@@ -26,6 +26,22 @@ set -m
 
 readonly LOG_TAG="ci-deploy"
 
+# Image signature verification (#5933 Item 4, PR 2/2). The running host pulls the
+# app image by semver tag (ALLOWED_IMAGES); this cosign-verifies its signature and
+# runs the VERIFIED DIGEST (not the tag → closes the tag-repoint TOCTOU). WARN mode
+# (default) emits a discriminating Sentry event on any failure but NEVER blocks the
+# deploy; the WARN→ENFORCE flip is a soak-gated fast-follow after a signed release
+# is confirmed live. The verifier is a SHA-pinned cosign CONTAINER (no host install;
+# the host pulls it from a public registry). `--offline` uses the registry-attached
+# Rekor bundle so no live sigstore egress is needed (the container egress firewall
+# #5046 does not allowlist sigstore). Identity is pinned to the reusable release
+# workflow on main/release-tags ONLY — an intra-repo branch/tag signature must NOT
+# verify (a loose `refs/(heads|tags)/.+` would accept attacker-branch RCE).
+readonly COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" # v3.1.1
+readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@(refs/heads/main|refs/tags/v[0-9].+)$'
+readonly COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
+readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enforce (soak-gated fast-follow)
+
 # Sentinel exit codes persisted in STATE_FILE. Consumed by cat-deploy-state.sh
 # and the GitHub Actions "Verify deploy script completion" step. Keep in sync
 # with the case statement in .github/workflows/web-platform-release.yml.
@@ -435,6 +451,79 @@ sandbox_canary_sentry_event() {
   fi
 }
 
+# cosign_verify_event: loud, no-SSH page on an image-signature verify failure
+# (#5933 Item 4). Best-effort + env-guarded, mirrors sandbox_canary_sentry_event.
+# The `verify_result` tag discriminates ALL failure modes in one event so the
+# root cause is decided without SSH. Fail-open under set -e.
+cosign_verify_event() {
+  local result="$1" ref="$2" detail="${3:-}"
+  logger -t "$LOG_TAG" "IMAGE_VERIFY_FAIL: result=$result ref=$ref mode=$IMAGE_VERIFY_MODE detail=$detail"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg r "$result" --arg ref "$ref" --arg d "$detail" --arg m "$IMAGE_VERIFY_MODE" \
+      '{message: ("image signature verify " + $r + " (" + $ref + ")"),
+        level: (if $m == "enforce" then "error" else "warning" end),
+        platform: "other", logger: "ci-deploy",
+        tags: {feature: "supply-chain", op: "image-verify", verify_result: $r, mode: $m},
+        extra: {ref: $ref, detail: $d}}' 2>/dev/null)" || return 0
+    curl -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "IMAGE_VERIFY: Sentry POST failed"
+  fi
+}
+
+# verify_image_signature <image:tag> — resolves the just-pulled image to its
+# immutable repo@sha256 digest and cosign-verifies the signature (offline,
+# identity-pinned) via the SHA-pinned cosign container. Echoes on stdout the ref
+# the caller should RUN: the verified digest on success (TOCTOU-safe), or the
+# original tag as a fail-open fallback in WARN mode. Emits a discriminating
+# Sentry event on every failure. Return: 0 in WARN mode always (never blocks);
+# in ENFORCE mode, 1 on any verify failure so the caller keeps the OLD container
+# live (downtime-safe). The mode branch is the ONLY behavioural difference — the
+# telemetry fires identically in both.
+verify_image_signature() {
+  local image_tag="$1" repo_digest err
+  err="$(mktemp 2>/dev/null || echo /tmp/cosign-verify.err)"
+  # Resolve the pulled tag to its immutable digest ref.
+  repo_digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$image_tag" 2>/dev/null || true)"
+  if [[ -z "$repo_digest" || "$repo_digest" != *"@sha256:"* ]]; then
+    cosign_verify_event "inspect_failed" "$image_tag" "RepoDigests[0] empty or not a digest ref"
+    printf '%s' "$image_tag" # fail-open: run the tag (WARN); ENFORCE aborts below
+    rm -f "$err" 2>/dev/null || true
+    [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
+    return 0
+  fi
+  # Verify via the pinned cosign container. --offline uses the registry-attached
+  # Rekor bundle (no live sigstore egress). The app image is public GHCR, so the
+  # cosign container needs no registry auth to fetch the signature.
+  if docker run --rm "$COSIGN_IMAGE" verify --offline \
+       --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
+       --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
+       "$repo_digest" >/dev/null 2>"$err"; then
+    logger -t "$LOG_TAG" "IMAGE_VERIFY: ok ref=$repo_digest"
+    printf '%s' "$repo_digest" # run the VERIFIED digest (TOCTOU-safe)
+    rm -f "$err" 2>/dev/null || true
+    return 0
+  fi
+  # Classify the failure for the discriminating Sentry event (telemetry only —
+  # best-effort string match on cosign stderr; never load-bearing).
+  local result="verify_failed" tail
+  tail="$(tail -c 400 "$err" 2>/dev/null || true)"
+  if   printf '%s' "$tail" | grep -qiE 'no matching signatures|no signatures found'; then result="unsigned"
+  elif printf '%s' "$tail" | grep -qiE 'certificate identity|none of the expected identities|subject.*mismatch'; then result="wrong_identity"
+  elif printf '%s' "$tail" | grep -qiE 'rekor|tlog|transparency|tuf'; then result="rekor_unreachable"
+  elif printf '%s' "$tail" | grep -qiE 'Unable to find image|manifest unknown|pull access denied|no such image'; then result="cosign_absent"
+  fi
+  cosign_verify_event "$result" "$repo_digest" "$tail"
+  printf '%s' "$repo_digest" # WARN: run the verified digest anyway (immutability holds)
+  rm -f "$err" 2>/dev/null || true
+  [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
+  return 0
+}
+
 # run_faithful_sandbox_canary: NON-BLOCKING dark-launch (#5875 / ADR-079). Runs
 # the SDK-captured bwrap argv INSIDE the canary container via the baked-in mjs,
 # records the verdict to deploy-state, and pages Sentry on a faithful FAIL — but
@@ -819,6 +908,17 @@ case "$COMPONENT" in
     docker image prune -af 200>&-
     docker pull "$IMAGE:$TAG" 200>&-
 
+    # #5933 Item 4: cosign-verify the pulled image's signature (WARN mode) and run
+    # the VERIFIED DIGEST at every subsequent create/run below (plugin-seed, canary,
+    # production) — closes the tag-repoint TOCTOU. WARN never blocks; ENFORCE aborts,
+    # keeping the OLD container live (downtime-safe). VERIFIED_REF is always a
+    # runnable ref (verified digest, or the tag as a WARN fail-open fallback).
+    if ! VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")"; then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
+      final_write_state 1 "cosign_verify_failed"
+      exit 1
+    fi
+
     # Clean stale canary from previous failed deploy
     { docker stop soleur-web-platform-canary 2>/dev/null || true; }
     { docker rm soleur-web-platform-canary 2>/dev/null || true; }
@@ -837,7 +937,7 @@ case "$COMPONENT" in
     # Pre-flight: a prior SIGKILLed deploy may have left this container behind.
     # `docker create --name` would otherwise fail with "container already exists".
     docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true
-    if ! docker create --name soleur-plugin-seed "$IMAGE:$TAG" >/dev/null; then
+    if ! docker create --name soleur-plugin-seed "$VERIFIED_REF" >/dev/null; then
       final_write_state 1 "plugin_seed_create_failed"
       exit 1
     fi
@@ -930,7 +1030,7 @@ case "$COMPONENT" in
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:3001:3000 \
-      "$IMAGE:$TAG"
+      "$VERIFIED_REF"
 
     # Layered canary probe set. Contract:
     #   knowledge-base/engineering/operations/runbooks/canary-probe-set.md
@@ -1164,7 +1264,7 @@ case "$COMPONENT" in
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
         -p 0.0.0.0:80:3000 \
         -p 0.0.0.0:3000:3000 \
-        "$IMAGE:$TAG"; then
+        "$VERIFIED_REF"; then
         # Canary was already stopped+removed before the cron drain gate above
         # (memory-dwell fix), so no teardown is needed here on the success path.
 
