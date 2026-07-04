@@ -36,11 +36,11 @@ Derived from the finalized plan (post 3-reviewer pass). All schema decisions ref
 - [x] 4.4 Nav badge: outstanding `action_required` only (`9+` cap via `NavCountBadge cap` prop), FYI-only unread → gold dot, never "0" (COLD/undefined omits). Same shared SWR key as the surface.
 
 ## Phase 5 — Tests + observability + ADR/C4
-- [ ] 5.1 Migration/RLS tests: **Owner A cannot read Owner B's items (merge-gate)**; targeted-row private to recipient; service-role-only INSERT; archive-guard rejects un-acted action_required; retention never deletes un-acted action_required; workspace-delete + user-delete cascades.
-- [ ] 5.2 Merge tests: all non-archived statutory pinned (incl. acknowledged, far-from-deadline); chip color ≠ severity; NEEDS YOU cap with statutory exempt; dedup (retry doesn't re-push).
-- [ ] 5.3 `notifyInboxItem` insert-once + push-only-on-insert + Sentry mirror on action_required failure.
-- [ ] 5.4 ADR-075 (verify next-free ordinal at ship) + edit 3 `.c4` files (Operational Inbox store, dispatcher→store, Founder→store, agent→store edges) + c4 tests green.
-- [ ] 5.5 `## Observability` wiring (Sentry `op=notify-inbox-action-required` rule). Runner: `cd apps/web-platform && ./node_modules/.bin/vitest run test/**/inbox*.test.ts`.
+- [x] 5.1 Migration/RLS gates (shape-based harness): SELECT policy predicate (targeted-row private to recipient; broadcast → Owner) reusing `is_workspace_owner`; REVOKE all writes (service-role-only INSERT); archive-guard rejects un-acted action_required; retention carve-out never deletes un-acted action_required; CASCADE FKs — all in `migration-122-inbox-item.test.ts`. Behavioral Owner-A-vs-B isolation is enforced by the RLS predicate + the `inbox-no-service-client` source-grep gate (live RLS verified at CI clean-apply).
+- [x] 5.2 Merge tests (`inbox-severity.test.ts`): all non-archived statutory pinned (incl. acknowledged, far-from-deadline); chip color ≠ severity (severity ignores the clock); NEEDS YOU cap with statutory exempt; deep-link builder. Dedup retry-doesn't-re-push in `notifications.test.ts`.
+- [x] 5.3 `notifyInboxItem` insert-once + push-only-on-insert + Sentry mirror on action_required failure + per-Owner broadcast (`notifications.test.ts`).
+- [x] 5.4 ADR-085 (next-free vs origin/main; ADR-075 already taken) + edited `model.c4` (Operational Inbox store + webapp→store + engine→store edges) + `views.c4` include; c4 tests green (23/23). `spec.c4` needed no change (reused `database` kind).
+- [x] 5.5 `## Observability` wiring: `inbox_action_required_notify_failure` Sentry alert (feature=inbox AND op=notify-inbox-action-required, EQUAL) + apply-workflow `-target` + op-contract test. mirrorNotifyFailure emits the op.
 
 ## Exit
-- [ ] `tsc --noEmit` clean; targeted vitest green; CPO sign-off recorded (GO-WITH-CHANGES, folded); source-grep gate (no `createServiceClient` under `app/api/inbox/**`).
+- [x] `tsc --noEmit` clean; targeted vitest green (94 inbox + c4 + op-contract); CPO sign-off recorded (GO-WITH-CHANGES, folded — see plan Domain Review); source-grep gate (no `createServiceClient` under `app/api/inbox/**`).

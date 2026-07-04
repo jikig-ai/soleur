@@ -157,6 +157,10 @@ model {
         technology "PostgreSQL"
         description "Users, BYOK-encrypted API keys, conversation sessions"
       }
+      operationalInbox = database "Operational Inbox" {
+        technology "Supabase (inbox_item, mig 122)"
+        description "Severity-ranked operational-notification store (ADR-085, #6007). Mutable read/act/archive state, workspace-grain, Owner-shared reads — SEPARATE from the email-triage WORM statutory ledger. Content-minimized (title + source_ref ids only). GET /api/inbox merges it with email-triage into one severity-ordered feed (statutory pinned first)."
+      }
       tunnel = container "Cloudflare Tunnel" {
         technology "cloudflared"
         description "Zero-trust inbound access — no exposed ports"
@@ -269,6 +273,14 @@ model {
   emailSender -> resend "Sends email to the operator address" { technology "SMTP" }
   resend -> webapp "Inbound email webhook (operator inbox ingress)" { technology "HTTPS webhook (svix)" }
   webapp -> resend "Statutory triage notifications (outbound email)" { technology "HTTPS (Resend API)" }
+
+  // ---- Operational inbox (severity-ranked attention queue, ADR-085 / #6007) --
+  // notifyInboxItem inserts the durable row (service role) then dispatches the
+  // push/email nudge; GET /api/inbox reads the merged severity-ranked feed
+  // (user-context client, RLS Owner-scoped); the inbox_list agent tool reads the
+  // same merged feed (agent-native parity).
+  webapp -> operationalInbox "notifyInboxItem writes inbox_item + GET /api/inbox reads the merged feed (RLS Owner-scoped)" { technology "PostgreSQL / PostgREST" }
+  engine -> operationalInbox "inbox_list agent tool reads the same merged severity-ranked feed (agent-native parity)" { technology "MCP tool → PostgREST" }
 
   // ---- fix-constraints two-stage privileged recovery boundary (ADR-074) ----
   // Trust boundary: the untrusted contributor's PR-head code runs ONLY in the

@@ -1267,3 +1267,53 @@ resource "sentry_issue_alert" "sandbox_startup_failure" {
     ignore_changes = [environment]
   }
 }
+
+# ── Missed action_required inbox dispatch (feat-severity-ranked-inbox #6007) ──
+# APPLY-CREATED (not import-only). A missed action_required inbox notification —
+# the insert failing, or the push/email dispatch failing — is the exact "a
+# decision that needs the founder, with no notice" failure this feature exists
+# to prevent (ADR-085). notifyInboxItem + notifyOfflineUser→mirrorNotifyFailure
+# emit feature=inbox / op=notify-inbox-action-required for the action_required
+# class specifically (info/attention misses do not page). Op-pinned (EQUAL, not
+# feature-only) because the `inbox` feature also carries non-paging list/read
+# errors (op=list, op=set-state) that must NOT fire this rule.
+resource "sentry_issue_alert" "inbox_action_required_notify_failure" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "inbox-action-required-notify-failure"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 15
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "inbox"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "notify-inbox-action-required"
+      }
+    },
+  ]
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}

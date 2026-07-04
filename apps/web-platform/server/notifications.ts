@@ -703,7 +703,7 @@ async function sendInboxItemEmailNotification(
  * (same dedup_key) never re-pushes. Targeted rows (user_id set) dispatch to that
  * one recipient; broadcast rows (user_id null) dispatch to every workspace Owner.
  *
- * Content-minimization (ADR-075): `title` must be server-generated — never raw
+ * Content-minimization (ADR-085): `title` must be server-generated — never raw
  * agent output / email content. `sourceRef` carries ids ONLY; the deep link is
  * built from those ids by the caller (never stored).
  */

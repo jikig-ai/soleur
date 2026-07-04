@@ -1,7 +1,7 @@
 -- 122_inbox_item.sql
 -- feat-severity-ranked-inbox (#6007, Multica-adaptation epic #6006 child 1) —
 -- a NEW general operational-notification store, SEPARATE from the
--- email_triage_items WORM statutory ledger (ADR-075). Operational (mutable
+-- email_triage_items WORM statutory ledger (ADR-085). Operational (mutable
 -- read/act/archive state), workspace-grain, Owner-shared reads per ADR-066.
 --
 -- Why a new table (not generalizing email_triage_items): that table is a
@@ -11,13 +11,13 @@
 -- email-triage rows is computed at the merge layer from statutory_class — this
 -- migration does NOT touch email_triage_items.
 --
--- Contrast with the WORM ledger (deliberate, ADR-075):
+-- Contrast with the WORM ledger (deliberate, ADR-085):
 --   * MUTABLE: read/act/archive transitions via set_inbox_item_state RPC.
 --   * CASCADE (not RESTRICT): operational data follows workspace + user
 --     lifecycle. mig 111 used RESTRICT to protect statutory EVIDENCE — that
 --     protection is inappropriate for operational ephemera.
 --   * 90d retention (more aggressive than the email ledger's 365d) — justified
---     as content-minimized operational noise (ADR-075 AP-009 deviation), with a
+--     as content-minimized operational noise (ADR-085 AP-009 deviation), with a
 --     hard NEVER-DELETE carve-out for un-acted action_required.
 --
 -- Reuses the shipped public.is_workspace_owner(uuid,uuid) helper (mig 098:67 —
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS public.inbox_item (
   source       text        NOT NULL CHECK (source IN ('task_completed', 'system')),
   -- Server-generated + sanitized. NEVER agent output / email subject / message
   -- body — a co-Owner-visible row must carry nothing the founder would not want
-  -- a co-Owner to see (ADR-075 content-minimization).
+  -- a co-Owner to see (ADR-085 content-minimization).
   title        text        NOT NULL,
   -- ids ONLY (e.g. {"conversationId": "..."}). The deep link is BUILT AT RENDER
   -- from these, never stored (a stored URL rots when a route path changes or the
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS public.inbox_item (
 );
 
 COMMENT ON TABLE public.inbox_item IS
-  'General operational-notification store (ADR-075, feat-severity-ranked-inbox '
+  'General operational-notification store (ADR-085, feat-severity-ranked-inbox '
   '#6007). Workspace-grain, Owner-shared reads; SEPARATE from the '
   'email_triage_items WORM statutory ledger. Mutable read/act/archive state via '
   'set_inbox_item_state. Content-minimized: title + source_ref ids only, never '
