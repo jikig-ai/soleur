@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import type { EmailTriageItem } from "@/components/inbox/email-triage-row";
+import type { MergedInboxItem } from "@/lib/inbox-severity";
 
 // AC1 (FR1): a warm cache-hit remount renders content with NO loading spinner
 // and fires NO refetch within the dedup window — the invariant is asserted on
@@ -18,14 +19,14 @@ vi.mock("next/navigation", () => ({
 
 import { InboxSurface } from "@/components/inbox/inbox-surface";
 
-function item(subject: string): EmailTriageItem {
-  return {
+function item(subject: string): MergedInboxItem {
+  const email: EmailTriageItem = {
     id: crypto.randomUUID(),
     message_id: null,
     sender: "vendor@example.com",
     subject,
     summary: "s",
-    mail_class: "operational",
+    mail_class: "vendor",
     statutory_class: null,
     rule_id: null,
     status: "new",
@@ -33,6 +34,14 @@ function item(subject: string): EmailTriageItem {
     acknowledged_at: null,
     received_at: "2026-06-18T10:00:00.000Z",
     created_at: "2026-06-18T10:00:00.000Z",
+  };
+  return {
+    kind: "email",
+    id: email.id,
+    severity: "info",
+    pinned: false,
+    outstanding: false,
+    email,
   };
 }
 

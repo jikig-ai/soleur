@@ -30,10 +30,10 @@ Derived from the finalized plan (post 3-reviewer pass). All schema decisions ref
 - [x] 3.4 Deadline is cosmetic-only: `deriveEmailSeverity` IGNORES the clock (tested: acknowledged + far-from-deadline statutory both → action_required), so a chip can never move severity/pin. Email rows keep EmailTriageRow's existing due-date display; native rows have no statutory clock. No-chip fallback = no rule match.
 
 ## Phase 4 — Surface
-- [ ] 4.1 `InboxItemRow` component (new): severity dot + title + relative time + cosmetic deadline chip; builds link from `source_ref`; non-navigating when target missing/RLS-hidden.
-- [ ] 4.2 Extend `inbox-surface.tsx`: NEEDS YOU / GOOD TO KNOW groups; per-group empty states (Appendix A copy); dispatch to `EmailTriageRow` vs `InboxItemRow` by source; keep Active/Archived tabs + SWR keys + never-re-sort contract.
-- [ ] 4.3 Archive confirmation for `action_required` (wireframe screen 19); guard until acted.
-- [ ] 4.4 Nav badge: outstanding `action_required` only (`9+` cap), FYI-only unread → gold dot, never "0" (align to `nav-count-badge.tsx`).
+- [x] 4.1 `InboxItemRow` component (new): severity dot (red/amber/grey) + plain-text title + relative time; builds link from `source_ref` via `buildInboxDeepLink`; non-navigating when target missing. Act/archive via new `POST /api/inbox/[id]/state` (RPC).
+- [x] 4.2 Rewrote `inbox-surface.tsx` → consumes `GET /api/inbox` (merged); NEEDS YOU / GOOD TO KNOW groups; per-group empty states (Appendix A copy); dispatches `EmailTriageRow` vs `InboxItemRow` by `kind`; keeps Active/Archived tabs + SWR keys (`swrKeys.inbox`) + never-re-sort (partition-only).
+- [x] 4.3 Archive confirmation for `action_required` (inline Confirm/Cancel); Archive disabled until the item is marked done (mirrors the RPC archive-guard).
+- [x] 4.4 Nav badge: outstanding `action_required` only (`9+` cap via `NavCountBadge cap` prop), FYI-only unread → gold dot, never "0" (COLD/undefined omits). Same shared SWR key as the surface.
 
 ## Phase 5 — Tests + observability + ADR/C4
 - [ ] 5.1 Migration/RLS tests: **Owner A cannot read Owner B's items (merge-gate)**; targeted-row private to recipient; service-role-only INSERT; archive-guard rejects un-acted action_required; retention never deletes un-acted action_required; workspace-delete + user-delete cascades.

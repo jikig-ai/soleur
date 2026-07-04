@@ -55,6 +55,10 @@ export async function clearSwrCache(mutate: ScopedMutator): Promise<void> {
  */
 export const swrKeys = {
   inboxEmails: (status: string) => ["/api/inbox/emails", status] as const,
+  // Unified severity-ranked inbox (feat-severity-ranked-inbox #6007). The
+  // surface + the nav badge share this key so one request feeds both (free
+  // dedup) and they can never disagree.
+  inbox: (status: string) => ["/api/inbox", status] as const,
   kbTree: () => ["/api/kb/tree"] as const,
   chatThreadInfo: (contextPath: string | null) =>
     contextPath ? (["/api/chat/thread-info", contextPath] as const) : null,

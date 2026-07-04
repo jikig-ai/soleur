@@ -87,15 +87,35 @@ vi.mock("@/components/dashboard/workspace-context-band", () => ({
   WorkspaceContextBand: () => null,
 }));
 
-function makeItems(n: number): Array<{ id: string }> {
-  return Array.from({ length: n }, (_, i) => ({ id: `item-${i}` }));
+// 4 OUTSTANDING action_required merged items → the inbox badge counts 4.
+function makeItems(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    kind: "inbox" as const,
+    id: `item-${i}`,
+    severity: "action_required" as const,
+    pinned: false as const,
+    outstanding: true,
+    inbox: {
+      id: `item-${i}`,
+      severity: "action_required" as const,
+      source: "system" as const,
+      title: "needs you",
+      source_ref: null,
+      status: "unread",
+      created_at: "2026-07-01T00:00:00.000Z",
+      read_at: null,
+      acted_at: null,
+      archived_at: null,
+    },
+  }));
 }
 
-// URL-routing fetch mock: inbox feed returns 4 active items; everything else
-// (admin check, banners' self-gating probes) returns a benign empty body.
+// URL-routing fetch mock: the unified inbox feed returns 4 action_required
+// items; everything else (admin check, banners' self-gating probes) returns a
+// benign empty body. The badge now keys /api/inbox (not /api/inbox/emails).
 const fetchMock = vi.fn((input: RequestInfo | URL) => {
   const url = typeof input === "string" ? input : input.toString();
-  if (url.startsWith("/api/inbox/emails")) {
+  if (url.startsWith("/api/inbox")) {
     return Promise.resolve({
       ok: true,
       json: () => Promise.resolve({ items: makeItems(4) }),
@@ -173,7 +193,7 @@ describe("DashboardLayout — Inbox attention badge", () => {
     // The count fetch fires exactly once — the badge does not double-fetch
     // /api/inbox/emails (it reuses the shared active-feed request; TR3).
     const inboxFetches = fetchMock.mock.calls.filter((c) =>
-      String(c[0]).startsWith("/api/inbox/emails"),
+      String(c[0]).startsWith("/api/inbox"),
     );
     expect(inboxFetches).toHaveLength(1);
   });
