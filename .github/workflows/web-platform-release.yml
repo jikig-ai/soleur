@@ -35,6 +35,10 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write # cosign keyless signing in reusable-release.yml (#5933 Item 4) — a
+  # reusable workflow can only USE permissions the caller grants; the release job below
+  # inherits these workflow-level perms, so id-token MUST be granted here or the reusable
+  # workflow fails at dispatch with startup_failure (regression from PR #5977).
 
 jobs:
   release:
