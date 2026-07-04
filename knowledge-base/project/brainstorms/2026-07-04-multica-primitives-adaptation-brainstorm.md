@@ -5,7 +5,10 @@ lane: cross-domain
 brand_survival_threshold: single-user incident
 status: brainstorm-complete
 source_intel: knowledge-base/product/competitive-intelligence.md (Tier 3 — Multica, added 2026-07-04)
-related_issues: [4672, 4673, 4674, 5292]
+epic: 6006
+children: [6007, 4674, 6008, 6009, 6010]
+related_issues: [4672, 4673, 4674, 5292, 6006, 6007, 6008, 6009, 6010]
+docs_pr: 6004
 assessed_domains: [Product, Engineering, Marketing, Legal, Operations]
 ---
 
@@ -144,5 +147,15 @@ None net-new — every proposed item maps to an existing surface + a locked ADR 
 ## Productize Candidate
 `autopilot-template` — a registered-function template contract so any read-only Soleur skill (operator-digest, competitive-analysis, ux-audit, community) can be exposed as a founder-schedulable autopilot without bespoke wiring. File as follow-up when item 2 is planned.
 
+## Tracking
+Filed as **Epic #6006** with children (build in order):
+1. Severity inbox — **#6007**
+2. Minimal autopilot — **#4674** (scope refined via Epic comment)
+3. Questionnaire onboarding — **#6008**
+4. (agent, work-item) session resumption — **#6009**
+5. Agents-as-teammates board (ADR-gated, last) — **#6010**
+
+Related (not children): #4672 (HITL = inbox `action_required` tier + autopilot gate), #4673 (Channels, Tier-2 hold), #5292 (KB consolidation, deferred). Docs PR: **#6004**.
+
 ## Next
-Turn items 1–2 into plans first (inbox spine, then minimal autopilot). Items 3–5 enter the backlog with this brainstorm as the source of truth; item 5 opens with an architecture ADR.
+Turn items 1–2 into plans first (inbox spine #6007, then minimal autopilot #4674). Items 3–5 are in the backlog with this brainstorm as the source of truth; #6010 opens with an architecture ADR.
