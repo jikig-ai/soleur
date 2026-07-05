@@ -434,23 +434,6 @@ atomic_git_config() {
 # Called before AND after git worktree add (add re-corrupts the shared config).
 # Safe for parallel sessions: all operations are idempotent.
 ensure_bare_config() {
-  # NON-BARE GUARD (#4826). This whole function is a BARE-repo accommodation: on a
-  # bare repo `git worktree add` corrupts the shared config (see header), and setting
-  # extensions.worktreeConfig=true is what steers those writes off the shared config.
-  # A NORMAL working clone (the Concierge workspace layout: a `.git` DIRECTORY,
-  # core.bare=false) needs NONE of this — `git worktree add` writes only to
-  # `.git/worktrees/<id>/` and never corrupts shared config. Worse, enabling
-  # worktreeConfig on such a repo FORCES git to read `.git/config.worktree` on every
-  # command; in the agent sandbox that path is a /dev/null char device the agent user
-  # CANNOT read → `fatal: unable to access '.git/config.worktree': Permission denied`
-  # breaks EVERY git command (the #4826 regression). So: skip entirely on a non-bare
-  # repo. Filesystem check only (a `.git` DIRECTORY ⇒ non-bare), never a git command —
-  # git may already be wedged by the very worktreeConfig this guard avoids. `git worktree
-  # add` on a normal repo is verified to work with zero shared-config surgery.
-  if [[ -d "$GIT_ROOT/.git" ]]; then
-    return 0
-  fi
-
   local git_dir="$GIT_ROOT/.git"
   # Only relevant for bare repos (git dir IS the repo root)
   if [[ ! -d "$git_dir" ]]; then
@@ -458,16 +441,34 @@ ensure_bare_config() {
   fi
 
   # Self-heal: sweep BEFORE the config writes below for its diagnostics + stale
-  # REGULAR-lock removal (the 2026-07-01 outage class). A NON-REGULAR (masked) lock
-  # is NO LONGER fatal here — atomic_git_config routes every write below around it
-  # via a lockless temp-copy+rename (#5912). So we intentionally ignore the sweep's
-  # non-zero return: the per-write gate in atomic_git_config makes the correct
-  # native-vs-lockless choice, and a genuinely stuck REGULAR lock (a real in-flight
-  # writer) still surfaces as a native `git config` EEXIST failure from
-  # atomic_git_config's clean-lock branch. `|| true` disarms set -e; the sweep's
-  # SOLEUR_GIT_LOCK_DIAG / SOLEUR_GIT_LOCK_UNREMOVABLE sentinels still print for
-  # the blind-surface forensic.
+  # REGULAR-lock removal (the 2026-07-01 outage class). Runs on EVERY repo (bare or
+  # normal) — it writes NO config, only removes stale regular locks and emits the
+  # blind-surface SOLEUR_GIT_LOCK_* forensic — so it stays ABOVE the non-bare guard
+  # below. A NON-REGULAR (masked) lock is NO LONGER fatal here — atomic_git_config
+  # routes every write below around it via a lockless temp-copy+rename (#5912). So we
+  # intentionally ignore the sweep's non-zero return: the per-write gate in
+  # atomic_git_config makes the correct native-vs-lockless choice, and a genuinely
+  # stuck REGULAR lock (a real in-flight writer) still surfaces as a native `git config`
+  # EEXIST failure from atomic_git_config's clean-lock branch. `|| true` disarms set -e.
   sweep_stale_git_locks "$git_dir" || true
+
+  # NON-BARE GUARD (#4826). Everything BELOW is a BARE-repo accommodation: on a bare
+  # repo `git worktree add` corrupts the shared config (see header), and setting
+  # extensions.worktreeConfig=true is what steers those writes off the shared config.
+  # A NORMAL working clone (the Concierge workspace layout: a `.git` DIRECTORY,
+  # core.bare=false) needs NONE of it — `git worktree add` writes only to
+  # `.git/worktrees/<id>/` and never corrupts shared config. Worse, enabling
+  # worktreeConfig on such a repo FORCES git to read `.git/config.worktree` on every
+  # command; in the agent sandbox that path is a /dev/null char device the agent user
+  # CANNOT read → `fatal: unable to access '.git/config.worktree': Permission denied`
+  # breaks EVERY git command (the #4826 regression). So: skip the config surgery on a
+  # non-bare repo (the diagnostic sweep above already ran). Filesystem check only (a
+  # `.git` DIRECTORY ⇒ non-bare), never a git command — git may already be wedged by
+  # the very worktreeConfig this guard avoids. Verified: `git worktree add` on a normal
+  # repo works with zero shared-config surgery.
+  if [[ -d "$GIT_ROOT/.git" ]]; then
+    return 0
+  fi
 
   local shared_config="$git_dir/config"
   local wt_config="$git_dir/config.worktree"
