@@ -349,44 +349,44 @@ None (test file is a rename + extension, not a new file).
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `grep -cE '^\s*return 3' scripts/content-publisher.sh` returns `11` (every named skip
+- [x] AC1 — `grep -cE '^\s*return 3' scripts/content-publisher.sh` returns `11` (every named skip
   path routed through the sentinel).
-- [ ] AC2 — No skip `return 0` remains in the 5 `post_*` functions: for each of
+- [x] AC2 — No skip `return 0` remains in the 5 `post_*` functions: for each of
   `post_discord`/`post_x_thread`/`post_linkedin`/`post_linkedin_company`/`post_bluesky`, a manual
   read confirms every non-success/non-failure early-return is `return 3` (the 6 non-post `return 0`
   sites at `:117/:130/:218/:350/:540/:740` are unchanged).
-- [ ] AC3 — Skip counting is **behavioral, not shape-grepped** (per the deepen shape-grep-AC
+- [x] AC3 — Skip counting is **behavioral, not shape-grepped** (per the deepen shape-grep-AC
   caution): the Phase 4 integration tests assert that (a) an all-skip file stays `status: scheduled`
   with a "Published nowhere" issue, (b) a degenerate `channels: ","` file also surfaces the issue
   (F1), and (c) the issue body enumerates per-channel skip reasons. `grep -q 'local file_skips=0'`
   and `grep -q 'file_skip_reasons' scripts/content-publisher.sh` confirm the counter + accumulator
   exist; correctness is proven by AC7, not by a literal-increment count.
-- [ ] AC4 — Exit-code capture is set-e-safe: `grep -c '|| rc=$?' scripts/content-publisher.sh`
+- [x] AC4 — Exit-code capture is set-e-safe: `grep -c '|| rc=$?' scripts/content-publisher.sh`
   returns `≥ 5` (one per channel `case` arm; no bare `cmd; rc=$?` and no `local rc=$(…)` form,
   which would trip / mask `set -e`).
-- [ ] AC4b — The all-skip issue body carries per-channel reasons (P1): the reason-discrimination
+- [x] AC4b — The all-skip issue body carries per-channel reasons (P1): the reason-discrimination
   integration test asserts the captured `create_nowhere_issue` body contains both
   `bluesky: no credentials` and `linkedin-personal: empty section`, and the plan/impl contains **no**
   "see the workflow run logs" pointer for skip reasons (`grep -c 'workflow run logs'
   scripts/content-publisher.sh` returns `0`).
-- [ ] AC5 — The status flip remains gated on real success:
+- [x] AC5 — The status flip remains gated on real success:
   `grep -A2 'file_successes.*-gt 0' scripts/content-publisher.sh` shows the
   `status: scheduled → published` `sed` only inside that arm; the all-skip `elif file_skips`
   branch does **not** flip status.
-- [ ] AC6 — The all-skip branch calls `create_dedup_issue` with a "Published nowhere" title and
+- [x] AC6 — The all-skip branch calls `create_dedup_issue` with a "Published nowhere" title and
   `action-required,content-publisher` labels (verified by read + the AC8 integration test).
-- [ ] AC7 — `bash scripts/test-content-publisher.sh` exits 0 (all unit + integration cases pass),
+- [x] AC7 — `bash scripts/test-content-publisher.sh` exits 0 (all unit + integration cases pass),
   including the regression test asserting an all-skipped file stays `status: scheduled`.
-- [ ] AC8 — `bash -n scripts/content-publisher.sh` and `bash -n scripts/test-content-publisher.sh`
+- [x] AC8 — `bash -n scripts/content-publisher.sh` and `bash -n scripts/test-content-publisher.sh`
   parse clean; `shellcheck scripts/content-publisher.sh` surfaces no new warnings vs. main
   (if `shellcheck` available — `command -v shellcheck` first).
-- [ ] AC9 — `scripts/test-all.sh` runs the new suite: `grep -c 'test-content-publisher.sh'
+- [x] AC9 — `scripts/test-all.sh` runs the new suite: `grep -c 'test-content-publisher.sh'
   scripts/test-all.sh` returns `1`, and `TEST_GROUP=scripts bash scripts/test-all.sh` includes
   and passes the `scripts/content-publisher` suite.
-- [ ] AC10 — The orphaned old filename is gone: `test ! -f scripts/test-content-publisher-stale-alert.sh`
+- [x] AC10 — The orphaned old filename is gone: `test ! -f scripts/test-content-publisher-stale-alert.sh`
   and no dangling references (`grep -rn 'test-content-publisher-stale-alert' . --exclude-dir=.git`
   returns nothing outside this plan/spec).
-- [ ] AC11 — PR body uses `Closes #6065` (this is a code fix that resolves at merge, not an
+- [x] AC11 — PR body uses `Closes #6065` (this is a code fix that resolves at merge, not an
   ops-remediation — `Closes`, not `Ref`).
 
 ### Post-merge (operator)
