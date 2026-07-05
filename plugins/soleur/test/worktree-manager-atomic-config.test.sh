@@ -245,5 +245,29 @@ else
   assert_eq "v11" "$(get_val "$D" section.keep)" "original config content intact after cp failure"
 fi
 
+# ---------------------------------------------------------------------------
+echo "Test 12: #4826 host-side pre-seed -> the in-sandbox ensure_bare_config sequence is a ZERO-WRITE no-op"
+# Mirrors seedWorktreeConfig (apps/web-platform/server/workspace.ts): pre-apply the
+# exact target state HOST-SIDE, then wedge config.lock non-regular (== the SDK's
+# /dev/null bind-mount mask). Each of the four mutations ensure_bare_config runs must
+# take its read-first / absent-key SKIP — rc 0, NO write past the mask, no temp. This
+# is why pre-seeding unblocks worktree creation without ever touching the masked lock.
+D=$(new_gitdir); seed_config "$D"
+git config --file "$D/config" core.repositoryformatversion 1     # pre-seed (host-side)
+git config --file "$D/config" extensions.worktreeConfig true     # pre-seed (host-side)
+# core.bare / core.worktree intentionally absent (seedWorktreeConfig unsets them).
+mkdir "$D/config.lock"                                           # non-regular lock == masked/wedged
+run_agc "$D/config" core.repositoryformatversion 1
+assert_eq "0" "$AGC_RC" "pre-seeded repositoryformatversion SET is a zero-write skip"
+run_agc "$D/config" extensions.worktreeConfig true
+assert_eq "0" "$AGC_RC" "pre-seeded worktreeConfig SET is a zero-write skip"
+run_agc "$D/config" --unset core.bare
+assert_eq "0" "$AGC_RC" "absent core.bare --unset is a zero-write skip"
+run_agc "$D/config" --unset core.worktree
+assert_eq "0" "$AGC_RC" "absent core.worktree --unset is a zero-write skip"
+no_temp_leftovers "$D" "#4826 pre-seed no-op (nothing written past the masked lock)"
+assert_eq "true" "$(get_val "$D" extensions.worktreeConfig)" "worktreeConfig value intact"
+rm -rf "$D/config.lock"
+
 echo ""
 print_results
