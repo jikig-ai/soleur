@@ -84,11 +84,35 @@ per-worktree config (`config.worktree`, unmasked).
   red in CI" gap by stripping the ambient state CI lacks
   (`env GIT_CONFIG_GLOBAL=/dev/null GIT_AUTHOR_NAME= …`) — don't assume flake.
 
+## Follow-up round 2 — a provision-time fix does not heal EXISTING workspaces
+
+The #6064 pre-seed ran ONLY in `provisionWorkspace`/`provisionWorkspaceWithRepo`
+(workspace-creation time). A fresh session on a workspace that was **provisioned before
+the fix shipped** still wedged: the persistent `/workspaces/<id>` `.git` was never
+seeded, so in-sandbox `ensure_bare_config` still tried to write the masked shared config.
+A fresh *session* is not a fresh *workspace* — the wedged `.git` persists on the volume.
+
+**Fix:** also call `seedWorktreeConfig` from `ensureWorkspaceRepoCloned` — the host-side,
+**per-session** boot path that already runs before the sandbox exists — on BOTH the
+existing-valid-workspace no-op return and the fresh-graft path. Idempotent; every boot
+heals the workspace. Extracted the seeder to its own module (`worktree-config-seed.ts`)
+so the hot boot path does not import workspace.ts's full provisioning graph.
+
+**Lesson:** when a fix mutates state at CREATE time, ask "what about the population that
+already exists?" A migration/boot-time re-apply is almost always also required — the
+install-time hook alone silently excludes every pre-existing entity. New evidence also
+showed `.git/config.worktree` masked as a char device (not just `.git/config.lock`),
+consistent with the SDK masking both git-config write targets; it does not block the fix
+because `git worktree add` writes to an unmasked `.git/worktrees/<id>/` subdir.
+
 ## Follow-ups
 
-- **Observability (open):** mirror the in-sandbox `SOLEUR_GIT_LOCK_*` markers to a
-  queryable sink so the next wedge is self-diagnosable without asking the operator to
-  paste `findmnt`. This blindness forced two round-trips and is the meta-bug.
+- **Observability (DONE, this PR):** a fail-open `PostToolUse(Bash)` hook
+  (`git-lock-marker-telemetry.ts`) scans Bash output for the `SOLEUR_GIT_LOCK_*` /
+  "worktree wedge" markers and re-emits them via the SERVER-SIDE logger (→ Better Stack +
+  Sentry breadcrumb). Closes ADR-081's "blind sandbox stdout, not mirrored to any
+  queryable sink" gap so the next wedge is self-diagnosable without a `findmnt`
+  round-trip. A drift guard pins the extractor's sentinel set against worktree-manager.sh.
 
 ## Tags
 category: bug-fixes

@@ -1,7 +1,7 @@
 // #6031 — cron-ghcr-token-minter tests (ADR-088).
 //
 // The minter mints a 1h `packages:read` GitHub App installation token and writes
-// it to Doppler `prd_ghcr` as GHCR_READ_TOKEN (+ GHCR_READ_USER=x-access-token).
+// it to Doppler `prd` as GHCR_READ_TOKEN (+ GHCR_READ_USER=x-access-token).
 // Security-critical invariants under test:
 //   - AC3    scoped mint body + atomic two-key Doppler write in ONE request
 //   - AC4    output-aware heartbeat: ok ONLY on 2xx write, error otherwise
@@ -102,7 +102,7 @@ beforeEach(() => {
     dopplerResponse(200, JSON.stringify({ secrets: { GHCR_READ_TOKEN: MINTED_TOKEN } })),
   );
   global.fetch = fetchMock as unknown as typeof fetch;
-  process.env.GHCR_MINTER_DOPPLER_TOKEN = "dp.st.prd_ghcr." + "synthetic-write-token";
+  process.env.GHCR_MINTER_DOPPLER_TOKEN = "dp.st.prd." + "synthetic-write-token";
 });
 
 afterEach(() => {
@@ -123,14 +123,14 @@ describe("cron-ghcr-token-minter — mint + Doppler write (AC3, AC-Sec3)", () =>
     expect(opts.minRemainingMs).toBeGreaterThanOrEqual(FRESHNESS_FLOOR_MS);
   });
 
-  it("writes BOTH keys atomically in ONE Doppler request to prd_ghcr (AC3)", async () => {
+  it("writes BOTH keys atomically in ONE Doppler request to prd (AC3)", async () => {
     await cronGhcrTokenMinterHandler({ step: makeStep() as never, logger });
     const dopplerCalls = fetchMock.mock.calls.filter(([url]) =>
       String(url) === DOPPLER_URL,
     );
     expect(dopplerCalls).toHaveLength(1); // atomic: exactly one write
     const body = dopplerRequestBody()!;
-    expect(body.config).toBe("prd_ghcr");
+    expect(body.config).toBe("prd");
     expect(body.secrets).toEqual({
       GHCR_READ_TOKEN: MINTED_TOKEN,
       GHCR_READ_USER: "x-access-token",

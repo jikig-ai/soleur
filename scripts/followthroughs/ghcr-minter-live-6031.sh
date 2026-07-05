@@ -2,15 +2,15 @@
 # Follow-through: GHCR installation-token minter live-and-writing (#6031 / ADR-088).
 #
 # #6031's full "done" is post-merge + operator-gated: org-owner re-consent to the
-# App's new packages:read grant (AC10) → apply the prd_ghcr IaC → the minter's first
-# successful mint+write (AC11) → the prd->prd_ghcr read-secret flip → a real deploy +
+# App's new packages:read grant (AC10) → apply the prd-scoped write-token IaC → the minter's first
+# successful mint+write (AC11) → a real deploy +
 # fresh-host boot authenticating with the minted token (AC12) → interim PAT revoked
 # (AC13). This follow-through automates the closure so it is NOT memory-gated.
 #
 # Close criterion (the honest live signal): the Sentry cron monitor
 # `scheduled-ghcr-token-minter` has a recent `ok` check-in. Because the handler's
 # heartbeat is OUTPUT-AWARE — it only checks in `ok` when the Doppler write returned
-# 2xx — a recent `ok` proves the minter is live AND writing valid tokens to prd_ghcr.
+# 2xx — a recent `ok` proves the minter is live AND writing valid tokens to prd.
 # A missed/errored check-in means the minter is not yet live (pre-cutover) or is
 # failing, so the tracker stays open.
 #

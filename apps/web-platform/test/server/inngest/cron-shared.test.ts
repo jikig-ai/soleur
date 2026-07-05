@@ -19,9 +19,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reportSilentFallbackSpy = vi.fn();
 const warnSilentFallbackSpy = vi.fn();
+// #4861 — postSentryHeartbeat routes its unset/malformed-env skip through the
+// debounced warn wrapper. The wrapper's own 5-min TTL bounding is unit-tested
+// in observability's TtlDedupMap suite; here it forwards to the warn spy so the
+// op/key/errorClass contract can be asserted.
+const mirrorWarnWithDebounceSpy = vi.fn(
+  (err: unknown, ctx: unknown, _key: string, _errorClass: string) =>
+    warnSilentFallbackSpy(err, ctx),
+);
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: (...a: unknown[]) => reportSilentFallbackSpy(...a),
   warnSilentFallback: (...a: unknown[]) => warnSilentFallbackSpy(...a),
+  mirrorWarnWithDebounce: (...a: unknown[]) =>
+    (mirrorWarnWithDebounceSpy as (...x: unknown[]) => void)(...a),
 }));
 
 // mintInstallationToken (#5046) mints via the App-JWT probe path, NOT any
@@ -45,6 +55,7 @@ import {
   deferIfTier2Cron,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   digestIssueExistsForDate,
+  ensureDedupIssue,
   ensureScheduledAuditIssue,
   formatTailForSentry,
   isRealScheduledDigest,
@@ -1371,5 +1382,132 @@ describe("digestIssueExistsForDate", () => {
       octokit,
     });
     expect(exists).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4861 — postSentryHeartbeat silent-skip is now LOUD. The unset/malformed-env
+// branches previously logged at info/warn and returned; a blank heartbeat env
+// then paged nowhere. They now route through the DEBOUNCED warn wrapper
+// (mirrorWarnWithDebounce → warnSilentFallback → @sentry/nextjs SDK via
+// SENTRY_DSN, a DIFFERENT var from the three ingest vars), so the loud path
+// lands even when the ingest vars are blank. The early return is preserved (the
+// change is observability, not control flow) — the POST is never attempted.
+// ---------------------------------------------------------------------------
+describe("postSentryHeartbeat — loud silent-skip on unset/malformed env (#4861)", () => {
+  const VALID_DOMAIN = "o4509.ingest.sentry.io";
+  const VALID_PROJECT = "4509999";
+  const VALID_PUBLIC_KEY = "abcdef0123456789abcdef0123456789";
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+  const call = () =>
+    postSentryHeartbeat({
+      ok: false, // avoids the best-effort cron-fires file write
+      sentryMonitorSlug: "scheduled-content-publisher",
+      cronName: "cron-content-publisher",
+      logger,
+    });
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    mirrorWarnWithDebounceSpy.mockClear();
+    warnSilentFallbackSpy.mockClear();
+    logger.info.mockClear();
+    logger.warn.mockClear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("unset ingest var → mirrorWarnWithDebounce op=heartbeat-env-unset; POST NOT attempted", async () => {
+    // Only two of three ingest vars set → unset branch.
+    vi.stubEnv("SENTRY_INGEST_DOMAIN", VALID_DOMAIN);
+    vi.stubEnv("SENTRY_PROJECT_ID", VALID_PROJECT);
+    vi.stubEnv("SENTRY_PUBLIC_KEY", "");
+    await call();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(mirrorWarnWithDebounceSpy).toHaveBeenCalledTimes(1);
+    const [, ctx, key, errorClass] = mirrorWarnWithDebounceSpy.mock.calls[0];
+    expect((ctx as { op: string }).op).toBe("heartbeat-env-unset");
+    expect((ctx as { feature: string }).feature).toBe("cron-sentry-heartbeat");
+    expect((ctx as { tags: { cron: string } }).tags.cron).toBe("cron-content-publisher");
+    // Debounce keyed on (cronName, op) so ~45 crons sharing this env do not flood.
+    expect(key).toBe("cron-content-publisher");
+    expect(errorClass).toBe("heartbeat-env-unset");
+  });
+
+  it("malformed ingest var → mirrorWarnWithDebounce op=heartbeat-env-malformed; POST NOT attempted", async () => {
+    vi.stubEnv("SENTRY_INGEST_DOMAIN", "not-a-sentry-domain");
+    vi.stubEnv("SENTRY_PROJECT_ID", VALID_PROJECT);
+    vi.stubEnv("SENTRY_PUBLIC_KEY", VALID_PUBLIC_KEY);
+    await call();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(mirrorWarnWithDebounceSpy).toHaveBeenCalledTimes(1);
+    const [, ctx, , errorClass] = mirrorWarnWithDebounceSpy.mock.calls[0];
+    expect((ctx as { op: string }).op).toBe("heartbeat-env-malformed");
+    expect(errorClass).toBe("heartbeat-env-malformed");
+  });
+
+  it("valid env still POSTs and does NOT emit a warn (no regression)", async () => {
+    fetchSpy.mockResolvedValue(new Response(null, { status: 202 }));
+    vi.stubEnv("SENTRY_INGEST_DOMAIN", VALID_DOMAIN);
+    vi.stubEnv("SENTRY_PROJECT_ID", VALID_PROJECT);
+    vi.stubEnv("SENTRY_PUBLIC_KEY", VALID_PUBLIC_KEY);
+    await call();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(mirrorWarnWithDebounceSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ensureDedupIssue (#2756 starvation backstop) — a stable-title, open-issue
+// dedup sibling of ensureScheduledAuditIssue. Reuses the same read shape
+// (labels, sort:created desc, per_page:10) but matches the EXACT title and
+// scopes the dedup read to OPEN issues so an auto-closed prior alert never
+// suppresses a fresh drought (the standing-condition contract).
+// ---------------------------------------------------------------------------
+describe("ensureDedupIssue (stable-title standing alert)", () => {
+  function octokit(existing: Array<{ title: string; number: number }>) {
+    const request = vi.fn(async (route: string) => {
+      if (route === "GET /repos/{owner}/{repo}/issues") return { data: existing };
+      return { data: { number: 4242 } };
+    });
+    return { request } as unknown as Parameters<typeof ensureDedupIssue>[0];
+  }
+
+  it("creates the issue when no open issue with the exact title exists", async () => {
+    const client = octokit([{ title: "Some other alert", number: 7 }]);
+    const res = await ensureDedupIssue(client, {
+      title: "Content starvation: schedule empty",
+      body: "drought",
+      labels: ["action-required"],
+    });
+    expect(res.created).toBe(true);
+    const calls = (client.request as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    // GET then POST
+    expect(calls[0][0]).toBe("GET /repos/{owner}/{repo}/issues");
+    expect(calls[0][1].state).toBe("open");
+    expect(calls[0][1].sort).toBe("created");
+    expect(calls[0][1].direction).toBe("desc");
+    expect(calls[0][1].per_page).toBe(10);
+    expect(calls[1][0]).toBe("POST /repos/{owner}/{repo}/issues");
+  });
+
+  it("does NOT create a duplicate when an open issue with the exact title exists", async () => {
+    const client = octokit([
+      { title: "Content starvation: schedule empty", number: 99 },
+    ]);
+    const res = await ensureDedupIssue(client, {
+      title: "Content starvation: schedule empty",
+      body: "drought",
+      labels: ["action-required"],
+    });
+    expect(res.created).toBe(false);
+    expect(res.issueNumber).toBe(99);
+    const calls = (client.request as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBe(1); // GET only, no POST
   });
 });
