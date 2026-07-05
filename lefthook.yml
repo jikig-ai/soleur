@@ -94,6 +94,27 @@ pre-commit:
         - "scripts/lint-agents-rule-budget.test.sh"
         - "scripts/_agents_md_sections.py"
       run: python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+    # Fail a plan/spec/runbook/ADR/legal-runbook that prescribes a *human-run*
+    # terraform / SSH / reboot / verify-on-private-net infra step (actor +
+    # imperative co-occurrence, not a bare-token denylist). Enforcement teeth
+    # for hr-no-ssh-fallback-in-runbooks. Dual-glob (single-star + double-star)
+    # per gobwas `**` semantics: `**` requires >=1 intermediate dir, so a bare
+    # `dir/**/*.md` silently skips depth-1 files. See learning
+    # 2026-03-21-lefthook-gobwas-glob-double-star.md.
+    lint-infra-no-human-steps:
+      priority: 4
+      glob:
+        - "knowledge-base/project/plans/*.md"
+        - "knowledge-base/project/plans/**/*.md"
+        - "knowledge-base/project/specs/*.md"
+        - "knowledge-base/project/specs/**/*.md"
+        - "knowledge-base/engineering/operations/runbooks/*.md"
+        - "knowledge-base/engineering/operations/runbooks/**/*.md"
+        - "knowledge-base/legal/runbooks/*.md"
+        - "knowledge-base/legal/runbooks/**/*.md"
+        - "knowledge-base/engineering/architecture/decisions/*.md"
+        - "knowledge-base/engineering/architecture/decisions/**/*.md"
+      run: python3 scripts/lint-infra-no-human-steps.py {staged_files}
     scheduled-show-full-output-lint:
       priority: 5
       # Forbid show_full_output: true in recurring scheduled workflows. Only

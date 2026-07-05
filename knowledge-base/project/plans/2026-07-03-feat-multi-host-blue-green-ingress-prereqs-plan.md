@@ -30,11 +30,14 @@ Two shippable deliverables + one design deliverable:
   targeted apply drags web-1 in only as a no-op → the guard passes → both apply pipelines
   go green with **zero reboot**. The follow-through sweeper (`moved-block-wedge-5887.sh`)
   then closes **#5887**. This is the true zero-downtime resolution of the CI wedge.
-- **Phase 2 — Warm web-2 standby (operator maintenance-window apply, zero user impact).**
-  Provision the private network + web-2 `/workspaces` volume/attachment + deploy the app
-  container to web-2 + verify `/health` **on web-2's private IP**. Ingress stays untouched
-  (single proxied A record → web-1). web-2 becomes a warm, deploy-current standby that is
-  **in no public serving pool**. Records the new recurring expense.
+- **Phase 2 — Warm web-2 standby (autonomous dispatch, zero user impact).**
+  Dispatch `gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby` — the
+  R2-serialized workflow provisions the private network + web-2 `/workspaces` volume/attachment
+  through the concurrency serializer, fans the deploy out to web-2 over the host-side private
+  net, and confirms web-2 accepted the deploy off-host via web-1's deploy-status `reason` (no
+  local command, no SSH, no private-IP curl). Ingress stays untouched (single proxied A record →
+  web-1). web-2 becomes a warm, deploy-current standby that is **in no public serving pool**.
+  Records the new recurring expense.
 - **Design deliverable — ADR-068 amendment (no apply).** Capture the deferred GA ingress
   design (Cloudflare Load Balancer, health-checked, web-2 weight 0→1 gated on GA), the
   reboot-deferral invariant, and the sequencing that makes the eventual web-1 reboot
@@ -54,7 +57,7 @@ risk. The LB therefore belongs to the GA cutover window, not to "prerequisites."
 | Claim (issue #5887 / initial framing) | Reality (verified 2026-07-03) | Plan response |
 |---|---|---|
 | CI is wedged on pending `moved` blocks ("Moved resource instances excluded by targeting") | **Stale.** `moved` blocks already consumed in state (full plan shows no pending moves). CI's *current* red cause is the `reboot_updates` destroy-guard (#5911) halting on web-1's pending `placement_group_id` change. | Phase 1 defers the placement change via `ignore_changes` → guard passes → green. |
-| The wedge clears only via an operator full apply that reboots web-1 | **False now.** `ignore_changes = [placement_group_id]` clears it with zero reboot (verified: `31 add, 1 change, 0 destroy`, no `placement_group_id` diff). | Phase 1 is the zero-downtime clear; the reboot is deferred to GA. |
+| The wedge clears only via a full apply that power-cycles web-1 | **False now.** `ignore_changes = [placement_group_id]` clears it with zero reboot (verified: `31 add, 1 change, 0 destroy`, no `placement_group_id` diff). | Phase 1 is the zero-downtime clear; the reboot is deferred to GA. |
 | web-2 needs provisioning | web-2 **server already exists** in TF state (`hcloud_server.web["web-2"]`, id 147422810, running). Its `/workspaces` volume + private-net attach are pending creates. | Phase 2 creates the volume/attach only; no server create. |
 | Convert `cloudflare_record.app` singleton→for_each for multi-host ingress | dns.tf comment: this is a destroy+recreate of the LIVE app record (no `moved`, no stable import id). spec-flow H2: a CF hostname is *either* a proxied A record *or* an LB — the swap has an inherent gap. | Ingress **untouched** this plan; LB/record migration deferred to GA and flagged for CF-behavior verification (Sharp Edge). |
 | `/health` can gate web-2 readiness | **False.** `server/health.ts` hardcodes `status:"ok"` and only probes shared Supabase; returns 200 with an empty `/workspaces`. A routing lie. | web-2 verified on private IP only; deep-readiness endpoint filed as follow-up (Sharp Edge C1). |
@@ -108,40 +111,57 @@ terraform plan (with ignore_changes) → AFTER: "Plan: 31 to add, 1 to change, 0
 `-target`-scoped set. With the reboot gone, the destroy-guard passes and the in-place
 `hcloud_firewall_attachment.web` update (server_ids += web-2) applies cleanly. **Both** red
 pipelines (`apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml`) go green →
-`moved-block-wedge-5887.sh` closes #5887. Zero reboot, zero downtime, no operator-local
-apply required.
+`moved-block-wedge-5887.sh` closes #5887. Zero reboot, zero downtime, fully autonomous on
+merge (no locally-run apply).
 
-### Phase 2 — Warm web-2 standby (operator maintenance-window apply; deferred until expense approved)
+### Phase 2 — Warm web-2 standby (autonomous dispatch; deferred until expense approved)
 
-> Operator-local apply (these resources are `OPERATOR_APPLIED_EXCLUSIONS`, not in CI).
-> Zero user impact — web-2 is not in ingress. Gated on recurring-expense approval.
+> Dispatched through the R2 concurrency serializer, never run locally (these resources are
+> `OPERATOR_APPLIED_EXCLUSIONS`, excluded from the per-PR auto-apply target sets). Zero user
+> impact — web-2 is not in ingress. Gated on recurring-expense approval.
 
-**Step 0 — State reconciliation (blocking, read-only).** Confirm `hcloud_server.web["web-2"]`
-is in state (VERIFIED: refreshes with id 147422810). Confirm the plan shows `0 to destroy`
-and **no** `placement_group_id`/reboot diff on `hcloud_server.web["web-1"]` before `yes`.
+**Trigger (post-merge, acknowledged-menu, not authored).**
+`gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby`. The dispatch job
+runs the whole sequence inside the serializer; there is no local command, no SSH, and no
+private-IP curl. (The `apply_target=warm-standby` path itself is delivered by
+`2026-07-04-feat-autonomous-multihost-ga-warm-standby-and-gate-plan.md`.)
 
-**Step 1 — Additive infra, precisely targeted.** `terraform apply` with `-target` limited to:
-`hcloud_network.private`, `hcloud_network_subnet.private`,
+**Step 0 — State reconciliation (blocking, read-only, in-job).** The job confirms
+`hcloud_server.web["web-2"]` is in state (VERIFIED: refreshes with id 147422810) and that the
+plan shows `0 to destroy` and **no** `placement_group_id`/reboot diff on
+`hcloud_server.web["web-1"]` before applying.
+
+**Step 1 — Additive infra, precisely targeted (in the serializer).** The dispatch plans then
+applies the 6 additive resources — `hcloud_network.private`, `hcloud_network_subnet.private`,
 `hcloud_server_network.web["web-1"]` (online attach, no reboot),
 `hcloud_server_network.web["web-2"]`, `hcloud_volume.workspaces["web-2"]`,
-`hcloud_volume_attachment.workspaces["web-2"]`. Canonical invocation (raw `AWS_*` for the
-R2 backend + `doppler -p soleur -c prd_terraform --name-transformer tf-var`). Do NOT
-`-target` `hcloud_placement_group.web_spread` or the git_data resources.
+`hcloud_volume_attachment.workspaces["web-2"]` — via the canonical invocation (raw `AWS_*` for
+the R2 backend + `doppler -p soleur -c prd_terraform --name-transformer tf-var`), after the
+plan-scoped destroy-guard asserts `reboot_updates=0`. The apply's created-resources output is
+the **attach proof** (no reachability probe needed). `hcloud_placement_group.web_spread` and the
+git_data resources are never in the target set.
 
-**Step 2 — Deploy app to web-2 + verify on PRIVATE IP.** Use the existing fan-out
-(`ci-deploy.sh fan_out_to_peers` over the private net; `WEB_HOST_PRIVATE_IPS` already
-carries `10.0.1.11`) or a targeted deploy. **Gate:** `GET http://10.0.1.11:3000/health` →
-`200`, `supabase:"connected"`, from a private-net probe — never via a public hostname/pool.
+**Step 2 — Deploy to web-2 + confirm acceptance off-host (no SSH).** The job triggers the
+host-side deploy fan-out (`ci-deploy.sh fan_out_to_peers` over the private net;
+`WEB_HOST_PRIVATE_IPS` already carries `10.0.1.11`). **Gate:** read web-1's
+`/hooks/deploy-status` `reason` off-host (`reason=="ok"` vs `ok_peer_fanout_degraded`) — the
+reachable web-2-accepted signal — never via a public hostname/pool and never via a private-IP
+curl.
 
-**Step 3 — Verify safe end-state (read-only).** web-1 still serves 100% via the unchanged
-A record; web-2 health-green on private IP; web-2 in no serving pool. Record the recurring
-expense (see IaC §Vendor-tier).
+**Step 3 — Confirm safe end-state (read-only).** web-1 still serves 100% via the unchanged
+A record; web-2 is a warm standby in no serving pool. Records the recurring expense
+(see IaC §Vendor-tier).
 
 ### Deferred to the GA maintenance window (NOT this plan — captured in the ADR)
 
 Ingress cutover (LB or in-place CF convert), `GIT_DATA_STORE_ENABLED=true` flip, owner-side
 relay env activation (`SOLEUR_PROXY_BIND`/`PEER_ALLOWLIST`/`HOST_ROSTER`), git-data LUKS
-cutover, remove `ignore_changes=[placement_group_id]` → drain web-1 → reboot web-1 → restore.
+cutover, remove `ignore_changes=[placement_group_id]` → drain web-1 → reboot web-1 → restore —
+all executed by the deferred cutover orchestrator (an Inngest-dispatched GHA maintenance-window
+workflow), never a human step. The web-2 LB weight flip 0→1 is gated on
+`apps/web-platform/infra/lb-weight-gate.sh` (the fail-closed, SHAPE-ONLY §(c) check that emits
+`requires_runtime_bind_probe=true`) **plus** the orchestrator's separate on-host runtime-bind
+probe — see `2026-07-04-feat-autonomous-multihost-ga-warm-standby-and-gate-plan.md`.
 
 ## Infrastructure (IaC)
 
@@ -159,12 +179,14 @@ cutover, remove `ignore_changes=[placement_group_id]` → drain web-1 → reboot
 
 ### Apply path
 - Phase 1: CI auto-apply on merge (in-place firewall update, `0 reboot`, `0 destroy`).
-- Phase 2: operator-local `-target` apply; expected downtime **zero** (private-net attach is
-  online; web-2 volume touches a non-serving host; no reboot-bearing change targeted).
+- Phase 2: dispatched via `apply_target=warm-standby` through the R2 concurrency serializer
+  (never run locally, never remote-shell); expected downtime **zero** (the private-net attach is
+  online; the web-2 volume touches a non-serving host; no reboot-bearing change is targeted). The
+  dispatch's created-resources output is the attach proof.
 - Reboot-exclusion mechanism (load-bearing): the `moved` blocks force `hcloud_server.web`
   into any targeted plan, so it cannot be `-target`-excluded — `ignore_changes =
   [placement_group_id]` (Phase 1) is what makes it a 0-change no-op. Phase 1 must merge
-  before Phase 2's operator apply.
+  before the Phase 2 dispatch.
 
 ### Distinctness / drift safeguards
 - `ignore_changes=[placement_group_id]` is **temporary** — the GA PR removes it to take the
@@ -185,17 +207,17 @@ cutover, remove `ignore_changes=[placement_group_id]` → drain web-1 → reboot
 
 ```yaml
 liveness_signal:
-  what: web-2 /health on private IP 10.0.1.11:3000 (200 + supabase:connected)
-  cadence: on-deploy (Phase 2 step 2) + existing web-1 public /health poll (release workflow)
-  alert_target: Better Stack (existing web-1 monitor); web-2 private-IP probe is deploy-gate only until GA
-  configured_in: apps/web-platform/server/health.ts + web-platform-release.yml health gate
+  what: warm-standby dispatch conclusion + the apply's created-resources output (attach proof) + web-1 deploy-status reason=="ok" (web-2 accepted the deploy)
+  cadence: on-dispatch (Phase 2) + existing web-1 public /health poll (release workflow)
+  alert_target: Better Stack (existing web-1 monitor); dispatch failure = red GHA run
+  configured_in: .github/workflows/apply-web-platform-infra.yml + apps/web-platform/infra/cat-deploy-state.sh
 error_reporting:
   destination: Sentry (existing web-platform DSN)
-  fail_loud: Phase 2 deploy-to-web-2 failure aborts the operator apply loudly (non-200 /health)
+  fail_loud: the warm-standby dispatch fails loudly on reason=~_peer_fanout_degraded or a partial apply
 failure_modes:
-  - mode: web-2 /health never green after deploy
-    detection: private-IP curl in Phase 2 step 2 (deploy gate)
-    alert_route: operator apply halts; no ingress change made
+  - mode: web-2 never accepted the deploy (unbound :9000 / fan-out degraded)
+    detection: web-1 deploy-status reason=="ok_peer_fanout_degraded" (off-host, no SSH)
+    alert_route: dispatch run red; no ingress change made
   - mode: Phase 1 ignore_changes silently re-wedges CI if later removed without the reboot
     detection: terraform-target-parity test asserting reboot_updates=0 with ignore present
     alert_route: CI red on the parity suite
@@ -263,10 +285,10 @@ Flagged the `/health` monitor-coupling hazard (adopted into Sharp Edges + the AD
 - [ ] No `cloudflare_load_balancer*` resource is added (grep-verified in review — LB is GA-deferred).
 - [ ] ADR-068 amendment committed in this PR (reboot-deferral + deferred ingress design + monitor-coupling rule).
 
-### Post-merge (operator)
+### Post-merge (autonomous dispatch)
 - [ ] Both `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` latest `main` runs = `success` (pull via `gh run list`, no dashboard).
 - [ ] `moved-block-wedge-5887.sh` PASS → #5887 auto-closed.
-- [ ] **(Phase 2, gated on expense approval)** operator `-target` apply provisions private net + web-2 volume/attach; plan showed `0 to destroy` + no web-1 reboot; web-2 `/health` green on `10.0.1.11`; expense recorded.
+- [ ] **(Phase 2, gated on expense approval)** the `apply_target=warm-standby` dispatch provisions the private net + web-2 volume/attach; the run's plan showed `0 to destroy` + no web-1 placement reboot; web-2 accepted the deploy (web-1 deploy-status `reason=="ok"`, off-host, no SSH); expense recorded.
 
 ## Sharp Edges
 
@@ -290,8 +312,8 @@ Flagged the `/health` monitor-coupling hazard (adopted into Sharp Edges + the AD
   hcloud_server.web : h.id]` references the whole map; `-target`ing it pulls
   `hcloud_server.web["web-1"]` into the closure. Safe now (Phase 1's `ignore_changes` makes
   the server a no-op) — but never `[ack-destroy]` through a reboot on the unattended path.
-- **`moved` blocks evaluate globally at plan time** regardless of `-target` — the operator
-  must read the plan and not mistake the (already-consumed) re-address for a change.
+- **`moved` blocks evaluate globally at plan time** regardless of `-target` — plan-review
+  must surface the (already-consumed) re-address as a no-op, never mistake it for a change.
 - **Do not `[ack-destroy]` the CI wedge.** The correct fix is Phase 1's `ignore_changes`
   (zero reboot), never acking the reboot through the unattended apply (#5911's whole point).
 - **`ignore_changes` removal is the GA PR's first diff** — leaving it forever means web-1
