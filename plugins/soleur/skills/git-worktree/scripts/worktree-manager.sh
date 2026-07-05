@@ -795,22 +795,34 @@ install_deps() {
 #      (so we only touch our own aborted-attempt namespace, never a sibling's);
 #   2. it is provably EMPTY — 0 commits ahead of its base (origin/<from>);
 #   3. no LIVE (open/merged) PR is attached (a parallel session may have opened a
-#      draft before committing — that collision is surfaced, never healed).
-# Real work (commits) or a live PR is left untouched and logged as a collision so
-# the caller's collision gate still sees it. Fully fail-open: any probe/network/
-# auth failure warns and returns 0 — healing must NEVER block worktree creation.
-# Runs identically from the CLI and the web (Concierge) surface, since both call
-# this script's `create`/`feature` path — that is the CLI/web parity guarantee.
+#      draft before committing — that collision is left untouched, never healed).
+# Real work (commits) or a live PR is left untouched and logged for the operator's
+# run log (these warnings are informational only — no automated caller gate
+# consumes heal's output; one-shot's Step 0a.5 collision gate is issue-ref-based
+# and runs BEFORE create). Fully fail-open: any probe/network/auth failure warns
+# and returns 0 — healing must NEVER block worktree creation. Runs identically
+# from the CLI and the web (Concierge) surface, since both call this script's
+# `create`/`feature` path — that is the CLI/web parity guarantee.
 heal_stale_branch() {
   local branch="$1"
   local from_branch="${2:-main}"
   [[ -n "$branch" ]] || return 0
 
+  # A branch checked out in ANY worktree is ACTIVE, not a stale orphan — never
+  # heal it (guards both the remote delete and the local prune below in one place;
+  # a checked-out branch is exactly the thing we must not touch).
+  if git worktree list --porcelain 2>/dev/null | grep -qx "branch refs/heads/$branch"; then
+    return 0
+  fi
+
   local remote_ref="refs/remotes/origin/$branch"
 
   # Base to measure "empty" against: the freshly-fetched origin/<from>, else the
   # local <from>. If neither resolves we cannot judge emptiness — bail rather than
-  # risk deleting a branch that only LOOKS empty against a missing base.
+  # risk deleting a branch that only LOOKS empty against a missing base. This
+  # deliberately does NOT reuse fetch_origin_branch_base(): that helper falls back
+  # to FETCH_HEAD / the literal branch name (never bails), which would be an unsafe
+  # emptiness baseline here — heal must bail, not measure against a wrong base.
   git fetch origin "$from_branch" >/dev/null 2>&1 || true
   local base_ref
   if git rev-parse --verify --quiet "refs/remotes/origin/$from_branch" >/dev/null 2>&1; then
@@ -837,25 +849,37 @@ heal_stale_branch() {
     local ahead
     ahead="$(git rev-list --count "$base_ref..$remote_sha" 2>/dev/null || echo unknown)"
     if [[ "$ahead" == "0" ]]; then
-      # Empty vs base. Refuse to delete if a LIVE PR exists. gh unavailable →
-      # exact-name + empty is itself sufficient evidence of a prior aborted run.
-      local live_pr="0"
+      # Empty vs base. Refuse to delete if a LIVE PR exists. The PR probe has THREE
+      # outcomes — and the error case must fail SAFE (asymmetry matters: unlike the
+      # emptiness probe, a wrong "no PR" answer deletes a parallel session's draft):
+      #   gh ABSENT          → policy: exact-name + empty is sufficient evidence of
+      #                        a prior aborted run → allow delete.
+      #   gh present, OK      → trust the count (0 = no live PR → delete).
+      #   gh present, ERRORED → unknown (auth/rate-limit/network) → do NOT delete;
+      #                        a transient gh outage must not yank a live PR's branch.
+      local pr_check="absent" live_pr="0"
       if command -v gh >/dev/null 2>&1; then
-        live_pr="$(gh pr list --head "$branch" --state all \
-          --json state --jq '[.[] | select(.state=="OPEN" or .state=="MERGED")] | length' 2>/dev/null || echo "0")"
-        [[ -n "$live_pr" ]] || live_pr="0"
+        if live_pr="$(gh pr list --head "$branch" --state all \
+             --json state --jq '[.[] | select(.state=="OPEN" or .state=="MERGED")] | length' 2>/dev/null)" \
+           && [[ -n "$live_pr" ]]; then
+          pr_check="ok"
+        else
+          pr_check="error"; live_pr=""
+        fi
       fi
-      if [[ "$live_pr" == "0" ]]; then
+      if [[ "$pr_check" == "error" ]]; then
+        headless_or_stderr warn "remote branch origin/$branch is empty but gh could not confirm PR state — NOT auto-deleting (fail-safe); logged for the operator's run log"
+      elif [[ "$live_pr" == "0" ]]; then
         if git push origin --delete "$branch" >/dev/null 2>&1; then
           headless_or_stderr warn "auto-healed stale empty remote branch origin/$branch (0 commits ahead of $from_branch, no live PR) — left by a prior aborted run"
         else
           headless_or_stderr warn "stale empty remote branch origin/$branch detected but delete failed (offline / no push auth) — continuing; a fresh push will fast-forward it"
         fi
       else
-        headless_or_stderr warn "remote branch origin/$branch is empty but has a live PR — NOT auto-deleting; surfacing as a collision for the caller's gate"
+        headless_or_stderr warn "remote branch origin/$branch is empty but has a live PR — NOT auto-deleting; logged for the operator's run log"
       fi
     else
-      headless_or_stderr warn "remote branch origin/$branch has $ahead commit(s) ahead of $from_branch — NOT auto-deleting (real work); surfacing as a collision"
+      headless_or_stderr warn "remote branch origin/$branch has $ahead commit(s) ahead of $from_branch — NOT auto-deleting (real work); logged for the operator's run log"
     fi
   else
     # Not on remote (already deleted, or never pushed). Prune any stale tracking ref.
@@ -863,17 +887,16 @@ heal_stale_branch() {
   fi
 
   # --- Local orphan ref (would block `git worktree add -b <branch>`) ---
-  # Only prune when it is NOT checked out in any worktree AND empty vs base.
+  # The not-checked-out condition is already guaranteed by the early return at the
+  # top, so only the emptiness gate remains. `git branch -D` skips git's merge
+  # check, but `lahead == 0` (0 commits ahead of base) is the correct substitute:
+  # a ref with unique unpushed commits reads lahead > 0 and is kept.
   if git show-ref --verify --quiet "refs/heads/$branch"; then
-    if git worktree list --porcelain 2>/dev/null | grep -qx "branch refs/heads/$branch"; then
-      : # checked out somewhere — the switch/existing-worktree path owns it
-    else
-      local lahead
-      lahead="$(git rev-list --count "$base_ref..refs/heads/$branch" 2>/dev/null || echo unknown)"
-      if [[ "$lahead" == "0" ]]; then
-        if git branch -D "$branch" >/dev/null 2>&1; then
-          headless_or_stderr warn "auto-healed stale empty local branch $branch (0 commits ahead of $from_branch) — would have blocked worktree add"
-        fi
+    local lahead
+    lahead="$(git rev-list --count "$base_ref..refs/heads/$branch" 2>/dev/null || echo unknown)"
+    if [[ "$lahead" == "0" ]]; then
+      if git branch -D "$branch" >/dev/null 2>&1; then
+        headless_or_stderr warn "auto-healed stale empty local branch $branch (0 commits ahead of $from_branch) — would have blocked worktree add"
       fi
     fi
   fi

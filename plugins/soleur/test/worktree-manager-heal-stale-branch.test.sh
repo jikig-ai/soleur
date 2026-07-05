@@ -63,9 +63,45 @@ EOF
   chmod +x "$dir/gh"
 }
 
+# gh stub whose `pr list` FAILS (auth/rate-limit/network class) — exercises the
+# fail-safe branch: gh present but errored must NOT delete (unknown PR state).
+make_pr_fail_stub() {
+  local dir="$1"
+  mkdir -p "$dir"
+  cat > "$dir/gh" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  echo "gh: could not connect to api.github.com (stub-forced error)" >&2
+  exit 1
+fi
+exit 1
+EOF
+  chmod +x "$dir/gh"
+}
+
 remote_has_branch() {
   git -C "$BARE" ls-remote --heads origin "$1" 2>/dev/null | grep -q . && echo true || echo false
 }
+
+local_has_branch() {
+  git -C "$BARE" show-ref --verify --quiet "refs/heads/$1" && echo true || echo false
+}
+
+# A bin dir with every PATH binary symlinked EXCEPT gh, so `command -v gh` fails
+# inside the SUT (gh genuinely absent) while git/bash/coreutils stay reachable.
+# (Simply dropping gh-containing PATH dirs would also remove git — the two share
+# /usr/bin on most systems.) First occurrence wins, preserving PATH precedence.
+CLEAN_BIN="$TEST_DIR/clean-bin"; mkdir -p "$CLEAN_BIN"
+while IFS= read -r d; do
+  [ -d "$d" ] || continue
+  for f in "$d"/*; do
+    [ -f "$f" ] || continue
+    b=$(basename "$f")
+    [ "$b" = "gh" ] && continue
+    [ -e "$CLEAN_BIN/$b" ] || ln -s "$f" "$CLEAN_BIN/$b" 2>/dev/null || true
+  done
+done < <(printf '%s\n' "$PATH" | tr ':' '\n')
+PATH_NO_GH="$CLEAN_BIN"
 
 # ---------------------------------------------------------------------------
 # Test 1: stale EMPTY remote branch + no live PR -> auto-deleted, worktree made
@@ -124,6 +160,67 @@ PATH="$STUB1:$PATH" bash "$SCRIPT" --yes create feat-empty-with-pr >"$TEST_DIR/t
   echo "  WARN: create exited non-zero:"; sed 's/^/    /' "$TEST_DIR/t4.log"; }
 assert_eq "true" "$(remote_has_branch feat-empty-with-pr)" "empty branch with a live PR NOT deleted"
 assert_contains "$(cat "$TEST_DIR/t4.log")" "has a live PR" "live-PR collision was surfaced"
+echo ""
+
+# ---------------------------------------------------------------------------
+# Test 5: stale EMPTY LOCAL branch (not checked out) -> pruned so worktree adds
+# ---------------------------------------------------------------------------
+# A pre-existing local `refs/heads/feat-*` at 0 commits ahead would make
+# `git worktree add -b` fail ("branch already exists"); heal must prune it first.
+echo "Test 5: empty local orphan ref is pruned (unblocks worktree add)"
+git -C "$BARE" branch feat-local-orphan main   # local ref, 0 ahead, not checked out
+STUB5="$TEST_DIR/stub-nopr5"; make_pr_count_stub "$STUB5" 0
+assert_eq "true" "$(local_has_branch feat-local-orphan)" "precondition: local orphan ref exists"
+cd "$BARE"
+PATH="$STUB5:$PATH" bash "$SCRIPT" --yes create feat-local-orphan >"$TEST_DIR/t5.log" 2>&1 || {
+  echo "  WARN: create exited non-zero:"; sed 's/^/    /' "$TEST_DIR/t5.log"; }
+assert_eq "true" "$([[ -d "$BARE/.worktrees/feat-local-orphan" ]] && echo true || echo false)" \
+  "worktree created after local orphan pruned"
+assert_contains "$(cat "$TEST_DIR/t5.log")" "auto-healed stale empty local branch" "local prune was logged"
+echo ""
+
+# ---------------------------------------------------------------------------
+# Test 6: branch checked out in a worktree is NEVER healed (early-return guard)
+# ---------------------------------------------------------------------------
+# feat-active is checked out at a NON-standard path, so create_worktree's
+# standard-path existence check misses it and reaches heal — which must early-
+# return on the checked-out guard, leaving both the ref and worktree intact.
+echo "Test 6: a checked-out branch is not healed"
+git -C "$BARE" worktree add -q "$TEST_DIR/active-elsewhere" -b feat-active main 2>/dev/null
+STUB6="$TEST_DIR/stub-nopr6"; make_pr_count_stub "$STUB6" 0
+cd "$BARE"
+PATH="$STUB6:$PATH" bash "$SCRIPT" --yes create feat-active >"$TEST_DIR/t6.log" 2>&1 || true
+assert_eq "true" "$(local_has_branch feat-active)" "checked-out branch ref preserved (not pruned)"
+assert_eq "true" "$([[ -d "$TEST_DIR/active-elsewhere" ]] && echo true || echo false)" \
+  "checked-out worktree left intact"
+echo ""
+
+# ---------------------------------------------------------------------------
+# Test 7: gh ABSENT -> empty orphan still healed on exact-name + empty evidence
+# ---------------------------------------------------------------------------
+echo "Test 7: gh unavailable still heals an empty orphan"
+git -C "$TEST_DIR/seed" branch feat-nogh-orphan main
+assert_eq "true" "$(remote_has_branch feat-nogh-orphan)" "precondition: orphan exists on origin"
+cd "$BARE"
+PATH="$PATH_NO_GH" bash "$SCRIPT" --yes create feat-nogh-orphan >"$TEST_DIR/t7.log" 2>&1 || {
+  echo "  WARN: create exited non-zero:"; sed 's/^/    /' "$TEST_DIR/t7.log"; }
+assert_eq "false" "$(remote_has_branch feat-nogh-orphan)" "empty orphan deleted even with gh absent"
+echo ""
+
+# ---------------------------------------------------------------------------
+# Test 8: gh ERRORS (present but failing) -> fail-safe, do NOT delete
+# ---------------------------------------------------------------------------
+# The load-bearing asymmetry: a transient gh outage must not yank a branch that
+# might have a live PR. Distinct from gh-absent (Test 7), which DOES heal.
+echo "Test 8: gh error is fail-safe (empty orphan preserved, not deleted)"
+git -C "$TEST_DIR/seed" branch feat-gh-error main
+STUB8="$TEST_DIR/stub-ghfail"; make_pr_fail_stub "$STUB8"
+assert_eq "true" "$(remote_has_branch feat-gh-error)" "precondition: orphan exists on origin"
+cd "$BARE"
+PATH="$STUB8:$PATH" bash "$SCRIPT" --yes create feat-gh-error >"$TEST_DIR/t8.log" 2>&1 || {
+  echo "  WARN: create exited non-zero:"; sed 's/^/    /' "$TEST_DIR/t8.log"; }
+assert_eq "true" "$(remote_has_branch feat-gh-error)" "orphan NOT deleted when gh could not confirm PR state"
+assert_contains "$(cat "$TEST_DIR/t8.log")" "could not confirm PR state" "fail-safe was logged"
 echo ""
 
 print_results
