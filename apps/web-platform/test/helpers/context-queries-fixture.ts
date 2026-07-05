@@ -74,6 +74,18 @@ export function buildFixture(): string {
   writeSkill(root, "traversal", "context_queries:\n  - knowledge-base/../../../etc/passwd\n");
   writeSkill(root, "absolute", "context_queries:\n  - /etc/passwd\n");
   writeSkill(root, "symlink-query", "context_queries:\n  - knowledge-base/marketing/link.md\n");
+  // A skill literally named `plugin`, resolving a real artifact. Makes the
+  // `other:plugin` adversarial test DISCRIMINATING: under the buggy
+  // `lastIndexOf(":")` strip, `other:plugin` launders to `plugin` and would
+  // resolve here; the correct anchored strip keeps the colon and fails the
+  // charset gate → {}. Without this skill, both impls return {} vacuously.
+  writeSkill(root, "plugin", "context_queries:\n  - knowledge-base/marketing/brand-guide.md\n");
+
+  // A skill whose SKILL.md is a SYMLINK (target inside the skills dir, so realpath
+  // containment passes) → gate #2's `lstatSync(...).isSymbolicLink()` reject fires.
+  const symlinkSkillDir = path.join(root, "plugins", "soleur", "skills", "symlink-skillmd");
+  mkdirSync(symlinkSkillDir, { recursive: true });
+  symlinkSync(path.join("..", "with-query", "SKILL.md"), path.join(symlinkSkillDir, "SKILL.md"));
 
   // A skill whose BODY (not frontmatter) mentions context_queries: — the
   // frontmatter fast-path must treat this as a silent no-op.

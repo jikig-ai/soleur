@@ -45,7 +45,7 @@ const SOLEUR_SKILL_PREFIX = "soleur:";
  * the prefix. Mirrors the shell hook's `"$real" == "$real_root"/*` (the trailing
  * slash) while also accepting `real === root` for completeness.
  */
-function isContained(real: string, root: string): boolean {
+export function isContained(real: string, root: string): boolean {
   return real === root || real.startsWith(root + path.sep);
 }
 
@@ -80,31 +80,36 @@ function parseContextQueries(md: string): string[] {
     }
     if (c !== 1) continue; // only inside the frontmatter block
 
+    // Horizontal-whitespace class is `[ \t]`, NOT `\s`: awk's C-locale
+    // `[[:space:]]` matches only ASCII space/tab within a line, whereas JS `\s`
+    // also matches Unicode separators (NBSP, U+2028, …) — using `\s` would parse
+    // a Unicode-spaced declaration in TS but not the shell, breaking byte-parity
+    // (and per cq-regex-unicode-separators-escape-only).
     // Block-item line: `  - value` → strip the `- ` prefix + surrounding quotes.
-    if (inBlock && /^\s+-\s+/.test(line)) {
-      const val = line.replace(/^\s+-\s+/, "").replace(/^["']|["']$/g, "");
+    if (inBlock && /^[ \t]+-[ \t]+/.test(line)) {
+      const val = line.replace(/^[ \t]+-[ \t]+/, "").replace(/^["']|["']$/g, "");
       if (val !== "") queries.push(val);
       continue;
     }
     // A non-space, non-dash line closes an open block (awk `/^[^[:space:]-]/`).
-    if (inBlock && /^[^\s-]/.test(line)) {
+    if (inBlock && /^[^ \t-]/.test(line)) {
       inBlock = false;
     }
     // Empty inline `context_queries: []` → declared but no items.
-    if (/^context_queries:\s*\[\s*\]\s*$/.test(line)) {
+    if (/^context_queries:[ \t]*\[[ \t]*\][ \t]*$/.test(line)) {
       continue;
     }
     // Inline array `context_queries: [a, b]`.
-    const inline = line.match(/^context_queries:\s*\[(.*)\]\s*$/);
+    const inline = line.match(/^context_queries:[ \t]*\[(.*)\][ \t]*$/);
     if (inline) {
-      for (const part of inline[1].split(/\s*,\s*/)) {
+      for (const part of inline[1].split(/[ \t]*,[ \t]*/)) {
         const v = part.replace(/^["']|["']$/g, "");
         if (v !== "") queries.push(v);
       }
       continue;
     }
     // Bare `context_queries:` opens the block form.
-    if (/^context_queries:\s*$/.test(line)) {
+    if (/^context_queries:[ \t]*$/.test(line)) {
       inBlock = true;
       continue;
     }
@@ -147,6 +152,15 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
   // suite that mocks `node:child_process` spawn-only at import time. See
   // knowledge-base/project/learnings/2026-06-10-bot-cron-safe-commit-substrate-symlink-removal.md.
   const execFileAsync = promisify(execFile);
+  // Constant-derived roots: realpath ONCE at registration — they depend only on the
+  // closure-constant repoRoot. Recomputing them per-fire (as an earlier draft did)
+  // paid two sync realpaths on the hot path for all ~89 non-declaring skills on
+  // every Skill dispatch. A null here (dir absent) fails the hook closed for the
+  // session, which is the correct fail-open behaviour for a workspace missing the
+  // plugin/kb tree.
+  const skillsDir = path.join(repoRoot, "plugins", "soleur", "skills");
+  const realSkills = realpathOrNull(skillsDir);
+  const realKb = realpathOrNull(path.join(repoRoot, "knowledge-base"));
   return async (input) => {
     try {
       // Kill-switch (strict "1", read per-invocation — mirrors the shell `== "1"`).
@@ -164,10 +178,8 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
       if (!/^[a-z0-9-]+$/.test(name)) return {};
 
       // Gate #2 — SKILL.md path containment under plugins/soleur/skills/.
-      const skillsDir = path.join(repoRoot, "plugins", "soleur", "skills");
       const skillmd = path.join(skillsDir, name, "SKILL.md");
       const realMd = realpathOrNull(skillmd);
-      const realSkills = realpathOrNull(skillsDir);
       if (!realMd || !realSkills || !isContained(realMd, realSkills)) return {};
       // Reject a symlinked SKILL.md; require a regular file (shell `-f && ! -L`).
       let mdStat: ReturnType<typeof lstatSync>;
@@ -184,7 +196,6 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
       if (!frontmatterDeclaresContextQueries(md)) return {};
 
       const queries = parseContextQueries(md);
-      const realKb = realpathOrNull(path.join(repoRoot, "knowledge-base"));
 
       const resolved: string[] = [];
       const skipped: string[] = [];
@@ -209,6 +220,11 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
           const { stdout } = await execFileAsync("git", ["-C", repoRoot, "ls-files", "--", q], {
             timeout: GIT_TIMEOUT_MS,
             encoding: "utf-8",
+            // Generous cap so a large committed match set is byte-sorted + capped at
+            // MAX_GLOB rather than rejected with ENOBUFS → misleading "(no committed
+            // match)" (the default 1 MB would truncate a big kb path list). The shell
+            // hook's `sort` pipe has no such limit; this keeps the divergence unreachable.
+            maxBuffer: 16 * 1024 * 1024,
           });
           matches = stdout.split("\n").filter((line) => line !== "");
           // LC_ALL=C byte-sort parity (git output order is not guaranteed stable
@@ -233,6 +249,13 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
           try {
             st = lstatSync(abs);
           } catch {
+            // KNOWN parity-exempt (byte-parity-safe): for a `git ls-files`-tracked
+            // path whose worktree copy is absent, the shell emits "(escapes
+            // knowledge-base)" (its `realpath` fails first); JS reaches lstat first
+            // and emits the more-accurate "(missing)". Reachable only via an
+            // index-vs-worktree inconsistency (tracked file, parent removed on disk)
+            // that cannot occur in a fresh Concierge checkout, so the parity test's
+            // fixtures never hit it — kept as-is for the more-correct operator signal.
             skipped.push(`${rel} (missing)`);
             continue;
           }

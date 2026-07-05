@@ -4,6 +4,9 @@
 // note that is NEVER silent once `context_queries` was declared. The
 // model-controlled `skill` value must never be echoed into the note or the error
 // path (a NEW trust boundary the phase-surface hook does not have).
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildFixture, cleanupFixture, gitAvailable } from "./helpers/context-queries-fixture";
 
@@ -15,7 +18,7 @@ vi.mock("../server/observability", async (importOriginal) => ({
   reportSilentFallback: (...args: unknown[]) => reportSilentFallback(...args),
 }));
 
-import { createContextQueriesHook } from "../server/context-queries-hook";
+import { createContextQueriesHook, isContained } from "../server/context-queries-hook";
 
 const HAS_GIT = gitAvailable();
 
@@ -139,10 +142,27 @@ describe("createContextQueriesHook", () => {
     // --- AC4 / Scenario 6: adversarial skill names → {} ---
     it("AC4: adversarial skill names fail gate #1 and return {}", async () => {
       expect(await call({ skill: "../../etc/passwd" })).toEqual({});
-      expect(await call({ skill: "other:plugin" })).toEqual({}); // anchored strip: NOT laundered to "plugin"
       expect(await call({ skill: "Foo Bar" })).toEqual({});
       expect(await call({ skill: "UPPER" })).toEqual({});
       expect(await call({ skill: "a/b" })).toEqual({});
+    });
+
+    // --- AC4 (discriminating): the anchored soleur: strip must NOT launder
+    // `other:plugin` → `plugin`. This is only a real regression guard because a
+    // fixture skill named `plugin` EXISTS and resolves: under the buggy
+    // lastIndexOf(":") strip, `other:plugin` would resolve the `plugin` skill's
+    // artifact; under the correct anchored strip the colon fails the charset gate.
+    it("AC4: `other:plugin` is NOT laundered to the resolvable `plugin` skill", async () => {
+      // Precondition: the laundered target IS reachable (proves the test discriminates).
+      const laundered = await ctxOf({ skill: "plugin" });
+      expect(laundered).toContain("knowledge-base/marketing/brand-guide.md");
+      // The adversarial input must still return {} (anchored strip keeps the colon).
+      expect(await call({ skill: "other:plugin" })).toEqual({});
+    });
+
+    // --- Gate #2: a symlinked SKILL.md is rejected even though its target is contained ---
+    it("Gate #2: a symlinked SKILL.md returns {} (symlink reject)", async () => {
+      expect(await call({ skill: "symlink-skillmd" })).toEqual({});
     });
     it("AC4: non-Skill tool / missing / non-string skill → {}", async () => {
       expect(await call({ skill: "with-query" }, "Read")).toEqual({});
@@ -201,24 +221,39 @@ describe("createContextQueriesHook", () => {
       cleanupFixture(nonGit);
     }
   });
+
+  // Scenario 10 note: the CLI test's live-pilot check (real `frontend-design`
+  // SKILL.md resolves ≥1 committed artifact) is deliberately NOT ported here —
+  // synthesizing that against the live repo would violate cq-test-fixtures-
+  // synthesized-only; `.claude/hooks/skill-context-queries.test.sh` (AC14) owns
+  // the live-repo pilot check, and the shell-parity test proves the TS hook
+  // produces byte-identical output over the shared synthetic fixture.
+
+  // --- P2 (test-design): direct guard on the load-bearing `+ path.sep` boundary.
+  // The prefix-collision case (`knowledge-base-evil/` sibling) is unreachable
+  // through the public interface (a `knowledge-base/` pathspec never git-expands
+  // into a sibling; a skill name can't contain `/`), so assert the helper directly.
+  it("isContained rejects a shared-prefix sibling (the `+ path.sep` guard)", () => {
+    const root = path.join("/repo", "knowledge-base");
+    expect(isContained(root, root)).toBe(true); // exact root
+    expect(isContained(path.join(root, "marketing", "brand-guide.md"), root)).toBe(true); // legit child
+    expect(isContained("/repo/knowledge-base-evil/secret.md", root)).toBe(false); // sibling prefix collision
+    expect(isContained("/repo/knowledge-base-evil", root)).toBe(false);
+  });
 });
 
 // A non-git directory holding a valid `with-query` SKILL.md but no git repo, so
 // `git ls-files` fails (exit 128 / git-absent) and the per-query inner catch must
 // convert that to a skip entry — never a bare {}.
 function buildNonGitRepo(): string {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { mkdtempSync, mkdirSync, writeFileSync } = require("node:fs");
-  const { tmpdir } = require("node:os");
-  const p = require("node:path");
-  const root = mkdtempSync(p.join(tmpdir(), "ctxq-nogit-"));
-  const d = p.join(root, "plugins", "soleur", "skills", "with-query");
+  const root = mkdtempSync(path.join(tmpdir(), "ctxq-nogit-"));
+  const d = path.join(root, "plugins", "soleur", "skills", "with-query");
   mkdirSync(d, { recursive: true });
   writeFileSync(
-    p.join(d, "SKILL.md"),
+    path.join(d, "SKILL.md"),
     '---\nname: with-query\ndescription: "d"\ncontext_queries:\n  - knowledge-base/marketing/brand-guide.md\n---\n\nBody.\n',
   );
-  mkdirSync(p.join(root, "knowledge-base", "marketing"), { recursive: true });
-  writeFileSync(p.join(root, "knowledge-base", "marketing", "brand-guide.md"), "x\n");
+  mkdirSync(path.join(root, "knowledge-base", "marketing"), { recursive: true });
+  writeFileSync(path.join(root, "knowledge-base", "marketing", "brand-guide.md"), "x\n");
   return root;
 }

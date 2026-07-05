@@ -72,12 +72,16 @@ async function jsNote(skill: string): Promise<string> {
   return out.hookSpecificOutput.additionalContext;
 }
 
+// The whole block is skipped when the toolchain is absent (skipIf), so the
+// non-blocking skip is reported by vitest itself; a `beforeAll` warn guard would
+// be dead code (beforeAll never runs under skipIf). One console.warn at collection
+// time keeps the skip visible without a dead runtime branch.
+if (!ready) {
+  console.warn("context-queries-shell-parity: bash/jq/git unavailable — skipping shell↔JS note parity.");
+}
+
 describe.skipIf(!ready)("shell ↔ JS context-queries note byte-parity (#6046)", () => {
   beforeAll(() => {
-    if (!ready) {
-      console.warn("context-queries-shell-parity: bash/jq/git unavailable — skipping shell↔JS note parity.");
-      return;
-    }
     FIX = buildFixture();
     jsHook = createContextQueriesHook(FIX);
   });
@@ -85,13 +89,19 @@ describe.skipIf(!ready)("shell ↔ JS context-queries note byte-parity (#6046)",
     if (FIX) cleanupFixture(FIX);
   });
 
-  // One skill per note shape: resolved-only, 0-resolved-clean, 0-resolved+skipped,
-  // resolved+skipped. Byte-equality proves the note template is identical.
+  // One skill per note shape. Byte-equality proves the note template — including
+  // EVERY hand-maintained skip-reason fragment — is identical across the two
+  // hand-ported copies. Covers: resolved-only, 0-resolved-clean,
+  // 0-resolved+skipped, resolved+skipped, MAX_GLOB cap, per-match symlink reject,
+  // and the out-of-tree traversal rejection.
   for (const [shape, skill] of [
     ["resolved", "with-query"],
     ["0-resolved (clean)", "empty-query"],
     ["0-resolved + skipped", "missing-art"],
     ["resolved + skipped", "mixed-query"],
+    ["MAX_GLOB cap", "many-query"],
+    ["per-match symlink reject", "symlink-query"],
+    ["out-of-tree traversal reject", "traversal"],
   ] as const) {
     it(`emits a byte-identical note for the ${shape} shape (${skill})`, async () => {
       expect(await jsNote(skill)).toBe(shellNote(FIX, skill));
