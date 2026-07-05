@@ -431,8 +431,8 @@ logs:
   where: Inngest fn logs (logger.info/warn, fn:"cron-ruleset-bypass-audit"); Sentry breadcrumbs
   retention: Inngest + Sentry defaults
 discoverability_test:
-  command: "gh issue list --label compliance/critical --search '[Ruleset Audit] CLA Required ruleset drift in:title'"
-  expected_output: "the auto-filed CLA drift issue when the live CLA ruleset diverges; empty on green"
+  command: "gh issue list --label compliance/critical --search '[Ruleset Audit] CLA Required ruleset drift in:title' --json number --jq 'length'"
+  expected_output: "0"
 ```
 
 ## Architecture Decision (ADR/C4)
