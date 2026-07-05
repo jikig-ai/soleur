@@ -574,7 +574,10 @@ function makeState(overrides: Partial<FakeState> = {}): FakeState {
   };
 }
 
-function installDispatch(state: FakeState) {
+function installDispatch(
+  state: FakeState,
+  opts: { throwOnCreate?: boolean } = {},
+) {
   h.requestSpy.mockImplementation(async (...args: unknown[]) => {
     const route = args[0] as string;
     const params = (args[1] ?? {}) as Record<string, unknown>;
@@ -602,6 +605,9 @@ function installDispatch(state: FakeState) {
       return { data: state.openIssues };
     }
     if (route === "POST /repos/{owner}/{repo}/issues") {
+      if (opts.throwOnCreate) {
+        throw new Error("fake GitHub 500 on issue create");
+      }
       const number = 9000 + state.created.length;
       state.created.push({
         title: params.title as string,
@@ -748,5 +754,48 @@ describe("cronRulesetBypassAuditHandler — per-ruleset audit isolation (#6061)"
     expect(createdTitles(state)).not.toContain(CLA_DRIFT_TITLE);
     // Behavioral isolation: the CI step still filed its own drift issue.
     expect(createdTitles(state)).toContain(CI_DRIFT_TITLE);
+  });
+
+  it("CLA bypass_actors redacted (token scope) → guardBroken: ok=false + reportSilentFallback + NO issue", async () => {
+    const state = makeState({
+      details: {
+        1: liveDetail(CI_BYPASS_CANON, CI_RSC_CANON), // CI green
+        // CLA live detail is missing bypass_actors (non-admin token redaction
+        // shape) → fetchRulesetDetail throws → guard fault, not a drift issue.
+        2: liveDetail(undefined, CLA_RSC_CANON),
+      },
+    });
+    installDispatch(state);
+    const result = await cronRulesetBypassAuditHandler({
+      step: makeStep(),
+      logger: handlerLogger,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.cla.guardBroken).toBe(true);
+    expect(h.reportSilentFallbackSpy).toHaveBeenCalled();
+    expect(createdTitles(state)).not.toContain(CLA_DRIFT_TITLE);
+  });
+
+  it("issue-file throw on real CLA drift → drift result PRESERVED (ok=false, not guardBroken) + reportSilentFallback", async () => {
+    const state = makeState({
+      details: {
+        1: liveDetail(CI_BYPASS_CANON, CI_RSC_CANON), // CI green
+        2: liveDetail(CLA_BYPASS_CANON, [
+          { context: "cla-check", integration_id: 15368 },
+        ]), // CLA dropped cla-evidence → critical drift
+      },
+    });
+    installDispatch(state, { throwOnCreate: true });
+    const result = await cronRulesetBypassAuditHandler({
+      step: makeStep(),
+      logger: handlerLogger,
+    });
+    // The write hiccup is reported to Sentry but must NOT discard the computed
+    // drift: criticalCount survives so the heartbeat still degrades, and the
+    // fault is NOT mislabeled guardBroken (it's an issue-lifecycle hiccup).
+    expect(result.ok).toBe(false);
+    expect(result.cla.criticalCount).toBe(1);
+    expect(result.cla.guardBroken).toBe(false);
+    expect(h.reportSilentFallbackSpy).toHaveBeenCalled();
   });
 });

@@ -787,7 +787,12 @@ t_cla_rsc_canonical_matches_create_script() {
   # No-dup guard: the canonical must not carry a duplicate context row.
   local dup
   dup=$(jq -r '(map(.context) | length) - (map(.context) | unique | length)' "$CLA_RSC_CANONICAL")
-  if [[ "$canon_pairs" == "$create_pairs" && "$dup" == "0" ]]; then
+  # Non-vacuity floor: a double-fault (canonical [] AND slice []) would compare
+  # equal; the >=2 floor (CLA currently requires cla-check + cla-evidence) makes
+  # this test self-evidently non-vacuous, matching T-rsc-7 / Test 7 convention.
+  local n_canon
+  n_canon=$(jq 'length' "$CLA_RSC_CANONICAL")
+  if [[ "$canon_pairs" == "$create_pairs" && "$dup" == "0" && "$n_canon" -ge 2 ]]; then
     _report "T-cla-1 CLA RSC canonical (context,integration_id) == create-script + no-dup" ok
   else
     _report "T-cla-1 CLA RSC canonical (context,integration_id) == create-script + no-dup" fail \
@@ -817,7 +822,11 @@ t_cla_bypass_canonical_matches_create_script() {
   create_triples=$(jq -S "[.bypass_actors[] | {actor_id, actor_type, bypass_mode}] | $sort_key" <<<"$payload")
   local dup
   dup=$(jq -r '(map("\(.actor_id)|\(.actor_type)|\(.bypass_mode)")) as $k | ($k | length) - ($k | unique | length)' "$CLA_BYPASS_CANONICAL")
-  if [[ "$canon_triples" == "$create_triples" && "$dup" == "0" ]]; then
+  # Non-vacuity floor (>=3): CLA currently carries OrgAdmin + RepoRole + the CLA
+  # bot Integration. Makes a double-empty-fault self-evidently non-vacuous.
+  local n_canon
+  n_canon=$(jq 'length' "$CLA_BYPASS_CANONICAL")
+  if [[ "$canon_triples" == "$create_triples" && "$dup" == "0" && "$n_canon" -ge 3 ]]; then
     _report "T-cla-1b CLA bypass canonical triples == create-script + no-dup" ok
   else
     _report "T-cla-1b CLA bypass canonical triples == create-script + no-dup" fail \

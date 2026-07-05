@@ -120,7 +120,7 @@ kept in lockstep with the create-script's inline blocks by the `T-cla-1` /
 | `cla-check` / `cla-evidence` dropped (or the whole RSC rule gone) | yes | a PR could merge without the CLA-signature / CLA-evidence gate |
 | `bypass_actors` widened | yes | a named actor can merge around the CLA gate while the gate still looks intact (the quiet defeat vector) |
 | `enforcement` not `active` | yes | the entire CLA gate is suspended |
-| a NEW `cla-*` context required live but unmirrored to `required-checks.txt` | no (liveness) | bot PRs deadlock (no synthetic posted for the new context) — a green heartbeat does NOT mean "no CLA problem" here |
+| a NEW `cla-*` context required live but absent from the canonical JSON | no (divergence) | the audit flags a non-critical "live has extra gates" finding (canonical snapshot is stale — reconcile). If that context is ALSO missing from `required-checks.txt`, bot PRs deadlock (no synthetic posted) — Test 7 guards the canonical↔`required-checks.txt` lockstep, so a green heartbeat does NOT by itself mean "no CLA problem" |
 
 > The `Integration:1236702/always` bypass actor is the **CLA bot** — it
 > legitimately needs `always` to update CLA status and is IN the canonical, so

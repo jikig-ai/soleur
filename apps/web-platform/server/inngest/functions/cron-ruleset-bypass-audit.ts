@@ -8,8 +8,12 @@
 // Auto-closes each ruleset's open drift issue on its next green run.
 //
 // Both rulesets are audited through the SAME `auditOneRuleset` helper, each in
-// its own `step.run` step (replay isolation: a throw/guard-fault on one cannot
-// abort the other, and each memoizes independently on the retries:1 replay).
+// its own `step.run` step. `auditOneRuleset` CATCHES its own guard faults and
+// RETURNS `guardBroken:true` (it never throws out of the step), so a fault on
+// one ruleset already cannot abort the other. The separate steps exist for
+// independent Inngest replay memoization: on the `retries:1` replay, a failed
+// heartbeat step re-runs without re-executing an already-memoized audit step
+// (no duplicate GitHub issue writes).
 //
 // Migrated from .github/workflows/scheduled-ruleset-bypass-audit.yml
 // (deleted in #4483, TR9 Phase 2). Pure TS — no agent spawn, no ephemeral
@@ -728,13 +732,13 @@ export async function cronRulesetBypassAuditHandler({
     },
   );
 
-  // --- Step 2: audit CI ruleset (own step — replay isolation from CLA) ---
+  // --- Step 2: audit CI ruleset (own step — independent replay memoization) ---
   const ci = await step.run("audit-ci-ruleset", async () => {
     const octokit = await newOctokit(installationToken);
     return auditOneRuleset(octokit, CI_AUDIT_CONFIG, logger);
   });
 
-  // --- Step 3: audit CLA ruleset (own step — a CLA throw cannot abort CI) ---
+  // --- Step 3: audit CLA ruleset (own step; auditOneRuleset never throws) ---
   const cla = await step.run("audit-cla-ruleset", async () => {
     const octokit = await newOctokit(installationToken);
     return auditOneRuleset(octokit, CLA_AUDIT_CONFIG, logger);
