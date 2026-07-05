@@ -945,6 +945,23 @@ describe("ADR-068 warm-standby dispatch -target set (additive; reboot_updates=0)
     expect([...warmTargets].sort()).toEqual([...WARM_STANDBY_TARGETS].sort());
   });
 
+  test("warm_standby REUSES the shared extracted poll, not an inline copy (AC8, #6040 migration lock)", () => {
+    // #6040: warm_standby was migrated off its ~94-line inline baseline/trigger/
+    // verify copy onto the shared deploy-status-fanout-verify.sh (the SAME poll the
+    // web_2_recreate job runs). Lock the migration in so a future revert fails CI.
+    expect(warmJobBlock).toContain("deploy-status-fanout-verify.sh");
+    // Proof the inline verify-poll copy is GONE: its terminal-timeout sentinel now
+    // lives ONLY in the shared script (+ that string never appeared elsewhere in the
+    // warm_standby block). A revert that reinstates the inline poll turns this red.
+    expect(warmJobBlock).not.toContain("did not report a fresh completion");
+    // The former cross-step outputs the inline copy published are gone: the summary
+    // step must read the shared verify step's deployed_tag, and no dangling
+    // steps.trigger.outputs.* / steps.baseline.outputs.* reference may remain.
+    expect(warmJobBlock).toContain("steps.verify.outputs.deployed_tag");
+    expect(warmJobBlock).not.toContain("steps.trigger.outputs");
+    expect(warmJobBlock).not.toContain("steps.baseline.outputs");
+  });
+
   test("warm-standby targets NO hcloud_server.* — reboot_updates=0 by construction", () => {
     // reboot_updates only counts placement_group_id/server_type in-place updates
     // on hcloud_server.* (destroy-guard-filter-web-platform.jq:135). The warm-standby
