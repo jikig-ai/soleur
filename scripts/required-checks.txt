@@ -4,7 +4,7 @@
 #   - "CI Required" ruleset: test, dependency-review, e2e, skill-security-scan PR gate
 #     (created by scripts/create-ci-required-ruleset.sh,
 #      `skill-security-scan PR gate` added by scripts/update-ci-required-ruleset.sh per #3542 R15)
-#   - "CLA Required" ruleset: cla-check
+#   - "CLA Required" ruleset: cla-check, cla-evidence
 #
 # Every scheduled-*.yml workflow that creates PRs via GITHUB_TOKEN must post
 # synthetic check-runs for each name listed here. GITHUB_TOKEN PRs do not

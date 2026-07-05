@@ -22,20 +22,26 @@
 #      action) — a silent divergence would scan the bot diff with a different
 #      engine than the required `gitleaks scan` job.
 #
-# The CLA contexts {cla-check, cla-evidence} live in required-checks.txt but
-# have no canonical JSON (only scripts/create-cla-required-ruleset.sh), so they
-# are excluded by an EXPLICIT named set below. A 3rd CLA context requires
-# updating CLA_EXCLUDE here.
+# The CLA contexts {cla-check, cla-evidence} live in required-checks.txt AND now
+# have their own canonical JSON (scripts/ci-cla-required-ruleset-canonical-
+# required-status-checks.json). They are excluded from the CI-parity checks (they
+# are a DIFFERENT ruleset) via CLA_EXCLUDE, which is now DERIVED from that CLA
+# canonical (not a hardcoded named set) — so a 3rd CLA context flows through
+# automatically once the canonical is updated.
 #
-# KNOWN GAP (entirely unguarded, not merely async): unlike the CI Required set —
-# whose live↔canonical drift the daily Inngest cron-ruleset-bypass-audit catches
-# next-day — the CLA Required ruleset has NEITHER a canonical JSON NOR audit-cron
-# coverage. A live drift there (e.g. a 3rd required CLA context) is caught by no
-# synchronous test AND no daily cron; the action would silently omit it and the
-# bot PR would deadlock. Deferred hardening: mint a ci-cla-required-ruleset
-# canonical JSON + extend the audit drift loop. Tracked in #6061.
+# CLA drift is now guarded on all three dimensions (#6061), closing the former
+# "entirely unguarded" gap:
+#   - canonical JSONs (bypass + required-status-checks) mirror the create-script;
+#   - daily live↔canonical coverage via the cron-ruleset-bypass-audit Inngest fn
+#     (enforcement + bypass_actors + required_status_checks, per-ruleset step);
+#   - file-vs-file: Test 7 below (SSOT CLA subset == CLA canonical) + the
+#     canonical↔create-script sync gates in tests/scripts/test-audit-ruleset-bypass.sh.
+# Test 7 keeps required-checks.txt and the CLA canonical in lockstep: the bot
+# composite action synthesizes a green check-run for every name in required-
+# checks.txt including cla-check/cla-evidence, so a 3rd CLA context mirrored into
+# the canonical but NOT into required-checks.txt would deadlock bot PRs.
 #
-# Refs: #6049
+# Refs: #6049, #6061
 
 set -euo pipefail
 
@@ -54,9 +60,19 @@ CANONICAL="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-chec
 ACTION_YML="$REPO_ROOT/.github/actions/bot-pr-with-synthetic-checks/action.yml"
 SECRET_SCAN_YML="$REPO_ROOT/.github/workflows/secret-scan.yml"
 CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+CLA_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
 
-# Explicit CLA exclusion — no canonical JSON mirror exists for the CLA ruleset.
-CLA_EXCLUDE=("cla-check" "cla-evidence")
+# CLA exclusion for the CI-parity checks, DERIVED from the CLA canonical (#6061)
+# — the CLA contexts belong to a different ruleset and must not be misattributed
+# as CI drift. Deriving (vs a hardcoded named set) means a 3rd CLA context is
+# handled structurally. GUARD: `mapfile`/`while-read` under `set -euo pipefail`
+# does NOT reap a jq failure inside process substitution, so an empty derive
+# would silently exclude NOTHING and misread CLA leakage as CI drift — the
+# `>= 2` non-empty guard is the real protection.
+assert_file_exists "$CLA_CANONICAL" "CLA RSC canonical exists"
+CLA_EXCLUDE=()
+while IFS= read -r c; do CLA_EXCLUDE+=("$c"); done < <(jq -e -r '.[].context' "$CLA_CANONICAL")
+(( ${#CLA_EXCLUDE[@]} >= 2 )) || { echo "FAIL: CLA_EXCLUDE derived < 2 contexts (jq failure or empty canonical)"; exit 1; }
 
 echo "=== required-checks ↔ canonical parity (#6049) ==="
 echo ""
@@ -105,6 +121,34 @@ diff_sets() {
 
 only_in_config() { sed -n "1,/^---ONLY-IN-CANONICAL---$/p" <<< "$1" | sed '/^---ONLY-IN-CANONICAL---$/d'; }
 only_in_canon()  { sed -n "/^---ONLY-IN-CANONICAL---$/,\$p" <<< "$1" | sed '/^---ONLY-IN-CANONICAL---$/d'; }
+
+# Parse ONLY the CLA Required ruleset section of required-checks.txt (for Test 7).
+# The section start is EXACT-anchored on `^#…CLA Required ruleset$` — a loose
+# `CLA Required.*ruleset` match would hit the line-7 header comment
+# (`#   - "CLA Required" ruleset: cla-check`) and slurp the whole CI section.
+# The end is bounded on the next `^#…ruleset$` header OR EOF, so a future section
+# appended after CLA is not slurped. Applies the same leading-`#`-only comment
+# rule + quote-strip, but deliberately does NOT inherit the CLA_EXCLUDE filter —
+# Test 7 WANTS the CLA lines, and a cloned parse_ci_required would exclude them
+# and pass vacuously.
+parse_cla_section() {
+  local file="$1" line
+  awk '
+    /^#[[:space:]]*CLA Required ruleset[[:space:]]*$/ { in_section=1; next }
+    in_section && /^#[[:space:]]*[A-Za-z].*ruleset[[:space:]]*$/ { in_section=0 }
+    in_section { print }
+  ' "$file" | while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    if [[ "$line" == \"*\" ]]; then
+      line="${line#\"}"
+      line="${line%\"}"
+    fi
+    [[ -z "$line" ]] && continue
+    printf '%s\n' "$line"
+  done
+}
 
 # --- Test 1: real files are in perfect parity (both directions) -----------
 
@@ -269,6 +313,33 @@ for f in "${PARSER_FILES[@]}"; do
     PASS=$((PASS + 1))
   fi
 done
+echo ""
+
+# --- Test 7: SSOT CLA subset == CLA canonical (⊆ and ⊇, non-vacuous) [#6061] --
+# The bot composite action synthesizes a green check-run for EVERY name in
+# required-checks.txt including the CLA contexts, so required-checks.txt and the
+# CLA canonical must stay in lockstep: a 3rd CLA context in the canonical but not
+# in required-checks.txt → no synthetic posted → bot PR deadlocks.
+
+echo "Test 7: required-checks.txt CLA-subset == CLA canonical contexts (⊆ and ⊇) [#6061]"
+cla_ssot=$(parse_cla_section "$CONFIG_FILE" | sort -u)
+cla_canon=$(jq -r '.[].context' "$CLA_CANONICAL" | sort -u)
+cla_extra=$(comm -23 <(printf '%s\n' "$cla_ssot") <(printf '%s\n' "$cla_canon") | sed '/^$/d')
+cla_missing=$(comm -13 <(printf '%s\n' "$cla_ssot") <(printf '%s\n' "$cla_canon") | sed '/^$/d')
+
+assert_eq "" "$cla_extra" "(7a) no CLA name in required-checks.txt absent from CLA canonical (⊆)"
+assert_eq "" "$cla_missing" "(7b) no CLA canonical context missing from required-checks.txt (⊇)"
+
+# Non-vacuous: a both-empty parse (broken anchor) would pass 7a/7b vacuously.
+n_cla_ssot=$(printf '%s\n' "$cla_ssot" | sed '/^$/d' | wc -l | tr -d ' ')
+n_cla_canon=$(printf '%s\n' "$cla_canon" | sed '/^$/d' | wc -l | tr -d ' ')
+if [[ "$n_cla_ssot" -ge 2 && "$n_cla_canon" -ge 2 ]]; then
+  echo "  PASS: (7c) non-vacuous — $n_cla_ssot CLA SSOT names, $n_cla_canon CLA canonical contexts"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (7c) suspiciously small CLA set — n_ssot=$n_cla_ssot n_canon=$n_cla_canon"
+  FAIL=$((FAIL + 1))
+fi
 echo ""
 
 print_results
