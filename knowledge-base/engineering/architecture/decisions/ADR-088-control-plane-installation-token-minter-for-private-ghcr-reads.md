@@ -125,3 +125,58 @@ rate limits.
   explicitly INTERIM/single-operator; the App-installation-token path is the multi-tenant
   target, aligning back toward `hr-github-app-auth-not-pat` for the standing credential.
 - Cross-references ADR-087 (verifier topology — unchanged) and ADR-082 (fresh-web-2 boot).
+
+## Amendment — #6031 minter implementation (2026-07-05)
+
+The minter (Strategy B) is **IMPLEMENTED** in #6031 (`cron-ghcr-token-minter.ts`,
+`ghcr-minter-doppler-token.tf`, the App-manifest `packages: read` grant, and the
+five/six-registry Inngest lockstep), pending the live cutover (org re-consent → first
+mint verified → PAT revoked). Status stays `active`; it flips to "minter live" once the
+Phase-6 cutover acceptance (a real deploy + fresh-host boot authenticating with the minted
+token) passes.
+
+### Phase-0 empirical gate (R1) — PASS
+
+GHCR accepting App **installation** tokens for `docker pull` was the plan-defining risk. It is
+proven by the repo's own production CI: `reusable-release.yml` pushes the `soleur-*` images with
+the Actions `GITHUB_TOKEN` (itself an App installation token), and `apply-web-platform-infra.yml`
+`docker login`s + pulls the **private** `soleur-web-platform` package with the same token
+(`packages:read` job scope). The mechanism is valid for this org+packages; residual package↔repo
+linkage for the *Soleur* app's own installation is Phase-5/6 provisioning config, not a reversal.
+
+### Doppler write-token injection (CTO ruling, 2026-07-05)
+
+The `prd_ghcr` throwaway config bounds the write token's **at-rest** blast radius (an isolated
+leak grants write to one config, never a prd-wide read of `GITHUB_APP_PRIVATE_KEY`). But the
+write token is surfaced into the minter runtime as a plain `prd` secret
+(`GHCR_MINTER_DOPPLER_TOKEN`), landing in web-1's container via the **existing** single
+`--config prd` env-file path — **not** a second `--config prd_ghcr` cloud-init download. A second
+host-side download was rejected: it would distribute a control-plane-only WRITE credential onto
+every fresh **tenant** host (the exact escalation the #5274 separation exists to prevent) and add
+fail-closed risk to the cold-boot critical path for a credential tenant hosts never use. The
+runtime isolation of the write token buys nothing today anyway — the org-wide-WRITE App key is
+already co-resident in the same `prd` container env.
+
+**CPO sign-off (threshold `single-user incident`, `requires_cpo_signoff`):** `prd` gains a
+`prd_ghcr`-write credential readable by every `prd` principal (CI, terraform runner, the app
+process). **Accepted** because those principals already read the co-resident org-wide-WRITE
+`GITHUB_APP_PRIVATE_KEY` (a strictly larger capability), and true control-plane-only injection is
+deferred to the #5274 gate below.
+
+### HARD GATE — control-plane separation before the first tenant host (#5274)
+
+When the first real tenant host is provisioned, the minter MUST run on a control-plane surface
+tenant hosts cannot read from, distributing only the scoped 1h read token. That cutover MUST
+relocate **BOTH** control-plane-resident credentials off the shared/tenant `prd` env:
+1. **`GITHUB_APP_PRIVATE_KEY`** — org-wide WRITE (already a `prd` landmine pre-#6031).
+2. **`GHCR_MINTER_DOPPLER_TOKEN`** — the `prd_ghcr`-write token this PR newly co-locates in `prd`.
+
+Recorded here (a committed artifact) rather than as a #5274 issue comment so neither item can be
+silently dropped at cutover.
+
+### Manifest permission widening
+
+`packages: read` on the App is a **per-installation standing grant** on the SHARED App: every
+consenting installation grants it, so a `GITHUB_APP_PRIVATE_KEY` leak post-multi-tenant reads
+every consenting tenant's packages. (The minted *token* remains 1h/single-install/read-only; the
+App *permission set* is what widens.) CPO-accepted as the prerequisite for zero-touch onboarding.

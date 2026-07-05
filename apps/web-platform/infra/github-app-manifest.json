@@ -23,6 +23,7 @@
     "issues": "write",
     "members": "read",
     "metadata": "read",
+    "packages": "read",
     "pull_requests": "write",
     "repository_advisories": "read",
     "secret_scanning_alerts": "read",
