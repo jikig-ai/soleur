@@ -26,19 +26,27 @@ Lane: cross-domain | Threshold: single-user incident (requires_cpo_signoff)
       (degraded→degraded→ok / all-degraded / stale-start_ts / bad-tag). `jq empty` each.
 - [ ] 1.3 Write failing assertions: AC1 (retry→exit 0), AC2 (all-degraded→terminal exit 1),
       AC3 (exactly 2 POSTs, DEGRADED_RETRY_MAX=1), AC3b (retry gated on FRESH_BOOT_WINDOW_S),
-      AC3c (lock_contention retryable→exit 0), AC3d (no baseline-advance / consumed-set keeps
-      a late `ok`), AC4 (roster/staleness/tag invariants), AC6 (emits `deployed_tag=`).
+      AC3c (lock_contention retryable→exit 0), **AC3d (P0 regression guard — SAME static
+      start_ts across many polls still fires exactly one retry after the window; NOT zero)**,
+      AC3e (DEPLOY_TAG reassigned across retrigger → newer-tag ok drives exit 0), AC3f
+      (retrigger non-202 → terminal exit 1), AC4 (roster/staleness/tag invariants),
+      AC6 (emits `deployed_tag=`). Fixtures hold `start_ts` CONSTANT across repeated degraded
+      polls (else AC3/AC3d pass for the wrong reason).
 
 ## Phase 2 — Core: retry loop in the shared script (GREEN)
 
 - [ ] 2.1 Add env knobs `DEGRADED_RETRY_MAX` (1), `FRESH_BOOT_WINDOW_S` (600),
       `OP_CONTEXT` (recreate) to `deploy-status-fanout-verify.sh`.
-- [ ] 2.2 Extract `_retrigger_fanout` (re-read freshest tag + downgrade guard + POST 202 —
-      does NOT touch `PRE_START_TS`) and `_recovery_msg` (OP_CONTEXT). Add the `consumed`
-      start_ts set; keep the ORIGINAL baseline for the whole run.
+- [ ] 2.2 Extract `_retrigger_fanout` (re-read freshest tag + downgrade guard + **REASSIGN
+      outer DEPLOY_TAG** + POST; **terminal exit 1 on non-202**; does NOT touch `PRE_START_TS`)
+      and `_recovery_msg` (OP_CONTEXT). Add the `retried` start_ts set marked ONLY when the
+      retry fires; keep the ORIGINAL baseline for the whole run; guard `START_TS==0`.
 - [ ] 2.3 Convert the `*_peer_fanout_degraded` terminal `exit 1` (`:136-138`) into: single
-      re-POST gated on `elapsed ≥ FRESH_BOOT_WINDOW_S`; treat `exit_code=1 reason=lock_contention`
-      as retryable; keep terminal exit-1 on budget exhaustion + genuine failure + unexpected reason.
+      re-POST gated on `elapsed ≥ FRESH_BOOT_WINDOW_S`, re-evaluating elapsed EVERY poll (P0:
+      do NOT mark `retried` until the retry actually fires); treat `exit_code=1
+      reason=lock_contention` as retryable; keep terminal exit-1 on budget exhaustion + genuine
+      failure + unexpected reason. Set recreate-job `STATUS_POLL_MAX_ATTEMPTS=120` (AC5b) +
+      verify `timeout-minutes` above the budget (AC5c) — recreate job env only, not script default.
 - [ ] 2.4 Emit `deployed_tag=<tag>` to `$GITHUB_OUTPUT` (guarded on `-n "${GITHUB_OUTPUT:-}"`).
 - [ ] 2.5 Add `elapsed=` + `retrigger K/MAX` annotations on poll log lines.
 - [ ] 2.6 Keep ONE overall poll budget (no fresh budget per retry). Re-measure vs ~10-min
@@ -61,8 +69,11 @@ Lane: cross-domain | Threshold: single-user incident (requires_cpo_signoff)
 - [ ] 4.2 Extend `plugins/soleur/test/terraform-target-parity.test.ts` to assert warm_standby
       references the shared script (AC8), or document the follow-through probe as sufficient.
 - [ ] 4.3 Amend ADR-068 (in-verify bounded degraded-retry semantics; `Ref #6051`) (AC11).
-- [ ] 4.4 File the secondary-finding tracking issue (graceful web-1 re-swap / web-2-only
-      fan-out path) — `domain/engineering`, `priority/p3-low`; Ref #6051.
+- [ ] 4.4 File tracking issue(s) (`domain/engineering`, `priority/p3-low`; Ref #6051):
+      (a) graceful web-1 re-swap / web-2-only fan-out path (secondary finding);
+      (b) private-net web-2 post-accept health probe for GA cutover (user-impact FINDING 2);
+      (c) optional cross-pipeline merge-freeze during operator recreate (FINDING 1). May be
+      one combined issue.
 
 ## Phase 5 — Verify
 
