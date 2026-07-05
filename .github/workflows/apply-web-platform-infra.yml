@@ -1062,6 +1062,11 @@ jobs:
   web_2_recreate:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'web-2-recreate'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # GHCR is NOT anonymously pullable (private package); the digest-resolve
+      # step below logs in with GITHUB_TOKEN + this scope to `imagetools inspect`.
+      packages: read
     # Budget must exceed the SUM of: digest-resolve (≤12×20s ≈ 4m) + preflight/plan
     # (~2m) + apply (~3m) + the off-host verify poll's own worst case (baseline
     # 12×20s + SETTLE 30s + poll 60×(10s curl + 15s) ≈ 29.5m — this is the fresh-boot
@@ -1153,10 +1158,14 @@ jobs:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          # GHCR digest resolution needs an authenticated pull (private package).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
         # Read web-1's RUNNING deploy tag off-host, GATED on web-1 being healthy and
         # not mid-deploy (exit_code==0 — P2-1, don't pin a transient mid-deploy tag).
-        # Resolve tag → immutable @sha256 index digest EXACTLY ONCE via anonymous
-        # `docker buildx imagetools inspect` (public GHCR), and freeze it into
+        # Resolve tag → immutable @sha256 index digest EXACTLY ONCE via an
+        # authenticated `docker buildx imagetools inspect` (GITHUB_TOKEN + packages:read;
+        # GHCR is private, NOT anonymously pullable), and freeze it into
         # $GITHUB_ENV as PINNED so the preflight, plan -var, and apply all consume the
         # byte-identical ref (the workflow MUST NOT re-resolve between preflight and
         # apply — a moved tag would void the preflight's guarantee).
@@ -1196,10 +1205,16 @@ jobs:
             echo "::error::could not read a valid, settled running tag from web-1 deploy-status (got '${TAG}'). Cannot resolve a known-good digest — aborting BEFORE any -replace."
             exit 1
           fi
-          # Resolve ONCE. `.Manifest.Digest` is the multi-arch OCI INDEX digest
-          # (anonymous pull on the public repo). docker pull on the amd64 host + the
-          # amd64 runner resolve it to the same amd64 manifest; host-scripts are
-          # arch-independent text, so the recomputed hash is identical.
+          # Authenticate to GHCR before resolving — the image is a PRIVATE package,
+          # so an anonymous `imagetools inspect` 401s (the pre-fix bug: the plan's
+          # "live-confirmed no-auth" was a cached-docker-login false-confirm). Log in
+          # with GITHUB_TOKEN (job scope packages:read); --password-stdin so the token
+          # never lands in argv/process list.
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
+          # Resolve ONCE. `.Manifest.Digest` is the multi-arch OCI INDEX digest.
+          # docker pull on the amd64 host + the amd64 runner resolve it to the same
+          # amd64 manifest; host-scripts are arch-independent text, so the recomputed
+          # hash is identical.
           DIGEST=$(docker buildx imagetools inspect "${IMAGE_REPO}:${TAG}" --format '{{.Manifest.Digest}}' || true)
           if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::tag->digest resolution returned '${DIGEST}' (want ^sha256:[0-9a-f]{64}\$) for ${IMAGE_REPO}:${TAG}. Aborting BEFORE -replace."
