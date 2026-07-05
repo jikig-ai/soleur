@@ -60,6 +60,26 @@ alirezarezvani/claude-skills (product-team/code-to-prd)
 
 --------------------------------------------------------------------------------
 
+gstack (redact-engine)
+  License: MIT
+  Description: A redaction engine that normalizes text (NFKC + zero-width /
+    bidi strip) before matching secret/PII patterns, defeating
+    Unicode-confusable evasion, with a fail-closed input cap.
+  Used in: skills/incident/scripts/redact-engine.py (#5987)
+  Portions adopted: The "normalize-before-match" adversary model
+    (NFKC + invisible-character strip ahead of pattern matching) and the
+    ReDoS-safe input-cap / synthetic-HIGH fail-closed posture. No source
+    code was copied verbatim (clean-room): the Soleur implementation is a
+    fresh Python 3 rewrite behind a contract-preserving `redact-sentinel.sh`
+    shim, ports Soleur's own 14+ secret/PII classes with `re.ASCII` C-locale
+    semantics, matches over a WHOLE-STRING NFKC normalization (no
+    per-codepoint offset-map, which would be a fail-open), and re-checks the
+    byte cap AFTER NFKC expansion. The upstream in-place-rewrite behavior is
+    intentionally NOT carried over — the Soleur sentinel halts, it never
+    rewrites.
+
+--------------------------------------------------------------------------------
+
 Nutlope/hallmark
   License: MIT
   URL: https://github.com/Nutlope/hallmark

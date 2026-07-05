@@ -1,0 +1,9 @@
+# AGENTS sidecar with no frontmatter
+
+- Rule body [id: hr-gamma].
+
+Some prose, then a Markdown horizontal rule below:
+
+---
+
+More text after the rule.

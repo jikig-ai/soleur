@@ -205,6 +205,29 @@ t_orphan_ids_surfaced() {
   rm -rf "$root"
 }
 
+# T8b: context-reviewed-* telemetry ids are EXEMPT from the orphan gate
+# (issue #5999, ADR-086) — the freshness audit tripwire logs undeclared
+# last_reviewed bumps under operational rule_ids that have no AGENTS.md tag
+# (B_ALWAYS has no headroom for one). They must NOT surface as orphans and
+# must NOT fail the run. Mirrors the te-*/gdpr-gate-* exemptions.
+t_context_reviewed_exempt() {
+  local root; root=$(_setup)
+  jq -nc '{schema:1, timestamp:"2026-07-05T00:00:00Z", rule_id:"context-reviewed-gate", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  jq -nc '{schema:1, timestamp:"2026-07-05T00:01:00Z", rule_id:"context-reviewed-hook-self-fault", event_type:"warn", rule_text_prefix:"", command_snippet:"", kind:"hook_self_fault"}' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" >/dev/null 2>&1 || exit_code=$?
+  local orphan
+  orphan=$(jq -r '.summary.orphan_rule_ids | join(",")' < "$root/knowledge-base/project/rule-metrics.json")
+  if [[ -z "$orphan" && "$exit_code" == "0" ]]; then
+    _report "context-reviewed-* exempt from orphan gate (exit 0, no orphans)" ok
+  else
+    _report "context-reviewed-* exempt from orphan gate" fail "orphan='$orphan' exit=$exit_code"
+  fi
+  rm -rf "$root"
+}
+
 # T9: rotate-twice-same-month → second archive uniquified (no clobber).
 t_rotate_twice_same_month() {
   local root; root=$(_setup)
@@ -245,6 +268,7 @@ t_malformed_tolerance
 t_schema_field
 t_malformed_first_seen
 t_orphan_ids_surfaced
+t_context_reviewed_exempt
 t_rotate_twice_same_month
 
 echo "=== $pass passed, $fail failed ==="
