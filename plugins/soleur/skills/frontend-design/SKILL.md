@@ -1,6 +1,8 @@
 ---
 name: frontend-design
 description: "This skill should be used when creating distinctive, production-grade frontend interfaces. It generates creative, polished web components, pages, or applications that avoid generic AI aesthetics with high design quality."
+context_queries:
+  - knowledge-base/marketing/brand-guide.md
 license: Complete terms in LICENSE.txt
 ---
 
