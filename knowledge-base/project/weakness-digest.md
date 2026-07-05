@@ -3,7 +3,7 @@
 _Read-only recurring-failure signal from learnings added in the last 7d (#6037).
 Triage clusters into `/compound`; this file never edits the harness._
 
-Learnings in window: 119
+Learnings in window: 120
 
 ## Recurring failure patterns
 
