@@ -568,95 +568,31 @@ async function auditOneRuleset(
   config: RulesetAuditConfig,
   logger: HandlerArgs["logger"],
 ): Promise<RulesetAuditResult> {
+  // GUARD-FAULT SURFACE (fetch canonicals + validate + fetch live detail +
+  // compare + find the open issue). A throw here (corrupt/empty canonical,
+  // redacted bypass_actors = token scope, network/API error, or a failed issue
+  // LOOKUP where filing anew could duplicate) is an ops/infra fault → Sentry +
+  // heartbeat degrade; it does NOT file a compliance/legal drift issue and does
+  // NOT read an empty canonical as green (#6061 arch HIGH). fetchCanonicalJson
+  // throws on bad base64/JSON *before* validation, so the try must envelop it.
+  let findings: AuditFinding[];
+  let criticalCount: number;
+  let existingIssue: number | null;
   try {
     const [rawBypass, rawRsc, detail] = await Promise.all([
       fetchCanonicalJson<unknown>(octokit, config.canonicalBypassPath),
       fetchCanonicalJson<unknown>(octokit, config.canonicalRscPath),
       fetchRulesetDetail(octokit, config.rulesetName),
     ]);
-
     // Read-time canonical validation (before buildFindings) — an empty/corrupt
     // snapshot is a guard fault, not benign green.
     assertNonEmptyBypassCanonical(rawBypass, config.canonicalBypassPath);
     assertNonEmptyRscCanonical(rawRsc, config.canonicalRscPath);
 
-    const findings = buildFindings(detail, rawBypass, rawRsc);
-    const criticalCount = findings.filter((f) => f.critical).length;
-
-    const existingIssue = await findOpenDriftIssue(octokit, config);
-
-    // Green: no findings → auto-close any open drift issue.
-    if (findings.length === 0) {
-      let closedIssueNumber: number | null = null;
-      if (existingIssue) {
-        await closeDriftIssue(octokit, existingIssue, config);
-        closedIssueNumber = existingIssue;
-        logger.info(
-          {
-            fn: "cron-ruleset-bypass-audit",
-            ruleset: config.rulesetName,
-            issueNumber: existingIssue,
-          },
-          "Auto-closed stale drift issue on green run",
-        );
-      } else {
-        logger.info(
-          { fn: "cron-ruleset-bypass-audit", ruleset: config.rulesetName },
-          "Ruleset matches canonical — no drift",
-        );
-      }
-      return {
-        drift: false,
-        findings,
-        criticalCount: 0,
-        findingCount: 0,
-        issueNumber: null,
-        closedIssueNumber,
-        guardBroken: false,
-      };
-    }
-
-    // Drift: file (or de-dupe to) the single open drift issue.
-    logger.warn(
-      { fn: "cron-ruleset-bypass-audit", ruleset: config.rulesetName, findings },
-      `DRIFT: ${config.rulesetName} ruleset diverged from canonical`,
-    );
-
-    let issueNumber: number | null = existingIssue;
-    if (existingIssue) {
-      logger.info(
-        {
-          fn: "cron-ruleset-bypass-audit",
-          ruleset: config.rulesetName,
-          issueNumber: existingIssue,
-        },
-        "Drift issue already open — skipping creation",
-      );
-    } else {
-      issueNumber = await fileDriftIssue(octokit, findings, config);
-      logger.info(
-        {
-          fn: "cron-ruleset-bypass-audit",
-          ruleset: config.rulesetName,
-          issueNumber,
-        },
-        "Filed drift issue",
-      );
-    }
-
-    return {
-      drift: true,
-      findings,
-      criticalCount,
-      findingCount: findings.length,
-      issueNumber,
-      closedIssueNumber: null,
-      guardBroken: false,
-    };
+    findings = buildFindings(detail, rawBypass, rawRsc);
+    criticalCount = findings.filter((f) => f.critical).length;
+    existingIssue = await findOpenDriftIssue(octokit, config);
   } catch (err) {
-    // Guard fault: canonical corrupt/empty, bypass_actors redacted (token
-    // scope), or a network/API error. Route to Sentry (CTO-visible) + degrade
-    // the heartbeat; do NOT file a compliance/legal drift issue.
     reportSilentFallback(err, {
       feature: "cron-ruleset-bypass-audit",
       op: "audit-ruleset",
@@ -673,6 +609,98 @@ async function auditOneRuleset(
       guardBroken: true,
     };
   }
+
+  // ISSUE LIFECYCLE. A file/close hiccup is reported to Sentry but must NOT
+  // discard the already-computed drift result (matches the pre-#6061 behavior):
+  // a critical `criticalCount` still degrades the heartbeat, and the retries:1
+  // replay re-attempts the write. Distinct from a guard fault above.
+
+  // Green: no findings → auto-close any open drift issue.
+  if (findings.length === 0) {
+    let closedIssueNumber: number | null = null;
+    if (existingIssue) {
+      try {
+        await closeDriftIssue(octokit, existingIssue, config);
+        closedIssueNumber = existingIssue;
+        logger.info(
+          {
+            fn: "cron-ruleset-bypass-audit",
+            ruleset: config.rulesetName,
+            issueNumber: existingIssue,
+          },
+          "Auto-closed stale drift issue on green run",
+        );
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cron-ruleset-bypass-audit",
+          op: "close-drift-issue",
+          message: `Failed to auto-close ${config.rulesetName} drift issue`,
+          extra: { fn: "cron-ruleset-bypass-audit", ruleset: config.rulesetName },
+        });
+      }
+    } else {
+      logger.info(
+        { fn: "cron-ruleset-bypass-audit", ruleset: config.rulesetName },
+        "Ruleset matches canonical — no drift",
+      );
+    }
+    return {
+      drift: false,
+      findings,
+      criticalCount: 0,
+      findingCount: 0,
+      issueNumber: null,
+      closedIssueNumber,
+      guardBroken: false,
+    };
+  }
+
+  // Drift: file (or de-dupe to) the single open drift issue.
+  logger.warn(
+    { fn: "cron-ruleset-bypass-audit", ruleset: config.rulesetName, findings },
+    `DRIFT: ${config.rulesetName} ruleset diverged from canonical`,
+  );
+
+  let issueNumber: number | null = existingIssue;
+  if (existingIssue) {
+    logger.info(
+      {
+        fn: "cron-ruleset-bypass-audit",
+        ruleset: config.rulesetName,
+        issueNumber: existingIssue,
+      },
+      "Drift issue already open — skipping creation",
+    );
+  } else {
+    try {
+      issueNumber = await fileDriftIssue(octokit, findings, config);
+      logger.info(
+        {
+          fn: "cron-ruleset-bypass-audit",
+          ruleset: config.rulesetName,
+          issueNumber,
+        },
+        "Filed drift issue",
+      );
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "cron-ruleset-bypass-audit",
+        op: "file-drift-issue",
+        message: `Failed to file ${config.rulesetName} drift issue`,
+        extra: { fn: "cron-ruleset-bypass-audit", ruleset: config.rulesetName },
+      });
+    }
+  }
+
+  return {
+    drift: true,
+    findings,
+    criticalCount,
+    findingCount: findings.length,
+    issueNumber,
+    closedIssueNumber: null,
+    guardBroken: false,
+  };
 }
 
 // =============================================================================
