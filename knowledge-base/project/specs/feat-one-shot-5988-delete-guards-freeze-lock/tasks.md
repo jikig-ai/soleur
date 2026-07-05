@@ -56,14 +56,14 @@ malformed JSON). Freeze prefix check reuses the `realpath -m` containment patter
 
 ## Phase 5 — Tests (TR3 regression load-bearing)
 
-- [ ] 5.1 Add an Edit/Write payload builder to `guardrails.test.sh`.
-- [ ] 5.2 TR3 regression: with a freeze ACTIVE, Bash `rm -rf ./.worktrees/foo` → deny; all six sentinels still fire.
-- [ ] 5.3 Delete-guard fixtures: repo root / worktree root / symlink-to-root / `.git`-bearing → deny; marked staging dir → allow.
-- [ ] 5.4 Freeze fixtures: inside allowed → allow; outside → deny; malformed/absent file → allow (fail-open).
-- [ ] 5.5 `bash .claude/hooks/hookeventname-coverage.test.sh` green.
+- [x] 5.1 Added `mk_edit_payload` + `run_decision`/`assert_run` runners to `guardrails.test.sh`.
+- [x] 5.2 TR3 regression: with a freeze ACTIVE, Bash `rm -rf ./.worktrees/foo` → deny; require-milestone + stash still deny; benign Bash allows (proves freeze does not shadow the Bash sentinels).
+- [x] 5.3 Delete-guard fixtures: repo root / symlink-to-root / `.git`-bearing / `/` / `$HOME` → deny; scratch + node_modules → allow.
+- [x] 5.4 Freeze fixtures: inside allowed → allow; outside → deny; malformed/absent file → allow (fail-open).
+- [x] 5.5 `hookeventname-coverage.test.sh` green; `test_hook_emissions.sh` extended with both new ids (+negatives), 25/25; `rule-metrics-aggregate.test.sh` green (AC8).
 
 ## Phase 6 — Prose + docs + full suite
 
-- [ ] 6.1 Update guardrails.sh top-comment prose-rule block.
-- [ ] 6.2 Add constitution.md (`knowledge-base/project/constitution.md`) prose rules for the hardened delete guard + freeze edit-lock.
+- [x] 6.1 Updated guardrails.sh top-comment prose-rule block (both harnesses) + added `block-recursive-delete`/`freeze-edit-lock` rows.
+- [x] 6.2 Added two `knowledge-base/project/constitution.md` prose rules (hook-enforced convention); citations reference the delete-executor rule by content (insertion-stable, not line number).
 - [ ] 6.3 `bash scripts/test-all.sh` green.

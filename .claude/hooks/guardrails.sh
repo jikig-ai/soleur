@@ -145,9 +145,10 @@ fi
 #
 # The realpath here is a DENY-DECISION resolver (resolving symlinks makes the
 # guard STRONGER — it catches `rm -rf ./link` → repo root). This is the OPPOSITE
-# direction from constitution.md:306, which forbids realpath in a delete-
-# EXECUTOR (resolving before removal weakens it, CWE-59). Different code paths;
-# do not conflate them.
+# direction from the constitution.md "bulk-cleanup helper ... never call realpath
+# before deciding to remove" rule, which forbids realpath in a delete-EXECUTOR
+# (resolving before removal weakens it, CWE-59). Different code paths; do not
+# conflate them.
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;|\|)[[:space:]]*(sudo[[:space:]]+)?rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)'; then
   # Resolve the command's working directory so relative targets resolve the same
   # way the shell would (cd <dir> && ..., git -C <dir>, hook .cwd, else $PWD).

@@ -82,8 +82,9 @@ fi
 # repo root, a git worktree root (or ancestor), $HOME, /, or a .git-bearing
 # checkout — catching symlink/relative-path obfuscation the literal grep misses.
 # The realpath here is a DENY-DECISION resolver (strengthens the block), the
-# OPPOSITE direction from a delete-executor (constitution.md:306). See
-# .claude/hooks/guardrails.sh for the canonical implementation.
+# OPPOSITE direction from the constitution.md bulk-cleanup delete-executor rule
+# (which forbids realpath before removal). See .claude/hooks/guardrails.sh for
+# the canonical implementation.
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;|\|)[[:space:]]*(sudo[[:space:]]+)?rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)'; then
   _rd_cwd=""
   if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
