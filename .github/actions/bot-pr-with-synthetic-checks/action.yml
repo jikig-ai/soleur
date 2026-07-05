@@ -121,12 +121,74 @@ runs:
           echo "::error::add-paths is empty"
           exit 1
         fi
+        # --- #6049 safe-surface allowlist (explicit enumeration) ---
+        # This action fabricates a green `gitleaks scan` AND `lint fixture
+        # content` for bot PRs (both are required 15368 contexts the bot cannot
+        # trigger). It may therefore only add artifacts whose content it can
+        # ACTUALLY scan with a real gitleaks run below. `.gitleaks.toml`
+        # allowlists the knowledge-base/{plans,specs,references}/** and
+        # learnings/** subtrees, so a real gitleaks pass over them finds nothing
+        # and the earned-green would be a fabrication after all. Reject anything
+        # outside the two real artifacts — fail loud (NOT a bare "markdown under
+        # knowledge-base/" predicate, which would be gitleaks-blind AND reject
+        # the rule-metrics `.json` caller).
+        ALLOWED_PATHS=(
+          "knowledge-base/project/weakness-digest.md"
+          "knowledge-base/project/rule-metrics.json"
+        )
+        for p in "${PATHS[@]}"; do
+          allowed=false
+          for a in "${ALLOWED_PATHS[@]}"; do
+            [[ "$p" == "$a" ]] && { allowed=true; break; }
+          done
+          if [[ "$allowed" != "true" ]]; then
+            echo "::error::add-path '$p' is not in the bot-PR safe-surface allowlist (${ALLOWED_PATHS[*]}). #6049 content-safety ceiling: the action can only earn a real gitleaks/lint-fixture green for paths it can actually scan; .gitleaks.toml allowlists plans/specs/references/learnings so a real scan there is blind. Add a Phase-4 preflight that can scan this path, then extend ALLOWED_PATHS."
+            exit 1
+          fi
+        done
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git add -- "${PATHS[@]}"
         if git diff --cached --quiet; then
           echo "No changes to commit"
           exit 0
+        fi
+        # --- #6049 content-safety ceiling (Tier 2, MANDATORY) ---
+        # Because the synthetic set now fabricates greens for `gitleaks scan`
+        # AND `lint fixture content`, the action must EARN both over its own
+        # staged diff before creating the PR. Any finding => fail loud, no
+        # branch pushed, no PR, no synthetics. Tier 1 (push-protection only)
+        # was REJECTED: it misses this repo's custom .gitleaks.toml rules +
+        # the entire lint-fixture-content PII class. (security-sentinel)
+        #
+        # gitleaks: pinned install (3rd site) — version + SHA256 MUST match
+        # secret-scan.yml and ci.yml test-scripts (enforced by
+        # required-checks-canonical-parity.test.sh Test 5). Scans the STAGED
+        # index only (`git --pre-commit --staged`) with the repo .gitleaks.toml
+        # (auto-loaded at repo root), mirroring secret-scan.yml's engine.
+        GITLEAKS_VERSION="8.24.2"
+        GITLEAKS_SHA256="fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
+        GITLEAKS_DIR="$(mktemp -d)"
+        curl -sSLo "${GITLEAKS_DIR}/gitleaks.tgz" \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        echo "${GITLEAKS_SHA256}  ${GITLEAKS_DIR}/gitleaks.tgz" | sha256sum -c -
+        tar -xzf "${GITLEAKS_DIR}/gitleaks.tgz" -C "${GITLEAKS_DIR}" gitleaks
+        chmod +x "${GITLEAKS_DIR}/gitleaks"
+        if ! "${GITLEAKS_DIR}/gitleaks" git --pre-commit --staged --redact --no-banner --exit-code 1; then
+          echo "::error::gitleaks found a secret-shaped string in the bot diff — refusing to create the PR or post synthetics (#6049 content-safety ceiling)."
+          exit 1
+        fi
+        # lint fixture content: emails / prod Supabase refs / prod UUIDs — a
+        # class gitleaks does NOT cover and whose CI scope excludes the digest
+        # paths. Fail loud if node is unavailable rather than silently skipping
+        # a security gate.
+        if ! command -v node >/dev/null 2>&1; then
+          echo "::error::node not found — cannot run lint-fixture-content over the bot diff (#6049 ceiling requires it)."
+          exit 1
+        fi
+        if ! node apps/web-platform/scripts/lint-fixture-content.mjs "${PATHS[@]}"; then
+          echo "::error::lint-fixture-content found a PII/prod-ref string in the bot diff — refusing to create the PR or post synthetics (#6049 content-safety ceiling)."
+          exit 1
         fi
         DATE_SUFFIX="$(date -u +%Y-%m-%d)"
         BRANCH="${BRANCH_PREFIX}${DATE_SUFFIX}"
@@ -161,34 +223,68 @@ runs:
         COMMIT_SHA=$(git rev-parse HEAD)
         # Synthetic checks — satisfies CI Required + CLA Required rulesets on
         # main. Use the Checks API (/check-runs), NOT Statuses API; rulesets
-        # require Check Runs from integration_id 15368.
-        # Array literal preserves multi-word names; do not flatten. (#3542 R10)
-        # tenant-integration-required (#5585): always-run gate job; bot PRs
-        # never trigger CI so the synthetic is required to satisfy the ruleset.
-        CHECK_NAMES=(test dependency-review e2e "skill-security-scan PR gate" enforce tenant-integration-required)
+        # require Check Runs from integration_id 15368. PRs created with
+        # GITHUB_TOKEN don't re-trigger CI, so each required check is posted here.
+        #
+        # CHECK_NAMES is DERIVED from scripts/required-checks.txt (the SSOT) —
+        # NOT hardcoded. #6049 fixed the drift where a hardcoded 6-name array
+        # fell behind the ruleset's 16 always-run 15368 contexts and every bot
+        # PR stalled at mergeState=BLOCKED forever. The file-vs-file parity test
+        # (plugins/soleur/test/required-checks-canonical-parity.test.sh) keeps
+        # the SSOT ≡ the canonical ruleset JSON, and a composite→SSOT guard in
+        # the same test catches any future re-hardcode here. `CodeQL` (GHAS
+        # 57789) is intentionally omitted from the SSOT — a 15368 synthetic
+        # cannot satisfy a GHAS gate; CodeQL concludes `neutral` for bot PRs.
+        #
+        # Parser: leading-`#`-only comment rule (kept in sync with
+        # scripts/lint-bot-synthetic-completeness.sh) — preserves multi-word
+        # names ("skill-security-scan PR gate") and `#`-bearing names ("waiver
+        # discipline (issue:#NNN trailer)"); NEVER `tr -d '[:space:]'`.
+        REQUIRED_CHECKS_FILE="scripts/required-checks.txt"
+        if [[ ! -f "$REQUIRED_CHECKS_FILE" ]]; then
+          echo "::error::${REQUIRED_CHECKS_FILE} not found — the repo must be checked out before this action so CHECK_NAMES can be derived from the SSOT. Refusing to post an empty (deadlocking) synthetic set."
+          exit 1
+        fi
+        CHECK_NAMES=()
+        while IFS= read -r rcline; do
+          [[ "$rcline" =~ ^[[:space:]]*# ]] && continue
+          rcline="${rcline#"${rcline%%[![:space:]]*}"}"
+          rcline="${rcline%"${rcline##*[![:space:]]}"}"
+          if [[ "$rcline" == \"*\" ]]; then rcline="${rcline#\"}"; rcline="${rcline%\"}"; fi
+          [[ -z "$rcline" ]] && continue
+          CHECK_NAMES+=("$rcline")
+        done < "$REQUIRED_CHECKS_FILE"
+        if (( ${#CHECK_NAMES[@]} == 0 )); then
+          echo "::error::no synthetic check names parsed from ${REQUIRED_CHECKS_FILE}"
+          exit 1
+        fi
+        # Post one check-run per name, exactly once. cla-check / cla-evidence
+        # carry custom output titles/summaries via a `case`; all others share
+        # the generic change-summary. Sourcing from ONE list means no name is
+        # double-posted and no hardcoded block can silently diverge from the SSOT.
         for check in "${CHECK_NAMES[@]}"; do
+          case "$check" in
+            cla-check)
+              OUT_TITLE="CLA pre-approved"
+              OUT_SUMMARY="github-actions[bot] is in CLA allowlist"
+              ;;
+            cla-evidence)
+              OUT_TITLE="CLA evidence not applicable"
+              OUT_SUMMARY="Bot-authored PR — no CLA-signed contributions to attest."
+              ;;
+            *)
+              OUT_TITLE="Bot PR"
+              OUT_SUMMARY="${CHANGE_SUMMARY}"
+              ;;
+          esac
           gh api "repos/${REPO}/check-runs" \
             -f name="$check" \
             -f head_sha="$COMMIT_SHA" \
             -f status=completed \
             -f conclusion=success \
-            -f "output[title]=Bot PR" \
-            -f "output[summary]=${CHANGE_SUMMARY}"
+            -f "output[title]=${OUT_TITLE}" \
+            -f "output[summary]=${OUT_SUMMARY}"
         done
-        gh api "repos/${REPO}/check-runs" \
-          -f name=cla-check \
-          -f head_sha="$COMMIT_SHA" \
-          -f status=completed \
-          -f conclusion=success \
-          -f "output[title]=CLA pre-approved" \
-          -f "output[summary]=github-actions[bot] is in CLA allowlist"
-        gh api "repos/${REPO}/check-runs" \
-          -f name=cla-evidence \
-          -f head_sha="$COMMIT_SHA" \
-          -f status=completed \
-          -f conclusion=success \
-          -f "output[title]=CLA evidence not applicable" \
-          -f "output[summary]=Bot-authored PR — no CLA-signed contributions to attest."
         if [[ "$SKIP_AUTO_MERGE" != "true" ]]; then
           gh pr merge "$BRANCH" --squash --auto
         fi
