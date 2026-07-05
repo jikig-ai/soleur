@@ -249,7 +249,7 @@ model {
   }
   sigstore = system "Sigstore" {
     #external
-    description "Keyless container-image signing/verification (cosign/Fulcio/Rekor). The release CI keyless-signs the pushed web app image digest (this IS a live sigstore call — github → sigstore below). The host then cosign-verifies the signature FULLY OFFLINE against a pinned trusted_root.json — it makes NO live sigstore call at verify time (ADR-086, #6005) — supply-chain authenticity for the shared host (#5933 Item 4)."
+    description "Keyless container-image signing/verification (cosign/Fulcio/Rekor). The release CI keyless-signs the pushed web app image digest (this IS a live sigstore call — github → sigstore below). The host then cosign-verifies the signature FULLY OFFLINE against a pinned trusted_root.json — it makes NO live sigstore call at verify time (ADR-087, #6005) — supply-chain authenticity for the shared host (#5933 Item 4)."
   }
 
   // ======================================================================
@@ -322,7 +322,7 @@ model {
   hetzner -> ghcr "Pulls app image + baked bootstrap scripts/hooks at boot; authenticated (read:packages) since the packages are private; a web-2-recreate boot pins an immutable @sha256 digest (coherence-checked vs host_scripts_content_hash, not :latest); the cosign signature bundle is fetched here too — verify is offline against a pinned root, so there is no live sigstore call (#5921, #5887, #6005)" { technology "Docker/GHCR (authenticated)" }
   betterstack -> hetzner "Per-host origin uptime probe (web-N.app.soleur.ai/health, CF-proxied) — absence detector (#5933 Item 1)" { technology "HTTPS via CF edge" }
   github -> sigstore "Keyless-signs the released app image digest (cosign, OIDC→Fulcio→Rekor) (#5933 Item 4)" { technology "HTTPS (cosign)" }
-  // NOTE: the former `hetzner -> sigstore` verify edge was REMOVED (#6005/ADR-086) — it was
+  // NOTE: the former `hetzner -> sigstore` verify edge was REMOVED (#6005/ADR-087) — it was
   // falsified: with a pinned local trusted_root.json + offline verify the host makes NO live
   // sigstore call at verify time. The signature bundle is fetched from `ghcr` (edge above).
   doppler -> inngest "Injects secrets" { technology "CLI (doppler run prd)" }

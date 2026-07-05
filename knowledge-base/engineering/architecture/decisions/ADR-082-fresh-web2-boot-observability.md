@@ -113,7 +113,7 @@ where web-2 actually boots and it is end-to-end testable.
 Precedents: `knowledge-base/project/learnings/2026-03-19-docker-base-image-digest-pinning.md`,
 `2026-06-10-release-digest-plan-review-catches.md`.
 
-**Amendment (2026-07-04, #6005): private-GHCR credential model + offline-verify mechanism → ADR-086.**
+**Amendment (2026-07-04, #6005): private-GHCR credential model + offline-verify mechanism → ADR-087.**
 Live validation found the shipped WARN verify **cannot pass on the real host**: the app +
 inngest-bootstrap GHCR packages flipped **PRIVATE**, so (a) the anonymous host `docker pull` AND
 (b) the cosign container's OCI-attached `.sig` fetch both fail `UNAUTHORIZED`; and (c) v3.1.1
@@ -122,8 +122,8 @@ still needs a registry round-trip (bare `--offline` without a pinned root reache
 blocked → never passes). The full verify-invocation design (a `--network host` ephemeral verifier
 that keeps the container egress allowlist UNwidened; a pinned committed `trusted_root.json` mounted
 `:ro`, delivered out-of-image via the baked HOST-image host-scripts set + a running-host SSH
-provisioner, NEVER baked into the DEPLOY image) is recorded in **ADR-086** (this amendment owns the
-PULL + verify credential; ADR-086 owns the invocation shape). The credential is a scoped, read-only,
+provisioner, NEVER baked into the DEPLOY image) is recorded in **ADR-087** (this amendment owns the
+PULL + verify credential; ADR-087 owns the invocation shape). The credential is a scoped, read-only,
 machine-account `read:packages` **PAT** over both packages, recorded as a **deliberate, narrow
 exception to `hr-github-app-auth-not-pat`** (AP-016): security-sentinel affirmed it as the security-
 *superior* choice — the App-installation path would force the org-wide-**write** App private key onto

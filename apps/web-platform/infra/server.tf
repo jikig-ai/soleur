@@ -51,7 +51,7 @@ locals {
     # verify (moving the ~90-line install/verify/assert ceremony out of user_data — #5921).
     "soleur-host-bootstrap.sh",
     # Pinned cosign trusted root (#6005). Public trust material (NOT a secret), baked into
-    # the HOST base image (NOT the app image cosign verifies — so no circular trust, ADR-086)
+    # the HOST base image (NOT the app image cosign verifies — so no circular trust, ADR-087)
     # and installed to /etc/soleur/cosign-trusted-root.json by soleur-host-bootstrap.sh. Too
     # large (~6.8 KB) for cloud-init user_data (32,768-byte cap; already ~29.6 KB). The
     # running host gets it byte-for-byte from terraform_data.cosign_trusted_root below.
@@ -459,7 +459,7 @@ resource "terraform_data" "journald_persistent" {
 # #6005: deliver the pinned cosign trusted root to the RUNNING host byte-for-byte
 # (the fresh-host copy comes from the baked host_script_files set + soleur-host-
 # bootstrap.sh). ci-deploy.sh mounts /etc/soleur/cosign-trusted-root.json :ro into
-# the ephemeral cosign verifier (ADR-086). Public trust material, not a secret.
+# the ephemeral cosign verifier (ADR-087). Public trust material, not a secret.
 # Mirrors terraform_data.journald_persistent: file() keeps triggers_replace and the
 # delivered content in lockstep; the pre-`file` mkdir is load-bearing because the
 # `file` provisioner (scp) does not create remote parents and cloud-init's write_files

@@ -1252,7 +1252,7 @@ assert_verify_enforce_blocks() {
 assert_verify_enforce_blocks
 
 # --- #6005 Design B′: cosign invocation shape + SENTRY-before-verify ordering -----
-# The verify `docker run` MUST run `--network host` (host-egress .sig fetch, ADR-086),
+# The verify `docker run` MUST run `--network host` (host-egress .sig fetch, ADR-087),
 # mount the deploy docker config :ro (private-pull auth) and the pinned trusted root
 # :ro, and pass `--offline --trusted-root` (offline verify). SENTRY_* MUST already be
 # in the script env at verify time (the Phase-3 early Doppler fetch ran first → the
@@ -1281,7 +1281,7 @@ assert_bprime_cosign_invocation() {
 }
 assert_bprime_cosign_invocation
 
-# ADR-086 rejects widening the shared container egress allowlist — ghcr.io reach is
+# ADR-087 rejects widening the shared container egress allowlist — ghcr.io reach is
 # confined to the ephemeral host-net verifier. Guard against a regression that adds
 # ghcr.io back into cron-egress-allowlist.txt.
 assert_no_ghcr_allowlist_widening() {
@@ -1289,9 +1289,9 @@ assert_no_ghcr_allowlist_widening() {
   local allowlist
   allowlist="$(dirname "$DEPLOY_SCRIPT")/cron-egress-allowlist.txt"
   if [[ -f "$allowlist" ]] && grep -qiE '(^|[^a-z0-9.-])ghcr\.io' "$allowlist"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: ghcr.io must NOT be in cron-egress-allowlist.txt (ADR-086 host-net design) (#6005)"
+    FAIL=$((FAIL + 1)); echo "  FAIL: ghcr.io must NOT be in cron-egress-allowlist.txt (ADR-087 host-net design) (#6005)"
   else
-    PASS=$((PASS + 1)); echo "  PASS: ghcr.io absent from cron-egress-allowlist.txt (ADR-086 — no container allowlist widening) (#6005)"
+    PASS=$((PASS + 1)); echo "  PASS: ghcr.io absent from cron-egress-allowlist.txt (ADR-087 — no container allowlist widening) (#6005)"
   fi
 }
 assert_no_ghcr_allowlist_widening

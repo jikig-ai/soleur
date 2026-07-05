@@ -75,7 +75,7 @@ for f in cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt; do
   FAILED_FILE="$f"; install -D -m 0644 -o root -g root "$SEED/$f" "/etc/soleur/$f"
 done
 # Pinned cosign trusted root (#6005) — public trust material mounted :ro into the
-# ephemeral cosign verifier by ci-deploy.sh (ADR-086). 0644 root:root; dockerd (root)
+# ephemeral cosign verifier by ci-deploy.sh (ADR-087). 0644 root:root; dockerd (root)
 # reads the mount source, so deploy-user readability is not required.
 FAILED_FILE=cosign-trusted-root.json
 install -D -m 0644 -o root -g root "$SEED/cosign-trusted-root.json" /etc/soleur/cosign-trusted-root.json

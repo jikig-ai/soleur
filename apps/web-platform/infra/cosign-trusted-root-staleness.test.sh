@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI staleness + integrity gate for the pinned cosign trusted root (#6005, ADR-086,
+# CI staleness + integrity gate for the pinned cosign trusted root (#6005, ADR-087,
 # security-sentinel HIGH #2). MUST land + stay green before any WARN→ENFORCE flip — a
 # stale pinned root fail-CLOSES every deploy once ENFORCE is on.
 #

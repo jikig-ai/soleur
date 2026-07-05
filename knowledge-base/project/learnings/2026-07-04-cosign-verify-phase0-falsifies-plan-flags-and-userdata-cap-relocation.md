@@ -1,7 +1,7 @@
 ---
-title: "Phase-0 probe falsified the plan's cosign flag set (→ CTO/ADR-086); cloud-init 32KB cap forced trusted-root relocation"
+title: "Phase-0 probe falsified the plan's cosign flag set (→ CTO/ADR-087); cloud-init 32KB cap forced trusted-root relocation"
 date: 2026-07-04
-tags: [supply-chain, cosign, one-shot, phase-0, cloud-init, architecture-fork, ADR-086]
+tags: [supply-chain, cosign, one-shot, phase-0, cloud-init, architecture-fork, ADR-087]
 issue: 6005
 ---
 
@@ -25,7 +25,7 @@ This is exactly the `hr-verify-repo-capability-claim-before-assert` /
 intent, never for a tool's exact flag/behavior.** The resolution (deprecated-`--offline`+
 allowlist-widen vs. host-prefetch+`--network none` vs. `--network host`) was an
 **engineering fork with material trade-offs**, so per the /work HARD GATE it routed to the
-`soleur:engineering:cto` agent, NOT the operator. The CTO ruled **Design B′** (ADR-086): a
+`soleur:engineering:cto` agent, NOT the operator. The CTO ruled **Design B′** (ADR-087): a
 `--network host` ephemeral verifier so the `.sig` fetch rides the host's unrestricted egress —
 keeping `ghcr.io` OUT of the sweep-enumerated container allowlist — with a pinned
 `--trusted-root` + `--offline` (frozen inert by the pinned SHA; SOLEUR-DEBT tied to the next
