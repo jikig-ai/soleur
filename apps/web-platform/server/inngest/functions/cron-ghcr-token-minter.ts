@@ -3,11 +3,14 @@
 // Retires the interim machine-account `read:packages` PAT (ADR-087 D1, shipped by
 // #6011) with a zero-touch, platform-owned mint: every ~20 min this function mints
 // a 1h `packages:read` GitHub App INSTALLATION token from the Doppler-stored App
-// key and writes it to Doppler `prd_ghcr` as GHCR_READ_TOKEN (+ GHCR_READ_USER=
+// key and writes it to Doppler `prd` as GHCR_READ_TOKEN (+ GHCR_READ_USER=
 // x-access-token). Consumers are UNCHANGED — the running host (ci-deploy.sh) and
 // every cold-boot host (soleur-host-bootstrap.sh) keep reading those two keys from
-// `--config prd` (cross-config-referenced from prd_ghcr) and `docker login ghcr.io`.
-// Only WHO writes the value changes. See ADR-088 + phase0-evidence.md.
+// `--config prd` and `docker login ghcr.io`. Only WHO writes the value changes.
+// (Writes go directly to `prd`, not a dedicated `prd_ghcr` config: that would need
+// Doppler config inheritance, which this workspace's plan lacks — plan Phase 2.2/R2
+// fallback; #6011's ignore_changes=[value] keeps terraform from clobbering the
+// runtime churn.) See ADR-088 + phase0-evidence.md.
 //
 // TTL / refresh model: 1h hard TTL, minted every 20 min (<= TTL/3) so Doppler
 // always holds a live <40-min token and the model survives one missed tick
@@ -50,7 +53,10 @@ const FRESHNESS_FLOOR_MS = 40 * 60 * 1000;
 // Doppler partial-upsert endpoint (merges named secrets; never a full replace).
 const DOPPLER_SECRETS_URL = "https://api.doppler.com/v3/configs/config/secrets";
 const DOPPLER_PROJECT = "soleur";
-const DOPPLER_GHCR_CONFIG = "prd_ghcr";
+// Writes to `prd` directly (consumers read GHCR_READ_TOKEN there; #6011 declares it
+// with ignore_changes=[value]). Not a dedicated `prd_ghcr` config — that needs
+// Doppler config inheritance the workspace plan lacks (plan Phase 2.2/R2 fallback).
+const DOPPLER_WRITE_CONFIG = "prd";
 // Bound the Doppler write so a hung socket surfaces as a classified write failure
 // (error heartbeat + fail-loud capture), not an unbounded hang → missed check-in.
 const DOPPLER_WRITE_TIMEOUT_MS = 10_000;
@@ -131,7 +137,7 @@ export async function cronGhcrTokenMinterHandler({
         },
         body: JSON.stringify({
           project: DOPPLER_PROJECT,
-          config: DOPPLER_GHCR_CONFIG,
+          config: DOPPLER_WRITE_CONFIG,
           secrets: {
             GHCR_READ_TOKEN: token,
             GHCR_READ_USER: GHCR_READ_USER_VALUE,
