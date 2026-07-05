@@ -14,6 +14,32 @@ date: 2026-07-05
 
 # feat(supply-chain): control-plane Inngest installation-token minter for private-GHCR reads (ADR-086)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-05
+**Research agents:** repo-research-analyst, learnings-researcher, framework-docs-researcher,
+scoped strong-model advisor (fable), security-sentinel, architecture-strategist.
+
+### Key improvements applied
+1. **Phase-0 reshaped from binary halt → package-linkage test matrix** (advisor): the Actions
+   `GITHUB_TOKEN` *is* an installation token, so a GHCR pull rejection is usually a package↔repo
+   linkage config gap, not a dead mechanism. Only a linked-and-granted (matrix arm b) failure halts.
+2. **Doppler write scope narrowed to a dedicated `prd_ghcr` config** (advisor, highest-leverage): a
+   `prd`-scoped read/write token *reads* every prd secret → compromised minter = full prd
+   exfiltration, failing the threshold. Cross-config secret referencing keeps consumers on `--config
+   prd` unchanged.
+3. **Reuse verified:** `generateInstallationToken(id,{permissions:{packages:"read"}})` already
+   supports the scoped mint (`github-app.ts:749`), and `createAppJwt()` already pins `exp=now+540s`
+   (`github-app.ts:148`) under GitHub's 600s ceiling — no new JWT code.
+4. **5-registry Inngest lockstep** made explicit (route/manifest/count-test/sentry-tf/apply-workflow),
+   all paths verified to exist; monitor slug `scheduled-ghcr-token-minter` per convention.
+
+### New considerations discovered
+- **Blocking:** GHCR-installation-token viability is contested → Phase-0 empirical gate is plan-defining.
+- **Hard dependency on PR #6011** (issue #6005) — ships ADR-086 + consumers + `ghcr-read-credential.tf`;
+  #6031 must rebase onto post-#6011 main and must not re-author those artifacts.
+- **Stale C4:** `model.c4:242` still calls GHCR "Public" — corrected as a Phase-6 deliverable.
+
 🔐 **Security / supply-chain.** Replace the interim machine-account `read:packages` **PAT**
 (shipped by #6005 / PR #6011, recorded in ADR-085 D1) with a **platform-owned Inngest
 function** that mints a short-lived (1h) GitHub **App installation access token** scoped to
@@ -101,11 +127,14 @@ minter writes to the same Doppler key all hosts read, a bad write (empty/invalid
 poisons the credential for *every* host at once.
 
 **If this leaks, the user's [credentials / infrastructure] is exposed via:** (a) the minted
-token — bounded: `packages:read`-only, single-org, 1h TTL, low blast radius; (b) **the
-material this plan newly co-locates in app memory** — the **write-capable Doppler `prd`
-service token** (can rewrite *any* prd secret, incl. `GITHUB_APP_PRIVATE_KEY`) and the
-org-wide-**WRITE** App private key (already resident on web-1, but the minter now signs with
-it on a schedule). These are the real blast-radius surfaces, not the read token.
+token — bounded: `packages:read`-only, single-install, 1h TTL, low blast radius; (b) **the
+material this plan newly co-locates in app memory** — the write-capable Doppler service token
+(scoped to `prd_ghcr` per Phase 2, so at-rest exposure is one throwaway config; runtime
+compromise still reaches the App key) and the org-wide-**WRITE** App private key (already
+resident on web-1, but the minter now signs with it on a schedule — the dominant surface); (c)
+**the App *permission set* widening** — `packages:read` on the shared App is a per-installation
+standing grant, so post-multi-tenant a key leak reads every consenting tenant's packages. These
+are the real blast-radius surfaces, not the read token.
 
 **Brand-survival threshold:** `single-user incident` — a broken or leaked credential path on
 the deploy/provision critical line is a brand-survival event; `requires_cpo_signoff: true`.
@@ -137,6 +166,12 @@ staleness math) that style-only plan-review is blind to.
     Record each outcome in the spec's Phase-0 evidence note.
     - **(b) PASS** → proceed. If (a) failed but (b) passed, the deliverable is **"add package↔repo
       linkage to provisioning"** — a config task folded into Phase 5/6, **not** an ADR-086 reversal.
+    **Spike hygiene (security review):** the script mints a REAL 1h token — keep it uncommitted and
+    never echo the token into CI logs/artifacts/terminal scrollback. **Scope-delta note:** if a pull
+    succeeds only when the token also carries `contents:read` (repo-linked package visibility
+    sometimes requires it), surface that as a **scope delta** (add `contents:read` to the mint +
+    manifest) rather than a linkage-only fix — record which scopes the successful pull actually
+    required.
     - **(b) FAIL** (installation tokens rejected even when correctly linked) → **halt the plan.**
       Persist a decision-challenge to `knowledge-base/project/specs/<branch>/decision-challenges.md`:
       "ADR-086's installation-token mechanism is rejected by GHCR pull even with correct package
@@ -146,11 +181,30 @@ staleness math) that style-only plan-review is blind to.
 0.3 Confirm the **org installation id** to mint against (the `jikig-ai` org installation that owns
     the packages) — resolve via `findInstallationByAccountLogin("jikig-ai")`
     (`server/github-app.ts:646`) or a pinned `GITHUB_APP_INSTALLATION_ID`. Record it.
+0.4 **Cross-config resolution + isolation assertion (HIGH — gates the Phase-2 `prd_ghcr` default;
+    architecture review Q3).** "Tier supports referencing" is NOT the load-bearing question —
+    whether a `prd`-**read** token *resolves* a value referenced from `prd_ghcr` is. Two failure
+    shapes the design must exclude: (a) resolution needs the reader to also hold `prd_ghcr` access →
+    the consumer's `prd` token gets an **empty** `GHCR_READ_TOKEN` → `docker login` fails on every
+    host (the exact single-user incident); (b) Doppler resolves transitively → the `prd` read token
+    can now reach into `prd_ghcr`, **silently defeating the isolation** Phase 2 exists to create.
+    Empirically assert, with the **actual consumer `prd`-scoped token**: `doppler secrets download
+    --config prd` returns the *resolved* `GHCR_READ_TOKEN` value **AND** that same token **cannot**
+    enumerate/download `prd_ghcr`. Only if BOTH hold does the `prd_ghcr` cross-config default stand;
+    else fall back to the `prd`-scoped write token with the R2 blast radius documented + a
+    security-sentinel sign-off (Phase 2 contingency).
 
 ### Phase 1 — App manifest `packages: read` + parity test (prerequisite, org re-consent)
 
 1.1 Edit `apps/web-platform/infra/github-app-manifest.json`: add `"packages": "read"` to
-    `default_permissions`.
+    `default_permissions`. **Blast-radius note (security review MEDIUM): this is a PER-INSTALLATION
+    standing grant on the SHARED App, not "single-org."** Adding `packages:read` to
+    `default_permissions` means every installation that re-consents grants `packages:read` on the
+    shared App — and since this plan is the prerequisite for multi-tenant Concierge onboarding, a
+    `GITHUB_APP_PRIVATE_KEY` leak would then read *every consenting tenant's* packages, not just
+    jikig-ai's. Document this in ADR-086 (Consequences) and require explicit CPO acceptance that the
+    shared App gains a cross-tenant `packages:read` standing grant. (The minted *token* is still
+    1h/single-install/read-only; it is the App *permission set* that widens.)
 1.2 Update `apps/web-platform/test/github-app-manifest-parity.test.ts` — add `packages: "read"`
     to the expected-permission assertion set (the test pins the exact set; an un-updated test
     fails on the new key).
@@ -181,13 +235,16 @@ compromised minter runtime = **full prd exfiltration** — which fails this plan
     **Verify Doppler plan tier supports secret referencing** before committing (framework probe);
     if unsupported, fall back to the `prd`-scoped token with the R2/R3 blast-radius documented and
     a security-sentinel sign-off in deepen-plan.
-2.3 Publish the `prd_ghcr` write token `.key` **into the runtime**: store it as a `prd_ghcr`
-    secret (e.g. `GHCR_MINTER_DOPPLER_TOKEN`) AND surface it to the web-1 container env (a single
-    named var the minter uses exclusively — never the ambient runtime token). Because this token
-    cannot read `prd`, the App private key the minter signs with is injected by the **existing**
-    path (`GITHUB_APP_PRIVATE_KEY` from `prd` via the app's normal `doppler run` env) — correct
-    isolation: the minter's Doppler-write credential and its App-signing credential come from
-    different scopes.
+2.3 Publish the `prd_ghcr` write token `.key` **into the runtime — via DIRECT `prd_ghcr`
+    injection, NOT a cross-config reference back into `prd` (security review MEDIUM).** Store it as
+    a `prd_ghcr` secret `GHCR_MINTER_DOPPLER_TOKEN` and inject `prd_ghcr` directly into the minter
+    runtime (dedicated mount/env). Do **not** mirror it into `prd` via `${soleur.prd_ghcr.…}` — that
+    would let every `prd`-scoped *read* credential (the broad terraform token, CI) read the write
+    token and poison `GHCR_READ_TOKEN` for all hosts, reintroducing the exact `prd`→`prd_ghcr`
+    escalation the throwaway config exists to remove. (Only the two *read-only* consumer secrets
+    `GHCR_READ_TOKEN`/`GHCR_READ_USER` are cross-referenced into `prd` per 2.2; the write token is
+    never.) The App private key the minter signs with is injected by the **existing** path
+    (`GITHUB_APP_PRIVATE_KEY` from `prd`) — different scope from the Doppler-write credential.
 2.4 No new *no-default operator-mint* var (provider-minted by tf, `hr-tf-variable-no-operator-mint-default`).
     Confirm `apply-web-platform-infra.yml` auto-apply resolves cleanly (add to `-target` set if the
     root uses targeted apply). `dev` not provisioned (`hr-dev-prd-distinct`).
@@ -195,25 +252,42 @@ compromised minter runtime = **full prd exfiltration** — which fails this plan
 ### Phase 3 — The minter Inngest function
 
 3.1 New `apps/web-platform/server/inngest/functions/cron-ghcr-token-minter.ts`. Template:
-    `cron-anthropic-credit-probe.ts` (id + `concurrency` + `retries`, a `[{ cron }, { event }]`
-    trigger array, a handler taking `{ step, logger }`).
+    `cron-anthropic-credit-probe.ts` (id `cron-ghcr-token-minter` + `concurrency` + `retries`, a
+    `[{ cron }, { event }]` trigger array, a handler taking `{ step, logger }`).
     - Trigger array: `[{ cron: "*/20 * * * *" }, { event: "ghcr/token-minter.mint-now" }]`
       (≤ TTL/3 floor + event-driven).
-    - `step.run("mint-token", …)`: `generateInstallationToken(orgInstallId, { permissions: {
-      packages: "read" } })` (memoized across Inngest replays by `step.run`).
-    - `step.run("write-doppler", …)`: `POST https://api.doppler.com/v3/configs/config/secrets`
-      with `{ project: "soleur", config: "prd_ghcr", secrets: { GHCR_READ_TOKEN: <token>,
-      GHCR_READ_USER: "x-access-token" } }`, `Authorization: Bearer $GHCR_MINTER_DOPPLER_TOKEN`
-      (the `prd_ghcr`-scoped token from Phase 2; `prd` resolves the values via cross-config ref).
-      New capability — **no existing app code writes Doppler** (repo research GAP). Deliver the
-      token via env, never argv (`2026-06-18-inngest-secrets-env-not-argv…`).
-    - **Output-aware heartbeat** (`2026-06-01-output-aware-cron-heartbeat…`): emit a single
-      terminal Sentry check-in `ok` **only if the Doppler write returned 2xx**; `error` otherwise.
-      No two-step in_progress→ok pattern (`2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md`).
+    - **Single `step.run("mint-and-write", …)` — do NOT split mint and write across two steps
+      (security review HIGH).** Inngest persists every `step.run` return value to its state store to
+      memoize across replays (the plan's own "Inngest run history" log surface); a `mint-token`
+      step that *returns the token* serializes the raw 1h token into Inngest run state, readable in
+      the run-output view — and the key-name-based Sentry scrubber (`server/sentry-scrub.ts`) does
+      not touch Inngest's state store. So the token must **never cross a step boundary**: mint +
+      Doppler-write happen inside one `step.run`, which returns **only non-secret metadata**
+      (`{ dopplerStatus, permissionKeys, expiresAt }`) — never the token.
+    - Inside that step: `generateInstallationToken(orgInstallId, { permissions: { packages:
+      "read" } })`. **Mint FRESH — bypass/ignore the token cache OR assert `expires_at − now ≥ 40
+      min` before writing (architecture review HIGH Q4):** the cache can return a token with ~25 min
+      left, which would expire before the next 20-min tick's miss-margin, collapsing the ≤40<60
+      staleness guarantee. Every written token must have ≥40 min remaining.
+    - Then `POST https://api.doppler.com/v3/configs/config/secrets` with `{ project: "soleur",
+      config: "prd_ghcr", secrets: { GHCR_READ_TOKEN: <token>, GHCR_READ_USER: "x-access-token" } }`,
+      `Authorization: Bearer $GHCR_MINTER_DOPPLER_TOKEN`. This is a **partial named-secrets upsert** —
+      it merges the two keys and leaves `GHCR_MINTER_DOPPLER_TOKEN` (co-resident in `prd_ghcr`)
+      intact; never a full-config replace/PUT (security LOW — a replace would delete the minter's own
+      credential). New capability — **no existing app code writes Doppler** (repo research GAP).
+      Deliver the token via env, never argv (`2026-06-18-inngest-secrets-env-not-argv…`).
+    - **Output-aware heartbeat** (`2026-06-01-output-aware-cron-heartbeat…`): a single terminal
+      Sentry check-in `ok` **only if the Doppler write returned 2xx**; `error` otherwise. No
+      two-step in_progress→ok pattern (`2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md`).
 3.2 Both keys are written **in one Doppler request** (atomic) so a partial write never leaves
     `x-access-token` paired with a stale token or vice-versa.
-3.3 Fail-loud: a mint 401/403 or a non-2xx Doppler write throws (Inngest `retries` + terminal
-    `error` heartbeat) — never a silent fallback (`cq-silent-fallback-must-mirror-to-sentry`).
+3.3 Fail-loud but **secret-safe capture (security review MEDIUM-HIGH):** a mint 401/403 or non-2xx
+    Doppler write throws (Inngest `retries` + terminal `error` heartbeat) — never a silent fallback
+    (`cq-silent-fallback-must-mirror-to-sentry`). The Doppler REST request AND its 2xx response body
+    both echo the token value, and the scrubber is **key-name-based, not value-based**, so a token
+    embedded in a captured `extra.body` string or `Error.message` is NOT redacted. Captures on the
+    failure path read the **numeric HTTP status ONLY** — never the request or response body, never
+    the token — enforced by AC + unit assertion (AC-Sec below).
 
 ### Phase 4 — Five-registry Inngest lockstep (all in this PR)
 
@@ -223,7 +297,10 @@ until all five are updated with a byte-identical slug:
 2. `apps/web-platform/server/inngest/cron-manifest.ts` — add slug to `EXPECTED_CRON_FUNCTIONS`.
 3. `apps/web-platform/test/server/inngest/function-registry-count.test.ts` — bump the count.
 4. `apps/web-platform/infra/sentry/cron-monitors.tf` — new `sentry_cron_monitor` (slug ==
-   handler's `SENTRY_MONITOR_SLUG` byte-for-byte; schedule matches `*/20 * * * *`).
+   handler's `SENTRY_MONITOR_SLUG` byte-for-byte; per the `scheduled-<name>` convention
+   (`cron-anthropic-credit-probe.ts:42` → `"scheduled-anthropic-credit-probe"`) use
+   **`scheduled-ghcr-token-minter`**; schedule matches `*/20 * * * *`). Reuse the existing
+   `postSentryHeartbeat({ ok, sentryMonitorSlug, cronName, logger })` helper.
 5. `.github/workflows/apply-sentry-infra.yml` — add `-target=sentry_cron_monitor.<name>`.
    (Verify against `2026-05-29-target-allowlist-extension-must-sweep-all-guard-suites.md`: also
    sweep any sentry `-target` scope-guard test for the new monitor type.)
@@ -259,9 +336,12 @@ until all five are updated with a byte-identical slug:
   `prd_ghcr`-scoped read/write `doppler_service_token`, its `doppler_secret` publish
   (`GHCR_MINTER_DOPPLER_TOKEN`), and the `prd` cross-config references
   (`GHCR_READ_TOKEN`/`GHCR_READ_USER = ${soleur.prd_ghcr.…}`).
-- (test) `apps/web-platform/test/server/inngest/cron-ghcr-token-minter.test.ts` — mint-scope +
-  atomic-two-key-write + output-aware-heartbeat assertions (deterministic; mock the Doppler
-  fetch + `generateInstallationToken`, do not hit live GitHub — `2026-04-19-llm-sdk-security-tests…`).
+- (test) `apps/web-platform/test/server/inngest/cron-ghcr-token-minter.test.ts` — deterministic
+  (mock the Doppler fetch + `generateInstallationToken`, no live GitHub —
+  `2026-04-19-llm-sdk-security-tests…`): mint-scope body; atomic two-key write; output-aware
+  heartbeat ok/error; **single-`step.run` metadata-only return (AC-Sec1)**; **token string absent
+  from every captured Sentry field (AC-Sec2)**; **≥40-min freshness floor (AC-Sec3)**; partial-upsert
+  (not full-replace) Doppler write.
 
 **Edit:**
 - `apps/web-platform/infra/github-app-manifest.json` — add `packages: read`.
@@ -283,7 +363,7 @@ until all five are updated with a byte-identical slug:
 
 ```yaml
 liveness_signal:
-  what: "Sentry cron monitor 'ghcr-token-minter' terminal check-in each run (output-aware: ok only on 2xx Doppler write)"
+  what: "Sentry cron monitor 'scheduled-ghcr-token-minter' terminal check-in each run (output-aware: ok only on 2xx Doppler write)"
   cadence: "every 20 min (*/20 * * * *)"
   alert_target: "Sentry cron-monitor missed/errored check-in → existing Sentry alert routing"
   configured_in: "apps/web-platform/infra/sentry/cron-monitors.tf + handler SENTRY_MONITOR_SLUG"
@@ -401,9 +481,21 @@ the review pipeline.
   request (atomicity).
 - AC4 Output-aware heartbeat: unit test proves the handler emits terminal `ok` **only** when the
   Doppler write mock returns 2xx, and `error` on non-2xx / mint throw.
+- AC-Sec1 **Token never crosses a step boundary:** the handler uses a **single** `step.run`
+  (mint+write) that returns only non-secret metadata (`{dopplerStatus, permissionKeys, expiresAt}`);
+  a test asserts no `step.run` return value contains the token string.
+- AC-Sec2 **No token in captures:** the Doppler-write failure path captures the numeric HTTP status
+  only; a unit test asserts the token value string never appears in any captured Sentry field
+  (`extra`/`tags`/`message`).
+- AC-Sec3 **Freshness floor (Q4):** a test asserts the minter writes only a token with
+  `expires_at − now ≥ 40 min` (fresh mint, not a stale cache hit).
+- AC-Sec4 **Cross-config isolation (Phase 0.4):** evidence note shows the consumer `prd`-scoped
+  token resolves `GHCR_READ_TOKEN` via `prd` AND cannot enumerate `prd_ghcr` (else the fallback
+  `prd`-scoped form with security sign-off is used).
 - AC5 **Five-registry lockstep** all present in the diff: `route.ts` serves it, `cron-manifest.ts`
-  slug added, `function-registry-count.test.ts` count bumped and green, `cron-monitors.tf` has the
-  monitor (slug == `SENTRY_MONITOR_SLUG` byte-for-byte), `apply-sentry-infra.yml` `-target` added.
+  `EXPECTED_CRON_FUNCTIONS` has `cron-ghcr-token-minter`, `function-registry-count.test.ts` count
+  bumped and green, `cron-monitors.tf` monitor `name`/`SENTRY_MONITOR_SLUG == "scheduled-ghcr-token-minter"`
+  byte-for-byte, `apply-sentry-infra.yml` `-target` added.
 - AC6 `ghcr-minter-doppler-token.tf` declares the `prd_ghcr` config, a `prd_ghcr`-scoped
   `read/write` `doppler_service_token`, `GHCR_MINTER_DOPPLER_TOKEN`, and the `prd` cross-config
   reference secrets; `terraform validate`/`tofu validate` passes; blast-radius comment present.
@@ -418,8 +510,8 @@ the review pipeline.
 ### Post-merge (operator / gated)
 - AC10 Org-owner **re-consent** to the App's new `packages: read` permission activated (plane-c);
   a scoped mint returns `permissions.packages == "read"`.
-- AC11 Minter live: Sentry monitor `ghcr-token-minter` shows `ok` within 20 min; `GHCR_READ_TOKEN`
-  in `prd` is a fresh installation token (`x-access-token` user).
+- AC11 Minter live: Sentry monitor `scheduled-ghcr-token-minter` shows `ok` within 20 min;
+  `GHCR_READ_TOKEN` in `prd` resolves to a fresh installation token (`x-access-token` user).
 - AC12 A real deploy **and** a fresh-host boot both authenticate with the minted token (ci-deploy
   / cloud-init `docker login` telemetry success — no SSH).
 - AC13 Interim machine-account PAT **revoked** (only after AC12); ADR-086 status amended; #6023
@@ -438,13 +530,22 @@ the review pipeline.
 - **R1 (P0, plan-defining): GHCR rejects installation tokens for pull.** → Phase-0 empirical gate;
   halt + decision-challenge on fail. Verified live before any build; not assumed from docs.
 - **R2: Doppler write token blast radius.** A `prd`-scoped read/write token can *read AND write*
-  every prd secret (incl. the App key) → compromised minter = full prd exfiltration, failing the
-  threshold. → **Resolved to the `prd_ghcr` throwaway-config default** (Phase 2): token scope
-  collapses to one config; consumers unchanged via cross-config referencing; the App-signing key
-  comes from a different scope. Contingency: if the Doppler tier lacks secret referencing, fall
-  back to the `prd` token with a security-sentinel sign-off in deepen-plan.
+  every prd secret → **at-rest** exfiltration surface (tfstate, Doppler dashboard, isolated leak).
+  → **Resolved to the `prd_ghcr` throwaway-config default** (Phase 2), gated on the Phase-0.4
+  cross-config resolution+isolation assertion, with direct `prd_ghcr` runtime injection (not a
+  `prd` mirror) per 2.3. **Benefit scope (security LOW-MEDIUM): `prd_ghcr` narrowing helps
+  token-AT-REST only, NOT runtime compromise** — 2.3 keeps `GITHUB_APP_PRIVATE_KEY` (org-wide WRITE)
+  in the same process env, the dominant runtime surface regardless of Doppler scope; do not overclaim
+  "compromised minter ≠ prd exfiltration." Contingency: if Phase 0.4 fails, fall back to the `prd`
+  write token with a security-sentinel sign-off.
+- **R2b: token cache vs staleness (architecture HIGH Q4).** A cache hit can write a token with <40
+  min remaining, expiring before the next tick's miss-margin. → mint fresh / assert ≥40 min remaining
+  before writing (Phase 3.1); reconciled with the cache Sharp Edge.
+- **R2c: token leak via Inngest step-state / Sentry capture (security HIGH + MEDIUM-HIGH).** →
+  single `step.run` returning metadata-only (3.1); failure-path captures read numeric status only
+  (3.3); unit assertion the token string never appears in any Sentry field (AC-Sec).
 - **R3: partial write pairs `x-access-token` with a stale token** → single atomic Doppler request
-  (AC3).
+  (AC3); partial named-secrets upsert preserves `GHCR_MINTER_DOPPLER_TOKEN` (never full-config replace).
 - **R4: missed cron tick** → 20-min floor (≤ TTL/3) survives one miss (≤40 < 60 min); a second
   consecutive miss pages via missed-checkin before TTL expiry.
 - **R5: manifest permission added but installation grant not re-consented** (three-plane drift) →
@@ -463,7 +564,10 @@ the review pipeline.
   minting code (`2026-05-28-github-app-jwt-exp-at-600s-ceiling…`).
 - Cron token cache: `generateInstallationToken` keys its cache on scope
   (`installationTokenCacheKey(id, permissions, repositories)`) — the scoped `packages:read` call
-  gets its own entry; do not bypass the cache.
+  gets its own entry. **But the minter must NOT write a stale cached token** (architecture HIGH Q4):
+  a cache hit can be <40 min from expiry, which breaks the ≤40<60 staleness guarantee. The minter
+  either bypasses the cache or asserts `expires_at − now ≥ 40 min` before writing to Doppler. (Other
+  callers keep the cache; only the minter's *write* path needs the freshness floor.)
 
 ## Open Code-Review Overlap
 Checked planned files against 61 open `code-review` issues. One incidental hit: **#2246**
@@ -473,9 +577,13 @@ overlap.
 
 ## Alternatives / Non-Goals
 - **Non-goal: physical control-plane separation from tenant hosts.** Deferred to the #5274 cutover
-  gate per ADR-086 (web-1 already co-hosts the App key; zero marginal blast radius today). Recorded
-  as a **hard gate**, tracked by #6031's relationship to #5274 — file/confirm the gate note on
-  #5274 so it is not lost.
+  gate per ADR-086 (web-1 already co-hosts the App key; zero marginal blast radius today). **Record
+  the gate as a committed artifact, NOT a GitHub-issue comment (architecture review MEDIUM Q2 — an
+  issue comment is the durability anti-pattern):** fold the separation gate into the Phase-6 ADR-086
+  amendment (already being edited), and have it **enumerate BOTH control-plane-resident credentials
+  the cutover must relocate — the `GITHUB_APP_PRIVATE_KEY` AND the new `prd_ghcr`
+  `GHCR_MINTER_DOPPLER_TOKEN`** (this PR newly co-locates the second on the shared host; an issue
+  comment could silently omit it). A `#5274` reference is fine as a pointer, but the ADR is the SoT.
 - **Rejected: on-host mint (ADR-086 Option A)** — forces the org-wide-WRITE App key onto every
   fresh tenant host; fails cold-boot. **Rejected: revert to public GHCR (Option C)** — operator/CPO
   confirmed keep-private (ADR-085 context).
