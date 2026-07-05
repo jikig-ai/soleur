@@ -273,7 +273,7 @@ variable "github_app_private_key" {
 # packages. NO default (hr-tf-variable-no-operator-mint-default) — the operator mints
 # it and writes the value into Doppler `prd_terraform` (the TF_VAR source) BEFORE this
 # file's doppler_secret resources apply. See ghcr-read-credential.tf for the ordered
-# runbook + the deliberate hr-github-app-auth-not-pat exception (ADR-085).
+# runbook + the deliberate hr-github-app-auth-not-pat exception (ADR-086).
 variable "ghcr_read_user" {
   description = "GitHub machine-account login that owns the scoped read:packages PAT (the docker login -u value). Published to Doppler soleur/prd as GHCR_READ_USER."
   type        = string

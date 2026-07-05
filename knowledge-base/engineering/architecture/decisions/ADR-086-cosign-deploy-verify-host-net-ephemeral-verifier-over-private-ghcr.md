@@ -1,11 +1,11 @@
 ---
-adr: ADR-085
+adr: ADR-086
 title: "Cosign deploy-verify: host-net ephemeral verifier over private GHCR (no container-allowlist widening)"
 status: active
 date: 2026-07-04
 ---
 
-# ADR-085: Cosign deploy-verify: host-net ephemeral verifier over private GHCR (no container-allowlist widening)
+# ADR-086: Cosign deploy-verify: host-net ephemeral verifier over private GHCR (no container-allowlist widening)
 
 ## Context
 

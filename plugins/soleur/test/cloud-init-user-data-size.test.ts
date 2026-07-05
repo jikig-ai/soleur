@@ -356,7 +356,7 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // enforcement probe, #5933 item 3).
     // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
     // HOST image (not the app image) + installed to /etc/soleur by the bootstrap (#6005,
-    // ADR-085). A data file, not a script.
+    // ADR-086). A data file, not a script.
     expect(serverTfBakedSet().length).toBe(27);
   });
 

@@ -1,23 +1,23 @@
 ---
-adr: ADR-086
-title: "Control-plane installation-token minter for private-GHCR reads (supersedes ADR-085 D1)"
+adr: ADR-087
+title: "Control-plane installation-token minter for private-GHCR reads (supersedes ADR-086 D1)"
 status: active
 date: 2026-07-05
-supersedes: "ADR-085 D1 (credential-provisioning choice only; ADR-085 Design B′ verifier topology is untouched)"
+supersedes: "ADR-086 D1 (credential-provisioning choice only; ADR-086 Design B′ verifier topology is untouched)"
 ---
 
-# ADR-086: Control-plane installation-token minter for private-GHCR reads
+# ADR-087: Control-plane installation-token minter for private-GHCR reads
 
 ## Context
 
 #6005 makes the running-host cosign image-verify passable against the now-PRIVATE
 `soleur-web-platform` + `soleur-inngest-bootstrap` GHCR packages. The host needs a
 `read:packages` credential to (a) `docker pull` and (b) let the cosign container fetch the
-OCI-attached `.sig` (ADR-085 Design B′). **ADR-085 Design B′ — the `--network host`
+OCI-attached `.sig` (ADR-086 Design B′). **ADR-086 Design B′ — the `--network host`
 ephemeral verifier topology — is settled and untouched here.** This ADR concerns ONLY how
 that credential is PROVISIONED and minted.
 
-**ADR-085 D1** chose a scoped, read-only, machine-account **fine-grained PAT**, published to
+**ADR-086 D1** chose a scoped, read-only, machine-account **fine-grained PAT**, published to
 Doppler `soleur/prd` via `ghcr-read-credential.tf` and consumed by the host via `docker
 login`. security-sentinel affirmed the PAT as security-superior to a GitHub-App-installation-
 token path because minting an App installation token on the host drags the org-wide-**WRITE**
@@ -49,12 +49,12 @@ Confirmed against the worktree: both consumption points read the SAME two Dopple
   it unchanged. App key stays on the control plane.
 - **C — revert to public.** Delete the whole credential subsystem; re-expose the built Next.js
   artifact + baked host-bootstrap scripts on public GHCR. Operator/CPO already confirmed
-  keep-private (ADR-085 Context).
+  keep-private (ADR-086 Context).
 
 ## Decision
 
 **Strategy B — a control-plane installation-token minter — shipped as a STAGED HYBRID: the
-ADR-085 D1 PAT is the interim single-operator bootstrap that #6005 (PR #6011) ships now; the
+ADR-086 D1 PAT is the interim single-operator bootstrap that #6005 (PR #6011) ships now; the
 minter replaces it in a distinct follow-up, gated to land BEFORE any tenant host pulls a
 private package.**
 
@@ -124,4 +124,4 @@ rate limits.
 - Refines **AP-016** (the `hr-github-app-auth-not-pat` exception): the PAT exception is now
   explicitly INTERIM/single-operator; the App-installation-token path is the multi-tenant
   target, aligning back toward `hr-github-app-auth-not-pat` for the standing credential.
-- Cross-references ADR-085 (verifier topology — unchanged) and ADR-082 (fresh-web-2 boot).
+- Cross-references ADR-086 (verifier topology — unchanged) and ADR-082 (fresh-web-2 boot).

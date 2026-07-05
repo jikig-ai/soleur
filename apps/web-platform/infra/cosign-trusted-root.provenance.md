@@ -1,7 +1,7 @@
 # cosign-trusted-root.json — provenance
 
 Pinned Sigstore **public-good** trusted root, vendored to the deploy host and mounted
-into the ephemeral cosign verifier (`ci-deploy.sh` `verify_image_signature`, ADR-085)
+into the ephemeral cosign verifier (`ci-deploy.sh` `verify_image_signature`, ADR-086)
 so image-signature verification runs against a **local** trust anchor — no live
 Fulcio/Rekor/TUF egress (the container egress firewall #5046/ADR-052 blocks sigstore).
 
@@ -22,7 +22,7 @@ The `sha256` above is a **trust-on-first-capture** anchor: `cosign initialize` T
 the root at capture time; this record + the CI capture-age gate guard against silent
 substitution afterward. Pinning a local root **disables TUF revocation propagation** — a
 compromised-then-rotated Sigstore key stays trusted here until a human re-captures. That is
-the deliberate trade-off of an air-gapped root (security-sentinel HIGH #2, ADR-085).
+the deliberate trade-off of an air-gapped root (security-sentinel HIGH #2, ADR-086).
 
 ## Staleness
 

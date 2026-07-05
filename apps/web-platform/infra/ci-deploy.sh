@@ -36,7 +36,7 @@ readonly LOG_TAG="ci-deploy"
 # The app image is now a PRIVATE GHCR package (#6005), so the host authenticates via
 # a scoped `read:packages` credential (ghcr_prelude_and_login below) before pulling.
 # The verifier is a SHA-pinned distroless cosign CONTAINER (no host install). Per
-# ADR-085 (Design B′) it runs `--network host` so the OCI-attached signature fetch
+# ADR-086 (Design B′) it runs `--network host` so the OCI-attached signature fetch
 # rides the host's UNRESTRICTED egress — the #5046/ADR-052 container egress firewall
 # is `iifname docker0`-scoped and never sees host OUTPUT, so ghcr.io stays OUT of the
 # container allowlist. Trust is a LOCALLY-PINNED `trusted_root.json` mounted :ro
@@ -56,13 +56,13 @@ readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enfor
 # inert under the pinned SHA (v3.1.1). Upgrade trigger: the next COSIGN_IMAGE SHA
 # bump — migrate to the `--bundle`+`--trusted-root` new-bundle-format path (verify
 # it exists on the target version first; v3.1.1 `verify` has neither `--bundle` nor
-# `--new-bundle-format`). See ADR-085.
+# `--new-bundle-format`). See ADR-086.
 # Host paths for the private-GHCR pull credential + the pinned offline trust root.
 # Overridable in tests; default to the real deploy-host layout. The docker config is
 # written by ghcr_prelude_and_login (host pull auth) and mounted :ro into the
 # ephemeral cosign verifier — it MUST carry an inline `auths."ghcr.io".auth` entry,
 # NEVER a credStore/credHelpers indirection (the distroless cosign image has no
-# credential helper; an indirection silently UNAUTHORIZEs the .sig fetch — ADR-085).
+# credential helper; an indirection silently UNAUTHORIZEs the .sig fetch — ADR-086).
 # The trusted root reaches the host via the baked HOST-image host-scripts set (fresh
 # hosts) + terraform_data.cosign_trusted_root SSH delivery (running host) — see
 # server.tf. It is NEVER baked into the DEPLOY image (circular trust).
@@ -594,7 +594,7 @@ verify_image_signature() {
     [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
     return 0
   fi
-  # Verify via the pinned cosign container (ADR-085 Design B′). The app image is a
+  # Verify via the pinned cosign container (ADR-086 Design B′). The app image is a
   # PRIVATE GHCR package (#6005): `--network host` routes the OCI-attached .sig fetch
   # through the host's unrestricted egress (no ghcr.io in the container allowlist),
   # and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by

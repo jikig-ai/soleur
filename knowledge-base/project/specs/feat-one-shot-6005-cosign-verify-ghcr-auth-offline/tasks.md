@@ -50,7 +50,7 @@ Post-merge: infra apply clean; real signed deploy authenticates + verify PASSES 
 **Design change (Phase 0 finding → CTO ruling):** the plan's prescribed cosign flag set
 (`--offline=true --new-bundle-format=false`) was FALSIFIED against the real pinned v3.1.1
 container — no `--new-bundle-format`, `--offline` deprecated, and it still needs a registry
-round-trip. CTO ruled **ADR-085 Design B′**: a `--network host` ephemeral verifier (so the
+round-trip. CTO ruled **ADR-086 Design B′**: a `--network host` ephemeral verifier (so the
 `.sig` fetch rides host egress and ghcr.io stays OUT of the container allowlist) + pinned
 `--trusted-root` + `--offline`. All code/tests/IaC/docs reflect B′. See
 `phase0-probe-evidence.md`.
@@ -59,7 +59,7 @@ round-trip. CTO ruled **ADR-085 Design B′**: a `--network host` ephemeral veri
 pull-failure event; committed `cosign-trusted-root.json` + provenance + CI staleness gate;
 Terraform doppler_secret + no-default TF_VARs; trusted-root host delivery (baked + SSH);
 fresh-boot login (baked bootstrap); ci-deploy.test.sh B′ assertions (106/106); C4 fixes;
-ADR-085 + ADR-082 amendment + AP-016. WARN preserved; ENFORCE default stays `warn`.
+ADR-086 + ADR-082 amendment + AP-016. WARN preserved; ENFORCE default stays `warn`.
 
 **0.2 (partial):** `trusted_root.json` generated + committed (sha256 `6494e21e…`) and the
 offline+trusted-root+`--network host` mechanics proven against a public signed image (no
