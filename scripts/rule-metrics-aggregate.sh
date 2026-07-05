@@ -253,6 +253,13 @@ report=$(jq -n \
         # the last introduced by PR #3541). These are operational events
         # tied to the skill, not rule_ids in the AGENTS.md taxonomy.
         | map(select(startswith("gdpr-gate-") | not))
+        # context-reviewed-* prefix reserved for context-reviewed-gate.sh
+        # telemetry (context-reviewed-gate deny, context-reviewed-hook-self-fault
+        # warn — issue #5999, ADR-086). The freshness audit tripwire logs
+        # undeclared last_reviewed bumps; these are operational events tied to
+        # the hook, not rule_ids in the AGENTS.md taxonomy (the always-loaded
+        # B_ALWAYS budget has no room for a new core tag).
+        | map(select(startswith("context-reviewed-") | not))
         # Hook-canonical Pencil rule_ids: per cq-agents-md-tier-gate, the rule
         # body lives in the hook header + pencil-setup SKILL (a Pencil-domain
         # rule is tier-gated OUT of AGENTS.md), so they legitimately never appear

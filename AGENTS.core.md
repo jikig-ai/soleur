@@ -1,3 +1,8 @@
+---
+last_reviewed: 2026-07-05
+review_cadence: monthly
+owner: founder
+---
 # AGENTS Core — always-loaded sidecar (every session, via .claude/hooks/session-rules-loader.sh)
 
 ## Hard Rules
