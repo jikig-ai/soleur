@@ -30,7 +30,12 @@ ADR_DIR=knowledge-base/engineering/architecture/decisions
 # ADR-068 was resolved (#5274 Phase 3): the graceful-cron-drain ADR was renumbered
 # to ADR-078-graceful-cron-drain-before-container-swap, leaving ADR-068 uniquely
 # the multi-host-workspaces coordinator ADR. Dropped from the allowlist here.
-ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038)
+# ADR-086 triple-collision (declarative-skill-context-injection +
+# fail-closed-redaction-engine-contract + freshness-last-reviewed) landed on main
+# from three concurrent PRs, turning `adr-ordinals` red on main and blocking
+# every subsequent merge. Stop-gap allowlist entry per this file's own contract;
+# renumber + shrink tracked in #6056.
+ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038 ADR-086)
 
 # (1) New (non-allowlisted) ordinal collisions.
 all_dups=$(ls "$ADR_DIR" | grep -oE '^ADR-[0-9]{3}' | sort | uniq -d || true)
