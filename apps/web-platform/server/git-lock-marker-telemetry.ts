@@ -30,16 +30,22 @@ import { reportSilentFallback } from "./observability";
 
 const log = createChildLogger("git-lock-marker-telemetry");
 
-// Matches the marker sentinels emitted by
-// plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh. Kept in sync with
-// that script; a drift test (git-lock-marker-telemetry.test.ts) pins the pattern set
-// against the live script so a renamed sentinel fails CI instead of going silently
-// unmirrored.
+// Matches the marker sentinels emitted by two in-sandbox surfaces:
+//   - worktree-manager.sh — the git-lock wedge markers (SOLEUR_GIT_LOCK_*, "worktree wedge:")
+//   - git-repo-readiness-diag.sh — the readiness-gate forensic (SOLEUR_GIT_REPO_DIAG),
+//     emitted by soleur:go Step 0.0 when git rejects the workspace repo (a layer ABOVE
+//     worktree creation, previously uninstrumented — #4826 round 3).
+// Kept in sync with those scripts; a drift test (git-lock-marker-telemetry.test.ts) pins
+// the pattern set against the live scripts so a renamed sentinel fails CI instead of going
+// silently unmirrored.
 const MARKER_RE =
-  /^(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|worktree wedge:.*)$/;
+  /^(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_REPO_DIAG\b.*|worktree wedge:.*)$/;
 
-// A wedge (vs. a benign DIAG) is any marker that indicates creation could not proceed.
-const WEDGE_RE = /^(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|worktree wedge:)/;
+// A wedge (vs. a benign DIAG) is any marker that indicates git operations could not
+// proceed: an unremovable/masked lock, a temp-wedge, an ensure_bare_config give-up, OR a
+// readiness-gate rejection (SOLEUR_GIT_REPO_DIAG is only emitted on the not-ready path).
+const WEDGE_RE =
+  /^(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_REPO_DIAG\b|worktree wedge:)/;
 
 // Bounds: scan at most this many lines, keep at most this many matched markers, and
 // truncate any single marker line to this many chars. A wedged run emits a handful of
@@ -127,12 +133,13 @@ export function createGitLockMarkerHook(workspacePath: string): HookCallback {
         markerCount: markers.length,
         markers: markers.map((m) => m.line),
       };
-      // A wedge is an error (a blocked session); a DIAG-only run is a warning. Both reach
-      // Better Stack (pino → stdout → journald → vector) and a Sentry breadcrumb.
+      // A wedge is an error (a blocked session — a git-lock wedge OR a readiness-gate
+      // rejection); a benign DIAG is a warning. Both reach Better Stack (pino → stdout →
+      // journald → vector) and a Sentry breadcrumb.
       if (anyWedged) {
-        log.error(payload, "in-sandbox git-lock wedge detected (worktree creation blocked)");
+        log.error(payload, "in-sandbox git wedge/rejection detected (worktree or readiness-gate blocked)");
       } else {
-        log.warn(payload, "in-sandbox git-lock diagnostic emitted (no wedge)");
+        log.warn(payload, "in-sandbox git diagnostic emitted (no wedge)");
       }
       return {};
     } catch (err) {

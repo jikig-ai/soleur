@@ -434,6 +434,23 @@ atomic_git_config() {
 # Called before AND after git worktree add (add re-corrupts the shared config).
 # Safe for parallel sessions: all operations are idempotent.
 ensure_bare_config() {
+  # NON-BARE GUARD (#4826). This whole function is a BARE-repo accommodation: on a
+  # bare repo `git worktree add` corrupts the shared config (see header), and setting
+  # extensions.worktreeConfig=true is what steers those writes off the shared config.
+  # A NORMAL working clone (the Concierge workspace layout: a `.git` DIRECTORY,
+  # core.bare=false) needs NONE of this — `git worktree add` writes only to
+  # `.git/worktrees/<id>/` and never corrupts shared config. Worse, enabling
+  # worktreeConfig on such a repo FORCES git to read `.git/config.worktree` on every
+  # command; in the agent sandbox that path is a /dev/null char device the agent user
+  # CANNOT read → `fatal: unable to access '.git/config.worktree': Permission denied`
+  # breaks EVERY git command (the #4826 regression). So: skip entirely on a non-bare
+  # repo. Filesystem check only (a `.git` DIRECTORY ⇒ non-bare), never a git command —
+  # git may already be wedged by the very worktreeConfig this guard avoids. `git worktree
+  # add` on a normal repo is verified to work with zero shared-config surgery.
+  if [[ -d "$GIT_ROOT/.git" ]]; then
+    return 0
+  fi
+
   local git_dir="$GIT_ROOT/.git"
   # Only relevant for bare repos (git dir IS the repo root)
   if [[ ! -d "$git_dir" ]]; then
