@@ -84,10 +84,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history so lint-infra-no-human-steps can merge-base against the
+          # PR base ref (changed-files grandfathering mode).
+          fetch-depth: 0
       - name: Lint bot synthetic statuses
         run: bash scripts/lint-bot-synthetic-statuses.sh
       - name: Lint bot synthetic completeness
         run: bash scripts/lint-bot-synthetic-completeness.sh
+      # Enforcement teeth for hr-no-ssh-fallback-in-runbooks: fail a
+      # plan/spec/runbook/ADR/legal-runbook that prescribes a *human-run*
+      # terraform / SSH / reboot / verify-on-private-net infra step. Changed-files
+      # mode grandfathers pre-existing docs; the diff base is the PR base ref
+      # (falls back to origin/main on push/merge_group).
+      - name: Lint infra no-human-steps (changed vs base)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            python3 scripts/lint-infra-no-human-steps.py --changed --base "origin/$BASE_REF"
+          else
+            python3 scripts/lint-infra-no-human-steps.py --changed
+          fi
 
   lint-conversations-update-callsites:
     runs-on: ubuntu-latest

@@ -514,7 +514,7 @@ Phase 4b (continuous checkpoint).
 > allow-list edit — adding `hcloud_server.web` to the unattended per-PR target set
 > forces a power-off reboot of the running prod host (it carries `placement_group_id`
 > + `for_each`; see `server.tf`) and the Cloudflare-scoped, `delete`-only destroy-guard
-> is blind to that in-place reboot. After the operator apply consumes the moves, no
+> is blind to that in-place reboot. After that maintenance-window apply consumes the moves, no
 > pending moves remain and the targeted CI plan self-heals with zero workflow change.
 > A recurrence guard lives in `plugins/soleur/test/terraform-target-parity.test.ts`
 > (`moved`/`-target` parity block, `MOVED_OPERATOR_CONSUMED`): a future migration that
@@ -664,6 +664,77 @@ Phase 4b (continuous checkpoint).
 > renamed them to `default_pools` / `fallback_pool` — the GA PR uses the v4 names since the repo
 > pins `cloudflare ~> 4.0`). Verification runbook:
 > `knowledge-base/engineering/operations/runbooks/cf-lb-a-record-gaplessness-verify.md`.
+
+> **Amendment (CTO ruling, 2026-07-04, Phase 3 GA — autonomous warm-standby apply + programmatic
+> §(c) gate).** The blue-green prerequisites amendment (2026-07-03, #5887) and the
+> `moved-block-wedge-cutover-5887.md` runbook carried **human-in-the-loop** ops — an
+> operator-local maintenance-window apply, a private-net remote-shell readiness check, and a
+> "book a window / decide before the window" human decision. Soleur users are non-technical and
+> act only through the web app / CI, so each is an automation bug to close, not a valid step
+> (`hr-exhaust-all-automated-options-before`,
+> `hr-fresh-host-provisioning-reachable-from-terraform-apply`, `hr-no-ssh-fallback-in-runbooks`).
+> This amendment closes that class for the warm-standby line:
+>
+> **(1) Warm-standby provisioning is a `workflow_dispatch`, never local.** The 6 additive
+> resources (private network + subnet + `hcloud_server_network.web[*]` + web-2 `/workspaces`
+> volume + attachment) provision through `apply-web-platform-infra.yml -f apply_target=warm-standby`
+> inside the **existing R2-backend concurrency serializer** (`terraform-apply-web-platform-host`,
+> `cancel-in-progress:false` — the sole writer-serializer for the lock-less R2 backend; NOT a
+> second workflow, which would reintroduce an unserialized second-writer hazard). It is never a
+> laptop-local run and never remote-shells a host. The plan-scoped `reboot_updates=0` destroy-guard
+> runs before the apply so no placement reboot can enter the additive path.
+>
+> **(2) §(c) is a fail-closed, SHAPE-ONLY programmatic check.**
+> `apps/web-platform/infra/lb-weight-gate.sh` verifies the config-shape of BOTH §(c) conditions
+> over injected env (owner-side relay: `SOLEUR_PROXY_BIND` + `SOLEUR_PROXY_PEER_ALLOWLIST` +
+> `SOLEUR_HOST_ROSTER` with web-2 in-roster and allowlist ⊆ roster, parser-parity with
+> `parseProxyPeerAllowlist`/`loadHostRoster`; git-data cut-over: `GIT_DATA_STORE_ENABLED=="true"`
+> + a LUKS-cutover soak marker). On success it prints **`requires_runtime_bind_probe=true`** and a
+> SHAPE-ONLY banner, so no consumer — CI or the orchestrator — can mistake exit 0 for weight-flip
+> authorization. It **defines the `GIT_DATA_LUKS_CUTOVER_AT` soak-marker contract**: a Doppler
+> `prd` ISO-8601 key written by the deferred cutover, satisfied only when
+> `now - GIT_DATA_LUKS_CUTOVER_AT >= GIT_DATA_LUKS_SOAK_DAYS` (default 3, §3.D); an
+> absent / malformed / future-dated marker is **not satisfied** (the correct fail-closed default
+> today, before GA has happened).
+>
+> **(3) Warm-standby verification: apply output = attach proof; deploy-status `reason` =
+> web-2-accepted; readyz is the DEFERRED on-host gate.** The volume attach is proven by the
+> terraform **apply output = attach proof** (`hcloud_volume_attachment.workspaces["web-2"]` +
+> `hcloud_server_network.web["web-2"]` shown created, in-job) — NOT by an off-host readiness
+> probe. web-2 liveness/acceptance is proven off-host by web-1's `/hooks/deploy-status` `reason`
+> (`ok` vs `ok_peer_fanout_degraded`), the only web-2 signal reachable through the single tunnel
+> (the off-host runner cannot read web-2 directly; web-2 has zero LB weight + no public ingress).
+> The **`/internal/readyz` serve-readiness gate is the DEFERRED orchestrator's on-host pre-pool
+> check** — in-container `docker exec` at `127.0.0.1:3000` with a loopback Host, requiring
+> `workspaces_writable && populated`, N≥2 consecutive reads — explicitly **NOT** `readyz==200`
+> off-host (loopback-peer gated → 403 off-host; empty `/workspaces` → 503 by design) and **NOT**
+> `workspaces_writable` as the attach proof (it passes on the host-root fallback dir, so it does
+> not prove the Hetzner volume attached). The readyz probe is therefore **dropped from the
+> warm-standby PR** and lands with the deferred orchestrator.
+>
+> **De-manualization + enforcement.** The multi-host blue-green plan (Phase 2 + Apply path +
+> Post-merge bullet) and the runbook Scope B are rewritten to the dispatch path; a CI lint
+> (`scripts/lint-infra-no-human-steps.py`, actor+imperative co-occurrence model, wired into
+> `ci.yml` + `lefthook.yml`, scan dirs including this ADR dir) fails any future plan / spec /
+> runbook that re-introduces a human terraform / SSH / reboot / verify-on-private-net step.
+>
+> <!-- lint-infra-ignore start (deferred-orchestrator apply+reboot prose below; the actor is the orchestrator, not a human) -->
+> **Deferred orchestrator (unchanged, not this line).** The live cutover remains the
+> Inngest-dispatched GHA maintenance-window workflow that — only after the §(c) gate AND its
+> separate on-host runtime-bind probe are both green — shifts web-2 LB weight 0→1 → drains web-1 →
+> removes `ignore_changes=[placement_group_id]` → power-cycle reboots the drained, non-serving
+> web-1 → restores, with auto-rollback. It is gated on the warm-standby + gate landing and
+> soak-verifying, and it is the only step that takes the placement reboot.
+> <!-- lint-infra-ignore end -->
+>
+> **Rejected:** (A) a second apply workflow for warm-standby — reintroduces the unserialized
+> second-writer hazard against the lock-less R2 backend; (B) `readyz==200` off-host or
+> `workspaces_writable` as attach proof — the readiness endpoint is loopback-gated (403 off-host)
+> and `workspaces_writable` passes on the host-root fallback dir, so neither proves the attach.
+> **Status:** UNCHANGED — this ADR stays `adopting`; the warm-standby + gate are inert-additive
+> (no LB weight, no reboot, no ingress change on merge), and the flip to `accepted` still gates on
+> the Phase-3 GA soak (AC11). Plan:
+> `knowledge-base/project/plans/2026-07-04-feat-autonomous-multihost-ga-warm-standby-and-gate-plan.md`.
 
 ## Consequences
 

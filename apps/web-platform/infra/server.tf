@@ -149,6 +149,17 @@ resource "hcloud_server" "web" {
   # window PR as its FIRST diff, then take the reboot on a drained host (blue-green).
   # Guarded by plugins/soleur/test/terraform-target-parity.test.ts so it is not
   # dropped silently.
+  #
+  # HARD GATE (ADR-068 §(c), the LB-weight gate) — the deferred cutover orchestrator
+  # must NOT remove this entry or shift web-2's Cloudflare LB weight above 0 until the
+  # programmatic gate apps/web-platform/infra/lb-weight-gate.sh exits 0 AND its separate
+  # runtime-bind probe passes: (1) owner-side relay active (SOLEUR_PROXY_BIND /
+  # SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER), AND (2) git-data store cut over
+  # (GIT_DATA_STORE_ENABLED==true + LUKS soak marker). Pooling web-2 before both = a
+  # request lands on a host without that user's /workspaces → empty workspace →
+  # "workspace-gone" single-user incident. The gate is SHAPE-ONLY (prints
+  # requires_runtime_bind_probe=true) so exit 0 alone is NOT weight-flip authorization.
+  # See the ADR §(c) amendment + runbook moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image, placement_group_id]
   }

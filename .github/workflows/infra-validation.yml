@@ -198,6 +198,9 @@ jobs:
       - name: Run firewall port-9000 deny drift-guard
         run: bash apps/web-platform/infra/firewall-9000-deny.test.sh
 
+      - name: Run §(c) LB-weight gate shape-only tests
+        run: bash apps/web-platform/infra/lb-weight-gate.test.sh
+
       # Host monitor family (#5417 registered these; resource-monitor +
       # cat-deploy-state were pre-existing orphan suites CI never ran).
       - name: Run container-restart-monitor.sh tests
