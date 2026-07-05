@@ -84,13 +84,9 @@ write_files:
       Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install
       deploy ALL=(root) NOPASSWD: INFRA_CONFIG_INSTALL
 
-      # #5934 / ADR-081 — permits ci-deploy.sh's pre-canary durable substrate
-      # sweep to clear a residual CHARACTER-DEVICE .git/config.lock on
-      # /mnt/data/workspaces (the #5912 worktree-creation wedge). Without it sudo
-      # denies the sweep and the durable fix is a silent no-op (ci-deploy.sh's
-      # `|| true` hides the denial). Pins the exact argv including the resolved
-      # /usr/bin/timeout 60 prefix; no wildcards (sudo-rs safe). Mirror of
-      # deploy-inngest-bootstrap.sudoers — keep the two in sync.
+      # #5934 — char-device sweep grant (full rationale in the mirrored
+      # deploy-inngest-bootstrap.sudoers; keep the two in sync). Pins the exact
+      # argv ci-deploy.sh invokes; no wildcards (sudo-rs safe).
       Cmnd_Alias GIT_LOCK_CHARDEVICE_SWEEP = /usr/bin/timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh
       deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP
     owner: root:root
