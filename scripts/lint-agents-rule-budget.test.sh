@@ -267,7 +267,7 @@ t7_multi_byte_utf8_per_rule() {
 }
 
 # Case T8: AGENTS.core.md leading YAML frontmatter is EXCLUDED from B_ALWAYS
-# (issue #5999, ADR-085) — the lint measures LOADED bytes (post-strip), matching
+# (issue #5999, ADR-086) — the lint measures LOADED bytes (post-strip), matching
 # the session loader. Reported B_ALWAYS must equal index + stripped-core bytes,
 # and be strictly less than the raw on-disk sum (the frontmatter had bytes).
 t8_frontmatter_excluded_from_b_always() {

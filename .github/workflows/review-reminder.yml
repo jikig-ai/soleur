@@ -46,7 +46,7 @@ jobs:
           created=0
           skipped=0
 
-          # Liveness guard (#5999, ADR-085): constitutional paths that MUST be
+          # Liveness guard (#5999, ADR-086): constitutional paths that MUST be
           # evaluated on every run. The repo-root AGENTS.core.md lives OUTSIDE
           # `find knowledge-base`, so it is appended to the feed below AND
           # tracked here. If a required path is silently dropped (frontmatter or
@@ -174,7 +174,7 @@ jobs:
             [[ -n "${evaluated_required[$rp]:-}" ]] || missing_required+=("$rp")
           done
           if [[ ${#missing_required[@]} -gt 0 ]]; then
-            echo "::error::Required constitutional path(s) not evaluated by the review scan: ${missing_required[*]}. Their last_reviewed/review_cadence frontmatter may have been removed, or the path dropped from the find feed (ADR-085, #5999)."
+            echo "::error::Required constitutional path(s) not evaluated by the review scan: ${missing_required[*]}. Their last_reviewed/review_cadence frontmatter may have been removed, or the path dropped from the find feed (ADR-086, #5999)."
             exit 1
           fi
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # context-reviewed-gate.sh — PreToolUse(Bash) audit tripwire for `last_reviewed`.
 #
-# Issue: #5999. ADR-085 (freshness-last-reviewed-source-fix-and-audit-tripwire).
+# Issue: #5999. ADR-086 (freshness-last-reviewed-source-fix-and-audit-tripwire).
 #
 # WHAT THIS IS: a DETECTIVE audit tripwire, NOT a preventive integrity guarantee.
 # When a commit made through the Claude Code Bash tool REMOVES or CHANGES a
@@ -14,7 +14,7 @@
 # point; it does not prove human review. It is bypassed by commits outside the
 # Bash tool (Warp / IDE / CI / Inngest) and by non-canonical key spellings. The
 # real integrity comes from the source-level fixes to the known automated
-# writers (see ADR-085 §Phase 4); this gate is the tripwire for future/unknown
+# writers (see ADR-086 §Phase 4); this gate is the tripwire for future/unknown
 # LOCAL agent bumps.
 #
 # Contract (PreToolUse(Bash)): reads `.tool_input.command` + `.cwd` on stdin.
@@ -125,7 +125,7 @@ jq -n '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "deny",
-    permissionDecisionReason: "BLOCKED: this commit removes or changes a `last_reviewed:` line in a Markdown file but carries no `Context-Reviewed:` trailer. `last_reviewed` is a cooperative freshness signal (ADR-085) — an undeclared bump silently ages the review clock so downstream staleness checks read false confidence. If a human review actually happened, add a final commit-message paragraph declaring it: `Context-Reviewed: all` (or `Context-Reviewed: <path>`). If this is an automated reconcile that did NOT review the doc, bump `last_updated` instead and leave `last_reviewed` unchanged. This gate is a detective audit tripwire, not a wall; the attempt has been logged to the local incident ledger."
+    permissionDecisionReason: "BLOCKED: this commit removes or changes a `last_reviewed:` line in a Markdown file but carries no `Context-Reviewed:` trailer. `last_reviewed` is a cooperative freshness signal (ADR-086) — an undeclared bump silently ages the review clock so downstream staleness checks read false confidence. If a human review actually happened, add a final commit-message paragraph declaring it: `Context-Reviewed: all` (or `Context-Reviewed: <path>`). If this is an automated reconcile that did NOT review the doc, bump `last_updated` instead and leave `last_reviewed` unchanged. This gate is a detective audit tripwire, not a wall; the attempt has been logged to the local incident ledger."
   }
 }'
 exit 0

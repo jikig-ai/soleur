@@ -32,7 +32,7 @@ Deepened 2026-07-05 (5-agent review). Contract-before-consumer: **Phase 2 (strip
 - [ ] 3.2 Confirm ALL THREE AGENTS lints green (`lint-agents-rule-budget.py`, `lint-rule-ids.py`, `lint-agents-enforcement-tags.py`).
 
 ## Phase 4 — Source-fix BOTH writers (real integrity)
-- [ ] 4.1 Edit `plugins/soleur/skills/brainstorm/SKILL.md:121`: `last_updated`-only; cite ADR-085.
+- [ ] 4.1 Edit `plugins/soleur/skills/brainstorm/SKILL.md:121`: `last_updated`-only; cite ADR-086.
 - [ ] 4.2 Edit `apps/web-platform/server/inngest/functions/cron-campaign-calendar.ts:108`: agent-prompt bumps `last_updated`, not `last_reviewed` (server-side — gate can't see it).
 - [ ] 4.3 Fix any third writer from 0.2.
 
@@ -40,7 +40,7 @@ Deepened 2026-07-05 (5-agent review). Contract-before-consumer: **Phase 2 (strip
 - [ ] 5.1 Edit `.github/workflows/review-reminder.yml`: add repo-root `AGENTS.core.md` to the `find` feed; run-time required-constitutional-path liveness assert (`::error::` if not evaluated). (Slug branch optional polish.)
 
 ## Phase 6 — ADR + C4
-- [ ] 6.1 Create `ADR-085-freshness-last-reviewed-source-fix-and-audit-tripwire.md` via `/soleur:architecture` (boundary + source-fix-first + verbatim guarantee-boundary statement + pre-existing-3-parsers ack + C4-none). Optional AP-016 in principles-register. Re-verify ordinal at ship.
+- [ ] 6.1 Create `ADR-086-freshness-last-reviewed-source-fix-and-audit-tripwire.md` via `/soleur:architecture` (boundary + source-fix-first + verbatim guarantee-boundary statement + pre-existing-3-parsers ack + C4-none). Optional AP-016 in principles-register. Ordinal re-verified at work: ADR-085 was taken by the inbox ADR (#6007), so this shipped as ADR-086.
 
 ## Phase 7 — Verify
 - [ ] 7.1 Run test suite + all new `.test.sh` + 3 AGENTS lints + strip cross-check + two-case discoverability probe (discriminate on `permissionDecision:deny` JSON).

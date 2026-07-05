@@ -41,7 +41,7 @@ if _SCRIPTS_DIR not in sys.path:
 
 from _agents_md_sections import SECTIONS
 
-# Shared frontmatter-strip contract (issue #5999, ADR-085). AGENTS.core.md now
+# Shared frontmatter-strip contract (issue #5999, ADR-086). AGENTS.core.md now
 # carries OPTIONAL leading YAML frontmatter (last_reviewed / review_cadence) that
 # the session loader STRIPS before injecting into context. B_ALWAYS must measure
 # the LOADED bytes (what the agent actually sees), not the on-disk bytes — so we

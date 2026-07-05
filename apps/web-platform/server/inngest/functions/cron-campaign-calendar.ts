@@ -105,7 +105,7 @@ If no new issues were created, create and immediately close a heartbeat audit is
   Milestone: "Post-MVP / Later"
 
 STEP 3 — Touch content-strategy freshness date:
-In knowledge-base/marketing/content-strategy.md, update the frontmatter last_updated field to today's date. Do NOT touch last_reviewed — an automated cron write is not a human review, and bumping last_reviewed would silently reset the review clock this doc is measured against (ADR-085).
+In knowledge-base/marketing/content-strategy.md, update the frontmatter last_updated field to today's date. Do NOT touch last_reviewed — an automated cron write is not a human review, and bumping last_reviewed would silently reset the review clock this doc is measured against (ADR-086).
 
 PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
 The platform commits and opens a PR for your changes automatically after the run.

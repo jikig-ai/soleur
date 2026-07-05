@@ -4,7 +4,7 @@
 # Canonical contract lives in SPEC.md; strip.py is the byte-identical Python
 # twin. `scripts/lib/frontmatter-strip.test.sh` feeds shared fixtures to BOTH
 # and asserts parity — the mechanical replacement for "keep two regexes
-# identical by hand" (issue #5999, ADR-085).
+# identical by hand" (issue #5999, ADR-086).
 #
 # Sourced by .claude/hooks/session-rules-loader.sh (defines `strip_frontmatter`);
 # also runnable as a filter: `bash strip.sh < file`.

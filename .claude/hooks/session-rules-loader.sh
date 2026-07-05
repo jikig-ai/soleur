@@ -27,7 +27,7 @@ set -uo pipefail
 # flagged on PR #3496. Errors are handled inline (`|| true` on tolerant paths,
 # explicit fallback emission at the end on hard failures).
 
-# --- frontmatter-strip (issue #5999, ADR-085) ------------------------------
+# --- frontmatter-strip (issue #5999, ADR-086) ------------------------------
 # Sidecars now carry OPTIONAL leading YAML frontmatter (last_reviewed / cadence
 # on AGENTS.core.md). It must be stripped before injection so raw YAML never
 # leaks into agent context. The real contract is sourced from
