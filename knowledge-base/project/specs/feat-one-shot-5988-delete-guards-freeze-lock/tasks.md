@@ -66,4 +66,4 @@ malformed JSON). Freeze prefix check reuses the `realpath -m` containment patter
 
 - [x] 6.1 Updated guardrails.sh top-comment prose-rule block (both harnesses) + added `block-recursive-delete`/`freeze-edit-lock` rows.
 - [x] 6.2 Added two `knowledge-base/project/constitution.md` prose rules (hook-enforced convention); citations reference the delete-executor rule by content (insertion-stable, not line number).
-- [ ] 6.3 `bash scripts/test-all.sh` green.
+- [x] 6.3 `bash scripts/test-all.sh` green — EXIT=0, 146/146 suites passed, 0 failed (AC10).
