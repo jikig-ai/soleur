@@ -51,7 +51,7 @@ lands before Phase 3 verification** (producer before consumer).
       carve-outs; changed-files mode; scan dirs incl. legal/runbooks + engineering/architecture/decisions;
       paren-safe.
 - [ ] 4.2 (RED→GREEN) `scripts/lint-infra-no-human-steps.test.sh`: human-step FAILS; orchestrator-defer
-      PASSES; ignore-region PASSES; `tofu apply`-by-operator paraphrase FAILS.
+      PASSES; ignore-region PASSES; a paraphrased `tofu apply` human step FAILS.
 - [ ] 4.3 Wire the lint into `.github/workflows/ci.yml` (lint step) + `lefthook.yml` (pre-commit).
 - [ ] 4.4 Strengthen `hr-no-ssh-fallback-in-runbooks` (AGENTS.core.md:44) in place: class clause +
       `[hook-enforced: lefthook lint-infra-no-human-steps.py]`; short cross-ref on

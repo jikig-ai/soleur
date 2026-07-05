@@ -10,20 +10,29 @@ to close (see also `hr-exhaust-all-automated-options-before`,
 
 Sentinel model — HUMAN-ACTOR + INFRA-IMPERATIVE CO-OCCURRENCE (NOT a bare
 token denylist). A line is flagged only when a *human-actor* token AND an
-*infra-imperative* token co-occur on the same line (or an actor line is
-immediately followed by an imperative line). A bare-token denylist cannot
-separate "prescribes a *human* runs terraform apply" (a bug) from "the
-dispatch/orchestrator runs terraform apply" (the fix), and would red-line the
-de-manualization plan itself plus the retained deferred-orchestrator runbook
-steps.
+*infra-imperative* token co-occur on the same line, or an actor line and an
+imperative line are adjacent in the non-blank line sequence (either ordering,
+across blank lines). A bare-token denylist cannot separate "prescribes a
+*human* runs terraform apply" (a bug) from "the dispatch/orchestrator runs
+terraform apply" (the fix), and would red-line the de-manualization plan itself
+plus the retained deferred-orchestrator runbook steps.
+
+Detection is on the RAW line (inline backticks are NOT stripped): a human step
+hidden behind an inline `terraform apply` span, or an actor named as
+`` `operator` ``, still counts. Only *fenced* code blocks (``` / ~~~) are
+skipped wholesale — a runnable multi-line example, never prose.
 
 Carve-outs (a matched line is NOT flagged when):
-  * inside a `<!-- lint-infra-ignore -->` … `<!-- lint-infra-ignore end -->`
-    region (a bare / `start` marker with no `end` grandfathers the rest of the
-    file — used to wrap the de-manualization plan + deferred-orchestrator prose);
-  * inside a fenced code block (``` / ~~~) or an inline backtick span;
-  * under a `## Resolved` or `Last-resort diagnosis` heading (until the next
-    heading of equal-or-higher level);
+  * inside a paired `<!-- lint-infra-ignore start -->` … `<!-- lint-infra-ignore
+    end -->` region. The markers MUST be HTML comments (a bare `lint-infra-ignore`
+    token in prose or inside a fence never opens a region). A `start` with no
+    matching `end` is fail-closed: it does NOT grandfather the file tail — it is
+    reported as an error (exit non-zero);
+  * inside a fenced code block (``` / ~~~). An unterminated fence is reported as
+    an error (fail-closed) rather than silently disabling the tail;
+  * under an exact `## Resolved` (or `## Resolved (…)` / `— …`) or a
+    `Last-resort diagnosis` heading, until the next heading of equal-or-higher
+    level. A heading like `## Resolved questions` does NOT carve;
   * in a file whose path contains `/archive/`.
 
 Paren-safety (learning 2026-05-15-ci-sentinel-paren-safety): tokens are short
@@ -33,7 +42,8 @@ never a literal paren, so prose parentheses can't break a match.
 Modes:
   * full-scan (default): every `*.md` under the scan dirs (minus `**/archive/**`).
   * `--changed`: only files changed vs the merge base (grandfathers pre-existing
-    violations; the CI/lefthook wiring). New untracked docs are included.
+    violations; the CI/lefthook wiring). New untracked docs are included. If the
+    merge base or the diff cannot be resolved, this is fail-closed (exit 2).
   * explicit positional paths: scan exactly those files (used by lefthook
     `{staged_files}` and the test harness).
 
@@ -41,11 +51,6 @@ Exit codes:
     0  no human-run infra step prescribed in the scanned set
     1  one or more violations (each printed as `file:line: ...` on stderr)
     2  argument or git error
-
-Usage:
-    python3 scripts/lint-infra-no-human-steps.py            # full scan
-    python3 scripts/lint-infra-no-human-steps.py --changed  # changed vs base
-    python3 scripts/lint-infra-no-human-steps.py FILE...     # explicit files
 """
 
 from __future__ import annotations
@@ -71,42 +76,68 @@ SCAN_DIRS = (
 ACTOR_RES = tuple(
     re.compile(p, re.IGNORECASE)
     for p in (
-        r"\boperator\b",              # operator, ask the operator
-        r"\byou\b",                   # you
-        r"\byour laptop\b",           # your laptop
-        r"\bssh into\b",              # SSH into
-        r"\blog into\b.*?\bconsole\b",  # log into … console
-        r"\bby hand\b",               # by hand
-        r"\bmanually\b",              # manually
+        r"\boperator\b",                      # operator, ask the operator
+        r"\byou\b",                           # you
+        r"\byourself\b",                      # do it yourself
+        r"\byour laptop\b",                   # your laptop
+        r"\bfounder\b",                       # the founder
+        # ssh into / onto / to / `ssh -i` — a human opening a remote shell.
+        r"\bssh(?:\s+into|\s+onto|\s+to|\s+-i)\b",
+        r"\blog into\b.*?\bconsole\b",        # log into … console
+        r"\bby hand\b",                       # by hand
+        r"\bmanually\b",                      # manually
+        # "<human role> runs …" — the founder runs, the admin runs, etc.
+        r"\b(?:founder|operator|admin|maintainer|sysadmin|engineer)\s+runs?\b",
     )
 )
 
-# Infra-imperative tokens. Case-insensitive. Gap phrases use non-greedy `.*?`
-# so intervening prose (incl. parentheses) can't break the match.
+# Infra-imperative tokens. Case-insensitive, with verb inflection (lemma + s /
+# ing / ed / -ies) so "reboots"/"is rebooting"/"applies"/"power-cycles" match,
+# not only the bare lemma. Gap phrases use non-greedy `.*?` so intervening prose
+# (incl. parentheses) can't break the match.
 IMPERATIVE_RES = tuple(
     re.compile(p, re.IGNORECASE)
     for p in (
-        r"\b(?:terraform|tofu|opentofu) apply\b",  # terraform/tofu/opentofu apply
-        r"\breboot\b",                             # reboot
-        r"\bpower[- ]cycle\b",                     # power-cycle / power cycle
-        r"\battach the volume\b",                  # attach the volume
-        r"\bverify\b.*?\bprivate\b.*?\bip\b",      # verify … private … IP
-        r"-target\b.*?\bapply\b",                  # -target … apply
+        r"\b(?:terraform|tofu|opentofu)\s+appl(?:y|ies|ied)\b",       # apply/applies/applied
+        r"\b(?:terraform|tofu|opentofu)\s+destroy(?:s|ed|ing)?\b",    # destroy
+        r"\b(?:terraform|tofu|opentofu)\s+taint(?:s|ed|ing)?\b",      # taint
+        r"\b(?:terraform|tofu|opentofu)\s+import(?:s|ed|ing)?\b",     # import
+        r"\breboot(?:s|ing|ed)?\b",                                   # reboot(s|ing|ed)
+        r"\bpowers?[- ]cycl(?:e|es|ed|ing)\b",                        # power-cycle(s|d|ing)
+        r"\bpowers?[- ]off\b",                                        # power off / power-off
+        r"\bshut(?:s|ting)?\s+down\b",                                # shut/shuts/shutting down
+        r"\bshutdown\b",                                              # shutdown
+        r"\bsystemctl\s+restart\b",                                   # systemctl restart
+        r"\bdocker\s+restart\b",                                      # docker restart
+        r"\bcryptsetup\b",                                            # cryptsetup (LUKS)
+        r"\bmount(?:s|ing|ed)?\b",                                    # mount(s|ing|ed)
+        r"\battach(?:es|ing|ed)?\s+the\s+volume\b",                   # attach the volume
+        r"\bverif(?:y|ies|ied)\b.*?\bprivate\b.*?\bip\b",             # verify … private … IP
+        r"-target\b.*?\bappl(?:y|ies|ied)\b",                         # -target … apply
     )
 )
 
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
-INLINE_CODE_RE = re.compile(r"`[^`]*`")
-CARVE_HEADING_RE = re.compile(r"\bResolved\b|Last-resort diagnosis", re.IGNORECASE)
-# Region markers. Order matters: an `end` line also contains `lint-infra-ignore`.
-IGNORE_END_RE = re.compile(r"lint-infra-ignore\s+end")
-IGNORE_START_RE = re.compile(r"lint-infra-ignore")
+# Region markers must be HTML comments (`<!-- lint-infra-ignore start|end … -->`).
+# A bare `lint-infra-ignore` token in prose or inside a fence never opens/closes
+# a region. Order matters: an `end` line also contains `lint-infra-ignore`.
+IGNORE_START_RE = re.compile(r"<!--\s*lint-infra-ignore\s+start\b", re.IGNORECASE)
+IGNORE_END_RE = re.compile(r"<!--\s*lint-infra-ignore\s+end\b", re.IGNORECASE)
 
 
-def _clean(line: str) -> str:
-    """Strip inline backtick spans so command references in code don't match."""
-    return INLINE_CODE_RE.sub(" ", line)
+def _is_carve_heading(title: str) -> bool:
+    """True for an exact `Resolved`/`Resolved (…)`/`Resolved — …` or a
+    `Last-resort diagnosis` heading — NOT for `Resolved questions` etc."""
+    # Strip leading decoration (emoji, ✅, whitespace) before the first letter.
+    t = re.sub(r"^[^A-Za-z]+", "", title)
+    # `Resolved` at start, followed by end-of-title OR a non-word separator
+    # (space+`(`, `—`, `:`, `-`) — but NOT another word like "questions".
+    if re.match(r"Resolved(?=$|\s*[^\w\s])", t, re.IGNORECASE):
+        return True
+    if re.match(r"Last-resort diagnosis\b", t, re.IGNORECASE):
+        return True
+    return False
 
 
 def _has_actor(text: str) -> bool:
@@ -117,13 +148,14 @@ def _has_imperative(text: str) -> bool:
     return any(r.search(text) for r in IMPERATIVE_RES)
 
 
-def scan_text(text: str) -> list[int]:
-    """Return the 1-based line numbers that prescribe a human-run infra step.
+def scan_text(text: str) -> tuple[list[int], list[str]]:
+    """Return (flagged 1-based line numbers, structural errors).
 
-    A line contributes an (actor, imperative) signal only when it is NOT
-    carved out (fenced / ignore-region / Resolved|Last-resort section). A
-    violation is a same-line co-occurrence, or an actor line immediately
-    followed by an imperative line (adjacent split).
+    A line contributes an (actor, imperative) signal only when it is NOT carved
+    out (fenced / ignore-region / Resolved|Last-resort section). A violation is
+    a same-line co-occurrence, or an actor line adjacent (in the non-blank line
+    sequence, either ordering) to an imperative line. Structural errors
+    (unterminated ignore region / unterminated fence) are fail-closed.
     """
     lines = text.splitlines()
     n = len(lines)
@@ -131,33 +163,47 @@ def scan_text(text: str) -> list[int]:
     imper = [False] * n
 
     in_fence = False
+    fence_start_line = 0
     in_ignore = False
+    ignore_start_line = 0
     carve = False
     carve_level = 0
 
     for i, raw in enumerate(lines):
-        # Ignore-region markers (checked before fence/heading; they are HTML
-        # comments that may sit anywhere). `end` first — it also matches start.
-        if IGNORE_END_RE.search(raw):
-            in_ignore = False
-            continue
-        if IGNORE_START_RE.search(raw):
-            in_ignore = True
-            continue
+        # 1. Inside an ignore region: only the terminating end marker matters.
         if in_ignore:
+            if IGNORE_END_RE.search(raw):
+                in_ignore = False
             continue
 
+        # 2. Fence toggling. Content (and any markers) inside a fence are skipped
+        #    wholesale — so a marker cannot be smuggled inside a code block.
         if FENCE_RE.match(raw):
-            in_fence = not in_fence
+            if not in_fence:
+                in_fence = True
+                fence_start_line = i + 1
+            else:
+                in_fence = False
             continue
         if in_fence:
             continue
 
+        # 3. Ignore-region markers (HTML-comment shape, outside fences only).
+        #    `end` before `start` — an `end` line also matches `lint-infra-ignore`.
+        if IGNORE_END_RE.search(raw):
+            # Stray `end` with no open region: no suppression to toggle.
+            continue
+        if IGNORE_START_RE.search(raw):
+            in_ignore = True
+            ignore_start_line = i + 1
+            continue
+
+        # 4. Headings drive the Resolved / Last-resort-diagnosis section carve.
         hm = HEADING_RE.match(raw)
         if hm:
             level = len(hm.group(1))
             title = hm.group(2)
-            if CARVE_HEADING_RE.search(title):
+            if _is_carve_heading(title):
                 carve = True
                 carve_level = level
             elif carve and level <= carve_level:
@@ -167,18 +213,38 @@ def scan_text(text: str) -> list[int]:
         if carve:
             continue
 
-        cleaned = _clean(raw)
-        actor[i] = _has_actor(cleaned)
-        imper[i] = _has_imperative(cleaned)
+        # 5. Actor / imperative on the RAW line (inline backticks NOT stripped).
+        actor[i] = _has_actor(raw)
+        imper[i] = _has_imperative(raw)
 
     flagged: set[int] = set()
+    # Same-line co-occurrence.
     for i in range(n):
         if actor[i] and imper[i]:
             flagged.add(i + 1)
-        elif actor[i] and i + 1 < n and imper[i + 1]:
-            # Actor line immediately above an imperative line (adjacent split).
-            flagged.add(i + 1)
-    return sorted(flagged)
+    # Adjacent split: pair each non-blank line with the next non-blank line
+    # (skipping blank lines), either ordering. Flag the actor-bearing line.
+    content = [i for i in range(n) if lines[i].strip() != ""]
+    for k in range(len(content) - 1):
+        a, b = content[k], content[k + 1]
+        if actor[a] and imper[b]:
+            flagged.add(a + 1)
+        elif imper[a] and actor[b]:
+            flagged.add(b + 1)
+
+    errors: list[str] = []
+    if in_ignore:
+        errors.append(
+            f"unterminated `<!-- lint-infra-ignore start -->` region (opened at "
+            f"line {ignore_start_line}); fail-closed — add a matching "
+            f"`<!-- lint-infra-ignore end -->`."
+        )
+    if in_fence:
+        errors.append(
+            f"unterminated code fence (opened at line {fence_start_line}); "
+            f"malformed markdown disables tail scanning — fail-closed."
+        )
+    return sorted(flagged), errors
 
 
 def lint_file(path: Path) -> list[str]:
@@ -189,15 +255,19 @@ def lint_file(path: Path) -> list[str]:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:  # pragma: no cover - defensive
         return [f"{path}: ERROR reading file: {exc}"]
+    flagged, errors = scan_text(text)
     out: list[str] = []
-    for ln in scan_text(text):
+    for ln in flagged:
         out.append(
             f"{path}:{ln}: prescribes a human-run infra step "
             f"(actor + terraform/SSH/reboot/verify-on-private-net imperative "
             f"co-occur). Route it through CI / Inngest / a workflow_dispatch, "
-            f"or wrap deferred-orchestrator prose in a `<!-- lint-infra-ignore -->` "
+            f"or wrap deferred-orchestrator prose in a "
+            f"`<!-- lint-infra-ignore start -->` … `<!-- lint-infra-ignore end -->` "
             f"region. See hr-no-ssh-fallback-in-runbooks."
         )
+    for e in errors:
+        out.append(f"{path}: {e} See hr-no-ssh-fallback-in-runbooks.")
     return out
 
 
@@ -222,18 +292,19 @@ def _resolve_base(base: str) -> str | None:
     return None
 
 
-def changed_files(base: str) -> list[Path]:
-    """Files changed vs the merge base + new untracked files, under scan dirs."""
-    mb = _resolve_base(base)
-    names: set[str] = set()
-    if mb is not None:
-        diff = _git(["diff", "--name-only", mb, "--"])
-        if diff.returncode == 0:
-            names.update(n for n in diff.stdout.splitlines() if n)
+def changed_files(base_ref: str) -> list[Path] | None:
+    """Files changed vs `base_ref` + new untracked files, under scan dirs.
+
+    Returns None on a git error (fail-closed → the caller exits 2)."""
+    diff = _git(["diff", "--name-only", base_ref, "--"])
+    if diff.returncode != 0:
+        return None
+    names: set[str] = {n for n in diff.stdout.splitlines() if n}
     # Untracked new docs (not yet in any commit) still count as "changed".
     others = _git(["ls-files", "--others", "--exclude-standard"])
-    if others.returncode == 0:
-        names.update(n for n in others.stdout.splitlines() if n)
+    if others.returncode != 0:
+        return None
+    names.update(n for n in others.stdout.splitlines() if n)
 
     prefixes = tuple(d + "/" for d in SCAN_DIRS)
     picked: list[Path] = []
@@ -287,7 +358,23 @@ def main(argv: list[str]) -> int:
     if args.paths:
         files = [p for p in args.paths if p.suffix == ".md" and p.is_file()]
     elif args.changed:
-        files = changed_files(args.base)
+        base_ref = _resolve_base(args.base)
+        if base_ref is None:
+            print(
+                "ERROR: --changed could not resolve a merge base against "
+                f"{args.base!r} / origin/main / main (git error). Fail-closed.",
+                file=sys.stderr,
+            )
+            return 2
+        picked = changed_files(base_ref)
+        if picked is None:
+            print(
+                "ERROR: --changed could not compute the changed-files set "
+                f"(git diff/ls-files failed against {base_ref!r}). Fail-closed.",
+                file=sys.stderr,
+            )
+            return 2
+        files = picked
     else:
         files = full_scan_files()
 
@@ -299,10 +386,10 @@ def main(argv: list[str]) -> int:
         for e in errors:
             print(e, file=sys.stderr)
         print(
-            f"\nFAIL: {len(errors)} prescribed human-run infra step(s). "
-            f"Non-technical Soleur users act only through the web app / CI — "
-            f"automate the step or wrap deferred-orchestrator prose in a "
-            f"lint-infra-ignore region.",
+            f"\nFAIL: {len(errors)} prescribed human-run infra step(s) / "
+            f"structural error(s). Non-technical Soleur users act only through "
+            f"the web app / CI — automate the step or wrap deferred-orchestrator "
+            f"prose in a lint-infra-ignore region.",
             file=sys.stderr,
         )
         return 1

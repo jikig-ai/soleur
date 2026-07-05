@@ -147,6 +147,11 @@ pre-existing web-1 needs a power-off to join. So reboot a **drained, non-serving
    already exists in state, born into `web_spread`), asserts the plan-scoped destroy-guard
    `reboot_updates=0`, then fans the deploy out to web-2 over the host-side private net. There
    is no local command and no SSH.
+   - **The deploy trigger re-swaps the live web-1 at the current tag first (SE-3).** The
+     `/hooks/deploy` fan-out fires only after web-1's own canary-gated swap completes, so the
+     dispatch redeploys web-1 at the **current tag** (not a new release) before reaching web-2;
+     ingress stays on web-1 throughout with zero weight/DNS change. This is dispatch/automation
+     behavior — an idempotent zero-downtime redeploy — not a separate human action.
 6. **Confirm web-2 accepted the deploy off-host.** The dispatch reads web-1's
    `/hooks/deploy-status` `reason` (`reason=="ok"` vs `ok_peer_fanout_degraded`) — the reachable
    web-2-accepted signal — and fails red on the degraded reason. The apply's created-resources

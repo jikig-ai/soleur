@@ -312,8 +312,8 @@ Flagged the `/health` monitor-coupling hazard (adopted into Sharp Edges + the AD
   hcloud_server.web : h.id]` references the whole map; `-target`ing it pulls
   `hcloud_server.web["web-1"]` into the closure. Safe now (Phase 1's `ignore_changes` makes
   the server a no-op) — but never `[ack-destroy]` through a reboot on the unattended path.
-- **`moved` blocks evaluate globally at plan time** regardless of `-target` — the operator
-  must read the plan and not mistake the (already-consumed) re-address for a change.
+- **`moved` blocks evaluate globally at plan time** regardless of `-target` — plan-review
+  must surface the (already-consumed) re-address as a no-op, never mistake it for a change.
 - **Do not `[ack-destroy]` the CI wedge.** The correct fix is Phase 1's `ignore_changes`
   (zero reboot), never acking the reboot through the unattended apply (#5911's whole point).
 - **`ignore_changes` removal is the GA PR's first diff** — leaving it forever means web-1

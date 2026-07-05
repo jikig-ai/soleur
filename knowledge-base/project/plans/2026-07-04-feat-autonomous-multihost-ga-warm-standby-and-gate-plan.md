@@ -522,3 +522,8 @@ spec-flow: it passes on the host root fs) — the apply output is.
    payload contract (P0.2).
 3. **RESOLVED:** §(c) Condition B drops the source-grep sentinel (tautology); keeps
    `GIT_DATA_STORE_ENABLED` + the soak marker. AGENTS Phase 4 strengthens one rule in place.
+
+<!-- Explicitly terminate the whole-file carve opened at the top (was unterminated, relying on the
+     old grandfather-the-tail behavior; the hardened lint is fail-closed on an unterminated start). -->
+<!-- lint-infra-ignore end -->
+
