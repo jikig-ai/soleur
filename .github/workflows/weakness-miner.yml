@@ -1,0 +1,66 @@
+# Weekly read-only weakness-miner (#6037) — Self-Harness "weakness mining"
+# stage, detection-only. Clusters learnings added in the last 7 days into a
+# ranked recurring-failure-pattern digest and opens a PR (via the same
+# bot-pr-with-synthetic-checks path as rule-metrics-aggregate.yml — ADR-054's
+# safeCommitAndPr governs the Inngest write path, NOT this GHA action, so the
+# governing precedent here is rule-metrics-aggregate).
+#
+# ZERO MUTATION SURFACE: `add-paths` is the single digest path; the script
+# writes nowhere else. The digest only informs a human's /compound triage — it
+# never edits AGENTS.md, skills, or hooks.
+#
+# Issue: #6037
+#
+# Security: No untrusted event inputs used in run: commands. Uses only
+# GITHUB_TOKEN, repo-local files, and safe GitHub context values.
+
+name: "Scheduled: Weakness Miner"
+
+on:
+  schedule:
+    - cron: '0 6 * * 0'   # Sunday 06:00 UTC (offset from rule-metrics 00:00)
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-weakness-miner
+  cancel-in-progress: false
+
+permissions:
+  checks: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  mine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0   # first-appearance dates need full history
+
+      - name: Run weakness-miner
+        run: bash scripts/weakness-miner.sh
+
+      - name: Create PR with weakness digest
+        uses: ./.github/actions/bot-pr-with-synthetic-checks
+        with:
+          add-paths: knowledge-base/project/weakness-digest.md
+          branch-prefix: ci/weakness-digest-
+          commit-message: "chore(weakness-miner): weekly digest"
+          pr-title-prefix: "chore(weakness-miner): weekly digest"
+          # Cite only files present in the PR diff — the body-vs-diff guard
+          # (#2905) blocks bodies whose cited paths are <50% matched.
+          pr-body: "Automated weekly weakness digest: regenerates knowledge-base/project/weakness-digest.md by clustering recently-added learnings into recurring-failure patterns for /compound triage."
+          change-summary: "Weakness digest regeneration only, no code changes"
+          gh-token: ${{ github.token }}
+
+      - name: Email notification (failure)
+        if: failure()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[FAIL] Scheduled: Weakness Miner failed'
+          body: '<p><strong>Scheduled: Weakness Miner</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
