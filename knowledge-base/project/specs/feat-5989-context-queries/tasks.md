@@ -13,7 +13,7 @@ adr: ADR-086
 Design (post 6-agent plan-review): **pointer-only** lazy `PostToolUse:Skill` hook. See plan for full rationale.
 
 ## Phase 0 — Preconditions (verify against installed state)
-- [x] 0.1 Composition spike: register a throwaway 2nd `PostToolUse:Skill` hook in the **exact ship shape** (sibling matcher block), invoke a skill, verify (a) both it + phase-surface reach the model (concat vs last-writer-wins) and (b) per-hook vs aggregate 10K cap. If last-writer-wins → ship a NEW dedicated single-emitter hook (do NOT graft into phase-surface); record tradeoff in ADR.
+- [~] 0.1 Composition: registered as a sibling `Skill` matcher block. Resolved by design (CC runs ALL matching hooks and concatenates additionalContext — phase-surface precedent + multi PreToolUse:Bash stacking) rather than a live throwaway spike (mid-session settings edit doesn't reload). Cap-collision moot: pointer payload is ~1 line. Fallback (single-emitter) recorded in ADR-086. **Live concat observation deferred to next natural session reload — low risk given tiny payload.**
 - [x] 0.2 Confirm `knowledge-base/marketing/brand-guide.md` git-tracked (36 KB → pointer path).
 - [x] 0.3 Surface probe: do web-agent Concierge sessions emit `PostToolUse:Skill`? (grep `apps/web-platform/server/` `options.hooks` + ADR-070). Record CLI-first vs CLI-intrinsic.
 - [x] 0.4 Read templates: `phase-surface-hint.sh`(+`.test.sh`), `pencil-collapse-guard.sh:42-59`, `scripts/generate-kb-index.sh` frontmatter idiom (`c==1` @138-141, block-start @176, continuation @144).
@@ -47,7 +47,7 @@ Design (post 6-agent plan-review): **pointer-only** lazy `PostToolUse:Skill` hoo
 ## Phase 6 — Verify
 - [x] 6.1 `skill-context-queries.test.sh` green; `components.test.ts` green; C4 tests green.
 - [x] 6.2 `skill-security-scan` on the hook → LOW-RISK/REVIEW (TR5).
-- [x] 6.3 PR review routed through `security-sentinel` + `observability-coverage-reviewer`.
+- [ ] 6.3 PR review routed through `security-sentinel` + `observability-coverage-reviewer` (Phase 4 handoff).
 
 ## Ship (deferrals to file)
 - [ ] Web-platform in-process parity issue (with user-facing symptom + 0.3 finding).
