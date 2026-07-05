@@ -16,6 +16,27 @@ plan_review: applied (architecture-strategist, spec-flow-analyzer, code-simplici
 
 Closes #5987 (Wave 2 · FR4 of epic #5983). **CLO gate: this ships before any feature that increases data egress.**
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-05. **Passes:** 4-agent plan-review (architecture-strategist, spec-flow-analyzer,
+code-simplicity-reviewer, fable advisor) → applied; deepen halt-gates (4.6/4.7/4.8/4.9/4.5/4.55) → all pass;
+authoritative local Python-semantics verification; security-sentinel adversary-model pass → applied.
+
+**Load-bearing claims verified live (python3.12):**
+- `re.ASCII` restores C-locale `\b`: `Ю`+`sk-ant-`+32 → Unicode `\b` **MISS**, `re.ASCII` **CATCH** (validates the port-safety P0).
+- NFKC expansion: `NFKC('ﷺ' U+FDFA)` → **18 codepoints** (validates the post-NFKC cap re-check).
+- `str.translate({ord:None})` deletes invisibles; invalid byte `\x80` → U+FFFD → stripped → `sk_live_live` reassembled (validates AC1b + STRIP).
+- POSIX trap: `[^[:space:]]+` in Python `re` matches only `DOPPLER_TOKEN=d` (stops at `s`); `\S+` correct (validates the hand-translate).
+- `dry-run.sh` fails-closed on any non-zero sentinel exit (contract preserved).
+
+**Key security-review-driven changes (folded in):** completed the STRIP set (added U+2028/U+2029 —
+a self-inconsistency with the repo's own `cq-regex-unicode-separators-escape-only` invariant — plus
+U+00AD soft-hyphen and other invisible splitters); `strip → NFKC → strip` double-strip; tightened
+meta-redaction to cap transcript entropy leak; reworded AC1 to end false-confidence + added a
+version-controlled homoglyph known-gap test (Test 12); added Soleur crown-jewel classes
+(Doppler/Slack) + broadened PEM/UUID/env_var (Phase 2b); named the previously-silent whitespace-split
+and encoding non-goals.
+
 ## Overview
 
 The Soleur redaction engine (`plugins/soleur/skills/incident/scripts/redact-sentinel.sh`)
@@ -121,8 +142,14 @@ with `\uXXXX` escapes — never commit literal invisibles (Edit-tool mangles U+2
 `cq-regex-unicode-separators-escape-only`; invisibles are unreviewable). All tokens synthesized
 (`cq-test-fixtures-synthesized-only`).
 
-- **Test 5 — confusable evasion (AC1):** ZWSP-spliced JWT + fullwidth Stripe key. Assert (a) raw
-  `grep -oE '<old pattern>'` **misses**; (b) engine **exits 1** with `matched pattern JWT` / `matched pattern stripe_key`.
+- **Test 5 — compatibility-confusable + invisible-splitter evasion (AC1):** JWT split by ZWSP **and**
+  by U+00AD (soft hyphen) and U+2028; a fullwidth Stripe key. Assert (a) raw `grep -oE '<old pattern>'`
+  **misses**; (b) engine **exits 1** with the correct classes. (The soft-hyphen/U+2028 vectors guard the
+  STRIP-set completion — plan v1 omitted them.)
+- **Test 12 — cross-script homoglyph KNOWN-GAP (AC1 honesty):** a Cyrillic-lookalike-prefixed secret
+  whose glyphs are NOT in `CONFUSABLE_MAP` asserts the CURRENT behavior (exit 0 = not caught), so the
+  residual fail-open is version-controlled and visible rather than silent. A `CONFUSABLE_MAP`-covered
+  prefix (`ѕk_live_…`) asserts exit 1 (the targeted fold works).
 - **Test 6 — oversize → synthetic HIGH (AC2):** file of `REDACT_MAX_INPUT_BYTES + 1` bytes → exit 1,
   distinct synthetic-HIGH marker, no per-class matching attempted.
 - **Test 6b — expansion bomb (AC2):** raw < cap but NFKC-expanded > cap → synthetic HIGH, exit 1
@@ -139,7 +166,9 @@ with `\uXXXX` escapes — never commit literal invisibles (Edit-tool mangles U+2
   exits **2** (not 0, not 1) with the fail-closed message.
 - **Test 11 — legal-generate gate blocks (AC5):** seed a draft `mktemp` with a synthesized secret;
   assert the sentinel invocation the legal-generate flow uses exits non-zero (⇒ no inline present, no write).
-- **Preserve Tests 1–4** (contract: 14 classes trip; invalid-arg exits 2; output-format regex matches).
+- **Preserve Tests 1–4** (contract: 14 classes trip; invalid-arg exits 2). **Test 4 format regex
+  tightens** to the new capped reveal: `at offset [0-9]+: .{0,4}\*\*\*(.{0,4})? matched pattern [A-Za-z_]+`
+  (was `.{8}\*\*\*.{8}` — the 8+8 reveal leaked ~50% of a fixed-prefix key's entropy into the transcript).
 
 ### Phase 2 (GREEN) — The hardened engine
 
@@ -155,23 +184,34 @@ import os, re, sys, unicodedata
 
 MAX = int(os.environ.get("REDACT_MAX_INPUT_BYTES", str(1024 * 1024)))  # 1 MiB
 
-# Zero-width + bidi controls + replacement char. NFKC does NOT remove these — strip explicitly.
-# str.translate map; keys are ordinals (escapes only, cq-regex-unicode-separators-escape-only).
-STRIP = {c: None for c in (0x200B,0x200C,0x200D,0x2060,0xFEFF,0x180E,
-                           0x200E,0x200F,0x202A,0x202B,0x202C,0x202D,0x202E,
-                           0x2066,0x2067,0x2068,0x2069, 0xFFFD)}
+# Invisible / break-rendering / bidi separators + replacement char. NFKC does NOT remove these.
+# INCLUDES U+2028/U+2029 (line/para sep) per the repo's own cq-regex-unicode-separators-escape-only
+# invariant — omitting them (as plan v1 did) is a self-inconsistency + a live splitter evasion.
+# str.translate map; keys are ordinals (escapes-only per that rule).
+STRIP = {c: None for c in (
+    0x200B,0x200C,0x200D,0x2060,0xFEFF,0x180E,           # zero-width
+    0x200E,0x200F,0x202A,0x202B,0x202C,0x202D,0x202E,0x2066,0x2067,0x2068,0x2069,0x061C,  # bidi
+    0x00AD,                                              # soft hyphen (renders invisibly, splits tokens)
+    0x2028,0x2029,                                       # line / paragraph separators
+    0x115F,0x1160,0x3164,0x17B4,0x17B5,                  # Hangul/Khmer fillers (render as nothing)
+    0xFFF9,0xFFFA,0xFFFB,                                # interlinear annotation
+    0xFFFD)}                                             # decode-replacement (invalid-byte splice)
 
 # All 14 classes ported 1:1 from redact-sentinel.sh, compiled with re.ASCII so \b/\w/\s keep
 # grep's C-locale (ASCII) semantics — WITHOUT re.ASCII, Python's Unicode \b makes "Юsk-ant-…"
 # a MISS the bash version catches (a NEW evasion). POSIX [^[:space:]] hand-translated to \S.
 F = re.ASCII
-PATTERNS = [
+PATTERNS = [                                   # all compiled with F=re.ASCII
     ("JWT", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", F)),
     ("email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", F)),
-    # … UUID, stripe_key, stripe_whsec, stripe_acct, stripe_cust_pi_seti_sub_in, IPv4,
-    #   env_var (…=\S+), github_token, anthropic_key, openai_key, supabase_pat, pem_private_key
-    #   — every one compiled with F=re.ASCII; env_var uses \S+ NOT [^[:space:]]+.
+    # … the 12 remaining FR3 classes ported 1:1 (env_var uses \S+ NOT [^[:space:]]+), plus
+    #   deepen-security broadenings (see Phase 2b): UUID → [0-9A-Fa-f]; PEM header → [A-Z0-9 ]*PRIVATE KEY;
+    #   new Soleur crown-jewel classes doppler_token (dp\.(st|pt)\.…), slack_token (xox[baprs]-…);
+    #   env_var vendor list += HETZNER|FLAGSMITH|RESEND|TAILSCALE.
 ]
+# CONFUSABLE_MAP: targeted ASCII-lookalike fold for ~25 Cyrillic/Greek codepoints that appear in
+# secret PREFIXES (ѕ→s е→e р→p с→c а→a о→o k l i v t …). Cheap partial cross-script coverage so
+# AC1 is honest; full TR39 skeleton stays a non-goal (residual gap version-controlled by Test 12).
 
 def scan(path):
     if not os.path.isfile(path) or not os.access(path, os.R_OK):
@@ -179,14 +219,17 @@ def scan(path):
     raw = open(path, "rb").read()
     if len(raw) > MAX:
         print(f"SYNTHETIC HIGH: input exceeds {MAX} bytes ({len(raw)}) — fail closed"); return 1
-    norm = unicodedata.normalize("NFKC", raw.decode("utf-8", "replace").translate(STRIP))
-    if len(norm.encode("utf-8")) > MAX:  # post-NFKC expansion re-check
+    stripped = raw.decode("utf-8", "replace").translate(STRIP)
+    # strip → NFKC → strip again: NFKC decomposition can EMIT combining/zero-width chars, re-opening
+    # a splitter after the first strip ran. Second strip is idempotent. Then targeted confusable fold.
+    norm = unicodedata.normalize("NFKC", stripped).translate(STRIP).translate(CONFUSABLE_MAP)
+    if len(norm.encode("utf-8")) > MAX:  # post-NFKC expansion re-check (NFKC can expand 1→18 cp)
         print(f"SYNTHETIC HIGH: normalized input exceeds {MAX} bytes — fail closed"); return 1
     hits = 0
     for name, rx in PATTERNS:
         for m in rx.finditer(norm):
-            t = m.group(0)
-            prev = f"{t[:8]}***{t[-8:]}" if len(t) > 16 else f"{t[:3]}***{t[-3:] if len(t) > 6 else ''}"
+            t = m.group(0)  # tightened meta-redaction — cap revealed entropy (finding lines hit the transcript)
+            prev = f"{t[:4]}***{t[-4:]}" if len(t) > 24 else (f"{t[:4]}***" if len(t) > 12 else "***")
             print(f"at offset {m.start()}: {prev} matched pattern {name}"); hits += 1
     return 1 if hits else 0
 
@@ -220,6 +263,26 @@ case "$rc" in 0|1|2) exit "$rc";; *) echo "redact-sentinel: engine exit ${rc} no
 **Fail-closed is independent of any offset math** (there is no offset map). Exit code depends only
 on `hits` over the whole-string-normalized text.
 
+### Phase 2b — Class-breadth + confusable additions (from deepen security review)
+
+File: `redact-engine.py` (PATTERNS + CONFUSABLE_MAP) and `positive-corpus.md` (new synthesized fixtures).
+
+Folded in because this PR is the **pre-egress gate** and these are one-line, low-false-positive, and
+target the modal Soleur secret. Golden-parity (Test 9) is old-vs-new on the **existing** corpus; new
+classes are **additive** — add a synthesized fixture per new class so Test 2 still asserts "every class trips".
+
+- **New classes (distinctive prefixes, low FP):** `doppler_token` (`\bdp\.(st|pt)\.[A-Za-z0-9._-]{16,}`),
+  `slack_token` (`\bxox[baprs]-[A-Za-z0-9-]{10,}`).
+- **Broaden existing:** `env_var` vendor list `+= HETZNER|FLAGSMITH|RESEND|TAILSCALE`; PEM header
+  `-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----` (catches `ENCRYPTED`/`SSH2`); UUID `[0-9A-Fa-f]` (uppercase —
+  a latent lowercase-only gap in the bash baseline, fixed deliberately; verify additive vs Test 9).
+- **`CONFUSABLE_MAP`:** targeted ~25-codepoint Cyrillic/Greek→ASCII fold for secret-prefix lookalikes
+  (closes the prefix-homoglyph vector so AC1 is honest). Full TR39 skeleton remains a non-goal; Test 12
+  version-controls what is still not folded. Redaction false-positives on legit Cyrillic prose are the
+  acceptable-asymmetry side (operator iterates) per the PII-scrubber learning.
+- **Deferred to follow-up (higher FP / real detection-design):** Cloudflare bare 40-char token,
+  prefix-agnostic high-entropy detection, base64/hex-decode-and-re-scan, headerless-PEM-body heuristic.
+
 ### Phase 3 — Wire the legal path (build + gate)
 
 File to edit: `plugins/soleur/skills/legal-generate/SKILL.md`.
@@ -243,8 +306,12 @@ and ADR-086 (below, minimal).
 
 ## Acceptance Criteria (all pre-merge — no operator post-merge steps)
 
-- [ ] **AC1 (confusable evasion):** Test 5 GREEN — ZWSP-spliced JWT + fullwidth Stripe key missed by
-      raw regex, caught by engine (exit 1, correct class).
+- [ ] **AC1 (compatibility-confusable + invisible-splitter evasion):** Test 5 GREEN — JWT split by
+      ZWSP/U+00AD/U+2028 + fullwidth Stripe key missed by raw regex, caught by engine. **AC1 is scoped to
+      NFKC-foldable + stripped + CONFUSABLE_MAP-covered vectors** — cross-script homoglyphs outside the
+      map are a version-controlled known gap (Test 12), NOT claimed as covered. (Reworded from "confusable
+      evasion" after deepen review flagged false-confidence: fullwidth-only Test 5 would go green while
+      un-folded homoglyphs stay fail-open.)
 - [ ] **AC1b (invalid-UTF-8 splice):** Test 7 GREEN — a U+FFFD-spliced secret is caught after strip.
 - [ ] **AC2 (oversize → synthetic HIGH → caller blocks):** Tests 6 + 6b GREEN — raw-oversize AND
       NFKC-expansion-oversize both exit 1 with a synthetic-HIGH line and skip per-class matching;
@@ -293,9 +360,11 @@ N/A — Product NONE.
 **Create ADR-086 (provisional — 085 highest on `main`; `/ship`'s ordinal-collision gate re-verifies).**
 Minimal (5–8 lines): the **fail-closed redaction-engine contract** — matching occurs over
 whole-string `NFKC(strip(text))`; oversize (raw or NFKC-expanded) or a non-running engine → non-zero
-exit → caller blocks; and the **scope boundary** — NFKC + strip defeats compatibility-char /
-zero-width / bidi / invalid-byte evasion but **NOT cross-script homoglyphs** (Cyrillic `А`→Latin `A`
-is not an NFKC mapping; TR39 skeleton is a documented non-goal). Records that `redact-sentinel.sh` is
+exit → caller blocks; matching runs over `strip → NFKC → strip → CONFUSABLE_MAP` (double-strip because
+NFKC can emit combining/zero-width chars); and the **scope boundary** — defeats compatibility-char /
+zero-width / bidi / invalid-byte / soft-hyphen / prefix-homoglyph evasion but **NOT** the full
+cross-script homoglyph space (TR39 skeleton), whitespace-splitting, or reversibly-encoded secrets —
+each a named non-goal, with the residual homoglyph gap version-controlled by Test 12. Records that `redact-sentinel.sh` is
 now a **shared cross-skill dependency** reached by relative path from three skills (code-to-prd,
 incident, legal-generate) — accepted debt vs a shared-location move.
 
@@ -388,13 +457,24 @@ discoverability_test:
    classes this engine MISSES — homoglyphs, unprefixed tokens, variable-length UTF-8 — do not restate
    the class set."
 
-## Non-Goals
+## Non-Goals (explicitly named — "not listed" must not read as "handled")
 
-- Cross-script **homoglyph** normalization (Unicode TR39) — ADR scope boundary; deferred.
-- **legal-audit** redaction wiring — deferred (already-committed content; multi-surface gating cost).
-- Hardening `operator-digest/digest-scrub.sh` + `linear-fetch/redact-linear-urls.sh` — **file a
-  follow-up issue** (per `wg-when-deferring-a-capability-create-a`) bundling legal-audit + digest-scrub
-  NFKC/zero-width hardening + class-set sync.
+- **Full cross-script homoglyph** normalization (Unicode TR39 skeleton) — only the targeted
+  `CONFUSABLE_MAP` prefix fold ships; the residual gap is version-controlled by Test 12. ADR boundary.
+- **Whitespace / newline token-splitting** (a secret split across two lines, or with a space/tab/CR mid-token):
+  strip cannot remove whitespace (it is meaningful in `env_var` values and prose), so a line-wrapped
+  secret that a PDF/markdown renderer reflows is NOT caught. This is the most likely *accidental* leak —
+  follow-up: a "collapse whitespace inside a high-entropy candidate run and re-scan" second pass.
+- **Reversibly-encoded secrets** (base64/hex/percent-encoded, k8s Secret manifests) — the engine is a
+  literal-shape matcher with no decode step. Follow-up: base64-decode candidate blobs and re-run the prefix classes.
+- **Headerless PEM key body** — the class anchors on the `BEGIN … PRIVATE KEY` header; a base64 key body
+  with the header stripped is not scanned. Follow-up: long-base64-run heuristic.
+- **legal-audit** redaction wiring — deferred (already-committed content; multi-surface gating cost). User-Challenge.
+- Hardening `operator-digest/digest-scrub.sh` + `linear-fetch/redact-linear-urls.sh`.
 - In-place redaction/rewrite of the original (Soleur halts; only gstack rewrites).
 - Offset-mapping back to the original text (User-Challenge; see decision-challenges.md).
-- IPv6 / new secret classes (tracked separately from the FR3 baseline).
+- IPv6.
+
+**One follow-up issue** (per `wg-when-deferring-a-capability-create-a`) bundles: legal-audit gating,
+digest-scrub NFKC/class-sync, whitespace-collapse re-scan, base64-decode re-scan, headerless-PEM-body
+heuristic, Cloudflare bare-token + prefix-agnostic detection, and full TR39.

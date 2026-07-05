@@ -20,20 +20,23 @@ Derived from the finalized (post-plan-review) plan. Implement with `skill: soleu
 ## Phase 1 — RED tests (extend `incident/test/redact-sentinel.test.sh`)
 
 - [ ] 1.1 Test 9 (golden ERE↔`re` parity) FIRST — capture OLD engine per-class hits on `positive-corpus.md` + near-miss negatives; assert NEW engine identical class-hit set.
-- [ ] 1.2 Test 5 — confusable evasion (ZWSP JWT + fullwidth Stripe): raw regex misses, engine exits 1 w/ class. Generate input at runtime via `\uXXXX`.
+- [ ] 1.2 Test 5 — compatibility-confusable + invisible-splitter (JWT split by ZWSP **+ U+00AD + U+2028**, fullwidth Stripe): raw regex misses, engine exits 1. Runtime-generate via `\uXXXX`.
 - [ ] 1.3 Test 6 + 6b — oversize (raw) AND NFKC-expansion oversize → synthetic HIGH, exit 1, no per-class scan.
 - [ ] 1.4 Test 7 — invalid-UTF-8 splice (→ U+FFFD) caught after strip.
 - [ ] 1.5 Test 8 — clean negative baseline still exits 0; Test 10 — `python3` off PATH → exit **2**.
 - [ ] 1.6 Test (AC7) — `Юsk-ant-…` still caught (guards `re.ASCII`).
 - [ ] 1.7 Test 11 — legal-generate: secret-bearing draft `mktemp` → sentinel exits non-zero.
-- [ ] 1.8 Preserve Tests 1–4 (14 classes, bad-arg=2, output-format regex).
+- [ ] 1.8 Test 12 — cross-script homoglyph known-gap: un-mapped-prefix secret asserts exit 0 (version-controls the residual); `CONFUSABLE_MAP`-covered `ѕk_live_…` asserts exit 1.
+- [ ] 1.9 Preserve Tests 1–4; **update Test 4 format regex** to the capped reveal `.{0,4}\*\*\*(.{0,4})?`.
 
 ## Phase 2 — GREEN engine
 
-- [ ] 2.1 Create `incident/scripts/redact-engine.py`: `cap → strip(STRIP incl. U+FFFD + bidi) → whole-string NFKC → re-check len(norm) → finditer → meta_redact`. All 14 patterns compiled with `re.ASCII`; `env_var` uses `\S+` (NOT `[^[:space:]]+`).
-- [ ] 2.2 Exit semantics: matches/synthetic-HIGH → 1; bad-arg/unreadable/crash → 2 (try/except wraps `scan`).
-- [ ] 2.3 Rewrite `incident/scripts/redact-sentinel.sh` as a thin shim: python3-absent → exit 2; normalize any non-{0,1,2} engine code → 2; else pass through.
-- [ ] 2.4 Run Phase 1 tests → GREEN, including golden parity (2.1 must reproduce the old class-hit set).
+- [ ] 2.1 Create `incident/scripts/redact-engine.py`: `cap → strip → NFKC → strip → CONFUSABLE_MAP → re-check len(norm.encode) → finditer → meta_redact`. Full STRIP set (zero-width + bidi + U+00AD + U+2028/U+2029 + Hangul/Khmer fillers + annotation + U+FFFD). All patterns compiled `re.ASCII`; `env_var` uses `\S+`.
+- [ ] 2.2 Tightened `meta_redact` (cap reveal: `{t[:4]}***{t[-4:]}` if len>24 / `{t[:4]}***` if >12 / `***`).
+- [ ] 2.3 Exit semantics: matches/synthetic-HIGH → 1; bad-arg/unreadable/crash → 2 (try/except wraps `scan`).
+- [ ] 2.4 Rewrite `redact-sentinel.sh` as thin shim: python3-absent → exit 2; normalize non-{0,1,2} → 2; else pass through.
+- [ ] 2.5 Phase 2b: add `doppler_token`/`slack_token` classes; broaden PEM (`[A-Z0-9 ]*PRIVATE KEY`), UUID (`[0-9A-Fa-f]`), env_var vendors (HETZNER|FLAGSMITH|RESEND|TAILSCALE); build `CONFUSABLE_MAP` (~25 Cyrillic/Greek→ASCII). Add a synthesized `positive-corpus.md` fixture per new class.
+- [ ] 2.6 Run Phase 1 tests → GREEN, including golden parity (Test 9 old-vs-new on existing corpus; new classes additive).
 
 ## Phase 3 — Legal path
 
