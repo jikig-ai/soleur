@@ -67,9 +67,17 @@ plugin components — the skill loader does not recurse into subdirectories, so
 they are not counted in README component tables. Each script is **self-contained**
 (the Workflow runtime has no filesystem/import access, so shared helpers like
 `safeTitle`/`safeId` are duplicated per script by design — keep the metacharacter
-sets identical across copies). The parent `SKILL.md` links its workflow via an
-opt-in pointer; the prose skill stays the default. Decision record + the full
-migrate-vs-keep inventory: `knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`.
+sets identical across copies). A script cannot be unit-tested by import (top-level
+`await agent(...)`/`return` throws on `import`; `node --check` also false-flags the
+top-level `return` — wrap the body in an async `new Function(...)` to syntax-check).
+So when a script carries decision logic worth a unit test, extract the pure
+function to an importable `lib/*.mjs`, duplicate it into the script, and pin the
+two copies with a **normalized logic-parity drift guard** (a presence grep is
+insufficient — the copy that runs must match the copy that is tested). Example:
+`plan-review/lib/named-panel.mjs` + `test/plan-review-named-panel.test.ts`. The
+parent `SKILL.md` links its workflow via an opt-in pointer; the prose skill stays
+the default. Decision record + the full migrate-vs-keep inventory:
+`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`.
 
 ### Adding a New Domain
 
