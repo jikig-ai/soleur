@@ -158,10 +158,29 @@ runtime isolation of the write token buys nothing today anyway — the org-wide-
 already co-resident in the same `prd` container env.
 
 **CPO sign-off (threshold `single-user incident`, `requires_cpo_signoff`):** `prd` gains a
-`prd_ghcr`-write credential readable by every `prd` principal (CI, terraform runner, the app
+write credential readable by every `prd` principal (CI, terraform runner, the app
 process). **Accepted** because those principals already read the co-resident org-wide-WRITE
 `GITHUB_APP_PRIVATE_KEY` (a strictly larger capability), and true control-plane-only injection is
 deferred to the #5274 gate below.
+
+### Config-inheritance fallback (post-merge, 2026-07-05) — prd-scoped write token
+
+The dedicated `prd_ghcr` config (which would have bounded the write token's **at-rest** scope to
+one config) **could not be created**: `terraform apply` returned `Doppler Error: Your workplace
+does not have access to config inheritance` — Doppler branch configs are a paid-tier feature this
+workspace's plan lacks. Per the plan's pre-declared **Phase 2.2 / R2 fallback**, the write token is
+`prd`-**scoped** (`doppler_service_token.ghcr_minter`, `config = "prd"`, `access = "read/write"`)
+and the minter writes `GHCR_READ_TOKEN`/`GHCR_READ_USER` **directly into `prd`** — where the
+consumers already read them, so the cross-config reference flip is eliminated entirely (`#6011`'s
+`ignore_changes=[value]` keeps terraform from clobbering the runtime churn).
+
+**security-sentinel sign-off:** a `prd`-scoped read/write token can read AND write every `prd`
+secret at rest — a strictly larger at-rest surface than the (unavailable) `prd_ghcr`-scoped token.
+**Accepted** on the same basis as the CPO sign-off above: per the runtime analysis, the dominant
+capability (`GITHUB_APP_PRIVATE_KEY`, org-wide WRITE) is already co-resident in the same `prd`
+container env, so the token's wider *at-rest* scope is the only delta, and the #5274
+control-plane-separation gate (below) already mandates relocating both credentials off `prd`. The
+fallback does not enlarge that gate's scope — the two relocation items are unchanged.
 
 ### HARD GATE — control-plane separation before the first tenant host (#5274)
 
@@ -169,7 +188,7 @@ When the first real tenant host is provisioned, the minter MUST run on a control
 tenant hosts cannot read from, distributing only the scoped 1h read token. That cutover MUST
 relocate **BOTH** control-plane-resident credentials off the shared/tenant `prd` env:
 1. **`GITHUB_APP_PRIVATE_KEY`** — org-wide WRITE (already a `prd` landmine pre-#6031).
-2. **`GHCR_MINTER_DOPPLER_TOKEN`** — the `prd_ghcr`-write token this PR newly co-locates in `prd`.
+2. **`GHCR_MINTER_DOPPLER_TOKEN`** — the Doppler write token this PR newly co-locates in `prd`.
 
 Recorded here (a committed artifact) rather than as a #5274 issue comment so neither item can be
 silently dropped at cutover.

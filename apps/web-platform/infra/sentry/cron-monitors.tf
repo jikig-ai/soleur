@@ -927,7 +927,7 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
 
 # #6031 (ADR-088) — control-plane GHCR installation-token minter. Inngest-fired via
 # apps/web-platform/server/inngest/functions/cron-ghcr-token-minter.ts. Mints a 1h
-# packages:read installation token every 20 min and writes it to Doppler prd_ghcr;
+# packages:read installation token every 20 min and writes it to Doppler prd;
 # slug MUST match the handler's SENTRY_MONITOR_SLUG and the crontab MUST match its
 # `{ cron: "*/20 * * * *" }` trigger. 20-min margin so a single missed tick pages at
 # ~40 min — inside the 60-min token TTL (the <=40<60 staleness floor). Output-aware:
