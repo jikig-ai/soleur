@@ -46,6 +46,10 @@ import { cronGhcrTokenMinterHandler } from "@/server/inngest/functions/cron-ghcr
 // captured Sentry fields to prove it never leaks (not `ghs_...` so it cannot
 // trip GitHub Push Protection).
 const MINTED_TOKEN = "SYNTHETIC_GHCR_INSTALL_TOKEN_6031_do_not_leak";
+// Exact URL the minter POSTs to — match it in full (not via substring `.includes`,
+// which CodeQL flags as incomplete-URL-substring-sanitization) to select the
+// Doppler write among the mock fetch calls.
+const DOPPLER_URL = "https://api.doppler.com/v3/configs/config/secrets";
 const ORG_INSTALL_ID = 424242;
 const FRESHNESS_FLOOR_MS = 40 * 60 * 1000; // 2_400_000
 
@@ -82,7 +86,7 @@ function lastHeartbeatOk(): boolean | undefined {
 
 function dopplerRequestBody(): Record<string, unknown> | undefined {
   const call = fetchMock.mock.calls.find(([url]) =>
-    String(url).includes("api.doppler.com"),
+    String(url) === DOPPLER_URL,
   );
   if (!call) return undefined;
   return JSON.parse((call[1] as { body: string }).body);
@@ -122,7 +126,7 @@ describe("cron-ghcr-token-minter — mint + Doppler write (AC3, AC-Sec3)", () =>
   it("writes BOTH keys atomically in ONE Doppler request to prd_ghcr (AC3)", async () => {
     await cronGhcrTokenMinterHandler({ step: makeStep() as never, logger });
     const dopplerCalls = fetchMock.mock.calls.filter(([url]) =>
-      String(url).includes("api.doppler.com"),
+      String(url) === DOPPLER_URL,
     );
     expect(dopplerCalls).toHaveLength(1); // atomic: exactly one write
     const body = dopplerRequestBody()!;
@@ -136,7 +140,7 @@ describe("cron-ghcr-token-minter — mint + Doppler write (AC3, AC-Sec3)", () =>
   it("Doppler write is a partial named-secrets upsert, never a full-config replace (R3)", async () => {
     await cronGhcrTokenMinterHandler({ step: makeStep() as never, logger });
     const call = fetchMock.mock.calls.find(([url]) =>
-      String(url).includes("api.doppler.com"),
+      String(url) === DOPPLER_URL,
     )!;
     const [url, init] = call as [string, { method: string; body: string }];
     // POST /v3/configs/config/secrets is the merge/upsert endpoint; a full replace
@@ -210,7 +214,7 @@ describe("cron-ghcr-token-minter — output-aware heartbeat (AC4)", () => {
     expect(lastHeartbeatOk()).toBe(false);
     // No Doppler write attempted when the mint fails.
     const dopplerCalls = fetchMock.mock.calls.filter(([url]) =>
-      String(url).includes("api.doppler.com"),
+      String(url) === DOPPLER_URL,
     );
     expect(dopplerCalls).toHaveLength(0);
     expect(JSON.stringify(reportSilentFallbackSpy.mock.calls)).not.toContain(MINTED_TOKEN);

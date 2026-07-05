@@ -351,3 +351,15 @@ describe("#5199 — restored auto-crons: no gh-api allowlist entry (F4a)", () =>
     },
   );
 });
+
+describe("#6031 — cron-ghcr-token-minter is a non-git cron", () => {
+  // The GHCR installation-token minter mints a token and writes to Doppler; it
+  // does NO git operations, so it neither calls safeCommitAndPr nor carries a
+  // CRON_BASH_ALLOWLISTS entry, and is not a deferred Tier-2 cron. Acknowledged
+  // here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS
+  // grows (cron-tier2-parity set).
+  it("has no CRON_BASH_ALLOWLISTS entry and is not Tier-2 deferred", () => {
+    expect(CRON_BASH_ALLOWLISTS["cron-ghcr-token-minter"]).toBeUndefined();
+    expect(TIER2_DEFERRED_CRONS.has("cron-ghcr-token-minter")).toBe(false);
+  });
+});
