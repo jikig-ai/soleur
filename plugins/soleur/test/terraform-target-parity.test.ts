@@ -398,6 +398,21 @@ function stripJob(workflowText: string, jobId: string): string {
   return out.join("\n");
 }
 
+/**
+ * Strip ALL dispatch-only jobs (warm_standby + web_2_recreate) from the workflow
+ * before the #5566/#5887 coverage+moved guards build `allTargets`. BOTH are
+ * additive/scoped `-target` writers whose targets are OPERATOR_APPLIED_EXCLUSIONS,
+ * so folding them into `allTargets` would WEAKEN the moved-block anchor. CTO
+ * must-fix 2: web_2_recreate carries `-target='hcloud_server.web["web-2"]'`, whose
+ * base `hcloud_server.web` is a MOVED_OPERATOR_CONSUMED endpoint — if it leaked
+ * into `allTargets`, dropping `hcloud_server.web` from MOVED_OPERATOR_CONSUMED
+ * would no longer turn the moved guard red (masking a dropped moved-base). Strip
+ * both dispatch jobs at EVERY site that builds the base-address coverage set.
+ */
+function stripDispatchJobs(workflowText: string): string {
+  return stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate");
+}
+
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
 function extractJobBlock(workflowText: string, jobId: string): string {
   const out: string[] = [];
@@ -533,11 +548,11 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
       extractAllResources(stripComments(readFileSync(f, "utf8"))),
     );
     allTargets = new Set<string>([
-      // JOB-AWARE: exclude the dispatch-only `warm_standby` job — its 6 additive
-      // for_each targets are OPERATOR_APPLIED_EXCLUSIONS and must not broaden this
-      // coverage set (see stripJob).
+      // JOB-AWARE: exclude the dispatch-only jobs (warm_standby + web_2_recreate)
+      // — their additive/scoped for_each targets are OPERATOR_APPLIED_EXCLUSIONS
+      // and must not broaden this coverage set (see stripDispatchJobs).
       ...extractAllTargets(
-        stripJob(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "warm_standby"),
+        stripDispatchJobs(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")),
       ),
       ...extractAllTargets(readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8")),
     ]);
@@ -829,13 +844,14 @@ describe("terraform `moved`/-target parity — pending moves are accounted for (
       extractMovedBases(stripComments(readFileSync(f, "utf8"))),
     );
     allTargets = new Set<string>([
-      // JOB-AWARE (P0.4): the warm_standby dispatch job `-target`s
-      // hcloud_server_network.web["web-1"/"web-2"] etc. Folding those into
-      // allTargets would let `hcloud_server_network.web` be dropped from
-      // MOVED_OPERATOR_CONSUMED without turning this guard red — weakening the
-      // #5877 regression anchor. Strip the job so the boundary holds.
+      // JOB-AWARE (P0.4 + CTO must-fix 2): the warm_standby job `-target`s
+      // hcloud_server_network.web["web-1"/"web-2"]; the web_2_recreate job
+      // `-target`s hcloud_server.web["web-2"] (base hcloud_server.web — itself a
+      // MOVED_OPERATOR_CONSUMED endpoint). Folding EITHER into allTargets would let
+      // a moved base be dropped from MOVED_OPERATOR_CONSUMED without turning this
+      // guard red — weakening the #5877 anchor. Strip BOTH dispatch jobs.
       ...extractAllTargets(
-        stripJob(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "warm_standby"),
+        stripDispatchJobs(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")),
       ),
       ...extractAllTargets(readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8")),
     ]);
@@ -919,7 +935,10 @@ describe("ADR-068 warm-standby dispatch -target set (additive; reboot_updates=0)
     warmJobBlock = extractJobBlock(wf, "warm_standby");
     warmTargets = extractTargetsWithKeys(warmJobBlock);
     fullBaseTargets = extractAllTargets(wf);
-    strippedBaseTargets = extractAllTargets(stripJob(wf, "warm_standby"));
+    // Strip BOTH dispatch jobs: web_2_recreate ALSO -targets
+    // hcloud_server_network.web["web-2"], so stripping only warm_standby would
+    // leave the base in strippedBaseTargets and break the boundary assertion below.
+    strippedBaseTargets = extractAllTargets(stripDispatchJobs(wf));
   });
 
   test("the warm_standby job -targets EXACTLY the 6 additive resources", () => {
@@ -1017,5 +1036,111 @@ describe("hcloud_server.web reboot deferral — placement_group_id stays in igno
     // Non-vacuity: the pre-existing import-artifact entries (#967) are still present,
     // proving we parsed the real ignore_changes list, not an empty/wrong block.
     expect(entries).toContain("user_data");
+  });
+});
+
+// ─── web-2-recreate dispatch -target/-replace guard (this PR, AC7/AC10c) ─────
+// The `apply_target=web-2-recreate` dispatch job (`web_2_recreate`) runs a SCOPED,
+// GUARDED `terraform apply -replace='hcloud_server.web["web-2"]'` + the 3 web-2
+// `-target`s to re-run web-2's first-boot cloud-init and bind :9000. This guard
+// pins the target/replace set to EXACTLY the web-2 addresses and proves it can
+// never carry a web-1 address (the sole live origin) into the plan. The DATA
+// volume (hcloud_volume.workspaces["web-2"]) must NOT be in the set (0-destroy).
+const WEB2_RECREATE_TARGETS = [
+  'hcloud_server.web["web-2"]',
+  'hcloud_server_network.web["web-2"]',
+  'hcloud_volume_attachment.workspaces["web-2"]',
+];
+const WEB2_RECREATE_REPLACE = 'hcloud_server.web["web-2"]';
+
+/** Every `-replace=<addr>` value (quoted or bare) in a workflow-job block. */
+function extractReplaceAddrs(text: string): string[] {
+  const out: string[] = [];
+  for (const m of stripComments(text).matchAll(
+    /-replace=(?:'([^']+)'|"([^"]+)"|(\S+))/g,
+  )) {
+    out.push((m[1] ?? m[2] ?? m[3]).replace(/\\$/, ""));
+  }
+  return out;
+}
+
+describe("web-2-recreate dispatch -target/-replace set (scoped; web-1 never targeted)", () => {
+  let recreateTargets: string[];
+  let recreateJobBlock: string;
+  let replaceAddrs: string[];
+
+  beforeAll(() => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    recreateJobBlock = extractJobBlock(wf, "web_2_recreate");
+    recreateTargets = extractTargetsWithKeys(recreateJobBlock);
+    replaceAddrs = extractReplaceAddrs(recreateJobBlock);
+  });
+
+  test("the web_2_recreate job -targets EXACTLY the 3 web-2 resources", () => {
+    expect([...recreateTargets].sort()).toEqual([...WEB2_RECREATE_TARGETS].sort());
+  });
+
+  test("every web-2-recreate target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
+    for (const t of recreateTargets) {
+      const base = t.replace(/\[.*$/, "");
+      expect(OPERATOR_APPLIED_EXCLUSIONS.has(base)).toBe(true);
+    }
+  });
+
+  test('hcloud_volume.workspaces["web-2"] (the DATA volume) is NOT in the recreate set', () => {
+    expect(recreateTargets).not.toContain('hcloud_volume.workspaces["web-2"]');
+    // base form absent too — the volume must be 0-destroy (AC3 / AC15).
+    expect(recreateTargets.map((t) => t.replace(/\[.*$/, ""))).not.toContain(
+      "hcloud_volume.workspaces",
+    );
+  });
+
+  test("the -replace address is EXACTLY the web-2 server (never web-1)", () => {
+    expect(replaceAddrs).toEqual([WEB2_RECREATE_REPLACE]);
+  });
+
+  test("NO web-1 address appears in the recreate job's -target/-replace set (blast-radius guard)", () => {
+    const all = [...recreateTargets, ...replaceAddrs];
+    const web1 = all.filter((a) => a.includes('"web-1"'));
+    expect(web1).toEqual([]);
+    // non-vacuity: the set is non-empty and DOES carry web-2 addresses.
+    expect(all.some((a) => a.includes('"web-2"'))).toBe(true);
+  });
+
+  test("guard would FAIL if a web-1 address were added to the recreate set (non-vacuity)", () => {
+    // Prove the "no web-1" filter above bites: a poisoned set with a web-1 target
+    // is flagged. Guards against the filter silently matching nothing.
+    const poisoned = [...WEB2_RECREATE_TARGETS, 'hcloud_server.web["web-1"]'];
+    const web1 = poisoned.filter((a) => a.includes('"web-1"'));
+    expect(web1).toEqual(['hcloud_server.web["web-1"]']);
+  });
+
+  test("the recreate job runs the sourced web2_recreate_gate + coherence preflight before apply", () => {
+    expect(recreateJobBlock).toContain("web2-recreate-gate.sh");
+    expect(recreateJobBlock).toContain("web2_recreate_gate");
+    // The LOAD-BEARING coherence preflight runs BEFORE any -replace.
+    expect(recreateJobBlock).toContain("web2-recreate-preflight.sh");
+  });
+
+  test("verify REUSES the shared extracted poll, not a re-derived copy (AC10c)", () => {
+    // The new job invokes the shared script rather than inlining the poll body.
+    expect(recreateJobBlock).toContain("deploy-status-fanout-verify.sh");
+    // Proof it did NOT copy-paste the warm_standby poll: the poll-loop timeout
+    // sentinel ("did not report a fresh completion") lives only in the shared
+    // script + warm_standby's inline copy, never in this job block.
+    expect(recreateJobBlock).not.toContain(
+      "did not report a fresh completion",
+    );
+    // The shared script carries the load-bearing invariants (single-peer guard +
+    // terminal exit 1 on timeout — no green-on-timeout).
+    const shared = readFileSync(
+      resolve(INFRA_DIR, "scripts/deploy-status-fanout-verify.sh"),
+      "utf8",
+    );
+    expect(shared).toContain("ROSTER_COUNT");
+    expect(shared).toMatch(/ROSTER_COUNT"?\s*-ne\s*2/);
+    expect(shared).toMatch(
+      /did not report a fresh completion[\s\S]*?exit 1/,
+    );
   });
 });

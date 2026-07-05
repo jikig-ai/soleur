@@ -140,6 +140,10 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-counter-github" bash tests/scripts/test-destroy-guard-counter.sh
   run_suite "tests/scripts/destroy-guard-counter-sentry" bash tests/scripts/test-destroy-guard-counter-sentry.sh
   run_suite "tests/scripts/destroy-guard-counter-web-platform" bash tests/scripts/test-destroy-guard-counter-web-platform.sh
+  # web-2-recreate coherence preflight (AC10b) — drives the standalone preflight
+  # via its test seams (no docker/network/prod write). Registered here alongside
+  # the destroy-guard trio since it gates the same web-2-recreate dispatch.
+  run_suite "tests/scripts/web2-recreate-preflight" bash tests/scripts/test-web2-recreate-preflight.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
