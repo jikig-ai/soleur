@@ -18,13 +18,16 @@ Do not proceed until there is input from the user.
 
 ## Step 0.0: Workspace Readiness Gate
 
-Before the session-start preamble and before any routing, confirm a usable git repository exists. Run:
+Before the session-start preamble and before any routing, confirm a usable git repository exists. Run the readiness probe (it decides readiness AND, on failure, emits a `SOLEUR_GIT_REPO_DIAG` forensic line that the server-side telemetry hook mirrors to Better Stack — so a not-ready workspace is self-diagnosable without a manual probe):
 
 ```bash
-git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-inside-work-tree 2>/dev/null || true
+bash ./plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh 2>&1 \
+  || { git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-inside-work-tree 2>/dev/null || true; }
 ```
 
-If **neither** command prints `true` (no bare repo to make a worktree from AND not inside a working tree), the workspace has no git checkout. In the Soleur web (Concierge) environment this happens when a connected repository is still cloning in the background, or its setup failed — the CWD is then a repo-less `/workspaces/<id>` and **every** route (`go`/`brainstorm`/`plan`/`one-shot`/`fix`/`drain`) will fail: worktree creation, knowledge-base artifact writes, and the session-start preamble all need a real repo. Do NOT run the preamble, do NOT route, do NOT improvise filesystem exploration. STOP and reply with this honest, no-wait message:
+The `||` fallback runs the bare inline probes if the script is unavailable (e.g. a repo-less workspace whose plugin symlink was not scaffolded). Readiness = the output contains `SOLEUR_GIT_REPO_READY=true` (script path) OR a bare `true` (fallback path).
+
+If the output shows `SOLEUR_GIT_REPO_READY=false` (or, on the fallback, **neither** probe printed `true`), the workspace has no usable git checkout. In the Soleur web (Concierge) environment this happens when a connected repository is still cloning in the background, or its setup failed (the CWD is then a repo-less `/workspaces/<id>`), OR the `.git` is present but git rejects it (a corrupt/masked config — the emitted `SOLEUR_GIT_REPO_DIAG config_parse_rc`/`err=` fields distinguish these). **Every** route (`go`/`brainstorm`/`plan`/`one-shot`/`fix`/`drain`) will fail: worktree creation, knowledge-base artifact writes, and the session-start preamble all need a real repo. Do NOT run the preamble, do NOT route, do NOT improvise filesystem exploration. STOP and reply with this honest, no-wait message:
 
 > Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening: if your project lives in a **team workspace**, switch to that workspace and try again; if this is your own workspace, check that a repository is connected in **Settings → Repository**.
 

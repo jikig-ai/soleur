@@ -130,13 +130,11 @@ export async function provisionWorkspace(workspaceId: string): Promise<string> {
     log.warn({ err, workspaceId }, "Git init failed");
   }
 
-  // Pre-seed worktree-config prerequisites HOST-SIDE, before the sandbox masks
-  // .git/config.lock, so in-sandbox worktree creation is a zero-write no-op (#4826).
-  // Deliberately OUTSIDE the init/commit try: it must run whenever `git init`
-  // produced a `.git/`, even if the initial `git add`/`git commit` failed — e.g. a
-  // runner (or prod host) with no git identity throws at commit, and gating the seed
-  // behind it would silently re-wedge worktree creation. seedWorktreeConfig is itself
-  // best-effort (per-call try/catch), so calling it when `.git/` is absent is a no-op.
+  // Heal worktree git config HOST-SIDE (#4826): remove any extensions.worktreeConfig
+  // that would force in-sandbox git to read the masked/unreadable .git/config.worktree
+  // and fatal. Deliberately OUTSIDE the init/commit try so it runs whenever `git init`
+  // produced a `.git/` even if `git add`/`git commit` failed (e.g. no git identity on a
+  // runner). Best-effort + no-op on a healthy/absent-`.git` workspace.
   seedWorktreeConfig(workspacePath);
 
   return workspacePath;
@@ -254,9 +252,9 @@ export async function provisionWorkspaceWithRepo(
     }
   }
 
-  // 6.5. Pre-seed worktree-config prerequisites HOST-SIDE, before the agent
-  // sandbox bind-mounts /dev/null over .git/config.lock, so the in-sandbox
-  // worktree creation path is a zero-write no-op and never wedges (#4826).
+  // 6.5. Heal worktree git config HOST-SIDE (#4826): a fresh clone has no
+  // extensions.worktreeConfig, so this is a no-op here — but keeps the provision and
+  // session-boot paths symmetric with ensureWorkspaceRepoCloned.
   seedWorktreeConfig(workspacePath);
 
   // 7-9. Overlay plugin symlink, .claude/settings.json, and KB scaffolding

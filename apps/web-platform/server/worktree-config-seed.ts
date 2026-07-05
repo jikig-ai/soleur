@@ -1,69 +1,90 @@
-// Host-side pre-seed of the git config that in-sandbox worktree creation needs —
-// applied BEFORE the agent sandbox bind-mounts /dev/null over `.git/config.lock`.
+// Host-side HEAL of a workspace's worktree git config (#4826).
 //
-// The Claude Agent SDK's bubblewrap masks git-config write targets (`.git/config.lock`,
-// and per live evidence `.git/config.worktree`) with a read-only /dev/null bind mount —
-// a per-session in-sandbox guard against git-config RCE via `core.hooksPath`/
-// `core.sshCommand`. Inside the sandbox, any `git config` WRITE to the shared config
-// fails EEXIST against that masked lock, so `worktree-manager.sh`'s `ensure_bare_config`
-// (which sets `core.repositoryformatversion=1` + `extensions.worktreeConfig=true` and
-// clears `core.bare`/`core.worktree` before `git worktree add`) wedges (#4826).
+// HISTORY (important — this file's behavior was INVERTED). #6064/#6068 shipped a
+// `seedWorktreeConfig` that SET `extensions.worktreeConfig=true` on the workspace, to
+// pre-empt worktree-manager.sh's `ensure_bare_config` config writes wedging on the
+// SDK-masked `.git/config.lock`. That was WRONG for a normal (non-bare) Concierge clone:
+// enabling worktreeConfig FORCES git to read `.git/config.worktree` on every command, and
+// in the agent sandbox that path is a /dev/null CHAR DEVICE owned by nobody:nogroup that
+// the agent user cannot read → `fatal: unable to access '.git/config.worktree': Permission
+// denied` → EVERY git command fails (readiness gate → "workspace isn't ready"). The seed
+// turned a deep worktree-creation wedge into total git breakage.
 //
-// Performing that exact transformation HOST-SIDE, before the mask exists, makes the
-// in-sandbox `ensure_bare_config` a ZERO-WRITE no-op: `atomic_git_config` read-first-skips
-// the two SETs (a read never takes the lock) and skips both UNSETs (keys already absent);
-// `git worktree add` then writes only `.git/worktrees/<id>/` (a fresh, unmasked subdir).
+// CORRECT MODEL: a Concierge workspace is a NORMAL working clone. `git worktree add` works
+// on it natively with ZERO shared-config surgery — the bare-repo `ensure_bare_config`
+// transformation (now guarded off for non-bare repos in worktree-manager.sh) is neither
+// needed nor safe here. So this function's job is the INVERSE of the old seed: HEAL a
+// non-bare workspace by UNSETTING the harmful `extensions.worktreeConfig` a prior version
+// wrote (and resetting the format version), restoring plain-repo semantics.
 //
-// This module is standalone (only `child_process` + the logger) so the hot per-session
-// boot path (`ensureWorkspaceRepoCloned`) can call it WITHOUT pulling in workspace.ts's
-// full provisioning dependency graph.
+// Runs HOST-SIDE (provision + every session boot via ensureWorkspaceRepoCloned), where
+// `.git/config.worktree` is NOT masked, so these git ops work even for a workspace that is
+// currently wedged in-sandbox. Idempotent + best-effort (never throws): a healthy workspace
+// has nothing to unset; a bare repo is left untouched.
 
 import { execFileSync } from "child_process";
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("worktree-config-seed");
 
+/** True iff `<workspacePath>/.git` is a DIRECTORY — i.e. a normal working clone, not a
+ *  bare repo (no `.git` subdir) and not a linked-worktree pointer (`.git` is a FILE). */
+function isNonBareWorkingClone(workspacePath: string): boolean {
+  try {
+    return statSync(join(workspacePath, ".git")).isDirectory();
+  } catch {
+    return false; // absent / unreadable → nothing to heal here
+  }
+}
+
 /**
- * Idempotently pre-seed the worktree-config prerequisites into `<workspacePath>/.git`.
+ * Heal a normal (non-bare) workspace's worktree config so in-sandbox git works and
+ * `git worktree add` runs natively. Removes the `extensions.worktreeConfig` key (whose
+ * presence forces git to read the sandbox-masked `.git/config.worktree` and fatal) and
+ * resets `core.repositoryformatversion` to 0. No-op on a bare repo or a `.git`-less path.
  *
- * Best-effort by contract: a failure degrades to the in-sandbox write path (no worse
- * than not calling it), so every step logs and continues rather than throwing. Safe to
- * re-run every session — the values are set-to-target, so repeats are no-ops. A no-op
- * when `<workspacePath>/.git` is absent (nothing to seed, and `git config` would fail).
- *
- * Runs at BOTH:
- *   - provision time (`provisionWorkspace` / `provisionWorkspaceWithRepo`) — new workspaces
- *   - session boot (`ensureWorkspaceRepoCloned`) — EXISTING workspaces provisioned before
- *     this fix shipped, which would otherwise never be seeded and keep wedging (#4826).
+ * NOTE: retains the export name `seedWorktreeConfig` (its two call sites) though its
+ * behavior is now a heal, not a seed — a rename is deferred to avoid churn in this
+ * hotfix. Best-effort: every step logs on failure and continues.
  */
 export function seedWorktreeConfig(workspacePath: string): void {
-  // A `.git` may be a directory (normal repo) or a file (linked-worktree pointer);
-  // either is seedable. Absent → nothing to do (a repo-less "Start Fresh" dir mid-init).
-  if (!existsSync(join(workspacePath, ".git"))) return;
+  if (!isNonBareWorkingClone(workspacePath)) return;
 
-  // SETs mirror ensure_bare_config exactly. repositoryformatversion=1 MUST precede the
-  // extensions.* write for git to honor the extension namespace. Failures are logged
-  // (they gate in-sandbox success) but never thrown.
-  for (const [key, value] of [
-    ["core.repositoryformatversion", "1"],
-    ["extensions.worktreeConfig", "true"],
-  ] as const) {
-    try {
-      execFileSync("git", ["config", key, value], { cwd: workspacePath, stdio: "pipe" });
-    } catch (err) {
-      log.warn({ err, workspacePath, key }, "Failed to pre-seed worktree git config");
-    }
+  // The load-bearing heal: remove extensions.worktreeConfig. Probe presence first so a
+  // no-op on a healthy workspace stays silent, and a real failure to clear a PRESENT key
+  // is surfaced loudly (that key is what keeps in-sandbox git wedged).
+  let hadWorktreeConfig = false;
+  try {
+    execFileSync("git", ["config", "--get", "extensions.worktreeConfig"], {
+      cwd: workspacePath,
+      stdio: "pipe",
+    });
+    hadWorktreeConfig = true;
+  } catch {
+    // absent → healthy, nothing to unset.
   }
-  // UNSETs: core.bare / core.worktree belong in per-worktree config, not shared (a normal
-  // clone/init carries `core.bare=false`). `--unset` of an absent key exits non-zero;
-  // that is expected, so these are silent best-effort.
-  for (const key of ["core.bare", "core.worktree"] as const) {
-    try {
-      execFileSync("git", ["config", "--unset", key], { cwd: workspacePath, stdio: "pipe" });
-    } catch {
-      // absent key (or already-unset) — nothing to do.
-    }
+  if (!hadWorktreeConfig) return;
+
+  try {
+    execFileSync("git", ["config", "--unset-all", "extensions.worktreeConfig"], {
+      cwd: workspacePath,
+      stdio: "pipe",
+    });
+    // Reset the format version bumped alongside the old seed. Harmless if already 0.
+    execFileSync("git", ["config", "core.repositoryformatversion", "0"], {
+      cwd: workspacePath,
+      stdio: "pipe",
+    });
+    log.warn(
+      { workspacePath, sec: true },
+      "healed workspace: removed harmful extensions.worktreeConfig (#4826 regression)",
+    );
+  } catch (err) {
+    log.error(
+      { err, workspacePath },
+      "FAILED to heal extensions.worktreeConfig — in-sandbox git may stay wedged (#4826)",
+    );
   }
 }
