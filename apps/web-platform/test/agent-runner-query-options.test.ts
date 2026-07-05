@@ -75,12 +75,36 @@ describe("buildAgentQueryOptions — phase-surface hint per-caller opt-in (#5772
     expect(on.hooks!.PostToolUse![0].matcher).toBe("Skill");
   });
 
-  it("omits PostToolUse entirely for the legacy caller (flag absent)", () => {
+  it("omits PostToolUse entirely for the legacy caller (both flags absent)", () => {
     const off = buildAgentQueryOptions(minArgs);
     expect(off.hooks?.PostToolUse).toBeUndefined();
     // The PreToolUse + SubagentStart hooks remain regardless of the flag.
     expect(off.hooks?.PreToolUse).toBeDefined();
     expect(off.hooks?.SubagentStart).toBeDefined();
+  });
+});
+
+describe("buildAgentQueryOptions — context_queries hook per-caller opt-in (#6046, AC9)", () => {
+  it("registers a PostToolUse(Skill) block when only enableContextQueries is true", () => {
+    const on = buildAgentQueryOptions({ ...minArgs, enableContextQueries: true });
+    expect(Array.isArray(on.hooks?.PostToolUse)).toBe(true);
+    expect(on.hooks!.PostToolUse!).toHaveLength(1);
+    expect(on.hooks!.PostToolUse![0].matcher).toBe("Skill");
+  });
+
+  it("registers TWO independent Skill entries when both flags are true", () => {
+    const both = buildAgentQueryOptions({
+      ...minArgs,
+      enablePhaseSurfaceHint: true,
+      enableContextQueries: true,
+    });
+    expect(both.hooks!.PostToolUse!).toHaveLength(2);
+    expect(both.hooks!.PostToolUse!.every((e: { matcher?: string }) => e.matcher === "Skill")).toBe(true);
+  });
+
+  it("leaves PostToolUse undefined when neither flag is set (AC5 drift snapshot)", () => {
+    const off = buildAgentQueryOptions(minArgs);
+    expect(off.hooks?.PostToolUse).toBeUndefined();
   });
 });
 

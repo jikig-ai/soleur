@@ -2687,6 +2687,10 @@ export const realSdkQueryFactory: QueryFactory = async (
         // cc-soleur-go Concierge router (the eval-covered workflow-routing path).
         // The legacy domain-leader runner (agent-runner.ts) does NOT opt in.
         enablePhaseSurfaceHint: true,
+        // #6046 (ADR-086) — opt into the declarative context_queries injection
+        // hook on the cc-soleur-go Concierge router only (web-parity port of the
+        // CLI hook). The legacy domain-leader runner leaves it undefined.
+        enableContextQueries: true,
         // #5843 (ADR-070) — register the per-query tool-attempt telemetry hook
         // as a separate matcher-less PreToolUse entry (full-surface capture).
         // Flushed once at `handleCcCloseQuery`. Observe-only + fail-open.
