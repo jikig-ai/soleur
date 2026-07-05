@@ -25,7 +25,7 @@
 //
 // Kill-switch: SOLEUR_DISABLE_CONTEXT_QUERIES=1.
 import { execFile } from "node:child_process";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { HookCallback, PostToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
@@ -159,7 +159,7 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
   // session, which is the correct fail-open behaviour for a workspace missing the
   // plugin/kb tree.
   const skillsDir = path.join(repoRoot, "plugins", "soleur", "skills");
-  const realSkills = realpathOrNull(skillsDir);
+  const resolvedSkills = path.resolve(skillsDir);
   const realKb = realpathOrNull(path.join(repoRoot, "knowledge-base"));
   return async (input) => {
     try {
@@ -177,20 +177,30 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
       const name = skill.startsWith(SOLEUR_SKILL_PREFIX) ? skill.slice(SOLEUR_SKILL_PREFIX.length) : skill;
       if (!/^[a-z0-9-]+$/.test(name)) return {};
 
-      // Gate #2 — SKILL.md path containment under plugins/soleur/skills/.
+      // Gate #2 — SKILL.md path containment under plugins/soleur/skills/. Gate #1
+      // already forbids `/`, `.`, and `..` in `name`, so the joined path is
+      // lexically contained; this resolve+containment is defense-in-depth.
       const skillmd = path.join(skillsDir, name, "SKILL.md");
-      const realMd = realpathOrNull(skillmd);
-      if (!realMd || !realSkills || !isContained(realMd, realSkills)) return {};
-      // Reject a symlinked SKILL.md; require a regular file (shell `-f && ! -L`).
-      let mdStat: ReturnType<typeof lstatSync>;
+      if (!isContained(path.resolve(skillmd), resolvedSkills)) return {};
+      // Open ONCE with O_NOFOLLOW, then fstat + read on the SAME fd — never
+      // lstat/realpath-then-readFile by path (that is the TOCTOU CodeQL flags as
+      // js/file-system-race). O_NOFOLLOW rejects a symlinked SKILL.md (final
+      // component) at open time with ELOOP, mirroring the shell hook's `! -L`;
+      // fstat enforces `-f` (regular file). Precedent: git-worktree-validity.ts,
+      // kb-reader.ts.
+      let fd: number;
       try {
-        mdStat = lstatSync(skillmd);
+        fd = openSync(skillmd, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
       } catch {
-        return {};
+        return {}; // ENOENT (missing) / ELOOP (symlinked final component) / etc.
       }
-      if (mdStat.isSymbolicLink() || !mdStat.isFile()) return {};
-
-      const md = readFileSync(skillmd, "utf-8");
+      let md: string;
+      try {
+        if (!fstatSync(fd).isFile()) return {};
+        md = readFileSync(fd, "utf-8");
+      } finally {
+        closeSync(fd);
+      }
 
       // Fast-path: proceed only if context_queries is declared in the FRONTMATTER.
       if (!frontmatterDeclaresContextQueries(md)) return {};
