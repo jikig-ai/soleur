@@ -30,9 +30,9 @@ set -uo pipefail
 # --- frontmatter-strip (issue #5999, ADR-086) ------------------------------
 # Sidecars now carry OPTIONAL leading YAML frontmatter (last_reviewed / cadence
 # on AGENTS.core.md). It must be stripped before injection so raw YAML never
-# leaks into agent context. The real contract is sourced from
-# scripts/lib/frontmatter-strip/strip.sh AFTER REPO_ROOT resolves; until then
-# (and if that source ever fails) this identity fallback stays in effect —
+# leaks into agent context. The real contract is sourced HOOK-RELATIVE just
+# below (see the override block); if that source ever fails this identity
+# fallback stays in effect —
 # UNDER-stripping (a frontmatter leak) is the SAFE degradation because it can
 # never drop a rule line. OVER-stripping is the governance-blackout failure the
 # guard below catches.
@@ -65,6 +65,9 @@ strip_sidecar_into_global() {
   local f="$1" sentinel="${2:-}" raw stripped raw_n stripped_n
   raw="$(<"$f")"
   stripped="$(printf '%s' "$raw" | strip_frontmatter)"
+  # Rule-line shape MIRRORED in scripts/lint-agents-rule-budget.py (_RULE_LINE_RE);
+  # both count the same lines so this RAW-injection guard and the lint's fail-hard
+  # agree on "the strip dropped a rule". Change BOTH in lockstep if it ever changes.
   raw_n=$(printf '%s\n' "$raw" | grep -cE '^- .*\[id: ' || true)
   stripped_n=$(printf '%s\n' "$stripped" | grep -cE '^- .*\[id: ' || true)
   # Over-strip iff: (a) the strip dropped any `- …[id: …]` rule line (the
@@ -104,7 +107,10 @@ emit_core_only_fallback() {
   local reason="${1:-unknown}"
   local root="${REPO_ROOT:-$PWD}"
   local fb=""
-  if [[ -r "$root/AGENTS.core.md" ]]; then
+  # Reject a symlinked AGENTS.core.md here too (a `-r` test follows symlinks) so
+  # the fallback path holds the same prompt-injection posture as the main loop's
+  # `-L` rejection — a crafted symlink must not be read+injected on this path.
+  if [[ ! -L "$root/AGENTS.core.md" && -r "$root/AGENTS.core.md" ]]; then
     strip_sidecar_into_global "$root/AGENTS.core.md" hr-never-git-stash-in-worktrees
     fb="$STRIPPED_OUT"
   fi

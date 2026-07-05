@@ -87,6 +87,26 @@ else
 fi
 rm -rf "$dB"
 
+# Case C: last_reviewed present but review_cadence REMOVED → the empty-cadence
+# `continue` skips the evaluated-marking → ::error:: + exit 1. Distinguishes
+# "cadence removed" from "whole frontmatter removed" (Case B) — the run must fail
+# loudly on either, not just the total wipe.
+dC=$(mktemp -d); mkdir -p "$dC/knowledge-base"
+cat > "$dC/AGENTS.core.md" <<'EOF'
+---
+last_reviewed: 2026-07-05
+owner: founder
+---
+# core
+EOF
+run_scan "$dC"
+if [[ "$RC" == "1" ]] && grep -q '::error::Required constitutional path' <<<"$OUT"; then
+  pass "liveness: core with last_reviewed but NO review_cadence → ::error:: + exit 1"
+else
+  fail "liveness cadence-removed" "rc=$RC out=${OUT:0:400}"
+fi
+rm -rf "$dC"
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ "$FAIL" -eq 0 ]]

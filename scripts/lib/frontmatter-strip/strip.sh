@@ -16,7 +16,12 @@
 # is consumed (empty output) — the malformed/over-strip signal the loader + lint
 # guards detect via a rule-line-count drop. No leading `---\n` → unchanged.
 strip_frontmatter() {
-  perl -0777 -pe 's/\A---\n(?:.*?\n---\n|.*\z)//s' 2>/dev/null
+  # `^`-anchored close (with /m) rather than a mandatory preceding `\n`, so an
+  # EMPTY frontmatter block (`---\n---\n`) — where the opener consumed the only
+  # newline before the close — strips correctly to the body instead of eating
+  # the whole file. Byte-identical to strip.py across empty/well-formed/malformed
+  # inputs (parity-pinned by ../frontmatter-strip.test.sh). See SPEC.md §2.
+  perl -0777 -pe 's/\A---\n(?:.*?^---\n|.*\z)//ms' 2>/dev/null
 }
 
 # When executed directly (not sourced), act as a stdin→stdout filter.

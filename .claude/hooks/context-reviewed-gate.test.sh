@@ -93,6 +93,42 @@ t_ac2_am_bump_deny() {
   rm -rf "$r" "$INCIDENTS_DIR"
 }
 
+# --- Directory/pathspec commit of an UNSTAGED bump → deny. Was a silent
+#     false-NEGATIVE in the old all-markdown union (only `-am`/`.md`-suffix
+#     pathspecs were detected; `git commit <file>`/`<dir>` slipped through). ---
+t_pathspec_bump_deny() {
+  local r; r=$(new_repo "last_reviewed: 2026-01-01")
+  printf 'last_reviewed: 2026-07-05\n' > "$r/doc.md"   # modified, NOT staged
+  run_hook "$(make_input "git -C $r commit doc.md -m 'docs: bump'" "$r")"
+  assert_deny "pathspec commit of unstaged last_reviewed bump → deny"
+  rm -rf "$r" "$INCIDENTS_DIR"
+}
+
+# --- Pathspec commit of a CLEAN file while an unrelated last_reviewed edit sits
+#     unstaged ELSEWHERE → allow. The delta is scoped to the committed pathspec,
+#     not all markdown, so the unrelated edit does not false-deny. -----------
+t_pathspec_scoped_allow() {
+  local r; r=$(new_repo "title: seed")
+  mkdir -p "$r/kb"; printf 'last_reviewed: 2026-01-01\n' > "$r/kb/other.md"
+  git -C "$r" add kb/other.md; git -C "$r" commit -q -m "add other"
+  printf 'x: 1\n' > "$r/doc.md"                          # the committed change (no last_reviewed)
+  printf 'last_reviewed: 2026-07-05\n' > "$r/kb/other.md" # UNRELATED unstaged bump elsewhere
+  run_hook "$(make_input "git -C $r commit doc.md -m 'docs: unrelated'" "$r")"
+  assert_allow "pathspec commit scoped — unrelated unstaged bump elsewhere → allow"
+  rm -rf "$r" "$INCIDENTS_DIR"
+}
+
+# --- A chained NON-commit segment carrying an `a`/`o` flag must NOT flip the
+#     mode: `git commit -m x && ls -la` with an unrelated unstaged bump → allow.
+t_chained_flag_allow() {
+  local r; r=$(new_repo "title: seed")
+  printf 'last_reviewed: 2026-07-05\n' > "$r/doc.md"     # unstaged bump, NOT in this commit
+  printf 'x\n' > "$r/staged.md"; git -C "$r" add staged.md  # the actual staged change
+  run_hook "$(make_input "git -C $r commit -m 'docs: unrelated' && ls -la" "$r")"
+  assert_allow "chained '&& ls -la' does not flip mode → allow"
+  rm -rf "$r" "$INCIDENTS_DIR"
+}
+
 # --- AC3a: net-new doc adding last_reviewed for the first time → allow ------
 t_ac3a_netnew_add_allow() {
   local r; r=$(new_repo "")
@@ -179,6 +215,9 @@ t_message_documents_but_no_delta_allow() {
 
 t_ac1_staged_bump_deny
 t_ac2_am_bump_deny
+t_pathspec_bump_deny
+t_pathspec_scoped_allow
+t_chained_flag_allow
 t_ac3a_netnew_add_allow
 t_ac3b_quoted_variant_deny
 t_ac3c_deletion_deny

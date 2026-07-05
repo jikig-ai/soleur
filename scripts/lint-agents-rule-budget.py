@@ -53,6 +53,11 @@ if _FM_STRIP_DIR not in sys.path:
     sys.path.insert(0, _FM_STRIP_DIR)
 from strip import strip_frontmatter  # noqa: E402
 
+# Rule-line shape. MIRRORED in .claude/hooks/session-rules-loader.sh's over-strip
+# guard (`grep -cE '^- .*\[id: '`) — both count the same lines so the loader's
+# RAW-injection guard and this lint's fail-hard agree on "the strip dropped a
+# rule". If this shape ever changes (e.g. `*` bullets, tighter id charset),
+# change BOTH sites in lockstep.
 _RULE_LINE_RE = re.compile(r"^- .*\[id: ")
 
 
