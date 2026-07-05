@@ -19,6 +19,7 @@ import { loadGithubFixture } from "../../fixtures/github/load";
 
 const reportSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
+  mirrorWarnWithDebounce: vi.fn(),
   reportSilentFallback: reportSilentFallbackSpy,
 }));
 

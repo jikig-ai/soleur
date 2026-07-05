@@ -308,7 +308,13 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 
 **Perpetual cadence: 2 posts per week (Tuesday + Thursday), staggered across platforms.**
 
-This cadence is not tied to any campaign. It runs indefinitely. The `scheduled-content-generator.yml` workflow (Tue/Thu 10:00 UTC) generates articles from the SEO refresh queue or via growth plan discovery. The `scheduled-content-publisher.yml` workflow (daily 14:00 UTC) publishes any distribution content file with `publish_date == today` and `status: scheduled`. The `scheduled-campaign-calendar.yml` workflow (Mondays 16:00 UTC) refreshes this calendar and flags overdue items.
+This cadence is not tied to any campaign. It runs indefinitely. The `scheduled-content-generator.yml` workflow (Tue/Thu 10:00 UTC) generates articles from the SEO refresh queue or via growth plan discovery. The `cron-content-publisher` cron (daily 14:00 UTC) publishes any distribution content file with `publish_date == today` and `status: scheduled`. The `scheduled-campaign-calendar.yml` workflow (Mondays 16:00 UTC) refreshes this calendar and flags overdue items.
+
+**`draft → scheduled` promotion is automated (no manual frontmatter edit).** Every daily `cron-content-publisher` run first auto-promotes review-ready drafts onto the next open Tuesday/Thursday slots (28-day rolling horizon, ~8 slots) and flips their `status: draft → scheduled`, so the schedule self-heals and posting resumes without hand-editing frontmatter. A draft is **review-ready** when it is `status: draft`, declares at least one channel, is Liquid-marker-clean, and has at least one non-empty mapped body section. Because there are only 2 slots/week, a large backlog drains across successive daily runs (steady state ~8-10 pending) rather than all at once — this IS the cadence buffer, not a bug.
+
+**Hold lever:** set a draft to `status: parked` to exclude it from auto-promotion (its `publish_date`, if any, is still honored as an occupied slot so nothing double-books onto it). `parked`/`stale`/`published` files are never promoted.
+
+**Starvation backstop:** if, after promotion, **0 items are scheduled within the horizon** (e.g. every draft fails the readiness gate, or there is no published baseline at all), the run fires a loud Sentry signal (`op=content-starvation`) **and** opens one deduplicated `action-required` GitHub issue — so a multi-week content drought can no longer look identical to a healthy day. The issue auto-closes once the schedule refills. A green publisher run with nothing to post is no longer silent.
 
 **Distribution channels per post:** Discord, X/Twitter, Bluesky, LinkedIn Company. Additional platforms (IndieHackers, Reddit, HN) are selective per content type.
 
@@ -318,7 +324,7 @@ This cadence is not tied to any campaign. It runs indefinitely. The `scheduled-c
 2. Auto-generated articles from `knowledge-base/marketing/seo-refresh-queue.md`
 3. Growth plan discovery (fallback when queue is exhausted)
 
-**Overdue handling:** If a distribution content file's `publish_date` has passed without publication, the campaign calendar workflow flags it. Overdue items are rescheduled to the next available Tue/Thu slot.
+**Overdue handling:** If a distribution content file's `publish_date` has passed without publication, the campaign calendar workflow flags it. Overdue items are rescheduled to the next available Tue/Thu slot. New review-ready drafts do not need manual scheduling — the daily publisher's auto-promotion (above) assigns them Tue/Thu slots; the starvation backstop alerts if the schedule is ever empty.
 
 ---
 

@@ -23,6 +23,7 @@ vi.mock("node:child_process", () => ({
 
 const reportSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
+  mirrorWarnWithDebounce: vi.fn(),
   reportSilentFallback: reportSilentFallbackSpy,
 }));
 
