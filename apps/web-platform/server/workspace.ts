@@ -184,12 +184,18 @@ export async function provisionWorkspace(workspaceId: string): Promise<string> {
       cwd: workspacePath,
       stdio: "pipe",
     });
-    // Pre-seed worktree-config prerequisites HOST-SIDE, before the sandbox masks
-    // .git/config.lock, so in-sandbox worktree creation is a zero-write no-op (#4826).
-    seedWorktreeConfig(workspacePath);
   } catch (err) {
     log.warn({ err, workspaceId }, "Git init failed");
   }
+
+  // Pre-seed worktree-config prerequisites HOST-SIDE, before the sandbox masks
+  // .git/config.lock, so in-sandbox worktree creation is a zero-write no-op (#4826).
+  // Deliberately OUTSIDE the init/commit try: it must run whenever `git init`
+  // produced a `.git/`, even if the initial `git add`/`git commit` failed — e.g. a
+  // runner (or prod host) with no git identity throws at commit, and gating the seed
+  // behind it would silently re-wedge worktree creation. seedWorktreeConfig is itself
+  // best-effort (per-call try/catch), so calling it when `.git/` is absent is a no-op.
+  seedWorktreeConfig(workspacePath);
 
   return workspacePath;
 }
