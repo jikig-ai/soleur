@@ -34,9 +34,9 @@ These outlive #5990 and bind every later adopter (recorded here, not only in an 
 
 **Threat-model note (security-sentinel review, INFO-1):** the invoked skill's SKILL.md is parsed directly, so a model-authored *untracked* SKILL.md could declare `context_queries` — but every query still passes all four containment gates, so the worst achievable outcome is directing the agent to Read an **already-committed** `knowledge-base/` file (reference data by definition, never an out-of-tree secret). Within design intent; not a vulnerability.
 
-## Surface scope (CLI-first, web parity deferred — feasible, tracked)
+## Surface scope (CLI-first at inception; web parity delivered by #6046)
 
-The hook is a CLI `.claude/` shell hook; web-agent Concierge sessions run `settingSources:[]` and are isolated from shell hooks (ADR-070). So the pilot auto-loads on the CLI surface but not the web Concierge — an **accepted, time-boxed capability gap**, not "no regression": the same design skill behaves differently across surfaces. **Verified CLI-first, not CLI-intrinsic:** web sessions *do* emit `PostToolUse(Skill)` and run an in-process port (`apps/web-platform/server/phase-surface-hook.ts`; note web emits *bare* skill names, CLI emits `soleur:`-prefixed), so a web port is buildable via that precedent. Deferred to a tracked follow-up so #5990 chooses the surface(s) its taste-profile needs.
+The hook shipped first as a CLI `.claude/` shell hook; web-agent Concierge sessions run `settingSources:[]` and are isolated from shell hooks (ADR-070), so at inception the pilot auto-loaded on the CLI surface but not the web Concierge — an accepted, time-boxed capability gap. **Verified CLI-first, not CLI-intrinsic:** web sessions *do* emit `PostToolUse(Skill)` and run in-process ports (`phase-surface-hook.ts` precedent; note web emits *bare* skill names, CLI emits `soleur:`-prefixed), so a web port was buildable via that precedent. **#6046 delivered that port** (`apps/web-platform/server/context-queries-hook.ts`): an in-process `PostToolUse(Skill)` hook registered as a sibling to `createPhaseSurfaceHook()` on the cc-soleur-go Concierge path (`enableContextQueries`), reproducing all four containment gates + the fail-open contract with byte-identical note output (guarded by a cross-language parity test). Both surfaces now behave identically; the CLI-first framing is retained above as history.
 
 ## Composition fallback
 
@@ -51,4 +51,5 @@ Registered as a sibling `Skill` matcher block (independently enable/disable-able
 ## Verification
 
 - `.claude/hooks/skill-context-queries.test.sh` (git-init fixture repo): happy-path pointer, inline+block parse, glob determinism, traversal/symlink/untracked rejection, no-op fast-exit, adversarial-name no-exec, kill-switch, and a consistency check that the real pilot resolves ≥1 committed artifact.
+- **Web port (#6046):** `apps/web-platform/test/context-queries-hook.test.ts` (behavioural: all four gates, fail-open + no-leak synthetic-Error mirror, git-unavailable never-silent, MAX_GLOB cap, kill-switch) + `context-queries-shell-parity.test.ts` (cross-language byte-parity of the note against the real shell hook over a shared git fixture) + the `agent-runner-query-options.test.ts` two-flag independent-registration cases.
 - Upholds **AP-006** (committed-only, rejects `~/.gstack`), AP-010, AP-011.

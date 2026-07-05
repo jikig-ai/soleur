@@ -38,7 +38,7 @@ model {
       }
       api = container "API Routes" {
         technology "Next.js API"
-        description "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843)."
+        description "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046)."
       }
       auth = container "Auth Module" {
         technology "Supabase Auth"
@@ -300,6 +300,7 @@ model {
   skillloader -> agents "Discovers" { technology "Recursive scan" }
   hooks -> claude "Guards tool calls" { technology "Event hook" }
   hooks -> kb "Reads context_queries artifacts (skill-scoped injection)" { technology "File I/O" }
+  api -> kb "Reads context_queries artifacts (skill-scoped injection, web in-process)" { technology "File I/O" }
   skills -> kb "Reads/writes" { technology "File I/O" }
   agents -> kb "Reads/writes" { technology "File I/O" }
   api -> supabase "Auth and data" { technology "HTTPS" }

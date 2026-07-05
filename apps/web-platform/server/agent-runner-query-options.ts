@@ -29,6 +29,7 @@ import type {
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import { createSandboxHook } from "./sandbox-hook";
+import { createContextQueriesHook } from "./context-queries-hook";
 import { createPhaseSurfaceHook } from "./phase-surface-hook";
 import { createChildLogger } from "./logger";
 
@@ -137,6 +138,19 @@ export interface AgentQueryOptionsArgs {
    * hint only — never touches `canUseTool`/`disallowedTools`.
    */
   enablePhaseSurfaceHint?: boolean;
+  /**
+   * Opt in to the declarative `context_queries` context-injection hook (#6046,
+   * ADR-086 — the web-parity port of the CLI `.claude/hooks/skill-context-queries.sh`).
+   * When true, a fail-open `PostToolUse(Skill)` hook resolves the invoked skill's
+   * SKILL.md `context_queries:` frontmatter to committed `knowledge-base/`
+   * artifacts and injects a POINTER (a Read-directive) as `additionalContext`.
+   * Registered INDEPENDENTLY of `enablePhaseSurfaceHint` (both use matcher
+   * "Skill"; the SDK delivers both `additionalContext` values). ONLY the
+   * cc-soleur-go Concierge router sets this; the legacy domain-leader runner
+   * leaves it undefined so the AC5 drift snapshot stays byte-identical. Additive
+   * pointer only — never touches `canUseTool`/`disallowedTools`.
+   */
+  enableContextQueries?: boolean;
   /**
    * TR3 tool-attempt telemetry (#5843, ADR-070 amendment). When set, this single
    * fail-open `PreToolUse` hook (minted per query by `createToolAttemptCollector`
@@ -253,14 +267,27 @@ export function buildAgentQueryOptions(
           ],
         },
       ],
-      // L3 phase-surface hint (#5772 lever 1, ADR-070). Per-caller opt-in: only
-      // the cc-soleur-go Concierge router enables it (the eval-covered path).
-      // Fail-open additive `additionalContext` only; registered conditionally so
-      // the legacy path stays zero-change and the fail-CLOSED lever 2 does not
-      // inherit a both-callers default.
-      ...(args.enablePhaseSurfaceHint
-        ? { PostToolUse: [{ matcher: "Skill", hooks: [createPhaseSurfaceHook()] }] }
-        : {}),
+      // PostToolUse(Skill) hints — two INDEPENDENT per-caller opt-ins, each a
+      // fail-open additive `additionalContext` only (never touch the tool floor):
+      //   - L3 phase-surface hint (#5772 lever 1, ADR-070);
+      //   - declarative context_queries injection (#6046, ADR-086).
+      // Both use matcher "Skill"; the SDK runs parallel matching hooks and
+      // delivers both `additionalContext` values (ADR-086 §Composition fallback).
+      // Built by concatenation so enabling one never gates the other; only the
+      // cc-soleur-go Concierge router opts in, so the legacy path stays
+      // zero-change (both undefined → `hooks.PostToolUse` is absent, preserving
+      // the AC5 drift snapshot).
+      ...(() => {
+        const postToolUse = [
+          ...(args.enablePhaseSurfaceHint
+            ? [{ matcher: "Skill", hooks: [createPhaseSurfaceHook()] }]
+            : []),
+          ...(args.enableContextQueries
+            ? [{ matcher: "Skill", hooks: [createContextQueriesHook(args.workspacePath)] }]
+            : []),
+        ];
+        return postToolUse.length ? { PostToolUse: postToolUse } : {};
+      })(),
     },
     canUseTool: args.canUseTool,
   };
