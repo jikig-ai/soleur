@@ -57,14 +57,18 @@ export function NavCountBadge({
   collapsed,
   label,
   testId,
+  cap = 99,
 }: {
   count: number;
   collapsed: boolean;
   label: string;
   testId: string;
+  /** Display cap — counts above it render "<cap>+". Default 99; the inbox
+   * attention badge passes 9 (Appendix A). */
+  cap?: number;
 }) {
-  // FR5: large counts cap at "99+".
-  const display = count > 99 ? "99+" : String(count);
+  // FR5: large counts cap at "<cap>+".
+  const display = count > cap ? `${cap}+` : String(count);
 
   return (
     <>

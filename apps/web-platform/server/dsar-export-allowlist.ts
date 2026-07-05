@@ -305,6 +305,19 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // (user_id FK is ON DELETE RESTRICT; anonymise runs before auth-delete).
   email_triage_items: { ownerField: "user_id", article: "15+20" },
 
+  // feat-severity-ranked-inbox (migration 122) — operational-inbox notifications.
+  // Art. 15 ACCESS (not 20 portability): the `title`/`source_ref` are
+  // server-generated pointers, but the row's `created_at`/`read_at`/`acted_at`/
+  // `archived_at` are the subject's notification-INTERACTION history (when they
+  // were notified, when they acted) — controller-generated personal data held in
+  // NO other allowlisted table (the referenced conversations/messages carry
+  // message timestamps, not the notification's read/acted timestamps). Same Art.
+  // 15 basis the sibling `email_triage_items` is allowlisted on. `ownerField =
+  // user_id` naturally scopes the export to TARGETED rows and excludes
+  // `user_id IS NULL` broadcasts (workspace-level, not personal to a subject).
+  // Art. 17 erasure via user_id ON DELETE CASCADE (no anonymise RPC needed).
+  inbox_item: { ownerField: "user_id", article: "15" },
+
 };
 
 /**

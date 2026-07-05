@@ -29,7 +29,11 @@ import {
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import { sendToClient } from "./ws-handler";
 import { streamReplayBuffer } from "./stream-replay-buffer";
-import { notifyOfflineUser, type NotificationPayload } from "./notifications";
+import {
+  notifyOfflineUser,
+  notifyTaskCompleted,
+  type NotificationPayload,
+} from "./notifications";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import {
@@ -58,6 +62,7 @@ import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
 import { buildEmailTriageTools } from "./email-triage-tools";
+import { buildInboxTools } from "./inbox-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
 import { buildRoutineTools } from "./routines-tools";
@@ -1755,6 +1760,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       "mcp__soleur_platform__email_suppress",
     );
 
+    // Unified attention-inbox read tool (feat-severity-ranked-inbox #6007):
+    // agent-user parity for the SAME severity-ranked feed the operator sees.
+    // Read-only (auto-approve); merges native inbox_item + email-triage via the
+    // shared fetchInboxSources + mergeAndRank modules.
+    const inboxTools = buildInboxTools({ userId });
+    platformTools.push(...inboxTools);
+    platformToolNames.push("mcp__soleur_platform__inbox_list");
+
     // Routines management tools (#5345): agent-user parity for the Routines
     // surface — registered unconditionally. routines_list / routine_runs_list
     // are read-only (auto-approve); routine_run is gated (the review-gate is the
@@ -2382,6 +2395,22 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // Mark as waiting_for_user instead of completed -- conversation
           // continues until explicit close or inactivity timeout.
           await updateConversationStatus(userId, conversationId, "waiting_for_user");
+
+          // task_completed inbox nudge (feat-severity-ranked-inbox #6007): a
+          // durable "your {leader} finished" item + push, targeted to the run's
+          // user. Only on a real completion (assistant output persisted). Title
+          // is the static leader title (server-generated — never agent output).
+          // Shared with the cc-soleur-go terminal via notifyTaskCompleted so the
+          // two turn-boundary lineages cannot drift (arch review P1). Fire-and-
+          // forget (never throws + self-mirroring).
+          if (assistantPersisted) {
+            void notifyTaskCompleted({
+              userId,
+              conversationId,
+              workspaceId: activeWorkspaceId,
+              title: `${leader.title} finished`,
+            });
+          }
 
           // In multi-leader mode, dispatchToLeaders sends a single session_ended
           // after all leaders finish — individual leaders must not send it or the

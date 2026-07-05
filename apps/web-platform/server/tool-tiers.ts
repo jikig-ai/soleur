@@ -83,6 +83,11 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__email_triage_list": "auto-approve",
   "mcp__soleur_platform__email_triage_get": "auto-approve",
 
+  // Unified attention inbox (feat-severity-ranked-inbox #6007): read-only,
+  // owner-scoped via closure userId + RLS → auto-approve (parity with
+  // email_triage_list). No write tool ships (state changes are operator-UI-only).
+  "mcp__soleur_platform__inbox_list": "auto-approve",
+
   // Routines management (#5345): reads auto-approve; run-now is a write →
   // gated. The review gate is the SINGLE confirmation for the agent path
   // (the routine_run tool dispatches confirmed=true post-approval — no

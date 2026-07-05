@@ -1,37 +1,81 @@
 "use client";
 
-// feat-inbox-attention-badge — a count badge on the Inbox left-nav item showing
-// the number of active (unarchived) inbox items. Reuses the Inbox Active tab's
-// shared SWR key (swrKeys.inboxEmails("active")) + fetcher (TR3), so the badge
-// and the Inbox list are fed by ONE request (free dedup via SWRConfig's
-// dedupingInterval) and can never disagree (G3). Mounting inside the dashboard
-// layout's <SWRConfig> (ADR-067) is what makes the dedup work — see layout.tsx.
+// Inbox left-nav attention badge (feat-severity-ranked-inbox #6007). Counts
+// OUTSTANDING action_required items only (a read-but-un-acted decision still
+// nudges) — NOT total unread. Reuses the Inbox Active tab's shared SWR key
+// (swrKeys.inbox("active")) + fetcher, so the badge and the list are fed by ONE
+// request (free dedup) and can never disagree, and runs the SAME
+// severity/clock logic via the shared lib (a naive status='new' count drifts).
 //
-// The neutral visual + the honesty contract (never a false "0") live in the
-// shared NavCountBadge / useNavAttentionCount primitives (nav-count-badge.tsx).
+// Honesty contract (user-brand-critical, FR6): a loading/errored fetch must
+// NEVER render a false "0" — COLD (undefined data) omits entirely. Three states:
+//   - action_required > 0 → numeric pill (9+ cap, Appendix A)
+//   - else + unread FYI    → a calm gold dot, no number ("New updates…")
+//   - else                 → omit
 
-import { fetchInboxItems } from "@/components/inbox/inbox-surface";
+import useSWR from "swr";
+import { fetchMergedInbox } from "@/components/inbox/inbox-surface";
 import { swrKeys } from "@/lib/swr-config";
+import { NavCountBadge } from "@/components/dashboard/nav-count-badge";
+import { warnSilentFallback } from "@/lib/client-observability";
 import {
-  NavCountBadge,
-  useNavAttentionCount,
-} from "@/components/dashboard/nav-count-badge";
+  countOutstandingActionRequired,
+  type MergedInboxItem,
+} from "@/lib/inbox-severity";
+
+function hasUnreadFyi(items: MergedInboxItem[]): boolean {
+  return items.some((m) => {
+    if (m.severity === "action_required") return false;
+    // Native rows track read_at; email rows are "unread" while status is new.
+    return m.kind === "inbox"
+      ? m.inbox.read_at === null
+      : m.email.status === "new";
+  });
+}
 
 export function InboxNavBadge({ collapsed }: { collapsed: boolean }) {
-  const count = useNavAttentionCount(
-    swrKeys.inboxEmails("active"),
-    fetchInboxItems,
-    (items) => items.length,
-    "inbox-nav-badge",
+  const { data } = useSWR<MergedInboxItem[]>(
+    swrKeys.inbox("active"),
+    fetchMergedInbox,
+    {
+      onError: (err) =>
+        warnSilentFallback(err, { feature: "inbox-nav-badge", op: "count-fetch" }),
+    },
   );
-  if (count === null || count === 0) return null;
 
-  return (
-    <NavCountBadge
-      count={count}
-      collapsed={collapsed}
-      testId="inbox-nav-badge"
-      label={`${count} ${count === 1 ? "item" : "items"} needing attention`}
-    />
-  );
+  // COLD (undefined data, incl. a hard-failed first load): omit — never a false "0".
+  if (data === undefined) return null;
+
+  const count = countOutstandingActionRequired(data);
+  if (count > 0) {
+    return (
+      <NavCountBadge
+        count={count}
+        collapsed={collapsed}
+        testId="inbox-nav-badge"
+        cap={9}
+        label={`${count} ${count === 1 ? "item needs" : "items need"} your decision`}
+      />
+    );
+  }
+
+  // No decisions pending, but unread updates → a calm gold dot (no number).
+  if (hasUnreadFyi(data)) {
+    return collapsed ? (
+      <span
+        data-testid="inbox-nav-badge-dot-collapsed"
+        aria-hidden="true"
+        className="pointer-events-none absolute right-1.5 top-1.5 hidden h-2 w-2 rounded-full bg-soleur-accent-gold-fill ring-2 ring-soleur-bg-surface-1 md:block"
+      />
+    ) : (
+      <span
+        data-testid="inbox-nav-badge-dot"
+        aria-label="New updates in your inbox"
+        className="ml-auto h-2 w-2 shrink-0 rounded-full bg-soleur-accent-gold-fill"
+      />
+    );
+  }
+
+  // Genuinely nothing — omit (never "0").
+  return null;
 }
