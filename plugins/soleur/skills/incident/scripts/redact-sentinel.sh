@@ -15,10 +15,11 @@
 # dry-run any-nonzero). python3 absent -> 2 (NOT 1: exit 1 means "matches found", which would give
 # a false "secrets found" message and trap the incident operator in an unsatisfiable redact loop).
 #
-# The hardened engine defeats compatibility-char / zero-width / bidi / invalid-byte / soft-hyphen /
-# prefix-homoglyph evasion (matching runs over strip -> NFKC -> strip -> confusable-fold). It does
-# NOT defeat the full cross-script homoglyph space (TR39 skeleton), whitespace token-splitting, or
-# reversibly-encoded secrets — each a named non-goal (see ADR-086).
+# The hardened engine defeats compatibility-char / invisible / bidi / control / invalid-byte /
+# soft-hyphen / prefix-homoglyph evasion (matching runs over strip -> NFKC -> strip -> confusable-fold;
+# invisibles are stripped by Unicode category, not a hand-picked list). It does NOT defeat the full
+# cross-script homoglyph space (TR39 skeleton), whitespace token-splitting, reversibly-encoded
+# secrets, or unprefixed/high-entropy tokens — each a named non-goal (see ADR-086).
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

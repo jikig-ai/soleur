@@ -121,9 +121,12 @@ stripe = fw('sk_live_0000000000000000')
 sys.stdout.write(jwt+'\n'+stripe+'\n')
 " > "${t5_file}"
 
-# (a) OLD bash engine (main) misses the evasive tokens
-OLD_ENGINE="${TMP_DIR}/old-redact-sentinel.sh"
-git -C "${REPO_ROOT}" show main:plugins/soleur/skills/incident/scripts/redact-sentinel.sh > "${OLD_ENGINE}" 2>/dev/null || cp "${SENTINEL}" "${OLD_ENGINE}"
+# (a) OLD bash engine MISSES the evasive tokens. Baseline is a FROZEN copy of the pre-#5987
+# grep scanner committed at fixtures/legacy-bash-scanner.sh — NOT `git show main:redact-sentinel.sh`,
+# which becomes the new shim post-merge (references redact-engine.py absent from a temp dir -> exit 2,
+# a merge-time time-bomb that would turn main red for the next contributor). The frozen copy is a
+# self-contained pure-bash scanner and is stable across merges.
+OLD_ENGINE="${SCRIPT_DIR}/fixtures/legacy-bash-scanner.sh"
 bash "${OLD_ENGINE}" "${t5_file}" >/dev/null 2>&1
 assert_exit "Test 5a: OLD raw-byte engine MISSES confusable/invisible-split tokens" 0 $?
 
@@ -133,6 +136,26 @@ bash "${SENTINEL}" "${t5_file}" >"${t5_out}" 2>&1
 assert_exit "Test 5b: engine catches confusable/invisible-split tokens" 1 $?
 assert_grep "Test 5b.JWT: JWT class tripped after strip" "matched pattern JWT" "${t5_out}"
 assert_grep "Test 5b.stripe: fullwidth Stripe key tripped after NFKC" "matched pattern stripe_key" "${t5_out}"
+
+# Test 5c — category-based STRIP: invisible/control/format families NFKC leaves intact must all be
+# stripped, not just a hand-picked list. One secret per invisible class; each must be CAUGHT (exit 1).
+# NUL(Cc), DEL(Cc), variation-selector U+FE0F(Mn), Tags-block U+E0020(Cf), combining grapheme joiner
+# U+034F(Mn). Splice is placed mid-token so a raw-byte matcher would miss it.
+for probe in "NUL:0x00" "DEL:0x7f" "VS16:0xfe0f" "TAGSPACE:0xe0020" "CGJ:0x34f"; do
+  name="${probe%%:*}"; cp="${probe##*:}"
+  f="${TMP_DIR}/t5c-${name}.txt"
+  python3 -c "import sys; sys.stdout.write('sk_live_0000'+chr(${cp})+'000000000000\n')" > "${f}"
+  bash "${SENTINEL}" "${f}" >/dev/null 2>&1
+  assert_exit "Test 5c.${name}: invisible-splice (${cp}) stripped by category, secret caught" 1 $?
+done
+
+# Test 5d — second-strip necessity (U+FFA0 halfwidth Hangul filler): NFKC folds U+FFA0 -> U+1160,
+# a strippable char NOT present in the raw input. Only the post-NFKC second strip catches it. This
+# pins the double-strip so a future "simplification" removing it fails loudly.
+t5d_file="${TMP_DIR}/t5d.txt"
+python3 -c "import sys; sys.stdout.write('sk_live_0000'+chr(0xFFA0)+'000000000000\n')" > "${t5d_file}"
+bash "${SENTINEL}" "${t5d_file}" >/dev/null 2>&1
+assert_exit "Test 5d: U+FFA0->U+1160 NFKC fold caught by the second strip" 1 $?
 
 # ---------------------------------------------------------------------------
 # Test 6 — oversize -> synthetic HIGH (AC2). Cap lowered via env for speed.
@@ -196,9 +219,12 @@ assert_exit "Test 8b: Cyrillic prose without secrets exits 0 (fold != fabricate)
 # ---------------------------------------------------------------------------
 old_hits="${TMP_DIR}/old_hits.txt"
 new_hits="${TMP_DIR}/new_hits.txt"
-bash "${OLD_ENGINE}" "${POSITIVE_CORPUS}" 2>/dev/null | grep -oE 'matched pattern [A-Za-z_]+' | sort -u > "${old_hits}"
-bash "${SENTINEL}"   "${POSITIVE_CORPUS}" 2>/dev/null | grep -oE 'matched pattern [A-Za-z_]+' | sort -u > "${new_hits}"
-missing=$(comm -23 "${old_hits}" "${new_hits}")
+# LC_ALL=C on BOTH sort and comm: comm requires byte-collation order; a locale sort (en_US) collates
+# case-insensitively so comm sees "unsorted input" and its diff is undefined — the parity guard would
+# run blind. Byte-sort both streams and byte-compare.
+bash "${OLD_ENGINE}" "${POSITIVE_CORPUS}" 2>/dev/null | grep -oE 'matched pattern [A-Za-z_]+' | LC_ALL=C sort -u > "${old_hits}"
+bash "${SENTINEL}"   "${POSITIVE_CORPUS}" 2>/dev/null | grep -oE 'matched pattern [A-Za-z_]+' | LC_ALL=C sort -u > "${new_hits}"
+missing=$(LC_ALL=C comm -23 "${old_hits}" "${new_hits}")
 if [[ -z "${missing}" ]]; then
   echo "PASS: Test 9: golden parity — new engine catches every class the old engine did"
   PASS=$((PASS + 1))
@@ -231,14 +257,16 @@ bash "${SENTINEL}" "${t11_file}" >/dev/null 2>&1
 assert_exit "Test 11a: legal draft with secret trips the sentinel (non-zero)" 1 $?
 assert_grep "Test 11b: legal-generate SKILL.md wires redact-sentinel.sh" \
   'redact-sentinel\.sh' "${LEGAL_SKILL}"
-# The gate block must appear BEFORE the Accept/Edit/Reject presentation step.
+# The gate block must appear BEFORE the presentation step. Anchor on the stable structural heading
+# `## Phase 3` (where the Accept/Edit/Reject presentation lives) rather than brittle label prose —
+# a reworded decision-gate label must not silently empty the check.
 gate_line=$(grep -nE 'redact-sentinel\.sh' "${LEGAL_SKILL}" 2>/dev/null | head -1 | cut -d: -f1)
-present_line=$(grep -nE 'Accept.*Write to disk' "${LEGAL_SKILL}" 2>/dev/null | tail -1 | cut -d: -f1)
+present_line=$(grep -nE '^## Phase 3' "${LEGAL_SKILL}" 2>/dev/null | head -1 | cut -d: -f1)
 if [[ -n "${gate_line}" && -n "${present_line}" && "${gate_line}" -lt "${present_line}" ]]; then
-  echo "PASS: Test 11c: redaction gate precedes inline presentation in legal-generate SKILL.md"
+  echo "PASS: Test 11c: redaction gate precedes inline presentation (Phase 3) in legal-generate SKILL.md"
   PASS=$((PASS + 1))
 else
-  echo "FAIL: Test 11c: redaction gate must precede presentation (gate=${gate_line:-none}, present=${present_line:-none})"
+  echo "FAIL: Test 11c: redaction gate must precede Phase 3 presentation (gate=${gate_line:-none}, phase3=${present_line:-none})"
   FAIL=$((FAIL + 1))
 fi
 

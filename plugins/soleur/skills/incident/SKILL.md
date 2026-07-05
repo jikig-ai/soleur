@@ -220,7 +220,7 @@ Run `bash scripts/redact-sentinel.sh <draft-tmpfile>` against the unwritten draf
 
 - Exit 0 → emit `sentinel: pass` and proceed to Phase 7.
 - Exit 1 → print each offset/pattern line from sentinel stdout. Prompt operator to redact. Operator iterates until sentinel exits 0. No max-iteration cap — `Ctrl-C` is the universal abort path.
-- Exit 2 → halt with the sentinel's error message; this is a skill bug.
+- Exit 2 → halt with the sentinel's error message; this is a skill bug OR an unmet runtime prerequisite (e.g. `python3` absent — the shim fails closed to exit 2 rather than a false "clean"/"secrets found" result).
 
 **Why pre-inline-emit (SpecFlow Critical #2):** transcripts ARE write boundaries. If the draft is emitted inline and only then scanned, the un-redacted secret has already crossed the operator transcript surface — and the conversation may be screenshot, exported, or replayed in plan-review tools. The sentinel must run before the draft is visible anywhere.
 

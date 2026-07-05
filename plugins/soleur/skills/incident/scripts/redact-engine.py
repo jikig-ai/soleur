@@ -20,20 +20,39 @@ import unicodedata
 # 1 MiB default cap. Overridable via env for tests/tuning.
 MAX = int(os.environ.get("REDACT_MAX_INPUT_BYTES", str(1024 * 1024)))
 
-# Invisible / break-rendering / bidi separators + the decode-replacement char. NFKC does NOT
-# remove these; they splice tokens invisibly. Keys are ordinals (escapes-only per the repo's own
-# `cq-regex-unicode-separators-escape-only` invariant — INCLUDING U+2028/U+2029, whose omission
-# would be both a self-inconsistency and a live splitter evasion).
-STRIP = {c: None for c in (
-    0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF, 0x180E,          # zero-width
-    0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E,  # bidi (LRM/RLM/embeddings/overrides)
-    0x2066, 0x2067, 0x2068, 0x2069, 0x061C,                  # bidi isolates + arabic letter mark
-    0x00AD,                                                  # soft hyphen (renders invisibly, splits)
-    0x2028, 0x2029,                                          # line / paragraph separators
-    0x115F, 0x1160, 0x3164, 0x17B4, 0x17B5,                  # Hangul/Khmer fillers (render as nothing)
-    0xFFF9, 0xFFFA, 0xFFFB,                                  # interlinear annotation anchors
-    0xFFFD,                                                  # decode-replacement (invalid-byte splice)
-)}
+# Invisible / break-rendering / bidi / format characters that NFKC does NOT remove and that splice
+# tokens invisibly. Built by Unicode CATEGORY, not a hand-picked codepoint list — an enumeration
+# silently misses whole families (C0 controls, DEL, variation selectors, the Tags block U+E0000-E007F,
+# combining grapheme joiner), each the SAME evasion class this engine defeats. Strip:
+#   - categories Cc (control), Cf (format), Cs (surrogate) — EXCEPT the meaningful ASCII whitespace
+#     controls (tab/LF/VT/FF/CR), which are kept (whitespace token-splitting is a documented non-goal);
+#   - variation selectors (U+FE00-FE0F, U+E0100-E01EF), combining grapheme joiner (U+034F), and the
+#     Mongolian free variation selectors (U+180B-180D) — invisible marks NFKC leaves intact.
+# Plus an explicit tail for the invisibles that are NOT in Cc/Cf/Cs: line/para separators (Zl/Zp),
+# the replacement char (So, from an invalid-byte splice), and the Hangul/Khmer fillers that render as
+# nothing (Lo/Mn). Keys are ordinals throughout (escapes-only per `cq-regex-unicode-separators-escape-only`).
+_KEEP_WHITESPACE = {0x09, 0x0A, 0x0B, 0x0C, 0x0D}
+_EXPLICIT_STRIP = (
+    0x2028, 0x2029,                          # line / paragraph separators (Zl / Zp)
+    0xFFFD,                                  # decode-replacement char (So — invalid-byte splice)
+    0x115F, 0x1160, 0x3164, 0xFFA0,          # Hangul fillers (Lo) — incl. halfwidth U+FFA0 (NFKC->U+1160)
+    0x17B4, 0x17B5,                          # Khmer inherent vowels (Mn) — render as nothing
+)
+
+
+def _strippable(o):
+    if o in _KEEP_WHITESPACE:
+        return False
+    if unicodedata.category(chr(o)) in ("Cc", "Cf", "Cs"):
+        return True
+    return 0xFE00 <= o <= 0xFE0F or 0xE0100 <= o <= 0xE01EF or o == 0x034F or 0x180B <= o <= 0x180D
+
+
+# Built once at import over the bounded ranges that hold every Cc/Cf/Cs + invisible-mark codepoint
+# (all below U+30000, plus the Tags/variation-selector-supplement block U+E0000-E01FF). ~0.1s, ~2.5k keys.
+STRIP = {o: None for o in _EXPLICIT_STRIP}
+STRIP.update({o: None for o in range(0x30000) if _strippable(o)})
+STRIP.update({o: None for o in range(0xE0000, 0xE0200) if _strippable(o)})
 
 # Targeted ASCII-lookalike fold for the strong Cyrillic/Greek homoglyphs that appear in secret
 # prefixes/bodies. Cheap partial cross-script coverage so AC1 is HONEST; the full TR39 skeleton is a
@@ -76,9 +95,11 @@ PATTERNS = [
     ("supabase_pat", re.compile(r"\bsbp_[a-z0-9]{20,}\b|\b(sb_secret|sb_publishable)_[A-Za-z0-9]{20,}\b", F)),
     # PEM header broadened to catch ENCRYPTED / SSH2 / any [A-Z0-9 ]* qualifier.
     ("pem_private_key", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", F)),
-    # New Soleur crown-jewel classes (distinctive prefixes, low false-positive).
-    ("doppler_token", re.compile(r"\bdp\.(st|pt)\.[A-Za-z0-9._-]{16,}", F)),
-    ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}", F)),
+    # New Soleur crown-jewel classes (distinctive prefixes, low false-positive). Doppler token kinds:
+    # service (st), personal (pt), CLI (ct), service-account (sa), scim, audit. Slack token kinds:
+    # bot/user/app/refresh/legacy (baprs) + config (c) + config-refresh (e).
+    ("doppler_token", re.compile(r"\bdp\.(st|pt|ct|sa|scim|audit)\.[A-Za-z0-9._-]{16,}", F)),
+    ("slack_token", re.compile(r"\bxox[baprsce]-[A-Za-z0-9-]{10,}", F)),
 ]
 
 
@@ -101,9 +122,10 @@ def scan(path):
         print(f"SYNTHETIC HIGH: input exceeds {MAX} bytes ({len(raw)}) — fail closed")
         return 1
     stripped = raw.decode("utf-8", "replace").translate(STRIP)
-    # strip -> NFKC -> strip again: NFKC decomposition can EMIT combining/zero-width chars,
-    # re-opening a splitter after the first strip. The second strip is idempotent. Then the
-    # targeted confusable fold.
+    # strip -> NFKC -> strip again: NFKC can FOLD a compatibility character into a strippable one that
+    # was not present in the raw input — e.g. U+FFA0 (halfwidth Hangul filler) -> U+1160 (Hangul filler,
+    # in STRIP). The second strip closes that re-opened splitter; it is idempotent on already-clean text.
+    # Then the targeted confusable fold.
     norm = unicodedata.normalize("NFKC", stripped).translate(STRIP).translate(CONFUSABLE_MAP)
     if len(norm.encode("utf-8")) > MAX:  # post-NFKC re-check (NFKC can expand 1 cp -> up to 18)
         print(f"SYNTHETIC HIGH: normalized input exceeds {MAX} bytes — fail closed")

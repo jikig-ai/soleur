@@ -118,6 +118,16 @@ meta-redacted (never a full token). This reducing-scope decision vs the issue's 
 - **Brand-survival threshold:** `single-user incident`. `requires_cpo_signoff: true` (CPO was not
   spawned at brainstorm — only CTO+CLO; CPO sign-off is required at plan time before `/work`).
   `user-impact-reviewer` runs at review time.
+- **Residual leak vectors still evading after this PR (surfaced per the threshold; each an ADR-086
+  named non-goal + follow-up-issue item):**
+  - **Whitespace / newline token-splitting** — the *highest-probability accidental* leak: strip cannot
+    remove meaningful whitespace, so a secret a markdown/PDF renderer reflows across a line break is
+    NOT caught. Follow-up: whitespace-collapse-and-re-scan second pass.
+  - **Cross-script homoglyphs outside `CONFUSABLE_MAP`** (full TR39 skeleton) — version-controlled by
+    Test 12; and **unprefixed / high-entropy secrets** (no vendor prefix to anchor on).
+- **Availability cost (fail-closed, never a leak):** code-to-prd Layer 2 was pure-bash and always ran;
+  it now hard-depends on `python3` and *blocks* all PRD writes (exit 2) on a `python3`-less runner. CI
+  and operator machines have `python3` (precedent skills already depend on it); the posture is correct.
 
 ## Implementation Phases
 
