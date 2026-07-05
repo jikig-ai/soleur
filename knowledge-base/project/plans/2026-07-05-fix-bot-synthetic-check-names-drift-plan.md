@@ -287,35 +287,35 @@ File to edit: `knowledge-base/engineering/architecture/decisions/ADR-032-github-
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `infra/github/ruleset-ci-required.tf` contains an `adr-ordinals` `required_check`
+- [x] `infra/github/ruleset-ci-required.tf` contains an `adr-ordinals` `required_check`
       (integration_id `var.actions_integration_id`); the canonical JSON contains a matching
       `{context: "adr-ordinals", integration_id: 15368}`; `test-audit-ruleset-bypass.sh` T-rsc-9
       (`.tf`↔canonical lockstep) passes AND T-rsc-7 count assertion updated 16→17 (with the
       `.tf:18` + `:618-621` prose bumped to 17).
-- [ ] `scripts/required-checks.txt` CI-Required subset, as a set, equals the
+- [x] `scripts/required-checks.txt` CI-Required subset, as a set, equals the
       `canonical-required-status-checks.json` contexts with `integration_id == 15368` (computed
       via `jq`, NOT a `CodeQL` string literal), verified by the new parity test asserting BOTH ⊆ and ⊇.
-- [ ] `action.yml` no longer hardcodes `CHECK_NAMES`; it parses `scripts/required-checks.txt`
+- [x] `action.yml` no longer hardcodes `CHECK_NAMES`; it parses `scripts/required-checks.txt`
       with the multi-word-safe parser (leading-`#`-only comment rule) and posts one 15368 check-run
       per name; `cla-check`/`cla-evidence` custom outputs preserved; no name double-posted; fails
       loud if the file is absent.
-- [ ] Parser round-trips `waiver discipline (issue:#NNN trailer)` intact (regression test) — no
+- [x] Parser round-trips `waiver discipline (issue:#NNN trailer)` intact (regression test) — no
       `#`-truncation.
-- [ ] Phase-4 ceiling present: real gitleaks AND `lint-fixture-content.mjs` run over the diff and
+- [x] Phase-4 ceiling present: real gitleaks AND `lint-fixture-content.mjs` run over the diff and
       fail loud on a finding; `add-paths` allowlist is the explicit `{weakness-digest.md,
       rule-metrics.json}` enumeration and REJECTS `plans/`/`specs/`/`references/`/`learnings/`
       sub-trees; pin-parity assertion covers all 3 gitleaks pin sites. `secret-scan.yml` untouched.
-- [ ] New `plugins/soleur/test/required-checks-canonical-parity.test.sh` passes (both ⊆/⊇ via
+- [x] New `plugins/soleur/test/required-checks-canonical-parity.test.sh` passes (both ⊆/⊇ via
       `jq integration_id==15368`, CLA `{cla-check,cla-evidence}` excluded) and is wired into CI.
-- [ ] A deterministic guard asserts `action.yml` references `scripts/required-checks.txt` (future
+- [x] A deterministic guard asserts `action.yml` references `scripts/required-checks.txt` (future
       re-hardcode caught).
-- [ ] `terraform -chdir=infra/github validate` passes; the `.tf` change is a **no-op** plan
+- [x] `terraform -chdir=infra/github validate` passes; the `.tf` change is a **no-op** plan
       against live (documented, not applied by the author).
-- [ ] ADR-032 amended; C4 read performed with "no impact" enumeration cited.
-- [ ] `bash scripts/lint-bot-synthetic-completeness.sh` and the full `plugins/soleur/test/*.test.sh`
+- [x] ADR-032 amended; C4 read performed with "no impact" enumeration cited.
+- [x] `bash scripts/lint-bot-synthetic-completeness.sh` and the full `plugins/soleur/test/*.test.sh`
       suite green; typecheck N/A (no TS in `apps/web-platform` touched — confirm no
       `apps/web-platform` files changed).
-- [ ] PR body uses `Closes #6049`. PR is code-owner-gated on `infra/github/**` (@deruelle);
+- [x] PR body uses `Closes #6049`. PR is code-owner-gated on `infra/github/**` (@deruelle);
       this is an expected pre-merge review approval, **not** a post-merge operator action.
 
 ### Post-merge (operator / automated)
