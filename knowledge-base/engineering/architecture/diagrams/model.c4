@@ -58,8 +58,8 @@ model {
         description "Discovers and loads skills, agents, commands from plugin directory"
       }
       hooks = container "Hook Engine" {
-        technology "PreToolUse Guards"
-        description "Enforces syntactic rules — blocks commits to main, rm -rf, etc."
+        technology "PreToolUse Guards + PostToolUse hints"
+        description "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086)."
       }
     }
 
@@ -299,6 +299,7 @@ model {
   skillloader -> skills "Discovers" { technology "Directory scan" }
   skillloader -> agents "Discovers" { technology "Recursive scan" }
   hooks -> claude "Guards tool calls" { technology "Event hook" }
+  hooks -> kb "Reads context_queries artifacts (skill-scoped injection)" { technology "File I/O" }
   skills -> kb "Reads/writes" { technology "File I/O" }
   agents -> kb "Reads" { technology "File I/O" }
   api -> supabase "Auth and data" { technology "HTTPS" }
