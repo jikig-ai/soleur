@@ -112,6 +112,7 @@ out="$(env_json "missing-art" | run_hook)"; rc=$?
 ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)"
 [[ "$rc" -eq 0 ]] && pass "AC2 missing-artifact exits 0" || fail "AC2 missing-artifact non-zero"
 printf '%s' "$ctx" | grep -qi 'skip' && pass "AC2 missing-artifact emits skip note" || fail "AC2 missing-artifact no skip note (ctx=$ctx)"
+printf '%s' "$ctx" | grep -qi 'tell the user' && pass "AC2 skip note instructs the agent to surface skips to the operator (FINDING 2)" || fail "AC2 skip note has no operator-surface instruction (ctx=$ctx)"
 
 # --- AC4: traversal query rejected, no /etc/passwd, exit 0 ---
 out="$(env_json "traversal" | run_hook)"; rc=$?

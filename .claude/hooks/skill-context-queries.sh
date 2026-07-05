@@ -141,6 +141,11 @@ else
 fi
 if [[ "${#skipped[@]}" -gt 0 ]]; then
   note+=" (skipped: $(printf '%s; ' "${skipped[@]}" | sed 's/; $//'))"
+  # additionalContext is model-visible only, so a skip is invisible to a
+  # non-technical operator unless the agent relays it — instruct the agent to
+  # surface it (closes the silent-drift path: a renamed/moved artifact would
+  # otherwise degrade output with no operator-visible signal).
+  note+=" — tell the user which declared context artifacts were skipped so they can fix the skill's context_queries frontmatter."
 fi
 
 jq -n --arg ctx "$note" \

@@ -113,6 +113,17 @@ non-technical operator cannot diagnose. (Applies on the CLI surface; the web sur
 escape in the resolver reading a file *outside* `knowledge-base/` (e.g. `.env`, secrets)
 and naming it to an agent whose context reaches the model.
 
+**Two additional failure modes (user-impact-reviewer, both mitigated):**
+- *Suppressing the existing phase-surface hint fleet-wide* — adding a second
+  `PostToolUse:Skill` hook could clobber `phase-surface-hint.sh`'s output if CC
+  didn't concatenate. **Mitigated/confirmed:** CC delivers *all* `additionalContext`
+  values (official docs) — no suppression. See tasks.md 0.1 / ADR-086 §Composition.
+- *Silent drift is model-invisible to the operator* — a renamed/moved artifact makes
+  every design call emit "declared but 0 resolved" to the model only. **Mitigated:**
+  the skip note now instructs the agent to *tell the user* which artifacts were
+  skipped (so a non-technical operator gets a visible signal), and the pilot
+  consistency test (AC14) catches drift for the pilot at every CI run.
+
 **Brand-survival threshold:** single-user incident. → `requires_cpo_signoff: true` (CPO
 reviewed the brainstorm framing — carry-forward); `user-impact-reviewer` at PR review;
 deepen-plan invoked (ultrathink).

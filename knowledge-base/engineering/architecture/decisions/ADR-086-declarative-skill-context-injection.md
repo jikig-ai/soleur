@@ -40,7 +40,7 @@ The hook is a CLI `.claude/` shell hook; web-agent Concierge sessions run `setti
 
 ## Composition fallback
 
-Registered as a sibling `Skill` matcher block (independently enable/disable-able). CC runs all matching PostToolUse hooks; with a ~1-line pointer payload the shared 10,000-char `additionalContext` budget is not a practical concern. If a future CC version were found to last-writer-wins multiple `additionalContext` emitters, the fallback is a **new dedicated single-emitter hook** owning both concerns — NOT grafting content-referencing into phase-surface-hint (which would re-entangle the two trust models this ADR keeps separate).
+Registered as a sibling `Skill` matcher block (independently enable/disable-able). **Composition is confirmed safe by the Claude Code official docs** (https://code.claude.com/docs/en/hooks.md §"Add context for Claude"): *"When several hooks return additionalContext for the same event, Claude receives all of the values"* — matching hooks run in parallel and every `additionalContext` is delivered (a single value >10,000 chars is written to a session file and passed as a path + preview, never dropped). So `phase-surface-hint.sh` is **not** clobbered by this sibling hook; with a ~1-line pointer payload the shared budget is a non-issue. The single-emitter fallback below is therefore **not needed** — retained only as a hypothetical guard: if a future CC version ever last-writer-wins multiple emitters, the fallback is a **new dedicated single-emitter hook** owning both concerns — NOT grafting content-referencing into phase-surface-hint (which would re-entangle the two trust models this ADR keeps separate).
 
 ## Alternatives considered
 

@@ -13,7 +13,7 @@ adr: ADR-086
 Design (post 6-agent plan-review): **pointer-only** lazy `PostToolUse:Skill` hook. See plan for full rationale.
 
 ## Phase 0 — Preconditions (verify against installed state)
-- [~] 0.1 Composition: registered as a sibling `Skill` matcher block. Resolved by design (CC runs ALL matching hooks and concatenates additionalContext — phase-surface precedent + multi PreToolUse:Bash stacking) rather than a live throwaway spike (mid-session settings edit doesn't reload). Cap-collision moot: pointer payload is ~1 line. Fallback (single-emitter) recorded in ADR-086. **Live concat observation deferred to next natural session reload — low risk given tiny payload.**
+- [x] 0.1 Composition: registered as a sibling `Skill` matcher block. **CONFIRMED via Claude Code official docs** (https://code.claude.com/docs/en/hooks.md §"Add context for Claude"): *"When several hooks return additionalContext for the same event, Claude receives all of the values."* So phase-surface-hint.sh is NOT clobbered — both hooks' additionalContext are delivered (parallel, order-not-guaranteed; a >10K-char value is file-offloaded, never dropped). Single-emitter fallback (recorded in ADR-086) is therefore unnecessary. (Resolves user-impact-reviewer FINDING 1.)
 - [x] 0.2 Confirm `knowledge-base/marketing/brand-guide.md` git-tracked (36 KB → pointer path).
 - [x] 0.3 Surface probe: do web-agent Concierge sessions emit `PostToolUse:Skill`? (grep `apps/web-platform/server/` `options.hooks` + ADR-070). Record CLI-first vs CLI-intrinsic.
 - [x] 0.4 Read templates: `phase-surface-hint.sh`(+`.test.sh`), `pencil-collapse-guard.sh:42-59`, `scripts/generate-kb-index.sh` frontmatter idiom (`c==1` @138-141, block-start @176, continuation @144).
