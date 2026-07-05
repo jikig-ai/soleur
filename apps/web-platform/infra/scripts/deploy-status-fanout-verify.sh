@@ -67,8 +67,10 @@ DEPLOY_POST_SINK="${DEPLOY_POST_SINK:-}"
 DEPLOY_POST_CODE_CMD="${DEPLOY_POST_CODE_CMD:-}"
 DEPLOY_POST_CODE="${DEPLOY_POST_CODE:-202}"
 
-# Single-peer invariant (explicit, before trusting `reason`).
-ROSTER_COUNT=$(printf '%s' "$WEB_HOST_PRIVATE_IPS" | tr ',' '\n' | grep -cE '10\.0\.1\.[0-9]+')
+# Single-peer invariant (explicit, before trusting `reason`). `grep -c` exits 1 on
+# a zero count, which under `set -e`+`pipefail` would abort the assignment BEFORE
+# the tailored error below — `|| true` lets ROSTER_COUNT=0 reach the fail-loud guard.
+ROSTER_COUNT=$(printf '%s' "$WEB_HOST_PRIVATE_IPS" | tr ',' '\n' | grep -cE '10\.0\.1\.[0-9]+' || true)
 if [[ "$ROSTER_COUNT" -ne 2 ]]; then
   echo "::error::web-2 verify assumes exactly one peer besides web-1 (reason==ok ⟹ web-2 accepted), but WEB_HOST_PRIVATE_IPS enumerates ${ROSTER_COUNT} hosts. With >1 peer, reason=ok no longer uniquely proves web-2 accepted — teach this verify to read per-peer state before adding web-3."
   exit 1
@@ -111,12 +113,15 @@ _post_fanout() {
     return
   fi
   local sig; sig=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+  # `|| echo "000"` mirrors _get_status: a curl transport failure (timeout/DNS/
+  # connection) surfaces as a non-202 "000" through the loud non-202 handler in
+  # _trigger_fanout rather than aborting under `set -e` before the recovery message.
   curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST \
     -H "Content-Type: application/json" \
     -H "X-Signature-256: sha256=$sig" \
     -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
     -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-    -d "$payload" "$DEPLOY_URL"
+    -d "$payload" "$DEPLOY_URL" || echo "000"
 }
 
 # Emit the tag actually POSTed so the warm_standby `Warm-standby summary` step can

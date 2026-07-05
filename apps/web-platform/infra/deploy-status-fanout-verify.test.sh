@@ -43,9 +43,13 @@ done
 
 # ── Test harness ────────────────────────────────────────────────────────────
 # Inputs via env:
-#   SEQ         space-separated fixture basenames (no .json); the popper clamps to
-#               the LAST body once the sequence is exhausted (a real static host
-#               re-emits the same deploy-status until a re-swap).
+#   SEQ         space-separated fixture basenames (no .json). Position contract:
+#               SEQ[0] = the baseline read, SEQ[1] = the trigger's internal
+#               _get_status re-read (tag-downgrade guard), SEQ[2..] = the verify
+#               polls — so every SEQ pads two leading settled bodies before the
+#               first verify body. The popper clamps to the LAST body once the
+#               sequence is exhausted (a real static host re-emits the same
+#               deploy-status until a re-swap).
 #   WINDOW      FRESH_BOOT_WINDOW_S (default 0 → retry fires on the first degraded)
 #   RETRY_MAX   DEGRADED_RETRY_MAX (default 1)
 #   ROSTER      WEB_HOST_PRIVATE_IPS (default the 2-host single-peer roster)
@@ -119,6 +123,9 @@ if [ "$RC" -eq 0 ]; then pass; else fail "AC1: degraded→degraded→ok should e
 SEQ="settled-v1 settled-v1 degraded-v1-s200 settled-v1 degraded-v1-s400" WINDOW=0 MAXATT=8 run_verify
 if [ "$RC" -eq 1 ]; then pass; else fail "AC2: all-degraded should exit 1, got rc=$RC"; fi
 if printf '%s' "$OUT" | grep -q '::error::'; then pass; else fail "AC2: terminal path must print an ::error:: recovery message. OUT: $OUT"; fi
+# Positively prove the retry FIRED before terminal exhaustion (not a retry-never-fired
+# abort) — the discriminating signal is POSTS==2, independent of message wording.
+if [ "$POSTS" -eq 2 ]; then pass; else fail "AC2: must retry once (POSTS==2) before terminal RED, got $POSTS"; fi
 
 # ── AC3: web-1 re-swap bound — exactly 2 fan-out POSTs (initial + 1 retry) ──
 SEQ="settled-v1 settled-v1 degraded-v1-s200 settled-v1 degraded-v1-s200 ok-v1-s300" WINDOW=0 MAXATT=8 run_verify
@@ -161,6 +168,13 @@ SEQ="settled-v1" ROSTER="10.0.1.10" MAXATT=3 run_verify
 if [ "$RC" -eq 1 ]; then pass; else fail "AC4-roster: single-host roster should exit 1, got rc=$RC"; fi
 if printf '%s' "$OUT" | grep -q 'exactly one peer'; then pass; else fail "AC4-roster: must print the single-peer guard error. OUT: $OUT"; fi
 
+# ── AC4: roster invariant — ZERO-count roster must FAIL LOUD, not abort silently ──
+# `grep -c` exits 1 on zero matches; without the `|| true` guard the ROSTER_COUNT
+# assignment aborts under set -e BEFORE the tailored error (silent rc=1).
+SEQ="settled-v1" ROSTER="garbage,nothing" MAXATT=3 run_verify
+if [ "$RC" -eq 1 ]; then pass; else fail "AC4-roster0: zero-count roster should exit 1, got rc=$RC"; fi
+if printf '%s' "$OUT" | grep -q 'exactly one peer'; then pass; else fail "AC4-roster0: zero-count roster must print the single-peer guard error (not abort silently). OUT: $OUT"; fi
+
 # ── AC4: staleness — a stale (start_ts <= baseline) 'ok' is NOT accepted as success ──
 SEQ="settled-v1 settled-v1 stale-ok-s50" WINDOW=0 MAXATT=5 run_verify
 if [ "$RC" -eq 1 ]; then pass; else fail "AC4-staleness: a stale ok must NOT be accepted (should exit 1 on budget), got rc=$RC"; fi
@@ -168,6 +182,16 @@ if [ "$RC" -eq 1 ]; then pass; else fail "AC4-staleness: a stale ok must NOT be 
 # ── AC4: full-anchor tag validation — a non-^v[0-9] current tag → exit 1 ──
 SEQ="bad-tag" MAXATT=3 run_verify
 if [ "$RC" -eq 1 ]; then pass; else fail "AC4-tag: an invalid baseline tag ('latest') should exit 1, got rc=$RC"; fi
+
+# ── AC4: fail-loud on an UNEXPECTED reason (exit_code=0, reason ∉ {ok, *_degraded}) ──
+SEQ="settled-v1 settled-v1 unexpected-reason-s300" WINDOW=0 MAXATT=5 run_verify
+if [ "$RC" -eq 1 ]; then pass; else fail "AC4-unexpected: an unexpected reason should terminal-exit 1, got rc=$RC"; fi
+if printf '%s' "$OUT" | grep -q 'unexpected reason'; then pass; else fail "AC4-unexpected: must print the unexpected-reason ::error::. OUT: $OUT"; fi
+
+# ── AC4: fail-loud on a genuine deploy failure (exit_code=1, reason≠lock_contention) ──
+SEQ="settled-v1 settled-v1 deploy-failed-s300" WINDOW=0 MAXATT=5 run_verify
+if [ "$RC" -eq 1 ]; then pass; else fail "AC4-failed: a non-lock_contention exit_code=1 should terminal-exit 1, got rc=$RC"; fi
+if printf '%s' "$OUT" | grep -q 'deploy fan-out failed'; then pass; else fail "AC4-failed: must print the deploy-failed ::error::. OUT: $OUT"; fi
 
 # ── AC6: emits deployed_tag=<tag> to $GITHUB_OUTPUT for the warm-standby summary ──
 SEQ="settled-v1 settled-v1 ok-v1-s300" WINDOW=0 MAXATT=5 run_verify
