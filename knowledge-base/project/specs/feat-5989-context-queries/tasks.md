@@ -47,7 +47,7 @@ Design (post 6-agent plan-review): **pointer-only** lazy `PostToolUse:Skill` hoo
 ## Phase 6 — Verify
 - [x] 6.1 `skill-context-queries.test.sh` green; `components.test.ts` green; C4 tests green.
 - [x] 6.2 `skill-security-scan` on the hook → LOW-RISK/REVIEW (TR5).
-- [ ] 6.3 PR review routed through `security-sentinel` + `observability-coverage-reviewer` (Phase 4 handoff).
+- [x] 6.3 PR review routed through `security-sentinel` + `observability-coverage-reviewer` (Phase 4 handoff).
 
 ## Ship (deferrals to file)
 - [ ] Web-platform in-process parity issue (with user-facing symptom + 0.3 finding).
