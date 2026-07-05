@@ -73,21 +73,31 @@ export async function fetchInboxSources(
     };
   }
 
-  // Default view — email: pinned statutory (UNCAPPED) + capped rest.
+  // Default view — email: pinned statutory (UNCAPPED) + capped non-statutory
+  // rest. CRITICAL (pin-all-statutory, ADR-085): the unified inbox pins EVERY
+  // non-archived statutory row — including status='acknowledged' — so the pinned
+  // query must be uncapped for ALL non-archived statuses, NOT just status='new'.
+  // (This intentionally DIVERGES from the legacy /api/inbox/emails route, which
+  // pins only unacknowledged statutory: acknowledgment there unpins the row. If
+  // this pinned query kept `.eq("status","new")`, an acknowledged statutory clock
+  // would fall into the capped rest tail and could be dropped past LIST_LIMIT —
+  // silently hiding a running statutory clock, the exact invariant this feature
+  // exists to protect.)
   const pinnedEmailQuery = client
     .from("email_triage_items")
     .select(EMAIL_COLUMNS)
     .not("statutory_class", "is", null)
-    .eq("status", "new")
+    .neq("status", "archived")
     .order("received_at", { ascending: false });
 
+  // The rest is now NON-statutory only (all non-archived statutory is pinned
+  // above), so the exclusion is simply `statutory_class IS NULL`. Still excludes
+  // unfinalized stubs (mail_class NULL AND statutory_class NULL) and probes.
   const restEmailQuery = client
     .from("email_triage_items")
     .select(EMAIL_COLUMNS)
-    .or("mail_class.not.is.null,statutory_class.not.is.null")
-    // Exclude the pinned shape (NOT (statutory AND new), De Morgan) so a row
-    // never appears twice.
-    .or("statutory_class.is.null,status.neq.new")
+    .is("statutory_class", null)
+    .not("mail_class", "is", null)
     .or("mail_class.is.null,mail_class.neq.probe")
     .neq("status", "archived")
     .order("received_at", { ascending: false })

@@ -9,6 +9,15 @@ import path from "node:path";
 // directly and cannot catch this — a source grep is the merge gate.
 
 const INBOX_API_DIR = path.join(__dirname, "../app/api/inbox");
+// The shared read modules the route + the inbox_list agent tool BOTH flow
+// through — `fetchInboxSources` runs the actual DB reads, so a service-client
+// swap there is the highest-value RLS bypass and lives OUTSIDE app/api/inbox
+// (review: security-sentinel + code-quality P2).
+const SERVER_MODULES = [
+  "../server/inbox-sources.ts",
+  "../server/inbox-tools.ts",
+  "../server/inbox-state-handler.ts",
+].map((p) => path.join(__dirname, p));
 
 function walk(dir: string): string[] {
   const out: string[] = [];
@@ -21,7 +30,7 @@ function walk(dir: string): string[] {
 }
 
 describe("inbox read routes never use the service client (RLS bypass gate)", () => {
-  const files = walk(INBOX_API_DIR);
+  const files = [...walk(INBOX_API_DIR), ...SERVER_MODULES];
 
   it("finds route files to gate (non-vacuous)", () => {
     expect(files.length).toBeGreaterThan(0);

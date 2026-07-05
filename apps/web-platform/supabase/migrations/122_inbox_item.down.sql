@@ -19,7 +19,6 @@ DROP FUNCTION IF EXISTS public.set_inbox_item_state(uuid, text);
 
 -- 3. Indexes (the table drop would cascade these; explicit per house style).
 DROP INDEX IF EXISTS public.inbox_item_dedup_key_uniq;
-DROP INDEX IF EXISTS public.inbox_item_workspace_created_idx;
 DROP INDEX IF EXISTS public.inbox_item_created_idx;
 
 -- 4. Table (drops the inbox_item_owner_select policy with it).

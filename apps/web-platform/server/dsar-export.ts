@@ -887,6 +887,30 @@ export async function exportSqlTable(
     });
   }
 
+  // -- inbox_item (operational-inbox notifications; migration 122) --
+  // Art. 15 ACCESS: `.eq("user_id", …)` returns the subject's TARGETED rows only
+  // (broadcast rows carry user_id NULL and are workspace-level, not personal).
+  // The row's created_at/read_at/acted_at/archived_at are the subject's
+  // notification-interaction history, held in no other allowlisted table. Art. 17
+  // erasure is via user_id ON DELETE CASCADE (no anonymise RPC).
+  {
+    const { data, error } = await service
+      .from("inbox_item")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`inbox_item read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "inbox_item", {
+      ownerField: "user_id",
+    });
+    results.push({
+      table: "inbox_item",
+      spec: DSAR_TABLE_ALLOWLIST.inbox_item,
+      rows,
+    });
+  }
+
   // -- outbound_sends (cold-outbound WORM audit; migration 104, #5325) --
   // Art. 15: the founder is entitled to a copy of every cold send the platform
   // recorded on their behalf. Recipient + body are persisted as a keyed HMAC /

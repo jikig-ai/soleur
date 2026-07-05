@@ -31,7 +31,7 @@ import { sendToClient } from "./ws-handler";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import {
   notifyOfflineUser,
-  notifyInboxItem,
+  notifyTaskCompleted,
   type NotificationPayload,
 } from "./notifications";
 import * as Sentry from "@sentry/nextjs";
@@ -2400,17 +2400,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // durable "your {leader} finished" item + push, targeted to the run's
           // user. Only on a real completion (assistant output persisted). Title
           // is the static leader title (server-generated — never agent output).
-          // Deep-linked to the conversation; source_ref carries ids only. Fire-
-          // and-forget (notifyInboxItem never throws + is self-mirroring).
+          // Shared with the cc-soleur-go terminal via notifyTaskCompleted so the
+          // two turn-boundary lineages cannot drift (arch review P1). Fire-and-
+          // forget (never throws + self-mirroring).
           if (assistantPersisted) {
-            void notifyInboxItem({
-              workspaceId: activeWorkspaceId,
+            void notifyTaskCompleted({
               userId,
-              severity: "info",
-              source: "task_completed",
+              conversationId,
+              workspaceId: activeWorkspaceId,
               title: `${leader.title} finished`,
-              sourceRef: { conversationId },
-              deepLinkPath: `/dashboard/chat/${conversationId}`,
             });
           }
 

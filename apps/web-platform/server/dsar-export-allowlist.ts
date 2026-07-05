@@ -305,6 +305,19 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // (user_id FK is ON DELETE RESTRICT; anonymise runs before auth-delete).
   email_triage_items: { ownerField: "user_id", article: "15+20" },
 
+  // feat-severity-ranked-inbox (migration 122) — operational-inbox notifications.
+  // Art. 15 ACCESS (not 20 portability): the `title`/`source_ref` are
+  // server-generated pointers, but the row's `created_at`/`read_at`/`acted_at`/
+  // `archived_at` are the subject's notification-INTERACTION history (when they
+  // were notified, when they acted) — controller-generated personal data held in
+  // NO other allowlisted table (the referenced conversations/messages carry
+  // message timestamps, not the notification's read/acted timestamps). Same Art.
+  // 15 basis the sibling `email_triage_items` is allowlisted on. `ownerField =
+  // user_id` naturally scopes the export to TARGETED rows and excludes
+  // `user_id IS NULL` broadcasts (workspace-level, not personal to a subject).
+  // Art. 17 erasure via user_id ON DELETE CASCADE (no anonymise RPC needed).
+  inbox_item: { ownerField: "user_id", article: "15" },
+
 };
 
 /**
@@ -324,22 +337,6 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "PII-segregated audit; subject to Art. 17 anonymisation cascade " +
     "(account-delete.ts), not Art. 15 export. The user-readable jobs " +
     "row in dsar_export_jobs already covers their own request history.",
-
-  // feat-severity-ranked-inbox (migration 122) — operational-inbox
-  // notifications. EXCLUDED as derivative content-minimized data: every row is
-  // a server-GENERATED notification pointer (title like "{Leader} finished" /
-  // "From Soleur: …" + a source_ref holding ONLY ids). It holds no
-  // user-provided content of its own — the referenced personal data is exported
-  // via its own allowlisted table (conversations/messages via source_ref
-  // conversationId; email items via email_triage_items). Targeted rows (user_id
-  // set) merely record "you were notified about already-exported item X";
-  // broadcast rows (user_id NULL) are workspace-level, not personal to a subject.
-  // 90d operational retention; Art. 17 erasure via user_id ON DELETE CASCADE.
-  inbox_item:
-    "Server-generated operational-notification pointers (title + source_ref " +
-    "ids only); no user-provided content. The referenced personal data is " +
-    "exported via its own allowlisted table (conversations/messages, " +
-    "email_triage_items). Content-minimized, 90d retention, CASCADE erasure.",
 
   // Operational state (no personal data).
   user_concurrency_slots:

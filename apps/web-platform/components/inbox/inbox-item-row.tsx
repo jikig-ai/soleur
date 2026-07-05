@@ -85,7 +85,21 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
   }
 
   const navigate = () => {
-    if (navigable && href) router.push(href);
+    if (!navigable || !href) return;
+    // Opening an unread item clears its FYI gold-dot (marks read). Fire-and-
+    // forget + idempotent (read_at is set-once in the RPC); guarded on unread so
+    // a re-open is not a needless write. onChanged refreshes the shared SWR feed
+    // (list + nav badge) so the dot clears immediately.
+    if (item.read_at === null && !isArchived) {
+      void fetch(`/api/inbox/${item.id}/state`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "read" }),
+      })
+        .then(() => onChanged?.())
+        .catch(() => {});
+    }
+    router.push(href);
   };
 
   return (

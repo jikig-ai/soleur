@@ -225,7 +225,7 @@ import {
 } from "./permission-callback";
 import { abortableReviewGate, type AgentSession } from "./review-gate";
 import { sendToClient as defaultSendToClient } from "./ws-handler";
-import { notifyOfflineUser } from "./notifications";
+import { notifyOfflineUser, notifyTaskCompleted } from "./notifications";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("cc-dispatcher");
@@ -3809,6 +3809,24 @@ export async function dispatchSoleurGo(
         { kind: "complete", usage: consumed.usage },
         consumed.text,
       );
+      // task_completed inbox nudge (feat-severity-ranked-inbox #6007) — the
+      // cc-soleur-go turn-boundary analog of the legacy startAgentSession emit
+      // (arch review P1: this is the DOMINANT production path since #3270). Only
+      // on a genuine text completion (consumed !== null; the abort branch never
+      // reaches here). The cc path is concierge-routed (CC_ROUTER_LEADER_ID), so
+      // the title is a fixed server-generated string, not a domain-leader title.
+      // activeWorkspaceId = basename(workspacePath) by construction (ADR-044,
+      // mirrors :3712). Shared helper so the two lineages cannot drift. Guarded
+      // on workspacePath: an unresolved workspace can't attribute a workspace-
+      // grain row, so skip the nudge rather than emit an unscoped one.
+      if (workspacePath) {
+        void notifyTaskCompleted({
+          userId,
+          conversationId,
+          workspaceId: path.basename(workspacePath),
+          title: "Soleur finished your request",
+        });
+      }
       // Per-turn boundary → terminal stream event for the cc_router bubble.
       // Without this, the client reducer keeps the bubble in
       // `state: "streaming"` (raw `whitespace-pre-wrap`), so markdown

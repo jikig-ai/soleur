@@ -717,11 +717,31 @@ export async function notifyInboxItem(opts: {
   title: string;
   /** ids only (e.g. { conversationId }). The deep link is built from these. */
   sourceRef?: Record<string, string> | null;
-  /** Idempotency key (ADR-035). Omit for naturally-once emits. */
+  /**
+   * Idempotency key (ADR-035). Omit for naturally-once emits. NOTE the dedup
+   * index is `(workspace_id, dedup_key)` — workspace-scoped, NOT per-recipient.
+   * A future TARGETED emitter that fans one event out to multiple recipients
+   * with a SHARED dedup_key would suppress all but the first recipient's row
+   * (23505 → silent skip). Such an emitter must namespace the key per user_id.
+   */
   dedupKey?: string | null;
   /** Same-origin relative deep-link path built from sourceRef ids. */
   deepLinkPath: string;
 }): Promise<void> {
+  // Reject a non-relative / protocol-relative deep link at the emit boundary —
+  // the email CTA (sendInboxItemEmailNotification) prefixes appUrl() without an
+  // origin re-check (unlike sw.js on click), so a `//evil.host` or absolute URL
+  // must never reach a co-Owner-visible email/push. Server-generated ids can't
+  // produce these today; this fails a future bad caller closed.
+  if (!opts.deepLinkPath.startsWith("/") || opts.deepLinkPath.startsWith("//")) {
+    reportSilentFallback(null, {
+      feature: "inbox",
+      op: "inbox-item-bad-deeplink",
+      message: "notifyInboxItem rejected a non-relative deepLinkPath",
+      extra: { workspaceId: opts.workspaceId, source: opts.source },
+    });
+    return;
+  }
   // action_required failures (insert OR dispatch) key the Sentry alert on this op.
   const failOp =
     opts.severity === "action_required"
@@ -800,6 +820,35 @@ export async function notifyInboxItem(opts: {
       extra: { workspaceId: opts.workspaceId },
     });
   }
+}
+
+/**
+ * Shared `task_completed` inbox emit (feat-severity-ranked-inbox #6007). The
+ * SINGLE seam both turn-boundary terminals call so the two agent-run lineages
+ * (legacy `startAgentSession` + cc-soleur-go `cc-dispatcher`) cannot drift — a
+ * new emit wired into only one path is the exact "must cover both turn
+ * boundaries" defect class. Fire-and-forget (notifyInboxItem never throws).
+ *
+ * `title` is server-generated (a static leader title or a fixed concierge
+ * string) — NEVER agent output. No dedupKey: each completed turn is a distinct
+ * event, and one durable row per completion is the intended semantic (the 90d
+ * retention sweep bounds accumulation).
+ */
+export async function notifyTaskCompleted(opts: {
+  userId: string;
+  conversationId: string;
+  workspaceId: string;
+  title: string;
+}): Promise<void> {
+  await notifyInboxItem({
+    workspaceId: opts.workspaceId,
+    userId: opts.userId,
+    severity: "info",
+    source: "task_completed",
+    title: opts.title,
+    sourceRef: { conversationId: opts.conversationId },
+    deepLinkPath: `/dashboard/chat/${opts.conversationId}`,
+  });
 }
 
 // ---------------------------------------------------------------------------

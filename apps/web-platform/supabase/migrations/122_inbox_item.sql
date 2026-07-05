@@ -58,8 +58,8 @@ CREATE TABLE IF NOT EXISTS public.inbox_item (
   -- Operational data follows workspace lifecycle: CASCADE (NOT the mig-111
   -- statutory RESTRICT — that protected legal evidence, not operational noise).
   workspace_id uuid        NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
-  -- NULL = workspace-broadcast (visible to every Owner); set = personally
-  -- targeted (private to that recipient — see the RLS SELECT predicate).
+  -- NULL = a workspace-broadcast visible to every Owner; a set value = a
+  -- personally-targeted row, private to that recipient (RLS SELECT predicate).
   user_id      uuid        NULL REFERENCES public.users(id) ON DELETE CASCADE,
   severity     text        NOT NULL CHECK (severity IN ('action_required', 'attention', 'info')),
   -- v1-emittable set ONLY. #4672 (approval_required) / #4674 (autopilot_run)
@@ -107,12 +107,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS inbox_item_dedup_key_uniq
   ON public.inbox_item (workspace_id, dedup_key)
   WHERE dedup_key IS NOT NULL;
 
--- Workspace read index for the merge — the non-archived feed by recency.
-CREATE INDEX IF NOT EXISTS inbox_item_workspace_created_idx
-  ON public.inbox_item (workspace_id, created_at DESC)
-  WHERE status <> 'archived';
-
--- Retention sweep support: age scan across all rows.
+-- Merge read + retention age-scan support. The unified read (GET /api/inbox)
+-- is RLS-scoped (no workspace_id constant in the query), ordered `created_at
+-- DESC` — so a workspace-LEADING index can't serve the ORDER BY and would be
+-- write-only overhead. A single created_at index serves both the merge's
+-- backward scan and the retention sweep; founder-scale volume makes the
+-- archived-row filter cost negligible (review: performance-oracle P3).
 CREATE INDEX IF NOT EXISTS inbox_item_created_idx
   ON public.inbox_item (created_at);
 

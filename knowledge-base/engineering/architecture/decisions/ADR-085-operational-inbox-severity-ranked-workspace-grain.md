@@ -4,7 +4,7 @@
 - **Date:** 2026-07-04
 - **Issue:** [#6007](https://github.com/jikigai/soleur/issues/6007) (Multica-adaptation epic [#6006](https://github.com/jikigai/soleur/issues/6006), child 1)
 - **Relationship to ADR-066:** extends the workspace-grain, Owner-shared inbox posture established by [ADR-066](./ADR-066-email-triage-inbox-workspace-grain.md) for email-triage. This ADR does **not** reverse it; the new store mirrors it exactly (workspace-grain, Owner-shared reads, RLS-only, user-context client in the read route).
-- **Relationship to the messages multi-source substrate (ADR-035):** the `messages.source_ref` composite-unique dedup ADR ([file `ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md`](./ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md), frontmatter `adr: 035`) established the multi-source feed over `messages` + the plain-insert-catch-`23505` idiom this inbox reuses. This ADR records **deliberate co-existence** for v1 (a different substrate — `inbox_item`, not `messages`); `deriveSeverity` is the shared severity contract that substrate can later adopt, not a silent second engine.
+- **Relationship to the messages multi-source substrate (ADR-035):** the `messages.source_ref` composite-unique dedup ADR ([file `ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md`](./ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md), frontmatter `adr: 035`) established the multi-source feed over `messages` + the plain-insert-catch-`23505` idiom this inbox reuses. This ADR records **deliberate co-existence** for v1 (a different substrate — `inbox_item`, not `messages`); `deriveEmailSeverity`/`mergeAndRank` is the shared severity contract that substrate can later adopt, not a silent second engine.
 
 ## Context
 
@@ -32,7 +32,7 @@ Two questions drove the design:
 
 ## Semantics
 
-- **Founder-scale, no cursor pagination.** The merge does a bounded fetch per source (uncapped non-archived statutory + capped `inbox_item`/email tails), runs `deriveSeverity` in app memory, and stable-sorts — SQL cannot sort on a wall-clock-derived severity. The GOOD TO KNOW tail is what grows; this is an explicit scale assumption for v1.
+- **Founder-scale, no cursor pagination.** The merge does a bounded fetch per source (uncapped non-archived statutory + capped `inbox_item`/email tails), runs `deriveEmailSeverity`/`mergeAndRank` in app memory, and stable-sorts — SQL cannot sort on a wall-clock-derived severity. The GOOD TO KNOW tail is what grows; this is an explicit scale assumption for v1.
 - **Content-minimization (GDPR).** `inbox_item` stores a server-generated `title` + `source_ref` ids + severity + source — NEVER agent output / message bodies / email content. A co-Owner-visible row carries nothing the founder wouldn't want a co-Owner to see.
 - **RLS is load-bearing.** Targeted rows (`user_id` set) are private to their recipient; broadcasts (`user_id NULL`) are visible to workspace Owners. The read route uses the user-context client (never `createServiceClient` — the ADR-066 404-and-bypass trap), enforced by a source-grep gate.
 - **Single global `acted_at`.** v1 stores read/act/archive state inline (no per-Owner recipient-state join — deferred to #4672, where broadcast `approval_required` is the first source that needs independent per-Owner state). One approver resolves for the workspace.

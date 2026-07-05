@@ -31,7 +31,7 @@ export interface InboxItemRowData {
   source: InboxItemSource;
   title: string;
   source_ref: Record<string, string> | null;
-  status: string;
+  status: "unread" | "read" | "archived";
   created_at: string;
   read_at: string | null;
   acted_at: string | null;
@@ -103,9 +103,10 @@ export function buildInboxDeepLink(
     }
     case "system": {
       // A system item may carry an explicit same-origin relative path; else it
-      // lands on the dashboard.
+      // lands on the dashboard. Reject protocol-relative `//host` (open-redirect
+      // via router.push) — `startsWith("/")` alone would accept it.
       const path = sourceRef?.path;
-      if (path && path.startsWith("/")) return path;
+      if (path && path.startsWith("/") && !path.startsWith("//")) return path;
       return "/dashboard";
     }
     default:

@@ -54,10 +54,10 @@ export async function clearSwrCache(mutate: ScopedMutator): Promise<void> {
  * used to gate a request until a precondition (e.g. a contextPath) is known.
  */
 export const swrKeys = {
-  inboxEmails: (status: string) => ["/api/inbox/emails", status] as const,
   // Unified severity-ranked inbox (feat-severity-ranked-inbox #6007). The
   // surface + the nav badge share this key so one request feeds both (free
-  // dedup) and they can never disagree.
+  // dedup) and they can never disagree. (The former `inboxEmails` key was
+  // removed once both consumers migrated here — no remaining consumer.)
   inbox: (status: string) => ["/api/inbox", status] as const,
   kbTree: () => ["/api/kb/tree"] as const,
   chatThreadInfo: (contextPath: string | null) =>
