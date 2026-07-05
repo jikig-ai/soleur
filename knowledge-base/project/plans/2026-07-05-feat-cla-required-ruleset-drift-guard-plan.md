@@ -501,9 +501,14 @@ deferred + tracked — Phase 6.1.)
 ### Post-merge (operator / automated)
 
 - [ ] Next daily `cron-ruleset-bypass-audit` run (or manual trigger
-  `cron/ruleset-bypass-audit.manual-trigger`) completes green against the live CLA
-  ruleset (no false-positive CLA drift issue). Automatable via the manual-trigger
-  event — bake into `/soleur:ship` post-merge verification, not an operator step.
+  `cron/ruleset-bypass-audit.manual-trigger`) audits the live CLA ruleset without a
+  GUARD FAULT (token scope / canonical readable). **NOTE (DC-3):** the run will NOT
+  be drift-green on day one — a review-time live probe found the live CLA ruleset is
+  missing `cla-evidence` (a pre-existing SSOT drift), so the first run correctly
+  files a TRUE-POSITIVE `required_status_checks dropped a gate` issue. That is the
+  feature working, not a false positive. Operator action per DC-3: reconcile live
+  (apply `create-cla-required-ruleset.sh` after confirming `cla-evidence` posts
+  reliably) or accept the audit's tracking issue.
 
 ## Domain Review
 

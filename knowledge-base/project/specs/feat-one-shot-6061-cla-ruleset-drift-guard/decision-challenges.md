@@ -55,3 +55,38 @@ Terraform-ifying the CLA ruleset remains deferred (tracked, Phase 6.1).
 **Operator override path:** if the operator wants bypass_actors deferred, the plan
 must (a) keep a bypass-tolerant CLA fetch honest about token scope and (b) NOT
 declare the parity-test gap "resolved" (bypass would remain unguarded).
+
+## DC-3 — Live CLA ruleset is MISSING `cla-evidence` (pre-existing drift the audit correctly flags on first run) — OPERATOR ACTION
+
+**Discovered at review time** via a live probe (`gh api repos/jikig-ai/soleur/rulesets/13304872`),
+per `hr-no-dashboard-eyeball-pull-data-yourself`. The live CLA Required ruleset
+currently requires **only `cla-check`** — `cla-evidence` is NOT a required status
+check on it. But `cla-evidence` was deliberately added to the SSOT
+(`scripts/create-cla-required-ruleset.sh` + `scripts/required-checks.txt`) by PR
+#3201 (the WORM-timestamped evidence layer), and `.github/workflows/cla-evidence.yml`
+is an active workflow that posts a `cla-evidence` Check Run. So the **live ruleset
+has drifted from the SSOT** — a pre-existing infra gap, NOT introduced by this PR.
+(The unrelated todo-027 `Integration:262318` unknown-bypass-actor is already
+resolved: live now shows `Integration:1236702`, matching the canonical.)
+
+**Consequence for this PR (by design, not a bug):** the canonical correctly mirrors
+the SSOT (both contexts), enforced by `T-cla-1`. So the audit's **first run will
+file a TRUE-POSITIVE** `required_status_checks dropped a gate` critical drift issue
+for the missing `cla-evidence`. This contradicts the plan's original post-merge AC
+("first run green, no false-positive") — that AC's premise (live == SSOT) was
+wrong. This is the feature working: the audit caught a real drift on day one.
+
+**Deliberately NOT done in this PR:**
+- Did NOT mutate the SSOT to match live (removing `cla-evidence` would reverse
+  #3201's deliberate decision and break `T-cla-1`/`Test 7`).
+- Did NOT run `create-cla-required-ruleset.sh` against production to add
+  `cla-evidence` to the live ruleset — that is a production branch-protection
+  write that could **block all merges** if `cla-evidence` is not reliably posted
+  on every PR, and is an operator/CTO call, not a drift-guard PR side effect.
+
+**Recommended operator action (default):** either (a) reconcile live by applying
+`scripts/create-cla-required-ruleset.sh` **after** confirming `cla-evidence` posts
+reliably on real PRs (closes the IP-provenance gap the evidence layer was built
+for), OR (b) accept the audit's first-run drift issue as the tracking signal and
+reconcile when convenient. Both are legitimate; the audit keeps flagging until
+live == SSOT.
