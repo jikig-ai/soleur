@@ -265,75 +265,75 @@ Load-bearing subtleties (each an AC below):
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (retry, unit):** a fixture sequence `degraded → degraded → ok` (start_ts
+- [x] **AC1 (retry, unit):** a fixture sequence `degraded → degraded → ok` (start_ts
   advancing) drives `deploy-status-fanout-verify.sh` to `exit 0` — asserts it RETRIES
   rather than aborting on the first degraded. Verified by the new
   `apps/web-platform/infra/deploy-status-fanout-verify.test.sh` with the network removed
   from the assertion path (curl/status stubbed via an injectable status source + POST sink;
   see Test Strategy). RED-proof: with the retry branch reverted, this fixture flips to `exit 1`.
-- [ ] **AC2 (terminal on budget, unit):** an all-`degraded` fixture (never `ok`) drives the
+- [x] **AC2 (terminal on budget, unit):** an all-`degraded` fixture (never `ok`) drives the
   script to terminal `exit 1` with the `::error::` recovery message — NO green-on-timeout.
-- [ ] **AC3 (web-1 re-swap bound, unit):** over an all-degraded fixture (with a small
+- [x] **AC3 (web-1 re-swap bound, unit):** over an all-degraded fixture (with a small
   `FRESH_BOOT_WINDOW_S` so the retry fires quickly in-test), the POST sink records **exactly
   2** fan-out POSTs (initial + 1) — `DEGRADED_RETRY_MAX=1` caps the live-origin churn (the
   secondary-finding 521 blast radius).
-- [ ] **AC3b (single retry gated on boot window, unit):** with `FRESH_BOOT_WINDOW_S` set
+- [x] **AC3b (single retry gated on boot window, unit):** with `FRESH_BOOT_WINDOW_S` set
   large, a `degraded` completion does NOT trigger a re-POST before the window elapses (the
   POST sink shows only the initial POST until the window passes).
-- [ ] **AC3c (lock_contention retryable, unit):** a fixture emitting `exit_code=1,
+- [x] **AC3c (lock_contention retryable, unit):** a fixture emitting `exit_code=1,
   reason=lock_contention` then later `ok` drives `exit 0` — lock_contention is treated as
   retryable, NOT terminal.
-- [ ] **AC3d (no baseline advance / retried-set, unit — P0 regression guard):** a fixture
+- [x] **AC3d (no baseline advance / retried-set, unit — P0 regression guard):** a fixture
   emitting the SAME static `start_ts` degraded completion across MANY polls (a real unbound
   fresh boot) drives exactly one re-POST once `FRESH_BOOT_WINDOW_S` elapses — NOT zero (the
   P0 both plan-review agents caught: marking `retried`/`consumed` on first sight makes the
   retry unreachable). Fixture holds `start_ts` constant across the degraded polls.
-- [ ] **AC3e (DEPLOY_TAG reassigned across retrigger, unit):** a fixture where a NEWER tag
+- [x] **AC3e (DEPLOY_TAG reassigned across retrigger, unit):** a fixture where a NEWER tag
   lands during the wait and the eventual `ok` reports the new tag drives `exit 0` — proves
   `_retrigger_fanout` rebinds `DEPLOY_TAG` so a healthy web-2 at the advanced tag is not
   RED'd on a permanent `TAG!=DEPLOY_TAG` mismatch (spec-flow P1).
-- [ ] **AC3f (retrigger non-202 is terminal, unit):** a fixture where the re-POST returns
+- [x] **AC3f (retrigger non-202 is terminal, unit):** a fixture where the re-POST returns
   403/500 drives terminal `exit 1` with the `_recovery_msg` (spec-flow P1 — the non-202
   path must not be silently absorbed into the budget-exhaustion message).
-- [ ] **AC4 (invariants preserved, unit):** `ROSTER_COUNT!=2` → `exit 1`; a completion with
+- [x] **AC4 (invariants preserved, unit):** `ROSTER_COUNT!=2` → `exit 1`; a completion with
   `start_ts <= PRE_START_TS` (original baseline) is ignored (staleness); a non-`^v[0-9]…$`
   tag → `exit 1` (full-anchor). Each asserted by a dedicated fixture.
-- [ ] **AC5 (warm_standby migrated):** the `warm_standby` job block of
+- [x] **AC5 (warm_standby migrated):** the `warm_standby` job block of
   `apply-web-platform-infra.yml` contains `deploy-status-fanout-verify.sh` and NO inline
   verify poll — verified by `bash scripts/followthroughs/warm-standby-verify-dedup-6030.sh`
   exiting 0 (this is the #6040 auto-close probe).
-- [ ] **AC5b (concrete poll budget — no "re-measure later", arch+spec-flow P1):** the
+- [x] **AC5b (concrete poll budget — no "re-measure later", arch+spec-flow P1):** the
   `web_2_recreate` job env sets `STATUS_POLL_MAX_ATTEMPTS` to a concrete value whose product
   with `STATUS_POLL_INTERVAL_S` ≥ `FRESH_BOOT_WINDOW_S` (600) + one realistic canary/swap
   cycle (~180 s, no concurrent cron drain) + margin — e.g. **`120 × 15 = 1800 s`**. The value
   is set in the recreate job env ONLY, NOT the script default (protects warm_standby's 30-min
   timeout — spec-flow P2). Assert the arithmetic in a workflow comment.
-- [ ] **AC5c (timeout above budget + pathological-drain residual, user-impact P1/FINDING 3):**
+- [x] **AC5c (timeout above budget + pathological-drain residual, user-impact P1/FINDING 3):**
   the `web_2_recreate` `timeout-minutes` (in seconds) > baseline (~150 s) + `STATUS_POLL`
   budget (1800 s) + pre-verify steps (~600 s) — i.e. keep/raise above ~2550 s (45 min = 2700 s
   holds). Document the residual: a concurrent 70-min `CRON_DRAIN_TIMEOUT` on the re-POST's
   web-1 swap CANNOT fit any sane job timeout; that pathological case times out RED → operator
   idempotent re-dispatch (the recreate is operator-gated, so a heavy in-flight cron is avoidable).
-- [ ] **AC6 (summary output preserved):** the `Warm-standby summary` step reads
+- [x] **AC6 (summary output preserved):** the `Warm-standby summary` step reads
   `steps.verify.outputs.deployed_tag`; the shared script writes `deployed_tag=` to
   `$GITHUB_OUTPUT`. Verified by a unit fixture asserting the script emits the line when
   `GITHUB_OUTPUT` is set, and by `actionlint`/grep on the workflow (no dangling
   `steps.trigger.outputs.*` reference remains).
-- [ ] **AC7 (fan-out roster parity intact):** `bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh`
+- [x] **AC7 (fan-out roster parity intact):** `bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh`
   still passes and still finds exactly 2 `WEB_HOST_PRIVATE_IPS` copies in the apply workflow.
-- [ ] **AC8 (recreate still references the shared script):** `plugins/soleur/test/terraform-target-parity.test.ts`
+- [x] **AC8 (recreate still references the shared script):** `plugins/soleur/test/terraform-target-parity.test.ts`
   passes; extend it to also assert the `warm_standby` block references the shared script
   (lock in the migration so a future revert fails CI), OR document why the follow-through
   probe (AC5) is the sufficient guard.
-- [ ] **AC9 (workflow lint):** `actionlint .github/workflows/apply-web-platform-infra.yml`
+- [x] **AC9 (workflow lint):** `actionlint .github/workflows/apply-web-platform-infra.yml`
   clean; embedded `run:` snippets syntax-checked via `bash -c '<snippet>'` (never `bash -n`
   on the YAML).
-- [ ] **AC10 (script lint):** `shellcheck apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh`
+- [x] **AC10 (script lint):** `shellcheck apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh`
   and the new `.test.sh` clean (match sibling `.test.sh` conventions).
-- [ ] **AC11 (ADR amended):** ADR-068 carries an amendment documenting the in-verify
+- [x] **AC11 (ADR amended):** ADR-068 carries an amendment documenting the in-verify
   bounded degraded-retry semantics (the off-host verify auto-retries the fan-out within a
   bounded fresh-boot window instead of aborting on the first degraded); `Ref #6051`.
-- [ ] **AC12 (test registered):** the new `.test.sh` is registered in
+- [x] **AC12 (test registered):** the new `.test.sh` is registered in
   `.github/workflows/infra-validation.yml` (append a `run: bash …` step next to the
   sibling infra `.test.sh` registrations).
 
