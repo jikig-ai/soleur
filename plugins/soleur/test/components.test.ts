@@ -288,7 +288,7 @@ describe("Decision-principles taxonomy wiring", () => {
   const DOC_REL = "skills/brainstorm-techniques/references/decision-principles.md";
   // Every consumer must reference the doc; markdown-link form only (backtick refs
   // are separately forbidden by "No backtick file references in skills").
-  const CONSUMERS = ["brainstorm-techniques", "plan", "work", "ship"];
+  const CONSUMERS = ["brainstorm-techniques", "plan", "work", "ship", "plan-review"];
   const LINK_RE = /\]\([^)]*decision-principles\.md\)/;
 
   test("decision-principles.md exists", () => {

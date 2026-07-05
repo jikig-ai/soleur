@@ -664,19 +664,24 @@ Examples:
 
 ## Plan Review (Always Runs)
 
-After writing the plan file, automatically run `/plan_review <plan_file_path>` to get feedback from three specialized reviewers in parallel:
+After writing the plan file, automatically run `/plan_review <plan_file_path>` to get feedback from the reviewer panel in parallel:
 
-- **DHH Rails Reviewer** - Challenges overengineering, enforces simplicity
-- **Kieran Rails Reviewer** - Checks correctness, completeness, convention adherence
-- **Code Simplicity Reviewer** - Ensures YAGNI, flags unnecessary complexity
+- **Eng panel (always):** DHH Rails Reviewer (challenges overengineering), Kieran Rails Reviewer (correctness, convention), Code Simplicity Reviewer (YAGNI) — escalating to +architecture-strategist +spec-flow-analyzer at the single-user-incident threshold.
+- **Named CEO/design/devex panel (relevance-gated):** `cpo`/`cmo` (business), `ux-design-lead` (design), `cto` (devex) — spawned only when the plan is relevant to the lens, by an independent content scan (see `plan-review/SKILL.md`). Their findings are frequently **taste**, so `plan-review` tags each consolidated decision `decisionClass ∈ {mechanical, taste, user-challenge}` per [decision-principles.md](../brainstorm-techniques/references/decision-principles.md) (ADR-084).
 
-**After review completes:**
+**After review completes**, present the consolidated feedback (agreements first, then disagreements), then apply by class:
 
-1. Present consolidated feedback (agreements first, then disagreements)
-2. Ask: "Apply these changes?" (Yes / Partially / Skip)
-3. If Yes: apply all changes to the plan file
-4. If Partially: ask which changes to apply, then apply selected changes
-5. If Skip: continue unchanged
+1. **Mechanical** findings → auto-apply to the plan file (both modes). **Fail-closed default:** auto-apply *only* a decision **explicitly tagged `mechanical`**. Treat any decision that is **unclassified, ambiguous, or sourced from a named-panel (product/market/design/devex) finding** as **Taste** — surface it, never silently auto-apply. (The producer defaults named findings to Taste, but the consumer must not depend on producer-side tagging fidelity: an untagged decision on the prose path routes to surfacing, not to auto-apply.)
+2. **Taste / User-Challenge** findings →
+   - *Operator-attached* (real TTY): present at the "Apply these changes?" gate below (Yes / Partially / Skip); a **User-Challenge** uses the 5-line frame (the operator's stated direction is the default).
+   - *Headless* (reuse the mode predicate at [`plan/SKILL.md` §Product/UX Gate step 4b, ":330"] — `HEADLESS_MODE`, no-TTY, `/soleur:one-shot`, `--headless`, OR a plan-file-path arg): **do NOT pause.** Persist each Taste / User-Challenge to `knowledge-base/project/specs/<branch>/decision-challenges.md` (append), which `ship` Phase 6 renders into the PR body + files as an `action-required` issue. This converges with the Step 4.5 `decision-challenges.md` wiring (`:574`) onto one artifact.
+
+**Operator-attached apply gate** (Mechanical already applied above):
+
+1. Ask: "Apply these changes?" (Yes / Partially / Skip)
+2. If Yes: apply all remaining (Taste/User-Challenge) changes to the plan file
+3. If Partially: ask which changes to apply, then apply selected changes
+4. If Skip: continue unchanged
 
 **Why Plan Review runs BEFORE Save Tasks:** `tasks.md` is a derivative breakdown of the plan's phases. If review prompts material changes (phase cuts, deliverable rewrites), generating `tasks.md` beforehand would immediately go stale and require regeneration. Running review first → applying changes → then deriving tasks ensures `tasks.md` reflects the final plan as a single source of truth, and the commit below covers both files in one atomic history entry.
 
