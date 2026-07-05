@@ -142,6 +142,11 @@ function frontmatterDeclaresContextQueries(md: string): boolean {
  *   `knowledge-base/` share this one root — exactly like the CLI's repo root.
  */
 export function createContextQueriesHook(repoRoot: string): HookCallback {
+  // Promisify here (factory body, runs at registration) rather than at module
+  // top level: a top-level `promisify(execFile)` would crash any sibling test
+  // suite that mocks `node:child_process` spawn-only at import time. See
+  // knowledge-base/project/learnings/2026-06-10-bot-cron-safe-commit-substrate-symlink-removal.md.
+  const execFileAsync = promisify(execFile);
   return async (input) => {
     try {
       // Kill-switch (strict "1", read per-invocation — mirrors the shell `== "1"`).
@@ -180,7 +185,6 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
 
       const queries = parseContextQueries(md);
       const realKb = realpathOrNull(path.join(repoRoot, "knowledge-base"));
-      const execFileAsync = promisify(execFile);
 
       const resolved: string[] = [];
       const skipped: string[] = [];
