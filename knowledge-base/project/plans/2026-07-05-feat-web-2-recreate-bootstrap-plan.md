@@ -20,6 +20,37 @@ issues_context: [5887, 5933, 5921, 5911, 5950, 4419, 4420]
 
 🔧 **Infra / CI workflow change — destructive prod server RECREATE, guarded.**
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-05
+**Review agents:** CTO (endorsed — "proceed to /work"), spec-flow-analyzer (P0-2 guard hole),
+verify-the-negative + precedent-diff pass (Explore/sonnet). Gates run: 4.4 precedent-diff, 4.5
+network-outage, 4.55 downtime-cutover, 4.6 user-brand (pass), 4.7 observability (pass), 4.8
+PAT-shape (pass), 4.9 UI-wireframe (skip — no UI).
+
+### Key improvements folded
+1. **P0-2 guard hole closed** — replaced the delete-only counter with a POSITIVE-scope
+   `web2_out_of_scope_changes` (any create/update/delete outside the 3-address allow-set),
+   catching a web-1 in-place update rebooting via a non-`placement_group_id`/`server_type` attr.
+2. **Exact-equality jq membership** (`IN(.address; web2_allow[])`) — not `inside`/substring;
+   verified on jq 1.8.1 this session.
+3. **Digest resolution LIVE-CONFIRMED** — `imagetools inspect :latest --format
+   '{{.Manifest.Digest}}'` works no-auth on the public repo; the image is a multi-arch OCI index
+   (pin the index digest; assert amd64).
+4. **TOCTOU freeze of `$PINNED`**, dual-`stripJob` parity call-sites, coherence-abort runbook
+   remediation, `["forget"]`-semantics note, best-effort-Sentry caveat (CTO must-fixes 1-5).
+5. **Extracted + testable** guard function + preflight script (pre-merge tests incl. a
+   mismatching-digest fixture, a web-1-non-placement-update fixture, and a `[ack-destroy]`-no-bypass
+   case).
+
+### New considerations discovered
+- CI-side `-target` + `-replace` is **novel for this repo** (all prior `-replace` is
+  runbook-local, never CI); the new job reuses the `warm_standby` invocation form, adding only
+  `-replace` + the pinned `image_name` var.
+- The recreate is a **blue-green** operation on a non-serving host → documented `## Downtime &
+  Cutover` (zero user downtime, no maintenance window) and `## Network-Outage Deep-Dive` (apply
+  path is Hetzner-API + HTTPS, NOT SSH — no firewall/egress-IP dependency).
+
 ## Overview
 
 The first live ADR-068 warm-standby dispatch (2026-07-05) attached web-2's private-net
@@ -301,10 +332,16 @@ multi-image-pull is 10+ min; + fan-out + verify poll under this ceiling). Steps:
    immutable digest ONCE and freeze `$PINNED` (AC3b, no re-resolve):
    `DIGEST=$(docker buildx imagetools inspect ghcr.io/jikig-ai/soleur-web-platform:"$TAG" --format '{{.Manifest.Digest}}')`;
    assert `DIGEST` non-empty + `=~ ^sha256:[0-9a-f]{64}$`; `PINNED="ghcr.io/jikig-ai/soleur-web-platform@$DIGEST"`.
-   **Multi-arch (CTO must-fix 4, hard checkpoint):** `{{.Manifest.Digest}}` is the manifest-LIST
-   digest; confirm the runner + Hetzner host are both amd64 so `docker create`/`run` resolve the
-   same platform manifest (host-scripts are arch-independent text, so content coherence holds —
-   assert amd64 to keep the equivalence exact).
+   **LIVE-CONFIRMED (this session):** `docker buildx imagetools inspect
+   ghcr.io/jikig-ai/soleur-web-platform:latest --format '{{.Manifest.Digest}}'` returns a valid
+   `sha256:<64hex>` with **no auth** (public repo), and `{{.Manifest.MediaType}}` is
+   `application/vnd.oci.image.index.v1+json` → the image IS a multi-arch **OCI index**, so
+   `.Manifest.Digest` is the INDEX digest (CTO must-fix 4 / spec-flow P2-5 confirmed real). Pin
+   the index digest: `docker pull` on the amd64 host and `docker create` on the amd64 runner both
+   resolve it to the same amd64 manifest; host-scripts are arch-independent text so the recomputed
+   hash is identical. Assert both runner (`ubuntu-24.04`) and Hetzner host are amd64 to keep the
+   equivalence exact. The release pipeline also tags `:${{ github.sha }}` (immutable per-commit,
+   `reusable-release.yml:598`) — an alternative pin source if web-1's semver `.tag` is ever ambiguous.
 2. **Coherence preflight (LOAD-BEARING).** Compute the applied hash:
    `WANT=$(doppler run … -- terraform console <<< 'local.host_scripts_content_hash' | tr -d '"')`.
    docker-cp the digest's baked scripts and recompute the **boot-identical** hash
@@ -375,6 +412,53 @@ multi-image-pull is 10+ min; + fan-out + verify poll under this ceiling). Steps:
 
 ### Vendor-tier reality check
 - n/a (Hetzner/GHCR already provisioned; no new vendor tier).
+
+## Downtime & Cutover
+
+**Offline-inducing operation:** `terraform apply -replace='hcloud_server.web["web-2"]'` —
+Hetzner applies a server replace via destroy-then-create (power-off + delete + fresh create).
+**Surface affected:** `hcloud_server.web["web-2"]` ONLY — a **non-serving** host (weight-0,
+drained, empty `/workspaces`, in no Cloudflare LB pool, no ingress). web-1 (the sole live
+origin) is UNTOUCHED — not targeted, not a dependency of any web-2 address, and doubly guarded
+(`web2_out_of_scope_changes==0` + `reboot_updates==0` abort BEFORE apply if any web-1 change
+appears).
+
+**Zero-downtime by construction (the default, not a mitigation):** this IS the blue-green
+pattern — web-2 is the fresh/idle "green" host; recreating it takes nothing offline because it
+serves nothing. Ingress stays 100% on web-1 (the "blue" serving host) throughout. There is NO
+user-facing downtime. The warm-standby fan-out that follows redeploys web-1 at its CURRENT tag
+(idempotent zero-downtime redeploy, runbook §5 SE-3) — no new release, no weight/DNS change.
+
+**Residual downtime:** none. No maintenance window required (the runbook §Pre-flight already
+states the warm-standby bring-up "needs no booked window" — the recreate is the same
+non-serving-host class). The deferred web-1 reboot (runbook steps 7-10) is a SEPARATE, later,
+maintenance-window operation and is explicitly OUT OF SCOPE here.
+
+**Per-stage verification / rollback:** destroy-guard aborts pre-apply on any web-1 touch or
+web-2-volume destroy; attach-proof + off-host `reason==ok` verify post-apply; re-dispatch is
+idempotent (AC16). Rollback: a failed create leaves web-2 absent (warm-standby capability gone
+until re-dispatch) — no serving impact; re-dispatch re-runs the boot.
+
+## Network-Outage Deep-Dive
+
+The web-2-recreate apply path is **not SSH-dependent** (the "SSH" keyword in this plan refers
+only to the no-SSH thesis + a rejected alternative). Layer check:
+
+- **L3 firewall / egress IP:** N/A to the apply. The 3 targeted resources
+  (`hcloud_server.web["web-2"]`, `hcloud_server_network.web["web-2"]`,
+  `hcloud_volume_attachment.workspaces["web-2"]`) are provisioned via the **Hetzner Cloud API**
+  (`hcloud_token`), not an SSH handshake — NONE of the three carries a `provisioner
+  "file"/"remote-exec"` or `connection { type="ssh" }` block (those live on the `terraform_data`
+  siblings, which are NOT in the recreate `-target` set). So there is no `admin_ips`/egress-IP
+  dependency and no `connection reset by peer` class failure in the apply (contrast the SSH
+  bridge path `hr-ssh-diagnosis-verify-firewall` guards).
+- **L3 DNS/routing:** the off-host verify + digest resolution use HTTPS —
+  `deploy.soleur.ai/hooks/deploy-status` (CF-proxied) and `ghcr.io` (public). Both `curl
+  --max-time`-bounded (mirror warm_standby).
+- **L7 TLS/proxy:** CF Access service-token auth on deploy-status (existing pattern); GHCR
+  anonymous pull (public repo, live-confirmed).
+- **L7 application:** the fresh-host boot itself (apt/docker/multi-image-pull) is the only long
+  operation — bounded by `timeout-minutes: 30` + the poll ceiling.
 
 ## Observability
 
@@ -501,6 +585,19 @@ AC16), P2-4 (`@sha256` var-validation check, Phase 0.6), P2-5 (runner amd64, Pha
   `main`'s host-scripts advanced beyond what web-1 currently runs (unrelated host-script merge
   not yet deployed to web-1). Safe (aborts before `-replace`) but confusing; the runbook step
   MUST state the remediation: **redeploy web-1 to current `main` first, then re-dispatch.**
+- **Precedent-diff (deepen Phase 4.4) — CI-side `-target` + `-replace` is NOVEL for this repo.**
+  Verified: `apply-web-platform-infra.yml` (`apply` + `warm_standby`) and
+  `apply-deploy-pipeline-fix.yml` use `-target`-ONLY apply paths; every `terraform apply
+  -replace=` in the repo is a **runbook-local** command (rotation runbooks, `.tf`
+  comments), never a workflow `run:` step. So `-target=… -replace=…` inside a GHA job has no
+  prior art here — reviewers should scrutinize. Mitigation: the new job REUSES the `warm_standby`
+  invocation form (single-level `doppler run … --name-transformer tf-var -- terraform …` with R2
+  creds pre-extracted to `$GITHUB_ENV`), adding ONLY `-replace` + `-var=image_name=$PINNED` — NOT
+  the nested-doppler runbook-local form. The `warm_standby` job (`:732-790`) already proves the
+  `-target`-in-CI + saved-plan + destroy-guard pattern for the SAME 3 web-2 addresses; `-replace`
+  is the only new flag. Verified this session: all 3 targeted resources are SSH-provisioner-free
+  (Hetzner-API-only apply), the volume is a separate resource with no server-id edge (0-destroy),
+  and `var.image_name` flows only through `user_data` (server `image` attr is the static OS).
 - **AC14 Sentry surface is best-effort** — `host_id` is unknown to the runner, so the query
   matches on message + recent window; a concurrent/stale event or a failed `emit_fail` curl
   yields a misleading or empty pointer. Job RED's regardless; label the summary line
