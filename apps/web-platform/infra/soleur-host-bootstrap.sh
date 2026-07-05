@@ -74,6 +74,11 @@ done
 for f in cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt; do
   FAILED_FILE="$f"; install -D -m 0644 -o root -g root "$SEED/$f" "/etc/soleur/$f"
 done
+# Pinned cosign trusted root (#6005) — public trust material mounted :ro into the
+# ephemeral cosign verifier by ci-deploy.sh (ADR-087). 0644 root:root; dockerd (root)
+# reads the mount source, so deploy-user readability is not required.
+FAILED_FILE=cosign-trusted-root.json
+install -D -m 0644 -o root -g root "$SEED/cosign-trusted-root.json" /etc/soleur/cosign-trusted-root.json
 # journald persistent+bounded drop-in (baked #5921). Installed here (post-extraction) and
 # applied below — before the terminal app container (--log-driver journald) starts. Was
 # previously an inline write_files: base64 blob (2.4 KB), the single biggest remaining
@@ -127,6 +132,7 @@ for f in container-restart-monitor.service container-restart-monitor.timer \
 done
 FAILED_FILE=cron-egress-allowlist.txt; test -f /etc/soleur/cron-egress-allowlist.txt
 FAILED_FILE=cron-egress-allowlist-cidr.txt; test -f /etc/soleur/cron-egress-allowlist-cidr.txt
+FAILED_FILE=cosign-trusted-root.json; test -f /etc/soleur/cosign-trusted-root.json
 FAILED_FILE=journald-soleur.conf; test -f /etc/systemd/journald.conf.d/00-soleur.conf
 
 STAGE=reload
@@ -141,6 +147,50 @@ mkdir -p /var/log/journal
 systemd-tmpfiles --create --prefix /var/log/journal
 systemctl restart systemd-journald
 journalctl --flush
+
+# #6005: authenticate the host docker daemon to the now-PRIVATE GHCR packages so the
+# fresh-boot inngest-bootstrap `docker pull` (later in cloud-init runcmd) succeeds. Lives
+# HERE (baked → zero user_data cost; user_data is within ~1 KB of the 32,768-byte cap).
+# Best-effort: a missing/rotated credential must NOT poweroff the host — the subshell +
+# `|| true` keeps it clear of `set -e` + the emit_fail trap; the inngest pull is the hard
+# gate. Token fetched at boot via the ambient DOPPLER_TOKEN — NEVER templatefile-
+# interpolated (that would leak it into Hetzner metadata + cloud-init-output.log).
+STAGE=ghcr_login
+( set +e
+  . /etc/default/webhook-deploy 2>/dev/null || true
+  # Non-fatal, no-SSH CAUSE signal for a fresh-boot login failure (observability-
+  # coverage-reviewer P1). The block is deliberately OUTSIDE the emit_fail EXIT trap
+  # (a rotated credential must not poweroff the host), so a failure would otherwise
+  # only reach the SSH-only cloud-init-output.log — and Vector (Layer 3) is not yet
+  # installed at this boot stage, so journald cannot ship it either. Emit a WARNING
+  # Sentry event (tag stage=ghcr_login) directly, mirroring emit_fail's DSN parse,
+  # SCRUBBED to a classification (never the raw docker stderr / auth header).
+  ghcr_login_warn() {
+    DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
+          || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
+    [ -n "$DSN" ] || return 0
+    KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
+    SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
+    PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
+    BODY=$(printf '{"message":"fresh-boot GHCR docker login failed","level":"warning","logger":"soleur-host-bootstrap","tags":{"feature":"supply-chain","op":"image-pull","stage":"ghcr_login","pull_result":"%s","host_id":"%s"}}' "$1" "$HOST_ID")
+    curl -m 10 --retry 3 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
+      -H 'Content-Type: application/json' \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY" \
+      -d "$BODY" >/dev/null 2>&1 || true
+  }
+  GHCR_USER=$(timeout 15 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null || true)
+  GHCR_TOKEN=$(timeout 15 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
+  if [ -n "$GHCR_USER" ] && [ -n "$GHCR_TOKEN" ]; then
+    if printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null 2>&1; then
+      echo "soleur-host-bootstrap: docker login ghcr.io ok"
+    else
+      echo "soleur-host-bootstrap: docker login ghcr.io FAILED (private pull may fail-closed)"
+      ghcr_login_warn auth_denied
+    fi
+  else
+    echo "soleur-host-bootstrap: GHCR_READ_{USER,TOKEN} not both present — skipping docker login"
+    ghcr_login_warn credential_absent
+  fi ) || true
 
 # Sentinel LAST: extraction + install proven complete. The terminal `docker run` block gates
 # on this file; without it the host poweroffs (fail-closed) instead of serving with an
