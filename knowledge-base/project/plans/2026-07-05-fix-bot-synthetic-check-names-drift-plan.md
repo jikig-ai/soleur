@@ -15,6 +15,40 @@ related:
 
 # fix(ci): bot synthetic check-runs are stale vs the CI Required ruleset — drift-proof the chain 🐛
 
+## Enhancement Summary (deepen-plan, 2026-07-05)
+
+Reviewed by scoped advisor (fable) + security-sentinel + architecture-strategist + code-simplicity-reviewer.
+Verdicts folded in below. Load-bearing corrections (all verified against source):
+
+1. **Tier 2 (real gitleaks) is MANDATORY — Tier 1 rejected.** Security-sentinel: GitHub
+   push-protection catches only partner-provider shapes; it does NOT enforce this repo's custom
+   `.gitleaks.toml` rules (BYOK `sk-soleur-`, Doppler `dp.st./dp.sa.`, Supabase JWTs, VAPID,
+   webhooks, `postgres://`) or the entropy rule — exactly the shapes the accidental stall blocks
+   and the learnings-clustering digest is most likely to carry. Tier 1 is a net regression.
+2. **Two content gates are fabricated, not one.** `lint fixture content` (emails / prod Supabase
+   refs / prod UUIDs) is a distinct gate gitleaks does NOT cover, and its CI scan scope
+   (`secret-scan.yml:161,169`) greps only `knowledge-base/project/learnings/*.md` — NOT the digest
+   paths. Phase 4 now reproduces BOTH `gitleaks` AND `lint-fixture-content.mjs` over the bot diff.
+3. **The "markdown under knowledge-base/" safe-surface allowlist VOIDS the ceiling.**
+   `.gitleaks.toml` exempts `knowledge-base/plans/`, `knowledge-base/*/specs/`, and (for
+   private-key/db-url rules) `knowledge-base/project/learnings/*.md` — so a path passing "markdown
+   under knowledge-base/" could be gitleaks-blind, and it also **breaks the rule-metrics caller**
+   (`.json`, not markdown). Allowlist is now an **explicit enumeration** of the two real artifacts
+   (`weakness-digest.md`, `rule-metrics.json`), rejecting the gitleaks-blind subtrees.
+4. **Parser `#`-truncation (P1).** The reused lint parser's `line="${line%%#*}"` truncates
+   `waiver discipline (issue:#NNN trailer)` → the parity test can never pass AND the bot still
+   stalls. Fix: change the shared comment rule to **leading-`#`-only**.
+5. **`adr-ordinals` breaks a hardcoded count (P1).** `test-audit-ruleset-bypass.sh:634` asserts
+   `n == "16"`; `.tf:18` + canonical prose say "16". Phase 1 now bumps all three to 17.
+6. **Cut the gitleaks-install *extraction*** (simplicity + architecture: it touches the required
+   `secret-scan.yml` jobs). Use a 3rd pinned install + a pin-parity assertion instead. Net: the PR
+   does NOT touch `secret-scan.yml`.
+7. **Composite→SSOT anti-drift assertion is mandatory** (architecture P2, resolving a reviewer
+   split) but implemented minimally (a grep that `action.yml` sources `required-checks.txt`).
+8. **`required-checks.txt` auto-fabrication guard** (security P2): a load-bearing header comment +
+   @deruelle CODEOWNERS so a future content-scoped required check isn't silently auto-fabricated.
+
+
 ## Overview
 
 `GITHUB_TOKEN`-created bot PRs (the weekly `rule-metrics-aggregate` and `weakness-miner`
@@ -67,21 +101,27 @@ fix is to **complete the set faithfully, derive it from a single SSOT, add a rea
 ceiling, and make the whole chain un-driftable**, not to invent a bypass actor or aggregator
 (both would deviate from the established synthesize-everything design; see Alternatives).
 
-**Secret-safety decision (the plan's central risk decision — routed to the security lens + advisor + CPO):**
-Completing the synthetic set relaxes the accidental stall-defense on the fabricated
-`gitleaks scan` green. Two ceilings were considered:
+**Secret-safety decision (RESOLVED by security-sentinel — Tier 2 mandatory):**
+Completing the synthetic set relaxes the accidental stall-defense on the **two** fabricated
+content gates — `gitleaks scan` AND `lint fixture content`. The ceiling:
 
-- **Tier 2 (recommended, CORE):** the action runs the **real** `gitleaks` (same pinned
-  v8.24.2 + SHA as `secret-scan.yml`) over its own staged diff before posting; a hit fails
-  loud (no PR, no synthetic). This genuinely *earns* the one content gate that applies to
-  markdown. Cost: a gitleaks-version-drift surface (guarded — see Phase 4 + Sharp Edges).
-- **Tier 1 (severable fallback):** assert `add-paths` stay inside a markdown/`knowledge-base`
-  safe-surface allowlist and rely on GitHub server-side push-protection (already blocks
-  provider-shaped tokens at the bot's `git push`) as the interim secret backstop. Weaker on
-  custom `.gitleaks.toml` rules + high-entropy strings.
-
-At `single-user incident` threshold the honest default is Tier 2 (it reproduces the gate being
-fabricated). deepen-plan's `security-sentinel` and the Phase-4.5 advisor confirm or downgrade.
+- The action reproduces **both** content gates over its own staged diff before posting: real
+  `gitleaks` (pinned v8.24.2 + SHA, repo `.gitleaks.toml`) AND `lint-fixture-content.mjs`. Any
+  finding fails loud (no PR, no synthetic). This *earns* both content greens rather than
+  fabricating them.
+- **Tier 1 (push-protection only) is REJECTED.** GitHub server-side push-protection enforces
+  only partner-provider token shapes — NOT this repo's custom `.gitleaks.toml` rules
+  (`sk-soleur-`, `dp.st./dp.sa.`, Supabase HS256 JWTs, VAPID, webhook URLs, `postgres://`) nor
+  the `generic-api-key` entropy rule, and NOT the `lint fixture content` PII class at all. Those
+  are exactly the shapes the learnings-clustering digest is most likely to surface, so Tier 1 is
+  a net regression at `single-user incident` threshold.
+- **Safe-surface allowlist = explicit enumeration**, not a directory prefix: the action asserts
+  every `add-paths` entry is one of `knowledge-base/project/weakness-digest.md` /
+  `knowledge-base/project/rule-metrics.json` (the two real artifacts) and REJECTS `plans/`,
+  `specs/`, `references/`, `learnings/` sub-trees — because `.gitleaks.toml` *allowlists* those,
+  so a real gitleaks run over them finds nothing and the earned-green would be fabricated after
+  all. This also fixes a naive "markdown"-only predicate that would break the rule-metrics
+  caller (whose `add-paths` is `.json`).
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -127,10 +167,17 @@ weakened merge gate on this surface = an installable-skill/secret code-execution
   legitimate for a ruleset change — a pre-merge review, not a punted operator action).
 
 ### Phase 1 — IaC reconciliation (`adr-ordinals`)
-Files to edit: `infra/github/ruleset-ci-required.tf`, `scripts/ci-required-ruleset-canonical-required-status-checks.json`
+Files to edit: `infra/github/ruleset-ci-required.tf`, `scripts/ci-required-ruleset-canonical-required-status-checks.json`, `tests/scripts/test-audit-ruleset-bypass.sh`
 - Add a `required_check { context = "adr-ordinals"; integration_id = var.actions_integration_id }`
-  block (Tier-mirroring the existing entries) to the `.tf`.
+  block (Tier-mirroring the existing entries) to the `.tf`. `integration_id` MUST be
+  `var.actions_integration_id` (15368) — `adr-ordinals` is a GitHub Actions job (`ci.yml:163`),
+  NOT GHAS; using `codeql_integration_id` would silently un-match and break the gate.
 - Add `{ "context": "adr-ordinals", "integration_id": 15368 }` to the canonical JSON.
+- **Bump the hardcoded count 16→17 in `tests/scripts/test-audit-ruleset-bypass.sh:634`** (T-rsc-7:
+  `[[ "$n" == "16" ... ]]`) and its prose comment `:618-621`, AND the `.tf:18` prose ("the 16
+  `context` strings below are public ABI" → 17). Same-PR; otherwise T-rsc-7 fails (the exact
+  stale-count failure mode #4397 it was written to catch). (T-rsc-9 `.tf`↔canonical lockstep is
+  satisfied by the paired `.tf`+JSON edits.)
 - Verify: `terraform -chdir=infra/github validate`; note that `apply-github-infra.yml` will
   compute a **no-op** plan against live (live already requires it) — this only makes the IaC honest.
 
@@ -142,6 +189,11 @@ File to edit: `scripts/required-checks.txt`
   `Bash fixture tests for guard scripts`, `lockfile-sync`, `service-role-allowlist-gate`,
   `tc-document-sha-guard`, `adr-ordinals`.
 - Preserve the `CodeQL` intentional-omission comment block verbatim.
+- **Add an auto-fabrication guard comment** (security P2) to the file header: *"Adding a name here
+  makes bot PRs fabricate a green for it with no per-check review. A content-scoped gate (secret /
+  PII / lockfile / fixture scanning) MUST first be reproduced in the action's preflight
+  (Phase 4) or excluded via non-15368 `integration_id` — do not add a content gate here that the
+  action cannot actually run over the bot diff."* The file is already `* @deruelle` CODEOWNERS-gated.
 - **Invariant (per advisor):** the synthesizable set is not "canonical minus a `CodeQL` literal"
   — it is **canonical entries whose `integration_id == 15368`** (the bot, app 15368, can only
   synthesize checks pinned to itself; GHAS-pinned `57789` checks it structurally cannot post).
@@ -155,54 +207,71 @@ File to edit: `scripts/required-checks.txt`
 ### Phase 3 — Action derives CHECK_NAMES from the SSOT (kill the hardcode)
 File to edit: `.github/actions/bot-pr-with-synthetic-checks/action.yml`
 - Replace the hardcoded `CHECK_NAMES=(...)` (line 168) with a read of `scripts/required-checks.txt`
-  (repo is checked out in the consumer job), reusing the **same** comment-strip + multi-word +
-  single-quote-strip parser as `lint-bot-synthetic-completeness.sh:42-57` (do NOT re-invent —
-  `tr -d '[:space:]'` destroys `skill-security-scan PR gate`; see learning
-  `2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug.md`).
+  (repo is checked out in the consumer job — both current callers run `actions/checkout` and commit
+  files; add a **fail-loud guard** if the file is absent so a future non-checkout consumer errors
+  instead of posting an empty set). Reuse the `lint-bot-synthetic-completeness.sh:42-57` parser
+  (multi-word + single-quote-strip; do NOT `tr -d '[:space:]'` — it destroys
+  `skill-security-scan PR gate`; learning `2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug.md`)
+  — **BUT with the comment rule fixed** (Phase 5): the current `line="${line%%#*}"` inline-comment
+  strip truncates `waiver discipline (issue:#NNN trailer)` at the `#`, posting a wrong check-run
+  name and leaving that live-required context UNsatisfied. Change to **leading-`#`-only** (a line
+  is a comment iff it starts with optional whitespace then `#`) — behavior-preserving for the
+  existing full-line comments, and required for the `#`-bearing check name.
 - Post one Checks-API `check-run` per parsed name. Special-case `cla-check`/`cla-evidence`
   output titles/summaries inside the loop (a small `case`), so the two custom outputs are
   preserved from **one** source with no separate hardcoded blocks and no double-post.
 - Update `.github/actions/bot-pr-with-synthetic-checks/CHANGELOG.md` (v3: derives from SSOT + real gitleaks preflight).
 
-### Phase 4 — Secret-safety ceiling (Tier 2, CORE — the named ceiling for the relaxation)
+### Phase 4 — Secret-safety ceiling (CORE — the named ceiling; Tier 2, mandatory)
 File to edit: `.github/actions/bot-pr-with-synthetic-checks/action.yml`
-- Before posting synthetics, run the **real** gitleaks over the action's own staged/committed
-  diff, reusing `secret-scan.yml`'s pinned `GITLEAKS_VERSION`/SHA256 (single pinned source) and
-  the repo `.gitleaks.toml`. On any finding: fail loud (`--redact`), do **not** create the PR,
-  do **not** post synthetics.
-- Assert every `add-paths` entry is within a safe-surface allowlist (markdown under
-  `knowledge-base/`); a path outside it fails loud (a future caller must not get fabricated
-  greens for path-scoped gates that would actually apply).
-- **Eliminate the version-drift surface at the source (advisor's third option, preferred):**
-  gitleaks `8.24.2`+SHA is **already** pinned in **two** sites (`secret-scan.yml:82-84` and
-  `ci.yml` `test-scripts` job `env`, with a "bump both files together" comment). Rather than add
-  a **third** independent pin, extract the pinned install (version+SHA+download+verify) to a
-  **single shared source** both the required-check workflow and the bot action consume — either a
-  small `.github/actions/gitleaks-install` composite or a sourced `scripts/gitleaks-version.env` —
-  so the earned green is **provably the same gate** and no assert-equal test is needed. **Blast-radius
-  guard:** extract only the INSTALL step; do **not** rename or restructure `secret-scan.yml`'s
-  required-check **jobs** (the ADR-032 job-name contract un-requires a check on rename). If the
-  shared extraction is judged too invasive at /work time, fall back to a third pin site + a
-  cross-site pin-parity assertion in the Phase-5 test. The `test-scripts` shard already installs
-  pinned gitleaks, so the tooling exists regardless.
-- *(If security-sentinel/advisor downgrade to Tier 1: replace the real-gitleaks step with the
-  safe-surface allowlist + a `push-protection is the interim secret backstop` note; the allowlist
-  guard stays either way.)*
+- Before posting synthetics, reproduce **both** fabricated content gates over the action's own
+  staged/committed diff:
+  1. **real gitleaks** — same pinned `GITLEAKS_VERSION` (8.24.2) + SHA256 as `secret-scan.yml` and
+     the repo `.gitleaks.toml`, `--redact`.
+  2. **`node apps/web-platform/scripts/lint-fixture-content.mjs`** over the diff (emails / prod
+     Supabase refs / prod UUIDs) — gitleaks does NOT cover this class, and its CI scope
+     (`secret-scan.yml:161,169`) greps only `knowledge-base/project/learnings/*.md`, so the digest
+     paths are otherwise unscanned by the real gate.
+  Any finding from either → fail loud, do **not** create the PR, do **not** post synthetics.
+- **Safe-surface allowlist = explicit enumeration.** Assert every `add-paths` entry equals one of
+  `knowledge-base/project/weakness-digest.md` / `knowledge-base/project/rule-metrics.json`. REJECT
+  (fail loud) any path under `knowledge-base/{plans,specs,references}/**` or
+  `knowledge-base/project/learnings/**` — `.gitleaks.toml` allowlists those, so the real gitleaks
+  run would be blind there and the earned-green would be fabricated. Do NOT use a bare "markdown
+  under knowledge-base/" predicate (voids the ceiling AND rejects the `.json` rule-metrics caller).
+- **Pin management (simplicity + architecture: do NOT extract).** Do NOT refactor `secret-scan.yml`'s
+  install step — it hosts the required `gitleaks scan` / `lint fixture content` jobs and the
+  ADR-032 job-name contract makes any restructure of a required-check workflow high blast-radius.
+  Instead add the action's own pinned install block (3rd site) and add a **pin-parity assertion**
+  to the Phase-5 test: all three sites (`secret-scan.yml:82`, `ci.yml` `test-scripts:448`, the
+  action) reference the same `GITLEAKS_VERSION` + SHA256; divergence fails CI. Cheaper and touches
+  no required-check workflow.
 
 ### Phase 5 — Drift-proof tests (make re-drift impossible)
 Files to create/edit: `plugins/soleur/test/required-checks-canonical-parity.test.sh` (new),
-`scripts/lint-bot-synthetic-completeness.sh` (extend), `plugins/soleur/test/lint-bot-synthetic-completeness.test.sh` (extend)
+`scripts/lint-bot-synthetic-completeness.sh` (fix parser comment rule + minimal composite guard),
+`plugins/soleur/test/lint-bot-synthetic-completeness.test.sh` (regression case)
+- **Fix the shared parser first** (P1, see Phase 3): change the comment rule in
+  `lint-bot-synthetic-completeness.sh` from inline `${line%%#*}` to **leading-`#`-only**, add a
+  regression case in its `.test.sh` asserting `waiver discipline (issue:#NNN trailer)` round-trips
+  intact. Without this, both the action AND the parity test break on that name.
 - **New parity test** (file-vs-file, deterministic, no API): assert the CI-Required subset of
   `required-checks.txt` **equals** the set of `context`s in `canonical-required-status-checks.json`
-  **filtered to `integration_id == 15368`** (compute via `jq`, do NOT special-case the string
-  `CodeQL` — future-proof per the Phase-2 invariant). Compare as sets (sorted), multi-word-safe,
-  regex-escaped — assert **both** directions (⊆ and ⊇), not `| length` (see learning
-  `2026-05-16-prose-contract-vs-executable-check-dimension-drift.md`).
-- **Close the composite blind spot:** either extend `lint-bot-synthetic-completeness.sh` to also
-  assert `.github/actions/bot-pr-with-synthetic-checks/action.yml` reads `required-checks.txt`
-  (so the composite exemption is test-backed), OR rely on the fact that the action now reads the
-  SSOT (coverage by construction) + the new parity test — document whichever is chosen. Add a
-  regression case to the lint's test asserting the composite action is covered.
+  **filtered to `integration_id == 15368`** (compute via `jq '.[]|select(.integration_id==15368).context'`,
+  NOT a `CodeQL` string literal). Compute the "CI-Required subset" of `required-checks.txt` by
+  **excluding an explicitly-named CLA set `{cla-check, cla-evidence}`** — there is no canonical CLA
+  JSON (only `create-cla-required-ruleset.sh`), so name the exclusion in the test with a comment
+  that a 3rd CLA context requires updating it (deferred hardening: a canonical CLA JSON mirroring
+  the RSC one — see Alternatives). Compare as sorted sets, multi-word-safe, regex-escaped — assert
+  **both** ⊆ and ⊇, not `| length` (`2026-05-16-prose-contract-vs-executable-check-dimension-drift.md`).
+- **Composite→SSOT guard (mandatory, minimal — architecture P2).** The action is exempt from the
+  existing lint by construction; a future re-hardcode of `CHECK_NAMES` in `action.yml` would
+  silently reintroduce the exact drift this PR fixes. Add a cheap deterministic assertion (in the
+  lint or the parity test) that `action.yml` **references** `scripts/required-checks.txt` (a
+  `grep -q` on the action body). Do NOT rely on "coverage by construction" alone. This is minimal
+  (one grep), so it satisfies both the architecture mandate and the simplicity concern.
+- **Pin-parity assertion** (Phase 4): assert `GITLEAKS_VERSION`+SHA256 match across
+  `secret-scan.yml`, `ci.yml` `test-scripts`, and the action.
 - Wire the new `.test.sh` into CI: sibling `plugins/soleur/test/*.test.sh` run via
   `scripts/test-all.sh` in the `ci.yml` `test-scripts` job (which already installs pinned
   gitleaks + likec4) — confirm `test-all.sh`'s glob picks up the new file at /work time.
@@ -218,21 +287,28 @@ File to edit: `knowledge-base/engineering/architecture/decisions/ADR-032-github-
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `infra/github/ruleset-ci-required.tf` contains an `adr-ordinals` `required_check`; the
-      canonical JSON contains a matching `{context: "adr-ordinals", integration_id: 15368}`;
-      `test-audit-ruleset-bypass.sh` T-rsc-9 (`.tf`↔canonical lockstep) passes.
+- [ ] `infra/github/ruleset-ci-required.tf` contains an `adr-ordinals` `required_check`
+      (integration_id `var.actions_integration_id`); the canonical JSON contains a matching
+      `{context: "adr-ordinals", integration_id: 15368}`; `test-audit-ruleset-bypass.sh` T-rsc-9
+      (`.tf`↔canonical lockstep) passes AND T-rsc-7 count assertion updated 16→17 (with the
+      `.tf:18` + `:618-621` prose bumped to 17).
 - [ ] `scripts/required-checks.txt` CI-Required subset, as a set, equals the
       `canonical-required-status-checks.json` contexts with `integration_id == 15368` (computed
       via `jq`, NOT a `CodeQL` string literal), verified by the new parity test asserting BOTH ⊆ and ⊇.
 - [ ] `action.yml` no longer hardcodes `CHECK_NAMES`; it parses `scripts/required-checks.txt`
-      with the multi-word-safe parser and posts one 15368 check-run per name; `cla-check`/
-      `cla-evidence` custom outputs preserved; no name double-posted.
-- [ ] Phase-4 ceiling present: real gitleaks (pinned == `secret-scan.yml`) runs over the diff and
-      fails loud on a finding; `add-paths` safe-surface allowlist enforced. (Or Tier-1 fallback
-      with push-protection note, if downgraded — recorded in the plan + ADR.)
-- [ ] New `plugins/soleur/test/required-checks-canonical-parity.test.sh` passes and is wired into CI.
-- [ ] `lint-bot-synthetic-completeness.sh` + its `.test.sh` updated so composite-action coverage
-      is asserted (no silent composite blind spot).
+      with the multi-word-safe parser (leading-`#`-only comment rule) and posts one 15368 check-run
+      per name; `cla-check`/`cla-evidence` custom outputs preserved; no name double-posted; fails
+      loud if the file is absent.
+- [ ] Parser round-trips `waiver discipline (issue:#NNN trailer)` intact (regression test) — no
+      `#`-truncation.
+- [ ] Phase-4 ceiling present: real gitleaks AND `lint-fixture-content.mjs` run over the diff and
+      fail loud on a finding; `add-paths` allowlist is the explicit `{weakness-digest.md,
+      rule-metrics.json}` enumeration and REJECTS `plans/`/`specs/`/`references/`/`learnings/`
+      sub-trees; pin-parity assertion covers all 3 gitleaks pin sites. `secret-scan.yml` untouched.
+- [ ] New `plugins/soleur/test/required-checks-canonical-parity.test.sh` passes (both ⊆/⊇ via
+      `jq integration_id==15368`, CLA `{cla-check,cla-evidence}` excluded) and is wired into CI.
+- [ ] A deterministic guard asserts `action.yml` references `scripts/required-checks.txt` (future
+      re-hardcode caught).
 - [ ] `terraform -chdir=infra/github validate` passes; the `.tf` change is a **no-op** plan
       against live (documented, not applied by the author).
 - [ ] ADR-032 amended; C4 read performed with "no impact" enumeration cited.
@@ -355,7 +431,9 @@ deliverable of this plan (Phase 6), not a follow-up.
 | **(a) Scoped ruleset bypass actor for the bot** | Ruleset bypass actors are actor-scoped, **not** path/branch-scoped; a bot bypass would waive **all** checks on **all** bot PRs (strictly weaker than synthesizing) and fights the daily bypass-audit + canonical bypass JSON. Deviates from ADR-032's synthesize-everything design. |
 | **(b) Path-conditional required set** | Rulesets have no native path-conditional required checks; the 16 gates are already always-run for humans. The bot problem is "triggers nothing," not "conditionally required." No lever here. |
 | **(c) Single always-green aggregator required check** | Cross-workflow `needs:` is impossible; an aggregator would need an API-polling meta-job — high blast radius, and it still fabricates one green (same trust model, less legible). A bigger governance change than the drift it fixes. |
-| **Tier-1-only secret safety (allowlist + push-protection)** | Severable fallback, documented in Phase 4; weaker than reproducing the `gitleaks scan` gate. Kept as the downgrade path if security-sentinel/advisor judge push-protection sufficient. |
+| **Tier-1-only secret safety (allowlist + push-protection)** | **REJECTED** by security-sentinel: push-protection covers only partner shapes, missing this repo's custom `.gitleaks.toml` rules + entropy + the entire `lint fixture content` PII class — a net regression on the digest's highest-risk shapes. Tier 2 (reproduce both content gates) is mandatory. |
+| **Shared gitleaks-install composite** | Cut per simplicity + architecture — it touches `secret-scan.yml`'s required-check jobs (ADR-032 job-name contract, high blast-radius). Replaced by a 3rd pinned install + pin-parity assertion. |
+| **Canonical CLA JSON (mirror the RSC one)** | Deferred hardening — would let the parity test derive the CLA exclusion structurally instead of a named `{cla-check,cla-evidence}` set. Low-drift (CLA rarely changes); a follow-up, not this PR. |
 | **Split adr-ordinals into its own PR** | Creates a merge-order dependency (parity test needs canonical to carry `adr-ordinals` first) for no gain; both must land and both need the @deruelle code-owner review anyway. |
 | **Modify/retire `post-bot-statuses.sh`** | Legacy, zero callers — deferred as a separate dead-code cleanup (tracking issue) to keep this PR scoped. |
 
@@ -367,6 +445,22 @@ deliverable of this plan (Phase 6), not a follow-up.
   leading/trailing-only trim (never `tr -d '[:space:]'`) and regex-escape names before any grep;
   `skill-security-scan PR gate`, `allowlist-diff (.gitleaks.toml paths surface)`,
   `waiver discipline (issue:#NNN trailer)` all contain spaces and/or parens.
+- **`#`-in-name truncation (P1, verified):** the current parser strips comments via inline
+  `${line%%#*}`, which truncates `waiver discipline (issue:#NNN trailer)` → `waiver discipline (issue:`.
+  This breaks the parity test AND makes the bot post a wrong name (still stalling on the real
+  context). Fix the comment rule to **leading-`#`-only** before reusing the parser. Verify:
+  `line='waiver discipline (issue:#NNN trailer)'; [[ "${line%%#*}" == "$line" ]]` must be made true.
+- **Safe-surface allowlist vs `.gitleaks.toml` allowlist (P1):** a "markdown under knowledge-base/"
+  predicate is NOT safe — `.gitleaks.toml` exempts `knowledge-base/{plans,specs}/**` and (for
+  private-key/db-url rules) `learnings/**`, so the real gitleaks run is blind there and the
+  earned-green becomes a fabrication. Enumerate the two real artifacts; reject those sub-trees.
+- **T-rsc-7 hardcoded count (P1):** adding `adr-ordinals` bumps the canonical set 16→17; the
+  audit test `test-audit-ruleset-bypass.sh:634` hardcodes `"16"` and `.tf:18` prose says "16" —
+  update both (and the `:618-621` comment) in the same PR or CI fails.
+- **Auto-fabrication (P2):** once the action derives from `required-checks.txt`, adding any
+  `integration_id==15368` context there auto-fabricates a green for bot PRs. A future
+  content-scoped required check MUST first be reproduced in Phase-4 preflight (or excluded via
+  non-15368 id) — the header guard comment + @deruelle CODEOWNERS enforce this.
 - **New gitleaks-version-drift surface:** the action's gitleaks pin must not diverge from
   `secret-scan.yml` (`GITLEAKS_VERSION=8.24.2` + SHA256) — source both from one file or add an
   equality assertion to the parity test. A silent divergence would scan with a different engine.
@@ -384,7 +478,9 @@ deliverable of this plan (Phase 6), not a follow-up.
   `adr-ordinals` slipped (added to live, never to canonical/`.tf`). So an unsanctioned live
   ruleset change is caught next-day, not at PR time, and the bot stalls for up to 24h in that
   window. This is acceptable **only because** every sanctioned ruleset change flows through
-  `infra/github/` (Terraform), keeping `live` and `canonical` equal by construction. The parity
+  `infra/github/` (Terraform) — convention + daily *detection* (the Inngest audit), NOT a
+  technical *prevention* gate (a console/API edit can still cross it, which is how `adr-ordinals`
+  slipped). The parity
   test does **not** close the live-drift vector; the Terraform-only mutation discipline does.
 
 ## Test Scenarios
