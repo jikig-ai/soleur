@@ -58,6 +58,11 @@ const EXPECTED_TF_SECRETS = [
 // The drift-guard cron is the runtime signal for divergence; this test catches
 // an in-band manifest mutation that adds an unexpected permission via a
 // malicious or sloppy PR.
+// #6031 (ADR-088): `packages: read` added for the control-plane installation-token
+// minter (cron-ghcr-token-minter). This is a PER-INSTALLATION standing grant on the
+// SHARED App — every re-consenting installation grants packages:read, so a private-key
+// leak reads every consenting tenant's packages (documented in ADR-088 Consequences;
+// requires_cpo_signoff). Plane-c activation needs org-owner re-consent (AC10).
 const EXPECTED_PERMISSION_KEYS = [
   "actions",
   "administration",
@@ -66,6 +71,7 @@ const EXPECTED_PERMISSION_KEYS = [
   "issues",
   "members",
   "metadata",
+  "packages",
   "pull_requests",
   "repository_advisories",
   "secret_scanning_alerts",
@@ -129,6 +135,15 @@ describe("github-app-manifest.json symbol parity", () => {
     // so a regress to read fails CI, not production.
     const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;
     expect(m.default_permissions?.checks).toBe("write");
+  });
+
+  test("default_permissions.packages === 'read' (minter needs read, never write)", () => {
+    // #6031 (ADR-088): the cron-ghcr-token-minter mints a `packages:read` token.
+    // The exact-key-set test only checks keys, not values — lock the value so a
+    // silent bump to `packages:write` (a major supply-chain escalation: write =
+    // publish/delete packages) fails CI, not review.
+    const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;
+    expect(m.default_permissions?.packages).toBe("read");
   });
 
   test("public === false", () => {
