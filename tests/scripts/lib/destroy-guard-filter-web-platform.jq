@@ -50,7 +50,12 @@
 # `test-destroy-guard-counter-<workflow>.sh`, CODEOWNERS rows.
 #
 # Input: `terraform show -json <plan>` document.
-# Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int}.
+# Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int,
+#          web2_out_of_scope_changes: int, web2_server_replaced: int}.
+# The last two are ADDITIVE (web-2-recreate scoped guard, this PR); the first
+# three are byte-unchanged so the apply / warm_standby / manual-rerun consumers
+# that read only them keep working. Only the web_2_recreate job's sourced gate
+# (tests/scripts/lib/web2-recreate-gate.sh) reads the web2_* keys.
 #
 # Each `_count($side)` helper uses `$side` value-binding (jq 1.7+; safe on
 # jq 1.8.x). NOT the call-by-name filter-arg shape that crashed v1 of
@@ -74,6 +79,20 @@ def cf_notif_email_integration_count($side):
 
 def cf_access_policy_include_count($side):
   ($side // {}) | [.include[]?] | length;
+
+# --- web-2-recreate scoped guard (apply_target=web-2-recreate) -------------
+# The EXACT allow-set for the scoped `-replace='hcloud_server.web["web-2"]'`:
+# the web-2 server + its two id-referencing dependents. A -replace of the
+# server shows actions ⊇ {delete,create}; its dependents (network attach,
+# volume attachment) replace because they reference the NEW server id.
+# hcloud_volume.workspaces["web-2"] is DELIBERATELY ABSENT — the 20 GB data
+# volume must be preserved, so ANY change to it must trip
+# web2_out_of_scope_changes.
+def web2_allow: [
+  "hcloud_server.web[\"web-2\"]",
+  "hcloud_server_network.web[\"web-2\"]",
+  "hcloud_volume_attachment.workspaces[\"web-2\"]"
+];
 
 {
   resource_deletes: ([.resource_changes[]? | select(.change.actions? | index("delete"))] | length),
@@ -138,6 +157,39 @@ def cf_access_policy_include_count($side):
       | select(.change.actions == ["update"])
       | select(.change.before.placement_group_id != .change.after.placement_group_id
             or .change.before.server_type       != .change.after.server_type) ]
+    | length
+  ),
+  # POSITIVE-SCOPE web-2-recreate guard (spec-flow P0-2). Count EVERY
+  # resource_change carrying a create/update/delete action whose address is NOT
+  # in web2_allow. STRICTLY STRONGER than a delete-only counter: it also catches
+  # a web-1 in-place UPDATE that reboots via an attribute OTHER than
+  # placement_group_id/server_type (reboot_updates is KNOWN-UNCOVERED for those;
+  # see its header), and any stray create. Blocks web-1 delete/replace/reboot-
+  # via-any-attr, a web-2 VOLUME change, and anything else outside the 3 allowed
+  # replaces. EXACT-EQUALITY membership via IN(.address; web2_allow[]) — NOT
+  # `inside`/array-`contains` (which do SUBSTRING matching, a false-match hazard
+  # on similar addresses such as a bare `hcloud_server.web`). Verified on jq 1.8.1.
+  # ["forget"] semantics: a Terraform 1.7+ `removed{}` state-drop serializes as
+  # actions==["forget"], which the any(create/update/delete) form below does NOT
+  # count (no `removed{}` blocks exist in apps/web-platform/infra/ today; if one
+  # is added for a non-allow resource, extend web2_allow or this clause — mirrors
+  # the filter header's forget note for resource_deletes/nested_deletes).
+  # BACKWARD-COMPAT: additive key; the apply / warm_standby / manual-rerun
+  # consumers read only resource_deletes/nested_deletes/reboot_updates (unchanged).
+  web2_out_of_scope_changes: (
+    [ .resource_changes[]?
+      | select(.change.actions? | any(. == "create" or . == "update" or . == "delete"))
+      | select(IN(.address; web2_allow[]) | not) ]
+    | length
+  ),
+  # Prove the recreate actually happens (guard against a silent no-op plan): 1 iff
+  # hcloud_server.web["web-2"] carries BOTH delete and create (a -replace). The
+  # recreate gate requires web2_server_replaced==1, so a drift-only / no-op plan
+  # (replaced==0) FAILS — the dispatch must be a real, scoped recreate.
+  web2_server_replaced: (
+    [ .resource_changes[]?
+      | select(.address == "hcloud_server.web[\"web-2\"]")
+      | select((.change.actions? | index("delete")) and (.change.actions? | index("create"))) ]
     | length
   )
 }
