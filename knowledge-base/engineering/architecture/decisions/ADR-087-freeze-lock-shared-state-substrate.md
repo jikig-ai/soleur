@@ -1,4 +1,4 @@
-# ADR-086: Freeze edit-lock — one cross-harness state substrate, fail-open on read / fail-closed on enforce
+# ADR-087: Freeze edit-lock — one cross-harness state substrate, fail-open on read / fail-closed on enforce
 
 - **Status:** Accepted
 - **Date:** 2026-07-05
