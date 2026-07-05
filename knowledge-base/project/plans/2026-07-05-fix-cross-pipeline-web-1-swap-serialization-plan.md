@@ -72,6 +72,46 @@ named future owner; see `## Deferred / Out of Scope`. In brief:
   on-host `/internal/readyz` pre-pool gate the deferred GA-cutover orchestrator's job; the
   GA warm-standby plan already reasoned this through and deferred it there.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-05
+**Research agents:** 3 Explore agents (traced all 3 deferred surfaces — graceful-swap/web-2-only
+path, web-2 health probe, merge-freeze concurrency), spec-flow-analyzer, architecture-strategist,
+code-simplicity-reviewer, + a Fable scoped-advisor consult. Mechanical halt gates: User-Brand
+Impact (4.6 ✓), Observability (4.7 ✓ 5-field), PAT-shaped (4.8 ✓ none), UI-wireframe (4.9 ✓
+no UI surface), Downtime & Cutover (4.55 ✓ no offline op introduced), network-outage (4.5 —
+Hypotheses provides L3→L7 disposition; not a connectivity outage). Citations verified live
+(#6060 OPEN, #6051/#6040/#5966 CLOSED, #3220 OPEN; all cited rule IDs active).
+
+### Key improvements (all applied)
+1. **Design pivot (Fable consult):** replaced the first-draft runs-API **polling gate** with a
+   **job-level shared concurrency group** — atomic (no TOCTOU), bidirectional, queue-not-fail,
+   zero custom code. Dissolves ~9 of spec-flow's polling-gate gaps by construction.
+2. **P1 completeness fix (architecture-strategist):** the premise was "three swap jobs" — there
+   are **four**. `apply-deploy-pipeline-fix.yml`'s `apply` job also POSTs `deploy web-platform`
+   and swaps web-1; it is serialized against recreate/warm_standby (shared workflow-level group)
+   but NOT against the release deploy. Added as the 4th `web-1-swap` member; guard is a 4-member
+   allow-list.
+3. **P2 lock-hold invariant (architecture-strategist):** serialization is only correct because
+   every member POSTs-then-polls-to-terminal (holds the job across the on-host swap); recorded
+   in the ADR + a Sharp Edge so a future fire-and-forget edit can't silently restore the overlap.
+4. **Verified concrete harm (spec-flow):** the primary harm is not the transient 521 but a
+   `lock_contention` **RED release** (the Verify step has no `exit_code=1` case) + web-1
+   tag-downgrade — leading the Overview now.
+5. **Threshold + YAGNI (code-simplicity):** downgraded `single-user incident` → `aggregate
+   pattern` (the change is risk-reducing; no single-user-incident failure mode is reachable);
+   cut the LARP AC10 and the internals-coupling apply-body grep; the allow-list guard resolves
+   the arch(catch-dropped)/simplicity(don't-block-future-add) tension.
+
+### New considerations discovered
+- The **inngest** deploy workflows share the on-host `flock` (so an inngest deploy CAN
+  `lock_contention`-RED a release) — recorded as a **named accepted residual** with a promote
+  trigger, not silently ignored.
+- G10 residual: a queued release widens the migrate-applied-but-not-deployed window (accepted
+  under expand/contract discipline; do NOT gate `migrate` on `web-1-swap`).
+- Coexistence of job-level + workflow-level `concurrency` **confirmed** against the GitHub
+  workflow-syntax reference (no in-repo precedent existed) — R2 serialization is preserved.
+
 ## Overview
 
 Two-line-of-effort PR, but the second is documentation-only:
