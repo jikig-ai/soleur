@@ -34,11 +34,13 @@ deny() {
 }
 
 # guardrails:freeze-edit-lock — directory-scoped edit-lock for file_editor.
-# Gated on file_path presence: a terminal payload carries no path, so this is
-# skipped for terminal calls and cannot shadow the delete guards (TR3). Fail-
-# open when no active freeze or a malformed state file (OQ2 blast-radius).
-if [[ -n "$FILE_PATH" ]] && declare -f freeze_active_prefix >/dev/null 2>&1; then
-  ALLOWED=$(freeze_active_prefix)
+# Gated on BOTH file_path present AND command empty: a terminal payload carries
+# .tool_input.command and no path, so this is skipped for terminal calls and
+# cannot shadow the delete guards (TR3); requiring `-z COMMAND` too is defense-
+# in-depth against a future payload forwarding both fields. Fail-open when no
+# active freeze or a malformed state file (OQ2 blast-radius).
+if [[ -n "$FILE_PATH" && -z "$COMMAND" ]] && declare -f freeze_active_prefix >/dev/null 2>&1; then
+  ALLOWED=$(freeze_active_prefix) || ALLOWED=""
   if [[ -n "$ALLOWED" ]]; then
     RESOLVED=$(realpath -m "$FILE_PATH" 2>/dev/null || echo "$FILE_PATH")
     case "$RESOLVED" in
@@ -84,8 +86,16 @@ fi
 # The realpath here is a DENY-DECISION resolver (strengthens the block), the
 # OPPOSITE direction from the constitution.md bulk-cleanup delete-executor rule
 # (which forbids realpath before removal). See .claude/hooks/guardrails.sh for
-# the canonical implementation.
-if echo "$COMMAND" | grep -qE '(^|&&|\|\||;|\|)[[:space:]]*(sudo[[:space:]]+)?rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)'; then
+# the canonical implementation + the full SCOPE note (lexical pre-exec guard:
+# covers literal/relative/symlink targets, the common protected shell refs
+# ~/$HOME/${HOME}/$PWD/${PWD}, and bare/path-qualified/escaped/sudo/env/command
+# `rm`; does NOT see arbitrary $VAR, aliases, xargs/find-exec, or glob-expanded
+# entries). This OpenHands port detects on the raw $COMMAND (it has no
+# strip_command_bodies helper), so — consistent with its sibling terminal gates
+# — a commit MESSAGE documenting `rm -rf` on a feature branch can over-match; the
+# tokenizer (which acts only on a real `rm`/`*/rm` token) prevents false-denies
+# in the common quoted-body case.
+if echo "$COMMAND" | grep -qE '(^|[[:space:]]|&&|\|\||;|\|)[^[:space:]]*rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)'; then
   _rd_cwd=""
   if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
     _rd_cwd=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
@@ -110,8 +120,9 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;|\|)[[:space:]]*(sudo[[:space:]]+)?rm
   while (( _ti < ${#_rd_toks[@]} )); do
     _t="${_rd_toks[$_ti]}"
     _ti=$((_ti + 1))
+    _t="${_t#\\}"   # normalize a backslash-escaped `\rm` → `rm`
     case "$_t" in
-      rm)                _in_rm=1; continue ;;
+      rm|*/rm)           _in_rm=1; continue ;;   # bare, /bin/rm, ./rm, \rm
       "&&"|"||"|";"|"|") _in_rm=0; continue ;;
     esac
     [[ "$_in_rm" == 1 && "$_t" != -* ]] && _targets+=("$_t")
@@ -121,6 +132,19 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;|\|)[[:space:]]*(sudo[[:space:]]+)?rm
   while (( _tj < ${#_targets[@]} )); do
     _tg="${_targets[$_tj]}"
     _tj=$((_tj + 1))
+    # Expand the common protected shell references before realpath (see canonical
+    # hook). xargs has already stripped surrounding quotes.
+    # shellcheck disable=SC2088  # case PATTERNS matching the literal `~` token.
+    case "$_tg" in
+      "~")          _tg="${HOME:-}" ;;
+      "~/"*)        _tg="${HOME:-}/${_tg#\~/}" ;;
+      '$HOME'|'${HOME}') _tg="${HOME:-}" ;;
+      '$HOME/'*)    _tg="${HOME:-}/${_tg#\$HOME/}" ;;
+      '${HOME}/'*)  _tg="${HOME:-}/${_tg#'${HOME}'/}" ;;
+      '$PWD'|'${PWD}')   _tg="$_rd_cwd" ;;
+      '$PWD/'*)     _tg="$_rd_cwd/${_tg#\$PWD/}" ;;
+      '${PWD}/'*)   _tg="$_rd_cwd/${_tg#'${PWD}'/}" ;;
+    esac
     _res=$( (cd "$_rd_cwd" 2>/dev/null && realpath -m "$_tg" 2>/dev/null) || echo "" )
     [[ -z "$_res" ]] && _res="$_tg"
     _deny=0

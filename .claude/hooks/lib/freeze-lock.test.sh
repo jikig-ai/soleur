@@ -99,6 +99,23 @@ assert_eq "set resolves relative → absolute prefix" \
   "$root/apps" "$(reader "$root")"
 rm -rf "$root"
 
+# --- CRLF / trailing-whitespace state must NOT brick (trim → active prefix) -
+# A foreign/CRLF-authored state line ('/path\r' or '/path   ') previously read
+# as a valid-looking active prefix that no realpath output can match → every
+# edit denied (fail-CLOSED brick). The reader now trims it to the intended
+# prefix. (Regression guard for the pattern-recognition P3.)
+root="$(mk_root)"; mkdir -p "$root/.claude"
+printf '%s\r\n' "/some/allowed/path" > "$root/.claude/.freeze-lock"
+assert_eq "reader, CRLF line → trimmed active prefix" \
+  "/some/allowed/path" "$(reader "$root")"
+rm -rf "$root"
+
+root="$(mk_root)"; mkdir -p "$root/.claude"
+printf '%s   \n' "/some/allowed/path" > "$root/.claude/.freeze-lock"
+assert_eq "reader, trailing-space line → trimmed active prefix" \
+  "/some/allowed/path" "$(reader "$root")"
+rm -rf "$root"
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1

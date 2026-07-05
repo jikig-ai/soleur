@@ -54,6 +54,13 @@ freeze_active_prefix() {
   # Malformed unless exactly one line.
   [[ ${#lines[@]} -eq 1 ]] || return 0
   local p="${lines[0]}"
+  # Trim a trailing CR (CRLF-authored/foreign-edited state) and trailing
+  # whitespace before validating. Without this, `/path\r` or `/path   ` reads as
+  # a valid-looking active prefix that no realpath output can ever match →
+  # every edit denied (a fail-CLOSED brick, the opposite of the fail-open
+  # contract). Trimming makes such a state activate the INTENDED prefix instead.
+  p="${p%$'\r'}"
+  p="${p%"${p##*[![:space:]]}"}"
   # Non-empty and absolute (leading slash). A relative or blank line is
   # malformed → fail-open.
   [[ -n "$p" && "$p" == /* ]] || return 0

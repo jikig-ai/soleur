@@ -11,7 +11,7 @@
 # Corresponding prose rules:
 #   guardrails:block-commit-on-main — constitution.md "Never allow agents to work directly on the default branch"
 #   guardrails:block-rm-rf-worktrees — constitution.md "Never rm -rf on the current directory, a worktree path, or the repo root"
-#   guardrails:block-recursive-delete — constitution.md "Never rm -rf a target that resolves onto a repo/worktree root, $HOME, /, or a .git-bearing checkout"
+#   guardrails:block-recursive-delete — constitution.md "Never rm -rf a target that resolves onto a repo/worktree root (or an ancestor of either), $HOME, /, or a .git-bearing checkout"
 #   guardrails:freeze-edit-lock — constitution.md "When a freeze is active, deny Write/Edit outside the allowed path prefix"
 #   guardrails:block-delete-branch — constitution.md "Never use --delete-branch with gh pr merge"
 #   guardrails:block-conflict-markers — constitution.md "grep staged content for conflict markers"
@@ -37,7 +37,7 @@ INPUT=$(cat)
 # two jq forks ran on every Bash tool invocation; collapsing to one halves
 # the hook's hot-path overhead. FILE_PATH is extracted here too so the freeze
 # edit-lock branch (Write/Edit) shares the same single fork.
-eval "$(echo "$INPUT" | jq -r '@sh "COMMAND=\(.tool_input.command // "") TOOL_NAME=\(.tool_name // "") FILE_PATH=\(.tool_input.file_path // "")"' 2>/dev/null || echo 'COMMAND="" TOOL_NAME="" FILE_PATH=""')"
+eval "$(echo "$INPUT" | jq -r '@sh "COMMAND=\(.tool_input.command // "") TOOL_NAME=\(.tool_name // "") FILE_PATH=\(.tool_input.file_path // .tool_input.notebook_path // "")"' 2>/dev/null || echo 'COMMAND="" TOOL_NAME="" FILE_PATH=""')"
 # Belt-and-braces against set -u: a partial eval (jq succeeded on one
 # field, failed on another) could leave a variable undefined.
 : "${COMMAND:=}"
@@ -45,14 +45,17 @@ eval "$(echo "$INPUT" | jq -r '@sh "COMMAND=\(.tool_input.command // "") TOOL_NA
 : "${FILE_PATH:=}"
 
 # guardrails:freeze-edit-lock — directory-scoped edit-lock for file-editing
-# tools (Write/Edit). Placed ABOVE the Bash sentinels and gated on file_path
-# presence: a Bash payload carries .tool_input.command and NO file_path, so this
-# branch is skipped entirely for Bash rm-rf calls and CANNOT shadow the delete
-# guards (TR3 — payload-shape disjointness). Fail-open: no active freeze (or a
-# malformed state file) => freeze_active_prefix echoes nothing => edit allowed
-# (OQ2 blast-radius — a parse bug must not brick every edit).
-if [[ -n "$FILE_PATH" ]] && declare -f freeze_active_prefix >/dev/null 2>&1; then
-  ALLOWED=$(freeze_active_prefix)
+# tools (Write/Edit/MultiEdit/NotebookEdit — registered on all four in
+# .claude/settings.json). Placed ABOVE the Bash sentinels and gated on BOTH
+# `file_path present` AND `command empty`: a Bash payload carries
+# .tool_input.command and NO file_path, so this branch is skipped for Bash calls
+# and CANNOT shadow the delete guards (TR3). Requiring `-z COMMAND` too is
+# defense-in-depth — even if a future harness forwarded an extra file_path field
+# on a Bash payload, the non-empty COMMAND keeps this branch skipped so the Bash
+# sentinels still run. Fail-open: no active freeze (or a malformed state file)
+# => freeze_active_prefix echoes nothing => edit allowed (OQ2 blast-radius).
+if [[ -n "$FILE_PATH" && -z "$COMMAND" ]] && declare -f freeze_active_prefix >/dev/null 2>&1; then
+  ALLOWED=$(freeze_active_prefix) || ALLOWED=""
   if [[ -n "$ALLOWED" ]]; then
     RESOLVED=$(realpath -m "$FILE_PATH" 2>/dev/null || echo "$FILE_PATH")
     case "$RESOLVED" in
@@ -149,10 +152,29 @@ fi
 # before deciding to remove" rule, which forbids realpath in a delete-EXECUTOR
 # (resolving before removal weakens it, CWE-59). Different code paths; do not
 # conflate them.
-if echo "$COMMAND" | grep -qE '(^|&&|\|\||;|\|)[[:space:]]*(sudo[[:space:]]+)?rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)'; then
+#
+# SCOPE (this is a lexical PRE-EXEC guard, not a shell — like no-memory-write.sh
+# it exists to stop ACCIDENTAL destructive deletes onto protected paths, not to
+# defeat determined evasion). It sees the command string BEFORE the shell applies
+# expansion / alias / PATH / glob. It covers: literal absolute + relative +
+# symlinked targets; the common protected shell refs `~`, `$HOME`, `${HOME}`,
+# `$PWD`, `${PWD}` (expanded below); and `rm` invoked bare, path-qualified
+# (`/bin/rm`), backslash-escaped (`\rm`), or behind `sudo`/`env`/`command`.
+# It CANNOT see: arbitrary `$VAR`/`$(cmd)` targets, aliases, `xargs rm` /
+# `find … -exec rm`, or the entries a glob (`rm -rf *`, `rm -rf ./*`) will expand
+# to (git-recoverable; `/` and `.git` survive default globbing). Multi-`cd`
+# chains resolve relative targets against only the FIRST `cd` (shared
+# resolve_command_cwd limitation). Detection runs against $SCAN (heredoc/quoted
+# commit-message bodies blanked) so a commit whose MESSAGE documents `rm -rf`
+# does not false-deny, while a real chained `rm` after the body is preserved and
+# tokenized from the raw $COMMAND (so a quoted path ARGUMENT is still checked).
+if echo "$SCAN" | grep -qE '(^|[[:space:]]|&&|\|\||;|\|)[^[:space:]]*rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)'; then
   # Resolve the command's working directory so relative targets resolve the same
   # way the shell would (cd <dir> && ..., git -C <dir>, hook .cwd, else $PWD).
-  _rd_cwd=$(resolve_command_cwd "$COMMAND" "$INPUT")
+  # `|| _rd_cwd=""` is belt-and-braces: resolve_command_cwd returns 0 today, but
+  # a future edit ending it in a non-zero command must not abort the hook mid-
+  # guard under set -e (which would silently skip the delete guard).
+  _rd_cwd=$(resolve_command_cwd "$COMMAND" "$INPUT") || _rd_cwd=""
   [[ -n "$_rd_cwd" && -d "$_rd_cwd" ]] || _rd_cwd="$PWD"
 
   # Enumerate protected roots. git worktree list yields the main checkout + all
@@ -166,7 +188,9 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;|\|)[[:space:]]*(sudo[[:space:]]+)?rm
 
   # Quote-aware tokenization (xargs -n1 honors shell quoting; chain operators
   # &&/||/;/| survive as their own tokens). Walk rm invocations, collecting
-  # non-flag args as delete targets and resetting at each chain boundary.
+  # non-flag args as delete targets and resetting at each chain boundary. Tokens
+  # are taken from the raw $COMMAND so a quoted path argument is preserved
+  # (detection above used $SCAN only to gate on a real, non-message `rm`).
   _rd_toks=()
   mapfile -t _rd_toks < <(printf '%s\n' "$COMMAND" | xargs -n1 2>/dev/null) || true
   _in_rm=0
@@ -175,8 +199,9 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;|\|)[[:space:]]*(sudo[[:space:]]+)?rm
   while (( _ti < ${#_rd_toks[@]} )); do
     _t="${_rd_toks[$_ti]}"
     _ti=$((_ti + 1))
+    _t="${_t#\\}"   # normalize a backslash-escaped `\rm` → `rm`
     case "$_t" in
-      rm)                _in_rm=1; continue ;;
+      rm|*/rm)           _in_rm=1; continue ;;   # bare, /bin/rm, ./rm, \rm
       "&&"|"||"|";"|"|") _in_rm=0; continue ;;
     esac
     [[ "$_in_rm" == 1 && "$_t" != -* ]] && _targets+=("$_t")
@@ -186,6 +211,22 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;|\|)[[:space:]]*(sudo[[:space:]]+)?rm
   while (( _tj < ${#_targets[@]} )); do
     _tg="${_targets[$_tj]}"
     _tj=$((_tj + 1))
+    # Expand the common protected shell references BEFORE realpath — a lexical
+    # guard sees these literal tokens, but the shell expands them at exec onto a
+    # protected target (3 review agents flagged the $HOME/~/$PWD bypass). xargs
+    # has already stripped surrounding quotes, so `"$HOME"` arrives as `$HOME`.
+    # shellcheck disable=SC2088  # these are case PATTERNS matching the literal
+    # `~` token the guard received, NOT a path we expand — the RHS expands it.
+    case "$_tg" in
+      "~")          _tg="${HOME:-}" ;;
+      "~/"*)        _tg="${HOME:-}/${_tg#\~/}" ;;
+      '$HOME'|'${HOME}') _tg="${HOME:-}" ;;
+      '$HOME/'*)    _tg="${HOME:-}/${_tg#\$HOME/}" ;;
+      '${HOME}/'*)  _tg="${HOME:-}/${_tg#'${HOME}'/}" ;;
+      '$PWD'|'${PWD}')   _tg="$_rd_cwd" ;;
+      '$PWD/'*)     _tg="$_rd_cwd/${_tg#\$PWD/}" ;;
+      '${PWD}/'*)   _tg="$_rd_cwd/${_tg#'${PWD}'/}" ;;
+    esac
     _res=$( (cd "$_rd_cwd" 2>/dev/null && realpath -m "$_tg" 2>/dev/null) || echo "" )
     # Fail-closed: an unresolvable target still gets checked in its raw form.
     [[ -z "$_res" ]] && _res="$_tg"
