@@ -76,6 +76,12 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FILTER="$REPO_ROOT/tests/scripts/lib/destroy-guard-filter-web-platform.jq"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
+# The web-2-recreate gate is an EXTRACTED, SOURCED shell function (AC5/AC6) — this
+# test calls it DIRECTLY (not a re-derived inline copy), so the bytes the workflow
+# runs are the bytes under test.
+WEB2_GATE_LIB="$REPO_ROOT/tests/scripts/lib/web2-recreate-gate.sh"
+# shellcheck source=tests/scripts/lib/web2-recreate-gate.sh
+source "$WEB2_GATE_LIB"
 pass=0; fail=0
 
 _report() {
@@ -353,6 +359,154 @@ t_hcloud_reboot_ack_allows() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# web-2-recreate scoped guard (apply_target=web-2-recreate). PERMITS EXACTLY the
+# scoped -replace of hcloud_server.web["web-2"] + its 2 id-referencing dependents;
+# ABORTS on any web-1 touch, any web-2 DATA-VOLUME destroy, a web-2 reboot, a
+# no-op, or anything else outside the 3-address allow-set. The gate is the SOURCED
+# web2_recreate_gate function (no [ack-destroy] bypass). Fixtures are synthesized
+# (cq-test-fixtures-synthesized-only).
+# ---------------------------------------------------------------------------
+
+# Returns "oos:ndel:rupd:replaced:rc" — the four web-2 counters (proof the filter
+# computed them) PLUS the sourced gate's rc (proof of the decision). Non-vacuous:
+# a delete-only or reboot-only guard would mis-decide the P0-2 / substring cases
+# below, and the counter columns make the difference visible.
+_run_web2_gate() {
+  local fixture="$1" path counts oos ndel rupd replaced rc
+  path="$FIXTURES/$fixture"
+  counts=$(jq -f "$FILTER" < "$path")
+  oos=$(echo "$counts" | jq -r '.web2_out_of_scope_changes')
+  ndel=$(echo "$counts" | jq -r '.nested_deletes')
+  rupd=$(echo "$counts" | jq -r '.reboot_updates')
+  replaced=$(echo "$counts" | jq -r '.web2_server_replaced')
+  web2_recreate_gate "$path" >/dev/null 2>&1 && rc=0 || rc=$?
+  # Column order is LOAD-BEARING — every T20-T28 assertion pins this exact tuple.
+  # Legend: web2_out_of_scope_changes : nested_deletes : reboot_updates :
+  #         web2_server_replaced : gate_rc. Do NOT transpose without updating all.
+  echo "$oos:$ndel:$rupd:$replaced:$rc"
+}
+
+# T20: the scoped web-2 replace (server + network attach + volume attachment all
+# ["delete","create"]; DATA volume absent) PASSES — the only permitted plan.
+t_web2_scoped_replace_passes() {
+  local out; out=$(_run_web2_gate "tfplan-web2-recreate-scoped.json")
+  if [[ "$out" == "0:0:0:1:0" ]]; then
+    _report "T20 web-2 scoped replace PASSES (oos=0 ndel=0 rupd=0 replaced=1 rc=0)" ok
+  else
+    _report "T20 web-2 scoped replace PASSES" fail "got '$out' want '0:0:0:1:0'"
+  fi
+}
+
+# T21: scoped + a hcloud_server.web["web-1"] REPLACE → out-of-scope → ABORT. The
+# sole-live-origin protection: a web-1 delete/replace can never ride the recreate.
+t_web2_web1_replace_aborts() {
+  local out; out=$(_run_web2_gate "tfplan-web2-recreate-web1-replace.json")
+  if [[ "$out" == "1:0:0:1:1" ]]; then
+    _report "T21 web-1 replace in the recreate plan ABORTS (oos=1 rc=1)" ok
+  else
+    _report "T21 web-1 replace in the recreate plan ABORTS" fail "got '$out' want '1:0:0:1:1'"
+  fi
+}
+
+# T22: scoped + a hcloud_volume.workspaces["web-2"] destroy → out-of-scope → ABORT.
+# The 20 GB data volume is DELIBERATELY absent from web2_allow, so any destroy trips.
+t_web2_volume_destroy_aborts() {
+  local out; out=$(_run_web2_gate "tfplan-web2-recreate-volume-destroy.json")
+  if [[ "$out" == "1:0:0:1:1" ]]; then
+    _report "T22 web-2 DATA-volume destroy ABORTS (oos=1 rc=1)" ok
+  else
+    _report "T22 web-2 DATA-volume destroy ABORTS" fail "got '$out' want '1:0:0:1:1'"
+  fi
+}
+
+# T23: web-2 server in-place reboot (actions==["update"], placement diff) → NOT a
+# replace (replaced=0) AND reboot_updates=1 → ABORT on both counts.
+t_web2_reboot_aborts() {
+  local out; out=$(_run_web2_gate "tfplan-web2-recreate-web2-reboot.json")
+  if [[ "$out" == "0:0:1:0:1" ]]; then
+    _report "T23 web-2 in-place reboot ABORTS (rupd=1 replaced=0 rc=1)" ok
+  else
+    _report "T23 web-2 in-place reboot ABORTS" fail "got '$out' want '0:0:1:0:1'"
+  fi
+}
+
+# T24: no-op / drift-only plan → web2_server_replaced=0 → ABORT (a dispatch must be
+# a REAL scoped recreate, never a silent no-op).
+t_web2_noop_aborts() {
+  local out; out=$(_run_web2_gate "tfplan-web2-recreate-noop.json")
+  if [[ "$out" == "0:0:0:0:1" ]]; then
+    _report "T24 no-op plan ABORTS (replaced=0 rc=1)" ok
+  else
+    _report "T24 no-op plan ABORTS" fail "got '$out' want '0:0:0:0:1'"
+  fi
+}
+
+# T25 (P0-2, NON-VACUOUS): scoped + a hcloud_server.web["web-1"] in-place UPDATE on
+# a NON-placement/server_type attr (labels). reboot_updates=0 here — a reboot-only
+# counter would MISS this web-1 reboot-via-any-attr — but web2_out_of_scope_changes
+# =1 catches it → ABORT. This is the exact hole the positive-scope counter closes.
+t_web2_web1_inplace_nonplacement_aborts() {
+  local out; out=$(_run_web2_gate "tfplan-web2-recreate-web1-inplace-nonplacement.json")
+  if [[ "$out" == "1:0:0:1:1" ]]; then
+    _report "T25 web-1 non-placement in-place UPDATE ABORTS (oos=1 rupd=0 — P0-2 hole closed)" ok
+  else
+    _report "T25 web-1 non-placement in-place UPDATE ABORTS" fail "got '$out' want '1:0:0:1:1' (rupd MUST be 0 to prove non-vacuity)"
+  fi
+}
+
+# T26: scoped + a bare `hcloud_server.web` (no for_each key) update — an address
+# that CONTAINS the allow-set substrings but is NOT exactly-equal to any entry.
+# Exact-equality IN() membership counts it out-of-scope (a substring `inside`
+# match would have FALSELY allowed it) → ABORT.
+t_web2_substring_collision_aborts() {
+  local out; out=$(_run_web2_gate "tfplan-web2-recreate-substring-collision.json")
+  if [[ "$out" == "1:0:0:1:1" ]]; then
+    _report "T26 substring-collision address (bare hcloud_server.web) ABORTS (oos=1 rc=1)" ok
+  else
+    _report "T26 substring-collision address ABORTS" fail "got '$out' want '1:0:0:1:1'"
+  fi
+}
+
+# T27 (AC5/AC6 no-bypass): the sourced gate has NO [ack-destroy] path — a commit
+# trailer cannot authorize a destructive web-1 touch. Prove BOTH: (a) the gate
+# still ABORTS on the web-1-replace fixture (rc=1), and (b) the gate lib source
+# carries no ack token to bypass with.
+t_web2_no_ack_destroy_bypass() {
+  local rc=0
+  web2_recreate_gate "$FIXTURES/tfplan-web2-recreate-web1-replace.json" >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" -ne 1 ]]; then
+    _report "T27 recreate gate has no [ack-destroy] bypass" fail "gate rc=$rc on web-1-replace, want 1"
+    return
+  fi
+  if grep -qi 'ack-destroy' "$WEB2_GATE_LIB"; then
+    # A match is only a violation if it's an actual bypass, not the doc line that
+    # documents the ABSENCE of one. Fail closed: any ack-destroy TOKEN in an
+    # executable-looking line is suspect.
+    if grep -vE '^\s*#' "$WEB2_GATE_LIB" | grep -qi 'ack-destroy'; then
+      _report "T27 recreate gate has no [ack-destroy] bypass" fail "gate lib references ack-destroy in a non-comment line"
+      return
+    fi
+  fi
+  _report "T27 recreate gate has no [ack-destroy] bypass (rc=1 on web-1-replace; no ack path in lib)" ok
+}
+
+# T28 (forget hole closed): scoped + a hcloud_volume.workspaces["web-2"] STATE-DROP
+# (actions==["forget"], a Terraform `removed{}` block). `forget` drops the resource
+# from state without destroying the physical volume, so a delete-only predicate
+# would MISS it (oos=0 → gate PASSES → the data volume is silently orphaned from
+# Terraform management). The web2_out_of_scope_changes predicate counts "forget"
+# on any out-of-allow-set address → oos=1 → ABORT. RED-tested: drop "forget" from
+# the jq any(...) and this case flips to 0:0:0:1:0 (a false PASS).
+t_web2_volume_forget_aborts() {
+  local out; out=$(_run_web2_gate "tfplan-web2-recreate-volume-forget.json")
+  if [[ "$out" == "1:0:0:1:1" ]]; then
+    _report "T28 web-2 DATA-volume state-drop (forget) ABORTS (oos=1 rc=1 — forget hole closed)" ok
+  else
+    _report "T28 web-2 DATA-volume state-drop (forget) ABORTS" fail "got '$out' want '1:0:0:1:1'"
+  fi
+}
+
 t_ruleset_rule_removal_trips
 t_tunnel_ingress_removal_trips
 t_zone_settings_header_removal_trips
@@ -372,6 +526,15 @@ t_hcloud_location_replace_no_double_count
 t_hcloud_noop_attr_update_passes
 t_hcloud_create_passes
 t_hcloud_reboot_ack_allows
+t_web2_scoped_replace_passes
+t_web2_web1_replace_aborts
+t_web2_volume_destroy_aborts
+t_web2_reboot_aborts
+t_web2_noop_aborts
+t_web2_web1_inplace_nonplacement_aborts
+t_web2_substring_collision_aborts
+t_web2_no_ack_destroy_bypass
+t_web2_volume_forget_aborts
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
