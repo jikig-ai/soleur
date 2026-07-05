@@ -154,9 +154,16 @@ instance RECREATE re-runs first-boot. This is an autonomous, no-SSH menu-ack dis
   (`web2_out_of_scope_changes==0 && reboot_updates==0 && web2_server_replaced==1` — web-1
   untouched, the `/workspaces` data volume 0-destroy), then verifies web-2 `:9000` bound off-host
   (web-1 `/hooks/deploy-status` reason flips to `ok`).
-- **Coherence-abort remediation.** If the preflight aborts on a hash mismatch, `main`'s
-  host-scripts advanced beyond web-1's running image; redeploy web-1 to current `main` first,
-  then re-dispatch. The abort happens BEFORE any recreate, so nothing is destroyed.
+- **Coherence-abort remediation (menu-ack, no SSH).** If the preflight aborts on a hash
+  mismatch, `main`'s host-scripts advanced beyond web-1's running image, so web-1 must be
+  redeployed to current `main` before the recreate can cohere. web-1 auto-deploys on every merge
+  to `main` via `web-platform-release.yml`; if a merge is pending, wait for that run to finish. To
+  force a redeploy without a code change, dispatch a patch release, then re-dispatch the recreate:
+  - `gh workflow run web-platform-release.yml -f bump_type=patch` — builds + deploys current `main`
+    to web-1 (watch with `gh run watch`).
+  - `gh workflow run apply-web-platform-infra.yml -f apply_target=web-2-recreate -f reason='retry after web-1 redeploy'`
+    — the recreate re-resolves web-1's now-current digest and the coherence preflight passes.
+  The abort happens BEFORE any recreate, so nothing is destroyed; both steps are idempotent.
 - **Re-dispatch is idempotent (spec-flow P2-3).** A create-success followed by a cloud-init
   abort still lands the server (verify RED, re-dispatch re-runs the boot); a create failure at
   the TF layer is recoverable by re-dispatch. No partial state strands web-2 permanently.

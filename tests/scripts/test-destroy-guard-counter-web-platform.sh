@@ -381,6 +381,9 @@ _run_web2_gate() {
   rupd=$(echo "$counts" | jq -r '.reboot_updates')
   replaced=$(echo "$counts" | jq -r '.web2_server_replaced')
   web2_recreate_gate "$path" >/dev/null 2>&1 && rc=0 || rc=$?
+  # Column order is LOAD-BEARING — every T20-T28 assertion pins this exact tuple.
+  # Legend: web2_out_of_scope_changes : nested_deletes : reboot_updates :
+  #         web2_server_replaced : gate_rc. Do NOT transpose without updating all.
   echo "$oos:$ndel:$rupd:$replaced:$rc"
 }
 
@@ -488,6 +491,22 @@ t_web2_no_ack_destroy_bypass() {
   _report "T27 recreate gate has no [ack-destroy] bypass (rc=1 on web-1-replace; no ack path in lib)" ok
 }
 
+# T28 (forget hole closed): scoped + a hcloud_volume.workspaces["web-2"] STATE-DROP
+# (actions==["forget"], a Terraform `removed{}` block). `forget` drops the resource
+# from state without destroying the physical volume, so a delete-only predicate
+# would MISS it (oos=0 → gate PASSES → the data volume is silently orphaned from
+# Terraform management). The web2_out_of_scope_changes predicate counts "forget"
+# on any out-of-allow-set address → oos=1 → ABORT. RED-tested: drop "forget" from
+# the jq any(...) and this case flips to 0:0:0:1:0 (a false PASS).
+t_web2_volume_forget_aborts() {
+  local out; out=$(_run_web2_gate "tfplan-web2-recreate-volume-forget.json")
+  if [[ "$out" == "1:0:0:1:1" ]]; then
+    _report "T28 web-2 DATA-volume state-drop (forget) ABORTS (oos=1 rc=1 — forget hole closed)" ok
+  else
+    _report "T28 web-2 DATA-volume state-drop (forget) ABORTS" fail "got '$out' want '1:0:0:1:1'"
+  fi
+}
+
 t_ruleset_rule_removal_trips
 t_tunnel_ingress_removal_trips
 t_zone_settings_header_removal_trips
@@ -515,6 +534,7 @@ t_web2_noop_aborts
 t_web2_web1_inplace_nonplacement_aborts
 t_web2_substring_collision_aborts
 t_web2_no_ack_destroy_bypass
+t_web2_volume_forget_aborts
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

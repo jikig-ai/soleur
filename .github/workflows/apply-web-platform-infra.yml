@@ -1062,9 +1062,14 @@ jobs:
   web_2_recreate:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'web-2-recreate'
     runs-on: ubuntu-24.04
-    # Fresh Ubuntu boot (apt + docker + multi-image pull) is 10+ min; + the deploy
-    # fan-out + off-host verify poll stay UNDER this ceiling.
-    timeout-minutes: 30
+    # Budget must exceed the SUM of: digest-resolve (≤12×20s ≈ 4m) + preflight/plan
+    # (~2m) + apply (~3m) + the off-host verify poll's own worst case (baseline
+    # 12×20s + SETTLE 30s + poll 60×(10s curl + 15s) ≈ 29.5m — this is the fresh-boot
+    # wait). That totals ~38m, so a 30m ceiling would let GitHub's job-timeout kill
+    # PRE-EMPT deploy-status-fanout-verify.sh's terminal exit-1 (which prints the
+    # idempotent-re-dispatch recovery contract). 45m lets the script's loud abort win
+    # the race on a genuinely-stuck web-2 while still bounding a hung job.
+    timeout-minutes: 45
     env:
       STATUS_POLL_MAX_ATTEMPTS: 60
       STATUS_POLL_INTERVAL_S: 15
@@ -1217,7 +1222,7 @@ jobs:
         run: |
           set -euo pipefail
           WANT=$(doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform console <<<'local.host_scripts_content_hash' | tr -d '"')
+            terraform console -input=false <<<'local.host_scripts_content_hash' | tr -d '"')
           WEB2_PREFLIGHT_WANT_HASH="$WANT" PINNED="$PINNED" INFRA_DIR="$PWD" \
             bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/web2-recreate-preflight.sh"
 

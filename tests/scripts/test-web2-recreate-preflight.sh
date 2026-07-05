@@ -56,62 +56,65 @@ t_coherent_passes() {
 }
 
 # T2 (core AC10b): mismatching applied hash → non-zero exit BEFORE any -replace.
+# Assert the DISCRIMINATING reason (COHERENCE MISMATCH), not just rc≠0 — otherwise
+# the test stays green if the script exits non-zero for an unrelated reason (e.g.
+# format-validation firing first), masking a regression in the load-bearing check.
 t_mismatch_aborts() {
-  local rc=0
-  PINNED="$VALID_PINNED" WEB2_PREFLIGHT_SEED_DIR="$SEED" WEB2_PREFLIGHT_WANT_HASH="$MISMATCH_HASH" \
-    bash "$PREFLIGHT" >/dev/null 2>&1 || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    _report "T2 hash mismatch aborts non-zero (the durable :latest fix, pre-destruction)" ok
+  local rc=0 err
+  err=$(PINNED="$VALID_PINNED" WEB2_PREFLIGHT_SEED_DIR="$SEED" WEB2_PREFLIGHT_WANT_HASH="$MISMATCH_HASH" \
+    bash "$PREFLIGHT" 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" -ne 0 && "$err" == *"COHERENCE MISMATCH"* ]]; then
+    _report "T2 hash mismatch aborts on COHERENCE MISMATCH (the durable :latest fix, pre-destruction)" ok
   else
-    _report "T2 hash mismatch aborts non-zero" fail "expected non-zero, got 0"
+    _report "T2 hash mismatch aborts on COHERENCE MISMATCH" fail "rc=$rc err='$err'"
   fi
 }
 
-# T3: malformed PINNED (a bare tag, no @digest) → non-zero (format-validate first).
+# T3: malformed PINNED (a bare tag, no @digest) → non-zero, on the digest-shape reason.
 t_bare_tag_aborts() {
-  local rc=0
-  PINNED="ghcr.io/jikig-ai/soleur-web-platform:latest" WEB2_PREFLIGHT_SEED_DIR="$SEED" \
-    WEB2_PREFLIGHT_WANT_HASH="$MATCH_HASH" bash "$PREFLIGHT" >/dev/null 2>&1 || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    _report "T3 bare tag (no @sha256 digest) aborts non-zero" ok
+  local rc=0 err
+  err=$(PINNED="ghcr.io/jikig-ai/soleur-web-platform:latest" WEB2_PREFLIGHT_SEED_DIR="$SEED" \
+    WEB2_PREFLIGHT_WANT_HASH="$MATCH_HASH" bash "$PREFLIGHT" 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" -ne 0 && "$err" == *"immutable digest ref"* ]]; then
+    _report "T3 bare tag (no @sha256 digest) aborts on 'immutable digest ref'" ok
   else
-    _report "T3 bare tag aborts non-zero" fail "expected non-zero, got 0"
+    _report "T3 bare tag aborts on 'immutable digest ref'" fail "rc=$rc err='$err'"
   fi
 }
 
-# T4: malformed digest hex (not 64 hex) → non-zero.
+# T4: malformed digest hex (not 64 hex) → non-zero, on the hex-shape reason.
 t_bad_digest_hex_aborts() {
-  local rc=0
-  PINNED="ghcr.io/jikig-ai/soleur-web-platform@sha256:notahex" WEB2_PREFLIGHT_SEED_DIR="$SEED" \
-    WEB2_PREFLIGHT_WANT_HASH="$MATCH_HASH" bash "$PREFLIGHT" >/dev/null 2>&1 || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    _report "T4 malformed digest hex aborts non-zero" ok
+  local rc=0 err
+  err=$(PINNED="ghcr.io/jikig-ai/soleur-web-platform@sha256:notahex" WEB2_PREFLIGHT_SEED_DIR="$SEED" \
+    WEB2_PREFLIGHT_WANT_HASH="$MATCH_HASH" bash "$PREFLIGHT" 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" -ne 0 && "$err" == *"refusing to proceed"* ]]; then
+    _report "T4 malformed digest hex aborts on 'refusing to proceed'" ok
   else
-    _report "T4 malformed digest hex aborts non-zero" fail "expected non-zero, got 0"
+    _report "T4 malformed digest hex aborts on 'refusing to proceed'" fail "rc=$rc err='$err'"
   fi
 }
 
-# T5: malformed WANT hash (terraform-console-failure shape) → non-zero.
+# T5: malformed WANT hash (terraform-console-failure shape) → non-zero, on the WANT reason.
 t_bad_want_aborts() {
-  local rc=0
-  PINNED="$VALID_PINNED" WEB2_PREFLIGHT_SEED_DIR="$SEED" WEB2_PREFLIGHT_WANT_HASH="not-a-hash" \
-    bash "$PREFLIGHT" >/dev/null 2>&1 || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    _report "T5 malformed applied-hash WANT aborts non-zero" ok
+  local rc=0 err
+  err=$(PINNED="$VALID_PINNED" WEB2_PREFLIGHT_SEED_DIR="$SEED" WEB2_PREFLIGHT_WANT_HASH="not-a-hash" \
+    bash "$PREFLIGHT" 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" -ne 0 && "$err" == *"applied hash WANT"* ]]; then
+    _report "T5 malformed applied-hash WANT aborts on 'applied hash WANT'" ok
   else
-    _report "T5 malformed applied-hash WANT aborts non-zero" fail "expected non-zero, got 0"
+    _report "T5 malformed applied-hash WANT aborts on 'applied hash WANT'" fail "rc=$rc err='$err'"
   fi
 }
 
-# T6: missing PINNED → non-zero (required input).
+# T6: missing PINNED → non-zero (required input), on the ':?' required-var reason.
 t_missing_pinned_aborts() {
-  local rc=0
-  WEB2_PREFLIGHT_SEED_DIR="$SEED" WEB2_PREFLIGHT_WANT_HASH="$MATCH_HASH" \
-    bash "$PREFLIGHT" >/dev/null 2>&1 || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    _report "T6 missing PINNED aborts non-zero" ok
+  local rc=0 err
+  err=$(WEB2_PREFLIGHT_SEED_DIR="$SEED" WEB2_PREFLIGHT_WANT_HASH="$MATCH_HASH" \
+    bash "$PREFLIGHT" 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" -ne 0 && "$err" == *"is required"* ]]; then
+    _report "T6 missing PINNED aborts on 'is required'" ok
   else
-    _report "T6 missing PINNED aborts non-zero" fail "expected non-zero, got 0"
+    _report "T6 missing PINNED aborts on 'is required'" fail "rc=$rc err='$err'"
   fi
 }
 

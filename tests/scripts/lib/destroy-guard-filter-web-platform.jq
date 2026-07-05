@@ -170,15 +170,19 @@ def web2_allow: [
   # `inside`/array-`contains` (which do SUBSTRING matching, a false-match hazard
   # on similar addresses such as a bare `hcloud_server.web`). Verified on jq 1.8.1.
   # ["forget"] semantics: a Terraform 1.7+ `removed{}` state-drop serializes as
-  # actions==["forget"], which the any(create/update/delete) form below does NOT
-  # count (no `removed{}` blocks exist in apps/web-platform/infra/ today; if one
-  # is added for a non-allow resource, extend web2_allow or this clause — mirrors
-  # the filter header's forget note for resource_deletes/nested_deletes).
+  # actions==["forget"] (drops the resource from state WITHOUT destroying the real
+  # infra). It is COUNTED here (the any(...) form includes "forget"), so a
+  # `removed{}` on any out-of-allow-set address — e.g. dropping web-1 or the web-2
+  # data volume from Terraform management — trips web2_out_of_scope_changes and
+  # ABORTS the recreate. (No `removed{}` blocks exist in apps/web-platform/infra/
+  # today; this closes the theoretical state-drift hole pre-emptively. The
+  # allow-set's 3 addresses never emit "forget" on a scoped recreate — they
+  # replace via delete+create — so this adds no false-positive.)
   # BACKWARD-COMPAT: additive key; the apply / warm_standby / manual-rerun
   # consumers read only resource_deletes/nested_deletes/reboot_updates (unchanged).
   web2_out_of_scope_changes: (
     [ .resource_changes[]?
-      | select(.change.actions? | any(. == "create" or . == "update" or . == "delete"))
+      | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
       | select(IN(.address; web2_allow[]) | not) ]
     | length
   ),

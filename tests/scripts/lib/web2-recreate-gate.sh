@@ -23,8 +23,13 @@
 # PASS (rc=0) iff:
 #   web2_out_of_scope_changes==0 && nested_deletes==0 && reboot_updates==0
 #   && web2_server_replaced==1
-# web2_out_of_scope_changes SUBSUMES a delete-only check (spec-flow P0-2);
-# reboot_updates==0 + nested_deletes==0 are kept belt-and-braces.
+# web2_out_of_scope_changes SUBSUMES a delete-only check (spec-flow P0-2).
+# reboot_updates==0 + nested_deletes==0 are INTENTIONALLY REDUNDANT defense-in-depth:
+# with web2_server_replaced==1 required, any reboot/nested-delete-bearing resource is
+# also an out-of-allow-set change (oos>0), so these two clauses cannot be the SOLE
+# cause of an abort in any realistic plan — a mutation that removes them fails no test
+# BY DESIGN. They are kept as a backstop against a future regression in the oos counter
+# (e.g. a broken IN() membership check), not as an independently-triggerable gate.
 #
 # Source of truth for the counters:
 #   tests/scripts/lib/destroy-guard-filter-web-platform.jq
