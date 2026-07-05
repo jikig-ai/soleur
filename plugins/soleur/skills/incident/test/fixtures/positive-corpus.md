@@ -73,3 +73,11 @@ sb_secret_zzzzzzzzzzzzzzzzzzzz
 ## PEM private-key header
 
 -----BEGIN RSA PRIVATE KEY-----
+
+## Doppler token (added #5987 — crown-jewel class)
+
+dp.st.dev.zzzzzzzzzzzzzzzzzzzz
+
+## Slack token (added #5987 — crown-jewel class)
+
+xoxb-zzzzzzzzzzzzzzzzzzzz

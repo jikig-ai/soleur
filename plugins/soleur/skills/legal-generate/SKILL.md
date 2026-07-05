@@ -47,6 +47,26 @@ Jurisdiction: [jurisdiction]
 Contact: [contact info]"
 ```
 
+## Phase 2.5: Redaction Gate (BLOCKING — runs BEFORE inline presentation)
+
+A generated legal draft can echo a secret or PII that was passed in as company context (a contact email, an API identifier pasted into a data-practices answer). **Presenting the draft inline in Phase 3 is a transcript write boundary** — the same fail-closed rule the incident skill enforces (`incident/SKILL.md` Phase 6): the sentinel must precede inline-emit, not just file-commit. So the redaction gate runs here, before the operator ever sees the draft.
+
+1. Write the generated draft to a `mktemp` file (do NOT emit it inline yet).
+2. Run the shared hardened engine against it:
+
+   ```bash
+   bash ../incident/scripts/redact-sentinel.sh <draft-tmpfile>
+   ```
+
+   The path is relative to this skill directory (`plugins/soleur/skills/legal-generate/`); the engine is owned by the `incident` skill and shared cross-skill (see ADR-086).
+
+3. Dispatch on the exit code (fail-closed):
+   - **exit 0 (clean)** — proceed to Phase 3 and present the draft.
+   - **exit 1 (redaction needed)** — print the finding lines (each is meta-redacted; never the full token), revise/redact the offending context, regenerate, and re-run the gate until it exits 0. Do NOT present or write an un-cleared draft.
+   - **exit 2 (cannot-evaluate)** — halt. The engine could not run (skill bug, `python3` absent, unreadable tmpfile). Do NOT present or write; surface the error.
+
+No un-scanned draft ever crosses the transcript or lands on disk.
+
 ## Phase 3: Output
 
 <decision_gate>
