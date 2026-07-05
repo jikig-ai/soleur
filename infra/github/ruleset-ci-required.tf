@@ -15,10 +15,15 @@
 #
 # Strict policy preserved (strict_required_status_checks_policy = true).
 #
-# Job-name contract: the 16 `context` strings below are public ABI for the
+# Job-name contract: the 17 `context` strings below are public ABI for the
 # branch-protection gate. A workflow job rename (`lint fixture content` ->
 # `lint-fixture-content`) silently un-requires the check until this resource
 # is updated in the same PR. See ADR-032 Sharp Edges.
+#
+# #6049 adds `adr-ordinals` (17th) — a ci.yml always-run gate job that the live
+# ruleset already required but this IaC root + the canonical JSON omitted (an
+# IaC-revert latent bug: the next apply would have computed it unmanaged and
+# REMOVED it from live). Reconciled here as a no-op apply (live already has it).
 #
 # #5780 adds a second rule sibling — a `merge_queue` block (below the
 # required_status_checks block) — adopting a GitHub merge queue for `main` to
@@ -125,6 +130,15 @@ resource "github_repository_ruleset" "ci_required" {
       }
       required_check {
         context        = "tc-document-sha-guard"
+        integration_id = var.actions_integration_id
+      }
+      # adr-ordinals (#6049): always-run ADR-ordinal-collision gate job in
+      # .github/workflows/ci.yml. GitHub Actions context (integration_id 15368,
+      # NOT GHAS 57789 — using the CodeQL id would silently un-match the gate).
+      # Reconciled from live, which already required it; see the count-contract
+      # comment at the top of this file.
+      required_check {
+        context        = "adr-ordinals"
         integration_id = var.actions_integration_id
       }
 

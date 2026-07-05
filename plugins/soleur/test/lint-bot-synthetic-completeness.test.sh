@@ -399,4 +399,48 @@ YAML
 done
 echo ""
 
+# Test (m): a check NAME containing '#' round-trips through the parser intact.
+# Regression for #6049: the old inline `line="${line%%#*}"` comment strip
+# truncated `waiver discipline (issue:#NNN trailer)` -> `waiver discipline
+# (issue:`, which (a) breaks the required-checks↔canonical parity test and
+# (b) makes the bot post a wrong check-run name, leaving the real live-required
+# context UNsatisfied. The fix is a leading-`#`-only comment rule.
+echo "Test (m): '#'-bearing check name is not truncated (leading-# comment rule)"
+WF=$(setup_wf_dir "m")
+CONF="$TMPDIR_BASE/m/required-checks.txt"
+cat > "$CONF" << 'CONF'
+# A full-line comment (must still be ignored).
+test
+waiver discipline (issue:#NNN trailer)
+   # An indented full-line comment (must still be ignored).
+CONF
+cat > "$WF/scheduled-hash-name.yml" << 'YAML'
+name: HashName
+on: schedule
+jobs:
+  run:
+    steps:
+      - name: Create PR
+        run: |
+          gh pr create --title "test"
+          gh api "repos/${{ github.repository }}/check-runs" \
+            -f name=test \
+            -f head_sha="$SHA"
+          gh api "repos/${{ github.repository }}/check-runs" \
+            -f name="waiver discipline (issue:#NNN trailer)" \
+            -f head_sha="$SHA"
+YAML
+output=$(WORKFLOW_DIR="$WF" CONFIG_FILE="$CONF" bash "$LINT_SCRIPT" 2>&1) || true
+assert_contains "$output" "waiver discipline (issue:#NNN trailer)" "(m) '#'-bearing name round-trips intact (no truncation)"
+# Negative guard: the truncated fragment must NOT appear as a standalone parsed
+# check (it only appears here as a substring of the full name, which is fine).
+if [[ "$output" == *"missing synthetic check-runs for: waiver discipline (issue:"* ]]; then
+  echo "  FAIL: (m) parser truncated the '#'-bearing name"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: (m) no truncated-name FAIL line"
+  PASS=$((PASS + 1))
+fi
+echo ""
+
 print_results
