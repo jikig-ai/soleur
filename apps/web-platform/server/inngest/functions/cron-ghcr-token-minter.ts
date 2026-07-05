@@ -51,6 +51,9 @@ const FRESHNESS_FLOOR_MS = 40 * 60 * 1000;
 const DOPPLER_SECRETS_URL = "https://api.doppler.com/v3/configs/config/secrets";
 const DOPPLER_PROJECT = "soleur";
 const DOPPLER_GHCR_CONFIG = "prd_ghcr";
+// Bound the Doppler write so a hung socket surfaces as a classified write failure
+// (error heartbeat + fail-loud capture), not an unbounded hang → missed check-in.
+const DOPPLER_WRITE_TIMEOUT_MS = 10_000;
 
 interface MintResult {
   ok: boolean;
@@ -80,9 +83,11 @@ export async function cronGhcrTokenMinterHandler({
   }
 
   // SINGLE step.run — mint + write together, returns ONLY non-secret metadata.
-  // Classified failures RETURN {ok:false} (not throw) so the terminal heartbeat
-  // below flips the monitor `error` (AC4 output-aware). The 20-min cron floor is
-  // the retry cadence; a genuinely unexpected throw is still caught by `retries`.
+  // EVERY failure class (missing env, mint throw, Doppler non-2xx, Doppler
+  // unreachable) RETURNS {ok:false} (never throws) so the terminal heartbeat below
+  // always runs and flips the monitor `error` (AC4 output-aware) with a fail-loud
+  // capture — no failure degrades to a silent missed check-in. The 20-min cron
+  // floor is the retry cadence.
   const result = await step.run("mint-and-write", async (): Promise<MintResult> => {
     let token: string;
     try {
@@ -110,28 +115,46 @@ export async function cronGhcrTokenMinterHandler({
     // Partial named-secrets upsert — merges GHCR_READ_TOKEN + GHCR_READ_USER,
     // leaving the co-resident GHCR_MINTER_DOPPLER_TOKEN intact. Token delivered in
     // the request body over TLS; the auth token is env-injected, never argv.
-    const res = await fetch(DOPPLER_SECRETS_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${dopplerToken}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        project: DOPPLER_PROJECT,
-        config: DOPPLER_GHCR_CONFIG,
-        secrets: {
-          GHCR_READ_TOKEN: token,
-          GHCR_READ_USER: GHCR_READ_USER_VALUE,
+    // The whole write is wrapped so a fetch REJECTION (DNS/TLS/timeout/ECONNRESET —
+    // the "Doppler unreachable" class) is classified as a write failure with an
+    // error heartbeat + fail-loud capture, NOT an unhandled throw that skips the
+    // terminal heartbeat and degrades to a delayed missed-checkin (review P1).
+    let dopplerStatus: number;
+    let dopplerOk: boolean;
+    try {
+      const res = await fetch(DOPPLER_SECRETS_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${dopplerToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
         },
-      }),
-    });
-    const dopplerStatus = res.status;
-    // Drain the socket but NEVER read the body — the 2xx response echoes the token
-    // and the scrubber is key-name-based (AC-Sec2).
-    await res.text().catch(() => undefined);
+        body: JSON.stringify({
+          project: DOPPLER_PROJECT,
+          config: DOPPLER_GHCR_CONFIG,
+          secrets: {
+            GHCR_READ_TOKEN: token,
+            GHCR_READ_USER: GHCR_READ_USER_VALUE,
+          },
+        }),
+        signal: AbortSignal.timeout(DOPPLER_WRITE_TIMEOUT_MS),
+      });
+      dopplerStatus = res.status;
+      dopplerOk = res.ok;
+      // Drain the socket but NEVER read the body — the 2xx response echoes the token
+      // and the scrubber is key-name-based (AC-Sec2).
+      await res.text().catch(() => undefined);
+    } catch (err) {
+      // Doppler unreachable / timed out — no HTTP status, and fetch errors carry no
+      // request body or token. Numeric-safe capture (no body); error heartbeat fires.
+      reportSilentFallback(
+        err instanceof Error ? err : new Error("Doppler write unreachable"),
+        { feature: CRON_NAME, op: "ghcr-token-doppler-unreachable", extra: { fn: CRON_NAME } },
+      );
+      return { ok: false, errorSummary: "Doppler write unreachable" };
+    }
 
-    if (!res.ok) {
+    if (!dopplerOk) {
       // Fail loud — numeric status ONLY, never the token/request/response body.
       reportSilentFallback(
         new Error(`Doppler GHCR_READ_TOKEN write failed: ${dopplerStatus}`),

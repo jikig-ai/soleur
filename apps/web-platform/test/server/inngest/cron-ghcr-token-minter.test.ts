@@ -185,6 +185,22 @@ describe("cron-ghcr-token-minter — output-aware heartbeat (AC4)", () => {
     expect(serialized).not.toContain(MINTED_TOKEN);
   });
 
+  it("Doppler unreachable (fetch rejects) → error heartbeat + capture, not a silent throw (review P1)", async () => {
+    // DNS/TLS/timeout/ECONNRESET — fetch rejects before any HTTP status. Must be
+    // classified as a write failure (error heartbeat + fail-loud), never an
+    // unhandled throw that skips the heartbeat and degrades to a missed check-in.
+    fetchMock.mockRejectedValue(new Error("ECONNRESET"));
+    const result = await cronGhcrTokenMinterHandler({ step: makeStep() as never, logger });
+    expect(result.ok).toBe(false);
+    expect(lastHeartbeatOk()).toBe(false);
+    const capture = reportSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string }).op === "ghcr-token-doppler-unreachable",
+    );
+    expect(capture).toBeDefined();
+    // No HTTP status echoed; no token anywhere.
+    expect(JSON.stringify(reportSilentFallbackSpy.mock.calls)).not.toContain(MINTED_TOKEN);
+  });
+
   it("mint throw → error heartbeat, no token in any captured field (AC4, AC-Sec2)", async () => {
     generateInstallationTokenSpy.mockRejectedValue(
       new Error("GitHub installation token request failed: 401"),
