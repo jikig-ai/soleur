@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # taste-profile-update.test.sh — fixture harness for the context-keyed taste-profile
-# helper (#5990 · FR7 · ADR-089). Pattern mirrors .claude/hooks/skill-context-queries.test.sh.
+# helper (#5990 · FR7 · ADR-090). Pattern mirrors .claude/hooks/skill-context-queries.test.sh.
 #
 # jq + bash only. Each test builds a fresh fixture profile in a temp dir, runs the
 # helper, and asserts on the resulting file (or exit code). No network, no git needed.

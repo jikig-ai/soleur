@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # taste-profile-update.sh — context-keyed design taste-profile writer/validator
-# (#5990 · FR7 · ADR-089). Rides FR6 declarative context-injection (ADR-086):
+# (#5990 · FR7 · ADR-090). Rides FR6 declarative context-injection (ADR-086):
 # the committed taste-profile.md is agent-writable content, so per ADR-086
 # §Consequences (content-trust ≠ path-trust) THIS helper is the sanitizing
 # boundary — every model-supplied token (context, axis, value, date) is validated
@@ -45,7 +45,7 @@ fm_field() { awk -F': ' -v k="$1" 'FNR==1{c=0} /^---$/{c++; next} c==1 && $0 ~ "
 validate_json() {
   # $1 = json string. Returns 0 iff EVERY entry AND contradiction is well-formed
   # (same allowlists/regex a fresh write enforces). This is the consumer read-path
-  # trust gate (ADR-089): it must cover the whole machine block, not just entries.
+  # trust gate (ADR-090): it must cover the whole machine block, not just entries.
   local j="$1"
   echo "$j" | jq -e '.schema == 1 and (.entries|type=="array") and (.contradictions|type=="array")' >/dev/null 2>&1 || return 1
   local bad
@@ -106,7 +106,7 @@ owner: $owner
 
 Learned operator design preferences, keyed by \`(context, axis)\` and ordered by
 recency. Loaded into design sessions via FR6 (\`frontend-design\` skill \`context_queries\`)
-and a direct Read (\`ux-design-lead\` agent). See ADR-089.
+and a direct Read (\`ux-design-lead\` agent). See ADR-090.
 
 <!-- Machine block owned by plugins/soleur/scripts/taste-profile-update.sh — do not hand-edit. -->
 <!-- taste-profile:data:start -->

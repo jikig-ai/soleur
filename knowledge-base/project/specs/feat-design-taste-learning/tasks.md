@@ -57,7 +57,7 @@ Derived from the post-plan-review plan (Option A reshape). Order is contract-bef
 
 ## Phase 6 — ADR + C4
 
-- [x] 6.1 Author `ADR-089-context-keyed-taste-profile-and-agent-surface-injection.md` (rich; full-slug ref to ADR-086-declarative; 3 decisions; flag 086 collision out-of-scope; note fan-out below C4 line)
+- [x] 6.1 Author `ADR-090-context-keyed-taste-profile-and-agent-surface-injection.md` (rich; full-slug ref to ADR-086-declarative; 3 decisions; flag 086 collision out-of-scope; note fan-out below C4 line)
 - [x] 6.2 `model.c4`: `agents -> kb "Reads"` → `"Reads/writes"`
 - [x] 6.3 Run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`
 

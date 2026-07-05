@@ -1,4 +1,4 @@
-# ADR-089: Context-keyed design taste-profile + agent-surface context injection
+# ADR-090: Context-keyed design taste-profile + agent-surface context injection
 
 - **Status:** Accepted
 - **Date:** 2026-07-05

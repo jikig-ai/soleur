@@ -5,14 +5,17 @@
 `feat-design-taste-learning` (#5990, gstack Wave 3 FR7) ran the full `go → brainstorm → plan →
 plan-review → work → review` pipeline in one long session. Two workflow gaps surfaced:
 
-1. **ADR ordinal collision mid-pipeline.** The plan chose a *provisional* `ADR-087` (highest on
-   `main` at plan time was 086). During the work phase's rebase onto `origin/main`, two sibling
-   PRs had merged `ADR-087` (cosign-deploy-verify) and `ADR-088` (control-plane-token-minter).
-   The ADR was correctly renumbered to **089** and that propagated to the ADR body, the seed
-   `taste-profile.md`, and the helper header comment — but the **plan and tasks.md kept the stale
-   `ADR-087`**, including **AC12** which literally asserted `` `ADR-087-*.md` exists `` — a
-   verification criterion that now fails against the real `ADR-089-*.md`. Caught only at the
-   review phase by `pattern-recognition-specialist`.
+1. **ADR ordinal collided TWICE mid-pipeline.** The plan chose a *provisional* `ADR-087` (highest on
+   `main` at plan time was 086). **First collision:** during the work-phase rebase, two sibling PRs
+   had merged `ADR-087` (cosign-deploy-verify) and `ADR-088` (control-plane-token-minter) →
+   renumbered to `ADR-089`. That renumber propagated to the ADR body/seed/helper but the **plan +
+   tasks.md kept the stale `ADR-087`** — including **AC12** asserting `` `ADR-087-*.md` exists `` —
+   caught only at the review phase by `pattern-recognition-specialist`, then swept to `ADR-089`.
+   **Second collision:** during `/ship`, a *third* sibling PR merged `ADR-089-freeze-lock-shared-state`
+   to `main` — `check-adr-ordinals.sh` passed on the branch (main's 089 not yet in-branch) but the
+   `/ship` ADR-Ordinal Collision Gate's `git ls-tree origin/main` diff caught it → renumbered to
+   `ADR-090` and swept all 11 referencing files. A ~2-hour single-session pipeline burned through
+   **three** consecutive free ordinals (087, 088, 089) as siblings claimed each one.
 
 2. **Orphan test suite.** The shared helper was hoisted to `plugins/soleur/scripts/` (per an
    architecture-strategist "ownership inversion" finding), and its `taste-profile-update.test.sh`
@@ -59,7 +62,7 @@ only certified the JSON block). The multi-stage gates are the value.
 
 ## Session Errors
 
-- **ADR-087 → 089 renumber didn't reach plan/tasks/AC** — Recovery: `sed` sweep in the two files at review time. Prevention: grep the feature's `plans/`+`specs/` for the old ordinal immediately after any renumber (this learning).
+- **ADR ordinal collided twice (087→089 at rebase, 089→090 at ship); first renumber didn't reach plan/tasks/AC** — Recovery: `sed` sweep of all referencing files at each collision. Prevention: grep the feature's whole artifact set for the old ordinal immediately after any renumber; expect ≥1 collision per long pipeline on a fast repo (this learning). The `/ship` ADR-Ordinal Collision Gate (`git ls-tree origin/main` diff) is the load-bearing catch for the second collision — `check-adr-ordinals.sh` alone passes because main's colliding ADR isn't in-branch yet.
 - **Orphan test suite (`plugins/soleur/scripts/*.test.sh` outside the glob)** — Recovery: added the glob to `test-all.sh:195`. Prevention: re-check `test-all.sh` glob membership whenever a `.test.sh` is created or moved.
 - **`validate_json` jq `.`-rebind** (`$str | contains(" " + .field + " ")` indexes the string) — Recovery: bind entry fields with `as` first. Prevention: one-off; note the jq-pipe-rebinds-dot gotcha.
 - **Recency-only grep matched the word "confidence" in a helper comment** — Recovery: reworded the comment. Prevention: already covered by `2026-06-17-grep-assertion-over-script-body-false-matches-own-comments`.

@@ -8,7 +8,7 @@ owner: CPO
 
 Learned operator design preferences, keyed by `(context, axis)` and ordered by
 recency. Loaded into design sessions via FR6 (`frontend-design` skill `context_queries`)
-and a direct Read (`ux-design-lead` agent). See ADR-089.
+and a direct Read (`ux-design-lead` agent). See ADR-090.
 
 <!-- Machine block owned by plugins/soleur/scripts/taste-profile-update.sh — do not hand-edit. -->
 <!-- taste-profile:data:start -->
