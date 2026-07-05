@@ -158,8 +158,8 @@ logs:
   where: .claude/.rule-incidents.jsonl (local, best-effort, per-machine — NOT cross-machine) + commit-time stderr + Actions run log
   retention: per existing incidents convention
 discoverability_test:
-  command: "in a scratch git repo, stage a .md adding a '+...last_reviewed:' line and commit WITHOUT the trailer through the gate; assert stdout contains '\"permissionDecision\":\"deny\"'; repeat WITH a Context-Reviewed trailer and assert NO deny JSON"
-  expected_output: case-1 stdout matches permissionDecision:deny; case-2 no deny JSON. Discriminate on the JSON, NOT exit code (PreToolUse deny exits 0).
+  command: bash scripts/context-reviewed-gate-discoverability.sh
+  expected_output: "DISCOVERABILITY: PASS"
 ```
 
 ## Acceptance Criteria
