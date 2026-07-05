@@ -19,14 +19,14 @@ Lane: cross-domain · Brand-survival threshold: aggregate pattern
 
 ## Phase 2 — TS Inngest audit (paging fix) [write failing tests first]
 
-- [ ] 2.1 Add CLA constants (names, both canonical paths, CLA drift title).
-- [ ] 2.2 Reuse `buildFindings` unchanged (no `buildRscFindings`).
-- [ ] 2.3 Extract `auditOneRuleset(...)`; parameterize findOpen/file/close/render by driftTitle + sourceHint; add read-time canonical validation (empty/corrupt → guard-broken, not green).
-- [ ] 2.4 Per-ruleset `step.run` isolation + per-step try/catch; convert "RSC rule missing" throw → critical finding; "bypass missing" throw → guard-broken.
-- [ ] 2.5 Handler: `ok = (ciCriticalCount + claCriticalCount) === 0`; deterministic per-ruleset return breakdown; heartbeat degrades if either critical.
+- [ ] 2.1 Add CLA constants + a `RulesetAuditConfig` object (name, both canonical paths, drift title, sourceHint) — one config threaded, not 4 separate params.
+- [ ] 2.2 Reuse `buildFindings` unchanged (no `buildRscFindings`); do NOT widen `AuditFinding.kind`.
+- [ ] 2.3 Extract `auditOneRuleset(octokit, config)` returning `{findings, criticalCount, guardBroken}`; route CI through it too (both inherit read-time canonical validation — fixes latent CI hole). Parameterize findOpen/file/close/render by config.
+- [ ] 2.4 ONE try/catch around the whole audit body (both fetchCanonicalJson + shape validation + fetchRulesetDetail + buildFindings). Real drift (incl. RSC-rule-missing signalled as `requiredStatusChecks: null`) → critical finding → files issue. Guard fault (corrupt/empty canonical, token scope, network) → `guardBroken=true` → reportSilentFallback(Sentry) + ok=false, NO drift issue. Separate `step.run` per ruleset.
+- [ ] 2.5 Handler: `ok = (sum criticalCount === 0) && !anyGuardBroken`; top-level scalars = sums; per-ruleset detail under ci/cla.
 - [ ] 2.6 Test: source anchors ("CLA Required", both canonical paths, CLA title).
 - [ ] 2.7 Test: pure-fn cases (dropped cla-evidence; widened bypass; enforcement disabled; green).
-- [ ] 2.8 Test: MANDATORY Octokit-mocked handler test (CLA-only critical ⇒ ok=false + files only CLA issue + CI untouched; CLA-green ⇒ closes only CLA issue; empty canonical ⇒ guard-broken + ok=false).
+- [ ] 2.8 Test: MANDATORY Octokit-mocked handler test — CLA-only critical ⇒ ok=false + files only CLA issue + CI untouched; CLA-green ⇒ closes only CLA issue; empty canonical ⇒ guardBroken (ok=false + reportSilentFallback, NO issue filed).
 
 ## Phase 3 — Parity test rewire
 
@@ -36,9 +36,9 @@ Lane: cross-domain · Brand-survival threshold: aggregate pattern
 
 ## Phase 4 — CLA canonical↔SSOT sync gates (tests/scripts/test-audit-ruleset-bypass.sh)
 
-- [ ] 4.1 T-cla-1: RSC canonical `(context,integration_id)` pairs == create-script inline; pin `$payload` + `<< 'EOF'` sentinel; `jq -e .` slice first.
-- [ ] 4.2 T-cla-1b: bypass canonical triples == create-script inline.
-- [ ] 4.3 T-cla-2: shape/count guards (RSC 2 entries; bypass 3 entries).
+- [ ] 4.1 T-cla-1: RSC canonical `(context,integration_id)` pairs == create-script inline + no-dup contexts; pin `$payload` + `<< 'EOF'` sentinel; `jq -e .` slice first.
+- [ ] 4.2 T-cla-1b: bypass canonical triples == create-script inline + no-dup rows.
+- [ ] 4.3 (Shape/count folded into 4.1/4.2 + the jq-shape AC; no standalone T-cla-2.)
 - [ ] 4.4 Register in dispatch list; do NOT touch T19.
 
 ## Phase 5 — Docs / metadata

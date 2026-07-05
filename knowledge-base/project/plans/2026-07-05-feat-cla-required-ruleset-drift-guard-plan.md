@@ -13,6 +13,51 @@ status: draft
 Closes #6061. Deferred follow-up to the #6049 synthetic-check `CHECK_NAMES` fix
 (merged 2026-07-05).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-05. **Reviewers:** scoped advisor (opus), CTO, CLO,
+spec-flow-analyzer, architecture-strategist, code-simplicity-reviewer.
+
+**Verified facts (live):** #4483 is MERGED ("migrate all remaining GHA scheduled
+workflows to Inngest, TR9 Phase 2") — confirms the bash-script workflow was
+deleted and the TS Inngest fn is the daily paging path (DC-1). The CLA
+create-script's bypass actors exactly match the minted canonical
+(`null/OrgAdmin/pull_request`, `5/RepoRole/pull_request`, `1236702/Integration/always`).
+`fetchRulesetDetail` throws on BOTH missing `bypass_actors` and missing
+`required_status_checks` rule (`:237-252`). The bot composite action derives
+synthetic check-runs from **all** names in `required-checks.txt` including
+`cla-check`/`cla-evidence` (`action.yml:40-41,243-256`) — so its CLA section is
+**enforced input** (a 3rd CLA context unmirrored there deadlocks bot PRs), making
+Test 7 load-bearing, not documentation ceremony.
+
+**Precedent:** the CLA audit mirrors the CI audit *in the same file* — the
+precedent is co-located (`buildFindings`, `compareBypassActors`,
+`compareRequiredStatusChecks` are already ruleset-agnostic). No novel pattern.
+
+**Key deepen refinements folded in:**
+1. **Guard-fault routing (arch HIGH).** Do NOT widen `AuditFinding.kind`. A
+   corrupt/empty canonical, token-scope redaction, or network/API error is an
+   ops/infra fault → route to **Sentry (`reportSilentFallback`) + heartbeat
+   degrade (`ok=false`)**, NOT a `compliance/critical` drift issue. Only real
+   drift (dropped context, widened bypass, suspended enforcement, **gate/rule
+   entirely missing**) files the titled compliance issue. Resolves the
+   type-home + mis-routing defect.
+2. **Full-body catch (arch MEDIUM).** The try/catch envelops the whole
+   `auditOneRuleset` body (both `fetchCanonicalJson` calls + shape validation +
+   `fetchRulesetDetail` + `buildFindings`) — `fetchCanonicalJson` throws on bad
+   base64/JSON *before* validation runs.
+3. **CI routed through the same helper (arch MEDIUM).** Both CI and CLA go
+   through `auditOneRuleset`, so both inherit read-time canonical validation —
+   this also fixes a pre-existing latent CI hole (an empty CI RSC canonical
+   currently reads live as green).
+4. **Top-level return scalars = sums** (arch LOW); per-ruleset detail under
+   `ci`/`cla`. **CLA "extra context" finding carries a liveness meaning**
+   (bot-deadlock) distinct from CI's merge-security meaning — still files an issue.
+5. **Simplicity trims:** T-cla-2 shape gate folded into T-cla-1/1b (drop the
+   redundant standalone); the "separate step.run (grep source)" AC replaced by
+   the behavioral handler assertion; Phase 6.1 given a concrete re-eval trigger;
+   per-ruleset scalars bundled into one `RulesetAuditConfig` object.
+
 > **No spec.md** exists for this branch; `lane:` defaulted to `cross-domain`
 > (TR2 fail-closed). This plan is the SSOT.
 
@@ -158,34 +203,51 @@ ruleset-agnostic `(detail, canonicalBypassActors, canonicalRequiredChecks)`. By
 minting a real CLA bypass canonical, there is **no** empty-canonical trap and
 **no** `buildRscFindings` split. Drop the R1/`buildRscFindings` idea entirely.
 
-2.3 Parameterize the per-ruleset audit. Extract
-`auditOneRuleset(octokit, { rulesetName, canonicalBypassPath, canonicalRscPath, driftTitle, sourceHint })` →
-returns `{ findings, criticalCount }`. It: fetches the ruleset detail by name,
-fetches both canonicals, **validates each canonical at read-time** (non-empty
-array of the expected shape; on failure emit a `guard-broken` finding — do NOT
-treat an empty/corrupt canonical as green — G5.1), then `buildFindings`.
-Parameterize `findOpenDriftIssue`/`fileDriftIssue`/`closeDriftIssue`/
-`renderIssueBody` by `{ driftTitle, sourceHint }`; the auto-close green-comment
-body and `renderIssueBody` prose must be per-ruleset (G1.5 — no hardcoded
-"CI Required"/`ruleset-ci-required.tf` in the CLA path; CLA's source hint is
-`scripts/create-cla-required-ruleset.sh`).
+2.3 Extract a table-driven per-ruleset audit. Define one config object
+`RulesetAuditConfig = { rulesetName, canonicalBypassPath, canonicalRscPath, driftTitle, sourceHint }`
+(bundle the scalars — do NOT thread `{driftTitle, sourceHint}` into four
+functions independently; simplicity review). `auditOneRuleset(octokit, config)`
+returns `{ findings, criticalCount, guardBroken: boolean }` and **routes CI too**
+(both rulesets go through it, so both inherit the read-time validation below —
+this also fixes a pre-existing latent CI hole where an empty CI RSC canonical
+reads live as green; arch MEDIUM). Parameterize
+`findOpenDriftIssue`/`fileDriftIssue`/`closeDriftIssue`/`renderIssueBody` by the
+config; the auto-close green-comment body + `renderIssueBody` prose must be
+per-ruleset (G1.5 — no hardcoded "CI Required"/`ruleset-ci-required.tf` in the
+CLA path; CLA's `sourceHint` is `scripts/create-cla-required-ruleset.sh`).
 
-2.4 **Per-ruleset isolation (G1.1/G1.2):** run the CI audit and the CLA audit in
-**separate `step.run` steps** (not one shared `Promise.all`) so a fetch/throw on
-one ruleset cannot abort the other, and each memoizes independently on the
-`retries: 1` replay. In each step, wrap the fetch in try/catch:
-- `fetchRulesetDetail`'s "no required_status_checks rule — gate missing entirely"
-  throw is the **most catastrophic drift** (the whole CLA gate is gone) — catch
-  it and file a **critical** `required_status_checks` finding (the actionable
-  drift issue), NOT an uncaught throw that files nothing (G1.2).
-- The "missing bypass_actors" throw → `guard-broken` finding (token scope), same
-  as CI.
+2.4 **Guard-fault vs. drift routing (arch HIGH — do NOT widen `AuditFinding`).**
+The whole audit body of `auditOneRuleset` (both `fetchCanonicalJson` calls +
+read-time canonical shape validation + `fetchRulesetDetail` + `buildFindings`)
+runs inside ONE try/catch (arch MEDIUM — `fetchCanonicalJson` throws on bad
+base64/JSON *before* validation can run):
+- **Real drift** → critical finding(s) via `buildFindings` → files the titled
+  `compliance/critical` issue. This includes the **"no required_status_checks
+  rule — gate missing entirely"** case: refactor `fetchRulesetDetail` to signal a
+  missing RSC rule as data (e.g. `requiredStatusChecks: null`) rather than throw,
+  so `auditOneRuleset` maps it to a critical `required_status_checks` finding
+  (G1.2 — the most catastrophic drift must FILE the issue, not throw).
+- **Guard fault** (canonical corrupt/empty/unparseable, `bypass_actors` redacted
+  = token scope, network/API error) → `guardBroken: true` → `reportSilentFallback`
+  to Sentry with a descriptive message + forces `ok=false` (heartbeat degrades).
+  It does **NOT** file a `compliance/critical`/`domain/legal` drift issue (a
+  corrupt-JSON-on-main fault is ops/infra, routed to the CTO via Sentry, not a
+  legal-compliance drift) and does **NOT** treat the empty canonical as green
+  (G5.1). No new `AuditFinding.kind` variant — avoids the
+  `hr-type-widening-cross-consumer-grep` sweep.
 
-2.5 Handler aggregation: `ok = (ciCriticalCount + claCriticalCount) === 0`
-(re-derive the sum — a leftover CI-only `criticalCount` would silently keep the
-heartbeat green on a CLA-only critical — G1.3). Extend the return shape with a
-deterministic per-ruleset breakdown (`ci: {...}`, `cla: {...}`; ADR-033 I5).
-Sentry heartbeat degrades if **either** ruleset has a critical finding.
+**Per-ruleset step isolation (G1.1/arch Probe 1):** run CI and CLA in **separate
+`step.run` steps** so a throw/guard-fault on one cannot abort the other, and each
+memoizes independently on the `retries: 1` replay (a succeeded CI step will not
+re-file on a CLA-step retry).
+
+2.5 Handler aggregation: `ok = (ciCriticalCount + claCriticalCount === 0) && !ciGuardBroken && !claGuardBroken`
+(re-derive — a leftover CI-only `criticalCount` would silently keep the heartbeat
+green on a CLA-only critical; G1.3). Return shape: top-level
+`criticalCount`/`findingCount` are the **sums** (matching `ok`), with per-ruleset
+detail under `ci: {...}` / `cla: {...}` so no consumer reads a half-truth (arch
+LOW; deterministic, ADR-033 I5). Sentry heartbeat degrades if **either** ruleset
+has a critical finding OR is guard-broken.
 
 **File to edit:** `apps/web-platform/test/server/inngest/cron-ruleset-bypass-audit.test.ts`
 
@@ -203,10 +265,14 @@ G1.3/G4.1 — promoted from optional). The current file has **zero** handler
 behavioral coverage. Add a mock (rulesets list → per-ruleset detail → canonical
 `contents` GETs → issues list/create/patch) asserting:
 (a) a CLA-only critical drift ⇒ handler returns `ok === false`, files **exactly**
-the CLA-titled issue, leaves the CI issue untouched;
+the CLA-titled issue, leaves the CI issue untouched (this behavioral assertion
+replaces the weaker "separate step.run (grep source)" AC — simplicity review);
 (b) CLA green after prior drift ⇒ closes **only** the CLA issue;
-(c) an empty/corrupt CLA canonical ⇒ `guard-broken` finding + `ok === false`
-(not silently green — G5.1).
+(c) an empty/corrupt CLA canonical ⇒ `guardBroken` path: `ok === false` +
+`reportSilentFallback` invoked + **no** drift issue filed (not silently green —
+G5.1; not mis-routed to a compliance issue — arch HIGH). (This case exercises the
+read-time validator; it may be a cheaper unit test of the validator rather than
+the full Octokit mock — simplicity review.)
 
 ### Phase 3 — Rewire the parity test
 
@@ -225,7 +291,12 @@ while IFS= read -r c; do CLA_EXCLUDE+=("$c"); done < <(jq -e -r '.[].context' "$
 ```
 
 3.2 Add **Test 7 — SSOT CLA subset == CLA canonical (⊆ and ⊇, non-vacuous ≥2)**.
-Parse the CLA section of `scripts/required-checks.txt`:
+This is load-bearing, not documentation ceremony (simplicity review, resolved):
+the bot composite action derives synthetic check-runs from **all** names in
+`required-checks.txt` including `cla-check`/`cla-evidence` (`action.yml:40-41,243-256`),
+so a 3rd CLA context mirrored into the canonical but NOT into `required-checks.txt`
+would deadlock bot PRs (no synthetic posted for the new context). Test 7 keeps the
+two in lockstep. Parse the CLA section of `scripts/required-checks.txt`:
 - **Exact-anchor** the section start on `^#[[:space:]]*CLA Required ruleset[[:space:]]*$`
   (G2.2 — a loose `CLA Required.*ruleset` match would hit the line-6 header
   comment `#   - "CLA Required" ruleset: cla-check` and slurp the whole CI
@@ -263,11 +334,14 @@ create-script, so the id belongs in the gate). Slice the heredoc with the exact
 **bypass_actors** canonical vs the create-script's inline `bypass_actors`
 (compare `(actor_id, actor_type, bypass_mode)` triples).
 
-4.3 `t_cla_canonical_shape` (T-cla-2): RSC canonical == exactly 2 entries
-`{cla-check, cla-evidence}` both `15368`, no dup contexts; bypass canonical == 3
-entries with the expected triples. (Mirror T-rsc-7.)
+4.3 Fold the shape/dedup guards INTO T-cla-1 / T-cla-1b rather than a standalone
+T-cla-2 (simplicity review — the first pre-merge `jq -e` shape AC already asserts
+absolute shape, and T-cla-1/1b already pin canonical==create-script). Each sync
+gate additionally asserts its canonical has no duplicate `context` (RSC) /
+duplicate `(actor_id,actor_type,bypass_mode)` (bypass) rows. No separate shape
+test.
 
-4.4 Register all in the dispatch list under a `# CLA ruleset canonical sync gates (#6061)`
+4.4 Register in the dispatch list under a `# CLA ruleset canonical sync gates (#6061)`
 banner. **Do NOT** touch T19 (asserts exactly 3 `$GITHUB_OUTPUT` lines) — the
 bash script runtime is unchanged.
 
@@ -295,9 +369,11 @@ canonicals together.
 
 6.1 **File a tracking issue** (wg-when-deferring — CTO): Terraform-ify the CLA
 ruleset (`infra/github/ruleset-cla-required.tf`) to match the CI IaC pattern;
-then repoint the Phase 4 sync gate at the `.tf`. Re-eval: next infra-hardening
-cycle. Label with an existing label (verify via `gh label list`; e.g.
-`domain/engineering`, `chore`).
+then repoint the Phase 4 sync gate at the `.tf`. **Concrete re-eval trigger**
+(simplicity review — not "next infra cycle", which the harvest-debt no-trigger
+rule flags): *when the CLA ruleset next needs a value change* — that edit is the
+natural moment to lift it into Terraform and repoint the gate. Label with an
+existing label (verify via `gh label list`; e.g. `domain/engineering`, `chore`).
 
 ## Files to Create
 
@@ -336,12 +412,15 @@ failure_modes:
   - mode: CLA enforcement suspended (whole gate off)
     detection: detail.enforcement != "active" → critical finding
     alert_route: CLA-titled compliance/critical issue + heartbeat degrade
-  - mode: CLA canonical empty/corrupt on main (would silently read live gates as benign "extra")
-    detection: read-time canonical validation in auditOneRuleset → guard-broken finding
-    alert_route: heartbeat degrade (ok=false); NOT treated as green
-  - mode: audit token lacks administration:read (bypass_actors redacted) — affects BOTH rulesets now (CLA audits bypass)
-    detection: caught fetch throw → guard-broken finding
-    alert_route: heartbeat degrade
+  - mode: canonical empty/corrupt on main (affects BOTH rulesets — would silently read live gates as benign "extra")
+    detection: read-time canonical validation inside auditOneRuleset try/catch → guardBroken=true
+    alert_route: reportSilentFallback (Sentry, CTO-visible) + heartbeat degrade (ok=false); NOT treated as green; does NOT file a compliance/legal drift issue (ops/infra fault)
+  - mode: audit token lacks administration:read (bypass_actors redacted) — affects BOTH rulesets (both audit bypass)
+    detection: caught fetch throw → guardBroken=true
+    alert_route: reportSilentFallback (Sentry) + heartbeat degrade; no drift issue
+  - mode: CLA gains an extra required context (unmirrored to required-checks.txt → bot-PR deadlock, a LIVENESS harm)
+    detection: buildFindings added>0 → non-critical finding → files issue (heartbeat stays ok — note this differs from CI's merge-security framing)
+    alert_route: CLA-titled issue (non-critical); operator MUST NOT read a green heartbeat as "no CLA problem"
   - mode: CLA canonical stale vs create-cla-required-ruleset.sh
     detection: T-cla-1/1b sync gates (CI, synchronous, block PR)
     alert_route: red CI check
@@ -393,8 +472,8 @@ deferred + tracked — Phase 6.1.)
   `jq -e 'length==2 and (map(.context)|sort)==["cla-check","cla-evidence"] and all(.[];.integration_id==15368)'`.
   Bypass: `jq -e 'length==3 and any(.[]; .actor_type=="Integration" and .actor_id==1236702 and .bypass_mode=="always")'`.
 - [ ] `bash tests/scripts/test-audit-ruleset-bypass.sh` passes, incl. T-cla-1
-  (RSC canonical `(context,integration_id)` pairs == create-script), T-cla-1b
-  (bypass canonical triples == create-script), T-cla-2 (shapes); T19 still asserts
+  (RSC canonical `(context,integration_id)` pairs == create-script + no-dup) and
+  T-cla-1b (bypass canonical triples == create-script + no-dup); T19 still asserts
   exactly 3 output lines.
 - [ ] `bash plugins/soleur/test/required-checks-canonical-parity.test.sh` passes:
   `CLA_EXCLUDE` is jq-derived with a `>=2` non-empty guard (grep confirms no
@@ -410,9 +489,11 @@ deferred + tracked — Phase 6.1.)
   guard-broken + `ok===false`.
 - [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
 - [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/function-registry-count.test.ts` passes (no new fn registered).
-- [ ] CI and CLA audits run in **separate `step.run` steps** (grep source) so one
-  fetch-throw cannot abort the other; the "RSC rule entirely missing" throw is
-  caught and converted to a critical finding (not an uncaught throw).
+- [ ] The handler test proves fetch-throw isolation **behaviorally** (a CLA-step
+  fault leaves the CI issue untouched — not a source grep; simplicity review), and
+  a "RSC rule entirely missing" state files a critical finding (not an uncaught
+  throw). Guard faults (empty/corrupt canonical, token scope) set `ok===false` via
+  `reportSilentFallback` and file **no** compliance issue (arch HIGH).
 - [ ] `decision-challenges.md` records DC-1 (bash→TS retarget) + DC-2 (bypass scope + filename).
 - [ ] DC-2 tracking issue for Phase 6.1 (Terraform-ify CLA) filed with a verified-existing label.
 - [ ] Every new `knowledge-base/*.md` citation in this plan resolves.
@@ -459,12 +540,12 @@ no CLO-attestation gate, no specialist delegation.
 3. SSOT gains a 3rd `cla-*` not in canonical → Test 7 ⊆-violation.
 4. CLA canonical gains a context not in SSOT → Test 7 ⊇-violation.
 5. Live CLA drops `cla-evidence` (rule still present) → cron files critical `required_status_checks` finding + `ok=false`.
-6. Live CLA RSC **rule entirely removed** → caught throw → critical finding + CLA issue filed (NOT an uncaught throw; CI audit unaffected — separate step).
+6. Live CLA RSC **rule entirely removed** → `fetchRulesetDetail` signals `requiredStatusChecks: null` → critical `required_status_checks` finding + CLA issue filed (NOT an uncaught throw; CI audit unaffected — separate step).
 7. Live CLA bypass widened (4th actor) → cron files critical `bypass_actors` finding + `ok=false`.
 8. Live CLA enforcement suspended → critical `enforcement` finding + `ok=false`.
-9. Live CLA gains an extra context → non-critical divergence; heartbeat stays ok.
+9. Live CLA gains an extra context → non-critical finding, files issue (bot-deadlock liveness harm); heartbeat stays ok.
 10. CLA green after prior drift → cron auto-closes ONLY the CLA issue; CI issue untouched.
-11. Empty/corrupt CLA canonical on main → guard-broken finding + `ok=false` (not silently green).
+11. Empty/corrupt CLA canonical on main → `guardBroken=true`: `reportSilentFallback` (Sentry) + `ok=false`, NO drift issue (not silently green, not mis-routed to a compliance issue).
 
 ## Risks & Mitigations
 
@@ -475,7 +556,11 @@ no CLO-attestation gate, no specialist delegation.
   `$payload` sentinel + `<< 'EOF'` delimiter the create-script uses; `jq -e .` the
   slice first (fail guard-broken if malformed); compare full pairs/triples.
 - **R3 — empty canonical reads live gates as benign.** Mitigation: read-time
-  canonical validation (Phase 2.3, G5.1) → guard-broken, not green.
+  canonical validation inside the `auditOneRuleset` try/catch (Phase 2.4, G5.1) →
+  `guardBroken=true` → Sentry + `ok=false`, NOT green, and NOT a compliance issue
+  (ops fault). No `AuditFinding.kind` widening (avoids the
+  `hr-type-widening-cross-consumer-grep` sweep — arch HIGH). Applies to CI too
+  (both route through `auditOneRuleset`), closing a pre-existing latent CI hole.
 - **R4 — two same-labelled drift issues share one un-paginated `findOpenDriftIssue`
   query (100-item ceiling).** Pre-existing latent risk this plan doubles.
   Mitigation: title-keyed find/close keeps them independent; note the ceiling in
