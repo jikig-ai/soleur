@@ -170,6 +170,11 @@ export const cronGhcrTokenMinter = inngest.createFunction(
   },
   [
     { cron: "*/20 * * * *" },
+    // Operator/live-verify on-demand fire via POST /api/internal/trigger-cron
+    // (auto-allowlisted from EXPECTED_CRON_FUNCTIONS; used for AC11 live check).
+    { event: "cron/ghcr-token-minter.manual-trigger" },
+    // Phase-5 event-driven mint on provision/deploy (emitter deferred — the 20-min
+    // floor already bounds staleness to <=40 < 60-min TTL; see plan Non-Goals).
     { event: "ghcr/token-minter.mint-now" },
   ],
   cronGhcrTokenMinterHandler as unknown as Parameters<
