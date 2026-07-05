@@ -191,6 +191,24 @@ assert_contains "invocation is -x guarded (inert until delivered)" "$(cat "$CID"
 assert_contains "invocation is wall-clock bounded (no fleet-wide deploy hang)" "$(cat "$CID")" "timeout"
 assert_contains "invocation is best-effort (never blocks a deploy)" "$(cat "$CID")" "git-lock-chardevice-sweep.sh || true"
 
+# ---------------------------------------------------------------------------
+# #5934 regression: the sweep is invoked via `sudo`, so it needs a matching
+# NOPASSWD sudoers grant. Its ABSENCE is the exact defect that made the durable
+# fix a silent no-op (sudo denied every deploy; `|| true` hid it). Pin BOTH that
+# the invocation is sudo-elevated with the timeout value the grant pins, AND that
+# both sudoers sources carry the grant for the EXACT resolved argv — so the two
+# can never drift apart again.
+echo "Test (sudoers grant): the sudo-invoked sweep has a matching NOPASSWD grant, drift-locked to ci-deploy.sh"
+SUDOERS="$SCRIPT_DIR/deploy-inngest-bootstrap.sudoers"
+CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
+# The exact command ci-deploy.sh runs (sudo resolves `timeout` → /usr/bin/timeout).
+SWEEP_CMD="/usr/bin/timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh"
+assert_contains "ci-deploy.sh invokes the sweep as sudo timeout 60 <script>" "$(cat "$CID")" "sudo timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh"
+assert_contains "repo sudoers grants the exact sweep argv" "$(cat "$SUDOERS")" "Cmnd_Alias GIT_LOCK_CHARDEVICE_SWEEP = $SWEEP_CMD"
+assert_contains "repo sudoers activates the grant for deploy" "$(cat "$SUDOERS")" "deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP"
+assert_contains "cloud-init inline sudoers grants the exact sweep argv" "$(cat "$CLOUD_INIT")" "Cmnd_Alias GIT_LOCK_CHARDEVICE_SWEEP = $SWEEP_CMD"
+assert_contains "cloud-init inline sudoers activates the grant for deploy" "$(cat "$CLOUD_INIT")" "deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP"
+
 echo ""
 echo "=== Results ==="
 echo "Passed: $PASS"

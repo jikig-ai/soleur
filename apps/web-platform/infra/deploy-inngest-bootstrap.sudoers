@@ -49,3 +49,18 @@ deploy ALL=(root) NOPASSWD: INNGEST_START
 # TOCTOU-guards the staged source, so the bare-command grant is the safe form.
 Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install
 deploy ALL=(root) NOPASSWD: INFRA_CONFIG_INSTALL
+
+# #5934 / ADR-081 — permits ci-deploy.sh's pre-canary durable substrate sweep
+# (`sudo timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh`) to run as root.
+# The sweep clears any residual CHARACTER-DEVICE .git/config.lock the container
+# substrate leaves on /mnt/data/workspaces, which otherwise wedges worktree
+# creation for every agent session (#5912). WITHOUT this grant sudo denies the
+# sweep ("command not allowed") and the durable remediation is a SILENT no-op —
+# ci-deploy.sh's `|| true` swallows the denial, so the wedge persists into live
+# sessions and #5934's soak probe never sees a DONE marker. The alias pins the
+# EXACT argv ci-deploy.sh invokes, including the resolved `/usr/bin/timeout 60`
+# prefix (sudo matches the full resolved command) — no wildcards, sudo-rs safe.
+# The `timeout 60` value is COUPLED to ci-deploy.sh's invocation; the two must
+# change in lockstep (git-lock-chardevice-sweep.test.sh asserts consistency).
+Cmnd_Alias GIT_LOCK_CHARDEVICE_SWEEP = /usr/bin/timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh
+deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP
