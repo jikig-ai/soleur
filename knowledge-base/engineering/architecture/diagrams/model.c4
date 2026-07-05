@@ -319,7 +319,7 @@ model {
   inngest -> inngestPostgres "Config + run history" { technology "PostgreSQL session pooler :5432" }
   inngest -> inngestRedis "Durable queue + run-state" { technology "Redis (AOF)" }
   hetzner -> inngest "Hosts" { technology "systemd" }
-  hetzner -> ghcr "Pulls app image + baked bootstrap scripts/hooks at boot (#5921)" { technology "Docker/GHCR" }
+  hetzner -> ghcr "Pulls app image + baked bootstrap scripts/hooks at boot; a web-2-recreate boot pins an immutable @sha256 digest (coherence-checked vs host_scripts_content_hash, not :latest) (#5921, #5887)" { technology "Docker/GHCR" }
   betterstack -> hetzner "Per-host origin uptime probe (web-N.app.soleur.ai/health, CF-proxied) — absence detector (#5933 Item 1)" { technology "HTTPS via CF edge" }
   github -> sigstore "Keyless-signs the released app image digest (cosign, OIDC→Fulcio→Rekor) (#5933 Item 4)" { technology "HTTPS (cosign)" }
   hetzner -> sigstore "Verifies the image signature (cosign --offline, identity-pinned) before docker run (#5933 Item 4)" { technology "HTTPS (cosign)" }
