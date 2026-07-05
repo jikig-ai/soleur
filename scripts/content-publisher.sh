@@ -55,6 +55,13 @@ LINKEDIN_TRACKER_REASON_MISSING_TOKEN="LINKEDIN_ORG_ACCESS_TOKEN unset — vendo
 CASE_NAME=""
 # Holds the last Discord error for passing to fallback issue creators
 DISCORD_LAST_ERROR=""
+# Holds the reason for the most recent per-channel skip (rc 3), set by each
+# post_* skip path immediately before `return 3` and read by the caller's
+# tally_rc right after the call. The Inngest spawn discards stderr, so the
+# reason must be carried in a variable to reach the durable "published nowhere"
+# issue body (not left on the dropped stderr stream). Single-threaded, so it is
+# not clobbered between the skip and its capture.
+SKIP_REASON=""
 
 # --- Temp File Cleanup ---
 # Track all temp files and clean up on any exit (normal, error, or signal).
@@ -294,6 +301,13 @@ extract_tweets() {
 
 # --- Discord Posting ---
 
+# post_* return-code convention:
+#   0 = posted (a message reached the network)
+#   1 = attempted + failed (a fallback issue was created)
+#   3 = skipped, not attempted (no credentials / no content / gate flag off).
+#       Set SKIP_REASON before returning 3 so the caller can name the reason
+#       in the durable "published nowhere" issue. `3` is an internal function
+#       return consumed inside main(); it never escapes as a process exit code.
 post_discord() {
   local content="$1"
 
@@ -302,7 +316,8 @@ post_discord() {
 
   if [[ -z "$webhook_url" ]]; then
     echo "Warning: No Discord webhook URL set (checked DISCORD_BLOG_WEBHOOK_URL, DISCORD_WEBHOOK_URL). Skipping Discord posting." >&2
-    return 0
+    SKIP_REASON="no credentials"
+    return 3
   fi
 
   local payload
@@ -415,7 +430,8 @@ post_x_thread() {
 
   if [[ -z "${X_API_KEY:-}" || -z "${X_API_SECRET:-}" || -z "${X_ACCESS_TOKEN:-}" || -z "${X_ACCESS_TOKEN_SECRET:-}" ]]; then
     echo "Warning: X API credentials not configured. Skipping X posting." >&2
-    return 0
+    SKIP_REASON="no credentials"
+    return 3
   fi
 
   local -a tweets=()
@@ -428,7 +444,8 @@ post_x_thread() {
 
   if [[ ${#tweets[@]} -eq 0 ]]; then
     echo "Warning: No tweets found in X/Twitter Thread section. Skipping X posting." >&2
-    return 0
+    SKIP_REASON="empty thread"
+    return 3
   fi
 
   # Post hook tweet -- capture stdout (JSON) and stderr separately
@@ -594,14 +611,16 @@ post_linkedin() {
 
   if [[ -z "${LINKEDIN_ACCESS_TOKEN:-}" ]]; then
     echo "Warning: LINKEDIN_ACCESS_TOKEN not set. Skipping LinkedIn posting." >&2
-    return 0
+    SKIP_REASON="no credentials"
+    return 3
   fi
 
   local content
   content=$(extract_section "$file" "$section")
   if [[ -z "$content" ]]; then
     echo "Warning: No $section content found in $(basename "$file"). Skipping." >&2
-    return 0
+    SKIP_REASON="empty section"
+    return 3
   fi
 
   local stderr_file
@@ -624,24 +643,31 @@ post_linkedin_company() {
   if [[ -z "${LINKEDIN_ORG_ACCESS_TOKEN:-}" ]]; then
     echo "Warning: LINKEDIN_ORG_ACCESS_TOKEN not set. LinkedIn Company Page posting blocked on Community Management API approval (#4046). Routing to rolling tracker." >&2
     append_to_linkedin_tracker "$CASE_NAME" "LinkedIn Company Page" "$LINKEDIN_TRACKER_REASON_MISSING_TOKEN"
-    return 0
+    # Skip: the company post never landed on LinkedIn (only the tracker recorded
+    # it). The rolling tracker (#4046) is the primary durable record; return 3
+    # so the caller does not score this as a real publish (Decision D1).
+    SKIP_REASON="no org token (routed to tracker)"
+    return 3
   fi
 
   if [[ -z "${LINKEDIN_ORG_ID:-}" ]]; then
     echo "Warning: LINKEDIN_ORG_ID not set. Skipping LinkedIn Company Page posting." >&2
-    return 0
+    SKIP_REASON="no org id"
+    return 3
   fi
 
   if [[ "${LINKEDIN_ALLOW_POST:-}" != "true" ]]; then
     echo "Warning: LINKEDIN_ALLOW_POST is not set to 'true'. Skipping LinkedIn Company Page posting." >&2
-    return 0
+    SKIP_REASON="gate flag off (LINKEDIN_ALLOW_POST)"
+    return 3
   fi
 
   local content
   content=$(extract_section "$file" "LinkedIn Company Page")
   if [[ -z "$content" ]]; then
     echo "Warning: No LinkedIn Company Page content found in $(basename "$file"). Skipping." >&2
-    return 0
+    SKIP_REASON="empty section"
+    return 3
   fi
 
   local stderr_file
@@ -685,19 +711,22 @@ post_bluesky() {
 
   if [[ -z "${BSKY_HANDLE:-}" || -z "${BSKY_APP_PASSWORD:-}" ]]; then
     echo "Warning: Bluesky credentials not configured (checked BSKY_HANDLE, BSKY_APP_PASSWORD). Skipping Bluesky posting." >&2
-    return 0
+    SKIP_REASON="no credentials"
+    return 3
   fi
 
   if [[ "${BSKY_ALLOW_POST:-}" != "true" ]]; then
     echo "Warning: BSKY_ALLOW_POST is not set to 'true'. Skipping Bluesky posting." >&2
-    return 0
+    SKIP_REASON="gate flag off (BSKY_ALLOW_POST)"
+    return 3
   fi
 
   local content
   content=$(extract_section "$file" "Bluesky")
   if [[ -z "$content" ]]; then
     echo "Warning: No Bluesky content found in $(basename "$file"). Skipping Bluesky." >&2
-    return 0
+    SKIP_REASON="empty section"
+    return 3
   fi
 
   local char_count
@@ -746,6 +775,40 @@ create_dedup_issue() {
     echo "Error: Failed to create issue: $title" >&2
     return 1
   fi
+}
+
+# create_nowhere_issue -- Surface a dedup action-required issue when every
+# declared channel for a file was skipped (posted nowhere). The body enumerates
+# the per-channel skip reason so credential-skip vs empty-section vs gate-off is
+# discriminable in the one durable artifact (the Inngest spawn discards stderr,
+# so the reason cannot rely on the log stream). Every other issue creator in
+# this file is a create_*_issue helper; this matches house style.
+create_nowhere_issue() {
+  local case_name="$1"
+  local reasons_list="$2"  # newline-joined "- channel: reason" lines
+  local title="[Content Publisher] Published nowhere -- all channels skipped for $case_name"
+  local body
+  body=$(printf '## Content Posted Nowhere\n\nEvery declared channel for **%s** was skipped -- nothing reached any network. The file remains `status: scheduled`.\n\n**Per-channel skip reason:**\n\n%s\n\nProvide the missing credentials / enable the gate flag / fix the empty section, then re-run.' \
+    "$case_name" "$reasons_list")
+  create_dedup_issue "$title" "$body" "action-required,content-publisher"
+}
+
+# tally_rc <rc> <channel> -- score one channel's post_* return into main()'s
+# local counters. 0 = posted, 3 = skipped (record the reason from SKIP_REASON),
+# any other code = attempted + failed. Mutates main()'s local
+# file_successes/file_failures/file_skips/file_skip_reasons via bash dynamic
+# scoping -- valid only because the channel loop runs in the current shell
+# (`done < <(...)`, not a pipeline subshell). Precedent for the idiom:
+# scripts/sweep-followthroughs.sh:211-261. Do NOT refactor the loop into a
+# `... | while` pipeline; that would silently break every counter.
+tally_rc() {
+  local rc="$1" channel="$2"
+  case "$rc" in
+    0) file_successes=$((file_successes + 1)) ;;
+    3) file_skips=$((file_skips + 1))
+       file_skip_reasons+=("${channel}: ${SKIP_REASON:-skipped}") ;;
+    *) file_failures=$((file_failures + 1)) ;;
+  esac
 }
 
 # --- Main ---
@@ -838,63 +901,79 @@ main() {
 
     local file_failures=0
     local file_successes=0
+    local file_skips=0
+    local -a file_skip_reasons=()
 
     # Publish to each declared channel
     local channel section
     while IFS= read -r channel; do
       channel=$(echo "$channel" | xargs)
-      [[ -z "$channel" ]] && continue
+      # A whitespace/comma-only channels value (e.g. `channels: ","`) passes the
+      # non-empty guard above but trims to empty tokens here. Count it as a skip
+      # so a degenerate channel list still surfaces a "published nowhere" issue
+      # instead of falling through the decision block with no signal (F1).
+      [[ -z "$channel" ]] && {
+        file_skips=$((file_skips + 1))
+        file_skip_reasons+=("(empty channel token)")
+        continue
+      }
 
       section=$(channel_to_section "$channel")
       if [[ -z "$section" ]]; then
         echo "Warning: Unknown channel '$channel' in $(basename "$file"). Skipping." >&2
+        file_skips=$((file_skips + 1))
+        file_skip_reasons+=("${channel}: unknown channel")
         continue
       fi
 
+      # Capture each post_*'s exit code set-e-safely: `rc=0; cmd || rc=$?` keeps
+      # errexit from aborting on a non-zero return. Do not capture the code via
+      # command substitution — `local` is itself a command, so $? would reflect
+      # local's status (0) and mask the real code. 0 = posted, 3 = skipped,
+      # any other code = attempted + failed.
       case "$channel" in
         discord)
+          # Discord keeps an inline case because its failure branch also creates
+          # a per-post fallback issue (which tally_rc's generic *) arm does not).
           local discord_content
           discord_content=$(extract_section "$file" "$section")
           if [[ -n "$discord_content" ]]; then
             DISCORD_LAST_ERROR=""
-            if post_discord "$discord_content"; then
-              file_successes=$((file_successes + 1))
-            else
-              echo "Warning: Discord posting failed. Creating fallback issue." >&2
-              create_discord_fallback_issue "$discord_content" "$DISCORD_LAST_ERROR" || true
-              file_failures=$((file_failures + 1))
-            fi
+            local rc=0
+            post_discord "$discord_content" || rc=$?
+            case "$rc" in
+              0) file_successes=$((file_successes + 1)) ;;
+              3) file_skips=$((file_skips + 1))
+                 file_skip_reasons+=("${channel}: ${SKIP_REASON:-skipped}") ;;
+              *) echo "Warning: Discord posting failed. Creating fallback issue." >&2
+                 create_discord_fallback_issue "$discord_content" "$DISCORD_LAST_ERROR" || true
+                 file_failures=$((file_failures + 1)) ;;
+            esac
           else
             echo "Warning: No $section content found in $(basename "$file"). Skipping Discord." >&2
+            file_skips=$((file_skips + 1))
+            file_skip_reasons+=("${channel}: empty section")
           fi
           ;;
         x)
-          if post_x_thread "$file"; then
-            file_successes=$((file_successes + 1))
-          else
-            file_failures=$((file_failures + 1))
-          fi
+          local rc=0
+          post_x_thread "$file" || rc=$?
+          tally_rc "$rc" "$channel"
           ;;
         linkedin-personal)
-          if post_linkedin "$file" "LinkedIn Personal"; then
-            file_successes=$((file_successes + 1))
-          else
-            file_failures=$((file_failures + 1))
-          fi
+          local rc=0
+          post_linkedin "$file" "LinkedIn Personal" || rc=$?
+          tally_rc "$rc" "$channel"
           ;;
         linkedin-company)
-          if post_linkedin_company "$file"; then
-            file_successes=$((file_successes + 1))
-          else
-            file_failures=$((file_failures + 1))
-          fi
+          local rc=0
+          post_linkedin_company "$file" || rc=$?
+          tally_rc "$rc" "$channel"
           ;;
         bluesky)
-          if post_bluesky "$file"; then
-            file_successes=$((file_successes + 1))
-          else
-            file_failures=$((file_failures + 1))
-          fi
+          local rc=0
+          post_bluesky "$file" || rc=$?
+          tally_rc "$rc" "$channel"
           ;;
       esac
     done < <(echo "$channels" | tr ',' '\n')
@@ -911,6 +990,22 @@ main() {
       published=$((published + 1))
     elif [[ "$file_failures" -gt 0 ]]; then
       failures=$((failures + 1))
+    elif [[ "$file_skips" -gt 0 ]]; then
+      # No channel posted and none failed — every declared channel was skipped,
+      # so nothing reached any network. Leave status: scheduled so the file
+      # re-attempts on the next same-day run and (per #6059) goes stale the next
+      # day → content-starvation alert. Surface a dedup action-required issue
+      # naming each skip reason. Do NOT increment failures (exit stays 0):
+      # exit 2 means "attempted + some failed", semantically distinct from
+      # "never attempted"; credential-less environments skip every run and
+      # should not emit a partial-failure signal (Decision D2).
+      echo "WARNING: $CASE_NAME posted nowhere — all $file_skips declared channel(s) skipped." >&2
+      local reasons_joined
+      # `--` terminates printf option parsing so the leading `-` in the format
+      # is treated as literal text, not an invalid `-` option flag.
+      reasons_joined=$(printf -- '- %s\n' "${file_skip_reasons[@]}")
+      # gh outage → the #6059 stale/starvation net is the cross-day backstop.
+      create_nowhere_issue "$CASE_NAME" "$reasons_joined" || true
     fi
 
     sleep 5  # Rate limit buffer between files
