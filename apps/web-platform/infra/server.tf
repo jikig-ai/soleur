@@ -133,7 +133,10 @@ resource "hcloud_server" "web" {
     # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
     webhook_deploy_secret = var.webhook_deploy_secret
     doppler_token         = var.doppler_token
-    resend_api_key        = var.resend_api_key
+    # Baked so the fresh-boot fatal Sentry emit does not depend on doppler (which may be the
+    # broken stage). Semi-public DSN (already in the client bundle). See on_err in cloud-init.yml.
+    sentry_dsn     = var.sentry_dsn
+    resend_api_key = var.resend_api_key
     # Fresh-host parity for the CI SSH keypair generated in
     # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
     # block in ci-ssh-key.tf for the rationale.

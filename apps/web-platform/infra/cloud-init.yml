@@ -367,7 +367,12 @@ runcmd:
       docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
       ( set +e
         . /etc/default/webhook-deploy 2>/dev/null || true
-        DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
+        # Prefer the BAKED DSN (templated into user_data) so this failure signal fires
+        # even when doppler itself is the broken stage — the exact blind spot that hid
+        # the private-GHCR seed-pull 401 (every fresh boot silently aborted at stage=pull
+        # with no Sentry event, because the only DSN source was `doppler secrets get`).
+        DSN='${sentry_dsn}'
+        [ -n "$DSN" ] || DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
                || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
         if [ -n "$DSN" ]; then
           KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
@@ -384,6 +389,25 @@ runcmd:
     trap on_err EXIT
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
+    # ROOT FIX (#6005 gap): the seed image is a PRIVATE GHCR package since #6005/#6011, but
+    # this early seed-pull ran ANONYMOUSLY — soleur-host-bootstrap.sh's ghcr_login runs LATER
+    # (post-extract), so every fresh boot 401'd here, aborted at stage=pull, and never bound
+    # :9000 (the recreate could not produce a working warm standby). Authenticate FIRST, using
+    # the same on-host doppler-fetched read credential the bootstrap uses. Non-fatal wrapper
+    # (mirrors the bootstrap): a creds miss still lets the pull attempt + emit stage=pull.
+    STAGE=ghcr_login
+    ( set +e
+      . /etc/default/webhook-deploy 2>/dev/null || true
+      GHCR_USER=$(timeout 15 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null || true)
+      GHCR_TOKEN=$(timeout 15 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
+      if [ -n "$GHCR_USER" ] && [ -n "$GHCR_TOKEN" ]; then
+        printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null 2>&1 \
+          && echo "cloud-init seed: docker login ghcr.io ok" \
+          || echo "cloud-init seed: docker login ghcr.io FAILED (private seed pull will fail-closed)"
+      else
+        echo "cloud-init seed: GHCR_READ_{USER,TOKEN} absent — private seed pull will 401"
+      fi ) || true
+    STAGE=pull
     N=0; until docker pull "$IMAGE_REF"; do N=$((N+1)); [ "$N" -ge 3 ] && exit 1; sleep 5; done
     STAGE=extract
     docker create --name soleur-hostscript-seed "$IMAGE_REF" >/dev/null

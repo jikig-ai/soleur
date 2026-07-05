@@ -203,6 +203,13 @@ variable "doppler_token" {
   sensitive   = true
 }
 
+variable "sentry_dsn" {
+  description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working (emit falls back to the doppler fetch when unset)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "cf_notification_email" {
   description = "Email address for Cloudflare notification policies"
   type        = string
