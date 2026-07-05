@@ -36,8 +36,7 @@ ADR_DIR=knowledge-base/engineering/architecture/decisions
 # freshness-last-reviewed-source-fix all authored ADR-086 and merged in the same
 # window, so main's own adr-ordinals check is red). Accepted here as pre-existing
 # tech debt so unrelated PRs are not blocked by it; renumber-cleanup tracked in #6054.
-# This branch's own cosign/minter ADRs deliberately took the next-free 087/088 to
-# avoid adding a fourth 086.
+# (The freeze-lock ADR in this PR took the next-free 087 to avoid a fourth 086.)
 ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038 ADR-086)
 
 # (1) New (non-allowlisted) ordinal collisions.
