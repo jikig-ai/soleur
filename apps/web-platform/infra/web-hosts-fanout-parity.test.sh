@@ -4,13 +4,16 @@
 # (#5274 Phase 3 / ADR-068) MUST equal the set of private_ips in var.web_hosts
 # (variables.tf). A drift means a deploy fans out to the wrong peers (or misses
 # web-2 entirely) → web-2 silently ships stale code (single-user incident). There
-# are TWO in-repo copies of this roster today and this guard covers both:
-#   1. web-platform-release.yml — the tagged-release deploy fan-out.
+# are THREE in-repo copies of this roster today and this guard covers EVERY one:
+#   1. web-platform-release.yml — the tagged-release deploy fan-out (×1).
 #   2. apply-web-platform-infra.yml `warm_standby` job — the ADR-068 warm-standby
 #      dispatch re-uses the SAME literal to fan a current-version redeploy out to
-#      web-2 (env WEB_HOST_PRIVATE_IPS). Added here because it was previously an
-#      un-guarded 3rd copy of the private-net roster.
-# Extracts EACH operand by shape and compares the sorted sets.
+#      web-2 (env WEB_HOST_PRIVATE_IPS).
+#   3. apply-web-platform-infra.yml `web_2_recreate` job (#6030) — the same env,
+#      a 2nd copy in the apply workflow. Previously this guard extracted only the
+#      FIRST occurrence per file (`head -1`), so this copy would have shipped
+#      un-guarded; it now validates EACH copy independently.
+# Extracts EACH copy by shape and compares its sorted set to var.web_hosts.
 #
 # Run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
 # Registered in .github/workflows/infra-validation.yml.
@@ -37,40 +40,53 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 tf_ips="$(grep -oE 'private_ip[[:space:]]*=[[:space:]]*"[0-9.]+"' "$VARS_TF" \
   | grep -oE '10\.0\.1\.[0-9]+' | sort -u)"
 
-# --- WEB_HOST_PRIVATE_IPS extractor (same shape in both workflows) ---
-extract_wf_ips() {
-  local file="$1"
+# --- WEB_HOST_PRIVATE_IPS extractor: emit ONE normalized IP-set (sorted,
+# comma-joined) PER occurrence — one line per in-file copy — so EACH copy is
+# checked independently. The prior `head -1` validated only the FIRST copy; a
+# union-then-compare would also hide a copy that DROPS an IP (the union carries
+# it from the sibling copy), so we compare per-copy.
+extract_wf_ip_sets() {
+  local file="$1" line
   grep -oE 'WEB_HOST_PRIVATE_IPS:[[:space:]]*"[0-9.,]+"' "$file" \
-    | grep -oE '"[0-9.,]+"' | tr -d '"' | head -1 \
-    | tr ',' '\n' | grep -oE '10\.0\.1\.[0-9]+' | sort -u
+    | grep -oE '"[0-9.,]+"' | tr -d '"' \
+    | while IFS= read -r line; do
+        printf '%s\n' "$line" | tr ',' '\n' | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd, -
+      done
 }
 
-# --- Operand 2: WEB_HOST_PRIVATE_IPS in the release workflow ---
-wf_ips="$(extract_wf_ips "$WORKFLOW")"
-
-# --- Operand 3: WEB_HOST_PRIVATE_IPS in the warm-standby apply workflow ---
-apply_ips="$(extract_wf_ips "$APPLY_WORKFLOW")"
-
-# --- Minimum-cardinality guard (a silent-empty extraction must fail loud) ---
+# --- Expected set: var.web_hosts private_ips, sorted + comma-joined to match the
+# per-copy normalization above. Must itself be non-empty (>=2 hosts). ---
 tf_n=$(printf '%s\n' "$tf_ips" | grep -c '.')
-wf_n=$(printf '%s\n' "$wf_ips" | grep -c '.')
-apply_n=$(printf '%s\n' "$apply_ips" | grep -c '.')
 if [ "$tf_n" -lt 2 ]; then fail "extracted <2 private_ips from var.web_hosts (got $tf_n) — parser drift"; fi
-if [ "$wf_n" -lt 2 ]; then fail "extracted <2 IPs from release-workflow WEB_HOST_PRIVATE_IPS (got $wf_n) — parser drift"; fi
-if [ "$apply_n" -lt 2 ]; then fail "extracted <2 IPs from apply-workflow WEB_HOST_PRIVATE_IPS (got $apply_n) — parser drift"; fi
+tf_set="$(printf '%s\n' "$tf_ips" | grep -E '.' | paste -sd, -)"
 
-# --- Each workflow roster MUST equal the var.web_hosts roster ---
-if [ "$tf_ips" = "$wf_ips" ]; then
-  pass
-else
-  fail "release-workflow fan-out peer list drift: var.web_hosts=[$(echo "$tf_ips" | tr '\n' ' ')] workflow=[$(echo "$wf_ips" | tr '\n' ' ')]"
-fi
+# --- Assert EVERY WEB_HOST_PRIVATE_IPS copy in a workflow equals var.web_hosts.
+# min_copies pins the KNOWN copy count so a silently-removed copy (or a
+# silent-empty extraction) fails loud instead of vacuously passing. ---
+check_all_copies() {
+  local file="$1" label="$2" min_copies="$3"
+  local s i=0 n
+  local sets=()
+  mapfile -t sets < <(extract_wf_ip_sets "$file")
+  n=${#sets[@]}
+  if [ "$n" -lt "$min_copies" ]; then
+    fail "$label: expected >=$min_copies WEB_HOST_PRIVATE_IPS copies, found $n — a copy was removed or the parser drifted"
+    return
+  fi
+  for s in "${sets[@]}"; do
+    i=$((i + 1))
+    if [ "$s" = "$tf_set" ]; then
+      pass
+    else
+      fail "$label copy #$i fan-out peer list drift: var.web_hosts=[$tf_set] copy=[$s]"
+    fi
+  done
+}
 
-if [ "$tf_ips" = "$apply_ips" ]; then
-  pass
-else
-  fail "warm-standby apply-workflow fan-out peer list drift: var.web_hosts=[$(echo "$tf_ips" | tr '\n' ' ')] workflow=[$(echo "$apply_ips" | tr '\n' ' ')]"
-fi
+# Operand 2: web-platform-release.yml — 1 copy (the tagged-release deploy fan-out).
+check_all_copies "$WORKFLOW" "release-workflow" 1
+# Operand 3: apply-web-platform-infra.yml — 2 copies (warm_standby + web_2_recreate, #6030).
+check_all_copies "$APPLY_WORKFLOW" "apply-workflow" 2
 
 total=$((passes + fails))
 echo "web-hosts-fanout-parity: ${passes} passed, ${fails} failed (${total} assertions)"

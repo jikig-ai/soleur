@@ -89,13 +89,14 @@ on:
       # prod-write authored by a non-technical user — `hr-menu-option-ack-not-prod-write-auth`):
       #   gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby -f reason='...'
       apply_target:
-        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out)"
+        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000)"
         required: false
         default: manual-rerun
         type: choice
         options:
           - manual-rerun
           - warm-standby
+          - web-2-recreate
 
 concurrency:
   # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
@@ -1040,6 +1041,331 @@ jobs:
             echo ""
             echo "**Dispatch reason:** ${REASON:-n/a}"
             echo "**Redeployed tag:** ${CURRENT_TAG:-unknown}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ─── web-2-recreate host bootstrap (dispatch-only; R2-serialized; no SSH) ─────
+  # Selected by `-f apply_target=web-2-recreate`. Runs in the SAME workflow, so it
+  # shares the top-level `concurrency: group: terraform-apply-web-platform-host`
+  # serializer with `apply` + `warm_standby` (a job of THIS workflow, NOT a second
+  # workflow — that would reintroduce the unserialized second-writer hazard on the
+  # lock-less R2 backend). It performs a SCOPED, GUARDED `terraform apply -replace`
+  # of hcloud_server.web["web-2"] to re-run first-boot cloud-init and bind web-2's
+  # :9000 webhook listener (which its ORIGINAL boot aborted before reaching). web-2
+  # is weight-0 / drained / in no serving pool → zero ingress impact; web-1 (the
+  # sole live origin) is untargeted AND doubly guarded (web2_out_of_scope_changes==0
+  # + reboot_updates==0 abort BEFORE apply). The 20 GB hcloud_volume.workspaces
+  # ["web-2"] is a SEPARATE resource — the server replace does not recreate it.
+  # PREREQUISITE to the warm-standby fan-out (web-2 must bind :9000 before the
+  # fan-out can verify reason==ok — ADR-068 Amendment 2026-07-05).
+  web_2_recreate:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'web-2-recreate'
+    runs-on: ubuntu-24.04
+    # Budget must exceed the SUM of: digest-resolve (≤12×20s ≈ 4m) + preflight/plan
+    # (~2m) + apply (~3m) + the off-host verify poll's own worst case (baseline
+    # 12×20s + SETTLE 30s + poll 60×(10s curl + 15s) ≈ 29.5m — this is the fresh-boot
+    # wait). That totals ~38m, so a 30m ceiling would let GitHub's job-timeout kill
+    # PRE-EMPT deploy-status-fanout-verify.sh's terminal exit-1 (which prints the
+    # idempotent-re-dispatch recovery contract). 45m lets the script's loud abort win
+    # the race on a genuinely-stuck web-2 while still bounding a hung job.
+    timeout-minutes: 45
+    env:
+      STATUS_POLL_MAX_ATTEMPTS: 60
+      STATUS_POLL_INTERVAL_S: 15
+      SETTLE_SECONDS: 30
+      # MUST equal var.web_hosts private_ips (variables.tf) — web-1 self-excludes at
+      # runtime, so the fan-out reaches web-2 (10.0.1.11). Single-peer invariant.
+      WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+      IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Assert runner is amd64 (multi-arch digest equivalence)
+        # The pinned image is a multi-arch OCI index; docker pull on the amd64 host
+        # and docker create on the runner must resolve it to the SAME amd64 manifest
+        # so the recomputed host-scripts hash is identical (CTO must-fix 4 / P2-5).
+        run: |
+          set -euo pipefail
+          ARCH=$(uname -m)
+          if [[ "$ARCH" != "x86_64" ]]; then
+            echo "::error::runner arch is ${ARCH}, expected x86_64 (amd64). The Hetzner host is amd64; a non-amd64 runner would resolve the multi-arch index to a different platform manifest, voiding the coherence preflight."
+            exit 1
+          fi
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target filtering (same as
+        # the other jobs). hcloud_ssh_key.default is not targeted, so this dummy key
+        # is never consumed — it only satisfies HCL parsing of var.ssh_key_path.
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
+            exit 1
+          }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
+            exit 1
+          }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Resolve known-good image digest off-host (freeze $PINNED — AC3b TOCTOU)
+        id: pin
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        # Read web-1's RUNNING deploy tag off-host, GATED on web-1 being healthy and
+        # not mid-deploy (exit_code==0 — P2-1, don't pin a transient mid-deploy tag).
+        # Resolve tag → immutable @sha256 index digest EXACTLY ONCE via anonymous
+        # `docker buildx imagetools inspect` (public GHCR), and freeze it into
+        # $GITHUB_ENV as PINNED so the preflight, plan -var, and apply all consume the
+        # byte-identical ref (the workflow MUST NOT re-resolve between preflight and
+        # apply — a moved tag would void the preflight's guarantee).
+        run: |
+          set -euo pipefail
+          SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          TAG=""
+          for i in $(seq 1 12); do
+            HTTP_CODE=$(curl -s --max-time 10 -o /tmp/pin-body -w '%{http_code}' -X GET \
+              -H "X-Signature-256: sha256=$SIGNATURE" \
+              -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+              -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+              "https://deploy.soleur.ai/hooks/deploy-status" || echo "000")
+            BODY=$(cat /tmp/pin-body 2>/dev/null || echo "")
+            if [[ -z "$BODY" ]] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
+              echo "Attempt $i/12: HTTP $HTTP_CODE non-JSON/empty deploy-status — retrying"
+              sleep 10; continue
+            fi
+            EXIT_CODE=$(echo "$BODY" | jq -r '.exit_code // -99')
+            REASON=$(echo "$BODY" | jq -r '.reason // "unknown"')
+            if [[ "$EXIT_CODE" == "-1" ]]; then
+              echo "Attempt $i/12: web-1 deploy in flight (exit_code=-1) — waiting for a settled tag"
+              sleep 10; continue
+            fi
+            # Gate the pin on a healthy, settled web-1 (P2-1). A degraded reason (the
+            # very state this recreate fixes: ok_peer_fanout_degraded) still surfaces
+            # web-1's OWN running tag, which is known-good FOR web-1 — accept exit 0
+            # regardless of the peer-fanout reason, but never a failed web-1 deploy.
+            if [[ "$EXIT_CODE" != "0" ]]; then
+              echo "Attempt $i/12: web-1 deploy-status exit_code=$EXIT_CODE (reason=$REASON) — waiting for a healthy web-1 tag"
+              sleep 10; continue
+            fi
+            TAG=$(echo "$BODY" | jq -r '.tag // ""')
+            break
+          done
+          if [[ ! "$TAG" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::could not read a valid, settled running tag from web-1 deploy-status (got '${TAG}'). Cannot resolve a known-good digest — aborting BEFORE any -replace."
+            exit 1
+          fi
+          # Resolve ONCE. `.Manifest.Digest` is the multi-arch OCI INDEX digest
+          # (anonymous pull on the public repo). docker pull on the amd64 host + the
+          # amd64 runner resolve it to the same amd64 manifest; host-scripts are
+          # arch-independent text, so the recomputed hash is identical.
+          DIGEST=$(docker buildx imagetools inspect "${IMAGE_REPO}:${TAG}" --format '{{.Manifest.Digest}}' || true)
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::tag->digest resolution returned '${DIGEST}' (want ^sha256:[0-9a-f]{64}\$) for ${IMAGE_REPO}:${TAG}. Aborting BEFORE -replace."
+            exit 1
+          fi
+          PINNED="${IMAGE_REPO}@${DIGEST}"
+          echo "web-1 running tag=${TAG} -> pinned ${PINNED}"
+          printf 'PINNED=%s\n' "$PINNED" >> "$GITHUB_ENV"
+          echo "pinned=${PINNED}" >> "$GITHUB_OUTPUT"
+
+      - name: Coherence preflight (LOAD-BEARING — abort before -replace on mismatch)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # The pinned digest's baked /opt/soleur/host-scripts MUST recompute to the
+        # applied local.host_scripts_content_hash, else recreating web-2 would
+        # RE-ABORT at cloud-init stage=verify (the exact bug). The WANT hash comes
+        # from `terraform console` under the canonical Doppler tf-var invocation
+        # (single source of truth — no bash re-implementation of the file list).
+        run: |
+          set -euo pipefail
+          WANT=$(doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform console -input=false <<<'local.host_scripts_content_hash' | tr -d '"')
+          WEB2_PREFLIGHT_WANT_HASH="$WANT" PINNED="$PINNED" INFRA_DIR="$PWD" \
+            bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/web2-recreate-preflight.sh"
+
+      - name: Terraform plan (scoped web-2 -replace) + web-2-recreate destroy-guard
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Scoped -replace of the web-2 server + the 3 web-2 -targets, with the pinned
+        # digest as image_name. The sourced web2_recreate_gate (no [ack-destroy]
+        # bypass) reads the STRUCTURED plan JSON and ABORTS unless the plan is EXACTLY
+        # the scoped web-2 recreate (web2_out_of_scope_changes==0 && nested_deletes==0
+        # && reboot_updates==0 && web2_server_replaced==1). NOTE: hcloud_volume
+        # .workspaces["web-2"] is NOT -targeted (data volume preserved).
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -replace='hcloud_server.web["web-2"]' \
+              -target='hcloud_server.web["web-2"]' \
+              -target='hcloud_server_network.web["web-2"]' \
+              -target='hcloud_volume_attachment.workspaces["web-2"]' \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -var="image_name=${PINNED}"
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (web-2-recreate) failed (exit $rc)."
+            exit $rc
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          # Sourced gate — the SAME bytes tests/scripts/test-destroy-guard-counter-web-platform.sh exercises.
+          # shellcheck source=tests/scripts/lib/web2-recreate-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/web2-recreate-gate.sh"
+          if ! web2_recreate_gate tfplan.json; then
+            echo "::error::web-2-recreate destroy-guard ABORTED: the plan is not the exact scoped web-2 recreate (an out-of-scope change, a web-2 data-volume destroy, a web-1 touch, a reboot, or a no-op). Refusing to apply. NO [ack-destroy] bypass on this path."
+            grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          echo "web-2-recreate plan is the exact scoped recreate. Plan summary:"
+          grep -E '^Plan:' tfplan.txt || true
+
+      - name: Terraform apply (web-2 -replace) — attach proof + volume-preserved assert
+        id: apply
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Apply the saved, guarded plan. Post-apply: assert the two web-2 dependents
+        # re-landed in state (attach proof) AND that the data volume was NOT in the
+        # plan's destroy set (AC15 — read the saved plan JSON, not live state).
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -auto-approve -input=false tfplan | tee /tmp/web2-recreate-apply.txt
+          # AC15: the data volume must be 0-destroy. Prove from the SAVED plan (the
+          # exact plan we applied) that hcloud_volume.workspaces["web-2"] carries no
+          # delete action.
+          VOL_DELETES=$(jq '[.resource_changes[]?
+            | select(.address == "hcloud_volume.workspaces[\"web-2\"]")
+            | select(.change.actions? | index("delete"))] | length' tfplan.json)
+          if [[ "$VOL_DELETES" != "0" ]]; then
+            echo "::error::hcloud_volume.workspaces[\"web-2\"] shows ${VOL_DELETES} delete action(s) in the applied plan — the data volume must be preserved. This should have been caught by the guard; failing hard."
+            exit 1
+          fi
+          echo "--- terraform state (attach proof) ---"
+          STATE_LIST=$(terraform state list)
+          missing=0
+          for addr in 'hcloud_server.web["web-2"]' 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_server_network.web["web-2"]'; do
+            if grep -qxF "$addr" <<< "$STATE_LIST"; then
+              echo "attach proof OK: ${addr} present in state"
+            else
+              echo "::error::attach proof MISSING: ${addr} not in terraform state after apply."
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            echo "::error::web-2-recreate apply did not yield the expected web-2 resources — aborting before the deploy verify."
+            exit 1
+          fi
+
+      - name: Wait for web-2 :9000 + verify off-host (no SSH — shared poll)
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        # REUSES the shared extracted poll (apps/web-platform/infra/scripts/
+        # deploy-status-fanout-verify.sh) — NOT a re-derived copy (spec-flow P1-3 /
+        # AC10c). It carries the ROSTER_COUNT==1 single-peer guard, the staleness
+        # gate, and a TERMINAL exit 1 on timeout (no green-on-timeout). A fresh web-2
+        # that bound :9000 flips web-1's deploy-status reason to ok.
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh"
+
+      - name: Surface fresh-host Sentry emit_fail on failure (best-effort — AC14)
+        if: failure()
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+        # If the fresh boot ALSO aborts, cloud-init emits a Sentry event
+        # (soleur-hostscript-seed failed OR soleur-host-bootstrap failed). host_id
+        # (web-2's Hetzner instance-id) is unknown to the runner, so match on message
+        # + a recent window — best-effort, may show an unrelated host / may be empty.
+        # Job RED's regardless; this only adds a diagnostic pointer to the summary.
+        run: |
+          set +e
+          {
+            echo "## web-2-recreate — fresh-host Sentry pointer (best-effort)"
+            echo ""
+            echo "The verify failed. If web-2's fresh boot re-aborted, a Sentry emit_fail event should exist."
+            echo "_Best-effort: host_id is unknown to the runner, so this matches on message + recent window — it may show an unrelated host or be empty._"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -z "${SENTRY_AUTH_TOKEN:-}" || -z "${SENTRY_ORG:-}" || -z "${SENTRY_PROJECT:-}" ]]; then
+            echo "_Sentry query skipped: SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT not configured._" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          QUERY='message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed"'
+          RESP=$(curl -s --max-time 20 -G \
+            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+            --data-urlencode "query=${QUERY}" \
+            --data-urlencode "statsPeriod=1h" \
+            "https://sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" 2>/dev/null)
+          if [[ -n "$RESP" ]] && echo "$RESP" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+            echo "$RESP" | jq -r '.[0:3][] | "- `\(.title // .message)` (\(.dateCreated // "?"))"' >> "$GITHUB_STEP_SUMMARY" || true
+          else
+            echo "_No matching fresh-host emit_fail event in the last hour (or the query failed)._" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: web-2-recreate summary
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          PINNED_REF: ${{ steps.pin.outputs.pinned }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## web-2-recreate host bootstrap (ADR-068)"
+            echo ""
+            echo "**Dispatch reason:** ${REASON:-n/a}"
+            echo "**Pinned image:** ${PINNED_REF:-unresolved}"
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"

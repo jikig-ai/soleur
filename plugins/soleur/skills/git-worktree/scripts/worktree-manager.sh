@@ -783,6 +783,127 @@ install_deps() {
   done
 }
 
+# Auto-heal a stale, EMPTY orphan branch left behind by a prior aborted
+# create/one-shot run, so a fresh create of the same branch proceeds cleanly
+# instead of stranding the operator with a hand-cleanup step (the failure the
+# 2026-07-05 #4826 session hit: a prior aborted run had pushed
+# `feat-one-shot-4826-*` with zero commits and no PR, and the next attempt had
+# to be rescued by a manual `git push origin --delete`).
+#
+# STRICTLY SCOPED — the auto-delete only ever fires when ALL hold:
+#   1. the branch name EXACTLY equals the one this run is about to create
+#      (so we only touch our own aborted-attempt namespace, never a sibling's);
+#   2. it is provably EMPTY — 0 commits ahead of its base (origin/<from>);
+#   3. no LIVE (open/merged) PR is attached (a parallel session may have opened a
+#      draft before committing — that collision is left untouched, never healed).
+# Real work (commits) or a live PR is left untouched and logged for the operator's
+# run log (these warnings are informational only — no automated caller gate
+# consumes heal's output; one-shot's Step 0a.5 collision gate is issue-ref-based
+# and runs BEFORE create). Fully fail-open: any probe/network/auth failure warns
+# and returns 0 — healing must NEVER block worktree creation. Runs identically
+# from the CLI and the web (Concierge) surface, since both call this script's
+# `create`/`feature` path — that is the CLI/web parity guarantee.
+heal_stale_branch() {
+  local branch="$1"
+  local from_branch="${2:-main}"
+  [[ -n "$branch" ]] || return 0
+
+  # A branch checked out in ANY worktree is ACTIVE, not a stale orphan — never
+  # heal it (guards both the remote delete and the local prune below in one place;
+  # a checked-out branch is exactly the thing we must not touch).
+  if git worktree list --porcelain 2>/dev/null | grep -qx "branch refs/heads/$branch"; then
+    return 0
+  fi
+
+  local remote_ref="refs/remotes/origin/$branch"
+
+  # Base to measure "empty" against: the freshly-fetched origin/<from>, else the
+  # local <from>. If neither resolves we cannot judge emptiness — bail rather than
+  # risk deleting a branch that only LOOKS empty against a missing base. This
+  # deliberately does NOT reuse fetch_origin_branch_base(): that helper falls back
+  # to FETCH_HEAD / the literal branch name (never bails), which would be an unsafe
+  # emptiness baseline here — heal must bail, not measure against a wrong base.
+  git fetch origin "$from_branch" >/dev/null 2>&1 || true
+  local base_ref
+  if git rev-parse --verify --quiet "refs/remotes/origin/$from_branch" >/dev/null 2>&1; then
+    base_ref="refs/remotes/origin/$from_branch"
+  elif git rev-parse --verify --quiet "refs/heads/$from_branch" >/dev/null 2>&1; then
+    base_ref="refs/heads/$from_branch"
+  else
+    return 0
+  fi
+
+  # --- Remote orphan ---
+  # Resolve the remote tip via a direct ls-remote query (a SHA), NOT a cached
+  # refs/remotes/origin/<branch> tracking ref — bare clones created without the
+  # standard `+refs/heads/*:refs/remotes/origin/*` fetch refspec never populate
+  # those tracking refs, so relying on them silently skips the heal. The fetch
+  # brings the tip's objects local so rev-list can measure it.
+  git fetch origin "$branch" >/dev/null 2>&1 || true
+  # Full `refs/heads/<branch>` (not the bare name) so ls-remote's tail-at-slash
+  # matching can't false-match a suffix branch (e.g. `sub/<branch>`). The trailing
+  # `|| remote_sha=""` keeps a non-zero ls-remote (offline) set -e-safe.
+  local remote_sha
+  remote_sha="$(git ls-remote --heads origin "refs/heads/$branch" 2>/dev/null | awk 'NR==1{print $1}')" || remote_sha=""
+  if [[ -n "$remote_sha" ]]; then
+    local ahead
+    ahead="$(git rev-list --count "$base_ref..$remote_sha" 2>/dev/null || echo unknown)"
+    if [[ "$ahead" == "0" ]]; then
+      # Empty vs base. Refuse to delete if a LIVE PR exists. The PR probe has THREE
+      # outcomes — and the error case must fail SAFE (asymmetry matters: unlike the
+      # emptiness probe, a wrong "no PR" answer deletes a parallel session's draft):
+      #   gh ABSENT          → policy: exact-name + empty is sufficient evidence of
+      #                        a prior aborted run → allow delete.
+      #   gh present, OK      → trust the count (0 = no live PR → delete).
+      #   gh present, ERRORED → unknown (auth/rate-limit/network) → do NOT delete;
+      #                        a transient gh outage must not yank a live PR's branch.
+      local pr_check="absent" live_pr="0"
+      if command -v gh >/dev/null 2>&1; then
+        if live_pr="$(gh pr list --head "$branch" --state all \
+             --json state --jq '[.[] | select(.state=="OPEN" or .state=="MERGED")] | length' 2>/dev/null)" \
+           && [[ -n "$live_pr" ]]; then
+          pr_check="ok"
+        else
+          pr_check="error"; live_pr=""
+        fi
+      fi
+      if [[ "$pr_check" == "error" ]]; then
+        headless_or_stderr warn "remote branch origin/$branch is empty but gh could not confirm PR state — NOT auto-deleting (fail-safe); logged for the operator's run log"
+      elif [[ "$live_pr" == "0" ]]; then
+        if git push origin --delete "$branch" >/dev/null 2>&1; then
+          headless_or_stderr warn "auto-healed stale empty remote branch origin/$branch (0 commits ahead of $from_branch, no live PR) — left by a prior aborted run"
+        else
+          headless_or_stderr warn "stale empty remote branch origin/$branch detected but delete failed (offline / no push auth) — continuing; a fresh push will fast-forward it"
+        fi
+      else
+        headless_or_stderr warn "remote branch origin/$branch is empty but has a live PR — NOT auto-deleting; logged for the operator's run log"
+      fi
+    else
+      headless_or_stderr warn "remote branch origin/$branch has $ahead commit(s) ahead of $from_branch — NOT auto-deleting (real work); logged for the operator's run log"
+    fi
+  else
+    # Not on remote (already deleted, or never pushed). Prune any stale tracking ref.
+    git update-ref -d "$remote_ref" 2>/dev/null || true
+  fi
+
+  # --- Local orphan ref (would block `git worktree add -b <branch>`) ---
+  # The not-checked-out condition is already guaranteed by the early return at the
+  # top, so only the emptiness gate remains. `git branch -D` skips git's merge
+  # check, but `lahead == 0` (0 commits ahead of base) is the correct substitute:
+  # a ref with unique unpushed commits reads lahead > 0 and is kept.
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    local lahead
+    lahead="$(git rev-list --count "$base_ref..refs/heads/$branch" 2>/dev/null || echo unknown)"
+    if [[ "$lahead" == "0" ]]; then
+      if git branch -D "$branch" >/dev/null 2>&1; then
+        headless_or_stderr warn "auto-healed stale empty local branch $branch (0 commits ahead of $from_branch) — would have blocked worktree add"
+      fi
+    fi
+  fi
+
+  return 0
+}
+
 # Create a new worktree
 create_worktree() {
   if ! ensure_bare_config; then
@@ -831,6 +952,10 @@ create_worktree() {
     echo -e "${YELLOW}Cancelled${NC}"
     return
   fi
+
+  # Auto-heal a stale empty orphan branch from a prior aborted run before we
+  # try to (re)create the branch of the same name — see heal_stale_branch().
+  heal_stale_branch "$branch_name" "$from_branch"
 
   # Create worktree
   mkdir -p "$WORKTREE_DIR"
@@ -903,6 +1028,10 @@ create_for_feature() {
   echo "  Worktree: $worktree_path"
   echo "  Spec dir: $spec_dir"
   echo ""
+
+  # Auto-heal a stale empty orphan branch from a prior aborted run before we
+  # try to (re)create the branch of the same name — see heal_stale_branch().
+  heal_stale_branch "$branch_name" "$from_branch"
 
   # Ensure directories exist
   mkdir -p "$WORKTREE_DIR"
