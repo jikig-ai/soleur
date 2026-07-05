@@ -300,6 +300,15 @@
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/phase-surface-hint.sh"
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/skill-context-queries.sh"
+          }
+        ]
       }
     ]
   }
