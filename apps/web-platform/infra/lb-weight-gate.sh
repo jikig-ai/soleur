@@ -45,6 +45,15 @@ PROXY_BIND="${PROXY_BIND#"${PROXY_BIND%%[![:space:]]*}"}"
 PROXY_BIND="${PROXY_BIND%"${PROXY_BIND##*[![:space:]]}"}"
 [[ -n "$PROXY_BIND" ]] || fail "A_proxy_bind_empty"
 
+# PARITY POINTER: the roster/allowlist parsing below intentionally MIRRORS (and is
+# stricter than) the two TypeScript loaders it gates for:
+#   - allowlist  ← session-proxy.ts  `parseProxyPeerAllowlist` (split ",", trim, drop empties)
+#   - roster     ← session-router.ts `loadHostRoster`          (JSON object, string values)
+# Keep the three in sync: a change to either loader's parse contract must be reflected
+# here. (A shared golden fixture is a larger follow-up; this pointer suffices for now.)
+# Note the DIRECTIONS differ — the allowlist is the INBOUND accept set, the roster is the
+# OUTBOUND dial map — so this gate asserts BOTH containment directions (see A.3 below).
+
 # A.2 — SOLEUR_PROXY_PEER_ALLOWLIST → non-empty set, parseProxyPeerAllowlist parity
 #       (split ",", trim each, drop empties).
 declare -a ALLOWLIST=()
@@ -58,6 +67,11 @@ parse_allowlist() {
     p="${p%"${p##*[![:space:]]}"}"   # rtrim (POSIX [:space:] includes the here-string newline)
     [[ -n "$p" ]] && ALLOWLIST+=("$p")
   done
+  # Force a 0 return: when the LAST token is empty the `[[ -n "$p" ]] &&` above evaluates
+  # false, which would otherwise be the function's exit status and — under `set -e` — abort
+  # the script HERE, before the explicit `A_peer_allowlist_empty` fail() below could emit
+  # its structured sub_condition line (rejecting for the wrong, unstructured reason).
+  return 0
 }
 parse_allowlist "${SOLEUR_PROXY_PEER_ALLOWLIST-}"
 [[ "${#ALLOWLIST[@]}" -gt 0 ]] || fail "A_peer_allowlist_empty"
@@ -93,6 +107,7 @@ key_uniq=$(printf '%s\n' "$ROSTER_KEYS" | sort -u | grep -c . || true)
 jq -e 'has("web-2")' >/dev/null 2>&1 <<<"$ROSTER_RAW" || fail "A_web2_not_in_roster"
 
 # Allowlist peers ⊆ roster addresses (the roster's values are the private-net addresses).
+# This is the OUTBOUND-dial direction: every peer we accept must be a host we can reach.
 declare -A ROSTER_ADDRS=()
 while IFS= read -r addr; do
   [[ -n "$addr" ]] && ROSTER_ADDRS["$addr"]=1
@@ -100,6 +115,21 @@ done < <(jq -r '.[]' <<<"$ROSTER_RAW")
 for peer in "${ALLOWLIST[@]}"; do
   [[ -n "${ROSTER_ADDRS[$peer]-}" ]] || fail "A_allowlist_not_subset_of_roster"
 done
+
+# web-2's roster (dial) address ⊆ allowlist (accept set) — the INBOUND direction the
+# subset check above does NOT cover. The allowlist is what THIS owner accepts as an
+# inbound relay peer (session-proxy.ts parseProxyPeerAllowlist); the roster is the
+# outbound dial map (session-router.ts loadHostRoster). A config like
+#   roster={web-1,web-2}, allowlist={web-1 addr}
+# PASSES the subset check yet web-1 would REJECT an inbound relay from web-2 (its addr ∉
+# allowlist) → post-weight-flip mis-route → web-2 serves an empty /workspaces →
+# workspace-gone. So assert web-2's dial address is a MEMBER of the allowlist. (Only
+# web-2's is required, not full set equality: extra roster hosts whose addresses are not
+# yet in the allowlist are tolerated — see the positive-tolerance test.)
+declare -A ALLOWLIST_SET=()
+for peer in "${ALLOWLIST[@]}"; do ALLOWLIST_SET["$peer"]=1; done
+WEB2_ADDR=$(jq -r '.["web-2"]' <<<"$ROSTER_RAW")
+[[ -n "${ALLOWLIST_SET[$WEB2_ADDR]-}" ]] || fail "A_web2_addr_not_in_allowlist"
 
 # =============================================================================
 # Condition B — git-data cut-over config-shape
@@ -124,6 +154,11 @@ ISO_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]+)?
 
 marker_epoch=$(date -u -d "$MARKER" +%s 2>/dev/null) || fail "B_luks_cutover_marker_unparseable"
 [[ "$marker_epoch" =~ ^-?[0-9]+$ ]] || fail "B_luks_cutover_marker_unparseable"
+
+# Pre-1970 marker → reject. A negative epoch is nonsensical for a cut-over that post-dates
+# the git-data store, and it would make `delta = now - negative` huge → soak trivially
+# "elapsed". Reject before the soak math can be fooled.
+[[ "$marker_epoch" -ge 0 ]] || fail "B_luks_cutover_marker_pre_epoch"
 
 now_epoch=$(date -u +%s)
 delta=$(( now_epoch - marker_epoch ))
