@@ -40,10 +40,17 @@ fi
 
 required_checks=()
 while IFS= read -r line; do
-  # Strip trailing inline comments and surrounding whitespace, but PRESERVE
-  # internal whitespace -- check names may contain spaces (e.g.
-  # "skill-security-scan PR gate" is one check, not three).
-  line="${line%%#*}"
+  # Full-line comments only: a line is a comment iff it starts with optional
+  # whitespace then '#'. Do NOT strip inline '#'-suffixes — a check name may
+  # legitimately contain '#' (e.g. "waiver discipline (issue:#NNN trailer)").
+  # The old inline `${line%%#*}` strip truncated such names, breaking the bot's
+  # synthetic post AND the required-checks↔canonical parity test. (#6049)
+  if [[ "$line" =~ ^[[:space:]]*# ]]; then
+    continue
+  fi
+  # Trim surrounding whitespace, but PRESERVE internal whitespace -- check names
+  # may contain spaces (e.g. "skill-security-scan PR gate" is one check, not
+  # three).
   line="${line#"${line%%[![:space:]]*}"}"
   line="${line%"${line##*[![:space:]]}"}"
   # Strip a single matching pair of surrounding double quotes — operators

@@ -35,9 +35,14 @@ const INFRA = join(REPO_ROOT, "apps", "web-platform", "infra");
 const DOCKERFILE = join(REPO_ROOT, "apps", "web-platform", "Dockerfile");
 
 // Hetzner hard cap; we enforce a sub-cap budget on WEB so a partial re-inlining still fails
-// CI with headroom (measured web ~29,256 B).
+// CI with headroom (measured web ~30,800 B as of #6055 — organic growth from ~29,256 B plus the
+// char-device sweep sudoers grant). The budget stays ~1,268 B under the hard cap, so a re-inlining
+// regression (KB-scale — the failure mode this guards) still trips it. NOTE: web user_data uses
+// the #5921 bake-and-extract approach (not git-data's base64gzip); as it keeps growing toward the
+// cap, a future base64gzip wrap (like #5927 did for git-data) will be needed — track before the
+// next multi-KB cloud-init addition.
 const HETZNER_CAP = 32_768;
-const WEB_BUDGET = 30_500;
+const WEB_BUDGET = 31_500;
 const WEB_FLOOR = 5_000; // non-vacuity
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
@@ -351,10 +356,13 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap", () => {
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root", () => {
     // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
     // enforcement probe, #5933 item 3).
-    expect(serverTfBakedSet().length).toBe(26);
+    // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
+    // HOST image (not the app image) + installed to /etc/soleur by the bootstrap (#6005,
+    // ADR-087). A data file, not a script.
+    expect(serverTfBakedSet().length).toBe(27);
   });
 
   // #5922 release break: the Dockerfile bakes the host-scripts via

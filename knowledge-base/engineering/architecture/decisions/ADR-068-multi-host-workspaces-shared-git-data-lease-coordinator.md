@@ -624,6 +624,22 @@ Phase 4b (continuous checkpoint).
 >   NOT relax (c) or by itself unlock pooling. Plan:
 >   `knowledge-base/project/plans/2026-07-03-feat-deep-readiness-endpoint-workspaces-mount-plan.md`.
 
+> **Amendment (2026-07-05, #6055 — web-2 must boot post-#6055 cloud-init before pooling).** A new
+> pre-pool gate, layered on the §(c) hard invariant above (necessary, not sufficient — does NOT
+> relax (c)): web-2 MUST be (re)created from a cloud-init dated on or after #6055 before its pool is
+> added to `default_pool_ids`. #6055 adds the `GIT_LOCK_CHARDEVICE_SWEEP` NOPASSWD grant that lets
+> `ci-deploy.sh`'s pre-canary char-device `.git/config.lock` sweep (#5934 / ADR-081) run as root;
+> WITHOUT it the sweep is sudo-DENIED (and `ci-deploy.sh`'s `|| true` hides the denial), so the
+> residual char-device node is never cleared and the #5912 worktree-creation wedge can strand every
+> agent session on that host. **Delivery asymmetry (the load-bearing reason this is a gate):** the 11
+> SSH provisioners are web-1-scoped by design (`server.tf` §"web-2 is fresh — provisioned entirely
+> by cloud-init at boot"), so a RUNNING web-2 gets **no live grant push** from `apply-deploy-pipeline-fix.yml`
+> — cloud-init at (re)create is the sole delivery path. A web-2 whose cloud-init predates #6055 boots
+> grant-less and MUST be **recreated** (the #6030 CI-driven `-replace` recreate), not merely
+> LB-undrained, before pooling. Enforcement today = this checklist item + #6030; making it
+> programmatic (a `/internal/readyz` pre-pool assertion that `grep -q GIT_LOCK_CHARDEVICE_SWEEP
+> /etc/sudoers.d/deploy-inngest-bootstrap` succeeds on-host) is a deep-readiness follow-up.
+
 > **Correction to §(b) (2026-07-03, gaplessness verification — PR #5968).** The §(b) remedy
 > ("verify against CF docs + a staging convert before the GA window") was executed via a
 > verification runbook + two agent pressure-tests (infra-security against the live CF DNS/zone

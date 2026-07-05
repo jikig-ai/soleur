@@ -153,6 +153,9 @@ jobs:
       - name: Run ci-deploy.sh tests
         run: bash apps/web-platform/infra/ci-deploy.test.sh
 
+      - name: Run cosign trusted-root staleness + integrity gate (#6005)
+        run: bash apps/web-platform/infra/cosign-trusted-root-staleness.test.sh
+
       - name: Run ci-deploy-wrapper.sh tests
         run: bash apps/web-platform/infra/ci-deploy-wrapper.test.sh
 

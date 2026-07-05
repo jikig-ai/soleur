@@ -50,6 +50,12 @@ locals {
     # The baked installer that cloud-init's minimal launcher runs AFTER the combined-hash
     # verify (moving the ~90-line install/verify/assert ceremony out of user_data — #5921).
     "soleur-host-bootstrap.sh",
+    # Pinned cosign trusted root (#6005). Public trust material (NOT a secret), baked into
+    # the HOST base image (NOT the app image cosign verifies — so no circular trust, ADR-087)
+    # and installed to /etc/soleur/cosign-trusted-root.json by soleur-host-bootstrap.sh. Too
+    # large (~6.8 KB) for cloud-init user_data (32,768-byte cap; already ~29.6 KB). The
+    # running host gets it byte-for-byte from terraform_data.cosign_trusted_root below.
+    "cosign-trusted-root.json",
   ]
 
   # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
@@ -450,6 +456,51 @@ resource "terraform_data" "journald_persistent" {
   }
 }
 
+# #6005: deliver the pinned cosign trusted root to the RUNNING host byte-for-byte
+# (the fresh-host copy comes from the baked host_script_files set + soleur-host-
+# bootstrap.sh). ci-deploy.sh mounts /etc/soleur/cosign-trusted-root.json :ro into
+# the ephemeral cosign verifier (ADR-087). Public trust material, not a secret.
+# Mirrors terraform_data.journald_persistent: file() keeps triggers_replace and the
+# delivered content in lockstep; the pre-`file` mkdir is load-bearing because the
+# `file` provisioner (scp) does not create remote parents and cloud-init's write_files
+# never re-runs on the existing host (ignore_changes=[user_data]).
+resource "terraform_data" "cosign_trusted_root" {
+  triggers_replace = sha256(file("${path.module}/cosign-trusted-root.json"))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/soleur",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cosign-trusted-root.json"
+    destination = "/etc/soleur/cosign-trusted-root.json"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chown root:root /etc/soleur/cosign-trusted-root.json",
+      "chmod 0644 /etc/soleur/cosign-trusted-root.json",
+      # Positive assertions: the file landed and is a valid sigstore trusted root
+      # (has certificateAuthorities) — a truncated/empty scp would else ship silently
+      # and every deploy's cosign verify would fail-open in WARN.
+      "test -s /etc/soleur/cosign-trusted-root.json",
+      "grep -q certificateAuthorities /etc/soleur/cosign-trusted-root.json",
+    ]
+  }
+}
+
 # Handler-bootstrap bridge: deliver infra-config-apply.sh (the /hooks/infra-config
 # webhook handler) + cat-infra-config-state.sh + the rendered hooks.json directly
 # to the running host over SSH (#4811, Ref #4804).
@@ -629,6 +680,10 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # The sudoers grant landed and parses (the INFRA_CONFIG_INSTALL alias is
       # what makes the webhook handler's prod-mode escalation work).
       "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #5934 — the char-device sweep grant landed (without it ci-deploy.sh's
+      # pre-canary sweep is sudo-denied and the durable #5912 wedge remediation is
+      # a silent no-op). Fail the provisioner loud rather than ship it missing.
+      "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
       # hooks.json re-registers the status hook + maps the state-reporter key (the
       # exact host drift that caused the #4804 freeze: stale hooks.json had neither).
       "grep -q infra-config-status /etc/webhook/hooks.json",
