@@ -49,10 +49,10 @@ malformed JSON). Freeze prefix check reuses the `realpath -m` containment patter
 
 ## Phase 4 — Registration + mirrors + gitignore
 
-- [ ] 4.1 `.claude/settings.json`: add `"matcher": "Write|Edit"` registration for `guardrails.sh`.
-- [ ] 4.2 `.openhands/hooks/guardrails.sh`: mirror the delete-guard hardening in the OpenHands `exit 2` protocol (required in-PR).
-- [ ] 4.3 `.openhands/hooks.json`: wire freeze into `file_editor` if payload shape supports it; else file a tracking issue for the freeze mirror (delete-guard mirror is non-negotiable).
-- [ ] 4.4 `.gitignore`: add `.claude/.freeze*`.
+- [x] 4.1 `.claude/settings.json`: added `Write|Edit` registration for `guardrails.sh` (JSON validated).
+- [x] 4.2 `.openhands/hooks/guardrails.sh`: mirrored the delete-guard hardening (OpenHands `exit 2` protocol); deny reasons match the Claude side (diff-audited). Manually verified deny on repo-root/.git-bearing, allow on scratch.
+- [x] 4.3 `.openhands/hooks.json`: freeze IS wired into `file_editor` (payload shape supports it — `.tool_input.path`). guardrails.sh sources the shared `freeze-lock.sh` cross-tree; both harnesses read the same state. Manually verified deny-outside/allow-inside. No tracking issue needed.
+- [x] 4.4 `.gitignore`: added `.claude/.freeze*`.
 
 ## Phase 5 — Tests (TR3 regression load-bearing)
 
