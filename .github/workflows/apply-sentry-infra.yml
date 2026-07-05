@@ -198,6 +198,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_domain_model_drift \
             -target=sentry_cron_monitor.scheduled_oauth_probe \
             -target=sentry_cron_monitor.scheduled_anthropic_credit_probe \
+            -target=sentry_cron_monitor.scheduled_ghcr_token_minter \
             -target=sentry_cron_monitor.scheduled_github_app_drift_guard \
             -target=sentry_cron_monitor.cron_github_cidr_refresh \
             -target=sentry_cron_monitor.cron_kb_template_health \

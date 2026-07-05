@@ -198,6 +198,9 @@ jobs:
       - name: Run deploy fan-out peer-list parity drift-guard
         run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
 
+      - name: Run deploy-status fan-out verify retry tests (#6051/#6040)
+        run: bash apps/web-platform/infra/deploy-status-fanout-verify.test.sh
+
       - name: Run firewall port-9000 deny drift-guard
         run: bash apps/web-platform/infra/firewall-9000-deny.test.sh
 

@@ -924,3 +924,23 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# #6031 (ADR-088) — control-plane GHCR installation-token minter. Inngest-fired via
+# apps/web-platform/server/inngest/functions/cron-ghcr-token-minter.ts. Mints a 1h
+# packages:read installation token every 20 min and writes it to Doppler prd_ghcr;
+# slug MUST match the handler's SENTRY_MONITOR_SLUG and the crontab MUST match its
+# `{ cron: "*/20 * * * *" }` trigger. 20-min margin so a single missed tick pages at
+# ~40 min — inside the 60-min token TTL (the <=40<60 staleness floor). Output-aware:
+# the handler only checks in `ok` on a 2xx Doppler write. Small pure-TS mint+write
+# → 5-min runtime.
+resource "sentry_cron_monitor" "scheduled_ghcr_token_minter" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-ghcr-token-minter"
+  schedule                = { crontab = "*/20 * * * *" }
+  checkin_margin_minutes  = 20
+  max_runtime_minutes     = 5
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}

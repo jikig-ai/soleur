@@ -115,6 +115,7 @@ run_suite() {
 if want_scripts; then
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
+  run_suite "tests/hooks/openhands-guardrails" bash tests/hooks/test_openhands_guardrails.sh
   run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
   run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
   # AGENTS B_ALWAYS rule-budget gate — CI-wired in #4599 (was lefthook pre-commit only).
@@ -192,7 +193,7 @@ fi
 # .claude/hooks/*.test.sh added 2026-05-15 (#3799 prereq to #3789); covers the
 # 8 hook tests that previously only the session-rules-loader entry pulled in.
 if want_scripts; then
-  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh .claude/hooks/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
+  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
     [[ -f "$f" ]] || continue
     run_suite "$f" bash "$f"
   done
