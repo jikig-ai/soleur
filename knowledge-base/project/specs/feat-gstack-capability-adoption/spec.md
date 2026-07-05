@@ -47,7 +47,16 @@ sequenced by dependency and shared surface.
   `ux-design-lead` agents into `plan-review` as CEO/design/devex reviewers
   alongside the eng reviewers. Depends on FR1's classifier.
 - FR3 (T3-12) Operator velocity metrics: enhance `operator-digest` with legible
-  shipping-cadence/cost-trend metrics (see OQ3).
+  shipping-cadence/cost-trend metrics (OQ3 — **RESOLVED**, see below).
+
+  **OQ3 (which velocity metrics are legible for a single non-technical operator vs.
+  noise?) — RESOLVED** (#5986,
+  `knowledge-base/project/plans/2026-07-04-feat-operator-velocity-metrics-plan.md`
+  §OQ3 Resolution). **Legible:** shipping cadence (qualitative band vs recent weeks)
+  and cost trend (this-week direction + a coarse run-rate anchor). **Noise (excluded):**
+  per-contributor/per-author velocity, context-switching, raw counts/percentages/arrows,
+  cycle-time/DORA jargon, lines-of-code. True month-over-month cost baseline deferred
+  (allowlist + false-precision reasons in the plan's resolution table).
 
 **Wave 2 — safety + memory spine**
 - FR4 (T2-7) Redaction hardening: NFKC-normalize + zero-width-strip before
