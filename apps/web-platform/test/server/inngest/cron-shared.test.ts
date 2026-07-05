@@ -178,6 +178,14 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     // the watchdog purview immediately.
     expect(TIER2_DEFERRED_CRONS.has("cron-domain-model-drift")).toBe(false);
   });
+
+  it("cron-ghcr-token-minter is live — not Tier-2 deferred (#6031)", () => {
+    // The GHCR installation-token minter does NO git operations (it mints a
+    // token and writes to Doppler), so it needs no CRON_BASH_ALLOWLISTS entry and
+    // is not a deferred Tier-2 cron — added to EXPECTED_CRON_FUNCTIONS but
+    // participating in the watchdog purview immediately.
+    expect(TIER2_DEFERRED_CRONS.has("cron-ghcr-token-minter")).toBe(false);
+  });
 });
 
 describe("verifyScheduledIssueCreated", () => {
