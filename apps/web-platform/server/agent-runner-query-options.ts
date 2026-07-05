@@ -31,6 +31,7 @@ import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import { createSandboxHook } from "./sandbox-hook";
 import { createContextQueriesHook } from "./context-queries-hook";
 import { createPhaseSurfaceHook } from "./phase-surface-hook";
+import { createGitLockMarkerHook } from "./git-lock-marker-telemetry";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("agent-query-options");
@@ -267,27 +268,27 @@ export function buildAgentQueryOptions(
           ],
         },
       ],
-      // PostToolUse(Skill) hints — two INDEPENDENT per-caller opt-ins, each a
-      // fail-open additive `additionalContext` only (never touch the tool floor):
-      //   - L3 phase-surface hint (#5772 lever 1, ADR-070);
-      //   - declarative context_queries injection (#6046, ADR-086).
-      // Both use matcher "Skill"; the SDK runs parallel matching hooks and
-      // delivers both `additionalContext` values (ADR-086 §Composition fallback).
-      // Built by concatenation so enabling one never gates the other; only the
-      // cc-soleur-go Concierge router opts in, so the legacy path stays
-      // zero-change (both undefined → `hooks.PostToolUse` is absent, preserving
-      // the AC5 drift snapshot).
-      ...(() => {
-        const postToolUse = [
-          ...(args.enablePhaseSurfaceHint
-            ? [{ matcher: "Skill", hooks: [createPhaseSurfaceHook()] }]
-            : []),
-          ...(args.enableContextQueries
-            ? [{ matcher: "Skill", hooks: [createContextQueriesHook(args.workspacePath)] }]
-            : []),
-        ];
-        return postToolUse.length ? { PostToolUse: postToolUse } : {};
-      })(),
+      // PostToolUse hooks (all fail-open, observe/additive-only — never touch the
+      // tool floor):
+      //   - ALWAYS: the #4826 git-lock marker mirror (matcher "Bash"). Observe-only;
+      //     re-emits the in-sandbox SOLEUR_GIT_LOCK_*/"worktree wedge" markers to the
+      //     server-side logger (→ Better Stack + Sentry breadcrumb), closing ADR-081's
+      //     "blind sandbox stdout, not mirrored to any queryable sink" gap. Path-agnostic
+      //     (a wedge can happen on any dispatch), so it is unconditional, not opt-in.
+      //   - Per-caller opt-ins (matcher "Skill"), each additive `additionalContext`:
+      //     the L3 phase-surface hint (#5772 lever 1, ADR-070) and the declarative
+      //     context_queries injection (#6046, ADR-086). Both use matcher "Skill"; the SDK
+      //     runs parallel matching hooks and delivers both values. Only the cc-soleur-go
+      //     Concierge router opts in.
+      PostToolUse: [
+        { matcher: "Bash", hooks: [createGitLockMarkerHook(args.workspacePath)] },
+        ...(args.enablePhaseSurfaceHint
+          ? [{ matcher: "Skill", hooks: [createPhaseSurfaceHook()] }]
+          : []),
+        ...(args.enableContextQueries
+          ? [{ matcher: "Skill", hooks: [createContextQueriesHook(args.workspacePath)] }]
+          : []),
+      ],
     },
     canUseTool: args.canUseTool,
   };

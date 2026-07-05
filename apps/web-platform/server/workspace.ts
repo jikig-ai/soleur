@@ -17,6 +17,7 @@ import {
 import { generateInstallationToken, checkRepoAccess } from "./github-app";
 import { getPluginPath } from "./plugin-path";
 import { reportSilentFallback } from "./observability";
+import { seedWorktreeConfig } from "./worktree-config-seed";
 
 // Minimal structural type for the Storage remove path — avoids dragging the
 // full SupabaseClient generic into this FS/git-focused module.
@@ -87,65 +88,6 @@ const DEFAULT_SETTINGS = {
     enabled: true,
   },
 };
-
-/**
- * Pre-seed the git config that in-sandbox worktree creation needs, HOST-SIDE at
- * provision time — BEFORE the agent sandbox bind-mounts /dev/null over
- * `.git/config.lock`.
- *
- * The Claude Agent SDK's bubblewrap masks the literal path `.git/config.lock`
- * with a read-only /dev/null bind mount (an in-sandbox, per-session guard against
- * git-config RCE via `core.hooksPath`/`core.sshCommand`; confirmed single-path via
- * `findmnt` = `tmpfs[/null]`). Inside the sandbox, any `git config` WRITE to the
- * shared config fails EEXIST against that masked lock. `worktree-manager.sh`'s
- * `ensure_bare_config` normally performs FOUR shared-config mutations before
- * `git worktree add` (set `core.repositoryformatversion=1`, set
- * `extensions.worktreeConfig=true`, unset `core.bare`, unset `core.worktree`); if
- * any needs a real write against the masked lock, worktree creation wedges (#4826).
- *
- * Performing that exact transformation here — on the host, before the mask exists —
- * makes the in-sandbox `ensure_bare_config` a ZERO-WRITE no-op: `atomic_git_config`
- * takes its read-first idempotent fast path for the two SETs (a read never takes the
- * lock) and skips both UNSETs because the keys are already absent. `git worktree add`
- * then reads `extensions.worktreeConfig` (a read) and writes only per-worktree config
- * (`config.worktree`, unmasked) — it never touches the masked `.git/config.lock`.
- *
- * Best-effort: a failure degrades to the in-sandbox write path (no worse than today),
- * so we log and continue rather than fail provisioning. Idempotent + safe to re-run.
- * Root cause + evidence: ADR-081 (corrected); this is the durable fix for #4826.
- */
-export function seedWorktreeConfig(workspacePath: string): void {
-  // Mirror ensure_bare_config's shared-config transformation exactly.
-  // SETs: log on failure (these gate in-sandbox success). repositoryformatversion=1
-  // MUST precede the extensions.* write for git to honor the extension namespace.
-  for (const [key, value] of [
-    ["core.repositoryformatversion", "1"],
-    ["extensions.worktreeConfig", "true"],
-  ] as const) {
-    try {
-      execFileSync("git", ["config", key, value], {
-        cwd: workspacePath,
-        stdio: "pipe",
-      });
-    } catch (err) {
-      log.warn({ err, workspacePath, key }, "Failed to pre-seed worktree git config");
-    }
-  }
-  // UNSETs: core.bare / core.worktree belong in per-worktree config, not shared
-  // (a normal clone/init carries `core.bare=false`). --unset on an already-absent
-  // key exits non-zero; that is expected, so these are silent best-effort — a
-  // present key that fails to unset just falls back to the in-sandbox path.
-  for (const key of ["core.bare", "core.worktree"] as const) {
-    try {
-      execFileSync("git", ["config", "--unset", key], {
-        cwd: workspacePath,
-        stdio: "pipe",
-      });
-    } catch {
-      // absent key (or already-unset) — nothing to do.
-    }
-  }
-}
 
 /**
  * Provisions a workspace directory.

@@ -178,6 +178,16 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
+    # Shared cross-pipeline web-1-swap mutex (#6060 item (c); ADR-068 amendment):
+    # the "Redeploy to load applied profile" step below POSTs `deploy web-platform`
+    # to /hooks/deploy → swaps web-1, so this job shares the `web-1-swap` group with
+    # the release deploy / web_2_recreate / warm_standby — at most one web-1 swap in
+    # flight at a time. Job-level group COEXISTS with (does not replace) the
+    # workflow-level R2 serializer above. `cancel-in-progress: false`: never kill an
+    # in-progress swap or terraform apply.
+    concurrency:
+      group: web-1-swap
+      cancel-in-progress: false
     # 90 min (was 15) because the #5875 item-4 "Redeploy to load applied profile"
     # step below can trigger ONE graceful ci-deploy.sh swap, which inherits the
     # ADR-078 cron drain (CRON_DRAIN_TIMEOUT=4200s ≈ 70 min worst case). This is a

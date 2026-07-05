@@ -851,6 +851,65 @@ Phase 4b (continuous checkpoint).
 > (verified against `model.c4`/`views.c4`/`spec.c4`). **Status:** UNCHANGED — additive/inert on merge
 > (both dispatches are operator-gated, never run pre-merge). `Ref #6051`, `Ref #6040`. Plan:
 > `knowledge-base/project/plans/2026-07-05-fix-web2-recreate-fanout-verify-retry-and-warm-standby-dedup-plan.md`.
+>
+> **Amendment (2026-07-05, #6060 item (c) — cross-pipeline web-1-swap serialization).** Closes
+> FINDING 1 from #6051's review: the frequent push-release `deploy` job
+> (`web-platform-release.yml`) and the operator-dispatched swap jobs were in DISJOINT concurrency
+> groups, so a release landing inside a recreate's in-flight window could issue its own web-1
+> container swap concurrent with the recreate's re-POST swap on the sole live prod origin
+> (`app.soleur.ai`). The verified harm is not merely the transient single-probe 521 (deferred item
+> (a)): if the recreate's detached `ci-deploy.sh` swap wins the on-host `flock`, the release's
+> detached swap writes `exit_code=1 reason=lock_contention`, and the release's "Verify deploy script
+> completion" step has NO `exit_code=1` case → the routine push-release fails **RED**; the recreate
+> also re-POSTs web-1 at its existing (possibly older) tag, risking a **tag-downgrade** of the sole
+> origin. **Decision:** the **four** jobs that POST `command: deploy web-platform` to `/hooks/deploy`
+> and thereby swap web-1 — release `deploy` (`web-platform-release.yml`), `web_2_recreate` +
+> `warm_standby` (`apply-web-platform-infra.yml`), and the `apply` job in
+> `apply-deploy-pipeline-fix.yml` — share ONE job-level `web-1-swap` concurrency group
+> (`cancel-in-progress: false`) so GitHub's scheduler guarantees at most one web-1 swap in flight at
+> a time across ALL pipelines. This is an **atomic scheduler mutex** (no check-then-act TOCTOU),
+> **bidirectional** (blocks release-during-recreate AND recreate-during-release), and
+> **queue-not-fail** (a superseded push release queues then deploys, or is latest-wins-cancelled by a
+> newer SHA — never hard-failed/stranded ahead of prod). **Operator-op priority-inversion (accepted,
+> mitigated by the merge-freeze):** GitHub keeps at most ONE pending run per concurrency group and the
+> newest arrival wins the pending slot, so an operator recovery dispatch (`web_2_recreate` etc.) that is
+> *pending* behind an in-flight release can be cancelled by a subsequent routine push entering
+> `web-1-swap` — the release then runs, not the recovery. It fails SAFE (nothing half-runs) and is
+> visible in the Actions UI; engage the merge-freeze/edit-lock (`guardrails.sh`) BEFORE an operator
+> recovery dispatch, and re-dispatch the recovery op if a release preempts it. A related mild coupling:
+> while a recreate/warm-standby job is pending on `web-1-swap` it still holds the workflow-level
+> `terraform-apply-web-platform-host` group, so a routine infra `apply` queues behind it for the
+> release-swap duration (liveness preserved — no cycle; a scheduling-latency residual alongside the G10
+> migrate-window one). The job-level `web-1-swap` group **coexists
+> with** the workflow-level `terraform-apply-web-platform-host` R2 state serializer (independent
+> scopes per the GitHub workflow-syntax reference) — the R2 serializer is UNCHANGED, so
+> `web_2_recreate`/`warm_standby`/pipeline-fix-`apply` keep their existing mutual serialization AND
+> gain the cross-pipeline web-1-swap mutex.
+>
+> **Load-bearing lock-hold-duration invariant.** Serialization is only correct because every member
+> POSTs `/hooks/deploy` then **polls deploy-status to a terminal state** — the GHA job (and thus the
+> `web-1-swap` mutex) is held across the multi-minute on-host detached swap, not just the 202 POST. A
+> future edit making any member fire-and-forget would release the mutex in seconds while the swap ran
+> on, silently restoring the overlap while the drift-guard stays green. **`cancel-in-progress: false`
+> is load-bearing:** cancelling an in-progress `ci-deploy.sh` mid-`docker run` (or a mid-apply
+> `terraform apply`) would itself widen a 521 window / risk R2 state. The routine `apply` job in
+> `apply-web-platform-infra.yml` is **excluded** (it runs terraform but does NOT POST `/hooks/deploy`
+> — enrolling it would over-serialize every routine release behind every routine infra apply).
+> **Accepted residual:** the inngest deploy workflows (`restart-inngest-server.yml`,
+> `deploy-inngest-image.yml`) POST the same `/hooks/deploy` and contend for the same on-host `flock`
+> but swap a DIFFERENT container (inngest, not web-1) and are out of `web-1-swap` scope; promote
+> `web-1-swap` to cover them (or rename to a `hooks-deploy` mutex) only IF an inngest-caused release
+> RED is observed. The 4-member allow-list + `cancel-in-progress: false` are CI-gated by
+> `apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh`.
+>
+> **C4 impact:** none — CI-scheduler serialization metadata over already-modeled internal control
+> edges (release→web-1 deploy webhook; apply→recreate→fan-out); no new actor/system/store/edge
+> (verified against `model.c4`/`views.c4`/`spec.c4`: operator dispatch, Hetzner web hosts, GHCR,
+> BetterStack origin-absence detector all pre-existing). **Status:** UNCHANGED — pure workflow
+> concurrency metadata, additive/inert on merge; **amend, not a reversal** (no prior decision
+> changes). Items (a) truly-zero-downtime swap / web-2-only path and (b) private-net web-2
+> post-accept health probe remain OPEN on #6060 (GA-cutover / owner-side-relay scoped). `Ref #6060`.
+> Plan: `knowledge-base/project/plans/2026-07-05-fix-cross-pipeline-web-1-swap-serialization-plan.md`.
 
 ## Consequences
 
