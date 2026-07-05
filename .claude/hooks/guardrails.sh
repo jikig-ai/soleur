@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# PreToolUse guardrail hook for Bash commands.
-# Blocks: commits on main, rm -rf on worktrees, --delete-branch with active worktrees,
-# commits with conflict markers in staged content, gh issue create without --milestone,
-# git stash in worktrees.
+# PreToolUse guardrail hook for Bash AND Write|Edit commands.
+# Bash: blocks commits on main, rm -rf on worktrees, a hardened recursive-delete
+# ownership proof (repo/worktree roots, $HOME, /, .git-bearing checkouts),
+# --delete-branch with active worktrees, commits with conflict markers in staged
+# content, gh issue create without --milestone, git stash in worktrees.
+# Write|Edit: enforces the freeze edit-lock (edits restricted to an active
+# freeze prefix). Registered on both matchers in .claude/settings.json.
 # NOTE: When adding or modifying guards, update the corresponding prose rule comments below.
 #
 # Corresponding prose rules:
 #   guardrails:block-commit-on-main — constitution.md "Never allow agents to work directly on the default branch"
 #   guardrails:block-rm-rf-worktrees — constitution.md "Never rm -rf on the current directory, a worktree path, or the repo root"
+#   guardrails:block-recursive-delete — constitution.md "Never rm -rf a target that resolves onto a repo/worktree root, $HOME, /, or a .git-bearing checkout"
+#   guardrails:freeze-edit-lock — constitution.md "When a freeze is active, deny Write/Edit outside the allowed path prefix"
 #   guardrails:block-delete-branch — constitution.md "Never use --delete-branch with gh pr merge"
 #   guardrails:block-conflict-markers — constitution.md "grep staged content for conflict markers"
 #   guardrails:require-milestone — constitution.md "GitHub Actions workflows and shell scripts that create issues must include --milestone"
@@ -17,17 +22,58 @@ set -euo pipefail
 
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
+# shellcheck source=lib/freeze-lock.sh
+# Provides freeze_active_prefix (reader) for the freeze edit-lock branch below.
+# Sourced (not run): its CLI-dispatch guard is BASH_SOURCE[0]==$0, which is
+# false here, so no verb runs on source. FAIL-SOFT (|| true): freeze is an
+# OPTIONAL feature — a missing/broken freeze helper must NEVER disarm the
+# critical delete/commit/stash guards below (which do not depend on it). The
+# freeze branch itself is additionally gated on `declare -f freeze_active_prefix`.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/freeze-lock.sh" 2>/dev/null || true
 
 INPUT=$(cat)
-# Single jq fork: @sh shell-escapes both fields so eval is safe for embedded
+# Single jq fork: @sh shell-escapes each field so eval is safe for embedded
 # quotes, newlines ($'\n' ANSI-C form), and shell metacharacters. Previously
 # two jq forks ran on every Bash tool invocation; collapsing to one halves
-# the hook's hot-path overhead.
-eval "$(echo "$INPUT" | jq -r '@sh "COMMAND=\(.tool_input.command // "") TOOL_NAME=\(.tool_name // "")"' 2>/dev/null || echo 'COMMAND="" TOOL_NAME=""')"
+# the hook's hot-path overhead. FILE_PATH is extracted here too so the freeze
+# edit-lock branch (Write/Edit) shares the same single fork.
+eval "$(echo "$INPUT" | jq -r '@sh "COMMAND=\(.tool_input.command // "") TOOL_NAME=\(.tool_name // "") FILE_PATH=\(.tool_input.file_path // "")"' 2>/dev/null || echo 'COMMAND="" TOOL_NAME="" FILE_PATH=""')"
 # Belt-and-braces against set -u: a partial eval (jq succeeded on one
-# field, failed on the other) could leave either variable undefined.
+# field, failed on another) could leave a variable undefined.
 : "${COMMAND:=}"
 : "${TOOL_NAME:=}"
+: "${FILE_PATH:=}"
+
+# guardrails:freeze-edit-lock — directory-scoped edit-lock for file-editing
+# tools (Write/Edit). Placed ABOVE the Bash sentinels and gated on file_path
+# presence: a Bash payload carries .tool_input.command and NO file_path, so this
+# branch is skipped entirely for Bash rm-rf calls and CANNOT shadow the delete
+# guards (TR3 — payload-shape disjointness). Fail-open: no active freeze (or a
+# malformed state file) => freeze_active_prefix echoes nothing => edit allowed
+# (OQ2 blast-radius — a parse bug must not brick every edit).
+if [[ -n "$FILE_PATH" ]] && declare -f freeze_active_prefix >/dev/null 2>&1; then
+  ALLOWED=$(freeze_active_prefix)
+  if [[ -n "$ALLOWED" ]]; then
+    RESOLVED=$(realpath -m "$FILE_PATH" 2>/dev/null || echo "$FILE_PATH")
+    case "$RESOLVED" in
+      "$ALLOWED"|"$ALLOWED"/*) : ;;   # inside the allowed prefix — allow
+      *)
+        emit_incident "guardrails-freeze-edit-lock" "deny" "Edit outside the active freeze prefix" "$FILE_PATH"
+        jq -n --arg p "$RESOLVED" --arg a "$ALLOWED" '{
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",            permissionDecision: "deny",
+            permissionDecisionReason: ("BLOCKED: a freeze is active — edits are restricted to " + $a + ". Target " + $p + " is outside the allowed prefix. Edit within the prefix, or clear the freeze: bash .claude/hooks/lib/freeze-lock.sh clear")
+          }
+        }'
+        exit 0
+        ;;
+    esac
+  fi
+  # Write/Edit payloads do not carry a Bash command — the sentinels below
+  # (all keyed on $COMMAND) do not apply. Exit here so no Bash-reachable path
+  # ever hits a bare `exit 0` that could shadow the delete guard (TR3).
+  exit 0
+fi
 
 # Derive a quote/heredoc-stripped view of the command ONCE (one perl fork per
 # Bash invocation, alongside the existing jq + grep overhead). PHRASE-detecting
@@ -86,6 +132,89 @@ if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[
     }
   }'
   exit 0
+fi
+
+# guardrails:block-recursive-delete — hardened ownership proof for rm -rf.
+# Runs AFTER the narrow .worktrees/ gate above (kept as a fast, regression-
+# covered subset). Model: default-allow-except-protected — every non-protected
+# recursive delete (rm -rf build/, node_modules, /tmp/x) passes through; the
+# hardening only ADDS deny cases for a protected class that a literal-substring
+# grep misses: a symlink- or relative-path-obfuscated target that RESOLVES onto
+# the repo root, a git worktree root (or an ancestor of either), $HOME, /, or a
+# .git-bearing checkout.
+#
+# The realpath here is a DENY-DECISION resolver (resolving symlinks makes the
+# guard STRONGER — it catches `rm -rf ./link` → repo root). This is the OPPOSITE
+# direction from constitution.md:306, which forbids realpath in a delete-
+# EXECUTOR (resolving before removal weakens it, CWE-59). Different code paths;
+# do not conflate them.
+if echo "$COMMAND" | grep -qE '(^|&&|\|\||;|\|)[[:space:]]*(sudo[[:space:]]+)?rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)'; then
+  # Resolve the command's working directory so relative targets resolve the same
+  # way the shell would (cd <dir> && ..., git -C <dir>, hook .cwd, else $PWD).
+  _rd_cwd=$(resolve_command_cwd "$COMMAND" "$INPUT")
+  [[ -n "$_rd_cwd" && -d "$_rd_cwd" ]] || _rd_cwd="$PWD"
+
+  # Enumerate protected roots. git worktree list yields the main checkout + all
+  # worktree roots; best-effort (git may not resolve from a non-repo cwd). $HOME
+  # is always protected.
+  _protected_roots=()
+  while IFS= read -r _wl; do
+    [[ "$_wl" == worktree\ * ]] && _protected_roots+=("${_wl#worktree }")
+  done < <(git -C "$_rd_cwd" worktree list --porcelain 2>/dev/null || true)
+  [[ -n "${HOME:-}" ]] && _protected_roots+=("$HOME")
+
+  # Quote-aware tokenization (xargs -n1 honors shell quoting; chain operators
+  # &&/||/;/| survive as their own tokens). Walk rm invocations, collecting
+  # non-flag args as delete targets and resetting at each chain boundary.
+  _rd_toks=()
+  mapfile -t _rd_toks < <(printf '%s\n' "$COMMAND" | xargs -n1 2>/dev/null) || true
+  _in_rm=0
+  _targets=()
+  _ti=0
+  while (( _ti < ${#_rd_toks[@]} )); do
+    _t="${_rd_toks[$_ti]}"
+    _ti=$((_ti + 1))
+    case "$_t" in
+      rm)                _in_rm=1; continue ;;
+      "&&"|"||"|";"|"|") _in_rm=0; continue ;;
+    esac
+    [[ "$_in_rm" == 1 && "$_t" != -* ]] && _targets+=("$_t")
+  done
+
+  _tj=0
+  while (( _tj < ${#_targets[@]} )); do
+    _tg="${_targets[$_tj]}"
+    _tj=$((_tj + 1))
+    _res=$( (cd "$_rd_cwd" 2>/dev/null && realpath -m "$_tg" 2>/dev/null) || echo "" )
+    # Fail-closed: an unresolvable target still gets checked in its raw form.
+    [[ -z "$_res" ]] && _res="$_tg"
+    _deny=0
+    [[ "$_res" == "/" ]] && _deny=1
+    [[ "$_deny" == 0 && -n "${HOME:-}" && "$_res" == "$HOME" ]] && _deny=1
+    if [[ "$_deny" == 0 ]]; then
+      _pi=0
+      while (( _pi < ${#_protected_roots[@]} )); do
+        _pr="${_protected_roots[$_pi]}"
+        _pi=$((_pi + 1))
+        [[ -z "$_pr" ]] && continue
+        # Deny when the target IS a protected root OR an ancestor of one
+        # (rm -rf of a parent dir destroys the checkout under it).
+        if [[ "$_res" == "$_pr" || "$_pr" == "$_res"/* ]]; then _deny=1; break; fi
+      done
+    fi
+    # A .git entry at the target root means it is a repository checkout.
+    [[ "$_deny" == 0 && -e "$_res/.git" ]] && _deny=1
+    if [[ "$_deny" == 1 ]]; then
+      emit_incident "guardrails-block-recursive-delete" "deny" "Never rm -rf a protected root or checkout" "$COMMAND"
+      jq -n --arg t "$_res" '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",          permissionDecision: "deny",
+          permissionDecisionReason: ("BLOCKED: rm -rf resolves onto a protected location (" + $t + "). Repo roots, git worktree roots, $HOME, /, and any .git-bearing checkout are protected. Delete a specific non-protected subdirectory instead, or use git worktree remove.")
+        }
+      }'
+      exit 0
+    fi
+  done
 fi
 
 # guardrails:block-delete-branch — Block gh pr merge --delete-branch when worktrees exist

@@ -22,9 +22,9 @@ TDD: write failing tests before implementation.
 
 ## Phase 1 — Freeze-lock control helper (RED → GREEN)
 
-- [ ] 1.1 Write failing `.claude/hooks/lib/freeze-lock.test.sh` (set/status/clear round-trip; malformed→fail-open; absent→inactive).
-- [ ] 1.2 Implement `.claude/hooks/lib/freeze-lock.sh` — state file `<repo-root>/.claude/.freeze-lock` (worktree-local via `cd -P && pwd -P`); `set <path>|status|clear`; `freeze_active_prefix` reader (absent/empty/malformed → echo nothing = fail-open).
-- [ ] 1.3 Tests green.
+- [x] 1.1 Wrote failing `.claude/hooks/lib/freeze-lock.test.sh`.
+- [x] 1.2 Implemented `.claude/hooks/lib/freeze-lock.sh` (`FREEZE_LOCK_REPO_ROOT` override mirrors `INCIDENTS_REPO_ROOT`).
+- [x] 1.3 Tests green (11/11).
 
 ## Phase 2 — Hardened recursive-delete ownership proof
 
@@ -32,20 +32,20 @@ Model: **default-allow-except-protected** (keep every non-protected `rm -rf`
 allowed; ADD deny for the protected class only). Reuse the `realpath -m` +
 prefix-containment precedent at `follow-through-directive-gate.sh:185-189`.
 
-- [ ] 2.1 In `.claude/hooks/guardrails.sh`, parse `rm -rf`/`-fr` targets from `$COMMAND`.
-- [ ] 2.2 realpath-resolve each target (DENY-decision only — NOT an executor; contrast constitution.md:306).
-- [ ] 2.3 `.git`-tripwire / structural protection: DENY on repo root, any `git worktree list --porcelain` root, `$HOME`, `/`, or `.git`-bearing dir; fail-closed on unresolvable protected-shape target. Non-protected targets pass through (allow).
-- [ ] 2.4 Staging ALLOW conjunction (NOVEL — no precedent; default-off scaffold): realpath-under-staging-root ∧ structural-name ∧ no-`.git` ∧ minted marker (marker never independently sufficient). Ship 2.3 unconditionally; gate 2.4 behind a concrete staging use-case.
-- [ ] 2.5 `emit_incident guardrails-block-recursive-delete deny …` + deny JSON with `hookEventName: "PreToolUse"`.
+- [x] 2.1 Parse `rm -rf`/`-fr` targets from `$COMMAND` (quote-aware `xargs -n1`; reset at chain boundaries). Kept the narrow `.worktrees/` gate as a fast subset above.
+- [x] 2.2 realpath-resolve each target from the command's cwd (DENY-decision only — NOT an executor; contrast constitution.md:306).
+- [x] 2.3 `.git`-tripwire / structural protection: DENY on repo root, any `git worktree list --porcelain` root (+ ancestors), `$HOME`, `/`, or `.git`-bearing dir; fail-closed on unresolvable target (checks raw form). Non-protected targets pass through.
+- [x] 2.4 Staging ALLOW: under default-allow-except-protected a non-protected scratch dir is ALREADY allowed with no marker; the forgeable minted-marker unlock stays a documented default-off scaffold (never unlocks a protected target). AC3 "marked staging → allow" satisfied via default-allow.
+- [x] 2.5 `emit_incident guardrails-block-recursive-delete deny …` + deny JSON with `hookEventName: "PreToolUse"`.
 
 ## Phase 3 — Freeze edit-lock branch (Write|Edit)
 
 Precedent: `no-memory-write.sh` (dual Bash+Write|Edit registration, fail-open on
 malformed JSON). Freeze prefix check reuses the `realpath -m` containment pattern.
 
-- [ ] 3.1 Add `FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""')` to the extraction block; source `freeze-lock.sh`. Fail-open on malformed payload (`exit 0`).
-- [ ] 3.2 Add the `[[ -n "$FILE_PATH" ]]` branch ABOVE the Bash sentinels: active freeze + resolved path outside allowed prefix → deny; else allow; `exit 0` inside the branch only (never on a Bash-reachable path — TR3).
-- [ ] 3.3 `emit_incident guardrails-freeze-edit-lock deny …` + deny JSON with `hookEventName: "PreToolUse"`.
+- [x] 3.1 Added `FILE_PATH` to the single `@sh` jq fork; source `freeze-lock.sh` FAIL-SOFT (`|| true`) so a missing freeze helper never disarms the delete/commit/stash guards.
+- [x] 3.2 Added the `[[ -n "$FILE_PATH" ]] && declare -f freeze_active_prefix` branch ABOVE the Bash sentinels; `exit 0` reachable only for file-tool payloads (TR3 — payload-shape disjointness, proven with a freeze ACTIVE).
+- [x] 3.3 `emit_incident guardrails-freeze-edit-lock deny …` + deny JSON with `hookEventName: "PreToolUse"`.
 
 ## Phase 4 — Registration + mirrors + gitignore
 

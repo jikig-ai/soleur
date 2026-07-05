@@ -138,6 +138,108 @@ else
   FAIL=$((FAIL + 1)); echo "FAIL: strip dropped real --delete-branch flags"
 fi
 
+# ===========================================================================
+# #5988 — hardened recursive-delete ownership proof (b) + freeze edit-lock (a)
+# ===========================================================================
+
+# Build an Edit-tool payload (file_path, no command).
+mk_edit_payload() {
+  local path="$1"
+  jq -nc --arg p "$path" '{tool_name:"Edit", tool_input:{file_path:$p}}'
+}
+
+# Run the hook with a given payload from a given CWD, redirecting incident +
+# freeze state to $root. Echoes the permissionDecision or "<none>".
+run_decision() {
+  local payload="$1" cwd="$2" root="$3"
+  local out
+  out="$(cd "$cwd" 2>/dev/null && printf '%s' "$payload" \
+    | INCIDENTS_REPO_ROOT="$root" FREEZE_LOCK_REPO_ROOT="$root" bash "$HOOK" 2>/dev/null)"
+  if [[ -z "${out//[[:space:]]/}" ]]; then echo "<none>"; return; fi
+  echo "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<none>"' 2>/dev/null || echo "<jq-fail>"
+}
+
+assert_run() {
+  local label="$1" want="$2" payload="$3" cwd="$4" root="$5"
+  TOTAL=$((TOTAL + 1))
+  local got; got="$(run_decision "$payload" "$cwd" "$root")"
+  if [[ "$got" == "$want" ]]; then
+    PASS=$((PASS + 1)); echo "PASS: $label → $got"
+  else
+    FAIL=$((FAIL + 1)); echo "FAIL: $label"; echo "  want: $want"; echo "  got:  $got"
+  fi
+}
+
+# --- Delete guard: protected targets deny; non-protected allow -------------
+DG="$(mktemp -d)"; git init -q "$DG/repo"
+mkdir -p "$DG/other/.git" "$DG/scratch-abc123"
+ln -s "$DG/repo" "$DG/link"
+
+# repo root (resolved via git worktree list from the command cwd) → deny
+assert_run "delete: repo root denies" "deny" \
+  "$(mk_payload "rm -rf $DG/repo")" "$DG/repo" "$DG"
+# symlink resolving onto a .git-bearing checkout → deny
+assert_run "delete: symlink-to-repo-root denies" "deny" \
+  "$(mk_payload "rm -rf $DG/link")" "$DG/repo" "$DG"
+# arbitrary .git-bearing dir (not the cwd repo) → deny
+assert_run "delete: .git-bearing dir denies" "deny" \
+  "$(mk_payload "rm -rf $DG/other")" "$DG" "$DG"
+# filesystem root → deny (constant protected)
+assert_run "delete: / denies" "deny" \
+  "$(mk_payload "rm -rf /")" "$DG" "$DG"
+# \$HOME → deny (constant protected)
+assert_run "delete: \$HOME denies" "deny" \
+  "$(mk_payload "rm -rf $HOME")" "$DG" "$DG"
+# non-protected scratch dir → allow (default-allow-except-protected; the staging
+# ALLOW needs no marker today — a non-protected target is already permitted)
+assert_run "delete: non-protected scratch allows" "<none>" \
+  "$(mk_payload "rm -rf $DG/scratch-abc123")" "$DG" "$DG"
+# ordinary build artifact → allow (guard must not brick normal cleanup)
+assert_run "delete: node_modules allows" "<none>" \
+  "$(mk_payload "rm -rf $DG/repo/node_modules")" "$DG/repo" "$DG"
+rm -rf "$DG"
+
+# --- Freeze edit-lock ------------------------------------------------------
+FZ="$(mktemp -d)"
+mkdir -p "$FZ/apps" "$FZ/other"
+# Activate a VALID freeze via the CLI (writes a realpath-canonical prefix).
+FREEZE_LOCK_REPO_ROOT="$FZ" bash "$SCRIPT_DIR/lib/freeze-lock.sh" set "$FZ/apps" >/dev/null 2>&1
+
+# Edit inside the allowed prefix → allow
+assert_run "freeze: edit inside prefix allows" "<none>" \
+  "$(mk_edit_payload "$FZ/apps/foo.ts")" "$FZ" "$FZ"
+# Edit outside the allowed prefix → deny
+assert_run "freeze: edit outside prefix denies" "deny" \
+  "$(mk_edit_payload "$FZ/other/bar.ts")" "$FZ" "$FZ"
+
+# Malformed freeze state (two lines) → fail-open (edit allowed)
+printf '%s\n%s\n' "$FZ/apps" "$FZ/extra" > "$FZ/.claude/.freeze-lock"
+assert_run "freeze: malformed state fails open (edit allows)" "<none>" \
+  "$(mk_edit_payload "$FZ/other/bar.ts")" "$FZ" "$FZ"
+
+# Absent freeze state → edit allowed
+rm -f "$FZ/.claude/.freeze-lock"
+assert_run "freeze: absent state allows edit" "<none>" \
+  "$(mk_edit_payload "$FZ/other/bar.ts")" "$FZ" "$FZ"
+rm -rf "$FZ"
+
+# --- TR3: freeze ACTIVE must NOT shadow the Bash sentinels -----------------
+TR="$(mktemp -d)"
+FREEZE_LOCK_REPO_ROOT="$TR" bash "$SCRIPT_DIR/lib/freeze-lock.sh" set "$TR/apps" >/dev/null 2>&1
+# rm -rf on a worktree path → still denied by the narrow sentinel
+assert_run "TR3: freeze active, rm -rf .worktrees still denies" "deny" \
+  "$(mk_payload 'rm -rf ./.worktrees/foo')" "$TR" "$TR"
+# gh issue create without --milestone → still denied by require-milestone
+assert_run "TR3: freeze active, gh issue create no-milestone still denies" "deny" \
+  "$(mk_payload 'gh issue create --title x --body y')" "$TR" "$TR"
+# git stash → still denied by block-stash
+assert_run "TR3: freeze active, git stash still denies" "deny" \
+  "$(mk_payload 'git stash')" "$TR" "$TR"
+# benign Bash command → allowed (freeze never applies to Bash)
+assert_run "TR3: freeze active, benign Bash allows" "<none>" \
+  "$(mk_payload 'ls -la')" "$TR" "$TR"
+rm -rf "$TR"
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1
