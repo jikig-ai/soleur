@@ -20,6 +20,7 @@ const {
   mockFetchFromGitData,
   mockResolveWorktreeId,
   mockLocalGit,
+  mockSeedWorktreeConfig,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(),
   mockGraftRepoClone: vi.fn(),
@@ -35,6 +36,7 @@ const {
   mockFetchFromGitData: vi.fn(),
   mockResolveWorktreeId: vi.fn(),
   mockLocalGit: vi.fn(),
+  mockSeedWorktreeConfig: vi.fn(),
 }));
 
 vi.mock("node:fs", () => ({ existsSync: mockExistsSync }));
@@ -84,6 +86,12 @@ vi.mock("@/server/git-data-client", () => ({
 }));
 vi.mock("@/server/worktree-write-lease", () => ({
   resolveWorktreeId: mockResolveWorktreeId,
+}));
+// #4826 — the host-side worktree-config re-seed. Spied so the boot path's calls are
+// assertable without touching real git (the seeder's behavior is unit-tested in
+// worktree-config-seed.test.ts).
+vi.mock("@/server/worktree-config-seed", () => ({
+  seedWorktreeConfig: mockSeedWorktreeConfig,
 }));
 
 import {
@@ -238,6 +246,10 @@ describe("ensureWorkspaceRepoCloned", () => {
     await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
     expect(mockGraftRepoClone).not.toHaveBeenCalled();
     expect(mockRm).not.toHaveBeenCalled();
+    // #4826 — an existing valid workspace must STILL be re-seeded every boot, so a
+    // workspace provisioned before the seed shipped stops wedging in-sandbox worktree
+    // creation. This is the fix for the "fresh session, existing workspace" failure.
+    expect(mockSeedWorktreeConfig).toHaveBeenCalledWith(WS);
   });
 
   // #5733 — a `.git` FILE pointer at a workspace ROOT is a stale gitdir pointer

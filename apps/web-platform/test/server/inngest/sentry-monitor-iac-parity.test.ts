@@ -30,6 +30,14 @@ const MONITORS_TF = resolve(
 // the same deliberate decision this list makes visible.
 const ONESHOT_SLUG_EXEMPTIONS = new Set(["oneshot-gdpr-gate-50d-eval"]);
 
+// Cron slugs whose sentry_cron_monitor was intentionally REMOVED because the
+// cron is DISABLED via a kill-switch (#6031 — the GHCR minter: App installation
+// tokens can't pull the private packages, ADR-088 arm-b). The handler keeps its
+// SENTRY_MONITOR_SLUG const for easy re-enable, but heartbeats never fire (it
+// no-ops under GHCR_MINTER_DISABLED=true), so there is no dropped-check-in risk.
+// Remove this exemption when the monitor + cron are restored.
+const DISABLED_CRON_SLUG_EXEMPTIONS = new Set(["scheduled-ghcr-token-minter"]);
+
 // Slugs assigned via SENTRY_MONITOR_SLUG consts in cron/event handlers.
 // The literal-extraction regex is deliberately narrow (double-quoted
 // kebab-case value on the declaration line) — a dynamically-computed slug
@@ -135,7 +143,9 @@ describe("Sentry cron-monitor IaC parity", () => {
 
   it("every code slug has a sentry_cron_monitor resource in cron-monitors.tf", () => {
     const names = iacMonitorNames();
-    const missing = codeSlugs().filter((s) => !names.has(s));
+    const missing = codeSlugs().filter(
+      (s) => !names.has(s) && !DISABLED_CRON_SLUG_EXEMPTIONS.has(s),
+    );
     expect(
       missing,
       `Inngest handlers heartbeat to monitor slug(s) with no IaC resource — ` +

@@ -68,43 +68,51 @@ describe("buildAgentQueryOptions — canonical shape (T1)", () => {
   });
 });
 
-describe("buildAgentQueryOptions — phase-surface hint per-caller opt-in (#5772 lever 1)", () => {
-  it("registers PostToolUse(Skill) only when enablePhaseSurfaceHint is true", () => {
-    const on = buildAgentQueryOptions({ ...minArgs, enablePhaseSurfaceHint: true });
-    expect(Array.isArray(on.hooks?.PostToolUse)).toBe(true);
-    expect(on.hooks!.PostToolUse![0].matcher).toBe("Skill");
-  });
-
-  it("omits PostToolUse entirely for the legacy caller (both flags absent)", () => {
+describe("buildAgentQueryOptions — PostToolUse(Bash) git-lock telemetry always-on (#4826)", () => {
+  it("ALWAYS registers the Bash git-lock marker hook, even for the legacy caller", () => {
     const off = buildAgentQueryOptions(minArgs);
-    expect(off.hooks?.PostToolUse).toBeUndefined();
-    // The PreToolUse + SubagentStart hooks remain regardless of the flag.
+    // PostToolUse is now always present: the #4826 telemetry hook is unconditional
+    // (a git-lock wedge is path-agnostic). The Bash entry is index 0; Skill hints append.
+    expect(Array.isArray(off.hooks?.PostToolUse)).toBe(true);
+    expect(off.hooks!.PostToolUse![0].matcher).toBe("Bash");
+    // The other hooks remain regardless.
     expect(off.hooks?.PreToolUse).toBeDefined();
     expect(off.hooks?.SubagentStart).toBeDefined();
+  });
+
+  it("registers ONLY the Bash hook when neither Skill opt-in is set", () => {
+    const off = buildAgentQueryOptions(minArgs);
+    expect(off.hooks!.PostToolUse!).toHaveLength(1);
+    expect(off.hooks!.PostToolUse![0].matcher).toBe("Bash");
+  });
+});
+
+describe("buildAgentQueryOptions — phase-surface hint per-caller opt-in (#5772 lever 1)", () => {
+  it("appends PostToolUse(Skill) after the always-on Bash hook when enablePhaseSurfaceHint is true", () => {
+    const on = buildAgentQueryOptions({ ...minArgs, enablePhaseSurfaceHint: true });
+    expect(on.hooks!.PostToolUse!).toHaveLength(2);
+    expect(on.hooks!.PostToolUse![0].matcher).toBe("Bash");
+    expect(on.hooks!.PostToolUse![1].matcher).toBe("Skill");
   });
 });
 
 describe("buildAgentQueryOptions — context_queries hook per-caller opt-in (#6046, AC9)", () => {
-  it("registers a PostToolUse(Skill) block when only enableContextQueries is true", () => {
+  it("appends one Skill entry after the Bash hook when only enableContextQueries is true", () => {
     const on = buildAgentQueryOptions({ ...minArgs, enableContextQueries: true });
-    expect(Array.isArray(on.hooks?.PostToolUse)).toBe(true);
-    expect(on.hooks!.PostToolUse!).toHaveLength(1);
-    expect(on.hooks!.PostToolUse![0].matcher).toBe("Skill");
+    expect(on.hooks!.PostToolUse!).toHaveLength(2);
+    expect(on.hooks!.PostToolUse![0].matcher).toBe("Bash");
+    expect(on.hooks!.PostToolUse![1].matcher).toBe("Skill");
   });
 
-  it("registers TWO independent Skill entries when both flags are true", () => {
+  it("registers the Bash hook + TWO independent Skill entries when both flags are true", () => {
     const both = buildAgentQueryOptions({
       ...minArgs,
       enablePhaseSurfaceHint: true,
       enableContextQueries: true,
     });
-    expect(both.hooks!.PostToolUse!).toHaveLength(2);
-    expect(both.hooks!.PostToolUse!.every((e: { matcher?: string }) => e.matcher === "Skill")).toBe(true);
-  });
-
-  it("leaves PostToolUse undefined when neither flag is set (AC5 drift snapshot)", () => {
-    const off = buildAgentQueryOptions(minArgs);
-    expect(off.hooks?.PostToolUse).toBeUndefined();
+    expect(both.hooks!.PostToolUse!).toHaveLength(3);
+    expect(both.hooks!.PostToolUse![0].matcher).toBe("Bash");
+    expect(both.hooks!.PostToolUse!.slice(1).every((e: { matcher?: string }) => e.matcher === "Skill")).toBe(true);
   });
 });
 
