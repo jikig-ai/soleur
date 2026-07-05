@@ -19,6 +19,7 @@ import { withWorkspacePermissionLock } from "@/server/workspace-permission-lock"
 import { isGitDataStoreEnabled } from "@/server/workspace-resolver";
 import { fetchFromGitData } from "@/server/git-data-client";
 import { resolveWorktreeId } from "@/server/worktree-write-lease";
+import { seedWorktreeConfig } from "@/server/worktree-config-seed";
 
 const log = createChildLogger("ensure-workspace-repo");
 const execFileAsync = promisify(execFile);
@@ -241,7 +242,16 @@ export async function ensureWorkspaceRepoCloned(
   // the heal the way bare `existsSync` did. (A STRANDING `.git` FILE pointer was
   // handled and removed just above; a non-stranding in-workspace pointer is a
   // valid linked tree we intentionally preserve here.)
-  if (isValidGitWorkTree(workspacePath)) return "ok";
+  if (isValidGitWorkTree(workspacePath)) {
+    // #4826 — re-seed the worktree-config prerequisites HOST-SIDE on every session
+    // boot of an EXISTING valid workspace. The #6064 provision-time seed only reaches
+    // workspaces created AFTER it shipped; a workspace provisioned earlier persists on
+    // the volume and would keep wedging in-sandbox worktree creation (the SDK masks
+    // `.git/config.lock`) forever. This heals that population idempotently. Best-effort
+    // (never throws); a failure just falls back to the in-sandbox write path.
+    seedWorktreeConfig(workspacePath);
+    return "ok";
+  }
 
   // `.git` EXISTS but is INVALID. The destructive removal is authorized ONLY by
   // the POSITIVE empty-corrupt fingerprint (`.git` dir + HEAD ENOENT + objects
@@ -298,6 +308,10 @@ export async function ensureWorkspaceRepoCloned(
 
   try {
     await graftFn(workspacePath, repoUrl, installationId);
+
+    // #4826 — seed worktree-config prerequisites into the freshly-grafted `.git`
+    // (host-side, before the sandbox mask), same as the provision-time clone path.
+    seedWorktreeConfig(workspacePath);
 
     // Sub-PR 3.D (#5274 Phase 3, ADR-068) — clone-from-git-data read-source
     // OVERLAY. Rehydration = clone(GitHub) → overlay(git-data). git-data ⊇ the
