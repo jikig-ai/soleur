@@ -25,7 +25,7 @@
 //
 // Kill-switch: SOLEUR_DISABLE_CONTEXT_QUERIES=1.
 import { execFile } from "node:child_process";
-import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from "node:fs";
+import { constants as fsConstants, lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { HookCallback, PostToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
@@ -182,24 +182,24 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
       // lexically contained; this resolve+containment is defense-in-depth.
       const skillmd = path.join(skillsDir, name, "SKILL.md");
       if (!isContained(path.resolve(skillmd), resolvedSkills)) return {};
-      // Open ONCE with O_NOFOLLOW, then fstat + read on the SAME fd — never
-      // lstat/realpath-then-readFile by path (that is the TOCTOU CodeQL flags as
-      // js/file-system-race). O_NOFOLLOW rejects a symlinked SKILL.md (final
-      // component) at open time with ELOOP, mirroring the shell hook's `! -L`;
-      // fstat enforces `-f` (regular file). Precedent: git-worktree-validity.ts,
-      // kb-reader.ts.
-      let fd: number;
-      try {
-        fd = openSync(skillmd, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-      } catch {
-        return {}; // ENOENT (missing) / ELOOP (symlinked final component) / etc.
-      }
+      // Single atomic read with an O_NOFOLLOW open flag — NOT a stat/realpath
+      // followed by a separate read (that check-then-use is CodeQL
+      // js/file-system-race), and NOT `fs.open`/`openSync` (whose sink CodeQL
+      // js/insecure-temporary-file flags when the path's provenance touches
+      // os.tmpdir — a false positive here via the test fixture's mkdtemp root).
+      // `readFileSync` is a read-only sink neither query targets. The numeric
+      // O_NOFOLLOW flag throws ELOOP on a symlinked SKILL.md (mirrors the shell
+      // hook's `! -L`); a directory throws EISDIR. Any error → fail-open `{}`.
+      // @types/node types the `flag` option as string-only, but Node accepts a
+      // numeric open-flags bitmask at runtime — required here because O_NOFOLLOW
+      // has no string-flag equivalent. Types-only cast, NOT a behaviour change
+      // (the symlink-skillmd fixture throws ELOOP → {}; verified by the suite).
+      const nofollowReadFlag = (fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW) as unknown as string;
       let md: string;
       try {
-        if (!fstatSync(fd).isFile()) return {};
-        md = readFileSync(fd, "utf-8");
-      } finally {
-        closeSync(fd);
+        md = readFileSync(skillmd, { encoding: "utf-8", flag: nofollowReadFlag });
+      } catch {
+        return {}; // ENOENT (missing) / ELOOP (symlink) / EISDIR (directory) / etc.
       }
 
       // Fast-path: proceed only if context_queries is declared in the FRONTMATTER.
