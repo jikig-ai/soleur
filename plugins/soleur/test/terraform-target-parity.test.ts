@@ -910,12 +910,14 @@ const WARM_STANDBY_TARGETS = [
 
 describe("ADR-068 warm-standby dispatch -target set (additive; reboot_updates=0)", () => {
   let warmTargets: string[];
+  let warmJobBlock: string;
   let fullBaseTargets: Set<string>;
   let strippedBaseTargets: Set<string>;
 
   beforeAll(() => {
     const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
-    warmTargets = extractTargetsWithKeys(extractJobBlock(wf, "warm_standby"));
+    warmJobBlock = extractJobBlock(wf, "warm_standby");
+    warmTargets = extractTargetsWithKeys(warmJobBlock);
     fullBaseTargets = extractAllTargets(wf);
     strippedBaseTargets = extractAllTargets(stripJob(wf, "warm_standby"));
   });
@@ -949,6 +951,19 @@ describe("ADR-068 warm-standby dispatch -target set (additive; reboot_updates=0)
       const base = t.replace(/\[.*$/, "");
       expect(OPERATOR_APPLIED_EXCLUSIONS.has(base)).toBe(true);
     }
+  });
+
+  test("the warm_standby job still RUNS the reboot_updates destroy-guard before apply (runtime-guard anchor)", () => {
+    // Defense-in-depth (optional, this PR): the static "no hcloud_server.* target"
+    // reasoning above wouldn't notice if the RUNTIME destroy-guard check were
+    // deleted from the plan step. `-target` still pulls hcloud_server.web into the
+    // plan graph transitively, so the runtime reboot_updates=0 gate is the real
+    // backstop. Anchor its presence so a future edit that drops it turns this red.
+    expect(warmJobBlock).toContain("destroy-guard-filter-web-platform.jq");
+    expect(warmJobBlock).toContain("reboot_updates");
+    // The gate must ABORT on a reboot (rc-bearing check), not merely compute the
+    // counter — pin the `reboot_updates -gt 0` guard expression itself.
+    expect(warmJobBlock).toMatch(/reboot_updates"?\s*-gt\s*0/);
   });
 
   test("the parity guards stay JOB-AWARE: warm-standby targets are NOT in the stripped allTargets", () => {

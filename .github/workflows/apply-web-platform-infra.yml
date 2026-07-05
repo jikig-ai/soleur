@@ -715,9 +715,15 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # The 6 warm-standby resources — EXACTLY the additive set enumerated in
-        # OPERATOR_APPLIED_EXCLUSIONS (terraform-target-parity.test.ts). No
-        # hcloud_server.* target → the placement-group reboot (behind
-        # ignore_changes=[placement_group_id], #5950) can never enter this plan.
+        # OPERATOR_APPLIED_EXCLUSIONS (terraform-target-parity.test.ts). Note that
+        # `-target` still pulls hcloud_server.web into the plan GRAPH (transitively,
+        # via hcloud_server_network.web[...] → its server dependency), so "no
+        # hcloud_server.* target" alone does NOT keep the reboot out. The reboot is
+        # kept out by TWO layers: (1) no placement-group diff materializes because
+        # placement_group_id is in hcloud_server.web's lifecycle.ignore_changes
+        # (#5950), and (2) the reboot_updates=0 destroy-guard below is the backstop
+        # that HALTS if one ever does (mirrors the parity test's "reboot_updates=0
+        # by construction").
         run: |
           # `-e` omitted so the plan exit code is captured in $rc (same pattern as
           # the apply job); re-enabled with `set -e` after the rc-capture window.
@@ -846,8 +852,12 @@ jobs:
             PRE_START_TS=$(echo "$BODY" | jq -r '.start_ts // 0')
             break
           done
-          if [[ ! "$CURRENT_TAG" =~ ^v[0-9] ]]; then
-            echo "::error::could not read a current deployed tag from web-1 deploy-status (got '${CURRENT_TAG}'). Cannot redeploy the current version — aborting (attach already landed; re-dispatch is idempotent)."
+          # Full-anchor tag validation (not a prefix-only `^v[0-9]`): CURRENT_TAG is
+          # interpolated into the JSON deploy payload below, so pin the WHOLE string
+          # to the tag grammar (`v` + digit + [A-Za-z0-9._-]) — no trailing junk,
+          # quotes, or shell/JSON metacharacters can ride through.
+          if [[ ! "$CURRENT_TAG" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::could not read a valid current deployed tag from web-1 deploy-status (got '${CURRENT_TAG}'). Cannot redeploy the current version — aborting (attach already landed; re-dispatch is idempotent)."
             exit 1
           fi
           if [[ ! "$PRE_START_TS" =~ ^[0-9]+$ ]]; then PRE_START_TS=0; fi
@@ -861,6 +871,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Trigger web-2 deploy via fan-out (re-swaps web-1, current version)
+        id: trigger
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
@@ -875,10 +886,34 @@ jobs:
         # an idempotent, canary-gated redeploy of the live origin, ingress unchanged.
         run: |
           set -euo pipefail
+          # Tag-downgrade race guard: a release can land in the window between the
+          # baseline read (+30s settle) and this POST. If we blindly POSTed the
+          # baseline tag, web-1 could be re-swapped DOWN to that now-stale older tag.
+          # Re-read deploy-status immediately before the POST and adopt the FRESHEST
+          # deployed tag so the fan-out never downgrades web-1. The re-read tag must
+          # pass the SAME full-anchor validation as the baseline before it is trusted.
+          RESIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          curl -s --max-time 10 -o /tmp/trigger-status -w '%{http_code}' -X GET \
+            -H "X-Signature-256: sha256=$RESIG" \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            "https://deploy.soleur.ai/hooks/deploy-status" >/dev/null 2>&1 || true
+          DEPLOY_TAG="$CURRENT_TAG"
+          RE_BODY=$(cat /tmp/trigger-status 2>/dev/null || echo "")
+          if [[ -n "$RE_BODY" ]] && echo "$RE_BODY" | jq -e . >/dev/null 2>&1; then
+            FRESH_TAG=$(echo "$RE_BODY" | jq -r '.tag // ""')
+            if [[ "$FRESH_TAG" =~ ^v[0-9][A-Za-z0-9._-]*$ ]] && [[ "$FRESH_TAG" != "$CURRENT_TAG" ]]; then
+              echo "current deployed tag advanced '${CURRENT_TAG}' -> '${FRESH_TAG}' between baseline and trigger; deploying the freshest to avoid a downgrade re-swap of web-1."
+              DEPLOY_TAG="$FRESH_TAG"
+            fi
+          fi
+          # Publish the tag actually deployed so the verify step matches against it
+          # (not the possibly-stale baseline tag).
+          echo "deployed_tag=${DEPLOY_TAG}" >> "$GITHUB_OUTPUT"
           # Redeploy the CURRENT version (not a new release) with the peer list so
           # web-1's fan-out delivers the SAME container to web-2. Image ref matches
-          # the release workflow's payload; TAG is the live tag read at baseline.
-          PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform %s","peers":"%s"}' "$CURRENT_TAG" "$WEB_HOST_PRIVATE_IPS")
+          # the release workflow's payload; TAG is the freshest live tag.
+          PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform %s","peers":"%s"}' "$DEPLOY_TAG" "$WEB_HOST_PRIVATE_IPS")
           SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST \
             -H "Content-Type: application/json" \
@@ -891,27 +926,41 @@ jobs:
             echo "::error::deploy webhook rejected the warm-standby fan-out (HTTP $HTTP_CODE). PARTIAL STATE: the volume attached (billing flips) but web-2 was NOT deployed — ingress-safe (web-2 weight 0) but attached-but-undeployed. Recovery: idempotent re-dispatch (apply = 0 changes, re-trigger)."
             exit 1
           fi
-          echo "warm-standby deploy fan-out accepted (HTTP 202) for ${CURRENT_TAG}; verifying web-2 acceptance off-host…"
+          echo "warm-standby deploy fan-out accepted (HTTP 202) for ${DEPLOY_TAG}; verifying web-2 acceptance off-host…"
 
       - name: Verify web-2 accepted the deploy off-host (no SSH)
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          CURRENT_TAG: ${{ steps.baseline.outputs.current_tag }}
+          CURRENT_TAG: ${{ steps.trigger.outputs.deployed_tag }}
           PRE_START_TS: ${{ steps.baseline.outputs.pre_start_ts }}
         # The reachable web-2-accepted signal (Open Question 1 topology): web-1's
-        # /hooks/deploy-status `reason`. fan_out_to_peers (ci-deploy.sh:165-169) sets
-        # reason="ok" when the peer (web-2) returned HTTP 202 and
-        # "ok_peer_fanout_degraded" (ci-deploy.sh:1328) when it did not. With ONE
-        # peer (web-2), reason=="ok" IS the web-2-accepted proof and
-        # reason=~_peer_fanout_degraded ⇒ web-2 did NOT accept ⇒ RED. Staleness-safe:
-        # only accept a completion whose start_ts ADVANCED past the pre-trigger
-        # baseline (the re-swap sets a fresh start_ts), so the prior "ok" state can't
-        # be misread as this run's success. Fails LOUDLY on a partial
+        # /hooks/deploy-status `reason`. The deploy CALLER sets reason="ok" vs
+        # "ok_peer_fanout_degraded" (ci-deploy.sh:1325-1328) from fan_out_to_peers'
+        # return code; that function sets its per-peer rc (rc=1 when the peer did NOT
+        # return HTTP 202) at ci-deploy.sh:165-169. With ONE peer (web-2),
+        # reason=="ok" IS the web-2-accepted proof and reason=~_peer_fanout_degraded
+        # ⇒ web-2 did NOT accept ⇒ RED. That single-peer inference is asserted
+        # explicitly below before `reason` is trusted. Staleness-safe: only accept a
+        # completion whose start_ts ADVANCED past the pre-trigger baseline (the
+        # re-swap sets a fresh start_ts), so the prior "ok" state can't be misread as
+        # this run's success. Fails LOUDLY on a partial
         # (apply-succeeded-but-verify-failed) per the recovery contract.
         run: |
           set -euo pipefail
+          # Single-peer invariant (explicit, before trusting `reason`): the
+          # reason=="ok" ⟹ web-2-accepted inference below holds ONLY while web-1 has
+          # exactly ONE peer. web-1 self-excludes at runtime, so a 2-host roster ==
+          # exactly one peer (web-2). A future web-3 makes this 3 and trips here
+          # LOUDLY rather than silently making `reason` an ambiguous aggregate over
+          # multiple peers. (WEB_HOST_PRIVATE_IPS parity with var.web_hosts is
+          # separately drift-guarded by web-hosts-fanout-parity.test.sh.)
+          ROSTER_COUNT=$(printf '%s' "$WEB_HOST_PRIVATE_IPS" | tr ',' '\n' | grep -cE '10\.0\.1\.[0-9]+')
+          if [[ "$ROSTER_COUNT" -ne 2 ]]; then
+            echo "::error::warm-standby verify assumes exactly one peer besides web-1 (reason==ok ⟹ web-2 accepted), but WEB_HOST_PRIVATE_IPS enumerates ${ROSTER_COUNT} hosts. With >1 peer, reason=ok no longer uniquely proves web-2 accepted — teach this verify to read per-peer state before adding web-3."
+            exit 1
+          fi
           SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
           for i in $(seq 1 "$STATUS_POLL_MAX_ATTEMPTS"); do
             HTTP_CODE=$(curl -s --max-time 10 \
@@ -980,7 +1029,10 @@ jobs:
         env:
           REASON: ${{ inputs.reason }}
           JOB_STATUS: ${{ job.status }}
-          CURRENT_TAG: ${{ steps.baseline.outputs.current_tag }}
+          # The tag actually POSTed to the fan-out (freshest, post-race-reread); empty
+          # if the job failed before the trigger step ran → "unknown" (nothing was
+          # redeployed).
+          CURRENT_TAG: ${{ steps.trigger.outputs.deployed_tag }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           {
