@@ -52,6 +52,7 @@ infra/
 !infra/hooks.json.tmpl
 !infra/journald-soleur.conf
 !infra/soleur-host-bootstrap.sh
+!infra/cosign-trusted-root.json
 scripts/
 # Allow the post-build dev-signin grep gate (R3 / feat-dev-signin-bypass).
 # The Dockerfile builder stage runs `bash scripts/assert-dev-signin-eliminated.sh`

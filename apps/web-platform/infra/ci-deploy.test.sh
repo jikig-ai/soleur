@@ -116,6 +116,15 @@ MOCK
 create_mock_doppler() {
   cat > "$1/doppler" << 'MOCK'
 #!/bin/bash
+if [[ "${1:-}" == "secrets" && "${2:-}" == "get" ]]; then
+  # #6005 ghcr_prelude_and_login: `secrets get <NAME> --plain` → bare per-name value.
+  # A non-empty distinguishable value so the prelude exports (SENTRY_*, GHCR_*) are
+  # observably set. MOCK_DOPPLER_GET_EMPTY simulates the pre-provisioning state
+  # (credential not yet in Doppler) → empty value, prelude skips docker login.
+  if [[ "${MOCK_DOPPLER_GET_EMPTY:-}" == "1" ]]; then exit 0; fi
+  echo "mock-${3:-VALUE}"
+  exit 0
+fi
 if [[ "${1:-}" == "secrets" ]]; then
   echo "KEY=value"
   exit 0
@@ -164,6 +173,14 @@ fi
 if [[ "${1:-}" == "run" ]]; then
   for _a in "$@"; do
     if [[ "$_a" == "verify" ]]; then
+      # #6005: capture the full cosign `docker run` argv + whether SENTRY_* were
+      # already in the script env AT VERIFY TIME (proves the Phase-3 early Doppler
+      # fetch ran before verify, so the WARN telemetry is not dark). ci-deploy.sh
+      # discards the cosign container stdout (>/dev/null), so record to a file.
+      if [[ -n "${MOCK_COSIGN_ARGS_FILE:-}" ]]; then
+        printf 'COSIGN_VERIFY_ARGS:%s\n' "$*" >> "$MOCK_COSIGN_ARGS_FILE"
+        printf 'SENTRY_AT_VERIFY:%s\n' "${SENTRY_INGEST_DOMAIN:-UNSET}" >> "$MOCK_COSIGN_ARGS_FILE"
+      fi
       if [[ "${MOCK_COSIGN_VERIFY_FAIL:-}" == "1" ]]; then
         echo "Error: no matching signatures found" >&2
         exit 1
@@ -1234,6 +1251,59 @@ assert_verify_enforce_blocks() {
 }
 assert_verify_enforce_blocks
 
+# --- #6005 Design B′: cosign invocation shape + SENTRY-before-verify ordering -----
+# The verify `docker run` MUST run `--network host` (host-egress .sig fetch, ADR-087),
+# mount the deploy docker config :ro (private-pull auth) and the pinned trusted root
+# :ro, and pass `--offline --trusted-root` (offline verify). SENTRY_* MUST already be
+# in the script env at verify time (the Phase-3 early Doppler fetch ran first → the
+# WARN telemetry is not dark, which is the whole point of this ENFORCE-prep issue).
+assert_bprime_cosign_invocation() {
+  TOTAL=$((TOTAL + 1))
+  local argsfile args sentry ok=1
+  argsfile=$(mktemp)
+  ( export MOCK_COSIGN_ARGS_FILE="$argsfile"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
+  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
+  sentry=$(grep '^SENTRY_AT_VERIFY:' "$argsfile" 2>/dev/null | head -1)
+  rm -f "$argsfile"
+  [[ -n "$args" ]] || ok=0
+  printf '%s' "$args" | grep -qF -- '--network host' || ok=0
+  printf '%s' "$args" | grep -qE -- '-v [^ ]+:/root/\.docker/config\.json:ro' || ok=0
+  printf '%s' "$args" | grep -qE -- '-v [^ ]+:/etc/cosign/trusted_root\.json:ro' || ok=0
+  printf '%s' "$args" | grep -qF -- '--offline' || ok=0
+  printf '%s' "$args" | grep -qF -- '--trusted-root=/etc/cosign/trusted_root.json' || ok=0
+  # SENTRY_* set at verify time (not the UNSET sentinel) — telemetry not dark.
+  [[ -n "$sentry" && "$sentry" != "SENTRY_AT_VERIFY:UNSET" ]] || ok=0
+  if [[ "$ok" == "1" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: B′ cosign run (--network host + config/trusted-root :ro mounts + --offline --trusted-root) and SENTRY set before verify (#6005)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: B′ cosign invocation/ordering (#6005)"; echo "        args: $args"; echo "        sentry: $sentry"
+  fi
+}
+assert_bprime_cosign_invocation
+
+# ADR-087 rejects widening the shared container egress allowlist — ghcr.io reach is
+# confined to the ephemeral host-net verifier. Guard against a regression that adds
+# ghcr.io back into cron-egress-allowlist.txt.
+assert_no_ghcr_allowlist_widening() {
+  TOTAL=$((TOTAL + 1))
+  local allowlist
+  allowlist="$(dirname "$DEPLOY_SCRIPT")/cron-egress-allowlist.txt"
+  if [[ -f "$allowlist" ]] && grep -qiE '(^|[^a-z0-9.-])ghcr\.io' "$allowlist"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: ghcr.io must NOT be in cron-egress-allowlist.txt (ADR-087 host-net design) (#6005)"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: ghcr.io absent from cron-egress-allowlist.txt (ADR-087 — no container allowlist widening) (#6005)"
+  fi
+}
+assert_no_ghcr_allowlist_widening
+
+# AC: the ENFORCE flip stays OUT OF SCOPE — the default MUST remain warn.
+TOTAL=$((TOTAL + 1))
+if grep -qE 'IMAGE_VERIFY_MODE:-warn' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1)); echo "  PASS: IMAGE_VERIFY_MODE default is still 'warn' (no ENFORCE flip) (#6005)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: IMAGE_VERIFY_MODE default must remain 'warn' — ENFORCE flip is out of scope (#6005)"
+fi
+
 echo ""
 echo "--- AppArmor profile on docker run ---"
 
@@ -1721,12 +1791,12 @@ assert_state_contains "flock contention writes reason=lock_contention" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
   "export MOCK_FLOCK_CONTENDED=1"
 
-# Docker pull failure -> unhandled exit path via set -e. Today's behavior: docker pull
-# failures fall through to the EXIT trap as "unhandled" (no explicit pull_failed handler).
-# When #2202's follow-up adds an explicit pull_failed reason, this assertion will fail
-# and force a single-direction update. See GitHub issue for the follow-up.
-assert_state_contains "docker pull fail writes reason=unhandled" \
-  "unhandled" "1" \
+# Docker pull failure -> reason=image_pull_failed (#6005). The pull is now against a
+# PRIVATE package (M2 SPOF), so a denial is caught explicitly and a scrubbed, no-SSH
+# pull_failure_event fires before aborting — replacing the legacy "unhandled" EXIT-trap
+# fallthrough (the #2202 follow-up this comment anticipated).
+assert_state_contains "docker pull fail writes reason=image_pull_failed (#6005)" \
+  "image_pull_failed" "1" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
   "export MOCK_DOCKER_PULL_FAIL=1"
 
@@ -2296,7 +2366,10 @@ assert_state_contains "deploy inngest restart latest rejected as image_mismatch"
 # source-grep gate — a future edit that drops `200>&-` re-introduces the
 # 40-min-stuck-lock class the v0.116.1 PIR documented.
 TOTAL=$((TOTAL + 1))
-if grep -qE '^[[:space:]]*docker pull "\$IMAGE:\$TAG" 200>&-' "$DEPLOY_SCRIPT" \
+# NB: the web-platform pull is wrapped in an `if ! docker pull … ; then` failure
+# guard (#6005), so the pull match is not line-anchored — the load-bearing assertion
+# is that `200>&-` still rides the pull (FD-200 close preserved through the wrap).
+if grep -qE 'docker pull "\$IMAGE:\$TAG" 200>&-' "$DEPLOY_SCRIPT" \
    && grep -qE '^[[:space:]]*docker image prune -af 200>&-' "$DEPLOY_SCRIPT"; then
   PASS=$((PASS + 1))
   echo "  PASS: long-running docker children close FD-200 lock (200>&-) — #5062 guard"
