@@ -736,6 +736,58 @@ Phase 4b (continuous checkpoint).
 > the Phase-3 GA soak (AC11). Plan:
 > `knowledge-base/project/plans/2026-07-04-feat-autonomous-multihost-ga-warm-standby-and-gate-plan.md`.
 
+> **Amendment (2026-07-05, #5887 — autonomous no-SSH web-2 host bootstrap via scoped
+> `-replace`).** The first live warm-standby dispatch (2026-07-05) attached web-2's private-net
+> interface + `/workspaces` volume cleanly, and the fail-closed verify correctly RED'd
+> (`reason=ok_peer_fanout_degraded`; web-2 stays drained / zero-weight / no user impact) — but
+> web-2's `:9000` webhook listener never bound: its ORIGINAL first-boot cloud-init aborted before
+> the webhook-enable step (most consistently at `stage=verify`, the baked-host-scripts hash-verify
+> that turns the ADR-080 stale-image trap into a loud abort). This amendment adds the **prerequisite**
+> that binds web-2 `:9000` before the warm-standby fan-out can verify `reason==ok`:
+>
+> **(1) web-2-recreate is an autonomous, no-SSH menu-ack dispatch.** `hcloud_server.web` carries
+> `lifecycle.ignore_changes = [user_data, ssh_keys, image, placement_group_id]`, so no plain apply
+> re-pushes cloud-init to the existing web-2 — only an instance RECREATE re-runs first-boot. The new
+> `web_2_recreate` job (`apply-web-platform-infra.yml -f apply_target=web-2-recreate`) runs a scoped
+> `-replace` of `hcloud_server.web["web-2"]` + its two id-referencing dependents
+> (`hcloud_server_network.web["web-2"]`, `hcloud_volume_attachment.workspaces["web-2"]`) inside the
+> EXISTING R2 concurrency serializer (`terraform-apply-web-platform-host` — a job of THIS workflow,
+> not a second workflow). web-2 is weight-0 / drained / in no serving pool → zero ingress impact;
+> web-1 (the sole live origin) is untargeted. The 20 GB `hcloud_volume.workspaces["web-2"]` is a
+> SEPARATE resource — recreating the server does not recreate the volume (0-destroy, guard-asserted).
+>
+> **(2) The destroy-guard permits ONLY the exact scoped recreate — no `[ack-destroy]` bypass.** A
+> POSITIVE-scope counter `web2_out_of_scope_changes` (any create/update/delete whose address ∉ the
+> 3-address web-2 allow-set, exact-equality membership) plus `web2_server_replaced` gate the plan:
+> PASS iff `web2_out_of_scope_changes==0 && nested_deletes==0 && reboot_updates==0 &&
+> web2_server_replaced==1`. This is strictly stronger than a delete-only counter — it also catches a
+> web-1 in-place update rebooting via a non-`placement_group_id`/`server_type` attribute (the
+> `reboot_updates` counter is known-uncovered for those) and any stray change. There is no ack
+> override: an ack could also permit a web-1 delete, so the precision guard is safer.
+>
+> **(3) Digest-pin determinism — the durable `:latest` fix.** The recreate/boot pins an immutable
+> `@sha256` INDEX digest whose baked host-scripts hash provably matches the applied
+> `local.host_scripts_content_hash`, never the mutable `:latest`. The `web_2_recreate` job resolves
+> web-1's known-good running tag off-host, resolves it to a digest EXACTLY ONCE (frozen `$PINNED`,
+> TOCTOU-safe), and runs a **coherence preflight** off-host BEFORE the recreate: it extracts the
+> pinned image's `/opt/soleur/host-scripts` and recomputes the boot-identical hash, asserting
+> `== local.host_scripts_content_hash`. A mismatch aborts loud BEFORE anything is destroyed
+> (remediation: redeploy web-1 to current `main`, then re-dispatch). This is the off-host equivalent
+> of the boot check — the durable determinism decision for recreate/boot.
+>
+> **(4) Verification + idempotence.** web-2 binding `:9000` (fresh cloud-init completed past the
+> webhook-enable step) is proven off-host by web-1's `/hooks/deploy-status` `reason` flipping
+> `ok_peer_fanout_degraded → ok` under the single-peer invariant (no SSH, no private-IP curl) — the
+> same reachable signal the warm-standby verify uses (shared, not re-derived). Re-dispatch is
+> idempotent: a create-success + cloud-init abort still lands the server (verify RED, re-dispatch
+> re-runs the boot); a TF-layer create failure is recoverable by re-dispatch.
+>
+> **C4 impact:** no new element. The existing `hetzner -> ghcr` edge (`model.c4`) is refined to note
+> the recreate/boot pins an `@sha256` digest (not `:latest`) — see the `## C4 impact` refinement
+> below. **Status:** UNCHANGED — this stays additive/inert on merge (the recreate is a post-merge
+> menu-ack dispatch, never runs pre-merge). Plan:
+> `knowledge-base/project/plans/2026-07-05-feat-web-2-recreate-bootstrap-plan.md`.
+
 ## Consequences
 
 - **Positive.** The serializable-vs-live-handle split (research reconciliation) kills
@@ -842,6 +894,13 @@ is clean and all four new elements render in the Container view.
 `claude -> sessionStore`; `claude -> gitDataStore`; `scheduler -> hetzner`. The
 `hetzner` description widens from single host → Nomad-client cluster (spread
 placement).
+
+**Refinement (2026-07-05, #5887 web-2-recreate).** No new C4 element. The existing
+`hetzner -> ghcr` edge (`model.c4`) description is refined to note that the recreate/boot pins an
+`@sha256` digest (not `:latest`) whose baked host-scripts hash is coherence-checked against the
+applied `host_scripts_content_hash`. The operator dispatch is the existing menu-ack actor; `ghcr`
+and `hetzner` are already modeled. Run `apps/web-platform/test/c4-code-syntax.test.ts` +
+`c4-render.test.ts` after the edit.
 
 The `## Diagram` below is a **runtime reconnect-path** sketch; its node labels map
 to the C4 ids as `coord→coordinator`, `pg→supabase` (the `worktree_write_lease`
