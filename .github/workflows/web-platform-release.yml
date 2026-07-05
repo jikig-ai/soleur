@@ -436,7 +436,10 @@ jobs:
        (github.event_name == 'workflow_dispatch' && needs.await-ci.result == 'skipped')) &&
       (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
-    # Holds the deploy-web-platform lock (cancel-in-progress: false). The job
+    # Holds the shared web-1-swap lock (cancel-in-progress: false) — the
+    # cross-pipeline mutex serializing every web-1 container swap (release deploy /
+    # web_2_recreate / warm_standby / pipeline-fix apply) so at most one runs at a
+    # time (#6060 item (c); ADR-068 amendment). The job
     # already self-bounds via the STATUS+HEALTH poll loops below (30m + 30m
     # sequential ceiling) plus the image build; this 90m cap is the backstop for
     # a hang BEFORE those loops (e.g. a buildx wedge per post-mortems/
@@ -444,7 +447,7 @@ jobs:
     # ~65m legitimate ceiling so it never kills a slow-but-healthy deploy.
     timeout-minutes: 90
     concurrency:
-      group: deploy-web-platform
+      group: web-1-swap
       cancel-in-progress: false
     # Job-level poll-window constants. All three windows MUST agree per
     # cq-align-ci-poll-windows-with-adjacent-steps:
