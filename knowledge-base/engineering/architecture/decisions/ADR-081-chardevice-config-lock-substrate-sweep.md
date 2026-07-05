@@ -5,6 +5,27 @@
 **Deciders:** Engineering (CTO carry-forward from the 2026-07-03 config.lock-wedge-fix brainstorm)
 **Related:** #5934 (this durable fix), #5912 / PR #5932 (in-session `atomic_git_config` self-heal), PR #5907 (instrument), ADR-068 (multi-host git-data), ADR-075 (agent-sandbox tenant read isolation), ADR-079 (faithful sandbox canary)
 
+> **CORRECTION (2026-07-05, #4826 — the root cause below is WRONG).** A fresh Concierge
+> session still wedged after this ADR's host sweep shipped and ran clean (DONE markers,
+> zero FAILED). Live probing from the wedged session (`findmnt -T .git/config.lock`)
+> proved the node is **`tmpfs[/null]` — a deliberate, per-path, read-only `/dev/null`
+> bind-mount on the literal `.git/config.lock`**, with an arbitrary `config.soleur-probe.lock`
+> beside it left a normal writable file (⇒ **single-path, not glob**). That is the Claude
+> Agent SDK's **bubblewrap file-mask (candidate "b" below), applied per-session INSIDE the
+> sandbox** as a git-config-RCE guard — **NOT** a container-filesystem residual inode on the
+> persistent volume (candidate "c", which this ADR adopted). Candidate (b) was ruled out
+> here on the assumption the repo passes only directory paths to `denyRead`; the live mount
+> evidence overturns that. **Consequences:** (1) the host-side `-type c` sweep (#5934) clears
+> a real but effectively non-occurring case — it can never see a per-session in-sandbox bwrap
+> mount; keep it as cheap insurance but it does NOT unblock live sessions. (2) The durable fix
+> is to make the in-sandbox worktree path **need no config write at all**: pre-seed
+> `core.repositoryformatversion=1` + `extensions.worktreeConfig=true` (and clear `core.bare`/
+> `core.worktree`) **host-side at workspace provision time, before the mask exists**
+> (`apps/web-platform/server/workspace.ts` `seedWorktreeConfig`), so the in-sandbox
+> `ensure_bare_config` takes `atomic_git_config`'s read-first/absent-key skip and never
+> touches the masked lock. See the #4826 PR. (3) #5912's in-session temp-file bypass remains
+> correct for a genuine single-path mask but is defence-in-depth, not the primary path.
+
 ## Context
 
 The confirmed root cause of the Concierge worktree-creation wedge (tracker #5912) is
