@@ -741,6 +741,90 @@ t_rsc_shared_lib_used() {
   _report "T-rsc-8 shared RSC lib sourced by audit + update; create-ci references canonical; no inline redecl" ok
 }
 
+# ---------- CLA ruleset canonical sync gates (#6061) ----------
+# The CLA Required ruleset is imperatively managed by
+# scripts/create-cla-required-ruleset.sh (no Terraform SSOT, unlike the CI
+# ruleset — see Phase 6.1 deferral). These gates lock the two CLA canonical
+# JSONs (which the daily cron-ruleset-bypass-audit Inngest fn reads) to the
+# create-script's inline blocks, so a value change in one without the other
+# fails CI. Co-located with T-rsc-9 (the CI canonical↔terraform sync gate).
+CLA_CREATE_SCRIPT="$REPO_ROOT/scripts/create-cla-required-ruleset.sh"
+CLA_RSC_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
+CLA_BYPASS_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-bypass-actors.json"
+
+# Slice the CLA create-script's `cat > "$payload" << 'EOF' ... EOF` heredoc.
+# Pins the exact `$payload` sentinel + quoted-EOF delimiter the create-script
+# uses (NOT the T-mq-1 `$skeleton` precedent — CLA uses `$payload`). The `\$`
+# keeps bash from expanding `$payload` before sed sees it.
+_cla_create_payload() {
+  sed -n "/cat > \"\$payload\" << 'EOF'/,/^EOF\$/p" "$CLA_CREATE_SCRIPT" | sed '1d;$d'
+}
+
+# T-cla-1: CLA RSC canonical (context, integration_id) pairs == create-script
+# inline required_status_checks, and the canonical has no duplicate context.
+# Compares full PAIRS (not context-only): the integration_id (15368 = GitHub
+# Actions Check Runs API) is load-bearing and CLA's SSOT is the create-script.
+t_cla_rsc_canonical_matches_create_script() {
+  if [[ ! -f "$CLA_CREATE_SCRIPT" ]]; then
+    _report "T-cla-1 CLA create-script exists" fail "missing $CLA_CREATE_SCRIPT"
+    return
+  fi
+  if [[ ! -f "$CLA_RSC_CANONICAL" ]]; then
+    _report "T-cla-1 CLA RSC canonical exists" fail "missing $CLA_RSC_CANONICAL"
+    return
+  fi
+  local payload
+  payload="$(_cla_create_payload)"
+  # jq -e the sliced heredoc first — a malformed slice is guard-broken, not a
+  # silent empty comparison.
+  if ! jq -e . >/dev/null 2>&1 <<<"$payload"; then
+    _report "T-cla-1 create-script heredoc slices to valid JSON" fail "guard-broken: bad slice"
+    return
+  fi
+  local canon_pairs create_pairs
+  canon_pairs=$(jq -S '[.[] | {context, integration_id}] | sort_by(.context)' "$CLA_RSC_CANONICAL")
+  create_pairs=$(jq -S '[.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[] | {context, integration_id}] | sort_by(.context)' <<<"$payload")
+  # No-dup guard: the canonical must not carry a duplicate context row.
+  local dup
+  dup=$(jq -r '(map(.context) | length) - (map(.context) | unique | length)' "$CLA_RSC_CANONICAL")
+  if [[ "$canon_pairs" == "$create_pairs" && "$dup" == "0" ]]; then
+    _report "T-cla-1 CLA RSC canonical (context,integration_id) == create-script + no-dup" ok
+  else
+    _report "T-cla-1 CLA RSC canonical (context,integration_id) == create-script + no-dup" fail \
+      "dup=$dup diff:$(diff <(echo "$canon_pairs") <(echo "$create_pairs") | tr '\n' ' ')"
+  fi
+}
+
+# T-cla-1b: CLA bypass canonical (actor_id, actor_type, bypass_mode) triples ==
+# create-script inline bypass_actors, and no duplicate triple. The
+# Integration:1236702/always actor is the CLA bot — legitimately `always`; it is
+# IN the canonical so the audit flags only ADDITIONAL bypass actors (widening).
+t_cla_bypass_canonical_matches_create_script() {
+  if [[ ! -f "$CLA_BYPASS_CANONICAL" ]]; then
+    _report "T-cla-1b CLA bypass canonical exists" fail "missing $CLA_BYPASS_CANONICAL"
+    return
+  fi
+  local payload
+  payload="$(_cla_create_payload)"
+  if ! jq -e . >/dev/null 2>&1 <<<"$payload"; then
+    _report "T-cla-1b create-script heredoc slices to valid JSON" fail "guard-broken: bad slice"
+    return
+  fi
+  # Deterministic sort over a null-safe interpolated key ("\(null)" -> "null").
+  local sort_key='sort_by("\(.actor_id)|\(.actor_type)|\(.bypass_mode)")'
+  local canon_triples create_triples
+  canon_triples=$(jq -S "[.[] | {actor_id, actor_type, bypass_mode}] | $sort_key" "$CLA_BYPASS_CANONICAL")
+  create_triples=$(jq -S "[.bypass_actors[] | {actor_id, actor_type, bypass_mode}] | $sort_key" <<<"$payload")
+  local dup
+  dup=$(jq -r '(map("\(.actor_id)|\(.actor_type)|\(.bypass_mode)")) as $k | ($k | length) - ($k | unique | length)' "$CLA_BYPASS_CANONICAL")
+  if [[ "$canon_triples" == "$create_triples" && "$dup" == "0" ]]; then
+    _report "T-cla-1b CLA bypass canonical triples == create-script + no-dup" ok
+  else
+    _report "T-cla-1b CLA bypass canonical triples == create-script + no-dup" fail \
+      "dup=$dup diff:$(diff <(echo "$canon_triples") <(echo "$create_triples") | tr '\n' ' ')"
+  fi
+}
+
 if [[ ! -f "$SCRIPT" ]]; then
   echo "ERROR: $SCRIPT does not exist — RED phase expected this." >&2
   exit 1
@@ -783,6 +867,10 @@ t_rsc_real_canonical_shape
 t_rsc_shared_lib_used
 t_rsc_canonical_matches_terraform
 t_mq_stays_reverted
+
+# CLA ruleset canonical sync gates (#6061)
+t_cla_rsc_canonical_matches_create_script
+t_cla_bypass_canonical_matches_create_script
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
