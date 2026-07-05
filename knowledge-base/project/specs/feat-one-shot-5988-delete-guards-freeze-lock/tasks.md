@@ -28,15 +28,22 @@ TDD: write failing tests before implementation.
 
 ## Phase 2 — Hardened recursive-delete ownership proof
 
+Model: **default-allow-except-protected** (keep every non-protected `rm -rf`
+allowed; ADD deny for the protected class only). Reuse the `realpath -m` +
+prefix-containment precedent at `follow-through-directive-gate.sh:185-189`.
+
 - [ ] 2.1 In `.claude/hooks/guardrails.sh`, parse `rm -rf`/`-fr` targets from `$COMMAND`.
 - [ ] 2.2 realpath-resolve each target (DENY-decision only — NOT an executor; contrast constitution.md:306).
-- [ ] 2.3 `.git`-tripwire / structural protection: DENY on repo root, any `git worktree` root, `$HOME`, `/`, or `.git`-bearing dir; fail-closed on unresolvable protected-shape target.
-- [ ] 2.4 Staging ALLOW conjunction: realpath-under-staging-root ∧ structural-name ∧ no-`.git` ∧ minted marker (marker never independently sufficient).
+- [ ] 2.3 `.git`-tripwire / structural protection: DENY on repo root, any `git worktree list --porcelain` root, `$HOME`, `/`, or `.git`-bearing dir; fail-closed on unresolvable protected-shape target. Non-protected targets pass through (allow).
+- [ ] 2.4 Staging ALLOW conjunction (NOVEL — no precedent; default-off scaffold): realpath-under-staging-root ∧ structural-name ∧ no-`.git` ∧ minted marker (marker never independently sufficient). Ship 2.3 unconditionally; gate 2.4 behind a concrete staging use-case.
 - [ ] 2.5 `emit_incident guardrails-block-recursive-delete deny …` + deny JSON with `hookEventName: "PreToolUse"`.
 
 ## Phase 3 — Freeze edit-lock branch (Write|Edit)
 
-- [ ] 3.1 Add `FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""')` to the extraction block; source `freeze-lock.sh`.
+Precedent: `no-memory-write.sh` (dual Bash+Write|Edit registration, fail-open on
+malformed JSON). Freeze prefix check reuses the `realpath -m` containment pattern.
+
+- [ ] 3.1 Add `FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""')` to the extraction block; source `freeze-lock.sh`. Fail-open on malformed payload (`exit 0`).
 - [ ] 3.2 Add the `[[ -n "$FILE_PATH" ]]` branch ABOVE the Bash sentinels: active freeze + resolved path outside allowed prefix → deny; else allow; `exit 0` inside the branch only (never on a Bash-reachable path — TR3).
 - [ ] 3.3 `emit_incident guardrails-freeze-edit-lock deny …` + deny JSON with `hookEventName: "PreToolUse"`.
 

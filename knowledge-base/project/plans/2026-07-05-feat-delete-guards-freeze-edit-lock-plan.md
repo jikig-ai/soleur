@@ -13,6 +13,34 @@ status: plan
 
 # 🛡️ feat(wave2): fail-closed delete guards + freeze edit-lock (guardrails.sh)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-05 · **Sections enhanced:** Phase 2, Phase 3, Precedent-Diff, Sharp Edges.
+
+### Key Improvements
+1. **Default-allow-except-protected model made explicit.** gstack `staging-guard` is
+   default-DENY for recursive deletes; Soleur's existing guard is
+   default-allow-except-`.worktrees/`. Faithful adaptation = keep default-allow, ADD
+   the realpath + `.git`-tripwire deny for protected targets. A blanket deny would
+   brick ordinary `rm -rf build/`/`node_modules`.
+2. **Concrete precedents found** for every novel mechanism: `realpath -m` +
+   prefix-containment at `follow-through-directive-gate.sh:185-189`; multi-tool
+   (Bash + Write|Edit) branch + fail-open-on-malformed-JSON at `no-memory-write.sh`
+   (registered on both matchers, `file_path // notebook_path // command` extraction);
+   structural-protection deny list derivable from `git worktree list --porcelain`.
+3. **TR3 branch confirmed safe by payload-shape disjointness** (Bash → command, no
+   file_path; Edit/Write → file_path, no command) — verified against two hooks that
+   already branch both surfaces.
+
+### New Considerations Discovered
+- The **minted-marker / structural-name STAGING-ALLOW path has NO precedent in
+  Soleur** (grep: zero staging convention). Per deepen-plan Phase 4.4, this is
+  flagged novel — reviewers must scrutinize. Recommendation: the DENY tripwire is
+  the load-bearing safety win and ships unconditionally; the staging-allow escape
+  hatch is minimal (forgery-resistant scaffold) and only matters if a concrete
+  disposable-staging use-case exists (none today — worktree cleanup already routes
+  through `git worktree remove`).
+
 ## Overview
 
 Wave 2 · FR5 of the gstack-capability-adoption epic (#5983). Two hardening
@@ -279,6 +307,27 @@ a recursive-force `rm` (`-rf`/`-fr`/`-r … -f` variants). For each target:
 
 Keep the existing narrow `.worktrees/` behavior as a subset (regression-covered).
 
+**Model (load-bearing): default-allow-except-protected.** Unlike gstack's
+default-DENY staging-guard, Soleur keeps every non-protected `rm -rf` allowed
+(`rm -rf build/`, `node_modules`, `/tmp/x` pass through as today). The hardening
+only ADDS deny cases for the protected class. "Fail-closed" is scoped to that
+class: an unresolvable target whose raw form matches a protected shape → deny.
+Structural targets are enumerable at hook time via `git worktree list --porcelain`
+(worktree roots) plus repo root, `$HOME`, `/`.
+
+**Precedent:** `realpath -m "$target"` + prefix-containment against a resolved
+root is exactly the pattern at `.claude/hooks/follow-through-directive-gate.sh:185-189`
+(`SCRIPT_ABS=$(realpath -m …)`, `SCRIPTS_ROOT_ABS=$(realpath -m …)`, then
+containment). Reuse it verbatim for both the delete-guard staging-root check and
+the freeze prefix check.
+
+**Novel (no precedent — scrutinize):** the minted-marker + structural-name
+STAGING-ALLOW path. Grep found zero staging convention in Soleur. Ship the DENY
+tripwire unconditionally; the staging-allow escape hatch is a forgery-resistant
+scaffold (marker filename e.g. `.soleur-staging`, valid only under a staging root
+AND with no `.git`) that stays default-off unless a concrete disposable-staging
+use-case lands. Do NOT let the marker alone unlock a protected target.
+
 ### Phase 3 — Freeze edit-lock branch (Write|Edit gate)
 
 In `.claude/hooks/guardrails.sh`, add — near the top, AFTER the `COMMAND`/
@@ -304,6 +353,22 @@ fi
 
 Add `FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""')` to the
 extraction block. Source `freeze-lock.sh` alongside `incidents.sh`.
+
+**Precedent (multi-tool branch + fail-open):** `.claude/hooks/no-memory-write.sh`
+is registered on BOTH `Bash` and `Write|Edit|MultiEdit|NotebookEdit`, extracts
+`.tool_input.file_path // .tool_input.notebook_path // .tool_input.command`, and
+**fails open (`exit 0`) on malformed JSON** (a parse failure must not block every
+tool call). `kb-domain-allowlist-guard.sh` follows the same dual-registration
+pattern. Model the freeze extraction + fail-open on these — a malformed hook
+payload must never brick the session (aligns with the freeze fail-open on a
+malformed STATE file).
+
+**TR3 confirmed by payload-shape disjointness:** a `Bash` payload carries
+`.tool_input.command` and NO `file_path`; an `Edit`/`Write` payload carries
+`.tool_input.file_path` and NO `command`. Gating the freeze branch on
+`[[ -n "$FILE_PATH" ]]` guarantees it is skipped entirely for Bash `rm -rf`
+calls, so it cannot shadow the delete guard. The regression test asserts this
+with a freeze ACTIVE.
 
 ### Phase 4 — Registration + mirrors + gitignore
 
@@ -402,6 +467,16 @@ migration, no infra apply, no vendor step.
   JSON verbatim into the mirror.
 - **A plan whose `## User-Brand Impact` section is empty or placeholder will fail
   deepen-plan Phase 4.6.** It is filled above.
+
+## Precedent-Diff (deepen-plan Phase 4.4)
+
+| Pattern-bound behavior | Precedent in repo | Applies as |
+|---|---|---|
+| `realpath -m <path>` + prefix-containment against a resolved root | `.claude/hooks/follow-through-directive-gate.sh:185-189` (path-traversal guard: `realpath -m` target + `realpath -m` root, then containment) | Reuse verbatim for the delete-guard staging-root check AND the freeze allowed-prefix check. |
+| Single hook branching Bash-command vs Edit/Write-file_path, registered on both matchers | `no-memory-write.sh` (`file_path // notebook_path // command`; fail-open on malformed JSON), `kb-domain-allowlist-guard.sh` (dual Bash + Write\|Edit registration) | The guardrails.sh multi-tool structure and the freeze fail-open-on-malformed. |
+| Structural-protection deny targets (repo root, worktree roots) | `git worktree list --porcelain` (already used across worktree tooling) | Enumerate protected roots at hook time. |
+| Delete-guard telemetry rule_id convention | `emit_incident "guardrails-block-rm-rf-worktrees" …` (guardrails.sh:81) | New ids `guardrails-block-recursive-delete`, `guardrails-freeze-edit-lock` follow the `guardrails-*` convention. |
+| **Minted-marker / structural-name STAGING-ALLOW** | **None** — grep found zero staging convention in Soleur. | **Novel; scrutinize.** Ship the DENY tripwire unconditionally; keep staging-allow default-off (forgery-resistant scaffold) until a concrete use-case lands. |
 
 ## Alternative Approaches Considered
 
