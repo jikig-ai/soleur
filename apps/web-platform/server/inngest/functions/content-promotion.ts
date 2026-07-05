@@ -67,7 +67,7 @@ export interface PlannedPromotion {
 // =============================================================================
 
 /** Split raw file into its frontmatter block and body (bytes after 2nd `---`). */
-function splitFrontmatter(raw: string): { frontmatter: string; body: string } {
+export function splitFrontmatter(raw: string): { frontmatter: string; body: string } {
   const lines = raw.split("\n");
   if (lines[0]?.trim() !== "---") return { frontmatter: "", body: raw };
   let end = -1;

@@ -73,7 +73,10 @@ describe("handler source-shape anchors", () => {
     ["content-publisher.sh", "spawns the existing bash script"],
     ["scripts/content-publisher.sh", "script path"],
     ["knowledge-base/marketing/distribution-content", "content directory"],
-    ["ci: update content distribution status", "commit message"],
+    [
+      "ci: promote review-ready drafts + update content distribution status",
+      "commit message",
+    ],
     ["buildPublisherEnv", "env builder function"],
     ["stale-content-detection", "stale content reporting op"],
     ["STALE_EVENTS_FILE", "stale events file env var"],
