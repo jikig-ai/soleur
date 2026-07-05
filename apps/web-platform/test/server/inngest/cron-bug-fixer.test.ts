@@ -106,6 +106,7 @@ vi.mock("node:fs", () => ({
 const reportSilentFallbackSpy = vi.fn();
 const warnSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
+  mirrorWarnWithDebounce: vi.fn(),
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: warnSilentFallbackSpy,
 }));
