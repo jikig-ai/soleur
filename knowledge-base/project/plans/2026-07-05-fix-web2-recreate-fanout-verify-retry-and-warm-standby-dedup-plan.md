@@ -32,14 +32,16 @@ atomically (auto-closes the `warm-standby-verify-dedup-6030` follow-through).
 Two tightly-coupled changes to the ADR-068 off-host web-2 acceptance verify, shipped in
 one PR because #6051 modifies the exact shared script #6040 asks `warm_standby` to adopt:
 
-1. **Retry the fan-out within a bounded fresh-boot window (#6051, Fix Option 1 — the
-   durable fix).** Treat `*_peer_fanout_degraded` as **retryable** while a bounded
-   re-trigger budget remains: re-POST the deploy fan-out (which re-swaps web-1 then
-   re-fans to web-2) with a **minimum backoff interval** until web-2 accepts (`reason==ok`)
-   or the budget expires. Preserve every existing invariant: single-peer `ROSTER_COUNT==2`
-   guard, `start_ts` staleness gate, full-anchor tag validation, tag-downgrade race guard,
-   and **terminal `exit 1` on budget exhaustion** (NO green-on-timeout) and on any other
-   unexpected reason / non-zero exit code.
+1. **Retry the fan-out ONCE after the fresh-boot window (#6051, Fix Option 1 — the
+   durable fix).** Treat `*_peer_fanout_degraded` as **retryable**: on the first degraded
+   completion, passively wait out the remaining fresh-boot window (~10 min from the
+   `-replace`), then re-POST the deploy fan-out **once** and verify. This bounds web-1
+   (the sole live prod origin) to **at most 2 swap cycles total** (initial + 1 retry) —
+   NOT a short-backoff loop. Preserve every existing invariant: single-peer
+   `ROSTER_COUNT==2` guard, `start_ts` staleness gate, full-anchor tag validation,
+   tag-downgrade race guard, and **terminal `exit 1` on budget exhaustion** (NO
+   green-on-timeout) and on any unexpected reason / non-zero exit code — but treat
+   `lock_contention` as **retryable** (a transient deploy-lock overlap), not terminal.
 
 2. **Migrate `warm_standby` onto the shared script (#6040 — collapse-to-one-call,
    regression-closed).** Replace `warm_standby`'s 3 inline polling steps (baseline +
@@ -59,7 +61,9 @@ fan-out returns `reason==ok` → the retry branch never fires → behavior is un
 |---|---|---|
 | `SETTLE_SECONDS=30` + one-shot fan-out is inherited from warm-standby | Confirmed: `deploy-status-fanout-verify.sh:37` default 30; `web_2_recreate` env sets it (`.github/workflows/apply-web-platform-infra.yml:1081`) | Keep default 30; the retry loop — not a longer settle — covers the fresh-boot window (Fix Option 1, not 2) |
 | Terminal abort is on first `ok_peer_fanout_degraded` | Confirmed: `deploy-status-fanout-verify.sh:136-138` `exit 1` on `*_peer_fanout_degraded` inside the `exit_code==0` arm | This single `exit 1` is the bug surface; convert to a bounded-retry branch |
-| Each fan-out re-swaps web-1 first | Confirmed: `ci-deploy.sh:1325` `fan_out_to_peers` runs AFTER web-1's own swap; `reason=ok_peer_fanout_degraded` set at `ci-deploy.sh:1328` when the peer did not return 202 | Retry AMPLIFIES web-1 re-swaps → bound via `RETRIGGER_MIN_INTERVAL_S` backoff + `DEGRADED_RETRY_MAX` cap (load-bearing, see User-Brand Impact) |
+| Each fan-out re-swaps web-1 first | Confirmed: `ci-deploy.sh:1325` `fan_out_to_peers` runs AFTER web-1's own swap; `reason=ok_peer_fanout_degraded` set at `ci-deploy.sh:1328` when the peer did not return 202 | Retry AMPLIFIES web-1 re-swaps → cap at **1 re-POST** (max 2 swaps total), gated on the fresh-boot window (see User-Brand Impact + advisor consult) |
+| A re-POST is a cheap ~50 ms no-op on the same tag | **False for web-platform** — the ~50 ms same-tag no-op at `ci-deploy.sh:1356` is the **inngest** case; the web-platform path re-runs the full canary + cron-drain (`CRON_DRAIN_TIMEOUT=4200`s, `:190`) + docker stop/rm/run | Do NOT re-POST on a short cadence; single retry after the boot window only |
+| Overlapping re-POSTs are harmless | **False** — a POST landing inside an in-flight deploy's critical section loses `flock -n` → `final_write_state 1 "lock_contention"` (`ci-deploy.sh:846-849`), exit_code=1 → the verify `*)` branch would treat it as terminal RED | Treat `exit_code=1 && reason=lock_contention` as retryable in the verify; single-retry design avoids overlap by construction |
 | `warm_standby` carries an inline copy, not the shared script | Confirmed: inline baseline/trigger/verify at `apply-web-platform-infra.yml:808-1026`; `web_2_recreate` sources the shared script at `:1334` | Migrate warm_standby onto the shared script (option 1-enhanced) |
 | `pre_start_ts` / `deployed_tag` are cross-step outputs the summary needs | `pre_start_ts` (`:938`) is consumed ONLY by the inline Verify step (removed); `deployed_tag` (`:1036`) is consumed by the Verify step AND the `Warm-standby summary` step | Script emits `deployed_tag` to `$GITHUB_OUTPUT` when set; `pre_start_ts` becomes script-internal |
 | `warm-standby-verify-dedup-6030` probe scopes to the warm_standby job block | Confirmed: `scripts/followthroughs/warm-standby-verify-dedup-6030.sh:30-40` awk-isolates the warm_standby block then greps for the script name | Migration makes the probe PASS → auto-closes #6040; no probe edit needed |
@@ -81,69 +85,94 @@ are read/written; the change is CI verify-loop control flow over the existing si
 `deploy-status` / `deploy` webhooks (HMAC + CF-Access already in place).
 
 **Brand-survival threshold:** single-user incident — because the retry re-swaps web-1 (the
-prod origin) one or more extra times, and a real user hitting `app.soleur.ai` during any
-re-swap window could see a transient `521`. Bounding the number of re-swaps
-(`RETRIGGER_MIN_INTERVAL_S` + `DEGRADED_RETRY_MAX`) is the load-bearing mitigation; this is
-why `requires_cpo_signoff: true` and `user-impact-reviewer` runs at review time.
+prod origin) **at most one extra time** (max 2 swaps total), and a real user hitting
+`app.soleur.ai` during a swap window could see a transient `521`. Capping the retry at
+`DEGRADED_RETRY_MAX=1` and gating it on `FRESH_BOOT_WINDOW_S` (so the single re-POST fires
+only after web-2 has had time to bind, never stacking POSTs onto an in-flight deploy) is the
+load-bearing mitigation; this is why `requires_cpo_signoff: true` and `user-impact-reviewer`
+runs at review time.
 
 ## Design Detail
 
 ### Retry loop (shared script `deploy-status-fanout-verify.sh`)
 
-Restructure so the baseline-read + freshest-tag-reread + fan-out POST is a **re-callable
-trigger**, and the verify poll re-triggers on an observed fresh-degraded completion within
-budget. One overall poll budget (`STATUS_POLL_MAX_ATTEMPTS × STATUS_POLL_INTERVAL_S`) — NOT
-a fresh 900 s per retry.
+> **[Updated 2026-07-05 — Fable advisor consult (Phase 4.5), verified against code.]** The
+> first-draft design (6 re-triggers on a 90 s cadence, advancing the staleness baseline) was
+> a wrong-architecture trap and is REPLACED. Three verified facts drove the change:
+> (1) `fan_out_to_peers` has NO host-side peer retry — a re-POST is required (client re-POST
+> is not redundant). (2) BUT the web-platform re-POST is **heavy**: no same-tag short-circuit
+> (the ~50 ms no-op at `ci-deploy.sh:1356` is the **inngest** path only), so every re-POST
+> re-runs the full canary + **cron-drain gate** (`CRON_DRAIN_TIMEOUT=4200`s bound, `:190`) +
+> prod `docker stop/rm/run` on the live origin. (3) A 90 s cadence is far shorter than one
+> deploy cycle → stacked POSTs lose `flock -n` and write `reason=lock_contention` with
+> `exit_code=1` (`ci-deploy.sh:846-849`), which the verify's `*)` catch-all treats as
+> **terminal exit-1** → flaky RED on the exact path this fix targets.
 
-New env knobs (defaults preserve warm_standby semantics; retry is ON for both paths):
+Restructure so the baseline-read + freshest-tag-reread + fan-out POST is a **re-callable
+trigger**. On the FIRST `*_peer_fanout_degraded`, passively wait out the remaining
+fresh-boot window, then re-POST the fan-out **exactly once**, and verify. Max **2** web-1
+swap cycles total (initial + 1 retry). One overall poll budget.
+
+New env knobs (defaults preserve warm_standby semantics; retry is ON for both paths — a
+booted warm-standby web-2 returns `ok` on the first fan-out, so the retry branch never fires):
 
 ```
-DEGRADED_RETRY_MAX          default 6   # max fan-out re-triggers on a fresh degraded completion
-RETRIGGER_MIN_INTERVAL_S    default 90  # min seconds between fan-out POSTs → bounds web-1 re-swaps
-OP_CONTEXT                  default "recreate"  # {recreate|warm-standby} selects recovery-message wording
+DEGRADED_RETRY_MAX      default 1    # exactly one re-POST after the boot window (NOT 6)
+FRESH_BOOT_WINDOW_S     default 600  # on 1st degraded, wait until elapsed-since-verify-start ≥ this before the single re-POST
+OP_CONTEXT              default "recreate"  # {recreate|warm-standby} selects recovery-message wording
 ```
 
 Loop skeleton (pseudocode — real edit in `apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh`):
 
 ```bash
+START_EPOCH=$(date +%s)
 retrigger_count=0
-last_trigger_ts=$(date +%s)          # first fan-out already fired (step 2)
+declare -A consumed        # start_ts values of degraded completions already seen (do NOT re-consume)
 for i in $(seq 1 "$STATUS_POLL_MAX_ATTEMPTS"); do
-  ... read deploy-status; non-JSON / staleness (start_ts<=PRE_START_TS) / exit_code -1,-3 handling UNCHANGED ...
+  ... read deploy-status; non-JSON handling UNCHANGED ...
+  # Staleness uses the ORIGINAL baseline for the WHOLE run — never advanced (see subtleties).
+  if (( START_TS <= PRE_START_TS )); then echo "verify $i: pre-trigger state"; sleep "$INT"; continue; fi
   case "$EXIT_CODE" in
     0)
-      [[ "$TAG" != "$DEPLOY_TAG" ]] && { echo "...waiting"; sleep "$STATUS_POLL_INTERVAL_S"; continue; }
+      [[ "$TAG" != "$DEPLOY_TAG" ]] && { echo "...waiting"; sleep "$INT"; continue; }
       if [[ "$REASON" == "ok" ]]; then echo "web-2 ACCEPTED..."; exit 0; fi
       if [[ "$REASON" == *"_peer_fanout_degraded" ]]; then
-        now=$(date +%s)
-        if (( retrigger_count < DEGRADED_RETRY_MAX )) && (( now - last_trigger_ts >= RETRIGGER_MIN_INTERVAL_S )); then
-          echo "verify $i: web-2 not yet bound (reason=$REASON), retrigger $((retrigger_count+1))/$DEGRADED_RETRY_MAX (elapsed=$((now - START_EPOCH))s) — re-fanning after fresh-boot backoff"
-          _retrigger_fanout                 # re-read freshest tag (downgrade guard) + advance PRE_START_TS + POST /hooks/deploy (202) + reset last_trigger_ts
-          retrigger_count=$((retrigger_count+1)); last_trigger_ts=$(date +%s)
-          sleep "$STATUS_POLL_INTERVAL_S"; continue
+        [[ -n "${consumed[$START_TS]:-}" ]] && { sleep "$INT"; continue; }   # already saw this exact degraded run
+        consumed[$START_TS]=1
+        elapsed=$(( $(date +%s) - START_EPOCH ))
+        if (( retrigger_count < DEGRADED_RETRY_MAX )); then
+          # single retry, but only AFTER the fresh-boot window has elapsed (let web-2 bind :9000)
+          if (( elapsed < FRESH_BOOT_WINDOW_S )); then
+            echo "verify $i: web-2 not yet bound (reason=$REASON, elapsed=${elapsed}s) — waiting out fresh-boot window before the single re-POST"
+            sleep "$INT"; continue
+          fi
+          echo "verify $i: fresh-boot window elapsed (${elapsed}s), re-POSTing fan-out once (retry $((retrigger_count+1))/$DEGRADED_RETRY_MAX)"
+          _retrigger_fanout             # re-read freshest tag (downgrade guard) + POST /hooks/deploy (assert 202); does NOT touch PRE_START_TS
+          retrigger_count=$((retrigger_count+1))
+          sleep "$INT"; continue
         fi
-        if (( retrigger_count >= DEGRADED_RETRY_MAX )); then
-          echo "::error::web-2 still degraded after $DEGRADED_RETRY_MAX re-triggers (reason=$REASON). $(_recovery_msg). RED."; echo "$BODY"|jq .; exit 1
-        fi
-        # backoff not elapsed → keep polling this attempt's completion, don't abort
-        sleep "$STATUS_POLL_INTERVAL_S"; continue
+        echo "::error::web-2 still degraded after the single re-POST (reason=$REASON, elapsed=${elapsed}s). $(_recovery_msg). RED."; echo "$BODY"|jq .; exit 1
       fi
       echo "::error::unexpected reason=$REASON. RED."; echo "$BODY"|jq .; exit 1 ;;
     -1) echo "verify $i: re-swap in flight (reason=$REASON)" ;;
     -3) echo "verify $i: corrupt state read, retrying" ;;
-    *)  echo "::error::deploy fan-out failed (exit=$EXIT_CODE...). $(_recovery_msg)."; echo "$BODY"|jq .; exit 1 ;;
+    1) # lock_contention is RETRYABLE, not terminal (a re-POST may briefly overlap the in-flight deploy)
+       if [[ "$REASON" == "lock_contention" ]]; then echo "verify $i: deploy lock held by in-flight swap (reason=lock_contention) — retrying"; else
+         echo "::error::deploy fan-out failed (exit=1, reason=$REASON). $(_recovery_msg)."; echo "$BODY"|jq .; exit 1; fi ;;
+    *)  echo "::error::deploy fan-out failed (exit=$EXIT_CODE, reason=$REASON). $(_recovery_msg)."; echo "$BODY"|jq .; exit 1 ;;
   esac
-  sleep "$STATUS_POLL_INTERVAL_S"
+  sleep "$INT"
 done
 echo "::error::web-2 fan-out did not accept within budget. $(_recovery_msg). Failing loudly per the recovery contract."; exit 1
 ```
 
 Load-bearing subtleties (each an AC below):
-- **`_retrigger_fanout` advances `PRE_START_TS`** to the new re-swap's baseline so the next completion is judged against the newest trigger (else a stale earlier-degraded completion re-reads as this cycle's result). It re-reads and re-validates the freshest tag first (tag-downgrade guard preserved per re-trigger) and asserts HTTP 202.
-- **One overall budget:** `STATUS_POLL_MAX_ATTEMPTS × STATUS_POLL_INTERVAL_S` must cover the fresh-boot window (~10 min). Current recreate 60×15 = 900 s already covers it once the terminal-first-degraded abort is removed. Re-measure vs the realistic window per the deploy-poll-ceiling learning (`2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`); bump only if a healthy fresh boot approaches 75 % of the ceiling. Keep the `web_2_recreate` `timeout-minutes: 45` ceiling ABOVE the poll budget so the script's loud terminal abort wins the race (its comment at `:1070-1077`).
-- **web-1 re-swap bounding:** with `RETRIGGER_MIN_INTERVAL_S=90` and `DEGRADED_RETRY_MAX=6`, web-1 is re-swapped at most ~7 times (initial + 6) across ~10 min — the explicit bound on the secondary-finding 521 amplification.
+- **Do NOT advance `PRE_START_TS`** (the first-draft trap). Keep the ORIGINAL baseline for the whole run and track a `consumed` set of already-seen degraded `start_ts` values. Advancing the baseline at re-trigger time discards a valid late-arriving `ok` from an EARLIER in-flight cycle (its `start_ts` would fall below the advanced baseline → filtered as "pre-trigger") and adds CI-runner↔host clock skew. Accept the first `ok` with `tag==DEPLOY_TAG && start_ts > original_baseline && start_ts ∉ consumed`. `_retrigger_fanout` re-reads/re-validates the freshest tag (tag-downgrade guard preserved) and asserts HTTP 202 — it does not touch the baseline.
+- **`lock_contention` is retryable, not terminal.** With the single-retry + boot-window design a re-POST cannot fit inside the prior cycle, but treat `exit_code=1 && reason=lock_contention` as retryable defensively (else a rare overlap RED-flakes a healthy deploy).
+- **Budget = boot-window + ONE full deploy cycle**, not attempt-count tuning. Size `STATUS_POLL_MAX_ATTEMPTS × STATUS_POLL_INTERVAL_S` ≥ `FRESH_BOOT_WINDOW_S` (~600 s) + one canary/drain/swap cycle (drain bounded 4200 s but typically short when no cron runs). Current 60×15 = 900 s is TIGHT against 600 s boot + a multi-minute cycle — /work MUST re-measure and likely raise `STATUS_POLL_MAX_ATTEMPTS`, keeping `web_2_recreate` `timeout-minutes: 45` ABOVE the poll budget so the script's loud terminal abort wins the race (`:1070-1077`). Per the deploy-poll-ceiling learning (`2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`).
+- **web-1 re-swap bound:** at most **2** re-swaps total (initial + 1) — a far smaller secondary-finding 521 blast radius than the first-draft 7.
 - **`_recovery_msg` is `OP_CONTEXT`-selected** ("recreate landed but web-2 undeployed" vs "attach landed / billing flips") — the intentional per-context divergence noted in #6040.
-- **`elapsed=` annotation** on every retrigger/poll log line (per the deploy-poll-ceiling learning) — the discoverability signal for a future ceiling bump; no prod-side change (`start_ts` already emitted).
+- **`elapsed=` annotation** on every poll log line (per the deploy-poll-ceiling learning) — the discoverability signal for a future ceiling bump; no prod-side change (`start_ts` already emitted).
 
 ### warm_standby migration (`.github/workflows/apply-web-platform-infra.yml`)
 
@@ -172,12 +201,23 @@ Load-bearing subtleties (each an AC below):
   see Test Strategy). RED-proof: with the retry branch reverted, this fixture flips to `exit 1`.
 - [ ] **AC2 (terminal on budget, unit):** an all-`degraded` fixture (never `ok`) drives the
   script to terminal `exit 1` with the `::error::` recovery message — NO green-on-timeout.
-- [ ] **AC3 (web-1 re-swap bound, unit):** with `RETRIGGER_MIN_INTERVAL_S` set high and
-  `DEGRADED_RETRY_MAX=2`, the POST sink records ≤ `1 + DEGRADED_RETRY_MAX` fan-out POSTs
-  over an all-degraded fixture — the backoff bound holds (the secondary-finding 521 cap).
+- [ ] **AC3 (web-1 re-swap bound, unit):** over an all-degraded fixture (with a small
+  `FRESH_BOOT_WINDOW_S` so the retry fires quickly in-test), the POST sink records **exactly
+  2** fan-out POSTs (initial + 1) — `DEGRADED_RETRY_MAX=1` caps the live-origin churn (the
+  secondary-finding 521 blast radius).
+- [ ] **AC3b (single retry gated on boot window, unit):** with `FRESH_BOOT_WINDOW_S` set
+  large, a `degraded` completion does NOT trigger a re-POST before the window elapses (the
+  POST sink shows only the initial POST until the window passes).
+- [ ] **AC3c (lock_contention retryable, unit):** a fixture emitting `exit_code=1,
+  reason=lock_contention` then later `ok` drives `exit 0` — lock_contention is treated as
+  retryable, NOT terminal.
+- [ ] **AC3d (no baseline advance / consumed-set, unit):** a fixture where an EARLIER
+  in-flight cycle completes `ok` (its `start_ts > original_baseline`) AFTER a degraded of a
+  later cycle drives `exit 0` — proves the original baseline is retained and a valid late
+  `ok` is not discarded (the anti-trap the first-draft PRE_START_TS-advance would have hit).
 - [ ] **AC4 (invariants preserved, unit):** `ROSTER_COUNT!=2` → `exit 1`; a completion with
-  `start_ts <= PRE_START_TS` is ignored (staleness); a non-`^v[0-9]…$` tag → `exit 1`
-  (full-anchor). Each asserted by a dedicated fixture.
+  `start_ts <= PRE_START_TS` (original baseline) is ignored (staleness); a non-`^v[0-9]…$`
+  tag → `exit 1` (full-anchor). Each asserted by a dedicated fixture.
 - [ ] **AC5 (warm_standby migrated):** the `warm_standby` job block of
   `apply-web-platform-infra.yml` contains `deploy-status-fanout-verify.sh` and NO inline
   verify poll — verified by `bash scripts/followthroughs/warm-standby-verify-dedup-6030.sh`
@@ -361,13 +401,17 @@ after the final Files list is frozen.)
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/placeholder, or
   omits the threshold will FAIL `deepen-plan` Phase 4.6. This section is filled.
-- The retry MUST advance `PRE_START_TS` on every `_retrigger_fanout`; otherwise a stale
-  earlier-degraded completion re-reads as this cycle's result and the loop live-locks or
-  falsely aborts. Explicit AC-covered.
-- Keep ONE overall poll budget across retries — do NOT give each retry a fresh
-  `STATUS_POLL_MAX_ATTEMPTS×INTERVAL` (6×900 s = 90 min ≫ the 45-min job timeout).
-- Verify `RETRIGGER_MIN_INTERVAL_S ≥ web-1 re-swap wall-clock` so a re-trigger fires only
-  after the previous re-swap's completion is observable — else back-to-back POSTs hit
-  `flock -n` `lock_contention` on the deploy host (deploy-poll-ceiling learning).
+- Do **NOT** advance `PRE_START_TS` on re-trigger (the first-draft trap the advisor caught):
+  advancing it discards a valid late-arriving `ok` from an earlier in-flight cycle (start_ts
+  below the advanced baseline → filtered as pre-trigger) and adds CI↔host clock skew. Keep
+  the original baseline; dedupe degraded completions via the `consumed` start_ts set. AC3d-covered.
+- The web-platform re-POST is a FULL deploy cycle (canary + cron-drain up to 4200 s + docker
+  swap), NOT a same-tag no-op (that ~50 ms shortcut is inngest-only, `ci-deploy.sh:1356`). So
+  cap the retry at 1 and gate it on `FRESH_BOOT_WINDOW_S` — never a short cadence.
+- `lock_contention` (`exit_code=1, reason=lock_contention`, `ci-deploy.sh:846-849`) is a
+  loser-of-`flock` state, NOT a deploy failure — the verify MUST treat it as retryable, else
+  any overlap RED-flakes a healthy deploy. AC3c-covered.
+- Size the poll budget as `FRESH_BOOT_WINDOW_S + one full deploy cycle` and keep
+  `timeout-minutes: 45` above it; the current 900 s poll is tight — re-measure at /work.
 - `OP_CONTEXT` default must keep the recreate wording (its first + primary consumer);
   warm_standby explicitly sets `OP_CONTEXT=warm-standby`.

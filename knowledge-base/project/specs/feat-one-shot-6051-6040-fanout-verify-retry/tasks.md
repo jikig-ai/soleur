@@ -12,8 +12,11 @@ Lane: cross-domain | Threshold: single-user incident (requires_cpo_signoff)
       check against the final Files list (expect none).
 - [ ] 0.3 Confirm `fan_out_to_peers` (`ci-deploy.sh:134-173`) is still single-attempt (no
       host-side peer retry) — the load-bearing premise for client-side re-POST.
-- [ ] 0.4 Confirm `RETRIGGER_MIN_INTERVAL_S` ≥ observed web-1 re-swap wall-clock (avoid
-      back-to-back `flock -n` `lock_contention` on the deploy host).
+- [ ] 0.4 Confirm the web-platform re-POST is a FULL deploy cycle (no same-tag no-op; the
+      ~50 ms shortcut at `ci-deploy.sh:1356` is inngest-only) and that `lock_contention`
+      writes `exit_code=1` (`:846-849`) — sizes the budget + the retryable-lock handling.
+- [ ] 0.5 Measure a realistic fresh-boot window from run logs to set `FRESH_BOOT_WINDOW_S`
+      (~600) and the poll budget = window + one full deploy cycle (keep timeout 45m above).
 
 ## Phase 1 — Test scaffolding (RED first)
 
@@ -22,17 +25,20 @@ Lane: cross-domain | Threshold: single-user incident (requires_cpo_signoff)
 - [ ] 1.2 Synthesize JSON fixtures under `apps/web-platform/infra/fixtures/`
       (degraded→degraded→ok / all-degraded / stale-start_ts / bad-tag). `jq empty` each.
 - [ ] 1.3 Write failing assertions: AC1 (retry→exit 0), AC2 (all-degraded→terminal exit 1),
-      AC3 (POST-count ≤ 1+DEGRADED_RETRY_MAX), AC4 (roster/staleness/tag invariants),
-      AC6 (emits `deployed_tag=` to `$GITHUB_OUTPUT`).
+      AC3 (exactly 2 POSTs, DEGRADED_RETRY_MAX=1), AC3b (retry gated on FRESH_BOOT_WINDOW_S),
+      AC3c (lock_contention retryable→exit 0), AC3d (no baseline-advance / consumed-set keeps
+      a late `ok`), AC4 (roster/staleness/tag invariants), AC6 (emits `deployed_tag=`).
 
 ## Phase 2 — Core: retry loop in the shared script (GREEN)
 
-- [ ] 2.1 Add env knobs `DEGRADED_RETRY_MAX` (6), `RETRIGGER_MIN_INTERVAL_S` (90),
+- [ ] 2.1 Add env knobs `DEGRADED_RETRY_MAX` (1), `FRESH_BOOT_WINDOW_S` (600),
       `OP_CONTEXT` (recreate) to `deploy-status-fanout-verify.sh`.
-- [ ] 2.2 Extract `_retrigger_fanout` (re-read freshest tag + downgrade guard + advance
-      `PRE_START_TS` + POST 202 + reset `last_trigger_ts`) and `_recovery_msg` (OP_CONTEXT).
-- [ ] 2.3 Convert the `*_peer_fanout_degraded` terminal `exit 1` (`:136-138`) into the
-      bounded-retry branch; keep terminal exit-1 on budget exhaustion + unexpected reason.
+- [ ] 2.2 Extract `_retrigger_fanout` (re-read freshest tag + downgrade guard + POST 202 —
+      does NOT touch `PRE_START_TS`) and `_recovery_msg` (OP_CONTEXT). Add the `consumed`
+      start_ts set; keep the ORIGINAL baseline for the whole run.
+- [ ] 2.3 Convert the `*_peer_fanout_degraded` terminal `exit 1` (`:136-138`) into: single
+      re-POST gated on `elapsed ≥ FRESH_BOOT_WINDOW_S`; treat `exit_code=1 reason=lock_contention`
+      as retryable; keep terminal exit-1 on budget exhaustion + genuine failure + unexpected reason.
 - [ ] 2.4 Emit `deployed_tag=<tag>` to `$GITHUB_OUTPUT` (guarded on `-n "${GITHUB_OUTPUT:-}"`).
 - [ ] 2.5 Add `elapsed=` + `retrigger K/MAX` annotations on poll log lines.
 - [ ] 2.6 Keep ONE overall poll budget (no fresh budget per retry). Re-measure vs ~10-min
