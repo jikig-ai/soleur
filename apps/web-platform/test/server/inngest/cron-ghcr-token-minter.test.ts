@@ -222,6 +222,20 @@ describe("cron-ghcr-token-minter — output-aware heartbeat (AC4)", () => {
 });
 
 describe("cron-ghcr-token-minter — misconfiguration", () => {
+  it("GHCR_MINTER_DISABLED=true → no-op: no mint, no write, no heartbeat, no page (#6031)", async () => {
+    process.env.GHCR_MINTER_DISABLED = "true";
+    try {
+      const result = await cronGhcrTokenMinterHandler({ step: makeStep() as never, logger });
+      expect(result.ok).toBe(false);
+      expect(generateInstallationTokenSpy).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(postSentryHeartbeatSpy).not.toHaveBeenCalled();
+      expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.GHCR_MINTER_DISABLED;
+    }
+  });
+
   it("missing GHCR_MINTER_DOPPLER_TOKEN → error heartbeat, no mint attempted", async () => {
     delete process.env.GHCR_MINTER_DOPPLER_TOKEN;
     const result = await cronGhcrTokenMinterHandler({ step: makeStep() as never, logger });
