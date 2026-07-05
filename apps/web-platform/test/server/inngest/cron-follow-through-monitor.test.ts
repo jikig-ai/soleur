@@ -48,6 +48,7 @@ vi.mock("@/server/inngest/functions/_predicate-validator", () => ({
 
 const reportSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
+  mirrorWarnWithDebounce: vi.fn(),
   reportSilentFallback: reportSilentFallbackSpy,
 }));
 

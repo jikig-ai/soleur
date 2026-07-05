@@ -300,12 +300,15 @@ export async function postSentryHeartbeat(args: {
   const publicKey = process.env.SENTRY_PUBLIC_KEY;
   if (!domain || !projectId || !publicKey) {
     // #4861 — was a silent `logger.info` + return; a blank heartbeat env then
-    // paged nowhere. Route through the DEBOUNCED warn wrapper: it lands via the
-    // @sentry/nextjs SDK (SENTRY_DSN — a DIFFERENT, populated var from these
-    // three ingest vars), so the skip is loud even when the ingest env is blank.
-    // Keep the early return — the change is observability, not control flow
+    // paged nowhere. Keep the pino log (stdout → Better Stack) AND additionally
+    // route through the DEBOUNCED warn wrapper: it lands via the @sentry/nextjs
+    // SDK (SENTRY_DSN — a DIFFERENT, populated var from these three ingest vars),
+    // so the skip is loud even when the ingest env is blank. This is strictly
+    // additive — the pino line stays (existing behavior), the Sentry mirror is
+    // new. Keep the early return — the change is observability, not control flow
     // (cq-silent-fallback-must-mirror-to-sentry). Debounce keyed on (cronName,
     // op) so ~45 crons sharing this env do not flood on a shared misconfig.
+    logger.info({ fn: cronName }, "Sentry env unset — skipping heartbeat");
     mirrorWarnWithDebounce(
       new Error(`Sentry heartbeat env unset — heartbeat skipped for ${cronName}`),
       {
@@ -324,6 +327,9 @@ export async function postSentryHeartbeat(args: {
     !SENTRY_PROJECT_RE.test(projectId) ||
     !SENTRY_PUBLIC_KEY_RE.test(publicKey)
   ) {
+    // Additive (see unset branch above): keep the pino warn line, add the
+    // debounced Sentry mirror so a malformed heartbeat env is never silent.
+    logger.warn({ fn: cronName }, "Sentry env malformed — skipping heartbeat");
     mirrorWarnWithDebounce(
       new Error(`Sentry heartbeat env malformed — heartbeat skipped for ${cronName}`),
       {
