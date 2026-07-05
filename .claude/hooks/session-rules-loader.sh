@@ -26,6 +26,64 @@ set -uo pipefail
 # rules. That is the `single-user incident` failure mode user-impact-reviewer
 # flagged on PR #3496. Errors are handled inline (`|| true` on tolerant paths,
 # explicit fallback emission at the end on hard failures).
+
+# --- frontmatter-strip (issue #5999, ADR-085) ------------------------------
+# Sidecars now carry OPTIONAL leading YAML frontmatter (last_reviewed / cadence
+# on AGENTS.core.md). It must be stripped before injection so raw YAML never
+# leaks into agent context. The real contract is sourced from
+# scripts/lib/frontmatter-strip/strip.sh AFTER REPO_ROOT resolves; until then
+# (and if that source ever fails) this identity fallback stays in effect —
+# UNDER-stripping (a frontmatter leak) is the SAFE degradation because it can
+# never drop a rule line. OVER-stripping is the governance-blackout failure the
+# guard below catches.
+strip_frontmatter() { cat; }
+# Override the identity fallback with the real (perl-backed) contract, sourced
+# HOOK-RELATIVE (BASH_SOURCE), not REPO_ROOT-relative: strip.sh ships in the
+# same checkout as this hook, whereas REPO_ROOT is the envelope's target tree
+# (which in production is the same repo, but need not be). strip.sh only DEFINES
+# the function when sourced (its filter path is guarded by BASH_SOURCE==$0). On
+# any failure the identity fallback above stays in effect (safe: under-strips).
+_strip_lib="$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/frontmatter-strip/strip.sh"
+# shellcheck source=/dev/null
+if [[ -r "$_strip_lib" ]]; then source "$_strip_lib" 2>/dev/null || true; fi
+
+# strip_sidecar_into_global <file> [sentinel_rule_id] — set STRIPPED_OUT to the
+# frontmatter-stripped sidecar. OVER-STRIP GUARD (obs P1): if the strip drops
+# any `- …[id: …]` rule line (malformed/greedy frontmatter — the governance-
+# blackout signature), OR the optional per-sidecar sentinel rule-id was present
+# in RAW but VANISHED after the strip, set STRIPPED_OUT to the RAW content and
+# set OVERSTRIP_DETECTED so the stamp surfaces it loudly. Rules are NEVER lost;
+# the worst case is a benign frontmatter leak plus a stamp note — we do NOT
+# inject a mangled (rule-shorn) sidecar.
+#
+# Returns content via the GLOBAL STRIPPED_OUT, NOT stdout: callers append
+# `$STRIPPED_OUT` directly so this function runs in the PARENT shell — a
+# `$(command-sub)` would run in a subshell and LOSE the OVERSTRIP_DETECTED flag.
+OVERSTRIP_DETECTED=0
+STRIPPED_OUT=""
+strip_sidecar_into_global() {
+  local f="$1" sentinel="${2:-}" raw stripped raw_n stripped_n
+  raw="$(<"$f")"
+  stripped="$(printf '%s' "$raw" | strip_frontmatter)"
+  raw_n=$(printf '%s\n' "$raw" | grep -cE '^- .*\[id: ' || true)
+  stripped_n=$(printf '%s\n' "$stripped" | grep -cE '^- .*\[id: ' || true)
+  # Over-strip iff: (a) the strip dropped any `- …[id: …]` rule line (the
+  # general, robust guard — rule count must be invariant across a correct
+  # strip), OR (b) the per-sidecar sentinel rule-id was present in RAW but
+  # VANISHED after the strip (defense-in-depth; "was-present-then-gone", never
+  # penalizes a sidecar that legitimately lacks the sentinel). Both never fire
+  # on the normal path; both fire on a malformed/greedy strip.
+  if (( stripped_n != raw_n )) \
+     || { [[ -n "$sentinel" ]] \
+          && printf '%s' "$raw" | grep -qF "$sentinel" \
+          && ! printf '%s' "$stripped" | grep -qF "$sentinel"; }; then
+    OVERSTRIP_DETECTED=1
+    STRIPPED_OUT="$raw"
+  else
+    STRIPPED_OUT="$stripped"
+  fi
+}
+
 trap 'emit_core_only_fallback "hook trap fired before emit"; exit 0' ERR
 
 # HEADLESS_MODE classifier — boolean, downstream hooks read this to decide
@@ -47,7 +105,8 @@ emit_core_only_fallback() {
   local root="${REPO_ROOT:-$PWD}"
   local fb=""
   if [[ -r "$root/AGENTS.core.md" ]]; then
-    fb="$(<"$root/AGENTS.core.md")"
+    strip_sidecar_into_global "$root/AGENTS.core.md" hr-never-git-stash-in-worktrees
+    fb="$STRIPPED_OUT"
   fi
   printf '%s' "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":$(jq -Rs . <<<"[rules-loader] FALLBACK ($reason): loaded AGENTS.core.md only"$'\n'"$fb")}}"
 }
@@ -131,8 +190,9 @@ fi
 CONTEXT=""
 FAIL_SAFE_TRIGGERED=0
 for class in $CLASSES; do
+  sentinel=""
   case "$class" in
-    core)      sidecar="$REPO_ROOT/AGENTS.core.md" ;;
+    core)      sidecar="$REPO_ROOT/AGENTS.core.md"; sentinel="hr-never-git-stash-in-worktrees" ;;
     docs-only) sidecar="$REPO_ROOT/AGENTS.docs.md" ;;
     rest)      sidecar="$REPO_ROOT/AGENTS.rest.md" ;;
     *)         continue ;;
@@ -145,8 +205,9 @@ for class in $CLASSES; do
     break
   fi
   if [[ -f "$sidecar" ]]; then
+    strip_sidecar_into_global "$sidecar" "$sentinel"
     CONTEXT+=$'\n\n---\n\n'
-    CONTEXT+="$(<"$sidecar")"
+    CONTEXT+="$STRIPPED_OUT"
   else
     FAIL_SAFE_TRIGGERED=1
     break
@@ -158,8 +219,11 @@ if (( FAIL_SAFE_TRIGGERED == 1 )); then
   for sc in "$REPO_ROOT"/AGENTS.core.md "$REPO_ROOT"/AGENTS.docs.md "$REPO_ROOT"/AGENTS.rest.md; do
     if [[ -L "$sc" ]]; then continue; fi
     if [[ -f "$sc" ]]; then
+      sentinel=""
+      [[ "$sc" == *"/AGENTS.core.md" ]] && sentinel="hr-never-git-stash-in-worktrees"
+      strip_sidecar_into_global "$sc" "$sentinel"
       CONTEXT+=$'\n\n---\n\n'
-      CONTEXT+="$(<"$sc")"
+      CONTEXT+="$STRIPPED_OUT"
     fi
   done
   CLASSES="core docs-only rest"
@@ -176,7 +240,13 @@ RULE_COUNT=$(printf '%s' "$CONTEXT" | grep -cE '^- .*\[id: ' || true)
 # contract.
 TOTAL_RULES=$(grep -hE '^- .*\[id: ' "$REPO_ROOT"/AGENTS*.md 2>/dev/null | wc -l | tr -d ' ')
 CLASSES_DISPLAY="${CLASSES// /+}"
-STAMP="[rules-loader] loaded: ${CLASSES_DISPLAY} (${RULE_COUNT} of ${TOTAL_RULES} rules)${FAIL_SAFE_NOTE}"
+# Loud stamp note when the over-strip guard fired: a sidecar's frontmatter strip
+# would have dropped rule bodies, so the RAW sidecar was injected instead (rules
+# preserved, frontmatter leaked). Kept short to stay under the 200-byte stamp
+# contract (test 11). Empty on the normal path.
+OVERSTRIP_NOTE=""
+(( OVERSTRIP_DETECTED == 1 )) && OVERSTRIP_NOTE=" — WARN: frontmatter over-strip; raw sidecar injected"
+STAMP="[rules-loader] loaded: ${CLASSES_DISPLAY} (${RULE_COUNT} of ${TOTAL_RULES} rules)${FAIL_SAFE_NOTE}${OVERSTRIP_NOTE}"
 # The hint embeds the *current* REPO_ROOT so the agent can re-run the loader
 # against the same worktree without relying on `$PWD` (which depends on the
 # Bash tool's resetting CWD between calls). Bare `echo '{}'` would have empty
