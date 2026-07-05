@@ -285,6 +285,16 @@ describe("runStarvationCheck", () => {
     const postArgs = posts[0]![1] as { title: string; labels: string[] };
     expect(postArgs.title).toBe(STARVATION_ISSUE_TITLE);
     expect(postArgs.labels).toContain("action-required");
+    // The dedicated label keeps the standing issue's dedup/close query scoped so
+    // it never scrolls off page 1 behind a backlog of other action-required issues.
+    expect(postArgs.labels).toContain("content-starvation");
+    // The dedup read must filter on BOTH labels (AND) — not action-required alone.
+    const dedupGet = client.request.mock.calls.find(
+      (c) => c[0] === "GET /repos/{owner}/{repo}/issues",
+    );
+    expect((dedupGet![1] as { labels: string }).labels).toBe(
+      "action-required,content-starvation",
+    );
   });
 
   it("starved + issue already open → does NOT duplicate", async () => {

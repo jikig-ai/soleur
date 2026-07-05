@@ -217,6 +217,20 @@ export const STARVATION_DAYS = 10;
 export const STARVATION_ISSUE_TITLE =
   "Content starvation: distribution schedule is empty (auto-promotion found nothing to schedule)";
 
+/**
+ * Dedicated label carried by the starvation issue IN ADDITION to
+ * `action-required`. The dedup + auto-close reads filter on BOTH labels
+ * (GitHub AND-semantics), so the candidate set stays ~1 regardless of how many
+ * other `action-required` issues are open. Without this, the `per_page: 10,
+ * sort: created desc` read would page the standing (long-lived, stable-title)
+ * starvation issue off page 1 once ≥10 newer `action-required` issues exist —
+ * exactly the neglected-backlog state a multi-week drought represents — causing
+ * daily duplicates AND a missed auto-close on recovery. (`ensureScheduledAuditIssue`
+ * is safe with `action-required` alone only because its title is date-suffixed
+ * and it dedups same-day; a standing alert needs the narrower filter.)
+ */
+export const STARVATION_ISSUE_LABEL = "content-starvation";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Strict `YYYY-MM-DD` → epoch ms (UTC), or NaN if not that shape. */
@@ -390,7 +404,9 @@ async function closeStarvationIssueOnRecovery(
     owner: REPO_OWNER,
     repo: REPO_NAME,
     state: "open",
-    labels: "action-required",
+    // Filter on BOTH labels (AND) so the standing starvation issue can never
+    // scroll off page 1 behind a backlog of other action-required issues.
+    labels: `action-required,${STARVATION_ISSUE_LABEL}`,
     sort: "created",
     direction: "desc",
     per_page: 10,
@@ -477,7 +493,7 @@ export async function runStarvationCheck(args: {
           latestPublishedDate,
           gateFailedDrafts,
         }),
-        labels: ["action-required"],
+        labels: ["action-required", STARVATION_ISSUE_LABEL],
       });
     } else if (scheduledWithinHorizon > 0) {
       await closeStarvationIssueOnRecovery(client, scheduledWithinHorizon);
