@@ -647,6 +647,15 @@ jobs:
   warm_standby:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'warm-standby'
     runs-on: ubuntu-24.04
+    # Shared cross-pipeline web-1-swap mutex (#6060 item (c); ADR-068 amendment):
+    # this job fans a redeploy out to web-2 which re-swaps web-1, so it shares the
+    # `web-1-swap` group with the release deploy / web_2_recreate / pipeline-fix
+    # apply — at most one web-1 swap in flight at a time. This job-level group
+    # COEXISTS with (does not replace) the workflow-level R2 serializer above.
+    # `cancel-in-progress: false`: never kill an in-progress swap or terraform apply.
+    concurrency:
+      group: web-1-swap
+      cancel-in-progress: false
     # Bounds the deploy-fan-out re-swap of web-1 (canary + prod) + the off-host
     # verify poll. The status poll window below (STATUS_POLL_MAX_ATTEMPTS *
     # STATUS_POLL_INTERVAL_S) stays UNDER this ceiling.
@@ -875,6 +884,15 @@ jobs:
   web_2_recreate:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'web-2-recreate'
     runs-on: ubuntu-24.04
+    # Shared cross-pipeline web-1-swap mutex (#6060 item (c); ADR-068 amendment):
+    # the recreate re-POSTs /hooks/deploy → re-swaps web-1, so it shares the
+    # `web-1-swap` group with the release deploy / warm_standby / pipeline-fix
+    # apply — at most one web-1 swap in flight at a time. Job-level group COEXISTS
+    # with (does not replace) the workflow-level R2 serializer above.
+    # `cancel-in-progress: false`: never kill an in-progress swap or terraform apply.
+    concurrency:
+      group: web-1-swap
+      cancel-in-progress: false
     permissions:
       contents: read
       # GHCR is NOT anonymously pullable (private package); the digest-resolve

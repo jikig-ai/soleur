@@ -276,7 +276,7 @@ registration pattern at `infra-validation.yml:154`).
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (coexistence + R2-preservation verified BEFORE relying on it):** the
+- [x] **AC1 (coexistence + R2-preservation verified BEFORE relying on it):** the
   load-bearing claim — job-level `concurrency` coexists with workflow-level `concurrency`,
   independent scopes — is **confirmed** (GitHub workflow-syntax reference, verified
   2026-07-05: *"concurrency can be defined at both levels in the same workflow; they operate
@@ -290,7 +290,7 @@ registration pattern at `infra-validation.yml:154`).
   the workflow-level group governs the whole apply run regardless of any job-level group, so
   R2 serialization is preserved; the drift-guard test (AC2) additionally asserts the
   workflow-level group literal is still present and unchanged.
-- [ ] **AC2 (four members share the group — allow-list guard):** the drift-guard test asserts
+- [x] **AC2 (four members share the group — allow-list guard):** the drift-guard test asserts
   the 4 named members — `deploy` (`web-platform-release.yml`), `web_2_recreate` + `warm_standby`
   (`apply-web-platform-infra.yml`), `apply` (`apply-deploy-pipeline-fix.yml`) — each carry
   job-level `concurrency.group == web-1-swap` with `cancel-in-progress: false`, AND the total
@@ -300,28 +300,28 @@ registration pattern at `infra-validation.yml:154`).
   `apply-web-platform-infra.yml` AND `apply-deploy-pipeline-fix.yml` (R2 preserved, AC1). The
   routine `apply` job (apply-web-platform-infra.yml) is not a named member, so the `== 4`
   count fails if it (or any other job) is accidentally enrolled.
-- [ ] **AC4 (release-vs-release preserved):** the rename preserves release deploy
+- [x] **AC4 (release-vs-release preserved):** the rename preserves release deploy
   serialization — `web-1-swap` is the group two concurrent release `deploy` runs share
   (asserted by the test reading the single release-deploy group literal), and no stale
   `deploy-web-platform` reference remains (`grep -rn 'deploy-web-platform' .github/ apps/
   plugins/ scripts/` returns 0).
-- [ ] **AC5 (workflow lint):** `actionlint .github/workflows/web-platform-release.yml
+- [x] **AC5 (workflow lint):** `actionlint .github/workflows/web-platform-release.yml
   .github/workflows/apply-web-platform-infra.yml` clean; any embedded `run:` snippet
   syntax-checked via `bash -c '<snippet>'` (never `bash -n` on the YAML). For the composite
   action caveat: do NOT actionlint `.github/actions/*/action.yml`.
-- [ ] **AC6 (script/test lint):** `shellcheck` clean on any new `.test.sh` (match sibling
+- [x] **AC6 (script/test lint):** `shellcheck` clean on any new `.test.sh` (match sibling
   `apps/web-platform/infra/*.test.sh` conventions).
-- [ ] **AC7 (test registered):** if a new `.test.sh` is added, it is registered in
+- [x] **AC7 (test registered):** if a new `.test.sh` is added, it is registered in
   `.github/workflows/infra-validation.yml` next to the sibling infra `.test.sh` steps
   (`:154`).
-- [ ] **AC8 (ADR amended):** ADR-068 carries a short amendment documenting the cross-pipeline
+- [x] **AC8 (ADR amended):** ADR-068 carries a short amendment documenting the cross-pipeline
   web-1-swap serialization invariant: one shared job-level `web-1-swap` group across the **4**
   swap-performing jobs (release `deploy`; `web_2_recreate`; `warm_standby`;
   `apply-deploy-pipeline-fix.yml` `apply`); workflow-level R2 serializer unchanged;
   `cancel-in-progress: false` rationale; the **lock-hold-duration invariant** (members must
   poll-to-terminal); the inngest-flock accepted residual. `Ref #6060`. **Amend**, not a new
   ADR (no decision reversed).
-- [ ] **AC9 (deferred re-triage recorded):** the PR body (via `ship`) and a #6060 update
+- [x] **AC9 (deferred re-triage recorded):** the PR body (via `ship`) and a #6060 update
   record: item (c) done; items (a) and (b) re-triaged with owner + re-eval criteria (see
   `## Deferred`). PR body uses `Ref #6060`, NOT `Closes` (a/b remain open).
 
