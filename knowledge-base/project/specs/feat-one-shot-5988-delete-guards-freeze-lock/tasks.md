@@ -15,10 +15,10 @@ TDD: write failing tests before implementation.
 
 ## Phase 0 — Preconditions
 
-- [ ] 0.1 Run `bash .claude/hooks/guardrails.test.sh` — baseline green.
-- [ ] 0.2 Run `bash .claude/hooks/hookeventname-coverage.test.sh` — baseline green.
-- [ ] 0.3 `git grep -n 'guardrails-' scripts/rule-metrics-aggregate.sh scripts/rule-metrics-aggregate.test.sh` — confirm `guardrails-*` rule_ids pass the orphan-gate.
-- [ ] 0.4 Read `.openhands/hooks/guardrails.sh` (exit-2 protocol) + `.openhands/hooks.json` (`terminal`/`file_editor` matchers).
+- [x] 0.1 Run `bash .claude/hooks/guardrails.test.sh` — baseline green (16/16).
+- [x] 0.2 Run `bash .claude/hooks/hookeventname-coverage.test.sh` — baseline green.
+- [x] 0.3 Confirmed `guardrails-*` is a documented sentinel namespace (README:43); orphan-gate test (`rule-metrics-aggregate.test.sh`) is synthetic/self-contained → new ids don't trip it. `tests/hooks/test_hook_emissions.sh:176` asserts `.worktrees/` case → `guardrails-block-rm-rf-worktrees`; so KEEP the narrow gate, ADD a new `guardrails-block-recursive-delete` gate.
+- [x] 0.4 Read `.openhands/hooks/guardrails.sh` (exit-2 protocol) + `.openhands/hooks.json` (`terminal`/`file_editor` matchers).
 
 ## Phase 1 — Freeze-lock control helper (RED → GREEN)
 
