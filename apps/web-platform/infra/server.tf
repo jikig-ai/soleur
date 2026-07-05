@@ -680,6 +680,10 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # The sudoers grant landed and parses (the INFRA_CONFIG_INSTALL alias is
       # what makes the webhook handler's prod-mode escalation work).
       "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #5934 — the char-device sweep grant landed (without it ci-deploy.sh's
+      # pre-canary sweep is sudo-denied and the durable #5912 wedge remediation is
+      # a silent no-op). Fail the provisioner loud rather than ship it missing.
+      "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
       # hooks.json re-registers the status hook + maps the state-reporter key (the
       # exact host drift that caused the #4804 freeze: stale hooks.json had neither).
       "grep -q infra-config-status /etc/webhook/hooks.json",

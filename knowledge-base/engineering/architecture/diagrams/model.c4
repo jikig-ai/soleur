@@ -302,7 +302,7 @@ model {
   hooks -> kb "Reads context_queries artifacts (skill-scoped injection)" { technology "File I/O" }
   api -> kb "Reads context_queries artifacts (skill-scoped injection, web in-process)" { technology "File I/O" }
   skills -> kb "Reads/writes" { technology "File I/O" }
-  agents -> kb "Reads" { technology "File I/O" }
+  agents -> kb "Reads/writes" { technology "File I/O" }
   api -> supabase "Auth and data" { technology "HTTPS" }
   claude -> supabase "Sessions and keys" { technology "HTTPS" }
   claude -> anthropic "LLM calls" { technology "HTTPS" }

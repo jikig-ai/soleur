@@ -68,10 +68,39 @@ count_marker() {
   return 0
 }
 
+# denied_count — rows that mention the sweep path AND are a sudo denial. This is
+# the failure mode that shipped #5934 blind: the sweep IS invoked every deploy
+# (`sudo timeout 60 …/git-lock-chardevice-sweep.sh`) but sudo had NO NOPASSWD grant,
+# so it was denied and ci-deploy.sh's `|| true` swallowed it — the script never ran,
+# so it emitted NEITHER a DONE nor its own FAILED marker, and the "no DONE" case below
+# read as a benign TRANSIENT ("no deploys"). The denial ("command not allowed") IS in
+# Better Stack under SYSLOG_IDENTIFIER sudo; a fetch of sweep-path rows post-filtered
+# to denials distinguishes "invoked-but-denied" (a hard FAIL) from "never invoked".
+denied_count() {
+  local out rc
+  out="$("$BQ" --since "$WINDOW" --grep "git-lock-chardevice-sweep" --limit 1000 2>/dev/null)"; rc=$?
+  [[ "$rc" -ne 0 ]] && return 1
+  # Among sweep-path rows, count sudo denials. Empty ⇒ 0.
+  printf '%s\n' "$out" | grep -c "command not allowed" || true
+  return 0
+}
+
 done_count="$(count_marker SOLEUR_CHARDEV_SWEEP_DONE)" || {
   echo "TRANSIENT: Better Stack query failed (liveness/DONE) — auth/config/network" >&2; exit 2; }
 failed_count="$(count_marker SOLEUR_CHARDEV_SWEEP_FAILED)" || {
   echo "TRANSIENT: Better Stack query failed (FAILED marker) — auth/config/network" >&2; exit 2; }
+denied="$(denied_count)" || {
+  echo "TRANSIENT: Better Stack query failed (sudo-denial marker) — auth/config/network" >&2; exit 2; }
+
+# Invoked-but-sudo-denied with zero successful runs = the durable fix is a SILENT
+# no-op (the #5934 shipped-blind defect). This must be a hard FAIL, never TRANSIENT —
+# a TRANSIENT here would leave #5934 "open, inconclusive" forever while the wedge is
+# live. Gated on done_count==0 so it self-clears once the sudoers grant lands and a
+# real DONE marker appears (a later working deploy supersedes earlier denials).
+if [[ "$done_count" -eq 0 && "$denied" -gt 0 ]]; then
+  echo "FAIL: sweep invoked but sudo-DENIED ${denied}x in ${WINDOW} with zero SOLEUR_CHARDEV_SWEEP_DONE — the durable char-device remediation is a silent no-op (missing NOPASSWD grant for git-lock-chardevice-sweep.sh; ci-deploy.sh's \`|| true\` hides the denial). The #5912 wedge is live."
+  exit 1
+fi
 
 if [[ "$done_count" -eq 0 ]]; then
   echo "TRANSIENT: no SOLEUR_CHARDEV_SWEEP_DONE marker in ${WINDOW} — sweep not observed running yet (no deploys in window, or delivery not live); inconclusive" >&2
