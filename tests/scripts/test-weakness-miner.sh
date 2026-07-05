@@ -150,11 +150,33 @@ t_workflow_addpaths() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Test 6 — member-set dedup: 3 files sharing 3 tags {p,q,r} must produce ONE
+# cluster heading (labelled p + q + r), NOT the 3 K-choose-2 pair headings.
+# ---------------------------------------------------------------------------
+t_dedup() {
+  local root; root=$(mktemp -d)
+  _learning "$root/a.md" "pp, qq, rr"
+  _learning "$root/b.md" "pp, qq, rr"
+  _learning "$root/c.md" "pp, qq, rr"
+  local digest="$root/digest.md"
+  SOLEUR_WM_FILES="$(printf '%s\n' "$root/a.md" "$root/b.md" "$root/c.md")" \
+    SOLEUR_WM_DIGEST_PATH="$digest" SOLEUR_WM_MIN_MEMBERS=3 \
+    bash "$SCRIPT" >/dev/null 2>&1
+  local headings; headings="$(grep -c '^### ' "$digest" 2>/dev/null)"
+  if [[ "$headings" == "1" ]] && grep -qE '^### pp \+ qq \+ rr — 3 learnings' "$digest"; then
+    _report "dedup: 3 files sharing 3 tags → one merged cluster heading" ok
+  else
+    _report "dedup: 3 files sharing 3 tags → one merged cluster heading" FAIL "(headings=$headings; digest: $(tr '\n' '|' <"$digest"))"
+  fi
+}
+
 t_clustering
 t_git_window
 t_zero_mutation
 t_no_cluster
 t_workflow_addpaths
+t_dedup
 
 echo "----"
 echo "weakness-miner: $pass passed, $fail failed"

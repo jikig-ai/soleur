@@ -53,31 +53,46 @@ tags_of() {
 }
 
 main() {
-  declare -A pair_count pair_files
-  local n_files=0 f base key i j
+  local DELIM=$'\x1f'   # unit separator: cannot appear in a YAML frontmatter tag
+  declare -A pair_count pair_paths
+  local n_files=0 f key i j
   local -a tags
+  # Count each co-occurring tag PAIR and the FULL PATHS (not basenames — same
+  # basename in different subdirs must not collapse) of the learnings that carry it.
   while IFS= read -r f; do
     [[ -n "$f" && -f "$f" ]] || continue
     n_files=$((n_files + 1))
     mapfile -t tags < <(tags_of "$f")
-    base="$(basename "$f")"
     for ((i = 0; i < ${#tags[@]}; i++)); do
       for ((j = i + 1; j < ${#tags[@]}; j++)); do
-        key="${tags[i]}|${tags[j]}"   # tags[] already sorted → stable unordered key
+        key="${tags[i]}${DELIM}${tags[j]}"   # tags[] already sorted → stable key
         pair_count["$key"]=$(( ${pair_count["$key"]:-0} + 1 ))
-        pair_files["$key"]="${pair_files["$key"]:-}${base}"$'\n'
+        pair_paths["$key"]="${pair_paths["$key"]:-}${f}"$'\n'
       done
     done
   done < <(select_recent_files)
 
-  # Ranked clusters: tag-pairs shared by >= MIN_MEMBERS learnings, desc by count.
+  # Collapse every pair that describes the SAME member-set into ONE cluster, so
+  # K files sharing K>=3 tags produce one heading (labelled with the shared tag
+  # set), not K-choose-2 near-identical headings. Member-set identity = a hash of
+  # its sorted full-path list.
+  declare -A ms_tags ms_paths ms_count
+  local sig a b members
+  for key in "${!pair_count[@]}"; do
+    [[ "${pair_count[$key]}" -ge "$MIN_MEMBERS" ]] || continue
+    members="$(printf '%s' "${pair_paths[$key]}" | grep -v '^$' | sort -u)"
+    sig="$(printf '%s' "$members" | sha1sum | cut -c1-16)"
+    a="${key%%"${DELIM}"*}"; b="${key##*"${DELIM}"}"
+    ms_tags["$sig"]="${ms_tags["$sig"]:-}${a}"$'\n'"${b}"$'\n'
+    ms_paths["$sig"]="$members"
+    ms_count["$sig"]="$(printf '%s\n' "$members" | grep -c .)"
+  done
+
+  # Rank distinct member-sets by size, desc.
   local ranked
-  ranked="$(
-    for key in "${!pair_count[@]}"; do
-      local c="${pair_count[$key]}"
-      [[ "$c" -ge "$MIN_MEMBERS" ]] && printf '%s\t%s\n' "$c" "$key"
-    done | sort -rn -k1,1
-  )"
+  ranked="$(for sig in "${!ms_count[@]}"; do
+    printf '%s\t%s\n' "${ms_count[$sig]}" "$sig"
+  done | sort -rn -k1,1)"
 
   # The single write sink.
   {
@@ -93,13 +108,16 @@ main() {
     else
       echo "## Recurring failure patterns"
       echo
-      echo "_Clusters of learnings sharing a tag pair, ranked by size (>= ${MIN_MEMBERS} members)._"
+      echo "_Clusters of learnings sharing >= 2 tags, ranked by size (>= ${MIN_MEMBERS} members)._"
       echo
-      while IFS=$'\t' read -r count key; do
-        [[ -n "$key" ]] || continue
-        local a="${key%|*}" b="${key#*|}"
-        echo "### ${a} + ${b} — ${count} learnings"
-        printf '%s' "${pair_files[$key]}" | grep -v '^$' | sort -u | sed 's/^/- /'
+      local label p
+      while IFS=$'\t' read -r count sig; do
+        [[ -n "$sig" ]] || continue
+        label="$(printf '%s' "${ms_tags[$sig]}" | grep -v '^$' | sort -u | paste -sd '+' - | sed 's/+/ + /g')"
+        echo "### ${label} — ${count} learnings"
+        printf '%s\n' "${ms_paths[$sig]}" | grep -v '^$' | while IFS= read -r p; do
+          echo "- $(basename "$p")"
+        done
         echo
       done <<< "$ranked"
     fi
