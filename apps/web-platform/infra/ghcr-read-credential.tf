@@ -5,12 +5,19 @@
 # (`--config prd` everywhere: ci-deploy.sh, cloud-init.yml). Mirrors the github-app.tf
 # doppler_secret precedent (config = "prd", ignore_changes = [value]).
 #
-# Ownership / auth-model decision (ADR-085, ADR-082 amendment): a scoped fine-grained
+# Ownership / auth-model decision (ADR-085 D1, ADR-082 amendment): a scoped fine-grained
 # PAT on a MACHINE account over the two jikig-ai packages, recorded as a DELIBERATE,
 # narrow, read-only exception to hr-github-app-auth-not-pat. security-sentinel affirmed
-# this as the security-SUPERIOR choice: the App-installation path would force the org-
-# wide-WRITE App private key onto the host at token-mint time (a ~2-order-of-magnitude
-# larger blast radius than a single-package READ token). See principles-register.md.
+# this as the security-SUPERIOR choice for a SINGLE OPERATOR: the on-host App-installation
+# path would force the org-wide-WRITE App private key onto the host at token-mint time (a
+# ~2-order-of-magnitude larger blast radius than a single-package READ token).
+#
+# INTERIM (ADR-086): this PAT is the single-operator BOOTSTRAP. GitHub has no API to create
+# a PAT (browser + 2FA only), so it does not scale to zero-touch multi-tenant (Concierge)
+# provisioning. ADR-086 supersedes D1 with a control-plane Inngest minter that issues 1h
+# `packages:read` App-installation tokens into this same Doppler key (consumers unchanged;
+# `ignore_changes = [value]` lets the minter own value churn). The migration follow-up is
+# gated to land BEFORE any tenant host pulls a private package. See ADR-086 + AP-016.
 #
 # Provisioning ORDER (L1 — do NOT skip): mint the credential → write the value into
 # Doppler `prd_terraform` (the TF runner's TF_VAR source) → verify present → THEN merge
