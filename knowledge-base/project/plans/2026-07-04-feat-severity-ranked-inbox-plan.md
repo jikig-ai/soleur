@@ -128,8 +128,8 @@ logs:
   where: pino child logger "notifications" / route handler
   retention: existing platform retention
 discoverability_test:
-  command: "cd apps/web-platform && ./node_modules/.bin/vitest run test/**/inbox*.test.ts"
-  expected_output: "all inbox merge/RLS/dispatch tests pass; no ssh"
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/inbox
+  expected_output: "401"
 ```
 
 ## Acceptance Criteria
