@@ -19,6 +19,13 @@ the loop opens up to **2 draft PRs per week**, each proposing a skill-instructio
 edit or an `AGENTS.core.md` rule addition. The loop **never auto-merges** —
 an operator confirms each proposal via normal PR review.
 
+**Upstream weakness signal (#6037):** the weekly read-only weakness-miner
+(`.github/workflows/weakness-miner.yml` → `scripts/weakness-miner.sh`, Sunday
+06:00 UTC) clusters recently-added learnings into a ranked recurring-failure
+digest at `knowledge-base/project/weakness-digest.md` (opened as its own bot-PR).
+Triage that digest to decide which recurring patterns are worth a `/compound`
+promotion — it is the detection half of the loop this runbook operates.
+
 **Handler:** `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`
 **Inngest function ID:** `cron-compound-promote`
 **Sentry monitor:** `scheduled-compound-promote`
