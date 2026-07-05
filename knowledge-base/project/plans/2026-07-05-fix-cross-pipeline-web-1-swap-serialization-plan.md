@@ -352,8 +352,8 @@ liveness_signal:
   alert_target: "GitHub Actions run status + job-summary; BetterStack apex/origin probe independently pages on a SUSTAINED (not transient) app.soleur.ai 521 (model.c4 origin absence detector) — the residual transient-521 backstop"
   configured_in: ".github/workflows/web-platform-release.yml (deploy job concurrency); .github/workflows/apply-web-platform-infra.yml (web_2_recreate + warm_standby); .github/workflows/apply-deploy-pipeline-fix.yml (apply); the new drift-guard .test.sh registered in infra-validation.yml"
 error_reporting:
-  destination: "CI: the drift-guard test FAILs loud in infra-validation.yml if the 3-copy shared-group invariant is violated (rename/drop/divergence). Runtime: GitHub Actions run status; a mis-serialized concurrent swap would surface as a transient 521 on the BetterStack apex probe."
-  fail_loud: "true — the drift-guard is a hard CI gate (exit non-zero); no green-on-missing-copy (min-copies==3 assertion)"
+  destination: "CI: the drift-guard test FAILs loud in infra-validation.yml if the 4-member shared-group invariant is violated (rename/drop/divergence). Runtime: GitHub Actions run status; a mis-serialized concurrent swap would surface as a transient 521 on the BetterStack apex probe."
+  fail_loud: "true — the drift-guard is a hard CI gate (exit non-zero); no green-on-missing-copy (exact count==4 assertion)"
 failure_modes:
   - mode: "a future edit renames one member's group, drops a copy, or makes a member fire-and-forget → serialization silently lost"
     detection: "drift-guard asserts all 4 named members share the `web-1-swap` literal AND total count==4 (allow-list, not head -1); optional completion-poll-step assertion guards the lock-hold-duration invariant"

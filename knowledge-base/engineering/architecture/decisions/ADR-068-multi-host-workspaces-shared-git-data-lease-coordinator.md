@@ -870,7 +870,17 @@ Phase 4b (continuous checkpoint).
 > a time across ALL pipelines. This is an **atomic scheduler mutex** (no check-then-act TOCTOU),
 > **bidirectional** (blocks release-during-recreate AND recreate-during-release), and
 > **queue-not-fail** (a superseded push release queues then deploys, or is latest-wins-cancelled by a
-> newer SHA — never hard-failed/stranded ahead of prod). The job-level `web-1-swap` group **coexists
+> newer SHA — never hard-failed/stranded ahead of prod). **Operator-op priority-inversion (accepted,
+> mitigated by the merge-freeze):** GitHub keeps at most ONE pending run per concurrency group and the
+> newest arrival wins the pending slot, so an operator recovery dispatch (`web_2_recreate` etc.) that is
+> *pending* behind an in-flight release can be cancelled by a subsequent routine push entering
+> `web-1-swap` — the release then runs, not the recovery. It fails SAFE (nothing half-runs) and is
+> visible in the Actions UI; engage the merge-freeze/edit-lock (`guardrails.sh`) BEFORE an operator
+> recovery dispatch, and re-dispatch the recovery op if a release preempts it. A related mild coupling:
+> while a recreate/warm-standby job is pending on `web-1-swap` it still holds the workflow-level
+> `terraform-apply-web-platform-host` group, so a routine infra `apply` queues behind it for the
+> release-swap duration (liveness preserved — no cycle; a scheduling-latency residual alongside the G10
+> migrate-window one). The job-level `web-1-swap` group **coexists
 > with** the workflow-level `terraform-apply-web-platform-host` R2 state serializer (independent
 > scopes per the GitHub workflow-syntax reference) — the R2 serializer is UNCHANGED, so
 > `web_2_recreate`/`warm_standby`/pipeline-fix-`apply` keep their existing mutual serialization AND

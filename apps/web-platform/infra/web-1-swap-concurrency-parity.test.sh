@@ -112,18 +112,27 @@ for f in "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF"; do
   fi
 done
 
-# --- No stale `deploy-web-platform` group name remains anywhere (renamed to
-# web-1-swap; the old name was referenced only in web-platform-release.yml). ---
-if grep -rq 'deploy-web-platform' "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF"; then
-  fail "stale 'deploy-web-platform' reference remains (should be renamed to web-1-swap)"
+# --- No stale `deploy-web-platform` group NAME remains anywhere (the release
+# deploy job's old group was renamed to web-1-swap). Anchor to the `group:` key
+# shape so this asserts on a resurrected group DECLARATION only — a future
+# comment documenting the rename (e.g. "was deploy-web-platform") must not
+# false-FAIL this guard. ---
+if grep -rqE '^[[:space:]]*group:[[:space:]]*deploy-web-platform[[:space:]]*$' \
+  "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF"; then
+  fail "stale 'deploy-web-platform' concurrency group remains (should be renamed to web-1-swap)"
 else
   pass
 fi
 
 # --- Negative: the routine `apply` job in apply-web-platform-infra.yml must NOT
-# be a web-1-swap member (it does not POST /hooks/deploy / swap web-1). ---
+# be a web-1-swap member (it does not POST /hooks/deploy / swap web-1). Guard
+# the block-non-empty precondition first, else a renamed/removed job or an awk
+# extractor regression would vacuously PASS this negative check (grep -q on
+# empty input → non-zero → else-pass). ---
 routine_apply_block="$(job_block "$APPLY_INFRA_WF" "apply")"
-if printf '%s\n' "$routine_apply_block" | grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$'; then
+if [ -z "$routine_apply_block" ]; then
+  fail "routine 'apply' job not found in apply-web-platform-infra.yml — negative assertion cannot run (extractor regressed or job renamed)"
+elif printf '%s\n' "$routine_apply_block" | grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$'; then
   fail "routine 'apply' job in apply-web-platform-infra.yml is enrolled in web-1-swap (over-serialization trap)"
 else
   pass
