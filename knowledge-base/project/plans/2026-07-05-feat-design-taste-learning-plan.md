@@ -1,5 +1,5 @@
 ---
-title: "feat: design taste-learning — multi-variant fan-out + committed taste-profile"
+title: "feat: design taste-learning — multi-variant fan-out + context-keyed taste-profile"
 date: 2026-07-05
 type: feat
 lane: cross-domain
@@ -13,199 +13,259 @@ pr: 6053
 spec: knowledge-base/project/specs/feat-design-taste-learning/spec.md
 brainstorm: knowledge-base/project/brainstorms/2026-07-05-design-taste-learning-brainstorm.md
 semver: minor
+plan_review: 7-agent panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, cto-devex, ux-design-lead) + fable advisor; reshaped per operator User-Challenge decision
 ---
 
-# feat: design taste-learning — multi-variant + committed taste-profile
+# feat: design taste-learning — multi-variant + context-keyed taste-profile
 
-✨ Wave 3 · FR7 of the gstack-adoption epic (#5983). Adapts gstack's `design-shotgun`
-into Soleur's committed-knowledge, all-Claude frame: (1) multi-variant design fan-out and
-(2) a committed `taste-profile.md` that learns the operator's design preferences with
-write-time-recomputed decaying confidence + contradiction-flagging, **loaded via the FR6
-declarative context-injection hook** (#5989, merged PR #6035, ADR-086).
+✨ Wave 3 · FR7 of the gstack-adoption epic (#5983). Adapts gstack's `design-shotgun` into
+Soleur's committed-knowledge, all-Claude frame: (1) multi-variant design fan-out and (2) a
+committed, **context-keyed** `taste-profile.md` that learns the operator's design preferences
+by **recency** (not numeric decay), with contradiction-flagging scoped to the same design
+context, **loaded via the FR6 declarative context-injection hook** (#5989, PR #6035,
+ADR-086-declarative-skill-context-injection).
 
 ## Overview
 
 Soleur's two design surfaces — the `frontend-design` **skill** (coded UI) and the
 `ux-design-lead` **agent** (`.pen` wireframes) — each produce a single take with no memory
 across sessions. This feature fans out N parallel variants seeded by distinct aesthetic
-directions, records the operator's selection into a committed `taste-profile.md`, decays
-confidence at write time, and primes future sessions with the learned profile via FR6.
+directions, records the operator's selection into a committed `taste-profile.md`, and primes
+future sessions with the learned profile via FR6 (skill) / direct-Read (agent).
 
-Three operator-locked decisions (brainstorm Phase 2) drive the design:
-- **Write-time decay** (not a cron) — FR6 injects a *static pointer* (ADR-086), so decay is
-  baked into explicit `confidence` values and recomputed/rewritten at session start.
-- **Parallel sub-agent fan-out** (not multi-model) — all-Claude per ADR-053.
-- **Auto-supersede on contradiction** — the flag still *fires* (detect + log the event),
-  then the newest selection supersedes.
+**This plan was reshaped after a 7-agent plan-review panel + fable advisor** (operator
+User-Challenge decision: *Reshape — context-keyed, recency*). The design-taste + simplification
+panels converged that the originally-planned model (single global axis + numeric 90-day decay
++ auto-supersede) would **actively mis-learn**: an operator picking `minimalist` for a dashboard
+and `maximalist` for a landing page is *context-conditioned taste*, not a contradiction, so a
+context-blind model thrashes ("learned taste" → "the last thing you designed"). The reshape:
 
-## Research Reconciliation — Spec vs. Codebase
+- **Context-keyed entries** `(context, axis) → value` — contradiction fires only when the *same*
+  design context gets a different value (genuine signal; no cross-surface thrash).
+- **Recency, not numeric decay** — most-recently-reinforced (tie-break: higher `reinforce_count`)
+  primes; no confidence curve, no half-life. (The prior "90-day half-life" was mislabeled linear-
+  to-zero decay hitting the floor at exactly a solo operator's design cadence.)
+- **Sanitize ALL model-supplied write tokens** (context, axis, value, date) — not just `value` —
+  because every token is written into the committed file FR6 re-injects (ADR-086 content-trust).
+- **Agent reads, orchestrator writes** — `ux-design-lead` is an isolated Task subagent with no
+  operator, so it cannot capture a selection; it READS the profile to bias designs, and the
+  wireframe-approval orchestrator gate captures the pick and does the WRITE.
 
-| Spec/brainstorm claim | Codebase reality | Plan response |
+## Research Reconciliation — Spec vs. Codebase (+ panel reshape)
+
+| Claim / original plan | Codebase / panel reality | Plan response |
 |---|---|---|
-| "loaded via FR6" for both surfaces | FR6 hook (`.claude/hooks/skill-context-queries.sh`) matches the **Skill** tool only; `ux-design-lead` is an **agent** (Agent tool) → hook never fires | Skill loads via `context_queries`; agent loads via a direct-Read directive (FR6-equivalent, not a bespoke loader). ADR-086 §Surface scope already anticipates per-consumer surface choice. |
-| taste-profile "loaded via FR6" | FR6 requires the path be `git ls-files`-tracked (committed-only); an uncommitted path is skipped | **Seed a committed `taste-profile.md` in this PR** so the `context_queries` path resolves from day one. |
-| decaying confidence | ADR-086: pointer-only injection, no load-time compute | Write-time recompute; `confidence` + `last_reinforced` stored explicitly. |
-| taste-profile is agent-writable | **ADR-086 §Consequences (content-trust ≠ path-trust):** "consumers MUST sanitize/validate their own content" | Constrain entries to a **fixed enum vocabulary** (no free-form text) → eliminates the injection surface AND makes contradiction detection reliable (elevates brainstorm OQ3 to a decision). Helper sanitizes/validates every write. |
-| decay dating | Freshness convention (ADR-086-freshness) + `context-reviewed-gate.sh` PreToolUse hook: `last_updated`=any write, `last_reviewed`=human-review-only | Automated decay/selection writes bump `last_updated` only, **never** `last_reviewed`; seed commit is net-new (gate-exempt). |
-| fan-out via sub-agents | Agent-tool sub-agents run isolated — they do NOT inherit the parent's FR6 injection (learning 2026-06-30) | The orchestrator passes each variant sub-agent its aesthetic seed + taste bias via **prompt text**, not FR6. |
-| "no C4 impact" | `model.c4:304` `agents -> kb "Reads"` is falsified by ux-design-lead writing taste-profile.md (already writes `.pen` too) | Broaden that one edge to `"Reads/writes"`; no new elements/actors/systems (operator = existing `founder` actor; no new vendor; skills/agents/hooks/kb containers all exist). |
-| genuinely-absent taste artifact | grep confirms zero design-taste/design-variant/preference artifacts (only ADR-084 *decision* "taste") | "New capability" framing grounded. |
+| "loaded via FR6" for both surfaces | FR6 hook matches the **Skill** tool only (`.tool_input.skill`); `ux-design-lead` is an **agent** → hook never fires (Kieran + architecture confirmed provable) | Skill loads via `context_queries`; agent loads via direct-Read (FR6-equivalent). |
+| taste-profile "loaded via FR6" | FR6 requires `git ls-files`-tracked; uncommitted path skipped | **Seed a committed `taste-profile.md`** so the path resolves day one (not gitignored — verified). |
+| decaying confidence (issue AC) + single axis | **Design-taste + simplification panels:** context-blind single-axis + numeric decay mis-learns (thrash); "90-day half-life" is mislabeled linear-to-zero (0.5 at day 45) | **Reshape (operator-approved):** `(context, axis)` keying + recency ordering; drop numeric decay. Contradiction still fires (issue AC preserved), scoped to same context. |
+| content-trust = validate `<value>` | **architecture-strategist (critical):** `<axis>` + `<date>` are ALSO model-supplied and written into the FR6-re-injected file → injection hole | Validate **all** tokens: context/axis allowlists, value `^[a-z][a-z0-9-]*$`, date `^\d{4}-\d{2}-\d{2}$`; reject-and-preserve; AC asserts each. |
+| helper under `frontend-design/scripts/` | **architecture-strategist:** shared by the agent too = ownership inversion / "inappropriate intimacy" | **Hoist to `plugins/soleur/scripts/taste-profile-update.sh`** (plugin-shared; neither consumer owns the other's dependency). |
+| helper = awk/`tr` in-place markdown surgery | **fable advisor:** fragile; test matrix explodes | Helper = **parse fenced JSON block → single jq transform → re-render whole file → atomic tmp+mv**. `last_reviewed` passes through untouched by construction. |
+| agent Step 3.5 writes taste | **spec-flow (critical, G1):** agent is an isolated Task subagent with no operator → write path orphaned; no orchestrator edited | Agent READS only; the **wireframe-approval orchestrator gate** (brainstorm 3.55b / plan 2.5 §4b) captures the pick and writes. |
+| enum "matches" frontend-design tone list | **CTO + Kieran + architecture:** SKILL.md:17 is open prose ("…etc."), slash-compounds → un-assertable 3-way drift | Helper's list is **canonical**; SKILL is "seeded from / documented alongside"; **value is sanitized (open), not a closed enum** (records the operator's genuine novel directions faithfully). |
+| FR6 consistency test "resolves taste-profile" | **Kieran (Issue 3):** the real test asserts only `grep -qF 'knowledge-base/'` (≥1 artifact) — already true via brand-guide; doesn't verify the new entry | Add a **direct hook-invocation AC:** `printf '{"tool_input":{"skill":"soleur:frontend-design"}}' \| bash .claude/hooks/skill-context-queries.sh \| grep -qF 'taste-profile.md'`. |
+| decay is "deterministic" | **Kieran (Issue 1):** reading stored decayed confidence back in compounds → path-dependent | Moot — recency reshape removes numeric confidence entirely. |
+| "no C4 impact" | `agents -> kb "Reads"` (304) falsified by ux-design-lead's `.pen` writes | Broaden to `"Reads/writes"` (assert the **edge string**, not line 304 — Kieran Issue 6). Fan-out spawn stays below the C4 line (noted in ADR). |
+
+## Data Model — `knowledge-base/product/design/taste-profile.md`
+
+Human-legible markdown with a fenced machine block the helper owns:
+
+````markdown
+---
+last_updated: 2026-07-05      # bumped on every write (automated)
+last_reviewed: 2026-07-05     # human-review only — NEVER bumped by the helper
+review_cadence: quarterly
+owner: CPO
+---
+# Design Taste Profile
+<!-- Machine block: edited ONLY by plugins/soleur/scripts/taste-profile-update.sh. Do not hand-edit. -->
+```json
+{ "schema": 1,
+  "entries": [
+    {"context":"dashboard","axis":"aesthetic-direction","value":"minimalist","last_reinforced":"2026-07-05","reinforce_count":2}
+  ],
+  "contradictions": [
+    {"context":"landing-page","axis":"aesthetic-direction","old_value":"editorial","new_value":"maximalist","old_count":1,"date":"2026-07-05"}
+  ] }
+```
+## Reinforced Aesthetics
+<!-- human-readable table re-rendered from entries[] by the helper -->
+## Contradiction Flags
+<!-- human-readable log re-rendered from contradictions[] -->
+````
+
+- **context** ∈ fixed allowlist: `landing-page | marketing-site | dashboard | app-ui | docs | email | component`.
+- **axis** ∈ fixed allowlist (v1): `aesthetic-direction`. (Axis decomposition — density/color-temp/type — deferred to v2.)
+- **value**: sanitized `^[a-z][a-z0-9-]*$`, ≤40 chars (seed suggestions from frontend-design's tone list; open, not closed).
+- **Priming:** for the current context, the most-recent entry per axis (tie-break higher `reinforce_count`).
+- **Contradiction:** same `(context, axis)`, different `value` → append to `contradictions[]` (old value + old count + date) then supersede. No cross-context contradiction.
 
 ## Files to Create
 
-- `knowledge-base/product/design/taste-profile.md` — seeded committed artifact (frontmatter + empty `## Reinforced Aesthetics` + `## Contradiction Flags` + an embedded schema comment). Confirmed committable (`git check-ignore` → not ignored).
-- `plugins/soleur/skills/frontend-design/scripts/taste-profile-update.sh` — shared write helper: parse frontmatter (awk `c==1` idiom), recompute decay, detect+log contradiction, auto-supersede, **validate against the fixed enum + sanitize**, atomic tmp+mv write, bump `last_updated` only.
-- `plugins/soleur/skills/frontend-design/scripts/taste-profile-update.test.sh` — git-init fixture harness (pattern: `.claude/hooks/skill-context-queries.test.sh`): decay math, reinforce-reset, contradiction detect+log+supersede, enum-reject of out-of-vocabulary/injection input, atomic-write-preserves-original-on-failure, `last_reviewed`-untouched.
-- `knowledge-base/engineering/architecture/decisions/ADR-087-committed-taste-profile-learned-design-preferences.md` — new ADR (provisional 087; **note the pre-existing ADR-086 triple-collision** — flag as out-of-scope tracking, do not renumber here). Records: skill-vs-agent load asymmetry, write-time-decay-over-cron, fixed-enum content-trust; extends ADR-086 §Consequences with the agent-surface observation.
+- `knowledge-base/product/design/taste-profile.md` — seeded committed artifact (empty `entries[]`/`contradictions[]`). Committable (verified). Frontmatter `last_reviewed` set once at seed (net-new → `context-reviewed-gate.sh` exempt).
+- `plugins/soleur/scripts/taste-profile-update.sh` — plugin-shared helper. Two modes: **write** `<profile> <context> <axis> <value> <today>` (validate all four tokens → parse fenced JSON → one jq transform: upsert `(context,axis)`→value + `last_reinforced=today` + `reinforce_count++`; on differing prior value append a `contradictions[]` entry → supersede → re-render → atomic tmp+mv → bump `last_updated` only); **validate** `--validate <profile>` (schema + allowlist + sanitize check; non-zero on any violation). No decay math.
+- `plugins/soleur/scripts/taste-profile-update.test.sh` — git-init fixture harness (pattern: `.claude/hooks/skill-context-queries.test.sh`): upsert/reinforce, recency priming, same-context contradiction append+supersede, **cross-context NON-contradiction** (dashboard≠landing coexist), reject+preserve for out-of-allowlist context/axis, bad-format value, bad-format date, `--validate` failure, `last_reviewed` byte-unchanged, atomic-preserve-on-failure.
+- `knowledge-base/engineering/architecture/decisions/ADR-087-context-keyed-taste-profile-and-agent-surface-injection.md` — rich template (new trust boundary + cross-surface decision, per AP-011). Records: (1) Agent-tool surface gap + agent-reads/orchestrator-writes (extends `ADR-086-declarative-skill-context-injection` §Consequences — **full slug**, bare "086" is ambiguous per the triple-collision); (2) context-keyed recency model (recency over numeric decay; `(context,axis)` over global axis to prevent thrash); (3) note fan-out spawn stays below the C4 container line; (4) note injected values carry no confidence number (recency is date-based, read faithfully). Flag the ADR-086 triple-collision as out-of-scope tracking (do not renumber).
 
 ## Files to Edit
 
-- `plugins/soleur/skills/frontend-design/SKILL.md` — add `- knowledge-base/product/design/taste-profile.md` to `context_queries`; add a `## Multi-Variant Fan-Out` section (spawn N Agent sub-agents seeded by distinct directions biased to the top taste-profile entries, passing the seed via prompt text) and a `## Recording Taste` section (on operator selection → invoke the helper). Link the helper script per skill-compliance (`[taste-profile-update.sh](./scripts/taste-profile-update.sh)`). **No `description:` change** → word-budget untouched.
-- `plugins/soleur/agents/product/design/ux-design-lead.md` — add a pre-Step-1 direct-Read directive ("Read `knowledge-base/product/design/taste-profile.md` if present; use top-confidence directions as secondary constraints alongside brand-guide"); add a Step 1.5 variant fan-out; add a Step 3.5 selection-capture invoking the helper. Honor existing HARD GATEs (output path, size gates).
-- `knowledge-base/engineering/architecture/diagrams/model.c4` — line 304 `agents -> kb "Reads"` → `agents -> kb "Reads/writes"`.
-- `README.md` / `plugin.json` — **no change** (no new skill/agent/command; scripts + ADR are not counted components). Pre-commit checklist: confirm counts unchanged.
+- `plugins/soleur/skills/frontend-design/SKILL.md` — add `- knowledge-base/product/design/taste-profile.md` to `context_queries`; add a `### Multi-Variant Fan-Out` section (identical grep-anchor, shared with the agent) + a `### Recording Taste` section. Read path runs `taste-profile-update.sh --validate` (fail → design with no bias); biases the N sub-agent seeds (passed via **prompt text**) to the current context's recent entries; **mode predicate**: interactive selection is captured via natural conversation (NOT `AskUserQuestion`); if no operator turn is available (headless/nested Task) → auto-select top-recency + **no write**. Empty-profile fallback: N distinct enum seeds. On selection → call the helper with the current context. Link the helper (`[taste-profile-update.sh](../../scripts/taste-profile-update.sh)`). **No `description:` change** → word budget untouched.
+- `plugins/soleur/agents/product/design/ux-design-lead.md` — pre-Step-1 direct-Read + `--validate` of the taste-profile (bias only, fail→no-bias); a `### Multi-Variant Fan-Out` section (same anchor) at Step 1.5; **explicit "this agent never writes taste — the orchestrator does"** directive (mirroring Step 3 item 5). Returns variants + a machine-readable selection-candidate. Honor existing HARD GATEs.
+- `plugins/soleur/skills/brainstorm/SKILL.md` (Phase 3.55b) **and** `plugins/soleur/skills/plan/SKILL.md` (Phase 2.5 §4b) — at the wireframe **approve** branch, after operator approval, call `taste-profile-update.sh` with the design context + the approved variant's aesthetic direction. This is the agent surface's real writer path. (Interactive arm only; headless arm already no-pause → no write.)
+- `knowledge-base/engineering/architecture/diagrams/model.c4` — `agents -> kb "Reads"` → `agents -> kb "Reads/writes"` (assert the edge string).
+- `README.md` / `plugin.json` — **no change** (no new skill/agent/command; scripts + ADR are not counted). Confirm counts unchanged.
 
-## Decisions (brainstorm OQs → resolved)
+## Decisions (post-review)
 
 | Ref | Decision |
 |---|---|
-| Location | `knowledge-base/product/design/taste-profile.md` |
-| OQ1 write path | **Shared jq+bash helper** (decay + contradiction + sanitize + atomic write are non-trivial and MUST be identical across skill+agent per TR3, and deterministic per TR2 — one tested script beats two prose copies that drift) |
-| OQ2 decay | Linear-to-floor: `confidence = max(FLOOR, confidence * (1 - days_since_reinforced / HALFLIFE_DAYS))`, `HALFLIFE_DAYS=90` (matches quarterly cadence), `FLOOR=0.1`; reselect resets to `1.0`. Deterministic — date passed in as an arg (no `Date.now()`). |
-| OQ3 vocabulary | **Fixed enum** aesthetic-direction axis seeded from `frontend-design`'s tone list (brutally-minimal, maximalist, retro-futuristic, organic, luxury-refined, playful, editorial, brutalist, art-deco, soft-pastel, industrial). Extensible to secondary axes later. Fixed enum = content-trust-safe + reliable contradiction detection. |
-| OQ4 negative evidence | MVP records **positive** (selected) evidence only; rejected-variant negative evidence deferred (non-goal). |
-| OQ5 rebase | Done — branch base already contains PR #6035 (FR6 hook verified present). |
-| Surface scope | **CLI-first**: the skill's FR6 load is CLI-only (web Concierge runs `settingSources:[]`, ADR-086 §Surface scope); the agent's direct-Read is surface-independent. Accept the Concierge skill-load gap; **defer web port** to a tracked follow-up (co-filed with ADR-086's existing deferred surface follow-up). |
-| N variants | Default 3 (parameterizable). |
-| Headless mode | Fan-out generates variants; auto-selects the highest-confidence direction and does **NOT** write reinforcement (no operator signal = no learning). Mirrors the wireframe-review mode branch. |
+| Model | `(context, axis) → value`, recency-ordered; no numeric confidence/decay |
+| OQ1 helper | Plugin-shared `plugins/soleur/scripts/taste-profile-update.sh`, jq-over-fenced-JSON, atomic tmp+mv, `--validate` read-path mode |
+| OQ2 decay | **Removed** — recency (`last_reinforced`, tie-break `reinforce_count`) replaces the numeric curve |
+| OQ3 value | Sanitized open token (`^[a-z][a-z0-9-]*$`), not a closed enum; helper list is canonical seed suggestions; context+axis are closed allowlists |
+| OQ4 negative evidence | Deferred (v2) |
+| Axis decomposition | Deferred (v2) — single `aesthetic-direction` axis in v1; ux-design-lead's density/color-temp/type sub-axes are the follow-up |
+| Agent write | **Orchestrator writes** at the wireframe-approval gate; agent reads only |
+| Mode predicate | Interactive = natural-conversation selection; no operator turn (headless/nested Task) = auto-select top-recency, no write. Never `AskUserQuestion` in a design surface. |
+| Empty profile | Seeding + headless fall back to N distinct enum seeds / no-op-no-write |
+| Surface scope | CLI-first skill FR6 load (web Concierge gap deferred, ADR-086 tracked); agent direct-Read + orchestrator write are surface-independent |
+| N variants | 3 (hardcoded; not parameterized) |
 
 ## Implementation Phases
 
-**Phase 0 — Preconditions (mostly complete):** FR6 hook present ✓, taste-profile committable ✓, ADR-087 free ✓, `model.c4:304` located ✓, enum sourced from `frontend-design` tone list ✓. Confirm `taste-profile-update.sh` invocation form with a fixture before wiring call sites.
+**Phase 0 — Preconditions (done):** FR6 hook present; committable; ADR-087 free; `model.c4` edge located; freshness gate net-new-exempt confirmed.
 
-**Phase 1 — Helper + tests (contract first, TDD).** Write `taste-profile-update.test.sh` RED, then `taste-profile-update.sh` GREEN. Helper contract: `taste-profile-update.sh <profile-path> <axis> <value> <today-YYYY-MM-DD>`; validates `<value>` ∈ enum (reject + non-zero exit otherwise, sanitizing the echoed value), recomputes decay across all entries, reinforces/inserts the selected entry (`confidence=1.0`, `last_reinforced=<today>`), detects same-axis contradiction (existing high-confidence entry with a different value) → appends a `## Contradiction Flags` line (flag fires) → supersedes, bumps frontmatter `last_updated` only, writes atomically (tmp + `mv`), preserves the original on any validation failure. Idioms: awk `c==1` frontmatter parse; `tr ',' '\n' | while IFS= read -r` for multi-value (never `tr -d ' '`). **Deterministic** (date is an arg).
+**Phase 1 — Helper + tests (contract first, TDD).** `taste-profile-update.test.sh` RED → `taste-profile-update.sh` GREEN. jq-over-fenced-JSON; validate all four tokens (allowlist context/axis, sanitize value, format date); atomic tmp+mv; `last_updated`-only; `--validate` mode. Idioms: awk `c==1` to slice the fenced block; jq for the transform.
 
-**Phase 2 — Seed the committed artifact.** Create `taste-profile.md` (frontmatter `last_updated`/`last_reviewed`/`review_cadence: quarterly`/`owner: CPO`, empty `## Reinforced Aesthetics` table, empty `## Contradiction Flags`, schema comment). Commit so the FR6 path resolves.
+**Phase 2 — Seed the committed `taste-profile.md`** (empty arrays; frontmatter). Commit so FR6 resolves.
 
-**Phase 3 — Wire `frontend-design` skill.** Add the `context_queries` entry; add fan-out + record-taste sections (mode-branch: interactive selection vs headless auto-select-no-write); link the helper.
+**Phase 3 — Wire `frontend-design` skill** (context_queries + fan-out + record-taste + mode predicate + `--validate`).
 
-**Phase 4 — Wire `ux-design-lead` agent.** Direct-Read directive + Step 1.5 fan-out + Step 3.5 helper call. The agent passes each variant's aesthetic seed via prompt text (sub-agents don't inherit FR6).
+**Phase 4 — Wire `ux-design-lead` agent** (direct-Read + `--validate` + fan-out; explicit no-write directive).
 
-**Phase 5 — ADR-087 + C4.** Author ADR-087 (extends ADR-086; flags the 086 triple-collision as out-of-scope tracking). Broaden `model.c4:304` to `Reads/writes`; run the C4 validation tests (`apps/web-platform/test/c4-code-syntax.test.ts`, `c4-render.test.ts`).
+**Phase 5 — Wire the orchestrator write** at brainstorm 3.55b + plan 2.5 §4b approve branches.
 
-**Phase 6 — Verify.** Run `taste-profile-update.test.sh`; run `.claude/hooks/skill-context-queries.test.sh` (FR6 consistency — pilot resolves ≥1 artifact, now also taste-profile via frontend-design); AC checks below.
+**Phase 6 — ADR-087 + C4** (broaden edge; run `c4-code-syntax.test.ts` + `c4-render.test.ts`).
+
+**Phase 7 — Verify** (`taste-profile-update.test.sh`; the direct FR6 hook-invocation check; AC checks).
 
 ## Observability
 
-The `taste-profile-update.sh` helper is under `plugins/*/scripts/` (gate fires). It is an **operator-local interactive tool**, not a dark server/cron surface — the agent running it sees stdout/stderr in-session.
+The helper is under `plugins/*/scripts/` (gate fires). It is an **operator-local interactive tool**, not a dark server/cron surface — the running agent sees stdout/stderr in-session.
 
 ```yaml
 liveness_signal:
-  what: helper invoked on operator variant-selection during a design session
+  what: helper invoked on operator variant-selection / wireframe-approval
   cadence: on-demand (no scheduled run)
-  alert_target: none (interactive; failure is visible in-session)
-  configured_in: frontend-design/SKILL.md + ux-design-lead.md call sites
+  alert_target: none (interactive; failure visible in-session)
+  configured_in: frontend-design/SKILL.md, brainstorm/plan orchestrator approve gates
 error_reporting:
-  destination: stderr + non-zero exit surfaced inline by the calling skill/agent
-  fail_loud: true (validation failure exits non-zero, original file preserved)
+  destination: stderr + non-zero exit surfaced inline by the caller
+  fail_loud: true (validation failure exits non-zero; original preserved)
 failure_modes:
-  - mode: out-of-enum / injection value in evidence
-    detection: enum validation before write
-    alert_route: non-zero exit + sanitized stderr message, in-session
-  - mode: malformed frontmatter / partial write
-    detection: parse-then-validate before atomic mv; tmp file discarded on failure
-    alert_route: non-zero exit; original taste-profile.md untouched
-  - mode: contradiction on same axis
-    detection: same-axis differing high-confidence entry
-    alert_route: logged to the `## Contradiction Flags` section (durable, greppable)
+  - mode: out-of-allowlist context/axis, or metachar/whitespace value, or bad date
+    detection: token validation before write; --validate read-path check
+    alert_route: non-zero exit + sanitized stderr, in-session; consumer falls back to no-bias
+  - mode: malformed fenced JSON / partial write
+    detection: jq parse-then-validate; tmp discarded on failure
+    alert_route: non-zero exit; taste-profile.md untouched
+  - mode: same-context contradiction
+    detection: same (context,axis), differing value
+    alert_route: appended to contradictions[] (durable, greppable) + in-session echo
 logs:
-  where: taste-profile.md `## Contradiction Flags` section (event log); helper stderr (errors)
+  where: taste-profile.md contradictions[] / Contradiction Flags section; helper stderr
   retention: committed to git (permanent)
 discoverability_test:
-  command: bash plugins/soleur/skills/frontend-design/scripts/taste-profile-update.test.sh
-  expected_output: all cases pass (decay, reinforce, contradiction+supersede, enum-reject, atomic-preserve, last_reviewed-untouched)
+  command: bash plugins/soleur/scripts/taste-profile-update.test.sh
+  expected_output: all cases pass (upsert, recency, same-context contradiction, cross-context non-contradiction, token rejection, --validate, last_reviewed-untouched, atomic-preserve)
 ```
 
 ## Infrastructure (IaC)
 
-None — no server, secret, vendor, DNS, cron, or persistent runtime process. Decay is write-time (no cron). IaC gate skipped.
+None — no server/secret/vendor/DNS/cron/runtime process. Recency is write-time. IaC gate skipped.
 
 ## GDPR / Compliance
 
-**Regulated-data surface: none.** Trigger (b) (`single-user incident` declared) fires the gate *consideration*; assessment: the taste-profile stores the operator's own **design-aesthetic metadata** (enum axis/value + selection date), no data subject, no PII, no special category, no egress. FR2 + the fixed-enum vocabulary structurally prevent free-form personal-data capture; the helper sanitizes every write. No new sub-processor (all-Claude). CLO carry-forward (below) cleared egress. No `compliance-posture.md` write needed.
+**Regulated-data surface: none.** Trigger (b) (`single-user incident`) fires the *consideration*; assessment: the taste-profile stores the operator's own **design-aesthetic metadata** (context/axis/value enums + dates), no data subject, no PII, no special category, no egress. Token sanitization + the closed context/axis allowlists structurally prevent free-form personal-data capture; the helper validates every write and the consumers `--validate` on read. No new sub-processor (all-Claude). CLO carry-forward cleared egress. No `compliance-posture.md` write.
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-- **Create ADR-087** (provisional ordinal — next free after the ADR-086 triple; the 086 collision is pre-existing and flagged as a separate out-of-scope tracking item, not renumbered here). Decision: committed `taste-profile.md` of learned design preferences, write-time-decayed, fixed-enum-vocabulary (content-trust-safe per ADR-086), loaded via FR6 (skill) / direct-Read (agent). **Extends** ADR-086 §Consequences with the agent-surface observation (the `Skill` matcher does not reach Agent-tool invocations). `status: Accepted` — the decision is true at merge (no soak gate).
+Create **ADR-087** (rich template; provisional ordinal — `/ship` re-verifies next-free before merge; the ADR-086 triple-collision is pre-existing and flagged as out-of-scope tracking). Decisions: agent-surface injection gap + agent-reads/orchestrator-writes; context-keyed recency taste model; token-sanitization trust boundary. References `ADR-086-declarative-skill-context-injection` by **full slug**. `status: Accepted`.
 
 ### C4 views
-- **Container/Component:** no new element. Enumeration checked against all three `.c4` files: external human actor = existing `founder` actor (model.c4:8); no new external system/vendor (all-Claude); no new container (`skills`, `agents`, `hooks`, `kb` all present); access-relationships `hooks -> kb` (context_queries injection, model.c4:302) and `skills -> kb "Reads/writes"` (303) already model the load + write paths. The **only** falsified description is `agents -> kb "Reads"` (304) — ux-design-lead now writes taste-profile.md (and already writes `.pen`). Fix: broaden to `"Reads/writes"`. This is a correctness edit the change requires, not a new view.
+No new element. Enumeration checked against all three `.c4` files: external human actor = existing `founder` (model.c4:8); no new vendor/system (all-Claude); containers `skills`/`agents`/`hooks`/`kb` all present; access edges `hooks -> kb` (302), `skills -> kb "Reads/writes"` (303) model the load+write. **Only** falsified description: `agents -> kb "Reads"` (304) → `"Reads/writes"` (ux-design-lead writes `.pen`; broaden is symmetric with 303). Multi-variant fan-out is a runtime spawn at container granularity, below the C4 line (the model shows spawns only at `api -> claude`); recorded in ADR-087 rather than adding a component-level edge.
 
 ### Sequencing
-ADR + C4 land in this PR (Phase 5). No deferral.
+ADR + C4 land in this PR (Phase 6). No deferral.
 
 ## Domain Review
 
-**Domains relevant:** Engineering, Legal (carried forward from epic #5983 brainstorm `## Domain Assessments`).
+**Domains relevant:** Engineering, Legal (carried forward from epic #5983 brainstorm).
 
 ### Engineering (CTO)
-**Status:** reviewed (carry-forward + FR7 delta)
-**Assessment:** Ride FR6 (landed), no bespoke loader. FR7 delta: FR6 Skill-matcher does not reach the agent surface → direct-Read; write-time decay forced by pointer-only injection; fan-out sub-agents need the taste bias passed via prompt (isolation). Low blast radius — additive frontmatter + agent-body + one committed artifact + one tested helper; no shared-hook edits, no product-runtime code, FR6 is fail-open by construction.
+**Status:** reviewed (carry-forward + FR7 delta + devex panel)
+**Assessment:** Ride FR6 (landed), no bespoke loader. Low blast radius — additive frontmatter/agent-body/orchestrator-gate + one plugin-shared tested helper + one committed artifact; no product-runtime code; FR6 fail-open. Devex-panel adjustments folded: helper hoisted to plugin-shared; value sanitized (not a drifting enum-vs-prose "match"); fan-out anchor shared across both files.
 
 ### Legal (CLO)
 **Status:** reviewed (carry-forward)
-**Assessment:** taste-profile is committed design-preference metadata, no egress to any sub-processor, no PII. Redaction gate (#5987) governs *egress* features — not tripped. Fixed-enum + FR2 keep operator-customer content out of the artifact.
+**Assessment:** committed design-preference metadata, no egress, no PII. Redaction gate (#5987) governs egress — not tripped. Closed context/axis allowlists + value sanitization keep operator-customer content out.
 
 ### Product/UX Gate
-**Tier:** none
-**Decision:** N/A — no UI-surface file in Files to Create/Edit (internal tooling that *generates* UI; does not *add* a product page/component/modal). Mechanical UI-surface override did not fire. Consistent with the brainstorm's Phase 3.55 skip.
-**Pencil available:** N/A (no UI surface)
+**Tier:** none — no UI-surface file in Files to Create/Edit (internal tooling that *generates* UI). Consistent with the brainstorm Phase 3.55 skip.
+**Pencil available:** N/A (no UI surface authored by this plan)
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** design sessions primed with a wrong learned taste (a malformed decay/supersede write biasing every future `frontend-design`/`ux-design-lead` run toward a preference the operator never chose), or a design skill that silently ignores the profile.
-**If this leaks, the user's data is exposed via:** the `taste-profile.md` artifact — mitigated by the fixed-enum vocabulary (no free-form/PII capture), helper sanitization, and ADR-086's committed-only/path-contained FR6 fencing. FR6 is fail-open (ADR-086: exit 0 every path; PostToolUse cannot fail-closed skills), capping loader-side blast radius.
+**If this lands broken, the user experiences:** design sessions primed with a wrong learned taste — mitigated by context-keying (no cross-surface thrash) and read-path `--validate` (fail → no bias, never a corrupt prime).
+**If this leaks, the user's data is exposed via:** the `taste-profile.md` artifact — mitigated by closed context/axis allowlists + value sanitization (no free-form/PII capture), helper validation, and ADR-086's committed-only/path-contained FR6 fencing (fail-open, cannot fail-closed skills).
 **Brand-survival threshold:** single-user incident.
 
-`requires_cpo_signoff: true` — CPO framing carried from the epic brainstorm (Product not re-spawned; internal tooling, Product/UX Gate = NONE). `user-impact-reviewer` will be invoked at review time.
+`requires_cpo_signoff: true` — CPO framing carried from the epic brainstorm; `user-impact-reviewer` invoked at review time.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] **AC1 (variants):** `frontend-design/SKILL.md` and `ux-design-lead.md` each contain a multi-variant fan-out section that seeds N (default 3) distinct aesthetic directions and passes each seed via prompt text. Verify: `grep -c` the fan-out heading in both files = 1 each.
-- [ ] **AC2 (persist + load — skill via FR6):** `frontend-design/SKILL.md` frontmatter `context_queries` contains `knowledge-base/product/design/taste-profile.md`; the file is committed and `git ls-files`-tracked. Verify: `git ls-files --error-unmatch knowledge-base/product/design/taste-profile.md` exits 0, and the FR6 consistency test resolves it.
-- [ ] **AC3 (load — agent via direct-Read):** `ux-design-lead.md` contains a directive to Read `knowledge-base/product/design/taste-profile.md` before designing. Verify: `grep -q "taste-profile.md" ux-design-lead.md`.
-- [ ] **AC4 (contradiction flag fires):** `taste-profile-update.test.sh` includes a case where a new same-axis selection contradicting a high-confidence entry appends a `## Contradiction Flags` log line AND supersedes; test passes.
-- [ ] **AC5 (decay determinism):** helper recomputes confidence from `last_reinforced` + a passed-in date with no `Date.now()`; test asserts a known input→output.
-- [ ] **AC6 (content-trust):** helper rejects (non-zero exit, original preserved) an out-of-enum / instruction-bearing value; test passes. Enum vocabulary matches `frontend-design`'s tone list.
-- [ ] **AC7 (freshness):** an automated decay/selection write bumps `last_updated` only; `last_reviewed` is byte-unchanged. Test asserts.
-- [ ] **AC8 (helper tests + FR6 test):** `taste-profile-update.test.sh` passes; `.claude/hooks/skill-context-queries.test.sh` passes.
-- [ ] **AC9 (C4):** `model.c4:304` reads `agents -> kb "Reads/writes"`; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
-- [ ] **AC10 (ADR):** `ADR-087-*.md` exists, status Accepted, references ADR-086, and notes the agent-surface extension; the 086 collision is flagged as out-of-scope.
-- [ ] **AC11 (no component drift):** README component counts + `plugin.json` unchanged (no new skill/agent/command).
+- [ ] **AC1 (variants — shared anchor):** both `frontend-design/SKILL.md` and `ux-design-lead.md` contain the literal `### Multi-Variant Fan-Out`. Verify: `grep -c '^### Multi-Variant Fan-Out' <file>` = 1 each.
+- [ ] **AC2 (persist + FR6 load):** `context_queries` in `frontend-design/SKILL.md` includes the taste-profile path; the file is `git ls-files`-tracked; the hook injects it. Verify: `git ls-files --error-unmatch knowledge-base/product/design/taste-profile.md` exits 0 **AND** `printf '{"tool_input":{"skill":"soleur:frontend-design"}}' | bash .claude/hooks/skill-context-queries.sh | grep -qF 'taste-profile.md'`.
+- [ ] **AC3 (agent reads, does not write):** `ux-design-lead.md` contains a Read directive for the taste-profile AND an explicit "this agent never writes taste — the orchestrator does" line. Verify: both grep.
+- [ ] **AC4 (contradiction — same context only):** test asserts same-`(context,axis)` differing value appends a `contradictions[]` entry (old value+count+date) + supersedes, AND a different-context selection does NOT flag. Both pass.
+- [ ] **AC5 (all tokens sanitized):** helper rejects (non-zero, original byte-preserved) an out-of-allowlist `context`, out-of-allowlist `axis`, metachar/whitespace `value`, and malformed `date`. Test asserts each of the four.
+- [ ] **AC6 (recency, no decay):** priming selects the most-recent entry per `(context,axis)` (tie-break `reinforce_count`); no `confidence`/`HALFLIFE` tokens exist in the helper or profile. Verify: `! grep -qiE 'halflife|confidence' plugins/soleur/scripts/taste-profile-update.sh`.
+- [ ] **AC7 (freshness):** an automated write bumps `last_updated` only; `last_reviewed` byte-unchanged. Test asserts.
+- [ ] **AC8 (end-to-end, per surface):** (skill) a simulated in-session selection drives the helper call and adds the `(context,axis)` entry; (agent) a simulated orchestrator approve-branch call adds the entry. Both post-conditions asserted (not grep-presence).
+- [ ] **AC9 (read-path validate):** both consumers invoke `taste-profile-update.sh --validate` before biasing, and fall back to no-bias on non-zero. Verify: grep each consumer for `--validate`.
+- [ ] **AC10 (helper + FR6 tests):** `taste-profile-update.test.sh` passes; `.claude/hooks/skill-context-queries.test.sh` passes.
+- [ ] **AC11 (C4):** `model.c4` contains `agents -> kb "Reads/writes"` (assert the string); `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
+- [ ] **AC12 (ADR):** `ADR-087-*.md` exists, status Accepted, references `ADR-086-declarative-skill-context-injection` by full slug, records the three decisions; 086 collision flagged out-of-scope.
+- [ ] **AC13 (no component drift):** README counts + `plugin.json` unchanged.
 
 ### Post-merge (operator)
-- None. (Web-Concierge FR6 surface port is a **deferred follow-up issue**, not a merge-gated step — see below.)
+- None. (Web-Concierge FR6 surface port is a deferred follow-up, not a merge-gated step.)
 
-## Deferred / Tracking
+## Deferred / Tracking (file as issues at ship)
 
-- **Web-Concierge FR6 port** (skill-side taste-profile auto-load on the web surface). ADR-086 already tracks a surface-parity follow-up; co-file this consumer's need there. Re-eval when a design skill is run from Concierge and the missing prime is felt.
-- **ADR-086 ordinal triple-collision** (three ADRs numbered 086 on main). File a housekeeping issue to renumber two of them; out of scope here.
-- **Negative-evidence learning** (OQ4) — record rejected variants to speed convergence. Re-eval after taste-profile has ≥10 reinforcements.
+- **Axis decomposition** — density / color-temperature / type-style / corners sub-axes (ux-design-lead: the person-invariant signal that transfers across projects). Re-eval after the single-axis loop has real reinforcement data.
+- **Negative-evidence learning** (OQ4) — record rejected variants to speed convergence.
+- **Web-Concierge FR6 skill-load port** — co-file onto ADR-086's tracked surface-parity follow-up.
+- **ADR-086 ordinal triple-collision** — housekeeping renumber of two of the three 086 files.
 
 ## Test Scenarios
 
-- Decay: entry at `confidence 0.9, last_reinforced 90d ago` → recomputes to `0.1` floor; at `45d` → `~0.45`.
-- Reinforce: selecting an existing axis/value → `confidence 1.0`, `last_reinforced` = today, `last_updated` bumped, `last_reviewed` unchanged.
-- Contradiction+supersede: axis `aesthetic-direction` held `minimalist@0.8`; select `maximalist` → `## Contradiction Flags` gains a dated line, entry becomes `maximalist@1.0`, old `minimalist` superseded.
-- Injection reject: value `"maximalist; rm -rf /"` (out of enum) → non-zero exit, `taste-profile.md` byte-identical to pre-call.
-- Headless: fan-out auto-selects top-confidence direction, no reinforcement write.
+- Upsert+reinforce: select `dashboard/aesthetic-direction/minimalist` twice → one entry, `reinforce_count=2`, `last_reinforced`=today, `last_updated` bumped, `last_reviewed` unchanged.
+- Recency prime: `dashboard→minimalist@t1`, `dashboard→editorial@t2` (t2>t1) → priming for `dashboard` returns `editorial`.
+- Same-context contradiction: `landing-page→editorial` then `landing-page→maximalist` → `contradictions[]` gains `{old:editorial, old_count, date}`, entry becomes `maximalist`.
+- Cross-context NON-contradiction: `dashboard→minimalist` + `landing-page→maximalist` → both coexist, `contradictions[]` empty.
+- Token reject: `context=prod; rm -rf /` (out of allowlist) → non-zero exit, file byte-identical.
+- Headless: fan-out auto-selects top-recency for the context, **no write**.
 
 ## Sharp Edges
 
-- A `## User-Brand Impact` section that is empty/`TBD` fails `deepen-plan` Phase 4.6 — this one is filled.
-- The helper lives under a **skill's** `scripts/` but is called by an **agent** too; keep the path stable and the invocation identical across both call sites (TR3). If refactored, update both.
-- FR6 is **CLI-only** for the skill — do not claim the taste-profile auto-loads in web Concierge. The agent's direct-Read is the surface-independent path.
-- Do NOT let the automated write touch `last_reviewed` — the `context-reviewed-gate.sh` PreToolUse hook denies commits that change it without a `Context-Reviewed:` trailer.
-- Provisional ADR-087 ordinal: `/ship` re-verifies next-free against `origin/main` before merge (a sibling PR may claim 087 mid-pipeline).
+- Empty `## User-Brand Impact` fails `deepen-plan` Phase 4.6 — filled.
+- The helper is plugin-shared under `plugins/soleur/scripts/`; both consumers reference it by that stable path. If moved, update the skill, agent, and both orchestrator gates.
+- FR6 is **CLI-only** for the skill — the agent's direct-Read + the orchestrator write are the surface-independent paths; do not claim the skill auto-primes in web Concierge.
+- Never bump `last_reviewed` from the helper — `context-reviewed-gate.sh` denies commits changing it without a `Context-Reviewed:` trailer.
+- **Fan-out sub-agents don't inherit Pencil MCP** (Kieran): each `ux-design-lead` fan-out sub-agent producing a `.pen` must have Pencil MCP available, or the agent's 0-byte HARD GATE fires per variant → N empty files. Confirm MCP availability before fan-out, or degrade to sequential single-variant.
+- Never `AskUserQuestion` inside a design surface (skill fan-out or agent) — a nested Task subagent hangs; interactive selection is natural-conversation, headless is auto-select-no-write.
+- Provisional ADR-087 ordinal: `/ship` re-verifies next-free against `origin/main` before merge.

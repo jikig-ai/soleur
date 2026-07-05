@@ -93,5 +93,31 @@ without any bespoke loader.
 - OQ1 shared write helper vs documented schema
 - OQ2 exact decay curve + half-life
 - OQ3 contradiction axis vocabulary (fixed enum vs free-form)
-- OQ4 record rejected variants as negative evidence?
-- OQ5 rebase base onto origin/main (also TR4)
+- OQ4 record rejected variants as negative evidence? → **deferred v2**
+- OQ5 rebase base onto origin/main (also TR4) → **done**
+
+## v1 Reshape (post-plan-review, 2026-07-05) — authoritative
+
+A 7-agent plan-review panel + fable advisor reshaped v1 (operator User-Challenge decision:
+*context-keyed, recency*). These supersede the FRs above where they conflict. Full rationale:
+`knowledge-base/project/plans/2026-07-05-feat-design-taste-learning-plan.md`.
+
+- **FR2/FR4 revised:** entries are keyed by `(context, axis) → value` and ordered by **recency**
+  (`last_reinforced`, tie-break `reinforce_count`) — the numeric 90-day "decaying confidence"
+  is **removed** (it mis-labeled linear-to-zero decay and, context-blind, caused the profile to
+  thrash). This is a deliberate, operator-approved deviation from #5990's literal
+  "decaying confidence" wording; recency is the honest realization of the intent
+  ("fades unless reinforced") without false precision.
+- **FR5 revised:** contradiction fires only within the **same** `(context, axis)` — an operator
+  preferring `minimalist@dashboard` and `maximalist@landing-page` is context-conditioned taste,
+  not a contradiction. The flag still fires (issue AC preserved), scoped correctly.
+- **FR6-load revised:** consumers run `taste-profile-update.sh --validate` before biasing and
+  fall back to no-bias on failure (ADR-086 content-trust enforced at the **consume** path, not
+  just the writer). The shared helper is hoisted to `plugins/soleur/scripts/`.
+- **Agent write revised:** `ux-design-lead` (isolated Task subagent, no operator) **reads** the
+  profile only; the **wireframe-approval orchestrator gate** (brainstorm 3.55b / plan 2.5 §4b)
+  captures the operator's pick and does the write.
+- **New TR (content-trust):** ALL model-supplied write tokens are validated — closed allowlists
+  for `context` + `axis`, sanitized `^[a-z][a-z0-9-]*$` for `value`, `^\d{4}-\d{2}-\d{2}$` for date.
+- **Deferred to v2:** axis decomposition (density/color-temp/type sub-axes), negative-evidence
+  learning, web-Concierge FR6 skill-load port.
