@@ -75,6 +75,14 @@ per-worktree config (`config.worktree`, unmasked).
 - **Declared the wedge fixed end-to-end after verifying only the sweep ran.** See Key
   Insight 1. **Prevention:** for a blind surface, reproduce the user action; if you
   cannot (Concierge session), say so and gate the "fixed" claim on the user's retry.
+- **Seed passed locally, failed in CI (`extensions.worktreeConfig` null).** The seed
+  was placed INSIDE `provisionWorkspace`'s `git init → add → commit` try, after the
+  commit. A CI runner (and a prod host) with no git identity throws at `git commit`,
+  so the catch swallowed it and the seed never ran — invisible locally where a global
+  identity exists. **Prevention:** a best-effort step that must run regardless of an
+  earlier step's failure belongs OUTSIDE that step's try. Reproduce a "works locally,
+  red in CI" gap by stripping the ambient state CI lacks
+  (`env GIT_CONFIG_GLOBAL=/dev/null GIT_AUTHOR_NAME= …`) — don't assume flake.
 
 ## Follow-ups
 
