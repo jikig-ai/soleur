@@ -342,20 +342,14 @@ runcmd:
   - systemctl restart docker
 
   # BEGIN host-script extraction (#5921) — verify + launch the baked bootstrap installer.
-  # The 22 scripts + hooks.json.tmpl + soleur-host-bootstrap.sh were removed from write_files:
-  # above (as base64 blobs they blew Hetzner's 32,768-byte user_data cap) and baked into
-  # ${image_name} at /opt/soleur/host-scripts/. This minimal launcher — after `systemctl
-  # restart docker` (docker is up) and BEFORE the first consumer — `docker cp`s the baked
-  # assets, recomputes the combined content-hash, compares it to the Terraform-computed
-  # host_scripts_content_hash, and ONLY THEN runs the now-trusted soleur-host-bootstrap.sh
-  # (which installs everything + writes the fail-closed /run/soleur-hostscripts.ok sentinel).
-  # The heavy install/assert ceremony lives in the baked script so it costs zero user_data.
-  # FAIL-CLOSED (two mechanisms): (1) cloud-init concatenates all runcmd into ONE /bin/sh, so
-  # this block's `set -e` + `exit 1` aborts the WHOLE runcmd — the app `docker run` never runs
-  # (primary); (2) the terminal run block also gates on /run/soleur-hostscripts.ok + poweroff on
-  # absence (backstop if cloud-init ever ran entries separately). Do NOT add a `set +e` that
-  # would let a later bare failure (e.g. firewall enable) fall through to the app start.
-  # Pre-verify failures emit a discriminating Sentry event here; install-stage from the bootstrap.
+  # The 22 scripts + hooks.json.tmpl + soleur-host-bootstrap.sh are baked into ${image_name}
+  # at /opt/soleur/host-scripts/ (as base64 blobs they blew the 32,768-byte user_data cap).
+  # After docker is up + BEFORE the first consumer, docker-cp the assets, recompute the
+  # combined content-hash, compare to host_scripts_content_hash, and ONLY THEN run the
+  # now-trusted soleur-host-bootstrap.sh. FAIL-CLOSED: runcmd is ONE /bin/sh, so `set -e` +
+  # `exit 1` aborts the whole runcmd (the app `docker run` never starts) + the terminal block
+  # gates on /run/soleur-hostscripts.ok; do NOT add a `set +e`. Pre-verify failures emit a
+  # discriminating Sentry event here (on_err); install-stage failures from the bootstrap.
   - |
     set -e
     IMAGE_REF='${image_name}'
@@ -367,7 +361,10 @@ runcmd:
       docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
       ( set +e
         . /etc/default/webhook-deploy 2>/dev/null || true
-        DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
+        # Prefer the BAKED DSN so this fatal emit fires even when doppler is the broken
+        # stage (the blind spot that hid the private-GHCR seed-pull 401). Doppler fallback.
+        DSN='${sentry_dsn}'
+        [ -n "$DSN" ] || DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
                || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
         if [ -n "$DSN" ]; then
           KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
@@ -384,6 +381,17 @@ runcmd:
     trap on_err EXIT
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
+    # ROOT FIX (#6005): the seed image is now a PRIVATE GHCR package, so this early seed-pull
+    # must authenticate FIRST (bootstrap's ghcr_login runs post-extract, too late) — anonymous
+    # pull 401s + aborts the boot. Non-fatal: a creds miss still lets the pull emit stage=pull.
+    STAGE=ghcr_login
+    ( set +e
+      . /etc/default/webhook-deploy 2>/dev/null || true
+      GHCR_USER=$(timeout 15 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null || true)
+      GHCR_TOKEN=$(timeout 15 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
+      [ -n "$GHCR_USER" ] && [ -n "$GHCR_TOKEN" ] && printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null 2>&1 || true
+    ) || true
+    STAGE=pull
     N=0; until docker pull "$IMAGE_REF"; do N=$((N+1)); [ "$N" -ge 3 ] && exit 1; sleep 5; done
     STAGE=extract
     docker create --name soleur-hostscript-seed "$IMAGE_REF" >/dev/null
