@@ -104,6 +104,11 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
   // New (never a GHA workflow). Findings alert via reportSilentFallback Sentry
   // issues, not a cron monitor; tf monitor deferred with the TR9 batch (#4476).
   "cron-workspace-sync-health",
+  // #6031 (ADR-088 arm-b) — the GHCR minter cron is DISABLED (App installation
+  // tokens can't pull the private repo-linked packages; pending GitHub support).
+  // Its handler no-ops under GHCR_MINTER_DISABLED=true, so the sentry monitor was
+  // removed; the slug is exempt here until the cron is re-enabled or removed.
+  "scheduled-ghcr-token-minter",
 ]);
 
 const NON_INNGEST_MONITORS = new Set([

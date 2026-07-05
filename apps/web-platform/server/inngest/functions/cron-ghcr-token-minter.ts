@@ -72,6 +72,22 @@ export async function cronGhcrTokenMinterHandler({
   step,
   logger,
 }: HandlerArgs): Promise<MintResult> {
+  // KILL-SWITCH (#6031 / ADR-088 arm-b). A GitHub App installation token can
+  // `docker login` GHCR but is DENIED `docker pull` of the private, repo-linked
+  // soleur-* packages (a user PAT + the Actions GITHUB_TOKEN pull fine). So the
+  // minted token is unusable as the host-pull credential and this cron is
+  // DISABLED pending GitHub-support confirmation. Env-gated so it no-ops in prod
+  // (Doppler prd GHCR_MINTER_DISABLED=true) without minting/writing/paging; the
+  // Sentry monitor was removed with this change so there is nothing to alarm.
+  // Re-enable by clearing GHCR_MINTER_DISABLED once the pull path is resolved.
+  if (process.env.GHCR_MINTER_DISABLED === "true") {
+    logger.info(
+      { fn: CRON_NAME },
+      "GHCR token minter disabled (ADR-088 arm-b, #6031) — no-op",
+    );
+    return { ok: false, errorSummary: "disabled pending ADR-088 arm-b (#6031)" };
+  }
+
   const dopplerToken = process.env.GHCR_MINTER_DOPPLER_TOKEN;
   if (!dopplerToken) {
     // Env misconfiguration — page so the operator fixes it (a minter that cannot
