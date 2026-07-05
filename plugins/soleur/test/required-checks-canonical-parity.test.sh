@@ -25,8 +25,15 @@
 # The CLA contexts {cla-check, cla-evidence} live in required-checks.txt but
 # have no canonical JSON (only scripts/create-cla-required-ruleset.sh), so they
 # are excluded by an EXPLICIT named set below. A 3rd CLA context requires
-# updating CLA_EXCLUDE here (deferred hardening: a canonical CLA JSON — see the
-# plan's Alternatives).
+# updating CLA_EXCLUDE here.
+#
+# KNOWN GAP (entirely unguarded, not merely async): unlike the CI Required set —
+# whose live↔canonical drift the daily Inngest cron-ruleset-bypass-audit catches
+# next-day — the CLA Required ruleset has NEITHER a canonical JSON NOR audit-cron
+# coverage. A live drift there (e.g. a 3rd required CLA context) is caught by no
+# synchronous test AND no daily cron; the action would silently omit it and the
+# bot PR would deadlock. Deferred hardening: mint a ci-cla-required-ruleset
+# canonical JSON + extend the audit drift loop. Tracked as a follow-up.
 #
 # Refs: #6049
 
@@ -135,9 +142,11 @@ mut_missing=$(only_in_canon "$mut_diff" | sed '/^$/d')
 assert_contains "$mut_missing" "z-fake-context" "(2) fake canonical context surfaces as a ⊇ violation"
 echo ""
 
-# --- Test 3: mutation — a dropped required-checks name is caught (⊆) --------
+# --- Test 3: mutation — a dropped required-checks name is caught (⊇) --------
+# Dropping a name FROM required-checks.txt that canonical still has is a ⊇
+# violation (canonical ⊄ config): the name surfaces in `only_in_canon`.
 
-echo "Test 3: removing a name from required-checks.txt FAILS (⊆)"
+echo "Test 3: removing a name from required-checks.txt FAILS (⊇)"
 # Drop 'adr-ordinals' from a config copy; it must then surface as canonical-only.
 grep -v '^adr-ordinals$' "$CONFIG_FILE" > "$TMP/cfg-drop.txt"
 drop_diff=$(diff_sets "$TMP/cfg-drop.txt" "$CANONICAL")
@@ -145,25 +154,48 @@ drop_missing=$(only_in_canon "$drop_diff" | sed '/^$/d')
 assert_contains "$drop_missing" "adr-ordinals" "(3) dropped name surfaces as a ⊇ violation (canonical has it, config doesn't)"
 echo ""
 
+# --- Test 3b: mutation — an EXTRA required-checks name is caught (⊆) --------
+# Negative control for the `only_in_config` / `comm -23` slice: Tests 2 & 3
+# both land in `only_in_canon`, so without this the ⊆-detection path is only
+# ever asserted empty (Test 1a) and a broken slice would pass vacuously.
+
+echo "Test 3b: adding a name to required-checks.txt not in canonical FAILS (⊆)"
+{ cat "$CONFIG_FILE"; printf '\nz-config-only-fake\n'; } > "$TMP/cfg-extra.txt"
+extra_diff=$(diff_sets "$TMP/cfg-extra.txt" "$CANONICAL")
+extra_present=$(only_in_config "$extra_diff" | sed '/^$/d')
+assert_contains "$extra_present" "z-config-only-fake" "(3b) config-only name surfaces as a ⊆ violation (config has it, canonical doesn't)"
+echo ""
+
 # --- Test 4: composite→SSOT guard (future re-hardcode caught) ---------------
+# The action is exempt from lint-bot-synthetic-completeness.sh by construction,
+# so this is its ONLY synchronous protection. Assert the SSOT is actually READ
+# (a loop `done < "$REQUIRED_CHECKS_FILE"` + the exact assignment) — a bare
+# `grep required-checks.txt` matches the comment block too, so a re-hardcode
+# that deletes the read-loop but keeps the comments would pass a mention-grep.
 
 echo "Test 4: action.yml derives CHECK_NAMES from scripts/required-checks.txt"
 assert_file_exists "$ACTION_YML" "action.yml exists"
-if grep -q 'required-checks\.txt' "$ACTION_YML"; then
-  echo "  PASS: (4a) action.yml references scripts/required-checks.txt"
+if grep -qE 'REQUIRED_CHECKS_FILE=.*required-checks\.txt' "$ACTION_YML"; then
+  echo "  PASS: (4a) action.yml assigns REQUIRED_CHECKS_FILE=scripts/required-checks.txt"
   PASS=$((PASS + 1))
 else
-  echo "  FAIL: (4a) action.yml does NOT reference required-checks.txt — CHECK_NAMES may be re-hardcoded"
+  echo "  FAIL: (4a) action.yml does NOT assign REQUIRED_CHECKS_FILE to required-checks.txt"
   FAIL=$((FAIL + 1))
 fi
-# Negative guard: the old hardcoded array literal must not return. Match the
-# specific `CHECK_NAMES=(test ...` shape, not the variable name (which the new
-# code legitimately populates from the file).
-if grep -qE 'CHECK_NAMES=\([[:space:]]*test[[:space:]]' "$ACTION_YML"; then
-  echo "  FAIL: (4b) action.yml still hardcodes the CHECK_NAMES=(test ...) array"
+if grep -qE 'done[[:space:]]*<[[:space:]]*"\$REQUIRED_CHECKS_FILE"' "$ACTION_YML"; then
+  echo "  PASS: (4b) action.yml READS the SSOT in a loop (done < \$REQUIRED_CHECKS_FILE)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (4b) action.yml does NOT read the SSOT in a loop — CHECK_NAMES may be re-hardcoded"
+  FAIL=$((FAIL + 1))
+fi
+# Negative guard: no hardcoded CHECK_NAMES array literal (any first element, not
+# just `test`) — matches `CHECK_NAMES=(` followed by a non-`)` token.
+if grep -qE 'CHECK_NAMES=\([[:space:]]*[^)[:space:]]' "$ACTION_YML"; then
+  echo "  FAIL: (4c) action.yml hardcodes a non-empty CHECK_NAMES=(...) array"
   FAIL=$((FAIL + 1))
 else
-  echo "  PASS: (4b) no hardcoded CHECK_NAMES=(test ...) array in action.yml"
+  echo "  PASS: (4c) no hardcoded non-empty CHECK_NAMES=(...) array in action.yml"
   PASS=$((PASS + 1))
 fi
 echo ""
@@ -200,6 +232,43 @@ assert_eq "$ss_v" "$ci_v" "(5b) secret-scan.yml version == ci.yml version"
 assert_eq "$ss_v" "$ac_v" "(5c) secret-scan.yml version == action version"
 assert_eq "$ss_s" "$ci_s" "(5d) secret-scan.yml SHA256 == ci.yml SHA256"
 assert_eq "$ss_s" "$ac_s" "(5e) secret-scan.yml SHA256 == action SHA256"
+echo ""
+
+# --- Test 6: parser logic-parity across all three copies --------------------
+# The leading-`#`-only required-checks.txt parser is replicated in three files:
+# the lint, the ACTION run block (the copy that actually posts checks in CI, and
+# is exercised by no behavioral test), and parse_ci_required above. A revert of
+# any copy to the truncating inline `${var%%#*}` comment strip would re-introduce
+# the #6049 stall on `waiver discipline (issue:#NNN trailer)` silently. Pin the
+# comment-rule invariant across all three: leading-`#` present, `%%#*` absent.
+
+echo "Test 6: all 3 required-checks parsers use leading-#-only (no #-truncation)"
+PARSER_FILES=(
+  "$ACTION_YML"
+  "$REPO_ROOT/scripts/lint-bot-synthetic-completeness.sh"
+  "${BASH_SOURCE[0]}"
+)
+for f in "${PARSER_FILES[@]}"; do
+  base="${f##*/}"
+  if grep -qE '=~[[:space:]]+\^\[\[:space:\]\]\*#' "$f"; then
+    echo "  PASS: (6) $base uses the leading-#-only comment rule"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: (6) $base is missing the leading-#-only comment rule"
+    FAIL=$((FAIL + 1))
+  fi
+  # Negative: the truncating `${line...}` / `${rcline...}` inline comment strip
+  # must not return in CODE. Filter full-line comments first — every parser file
+  # (and this test) documents the old form in prose, which a bare grep would
+  # false-match (the grep-over-own-comments trap).
+  if grep -vE '^[[:space:]]*#' "$f" | grep -qE '\$\{(line|rcline)%%#'; then
+    echo "  FAIL: (6) $base contains a truncating inline #-strip in code — re-introduces #6049"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: (6) $base has no truncating #-strip on the parse variable"
+    PASS=$((PASS + 1))
+  fi
+done
 echo ""
 
 print_results

@@ -144,6 +144,15 @@ against the live repo + GitHub API; divergences found:
 crons exist to drive silently stalls; no user-facing product artifact, but the operator's
 comprehension/health surface degrades.
 
+**Known recurring stall (accepted tradeoff, not a defect):** the Phase-4 ceiling can trip on
+*legitimate documentary* content — a `weakness-miner` digest that clusters a learning which
+documents a credential SHAPE or a prod-ref (exactly what learnings "frequently" carry, per the
+Overview) will fail the real `gitleaks`/`lint-fixture-content` gates and the same digest
+re-stalls every week until the finding is resolved. This is the correctly-prioritized
+leak-over-availability tradeoff at `single-user incident` threshold (a recurring stall is
+recoverable + surfaced by the crons' `if: failure()` → `notify-ops-email`; a fabricated-green
+secret leak is brand-ending). The stall is LOUD (red Actions run + operator email), never silent.
+
 **If this leaks, the user's data is exposed via:** a `weakness-miner` digest that clusters a
 learnings file containing a real secret-shaped string, merged to `main` under a **fabricated**
 `gitleaks scan` green, then surfaced in the public repo / an Artifact — a secret-exposure
