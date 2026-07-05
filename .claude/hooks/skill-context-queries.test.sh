@@ -52,6 +52,11 @@ mk_skill "empty-query"  $'context_queries: []\n'
 mk_skill "missing-art"  $'context_queries:\n  - knowledge-base/marketing/does-not-exist.md\n'
 mk_skill "traversal"    $'context_queries:\n  - knowledge-base/../../../etc/passwd\n'
 
+# A skill whose BODY (not frontmatter) mentions "context_queries:" — the
+# fast-path must be frontmatter-scoped, so this must be a silent no-op.
+mkdir -p "$FIX/plugins/soleur/skills/body-mention"
+printf -- '---\nname: body-mention\ndescription: "d"\n---\n\nThis documents context_queries: the frontmatter field.\n' > "$FIX/plugins/soleur/skills/body-mention/SKILL.md"
+
 git -C "$FIX" init -q -b main
 git -C "$FIX" -c user.email=t@t -c user.name=t add -A >/dev/null 2>&1
 git -C "$FIX" -c user.email=t@t -c user.name=t commit -q -m init >/dev/null 2>&1
@@ -91,6 +96,10 @@ ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev
 # --- AC6: no context_queries key -> exit 0, empty output (fast-path) ---
 out="$(env_json "no-query" | run_hook)"; rc=$?
 [[ -z "$out" && "$rc" -eq 0 ]] && pass "AC6 no-key skill -> empty, exit 0 (fast-path)" || fail "AC6 no-key not fail-silent (out=$out rc=$rc)"
+
+# --- AC6b: body mentions "context_queries:" but frontmatter does not -> silent no-op ---
+out="$(env_json "body-mention" | run_hook)"; rc=$?
+[[ -z "$out" && "$rc" -eq 0 ]] && pass "AC6b body-only context_queries -> no spurious note (frontmatter-scoped fast-path)" || fail "AC6b body mention triggered spurious output ($out)"
 
 # --- AC2: empty list / unparseable -> exit 0, in-band note (NOT silent) ---
 out="$(env_json "empty-query" | run_hook)"; rc=$?
@@ -133,8 +142,7 @@ out="$(SOLEUR_DISABLE_CONTEXT_QUERIES=1 CONTEXT_QUERIES_REPO_ROOT="$FIX" bash "$
 # (runs against the REAL repo, not the fixture)
 if [[ -f "$REPO_ROOT/plugins/soleur/skills/frontend-design/SKILL.md" ]] \
    && grep -q '^context_queries:' "$REPO_ROOT/plugins/soleur/skills/frontend-design/SKILL.md"; then
-  real_out="$(env_json "frontend-design" | run_hook 2>/dev/null)"
-  # re-run against the real repo root
+  # run against the REAL repo root (no CONTEXT_QUERIES_REPO_ROOT override)
   real_out="$(printf '{"tool_input":{"skill":"soleur:frontend-design"}}' | bash "$HOOK" 2>/dev/null)"
   real_ctx="$(printf '%s' "$real_out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)"
   printf '%s' "$real_ctx" | grep -qF 'knowledge-base/' && pass "AC14 real pilot resolves >=1 committed artifact" || fail "AC14 real pilot did not resolve (ctx=$real_ctx)"

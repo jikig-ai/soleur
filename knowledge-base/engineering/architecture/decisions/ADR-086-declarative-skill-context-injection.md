@@ -30,7 +30,9 @@ TR2 mandates: *a bad query must not fail-closed all ~90 skills.*
 These outlive #5990 and bind every later adopter (recorded here, not only in an issue thread):
 
 - **content-trust ≠ path-trust.** The mechanism guarantees an artifact is committed and path-contained — NOT that its *content* is trustworthy. A skill pointing `context_queries` at agent-authored / agent-writable content (e.g. #5990's `taste-profile`, generated from user design feedback) auto-consumes untrusted content that can carry latent instructions. Such consumers MUST sanitize/validate their own content; this hook only fences provenance and enforces committed-only.
-- **must-present = literal path, never glob.** An artifact that must reliably load is declared as an explicit literal path. Glob matches are sorted and capped (`MAX_GLOB`), so under the cap *which* files drop is order-dependent — a load-bearing artifact must not depend on glob inclusion.
+- **must-present = literal path, never glob.** An artifact that must reliably load is declared as an explicit literal path. Glob matches are sorted (`LC_ALL=C`) and capped (`MAX_GLOB`, with a skip note on truncation), so under the cap *which* files drop is order-dependent — a load-bearing artifact must not depend on glob inclusion.
+
+**Threat-model note (security-sentinel review, INFO-1):** the invoked skill's SKILL.md is parsed directly, so a model-authored *untracked* SKILL.md could declare `context_queries` — but every query still passes all four containment gates, so the worst achievable outcome is directing the agent to Read an **already-committed** `knowledge-base/` file (reference data by definition, never an out-of-tree secret). Within design intent; not a vulnerability.
 
 ## Surface scope (CLI-first, web parity deferred — feasible, tracked)
 
