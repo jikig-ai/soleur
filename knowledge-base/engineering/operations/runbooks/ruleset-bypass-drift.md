@@ -2,9 +2,9 @@
 title: CI Required Ruleset Drift (bypass_actors · required_status_checks · enforcement)
 audience: operator
 on_page_for: cron-ruleset-bypass-audit
-issues: [3544, 3542, 2719, 3569, 4397, 5759]
+issues: [3544, 3542, 2719, 3569, 4397, 5759, 6061]
 brand_survival_threshold: single-user incident
-last_updated: 2026-06-30
+last_updated: 2026-07-05
 ---
 
 # CI Required Ruleset Drift
@@ -89,6 +89,67 @@ throw and surface via the Sentry monitor + `reportSilentFallback` — **no SSH i
 needed to see them** (per `hr-no-ssh-fallback-in-runbooks`; observability layer:
 Sentry → the `scheduled-ruleset-bypass-audit` monitor, and Better Stack logs for
 the `cron-ruleset-bypass-audit` function).
+
+## CLA Required ruleset drift (#6061)
+
+The same `cron-ruleset-bypass-audit` function audits a **second** ruleset — the
+**"CLA Required"** ruleset (id `13304872`) — in its own `step.run` step, and
+files a separately-titled issue **`[Ruleset Audit] CLA Required ruleset drift`**
+(same labels: `ci/auth-broken`, `compliance/critical`, `priority/p1-high`,
+`domain/legal`). A CLA-step fault or drift cannot abort the CI step, and vice
+versa.
+
+**Source of truth (differs from CI):** the CLA ruleset is **imperatively
+managed** by [`scripts/create-cla-required-ruleset.sh`](../../../../scripts/create-cla-required-ruleset.sh)
+— there is **no Terraform** for it yet (Terraform-ifying it is a tracked
+follow-up, #6061 Phase 6.1). The audit compares the live ruleset against two
+canonical snapshots:
+
+- `scripts/ci-cla-required-ruleset-canonical-bypass-actors.json`
+- `scripts/ci-cla-required-ruleset-canonical-required-status-checks.json`
+
+kept in lockstep with the create-script's inline blocks by the `T-cla-1` /
+`T-cla-1b` sync gates in `tests/scripts/test-audit-ruleset-bypass.sh`, and with
+`scripts/required-checks.txt` by Test 7 in
+`plugins/soleur/test/required-checks-canonical-parity.test.sh`.
+
+**CLA drift classes:**
+
+| Finding | `critical` | What it means |
+|---------|------------|---------------|
+| `cla-check` / `cla-evidence` dropped (or the whole RSC rule gone) | yes | a PR could merge without the CLA-signature / CLA-evidence gate |
+| `bypass_actors` widened | yes | a named actor can merge around the CLA gate while the gate still looks intact (the quiet defeat vector) |
+| `enforcement` not `active` | yes | the entire CLA gate is suspended |
+| a NEW `cla-*` context required live but absent from the canonical JSON | no (divergence) | the audit flags a non-critical "live has extra gates" finding (canonical snapshot is stale — reconcile). If that context is ALSO missing from `required-checks.txt`, bot PRs deadlock (no synthetic posted) — Test 7 guards the canonical↔`required-checks.txt` lockstep, so a green heartbeat does NOT by itself mean "no CLA problem" |
+
+> The `Integration:1236702/always` bypass actor is the **CLA bot** — it
+> legitimately needs `always` to update CLA status and is IN the canonical, so
+> the audit flags only *additional* bypass actors.
+
+**Remedy the `domain/legal` recipient must action (NOT just "reconcile the
+canonical"):** a real CLA drift means unsigned external contributions may have
+merged to `main` without a recorded CLA. Beyond reconciling the ruleset, the
+CLO/operator must **chase the contributor's CLA signature post-hoc** (request it
+from the identifiable contributor) or, if unobtainable (anonymous/adversarial
+author), **revert the unsigned contribution** to keep the IP-provenance chain
+auditable. If the drift was an *authorized* change, reconcile
+`scripts/create-cla-required-ruleset.sh` **and** the two CLA canonical JSONs
+together (the sync gates require both).
+
+**Probe the live CLA state directly** (read-only, admin-scoped workstation):
+
+```bash
+gh api repos/jikig-ai/soleur/rulesets/13304872 \
+  --jq '{enforcement, bypass_actors, required_status_checks: [.rules[]
+        | select(.type=="required_status_checks")
+        | .parameters.required_status_checks[]]}'
+```
+
+Guard faults on the CLA path (canonical empty/corrupt on `main`, `bypass_actors`
+redacted by token scope, network/API error) are routed to Sentry via
+`reportSilentFallback` + degrade the heartbeat — they do **NOT** file a
+`compliance/critical` drift issue (a corrupt-JSON-on-main fault is an ops/infra
+issue for the CTO, not a legal-compliance drift).
 
 ## Run the audit on demand (no SSH)
 
