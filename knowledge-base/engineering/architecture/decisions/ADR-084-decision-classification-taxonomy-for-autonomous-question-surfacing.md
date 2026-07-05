@@ -20,7 +20,7 @@ questions they can't answer or hang the pipeline on `AskUserQuestion`.
 
 ## Decision
 
-1. **A committed reference doc** — `plugins/soleur/skills/brainstorm-techniques/references/decision-principles.md` — defines the taxonomy, 2 surfacing principles (blast-radius, bias-to-action), classify-by-consequence with 4 never-Mechanical classes, the CTO-fork precedence carve-out, the mode-branch table, the 5-line frame, the consult scope, and the security exception. Consumed by `brainstorm-techniques`, `plan` Step 4.5, `work`, and `ship`.
+1. **A committed reference doc** — `plugins/soleur/skills/brainstorm-techniques/references/decision-principles.md` — defines the taxonomy, 2 surfacing principles (blast-radius, bias-to-action), classify-by-consequence with 4 never-Mechanical classes, the CTO-fork precedence carve-out, the mode-branch table, the 5-line frame, the consult scope, and the security exception. Consumed by **5 skills**: `brainstorm-techniques`, `plan` Step 4.5, `work`, `ship`, and `plan-review` (#5985 — plan-review classifies its consolidated *review findings* with the taxonomy so named-panel taste findings are surfaced, never auto-applied; a finding-classification use adjacent to the skills that classify their own intermediate decisions).
 2. **Classify by consequence, not surface-flavor.** Surface criterion = user-visible OR money/compliance (sub-processor / recurring cost / data egress / lawful-basis). Four classes are never Mechanical even when they look technical: dropping operator-requested scope; a new sub-processor/paid dependency; a new recurring cost; irreversible data ops.
 3. **Mode = execution context, not skill name.** Operator-attached ⟺ a real TTY (direct brainstorm/plan, no `HEADLESS_MODE`, not a plan-file arg, not inside a Task subagent). Any subagent / one-shot context is headless — a subagent returns the decision to its parent as structured text.
 4. **No-mid-pipeline-pause invariant**, with **one** sanctioned exception: a security/feasibility regression halts **terminally** before merge (a stop, not a per-phase pause) + an `action-required`+`security` issue.
@@ -30,9 +30,9 @@ questions they can't answer or hang the pipeline on `AskUserQuestion`.
 ## Consequences
 
 - Autonomous runs get principled surface-vs-auto decisions with an operator-legible async surface, and never hang or pause mid-pipeline.
-- A new SKILL.md-prose surface across 4 skills; drift-guarded by a `components.test.ts` assertion (doc exists + 4 consumers link it + `ship` emits the `action-required` issue).
+- A new SKILL.md-prose surface across 5 skills; drift-guarded by a `components.test.ts` assertion (doc exists + all consumers link it + `ship` emits the `action-required` issue).
 - The doc home (`brainstorm-techniques/references/`) is semantically inverted (the load-bearing consumers are `work`/`ship`), accepted because cross-skill reference-by-path is an established pattern (`deepen-plan` reads `plan/references/*`, `ux-audit` reads `ship/references/*`) and the drift-guard mitigates the rename-orphan risk.
-- Fully reversible: delete the doc + the 4 pointers + the ADR.
+- Fully reversible: delete the doc + the 5 pointers + the ADR.
 
 ## Alternatives considered
 

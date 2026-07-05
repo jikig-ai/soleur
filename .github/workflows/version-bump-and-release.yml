@@ -22,6 +22,16 @@ permissions:
 jobs:
   release:
     uses: ./.github/workflows/reusable-release.yml
+    permissions:
+      # A reusable workflow can only USE permissions its CALLER grants. cosign
+      # keyless signing in reusable-release.yml needs id-token: write (#5933
+      # Item 4, added by #5977). A job-level block REPLACES the inherited
+      # workflow perms, so contents/packages are re-declared here. Absent
+      # id-token, the reusable workflow fails at dispatch with startup_failure
+      # (this fixes #6018; the sibling fix for web-platform-release.yml was #5981).
+      contents: write
+      packages: write
+      id-token: write
     with:
       component: plugin
       component_display: "Soleur"
