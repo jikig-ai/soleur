@@ -33,7 +33,7 @@
 # coverage. A live drift there (e.g. a 3rd required CLA context) is caught by no
 # synchronous test AND no daily cron; the action would silently omit it and the
 # bot PR would deadlock. Deferred hardening: mint a ci-cla-required-ruleset
-# canonical JSON + extend the audit drift loop. Tracked as a follow-up.
+# canonical JSON + extend the audit drift loop. Tracked in #6061.
 #
 # Refs: #6049
 
