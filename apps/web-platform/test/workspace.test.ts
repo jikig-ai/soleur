@@ -10,6 +10,7 @@ delete process.env.GIT_INDEX_FILE;
 delete process.env.GIT_WORK_TREE;
 
 import { describe, test, expect, afterEach } from "vitest";
+import { execFileSync } from "child_process";
 import { existsSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
@@ -72,5 +73,47 @@ describe("workspace provisioning", () => {
 
     expect(path1).toBe(path2);
     expect(existsSync(path1)).toBe(true);
+  });
+
+  // #4826 — pre-seed the worktree-config prerequisites HOST-SIDE so in-sandbox
+  // worktree creation is a zero-write no-op and never wedges on the SDK's
+  // /dev/null mask over .git/config.lock. Asserts the exact state that makes
+  // ensure_bare_config's atomic_git_config calls take their read-first idempotent
+  // path (SETs already at target) and skip the UNSET block (keys already absent).
+  test("pre-seeds worktree-config prerequisites host-side (#4826 config.lock-mask bypass)", async () => {
+    const userId = randomUUID();
+    const path = await provisionWorkspace(userId);
+    const cfg = (key: string): string | null => {
+      try {
+        return execFileSync("git", ["config", "--get", key], {
+          cwd: path,
+          stdio: "pipe",
+        })
+          .toString()
+          .trim();
+      } catch {
+        return null; // git config --get exits non-zero when the key is absent
+      }
+    };
+    // SETs pre-applied at their target values → in-sandbox writes become no-ops.
+    expect(cfg("extensions.worktreeConfig")).toBe("true");
+    expect(cfg("core.repositoryformatversion")).toBe("1");
+    // UNSET targets absent → in-sandbox ensure_bare_config skips them (no write).
+    expect(cfg("core.bare")).toBeNull();
+    expect(cfg("core.worktree")).toBeNull();
+  });
+
+  test("pre-seed is idempotent — re-provisioning keeps the target config state", async () => {
+    const userId = randomUUID();
+    await provisionWorkspace(userId);
+    const path = await provisionWorkspace(userId);
+    expect(
+      execFileSync("git", ["config", "--get", "extensions.worktreeConfig"], {
+        cwd: path,
+        stdio: "pipe",
+      })
+        .toString()
+        .trim(),
+    ).toBe("true");
   });
 });
