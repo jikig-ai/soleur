@@ -1,5 +1,6 @@
-// Unit tests for seedWorktreeConfig — the host-side pre-seed that makes in-sandbox
-// worktree creation a zero-write no-op past the SDK's `.git/config.lock` mask (#4826).
+// Unit tests for seedWorktreeConfig — the host-side HEAL that removes the harmful
+// extensions.worktreeConfig a prior version wrote, so in-sandbox git (reading a masked
+// .git/config.worktree) stops fataling and `git worktree add` runs natively (#4826).
 import { describe, test, expect, afterEach } from "vitest";
 import { execFileSync } from "child_process";
 import { mkdtempSync, rmSync } from "fs";
@@ -34,35 +35,36 @@ afterEach(() => {
   }
 });
 
-describe("seedWorktreeConfig", () => {
-  test("sets the two worktree-config prerequisites", () => {
+describe("seedWorktreeConfig (heal)", () => {
+  test("removes the harmful extensions.worktreeConfig a prior seed wrote", () => {
     const dir = freshRepo();
+    // Simulate a workspace broken by the old seed.
+    execFileSync("git", ["config", "extensions.worktreeConfig", "true"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["config", "core.repositoryformatversion", "1"], { cwd: dir, stdio: "pipe" });
     seedWorktreeConfig(dir);
-    expect(cfg(dir, "extensions.worktreeConfig")).toBe("true");
-    expect(cfg(dir, "core.repositoryformatversion")).toBe("1");
+    expect(cfg(dir, "extensions.worktreeConfig")).toBeNull(); // unset → in-sandbox git works
+    expect(cfg(dir, "core.repositoryformatversion")).toBe("0"); // reset to plain-repo default
   });
 
-  test("clears core.bare / core.worktree so they never live in shared config", () => {
+  test("no-ops on a healthy normal repo (no worktreeConfig to remove)", () => {
     const dir = freshRepo();
-    // A bare-ish leftover the in-sandbox ensure_bare_config would otherwise try to unset.
-    execFileSync("git", ["config", "core.bare", "false"], { cwd: dir, stdio: "pipe" });
     seedWorktreeConfig(dir);
-    expect(cfg(dir, "core.bare")).toBeNull();
-    expect(cfg(dir, "core.worktree")).toBeNull();
+    expect(cfg(dir, "extensions.worktreeConfig")).toBeNull();
+    // A healthy clone is untouched — repositoryformatversion stays whatever git init set.
   });
 
-  test("is idempotent — a second run keeps the target state and does not throw", () => {
+  test("is idempotent — a second run does not throw and keeps it healed", () => {
     const dir = freshRepo();
+    execFileSync("git", ["config", "extensions.worktreeConfig", "true"], { cwd: dir, stdio: "pipe" });
     seedWorktreeConfig(dir);
     expect(() => seedWorktreeConfig(dir)).not.toThrow();
-    expect(cfg(dir, "extensions.worktreeConfig")).toBe("true");
+    expect(cfg(dir, "extensions.worktreeConfig")).toBeNull();
   });
 
-  test("no-ops (no throw) when the path has no .git — nothing to seed", () => {
+  test("no-ops (no throw) when the path has no .git directory", () => {
     const empty = mkdtempSync(join(tmpdir(), "seed-empty-"));
     made.push(empty);
     expect(() => seedWorktreeConfig(empty)).not.toThrow();
-    // No .git → git config would have errored; the guard skips it entirely.
     expect(cfg(empty, "extensions.worktreeConfig")).toBeNull();
   });
 });

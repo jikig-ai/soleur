@@ -246,28 +246,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-echo "Test 12: #4826 host-side pre-seed -> the in-sandbox ensure_bare_config sequence is a ZERO-WRITE no-op"
-# Mirrors seedWorktreeConfig (apps/web-platform/server/workspace.ts): pre-apply the
-# exact target state HOST-SIDE, then wedge config.lock non-regular (== the SDK's
-# /dev/null bind-mount mask). Each of the four mutations ensure_bare_config runs must
-# take its read-first / absent-key SKIP — rc 0, NO write past the mask, no temp. This
-# is why pre-seeding unblocks worktree creation without ever touching the masked lock.
-D=$(new_gitdir); seed_config "$D"
-git config --file "$D/config" core.repositoryformatversion 1     # pre-seed (host-side)
-git config --file "$D/config" extensions.worktreeConfig true     # pre-seed (host-side)
-# core.bare / core.worktree intentionally absent (seedWorktreeConfig unsets them).
-mkdir "$D/config.lock"                                           # non-regular lock == masked/wedged
-run_agc "$D/config" core.repositoryformatversion 1
-assert_eq "0" "$AGC_RC" "pre-seeded repositoryformatversion SET is a zero-write skip"
-run_agc "$D/config" extensions.worktreeConfig true
-assert_eq "0" "$AGC_RC" "pre-seeded worktreeConfig SET is a zero-write skip"
-run_agc "$D/config" --unset core.bare
-assert_eq "0" "$AGC_RC" "absent core.bare --unset is a zero-write skip"
-run_agc "$D/config" --unset core.worktree
-assert_eq "0" "$AGC_RC" "absent core.worktree --unset is a zero-write skip"
-no_temp_leftovers "$D" "#4826 pre-seed no-op (nothing written past the masked lock)"
-assert_eq "true" "$(get_val "$D" extensions.worktreeConfig)" "worktreeConfig value intact"
-rm -rf "$D/config.lock"
+echo "Test 12: #4826 ensure_bare_config is a NO-OP on a normal (non-bare) repo"
+# The #4826 regression: ensure_bare_config unconditionally enabled extensions.worktreeConfig,
+# which on a normal Concierge clone forces git to read the sandbox-masked (unreadable)
+# .git/config.worktree and fatals EVERY git command. Fix: a `.git` DIRECTORY ⇒ non-bare ⇒
+# the whole bare-accommodation is skipped, so `git worktree add` runs natively with NO
+# shared-config surgery (no worktreeConfig, no config.lock write, no masked-file read).
+WS12=$(mktemp -d "$TMP/nonbare.XXXXXX"); git init -q -b main "$WS12" >/dev/null 2>&1
+_SAVED_GIT_ROOT="$GIT_ROOT"
+GIT_ROOT="$WS12"
+set +e; ensure_bare_config >"$TMP/ebc.out" 2>&1; EBC_RC=$?; set -e
+GIT_ROOT="$_SAVED_GIT_ROOT"
+assert_eq "0" "$EBC_RC" "ensure_bare_config returns 0 (no-op) on a non-bare repo"
+assert_eq "__ABSENT__" "$(git config --file "$WS12/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
+  "extensions.worktreeConfig NOT set on the non-bare repo (the #4826 regression is gone)"
+if git config --file "$WS12/.git/config" --get core.repositoryformatversion 2>/dev/null | grep -qx 1; then
+  echo "  FAIL: repositoryformatversion bumped to 1 on a non-bare repo"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: repositoryformatversion left at plain-repo default on the non-bare repo"; PASS=$((PASS + 1))
+fi
 
 echo ""
 print_results

@@ -75,12 +75,12 @@ describe("workspace provisioning", () => {
     expect(existsSync(path1)).toBe(true);
   });
 
-  // #4826 — pre-seed the worktree-config prerequisites HOST-SIDE so in-sandbox
-  // worktree creation is a zero-write no-op and never wedges on the SDK's
-  // /dev/null mask over .git/config.lock. Asserts the exact state that makes
-  // ensure_bare_config's atomic_git_config calls take their read-first idempotent
-  // path (SETs already at target) and skip the UNSET block (keys already absent).
-  test("pre-seeds worktree-config prerequisites host-side (#4826 config.lock-mask bypass)", async () => {
+  // #4826 (corrected) — a provisioned NORMAL workspace must NOT have
+  // extensions.worktreeConfig set. Enabling it forces git to read the sandbox-masked
+  // (unreadable) .git/config.worktree and fatals every git command. The seed now HEALS
+  // (removes) that key rather than setting it; a fresh clone has it absent, and
+  // `git worktree add` works natively without any bare-repo surgery.
+  test("provisioned workspace has NO extensions.worktreeConfig (#4826 regression guard)", async () => {
     const userId = randomUUID();
     const path = await provisionWorkspace(userId);
     const cfg = (key: string): string | null => {
@@ -95,25 +95,19 @@ describe("workspace provisioning", () => {
         return null; // git config --get exits non-zero when the key is absent
       }
     };
-    // SETs pre-applied at their target values → in-sandbox writes become no-ops.
-    expect(cfg("extensions.worktreeConfig")).toBe("true");
-    expect(cfg("core.repositoryformatversion")).toBe("1");
-    // UNSET targets absent → in-sandbox ensure_bare_config skips them (no write).
-    expect(cfg("core.bare")).toBeNull();
-    expect(cfg("core.worktree")).toBeNull();
+    expect(cfg("extensions.worktreeConfig")).toBeNull();
+    expect(cfg("core.repositoryformatversion")).not.toBe("1");
   });
 
-  test("pre-seed is idempotent — re-provisioning keeps the target config state", async () => {
+  test("re-provisioning keeps extensions.worktreeConfig absent (idempotent heal)", async () => {
     const userId = randomUUID();
     await provisionWorkspace(userId);
     const path = await provisionWorkspace(userId);
-    expect(
+    expect(() =>
       execFileSync("git", ["config", "--get", "extensions.worktreeConfig"], {
         cwd: path,
         stdio: "pipe",
-      })
-        .toString()
-        .trim(),
-    ).toBe("true");
+      }),
+    ).toThrow(); // --get on an absent key exits non-zero
   });
 });

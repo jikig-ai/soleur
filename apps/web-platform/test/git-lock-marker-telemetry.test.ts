@@ -33,6 +33,15 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(TEMP_WEDGED)[0]?.wedged).toBe(true);
   });
 
+  test("matches the readiness-gate SOLEUR_GIT_REPO_DIAG forensic and treats it as wedged", () => {
+    const repoDiag =
+      'SOLEUR_GIT_REPO_DIAG ready=false git_dir=dir config_worktree=chardevice config_lock=chardevice rev_parse_rc=128 config_parse_rc=128 err="fatal: bad config line 1 in file .git/config"';
+    const [m] = extractGitLockMarkers(repoDiag);
+    expect(m?.line).toBe(repoDiag);
+    // SOLEUR_GIT_REPO_DIAG is emitted ONLY on the not-ready path → always a blocked session.
+    expect(m?.wedged).toBe(true);
+  });
+
   test("returns [] for output with no markers, and for empty input", () => {
     expect(extractGitLockMarkers("just some normal git output\nProsuming worktree")).toEqual([]);
     expect(extractGitLockMarkers("")).toEqual([]);
@@ -80,22 +89,25 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
   // this copy is not updated, the new wedge signal would go silently unmirrored — the
   // exact blindness this feature closes. Pin the two in sync: every `echo "SOLEUR_GIT_LOCK_*`
   // literal in the script must be matched by extractGitLockMarkers.
-  test("extractor matches every SOLEUR_GIT_LOCK_* sentinel echoed by worktree-manager.sh", () => {
-    const script = readFileSync(
-      join(
-        __dirname,
-        "../../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh",
-      ),
-      "utf8",
+  test("extractor matches every SOLEUR_GIT_* sentinel echoed by the two shell scripts", () => {
+    const scripts = [
+      "../../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh",
+      "../../../plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh",
+    ].map((p) => readFileSync(join(__dirname, p), "utf8"));
+    // Both scripts emit `echo "SOLEUR_GIT_..."` sentinels; collect the union.
+    const sentinels = scripts.flatMap((s) =>
+      [...s.matchAll(/echo "(SOLEUR_GIT_[A-Z_]+)/g)].map((m) => m[1]),
     );
-    const sentinels = [...script.matchAll(/echo "(SOLEUR_GIT_LOCK_[A-Z_]+)/g)].map((m) => m[1]);
     const unique = [...new Set(sentinels)];
-    expect(unique.length).toBeGreaterThan(0); // non-vacuous: the script DOES emit sentinels
+    expect(unique.length).toBeGreaterThan(0); // non-vacuous: the scripts DO emit sentinels
+    // Every emitted sentinel must be mirrored — except the readiness-READY status line,
+    // which is a control signal for go.md (ready path), not a forensic to log.
     for (const name of unique) {
+      if (name === "SOLEUR_GIT_REPO_READY") continue;
       const sample = `${name} file=.git/config.lock type=chardevice rdev=1:3`;
       expect(
         extractGitLockMarkers(sample).length,
-        `sentinel ${name} echoed by worktree-manager.sh is not matched by the telemetry extractor — update MARKER_RE`,
+        `sentinel ${name} echoed by a git-worktree script is not matched by the telemetry extractor — update MARKER_RE`,
       ).toBe(1);
     }
   });
