@@ -106,7 +106,7 @@ owner: CPO
 - `knowledge-base/product/design/taste-profile.md` — seeded committed artifact (empty `entries[]`/`contradictions[]`). Committable (verified). Frontmatter `last_reviewed` set once at seed (net-new → `context-reviewed-gate.sh` exempt).
 - `plugins/soleur/scripts/taste-profile-update.sh` — plugin-shared helper. Two modes: **write** `<profile> <context> <axis> <value> <today>` (validate all four tokens → parse fenced JSON → one jq transform: upsert `(context,axis)`→value + `last_reinforced=today` + `reinforce_count++`; on differing prior value append a `contradictions[]` entry → supersede → re-render → atomic tmp+mv → bump `last_updated` only); **validate** `--validate <profile>` (schema + allowlist + sanitize check; non-zero on any violation). No decay math.
 - `plugins/soleur/scripts/taste-profile-update.test.sh` — git-init fixture harness (pattern: `.claude/hooks/skill-context-queries.test.sh`): upsert/reinforce, recency priming, same-context contradiction append+supersede, **cross-context NON-contradiction** (dashboard≠landing coexist), reject+preserve for out-of-allowlist context/axis, bad-format value, bad-format date, `--validate` failure, `last_reviewed` byte-unchanged, atomic-preserve-on-failure.
-- `knowledge-base/engineering/architecture/decisions/ADR-087-context-keyed-taste-profile-and-agent-surface-injection.md` — rich template (new trust boundary + cross-surface decision, per AP-011). Records: (1) Agent-tool surface gap + agent-reads/orchestrator-writes (extends `ADR-086-declarative-skill-context-injection` §Consequences — **full slug**, bare "086" is ambiguous per the triple-collision); (2) context-keyed recency model (recency over numeric decay; `(context,axis)` over global axis to prevent thrash); (3) note fan-out spawn stays below the C4 container line; (4) note injected values carry no confidence number (recency is date-based, read faithfully). Flag the ADR-086 triple-collision as out-of-scope tracking (do not renumber).
+- `knowledge-base/engineering/architecture/decisions/ADR-089-context-keyed-taste-profile-and-agent-surface-injection.md` — rich template (new trust boundary + cross-surface decision, per AP-011). Records: (1) Agent-tool surface gap + agent-reads/orchestrator-writes (extends `ADR-086-declarative-skill-context-injection` §Consequences — **full slug**, bare "086" is ambiguous per the triple-collision); (2) context-keyed recency model (recency over numeric decay; `(context,axis)` over global axis to prevent thrash); (3) note fan-out spawn stays below the C4 container line; (4) note injected values carry no confidence number (recency is date-based, read faithfully). Flag the ADR-086 triple-collision as out-of-scope tracking (do not renumber).
 
 ## Files to Edit
 
@@ -134,7 +134,7 @@ owner: CPO
 
 ## Implementation Phases
 
-**Phase 0 — Preconditions (done):** FR6 hook present; committable; ADR-087 free; `model.c4` edge located; freshness gate net-new-exempt confirmed.
+**Phase 0 — Preconditions (done):** FR6 hook present; committable; ADR-089 free; `model.c4` edge located; freshness gate net-new-exempt confirmed.
 
 **Phase 1 — Helper + tests (contract first, TDD).** `taste-profile-update.test.sh` RED → `taste-profile-update.sh` GREEN. jq-over-fenced-JSON; validate all four tokens (allowlist context/axis, sanitize value, format date); atomic tmp+mv; `last_updated`-only; `--validate` mode. Idioms: awk `c==1` to slice the fenced block; jq for the transform.
 
@@ -146,7 +146,7 @@ owner: CPO
 
 **Phase 5 — Wire the orchestrator write** at brainstorm 3.55b + plan 2.5 §4b approve branches.
 
-**Phase 6 — ADR-087 + C4** (broaden edge; run `c4-code-syntax.test.ts` + `c4-render.test.ts`).
+**Phase 6 — ADR-089 + C4** (broaden edge; run `c4-code-syntax.test.ts` + `c4-render.test.ts`).
 
 **Phase 7 — Verify** (`taste-profile-update.test.sh`; the direct FR6 hook-invocation check; AC checks).
 
@@ -187,15 +187,15 @@ None — no server/secret/vendor/DNS/cron/runtime process. Recency is write-time
 
 ## GDPR / Compliance
 
-**Regulated-data surface: none.** Trigger (b) (`single-user incident`) fires the *consideration*; assessment: the taste-profile stores the operator's own **design-aesthetic metadata** (context/axis/value enums + dates), no data subject, no PII, no special category, no egress. Token sanitization + the closed context/axis allowlists structurally prevent free-form personal-data capture; the helper validates every write and the consumers `--validate` on read. No new sub-processor (all-Claude). CLO carry-forward cleared egress. No `compliance-posture.md` write.
+**Regulated-data surface: none.** Trigger (b) (`single-user incident`) fires the *consideration*; assessment: the taste-profile stores the operator's own **design-aesthetic metadata** (context/axis/value enums + dates), no data subject, no PII, no special category, no egress. Token sanitization + the closed context/axis allowlists block whitespace/multi-word free-form capture (a single hyphenated proper noun remains syntactically possible but is git-revertable, not silent free-text capture); the helper validates every write and the consumers `--validate` on read. No new sub-processor (all-Claude). CLO carry-forward cleared egress. No `compliance-posture.md` write.
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-Create **ADR-087** (rich template; provisional ordinal — `/ship` re-verifies next-free before merge; the ADR-086 triple-collision is pre-existing and flagged as out-of-scope tracking). Decisions: agent-surface injection gap + agent-reads/orchestrator-writes; context-keyed recency taste model; token-sanitization trust boundary. References `ADR-086-declarative-skill-context-injection` by **full slug**. `status: Accepted`.
+Create **ADR-089** (rich template; provisional ordinal — `/ship` re-verifies next-free before merge; the ADR-086 triple-collision is pre-existing and flagged as out-of-scope tracking). Decisions: agent-surface injection gap + agent-reads/orchestrator-writes; context-keyed recency taste model; token-sanitization trust boundary. References `ADR-086-declarative-skill-context-injection` by **full slug**. `status: Accepted`.
 
 ### C4 views
-No new element. Enumeration checked against all three `.c4` files: external human actor = existing `founder` (model.c4:8); no new vendor/system (all-Claude); containers `skills`/`agents`/`hooks`/`kb` all present; access edges `hooks -> kb` (302), `skills -> kb "Reads/writes"` (303) model the load+write. **Only** falsified description: `agents -> kb "Reads"` (304) → `"Reads/writes"` (ux-design-lead writes `.pen`; broaden is symmetric with 303). Multi-variant fan-out is a runtime spawn at container granularity, below the C4 line (the model shows spawns only at `api -> claude`); recorded in ADR-087 rather than adding a component-level edge.
+No new element. Enumeration checked against all three `.c4` files: external human actor = existing `founder` (model.c4:8); no new vendor/system (all-Claude); containers `skills`/`agents`/`hooks`/`kb` all present; access edges `hooks -> kb` (302), `skills -> kb "Reads/writes"` (303) model the load+write. **Only** falsified description: `agents -> kb "Reads"` (304) → `"Reads/writes"` (ux-design-lead writes `.pen`; broaden is symmetric with 303). Multi-variant fan-out is a runtime spawn at container granularity, below the C4 line (the model shows spawns only at `api -> claude`); recorded in ADR-089 rather than adding a component-level edge.
 
 ### Sequencing
 ADR + C4 land in this PR (Phase 6). No deferral.
@@ -218,8 +218,8 @@ ADR + C4 land in this PR (Phase 6). No deferral.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** design sessions primed with a wrong learned taste — mitigated by context-keying (no cross-surface thrash) and read-path `--validate` (fail → no bias, never a corrupt prime).
-**If this leaks, the user's data is exposed via:** the `taste-profile.md` artifact — mitigated by closed context/axis allowlists + value sanitization (no free-form/PII capture), helper validation, and ADR-086's committed-only/path-contained FR6 fencing (fail-open, cannot fail-closed skills).
+**If this lands broken, the user experiences:** design sessions primed with a wrong learned taste — from (a) a malformed write (mitigated by context-keying + read-path `--validate` fail→no-bias, never a corrupt prime), or (b) a **headless false-write**: a `/work`/`one-shot` design run has no operator to pick, so a recorded selection would be machine-invented. "No write in headless" is a caller-prose contract at all three write sites (`frontend-design` Recording + brainstorm 3.55b + plan 2.5 §4b); a spurious headless write produces a *valid* token `--validate` cannot catch, but it is a single-token, git-revertable entry the consumers only *bias* (never hard-constrain) from.
+**If this leaks, the user's data is exposed via:** the `taste-profile.md` artifact — mitigated by closed context/axis allowlists + value sanitization (blocks whitespace/multi-word free-form; a single hyphenated proper noun like a client name remains possible but is git-revertable, not silent capture), helper validation (`--validate` covers the whole machine block — entries[] + contradictions[]), consumers biasing from the validated JSON block (not the unvalidated prose table), and ADR-086's committed-only/path-contained FR6 fencing (fail-open, cannot fail-closed skills).
 **Brand-survival threshold:** single-user incident.
 
 `requires_cpo_signoff: true` — CPO framing carried from the epic brainstorm; `user-impact-reviewer` invoked at review time.
@@ -238,7 +238,7 @@ ADR + C4 land in this PR (Phase 6). No deferral.
 - [ ] **AC9 (read-path validate):** both consumers invoke `taste-profile-update.sh --validate` before biasing, and fall back to no-bias on non-zero. Verify: grep each consumer for `--validate`.
 - [ ] **AC10 (helper + FR6 tests):** `taste-profile-update.test.sh` passes; `.claude/hooks/skill-context-queries.test.sh` passes.
 - [ ] **AC11 (C4):** `model.c4` contains `agents -> kb "Reads/writes"` (assert the string); `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
-- [ ] **AC12 (ADR):** `ADR-087-*.md` exists, status Accepted, references `ADR-086-declarative-skill-context-injection` by full slug, records the three decisions; 086 collision flagged out-of-scope.
+- [ ] **AC12 (ADR):** `ADR-089-*.md` exists, status Accepted, references `ADR-086-declarative-skill-context-injection` by full slug, records the three decisions; 086 collision flagged out-of-scope.
 - [ ] **AC13 (no component drift):** README counts + `plugin.json` unchanged.
 
 ### Post-merge (operator)
@@ -268,4 +268,4 @@ ADR + C4 land in this PR (Phase 6). No deferral.
 - Never bump `last_reviewed` from the helper — `context-reviewed-gate.sh` denies commits changing it without a `Context-Reviewed:` trailer.
 - **Fan-out sub-agents don't inherit Pencil MCP** (Kieran): each `ux-design-lead` fan-out sub-agent producing a `.pen` must have Pencil MCP available, or the agent's 0-byte HARD GATE fires per variant → N empty files. Confirm MCP availability before fan-out, or degrade to sequential single-variant.
 - Never `AskUserQuestion` inside a design surface (skill fan-out or agent) — a nested Task subagent hangs; interactive selection is natural-conversation, headless is auto-select-no-write.
-- Provisional ADR-087 ordinal: `/ship` re-verifies next-free against `origin/main` before merge.
+- Provisional ADR-089 ordinal: `/ship` re-verifies next-free against `origin/main` before merge.

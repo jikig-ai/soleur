@@ -24,6 +24,9 @@ set -uo pipefail
 # --- allowlists / sanitizers (the content-trust boundary) --------------------
 CONTEXT_ALLOW=" landing-page marketing-site dashboard app-ui docs email component "
 AXIS_ALLOW=" aesthetic-direction "
+# value = a short lowercase-hyphen aesthetic-direction slug (≤40 chars). The closed
+# charset + length cap is the injection defense: no whitespace/punctuation means a
+# value can never encode imperative prose that could steer a future FR6-primed session.
 VALUE_RE='^[a-z][a-z0-9-]{0,39}$'
 DATE_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
 
@@ -35,25 +38,37 @@ extract_json() {
     | sed -e '/^```/d'
 }
 
-fm_field() { awk -F': ' -v k="$1" '$0 ~ "^"k":" {print $2; exit}' "$2"; }
+# Frontmatter-scoped field read (house `c==1` idiom — only the block between the
+# first two `---` lines, so a body line beginning with the key never matches).
+fm_field() { awk -F': ' -v k="$1" 'FNR==1{c=0} /^---$/{c++; next} c==1 && $0 ~ "^"k":" {print $2; exit}' "$2"; }
 
 validate_json() {
-  # $1 = json string. Returns 0 if every entry/contradiction is well-formed.
+  # $1 = json string. Returns 0 iff EVERY entry AND contradiction is well-formed
+  # (same allowlists/regex a fresh write enforces). This is the consumer read-path
+  # trust gate (ADR-089): it must cover the whole machine block, not just entries.
   local j="$1"
   echo "$j" | jq -e '.schema == 1 and (.entries|type=="array") and (.contradictions|type=="array")' >/dev/null 2>&1 || return 1
-  # Every entry field must satisfy the same allowlists/regex a fresh write enforces.
   local bad
-  bad=$(echo "$j" | jq -r --arg ctxs "$CONTEXT_ALLOW" --arg axes "$AXIS_ALLOW" '
-    [ .entries[]
-      | .context as $c | .axis as $a | .value as $v | .last_reinforced as $d
-      | select(
-          ( ($ctxs | contains(" " + $c + " ")) | not )
-          or ( ($axes | contains(" " + $a + " ")) | not )
-          or ( ($v|type) != "string" )
-          or ( $v | test("^[a-z][a-z0-9-]{0,39}$") | not )
-          or ( $d | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") | not )
-        )
-    ] | length' 2>/dev/null)
+  bad=$(echo "$j" | jq -r \
+    --arg ctxs "$CONTEXT_ALLOW" --arg axes "$AXIS_ALLOW" \
+    --arg valre "$VALUE_RE" --arg datere "$DATE_RE" '
+    def ok_ctx($c): ($ctxs | contains(" " + $c + " "));
+    def ok_axis($a): ($axes | contains(" " + $a + " "));
+    ( [ .entries[]
+        | select(
+            ( ok_ctx(.context) | not ) or ( ok_axis(.axis) | not )
+            or ( (.value|type) != "string" ) or ( .value | test($valre) | not )
+            or ( .last_reinforced | test($datere) | not )
+            or ( (.reinforce_count|type) != "number" ) or ( .reinforce_count < 1 )
+          ) ] | length )
+    + ( [ .contradictions[]
+        | select(
+            ( ok_ctx(.context) | not ) or ( ok_axis(.axis) | not )
+            or ( (.old_value|type) != "string" ) or ( .old_value | test($valre) | not )
+            or ( (.new_value|type) != "string" ) or ( .new_value | test($valre) | not )
+            or ( .date | test($datere) | not )
+            or ( (.old_count|type) != "number" )
+          ) ] | length )' 2>/dev/null)
   [[ "$bad" == "0" ]] || return 1
   return 0
 }
@@ -63,22 +78,23 @@ render_file() {
   # $5 today (new last_updated), $6 json
   local out reviewed cadence owner today json tables flags
   out="$1"; reviewed="$2"; cadence="$3"; owner="$4"; today="$5"; json="$6"
+  # Recency order: most-recent first, higher reinforce_count breaks a same-date tie.
   tables=$(echo "$json" | jq -r '
     if (.entries|length)==0 then "_None yet._"
     else (["| context | axis | value | last_reinforced | reinforced |",
            "|---|---|---|---|---|"]
-          + ( .entries | sort_by(.last_reinforced) | reverse
+          + ( .entries | sort_by([.last_reinforced, .reinforce_count]) | reverse
               | map("| \(.context) | \(.axis) | \(.value) | \(.last_reinforced) | \(.reinforce_count) |") ))
          | join("\n")
-    end')
+    end') || return 1
   flags=$(echo "$json" | jq -r '
     if (.contradictions|length)==0 then "_None yet._"
     else ( .contradictions | sort_by(.date) | reverse
            | map("- \(.date) — `\(.context)`/`\(.axis)`: `\(.old_value)` (reinforced \(.old_count)×) superseded by `\(.new_value)`") )
          | join("\n")
-    end')
+    end') || return 1
   local compact
-  compact=$(echo "$json" | jq -c '.')
+  compact=$(echo "$json" | jq -c '.') || return 1
   cat > "$out" <<EOF
 ---
 last_updated: $today

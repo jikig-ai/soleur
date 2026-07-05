@@ -144,6 +144,19 @@ s=s[:m.start(1)]+json.dumps(d)+s[m.end(1):]; open(f,"w").write(s)
 PY
 if bash "$HELPER" --validate "$p" >/dev/null 2>&1; then fail "--validate passed a tampered profile"; else pass "--validate fails on tampered profile"; fi
 
+# 9b. --validate also covers contradictions[] (not just entries[]) — the consumer
+# read-path trust gate must certify the whole machine block (security P3-1 / user-impact F2).
+p="$(mk_profile)"
+bash "$HELPER" "$p" landing-page aesthetic-direction editorial 2026-07-05 >/dev/null 2>&1
+python3 - "$p" <<'PY' 2>/dev/null || true
+import re,sys,json
+f=sys.argv[1]; s=open(f).read()
+m=re.search(r'```json\n(.*?)\n```', s, re.S)
+d=json.loads(m.group(1)); d["contradictions"].append({"context":"landing-page","axis":"aesthetic-direction","old_value":"editorial; rm -rf /","new_value":"maximalist","old_count":1,"date":"2026-07-06"})
+s=s[:m.start(1)]+json.dumps(d)+s[m.end(1):]; open(f,"w").write(s)
+PY
+if bash "$HELPER" --validate "$p" >/dev/null 2>&1; then fail "--validate passed a poisoned contradictions[] entry"; else pass "--validate fails on poisoned contradictions[] (whole-block coverage)"; fi
+
 # 10. No decay/confidence tokens in the helper source (recency, not numeric decay)
 if grep -qiE 'halflife|confidence|decay_' "$HELPER" 2>/dev/null; then
   fail "helper contains decay/confidence tokens"
