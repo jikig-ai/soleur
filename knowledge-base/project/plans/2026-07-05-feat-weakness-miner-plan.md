@@ -107,13 +107,27 @@ the compound-promote guardrails + eval-gate.
 3. Confirm the first-appearance recency command against a real learning file; reuse the canonical
    gsub awk (`skill-security-scan/scripts/run-scan.sh:34`) for reading frontmatter fields only.
 
-### Phase 0.4 — Clustering-key go/no-go spike (real corpus, BEFORE writing the pipeline)
+### Phase 0.4 — Clustering-key go/no-go spike — ✅ RAN 2026-07-05 (result baked in below)
 
-Run a ≤20-line awk/jq spike applying the proposed key to the **actual** last-7-day corpus; eyeball the
-top clusters. If they are genuine recurring failure patterns → proceed with the frontmatter key. If
-they are taxonomy echoes → switch to **normalized error-signature n-grams from the `## Session Errors`
-body** before any fixture is written. This is the load-bearing design decision; synthetic fixtures pass
-regardless of real signal. Record the chosen key + spike output in the PR body.
+**Spike result (real corpus, last-7-day window):**
+- **120 new learnings in 7 days** — NOT ~3–5/week. The window is high-volume; the digest must be
+  selective (a bare "list everything new" is noise). Threshold/ranking matters more than assumed.
+- **Frontmatter `category` = taxonomy echo → REJECTED as the key.** `workflow-patterns` (44) +
+  `best-practices` (37) = 67% of the window in two filing-cabinet buckets. Clustering on category
+  names the cabinet, not the weakness (advisor + Kieran predicted this).
+- **Tags = topic-level, usable but coarse:** `observability` (10), `plan-review` (6), `eval-harness`
+  (6), `ci` (6), `terraform`/`supabase`/`github-actions`/`drift-guard`/`bash` (5 each).
+
+**DECISION — deterministic key for implementation:** **multi-tag co-occurrence clustering** —
+group learnings that share **≥2 tags**, rank clusters by member count (≥3 threshold), label each
+cluster by its shared-tag set (e.g. `ci`+`drift-guard`+`bash` = "recurring CI drift-guard bash
+failures"). This is sharper than category (rejected) and than a bare tag histogram (too coarse),
+and stays fully deterministic. **error-signature n-grams from the `## Session Errors` body** are the
+v1.1 sharpening (alongside the LLM theme-naming pass — same deferred issue), NOT v1.
+
+**Consequences for the rest of the plan:** AC1/AC2/AC8 cluster on the shared-tag-set key (≥2 shared
+tags, ≥3 members), NOT `category`/`module`. The 7-day window + ≥3 threshold are load-bearing for
+selectivity given the 120/week volume.
 
 ### Phase 1 — Deterministic miner script (RED → GREEN)
 
