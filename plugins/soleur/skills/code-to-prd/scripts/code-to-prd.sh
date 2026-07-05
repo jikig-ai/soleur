@@ -465,7 +465,7 @@ render_coverage_caveats() {
   echo ""
   echo "### GDPR Art. 9 special-category disclaimer"
   echo ""
-  echo "Automated redaction (\`redact-sentinel.sh\` + \`gitleaks\`) covers 14 secret/PII classes (JWT, email, UUID, Stripe/GitHub/Anthropic/OpenAI/Supabase keys, IPv4, env-var values, PEM private keys). It does **NOT** detect Article 9 special-category text content (race, ethnicity, religion, political views, health, biometric, sexual orientation). Before sharing this PRD outside the founder's immediate trust circle, review banner-flagged sections and any free-text content for Art. 9 categories. See \`knowledge-base/project/learnings/2026-05-15-fail-closed-redaction-enables-committed-default-output.md\` for the v2 keyword-scan layer roadmap."
+  echo "Automated redaction (\`redact-sentinel.sh\` + \`gitleaks\`) covers 16 secret/PII classes (JWT, email, UUID, Stripe/GitHub/Anthropic/OpenAI/Supabase/Doppler/Slack keys, IPv4, env-var values, PEM private keys) and NFKC-normalizes + strips zero-width/invalid-byte characters before matching (defeats Unicode-confusable evasion; see ADR-086). It does **NOT** detect Article 9 special-category text content (race, ethnicity, religion, political views, health, biometric, sexual orientation). Before sharing this PRD outside the founder's immediate trust circle, review banner-flagged sections and any free-text content for Art. 9 categories. See \`knowledge-base/project/learnings/2026-05-15-fail-closed-redaction-enables-committed-default-output.md\` for the v2 keyword-scan layer roadmap."
   echo ""
 }
 
