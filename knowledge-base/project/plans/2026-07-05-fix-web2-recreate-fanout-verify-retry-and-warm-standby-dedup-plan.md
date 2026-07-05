@@ -390,8 +390,8 @@ logs:
   where: "GitHub Actions job log + $GITHUB_STEP_SUMMARY; ci-deploy.sh writes reason/start_ts to web-1 deploy-status (read off-host)"
   retention: "GitHub Actions default (90 days)"
 discoverability_test:
-  command: "bash apps/web-platform/infra/deploy-status-fanout-verify.test.sh"
-  expected_output: "all fixtures PASS (retry→ok exit 0; all-degraded→exit 1; roster/staleness/tag invariants); NO ssh"
+  command: bash apps/web-platform/infra/deploy-status-fanout-verify.test.sh
+  expected_output: "0 failed"
 ```
 
 ## Architecture Decision (ADR/C4)
