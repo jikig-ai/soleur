@@ -81,3 +81,7 @@ dp.st.dev.zzzzzzzzzzzzzzzzzzzz
 ## Slack token (added #5987 — crown-jewel class)
 
 xoxb-zzzzzzzzzzzzzzzzzzzz
+
+## Cloudflare API token (added #6045 item 6 — 40-char, upper+digit anti-SHA predicate)
+
+Ab3K9xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
