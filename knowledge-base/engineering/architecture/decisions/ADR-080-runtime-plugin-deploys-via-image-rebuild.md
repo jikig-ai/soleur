@@ -262,6 +262,20 @@ scripts stay byte-identical; only the one expression changed.
   blind to the gzipped envelope. (No live regression: today's CI secret-scan is `gitleaks git`
   over committed source, where the token is only a TF reference.)
 
+**Amendment (2026-07-06): the WEB host is now `base64gzip()`'d too, layered ON the #5921 bake (#6090).**
+#6090's fresh-boot observability (readiness gates + Sentry emit call-sites that MUST run in-cloud-init,
+post-install, so they cannot be baked) pushed the web host's RAW render from ~31.3 KB to ~32.7 KB — past
+the 31,500 B raw sub-cap budget (still under the 32,768 hard cap, but the sub-cap test is the CI gate).
+Resolution: wrap the web `user_data` in `base64gzip()` exactly as git-data did, layered ON TOP of the
+retained #5921 bake-and-extract — **NOT a reversal**: the 22 host scripts stay baked into `var.image_name`.
+Measured: post-bake raw ~32,690 B → terraform `base64gzip()` (Go gzip level 6) **~15,152 B**, ~17.6 KB under
+the cap. The 140,856 B / "4.3× over even gzipped" figure above was the PRE-bake full-inline payload (why bake
+was necessary — gzip alone could not fit ~282 KB); the POST-bake residual compresses far better, so bake (for
+the ~250 KB script bulk) + gzip (for the residual launcher + call-sites) now BOTH apply to web. The size-guard
+test models the web host via `renderedGzipB64Len(serverTf)` against `WEB_GZIP_BUDGET = 18,000`; byte-exact truth
+is the web-2 recreate's `terraform apply` (Hetzner rejects >32,768), and the new `cloudflared_ready` /
+`webhook_bound` readiness gates fail-closed if decode ever produced a non-`#cloud-config`.
+
 **Accretion advisory (non-blocking):** this is ADR-080's second stretch onto Hetzner 32 KB
 `user_data` cap handling (a no-docker concern unrelated to image rebuild). A future
 consolidation of "Hetzner user_data cap handling" into a small dedicated ADR that both the web

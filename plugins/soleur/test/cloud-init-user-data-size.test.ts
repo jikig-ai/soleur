@@ -42,8 +42,17 @@ const DOCKERFILE = join(REPO_ROOT, "apps", "web-platform", "Dockerfile");
 // cap, a future base64gzip wrap (like #5927 did for git-data) will be needed — track before the
 // next multi-KB cloud-init addition.
 const HETZNER_CAP = 32_768;
-const WEB_BUDGET = 31_500;
-const WEB_FLOOR = 5_000; // non-vacuity
+// Web host base64gzip'd budget (#6090). server.tf wraps the web render in base64gzip() (the
+// git-data #5927 precedent, ADR-080 amended for the web host) because the RAW render reached the
+// old 31,500 B sub-cap organically and #6090's fresh-boot observability additions (readiness
+// gates + emit call-sites that must live IN cloud-init, post-install) pushed it over. We model the
+// base64gzip OUTPUT (what Hetzner stores against the cap). Measured ~15,064 B; the 18,000 B budget
+// leaves ~2.9 KB headroom for Go(terraform)-vs-node(zlib) header/level jitter + organic growth,
+// tight enough to catch a re-inlined multi-KB regression; well under HETZNER_CAP (~17.7 KB spare).
+// FLOOR is non-vacuity: a broken model gzipping near-nothing fails loudly. #5921's bake-and-extract
+// is RETAINED underneath — base64gzip is layered on top, not a reversal.
+const WEB_GZIP_BUDGET = 18_000;
+const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
 // level differences + CI jitter, tight enough to catch a re-inlined script re-ballooning the raw
@@ -187,11 +196,13 @@ const dockerfile = readFileSync(DOCKERFILE, "utf8");
 const dockerignore = readFileSync(join(REPO_ROOT, "apps", "web-platform", ".dockerignore"), "utf8");
 
 describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
-  test("web host user_data is under the sub-cap budget with headroom", () => {
-    const size = renderedSize("cloud-init.yml", varLengths(serverTf, "cloud-init.yml"));
-    expect(size).toBeLessThan(WEB_BUDGET);
+  test("web host base64gzip'd user_data is under the sub-cap budget (#6090)", () => {
+    // server.tf wraps the web render in base64gzip() (#6090, git-data #5927 precedent). Model the
+    // base64gzip OUTPUT (the string Hetzner stores against the cap) with REAL keep-inline content.
+    const size = renderedGzipB64Len("cloud-init.yml", serverTf);
     expect(size).toBeLessThan(HETZNER_CAP);
-    expect(size).toBeGreaterThan(WEB_FLOOR); // non-vacuity
+    expect(size).toBeLessThan(WEB_GZIP_BUDGET);
+    expect(size).toBeGreaterThan(WEB_GZIP_FLOOR); // non-vacuity
   });
 
   test("git-data host base64gzip'd user_data is under the sub-cap budget (#5927)", () => {
