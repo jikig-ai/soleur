@@ -9,6 +9,21 @@ brand_survival_threshold: none
 
 # 🐛 fix(infra): probe web-1 uptime over a single-level hostname (Universal SSL depth)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-06
+**Sections enhanced:** Hypotheses (Network-Outage Deep-Dive), Research Insights (precedent diff), User-Brand Impact (canonical scope-out bullet).
+**Method:** deepen-plan mandatory halt gates verified programmatically (4.6 User-Brand Impact ✓, 4.7 Observability ✓, 4.8 PAT-shaped ✓ none, 4.9 UI-wireframe ✓ N/A) + live repo precedent grep. A 40-agent fan-out was deliberately not run: this is a 4-line, live-verified, mechanical infra fix with no architecture choice (plan skill token-frugality guidance).
+
+### Key Improvements
+1. **Network-Outage Deep-Dive** (Phase 4.5, trigger "handshake"): L3→L7 layer table proving the causal layer is CF-edge TLS and every lower layer is verified clean — no SSH/firewall/service-layer misdiagnosis.
+2. **Precedent diff** (Phase 4.4): the fix aligns `web_host` with the single-label convention of every other proxied record in `dns.tf` (`app`/`deploy`/`ssh`/`www`); the buggy `${each.key}.app` is the sole two-level proxied name. Unproxied mail records are not a counterexample (no edge-cert dependency).
+3. **Downtime & Cutover** (Phase 4.55): explicitly not triggered — in-place probe-record rename, no reboot/replace, no serving-surface cutover.
+
+### New Considerations Discovered
+- The origin must answer `/health` for Host `web-1.soleur.ai`; it already did for the prior non-primary Host `web-1.app.soleur.ai` and `/health` is Host-agnostic, so the post-apply `curl … == 200` is the load-bearing confirmation (captured in AC + Sharp Edges).
+- Universal SSL wildcard depth is one label — a permanent constraint; the Phase 3 guard grep is the cheap regression brake against any future two-level probe hostname.
+
 ## Overview
 
 Better Stack auto-paused the uptime monitor **"soleur uptime web-1"** for sustained
@@ -48,9 +63,9 @@ surface is affected; the apex + Sentry monitors still prove overall reachability
 hostname and a DNS record name. No user data, secrets, auth, or PII are touched. The record
 stays proxied, preserving the CF-IP-only origin firewall (no origin-IP exposure).
 
-**Brand-survival threshold:** none — internal observability restoration on an already-provisioned
-surface. `reason: probe-hostname rename + monitor unpause; no user-data, auth, schema, or API
-surface touched; diff is confined to two .tf files (DNS record name + monitor URL string).`
+**Brand-survival threshold:** none — internal observability restoration on an already-provisioned surface.
+
+- `threshold: none, reason: probe-hostname rename + monitor unpause on an already-provisioned surface; the diff touches apps/web-platform/infra/ (sensitive-path regex) but only a DNS record name and an uptime-monitor URL string — no user data, auth, schema, API, or secret surface.`
 
 ## Research Reconciliation — Premise Validation (verified live against repo)
 
@@ -89,6 +104,24 @@ verified clean, ruling out an origin/firewall/service misdiagnosis:
 
 Fix acts at L7: move the probe hostname under the covered wildcard depth (`web-1.soleur.ai`),
 so the edge presents `*.soleur.ai` and the handshake completes → CF proxies to origin → 200.
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5, trigger: "handshake")
+
+| Layer | Verified | Artifact |
+|---|---|---|
+| L3 firewall allow-list | verified — not the cause | Origin 443 firewall (CF-IP-only, `firewall.tf`) is irrelevant: the probe dies at the CF edge TLS handshake, before any origin packet. This is NOT an SSH/egress-IP-drift outage (no `hcloud firewall` diff needed — no SSH surface in scope). |
+| L3 DNS / routing | verified — resolves | The proxied A record exists in state and returns a CF edge IP; TLS handshake only begins after DNS + TCP succeed, so DNS is not the failure. |
+| L7 TLS / edge (HTTPS) | verified — **ROOT CAUSE** | `openssl s_client -connect app.soleur.ai:443` → SAN `soleur.ai, *.soleur.ai`. `*.soleur.ai` matches one label; `web-1.app.soleur.ai` (two labels) has no edge cert → SSL alert 40 handshake failure. |
+| L7 application | verified — healthy | `app.soleur.ai/health` → 200. The origin app is up; a service-layer fix would be non-causal. |
+
+L3→L7 order satisfied; the causal layer (L7 edge TLS) is the deepest verified-broken layer, and every layer below it is verified clean. No SSH/firewall/service-layer fix is proposed (compliant with `hr-ssh-diagnosis-verify-firewall`).
+
+### Research Insights — Precedent Diff (deepen-plan Phase 4.4)
+
+**Single-level proxied-record precedent (in-repo, same file):** every other CF-proxied A/CNAME record in `dns.tf` uses a **single-label** name covered by `*.soleur.ai` — `cloudflare_record.app` (`name = "app"`, line 15), `.deploy` (`"deploy"`, 47), `.ssh` (`"ssh"`, 59), `.www` (`"www"`, 320). The buggy `${each.key}.app` (line 36) is the **only** two-level proxied name in the file. The fix aligns `web_host` with the established single-level convention — no novel pattern, no new cert.
+
+- The two-level mail records (`send.send`, `send.inbound`, `resend._domainkey.send`, etc.) are NOT a counterexample: they are **unproxied** TXT/MX records that never traverse the CF edge over HTTPS, so Universal SSL edge-cert depth does not apply to them. Only **proxied HTTPS-served** hostnames need the edge cert — the exact discriminator for this bug.
+- **Downtime & Cutover (Phase 4.55): not triggered.** The change is an in-place `cloudflare_record.name` UPDATE on the **monitoring probe** record (`web_host`), not a reboot/replace of any `hcloud_server`, not a singleton→for_each cutover, and not a change to the serving app ingress (`cloudflare_record.app`, untouched). No in-flight user requests are dropped; no maintenance window is needed.
 
 ## Implementation Phases
 
