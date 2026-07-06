@@ -236,33 +236,33 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `cron-roadmap-review.ts` `ROADMAP_REVIEW_PROMPT` contains **none** of:
+- [x] AC1 — `cron-roadmap-review.ts` `ROADMAP_REVIEW_PROMPT` contains **none** of:
       `DEDUP RULE`, `within the last 6 days`, `post your findings as a comment on the most recent
       existing issue`, `If no recent duplicate exists`.
       Verify: `grep -c -E 'DEDUP RULE|within the last 6 days|post your findings as a comment on the most recent existing issue|If no recent duplicate exists' apps/web-platform/server/inngest/functions/cron-roadmap-review.ts` → `0`.
-- [ ] AC2 — the four verbatim-extraction anchors survive. Use **per-anchor presence** assertions
+- [x] AC2 — the four verbatim-extraction anchors survive. Use **per-anchor presence** assertions
       (NOT a summed `grep -c` — the header verbatim-extraction comment at lines 114–115 echoes
       three of the anchor literals, so a count would read `6`, not `4`; Kieran plan-review F1). The
       new `cron-roadmap-review.test.ts` `it.each` block asserts each of `Part 1: Issue-to-Milestone
       Alignment`, `Part 2: Bidirectional Integrity Gate`, `MILESTONE RULE:`, `BIDIRECTIONAL RULE:`
       is present in `SUT_SOURCE`.
-- [ ] AC3 — the surviving safety-guard anchors are intact, asserted per-anchor (the existing
+- [x] AC3 — the surviving safety-guard anchors are intact, asserted per-anchor (the existing
       `it.each` rows for `ISSUE CLOSURE SAFETY:`, `ROADMAP.MD CONFLICT GUARD:`, `CLONE DEPTH RULE:`,
       `STAGING RULE (#5091):` remain green).
-- [ ] AC4 — the `## Output` section unconditionally creates the dated digest: the verbatim
+- [x] AC4 — the `## Output` section unconditionally creates the dated digest: the verbatim
       substring `create a new issue with:` is present and the removed 6-day conditional strings are
       absent (new `cron-roadmap-review.test.ts` presence + absence assertions pass).
-- [ ] AC5 — `cron-roadmap-review.test.ts` no longer asserts the removed rule and DOES assert
+- [x] AC5 — `cron-roadmap-review.test.ts` no longer asserts the removed rule and DOES assert
       absence of the removed strings + presence of the new wording.
-- [ ] AC6 — behavioral invariant unchanged: the cohort suite still proves exactly-one-digest +
+- [x] AC6 — behavioral invariant unchanged: the cohort suite still proves exactly-one-digest +
       green-skip-no-spawn for roadmap-review (the mock ignores the prompt, so removing the DEDUP
       RULE cannot regress it).
       Verify: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-cohort-dedup.test.ts` → roadmap-review rows green.
-- [ ] AC7 — `cron-shared.test.ts` "credits a dedup-comment" test still returns `true` with the
+- [x] AC7 — `cron-shared.test.ts` "credits a dedup-comment" test still returns `true` with the
       re-pointed `scheduled-community-monitor` fixture label + updated rationale.
-- [ ] AC8 — `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-roadmap-review.test.ts test/server/inngest/cron-cohort-dedup.test.ts test/server/inngest/cron-shared.test.ts` all green.
-- [ ] AC9 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
-- [ ] AC10 — `cron-content-generator.ts` untouched (scope guard).
+- [x] AC8 — `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-roadmap-review.test.ts test/server/inngest/cron-cohort-dedup.test.ts test/server/inngest/cron-shared.test.ts` all green.
+- [x] AC9 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
+- [x] AC10 — `cron-content-generator.ts` untouched (scope guard).
       Verify: `git diff --name-only` does not list `cron-content-generator.ts`.
 
 ## Open Code-Review Overlap
