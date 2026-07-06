@@ -633,8 +633,9 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       { value: "sk-test", scheme: "api_key" },
       { PLAUSIBLE_API_KEY: "plk-1" },
       // Issue A: third opts arg always present; ghToken undefined here
-      // because the default mock resolves no installation (null).
-      { ghToken: undefined },
+      // because the default mock resolves no installation (null). Slice B:
+      // pluginPath (getPluginPath() = deployed root) is always threaded.
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
     );
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.env.ANTHROPIC_API_KEY).toBe("sk-test");
@@ -671,6 +672,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         ghToken: "ghs_minted_xyz",
         gitAskpassScriptPath: `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
         gitInstallationToken: "ghs_minted_xyz",
+        pluginPath: "/app/shared/plugins/soleur",
       },
     );
   });
@@ -754,6 +756,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         ghToken: undefined,
         gitAskpassScriptPath: undefined,
         gitInstallationToken: undefined,
+        pluginPath: "/app/shared/plugins/soleur",
       },
     );
   });
@@ -798,7 +801,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
     );
     expect(mockQuery).toHaveBeenCalledOnce();
   });
@@ -818,7 +821,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
     );
   });
 
