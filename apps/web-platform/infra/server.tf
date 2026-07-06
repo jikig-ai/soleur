@@ -117,7 +117,24 @@ resource "hcloud_server" "web" {
   # keep-inline set (fail2ban/journald, consumed pre-Docker) + non-file args remain, plus
   # host_scripts_content_hash for the boot integrity check. hooks.json is rendered on-host
   # from the baked hooks.json.tmpl with webhook_deploy_secret injected at boot.
-  user_data = templatefile("${path.module}/cloud-init.yml", {
+  # gzip-first (#6090). The web host's rendered cloud-config reached the raw 31,500-byte
+  # sub-cap budget organically (~31.3 KB), and the #6090 fresh-boot observability additions
+  # (readiness gates + emit call-sites that CANNOT be baked — they run IN cloud-init,
+  # post-install) pushed it over. #5921's bake-and-extract (ADR-080) is RETAINED underneath —
+  # the host scripts stay baked into var.image_name; base64gzip() is layered ON TOP of the
+  # residual launcher + call-sites, exactly as git-data adopted it in #5927. NOT a reversal
+  # of #5921.
+  #
+  # Decode contract (identical to git-data.tf, same ubuntu-24.04 image): Hetzner base64-decodes
+  # the stored string (DataSourceHetzner.maybe_b64decode, ≥20.3) → raw gzip bytes (magic 1f 8b)
+  # → cloud-init auto-gunzips → byte-identical #cloud-config, so every runcmd / write_files /
+  # ${host_scripts_content_hash} runs unchanged. base64 is MANDATORY on Hetzner, which makes
+  # base64gzip() the intended path, not a datasource gamble. web-1 carries
+  # ignore_changes=[user_data], so ONLY a fresh create (the web-2 recreate this PR instruments)
+  # receives the gzipped form; its readiness gates fail-closed if decode ever produced a
+  # non-#cloud-config. Byte-exact size is confirmed at `terraform plan`. See ADR-080 (amended
+  # for the web host).
+  user_data = base64gzip(templatefile("${path.module}/cloud-init.yml", {
     image_name = var.image_name
     # Keep-inline: fail2ban is reloaded early (at the package-audit stage, before Docker) so
     # its drop-in cannot come from the post-Docker image extraction. journald was ALSO inline
@@ -141,7 +158,7 @@ resource "hcloud_server" "web" {
     # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
     # block in ci-ssh-key.tf for the rationale.
     ci_ssh_public_key_openssh = local.ci_ssh_pubkey
-  })
+  }))
 
   # cloud-init and ssh_keys are create-time attributes. After import,
   # template interpolation differs from the original user_data, and

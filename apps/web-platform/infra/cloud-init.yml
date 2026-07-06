@@ -409,8 +409,9 @@ runcmd:
     # runcmd (set -e) before the app starts. Secret via single-quote interpolation, same as
     # doppler_token below (trusted operator value, generated ASCII — no shell metachar).
     trap - EXIT
-    WEBHOOK_DEPLOY_SECRET='${webhook_deploy_secret}' sh "$SEED/soleur-host-bootstrap.sh" "$SEED"
+    WEBHOOK_DEPLOY_SECRET='${webhook_deploy_secret}' SOLEUR_SENTRY_DSN='${sentry_dsn}' sh "$SEED/soleur-host-bootstrap.sh" "$SEED"
     rm -rf "$SEED"
+    set +e  # H3 (#6090): scope set -e — runcmd is ONE /bin/sh; leak = silent abort (plan).
   # END host-script extraction (#5921)
 
   # Mount volume for workspaces (Hetzner pre-formats with ext4 via Terraform)
@@ -440,17 +441,24 @@ runcmd:
   # The token encodes tunnel configuration managed remotely via Terraform.
   - cloudflared service install ${tunnel_token}
 
+  # #6090 H4: baked readiness poll (enable returns 0 before connect).
+  - soleur-wait-ready service cloudflared cloudflared_ready || exit 1
+
   # Install webhook binary (adnanh/webhook v2.8.2) with checksum verification
   - |
     WEBHOOK_VERSION="2.8.2"
     WEBHOOK_SHA256="7a190ec7b4c2ffbb4eb1e11755a2e7acd82f1ffe74f60f235a360441daf22fd2"
     curl -fsSL "https://github.com/adnanh/webhook/releases/download/$${WEBHOOK_VERSION}/webhook-linux-amd64.tar.gz" -o /tmp/webhook.tar.gz
-    echo "$${WEBHOOK_SHA256}  /tmp/webhook.tar.gz" | sha256sum -c -
+    # #6090: checksum fail-CLOSED independent of H3 set +e (mismatch aborts).
+    echo "$${WEBHOOK_SHA256}  /tmp/webhook.tar.gz" | sha256sum -c - || { soleur-boot-emit webhook_checksum fatal; exit 1; }
     tar xzf /tmp/webhook.tar.gz -C /usr/local/bin --strip-components=1 webhook-linux-amd64/webhook
     chmod +x /usr/local/bin/webhook
     rm /tmp/webhook.tar.gz
   - systemctl daemon-reload
   - systemctl enable --now webhook
+
+  # #6090 H4 (load-bearing): baked :9000 bind poll (the primary symptom).
+  - soleur-wait-ready port 9000 webhook_bound || exit 1
 
   # Enable disk space monitoring timer (#1409)
   - systemctl enable --now disk-monitor.timer
@@ -493,7 +501,8 @@ runcmd:
     set -e
     docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true
     cleanup() { docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true; }
-    trap cleanup EXIT
+    # #6090: composite trap (cleanup + named fatal).
+    trap 'rc=$?; cleanup; [ "$rc" = 0 ] || soleur-boot-emit plugin_seed fatal' EXIT
     docker create --name soleur-plugin-seed ${image_name}
     find /mnt/data/plugins/soleur -mindepth 1 -delete 2>/dev/null || true
     docker cp soleur-plugin-seed:/opt/soleur/plugin/. /mnt/data/plugins/soleur/
@@ -525,7 +534,8 @@ runcmd:
     docker pull ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
-    trap cleanup EXIT
+    # #6090: composite trap (cleanup + named fatal).
+    trap 'rc=$?; cleanup; [ "$rc" = 0 ] || soleur-boot-emit inngest_bootstrap fatal' EXIT
     docker create --name soleur-inngest-bootstrap-extract ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
     docker cp soleur-inngest-bootstrap-extract:/inngest-bootstrap.sh "$EXTRACT_DIR/inngest-bootstrap.sh"
     docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
@@ -551,6 +561,7 @@ runcmd:
     env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
         "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=$VECTOR_CLI_SHA256" \
       bash "$EXTRACT_DIR/inngest-bootstrap.sh"
+    trap - EXIT  # #6090: disarm, else the composite trap mislabels terminal-block failures as inngest_bootstrap.
 
   - |
     set -e
@@ -598,3 +609,5 @@ runcmd:
       echo "FATAL: container egress enforcement not proven — powering off (#5933)" >&2
       poweroff -f
     fi
+    # #6090: reached serving host (poweroff → Better Stack).
+    soleur-boot-emit cloud_init_complete info
