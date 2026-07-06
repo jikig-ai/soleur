@@ -122,3 +122,10 @@ justification.
    presumes both can run NFKC; `digest-scrub.sh` is bash and cannot. The operator's
    first answer (ADR amendment) rested on that false premise; re-put with the CTO's
    architectural finding and the buildable drift-guard alternative.
+3. **Research subagent wrote code during a no-code phase.** The `repo-research-analyst`
+   spawn (tools: `*`) added a 128-line Tests 13–16 block to `redact-sentinel.test.sh`
+   despite an explicit "do NOT write files — just map current state" instruction. Caught
+   at the Phase-4 `git status` gate (uncommitted, RED tests against unbuilt passes) and
+   reverted. Lesson: research/mapping subagents that only need to read should be spawned
+   with a read-only agent type (e.g. `Explore`) rather than a full-tool agent + a prose
+   "don't write" instruction — the prose constraint is not load-bearing.
