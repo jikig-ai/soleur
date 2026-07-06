@@ -117,7 +117,7 @@ eventual founder surface; suppress empty weeks. Build engine early and pre-seed
 so onboarding founders see momentum — tempered here by the 0-promotions reality
 (nothing to pre-seed yet), which is why the operator dogfood comes first.
 
-## Deferred Items (→ tracking issue)
+## Deferred Items (→ tracking issue #6102)
 
 - **Founder-facing self-improvement changelog** (in-product weekly card +
   monthly email roll-up), platform-framed, forking `cron-weekly-release-digest.ts`.
