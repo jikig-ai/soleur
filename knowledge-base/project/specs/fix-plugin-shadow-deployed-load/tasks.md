@@ -30,11 +30,11 @@ lane: cross-domain · brand_survival_threshold: single-user incident · requires
 - [ ] B6 Phase 6 (optional, 1-line): non-silent collision warn in `scaffoldWorkspaceDefaults` (`workspace.ts:433-444`).
 
 ## Cross-cutting
-- [ ] C1 ADR-0NN (trust boundary: SDK plugin/hook source = deployed root). Provisional ordinal; re-verify at ship.
-- [ ] C2 C4: add untrusted connected-repo-plugin-source element + boundary note (mirror `contributor` precedent); annotate `claude -> skillloader "Loads plugin"`. Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
-- [ ] C3 Observability: reduced Phase 5 (verifyPluginMountOnce + `connectedRepoShipsPlugin` breadcrumb; no dead-branch source probe).
-- [ ] C4 Learning file already re-captured (enhanced): `knowledge-base/project/learnings/bug-fixes/2026-07-06-connected-repo-shadows-deployed-plugin-via-workspace-relative-path.md`.
-- [ ] C5 Follow-up issue: broader `${CLAUDE_PLUGIN_ROOT}` migration (ship/brainstorm/merge-pr/drain-prs/fix-issue/git-worktree examples + archive-kb/deploy/pencil-setup/feature-video/community families).
+- [x] C1 **ADR-093** created (`accepted`): SDK plugin/hook/skill source = platform-deployed root, never connected-repo workspace copy. Ordinal verified next-free vs origin/main; `ADR-0NN` placeholders swept in plan + model.c4.
+- [x] C2 C4: **DONE.** Added `connectedRepoPlugin` untrusted `#external` element + trust-boundary comment (mirrors `contributor`); annotated `claude -> skillloader "Loads plugin from the PLATFORM-DEPLOYED root"`; added the `connectedRepoPlugin -> skillloader "IGNORED (trust boundary)"` edge; included it in the `containers` view. `c4-code-syntax.test.ts` + `c4-render.test.ts` green (23 passed).
+- [x] C3 Observability: **DONE (reduced Phase 5 + folds in Phase-6/B6 collision warn).** `scaffoldWorkspaceDefaults` emits a `connectedRepoShipsPlugin` diagnostic breadcrumb when a connected repo ships a committed `plugins/soleur/` dir (existing-logger channel; no new pipeline). No dead-branch per-dispatch `source` probe. 2 new tests.
+- [x] C4 Learning file re-captured + enhanced (canary reconciliation, two-factory correction, F3/loaded-gun, reduced observability): `knowledge-base/project/learnings/bug-fixes/2026-07-06-connected-repo-shadows-deployed-plugin-via-workspace-relative-path.md`.
+- [ ] C5 Follow-up issue: broader `${CLAUDE_PLUGIN_ROOT}` migration (ship/brainstorm/merge-pr/drain-prs/fix-issue/git-worktree examples + archive-kb/deploy/pencil-setup/feature-video/community families) + Slice B (Phase 2+3).
 - [ ] C6 `tsc --noEmit` clean (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`); full suite green (vitest, NOT `npm run -w`).
 
 ## Post-merge (operator)

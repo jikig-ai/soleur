@@ -80,13 +80,20 @@ effect, exactly the split observed.
 
 ## Solution (the redo, corrected)
 
-Load the plugin from `getPluginPath()` in BOTH SDK factories; export `CLAUDE_PLUGIN_ROOT = getPluginPath()` into
-the agent bash env (not in `AGENT_ENV_ALLOWLIST` — injected explicitly); migrate the shelled-out
-`worktree-manager.sh`/readiness-diag invocations to `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}`. **No ADR-079 fixture
+Load the plugin from `getPluginPath()` in BOTH SDK factories (Slice A — the security core; ADR-093). The residual
+in-process SKILL.md reader (`context-queries-hook.ts` `skillsDir`) sources from `getPluginPath()` too, while
+`knowledge-base/` stays workspace-rooted (repo content, `git ls-files`+containment gated). A **loaded-gun guard**
+(`assertTrustedPluginPath`, test-tolerant `/app/` allowlist) wraps the `plugins:[{path}]` chokepoint so a future
+workspace-relative regression fails loudly instead of silently re-opening the hole. Slice B (a sequenced follow-up):
+export `CLAUDE_PLUGIN_ROOT = getPluginPath()` into the agent bash env (not in `AGENT_ENV_ALLOWLIST` — injected
+explicitly) and migrate the shelled-out `worktree-manager.sh`/readiness-diag invocations to
+`${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` behind a safe-bash exact-literal carve-out. **No ADR-079 fixture
 regeneration is needed** (the change doesn't touch `buildAgentSandboxConfig`). The gating on-host step is NOT a
 fixture regen — it is reading `/hooks/deploy-status` for the real reason and refusing to re-misattribute a host
-`canary_sandbox_failed` to the plugin path. Add a per-dispatch load-source probe (`source` /`pluginPath` /
-`connectedRepoShipsPlugin`) so the affected surface is no longer blind.
+`canary_sandbox_failed` to the plugin path. **Observability was reduced (not the originally-planned per-dispatch
+`source=='workspace-shadow'` probe — that monitors a state the post-Slice-A code cannot produce, a tautology):**
+rely on the existing `verifyPluginMountOnce()` boot probe + a single scaffold-time `connectedRepoShipsPlugin`
+diagnostic breadcrumb that makes the previously-silent collision observable.
 
 ## Session Errors
 

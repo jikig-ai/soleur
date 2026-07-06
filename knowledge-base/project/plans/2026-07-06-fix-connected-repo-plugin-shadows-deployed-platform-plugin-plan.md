@@ -197,7 +197,7 @@ the workspace symlink irrelevant to the SDK); purely surfaces the previously-sil
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-0NN-sdk-plugin-source-is-platform-deployed-not-connected-repo.md` (ordinal provisional — see ADR gate).
+- `knowledge-base/engineering/architecture/decisions/ADR-093-sdk-plugin-source-is-platform-deployed-not-connected-repo.md` (ordinal provisional — see ADR gate).
 - `knowledge-base/project/learnings/bug-fixes/2026-07-06-connected-repo-shadows-deployed-plugin-via-workspace-relative-path.md` (re-capture of the file reverted with #6115, **enhanced** — see below).
 
 ---
@@ -233,7 +233,7 @@ This changes a **trust boundary** (the SDK plugin/hook load source moves from th
 workspace copy to the platform-controlled deployed root) → ADR is a deliverable of THIS plan (`wg-architecture-decision-is-a-plan-deliverable`), not a follow-up.
 
 ### ADR
-Create **ADR-0NN — "SDK plugin/hook source is the platform-deployed root, never the connected-repo workspace copy."**
+Create **ADR-093 — "SDK plugin/hook source is the platform-deployed root, never the connected-repo workspace copy."**
 Decision: both real-SDK factories load `plugins:[{path: getPluginPath()}]`; deployed skills invoke out-of-tree
 scripts via `${CLAUDE_PLUGIN_ROOT}`; the connected-repo workspace copy is untrusted and inert for the SDK.
 Alternatives Considered: Options 1 & 2 above (record why rejected). Relates to / does not reverse ADR-044
@@ -343,7 +343,7 @@ unverified delivery mechanism). The operator's call, surfaced via AskUserQuestio
 - [ ] **AC6 (safe-bash — F1-safe):** the `$` metachar denylist is **unchanged** (still rejects `$`/`{`/`}`/`$(…)`); the new allowlist entry is an **exact-literal carve-out** for the specific worktree-manager/readiness-diag invocation(s) only; the pre-existing `./plugins/…` server auto-approve of the untrusted copy is removed/rescoped. Unit-test: the exact known invocation is allowed; an arbitrary `${FOO}` / `$(…)` / a `../`-traversal / a different script path is denied.
 - [ ] **AC7 (F2 — runtime env guarantee, fail-closed):** an **in-image** test asserts `CLAUDE_PLUGIN_ROOT` is present in the **sandboxed Bash** env (not merely in `buildAgentEnv` output — that is AC3); and the server dispatch **errors/observes rather than silently falls back to `./plugins/…`** when it is unset. (If in-image verification shows the var does NOT reach sandbox bash, Phase 3 delivery defers — see Sequencing Decision.)
 - [ ] **AC7b (loaded-gun guard):** plugin-path consumers assert `path.isAbsolute(p) && p.startsWith("/app/")`; a workspace-relative value fails loudly (unit-tested).
-- [ ] **AC8 (ADR/C4):** ADR-0NN created (`accepted`); the `claude -> skillloader "Loads plugin"` edge/description in `model.c4` annotated with the deployed-root trust boundary; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
+- [ ] **AC8 (ADR/C4):** ADR-093 created (`accepted`); the `claude -> skillloader "Loads plugin"` edge/description in `model.c4` annotated with the deployed-root trust boundary; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
 - [ ] **AC9 (typecheck/tests):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; the four touched test suites pass (use the package's real runner — vitest per `vitest.config.ts`, NOT `npm run -w`).
 - [ ] **AC10 (learning):** the reverted learning file is re-created enhanced with the canary drift-gate reconciliation and the "two SDK factories" correction.
 - [ ] **AC11 (HARD — no manual pull, deployed authoritative):** With this fix, a Soleur user — **including one whose connected repo IS soleur itself** — never needs a manual `git pull`/`git fetch` for the platform to use current tooling. Evidenced by: the SDK loads commands/skills/agents/hooks from the deployed root (Phase 1); the wedge script family runs from the deployed root via `${CLAUDE_PLUGIN_ROOT}` (Phase 3). *Test:* on a synthetic workspace whose committed `plugins/soleur/worktree-manager.sh` differs from deployed, the loaded/executed version is the deployed one (assert via the load-source probe + a version sentinel).
