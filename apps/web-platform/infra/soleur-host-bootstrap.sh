@@ -198,16 +198,17 @@ STAGE=ghcr_login
     ghcr_login_warn credential_absent
   fi ) || true
 
-# Author the shared post-bootstrap Sentry emitter (#6090) for the DOWNSTREAM cloud-init
-# region (cloudflared → webhook → app-run), which today carries NO Sentry trap at all —
-# the deeper blind spot beyond the bootstrap block. Written HERE (baked → zero user_data;
-# the rendered cloud-init is within ~1.4 KB of the 32,768-byte cap, so a per-block emit
-# body is infeasible). The baked ${SOLEUR_SENTRY_DSN} is spliced in via a placeholder +
-# sed (avoids per-`$` heredoc escaping); a non-`/` sed delimiter tolerates the DSN URL.
-# BEST-EFFORT: the whole authoring is fail-open (a write miss must never brick the boot —
-# observability degrades, the host still serves); downstream callers tolerate its absence.
-STAGE=boot_emit
-( set +e
+# Author the shared post-bootstrap Sentry emitter + readiness poller (#6090) for the
+# DOWNSTREAM cloud-init region (cloudflared → webhook → app-run), which today carries NO
+# Sentry trap at all — the deeper blind spot beyond the bootstrap block. Baked HERE (0
+# user_data; the rendered cloud-init has only ~0.4 KB headroom under the 32,768-byte cap,
+# so a per-block emit body is infeasible). The baked ${SOLEUR_SENTRY_DSN} is spliced in via
+# a placeholder + sed (avoids per-`$` heredoc escaping); a non-`/` delimiter tolerates the
+# DSN URL. FAIL-CLOSED authoring (runs under the top-level set -e + emit_fail trap): a write
+# miss emits a NAMED stage=boot_emit fatal and aborts, NOT a later anonymous abort at the
+# fail-closed readiness gates (`soleur-wait-ready … || exit 1`) with no signal. The install
+# loop above already proved /usr/local/bin writable, so this won't spuriously fire.
+STAGE=boot_emit; FAILED_FILE=soleur-boot-emit
 cat > /usr/local/bin/soleur-boot-emit <<'EMITEOF'
 #!/bin/sh
 # Fail-open Sentry breadcrumb/fatal emitter for the cloud-init post-bootstrap region
@@ -230,8 +231,8 @@ exit 0
 EMITEOF
 sed -i "s|@@SOLEUR_SENTRY_DSN@@|${SOLEUR_SENTRY_DSN:-}|" /usr/local/bin/soleur-boot-emit
 chmod 0755 /usr/local/bin/soleur-boot-emit
-# Bounded readiness poll (#6090, H4) — baked (0 user_data; the rendered cloud-init is within
-# ~1 KB of the 32,768-byte cap, so the poll body cannot live inline). systemd enable commands
+# Bounded readiness poll (#6090, H4) — baked (0 user_data; only ~0.4 KB cap headroom, so the
+# poll body cannot live inline). systemd enable commands
 # return 0 the instant a unit launches, NOT when it connects/binds; this polls the real
 # invariant so an ASYNC death (the primary "cloudflared never comes up / :9000 never binds"
 # symptom) becomes a NAMED fatal instead of a silent green-and-broken boot. Callers do
@@ -250,7 +251,6 @@ done
 soleur-boot-emit "$STAGE" info
 WAITEOF
 chmod 0755 /usr/local/bin/soleur-wait-ready
-) || true
 
 # Completion breadcrumb (#6090): the SINGLE signal distinguishing "died IN bootstrap"
 # (emit_fail names a bootstrap stage) from "bootstrap COMPLETED, died downstream" (this

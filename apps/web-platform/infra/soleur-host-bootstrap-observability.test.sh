@@ -14,7 +14,7 @@ set -euo pipefail
 #   - a single `bootstrap_complete` breadcrumb (distinguishes "died IN bootstrap" from
 #     "bootstrap completed, died downstream")
 #   - a baked `soleur-boot-emit` written by bootstrap.sh for the downstream region
-#     (zero user_data — the 32,768-byte cap has ~1.4 KB headroom)
+#     (zero user_data — the 32,768-byte cap has only ~0.4 KB headroom)
 #   - READINESS GATES (cloudflared_ready / webhook_bound) — the ONLY detector for an
 #     async systemd-service death (enable returns 0, service never binds :9000)
 #   - H3 fix: restore `set +e` after the extraction block so its `set -e` no longer
@@ -133,7 +133,7 @@ fi
 
 # ── AC6 (readiness gates — the load-bearing async-death detector) ──
 # The poll logic is BAKED (soleur-wait-ready, authored by bootstrap.sh → 0 user_data, the
-# ~1.4 KB cap headroom forbids an inline loop); cloud-init carries only the call-sites, each
+# ~0.4 KB cap headroom forbids an inline loop); cloud-init carries only the call-sites, each
 # `|| exit 1` so a never-ready service aborts the boot.
 if grep -qE 'cat > /usr/local/bin/soleur-wait-ready' "$BOOT" \
    && grep -qE 'systemctl is-active --quiet "\$NAME"' "$BOOT" \
@@ -203,8 +203,14 @@ else
       no "AC8: workflow QUERY missing message \"$msg\" (lockstep drift re-opens the blind spot)"
     fi
   done
-  # And each message literal must actually be emitted somewhere in the sources.
-  for pair in "soleur-host-bootstrap complete:$BOOT" "soleur-cloud-init boot stage:$BOOT"; do
+  # Bidirectional lockstep: each of the FOUR query literals must actually be emitted at its
+  # source site (a rename of ANY emit — new OR legacy — would leave the QUERY listing a dead
+  # string that matches nothing → dark query, uncaught). Covers both new and pre-existing.
+  for pair in \
+    "soleur-hostscript-seed failed:$CI" \
+    "soleur-host-bootstrap failed:$BOOT" \
+    "soleur-host-bootstrap complete:$BOOT" \
+    "soleur-cloud-init boot stage:$BOOT"; do
     msg="${pair%%:*}"; src="${pair##*:}"
     if grep -qF -- "$msg" "$src"; then
       ok "AC8: message \"$msg\" is emitted in $(basename "$src")"
@@ -232,6 +238,56 @@ if awk '/Surface fresh-host Sentry/{f=1} f&&/if: always\(\)/{print "y"; exit}' "
   ok "AC8b: fresh-host Sentry surface runs if: always() (green boot shows the probe fired)"
 else
   no "AC8b: the Sentry surface step must be if: always() (spec-flow F4)"
+fi
+
+# ── AC8c (transport parity for the BAKED emitter) ──
+# The DSN-parse + store-endpoint transport now exists in THREE copies inside bootstrap.sh:
+# _sentry_emit (6-space) and the baked soleur-boot-emit body (heredoc, different indent).
+# cron-egress-enforce-probe.test.sh's parity guard only covers the 6-space copy, so a
+# de.sentry.io-style DSN/endpoint migration could leave the baked copy stale → the whole
+# downstream region goes dark with every other guard green. Assert each transport construct
+# appears in BOTH copies (indentation-agnostic substring; >=2 occurrences in bootstrap.sh).
+while IFS= read -r tline; do
+  [ -z "$tline" ] && continue
+  cnt=$(grep -cF -- "$tline" "$BOOT" || true)
+  if [ "${cnt:-0}" -ge 2 ]; then
+    ok "AC8c: transport shared by _sentry_emit + baked soleur-boot-emit: $(printf '%.38s' "$tline")…"
+  else
+    no "AC8c: transport drift — '$tline' appears ${cnt}× in bootstrap.sh (need >=2: both copies)"
+  fi
+done <<'TRANSPORT'
+sed -E 's#https://([^@]+)@.*#\1#'
+sed -E 's#https://[^@]+@([^/]+)/.*#\1#'
+curl -m 10 --retry 3 -sf -X POST "https://$SHOST/api/$PROJ/store/"
+X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY
+TRANSPORT
+
+# ── AC9 (stage-name coverage): the terminal healthy-boot breadcrumb is name-anchored ──
+# The workflow summary advertises cloud_init_complete as the expected last-reached stage; a
+# typo would pass every structural guard while making the healthy-boot signal unqueryable.
+if grep -qE 'soleur-boot-emit cloud_init_complete info' "$CI"; then
+  ok "AC9: terminal cloud_init_complete breadcrumb present (healthy-boot last-reached signal)"
+else
+  no "AC9: cloud-init must emit 'soleur-boot-emit cloud_init_complete info' after the egress probe"
+fi
+
+# ── AC10 (inngest trap disarmed): the composite trap must not linger into the terminal block ──
+# Without a trailing `trap - EXIT`, the inngest composite trap stays armed through the
+# trap-less terminal block and mislabels a doppler_download/docker_run failure as
+# stage=inngest_bootstrap — defeating the "name the exact stage" deliverable.
+if awk '/soleur-boot-emit inngest_bootstrap fatal/{f=1} f&&/trap - EXIT/{print "y"; exit}' "$CI" | grep -q y; then
+  ok "AC10: inngest composite trap is disarmed (trap - EXIT) before the terminal block"
+else
+  no "AC10: inngest block must 'trap - EXIT' after its composite trap (else terminal failures mislabel)"
+fi
+
+# ── AC11 (webhook checksum fail-closed independent of the H3 set +e) ──
+# The signed-release binary's sha256sum must abort on mismatch even though H3 restored
+# set +e for the region (a mismatch must not install an unverified binary).
+if awk '/sha256sum -c -/{if (/webhook_checksum|exit 1/) {print "y"; exit}}' "$CI" | grep -q y; then
+  ok "AC11: webhook checksum is fail-closed (|| exit 1) independent of the H3 set +e"
+else
+  no "AC11: webhook 'sha256sum -c -' must be '|| { … fatal; exit 1; }' (H3 set +e un-gates it otherwise)"
 fi
 
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
