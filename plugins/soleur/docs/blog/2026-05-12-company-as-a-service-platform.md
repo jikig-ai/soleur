@@ -59,7 +59,7 @@ Knowledge coherence is what makes compounding possible. Every decision, document
 
 A CaaS platform amplifies founder judgment — it does not replace it. The founder remains the decision-maker. Agents execute with domain expertise and full context, but they do not override the human at the top of the hierarchy.
 
-This is the distinction from fully autonomous AI companies. The founder's judgment is not a bug in the human-AI relationship. It is the product's core value proposition.
+This is the distinction from [fully autonomous AI companies]({{ site.url }}/blog/soleur-vs-polsia/). The founder's judgment is not a bug in the human-AI relationship. It is the product's core value proposition.
 
 ## How Soleur Implements CaaS
 
@@ -104,7 +104,7 @@ The most important property of Company-as-a-Service is not what it does on day o
 
 Every session captures learnings. Every document produced enters the knowledge base. Every decision made becomes available context for the next decision. The system does not reset. It accumulates.
 
-This is the mechanism behind the prediction. Dario Amodei, CEO of Anthropic, [forecast that a one-person billion-dollar company would emerge as soon as 2026](https://officechai.com/ai/the-first-one-person-billon-dollar-startup-will-be-a-reality-by-2026-anthropic-ceo-dario-amodei/) — not as a curiosity but as a structural outcome of AI agents extending beyond engineering into every function a company needs. The solo founder building with a CaaS platform today is not waiting for that future. They are already inside it.
+This is the mechanism behind the prediction. Dario Amodei, CEO of Anthropic, [forecast that a one-person billion-dollar company would emerge as soon as 2026](https://officechai.com/ai/the-first-one-person-billon-dollar-startup-will-be-a-reality-by-2026-anthropic-ceo-dario-amodei/) — not as a curiosity but as [a structural outcome of AI agents extending beyond engineering into every function a company needs]({{ site.url }}/blog/billion-dollar-solo-founder-stack/). The solo founder building with a CaaS platform today is not waiting for that future. They are already inside it.
 
 ---
 
