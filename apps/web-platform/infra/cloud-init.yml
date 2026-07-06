@@ -456,10 +456,8 @@ runcmd:
       else
         printf 'ghcr_login_fail: %s' "$(tail -c 140 /run/soleur-ghcr-login.log 2>/dev/null)" > /run/soleur-stage-detail
       fi
-      # #6122/ADR-096: also log in to the self-hosted zot registry (dark — only when ZOT_*
-      # present) so the seed pull can prefer it. Login persists in the host docker config
-      # for the app pull + inngest extract below. bootstrap's zot_login runs post-extract
-      # (too late for THIS pull), so it is done inline here too.
+      # #6122/ADR-096: also log in to zot (dark — only when ZOT_* present) so the seed pull can
+      # prefer it; login persists for the app + inngest pulls (bootstrap's zot_login is too late).
       ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
       if [ -n "$ZURL" ]; then
         ZUSER=$(timeout 15 doppler secrets get ZOT_PULL_USER --plain --project soleur --config prd 2>/dev/null || true)
@@ -467,23 +465,18 @@ runcmd:
         [ -n "$ZUSER" ] && [ -n "$ZTOK" ] && printf '%s' "$ZTOK" | docker login "$ZURL" -u "$ZUSER" --password-stdin >/dev/null 2>&1 || true
       fi
     ) || true
-    # #6122/ADR-096: resolve the effective image ref ONCE — zot-primary when zot is
-    # configured + /v2/-reachable, else the unchanged GHCR ref — and record it in
-    # /run/soleur-image-ref so the downstream app pull/create/run use the SAME registry
-    # atomically (image ref moves together). Dark-safe: an unset/unreachable zot leaves
-    # REF = the GHCR ref (today's behaviour, byte-identical). The `until` loop tries the
-    # zot ref first, then falls back to the GHCR ref for the remaining attempts; the
-    # STAGE=pull top-armed on_err trap names a TOTAL pull failure.
+    # #6122/ADR-096: resolve the effective image ref ONCE (zot-primary when configured +
+    # /v2/-reachable, else the unchanged GHCR ref) → /run/soleur-image-ref so app pull/create/
+    # run follow the SAME registry. Dark-safe: unset/unreachable zot ⇒ REF = GHCR ref.
     STAGE=pull
     ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
     REF="$IMAGE_REF"
     if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
       REF="$ZURL/$(printf '%s' "$IMAGE_REF" | sed 's#^ghcr.io/##')"
     fi
-    # #6090: log each pull to /run/soleur-pull.log; on the final failed attempt append the
-    # stderr to /run/soleur-stage-detail so on_err's `detail` tag carries the real error; clear
-    # it after a successful pull. #6122: try the zot ref first, fall back to the GHCR ref after
-    # the zot attempt (atomic — the served ref is recorded in /run/soleur-image-ref).
+    # #6090: log each pull to /run/soleur-pull.log; on final failure append stderr to
+    # /run/soleur-stage-detail (on_err detail tag); clear on success. #6122: zot ref first,
+    # fall back to GHCR after the zot attempt.
     N=0
     until docker pull "$REF" > /run/soleur-pull.log 2>&1; do
       N=$((N+1))
@@ -586,9 +579,8 @@ runcmd:
     chmod +x /etc/cron.weekly/docker-cleanup
 
   # Pull and run container (secrets from Doppler -- no .env fallback)
-  # #6122/ADR-096: use the registry the seed block resolved (/run/soleur-image-ref) so
-  # the pull + create + run all follow the SAME registry; falls back to the GHCR
-  # ${image_name} if the sentinel is absent (byte-identical to the pre-#6122 behaviour).
+  # #6122/ADR-096: pull the registry the seed block resolved (/run/soleur-image-ref); falls
+  # back to the GHCR ${image_name} if the sentinel is absent (byte-identical pre-#6122).
   - docker pull "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
 
   # Seed /mnt/data/plugins/soleur from the image's baked plugin tree (#3045).
@@ -636,10 +628,8 @@ runcmd:
   - |
     set -e
     IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
-    # #6122/ADR-096: prefer zot (dark — only when reachable + the ref resolves there); the
-    # host is already logged into zot by soleur-host-bootstrap.sh. All 3 refs below follow
-    # IREF atomically. A zot miss falls back to the GHCR ref (byte-identical to pre-#6122);
-    # soleur-boot-emit records which registry served (soak-gate signal).
+    # #6122/ADR-096: prefer zot (dark; host already logged in by soleur-host-bootstrap.sh);
+    # all 3 refs follow IREF, zot miss ⇒ GHCR fallback; soleur-boot-emit records the registry.
     ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
     if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
       ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.18"
