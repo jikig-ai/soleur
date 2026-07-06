@@ -238,7 +238,7 @@ logs:
          mirrored into the Sentry emit `detail` tag (no SSH required to read the cause)
   retention: tmpfs (/run) for the boot; the Sentry event is the durable record
 discoverability_test:
-  command: gh workflow run apply-web-platform-infra.yml -f apply_target=web-2-recreate  # OPERATOR-GATED, not auto-dispatched; then read the Sentry detail tag / the workflow's always()-run Sentry surface step — NO ssh
+  command: gh workflow run apply-web-platform-infra.yml -f apply_target=web-2-recreate  # OPERATOR-GATED, not auto-dispatched; then read the Sentry detail tag via the workflow's always()-run Sentry surface step (no host shell access needed)
   expected_output: detail tag "ghcr_login_ok" and a terminal cloud_init_complete breadcrumb (web-2 bound :9000)
 ```
 
