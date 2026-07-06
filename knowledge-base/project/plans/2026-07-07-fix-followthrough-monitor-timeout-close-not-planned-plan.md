@@ -87,7 +87,7 @@ established codebase semantic for "automation is giving up." CLI form verified:
 
 **If this lands broken, the user experiences:** every timed-out follow-through
 issue continues to be recorded as `state_reason: COMPLETED` — a false "done"
-signal on post-deploy verifications, prod spot-checks, secret rotations, and
+signal on post-deployment verifications, prod spot-checks, secret rotations, and
 GDPR/compliance follow-throughs that never actually ran. Any metric or audit
 that trusts `state_reason` silently overcounts completed work, and
 `needs-attention` keeps appearing on closed issues (making the label meaningless).
