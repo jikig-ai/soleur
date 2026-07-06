@@ -396,6 +396,25 @@ if grep -qE 'timeout [0-9]+ apt-get update' "$CI" && grep -qE 'timeout [0-9]+ ap
 else
   no "AC17: apt-get update/install must be timeout-wrapped so a hang trips the trap with a named stage"
 fi
+# Ordering: STAGE must be set BEFORE the hang-capable command (else the fatal mis-attributes), and
+# the apt block must sit AFTER the trap arm (else no emit coverage). Guards a silent regression.
+su_ln=$(grep -nE '^\s*STAGE=apt_update' "$CI" | head -1 | cut -d: -f1 || true)
+auu_ln=$(grep -nE 'timeout [0-9]+ apt-get update' "$CI" | head -1 | cut -d: -f1 || true)
+armln2=$(grep -nE '^\s*trap on_err EXIT' "$CI" | head -1 | cut -d: -f1 || true)
+if [ -n "$su_ln" ] && [ -n "$auu_ln" ] && [ -n "$armln2" ] && [ "$armln2" -lt "$su_ln" ] && [ "$su_ln" -lt "$auu_ln" ]; then
+  ok "AC17: trap-arm ($armln2) < STAGE=apt_update ($su_ln) < apt-get update ($auu_ln) — covered + correctly attributed"
+else
+  no "AC17: need trap-arm < STAGE=apt_update < apt-get update (arm=$armln2 stage=$su_ln update=$auu_ln)"
+fi
+# The cloudflare keyring must be fetched BEFORE the first apt-get update — the cloudflare source is
+# active from boot (write_files), so an update before the key deterministically fails (missing
+# signed-by keyring) and masks the real cause. (Anchor on the curl fetch, not the deb/signed-by line.)
+cfk_ln=$(grep -nE 'curl.*cloudflare-main\.gpg' "$CI" | head -1 | cut -d: -f1 || true)
+if [ -n "$cfk_ln" ] && [ -n "$auu_ln" ] && [ "$cfk_ln" -lt "$auu_ln" ]; then
+  ok "AC17: cloudflare keyring fetched (line $cfk_ln) BEFORE apt-get update ($auu_ln) — no missing-key fatal"
+else
+  no "AC17: cloudflare-main.gpg must be curl-fetched before the first apt-get update (cfk=$cfk_ln update=$auu_ln)"
+fi
 
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

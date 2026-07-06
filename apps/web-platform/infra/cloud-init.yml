@@ -344,10 +344,20 @@ runcmd:
   - |
     set -e
     export DEBIAN_FRONTEND=noninteractive
+    # cloudflare-main.list is active from boot (write_files) but its keyring is only fetched at the
+    # cloudflared install far below — so apt-get update here would DETERMINISTICALLY fail on the
+    # missing signed-by keyring (noble exit 100, NOT retryable by Acquire::Retries) and mask the
+    # real cause. Fetch it FIRST, before any apt-get update sees the cloudflare source.
+    STAGE=cf_apt_key
+    n=0; until curl --connect-timeout 5 -m 20 -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg; do n=$((n+1)); [ "$n" -ge 3 ] && exit 1; sleep 5; done
+    # DPkg::Lock::Timeout waits out the apt-daily timer (holds the lock minutes on a fresh boot)
+    # instead of hard-failing; the outer `timeout` still bounds a true hang → named fatal. 2
+    # attempts keeps the named fatal near the ~640s provision poll — the Sentry fatal is durable
+    # regardless (it may post-date the poll and is the authoritative signal).
     STAGE=apt_update
-    n=0; until timeout 240 apt-get update -o Acquire::Retries=3; do n=$((n+1)); [ "$n" -ge 3 ] && exit 1; sleep 10; done
+    n=0; until timeout 240 apt-get update -o Acquire::Retries=3 -o DPkg::Lock::Timeout=300; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
     STAGE=apt_install
-    n=0; until timeout 300 apt-get install -y curl fail2ban jq nftables; do n=$((n+1)); [ "$n" -ge 3 ] && exit 1; sleep 10; done
+    n=0; until timeout 300 apt-get install -y -o DPkg::Lock::Timeout=300 curl fail2ban jq nftables; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
 
   # Reload fail2ban so the jail.d/soleur-sshd.local drop-in applies (#2654).
   # fail2ban is installed via the apt_install block above; the service auto-starts on
@@ -468,9 +478,9 @@ runcmd:
   # Set after recursive chown so it isn't overridden
   - chown 1001:1001 /mnt/data/workspaces
 
-  # Install cloudflared from Cloudflare apt repository.
-  # GPG key downloaded at provision time (rotated Oct 2025).
-  - curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  # Install cloudflared from Cloudflare apt repository. The signing keyring (rotated Oct 2025) is
+  # now fetched in the early apt block above (stage=cf_apt_key) — the cloudflare source is active
+  # from boot, so its key must precede the FIRST apt-get update, not just this cloudflared install.
   - apt-get update
   - apt-get install -y cloudflared
 
