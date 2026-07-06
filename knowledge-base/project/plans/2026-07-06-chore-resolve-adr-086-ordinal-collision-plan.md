@@ -171,8 +171,8 @@ logs:
   retention: "90 days (GitHub default)"
 
 discoverability_test:
-  command: "bash scripts/check-adr-ordinals.sh && bash plugins/soleur/test/c4-model-freshness.test.sh"
-  expected_output: "'ADR ordinal + content checks passed.' AND 'PASS: committed model.likec4.json is in sync with the .c4 sources'"
+  command: "bash scripts/check-adr-ordinals.sh"
+  expected_output: "ADR ordinal + content checks passed."
 ```
 
 ## Architecture Decision (ADR/C4)
