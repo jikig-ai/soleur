@@ -25,10 +25,11 @@ plan: knowledge-base/project/plans/2026-07-06-feat-registry-oidc-migration-plan.
 - [ ] 1.9 Backfill last N releases of BOTH images GHCR→zot + the pinned `v1.1.18` (inngest) + `:latest` (web) — **post-provisioning (crane copy; needs the live zot host)**
 
 ## Phase 2 — Push side (dual-push)
-- [ ] 2.1 `build-inngest-bootstrap-image.yml:131-194` → also push to zot (ZOT_PUSH_* via Doppler)
-- [ ] 2.2 `reusable-release.yml:425-432,580-611` → also push to zot
-- [ ] 2.3 `reusable-release.yml:626-640` → cosign-sign the zot digest
-- [ ] 2.4 CI evidence: a tag build is pullable + signed from zot
+- [x] 2.0 NEW `cf-tunnel-registry-bridge` composite action (CI→private-net zot push via the existing web CF Tunnel; CTO ruling 2). `cloudflared access tcp … 127.0.0.1:5000` + `docker login` (CF Access registry_push token + zot-push htpasswd from Doppler)
+- [x] 2.1 `build-inngest-bootstrap-image.yml` → dual-push (docker tag+push 127.0.0.1:5000; plain build → local docker, no crane). Not cosign-signed (no id-token perm — GHCR parity)
+- [x] 2.2 `reusable-release.yml` → dual-push web image via `crane copy` GHCR→zot RUNNER-SIDE (buildx container driver can't reach the runner bridge; digest preserved). Bridge continue-on-error + if:always() teardown (additive — zot failure never fails GHCR)
+- [x] 2.3 `reusable-release.yml` → cosign-sign the zot digest (same digest; host offline-verify passes, COSIGN_IDENTITY_REGEXP unchanged)
+- [ ] 2.4 CI evidence: a tag build is pullable + signed from zot — **post-provisioning (needs live zot + a tag build)**
 
 ## Phase 3 — Pull side (flip zot-primary + atomic GHCR fallback + per-site beacon)
 - [ ] 3.1 `ci-deploy.sh`: web login/pull (`:535-569`,`:1025`) → zot-primary; atomic fallback (image+docker-config auth+sig target); beacon fields
