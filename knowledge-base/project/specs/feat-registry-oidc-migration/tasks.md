@@ -8,10 +8,10 @@ plan: knowledge-base/project/plans/2026-07-06-feat-registry-oidc-migration-plan.
 # Tasks — Registry migration off GHCR to self-hosted zot (Hetzner registry host, volume-backed)
 
 ## Phase 0 — De-risking spikes (no production writes)
-- [ ] 0.1 Local zot (docker, upstream digest-pinned image) + local-fs storage; push+pull both images; confirm read-only htpasswd ACL (pull ok / push denied) + gc/dedupe on singleton
-- [ ] 0.2 cosign: sign a zot-stored digest; offline-verify; assert read-only user fetches `sha256-<digest>.sig`/`.att`; assert gc does not reap `.sig`; confirm `COSIGN_IDENTITY_REGEXP` unchanged
-- [ ] 0.3 Confirm `crane copy` (or `skopeo copy`) mirrors a GHCR tag → zot (backfill mechanism)
-- [ ] 0.4 Re-verify next ADR ordinal vs origin/main (provisional 093)
+- [x] 0.1 Local zot (docker, upstream digest-pinned image) + local-fs storage; push+pull both images; confirm read-only htpasswd ACL (pull ok / push denied) + gc/dedupe on singleton — evidence: `phase-0-spike-evidence.md` (ACL push→403; dedupe+gc clean)
+- [x] 0.2 cosign: sign a zot-stored digest; offline-verify; assert read-only user fetches `sha256-<digest>.sig`/`.att`; assert gc does not reap `.sig`; confirm `COSIGN_IDENTITY_REGEXP` unchanged — evidence: legacy `.sig` tag fetched by read-only user; survives aggressive-gc; regexp registry-agnostic (ci-deploy.sh:52)
+- [x] 0.3 Confirm `crane copy` (or `skopeo copy`) mirrors a GHCR tag → zot (backfill mechanism) — evidence: GHCR→zot digest-identical copy
+- [x] 0.4 Re-verify next ADR ordinal vs origin/main (provisional 093) — latest committed = ADR-092; 093 free
 
 ## Phase 1 — IaC foundations + backfill (additive; GHCR primary)
 - [ ] 1.1 `apps/web-platform/infra/zot-registry.tf`: `hcloud_server.registry` (CAX11) + `hcloud_volume` (attached, `/var/lib/zot`) on the private network
