@@ -29,7 +29,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: scheduled-rule-metrics-aggregate
+  group: rule-metrics-aggregate
   cancel-in-progress: false
 
 permissions:
@@ -56,11 +56,11 @@ jobs:
         with:
           add-paths: knowledge-base/project/rule-metrics.json
           branch-prefix: ci/rule-metrics-
-          commit-message: "chore(rule-metrics): weekly aggregate"
-          pr-title-prefix: "chore(rule-metrics): weekly aggregate"
+          commit-message: "chore(rule-metrics): on-demand aggregate"
+          pr-title-prefix: "chore(rule-metrics): on-demand aggregate"
           # Cite only files present in the PR diff — the body-vs-diff guard
           # (#2905) blocks bodies whose cited paths are <50% matched.
-          pr-body: "Automated weekly rule-metrics snapshot: regenerates knowledge-base/project/rule-metrics.json from the rule-incidents log and the AGENTS rule index via the rule-metrics-aggregate script."
+          pr-body: "On-demand rule-metrics snapshot: regenerates knowledge-base/project/rule-metrics.json from the rule-incidents log and the AGENTS rule index via the rule-metrics-aggregate script."
           change-summary: "Rule metrics aggregation only, no code changes"
           gh-token: ${{ github.token }}
 
@@ -68,6 +68,6 @@ jobs:
         if: failure()
         uses: ./.github/actions/notify-ops-email
         with:
-          subject: '[FAIL] Scheduled: Rule Metrics Aggregate failed'
-          body: '<p><strong>Scheduled: Rule Metrics Aggregate</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          subject: '[FAIL] On-Demand: Rule Metrics Aggregate failed'
+          body: '<p><strong>On-Demand: Rule Metrics Aggregate</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}

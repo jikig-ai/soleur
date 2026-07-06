@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Weekly aggregator: parse AGENTS.md rule IDs + .claude/.rule-incidents.jsonl
+# On-demand + local aggregator: parse AGENTS.md rule IDs + .claude/.rule-incidents.jsonl
 # and write knowledge-base/project/rule-metrics.json.
 #
 # Output schema (plan Phase 5):
@@ -84,7 +84,7 @@ fi
 
 # --- Counts from jsonl ----------------------------------------------------
 # Per-line parse via `jq -R 'fromjson?'` so a single malformed line from a
-# crash-mid-write or OOM does NOT abort the whole weekly aggregation. Bad
+# crash-mid-write or OOM does NOT abort the whole aggregation. Bad
 # lines are dropped with a stderr warning; valid lines are still counted.
 #
 # Archive-spanning input (#3508): per-write rotation moves data from the
@@ -250,7 +250,7 @@ report=$(jq -n \
         | map(select(. as $id | ($known_ids | index($id)) | not))
         # LOAD-BEARING: te-* prefix reserved for token-efficiency telemetry
         # (issue #3494, compound Phase 1.6). Removing this filter breaks the
-        # weekly cron — every Phase 1.6 outlier would fail orphan-gate.
+        # aggregation run — every Phase 1.6 outlier would fail orphan-gate.
         # Tests T6/T7/T8 in scripts/rule-metrics-aggregate.test.sh cover this.
         # AGENTS.md section prefixes are hr|wg|cq|rf|pdr|cm; te- cannot collide.
         | map(select(startswith("te-") | not))
@@ -312,7 +312,7 @@ echo "$report" | jq -e '.schema == 1' >/dev/null 2>&1 \
 
 # Orphan invariant: any rule_id emitted by a hook / skill that is not tagged
 # in AGENTS.md indicates drift (renamed rule, typo in snippet, dead rule-id).
-# Weekly cron surfaces this as a failing workflow step — the next run is a
+# The aggregation run surfaces this as a failing step — the next run is a
 # silent normalization otherwise. The file IS still written first so
 # operators have forensic context for the orphan list on failed runs.
 orphan_count=$(echo "$report" | jq -r '.summary.orphan_rule_ids | length')
@@ -373,7 +373,7 @@ fi
 # Orphan gate (post-write): fail loudly if the jsonl emitted rule_ids not
 # present in AGENTS.md. File is already written so operators have forensic
 # context; rotation below is skipped because the exit short-circuits. The
-# weekly workflow's notify-ops-email catches this via `if: failure()`.
+# workflow's notify-ops-email catches this via `if: failure()`.
 if [[ "${orphan_count:-0}" -gt 0 ]]; then
   orphan_list=$(echo "$report" | jq -r '.summary.orphan_rule_ids | join(", ")')
   echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2

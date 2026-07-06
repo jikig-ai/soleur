@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-06
 - **Issue:** [#6042](https://github.com/jikig-ai/soleur/issues/6042) (blocker cut from the weakness-miner [#6037](https://github.com/jikig-ai/soleur/issues/6037), merged as PR #6036)
-- **Supersedes (in part):** ADR-3 of the [2026-04-14 rule-utility-scoring plan](../../../project/plans/2026-04-14-feat-rule-utility-scoring-plan.md) — its "single `flock`-guarded file, no per-session fragmentation" premise.
+- **Supersedes (in part):** ADR-3 of the [2026-04-14 rule-utility-scoring plan](../../../project/plans/2026-04-14-feat-rule-utility-scoring-plan.md) — its single-log premise (ADR-3 replaced per-session logs + rollup with one `flock`-guarded `.rule-incidents.jsonl`, eliminating per-session filename generation).
 - **Diverges from:** [ADR-054](./ADR-054-safe-commit-and-pr-sole-write-path-for-bot-cron-prs.md) — the bot-cron-PR write-path precedent, *for this sink only*.
 
 ## Context
@@ -30,7 +30,7 @@ The **authoritative producer** of `rule-metrics.json` is the **local compound fl
 
 ## Consequences
 
-- **Relationship to ADR-3.** This supersedes ADR-3's "single file, *no per-session fragmentation*" premise, empirically falsified today: events fragment across ~12 worktree-local logs (the bare-primary root holds the ~577 KB canonical log; sibling worktrees carry 4–16 KB scraps). This ADR does **not** restore the single-file invariant — cross-worktree completeness is **deferred** (see below). Until the follow-up lands read-merge, the committed metric reflects the **committing worktree's** log: real, but under-complete.
+- **Relationship to ADR-3.** This supersedes ADR-3's single-log premise (per-session logs + rollup collapsed to one `flock`-guarded file), empirically falsified today: events fragment across ~12 worktree-local logs (the bare-primary root holds the ~577 KB canonical log; sibling worktrees carry 4–16 KB scraps). This ADR does **not** restore the single-file invariant — cross-worktree completeness is **deferred** (see below). Until the follow-up lands read-merge, the committed metric reflects the **committing worktree's** log: real, but under-complete.
 - **Divergence from ADR-054.** ADR-054's bot-cron-PR write-path is correct for sinks whose inputs are repo-tracked. It does not apply to this sink because the input log is gitignored and structurally invisible to a fresh CI checkout.
 - **Metric goes stale/under-complete, never false-zero.** Between compound runs the aggregate is last-known-good. No consumer breaks: rule-prune reads the committed file, is quarterly + manually `/sync`-triggered, and its `first_seen != null` guard already prevents mass false-retirement; `weakness-miner.yml` is fully decoupled.
 - **Lost automated locality-regression detector (deferred).** Dropping the cron removes the only *scheduled* detector of a future locality re-break. A read-only assertion (`jq -e '.summary.rules_unused_over_8w < .summary.total_rules_tagged'` on the *committed* file) inside an existing scheduled job would restore it with zero producer — but it can only go green once real local data has flowed, so it is added in the follow-up, not here.

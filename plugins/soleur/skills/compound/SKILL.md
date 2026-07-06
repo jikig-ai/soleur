@@ -265,7 +265,13 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
          echo "[INFO] $unused rules have zero hits over 8 weeks. Run /soleur:sync rule-prune to surface pruning candidates."
        fi
      else
-       echo "[WARN] rule-metrics-aggregate.sh failed; skipping rule-metrics write + unused-rules hint." >&2
+       # The aggregator's orphan gate exits AFTER writing (CI forensic context),
+       # so a failed run may have left a partial/orphan-flagged rule-metrics.json
+       # in the working tree. Revert it so a later blanket `git add -A
+       # knowledge-base/` (compound-capture consolidation) cannot stage a
+       # rejected aggregate.
+       git checkout -- "$OUT" 2>/dev/null || true
+       echo "[WARN] rule-metrics-aggregate.sh failed; reverted any partial write, skipped the unused-rules hint." >&2
      fi
    fi
    ```
