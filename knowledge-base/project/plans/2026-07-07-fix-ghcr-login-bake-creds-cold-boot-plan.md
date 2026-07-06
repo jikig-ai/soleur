@@ -193,8 +193,11 @@ plan time; if the deepen pass finds one, fold-in or acknowledge per the standard
 - **Blast radius:** web-2 only (weight-0, non-serving). **web-1 is never replaced** by this
   change. Expected downtime: none (web-1 keeps serving; web-2 is not in the LB pool).
 - **Post-merge web-2 recreate + verification is OPERATOR-GATED** — this plan prescribes **no**
-  autonomous dispatch. The verification signal is the `detail` tag (`ghcr_login_ok`) on the
-  next recreate's Sentry breadcrumb / the healthy `cloud_init_complete` emit + `:9000` bind.
+  autonomous dispatch. The positive verification signal is the terminal `cloud_init_complete`
+  Sentry breadcrumb + the `:9000` bind (a green recreate). NOTE: the `ghcr_login_ok` string is
+  written to `/run/soleur-stage-detail` but a *successful* `docker pull` clears that file (L467
+  `: > /run/soleur-stage-detail`) before any emit reads it — so the `detail` tag carries a value
+  ONLY on the failure paths (`ghcr_creds_missing` / `ghcr_login_fail` / `... | pull_err:`).
 
 ### Distinctness / drift safeguards
 - `dev` is intentionally NOT provisioned for GHCR creds (host reads `--config prd` only —
@@ -239,7 +242,7 @@ logs:
   retention: tmpfs (/run) for the boot; the Sentry event is the durable record
 discoverability_test:
   command: gh workflow run apply-web-platform-infra.yml -f apply_target=web-2-recreate  # OPERATOR-GATED, not auto-dispatched; then read the Sentry detail tag via the workflow's always()-run Sentry surface step (no host shell access needed)
-  expected_output: detail tag "ghcr_login_ok" and a terminal cloud_init_complete breadcrumb (web-2 bound :9000)
+  expected_output: a terminal cloud_init_complete breadcrumb (web-2 bound :9000) = success; a failed boot instead emits a STAGE=pull fatal whose detail tag names the sub-cause (ghcr_creds_missing / ghcr_login_fail / pull_err)
 ```
 
 ## Acceptance Criteria
@@ -272,8 +275,9 @@ discoverability_test:
       (OPERATOR-GATED — not auto-dispatched). Automation: not feasible in-session because
       the recreate replaces a live cluster host inside a maintenance window and is
       deliberately human-gated (weight-0 standby, but a `-replace` of prod infra).
-- [ ] Verify via the recreate's Sentry `detail` tag = `ghcr_login_ok` and a terminal
-      `cloud_init_complete` breadcrumb (web-2 bound `:9000`) — read from Sentry, **no SSH**.
+- [ ] Verify via the recreate's terminal `cloud_init_complete` breadcrumb (web-2 bound `:9000`)
+      — read from Sentry, **no SSH**. Success clears the detail file, so a green recreate + bind
+      IS the positive signal; a `detail` tag only appears on a failed boot (names the sub-cause).
 - [ ] `gh issue close 6090` after the recreate confirms the bind.
 
 ## Domain Review
