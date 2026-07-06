@@ -131,7 +131,7 @@ Yes. Soleur's domain agents could run as managed workers within Paperclip's orch
 
 **Q: What are the main open-source AI company platforms in 2026?**
 
-The two most prominent self-hosted platforms for AI company operation are Paperclip (open-source, MIT license, 14,600+ GitHub stars, governance infrastructure layer) and Soleur (source-available, BSL 1.1, {{ stats.agents }} agents, domain intelligence layer). Polsia is the fastest-growing proprietary alternative -- [$1.5M ARR with 2,000+ managed companies](https://www.teamday.ai/ai/polsia-solo-founder-million-arr-self-running-companies) as of March 2026 -- but is cloud-hosted, closed-source, and fully autonomous by design.
+The two most prominent self-hosted platforms for AI company operation are Paperclip (open-source, MIT license, 14,600+ GitHub stars, governance infrastructure layer) and Soleur (source-available, BSL 1.1, {{ stats.agents }} agents, domain intelligence layer). Polsia is the fastest-growing proprietary alternative -- [$1.5M ARR with 2,000+ managed companies](https://www.teamday.ai/ai/polsia-solo-founder-million-arr-self-running-companies) as of March 2026 -- but is cloud-hosted, closed-source, and [fully autonomous by design]({{ site.url }}/blog/soleur-vs-polsia/).
 
 <script type="application/ld+json">
 {
