@@ -16,10 +16,10 @@ lane: cross-domain · brand_survival_threshold: single-user incident · requires
 ## Slice A — Security core (Phase 1 + F3)
 - [x] A1 `cc-dispatcher.ts:2387` → `getPluginPath()` (+ import). T3 flipped. **DONE — commit 18db92d5c** (349 tests green, tsc clean).
 - [x] A2 `agent-runner.ts:1109` (legacy `startAgentSession`) → `getPluginPath()` (the factory #6115 missed). **DONE — same commit.**
-- [ ] A3 **F3:** `context-queries-hook.ts:161` `skillsDir` → `getPluginPath()`; keep `knowledge-base/` workspace-rooted. **NOTE:** skill fixtures live in the shared helper `test/helpers/context-queries-fixture.ts` used by BOTH `context-queries-hook.test.ts` AND `context-queries-shell-parity.test.ts` (parity vs `.claude/hooks/skill-context-queries.sh`). Wiring: set `SOLEUR_PLUGIN_PATH=<fixtureRoot>/plugins/soleur` at each hook-construction site so `getPluginPath()` resolves to the fixture (and the shell hook's repoRoot-relative read stays parity-equal). Reverted from the checkpoint commit to keep it GREEN; do this as its own unit.
-- [ ] A4 Loaded-gun guard: consumers assert `path.isAbsolute(p) && p.startsWith("/app/")`.
-- [ ] A5 Tests: `cc-dispatcher-real-factory.test.ts` T3, `agent-runner-query-options.test.ts`, `agent-runner-helpers.test.ts`, `mu1-integration.test.ts` (symlink expectations still valid). AC1 broad grep = 0 residual workspace-relative readers.
-- [ ] A6 hooks.json closure verified (SDK sets `${CLAUDE_PLUGIN_ROOT}` for command-hook expansion to the loaded=deployed root).
+- [x] A3 **F3:** `context-queries-hook.ts:161` `skillsDir` → `getPluginPath()`; keep `knowledge-base/` workspace-rooted. **DONE.** Shared helper `test/helpers/context-queries-fixture.ts` gained `fixturePluginPath(root)`; both `context-queries-hook.test.ts` + `context-queries-shell-parity.test.ts` stub `SOLEUR_PLUGIN_PATH` at each construction site. Added the discriminating `F3: SKILL.md loads from the deployed plugin root` shadow-closed test (deployed declares `safe.md`, workspace shadow declares `evil.md` — mutation-verified non-vacuous).
+- [x] A4 Loaded-gun guard: **DONE.** `assertTrustedPluginPath(p)` in `plugin-path.ts` (test-tolerant, reuses the `/app/` allowlist), wired at the `plugins:[{path}]` chokepoint (`agent-runner-query-options.ts:231`). `test/plugin-path.test.ts` covers the production throw + AC12b/F4 non-regression.
+- [x] A5 Tests: `cc-dispatcher-real-factory.test.ts` T3, `agent-runner-query-options.test.ts` green; AC1 broad grep = **0** residual workspace-relative Concierge-path readers.
+- [x] A6 hooks.json closure verified: both factories load `plugins:[{path: getPluginPath()}]`, so the SDK resolves `hooks/hooks.json` command-hooks against the DEPLOYED root — the untrusted workspace `hooks/*.sh` never execute in-process.
 
 ## Slice B — Delivery / #4826 wedge (Phase 2 + 3) [after F1/F2 resolved on-host]
 - [ ] B1 `agent-env.ts` `BuildAgentEnvOptions.pluginPath` → `CLAUDE_PLUGIN_ROOT` injection (canary-neutral).
