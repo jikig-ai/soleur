@@ -10,6 +10,7 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_TF="$DIR/server.tf"
 DAEMON_JSON="$DIR/docker-daemon.json"
+CLOUD_INIT="$DIR/cloud-init.yml"
 WORKFLOW="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
 
 PASS=0; FAIL=0
@@ -72,6 +73,14 @@ assert "docker-daemon.json lists 10.0.1.30:5000 under insecure-registries" \
 # silently never apply — apply-path-cto-ruling.md condition #1).
 assert "registry_insecure_config is in the workflow SSH -target list" \
   "grep -qF -- '-target=terraform_data.registry_insecure_config' \"\$WORKFLOW\""
+
+# Fresh/running-host parity: cloud-init.yml writes its OWN inline daemon.json on fresh boot
+# (task 3.0a) and this resource delivers docker-daemon.json to running hosts — both MUST
+# allowlist the SAME zot endpoint, else a future IP change diverges the two host classes.
+CI_ZOT_IP="$(grep -oE '"insecure-registries":[[:space:]]*\["[0-9.]+:[0-9]+"\]' "$CLOUD_INIT" | grep -oE '[0-9.]+:[0-9]+' | head -1 || true)"
+DJ_ZOT_IP="$(python3 -c 'import json; print((json.load(open("'"$DAEMON_JSON"'")).get("insecure-registries") or [""])[0])' 2>/dev/null || true)"
+assert "cloud-init inline daemon.json and docker-daemon.json agree on the zot endpoint (found ci='$CI_ZOT_IP' dj='$DJ_ZOT_IP')" \
+  "[[ -n \"\$CI_ZOT_IP\" && \"\$CI_ZOT_IP\" == \"\$DJ_ZOT_IP\" ]]"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

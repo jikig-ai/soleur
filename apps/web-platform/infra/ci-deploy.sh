@@ -572,6 +572,33 @@ registry_pull_event() {
   fi
 }
 
+# zot_gate_degraded_event <reason>: WARNING beacon for when zot is CONFIGURED
+# (ZOT_REGISTRY_URL present) but the dark-launch gate could not activate it — the fleet
+# silently reverts to the GHCR path on the frequent rolling-deploy path WITHOUT a
+# registry=ghcr-fallback pull event (the pull path never attempts zot, so pull_image_with_
+# fallback takes its dark branch). Without this, a post-cutover zot pull-cred degradation
+# (host up + heartbeat green, but pull login failing) is journald-only and the fallback-rate
+# alarm is blind (hr-no-ssh-fallback-in-runbooks). SILENT during dark-launch — only fires
+# when ZOT_REGISTRY_URL is set. reason ∈ {probe_unreachable, creds_absent, login_failed}.
+# Fail-open, same Sentry store transport as pull_failure_event.
+zot_gate_degraded_event() {
+  local reason="$1"
+  logger -t "$LOG_TAG" "ZOT_GATE_DEGRADED: reason=$reason (configured but inactive — GHCR path)"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg r "$reason" \
+      '{message: ("zot gate degraded (" + $r + ") — configured but inactive, using GHCR"),
+        level: "warning", platform: "other", logger: "ci-deploy",
+        tags: {feature: "supply-chain", op: "image-pull", registry: "zot-gate-degraded", zot_gate_reason: $r}}' 2>/dev/null)" || return 0
+    curl -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "ZOT_GATE: Sentry POST failed"
+  fi
+}
+
 # ghcr_prelude_and_login: fetch the deploy-time secrets the pull + verify + telemetry
 # need INTO this script's OWN env, then authenticate the host docker daemon to the
 # now-PRIVATE GHCR packages (#6005). Runs BEFORE the first `docker pull` — the
@@ -640,6 +667,7 @@ zot_gate_and_login() {
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time "$ZOT_PROBE_TIMEOUT" "http://${ZOT_REGISTRY_URL}/v2/" 2>/dev/null || echo 000)"
   if [[ "$code" != "200" && "$code" != "401" ]]; then
     logger -t "$LOG_TAG" "ZOT_GATE: /v2/ probe http=$code — GHCR path (zot unreachable)"
+    zot_gate_degraded_event probe_unreachable
     return 0
   fi
   local zuser ztoken
@@ -648,6 +676,7 @@ zot_gate_and_login() {
   if [[ -z "$zuser" || -z "$ztoken" ]]; then
     logger -t "$LOG_TAG" "ZOT_GATE: ZOT_PULL_{USER,TOKEN} not both present — GHCR path"
     ztoken=""
+    zot_gate_degraded_event creds_absent
     return 0
   fi
   if printf '%s' "$ztoken" | docker login "$ZOT_REGISTRY_URL" -u "$zuser" --password-stdin >/dev/null 2>&1; then
@@ -655,6 +684,7 @@ zot_gate_and_login() {
     logger -t "$LOG_TAG" "ZOT_GATE: active — docker login $ZOT_REGISTRY_URL ok (zot-primary)"
   else
     logger -t "$LOG_TAG" "ZOT_GATE: docker login $ZOT_REGISTRY_URL FAILED — GHCR path (fallback)"
+    zot_gate_degraded_event login_failed
   fi
   ztoken=""
 }

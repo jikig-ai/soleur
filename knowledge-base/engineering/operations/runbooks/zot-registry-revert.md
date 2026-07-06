@@ -72,13 +72,20 @@ condition. The fallback-rate alarm is a **real-time page** so a live zot degrada
 caught in minutes, not at the next daily sweep. Arm it in Sentry at cutover (it targets
 events that do not exist pre-flip):
 
-- **Signal:** `registry_pull_event` emits `level:warning` with tags
-  `feature:supply-chain op:image-pull registry:"ghcr-fallback"` (rolling deploy) and
-  cloud-init `soleur-boot-emit` emits `stage:"inngest_ghcr_fallback"` (fresh boot).
+- **Signal:** three warning tags, all `feature:supply-chain op:image-pull`:
+  - `registry:"ghcr-fallback"` — a host *attempted* zot and the pull failed, then fell back
+    (ci-deploy.sh `registry_pull_event`, rolling deploy);
+  - `stage:"inngest_ghcr_fallback"` — same, on the fresh-boot inngest path (cloud-init
+    `soleur-boot-emit`);
+  - `registry:"zot-gate-degraded"` — zot is CONFIGURED but the gate could not activate it
+    (probe unreachable / pull creds absent / login failed), so the deploy used GHCR WITHOUT
+    ever running a zot pull (ci-deploy.sh `zot_gate_degraded_event`). This catches the
+    host-up-heartbeat-green-but-pull-cred-broken case the other two miss.
 - **Alert rule (Sentry issue/metric alert):** notify (page) when the count of events matching
-  `registry:"ghcr-fallback" OR stage:"inngest_ghcr_fallback"` exceeds **X = 3 events in
-  Y = 1 hour**. A healthy post-cutover fleet emits ZERO; a low threshold is intentional — any
-  sustained fallback means zot cannot serve and every affected host paid the fallback cost.
+  `registry:"ghcr-fallback" OR stage:"inngest_ghcr_fallback" OR registry:"zot-gate-degraded"`
+  exceeds **X = 3 events in Y = 1 hour**. A healthy post-cutover fleet emits ZERO; a low
+  threshold is intentional — any sustained fallback/degradation means zot cannot serve and
+  every affected host paid the fallback cost (or silently reverted to GHCR).
 - **On page:** confirm zot health, then run the Immediate revert above if the degradation is
   not resolving. Do not wait for the soak sweep.
 
