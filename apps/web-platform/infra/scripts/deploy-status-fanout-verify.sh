@@ -177,7 +177,14 @@ for i in $(seq 1 12); do
   PRE_START_TS=$(echo "$BODY" | jq -r '.start_ts // 0')
   break
 done
-if [[ ! "$CURRENT_TAG" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; then
+# Accept a pinned vX.Y.Z OR the floating `latest`. web-1 can sit on :latest (the durable-
+# :latest state), which previously aborted the verify here. For the verify's redeploy this
+# is acceptable: `latest` is the newest tag, so the web-1 re-swap can NEVER DOWNGRADE web-1
+# (the risk the original ^v[0-9]-only guard addressed), and the verify only redeploys the
+# current GA image to trigger the web-2 fan-out. Truly-unknown tags (empty / garbage) still
+# abort. Cleaner long-term fixes: a web-2-only fan-out that never re-swaps web-1 (#6060), and
+# resolving the durable-:latest at the deploy source so web-1 always reports a pinned version.
+if [[ ! "$CURRENT_TAG" =~ ^(v[0-9][A-Za-z0-9._-]*|latest)$ ]]; then
   echo "::error::could not read a valid current deployed tag from web-1 deploy-status (got '${CURRENT_TAG}'). Cannot redeploy the current version — aborting ($(_recovery_msg))."
   exit 1
 fi

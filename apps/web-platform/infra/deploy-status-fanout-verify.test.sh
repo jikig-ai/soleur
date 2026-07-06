@@ -179,9 +179,14 @@ if printf '%s' "$OUT" | grep -q 'exactly one peer'; then pass; else fail "AC4-ro
 SEQ="settled-v1 settled-v1 stale-ok-s50" WINDOW=0 MAXATT=5 run_verify
 if [ "$RC" -eq 1 ]; then pass; else fail "AC4-staleness: a stale ok must NOT be accepted (should exit 1 on budget), got rc=$RC"; fi
 
-# ── AC4: full-anchor tag validation — a non-^v[0-9] current tag → exit 1 ──
-SEQ="bad-tag" MAXATT=3 run_verify
-if [ "$RC" -eq 1 ]; then pass; else fail "AC4-tag: an invalid baseline tag ('latest') should exit 1, got rc=$RC"; fi
+# ── AC4: tag validation — a TRULY-invalid current tag (garbage) → exit 1 ──
+SEQ="garbage-tag" MAXATT=3 run_verify
+if [ "$RC" -eq 1 ]; then pass; else fail "AC4-tag: a truly-invalid baseline tag ('garbage!') should exit 1, got rc=$RC"; fi
+
+# ── AC4-latest: web-1 on the floating :latest is TOLERATED (can't downgrade web-1) → the
+# verify proceeds to a successful web-2 fan-out instead of aborting on the baseline read. ──
+SEQ="bad-tag bad-tag ok-latest-s300" WINDOW=0 MAXATT=5 run_verify
+if [ "$RC" -eq 0 ]; then pass; else fail "AC4-latest: a 'latest' baseline tag should be tolerated and reach a successful verify (exit 0), got rc=$RC. OUT: $OUT"; fi
 
 # ── AC4: fail-loud on an UNEXPECTED reason (exit_code=0, reason ∉ {ok, *_degraded}) ──
 SEQ="settled-v1 settled-v1 unexpected-reason-s300" WINDOW=0 MAXATT=5 run_verify
