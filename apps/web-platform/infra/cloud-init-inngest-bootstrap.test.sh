@@ -68,9 +68,13 @@ assert "INNGEST_CLI_SHA256 extracted from image env" \
 
 # --- AC1: trap cleanup ---
 echo ""
-echo "--- AC1: trap cleanup EXIT ---"
-assert "Inngest block uses trap cleanup EXIT" \
-  "awk '/Bootstrap Inngest server on first boot/,/^[^[:space:]]/' '$CLOUD_INIT' | grep -qE 'trap cleanup EXIT'"
+echo "--- AC1: trap still calls cleanup (composite form OK, #6090) ---"
+# #6090 turned this into a COMPOSITE trap ('rc=$?; cleanup; … || soleur-boot-emit …' EXIT)
+# so a downstream boot failure also emits a NAMED Sentry fatal. The invariant preserved
+# here is that the EXIT trap STILL runs cleanup (no orphaned extract container) — assert
+# the composite-or-plain shape, not the exact 'trap cleanup EXIT' literal.
+assert "Inngest block EXIT trap still calls cleanup" \
+  "awk '/Bootstrap Inngest server on first boot/,/^[^[:space:]]/' '$CLOUD_INIT' | grep -qE 'trap .*cleanup.* EXIT'"
 
 # --- AC2: drift comment ---
 echo ""
