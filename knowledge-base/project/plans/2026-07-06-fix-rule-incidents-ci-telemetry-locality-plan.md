@@ -8,6 +8,22 @@ adr: ADR-091
 
 # 🐛 fix(telemetry): rule-incident aggregation belongs where the data lives — stop the CI fresh-checkout all-zero clobber (#6042)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-06. **Sections enhanced:** scope reduction + gate verification. **Review agents used:** CTO, spec-flow-analyzer (pre-review); DHH, Kieran, code-simplicity-reviewer, architecture-strategist (plan-review panel); repo-research-analyst, learnings-researcher (Phase 1 research).
+
+### Key improvements over the first draft
+1. **Scope cut 5 phases → 3.** Both simplification reviewers and both correctness reviewers converged on deferring cross-worktree read-merge + `first_observed` obsolescence; cutting them dissolved ~6 concrete correctness bugs (bare-repo fallback trap, pointer-index git-log anchor, cross-branch non-monotonicity, dual age-proxy breadcrumb lie) plus the `.gitattributes merge=ours` driver, the backfill migration, and the presence gate.
+2. **Mechanical correctness fixes folded into retained phases** — Kieran's Phase-1 unbound-variable bug (`valid_lines`/`drops_total` scoped inside `[[ -s ]]` under `set -euo pipefail`) and write-vs-report-build placement bug; code-simplicity's collapse of the compound exit-code matrix to `git diff --quiet -- <OUT> || git add <OUT>`.
+3. **All correctness notes for the deferred work captured** in `## Deferred to follow-up` so the follow-up is built right (authoritative `git worktree list --porcelain` enumeration incl. the bare primary root; flat-past-epoch backfill anchor; #3123 null-skip preservation).
+
+### Deepen-plan gate status
+- Phase 4.4 precedent-diff: `git diff --quiet` conditional-staging has repo precedent (`constraint-scaffold/test/generator.test.sh`); the no-op guard is a natural extension of the aggregator's existing `[[ -s "$INCIDENTS_MERGED" ]]` size-check reusing the already-computed `valid_lines` — no novel primitive.
+- Phase 4.6 (User-Brand Impact): PASS — section present, threshold `none` (Files-to-Edit do not match the sensitive-path regex).
+- Phase 4.7 (Observability): PASS — 5 fields present, `discoverability_test.command` is ssh-free.
+- Phase 4.8 (PAT-shaped var): PASS — no PAT-shaped variables/literals.
+- Phase 4.9 (UI wireframe): PASS — no UI surface in Files-to-Edit (scripts/workflow/skill-md/ADR only); the UI-glob strings appear only in the Product-NONE explanation prose.
+
 ## Overview
 
 `.claude/.rule-incidents.jsonl` is gitignored (`.gitignore:37`, `.claude/.rule-incidents*`) and written **only on the operator's local machine** by PreToolUse hooks (`.claude/hooks/lib/incidents.sh::emit_incident` + the Python sibling `.claude/hooks/security_reminder_hook.py`). The weekly CI cron `.github/workflows/rule-metrics-aggregate.yml` runs `scripts/rule-metrics-aggregate.sh` on a **fresh checkout** where that log does not exist → the aggregator reads zero events → it commits `knowledge-base/project/rule-metrics.json` with `total_rules_tagged: 97, rules_unused_over_8w: 97`.
