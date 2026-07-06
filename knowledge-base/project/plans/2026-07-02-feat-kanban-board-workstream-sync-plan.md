@@ -7,7 +7,7 @@ status: draft
 created: 2026-07-02
 branch: feat-kanban-board-workstream-sync
 issue: TBD
-adr: ADR-080 (allocate at write time — main HEAD max is ADR-074; re-confirm the next free number, unmerged branches may race)
+adr: ADR-091 (allocate at write time — main HEAD max is ADR-074; re-confirm the next free number, unmerged branches may race)
 plan_review: applied (DHH + Kieran + code-simplicity, 2026-07-02) — see "Plan Review Applied"
 ---
 
@@ -99,7 +99,7 @@ reuses issue data already exposed by #5659.`
 ADR + C4 update are **deliverables of this plan** (`wg-architecture-decision-is-a-plan-deliverable`).
 
 ### ADR
-Create **ADR-080: GitHub Project v2 board is the canonical issue-Status store** (re-confirm
+Create **ADR-091: GitHub Project v2 board is the canonical issue-Status store** (re-confirm
 the next free number: `git ls-tree -r main -- knowledge-base/engineering/architecture/decisions/ | grep -oE 'ADR-[0-9]+' | sort -t- -k2 -n | tail -1`; main HEAD max is ADR-074).
 - `## Decision`: the org board "Soleur Kanban" is the single source of truth for issue
   Status. A GitHub Actions workflow advances cards on lifecycle events via the GitHub App
@@ -116,7 +116,7 @@ board = existing `founder`; the board = facet of existing `github` (no new syste
 = existing `supabase`. **Add the missing `api -> github` edge** (verified absent — only
 `engine`/`claude`/`contributor -> github` exist), which the Phase-2 read needs:
 ```
-api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); board is canonical Status store (ADR-080)" { technology "HTTPS (REST + GraphQL)" }
+api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); board is canonical Status store (ADR-091)" { technology "HTTPS (REST + GraphQL)" }
 ```
 **State explicitly** in the ADR/C4 note that the Phase-1 **write** path (GitHub Actions →
 ProjectV2) is *github-internal* (both inside the `github` boundary) and correctly has no
@@ -327,7 +327,7 @@ tracked below — added only when a second board exists.)
 ### Post-merge (operator)
 - [ ] **[consent-gated]** Grant the Soleur GitHub App `organization_projects: Read and write`; org owner approves. `automation-status: UNVERIFIED` — /work Playwright-attempts the request first, then hands org-approval to the operator with a `playwright-attempt:` line.
 - [ ] After the grant: close a test issue / add `blocked` / open a draft PR with `Ref #N` and confirm the **issue** card moves; `gh run list --workflow=board-status-sync.yml -L 3` = `conclusion=success`.
-- [ ] ADR-080 committed + `api -> github` C4 edge renders in the containers view.
+- [ ] ADR-091 committed + `api -> github` C4 edge renders in the containers view.
 
 ## Domain Review
 **Domains relevant:** Product (advisory), Engineering/Architecture (via ADR section).

@@ -16,7 +16,7 @@ function issue(overrides: Partial<WorkstreamIssue>): WorkstreamIssue {
     id: "1",
     title: "t",
     description: "",
-    status: "todo",
+    status: "ready",
     priority: "none",
     assigneeRole: null,
     createdAt: "2026-07-03T00:00:00Z",
@@ -43,20 +43,21 @@ describe("isWorkstreamAttentionItem", () => {
     // Attention:
     expect(isWorkstreamAttentionItem(issue({ status: "blocked" }))).toBe(true);
     expect(
-      isWorkstreamAttentionItem(issue({ status: "todo", assigneeRole: "ceo" })),
+      isWorkstreamAttentionItem(issue({ status: "ready", assigneeRole: "ceo" })),
     ).toBe(true);
     // NOT attention:
     expect(isWorkstreamAttentionItem(issue({ status: "in_progress" }))).toBe(
       false,
     );
     expect(
-      isWorkstreamAttentionItem(issue({ status: "todo", assigneeRole: "cto" })),
+      isWorkstreamAttentionItem(issue({ status: "ready", assigneeRole: "cto" })),
     ).toBe(false);
-    // Closed wins even if blocked/ceo (done/cancelled are resolved):
+    // Closed wins even if blocked/ceo (done is resolved; the board has no
+    // Cancelled column, so closed issues fold to `done`, ADR-091):
     expect(isWorkstreamAttentionItem(issue({ status: "done" }))).toBe(false);
     expect(
       isWorkstreamAttentionItem(
-        issue({ status: "cancelled", assigneeRole: "ceo" }),
+        issue({ status: "done", assigneeRole: "ceo" }),
       ),
     ).toBe(false);
   });
@@ -75,7 +76,7 @@ describe("WorkstreamNavBadge", () => {
       data: {
         issues: [
           issue({ id: "1", status: "blocked" }),
-          issue({ id: "2", status: "todo", assigneeRole: "ceo" }),
+          issue({ id: "2", status: "ready", assigneeRole: "ceo" }),
           issue({ id: "3", status: "in_progress" }), // not attention
           issue({ id: "4", status: "done", assigneeRole: "ceo" }), // closed
         ],

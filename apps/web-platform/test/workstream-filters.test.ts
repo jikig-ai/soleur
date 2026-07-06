@@ -55,7 +55,7 @@ describe("isClosed / CLOSED_STATUSES", () => {
   });
 
   it("round-trip: every status deriveColumn yields for a closed GitHub issue is in CLOSED_STATUSES", () => {
-    // every closed issue folds to done (board has no Cancelled column, ADR-080)
+    // every closed issue folds to done (board has no Cancelled column, ADR-091)
     const completed = deriveColumn(ghInput({ state: "closed", state_reason: "completed" }));
     const notPlanned = deriveColumn(ghInput({ state: "closed", state_reason: "not_planned" }));
     expect(CLOSED_STATUSES.has(completed)).toBe(true);

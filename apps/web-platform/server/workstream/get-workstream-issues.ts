@@ -35,7 +35,7 @@ import { reportSilentFallback } from "@/server/observability";
  * name) for the connected repo, or null when unconfigured / not the board org /
  * the read fails. NEVER throws — a degraded board read falls back to label
  * derivation (mirrored to Sentry) so the tab still renders issues (Phase 2,
- * ADR-080). Configured via SOLEUR_KANBAN_ORG + SOLEUR_KANBAN_PROJECT_NUMBER.
+ * ADR-091). Configured via SOLEUR_KANBAN_ORG + SOLEUR_KANBAN_PROJECT_NUMBER.
  */
 async function readBoardStatuses(
   installationId: number,
@@ -97,7 +97,7 @@ export async function getWorkstreamIssues(
   // Throws on any GitHub API failure (404/403/5xx) — caller surfaces 502/isError.
   const raw = await listRepoIssues(installationId, parsed.owner, parsed.repo);
 
-  // Phase 2 (ADR-080): prefer the canonical Project v2 board Status. Degrade-safe
+  // Phase 2 (ADR-091): prefer the canonical Project v2 board Status. Degrade-safe
   // — a null map (unconfigured / not the board org / read failed) leaves each
   // issue to label/state derivation, so the tab never breaks on a board hiccup.
   const boardStatuses = await readBoardStatuses(

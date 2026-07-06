@@ -340,7 +340,7 @@ model {
   doppler -> claude "Injects secrets" { technology "CLI" }
   auth -> supabase "Validates tokens" { technology "HTTPS" }
   api -> stripe "Checkout and webhooks" { technology "HTTPS" }
-  api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); the board is the canonical Status store (ADR-080). The Phase-1 lifecycle→board write path runs inside GitHub Actions (github-internal) so it needs no cross-boundary edge." { technology "HTTPS (REST + GraphQL)" }
+  api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); the board is the canonical Status store (ADR-091). The Phase-1 lifecycle→board write path runs inside GitHub Actions (github-internal) so it needs no cross-boundary edge." { technology "HTTPS (REST + GraphQL)" }
   dashboard -> plausible "Page view events" { technology "JS snippet" }
   api -> inngest "Sends events; serves functions" { technology "HTTP loopback :8288/:3000" }
   resend -> api "Inbound email webhook (svix-verified) → email-triage ingress" { technology "HTTPS" }

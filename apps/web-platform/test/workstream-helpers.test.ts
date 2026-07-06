@@ -204,7 +204,7 @@ describe("deriveColumn (state + state_reason + labels)", () => {
   });
 });
 
-describe("board Status preference (Phase 2, ADR-080)", () => {
+describe("board Status preference (Phase 2, ADR-091)", () => {
   it("maps board Status names to app columns (case-insensitive)", () => {
     expect(boardStatusToWorkstreamStatus("Backlog")).toBe("backlog");
     expect(boardStatusToWorkstreamStatus("Ready")).toBe("ready");

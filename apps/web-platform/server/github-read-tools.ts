@@ -379,7 +379,7 @@ export async function listRepoIssues(
 }
 
 // ---------------------------------------------------------------------------
-// Workstream board Status reader (Phase 2, ADR-080)
+// Workstream board Status reader (Phase 2, ADR-091)
 //
 // The canonical "Soleur Kanban" Project v2 board is the source of truth for a
 // card's column. This reads each board item's Status single-select via GraphQL
@@ -427,7 +427,7 @@ const BOARD_STATUS_QUERY = `query($org:String!,$num:Int!,$field:String!,$cursor:
 /**
  * Fetch `issueNumber → board Status name` for the issues of `repoNwo`
  * (e.g. "jikig-ai/soleur") that live on the org's Project v2 board
- * `projectNumber` (Phase 2, ADR-080).
+ * `projectNumber` (Phase 2, ADR-091).
  *
  * Requires the App installation to have `organization_projects: read`. THROWS on
  * any GitHub/GraphQL error (403 = App not granted) so the caller degrades to

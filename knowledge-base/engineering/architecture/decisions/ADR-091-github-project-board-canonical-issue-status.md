@@ -1,4 +1,4 @@
-# ADR-080: GitHub Project v2 board is the canonical issue-Status store
+# ADR-091: GitHub Project v2 board is the canonical issue-Status store
 
 - **Status:** adopting (Phase 0 + Phase 2 app changes ship; the board writer +
   the `organization_projects` App grant complete adoption)
