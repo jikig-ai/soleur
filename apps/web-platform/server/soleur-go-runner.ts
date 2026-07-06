@@ -659,31 +659,31 @@ function classifyInteractiveTool(
       return null;
     }
     case "AskUserQuestion": {
-      const questions = Array.isArray(toolInput.questions) ? toolInput.questions : [];
-      const first =
-        questions.length > 0 && questions[0] && typeof questions[0] === "object"
-          ? (questions[0] as {
-              question?: unknown;
-              multiSelect?: unknown;
-              options?: unknown;
-            })
-          : null;
-      const question =
-        first && typeof first.question === "string" ? first.question : "";
-      const multiSelect =
-        first && typeof first.multiSelect === "boolean" ? first.multiSelect : false;
-      const opts: string[] = [];
-      if (first && Array.isArray(first.options)) {
-        for (const o of first.options) {
-          if (o && typeof o === "object" && "label" in o) {
-            const label = (o as { label?: unknown }).label;
-            if (typeof label === "string") opts.push(label);
-          } else if (typeof o === "string") {
-            opts.push(o);
-          }
-        }
-      }
-      return { kind: "ask_user", payload: { question, options: opts, multiSelect } };
+      // feat-one-shot-concierge-web-duplicate-question-box (AC1) —
+      // AskUserQuestion NO LONGER produces an `ask_user` interactive-prompt
+      // card. It rendered a plain, unstyled duplicate box above the amber
+      // "Confirm scope" card, carrying the SAME question + options. The
+      // authoritative `review_gate` (permission-callback.ts:268 — intercepts
+      // AskUserQuestion UNCONDITIONALLY in `canUseTool`, and fires for
+      // subagent calls too) is the single, richer gating surface (header
+      // badge, per-option descriptions, highlighted selection), so the plain
+      // `ask_user` card is redundant spam. We suppress it for ALL
+      // AskUserQuestion tool-uses by returning null here, mirroring the `Bash`
+      // suppression above.
+      //
+      // Co-installation invariant (spec-flow P2b): this de-dup is only safe
+      // because `createCanUseTool` (the review_gate emitter) and the
+      // interactive-prompt bridge (`emitInteractivePrompt` / `pendingPrompts`)
+      // are ALWAYS wired together in the cc path. A future refactor that
+      // splits those two wirings MUST keep the review_gate surface, or
+      // AskUserQuestion would have NO question surface at all.
+      //
+      // The `ask_user` variant is KEPT in the `InteractivePromptPayload`
+      // union (and in `InteractivePromptCard`) for replay of already-persisted
+      // prompts — identical to how `bash_approval` was kept when Bash stopped
+      // emitting. The declared return type still admits it, so the
+      // kind-exhaustiveness assertion above stays satisfied without emitting it.
+      return null;
     }
     default:
       return null;

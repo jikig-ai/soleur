@@ -21,6 +21,7 @@ import {
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { SubagentGroup } from "@/components/chat/subagent-group";
 import { InteractivePromptCard } from "@/components/chat/interactive-prompt-card";
+import { ReviewGateCard } from "@/components/chat/review-gate-card";
 import { ToolUseChip } from "@/components/chat/tool-use-chip";
 import { WorkflowLifecycleBar } from "@/components/chat/workflow-lifecycle-bar";
 
@@ -104,7 +105,15 @@ describe("cc-soleur-go end-to-end reducer + render", () => {
         spawnId: "s-1",
         status: "success",
       } as StreamEventArg,
-      // 5. An interactive prompt is raised.
+      // 5. An interactive prompt is raised. NOTE: as of
+      // feat-one-shot-concierge-web-duplicate-question-box, `AskUserQuestion`
+      // no longer emits a fresh `ask_user` interactive_prompt (see AC1 in
+      // soleur-go-runner-interactive-prompt.test.ts) — the amber `review_gate`
+      // is the single live question surface. This synthetic `ask_user` wire
+      // event exercises the REPLAY back-compat path (a persisted prompt still
+      // rehydrates + renders via InteractivePromptCard), which is intentionally
+      // preserved. The single-live-surface guarantee is asserted separately in
+      // the "AskUserQuestion → amber review_gate is the sole surface" test below.
       {
         type: "interactive_prompt",
         promptId: "pr-1",
@@ -220,6 +229,55 @@ describe("cc-soleur-go end-to-end reducer + render", () => {
     }
     // activeStreams must no longer track cc_router after stream_end.
     expect(state.activeStreams.has("cc_router" as DomainLeaderId)).toBe(false);
+  });
+
+  test("AskUserQuestion → amber review_gate is the sole question surface (AC2: no duplicate ask_user card)", () => {
+    // feat-one-shot-concierge-web-duplicate-question-box (AC2). An
+    // AskUserQuestion tool call now yields exactly ONE selectable question
+    // surface on the wire: the amber `review_gate` (permission-callback.ts),
+    // NOT the plain `ask_user` interactive_prompt (suppressed at the classifier
+    // — AC1). Replaying the `review_gate` wire event the server emits, the
+    // reducer holds a single `review_gate` message and no `interactive_prompt`,
+    // and the rendered card is the amber ReviewGateCard.
+    const state = replay([
+      {
+        type: "review_gate",
+        gateId: "g-1",
+        question: "Continue implementing / Investigate first / Abort?",
+        header: "Confirm scope",
+        options: ["Continue implementing", "Investigate first", "Abort"],
+        descriptions: {
+          "Continue implementing": "Proceed with the pipeline",
+          "Investigate first": "Look more closely first",
+          Abort: "Don't run now",
+        },
+      } as StreamEventArg,
+    ]);
+
+    // Exactly one question surface, and it is the amber gate — no plain box.
+    expect(state.messages.filter((m) => m.type === "review_gate").length).toBe(1);
+    expect(state.messages.filter((m) => m.type === "interactive_prompt").length).toBe(0);
+
+    const gate = state.messages.find((m) => m.type === "review_gate");
+    expect(gate).toBeDefined();
+    if (gate?.type === "review_gate") {
+      const { container } = render(
+        <ReviewGateCard
+          gateId={gate.gateId}
+          question={gate.question}
+          options={gate.options}
+          header={gate.header}
+          descriptions={gate.descriptions}
+          onSelect={() => {}}
+        />,
+      );
+      // Amber "Confirm scope" card present …
+      expect(
+        container.querySelector(`[role="group"][aria-label="${gate.question}"]`),
+      ).not.toBeNull();
+      // … and no duplicate plain ask_user box.
+      expect(container.querySelector('[data-prompt-kind="ask_user"]')).toBeNull();
+    }
   });
 
   test("ToolUseChip renders the Stage 4 chip variant from a real reducer message", () => {
