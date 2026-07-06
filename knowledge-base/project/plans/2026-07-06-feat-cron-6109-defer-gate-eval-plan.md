@@ -11,6 +11,48 @@ status: draft
 
 # feat: `cron-6109-defer-gate-eval` — self-disarming recurring defer-gate nudge for #6109
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-06
+**Sections enhanced:** Research Reconciliation, Observability, Sharp Edges, Research Insights (Phase 1)
+**Method:** direct in-repo precedent-diff + deepen-plan halt-gate verification (4.4/4.6/4.7/4.8/4.9). A
+40-agent fan-out was intentionally NOT run — this is a single-file, mechanical Inngest-cron
+addition with three strong sibling precedents (`cron-nag-4216-readiness`, `cron-review-reminder`,
+`oneshot-4650-monitor-close`) read line-by-line; the token-frugal precedent-diff is the higher-value
+pass here.
+
+### Key improvements over the raw spec
+1. **Two omitted integration points recovered** (guard (c) + (f): `sentry_cron_monitor` resource +
+   `-target` line) — the spec's "5 points" would have failed `function-registry-count.test.ts` at CI.
+2. **Heartbeat/verdict decoupling** — feeding the date-guard `{ok:false}` into `postSentryHeartbeat`
+   would false-RED the monitor for ~2 months; liveness is now `ok:true` on all benign paths.
+3. **Comment pagination** for the marker self-disarm (single-page GET → double-post risk).
+
+### Halt-gate results (all PASS)
+- 4.4 scheduled-work → 47 Inngest crons in tree → Inngest substrate is canonical (ADR-033). PASS.
+- 4.6 User-Brand Impact → present; threshold `none` + sensitive-path scope-out bullet (files under
+  `apps/web-platform/{server,infra}/` match the sensitive regex). PASS.
+- 4.7 Observability → 5 fields non-placeholder; `discoverability_test.command` is `gh api` (no ssh). PASS.
+- 4.8 PAT-shaped variable → none (GitHub **App** installation token). PASS.
+- 4.9 UI-wireframe → no UI-surface file. PASS (skip).
+- verify-the-negative → "never returns the token into step state" / "never a founder BYOK" /
+  "never double-posts" all confirmed consistent with the handler design.
+
+### Research Insights — precedent diff
+- **Config triplet** (`concurrency` `[{fn,1},{account,"cron-platform",1}]` + `retries:1` + the
+  `as unknown as Parameters<…>[2]` cast + trigger array shape) is byte-identical across
+  `cron-review-reminder.ts:104-120`, `cron-nag-4216-readiness.ts:157-173`, and
+  `oneshot-4650-monitor-close.ts:282-295`. Mirror it exactly — no novel config.
+- **Mint-inside-work-step** (token never returned into step state) follows
+  `oneshot-4650-monitor-close.ts:146-157`, NOT `cron-nag-4216-readiness.ts:47-52` (which returns the
+  token from a separate step-1). The spec requires the oneshot-4650 shape.
+- **`postSentryHeartbeat` 404 caution**: a heartbeat to a slug with no provisioned monitor returns
+  4xx → `reportSilentFallback` fires every fire (permanent, not retried). Shipping the real
+  `sentry_cron_monitor` (Phase 4) avoids this; the `KNOWN_UNMONITORED_SLUGS` fallback would incur it.
+- **Monthly `0 9 1 * *` precedent**: already used by `sentry_cron_monitor` at cron-monitors.tf:452 and
+  :542 — the schedule value is proven for the Sentry Crons provider; `checkin_margin_minutes: 30`,
+  `max_runtime_minutes: 5` (a sub-second pure-TS handler; 5 is generous).
+
 ## Overview
 
 Issue **#6109** ("rule-metrics: cross-worktree read-merge + first_observed obsolescence")
@@ -340,8 +382,8 @@ logs:
   where: pino stdout → Better Stack (logger.info on posted/skip; logger.warn on date-guard)
   retention: Better Stack default
 discoverability_test:
-  command: gh api repos/jikig-ai/soleur/issues/6109/comments --jq '[.[] | select(.body｜contains("<!-- cron-6109-defer-gate-eval -->"))] | length'
-  expected_output: "0 before first post / 1 after — never ≥2 (idempotency); no ssh required"
+  command: gh api --paginate repos/jikig-ai/soleur/issues/6109/comments --jq '[.[] | select(.body | contains("<!-- cron-6109-defer-gate-eval -->"))] | length'
+  expected_output: "0 before first post / 1 after — never >=2 (idempotency); no ssh required"
 ```
 
 ### Affected-surface note (Phase 2.9.2 — cron worker is a blind surface)
