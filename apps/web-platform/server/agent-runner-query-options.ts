@@ -211,6 +211,14 @@ export function buildAgentQueryOptions(
       // only when BOTH the path and token are present (both-or-nothing).
       gitAskpassScriptPath: args.gitAskpassScriptPath,
       gitInstallationToken: args.ghToken,
+      // Deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's `bash`
+      // shell-outs (Slice B). `args.pluginPath` is `getPluginPath()` (an
+      // absolute /app/ platform path, already `assertTrustedPluginPath`-guarded
+      // at the `plugins:` binding below), so the deployed skills'
+      // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` runs the platform copy, never
+      // the untrusted connected-repo copy. Canary-neutral: `--setenv` is
+      // dropped from the ADR-079 sandbox-argv projection.
+      pluginPath: args.pluginPath,
     }),
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
     // share the same shape — identical except for the token-derived

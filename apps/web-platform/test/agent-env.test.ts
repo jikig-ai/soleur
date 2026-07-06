@@ -226,4 +226,59 @@ describe("buildAgentEnv", () => {
       expect(viaOpts.GH_TOKEN).toBe("lands_via_opts");
     });
   });
+
+  // --- CLAUDE_PLUGIN_ROOT injection (Slice B / AC3 — connected-repo shadow
+  // fix) -------------------------------------------------------------------
+  // The per-dispatch deployed plugin root (`getPluginPath()` →
+  // `/app/shared/plugins/soleur`) rides as `CLAUDE_PLUGIN_ROOT` via a typed
+  // `opts.pluginPath` param. It is deliberately NOT in AGENT_ENV_ALLOWLIST
+  // (that list copies ambient process.env; this is a per-dispatch value), so
+  // an ambient process.env.CLAUDE_PLUGIN_ROOT must NEVER leak into the agent
+  // env — only the explicit opts value lands. The deployed skills'
+  // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` shell-outs read this var so
+  // they run the platform-deployed script, not the untrusted workspace copy.
+  describe("CLAUDE_PLUGIN_ROOT injection", () => {
+    test("injects CLAUDE_PLUGIN_ROOT when opts.pluginPath is set", () => {
+      const env = buildAgentEnv(
+        { value: "sk-ant-test", scheme: "api_key" },
+        undefined,
+        { pluginPath: "/app/shared/plugins/soleur" },
+      );
+      expect(env.CLAUDE_PLUGIN_ROOT).toBe("/app/shared/plugins/soleur");
+      // Auth-var switch untouched.
+      expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
+    });
+
+    test("omits CLAUDE_PLUGIN_ROOT when opts.pluginPath is absent or empty", () => {
+      const envNoOpts = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+      expect(envNoOpts).not.toHaveProperty("CLAUDE_PLUGIN_ROOT");
+      const envEmpty = buildAgentEnv(
+        { value: "sk-ant-test", scheme: "api_key" },
+        undefined,
+        { pluginPath: "" },
+      );
+      expect(envEmpty).not.toHaveProperty("CLAUDE_PLUGIN_ROOT");
+      const envUndef = buildAgentEnv(
+        { value: "sk-ant-test", scheme: "api_key" },
+        undefined,
+        {},
+      );
+      expect(envUndef).not.toHaveProperty("CLAUDE_PLUGIN_ROOT");
+    });
+
+    test("does NOT forward an ambient process.env.CLAUDE_PLUGIN_ROOT (not allowlisted)", () => {
+      const mutableEnv = process.env as Record<string, string | undefined>;
+      const saved = mutableEnv.CLAUDE_PLUGIN_ROOT;
+      mutableEnv.CLAUDE_PLUGIN_ROOT = "/app/ambient-should-not-leak";
+      try {
+        // No opts.pluginPath → the ambient value must not ride through the
+        // allowlist loop (CLAUDE_PLUGIN_ROOT is intentionally not allowlisted).
+        const env = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+        expect(env).not.toHaveProperty("CLAUDE_PLUGIN_ROOT");
+      } finally {
+        if (saved === undefined) delete mutableEnv.CLAUDE_PLUGIN_ROOT;
+        else mutableEnv.CLAUDE_PLUGIN_ROOT = saved;
+      }
+    });
+  });
 });
