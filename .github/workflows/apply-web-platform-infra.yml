@@ -1201,8 +1201,11 @@ jobs:
           set +e
           # Resolve the Sentry read creds from Doppler prd_terraform (doppler CLI installed +
           # DOPPLER_TOKEN set earlier in this job). No command-substitution-into-run risk: these
-          # are Doppler-sourced, never github.event.* input.
-          SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --plain -p soleur -c prd_terraform 2>/dev/null || true)
+          # are Doppler-sourced, never github.event.* input. Capture the fetch stderr + rc so a
+          # FETCH FAILURE (bad/absent secrets.DOPPLER_TOKEN, wrong scope, doppler CLI/API/network
+          # error) is NAMED — not collapsed into "not configured", which would re-create the exact
+          # silent-dark class (#6090 recreate 28805034101) this auto-read step exists to end.
+          SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --plain -p soleur -c prd_terraform 2>/tmp/doppler-sentry.err); dop_rc=$?
           SENTRY_ORG=$(doppler secrets get SENTRY_ORG --plain -p soleur -c prd_terraform 2>/dev/null || true)
           SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT --plain -p soleur -c prd_terraform 2>/dev/null || true)
           # Pointer to the LOG too (not only the summary) so
@@ -1218,8 +1221,14 @@ jobs:
             fi
             echo "_Best-effort: host_id is unknown to the runner, so this matches on message + recent window — it may show an unrelated host or be empty._"
           } >> "$GITHUB_STEP_SUMMARY"
+          # Name the cause; `tee` so it lands in the step LOG too (grep-able via
+          # `gh run view <id> --log`), not only the collapsible step summary (#6090 discoverability).
+          if [[ "$dop_rc" -ne 0 ]]; then
+            echo "_Sentry query skipped: DOPPLER FETCH FAILED (rc=${dop_rc}) — verify secrets.DOPPLER_TOKEN scope/validity for soleur/prd_terraform. doppler stderr: $(tr '\n' ' ' </tmp/doppler-sentry.err | tail -c 300)_" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [[ -z "${SENTRY_AUTH_TOKEN:-}" || -z "${SENTRY_ORG:-}" || -z "${SENTRY_PROJECT:-}" ]]; then
-            echo "_Sentry query skipped: SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT not configured._" >> "$GITHUB_STEP_SUMMARY"
+            echo "_Sentry query skipped: fetch succeeded but SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT is empty in Doppler prd_terraform (secret genuinely absent)._" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           # Lockstep with the emit MESSAGE literals (soleur-host-bootstrap.sh + cloud-init.yml's
@@ -1247,7 +1256,7 @@ jobs:
             || echo "$RESP" | jq -r '.[0:5][] | "- `\(.title // .message)` (\(.dateCreated // "?"))"' >> "$GITHUB_STEP_SUMMARY" 2>/dev/null \
             || true
           else
-            echo "_No matching fresh-host boot-stage event in the last hour (or the query failed)._" >> "$GITHUB_STEP_SUMMARY"
+            echo "_No matching fresh-host boot-stage event in the last hour (or the query failed)._" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: web-2-recreate summary
