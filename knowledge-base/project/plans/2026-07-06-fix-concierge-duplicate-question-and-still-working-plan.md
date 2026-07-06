@@ -131,42 +131,42 @@ a redundant client render and gates a UI indicator; no new persistence, network,
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (de-dup, server):** `classifyInteractiveTool("AskUserQuestion", …)` returns `null` — an
+- [x] **AC1 (de-dup, server):** `classifyInteractiveTool("AskUserQuestion", …)` returns `null` — an
       `AskUserQuestion` `tool_use` no longer registers a pending prompt or emits an
       `interactive_prompt`. Verified by the updated
       `test/soleur-go-runner-interactive-prompt.test.ts` case (mirrors the `Bash` suppression
       assertion).
-- [ ] **AC2 (single surface):** Given an `AskUserQuestion`, exactly one selectable question card
+- [x] **AC2 (single surface):** Given an `AskUserQuestion`, exactly one selectable question card
       renders — the amber `ReviewGateCard` (`review_gate`). No `data-prompt-kind="ask_user"` card is
       present. Verified in `test/cc-soleur-go-end-to-end-render.test.tsx`.
-- [ ] **AC3 (no "Still working…" while awaiting input):** When `streamState === "streaming"` and an
+- [x] **AC3 (no "Still working…" while awaiting input):** When `streamState === "streaming"` and an
       **unresolved** `review_gate` (or `autonomous_disclosure`) message from the current turn is
       present, the `data-testid="live-narration"` slot is **absent** (no "Still working…"). Verified
       by a new component render test (jsdom, `.test.tsx`) using the `test/mocks/use-websocket.ts`
       mock.
-- [ ] **AC4 (narration still works otherwise):** With `streamState === "streaming"` and **no**
+- [x] **AC4 (narration still works otherwise):** With `streamState === "streaming"` and **no**
       unresolved gate, the live-narration slot still renders `liveNarration ?? "Still working…"`
       exactly as today (regression guard).
-- [ ] **AC5 (resolved gate resumes narration):** After the gate is resolved (`resolved: true`) and
+- [x] **AC5 (resolved gate resumes narration):** After the gate is resolved (`resolved: true`) and
       the turn resumes streaming, the "Still working…" slot renders again (the suppression is
       awaiting-input-scoped, not permanent).
-- [ ] **AC5b (informational prompt does NOT suppress — P1 regression guard):** With
+- [x] **AC5b (informational prompt does NOT suppress — P1 regression guard):** With
       `streamState === "streaming"` and an **unresolved `interactive_prompt` (kind `diff` /
       `todo_write`)** card present but NO gate, the live-narration slot is **present**. Informational
       ack cards are emitted while the agent keeps working (they are auto-allowed in `canUseTool` and
       never flip `waiting_for_user`); gating on them would dark real narration. This is the coverage
       the plain AC4 (zero-prompt) case does not exercise.
-- [ ] **AC5c (stale prior-turn gate does NOT suppress — P2a regression guard):** With
+- [x] **AC5c (stale prior-turn gate does NOT suppress — P2a regression guard):** With
       `streamState === "streaming"`, an **unresolved `review_gate` that precedes the last `user`
       message** (abandoned/timed-out gate from a prior turn), the live-narration slot is **present**
       — the turn-scoping (`i > lastUserIdx`) excludes stale gates so a new turn is not darked by
       unresolved message residue.
-- [ ] **AC6 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes — the
+- [x] **AC6 (typecheck):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes — the
       kind-exhaustiveness assertion in `soleur-go-runner.ts` stays satisfied (the declared return
       type `InteractivePromptPayload | null` is unchanged, so removing the `ask_user` *return*
       branch does not break `_AssertClassifiedExhaustive`; `ask_user` stays a union member for
       replay back-compat, exactly like `bash_approval`).
-- [ ] **AC7 (targeted suites green):** `cd apps/web-platform && ./node_modules/.bin/vitest run test/soleur-go-runner-interactive-prompt.test.ts test/cc-soleur-go-end-to-end-render.test.tsx test/reasoning-narration-frame.test.ts test/chat-surface-awaiting-input.test.tsx` all pass.
+- [x] **AC7 (targeted suites green):** `cd apps/web-platform && ./node_modules/.bin/vitest run test/soleur-go-runner-interactive-prompt.test.ts test/cc-soleur-go-end-to-end-render.test.tsx test/reasoning-narration-frame.test.ts test/chat-surface-awaiting-input.test.tsx` all pass.
 
 ## Implementation Phases
 

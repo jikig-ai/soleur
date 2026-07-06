@@ -543,6 +543,36 @@ export function ChatSurface({
   const hasUserMessage = messages.some((m) => m.role === "user");
   const hasAssistantMessage = messages.some((m) => m.role === "assistant");
 
+  // feat-one-shot-concierge-web-duplicate-question-box — the agent is PARKED
+  // (awaiting the operator, NOT working) while an unresolved `review_gate` or
+  // `autonomous_disclosure` is on screen. These are the exact two surfaces
+  // whose `canUseTool` site flips the server conversation status to
+  // `waiting_for_user` and pauses the runaway wall-clock (cc-dispatcher.ts).
+  // Both keep `streamState === "streaming"` (they are not turn-active events),
+  // so the live-narration slot below would otherwise show a contradictory
+  // "Still working…" spinner while the operator is being asked to decide. The
+  // amber prompt card already conveys the waiting state, so suppressing the
+  // spinner is sufficient.
+  //
+  // Deliberately NOT `interactive_prompt`: after the AskUserQuestion de-dup,
+  // the still-emitted interactive_prompt kinds (diff / todo_write /
+  // notebook_edit / plan_preview) are AUTO-ALLOWED in `canUseTool` — the agent
+  // keeps streaming while they render as informational "ack" cards. Gating on
+  // them would dark real narration for the rest of a genuinely-working turn.
+  //
+  // Turn-scoped (`i > lastUserIdx`): an unresolved gate is durable in
+  // `messages` (nothing prunes it — `stream_end` prunes only `tool_use_chip`),
+  // so a gate abandoned by a prior turn (timeout / abort / the operator
+  // ignored it and sent a new message) would otherwise dark the narration on
+  // every later streaming turn. Only a gate AFTER the last user message counts.
+  const lastUserIdx = messages.map((m) => m.role).lastIndexOf("user");
+  const awaitingUserInput = messages.some(
+    (m, i) =>
+      i > lastUserIdx &&
+      (m.type === "review_gate" || m.type === "autonomous_disclosure") &&
+      !m.resolved,
+  );
+
   // feat-debug-mode-stream — the separate debug drawer. Visibility is the
   // dev-cohort `debug-mode` flag; the panel filters debug_event frames out of
   // the main message flow (they render null inline). `connected` drives the
@@ -978,8 +1008,16 @@ export function ChatSurface({
               immediately replaced when the next `narrate` frame arrives. It
               disappears on turn-end (the reducer nulls liveNarration AND
               streamState leaves "streaming" on every turn-end path), so it is
-              still fully inert outside an in-flight turn. */}
-          {streamState === "streaming" && (
+              still fully inert outside an in-flight turn.
+
+              feat-one-shot-concierge-web-duplicate-question-box — additionally
+              gated on `!awaitingUserInput`: while an unresolved review_gate /
+              autonomous_disclosure parks the turn on the operator, the amber
+              prompt card is the waiting-for-input surface, so this spinner is
+              suppressed to avoid a contradictory "Still working…" signal. See
+              the `awaitingUserInput` derivation above for the turn-scoping and
+              why informational interactive_prompt cards are excluded. */}
+          {streamState === "streaming" && !awaitingUserInput && (
             <div
               data-testid="live-narration"
               aria-live="polite"
