@@ -15,6 +15,28 @@ related:
 
 # chore(infra): Terraform-ify the CLA Required ruleset + repoint the #6061 sync gate at the .tf
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-06 · **Reviewed by:** architecture-strategist + kieran-rails-reviewer + code-simplicity-reviewer (eng panel).
+
+**Key improvements applied from review:**
+1. **SE-3 header-token hygiene** — the `.tf` header/block comments must carry no literal
+   `context = "..."` / `required_check {` / `bypass_actors {` token and no inline `#...=...`
+   on assignment lines (Kieran: comment-naive gate greps false-fail otherwise); the two
+   count-ACs are now leading-anchored/comment-safe.
+2. **`set -e` guards** on the two negative greps in `T-cla-1` (happy path exits 1).
+3. **`moved {}` caveat** preserved on the per-address import gate; **CI-specific `context=test`
+   preflight explicitly excluded** from the CLA DR script refactor (architecture P2-a/b).
+4. **No-op-apply dependency made explicit** — it rests on the daily audit being green, since
+   the post-apply verify probes RSC count only, not bypass_actors (architecture P2-c).
+5. **CUT** `cla_ruleset_id`/`cla_ruleset_url` outputs + the optional `T-cla-2` gate (YAGNI,
+   code-simplicity).
+
+**New confirmations from deepen (live probes):** the live CLA ruleset is byte-identical to
+the canonicals + planned `.tf` (no-op apply verified); provider pinned `integrations/github
+6.12.1`; precedent-diff vs the CI `.tf` shows exactly three intended divergences. See
+`## Deepen Insights`.
+
 ## Overview
 
 The **"CLA Required"** ruleset (id `13304872`) is drift-guarded (canonical JSONs +
@@ -52,6 +74,47 @@ place; this migrates the declaration surface only.
 | **[DISCOVERY]** apply workflow import gate uses a blanket `grep -qE '^github_repository_ruleset\.'` | ✅ `apply-github-infra.yml` "First-apply import" step skips import if **any** ruleset address is in state. With a second resource this would **never import** the CLA ruleset → next apply tries to **CREATE** a "CLA Required" ruleset that already exists live. | Rewrite the gate to import per-address (`grep -qxF <addr>`). Highest-risk item. |
 | **[DISCOVERY]** cron audit `CLA_AUDIT_CONFIG.sourceHint` = `scripts/create-cla-required-ruleset.sh` | ✅ `cron-ruleset-bypass-audit.ts:129`. Human-facing hint in the drift-issue body naming the file to reconcile. | Repoint to `infra/github/ruleset-cla-required.tf` + update the file-header comment. |
 | Terraform-ifying CLA is deferred (per #6061 docs, cron comment, runbook) | ✅ Multiple docs assert "deferred — #6061 Phase 6.1". | Update the stale "deferred/no-Terraform" assertions in the cron comment + `ruleset-bypass-drift.md` + `cla-signature-evidence-retrieval.md`. |
+
+## Deepen Insights (2026-07-06)
+
+**Live-state confirmation (zero-blast-radius premise verified).** Read-only
+`gh api repos/jikig-ai/soleur/rulesets/13304872` returns EXACTLY the planned values:
+
+```json
+{"enforcement":"active","strict":false,
+ "checks":[{"context":"cla-check","integration_id":15368},{"context":"cla-evidence","integration_id":15368}],
+ "bypass":[{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"pull_request"},
+           {"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"pull_request"},
+           {"actor_id":1236702,"actor_type":"Integration","bypass_mode":"always"}]}
+```
+
+live == the two canonical JSONs == the planned `.tf`. This substantiates the
+import-then-plan **no-op first apply** and independently confirms **SE-1**: the live
+OrganizationAdmin `actor_id` is `null` (the `.tf`'s `0` sentinel must normalize to it in
+`T-cla-1b`).
+
+**Provider-attribute confirmation.** `infra/github/.terraform.lock.hcl` pins
+`integrations/github 6.12.1` (constraint `~> 6.10`). The sibling `ruleset-ci-required.tf`
+already exercises `bypass_actors { actor_type / actor_id / bypass_mode }`,
+`required_check { context / integration_id }`, and
+`strict_required_status_checks_policy` on this exact provider (43 attribute occurrences) —
+the strongest possible proof that the CLA `.tf`'s surface is supported. The only value not
+present in the CI `.tf` is `actor_type = "Integration"`, which the live ruleset already
+carries, so `terraform import` round-trips it. No Context7 lookup needed — the installed,
+pinned sibling resource is the ground truth.
+
+**Precedent-diff gate (4.4) — CLA `.tf` vs `ruleset-ci-required.tf`.** Exactly three
+intended divergences, each documented in the `.tf` header:
+
+| Attribute | CI (`ci_required`) | CLA (`cla_required`) | Why |
+|---|---|---|---|
+| `strict_required_status_checks_policy` | `true` | **`false`** | CLA gate does not require branches be up-to-date (preserved from live). |
+| `bypass_actors` count | 2 (OrgAdmin, RepoRole:5) | **3** (+ Integration:1236702/always) | The CLA bot must update CLA status on every PR. |
+| `required_check` count / apps | 17, incl. CodeQL @ `var.codeql_integration_id` | **2** (cla-check, cla-evidence), both @ `var.actions_integration_id` | CLA has no GHAS/CodeQL check — all GitHub Actions. |
+
+Everything else (resource type, `name`/`repository`/`target`, `enforcement = "active"`,
+`conditions.ref_name`, `actor_id = 0` OrgAdmin sentinel, `do_not_enforce_on_create = false`,
+provider, R2 backend) is identical — the mirror is faithful.
 
 ## User-Brand Impact
 
@@ -512,10 +575,9 @@ or `cron-ruleset-bypass-audit.ts`. `/work` re-runs the two-stage `gh --json` + s
   literal `context = "..."`, `required_check {`, or `bypass_actors {` token, nor an inline
   `# ... = ...` on any assignment line (greedy awk `.*=`). All slips fail safe (RED) except
   the two count-ACs, which are made leading-anchored/comment-safe. See Phase 1 token hygiene.
-- **Deepen-plan precedent-diff:** the `.tf` is a sibling of `ruleset-ci-required.tf` — the
-  precedent-diff gate (deepen Phase 4.4) should diff the CLA resource against the CI resource
-  and confirm only the three documented divergences (`strict = false`, third bypass actor,
-  two checks / no CodeQL).
+- **Deepen-plan precedent-diff (DONE):** the precedent-diff gate (deepen Phase 4.4) ran —
+  see the Deepen Insights precedent-diff table. Only the three documented divergences
+  (`strict = false`, third bypass actor, two checks / no CodeQL) exist; the mirror is faithful.
 - **Empty `## User-Brand Impact` fails deepen-plan Phase 4.6** — filled above (threshold none
   + reason bullet).
 - **Do NOT generalize `destroy-guard-filter.jq`** — it is intentionally path-specific and
