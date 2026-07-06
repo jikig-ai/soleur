@@ -42,6 +42,7 @@ declare -A DIVERGENCE_ALLOWLIST=(
   [email]=domain-logic
   [UUID]=warn-only
   [IPv4]=warn-only
+  [cloudflare_token]=not-in-digest
 )
 
 command -v python3 >/dev/null 2>&1 || { echo "FAIL: python3 not found — cannot enumerate engine classes"; exit 1; }

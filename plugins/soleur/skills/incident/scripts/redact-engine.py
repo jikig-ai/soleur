@@ -100,7 +100,56 @@ PATTERNS = [
     # bot/user/app/refresh/legacy (baprs) + config (c) + config-refresh (e).
     ("doppler_token", re.compile(r"\bdp\.(st|pt|ct|sa|scim|audit)\.[A-Za-z0-9._-]{16,}", F)),
     ("slack_token", re.compile(r"\bxox[baprsce]-[A-Za-z0-9-]{10,}", F)),
+    # Cloudflare API tokens are exactly 40 chars of [A-Za-z0-9_-] with NO vendor prefix (#6045 item 6).
+    # A 40-char lowercase-hex git SHA collides on length (incident PIRs cite SHAs constantly), so the
+    # class carries an anti-SHA PREDICATE (below) requiring BOTH an uppercase letter AND a digit. Explicit
+    # non-class boundaries (lookaround), NOT \b — '-' is a non-word char and \b mis-anchors at token ends.
+    ("cloudflare_token", re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{40}(?![A-Za-z0-9_-])", F)),
 ]
+
+# Per-class post-match predicates: a match is kept only if the predicate returns truthy. The bare-length
+# Cloudflare class must be gated or it fires on a 40-char lowercase-hex git SHA and 40-char kebab prose.
+# A real CF API token is high-entropy base64url, so require BOTH an uppercase letter AND a digit — hex
+# SHAs have no uppercase; kebab prose has neither. Deliberate ~0.1% miss (a real token lacking a digit or
+# uppercase) to preserve the engine's low-false-positive posture. No entry = always kept. Shared by the
+# base pass and the decoded-content pass so the gate cannot be bypassed via an encoded blob.
+PREDICATES = {
+    "cloudflare_token": lambda t: bool(re.search(r"[A-Z]", t)) and bool(re.search(r"[0-9]", t)),
+}
+
+PAT_BY_NAME = dict(PATTERNS)
+
+# #6045 item 1 — whitespace / newline token-splitting re-scan. strip() KEEPS meaningful whitespace (a
+# documented non-goal of the base pass), so a secret reflowed across a line break by a markdown/PDF
+# renderer survives normalization. For each DISTINCTIVE-prefix class, locate the prefix at a real word
+# boundary and rejoin the token across a BOUNDED number of whitespace runs (a reflowed token is split a
+# few times by a renderer; prose has a whitespace run every few chars, so the bound admits reflow and
+# rejects prose). Excludes the short/ambiguous openai `sk-` prefix and the prefixless Cloudflare class.
+# REFLOW_PREFIXES keys MUST be PATTERNS names (asserted at import — no silent drift).
+REFLOW_WINDOW = 512               # ~2.5x the longest anchored body; a 4096 window would be wasted work.
+_MAX_REFLOW_SPLITS = 4            # rejoin across at most 4 whitespace runs — a reflowed token wrapped a
+                                  # few times is caught; prose (a run every few chars) never reaches a
+                                  # class's min length within 4 joins, so it is rejected (no manufactured FP).
+_MAX_REFLOW_CANDIDATES = 4000     # cap prefix occurrences per class so a prefix-flooded 1 MiB input stays
+                                  # linear (code-to-prd scans attacker-controlled rendered text). Safe only
+                                  # while the 1 MiB MAX input cap dominates; re-evaluate if MAX is raised.
+REFLOW_PREFIXES = {
+    "JWT": re.compile(r"eyJ", F),
+    "stripe_key": re.compile(r"(sk|pk|rk)_(live|test)_", F),
+    "stripe_whsec": re.compile(r"whsec_", F),
+    "stripe_acct": re.compile(r"acct_", F),
+    "github_token": re.compile(r"(gh[pousr]_|github_pat_)", F),
+    "anthropic_key": re.compile(r"sk-ant-", F),
+    "supabase_pat": re.compile(r"(sbp_|sb_secret_|sb_publishable_)", F),
+    "doppler_token": re.compile(r"dp\.(st|pt|ct|sa|scim|audit)\.", F),
+    "slack_token": re.compile(r"xox[baprsce]-", F),
+}
+assert set(REFLOW_PREFIXES) <= {n for n, _ in PATTERNS}, "REFLOW_PREFIXES has an unknown class name"
+
+
+def _is_word(ch):
+    # ASCII word char (matches re.ASCII \w): [A-Za-z0-9_]. Confirms a real boundary before a prefix.
+    return ch == "_" or (ch.isascii() and ch.isalnum())
 
 
 def _meta_redact(t):
@@ -110,6 +159,49 @@ def _meta_redact(t):
     if len(t) > 12:
         return f"{t[:4]}***"
     return "***"
+
+
+def _emit(name, value, offset, tag, seen):
+    # Dedup on (class, raw value) so a token found by the base pass is not re-reported by the reflow /
+    # decode passes. Offsets are NOT part of the key — base-pass offsets are norm-space, derived-pass
+    # offsets are decoded-space, so they are not comparable; dedup affects finding-line noise only, never
+    # the exit code. The tag note ALWAYS starts with " (" so the parity grep 'matched pattern [A-Za-z_]+'
+    # (which stops at the space) never absorbs it. Returns 1 on a new emit, 0 on a dedup hit.
+    key = (name, value)
+    if key in seen:
+        return 0
+    seen.add(key)
+    note = f" ({tag})" if tag else ""
+    print(f"at offset {offset}: {_meta_redact(value)} matched pattern {name}{note}")
+    return 1
+
+
+def _scan_reflow(norm, seen):
+    hits = 0
+    for name, prefix_rx in REFLOW_PREFIXES.items():
+        full_rx = PAT_BY_NAME[name]
+        count = 0
+        for pm in prefix_rx.finditer(norm):
+            if count >= _MAX_REFLOW_CANDIDATES:
+                break
+            p = pm.start()
+            if p > 0 and _is_word(norm[p - 1]):
+                continue  # interior substring, not a real boundary — would fabricate a match
+            window = norm[p : p + REFLOW_WINDOW]
+            parts = re.split(r"\s+", window, maxsplit=_MAX_REFLOW_SPLITS)
+            if len(parts) < 2:
+                continue  # no whitespace in window — the base pass already saw this exact run
+            count += 1
+            # If the split cap was hit (len == _MAX_REFLOW_SPLITS+1), the last element is an unbounded
+            # prose remainder — drop it so prose cannot be glued into a spurious token.
+            joinable = parts[:-1] if len(parts) == _MAX_REFLOW_SPLITS + 1 else parts
+            candidate = "".join(joinable)
+            if candidate == window:
+                continue  # nothing rejoined
+            m = full_rx.match(candidate)
+            if m:
+                hits += _emit(name, m.group(0), p, "whitespace-rejoin", seen)
+    return hits
 
 
 def scan(path):
@@ -130,11 +222,17 @@ def scan(path):
     if len(norm.encode("utf-8")) > MAX:  # post-NFKC re-check (NFKC can expand 1 cp -> up to 18)
         print(f"SYNTHETIC HIGH: normalized input exceeds {MAX} bytes — fail closed")
         return 1
+    seen = set()
     hits = 0
+    # Base pass over the whole normalized string (real offsets). PREDICATES gate the bare-length classes.
     for name, rx in PATTERNS:
+        pred = PREDICATES.get(name)
         for m in rx.finditer(norm):
-            print(f"at offset {m.start()}: {_meta_redact(m.group(0))} matched pattern {name}")
-            hits += 1
+            val = m.group(0)
+            if pred and not pred(val):
+                continue
+            hits += _emit(name, val, m.start(), "", seen)
+    hits += _scan_reflow(norm, seen)   # #6045 item 1 — whitespace/newline token-splitting re-scan
     return 1 if hits else 0
 
 

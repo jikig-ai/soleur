@@ -17,9 +17,10 @@
 #
 # The hardened engine defeats compatibility-char / invisible / bidi / control / invalid-byte /
 # soft-hyphen / prefix-homoglyph evasion (matching runs over strip -> NFKC -> strip -> confusable-fold;
-# invisibles are stripped by Unicode category, not a hand-picked list). It does NOT defeat the full
-# cross-script homoglyph space (TR39 skeleton), whitespace token-splitting, reversibly-encoded
-# secrets, or unprefixed/high-entropy tokens — each a named non-goal (see ADR-086).
+# invisibles are stripped by Unicode category, not a hand-picked list), whitespace / newline
+# token-splitting (#6045 item 1 — bounded-rejoin re-scan), and the bare Cloudflare 40-char token class
+# (#6045 item 6). It does NOT defeat the full cross-script homoglyph space (TR39 skeleton),
+# reversibly-encoded secrets, or unprefixed/high-entropy tokens — each a named non-goal (see ADR-086).
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

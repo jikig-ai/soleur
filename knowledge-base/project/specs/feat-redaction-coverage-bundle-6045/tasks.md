@@ -22,11 +22,11 @@ fan-out caps with inline rationale; tag suffix starts with `` ( ``) apply across
 
 ## PR-B — item 1 (whitespace reflow) + item 6 (Cloudflare)
 
-- [ ] 2.1 (RED) Reflow tests: two-engine (old MISSES / new CATCHES); distinct newline + space positives; no-FP on an INCLUDED prefix (`dp.st.`+prose); Test 4b on a reflow finding.
-- [ ] 2.2 (RED) Cloudflare tests: upper+digit positive; git-SHA + kebab-prose negatives; add `cloudflare_token` to Test 2 loop + `positive-corpus.md`.
-- [ ] 2.3 Implement item 6: `cloudflare_token` with lookaround boundaries + inline uppercase-AND-digit predicate; update guard allowlist (`cloudflare_token=not-in-digest`).
-- [ ] 2.4 Implement item 1: `seen`/`_emit` dedup; `_scan_reflow` from a `reflow=True` `PATTERNS` marker; real-boundary guard; `REFLOW_WINDOW=512`; `_MAX_REFLOW_CANDIDATES`.
-- [ ] 2.5 Trim item-1/item-6 lines from `redact-sentinel.sh` header (this PR). GREEN + Test 9 parity.
+- [x] 2.1 (RED) Reflow tests: two-engine (old MISSES / new CATCHES); distinct newline + space positives; no-FP on an INCLUDED prefix (`dp.st.`+prose); Test 4b on a reflow finding.
+- [x] 2.2 (RED) Cloudflare tests: upper+digit positive; git-SHA + kebab-prose negatives; add `cloudflare_token` to Test 2 loop + `positive-corpus.md`.
+- [x] 2.3 Implement item 6: `cloudflare_token` with lookaround boundaries + inline uppercase-AND-digit predicate; update guard allowlist (`cloudflare_token=not-in-digest`).
+- [x] 2.4 Implement item 1: `seen`/`_emit` dedup; `_scan_reflow` from a `reflow=True` `PATTERNS` marker; real-boundary guard; `REFLOW_WINDOW=512`; `_MAX_REFLOW_CANDIDATES`.
+- [x] 2.5 Trim item-1/item-6 lines from `redact-sentinel.sh` header (this PR). GREEN + Test 9 parity.
 
 ## PR-C — item 2 (decode) + item 3 (private-key DER)
 

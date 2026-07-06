@@ -69,7 +69,8 @@ rc=$?
 assert_exit "Test 2: positive-corpus exits non-zero" 1 "${rc}"
 
 for class in JWT email UUID stripe_key stripe_whsec stripe_acct stripe_cust_pi_seti_sub_in IPv4 env_var \
-             github_token anthropic_key openai_key supabase_pat pem_private_key doppler_token slack_token; do
+             github_token anthropic_key openai_key supabase_pat pem_private_key doppler_token slack_token \
+             cloudflare_token; do
   assert_grep "Test 2.${class}: pattern '${class}' present" "matched pattern ${class}" "${out}"
 done
 
@@ -300,6 +301,98 @@ else
   echo "PASS: AC6: no literal invisibles committed in incident/legal-generate skills"
   PASS=$((PASS + 1))
 fi
+
+# ===========================================================================
+# #6045 PR-B — item 1 (whitespace/newline reflow re-scan) + item 6 (Cloudflare token).
+# All fixtures synthesized at runtime; invisibles/newlines via chr() (AC6).
+# ===========================================================================
+
+# Test 13 — reflow two-engine (item 1, AC1 shape): a stripe key split by a NEWLINE.
+# (a) OLD raw-byte engine MISSES the split token (exit 0); (b) the new engine's base pass also
+# cannot match across the kept newline — only _scan_reflow catches it after whitespace-rejoin.
+# stripe_key is a pre-#5987 class the OLD engine already carries, so 13a isolates the SPLIT-evasion.
+t13_file="${TMP_DIR}/t13.txt"
+python3 -c "import sys; sys.stdout.write('key sk_live_0000ABCD'+chr(0x0a)+'1234000000000000 end'+chr(0x0a))" > "${t13_file}"
+bash "${OLD_ENGINE}" "${t13_file}" >/dev/null 2>&1
+assert_exit "Test 13a: OLD raw-byte engine MISSES newline-split stripe key" 0 $?
+t13_out="${TMP_DIR}/t13.out"
+bash "${SENTINEL}" "${t13_file}" >"${t13_out}" 2>&1
+assert_exit "Test 13b: reflow catches newline-split stripe key" 1 $?
+assert_grep "Test 13b: stripe_key via whitespace-rejoin" "matched pattern stripe_key" "${t13_out}"
+
+# Test 13c — reflow with a SPACE split (distinct whitespace kind from 13b's newline). A doppler
+# token split by an ASCII space (0x20 survives normalization). Must be caught.
+t13c_file="${TMP_DIR}/t13c.txt"
+python3 -c "import sys; sys.stdout.write('tok dp.st.ABCD1234 EFGH5678IJKLMNOP done'+chr(0x0a))" > "${t13c_file}"
+bash "${SENTINEL}" "${t13c_file}" >/dev/null 2>&1
+assert_exit "Test 13c: reflow catches space-split doppler token" 1 $?
+
+# Test 13d — reflow NO-FALSE-POSITIVE on an INCLUDED prefix (spec-flow highest-value guard):
+# an included distinctive prefix (dp.st.) followed by DESPACEABLE PROSE must NOT manufacture a
+# match. Naive whitespace-strip would glue the prose into a 16+ run; the bounded-split guard
+# (rejoin across few runs only; prose has a run every few chars) rejects it. Must exit 0.
+t13d_file="${TMP_DIR}/t13d.txt"
+python3 -c "import sys; sys.stdout.write('note dp.st. the quick brown fox ran far away today ok'+chr(0x0a))" > "${t13d_file}"
+bash "${SENTINEL}" "${t13d_file}" >/dev/null 2>&1
+assert_exit "Test 13d: reflow does NOT manufacture a match from prose after an included prefix" 0 $?
+
+# Test 13e — negative baseline still clean after the reflow pass (no manufactured matches).
+bash "${SENTINEL}" "${NEGATIVE_BASELINE}" >/dev/null 2>&1
+assert_exit "Test 13e: reflow pass does not manufacture matches on the clean PIR" 0 $?
+
+# Test 13f — Test-4b invariant (meta-redaction) holds on a REFLOW-caught finding (new emit path).
+t13f_out="${TMP_DIR}/t13f.out"
+bash "${SENTINEL}" "${t13_file}" >"${t13f_out}" 2>&1 || true
+if grep -qE 'matched pattern stripe_key \(whitespace-rejoin\)' "${t13f_out}" && \
+   ! grep -qE 'at offset [0-9]+: [^*]{5,}\*\*\*' "${t13f_out}"; then
+  echo "PASS: Test 13f: reflow finding is tagged and meta-redacted (<=4-char reveal)"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 13f: reflow finding missing tag or leaked >4 prefix chars"
+  cat "${t13f_out}"
+  FAIL=$((FAIL + 1))
+fi
+
+# Test 14 — Cloudflare token (item 6): a 40-char [A-Za-z0-9_-] token containing BOTH an uppercase
+# letter AND a digit trips cloudflare_token. Synthesized (no real token).
+t14_file="${TMP_DIR}/t14.txt"
+python3 -c "import sys; sys.stdout.write('CF_TOKEN v1.0 Ab3'+'x'*37+' end'+chr(0x0a))" > "${t14_file}"
+t14_out="${TMP_DIR}/t14.out"
+bash "${SENTINEL}" "${t14_file}" >"${t14_out}" 2>&1
+assert_exit "Test 14: 40-char upper+digit token trips cloudflare_token" 1 $?
+assert_grep "Test 14: cloudflare_token matched" "matched pattern cloudflare_token" "${t14_out}"
+
+# Test 14b — anti-SHA NO-FALSE-POSITIVE: a 40-char lowercase-hex git SHA (digit, NO uppercase)
+# must NOT trip. Incident PIRs cite commit SHAs constantly.
+t14b_file="${TMP_DIR}/t14b.txt"
+python3 -c "import sys; sys.stdout.write('commit '+'a1b2c3d4'*5+' shipped'+chr(0x0a))" > "${t14b_file}"
+t14b_out="${TMP_DIR}/t14b.out"
+bash "${SENTINEL}" "${t14b_file}" >"${t14b_out}" 2>&1
+if grep -qE 'matched pattern cloudflare_token' "${t14b_out}"; then
+  echo "FAIL: Test 14b: a 40-char git SHA falsely tripped cloudflare_token"
+  FAIL=$((FAIL + 1))
+else
+  echo "PASS: Test 14b: 40-char lowercase-hex git SHA does NOT trip cloudflare_token (anti-SHA predicate)"
+  PASS=$((PASS + 1))
+fi
+
+# Test 14c — anti-prose NO-FALSE-POSITIVE: a 40-char kebab-case identifier span (NO uppercase, NO
+# digit) must NOT trip.
+t14c_file="${TMP_DIR}/t14c.txt"
+python3 -c "import sys; sys.stdout.write('rule cq-'+'-'.join(['abc']*9)+' xx'+chr(0x0a))" > "${t14c_file}"
+t14c_out="${TMP_DIR}/t14c.out"
+bash "${SENTINEL}" "${t14c_file}" >"${t14c_out}" 2>&1
+if grep -qE 'matched pattern cloudflare_token' "${t14c_out}"; then
+  echo "FAIL: Test 14c: a 40-char kebab span falsely tripped cloudflare_token"
+  FAIL=$((FAIL + 1))
+else
+  echo "PASS: Test 14c: 40-char kebab prose does NOT trip cloudflare_token"
+  PASS=$((PASS + 1))
+fi
+
+# Test 14d — negative baseline still clean with cloudflare_token added (cites SHAs).
+bash "${SENTINEL}" "${NEGATIVE_BASELINE}" >/dev/null 2>&1
+assert_exit "Test 14d: cloudflare_token class does not manufacture matches on the clean PIR" 0 $?
 
 echo
 echo "Total: ${PASS} pass, ${FAIL} fail"
