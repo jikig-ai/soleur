@@ -65,5 +65,5 @@ plan: knowledge-base/project/plans/2026-07-06-feat-registry-oidc-migration-plan.
 
 ## Cross-cutting (pre-PR-ready)
 - [x] X.1 Record recurring registry-host expense (~€4/mo) via ops-advisor
-- [ ] X.2 Typecheck `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`; run test suite via vitest
-- [ ] X.3 File deferred HA/read-replica follow-up issue (done at plan time — see issue link)
+- [x] X.2 Typecheck `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`; run test suite via vitest
+- [x] X.3 File deferred HA/read-replica follow-up issue (done at plan time — see issue link)
