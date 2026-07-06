@@ -78,6 +78,26 @@ effect, exactly the split observed.
    of active web-2 fresh-boot instability (`#6090`/`#6116` landed right after the revert) — **not** caused by the
    plugin change. Reverting the plugin fix "for the canary" was a near-6th round of wrong-layer misattribution.
 
+5. **A residual reader can read the untrusted source through a DIFFERENT code path than `plugins:` — so the
+   completeness grep must be BROAD, not a hardcoded pair.** Fixing both `plugins:[{path}]` factories (insight #2)
+   left `context-queries-hook.ts` reading `skillsDir = join(workspacePath,"plugins","soleur","skills")` on every
+   Skill dispatch — an in-process SKILL.md reader that never touches `plugins:`, so a `plugins:[`-scoped grep
+   MISSES it (the F3 finding). The AC grep must enumerate EVERY reader of the untrusted source
+   (`git grep -nE '"plugins",\s*"soleur"|plugins/soleur' <server-scope>`), not just the SDK-binding shape. Same
+   class as `hr-write-boundary-sentinel-sweep-all-write-sites` (enumerate ALL sites, not the diff sites) — here for
+   *reads* of an untrusted directory. Corollary: when moving a load source to a trusted root, `knowledge-base/`
+   (repo content) correctly STAYS workspace-rooted — path-trust ≠ content-trust (ADR-086); only the
+   code/skill/hook source moves.
+
+6. **A load-SOURCE-swap fix has a vacuous-test trap: the discriminating test must make the two sources declare
+   DIFFERENT observable outputs.** Wiring the fixture's `SOLEUR_PLUGIN_PATH` at the SAME root as the hook's
+   `repoRoot` makes `getPluginPath()`-derived `skillsDir` byte-identical to the old `repoRoot`-derived one — the
+   test passes with AND without the fix (vacuous). The non-vacuous shape: a DEPLOYED root whose skill declares
+   artifact X and an untrusted WORKSPACE shadow whose same-named skill declares Y (X≠Y), then assert the note
+   resolves X and never Y — mutation-verified by reverting `skillsDir` to the workspace form and watching it fail.
+   A specific instance of the laundered-target-resolvable rule:
+   [[2026-07-05-security-fix-regression-guard-must-make-the-laundered-target-resolvable]].
+
 ## Solution (the redo, corrected)
 
 Load the plugin from `getPluginPath()` in BOTH SDK factories (Slice A — the security core; ADR-093). The residual
@@ -103,6 +123,18 @@ diagnostic breadcrumb that makes the previously-silent collision observable.
 - **The revert (#6117) accepted a plausible-but-wrong sandbox theory** ("`/app/shared` not sandbox-accessible")
   without reading the actual `canary_sandbox_failed` gate. **Prevention:** when a canary/deploy gate blocks a
   change, read the gate's own code to confirm the change can even reach it before attributing the failure to it.
+
+### Slice A /work session (2026-07-06) — all one-off, already-covered
+- **CWD drift** — a `grep`/`tsc` invocation ran from `apps/web-platform` after a prior `cd apps/web-platform` in a
+  different Bash call, producing "No such file or directory" / exit 127. **Recovery:** re-run with an explicit
+  `cd <abs-path> && …`. **Prevention:** the Bash tool does not persist CWD across calls — always prefix
+  worktree/package-relative commands with the absolute `cd` (already documented; one-off).
+- **`run_in_background` full-suite exit-code split** — the completion notification reported "exit code 0" from the
+  trailing `echo "VITEST_RC=$?"`, and `grep VITEST_RC <redirect-log>` missed it (the echo landed in the task-output
+  file, not the redirect target). **Recovery:** read `VITEST_RC` from the task-output file AND grep the redirect log
+  for vitest's own `Test Files/Tests` summary. **Prevention:** for a backgrounded `<cmd> > log; echo EXIT=$?`, the
+  notification's exit reflects the echo, not `<cmd>` — always grep the redirect log for the runner's own summary
+  (already documented as the redirect-split pattern; one-off).
 
 ## Tags
 category: bug-fixes
