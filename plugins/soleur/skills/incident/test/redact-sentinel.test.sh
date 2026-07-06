@@ -543,6 +543,45 @@ else
   echo "FAIL: Test 16e: base64-flooded input did not complete (rc=${rc} — possible unbounded fan-out)"; FAIL=$((FAIL + 1))
 fi
 
+# Test 15f — item 3 with an INDENTED, 32-col-wrapped body (the real k8s Secret / Helm `data:` shape):
+# block assembly must .strip() each line so indented base64 assembles. (#6045 review F2)
+t15f="${TMP_DIR}/t15f.txt"
+python3 -c "${_DER_PY}
+b = b64(priv_long)
+wrapped = '\n'.join('    ' + b[i:i+32] for i in range(0, len(b), 32))  # 4-space indent, 32-col
+sys.stdout.write('data:\n  tls.key: |\n' + wrapped + '\n')" > "${t15f}"
+bash "${SENTINEL}" "${t15f}" >/dev/null 2>&1
+assert_exit "Test 15f: indented 32-col-wrapped k8s Secret private-key body caught via block assembly" 1 $?
+
+# Test 16f — decode NO-FALSE-POSITIVE on a BINARY asset: a base64'd mostly-non-printable blob that
+# carries an INCIDENTAL sk- run must NOT fail-close (the printable-text gate skips binary). (#6045 review F4)
+t16f="${TMP_DIR}/t16f.txt"
+python3 -c "
+import base64, sys
+# 200 high bytes (a font/wasm/image shape) with an incidental 'sk-...' run spliced in.
+blob = bytes(range(0x80, 0x100)) * 2 + b'sk-A1b2C3d4E5f6G7h8I9j0' + bytes(range(0x80, 0x100))
+sys.stdout.write('embedded asset: ' + base64.b64encode(blob).decode() + ' end\n')
+" > "${t16f}"
+bash "${SENTINEL}" "${t16f}" >/tmp/t16f.out 2>&1
+if [[ $? -eq 0 ]]; then
+  echo "PASS: Test 16f: a base64 binary asset with an incidental sk- run does NOT fail-close (printable-text gate)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 16f: decode pass fail-closed a legitimate binary asset (over-redaction FP)"; cat /tmp/t16f.out; FAIL=$((FAIL + 1))
+fi
+
+# Test 17 — email-class ReDoS bound (#6045 security review P1): a large run of email-class chars with
+# NO '@' must complete quickly (bounded quantifier → linear), not hang the fail-closed gate. 256 KiB of
+# 'a' at the pre-fix O(n^2) rate timed out (>2 min); bounded it returns in well under the 20s ceiling.
+t17="${TMP_DIR}/t17.txt"
+python3 -c "import sys; sys.stdout.write('a'*262144)" > "${t17}"
+timeout 20 bash "${SENTINEL}" "${t17}" >/dev/null 2>&1
+rc=$?
+if [[ $rc -eq 0 || $rc -eq 1 ]]; then
+  echo "PASS: Test 17: 256 KiB email-class flood completes within 20s (email quantifier bounded — no O(n^2) ReDoS)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 17: email-class flood did not complete (rc=${rc} — O(n^2) ReDoS regression)"; FAIL=$((FAIL + 1))
+fi
+
 echo
 echo "Total: ${PASS} pass, ${FAIL} fail"
 [[ "${FAIL}" -eq 0 ]]

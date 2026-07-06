@@ -80,7 +80,10 @@ CONFUSABLE_MAP = {ord(k): v for k, v in _CONFUSABLE_PAIRS.items()}
 F = re.ASCII
 PATTERNS = [
     ("JWT", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", F)),
-    ("email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", F)),
+    # Local-part/domain quantifiers are BOUNDED (RFC 5321: local <=64, domain <=255) — an unbounded
+    # `+` backtracks O(n^2) on a long email-class run with no '@', hanging the fail-closed gate on a
+    # crafted ~1 MiB input (#6045 security review). Bounding keeps it linear without narrowing real emails.
+    ("email", re.compile(r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,}\b", F)),
     # UUID broadened to [0-9A-Fa-f] (uppercase — a latent lowercase-only gap in the bash baseline).
     ("UUID", re.compile(r"\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b", F)),
     ("stripe_key", re.compile(r"\b(sk|pk|rk)_(live|test)_[A-Za-z0-9]{16,}\b", F)),
@@ -107,7 +110,11 @@ PATTERNS = [
     # A 40-char lowercase-hex git SHA collides on length (incident PIRs cite SHAs constantly), so the
     # class carries an anti-SHA PREDICATE (below) requiring BOTH an uppercase letter AND a digit. Explicit
     # non-class boundaries (lookaround), NOT \b — '-' is a non-word char and \b mis-anchors at token ends.
-    ("cloudflare_token", re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{40}(?![A-Za-z0-9_-])", F)),
+    # The boundary ALSO rejects `+` / `/` / `=` adjacency (base64 specials) so a 40-char SEGMENT of a
+    # standard-base64 blob (split by +//) does not fire — that FP fail-closes a legitimate embedded asset
+    # (#6045 review F4). Real tokens sit on whitespace / quote / colon boundaries; the `=`-prefixed env-var
+    # case (`CLOUDFLARE_*_TOKEN=…`) is already caught by the env_var class.
+    ("cloudflare_token", re.compile(r"(?<![A-Za-z0-9_+/=-])[A-Za-z0-9_-]{40}(?![A-Za-z0-9_+/=-])", F)),
 ]
 
 # Per-class post-match predicates: a match is kept only if the predicate returns truthy. The bare-length
@@ -185,8 +192,9 @@ def _scan_reflow(norm, seen):
         full_rx = PAT_BY_NAME[name]
         count = 0
         for pm in prefix_rx.finditer(norm):
-            if count >= _MAX_REFLOW_CANDIDATES:
-                break
+            count += 1
+            if count > _MAX_REFLOW_CANDIDATES:
+                break  # bound total prefix occurrences EXAMINED per class (incremented before the skips)
             p = pm.start()
             if p > 0 and _is_word(norm[p - 1]):
                 continue  # interior substring, not a real boundary — would fabricate a match
@@ -194,14 +202,12 @@ def _scan_reflow(norm, seen):
             parts = re.split(r"\s+", window, maxsplit=_MAX_REFLOW_SPLITS)
             if len(parts) < 2:
                 continue  # no whitespace in window — the base pass already saw this exact run
-            count += 1
             # If the split cap was hit (len == _MAX_REFLOW_SPLITS+1), the last element is an unbounded
-            # prose remainder — drop it so prose cannot be glued into a spurious token.
+            # prose remainder — drop it so prose cannot be glued into a spurious token. A token split at
+            # more than _MAX_REFLOW_SPLITS points is missed — a recorded residual (ADR-086). Joining
+            # removes the whitespace separators, so the candidate is always shorter than the window.
             joinable = parts[:-1] if len(parts) == _MAX_REFLOW_SPLITS + 1 else parts
-            candidate = "".join(joinable)
-            if candidate == window:
-                continue  # nothing rejoined
-            m = full_rx.match(candidate)
+            m = full_rx.match("".join(joinable))
             if m:
                 hits += _emit(name, m.group(0), p, "whitespace-rejoin", seen)
     return hits
@@ -266,20 +272,32 @@ def _scan_text(text, offset, tag, seen):
     return hits
 
 
+def _mostly_text(raw):
+    # Only re-scan decoded content that is plausibly TEXT. A real base64/hex-encoded secret decodes to
+    # printable text; a legitimate embedded BINARY asset (font/wasm/image) decodes to bytes that can carry
+    # an INCIDENTAL short-anchored run (e.g. `sk-…`, `whsec_…`) and manufacture a false positive that
+    # fail-closes the write (#6045 review F4). A private-key body is binary but is handled by the DER check
+    # BEFORE this gate. Empty → not text.
+    if not raw:
+        return False
+    printable = sum(1 for b in raw if 0x20 <= b < 0x7F or b in (0x09, 0x0A, 0x0D))
+    return printable / len(raw) >= 0.85
+
+
 def _scan_encoded(norm, seen):
     hits = 0
-    count = 0
     candidates = []  # (blob, offset)
-    # (1) single-line / inline base64 runs (k8s Secret `data:` values, inline blobs).
+    # (1) single-line / inline base64 runs (inline blobs).
     for m in re.finditer(r"[A-Za-z0-9+/_-]{24,}={0,2}", norm):
         candidates.append((m.group(0), m.start()))
     # (2) multi-line base64 BLOCKS: consecutive whole-line base64 joined into one blob — real PEM/DER
-    #     bodies are 64-char line-wrapped, so a per-line run never decodes to a full key.
+    #     bodies are 64-char line-wrapped, and k8s Secret / Helm `data:` values are INDENTED, so `.strip()`
+    #     each line (not just rstrip) before the fullmatch or an indented wrapped body never assembles.
     block_lines = []
     block_off = None
     pos = 0
     for line in norm.splitlines(keepends=True):
-        stripped = line.rstrip("\r\n")
+        stripped = line.strip()
         if re.fullmatch(r"[A-Za-z0-9+/_-]{16,}={0,2}", stripped):
             if not block_lines:
                 block_off = pos
@@ -292,33 +310,38 @@ def _scan_encoded(norm, seen):
     if len(block_lines) >= 2:
         candidates.append(("".join(block_lines), block_off))
 
+    b64_count = 0
     for blob, off in candidates:
-        if count >= _MAX_ENCODED_CANDIDATES:
+        if b64_count >= _MAX_ENCODED_CANDIDATES:
             break
         if len(blob) > _MAX_CANDIDATE_LEN:
             continue
-        count += 1
+        b64_count += 1
         raw = _b64_decode(blob)  # never raises — returns None on failure (no exit-2 bubble)
         if raw is None:
             continue
-        if _is_der_private_key(raw):
+        if _is_der_private_key(raw):   # binary key body — DER-checked BEFORE the text gate
             hits += _emit("pem_key_body", blob, off, "headerless-PEM-DER", seen)
-        hits += _scan_text(raw.decode("utf-8", "replace"), off, "decoded base64", seen)
+        if _mostly_text(raw):
+            hits += _scan_text(raw.decode("utf-8", "replace"), off, "decoded base64", seen)
     # hex runs (even length only — an odd run cannot be whole bytes).
+    hex_count = 0
     for m in re.finditer(r"\b[0-9A-Fa-f]{32,}\b", norm):
-        if count >= 2 * _MAX_ENCODED_CANDIDATES:
+        if hex_count >= _MAX_ENCODED_CANDIDATES:
             break
         blob = m.group(0)
         if len(blob) % 2 or len(blob) > _MAX_CANDIDATE_LEN:
             continue
-        count += 1
+        hex_count += 1
         try:
             raw = bytes.fromhex(blob)
         except ValueError:
             continue
-        hits += _scan_text(raw.decode("utf-8", "replace"), m.start(), "decoded hex", seen)
-    # percent-encoding: unquote once over the whole normalized text.
-    if re.search(r"%[0-9A-Fa-f]{2}", norm):
+        if _mostly_text(raw):
+            hits += _scan_text(raw.decode("utf-8", "replace"), m.start(), "decoded hex", seen)
+    # percent-encoding: unquote once over the normalized text (bounded like the base64/hex paths; a
+    # >_MAX_CANDIDATE_LEN document skips the decoded layer — its raw form is still scanned by the base pass).
+    if re.search(r"%[0-9A-Fa-f]{2}", norm) and len(norm) <= _MAX_CANDIDATE_LEN:
         decoded = urllib.parse.unquote(norm)
         if decoded != norm:
             hits += _scan_text(decoded, 0, "decoded percent", seen)

@@ -59,8 +59,8 @@ for name, _ in m.PATTERNS:
     sys.stdout.write(name + '\n')
 ")
 
-# Floor sanity-check: a broken import (empty PATTERNS) would vacuously pass the loop.
-# The base engine ships 16 classes (13 secret + email/UUID/IPv4); require the known floor.
+# Floor sanity-check: a broken import (empty/short PATTERNS) would vacuously pass the per-class loop.
+# The <13 floor is the real contract — enough secret classes must enumerate to make the loop meaningful.
 if (( ${#ENGINE_CLASSES[@]} < 13 )); then
   fail "engine class enumeration returned ${#ENGINE_CLASSES[@]} (< 13 floor) — import broken or PATTERNS empty"
 else
