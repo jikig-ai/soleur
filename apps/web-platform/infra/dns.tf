@@ -77,7 +77,7 @@ resource "cloudflare_record" "ssh" {
   ttl     = 1
 }
 
-# #6122 (ADR-093) — registry PUSH ingress for CI via Cloudflare Tunnel (CTO ruling).
+# #6122 (ADR-096) — registry PUSH ingress for CI via Cloudflare Tunnel (CTO ruling).
 # CI pushes container images to the private-net zot host through this hostname: it runs
 # `cloudflared access tcp --hostname registry.<base>` (CF Access service-token auth) → the
 # web host's cloudflared → http://10.0.1.30:5000 (the tunnel ingress_rule in tunnel.tf).

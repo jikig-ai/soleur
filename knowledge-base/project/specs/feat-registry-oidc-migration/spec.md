@@ -48,6 +48,7 @@ minter disabled.
 - FR6: Preserve cosign: verify the offline verifier fetches `.sig` from zot with the minted credential; `COSIGN_IDENTITY_REGEXP` (GitHub Actions OIDC) unchanged.
 - FR7: Cutover sequence: dual-push (GHCR + zot) → validate zot pull E2E on a host → flip pull sites → retire GHCR push after soak.
 
+<!-- lint-infra-ignore start -->
 ## Technical Requirements
 
 - TR1: New Terraform: R2 bucket, zot host (Hetzner, ~CAX11), zot config, `doppler_secret` for the zot-mint credential with `lifecycle { ignore_changes = [value] }` (mirror the existing `ghcr-read-credential.tf` pattern). Every new TF var: NO operator-mint default (`hr-tf-variable-no-operator-mint-default`); the TF root must be reachable from `terraform apply` (`hr-fresh-host-provisioning-reachable-from-terraform-apply`).
@@ -56,6 +57,8 @@ minter disabled.
 - TR4: Break-glass: keep interim GHCR PAT documented as fallback until zot HA is proven; do not revoke early (`decision-challenges.md` incident note).
 - TR5: Rotate the exposed classic PAT (overwritten during the 2026-07-05 minter misfire).
 - TR6: Retire on completion: `ghcr-read-credential.tf`, `ghcr-minter-doppler-token.tf` (or repurpose to zot), and the GHCR `GHCR_MINTER_DISABLED` gate.
+
+<!-- lint-infra-ignore end -->
 
 ## Blast Radius (from repo-research map, 2026-07-06)
 

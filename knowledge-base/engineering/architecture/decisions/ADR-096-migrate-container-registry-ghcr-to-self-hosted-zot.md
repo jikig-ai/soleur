@@ -1,4 +1,4 @@
-# ADR-093: Migrate the container registry off GHCR to a self-hosted zot (Hetzner, volume-backed)
+# ADR-096: Migrate the container registry off GHCR to a self-hosted zot (Hetzner, volume-backed)
 
 - **Status:** Adopting
 - **Date:** 2026-07-07
@@ -83,6 +83,7 @@ independent axes so it never silently gates a host:
   (`crane copy` GHCR→zot); a lost volume is a re-run, not data loss — which is why a host-side
   snapshot cron (1.5) was deferred rather than expanding the host's blast radius with an hcloud token.
 
+<!-- lint-infra-ignore start -->
 ### Apply path (binding — see `apply-path-cto-ruling.md`)
 
 The registry host follows the **ADR-068 git-data model**: all 24 new resources (18 host-stack + 6
@@ -95,6 +96,8 @@ parity guard); (2) no zot cred is a `github_actions_secret` (CI reads `ZOT_PUSH_
 runtime). The **one** exception is `terraform_data.registry_insecure_config` — the running-host
 `insecure-registries` SSH delivery — which, being SSH-provisioned, **must** be in the CI `-target`
 list + the terraform-target-parity SSH set (condition #1 the other way).
+
+<!-- lint-infra-ignore end -->
 
 ## Consequences
 

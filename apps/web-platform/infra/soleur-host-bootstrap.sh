@@ -197,7 +197,7 @@ STAGE=ghcr_login
     echo "soleur-host-bootstrap: GHCR_READ_{USER,TOKEN} not both present — skipping docker login"
     ghcr_login_warn credential_absent
   fi
-  # #6122/ADR-093: ALSO authenticate to the self-hosted zot registry so the downstream
+  # #6122/ADR-096: ALSO authenticate to the self-hosted zot registry so the downstream
   # cloud-init inngest-bootstrap + app pulls can prefer zot. Strict dark-launch: only when
   # ZOT_REGISTRY_URL is present in Doppler prd (absent until the operator provisions (1.8) +
   # backfills (1.9) → a true no-op, and an unset URL emits NO beacon so a pre-provisioning

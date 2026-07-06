@@ -49,6 +49,6 @@ specification {
   tag external
 
   // Applied to infrastructure we self-host + operate (vs. external SaaS) — e.g. the
-  // self-hosted zot container registry (ADR-093). Not muted in views (it is ours).
+  // self-hosted zot container registry (ADR-096). Not muted in views (it is ours).
   tag selfhosted
 }

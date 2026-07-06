@@ -1,5 +1,5 @@
 #cloud-config
-# #6122 (ADR-093) — zot registry host cloud-init. Rendered by templatefile() in
+# #6122 (ADR-096) — zot registry host cloud-init. Rendered by templatefile() in
 # zot-registry.tf. Mirrors cloud-init-git-data.yml (dedicated volume-backed host,
 # cloud-init-only — NO SSH provisioner, so the CI runner cannot hang a merge-triggered
 # apply; secrets injected via a scoped Doppler token, NEVER baked into user_data) and

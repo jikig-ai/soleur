@@ -1,10 +1,10 @@
-# #6122 (ADR-093) — the self-hosted zot container-registry host.
+# #6122 (ADR-096) — the self-hosted zot container-registry host.
 #
 # A dedicated Hetzner host running a single zot OCI registry as a docker container
 # (digest-pinned upstream image), volume-backed at /var/lib/zot, on the existing
 # private network (network.tf). Hetzner web hosts + CI `docker pull` our two private
 # platform images from it with a Terraform-generated read-only htpasswd credential
-# (zero human mint). Supersedes GHCR for our own images (ADR-093; a GitHub App
+# (zero human mint). Supersedes GHCR for our own images (ADR-096; a GitHub App
 # installation token cannot pull private GHCR packages — community #171423).
 #
 # STRUCTURAL PRECEDENT: git-data.tf (ADR-068), NOT inngest.tf. inngest.tf has no host

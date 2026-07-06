@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase-3 entry gate (#6122/ADR-093): assert that BOTH platform images' currently-deployed
+# Phase-3 entry gate (#6122/ADR-096): assert that BOTH platform images' currently-deployed
 # tags resolve in the self-hosted zot registry BEFORE the pull-site flip is relied on. This
 # is the RUNTIME expression of the dark-launch gate — it can only PASS once the operator has
 # provisioned (task 1.8) + backfilled (task 1.9) zot, which is exactly why the flip "trails

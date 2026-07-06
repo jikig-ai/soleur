@@ -55,10 +55,10 @@ plan: knowledge-base/project/plans/2026-07-06-feat-registry-oidc-migration-plan.
 - [ ] 5.3 (post-soak) remove fallback branch; stop GHCR push; remove GHCR egress allow
 - [ ] 5.4 (post-soak) retire `cron-ghcr-token-minter.ts` + test + `ghcr-minter-doppler-token.tf` + `ghcr-read-credential.tf` + `GHCR_MINTER_DISABLED` gate
 - [ ] 5.5 (post-soak, after fallback-removal deploy confirmed on all hosts) rotate + revoke the leaked classic PAT
-- [ ] 5.6 Flip ADR-093 status adopting → accepted
+- [ ] 5.6 Flip ADR-096 status adopting → accepted
 
 ## Phase 6 — ADR/C4 + docs
-- [x] 6.1 ADR-093 via `/soleur:architecture` (7-alt table + cold-boot-dependency statement; status: adopting)
+- [x] 6.1 ADR-096 via `/soleur:architecture` (7-alt table + cold-boot-dependency statement; status: adopting)
 - [x] 6.2 Edit `model.c4`+`views.c4`+`spec.c4` (add `zotRegistry`, move host pull edge GHCR→zot, correct `ghcr` desc)
 - [x] 6.3 Run `c4-code-syntax.test.ts` + `c4-render.test.ts`
 - [x] 6.4 Update runbooks naming GHCR pull

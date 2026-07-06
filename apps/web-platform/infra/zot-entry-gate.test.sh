@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Tests for zot-entry-gate.sh (#6122/ADR-093): the pre-flip go/no-go gate that asserts both
+# Tests for zot-entry-gate.sh (#6122/ADR-096): the pre-flip go/no-go gate that asserts both
 # platform images resolve in zot. Exit contract: 0=PASS, 1=BLOCK (tag missing), 2=TRANSIENT.
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

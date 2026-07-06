@@ -521,7 +521,7 @@ resource "terraform_data" "cosign_trusted_root" {
   }
 }
 
-# #6122/ADR-093 (Edge A, RUNNING hosts): deliver the canonical docker daemon.json — which
+# #6122/ADR-096 (Edge A, RUNNING hosts): deliver the canonical docker daemon.json — which
 # now allowlists the plain-HTTP private-net zot registry (10.0.1.30:5000) under
 # insecure-registries — to the ALREADY-RUNNING web host and hot-reload dockerd. Fresh hosts
 # get the same content from cloud-init.yml's daemon.json write (task 3.0a); a running host

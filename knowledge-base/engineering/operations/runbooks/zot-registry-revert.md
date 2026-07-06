@@ -1,12 +1,12 @@
 ---
 title: Revert the zot pull-site flip to GHCR-primary
 issue: "#6122"
-adr: ADR-093
+adr: ADR-096
 severity: P1 (deploy/boot path)
 last_reviewed: 2026-07-07
 ---
 
-# Revert the zot pull-site flip → GHCR-primary (#6122 / ADR-093)
+# Revert the zot pull-site flip → GHCR-primary (#6122 / ADR-096)
 
 The Phase-3 pull-site migration is **dark-launch gated**: every pull site (ci-deploy.sh
 rolling deploy, soleur-host-bootstrap.sh + cloud-init.yml fresh boot) prefers the

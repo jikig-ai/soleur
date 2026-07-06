@@ -41,7 +41,7 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
       hostname = "ssh.${var.app_domain_base}"
       service  = "ssh://localhost:22"
     }
-    # #6122 (ADR-093) — registry PUSH ingress. The web host's cloudflared (already a
+    # #6122 (ADR-096) — registry PUSH ingress. The web host's cloudflared (already a
     # 10.0.1.0/24 member) proxies to the private-net zot host, so the registry host needs
     # NO cloudflared of its own. CI runs `cloudflared access tcp --hostname registry.<base>`
     # → this rule → http://10.0.1.30:5000 (zot). First-match; MUST stay above the 404.
@@ -121,7 +121,7 @@ resource "cloudflare_zero_trust_access_policy" "ci_ssh_service_token" {
   }
 }
 
-# #6122 (ADR-093) — CF Access for the registry PUSH ingress (CTO ruling). A NEW dedicated
+# #6122 (ADR-096) — CF Access for the registry PUSH ingress (CTO ruling). A NEW dedicated
 # service token (NOT reused from ci_ssh/deploy) so registry-write access rotates/revokes
 # independently of host-shell + webhook access, with its own session duration. Push-time auth
 # is BOTH gates: this CF Access service token (network/edge) + the zot-push htpasswd (registry).

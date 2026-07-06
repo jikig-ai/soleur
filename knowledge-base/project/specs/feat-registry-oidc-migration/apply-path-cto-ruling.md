@@ -4,7 +4,7 @@ issue: "#6122"
 kind: cto-ruling
 date: 2026-07-06
 routed_by: /work Phase 1 (architectural-fork routing rule)
-adr: ADR-093 (Apply path section)
+adr: ADR-096 (Apply path section)
 ---
 
 # CTO Ruling — Registry-host Terraform apply-path topology
@@ -53,7 +53,7 @@ that is correct, not a miss. Rewrite AC #2 as two checks:
 - (a) per-PR targeted plan → zero zot resources, zero create/replace of existing infra;
 - (b) operator full (untargeted) plan → all 16 as CREATE, zero create/replace of existing infra.
 
-## Rejected alternatives (→ ADR-093 "Apply path")
+## Rejected alternatives (→ ADR-096 "Apply path")
 - **Alt A — per-PR `-target` the whole stack (plan's literal P1-2).** Rejected: contradicts the sole
   brand-new-host precedent; makes unattended per-PR CI provision a host with no operator readiness
   checkpoint; a merge side-effect creating a host violates `hr-fresh-host-provisioning-reachable-from-terraform-apply`.

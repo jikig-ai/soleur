@@ -43,7 +43,7 @@ All spikes run locally against a throwaway zot container (`ghcr.io/project-zot/z
 
 ## 0.4 — ADR ordinal re-verified vs origin/main
 
-- Latest committed ADR on this branch = **ADR-092**. Next free = **ADR-093** — the plan's provisional ordinal holds. (Ship's collision gate re-verifies; on renumber sweep plan+spec+tasks per Sharp Edges.)
+- Latest committed ADR on this branch = **ADR-092**. Next free = **ADR-096** — the plan's provisional ordinal holds. (Ship's collision gate re-verifies; on renumber sweep plan+spec+tasks per Sharp Edges.)
 
 ## Carry-forward to Phase 1+
 

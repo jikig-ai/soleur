@@ -69,7 +69,7 @@ readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enfor
 readonly GHCR_DOCKER_CONFIG="${GHCR_DOCKER_CONFIG:-/home/deploy/.docker/config.json}"
 readonly COSIGN_TRUSTED_ROOT_HOST="${COSIGN_TRUSTED_ROOT_HOST:-/etc/soleur/cosign-trusted-root.json}"
 
-# Self-hosted zot registry (#6122/ADR-093). The pull path prefers zot ONLY when it is
+# Self-hosted zot registry (#6122/ADR-096). The pull path prefers zot ONLY when it is
 # confirmed-configured-and-live (see zot_gate_and_login) — a strict dark-launch: until
 # the operator provisions (1.8) + backfills (1.9) zot, ZOT_REGISTRY_URL is absent in
 # Doppler prd, ZOT_ACTIVE stays 0, and every pull takes the UNCHANGED private-GHCR path
@@ -545,7 +545,7 @@ pull_failure_event() {
 }
 
 # registry_pull_event <registry> <image_kind> <tag>: success breadcrumb recording
-# WHICH registry served a pull (#6122/ADR-093). registry ∈ {zot, ghcr-fallback};
+# WHICH registry served a pull (#6122/ADR-096). registry ∈ {zot, ghcr-fallback};
 # image_kind ∈ {web, inngest}. The soak gate (scripts/followthroughs/zot-soak-6122.sh)
 # counts registry=ghcr-fallback events per image — a healthy post-cutover fleet emits
 # ONLY registry=zot, so ghcr-fallback is level=warning (the watched signal) and zot is
@@ -640,7 +640,7 @@ ghcr_prelude_and_login() {
   ghcr_token=""
 }
 
-# zot_gate_and_login: dark-launch gate for the self-hosted zot registry (#6122/ADR-093).
+# zot_gate_and_login: dark-launch gate for the self-hosted zot registry (#6122/ADR-096).
 # Sets ZOT_ACTIVE=1 ONLY when zot is confirmed-configured-and-live: ZOT_REGISTRY_URL
 # present in Doppler prd AND a fast /v2/ probe answers AND the pull cred logs in. Any
 # miss leaves ZOT_ACTIVE=0 → every pull falls straight through to the UNCHANGED GHCR path
@@ -690,7 +690,7 @@ zot_gate_and_login() {
 }
 
 # pull_image_with_fallback <image_kind>: pull $IMAGE:$TAG zot-primary with an ATOMIC
-# GHCR fallback (#6122/ADR-093). image_kind ∈ {web, inngest} (beacon tag only). On
+# GHCR fallback (#6122/ADR-096). image_kind ∈ {web, inngest} (beacon tag only). On
 # success it reassigns the GLOBAL IMAGE to the registry-qualified repo actually pulled,
 # so verify_image_signature + every downstream docker create/run follow the SAME
 # registry — image ref + docker auth + cosign .sig target move together. Emits a
@@ -1173,7 +1173,7 @@ fi
 # prefetch SENTRY_* into this script's env BEFORE any pull/verify. Covers BOTH the
 # web-platform and inngest pull sites below. Fail-open (never aborts the deploy).
 ghcr_prelude_and_login
-# #6122/ADR-093: evaluate the zot dark-launch gate (probe + pull login) once, covering
+# #6122/ADR-096: evaluate the zot dark-launch gate (probe + pull login) once, covering
 # BOTH pull sites. Sets ZOT_ACTIVE; strict no-op (GHCR path) until zot is provisioned.
 zot_gate_and_login
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Drift guard for terraform_data.registry_insecure_config (#6122/ADR-093 Edge A, running
+# Drift guard for terraform_data.registry_insecure_config (#6122/ADR-096 Edge A, running
 # hosts). This SSH provisioner delivers the canonical docker daemon.json (allowlisting the
 # plain-HTTP private-net zot registry 10.0.1.30:5000 under insecure-registries) to the
 # ALREADY-RUNNING web host and hot-reloads dockerd. HIGH-RISK: it mutates the prod docker

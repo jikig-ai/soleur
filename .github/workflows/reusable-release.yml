@@ -639,7 +639,7 @@ jobs:
           set -euo pipefail
           cosign sign --yes "${IMAGE}@${DIGEST}"
 
-      # --- #6122 (ADR-093) Phase 2: dual-push the pushed image to the self-hosted zot
+      # --- #6122 (ADR-096) Phase 2: dual-push the pushed image to the self-hosted zot
       # registry + cosign-sign the zot digest. CI reaches the private-net zot ONLY through
       # the existing `web` CF Tunnel (cf-tunnel-registry-bridge). The image is COPIED
       # GHCR→zot with `crane` RUNNER-SIDE (the buildx container driver cannot reach the

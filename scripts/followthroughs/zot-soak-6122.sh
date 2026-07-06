@@ -3,7 +3,7 @@
 #
 # After the operator provisions (1.8) + backfills (1.9) zot and the pull-site flip goes
 # live, the fleet must run zot-primary for a soak window with ZERO GHCR fallbacks before
-# GHCR push/egress can be retired (tasks 5.3-5.5) and ADR-093 flips adopting → accepted
+# GHCR push/egress can be retired (tasks 5.3-5.5) and ADR-096 flips adopting → accepted
 # (5.6). This script is that gate. It PASSES (closes the tracker) only when, over the
 # window from just-after cutover to now, Sentry shows:
 #   (a) ZERO ghcr-fallback events for EITHER image, on the rolling-deploy path
@@ -78,5 +78,5 @@ if [[ "$ZOT_WEB" -lt "$MIN_SAMPLE" || "$ZOT_INNGEST" -lt "$MIN_SAMPLE" ]]; then
   exit 1
 fi
 
-echo "PASS: 0 ghcr-fallbacks and zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each) since $START — zot-primary soak holds. Safe to retire GHCR (5.3-5.5) and flip ADR-093 accepted (5.6)."
+echo "PASS: 0 ghcr-fallbacks and zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each) since $START — zot-primary soak holds. Safe to retire GHCR (5.3-5.5) and flip ADR-096 accepted (5.6)."
 exit 0

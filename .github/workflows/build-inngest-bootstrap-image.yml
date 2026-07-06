@@ -194,7 +194,7 @@ jobs:
           docker push "$IMAGE:$TAG"
           echo "Pushed $IMAGE:$TAG"
 
-      # --- #6122 (ADR-093) Phase 2: dual-push the inngest-bootstrap image to the self-hosted
+      # --- #6122 (ADR-096) Phase 2: dual-push the inngest-bootstrap image to the self-hosted
       # zot registry. The plain `docker build`/`docker push` above leaves the image in the
       # runner's local docker, so `docker tag` + `docker push 127.0.0.1:5000/...` mirrors it
       # over the CF Tunnel bridge directly (no crane/buildx-localhost issue). GHCR push stays

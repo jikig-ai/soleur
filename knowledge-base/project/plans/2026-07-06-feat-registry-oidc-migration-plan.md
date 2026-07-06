@@ -9,7 +9,7 @@ brainstorm: knowledge-base/project/brainstorms/2026-07-06-registry-oidc-migratio
 spec: knowledge-base/project/specs/feat-registry-oidc-migration/spec.md
 supersedes_adr: ["ADR-088"]
 amends_adr: ["ADR-087"]
-new_adr: "ADR-093 (provisional)"
+new_adr: "ADR-096 (provisional)"
 plan_review: "architecture-strategist + spec-flow-analyzer + code-simplicity-reviewer (single-user-incident panel), 2026-07-06"
 ---
 
@@ -47,7 +47,7 @@ HA deferred. See Research Reconciliation.
 | "single `registry` field per boot, reuse #6090 bootcmd beacon" | `#6090` beacon fires at **network stage before any docker pull**; rolling `ci-deploy` deploys never run cloud-init bootcmd. Category error. | **Emit `registry`/`pull_rc`/`login_rc`/`image` at each pull site.** |
 | Pull-site inventory (6 sites) | **Incomplete:** missed `cloud-init.yml:591-606` (2nd inngest pull), `apply-web-platform-infra.yml:1070` (imagetools digest-resolve + `docker login ghcr`), `deploy.sh` (soleur:deploy). host-bootstrap login is `:172-199` not `:25-30`. | Full inventory below; all in Phase 3 scope. |
 | Dual-push covers rollback | Only **new** tags dual-push; `cloud-init.yml:591` pins `v1.1.18`, `variables.tf:47` defaults `:latest` — **old tags never mirrored** → rollback + fresh-boot break after retirement. | **Backfill last N releases of both images** (crane/skopeo GHCR→zot); retirement gates on "every pinned tag resolves in zot." |
-| ADR-088 governs; ghcr in C4 | ADR-087+088 on main (highest ADR-092). `ghcr` = external system `model.c4:242`; `hetzner` desc `:170`. | New **ADR-093** supersedes 088, amends 087; C4 edits in scope. |
+| ADR-088 governs; ghcr in C4 | ADR-087+088 on main (highest ADR-092). `ghcr` = external system `model.c4:242`; `hetzner` desc `:170`. | New **ADR-096** supersedes 088, amends 087; C4 edits in scope. |
 
 ## User-Brand Impact
 
@@ -66,7 +66,7 @@ runs at PR review.
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-Create **ADR-093 — "Container images served from a self-hosted zot registry host (Hetzner,
+Create **ADR-096 — "Container images served from a self-hosted zot registry host (Hetzner,
 volume-backed); read-only htpasswd machine credential; GHCR retired for own images"** via
 `/soleur:architecture`.
 - **Supersedes ADR-088** (installation-token minter — infeasible, GHCR refuses App tokens).
@@ -118,6 +118,7 @@ New infra: a dedicated Hetzner registry host + volume, a single zot systemd/dock
   - **Snapshot cron** for `/var/lib/zot` volume (durability belt-and-suspenders; images are also
     CI-reproducible).
 - `variables.tf`: **no new no-default vars** (all creds TF-generated). Confirm at /work.
+<!-- lint-infra-ignore start -->
 - **Apply-path topology (architecture P1-2 — REVISED by CTO ruling 2026-07-06, see
   `knowledge-base/project/specs/feat-registry-oidc-migration/apply-path-cto-ruling.md`):** the
   original AC ("append every zot resource to the `-target=` list") is **REVERSED**. A brand-new host
@@ -142,6 +143,8 @@ miss); (b) the operator's **full untargeted** plan shows all 24 #6122 resources 
 create/replace of existing infra. Ordering: registry host provisioned + `/v2/`-healthy before web-host
 pulls flip (Phase 3 entry gate). zot config changes on the running host re-apply via re-provision
 (cloud-init is idempotent; git-data pattern), not a separate SSH bootstrap.
+
+<!-- lint-infra-ignore end -->
 
 ### Distinctness / drift safeguards
 `dev != prd` (registry host prd-only — confirm at /work). No `ignore_changes` (TF owns all values).
@@ -239,10 +242,10 @@ Edit every pull site to try zot-primary then fall back to GHCR, **atomically swi
 Confirm the offline verifier passes on **both** the zot-primary and the GHCR-fallback branch (auth+sig target move together). Trust root + identity regexp unchanged; no cosign version bump.
 
 ### Phase 5 — Cutover, soak, retirement (soak-gated)
-Soak on zot-primary. **Revert runbook (spec-flow P1-7):** if the fallback-rate alarm fires (>X% ghcr-fallback over Y hours), page + revert Phase 3 to GHCR-primary (clean — GHCR push still live). When `zot-soak-6122.sh` passes (min-sample incl fresh-boot of each image): remove the fallback branch, stop GHCR push, **retire** `cron-ghcr-token-minter.ts` + `ghcr-minter-doppler-token.tf` + `ghcr-read-credential.tf` + the `GHCR_MINTER_DISABLED` gate + GHCR egress allow. **PAT rotation ordering (spec-flow P2-8):** rotate + revoke the leaked classic PAT **only after** the fallback-removal deploy is confirmed on all hosts (the soak break-glass rides that PAT until then). Flip ADR-093 → accepted.
+Soak on zot-primary. **Revert runbook (spec-flow P1-7):** if the fallback-rate alarm fires (>X% ghcr-fallback over Y hours), page + revert Phase 3 to GHCR-primary (clean — GHCR push still live). When `zot-soak-6122.sh` passes (min-sample incl fresh-boot of each image): remove the fallback branch, stop GHCR push, **retire** `cron-ghcr-token-minter.ts` + `ghcr-minter-doppler-token.tf` + `ghcr-read-credential.tf` + the `GHCR_MINTER_DISABLED` gate + GHCR egress allow. **PAT rotation ordering (spec-flow P2-8):** rotate + revoke the leaked classic PAT **only after** the fallback-removal deploy is confirmed on all hosts (the soak break-glass rides that PAT until then). Flip ADR-096 → accepted.
 
 ### Phase 6 — ADR/C4 + docs
-Write ADR-093; edit the three `.c4` files; run c4 syntax+render tests. Update any runbook naming GHCR pull.
+Write ADR-096; edit the three `.c4` files; run c4 syntax+render tests. Update any runbook naming GHCR pull.
 
 ## Acceptance Criteria
 
@@ -255,7 +258,7 @@ Write ADR-093; edit the three `.c4` files; run c4 syntax+render tests. Update an
 - [ ] cosign offline verify passes on **both** zot-primary and GHCR-fallback branches; `COSIGN_IDENTITY_REGEXP` unchanged.
 - [ ] Phase-3 entry gate script verifies both images' deployed tags resolve in zot before flip.
 - [ ] Revert runbook + fallback-rate alarm (`> X%` over `Y h` ⇒ page+revert) documented, distinct from soak-close.
-- [ ] ADR-093 written (status: adopting) with the 7-alternative table + the cold-boot-dependency statement; all three `.c4` files edited; `c4-code-syntax.test.ts` + `c4-render.test.ts` green.
+- [ ] ADR-096 written (status: adopting) with the 7-alternative table + the cold-boot-dependency statement; all three `.c4` files edited; `c4-code-syntax.test.ts` + `c4-render.test.ts` green.
 - [ ] `## Observability` liveness + per-pull-site beacon wired; `discoverability_test.command` has no shell/ssh.
 - [ ] `zot-soak-6122.sh` (min-sample incl fresh-boot of each image; per-`image` count) + directive + label committed.
 - [ ] Recurring registry-host expense (~€4/mo) recorded via ops-advisor (`wg-record-recurring-vendor-expense`).
@@ -264,7 +267,7 @@ Write ADR-093; edit the three `.c4` files; run c4 syntax+render tests. Update an
 ### Post-merge (automated / one owner-only step)
 - [ ] Registry host `/v2/` uptime monitor green (Better Stack).
 - [ ] Soak window elapses with zero `registry=ghcr-fallback` beacons across the min-sample incl fresh-boot of each image (follow-through sweeper).
-- [ ] On soak pass (retirement PR): GHCR retired, minter + `ghcr-*.tf` removed, ADR-093 → accepted.
+- [ ] On soak pass (retirement PR): GHCR retired, minter + `ghcr-*.tf` removed, ADR-096 → accepted.
 - [ ] Rotate + revoke the leaked classic PAT **after** the fallback-removal deploy is confirmed on all hosts — the one owner-only step (`Automation: personal GitHub credential the account owner holds; revoke via github.com/settings/tokens or `gh` under the owner session`). `playwright-attempt: n/a — owner-held credential, not a session-automatable vendor mint.`
 
 ## Domain Review
@@ -291,7 +294,7 @@ Considered (single-user-incident threshold trigger). **No regulated-data surface
 
 ## Sharp Edges
 - A plan whose `## User-Brand Impact` is empty/TBD fails deepen-plan Phase 4.6 — filled.
-- ADR-093 ordinal provisional; on renumber `grep -rn 'ADR-093' knowledge-base/project/{plans,specs}/feat-registry-oidc-migration/` and sweep.
+- ADR-096 ordinal provisional; on renumber `grep -rn 'ADR-096' knowledge-base/project/{plans,specs}/feat-registry-oidc-migration/` and sweep.
 - zot's own image is third-party (upstream, digest-pinned) — never pull it from our zot (bootstrap paradox).
 - **Deferred (follow-up issue):** zot HA + read-replicas (and R2-backed stateless storage) — reopen only if the singleton shows real availability pain in the soak data.
 - **Deferred (fast-follow, inline-triaged at /work):** the `/var/lib/zot` volume **snapshot cron** (task 1.5). Durability's primary guarantee is CI-reproducibility (images rebuildable from source; the crane backfill re-runs) — the snapshot is belt-and-suspenders. A host-side hcloud API token to self-snapshot would widen the registry host's blast radius (it currently holds only a scoped read-only `prd_registry` token); if added it belongs as a **GHA-side scheduled snapshot job** (uses the existing CI `hcloud_token`, no new host secret). Not merge-blocking for a CI-reproducible registry.

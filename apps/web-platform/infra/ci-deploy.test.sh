@@ -2514,7 +2514,7 @@ assert_zot_dark() {
 assert_zot_dark
 
 # --- #6122 Phase 4: cosign continuity (trust anchor unchanged) ---
-# The zot migration must NOT alter the cosign trust anchor (ADR-093 G3 / task 4.2). Assert
+# The zot migration must NOT alter the cosign trust anchor (ADR-096 G3 / task 4.2). Assert
 # the pinned cosign image SHA (v3.1.1), the offline trusted-root flag, and the reusable-
 # release identity regexp are still present verbatim — only --allow-insecure-registry is
 # CONDITIONALLY added on the zot branch (proven by T-ZOT-1/T-ZOT-2 above, which also assert

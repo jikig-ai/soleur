@@ -1,5 +1,5 @@
 # CF Tunnel registry-push bridge — setup steps for a GitHub runner to `docker push`
-# container images to the private-net zot registry host (#6122 / ADR-093). The Hetzner
+# container images to the private-net zot registry host (#6122 / ADR-096). The Hetzner
 # registry firewall denies all public ingress; the runner reaches zot ONLY through the
 # existing `web` Cloudflare Tunnel (tunnel.tf `registry.${app_domain_base}` ingress_rule →
 # the web host's cloudflared → http://10.0.1.30:5000).

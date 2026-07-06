@@ -515,7 +515,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume.git_data_luks",
   "hcloud_volume_attachment.git_data_luks",
   "doppler_service_token.git_data",
-  // #6122 (ADR-093) — the zot registry host + its volume/network/firewall/creds/heartbeat
+  // #6122 (ADR-096) — the zot registry host + its volume/network/firewall/creds/heartbeat
   // ALL ride the operator's initial full (untargeted) `terraform apply` + drift detector,
   // exactly like the git-data host above (CTO ruling 2026-07-06,
   // knowledge-base/project/specs/feat-registry-oidc-migration/apply-path-cto-ruling.md).
@@ -542,7 +542,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "betteruptime_heartbeat.registry_prd",
   "doppler_secret.zot_heartbeat_url_prd",
   "doppler_service_token.registry",
-  // #6122 (ADR-093) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net
+  // #6122 (ADR-096) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net
   // zot host via the EXISTING `web` Cloudflare Tunnel + a NEW dedicated CF Access service token,
   // bridged with `cloudflared access tcp` (mirrors the SSH bridge). All operator-applied WITH the
   // registry host (an unattended per-PR apply must not mint a push credential + DNS for a host
@@ -564,7 +564,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
 // a github_actions_secret — that is the #5566 silent-un-applied class and MUST be targeted.
 const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   "doppler_service_token.git_data",
-  // #6122 (ADR-093) — minted into the operator-created `prd_registry` config, consumed by the
+  // #6122 (ADR-096) — minted into the operator-created `prd_registry` config, consumed by the
   // registry host's cloud-init (NOT published to a CI github_actions_secret). CI cannot apply
   // it — the config does not exist until the operator creates it (runbook precondition), and CI
   // cannot provision the host that reads it. Same class as doppler_service_token.git_data.

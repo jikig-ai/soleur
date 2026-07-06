@@ -402,7 +402,7 @@ runcmd:
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
 
   # Configure Docker log rotation + the self-hosted zot registry as an insecure (plain-HTTP,
-  # private-net) registry (#6122/ADR-093). zot serves HTTP on 10.0.1.30:5000 (= zot-registry.tf
+  # private-net) registry (#6122/ADR-096). zot serves HTTP on 10.0.1.30:5000 (= zot-registry.tf
   # local.registry_endpoint) behind a deny-all-public firewall; docker refuses a non-TLS registry
   # unless it is allowlisted here. Harmless before the Phase-3 flip activates — nothing pulls from
   # zot until the dark-launch gate confirms it live. cosign digest-pinning is the integrity guard,
@@ -456,7 +456,7 @@ runcmd:
       else
         printf 'ghcr_login_fail: %s' "$(tail -c 140 /run/soleur-ghcr-login.log 2>/dev/null)" > /run/soleur-stage-detail
       fi
-      # #6122/ADR-093: also log in to the self-hosted zot registry (dark — only when ZOT_*
+      # #6122/ADR-096: also log in to the self-hosted zot registry (dark — only when ZOT_*
       # present) so the seed pull can prefer it. Login persists in the host docker config
       # for the app pull + inngest extract below. bootstrap's zot_login runs post-extract
       # (too late for THIS pull), so it is done inline here too.
@@ -467,7 +467,7 @@ runcmd:
         [ -n "$ZUSER" ] && [ -n "$ZTOK" ] && printf '%s' "$ZTOK" | docker login "$ZURL" -u "$ZUSER" --password-stdin >/dev/null 2>&1 || true
       fi
     ) || true
-    # #6122/ADR-093: resolve the effective image ref ONCE — zot-primary when zot is
+    # #6122/ADR-096: resolve the effective image ref ONCE — zot-primary when zot is
     # configured + /v2/-reachable, else the unchanged GHCR ref — and record it in
     # /run/soleur-image-ref so the downstream app pull/create/run use the SAME registry
     # atomically (image ref moves together). Dark-safe: an unset/unreachable zot leaves
@@ -586,7 +586,7 @@ runcmd:
     chmod +x /etc/cron.weekly/docker-cleanup
 
   # Pull and run container (secrets from Doppler -- no .env fallback)
-  # #6122/ADR-093: use the registry the seed block resolved (/run/soleur-image-ref) so
+  # #6122/ADR-096: use the registry the seed block resolved (/run/soleur-image-ref) so
   # the pull + create + run all follow the SAME registry; falls back to the GHCR
   # ${image_name} if the sentinel is absent (byte-identical to the pre-#6122 behaviour).
   - docker pull "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
@@ -636,7 +636,7 @@ runcmd:
   - |
     set -e
     IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
-    # #6122/ADR-093: prefer zot (dark — only when reachable + the ref resolves there); the
+    # #6122/ADR-096: prefer zot (dark — only when reachable + the ref resolves there); the
     # host is already logged into zot by soleur-host-bootstrap.sh. All 3 refs below follow
     # IREF atomically. A zot miss falls back to the GHCR ref (byte-identical to pre-#6122);
     # soleur-boot-emit records which registry served (soak-gate signal).
