@@ -1185,9 +1185,12 @@ jobs:
         if: always()
         env:
           JOB_STATUS: ${{ job.status }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          # #6090: source the Sentry read creds from Doppler prd_terraform (like every other
+          # step in this job), NOT GitHub repo secrets — the repo secret SENTRY_AUTH_TOKEN is
+          # unset, so recreate 28805034101 logged this step as "Sentry query skipped" and the
+          # auto-read never ran. prd_terraform holds SENTRY_AUTH_TOKEN (event:read → HTTP 200 on
+          # the events endpoint), SENTRY_ORG (jikigai-eu), SENTRY_PROJECT (web-platform).
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # Runs on SUCCESS too (#6090 spec-flow F4): a green boot must still show the probe
         # fired + which stage was last reached (bootstrap_complete → cloudflared_ready →
         # webhook_bound → cloud_init_complete), else "verify passed" is indistinguishable from
@@ -1196,6 +1199,12 @@ jobs:
         # recent window — best-effort, may show an unrelated host / may be empty.
         run: |
           set +e
+          # Resolve the Sentry read creds from Doppler prd_terraform (doppler CLI installed +
+          # DOPPLER_TOKEN set earlier in this job). No command-substitution-into-run risk: these
+          # are Doppler-sourced, never github.event.* input.
+          SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --plain -p soleur -c prd_terraform 2>/dev/null || true)
+          SENTRY_ORG=$(doppler secrets get SENTRY_ORG --plain -p soleur -c prd_terraform 2>/dev/null || true)
+          SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT --plain -p soleur -c prd_terraform 2>/dev/null || true)
           # Pointer to the LOG too (not only the summary) so
           # `gh run view <id> --log | grep 'fresh-host Sentry pointer'` works (discoverability_test).
           echo "web-2-recreate — fresh-host Sentry pointer (job=${JOB_STATUS})"

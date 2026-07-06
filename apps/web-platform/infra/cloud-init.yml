@@ -254,6 +254,43 @@ write_files:
   # terminal --log-driver journald app container, starts after extraction.
 
 runcmd:
+  # (#6090 follow-up) Arm the baked-${sentry_dsn} fatal-emit trap at the TOP of runcmd so it
+  # ALSO covers the package-audit + doppler + docker install region below. That region runs
+  # under the `set -e` leaked from the package audit but PRE-DATES the host-script extraction
+  # block where on_err used to be defined — the blind spot that silently aborted web-2's fresh
+  # boot (recreate 28805034101: 0 emits, :9000 unbound). STAGE is bumped per install step so the
+  # fatal names the exact dying command; the extraction block re-sets STAGE=pull onward and
+  # disarms this trap (trap - EXIT) before handing off to the trusted baked installer. on_err
+  # emits `soleur-hostscript-seed failed` (already in the workflow QUERY + AC8 lockstep) with the
+  # live STAGE tag — docker IS the hostscript-seed prerequisite, so the message stays accurate.
+  - |
+    IMAGE_REF='${image_name}'
+    STAGE=pkg_audit
+    HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
+    on_err() {
+      trap - EXIT
+      docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
+      ( set +e
+        . /etc/default/webhook-deploy 2>/dev/null || true
+        # Prefer the BAKED DSN so this fatal fires even when doppler is the broken stage (and
+        # even before doppler/docker are installed, which is exactly the region this now covers).
+        DSN='${sentry_dsn}'
+        [ -n "$DSN" ] || DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
+               || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
+        if [ -n "$DSN" ]; then
+          KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
+          SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
+          PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
+          BODY=$(printf '{"message":"soleur-hostscript-seed failed","level":"fatal","tags":{"stage":"%s","image_ref":"%s","host_id":"%s"}}' "$STAGE" "$IMAGE_REF" "$HOST_ID")
+          curl -m 10 --retry 3 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
+            -H 'Content-Type: application/json' \
+            -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY" \
+            -d "$BODY" >/dev/null 2>&1 || true
+        fi ) || true
+      exit 1
+    }
+    trap on_err EXIT
+
   # Apply SSH hardening immediately (drop-in written by write_files above).
   # Runs BEFORE the package audit so the operator always has hardened SSH
   # access even if the audit exits non-zero and halts the rest of cloud-init.
@@ -305,6 +342,7 @@ runcmd:
   # migrates this early boot's volatile journal into the persistent store (no logs lost).
 
   # Install Doppler CLI v3.75.3 (for secrets injection) with checksum verification
+  - STAGE=doppler_dl  # (#6090) name the stage for the top-armed on_err fatal
   - |
     DOPPLER_VERSION="3.75.3"
     DOPPLER_SHA256="9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
@@ -321,6 +359,7 @@ runcmd:
 
   # Install Docker via official APT repository with GPG key verification (#1615).
   # Replaces pipe-to-shell (curl | sh) with signed APT repo -- same pattern as cloudflared above.
+  - STAGE=docker_apt  # (#6090) name the stage for the top-armed on_err fatal
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   - chmod a+r /etc/apt/keyrings/docker.asc
@@ -339,6 +378,7 @@ runcmd:
       }
     }
     DOCKEREOF
+  - STAGE=docker_restart  # (#6090) name the stage for the top-armed on_err fatal
   - systemctl restart docker
 
   # BEGIN host-script extraction (#5921) — verify + launch the baked bootstrap installer.
@@ -348,37 +388,14 @@ runcmd:
   # combined content-hash, compare to host_scripts_content_hash, and ONLY THEN run the
   # now-trusted soleur-host-bootstrap.sh. FAIL-CLOSED: runcmd is ONE /bin/sh, so `set -e` +
   # `exit 1` aborts the whole runcmd (the app `docker run` never starts) + the terminal block
-  # gates on /run/soleur-hostscripts.ok; do NOT add a `set +e`. Pre-verify failures emit a
-  # discriminating Sentry event here (on_err); install-stage failures from the bootstrap.
+  # gates on /run/soleur-hostscripts.ok; do NOT add a `set +e`. Pull/extract/verify failures are
+  # named by the top-armed on_err trap (STAGE=pull/ghcr_login/extract/verify); install-stage
+  # failures come from the bootstrap's own emit_fail after the trap is disarmed below.
   - |
     set -e
     IMAGE_REF='${image_name}'
     HOST_SCRIPTS_HASH='${host_scripts_content_hash}'
     STAGE=pull
-    HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
-    on_err() {
-      trap - EXIT
-      docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
-      ( set +e
-        . /etc/default/webhook-deploy 2>/dev/null || true
-        # Prefer the BAKED DSN so this fatal emit fires even when doppler is the broken
-        # stage (the blind spot that hid the private-GHCR seed-pull 401). Doppler fallback.
-        DSN='${sentry_dsn}'
-        [ -n "$DSN" ] || DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
-               || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
-        if [ -n "$DSN" ]; then
-          KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
-          SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
-          PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
-          BODY=$(printf '{"message":"soleur-hostscript-seed failed","level":"fatal","tags":{"stage":"%s","image_ref":"%s","host_id":"%s"}}' "$STAGE" "$IMAGE_REF" "$HOST_ID")
-          curl -m 10 --retry 3 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
-            -H 'Content-Type: application/json' \
-            -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY" \
-            -d "$BODY" >/dev/null 2>&1 || true
-        fi ) || true
-      exit 1
-    }
-    trap on_err EXIT
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
     # ROOT FIX (#6005): the seed image is now a PRIVATE GHCR package, so this early seed-pull
