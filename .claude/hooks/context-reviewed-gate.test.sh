@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fixture-based tests for context-reviewed-gate.sh (issue #5999, ADR-086).
+# Fixture-based tests for context-reviewed-gate.sh (issue #5999, ADR-094).
 #
 # Each case builds a throwaway git repo, stages/edits a `last_reviewed` delta,
 # composes a PreToolUse(Bash) input, pipes it to the hook, and asserts on the

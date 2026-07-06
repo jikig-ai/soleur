@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Discoverability probe for the context-reviewed audit gate (#5999, ADR-086).
+# Discoverability probe for the context-reviewed audit gate (#5999, ADR-094).
 #
 # Two-case scratch-repo probe run WITHOUT ssh (satisfies the plan's
 # `discoverability_test.command` contract + preflight Check 10 executable form):

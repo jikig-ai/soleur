@@ -31,13 +31,13 @@ ADR_DIR=knowledge-base/engineering/architecture/decisions
 # to ADR-078-graceful-cron-drain-before-container-swap, leaving ADR-068 uniquely
 # the multi-host-workspaces coordinator ADR. Dropped from the allowlist here.
 #
-# ADR-086 is a THREE-WAY concurrent-merge collision that landed on main directly
+# ADR-086 WAS a three-way concurrent-merge collision that landed on main directly
 # (#6035 declarative-skill-context-injection + fail-closed-redaction-engine +
 # freshness-last-reviewed-source-fix all authored ADR-086 and merged in the same
-# window, so main's own adr-ordinals check is red). Accepted here as pre-existing
-# tech debt so unrelated PRs are not blocked by it; renumber-cleanup tracked in #6054.
-# (The freeze-lock ADR in this PR took the next-free 087 to avoid a fourth 086.)
-ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038 ADR-086)
+# window). Resolved in #6054: declarative-skill-context-injection kept ADR-086,
+# fail-closed-redaction-engine → ADR-093, freshness-last-reviewed-source-fix → ADR-094.
+# Dropped from the allowlist here.
+ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038)
 
 # (1) New (non-allowlisted) ordinal collisions.
 all_dups=$(ls "$ADR_DIR" | grep -oE '^ADR-[0-9]{3}' | sort | uniq -d || true)

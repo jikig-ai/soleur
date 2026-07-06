@@ -203,22 +203,22 @@ because ADRs are touched, so its checks are recorded here:
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Renames:** `git mv` applied so exactly these files exist and the old names are gone:
+- [x] **AC1 — Renames:** `git mv` applied so exactly these files exist and the old names are gone:
       `ADR-093-fail-closed-redaction-engine-contract.md`,
       `ADR-094-freshness-last-reviewed-source-fix-and-audit-tripwire.md`; and
       `ADR-086-declarative-skill-context-injection.md` remains.
-- [ ] **AC2 — ADR body titles:** line 1 of the renamed files reads `# ADR-093: …` and `# ADR-094: …`
+- [x] **AC2 — ADR body titles:** line 1 of the renamed files reads `# ADR-093: …` and `# ADR-094: …`
       respectively.
-- [ ] **AC3 — Ordinal notes:** the B body has a new "Ordinal note" recording `086→093 (#6054)`; the C
+- [x] **AC3 — Ordinal notes:** the B body has a new "Ordinal note" recording `086→093 (#6054)`; the C
       body's existing Ordinal note is rewritten to `085 (provisional) → 086 (ship) → 094 (#6054)`.
-- [ ] **AC4 — Gate green:** `ADR-086` removed from `ALLOWED_COLLISIONS` in `check-adr-ordinals.sh`,
+- [x] **AC4 — Gate green:** `ADR-086` removed from `ALLOWED_COLLISIONS` in `check-adr-ordinals.sh`,
       its comment rewritten to past-tense resolution, and `bash scripts/check-adr-ordinals.sh` exits 0
       printing `ADR ordinal + content checks passed.`
-- [ ] **AC5 — B sweep complete:** for every Topic-B live file (see Files to Edit),
+- [x] **AC5 — B sweep complete:** for every Topic-B live file (see Files to Edit),
       `grep -c 'ADR-086' <file>` returns 0 and the topic now reads `ADR-093` (bare + slug forms).
-- [ ] **AC6 — C sweep complete:** for every Topic-C live file, `grep -c 'ADR-086' <file>` returns 0
+- [x] **AC6 — C sweep complete:** for every Topic-C live file, `grep -c 'ADR-086' <file>` returns 0
       and the topic now reads `ADR-094`.
-- [ ] **AC7 — Residual-zero (scoped):** `git grep -n 'ADR-086' -- '.claude/' '.github/' 'scripts/'
+- [x] **AC7 — Residual-zero (scoped):** `git grep -n 'ADR-086' -- '.claude/' '.github/' 'scripts/'
       'tests/' 'apps/' 'plugins/' 'knowledge-base/engineering/'` returns **only** Topic-A
       (declarative) references + the `check-adr-ordinals.sh` resolution-narrative comment — i.e. the
       allowlist: `skill-context-queries.sh/.test.sh`, `agent-runner-query-options.ts`,
@@ -226,19 +226,19 @@ because ADRs are touched, so its checks are recorded here:
       `context-queries-shell-parity.test.ts`, `context-queries-fixture.ts`, `taste-profile-update.sh`,
       `ADR-090-*.md`, `model.c4`, `model.likec4.json`, and `check-adr-ordinals.sh`. Any other hit = a
       missed B/C ref = FAIL.
-- [ ] **AC8 — C4 untouched:** `git diff --stat` shows no change to `model.c4`, `views.c4`, `spec.c4`,
+- [x] **AC8 — C4 untouched:** `git diff --stat` shows no change to `model.c4`, `views.c4`, `spec.c4`,
       or `model.likec4.json`; `bash plugins/soleur/test/c4-model-freshness.test.sh` passes.
-- [ ] **AC9 — Topic-D untouched:** `git diff --name-only` includes **none** of the 7 GHCR-minter
+- [x] **AC9 — Topic-D untouched:** `git diff --name-only` includes **none** of the 7 GHCR-minter
       files (their `ADR-086`→ADR-088 strings are out of scope).
-- [ ] **AC10 — Historical artifacts untouched:** `git diff --name-only` includes no file under
+- [x] **AC10 — Historical artifacts untouched:** `git diff --name-only` includes no file under
       `knowledge-base/project/{plans,specs,brainstorms,learnings}/` except this plan + `tasks.md`.
-- [ ] **AC11 — Touched suites green:** the affected test suites pass, confirming no drift-guard
+- [x] **AC11 — Touched suites green:** the affected test suites pass, confirming no drift-guard
       asserts on the `ADR-086` literal — at minimum:
       `scripts/lib/frontmatter-strip.test.sh`, `scripts/lint-agents-rule-budget.test.sh`,
       `scripts/review-reminder-liveness.test.sh`, `tests/scripts/test-rule-metrics-aggregate.sh`,
       `.claude/hooks/context-reviewed-gate.test.sh`, and the vitest suites for the two
       `cron-campaign-calendar` files.
-- [ ] **AC12 — PR body uses `Closes #6054`** (this is a code-merge cleanup, not a post-merge
+- [x] **AC12 — PR body uses `Closes #6054`** (this is a code-merge cleanup, not a post-merge
       ops-remediation — the fix ships in the diff, so auto-close on merge is correct).
 
 ## Test Scenarios
