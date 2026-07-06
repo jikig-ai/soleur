@@ -121,6 +121,8 @@ Every hook calls `emit_incident "<rule_id>" "<event_type>" "<rule_text_prefix>"`
 
 ### ADR-3: jsonl concurrency — single `flock`-guarded file
 
+> **Superseded in part by [ADR-091](../../engineering/architecture/decisions/ADR-091-rule-metrics-local-producer.md) (#6042):** the "single file, no per-session fragmentation" premise was empirically falsified — incident events fragment across ~12 worktree-local logs. ADR-091 moves the authoritative producer of `rule-metrics.json` to the local compound flow; cross-worktree read-merge (restoring completeness without the single-inode invariant) is deferred to a follow-up.
+
 Brainstorm's original CTO-advised per-session + rollup was over-engineered for scale (~10 sessions/day). A single append-only `.claude/.rule-incidents.jsonl` guarded by `flock -x` on the file itself adds microseconds per hook invocation and eliminates: per-session filename generation, weekly concat, gzip rotation, 7-day truncation, `CLAUDE_SESSION_ID || $$` fallback.
 
 - Filename: `.claude/.rule-incidents.jsonl` (single file, gitignored).
