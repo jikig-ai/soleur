@@ -1253,18 +1253,39 @@ jobs:
           # EU-resident project returns empty. The endpoint returns newest-first, so the first match
           # is the LAST-reached stage. `tee` so matches land in the LOG too (discoverability).
           MSG_RE=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | sed -E 's/message:"([^"]+)"/\1/' | paste -sd'|' -)
-          RESP=$(curl -s --max-time 20 -G \
+          # Guard: an empty MSG_RE (QUERY reshaped so the message: extraction yields nothing) would
+          # make jq test("") match EVERY event → list arbitrary events as boot stages. Refuse.
+          if [[ -z "$MSG_RE" ]]; then
+            echo "_Sentry query skipped: QUERY message-literal extraction produced an empty regex — refusing to match-all (would mislabel arbitrary events as boot stages)._" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Capture the HTTP status so a curl/auth/API failure is NAMED, not silently reported as
+          # "no events" — the whole point of this step is to not go dark on its own failure.
+          # statsPeriod + sort ARE honored by this endpoint (only the `message:` search prefix is
+          # broken) — keep both: the time bound stops the boot event being pushed past per_page on
+          # the SHARED project (which ingests all app events + verify_failed spam), and sort pins
+          # "first match = last-reached stage" instead of relying on undocumented default order.
+          HTTP=$(curl -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
             -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
             --data-urlencode "per_page=100" \
-            "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" 2>/dev/null)
-          if [[ -n "$RESP" ]] && echo "$RESP" | jq -e --arg re "$MSG_RE" '[.[] | select((.message // .title) | test($re))] | length > 0' >/dev/null 2>&1; then
+            --data-urlencode "statsPeriod=1h" \
+            --data-urlencode "sort=-timestamp" \
+            "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" 2>/dev/null || echo "000")
+          RESP=$(cat /tmp/sentry-events.json 2>/dev/null || echo "")
+          if [[ "$HTTP" != "200" ]] || ! echo "$RESP" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "_Sentry query FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result. $(echo "$RESP" | jq -r '.detail // empty' 2>/dev/null | tr '\n' ' ' | head -c 160)_" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # `// ""` coalesces null message AND title so a malformed sibling event in the window
+          # can't throw jq ("null cannot be matched") and blank the whole read.
+          if echo "$RESP" | jq -e --arg re "$MSG_RE" '[.[] | select(((.message // .title) // "") | test($re))] | length > 0' >/dev/null 2>&1; then
             echo "$RESP" | jq -r --arg re "$MSG_RE" '
-              [.[] | select((.message // .title) | test($re))] | .[0:8][]
+              [.[] | select(((.message // .title) // "") | test($re))] | .[0:8][]
               | ( [ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?" ) as $stage
-              | "- `\(.message // .title)` — stage=`\($stage)` (\(.dateCreated // "?"))"
+              | "- `\((.message // .title) // "?")` — stage=`\($stage)` (\(.dateCreated // "?"))"
             ' | tee -a "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           else
-            echo "_No matching fresh-host boot-stage event in the recent-events scan (client-side filtered — the endpoint ignores message: search)._" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "_The scan RAN (HTTP 200, project ${SENTRY_PROJECT}) but no fresh-host boot-stage event matched in the recent events — the host genuinely emitted nothing in this window._" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: web-2-recreate summary
