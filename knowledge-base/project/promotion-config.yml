@@ -13,5 +13,7 @@
 # Flipping to true requires a committed PR that operators can review. The
 # .example file (promotion-config.yml.example) is documentation only.
 # See knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md.
-# Default: OFF. Issue: #2720.
-enabled: false
+# Default: OFF. Enabled 2026-07-06 (#6039) — operator dogfood; loop opens
+# human-gated draft PRs (never auto-merges). Kill switch: set false + commit.
+# Issue: #2720.
+enabled: true
