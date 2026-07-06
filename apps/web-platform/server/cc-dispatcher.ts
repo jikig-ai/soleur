@@ -204,6 +204,7 @@ import type { PdfExtractErrorClass } from "./pdf-text-extract";
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import { getPluginPath } from "./plugin-path";
 // In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
 // writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
 // (the agent's OWN workspace — read+write in the sandbox because it is NOT in
@@ -2383,8 +2384,18 @@ export const realSdkQueryFactory: QueryFactory = async (
     effectiveSystemPrompt += `\n\n${buildConnectedRepoContext(connectedOwner, connectedRepo)}`;
   }
 
-  // nosemgrep: path-join-resolve-traversal -- workspacePath is server-resolved (fetchUserWorkspacePath, ADR-044), never user-tainted input.
-  const pluginPath = path.join(workspacePath, "plugins", "soleur");
+  // Load the plugin from the DEPLOYED root, NOT `<workspacePath>/plugins/soleur`
+  // (#4826). The workspace path was equivalent for a normal user (there
+  // `plugins/soleur` is a symlink to the deployed plugin), but for a workspace whose
+  // connected repo SHIPS its own `plugins/soleur/` — e.g. an operator dogfooding
+  // soleur-in-soleur — it resolves to the connected repo's COMMITTED, frozen copy, so
+  // the SDK loads stale commands/skills and every platform fix is silently shadowed.
+  // getPluginPath() (`/app/shared/plugins/soleur`) is sandbox-readable (the SDK base
+  // `--ro-bind / /` exposes it; it is not in the sandbox denyRead — proven by normal
+  // users' symlinks resolving there) and respects the SOLEUR_PLUGIN_PATH override for
+  // the advanced plugin-dev case. CLAUDE_PLUGIN_ROOT (buildAgentEnv) is set to this
+  // same value so plugin scripts shelled out from bash also resolve to the deployed tree.
+  const pluginPath = getPluginPath();
 
   // Synthetic AgentSession — the only place in the cc path where an
   // AgentSession exists. Registered into `_ccBashGates` per Bash

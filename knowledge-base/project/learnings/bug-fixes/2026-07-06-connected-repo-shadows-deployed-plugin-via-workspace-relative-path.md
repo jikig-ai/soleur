@@ -35,14 +35,28 @@ commit their working tree sat on), NOT the deployed one. All plugin-script fixes
 shadowed. Only APP-side fixes (the git-config heal, the telemetry hook — container code, not
 the plugin mount) ever took effect, which is exactly the split we observed.
 
+There are actually TWO shadowing layers, both fixed here:
+- **The SDK plugin load itself.** `cc-dispatcher.ts` set the SDK `plugins: [{ path }]` to
+  `path.join(workspacePath, "plugins", "soleur")` — the WORKSPACE path. For a normal user
+  that is a symlink to the deployed plugin (fresh); for the dogfooder it is the committed
+  copy, so even the COMMANDS/SKILLS (go.md, one-shot) load stale. A fix to only the bash
+  invocation path would NOT reach the dogfooder because their stale go.md would still run.
+- **The bash invocation.** go.md/one-shot shelled out via `./plugins/soleur/...`
+  (workspace-relative → committed copy).
+
 ## Solution
 
-Invoke plugin scripts from the DEPLOYED plugin root, not a workspace-relative path:
+Route BOTH the SDK plugin load and the bash invocations to the DEPLOYED plugin root:
 
-- `buildAgentEnv` now exports `CLAUDE_PLUGIN_ROOT = getPluginPath()` (the deployed
-  `/app/shared/plugins/soleur`) into the agent bash env. It was NOT in `AGENT_ENV_ALLOWLIST`
-  (the env is a curated replacement of process.env), so it had to be injected explicitly as
-  a per-dispatch value threaded from `agent-runner-query-options.ts`.
+- `cc-dispatcher.ts` (the real Concierge SDK factory) now loads the plugin from
+  `getPluginPath()` (deployed), not `<workspacePath>/plugins/soleur` — so commands/skills
+  come from the deployed tree. Safe because `/app/shared` is sandbox-readable (the SDK base
+  `--ro-bind / /` exposes it; not in the sandbox `denyRead` — proven by normal users' plugin
+  symlinks already resolving there) and `getPluginPath()` respects the `SOLEUR_PLUGIN_PATH`
+  override for the advanced plugin-dev-testing case.
+- `buildAgentEnv` now exports `CLAUDE_PLUGIN_ROOT = args.pluginPath` (= `getPluginPath()`
+  after the cc-dispatcher change) into the agent bash env. It was NOT in `AGENT_ENV_ALLOWLIST`
+  (the env is a curated replacement of process.env), so it had to be injected explicitly.
 - `go.md` (readiness gate + session-start preamble) and `one-shot` (worktree create) now call
   `bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/.../worktree-manager.sh"`. The var
   resolves to the deployed script in Concierge; the `:-./plugins/soleur` fallback preserves
