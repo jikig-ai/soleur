@@ -444,5 +444,39 @@ else
   no "AC18: the pull loop must capture the docker pull error into /run/soleur-stage-detail"
 fi
 
+# ── AC19 (#6090): ghcr_login prefers BAKED creds + hardens the doppler fallback ──
+# recreate 28826611336 reached stage=pull with detail=ghcr_creds_missing user=n token=n: doppler
+# answered EMPTY at the cold-boot instant, so docker login was skipped → anonymous private pull →
+# 401 → boot aborts before :9000. Fix: bake ${ghcr_read_*} (like ${sentry_dsn}) preferred, with a
+# HARDENED doppler fallback (timeout 45 + 3-try retry loop). server.tf must pass both vars in.
+TF="$DIR/server.tf"
+# (1) baked creds preferred (the assignment mirrors the ${sentry_dsn} bake; literal, not expanded)
+bake_u=$'GHCR_USER=\'${ghcr_read_user}\''
+bake_t=$'GHCR_TOKEN=\'${ghcr_read_token}\''
+if grep -qF "$bake_u" "$CI" && grep -qF "$bake_t" "$CI"; then
+  ok "AC19: ghcr_login prefers baked \${ghcr_read_user}/\${ghcr_read_token} (survives a cold-boot empty doppler)"
+else
+  no "AC19: ghcr_login must prefer baked \${ghcr_read_user}/\${ghcr_read_token} before falling back to doppler"
+fi
+# (2) hardened doppler fallback: timeout 45 + retry loop for BOTH vars, and NO stale timeout-15 form
+if grep -qE 'until GHCR_USER=\$\(timeout 45 doppler[^)]*GHCR_READ_USER' "$CI" \
+   && grep -qE 'until GHCR_TOKEN=\$\(timeout 45 doppler[^)]*GHCR_READ_TOKEN' "$CI"; then
+  ok "AC19: doppler fallback hardened — timeout 45 + until-retry loop for both GHCR_READ_USER and GHCR_READ_TOKEN"
+else
+  no "AC19: doppler fallback must use 'until VAR=\$(timeout 45 doppler ... GHCR_READ_*)' retry loops"
+fi
+if grep -qE 'timeout 15 doppler secrets get GHCR_READ' "$CI"; then
+  no "AC19: stale un-hardened 'timeout 15 doppler secrets get GHCR_READ_*' fetch still present — must be replaced"
+else
+  ok "AC19: no stale 'timeout 15 doppler secrets get GHCR_READ_*' fetch remains"
+fi
+# (3) server.tf passes both baked vars into the web-host cloud-init templatefile map
+if grep -qE '^\s*ghcr_read_user\s*=\s*var\.ghcr_read_user' "$TF" \
+   && grep -qE '^\s*ghcr_read_token\s*=\s*var\.ghcr_read_token' "$TF"; then
+  ok "AC19: server.tf passes ghcr_read_user + ghcr_read_token into the web-host templatefile"
+else
+  no "AC19: server.tf web-host templatefile map must pass ghcr_read_user + ghcr_read_token (coupled to the cloud-init bake)"
+fi
+
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]
