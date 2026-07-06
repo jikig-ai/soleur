@@ -1245,27 +1245,26 @@ jobs:
           # (AC8) fails. Covers the seed/bootstrap fatals, the bootstrap_complete breadcrumb, and
           # every cloud-init stage emit (the stage lives in the event's `stage` tag).
           QUERY='message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage"'
-          # EU data plane (#6090 AC8b, LOAD-BEARING): the project is jikigai-eu / de.sentry.io.
-          # Querying the US host (sentry.io) against an EU-resident project returns empty — the
-          # whole auto-surface deliverable would be dark. Residency is authoritative per learning
-          # 2026-05-15-sentry-dsn-cluster-substring-authoritative-residency.md. Sort most-recent
-          # so the first row is the LAST-reached stage.
+          # #6090: the /projects/{org}/{proj}/events/ endpoint IGNORES the `message:` search prefix
+          # — a `message:"x"` query returns 0 even for events that provably exist (verified against a
+          # known event id: bare full-text = 1 hit, message:"x" = 0). So fetch RECENT events
+          # UNFILTERED and match client-side with a regex DERIVED from QUERY (single source, no
+          # drift). EU data plane (de.sentry.io) is LOAD-BEARING: a US sentry.io query against the
+          # EU-resident project returns empty. The endpoint returns newest-first, so the first match
+          # is the LAST-reached stage. `tee` so matches land in the LOG too (discoverability).
+          MSG_RE=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | sed -E 's/message:"([^"]+)"/\1/' | paste -sd'|' -)
           RESP=$(curl -s --max-time 20 -G \
             -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-            --data-urlencode "query=${QUERY}" \
-            --data-urlencode "statsPeriod=1h" \
-            --data-urlencode "sort=-timestamp" \
+            --data-urlencode "per_page=100" \
             "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" 2>/dev/null)
-          if [[ -n "$RESP" ]] && echo "$RESP" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
-            echo "$RESP" | jq -r '
-              .[0:5][]
+          if [[ -n "$RESP" ]] && echo "$RESP" | jq -e --arg re "$MSG_RE" '[.[] | select((.message // .title) | test($re))] | length > 0' >/dev/null 2>&1; then
+            echo "$RESP" | jq -r --arg re "$MSG_RE" '
+              [.[] | select((.message // .title) | test($re))] | .[0:8][]
               | ( [ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?" ) as $stage
-              | "- `\(.title // .message)` — stage=`\($stage)` (\(.dateCreated // "?"))"
-            ' >> "$GITHUB_STEP_SUMMARY" 2>/dev/null \
-            || echo "$RESP" | jq -r '.[0:5][] | "- `\(.title // .message)` (\(.dateCreated // "?"))"' >> "$GITHUB_STEP_SUMMARY" 2>/dev/null \
-            || true
+              | "- `\(.message // .title)` — stage=`\($stage)` (\(.dateCreated // "?"))"
+            ' | tee -a "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           else
-            echo "_No matching fresh-host boot-stage event in the last hour (or the query failed)._" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "_No matching fresh-host boot-stage event in the recent-events scan (client-side filtered — the endpoint ignores message: search)._" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: web-2-recreate summary
