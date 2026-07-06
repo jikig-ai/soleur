@@ -34,7 +34,7 @@ can't reach the host — so detection and recovery are both SSH-free.
 
 | `stage` | Meaning | Most likely cause |
 |---|---|---|
-| `pull` | `docker pull ${image_name}` failed after 3 retries | GHCR/registry/network; image tag missing |
+| `pull` | `docker pull ${image_name}` failed after 3 retries | zot/GHCR/registry/network; image tag missing. Post-#6122 (ADR-093) the seed pull is **zot-primary with an atomic GHCR fallback** (dark-launch gated): it resolves the effective ref into `/run/soleur-image-ref` and retries the GHCR ref if zot misses, so a `pull` FATAL means BOTH registries failed. If zot is the suspect, revert via `zot-registry-revert.md` (unset `ZOT_REGISTRY_URL` → GHCR-primary) before recreating. |
 | `extract` | `docker create` / `docker cp` failed | image lacks `/opt/soleur/host-scripts/` (build regression) |
 | `verify` | boot recompute ≠ `host_scripts_content_hash` | **stale / mis-built / tampered image** — the applied Terraform commit ≠ the image build commit (AC11), or a supply-chain issue |
 | `extract` | `docker create`/`docker cp` failed | image lacks `/opt/soleur/host-scripts/` (build regression) — note: a *missing/extra baked file* usually surfaces later at `verify` (hash) or `install`/`assert` (per-file), since `docker cp` of the whole dir succeeds |

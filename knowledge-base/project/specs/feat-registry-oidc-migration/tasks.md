@@ -58,10 +58,10 @@ plan: knowledge-base/project/plans/2026-07-06-feat-registry-oidc-migration-plan.
 - [ ] 5.6 Flip ADR-093 status adopting → accepted
 
 ## Phase 6 — ADR/C4 + docs
-- [ ] 6.1 ADR-093 via `/soleur:architecture` (7-alt table + cold-boot-dependency statement; status: adopting)
-- [ ] 6.2 Edit `model.c4`+`views.c4`+`spec.c4` (add `zotRegistry`, move host pull edge GHCR→zot, correct `ghcr` desc)
-- [ ] 6.3 Run `c4-code-syntax.test.ts` + `c4-render.test.ts`
-- [ ] 6.4 Update runbooks naming GHCR pull
+- [x] 6.1 ADR-093 via `/soleur:architecture` (7-alt table + cold-boot-dependency statement; status: adopting)
+- [x] 6.2 Edit `model.c4`+`views.c4`+`spec.c4` (add `zotRegistry`, move host pull edge GHCR→zot, correct `ghcr` desc)
+- [x] 6.3 Run `c4-code-syntax.test.ts` + `c4-render.test.ts`
+- [x] 6.4 Update runbooks naming GHCR pull
 
 ## Cross-cutting (pre-PR-ready)
 - [ ] X.1 Record recurring registry-host expense (~€4/mo) via ops-advisor

@@ -47,4 +47,8 @@ specification {
 
   // Applied to third-party systems outside the Soleur platform boundary.
   tag external
+
+  // Applied to infrastructure we self-host + operate (vs. external SaaS) — e.g. the
+  // self-hosted zot container registry (ADR-093). Not muted in views (it is ours).
+  tag selfhosted
 }
