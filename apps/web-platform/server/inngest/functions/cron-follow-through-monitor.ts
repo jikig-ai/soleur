@@ -181,9 +181,13 @@ predicates and SLA status.
             COMPLETED — the exact bug this guard exists to avoid); NEVER
             ${"`"}--reason "completed"${"`"} on this timeout path.
         If (1) fails, do NOT proceed to (2)/(3) — the issue stays open and a
-        future run retries the full transition. Torn-write recovery: if state
-        is "closed" but no "Maximum polling " comment exists, post the comment
-        now (the close succeeded but the comment was lost); and if
+        future run retries the full transition. If (2) is required (the label
+        is present) but fails, do NOT proceed to (3) either — leave the issue
+        OPEN with needs-attention (a valid state); NEVER close while
+        needs-attention is still present (that recreates the closed-with-
+        needs-attention state this guard exists to avoid). Torn-write recovery:
+        if state is "closed" but no "Maximum polling " comment exists, post the
+        comment now (the close succeeded but the comment was lost); and if
         needs-attention is still present on that closed issue, remove it.
 
       - WITHIN SLA, NO STATE CHANGE: Do nothing. No comment.

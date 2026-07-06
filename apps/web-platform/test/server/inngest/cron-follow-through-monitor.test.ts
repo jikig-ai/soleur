@@ -607,10 +607,29 @@ describe("cron-follow-through-monitor — T9 Guard C not-planned close semantics
     expect(guardC).toContain(
       'gh issue edit <number> --remove-label "needs-attention"',
     );
-    // The old contradictory add-then-strip step is gone — `--add-label` must
-    // not appear anywhere in the prompt (verified pre-fix count was 1, at the
-    // old Guard C step 1).
-    expect(FOLLOW_THROUGH_PROMPT).not.toContain("--add-label");
+    // The old contradictory add-then-strip step is gone — `--add-label` (the
+    // old Guard C step 1) must not appear in the Guard C region. Scoped to
+    // guardC (not the whole prompt) so a future Guard B edit that renders its
+    // "add needs-attention label" instruction as a literal flag does not
+    // false-fail this assertion; the RED-on-revert guarantee is preserved
+    // because the removed --add-label lived in Guard C.
+    expect(guardC).not.toContain("--add-label");
+
+    // ORDERING IS LOAD-BEARING (the fix's core invariant): comment FIRST →
+    // strip needs-attention BEFORE close. toContain proves presence, not
+    // order — a regression emitting the close before the strip (leaving
+    // needs-attention on a closed issue, the exact failure mode #6132 fixes)
+    // would pass a presence-only check. Assert the three steps are in order.
+    const commentIdx = guardC.indexOf("gh issue comment <number>");
+    const stripIdx = guardC.indexOf(
+      'gh issue edit <number> --remove-label "needs-attention"',
+    );
+    const closeIdx = guardC.indexOf(
+      'gh issue close <number> --reason "not planned"',
+    );
+    expect(commentIdx).toBeGreaterThan(-1);
+    expect(stripIdx).toBeGreaterThan(commentIdx); // strip after comment…
+    expect(closeIdx).toBeGreaterThan(stripIdx); // …and before close
   });
 
   it("Guard A (predicate PASSES) stays a bare COMPLETED close — no --reason", async () => {
