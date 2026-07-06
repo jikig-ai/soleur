@@ -31,6 +31,7 @@ import { promisify } from "node:util";
 import type { HookCallback, PostToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
+import { getPluginPath } from "./plugin-path";
 
 const log = createChildLogger("context-queries-hook");
 
@@ -141,10 +142,16 @@ function frontmatterDeclaresContextQueries(md: string): boolean {
  * (it only closes over `repoRoot`), so a builder-time call inside the
  * `options.hooks` literal can never throw into `query()` startup.
  *
- * @param repoRoot The SDK `cwd` (`args.workspacePath`). In the web Concierge the
- *   plugin bundle is mounted INSIDE the workspace
- *   (`pluginPath = join(workspacePath, "plugins", "soleur")`), so SKILL.md and
- *   `knowledge-base/` share this one root — exactly like the CLI's repo root.
+ * @param repoRoot The SDK `cwd` (`args.workspacePath`). This is the UNTRUSTED
+ *   connected-repo workspace and remains authoritative ONLY for the
+ *   `knowledge-base/` artifacts (repo content — the injected pointers, gated by
+ *   `git ls-files` committed-only + containment). The SKILL.md source, however,
+ *   is the PLATFORM-DEPLOYED plugin root (`getPluginPath()`), NOT this workspace
+ *   copy — a connected repo that ships its own `plugins/soleur/` must not shadow
+ *   the deployed skills (the F3 residual-reader fix; see the connected-repo-
+ *   shadows-deployed-plugin learning + ADR). SKILL.md frontmatter flows into the
+ *   agent context, so it must come from the trusted deployed root, not untrusted
+ *   workspace content.
  */
 export function createContextQueriesHook(repoRoot: string): HookCallback {
   // Promisify here (factory body, runs at registration) rather than at module
@@ -152,13 +159,22 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
   // suite that mocks `node:child_process` spawn-only at import time. See
   // knowledge-base/project/learnings/2026-06-10-bot-cron-safe-commit-substrate-symlink-removal.md.
   const execFileAsync = promisify(execFile);
-  // Constant-derived roots: realpath ONCE at registration — they depend only on the
-  // closure-constant repoRoot. Recomputing them per-fire (as an earlier draft did)
-  // paid two sync realpaths on the hot path for all ~89 non-declaring skills on
-  // every Skill dispatch. A null here (dir absent) fails the hook closed for the
-  // session, which is the correct fail-open behaviour for a workspace missing the
-  // plugin/kb tree.
-  const skillsDir = path.join(repoRoot, "plugins", "soleur", "skills");
+  // Constant-derived roots: computed ONCE at registration.
+  //   - `skillsDir` sources from the PLATFORM-DEPLOYED plugin root
+  //     (`getPluginPath()` → `/app/shared/plugins/soleur` in prod), NEVER
+  //     `repoRoot` (the untrusted connected-repo workspace). This is the F3
+  //     residual-reader fix: SKILL.md frontmatter flows into the agent context, so
+  //     a connected repo shipping its own `plugins/soleur/skills/` must not shadow
+  //     the deployed skills. `getPluginPath()` is a process-constant platform path
+  //     (a runtime env read, resolved ONCE here — env-override guarded by the
+  //     `/app/` allowlist); reading it once mirrors the prior single-realpath discipline.
+  //   - `realKb` stays `repoRoot`-relative: `knowledge-base/` IS repo content, and
+  //     the injected pointers are gated by `git ls-files` committed-only +
+  //     containment (path-trust ≠ content-trust; ADR-086 §Consequences).
+  // A null realKb (dir absent) makes the per-artifact containment gate reject every
+  // query (no artifact can be contained under a null root). The hook still returns
+  // its note (fail-OPEN at the hook level) — correct for a workspace missing the kb tree.
+  const skillsDir = path.join(getPluginPath(), "skills");
   const resolvedSkills = path.resolve(skillsDir);
   const realKb = realpathOrNull(path.join(repoRoot, "knowledge-base"));
   return async (input) => {

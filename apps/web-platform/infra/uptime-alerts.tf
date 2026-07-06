@@ -77,9 +77,11 @@ resource "betteruptime_monitor" "soleur_apex" {
 }
 
 # Per-host origin absence detector (#5933 Item 1). Mirrors soleur_apex but targets
-# each host's CF-proxied probe hostname (web-<n>.app.soleur.ai/health, dns.tf) directly,
+# each host's CF-proxied probe hostname (web-<n>.soleur.ai/health, dns.tf) directly,
 # so a dead/never-booted host returns non-200 (CF 522) and pages — the apex/round-robin
 # monitors stay green because healthy hosts answer them, giving zero per-host attribution.
+# Single-label hostname is load-bearing (Cloudflare Universal SSL `*.soleur.ai` covers one
+# subdomain label only; a two-level probe name fails the edge TLS handshake — see dns.tf).
 #
 # for_each gates on `if v.monitored` (SAME filter as cloudflare_record.web_host): web-1 now;
 # web-2 activates when the #5274 cutover flips monitored=true (pointing a monitor at a
@@ -88,7 +90,7 @@ resource "betteruptime_monitor" "web_host" {
   for_each = { for k, v in var.web_hosts : k => v if v.monitored }
 
   monitor_type       = "status"
-  url                = "https://${each.key}.app.soleur.ai/health"
+  url                = "https://${each.key}.soleur.ai/health"
   pronounceable_name = "soleur uptime ${each.key}" # unique per host (hard provider constraint)
 
   check_frequency     = 180

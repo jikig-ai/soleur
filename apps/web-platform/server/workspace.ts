@@ -441,5 +441,24 @@ export function scaffoldWorkspaceDefaults(
     } catch (err) {
       log.warn({ err, workspacePath }, "Failed to symlink plugin");
     }
+  } else {
+    // Diagnostic breadcrumb (C3 / ADR-093): the workspace already has a
+    // plugins/soleur entry, so the symlink is skipped. If it is a REAL directory
+    // (not our symlink), the connected repo ships its OWN committed plugin copy —
+    // the previously-SILENT shadow condition behind the #4826 delivery wedge. This
+    // is diagnostic-only, NOT an alert: both SDK factories load getPluginPath()
+    // (the deployed root), so the committed copy is inert for the SDK — the fix
+    // this ADR records already neutralizes it. Emitting the field makes the
+    // collision path observable (it was blind during the 5-round saga).
+    try {
+      if (lstatSync(symlinkTarget).isDirectory()) {
+        log.warn(
+          { workspacePath, connectedRepoShipsPlugin: true },
+          "connected repo ships plugins/soleur/ — deployed plugin is authoritative via SDK load (getPluginPath()); workspace copy is inert for the SDK (ADR-093)",
+        );
+      }
+    } catch {
+      // lstat race (entry removed between existsSync and lstat) — non-critical diagnostic; ignore.
+    }
   }
 }

@@ -1,18 +1,16 @@
 #cloud-config
-package_update: true
-packages:
-  - curl
-  - fail2ban
-  - jq
-  - nftables
+# (#6090) package_update:/packages: were REMOVED here and moved into an instrumented early-runcmd
+# apt block (STAGE=apt_update/apt_install, under the top-armed trap + `timeout`s). recreate
+# 28819237402 proved web-2 dies in the opaque config phase (bootcmd_start fired, runcmd_start never
+# did) — running apt in runcmd converts a config-stage hang into a NAMED fatal, not a silent abort.
 
-# (#6090) Earliest boot beacon. bootcmd runs in cloud-init's network stage — BEFORE
-# package_update/packages: and runcmd — so if web-2 dies pre-runcmd (an apt hang in
-# package_update, a broken mirror, a wedged packages: install) this still reports that the
-# boot reached bootcmd AND has Sentry egress. Best-effort: curl may not exist until packages:
-# installs it (Hetzner ubuntu-24.04 ships curl, so it normally fires); fully fail-open, never
-# blocks boot. Reads the baked ${sentry_dsn} (no doppler yet). A landed bootcmd_start with no
-# later stage brackets the death to packages:/config; nothing landing → no-egress/pre-network.
+# (#6090) Earliest boot beacon. bootcmd runs in cloud-init's network stage — before runcmd (and
+# before any residual config-stage cc modules) — so even a very early death still reports that the
+# boot reached bootcmd AND has Sentry egress. CONFIRMED by recreate 28819237402: bootcmd_start
+# landed (host_id=148545005) but runcmd_start never did → egress works, death was in the config
+# phase → apt install was moved into instrumented runcmd (below). Best-effort: uses the base-image
+# curl (Hetzner ubuntu-24.04 ships it, proven by this beacon firing); fully fail-open, never blocks
+# boot. Reads the baked ${sentry_dsn} (no doppler yet).
 bootcmd:
   - |
     ( set +e
@@ -295,7 +293,7 @@ runcmd:
   # POST, so a curl-less host (which dies everywhere) is an accepted residual.
   - |
     IMAGE_REF='${image_name}'
-    STAGE=pkg_audit
+    STAGE=runcmd_early
     HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
     # (#6090) ONE transport, reused by on_err (fatal) + the runcmd_start breadcrumb (info):
     #   _emit <message> <stage> <level>. Prefers the BAKED DSN so it fires even when doppler is
@@ -335,42 +333,34 @@ runcmd:
   # access even if the audit exits non-zero and halts the rest of cloud-init.
   - systemctl restart sshd
 
-  # Audit that cloud-init's packages: stage actually installed every declared
-  # package. Cloud-init can silently drop package installs on transient
-  # failures (apt lock contention, network error, "No space left on device"
-  # during first boot) without failing the run. If any declared package is
-  # missing after packages:, fail loudly so the operator sees the root cause
-  # in /var/log/cloud-init-output.log (#2680).
-  #
-  # The required-package list is parsed at runtime from the rendered cloud
-  # config at /var/lib/cloud/instance/cloud-config.txt -- no hardcoded list
-  # to drift away from the packages: block at the top of this file.
+  # (#6090) Package install — MOVED here from cloud-config package_update:/packages:. recreate
+  # 28819237402 localized web-2's death to the opaque config phase (bootcmd_start fired,
+  # runcmd_start never did), and apt (update/install) is that phase's heavy op. Running it under
+  # the top-armed trap with explicit `timeout`s converts a HANG (the likely cause of the ~640s
+  # poll timeouts) into a NAMED fatal (stage=apt_update / apt_install) instead of a silent config-
+  # stage abort. Fail-CLOSED: a non-zero/timeout after retries trips `set -e` → on_err emits the
+  # live STAGE → exit 1. curl is base-image-provided (the bootcmd beacon already proved it), so
+  # the earlier runcmd _emit/breadcrumb don't depend on this install.
   - |
     set -e
-    required_packages=$(awk '/^packages:$/{flag=1; next} /^[^ ]/{flag=0} flag && /^  - /{sub(/^  - /, ""); print}' /var/lib/cloud/instance/cloud-config.txt)
-    if [ -z "$required_packages" ]; then
-      echo "FATAL: package audit could not parse packages: list from cloud-config.txt" >&2
-      exit 1
-    fi
-    missing=""
-    for pkg in $required_packages; do
-      dpkg -s "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
-    done
-    if [ -n "$missing" ]; then
-      echo "FATAL: cloud-init packages: stage did not install:$missing" >&2
-      # One-shot self-heal for transient apt failures. If this also fails we
-      # exit non-zero so cloud-init marks the boot failed and the operator
-      # investigates via the Hetzner console.
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get update -qq
-      apt-get install -y -qq $missing
-      for pkg in $missing; do
-        dpkg -s "$pkg" >/dev/null 2>&1 || { echo "FATAL: $pkg still missing after recovery install" >&2; exit 1; }
-      done
-    fi
+    export DEBIAN_FRONTEND=noninteractive
+    # cloudflare-main.list is active from boot (write_files) but its keyring is only fetched at the
+    # cloudflared install far below — so apt-get update here would DETERMINISTICALLY fail on the
+    # missing signed-by keyring (noble exit 100, NOT retryable by Acquire::Retries) and mask the
+    # real cause. Fetch it FIRST, before any apt-get update sees the cloudflare source.
+    STAGE=cf_apt_key
+    n=0; until curl --connect-timeout 5 -m 20 -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg; do n=$((n+1)); [ "$n" -ge 3 ] && exit 1; sleep 5; done
+    # DPkg::Lock::Timeout waits out the apt-daily timer (holds the lock minutes on a fresh boot)
+    # instead of hard-failing; the outer `timeout` still bounds a true hang → named fatal. 2
+    # attempts keeps the named fatal near the ~640s provision poll — the Sentry fatal is durable
+    # regardless (it may post-date the poll and is the authoritative signal).
+    STAGE=apt_update
+    n=0; until timeout 240 apt-get update -o Acquire::Retries=3 -o DPkg::Lock::Timeout=300; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
+    STAGE=apt_install
+    n=0; until timeout 300 apt-get install -y -o DPkg::Lock::Timeout=300 curl fail2ban jq nftables; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
 
   # Reload fail2ban so the jail.d/soleur-sshd.local drop-in applies (#2654).
-  # fail2ban is installed via `packages:` above; the service auto-starts on
+  # fail2ban is installed via the apt_install block above; the service auto-starts on
   # install with the defaults-debian.conf [sshd] jail enabled. The reload
   # picks up the bantime.maxtime cap before any login activity is recorded.
   - STAGE=fail2ban  # (#6090) exact stage attribution for the top-armed on_err fatal
@@ -488,9 +478,9 @@ runcmd:
   # Set after recursive chown so it isn't overridden
   - chown 1001:1001 /mnt/data/workspaces
 
-  # Install cloudflared from Cloudflare apt repository.
-  # GPG key downloaded at provision time (rotated Oct 2025).
-  - curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  # Install cloudflared from Cloudflare apt repository. The signing keyring (rotated Oct 2025) is
+  # now fetched in the early apt block above (stage=cf_apt_key) — the cloudflare source is active
+  # from boot, so its key must precede the FIRST apt-get update, not just this cloudflared install.
   - apt-get update
   - apt-get install -y cloudflared
 

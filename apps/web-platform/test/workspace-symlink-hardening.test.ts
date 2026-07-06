@@ -7,7 +7,7 @@ delete process.env.GIT_DIR;
 delete process.env.GIT_INDEX_FILE;
 delete process.env.GIT_WORK_TREE;
 
-import { describe, test, expect, afterEach } from "vitest";
+import { describe, test, expect, afterEach, beforeEach, vi } from "vitest";
 import {
   existsSync,
   mkdirSync,
@@ -18,6 +18,16 @@ import {
 } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
+
+// Spy on the workspace logger's warn to assert the C3 connectedRepoShipsPlugin
+// diagnostic breadcrumb (ADR-093). Partial mock (importOriginal spread) so the
+// default logger + REDACT_PATHS stay intact for any transitive consumer.
+const { warnSpy } = vi.hoisted(() => ({ warnSpy: vi.fn() }));
+vi.mock("../server/logger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server/logger")>()),
+  createChildLogger: () => ({ info: vi.fn(), warn: warnSpy, error: vi.fn(), debug: vi.fn() }),
+}));
+
 import { scaffoldWorkspaceDefaults } from "../server/workspace";
 
 const TEST_WORKSPACES = "/tmp/soleur-test-workspaces-symlink";
@@ -25,6 +35,10 @@ const TEST_WORKSPACES = "/tmp/soleur-test-workspaces-symlink";
 // a single afterEach rm recovers state even when a test throws between
 // `writeFileSync` and the per-test `finally` cleanup.
 const EXTERNAL_ROOT = join(TEST_WORKSPACES, "external");
+
+beforeEach(() => {
+  warnSpy.mockClear();
+});
 
 afterEach(() => {
   try {
@@ -108,5 +122,35 @@ describe("workspace scaffolding — symlink hardening (#2333)", () => {
     scaffoldWorkspaceDefaults(workspacePath, { suppressWelcomeHook: false });
 
     expect(existsSync(join(workspacePath, ".claude", "soleur-welcomed.local"))).toBe(false);
+  });
+
+  // --- C3 / ADR-093: connectedRepoShipsPlugin diagnostic breadcrumb ---
+  test("emits connectedRepoShipsPlugin breadcrumb when the connected repo ships a committed plugins/soleur/ dir", () => {
+    const userId = randomUUID();
+    const workspacePath = join(TEST_WORKSPACES, userId);
+    // Simulate a connected repo that committed its own plugins/soleur/ (a real dir).
+    mkdirSync(join(workspacePath, "plugins", "soleur"), { recursive: true });
+
+    scaffoldWorkspaceDefaults(workspacePath);
+
+    // The collision is now observable (was silent through the 5-round #4826 saga).
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ connectedRepoShipsPlugin: true }),
+      expect.stringContaining("workspace copy is inert for the SDK"),
+    );
+  });
+
+  test("does NOT emit the collision breadcrumb on a fresh workspace (symlink created)", () => {
+    const userId = randomUUID();
+    const workspacePath = join(TEST_WORKSPACES, userId);
+    mkdirSync(workspacePath, { recursive: true });
+
+    scaffoldWorkspaceDefaults(workspacePath);
+
+    // A fresh workspace gets the plugin symlink; no committed copy, no breadcrumb.
+    const collisionCall = warnSpy.mock.calls.find(
+      ([fields]) => (fields as { connectedRepoShipsPlugin?: boolean })?.connectedRepoShipsPlugin,
+    );
+    expect(collisionCall).toBeUndefined();
   });
 });

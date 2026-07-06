@@ -23,7 +23,7 @@ vi.mock("../server/observability", async (importOriginal) => ({
 }));
 
 import { createContextQueriesHook } from "../server/context-queries-hook";
-import { buildFixture, cleanupFixture } from "./helpers/context-queries-fixture";
+import { buildFixture, cleanupFixture, fixturePluginPath } from "./helpers/context-queries-fixture";
 
 function findRepoRoot(start: string): string {
   let dir = start;
@@ -83,6 +83,10 @@ if (!ready) {
 describe.skipIf(!ready)("shell ↔ JS context-queries note byte-parity (#6046)", () => {
   beforeAll(() => {
     FIX = buildFixture();
+    // F3: the JS hook's `skillsDir` sources from `getPluginPath()` (deployed root),
+    // not `repoRoot`. Point it at this fixture's plugin dir so the SKILL.md read
+    // stays byte-equal to the shell hook's `CONTEXT_QUERIES_REPO_ROOT`-relative read.
+    vi.stubEnv("SOLEUR_PLUGIN_PATH", fixturePluginPath(FIX));
     jsHook = createContextQueriesHook(FIX);
   });
   afterAll(() => {

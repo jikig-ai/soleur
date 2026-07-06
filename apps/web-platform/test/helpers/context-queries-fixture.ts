@@ -13,6 +13,22 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+/**
+ * The deployed-plugin-root the hook's `skillsDir` must resolve to for a fixture
+ * root. Since the F3 fix (context-queries-hook.ts), `skillsDir` sources from
+ * `getPluginPath()` (the PLATFORM-DEPLOYED root), NOT the hook's `repoRoot`
+ * argument. So every test that wants the hook to read this fixture's committed
+ * SKILL.md files must `vi.stubEnv("SOLEUR_PLUGIN_PATH", fixturePluginPath(root))`
+ * BEFORE `createContextQueriesHook(root)` — `getPluginPath()` (in test env) then
+ * returns this path verbatim and `skillsDir` becomes `<root>/plugins/soleur/skills`,
+ * keeping the shell-hook parity (its `CONTEXT_QUERIES_REPO_ROOT`-relative SKILL.md
+ * read stays byte-equal). Deriving it here keeps the plugin-path shape in lockstep
+ * with {@link buildFixture}'s `plugins/soleur/skills/<name>` layout.
+ */
+export function fixturePluginPath(root: string): string {
+  return path.join(root, "plugins", "soleur");
+}
+
 /** Toolchain probe — the fixture needs a working `git` binary. */
 export function gitAvailable(): boolean {
   try {
