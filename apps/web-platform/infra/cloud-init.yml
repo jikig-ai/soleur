@@ -440,8 +440,14 @@ runcmd:
     # reports WHY (off-host the creds+image are valid, so the failure is host-side and uncaptured).
     ( set +e
       . /etc/default/webhook-deploy 2>/dev/null || true
-      GHCR_USER=$(timeout 15 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null || true)
-      GHCR_TOKEN=$(timeout 15 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
+      # (#6090) Prefer the BAKED creds (mirrors the baked sentry_dsn above): Doppler answers
+      # EMPTY at the cold-boot instant, so the un-baked fetch skipped docker login → anonymous
+      # private pull → 401 → abort at stage=pull. Fall back to Doppler (hardened: timeout 45 +
+      # 3-try retry, mirroring the apt-block idiom) only when the bake is empty.
+      GHCR_USER='${ghcr_read_user}'
+      [ -n "$GHCR_USER" ] || { n=0; until GHCR_USER=$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null); [ -n "$GHCR_USER" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done; }
+      GHCR_TOKEN='${ghcr_read_token}'
+      [ -n "$GHCR_TOKEN" ] || { n=0; until GHCR_TOKEN=$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null); [ -n "$GHCR_TOKEN" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done; }
       if [ -z "$GHCR_USER" ] || [ -z "$GHCR_TOKEN" ]; then
         printf 'ghcr_creds_missing user=%s token=%s' "$([ -n "$GHCR_USER" ] && echo y || echo n)" "$([ -n "$GHCR_TOKEN" ] && echo y || echo n)" > /run/soleur-stage-detail
       elif printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin > /run/soleur-ghcr-login.log 2>&1; then
