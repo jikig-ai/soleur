@@ -70,7 +70,7 @@ Two work items from the tracker:
 
 **If this leaks, the user's data is exposed via:** n/a — the only egress added is a Sentry event carrying `stage`/`failed_file`/`host_id`/`region` (a Hetzner instance-id and a stage enum — no secrets, no PII). The DSN is the already-semi-public `${sentry_dsn}` (already in the client bundle; `variables.tf:206`). Emit bodies are classifications, never raw stderr/creds (mirrors the existing `ghcr_login_warn` scrubbing).
 
-**Brand-survival threshold:** none.
+- **Brand-survival threshold:** none
 - `threshold: none, reason:` web-2 is a weight-0 non-serving standby; this change is best-effort observability only (every emit is `|| true`/`set +e`-guarded and MUST NOT poweroff the host), it never touches web-1 (cloud-init only exercises on the operator-gated web-2 recreate; web-1's running host is patched via the web-1-scoped `terraform_data` SSH provisioners, not cloud-init — `server.tf:98`), and it changes no serving behavior. (Required because the diff touches the sensitive `apps/web-platform/infra/` path.)
 
 ## Hypotheses
@@ -241,8 +241,14 @@ logs:
   where: "on-host cloud-init-output.log (SSH-only, not relied on); journald (persistent post-bootstrap). Off-host truth = Sentry + Better Stack."
   retention: "Sentry project default; Better Stack default"
 discoverability_test:
-  command: "gh run view <recreate-run-id> --log | grep -i 'fresh-host Sentry pointer'   # OR the AC14 de.sentry.io curl (off-host, no host login)"
-  expected_output: "a Sentry event naming the last-reached stage/region for the boot"
+  # Pre-merge runnable off-host probe: confirm the EU Sentry data plane (de.sentry.io — the
+  # host the recreate auto-read now uses, AC8b) resolves + responds. A typo'd host (the #4148
+  # class) DNS-fails or returns something other than 401. 401 = reachable + auth-required.
+  # (The AC14 post-recreate stage-read — `gh run view <run> --log | grep 'fresh-host Sentry
+  # pointer'` OR the authenticated de.sentry.io issues curl — is the SEPARATE post-merge
+  # verification; it is not runnable pre-recreate.)
+  command: 'curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://de.sentry.io/api/0/'
+  expected_output: "401"
 ```
 
 ## Infrastructure (IaC)
