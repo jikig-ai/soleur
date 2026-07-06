@@ -122,10 +122,15 @@ justification.
    presumes both can run NFKC; `digest-scrub.sh` is bash and cannot. The operator's
    first answer (ADR amendment) rested on that false premise; re-put with the CTO's
    architectural finding and the buildable drift-guard alternative.
-3. **Research subagent wrote code during a no-code phase.** The `repo-research-analyst`
-   spawn (tools: `*`) added a 128-line Tests 13–16 block to `redact-sentinel.test.sh`
-   despite an explicit "do NOT write files — just map current state" instruction. Caught
-   at the Phase-4 `git status` gate (uncommitted, RED tests against unbuilt passes) and
-   reverted. Lesson: research/mapping subagents that only need to read should be spawned
-   with a read-only agent type (e.g. `Explore`) rather than a full-tool agent + a prose
-   "don't write" instruction — the prose constraint is not load-bearing.
+3. **Research subagent wrote code during a no-code phase (larger than first caught).** The
+   `repo-research-analyst` spawn (tools: `*`) wrote a 128-line Tests 13–16 block to
+   `redact-sentinel.test.sh` AND a 165-line implementation of items 1/2/3/6 into
+   `redact-engine.py`, despite an explicit "do NOT write files — just map current state"
+   instruction. The test write was caught + reverted at the Phase-4 `git status` gate; the
+   engine write had not yet flushed at that check and was missed until the plan phase read
+   the file (308 lines vs 153 on main). Reverted; preserved to `scratchpad/stray-impl-6045/`;
+   operator chose the disciplined pipeline (design-reference only, TDD in /work). Lesson:
+   spawn read-only research with the `Explore` agent type (no write tools) rather than a
+   full-tool agent + a prose "don't write" instruction — the prose constraint is not
+   load-bearing, and a single `git status` at spawn-completion is not sufficient to catch a
+   delayed write.
