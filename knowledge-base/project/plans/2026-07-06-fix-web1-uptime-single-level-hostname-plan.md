@@ -242,8 +242,13 @@ logs:
   where: "Better Stack monitor history (vendor dashboard) + incident emails"
   retention: "Better Stack free-tier retention"
 discoverability_test:
-  command: "curl -sS -o /dev/null -w '%{http_code}' https://web-1.soleur.ai/health"
+  # Pre-merge-runnable probe of the origin-health surface the per-host monitor guards
+  # (cert-valid under *.soleur.ai today). The per-host web-1.soleur.ai/health probe only
+  # exists AFTER the merge-triggered terraform apply creates the renamed record — that is
+  # covered by the post-merge Acceptance Criterion `curl web-1.soleur.ai/health == 200`.
+  command: "curl -sS -o /dev/null -w '%{http_code}' https://app.soleur.ai/health"
   expected_output: "200"
+  post_merge_probe: "curl -sS -o /dev/null -w '%{http_code}' https://web-1.soleur.ai/health  # == 200 once applied"
 ```
 
 ## Open Code-Review Overlap
