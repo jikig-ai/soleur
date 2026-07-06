@@ -639,6 +639,67 @@ jobs:
           set -euo pipefail
           cosign sign --yes "${IMAGE}@${DIGEST}"
 
+      # --- #6122 (ADR-093) Phase 2: dual-push the pushed image to the self-hosted zot
+      # registry + cosign-sign the zot digest. CI reaches the private-net zot ONLY through
+      # the existing `web` CF Tunnel (cf-tunnel-registry-bridge). The image is COPIED
+      # GHCR→zot with `crane` RUNNER-SIDE (the buildx container driver cannot reach the
+      # runner's 127.0.0.1 bridge listener, so adding a zot tag to build-push would not
+      # work); crane preserves the digest, so the same cosign identity chain the host
+      # offline-verifies holds. GHCR push stays live (break-glass through the Phase-5 soak).
+      # crane + cosign auto-treat loopback (127.0.0.1) as an insecure registry → plain-HTTP
+      # zot over the raw-TCP forward needs no extra flag (Phase-0 spike evidence). This block
+      # is additive: a zot/bridge failure must not fail the GHCR release (the whole block is
+      # gated on zot_bridge.outcome and the teardown is if:always()).
+      - name: Bridge to zot registry (CF Tunnel)
+        id: zot_bridge
+        if: steps.docker_build.outcome == 'success'
+        continue-on-error: true
+        uses: ./.github/actions/cf-tunnel-registry-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          cloudflared-version: "2026.5.0"
+          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+
+      - name: Mirror image GHCR→zot (crane) + cosign-sign the zot digest
+        if: steps.zot_bridge.outcome == 'success'
+        env:
+          IMAGE: ${{ inputs.docker_image }}
+          DIGEST: ${{ steps.docker_build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.next }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Install crane (SHA-pinned; supply-chain discipline, same as cloudflared).
+          CRANE_VERSION="v0.20.2"
+          CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
+          curl -fsSL -o /tmp/crane.tgz \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane
+          rm /tmp/crane.tgz
+
+          BASE="$(basename "$IMAGE")"        # e.g. soleur-web-platform
+          ZOT="127.0.0.1:5000/${BASE}"
+          # crane reads ~/.docker/config.json for BOTH ghcr.io (Docker login step) and
+          # 127.0.0.1:5000 (cf-tunnel-registry-bridge docker login). Copy every tag the GHCR
+          # build-push wrote (digest preserved → zot manifest byte-identical).
+          for TAG in "v${VERSION}" "${COMMIT_SHA}" "latest"; do
+            crane copy "${IMAGE}:${TAG}" "${ZOT}:${TAG}"
+          done
+          # Sign the zot digest (same digest; writes a sig referrer into zot so the host's
+          # offline verify — same COSIGN_IDENTITY_REGEXP — passes against the zot copy).
+          cosign sign --yes "${ZOT}@${DIGEST}"
+
+      - name: Tear down cloudflared registry bridge
+        if: always()
+        run: |
+          set +e
+          docker logout 127.0.0.1:5000 2>/dev/null || true
+          if [[ -n "${REGISTRY_BRIDGE_PID:-}" ]]; then
+            kill "$REGISTRY_BRIDGE_PID" 2>/dev/null || true
+          fi
+          [[ -f /tmp/cloudflared-registry.log ]] && tail -n 200 /tmp/cloudflared-registry.log || true
+
       # Publish the draft release once Docker has pushed AND the audit
       # asset has uploaded. GitHub now publishes releases as IMMUTABLE —
       # once a release is out of draft state, `gh release upload` returns
