@@ -10,6 +10,33 @@ status: draft
 
 # 🐛 fix: cron-roadmap-review output-contract — remove the prompt-level 6-day DEDUP RULE
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-07 · **Plan-review panel:** Kieran, DHH, code-simplicity (eng tier — `none` threshold).
+
+### Key improvements applied
+1. **Kieran F1 (blocking mechanical):** AC "surviving-anchors" check rewritten from a summed
+   `grep -c` (which reads `6`, not `4`, because the header comment echoes three anchor literals)
+   to per-anchor presence assertions.
+2. **DHH #2 → deepen-plan Precedent-Diff reversal:** DHH proposed pinning the digest title date to
+   `runStartedAt`; the Phase 4.4 precedent-diff gate showed all 7 cohort crons use a static prompt
+   + agent-derived date (5 run with no backstop — the canonical pattern), so pinning roadmap alone
+   would be a snowflake. **Reverted the pin; deferred cohort-wide.** Added a Precedent-Diff table.
+3. **Files-to-Edit #3/#4 (code-simplicity confirmed):** the `_cron-shared.ts` citation re-point +
+   `cron-shared.test.ts` fixture-label flip are kept inline — comment-accuracy fixes *forced* by
+   the primary change, not scope creep.
+
+### New considerations discovered
+- The comment-and-exit path is **fragile, not deterministically RED** — `verifyScheduledIssueCreated`
+  credits a dedup-comment via `updated_at` (Research Reconciliation row 1). The fix removes that
+  fragility regardless.
+- The cross-midnight-UTC skew is a **cohort-wide** property (deferral), not a roadmap-only bug.
+- `cron-community-monitor` carries the identical DEDUP-RULE bug (sibling deferral).
+
+### Deepen-plan gate status
+4.6 User-Brand Impact ✅ · 4.7 Observability ✅ · 4.8 PAT-shaped ✅ · 4.9 UI-wireframe ✅ (no UI
+surface — Files-to-Edit are `.ts` only) · 4.4 Precedent-Diff ✅ (drove the date-pin reversal).
+
 ## Overview
 
 The `scheduled-roadmap-review` Better Stack / Sentry cron monitor goes RED (or produces no
@@ -42,19 +69,28 @@ Two further defects compound it:
   re-fire within 6 days comment-and-exit onto the fallback — self-perpetuating the missing-digest
   / RED state.
 
-**The fix (two coupled halves):**
-1. Remove the prompt-level 6-day DEDUP RULE and the `## Output` "If no recent duplicate exists…"
-   preamble that depends on it; rely on the code-level **same-date** dedup which already
-   short-circuits genuine same-day duplicates with a green heartbeat before the eval spawns.
-2. **Pin the digest title date to `runStartedAt`** (inject `runStartedAt.slice(0,10)` into the
-   prompt) so the eval stamps the *exact* dated title the code-level dedup queries for — see the
-   cross-midnight reconciliation below. Without this, the code-level same-date dedup silently
-   depends on the agent's own container clock matching the host UTC date, and the deleted 6-day
-   rolling rule was the (fragile) date-source-agnostic backstop that papered over the skew.
+**The fix:** remove the prompt-level 6-day DEDUP RULE and the `## Output` "If no recent duplicate
+exists…" preamble that depends on it; rely on the code-level **same-date** dedup which already
+short-circuits genuine same-day duplicates with a green heartbeat before the eval spawns. This
+brings roadmap-review into line with the 5 other always-create cohort crons (content-generator,
+growth-audit, growth-execution, competitive-analysis, seo-aeo-audit) which carry **no**
+comment-and-exit DEDUP RULE and rely purely on the code-level same-date dedup (see Precedent-Diff
+below).
 
 Net contract: **every distinct run-day that reaches the eval MUST create its dated digest**
-(the monitor's check-in artifact, stamped with the run's own `runStartedAt` date); same-day
-manual+cron duplicates are handled code-side before the eval spawns.
+(the monitor's check-in artifact); same-day manual+cron duplicates are handled code-side before
+the eval spawns.
+
+> **Deepen-plan precedent-diff reversal (DHH plan-review #2 vs. cohort precedent).** DHH proposed
+> also *pinning* the digest title date to `runStartedAt` (injecting it into the prompt) to close a
+> cross-midnight-UTC skew between the dedup key (`runStartedAt.slice(0,10)`, host UTC) and the
+> agent-derived title date. The deepen-plan precedent-diff gate (Phase 4.4) then showed all **7
+> cohort crons use a static prompt const + agent-derived title date** and **none** inject
+> `runStartedAt`; the 5 always-create siblings run this way with no comment-and-exit backstop and
+> that is the canonical, accepted pattern (#5786: "a duplicate paper-cut beats a missed digest").
+> The cross-midnight skew is therefore a **cohort-wide pre-existing property**, not roadmap-
+> specific, and pinning roadmap alone would make it a snowflake diverging from 7 siblings.
+> **Decision: keep the narrow fix; defer the date-pin as a cohort-wide follow-up** (see Non-Goals).
 
 **Scope:** ONLY the roadmap-review dedup/output-contract bug. Do NOT touch
 `cron-content-generator` (verified: it carries zero DEDUP RULE). The June credit-exhaustion cause
@@ -71,7 +107,7 @@ not change the fix, but it sharpens the "why" and adds one in-scope comment/test
 | Comment-and-exit path → `verify-output`/`resolveOutputAwareOk` returns `heartbeatOk=false` → terminal heartbeat `ok:false` (deterministic RED). | `verifyScheduledIssueCreated` (`_cron-shared.ts:699`) filters on **`updated_at >= runStartedAt`** (`since` param), and the comment at `:680–688` **explicitly credits a dedup-comment as valid output** — a comment bumps the existing issue's `updated_at` into the run window → green. So comment-and-exit is **fragile, not deterministically RED**: it stays green *iff* the LLM's comment actually lands on a `scheduled-roadmap-review`-labeled issue; it goes RED only when the comment fails/mis-places. **Either way it produces no dated digest artifact.** | Fix is unchanged and still correct — the real defect is "monitor color + digest presence made to depend on LLM comment-placement behavior instead of a deterministic dated artifact," plus defects (a)/(b) which are independent of verify-output. Reconciliation folded into Root Cause. |
 | (implicit) `verifyScheduledIssueCreated`'s `updated_at` crediting exists *for* roadmap-review. | The `updated_at` crediting is shared and **still load-bearing for `cron-community-monitor`** (which retains its 24h DEDUP RULE). Only the *citation* ("roadmap-review's DEDUP RULE") in `_cron-shared.ts:680–688` and the rationale-comment + fixture label in `cron-shared.test.ts:230–245` become stale once roadmap loses its rule. | Do **not** remove the `updated_at` filter (community-monitor needs it). Re-point the stale citation/comment to `cron-community-monitor` and flip the `cron-shared.test.ts` fixture label to `scheduled-community-monitor` so the test rationale stays truthful. Behavior-preserving. |
 | The requested new test ("a run reaching the eval always yields a dated digest (green); a same-date pre-existing digest short-circuits to a green heartbeat without spawning"). | This behavior is **already proven for roadmap-review** by `cron-cohort-dedup.test.ts` — AC1 (two serialized same-date invocations file exactly ONE digest, spawn called once), AC1b (skip path posts a GREEN heartbeat, does NOT execute `claude-eval` or `verify-output`), AC3 (a FAILED audit stub does not suppress the real digest). | Do NOT duplicate the behavioral cohort test. Instead add **regression-guard anchors** in `cron-roadmap-review.test.ts`: assert the removed DEDUP-RULE / comment-and-exit strings are **absent**, and assert the new unconditional `## Output` wording is **present**. The cohort suite remains the behavioral gate. |
-| (implicit) The code-level same-date dedup fully guarantees "same-day handled code-side." | **Cross-midnight-UTC skew (DHH plan-review):** the dedup KEY is `runStartedAt.slice(0,10)` (host UTC date captured in Node at handler start, `cron-roadmap-review.ts:215–234`), but the digest TITLE date is **agent-derived** — `ROADMAP_REVIEW_PROMPT` is a static const (line 117) whose `## Output` "Title format: … YYYY-MM-DD" (line 170) injects nothing; the spawned claude computes "today" from its own container clock. When a run crosses UTC midnight (run starts `23:59:40Z` → key = day N; eval stamps at `00:00:20Z` → title = day N+1) the title date ≠ the key, so the same-date dedup can MISS (duplicate digest) or over-suppress. The deleted 6-day rolling rule was date-source-agnostic and masked this; removing it removes the backstop. | **Fold in (fix #2 above):** convert `ROADMAP_REVIEW_PROMPT` to a builder that interpolates `runStartedAt.slice(0,10)` and make the title date **exact/mandatory** ("use THIS date, do not compute your own"). Dedup key and stamped title then share one source → skew impossible. `ROADMAP_REVIEW_PROMPT` is module-local (not exported) with a single use site (the spawn call at line 317), so the const→builder conversion is contained. |
+| (implicit) The code-level same-date dedup fully guarantees "same-day handled code-side." | **Cross-midnight-UTC skew (DHH plan-review #2):** the dedup KEY is `runStartedAt.slice(0,10)` (host UTC date captured in Node at handler start, `cron-roadmap-review.ts:215–234`), but the digest TITLE date is **agent-derived** — `ROADMAP_REVIEW_PROMPT` is a static const (line 117) whose `## Output` "Title format: … YYYY-MM-DD" (line 170) injects nothing; the spawned claude computes "today" from its own container clock. When a run crosses UTC midnight the title date can differ from the key, so the same-date dedup can MISS (duplicate) or over-suppress. **However** the deepen-plan precedent-diff gate (Phase 4.4) showed this is a **cohort-wide property**: all 7 always-create cohort crons use a static prompt const + agent-derived title date + `digestIssueExistsForDate({date: runStartedAt.slice(0,10)})`, and the 5 without a DEDUP RULE run this way with no backstop (the accepted #5786 "paper-cut beats missed digest" baseline). | **Do NOT fold in (precedent-diff reversal).** Pinning roadmap alone makes it a snowflake diverging from 7 siblings; the skew is not created by this PR (removing the DEDUP RULE only aligns roadmap with the 5 backstop-free siblings). Defer as a **cohort-wide** follow-up (Non-Goals) alongside the community-monitor tracking issue. |
 
 ## Root Cause (verified 2026-07-06 / re-verified 2026-07-07)
 
@@ -80,29 +116,23 @@ not change the fix, but it sharpens the "why" and adds one in-scope comment/test
   "If no recent duplicate exists, create a new issue…" preamble that assumes the removed rule.
 - Interacts with `_cron-shared.ts` `verifyScheduledIssueCreated` (`updated_at` crediting) and
   `digestIssueExistsForDate` / `isRealScheduledDigest` (same-date, FAILED-stub-excluding).
-- **Unpinned title date:** `ROADMAP_REVIEW_PROMPT` (static const, line 117) never injects
-  `runStartedAt`; the eval self-computes the `YYYY-MM-DD` in the title (line 170) from its own
-  clock, so the code-level same-date dedup key (`runStartedAt.slice(0,10)`) and the stamped title
-  date can diverge across a UTC-midnight boundary — the second half of the fix pins them.
+- **Unpinned title date (cohort-wide, out of scope here):** `ROADMAP_REVIEW_PROMPT` (static const)
+  never injects `runStartedAt`; the eval self-computes the title `YYYY-MM-DD` from its own clock —
+  a property shared by all 7 cohort crons, deferred cohort-wide (see Precedent-Diff + Non-Goals).
 
 ## Files to Edit
 
-1. **`apps/web-platform/server/inngest/functions/cron-roadmap-review.ts`** —
-   (a) remove the DEDUP RULE block (165–167) from `ROADMAP_REVIEW_PROMPT`; rewrite the `## Output`
-   section so the eval **unconditionally creates** the dated digest after analysis (drop the "If
-   no recent duplicate exists" conditional). Keep the exact surviving substring `create a new
-   issue with:` (do NOT paraphrase — the AC4 presence test pins it verbatim). Preserve the
-   verbatim-extraction anchors (Part 1 / Part 2 / MILESTONE RULE / BIDIRECTIONAL RULE) and the
-   other safety guards (ISSUE CLOSURE SAFETY, ROADMAP.MD CONFLICT GUARD, CLONE DEPTH RULE, STAGING
-   RULE).
-   (b) **Pin the title date:** convert `ROADMAP_REVIEW_PROMPT` (module-local const, single use
-   site at line 317) into a builder `buildRoadmapReviewPrompt(runDate: string)` and interpolate
-   `runStartedAt.slice(0,10)` at the spawn call (`prompt: buildRoadmapReviewPrompt(runStartedAt.slice(0,10))`).
-   Change the `## Output` title directive to an EXACT, mandatory dated title, e.g.
-   `` Title (EXACT — use this date, do NOT compute your own): [Scheduled] Weekly Roadmap Review - ${runDate} ``.
-   The header verbatim-extraction comment (lines 113–116) already repeats several anchor literals
-   — leave the anchor list intact (all four anchors survive); the AC uses per-anchor presence
-   checks so the comment's echoes do not skew a count.
+1. **`apps/web-platform/server/inngest/functions/cron-roadmap-review.ts`** — remove the DEDUP RULE
+   block (165–167) from `ROADMAP_REVIEW_PROMPT`; rewrite the `## Output` section so the eval
+   **unconditionally creates** the dated digest after analysis (drop the "If no recent duplicate
+   exists" conditional). Keep the exact surviving substring `create a new issue with:` (do NOT
+   paraphrase — the AC4 presence test pins it verbatim). Preserve the verbatim-extraction anchors
+   (Part 1 / Part 2 / MILESTONE RULE / BIDIRECTIONAL RULE) and the other safety guards (ISSUE
+   CLOSURE SAFETY, ROADMAP.MD CONFLICT GUARD, CLONE DEPTH RULE, STAGING RULE). Leave the header
+   verbatim-extraction comment (113–116) intact (all four anchors survive; the AC uses per-anchor
+   presence checks so the comment's echoes do not skew a count). `ROADMAP_REVIEW_PROMPT` stays a
+   static const (no date-pin — see Precedent-Diff); the sole edit is deleting the DEDUP RULE +
+   rewriting `## Output`.
 
 2. **`apps/web-platform/test/server/inngest/cron-roadmap-review.test.ts`** — remove the two
    assertions referencing the removed rule: the `["DEDUP RULE", …]` row (line 103) and the
@@ -112,9 +142,7 @@ not change the fix, but it sharpens the "why" and adds one in-scope comment/test
    `DEDUP RULE`, `within the last 6 days`, `post your findings as a comment on the most recent
    existing issue`, `If no recent duplicate exists` are **absent** from `SUT_SOURCE`; (ii) the new
    unconditional output wording — the verbatim substring `create a new issue with:` — is
-   **present**; (iii) the **pinned-date directive** is present — assert `SUT_SOURCE` contains both
-   the interpolation `${runDate}` and the "do NOT compute your own" title directive text, proving
-   the title date is sourced from `runStartedAt`, not the agent clock.
+   **present**.
 
 3. **`apps/web-platform/server/inngest/functions/_cron-shared.ts`** (comment-only, 680–688) —
    re-point the `verifyScheduledIssueCreated` rationale from "roadmap-review's DEDUP RULE" to
@@ -137,11 +165,7 @@ None.
 - Rewrite `## Output` (169–172): after "create a GitHub issue summarizing your findings",
   proceed directly to "create a new issue with: …" — no 6-day conditional, no comment-and-exit
   fallback. Keep the exact substring `create a new issue with:`.
-- **Pin the date:** convert `ROADMAP_REVIEW_PROMPT` const → `buildRoadmapReviewPrompt(runDate)`
-  builder; change the title directive to the exact mandatory
-  `` [Scheduled] Weekly Roadmap Review - ${runDate} `` with a "use this date, do NOT compute your
-  own" instruction; update the spawn call to
-  `prompt: buildRoadmapReviewPrompt(runStartedAt.slice(0, 10))`.
+- `ROADMAP_REVIEW_PROMPT` stays a static const (no date-pin — Precedent-Diff).
 - Leave the header verbatim-extraction anchor comment (113–116) intact (all four anchors survive).
 
 **Phase 2 — Test updates (consumer of the contract).**
@@ -228,21 +252,17 @@ discoverability_test:
 - [ ] AC4 — the `## Output` section unconditionally creates the dated digest: the verbatim
       substring `create a new issue with:` is present and the removed 6-day conditional strings are
       absent (new `cron-roadmap-review.test.ts` presence + absence assertions pass).
-- [ ] AC5 — **title date is pinned to `runStartedAt`**: `SUT_SOURCE` contains the `${runDate}`
-      interpolation and the "do NOT compute your own" directive; the spawn call passes
-      `buildRoadmapReviewPrompt(runStartedAt.slice(0, 10))`.
-      Verify: `grep -c 'runStartedAt.slice(0, 10)' apps/web-platform/server/inngest/functions/cron-roadmap-review.ts` → `2` (dedup-digest-check line 234 + the new prompt-builder call).
-- [ ] AC6 — `cron-roadmap-review.test.ts` no longer asserts the removed rule and DOES assert
-      absence of the removed strings + presence of the new wording + the pinned-date anchor.
-- [ ] AC7 — behavioral invariant unchanged: the cohort suite still proves exactly-one-digest +
-      green-skip-no-spawn for roadmap-review (the mock ignores the prompt, so the const→builder +
-      date-pin change cannot regress it).
+- [ ] AC5 — `cron-roadmap-review.test.ts` no longer asserts the removed rule and DOES assert
+      absence of the removed strings + presence of the new wording.
+- [ ] AC6 — behavioral invariant unchanged: the cohort suite still proves exactly-one-digest +
+      green-skip-no-spawn for roadmap-review (the mock ignores the prompt, so removing the DEDUP
+      RULE cannot regress it).
       Verify: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-cohort-dedup.test.ts` → roadmap-review rows green.
-- [ ] AC8 — `cron-shared.test.ts` "credits a dedup-comment" test still returns `true` with the
+- [ ] AC7 — `cron-shared.test.ts` "credits a dedup-comment" test still returns `true` with the
       re-pointed `scheduled-community-monitor` fixture label + updated rationale.
-- [ ] AC9 — `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-roadmap-review.test.ts test/server/inngest/cron-cohort-dedup.test.ts test/server/inngest/cron-shared.test.ts` all green.
-- [ ] AC10 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
-- [ ] AC11 — `cron-content-generator.ts` untouched (scope guard).
+- [ ] AC8 — `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-roadmap-review.test.ts test/server/inngest/cron-cohort-dedup.test.ts test/server/inngest/cron-shared.test.ts` all green.
+- [ ] AC9 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
+- [ ] AC10 — `cron-content-generator.ts` untouched (scope guard).
       Verify: `git diff --name-only` does not list `cron-content-generator.ts`.
 
 ## Open Code-Review Overlap
@@ -281,12 +301,19 @@ No `.c4` edit required.
   same-date, making defect (a) milder, but the "comment-and-exit produces no dated digest" and
   self-perpetuation defects still apply. **Out of scope per the explicit "ONLY roadmap-review"
   scope.** Re-evaluation criterion: apply the same "remove prompt DEDUP RULE, rely on code-level
-  same-date dedup, pin the title date" fix once this PR validates the pattern. **When that fix
-  lands, the shared `verifyScheduledIssueCreated` `updated_at` filter AND the re-pointed
-  `_cron-shared.ts:680–688` citation come out together** — after community-monitor loses its rule,
-  no cron relies on the `updated_at`-crediting-of-a-comment path, so the citation would again go
-  stale (DHH plan-review F4). File a `gh issue create` tracking issue (milestone from
-  `knowledge-base/product/roadmap.md`) at ship time and record this coupling in it.
+  same-date dedup" fix once this PR validates the pattern. **When that fix lands, the shared
+  `verifyScheduledIssueCreated` `updated_at` filter AND the re-pointed `_cron-shared.ts:680–688`
+  citation come out together** — after community-monitor loses its rule, no cron relies on the
+  `updated_at`-crediting-of-a-comment path, so the citation would again go stale (DHH plan-review
+  F4). File a `gh issue create` tracking issue (milestone from `knowledge-base/product/roadmap.md`)
+  at ship time and record this coupling in it.
+- **Cohort-wide title-date pinning (DEFERRAL — cohort-wide, tracking issue).** The digest title
+  date is agent-derived across all 7 always-create cohort crons, so the code-level same-date dedup
+  can skew across a UTC-midnight boundary (DHH plan-review #2). This is a **pre-existing cohort
+  property**, not created by this PR, and #5786 accepts the resulting rare duplicate as a paper-cut.
+  Pinning only roadmap-review would make it a snowflake diverging from 6 siblings (Precedent-Diff).
+  Defer as a single cohort-wide change (inject `runStartedAt.slice(0,10)` into all 7 prompts, or a
+  shared prompt-builder) if determinism is later judged worth the divergence. File a tracking issue.
 - **`cron-content-generator`** — verified to carry no DEDUP RULE (0 matches); nothing to fix.
 - **June credit-exhaustion cause** — separately tracked and resolved; not addressed here.
 
@@ -320,13 +347,30 @@ No `.c4` edit required.
   (lines 114–115) echoes three of the four Part-1/Part-2/MILESTONE/BIDIRECTIONAL literals, so a
   count reads `6` not `4` (Kieran F1). Use per-anchor presence assertions (the test file already
   uses `it.each` for exactly this).
-- The date-pin is a prompt-text/handler change the cohort test's spawn-mock cannot exercise (the
-  mock never runs the prompt). Its regression guard is therefore a **source-anchor** assertion in
-  `cron-roadmap-review.test.ts` (presence of `${runDate}` + the "do NOT compute your own"
-  directive), not a behavioral cohort case. `readFileSync` returns the raw source, so the literal
-  characters `${runDate}` inside the template are matchable.
 - With comment-and-exit gone, the fail-OPEN-on-read-error path (`digest-dedup-read-failed` →
   spawn) now reliably files a duplicate digest on a GitHub LIST blip where the old rolling window
-  might have absorbed it (DHH F5). This is the intended priority ("a duplicate paper-cut beats a
-  missed digest"); the pinned date at least makes any such duplicate a cleanly, correctly-dated
-  second issue. Acceptable — no additional guard.
+  might have absorbed it (DHH F5). This is the intended priority and matches the 5 always-create
+  cohort siblings ("a duplicate paper-cut beats a missed digest", #5786). Acceptable — no
+  additional guard.
+
+## Precedent-Diff — Cohort Consistency (deepen-plan Phase 4.4)
+
+Grepped the sibling always-create cohort crons (`git grep -n "runStartedAt.slice(0, 10)"
+apps/web-platform/server/inngest/functions/cron-*.ts` + prompt-const inventory):
+
+| Cron | Prompt shape | Title date source | Code-level same-date dedup | Comment-and-exit DEDUP RULE |
+|---|---|---|---|---|
+| cron-roadmap-review (this PR) | static const → static const | agent-derived | `digestIssueExistsForDate` | **removing it** |
+| cron-content-generator | static const | agent-derived | `digestIssueExistsForDate` | none |
+| cron-growth-audit | static const | agent-derived | `digestIssueExistsForDate` | none |
+| cron-growth-execution | static const | agent-derived | `digestIssueExistsForDate` | none |
+| cron-competitive-analysis | static const | agent-derived | `digestIssueExistsForDate` | none |
+| cron-seo-aeo-audit | static const | agent-derived | `digestIssueExistsForDate` | none |
+| cron-campaign-calendar | static const | agent-derived | `digestIssueExistsForDate` (` (heartbeat)` suffix) | none |
+| cron-community-monitor | static const | agent-derived | `digestIssueExistsForDate` | 24h (deferral) |
+
+**Conclusion:** the fix keeps roadmap-review's prompt a static const — identical in shape to the 5
+backstop-free always-create siblings, which are the canonical accepted pattern. No divergence. The
+alternative DHH #2 (a `runStartedAt`-injecting prompt-builder) would have made roadmap the only
+cron of 7 with a builder — a novel pattern; deferred cohort-wide instead (Non-Goals). No other
+precedent (SECURITY DEFINER, atomic-write, lock, RPC-permission) is touched by this change.

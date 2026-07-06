@@ -11,22 +11,19 @@ Derived from `2026-07-07-fix-cron-roadmap-review-dedup-output-contract-plan.md` 
 Runner: **vitest** (`apps/web-platform/node_modules/.bin/vitest`). Typecheck:
 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 
-## Phase 1 — Prompt fix + date-pin (contract change first)
+## Phase 1 — Prompt fix (contract change first)
 
 - [ ] 1.1 In `apps/web-platform/server/inngest/functions/cron-roadmap-review.ts`, delete the DEDUP
       RULE block (lines 165–167) from the prompt.
 - [ ] 1.2 Rewrite the `## Output` section (169–172): drop the "If no recent duplicate exists"
       conditional and the comment-and-exit fallback; keep the exact verbatim substring
       `create a new issue with:`. The eval unconditionally creates the dated digest.
-- [ ] 1.3 Convert `ROADMAP_REVIEW_PROMPT` (module-local const, single use site line 317) into a
-      builder `buildRoadmapReviewPrompt(runDate: string)`; change the title directive to the exact
-      mandatory `` [Scheduled] Weekly Roadmap Review - ${runDate} `` with a "use this date, do NOT
-      compute your own" instruction.
-- [ ] 1.4 Update the spawn call to `prompt: buildRoadmapReviewPrompt(runStartedAt.slice(0, 10))`.
-- [ ] 1.5 Preserve the four verbatim-extraction anchors (Part 1 / Part 2 / MILESTONE RULE /
+      `ROADMAP_REVIEW_PROMPT` stays a static const (no date-pin — Precedent-Diff / cohort
+      consistency; the cross-midnight date-pin is deferred cohort-wide).
+- [ ] 1.3 Preserve the four verbatim-extraction anchors (Part 1 / Part 2 / MILESTONE RULE /
       BIDIRECTIONAL RULE) and the safety guards (ISSUE CLOSURE SAFETY, ROADMAP.MD CONFLICT GUARD,
       CLONE DEPTH RULE, STAGING RULE); leave the header comment (113–116) intact.
-- [ ] 1.6 Re-point the stale citation in `_cron-shared.ts:680–688` from "roadmap-review's DEDUP
+- [ ] 1.4 Re-point the stale citation in `_cron-shared.ts:680–688` from "roadmap-review's DEDUP
       RULE" to "`cron-community-monitor`'s DEDUP RULE" (comment-only; do NOT touch the
       `updated_at`/`since` filter — community-monitor still needs it).
 
@@ -38,8 +35,7 @@ Runner: **vitest** (`apps/web-platform/node_modules/.bin/vitest`). Typecheck:
 - [ ] 2.2 Add a new `describe` block asserting on `SUT_SOURCE`: (i) **absence** of `DEDUP RULE`,
       `within the last 6 days`, `post your findings as a comment on the most recent existing
       issue`, `If no recent duplicate exists`; (ii) **presence** of the verbatim `create a new
-      issue with:`; (iii) **presence** of the pinned-date directive — both `${runDate}` and the
-      "do NOT compute your own" text.
+      issue with:`.
 - [ ] 2.3 Keep the four surviving verbatim-extraction anchors as **per-anchor** `it.each` presence
       assertions (NOT a summed `grep -c` — the header comment echoes three literals → count would
       be 6, not 4).
@@ -51,15 +47,16 @@ Runner: **vitest** (`apps/web-platform/node_modules/.bin/vitest`). Typecheck:
 ## Phase 3 — Verify (ACs)
 
 - [ ] 3.1 `grep -c -E 'DEDUP RULE|within the last 6 days|post your findings as a comment on the most recent existing issue|If no recent duplicate exists' apps/web-platform/server/inngest/functions/cron-roadmap-review.ts` → `0` (AC1).
-- [ ] 3.2 `grep -c 'runStartedAt.slice(0, 10)' apps/web-platform/server/inngest/functions/cron-roadmap-review.ts` → `2` (dedup-digest-check + prompt-builder call) (AC5).
-- [ ] 3.3 `git diff --name-only` does NOT list `cron-content-generator.ts` (AC11 scope guard).
-- [ ] 3.4 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-roadmap-review.test.ts test/server/inngest/cron-cohort-dedup.test.ts test/server/inngest/cron-shared.test.ts` — all green (AC6/AC7/AC8/AC9).
-- [ ] 3.5 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — clean (AC10).
+- [ ] 3.2 `git diff --name-only` does NOT list `cron-content-generator.ts` (AC10 scope guard).
+- [ ] 3.3 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-roadmap-review.test.ts test/server/inngest/cron-cohort-dedup.test.ts test/server/inngest/cron-shared.test.ts` — all green (AC6/AC7/AC8).
+- [ ] 3.4 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — clean (AC9).
 
 ## Phase 4 — Ship follow-ups
 
 - [ ] 4.1 File a tracking issue for the identical `cron-community-monitor` DEDUP-RULE bug
       (deferral), noting the `updated_at`-filter + citation coupling (DHH F4). Milestone from
       `knowledge-base/product/roadmap.md`.
-- [ ] 4.2 Ensure `/ship` renders `decision-challenges.md` (date-pin scope note) into the PR body +
-      an `action-required` issue.
+- [ ] 4.2 File a tracking issue for the **cohort-wide title-date pinning** deferral (DHH #2;
+      deferred per deepen-plan Precedent-Diff — affects all 7 always-create cohort crons).
+- [ ] 4.3 Ensure `/ship` renders `decision-challenges.md` into the PR body + an `action-required`
+      issue.
