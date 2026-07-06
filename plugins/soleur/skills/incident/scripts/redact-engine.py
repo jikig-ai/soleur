@@ -12,10 +12,13 @@
 # equal to whole-string NFKC (a decomposed/combining sequence folds to an ASCII secret char only
 # whole-string), so per-codepoint would be a fail-OPEN. The sentinel halts; it never rewrites in
 # place and no consumer parses the offset, so there is no offset-map back to the original.
+import base64
+import binascii
 import os
 import re
 import sys
 import unicodedata
+import urllib.parse
 
 # 1 MiB default cap. Overridable via env for tests/tuning.
 MAX = int(os.environ.get("REDACT_MAX_INPUT_BYTES", str(1024 * 1024)))
@@ -204,6 +207,124 @@ def _scan_reflow(norm, seen):
     return hits
 
 
+# #6045 items 2 & 3 — reversibly-encoded secrets + headerless-PEM private-key body.
+# Classes EXCLUDED from the decoded-content re-scan: weakly-anchored classes manufacture false positives
+# on decoded high-entropy bytes (an IPv4/UUID/email surfacing INSIDE decoded bytes is far likelier a false
+# positive than a real leak — over-redaction fail-closes a legitimate write). cloudflare_token (bare 40-char
+# + predicate) is likewise excluded — a base64 blob is routinely 40 chars.
+_DECODE_SKIP = {"IPv4", "UUID", "email", "cloudflare_token"}
+# Bounds on the decode fan-out: the 1 MiB MAX input cap already bounds total input; these keep adversarial
+# input (many candidate blobs) linear. Safe ONLY while MAX dominates — re-evaluate if MAX is raised.
+_MAX_ENCODED_CANDIDATES = 4000
+_MAX_CANDIDATE_LEN = 200000
+
+
+def _b64_decode(s):
+    # Try standard then url-safe base64; tolerate missing padding. None on failure (never raises).
+    for alt in (s, s.replace("-", "+").replace("_", "/")):
+        body = alt.rstrip("=")
+        try:
+            return base64.b64decode(body + "=" * ((-len(body)) % 4), validate=True)
+        except (binascii.Error, ValueError):
+            continue
+    return None
+
+
+def _is_der_private_key(raw):
+    # #6045 item 3. True iff `raw` looks like an UNENCRYPTED private-key body: an outer DER SEQUENCE whose
+    # FIRST inner element is an INTEGER (the version field of PKCS#1 / SEC1 / PKCS#8). A cert / SPKI /
+    # EncryptedPrivateKeyInfo opens with an inner SEQUENCE and is REJECTED — those are public/encrypted
+    # material and flagging them would fail-close a legitimate write (a public cert in a legal draft is fine).
+    # Handles BOTH short-form (EC ~118B, Ed25519 ~48-85B) and long-form (RSA >=128B) length encodings; a
+    # long-form-only check would silently miss EC/Ed25519. Residual gap: EncryptedPrivateKeyInfo (inner
+    # SEQUENCE) is not caught — a named non-goal recorded in ADR-086. Floor guards tiny innocent DER.
+    if len(raw) < 48 or raw[0] != 0x30:
+        return False
+    lb = raw[1]
+    if lb < 0x80:
+        content_start = 2
+    elif lb in (0x81, 0x82, 0x83, 0x84):
+        content_start = 2 + (lb - 0x80)
+    else:
+        return False
+    return content_start < len(raw) and raw[content_start] == 0x02
+
+
+def _scan_text(text, offset, tag, seen):
+    # Re-run only the vendor-prefix/format-ANCHORED secret classes over a derived string (a decoded blob).
+    # _DECODE_SKIP excludes the weakly-anchored classes that FP on decoded high-entropy bytes.
+    hits = 0
+    for name, rx in PATTERNS:
+        if name in _DECODE_SKIP:
+            continue
+        pred = PREDICATES.get(name)
+        for m in rx.finditer(text):
+            val = m.group(0)
+            if pred and not pred(val):
+                continue
+            hits += _emit(name, val, offset, tag, seen)
+    return hits
+
+
+def _scan_encoded(norm, seen):
+    hits = 0
+    count = 0
+    candidates = []  # (blob, offset)
+    # (1) single-line / inline base64 runs (k8s Secret `data:` values, inline blobs).
+    for m in re.finditer(r"[A-Za-z0-9+/_-]{24,}={0,2}", norm):
+        candidates.append((m.group(0), m.start()))
+    # (2) multi-line base64 BLOCKS: consecutive whole-line base64 joined into one blob — real PEM/DER
+    #     bodies are 64-char line-wrapped, so a per-line run never decodes to a full key.
+    block_lines = []
+    block_off = None
+    pos = 0
+    for line in norm.splitlines(keepends=True):
+        stripped = line.rstrip("\r\n")
+        if re.fullmatch(r"[A-Za-z0-9+/_-]{16,}={0,2}", stripped):
+            if not block_lines:
+                block_off = pos
+            block_lines.append(stripped)
+        else:
+            if len(block_lines) >= 2:
+                candidates.append(("".join(block_lines), block_off))
+            block_lines = []
+        pos += len(line)
+    if len(block_lines) >= 2:
+        candidates.append(("".join(block_lines), block_off))
+
+    for blob, off in candidates:
+        if count >= _MAX_ENCODED_CANDIDATES:
+            break
+        if len(blob) > _MAX_CANDIDATE_LEN:
+            continue
+        count += 1
+        raw = _b64_decode(blob)  # never raises — returns None on failure (no exit-2 bubble)
+        if raw is None:
+            continue
+        if _is_der_private_key(raw):
+            hits += _emit("pem_key_body", blob, off, "headerless-PEM-DER", seen)
+        hits += _scan_text(raw.decode("utf-8", "replace"), off, "decoded base64", seen)
+    # hex runs (even length only — an odd run cannot be whole bytes).
+    for m in re.finditer(r"\b[0-9A-Fa-f]{32,}\b", norm):
+        if count >= 2 * _MAX_ENCODED_CANDIDATES:
+            break
+        blob = m.group(0)
+        if len(blob) % 2 or len(blob) > _MAX_CANDIDATE_LEN:
+            continue
+        count += 1
+        try:
+            raw = bytes.fromhex(blob)
+        except ValueError:
+            continue
+        hits += _scan_text(raw.decode("utf-8", "replace"), m.start(), "decoded hex", seen)
+    # percent-encoding: unquote once over the whole normalized text.
+    if re.search(r"%[0-9A-Fa-f]{2}", norm):
+        decoded = urllib.parse.unquote(norm)
+        if decoded != norm:
+            hits += _scan_text(decoded, 0, "decoded percent", seen)
+    return hits
+
+
 def scan(path):
     if not os.path.isfile(path) or not os.access(path, os.R_OK):
         sys.stderr.write(f"redact-engine: file not readable: {path}\n")
@@ -232,7 +353,8 @@ def scan(path):
             if pred and not pred(val):
                 continue
             hits += _emit(name, val, m.start(), "", seen)
-    hits += _scan_reflow(norm, seen)   # #6045 item 1 — whitespace/newline token-splitting re-scan
+    hits += _scan_reflow(norm, seen)    # #6045 item 1  — whitespace/newline token-splitting re-scan
+    hits += _scan_encoded(norm, seen)   # #6045 items 2 & 3 — reversibly-encoded + headerless-PEM DER body
     return 1 if hits else 0
 
 

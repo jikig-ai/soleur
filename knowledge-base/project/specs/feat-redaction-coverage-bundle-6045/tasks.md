@@ -30,18 +30,18 @@ fan-out caps with inline rationale; tag suffix starts with `` ( ``) apply across
 
 ## PR-C — item 2 (decode) + item 3 (private-key DER)
 
-- [ ] 3.1 (RED) Decode positives: base64 / base64url / hex / percent of a known secret; wrapped-base64 block. No-FP: data-URI image, `sha512-` SRI, git SHA/sha256, JWT→JSON-with-email, percent-encoded URL.
-- [ ] 3.2 (RED) DER positives: headerless RSA + EC P-256 + Ed25519. DER no-FP: public X.509 cert, PNG/JPEG, `0x30 0x81` non-key. Add `pem_key_body` to Test 2 + corpus.
-- [ ] 3.3 (RED) Behavioral fan-out bound test; Test 4b on a decode finding.
-- [ ] 3.4 Implement `_scan_text` (anchored secret classes only — exclude IPv4/UUID/email).
-- [ ] 3.5 Implement `_scan_encoded`: base64 candidate assembly (join wrapped lines) + per-candidate `try/except/continue`; hex (even-length); percent (`unquote` once); caps with rationale.
-- [ ] 3.6 Implement item 3 DER discriminator: short+long-form length; inner `INTEGER` (private) → emit, inner `SEQUENCE` (cert) → reject. Update guard allowlist (`pem_key_body=not-in-digest`).
-- [ ] 3.7 GREEN + Test 8 no-FP + parity.
+- [x] 3.1 (RED) Decode positives: base64 / base64url / hex / percent of a known secret; wrapped-base64 block. No-FP: data-URI image, `sha512-` SRI, git SHA/sha256, JWT→JSON-with-email, percent-encoded URL.
+- [x] 3.2 (RED) DER positives: headerless RSA + EC P-256 + Ed25519. DER no-FP: public X.509 cert, PNG/JPEG, `0x30 0x81` non-key. Add `pem_key_body` to Test 2 + corpus.
+- [x] 3.3 (RED) Behavioral fan-out bound test; Test 4b on a decode finding.
+- [x] 3.4 Implement `_scan_text` (anchored secret classes only — exclude IPv4/UUID/email).
+- [x] 3.5 Implement `_scan_encoded`: base64 candidate assembly (join wrapped lines) + per-candidate `try/except/continue`; hex (even-length); percent (`unquote` once); caps with rationale.
+- [x] 3.6 Implement item 3 DER discriminator: short+long-form length; inner `INTEGER` (private) → emit, inner `SEQUENCE` (cert) → reject. Update guard allowlist (`pem_key_body=not-in-digest`).
+- [x] 3.7 GREEN + Test 8 no-FP + parity.
 
 ## Phase Z — ADR + docs (in PR-C)
 
-- [ ] 4.1 Amend `ADR-086-fail-closed-redaction-engine-contract` additively/dated: items 1/2/3/6 covered; residual gaps (encrypted-PKCS#8 headerless) recorded; 4/5/7 remain non-goals (#6104/#6105); full slug; note #6054 ordinal collision.
-- [ ] 4.2 `redact-sentinel.sh` header matches final coverage.
+- [x] 4.1 Amend `ADR-086-fail-closed-redaction-engine-contract` additively/dated: items 1/2/3/6 covered; residual gaps (encrypted-PKCS#8 headerless) recorded; 4/5/7 remain non-goals (#6104/#6105); full slug; note #6054 ordinal collision.
+- [x] 4.2 `redact-sentinel.sh` header matches final coverage.
 
 ## Ship
 

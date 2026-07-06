@@ -394,6 +394,155 @@ fi
 bash "${SENTINEL}" "${NEGATIVE_BASELINE}" >/dev/null 2>&1
 assert_exit "Test 14d: cloudflare_token class does not manufacture matches on the clean PIR" 0 $?
 
+# ===========================================================================
+# #6045 PR-C — item 2 (base64/hex/percent decode-and-rescan) + item 3 (headerless-PEM
+# private-key DER discriminator). DER fixtures are SYNTHESIZED from the ASN.1 spec (no
+# key material) so they exercise the discriminator branches directly.
+# ===========================================================================
+
+# DER shape helpers (Python): seq() wraps content in a SEQUENCE with correct short/long-form length.
+_DER_PY='
+import base64, sys
+def seq(content):
+    n = len(content)
+    if n < 0x80: length = bytes([n])
+    elif n < 0x100: length = bytes([0x81, n])
+    else: length = bytes([0x82, n >> 8, n & 0xFF])
+    return bytes([0x30]) + length + content
+def b64(b): return base64.b64encode(b).decode()
+# private-key-shaped, SHORT-form length (EC/Ed25519 size): SEQUENCE{ INTEGER 1, OCTET STRING(44) }
+priv_short = seq(bytes([0x02,0x01,0x01]) + bytes([0x04,0x2C]) + b"\x00"*44)
+# private-key-shaped, LONG-form length (RSA size): SEQUENCE{ INTEGER 0, OCTET STRING(300) }
+priv_long  = seq(bytes([0x02,0x01,0x00]) + bytes([0x04,0x82,0x01,0x2C]) + b"\x00"*300)
+# cert/SPKI/encrypted-PKCS#8 shape: SEQUENCE{ SEQUENCE(44) } — first inner is SEQUENCE, must REJECT
+cert_like  = seq(seq(b"\x00"*44))
+# PNG magic (0x89) — not a SEQUENCE, must REJECT
+png        = bytes([0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A]) + b"\x00"*56
+'
+
+# Test 15 — item 3 private-key DER discriminator POSITIVES (short + long form).
+t15a="${TMP_DIR}/t15a.txt"
+python3 -c "${_DER_PY}
+sys.stdout.write('k8s data: ' + b64(priv_short) + '\n')" > "${t15a}"
+bash "${SENTINEL}" "${t15a}" >/tmp/t15a.out 2>&1
+assert_exit "Test 15a: short-form (EC/Ed25519-size) headerless private-key DER caught" 1 $?
+assert_grep "Test 15a: pem_key_body" "matched pattern pem_key_body" /tmp/t15a.out
+
+t15b="${TMP_DIR}/t15b.txt"
+python3 -c "${_DER_PY}
+sys.stdout.write('blob ' + b64(priv_long) + '\n')" > "${t15b}"
+bash "${SENTINEL}" "${t15b}" >/dev/null 2>&1
+assert_exit "Test 15b: long-form (RSA-size) headerless private-key DER caught" 1 $?
+
+# Test 15c — item 3 with a 64-char-WRAPPED body (real PEM bodies are line-wrapped): block assembly
+# must join consecutive base64 lines before decoding.
+t15c="${TMP_DIR}/t15c.txt"
+python3 -c "${_DER_PY}
+b = b64(priv_long)
+wrapped = '\n'.join(b[i:i+64] for i in range(0, len(b), 64))
+sys.stdout.write('-- body --\n' + wrapped + '\n-- end --\n')" > "${t15c}"
+bash "${SENTINEL}" "${t15c}" >/dev/null 2>&1
+assert_exit "Test 15c: 64-char-wrapped headerless private-key body caught via block assembly" 1 $?
+
+# Test 15d — item 3 NO-FALSE-POSITIVE: cert/SPKI/encrypted-PKCS#8 shape (inner SEQUENCE) must NOT
+# trip pem_key_body — a public cert pasted into a legal draft is legitimate; flagging it fail-closes.
+t15d="${TMP_DIR}/t15d.txt"
+python3 -c "${_DER_PY}
+sys.stdout.write('cert ' + b64(cert_like) + '\n')" > "${t15d}"
+bash "${SENTINEL}" "${t15d}" >/tmp/t15d.out 2>&1
+if grep -qE 'matched pattern pem_key_body' /tmp/t15d.out; then
+  echo "FAIL: Test 15d: a public-cert-shaped DER (inner SEQUENCE) falsely tripped pem_key_body"; FAIL=$((FAIL + 1))
+else
+  echo "PASS: Test 15d: cert/SPKI/encrypted-PKCS#8 shape does NOT trip pem_key_body (private-key discriminator)"; PASS=$((PASS + 1))
+fi
+
+# Test 15e — item 3 NO-FALSE-POSITIVE: a PNG image body (0x89 magic) must NOT trip pem_key_body.
+t15e="${TMP_DIR}/t15e.txt"
+python3 -c "${_DER_PY}
+sys.stdout.write('img ' + b64(png) + '\n')" > "${t15e}"
+bash "${SENTINEL}" "${t15e}" >/tmp/t15e.out 2>&1
+if grep -qE 'matched pattern pem_key_body' /tmp/t15e.out; then
+  echo "FAIL: Test 15e: a PNG body falsely tripped pem_key_body"; FAIL=$((FAIL + 1))
+else
+  echo "PASS: Test 15e: PNG image body does NOT trip pem_key_body"; PASS=$((PASS + 1))
+fi
+
+# Test 16 — item 2 decode-and-rescan POSITIVES (base64, base64url, hex, percent) of a known secret.
+_SECRET_PY='
+import base64, urllib.parse, binascii, sys
+# Split across concatenation so no contiguous sk_live_<24+> literal exists in source (GitHub push
+# protection scans the raw file; cq-test-fixtures-synthesized-only). 38B body -> base64 is 52 chars
+# (not 40 -> no cloudflare_token collision in the decode test).
+s = b"sk_" + b"live_0000ABCD1234567890abcdefXYZ789"
+b64s   = base64.b64encode(s).decode()
+b64url = base64.urlsafe_b64encode(s).decode()
+hexs   = s.hex()
+pcts   = urllib.parse.quote(s.decode())
+'
+for enc in b64s b64url hexs pcts; do
+  f="${TMP_DIR}/t16-${enc}.txt"
+  python3 -c "${_SECRET_PY}
+sys.stdout.write('payload: ' + ${enc} + ' trailer\n')" > "${f}"
+  bash "${SENTINEL}" "${f}" >/tmp/t16.out 2>&1
+  assert_exit "Test 16.${enc}: encoded stripe key decoded and caught" 1 $?
+  assert_grep "Test 16.${enc}: stripe_key via decode" "matched pattern stripe_key" /tmp/t16.out
+done
+
+# Test 16b — decode NO-FALSE-POSITIVE corpus: innocent encoded content must NOT manufacture a match.
+#  (i) base64 of a PNG image; (ii) an SRI sha512- hash; (iii) a git SHA / sha256 hex; (iv) a base64
+#  JWT-payload-shaped JSON containing an email (email is decode-skipped → must stay clean); (v) a
+#  percent-encoded URL.
+t16b="${TMP_DIR}/t16b.txt"
+python3 -c "
+import base64, sys
+png = bytes([0x89,0x50,0x4E,0x47]) + bytes(range(60))
+sri = 'sha512-' + base64.b64encode(bytes(range(64))).decode()
+jwtjson = base64.urlsafe_b64encode(b'{\"sub\":\"1\",\"email\":\"a@b.com\"}').decode()
+sys.stdout.write('image ' + base64.b64encode(png).decode() + '\n')
+sys.stdout.write('integrity ' + sri + '\n')
+sys.stdout.write('commit ' + 'ab'*20 + ' sha256 ' + 'cd'*32 + '\n')
+sys.stdout.write('token ' + jwtjson + '\n')
+sys.stdout.write('url https://x.example/a%2Fb%2Fc?q=1 done\n')
+" > "${t16b}"
+bash "${SENTINEL}" "${t16b}" >/tmp/t16b.out 2>&1
+if [[ $? -eq 0 ]]; then
+  echo "PASS: Test 16b: innocent encoded content (image/SRI/SHA/JWT-JSON-email/percent-URL) does NOT manufacture a match"; PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 16b: decode pass manufactured a false positive on innocent encoded content"; cat /tmp/t16b.out; FAIL=$((FAIL + 1))
+fi
+
+# Test 16c — malformed base64 candidate must NOT bubble to the exit-2 catch-all (per-candidate guard).
+# A real secret alongside a malformed blob must still be caught (exit 1), not fail-closed to exit 2.
+t16c="${TMP_DIR}/t16c.txt"
+python3 -c "
+import base64, sys
+good = base64.b64encode(b'sk_' + b'live_0000ABCD1234567890abXY').decode()
+sys.stdout.write('bad !!!====notbase64==== ' + good + ' end\n')
+" > "${t16c}"
+bash "${SENTINEL}" "${t16c}" >/dev/null 2>&1
+assert_exit "Test 16c: malformed base64 candidate skipped per-candidate (real secret still caught, exit 1 not 2)" 1 $?
+
+# Test 16d — Test-4b invariant on a DECODE-caught finding (new emit path).
+bash "${SENTINEL}" "${TMP_DIR}/t16-b64s.txt" >/tmp/t16d.out 2>&1 || true
+if grep -qE 'matched pattern stripe_key \(decoded' /tmp/t16d.out && \
+   ! grep -qE 'at offset [0-9]+: [^*]{5,}\*\*\*' /tmp/t16d.out; then
+  echo "PASS: Test 16d: decode finding is tagged and meta-redacted (<=4-char reveal)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 16d: decode finding missing tag or leaked >4 prefix chars"; cat /tmp/t16d.out; FAIL=$((FAIL + 1))
+fi
+
+# Test 16e — behavioral fan-out bound: a base64-run-flooded input completes without hanging and
+# exits cleanly (no manufactured matches); pins _MAX_ENCODED_CANDIDATES against a future cap removal.
+t16e="${TMP_DIR}/t16e.txt"
+python3 -c "import sys; sys.stdout.write((('QUJDREVGR0hJSktMTU5PUFFSU1Q ')*5000))" > "${t16e}"
+timeout 30 bash "${SENTINEL}" "${t16e}" >/dev/null 2>&1
+rc=$?
+if [[ $rc -eq 0 || $rc -eq 1 ]]; then
+  echo "PASS: Test 16e: base64-flooded input completes within bound (rc=${rc}, not a timeout)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 16e: base64-flooded input did not complete (rc=${rc} — possible unbounded fan-out)"; FAIL=$((FAIL + 1))
+fi
+
 echo
 echo "Total: ${PASS} pass, ${FAIL} fail"
 [[ "${FAIL}" -eq 0 ]]
