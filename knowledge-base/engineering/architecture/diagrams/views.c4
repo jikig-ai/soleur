@@ -33,7 +33,8 @@ views {
       platform.infra.inngest, platform.infra.inngestPostgres, platform.infra.inngestRedis,
       platform.infra.coordinator, platform.infra.scheduler,
       platform.infra.gitDataStore, platform.infra.sessionStore,
-      anthropic, github, cloudflare, doppler, stripe, plausible, resend, ghcr, zotRegistry, betterstack
+      anthropic, github, cloudflare, doppler, stripe, plausible, resend, ghcr, zotRegistry, betterstack,
+      connectedRepoPlugin
 
     style element.tag == #external {
       color muted

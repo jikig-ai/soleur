@@ -204,6 +204,7 @@ import type { PdfExtractErrorClass } from "./pdf-text-extract";
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import { getPluginPath } from "./plugin-path";
 // In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
 // writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
 // (the agent's OWN workspace — read+write in the sandbox because it is NOT in
@@ -2383,8 +2384,16 @@ export const realSdkQueryFactory: QueryFactory = async (
     effectiveSystemPrompt += `\n\n${buildConnectedRepoContext(connectedOwner, connectedRepo)}`;
   }
 
-  // nosemgrep: path-join-resolve-traversal -- workspacePath is server-resolved (fetchUserWorkspacePath, ADR-044), never user-tainted input.
-  const pluginPath = path.join(workspacePath, "plugins", "soleur");
+  // Load the SDK plugin from the PLATFORM-DEPLOYED root, never `<workspacePath>/
+  // plugins/soleur` (the connected repo's committed copy for a soleur-in-soleur
+  // dogfooder). getPluginPath() (`/app/shared/plugins/soleur`) is workspace-
+  // independent + sandbox-readable (`--ro-bind / /`) + boot-validated by
+  // verifyPluginMountOnce(). This is the trust boundary (ADR — SDK plugin/hook
+  // source is platform-controlled): loading the workspace copy would execute the
+  // connected repo's `hooks/hooks.json` command-hooks in the dispatch process.
+  // See knowledge-base/project/learnings/bug-fixes/2026-07-06-connected-repo-
+  // shadows-deployed-plugin-via-workspace-relative-path.md (supersedes #6115).
+  const pluginPath = getPluginPath();
 
   // Synthetic AgentSession — the only place in the cc path where an
   // AgentSession exists. Registered into `_ccBashGates` per Bash

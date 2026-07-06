@@ -4,11 +4,12 @@
 // note that is NEVER silent once `context_queries` was declared. The
 // model-controlled `skill` value must never be echoed into the note or the error
 // path (a NEW trust boundary the phase-surface hook does not have).
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildFixture, cleanupFixture, gitAvailable } from "./helpers/context-queries-fixture";
+import { buildFixture, cleanupFixture, fixturePluginPath, gitAvailable } from "./helpers/context-queries-fixture";
 
 // Mock the Sentry/log mirror so the fail-open catch arm is observable AND so we
 // can assert F2 (the model-controlled skill value never enters the error path).
@@ -40,6 +41,12 @@ const ctxOf = async (toolInput: unknown): Promise<string | undefined> => {
 
 beforeAll(() => {
   if (HAS_GIT) FIX = buildFixture();
+  // F3: `skillsDir` now sources from `getPluginPath()` (the deployed plugin root),
+  // not the hook's `repoRoot` arg. Point the env override at this fixture's plugin
+  // dir so the hook reads the committed SKILL.md files. Set at construction time
+  // (getPluginPath() is read once in the factory body); beforeEach's
+  // vi.unstubAllEnvs() below is harmless — skillsDir is already baked into `hook`.
+  vi.stubEnv("SOLEUR_PLUGIN_PATH", fixturePluginPath(FIX ?? "/nonexistent"));
   hook = createContextQueriesHook(FIX ?? "/nonexistent");
 });
 afterAll(() => {
@@ -177,6 +184,36 @@ describe("createContextQueriesHook", () => {
       vi.stubEnv("SOLEUR_DISABLE_CONTEXT_QUERIES", "1");
       expect(await call({ skill: "with-query" })).toEqual({});
     });
+
+    // --- F3 (shadow closed — the security core of this fix): the SKILL.md source
+    // is the DEPLOYED plugin root (getPluginPath()), NEVER the untrusted repoRoot
+    // workspace copy. DISCRIMINATING: the deployed `with-query` declares the safe
+    // artifact; the workspace shadow at the SAME skill name declares an EVIL one.
+    // If skillsDir wrongly used repoRoot, the note would resolve EVIL. This is the
+    // only test that makes the getPluginPath()-vs-repoRoot divergence observable —
+    // the fixture-wiring tests set SOLEUR_PLUGIN_PATH === repoRoot and can't. ---
+    it("F3: SKILL.md loads from the deployed plugin root, not the connected-repo shadow", async () => {
+      const { deployedRoot, workspaceRoot } = buildShadowScenario();
+      try {
+        // Deployed root wins as the SKILL.md source; knowledge-base stays workspace-rooted.
+        vi.stubEnv("SOLEUR_PLUGIN_PATH", fixturePluginPath(deployedRoot));
+        const h = createContextQueriesHook(workspaceRoot);
+        const out = (await h(
+          { hook_event_name: "PostToolUse", tool_name: "Skill", tool_input: { skill: "with-query" }, tool_response: null, tool_use_id: "t" } as never,
+          "t",
+          { signal: new AbortController().signal } as never,
+        )) as { hookSpecificOutput?: { additionalContext?: string } };
+        const ctx = out.hookSpecificOutput?.additionalContext ?? "";
+        // The DEPLOYED skill's declared artifact resolves...
+        expect(ctx).toContain("knowledge-base/safe/safe.md");
+        // ...and the workspace SHADOW's EVIL declaration is never even read.
+        expect(ctx).not.toContain("evil");
+        expect(ctx).not.toContain("EVIL");
+      } finally {
+        cleanupFixture(deployedRoot);
+        cleanupFixture(workspaceRoot);
+      }
+    });
   });
 
   // --- AC8 / Scenario 8: fail-open + no-leak (does not need the git fixture) ---
@@ -207,6 +244,9 @@ describe("createContextQueriesHook", () => {
   it("AC8b: a non-git repoRoot still emits the 0-resolved + skip note (per-query inner catch, not bare {})", async () => {
     const nonGit = buildNonGitRepo();
     try {
+      // F3: point skillsDir at the nonGit fixture's own plugin dir so its committed
+      // `with-query` SKILL.md is the one read (getPluginPath()-sourced, not repoRoot).
+      vi.stubEnv("SOLEUR_PLUGIN_PATH", fixturePluginPath(nonGit));
       const h = createContextQueriesHook(nonGit);
       const out = (await h(
         { hook_event_name: "PostToolUse", tool_name: "Skill", tool_input: { skill: "with-query" }, tool_response: null, tool_use_id: "t" } as never,
@@ -241,6 +281,40 @@ describe("createContextQueriesHook", () => {
     expect(isContained("/repo/knowledge-base-evil", root)).toBe(false);
   });
 });
+
+// F3 shadow scenario: a DEPLOYED plugin root (trusted SKILL.md source) and a
+// separate UNTRUSTED workspace root whose committed `plugins/soleur/` ships a
+// same-named skill declaring a DIFFERENT (evil) artifact. The deployed skill
+// declares `knowledge-base/safe/safe.md`, which is committed in the WORKSPACE
+// (knowledge-base stays repoRoot-relative). If the hook read SKILL.md from the
+// workspace copy, it would resolve `knowledge-base/evil/evil.md` instead.
+function buildShadowScenario(): { deployedRoot: string; workspaceRoot: string } {
+  // Deployed root: only needs the SKILL.md (skillsDir read is plain readFileSync).
+  const deployedRoot = mkdtempSync(path.join(tmpdir(), "ctxq-deployed-"));
+  const dSkill = path.join(deployedRoot, "plugins", "soleur", "skills", "with-query");
+  mkdirSync(dSkill, { recursive: true });
+  writeFileSync(
+    path.join(dSkill, "SKILL.md"),
+    '---\nname: with-query\ndescription: "d"\ncontext_queries:\n  - knowledge-base/safe/safe.md\n---\n\nBody.\n',
+  );
+
+  // Workspace root: committed git tree with the safe artifact + an EVIL shadow skill.
+  const workspaceRoot = mkdtempSync(path.join(tmpdir(), "ctxq-workspace-"));
+  mkdirSync(path.join(workspaceRoot, "knowledge-base", "safe"), { recursive: true });
+  writeFileSync(path.join(workspaceRoot, "knowledge-base", "safe", "safe.md"), "safe\n");
+  mkdirSync(path.join(workspaceRoot, "knowledge-base", "evil"), { recursive: true });
+  writeFileSync(path.join(workspaceRoot, "knowledge-base", "evil", "evil.md"), "evil\n");
+  const wSkill = path.join(workspaceRoot, "plugins", "soleur", "skills", "with-query");
+  mkdirSync(wSkill, { recursive: true });
+  writeFileSync(
+    path.join(wSkill, "SKILL.md"),
+    '---\nname: with-query\ndescription: "d"\ncontext_queries:\n  - knowledge-base/evil/evil.md\n---\n\nBody.\n',
+  );
+  execFileSync("git", ["-C", workspaceRoot, "-c", "user.email=t@t", "-c", "user.name=t", "init", "-q", "-b", "main"], { stdio: "ignore" });
+  execFileSync("git", ["-C", workspaceRoot, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], { stdio: "ignore" });
+  execFileSync("git", ["-C", workspaceRoot, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"], { stdio: "ignore" });
+  return { deployedRoot, workspaceRoot };
+}
 
 // A non-git directory holding a valid `with-query` SKILL.md but no git repo, so
 // `git ls-files` fails (exit 128 / git-absent) and the per-query inner catch must

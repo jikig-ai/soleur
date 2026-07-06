@@ -256,6 +256,20 @@ model {
     description "Keyless container-image signing/verification (cosign/Fulcio/Rekor). The release CI keyless-signs the pushed web app image digest (this IS a live sigstore call — github → sigstore below). The host then cosign-verifies the signature FULLY OFFLINE against a pinned trusted_root.json — it makes NO live sigstore call at verify time (ADR-087, #6005) — supply-chain authenticity for the shared host (#5933 Item 4)."
   }
 
+  // External UNTRUSTED plugin SOURCE — the connected repo's OWN committed
+  // `plugins/soleur/` directory. When an operator connects a repo that dogfoods
+  // Soleur (soleur-in-soleur), that repo's frozen committed plugin copy lands in
+  // the user's workspace. It is UNTRUSTED code: its `hooks/hooks.json` registers
+  // `type:"command"` hooks that the Agent SDK would run as subprocesses of the
+  // Node dispatch process (outside the bwrap tool sandbox, with the server's env +
+  // privileges). Distinct from the platform-controlled `plugin` system above. The
+  // untrusted-source counterpart to `contributor` (both #external, both gated by an
+  // explicit trust boundary — see the `connectedRepoPlugin -> skillloader` edge).
+  connectedRepoPlugin = system "Connected-Repo Plugin Copy" {
+    #external
+    description "The connected repo's own committed plugins/soleur/ dir, present in the user's workspace when they connect a Soleur-dogfooding repo. UNTRUSTED: its hooks/hooks.json command-hooks would run in the Node dispatch process (outside bwrap). INERT for the SDK — both real-SDK factories load plugins:[{path: getPluginPath()}] (the platform-deployed root), never this copy (ADR-093 trust boundary)."
+  }
+
   // ======================================================================
   // Relationships — preserved 1:1 from the three Mermaid sources.
   // ======================================================================
@@ -299,7 +313,17 @@ model {
   founder -> dashboard "Browses and converses" { technology "HTTPS" }
   dashboard -> api "Calls" { technology "HTTPS" }
   api -> claude "Spawns agent sessions" { technology "WebSocket" }
-  claude -> skillloader "Loads plugin" { technology "File I/O" }
+  claude -> skillloader "Loads plugin from the PLATFORM-DEPLOYED root (getPluginPath(), /app/shared/plugins/soleur) — never the connected-repo workspace copy (ADR-093)" { technology "File I/O" }
+  // ---- SDK plugin-source trust boundary (ADR-093, fix-plugin-shadow-deployed-load) --
+  // The untrusted connected-repo committed plugins/soleur/ is IGNORED by the loader:
+  // both real-SDK factories (cc-dispatcher.ts + agent-runner.ts startAgentSession)
+  // bind plugins:[{path: getPluginPath()}] (the platform-deployed root, workspace-
+  // independent, boot-validated by verifyPluginMountOnce). Loading the workspace copy
+  // would execute its hooks.json command-hooks in the dispatch process (outside bwrap)
+  // AND silently shadow every platform plugin fix (#4826 delivery wedge). Even the
+  // residual in-process SKILL.md reader (context-queries-hook) sources from the
+  // deployed root. See knowledge-base/.../2026-07-06-connected-repo-shadows-deployed-plugin-*.md.
+  connectedRepoPlugin -> skillloader "IGNORED by the loader (trust boundary): the committed workspace plugins/soleur/ is never the SDK load source — getPluginPath() (deployed root) is. Loading it would exec the repo's hooks.json in-process + shadow platform fixes (ADR-093, #4826)" { technology "File I/O (rejected)" }
   skillloader -> skills "Discovers" { technology "Directory scan" }
   skillloader -> agents "Discovers" { technology "Recursive scan" }
   hooks -> claude "Guards tool calls" { technology "Event hook" }
