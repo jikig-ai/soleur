@@ -105,6 +105,12 @@ jq_counts='{}'
 # `rule_id` / `event_type`; the valid_stream filter below excludes them
 # from the reduce. A separate jq pass populates these counts.
 drops_counts_json='{}'
+# Initialized at top level so the no-op guard (issue #6042) can read them on
+# the empty / absent / sentinel-only path without a `set -euo pipefail`
+# unbound-variable abort; the `[[ -s "$INCIDENTS_MERGED" ]]` block below only
+# assigns them when the merged log is non-empty.
+valid_lines=0
+drops_total=0
 if [[ -s "$INCIDENTS_MERGED" ]]; then
   total_lines=$(wc -l < "$INCIDENTS_MERGED")
   # Tolerant parse: fromjson? yields null on parse failure; select(.) drops
@@ -317,6 +323,26 @@ if [[ "$DRY_RUN" == "1" ]]; then
     orphan_list=$(echo "$report" | jq -r '.summary.orphan_rule_ids | join(", ")')
     echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2
     exit 5
+  fi
+  exit 0
+fi
+
+# --- No-op guard: zero rule-carrying incident lines (issue #6042) ----------
+# When the merged incident stream has zero valid rule_id rows — an empty or
+# absent .rule-incidents.jsonl (the fresh-checkout CI case) OR a sentinel-only
+# log (non-empty, but zero rule_id rows) — do NOT write rule-metrics.json and
+# do NOT rotate. A write here would clobber the committed real aggregate with an
+# all-zero snapshot; the authoritative producer is the local compound flow where
+# the log actually exists (ADR-091). Keyed on valid_lines (rule-carrying rows),
+# NOT file size — a sentinel-only file is non-empty but carries zero rule_id
+# rows, and that is the exact clobber this guard exists to prevent. The report
+# build and --dry-run print above are intentionally left intact so compound's
+# unused-rules hint (compound/SKILL.md step 8) still parses.
+if [[ "${valid_lines:-0}" -eq 0 ]]; then
+  echo "rule-metrics: 0 rule-carrying incident lines; leaving committed $OUT unchanged." >&2
+  if [[ "${drops_total:-0}" -gt 0 ]]; then
+    drops_breakdown=$(jq -r 'to_entries | map("\(.key)=\(.value)") | join(" ")' <<< "$drops_counts_json" 2>/dev/null || echo "")
+    echo "rule-metrics: filtered $drops_total telemetry-drop sentinel row(s) [${drops_breakdown}]; no aggregate written." >&2
   fi
   exit 0
 fi

@@ -50,6 +50,23 @@ write_event() {
     "$ts" "$rule" "$event" >> "$root/.claude/.rule-incidents.jsonl"
 }
 
+# Seed a pre-existing committed rule-metrics.json carrying REAL (non-zero) data.
+# Used by the no-op-guard tests (issue #6042): a zero-line aggregation must
+# leave this file byte-identical, so a clobber to all-zeros is detectable.
+seed_committed_metrics() {
+  local root="$1"
+  cat > "$root/knowledge-base/project/rule-metrics.json" <<'EOF'
+{
+  "schema": 1,
+  "generated_at": "2026-06-30T00:00:00Z",
+  "rules": [
+    { "id": "hr-rule-a-synthetic-test", "section": "Hard Rules", "hit_count": 5, "bypass_count": 0, "applied_count": 0, "warn_count": 0, "fire_count": 5, "prevented_errors": 5, "last_hit": "2026-06-29T00:00:00Z", "first_seen": "2026-05-01T00:00:00Z", "rule_text_prefix": "Rule A synthetic." }
+  ],
+  "summary": { "total_rules_tagged": 4, "rules_unused_over_8w": 3, "rules_bypassed_over_baseline": 0, "orphan_rule_ids": [], "drops_jq_fail_count": 0, "drops_rotation_fail_count": 0 }
+}
+EOF
+}
+
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
   if [[ "$expected" == "$actual" ]]; then
@@ -242,16 +259,21 @@ EOF
   rm -rf "$root"
 }
 
-# --- T5: empty jsonl → exit 0, well-formed JSON --------------------------
-t5_empty_jsonl_exits_zero() {
+# --- T5: absent incidents log → no-op, committed file untouched (#6042) ---
+# When .claude/.rule-incidents.jsonl does not exist (the fresh-checkout CI
+# case), the aggregator must exit 0, write NOTHING, and leave a pre-existing
+# committed rule-metrics.json byte-identical — no unbound-variable abort under
+# `set -euo pipefail` (valid_lines/drops_total must be top-level initialized).
+t5_absent_log_noop_leaves_committed_file_untouched() {
   local root; root=$(make_fixture_repo)
-  # No events at all — aggregator should still emit a valid report.
+  seed_committed_metrics "$root"
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+  local before; before=$(cat "$metrics")
+  # No incidents jsonl exists at all.
   local exit_code=0
   INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
-  assert_eq "T5 empty jsonl exit code"    "0" "$exit_code"
-  local metrics="$root/knowledge-base/project/rule-metrics.json"
-  assert_eq "T5 total_rules_tagged = 4"   "4" "$(jq -r '.summary.total_rules_tagged' < "$metrics")"
-  assert_eq "T5 orphan_rule_ids empty"    "0" "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+  assert_eq "T5 absent log → exit 0 (no unbound-var abort)" "0" "$exit_code"
+  assert_eq "T5 absent log → committed file byte-identical" "$before" "$(cat "$metrics")"
   rm -rf "$root"
 }
 
@@ -385,6 +407,10 @@ t10_sentinels_excluded_from_data_and_counted_in_summary() {
 }
 
 # --- T11: archived sentinel (gzipped) is merged + counted ----------------
+# The archive holds ONLY a sentinel (0 rule-carrying lines), so the aggregator
+# no-ops the write path (issue #6042) and never emits rule-metrics.json. Verify
+# the merge+count path still sees the archived sentinel via --dry-run, which
+# builds the full report (including drops_*) without writing.
 t11_archived_sentinel_counted() {
   local root; root=$(make_fixture_repo)
   # A sentinel that lives only in the .gz archive.
@@ -392,10 +418,68 @@ t11_archived_sentinel_counted() {
   printf '{"schema":1,"hook_event":"PreToolUse","error":"jq_fail","ts":"2026-04-15T08:00:00Z"}\n' > "$archive"
   gzip -f "$archive"
 
-  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1
+  local out
+  out=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" --dry-run 2>/dev/null || true)
+  assert_eq "T11 archived sentinel counted (via --dry-run)" "1" \
+    "$(echo "$out" | jq -r '.summary.drops_jq_fail_count')"
+  rm -rf "$root"
+}
+
+# --- T13: empty (0-byte) incidents log → no-op, committed file untouched ---
+t13_empty_log_noop_leaves_committed_file_untouched() {
+  local root; root=$(make_fixture_repo)
+  seed_committed_metrics "$root"
+  : > "$root/.claude/.rule-incidents.jsonl"   # exists but zero bytes
   local metrics="$root/knowledge-base/project/rule-metrics.json"
-  assert_eq "T11 archived sentinel counted" "1" \
-    "$(jq -r '.summary.drops_jq_fail_count' < "$metrics")"
+  local before; before=$(cat "$metrics")
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T13 empty log → exit 0" "0" "$exit_code"
+  assert_eq "T13 empty log → committed file byte-identical" "$before" "$(cat "$metrics")"
+  rm -rf "$root"
+}
+
+# --- T14: sentinel-only log (non-empty, 0 rule_id rows) → no-op + drops -----
+# The exact failure this PR kills: a sentinel-only file is NON-EMPTY, so a
+# file-size gate would still clobber committed real data with zeros. The guard
+# keys on valid_lines==0 (rule-carrying rows), not file size. Drop counts must
+# still reach stderr.
+t14_sentinel_only_noop_leaves_file_and_reports_drops() {
+  local root; root=$(make_fixture_repo)
+  seed_committed_metrics "$root"
+  printf '{"schema":1,"hook_event":"PreToolUse","error":"jq_fail","ts":"2026-04-25T11:00:00Z"}\n' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  printf '{"schema":1,"hook_event":"PreToolUse","error":"rotation_fail","ts":"2026-04-25T12:00:00Z"}\n' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+  local before; before=$(cat "$metrics")
+  local exit_code=0 stderr
+  stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
+  assert_eq "T14 sentinel-only → exit 0" "0" "$exit_code"
+  assert_eq "T14 sentinel-only → committed file byte-identical" "$before" "$(cat "$metrics")"
+  if echo "$stderr" | grep -q 'jq_fail'; then
+    echo "PASS: T14 sentinel-only → drop breakdown echoed to stderr"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: T14 sentinel-only → drop breakdown NOT in stderr"
+    echo "  stderr: $stderr"
+    FAIL=$((FAIL + 1))
+  fi
+  TOTAL=$((TOTAL + 1))
+  rm -rf "$root"
+}
+
+# --- T15: --dry-run on empty input still prints parseable JSON -------------
+# Regression guard for compound's unused-rules hint (SKILL.md:252-258): the
+# no-op guard must NOT gate the report build, so --dry-run still prints the
+# summary even when there are zero rule-carrying lines.
+t15_dry_run_empty_still_prints_json() {
+  local root; root=$(make_fixture_repo)
+  local out
+  out=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" --dry-run 2>/dev/null || true)
+  # 4 synthetic rules, none fired → all 4 unused.
+  assert_eq "T15 --dry-run empty prints parseable JSON summary" "4" \
+    "$(echo "$out" | jq -r '.summary.rules_unused_over_8w' 2>/dev/null || echo PARSE_FAIL)"
   rm -rf "$root"
 }
 
@@ -424,7 +508,7 @@ t2_unused_predicate_uses_fire_count
 t3_orphan_rule_id_exits_nonzero
 t4_rule_prune_excludes_rules_with_fire_events
 t4b_rule_prune_emits_candidates_with_first_seen
-t5_empty_jsonl_exits_zero
+t5_absent_log_noop_leaves_committed_file_untouched
 t6_te_prefix_not_orphan
 t7_te_plus_orphan_isolates_real_orphan
 t8_te_prefix_arbitrary_id
@@ -432,6 +516,9 @@ t9_archive_spanning_input
 t10_sentinels_excluded_from_data_and_counted_in_summary
 t11_archived_sentinel_counted
 t12_pencil_hook_ids_not_orphan
+t13_empty_log_noop_leaves_committed_file_untouched
+t14_sentinel_only_noop_leaves_file_and_reports_drops
+t15_dry_run_empty_still_prints_json
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
