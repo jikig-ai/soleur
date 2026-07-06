@@ -1,9 +1,10 @@
-# ADR-086: Fail-closed redaction-engine contract — normalize-before-match, capped, cross-skill shared
+# ADR-095: Fail-closed redaction-engine contract — normalize-before-match, capped, cross-skill shared
 
 - **Status:** Accepted
 - **Date:** 2026-07-05
 - **Issue:** [#5987](https://github.com/jikigai/soleur/issues/5987) (Wave 2 · FR4 of epic [#5983](https://github.com/jikigai/soleur/issues/5983))
 - **Adapted from:** gstack `redact-engine` (clean-room; see [plugins/soleur/NOTICE](../../../../plugins/soleur/NOTICE))
+- **Ordinal note:** Ordinal chain: 086 (original — one of three PRs that concurrently claimed 086 on 2026-07-05) → 093 (assigned in the #6054 collision cleanup) → **095** (bumped again mid-pipeline when a sibling ADR landed 093 on main before this merged). Moved to the next-free ordinal each time.
 
 ## Context
 
