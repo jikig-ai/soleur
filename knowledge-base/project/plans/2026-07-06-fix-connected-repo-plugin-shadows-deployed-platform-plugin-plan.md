@@ -371,12 +371,18 @@ unverified delivery mechanism). The operator's call, surfaced via AskUserQuestio
 Run `gh issue list --label code-review --state open --json number,title,body` and `jq --arg path <each>` against
 Files-to-Edit at /work (deferred until the edit list is frozen). Record `None` / dispositions there.
 
+**Disposition (Slice A /work, 2026-07-06):** `None`. The four open `code-review` issues (#4529 compound-docs, #4525
+`resolveCurrentOrganizationId` migration, #4254 tenant-iso fixture drift, #3829 Sentry-monitor CI gate) touch none of
+Slice A's edited files (`cc-dispatcher.ts`, `agent-runner.ts`, `context-queries-hook.ts`, `plugin-path.ts`,
+`agent-runner-query-options.ts`, `workspace.ts`, `model.c4`/`views.c4`).
+
 ## Deferrals (tracked)
-- **Broader `${CLAUDE_PLUGIN_ROOT}` migration** for the non-worktree-manager script families (`archive-kb.sh`,
-  `deploy.sh`, `pencil-setup check_deps.sh`, `feature-video`, `community-router.sh`, `compound token-efficiency-report.sh`,
-  brand/validation workshop refs — ~9 sites). Lower risk (sandboxed Bash-tool, not the in-process hook path) but the
-  HARD AC's spirit wants them eventually deployed-anchored. **File a `follow-up` tracking issue** with the site list +
-  re-eval criterion ("after this PR soaks; batch-migrate the remaining families"). Do NOT leave silent.
+- **Slice B (Phase 2+3) + broader `${CLAUDE_PLUGIN_ROOT}` migration** — filed as **#6121** (consolidated tracker,
+  `type/security` + `deferred-scope-out`, milestone Phase 4). Covers: the delivery half (`CLAUDE_PLUGIN_ROOT` env
+  injection + F2 in-image env-propagation proof + F1 `safe-bash.ts` exact-literal carve-out + wedge-flow skill
+  migration) AND the non-worktree-manager script families (`archive-kb.sh`, `deploy.sh`, `pencil-setup check_deps.sh`,
+  `feature-video`, `community-router.sh`, `compound token-efficiency-report.sh`, brand/validation workshop refs — ~9
+  sites). Re-eval criterion recorded in the issue: after PR-A soaks + Slice B's safe-bash/F2 are on-host-verified.
 
 ---
 

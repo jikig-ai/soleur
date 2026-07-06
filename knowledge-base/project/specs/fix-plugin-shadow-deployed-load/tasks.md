@@ -34,7 +34,7 @@ lane: cross-domain · brand_survival_threshold: single-user incident · requires
 - [x] C2 C4: **DONE.** Added `connectedRepoPlugin` untrusted `#external` element + trust-boundary comment (mirrors `contributor`); annotated `claude -> skillloader "Loads plugin from the PLATFORM-DEPLOYED root"`; added the `connectedRepoPlugin -> skillloader "IGNORED (trust boundary)"` edge; included it in the `containers` view. `c4-code-syntax.test.ts` + `c4-render.test.ts` green (23 passed).
 - [x] C3 Observability: **DONE (reduced Phase 5 + folds in Phase-6/B6 collision warn).** `scaffoldWorkspaceDefaults` emits a `connectedRepoShipsPlugin` diagnostic breadcrumb when a connected repo ships a committed `plugins/soleur/` dir (existing-logger channel; no new pipeline). No dead-branch per-dispatch `source` probe. 2 new tests.
 - [x] C4 Learning file re-captured + enhanced (canary reconciliation, two-factory correction, F3/loaded-gun, reduced observability): `knowledge-base/project/learnings/bug-fixes/2026-07-06-connected-repo-shadows-deployed-plugin-via-workspace-relative-path.md`.
-- [ ] C5 Follow-up issue: broader `${CLAUDE_PLUGIN_ROOT}` migration (ship/brainstorm/merge-pr/drain-prs/fix-issue/git-worktree examples + archive-kb/deploy/pencil-setup/feature-video/community families) + Slice B (Phase 2+3).
+- [x] C5 Follow-up issue **#6121** filed (consolidated: Slice B Phase 2+3 + broader `${CLAUDE_PLUGIN_ROOT}` migration). `type/security` + `deferred-scope-out`, milestone Phase 4. Net-flow +1 (justified — larger on-host-gated work-stream).
 - [ ] C6 `tsc --noEmit` clean (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`); full suite green (vitest, NOT `npm run -w`).
 
 ## Post-merge (operator)
