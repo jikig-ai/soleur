@@ -33,6 +33,12 @@ resource "cloudflare_record" "app" {
 # label, covered by `*.soleur.ai`, so the handshake completes. Do NOT push this back to a
 # two-level name without a paid Advanced Certificate Manager / Total TLS cert.
 #
+# NOTE: the cloudflare provider treats `name` as ForceNew — changing it destroys and
+# recreates the record (NOT an in-place update), so a rename of this probe hostname trips
+# the apply-web-platform-infra destroy-guard and needs `[ack-destroy]` in the merge commit.
+# The replacement is safe: this is the monitoring PROBE record, not the app ingress
+# (`cloudflare_record.app`), and no user traffic flows through it.
+#
 # for_each gates on `if v.monitored` (NOT all of var.web_hosts): web-2's server is excluded
 # from the auto-apply -target set until the #5274 cutover, so an ungated for_each would drag
 # hcloud_server.web["web-2"] into a routine -target apply. web-2's record+monitor both land
