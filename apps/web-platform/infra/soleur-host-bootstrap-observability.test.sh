@@ -14,7 +14,9 @@ set -euo pipefail
 #   - a single `bootstrap_complete` breadcrumb (distinguishes "died IN bootstrap" from
 #     "bootstrap completed, died downstream")
 #   - a baked `soleur-boot-emit` written by bootstrap.sh for the downstream region
-#     (zero user_data — the 32,768-byte cap has only ~0.4 KB headroom)
+#     (zero user_data cost; note the 32,768-byte cap applies to the base64gzip render, not
+#     the raw file — `gzip -9 -c cloud-init.yml | base64 -w0 | wc -c` is ~17 KB, so there is
+#     ~15 KB of real headroom post-#6090; the old "~0.4 KB" figure predates the gzip wrap)
 #   - READINESS GATES (cloudflared_ready / webhook_bound) — the ONLY detector for an
 #     async systemd-service death (enable returns 0, service never binds :9000)
 #   - H3 fix: restore `set +e` after the extraction block so its `set -e` no longer
