@@ -639,3 +639,40 @@ modeled person); `github = system "GitHub"` (`model.c4`) and the
 change is an internal mechanic of that existing edge and falsifies no element
 description. No new external actor/system, container/data-store, or
 actor↔surface access relationship.
+
+## Amendment — 2026-07-06 (#6072): the CLA Required ruleset joins this IaC root
+
+This ADR's accepted decision — "the branch-protection ruleset is
+Terraform-managed" — was authored with a Context naming only the **CI Required**
+ruleset (id 14145388). It now **extends to a second ruleset**: the **CLA
+Required** ruleset (id 13304872) is managed by the same `infra/github/` root via
+`ruleset-cla-required.tf`, applied by the same `apply-github-infra.yml`
+apply-on-merge path, and drift-guarded by the same daily
+`cron-ruleset-bypass-audit` + the `T-cla-1`/`T-cla-1b` canonical↔`.tf` sync gates
+(now pinned to the `.tf`, mirroring `T-rsc-9`). `scripts/create-cla-required-ruleset.sh`
+is demoted to a **DR-only restore skeleton** mirroring
+`scripts/create-ci-required-ruleset.sh` (it reads the two CLA canonical JSONs via
+`jq --slurpfile`; the inline heredoc payload is retired). This is an **extension
+of the accepted decision, not a new decision** — hence an amendment, no new ADR
+ordinal.
+
+**Enforced values unchanged.** The migration is declaration-surface only: the two
+required checks (`cla-check`, `cla-evidence` @ integration_id 15368) and the three
+bypass actors (OrganizationAdmin/pull_request, RepositoryRole:5/pull_request,
+Integration:1236702/always — the CLA bot) are byte-identical to the former
+imperative payload and to the live ruleset, so the first apply is a no-op
+import-then-reconcile (verified live-vs-`.tf` at plan time). The compliance
+posture the CLO reviewed in #6061 is unchanged.
+
+**Divergences from `ruleset-ci-required.tf` (intended, documented in the `.tf`
+header):** `strict_required_status_checks_policy = false` (CI is `true`); a third
+bypass actor (the CLA bot Integration); two required checks (no GHAS/CodeQL
+rollup, so the CLA `.tf` references no CodeQL integration id). The
+OrganizationAdmin `actor_id = 0` HCL sentinel (provider issue #2536) normalizes to
+the canonical's `null` in `T-cla-1b` (SE-1).
+
+**C4 impact:** none. Same reasoning as the CI ruleset (already absent from the C4
+model): the CLA ruleset is a GitHub-side CI/governance control on the existing
+`engine -> github` build-plane edge, not a modeled runtime element. Checked
+`model.c4` / `views.c4` / `spec.c4` — no `ruleset`/`branch protection` elements.
+No new external actor/system, container/data-store, or access relationship.

@@ -19,12 +19,12 @@
 // (deleted in #4483, TR9 Phase 2). Pure TS — no agent spawn, no ephemeral
 // workspace. All IO via Octokit (installation-scoped token).
 //
-// Source of truth for the CI ruleset is Terraform (infra/github/
-// ruleset-ci-required.tf); for the CLA ruleset it is the imperative
-// scripts/create-cla-required-ruleset.sh (Terraform-ifying CLA is deferred —
-// #6061 Phase 6.1). The canonical JSON snapshots this audit reads are kept in
-// lockstep with those sources by sync gates in
-// tests/scripts/test-audit-ruleset-bypass.sh.
+// Source of truth for BOTH rulesets is now Terraform (infra/github/): the CI
+// ruleset is ruleset-ci-required.tf and the CLA ruleset is
+// ruleset-cla-required.tf (Terraform-ified in #6072; scripts/
+// create-cla-required-ruleset.sh is now a DR-only restore skeleton). The
+// canonical JSON snapshots this audit reads are kept in lockstep with those
+// `.tf` sources by sync gates in tests/scripts/test-audit-ruleset-bypass.sh.
 //
 // Guard-fault vs. drift routing (#6061): a corrupt/empty canonical, a redacted
 // bypass_actors (token scope), or a network/API error is an ops/infra fault —
@@ -126,7 +126,7 @@ const CLA_AUDIT_CONFIG: RulesetAuditConfig = {
   canonicalRscPath:
     "scripts/ci-cla-required-ruleset-canonical-required-status-checks.json",
   driftTitle: "[Ruleset Audit] CLA Required ruleset drift",
-  sourceHint: "scripts/create-cla-required-ruleset.sh",
+  sourceHint: "infra/github/ruleset-cla-required.tf",
 };
 
 // Per-ruleset audit result. Guard fault (guardBroken) is a Sentry-routed ops

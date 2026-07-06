@@ -99,16 +99,18 @@ files a separately-titled issue **`[Ruleset Audit] CLA Required ruleset drift`**
 `domain/legal`). A CLA-step fault or drift cannot abort the CI step, and vice
 versa.
 
-**Source of truth (differs from CI):** the CLA ruleset is **imperatively
-managed** by [`scripts/create-cla-required-ruleset.sh`](../../../../scripts/create-cla-required-ruleset.sh)
-— there is **no Terraform** for it yet (Terraform-ifying it is a tracked
-follow-up, #6061 Phase 6.1). The audit compares the live ruleset against two
-canonical snapshots:
+**Source of truth (now Terraform, same as CI):** as of #6072 the CLA ruleset is
+**Terraform-managed** by [`infra/github/ruleset-cla-required.tf`](../../../../infra/github/ruleset-cla-required.tf),
+applied by `apply-github-infra.yml` on merge — exactly like the CI ruleset.
+[`scripts/create-cla-required-ruleset.sh`](../../../../scripts/create-cla-required-ruleset.sh)
+is now a **DR-only restore skeleton** (it reads the canonicals; the update path
+is `terraform apply`). The audit compares the live ruleset against two canonical
+snapshots:
 
 - `scripts/ci-cla-required-ruleset-canonical-bypass-actors.json`
 - `scripts/ci-cla-required-ruleset-canonical-required-status-checks.json`
 
-kept in lockstep with the create-script's inline blocks by the `T-cla-1` /
+kept in lockstep with `infra/github/ruleset-cla-required.tf` by the `T-cla-1` /
 `T-cla-1b` sync gates in `tests/scripts/test-audit-ruleset-bypass.sh`, and with
 `scripts/required-checks.txt` by Test 7 in
 `plugins/soleur/test/required-checks-canonical-parity.test.sh`.
@@ -133,8 +135,9 @@ CLO/operator must **chase the contributor's CLA signature post-hoc** (request it
 from the identifiable contributor) or, if unobtainable (anonymous/adversarial
 author), **revert the unsigned contribution** to keep the IP-provenance chain
 auditable. If the drift was an *authorized* change, reconcile
-`scripts/create-cla-required-ruleset.sh` **and** the two CLA canonical JSONs
-together (the sync gates require both).
+`infra/github/ruleset-cla-required.tf` **and** the two CLA canonical JSONs
+together (the sync gates require both; `apply-github-infra.yml` applies the `.tf`
+on merge).
 
 **Probe the live CLA state directly** (read-only, admin-scoped workstation):
 

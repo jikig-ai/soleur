@@ -360,11 +360,11 @@ Refactor to mirror `scripts/create-ci-required-ruleset.sh` (the CI DR precedent)
 
 ### Pre-merge (PR)
 
-- [ ] `infra/github/ruleset-cla-required.tf` exists and `terraform fmt -check` passes on
+- [x] `infra/github/ruleset-cla-required.tf` exists and `terraform fmt -check` passes on
       `infra/github/` (the `infra-validation.yml` `validate` job is green for `infra/github`).
-- [ ] `cd infra/github && terraform init -backend=false && terraform validate` passes
+- [x] `cd infra/github && terraform init -backend=false && terraform validate` passes
       (schema-valid HCL for both resources).
-- [ ] `.tf` declares exactly: `enforcement = "active"`; `strict_required_status_checks_policy = false`;
+- [x] `.tf` declares exactly: `enforcement = "active"`; `strict_required_status_checks_policy = false`;
       two `required_check` contexts `cla-check` + `cla-evidence`, both
       `integration_id = var.actions_integration_id`; three `bypass_actors`
       (`OrganizationAdmin`/`pull_request`, `RepositoryRole` id `5`/`pull_request`,
@@ -373,22 +373,22 @@ Refactor to mirror `scripts/create-ci-required-ruleset.sh` (the CI DR precedent)
       names the token):
       `grep -cE '^[[:space:]]*required_check[[:space:]]*\{' ruleset-cla-required.tf` → 2;
       `grep -cE '^[[:space:]]*bypass_actors[[:space:]]*\{' ruleset-cla-required.tf` → 3.
-- [ ] `bash tests/scripts/test-audit-ruleset-bypass.sh` exits 0 with `T-cla-1` and
+- [x] `bash tests/scripts/test-audit-ruleset-bypass.sh` exits 0 with `T-cla-1` and
       `T-cla-1b` reporting `ok` **against the `.tf`** (not the create-script). Confirm the
       run output names `ruleset-cla-required.tf`, and `grep -c _cla_create_payload
       tests/scripts/test-audit-ruleset-bypass.sh` → 0 (heredoc slicer deleted).
-- [ ] `T-cla-1b` is non-vacuous: temporarily flip the `.tf` OrganizationAdmin `actor_id`
+- [x] `T-cla-1b` is non-vacuous: temporarily flip the `.tf` OrganizationAdmin `actor_id`
       to a non-sentinel value (e.g. `7`) and confirm `T-cla-1b` reports `fail`; revert.
-- [ ] Import-gate rewrite is per-address:
+- [x] Import-gate rewrite is per-address:
       `grep -c 'import_ruleset github_repository_ruleset' apply-github-infra.yml` → 2, and no
       remaining blanket `grep -qE '\^github_repository_ruleset'` gate.
-- [ ] `cron-ruleset-bypass-audit.ts` `CLA_AUDIT_CONFIG.sourceHint ===
+- [x] `cron-ruleset-bypass-audit.ts` `CLA_AUDIT_CONFIG.sourceHint ===
       "infra/github/ruleset-cla-required.tf"`; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
-- [ ] `grep -rn 'create-cla-required-ruleset.sh' apps/web-platform/server/inngest knowledge-base/engineering/operations/runbooks`
+- [x] `grep -rn 'create-cla-required-ruleset.sh' apps/web-platform/server/inngest knowledge-base/engineering/operations/runbooks`
       returns only DR-context mentions (no "source of truth"/"deferred/no-Terraform" assertions remain).
-- [ ] `scripts/create-cla-required-ruleset.sh` no longer contains the `cat > "$payload" << 'EOF'`
+- [x] `scripts/create-cla-required-ruleset.sh` no longer contains the `cat > "$payload" << 'EOF'`
       heredoc; `bash -n scripts/create-cla-required-ruleset.sh` parses.
-- [ ] ADR-032 carries a dated CLA amendment; `grep -q 'ruleset-cla-required.tf' ADR-032*.md` → true.
+- [x] ADR-032 carries a dated CLA amendment; `grep -q 'ruleset-cla-required.tf' ADR-032*.md` → true.
 
 ### Post-merge (auto, no operator action)
 
