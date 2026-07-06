@@ -12,6 +12,17 @@ created: 2026-07-07
 
 > Note: No `spec.md` exists for this branch — `lane:` defaulted to `cross-domain` (TR2 fail-closed) per plan skill Save-Tasks rule.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-07
+**Halt gates cleared:** 4.6 User-Brand Impact (threshold `none`, non-sensitive path), 4.7 Observability (skips — test path not in code/infra trigger set), 4.8 PAT-shaped (no hits), 4.9 UI-wireframe (no UI surface).
+
+### Key improvements from precedent-diff (Phase 4.4)
+
+1. **Reuse the existing extractor, don't fork one.** `plugins/soleur/test/lib/discoverability-test-parser.ts` already exports `extractObservabilityBlock(body)` — walks `^## Observability` → next `^## ` heading. The parity test SHOULD import it for the single-block surfaces and mirror its heading-boundary logic for the 3-block template walk, so we don't add a second observability extractor that can itself drift.
+2. **Confirmed no duplication.** `preflight-discoverability-test.test.ts` tests the Check-10 discoverability_test *parser/classifier runtime* (SSH reject, 8 decision states) — NOT field-name parity across the 4 doc surfaces. This new test is a distinct concern.
+3. **Precedent parity-test shape** to match: `terraform-target-parity.test.ts`, `trigger-cron-allowlist-parity.test.ts` (both `bun:test`, canonical-source → mirror-surface set-equality). The `yaml` package is available (`plugins/soleur/test/helpers.ts` imports `parse as parseYaml`), but regex top-level-key extraction is sufficient and lower-drift here.
+
 ## Overview
 
 The `## Observability` block schema — 5 top-level fields (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`) — introduced by PR #4123 (Ref #4116) is replicated verbatim across **4 surfaces** with no compile-time or commit-time guard. Phase 4.7 of `deepen-plan` enforces the schema at *plan-authoring runtime* (against a plan file), but nothing guards the **canonical schema definitions themselves** against drifting apart. A rename or field add/remove in any single surface silently desyncs the gate from its own template.
@@ -77,6 +88,13 @@ Assertions (one `test()` per surface):
 2. **`plan-issue-templates.md`**: block-walk every `## Observability` yaml block. Assert **exactly 3** blocks found (catches a dropped/added template). For each block, assert `topLevelKeys(block)` set-equals `CANONICAL`.
 3. **`deepen-plan/SKILL.md` §4.7**: for every line that enumerates the fields (`For each of the 5 required top-level fields (…)` and the empty-key line), extract all `` `([a-z_]+)` `` tokens; assert the extracted set (filtered to the canonical namespace) set-equals `CANONICAL`. Assert the literal count word `5` in "the 5 required top-level fields" equals `CANONICAL.length`.
 4. **`AGENTS.core.md`**: locate the `hr-observability-as-plan-quality-gate` rule line. Assert it contains `(${CANONICAL.length} fields)` (count parity), `discoverability_test`, and a WITHOUT-SSH invariant token (`WITHOUT SSH`). Names are intentionally not asserted here (see design nuance).
+
+#### Research Insights — extraction details (Phase 4.4 precedent)
+
+- **Canonical block** (`plan/SKILL.md`): locate the fenced block whose opening ```` ```yaml ```` follows the line `**Required schema (verbatim`; collect its body until the closing ```` ``` ````. `topLevelKeys` on that body yields the 5 canonical names. (The canonical schema is under `### 2.9`, NOT a `## Observability` heading — so `extractObservabilityBlock` does not apply to the canonical surface; use the fence-after-marker locator.)
+- **Template blocks** (`plan-issue-templates.md`): the 3 blocks ARE under `## Observability` headings. Reuse the boundary logic from `plugins/soleur/test/lib/discoverability-test-parser.ts#extractObservabilityBlock` (walk `^## Observability` → next `^## `), but as a **multi-block** walk (the shipped helper returns only the first block; either extend it to return all, or inline the same loop collecting every block). Then take the fenced ```` ```yaml ```` body inside each and run `topLevelKeys`.
+- **deepen-plan §4.7**: extract every `` `([a-z_]+)` `` token from the two enumeration lines (the `For each of the 5 required top-level fields (…)` line and the empty-key line), intersect with the canonical namespace, assert set-equality.
+- **DRY guard:** prefer importing/extending the existing extractor over writing a third `## Observability` parser — a forked extractor is itself a drift surface (the exact failure class this test guards against).
 
 ### Phase 2 — Prove the guard bites (RED evidence)
 

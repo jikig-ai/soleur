@@ -9,7 +9,7 @@ issue: 4133
 ## Phase 1 — Setup / Write test
 
 - [ ] 1.1 Create `plugins/soleur/test/observability-schema-parity.test.ts` (`bun:test`, resolve `REPO_ROOT` via `import.meta.dir`).
-- [ ] 1.2 Implement `topLevelKeys(blockBody)` (column-0 `^([a-z_]+):` extractor) and `observabilityYamlBlocks(md)` (walk every ```yaml block under a `## Observability` heading).
+- [ ] 1.2 Implement `topLevelKeys(blockBody)` (column-0 `^([a-z_]+):` extractor). For `## Observability` block extraction, REUSE/extend `extractObservabilityBlock` from `plugins/soleur/test/lib/discoverability-test-parser.ts` (multi-block variant — shipped helper returns only the first block); do NOT fork a third parser. Canonical `plan/SKILL.md §2.9` block is under `### 2.9` (not `## Observability`) → locate the ```yaml fence after the `**Required schema (verbatim` marker.
 
 ## Phase 2 — Core assertions (one test per surface)
 
