@@ -516,7 +516,7 @@ fi
 t16c="${TMP_DIR}/t16c.txt"
 python3 -c "
 import base64, sys
-good = base64.b64encode(b'sk_' + b'live_0000ABCD1234567890abXY').decode()
+good = base64.b64encode(b'sk_' + b'live_0000ABCD1234567890abXY').decode()  # split literal: gitleaks stripe rule (cq-test-fixtures-synthesized-only)
 sys.stdout.write('bad !!!====notbase64==== ' + good + ' end\n')
 " > "${t16c}"
 bash "${SENTINEL}" "${t16c}" >/dev/null 2>&1
