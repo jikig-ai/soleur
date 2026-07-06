@@ -376,5 +376,45 @@ else
   no "AC16: surface step must derive MSG_RE from QUERY and filter events client-side (test(\$re))"
 fi
 
+# ── AC17 (#6090): package install moved from the opaque config phase into instrumented runcmd ──
+# recreate 28819237402 localized web-2's death to the packages:/config phase (bootcmd_start fired,
+# runcmd_start never did). apt now runs under the top-armed trap with named stages + timeouts so a
+# HANG becomes a NAMED fatal (stage=apt_update/apt_install), and the cloud-config packages: block
+# is removed (else the hang would remain in the opaque config phase).
+if grep -qE 'STAGE=apt_update' "$CI" && grep -qE 'STAGE=apt_install' "$CI"; then
+  ok "AC17: apt runs in instrumented runcmd with named stages (apt_update/apt_install)"
+else
+  no "AC17: cloud-init must set STAGE=apt_update + STAGE=apt_install in the runcmd apt block"
+fi
+if grep -qE '^packages:' "$CI"; then
+  no "AC17: cloud-config packages: must be REMOVED (a config-phase hang would stay opaque) — install in runcmd"
+else
+  ok "AC17: no cloud-config packages: block (install moved to instrumented runcmd)"
+fi
+if grep -qE 'timeout [0-9]+ apt-get update' "$CI" && grep -qE 'timeout [0-9]+ apt-get install' "$CI"; then
+  ok "AC17: apt update+install are timeout-wrapped (a HANG becomes a named fatal, not a ~640s poll timeout)"
+else
+  no "AC17: apt-get update/install must be timeout-wrapped so a hang trips the trap with a named stage"
+fi
+# Ordering: STAGE must be set BEFORE the hang-capable command (else the fatal mis-attributes), and
+# the apt block must sit AFTER the trap arm (else no emit coverage). Guards a silent regression.
+su_ln=$(grep -nE '^\s*STAGE=apt_update' "$CI" | head -1 | cut -d: -f1 || true)
+auu_ln=$(grep -nE 'timeout [0-9]+ apt-get update' "$CI" | head -1 | cut -d: -f1 || true)
+armln2=$(grep -nE '^\s*trap on_err EXIT' "$CI" | head -1 | cut -d: -f1 || true)
+if [ -n "$su_ln" ] && [ -n "$auu_ln" ] && [ -n "$armln2" ] && [ "$armln2" -lt "$su_ln" ] && [ "$su_ln" -lt "$auu_ln" ]; then
+  ok "AC17: trap-arm ($armln2) < STAGE=apt_update ($su_ln) < apt-get update ($auu_ln) — covered + correctly attributed"
+else
+  no "AC17: need trap-arm < STAGE=apt_update < apt-get update (arm=$armln2 stage=$su_ln update=$auu_ln)"
+fi
+# The cloudflare keyring must be fetched BEFORE the first apt-get update — the cloudflare source is
+# active from boot (write_files), so an update before the key deterministically fails (missing
+# signed-by keyring) and masks the real cause. (Anchor on the curl fetch, not the deb/signed-by line.)
+cfk_ln=$(grep -nE 'curl.*cloudflare-main\.gpg' "$CI" | head -1 | cut -d: -f1 || true)
+if [ -n "$cfk_ln" ] && [ -n "$auu_ln" ] && [ "$cfk_ln" -lt "$auu_ln" ]; then
+  ok "AC17: cloudflare keyring fetched (line $cfk_ln) BEFORE apt-get update ($auu_ln) — no missing-key fatal"
+else
+  no "AC17: cloudflare-main.gpg must be curl-fetched before the first apt-get update (cfk=$cfk_ln update=$auu_ln)"
+fi
+
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]
