@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-03
+last_updated: 2026-07-07
 ---
 
 # Expenses
@@ -17,6 +17,7 @@ last_updated: 2026-07-03
 | Hetzner CX33 (web-2) | Hetzner | hosting | 15.37 | active | 2026-08-01 | 2nd web host (4 vCPU, 8 GB RAM, 160 GB SSD, hel1) for the multi-host /workspaces GA line (#5274 Phase 3, ADR-068). Same spec as the existing web CX33; joins the `for_each` cluster + `hcloud_placement_group` spread. Provisions on the 3.A maintenance-window apply (placement-group attach reboots web-1). DPA: covered by the existing Hetzner DPA (same account, no new sub-processor). VERIFY actual draw on the next Hetzner invoice |
 | Hetzner Volume (web-2, 20 GB) | Hetzner | hosting | 0.88 | active | 2026-08-01 | Per-host /workspaces block volume for web-2 (host-local NVMe worktrees — ADR-068 §1), hel1 (#5274 Phase 3). Same spec as the existing web /workspaces volume. VERIFY on invoice |
 | Hetzner Primary IPv4 (web-2) | Hetzner | hosting | 0.54 | active | 2026-08-01 | Public IPv4 for web-2 (egress + Cloudflare-fronted app ingress once 3.D rewires DNS; public ingress is deny-all except CF/admin by firewall). ~EUR 0.50/mo — VERIFY on invoice. Placement group itself is free (Hetzner) |
+| Hetzner CAX11 (registry) | Hetzner | hosting | 4.32 | approved-not-billing | 2026-08-01 | Dedicated ARM64 host (`hcloud_server.registry`, cax11: 2 vCPU Ampere, 4 GB RAM) for the self-hosted **zot** container registry + an attached `hcloud_volume` for registry storage (`/var/lib/zot`). Part of migrating the container registry off GitHub Container Registry (GHCR) to self-hosted zot on Hetzner. ~EUR 4/mo combined (cax11 ~EUR 3.79/mo + a small storage volume); USD amount is an estimate at ~1.08 FX — VERIFY actual draw on the next Hetzner invoice. Provisions on the operator's post-merge full `terraform apply`; **billing begins at provision** (flip status approved-not-billing → active then). DPA: covered by the existing Hetzner DPA (same account, no new sub-processor). See issue #6122, ADR-093, PR #6120 |
 | Supabase Pro + Custom Domain | Supabase | saas | 35.00 | active | 2026-04-03 | Pro plan ($25/mo) + custom domain add-on ($10/mo). Custom domain: api.soleur.ai for branded OAuth callbacks |
 | Supabase Inngest project (Micro compute) | Supabase | saas | 10.00 | active | 2026-06-17 | Dedicated EU project `soleur-inngest-prd` (ref pigsfuxruiopinouvjwy, eu-west-1) for the durable Inngest Postgres backend (#5450). Org is on Pro, so a 3rd project bills ~$10/mo Micro compute (Nano is Free-plan-only) — the plan's "free-tier-capable" assumption was false. Isolation rationale: breaks shared-fate + connection-budget contention with the main app's project (architecture review P1-1). Verify actual compute draw on the next invoice |
 | Stripe | Stripe | payments | 0.00 | test-mode | - | Payment processing for web platform. Live costs: 2.9% + $0.30/charge (US), 1.5% + EUR 0.25/charge (EU cards). No monthly minimum |
