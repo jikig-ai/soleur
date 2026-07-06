@@ -35,7 +35,7 @@ lane: cross-domain · brand_survival_threshold: single-user incident · requires
 - [x] C3 Observability: **DONE (reduced Phase 5 + folds in Phase-6/B6 collision warn).** `scaffoldWorkspaceDefaults` emits a `connectedRepoShipsPlugin` diagnostic breadcrumb when a connected repo ships a committed `plugins/soleur/` dir (existing-logger channel; no new pipeline). No dead-branch per-dispatch `source` probe. 2 new tests.
 - [x] C4 Learning file re-captured + enhanced (canary reconciliation, two-factory correction, F3/loaded-gun, reduced observability): `knowledge-base/project/learnings/bug-fixes/2026-07-06-connected-repo-shadows-deployed-plugin-via-workspace-relative-path.md`.
 - [x] C5 Follow-up issue **#6121** filed (consolidated: Slice B Phase 2+3 + broader `${CLAUDE_PLUGIN_ROOT}` migration). `type/security` + `deferred-scope-out`, milestone Phase 4. Net-flow +1 (justified — larger on-host-gated work-stream).
-- [ ] C6 `tsc --noEmit` clean (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`); full suite green (vitest, NOT `npm run -w`).
+- [x] C6 `tsc --noEmit` clean; full web-platform vitest suite green: **11997 passed / 0 failed** (256 skipped, 967 files), VITEST_RC=0.
 
 ## Post-merge (operator)
 - [ ] P1 Read `/hooks/deploy-status` reason == `ok`; if `canary_sandbox_failed`, triage as HOST bwrap/userns (NOT the plugin path — do not revert).
