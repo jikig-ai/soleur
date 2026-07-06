@@ -44,8 +44,10 @@ If `$ARGUMENTS` contains no `#N` substrings (e.g., a plan file path or freeform 
 
 ```bash
 SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
-  bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
+  bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh" --yes create feat-one-shot-<slugified-arguments>
 ```
+
+(`${CLAUDE_PLUGIN_ROOT}` → the DEPLOYED worktree-manager.sh, not a connected repo's shadowing `plugins/soleur/` copy — #4826.)
 
 If the script exits non-zero and its output contains `NO_GIT_REPOSITORY`, the workspace lost its git checkout between the Step 0 (pre) gate and now (e.g. a reclaim). STOP — do NOT spawn the planning subagent. Reply with the same honest, no-wait message from Step 0 (pre). Do not retry or improvise alternative worktree paths.
 
