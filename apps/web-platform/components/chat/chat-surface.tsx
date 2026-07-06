@@ -546,8 +546,9 @@ export function ChatSurface({
   // feat-one-shot-concierge-web-duplicate-question-box — the agent is PARKED
   // (awaiting the operator, NOT working) while an unresolved `review_gate` or
   // `autonomous_disclosure` is on screen. These are the exact two surfaces
-  // whose `canUseTool` site flips the server conversation status to
-  // `waiting_for_user` and pauses the runaway wall-clock (cc-dispatcher.ts).
+  // whose `canUseTool` site (permission-callback.ts) sets the server
+  // conversation status to `waiting_for_user`, which cc-dispatcher.ts then
+  // observes to pause the runaway wall-clock (cc-dispatcher.ts:2530).
   // Both keep `streamState === "streaming"` (they are not turn-active events),
   // so the live-narration slot below would otherwise show a contradictory
   // "Still working…" spinner while the operator is being asked to decide. The

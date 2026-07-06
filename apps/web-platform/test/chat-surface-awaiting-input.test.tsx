@@ -122,4 +122,29 @@ describe("ChatSurface — 'Still working…' suppressed while awaiting operator 
     await renderStreaming([reviewGate("g0", false), userMsg("u1")]);
     expect(screen.getByTestId("live-narration")).toBeInTheDocument();
   });
+
+  // autonomous_disclosure flows through the identical `!m.resolved` +
+  // turn-scoping predicate as review_gate; parameterize the resolved + stale
+  // branches over it too so a regression that special-cased
+  // autonomous_disclosure cannot slip through (only its suppress path was
+  // covered above).
+  it("AC5 (autonomous_disclosure) — resolved disclosure + streaming → slot PRESENT", async () => {
+    await renderStreaming([userMsg("u1"), autonomousDisclosure("d1", true)]);
+    expect(screen.getByTestId("live-narration")).toBeInTheDocument();
+  });
+
+  it("AC5c (autonomous_disclosure) — stale disclosure BEFORE the last user message → slot PRESENT", async () => {
+    await renderStreaming([autonomousDisclosure("d0", false), userMsg("u1")]);
+    expect(screen.getByTestId("live-narration")).toBeInTheDocument();
+  });
+
+  // Benign-edge pin: with NO user message at all, lastUserIdx === -1 so any
+  // gate at index ≥ 0 satisfies `i > -1` and suppresses. This is unreachable
+  // in practice (a streaming turn is always user-initiated), but pin it so the
+  // -1 fallback's behavior is documented and a future refactor can't silently
+  // change it.
+  it("edge — no user message present, unresolved gate → slot ABSENT (lastUserIdx === -1 fallback)", async () => {
+    await renderStreaming([reviewGate("g1", false)]);
+    expect(screen.queryByTestId("live-narration")).not.toBeInTheDocument();
+  });
 });
