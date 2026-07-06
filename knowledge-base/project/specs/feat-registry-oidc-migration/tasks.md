@@ -43,7 +43,7 @@ plan: knowledge-base/project/plans/2026-07-06-feat-registry-oidc-migration-plan.
 - [x] 3.6 `cloud-init.yml`: **inngest fresh-boot extract L591/596/606** (missed site; hardcoded `v1.1.18` ×3) → same
 - [x] 3.7 `apply-web-platform-infra.yml:1070` → **STAYS GHCR** (runner can't reach the private net; resolves the digest from GHCR, hosts pull the same digest from zot). Documented in `phase-3-pull-site-design.md` §Site 7
 - [x] 3.8 `plugins/soleur/skills/deploy/scripts/deploy.sh` → **OUT-SCOPE** (tenant-facing template; no Doppler/beacon/cosign/ZOT_* access). Documented in `phase-3-pull-site-design.md` §Site 8
-- [ ] 3.9 Phase-3 entry-gate script: verify both images' deployed tags resolve in zot before flip (runtime expression of the dark-launch gate)
+- [x] 3.9 Phase-3 entry-gate script: verify both images' deployed tags resolve in zot before flip (runtime expression of the dark-launch gate)
 
 ## Phase 4 — cosign continuity
 - [ ] 4.1 Confirm offline verify passes on BOTH zot-primary and GHCR-fallback branches

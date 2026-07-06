@@ -204,6 +204,9 @@ jobs:
       - name: Run registry insecure-config (zot) drift-guard (#6122)
         run: bash apps/web-platform/infra/registry-insecure-config.test.sh
 
+      - name: Run zot entry-gate tests (#6122)
+        run: bash apps/web-platform/infra/zot-entry-gate.test.sh
+
       - name: Run deploy fan-out peer-list parity drift-guard
         run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
 
