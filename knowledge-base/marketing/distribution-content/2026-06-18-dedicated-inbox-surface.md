@@ -1,9 +1,9 @@
 ---
 title: "A real Inbox for your AI org's operator mail"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-07-30
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#5524"
 issue_reference: "#5512"
 ---
