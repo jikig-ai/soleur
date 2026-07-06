@@ -12,6 +12,20 @@ created: 2026-07-06
 
 Closes #6112 (via `Ref #6112` — see Sharp Edges on close semantics).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-06
+**Sections enhanced:** Observability (5-field schema), Research Insights (precedent-diff + verify-the-negative evidence).
+**Passes run:** deepen gates 4.4 (precedent-diff), 4.6 (User-Brand Impact — PASS), 4.7 (Observability schema — reformatted to pass), 4.8 (PAT-shaped — PASS, none), 4.9 (UI-wireframe — PASS, no UI); verify-the-negative on all load-bearing negative claims.
+
+### Key Improvements
+1. **Verify-the-negative on "hash-only" claim (entry #1):** `git show f17f7a02:.claude/rule-body-hashes.json` confirms the file is `{"schema":1,"hashes":{"<rule-id>":"<64-hex SHA-256>"}}`. Line 18 is literally `"hr-github-app-auth-not-pat": "87b13f93…db8"` — the `generic-api-key` regex fires on the `auth"` substring inside the rule-id key followed by its SHA-256. Provably a hash, never a credential. This validates the top-level all-rules home for entry #1 (robust if the regenerated manifest adds more `auth`/`token`/`secret`-substring rule-ids).
+2. **Precedent-diff (gate 4.4):** the new `plugins/soleur/skills/.*/test/.*\.test\.sh$` top-level entry mirrors the existing `apps/web-platform/(?:infra|test)/.*\.test\.(?:sh|ts)$` entry (`.gitleaks.toml:81`) — same class (integration test-runners crafting synthesized token corpora), same all-rules scope, same 3 compensating controls. Not a novel pattern.
+3. **Confirmed the double-premise correction** (Sentry-DSN false; secret-scan-not-required false) against live gitleaks JSON + live ruleset API — see Research Reconciliation.
+
+### New Considerations Discovered
+- The irony worth noting in the PR body: the specific value that trips the scanner is the SHA-256 hash of the `hr-github-app-auth-not-pat` rule body — a hash of a *rule about not committing secrets*, not a secret.
+
 ## Overview
 
 The `secret-scan` workflow's **`push:main` full-history** job (`./gitleaks git --redact --no-banner --exit-code 1`, `.github/workflows/secret-scan.yml:131-135`) is RED on `main`, failing on every push since `560168055` (2026-07-06 14:45Z). A local `gitleaks git --redact --no-banner` run in this worktree reproduces the failure and pins the exact findings.
@@ -103,7 +117,34 @@ Residual (small) gap for an **optional follow-up issue** (do not block this PR):
 - [ ] `gh issue close 6112` once the post-merge `push:main` scan is confirmed green (the fix is only "done" after main is green; `Ref` + explicit close avoids a premature auto-close).
 
 ## Observability
-The change is a CI-config edit (`.gitleaks.toml`) — not code under `apps/*/server|src|infra`, `plugins/*/scripts`, and introduces no new runtime surface, so the 5-field schema is **not required** (Phase 2.9 skip: pure CI-config change). The `secret-scan` workflow **is itself** the observability surface for this class: liveness = runs on every `push:main` + weekly `schedule` cron; failure = red required check (`gitleaks scan`) on PRs + red post-merge run on `main`; discoverability (no ssh) = `gh run list --workflow=secret-scan.yml --branch=main`. This PR *restores* that signal from a stuck-RED (dark) state to actionable-green.
+The change is a CI-config edit (`.gitleaks.toml`), not production runtime code — but the `secret-scan` workflow **is itself** the observability surface this PR restores from a stuck-RED (dark) state to actionable-green. Schema filled truthfully:
+
+```yaml
+liveness_signal:
+  what: secret-scan `gitleaks scan` (PR-diff, required) + full-tree scan (push:main) + weekly retroactive cron
+  cadence: every PR, every push to main, weekly (Mon 06:00 UTC)
+  alert_target: red required-check on PRs / red run on main in the GitHub Checks UI
+  configured_in: .github/workflows/secret-scan.yml
+error_reporting:
+  destination: GitHub Actions run log + Checks API (red status); content redacted via --redact
+  fail_loud: yes — `--exit-code 1` fails the job; the `gitleaks scan` required check blocks PR merge
+failure_modes:
+  - mode: real secret enters via a PR diff
+    detection: required `gitleaks scan` PR-diff job (--no-merges BASE..HEAD)
+    alert_route: red required check blocks the merge
+  - mode: secret already in history the PR-diff scan did not cover
+    detection: push:main full-tree scan + weekly schedule full-history cron
+    alert_route: red run on main (THIS issue's class) — surfaced at /ship post-merge verification
+  - mode: over-broad allowlist masks a genuine secret on the allowlisted paths
+    detection: lint-fixture-content.mjs + GitHub server-side push protection (both ignore .gitleaks.toml)
+    alert_route: separate red check / server-side push rejection
+logs:
+  where: GitHub Actions run logs for the secret-scan workflow (redacted)
+  retention: GitHub default (~90 days)
+discoverability_test:
+  command: gh run list --workflow=secret-scan.yml --branch=main --limit 1 --json conclusion
+  expected_output: conclusion == "success" once this fix merges to main
+```
 
 ## Infrastructure (IaC)
 No IaC change. The CI Required ruleset is Terraform-managed (`infra/github/ruleset-ci-required.tf`), but the `gitleaks scan` context is **already** a `required_check` there (Tier-1) — nothing to add. The failing `push:main` full-tree job is post-merge and non-gateable, so it cannot be added to `required_status_checks`. No server, secret, vendor, DNS, or runtime process is introduced.
