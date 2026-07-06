@@ -6,6 +6,32 @@ packages:
   - jq
   - nftables
 
+# (#6090) Earliest boot beacon. bootcmd runs in cloud-init's network stage — BEFORE
+# package_update/packages: and runcmd — so if web-2 dies pre-runcmd (an apt hang in
+# package_update, a broken mirror, a wedged packages: install) this still reports that the
+# boot reached bootcmd AND has Sentry egress. Best-effort: curl may not exist until packages:
+# installs it (Hetzner ubuntu-24.04 ships curl, so it normally fires); fully fail-open, never
+# blocks boot. Reads the baked ${sentry_dsn} (no doppler yet). A landed bootcmd_start with no
+# later stage brackets the death to packages:/config; nothing landing → no-egress/pre-network.
+bootcmd:
+  - |
+    ( set +e
+      command -v curl >/dev/null 2>&1 || exit 0
+      DSN='${sentry_dsn}'
+      [ -n "$DSN" ] || exit 0
+      HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
+      KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
+      SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
+      PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
+      BODY=$(printf '{"message":"soleur-cloud-init boot stage","level":"info","tags":{"stage":"bootcmd_start","host_id":"%s"}}' "$HOST_ID")
+      # --connect-timeout 5 + --retry 1 caps the black-hole stall (no-egress is the exact case this
+      # beacon targets, and bootcmd runs every boot) to a few seconds instead of ~30s.
+      curl --connect-timeout 5 -m 8 --retry 1 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
+        -H 'Content-Type: application/json' \
+        -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY" \
+        -d "$BODY" >/dev/null 2>&1 || true
+    ) || true
+
 groups:
   - docker
 
@@ -271,13 +297,13 @@ runcmd:
     IMAGE_REF='${image_name}'
     STAGE=pkg_audit
     HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
-    on_err() {
-      trap - EXIT
-      docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
+    # (#6090) ONE transport, reused by on_err (fatal) + the runcmd_start breadcrumb (info):
+    #   _emit <message> <stage> <level>. Prefers the BAKED DSN so it fires even when doppler is
+    # the broken stage (and before doppler/docker install). Fully fail-open — never blocks boot.
+    _emit() {
+      _m="$1"; _s="$2"; _l="$3"   # capture args before the subshell sources the env file
       ( set +e
         . /etc/default/webhook-deploy 2>/dev/null || true
-        # Prefer the BAKED DSN so this fatal fires even when doppler is the broken stage (and
-        # even before doppler/docker are installed, which is exactly the region this now covers).
         DSN='${sentry_dsn}'
         [ -n "$DSN" ] || DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
                || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
@@ -285,15 +311,24 @@ runcmd:
           KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
           SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
           PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
-          BODY=$(printf '{"message":"soleur-hostscript-seed failed","level":"fatal","tags":{"stage":"%s","image_ref":"%s","host_id":"%s"}}' "$STAGE" "$IMAGE_REF" "$HOST_ID")
-          curl -m 10 --retry 3 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
+          BODY=$(printf '{"message":"%s","level":"%s","tags":{"stage":"%s","image_ref":"%s","host_id":"%s"}}' "$_m" "$_l" "$_s" "$IMAGE_REF" "$HOST_ID")
+          curl --connect-timeout 5 -m 8 --retry 1 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
             -H 'Content-Type: application/json' \
             -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY" \
             -d "$BODY" >/dev/null 2>&1 || true
         fi ) || true
+    }
+    on_err() {
+      trap - EXIT
+      docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
+      _emit "soleur-hostscript-seed failed" "$STAGE" fatal
       exit 1
     }
     trap on_err EXIT
+    # (#6090) Positive breadcrumb: runcmd was REACHED (curl is guaranteed installed by now). A
+    # landed bootcmd_start (below) with NO runcmd_start brackets the death to the packages:/config
+    # phase; neither landing points at no-egress / a pre-network death → needs host console.
+    _emit "soleur-cloud-init boot stage" runcmd_start info
 
   # Apply SSH hardening immediately (drop-in written by write_files above).
   # Runs BEFORE the package audit so the operator always has hardened SSH

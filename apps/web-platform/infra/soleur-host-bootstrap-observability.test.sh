@@ -338,5 +338,43 @@ else
   no "AC14: the recreate must assert SENTRY_DSN is non-empty before -replace (empty baked DSN = silent pre-extraction blind spot)"
 fi
 
+# ── AC15 (#6090): earliest bootcmd beacon + runcmd_start breadcrumb bracket a pre-runcmd death ──
+# recreate 28812931362 (on the merged pre-extraction fix) was STILL fully dark — web-2 emits
+# nothing, so the death is BEFORE the top-armed runcmd trap (the cloud-init packages:/config phase)
+# or the host has no Sentry egress. A bootcmd beacon (runs before packages:) + a runcmd_start
+# breadcrumb (curl guaranteed) bracket it: bootcmd-only = died in packages:; neither = no-egress.
+if grep -qE '^bootcmd:' "$CI" && grep -qF 'stage":"bootcmd_start"' "$CI"; then
+  ok "AC15: bootcmd beacon present (earliest pre-packages: boot signal)"
+else
+  no "AC15: cloud-init must emit a bootcmd_start beacon in a bootcmd: block (pre-runcmd bracket)"
+fi
+if grep -qF '_emit "soleur-cloud-init boot stage" runcmd_start info' "$CI"; then
+  ok "AC15: runcmd_start breadcrumb present (curl-guaranteed control vs the best-effort bootcmd beacon)"
+else
+  no "AC15: cloud-init must emit a runcmd_start breadcrumb right after arming the trap"
+fi
+# The runcmd transport is written ONCE (_emit), reused by on_err + the breadcrumb (no drift/bytes).
+n_emit_def=$(grep -cE '^\s*_emit\(\) \{' "$CI" || true)
+if [ "${n_emit_def:-0}" -eq 1 ]; then
+  ok "AC15: _emit transport helper defined once in runcmd ($n_emit_def) — shared by on_err + breadcrumb"
+else
+  no "AC15: _emit must be defined exactly once in cloud-init runcmd (found $n_emit_def)"
+fi
+
+# ── AC16 (#6090): the auto-read must NOT use the broken message: query ──
+# The /projects/../events/ endpoint ignores `message:"x"` search (returns 0 for events that exist).
+# The surface step must derive a client-side regex from QUERY and filter fetched events, NOT pass
+# `query=${QUERY}` to the endpoint.
+if grep -qF 'query=${QUERY}' "$WF"; then
+  no "AC16: surface step still passes the broken message: query to the events endpoint (returns 0)"
+else
+  ok "AC16: surface step no longer passes the broken message: query to the endpoint"
+fi
+if grep -qF 'MSG_RE=' "$WF" && grep -qF 'test($re)' "$WF"; then
+  ok "AC16: surface step filters recent events client-side via a regex derived from QUERY"
+else
+  no "AC16: surface step must derive MSG_RE from QUERY and filter events client-side (test(\$re))"
+fi
+
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]
