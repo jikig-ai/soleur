@@ -65,6 +65,45 @@ that is correct, not a miss. Rewrite AC #2 as two checks:
   two-writer choreography over shared R2 state for zero benefit, and publishes `zot_registry_url`
   before the endpoint exists.
 
+## Second ruling — CI→zot PUSH ingress path (2026-07-06)
+
+**Gap:** the plan's Phase 2 needs GitHub Actions to push to zot, but the registry is deny-all-public
+(private-net only) and the ingress path was unspecified (the plan is internally inconsistent —
+firewall says "no public ingress", observability referenced a public `https://<zot-host>/v2/`).
+
+**Ruling: Option A — CF Tunnel + CF Access, routed on the EXISTING `web` tunnel; NO cloudflared on
+the registry host.** CI bridges with `cloudflared access tcp --hostname registry.<base> --url
+127.0.0.1:5000` (auto-insecure to docker → plain-HTTP zot works, no runner `insecure-registries`),
+then `docker login 127.0.0.1:5000` (zot-push htpasswd) + push. Mirrors the SSH bridge 1:1. The web
+host's cloudflared (already a `10.0.1.0/24` member) proxies to `http://10.0.1.30:5000`. Firewall
+UNCHANGED (deny-all-public preserved — traffic arrives via the tunnel, no public port opens). Push
+auth = BOTH gates (CF Access service token + zot htpasswd).
+
+**6 new resources → OPERATOR_APPLIED_EXCLUSIONS** (all ride the operator full apply with the host;
+an unattended per-PR apply must not mint a push credential + DNS for a host that doesn't exist yet):
+`cloudflare_zero_trust_access_application.registry`, `..._service_token.registry_push`,
+`..._access_policy.registry_push_service_token`, `cloudflare_record.registry`,
+`doppler_secret.registry_push_access_token_id`, `doppler_secret.registry_push_access_token_secret`.
+The `..._tunnel_cloudflared_config.web` ingress_rule EDIT rides the already-`-target`ed config
+resource (not a new resource). **Total #6122 resources now 24** (18 host-stack + 6 ingress).
+
+**Implementation refinements over the raw ruling:**
+- The CF Access token is published to Doppler via `doppler_secret` (operator-applied) with
+  **`lifecycle { ignore_changes = [value] }`** — because `cloudflare_...service_token.client_secret`
+  is write-once/empty-on-refresh (#4492→#4494 learning). The operator full apply writes it once; a
+  later refresh cannot clobber. (The raw ruling said "no ignore_changes"; that holds for the
+  random_password-derived zot secrets but NOT for the write-once CF client_secret.)
+- CI reads `REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET` from Doppler `prd_terraform` at runtime (like
+  `CI_SSH_ACCESS_TOKEN_ID/_SECRET`) — NOT a `github_actions_secret` (condition #2 satisfied).
+
+**Observability correction (CTO):** DROP the redundant public `https://<zot-host>/v2/`
+`discoverability_test` — the `betteruptime_heartbeat.registry_prd` push-heartbeat is the single
+liveness source (needs no ingress). Do NOT add a public HTTP uptime monitor.
+
+**Retirement story unchanged:** Option A only changes the CI→zot push transport (a cloudflared
+bridge); zero GHCR dependency introduced. GHCR remains dual-push + break-glass through the soak,
+then fully removable.
+
 ## Precedent correction (secondary)
 The plan/brainstorm named `inngest.tf` as the systemd-host precedent. `inngest.tf` has **no** host
 resources — Inngest runs as a unit *on the web host*. The accurate dedicated-host precedent is

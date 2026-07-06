@@ -542,6 +542,20 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "betteruptime_heartbeat.registry_prd",
   "doppler_secret.zot_heartbeat_url_prd",
   "doppler_service_token.registry",
+  // #6122 (ADR-093) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net
+  // zot host via the EXISTING `web` Cloudflare Tunnel + a NEW dedicated CF Access service token,
+  // bridged with `cloudflared access tcp` (mirrors the SSH bridge). All operator-applied WITH the
+  // registry host (an unattended per-PR apply must not mint a push credential + DNS for a host
+  // that doesn't exist yet). The `..._config.web` ingress_rule EDIT rides the already-`-target`ed
+  // config resource (not a new resource). The two doppler_secrets carry ignore_changes=[value]
+  // (CF client_secret is write-once/empty-on-refresh, #4492) — still `doppler_secret`, not the
+  // CI-published github_actions_secret/doppler_service_token types the #5566 test forces.
+  "cloudflare_zero_trust_access_application.registry",
+  "cloudflare_zero_trust_access_service_token.registry_push",
+  "cloudflare_zero_trust_access_policy.registry_push_service_token",
+  "cloudflare_record.registry",
+  "doppler_secret.registry_push_access_token_id",
+  "doppler_secret.registry_push_access_token_secret",
 ]);
 // Operator-applied doppler_service_token exceptions to the "every token is CI-targeted"
 // assertion (#5566). A token belongs here ONLY when it is minted into an operator-created

@@ -122,7 +122,7 @@ New infra: a dedicated Hetzner registry host + volume, a single zot systemd/dock
   `knowledge-base/project/specs/feat-registry-oidc-migration/apply-path-cto-ruling.md`):** the
   original AC ("append every zot resource to the `-target=` list") is **REVERSED**. A brand-new host
   cannot be provisioned by the per-PR CI `-target` path (it bridges over SSH to the EXISTING web
-  host). Following the sole brand-new-host precedent (git-data, ADR-068), **all 16 zot resources →
+  host). Following the sole brand-new-host precedent (git-data, ADR-068), **all 24 #6122 resources (18 host-stack + 6 CI-push ingress) →
   `OPERATOR_APPLIED_EXCLUSIONS`** in `plugins/soleur/test/terraform-target-parity.test.ts`, applied
   by the operator's initial full (untargeted) `terraform apply` + drift detector; **ZERO added to the
   workflow `-target=` list.** `doppler_service_token.registry` additionally goes in
@@ -138,7 +138,7 @@ secrets land via the **operator's initial full (untargeted) `terraform apply` + 
 the per-PR CI targeted apply (CTO ruling; a new host can't be provisioned over the SSH-to-existing-host
 bridge). **AC #2 reinterpreted as two checks (CTO):** (a) the per-PR CI **targeted** plan shows **zero**
 zot resources + zero create/replace of existing infra (they are operator-applied exclusions, not a
-miss); (b) the operator's **full untargeted** plan shows all 16 zot resources as CREATE + zero
+miss); (b) the operator's **full untargeted** plan shows all 24 #6122 resources as CREATE + zero
 create/replace of existing infra. Ordering: registry host provisioned + `/v2/`-healthy before web-host
 pulls flip (Phase 3 entry gate). zot config changes on the running host re-apply via re-provision
 (cloud-init is idempotent; git-data pattern), not a separate SSH bootstrap.
@@ -185,8 +185,8 @@ logs:
   where: zot container logs to vector (apps/web-platform/infra/vector.tf) to Better Stack
   retention: existing Better Stack retention
 discoverability_test:
-  command: curl -fsS https://<zot-registry-host>/v2/ (via uptime monitor / deploy-webhook read; no shell access)
-  expected_output: HTTP 200 (or 401 if auth-gated) — reachable, not connection-refused
+  command: betteruptime_heartbeat.registry_prd absence-of-ping (web-host cron probes zot /v2/ over the private net + pings the heartbeat)
+  expected_output: heartbeat green — liveness needs NO public ingress (CTO ruling — the public https://<zot-host>/v2/ probe was DROPPED as redundant; do not add a public uptime monitor)
 ```
 **Per-pull-site beacon (spec-flow P0-3 — replaces the bootcmd-beacon category error):** emit a
 structured event with `registry=zot|ghcr-fallback`, `image=web|inngest`, `pull_rc`, `login_rc` at
@@ -215,7 +215,16 @@ tracker + `follow-through` label, and any new `secrets=` wired into `scheduled-f
 Author `zot-registry.tf` (host+volume+zot unit+creds+firewall+snapshot) + `uptime-alerts.tf` monitor; append all addresses to the `-target=` allowlist. Deploy; verify `/v2/` reachable on the private network + monitor green. **Backfill** the last N releases of BOTH images GHCR→zot (`crane copy`) so rollback targets and the pinned `v1.1.18`/`:latest` tags exist in zot.
 
 ### Phase 2 — Push side (dual-push: GHCR + zot)
-Edit `build-inngest-bootstrap-image.yml` (`:131-194`) + `reusable-release.yml` (`:425-432`,`:580-611`) to also push to zot (Actions auth via `ZOT_PUSH_*` from Doppler) and cosign-sign the zot digest (`:626-640`). GHCR push stays live. **Push must land in zot before any pull flips.**
+**CI→zot ingress (CTO ruling 2, `apply-path-cto-ruling.md`):** CI cannot reach the private-net zot
+directly; it bridges via `cloudflared access tcp --hostname registry.<base> --url 127.0.0.1:5000`
+(new `cf-tunnel-registry-bridge` composite action, mirrors `cf-tunnel-ssh-bridge`) using the
+`registry_push` CF Access service token from Doppler `prd_terraform`, then `docker login
+127.0.0.1:5000` with the zot-push htpasswd. `127.0.0.1` is auto-insecure to docker → plain-HTTP zot
+rides the raw-TCP forward.
+Edit `build-inngest-bootstrap-image.yml` (`:131-194`) + `reusable-release.yml` (`:425-432`,`:580-611`)
+to also push to zot (add `127.0.0.1:5000/...` tags to the single build-push → dual-push) and
+cosign-sign the zot digest (`:626-640` — same digest, same registry the host offline-verifies
+against). GHCR push stays live. **Push must land in zot before any pull flips.**
 
 ### Phase 3 — Pull side (flip to zot-primary, GHCR break-glass) — FULL inventory
 Edit every pull site to try zot-primary then fall back to GHCR, **atomically switching image source + mounted docker-config auth + cosign sig-fetch target together** (spec-flow P1-4), and emit the per-site beacon fields:
@@ -239,7 +248,7 @@ Write ADR-093; edit the three `.c4` files; run c4 syntax+render tests. Update an
 
 ### Pre-merge (PR)
 - [ ] Phase-0 spike evidence in PR/spec: zot local-fs push/pull both images, read-only ACL enforced, cosign offline-verify passes from zot incl `.sig` ACL + gc-not-reaping-`.sig`.
-- [ ] `zot-registry.tf` adds **no no-default TF var**; **(CTO-revised)** all 16 zot resources are in `OPERATOR_APPLIED_EXCLUSIONS` (parity test green) and **none** are in the `apply-web-platform-infra.yml` `-target=` list; the per-PR **targeted** plan shows **zero** zot resources + no create/replace of existing infra; the operator's **full untargeted** plan shows all 16 as CREATE + no create/replace of existing infra (paste plan summary).
+- [ ] `zot-registry.tf` adds **no no-default TF var**; **(CTO-revised)** all 24 #6122 resources (18 host-stack + 6 CI-push ingress) are in `OPERATOR_APPLIED_EXCLUSIONS` (parity test green) and **none** are in the `apply-web-platform-infra.yml` `-target=` list; the per-PR **targeted** plan shows **zero** zot resources + no create/replace of existing infra; the operator's **full untargeted** plan shows all 24 as CREATE + no create/replace of existing infra (paste plan summary).
 - [ ] Both images backfilled to zot (last N releases + the pinned `v1.1.18` + `:latest`); Phase-5 retirement gate: every tag referenced by `cloud-init.yml`/`variables.tf` resolves in zot.
 - [ ] Push workflows dual-push both images + cosign-sign the zot digest (CI evidence: a tag build is pullable + signed from zot).
 - [ ] Every pull site (full inventory incl `cloud-init.yml:591-606`, `apply-web-platform-infra.yml:1070`) tries zot-primary with an atomic GHCR fallback (image+auth+sig together) and emits `registry`/`image`/`pull_rc`/`login_rc`.
