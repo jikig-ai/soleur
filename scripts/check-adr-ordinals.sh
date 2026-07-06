@@ -35,7 +35,8 @@ ADR_DIR=knowledge-base/engineering/architecture/decisions
 # (#6035 declarative-skill-context-injection + fail-closed-redaction-engine +
 # freshness-last-reviewed-source-fix all authored ADR-086 and merged in the same
 # window). Resolved in #6054: declarative-skill-context-injection kept ADR-086,
-# fail-closed-redaction-engine → ADR-093, freshness-last-reviewed-source-fix → ADR-094.
+# fail-closed-redaction-engine → ADR-095, freshness-last-reviewed-source-fix → ADR-094.
+# (redaction took 095 not 093 — a sibling ADR claimed 093 on main mid-pipeline.)
 # Dropped from the allowlist here.
 ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038)
 

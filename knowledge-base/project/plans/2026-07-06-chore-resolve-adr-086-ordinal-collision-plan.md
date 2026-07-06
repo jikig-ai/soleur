@@ -9,6 +9,13 @@ branch: feat-one-shot-6054-adr-086-collision
 
 # chore(arch): resolve 3-way ADR-086 ordinal collision on main
 
+> **Post-plan amendment (ship-time):** the redaction ADR (Topic B) landed at **ADR-095**, not 093.
+> A sibling ADR (`ADR-093-sdk-plugin-source-...`) claimed 093 on `main` during this PR's pipeline and
+> was pulled in by a Phase 7 BEHIND auto-sync; the `/ship` ADR-Ordinal Collision Gate caught it and
+> bumped redaction 093 → 095 (the next free ordinal; freshness stayed at 094, no collision). Every
+> "B → 093" reference below is the plan-time assignment; the shipped ordinal is **095**. The
+> "093/094 free" premise statements were true when written (pre-sibling).
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-07-06

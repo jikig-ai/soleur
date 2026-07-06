@@ -9,6 +9,8 @@ lane: single-domain
 
 Decision (locked): **A `declarative-skill-context-injection` keeps ADR-086**; **B `fail-closed-redaction-engine-contract` → ADR-093**; **C `freshness-last-reviewed-source-fix-and-audit-tripwire` → ADR-094**. Next-free ordinals verified: 086–092 taken → 093/094 free.
 
+> **Ship-time amendment:** B (redaction) actually landed at **ADR-095** — a sibling `ADR-093-sdk-plugin-source-...` claimed 093 on `main` mid-pipeline (pulled in by a Phase 7 BEHIND auto-sync), so the `/ship` ADR-Ordinal Collision Gate bumped redaction 093 → 095. C (freshness) stayed at 094. The "093/094 free" line above was true at /work-start (Task 0.1), pre-sibling.
+
 **DO NOT** run a repo-wide `s/ADR-086/…/g`. It would corrupt Topic-D (GHCR minter, now **ADR-088**) strings and rewrite historical decision records. Use the scoped per-file lists below.
 
 ## Phase 0 — Preconditions (re-verify at /work start)

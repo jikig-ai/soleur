@@ -23,7 +23,7 @@
 # and a headerless-PEM private-key DER body (#6045 item 3). It does NOT defeat the full cross-script
 # homoglyph space (TR39 skeleton), an EncryptedPrivateKeyInfo body, MULTIPLY-encoded secrets (decode is
 # single-level), a token reflowed across >4 whitespace runs, or unprefixed/high-entropy tokens — each a
-# named non-goal / recorded residual (see ADR-093).
+# named non-goal / recorded residual (see ADR-095).
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
