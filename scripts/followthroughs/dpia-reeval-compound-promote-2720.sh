@@ -41,7 +41,9 @@ matches=()
 for f in "$AUDITS_DIR"/*dpia*compound-promote*.md \
          "$AUDITS_DIR"/*compound-promote*dpia*.md \
          "$AUDITS_DIR"/*dpia*2720*.md; do
-  matches+=("$f")
+  # Only a real, non-empty regular file discharges an Art. 35 obligation — a
+  # 0-byte placeholder or a symlink must NOT self-close this GDPR follow-through.
+  [[ -f "$f" && -s "$f" && ! -L "$f" ]] && matches+=("$f")
 done
 shopt -u nullglob nocaseglob
 
