@@ -261,7 +261,7 @@ report=$(jq -n \
         | map(select(startswith("gdpr-gate-") | not))
         # context-reviewed-* prefix reserved for context-reviewed-gate.sh
         # telemetry (context-reviewed-gate deny, context-reviewed-hook-self-fault
-        # warn — issue #5999, ADR-086). The freshness audit tripwire logs
+        # warn — issue #5999, ADR-094). The freshness audit tripwire logs
         # undeclared last_reviewed bumps; these are operational events tied to
         # the hook, not rule_ids in the AGENTS.md taxonomy (the always-loaded
         # B_ALWAYS budget has no room for a new core tag).

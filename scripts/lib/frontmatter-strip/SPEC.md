@@ -2,7 +2,7 @@
 
 Single source of truth for stripping a **leading YAML frontmatter block** from a
 Markdown sidecar before it is measured (byte budget) or injected (session
-context). Issue #5999, ADR-086.
+context). Issue #5999, ADR-094.
 
 Two byte-identical implementations consume this contract:
 

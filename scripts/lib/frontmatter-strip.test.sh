@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cross-check + semantic tests for the frontmatter-strip contract (issue #5999,
-# ADR-086). For every fixture in frontmatter-strip/fixtures/*.in:
+# ADR-094). For every fixture in frontmatter-strip/fixtures/*.in:
 #   1. PARITY  — strip.sh output is byte-identical to strip.py output.
 #   2. SEMANTIC — named fixtures satisfy the contract (SPEC.md).
 # Parity alone could pass on two identically-wrong impls, so both are asserted.
