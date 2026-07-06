@@ -83,7 +83,7 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // SSH-provisioned resource raises the count without a brittle exact-match edit —
 // the union-coverage assertion is what enforces correctness; this only guards
 // against the predicate silently collapsing to zero (e.g. a parser regression).
-const MIN_SSH_PROVISIONED = 9;
+const MIN_SSH_PROVISIONED = 10; // #6122: +terraform_data.registry_insecure_config (zot insecure-registries, running-host SSH delivery)
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {

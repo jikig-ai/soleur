@@ -579,6 +579,7 @@ jobs:
               -target=terraform_data.fail2ban_tuning \
               -target=terraform_data.journald_persistent \
               -target=terraform_data.cosign_trusted_root \
+              -target=terraform_data.registry_insecure_config \
               -target=terraform_data.docker_seccomp_config \
               -target=terraform_data.apparmor_bwrap_profile \
               -target=terraform_data.orphan_reaper_install \
