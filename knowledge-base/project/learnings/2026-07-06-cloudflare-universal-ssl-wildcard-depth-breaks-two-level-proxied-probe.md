@@ -45,11 +45,39 @@ Rename the probe hostname **down one label** to `web-1.soleur.ai`, which the exi
 - `dns.tf` — `cloudflare_record.web_host`: `name = each.key` (was `"${each.key}.app"`).
 - `uptime-alerts.tf` — `betteruptime_monitor.web_host`: `url = "https://${each.key}.soleur.ai/health"`.
 
-Changing only the `name`/`url` attribute (not the resource address or `for_each` keys) is an
-**in-place UPDATE**, not destroy/recreate — no maintenance window. `paused = false` is
-unchanged, so the merge-triggered `terraform apply` reconciles Better Stack's auto-pause and
+The `betteruptime_monitor.web_host.url` change is in-place, but **the `cloudflare_record.name`
+change is NOT** — the Cloudflare provider treats `name` as **ForceNew**, so renaming the record
+**destroys and recreates it** (`# forces replacement` in the plan). That trips the
+`apply-web-platform-infra` destroy-guard, which halts the auto-apply unless the merge commit
+contains a line `[ack-destroy]`. The replacement is safe (it is the monitoring *probe* record,
+not the app ingress `cloudflare_record.app`, and carries no user traffic) — but the merge commit
+MUST acknowledge it. This was the miss on PR #6128: the plan predicted an "in-place UPDATE", the
+apply was blocked, and a follow-up PR carrying `[ack-destroy]` was needed to land it. Lesson: any
+`cloudflare_record` attribute change that the provider marks ForceNew (name, type, zone) is a
+destroy, and an infra PR that renames one must ship `[ack-destroy]` in its PR body.
+
+`paused = false` is unchanged, so the (acknowledged) `terraform apply` reconciles Better Stack's auto-pause and
 re-enables the monitor in the same run. The record stays `proxied = true`, preserving the
 CF-IP-only origin firewall.
+
+## Resolution superseded — the per-host probe was the wrong tool
+
+Fixing the cert depth (single-label rename) got the TLS handshake to succeed, but the probe
+then returned **CF 521**: `web-1.soleur.ai` and `app.soleur.ai` share one origin IP, and the
+origin's web server accepts the `app.soleur.ai` Host but **closes the connection for the
+`web-1.soleur.ai` Host/SNI**. So the per-host probe was *doubly* broken — the cert bug masked an
+origin-vhost gap. Making the per-host probe green would require every host's origin to serve its
+own `web-<n>.soleur.ai` vhost/cert.
+
+The operator's call (correct): **retire the per-host external HTTP probe entirely and monitor
+`app.soleur.ai` instead.** For an LB-fronted multi-host cluster, "is a specific host dead" is the
+job of the load balancer's origin health checks + host-level metric emails (`resource-monitor.sh`
+→ ops@), NOT an external per-host HTTP monitor that has to be told every host's hostname and
+needs per-host origin vhosts. Removed `betteruptime_monitor.web_host` + `cloudflare_record.web_host`
++ the dead `monitored` flag; added `betteruptime_monitor.app` probing `https://app.soleur.ai/`
+(307→/login→200, `follow_redirects = true`). **Broader lesson: before fixing a monitor's probe
+URL, ask whether the monitor's *target layer* is right at all — an external HTTP probe of a
+specific backend host is usually the wrong altitude when a load balancer fronts the pool.**
 
 ## Key Insight
 

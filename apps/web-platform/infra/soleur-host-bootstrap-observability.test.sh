@@ -416,5 +416,26 @@ else
   no "AC17: cloudflare-main.gpg must be curl-fetched before the first apt-get update (cfk=$cfk_ln update=$auu_ln)"
 fi
 
+# ── AC18 (#6090): ghcr_login/pull capture the host-side error into the emit `detail` tag ──
+# recreate 28823498601 reached stage=pull (the private-GHCR seed-image pull). Off-host the token +
+# image are valid (HTTP 200), so the failure is host-side and the silent login / bare-pull did not
+# capture it. The login writes its outcome + the pull appends its stderr to /run/soleur-stage-detail,
+# which _emit surfaces as a `detail` tag so the next recreate names the exact sub-cause.
+if grep -qF '"detail":"%s"' "$CI" && grep -qF '/run/soleur-stage-detail' "$CI"; then
+  ok "AC18: _emit includes a detail tag sourced from /run/soleur-stage-detail"
+else
+  no "AC18: _emit must include a detail tag from /run/soleur-stage-detail"
+fi
+if grep -qE 'ghcr_login_ok|ghcr_login_fail|ghcr_creds_missing' "$CI"; then
+  ok "AC18: ghcr_login records its outcome (ok / fail+error / creds_missing) to the detail file"
+else
+  no "AC18: ghcr_login must write its outcome to /run/soleur-stage-detail"
+fi
+if grep -qF 'pull_err:' "$CI"; then
+  ok "AC18: the pull loop appends the docker pull stderr on final failure (names the pull error)"
+else
+  no "AC18: the pull loop must capture the docker pull error into /run/soleur-stage-detail"
+fi
+
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]
