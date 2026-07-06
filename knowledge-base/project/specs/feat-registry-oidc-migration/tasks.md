@@ -46,12 +46,12 @@ plan: knowledge-base/project/plans/2026-07-06-feat-registry-oidc-migration-plan.
 - [x] 3.9 Phase-3 entry-gate script: verify both images' deployed tags resolve in zot before flip (runtime expression of the dark-launch gate)
 
 ## Phase 4 — cosign continuity
-- [ ] 4.1 Confirm offline verify passes on BOTH zot-primary and GHCR-fallback branches
-- [ ] 4.2 Trust root + identity regexp unchanged; no cosign version bump
+- [x] 4.1 Confirm offline verify passes on BOTH zot-primary and GHCR-fallback branches
+- [x] 4.2 Trust root + identity regexp unchanged; no cosign version bump
 
 ## Phase 5 — Cutover, soak, retirement (soak-gated)
-- [ ] 5.1 `scripts/followthroughs/zot-soak-6122.sh` (zero ghcr-fallback across min-sample incl fresh-boot of each image; per-`image` count) + directive + `follow-through` label + sweeper `secrets=`
-- [ ] 5.2 Revert runbook (Phase-3 → GHCR-primary) + fallback-rate alarm (`>X%`/`Yh` ⇒ page+revert), distinct from soak-close
+- [x] 5.1 `scripts/followthroughs/zot-soak-6122.sh` (zero ghcr-fallback across min-sample incl fresh-boot of each image; per-`image` count) + directive + `follow-through` label + sweeper `secrets=`
+- [x] 5.2 Revert runbook (Phase-3 → GHCR-primary) + fallback-rate alarm (`>X%`/`Yh` ⇒ page+revert), distinct from soak-close
 - [ ] 5.3 (post-soak) remove fallback branch; stop GHCR push; remove GHCR egress allow
 - [ ] 5.4 (post-soak) retire `cron-ghcr-token-minter.ts` + test + `ghcr-minter-doppler-token.tf` + `ghcr-read-credential.tf` + `GHCR_MINTER_DISABLED` gate
 - [ ] 5.5 (post-soak, after fallback-removal deploy confirmed on all hosts) rotate + revoke the leaked classic PAT

@@ -2453,8 +2453,10 @@ assert_zot_primary() {
   run_deploy_zot "$pf" "$cf" ""
   if grep -q '^PULL:10.0.1.30:5000/jikig-ai/soleur-web-platform:v1.0.0$' "$pf" \
      && ! grep -q '^PULL:ghcr.io' "$pf" \
-     && grep -q -- '--allow-insecure-registry' "$cf"; then
-    PASS=$((PASS + 1)); echo "  PASS: zot-primary pulls the zot ref + cosign --allow-insecure-registry (Edge B)"
+     && grep -q -- '--allow-insecure-registry' "$cf" \
+     && grep -q -- '--trusted-root=/etc/cosign/trusted_root.json' "$cf" \
+     && grep -q -- '--certificate-identity-regexp' "$cf"; then
+    PASS=$((PASS + 1)); echo "  PASS: zot-primary pulls the zot ref + cosign --allow-insecure-registry + unchanged trust root/identity (Edge B, Phase 4)"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: zot-primary (pulls=[$(tr '\n' ' ' < "$pf")] cosign_has_insecure=$(grep -qc -- '--allow-insecure-registry' "$cf" && echo y || echo n))"
   fi
@@ -2470,8 +2472,10 @@ assert_zot_fallback() {
   run_deploy_zot "$pf" "$cf" "export MOCK_ZOT_PULL_FAIL=1"
   if grep -q '^PULL:10.0.1.30:5000/jikig-ai/soleur-web-platform:v1.0.0$' "$pf" \
      && grep -q '^PULL:ghcr.io/jikig-ai/soleur-web-platform:v1.0.0$' "$pf" \
-     && ! grep -q -- '--allow-insecure-registry' "$cf"; then
-    PASS=$((PASS + 1)); echo "  PASS: zot pull failure → atomic GHCR fallback, no insecure flag on ghcr digest"
+     && ! grep -q -- '--allow-insecure-registry' "$cf" \
+     && grep -q -- '--trusted-root=/etc/cosign/trusted_root.json' "$cf" \
+     && grep -q -- '--certificate-identity-regexp' "$cf"; then
+    PASS=$((PASS + 1)); echo "  PASS: zot pull failure → atomic GHCR fallback, no insecure flag, unchanged trust root/identity (Phase 4)"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: zot fallback (pulls=[$(tr '\n' ' ' < "$pf")])"
   fi
@@ -2508,6 +2512,22 @@ assert_zot_dark() {
   rm -f "$pf"
 }
 assert_zot_dark
+
+# --- #6122 Phase 4: cosign continuity (trust anchor unchanged) ---
+# The zot migration must NOT alter the cosign trust anchor (ADR-093 G3 / task 4.2). Assert
+# the pinned cosign image SHA (v3.1.1), the offline trusted-root flag, and the reusable-
+# release identity regexp are still present verbatim — only --allow-insecure-registry is
+# CONDITIONALLY added on the zot branch (proven by T-ZOT-1/T-ZOT-2 above, which also assert
+# the trusted-root + identity flags ride BOTH the zot and the GHCR-fallback branch = 4.1).
+TOTAL=$((TOTAL + 1))
+if grep -qF 'ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870' "$DEPLOY_SCRIPT" \
+   && grep -qF 'verify --offline' "$DEPLOY_SCRIPT" \
+   && grep -qF -- '--trusted-root=/etc/cosign/trusted_root.json' "$DEPLOY_SCRIPT" \
+   && grep -qF 'reusable-release' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1)); echo "  PASS: cosign trust anchor unchanged (pinned v3.1.1 SHA + offline trusted-root + identity regexp) — Phase 4 continuity"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: cosign trust anchor drifted (Phase 4 continuity)"
+fi
 
 # #5145 / reframed #5159: the cron-plan loop owns its own (advisory) budget,
 # distinct from the /health loop. Post-#5159 the cron-plan check is best-effort
