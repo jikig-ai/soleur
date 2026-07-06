@@ -10,6 +10,75 @@ status: planned
 
 # ✨ Strengthen internal-link equity for 3 structurally-healthy, unindexed blog pages
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-06
+**Change class:** docs-only (6 Markdown internal links across 5 blog posts) — right-sized
+deepen (deterministic fact-verification + one targeted SEO-best-practice research pass),
+not a full multi-agent fan-out (disproportionate for a 6-link content edit).
+
+### Deepen gate results (all pass)
+
+- **4.4 Precedent-diff (link idiom):** the `{{ site.url }}/blog/<slug>/` leading-slash
+  idiom is the established repo precedent (21 existing leading-slash `/blog/` cross-links).
+  Not novel; no host-mangle in source today.
+- **4.5 Network-outage / 4.55 Downtime & Cutover:** no triggers (no SSH/network/infra/DB
+  migration/deploy surface). Skip.
+- **4.6 User-Brand Impact halt:** section present; threshold `none` with a valid
+  scope-out reason (pure Markdown link insertion, no sensitive path). Pass.
+- **4.7 Observability gate:** pure-docs — every Files-to-Edit path is `.md` outside
+  `plugins/*/skills/` and `apps/*/`. Skip.
+- **4.8 PAT-shaped variable halt:** no PAT-shaped var/literal in plan. Pass.
+- **4.9 UI-wireframe halt:** no UI-surface file. Skip.
+
+### Load-bearing facts re-verified deterministically
+
+- **Permalink resolution:** `plugins/soleur/docs/blog/blog.json` sets
+  `permalink: "blog/{{ page.fileSlug }}/index.html"`. Eleventy's `fileSlug` strips the
+  `YYYY-MM-DD-` date prefix, so the three targets resolve to `/blog/soleur-vs-polsia/`,
+  `/blog/your-ai-team-works-from-your-actual-codebase/`, `/blog/billion-dollar-solo-founder-stack/`
+  — exactly the URLs in §Overview. `_data/pillars.js:16` independently confirms
+  `/blog/billion-dollar-solo-founder-stack/` as the canonical pillar URL. `blogRedirects.js`
+  also 301s the date-prefixed form to the clean slug, so the clean-slug links are canonical.
+- **All 6 anchor phrases** are present verbatim and **unlinked** at their sites (verified
+  by `sed`/`grep` at plan time). The company-as-a-service:107 anchor is the *unlinked tail
+  clause* — the existing external link occupies the earlier clause, so no nesting.
+- **Dup-check:** none of the 5 source posts currently link their assigned target.
+
+---
+
+# (original plan below)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-07-06
+
+**Deepen-plan halt gates — all clear:**
+- Phase 4.6 User-Brand Impact — PASS (section present; threshold `none` with a
+  `threshold: none, reason:` scope-out; Files-to-Edit are non-sensitive blog `.md`).
+- Phase 4.7 Observability — SKIP (pure-docs; every Files-to-Edit path is `.md` outside
+  `plugins/*/skills/` and `apps/*/` — no production code/infra surface).
+- Phase 4.8 PAT-shaped variable — PASS (no `var.*_token`/`TF_VAR_*`/literal-token hits).
+- Phase 4.9 UI-wireframe — SKIP (no UI-surface file in Files-to-Edit).
+- Phase 4.5 network-outage / 4.55 downtime-cutover — SKIP (no SSH/network/infra/DB/deploy
+  triggers).
+
+**Deepen verification (deterministic — the load-bearing facts):**
+- **Permalink resolution confirmed.** `plugins/soleur/docs/blog/blog.json` sets
+  `permalink: "blog/{{ page.fileSlug }}/index.html"`; Eleventy's `fileSlug` strips the
+  `YYYY-MM-DD-` date prefix, so the three targets resolve to exactly
+  `/blog/soleur-vs-polsia/`, `/blog/your-ai-team-works-from-your-actual-codebase/`, and
+  `/blog/billion-dollar-solo-founder-stack/`. `pillars.js` independently pins
+  `/blog/billion-dollar-solo-founder-stack/` as the canonical pillar URL. The
+  date-prefixed form redirects to the clean slug (`blogRedirects.js`), so the clean-slug
+  links are canonical.
+- **Idiom precedent confirmed** (Phase 4.4 precedent-diff): 21 existing leading-slash
+  `{{ site.url }}/blog/<slug>/` cross-links in the corpus; the pattern is established, not
+  novel. Zero host-mangled `{{ site.url }}blog/...` in source today.
+- **All 6 anchor phrases verified present and unlinked** in their source posts at plan
+  time (exact strings quoted in Phase 1; /work must re-grep as line numbers drift).
+- **Dup-check confirmed:** none of the 5 source posts currently links its assigned target.
+
 ## Overview
 
 Google Search Console (soleur.ai, report last updated 2026-06-30) flags three canonical
@@ -173,6 +242,9 @@ No unit tests apply to prose links. Verification is the Phase-4 build grep (belo
       any `application/ld+json` block.
 - [ ] Each new anchor sits on the pre-existing phrase named in Phase 1 (no fabricated
       sentences, no keyword-stuffed anchor lists).
+- [ ] Anchor text is descriptive and varied, not identical exact-match repeated across
+      links (per Google Links best-practices). No two links to the same target use the
+      identical anchor string; each anchor is embedded in body prose (not a link widget).
 - [ ] Fresh Eleventy build succeeds.
 - [ ] `grep -rEoh 'https://soleur\.ai[a-zA-Z]' "$SITE"/blog/` returns **empty** (no
       host-mangle) against the dynamically-located `$SITE`.
@@ -198,6 +270,33 @@ No unit tests apply to prose links. Verification is the Phase-4 build grep (belo
 
 Dup-check confirmed at plan time: none of these 5 source posts currently link their
 assigned target (`grep -l '<target-slug>' <source>` → no match for all pairs).
+
+### Research Insights — contextual internal linking (Google Search Central, 2025-2026)
+
+Sources: [Google — SEO Link Best Practices](https://developers.google.com/search/docs/crawling-indexing/links-crawlable),
+[Google — Page indexing report](https://support.google.com/webmasters/answer/7440203),
+[Onely — Fixing "Crawled – currently not indexed"](https://www.onely.com/blog/how-to-fix-crawled-currently-not-indexed-in-google-search-console/).
+
+- **Internal linking is a Google-endorsed lever for this exact bucket.** For structurally
+  healthy pages, "Crawled – currently not indexed" reflects Google judging standalone
+  importance as low; links from already-indexed, higher-authority pages signal importance
+  and distribute crawl priority / link equity. Confirms the learning's Insight 2.
+- **Anchor text must be descriptive, concise, relevant — and VARIED.** Repeating one
+  exact-match keyword anchor across many links is an over-optimization signal Google can
+  discount. Our 6 anchors are sentence-embedded and varied per source; encoded as an AC
+  below. (Note: T1's three anchors include two "fully autonomous …" variants — acceptable
+  because they are different phrases in different posts and each descriptively names the
+  destination's autonomous-vs-human axis; T2's two "blank slate" anchors are likewise
+  partial-match, sentence-embedded, not identical.)
+- **~6 contextual internal links across 3 targets is conservative and natural.** Healthy
+  range for an under-linked page is ~5-10 inbound; manipulation comes from *irrelevance
+  and identical anchors*, not from count. Internal links between your own topically-related
+  pages carry no PBN/link-farm risk. Reinforces "don't over-link."
+- **Body prose beats widgets.** Contextual links inside relevant body copy pass more value
+  than footer/sidebar/"related links" widgets (template noise). All 6 links land in body
+  prose — correct by construction. Do NOT convert this into a related-links widget.
+- **Links are necessary, not sufficient.** Indexing also depends on content quality and is
+  Google-controlled + lagged — reinforces `Ref` (not `Closes`) framing.
 
 ## Open Code-Review Overlap
 
