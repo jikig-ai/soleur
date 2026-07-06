@@ -52,10 +52,13 @@ function topLevelKeys(blockBody: string): string[] {
     .filter((k): k is string => Boolean(k));
 }
 
-// Body of the first ```yaml fence appearing in `text`.
-function firstYamlBlock(text: string): string {
-  const m = text.match(/```ya?ml\r?\n([\s\S]*?)\r?\n```/);
-  if (!m) throw new Error("no ```yaml fence found");
+// Body of the first ```yaml fence appearing in `text`. `label` identifies the
+// surface/block in the throw so a real drift points at the offending source.
+// The `[^\n]*` after the language token tolerates a trailing info-string
+// (e.g. ```yaml title=…) so a benign fence edit does not false-fail.
+function firstYamlBlock(text: string, label: string): string {
+  const m = text.match(/```ya?ml[^\n]*\r?\n([\s\S]*?)\r?\n```/);
+  if (!m) throw new Error(`no \`\`\`yaml fence found in ${label}`);
   return m[1];
 }
 
@@ -63,7 +66,9 @@ function firstYamlBlock(text: string): string {
 const canonicalSrc = read(PLAN_SKILL);
 const markerIdx = canonicalSrc.indexOf("**Required schema (verbatim");
 if (markerIdx === -1) throw new Error(`canonical marker not found in ${PLAN_SKILL}`);
-const CANONICAL = topLevelKeys(firstYamlBlock(canonicalSrc.slice(markerIdx)));
+const CANONICAL = topLevelKeys(
+  firstYamlBlock(canonicalSrc.slice(markerIdx), "plan/SKILL.md §2.9 canonical block"),
+);
 
 const asSet = (xs: readonly string[]) => new Set(xs);
 
@@ -80,7 +85,7 @@ describe("## Observability schema parity across the 4 surfaces", () => {
     // A dropped or added template is drift and must fail here.
     expect(sections.length).toBe(3);
     sections.forEach((section, i) => {
-      const keys = topLevelKeys(firstYamlBlock(section));
+      const keys = topLevelKeys(firstYamlBlock(section, `plan-issue-templates.md block #${i + 1}`));
       expect(asSet(keys), `template block #${i + 1} top-level keys must equal canonical`).toEqual(
         asSet(CANONICAL),
       );
@@ -88,16 +93,21 @@ describe("## Observability schema parity across the 4 surfaces", () => {
   });
 
   test("surface 3 (deepen-plan/SKILL.md §4.7) — field enumeration set-equals canonical", () => {
-    const line = read(DEEPEN)
+    const matches = read(DEEPEN)
       .split(/\r?\n/)
-      .find((l) => l.includes("required top-level fields"));
-    expect(line, "deepen-plan §4.7 enumeration line must exist").toBeDefined();
+      .filter((l) => l.includes("required top-level fields"));
+    // Exactly one enumeration line — a second copy would let drift in it go unseen.
+    expect(matches.length, "expected exactly one deepen-plan §4.7 enumeration line").toBe(1);
+    const line = matches[0];
     // The count word ("the 5 required top-level fields") must match canonical length.
-    const countMatch = line!.match(/the (\d+) required top-level fields/);
+    const countMatch = line.match(/the (\d+) required top-level fields/);
     expect(countMatch, "expected 'the N required top-level fields'").not.toBeNull();
     expect(Number(countMatch![1])).toBe(CANONICAL.length);
-    // The backticked names on that line must set-equal canonical.
-    const names = [...line!.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]);
+    // Extract names from the parenthetical list ONLY, so an unrelated backticked
+    // lowercase word elsewhere on the line cannot pollute the set.
+    const paren = line.match(/required top-level fields \(([^)]*)\)/);
+    expect(paren, "expected a parenthetical field list after the count").not.toBeNull();
+    const names = [...paren![1].matchAll(/`([a-z_]+)`/g)].map((m) => m[1]);
     expect(asSet(names)).toEqual(asSet(CANONICAL));
   });
 
@@ -107,8 +117,12 @@ describe("## Observability schema parity across the 4 surfaces", () => {
       .find((l) => l.includes("hr-observability-as-plan-quality-gate"));
     expect(rule, "hr-observability-as-plan-quality-gate rule line must exist").toBeDefined();
     // Count derived from canonical length — stays correct if the schema legitimately grows.
-    expect(rule).toContain(`(${CANONICAL.length} fields)`);
-    expect(rule).toContain("discoverability_test");
-    expect(rule).toContain("WITHOUT SSH");
+    expect(rule, "AGENTS.core.md rule must state count parity `(N fields)`").toContain(
+      `(${CANONICAL.length} fields)`,
+    );
+    expect(rule, "AGENTS.core.md rule must reference discoverability_test").toContain(
+      "discoverability_test",
+    );
+    expect(rule, "AGENTS.core.md rule must state the WITHOUT SSH invariant").toContain("WITHOUT SSH");
   });
 });

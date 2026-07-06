@@ -63,6 +63,12 @@ export function extractAllObservabilityBlocks(planBody: string): string[] {
   return blocks;
 }
 
+// First `## Observability` section body — the view the preflight runtime consumes
+// (plan bodies carry a single such section). NOTE: not byte-identical to a hand-
+// written first-only loop for the malformed case of two ADJACENT `## Observability`
+// headings with no intervening `^## ` — the old loop merged their bodies, this
+// returns only the first. That input does not occur in real plans, so preflight
+// behavior is unchanged; the split-then-`[0]` shape is what the parity guard needs.
 export function extractObservabilityBlock(planBody: string): string {
   return extractAllObservabilityBlocks(planBody)[0] ?? "";
 }
