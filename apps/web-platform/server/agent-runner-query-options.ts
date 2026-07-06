@@ -27,6 +27,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
+import { assertTrustedPluginPath } from "./plugin-path";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import { createSandboxHook } from "./sandbox-hook";
 import { createContextQueriesHook } from "./context-queries-hook";
@@ -228,7 +229,12 @@ export function buildAgentQueryOptions(
     sandbox: buildAgentSandboxConfig(args.workspacePath, {
       allowGithubEgress: Boolean(args.ghToken),
     }),
-    plugins: [{ type: "local" as const, path: args.pluginPath }],
+    // Loaded-gun guard: both factories source args.pluginPath from getPluginPath()
+    // (an absolute /app/ platform path). assertTrustedPluginPath fails LOUDLY if a
+    // future regression threads a connected-repo workspace path here — which would
+    // silently re-execute the untrusted repo's hooks.json in-process (the
+    // connected-repo-shadow security hole this PR closes). Test-tolerant.
+    plugins: [{ type: "local" as const, path: assertTrustedPluginPath(args.pluginPath) }],
     hooks: {
       PreToolUse: [
         {

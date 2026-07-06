@@ -463,13 +463,17 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
-  // T3: plugins: [{ type: "local", path: <workspace>/plugins/soleur }]
+  // T3: plugins: [{ type: "local", path: <DEPLOYED plugin root> }]  (security fix)
   // -------------------------------------------------------------------------
-  it("T3: plugins points at the per-user workspace plugin copy", async () => {
+  it("T3: plugins points at the DEPLOYED plugin root, not the workspace copy", async () => {
+    // getPluginPath() default (no SOLEUR_PLUGIN_PATH set in test). A workspace whose
+    // connected repo ships its own plugins/soleur/ must NOT shadow the deployed plugin
+    // (security: loading the workspace copy would run its hooks.json in-process).
+    // See knowledge-base/.../2026-07-06-connected-repo-shadows-deployed-plugin-*.md.
     await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.plugins).toEqual([
-      { type: "local", path: `${WORKSPACE_PATH}/plugins/soleur` },
+      { type: "local", path: "/app/shared/plugins/soleur" },
     ]);
   });
 
