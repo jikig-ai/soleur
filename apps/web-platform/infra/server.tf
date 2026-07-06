@@ -154,6 +154,12 @@ resource "hcloud_server" "web" {
     # broken stage). Semi-public DSN (already in the client bundle). See on_err in cloud-init.yml.
     sentry_dsn     = var.sentry_dsn
     resend_api_key = var.resend_api_key
+    # (#6090) Baked so the cold-boot ghcr_login does not depend on doppler answering at the
+    # first-boot instant (an empty answer skipped docker login → anonymous private pull → 401
+    # → abort at stage=pull). Scoped read:packages PAT; user_data already carries the strictly
+    # stronger doppler_token, so this adds no new trust boundary. See cloud-init.yml ghcr_login.
+    ghcr_read_user  = var.ghcr_read_user
+    ghcr_read_token = var.ghcr_read_token
     # Fresh-host parity for the CI SSH keypair generated in
     # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
     # block in ci-ssh-key.tf for the rationale.
