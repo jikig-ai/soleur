@@ -10,6 +10,39 @@ status: draft
 
 # 🐛 fix: De-duplicate the Concierge question prompt + suppress "Still working…" while awaiting operator input
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-06
+**Sections enhanced:** Phase 2 predicate, Acceptance Criteria, Alternatives, Sharp Edges, Observability
+**Agents used:** ux-design-lead (wireframe), spec-flow-analyzer (flow/correctness), code-simplicity-reviewer (YAGNI)
+
+### Key Improvements
+1. **Narrowed `awaitingUserInput`** to `review_gate` + `autonomous_disclosure` only (dropped
+   `interactive_prompt`). Both reviewers independently flagged (P1) that gating on `interactive_prompt`
+   would suppress "Still working…" during genuine work, because `diff`/`todo_write`/`notebook_edit`
+   are informational ack cards emitted while the agent streams. The two-type set exactly mirrors the
+   server's authoritative `waiting_for_user` definition (`cc-dispatcher.ts:2530-2534`).
+2. **Turn-scoped the predicate** (`i > lastUserIdx`) to fix a P2a cross-turn regression: an
+   abandoned/timed-out gate persists unresolved in `messages` (nothing prunes it — `stream_end`
+   prunes only `tool_use_chip`, verified `chat-state-machine.ts:640-648`) and would otherwise dark
+   narration on every later streaming turn.
+3. **Added AC5b + AC5c** regression guards (informational-card and stale-gate cases) — the coverage
+   the original AC3/AC4 did not exercise.
+4. **P2b co-installation note** in Phase 1 to guard a future wiring split from reintroducing a
+   no-question-surface state.
+
+### Verified negatives (verify-the-negative pass)
+- `AskUserQuestion` classify → `null` returns BEFORE `pendingPrompts.register` (`soleur-go-runner.ts:1746`
+  guards `:1751`) → no dangling registry entry. ✓
+- `permission-callback.ts:268` intercepts `AskUserQuestion` unconditionally in `canUseTool` (fires for
+  subagent calls too) → no flow left with zero question surface. ✓
+- `stream_end` prunes only `tool_use_chip` (`chat-state-machine.ts:640-648`) → unresolved gates are
+  durable, confirming the turn-scoping need. ✓
+
+### Gate status
+User-Brand Impact ✓ (threshold `none` + scope-out reason) · Observability ✓ (5-field, no-ssh) ·
+PAT-shaped ✓ (none) · UI-Wireframe ✓ (`.pen` committed). No ADR/IaC/GDPR surface.
+
 ## Overview
 
 When the Concierge agent calls the SDK `AskUserQuestion` tool, the web chat renders the
