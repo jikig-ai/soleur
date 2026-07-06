@@ -290,5 +290,53 @@ else
   no "AC11: webhook 'sha256sum -c -' must be '|| { … fatal; exit 1; }' (H3 set +e un-gates it otherwise)"
 fi
 
+# ── AC12 (#6090 follow-up): the fatal-emit trap covers the PRE-extraction install region ──
+# recreate 28805034101 died with ZERO emits + :9000 unbound while every post-extraction guard
+# was green — because on_err was defined/armed only inside the extraction block, leaving the
+# package-audit/doppler/docker install region (which runs under the leaked `set -e`) a blind
+# spot. The fix moves on_err to the TOP of runcmd and bumps STAGE per install step. Guard that:
+#   (a) on_err is armed BEFORE the doppler download (early coverage), and
+#   (b) on_err is defined exactly ONCE (moved, not duplicated — no transport drift / no bytes).
+armln=$(grep -nE '^\s*trap on_err EXIT' "$CI" | head -1 | cut -d: -f1 || true)
+dopplerln=$(line_of "$CI" 'tar xzf /tmp/doppler.tar.gz')
+if [ -n "$armln" ] && [ -n "$dopplerln" ] && [ "$armln" -lt "$dopplerln" ]; then
+  ok "AC12: on_err trap armed (line $armln) BEFORE the doppler install ($dopplerln) — pre-extraction covered"
+else
+  no "AC12: 'trap on_err EXIT' must precede the doppler install (arm=$armln doppler=$dopplerln); the install region is the blind spot"
+fi
+n_onerr=$(grep -cE '^\s*on_err\(\) \{' "$CI" || true)
+if [ "${n_onerr:-0}" -eq 1 ]; then
+  ok "AC12: on_err defined exactly once in cloud-init ($n_onerr) — moved to the top, not duplicated"
+else
+  no "AC12: on_err must be defined exactly once (found $n_onerr) — a second copy drifts + burns user_data bytes"
+fi
+# Per-step stage names so the fatal points at the exact dying install command.
+for st in doppler_dl docker_apt docker_restart; do
+  if grep -qE "STAGE=$st\b" "$CI"; then
+    ok "AC12: install region bumps STAGE=$st (fatal names the exact command)"
+  else
+    no "AC12: cloud-init must set STAGE=$st in the pre-extraction install region"
+  fi
+done
+
+# ── AC13 (#6090 follow-up): the recreate auto-read sources its Sentry token from Doppler ──
+# The GitHub repo secret SENTRY_AUTH_TOKEN is unset, so the surface step self-skipped. It must
+# now fetch the token (+org+project) from Doppler prd_terraform like every other step in the job.
+if grep -qE 'doppler secrets get SENTRY_AUTH_TOKEN .*-c prd_terraform' "$WF"; then
+  ok "AC13: surface step resolves SENTRY_AUTH_TOKEN from Doppler prd_terraform (not the unset repo secret)"
+else
+  no "AC13: the fresh-host Sentry surface step must fetch SENTRY_AUTH_TOKEN via doppler -c prd_terraform"
+fi
+
+# ── AC14 (#6090 P2-1): the recreate asserts the baked DSN is non-empty before -replace ──
+# The pre-extraction fresh-boot stages depend SOLELY on the baked ${sentry_dsn} (doppler isn't
+# installed yet, so its fallback is dead). An empty SENTRY_DSN (var.sentry_dsn's TF default) would
+# silently re-open the zero-emit blind spot. The recreate must fail loudly, not boot dark.
+if grep -qE 'SENTRY_DSN is empty in Doppler prd_terraform' "$WF"; then
+  ok "AC14: web-2-recreate asserts baked SENTRY_DSN non-empty before -replace (pre-extraction can't go dark)"
+else
+  no "AC14: the recreate must assert SENTRY_DSN is non-empty before -replace (empty baked DSN = silent pre-extraction blind spot)"
+fi
+
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]
