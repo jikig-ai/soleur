@@ -28,6 +28,7 @@ import {
 // inside the resolver's flag-OFF fast path.
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import { sendToClient } from "./ws-handler";
+import { getPluginPath } from "./plugin-path";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import {
   notifyOfflineUser,
@@ -1106,7 +1107,10 @@ export async function startAgentSession(
       sessionTenant,
       activeWorkspaceId,
     );
-    const pluginPath = path.join(workspacePath, "plugins", "soleur");
+    // Load the SDK plugin from the PLATFORM-DEPLOYED root, never the workspace
+    // copy — same trust boundary as cc-dispatcher (this legacy startAgentSession
+    // factory is the one #6115 missed). See the connected-repo-shadows learning.
+    const pluginPath = getPluginPath();
 
     // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
     // reprovision-ensure-dir-presandbox). The leader's bwrap sandbox binds
