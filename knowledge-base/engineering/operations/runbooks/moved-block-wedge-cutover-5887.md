@@ -154,6 +154,7 @@ instance RECREATE re-runs first-boot. This is an autonomous, no-SSH menu-ack dis
   (`web2_out_of_scope_changes==0 && reboot_updates==0 && web2_server_replaced==1` — web-1
   untouched, the `/workspaces` data volume 0-destroy), then verifies web-2 `:9000` bound off-host
   (web-1 `/hooks/deploy-status` reason flips to `ok`).
+- **⚠ Current status (2026-07-06 — deep-dive tracked in [#6090](https://github.com/jikig-ai/soleur/issues/6090)).** The recreate's apply + coherence preflight + destroy-guard all succeed, and #6076 cleared the private-GHCR seed-pull 401 — but web-2's fresh cloud-init still **dies silently AFTER the seed-extract, BEFORE `:9000` binds** (8/8 tunnel probes hit web-1; no Sentry host-boot emit). So the verify below still returns `ok_peer_fanout_degraded`, NOT `ok` — **do not expect a clean warm-standby verify until #6090 resolves**. Next steps (per #6090): check the #6023 cosign WARN→ENFORCE angle FIRST (code/config read, may not need a recreate), then extend the baked-`${sentry_dsn}` emit from cloud-init's `on_err` into `soleur-host-bootstrap.sh`'s `emit_fail` (an image-rebuild cycle) so the failing `stage` is named off-host.
 - **Coherence-abort remediation (menu-ack, no SSH).** If the preflight aborts on a hash
   mismatch, `main`'s host-scripts advanced beyond web-1's running image, so web-1 must be
   redeployed to current `main` before the recreate can cohere. web-1 auto-deploys on every merge
