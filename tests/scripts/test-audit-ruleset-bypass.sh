@@ -781,14 +781,24 @@ t_cla_rsc_canonical_matches_tf() {
     | sed -E 's/.*"([^"]+)"$/\1/' | sort)
   # integration_id pin: every canonical row is 15368, AND the `.tf` binds every
   # required_check to var.actions_integration_id, never var.codeql_integration_id.
-  local canon_all_15368 actions_binds ctx_count has_codeql
+  local canon_all_15368 actions_binds ctx_count
   canon_all_15368=$(jq -r 'all(.[]; .integration_id == 15368)' < "$CLA_RSC_CANONICAL")
   # `grep -c` exits 1 on zero matches (a broken `.tf`); `|| true` keeps
   # `set -euo pipefail` from aborting the suite on the happy path.
   actions_binds=$(grep -cE 'integration_id[[:space:]]*=[[:space:]]*var\.actions_integration_id' "$CLA_TF" || true)
   ctx_count=$(printf '%s\n' "$tf_ctx" | grep -c . || true)
+  # Comment-safe codeql check: match an actual `= var.codeql_integration_id`
+  # BINDING, never the bare token — a comment naming it must not false-fail (same
+  # SE-3 class as the `context = "..."` hygiene). Explicit signal alongside
+  # actions_binds==ctx_count; keeps a clear `codeql=yes` failure line.
   local has_codeql=no
-  if grep -q 'codeql_integration_id' "$CLA_TF"; then has_codeql=yes; fi
+  if grep -qE 'integration_id[[:space:]]*=[[:space:]]*var\.codeql_integration_id' "$CLA_TF"; then has_codeql=yes; fi
+  # Pin the integration_id NUMBER end-to-end: the `.tf` binds required_checks to
+  # var.actions_integration_id by NAME, so also assert that var's default == the
+  # canonical's 15368 (restores the literal pin the retired create-script carried;
+  # closes the variables.tf-default→codeql-id path T-rsc-7 guards on the JSON side).
+  local actions_default
+  actions_default=$(awk '/variable "actions_integration_id"/{f=1} f&&/^[[:space:]]*default[[:space:]]*=/{gsub(/[^0-9]/,"",$0); print; exit}' "$REPO_ROOT/infra/github/variables.tf")
   # No-dup guard: the canonical must not carry a duplicate context row.
   local dup
   dup=$(jq -r '(map(.context) | length) - (map(.context) | unique | length)' "$CLA_RSC_CANONICAL")
@@ -799,11 +809,12 @@ t_cla_rsc_canonical_matches_tf() {
   n_canon=$(jq 'length' "$CLA_RSC_CANONICAL")
   if [[ "$json_ctx" == "$tf_ctx" && "$canon_all_15368" == "true" \
         && "$actions_binds" == "$ctx_count" && "$has_codeql" == "no" \
+        && "$actions_default" == "15368" \
         && "$dup" == "0" && "$n_canon" -ge 2 ]]; then
     _report "T-cla-1 CLA RSC canonical context set + integration_id == ruleset-cla-required.tf" ok
   else
     _report "T-cla-1 CLA RSC canonical context set + integration_id == ruleset-cla-required.tf" fail \
-      "all15368=$canon_all_15368 actions_binds=$actions_binds ctx_count=$ctx_count codeql=$has_codeql dup=$dup diff:$(diff <(echo "$json_ctx") <(echo "$tf_ctx") | tr '\n' ' ')"
+      "all15368=$canon_all_15368 actions_binds=$actions_binds ctx_count=$ctx_count codeql=$has_codeql actions_default=$actions_default dup=$dup diff:$(diff <(echo "$json_ctx") <(echo "$tf_ctx") | tr '\n' ' ')"
   fi
 }
 
@@ -827,12 +838,15 @@ t_cla_bypass_canonical_matches_tf() {
   # triples; default actor_id to "null" per block; strip quotes + trailing
   # comments. Normalize actor_id "0" -> "null" (OrganizationAdmin sentinel; no real
   # actor has id 0) so the `.tf`'s 0 compares equal to the canonical's null.
+  # Strip any trailing `# ...` comment FIRST (before the greedy `.*=` value slice)
+  # so an inline comment containing a stray `=` cannot corrupt the extracted value
+  # (removes the SE-3 `# ... = ...`-on-assignment-line latent trap at the parser).
   local tf_triples
   tf_triples=$(awk '
     /^[[:space:]]*bypass_actors[[:space:]]*\{/ {blk=1; aid="null"; at=""; bm=""; next}
-    blk && /^[[:space:]]*actor_id[[:space:]]*=/    {v=$0; sub(/.*=[[:space:]]*/,"",v); sub(/[[:space:]]*(#.*)?$/,"",v); aid=v}
-    blk && /^[[:space:]]*actor_type[[:space:]]*=/  {v=$0; sub(/.*=[[:space:]]*"?/,"",v); sub(/"?[[:space:]]*(#.*)?$/,"",v); at=v}
-    blk && /^[[:space:]]*bypass_mode[[:space:]]*=/ {v=$0; sub(/.*=[[:space:]]*"?/,"",v); sub(/"?[[:space:]]*(#.*)?$/,"",v); bm=v}
+    blk && /^[[:space:]]*actor_id[[:space:]]*=/    {v=$0; sub(/#.*/,"",v); sub(/.*=[[:space:]]*/,"",v);  sub(/[[:space:]]*$/,"",v); aid=v}
+    blk && /^[[:space:]]*actor_type[[:space:]]*=/  {v=$0; sub(/#.*/,"",v); sub(/.*=[[:space:]]*"?/,"",v); sub(/"?[[:space:]]*$/,"",v); at=v}
+    blk && /^[[:space:]]*bypass_mode[[:space:]]*=/ {v=$0; sub(/#.*/,"",v); sub(/.*=[[:space:]]*"?/,"",v); sub(/"?[[:space:]]*$/,"",v); bm=v}
     blk && /^[[:space:]]*\}/ {print aid"|"at"|"bm; blk=0}
   ' "$CLA_TF" | sed 's/^0|/null|/' | sort)
   # Canonical triples: null prints as "null".
