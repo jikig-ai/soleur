@@ -77,7 +77,7 @@ Not every AI agent is useful for a solo founder. The properties that matter most
 
 **Cross-domain context.** The most important question to ask about any AI agent stack: what does the marketing agent know about what the engineering agent decided last week? If the answer is "nothing," you have a collection of tools, not an organization.
 
-**Persistent knowledge.** Agents that start from a blank slate on each session require the founder to re-supply context manually every time. Agents with persistent memory across sessions accumulate knowledge and reduce the founder's coordination cost over time. This distinction compounds — a system that remembers three months of decisions is dramatically more useful than one that forgets at session end.
+**Persistent knowledge.** Agents that [start from a blank slate on each session]({{ site.url }}/blog/your-ai-team-works-from-your-actual-codebase/) require the founder to re-supply context manually every time. Agents with persistent memory across sessions accumulate knowledge and reduce the founder's coordination cost over time. This distinction compounds — a system that remembers three months of decisions is dramatically more useful than one that forgets at session end.
 
 **Verifiable output.** An agent's output should be checkable against a specification. Quality gates built into the workflow replace the code review, legal review, and editorial review that a team provides. Without those gates, the founder becomes the bottleneck for every domain, every time.
 
