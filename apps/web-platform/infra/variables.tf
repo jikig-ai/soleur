@@ -112,6 +112,19 @@ variable "git_data_volume_size" {
   default     = 10
 }
 
+# --- #6122 (ADR-093) — the self-hosted zot registry host ---
+variable "registry_server_type" {
+  description = "Hetzner server type for the zot registry host (cax11 = 2 vCPU ARM64/Ampere, 4GB RAM). zot is ARM-native; a registry serving two small images needs little CPU. Verify current Hetzner pricing before budget decisions (~€4/mo CAX11 + volume — recorded via ops-advisor)."
+  type        = string
+  default     = "cax11"
+}
+
+variable "registry_volume_size" {
+  description = "Size of the zot storage block volume in GB (Hetzner minimum is 10 GB), mounted at /var/lib/zot. Holds the OCI blobs for both platform images + backfilled release tags + cosign .sig referrers — never tmpfs (reboot-durable; a wiped registry breaks cold-boot pulls). dedupe is on, so 10 GB is ample for two small images."
+  type        = number
+  default     = 10
+}
+
 # --- Epic #5274 Phase 3, Sub-PR 3.D (ADR-068) — LUKS-at-rest cutover volume ---
 variable "git_data_luks_volume_size" {
   description = "Size of the FRESH LUKS-at-rest git-data volume in GB (Hetzner minimum 10 GB). The cutover target (git-data-luks.tf / git-data-cutover.sh FRESH_ROOT). >= git_data_volume_size so the plaintext repo tree rsyncs onto it without ENOSPC. Guest-side LUKS: this is a plain hcloud_volume; cryptsetup runs in the guest."

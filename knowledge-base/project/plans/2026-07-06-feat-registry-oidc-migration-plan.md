@@ -118,20 +118,30 @@ New infra: a dedicated Hetzner registry host + volume, a single zot systemd/dock
   - **Snapshot cron** for `/var/lib/zot` volume (durability belt-and-suspenders; images are also
     CI-reproducible).
 - `variables.tf`: **no new no-default vars** (all creds TF-generated). Confirm at /work.
-- **`-target` allowlist (architecture P1-2 — load-bearing):** append EVERY new zot resource address
-  (`hcloud_server.registry`, `hcloud_volume.*`, `random_password.zot_*`, `doppler_secret.zot_*`,
-  firewall rule) to `apply-web-platform-infra.yml`'s `-target=` list, else they **silently never
-  apply**. Any resource whose `for_each`/reference touches `var.web_hosts` (e.g. a firewall
-  attachment) MUST replicate the `monitored` existence-flag gate (`dns.tf:28-33`,`variables.tf:71-77`)
-  so it can't drag `hcloud_server.web["web-2"]` into a routine apply.
+- **Apply-path topology (architecture P1-2 — REVISED by CTO ruling 2026-07-06, see
+  `knowledge-base/project/specs/feat-registry-oidc-migration/apply-path-cto-ruling.md`):** the
+  original AC ("append every zot resource to the `-target=` list") is **REVERSED**. A brand-new host
+  cannot be provisioned by the per-PR CI `-target` path (it bridges over SSH to the EXISTING web
+  host). Following the sole brand-new-host precedent (git-data, ADR-068), **all 16 zot resources →
+  `OPERATOR_APPLIED_EXCLUSIONS`** in `plugins/soleur/test/terraform-target-parity.test.ts`, applied
+  by the operator's initial full (untargeted) `terraform apply` + drift detector; **ZERO added to the
+  workflow `-target=` list.** `doppler_service_token.registry` additionally goes in
+  `OPERATOR_APPLIED_TOKEN_EXCLUSIONS`. Two load-bearing conditions: (1) registry host is cloud-init-only
+  (no `remote-exec` `terraform_data`); (2) no zot cred is a `github_actions_secret` — Phase-2 push
+  reads `ZOT_PUSH_*` via `doppler run` at runtime. The registry host is a singleton (no `for_each
+  var.web_hosts`, no placement group, no `moved {}`) → no `monitored`-flag gate needed, no transitive
+  drag.
 
 ### Apply path
-**(b) cloud-init + idempotent bootstrap.** Registry host + volume + Doppler secrets land via the
-auto-applied root. **AC asserts the targeted `terraform plan` shows the new zot resources as CREATES
-and NO create/replace of any `-target`-excluded resource** (guards both the vacuous-pass omission and
-the transitive-drag hole). Ordering: registry host provisioned + `/v2/`-healthy before web-host pulls
-flip (Phase 3 entry gate). zot config changes on the running host apply via an idempotent bootstrap
-script (Inngest pattern), not re-provision.
+**(b) cloud-init-only (git-data/ADR-068 model; NO `remote-exec`).** Registry host + volume + Doppler
+secrets land via the **operator's initial full (untargeted) `terraform apply` + drift detector** — NOT
+the per-PR CI targeted apply (CTO ruling; a new host can't be provisioned over the SSH-to-existing-host
+bridge). **AC #2 reinterpreted as two checks (CTO):** (a) the per-PR CI **targeted** plan shows **zero**
+zot resources + zero create/replace of existing infra (they are operator-applied exclusions, not a
+miss); (b) the operator's **full untargeted** plan shows all 16 zot resources as CREATE + zero
+create/replace of existing infra. Ordering: registry host provisioned + `/v2/`-healthy before web-host
+pulls flip (Phase 3 entry gate). zot config changes on the running host re-apply via re-provision
+(cloud-init is idempotent; git-data pattern), not a separate SSH bootstrap.
 
 ### Distinctness / drift safeguards
 `dev != prd` (registry host prd-only — confirm at /work). No `ignore_changes` (TF owns all values).
@@ -229,7 +239,7 @@ Write ADR-093; edit the three `.c4` files; run c4 syntax+render tests. Update an
 
 ### Pre-merge (PR)
 - [ ] Phase-0 spike evidence in PR/spec: zot local-fs push/pull both images, read-only ACL enforced, cosign offline-verify passes from zot incl `.sig` ACL + gc-not-reaping-`.sig`.
-- [ ] `zot-registry.tf` adds **no no-default TF var**; the **targeted** `terraform plan` shows the new zot resources as CREATES and **no create/replace of any `-target`-excluded resource** (paste plan summary); all new addresses appear in the `apply-web-platform-infra.yml` `-target=` list.
+- [ ] `zot-registry.tf` adds **no no-default TF var**; **(CTO-revised)** all 16 zot resources are in `OPERATOR_APPLIED_EXCLUSIONS` (parity test green) and **none** are in the `apply-web-platform-infra.yml` `-target=` list; the per-PR **targeted** plan shows **zero** zot resources + no create/replace of existing infra; the operator's **full untargeted** plan shows all 16 as CREATE + no create/replace of existing infra (paste plan summary).
 - [ ] Both images backfilled to zot (last N releases + the pinned `v1.1.18` + `:latest`); Phase-5 retirement gate: every tag referenced by `cloud-init.yml`/`variables.tf` resolves in zot.
 - [ ] Push workflows dual-push both images + cosign-sign the zot digest (CI evidence: a tag build is pullable + signed from zot).
 - [ ] Every pull site (full inventory incl `cloud-init.yml:591-606`, `apply-web-platform-infra.yml:1070`) tries zot-primary with an atomic GHCR fallback (image+auth+sig together) and emits `registry`/`image`/`pull_rc`/`login_rc`.
@@ -275,3 +285,4 @@ Considered (single-user-incident threshold trigger). **No regulated-data surface
 - ADR-093 ordinal provisional; on renumber `grep -rn 'ADR-093' knowledge-base/project/{plans,specs}/feat-registry-oidc-migration/` and sweep.
 - zot's own image is third-party (upstream, digest-pinned) — never pull it from our zot (bootstrap paradox).
 - **Deferred (follow-up issue):** zot HA + read-replicas (and R2-backed stateless storage) — reopen only if the singleton shows real availability pain in the soak data.
+- **Deferred (fast-follow, inline-triaged at /work):** the `/var/lib/zot` volume **snapshot cron** (task 1.5). Durability's primary guarantee is CI-reproducibility (images rebuildable from source; the crane backfill re-runs) — the snapshot is belt-and-suspenders. A host-side hcloud API token to self-snapshot would widen the registry host's blast radius (it currently holds only a scoped read-only `prd_registry` token); if added it belongs as a **GHA-side scheduled snapshot job** (uses the existing CI `hcloud_token`, no new host secret). Not merge-blocking for a CI-reproducible registry.

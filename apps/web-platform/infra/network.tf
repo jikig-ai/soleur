@@ -50,3 +50,12 @@ resource "hcloud_server_network" "git_data" {
   subnet_id = hcloud_network_subnet.private.id
   ip        = "10.0.1.20"
 }
+
+# #6122 (ADR-093) — attach the zot registry host at a stable private IP. Web hosts + CI
+# `docker pull` our platform images from ${this ip}:5000 over the private net (zot-registry.tf
+# local.registry_private_ip). Same ADDITIVE online-attach shape as git_data above.
+resource "hcloud_server_network" "registry" {
+  server_id = hcloud_server.registry.id
+  subnet_id = hcloud_network_subnet.private.id
+  ip        = "10.0.1.30"
+}

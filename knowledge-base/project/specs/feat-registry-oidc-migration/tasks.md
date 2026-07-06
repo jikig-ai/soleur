@@ -14,15 +14,15 @@ plan: knowledge-base/project/plans/2026-07-06-feat-registry-oidc-migration-plan.
 - [x] 0.4 Re-verify next ADR ordinal vs origin/main (provisional 093) — latest committed = ADR-092; 093 free
 
 ## Phase 1 — IaC foundations + backfill (additive; GHCR primary)
-- [ ] 1.1 `apps/web-platform/infra/zot-registry.tf`: `hcloud_server.registry` (CAX11) + `hcloud_volume` (attached, `/var/lib/zot`) on the private network
-- [ ] 1.2 cloud-init for the registry host: docker + zot systemd unit (Inngest pattern), local-fs storage, htpasswd, read-only/push ACLs
-- [ ] 1.3 `random_password.zot_pull` + `random_password.zot_push`; `doppler_secret` ZOT_REGISTRY_URL/PULL_USER/PULL_TOKEN/PUSH_USER/PUSH_TOKEN (no `ignore_changes`)
-- [ ] 1.4 `firewall.tf`: registry host reachable from web hosts on private network; keep GHCR egress through soak; any web_hosts `for_each` uses the `monitored` existence-flag gate
-- [ ] 1.5 Volume snapshot cron
-- [ ] 1.6 **Append every new zot resource address to `apply-web-platform-infra.yml` `-target=` list** (else silent no-apply)
-- [ ] 1.7 `uptime-alerts.tf`: zot `/v2/` Better Stack monitor
-- [ ] 1.8 Deploy; verify `/v2/` reachable on private network + monitor green
-- [ ] 1.9 Backfill last N releases of BOTH images GHCR→zot + the pinned `v1.1.18` (inngest) + `:latest` (web)
+- [x] 1.1 `apps/web-platform/infra/zot-registry.tf`: `hcloud_server.registry` (cax11) + `hcloud_volume.registry` (attached, `/var/lib/zot`) + `hcloud_server_network.registry` (10.0.1.30) on the private network — mirrors `git-data.tf` (NOT inngest.tf). fmt+validate green
+- [x] 1.2 `cloud-init-registry.yml`: docker.io + digest-pinned zot **container** (`--restart unless-stopped`; upstream image was the Phase-0 precedent, not a systemd unit — matches web-host runcmd docker-run), local-fs storage, htpasswd (on-host `htpasswd -Bbn` from Doppler tokens), deny-by-default read-only/push ACLs. Rendered + `cloud-init schema` valid (6648B raw); zot boots + serves the authored config.json (401 unauth / 200 authed, no config errors)
+- [x] 1.3 `random_password.zot_pull` + `random_password.zot_push`; `doppler_secret` ZOT_REGISTRY_URL/PULL_USER/PULL_TOKEN/PUSH_USER/PUSH_TOKEN in `prd` (no `ignore_changes`) + host-scoped ZOT_PULL_TOKEN/ZOT_PUSH_TOKEN in operator-created `prd_registry` config (least-privilege, mirrors git-data-luks `prd_git_data`)
+- [x] 1.4 Deny-all-public `hcloud_firewall.registry` + attachment (private-net reachability is automatic via network membership — no allow rule, mirrors `git_data`); GHCR egress stays (no explicit egress rule needed — firewall denies only public *ingress*). Registry is a singleton (no `for_each var.web_hosts`) → no `monitored`-flag gate needed
+- [~] 1.5 Volume snapshot cron — **DEFERRED (inline-triaged): durability = CI-reproducibility (plan's stated primary; images rebuildable + backfill re-runnable). A host-side hcloud token would expand the registry host's blast radius; if added it belongs as a GHA-side scheduled snapshot job, filed as a fast-follow (not merge-blocking for a CI-reproducible registry).** See plan Sharp Edges.
+- [x] 1.6 **(CTO-REVISED)** added all 18 zot resources to `OPERATOR_APPLIED_EXCLUSIONS` (+ `doppler_service_token.registry` to `OPERATOR_APPLIED_TOKEN_EXCLUSIONS`) in `terraform-target-parity.test.ts` (40 tests green); added NONE to the workflow `-target=` list (git-data model). See `apply-path-cto-ruling.md`
+- [x] 1.7 Liveness = `betteruptime_heartbeat.registry_prd` push heartbeat in `zot-registry.tf` (no public ingress → no pull monitor; paused=true+ignore_changes until probe cron ships); reuses the inngest escalation policy; mirrors `git_data_prd`
+- [ ] 1.8 Deploy; verify `/v2/` reachable on private network + heartbeat green — **operator full apply (post-merge; requires `prd_registry` Doppler config precondition + live Hetzner provisioning)**
+- [ ] 1.9 Backfill last N releases of BOTH images GHCR→zot + the pinned `v1.1.18` (inngest) + `:latest` (web) — **post-provisioning (crane copy; needs the live zot host)**
 
 ## Phase 2 — Push side (dual-push)
 - [ ] 2.1 `build-inngest-bootstrap-image.yml:131-194` → also push to zot (ZOT_PUSH_* via Doppler)

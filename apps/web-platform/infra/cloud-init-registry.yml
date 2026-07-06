@@ -1,0 +1,139 @@
+#cloud-config
+# #6122 (ADR-093) — zot registry host cloud-init. Rendered by templatefile() in
+# zot-registry.tf. Mirrors cloud-init-git-data.yml (dedicated volume-backed host,
+# cloud-init-only — NO SSH provisioner, so the CI runner cannot hang a merge-triggered
+# apply; secrets injected via a scoped Doppler token, NEVER baked into user_data) and
+# adds docker + a digest-pinned zot container.
+#
+# zot serves HTTP on the private net (${zot_pull_user}/${zot_push_user} via htpasswd);
+# public ingress is deny-all (zot-registry.tf firewall). cosign digest-pinning + offline
+# verify is the integrity guarantee (Phase-0 spike). Web hosts add this registry to docker
+# insecure-registries in Phase 3.
+#
+# A bare dollar-var ($ZOT_PULL_TOKEN, $i) is left literal by terraform templatefile() —
+# only a dollar-brace interpolates. `$${VAR}` renders a literal shell var (doppler DL).
+package_update: true
+packages:
+  - docker.io # runs the zot container (arm64-native; RUN-only host, no build → docker.io suffices, not docker-ce)
+  - apache2-utils # htpasswd -Bbn (bcrypt) — build the zot htpasswd on-host from Doppler tokens
+  - curl
+
+groups:
+  - docker
+
+write_files:
+  # SSH hardening parity with git-data / the web host's minimal set.
+  - path: /etc/ssh/sshd_config.d/01-hardening.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      MaxAuthTries 3
+      LoginGraceTime 30
+      PermitRootLogin prohibit-password
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+    owner: root:root
+    permissions: '0644'
+
+  # zot config — the Phase-0-validated shape: local-fs storage on the mounted volume,
+  # dedupe + gc (safe on a singleton; gc retains the tagged sha256-<digest>.sig referrers),
+  # htpasswd auth, deny-by-default accessControl (pull user = read; push user =
+  # read/create/update). Usernames are terraform-interpolated (non-secret constants).
+  - path: /etc/zot/config.json
+    content: |
+      {
+        "distSpecVersion": "1.1.0",
+        "storage": {
+          "rootDirectory": "/var/lib/zot",
+          "dedupe": true,
+          "gc": true,
+          "gcDelay": "1h",
+          "gcInterval": "24h"
+        },
+        "http": {
+          "address": "0.0.0.0",
+          "port": "5000",
+          "auth": { "htpasswd": { "path": "/etc/zot/htpasswd" } },
+          "accessControl": {
+            "repositories": {
+              "**": {
+                "policies": [
+                  { "users": ["${zot_pull_user}"], "actions": ["read"] },
+                  { "users": ["${zot_push_user}"], "actions": ["read", "create", "update"] }
+                ],
+                "defaultPolicy": []
+              }
+            }
+          }
+        },
+        "log": { "level": "info" }
+      }
+    owner: root:root
+    permissions: '0644'
+
+runcmd:
+  # Apply SSH hardening immediately.
+  - systemctl restart sshd
+
+  # Mount the zot storage volume by id at /var/lib/zot (server.tf / cloud-init.yml by-id
+  # pattern). `nofail` so a volume hiccup does not wedge boot. zot runs as root in-container,
+  # and the volume mountpoint is root-owned, so no chown/chmod is needed.
+  - mkdir -p /var/lib/zot
+  - mount /dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id} /var/lib/zot || true
+  - echo '/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id} /var/lib/zot ext4 defaults,nofail 0 2' >> /etc/fstab
+
+  # --- Doppler CLI (arm64) — the ONLY channel for the ZOT_* tokens ---------------------
+  # The tokens are NEVER baked into user_data (retrievable via the hcloud metadata API). They
+  # arrive ONLY as the Doppler-injected env at boot. cax11 is ARM64 → linux_arm64 build + its
+  # checksum (same pin as cloud-init-git-data.yml). Egress (github release DL) is open —
+  # zot-registry.tf denies only PUBLIC ingress.
+  - |
+    DOPPLER_VERSION="3.75.3"
+    DOPPLER_SHA256="f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143"
+    curl -fsSL --retry 3 "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_arm64.tar.gz" -o /tmp/doppler.tar.gz
+    echo "$${DOPPLER_SHA256}  /tmp/doppler.tar.gz" | sha256sum -c -
+    tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
+    chmod +x /usr/local/bin/doppler
+    rm /tmp/doppler.tar.gz
+  # Restricted (0600 root) env file with the scoped Doppler service token — NOT world-readable
+  # /etc/environment (mirrors git-data's /etc/default/git-data-doppler). The token is scoped to
+  # the prd_registry config (only the two ZOT tokens), so a host compromise reads nothing else.
+  - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/registry-doppler
+  - chmod 600 /etc/default/registry-doppler
+
+  # Ensure docker is up before the container launch.
+  - systemctl enable --now docker
+
+  # --- Build htpasswd from the Doppler tokens + launch zot -----------------------------
+  # Runs UNDER `doppler run` (scoped prd_registry) so ZOT_PULL_TOKEN/ZOT_PUSH_TOKEN are in
+  # the env. Usernames are terraform-interpolated (non-secret). FAIL LOUD on an empty token —
+  # never launch zot with a half-built htpasswd. Idempotent: `docker rm -f zot` first so a
+  # re-provision (config/token change → clean host replace) relaunches with fresh state.
+  - |
+    set -a
+    . /etc/default/registry-doppler
+    set +a
+    doppler run --project soleur --config prd_registry -- bash -s <<'ZOTEOF'
+    set -euo pipefail
+    [ -n "$ZOT_PULL_TOKEN" ] || { echo "[zot] FATAL: ZOT_PULL_TOKEN empty — refusing to build htpasswd"; exit 1; }
+    [ -n "$ZOT_PUSH_TOKEN" ] || { echo "[zot] FATAL: ZOT_PUSH_TOKEN empty — refusing to build htpasswd"; exit 1; }
+    mkdir -p /etc/zot
+    htpasswd -Bbn '${zot_pull_user}' "$ZOT_PULL_TOKEN"  > /etc/zot/htpasswd
+    htpasswd -Bbn '${zot_push_user}' "$ZOT_PUSH_TOKEN" >> /etc/zot/htpasswd
+    chmod 600 /etc/zot/htpasswd
+    for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+    docker rm -f zot >/dev/null 2>&1 || true
+    docker run -d --name zot --restart unless-stopped \
+      --log-driver journald \
+      -v /var/lib/zot:/var/lib/zot \
+      -v /etc/zot/config.json:/etc/zot/config.json:ro \
+      -v /etc/zot/htpasswd:/etc/zot/htpasswd:ro \
+      -p 0.0.0.0:5000:5000 \
+      '${zot_image}' serve /etc/zot/config.json
+    # Readiness: /v2/ answers (401 unauth IS healthy — reachable, auth-gated). `curl -s`
+    # without -f returns 0 on any HTTP response, non-zero only on connection-refused.
+    for i in $(seq 1 30); do
+      curl -s -o /dev/null "http://localhost:5000/v2/" && { echo "[zot] listening on :5000"; break; }
+      sleep 2
+    done
+    ZOTEOF
