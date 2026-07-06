@@ -215,7 +215,7 @@ t_orphan_ids_surfaced() {
 }
 
 # T8b: context-reviewed-* telemetry ids are EXEMPT from the orphan gate
-# (issue #5999, ADR-086) — the freshness audit tripwire logs undeclared
+# (issue #5999, ADR-094) — the freshness audit tripwire logs undeclared
 # last_reviewed bumps under operational rule_ids that have no AGENTS.md tag
 # (B_ALWAYS has no headroom for one). They must NOT surface as orphans and
 # must NOT fail the run. Mirrors the te-*/gdpr-gate-* exemptions.

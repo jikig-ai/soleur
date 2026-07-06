@@ -1,9 +1,9 @@
-# ADR-086: Freshness `last_reviewed` — source-fix-first integrity + a commit-time audit tripwire
+# ADR-094: Freshness `last_reviewed` — source-fix-first integrity + a commit-time audit tripwire
 
 - **Status:** Accepted
 - **Date:** 2026-07-05
 - **Issue:** #5999 (epic #6003)
-- **Ordinal note:** Planned provisionally as ADR-085; that ordinal was taken by the attention-inbox ADR (PR #6007) before this shipped, so it re-verified to **ADR-086** at implementation time (per the plan's "re-verify against origin/main at ship" instruction).
+- **Ordinal note:** Ordinal chain: 085 (provisional) → 086 (re-verified at ship time — ordinal 085 was taken by the attention-inbox ADR, PR #6007) → **094** (this collision cleanup, #6054: three PRs concurrently claimed ordinal 086 on 2026-07-05; this one moved to the next-free ordinal).
 
 ## Context
 

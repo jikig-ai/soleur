@@ -62,7 +62,7 @@ A generated legal draft can echo a secret or PII that was passed in as company c
    bash "$SENTINEL" <draft-tmpfile>
    ```
 
-   The engine is owned by the `incident` skill and shared cross-skill by relative reference (see ADR-086).
+   The engine is owned by the `incident` skill and shared cross-skill by relative reference (see ADR-095).
 
 3. Dispatch on the exit code (fail-closed):
    - **exit 0 (clean)** — proceed to Phase 3 and present the draft.

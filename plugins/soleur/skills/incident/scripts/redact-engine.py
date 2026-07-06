@@ -204,7 +204,7 @@ def _scan_reflow(norm, seen):
                 continue  # no whitespace in window — the base pass already saw this exact run
             # If the split cap was hit (len == _MAX_REFLOW_SPLITS+1), the last element is an unbounded
             # prose remainder — drop it so prose cannot be glued into a spurious token. A token split at
-            # more than _MAX_REFLOW_SPLITS points is missed — a recorded residual (ADR-086). Joining
+            # more than _MAX_REFLOW_SPLITS points is missed — a recorded residual (ADR-095). Joining
             # removes the whitespace separators, so the candidate is always shorter than the window.
             joinable = parts[:-1] if len(parts) == _MAX_REFLOW_SPLITS + 1 else parts
             m = full_rx.match("".join(joinable))
@@ -243,7 +243,7 @@ def _is_der_private_key(raw):
     # material and flagging them would fail-close a legitimate write (a public cert in a legal draft is fine).
     # Handles BOTH short-form (EC ~118B, Ed25519 ~48-85B) and long-form (RSA >=128B) length encodings; a
     # long-form-only check would silently miss EC/Ed25519. Residual gap: EncryptedPrivateKeyInfo (inner
-    # SEQUENCE) is not caught — a named non-goal recorded in ADR-086. Floor guards tiny innocent DER.
+    # SEQUENCE) is not caught — a named non-goal recorded in ADR-095. Floor guards tiny innocent DER.
     if len(raw) < 48 or raw[0] != 0x30:
         return False
     lb = raw[1]
