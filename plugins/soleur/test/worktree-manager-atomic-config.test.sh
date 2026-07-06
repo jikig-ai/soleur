@@ -266,5 +266,30 @@ else
   echo "  PASS: repositoryformatversion left at plain-repo default on the non-bare repo"; PASS=$((PASS + 1))
 fi
 
+# ---------------------------------------------------------------------------
+echo "Test 13: #4826 round-5 — guard STILL fires on a normal repo when GIT_ROOT is EMPTY"
+# The round-4 guard was `[[ -d "\$GIT_ROOT/.git" ]]` alone. In the live sandbox GIT_ROOT
+# resolved EMPTY (git rev-parse --show-toplevel returned nothing under the masked config),
+# so the check became `[[ -d "/.git" ]]` → false → the guard did NOT fire and the surgery
+# wedged on the masked config.lock (user's cleanup-merged, 2026-07-06). The hardened guard
+# adds git's authoritative `--is-bare-repository` with a `${GIT_ROOT:-.}` CWD fallback, so a
+# normal clone skips even when GIT_ROOT is empty. Simulate it: cd INTO the repo, blank
+# GIT_ROOT, plant a masked lock, and assert NO wedge + NO config write.
+WS13=$(mktemp -d "$TMP/emptyroot.XXXXXX"); git init -q -b main "$WS13" >/dev/null 2>&1
+mkdir "$WS13/.git/config.lock"   # non-regular (masked) lock — a write attempt would wedge
+_SAVED_GIT_ROOT="$GIT_ROOT"; _SAVED_PWD="$PWD"
+cd "$WS13"; GIT_ROOT=""          # the exact sandbox failure: empty GIT_ROOT, CWD is the repo
+set +e; ensure_bare_config >"$TMP/ebc13.out" 2>&1; EBC13_RC=$?; set -e
+GIT_ROOT="$_SAVED_GIT_ROOT"; cd "$_SAVED_PWD"
+assert_eq "0" "$EBC13_RC" "ensure_bare_config returns 0 with empty GIT_ROOT (git fallback fires)"
+if grep -qE "mv:|worktree wedge|config.soleur-tmp" "$TMP/ebc13.out"; then
+  echo "  FAIL: WEDGED on empty GIT_ROOT — the round-4 regression is NOT fixed"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: no config-write wedge on empty GIT_ROOT (hardened guard held)"; PASS=$((PASS + 1))
+fi
+assert_eq "__ABSENT__" "$(git config --file "$WS13/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
+  "worktreeConfig NOT set with empty GIT_ROOT (no surgery ran)"
+rm -rf "$WS13/.git/config.lock"
+
 echo ""
 print_results
