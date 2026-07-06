@@ -183,10 +183,23 @@ if [ "$RC" -eq 1 ]; then pass; else fail "AC4-staleness: a stale ok must NOT be 
 SEQ="garbage-tag" MAXATT=3 run_verify
 if [ "$RC" -eq 1 ]; then pass; else fail "AC4-tag: a truly-invalid baseline tag ('garbage!') should exit 1, got rc=$RC"; fi
 
+# ── AC4: tag validation — an EMPTY current tag still aborts (the comment at the guard
+# advertises "empty / garbage still abort"; garbage is covered above, empty here). ──
+SEQ="empty-tag" MAXATT=3 run_verify
+if [ "$RC" -eq 1 ]; then pass; else fail "AC4-tag-empty: an empty baseline tag should exit 1, got rc=$RC"; fi
+
 # ── AC4-latest: web-1 on the floating :latest is TOLERATED (can't downgrade web-1) → the
 # verify proceeds to a successful web-2 fan-out instead of aborting on the baseline read. ──
-SEQ="bad-tag bad-tag ok-latest-s300" WINDOW=0 MAXATT=5 run_verify
+SEQ="latest-tag latest-tag ok-latest-s300" WINDOW=0 MAXATT=5 run_verify
 if [ "$RC" -eq 0 ]; then pass; else fail "AC4-latest: a 'latest' baseline tag should be tolerated and reach a successful verify (exit 0), got rc=$RC. OUT: $OUT"; fi
+
+# ── AC4-latest-resolve: a :latest baseline whose trigger re-read reports a PINNED version
+# is a path only reachable because the baseline now tolerates `latest`. The downgrade guard
+# reassigns DEPLOY_TAG latest→vX.Y.Z (never a downgrade) and the poll matches the pinned tag.
+# Proves the durable-:latest-resolved-at-source case (guard comment / #6060) works end-to-end. ──
+SEQ="latest-tag settled-v2-s250 ok-v2-s300" WINDOW=0 MAXATT=5 run_verify
+if [ "$RC" -eq 0 ]; then pass; else fail "AC4-latest-resolve: latest baseline + pinned re-read should exit 0, got rc=$RC. OUT: $OUT"; fi
+if printf '%s' "$GHOUT" | grep -q '^deployed_tag=v1.1.0$'; then pass; else fail "AC4-latest-resolve: DEPLOY_TAG must reassign latest→v1.1.0 (emitted to GITHUB_OUTPUT). GHOUT: $GHOUT"; fi
 
 # ── AC4: fail-loud on an UNEXPECTED reason (exit_code=0, reason ∉ {ok, *_degraded}) ──
 SEQ="settled-v1 settled-v1 unexpected-reason-s300" WINDOW=0 MAXATT=5 run_verify
