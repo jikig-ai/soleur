@@ -28,6 +28,7 @@ import {
 // inside the resolver's flag-OFF fast path.
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import { sendToClient } from "./ws-handler";
+import { getPluginPath } from "./plugin-path";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import {
   notifyOfflineUser,
@@ -1106,7 +1107,10 @@ export async function startAgentSession(
       sessionTenant,
       activeWorkspaceId,
     );
-    const pluginPath = path.join(workspacePath, "plugins", "soleur");
+    // Load the SDK plugin from the PLATFORM-DEPLOYED root, never the workspace
+    // copy — same trust boundary as cc-dispatcher (this legacy startAgentSession
+    // factory is the one #6115 missed). See the connected-repo-shadows learning.
+    const pluginPath = getPluginPath();
 
     // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
     // reprovision-ensure-dir-presandbox). The leader's bwrap sandbox binds
@@ -1170,10 +1174,12 @@ export async function startAgentSession(
         pluginMcpServerNames = Object.keys(pluginJson.mcpServers);
       }
     } catch (err) {
-      // plugin.json may not exist in all workspaces; proceed without plugin MCP tools.
-      // ENOENT is an expected state (no plugin installed). Parse errors or other
-      // read failures on a committed file are degraded conditions — mirror to
-      // Sentry so we hear about corrupted workspaces.
+      // plugin.json is read from the DEPLOYED plugin root (pluginPath =
+      // getPluginPath()), not the workspace copy; proceed without plugin MCP tools
+      // on any failure. ENOENT is an expected state on a container whose plugin
+      // mount is absent/partial (verifyPluginMountOnce owns that signal). Parse or
+      // other read failures on the deployed file are a degraded deploy condition —
+      // mirror to Sentry so we hear about a corrupted plugin mount.
       if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
         reportSilentFallback(err, {
           feature: "agent-runner",

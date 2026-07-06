@@ -14,6 +14,8 @@
  * a one-line warning to stderr (no Sentry, since this is import-time).
  */
 
+import path from "node:path";
+
 export const SOLEUR_PLUGIN_PATH_DEFAULT = "/app/shared/plugins/soleur";
 
 // Allowlisted prefixes. `/app/` covers the production container; broader
@@ -44,4 +46,44 @@ export function getPluginPath(): string {
       `Falling back to default ${SOLEUR_PLUGIN_PATH_DEFAULT}.`,
   );
   return SOLEUR_PLUGIN_PATH_DEFAULT;
+}
+
+/**
+ * Loaded-gun guard for the SDK `plugins:[{ path }]` binding (both real-SDK
+ * factories, at `agent-runner-query-options.ts`). Both factories now source the
+ * plugin path from {@link getPluginPath} (an absolute `/app/` platform path,
+ * workspace-independent) — the connected-repo-shadow security fix
+ * (fix-plugin-shadow-deployed-load). This assertion makes a REGRESSION back to a
+ * workspace-relative path fail LOUDLY rather than silently re-executing an
+ * untrusted connected repo's `plugins/soleur/hooks/hooks.json` in the dispatch
+ * process. It reuses the same `/app/` allowlist prefix as the env-override guard.
+ *
+ * Test-tolerant, mirroring {@link getPluginPath}'s VITEST/NODE_ENV=test bypass:
+ * unit/integration fixtures legitimately pass mkdtemp (`/tmp`, `/var/folders`)
+ * paths and the production `/app/` prefix is where the guard actually matters.
+ *
+ * @returns `p` unchanged when trusted (chainable at the call site).
+ * @throws if, in a production env, `p` is not an absolute `/app/` path.
+ */
+export function assertTrustedPluginPath(p: string): string {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return p;
+  // Normalize `..`/`.` segments BEFORE the prefix check: a security guard must
+  // not be defeated by a non-canonical path like `/app/../workspaces/x` (lexically
+  // `startsWith("/app/")` but resolves outside it). `p` is still required to be
+  // absolute — a relative path is rejected outright (never resolved against CWD).
+  // The guard's effectiveness rests on the invariant that real workspaces live
+  // OUTSIDE the `/app/` allowlist (WORKSPACES_ROOT=/workspaces, cron at /mnt/data —
+  // agent-runner-sandbox-config.ts): a workspace-relative regression resolves
+  // outside `/app/` and throws. If WORKSPACES_ROOT is ever repointed under /app/,
+  // this guard stops distinguishing deployed-root from workspace paths.
+  const resolved = path.resolve(p);
+  if (path.isAbsolute(p) && ALLOWED_PREFIXES.some((prefix) => resolved.startsWith(prefix))) {
+    return p;
+  }
+  throw new Error(
+    `[plugin-path] Refusing untrusted plugin path ${JSON.stringify(p)} — the SDK ` +
+      `plugins: binding must be an absolute path under one of ${ALLOWED_PREFIXES.join(", ")} ` +
+      `(the platform-deployed root), never a connected-repo workspace path. ` +
+      `Load it from getPluginPath().`,
+  );
 }
