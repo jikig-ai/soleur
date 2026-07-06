@@ -97,7 +97,7 @@ change corrects an issue's `state_reason` bookkeeping and a label; it touches no
 data-processing path, no secret, and no external data-movement surface. There is
 no data-exposure vector.
 
-**Brand-survival threshold:** aggregate pattern — the harm is corpus-wide
+- **Brand-survival threshold:** aggregate pattern — the harm is corpus-wide
 audit/metric integrity that accumulates across every timed-out follow-through,
 not a single-user data-exposure incident. (The underlying "was the secret
 rotated / was erasure verified" facts are unaffected by the label; the bug
