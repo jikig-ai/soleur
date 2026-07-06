@@ -103,7 +103,10 @@ import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 // Editing this prompt and the --allowedTools / --max-turns flags below MUST
 // happen together — they form a single agent contract (a permissive tool
 // list with a restrictive prompt is silent agent failure).
-const FOLLOW_THROUGH_PROMPT = String.raw`You are a follow-through monitor agent. Your job is to check open GitHub
+// Exported for test parity (cron-follow-through-monitor.test.ts T9 asserts the
+// Guard A / Guard C close semantics on the instruction text — the agent itself
+// cannot be executed in-suite).
+export const FOLLOW_THROUGH_PROMPT = String.raw`You are a follow-through monitor agent. Your job is to check open GitHub
 issues labeled ${"`"}follow-through${"`"} and take action based on their verification
 predicates and SLA status.
 
@@ -143,7 +146,10 @@ predicates and SLA status.
         and skip this transition for this issue if any existing comment
         starts with "Verified: ". Otherwise: ORDERING IS LOAD-BEARING —
         post the comment FIRST, then close: (1) ${"`"}gh issue comment <number> --body "Verified: [result details]. Auto-closing."${"`"}
-        then (2) ${"`"}gh issue close <number>${"`"}. The comment is the durable
+        then (2) ${"`"}gh issue close <number>${"`"}. This close stays a BARE close
+        (state_reason COMPLETED) — the predicate PASSED, so COMPLETED is
+        correct here; do NOT add a reason flag. Only the max-polling give-up
+        path (Guard C) closes as not-planned. The comment is the durable
         audit record; the close is reversible. If (1) fails, do NOT proceed
         to (2) — the issue stays open and a future run retries the full
         transition. Torn-write recovery: if state is "closed" but no
@@ -158,16 +164,31 @@ predicates and SLA status.
         add ${"`"}needs-attention${"`"} label. Comment: "SLA exceeded ([N] business
         days, limit was [M]). @[author login] — manual intervention required."
 
-      - MAX POLLING EXCEEDED (30 business days) — Guard C (idempotent max-polling-close):
+      - MAX POLLING EXCEEDED (30 business days) — Guard C (idempotent max-polling-close-as-not-planned):
         First run ${"`"}gh issue view <number> --json comments,state,labels --jq '{comments: .comments, state: .state, labels: .labels}'${"`"}
         and skip this transition if any existing comment starts with
         "Maximum polling ". Otherwise: ORDERING IS LOAD-BEARING — perform
-        in this exact order: (1) ${"`"}gh issue edit <number> --add-label "needs-attention"${"`"},
-        then (2) ${"`"}gh issue comment <number> --body "Maximum polling period reached (30 business days). Stopping automated monitoring. @[author login] — manual intervention required."${"`"},
-        then (3) ${"`"}gh issue close <number>${"`"}. If (2) fails, do NOT proceed
-        to (3) — the issue stays open and a future run retries. Torn-write
-        recovery: if state is "closed" but no "Maximum polling " comment
-        exists, post the comment now.
+        in this exact order:
+        (1) ${"`"}gh issue comment <number> --body "Maximum polling period reached (30 business days). Stopping automated monitoring. @[author login] — manual intervention required."${"`"}
+            (durable audit record — post FIRST).
+        (2) If the ${"`"}needs-attention${"`"} label is present (from the labels
+            fetched in the view above), ${"`"}gh issue edit <number> --remove-label "needs-attention"${"`"}
+            — strip the now-misleading label BEFORE closing so needs-attention
+            never persists on a closed issue.
+        (3) ${"`"}gh issue close <number> --reason "not planned"${"`"} — this is a
+            timed-out, never-verified issue: record it as NOT completed. NEVER a
+            bare ${"`"}gh issue close${"`"} here (a bare close defaults to state_reason
+            COMPLETED — the exact bug this guard exists to avoid); NEVER
+            ${"`"}--reason "completed"${"`"} on this timeout path.
+        If (1) fails, do NOT proceed to (2)/(3) — the issue stays open and a
+        future run retries the full transition. If (2) is required (the label
+        is present) but fails, do NOT proceed to (3) either — leave the issue
+        OPEN with needs-attention (a valid state); NEVER close while
+        needs-attention is still present (that recreates the closed-with-
+        needs-attention state this guard exists to avoid). Torn-write recovery:
+        if state is "closed" but no "Maximum polling " comment exists, post the
+        comment now (the close succeeded but the comment was lost); and if
+        needs-attention is still present on that closed issue, remove it.
 
       - WITHIN SLA, NO STATE CHANGE: Do nothing. No comment.
 
@@ -182,7 +203,9 @@ predicates and SLA status.
 - NEVER modify issue bodies. Only add comments and labels.
 - NEVER create new issues.
 - NEVER close issues unless a predicate passes or 30 business day max
-  is exceeded.
+  is exceeded. A predicate-pass close is a bare close (state_reason
+  completed); the max-polling give-up close is a not-planned close (the
+  automation is giving up, so the issue is NOT completed).
 - NEVER include any of the following substrings (case-insensitive)
   anywhere in any comment body — they trigger GitHub's auto-close
   regex which is markdown-blind and fires inside code blocks,
