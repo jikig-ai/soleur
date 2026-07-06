@@ -167,7 +167,7 @@ See **Canary Handling** below. This is the corrected replacement for the request
 **Correction:** after Phase 1 the SDK load source is a compile-time constant (`getPluginPath()`), so a per-dispatch
 `source=='workspace-shadow'` event monitors a **state the code cannot produce** (a tautology). Reduce to: (a) rely on
 the existing `verifyPluginMountOnce()` boot probe (deployed-root missing/empty → Sentry) + the deploy SHA to answer
-"is the new build actually running on the operator's surface?"; (b) a single diagnostic breadcrumb field
+"is the new build actually running on the deployed container?"; (b) a single diagnostic breadcrumb field
 `connectedRepoShipsPlugin` on the existing dispatch/plugin-mount channel (records the previously-silent collision
 condition — no new pipeline). Drop the synthetic-`workspace-shadow` test and the shadow-count monitor.
 
@@ -374,9 +374,14 @@ unverified delivery mechanism). The operator's call, surfaced via AskUserQuestio
 - [x] **AC12b (F4 — test-bypass not widened):** under `NODE_ENV=production` (VITEST unset), `getPluginPath()` with a non-`/app/` `SOLEUR_PLUGIN_PATH` override falls back to the default (the `/app/` prefix guard holds); this fix adds no new production exposure.
 
 ### Post-merge (operator)
+<!-- lint-infra-ignore start -->
+<!-- Deferred-orchestrator prose: all three ACs are automated post-merge verification
+     (deploy-status webhook read + Sentry API, explicitly no SSH) run by /soleur:postmerge,
+     NOT human-run infra steps. Wrapped per the no-human-steps linter's sanctioned remedy. -->
 - [ ] **AC13:** Read `/hooks/deploy-status` reason after the re-apply deploy (`curl … | jq -r '.reason'`) — expect `ok`. If `canary_sandbox_failed`, triage as HOST bwrap/userns (Canary Handling step 3), do NOT revert the plugin fix. `Automation:` deploy-status webhook read (no SSH).
 - [ ] **AC14 (reframed — the shadow-count monitor was a dead branch):** confirm the operator's container is running the new build (deploy SHA advanced) AND Sentry shows **zero** `verifyPluginMountOnce` plugin-mount fallbacks on it post-deploy; plus the `connectedRepoShipsPlugin` breadcrumb is observed (proving the collision path was exercised and is now inert). `Automation:` deploy-status + Sentry API.
 - [ ] **AC15:** `gh issue close` the tracking issue only after AC13+AC14 hold (use `Ref #N` in the PR body, not `Closes`, since verification is post-merge).
+<!-- lint-infra-ignore end -->
 
 ---
 
