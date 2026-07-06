@@ -85,6 +85,21 @@ const OAUTH_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
 export interface BuildAgentEnvOptions {
   ghToken?: string;
   /**
+   * Absolute path to the DEPLOYED Soleur plugin root (`getPluginPath()`, i.e.
+   * `/app/shared/plugins/soleur`), exported to the agent bash env as
+   * `CLAUDE_PLUGIN_ROOT`. WHY (#4826): the env passed to the sandbox REPLACES
+   * process.env with the curated AGENT_ENV_ALLOWLIST, which does NOT include
+   * CLAUDE_PLUGIN_ROOT — so a plugin command that shells out to
+   * `${CLAUDE_PLUGIN_ROOT}/skills/.../worktree-manager.sh` would otherwise get an
+   * empty var and fall back to the WORKSPACE-relative `./plugins/soleur/...`. For
+   * a workspace whose connected repo ships its own `plugins/soleur/` (e.g. an
+   * operator dogfooding soleur-in-soleur), that workspace-relative path resolves
+   * to the connected repo's COMMITTED, frozen copy — never the deployed plugin —
+   * so every plugin-script fix is silently shadowed. Injecting this makes the
+   * deployed plugin scripts run regardless of what the connected repo ships.
+   */
+  pluginPath?: string;
+  /**
    * Absolute path to the in-sandbox GIT_ASKPASS helper script. Written by
    * the server under the agent's own `workspacePath` (the only verified
    * sandbox-readable `allowWrite` dir) so a bwrap `git` subprocess can
@@ -126,6 +141,14 @@ export function buildAgentEnv(
     if (value !== undefined) {
       env[key] = value;
     }
+  }
+
+  // Export the deployed plugin root so plugin scripts invoked from bash resolve to
+  // the DEPLOYED plugin, not a connected repo's shadowing `plugins/soleur/` copy
+  // (#4826). Not in AGENT_ENV_ALLOWLIST by design — it is a per-dispatch value the
+  // caller supplies, not an ambient process.env var to copy through.
+  if (opts?.pluginPath) {
+    env.CLAUDE_PLUGIN_ROOT = opts.pluginPath;
   }
 
   // Inject third-party service tokens AFTER the allowlist loop.

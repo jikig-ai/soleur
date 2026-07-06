@@ -97,6 +97,19 @@ describe("buildAgentEnv", () => {
     }
   });
 
+  test("exports opts.pluginPath as CLAUDE_PLUGIN_ROOT (#4826 plugin-shadow fix)", () => {
+    const env = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" }, undefined, {
+      pluginPath: "/app/shared/plugins/soleur",
+    });
+    expect(env.CLAUDE_PLUGIN_ROOT).toBe("/app/shared/plugins/soleur");
+  });
+
+  test("omits CLAUDE_PLUGIN_ROOT when no pluginPath is supplied", () => {
+    // Deliberately NOT copied from ambient process.env — it is a per-dispatch value.
+    const env = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+    expect(env).not.toHaveProperty("CLAUDE_PLUGIN_ROOT");
+  });
+
   test("omits allowlisted vars not present in process.env", () => {
     const mutableEnv = process.env as Record<string, string | undefined>;
     delete mutableEnv.LANG;
