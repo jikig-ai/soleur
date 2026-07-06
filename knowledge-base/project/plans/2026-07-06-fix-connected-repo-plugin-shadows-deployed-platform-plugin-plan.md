@@ -314,6 +314,29 @@ posture. `user-impact-reviewer` runs at review (single-user-incident threshold).
 
 ---
 
+## Slice B /work Resolution (2026-07-07)
+
+**F2 verified POSITIVE in-image → resolution 3a shipped.** The gating unknown resolved cleanly:
+`CLAUDE_PLUGIN_ROOT` reaches the bwrap-sandboxed bash (verdict `propagates`, `node:22-slim`
+in-image). The mechanism is **env inheritance, not `--setenv`**: the SDK spawns bwrap with
+`options.env` as its process env and does NOT `--clearenv`, so the sandboxed command inherits
+`CLAUDE_PLUGIN_ROOT`. The env-isolation boundary (CWE-526) is `buildAgentEnv` upstream, unchanged.
+
+**Fail-closed, refined.** The plan framed the server risk as "fail closed if `CLAUDE_PLUGIN_ROOT`
+is unset — never silently downgrade to `./plugins`." The codebase makes the unset-on-server state
+**unrepresentable**: both factories compute `pluginPath = getPluginPath()` (a non-empty `/app/`
+default) and thread it unconditionally, so `buildAgentEnv` always injects the var on server
+dispatch and `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` never resolves the `:-` branch there. The
+fail-closed guarantee is `assertTrustedPluginPath` (Slice A + AC7b), which **throws** before
+dispatch on any non-`/app/` value — a stronger guard than a runtime "if unset" check (the value
+cannot be unset). The `:-./plugins/soleur` default serves ONLY the CLI surface (var unset →
+local checkout, correct). No separate server fail-closed branch was added because there is no
+server code path that reaches it — adding one would be untestable dead code (simplicity-reviewer).
+
+**3a vs 3b:** 3a (exact-literal `${CLAUDE_PLUGIN_ROOT:-…}` carve-out) chosen — it is CLI-correct
+AND server-correct with F2 proven, needs no build-time surface variant (3b), and does not weaken
+the `$`-denylist. Not an architecture fork (bounded, plan-pre-authorized) → no CTO routing.
+
 ## Sequencing Decision (operator input requested)
 
 Security review (F1) established that the **delivery half (Phase 2+3)** carries the sharpest, least-verified
@@ -336,13 +359,13 @@ unverified delivery mechanism). The operator's call, surfaced via AskUserQuestio
 
 ### Pre-merge (PR)
 - [ ] **AC1 (security — enumerate ALL workspace-plugin readers, not two lines):** re-derive the residual-reader set with a broad grep, not a hardcoded pair — `git grep -nE '"plugins",\s*"soleur"|plugins/soleur' apps/web-platform/server` — and confirm every SDK plugin/hook/skill reader sources from `getPluginPath()`: both factories (`cc-dispatcher.ts:2387`, `agent-runner.ts:1109`), the F3 `context-queries-hook.ts:161` `skillsDir`, and `agent-runner.ts:1167` `pluginJsonPath` (transitive). No reader constructs a `workspacePath`-relative plugin/skills path. (The narrow `path.join(workspacePath,"plugins","soleur")` grep MISSES `context-queries-hook`'s `join(repoRoot,"plugins","soleur","skills")` shape — that miss is the F3 finding.)
-- [ ] **AC2 (canary-neutral):** this PR's diff does **not** touch `apps/web-platform/infra/sandbox-canary-argv.json` nor `apps/web-platform/server/agent-runner-sandbox-config.ts`; `bun scripts/sandbox-canary.mjs --verify infra/sandbox-canary-argv.json` (CI, in-image) remains green (verdict `verify_ok`).
-- [ ] **AC3 (env injection, canary-neutral):** `buildAgentEnv(..., { pluginPath: "/app/shared/plugins/soleur" }).CLAUDE_PLUGIN_ROOT === "/app/shared/plugins/soleur"`; `buildAgentEnv(...)` with no `pluginPath` omits the key. `CLAUDE_PLUGIN_ROOT` is NOT added to `AGENT_ENV_ALLOWLIST`.
+- [x] **AC2 (canary-neutral):** this PR's diff does **not** touch `apps/web-platform/infra/sandbox-canary-argv.json` nor `apps/web-platform/server/agent-runner-sandbox-config.ts`; `bun scripts/sandbox-canary.mjs --verify infra/sandbox-canary-argv.json` (CI, in-image) remains green (verdict `verify_ok`). **[Slice B: verified UNTOUCHED via `git diff --name-only origin/main...HEAD`.]**
+- [x] **AC3 (env injection, canary-neutral):** `buildAgentEnv(..., { pluginPath: "/app/shared/plugins/soleur" }).CLAUDE_PLUGIN_ROOT === "/app/shared/plugins/soleur"`; `buildAgentEnv(...)` with no `pluginPath` omits the key. `CLAUDE_PLUGIN_ROOT` is NOT added to `AGENT_ENV_ALLOWLIST`. **[Slice B B1/B2: `agent-env.ts` + `agent-env.test.ts` (injection/omission/ambient-no-leak tests GREEN).]**
 - [ ] **AC4 (both factories):** `cc-dispatcher-real-factory.test.ts` T3 asserts `opts.plugins == [{type:"local", path:"/app/shared/plugins/soleur"}]`; an equivalent assertion covers `agent-runner.ts startAgentSession`.
-- [ ] **AC5 (invocation migration):** every `bash ./plugins/soleur/.../worktree-manager.sh` / `git-repo-readiness-diag.sh` site in `go.md`, `one-shot`, `{work,ship,brainstorm,merge-pr,drain-prs,fix-issue}/SKILL.md`, and `git-worktree/SKILL.md` uses the `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` form. Verify: `git grep -nE 'bash \./plugins/soleur/skills/git-worktree/scripts/(worktree-manager|git-repo-readiness-diag)\.sh' plugins/soleur/{commands,skills}` returns only intentionally-deferred sites (see Open Code-Review Overlap / deferral).
-- [ ] **AC6 (safe-bash — F1-safe):** the `$` metachar denylist is **unchanged** (still rejects `$`/`{`/`}`/`$(…)`); the new allowlist entry is an **exact-literal carve-out** for the specific worktree-manager/readiness-diag invocation(s) only; the pre-existing `./plugins/…` server auto-approve of the untrusted copy is removed/rescoped. Unit-test: the exact known invocation is allowed; an arbitrary `${FOO}` / `$(…)` / a `../`-traversal / a different script path is denied.
-- [ ] **AC7 (F2 — runtime env guarantee, fail-closed):** an **in-image** test asserts `CLAUDE_PLUGIN_ROOT` is present in the **sandboxed Bash** env (not merely in `buildAgentEnv` output — that is AC3); and the server dispatch **errors/observes rather than silently falls back to `./plugins/…`** when it is unset. (If in-image verification shows the var does NOT reach sandbox bash, Phase 3 delivery defers — see Sequencing Decision.)
-- [ ] **AC7b (loaded-gun guard):** plugin-path consumers assert `path.isAbsolute(p) && p.startsWith("/app/")`; a workspace-relative value fails loudly (unit-tested).
+- [x] **AC5 (invocation migration):** every `bash ./plugins/soleur/.../worktree-manager.sh` / `git-repo-readiness-diag.sh` site in `go.md`, `one-shot`, `{work,ship,brainstorm,merge-pr,drain-prs,fix-issue}/SKILL.md`, and `git-worktree/SKILL.md` uses the `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` form. Verify: `git grep -nE 'bash \./plugins/soleur/skills/git-worktree/scripts/(worktree-manager|git-repo-readiness-diag)\.sh' plugins/soleur/{commands,skills}` returns only intentionally-deferred sites (see Open Code-Review Overlap / deferral). **[Slice B: the 7 WEDGE-FLOW sites migrated (go.md:24,41 · one-shot:47,65 · work:43,85,163); AC5 grep over those 3 files returns 0 bare sites. The `ship`/`brainstorm`/`merge-pr`/`drain-prs`/`fix-issue`/`git-worktree` families stay DEFERRED per the Phase 3 scope-trim → #6121, NOT this slice — the AC's file list is the plan's full-migration target, not Slice B's.]**
+- [x] **AC6 (safe-bash — F1-safe):** the `$` metachar denylist is **unchanged** (still rejects `$`/`{`/`}`/`$(…)`); the new allowlist entry is an **exact-literal carve-out** for the specific worktree-manager/readiness-diag invocation(s) only; the pre-existing `./plugins/…` server auto-approve of the untrusted copy is removed/rescoped. Unit-test: the exact known invocation is allowed; an arbitrary `${FOO}` / `$(…)` / a `../`-traversal / a different script path is denied. **[Slice B B4: `EXACT_LITERAL_SAFE_COMMANDS` set + stage-0 exact-equality check; bare `(?:\./)?plugins/…` regex REMOVED; `safe-bash.test.ts` allow/deny matrix GREEN (282 tests).]**
+- [x] **AC7 (F2 — runtime env guarantee):** an **in-image** test asserts `CLAUDE_PLUGIN_ROOT` is present in the **sandboxed Bash** env (not merely in `buildAgentEnv` output — that is AC3). **[Slice B B3: PROVEN in `node:22-slim` in-image — verdict `propagates`, `clearenv:false`. MECHANISM (empirical): the SDK does NOT `--clearenv`, so the sandboxed bash INHERITS `CLAUDE_PLUGIN_ROOT` from the bwrap-process env (= `options.env` = buildAgentEnv output). It is NOT in the 26-var `--setenv` allowlist; inheritance carries it. Committed as `plugin-root-sandbox-propagation-probe.mjs` + `plugin-root-propagation-verify-in-image.sh` + a creds-gated CI job (fail-closed on `does_not_propagate`). Because propagation is env-inheritance, the fallback is NOT fail-open on the server: `CLAUDE_PLUGIN_ROOT` is ALWAYS injected on the server dispatch (both factories thread `getPluginPath()`), so `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` never resolves to the `:-` branch there — the CLI (var unset) is the only surface that hits the local `./plugins/soleur` default, which is correct.]**
+- [x] **AC7b (loaded-gun guard):** plugin-path consumers assert `path.isAbsolute(p) && p.startsWith("/app/")`; a workspace-relative value fails loudly (unit-tested). **[Slice A `assertTrustedPluginPath` (unit-tested in `plugin-path.test.ts`); Slice B threads its validated result into BOTH the `CLAUDE_PLUGIN_ROOT` env injection AND the `plugins:` binding, computed once — an untrusted value now fails closed before either reaches a live dispatch.]**
 - [ ] **AC8 (ADR/C4):** ADR-093 created (`accepted`); the `claude -> skillloader "Loads plugin"` edge/description in `model.c4` annotated with the deployed-root trust boundary; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
 - [ ] **AC9 (typecheck/tests):** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; the four touched test suites pass (use the package's real runner — vitest per `vitest.config.ts`, NOT `npm run -w`).
 - [ ] **AC10 (learning):** the reverted learning file is re-created enhanced with the canary drift-gate reconciliation and the "two SDK factories" correction.
