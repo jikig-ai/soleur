@@ -7,9 +7,15 @@ bootstrap; the sibling Sentry README is structured as a reference doc
 because cron-monitors + issue-alerts have parallel lifecycles. State key:
 `github/terraform.tfstate` in R2 bucket `soleur-terraform-state`.
 
-Managed resource: ruleset 14145388 ("CI Required") on the `main` branch of
-`jikig-ai/soleur`. Adopted via `terraform import` (idempotent, runs in CI on
-first apply — see Phase 1 below).
+Managed resources (both on the `main` branch of `jikig-ai/soleur`, both adopted
+via `terraform import` — idempotent, run in CI on first apply, see Phase 1):
+
+- `github_repository_ruleset.ci_required` — ruleset 14145388 ("CI Required"),
+  `ruleset-ci-required.tf`.
+- `github_repository_ruleset.cla_required` — ruleset 13304872 ("CLA Required"),
+  `ruleset-cla-required.tf` (Terraform-ified in #6072, mirroring CI per ADR-032;
+  its enforced values are byte-identical to the former imperative
+  `scripts/create-cla-required-ruleset.sh`, now a DR-only restore skeleton).
 
 Per AGENTS.md `hr-all-infrastructure-provisioning-servers`, every change to
 the required-status-check set must flow through this root. UI edits will
@@ -200,8 +206,21 @@ The workflow performs:
    in commit message for any `delete` action).
 4. `terraform apply tfplan` (auto-approved — PR merge is the human
    authorization).
-5. **Post-apply verify**: `gh api .../rulesets/14145388` count probe,
-   recorded in the workflow run summary.
+5. **Post-apply verify**: `gh api .../rulesets/14145388` (CI) **and**
+   `.../rulesets/13304872` (CLA) count probes, recorded in the workflow run
+   summary.
+
+The import step is **per-address** (`import_ruleset <addr> <id>` for each
+resource), so both rulesets adopt independently — the CI resource being in state
+does not skip the CLA import. The CLA first apply is a **no-op reconcile**: the
+`.tf` values are byte-identical to the live ruleset (id 13304872), so
+`terraform plan` shows no change once imported. To reproduce the CLA import
+manually (mirrors the CI block below), run:
+
+```bash
+doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+  terraform import github_repository_ruleset.cla_required soleur:13304872
+```
 
 If you want to reproduce the local-terminal plan-diff probe before merge
 (sanity check that the diff is the expected set of additions), the
