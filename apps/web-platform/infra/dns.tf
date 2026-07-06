@@ -19,40 +19,12 @@ resource "cloudflare_record" "app" {
   ttl     = 1 # Auto when proxied
 }
 
-# Per-host CF-PROXIED probe hostname (web-<n>.soleur.ai → that host's origin IP),
-# the reach-target for the per-host uptime absence detector (betteruptime_monitor.web_host,
-# uptime-alerts.tf). #5933 Item 1. Proxied so the probe traverses CF edge → origin,
-# preserving the CF-IP-only origin firewall (firewall.tf:54-76) — a raw-origin-IP probe
-# would be firewall-dropped; an unproxied record would expose the origin.
-#
-# SINGLE-LABEL hostname is load-bearing: Cloudflare Universal SSL (free) covers only
-# `soleur.ai` and the ONE-label wildcard `*.soleur.ai`. A wildcard matches exactly one
-# subdomain label, so a two-level `web-<n>.app.soleur.ai` has NO edge certificate and
-# every proxied HTTPS probe fails the edge TLS handshake (SSL alert 40) before reaching
-# the origin — which is why Better Stack auto-paused the monitor. `web-<n>.soleur.ai` is one
-# label, covered by `*.soleur.ai`, so the handshake completes. Do NOT push this back to a
-# two-level name without a paid Advanced Certificate Manager / Total TLS cert.
-#
-# NOTE: the cloudflare provider treats `name` as ForceNew — changing it destroys and
-# recreates the record (NOT an in-place update), so a rename of this probe hostname trips
-# the apply-web-platform-infra destroy-guard and needs `[ack-destroy]` in the merge commit.
-# The replacement is safe: this is the monitoring PROBE record, not the app ingress
-# (`cloudflare_record.app`), and no user traffic flows through it.
-#
-# for_each gates on `if v.monitored` (NOT all of var.web_hosts): web-2's server is excluded
-# from the auto-apply -target set until the #5274 cutover, so an ungated for_each would drag
-# hcloud_server.web["web-2"] into a routine -target apply. web-2's record+monitor both land
-# when the cutover flips monitored=true. See variables.tf web_hosts comment.
-resource "cloudflare_record" "web_host" {
-  for_each = { for k, v in var.web_hosts : k => v if v.monitored }
-
-  zone_id = var.cf_zone_id
-  name    = each.key
-  content = hcloud_server.web[each.key].ipv4_address
-  type    = "A"
-  proxied = true
-  ttl     = 1 # Auto when proxied
-}
+# NOTE (#5933 retired): the per-host CF-proxied probe hostname (web-<n>.soleur.ai) and its
+# betteruptime_monitor.web_host were removed — uptime is now monitored at the LB-fronted
+# app.soleur.ai surface (betteruptime_monitor.app, uptime-alerts.tf). An external per-host
+# HTTP probe would require each host's origin to serve its own web-<n>.soleur.ai Host/SNI,
+# which it does not (the probe returned CF 521); per-host liveness is covered by CF LB origin
+# health checks + the resource-monitor.sh emails to ops@ instead.
 
 # Deploy webhook endpoint routed through Cloudflare Tunnel (see #749).
 # Protected by CF Access service token + HMAC signature validation.
