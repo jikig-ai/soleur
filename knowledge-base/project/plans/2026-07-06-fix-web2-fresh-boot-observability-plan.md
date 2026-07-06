@@ -247,7 +247,7 @@ discoverability_test:
   # (The AC14 post-recreate stage-read — `gh run view <run> --log | grep 'fresh-host Sentry
   # pointer'` OR the authenticated de.sentry.io issues curl — is the SEPARATE post-merge
   # verification; it is not runnable pre-recreate.)
-  command: 'curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://de.sentry.io/api/0/'
+  command: 'curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://de.sentry.io/api/0/organizations/'
   expected_output: "401"
 ```
 
