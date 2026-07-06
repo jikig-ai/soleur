@@ -45,9 +45,18 @@ Rename the probe hostname **down one label** to `web-1.soleur.ai`, which the exi
 - `dns.tf` — `cloudflare_record.web_host`: `name = each.key` (was `"${each.key}.app"`).
 - `uptime-alerts.tf` — `betteruptime_monitor.web_host`: `url = "https://${each.key}.soleur.ai/health"`.
 
-Changing only the `name`/`url` attribute (not the resource address or `for_each` keys) is an
-**in-place UPDATE**, not destroy/recreate — no maintenance window. `paused = false` is
-unchanged, so the merge-triggered `terraform apply` reconciles Better Stack's auto-pause and
+The `betteruptime_monitor.web_host.url` change is in-place, but **the `cloudflare_record.name`
+change is NOT** — the Cloudflare provider treats `name` as **ForceNew**, so renaming the record
+**destroys and recreates it** (`# forces replacement` in the plan). That trips the
+`apply-web-platform-infra` destroy-guard, which halts the auto-apply unless the merge commit
+contains a line `[ack-destroy]`. The replacement is safe (it is the monitoring *probe* record,
+not the app ingress `cloudflare_record.app`, and carries no user traffic) — but the merge commit
+MUST acknowledge it. This was the miss on PR #6128: the plan predicted an "in-place UPDATE", the
+apply was blocked, and a follow-up PR carrying `[ack-destroy]` was needed to land it. Lesson: any
+`cloudflare_record` attribute change that the provider marks ForceNew (name, type, zone) is a
+destroy, and an infra PR that renames one must ship `[ack-destroy]` in its PR body.
+
+`paused = false` is unchanged, so the (acknowledged) `terraform apply` reconciles Better Stack's auto-pause and
 re-enables the monitor in the same run. The record stays `proxied = true`, preserving the
 CF-IP-only origin firewall.
 
