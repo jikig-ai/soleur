@@ -1174,10 +1174,12 @@ export async function startAgentSession(
         pluginMcpServerNames = Object.keys(pluginJson.mcpServers);
       }
     } catch (err) {
-      // plugin.json may not exist in all workspaces; proceed without plugin MCP tools.
-      // ENOENT is an expected state (no plugin installed). Parse errors or other
-      // read failures on a committed file are degraded conditions — mirror to
-      // Sentry so we hear about corrupted workspaces.
+      // plugin.json is read from the DEPLOYED plugin root (pluginPath =
+      // getPluginPath()), not the workspace copy; proceed without plugin MCP tools
+      // on any failure. ENOENT is an expected state on a container whose plugin
+      // mount is absent/partial (verifyPluginMountOnce owns that signal). Parse or
+      // other read failures on the deployed file are a degraded deploy condition —
+      // mirror to Sentry so we hear about a corrupted plugin mount.
       if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
         reportSilentFallback(err, {
           feature: "agent-runner",

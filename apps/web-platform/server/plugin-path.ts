@@ -67,7 +67,17 @@ export function getPluginPath(): string {
  */
 export function assertTrustedPluginPath(p: string): string {
   if (process.env.VITEST || process.env.NODE_ENV === "test") return p;
-  if (path.isAbsolute(p) && ALLOWED_PREFIXES.some((prefix) => p.startsWith(prefix))) {
+  // Normalize `..`/`.` segments BEFORE the prefix check: a security guard must
+  // not be defeated by a non-canonical path like `/app/../workspaces/x` (lexically
+  // `startsWith("/app/")` but resolves outside it). `p` is still required to be
+  // absolute — a relative path is rejected outright (never resolved against CWD).
+  // The guard's effectiveness rests on the invariant that real workspaces live
+  // OUTSIDE the `/app/` allowlist (WORKSPACES_ROOT=/workspaces, cron at /mnt/data —
+  // agent-runner-sandbox-config.ts): a workspace-relative regression resolves
+  // outside `/app/` and throws. If WORKSPACES_ROOT is ever repointed under /app/,
+  // this guard stops distinguishing deployed-root from workspace paths.
+  const resolved = path.resolve(p);
+  if (path.isAbsolute(p) && ALLOWED_PREFIXES.some((prefix) => resolved.startsWith(prefix))) {
     return p;
   }
   throw new Error(

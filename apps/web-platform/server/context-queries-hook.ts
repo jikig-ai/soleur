@@ -165,14 +165,15 @@ export function createContextQueriesHook(repoRoot: string): HookCallback {
   //     `repoRoot` (the untrusted connected-repo workspace). This is the F3
   //     residual-reader fix: SKILL.md frontmatter flows into the agent context, so
   //     a connected repo shipping its own `plugins/soleur/skills/` must not shadow
-  //     the deployed skills. `getPluginPath()` is a compile-time-constant platform
-  //     path (env-override guarded by the `/app/` allowlist); reading it once here
-  //     mirrors the prior single-realpath discipline.
+  //     the deployed skills. `getPluginPath()` is a process-constant platform path
+  //     (a runtime env read, resolved ONCE here — env-override guarded by the
+  //     `/app/` allowlist); reading it once mirrors the prior single-realpath discipline.
   //   - `realKb` stays `repoRoot`-relative: `knowledge-base/` IS repo content, and
   //     the injected pointers are gated by `git ls-files` committed-only +
   //     containment (path-trust ≠ content-trust; ADR-086 §Consequences).
-  // A null realKb (dir absent) fails the per-artifact gate closed for the session
-  // — correct fail-open for a workspace missing the kb tree.
+  // A null realKb (dir absent) makes the per-artifact containment gate reject every
+  // query (no artifact can be contained under a null root). The hook still returns
+  // its note (fail-OPEN at the hook level) — correct for a workspace missing the kb tree.
   const skillsDir = path.join(getPluginPath(), "skills");
   const resolvedSkills = path.resolve(skillsDir);
   const realKb = realpathOrNull(path.join(repoRoot, "knowledge-base"));

@@ -43,6 +43,9 @@ describe("assertTrustedPluginPath (loaded-gun guard)", () => {
     expect(() => assertTrustedPluginPath("/workspaces/abc123/plugins/soleur")).toThrow(/plugin path/i);
     expect(() => assertTrustedPluginPath("plugins/soleur")).toThrow(/plugin path/i);
     expect(() => assertTrustedPluginPath("/tmp/evil/plugins/soleur")).toThrow(/plugin path/i);
+    // Normalization guard: a non-canonical path that lexically starts with /app/
+    // but resolves OUTSIDE it must still throw (path.resolve collapses the `..`).
+    expect(() => assertTrustedPluginPath("/app/../workspaces/x/plugins/soleur")).toThrow(/plugin path/i);
   });
 
   it("is test-tolerant: under VITEST any path passes (fixtures use mkdtemp roots)", () => {
