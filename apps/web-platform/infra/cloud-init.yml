@@ -265,7 +265,8 @@ runcmd:
   # live STAGE tag — docker IS the hostscript-seed prerequisite, so the message stays accurate.
   # NOTE: the trap fires only under `set -e`, which the package audit turns on — so emit coverage
   # effectively begins at the audit; the preceding `systemctl restart sshd` stays deliberately
-  # non-fatal (its own comment below) and is intentionally NOT emit-covered.
+  # non-fatal (its own comment below) and is intentionally NOT emit-covered. The emit is a curl
+  # POST, so a curl-less host (which dies everywhere) is an accepted residual.
   - |
     IMAGE_REF='${image_name}'
     STAGE=pkg_audit
@@ -337,6 +338,7 @@ runcmd:
   # fail2ban is installed via `packages:` above; the service auto-starts on
   # install with the defaults-debian.conf [sshd] jail enabled. The reload
   # picks up the bantime.maxtime cap before any login activity is recorded.
+  - STAGE=fail2ban  # (#6090) exact stage attribution for the top-armed on_err fatal
   - systemctl reload fail2ban || systemctl restart fail2ban
 
   # (#5921) journald persistence (mkdir /var/log/journal + systemd-tmpfiles + restart +

@@ -328,5 +328,15 @@ else
   no "AC13: the fresh-host Sentry surface step must fetch SENTRY_AUTH_TOKEN via doppler -c prd_terraform"
 fi
 
+# ── AC14 (#6090 P2-1): the recreate asserts the baked DSN is non-empty before -replace ──
+# The pre-extraction fresh-boot stages depend SOLELY on the baked ${sentry_dsn} (doppler isn't
+# installed yet, so its fallback is dead). An empty SENTRY_DSN (var.sentry_dsn's TF default) would
+# silently re-open the zero-emit blind spot. The recreate must fail loudly, not boot dark.
+if grep -qE 'SENTRY_DSN is empty in Doppler prd_terraform' "$WF"; then
+  ok "AC14: web-2-recreate asserts baked SENTRY_DSN non-empty before -replace (pre-extraction can't go dark)"
+else
+  no "AC14: the recreate must assert SENTRY_DSN is non-empty before -replace (empty baked DSN = silent pre-extraction blind spot)"
+fi
+
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

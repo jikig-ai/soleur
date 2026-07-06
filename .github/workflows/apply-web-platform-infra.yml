@@ -995,6 +995,15 @@ jobs:
           printf '::add-mask::%s\n' "$SECRET"
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          # #6090: the baked ${sentry_dsn} (TF_VAR_sentry_dsn ← this SENTRY_DSN) is the SOLE
+          # fatal-emit path for the pre-extraction fresh-boot stages (pkg_audit/doppler_dl) —
+          # doppler isn't installed yet there, so its fallback is dead. An empty SENTRY_DSN
+          # (var.sentry_dsn's TF default) would silently revert those stages to the zero-emit
+          # abort #6090 exists to end. Assert non-empty before -replace; do NOT print the value.
+          if [[ -z "$(doppler secrets get SENTRY_DSN --plain 2>/dev/null || true)" ]]; then
+            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform — the fresh-boot fatal-emit would be dark for pre-extraction stages. Set it before recreating web-2 (#6090)."
+            exit 1
+          fi
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
