@@ -17,6 +17,7 @@ import {
 import { generateInstallationToken, checkRepoAccess } from "./github-app";
 import { getPluginPath } from "./plugin-path";
 import { reportSilentFallback } from "./observability";
+import { seedWorktreeConfig } from "./worktree-config-seed";
 
 // Minimal structural type for the Storage remove path — avoids dragging the
 // full SupabaseClient generic into this FS/git-focused module.
@@ -128,6 +129,13 @@ export async function provisionWorkspace(workspaceId: string): Promise<string> {
   } catch (err) {
     log.warn({ err, workspaceId }, "Git init failed");
   }
+
+  // Heal worktree git config HOST-SIDE (#4826): remove any extensions.worktreeConfig
+  // that would force in-sandbox git to read the masked/unreadable .git/config.worktree
+  // and fatal. Deliberately OUTSIDE the init/commit try so it runs whenever `git init`
+  // produced a `.git/` even if `git add`/`git commit` failed (e.g. no git identity on a
+  // runner). Best-effort + no-op on a healthy/absent-`.git` workspace.
+  seedWorktreeConfig(workspacePath);
 
   return workspacePath;
 }
@@ -243,6 +251,11 @@ export async function provisionWorkspaceWithRepo(
       log.warn({ err, workspaceId }, "Failed to set git user.email");
     }
   }
+
+  // 6.5. Heal worktree git config HOST-SIDE (#4826): a fresh clone has no
+  // extensions.worktreeConfig, so this is a no-op here — but keeps the provision and
+  // session-boot paths symmetric with ensureWorkspaceRepoCloned.
+  seedWorktreeConfig(workspacePath);
 
   // 7-9. Overlay plugin symlink, .claude/settings.json, and KB scaffolding
   // via the shared helper. Missing entries are created; existing directories

@@ -138,6 +138,200 @@ else
   FAIL=$((FAIL + 1)); echo "FAIL: strip dropped real --delete-branch flags"
 fi
 
+# ===========================================================================
+# #5988 — hardened recursive-delete ownership proof (b) + freeze edit-lock (a)
+# ===========================================================================
+
+# Build an Edit-tool payload (file_path, no command).
+mk_edit_payload() {
+  local path="$1"
+  jq -nc --arg p "$path" '{tool_name:"Edit", tool_input:{file_path:$p}}'
+}
+
+# Run the hook with a given payload from a given CWD, redirecting incident +
+# freeze state to $root. Echoes the permissionDecision or "<none>".
+run_decision() {
+  local payload="$1" cwd="$2" root="$3"
+  local out
+  out="$(cd "$cwd" 2>/dev/null && printf '%s' "$payload" \
+    | INCIDENTS_REPO_ROOT="$root" FREEZE_LOCK_REPO_ROOT="$root" bash "$HOOK" 2>/dev/null)"
+  if [[ -z "${out//[[:space:]]/}" ]]; then echo "<none>"; return; fi
+  echo "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<none>"' 2>/dev/null || echo "<jq-fail>"
+}
+
+assert_run() {
+  local label="$1" want="$2" payload="$3" cwd="$4" root="$5"
+  TOTAL=$((TOTAL + 1))
+  local got; got="$(run_decision "$payload" "$cwd" "$root")"
+  if [[ "$got" == "$want" ]]; then
+    PASS=$((PASS + 1)); echo "PASS: $label → $got"
+  else
+    FAIL=$((FAIL + 1)); echo "FAIL: $label"; echo "  want: $want"; echo "  got:  $got"
+  fi
+}
+
+# --- Delete guard: protected targets deny; non-protected allow -------------
+DG="$(mktemp -d)"; git init -q "$DG/repo"
+mkdir -p "$DG/other/.git" "$DG/scratch-abc123"
+ln -s "$DG/repo" "$DG/link"
+
+# repo root (resolved via git worktree list from the command cwd) → deny
+assert_run "delete: repo root denies" "deny" \
+  "$(mk_payload "rm -rf $DG/repo")" "$DG/repo" "$DG"
+# symlink resolving onto a .git-bearing checkout → deny
+assert_run "delete: symlink-to-repo-root denies" "deny" \
+  "$(mk_payload "rm -rf $DG/link")" "$DG/repo" "$DG"
+# arbitrary .git-bearing dir (not the cwd repo) → deny
+assert_run "delete: .git-bearing dir denies" "deny" \
+  "$(mk_payload "rm -rf $DG/other")" "$DG" "$DG"
+# filesystem root → deny (constant protected)
+assert_run "delete: / denies" "deny" \
+  "$(mk_payload "rm -rf /")" "$DG" "$DG"
+# \$HOME → deny (constant protected)
+assert_run "delete: \$HOME denies" "deny" \
+  "$(mk_payload "rm -rf $HOME")" "$DG" "$DG"
+# non-protected scratch dir → allow (default-allow-except-protected; the staging
+# ALLOW needs no marker today — a non-protected target is already permitted)
+assert_run "delete: non-protected scratch allows" "<none>" \
+  "$(mk_payload "rm -rf $DG/scratch-abc123")" "$DG" "$DG"
+# ordinary build artifact → allow (guard must not brick normal cleanup)
+assert_run "delete: node_modules allows" "<none>" \
+  "$(mk_payload "rm -rf $DG/repo/node_modules")" "$DG/repo" "$DG"
+rm -rf "$DG"
+
+# --- Freeze edit-lock ------------------------------------------------------
+FZ="$(mktemp -d)"
+mkdir -p "$FZ/apps" "$FZ/other"
+# Activate a VALID freeze via the CLI (writes a realpath-canonical prefix).
+FREEZE_LOCK_REPO_ROOT="$FZ" bash "$SCRIPT_DIR/lib/freeze-lock.sh" set "$FZ/apps" >/dev/null 2>&1
+
+# Edit inside the allowed prefix → allow
+assert_run "freeze: edit inside prefix allows" "<none>" \
+  "$(mk_edit_payload "$FZ/apps/foo.ts")" "$FZ" "$FZ"
+# Edit outside the allowed prefix → deny
+assert_run "freeze: edit outside prefix denies" "deny" \
+  "$(mk_edit_payload "$FZ/other/bar.ts")" "$FZ" "$FZ"
+
+# Malformed freeze state (two lines) → fail-open (edit allowed)
+printf '%s\n%s\n' "$FZ/apps" "$FZ/extra" > "$FZ/.claude/.freeze-lock"
+assert_run "freeze: malformed state fails open (edit allows)" "<none>" \
+  "$(mk_edit_payload "$FZ/other/bar.ts")" "$FZ" "$FZ"
+
+# Absent freeze state → edit allowed
+rm -f "$FZ/.claude/.freeze-lock"
+assert_run "freeze: absent state allows edit" "<none>" \
+  "$(mk_edit_payload "$FZ/other/bar.ts")" "$FZ" "$FZ"
+rm -rf "$FZ"
+
+# --- TR3: freeze ACTIVE must NOT shadow the Bash sentinels -----------------
+TR="$(mktemp -d)"
+FREEZE_LOCK_REPO_ROOT="$TR" bash "$SCRIPT_DIR/lib/freeze-lock.sh" set "$TR/apps" >/dev/null 2>&1
+# rm -rf on a worktree path → still denied by the narrow sentinel
+assert_run "TR3: freeze active, rm -rf .worktrees still denies" "deny" \
+  "$(mk_payload 'rm -rf ./.worktrees/foo')" "$TR" "$TR"
+# gh issue create without --milestone → still denied by require-milestone
+assert_run "TR3: freeze active, gh issue create no-milestone still denies" "deny" \
+  "$(mk_payload 'gh issue create --title x --body y')" "$TR" "$TR"
+# git stash → still denied by block-stash
+assert_run "TR3: freeze active, git stash still denies" "deny" \
+  "$(mk_payload 'git stash')" "$TR" "$TR"
+# benign Bash command → allowed (freeze never applies to Bash)
+assert_run "TR3: freeze active, benign Bash allows" "<none>" \
+  "$(mk_payload 'ls -la')" "$TR" "$TR"
+rm -rf "$TR"
+
+# ===========================================================================
+# #5988 review hardening — variable/tilde expansion, wrapper forms, heredoc
+# false-positive, MultiEdit/NotebookEdit freeze coverage, ancestor deny.
+# ===========================================================================
+
+mk_multiedit_payload() { jq -nc --arg p "$1" '{tool_name:"MultiEdit", tool_input:{file_path:$p}}'; }
+mk_notebook_payload()  { jq -nc --arg p "$1" '{tool_name:"NotebookEdit", tool_input:{notebook_path:$p}}'; }
+
+# HOME-aware runner: overrides HOME so the $HOME/~ deny assertions are hermetic
+# (never resolves onto the test operator's real home).
+run_decision_home() {
+  local payload="$1" cwd="$2" root="$3" home="$4" out
+  out="$(cd "$cwd" 2>/dev/null && printf '%s' "$payload" \
+    | HOME="$home" INCIDENTS_REPO_ROOT="$root" FREEZE_LOCK_REPO_ROOT="$root" bash "$HOOK" 2>/dev/null)"
+  if [[ -z "${out//[[:space:]]/}" ]]; then echo "<none>"; return; fi
+  echo "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<none>"' 2>/dev/null || echo "<jq-fail>"
+}
+assert_run_home() {
+  local label="$1" want="$2" payload="$3" cwd="$4" root="$5" home="$6"
+  TOTAL=$((TOTAL + 1))
+  local got; got="$(run_decision_home "$payload" "$cwd" "$root" "$home")"
+  if [[ "$got" == "$want" ]]; then PASS=$((PASS + 1)); echo "PASS: $label → $got"
+  else FAIL=$((FAIL + 1)); echo "FAIL: $label"; echo "  want: $want"; echo "  got:  $got"; fi
+}
+
+# --- variable/tilde expansion bypass (3 agents flagged; the earlier
+#     "delete: \$HOME denies" fixture MASKED this by pre-expanding \$HOME in the
+#     test shell). These fixtures pass the LITERAL token via single quotes. ---
+VX="$(mktemp -d)"; git init -q "$VX/repo"; VXHOME="$(mktemp -d)"
+assert_run_home "delete: literal \$HOME denies (unmasked)" "deny" \
+  "$(mk_payload 'rm -rf $HOME')" "$VX/repo" "$VX" "$VXHOME"
+assert_run_home "delete: literal \${HOME} denies" "deny" \
+  "$(mk_payload 'rm -rf ${HOME}')" "$VX/repo" "$VX" "$VXHOME"
+assert_run_home "delete: quoted \"\$HOME\" denies" "deny" \
+  "$(mk_payload 'rm -rf "$HOME"')" "$VX/repo" "$VX" "$VXHOME"
+assert_run_home "delete: tilde ~ denies" "deny" \
+  "$(mk_payload 'rm -rf ~')" "$VX/repo" "$VX" "$VXHOME"
+assert_run_home "delete: tilde ~/ denies" "deny" \
+  "$(mk_payload 'rm -rf ~/')" "$VX/repo" "$VX" "$VXHOME"
+# \$PWD from the repo root resolves onto the repo root → deny.
+assert_run_home "delete: \$PWD (repo root) denies" "deny" \
+  "$(mk_payload 'rm -rf $PWD')" "$VX/repo" "$VX" "$VXHOME"
+# a benign \$HOME-relative subdir is still a delete UNDER home; home itself is
+# protected, and node_modules under a non-home cwd stays allowed.
+assert_run_home "delete: node_modules still allows (no over-deny)" "<none>" \
+  "$(mk_payload 'rm -rf node_modules')" "$VX/repo" "$VX" "$VXHOME"
+rm -rf "$VX" "$VXHOME"
+
+# --- wrapper / path-qualified / escaped rm forms deny on a protected target ---
+WR="$(mktemp -d)"; git init -q "$WR/repo"
+assert_run "delete: /bin/rm on repo root denies" "deny" \
+  "$(mk_payload "/bin/rm -rf $WR/repo")" "$WR/repo" "$WR"
+assert_run "delete: env rm on repo root denies" "deny" \
+  "$(mk_payload "env rm -rf $WR/repo")" "$WR/repo" "$WR"
+assert_run "delete: command rm on repo root denies" "deny" \
+  "$(mk_payload "command rm -rf $WR/repo")" "$WR/repo" "$WR"
+rm -rf "$WR"
+
+# --- heredoc / commit-message body must NOT false-deny (detection on $SCAN),
+#     while a real chained rm and a quoted literal target still deny. ---
+HD="$(mktemp -d)"; git init -q "$HD/repo"
+assert_run "delete: commit heredoc body mentioning rm -rf / allows" "<none>" \
+  "$(mk_payload $'git commit -F - <<EOF\nfix\nrm -rf /\nEOF')" "$HD/repo" "$HD"
+assert_run "delete: commit -m body mentioning ; rm -rf / allows" "<none>" \
+  "$(mk_payload 'git commit -m "note; rm -rf /"')" "$HD/repo" "$HD"
+assert_run "delete: real chained rm after commit still denies" "deny" \
+  "$(mk_payload $'git commit -m x && rm -rf /')" "$HD/repo" "$HD"
+assert_run "delete: quoted literal protected target still denies" "deny" \
+  "$(mk_payload "rm -rf \"$HD/repo\"")" "$HD/repo" "$HD"
+rm -rf "$HD"
+
+# --- ancestor-of-a-real-worktree deny (the "$_pr == $_res/*" branch) ---
+AN="$(mktemp -d)"; git init -q "$AN/repo"
+( cd "$AN/repo" && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+    && git worktree add -q "$AN/repo/wt/feat-x" -b feat-x ) >/dev/null 2>&1
+assert_run "delete: ancestor of a registered worktree denies" "deny" \
+  "$(mk_payload "rm -rf $AN/repo/wt")" "$AN/repo" "$AN"
+rm -rf "$AN"
+
+# --- freeze covers MultiEdit + NotebookEdit (not just Write|Edit) ---
+FZ2="$(mktemp -d)"; mkdir -p "$FZ2/apps" "$FZ2/other"
+FREEZE_LOCK_REPO_ROOT="$FZ2" bash "$SCRIPT_DIR/lib/freeze-lock.sh" set "$FZ2/apps" >/dev/null 2>&1
+assert_run "freeze: MultiEdit outside prefix denies" "deny" \
+  "$(mk_multiedit_payload "$FZ2/other/bar.ts")" "$FZ2" "$FZ2"
+assert_run "freeze: MultiEdit inside prefix allows" "<none>" \
+  "$(mk_multiedit_payload "$FZ2/apps/bar.ts")" "$FZ2" "$FZ2"
+assert_run "freeze: NotebookEdit outside prefix denies" "deny" \
+  "$(mk_notebook_payload "$FZ2/other/n.ipynb")" "$FZ2" "$FZ2"
+assert_run "freeze: NotebookEdit inside prefix allows" "<none>" \
+  "$(mk_notebook_payload "$FZ2/apps/n.ipynb")" "$FZ2" "$FZ2"
+rm -rf "$FZ2"
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1

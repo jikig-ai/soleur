@@ -441,16 +441,43 @@ ensure_bare_config() {
   fi
 
   # Self-heal: sweep BEFORE the config writes below for its diagnostics + stale
-  # REGULAR-lock removal (the 2026-07-01 outage class). A NON-REGULAR (masked) lock
-  # is NO LONGER fatal here — atomic_git_config routes every write below around it
-  # via a lockless temp-copy+rename (#5912). So we intentionally ignore the sweep's
-  # non-zero return: the per-write gate in atomic_git_config makes the correct
-  # native-vs-lockless choice, and a genuinely stuck REGULAR lock (a real in-flight
-  # writer) still surfaces as a native `git config` EEXIST failure from
-  # atomic_git_config's clean-lock branch. `|| true` disarms set -e; the sweep's
-  # SOLEUR_GIT_LOCK_DIAG / SOLEUR_GIT_LOCK_UNREMOVABLE sentinels still print for
-  # the blind-surface forensic.
+  # REGULAR-lock removal (the 2026-07-01 outage class). Runs on EVERY repo (bare or
+  # normal) — it writes NO config, only removes stale regular locks and emits the
+  # blind-surface SOLEUR_GIT_LOCK_* forensic — so it stays ABOVE the non-bare guard
+  # below. A NON-REGULAR (masked) lock is NO LONGER fatal here — atomic_git_config
+  # routes every write below around it via a lockless temp-copy+rename (#5912). So we
+  # intentionally ignore the sweep's non-zero return: the per-write gate in
+  # atomic_git_config makes the correct native-vs-lockless choice, and a genuinely
+  # stuck REGULAR lock (a real in-flight writer) still surfaces as a native `git config`
+  # EEXIST failure from atomic_git_config's clean-lock branch. `|| true` disarms set -e.
   sweep_stale_git_locks "$git_dir" || true
+
+  # NON-BARE GUARD (#4826, hardened round 5). Everything BELOW is a BARE-repo
+  # accommodation: on a bare repo `git worktree add` corrupts the shared config (see
+  # header), and setting extensions.worktreeConfig=true steers those writes off it. A
+  # NORMAL working clone (the Concierge workspace layout, core.bare=false) needs NONE of
+  # it — `git worktree add` writes only to `.git/worktrees/<id>/`. Worse, enabling
+  # worktreeConfig FORCES git to read `.git/config.worktree`, which in the agent sandbox
+  # is an unreadable /dev/null char device → `fatal: … Permission denied` on EVERY git
+  # command. So: proceed with the surgery ONLY when the repo is DEFINITIVELY bare;
+  # default to SKIP.
+  #
+  # WHY not just `[[ -d "$GIT_ROOT/.git" ]]`: that was the round-4 guard and it FAILED in
+  # the live sandbox — the surgery still ran and wedged despite the guard being present
+  # (verified: user's cleanup-merged, 2026-07-06). Root cause: `$GIT_ROOT` was empty
+  # there (its `git rev-parse --show-toplevel` resolution returned nothing under the
+  # masked config), so `[[ -d "$GIT_ROOT/.git" ]]` became `[[ -d "/.git" ]]` → false →
+  # the guard did not fire. Git's own `--is-bare-repository` is authoritative and
+  # independent of GIT_ROOT-path resolution; `${GIT_ROOT:-.}` falls back to the CWD (the
+  # workspace) when GIT_ROOT is empty. SKIP unless it returns exactly "true": a normal
+  # clone ("false"), an indeterminate/error (""), or a transiently-wedged git all skip
+  # safely — none of them want bare surgery. A genuine bare repo (CLI dev repo, no `.git`
+  # subdir) returns "true" AND has no `.git` dir, so it correctly proceeds.
+  local _bare_status
+  _bare_status="$(git -C "${GIT_ROOT:-.}" rev-parse --is-bare-repository 2>/dev/null || true)"
+  if [[ -d "$GIT_ROOT/.git" || "$_bare_status" != "true" ]]; then
+    return 0
+  fi
 
   local shared_config="$git_dir/config"
   local wt_config="$git_dir/config.worktree"

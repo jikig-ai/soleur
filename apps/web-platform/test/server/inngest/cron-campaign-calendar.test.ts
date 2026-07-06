@@ -78,7 +78,11 @@ describe("CAMPAIGN_CALENDAR_PROMPT — anchor strings (regression-detection)", (
       ["campaign-calendar", "skill invocation"],
       ["overdue", "overdue content detection"],
       ["heartbeat", "heartbeat audit issue"],
-      ["content-strategy.md", "content-strategy review date update"],
+      ["content-strategy.md", "content-strategy freshness-date update"],
+      [
+        "update the frontmatter last_updated field",
+        "source-fix: cron bumps last_updated, NOT last_reviewed (ADR-086, #5999)",
+      ],
       ["PERSISTENCE: Do NOT run git add", "platform-persistence directive (#5111)"],
       ["opens a PR for your changes", "handler-side persistence note (#5111)"],
     ])("contains %s (%s)", (anchor) => {

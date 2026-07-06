@@ -1,0 +1,17 @@
+[
+  {
+    "actor_id": null,
+    "actor_type": "OrganizationAdmin",
+    "bypass_mode": "pull_request"
+  },
+  {
+    "actor_id": 5,
+    "actor_type": "RepositoryRole",
+    "bypass_mode": "pull_request"
+  },
+  {
+    "actor_id": 1236702,
+    "actor_type": "Integration",
+    "bypass_mode": "always"
+  }
+]

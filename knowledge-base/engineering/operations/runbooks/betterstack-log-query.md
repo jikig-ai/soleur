@@ -13,6 +13,25 @@ doppler run -p soleur -c prd_terraform -- \
   'SELECT count() AS n FROM remote($BS_TABLE) WHERE dt >= now() - INTERVAL 2 HOUR FORMAT JSONEachRow'
 ```
 
+## ⚠️ A "no creds" / TRANSIENT error is NOT "no access" (repeat misdiagnosis)
+
+`betterstack-query.sh` does **not** read Doppler itself — it needs the query creds
+**injected** via `doppler run`. Run it in a bare shell and it exits with
+`BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not set`; a follow-through that wraps it
+(e.g. `chardevice-wedge-nonrecurrence-5934.sh`) then reports `TRANSIENT: … auth/config/network`.
+
+**Neither means this session lacks Better Stack access.** Both mean the call was not
+wrapped in `doppler run`. The fix is always the same — re-run:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh <args>
+```
+
+Do NOT conclude "I can't verify from here" and stop. This mistake has now happened
+twice (the note below, and #5934); the script's error message itself now spells out
+the correct invocation. See hard rule `hr-verify-repo-capability-claim-before-assert`
+— a fail-safe/degraded probe output is *inconclusive*, never proof of a capability gap.
+
 ## Why this exists (the three-token trap)
 
 Better Stack has **three** distinct credentials and it is easy to reach for the

@@ -1,0 +1,156 @@
+---
+date: 2026-07-05
+category: bug-fixes
+module: workspace-provisioning
+tags: [config-lock, sandbox, bubblewrap, git-worktree, concierge, root-cause, observability]
+issue: 4826
+related:
+  - 2026-07-03-lockless-git-config-writer-bypasses-masked-config-lock.md
+---
+
+# Learning: the `.git/config.lock` wedge is an SDK bwrap per-path /dev/null mask, not a filesystem residual — fix it host-side before the mask exists
+
+## Problem
+
+Concierge worktree creation wedges because `.git/config.lock` is a **character
+device** and every in-sandbox `git config` write fails against it. ADR-081 concluded
+the root cause was a **container-filesystem residual inode** on the persistent volume
+(candidate "c") and shipped a **host-side, deploy-time `-type c` sweep** (#5934) to
+clear it. That sweep was verified *running* (Better Stack `SOLEUR_CHARDEV_SWEEP_DONE`
+markers, zero FAILED) — yet a **fresh session still wedged**.
+
+## Solution
+
+Live probing from the wedged session (which we could not do from telemetry — the
+in-sandbox `SOLEUR_GIT_LOCK_*` markers are **not mirrored to any queryable sink**)
+was decisive:
+
+- `ls -la .git/config.lock` → `crw-rw-rw- … 1, 3` (a `/dev/null` char device).
+- `findmnt -T .git/config.lock` → `tmpfs[/null]  ro` — a **deliberate per-path bind
+  mount** on the *literal* path, not a residual inode and not a mount over `.git`.
+- `touch .git/config.soleur-probe.lock` → a **normal writable file** ⇒ the mask is
+  **single-path**, not a `*.lock` glob.
+
+So the node is the **Claude Agent SDK's bubblewrap file-mask (ADR-081 candidate "b"),
+applied per-session INSIDE the sandbox** as a git-config-RCE guard — *not* a
+host-volume residual. The deploy-time host sweep can never see a per-session
+in-sandbox mount, which is why it ran clean while sessions still wedged.
+
+The durable fix makes the in-sandbox path **need no config write at all**:
+`seedWorktreeConfig()` in `apps/web-platform/server/workspace.ts` pre-applies the exact
+transformation `ensure_bare_config` performs (`core.repositoryformatversion=1`,
+`extensions.worktreeConfig=true`, clear `core.bare`/`core.worktree`) **host-side at
+provision time, before the sandbox mask exists**. In-sandbox, `atomic_git_config`
+then takes its read-first / absent-key **skip** for all four — zero writes, the masked
+lock is never touched — and `git worktree add` reads `worktreeConfig` and writes only
+per-worktree config (`config.worktree`, unmasked).
+
+## Key Insight
+
+1. **"The fix runs" is not "the fix works." Verify the USER-FACING symptom, not the
+   mechanism.** The host sweep emitted DONE markers (mechanism verified) while the
+   actual outcome (a session creating a worktree) stayed broken. A green internal
+   signal conflated with the outcome produced two false "it's fixed" claims. For a
+   blind execution surface, the only sound verification is reproducing the user's
+   exact action — here, a fresh session — not a proxy telemetry marker.
+
+2. **When a masked file is a `.lock` sidecar, the robust fix is to remove the NEED to
+   write it, not to fight the mask.** #5912's in-sandbox temp-file bypass fights the
+   mask (and is fail-closed correct for a genuine single-path mask). Pre-seeding the
+   target state on the host, before the mask exists, makes the write idempotent-skip —
+   strictly more robust, and independent of whether the in-session bypass fires.
+
+3. **A root-cause ADR built on a ruled-out candidate must be re-probed against live
+   ground truth.** ADR-081 ruled out the SDK bwrap mask (b) by *reading the sandbox
+   config* (only directory paths passed to `denyRead`). One `findmnt` from a wedged
+   session overturned it. Prefer a live mount/inode probe over config-reading when the
+   artifact is a mount.
+
+## Session Errors
+
+- **Claimed "no Better Stack access"** from a bare-shell probe that needed
+  `doppler run -p soleur -c prd_terraform`. Fixed in #6055 (the script now names the
+  invocation). **Prevention:** a fail-safe TRANSIENT/auth error from an infra probe is
+  inconclusive, never proof of a capability gap — re-run wrapped in `doppler run`.
+- **Declared the wedge fixed end-to-end after verifying only the sweep ran.** See Key
+  Insight 1. **Prevention:** for a blind surface, reproduce the user action; if you
+  cannot (Concierge session), say so and gate the "fixed" claim on the user's retry.
+- **Seed passed locally, failed in CI (`extensions.worktreeConfig` null).** The seed
+  was placed INSIDE `provisionWorkspace`'s `git init → add → commit` try, after the
+  commit. A CI runner (and a prod host) with no git identity throws at `git commit`,
+  so the catch swallowed it and the seed never ran — invisible locally where a global
+  identity exists. **Prevention:** a best-effort step that must run regardless of an
+  earlier step's failure belongs OUTSIDE that step's try. Reproduce a "works locally,
+  red in CI" gap by stripping the ambient state CI lacks
+  (`env GIT_CONFIG_GLOBAL=/dev/null GIT_AUTHOR_NAME= …`) — don't assume flake.
+
+## Follow-up round 2 — a provision-time fix does not heal EXISTING workspaces
+
+The #6064 pre-seed ran ONLY in `provisionWorkspace`/`provisionWorkspaceWithRepo`
+(workspace-creation time). A fresh session on a workspace that was **provisioned before
+the fix shipped** still wedged: the persistent `/workspaces/<id>` `.git` was never
+seeded, so in-sandbox `ensure_bare_config` still tried to write the masked shared config.
+A fresh *session* is not a fresh *workspace* — the wedged `.git` persists on the volume.
+
+**Fix:** also call `seedWorktreeConfig` from `ensureWorkspaceRepoCloned` — the host-side,
+**per-session** boot path that already runs before the sandbox exists — on BOTH the
+existing-valid-workspace no-op return and the fresh-graft path. Idempotent; every boot
+heals the workspace. Extracted the seeder to its own module (`worktree-config-seed.ts`)
+so the hot boot path does not import workspace.ts's full provisioning graph.
+
+**Lesson:** when a fix mutates state at CREATE time, ask "what about the population that
+already exists?" A migration/boot-time re-apply is almost always also required — the
+install-time hook alone silently excludes every pre-existing entity. New evidence also
+showed `.git/config.worktree` masked as a char device (not just `.git/config.lock`),
+consistent with the SDK masking both git-config write targets; it does not block the fix
+because `git worktree add` writes to an unmasked `.git/worktrees/<id>/` subdir.
+
+## Follow-up round 3 — the pre-seed was a self-inflicted REGRESSION; the real fix is "don't do bare surgery on a non-bare repo"
+
+The #6064/#6068 pre-seed set `extensions.worktreeConfig=true` on the workspace. That is
+the bare-repo `ensure_bare_config` transformation — and it is WRONG for a Concierge
+workspace, which is a **normal non-bare clone**. Enabling worktreeConfig forces git to read
+`.git/config.worktree` on EVERY command; in-sandbox that path is a `/dev/null` **char
+device owned by nobody:nogroup that the agent user cannot read** → `fatal: unable to access
+'.git/config.worktree': Permission denied` → every git command fails → the readiness gate
+fires ("workspace isn't ready"). **The pre-seed turned a deep worktree wedge into total git
+breakage.**
+
+Why it wasn't caught: the local repro used a **symlink to /dev/null** (readable → empty →
+git fine). The real mask is an **unreadable** char device, so git fatals. `chmod 000
+.git/config.worktree` + `worktreeConfig=true` reproduces the exact `Permission denied`
+fatal; without worktreeConfig, git ignores the file and works.
+
+The correct fix, three rounds late:
+- **`git worktree add` works natively on a normal repo** with ZERO shared-config surgery —
+  verified. The entire `ensure_bare_config` transformation is a BARE-repo accommodation.
+- **worktree-manager.sh:** `ensure_bare_config` now early-returns on a non-bare repo (a
+  `.git` DIRECTORY, filesystem check — never a git command, since git may be wedged).
+- **worktree-config-seed.ts:** inverted from SET to HEAL — for a non-bare workspace it
+  UNSETS `extensions.worktreeConfig` (host-side, where config.worktree is not masked),
+  repairing the population the bad seed already damaged.
+- **soleur:go readiness gate:** now runs `git-repo-readiness-diag.sh`, which captures git's
+  discarded stderr into a `SOLEUR_GIT_REPO_DIAG` marker mirrored to Better Stack — so a
+  readiness-gate rejection is self-diagnosing (this layer was above the worktree-wedge
+  instrumentation and previously blind).
+
+**Meta-lesson (the expensive one): a fix that ADDS state to work around a constraint can be
+worse than the bug.** Four rounds of "add config / add re-seed" each moved the failure to a
+new layer. The fix that finally worked REMOVED the intervention (don't run bare surgery on a
+non-bare repo). When a workaround keeps spawning new failure modes, question whether the
+intervention itself is the problem — and reproduce with the EXACT adversarial condition
+(an *unreadable* node, not a readable stand-in), because the permission bit was the whole
+difference between "repro passes" and "prod fatals".
+
+## Follow-ups
+
+- **Observability (DONE, this PR):** a fail-open `PostToolUse(Bash)` hook
+  (`git-lock-marker-telemetry.ts`) scans Bash output for the `SOLEUR_GIT_LOCK_*` /
+  "worktree wedge" markers and re-emits them via the SERVER-SIDE logger (→ Better Stack +
+  Sentry breadcrumb). Closes ADR-081's "blind sandbox stdout, not mirrored to any
+  queryable sink" gap so the next wedge is self-diagnosable without a `findmnt`
+  round-trip. A drift guard pins the extractor's sentinel set against worktree-manager.sh.
+
+## Tags
+category: bug-fixes
+module: workspace-provisioning

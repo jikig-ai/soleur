@@ -10,6 +10,7 @@ delete process.env.GIT_INDEX_FILE;
 delete process.env.GIT_WORK_TREE;
 
 import { describe, test, expect, afterEach } from "vitest";
+import { execFileSync } from "child_process";
 import { existsSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
@@ -72,5 +73,41 @@ describe("workspace provisioning", () => {
 
     expect(path1).toBe(path2);
     expect(existsSync(path1)).toBe(true);
+  });
+
+  // #4826 (corrected) — a provisioned NORMAL workspace must NOT have
+  // extensions.worktreeConfig set. Enabling it forces git to read the sandbox-masked
+  // (unreadable) .git/config.worktree and fatals every git command. The seed now HEALS
+  // (removes) that key rather than setting it; a fresh clone has it absent, and
+  // `git worktree add` works natively without any bare-repo surgery.
+  test("provisioned workspace has NO extensions.worktreeConfig (#4826 regression guard)", async () => {
+    const userId = randomUUID();
+    const path = await provisionWorkspace(userId);
+    const cfg = (key: string): string | null => {
+      try {
+        return execFileSync("git", ["config", "--get", key], {
+          cwd: path,
+          stdio: "pipe",
+        })
+          .toString()
+          .trim();
+      } catch {
+        return null; // git config --get exits non-zero when the key is absent
+      }
+    };
+    expect(cfg("extensions.worktreeConfig")).toBeNull();
+    expect(cfg("core.repositoryformatversion")).not.toBe("1");
+  });
+
+  test("re-provisioning keeps extensions.worktreeConfig absent (idempotent heal)", async () => {
+    const userId = randomUUID();
+    await provisionWorkspace(userId);
+    const path = await provisionWorkspace(userId);
+    expect(() =>
+      execFileSync("git", ["config", "--get", "extensions.worktreeConfig"], {
+        cwd: path,
+        stdio: "pipe",
+      }),
+    ).toThrow(); // --get on an absent key exits non-zero
   });
 });

@@ -556,16 +556,123 @@ the queue rule is re-applied:
   The remaining canary items below apply only after one of those preconditions
   holds.
 - `apply-github-infra.yml` ran green on the re-enable merge; summary shows the
-  required_status_checks count (16) via the `select(.type==…)` probe.
+  required_status_checks count (17 as of #6049; was 16) via the
+  `select(.type==…)` probe.
 - Discoverability:
   `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '[.rules[] | select(.type=="merge_queue")] | length'`
   → `1` (App-auth token; asserts the rule is APPLIED, not that the queue drains).
-- **Canary human PR:** a trivial PR enters the queue (not direct-merge), all 18
-  required contexts (16 CI Required + 2 CLA Required: `cla-check`, `cla-evidence`)
-  report on the `merge_group` temp ref incl. `CodeQL`, and it merges without
-  stalling.
+- **Canary human PR:** a trivial PR enters the queue (not direct-merge), all 19
+  required contexts (17 CI Required as of #6049 — was 16 — + 2 CLA Required:
+  `cla-check`, `cla-evidence`) report on the `merge_group` temp ref incl.
+  `CodeQL`, and it merges without stalling.
 - **Canary bot PR:** a `rule-metrics-aggregate.yml` bot PR flows through the
   queue without stalling (CLA synthetics cover its CLA contexts).
 - **Stall probe live:** `merge-queue-stall-check.yml` has run ≥1 green cycle.
 - **Ruleset drift:** `scheduled-terraform-drift.yml` `infra/github` plan is clean
   (`plan → apply → plan` shows no `merge_queue` drift).
+
+## Amendment — 2026-07-05 (#6049): close + drift-proof the synthetic-check chain
+
+**Problem.** `GITHUB_TOKEN`-created bot PRs (the `rule-metrics-aggregate` and
+`weakness-miner` weekly crons) never trigger `pull_request` CI, so
+`.github/actions/bot-pr-with-synthetic-checks` posts **synthetic** check-runs
+(Checks API, `integration_id 15368`) to satisfy the required-check rulesets. Its
+`CHECK_NAMES` had drifted to **6** hardcoded contexts (+ `cla-check` /
+`cla-evidence`) while the live **CI Required** ruleset (#14145388) requires
+**17** contexts — so every synthetic-check bot PR sat at `mergeState=BLOCKED`
+forever (zero `ci/`-prefixed bot PRs had ever auto-merged; #6048 was
+admin-merged as the documented interim). This was a **three-layer drift**:
+
+| Layer | File(s) | Was | Now |
+|---|---|---|---|
+| IaC (what the ruleset requires) | `infra/github/ruleset-ci-required.tf` + `scripts/ci-required-ruleset-canonical-required-status-checks.json` | 16 contexts | **17** — `adr-ordinals` reconciled |
+| Synthetic SSOT (what the bot posts) | `scripts/required-checks.txt` | 8 names | canonical filtered to `integration_id == 15368` (16) + CLA (2) |
+| Action (posting site) | `.github/actions/bot-pr-with-synthetic-checks/action.yml` | 6 hardcoded + 2 CLA | **derived from the SSOT** |
+
+**The closed drift-chain contract (now un-driftable):**
+
+- `live ≡ canonical ≡ .tf` — `canonical ↔ live` enforced daily by the Inngest
+  `cron-ruleset-bypass-audit` (async, next-day); `.tf ↔ canonical` enforced
+  synchronously at PR time by `test-audit-ruleset-bypass.sh` T-rsc-9.
+- `(canonical filtered to integration_id == 15368) ≡ required-checks.txt CI-subset`
+  — enforced synchronously at PR time by the new file-vs-file
+  `plugins/soleur/test/required-checks-canonical-parity.test.sh` (both ⊆ and ⊇,
+  computed via `jq select(.integration_id==15368)`, NOT a `CodeQL` literal, so a
+  future second non-15368 GHAS check is handled structurally).
+- `required-checks.txt ≡ action CHECK_NAMES` — the action now **reads** the SSOT
+  (the hardcode is gone); a composite→SSOT guard in the same parity test catches
+  any future re-hardcode (the action is exempt from
+  `lint-bot-synthetic-completeness.sh` by construction).
+
+**`adr-ordinals` reconciliation.** The live ruleset already required
+`adr-ordinals` (a `ci.yml` always-run gate job, `integration_id 15368`) but the
+`.tf` + canonical JSON omitted it — a latent IaC-revert bug where the next
+`apply-github-infra.yml` would have computed it unmanaged and **removed** it from
+live. Reconciled here as a documented **no-op apply** (live already has it),
+bumping the canonical count 16→17 (T-rsc-7 updated in lockstep).
+
+**Content-safety ceiling (per the defense-relaxation rule).** Completing the
+synthetic set fabricates greens for two *content* gates — `gitleaks scan` AND
+`lint fixture content` — so the accidental "secret-bearing digest stalls"
+protection is relaxed and MUST name a new ceiling. The action now **earns** both
+over its own staged diff before creating the PR: a pinned real `gitleaks` run
+(v8.24.2 + SHA256, pin-parity-asserted across all 3 install sites) plus
+`lint-fixture-content.mjs`; any finding fails loud (no branch pushed, no PR, no
+synthetics). Tier 1 (push-protection only) was **rejected** — it misses this
+repo's custom `.gitleaks.toml` rules + the entire `lint fixture content` PII
+class, exactly the shapes the learnings-clustering digest is most likely to
+carry. A **safe-surface allowlist** (explicit enumeration of the two real
+artifacts) rejects the `.gitleaks.toml`-allowlisted
+`plans/`/`specs/`/`references/`/`learnings/` subtrees, where a real gitleaks run
+would be blind and the earned-green would be a fabrication after all.
+
+**Composite-action coverage guarantee.** `CHECK_NAMES` can no longer silently
+diverge from the required set: the parity test's composite→SSOT grep fails CI on
+any re-hardcode, and the SSOT itself is `@deruelle` CODEOWNERS-gated with an
+auto-fabrication guard comment (adding a content-scoped name there is inert
+unless the action can actually scan the bot diff for it).
+
+**C4 impact:** none. Completeness read performed against `model.c4`, `views.c4`,
+`spec.c4`: the bot is `github-actions[bot]` (an internal CI identity, not a
+modeled person); `github = system "GitHub"` (`model.c4`) and the
+`engine -> github "Git operations and CI"` edge already model this surface; the
+change is an internal mechanic of that existing edge and falsifies no element
+description. No new external actor/system, container/data-store, or
+actor↔surface access relationship.
+
+## Amendment — 2026-07-06 (#6072): the CLA Required ruleset joins this IaC root
+
+This ADR's accepted decision — "the branch-protection ruleset is
+Terraform-managed" — was authored with a Context naming only the **CI Required**
+ruleset (id 14145388). It now **extends to a second ruleset**: the **CLA
+Required** ruleset (id 13304872) is managed by the same `infra/github/` root via
+`ruleset-cla-required.tf`, applied by the same `apply-github-infra.yml`
+apply-on-merge path, and drift-guarded by the same daily
+`cron-ruleset-bypass-audit` + the `T-cla-1`/`T-cla-1b` canonical↔`.tf` sync gates
+(now pinned to the `.tf`, mirroring `T-rsc-9`). `scripts/create-cla-required-ruleset.sh`
+is demoted to a **DR-only restore skeleton** mirroring
+`scripts/create-ci-required-ruleset.sh` (it reads the two CLA canonical JSONs via
+`jq --slurpfile`; the inline heredoc payload is retired). This is an **extension
+of the accepted decision, not a new decision** — hence an amendment, no new ADR
+ordinal.
+
+**Enforced values unchanged.** The migration is declaration-surface only: the two
+required checks (`cla-check`, `cla-evidence` @ integration_id 15368) and the three
+bypass actors (OrganizationAdmin/pull_request, RepositoryRole:5/pull_request,
+Integration:1236702/always — the CLA bot) are byte-identical to the former
+imperative payload and to the live ruleset, so the first apply is a no-op
+import-then-reconcile (verified live-vs-`.tf` at plan time). The compliance
+posture the CLO reviewed in #6061 is unchanged.
+
+**Divergences from `ruleset-ci-required.tf` (intended, documented in the `.tf`
+header):** `strict_required_status_checks_policy = false` (CI is `true`); a third
+bypass actor (the CLA bot Integration); two required checks (no GHAS/CodeQL
+rollup, so the CLA `.tf` references no CodeQL integration id). The
+OrganizationAdmin `actor_id = 0` HCL sentinel (provider issue #2536) normalizes to
+the canonical's `null` in `T-cla-1b` (SE-1).
+
+**C4 impact:** none. Same reasoning as the CI ruleset (already absent from the C4
+model): the CLA ruleset is a GitHub-side CI/governance control on the existing
+`engine -> github` build-plane edge, not a modeled runtime element. Checked
+`model.c4` / `views.c4` / `spec.c4` — no `ruleset`/`branch protection` elements.
+No new external actor/system, container/data-store, or access relationship.

@@ -39,6 +39,8 @@ variables {
   doppler_token_tf             = "dummy"
   github_app_id                = "12345"
   github_app_private_key       = "dummy"
+  ghcr_read_user               = "dummy"
+  ghcr_read_token              = "dummy"
   hcloud_token                 = "dummy"
   kb_drift_operator_founder_id = "00000000-0000-0000-0000-000000000000"
   resend_api_key               = "dummy"

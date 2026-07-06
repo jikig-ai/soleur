@@ -35,9 +35,29 @@
 # Output: JSONEachRow (one JSON object per line) on stdout. Errors to stderr.
 set -uo pipefail
 
-: "${BETTERSTACK_QUERY_HOST:?set BETTERSTACK_QUERY_HOST (Doppler soleur/prd_terraform)}"
-: "${BETTERSTACK_QUERY_USERNAME:?set BETTERSTACK_QUERY_USERNAME}"
-: "${BETTERSTACK_QUERY_PASSWORD:?set BETTERSTACK_QUERY_PASSWORD}"
+# Credential guard. These are Doppler-managed secrets that must be INJECTED into
+# the env — this script does not read Doppler itself. A bare-shell run (no
+# `doppler run` wrapper) trips this. The message is deliberately explicit that the
+# fix is the invocation, NOT a missing capability: an agent that reads "unset" as
+# "this session lacks Better Stack access" and gives up is the exact misdiagnosis
+# this hint exists to prevent (see hr-observability-probe-transient-is-not-no-access).
+if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
+  cat >&2 <<'EOF'
+betterstack-query.sh: BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not set.
+
+You are NOT missing Better Stack access — these creds live in Doppler and this
+script needs them INJECTED. Re-run wrapped in `doppler run`:
+
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh <args>
+
+e.g.  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep <marker>
+
+Do NOT conclude "no access / can't verify" from this message — the correct next
+step is the doppler-wrapped re-run above. (Creds provisioning: see
+knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+EOF
+  exit 3
+fi
 
 # Table identifier — overridable for other sources via BS_TABLE.
 export BS_TABLE="${BS_TABLE:-t520508_soleur_inngest_vector_prd_3_logs}"

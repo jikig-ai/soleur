@@ -203,6 +203,13 @@ variable "doppler_token" {
   sensitive   = true
 }
 
+variable "sentry_dsn" {
+  description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working. NOTE: the doppler fallback only applies AFTER doppler is installed — the pre-extraction fresh-boot stages (pkg_audit/doppler_dl, #6090) depend SOLELY on this baked value, so an empty DSN there silently reverts to a zero-emit abort. The web-2-recreate job's 'Extract backend credentials' step asserts this is non-empty before -replace so that coverage cannot regress unnoticed."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "cf_notification_email" {
   description = "Email address for Cloudflare notification policies"
   type        = string
@@ -265,6 +272,23 @@ variable "github_app_id" {
 
 variable "github_app_private_key" {
   description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded."
+  type        = string
+  sensitive   = true
+}
+
+# #6005: scoped read:packages credential (machine account) for the now-PRIVATE GHCR
+# packages. NO default (hr-tf-variable-no-operator-mint-default) — the operator mints
+# it and writes the value into Doppler `prd_terraform` (the TF_VAR source) BEFORE this
+# file's doppler_secret resources apply. See ghcr-read-credential.tf for the ordered
+# runbook + the deliberate hr-github-app-auth-not-pat exception (ADR-087).
+variable "ghcr_read_user" {
+  description = "GitHub machine-account login that owns the scoped read:packages PAT (the docker login -u value). Published to Doppler soleur/prd as GHCR_READ_USER."
+  type        = string
+  sensitive   = true
+}
+
+variable "ghcr_read_token" {
+  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN; consumed by ci-deploy.sh (host pull + cosign .sig fetch auth) + cloud-init fresh-boot login. NO default."
   type        = string
   sensitive   = true
 }

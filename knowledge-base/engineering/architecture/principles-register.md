@@ -23,6 +23,8 @@ Queryable index of architectural principles. Each principle links to its canonic
 | AP-013 | Process-local state for runner sessions | ADR-027 | skill | NFR-019 |
 | AP-014 | Platform-loop / per-founder cohabitation boundary | ADR-033 | hook | NFR-014 |
 | AP-015 | Always-enforce-workspace (every user owns a guaranteed 1-member personal workspace; the owner-membership canary) | ADR-044, ADR-073 | advisory | NFR-014 |
+| AP-016 | GHCR read:packages credential — the machine-account PAT is the INTERIM single-operator exception to `hr-github-app-auth-not-pat`; the multi-tenant target is a control-plane Inngest minter issuing 1h `packages:read` App-installation tokens (PAT has no creation API → does not scale to zero-touch tenant onboarding) | ADR-088 (supersedes ADR-087 D1), ADR-082 | advisory | NFR-014 |
+| AP-017 | Additive-only auto-edit boundary — the harness self-edit path may ADD rules (new id) but any edit/deletion of an `hr-*`/`wg-*` rule BODY is human-gated by a per-change, hash-bound WORM ack enforced by the always-run `rule-body-lint` required CI check; the gate's own control surface stays outside the auto-editable set (recursion invariant) | ADR-092 | hook | NFR-014 |
 
 ## Enforcement Tiers
 

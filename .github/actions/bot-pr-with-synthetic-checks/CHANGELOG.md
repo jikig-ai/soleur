@@ -4,6 +4,46 @@ Composite-action behavior log. No test runner exists for composites in this
 repo, so backward-compat is asserted by reading existing callers and verifying
 their input set is unchanged. See `action.yml` for the live contract.
 
+## v3 (2026-07-05)
+
+Issue: #6049. Plan:
+`knowledge-base/project/plans/2026-07-05-fix-bot-synthetic-check-names-drift-plan.md`.
+
+`CHECK_NAMES` had drifted: the action hardcoded 6 CI contexts (+ `cla-check` /
+`cla-evidence`) while the live **CI Required** ruleset requires **17** contexts
+(16 GitHub-Actions `integration_id 15368` + `CodeQL` GHAS 57789). Every
+synthetic-check bot PR sat at `mergeState=BLOCKED` forever — zero `ci/`-prefixed
+bot PRs had ever auto-merged.
+
+**Two behavior changes:**
+
+1. **`CHECK_NAMES` is now DERIVED from `scripts/required-checks.txt`** (the
+   SSOT), not hardcoded. The action parses the file (leading-`#`-only comment
+   rule, multi-word- and `#`-safe — shared with
+   `scripts/lint-bot-synthetic-completeness.sh`) and posts one check-run per
+   name, with `cla-check` / `cla-evidence` custom outputs preserved via a
+   `case`. Fails loud if the file is absent (a non-checkout consumer) rather
+   than posting an empty, deadlocking set. A composite→SSOT guard in
+   `plugins/soleur/test/required-checks-canonical-parity.test.sh` catches any
+   future re-hardcode. `CodeQL` stays omitted (a 15368 synthetic can't satisfy
+   a GHAS gate; it concludes `neutral` for bot PRs).
+
+2. **Content-safety ceiling (Tier 2, mandatory).** Completing the synthetic set
+   fabricates greens for the `gitleaks scan` AND `lint fixture content` required
+   contexts, so the action now EARNS both over its own staged diff before
+   creating the PR: a pinned real `gitleaks` run (v8.24.2 + SHA256, matching
+   `secret-scan.yml` + `ci.yml` test-scripts — pin-parity asserted in CI) plus
+   `lint-fixture-content.mjs`. Any finding → fail loud, no branch pushed, no PR,
+   no synthetics. A **safe-surface allowlist** additionally restricts `add-paths`
+   to the two artifacts the two callers actually emit
+   (`knowledge-base/project/weakness-digest.md`,
+   `knowledge-base/project/rule-metrics.json`) and rejects the
+   `.gitleaks.toml`-allowlisted `plans/`/`specs/`/`references/`/`learnings/`
+   subtrees (where a real gitleaks run would be blind and the green fabricated).
+
+**No input contract change.** Both existing callers (`weakness-miner.yml`,
+`rule-metrics-aggregate.yml`) pass allowlisted `add-paths` and are unaffected.
+
 ## v2.1 (2026-05-17)
 
 Issue: #3916 / #3923 / #3927. PR #3201 added `cla-evidence` to the "CLA

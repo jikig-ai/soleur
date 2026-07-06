@@ -15,10 +15,23 @@
 #
 # Strict policy preserved (strict_required_status_checks_policy = true).
 #
-# Job-name contract: the 16 `context` strings below are public ABI for the
+# Job-name contract: the 18 `context` strings below are public ABI for the
 # branch-protection gate. A workflow job rename (`lint fixture content` ->
 # `lint-fixture-content`) silently un-requires the check until this resource
 # is updated in the same PR. See ADR-032 Sharp Edges.
+#
+# #6049 adds `adr-ordinals` (17th) — a ci.yml always-run gate job that the live
+# ruleset already required but this IaC root + the canonical JSON omitted (an
+# IaC-revert latent bug: the next apply would have computed it unmanaged and
+# REMOVED it from live). Reconciled here as a no-op apply (live already has it).
+#
+# #6103 adds `rule-body-lint` (18th, ADR-092) — the always-run ci.yml job that
+# blocks un-acked hr-*/wg-* rule-body weakening. First apply (this PR's merge via
+# apply-github-infra.yml) makes it LIVE-required. It is a content-scoped gate: on
+# bot PRs the synthetic is FABRICATED (not earned) — sound ONLY while the bot
+# action's ALLOWED_PATHS excludes AGENTS.{core,docs,rest}.md; #6038 must reproduce
+# it in the action's Phase-4 ceiling before extending ALLOWED_PATHS. See the
+# CODEOWNERS-gated note in scripts/required-checks.txt + ADR-092.
 #
 # #5780 adds a second rule sibling — a `merge_queue` block (below the
 # required_status_checks block) — adopting a GitHub merge queue for `main` to
@@ -127,6 +140,15 @@ resource "github_repository_ruleset" "ci_required" {
         context        = "tc-document-sha-guard"
         integration_id = var.actions_integration_id
       }
+      # adr-ordinals (#6049): always-run ADR-ordinal-collision gate job in
+      # .github/workflows/ci.yml. GitHub Actions context (integration_id 15368,
+      # NOT GHAS 57789 — using the CodeQL id would silently un-match the gate).
+      # Reconciled from live, which already required it; see the count-contract
+      # comment at the top of this file.
+      required_check {
+        context        = "adr-ordinals"
+        integration_id = var.actions_integration_id
+      }
 
       # --- Tier 3: legal-doc cross-document lockstep gate (#4384, closes the
       # advisory-bypass-via-auto-merge gap that produced #4333). Context
@@ -153,6 +175,18 @@ resource "github_repository_ruleset" "ci_required" {
       # this is the first conditionally-skipped-but-required check. See ADR-032.
       required_check {
         context        = "tenant-integration-required"
+        integration_id = var.actions_integration_id
+      }
+
+      # --- Tier 5: hard-rule body-weakening gate (#6103, ADR-092). Context is
+      # the JOB name `rule-body-lint` at .github/workflows/ci.yml — an always-run
+      # gate that BLOCKS any un-acked change/deletion of an hr-*/wg-* rule BODY
+      # line in AGENTS.{core,docs,rest}.md. Runs under GitHub Actions
+      # (integration_id 15368). Content-scoped: the bot synthetic is fabricated,
+      # not earned — sound only while the bot action's ALLOWED_PATHS excludes
+      # AGENTS bodies (see scripts/required-checks.txt note + ADR-092 residual).
+      required_check {
+        context        = "rule-body-lint"
         integration_id = var.actions_integration_id
       }
     }

@@ -38,7 +38,7 @@ model {
       }
       api = container "API Routes" {
         technology "Next.js API"
-        description "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843)."
+        description "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046)."
       }
       auth = container "Auth Module" {
         technology "Supabase Auth"
@@ -58,8 +58,8 @@ model {
         description "Discovers and loads skills, agents, commands from plugin directory"
       }
       hooks = container "Hook Engine" {
-        technology "PreToolUse Guards"
-        description "Enforces syntactic rules — blocks commits to main, rm -rf, etc."
+        technology "PreToolUse Guards + PostToolUse hints"
+        description "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086)."
       }
     }
 
@@ -241,7 +241,7 @@ model {
   }
   ghcr = system "GitHub Container Registry" {
     #external
-    description "Public GHCR registry (ghcr.io/jikig-ai/soleur-web-platform) — source of the web app image a fresh Hetzner host pulls at boot. The image also bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+    description "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — source of the web app image a Hetzner host pulls (authenticated via a scoped read:packages credential; the host docker login is done by ci-deploy.sh / the fresh-boot bootstrap, #6005). The image also bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
   }
   betterstack = system "Better Stack" {
     #external
@@ -249,7 +249,7 @@ model {
   }
   sigstore = system "Sigstore" {
     #external
-    description "Keyless container-image signing/verification (cosign/Fulcio/Rekor). The release CI keyless-signs the pushed web app image digest; the host cosign-verifies the signature (offline, identity-pinned to the release workflow) before running the image — supply-chain authenticity for the shared host (#5933 Item 4)."
+    description "Keyless container-image signing/verification (cosign/Fulcio/Rekor). The release CI keyless-signs the pushed web app image digest (this IS a live sigstore call — github → sigstore below). The host then cosign-verifies the signature FULLY OFFLINE against a pinned trusted_root.json — it makes NO live sigstore call at verify time (ADR-087, #6005) — supply-chain authenticity for the shared host (#5933 Item 4)."
   }
 
   // ======================================================================
@@ -299,8 +299,10 @@ model {
   skillloader -> skills "Discovers" { technology "Directory scan" }
   skillloader -> agents "Discovers" { technology "Recursive scan" }
   hooks -> claude "Guards tool calls" { technology "Event hook" }
+  hooks -> kb "Reads context_queries artifacts (skill-scoped injection)" { technology "File I/O" }
+  api -> kb "Reads context_queries artifacts (skill-scoped injection, web in-process)" { technology "File I/O" }
   skills -> kb "Reads/writes" { technology "File I/O" }
-  agents -> kb "Reads" { technology "File I/O" }
+  agents -> kb "Reads/writes" { technology "File I/O" }
   api -> supabase "Auth and data" { technology "HTTPS" }
   claude -> supabase "Sessions and keys" { technology "HTTPS" }
   claude -> anthropic "LLM calls" { technology "HTTPS" }
@@ -318,11 +320,18 @@ model {
   inngest -> inngestPostgres "Config + run history" { technology "PostgreSQL session pooler :5432" }
   inngest -> inngestRedis "Durable queue + run-state" { technology "Redis (AOF)" }
   hetzner -> inngest "Hosts" { technology "systemd" }
-  hetzner -> ghcr "Pulls app image + baked bootstrap scripts/hooks at boot; a web-2-recreate boot pins an immutable @sha256 digest (coherence-checked vs host_scripts_content_hash, not :latest) (#5921, #5887)" { technology "Docker/GHCR" }
+  hetzner -> ghcr "Pulls app image + baked bootstrap scripts/hooks at boot; authenticated (read:packages) since the packages are private; a web-2-recreate boot pins an immutable @sha256 digest (coherence-checked vs host_scripts_content_hash, not :latest); the cosign signature bundle is fetched here too — verify is offline against a pinned root, so there is no live sigstore call (#5921, #5887, #6005)" { technology "Docker/GHCR (authenticated)" }
   betterstack -> hetzner "Per-host origin uptime probe (web-N.app.soleur.ai/health, CF-proxied) — absence detector (#5933 Item 1)" { technology "HTTPS via CF edge" }
   github -> sigstore "Keyless-signs the released app image digest (cosign, OIDC→Fulcio→Rekor) (#5933 Item 4)" { technology "HTTPS (cosign)" }
-  hetzner -> sigstore "Verifies the image signature (cosign --offline, identity-pinned) before docker run (#5933 Item 4)" { technology "HTTPS (cosign)" }
+  // NOTE: the former `hetzner -> sigstore` verify edge was REMOVED (#6005/ADR-087) — it was
+  // falsified: with a pinned local trusted_root.json + offline verify the host makes NO live
+  // sigstore call at verify time. The signature bundle is fetched from `ghcr` (edge above).
   doppler -> inngest "Injects secrets" { technology "CLI (doppler run prd)" }
+  // #6031 / ADR-088 — control-plane GHCR installation-token minter (cron-ghcr-token-minter,
+  // every 20 min). Mints a 1h packages:read App installation token and writes it to Doppler,
+  // retiring the interim read:packages PAT; hosts read GHCR_READ_TOKEN unchanged.
+  inngest -> github "Mints packages:read installation token every 20 min (ADR-088)" { technology "HTTPS (GitHub App JWT → /app/installations/{id}/access_tokens)" }
+  inngest -> doppler "Writes GHCR_READ_TOKEN (1h scoped, prd_ghcr) (ADR-088)" { technology "HTTPS (Doppler REST API)" }
 
   // ---- C4 L2 — Multi-host /workspaces cluster (ADR-068, #5274) -----------
   // tunnel -> coordinator (above) replaces the former tunnel -> api ingress.

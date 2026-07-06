@@ -624,6 +624,22 @@ Phase 4b (continuous checkpoint).
 >   NOT relax (c) or by itself unlock pooling. Plan:
 >   `knowledge-base/project/plans/2026-07-03-feat-deep-readiness-endpoint-workspaces-mount-plan.md`.
 
+> **Amendment (2026-07-05, #6055 — web-2 must boot post-#6055 cloud-init before pooling).** A new
+> pre-pool gate, layered on the §(c) hard invariant above (necessary, not sufficient — does NOT
+> relax (c)): web-2 MUST be (re)created from a cloud-init dated on or after #6055 before its pool is
+> added to `default_pool_ids`. #6055 adds the `GIT_LOCK_CHARDEVICE_SWEEP` NOPASSWD grant that lets
+> `ci-deploy.sh`'s pre-canary char-device `.git/config.lock` sweep (#5934 / ADR-081) run as root;
+> WITHOUT it the sweep is sudo-DENIED (and `ci-deploy.sh`'s `|| true` hides the denial), so the
+> residual char-device node is never cleared and the #5912 worktree-creation wedge can strand every
+> agent session on that host. **Delivery asymmetry (the load-bearing reason this is a gate):** the 11
+> SSH provisioners are web-1-scoped by design (`server.tf` §"web-2 is fresh — provisioned entirely
+> by cloud-init at boot"), so a RUNNING web-2 gets **no live grant push** from `apply-deploy-pipeline-fix.yml`
+> — cloud-init at (re)create is the sole delivery path. A web-2 whose cloud-init predates #6055 boots
+> grant-less and MUST be **recreated** (the #6030 CI-driven `-replace` recreate), not merely
+> LB-undrained, before pooling. Enforcement today = this checklist item + #6030; making it
+> programmatic (a `/internal/readyz` pre-pool assertion that `grep -q GIT_LOCK_CHARDEVICE_SWEEP
+> /etc/sudoers.d/deploy-inngest-bootstrap` succeeds on-host) is a deep-readiness follow-up.
+
 > **Correction to §(b) (2026-07-03, gaplessness verification — PR #5968).** The §(b) remedy
 > ("verify against CF docs + a staging convert before the GA window") was executed via a
 > verification runbook + two agent pressure-tests (infra-security against the live CF DNS/zone
@@ -787,6 +803,113 @@ Phase 4b (continuous checkpoint).
 > below. **Status:** UNCHANGED — this stays additive/inert on merge (the recreate is a post-merge
 > menu-ack dispatch, never runs pre-merge). Plan:
 > `knowledge-base/project/plans/2026-07-05-feat-web-2-recreate-bootstrap-plan.md`.
+
+> **Amendment (2026-07-05, #6051/#6040 — off-host verify auto-retries the fresh-boot degraded
+> window; warm_standby de-duplicated onto the shared script).** The first live `web-2-recreate`
+> dispatch (run 28747333763) confirmed the previous amendment's recreate path end-to-end (coherence
+> preflight ✓, destroy-guard ✓, `-replace` + attach-proof + volume-preserved ✓, web-1 untouched, prod
+> 200 throughout) — but the off-host verify RED'd on a **timing** bug, not a safety one: it fired ONE
+> fan-out `SETTLE_SECONDS` (30s) after apply and aborted on the first `ok_peer_fanout_degraded`, while
+> a full fresh `-replace` boot of web-2 (apt + docker + multi-image pull + webhook-enable) takes ~10
+> min to bind `:9000`. This amendment refines the verify's degraded-handling and ends the
+> two-divergent-copies hazard flagged in #6040:
+>
+> **(1) Bounded in-verify degraded-retry (operationalizes the "idempotent re-dispatch" contract).**
+> `deploy-status-fanout-verify.sh` no longer aborts on the FIRST `*_peer_fanout_degraded`. On the
+> first degraded completion it passively waits until `elapsed-since-verify-start ≥ FRESH_BOOT_WINDOW_S`
+> (default 600s), then re-POSTs the fan-out **exactly once** (`DEGRADED_RETRY_MAX`, default 1) and
+> re-verifies. This performs the ADR's already-stated "`ci-deploy.sh` is idempotent + flock-serialized
+> → a full retry re-delivers" recovery INSIDE the verify for the `-replace` fresh-boot case, instead of
+> requiring a manual operator re-dispatch. `fan_out_to_peers` (`ci-deploy.sh`) is single-attempt
+> fire-and-forget with NO host-side peer retry, so the client-side re-POST is the ONLY off-host
+> mechanism to re-deliver to web-2 after it boots (web-2 `:9000` is private-net-deny). This is an
+> **amend, not a reversal** — no prior decision changes; the fail-loud, no-green-on-timeout contract is
+> preserved (terminal `exit 1` on budget exhaustion / genuine failure / non-202 (re)trigger /
+> unexpected reason).
+>
+> **(2) web-1 re-swap amplification is bounded (single-user-incident mitigation).** Each fan-out
+> re-POST re-swaps web-1 (the sole live origin) BEFORE fanning to web-2 (`ci-deploy.sh` fans out AFTER
+> web-1's own canary-gated swap) — and the web-platform re-POST is a FULL canary + cron-drain + docker
+> swap, NOT a same-tag no-op (that ~50ms shortcut is inngest-only). So the retry is capped at ONE
+> re-POST (≤2 web-1 swaps total) and gated on the boot window so it never stacks onto an in-flight
+> swap; `lock_contention` (a lost `flock -n`, `exit_code=1`) is treated as retryable, not a deploy
+> failure. The re-POST re-reads + adopts the freshest tag (downgrade guard) and rebinds the tag the
+> verify matches against, so a release landing during the ≥600s wait does not RED a healthy web-2.
+> Residual: `reason==ok` proves web-2 ACCEPTED + bound `:9000`, NOT its post-accept canary health
+> (private-net-only, invisible off-host by the ADR-068 topology) — a pre-existing limit, tracked as a
+> GA-cutover prerequisite (a private-net web-2 health probe), NOT widened by the retry.
+>
+> **(3) warm_standby de-duplicated onto the shared script (#6040).** The `warm_standby` job's ~94-line
+> inline baseline/trigger/verify copy is replaced by a single call to the SAME
+> `deploy-status-fanout-verify.sh` (parameterized by `OP_CONTEXT` for the per-context recovery
+> wording; the script emits `deployed_tag` to `$GITHUB_OUTPUT` for the surviving summary step). Both
+> the recreate and warm-standby paths now run one verify with the retry robustness, ending the
+> silent-drift hazard of two load-bearing copies. A booted warm-standby web-2 returns `reason==ok` on
+> the first fan-out, so the retry branch never fires there — behavior unchanged.
+>
+> **C4 impact:** none — internal CI verify control-flow only; no new actor/system/container/edge
+> (verified against `model.c4`/`views.c4`/`spec.c4`). **Status:** UNCHANGED — additive/inert on merge
+> (both dispatches are operator-gated, never run pre-merge). `Ref #6051`, `Ref #6040`. Plan:
+> `knowledge-base/project/plans/2026-07-05-fix-web2-recreate-fanout-verify-retry-and-warm-standby-dedup-plan.md`.
+>
+> **Amendment (2026-07-05, #6060 item (c) — cross-pipeline web-1-swap serialization).** Closes
+> FINDING 1 from #6051's review: the frequent push-release `deploy` job
+> (`web-platform-release.yml`) and the operator-dispatched swap jobs were in DISJOINT concurrency
+> groups, so a release landing inside a recreate's in-flight window could issue its own web-1
+> container swap concurrent with the recreate's re-POST swap on the sole live prod origin
+> (`app.soleur.ai`). The verified harm is not merely the transient single-probe 521 (deferred item
+> (a)): if the recreate's detached `ci-deploy.sh` swap wins the on-host `flock`, the release's
+> detached swap writes `exit_code=1 reason=lock_contention`, and the release's "Verify deploy script
+> completion" step has NO `exit_code=1` case → the routine push-release fails **RED**; the recreate
+> also re-POSTs web-1 at its existing (possibly older) tag, risking a **tag-downgrade** of the sole
+> origin. **Decision:** the **four** jobs that POST `command: deploy web-platform` to `/hooks/deploy`
+> and thereby swap web-1 — release `deploy` (`web-platform-release.yml`), `web_2_recreate` +
+> `warm_standby` (`apply-web-platform-infra.yml`), and the `apply` job in
+> `apply-deploy-pipeline-fix.yml` — share ONE job-level `web-1-swap` concurrency group
+> (`cancel-in-progress: false`) so GitHub's scheduler guarantees at most one web-1 swap in flight at
+> a time across ALL pipelines. This is an **atomic scheduler mutex** (no check-then-act TOCTOU),
+> **bidirectional** (blocks release-during-recreate AND recreate-during-release), and
+> **queue-not-fail** (a superseded push release queues then deploys, or is latest-wins-cancelled by a
+> newer SHA — never hard-failed/stranded ahead of prod). **Operator-op priority-inversion (accepted,
+> mitigated by the merge-freeze):** GitHub keeps at most ONE pending run per concurrency group and the
+> newest arrival wins the pending slot, so an operator recovery dispatch (`web_2_recreate` etc.) that is
+> *pending* behind an in-flight release can be cancelled by a subsequent routine push entering
+> `web-1-swap` — the release then runs, not the recovery. It fails SAFE (nothing half-runs) and is
+> visible in the Actions UI; engage the merge-freeze/edit-lock (`guardrails.sh`) BEFORE an operator
+> recovery dispatch, and re-dispatch the recovery op if a release preempts it. A related mild coupling:
+> while a recreate/warm-standby job is pending on `web-1-swap` it still holds the workflow-level
+> `terraform-apply-web-platform-host` group, so a routine infra `apply` queues behind it for the
+> release-swap duration (liveness preserved — no cycle; a scheduling-latency residual alongside the G10
+> migrate-window one). The job-level `web-1-swap` group **coexists
+> with** the workflow-level `terraform-apply-web-platform-host` R2 state serializer (independent
+> scopes per the GitHub workflow-syntax reference) — the R2 serializer is UNCHANGED, so
+> `web_2_recreate`/`warm_standby`/pipeline-fix-`apply` keep their existing mutual serialization AND
+> gain the cross-pipeline web-1-swap mutex.
+>
+> **Load-bearing lock-hold-duration invariant.** Serialization is only correct because every member
+> POSTs `/hooks/deploy` then **polls deploy-status to a terminal state** — the GHA job (and thus the
+> `web-1-swap` mutex) is held across the multi-minute on-host detached swap, not just the 202 POST. A
+> future edit making any member fire-and-forget would release the mutex in seconds while the swap ran
+> on, silently restoring the overlap while the drift-guard stays green. **`cancel-in-progress: false`
+> is load-bearing:** cancelling an in-progress `ci-deploy.sh` mid-`docker run` (or a mid-apply
+> `terraform apply`) would itself widen a 521 window / risk R2 state. The routine `apply` job in
+> `apply-web-platform-infra.yml` is **excluded** (it runs terraform but does NOT POST `/hooks/deploy`
+> — enrolling it would over-serialize every routine release behind every routine infra apply).
+> **Accepted residual:** the inngest deploy workflows (`restart-inngest-server.yml`,
+> `deploy-inngest-image.yml`) POST the same `/hooks/deploy` and contend for the same on-host `flock`
+> but swap a DIFFERENT container (inngest, not web-1) and are out of `web-1-swap` scope; promote
+> `web-1-swap` to cover them (or rename to a `hooks-deploy` mutex) only IF an inngest-caused release
+> RED is observed. The 4-member allow-list + `cancel-in-progress: false` are CI-gated by
+> `apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh`.
+>
+> **C4 impact:** none — CI-scheduler serialization metadata over already-modeled internal control
+> edges (release→web-1 deploy webhook; apply→recreate→fan-out); no new actor/system/store/edge
+> (verified against `model.c4`/`views.c4`/`spec.c4`: operator dispatch, Hetzner web hosts, GHCR,
+> BetterStack origin-absence detector all pre-existing). **Status:** UNCHANGED — pure workflow
+> concurrency metadata, additive/inert on merge; **amend, not a reversal** (no prior decision
+> changes). Items (a) truly-zero-downtime swap / web-2-only path and (b) private-net web-2
+> post-accept health probe remain OPEN on #6060 (GA-cutover / owner-side-relay scoped). `Ref #6060`.
+> Plan: `knowledge-base/project/plans/2026-07-05-fix-cross-pipeline-web-1-swap-serialization-plan.md`.
 
 ## Consequences
 

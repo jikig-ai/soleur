@@ -1,6 +1,9 @@
 ---
 name: frontend-design
 description: "This skill should be used when creating distinctive, production-grade frontend interfaces. It generates creative, polished web components, pages, or applications that avoid generic AI aesthetics with high design quality."
+context_queries:
+  - knowledge-base/marketing/brand-guide.md
+  - knowledge-base/product/design/taste-profile.md
 license: Complete terms in LICENSE.txt
 ---
 
@@ -40,3 +43,24 @@ Interpret creatively and make unexpected choices that feel genuinely designed fo
 **IMPORTANT**: Match implementation complexity to the aesthetic vision. Maximalist designs need elaborate code with extensive animations and effects. Minimalist or refined designs need restraint, precision, and careful attention to spacing, typography, and subtle details. Elegance comes from executing the vision well.
 
 Remember: Claude is capable of extraordinary creative work. Don't hold back, show what can truly be created when thinking outside the box and committing fully to a distinctive vision.
+
+### Multi-Variant Fan-Out
+
+When the design brief is a full surface (page, app, or non-trivial component), generate **3 variants in parallel** instead of a single take, then let the operator choose. This is Soleur's all-Claude adaptation of gstack `design-shotgun` (ADR-090).
+
+1. **Load learned taste (FR6 + validate).** The FR6 hook injects a read-directive for `knowledge-base/product/design/taste-profile.md`. Before trusting it, run `bash plugins/soleur/scripts/taste-profile-update.sh --validate knowledge-base/product/design/taste-profile.md`. On a **non-zero** exit, design with **no taste bias** (fail-open — never block on a corrupt profile). On success, read the profile's **fenced JSON machine block** (`entries[]` between the `taste-profile:data` markers — this is the region `--validate` certifies; do NOT bias from the human `## Reinforced Aesthetics` table, which `--validate` does not cover) and take the entries whose `context` matches the current design context (`landing-page | marketing-site | dashboard | app-ui | docs | email | component`); the most-recent value per axis is the operator's current lean.
+2. **Seed distinct directions.** Pick 3 distinct aesthetic directions from the Design Thinking tone list. Bias — do not restrict — the seeds toward the loaded taste: if the profile leans `minimalist@dashboard`, one seed should honor it and the others deliberately diverge so the operator still sees range. With an empty/invalid profile, pick 3 maximally-distinct seeds.
+3. **Fan out via the Agent tool.** Spawn 3 sub-agents (one per seed), each with the full brief + its assigned direction **in the prompt text** — sub-agents do NOT inherit the FR6 injection, so the taste bias must be passed explicitly. Each returns a self-contained variant.
+4. **Present the slate** for selection. Interactive: describe the 3 variants and let the operator choose by natural conversation — **never** `AskUserQuestion` (a nested Task subagent hangs on it). Headless / no operator turn: auto-select the variant matching the top-recency taste entry (or variant 1 if the profile is empty) and skip step 5 (no operator signal = no learning).
+
+### Recording Taste
+
+When the operator selects a variant **in an interactive session**, record the choice so future sessions are primed:
+
+```bash
+bash plugins/soleur/scripts/taste-profile-update.sh \
+  knowledge-base/product/design/taste-profile.md \
+  <context> aesthetic-direction <selected-direction> "$(date -u +%F)"
+```
+
+`<context>` is the current design context (the enum above); `<selected-direction>` is the chosen direction as a sanitized lowercase-hyphen token (e.g. `minimalist`, `editorial`). The helper ([`taste-profile-update.sh`](../../scripts/taste-profile-update.sh)) validates every token, recomputes the entry by recency, flags a same-context contradiction, and bumps `last_updated` only. Do **not** hand-edit `taste-profile.md`. Do **not** record in headless runs.

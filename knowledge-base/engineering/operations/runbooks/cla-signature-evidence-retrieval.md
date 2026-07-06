@@ -425,7 +425,7 @@ The monthly cron (`cla-evidence-timestamp.yml`) files a tracking issue per faile
 ## Appendix A: Sharp edges
 
 - **Tokens are config-pinned in Doppler** (learning #9). `DOPPLER_TOKEN_CLA` works only against the `prd_cla` config. Read tokens generated for inspection live in your local shell only, never in Doppler.
-- **Ruleset PUT is full-replace** (learning #11). If the runbook ever needs to modify the CLA Required ruleset, use `scripts/create-cla-required-ruleset.sh` which rewrites the entire payload.
+- **The CLA Required ruleset is Terraform-managed** (as of #6072). To modify it, edit `infra/github/ruleset-cla-required.tf` and let `apply-github-infra.yml` apply on merge. `scripts/create-cla-required-ruleset.sh` is now a DR-only restore skeleton (used only to re-create the ruleset from scratch after a total loss, then reconciled back via `terraform import` + apply); do not use it for routine edits.
 - **R2 backend has no lock** (learning #8). Concurrent `terraform apply` against `apps/cla-evidence/infra/` is unsafe. Single-writer only.
 - **The runbook itself must NOT contain real signer PII.** All examples in this document use synthetic logins / PR numbers; preserve that convention per `cq-test-fixtures-synthesized-only`.
 - **`[skip ci]` deadlocks required Check Runs** (learning #12). If you author a manual commit related to this runbook, never include `[skip ci]` in the message.

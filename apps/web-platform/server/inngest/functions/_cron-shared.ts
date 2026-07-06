@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
 import { generateInstallationToken } from "@/server/github-app";
-import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import {
+  reportSilentFallback,
+  warnSilentFallback,
+  mirrorWarnWithDebounce,
+} from "@/server/observability";
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 import type { SpawnResult } from "./_cron-claude-eval-substrate";
 import type { Octokit } from "@octokit/core";
@@ -295,7 +299,27 @@ export async function postSentryHeartbeat(args: {
   const projectId = process.env.SENTRY_PROJECT_ID;
   const publicKey = process.env.SENTRY_PUBLIC_KEY;
   if (!domain || !projectId || !publicKey) {
+    // #4861 — was a silent `logger.info` + return; a blank heartbeat env then
+    // paged nowhere. Keep the pino log (stdout → Better Stack) AND additionally
+    // route through the DEBOUNCED warn wrapper: it lands via the @sentry/nextjs
+    // SDK (SENTRY_DSN — a DIFFERENT, populated var from these three ingest vars),
+    // so the skip is loud even when the ingest env is blank. This is strictly
+    // additive — the pino line stays (existing behavior), the Sentry mirror is
+    // new. Keep the early return — the change is observability, not control flow
+    // (cq-silent-fallback-must-mirror-to-sentry). Debounce keyed on (cronName,
+    // op) so ~45 crons sharing this env do not flood on a shared misconfig.
     logger.info({ fn: cronName }, "Sentry env unset — skipping heartbeat");
+    mirrorWarnWithDebounce(
+      new Error(`Sentry heartbeat env unset — heartbeat skipped for ${cronName}`),
+      {
+        feature: "cron-sentry-heartbeat",
+        op: "heartbeat-env-unset",
+        message: "Sentry heartbeat env unset — skipping heartbeat",
+        tags: { cron: cronName },
+      },
+      cronName,
+      "heartbeat-env-unset",
+    );
     return;
   }
   if (
@@ -303,7 +327,20 @@ export async function postSentryHeartbeat(args: {
     !SENTRY_PROJECT_RE.test(projectId) ||
     !SENTRY_PUBLIC_KEY_RE.test(publicKey)
   ) {
+    // Additive (see unset branch above): keep the pino warn line, add the
+    // debounced Sentry mirror so a malformed heartbeat env is never silent.
     logger.warn({ fn: cronName }, "Sentry env malformed — skipping heartbeat");
+    mirrorWarnWithDebounce(
+      new Error(`Sentry heartbeat env malformed — heartbeat skipped for ${cronName}`),
+      {
+        feature: "cron-sentry-heartbeat",
+        op: "heartbeat-env-malformed",
+        message: "Sentry heartbeat env malformed — skipping heartbeat",
+        tags: { cron: cronName },
+      },
+      cronName,
+      "heartbeat-env-malformed",
+    );
     return;
   }
   const status = ok ? "ok" : "error";
@@ -1250,4 +1287,46 @@ export async function ensureScheduledAuditIssue(args: {
     labels: [label],
   });
   return { created: true };
+}
+
+/**
+ * Stable-title, open-issue dedup sibling of `ensureScheduledAuditIssue`, for a
+ * STANDING condition (e.g. content starvation) rather than a dated per-run audit
+ * stub. Reuses that helper's read shape verbatim — `GET .../issues` with
+ * `labels`, `sort: created, direction: desc, per_page: 10` — but:
+ *   - matches the EXACT title (a standing alert has one canonical title, no
+ *     date suffix — a persisting condition files ONE issue, not one per run), and
+ *   - scopes the dedup read to `state: "open"` so an auto-CLOSED prior alert
+ *     never suppresses a fresh occurrence after a recovery (the standing-alert
+ *     lifecycle: fire → auto-close on recovery → re-fire on the next drought).
+ *
+ * Caller passes a ready Octokit (this helper does no minting) — the starvation
+ * check runs inside a failure-isolated try/catch and reuses the handler's token.
+ */
+export async function ensureDedupIssue(
+  client: Octokit,
+  args: { title: string; body: string; labels: string[] },
+): Promise<{ created: boolean; issueNumber?: number }> {
+  const { title, body, labels } = args;
+  const existing = (await client.request("GET /repos/{owner}/{repo}/issues", {
+    owner: REPO_OWNER,
+    repo: REPO_NAME,
+    state: "open",
+    labels: labels.join(","),
+    sort: "created",
+    direction: "desc",
+    per_page: 10,
+    headers: { "X-GitHub-Api-Version": "2022-11-28" },
+  })) as { data: Array<{ title: string; number: number }> };
+  const match = existing.data.find((i) => i.title === title);
+  if (match) return { created: false, issueNumber: match.number };
+
+  const created = (await client.request("POST /repos/{owner}/{repo}/issues", {
+    owner: REPO_OWNER,
+    repo: REPO_NAME,
+    title,
+    body,
+    labels,
+  })) as { data: { number: number } };
+  return { created: true, issueNumber: created.data.number };
 }

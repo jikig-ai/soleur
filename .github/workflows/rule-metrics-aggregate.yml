@@ -1,25 +1,35 @@
-# Weekly aggregator for AGENTS.md rule utility metrics.
+# On-demand aggregator for AGENTS.md rule utility metrics.
 # Rolls up .claude/.rule-incidents.jsonl + AGENTS.md into
 # knowledge-base/project/rule-metrics.json and opens a PR when materially
 # changed. The PR is auto-merged after synthetic check-runs satisfy the
 # CI Required and CLA Required rulesets on main.
 #
+# LOCAL-PRODUCER MODEL (ADR-091, issue #6042): the AUTHORITATIVE producer of
+# rule-metrics.json is the local compound flow (compound/SKILL.md step 8), which
+# runs on the operator's machine where the gitignored .claude/.rule-incidents.jsonl
+# actually exists. The weekly `schedule:` trigger was REMOVED because a
+# fresh-checkout CI run sees zero incident data and committed an all-zero
+# (97/97 unused) snapshot every week, clobbering the real local aggregate. The
+# aggregator now no-ops on zero rule-carrying lines (scripts/rule-metrics-aggregate.sh),
+# so a rare manual workflow_dispatch on a fresh checkout self-no-ops and
+# bot-pr-with-synthetic-checks opens no empty PR. workflow_dispatch is retained
+# only for on-demand manual runs (e.g. from a checkout that DOES carry a log).
+#
 # See knowledge-base/project/plans/2026-04-14-feat-rule-utility-scoring-plan.md
-# Issue: #2258 (switched from direct push to PR pattern)
+# and knowledge-base/engineering/architecture/decisions/ADR-091-rule-metrics-local-producer.md
+# Issue: #2258 (switched from direct push to PR pattern), #6042 (locality fix)
 #
 # Security: No untrusted event inputs used in run: commands. Uses only
 # GITHUB_TOKEN, repo-local files, and safe GitHub context values
 # (github.repository, github.server_url, github.run_id, github.token).
 
-name: "Scheduled: Rule Metrics Aggregate"
+name: "On-Demand: Rule Metrics Aggregate"
 
 on:
-  schedule:
-    - cron: '0 0 * * 0'   # Sunday 00:00 UTC
   workflow_dispatch:
 
 concurrency:
-  group: scheduled-rule-metrics-aggregate
+  group: rule-metrics-aggregate
   cancel-in-progress: false
 
 permissions:
@@ -46,11 +56,11 @@ jobs:
         with:
           add-paths: knowledge-base/project/rule-metrics.json
           branch-prefix: ci/rule-metrics-
-          commit-message: "chore(rule-metrics): weekly aggregate"
-          pr-title-prefix: "chore(rule-metrics): weekly aggregate"
+          commit-message: "chore(rule-metrics): on-demand aggregate"
+          pr-title-prefix: "chore(rule-metrics): on-demand aggregate"
           # Cite only files present in the PR diff — the body-vs-diff guard
           # (#2905) blocks bodies whose cited paths are <50% matched.
-          pr-body: "Automated weekly rule-metrics snapshot: regenerates knowledge-base/project/rule-metrics.json from the rule-incidents log and the AGENTS rule index via the rule-metrics-aggregate script."
+          pr-body: "On-demand rule-metrics snapshot: regenerates knowledge-base/project/rule-metrics.json from the rule-incidents log and the AGENTS rule index via the rule-metrics-aggregate script."
           change-summary: "Rule metrics aggregation only, no code changes"
           gh-token: ${{ github.token }}
 
@@ -58,6 +68,6 @@ jobs:
         if: failure()
         uses: ./.github/actions/notify-ops-email
         with:
-          subject: '[FAIL] Scheduled: Rule Metrics Aggregate failed'
-          body: '<p><strong>Scheduled: Rule Metrics Aggregate</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          subject: '[FAIL] On-Demand: Rule Metrics Aggregate failed'
+          body: '<p><strong>On-Demand: Rule Metrics Aggregate</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
