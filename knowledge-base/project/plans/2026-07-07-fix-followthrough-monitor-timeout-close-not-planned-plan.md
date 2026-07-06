@@ -287,11 +287,14 @@ NOT `bun test`). Typecheck with `cd apps/web-platform && ./node_modules/.bin/tsc
 
 ### Post-merge (operator)
 
-- [ ] AC8 — After the next weekday 09:00 fire (or a manual
-  `inngest send cron/follow-through-monitor.manual-trigger`), the discoverability
-  query below returns zero rows (no follow-through issue closed COMPLETED while
-  carrying `needs-attention`). Automatable via `gh` — see Observability.
-  `Automation: inline gh query, no SSH.`
+- [ ] AC8 — After the next weekday 09:00 fire (or a `inngest send
+  cron/follow-through-monitor.manual-trigger`), the Observability
+  discoverability query returns `0` — no follow-through issue with the "Maximum
+  polling period reached" give-up comment was closed as COMPLETED on/after
+  2026-07-08 (the recurrence signal). Automatable via `gh` — see Observability.
+  `Automation: inline gh query, no SSH.` (Pre-2026-07-08 issues in the same
+  bug state are excluded by the date range and tracked as a separate
+  historical-data item.)
 
 ## Observability
 
@@ -307,9 +310,12 @@ error_reporting:
                ensure-labels/validate-predicates/claude-eval error paths)
   fail_loud: true
 failure_modes:
-  - mode: Guard C regresses to COMPLETED close (this bug recurs)
-    detection: gh query — a follow-through issue closed with state_reason
-               COMPLETED while carrying needs-attention
+  - mode: Guard C regresses to a COMPLETED close (this bug recurs)
+    detection: gh query — a follow-through issue that received the "Maximum
+               polling period reached" give-up comment AND was closed with
+               state_reason COMPLETED (the exact bug signature; excludes
+               legitimate Guard A predicate-pass completions, which carry a
+               "Verified:" comment instead)
     alert_route: post-merge discoverability_test (AC8); no new runtime alert
                  needed (behavior lives in the agent prompt, not a TS branch)
   - mode: gh issue edit --remove-label fails (label absent / transient 5xx)
@@ -320,12 +326,20 @@ logs:
   where: Inngest run logs + Sentry (existing)
   retention: Sentry default
 discoverability_test:
-  command: >
-    gh issue list --repo jikig-ai/soleur --state closed --label follow-through
-    --search "reason:completed label:needs-attention" --json number,stateReason
-    --jq 'length'
-  expected_output: "0  (no follow-through issue closed COMPLETED while carrying needs-attention)"
+  command: gh issue list --repo jikig-ai/soleur --state closed --label follow-through --search "\"Maximum polling period reached\" in:comments reason:completed closed:2026-07-08..2030-01-01" --json number --jq "length"
+  expected_output: "0"
 ```
+
+The query keys on the bug SIGNATURE (the give-up comment + `reason:completed`)
+and is date-scoped to closures on/after 2026-07-08 (`closed:2026-07-08..`) so it
+measures RECURRENCE — the behavior this fix controls — not older issues. It
+returns `0` today (verified) and stays `0` unless the monitor regresses. (No
+`|` / `>` tokens: filtering is done entirely in `--search` with a range date, so
+the preflight Check-10 shell-active-token reject passes; the count uses a
+pipe-free `--jq "length"`.) Follow-through issues closed COMPLETED with the
+give-up comment earlier than 2026-07-08 are excluded by the date range and are
+tracked as a separate historical-data item, so they are not a false
+code-regression signal.
 
 No new TS error path, log call, or failure mode is introduced (the change is
 confined to the agent-instruction string). The behavioral change is verifiable
