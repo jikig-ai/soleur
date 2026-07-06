@@ -11,8 +11,8 @@ fixed), and what now needs their attention. Autonomous loops ship features, move
 incidents faster than a solo owner can track; this digest is the antidote to that comprehension debt.
 
 This skill runs **headless inside `claude-code-action`** in the private `jikig-ai/operator-digest`
-repo, with the **public** `jikig-ai/soleur` repo checked out at `$GITHUB_WORKSPACE`. It reads four
-sources, synthesizes four sections of prose, and writes `$GITHUB_WORKSPACE/digest.md`. It then
+repo, with the **public** `jikig-ai/soleur` repo checked out at `$GITHUB_WORKSPACE`. It reads five
+sources, synthesizes five sections of prose, and writes `$GITHUB_WORKSPACE/digest.md`. It then
 **STOPS**. A deterministic workflow post-step scrubs that file (fail-closed) and is the only thing
 that posts the issue — this skill itself must never post the digest (it writes the file and STOPS).
 
@@ -51,7 +51,7 @@ Only emit the "Nothing …" fallback when the command **succeeded** and genuinel
 
 ## Scope guardrails (load-bearing — do not weaken)
 
-- **L1 — path scope.** Read ONLY the four named sources below. Any other file path is out of scope.
+- **L1 — path scope.** Read ONLY the five named sources below. Any other file path is out of scope.
   Do not wander the repository.
 - **L2 — summaries only (the named-PII + customer-email control).** A regex cannot catch "Jane Doe".
   - Incidents: build the section from each post-mortem's **frontmatter, title, and status ONLY —
@@ -69,7 +69,7 @@ Only emit the "Nothing …" fallback when the command **succeeded** and genuinel
   neutral hedge on any read doubt, and both are stated as a business consequence — never a raw count, a
   percentage, or an up/down arrow as the signal.
 
-## The four sections
+## The five sections
 
 ### 1. What your company built
 
@@ -81,8 +81,11 @@ Source: merged pull requests in the window.
 # would silently render "Nothing shipped" every week. The List API works cross-repo (same path
 # as the action-required read below). Filter by mergedAt >= $SINCE in your synthesis.
 gh pr list -R jikig-ai/soleur --state merged --limit 300 \
-  --json title,labels,mergedAt
+  --json title,labels,mergedAt,number,url
 ```
+
+(`number,url` are used ONLY by §5's substantiation links — never surface a PR
+number in §1's prose; still no `author` field per L3.)
 
 Keep only PRs whose `mergedAt` is on or after `$SINCE`. Rewrite each meaningful change into its
 **business consequence** in plain language. Group related work. Drop pure chores/dependency bumps
@@ -167,6 +170,28 @@ These are genuine owner-action signals (expiring tokens, saturating disks, TLS/c
 content, stale CLA). Recap each as a plain "what needs you to act" line with its link. This is a
 read-only recap — do **not** mutate, close, or comment on any issue.
 
+### 5. What got smarter this week
+
+Source: the self-improvements Soleur's compounding loop **completed** in the window — the promotion
+PRs it merged into how your agents work. **Reuse §1's already-fetched merged-PR list — do NOT run
+another `gh` call, and NEVER `--search`** (the Search API returns empty cross-repo under the
+in-action App token, exactly as noted in §1; a `--search` here would silently render "nothing got
+smarter" every week). From §1's list, keep only PRs whose `labels` contains `self-healing/auto`
+**and** whose `mergedAt` is on or after `$SINCE`. Production shape: title
+`self-healing(auto): promote cluster <hash> <date>`, label `self-healing/auto`.
+
+Render as a **platform-level outcome, framed for the operator** — the improvement is to the shared
+Soleur harness (the rules and skills every workspace runs on), not to any one workspace's data:
+"Soleur got sharper this week — N improvements shipped to the shared brain your agents run on."
+Add a compact `Details:` line linking each kept PR (its `url`) as substantiation. Do **not** invent
+a per-item description from the cluster-hash title — it carries no human summary, and reading a PR
+body to synthesize one would violate L2 (summaries only). The count plus the links is the honest
+claim; the link is the drill-in path.
+
+**Never write "your workspace got smarter"** — that phrasing implies a per-tenant benefit the loop
+does not produce (improvements are global harness edits). Because §5 reuses §1's read, a §1 read
+FAILURE (the ⚠️ warning) suppresses §5 too — do not render a "nothing" line off a failed read.
+
 ## Deterministic fallback (never blank)
 
 A quiet week is itself information. **Even an all-empty week still posts.** If a source yields nothing
@@ -176,6 +201,7 @@ in the window, write the section's labelled fallback line — **never leave a se
 - Section 2 → "No money or vendor changes this week."
 - Section 3 → "Nothing broke this week."
 - Section 4 → "Nothing needs your attention this week."
+- Section 5 → "Nothing was promoted to the shared harness this week."
 
 Every section must contain at least one full sentence. A blank or byte-for-byte command-dump section
 is a failure.
@@ -202,7 +228,7 @@ the operator-visible signal that a week was skipped.
 Write the assembled digest to `$GITHUB_WORKSPACE/digest.md`:
 
 - A short title line: `# Weekly digest: <ISO week or date range>`.
-- The four `##` sections above, in order, each with prose (or its fallback line).
+- The five `##` sections above, in order, each with prose (or its fallback line).
 - The final `Last week: #N` continuity line.
 
 Then **STOP**. Do not open, post, or create any issue — the gated workflow post-step owns publishing.

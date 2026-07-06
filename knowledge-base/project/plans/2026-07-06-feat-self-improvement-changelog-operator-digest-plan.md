@@ -111,16 +111,16 @@ FR4) and L2 summaries-only (FR: no raw bodies/records). Single source → the
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] AC1 — `promotion-config.yml` reads `enabled: true` (`grep -c '^enabled: true' <file>` == 1).
-- [ ] AC2 — `compliance-posture.md` #3594 row no longer shows OPEN (`awk '/#3594/{print}' <file> | grep -c OPEN` == 0).
-- [ ] AC3 — operator-digest/SKILL.md has a `### 5. What got smarter this week` heading (`grep -c '### 5. What got smarter this week' <file>` == 1).
-- [ ] AC4 — §5 makes no independent `gh` call (it reuses §1's data): `awk '/### 5\./{f=1;next}/^## [^#]/{f=0}f' <file> | grep -cE '^\s*gh '` == 0. (This also guarantees no `--search` in §5.)
-- [ ] AC5 — the platform-framing guardrail line is present: `grep -c 'Never write "your workspace got smarter"' <file>` ≥ 1. *(Assert the guardrail's presence — do NOT grep for absence of "your workspace", which false-fails because the guardrail line itself contains the phrase — Kieran P0.)*
-- [ ] AC6 — §1's `--json` includes `number,url`: `grep -cE 'gh pr list.*--json' <file>` shows the field list contains `number` and `url`.
-- [ ] AC7 — fallback list has the Section 5 line: `grep -c 'Nothing was promoted to the shared harness' <file>` == 1.
-- [ ] AC8 — all four "four sections/sources" sites updated: "four" appears in the skill ONLY in those references, so `grep -ciw four <file>` == 0 AND `grep -c 'five' <file>` ≥ 3.
-- [ ] AC9 — skill still parses / budget intact: `bun test plugins/soleur/test/components.test.ts` passes.
-- [ ] AC10 — DPIA follow-through enrolled: `scripts/followthroughs/dpia-reeval-compound-promote-2720.sh` exists, is executable, and a `follow-through`-labelled tracker carries the `<!-- soleur:followthrough script=… earliest=<enable+28d> -->` directive.
+- [x] AC1 — `promotion-config.yml` reads `enabled: true` (`grep -c '^enabled: true' <file>` == 1).
+- [x] AC2 — `compliance-posture.md` #3594 row no longer shows OPEN (`awk '/#3594/{print}' <file> | grep -c OPEN` == 0).
+- [x] AC3 — operator-digest/SKILL.md has a `### 5. What got smarter this week` heading (`grep -c '### 5. What got smarter this week' <file>` == 1).
+- [x] AC4 — §5 makes no independent `gh` call (it reuses §1's data): `awk '/### 5\./{f=1;next}/^## [^#]/{f=0}f' <file> | grep -cE '^\s*gh '` == 0. (This also guarantees no `--search` in §5.)
+- [x] AC5 — the platform-framing guardrail line is present: `grep -c 'Never write "your workspace got smarter"' <file>` ≥ 1. *(Assert the guardrail's presence — do NOT grep for absence of "your workspace", which false-fails because the guardrail line itself contains the phrase — Kieran P0.)*
+- [x] AC6 — §1's `--json` includes `number,url`: `grep -cE 'gh pr list.*--json' <file>` shows the field list contains `number` and `url`.
+- [x] AC7 — fallback list has the Section 5 line: `grep -c 'Nothing was promoted to the shared harness' <file>` == 1.
+- [x] AC8 — all four "four sections/sources" sites updated: "four" appears in the skill ONLY in those references, so `grep -ciw four <file>` == 0 AND `grep -c 'five' <file>` ≥ 3.
+- [x] AC9 — skill still parses / budget intact: `bun test plugins/soleur/test/components.test.ts` passes.
+- [x] AC10 — DPIA follow-through enrolled: `scripts/followthroughs/dpia-reeval-compound-promote-2720.sh` exists, is executable, and a `follow-through`-labelled tracker carries the `<!-- soleur:followthrough script=… earliest=<enable+28d> -->` directive.
 
 ### Post-merge (operator)
 - [ ] AC11 — Trigger the first loop run (automatable via `/soleur:trigger-cron cron/compound-promote.manual-trigger` — no SSH, no waiting for Sunday). Confirm the run fired via the `scheduled-compound-promote` Sentry monitor.
