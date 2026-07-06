@@ -172,7 +172,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - Treating a failed command as success
    - **Manual browser steps in prose output:** Scan all text output (summaries, handoffs, "next steps" lists) for browser tasks labeled as manual without a preceding Playwright MCP attempt. Phrases like "set up X in the browser", "go to the portal and configure", "manually create an account" are violations of the Playwright-first rule unless the session log shows a `mcp__plugin_playwright_playwright__browser_navigate` call for that task. This catches laziness in handoff text that hooks cannot detect.
 
-3.5. **Ingest recent hook incidents.** Read `.claude/.rule-incidents.jsonl` if present (gitignored single-file log written by `.claude/hooks/lib/incidents.sh`). Filter to events emitted since the session started (use the earliest timestamp in the session log, or the last 30 minutes if no anchor is available). Filter to `event_type ∈ {deny, bypass}` AND ignore lines where `error` is set — the latter are telemetry-drop sentinels (issue #3509), not deviation evidence. Treat each recent `deny` and `bypass` as evidence for the Deviation Analyst — denies confirm a hook caught a violation; bypasses signal a rule the user actively skipped. Per plan ADR-1, this step **does NOT mutate any learning's frontmatter** — counter aggregation lives exclusively in `knowledge-base/project/rule-metrics.json` (written weekly by the aggregator). If the file is absent or empty, note "no recent incidents" and continue.
+3.5. **Ingest recent hook incidents.** Read `.claude/.rule-incidents.jsonl` if present (gitignored single-file log written by `.claude/hooks/lib/incidents.sh`). Filter to events emitted since the session started (use the earliest timestamp in the session log, or the last 30 minutes if no anchor is available). Filter to `event_type ∈ {deny, bypass}` AND ignore lines where `error` is set — the latter are telemetry-drop sentinels (issue #3509), not deviation evidence. Treat each recent `deny` and `bypass` as evidence for the Deviation Analyst — denies confirm a hook caught a violation; bypasses signal a rule the user actively skipped. Per plan ADR-1, this step **does NOT mutate any learning's frontmatter** — counter aggregation lives exclusively in `knowledge-base/project/rule-metrics.json` (written by the local compound aggregation in Phase 1.5 step 8 — ADR-091). If the file is absent or empty, note "no recent incidents" and continue.
 
 4. **Propose enforcement.** For each detected deviation, first check if an existing PreToolUse hook already covers it by scanning `.claude/hooks/*.sh` comment headers. If a hook already enforces the rule, note "already hook-enforced" and skip the proposal. If no hook covers it, propose enforcement following the hierarchy:
    - **PreToolUse hook** (preferred) — mechanical prevention, cannot be bypassed
@@ -246,16 +246,26 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
    B_TOTAL is informational only — the per-turn cost is B_INDEX, the per-session-first-turn cost is B_ALWAYS; cross-class sidecars (docs / rest) add to first-turn cost when their class fires but do not load every turn.
 
-   Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it in `--dry-run` mode and parse `summary.rules_unused_over_8w`. Do not fail the phase if the aggregator is missing, but do NOT silently swallow an aggregator crash — a stderr line tells the reader why the hint is absent:
+   Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it **for real** — compound is the authoritative local producer of `knowledge-base/project/rule-metrics.json` (ADR-091): it runs on the operator's machine where `.claude/.rule-incidents.jsonl` actually exists, so it, not a fresh-checkout CI cron, generates the metric. Stage the aggregate **only if it changed** (`git diff --quiet -- <OUT> || git add <OUT>`) so it lands in this session's compound commit; then parse `summary.rules_unused_over_8w` for the pruning hint. Only the redaction-safe aggregate (rule_id + counts + a 50-char public prefix) is committed — never the raw `command_snippet` log. On zero rule-carrying lines the aggregator no-ops (issue #6042), leaving the committed file untouched. Do not fail the phase if the aggregator is missing or errors, but do NOT silently swallow a crash — a stderr line tells the reader why the write/hint is absent:
 
    ```bash
    if [[ -x ./scripts/rule-metrics-aggregate.sh ]]; then
-     if unused=$(bash ./scripts/rule-metrics-aggregate.sh --dry-run 2>/dev/null | jq -r '.summary.rules_unused_over_8w // "unknown"' 2>/dev/null); then
+     OUT=knowledge-base/project/rule-metrics.json
+     if bash ./scripts/rule-metrics-aggregate.sh >/dev/null 2>&1; then
+       # Conditional stage: skip unchanged (jq refactor no-diff) and no-op
+       # (zero rule-carrying lines) runs; stage only a real content change.
+       if git diff --quiet -- "$OUT"; then
+         echo "rule-metrics: $OUT unchanged; not staged." >&2
+       else
+         git add "$OUT"
+         echo "rule-metrics: $OUT changed; staged for the compound commit." >&2
+       fi
+       unused=$(jq -r '.summary.rules_unused_over_8w // "unknown"' "$OUT" 2>/dev/null || echo unknown)
        if [[ -n "$unused" && "$unused" != "0" && "$unused" != "unknown" ]]; then
          echo "[INFO] $unused rules have zero hits over 8 weeks. Run /soleur:sync rule-prune to surface pruning candidates."
        fi
      else
-       echo "[WARN] rule-metrics-aggregate.sh --dry-run failed; skipping unused-rules hint." >&2
+       echo "[WARN] rule-metrics-aggregate.sh failed; skipping rule-metrics write + unused-rules hint." >&2
      fi
    fi
    ```
@@ -273,7 +283,7 @@ Run the cost-efficiency report:
 bash "$(git rev-parse --show-toplevel)/plugins/soleur/skills/compound/scripts/token-efficiency-report.sh"
 ```
 
-Prints top-3 cost table; emits `te-*` `warn` to `.claude/.rule-incidents.jsonl` on outliers (rolled up into `knowledge-base/project/rule-metrics.json` by weekly cron). Proposals route through Phase 1.5 step 7's gate.
+Prints top-3 cost table; emits `te-*` `warn` to `.claude/.rule-incidents.jsonl` on outliers (rolled up into `knowledge-base/project/rule-metrics.json` by the local compound aggregation in Phase 1.5 step 8 — ADR-091). Proposals route through Phase 1.5 step 7's gate.
 
 ### Rubric
 
