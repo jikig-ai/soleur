@@ -132,6 +132,19 @@ runs:
         # outside the two real artifacts — fail loud (NOT a bare "markdown under
         # knowledge-base/" predicate, which would be gitleaks-blind AND reject
         # the rule-metrics `.json` caller).
+        #
+        # ⚠ #6103 / ADR-092 PREFLIGHT-TODO (rule-body-lint fabrication ceiling):
+        # `rule-body-lint` is a required 15368 context this action FABRICATES a
+        # green for (it is in required-checks.txt for canonical set-parity). That
+        # is sound ONLY because no AGENTS.{core,docs,rest}.md path is in
+        # ALLOWED_PATHS below, so no bot PR can weaken a hard-rule body under the
+        # fabricated green. BEFORE adding any AGENTS.{core,docs,rest}.md path here
+        # (the #6038 auto-proposer will need AGENTS.core.md — its TARGET_ALLOW_RE),
+        # you MUST first reproduce `python3 scripts/lint-rule-bodies.py --check
+        # --base <merge-base>` over the bot diff in a Phase-4 preflight step (same
+        # earned-green pattern as the real gitleaks run below) and fail loud on a
+        # BLOCK. Extending ALLOWED_PATHS to an AGENTS path without that
+        # reproduction silently defeats the body-weakening gate for bot PRs.
         ALLOWED_PATHS=(
           "knowledge-base/project/weakness-digest.md"
           "knowledge-base/project/rule-metrics.json"
