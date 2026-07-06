@@ -252,17 +252,17 @@ NOT `bun test`). Typecheck with `cd apps/web-platform && ./node_modules/.bin/tsc
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `FOLLOW_THROUGH_PROMPT` Guard C closes with `--reason "not planned"`:
+- [x] AC1 — `FOLLOW_THROUGH_PROMPT` Guard C closes with `--reason "not planned"`:
   `git grep -c 'gh issue close <number> --reason "not planned"'
   apps/web-platform/server/inngest/functions/cron-follow-through-monitor.ts`
   returns `1`. (The exact `<number>`-command form appears only at Guard C step 3;
   the Guard A inline comment and the Sharp Edges clarifier MUST NOT reproduce
   this exact command string — see AC3 note.)
-- [ ] AC2 — Guard C strips the label before close: the Guard C region contains
+- [x] AC2 — Guard C strips the label before close: the Guard C region contains
   `gh issue edit <number> --remove-label "needs-attention"` AND the region no
   longer contains `--add-label` (`git grep -c 'add-label' <file>` returns `0` —
   verified pre-fix count is `1`, at the old Guard C step 1).
-- [ ] AC3 — Guard A unchanged / stays COMPLETED: asserted by the T9 test's
+- [x] AC3 — Guard A unchanged / stays COMPLETED: asserted by the T9 test's
   region slice — the Guard A region (anchors `PREDICATE PASSES` →
   `SLA EXCEEDED (first time`) contains `gh issue close <number>` with **no**
   `--reason` token, and the only `--reason "not planned"` occurrence in the
@@ -271,15 +271,15 @@ NOT `bun test`). Typecheck with `cd apps/web-platform && ./node_modules/.bin/tsc
   count as the gate — the Sharp Edges clarifier line legitimately contains the
   words "not planned" in prose, so a raw count is non-deterministic; the
   region-scoped test is the canonical assertion.
-- [ ] AC4 — No `--allowedTools` change: the `CLAUDE_CODE_FLAGS` `--allowedTools`
+- [x] AC4 — No `--allowedTools` change: the `CLAUDE_CODE_FLAGS` `--allowedTools`
   value still contains `Bash(gh issue close:*)` and `Bash(gh issue edit:*)` and
   is otherwise byte-identical to `main` (verify via `git diff main -- <file>`
   showing no change to the `--allowedTools` line).
-- [ ] AC5 — New `T9` test block asserts the not-planned reason, the label
+- [x] AC5 — New `T9` test block asserts the not-planned reason, the label
   removal, the absence of `--add-label` in Guard C, and Guard A staying
   reason-less. `vitest run test/server/inngest/cron-follow-through-monitor.test.ts`
   is green (all pre-existing T1–T8 tests still pass).
-- [ ] AC6 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean
+- [x] AC6 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean
   (the new `export const FOLLOW_THROUGH_PROMPT` is well-typed).
 - [ ] AC7 — PR body corrects the issue's "not in this repo / fix in the bot
   service" framing (states the monitor is the in-repo Inngest cron and the fix
