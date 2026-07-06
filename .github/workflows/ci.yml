@@ -339,7 +339,14 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin main 2>/dev/null || true
           CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
-          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-query-options\.ts|server/agent-runner-sandbox-config\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
+          # Trigger set = the probe's ACTUAL inputs: it imports buildAgentEnv
+          # (agent-env.ts) + buildAgentSandboxConfig (agent-runner-sandbox-config.ts)
+          # + the SDK (package-lock.json) + the probe itself. Deliberately NOT
+          # agent-runner-query-options.ts: the probe calls buildAgentEnv directly,
+          # so a query-options `pluginPath`-threading regression is invisible to it
+          # (covered by agent-runner-query-options.test.ts instead) — including it
+          # would burn a paid Haiku turn on a probe that cannot detect the change.
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"

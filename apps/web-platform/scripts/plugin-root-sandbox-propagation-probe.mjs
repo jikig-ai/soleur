@@ -185,8 +185,16 @@ try {
 
   const setupRecs = readRecs(captureFile).filter((r) => r.isSetup);
   if (setupRecs.length === 0) {
-    // Never a false PASS: no sandbox spawn captured → the SDK did not sandbox
-    // (missing socat/bwrap, auth failure, or model issued no Bash call).
+    // Never a false PASS for the propagation property: no sandbox spawn captured
+    // → the SDK did not sandbox (missing socat/bwrap, auth failure, or model
+    // issued no Bash call) → `infra_error`, which the CI gate treats as a
+    // non-regression skip (exit 3, not a `does_not_propagate` failure).
+    // KNOWN LATENT GAP (accepted, mirrors ADR-079 canary posture): `isSetup` keys
+    // on `--unshare-user`/`--unshare-all`. If a future SDK changes its bwrap setup
+    // arg shape, this branch fires and the gate greens as an infra skip — masking
+    // a *real* propagation regression as an infra error. The SDK-bump canary gate
+    // (`sandbox-canary-capture-gate`) is the coarser backstop that reddens on SDK
+    // argv-shape drift, so a shape change is not silently unnoticed system-wide.
     emit("infra_error", { reason: "no_sandbox_setup_captured" });
     process.exit(3);
   }
