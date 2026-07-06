@@ -167,6 +167,31 @@ jobs:
       - name: Check ADR ordinals + content completeness
         run: bash scripts/check-adr-ordinals.sh
 
+  # Hard-rule body-weakening gate (ADR-092, #6103). BLOCKS any un-acked change
+  # or deletion of an `hr-*`/`wg-*` rule BODY line in AGENTS.{core,docs,rest}.md
+  # (see scripts/lint-rule-bodies.py). This job's name IS the `rule-body-lint`
+  # required context pinned in infra/github/ruleset-ci-required.tf +
+  # scripts/ci-required-ruleset-canonical-required-status-checks.json — a rename
+  # requires a paired terraform apply. MUST stay ALWAYS-RUN (no `paths:`/`if:`
+  # event gate) and green on the no-op path: a path-gated required 15368 context
+  # never posts on unrelated PRs → permanent `pending` → wedges every human PR
+  # (CTO ruling 2026-07-06; mirrors the `enforce`/`tenant-integration-required`
+  # always-run contexts). The gate itself is green when no body changed, so the
+  # no-op path needs no explicit short-circuit. fetch-depth: 0 + `git fetch
+  # origin main` so the merge-base (NOT origin/main tip) is resolvable on
+  # pull_request / push / merge_group alike.
+  rule-body-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: Hard-rule body-weakening gate (ADR-092)
+        run: |
+          git fetch --no-tags --quiet origin main
+          BASE="$(git merge-base origin/main HEAD)"
+          python3 scripts/lint-rule-bodies.py --check --base "$BASE"
+
   rule-metrics-shape:
     runs-on: ubuntu-latest
     steps:
