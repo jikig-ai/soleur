@@ -230,8 +230,12 @@ echo "        writer (#5912) -> prerequisites written, rc 0, wedge untouched, fo
 # no longer fails loud — atomic_git_config routes the shared-config writes around it
 # via a same-dir temp-copy+rename, so ensure_bare_config now SUCCEEDS and applies the
 # prerequisites that steer `git worktree add` off the wedged shared config.lock.
-BARE=$(new_lockdir)                    # acts as GIT_ROOT (no .git subdir -> git_dir=GIT_ROOT)
-printf '[core]\n\tsentinel = untouched\n' > "$BARE/config"
+BARE=$(new_lockdir); git init -q --bare "$BARE" >/dev/null 2>&1   # REAL bare repo (no .git
+                                       # subdir -> git_dir=GIT_ROOT). Must be a real bare repo
+                                       # so the #4826 hardened guard's `rev-parse
+                                       # --is-bare-repository` returns "true" and the surgery
+                                       # proceeds (the guard skips non-bare / fake dirs).
+printf '[core]\n\tbare = true\n\tsentinel = untouched\n' > "$BARE/config"   # keep bare=true
 mkdir "$BARE/config.lock"             # non-regular -> would EEXIST a native write
 touch -d "$OLD_MTIME" "$BARE/config.lock"
 GIT_ROOT="$BARE"
@@ -260,8 +264,8 @@ echo "Test 8b: a stale REGULAR lock that survives the sweep still FAILS LOUD (20
 # not-wedged for it, so atomic_git_config takes the NATIVE git-config branch, which
 # EEXISTs against the held regular lock and must make ensure_bare_config return non-zero
 # (a genuine in-flight writer / stuck lock must never be routed around).
-BARE2=$(new_lockdir)
-printf '[core]\n\tsentinel = untouched\n' > "$BARE2/config"
+BARE2=$(new_lockdir); git init -q --bare "$BARE2" >/dev/null 2>&1   # REAL bare repo (see Test 8)
+printf '[core]\n\tbare = true\n\tsentinel = untouched\n' > "$BARE2/config"
 printf 'held-by-a-real-writer\n' > "$BARE2/config.lock"   # REGULAR + fresh -> sweep leaves it
 GIT_ROOT="$BARE2"
 set +e
