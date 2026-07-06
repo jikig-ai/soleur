@@ -14,9 +14,9 @@ lane: cross-domain · brand_survival_threshold: single-user incident · requires
 - [ ] 0.5 Open Code-Review Overlap grep against Files-to-Edit; record dispositions.
 
 ## Slice A — Security core (Phase 1 + F3)
-- [ ] A1 `cc-dispatcher.ts:2387` → `getPluginPath()` (+ import). RED test first (T3 flip).
-- [ ] A2 `agent-runner.ts:1109` (legacy `startAgentSession`) → `getPluginPath()` (the factory #6115 missed).
-- [ ] A3 **F3:** `context-queries-hook.ts:161` `skillsDir` → `getPluginPath()`; keep `knowledge-base/` workspace-rooted.
+- [x] A1 `cc-dispatcher.ts:2387` → `getPluginPath()` (+ import). T3 flipped. **DONE — commit 18db92d5c** (349 tests green, tsc clean).
+- [x] A2 `agent-runner.ts:1109` (legacy `startAgentSession`) → `getPluginPath()` (the factory #6115 missed). **DONE — same commit.**
+- [ ] A3 **F3:** `context-queries-hook.ts:161` `skillsDir` → `getPluginPath()`; keep `knowledge-base/` workspace-rooted. **NOTE:** skill fixtures live in the shared helper `test/helpers/context-queries-fixture.ts` used by BOTH `context-queries-hook.test.ts` AND `context-queries-shell-parity.test.ts` (parity vs `.claude/hooks/skill-context-queries.sh`). Wiring: set `SOLEUR_PLUGIN_PATH=<fixtureRoot>/plugins/soleur` at each hook-construction site so `getPluginPath()` resolves to the fixture (and the shell hook's repoRoot-relative read stays parity-equal). Reverted from the checkpoint commit to keep it GREEN; do this as its own unit.
 - [ ] A4 Loaded-gun guard: consumers assert `path.isAbsolute(p) && p.startsWith("/app/")`.
 - [ ] A5 Tests: `cc-dispatcher-real-factory.test.ts` T3, `agent-runner-query-options.test.ts`, `agent-runner-helpers.test.ts`, `mu1-integration.test.ts` (symlink expectations still valid). AC1 broad grep = 0 residual workspace-relative readers.
 - [ ] A6 hooks.json closure verified (SDK sets `${CLAUDE_PLUGIN_ROOT}` for command-hook expansion to the loaded=deployed root).
