@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-06-30T15:58:04Z",
+  "generated_at": "2026-07-06T23:03:10Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -43,19 +43,6 @@
     },
     {
       "id": "cq-agents-md-tier-gate",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → docs-only"
-    },
-    {
-      "id": "cq-agents-md-why-single-line",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -589,19 +576,6 @@
     },
     {
       "id": "hr-ship-message-no-operator-checklist",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → core"
-    },
-    {
-      "id": "hr-ssh-diagnosis-verify-firewall",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1262,11 +1236,37 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": " → core"
+    },
+    {
+      "id": "cq-agents-md-why-single-line",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 1,
+      "warn_count": 0,
+      "fire_count": 1,
+      "prevented_errors": 0,
+      "last_hit": "2026-07-06T23:02:47Z",
+      "first_seen": "2026-07-06T23:02:47Z",
+      "rule_text_prefix": " → docs-only"
+    },
+    {
+      "id": "hr-ssh-diagnosis-verify-firewall",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 1,
+      "warn_count": 0,
+      "fire_count": 1,
+      "prevented_errors": 0,
+      "last_hit": "2026-07-06T22:42:05Z",
+      "first_seen": "2026-07-06T22:42:05Z",
+      "rule_text_prefix": " → core"
     }
   ],
   "summary": {
     "total_rules_tagged": 97,
-    "rules_unused_over_8w": 97,
+    "rules_unused_over_8w": 95,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,
