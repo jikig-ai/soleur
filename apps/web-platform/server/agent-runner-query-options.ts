@@ -205,11 +205,6 @@ export function buildAgentQueryOptions(
     systemPrompt: args.systemPrompt,
     env: buildAgentEnv(args.credential, args.serviceTokens, {
       ghToken: args.ghToken,
-      // Export the deployed plugin root as CLAUDE_PLUGIN_ROOT so plugin scripts
-      // shelled out from bash run the DEPLOYED version, not a connected repo's
-      // shadowing `plugins/soleur/` copy (#4826). Same path the SDK loads the
-      // plugin from (`plugins: [{ path: args.pluginPath }]` below).
-      pluginPath: args.pluginPath,
       // In-sandbox raw-git credential path (item 1). The askpass token IS the
       // installation token (`ghToken`); `buildAgentEnv` injects the GIT_* set
       // only when BOTH the path and token are present (both-or-nothing).
