@@ -19,6 +19,25 @@ created: 2026-07-06
 
 🐛 **Tracker:** #6090 — *web-2 fresh boot dies silently after the seed-extract (before `:9000`) — extend baked-DSN observability + check #6023 cosign ENFORCE*
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-06 · **Reviewers:** architecture-strategist, observability-coverage-reviewer, spec-flow-analyzer, code-simplicity-reviewer (4 parallel) + learnings-researcher.
+
+### Key improvements folded in (all P0/P1 caught before implementation)
+1. **Readiness gates are load-bearing, not optional (spec-flow P0 F1 / architecture P1 Q2).** cloudflared + webhook are systemd services: their cloud-init service-enable step (cloud-init.yml:441, 453) returns 0 the instant the unit *launches*; the service can then fail to bind `:9000` **asynchronously, in a context with no trap and no emit**. Breadcrumbs/traps on the *enable command* are a no-op for the exact H1 symptom → the recreate returns all-green-and-still-broken, burning the one operator-gated cycle. Fix: bounded-timeout **readiness assertions** (service-active query + `:9000` bind check) that convert the async death into an emitted fatal. This also covers the "hang, no non-zero exit" hypothesis (H4/F3).
+2. **The auto Sentry-read queries the WRONG data plane (spec-flow P0 F2 / architecture P1 Q3).** `apply-web-platform-infra.yml:1212` hits US `https://sentry.io/...`, but the project is EU-resident (`de.sentry.io`/`jikigai-eu`). Phase 3 must fix the endpoint **host**, not just the query string — otherwise the headline "one recreate auto-names the stage" deliverable returns empty.
+3. **A new root-cause hypothesis (H3, architecture P1 Q2).** cloud-init may concatenate runcmd into one `/bin/sh`; a `set -e` leaked from the extraction block (line 354) could be aborting the bare cloudflared `apt-get` (437) with no active trap — a silent pre-`:9000` death matching the exact symptom. Phase 0 now empirically pins errexit scoping before any code (it may be the fix itself).
+4. **Do NOT consolidate bare tolerant commands into `set -e` blocks (architecture P1 Q2 / simplicity).** Folding the cloudflared `apt`/webhook lines into a `set -e` + `exit 1` block *inverts* an implicitly-tolerated transient failure from survivable→fatal AND skips the terminal poweroff gate. Instrument via lightweight breadcrumbs as separate runcmd items + readiness gates; leave existing commands' exit disposition unchanged.
+5. **One shared emit helper, written once — never per-block duplication (architecture P1 Q1).** Each cloud-init `- |` is an independent `/bin/sh`; duplicating the ~23-line `on_err` across ~4 blocks ≈ 3.6 KB blows the cap (baseline ~29.6 KB / ~3 KB headroom, `server.tf:56`). Default: an inline-written `soleur-boot-emit` helper (interpolating `${sentry_dsn}` once); bake it only if Phase 0 measures over the cap.
+6. **Merge into existing cleanup traps, don't clobber them (architecture P1 Q5).** `plugin_seed`/`inngest` already own `trap cleanup EXIT`; add the emit as a composite `trap 'rc=$?; cleanup; [ $rc = 0 ] || emit …' EXIT`, never a second trap.
+7. **Simplification (simplicity):** drop the 6 per-stage bootstrap breadcrumbs (existing `emit_fail` already tags `{stage}`) — keep only `bootstrap_complete`; drop the `_breadcrumb` wrapper (single caller); commit to the shared-helper shape instead of carrying Option A/B as co-equal.
+8. **Coupling is already enforced (architecture P2 Q3):** `apps/web-platform/infra/scripts/web2-recreate-preflight.sh` fail-closes a stale-image recreate (hash mismatch → abort, no `-replace`). Cite it; relax the "operator must sequence" framing.
+
+### New considerations discovered
+- Message-string lockstep must be tested by **cross-file byte-equality** of the real emit literal vs the workflow query (not a synthetic event) — else a wording drift silently re-opens the blind spot (obs P1 #4 / spec-flow F6).
+- FLOW 2 needs a **boot-succeeded branch**: surface the breadcrumb trail `if: always()` and add an AC to close #6090 when `:9000` binds (spec-flow F4).
+- app-image pull (480), volume-mount (417-431), and the systemd-timer region (455-477) were uninstrumented gaps inside the claimed "whole-region" coverage (obs P1 #1/#2, P2 #5).
+
 ## Overview
 
 web-2 has never completed a fresh boot. After a `web-2-recreate` (`terraform apply -replace='hcloud_server.web["web-2"]'`) the apply succeeds, but cloud-init dies **silently** before the deploy-status webhook (`:9000`, fronted by cloudflared) binds, so every deploy fan-out to web-2 reports `ok_peer_fanout_degraded`. Prod is unaffected — web-1 is the sole live origin at 200; web-2 is weight-0, non-serving.
@@ -60,8 +79,21 @@ This is a fresh-boot connectivity symptom ("cloudflared never comes up", "`:9000
 
 - **No SSH hypothesis exists.** web-2 has **no** SSH path by design: `hcloud_server.web`'s `file`/`remote-exec` provisioners are web-1-scoped (`server.tf:98`), and diagnosis is off-host by rule (`hr-no-ssh-fallback-in-runbooks`). There is no sshd/fail2ban fix to propose, so the firewall-before-sshd ordering is inapplicable.
 - **Primary hypothesis (H1):** `soleur-host-bootstrap.sh` **completes** (writes the sentinel) and the death is in the untrapped downstream cloud-init region — most likely the cloudflared install (`cloud-init.yml:433-441`) or the webhook service-enable (453). Supported by: doppler works at boot (seed `ghcr_login` succeeded), yet Sentry is *silent* → the failing region has no emit → it is downstream of bootstrap (which *does* emit via `emit_fail`).
-- **Secondary hypothesis (H2):** `soleur-host-bootstrap.sh` fails at a late stage but its `emit_fail` DSN fetch (doppler) is unavailable at that instant → silent. Lower-probability (doppler worked moments earlier) but cheaply covered by the baked-DSN preference + per-stage breadcrumbs.
-- **This PR does not choose between H1/H2** — it makes both observable. The single post-merge recreate reads the named stage and picks the layer for the follow-up fix (per `2026-06-30-verify-the-fixed-code-path-actually-executes-on-the-affected-surface.md`).
+- **Secondary hypothesis (H2):** `soleur-host-bootstrap.sh` fails at a late stage but its `emit_fail` DSN fetch (doppler) is unavailable at that instant → silent. Lower-probability (doppler worked moments earlier) but cheaply covered by the baked-DSN preference.
+- **H3 (candidate ROOT CAUSE — architecture P1 Q2):** cloud-init concatenates runcmd entries; a `set -e` leaked from the extraction block (`cloud-init.yml:354`) could abort the bare cloudflared `apt-get` at 437 **with no active trap** (the extraction block disarms its own trap at 411) — a silent pre-`:9000` death matching the exact symptom. If Phase 0.4 confirms errexit leaks across runcmd items, this may be the fix itself (scope the `set -e`), independent of the observability work. **Falsify before assuming H1.**
+- **H4 (async systemd-service death — spec-flow P0 F1):** the bootstrap AND the cloudflared/webhook enable commands all return 0; the service then fails to connect the tunnel / bind `:9000` **asynchronously**, in a systemd context no runcmd trap can see. This is the literal reading of "cloudflared never comes up." A command-level breadcrumb/trap is a **no-op** here — every stage reads green while `:9000` stays dead. **Only an active readiness assertion (bounded-timeout service-active + bind check) makes this observable** (Phase 2.4). This subsumes the "hang, no non-zero exit" case (Phase 4 F3): a bounded poll converts both a hang and an async failure into an emitted fatal.
+- **This PR does not choose between H1-H4** — it makes all four observable in one recreate. H3 is checked first (cheap, code-read/dry-run) since it may resolve the boot without instrumentation; the readiness gates (H4) are the load-bearing detector for the async-service class. Per `2026-06-30-verify-the-fixed-code-path-actually-executes-on-the-affected-surface.md`, the probe must assert the invariant (`:9000` bound), not a proxy (stage reached).
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+Fired by the resource-shape trigger (the plan drives `terraform apply -replace` and `hcloud_server.web`'s file carries `provisioner "file"`/`remote-exec` blocks) **and** the "SSH" keyword in the Hypotheses. Layer status:
+
+- **L3 firewall allow-list:** Not on the web-2 recreate path. The `file`/`remote-exec` provisioners at `server.tf:191-234` sit on a **`terraform_data` SSH bridge keyed to the existing web-1 host** (`server.tf:98` — "the 11 SSH provisioners below stay web-1-scoped"); `hcloud_server.web["web-2"]` itself is **cloud-init-only** (no provisioner), so `-replace='hcloud_server.web["web-2"]'` triggers no SSH handshake and no operator-egress-IP dependency. Verification artifact: the recreate workflow (`apply-web-platform-infra.yml`) reaches web-2 purely via the CF-proxied fan-out/deploy-status probe, not SSH.
+- **L3 DNS/routing:** the deploy-status probe resolves `deploy.soleur.ai` (CF edge) — unchanged by this PR.
+- **L7 TLS/proxy:** cloudflared tunnel fronting `:9000` — this is the *suspected failure surface* (H1), which is exactly what the new breadcrumbs make observable; no TLS/proxy config change is proposed here.
+- **L7 application:** the webhook/deploy-status handler — downstream of the instrumented region.
+
+No firewall/sshd/fail2ban fix is proposed (there is no SSH hypothesis for web-2), so the L3-before-L7 ordering is satisfied vacuously. Telemetry emitted (`hr-ssh-diagnosis-verify-firewall applied`).
 
 ## Implementation Phases
 
@@ -69,62 +101,75 @@ This is a fresh-boot connectivity symptom ("cloudflared never comes up", "`:9000
 
 0.1 **(B) cosign confirmation (code-read only).** Re-assert in the PR body: #6023 unmerged; `IMAGE_VERIFY_MODE` default `warn`; no `enforce` setter in repo; cosign verify absent from cloud-init; trusted root installed pre-sentinel (`soleur-host-bootstrap.sh:81`). No code change. (Covers tracker item B.)
 
-0.2 **user_data byte-budget gate (hard).** cloud-init user_data is within ~1 KB of Hetzner's 32,768-byte cap (`server.tf:11`; learning `2026-07-03-cloud-init-32kb-cap-bake-and-extract-not-compress.md`). Before choosing the Phase 2 shape, render the rendered user_data and measure bytes with vs. without the added trap/breadcrumb text:
+0.2 **user_data byte-budget gate (hard).** Rendered cloud-init user_data baseline is ~29.6 KB against Hetzner's 32,768-byte cap → ~3 KB headroom (`server.tf:56`; learning `2026-07-03-cloud-init-32kb-cap-bake-and-extract-not-compress.md`). Measure the delta the Phase 2 additions introduce:
   - Render via `templatefile("cloud-init.yml", {...})` with placeholder vars and `wc -c` (or `terraform console` under `doppler run … --name-transformer tf-var`).
-  - **Decision rule:** if the inline-trap shape (Phase 2, Option A) keeps rendered user_data **< 32,768 bytes**, use it. If it does not, fall back to the **baked-helper** shape (Phase 2, Option B: bake `soleur-boot-emit` into the host-scripts set → zero user_data cost; each block pays only a one-line `trap`). Record the measured before/after byte counts in the PR body.
+  - **Shape decision (architecture P1 Q1 — do NOT duplicate the ~23-line `on_err` per block; that ≈3.6 KB blows the cap):** default to a **single shared `soleur-boot-emit` helper written once** in an early cloud-init `- |` block (`cat > /usr/local/bin/soleur-boot-emit <<'EOF' … EOF`, interpolating `${sentry_dsn}` once); each downstream block then pays only a one-line call. If the measured render still exceeds 32,768, fall back to **baking** `soleur-boot-emit` into the host-scripts set (zero user_data, but adds `host_scripts_content_hash` + Dockerfile COPY lockstep). Record measured before/after bytes + the chosen shape in the PR body.
 
 0.3 Confirm `${sentry_dsn}` is already wired into the cloud-init `templatefile` call (`server.tf:138`) — it is; no Terraform variable plumbing needed for the cloud-init side.
 
-### Phase 1 — `soleur-host-bootstrap.sh`: prefer baked DSN + per-stage breadcrumbs
+0.4 **Empirically pin cloud-init errexit scoping (H3 — architecture P1 Q2, may be the fix itself).** Determine whether a `set -e` inside one runcmd entry leaks to subsequent entries: render `/var/lib/cloud/instance/scripts/runcmd` (cloud-init `--file cloud-init.yml single --name runcmd`, or a `cloud-init devel schema`/local dry-run), and inspect how the extraction block's `set -e` (line 354) interacts with the bare cloudflared `apt-get` (437). **If errexit leaks and no trap is active there, that is a candidate root cause** — a transient/non-zero at 437 aborts the boot silently. If confirmed, scope the leak (subshell the extraction block, or re-assert disposition) as part of THIS PR and note it prominently; the observability work still lands (it proves the fix). Pin the finding (leaks / does-not-leak) in the PR body.
+
+0.5 Confirm the enforcing coupling gate: read `apps/web-platform/infra/scripts/web2-recreate-preflight.sh` — it recomputes the baked-scripts hash from the pinned `@sha256` image and **aborts (no `-replace`) on mismatch**, so a stale-image recreate cannot boot a hash mismatch. Cite it in the IaC section (relaxes the AC11/AC12 "operator must sequence" framing to "preflight fail-closes").
+
+### Phase 1 — `soleur-host-bootstrap.sh`: prefer baked DSN + completion breadcrumb
 
 *(Failing test first per `cq-write-failing-tests-before` — see Phase 4.)*
 
-1.1 **Accept the baked DSN via env.** At the top, resolve a single `DSN` source preferring the env: `SOLEUR_SENTRY_DSN` (passed by cloud-init in Phase 2.1) falling back to the existing doppler fetch. Factor the DSN-resolve + Sentry-POST into one helper (`_sentry_emit <level> <json-tags>`), used by `emit_fail`, `ghcr_login_warn`, and the new breadcrumb emitter — so the DSN preference lives in one place.
-  - `emit_fail` (lines 34-52) and `ghcr_login_warn` (lines 168-180) change from doppler-only to `${SOLEUR_SENTRY_DSN:-<doppler fetch>}`.
-1.2 **Per-`STAGE` breadcrumb emits.** Add a `_breadcrumb()` that emits a `level:"info"`, `message:"soleur-host-bootstrap stage"` Sentry event with tags `{stage, host_id, region:"bootstrap"}` at each stage transition (`install/hooks/assert/reload/journald/ghcr_login`), and a terminal `stage:"bootstrap_complete"` breadcrumb **immediately before** `: > /run/soleur-hostscripts.ok` (line 199). This makes bootstrap completion (H1's precondition) explicit in Sentry.
-1.3 **Fail-open invariant (load-bearing).** Every `_breadcrumb`/`_sentry_emit` call site MUST be `( set +e; ... ) || true` (mirror the existing `ghcr_login` subshell at line 159) so a curl/DNS hiccup can never trip the top-level `set -e` and brick the boot. `emit_fail` continues to `trap - EXIT` first. Add an AC + Sharp Edge for this.
-1.4 Keep the emit body a **classification/enum only** (no raw stderr, no creds) — matches the existing scrubbing contract.
+1.1 **Accept the baked DSN via env + single emit helper.** Resolve one `DSN` preferring `SOLEUR_SENTRY_DSN` (passed by cloud-init, Phase 2.1) then the existing doppler fetch. Factor DSN-resolve + Sentry-POST into one `_sentry_emit <level> <json-tags>` used by `emit_fail` (lines 34-52) and `ghcr_login_warn` (168-180). The `${SOLEUR_SENTRY_DSN:-<doppler fetch>}` preference lives in exactly one place.
+1.2 **Completion breadcrumb only** (simplicity rec 2 — drop the 6 per-stage breadcrumbs; `emit_fail` already tags `{stage, failed_file}` on any bootstrap-stage failure, so per-stage info breadcrumbs are redundant). Emit ONE `stage:"bootstrap_complete"`, `region:"bootstrap"` breadcrumb **immediately before** `: > /run/soleur-hostscripts.ok` (line 199). This answers H1's only open question — "did bootstrap complete?" — and is what distinguishes H1 (died downstream) from H2 (died in bootstrap). Inline it as one guarded `_sentry_emit info …` call (no separate `_breadcrumb` wrapper — single caller).
+1.3 **Fail-open invariant (load-bearing).** The `bootstrap_complete` call and any emit under `set -e` MUST be inside a `( set +e; … ) || true` subshell (mirror the existing `ghcr_login` subshell at line 159) so a curl/DNS hiccup can never trip `set -e` and brick the boot. `emit_fail` continues to `trap - EXIT` first.
+1.4 Keep the emit body a **classification/enum only** (no raw stderr, no creds).
 
-### Phase 2 — cloud-init downstream region: baked-DSN trap + breadcrumbs
+### Phase 2 — cloud-init post-bootstrap region: breadcrumbs + readiness gates
 
-2.1 **Pass the baked DSN into bootstrap** (tracker item A, `cloud-init.yml:412`): add `SOLEUR_SENTRY_DSN='${sentry_dsn}'` to the `WEBHOOK_DEPLOY_SECRET='...' sh "$SEED/soleur-host-bootstrap.sh" "$SEED"` invocation.
+2.1 **Pass the baked DSN into bootstrap** (`cloud-init.yml:412`): add `SOLEUR_SENTRY_DSN='${sentry_dsn}'` to the bootstrap invocation env (item A).
 
-2.2 **Instrument the post-bootstrap region** (the load-bearing extension). The runcmd blocks from the volume mount (417) through the terminal `docker run` (580) currently have **no Sentry trap** except the seed block (359-381, disarmed at 411) and the cron-egress probe (596). Add whole-region coverage. Choose the shape by Phase 0.2:
-  - **Option A (inline, preferred if under cap):** consolidate the cloudflared-install + webhook-install/service-enable commands (`cloud-init.yml:433-453`, currently bare `- command` lines) into `- |` block(s) carrying a `set -e` + an `on_err` EXIT trap that reuses the seed block's baked-`${sentry_dsn}` emit shape (359-381), with `STAGE` set per step (`cloudflared_apt`, `cloudflared_service`, `webhook_install`, `webhook_enable`) and an entry breadcrumb per stage. Extend the same trap idiom to the plugin-seed (492), inngest-bootstrap (523), and terminal app-run (555) blocks (`STAGE` = `plugin_seed`/`inngest_bootstrap`/`app_run`), reusing their existing `set -e`.
-  - **Option B (baked helper, fallback if Option A blows the cap):** add a small baked `soleur-boot-emit` script to the host-scripts set (installed by `soleur-host-bootstrap.sh`, so it counts toward `host_scripts_content_hash` — zero user_data), reading the baked DSN from a root-only `/run/soleur-boot-dsn` written once by an early cloud-init line (`printf '%s' '${sentry_dsn}' > /run/soleur-boot-dsn`). Each downstream `- |` block then pays only `STAGE=x; trap 'rc=$?; [ "$rc" = 0 ] || soleur-boot-emit "$STAGE" fatal' EXIT` + an entry `soleur-boot-emit "$STAGE" info || true`.
-  - **Behavioral-parity invariant (load-bearing):** consolidating bare `- command` lines into `set -e` `- |` blocks MUST preserve every existing tolerance (`mount ... || true` at 418, the `2>/dev/null || true` guards). Add an AC that the consolidated block reproduces each original command's exit tolerance.
-  - **Fail-open invariant:** downstream breadcrumb entry calls are `|| true`; the `on_err`/trap fires only on a genuine `set -e` abort (correct — that is the death we want emitted).
+2.2 **Shared emit helper, written once** (Phase 0.2 shape). Define `soleur-boot-emit <stage> <level>` once (inline-written or baked) — POSTs `{message, level, tags:{stage, host_id, region:"cloud-init"}}` to Sentry via the baked `${sentry_dsn}` (mirrors `emit_fail`'s DSN parse). All calls `|| true`. **No per-block `on_err` duplication.**
 
-2.3 **Discriminating fields (2.9.2 blind-surface requirement):** every fatal/breadcrumb carries `{stage, host_id, region ∈ {bootstrap, cloud-init}}` so **one** event names the exact stage and region where the boot died — no host-side-only inference.
+2.3 **Entry breadcrumbs WITHOUT changing exit disposition** (architecture P1 Q2 / simplicity). Insert a breadcrumb as a *separate* runcmd list-item before each region, and for bare currently-tolerated commands use `cmd || soleur-boot-emit <stage> warning` (continuation preserved) — **do NOT** wrap the existing bare `apt`/mount lines in `set -e`+`exit 1` (that inverts survivable→fatal and skips the terminal poweroff gate). Stages, closing the coverage gaps: `volume_mount` (417-431, obs P1 #1), `cloudflared` (433-441), `webhook` (444-453), `host_timers` (455-477, obs P2 #5), `app_image_pull` (480 — its OWN stage, NOT folded into `plugin_seed`, obs P1 #2), `plugin_seed` (492), `inngest_bootstrap` (523).
 
-### Phase 3 — recreate workflow: surface the named stage automatically
+2.4 **Readiness gates (NEW — the load-bearing death-detector for H4/F3).** After the cloudflared enable step and after the webhook enable step, add a bounded-timeout `- |` block that actively asserts the service is up:
+  - `cloudflared_ready`: poll `systemctl is-active --quiet cloudflared` (a read, not a state-change) up to N×interval; on timeout `soleur-boot-emit cloudflared_ready fatal` then `exit 1`.
+  - `webhook_bound`: poll a `:9000` bind check (`curl -sf -o /dev/null http://localhost:9000/` or `ss -ltn 'sport = :9000' | grep -q :9000`) up to N×interval; on timeout `soleur-boot-emit webhook_bound fatal` then `exit 1`; success emits a `webhook_bound` info breadcrumb.
+  These NEW blocks are legitimately `set -e`+`exit 1` (they add no tolerance inversion — a service that never binds SHOULD fail the boot), and they convert the async-service death (green enable, dead `:9000`) into a named emitted fatal. This is the single change that makes the one-recreate promise real.
 
-3.1 Extend the failure Sentry query at `apply-web-platform-infra.yml:1207` from the two literal fatal messages to also match the new downstream fatal message and the last breadcrumb, e.g. add `OR message:"soleur-cloud-init boot failed" OR message:"soleur-host-bootstrap stage"` (final wording to match the Phase 1/2 emit `message` strings — keep them in lockstep). Sort/most-recent so the run summary shows the *last-reached* stage.
-3.2 Update the step's summary prose (1198-1201) to say it surfaces the *named boot stage* (not only `emit_fail`). This turns "read the named stage" into an artifact of the recreate run itself (manual `curl` recipe retained as a fallback in the operator runbook, below).
+2.5 **Composite trap merge, never a second trap** (architecture P1 Q5). `plugin_seed` (496 `trap cleanup EXIT` … 501) and `inngest` (528) already own an EXIT trap. Add the emit by **rewriting** their trap to `trap 'rc=$?; cleanup; [ "$rc" = 0 ] || soleur-boot-emit <stage> fatal' EXIT` — never `trap on_err EXIT` (which silently replaces `cleanup` and orphans the container). Strip any seed-specific `docker rm`/`image_ref` from the copied shape.
+
+2.6 **app_run sub-stages + terminal breadcrumb** (obs P1 #3, spec-flow F8). In the terminal block (555-600): distinguish `doppler_download` (568) from `docker_run` (580) as sub-stages; emit a terminal `cloud_init_complete` breadcrumb **after** the egress probe (597) so "last-reached = app_run" is not the ceiling when the truth is a post-app-run hang. Document that the two `poweroff -f` paths (563, 599) race/kill a curl emit and therefore rely on **mode-3 Better Stack absence**, not the emit (do not claim trap coverage there).
+
+2.7 **Discriminating fields (2.9.2):** every fatal/breadcrumb carries `{stage, host_id, region ∈ {bootstrap, cloud-init}}` so **one** event names the exact stage+region — no host-side inference.
+
+### Phase 3 — recreate workflow: surface the named stage (correct data plane)
+
+3.1 **Fix the Sentry endpoint host (spec-flow P0 F2 / architecture P1 Q3 — load-bearing).** `apply-web-platform-infra.yml:1212` queries US `https://sentry.io/...`; the project is EU-resident (`de.sentry.io`/`jikigai-eu`, per the DSN residency + AC14). An EU project queried at the US host returns empty → the auto-surface deliverable is dark. Point the workflow curl at the EU host (derive the region from the DSN/secret rather than hard-coding a literal), and add a test asserting the workflow endpoint host matches the emit DSN's residency segment.
+3.2 **Extend the query string** (1207) to also match the new downstream fatal + the `bootstrap_complete`/`webhook_bound` breadcrumb messages — specify the exact canonical `message` literals (Phase 1/2) and keep them in lockstep. Sort most-recent so the summary shows the *last-reached* stage.
+3.3 **Surface the breadcrumb trail `if: always()`, not only `if: failure()`** (spec-flow F4). On a *green* boot the operator must still see the probe fired (and that `:9000` bound), or "verify passed for unrelated reasons" is indistinguishable from "probe worked + boot fixed." Add an always-run summary line reading the breadcrumb trail.
+3.4 Verify the `fresh-host Sentry pointer` literal actually lands in `gh run view --log` (it is written to `$GITHUB_STEP_SUMMARY`, 1198); if not, point the `discoverability_test` at the summary artifact instead (obs P2 #6).
 
 ### Phase 4 — Tests (write first; `cq-write-failing-tests-before`)
 
-New `apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh` (source-grep + behavioral where a POSIX-sh shape can be exercised), plus extend an existing cloud-init test. Assertions:
-- `cloud-init.yml:412` passes `SOLEUR_SENTRY_DSN='${sentry_dsn}'` to the bootstrap invocation.
-- `soleur-host-bootstrap.sh` `emit_fail` + `ghcr_login_warn` resolve DSN preferring `SOLEUR_SENTRY_DSN` before the doppler fetch.
-- A `bootstrap_complete` breadcrumb is emitted before the `/run/soleur-hostscripts.ok` sentinel (grep line-ordering).
-- Every breadcrumb/emit call site is `set +e`/`|| true`-guarded (grep: no unguarded `_sentry_emit`/`soleur-boot-emit` on a `set -e` line).
-- Downstream cloud-init blocks (cloudflared/webhook + app-run) carry a baked-`${sentry_dsn}` trap and a `STAGE=` per step; consolidated blocks preserve the original `|| true` tolerances.
-- `apply-web-platform-infra.yml` Sentry query includes the new stage message(s).
-- Wire the new test into `.github/workflows/infra-validation.yml` (mirror line 160's `cloud-init-ghcr-seed-login.test.sh` invocation).
+New `apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh` (source-grep + behavioral where a POSIX-sh shape can be exercised), wired into `.github/workflows/infra-validation.yml` (mirror line 160). Assertions:
+- **AC2:** `cloud-init.yml:412` passes `SOLEUR_SENTRY_DSN='${sentry_dsn}'`.
+- **AC3:** `emit_fail` + `ghcr_login_warn` resolve DSN preferring `SOLEUR_SENTRY_DSN` before doppler.
+- **AC4:** `bootstrap_complete` breadcrumb precedes the sentinel (line-order grep).
+- **AC5 (fixed shape):** every emit call sits inside a `( set +e … ) || true` subshell — assert the **structural enclosure**, NOT a per-line `|| true` (the subshell form has no per-line `|| true`; a per-line grep false-positives on every correct call — spec-flow F5).
+- **AC6 (readiness gates):** `cloudflared_ready` + `webhook_bound` blocks exist, poll with a bounded timeout, emit a fatal on timeout, and the `webhook_bound` check targets `:9000`.
+- **AC-parity:** bare tolerant commands (mount, cloudflared apt) retain continuation (no new `set -e`+`exit 1` around them); `plugin_seed`/`inngest` use a composite trap that still calls `cleanup`.
+- **AC8 (lockstep, byte-equality):** extract the literal `"message":"…"` from each emit site and assert byte-equality against the substring in the workflow QUERY — not a synthetic event (spec-flow F6 / obs P1 #4).
+- **AC-EU:** the workflow Sentry endpoint host matches the DSN residency segment (spec-flow F2).
 
 ## Files to Edit
 
-- `apps/web-platform/infra/soleur-host-bootstrap.sh` — DSN-prefer env, `_sentry_emit`/`_breadcrumb` helpers, per-stage + `bootstrap_complete` breadcrumbs, fail-open guards. *(Baked → part of `local.host_scripts_content_hash`; needs an image rebuild.)*
-- `apps/web-platform/infra/cloud-init.yml` — line 412 `SOLEUR_SENTRY_DSN` pass; downstream region trap + breadcrumbs (Option A or B); (Option B only) early `/run/soleur-boot-dsn` write.
-- `.github/workflows/apply-web-platform-infra.yml` — extend the failure Sentry query (1207) + summary prose to surface the named stage.
+- `apps/web-platform/infra/soleur-host-bootstrap.sh` — DSN-prefer env via one `_sentry_emit` helper, single `bootstrap_complete` breadcrumb before the sentinel, fail-open subshell guards. *(Baked → part of `local.host_scripts_content_hash`; needs an image rebuild.)*
+- `apps/web-platform/infra/cloud-init.yml` — line 412 `SOLEUR_SENTRY_DSN` pass; shared `soleur-boot-emit` helper written once (inline default); entry breadcrumbs (no exit-disposition change on bare commands); **readiness-gate blocks** for `cloudflared_ready`/`webhook_bound`; composite-trap merge on plugin-seed/inngest; terminal `cloud_init_complete` breadcrumb; H3 errexit scope-fix if Phase 0.4 confirms the leak.
+- `.github/workflows/apply-web-platform-infra.yml` — **fix the Sentry endpoint host to the EU data plane** (1212), extend the query (1207) to the new stage literals, surface the breadcrumb trail `if: always()`.
 - `.github/workflows/infra-validation.yml` — run the new observability test.
-- *(Option B only)* `apps/web-platform/infra/server.tf` `local.host_scripts_content_hash` list + the Dockerfile COPY set — add `soleur-boot-emit` in lockstep (`server.tf:12` "KEEP THIS LIST IN LOCKSTEP").
+- *(baked-helper fallback only, if Phase 0.2 measures over-cap)* `apps/web-platform/infra/server.tf` `local.host_scripts_content_hash` list + the Dockerfile COPY set — add `soleur-boot-emit` in lockstep (`server.tf:12` "KEEP THIS LIST IN LOCKSTEP").
 
 ## Files to Create
 
 - `apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh` — the Phase 4 gate.
-- *(Option B only)* `apps/web-platform/infra/soleur-boot-emit` — baked POSIX emit helper.
+- *(baked-helper fallback only)* `apps/web-platform/infra/soleur-boot-emit` — POSIX emit helper (only if not inline-written).
 
 ## Open Code-Review Overlap
 
@@ -134,25 +179,30 @@ None. (`gh issue list --label code-review --state open` — no open scope-out na
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (B):** PR body documents that #6023 is unmerged, `IMAGE_VERIFY_MODE` default is `warn` with no `enforce` setter in-repo, and cosign verify is absent from the fresh-boot path — no code change for B. `grep -rn 'IMAGE_VERIFY_MODE' apps/web-platform/infra .github` shows only the `:-warn` default + comparisons.
+- [ ] **AC1 (B):** PR body documents #6023 unmerged, `IMAGE_VERIFY_MODE` default `warn` with no `enforce` setter, cosign verify absent from the fresh-boot path — no code change for B. `grep -rn 'IMAGE_VERIFY_MODE' apps/web-platform/infra .github` shows only the `:-warn` default + comparisons.
+- [ ] **AC1b (H3):** Phase 0.4 errexit-scoping finding pinned in PR body (leaks / does-not-leak); if it leaks, the scope-fix is included and named.
 - [ ] **AC2:** `grep -n "SOLEUR_SENTRY_DSN='\${sentry_dsn}'" apps/web-platform/infra/cloud-init.yml` matches the bootstrap invocation line.
-- [ ] **AC3:** `emit_fail` and `ghcr_login_warn` resolve DSN preferring `SOLEUR_SENTRY_DSN` before any `doppler secrets get` (test asserts the `${SOLEUR_SENTRY_DSN:-...}` shape at both sites).
-- [ ] **AC4:** A `stage`-tagged breadcrumb is emitted at each `STAGE` transition and a `bootstrap_complete` breadcrumb appears **before** `/run/soleur-hostscripts.ok` (line-order grep).
-- [ ] **AC5 (fail-open, load-bearing):** no emit/breadcrumb call site executes under `set -e` unguarded — every one is inside a `( set +e … ) || true` subshell (or `… || true`). Test greps for any bare `_sentry_emit`/`_breadcrumb`/`soleur-boot-emit` not `|| true`-guarded and on a non-`set +e` line → must return zero.
-- [ ] **AC6:** the downstream cloud-init region (cloudflared install → webhook enable → app-run) carries a baked-`${sentry_dsn}` fatal trap with `{stage, host_id, region:"cloud-init"}`; consolidated blocks preserve every original `|| true` tolerance (behavioral-parity test).
-- [ ] **AC7 (cap):** rendered user_data byte count recorded in PR body and **< 32,768**; if Option B was chosen, `local.host_scripts_content_hash` + Dockerfile COPY include `soleur-boot-emit` (lockstep grep).
-- [ ] **AC8:** `apply-web-platform-infra.yml` failure Sentry query matches the new stage message(s) (grep the QUERY string).
-- [ ] **AC9:** new test wired into `infra-validation.yml` and passes locally; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` unaffected (no TS touched); all existing `apps/web-platform/infra/*.test.sh` still pass.
+- [ ] **AC3:** `emit_fail` and `ghcr_login_warn` resolve DSN preferring `SOLEUR_SENTRY_DSN` before any `doppler secrets get` (test asserts the `${SOLEUR_SENTRY_DSN:-...}` shape at both sites, via the shared `_sentry_emit`).
+- [ ] **AC4:** a single `bootstrap_complete` breadcrumb appears **before** `/run/soleur-hostscripts.ok` (line-order grep).
+- [ ] **AC5 (fail-open — structural enclosure, spec-flow F5):** every emit call sits inside a `( set +e … ) || true` subshell. Test asserts the **enclosure** (the emit line is bracketed by `( set +e` … `) || true`), NOT a per-line `|| true` — the subshell form deliberately has no per-line `|| true`, so a per-line grep would false-positive on every correct call.
+- [ ] **AC6 (readiness gates, load-bearing):** `cloudflared_ready` and `webhook_bound` blocks exist, poll with a **bounded timeout**, `soleur-boot-emit <stage> fatal` + `exit 1` on timeout, and `webhook_bound` polls a real `:9000` bind check.
+- [ ] **AC6b (no tolerance inversion):** bare currently-tolerated commands (mount 418, cloudflared apt 435-437) retain continuation — the test asserts they are NOT wrapped in a new `set -e`+`exit 1`; `plugin_seed`/`inngest` use a **composite** trap that still calls `cleanup`.
+- [ ] **AC7 (cap):** rendered user_data byte count recorded in PR body and **< 32,768**; the shared `soleur-boot-emit` is written **once** (no per-block `on_err` duplication). If the baked fallback was used, `local.host_scripts_content_hash` + Dockerfile COPY include it (lockstep grep).
+- [ ] **AC8 (lockstep, byte-equality — spec-flow F6):** the test extracts the literal `"message":"…"` from each emit site (`soleur-host-bootstrap.sh`, `cloud-init.yml`) and asserts byte-equality against the corresponding substring in `apply-web-platform-infra.yml`'s QUERY — a synthetic-event match is NOT sufficient.
+- [ ] **AC8b (EU data plane — spec-flow F2, load-bearing):** the workflow Sentry endpoint host matches the DSN residency segment (EU `de.sentry.io`); a test asserts host↔DSN residency parity. The `if: always()` breadcrumb-trail surface is present.
+- [ ] **AC9:** new test wired into `infra-validation.yml`; all existing `apps/web-platform/infra/*.test.sh` still pass. (No `tsc` — this diff touches only shell/yaml/workflow, no TS.)
 - [ ] **AC10:** PR uses `Ref #6090` (NOT `Closes`) — the boot failure is not fixed by this PR; #6090 stays open until `:9000` binds (ops-remediation-class per Sharp Edge).
 
 ### Post-merge (operator + verification)
 
-- [ ] **AC11 [automatable] Image rebuild landed:** after merge, `web-platform-release.yml` rebuilds `${image_name}` with the new baked `soleur-host-bootstrap.sh` (and, Option B, `soleur-boot-emit`). Confirm the new release tag/digest is published before any recreate. *(A recreate before the rebuild would boot the OLD image → no new observability.)*
-- [ ] **AC12 [automatable] Quiet-window precondition:** `gh run list --workflow web-platform-release.yml --status in_progress` returns **0** AND web-1 deploy-status `exit_code=0` (HMAC deploy-status probe) AND `app.soleur.ai/health` = 200. Script this as a single go/no-go check before dispatch.
+- [ ] **AC11 [automatable] Image rebuild landed:** after merge, `web-platform-release.yml` rebuilds `${image_name}` with the new baked `soleur-host-bootstrap.sh` (and the baked helper if that fallback was used). **`web2-recreate-preflight.sh` fail-closes a stale-image recreate** (hash mismatch → abort, no `-replace`), so this is a "don't waste a run" check, not a safety gate — confirm the new digest is published before dispatch.
+- [ ] **AC12 [automatable] Quiet-window precondition:** `gh run list --workflow web-platform-release.yml --status in_progress` returns **0** AND web-1 deploy-status `exit_code=0` (HMAC deploy-status probe) AND `app.soleur.ai/health` = 200. Script as a single go/no-go before dispatch. (Weaker than the preflight hash gate by design — the preflight is the real guard.)
 - [ ] **AC13 [operator-ack — menu-ack dispatch] Recreate web-2:** `gh workflow run apply-web-platform-infra.yml -f apply_target=web-2-recreate -f reason='#6090 read named fresh-boot stage'`. `Automation: not feasible because` this is a prod-affecting dispatch gated by `hr-menu-option-ack-not-prod-write-auth` (operator ack required); the pre/post checks (AC12, AC14) are automated around it. NEVER `-replace` web-1.
 - [ ] **AC14 [automated in-workflow + manual fallback] Read the named stage:** the recreate run's failure step (Phase 3) surfaces the last-reached `stage` in `$GITHUB_STEP_SUMMARY`. Manual fallback (EU region, `de.sentry.io`): `curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://de.sentry.io/api/0/projects/jikigai-eu/web-platform/issues/?query=host-bootstrap&statsPeriod=24h"` (secrets from `doppler … -p soleur -c prd_terraform --plain` via command substitution — never echo).
-- [ ] **AC15 [verification]:** the recreate produced a Sentry event whose `stage`/`region` names where the boot died (or `bootstrap_complete` + a downstream `stage` fatal). This proves the probe fires on the affected surface (`2026-06-30-...`). Confirm `app.soleur.ai/health` = 200 unchanged before/after.
-- [ ] **AC16 [follow-up]:** file/annotate the follow-up fix issue against the **named** stage; keep #6090 open until web-2 binds `:9000` and a fan-out reports `ok` (not `ok_peer_fanout_degraded`).
+- [ ] **AC15 [verification]:** the recreate produced a Sentry event whose `stage`/`region` names where the boot died (or `bootstrap_complete` + a downstream `stage`/`webhook_bound` fatal). This proves the probe fires on the affected surface (`2026-06-30-...`).
+- [ ] **AC16 [branch on outcome — spec-flow F4]:**
+  - **If web-2 died again:** file/annotate the follow-up fix issue against the **named** stage; keep #6090 open.
+  - **If web-2 booted green** (`:9000` binds, fan-out reports `ok` not `ok_peer_fanout_degraded`, and the `if: always()` breadcrumb trail confirms the probe fired): the boot is fixed — **close #6090**, no follow-up. (Without the always-run breadcrumb surface, "verify passed" is indistinguishable from "probe never emitted"; AC8b makes the green branch trustworthy.)
 
 ## Observability
 
@@ -169,9 +219,18 @@ failure_modes:
   - mode: "bootstrap.sh stage fails (install/hooks/assert/reload/journald/ghcr_login)"
     detection: "in-surface emit_fail Sentry event, tags {stage, failed_file, host_id, region:bootstrap}, DSN preferring baked env"
     alert_route: "Sentry + recreate summary"
-  - mode: "boot dies downstream of bootstrap (cloudflared apt/service, webhook install/enable, plugin-seed, inngest, app-run)"
-    detection: "in-surface on_err Sentry fatal, tags {stage, host_id, region:cloud-init}, baked ${sentry_dsn}; last bootstrap breadcrumb = bootstrap_complete"
+  - mode: "boot dies with a non-zero exit downstream of bootstrap (volume_mount, app_image_pull, plugin_seed, inngest, doppler_download, docker_run)"
+    detection: "in-surface soleur-boot-emit fatal, tags {stage, host_id, region:cloud-init}, baked ${sentry_dsn}; bootstrap_complete breadcrumb present => death is downstream"
     alert_route: "Sentry + recreate summary"
+  - mode: "ASYNC systemd-service death: enable command returns 0 but cloudflared/webhook never binds :9000 (H4 -- the primary symptom) OR a stage hangs with no non-zero exit"
+    detection: "in-surface readiness-gate fatal (cloudflared_ready / webhook_bound) after a bounded-timeout service-active + :9000 bind poll -- a command-level trap CANNOT see this; the readiness assertion is the only detector"
+    alert_route: "Sentry + recreate summary"
+  - mode: "leaked set -e aborts a bare downstream command with no active trap (H3 candidate root cause)"
+    detection: "Phase 0.4 dry-run pins errexit scoping; if confirmed, the fix scopes the leak AND the new breadcrumbs name the aborting stage on the next recreate"
+    alert_route: "Sentry (named stage) + recreate summary"
+  - mode: "terminal poweroff -f path fires (sentinel-incomplete 563 / egress-probe 599) -- races/kills a curl emit"
+    detection: "NOT the in-surface emit (poweroff wins the race); relies on Better Stack per-host absence probe (web-2.app.soleur.ai/health)"
+    alert_route: "Better Stack page (#5933 Item 1)"
   - mode: "emit path itself unavailable (Sentry egress + doppler both down)"
     detection: "Better Stack per-host absence probe (web-2.app.soleur.ai/health) -- host visibly absent"
     alert_route: "Better Stack page (#5933 Item 1)"
@@ -179,7 +238,7 @@ logs:
   where: "on-host cloud-init-output.log (SSH-only, not relied on); journald (persistent post-bootstrap). Off-host truth = Sentry + Better Stack."
   retention: "Sentry project default; Better Stack default"
 discoverability_test:
-  command: "gh run view <recreate-run-id> --log | grep -i 'fresh-host Sentry pointer'   # OR the AC14 de.sentry.io curl -- NO ssh"
+  command: "gh run view <recreate-run-id> --log | grep -i 'fresh-host Sentry pointer'   # OR the AC14 de.sentry.io curl (off-host, no host login)"
   expected_output: "a Sentry event naming the last-reached stage/region for the boot"
 ```
 
@@ -189,7 +248,8 @@ discoverability_test:
 - No new Terraform resources or variables. `var.sentry_dsn` already exists (`variables.tf:206`) and is already passed into the cloud-init `templatefile` (`server.tf:138`). Editing `soleur-host-bootstrap.sh` changes `local.host_scripts_content_hash` (`server.tf:77`) — this is expected and *required*: the boot integrity check (`cloud-init.yml:405`) compares the pulled image's baked scripts against the Terraform-computed hash, so the image rebuild and the hash move together. (Option B additionally adds `soleur-boot-emit` to the hash list + Dockerfile COPY, in lockstep.) All `systemctl`/`apt-get`/`cloudflared` references in this plan are EXISTING cloud-init runcmd lines already routed through `templatefile()` + the baked bootstrap script — this plan adds no new manual provisioning, only Sentry breadcrumb/trap text around them.
 
 ### Apply path
-- **cloud-init + baked-image rebuild → operator-gated `-replace` recreate (path c, scoped).** `soleur-host-bootstrap.sh` is baked into `${image_name}`, so it cannot be hot-patched; the change is live only after `web-platform-release.yml` rebuilds the image (AC11). The instrumented boot is then exercised by a **web-2-only** `terraform apply -replace='hcloud_server.web["web-2"]'` via `apply-web-platform-infra.yml -f apply_target=web-2-recreate` (AC13), operator-ack-gated, fail-closed destroy-guard, in a quiet window (AC12). **Expected blast-radius:** web-2 only (weight-0, non-serving); web-1 untouched; zero prod downtime.
+- **cloud-init + baked-image rebuild → operator-gated `-replace` recreate (blue-green for web-2).** `soleur-host-bootstrap.sh` is baked into `${image_name}`, so it cannot be hot-patched; the change is live only after `web-platform-release.yml` rebuilds the image (AC11). `apps/web-platform/infra/scripts/web2-recreate-preflight.sh` recomputes the baked-scripts hash from the pinned `@sha256` and **aborts before `-replace` on mismatch** — a stale-image recreate can never boot a mismatch. The instrumented boot is then exercised by a **web-2-only** `terraform apply -replace='hcloud_server.web["web-2"]'` (AC13), operator-ack-gated, fail-closed destroy-guard, in a quiet window (AC12).
+- **Downtime & cutover (deepen Phase 4.55 — does not trigger a HALT):** web-2 is weight-0, non-serving, so the recreate takes **no serving surface offline**; web-1 (the sole serving host) pins `lifecycle.ignore_changes=[user_data]` (`ci-ssh-key.tf:8`), so this cloud-init edit forces no web-1 change on a routine apply. The recreate is effectively blue-green for web-2 (fresh host born, old web-2 already non-serving). **Expected blast-radius:** web-2 only; web-1 untouched; zero prod downtime (learning `2026-07-02-zero-downtime-first-moved-block-statemv-and-blue-green-cutover.md`).
 
 ### Distinctness / drift safeguards
 - web-1 carries `lifecycle.ignore_changes=[user_data]` (`ci-ssh-key.tf:8`), so this cloud-init edit does not force a web-1 change on a routine infra apply. The recreate is `-target`/`-replace`-scoped to `web["web-2"]`. No `dev`/`prd` collapse risk (single prd infra root). The baked `${sentry_dsn}` is semi-public; no secret lands in state that isn't already there.
@@ -216,23 +276,29 @@ No Product/UX surface (no `components/**`, `app/**/page.tsx`, or UI files in Fil
 
 ## Test Scenarios
 
-1. **DSN preference:** with `SOLEUR_SENTRY_DSN` set, `emit_fail`/`ghcr_login_warn` use it and do **not** call `doppler secrets get` (behavioral, mockable via a stub `doppler` on PATH that fails if invoked).
+1. **DSN preference:** with `SOLEUR_SENTRY_DSN` set, `emit_fail`/`ghcr_login_warn` (via `_sentry_emit`) use it and do **not** call `doppler secrets get` (behavioral, stub `doppler` on PATH that fails if invoked).
 2. **DSN fallback:** with `SOLEUR_SENTRY_DSN` empty, both fall back to the doppler fetch (existing behavior preserved).
-3. **Breadcrumb ordering:** `bootstrap_complete` breadcrumb precedes the sentinel write.
-4. **Fail-open:** a stubbed emit that exits non-zero does NOT abort the script (sentinel still written) — proves AC5.
-5. **Behavioral parity:** consolidated cloud-init blocks reproduce each original command's exit tolerance (e.g., `mount` still `|| true`).
-6. **Workflow query:** the recreate failure step's QUERY matches a synthetic event carrying the new `stage` message.
-7. **Cap:** rendered user_data `< 32,768` bytes (Phase 0.2 measurement pinned in PR body).
+3. **Breadcrumb ordering:** `bootstrap_complete` precedes the sentinel write.
+4. **Fail-open (enclosure):** a stubbed emit that exits non-zero does NOT abort the script (sentinel still written); test asserts the `( set +e … ) || true` enclosure shape — AC5.
+5. **Readiness gate:** the `webhook_bound` block polls `:9000` with a bounded timeout and emits a `webhook_bound` fatal on timeout; `cloudflared_ready` polls service-active. AC6.
+6. **No tolerance inversion:** bare mount/cloudflared-apt lines retain continuation (no new `set -e`+`exit 1`); plugin_seed/inngest traps still call `cleanup`. AC6b.
+7. **Lockstep byte-equality:** the emit `"message":"…"` literal in `cloud-init.yml`/`soleur-host-bootstrap.sh` is byte-identical to the substring in the workflow QUERY. AC8.
+8. **EU endpoint:** the workflow Sentry endpoint host matches the DSN residency segment. AC8b.
+9. **Cap:** rendered user_data `< 32,768` bytes; helper written once (Phase 0.2 measurement in PR body). AC7.
 
 ## Sharp Edges
 
-- **The emit must never brick the boot.** `soleur-host-bootstrap.sh` runs under `set -e`; an unguarded breadcrumb `curl` that exits non-zero would abort → no sentinel → `poweroff -f`. Every emit/breadcrumb is `( set +e … ) || true`. This is the single highest-risk aspect (AC5 + Test 4).
-- **Consolidating bare `- command` cloud-init lines into `set -e` `- |` blocks silently changes exit semantics.** Preserve every existing `|| true`/`2>/dev/null || true` tolerance (AC6 + Test 5).
-- **user_data is ~1 KB from the 32,768-byte cap.** Measure before/after (Phase 0.2). If inline traps blow the cap, use the baked-helper shape (Option B) — do not ship an untested cap-buster.
-- **Editing a baked script changes `host_scripts_content_hash`; the recreate boot-verifies against it (`cloud-init.yml:405`).** This is correct *only if* the image is rebuilt from the same source before the recreate (AC11). A recreate before the rebuild boots the old image (old hash, old scripts) → no new observability and a possible hash mismatch abort. Sequence: merge → release/rebuild → recreate.
-- **This PR does not close #6090.** It makes the failure observable; the actual stage fix is a follow-up. Use `Ref #6090`, not `Closes` (ops-remediation class — auto-close-at-merge would false-resolve).
-- **Keep the emit `message` strings in lockstep across `soleur-host-bootstrap.sh`, `cloud-init.yml`, and the `apply-web-platform-infra.yml` query.** A query that doesn't match the emitted message silently shows "no event" (the exact blind spot this PR closes) — AC8 + Test 6.
-- **EU Sentry region.** The manual read uses `de.sentry.io` / `jikigai-eu` (DSN host segment carries residency — learning `2026-05-15-sentry-dsn-cluster-substring-authoritative-residency.md`). The baked DSN's host segment already encodes this, so the on-host emit posts to the right region automatically.
+- **Breadcrumbs/traps on the enable command CANNOT see an async systemd-service death (the primary symptom).** cloudflared/webhook enable returns 0 the instant the unit launches; the service can fail to bind `:9000` later with no trap. Only the **readiness gates** (Phase 2.4, bounded-timeout service-active + `:9000` bind poll) name that death. Ship them, or the recreate returns green-and-broken (spec-flow P0 F1).
+- **The auto Sentry-read must query the EU data plane.** `apply-web-platform-infra.yml:1212` queries US `sentry.io`; the project is EU-resident (`de.sentry.io`/`jikigai-eu`, learning `2026-05-15-sentry-dsn-cluster-substring-authoritative-residency.md`). Fix the endpoint HOST, not just the query string, or the deliverable returns empty (spec-flow P0 F2 / architecture P1 Q3).
+- **Do NOT consolidate bare tolerant cloud-init commands into `set -e`+`exit 1` blocks.** That inverts an implicitly-tolerated transient `apt`/mount failure from survivable→fatal AND skips the terminal poweroff gate — a diagnosis PR must change *nothing* about failure disposition. Instrument via separate breadcrumb runcmd items + `cmd || soleur-boot-emit` continuation (architecture P1 Q2). The readiness gates are the ONLY new `set -e`+`exit 1` blocks, and they add no inversion (a service that never binds *should* fail the boot).
+- **Do NOT add a second EXIT trap to plugin_seed/inngest — merge into their existing `cleanup` trap.** A shell has one EXIT trap; `trap on_err EXIT` silently replaces `cleanup` and orphans the container. Use `trap 'rc=$?; cleanup; [ "$rc" = 0 ] || soleur-boot-emit …' EXIT` (architecture P1 Q5).
+- **One shared emit helper written once — never duplicate the ~23-line `on_err` per block.** ~4 copies ≈ 3.6 KB blows the cap (baseline ~29.6 KB, `server.tf:56`). Phase 0.2 measures; bake only if inline-written still overflows (architecture P1 Q1).
+- **The emit must never brick the boot.** Every emit sits in a `( set +e … ) || true` subshell — and AC5 asserts the *enclosure*, not a per-line `|| true` (which would false-positive on the correct subshell form). `emit_fail` does `trap - EXIT` first (spec-flow F5).
+- **Lockstep is byte-equality, not "the query contains a stage word."** Test the real emit literal against the workflow QUERY substring across all three files; a synthetic-event test passes while the real string has drifted (spec-flow F6 / obs P1 #4).
+- **`set -e` may already leak across runcmd items (H3).** Phase 0.4 pins it; a leaked errexit killing the bare cloudflared `apt` at 437 with no active trap could be the actual root cause — check before assuming H1.
+- **Hash coupling is enforced by `web2-recreate-preflight.sh` (fail-closed), not operator discipline.** A stale-image recreate aborts before `-replace`. Sequence is still merge → rebuild → recreate, but a mistake wastes a run, it doesn't boot a mismatch (architecture P2 Q3).
+- **Early-exit in a downstream readiness gate bypasses the app-run `poweroff -f` gates (563/599).** Intended: no container starts → nothing to poweroff → host stays absent → Better Stack pages (architecture P2 Q4). Do not claim in-surface emit coverage for the poweroff paths (obs P1 #3).
+- **This PR does not close #6090** (unless the recreate boots green per AC16). Use `Ref #6090`, not `Closes` (ops-remediation class).
 
 ## Alternatives Considered
 
