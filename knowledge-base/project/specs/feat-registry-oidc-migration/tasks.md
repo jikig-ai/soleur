@@ -35,12 +35,12 @@ plan: knowledge-base/project/plans/2026-07-06-feat-registry-oidc-migration-plan.
 **Design + verified site map: `phase-3-pull-site-design.md`. Dark-launch gated (attempt zot only when confirmed-configured, else unchanged GHCR) → SAFE to land before the host is provisioned (1.8) + backfilled (1.9); honours the plan's "flip trails dual-push by ≥1 release".**
 - [x] 3.0a **(Edge A, fresh hosts — DONE)** `cloud-init.yml:412` daemon.json → added `"insecure-registries": ["10.0.1.30:5000"]`. Safe/additive (nothing pulls from zot until the flip). Valid JSON, quoted heredoc (no interpolation).
 - [ ] 3.0b **(Edge A, running hosts — HIGH-RISK, defer to flip-activation)** NEW SSH-provisioned `terraform_data.registry_insecure_config` (web hosts; CI-`-target`ed + SSH parity set) → writes daemon.json + `docker RELOAD` (SIGHUP, not restart). Mutates the prod docker daemon → author with fresh context + a malformed-JSON guard; only needed when zot-primary activates on running hosts (post-provisioning). Mirror `terraform_data.journald_persistent` (server.tf).
-- [ ] 3.1 `ci-deploy.sh`: web login/pull (`ghcr_prelude_and_login` L547/L1002, pull L1024) → zot-primary (gated); atomic fallback (image+docker-config auth+sig target); beacon via `pull_failure_event`+`final_write_state`
-- [ ] 3.2 `ci-deploy.sh`: inngest pull (L1491) → same
-- [ ] 3.3 `ci-deploy.sh`: cosign `verify_image_signature` (L585-632) → sig-fetch auto-follows RepoDigest; add zot `auths` + `--allow-insecure-registry` on the zot branch (Edge B)
-- [ ] 3.4 `soleur-host-bootstrap.sh` L172-199 → add gated zot `docker login` beside GHCR; beacon via `_sentry_emit`
-- [ ] 3.5 `cloud-init.yml`: web fresh-boot seed+app (L449 login, L452/L545 pull) → zot-primary (gated) + fallback + beacon (`soleur-boot-emit`)
-- [ ] 3.6 `cloud-init.yml`: **inngest fresh-boot extract L591/596/606** (missed site; hardcoded `v1.1.18` ×3) → same
+- [x] 3.1 `ci-deploy.sh`: web login/pull (`ghcr_prelude_and_login` L547/L1002, pull L1024) → zot-primary (gated); atomic fallback (image+docker-config auth+sig target); beacon via `pull_failure_event`+`final_write_state`
+- [x] 3.2 `ci-deploy.sh`: inngest pull (L1491) → same
+- [x] 3.3 `ci-deploy.sh`: cosign `verify_image_signature` (L585-632) → sig-fetch auto-follows RepoDigest; add zot `auths` + `--allow-insecure-registry` on the zot branch (Edge B)
+- [x] 3.4 `soleur-host-bootstrap.sh` L172-199 → add gated zot `docker login` beside GHCR; beacon via `_sentry_emit`
+- [x] 3.5 `cloud-init.yml`: web fresh-boot seed+app (L449 login, L452/L545 pull) → zot-primary (gated) + fallback + beacon (`soleur-boot-emit`)
+- [x] 3.6 `cloud-init.yml`: **inngest fresh-boot extract L591/596/606** (missed site; hardcoded `v1.1.18` ×3) → same
 - [x] 3.7 `apply-web-platform-infra.yml:1070` → **STAYS GHCR** (runner can't reach the private net; resolves the digest from GHCR, hosts pull the same digest from zot). Documented in `phase-3-pull-site-design.md` §Site 7
 - [x] 3.8 `plugins/soleur/skills/deploy/scripts/deploy.sh` → **OUT-SCOPE** (tenant-facing template; no Doppler/beacon/cosign/ZOT_* access). Documented in `phase-3-pull-site-design.md` §Site 8
 - [ ] 3.9 Phase-3 entry-gate script: verify both images' deployed tags resolve in zot before flip (runtime expression of the dark-launch gate)

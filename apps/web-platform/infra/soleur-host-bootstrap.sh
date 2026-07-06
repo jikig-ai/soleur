@@ -196,6 +196,33 @@ STAGE=ghcr_login
   else
     echo "soleur-host-bootstrap: GHCR_READ_{USER,TOKEN} not both present — skipping docker login"
     ghcr_login_warn credential_absent
+  fi
+  # #6122/ADR-093: ALSO authenticate to the self-hosted zot registry so the downstream
+  # cloud-init inngest-bootstrap + app pulls can prefer zot. Strict dark-launch: only when
+  # ZOT_REGISTRY_URL is present in Doppler prd (absent until the operator provisions (1.8) +
+  # backfills (1.9) → a true no-op, and an unset URL emits NO beacon so a pre-provisioning
+  # boot never pages). Same fail-open shape; the login writes a zot auths entry into the
+  # host docker config that the later pulls reuse.
+  zot_login_warn() {
+    _sentry_emit "$(printf '{"message":"fresh-boot zot docker login failed","level":"warning","logger":"soleur-host-bootstrap","tags":{"feature":"supply-chain","op":"image-pull","stage":"zot_login","pull_result":"%s","host_id":"%s"}}' "$1" "$HOST_ID")"
+  }
+  ZOT_URL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
+  if [ -n "$ZOT_URL" ]; then
+    ZOT_USER=$(timeout 15 doppler secrets get ZOT_PULL_USER --plain --project soleur --config prd 2>/dev/null || true)
+    ZOT_TOKEN=$(timeout 15 doppler secrets get ZOT_PULL_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
+    if [ -n "$ZOT_USER" ] && [ -n "$ZOT_TOKEN" ]; then
+      if printf '%s' "$ZOT_TOKEN" | docker login "$ZOT_URL" -u "$ZOT_USER" --password-stdin >/dev/null 2>&1; then
+        echo "soleur-host-bootstrap: docker login $ZOT_URL ok (zot-primary)"
+      else
+        echo "soleur-host-bootstrap: docker login $ZOT_URL FAILED (will fall back to GHCR)"
+        zot_login_warn auth_denied
+      fi
+    else
+      echo "soleur-host-bootstrap: ZOT_PULL_{USER,TOKEN} not both present — skipping zot login"
+      zot_login_warn credential_absent
+    fi
+  else
+    echo "soleur-host-bootstrap: ZOT_REGISTRY_URL unset — skipping zot login (dark)"
   fi ) || true
 
 # Author the shared post-bootstrap Sentry emitter + readiness poller (#6090) for the

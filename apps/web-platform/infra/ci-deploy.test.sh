@@ -122,6 +122,19 @@ if [[ "${1:-}" == "secrets" && "${2:-}" == "get" ]]; then
   # observably set. MOCK_DOPPLER_GET_EMPTY simulates the pre-provisioning state
   # (credential not yet in Doppler) → empty value, prelude skips docker login.
   if [[ "${MOCK_DOPPLER_GET_EMPTY:-}" == "1" ]]; then exit 0; fi
+  # #6122 zot dark-launch: ZOT_* are EMPTY by default (the merge-time dark state → the
+  # unchanged GHCR pull path), so every legacy trace assertion stays single-pull. A test
+  # arms MOCK_ZOT_CONFIGURED=1 to simulate the post-provisioning zot-primary state; then
+  # ZOT_REGISTRY_URL resolves to the real private-net endpoint and the pull/login creds
+  # are present.
+  case "${3:-}" in
+    ZOT_REGISTRY_URL)
+      [[ "${MOCK_ZOT_CONFIGURED:-}" == "1" ]] && echo "10.0.1.30:5000"
+      exit 0 ;;
+    ZOT_PULL_USER|ZOT_PULL_TOKEN)
+      [[ "${MOCK_ZOT_CONFIGURED:-}" == "1" ]] && echo "mock-${3}"
+      exit 0 ;;
+  esac
   echo "mock-${3:-VALUE}"
   exit 0
 fi
@@ -200,11 +213,30 @@ if [[ "${1:-}" == "inspect" ]]; then
       if [[ "${MOCK_INSPECT_NO_DIGEST:-}" == "1" ]]; then
         echo ""
       else
+        # #6122: verify_image_signature now reads the FULL RepoDigests list (range) and
+        # selects the entry for the pulled registry. In the zot-primary state the local
+        # image carries BOTH a zot and a GHCR RepoDigest; emit both so the registry-scoped
+        # grep can pick the right one (zot ⇒ --allow-insecure-registry; ghcr ⇒ not).
         echo "ghcr.io/jikig-ai/soleur-web-platform@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        [[ "${MOCK_ZOT_CONFIGURED:-}" == "1" ]] && \
+          echo "10.0.1.30:5000/jikig-ai/soleur-web-platform@sha256:0000000000000000000000000000000000000000000000000000000000000000"
       fi
       exit 0
     fi
   done
+fi
+
+# #6122: capture docker pull targets (MOCK_PULL_ARGS_FILE) so a test can assert WHICH
+# registry was pulled, and simulate a zot-only pull failure (MOCK_ZOT_PULL_FAIL) to
+# exercise the atomic GHCR fallback. Runs BEFORE the mode case so it works in default
+# AND trace mode; falls through on success so the mode case still emits its trace.
+if [[ "${1:-}" == "pull" ]]; then
+  _pref="${2:-}"
+  [[ -n "${MOCK_PULL_ARGS_FILE:-}" ]] && printf 'PULL:%s\n' "$_pref" >> "$MOCK_PULL_ARGS_FILE"
+  if [[ "${MOCK_ZOT_PULL_FAIL:-}" == "1" && "$_pref" == 10.0.1.30:5000/* ]]; then
+    echo "manifest unknown" >&2
+    exit 1
+  fi
 fi
 
 case "$mode" in
@@ -2366,17 +2398,116 @@ assert_state_contains "deploy inngest restart latest rejected as image_mismatch"
 # source-grep gate — a future edit that drops `200>&-` re-introduces the
 # 40-min-stuck-lock class the v0.116.1 PIR documented.
 TOTAL=$((TOTAL + 1))
-# NB: the web-platform pull is wrapped in an `if ! docker pull … ; then` failure
-# guard (#6005), so the pull match is not line-anchored — the load-bearing assertion
-# is that `200>&-` still rides the pull (FD-200 close preserved through the wrap).
-if grep -qE 'docker pull "\$IMAGE:\$TAG" 200>&-' "$DEPLOY_SCRIPT" \
+# NB: #6122 wrapped BOTH pulls in pull_image_with_fallback (zot-primary + atomic GHCR
+# fallback), so the pull is no longer a single literal `docker pull "$IMAGE:$TAG"`. The
+# load-bearing INVARIANT is unchanged: EVERY real `docker pull` command must close
+# FD-200. Assert the invariant (no pull command line lacks `200>&-`) rather than a brittle
+# literal ref shape — matches command lines only (`docker pull`, `if docker pull`,
+# `if ! docker pull`), so the `\`docker pull\`` mention inside verify's comment is
+# excluded by the `^[[:space:]]*` anchor. A future edit dropping `200>&-` on any pull
+# re-introduces the 40-min-stuck-lock class the v0.116.1 PIR documented.
+_bad_pull="$(grep -nE '^[[:space:]]*(if (! )?)?docker pull ' "$DEPLOY_SCRIPT" | grep -v '200>&-' || true)"
+if [[ -z "$_bad_pull" ]] \
+   && grep -qE '^[[:space:]]*(if (! )?)?docker pull ' "$DEPLOY_SCRIPT" \
    && grep -qE '^[[:space:]]*docker image prune -af 200>&-' "$DEPLOY_SCRIPT"; then
   PASS=$((PASS + 1))
   echo "  PASS: long-running docker children close FD-200 lock (200>&-) — #5062 guard"
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: docker pull/prune must close FD-200 via '200>&-' (#5062) — an orphaned pull would hold the deploy lock"
+  [[ -n "$_bad_pull" ]] && echo "        pull line(s) missing 200>&-: $_bad_pull"
 fi
+
+echo ""
+echo "--- #6122 zot-primary pull + atomic GHCR fallback + Edge B ---"
+
+# Runs a web-platform deploy with zot CONFIGURED (MOCK_ZOT_CONFIGURED) and capture files
+# for docker pull targets + cosign args. Echoes nothing; the caller greps the files.
+run_deploy_zot() {
+  local pull_file="$1" cosign_file="$2" extra="${3:-}"
+  (
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    export MOCK_ZOT_CONFIGURED=1
+    export MOCK_PULL_ARGS_FILE="$pull_file"
+    export MOCK_COSIGN_ARGS_FILE="$cosign_file"
+    eval "$extra"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    bash "$DEPLOY_SCRIPT" >/dev/null 2>&1 || true
+  )
+}
+
+# T-ZOT-1: zot live + zot pull ok → the zot ref is pulled (never GHCR) and cosign verify
+# carries --allow-insecure-registry (Edge B — plain-HTTP zot .sig fetch).
+assert_zot_primary() {
+  TOTAL=$((TOTAL + 1))
+  local pf cf; pf=$(mktemp); cf=$(mktemp)
+  run_deploy_zot "$pf" "$cf" ""
+  if grep -q '^PULL:10.0.1.30:5000/jikig-ai/soleur-web-platform:v1.0.0$' "$pf" \
+     && ! grep -q '^PULL:ghcr.io' "$pf" \
+     && grep -q -- '--allow-insecure-registry' "$cf"; then
+    PASS=$((PASS + 1)); echo "  PASS: zot-primary pulls the zot ref + cosign --allow-insecure-registry (Edge B)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: zot-primary (pulls=[$(tr '\n' ' ' < "$pf")] cosign_has_insecure=$(grep -qc -- '--allow-insecure-registry' "$cf" && echo y || echo n))"
+  fi
+  rm -f "$pf" "$cf"
+}
+assert_zot_primary
+
+# T-ZOT-2: zot live + zot pull FAILS → ATOMIC fallback pulls GHCR; cosign follows the
+# GHCR RepoDigest with NO insecure flag (image + auth + sig move together).
+assert_zot_fallback() {
+  TOTAL=$((TOTAL + 1))
+  local pf cf; pf=$(mktemp); cf=$(mktemp)
+  run_deploy_zot "$pf" "$cf" "export MOCK_ZOT_PULL_FAIL=1"
+  if grep -q '^PULL:10.0.1.30:5000/jikig-ai/soleur-web-platform:v1.0.0$' "$pf" \
+     && grep -q '^PULL:ghcr.io/jikig-ai/soleur-web-platform:v1.0.0$' "$pf" \
+     && ! grep -q -- '--allow-insecure-registry' "$cf"; then
+    PASS=$((PASS + 1)); echo "  PASS: zot pull failure → atomic GHCR fallback, no insecure flag on ghcr digest"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: zot fallback (pulls=[$(tr '\n' ' ' < "$pf")])"
+  fi
+  rm -f "$pf" "$cf"
+}
+assert_zot_fallback
+
+# T-ZOT-3: zot DARK (default, unconfigured) → single GHCR pull, zot never attempted
+# (strict no-op — the merge-time dark state until the operator provisions + backfills).
+assert_zot_dark() {
+  TOTAL=$((TOTAL + 1))
+  local pf; pf=$(mktemp)
+  (
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    export MOCK_PULL_ARGS_FILE="$pf"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    bash "$DEPLOY_SCRIPT" >/dev/null 2>&1 || true
+  )
+  if grep -q '^PULL:ghcr.io/jikig-ai/soleur-web-platform:v1.0.0$' "$pf" \
+     && ! grep -q '^PULL:10.0.1.30:5000' "$pf"; then
+    PASS=$((PASS + 1)); echo "  PASS: zot dark (unconfigured) → single GHCR pull, zot never attempted"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: zot dark (pulls=[$(tr '\n' ' ' < "$pf")])"
+  fi
+  rm -f "$pf"
+}
+assert_zot_dark
 
 # #5145 / reframed #5159: the cron-plan loop owns its own (advisory) budget,
 # distinct from the /health loop. Post-#5159 the cron-plan check is best-effort

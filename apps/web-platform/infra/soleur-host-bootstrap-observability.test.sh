@@ -45,7 +45,12 @@ if grep -qE 'IMAGE_VERIFY_MODE:-warn' "$DIR/ci-deploy.sh"; then
 else
   no "AC1: expected IMAGE_VERIFY_MODE:-warn default in ci-deploy.sh"
 fi
-if grep -qE 'cosign' "$CI"; then
+# #6122: match a cosign INVOCATION, not the word in a comment. cloud-init.yml's
+# daemon.json block documents "cosign digest-pinning is the integrity guard, not TLS"
+# (explaining why plain-HTTP zot is safe) — that comment is documentation, not a call.
+# Exclude comment lines so the guard tracks the real invariant (no cosign VERIFY runs
+# on the fresh-boot path — it lives only in ci-deploy.sh).
+if grep -E 'cosign' "$CI" | grep -qvE '^[[:space:]]*#'; then
   no "AC1: cloud-init.yml must NOT invoke cosign (verify lives only in ci-deploy.sh)"
 else
   ok "AC1: no cosign call in the fresh-boot cloud-init sequence"
