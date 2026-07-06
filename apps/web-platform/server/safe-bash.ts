@@ -141,16 +141,35 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`^gh\s+issue\s+(?:view|list|status)(?:\s+${GH_ARG})*\s*$`),
   new RegExp(String.raw`^gh\s+pr\s+(?:view|list|status|diff|checks)(?:\s+${GH_ARG})*\s*$`),
   new RegExp(String.raw`^gh\s+repo\s+view(?:\s+${GH_ARG})*\s*$`),
-  // Read-only worktree-manager.sh subcommands ONLY (Issue B part 1, AC8).
-  // `list`/`ls` shell out to `git worktree list` (read-only). Every other
-  // subcommand (create/cleanup-merged/cleanup-tmp/draft-pr/sync) writes or
-  // destroys and is deliberately EXCLUDED — it stays gated (or is covered by
-  // the opt-in autonomous toggle). Exact literal path; the optional leading
-  // `./` is the form the agent emits; `..` cannot appear (PATH_TRAVERSAL_DENYLIST).
-  new RegExp(
-    String.raw`^bash\s+(?:\./)?plugins/soleur/skills/git-worktree/scripts/worktree-manager\.sh\s+(?:list|ls)\s*$`,
-  ),
+  // NOTE (Slice B, #6121/ADR-093): the read-only `worktree-manager.sh (list|ls)`
+  // auto-approve is NO LONGER a bare `(?:\./)?plugins/soleur/…` regex here. On the
+  // Concierge SERVER surface, a CWD-relative `./plugins/soleur/…` resolves to the
+  // connected repo's UNTRUSTED committed copy, so auto-approving it ran untrusted
+  // code. It now lives in EXACT_LITERAL_SAFE_COMMANDS below as the deployed
+  // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` form (server → /app deployed copy;
+  // CLI → local checkout), matched by exact string equality (no `$`-denylist
+  // relaxation). See isSafeSingleSegment stage 0.
 ];
+
+// Exact-literal safe-command carve-out (Slice B, #6121). A CLOSED set of KNOWN
+// fixed command literals that legitimately contain `${CLAUDE_PLUGIN_ROOT:-./plugins/
+// soleur}` — a bash DEFAULT-VALUE expansion (`:-`), NOT command substitution
+// (`$(…)`) — and would otherwise be rejected by SHELL_METACHAR_DENYLIST at stage 1.
+// Matched by EXACT string equality on the trimmed (redirect-stripped) segment, so
+// there is ZERO arg-variation / injection surface: only these precise strings pass,
+// and their runtime expansion is trusted on BOTH surfaces (server → the platform-
+// deployed `/app/shared/plugins/soleur`; CLI → the local `./plugins/soleur`
+// checkout). This does NOT loosen the general `$`/`{`/`}` denylist for any other
+// command — `${FOO}` / `$(…)` / a `..`-traversal / a different script path all
+// still fall through to the denylist (verified in safe-bash.test.ts). Only
+// read-only verbs (`list`/`ls`) are included; write verbs (create/cleanup-merged/
+// draft-pr) stay gated (they run via the autonomous/sandbox path, never here).
+const WORKTREE_MANAGER_DEPLOYED_FORM =
+  "bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh";
+export const EXACT_LITERAL_SAFE_COMMANDS: ReadonlySet<string> = new Set([
+  `${WORKTREE_MANAGER_DEPLOYED_FORM} list`,
+  `${WORKTREE_MANAGER_DEPLOYED_FORM} ls`,
+]);
 
 // Single source of truth for the safe-bash verb list. Used by the
 // per-pattern regexes above (informationally — each regex hardcodes its
@@ -223,6 +242,15 @@ function isSafeSingleSegment(segment: string): boolean {
   // Strip a single recognized trailing stderr redirect (AC10). Anything else
   // containing `>`/`<`/`&` survives to the denylist below.
   const candidate = segment.replace(TRAILING_SAFE_REDIRECT, "");
+  // Stage 0: exact-literal carve-out (Slice B, #6121). A CLOSED set of known
+  // fixed command literals that legitimately carry `${CLAUDE_PLUGIN_ROOT:-…}` (a
+  // default-value expansion, not `$(…)`). Matched by EXACT equality on the
+  // trimmed segment BEFORE the `$`/`{`/`}` denylist, so these — and ONLY these
+  // precise strings — are admitted; any arg variation, injection tail, or
+  // different var/path falls through to the intact denylist below. `&&`-chains
+  // are still decomposed by isBashCommandSafe, so a `<literal> && evil` segment 2
+  // is independently denied. See EXACT_LITERAL_SAFE_COMMANDS.
+  if (EXACT_LITERAL_SAFE_COMMANDS.has(candidate.trim())) return true;
   // Stage 1: raw-string metacharacter denylist. Run BEFORE trim so
   // leading/trailing newlines (for example) are caught.
   if (SHELL_METACHAR_DENYLIST.test(candidate)) return false;
