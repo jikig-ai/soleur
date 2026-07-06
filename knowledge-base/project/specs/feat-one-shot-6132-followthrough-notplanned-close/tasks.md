@@ -32,7 +32,12 @@ Lane: single-domain
 - [ ] 3.1 `cd apps/web-platform && ./node_modules/.bin/vitest run
       test/server/inngest/cron-follow-through-monitor.test.ts` green (T1–T9).
 - [ ] 3.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
-- [ ] 3.3 AC greps (AC1–AC4) pass on the edited file.
+- [ ] 3.3 AC1/AC2/AC4 greps pass on the edited file; AC3 (Guard A stays
+      COMPLETED) is asserted by the T9 region-scoped test, NOT a raw
+      `grep -c 'not planned'` (the Sharp Edges clarifier prose contains those
+      words — a raw count is non-deterministic). Guard A comment + Sharp Edges
+      clarifier MUST NOT reproduce the exact `gh issue close <number> --reason
+      "not planned"` command form.
 
 ## Phase 4 — Ship
 

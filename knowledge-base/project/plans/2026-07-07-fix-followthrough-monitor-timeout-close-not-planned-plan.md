@@ -10,6 +10,36 @@ created: 2026-07-07
 
 # 🐛 fix: follow-through monitor closes timed-out issues as not-planned (#6132)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-07
+
+**Key improvements from the deepen pass:**
+1. **AC determinism fix.** The verify-negative pass found that AC1/AC3 originally
+   counted the literal `not planned`, which the planned Sharp-Edges clarifier line
+   (added inside the prompt) would also contain — making the count
+   non-deterministic. AC1 now counts the exact `<number>`-command form; AC3 is
+   asserted by the region-scoped T9 test (Guard A slice), not a raw grep. Phase 1
+   now forbids the Guard A comment / Sharp Edges clarifier from reproducing the
+   exact command string.
+2. **CLI form verified live** (Verify-the-command gate): `gh issue close --help`
+   → `-r, --reason string   Reason for closing: {completed|not planned|duplicate}`
+   with example `gh issue close 123 --reason "not planned"` (verified 2026-07-07).
+   The prompt embeds this agent-facing CLI form, so the token is pinned.
+3. **Precedent-diff (Phase 4.4).** Sibling give-up cron
+   `cron-stale-deferred-scope-outs.ts:299` already records give-up closes as
+   `state_reason: "not_planned"` (via octokit). This plan uses the CLI equivalent
+   `--reason "not planned"` because the follow-through monitor closes through the
+   agent's `gh` verbs, not octokit — same semantic, different (already-allowlisted)
+   mechanism. No novel pattern.
+4. **allowlist no-op confirmed.** `git grep` confirms `--add-label` appears
+   exactly once (old Guard C step 1, being removed); `Bash(gh issue close:*)` +
+   `Bash(gh issue edit:*)` already cover the new verbs — no `--allowedTools` change.
+
+**Halt gates:** 4.6 User-Brand Impact (present, threshold `aggregate pattern`),
+4.7 Observability (present, 5 fields, no-SSH discoverability test), 4.8 PAT-shaped
+var (none), 4.9 UI wireframe (no UI surface) — all pass.
+
 ## Overview
 
 The follow-through monitor's Guard C ("MAX POLLING EXCEEDED") closes a timed-out
@@ -159,13 +189,18 @@ Key deltas:
 the "Verified: … Auto-closing." comment) stays a bare/COMPLETED close — that is
 the predicate-PASSES path and COMPLETED is correct. Add a one-line inline
 comment near Guard A clarifying the bare close is intentionally COMPLETED (to
-prevent a future "consistency" edit from wrongly adding `--reason "not planned"`
-there).
+prevent a future "consistency" edit from giving it the timeout reason). **The
+Guard A comment MUST NOT reproduce the exact command string `gh issue close
+<number> --reason "not planned"`** — phrase it as prose ("stays a bare close =
+COMPLETED; the timeout give-up path is the only not-planned close") so AC1's
+count of the exact command form stays deterministic (1).
 
 Also update the prompt's `## Sharp Edges` "NEVER close issues unless a predicate
 passes or 30 business day max is exceeded." bullet region with a one-line
-clarifier: predicate-pass closes are COMPLETED (bare close); max-polling closes
-are `not planned` (`--reason "not planned"`).
+clarifier: predicate-pass closes are COMPLETED (bare close); the max-polling
+give-up close is not-planned. This clarifier is prose (it may say the words "not
+planned") but MUST NOT reproduce the exact `gh issue close <number> --reason
+"not planned"` command form — again to keep AC1 deterministic.
 
 ### Phase 2 — `--allowedTools` verification (no change expected)
 
@@ -220,14 +255,22 @@ NOT `bun test`). Typecheck with `cd apps/web-platform && ./node_modules/.bin/tsc
 - [ ] AC1 — `FOLLOW_THROUGH_PROMPT` Guard C closes with `--reason "not planned"`:
   `git grep -c 'gh issue close <number> --reason "not planned"'
   apps/web-platform/server/inngest/functions/cron-follow-through-monitor.ts`
-  returns `1`.
+  returns `1`. (The exact `<number>`-command form appears only at Guard C step 3;
+  the Guard A inline comment and the Sharp Edges clarifier MUST NOT reproduce
+  this exact command string — see AC3 note.)
 - [ ] AC2 — Guard C strips the label before close: the Guard C region contains
   `gh issue edit <number> --remove-label "needs-attention"` AND the region no
-  longer contains `--add-label` (`git grep -c 'add-label' <file>` returns `0`).
-- [ ] AC3 — Guard A unchanged / stays COMPLETED: the "Auto-closing" region still
-  ends in a bare `gh issue close <number>` with no `--reason` token; `not planned`
-  appears in the prompt exactly once (Guard C only): `git grep -c 'not planned'
-  <file>` returns `1`.
+  longer contains `--add-label` (`git grep -c 'add-label' <file>` returns `0` —
+  verified pre-fix count is `1`, at the old Guard C step 1).
+- [ ] AC3 — Guard A unchanged / stays COMPLETED: asserted by the T9 test's
+  region slice — the Guard A region (anchors `PREDICATE PASSES` →
+  `SLA EXCEEDED (first time`) contains `gh issue close <number>` with **no**
+  `--reason` token, and the only `--reason "not planned"` occurrence in the
+  prompt falls inside the Guard C region (anchors `MAX POLLING EXCEEDED` →
+  `WITHIN SLA, NO STATE CHANGE`). Do NOT use a bare `git grep -c 'not planned'`
+  count as the gate — the Sharp Edges clarifier line legitimately contains the
+  words "not planned" in prose, so a raw count is non-deterministic; the
+  region-scoped test is the canonical assertion.
 - [ ] AC4 — No `--allowedTools` change: the `CLAUDE_CODE_FLAGS` `--allowedTools`
   value still contains `Bash(gh issue close:*)` and `Bash(gh issue edit:*)` and
   is otherwise byte-identical to `main` (verify via `git diff main -- <file>`
