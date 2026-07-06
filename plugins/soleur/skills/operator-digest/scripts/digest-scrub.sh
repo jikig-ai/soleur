@@ -34,24 +34,32 @@ fi
 # customer-email leak class and MUST abort.
 FIRST_PARTY_DOMAINS=(jikigai.com soleur.ai)
 
-# Secret classes — any match ABORTS. Verbatim from redact-sentinel.sh (the canonical set).
+# Secret classes — any match ABORTS. Class-name set + bodies synced with redact-engine.py
+# 2026-07-06 (#6045); NAME-level parity is CI-enforced by plugins/soleur/test/redact-class-parity.test.sh.
+# Regex-BODY parity is a named non-goal (ERE here vs Python `re` in the engine — not cheaply
+# comparable); bodies below are a superset of the engine's shared classes as of the sync date and
+# pattern edits get manual cross-review. The engine's email/UUID/IPv4 classes are handled OUTSIDE
+# this map (email via first-party domain logic below; UUID/IPv4 as WARN-only), so the parity guard
+# allowlists them.
 declare -A SECRET=(
   [JWT]='eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
   [stripe_key]='\b(sk|pk|rk)_(live|test)_[A-Za-z0-9]{16,}\b'
   [stripe_whsec]='\bwhsec_[A-Za-z0-9]{16,}\b'
   [stripe_acct]='\bacct_[A-Za-z0-9]{16,}\b'
   [stripe_cust_pi_seti_sub_in]='\b(cus|pi|seti|sub|in)_[A-Za-z0-9]{14,}\b'
-  [env_var]='\b(DOPPLER|SENTRY|STRIPE|SUPABASE|OPENAI|ANTHROPIC|GITHUB|VERCEL|CLOUDFLARE)_[A-Z_]+=[^[:space:]]+'
+  [env_var]='\b(DOPPLER|SENTRY|STRIPE|SUPABASE|OPENAI|ANTHROPIC|GITHUB|VERCEL|CLOUDFLARE|HETZNER|FLAGSMITH|RESEND|TAILSCALE)_[A-Z_]+=[^[:space:]]+'
   [github_token]='\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b'
   [anthropic_key]='\bsk-ant-[A-Za-z0-9_-]{32,}\b'
   [openai_key]='\bsk-(proj-)?[A-Za-z0-9_-]{20,}\b'
   [supabase_pat]='\bsbp_[a-z0-9]{20,}\b|\b(sb_secret|sb_publishable)_[A-Za-z0-9]{20,}\b'
-  [pem_private_key]='-----BEGIN ((RSA|EC|OPENSSH|PGP|DSA) )?PRIVATE KEY-----'
+  [pem_private_key]='-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----'
+  [doppler_token]='\bdp\.(st|pt|ct|sa|scim|audit)\.[A-Za-z0-9._-]{16,}'
+  [slack_token]='\bxox[baprsce]-[A-Za-z0-9-]{10,}'
 )
-SECRET_ORDER=(JWT stripe_key stripe_whsec stripe_acct stripe_cust_pi_seti_sub_in env_var github_token anthropic_key openai_key supabase_pat pem_private_key)
+SECRET_ORDER=(JWT stripe_key stripe_whsec stripe_acct stripe_cust_pi_seti_sub_in env_var github_token anthropic_key openai_key supabase_pat pem_private_key doppler_token slack_token)
 
 EMAIL_RE='\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
-UUID_RE='\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
+UUID_RE='\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b'
 IPV4_RE='\b(([0-9]{1,3})\.){3}[0-9]{1,3}\b'
 
 abort=0

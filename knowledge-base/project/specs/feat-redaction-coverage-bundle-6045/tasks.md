@@ -16,9 +16,9 @@ fan-out caps with inline rationale; tag suffix starts with `` ( ``) apply across
 
 ## PR-A — item 8: drift-guard + digest-scrub sync
 
-- [ ] 1.1 Sync `digest-scrub.sh`: add `doppler_token` + `slack_token`; widen `env_var` vendors (+HETZNER/FLAGSMITH/RESEND/TAILSCALE), `pem` qualifier (`[A-Z0-9 ]*PRIVATE KEY`), `UUID` (`[0-9A-Fa-f]`); correct the header comment.
-- [ ] 1.2 Create `operator-digest/test/redact-class-parity.test.sh`: parse engine `PATTERNS` names; class-count self-test (`parsed == len(PATTERNS)`); assert each secret class present-in-digest OR in `DIVERGENCE_ALLOWLIST` (one-word rationale); `linear-urls.sh` out-of-set comment.
-- [ ] 1.3 GREEN + negative controls: guard passes synced; FAILs on a locally-unsynced class AND on a dropped `PATTERNS` entry.
+- [x] 1.1 Sync `digest-scrub.sh`: add `doppler_token` + `slack_token`; widen `env_var` vendors (+HETZNER/FLAGSMITH/RESEND/TAILSCALE), `pem` qualifier (`[A-Z0-9 ]*PRIVATE KEY`), `UUID` (`[0-9A-Fa-f]`); correct the header comment.
+- [x] 1.2 Create `operator-digest/test/redact-class-parity.test.sh`: parse engine `PATTERNS` names; class-count self-test (`parsed == len(PATTERNS)`); assert each secret class present-in-digest OR in `DIVERGENCE_ALLOWLIST` (one-word rationale); `linear-urls.sh` out-of-set comment.
+- [x] 1.3 GREEN + negative controls: guard passes synced; FAILs on a locally-unsynced class AND on a dropped `PATTERNS` entry.
 
 ## PR-B — item 1 (whitespace reflow) + item 6 (Cloudflare)
 
