@@ -358,6 +358,7 @@ jobs:
               -target=doppler_secret.ghcr_minter_doppler_token \
               -target=betteruptime_monitor.soleur_apex \
               -target=betteruptime_policy.uptime \
+              -target=betteruptime_monitor.app \
               -target=cloudflare_record.web_host \
               -target=betteruptime_monitor.web_host \
               -target=random_id.inngest_signing_key_prd \
