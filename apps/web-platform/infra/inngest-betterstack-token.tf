@@ -19,10 +19,16 @@
 # the dark arm64 host reads `--config prd` exclusively (hr-dev-prd-distinct).
 
 resource "doppler_secret" "inngest_betterstack_logs_token" {
-  project = "soleur-inngest"
-  config  = "prd"
-  name    = "BETTERSTACK_LOGS_TOKEN"
-  value   = var.betterstack_logs_token
+  # Reference the TF-managed project + env (NOT string literals) so Terraform builds the
+  # dependency edge — the project/config are created by doppler_project.inngest +
+  # doppler_environment.inngest_prd (inngest-host.tf), and a literal would let this secret
+  # schedule before they exist ("Could not find requested config 'prd'") on a cold apply AND
+  # would not be pulled in by a `-target` of the project. Mirrors the sibling dedicated secrets.
+  project    = doppler_project.inngest.name
+  config     = doppler_environment.inngest_prd.slug
+  name       = "BETTERSTACK_LOGS_TOKEN"
+  value      = var.betterstack_logs_token
+  visibility = "masked"
 
   lifecycle {
     # Value churn (rotation) is managed at the source of truth (Better Stack / Doppler),

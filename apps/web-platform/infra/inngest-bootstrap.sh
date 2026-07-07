@@ -454,9 +454,9 @@ log "bootstrap complete: inngest-server $INNGEST_CLI_VERSION active on 127.0.0.1
 # stderr at the sudo boundary into /tmp/inngest-bootstrap-stderr.log so
 # any future failure surfaces via the deploy-status endpoint without
 # needing SSH (permanent diagnostic kept post-pivot).
-# envelope endpoint. Same Doppler-injected envs as inngest-heartbeat
-# (SENTRY_INGEST_DOMAIN / SENTRY_PROJECT_ID / SENTRY_PUBLIC_KEY); no new
-# secrets minted.
+# The sink reads BETTERSTACK_LOGS_TOKEN, Doppler-injected at ExecStart via
+# `doppler run --project @@DOPPLER_PROJECT@@ --config prd`. On the dedicated
+# arm64 host that token lives in the isolated soleur-inngest project (#6197).
 #
 # Idempotency: matches the inngest path — version file at
 # `/var/lib/vector/version`, sha256-verify on download, skip-install when

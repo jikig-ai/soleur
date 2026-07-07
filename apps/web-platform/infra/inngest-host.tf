@@ -268,6 +268,13 @@ resource "hcloud_firewall" "inngest" {
   }
 }
 
+# server_ids is update-in-place (NOT ForceNew), so the scoped `inngest-host-replace` dispatch
+# (#6197) does NOT -target this attachment — after that replace it transiently points at the
+# destroyed server id and the new host boots with NO hcloud firewall attached until the next
+# full/drift apply reconciles server_ids (verify re-attach on replace, as with the Redis volume).
+# Low blast radius: this firewall is a zero-rule deny-all; the real :8288/:8289 ingress control is
+# host-local nftables (cloud-init, independent of the hcloud firewall) and /api/inngest is HMAC
+# fail-closed. Do NOT add it to the replace allow-set — an in-place update is not a replace.
 resource "hcloud_firewall_attachment" "inngest" {
   firewall_id = hcloud_firewall.inngest.id
   server_ids  = [hcloud_server.inngest.id]
