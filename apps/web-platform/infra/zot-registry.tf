@@ -35,10 +35,19 @@ locals {
   # scheme). Published as ZOT_REGISTRY_URL.
   registry_endpoint = "${local.registry_private_ip}:5000"
 
-  # zot's OWN image is third-party (upstream project-zot), DIGEST-PINNED, ARM64 (cax11).
-  # Pulled from the PUBLIC upstream registry at boot — NEVER from our own zot (bootstrap
-  # paradox, Sharp Edges). v2.1.2 arm64; re-verify the digest on a version bump.
-  zot_image = "ghcr.io/project-zot/zot-linux-arm64@sha256:c3fc47782d98b731d5928a24182b495e28cc92f9dcf1d5317f7dbd632e10bf30"
+  # zot's OWN image is third-party (upstream project-zot), DIGEST-PINNED, v2.1.2. Pulled from
+  # the PUBLIC upstream registry at boot — NEVER from our own zot (bootstrap paradox, Sharp Edges).
+  # Arch is DERIVED from var.registry_server_type so a single var switches the whole host: `cax*`
+  # (Ampere) → arm64, anything else (`cx*`/`cpx*`) → amd64. This lets provisioning take whichever of
+  # cax11 (ARM, €5.99) / cx23 (x86, €5.49) has Hetzner stock — both are functionally identical for a
+  # store-and-serve registry (it never RUNS the amd64 platform images it holds). Re-verify BOTH
+  # digests on a version bump: `crane digest ghcr.io/project-zot/zot-linux-{arm64,amd64}:vX.Y.Z`.
+  registry_arch   = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"
+  zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64@sha256:c3fc47782d98b731d5928a24182b495e28cc92f9dcf1d5317f7dbd632e10bf30"
+  zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64@sha256:073f30d99fbdbcd8869334231c9ca45c75e535e4bdc6e28cc8a1541abe7a3f71"
+  zot_image       = local.registry_arch == "arm64" ? local.zot_image_arm64 : local.zot_image_amd64
+  # Doppler CLI (v3.75.3) per-arch SHA256 for the cloud-init download (arm64 / amd64).
+  doppler_sha256 = local.registry_arch == "arm64" ? "f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143" : "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
 
   # Non-secret, stable htpasswd usernames (constants — only the TOKENS are secret).
   zot_pull_user = "zot-pull"
@@ -173,7 +182,7 @@ resource "doppler_secret" "zot_push_token" {
 # --- The registry host -----------------------------------------------------------------
 resource "hcloud_server" "registry" {
   name        = "soleur-registry"
-  server_type = var.registry_server_type # cax11 = ARM64 (Ampere); zot is ARM-native
+  server_type = var.registry_server_type # cax11 (arm64) / cx23 (amd64) — arch derived in locals
   location    = var.location
   image       = "ubuntu-24.04"
   keep_disk   = true
@@ -205,6 +214,9 @@ resource "hcloud_server" "registry" {
     zot_image     = local.zot_image
     zot_pull_user = local.zot_pull_user
     zot_push_user = local.zot_push_user
+    # Host arch (arm64/amd64) → the matching Doppler CLI release build + its checksum.
+    doppler_arch   = local.registry_arch
+    doppler_sha256 = local.doppler_sha256
   }))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,

@@ -14,7 +14,7 @@
 # only a dollar-brace interpolates. `$${VAR}` renders a literal shell var (doppler DL).
 package_update: true
 packages:
-  - docker.io # runs the zot container (arm64-native; RUN-only host, no build → docker.io suffices, not docker-ce)
+  - docker.io # runs the zot container (RUN-only host, no build → docker.io suffices, not docker-ce)
   - apache2-utils # htpasswd -Bbn (bcrypt) — build the zot htpasswd on-host from Doppler tokens
   - curl
   - jq # parse `doppler secrets --only-names --json` for the boot-time isolation self-check (runcmd)
@@ -83,15 +83,16 @@ runcmd:
   - mount /dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id} /var/lib/zot || true
   - echo '/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id} /var/lib/zot ext4 defaults,nofail 0 2' >> /etc/fstab
 
-  # --- Doppler CLI (arm64) — the ONLY channel for the ZOT_* tokens ---------------------
+  # --- Doppler CLI (${doppler_arch}) — the ONLY channel for the ZOT_* tokens ------------
   # The tokens are NEVER baked into user_data (retrievable via the hcloud metadata API). They
-  # arrive ONLY as the Doppler-injected env at boot. cax11 is ARM64 → linux_arm64 build + its
-  # checksum (same pin as cloud-init-git-data.yml). Egress (github release DL) is open —
-  # zot-registry.tf denies only PUBLIC ingress.
+  # arrive ONLY as the Doppler-injected env at boot. Arch (arm64/amd64) + its checksum are
+  # terraform-interpolated from local.registry_arch (derived from registry_server_type), so the
+  # host provisions on whichever of cax11 (arm64) / cx23 (amd64) has Hetzner stock. Egress (github
+  # release DL) is open — zot-registry.tf denies only PUBLIC ingress.
   - |
     DOPPLER_VERSION="3.75.3"
-    DOPPLER_SHA256="f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143"
-    curl -fsSL --retry 3 "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_arm64.tar.gz" -o /tmp/doppler.tar.gz
+    DOPPLER_SHA256="${doppler_sha256}"
+    curl -fsSL --retry 3 "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz" -o /tmp/doppler.tar.gz
     echo "$${DOPPLER_SHA256}  /tmp/doppler.tar.gz" | sha256sum -c -
     tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
     chmod +x /usr/local/bin/doppler
