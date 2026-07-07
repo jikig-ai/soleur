@@ -472,8 +472,11 @@ logs:
   where: Vector → Better Stack Logs (journald) on the inngest host
   retention: Better Stack default
 discoverability_test:
-  command: "curl -fsS https://deploy.soleur.ai/hooks/inngest-inventory  # web-host hook → private-net 10.0.1.40; NO ssh"
-  expected_output: "JSON with .functions non-empty"
+  # web-host hook proxies to the private-net inngest host (10.0.1.40); no ssh.
+  # CF-Access-gated, so an unauthenticated local probe returns 403 (RC 22) — the
+  # operator adds CF-Access + HMAC headers per postmerge/deploy-status-debugging.md.
+  command: curl -fsS https://deploy.soleur.ai/hooks/inngest-inventory
+  expected_output: JSON with .functions non-empty
 ```
 
 **Soak follow-through (4.1):** `scripts/followthroughs/inngest-double-fire-6178.sh`
