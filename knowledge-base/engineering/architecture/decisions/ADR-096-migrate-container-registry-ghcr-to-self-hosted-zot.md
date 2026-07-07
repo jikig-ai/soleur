@@ -112,6 +112,28 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
   egress allow (5.3), retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
   `GHCR_MINTER_DISABLED` gate (5.4), then rotate + revoke the exposed classic PAT (5.5).
 
+### Credential isolation (amendment 2026-07-07, #6122)
+
+The registry host's boot credential is scoped to a **dedicated Doppler project `soleur-registry`**
+whose own `prd` root config holds ONLY `ZOT_PULL_TOKEN` + `ZOT_PUSH_TOKEN` — **not** a `prd` branch
+config. The original design placed the host token in a `prd_registry` **branch config under the
+`prd` environment** and claimed it isolated the host. That claim was **structurally impossible**:
+in Doppler, every config within an environment resolves that environment's ROOT config as its base,
+so a token scoped to a `prd` branch config reads the full `prd` secret set — empirically verified to
+return all 116 secrets including `SUPABASE_SERVICE_ROLE_KEY`. Provisioning as-designed would have
+handed a new CF-tunnel-reachable private-net host read access to every production secret.
+
+True isolation requires a boundary that does not share the `prd` root. A **separate project** was
+chosen over a standalone `registry` **environment** because the `soleur` project is at the
+4-environment tier cap (dev/prd/ci/cli) — a 5th environment needs a Doppler Team-plan upgrade,
+whereas project creation is unrestricted at the current tier. `doppler_project.registry` is
+TF-created in the operator's full apply (`var.doppler_token_tf` is workplace-scoped); fallback is a
+one-time operator-created project. Verified by a boot-time self-assertion (cloud-init refuses to
+launch unless its own shipped token resolves exactly 2 non-`DOPPLER_*` secrets, both `ZOT_*`) plus a
+provisioning-gate scoped-token count/identity assert. The identical branch-config non-isolation
+affects `prd_git_data`, `prd_kb_drift_walker`, and `prd_cla` (a **live** over-read) — audited
+separately in **#6167**; status stays **Adopting**.
+
 ## Alternatives Considered
 
 The 7 registry-choice options are tabled above. The **apply-path** alternatives (per-PR `-target`

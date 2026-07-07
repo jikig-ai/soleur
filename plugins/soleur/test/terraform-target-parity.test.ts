@@ -521,9 +521,12 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // knowledge-base/project/specs/feat-registry-oidc-migration/apply-path-cto-ruling.md).
   // The per-PR CI `-target` path bridges over SSH to the EXISTING web host; it cannot
   // provision a brand-new host, a new private network attach, or that host's firewall.
-  // NONE are in the workflow `-target` list. `doppler_secret.*` here (incl the prd_registry
-  // host-token copies) ride the same host apply; they are `doppler_secret`, not the
-  // CI-published `doppler_service_token`/`github_actions_secret` types the #5566 test forces.
+  // NONE are in the workflow `-target` list. `doppler_secret.*` here (incl the host-token copies
+  // in the ISOLATED `soleur-registry` project, #6122) ride the same host apply; they are
+  // `doppler_secret`, not the CI-published `doppler_service_token`/`github_actions_secret` types
+  // the #5566 test forces. `doppler_project.registry` (the isolated boot-credential project whose
+  // own `prd` root holds ONLY the two ZOT tokens — true cross-project isolation from soleur/prd)
+  // also rides the operator full apply: CI cannot create it (no host) and it is not a CI-published type.
   "hcloud_server.registry",
   "hcloud_volume.registry",
   "hcloud_volume_attachment.registry",
@@ -532,6 +535,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_firewall_attachment.registry",
   "random_password.zot_pull",
   "random_password.zot_push",
+  "doppler_project.registry",
   "doppler_secret.zot_pull_token_registry",
   "doppler_secret.zot_push_token_registry",
   "doppler_secret.zot_registry_url",
@@ -564,10 +568,12 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
 // a github_actions_secret — that is the #5566 silent-un-applied class and MUST be targeted.
 const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   "doppler_service_token.git_data",
-  // #6122 (ADR-096) — minted into the operator-created `prd_registry` config, consumed by the
-  // registry host's cloud-init (NOT published to a CI github_actions_secret). CI cannot apply
-  // it — the config does not exist until the operator creates it (runbook precondition), and CI
-  // cannot provision the host that reads it. Same class as doppler_service_token.git_data.
+  // #6122 (ADR-096) — minted into the ISOLATED `soleur-registry` project's `prd` root config
+  // (TF-created via doppler_project.registry in the operator full apply; its own root holds ONLY
+  // the two ZOT tokens — true cross-project isolation, NOT the leaky `prd_registry` branch config
+  // it replaced), consumed by the registry host's cloud-init (NOT published to a CI
+  // github_actions_secret). CI cannot apply it — no host to read it. Same class as
+  // doppler_service_token.git_data.
   "doppler_service_token.registry",
 ]);
 // AUDIT-PENDING (#5577): these are un-targeted today but it is NOT yet confirmed
