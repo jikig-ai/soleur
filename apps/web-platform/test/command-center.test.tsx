@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SwrTestProvider } from "./helpers/swr-wrapper";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { buildSupabaseQueryBuilder } from "./mocks/supabase-query-builder";
+import { makeEnrichedListRpc } from "./helpers/mock-supabase";
 
 // Mock next/navigation — stable reference prevents useEffect re-fires
 const mockPush = vi.fn();
@@ -141,6 +142,20 @@ vi.mock("@/lib/supabase/client", () => ({
         error: null,
       }),
     },
+    // The conversation-list read now flows through the list_conversations_enriched
+    // RPC (migration 125): it derives from the current conversation/message
+    // builders' data and applies the archive/status/domain filters the hook
+    // previously issued as chained `.is`/`.not`/`.eq` calls. listRpcCalls
+    // captures the args so the filter assertions can inspect them.
+    rpc: async (name: string, args: Record<string, unknown>) => {
+      listRpcCalls.push({ name, args });
+      const conv = (await conversationBuilder) as { data: unknown[] };
+      const msg = (await messageBuilder) as { data: unknown[] };
+      return makeEnrichedListRpc(
+        (conv.data ?? []) as { id: string }[],
+        (msg.data ?? []) as { conversation_id: string; role: string; content: string; leader_id?: string | null; created_at?: string }[],
+      )(name, args);
+    },
     from: (table: string) => {
       if (table === "conversations") return conversationBuilder;
       if (table === "messages") return messageBuilder;
@@ -152,10 +167,15 @@ vi.mock("@/lib/supabase/client", () => ({
   }),
 }));
 
+// Captures every list_conversations_enriched RPC invocation for filter-arg
+// assertions (replaces the old chained-call inspection). Reset per test.
+let listRpcCalls: { name: string; args: Record<string, unknown> }[] = [];
+
 describe("Command Center", () => {
   beforeEach(() => {
     mockPush.mockClear();
     mockChannel.mockClear();
+    listRpcCalls = [];
     conversationBuilder = buildSupabaseQueryBuilder({ data: mockConversations });
     messageBuilder = buildSupabaseQueryBuilder({ data: mockMessages });
 
@@ -337,8 +357,10 @@ describe("Command Center", () => {
       expect(screen.getAllByText("Needs your decision").length).toBeGreaterThanOrEqual(1);
     });
 
-    // The query builder should have been called with .is("archived_at", null) for the default active view
-    expect(conversationBuilder.is).toHaveBeenCalledWith("archived_at", null);
+    // The active view requests the RPC with p_archive="active" (the RPC applies
+    // the archived_at IS NULL filter server-side; the archived row is excluded).
+    expect(listRpcCalls.some((c) => c.args.p_archive === "active")).toBe(true);
+    expect(screen.queryByText(/conv-archived/)).toBeNull();
   });
 
   it("shows Active and Archived toggle buttons in filter bar", async () => {
@@ -363,14 +385,16 @@ describe("Command Center", () => {
       expect(screen.getByRole("button", { name: "Archived" })).toBeInTheDocument();
     });
 
-    // Reset the mock to track the new query
+    // Reset to track the new query
     conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
+    listRpcCalls = [];
 
     fireEvent.click(screen.getByRole("button", { name: "Archived" }));
 
-    // After clicking, the hook should refetch with .not("archived_at", "is", null)
+    // After clicking, the hook refetches with p_archive="archived" (the RPC
+    // applies the archived_at IS NOT NULL filter server-side).
     await waitFor(() => {
-      expect(conversationBuilder.not).toHaveBeenCalledWith("archived_at", "is", null);
+      expect(listRpcCalls.some((c) => c.args.p_archive === "archived")).toBe(true);
     });
   });
 

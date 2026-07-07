@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { SwrTestProvider } from "./helpers/swr-wrapper";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { buildSupabaseQueryBuilder } from "./mocks/supabase-query-builder";
+import { makeEnrichedListRpc } from "./helpers/mock-supabase";
 
 // Mock next/navigation — stable reference prevents useEffect re-fires
 const mockPush = vi.fn();
@@ -35,6 +36,16 @@ vi.mock("@/lib/supabase/client", () => ({
         data: { user: { id: "user-1" } },
         error: null,
       }),
+    },
+    // The list read flows through the list_conversations_enriched RPC
+    // (migration 125), deriving from the current conversation/message builders.
+    rpc: async (name: string, args: Record<string, unknown>) => {
+      const conv = (await conversationBuilder) as { data: unknown[] };
+      const msg = (await messageBuilder) as { data: unknown[] };
+      return makeEnrichedListRpc(
+        (conv.data ?? []) as { id: string }[],
+        (msg.data ?? []) as { conversation_id: string; role: string; content: string; leader_id?: string | null; created_at?: string }[],
+      )(name, args);
     },
     from: (table: string) => {
       if (table === "conversations") return conversationBuilder;

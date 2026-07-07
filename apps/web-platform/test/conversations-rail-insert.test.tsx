@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
 import type { Conversation } from "@/lib/types";
+import { enrichConversationFixtures } from "./helpers/mock-supabase";
 
 // RED→GREEN regression for plan
 // 2026-06-15-fix-active-conversation-missing-from-rail.
@@ -97,6 +98,16 @@ vi.mock("@/lib/supabase/client", () => ({
         Promise.resolve({ data: { user: { id: "user-1" } }, error: null }),
       ),
     },
+    // The list read now flows through list_conversations_enriched (migration
+    // 125). state.rows carries no message fixtures here, so the snippet fields
+    // are null and titles derive from domain_leader exactly as the old
+    // messages-chain (which returned []) produced them.
+    rpc: vi.fn((name: string) => {
+      if (name !== "list_conversations_enriched") {
+        return Promise.resolve({ data: null, error: { message: `unexpected rpc: ${name}` } });
+      }
+      return Promise.resolve({ data: enrichConversationFixtures(state.rows, []), error: null });
+    }),
     from: vi.fn((table: string) => {
       if (table === "conversations") return buildConversationsChain();
       if (table === "messages") return buildMessagesChain();
