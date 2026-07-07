@@ -170,8 +170,8 @@ model {
         description "Cluster of Hetzner Cloud hosts (Nomad clients, spread placement) running web app + CLI engine containers; per-user worktrees on host-local NVMe (ADR-068). At first boot a fresh host pulls the web app image from GHCR and extracts its baked bootstrap scripts + hooks.json.tmpl via docker cp (ADR-080, #5921)"
       }
       inngest = container "Inngest Server" {
-        technology "Self-hosted inngest (Hetzner, loopback 127.0.0.1:8288)"
-        description "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders (ADR-030)"
+        technology "Dedicated Hetzner host, private-net 10.0.1.40:8288/:8289"
+        description "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178)"
       }
       inngestPostgres = database "Supabase PostgreSQL (Inngest)" {
         technology "PostgreSQL — dedicated EU project, Supavisor session pooler :5432"
@@ -342,13 +342,13 @@ model {
   api -> stripe "Checkout and webhooks" { technology "HTTPS" }
   api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); the board is the canonical Status store (ADR-097). The Phase-1 lifecycle→board write path runs inside GitHub Actions (github-internal) so it needs no cross-boundary edge." { technology "HTTPS (REST + GraphQL)" }
   dashboard -> plausible "Page view events" { technology "JS snippet" }
-  api -> inngest "Sends events; serves functions" { technology "HTTP loopback :8288/:3000" }
+  api -> inngest "Sends events; serves functions" { technology "HTTP private-net :8288" }
   resend -> api "Inbound email webhook (svix-verified) → email-triage ingress" { technology "HTTPS" }
   api -> resend "Statutory triage notifications (single configured recipient; reads are Owner-shared per ADR-066)" { technology "HTTPS" }
   inngest -> supabase "Email-triage claim/finalize writes (email-on-received)" { technology "PostgreSQL" }
   inngest -> inngestPostgres "Config + run history" { technology "PostgreSQL session pooler :5432" }
   inngest -> inngestRedis "Durable queue + run-state" { technology "Redis (AOF)" }
-  hetzner -> inngest "Hosts" { technology "systemd" }
+  hetzner -> inngest "Hosts (dedicated single-host node, private-net 10.0.1.40; removed from web cloud-init — ADR-100, #6178)" { technology "systemd" }
   hetzner -> zotRegistry "Pulls app image + baked bootstrap scripts/hooks + the cosign .sig at boot/deploy — zot-primary, dark-launch gated (attempts zot only when configured + /v2/-reachable + login ok); the SAME @sha256 digest dual-pushed from CI; verify is offline against the unchanged pinned root, no live sigstore call (ADR-096, #6122)" { technology "Docker/zot (private-net, plain-HTTP + insecure-registries)" }
   hetzner -> ghcr "Atomic fallback pull when zot is unconfigured/unreachable — dual-pushed + break-glass through the Phase-5 soak, then retired; authenticated (read:packages), immutable @sha256 digest, offline cosign verify (#5921, #5887, #6005)" { technology "Docker/GHCR (authenticated, fallback)" }
   betterstack -> hetzner "Per-host origin uptime probe (web-N.app.soleur.ai/health, CF-proxied) — absence detector (#5933 Item 1)" { technology "HTTPS via CF edge" }
@@ -356,7 +356,7 @@ model {
   // NOTE: the former `hetzner -> sigstore` verify edge was REMOVED (#6005/ADR-087) — it was
   // falsified: with a pinned local trusted_root.json + offline verify the host makes NO live
   // sigstore call at verify time. The signature bundle is fetched from `ghcr` (edge above).
-  doppler -> inngest "Injects secrets" { technology "CLI (doppler run prd)" }
+  doppler -> inngest "Injects secrets — dedicated host's boot credential is scoped to the SEPARATE Doppler project `soleur-inngest` (its own `prd` root holds only inngest secrets: Postgres URI, freshly-rotated signing/event keys, Redis pw), NOT a `prd` branch config that would inherit all ~116 soleur/prd secrets (ADR-100, #6178; mirrors the soleur-registry isolation #6122)" { technology "CLI (doppler run soleur-inngest)" }
   // #6122 (ADR-096, isolation amendment) — the registry host's boot credential is scoped to a
   // SEPARATE Doppler project `soleur-registry` (its own `prd` root holds ONLY the 2 ZOT htpasswd
   // tokens), NOT a `prd` branch config that would inherit all 116 soleur/prd secrets. #6167 audits

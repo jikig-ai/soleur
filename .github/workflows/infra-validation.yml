@@ -276,6 +276,9 @@ jobs:
       - name: Run inngest.tf + bootstrap drift-guards
         run: bash apps/web-platform/infra/inngest.test.sh
 
+      - name: Run inngest-host.tf dedicated-host drift-guard (#6178)
+        run: bash apps/web-platform/infra/inngest-host.test.sh
+
       - name: Run cutover-inngest.yml workflow tests
         run: bash apps/web-platform/infra/cutover-inngest-workflow.test.sh
 
