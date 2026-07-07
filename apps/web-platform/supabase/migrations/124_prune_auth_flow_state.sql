@@ -45,11 +45,13 @@
 --   this prune does not touch.
 --
 -- Permissioning: runs as `postgres`, which holds an explicit DELETE grant on
---   auth.flow_state AND rolbypassrls (both live-verified 2026-07-07) — like every
---   one of the 14 existing retention crons. No SECURITY DEFINER function is needed
---   or introduced. This is the first in-repo cron to own retention on a
---   GoTrue-managed `auth` schema table (all prior crons target public.*); the
---   DELETE grant is revocable by a future platform upgrade — on revocation the cron
+--   auth.flow_state AND rolbypassrls (both live-verified 2026-07-07) — like the
+--   sibling pg_cron retention jobs (103/115/094/076/038), which all run as
+--   `postgres`. No SECURITY DEFINER function is needed or introduced. This is the
+--   first in-repo cron to own retention on a vendor-auth (GoTrue-managed) `auth`
+--   schema table — every prior retention cron targets public.* EXCEPT 115, which
+--   prunes the pg_cron-owned `cron` schema; none touch a vendor-owned auth schema.
+--   The DELETE grant is revocable by a future platform upgrade — on revocation the cron
 --   simply errors (visible in cron.job_run_details) with NO data risk, failing OPEN
 --   (stale-token minimization lapses; it does not fail closed). Accepted in writing
 --   at p3 (see plan Observability §Fails-open + ADR-098).
@@ -57,7 +59,7 @@
 -- Atomicity: run-migrations.sh runs each file under `psql --single-transaction`, so
 --   the cron schedule AND the one-time purge commit/rollback as one unit. Do NOT add
 --   a top-level BEGIN;/COMMIT; here — a self-issued COMMIT breaks ledger idempotency
---   (2026-05-25-migration-body-no-top-level-begin-commit.md). The
+--   (knowledge-base/project/learnings/build-errors/2026-05-25-migration-body-no-top-level-begin-commit.md). The
 --   `EXCEPTION WHEN duplicate_object` guard is belt-and-suspenders on top of the
 --   cron.unschedule guard.
 --
@@ -97,7 +99,10 @@ END $cron_block$;
 -- ROW EXCLUSIVE only (never ACCESS EXCLUSIVE) and matches only stale rows
 -- (created_at < now() - 7d), so it cannot lock or block a concurrent live sign-in
 -- (GoTrue touches rows < ~5 min old on exchange). The one referential dependent,
--- auth.saml_relay_states.flow_state_id, is live-verified empty (Soleur has no SAML
--- SSO wiring) so there is no cascade child.
+-- auth.saml_relay_states.flow_state_id, is FK'd ON DELETE CASCADE (live-verified
+-- 2026-07-07) and is currently empty (Soleur has no SAML SSO wiring). So even if a
+-- future SAML onboarding populated it, deleting an aged-out parent flow_state would
+-- cascade-delete its ephemeral relay-state child — never block, never orphan, never
+-- error. The prune reaches into saml_relay_states via that cascade by design.
 
 DELETE FROM auth.flow_state WHERE created_at < now() - interval '7 days';

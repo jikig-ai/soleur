@@ -4,7 +4,7 @@
 - **Date:** 2026-07-07
 - **Issue:** [#5739](https://github.com/jikig-ai/soleur/issues/5739)
 - **Migration:** `apps/web-platform/supabase/migrations/124_prune_auth_flow_state.sql`
-- **Precedent (mechanism):** [ADR-030](./ADR-030-inngest-as-durable-trigger-layer.md) (Inngest is the durable trigger layer for *application* scheduled work; a DB-internal retention sweep with no app context is pg_cron's job); retention siblings `103_github_events_retention_7day.sql`, `115_prune_cron_job_run_details.sql`, `094`, `076`, `038` (all pg_cron, all `public.*`).
+- **Precedent (mechanism):** [ADR-030](./ADR-030-inngest-as-durable-trigger-layer.md) (Inngest is the durable trigger layer for *application* scheduled work; a DB-internal retention sweep with no app context is pg_cron's job); retention siblings `103_github_events_retention_7day.sql`, `115_prune_cron_job_run_details.sql`, `094`, `076`, `038` (all pg_cron; all target `public.*` except 115, which prunes the pg_cron-owned `cron` schema).
 
 ## Context
 
@@ -19,9 +19,11 @@ Live: 4,303 rows, 3,796 older than 7 days, oldest ~3.7 months, **99.6% abandoned
 `provider_refresh_token`, so months-stale third-party OAuth credentials sit in the DB —
 a security / GDPR data-minimization concern on top of bloat.
 
-The pg_cron retention *mechanism* is well-established (5 sibling crons). The **novel
-axis** here is the target schema: this is the **first** in-repo cron to own retention on
-a **GoTrue-managed `auth` schema** table — every prior retention cron targets `public.*`.
+The pg_cron retention *mechanism* is well-established (5 sibling retention crons:
+103/115/094/076/038). The **novel axis** here is the target schema: this is the **first**
+in-repo cron to own retention on a **vendor-auth (GoTrue-managed) `auth` schema** table —
+every prior retention cron targets `public.*` except 115, which prunes the pg_cron-owned
+`cron` schema; none reach into a vendor-component-owned schema.
 That makes it a cross-boundary decision (Soleur taking over the lifecycle of a
 vendor-component-owned table) and precedent-setting for the next auth-schema prune, which
 is why it warrants an ADR rather than a silent pattern application.
@@ -31,9 +33,9 @@ is why it warrants an ADR rather than a silent pattern application.
 Soleur owns `auth.flow_state` retention via a **daily pg_cron DELETE** (`0 4 * * *`,
 predicate `created_at < now() - interval '7 days'`) run as **`postgres`** — which holds
 an explicit `DELETE` grant on `auth.flow_state` **and** `rolbypassrls` (both live-verified
-2026-07-07), exactly like all 14 existing retention crons. **No SECURITY DEFINER function
-is introduced.** A one-time in-transaction backlog purge (same predicate) ships in the
-migration so relief lands at deploy.
+2026-07-07), exactly like the sibling pg_cron retention jobs (103/115/094/076/038, all run
+as `postgres`). **No SECURITY DEFINER function is introduced.** A one-time in-transaction
+backlog purge (same predicate) ships in the migration so relief lands at deploy.
 
 **7-day window + floor-invariant.** The window matches siblings 103/115. The unexchangeable
 floor is ~10 min (PKCE `FlowStateExpiryDuration` 5 min; live `mailer_otp_exp` 600 s at
@@ -69,7 +71,15 @@ reads `created_at`).
   Sentry/Better Stack alert. A row-count tripwire (mirroring migration 095's
   `processed_github_events` monitor) is the follow-up if the security weight grows.
 - **Scope boundary.** This touches `flow_state` (PKCE/OAuth/magic-link/SSO web flows) only.
-  MFA/AAL2 challenges live in `auth.mfa_challenges` — untouched.
+  MFA/AAL2 challenges live in `auth.mfa_challenges` — untouched. `flow_state` holds no
+  session/refresh state (those live in `auth.sessions`/`auth.refresh_tokens`), so a prune
+  cannot log an authenticated user out. The one referential dependent
+  (`auth.saml_relay_states.flow_state_id`) is FK'd `ON DELETE CASCADE` (live-verified), so a
+  future non-empty child cascade-deletes with the aged-out parent — never blocks, never errors.
+- **AP-009 ("never delete user data") does not fire.** Expired/abandoned `flow_state` rows are
+  transient auth-flow protocol scratch state (99.6% never issued an auth code), not user data;
+  pruning them advances data-minimization (Art. 5(1)(e) storage limitation) rather than
+  violating AP-009. Named explicitly here because this is a precedent-setting auth-schema ADR.
 - **Precedent for the next auth-schema prune.** Future retention on a GoTrue/platform-owned
   table should follow this shape (run as `postgres` on an explicit grant, re-verify the grant
   read-only at plan time, no DEFINER) unless the grant has since tightened.

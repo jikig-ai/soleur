@@ -328,8 +328,9 @@ daily cron `DELETE` is identically non-blocking. No `ALTER TABLE` / `ADD COLUMN`
 DDL is involved — the Phase 4.55 database-lock triggers do not fire; this note is recorded
 defensively given the `single-user incident` threshold. No maintenance window needed. (The one
 referential dependent — `auth.saml_relay_states.flow_state_id` → `flow_state(id)` — is confirmed
-empty in Phase 0, so the "row locks on stale rows only" claim holds with no cascade child; if it
-were ever non-empty, a `NO ACTION` FK would surface as a visible cron error, never corruption.)
+empty in Phase 0, so the "row locks on stale rows only" claim holds with no cascade child today;
+the FK is `ON DELETE CASCADE` (live-verified 2026-07-07), so if it were ever non-empty a parent
+delete would cascade-delete its ephemeral relay-state child — never block, never orphan, never error.)
 
 ## Precedent-Diff (Phase 4.4)
 
