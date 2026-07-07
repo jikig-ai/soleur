@@ -241,7 +241,11 @@ model {
   }
   ghcr = system "GitHub Container Registry" {
     #external
-    description "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — source of the web app image a Hetzner host pulls (authenticated via a scoped read:packages credential; the host docker login is done by ci-deploy.sh / the fresh-boot bootstrap, #6005). The image also bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+    description "PRIVATE GHCR registry (ghcr.io/jikig-ai/soleur-web-platform + soleur-inngest-bootstrap) — the ORIGINAL host pull source, now the DUAL-PUSH + break-glass FALLBACK during the migration to self-hosted zot (ADR-096, #6122); retired from the pull path after the Phase-5 soak (App tokens can't pull GHCR, so it cannot deliver a zero-touch machine credential — ADR-088 superseded). Still bakes the host bootstrap scripts + hooks.json.tmpl, extracted via docker cp at first boot to keep cloud-init user_data under Hetzner's 32,768-byte cap (ADR-080, #5921)."
+  }
+  zotRegistry = system "Self-hosted zot registry" {
+    #selfhosted
+    description "OCI-native container registry (zot) on a dedicated Hetzner host (cax11, volume-backed) on the private network (10.0.1.30:5000), behind a deny-all-public firewall — the zero-touch machine-credential registry that replaces GHCR on the pull path (ADR-096, #6122). Hosts pull the SAME @sha256 digests here (crane-copy from CI preserves them); cosign verifies the zot-stored .sig offline against the unchanged pinned root. Plain-HTTP on the private net (integrity via cosign digest-pinning, not TLS); dark-launch gated with an atomic GHCR fallback until the Phase-5 soak retires GHCR push."
   }
   betterstack = system "Better Stack" {
     #external
@@ -344,7 +348,8 @@ model {
   inngest -> inngestPostgres "Config + run history" { technology "PostgreSQL session pooler :5432" }
   inngest -> inngestRedis "Durable queue + run-state" { technology "Redis (AOF)" }
   hetzner -> inngest "Hosts" { technology "systemd" }
-  hetzner -> ghcr "Pulls app image + baked bootstrap scripts/hooks at boot; authenticated (read:packages) since the packages are private; a web-2-recreate boot pins an immutable @sha256 digest (coherence-checked vs host_scripts_content_hash, not :latest); the cosign signature bundle is fetched here too — verify is offline against a pinned root, so there is no live sigstore call (#5921, #5887, #6005)" { technology "Docker/GHCR (authenticated)" }
+  hetzner -> zotRegistry "Pulls app image + baked bootstrap scripts/hooks + the cosign .sig at boot/deploy — zot-primary, dark-launch gated (attempts zot only when configured + /v2/-reachable + login ok); the SAME @sha256 digest dual-pushed from CI; verify is offline against the unchanged pinned root, no live sigstore call (ADR-096, #6122)" { technology "Docker/zot (private-net, plain-HTTP + insecure-registries)" }
+  hetzner -> ghcr "Atomic fallback pull when zot is unconfigured/unreachable — dual-pushed + break-glass through the Phase-5 soak, then retired; authenticated (read:packages), immutable @sha256 digest, offline cosign verify (#5921, #5887, #6005)" { technology "Docker/GHCR (authenticated, fallback)" }
   betterstack -> hetzner "Per-host origin uptime probe (web-N.app.soleur.ai/health, CF-proxied) — absence detector (#5933 Item 1)" { technology "HTTPS via CF edge" }
   github -> sigstore "Keyless-signs the released app image digest (cosign, OIDC→Fulcio→Rekor) (#5933 Item 4)" { technology "HTTPS (cosign)" }
   // NOTE: the former `hetzner -> sigstore` verify edge was REMOVED (#6005/ADR-087) — it was

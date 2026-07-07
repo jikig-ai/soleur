@@ -193,3 +193,41 @@ jobs:
           docker build -t "$IMAGE:$TAG" "$BUILD_DIR"
           docker push "$IMAGE:$TAG"
           echo "Pushed $IMAGE:$TAG"
+
+      # --- #6122 (ADR-096) Phase 2: dual-push the inngest-bootstrap image to the self-hosted
+      # zot registry. The plain `docker build`/`docker push` above leaves the image in the
+      # runner's local docker, so `docker tag` + `docker push 127.0.0.1:5000/...` mirrors it
+      # over the CF Tunnel bridge directly (no crane/buildx-localhost issue). GHCR push stays
+      # primary (break-glass through the Phase-5 soak). Additive: a zot/bridge failure must not
+      # fail the GHCR release (bridge continue-on-error; teardown if:always()). This image is
+      # NOT cosign-signed (no id-token perm) — parity with the GHCR side, no sign step.
+      - name: Bridge to zot registry (CF Tunnel)
+        id: zot_bridge
+        continue-on-error: true
+        uses: ./.github/actions/cf-tunnel-registry-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          cloudflared-version: "2026.5.0"
+          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+
+      - name: Mirror inngest image GHCR→zot (docker tag + push)
+        if: steps.zot_bridge.outcome == 'success'
+        env:
+          IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ZOT="127.0.0.1:5000/soleur-inngest-bootstrap"
+          docker tag "$IMAGE:$TAG" "$ZOT:$TAG"
+          docker push "$ZOT:$TAG"
+          echo "Pushed $ZOT:$TAG"
+
+      - name: Tear down cloudflared registry bridge
+        if: always()
+        run: |
+          set +e
+          docker logout 127.0.0.1:5000 2>/dev/null || true
+          if [[ -n "${REGISTRY_BRIDGE_PID:-}" ]]; then
+            kill "$REGISTRY_BRIDGE_PID" 2>/dev/null || true
+          fi
+          [[ -f /tmp/cloudflared-registry.log ]] && tail -n 200 /tmp/cloudflared-registry.log || true
