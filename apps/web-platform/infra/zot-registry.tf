@@ -74,20 +74,34 @@ resource "random_password" "zot_push" {
 # (A standalone *environment* in `soleur` was rejected: the project is at the 4-environment
 # tier cap — dev/prd/ci/cli — so a 5th env is impossible without a Doppler Team-plan upgrade.)
 #
-# PROVISIONING: `doppler_project.registry` is TF-created in the operator's full apply
-# (var.doppler_token_tf is a workplace-scope personal token; provider create-project scope is
-# verified at apply). FALLBACK if project-create is denied at apply: create the project once
-# via the dashboard (New PROJECT `soleur-registry` — NOT a config under `prd`), TF then managing
-# only the two secrets + the token inside it — identical isolation, one dashboard step. Rotate
-# via `terraform apply -replace=random_password.zot_pull`.
+# PROVISIONING (fully automated — ZERO operator CLI actions, per
+# hr-fresh-host-provisioning-reachable-from-terraform-apply): the agent's `terraform apply` stands
+# the whole isolation boundary up from empty state. Terraform creates the isolated project
+# (`doppler_project.registry`) AND its `prd` environment + root config (`doppler_environment.registry_prd`),
+# then writes the two host secrets + the boot token into that config. var.doppler_token_tf is a
+# workplace-scope personal token (create-project + create-environment scope). Rotate via
+# `terraform apply -replace=random_password.zot_pull`.
 resource "doppler_project" "registry" {
   name        = "soleur-registry"
   description = "Isolated boot-credential project for the zot registry host (#6122, ADR-096) — its `prd` root config holds ONLY the two ZOT htpasswd tokens; cross-project isolation from soleur/prd (no shared root-secret resolution path)."
 }
 
+# The `prd` environment + its root config inside the isolated project. REQUIRED for zero-operator
+# provisioning: a TF-created `doppler_project` is created BARE (no default dev/stg/prd configs that
+# the Doppler CLI/dashboard would auto-add), so without this the host secrets below fail at apply
+# with "Doppler Error: Could not find requested config 'prd'" (#6122 provisioning). Creating the
+# environment also creates its same-named root config, which is the isolation boundary the host
+# boot token resolves. Does NOT need the paid config-inheritance feature (#6067) — it is a basic
+# Project-Structure resource, not a branch config.
+resource "doppler_environment" "registry_prd" {
+  project = doppler_project.registry.name
+  slug    = "prd"
+  name    = "Production"
+}
+
 resource "doppler_secret" "zot_pull_token_registry" {
   project    = doppler_project.registry.name
-  config     = "prd"
+  config     = doppler_environment.registry_prd.slug
   name       = "ZOT_PULL_TOKEN"
   value      = random_password.zot_pull.result
   visibility = "masked"
@@ -95,7 +109,7 @@ resource "doppler_secret" "zot_pull_token_registry" {
 
 resource "doppler_secret" "zot_push_token_registry" {
   project    = doppler_project.registry.name
-  config     = "prd"
+  config     = doppler_environment.registry_prd.slug
   name       = "ZOT_PUSH_TOKEN"
   value      = random_password.zot_push.result
   visibility = "masked"
@@ -107,7 +121,7 @@ resource "doppler_secret" "zot_push_token_registry" {
 # rotate via `terraform apply -replace=doppler_service_token.registry`.
 resource "doppler_service_token" "registry" {
   project = doppler_project.registry.name
-  config  = "prd"
+  config  = doppler_environment.registry_prd.slug
   name    = "zot-registry-boot"
   access  = "read"
 }
