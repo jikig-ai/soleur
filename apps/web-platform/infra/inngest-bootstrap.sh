@@ -29,11 +29,29 @@ set -euo pipefail
 # substitution. Default-to-empty triggers loud failure at runtime check.
 INNGEST_CLI_VERSION="${INNGEST_CLI_VERSION:-}"
 INNGEST_CLI_SHA256="${INNGEST_CLI_SHA256:-}"
+# #6178: the co-located web host is amd64; the dedicated inngest host (cax11) is
+# ARM64. Default amd64 PRESERVES the web-host behavior (cross-consumer edit —
+# hr-type-widening-cross-consumer-grep); the dedicated host's cloud-init passes
+# INNGEST_CLI_ARCH=arm64 AND an arch-matching INNGEST_CLI_SHA256 (the arm64 tarball
+# SHA — the amd64 image-baked SHA would fail the verify below on an arm64 download).
+INNGEST_CLI_ARCH="${INNGEST_CLI_ARCH:-amd64}"
+# #6178 cross-consumer templating (defaults PRESERVE the co-located web-host behavior;
+# the dedicated inngest host overrides both). SDK_URL: the app serve URL inngest syncs +
+# invokes (Phase-0.2 spike: route-once → a single stable URL; the dedicated host points
+# at the active web backend's private interface). DOPPLER_PROJECT: the dedicated host's
+# boot token is scoped to the ISOLATED `soleur-inngest` project (AC3), so its ExecStart
+# `doppler run` must target that project, not `soleur`.
+SDK_URL="${SDK_URL:-http://127.0.0.1:3000/api/inngest}"
+DOPPLER_PROJECT="${DOPPLER_PROJECT:-soleur}"
 
 if [[ -z "$INNGEST_CLI_VERSION" || -z "$INNGEST_CLI_SHA256" ]]; then
   echo "ERROR: INNGEST_CLI_VERSION and INNGEST_CLI_SHA256 must be set (templated at build/cloud-init time)" >&2
   exit 1
 fi
+case "$INNGEST_CLI_ARCH" in
+  amd64 | arm64) ;;
+  *) echo "ERROR: INNGEST_CLI_ARCH must be amd64 or arm64 (got '$INNGEST_CLI_ARCH')" >&2; exit 1 ;;
+esac
 
 readonly INSTALL_PATH="/usr/local/bin/inngest"
 readonly VERSION_FILE="/var/lib/inngest/version"
@@ -41,7 +59,7 @@ readonly UNIT_FILE="/etc/systemd/system/inngest-server.service"
 readonly HEARTBEAT_UNIT="/etc/systemd/system/inngest-heartbeat.service"
 readonly HEARTBEAT_TIMER="/etc/systemd/system/inngest-heartbeat.timer"
 readonly HEARTBEAT_SCRIPT="/usr/local/bin/inngest-heartbeat.sh"
-readonly DOWNLOAD_URL="https://github.com/inngest/inngest/releases/download/${INNGEST_CLI_VERSION}/inngest_${INNGEST_CLI_VERSION#v}_linux_amd64.tar.gz"
+readonly DOWNLOAD_URL="https://github.com/inngest/inngest/releases/download/${INNGEST_CLI_VERSION}/inngest_${INNGEST_CLI_VERSION#v}_linux_${INNGEST_CLI_ARCH}.tar.gz"
 # In-place upgrade drain. Override via env at install time if event volume
 # exceeds ~10 events/sec sustained — at higher rates the SQLite fsync window
 # can leave some inbound HTTP events unacknowledged. Default is fine for
@@ -336,7 +354,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest'
+ExecStart=/usr/bin/doppler run --project @@DOPPLER_PROJECT@@ --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
 Restart=on-failure
 RestartSec=5
 User=deploy
@@ -390,6 +408,9 @@ fi
 unit_content="$(cat "$UNIT_FILE")"
 unit_content="${unit_content//@@BACKEND_ENV@@/$BACKEND_ENV}"
 unit_content="${unit_content//@@BACKEND_FLAGS@@/$BACKEND_FLAGS}"
+# #6178: same bash-parameter-expansion mechanism (NOT sed — SDK_URL contains `/`).
+unit_content="${unit_content//@@SDK_URL@@/$SDK_URL}"
+unit_content="${unit_content//@@DOPPLER_PROJECT@@/$DOPPLER_PROJECT}"
 printf '%s\n' "$unit_content" > "$UNIT_FILE"
 
 # Record the installed version BEFORE restart so the idempotency short-circuit

@@ -155,8 +155,25 @@ assert "inngest-server unit block extracted (non-empty)" \
 # AC1: each new flag asserted independently (flag-order-insensitive).
 assert "server ExecStart sets --poll-interval 60" \
   "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE 'inngest start .*--poll-interval 60'"
-assert "server ExecStart sets --sdk-url loopback app route (port 3000)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'sdk-url http://127.0.0.1:3000/api/inngest'"
+# #6178: --sdk-url is now TEMPLATED (@@SDK_URL@@ sentinel, same bash-param-expansion
+# mechanism as @@BACKEND_*@@) so the dedicated inngest host can point at a remote web
+# backend's private interface. The heredoc carries the sentinel; a substitution strips
+# it; the SDK_URL DEFAULT preserves the exact co-located loopback literal (the web-host
+# regression guard — cross-consumer behavior-preservation, hr-type-widening-cross-consumer-grep).
+assert "server ExecStart carries the @@SDK_URL@@ sentinel (templated, #6178)" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'sdk-url @@SDK_URL@@'"
+assert "the @@SDK_URL@@ sentinel is substituted (bash param expansion, not sed)" \
+  "grep -qE '@@SDK_URL@@/' \"\$BOOTSTRAP_SH\""
+assert "SDK_URL default PRESERVES the co-located loopback app route (web regression guard, #6178)" \
+  "grep -qF 'SDK_URL=\"\${SDK_URL:-http://127.0.0.1:3000/api/inngest}\"' \"\$BOOTSTRAP_SH\""
+# #6178: the ExecStart doppler project is templated (@@DOPPLER_PROJECT@@) so the dedicated
+# host targets its ISOLATED `soleur-inngest` project; the default preserves `soleur` for web.
+assert "server ExecStart carries the @@DOPPLER_PROJECT@@ sentinel (templated, #6178)" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'run --project @@DOPPLER_PROJECT@@ --config prd'"
+assert "the @@DOPPLER_PROJECT@@ sentinel is substituted" \
+  "grep -qE '@@DOPPLER_PROJECT@@/' \"\$BOOTSTRAP_SH\""
+assert "DOPPLER_PROJECT default PRESERVES 'soleur' for the co-located web host (regression guard, #6178)" \
+  "grep -qF 'DOPPLER_PROJECT=\"\${DOPPLER_PROJECT:-soleur}\"' \"\$BOOTSTRAP_SH\""
 # Regression guard: the signing-key strip survives the edit as an ENV export (#5560 —
 # inngest reads INNGEST_SIGNING_KEY from env; the `signkey-prod-` strip is preserved so
 # the self-hosted server gets the bare hex). The systemd `$$` escape must not be
