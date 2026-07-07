@@ -84,9 +84,9 @@ describe("GuidedTour overlay", () => {
   });
 
   it("renders a box-shadow spotlight when the target is present with a real rect", async () => {
-    // A spotlight step (stepIndex 1 → /dashboard) with a measurable target.
+    // A spotlight step (stepIndex 1 → start-a-conversation action) with a target.
     const a = document.createElement("a");
-    a.setAttribute("data-tour-id", "/dashboard");
+    a.setAttribute("data-tour-id", "action:new-conversation");
     a.getBoundingClientRect = () =>
       ({ top: 100, left: 60, width: 200, height: 44, right: 260, bottom: 144, x: 60, y: 100, toJSON: () => ({}) }) as DOMRect;
     document.body.appendChild(a);

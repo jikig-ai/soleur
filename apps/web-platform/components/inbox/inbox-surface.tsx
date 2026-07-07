@@ -109,6 +109,7 @@ export function InboxSurface() {
       <RefreshShimmer active={isValidating && items !== undefined} />
       <div
         role="tablist"
+        data-tour-id="action:inbox-triage"
         className="mb-5 flex gap-5 border-b border-soleur-border-default"
       >
         <TabButton active={!archived} onClick={() => selectTab(false)}>

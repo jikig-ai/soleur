@@ -16,13 +16,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { track } from "@/lib/analytics-client";
 import { RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
 import { GuidedTour } from "./guided-tour";
-import { TOUR_STEP_COUNT } from "./tour-steps";
+import { TOUR_STEPS, TOUR_STEP_COUNT } from "./tour-steps";
 
 export interface TourContextValue {
   /** True only when the guided-tour flag is on (launch points gate on this). */
@@ -57,6 +57,7 @@ export function useTour(): TourContextValue {
 export function TourProvider({ children }: { children: React.ReactNode }) {
   const enabled = useOptionalFeatureFlag("guided-tour");
   const pathname = usePathname();
+  const router = useRouter();
   const { onboardingLoaded, onboardingCompletedAt, tourCompletedAt } =
     useOnboarding();
 
@@ -141,6 +142,18 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
     pathname,
     startTour,
   ]);
+
+  // Action steps live on their own route. When the active step declares a `route`
+  // that isn't the current one, navigate there so its `data-tour-id` target can
+  // mount — the overlay polls for it before drawing the spotlight. Nav-link steps
+  // (Settings, Welcome) omit `route` and stay put.
+  useEffect(() => {
+    if (!active) return;
+    const route = TOUR_STEPS[stepIndex]?.route;
+    if (route && route !== pathname) {
+      router.push(route);
+    }
+  }, [active, stepIndex, pathname, router]);
 
   const value: TourContextValue = {
     available: enabled,
