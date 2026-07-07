@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `listRepoIssues` is exercised against a mocked `githubApiGet` — there are NO
-// live network calls. We assert the PR-filter, the request shape (state=all +
-// per_page=100), pagination (full page → next fetch; short page → stop), and
-// the `name:null` label coercion via normalizeLabel.
+// live network calls. We assert the PR-filter, the SPLIT request shape (all open
+// issues via state=open, then a windowed state=closed for the Done column),
+// pagination (full page → next fetch; short page → stop), the open-cap Sentry
+// mirror, the closed-window bound, and `name:null` label coercion.
 
 const githubApiGet = vi.fn();
 const reportSilentFallback = vi.fn();
@@ -45,8 +46,18 @@ function rawIssue(over: Partial<RawIssue> = {}): RawIssue {
   };
 }
 
+const path = (i: number) => githubApiGet.mock.calls[i][1] as string;
+const paths = () => githubApiGet.mock.calls.map((c) => c[1] as string);
+const callsMatching = (needle: string) =>
+  githubApiGet.mock.calls.filter((c) => (c[1] as string).includes(needle));
+const fullPage = () => Array.from({ length: 100 }, (_, i) => rawIssue({ number: i + 1 }));
+// The real `page` param — matched with a leading `&` so it can't collide with
+// the `page=1` substring inside `per_page=100`.
+const pageOf = (p: string) => Number(/&page=(\d+)/.exec(p)?.[1] ?? 0);
+
 beforeEach(() => {
   githubApiGet.mockReset();
+  githubApiGet.mockResolvedValue([]); // default: every state/page empty
   reportSilentFallback.mockReset();
 });
 afterEach(() => {
@@ -55,10 +66,16 @@ afterEach(() => {
 
 describe("listRepoIssues", () => {
   it("filters out items carrying a pull_request key, keeps plain issues", async () => {
-    githubApiGet.mockResolvedValueOnce([
-      rawIssue({ number: 10, title: "A real issue" }),
-      rawIssue({ number: 11, title: "A PR masquerading", pull_request: { url: "x" } }),
-    ]);
+    githubApiGet.mockImplementation((_i: unknown, p: string) =>
+      Promise.resolve(
+        p.includes("state=open")
+          ? [
+              rawIssue({ number: 10, title: "A real issue" }),
+              rawIssue({ number: 11, title: "A PR", pull_request: { url: "x" } }),
+            ]
+          : [],
+      ),
+    );
 
     const out = await listRepoIssues(123, "acme", "widgets");
 
@@ -67,39 +84,79 @@ describe("listRepoIssues", () => {
     expect(out[0].title).toBe("A real issue");
   });
 
-  it("requests state=all and per_page=100", async () => {
-    githubApiGet.mockResolvedValueOnce([]);
-
+  it("reads ALL open issues, then a windowed recently-updated closed set", async () => {
     await listRepoIssues(123, "acme", "widgets");
 
-    expect(githubApiGet).toHaveBeenCalledTimes(1);
-    const path = githubApiGet.mock.calls[0][1] as string;
-    expect(path).toContain("/repos/acme/widgets/issues");
-    expect(path).toContain("state=all");
-    expect(path).toContain("per_page=100");
+    // Empty repo: open page 1 (short) + closed page 1 (short) = 2 calls.
+    expect(githubApiGet).toHaveBeenCalledTimes(2);
+    expect(path(0)).toContain("/repos/acme/widgets/issues");
+    expect(path(0)).toContain("state=open");
+    expect(path(1)).toContain("state=closed");
+    // Done column shows the most-recently-updated closures first.
+    expect(path(1)).toContain("sort=updated");
+    expect(path(1)).toContain("direction=desc");
+    // Both use the max page size.
+    expect(paths().every((p) => p.includes("per_page=100"))).toBe(true);
   });
 
-  it("pages: a full first page triggers a second fetch; a short page stops", async () => {
-    const fullPage = Array.from({ length: 100 }, (_, i) =>
-      rawIssue({ number: i + 1 }),
-    );
-    const shortPage = [rawIssue({ number: 101 })];
-    githubApiGet
-      .mockResolvedValueOnce(fullPage)
-      .mockResolvedValueOnce(shortPage);
+  it("pages open issues: a full first page triggers a second fetch; a short page stops", async () => {
+    const short = [rawIssue({ number: 101 })];
+    githubApiGet.mockImplementation((_i: unknown, p: string) => {
+      if (p.includes("state=open")) {
+        if (pageOf(p) === 1) return Promise.resolve(fullPage());
+        if (pageOf(p) === 2) return Promise.resolve(short);
+      }
+      return Promise.resolve([]);
+    });
 
     const out = await listRepoIssues(123, "acme", "widgets");
 
-    expect(githubApiGet).toHaveBeenCalledTimes(2);
-    expect((githubApiGet.mock.calls[0][1] as string)).toContain("page=1");
-    expect((githubApiGet.mock.calls[1][1] as string)).toContain("page=2");
-    expect(out).toHaveLength(101);
+    const openCalls = callsMatching("state=open");
+    expect(openCalls).toHaveLength(2);
+    expect(openCalls[0][1] as string).toContain("page=1");
+    expect(openCalls[1][1] as string).toContain("page=2");
+    expect(out.filter((i) => i.state === "open")).toHaveLength(101);
   });
 
-  it("coerces a label object with name:null to \"\" via normalizeLabel", async () => {
-    githubApiGet.mockResolvedValueOnce([
-      rawIssue({ number: 5, labels: [{ name: null }, { name: "blocked" }, "raw-string"] }),
-    ]);
+  it("mirrors a Sentry fallback when the OPEN read hits its page cap (active columns truncated)", async () => {
+    // Every open page comes back full → the 20-page open cap is hit.
+    githubApiGet.mockImplementation((_i: unknown, p: string) =>
+      Promise.resolve(p.includes("state=open") ? fullPage() : []),
+    );
+
+    await listRepoIssues(123, "acme", "widgets");
+
+    expect(callsMatching("state=open")).toHaveLength(20); // MAX_OPEN_PAGES
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const ctx = reportSilentFallback.mock.calls[0][1] as { op: string };
+    expect(ctx.op).toBe("list-repo-issues-open-cap");
+  });
+
+  it("windows the CLOSED read to a bounded page count WITHOUT a truncation warning", async () => {
+    // Every closed page comes back full → the closed window stops at its cap,
+    // but that is intentional (old closures aren't actionable) → no Sentry.
+    githubApiGet.mockImplementation((_i: unknown, p: string) =>
+      Promise.resolve(
+        p.includes("state=closed")
+          ? Array.from({ length: 100 }, (_, i) => rawIssue({ number: i + 1, state: "closed" }))
+          : [],
+      ),
+    );
+
+    await listRepoIssues(123, "acme", "widgets");
+
+    expect(callsMatching("state=closed")).toHaveLength(3); // MAX_CLOSED_PAGES
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it('coerces a label object with name:null to "" via normalizeLabel', async () => {
+    githubApiGet.mockImplementation((_i: unknown, p: string) =>
+      Promise.resolve(
+        p.includes("state=open")
+          ? [rawIssue({ number: 5, labels: [{ name: null }, { name: "blocked" }, "raw-string"] })]
+          : [],
+      ),
+    );
 
     const out = await listRepoIssues(123, "acme", "widgets");
 
