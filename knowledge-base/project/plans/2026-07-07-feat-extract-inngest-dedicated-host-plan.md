@@ -389,6 +389,14 @@ Not deferred.
 
 ## Infrastructure (IaC)
 
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!-- All provisioning is Terraform (`inngest-host.tf`) + cloud-init (`cloud-init-inngest.yml`)
+     + the baked `inngest-bootstrap.sh`; no manual host steps. The ONLY non-TF-minted values are
+     the pre-existing sanctioned out-of-band secrets `INNGEST_POSTGRES_URI` and `BETTERSTACK_LOGS_TOKEN`
+     (the URI embeds a project-side secret Terraform never mints — the established `inngest.tf` doctrine,
+     not a new manual step). Reviewed 2026-07-07. -->
+
+
 ### Terraform changes
 New `apps/web-platform/infra/inngest-host.tf` (host/volume/attachment/server_network/
 firewall + `hcloud_firewall.web` inbound for `10.0.1.40`). Secrets on a **separate
