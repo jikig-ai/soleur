@@ -25,7 +25,7 @@ If `--headless` is present, skip all interactive prompts and approval gates.
 Platform detection is centralized in [community-router.sh](./scripts/community-router.sh). Run at the start of every sub-command:
 
 ```bash
-bash plugins/soleur/skills/community/scripts/community-router.sh platforms
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/community/scripts/community-router.sh platforms
 ```
 
 This prints each platform's name, enabled/disabled status, and script filename. The router's `PLATFORMS` array is the single source of truth for platform names, required env vars, and auth checks. To add a new platform, add one entry to the array and create the script.
@@ -70,7 +70,7 @@ Display community health metrics across all enabled platforms. Spawns the `commu
 
 List all platforms with their configuration status. Does NOT spawn an agent -- runs directly.
 
-1. Run `bash plugins/soleur/skills/community/scripts/community-router.sh platforms`
+1. Run `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/community/scripts/community-router.sh platforms`
 2. For disabled platforms, show setup instructions:
    - Discord: "Run `plugins/soleur/skills/community/scripts/discord-setup.sh` to configure"
    - X/Twitter: "Run `plugins/soleur/skills/community/scripts/x-setup.sh validate-credentials` to verify, or `x-setup.sh write-env` to save credentials"

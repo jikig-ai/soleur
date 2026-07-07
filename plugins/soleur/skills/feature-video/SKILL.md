@@ -34,13 +34,13 @@ This skill creates professional video walkthroughs of features for PR documentat
 Run [check_deps.sh](./scripts/check_deps.sh) before proceeding. When invoked from a pipeline (e.g., one-shot), pass `--auto` to skip interactive prompts and install missing tools automatically:
 
 ```bash
-bash ./plugins/soleur/skills/feature-video/scripts/check_deps.sh
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/feature-video/scripts/check_deps.sh
 ```
 
 For pipeline/automated use:
 
 ```bash
-bash ./plugins/soleur/skills/feature-video/scripts/check_deps.sh --auto
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/feature-video/scripts/check_deps.sh --auto
 ```
 
 If the script exits non-zero, agent-browser is missing and recording cannot proceed. Stop and inform the user.

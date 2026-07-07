@@ -383,7 +383,7 @@ Navigate to the main repository root directory (the parent of `.worktrees/`). Ru
 ### 6.2 Run cleanup
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
 ```
 
 This detects `[gone]` branches (remote deleted after merge), removes worktrees, archives spec directories, deletes local branches, and pulls latest main so the next worktree branches from the current state.

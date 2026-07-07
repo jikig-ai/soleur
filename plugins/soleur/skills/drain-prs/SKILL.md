@@ -46,7 +46,7 @@ Verify `gh` and `jq` are on PATH (abort with installation guidance if missing). 
 Delegate to the helper [triage-prs.sh](./scripts/triage-prs.sh):
 
 ```bash
-bash plugins/soleur/skills/drain-prs/scripts/triage-prs.sh
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/drain-prs/scripts/triage-prs.sh
 ```
 
 The helper runs `gh pr list --state open --json number,title,headRefName,isDraft,mergeable,reviewDecision,labels,author,createdAt,statusCheckRollup` (two-stage `gh --json … | jq`, never `gh --jq` with `--arg` — learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`) and classifies each PR into **six tiers**:
@@ -99,7 +99,7 @@ See `knowledge-base/project/learnings/workflow-patterns/2026-06-30-update-branch
 ### 7. Cleanup + report
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
 ```
 
 Report the drain delta: before/after open-PR count and the per-tier outcome (merged / skipped / deferred).
