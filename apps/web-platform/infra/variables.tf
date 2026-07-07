@@ -68,22 +68,16 @@ variable "cf_api_token" {
 # GDPR residency (CLO T-1, GA-blocking).
 variable "web_hosts" {
   description = "Web-host cluster (multi-host /workspaces, ADR-068 Phase 3). web-1 = pre-existing host; keys immutable post-migration; EU-location-pinned (CLO T-1)."
-  # `monitored` gates BOTH the per-host uptime monitor AND its CF-proxied probe
-  # record (dns.tf / uptime-alerts.tf, #5933 Item 1). It doubles as an EXISTENCE
-  # flag: web-2's backing hcloud_server.web["web-2"] is excluded from the auto-apply
-  # -target set (managed by the #5274 operator cutover), so a probe record/monitor
-  # for web-2 must NOT materialise until that cutover flips this to true — else the
-  # record's `content = hcloud_server.web["web-2"].ipv4_address` transitively drags
-  # the excluded server into a routine -target apply and provisions it out-of-window.
+  # (The former `monitored` per-host flag was removed with the #5933 per-host uptime
+  # probe/monitor — uptime is now monitored at app.soleur.ai, see uptime-alerts.tf.)
   type = map(object({
     location    = string
     private_ip  = string
     server_type = optional(string, "cx33")
-    monitored   = optional(bool, true)
   }))
   default = {
     "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
-    "web-2" = { location = "hel1", private_ip = "10.0.1.11", monitored = false }
+    "web-2" = { location = "hel1", private_ip = "10.0.1.11" }
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])
@@ -108,6 +102,19 @@ variable "git_data_server_type" {
 
 variable "git_data_volume_size" {
   description = "Size of the git-data bare-repo block volume in GB (Hetzner minimum is 10 GB). The bare repos + the per-(workspace,worktree) fence sidecar/lock live here — never tmpfs (reboot-durable fence)."
+  type        = number
+  default     = 10
+}
+
+# --- #6122 (ADR-096) — the self-hosted zot registry host ---
+variable "registry_server_type" {
+  description = "Hetzner server type for the zot registry host (cax11 = 2 vCPU ARM64/Ampere, 4GB RAM). zot is ARM-native; a registry serving two small images needs little CPU. Verify current Hetzner pricing before budget decisions (~€4/mo CAX11 + volume — recorded via ops-advisor)."
+  type        = string
+  default     = "cax11"
+}
+
+variable "registry_volume_size" {
+  description = "Size of the zot storage block volume in GB (Hetzner minimum is 10 GB), mounted at /var/lib/zot. Holds the OCI blobs for both platform images + backfilled release tags + cosign .sig referrers — never tmpfs (reboot-durable; a wiped registry breaks cold-boot pulls). dedupe is on, so 10 GB is ample for two small images."
   type        = number
   default     = 10
 }
@@ -204,7 +211,7 @@ variable "doppler_token" {
 }
 
 variable "sentry_dsn" {
-  description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working (emit falls back to the doppler fetch when unset)."
+  description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working. NOTE: the doppler fallback only applies AFTER doppler is installed — the pre-extraction fresh-boot stages (pkg_audit/doppler_dl, #6090) depend SOLELY on this baked value, so an empty DSN there silently reverts to a zero-emit abort. The web-2-recreate job's 'Extract backend credentials' step asserts this is non-empty before -replace so that coverage cannot regress unnoticed."
   type        = string
   default     = ""
   sensitive   = true

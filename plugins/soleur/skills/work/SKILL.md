@@ -40,7 +40,7 @@ fi
 
 **Clean up merged worktrees (silent, runs in background):**
 
-Navigate to the repository root, then run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`. Report cleanup results: how many worktrees were cleaned up, which branches remain active.
+Navigate to the repository root, then run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`. Report cleanup results: how many worktrees were cleaned up, which branches remain active.
 
 **Check for knowledge-base directory and load context:**
 
@@ -82,7 +82,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 **Environment checks:**
 
-1. Run `git branch --show-current`. If the result is empty (detached HEAD), FAIL: "Detached HEAD state -- checkout a feature branch or create a worktree." If the result is the default branch (main or master), FAIL: "On default branch -- create a worktree before starting work. Run: `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`"
+1. Run `git branch --show-current`. If the result is empty (detached HEAD), FAIL: "Detached HEAD state -- checkout a feature branch or create a worktree." If the result is the default branch (main or master), FAIL: "On default branch -- create a worktree before starting work. Run: `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh feature <name>`"
 2. Run `pwd`. If the path does NOT contain `.worktrees/`, WARN: "Not in a worktree directory. You can create one via `git-worktree` skill in Phase 1."
 3. Run `git status --short`. If output is non-empty, WARN: "Uncommitted changes detected. Consider committing or stashing before starting new work."
 4. Probe for stashed changes WITHOUT invoking `git stash` (the `hr-never-git-stash-in-worktrees` hook denies even the read-only `git stash list`). Use `git rev-parse --verify --quiet refs/stash` — a zero exit means a stash exists; WARN: "Stashed changes found. Review stash list to avoid forgotten work." A non-zero exit means no stash; continue silently.
@@ -160,7 +160,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    ```bash
    SOLEUR_SKILL_NAME=work SOLEUR_EXPECTED_DURATION_MIN=240 \
-     bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
+     bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
    ```
 
    Then `cd` into the worktree path printed by the script. The worktree manager handles bare-repo detection, branch creation from latest origin/main, .env copying, and dependency installation. The env vars wire a session lease so sibling cleanup-merged invocations refuse to reap this worktree.
@@ -652,7 +652,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    Before entering Phase 3, run `bash scripts/test-all.sh` once. Touched-file tests are the inner loop; `test-all.sh` is the exit gate — it discovers orphan test suites (sibling files covering the same script — e.g., an untouched `tests/scripts/test-rule-metrics-aggregate.sh` alongside the touched `rule-metrics-aggregate.test.sh`) that the touched-file set never sees. Symmetric to the ship Phase 5.5 Review-Findings Exit Gate; catches the gap that PR #3512 surfaced post-merge-queue when an untouched orphan suite's fixture broke under a tightened predicate. **Why:** see issue #3533.
 
-   **Doppler-env false-positive caveat (`TEST_GROUP=webplat`).** Running the webplat shard under `doppler run -c dev` injects feature flags + live vendor creds that CI does not, which can flip untouched files into code paths their unit mocks don't cover (e.g. a delegation flag routes `team-membership-resolver.ts` into a `byok_delegations` query → `unmocked table`) — the `vi.unstubAllEnvs`-can't-clear-inherited-env class. Before treating a webplat failure as a regression, re-run the failing file **without** Doppler (CI-equivalent); if it passes there and `gh run list --workflow=ci.yml --branch main` is green, it's a pre-existing env-only flake, not your diff. **Why:** #4660 (filed #4663).
+   **Doppler-env false-positive caveat (`TEST_GROUP=webplat`).** Running the webplat shard under `doppler run -c dev` injects feature flags + live vendor creds that CI does not, which can flip untouched files into code paths their unit mocks don't cover (e.g. a delegation flag routes `team-membership-resolver.ts` into a `byok_delegations` query → `unmocked table`) — the `vi.unstubAllEnvs`-can't-clear-inherited-env class. Before treating a webplat failure as a regression, re-run the failing file **without** Doppler (CI-equivalent); if it passes there and `gh run list --workflow=ci.yml --branch main` is green, it's a pre-existing env-only flake, not your diff. **Why:** #4660 (filed #4663). **Inverse (Doppler masks a CI-only FAILURE):** a new webplat test that imports any `server/inngest/*` module (or anything transitively loading `server/inngest/client.ts`) throws an `INNGEST_SIGNING_KEY missing at startup` error at module-eval unless guarded by a hoisted `vi.hoisted(...)` block that sets the `NEXT_PHASE` env to `phase-production-build` BEFORE the import (mirror the sibling `cron-compound-promote.test.ts`). Running the file under `doppler run` injects the key → it passes locally while CI's `test-webplat` (no inngest env) errors at **collection** → the required `test` context reds. Always run a new inngest-importing test CI-equivalent (no Doppler) before trusting green. **Why:** #6103 — the ADR-092 recursion test passed 4/4 under Doppler and would have wedged the merge; caught by review. See `knowledge-base/project/learnings/security-issues/2026-07-06-body-hashing-guardrail-gate-fail-open-classes.md`.
 
    **Legal-doc edits have TWO independent mirror gates — a new heading needs the Eleventy mirror in the same PR.** When the diff adds a `## `/`### ` heading to a canonical `docs/legal/*.md`, `apps/web-platform/test/legal-doc-consistency.test.ts` (full-suite-only — the touched-file loop never runs it) FAILS on source↔mirror section-heading-sequence drift unless the SAME heading is added to `plugins/soleur/docs/pages/legal/<doc>.md`. This is a DIFFERENT, stricter gate than `apps/web-platform/scripts/check-tc-document-sha.sh` (whose mirror *body-equivalence* step is T&C-only and explicitly defers non-T&C docs) — passing the SHA guard does NOT imply heading parity. Prose added *inside* an existing section needs no mirror heading; a NEW section does. Catch it at the full-suite exit gate (and `rc=$?` + grep the log — a backgrounded runner can report exit 0 with a real failure). **Why:** #5370 — a new gdpr-policy `### 3.12` passed the SHA guard but turned the full suite red until the mirror heading was synced. See [[2026-06-15-two-legal-mirror-gates-and-always-build-mcp-registered-list-desync]].
 

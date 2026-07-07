@@ -76,26 +76,30 @@ resource "betteruptime_monitor" "soleur_apex" {
   paused     = false
 }
 
-# Per-host origin absence detector (#5933 Item 1). Mirrors soleur_apex but targets
-# each host's CF-proxied probe hostname (web-<n>.app.soleur.ai/health, dns.tf) directly,
-# so a dead/never-booted host returns non-200 (CF 522) and pages — the apex/round-robin
-# monitors stay green because healthy hosts answer them, giving zero per-host attribution.
+# App dashboard uptime monitor (app.soleur.ai) — the LB-fronted surface users actually hit.
+# REPLACES the #5933 per-host absence detector (betteruptime_monitor.web_host): with the
+# multi-host cluster fronted by Cloudflare, an external per-host HTTP probe requires each
+# host's origin to serve its own web-<n>.soleur.ai Host/SNI — it does not (the probe returned
+# CF 521 because the origin only answers the app.soleur.ai Host, both records sharing one
+# origin IP). Per-host "is this specific host dead" is better covered by Cloudflare LB origin
+# health checks + the per-host resource-monitor.sh/container-restart-monitor.sh emails to
+# ops@ — not an external HTTP monitor that would need per-host origin vhosts/certs. So we
+# monitor app.soleur.ai directly; a dead host is drained by the LB and the remaining pool
+# keeps this green, which is the correct user-facing signal.
 #
-# for_each gates on `if v.monitored` (SAME filter as cloudflare_record.web_host): web-1 now;
-# web-2 activates when the #5274 cutover flips monitored=true (pointing a monitor at a
-# not-yet-created hostname would page immediately on 522/NXDOMAIN).
-resource "betteruptime_monitor" "web_host" {
-  for_each = { for k, v in var.web_hosts : k => v if v.monitored }
-
+# follow_redirects = true: app.soleur.ai/ 307s to /login for an unauthenticated probe, so
+# the monitor succeeds only if the full chain / -> 307 -> /login -> 200 returns 200 (proves
+# the app is actually serving, not just that the CF edge answered).
+resource "betteruptime_monitor" "app" {
   monitor_type       = "status"
-  url                = "https://${each.key}.app.soleur.ai/health"
-  pronounceable_name = "soleur uptime ${each.key}" # unique per host (hard provider constraint)
+  url                = "https://app.soleur.ai/"
+  pronounceable_name = "soleur app dashboard"
 
   check_frequency     = 180
   request_timeout     = 10
   confirmation_period = 60
   recovery_period     = 60
-  # No follow_redirects: /health serves 200 directly (no apex→www 301 to chase).
+  follow_redirects    = true
 
   email = true
   call  = false

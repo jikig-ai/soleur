@@ -75,6 +75,24 @@ service-role-allowlist-gate
 tc-document-sha-guard
 adr-ordinals
 
+# #6103 (ADR-092) — hard-rule body-weakening gate. ci.yml `rule-body-lint`
+# always-run job; blocks un-acked hr-*/wg-* rule-BODY changes in AGENTS
+# sidecars. Present here for canonical-JSON set-parity (required-checks-
+# canonical-parity.test.sh Test 1).
+#
+# ⚠ FABRICATED-NOT-EARNED for bot PRs (#6049 auto-fabrication guard): this is a
+# CONTENT-scoped gate, but the bot composite action does NOT reproduce it in its
+# Phase-4 ceiling — so the synthetic green is unconditional. This is SOUND ONLY
+# because the action's ALLOWED_PATHS = {weakness-digest.md, rule-metrics.json}
+# makes AGENTS.{core,docs,rest}.md physically unreachable by every bot PR today,
+# so no bot can weaken a rule body under a fabricated green. The residual goes
+# LIVE the instant #6038's auto-proposer adds an AGENTS path to ALLOWED_PATHS —
+# and the #6049 ceiling forces that PR to reproduce `rule-body-lint --check`
+# over the bot diff first. Do NOT extend ALLOWED_PATHS to any AGENTS path
+# without that reproduction. See the Phase-4 preflight-TODO in
+# .github/actions/bot-pr-with-synthetic-checks/action.yml + ADR-092.
+rule-body-lint
+
 # #4384 — legal-doc-cross-document-gate.yml jobs.enforce. Always-runs (no
 # path filter post-#4384) — synthetic needed for bot PRs only.
 enforce

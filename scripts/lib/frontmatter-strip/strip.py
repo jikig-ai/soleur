@@ -3,7 +3,7 @@
 
 Canonical contract lives in SPEC.md; strip.sh is the byte-identical bash twin.
 `scripts/lib/frontmatter-strip.test.sh` feeds shared fixtures to BOTH and asserts
-parity (issue #5999, ADR-086).
+parity (issue #5999, ADR-094).
 
 Imported by scripts/lint-agents-rule-budget.py as `strip_frontmatter`; also
 runnable as a stdin->stdout filter: `python3 strip.py < file`.

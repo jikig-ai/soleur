@@ -358,6 +358,7 @@ jobs:
               -target=doppler_secret.ghcr_minter_doppler_token \
               -target=betteruptime_monitor.soleur_apex \
               -target=betteruptime_policy.uptime \
+              -target=betteruptime_monitor.app \
               -target=cloudflare_record.web_host \
               -target=betteruptime_monitor.web_host \
               -target=random_id.inngest_signing_key_prd \
@@ -579,6 +580,7 @@ jobs:
               -target=terraform_data.fail2ban_tuning \
               -target=terraform_data.journald_persistent \
               -target=terraform_data.cosign_trusted_root \
+              -target=terraform_data.registry_insecure_config \
               -target=terraform_data.docker_seccomp_config \
               -target=terraform_data.apparmor_bwrap_profile \
               -target=terraform_data.orphan_reaper_install \
@@ -995,6 +997,15 @@ jobs:
           printf '::add-mask::%s\n' "$SECRET"
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          # #6090: the baked ${sentry_dsn} (TF_VAR_sentry_dsn ← this SENTRY_DSN) is the SOLE
+          # fatal-emit path for the pre-extraction fresh-boot stages (pkg_audit/doppler_dl) —
+          # doppler isn't installed yet there, so its fallback is dead. An empty SENTRY_DSN
+          # (var.sentry_dsn's TF default) would silently revert those stages to the zero-emit
+          # abort #6090 exists to end. Assert non-empty before -replace; do NOT print the value.
+          if [[ -z "$(doppler secrets get SENTRY_DSN --plain 2>/dev/null || true)" ]]; then
+            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform — the fresh-boot fatal-emit would be dark for pre-extraction stages. Set it before recreating web-2 (#6090)."
+            exit 1
+          fi
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
@@ -1185,9 +1196,12 @@ jobs:
         if: always()
         env:
           JOB_STATUS: ${{ job.status }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          # #6090: source the Sentry read creds from Doppler prd_terraform (like every other
+          # step in this job), NOT GitHub repo secrets — the repo secret SENTRY_AUTH_TOKEN is
+          # unset, so recreate 28805034101 logged this step as "Sentry query skipped" and the
+          # auto-read never ran. prd_terraform holds SENTRY_AUTH_TOKEN (event:read → HTTP 200 on
+          # the events endpoint), SENTRY_ORG (jikigai-eu), SENTRY_PROJECT (web-platform).
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # Runs on SUCCESS too (#6090 spec-flow F4): a green boot must still show the probe
         # fired + which stage was last reached (bootstrap_complete → cloudflared_ready →
         # webhook_bound → cloud_init_complete), else "verify passed" is indistinguishable from
@@ -1196,6 +1210,15 @@ jobs:
         # recent window — best-effort, may show an unrelated host / may be empty.
         run: |
           set +e
+          # Resolve the Sentry read creds from Doppler prd_terraform (doppler CLI installed +
+          # DOPPLER_TOKEN set earlier in this job). No command-substitution-into-run risk: these
+          # are Doppler-sourced, never github.event.* input. Capture the fetch stderr + rc so a
+          # FETCH FAILURE (bad/absent secrets.DOPPLER_TOKEN, wrong scope, doppler CLI/API/network
+          # error) is NAMED — not collapsed into "not configured", which would re-create the exact
+          # silent-dark class (#6090 recreate 28805034101) this auto-read step exists to end.
+          SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --plain -p soleur -c prd_terraform 2>/tmp/doppler-sentry.err); dop_rc=$?
+          SENTRY_ORG=$(doppler secrets get SENTRY_ORG --plain -p soleur -c prd_terraform 2>/dev/null || true)
+          SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT --plain -p soleur -c prd_terraform 2>/dev/null || true)
           # Pointer to the LOG too (not only the summary) so
           # `gh run view <id> --log | grep 'fresh-host Sentry pointer'` works (discoverability_test).
           echo "web-2-recreate — fresh-host Sentry pointer (job=${JOB_STATUS})"
@@ -1209,8 +1232,14 @@ jobs:
             fi
             echo "_Best-effort: host_id is unknown to the runner, so this matches on message + recent window — it may show an unrelated host or be empty._"
           } >> "$GITHUB_STEP_SUMMARY"
+          # Name the cause; `tee` so it lands in the step LOG too (grep-able via
+          # `gh run view <id> --log`), not only the collapsible step summary (#6090 discoverability).
+          if [[ "$dop_rc" -ne 0 ]]; then
+            echo "_Sentry query skipped: DOPPLER FETCH FAILED (rc=${dop_rc}) — verify secrets.DOPPLER_TOKEN scope/validity for soleur/prd_terraform. doppler stderr: $(tr '\n' ' ' </tmp/doppler-sentry.err | tail -c 300)_" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [[ -z "${SENTRY_AUTH_TOKEN:-}" || -z "${SENTRY_ORG:-}" || -z "${SENTRY_PROJECT:-}" ]]; then
-            echo "_Sentry query skipped: SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT not configured._" >> "$GITHUB_STEP_SUMMARY"
+            echo "_Sentry query skipped: fetch succeeded but SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT is empty in Doppler prd_terraform (secret genuinely absent)._" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           # Lockstep with the emit MESSAGE literals (soleur-host-bootstrap.sh + cloud-init.yml's
@@ -1218,27 +1247,47 @@ jobs:
           # (AC8) fails. Covers the seed/bootstrap fatals, the bootstrap_complete breadcrumb, and
           # every cloud-init stage emit (the stage lives in the event's `stage` tag).
           QUERY='message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage"'
-          # EU data plane (#6090 AC8b, LOAD-BEARING): the project is jikigai-eu / de.sentry.io.
-          # Querying the US host (sentry.io) against an EU-resident project returns empty — the
-          # whole auto-surface deliverable would be dark. Residency is authoritative per learning
-          # 2026-05-15-sentry-dsn-cluster-substring-authoritative-residency.md. Sort most-recent
-          # so the first row is the LAST-reached stage.
-          RESP=$(curl -s --max-time 20 -G \
+          # #6090: the /projects/{org}/{proj}/events/ endpoint IGNORES the `message:` search prefix
+          # — a `message:"x"` query returns 0 even for events that provably exist (verified against a
+          # known event id: bare full-text = 1 hit, message:"x" = 0). So fetch RECENT events
+          # UNFILTERED and match client-side with a regex DERIVED from QUERY (single source, no
+          # drift). EU data plane (de.sentry.io) is LOAD-BEARING: a US sentry.io query against the
+          # EU-resident project returns empty. The endpoint returns newest-first, so the first match
+          # is the LAST-reached stage. `tee` so matches land in the LOG too (discoverability).
+          MSG_RE=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | sed -E 's/message:"([^"]+)"/\1/' | paste -sd'|' -)
+          # Guard: an empty MSG_RE (QUERY reshaped so the message: extraction yields nothing) would
+          # make jq test("") match EVERY event → list arbitrary events as boot stages. Refuse.
+          if [[ -z "$MSG_RE" ]]; then
+            echo "_Sentry query skipped: QUERY message-literal extraction produced an empty regex — refusing to match-all (would mislabel arbitrary events as boot stages)._" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Capture the HTTP status so a curl/auth/API failure is NAMED, not silently reported as
+          # "no events" — the whole point of this step is to not go dark on its own failure.
+          # statsPeriod + sort ARE honored by this endpoint (only the `message:` search prefix is
+          # broken) — keep both: the time bound stops the boot event being pushed past per_page on
+          # the SHARED project (which ingests all app events + verify_failed spam), and sort pins
+          # "first match = last-reached stage" instead of relying on undocumented default order.
+          HTTP=$(curl -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
             -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-            --data-urlencode "query=${QUERY}" \
+            --data-urlencode "per_page=100" \
             --data-urlencode "statsPeriod=1h" \
             --data-urlencode "sort=-timestamp" \
-            "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" 2>/dev/null)
-          if [[ -n "$RESP" ]] && echo "$RESP" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
-            echo "$RESP" | jq -r '
-              .[0:5][]
+            "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" 2>/dev/null || echo "000")
+          RESP=$(cat /tmp/sentry-events.json 2>/dev/null || echo "")
+          if [[ "$HTTP" != "200" ]] || ! echo "$RESP" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "_Sentry query FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result. $(echo "$RESP" | jq -r '.detail // empty' 2>/dev/null | tr '\n' ' ' | head -c 160)_" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # `// ""` coalesces null message AND title so a malformed sibling event in the window
+          # can't throw jq ("null cannot be matched") and blank the whole read.
+          if echo "$RESP" | jq -e --arg re "$MSG_RE" '[.[] | select(((.message // .title) // "") | test($re))] | length > 0' >/dev/null 2>&1; then
+            echo "$RESP" | jq -r --arg re "$MSG_RE" '
+              [.[] | select(((.message // .title) // "") | test($re))] | .[0:8][]
               | ( [ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?" ) as $stage
-              | "- `\(.title // .message)` — stage=`\($stage)` (\(.dateCreated // "?"))"
-            ' >> "$GITHUB_STEP_SUMMARY" 2>/dev/null \
-            || echo "$RESP" | jq -r '.[0:5][] | "- `\(.title // .message)` (\(.dateCreated // "?"))"' >> "$GITHUB_STEP_SUMMARY" 2>/dev/null \
-            || true
+              | "- `\((.message // .title) // "?")` — stage=`\($stage)` (\(.dateCreated // "?"))"
+            ' | tee -a "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           else
-            echo "_No matching fresh-host boot-stage event in the last hour (or the query failed)._" >> "$GITHUB_STEP_SUMMARY"
+            echo "_The scan RAN (HTTP 200, project ${SENTRY_PROJECT}) but no fresh-host boot-stage event matched in the recent events — the host genuinely emitted nothing in this window._" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: web-2-recreate summary

@@ -615,11 +615,11 @@ t_rsc_order_insensitive() {
   rm -rf "$tmp"
 }
 
-# T-rsc-7: real canonical RSC has 17 entries with CodeQL pinned to 57789.
+# T-rsc-7: real canonical RSC has 18 entries with CodeQL pinned to 57789.
 # Reconciled from the stale 5-check baseline to the Terraform-managed live set
-# (#4397); bumped 16->17 by #6049 (adr-ordinals reconciled from live). The exact
-# count is kept in lockstep with infra/github/ruleset-ci-required.tf by T-rsc-9
-# below.
+# (#4397); bumped 16->17 by #6049 (adr-ordinals reconciled from live); bumped
+# 17->18 by #6103 (rule-body-lint, ADR-091). The exact count is kept in lockstep
+# with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
 t_rsc_real_canonical_shape() {
   local real="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json"
   if [[ ! -f "$real" ]]; then
@@ -632,10 +632,10 @@ t_rsc_real_canonical_shape() {
   # Every non-CodeQL check is a GitHub Actions context (15368). A flattened
   # CodeQL integration_id would let github-actions[bot] spoof the GHAS gate.
   non_codeql_apps=$(jq -r '[.[] | select(.context!="CodeQL") | .integration_id] | unique | join(",")' < "$real")
-  if [[ "$n" == "17" && "$codeql_app" == "57789" && "$non_codeql_apps" == "15368" ]]; then
-    _report "T-rsc-7 real canonical RSC: 17 entries, CodeQL=57789, rest=15368" ok
+  if [[ "$n" == "18" && "$codeql_app" == "57789" && "$non_codeql_apps" == "15368" ]]; then
+    _report "T-rsc-7 real canonical RSC: 18 entries, CodeQL=57789, rest=15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 17 entries, CodeQL=57789, rest=15368" fail "n=$n codeql_app=$codeql_app non_codeql=$non_codeql_apps"
+    _report "T-rsc-7 real canonical RSC: 18 entries, CodeQL=57789, rest=15368" fail "n=$n codeql_app=$codeql_app non_codeql=$non_codeql_apps"
   fi
 }
 

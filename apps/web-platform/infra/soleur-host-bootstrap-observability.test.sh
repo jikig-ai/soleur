@@ -14,7 +14,9 @@ set -euo pipefail
 #   - a single `bootstrap_complete` breadcrumb (distinguishes "died IN bootstrap" from
 #     "bootstrap completed, died downstream")
 #   - a baked `soleur-boot-emit` written by bootstrap.sh for the downstream region
-#     (zero user_data — the 32,768-byte cap has only ~0.4 KB headroom)
+#     (zero user_data cost; note the 32,768-byte cap applies to the base64gzip render, not
+#     the raw file — `gzip -9 -c cloud-init.yml | base64 -w0 | wc -c` is ~17 KB, so there is
+#     ~15 KB of real headroom post-#6090; the old "~0.4 KB" figure predates the gzip wrap)
 #   - READINESS GATES (cloudflared_ready / webhook_bound) — the ONLY detector for an
 #     async systemd-service death (enable returns 0, service never binds :9000)
 #   - H3 fix: restore `set +e` after the extraction block so its `set -e` no longer
@@ -45,7 +47,12 @@ if grep -qE 'IMAGE_VERIFY_MODE:-warn' "$DIR/ci-deploy.sh"; then
 else
   no "AC1: expected IMAGE_VERIFY_MODE:-warn default in ci-deploy.sh"
 fi
-if grep -qE 'cosign' "$CI"; then
+# #6122: match a cosign INVOCATION, not the word in a comment. cloud-init.yml's
+# daemon.json block documents "cosign digest-pinning is the integrity guard, not TLS"
+# (explaining why plain-HTTP zot is safe) — that comment is documentation, not a call.
+# Exclude comment lines so the guard tracks the real invariant (no cosign VERIFY runs
+# on the fresh-boot path — it lives only in ci-deploy.sh).
+if grep -E 'cosign' "$CI" | grep -qvE '^[[:space:]]*#'; then
   no "AC1: cloud-init.yml must NOT invoke cosign (verify lives only in ci-deploy.sh)"
 else
   ok "AC1: no cosign call in the fresh-boot cloud-init sequence"
@@ -288,6 +295,187 @@ if awk '/sha256sum -c -/{if (/webhook_checksum|exit 1/) {print "y"; exit}}' "$CI
   ok "AC11: webhook checksum is fail-closed (|| exit 1) independent of the H3 set +e"
 else
   no "AC11: webhook 'sha256sum -c -' must be '|| { … fatal; exit 1; }' (H3 set +e un-gates it otherwise)"
+fi
+
+# ── AC12 (#6090 follow-up): the fatal-emit trap covers the PRE-extraction install region ──
+# recreate 28805034101 died with ZERO emits + :9000 unbound while every post-extraction guard
+# was green — because on_err was defined/armed only inside the extraction block, leaving the
+# package-audit/doppler/docker install region (which runs under the leaked `set -e`) a blind
+# spot. The fix moves on_err to the TOP of runcmd and bumps STAGE per install step. Guard that:
+#   (a) on_err is armed BEFORE the doppler download (early coverage), and
+#   (b) on_err is defined exactly ONCE (moved, not duplicated — no transport drift / no bytes).
+armln=$(grep -nE '^\s*trap on_err EXIT' "$CI" | head -1 | cut -d: -f1 || true)
+dopplerln=$(line_of "$CI" 'tar xzf /tmp/doppler.tar.gz')
+if [ -n "$armln" ] && [ -n "$dopplerln" ] && [ "$armln" -lt "$dopplerln" ]; then
+  ok "AC12: on_err trap armed (line $armln) BEFORE the doppler install ($dopplerln) — pre-extraction covered"
+else
+  no "AC12: 'trap on_err EXIT' must precede the doppler install (arm=$armln doppler=$dopplerln); the install region is the blind spot"
+fi
+n_onerr=$(grep -cE '^\s*on_err\(\) \{' "$CI" || true)
+if [ "${n_onerr:-0}" -eq 1 ]; then
+  ok "AC12: on_err defined exactly once in cloud-init ($n_onerr) — moved to the top, not duplicated"
+else
+  no "AC12: on_err must be defined exactly once (found $n_onerr) — a second copy drifts + burns user_data bytes"
+fi
+# Per-step stage names so the fatal points at the exact dying install command.
+for st in doppler_dl docker_apt docker_restart; do
+  if grep -qE "STAGE=$st\b" "$CI"; then
+    ok "AC12: install region bumps STAGE=$st (fatal names the exact command)"
+  else
+    no "AC12: cloud-init must set STAGE=$st in the pre-extraction install region"
+  fi
+done
+
+# ── AC13 (#6090 follow-up): the recreate auto-read sources its Sentry token from Doppler ──
+# The GitHub repo secret SENTRY_AUTH_TOKEN is unset, so the surface step self-skipped. It must
+# now fetch the token (+org+project) from Doppler prd_terraform like every other step in the job.
+if grep -qE 'doppler secrets get SENTRY_AUTH_TOKEN .*-c prd_terraform' "$WF"; then
+  ok "AC13: surface step resolves SENTRY_AUTH_TOKEN from Doppler prd_terraform (not the unset repo secret)"
+else
+  no "AC13: the fresh-host Sentry surface step must fetch SENTRY_AUTH_TOKEN via doppler -c prd_terraform"
+fi
+
+# ── AC14 (#6090 P2-1): the recreate asserts the baked DSN is non-empty before -replace ──
+# The pre-extraction fresh-boot stages depend SOLELY on the baked ${sentry_dsn} (doppler isn't
+# installed yet, so its fallback is dead). An empty SENTRY_DSN (var.sentry_dsn's TF default) would
+# silently re-open the zero-emit blind spot. The recreate must fail loudly, not boot dark.
+if grep -qE 'SENTRY_DSN is empty in Doppler prd_terraform' "$WF"; then
+  ok "AC14: web-2-recreate asserts baked SENTRY_DSN non-empty before -replace (pre-extraction can't go dark)"
+else
+  no "AC14: the recreate must assert SENTRY_DSN is non-empty before -replace (empty baked DSN = silent pre-extraction blind spot)"
+fi
+
+# ── AC15 (#6090): earliest bootcmd beacon + runcmd_start breadcrumb bracket a pre-runcmd death ──
+# recreate 28812931362 (on the merged pre-extraction fix) was STILL fully dark — web-2 emits
+# nothing, so the death is BEFORE the top-armed runcmd trap (the cloud-init packages:/config phase)
+# or the host has no Sentry egress. A bootcmd beacon (runs before packages:) + a runcmd_start
+# breadcrumb (curl guaranteed) bracket it: bootcmd-only = died in packages:; neither = no-egress.
+if grep -qE '^bootcmd:' "$CI" && grep -qF 'stage":"bootcmd_start"' "$CI"; then
+  ok "AC15: bootcmd beacon present (earliest pre-packages: boot signal)"
+else
+  no "AC15: cloud-init must emit a bootcmd_start beacon in a bootcmd: block (pre-runcmd bracket)"
+fi
+if grep -qF '_emit "soleur-cloud-init boot stage" runcmd_start info' "$CI"; then
+  ok "AC15: runcmd_start breadcrumb present (curl-guaranteed control vs the best-effort bootcmd beacon)"
+else
+  no "AC15: cloud-init must emit a runcmd_start breadcrumb right after arming the trap"
+fi
+# The runcmd transport is written ONCE (_emit), reused by on_err + the breadcrumb (no drift/bytes).
+n_emit_def=$(grep -cE '^\s*_emit\(\) \{' "$CI" || true)
+if [ "${n_emit_def:-0}" -eq 1 ]; then
+  ok "AC15: _emit transport helper defined once in runcmd ($n_emit_def) — shared by on_err + breadcrumb"
+else
+  no "AC15: _emit must be defined exactly once in cloud-init runcmd (found $n_emit_def)"
+fi
+
+# ── AC16 (#6090): the auto-read must NOT use the broken message: query ──
+# The /projects/../events/ endpoint ignores `message:"x"` search (returns 0 for events that exist).
+# The surface step must derive a client-side regex from QUERY and filter fetched events, NOT pass
+# `query=${QUERY}` to the endpoint.
+if grep -qF 'query=${QUERY}' "$WF"; then
+  no "AC16: surface step still passes the broken message: query to the events endpoint (returns 0)"
+else
+  ok "AC16: surface step no longer passes the broken message: query to the endpoint"
+fi
+if grep -qF 'MSG_RE=' "$WF" && grep -qF 'test($re)' "$WF"; then
+  ok "AC16: surface step filters recent events client-side via a regex derived from QUERY"
+else
+  no "AC16: surface step must derive MSG_RE from QUERY and filter events client-side (test(\$re))"
+fi
+
+# ── AC17 (#6090): package install moved from the opaque config phase into instrumented runcmd ──
+# recreate 28819237402 localized web-2's death to the packages:/config phase (bootcmd_start fired,
+# runcmd_start never did). apt now runs under the top-armed trap with named stages + timeouts so a
+# HANG becomes a NAMED fatal (stage=apt_update/apt_install), and the cloud-config packages: block
+# is removed (else the hang would remain in the opaque config phase).
+if grep -qE 'STAGE=apt_update' "$CI" && grep -qE 'STAGE=apt_install' "$CI"; then
+  ok "AC17: apt runs in instrumented runcmd with named stages (apt_update/apt_install)"
+else
+  no "AC17: cloud-init must set STAGE=apt_update + STAGE=apt_install in the runcmd apt block"
+fi
+if grep -qE '^packages:' "$CI"; then
+  no "AC17: cloud-config packages: must be REMOVED (a config-phase hang would stay opaque) — install in runcmd"
+else
+  ok "AC17: no cloud-config packages: block (install moved to instrumented runcmd)"
+fi
+if grep -qE 'timeout [0-9]+ apt-get update' "$CI" && grep -qE 'timeout [0-9]+ apt-get install' "$CI"; then
+  ok "AC17: apt update+install are timeout-wrapped (a HANG becomes a named fatal, not a ~640s poll timeout)"
+else
+  no "AC17: apt-get update/install must be timeout-wrapped so a hang trips the trap with a named stage"
+fi
+# Ordering: STAGE must be set BEFORE the hang-capable command (else the fatal mis-attributes), and
+# the apt block must sit AFTER the trap arm (else no emit coverage). Guards a silent regression.
+su_ln=$(grep -nE '^\s*STAGE=apt_update' "$CI" | head -1 | cut -d: -f1 || true)
+auu_ln=$(grep -nE 'timeout [0-9]+ apt-get update' "$CI" | head -1 | cut -d: -f1 || true)
+armln2=$(grep -nE '^\s*trap on_err EXIT' "$CI" | head -1 | cut -d: -f1 || true)
+if [ -n "$su_ln" ] && [ -n "$auu_ln" ] && [ -n "$armln2" ] && [ "$armln2" -lt "$su_ln" ] && [ "$su_ln" -lt "$auu_ln" ]; then
+  ok "AC17: trap-arm ($armln2) < STAGE=apt_update ($su_ln) < apt-get update ($auu_ln) — covered + correctly attributed"
+else
+  no "AC17: need trap-arm < STAGE=apt_update < apt-get update (arm=$armln2 stage=$su_ln update=$auu_ln)"
+fi
+# The cloudflare keyring must be fetched BEFORE the first apt-get update — the cloudflare source is
+# active from boot (write_files), so an update before the key deterministically fails (missing
+# signed-by keyring) and masks the real cause. (Anchor on the curl fetch, not the deb/signed-by line.)
+cfk_ln=$(grep -nE 'curl.*cloudflare-main\.gpg' "$CI" | head -1 | cut -d: -f1 || true)
+if [ -n "$cfk_ln" ] && [ -n "$auu_ln" ] && [ "$cfk_ln" -lt "$auu_ln" ]; then
+  ok "AC17: cloudflare keyring fetched (line $cfk_ln) BEFORE apt-get update ($auu_ln) — no missing-key fatal"
+else
+  no "AC17: cloudflare-main.gpg must be curl-fetched before the first apt-get update (cfk=$cfk_ln update=$auu_ln)"
+fi
+
+# ── AC18 (#6090): ghcr_login/pull capture the host-side error into the emit `detail` tag ──
+# recreate 28823498601 reached stage=pull (the private-GHCR seed-image pull). Off-host the token +
+# image are valid (HTTP 200), so the failure is host-side and the silent login / bare-pull did not
+# capture it. The login writes its outcome + the pull appends its stderr to /run/soleur-stage-detail,
+# which _emit surfaces as a `detail` tag so the next recreate names the exact sub-cause.
+if grep -qF '"detail":"%s"' "$CI" && grep -qF '/run/soleur-stage-detail' "$CI"; then
+  ok "AC18: _emit includes a detail tag sourced from /run/soleur-stage-detail"
+else
+  no "AC18: _emit must include a detail tag from /run/soleur-stage-detail"
+fi
+if grep -qE 'ghcr_login_ok|ghcr_login_fail|ghcr_creds_missing' "$CI"; then
+  ok "AC18: ghcr_login records its outcome (ok / fail+error / creds_missing) to the detail file"
+else
+  no "AC18: ghcr_login must write its outcome to /run/soleur-stage-detail"
+fi
+if grep -qF 'pull_err:' "$CI"; then
+  ok "AC18: the pull loop appends the docker pull stderr on final failure (names the pull error)"
+else
+  no "AC18: the pull loop must capture the docker pull error into /run/soleur-stage-detail"
+fi
+
+# ── AC19 (#6090): ghcr_login prefers BAKED creds + hardens the doppler fallback ──
+# recreate 28826611336 reached stage=pull with detail=ghcr_creds_missing user=n token=n: doppler
+# answered EMPTY at the cold-boot instant, so docker login was skipped → anonymous private pull →
+# 401 → boot aborts before :9000. Fix: bake ${ghcr_read_*} (like ${sentry_dsn}) preferred, with a
+# HARDENED doppler fallback (timeout 45 + 3-try retry loop). server.tf must pass both vars in.
+TF="$DIR/server.tf"
+# (1) baked creds preferred (the assignment mirrors the ${sentry_dsn} bake; literal, not expanded)
+bake_u=$'GHCR_USER=\'${ghcr_read_user}\''
+bake_t=$'GHCR_TOKEN=\'${ghcr_read_token}\''
+if grep -qF "$bake_u" "$CI" && grep -qF "$bake_t" "$CI"; then
+  ok "AC19: ghcr_login prefers baked \${ghcr_read_user}/\${ghcr_read_token} (survives a cold-boot empty doppler)"
+else
+  no "AC19: ghcr_login must prefer baked \${ghcr_read_user}/\${ghcr_read_token} before falling back to doppler"
+fi
+# (2) hardened doppler fallback: timeout 45 + retry loop for BOTH vars, and NO stale timeout-15 form
+if grep -qE 'until GHCR_USER=\$\(timeout 45 doppler[^)]*GHCR_READ_USER' "$CI" \
+   && grep -qE 'until GHCR_TOKEN=\$\(timeout 45 doppler[^)]*GHCR_READ_TOKEN' "$CI"; then
+  ok "AC19: doppler fallback hardened — timeout 45 + until-retry loop for both GHCR_READ_USER and GHCR_READ_TOKEN"
+else
+  no "AC19: doppler fallback must use 'until VAR=\$(timeout 45 doppler ... GHCR_READ_*)' retry loops"
+fi
+if grep -qE 'timeout 15 doppler secrets get GHCR_READ' "$CI"; then
+  no "AC19: stale un-hardened 'timeout 15 doppler secrets get GHCR_READ_*' fetch still present — must be replaced"
+else
+  ok "AC19: no stale 'timeout 15 doppler secrets get GHCR_READ_*' fetch remains"
+fi
+# (3) server.tf passes both baked vars into the web-host cloud-init templatefile map
+if grep -qE '^\s*ghcr_read_user\s*=\s*var\.ghcr_read_user' "$TF" \
+   && grep -qE '^\s*ghcr_read_token\s*=\s*var\.ghcr_read_token' "$TF"; then
+  ok "AC19: server.tf passes ghcr_read_user + ghcr_read_token into the web-host templatefile"
+else
+  no "AC19: server.tf web-host templatefile map must pass ghcr_read_user + ghcr_read_token (coupled to the cloud-init bake)"
 fi
 
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="

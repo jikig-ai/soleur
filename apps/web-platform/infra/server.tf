@@ -154,6 +154,12 @@ resource "hcloud_server" "web" {
     # broken stage). Semi-public DSN (already in the client bundle). See on_err in cloud-init.yml.
     sentry_dsn     = var.sentry_dsn
     resend_api_key = var.resend_api_key
+    # (#6090) Baked so the cold-boot ghcr_login does not depend on doppler answering at the
+    # first-boot instant (an empty answer skipped docker login → anonymous private pull → 401
+    # → abort at stage=pull). Scoped read:packages PAT; user_data already carries the strictly
+    # stronger doppler_token, so this adds no new trust boundary. See cloud-init.yml ghcr_login.
+    ghcr_read_user  = var.ghcr_read_user
+    ghcr_read_token = var.ghcr_read_token
     # Fresh-host parity for the CI SSH keypair generated in
     # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
     # block in ci-ssh-key.tf for the rationale.
@@ -517,6 +523,67 @@ resource "terraform_data" "cosign_trusted_root" {
       # and every deploy's cosign verify would fail-open in WARN.
       "test -s /etc/soleur/cosign-trusted-root.json",
       "grep -q certificateAuthorities /etc/soleur/cosign-trusted-root.json",
+    ]
+  }
+}
+
+# #6122/ADR-096 (Edge A, RUNNING hosts): deliver the canonical docker daemon.json — which
+# now allowlists the plain-HTTP private-net zot registry (10.0.1.30:5000) under
+# insecure-registries — to the ALREADY-RUNNING web host and hot-reload dockerd. Fresh hosts
+# get the same content from cloud-init.yml's daemon.json write (task 3.0a); a running host
+# has NO cloud-init re-run path (lifecycle ignore_changes=[user_data]), so this SSH
+# provisioner is the ONLY running-host delivery — mirrors terraform_data.journald_persistent
+# / cosign_trusted_root. HIGH-RISK (mutates the prod docker daemon), so:
+#   (a) validate the delivered JSON parses BEFORE reloading — a malformed daemon.json makes
+#       dockerd refuse the reload AND fail the NEXT restart (boot-bricking); the guard aborts
+#       the apply with dockerd untouched (still on its valid in-memory config); and
+#   (b) `systemctl reload docker` (SIGHUP) — NOT restart — so running containers
+#       (app/inngest/redis) are NOT bounced mid-deploy; dockerd applies insecure-registries
+#       on reload.
+# This is the ONE #6122 resource that is CI-`-target`ed: it bridges over SSH to the existing
+# host (like journald), so it rides the apply-web-platform-infra.yml SSH `-target` list + the
+# terraform-target-parity SSH-provisioned set — NOT OPERATOR_APPLIED_EXCLUSIONS (the git-data
+# model of the other 24 #6122 resources). See apply-path-cto-ruling.md §"Two load-bearing
+# conditions" #1: an SSH-provisioned terraform_data MUST be in the `-target` list.
+resource "terraform_data" "registry_insecure_config" {
+  triggers_replace = sha256(file("${path.module}/docker-daemon.json"))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/docker",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/docker-daemon.json"
+    destination = "/etc/docker/daemon.json"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      # Malformed-JSON guard: parse the DELIVERED file before touching dockerd. A config
+      # that does not parse makes `systemctl reload docker` a no-op AND bricks the next
+      # restart — abort here (file delivered, daemon untouched) rather than reload a
+      # broken config. python3 is base-Ubuntu-guaranteed on the Hetzner image.
+      "python3 -c 'import json; json.load(open(\"/etc/docker/daemon.json\"))'",
+      "chown root:root /etc/docker/daemon.json",
+      "chmod 0644 /etc/docker/daemon.json",
+      # SIGHUP reload (NOT restart): dockerd applies insecure-registries live without
+      # bouncing running containers. A restart would kill the app/inngest/redis mid-deploy.
+      "systemctl reload docker",
+      # Assert dockerd now honors the private-net zot registry as insecure (fail loud if
+      # the reload silently did not pick it up).
+      "docker info 2>/dev/null | grep -q '10.0.1.30:5000'",
     ]
   }
 }

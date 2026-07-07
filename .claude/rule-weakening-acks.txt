@@ -1,0 +1,16 @@
+# rule-weakening-acks.txt — CODEOWNERS-owned WORM ack log (ADR-092).
+#
+# Append-only. Every change or deletion of an `hr-*`/`wg-*` rule BODY line in
+# AGENTS.{core,docs,rest}.md must be accompanied by a matching ack here, or the
+# required `rule-body-lint` CI check BLOCKS the merge.
+#
+# Format (one per line; `#` comments + blank lines ignored):
+#   <id>|<sha256>|<date>|<PR>|<reason>
+# where <sha256> is the NEW normalized body hash from .claude/rule-body-hashes.json
+# after running `python3 scripts/lint-rule-bodies.py --write`. For a DELETION the
+# sha256 field is the literal token `DELETED`.
+#
+# NEVER edit or remove an existing line (WORM). To weaken a rule:
+#   1. edit the body line in the sidecar
+#   2. python3 scripts/lint-rule-bodies.py --write   # regenerate the manifest
+#   3. append the ack line below with the new hash + a real reason

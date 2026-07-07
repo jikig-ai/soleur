@@ -69,6 +69,18 @@ readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enfor
 readonly GHCR_DOCKER_CONFIG="${GHCR_DOCKER_CONFIG:-/home/deploy/.docker/config.json}"
 readonly COSIGN_TRUSTED_ROOT_HOST="${COSIGN_TRUSTED_ROOT_HOST:-/etc/soleur/cosign-trusted-root.json}"
 
+# Self-hosted zot registry (#6122/ADR-096). The pull path prefers zot ONLY when it is
+# confirmed-configured-and-live (see zot_gate_and_login) — a strict dark-launch: until
+# the operator provisions (1.8) + backfills (1.9) zot, ZOT_REGISTRY_URL is absent in
+# Doppler prd, ZOT_ACTIVE stays 0, and every pull takes the UNCHANGED private-GHCR path
+# (wg-dark-launch-deploy-gates). zot serves plain HTTP on the private net (cosign digest-
+# pinning is the integrity guard, not TLS — Phase-0 spike), so cosign verify of a
+# zot-pulled digest needs --allow-insecure-registry (Edge B). ZOT_REGISTRY_URL is fetched
+# from Doppler at runtime by zot_gate_and_login (test-overridable); it is NOT readonly.
+ZOT_REGISTRY_URL="${ZOT_REGISTRY_URL:-}"           # e.g. 10.0.1.30:5000 (schemeless host:port); empty ⇒ zot disabled
+ZOT_ACTIVE=0                                        # set to 1 by zot_gate_and_login iff /v2/ probe + pull login both succeed
+readonly ZOT_PROBE_TIMEOUT="${ZOT_PROBE_TIMEOUT:-3}" # seconds for the /v2/ reachability probe
+
 # Sentinel exit codes persisted in STATE_FILE. Consumed by cat-deploy-state.sh
 # and the GitHub Actions "Verify deploy script completion" step. Keep in sync
 # with the case statement in .github/workflows/web-platform-release.yml.
@@ -532,6 +544,61 @@ pull_failure_event() {
   fi
 }
 
+# registry_pull_event <registry> <image_kind> <tag>: success breadcrumb recording
+# WHICH registry served a pull (#6122/ADR-096). registry ∈ {zot, ghcr-fallback};
+# image_kind ∈ {web, inngest}. The soak gate (scripts/followthroughs/zot-soak-6122.sh)
+# counts registry=ghcr-fallback events per image — a healthy post-cutover fleet emits
+# ONLY registry=zot, so ghcr-fallback is level=warning (the watched signal) and zot is
+# level=info. Emitted ONLY when zot was ACTUALLY attempted (ZOT_ACTIVE=1); the pure-dark
+# pre-activation period emits nothing, so the flip stays a strict no-op until zot is
+# live. Fail-open, same Sentry store transport as pull_failure_event.
+registry_pull_event() {
+  local registry="$1" image_kind="$2" tag="$3"
+  logger -t "$LOG_TAG" "IMAGE_PULL_OK: registry=$registry image=$image_kind tag=$tag"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg reg "$registry" --arg img "$image_kind" --arg t "$tag" \
+      '{message: ("image pulled from " + $reg + " (" + $img + ":" + $t + ")"),
+        level: (if $reg == "ghcr-fallback" then "warning" else "info" end),
+        platform: "other", logger: "ci-deploy",
+        tags: {feature: "supply-chain", op: "image-pull", registry: $reg, image: $img},
+        extra: {tag: $t}}' 2>/dev/null)" || return 0
+    curl -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "IMAGE_PULL: Sentry POST failed"
+  fi
+}
+
+# zot_gate_degraded_event <reason>: WARNING beacon for when zot is CONFIGURED
+# (ZOT_REGISTRY_URL present) but the dark-launch gate could not activate it — the fleet
+# silently reverts to the GHCR path on the frequent rolling-deploy path WITHOUT a
+# registry=ghcr-fallback pull event (the pull path never attempts zot, so pull_image_with_
+# fallback takes its dark branch). Without this, a post-cutover zot pull-cred degradation
+# (host up + heartbeat green, but pull login failing) is journald-only and the fallback-rate
+# alarm is blind (hr-no-ssh-fallback-in-runbooks). SILENT during dark-launch — only fires
+# when ZOT_REGISTRY_URL is set. reason ∈ {probe_unreachable, creds_absent, login_failed}.
+# Fail-open, same Sentry store transport as pull_failure_event.
+zot_gate_degraded_event() {
+  local reason="$1"
+  logger -t "$LOG_TAG" "ZOT_GATE_DEGRADED: reason=$reason (configured but inactive — GHCR path)"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg r "$reason" \
+      '{message: ("zot gate degraded (" + $r + ") — configured but inactive, using GHCR"),
+        level: "warning", platform: "other", logger: "ci-deploy",
+        tags: {feature: "supply-chain", op: "image-pull", registry: "zot-gate-degraded", zot_gate_reason: $r}}' 2>/dev/null)" || return 0
+    curl -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "ZOT_GATE: Sentry POST failed"
+  fi
+}
+
 # ghcr_prelude_and_login: fetch the deploy-time secrets the pull + verify + telemetry
 # need INTO this script's OWN env, then authenticate the host docker daemon to the
 # now-PRIVATE GHCR packages (#6005). Runs BEFORE the first `docker pull` — the
@@ -573,6 +640,98 @@ ghcr_prelude_and_login() {
   ghcr_token=""
 }
 
+# zot_gate_and_login: dark-launch gate for the self-hosted zot registry (#6122/ADR-096).
+# Sets ZOT_ACTIVE=1 ONLY when zot is confirmed-configured-and-live: ZOT_REGISTRY_URL
+# present in Doppler prd AND a fast /v2/ probe answers AND the pull cred logs in. Any
+# miss leaves ZOT_ACTIVE=0 → every pull falls straight through to the UNCHANGED GHCR path
+# (wg-dark-launch-deploy-gates), so this is a strict no-op until the operator provisions
+# (1.8) + backfills (1.9) zot. The zot `docker login` writes a second auths entry into
+# the SAME $GHCR_DOCKER_CONFIG the cosign verifier mounts :ro — so Edge B (insecure .sig
+# fetch auth) is satisfied ATOMICALLY with the pull cred. Fail-open: never aborts the
+# deploy. Runs AFTER ghcr_prelude_and_login (which already prefetched SENTRY_* + guarded
+# doppler/DOPPLER_TOKEN). Token reaches `docker login` via --password-stdin (never argv),
+# and login output is >/dev/null 2>&1 so no trace/secret leaks.
+zot_gate_and_login() {
+  ZOT_ACTIVE=0
+  command -v doppler >/dev/null 2>&1 || return 0
+  [[ -n "${DOPPLER_TOKEN:-}" ]] || return 0
+  [[ -n "$ZOT_REGISTRY_URL" ]] || \
+    ZOT_REGISTRY_URL="$(doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)"
+  if [[ -z "$ZOT_REGISTRY_URL" ]]; then
+    logger -t "$LOG_TAG" "ZOT_GATE: ZOT_REGISTRY_URL unset — GHCR path (dark, pre-provisioning)"
+    return 0
+  fi
+  # Reachability probe: a live OCI registry answers /v2/ with 200 (open) or 401 (auth
+  # required); a down/unreachable host yields 000 (curl connect failure) → GHCR path.
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time "$ZOT_PROBE_TIMEOUT" "http://${ZOT_REGISTRY_URL}/v2/" 2>/dev/null || echo 000)"
+  if [[ "$code" != "200" && "$code" != "401" ]]; then
+    logger -t "$LOG_TAG" "ZOT_GATE: /v2/ probe http=$code — GHCR path (zot unreachable)"
+    zot_gate_degraded_event probe_unreachable
+    return 0
+  fi
+  local zuser ztoken
+  zuser="$(doppler secrets get ZOT_PULL_USER --plain --project soleur --config prd 2>/dev/null || true)"
+  ztoken="$(doppler secrets get ZOT_PULL_TOKEN --plain --project soleur --config prd 2>/dev/null || true)"
+  if [[ -z "$zuser" || -z "$ztoken" ]]; then
+    logger -t "$LOG_TAG" "ZOT_GATE: ZOT_PULL_{USER,TOKEN} not both present — GHCR path"
+    ztoken=""
+    zot_gate_degraded_event creds_absent
+    return 0
+  fi
+  if printf '%s' "$ztoken" | docker login "$ZOT_REGISTRY_URL" -u "$zuser" --password-stdin >/dev/null 2>&1; then
+    ZOT_ACTIVE=1
+    logger -t "$LOG_TAG" "ZOT_GATE: active — docker login $ZOT_REGISTRY_URL ok (zot-primary)"
+  else
+    logger -t "$LOG_TAG" "ZOT_GATE: docker login $ZOT_REGISTRY_URL FAILED — GHCR path (fallback)"
+    zot_gate_degraded_event login_failed
+  fi
+  ztoken=""
+}
+
+# pull_image_with_fallback <image_kind>: pull $IMAGE:$TAG zot-primary with an ATOMIC
+# GHCR fallback (#6122/ADR-096). image_kind ∈ {web, inngest} (beacon tag only). On
+# success it reassigns the GLOBAL IMAGE to the registry-qualified repo actually pulled,
+# so verify_image_signature + every downstream docker create/run follow the SAME
+# registry — image ref + docker auth + cosign .sig target move together. Emits a
+# registry_pull_event breadcrumb (zot on success, ghcr-fallback when zot was attempted
+# but failed); pull_failure_event on total failure. Returns 1 only when BOTH registries
+# fail (caller aborts, OLD container stays live — downtime-safe). FD-200 advisory lock
+# is closed for the pull children (#5062).
+pull_image_with_fallback() {
+  local image_kind="$1" perr
+  perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
+  if [[ "$ZOT_ACTIVE" == "1" ]]; then
+    local zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}"
+    if docker pull "${zot_ref}:${TAG}" 200>&- 2>"$perr"; then
+      IMAGE="$zot_ref"
+      registry_pull_event zot "$image_kind" "$TAG"
+      rm -f "$perr" 2>/dev/null || true
+      return 0
+    fi
+    # zot attempted but failed → ATOMIC fallback to GHCR (IMAGE stays the ghcr ref, so
+    # cosign follows the GHCR RepoDigest with NO insecure flag). This is the soak gate's
+    # watched event; surfaced loudly, not journald-only.
+    logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} — falling back to GHCR"
+    if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+      registry_pull_event ghcr-fallback "$image_kind" "$TAG"
+      rm -f "$perr" 2>/dev/null || true
+      return 0
+    fi
+    pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)"
+    rm -f "$perr" 2>/dev/null || true
+    return 1
+  fi
+  # zot dark (not configured/unreachable) → unchanged GHCR path, no new beacon.
+  if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+    rm -f "$perr" 2>/dev/null || true
+    return 0
+  fi
+  pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)"
+  rm -f "$perr" 2>/dev/null || true
+  return 1
+}
+
 # verify_image_signature <image:tag> — resolves the just-pulled image to its
 # immutable repo@sha256 digest and cosign-verifies the signature (offline,
 # identity-pinned) via the SHA-pinned cosign container. Echoes on stdout the ref
@@ -585,8 +744,14 @@ ghcr_prelude_and_login() {
 verify_image_signature() {
   local image_tag="$1" repo_digest err
   err="$(mktemp 2>/dev/null || echo /tmp/cosign-verify.err)"
-  # Resolve the pulled tag to its immutable digest ref.
-  repo_digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$image_tag" 2>/dev/null || true)"
+  # Resolve the pulled tag to its immutable digest ref. Select the RepoDigest for the
+  # SAME registry the tag names — after a dual-push era the local image can carry BOTH a
+  # zot and a GHCR RepoDigest, and `{{index .RepoDigests 0}}` picks a non-deterministic
+  # one; scoping to the pulled registry keeps the cosign target following the pull
+  # registry atomically (#6122 Edge B). `${image_tag%:*}` strips only the trailing :tag
+  # (the zot host:port colon is followed by '/', so it survives the strip).
+  local repo="${image_tag%:*}"
+  repo_digest="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image_tag" 2>/dev/null | grep -F "${repo}@sha256:" | head -1 || true)"
   if [[ -z "$repo_digest" || "$repo_digest" != *"@sha256:"* ]]; then
     cosign_verify_event "inspect_failed" "$image_tag" "RepoDigests[0] empty or not a digest ref"
     printf '%s' "$image_tag" # fail-open: run the tag (WARN); ENFORCE aborts below
@@ -602,10 +767,18 @@ verify_image_signature() {
   # Trust is the locally-pinned trusted_root.json (mounted :ro) with `--offline`, so
   # no live Fulcio/Rekor/TUF egress is needed. `docker pull` of the image does NOT
   # pull the .sig referrer, so the fetch (host egress) is still required.
+  # Edge B (#6122): a zot-pulled digest lives on plain-HTTP zot on the private net, so
+  # the .sig referrer fetch needs --allow-insecure-registry. When the pull fell back to
+  # GHCR the digest is a ghcr.io ref and the flag stays off — image+auth+sig move
+  # together. The zot auths entry was written into $GHCR_DOCKER_CONFIG by
+  # zot_gate_and_login, so the mounted :ro config already authenticates the fetch.
+  local zot_insecure=""
+  [[ -n "$ZOT_REGISTRY_URL" && "$repo_digest" == "${ZOT_REGISTRY_URL}/"* ]] && zot_insecure=1
   if docker run --rm --network host \
        -v "$GHCR_DOCKER_CONFIG:/root/.docker/config.json:ro" \
        -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
        "$COSIGN_IMAGE" verify --offline \
+       ${zot_insecure:+--allow-insecure-registry} \
        --trusted-root=/etc/cosign/trusted_root.json \
        --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
        --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
@@ -1000,6 +1173,9 @@ fi
 # prefetch SENTRY_* into this script's env BEFORE any pull/verify. Covers BOTH the
 # web-platform and inngest pull sites below. Fail-open (never aborts the deploy).
 ghcr_prelude_and_login
+# #6122/ADR-096: evaluate the zot dark-launch gate (probe + pull login) once, covering
+# BOTH pull sites. Sets ZOT_ACTIVE; strict no-op (GHCR path) until zot is provisioned.
+zot_gate_and_login
 
 # Component-specific deploy logic
 case "$COMPONENT" in
@@ -1018,17 +1194,14 @@ case "$COMPONENT" in
     # the next attempt). prune is included for the same reason — a slow prune on
     # a disk-full host is the same orphan class.
     docker image prune -af 200>&-
-    # #6005: the pull is now against a PRIVATE package (M2 SPOF). Capture stderr and
-    # emit a loud, no-SSH pull-failure event (scrubbed) on denial before aborting —
-    # keeps the OLD container live (downtime-safe), same as any pre-swap failure.
-    _pull_err="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
-    if ! docker pull "$IMAGE:$TAG" 200>&- 2>"$_pull_err"; then
-      pull_failure_event "$IMAGE:$TAG" "$(tail -c 400 "$_pull_err" 2>/dev/null || true)"
-      rm -f "$_pull_err" 2>/dev/null || true
+    # #6005/#6122: the pull is against a PRIVATE package (M2 SPOF). pull_image_with_fallback
+    # tries zot-primary (when ZOT_ACTIVE) with an atomic GHCR fallback, reassigns IMAGE to
+    # the registry that served it (so verify + run follow the same registry), and emits a
+    # loud no-SSH beacon on total failure — keeps the OLD container live (downtime-safe).
+    if ! pull_image_with_fallback web; then
       final_write_state 1 "image_pull_failed"
       exit 1
     fi
-    rm -f "$_pull_err" 2>/dev/null || true
 
     # #5933 Item 4: cosign-verify the pulled image's signature (WARN mode) and run
     # the VERIFIED DIGEST at every subsequent create/run below (plugin-seed, canary,
@@ -1485,17 +1658,15 @@ case "$COMPONENT" in
     # script inside it would fail at `systemctl daemon-reload`. The host has
     # systemd + the deploy user + the systemd unit paths the script writes.
     echo "Pulling Inngest bootstrap image $IMAGE:$TAG..."
-    # #6005: soleur-inngest-bootstrap is ALSO a PRIVATE package. ghcr_prelude_and_login
-    # (run before the case) already authenticated the host daemon; emit a loud, no-SSH
-    # pull-failure event (scrubbed) on denial before aborting.
-    _pull_err="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
-    if ! docker pull "$IMAGE:$TAG" 2>"$_pull_err"; then
-      pull_failure_event "$IMAGE:$TAG" "$(tail -c 400 "$_pull_err" 2>/dev/null || true)"
-      rm -f "$_pull_err" 2>/dev/null || true
+    # #6005/#6122: soleur-inngest-bootstrap is ALSO a PRIVATE package. zot_gate_and_login
+    # (run before the case) already evaluated the gate + logged in; pull_image_with_fallback
+    # tries zot-primary with an atomic GHCR fallback, reassigns IMAGE to the served
+    # registry (downstream create/inspect follow it), and emits a loud no-SSH beacon on
+    # total failure.
+    if ! pull_image_with_fallback inngest; then
       final_write_state 1 "image_pull_failed"
       exit 1
     fi
-    rm -f "$_pull_err" 2>/dev/null || true
 
     # Extract the script + pinned ENV vars from the image.
     # Fixed path (not mktemp) so the sudoers entry in

@@ -233,6 +233,9 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
         gitAskpassScriptPath: "/tmp/test-workspace/.askpass-xyz.sh",
         // The askpass token IS the installation token (same value as ghToken).
         gitInstallationToken: "ghs_install_tok",
+        // Slice B: deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's
+        // bash shell-outs; threaded verbatim from args.pluginPath.
+        pluginPath: PLUGIN,
       },
     );
   });
@@ -247,6 +250,9 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
         ghToken: undefined,
         gitAskpassScriptPath: undefined,
         gitInstallationToken: undefined,
+        // Slice B: pluginPath is ALWAYS threaded (both factories pass
+        // getPluginPath()); only the git-askpass extras are per-call divergent.
+        pluginPath: PLUGIN,
       },
     );
   });

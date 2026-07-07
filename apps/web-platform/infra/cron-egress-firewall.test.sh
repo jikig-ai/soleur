@@ -534,7 +534,9 @@ assert_grep "bootstrap installs cron-egress allowlists into /etc/soleur (0644)" 
 assert_not_grep "cron-egress loader is NOT re-inlined in cloud-init write_files" '- path: /usr/local/bin/cron-egress-nftables\.sh' "$CLOUD_INIT"
 assert_grep "cloud-init enables the firewall unit" 'systemctl enable --now cron-egress-firewall\.service' "$CLOUD_INIT"
 assert_grep "cloud-init enables the resolve timer" 'systemctl enable --now cron-egress-resolve\.timer' "$CLOUD_INIT"
-assert_grep "cloud-init installs nftables" '^ *- nftables$' "$CLOUD_INIT"
+# #6090: package install moved from cloud-config packages: into an instrumented runcmd apt block
+# (so a config-phase apt hang becomes a named fatal). nftables is still installed — now via apt-get.
+assert_grep "cloud-init installs nftables (runcmd apt block, #6090)" 'apt-get install -y .*nftables' "$CLOUD_INIT"
 
 echo "-- Phase 2.1: assertion-block self-reporting sentinels (#5279) --"
 # The post-apply assertion block (server.tf, the 2nd remote-exec) runs under

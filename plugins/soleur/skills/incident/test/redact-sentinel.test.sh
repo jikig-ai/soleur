@@ -69,7 +69,8 @@ rc=$?
 assert_exit "Test 2: positive-corpus exits non-zero" 1 "${rc}"
 
 for class in JWT email UUID stripe_key stripe_whsec stripe_acct stripe_cust_pi_seti_sub_in IPv4 env_var \
-             github_token anthropic_key openai_key supabase_pat pem_private_key doppler_token slack_token; do
+             github_token anthropic_key openai_key supabase_pat pem_private_key doppler_token slack_token \
+             cloudflare_token; do
   assert_grep "Test 2.${class}: pattern '${class}' present" "matched pattern ${class}" "${out}"
 done
 
@@ -299,6 +300,286 @@ if grep -rlP '[\x{200b}\x{200c}\x{200d}\x{2060}\x{feff}\x{202a}-\x{202e}\x{2028}
 else
   echo "PASS: AC6: no literal invisibles committed in incident/legal-generate skills"
   PASS=$((PASS + 1))
+fi
+
+# ===========================================================================
+# #6045 PR-B — item 1 (whitespace/newline reflow re-scan) + item 6 (Cloudflare token).
+# All fixtures synthesized at runtime; invisibles/newlines via chr() (AC6).
+# ===========================================================================
+
+# Test 13 — reflow two-engine (item 1, AC1 shape): a stripe key split by a NEWLINE.
+# (a) OLD raw-byte engine MISSES the split token (exit 0); (b) the new engine's base pass also
+# cannot match across the kept newline — only _scan_reflow catches it after whitespace-rejoin.
+# stripe_key is a pre-#5987 class the OLD engine already carries, so 13a isolates the SPLIT-evasion.
+t13_file="${TMP_DIR}/t13.txt"
+python3 -c "import sys; sys.stdout.write('key sk_live_0000ABCD'+chr(0x0a)+'1234000000000000 end'+chr(0x0a))" > "${t13_file}"
+bash "${OLD_ENGINE}" "${t13_file}" >/dev/null 2>&1
+assert_exit "Test 13a: OLD raw-byte engine MISSES newline-split stripe key" 0 $?
+t13_out="${TMP_DIR}/t13.out"
+bash "${SENTINEL}" "${t13_file}" >"${t13_out}" 2>&1
+assert_exit "Test 13b: reflow catches newline-split stripe key" 1 $?
+assert_grep "Test 13b: stripe_key via whitespace-rejoin" "matched pattern stripe_key" "${t13_out}"
+
+# Test 13c — reflow with a SPACE split (distinct whitespace kind from 13b's newline). A doppler
+# token split by an ASCII space (0x20 survives normalization). Must be caught.
+t13c_file="${TMP_DIR}/t13c.txt"
+python3 -c "import sys; sys.stdout.write('tok dp.st.ABCD1234 EFGH5678IJKLMNOP done'+chr(0x0a))" > "${t13c_file}"
+bash "${SENTINEL}" "${t13c_file}" >/dev/null 2>&1
+assert_exit "Test 13c: reflow catches space-split doppler token" 1 $?
+
+# Test 13d — reflow NO-FALSE-POSITIVE on an INCLUDED prefix (spec-flow highest-value guard):
+# an included distinctive prefix (dp.st.) followed by DESPACEABLE PROSE must NOT manufacture a
+# match. Naive whitespace-strip would glue the prose into a 16+ run; the bounded-split guard
+# (rejoin across few runs only; prose has a run every few chars) rejects it. Must exit 0.
+t13d_file="${TMP_DIR}/t13d.txt"
+python3 -c "import sys; sys.stdout.write('note dp.st. the quick brown fox ran far away today ok'+chr(0x0a))" > "${t13d_file}"
+bash "${SENTINEL}" "${t13d_file}" >/dev/null 2>&1
+assert_exit "Test 13d: reflow does NOT manufacture a match from prose after an included prefix" 0 $?
+
+# Test 13e — negative baseline still clean after the reflow pass (no manufactured matches).
+bash "${SENTINEL}" "${NEGATIVE_BASELINE}" >/dev/null 2>&1
+assert_exit "Test 13e: reflow pass does not manufacture matches on the clean PIR" 0 $?
+
+# Test 13f — Test-4b invariant (meta-redaction) holds on a REFLOW-caught finding (new emit path).
+t13f_out="${TMP_DIR}/t13f.out"
+bash "${SENTINEL}" "${t13_file}" >"${t13f_out}" 2>&1 || true
+if grep -qE 'matched pattern stripe_key \(whitespace-rejoin\)' "${t13f_out}" && \
+   ! grep -qE 'at offset [0-9]+: [^*]{5,}\*\*\*' "${t13f_out}"; then
+  echo "PASS: Test 13f: reflow finding is tagged and meta-redacted (<=4-char reveal)"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 13f: reflow finding missing tag or leaked >4 prefix chars"
+  cat "${t13f_out}"
+  FAIL=$((FAIL + 1))
+fi
+
+# Test 14 — Cloudflare token (item 6): a 40-char [A-Za-z0-9_-] token containing BOTH an uppercase
+# letter AND a digit trips cloudflare_token. Synthesized (no real token).
+t14_file="${TMP_DIR}/t14.txt"
+python3 -c "import sys; sys.stdout.write('CF_TOKEN v1.0 Ab3'+'x'*37+' end'+chr(0x0a))" > "${t14_file}"
+t14_out="${TMP_DIR}/t14.out"
+bash "${SENTINEL}" "${t14_file}" >"${t14_out}" 2>&1
+assert_exit "Test 14: 40-char upper+digit token trips cloudflare_token" 1 $?
+assert_grep "Test 14: cloudflare_token matched" "matched pattern cloudflare_token" "${t14_out}"
+
+# Test 14b — anti-SHA NO-FALSE-POSITIVE: a 40-char lowercase-hex git SHA (digit, NO uppercase)
+# must NOT trip. Incident PIRs cite commit SHAs constantly.
+t14b_file="${TMP_DIR}/t14b.txt"
+python3 -c "import sys; sys.stdout.write('commit '+'a1b2c3d4'*5+' shipped'+chr(0x0a))" > "${t14b_file}"
+t14b_out="${TMP_DIR}/t14b.out"
+bash "${SENTINEL}" "${t14b_file}" >"${t14b_out}" 2>&1
+if grep -qE 'matched pattern cloudflare_token' "${t14b_out}"; then
+  echo "FAIL: Test 14b: a 40-char git SHA falsely tripped cloudflare_token"
+  FAIL=$((FAIL + 1))
+else
+  echo "PASS: Test 14b: 40-char lowercase-hex git SHA does NOT trip cloudflare_token (anti-SHA predicate)"
+  PASS=$((PASS + 1))
+fi
+
+# Test 14c — anti-prose NO-FALSE-POSITIVE: a 40-char kebab-case identifier span (NO uppercase, NO
+# digit) must NOT trip.
+t14c_file="${TMP_DIR}/t14c.txt"
+python3 -c "import sys; sys.stdout.write('rule cq-'+'-'.join(['abc']*9)+' xx'+chr(0x0a))" > "${t14c_file}"
+t14c_out="${TMP_DIR}/t14c.out"
+bash "${SENTINEL}" "${t14c_file}" >"${t14c_out}" 2>&1
+if grep -qE 'matched pattern cloudflare_token' "${t14c_out}"; then
+  echo "FAIL: Test 14c: a 40-char kebab span falsely tripped cloudflare_token"
+  FAIL=$((FAIL + 1))
+else
+  echo "PASS: Test 14c: 40-char kebab prose does NOT trip cloudflare_token"
+  PASS=$((PASS + 1))
+fi
+
+# Test 14d — negative baseline still clean with cloudflare_token added (cites SHAs).
+bash "${SENTINEL}" "${NEGATIVE_BASELINE}" >/dev/null 2>&1
+assert_exit "Test 14d: cloudflare_token class does not manufacture matches on the clean PIR" 0 $?
+
+# ===========================================================================
+# #6045 PR-C — item 2 (base64/hex/percent decode-and-rescan) + item 3 (headerless-PEM
+# private-key DER discriminator). DER fixtures are SYNTHESIZED from the ASN.1 spec (no
+# key material) so they exercise the discriminator branches directly.
+# ===========================================================================
+
+# DER shape helpers (Python): seq() wraps content in a SEQUENCE with correct short/long-form length.
+_DER_PY='
+import base64, sys
+def seq(content):
+    n = len(content)
+    if n < 0x80: length = bytes([n])
+    elif n < 0x100: length = bytes([0x81, n])
+    else: length = bytes([0x82, n >> 8, n & 0xFF])
+    return bytes([0x30]) + length + content
+def b64(b): return base64.b64encode(b).decode()
+# private-key-shaped, SHORT-form length (EC/Ed25519 size): SEQUENCE{ INTEGER 1, OCTET STRING(44) }
+priv_short = seq(bytes([0x02,0x01,0x01]) + bytes([0x04,0x2C]) + b"\x00"*44)
+# private-key-shaped, LONG-form length (RSA size): SEQUENCE{ INTEGER 0, OCTET STRING(300) }
+priv_long  = seq(bytes([0x02,0x01,0x00]) + bytes([0x04,0x82,0x01,0x2C]) + b"\x00"*300)
+# cert/SPKI/encrypted-PKCS#8 shape: SEQUENCE{ SEQUENCE(44) } — first inner is SEQUENCE, must REJECT
+cert_like  = seq(seq(b"\x00"*44))
+# PNG magic (0x89) — not a SEQUENCE, must REJECT
+png        = bytes([0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A]) + b"\x00"*56
+'
+
+# Test 15 — item 3 private-key DER discriminator POSITIVES (short + long form).
+t15a="${TMP_DIR}/t15a.txt"
+python3 -c "${_DER_PY}
+sys.stdout.write('k8s data: ' + b64(priv_short) + '\n')" > "${t15a}"
+bash "${SENTINEL}" "${t15a}" >/tmp/t15a.out 2>&1
+assert_exit "Test 15a: short-form (EC/Ed25519-size) headerless private-key DER caught" 1 $?
+assert_grep "Test 15a: pem_key_body" "matched pattern pem_key_body" /tmp/t15a.out
+
+t15b="${TMP_DIR}/t15b.txt"
+python3 -c "${_DER_PY}
+sys.stdout.write('blob ' + b64(priv_long) + '\n')" > "${t15b}"
+bash "${SENTINEL}" "${t15b}" >/dev/null 2>&1
+assert_exit "Test 15b: long-form (RSA-size) headerless private-key DER caught" 1 $?
+
+# Test 15c — item 3 with a 64-char-WRAPPED body (real PEM bodies are line-wrapped): block assembly
+# must join consecutive base64 lines before decoding.
+t15c="${TMP_DIR}/t15c.txt"
+python3 -c "${_DER_PY}
+b = b64(priv_long)
+wrapped = '\n'.join(b[i:i+64] for i in range(0, len(b), 64))
+sys.stdout.write('-- body --\n' + wrapped + '\n-- end --\n')" > "${t15c}"
+bash "${SENTINEL}" "${t15c}" >/dev/null 2>&1
+assert_exit "Test 15c: 64-char-wrapped headerless private-key body caught via block assembly" 1 $?
+
+# Test 15d — item 3 NO-FALSE-POSITIVE: cert/SPKI/encrypted-PKCS#8 shape (inner SEQUENCE) must NOT
+# trip pem_key_body — a public cert pasted into a legal draft is legitimate; flagging it fail-closes.
+t15d="${TMP_DIR}/t15d.txt"
+python3 -c "${_DER_PY}
+sys.stdout.write('cert ' + b64(cert_like) + '\n')" > "${t15d}"
+bash "${SENTINEL}" "${t15d}" >/tmp/t15d.out 2>&1
+if grep -qE 'matched pattern pem_key_body' /tmp/t15d.out; then
+  echo "FAIL: Test 15d: a public-cert-shaped DER (inner SEQUENCE) falsely tripped pem_key_body"; FAIL=$((FAIL + 1))
+else
+  echo "PASS: Test 15d: cert/SPKI/encrypted-PKCS#8 shape does NOT trip pem_key_body (private-key discriminator)"; PASS=$((PASS + 1))
+fi
+
+# Test 15e — item 3 NO-FALSE-POSITIVE: a PNG image body (0x89 magic) must NOT trip pem_key_body.
+t15e="${TMP_DIR}/t15e.txt"
+python3 -c "${_DER_PY}
+sys.stdout.write('img ' + b64(png) + '\n')" > "${t15e}"
+bash "${SENTINEL}" "${t15e}" >/tmp/t15e.out 2>&1
+if grep -qE 'matched pattern pem_key_body' /tmp/t15e.out; then
+  echo "FAIL: Test 15e: a PNG body falsely tripped pem_key_body"; FAIL=$((FAIL + 1))
+else
+  echo "PASS: Test 15e: PNG image body does NOT trip pem_key_body"; PASS=$((PASS + 1))
+fi
+
+# Test 16 — item 2 decode-and-rescan POSITIVES (base64, base64url, hex, percent) of a known secret.
+_SECRET_PY='
+import base64, urllib.parse, binascii, sys
+# Split across concatenation so no contiguous sk_live_<24+> literal exists in source (GitHub push
+# protection scans the raw file; cq-test-fixtures-synthesized-only). 38B body -> base64 is 52 chars
+# (not 40 -> no cloudflare_token collision in the decode test).
+s = b"sk_" + b"live_0000ABCD1234567890abcdefXYZ789"
+b64s   = base64.b64encode(s).decode()
+b64url = base64.urlsafe_b64encode(s).decode()
+hexs   = s.hex()
+pcts   = urllib.parse.quote(s.decode())
+'
+for enc in b64s b64url hexs pcts; do
+  f="${TMP_DIR}/t16-${enc}.txt"
+  python3 -c "${_SECRET_PY}
+sys.stdout.write('payload: ' + ${enc} + ' trailer\n')" > "${f}"
+  bash "${SENTINEL}" "${f}" >/tmp/t16.out 2>&1
+  assert_exit "Test 16.${enc}: encoded stripe key decoded and caught" 1 $?
+  assert_grep "Test 16.${enc}: stripe_key via decode" "matched pattern stripe_key" /tmp/t16.out
+done
+
+# Test 16b — decode NO-FALSE-POSITIVE corpus: innocent encoded content must NOT manufacture a match.
+#  (i) base64 of a PNG image; (ii) an SRI sha512- hash; (iii) a git SHA / sha256 hex; (iv) a base64
+#  JWT-payload-shaped JSON containing an email (email is decode-skipped → must stay clean); (v) a
+#  percent-encoded URL.
+t16b="${TMP_DIR}/t16b.txt"
+python3 -c "
+import base64, sys
+png = bytes([0x89,0x50,0x4E,0x47]) + bytes(range(60))
+sri = 'sha512-' + base64.b64encode(bytes(range(64))).decode()
+jwtjson = base64.urlsafe_b64encode(b'{\"sub\":\"1\",\"email\":\"a@b.com\"}').decode()
+sys.stdout.write('image ' + base64.b64encode(png).decode() + '\n')
+sys.stdout.write('integrity ' + sri + '\n')
+sys.stdout.write('commit ' + 'ab'*20 + ' sha256 ' + 'cd'*32 + '\n')
+sys.stdout.write('token ' + jwtjson + '\n')
+sys.stdout.write('url https://x.example/a%2Fb%2Fc?q=1 done\n')
+" > "${t16b}"
+bash "${SENTINEL}" "${t16b}" >/tmp/t16b.out 2>&1
+if [[ $? -eq 0 ]]; then
+  echo "PASS: Test 16b: innocent encoded content (image/SRI/SHA/JWT-JSON-email/percent-URL) does NOT manufacture a match"; PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 16b: decode pass manufactured a false positive on innocent encoded content"; cat /tmp/t16b.out; FAIL=$((FAIL + 1))
+fi
+
+# Test 16c — malformed base64 candidate must NOT bubble to the exit-2 catch-all (per-candidate guard).
+# A real secret alongside a malformed blob must still be caught (exit 1), not fail-closed to exit 2.
+t16c="${TMP_DIR}/t16c.txt"
+python3 -c "
+import base64, sys
+good = base64.b64encode(b'sk_' + b'live_0000ABCD1234567890abXY').decode()  # split literal: gitleaks stripe rule (cq-test-fixtures-synthesized-only)
+sys.stdout.write('bad !!!====notbase64==== ' + good + ' end\n')
+" > "${t16c}"
+bash "${SENTINEL}" "${t16c}" >/dev/null 2>&1
+assert_exit "Test 16c: malformed base64 candidate skipped per-candidate (real secret still caught, exit 1 not 2)" 1 $?
+
+# Test 16d — Test-4b invariant on a DECODE-caught finding (new emit path).
+bash "${SENTINEL}" "${TMP_DIR}/t16-b64s.txt" >/tmp/t16d.out 2>&1 || true
+if grep -qE 'matched pattern stripe_key \(decoded' /tmp/t16d.out && \
+   ! grep -qE 'at offset [0-9]+: [^*]{5,}\*\*\*' /tmp/t16d.out; then
+  echo "PASS: Test 16d: decode finding is tagged and meta-redacted (<=4-char reveal)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 16d: decode finding missing tag or leaked >4 prefix chars"; cat /tmp/t16d.out; FAIL=$((FAIL + 1))
+fi
+
+# Test 16e — behavioral fan-out bound: a base64-run-flooded input completes without hanging and
+# exits cleanly (no manufactured matches); pins _MAX_ENCODED_CANDIDATES against a future cap removal.
+t16e="${TMP_DIR}/t16e.txt"
+python3 -c "import sys; sys.stdout.write((('QUJDREVGR0hJSktMTU5PUFFSU1Q ')*5000))" > "${t16e}"
+timeout 30 bash "${SENTINEL}" "${t16e}" >/dev/null 2>&1
+rc=$?
+if [[ $rc -eq 0 || $rc -eq 1 ]]; then
+  echo "PASS: Test 16e: base64-flooded input completes within bound (rc=${rc}, not a timeout)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 16e: base64-flooded input did not complete (rc=${rc} — possible unbounded fan-out)"; FAIL=$((FAIL + 1))
+fi
+
+# Test 15f — item 3 with an INDENTED, 32-col-wrapped body (the real k8s Secret / Helm `data:` shape):
+# block assembly must .strip() each line so indented base64 assembles. (#6045 review F2)
+t15f="${TMP_DIR}/t15f.txt"
+python3 -c "${_DER_PY}
+b = b64(priv_long)
+wrapped = '\n'.join('    ' + b[i:i+32] for i in range(0, len(b), 32))  # 4-space indent, 32-col
+sys.stdout.write('data:\n  tls.key: |\n' + wrapped + '\n')" > "${t15f}"
+bash "${SENTINEL}" "${t15f}" >/dev/null 2>&1
+assert_exit "Test 15f: indented 32-col-wrapped k8s Secret private-key body caught via block assembly" 1 $?
+
+# Test 16f — decode NO-FALSE-POSITIVE on a BINARY asset: a base64'd mostly-non-printable blob that
+# carries an INCIDENTAL sk- run must NOT fail-close (the printable-text gate skips binary). (#6045 review F4)
+t16f="${TMP_DIR}/t16f.txt"
+python3 -c "
+import base64, sys
+# 200 high bytes (a font/wasm/image shape) with an incidental 'sk-...' run spliced in.
+blob = bytes(range(0x80, 0x100)) * 2 + b'sk-A1b2C3d4E5f6G7h8I9j0' + bytes(range(0x80, 0x100))
+sys.stdout.write('embedded asset: ' + base64.b64encode(blob).decode() + ' end\n')
+" > "${t16f}"
+bash "${SENTINEL}" "${t16f}" >/tmp/t16f.out 2>&1
+if [[ $? -eq 0 ]]; then
+  echo "PASS: Test 16f: a base64 binary asset with an incidental sk- run does NOT fail-close (printable-text gate)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 16f: decode pass fail-closed a legitimate binary asset (over-redaction FP)"; cat /tmp/t16f.out; FAIL=$((FAIL + 1))
+fi
+
+# Test 17 — email-class ReDoS bound (#6045 security review P1): a large run of email-class chars with
+# NO '@' must complete quickly (bounded quantifier → linear), not hang the fail-closed gate. 256 KiB of
+# 'a' at the pre-fix O(n^2) rate timed out (>2 min); bounded it returns in well under the 20s ceiling.
+t17="${TMP_DIR}/t17.txt"
+python3 -c "import sys; sys.stdout.write('a'*262144)" > "${t17}"
+timeout 20 bash "${SENTINEL}" "${t17}" >/dev/null 2>&1
+rc=$?
+if [[ $rc -eq 0 || $rc -eq 1 ]]; then
+  echo "PASS: Test 17: 256 KiB email-class flood completes within 20s (email quantifier bounded — no O(n^2) ReDoS)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 17: email-class flood did not complete (rc=${rc} — O(n^2) ReDoS regression)"; FAIL=$((FAIL + 1))
 fi
 
 echo

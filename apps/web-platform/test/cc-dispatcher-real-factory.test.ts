@@ -463,13 +463,17 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
-  // T3: plugins: [{ type: "local", path: <workspace>/plugins/soleur }]
+  // T3: plugins: [{ type: "local", path: <DEPLOYED plugin root> }]  (security fix)
   // -------------------------------------------------------------------------
-  it("T3: plugins points at the per-user workspace plugin copy", async () => {
+  it("T3: plugins points at the DEPLOYED plugin root, not the workspace copy", async () => {
+    // getPluginPath() default (no SOLEUR_PLUGIN_PATH set in test). A workspace whose
+    // connected repo ships its own plugins/soleur/ must NOT shadow the deployed plugin
+    // (security: loading the workspace copy would run its hooks.json in-process).
+    // See knowledge-base/.../2026-07-06-connected-repo-shadows-deployed-plugin-*.md.
     await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.plugins).toEqual([
-      { type: "local", path: `${WORKSPACE_PATH}/plugins/soleur` },
+      { type: "local", path: "/app/shared/plugins/soleur" },
     ]);
   });
 
@@ -629,8 +633,9 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       { value: "sk-test", scheme: "api_key" },
       { PLAUSIBLE_API_KEY: "plk-1" },
       // Issue A: third opts arg always present; ghToken undefined here
-      // because the default mock resolves no installation (null).
-      { ghToken: undefined },
+      // because the default mock resolves no installation (null). Slice B:
+      // pluginPath (getPluginPath() = deployed root) is always threaded.
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
     );
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.env.ANTHROPIC_API_KEY).toBe("sk-test");
@@ -667,6 +672,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         ghToken: "ghs_minted_xyz",
         gitAskpassScriptPath: `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
         gitInstallationToken: "ghs_minted_xyz",
+        pluginPath: "/app/shared/plugins/soleur",
       },
     );
   });
@@ -750,6 +756,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         ghToken: undefined,
         gitAskpassScriptPath: undefined,
         gitInstallationToken: undefined,
+        pluginPath: "/app/shared/plugins/soleur",
       },
     );
   });
@@ -794,7 +801,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
     );
     expect(mockQuery).toHaveBeenCalledOnce();
   });
@@ -814,7 +821,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
     );
   });
 

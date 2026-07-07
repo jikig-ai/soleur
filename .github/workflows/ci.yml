@@ -167,6 +167,31 @@ jobs:
       - name: Check ADR ordinals + content completeness
         run: bash scripts/check-adr-ordinals.sh
 
+  # Hard-rule body-weakening gate (ADR-092, #6103). BLOCKS any un-acked change
+  # or deletion of an `hr-*`/`wg-*` rule BODY line in AGENTS.{core,docs,rest}.md
+  # (see scripts/lint-rule-bodies.py). This job's name IS the `rule-body-lint`
+  # required context pinned in infra/github/ruleset-ci-required.tf +
+  # scripts/ci-required-ruleset-canonical-required-status-checks.json — a rename
+  # requires a paired terraform apply. MUST stay ALWAYS-RUN (no `paths:`/`if:`
+  # event gate) and green on the no-op path: a path-gated required 15368 context
+  # never posts on unrelated PRs → permanent `pending` → wedges every human PR
+  # (CTO ruling 2026-07-06; mirrors the `enforce`/`tenant-integration-required`
+  # always-run contexts). The gate itself is green when no body changed, so the
+  # no-op path needs no explicit short-circuit. fetch-depth: 0 + `git fetch
+  # origin main` so the merge-base (NOT origin/main tip) is resolvable on
+  # pull_request / push / merge_group alike.
+  rule-body-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: Hard-rule body-weakening gate (ADR-092)
+        run: |
+          git fetch --no-tags --quiet origin main
+          BASE="$(git merge-base origin/main HEAD)"
+          python3 scripts/lint-rule-bodies.py --check --base "$BASE"
+
   rule-metrics-shape:
     runs-on: ubuntu-latest
     steps:
@@ -289,6 +314,62 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin main 2>/dev/null || true
           bash apps/web-platform/scripts/sdk-bump-sandbox-gate.sh
+
+  # plugin-root-propagation-verify-in-image.sh — the F2 runtime guarantee
+  # (Slice B / AC7a, #6121): proves CLAUDE_PLUGIN_ROOT (injected by buildAgentEnv)
+  # actually reaches the bwrap-SANDBOXED Bash env, so the deployed skills'
+  # `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` never silently falls back to the
+  # untrusted connected-repo copy on the server. Must run in the node:22-slim
+  # deploy base (with socat) — the SDK's claude-CLI → bwrap env projection is
+  # SDK-internal; a future `--clearenv` regression would break propagation and is
+  # caught here. Creds-gated (one paid Haiku turn); skipped when the injection
+  # inputs or the SDK are unchanged.
+  plugin-root-propagation-gate:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect propagation-input changes
+        id: trigger
+        run: |
+          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
+          # Trigger set = the probe's ACTUAL inputs: it imports buildAgentEnv
+          # (agent-env.ts) + buildAgentSandboxConfig (agent-runner-sandbox-config.ts)
+          # + the SDK (package-lock.json) + the probe itself. Deliberately NOT
+          # agent-runner-query-options.ts: the probe calls buildAgentEnv directly,
+          # so a query-options `pluginPath`-threading regression is invisible to it
+          # (covered by agent-runner-query-options.test.ts instead) — including it
+          # would burn a paid Haiku turn on a probe that cannot detect the change.
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
+            echo "hit=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=0" >> "$GITHUB_OUTPUT"
+            echo "plugin-root-propagation-gate: no propagation-input change — skipping."
+          fi
+
+      # Runs entirely inside node:22-slim (deploy base) via the helper, which does
+      # its own apt (socat) + npm ci. The runner needs only docker + git.
+      - name: CLAUDE_PLUGIN_ROOT sandbox-propagation (in-image, fail-closed)
+        if: steps.trigger.outputs.hit == '1'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          VERDICT_JSON="$(bash apps/web-platform/scripts/plugin-root-propagation-verify-in-image.sh | tail -1)"
+          echo "verdict: $VERDICT_JSON"
+          V="$(printf '%s' "$VERDICT_JSON" | sed -n 's/.*"verdict":"\([a-z_]*\)".*/\1/p')"
+          case "$V" in
+            propagates) echo "OK: CLAUDE_PLUGIN_ROOT reaches sandbox bash." ;;
+            infra_error) echo "::warning::propagation probe infra_error (creds/sandbox-engage) — not a regression signal." ;;
+            does_not_propagate) echo "::error::CLAUDE_PLUGIN_ROOT no longer reaches sandbox bash — deployed skills would run the untrusted ./plugins copy. See #6121 / ADR-093."; exit 1 ;;
+            *) echo "::error::unrecognized propagation verdict: $VERDICT_JSON"; exit 1 ;;
+          esac
 
   # next build runs the App Router route-file validator that vitest and `tsc --noEmit`
   # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead

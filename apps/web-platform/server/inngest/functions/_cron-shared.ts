@@ -678,11 +678,11 @@ export async function deferIfTier2Cron(args: {
 // issue-count caught it (weeks later).
 //
 // "Produced output" = a `scheduled-<task>`-labeled issue CREATED OR UPDATED in
-// the run window. The update case matters: roadmap-review's DEDUP RULE comments
-// on the most-recent existing issue (instead of creating a new one) when a fire
-// from the last 6 days exists — a healthy outcome that creates no new issue.
-// Filtering on updated_at (via the GitHub `since` param) credits that
-// dedup-comment as output, so a manual-trigger-same-week does NOT false-red.
+// the run window. The update case matters: cron-community-monitor's DEDUP RULE
+// comments on the most-recent existing issue (instead of creating a new one)
+// when a fire from the last 24h exists — a healthy outcome that creates no new
+// issue. Filtering on updated_at (via the GitHub `since` param) credits that
+// dedup-comment as output, so a manual-trigger-same-day does NOT false-red.
 // Within a producer's ~50-min run window only the producer itself touches its
 // own labeled issues (daily-triage runs at a different hour), so updated_at
 // moving == the producer did something.

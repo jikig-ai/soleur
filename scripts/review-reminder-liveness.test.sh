@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests the review-reminder.yml liveness guard (#5999, ADR-086, AC9):
+# Tests the review-reminder.yml liveness guard (#5999, ADR-094, AC9):
 #   - the repo-root AGENTS.core.md is appended to the scan feed;
 #   - the run FAILS loudly (::error:: + exit 1) when a required constitutional
 #     path is NOT evaluated (frontmatter/cadence removed, or feed drop);

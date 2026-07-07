@@ -46,12 +46,17 @@ const HETZNER_CAP = 32_768;
 // git-data #5927 precedent, ADR-080 amended for the web host) because the RAW render reached the
 // old 31,500 B sub-cap organically and #6090's fresh-boot observability additions (readiness
 // gates + emit call-sites that must live IN cloud-init, post-install) pushed it over. We model the
-// base64gzip OUTPUT (what Hetzner stores against the cap). Measured ~15,064 B; the 18,000 B budget
-// leaves ~2.9 KB headroom for Go(terraform)-vs-node(zlib) header/level jitter + organic growth,
-// tight enough to catch a re-inlined multi-KB regression; well under HETZNER_CAP (~17.7 KB spare).
+// base64gzip OUTPUT (what Hetzner stores against the cap). Was ~15,064 B / 18,000 B budget. Two
+// legitimate arcs grew it: #6090's fresh-boot observability (readiness gates, per-stage emit
+// call-sites, the ghcr_login baked-cred + hardened doppler fallback) and #6122's registry-migration
+// inline logic (the seed-block zot login + /run/soleur-image-ref resolution + the inngest IREF — all
+// MUST live in cloud-init since the seed pull runs pre-bootstrap, so a baked helper can't cover it).
+// Merged render ~19.3 KB. Re-baselined to 21,000 B: still a KB-scale re-inlining tripwire (a
+// re-inlined ≥1.7 KB blob trips it) and ~11.8 KB below HETZNER_CAP. When this climbs further, prefer
+// baking new host logic over inline cloud-init (the #5921 pattern) before raising again.
 // FLOOR is non-vacuity: a broken model gzipping near-nothing fails loudly. #5921's bake-and-extract
 // is RETAINED underneath — base64gzip is layered on top, not a reversal.
-const WEB_GZIP_BUDGET = 18_000;
+const WEB_GZIP_BUDGET = 21_000;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/

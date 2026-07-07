@@ -1,10 +1,34 @@
 #cloud-config
-package_update: true
-packages:
-  - curl
-  - fail2ban
-  - jq
-  - nftables
+# (#6090) package_update:/packages: were REMOVED here and moved into an instrumented early-runcmd
+# apt block (STAGE=apt_update/apt_install, under the top-armed trap + `timeout`s). recreate
+# 28819237402 proved web-2 dies in the opaque config phase (bootcmd_start fired, runcmd_start never
+# did) — running apt in runcmd converts a config-stage hang into a NAMED fatal, not a silent abort.
+
+# (#6090) Earliest boot beacon. bootcmd runs in cloud-init's network stage — before runcmd (and
+# before any residual config-stage cc modules) — so even a very early death still reports that the
+# boot reached bootcmd AND has Sentry egress. CONFIRMED by recreate 28819237402: bootcmd_start
+# landed (host_id=148545005) but runcmd_start never did → egress works, death was in the config
+# phase → apt install was moved into instrumented runcmd (below). Best-effort: uses the base-image
+# curl (Hetzner ubuntu-24.04 ships it, proven by this beacon firing); fully fail-open, never blocks
+# boot. Reads the baked ${sentry_dsn} (no doppler yet).
+bootcmd:
+  - |
+    ( set +e
+      command -v curl >/dev/null 2>&1 || exit 0
+      DSN='${sentry_dsn}'
+      [ -n "$DSN" ] || exit 0
+      HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
+      KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
+      SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
+      PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
+      BODY=$(printf '{"message":"soleur-cloud-init boot stage","level":"info","tags":{"stage":"bootcmd_start","host_id":"%s"}}' "$HOST_ID")
+      # --connect-timeout 5 + --retry 1 caps the black-hole stall (no-egress is the exact case this
+      # beacon targets, and bootcmd runs every boot) to a few seconds instead of ~30s.
+      curl --connect-timeout 5 -m 8 --retry 1 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
+        -H 'Content-Type: application/json' \
+        -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY" \
+        -d "$BODY" >/dev/null 2>&1 || true
+    ) || true
 
 groups:
   - docker
@@ -254,49 +278,96 @@ write_files:
   # terminal --log-driver journald app container, starts after extraction.
 
 runcmd:
+  # (#6090 follow-up) Arm the baked-${sentry_dsn} fatal-emit trap at the TOP of runcmd so it
+  # ALSO covers the package-audit + doppler + docker install region below. That region runs
+  # under the `set -e` leaked from the package audit but PRE-DATES the host-script extraction
+  # block where on_err used to be defined — the blind spot that silently aborted web-2's fresh
+  # boot (recreate 28805034101: 0 emits, :9000 unbound). STAGE is bumped per install step so the
+  # fatal names the exact dying command; the extraction block re-sets STAGE=pull onward and
+  # disarms this trap (trap - EXIT) before handing off to the trusted baked installer. on_err
+  # emits `soleur-hostscript-seed failed` (already in the workflow QUERY + AC8 lockstep) with the
+  # live STAGE tag — docker IS the hostscript-seed prerequisite, so the message stays accurate.
+  # NOTE: the trap fires only under `set -e`, which the package audit turns on — so emit coverage
+  # effectively begins at the audit; the preceding `systemctl restart sshd` stays deliberately
+  # non-fatal (its own comment below) and is intentionally NOT emit-covered. The emit is a curl
+  # POST, so a curl-less host (which dies everywhere) is an accepted residual.
+  - |
+    IMAGE_REF='${image_name}'
+    STAGE=runcmd_early
+    HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
+    # (#6090) ONE transport, reused by on_err (fatal) + the runcmd_start breadcrumb (info):
+    #   _emit <message> <stage> <level>. Prefers the BAKED DSN so it fires even when doppler is
+    # the broken stage (and before doppler/docker install). Fully fail-open — never blocks boot.
+    _emit() {
+      _m="$1"; _s="$2"; _l="$3"   # capture args before the subshell sources the env file
+      ( set +e
+        . /etc/default/webhook-deploy 2>/dev/null || true
+        DSN='${sentry_dsn}'
+        [ -n "$DSN" ] || DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
+               || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
+        if [ -n "$DSN" ]; then
+          KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
+          SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
+          PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
+          # (#6090) optional per-stage detail (e.g. the docker login/pull error a host-side stage
+          # captured to /run/soleur-stage-detail). Keep only printable, drop quotes/backslash, cap
+          # 200 → JSON-safe. Off-host all creds/image checks pass, so the real error only exists here.
+          DETAIL=$(tr -cd '[:print:]' < /run/soleur-stage-detail 2>/dev/null | tr -d '"\\' | head -c 200)
+          BODY=$(printf '{"message":"%s","level":"%s","tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s"}}' "$_m" "$_l" "$_s" "$IMAGE_REF" "$HOST_ID" "$DETAIL")
+          curl --connect-timeout 5 -m 8 --retry 1 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
+            -H 'Content-Type: application/json' \
+            -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY" \
+            -d "$BODY" >/dev/null 2>&1 || true
+        fi ) || true
+    }
+    on_err() {
+      trap - EXIT
+      docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
+      _emit "soleur-hostscript-seed failed" "$STAGE" fatal
+      exit 1
+    }
+    trap on_err EXIT
+    # (#6090) Positive breadcrumb: runcmd was REACHED (curl is guaranteed installed by now). A
+    # landed bootcmd_start (below) with NO runcmd_start brackets the death to the packages:/config
+    # phase; neither landing points at no-egress / a pre-network death → needs host console.
+    _emit "soleur-cloud-init boot stage" runcmd_start info
+
   # Apply SSH hardening immediately (drop-in written by write_files above).
   # Runs BEFORE the package audit so the operator always has hardened SSH
   # access even if the audit exits non-zero and halts the rest of cloud-init.
   - systemctl restart sshd
 
-  # Audit that cloud-init's packages: stage actually installed every declared
-  # package. Cloud-init can silently drop package installs on transient
-  # failures (apt lock contention, network error, "No space left on device"
-  # during first boot) without failing the run. If any declared package is
-  # missing after packages:, fail loudly so the operator sees the root cause
-  # in /var/log/cloud-init-output.log (#2680).
-  #
-  # The required-package list is parsed at runtime from the rendered cloud
-  # config at /var/lib/cloud/instance/cloud-config.txt -- no hardcoded list
-  # to drift away from the packages: block at the top of this file.
+  # (#6090) Package install — MOVED here from cloud-config package_update:/packages:. recreate
+  # 28819237402 localized web-2's death to the opaque config phase (bootcmd_start fired,
+  # runcmd_start never did), and apt (update/install) is that phase's heavy op. Running it under
+  # the top-armed trap with explicit `timeout`s converts a HANG (the likely cause of the ~640s
+  # poll timeouts) into a NAMED fatal (stage=apt_update / apt_install) instead of a silent config-
+  # stage abort. Fail-CLOSED: a non-zero/timeout after retries trips `set -e` → on_err emits the
+  # live STAGE → exit 1. curl is base-image-provided (the bootcmd beacon already proved it), so
+  # the earlier runcmd _emit/breadcrumb don't depend on this install.
   - |
     set -e
-    required_packages=$(awk '/^packages:$/{flag=1; next} /^[^ ]/{flag=0} flag && /^  - /{sub(/^  - /, ""); print}' /var/lib/cloud/instance/cloud-config.txt)
-    if [ -z "$required_packages" ]; then
-      echo "FATAL: package audit could not parse packages: list from cloud-config.txt" >&2
-      exit 1
-    fi
-    missing=""
-    for pkg in $required_packages; do
-      dpkg -s "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
-    done
-    if [ -n "$missing" ]; then
-      echo "FATAL: cloud-init packages: stage did not install:$missing" >&2
-      # One-shot self-heal for transient apt failures. If this also fails we
-      # exit non-zero so cloud-init marks the boot failed and the operator
-      # investigates via the Hetzner console.
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get update -qq
-      apt-get install -y -qq $missing
-      for pkg in $missing; do
-        dpkg -s "$pkg" >/dev/null 2>&1 || { echo "FATAL: $pkg still missing after recovery install" >&2; exit 1; }
-      done
-    fi
+    export DEBIAN_FRONTEND=noninteractive
+    # cloudflare-main.list is active from boot (write_files) but its keyring is only fetched at the
+    # cloudflared install far below — so apt-get update here would DETERMINISTICALLY fail on the
+    # missing signed-by keyring (noble exit 100, NOT retryable by Acquire::Retries) and mask the
+    # real cause. Fetch it FIRST, before any apt-get update sees the cloudflare source.
+    STAGE=cf_apt_key
+    n=0; until curl --connect-timeout 5 -m 20 -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg; do n=$((n+1)); [ "$n" -ge 3 ] && exit 1; sleep 5; done
+    # DPkg::Lock::Timeout waits out the apt-daily timer (holds the lock minutes on a fresh boot)
+    # instead of hard-failing; the outer `timeout` still bounds a true hang → named fatal. 2
+    # attempts keeps the named fatal near the ~640s provision poll — the Sentry fatal is durable
+    # regardless (it may post-date the poll and is the authoritative signal).
+    STAGE=apt_update
+    n=0; until timeout 240 apt-get update -o Acquire::Retries=3 -o DPkg::Lock::Timeout=300; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
+    STAGE=apt_install
+    n=0; until timeout 300 apt-get install -y -o DPkg::Lock::Timeout=300 curl fail2ban jq nftables; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
 
   # Reload fail2ban so the jail.d/soleur-sshd.local drop-in applies (#2654).
-  # fail2ban is installed via `packages:` above; the service auto-starts on
+  # fail2ban is installed via the apt_install block above; the service auto-starts on
   # install with the defaults-debian.conf [sshd] jail enabled. The reload
   # picks up the bantime.maxtime cap before any login activity is recorded.
+  - STAGE=fail2ban  # (#6090) exact stage attribution for the top-armed on_err fatal
   - systemctl reload fail2ban || systemctl restart fail2ban
 
   # (#5921) journald persistence (mkdir /var/log/journal + systemd-tmpfiles + restart +
@@ -305,6 +376,7 @@ runcmd:
   # migrates this early boot's volatile journal into the persistent store (no logs lost).
 
   # Install Doppler CLI v3.75.3 (for secrets injection) with checksum verification
+  - STAGE=doppler_dl  # (#6090) name the stage for the top-armed on_err fatal
   - |
     DOPPLER_VERSION="3.75.3"
     DOPPLER_SHA256="9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
@@ -321,6 +393,7 @@ runcmd:
 
   # Install Docker via official APT repository with GPG key verification (#1615).
   # Replaces pipe-to-shell (curl | sh) with signed APT repo -- same pattern as cloudflared above.
+  - STAGE=docker_apt  # (#6090) name the stage for the top-armed on_err fatal
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   - chmod a+r /etc/apt/keyrings/docker.asc
@@ -328,7 +401,13 @@ runcmd:
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
 
-  # Configure Docker log rotation
+  # Configure Docker log rotation + the self-hosted zot registry as an insecure (plain-HTTP,
+  # private-net) registry (#6122/ADR-096). zot serves HTTP on 10.0.1.30:5000 (= zot-registry.tf
+  # local.registry_endpoint) behind a deny-all-public firewall; docker refuses a non-TLS registry
+  # unless it is allowlisted here. Harmless before the Phase-3 flip activates — nothing pulls from
+  # zot until the dark-launch gate confirms it live. cosign digest-pinning is the integrity guard,
+  # not TLS (Phase-0 spike). This is the ONLY daemon.json write for FRESH hosts; running hosts get
+  # the same allowlist via terraform_data.registry_insecure_config (server.tf).
   - |
     cat > /etc/docker/daemon.json << 'DOCKEREOF'
     {
@@ -336,9 +415,11 @@ runcmd:
       "log-opts": {
         "max-size": "10m",
         "max-file": "3"
-      }
+      },
+      "insecure-registries": ["10.0.1.30:5000"]
     }
     DOCKEREOF
+  - STAGE=docker_restart  # (#6090) name the stage for the top-armed on_err fatal
   - systemctl restart docker
 
   # BEGIN host-script extraction (#5921) — verify + launch the baked bootstrap installer.
@@ -348,51 +429,70 @@ runcmd:
   # combined content-hash, compare to host_scripts_content_hash, and ONLY THEN run the
   # now-trusted soleur-host-bootstrap.sh. FAIL-CLOSED: runcmd is ONE /bin/sh, so `set -e` +
   # `exit 1` aborts the whole runcmd (the app `docker run` never starts) + the terminal block
-  # gates on /run/soleur-hostscripts.ok; do NOT add a `set +e`. Pre-verify failures emit a
-  # discriminating Sentry event here (on_err); install-stage failures from the bootstrap.
+  # gates on /run/soleur-hostscripts.ok; do NOT add a `set +e`. Pull/extract/verify failures are
+  # named by the top-armed on_err trap (STAGE=pull/ghcr_login/extract/verify); install-stage
+  # failures come from the bootstrap's own emit_fail after the trap is disarmed below.
   - |
     set -e
     IMAGE_REF='${image_name}'
     HOST_SCRIPTS_HASH='${host_scripts_content_hash}'
     STAGE=pull
-    HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
-    on_err() {
-      trap - EXIT
-      docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
-      ( set +e
-        . /etc/default/webhook-deploy 2>/dev/null || true
-        # Prefer the BAKED DSN so this fatal emit fires even when doppler is the broken
-        # stage (the blind spot that hid the private-GHCR seed-pull 401). Doppler fallback.
-        DSN='${sentry_dsn}'
-        [ -n "$DSN" ] || DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
-               || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null || true)
-        if [ -n "$DSN" ]; then
-          KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
-          SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
-          PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
-          BODY=$(printf '{"message":"soleur-hostscript-seed failed","level":"fatal","tags":{"stage":"%s","image_ref":"%s","host_id":"%s"}}' "$STAGE" "$IMAGE_REF" "$HOST_ID")
-          curl -m 10 --retry 3 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
-            -H 'Content-Type: application/json' \
-            -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY" \
-            -d "$BODY" >/dev/null 2>&1 || true
-        fi ) || true
-      exit 1
-    }
-    trap on_err EXIT
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
     # ROOT FIX (#6005): the seed image is now a PRIVATE GHCR package, so this early seed-pull
     # must authenticate FIRST (bootstrap's ghcr_login runs post-extract, too late) — anonymous
     # pull 401s + aborts the boot. Non-fatal: a creds miss still lets the pull emit stage=pull.
     STAGE=ghcr_login
+    # (#6090) Capture the login OUTCOME to /run/soleur-stage-detail so a downstream stage=pull fatal
+    # reports WHY (off-host the creds+image are valid, so the failure is host-side and uncaptured).
     ( set +e
       . /etc/default/webhook-deploy 2>/dev/null || true
-      GHCR_USER=$(timeout 15 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null || true)
-      GHCR_TOKEN=$(timeout 15 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
-      [ -n "$GHCR_USER" ] && [ -n "$GHCR_TOKEN" ] && printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null 2>&1 || true
+      # (#6090) Prefer the BAKED creds (mirrors the baked sentry_dsn above): Doppler answers
+      # EMPTY at the cold-boot instant, so the un-baked fetch skipped docker login → anonymous
+      # private pull → 401 → abort at stage=pull. Fall back to Doppler (hardened: timeout 45 +
+      # 3-try retry, mirroring the apt-block idiom) only when the bake is empty.
+      GHCR_USER='${ghcr_read_user}'
+      [ -n "$GHCR_USER" ] || { n=0; until GHCR_USER=$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null); [ -n "$GHCR_USER" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done; }
+      GHCR_TOKEN='${ghcr_read_token}'
+      [ -n "$GHCR_TOKEN" ] || { n=0; until GHCR_TOKEN=$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null); [ -n "$GHCR_TOKEN" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done; }
+      if [ -z "$GHCR_USER" ] || [ -z "$GHCR_TOKEN" ]; then
+        printf 'ghcr_creds_missing user=%s token=%s' "$([ -n "$GHCR_USER" ] && echo y || echo n)" "$([ -n "$GHCR_TOKEN" ] && echo y || echo n)" > /run/soleur-stage-detail
+      elif printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin > /run/soleur-ghcr-login.log 2>&1; then
+        printf 'ghcr_login_ok' > /run/soleur-stage-detail
+      else
+        printf 'ghcr_login_fail: %s' "$(tail -c 140 /run/soleur-ghcr-login.log 2>/dev/null)" > /run/soleur-stage-detail
+      fi
+      # #6122/ADR-096: also log in to zot (dark — only when ZOT_* present) so the seed pull can
+      # prefer it; login persists for the app + inngest pulls (bootstrap's zot_login is too late).
+      ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
+      if [ -n "$ZURL" ]; then
+        ZUSER=$(timeout 15 doppler secrets get ZOT_PULL_USER --plain --project soleur --config prd 2>/dev/null || true)
+        ZTOK=$(timeout 15 doppler secrets get ZOT_PULL_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
+        [ -n "$ZUSER" ] && [ -n "$ZTOK" ] && printf '%s' "$ZTOK" | docker login "$ZURL" -u "$ZUSER" --password-stdin >/dev/null 2>&1 || true
+      fi
     ) || true
+    # #6122/ADR-096: resolve the effective image ref ONCE (zot-primary when configured +
+    # /v2/-reachable, else the unchanged GHCR ref) → /run/soleur-image-ref so app pull/create/
+    # run follow the SAME registry. Dark-safe: unset/unreachable zot ⇒ REF = GHCR ref.
     STAGE=pull
-    N=0; until docker pull "$IMAGE_REF"; do N=$((N+1)); [ "$N" -ge 3 ] && exit 1; sleep 5; done
+    ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
+    REF="$IMAGE_REF"
+    if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
+      REF="$ZURL/$(printf '%s' "$IMAGE_REF" | sed 's#^ghcr.io/##')"
+    fi
+    # #6090: log each pull to /run/soleur-pull.log; on final failure append stderr to
+    # /run/soleur-stage-detail (on_err detail tag); clear on success. #6122: zot ref first,
+    # fall back to GHCR after the zot attempt.
+    N=0
+    until docker pull "$REF" > /run/soleur-pull.log 2>&1; do
+      N=$((N+1))
+      [ "$N" -ge 2 ] && REF="$IMAGE_REF"   # atomic fallback to GHCR after the zot attempt
+      [ "$N" -ge 5 ] && { printf ' | pull_err: %s' "$(tail -c 160 /run/soleur-pull.log 2>/dev/null)" >> /run/soleur-stage-detail; exit 1; }
+      sleep 5
+    done
+    : > /run/soleur-stage-detail
+    printf '%s' "$REF" > /run/soleur-image-ref
+    IMAGE_REF="$REF"
     STAGE=extract
     docker create --name soleur-hostscript-seed "$IMAGE_REF" >/dev/null
     SEED=$(mktemp -d)
@@ -431,9 +531,9 @@ runcmd:
   # Set after recursive chown so it isn't overridden
   - chown 1001:1001 /mnt/data/workspaces
 
-  # Install cloudflared from Cloudflare apt repository.
-  # GPG key downloaded at provision time (rotated Oct 2025).
-  - curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  # Install cloudflared from Cloudflare apt repository. The signing keyring (rotated Oct 2025) is
+  # now fetched in the early apt block above (stage=cf_apt_key) — the cloudflare source is active
+  # from boot, so its key must precede the FIRST apt-get update, not just this cloudflared install.
   - apt-get update
   - apt-get install -y cloudflared
 
@@ -485,7 +585,9 @@ runcmd:
     chmod +x /etc/cron.weekly/docker-cleanup
 
   # Pull and run container (secrets from Doppler -- no .env fallback)
-  - docker pull ${image_name}
+  # #6122/ADR-096: pull the registry the seed block resolved (/run/soleur-image-ref); falls
+  # back to the GHCR ${image_name} if the sentinel is absent (byte-identical pre-#6122).
+  - docker pull "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
 
   # Seed /mnt/data/plugins/soleur from the image's baked plugin tree (#3045).
   # Ephemeral container so we don't depend on a long-running container.
@@ -503,7 +605,7 @@ runcmd:
     cleanup() { docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true; }
     # #6090: composite trap (cleanup + named fatal).
     trap 'rc=$?; cleanup; [ "$rc" = 0 ] || soleur-boot-emit plugin_seed fatal' EXIT
-    docker create --name soleur-plugin-seed ${image_name}
+    docker create --name soleur-plugin-seed "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
     find /mnt/data/plugins/soleur -mindepth 1 -delete 2>/dev/null || true
     docker cp soleur-plugin-seed:/opt/soleur/plugin/. /mnt/data/plugins/soleur/
     docker rm soleur-plugin-seed
@@ -531,12 +633,20 @@ runcmd:
   # fresh hosts.
   - |
     set -e
-    docker pull ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
+    # #6122/ADR-096: prefer zot (dark; host already logged in by soleur-host-bootstrap.sh);
+    # all 3 refs follow IREF, zot miss ⇒ GHCR fallback; soleur-boot-emit records the registry.
+    ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
+    if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
+      ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.18"
+      if docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_ghcr_fallback warning; fi
+    fi
+    docker pull "$IREF"
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
     # #6090: composite trap (cleanup + named fatal).
     trap 'rc=$?; cleanup; [ "$rc" = 0 ] || soleur-boot-emit inngest_bootstrap fatal' EXIT
-    docker create --name soleur-inngest-bootstrap-extract ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
+    docker create --name soleur-inngest-bootstrap-extract "$IREF"
     docker cp soleur-inngest-bootstrap-extract:/inngest-bootstrap.sh "$EXTRACT_DIR/inngest-bootstrap.sh"
     docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
     # Durable Redis assets (#5450) — stage to /tmp like vector.toml so the
@@ -546,7 +656,7 @@ runcmd:
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis.service /tmp/inngest-redis.service 2>/dev/null || true
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis-bootstrap.sh /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
     chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
-    image_env=$(docker inspect ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18 -f '{{range .Config.Env}}{{println .}}{{end}}')
+    image_env=$(docker inspect "$IREF" -f '{{range .Config.Env}}{{println .}}{{end}}')
     chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
     INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | head -1 | cut -d= -f2-)
     INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | head -1 | cut -d= -f2-)
@@ -600,7 +710,7 @@ runcmd:
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:80:3000 \
       -p 0.0.0.0:3000:3000 \
-      ${image_name}
+      "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
     rm -f "$TMPENV"
     # Fresh-host post-container egress-enforcement probe (#5933; details in the script
     # header). Fail-closed: a non-enforcing host poweroffs rather than serve an open

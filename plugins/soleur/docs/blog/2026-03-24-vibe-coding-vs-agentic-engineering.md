@@ -46,7 +46,7 @@ The problem is not the approach. The problem is what happens after you decide to
 
 The plateau arrives fast.
 
-You have a working prototype. The vibes were good. Now you need to add a feature, fix a regression, or hand the codebase to another agent for review. And the first thing you realize is that the hundredth session starts from the same blank slate as the first.
+You have a working prototype. The vibes were good. Now you need to add a feature, fix a regression, or hand the codebase to another agent for review. And the first thing you realize is that the hundredth session starts from [the same blank slate]({{ site.url }}/blog/your-ai-team-works-from-your-actual-codebase/) as the first.
 
 The model does not remember why you made that architectural decision. It does not know that approach was tried and failed three days ago. It does not know which edge cases your tests cover or which parts of the codebase are fragile. Every session is a reconstruction.
 

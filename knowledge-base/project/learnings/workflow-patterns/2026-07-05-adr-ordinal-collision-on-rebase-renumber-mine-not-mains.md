@@ -40,6 +40,10 @@ rebase auto-merged the file.
    `uniq -d` — legit multi-part ADRs like `ADR-033-a/b/c` are not collisions), the c4-freshness
    test, and the touched infra suites. Update the downstream issue/PR bodies too (the minter
    follow-up issue #6031 cited ADR-086 → ADR-087; the PR body cited ADR-085 → ADR-086).
+7. **Provenance ('Ordinal note') must use BARE ordinals, not the retired `ADR-NNN` literal.** The
+   residual-zero AC greps the decisions/ dir (which holds the renamed bodies), so a history note
+   saying "…authored ADR-086…" fails the very gate the renumber turns green. Write `086 → 093`,
+   not `ADR-086`. See [[2026-07-06-adr-renumber-provenance-note-must-use-bare-ordinals]] (#6054).
 
 ## Machine-quirk footnote
 

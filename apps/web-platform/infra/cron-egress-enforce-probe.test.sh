@@ -153,9 +153,12 @@ assert_grep "cloud-init invokes the probe" '/usr/local/bin/cron-egress-enforce-p
 assert_grep "cloud-init fail-closed poweroff on non-enforcing host" 'poweroff -f' "$CLOUD_INIT"
 assert_grep "probe invocation is fail-closed (if ! probe; then … poweroff)" \
   'if ! /usr/local/bin/cron-egress-enforce-probe\.sh; then' "$CLOUD_INIT"
-# ORDERING: the probe must run AFTER the app container starts (the `${image_name}` line
-# is the last arg of the terminal `docker run`). Probe line number MUST be greater.
-CONTAINER_LINE="$(grep -nE '^\s*\$\{image_name\}\s*$' "$CLOUD_INIT" | tail -1 | cut -d: -f1)"
+# ORDERING: the probe must run AFTER the app container starts (the terminal `docker run`'s
+# final image arg). #6122 replaced the bare `${image_name}` arg with the resolved
+# zot-or-GHCR ref `"$(cat /run/soleur-image-ref … || echo '${image_name}')"`; the run arg
+# is the only line that STARTS with the quoted `cat` (the pull/create sites prefix it with
+# `docker pull`/`docker create`). Probe line number MUST be greater.
+CONTAINER_LINE="$(grep -nE '^\s*"\$\(cat /run/soleur-image-ref' "$CLOUD_INIT" | tail -1 | cut -d: -f1)"
 PROBE_LINE="$(grep -nE 'if ! /usr/local/bin/cron-egress-enforce-probe\.sh' "$CLOUD_INIT" | head -1 | cut -d: -f1)"
 if [[ -n "$CONTAINER_LINE" && -n "$PROBE_LINE" && "$PROBE_LINE" -gt "$CONTAINER_LINE" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: probe runs AFTER the app container starts (container=$CONTAINER_LINE < probe=$PROBE_LINE)"
