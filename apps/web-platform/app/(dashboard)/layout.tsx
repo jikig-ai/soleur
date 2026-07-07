@@ -186,6 +186,16 @@ export default function DashboardLayout({
   // pathname.startsWith("/dashboard/(kb|settings|chat)") literal lives here.
   const drill = segmentToDrillLevel(pathname);
   const settingsActive = drill === "settings";
+  // Releases is a read-only info feed rendered in the footer info/settings
+  // group (alongside Status/Settings), NOT the primary action-tab loop. It
+  // stays in NAV_ITEMS (the ⌘K palette / `g l` / help-overlay source of
+  // truth) and is filtered out of the primary render below. RELEASES_HREF
+  // pins the single route literal shared by the filter, the footer <Link>,
+  // and releasesActive. Releases is not a drill segment (DrillLevel is only
+  // "kb" | "settings" | "chat"), so its active state is a direct pathname
+  // check — `drill === "releases"` would be a TS error.
+  const RELEASES_HREF = "/dashboard/releases";
+  const releasesActive = pathname.startsWith(RELEASES_HREF);
   // The widen affordance applies to ANY expanded rail (every drill state),
   // subordinate to collapse. `kbExpanded` and `mainExpanded` are a structural
   // PARTITION of "expanded" (drill === "kb" XOR drill !== "kb"), so at most one
@@ -406,7 +416,9 @@ export default function DashboardLayout({
           <>
             {/* Navigation */}
             <nav className={`flex-1 space-y-1 pt-3 ${collapsed ? "px-1" : "px-3"}`}>
-              {navItems.map((item) => {
+              {navItems
+                .filter((item) => item.href !== RELEASES_HREF)
+                .map((item) => {
                 const active =
                   item.href === "/dashboard"
                     ? pathname === "/dashboard" || drill === "chat"
@@ -471,6 +483,25 @@ export default function DashboardLayout({
                   {userEmail}
                 </p>
               )}
+              {/* Releases — read-only release-notes feed, grouped with the
+                  info/settings chrome. Icon referenced directly (not via
+                  NAV_ICONS, which is consumed only inside the primary loop);
+                  neutral active treatment mirrors Settings so it reads as part
+                  of this group, driven by the direct pathname check. */}
+              <Link
+                href={RELEASES_HREF}
+                data-tour-id={RELEASES_HREF}
+                title={collapsed ? "Releases" : undefined}
+                aria-current={releasesActive ? "page" : undefined}
+                className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                  releasesActive
+                    ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                    : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
+                } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+              >
+                <RocketIcon className="h-4 w-4 shrink-0" />
+                <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Releases</span>
+              </Link>
               <a
                 href="https://soleur-ai.betteruptime.com/"
                 target="_blank"
