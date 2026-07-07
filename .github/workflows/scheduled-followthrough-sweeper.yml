@@ -72,6 +72,9 @@ jobs:
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # #6168 autovacuum-thrash-6168.sh — read-only pg_stat_all_tables query
+          # against prod via the Supabase Management API (soak gate for PR #6164).
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           bash scripts/sweep-followthroughs.sh
