@@ -26,7 +26,7 @@ Reconcile the roadmap against live GitHub milestone state and print a drift repo
 Run the shared module ([roadmap-reconcile.sh](./scripts/roadmap-reconcile.sh)) from the repo root:
 
 ```bash
-bash plugins/soleur/skills/product-roadmap/scripts/roadmap-reconcile.sh validate
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh validate
 ```
 
 It prints `STALE_STATUS` / `MISSING_ISSUE` / `EMPTY_MILESTONE` verdicts (the same vocabulary the roadmap-review cron uses) and exits non-zero on drift. Relay the report verbatim. When drift is found, the report already names the remediation — trigger the roadmap-review cron (`/soleur:trigger-cron cron/roadmap-review.manual-trigger`), which opens a reviewed PR. Do **not** edit `roadmap.md` from this skill.
@@ -36,7 +36,7 @@ It prints `STALE_STATUS` / `MISSING_ISSUE` / `EMPTY_MILESTONE` verdicts (the sam
 Report the single next action for the first incomplete roadmap phase. **Read-only — invokes no build.**
 
 ```bash
-bash plugins/soleur/skills/product-roadmap/scripts/roadmap-reconcile.sh next
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh next
 ```
 
 It finds the first phase with open issues, picks the lowest-numbered open issue (deterministic tie-break), and classifies it: a **codeable** item (engineering label) is surfaced as a paste-ready `/soleur:go #N`; an **operator** item (recruitment, interviews, research, marketing, ops) is named for the founder to action directly; an empty milestone yields an explicit "no actionable next item". Relay the output. **Never** invoke `/soleur:one-shot` or any build from this sub-command — surface the recommendation and stop.
