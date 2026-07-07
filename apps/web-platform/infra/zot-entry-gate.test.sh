@@ -41,6 +41,11 @@ run_gate() { # $1=extra env (eval'd); echoes nothing, returns the gate's exit co
   (
     local md; md=$(mktemp -d); trap 'rm -rf "$md"' EXIT
     make_mock_curl "$md"
+    # Hermeticity: zot-entry-gate.sh falls back to `doppler secrets get … --config prd` on an
+    # empty ZOT_PULL_TOKEN. Stub `doppler` to return NOTHING so the "missing creds" case is
+    # deterministic — otherwise, once the cutover provisions ZOT_PULL_TOKEN into prd, a local run
+    # with a real doppler on PATH resolves the live token and the exit-2 assertion flips to 0 (#6122).
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$md/doppler"; chmod +x "$md/doppler"
     export PATH="$md:/usr/bin:/bin"
     export ZOT_REGISTRY_URL="10.0.1.30:5000" ZOT_PULL_USER="zot-pull" ZOT_PULL_TOKEN="tok"
     eval "${1:-}"
