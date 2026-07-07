@@ -36,9 +36,15 @@ variable "server_type" {
 }
 
 variable "location" {
-  description = "Hetzner datacenter location"
+  description = "Hetzner datacenter location (web + git-data hosts). NOT the registry — that has its own var.registry_location so the two can diverge (#6122: the registry lives in nbg1, provisioned during a hel1 capacity outage)."
   type        = string
   default     = "hel1"
+}
+
+variable "registry_location" {
+  description = "Hetzner datacenter location for the zot registry host + its volume (#6122). Separate from var.location because the registry was provisioned in nbg1 (cx23 stock) during a hel1/eu-central capacity outage; keeping it independent lets a `terraform plan` show no registry drift and lets the registry move regions without disturbing the web/git-data hosts."
+  type        = string
+  default     = "nbg1"
 }
 
 variable "image_name" {
@@ -110,7 +116,11 @@ variable "git_data_volume_size" {
 variable "registry_server_type" {
   description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): cax11 (2 vCPU ARM64/Ampere, 4GB, €5.99/mo) or cx23 (2 vCPU x86, 4GB, €5.49/mo). A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral — provisioning takes whichever has Hetzner stock. Recorded via ops-advisor (~€5/mo + volume)."
   type        = string
-  default     = "cax11"
+  # cx23 (x86), NOT cax11 (arm64): the live registry is cx23 in nbg1 — provisioned when both
+  # cax11 AND cx23 were out of stock in hel1 during a eu-central capacity outage (#6122). This
+  # default matches the live host so `terraform plan` shows no registry drift; arch is
+  # functionally neutral for a store-and-serve registry (it never runs the images it holds).
+  default = "cx23"
 }
 
 variable "registry_volume_size" {
