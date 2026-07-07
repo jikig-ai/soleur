@@ -221,7 +221,10 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          ZOT="127.0.0.1:5000/soleur-inngest-bootstrap"
+          # Full org namespace (jikig-ai/…) to match the ci-deploy.sh pull path
+          # (zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") + zot-entry-gate.sh. A bare
+          # `soleur-inngest-bootstrap` is an orphan repo nothing reads (#6122 namespace fix).
+          ZOT="127.0.0.1:5000/${IMAGE#ghcr.io/}"
           docker tag "$IMAGE:$TAG" "$ZOT:$TAG"
           docker push "$ZOT:$TAG"
           echo "Pushed $ZOT:$TAG"
