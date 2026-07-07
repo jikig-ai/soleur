@@ -40,7 +40,7 @@ fi
 
 **Clean up merged worktrees (silent, runs in background):**
 
-Navigate to the repository root, then run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`. Report cleanup results: how many worktrees were cleaned up, which branches remain active.
+Navigate to the repository root, then run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`. Report cleanup results: how many worktrees were cleaned up, which branches remain active.
 
 **Check for knowledge-base directory and load context:**
 
@@ -82,7 +82,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 **Environment checks:**
 
-1. Run `git branch --show-current`. If the result is empty (detached HEAD), FAIL: "Detached HEAD state -- checkout a feature branch or create a worktree." If the result is the default branch (main or master), FAIL: "On default branch -- create a worktree before starting work. Run: `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`"
+1. Run `git branch --show-current`. If the result is empty (detached HEAD), FAIL: "Detached HEAD state -- checkout a feature branch or create a worktree." If the result is the default branch (main or master), FAIL: "On default branch -- create a worktree before starting work. Run: `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh feature <name>`"
 2. Run `pwd`. If the path does NOT contain `.worktrees/`, WARN: "Not in a worktree directory. You can create one via `git-worktree` skill in Phase 1."
 3. Run `git status --short`. If output is non-empty, WARN: "Uncommitted changes detected. Consider committing or stashing before starting new work."
 4. Probe for stashed changes WITHOUT invoking `git stash` (the `hr-never-git-stash-in-worktrees` hook denies even the read-only `git stash list`). Use `git rev-parse --verify --quiet refs/stash` — a zero exit means a stash exists; WARN: "Stashed changes found. Review stash list to avoid forgotten work." A non-zero exit means no stash; continue silently.
@@ -160,7 +160,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    ```bash
    SOLEUR_SKILL_NAME=work SOLEUR_EXPECTED_DURATION_MIN=240 \
-     bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
+     bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
    ```
 
    Then `cd` into the worktree path printed by the script. The worktree manager handles bare-repo detection, branch creation from latest origin/main, .env copying, and dependency installation. The env vars wire a session lease so sibling cleanup-merged invocations refuse to reap this worktree.

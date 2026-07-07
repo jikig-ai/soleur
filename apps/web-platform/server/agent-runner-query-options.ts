@@ -185,6 +185,17 @@ export function buildAgentQueryOptions(
   const extraLogFields = subagentOverride?.extraLogFields ?? {};
   const logMessage = subagentOverride?.logMessage ?? "Subagent started";
 
+  // Loaded-gun guard, computed ONCE (Slice A + Slice B). Both factories source
+  // args.pluginPath from getPluginPath() (an absolute /app/ platform path).
+  // assertTrustedPluginPath throws LOUDLY if a future regression threads a
+  // connected-repo workspace path — which would both (a) re-execute the
+  // untrusted repo's hooks.json in-process AND (b) inject an untrusted
+  // CLAUDE_PLUGIN_ROOT the deployed skills would shell out to. Validating BEFORE
+  // buildAgentEnv (below) means an untrusted value fails CLOSED — it can never
+  // reach the agent env NOR the plugins: binding of a live dispatch (AC7b).
+  // Test-tolerant (mirrors getPluginPath's VITEST/NODE_ENV=test bypass).
+  const trustedPluginPath = assertTrustedPluginPath(args.pluginPath);
+
   // biome-ignore lint/suspicious/noExplicitAny: SDK Options is a wide union; partial-shape build avoids re-asserting every key
   const opts: any = {
     cwd: args.workspacePath,
@@ -211,6 +222,13 @@ export function buildAgentQueryOptions(
       // only when BOTH the path and token are present (both-or-nothing).
       gitAskpassScriptPath: args.gitAskpassScriptPath,
       gitInstallationToken: args.ghToken,
+      // Deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's `bash`
+      // shell-outs (Slice B). The assertTrustedPluginPath-validated value (an
+      // absolute /app/ platform path) is threaded so the deployed skills'
+      // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` runs the platform copy, never
+      // the untrusted connected-repo copy. Proven to reach the bwrap-sandboxed
+      // bash via env inheritance (F2, AC7a — plugin-root-propagation gate).
+      pluginPath: trustedPluginPath,
     }),
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
     // share the same shape — identical except for the token-derived
@@ -234,7 +252,7 @@ export function buildAgentQueryOptions(
     // future regression threads a connected-repo workspace path here — which would
     // silently re-execute the untrusted repo's hooks.json in-process (the
     // connected-repo-shadow security hole this PR closes). Test-tolerant.
-    plugins: [{ type: "local" as const, path: assertTrustedPluginPath(args.pluginPath) }],
+    plugins: [{ type: "local" as const, path: trustedPluginPath }],
     hooks: {
       PreToolUse: [
         {
