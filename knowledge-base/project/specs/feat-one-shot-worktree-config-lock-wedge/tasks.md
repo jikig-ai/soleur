@@ -41,6 +41,13 @@ Derived from the finalized (post-plan-review) plan. RED-first. Closes #6184.
 - [ ] 5.2 `git-worktree/SKILL.md`: add Sharp Edges (never re-add a raw `git config` write; identity-authority inversion).
 - [ ] 5.3 Amend `ADR-081` `## Decision` (identity authority on non-bare) + `## Alternatives Considered` (Layer A rejected: misattribution).
 
+## Phase 5b — Canonical topology docs (coordinator-directed)
+
+- [ ] 5b.1 Create `knowledge-base/engineering/architecture/decisions/ADR-098-git-surface-topology.md` (provisional ordinal): three surfaces (server-side bare git-data / non-bare agent workspace / local-dev bare) + the non-bare-guard consequence (`worktree-manager.sh:478`); cross-link ADR-081 + `post-mortems/concierge-worktree-creation-stale-lock-wedge-postmortem.md`.
+- [ ] 5b.2 AGENTS.rest.md `rf-after-merging…`: append non-bare caveat + ADR-098 pointer (budget-free).
+- [ ] 5b.3 AGENTS.core.md `hr-when-in-a-worktree…` + `wg-at-session-start…`: add concise non-bare caveat + ADR-098 pointer, NET-BYTE-NEUTRAL (or free room via a loader-class-fit-verified wg-* demotion; `sed -n '88,126p' .claude/hooks/session-rules-loader.sh`). Keep one line per rule; do NOT rename ids.
+- [ ] 5b.4 `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md` exits 0 (B_ALWAYS ≤ 23000).
+
 ## Phase 6 — Verify
 
 - [ ] 6.1 `bash plugins/soleur/test/worktree-manager-atomic-config.test.sh` green (1–13 + T14–T17).

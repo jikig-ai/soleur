@@ -113,6 +113,13 @@ Extend `plugins/soleur/test/worktree-manager-atomic-config.test.sh` (auto-discov
 - **T17 (bare layout regression):** existing bare `ensure_bare_config` flow unchanged (complements Tests 12/13).
 - Update the test header comment to the identity-inversion diagnosis.
 
+### Phase 5 — Canonical topology docs (coordinator-directed; Architecture Decision (1)+(3))
+
+- Author `ADR-098-git-surface-topology.md` (three surfaces + the non-bare-guard consequence; cross-link ADR-081 + the postmortem). Provisional ordinal — `/ship` re-verifies against origin/main.
+- Amend `ADR-081-chardevice-config-lock-substrate-sweep.md` (`## Decision` + `## Alternatives Considered`) per Architecture Decision (2).
+- AGENTS.rest.md `rf-after-merging…`: append the non-bare caveat + ADR-098 pointer (budget-free).
+- AGENTS.core.md `hr-when-in-a-worktree…` + `wg-at-session-start…`: add the concise non-bare caveat + ADR-098 pointer, net-byte-neutral (or free room via a loader-class-fit-verified `wg-*` demotion). Run `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md` and confirm exit 0 BEFORE and AFTER.
+
 ## Files to Edit
 
 - `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` — Phases 1, 2, 3.
@@ -122,11 +129,13 @@ Extend `plugins/soleur/test/worktree-manager-atomic-config.test.sh` (auto-discov
 - `plugins/soleur/test/worktree-manager-atomic-config.test.sh` — Phase 4 + Phase 3.
 - `plugins/soleur/skills/one-shot/SKILL.md` — Phase 3.
 - `plugins/soleur/skills/git-worktree/SKILL.md` — Sharp Edge: never re-add a raw `git config` write; identity-authority note.
-- `knowledge-base/engineering/architecture/decisions/ADR-081-*.md` — amendment (see Architecture Decision).
+- `knowledge-base/engineering/architecture/decisions/ADR-081-chardevice-config-lock-substrate-sweep.md` — amendment (Architecture Decision (2)).
+- `AGENTS.core.md` — non-bare caveat + ADR-098 pointer on `hr-when-in-a-worktree…` (:35) and `wg-at-session-start…` (:57), **net-byte-neutral or via a wg-* demotion** (Architecture Decision (3); budget-gated).
+- `AGENTS.rest.md` — non-bare caveat + ADR-098 pointer on `rf-after-merging…` (:42) (budget-free).
 
 ## Files to Create
 
-None.
+- `knowledge-base/engineering/architecture/decisions/ADR-098-git-surface-topology.md` — canonical three-surface git topology (Architecture Decision (1); provisional ordinal).
 
 ## Acceptance Criteria
 
@@ -140,6 +149,8 @@ None.
 7. `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
 8. `grep -rn "4826" plugins/soleur/skills/git-worktree/ plugins/soleur/test/worktree-manager-atomic-config.test.sh plugins/soleur/skills/one-shot/SKILL.md apps/web-platform/server/git-lock-marker-telemetry.ts apps/web-platform/test/git-lock-marker-telemetry.test.ts` returns zero — scoped to exactly the files Phase 3 edits (NOT a broader surface; the host-side-heal citations are deliberately out of scope). `knowledge-base/project/{plans,specs}/**` excluded.
 9. `bash scripts/test-all.sh` (from a worktree) green for the scripts + webplat shards touched.
+10. `ADR-098-git-surface-topology.md` exists, non-empty, states all three surfaces, and cross-links ADR-081 + the postmortem; ADR-081 amended (`## Decision` + `## Alternatives Considered`). C4 syntax/render tests still pass (`apps/web-platform/test/c4-*.test.ts`) — no `.c4` edit, so a no-op check.
+11. `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md` exits 0 after the AGENTS edits (B_ALWAYS ≤ 23000); all three target rules carry the non-bare caveat + ADR-098 pointer; rule ids unchanged (`cq-rule-ids-are-immutable`); each edited rule body stays one line (`cq-agents-md-why-single-line`).
 
 ### Post-merge (operator) — automatable, routed to /ship + postmerge (no manual steps)
 10. After the web-platform image rebuild deploys, `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 48h --grep SOLEUR_GIT_LOCK_IDENTITY_WEDGED` shows the benign precondition marker on real creates (proves the path executes) and NO `reason=native-eexist|common-dir-unresolved` on successful runs (read-only; `hr-no-dashboard-eyeball-pull-data-yourself`).
@@ -175,9 +186,21 @@ discoverability_test:
 
 ## Architecture Decision (ADR / C4)
 
-**ADR-081 amendment (required — arch-strategist #5).** Records the corrected model for the **non-bare Concierge** surface: the host-seeded per-workspace **owner** identity is authoritative in-sandbox; `ensure_worktree_identity` must not override it with the image's `github-actions[bot]` global. Amend ADR-081 `## Decision` with the identity-authority resolution; add "route-the-write (Layer A)" to `## Alternatives Considered` (rejected: misattributes commits). Extends the existing ADR — not a new one.
+Two ADR actions (coordinator-directed — the ROOT reason this wedged six times is that the git-surface topology was never a canonical loaded fact, so every round mis-targeted it):
 
-**C4 views: no impact (checked `model.c4`, `views.c4`, `spec.c4`).** External actors — none new (agent sandbox modeled via `claude`/`hetzner`). Vendors — Better Stack already modeled (`model.c4:250`). Data-stores — `.git/config` on host-local worktree NVMe, modeled (`model.c4:170,200`, ADR-068). Access relationships — unchanged. Internal write-path correction + one log marker; nothing crosses the boundary.
+**(1) NEW ADR-098 — canonical git-surface topology (provisional ordinal; `/ship` re-verifies against origin/main + sibling-collision sweep).** File `knowledge-base/engineering/architecture/decisions/ADR-098-git-surface-topology.md`. States the three git surfaces as first-class facts + the load-bearing consequence:
+- **Server-side git-data:** BARE (`git init --bare`, `/mnt/git-data/repositories/<id>.git`) — `apps/web-platform/infra/git-data-provision.sh`.
+- **Agent workspace (where worktree-manager.sh runs):** NON-BARE (`git clone --depth 1`, `/workspaces/<id>`, `core.bare=false`) — `apps/web-platform/server/ensure-workspace-repo.ts`.
+- **Local CLI dev:** BARE + worktrees.
+- **Consequence:** `worktree-manager.sh`'s `ensure_bare_config` NON-BARE GUARD (`:478`) returns early on the Concierge workspace, so the `atomic_git_config`/`_config_lock_wedged` **bare path never executes there** — the surface every prior round targeted. Cross-link ADR-081 and `knowledge-base/engineering/operations/post-mortems/concierge-worktree-creation-stale-lock-wedge-postmortem.md`.
+
+**(2) ADR-081 amendment (arch-strategist #5).** Records the identity-authority resolution for the non-bare surface: the host-seeded per-workspace **owner** identity is authoritative in-sandbox; `ensure_worktree_identity` must not override it with the image's `github-actions[bot]` global. Amend `## Decision` + add "route-the-write (Layer A)" to `## Alternatives Considered` (rejected: misattributes commits). Extends the existing ADR.
+
+**(3) AGENTS.md caveat (coordinator-directed) — BUDGET-GATED.** The three rules that assert "repo root is bare" are written from the local-dev-bare viewpoint and give no signal that the Concierge workspace is non-bare: `hr-when-in-a-worktree-never-read-from-bare` (AGENTS.core.md:35), `wg-at-session-start-run-bash-plugins-soleur` (AGENTS.core.md:57), `rf-after-merging-read-files-from-the-merged` (AGENTS.rest.md:42). Add a concise non-bare caveat + ADR-098 pointer.
+- **Budget reality:** loaded `B_ALWAYS = 22995 / 23000` (measured via `python3 scripts/lint-agents-rule-budget.py`) — only ~5 bytes slack. AGENTS.rest.md is NOT always-loaded → the `rf-after-merging` caveat is budget-free (do the fuller wording there). The two **core** rules are always-loaded → adding bytes breaches the 23000 reject cap.
+- **Required approach for the core rules:** either (a) a **net-byte-neutral** edit (tighten existing wording in the same two rules to offset the added pointer; verify `lint-agents-rule-budget.py` exits 0), OR (b) if net-neutral is infeasible, demote ONE `wg-*` rule core→rest to free room — the lint's own WARN names this remedy — with **loader-class-fit verification** (`sed -n '88,126p' .claude/hooks/session-rules-loader.sh`; the demoted rule must not fire on a trigger class where AGENTS.rest.md doesn't load) per learning `2026-05-12-agents-md-trim-loader-class-fit-verification.md`. Respect `cq-agents-md-why-single-line` (one line per rule body), `cq-rule-ids-are-immutable` (no id renames), `cq-agents-md-tier-gate`.
+
+**C4 views: no impact (checked `model.c4`, `views.c4`, `spec.c4`).** External actors — none new (agent sandbox modeled via `claude`/`hetzner`). Vendors — Better Stack already modeled (`model.c4:250`). Data-stores — `.git/config` on host-local worktree NVMe, modeled (`model.c4:170,200`, ADR-068). Access relationships — unchanged. Internal write-path correction + one log marker + docs; nothing crosses the boundary.
 
 ## Domain Review
 
@@ -224,6 +247,8 @@ None. (`gh issue list --label code-review --state open` scanned for the edited p
 - `--update-local-main` + user global `branch.autoSetupMerge=always`: git's own `branch.*` write during `add` could EEXIST on the masked lock. Out of scope (default `--no-track` path is safe); note for future.
 - The new sentinel emits ONLY device/path forensic — never the `user.email`/`user.name` values, and no un-derivable `errno=`.
 - `#4826`→`#6184`: scoped to edited files only; preserve prior-PR-number comments; do NOT claim "all citations corrected."
+- **AGENTS always-loaded budget is at the cap (B_ALWAYS 22995/23000, ~5 bytes slack).** Any addition to AGENTS.md or AGENTS.core.md breaches the reject cap. The core-rule caveat MUST be net-byte-neutral OR paired with a loader-class-fit-verified `wg-*` core→rest demotion. Put the fuller caveat in AGENTS.rest.md (`rf-after-merging`, not always-loaded) and the ADR-098 pointer in core. Verify with `lint-agents-rule-budget.py` (exit 0) before/after.
+- **ADR-098 ordinal is provisional.** A sibling PR can claim it during the pipeline (ordinals surface only post-squash on main). `/ship`'s ADR-Ordinal Collision Gate re-verifies against origin/main; if renumbered, sweep the whole feature's artifact set for the old ordinal (`grep -rn 'ADR-098' knowledge-base/project/{plans,specs}/feat-one-shot-worktree-config-lock-wedge/` + the AGENTS pointers + the ADR-081 cross-link).
 
 ## Risks & Mitigations
 
