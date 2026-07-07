@@ -84,9 +84,9 @@ describe("GuidedTour overlay", () => {
   });
 
   it("renders a box-shadow spotlight when the target is present with a real rect", async () => {
-    // A spotlight step (stepIndex 1 → start-a-conversation action) with a target.
+    // A spotlight step (stepIndex 1 → Dashboard sidebar tab) with a target.
     const a = document.createElement("a");
-    a.setAttribute("data-tour-id", "action:new-conversation");
+    a.setAttribute("data-tour-id", "/dashboard");
     a.getBoundingClientRect = () =>
       ({ top: 100, left: 60, width: 200, height: 44, right: 260, bottom: 144, x: 60, y: 100, toJSON: () => ({}) }) as DOMRect;
     document.body.appendChild(a);
@@ -106,7 +106,7 @@ describe("GuidedTour overlay", () => {
     // Target pinned to the bottom-right corner — naive placement would push the
     // card off both the right and bottom edges (the #tour-overflow bug).
     const a = document.createElement("a");
-    a.setAttribute("data-tour-id", "action:new-conversation");
+    a.setAttribute("data-tour-id", "/dashboard");
     a.getBoundingClientRect = () =>
       ({ top: 760, left: 1120, width: 70, height: 40, right: 1190, bottom: 800, x: 1120, y: 760, toJSON: () => ({}) }) as DOMRect;
     document.body.appendChild(a);
