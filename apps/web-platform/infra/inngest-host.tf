@@ -109,6 +109,21 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
   visibility = "masked"
 }
 
+# The dedicated host's heartbeat unit (inngest-bootstrap.sh, doppler-wrapped against THIS
+# project) reads INNGEST_HEARTBEAT_URL from here — full isolation means every secret the
+# host's units resolve lives in soleur-inngest, not soleur/prd. Value is the REUSED
+# betteruptime_heartbeat.inngest_prd URL (the pusher just moves to the dedicated host; same
+# TF-clean source as the co-located inngest.tf:323). TF owns it → no ignore_changes.
+# (Vector's BETTERSTACK_LOGS_TOKEN is NOT provisioned here — the Vector observability shipper
+# is deferred on this arm64 host to a follow-up; see cloud-init-inngest.yml Vector-defer note.)
+resource "doppler_secret" "inngest_heartbeat_url_dedicated" {
+  project    = doppler_project.inngest.name
+  config     = "prd"
+  name       = "INNGEST_HEARTBEAT_URL"
+  value      = betteruptime_heartbeat.inngest_prd.url
+  visibility = "masked"
+}
+
 # ---------------------------------------------------------------------------------------
 # INNGEST_POSTGRES_URI — provisioned OUT-OF-BAND into THIS project's `prd` config, NOT a
 # TF resource (mirrors the co-located inngest.tf:170-194 out-of-band doctrine + the

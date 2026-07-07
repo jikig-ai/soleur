@@ -123,12 +123,17 @@ HEARTBEAT_BLOCK=$(awk '/cat > "\$HEARTBEAT_UNIT" <</,/^HEARTBEATEOF$/' "$BOOTSTR
 # Reference the block BY NAME ("$HEARTBEAT_BLOCK"), never by embedding its
 # value ('$HEARTBEAT_BLOCK'): the block's comments contain apostrophes
 # (e.g. "inngest-server.service's"), which break the single-quoted eval form.
-assert "heartbeat unit uses doppler run" \
-  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --project soleur --config prd'"
+# #6178: the heartbeat unit doppler project is templated (${DOPPLER_PROJECT}, an
+# UNQUOTED-heredoc expansion — resolves at write time to the default soleur on the web
+# host, or soleur-inngest on the dedicated host). Source carries the literal ${DOPPLER_PROJECT}.
+assert "heartbeat unit uses doppler run (templated \${DOPPLER_PROJECT})" \
+  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --project [\$][{]DOPPLER_PROJECT[}] --config prd'"
 assert "heartbeat unit ExecStart is exactly one line" \
   "[[ \$(printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
 assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.* run --project soleur --config prd -- \\\$\\{HEARTBEAT_SCRIPT\\}'"
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.* run --project [\$][{]DOPPLER_PROJECT[}] --config prd -- \\\$\\{HEARTBEAT_SCRIPT\\}'"
+assert "DOPPLER_PROJECT is exported (so inngest-redis-bootstrap.sh inherits it), default soleur" \
+  "grep -qF 'export DOPPLER_PROJECT=\"\${DOPPLER_PROJECT:-soleur}\"' '$BOOTSTRAP_SH'"
 DOPPLER_BIN_LINE=$(grep -nE 'DOPPLER_BIN=.*command -v doppler' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
 # shellcheck disable=SC2016
 # Single-quotes are intentional — the regex matches the literal shell text
@@ -338,7 +343,15 @@ assert "redis.conf loopback bind"         "grep -qE '^bind 127.0.0.1' '$REDIS_CO
 # password via doppler (never a literal in the file).
 assert "redis.service RequiresMountsFor=/mnt/data" "grep -qE '^RequiresMountsFor=/mnt/data' '$REDIS_SERVICE'"
 assert "redis.service requirepass injected from Doppler" "grep -qF 'requirepass \"\$INNGEST_REDIS_PASSWORD\"' '$REDIS_SERVICE'"
-assert "redis.service runs under doppler run prd" "grep -qE 'doppler run --project soleur --config prd' '$REDIS_SERVICE'"
+# #6178: redis.service doppler project is templated (@@DOPPLER_PROJECT@@) so the dedicated
+# inngest host targets its isolated soleur-inngest project; inngest-redis-bootstrap.sh renders
+# the sentinel (default soleur preserves the web host — regression guard).
+assert "redis.service runs under doppler run prd (templated @@DOPPLER_PROJECT@@)" \
+  "grep -qE 'doppler run --project @@DOPPLER_PROJECT@@ --config prd' '$REDIS_SERVICE'"
+assert "inngest-redis-bootstrap.sh renders the @@DOPPLER_PROJECT@@ sentinel" \
+  "grep -qF '@@DOPPLER_PROJECT@@/' '$SCRIPT_DIR/inngest-redis-bootstrap.sh'"
+assert "redis unit DOPPLER_PROJECT default PRESERVES soleur for the web host (regression guard)" \
+  "grep -qF 'redis_doppler_project=\"\${DOPPLER_PROJECT:-soleur}\"' '$SCRIPT_DIR/inngest-redis-bootstrap.sh'"
 # #5450 F1 regression guard: the conf MUST live under /mnt/data/redis, NOT
 # /etc/redis — on the existing-host deploy the bootstrap runs inside
 # webhook.service's ProtectSystem=strict namespace where /etc is read-only and

@@ -141,8 +141,8 @@ runcmd:
   # --- Fail-closed boot isolation self-check (mirrors registry) ------------------------
   # The load-bearing, fail-CLOSED defense run under the host's OWN shipped boot token: the
   # credential MUST resolve ONLY the inngest secret set. Asserts identity (every visible
-  # non-DOPPLER secret is INNGEST_*) AND cardinality (>=3 — the TF-owned signing/event/redis
-  # keys; the 4th, INNGEST_POSTGRES_URI, is out-of-band). An over-scoped `prd`-branch token
+  # non-DOPPLER secret is a known INNGEST_* name) AND cardinality (>=3 — the TF-owned
+  # signing/event/redis/heartbeat-url keys + the out-of-band INNGEST_POSTGRES_URI). An over-scoped `prd`-branch token
   # would see ~116 foreign secrets → n_total != n_inngest → refuse. On pass, drop the sentinel
   # the bootstrap block gates on; on fail, no sentinel → the next block aborts (fail-closed).
   - |
@@ -151,7 +151,7 @@ runcmd:
     set -euo pipefail
     names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
     n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI)$' || true)"
+    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|HEARTBEAT_URL)$' || true)"
     if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 3 ]; then
       echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
     fi
@@ -186,7 +186,13 @@ runcmd:
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis.conf /tmp/inngest-redis.conf 2>/dev/null || true
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis.service /tmp/inngest-redis.service 2>/dev/null || true
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis-bootstrap.sh /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
-    docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
+    # #6178: Vector (journald->BetterStack shipper) is DEFERRED on this arm64 host — its
+    # download URL is hardcoded x86_64 (inngest-bootstrap.sh:475) and BETTERSTACK_LOGS_TOKEN
+    # would need provisioning into the isolated soleur-inngest project. This host is DARK/inert
+    # in Phase 1 (no prod crons); liveness is covered by the heartbeat-absence alert. So we do
+    # NOT stage /tmp/vector.toml (skips the Vector unit write) and pass empty VECTOR_CLI_* below
+    # (skips the binary install — inngest-bootstrap.sh:467-468 guard). Vector->Sentry error
+    # shipping is wired (arm64 Vector + token) before the Phase-2 cutover — tracked follow-up.
     chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
     image_env=$(docker inspect "$IREF" -f '{{range .Config.Env}}{{println .}}{{end}}')
     chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
@@ -195,10 +201,12 @@ runcmd:
     # checksum — this cax11 host downloads the linux_arm64 tarball (INNGEST_CLI_ARCH=arm64),
     # which the amd64 SHA would reject at verify. Version is arch-independent (from the image).
     INNGEST_CLI_SHA256="${inngest_cli_sha256_arm64}"
-    VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)
-    VECTOR_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_SHA256=' | head -1 | cut -d= -f2- || true)
+    # Vector deferred (see note above): pass empty VECTOR_CLI_* so the install is skipped.
+    # DOPPLER_PROJECT=soleur-inngest routes every doppler-wrapped unit (server/heartbeat/redis)
+    # at THIS host's ISOLATED project (AC3) — the scoped boot token can read only soleur-inngest.
     env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
         "INNGEST_CLI_ARCH=${inngest_cli_arch}" "SDK_URL=${sdk_url}" \
-        "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=$VECTOR_CLI_SHA256" \
+        "DOPPLER_PROJECT=soleur-inngest" \
+        "VECTOR_CLI_VERSION=" "VECTOR_CLI_SHA256=" \
       bash "$EXTRACT_DIR/inngest-bootstrap.sh"
     trap - EXIT

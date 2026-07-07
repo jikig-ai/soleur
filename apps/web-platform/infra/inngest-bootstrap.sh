@@ -42,7 +42,9 @@ INNGEST_CLI_ARCH="${INNGEST_CLI_ARCH:-amd64}"
 # boot token is scoped to the ISOLATED `soleur-inngest` project (AC3), so its ExecStart
 # `doppler run` must target that project, not `soleur`.
 SDK_URL="${SDK_URL:-http://127.0.0.1:3000/api/inngest}"
-DOPPLER_PROJECT="${DOPPLER_PROJECT:-soleur}"
+# EXPORTED so the inngest-redis-bootstrap.sh subprocess (which renders the redis
+# unit's @@DOPPLER_PROJECT@@) inherits it. Default `soleur` preserves the web host.
+export DOPPLER_PROJECT="${DOPPLER_PROJECT:-soleur}"
 
 if [[ -z "$INNGEST_CLI_VERSION" || -z "$INNGEST_CLI_SHA256" ]]; then
   echo "ERROR: INNGEST_CLI_VERSION and INNGEST_CLI_SHA256 must be set (templated at build/cloud-init time)" >&2
@@ -187,7 +189,7 @@ Group=deploy
 # automatically, matching inngest-server.service's hardening pattern.
 # Surfaced 2026-05-20 once #4204's reconcile gate exposed the new unit shape.
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=${DOPPLER_BIN} run --project soleur --config prd -- ${HEARTBEAT_SCRIPT}
+ExecStart=${DOPPLER_BIN} run --project ${DOPPLER_PROJECT} --config prd -- ${HEARTBEAT_SCRIPT}
 HEARTBEATEOF
 
 cat > "$HEARTBEAT_TIMER" <<'TIMEREOF'
