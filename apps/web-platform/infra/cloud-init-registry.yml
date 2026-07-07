@@ -110,8 +110,9 @@ write_files:
 
   # Disk-capacity guard (#6122 follow-up): ping the disk-health heartbeat ONLY while /var/lib/zot
   # is under 85% used. A filling store (or a down host / broken cron) stops the ping → Better Stack
-  # alerts BEFORE full, no SSH/df/dashboard (hr-no-dashboard-eyeball-pull-data-yourself). ${disk_heartbeat_url}
-  # is terraform-interpolated; $USE stays literal (templatefile only expands ${...}, not $VAR).
+  # alerts BEFORE full, no SSH/df/dashboard (hr-no-dashboard-eyeball-pull-data-yourself). The
+  # disk_heartbeat_url below is terraform-interpolated; the bash $USE stays literal (templatefile
+  # only expands dollar-brace references, not plain dollar-VAR).
   - path: /usr/local/bin/zot-disk-heartbeat.sh
     content: |
       #!/usr/bin/env bash
