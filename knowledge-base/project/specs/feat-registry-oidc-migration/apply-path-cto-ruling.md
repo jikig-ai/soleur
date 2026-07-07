@@ -30,14 +30,18 @@ apply` + the 12h drift detector. ZERO added to the workflow `-target=` list.** P
 ### Per-resource bucket (all → OPERATOR_APPLIED_EXCLUSIONS)
 `hcloud_server.registry`, `hcloud_volume.registry`, `hcloud_volume_attachment.registry`,
 `hcloud_server_network.registry`, `hcloud_firewall.registry`, `hcloud_firewall_attachment.registry`,
-`random_password.zot_pull`, `random_password.zot_push`, `doppler_secret.zot_registry_url`,
+`random_password.zot_pull`, `random_password.zot_push`, `doppler_project.registry`, `doppler_secret.zot_registry_url`,
 `doppler_secret.zot_pull_user`, `doppler_secret.zot_pull_token`, `doppler_secret.zot_push_user`,
 `doppler_secret.zot_push_token`, `betteruptime_heartbeat.registry_prd`,
 `doppler_secret.zot_heartbeat_url_prd`, `doppler_service_token.registry`.
 
 `doppler_service_token.registry` is **additionally** in `OPERATOR_APPLIED_TOKEN_EXCLUSIONS`
-(minted into an operator-created `prd_registry` config, consumed by cloud-init — CI cannot apply
-it). Its non-vacuity check requires the resource to exist in a `.tf` (it does, in `zot-registry.tf`).
+(minted into the isolated `soleur-registry` project's `prd` root config — TF-created via
+`doppler_project.registry` in the operator full apply — consumed by cloud-init; CI cannot apply it,
+no host. **Updated 2026-07-07 (#6122 isolation fix):** the original "operator-created `prd_registry`
+config under `prd`" was a leaky branch config that inherited the full `prd` root; replaced by a
+dedicated project for true cross-project isolation — see #6167). Its non-vacuity check requires the
+resource to exist in a `.tf` (it does, in `zot-registry.tf`).
 
 ## Two load-bearing conditions (violating either re-classes a resource to CI-`-target`)
 1. **Registry host MUST be cloud-init-only** — no `remote-exec` `terraform_data`. An SSH-provisioned
