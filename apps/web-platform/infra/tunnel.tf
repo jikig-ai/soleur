@@ -41,6 +41,14 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
       hostname = "ssh.${var.app_domain_base}"
       service  = "ssh://localhost:22"
     }
+    # #6122 (ADR-096) — registry PUSH ingress. The web host's cloudflared (already a
+    # 10.0.1.0/24 member) proxies to the private-net zot host, so the registry host needs
+    # NO cloudflared of its own. CI runs `cloudflared access tcp --hostname registry.<base>`
+    # → this rule → http://10.0.1.30:5000 (zot). First-match; MUST stay above the 404.
+    ingress_rule {
+      hostname = "registry.${var.app_domain_base}"
+      service  = "http://${local.registry_endpoint}"
+    }
     # Catch-all rule (required by Cloudflare)
     ingress_rule {
       service = "http_status:404"
@@ -113,16 +121,83 @@ resource "cloudflare_zero_trust_access_policy" "ci_ssh_service_token" {
   }
 }
 
+# #6122 (ADR-096) — CF Access for the registry PUSH ingress (CTO ruling). A NEW dedicated
+# service token (NOT reused from ci_ssh/deploy) so registry-write access rotates/revokes
+# independently of host-shell + webhook access, with its own session duration. Push-time auth
+# is BOTH gates: this CF Access service token (network/edge) + the zot-push htpasswd (registry).
+# All operator-applied (rides the registry host's full apply), like the rest of the #6122 stack.
+resource "cloudflare_zero_trust_access_application" "registry" {
+  zone_id = var.cf_zone_id
+  name    = "Registry Push (CI) - soleur-web-platform"
+  domain  = "registry.${var.app_domain_base}"
+  type    = "self_hosted"
+  # 15m — same as the ssh app (registry write is a comparable blast radius: it can
+  # overwrite platform image tags). A release build's push is well under 15m.
+  session_duration = "15m"
+}
+
+resource "cloudflare_zero_trust_access_service_token" "registry_push" {
+  account_id = var.cf_account_id
+  name       = "github-actions-registry-push"
+}
+
+resource "cloudflare_zero_trust_access_policy" "registry_push_service_token" {
+  zone_id        = var.cf_zone_id
+  application_id = cloudflare_zero_trust_access_application.registry.id
+  name           = "Allow GitHub Actions registry push"
+  decision       = "non_identity"
+  precedence     = 1
+
+  include {
+    service_token = [cloudflare_zero_trust_access_service_token.registry_push.id]
+  }
+}
+
+# Publish the registry-push CF Access token to Doppler prd_terraform so the Phase-2 push
+# workflow reads it at runtime via `doppler secrets get` (like CI_SSH_ACCESS_TOKEN_ID/_SECRET)
+# — NOT a github_actions_secret (CTO load-bearing condition #2; avoids the #5566 class).
+#
+# WRITE-ONCE (ignore_changes=[value]): cloudflare_zero_trust_access_service_token.client_secret
+# is populated ONLY at create and reads EMPTY on subsequent `terraform refresh` (#4492→#4494
+# learning). Because this stack is OPERATOR-applied (no CI post-apply output-sync step like
+# ci_ssh has), TF writes Doppler directly on the operator's full apply; ignore_changes prevents
+# a later refresh from clobbering the live Doppler value with the empty state read. client_id is
+# stable, but ignore_changes on both keeps the write-once semantics symmetric. Rotate via
+# `terraform apply -replace=cloudflare_zero_trust_access_service_token.registry_push` (which
+# re-creates the token → new client_secret → this re-writes Doppler on that apply).
+resource "doppler_secret" "registry_push_access_token_id" {
+  project    = "soleur"
+  config     = "prd_terraform"
+  name       = "REGISTRY_PUSH_ACCESS_TOKEN_ID"
+  value      = cloudflare_zero_trust_access_service_token.registry_push.client_id
+  visibility = "masked"
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+resource "doppler_secret" "registry_push_access_token_secret" {
+  project    = "soleur"
+  config     = "prd_terraform"
+  name       = "REGISTRY_PUSH_ACCESS_TOKEN_SECRET"
+  value      = cloudflare_zero_trust_access_service_token.registry_push.client_secret
+  visibility = "masked"
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
 # Alert one week before any CF Access service token expires.
 # Cloudflare sends expiring_service_token_alert 7 days pre-expiry.
 # Note: this alert fires for ALL service tokens in the account (no per-token
-# filtering). Two tokens exist: `github-actions-deploy` (webhook) and
-# `github-actions-ci-ssh` (CI runner SSH bridge, #4177); the alert body
+# filtering). Three tokens exist: `github-actions-deploy` (webhook),
+# `github-actions-ci-ssh` (CI runner SSH bridge, #4177), and
+# `github-actions-registry-push` (CI registry push, #6122); the alert body
 # names the specific token.
 resource "cloudflare_notification_policy" "service_token_expiry" {
   account_id  = var.cf_account_id
   name        = "CF Access service token expiring"
-  description = "Alert when any CF Access service token (github-actions-deploy or github-actions-ci-ssh) approaches expiry"
+  description = "Alert when any CF Access service token (github-actions-deploy, github-actions-ci-ssh, or github-actions-registry-push) approaches expiry"
   alert_type  = "expiring_service_token_alert"
   enabled     = true
 

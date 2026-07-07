@@ -401,7 +401,13 @@ runcmd:
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
 
-  # Configure Docker log rotation
+  # Configure Docker log rotation + the self-hosted zot registry as an insecure (plain-HTTP,
+  # private-net) registry (#6122/ADR-096). zot serves HTTP on 10.0.1.30:5000 (= zot-registry.tf
+  # local.registry_endpoint) behind a deny-all-public firewall; docker refuses a non-TLS registry
+  # unless it is allowlisted here. Harmless before the Phase-3 flip activates — nothing pulls from
+  # zot until the dark-launch gate confirms it live. cosign digest-pinning is the integrity guard,
+  # not TLS (Phase-0 spike). This is the ONLY daemon.json write for FRESH hosts; running hosts get
+  # the same allowlist via terraform_data.registry_insecure_config (server.tf).
   - |
     cat > /etc/docker/daemon.json << 'DOCKEREOF'
     {
@@ -409,7 +415,8 @@ runcmd:
       "log-opts": {
         "max-size": "10m",
         "max-file": "3"
-      }
+      },
+      "insecure-registries": ["10.0.1.30:5000"]
     }
     DOCKEREOF
   - STAGE=docker_restart  # (#6090) name the stage for the top-armed on_err fatal
@@ -455,16 +462,37 @@ runcmd:
       else
         printf 'ghcr_login_fail: %s' "$(tail -c 140 /run/soleur-ghcr-login.log 2>/dev/null)" > /run/soleur-stage-detail
       fi
+      # #6122/ADR-096: also log in to zot (dark — only when ZOT_* present) so the seed pull can
+      # prefer it; login persists for the app + inngest pulls (bootstrap's zot_login is too late).
+      ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
+      if [ -n "$ZURL" ]; then
+        ZUSER=$(timeout 15 doppler secrets get ZOT_PULL_USER --plain --project soleur --config prd 2>/dev/null || true)
+        ZTOK=$(timeout 15 doppler secrets get ZOT_PULL_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
+        [ -n "$ZUSER" ] && [ -n "$ZTOK" ] && printf '%s' "$ZTOK" | docker login "$ZURL" -u "$ZUSER" --password-stdin >/dev/null 2>&1 || true
+      fi
     ) || true
+    # #6122/ADR-096: resolve the effective image ref ONCE (zot-primary when configured +
+    # /v2/-reachable, else the unchanged GHCR ref) → /run/soleur-image-ref so app pull/create/
+    # run follow the SAME registry. Dark-safe: unset/unreachable zot ⇒ REF = GHCR ref.
     STAGE=pull
-    # On the final failed attempt, append the docker pull stderr to the login outcome so on_err's
-    # `detail` tag carries the real error. Clear the file after a successful pull (no stale detail).
-    N=0; until docker pull "$IMAGE_REF" > /run/soleur-pull.log 2>&1; do
+    ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
+    REF="$IMAGE_REF"
+    if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
+      REF="$ZURL/$(printf '%s' "$IMAGE_REF" | sed 's#^ghcr.io/##')"
+    fi
+    # #6090: log each pull to /run/soleur-pull.log; on final failure append stderr to
+    # /run/soleur-stage-detail (on_err detail tag); clear on success. #6122: zot ref first,
+    # fall back to GHCR after the zot attempt.
+    N=0
+    until docker pull "$REF" > /run/soleur-pull.log 2>&1; do
       N=$((N+1))
-      [ "$N" -ge 3 ] && { printf ' | pull_err: %s' "$(tail -c 160 /run/soleur-pull.log 2>/dev/null)" >> /run/soleur-stage-detail; exit 1; }
+      [ "$N" -ge 2 ] && REF="$IMAGE_REF"   # atomic fallback to GHCR after the zot attempt
+      [ "$N" -ge 5 ] && { printf ' | pull_err: %s' "$(tail -c 160 /run/soleur-pull.log 2>/dev/null)" >> /run/soleur-stage-detail; exit 1; }
       sleep 5
     done
     : > /run/soleur-stage-detail
+    printf '%s' "$REF" > /run/soleur-image-ref
+    IMAGE_REF="$REF"
     STAGE=extract
     docker create --name soleur-hostscript-seed "$IMAGE_REF" >/dev/null
     SEED=$(mktemp -d)
@@ -557,7 +585,9 @@ runcmd:
     chmod +x /etc/cron.weekly/docker-cleanup
 
   # Pull and run container (secrets from Doppler -- no .env fallback)
-  - docker pull ${image_name}
+  # #6122/ADR-096: pull the registry the seed block resolved (/run/soleur-image-ref); falls
+  # back to the GHCR ${image_name} if the sentinel is absent (byte-identical pre-#6122).
+  - docker pull "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
 
   # Seed /mnt/data/plugins/soleur from the image's baked plugin tree (#3045).
   # Ephemeral container so we don't depend on a long-running container.
@@ -575,7 +605,7 @@ runcmd:
     cleanup() { docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true; }
     # #6090: composite trap (cleanup + named fatal).
     trap 'rc=$?; cleanup; [ "$rc" = 0 ] || soleur-boot-emit plugin_seed fatal' EXIT
-    docker create --name soleur-plugin-seed ${image_name}
+    docker create --name soleur-plugin-seed "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
     find /mnt/data/plugins/soleur -mindepth 1 -delete 2>/dev/null || true
     docker cp soleur-plugin-seed:/opt/soleur/plugin/. /mnt/data/plugins/soleur/
     docker rm soleur-plugin-seed
@@ -603,12 +633,20 @@ runcmd:
   # fresh hosts.
   - |
     set -e
-    docker pull ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
+    # #6122/ADR-096: prefer zot (dark; host already logged in by soleur-host-bootstrap.sh);
+    # all 3 refs follow IREF, zot miss ⇒ GHCR fallback; soleur-boot-emit records the registry.
+    ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
+    if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
+      ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.18"
+      if docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_ghcr_fallback warning; fi
+    fi
+    docker pull "$IREF"
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
     # #6090: composite trap (cleanup + named fatal).
     trap 'rc=$?; cleanup; [ "$rc" = 0 ] || soleur-boot-emit inngest_bootstrap fatal' EXIT
-    docker create --name soleur-inngest-bootstrap-extract ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
+    docker create --name soleur-inngest-bootstrap-extract "$IREF"
     docker cp soleur-inngest-bootstrap-extract:/inngest-bootstrap.sh "$EXTRACT_DIR/inngest-bootstrap.sh"
     docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
     # Durable Redis assets (#5450) — stage to /tmp like vector.toml so the
@@ -618,7 +656,7 @@ runcmd:
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis.service /tmp/inngest-redis.service 2>/dev/null || true
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis-bootstrap.sh /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
     chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
-    image_env=$(docker inspect ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18 -f '{{range .Config.Env}}{{println .}}{{end}}')
+    image_env=$(docker inspect "$IREF" -f '{{range .Config.Env}}{{println .}}{{end}}')
     chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
     INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | head -1 | cut -d= -f2-)
     INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | head -1 | cut -d= -f2-)
@@ -672,7 +710,7 @@ runcmd:
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:80:3000 \
       -p 0.0.0.0:3000:3000 \
-      ${image_name}
+      "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
     rm -f "$TMPENV"
     # Fresh-host post-container egress-enforcement probe (#5933; details in the script
     # header). Fail-closed: a non-enforcing host poweroffs rather than serve an open

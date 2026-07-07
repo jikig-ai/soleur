@@ -49,6 +49,21 @@ resource "cloudflare_record" "ssh" {
   ttl     = 1
 }
 
+# #6122 (ADR-096) — registry PUSH ingress for CI via Cloudflare Tunnel (CTO ruling).
+# CI pushes container images to the private-net zot host through this hostname: it runs
+# `cloudflared access tcp --hostname registry.<base>` (CF Access service-token auth) → the
+# web host's cloudflared → http://10.0.1.30:5000 (the tunnel ingress_rule in tunnel.tf).
+# Mirrors cloudflare_record.ssh 1:1. The Hetzner registry firewall stays deny-all-public —
+# push arrives via the tunnel, never a public port. Web hosts PULL direct on the private net.
+resource "cloudflare_record" "registry" {
+  zone_id = var.cf_zone_id
+  name    = "registry"
+  content = "${cloudflare_zero_trust_tunnel_cloudflared.web.id}.cfargotunnel.com"
+  type    = "CNAME"
+  proxied = true
+  ttl     = 1
+}
+
 # Email authentication records for Resend SMTP (sends via Amazon SES, eu-west-1)
 
 resource "cloudflare_record" "dkim_resend" {

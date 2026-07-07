@@ -1,12 +1,28 @@
 ---
 adr: ADR-088
 title: "Control-plane installation-token minter for private-GHCR reads (supersedes ADR-087 D1)"
-status: active
+status: superseded
+superseded_by: "#6122 (migrate off GHCR to self-hosted zot + control-plane-minted OIDC bearer)"
 date: 2026-07-05
 supersedes: "ADR-087 D1 (credential-provisioning choice only; ADR-087 Design B′ verifier topology is untouched)"
 ---
 
 # ADR-088: Control-plane installation-token minter for private-GHCR reads
+
+> **SUPERSEDED (2026-07-06, #6122).** This ADR's chosen mechanism — a control-plane minter
+> issuing **GitHub App installation tokens** for private-GHCR `docker pull` — was proven
+> **infeasible**: a GitHub App installation token can `docker login ghcr.io` but `docker pull`
+> returns `denied`. This is a **confirmed GitHub platform limitation** (GitHub staff on record,
+> [community discussion #171423](https://github.com/orgs/community/discussions/171423)), not a
+> misconfiguration — only a user classic PAT (browser-only creation, no mint API) or the Actions
+> `GITHUB_TOKEN` pull private GHCR. GHCR therefore cannot deliver a zero-touch machine identity.
+> The zero-touch **goal** of this ADR is retained and carried forward by **#6122** (migrate the
+> registry off GHCR to self-hosted **zot** on Hetzner/R2, which validates a control-plane-signed
+> OIDC bearer natively — the minter/IaC/Doppler wiring here is reused, only the registry substrate
+> changes). See `knowledge-base/project/learnings/2026-07-06-ghcr-app-token-cannot-pull-and-oidc-needs-native-identity-source.md`
+> and the #6122 brainstorm/spec. The interim machine-account classic PAT stays live until the zot
+> pull path is validated end-to-end (do NOT revoke early). ADR-087 (the deploy-time verifier
+> topology) is unaffected.
 
 ## Context
 
