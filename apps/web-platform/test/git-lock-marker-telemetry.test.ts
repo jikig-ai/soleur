@@ -151,11 +151,15 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
       "../../../plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh",
     ].map((p) => readFileSync(join(__dirname, p), "utf8"));
     // Both scripts emit `echo "SOLEUR_..."` sentinels; also collect the non-SOLEUR_-prefixed
-    // fatal markers now in the allowlist (D1b): `NO_GIT_REPOSITORY` (the repo-readiness gate)
-    // and the `SOLEUR_FEATURE_*` push-failure. A renamed/added sentinel unmatched by MARKER_RE
+    // fatal markers now in the allowlist (D1b): `NO_GIT_REPOSITORY` (the repo-readiness gate),
+    // the `SOLEUR_FEATURE_*` push-failure, and the `worktree wedge:` give-up phrase (this PR
+    // adds five new bare-echo copies of it — pin the literal so a future rename fails CI here
+    // rather than silently un-mirroring). A renamed/added sentinel unmatched by MARKER_RE
     // must fail CI here rather than go silently unmirrored — the exact blindness this closes.
     const sentinels = scripts.flatMap((s) =>
-      [...s.matchAll(/echo "(SOLEUR_[A-Z_]+|NO_GIT_REPOSITORY)/g)].map((m) => m[1]),
+      [...s.matchAll(/echo "(SOLEUR_[A-Z_]+|NO_GIT_REPOSITORY|worktree wedge:)/g)].map(
+        (m) => m[1],
+      ),
     );
     const unique = [...new Set(sentinels)];
     expect(unique.length).toBeGreaterThan(0); // non-vacuous: the scripts DO emit sentinels
