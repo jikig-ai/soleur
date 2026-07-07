@@ -1,6 +1,6 @@
 ---
 date: 2026-07-07
-status: paused-pending-product-validation
+status: complete
 lane: cross-domain
 brand_survival_threshold: single-user incident
 domains_assessed: [product, legal, engineering, sales, operations, finance]
@@ -12,10 +12,11 @@ domains_assessed: [product, legal, engineering, sales, operations, finance]
 
 Mid-brainstorm, the Sourcing Options Canvas surfaced that the quadrant [turnkey CRM + agent-native MCP + multi-tenant + resale-safe license] is **empty in the 2026 market** — a potential product opportunity. The operator opted to **validate an "agent-operated open-source CRM" as a separate Jikigai product** before investing further here (validation report: `knowledge-base/product/validation/2026-07-07-agent-operated-crm-validation.md`).
 
+**Resolution (validation complete):** verdict = **NOT-NOW as a standalone product** → **build this capture store as a Soleur MODULE and dogfood it.** So this spec is the validated path forward, not paused. Report: `knowledge-base/product/validation/2026-07-07-agent-operated-crm-validation.md`. Standalone/OSS spin-out is deferred behind explicit triggers (≥3 of first ~5 testers unprompted ask to buy it standalone; Soleur early PMF; a real moat) with a shelf-ready AGPL + per-agent-action pricing playbook.
+
 **Consequences:**
-- The DB-backed capture build below is **paused** pending the product go/no-go. The design remains valid as the product's **v0 seed / first dogfood datapoint**.
-- **This-week stopgap (no build):** capture beta conversations in the existing anonymized markdown format (`knowledge-base/support/community/user-conversations/`), initials/role/company-type only, **no raw PII** — leak-safe and compliance-clean.
-- If the product verdict is GO, this capability spins into its own repo/roadmap; if NOT-NOW, resume this spec as an internal-only feature.
+- The DB-backed capture store below **proceeds** as the internal Soleur module (also the product's v0 seed / first dogfood datapoint).
+- **This-week stopgap (no build required):** while the module is built, capture beta conversations in the existing anonymized markdown format (`knowledge-base/support/community/user-conversations/`), initials/role/company-type only, **no raw PII** — leak-safe and compliance-clean.
 
 ## What We're Building
 
