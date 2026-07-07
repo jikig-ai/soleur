@@ -28,6 +28,15 @@ If all of (1)-(3) point to "untouched + crash-at-navigation + changed-surface-pa
 
 A BLOCKING visual-regression gate can produce non-blocking failures when the *runner* is resource-starved. The discriminator is **provenance + failure-layer**: a failure in a test your diff never touches, occurring at the browser/navigation layer before any assertion, on a machine known to throttle, is an environment flake — the authoritative gate is CI's containerized e2e, not the local laptop.
 
+## Addendum (2026-07-07): webServer-startup build race + kill-by-port
+
+A second flake shape on the same throttled machine, distinct from the navigation-crash above — it fails **before any test runs**:
+
+- `playwright test nav-states --project=authenticated` aborts with `Error: Process from config.webServer was not able to start. Exit code: 1`. The `playwright.config.ts` `webServer` array launches **two** `npm run dev` processes (public `3099` + auth `3100`) concurrently, and both build into the same `.next/dev-server.mjs` — a concurrent-build race that intermittently exits 1. `rm -rf .next` + retry does NOT fix it (the race is between the two servers, not stale artifacts).
+- **Workaround:** pre-start both dev servers **sequentially** in the background (so the `.next` build happens once and the second server reuses it), wait for each port to answer, then run `playwright test` — with `reuseExistingServer: true` (the default when not CI) playwright reuses them and skips its own racing launch. Auth server env: `PORT=3100 NEXT_PUBLIC_SUPABASE_URL=http://localhost:54399 SUPABASE_URL=http://localhost:54399 SUPABASE_SERVICE_ROLE_KEY=test-service-role-key npm run dev`. A `307` on `/` is the expected auth redirect = ready.
+- The custom `npm run dev` server spawns a child that **survives `kill <launcher-pid>`** — `kill` reports success but the port stays bound. Stop it by port: `lsof -ti tcp:3099 tcp:3100 | xargs kill -9`.
+- Same discriminator applies: the 2 tests that still failed (`nav-states:600`/`:614`, chat conversation-rail) are on a component the diff never touched, are data-population/timing-bound, and one flipped FAIL→PASS on isolated re-run — flake, not regression. CI's containerized e2e is authoritative.
+
 ## Tags
 category: test-failures
 module: apps/web-platform/e2e (nav-states structural-UI gate)
