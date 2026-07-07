@@ -88,12 +88,24 @@ if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(g) already-prefixed v1
 run_stdin "4.5.6"
 if [[ "$RC" -eq 0 && "$OUT" == "v4.5.6" ]]; then pass; else fail "(h) stdin 4.5.6 → expected rc=0 OUT=v4.5.6, got rc=$RC OUT='$OUT'"; fi
 
-# ── (i) diagnostic quality: rejection message names the rejected version + surfaces ::error:: ──
+# ── (h2) stdin reject parity: an invalid version on stdin rejects like the arg path ──
+run_stdin "latest"
+if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(h2) stdin latest → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+
+# ── (j) trailing whitespace → non-zero (pins the resolver's documented "no trimming" contract) ──
+run_arg "1.2.3 "
+if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(j) trailing-space '1.2.3 ' → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+
+# ── (k) four-part version → non-zero (pins the trailing \$ anchor) ─────────────
+run_arg "1.2.3.4"
+if [[ "$RC" -ne 0 && -z "$OUT" ]]; then pass; else fail "(k) four-part 1.2.3.4 → expected rc!=0 and empty OUT, got rc=$RC OUT='$OUT'"; fi
+
+# ── (i) diagnostic quality: rejection message names the rejected version inside the quoted slot + surfaces ::error:: ──
 STDERR="$(bash "$SCRIPT" "latest" 2>&1 >/dev/null)"
-if echo "$STDERR" | grep -q "::error::" && echo "$STDERR" | grep -q "latest"; then
+if echo "$STDERR" | grep -q "::error::" && echo "$STDERR" | grep -q "version='latest'"; then
   pass
 else
-  fail "(i) rejection diagnostic → expected ::error:: naming 'latest', got: $STDERR"
+  fail "(i) rejection diagnostic → expected ::error:: with version='latest', got: $STDERR"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

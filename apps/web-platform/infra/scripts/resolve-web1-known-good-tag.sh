@@ -48,7 +48,12 @@ fi
 TARGET_TAG="v${RUNNING_VERSION}"
 
 if [[ ! "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "::error::Cannot resolve a semver known-good tag for web-1's running container from /health (.version='${RUNNING_VERSION}'). The container is not reporting a released BUILD_VERSION (expected strict vX.Y.Z). Trigger a normal web-platform release, confirm app/health reports the new version, then re-run this recreate." >&2
+  # Strip control chars from the untrusted /health value before echoing it into
+  # the runner log — a spoofed .version carrying an embedded newline could
+  # otherwise inject a `::workflow-command::` annotation line (log-annotation
+  # injection). The valid path never reaches here (validated semver has none).
+  SAFE_VERSION=$(printf '%s' "$RUNNING_VERSION" | tr -d '\000-\037')
+  echo "::error::Cannot resolve a semver known-good tag for web-1's running container from /health (.version='${SAFE_VERSION}'). The container is not reporting a released BUILD_VERSION (expected strict vX.Y.Z). Trigger a normal web-platform release, confirm app/health reports the new version, then re-run this recreate." >&2
   exit 1
 fi
 

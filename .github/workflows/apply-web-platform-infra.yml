@@ -1014,8 +1014,15 @@ jobs:
       - name: Resolve known-good image digest off-host (freeze $PINNED — AC3b TOCTOU)
         id: pin
         env:
-          # /health resolution needs Doppler for APP_DOMAIN_BASE (#6147).
+          # /health resolution needs Doppler for APP_DOMAIN_BASE (#6147). Pin the
+          # project+config scope like every other `doppler secrets get` step in
+          # this file (:241-242, :526-527) — the CLI has no job-wide `doppler setup`
+          # default, so a bare token call would fall through to the hardcoded
+          # `soleur.ai` default and silently mask a real Doppler misconfig on the
+          # load-bearing host-targeting variable.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
           # GHCR digest resolution needs an authenticated pull (private package).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
@@ -1058,6 +1065,13 @@ jobs:
             # Public endpoint — NO CF-Access headers (contrast the deploy-status curl
             # this replaces). Same endpoint web-platform-release.yml curls for its
             # health gate. .version is a bare semver (jq '.version // ""').
+            # This replaces the old exit_code==0 settledness gate: no mid-deploy
+            # gate is needed because /health reports the ACTUALLY-RUNNING container's
+            # version. During a web-1 graceful reload it returns the old-or-new
+            # released version (both known-good); a still-booting container 503s and
+            # `-sf` fails closed → retry. (Assumes ci-deploy keeps the old container
+            # serving until the new one is healthy — the current graceful-reload
+            # contract; revisit if that deploy mechanism changes.)
             RUNNING_VERSION=$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")
             if [[ -n "$RUNNING_VERSION" ]]; then
               break
