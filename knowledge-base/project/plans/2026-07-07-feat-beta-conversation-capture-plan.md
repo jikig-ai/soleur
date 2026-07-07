@@ -280,6 +280,8 @@ At the `single-user incident` threshold the panel ran the escalated set: spec-fl
 **Residual acknowledged (not MVP-blocking):** within-tenant prompt-injection overwrite of the mutable head (R3 — field-diff audit deferred; operator reviews in-session at single-user scale).
 
 ## Deferred Items (→ follow-up issues, filed)
+
+Items 1–7 are tracked under **Epic #6177** (Beta-CRM module — post-MVP roadmap). #6176 is standalone (pre-existing gap on other tables); #6166 is the separate product-spin-out track.
 1. **`/soleur:capture-conversation` skill** — parse a raw conversation into a faceted record (Productize Candidate). → **#6169**
 2. **BYO-CRM connect** via native MCP (HubSpot first); re-eval unified-API at ~8–10 tenants/4+ CRMs. → **#6170**
 3. **Tester-visible records** (external-person auth surface; agent-user parity). → **#6171**
