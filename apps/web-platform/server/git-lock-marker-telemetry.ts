@@ -52,21 +52,27 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     bare surgery was correctly skipped and native `git worktree add` proceeds. NOT a wedge.
 //   - SOLEUR_FEATURE_PUSH_FAILED      — the -u push failed → local-only branch (was dropped at ingest).
 //   - NO_GIT_REPOSITORY               — the repo-readiness gate: a repo-less workspace exits 3 (was dropped).
+//   - SOLEUR_GIT_WORKTREE_VERIFY_FAILED — verify_worktree_created rejected the new worktree
+//     (reason=path-mismatch|not-a-worktree|dir-not-created|unregistered|branch-missing). The
+//     #5934 round-3 LIVE failure was reason=path-mismatch: a relative GIT_ROOT made the expected
+//     path relative while git reported it absolute. This exit was SILENT to every sink before
+//     round-3 (the round-2 wedge could only be seen via an operator paste). A wedge.
 // The optional leading `(?:\[[a-z]+\] )?` prefix tolerates the `[error] ` / `[warn] ` prefix that
 // headless_or_stderr stamps onto a marker when it reaches stderr instead of a bare stdout echo
 // (D1c) — so the existing `[error] worktree wedge:` give-up finally matches.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // A wedge (vs. a benign DIAG) is any marker that indicates git operations could not
 // proceed: an unremovable/masked lock, a temp-wedge, a config-TARGET-masked give-up, an
 // ensure_bare_config give-up, a failed identity set-from-global write, a readiness-gate
 // rejection (SOLEUR_GIT_REPO_DIAG is only emitted on the not-ready path), a repo-less
 // workspace (NO_GIT_REPOSITORY), OR a failed feature push (SOLEUR_FEATURE_PUSH_FAILED →
-// local-only branch). EXCLUDED (benign, mirrored-not-paged): SOLEUR_GIT_LOCK_IDENTITY_DIAG
+// local-only branch), OR a rejected worktree (SOLEUR_GIT_WORKTREE_VERIFY_FAILED → creation
+// aborted with exit 1). EXCLUDED (benign, mirrored-not-paged): SOLEUR_GIT_LOCK_IDENTITY_DIAG
 // (precondition) and SOLEUR_GIT_CONFIG_MASK_SKIP (non-bare-skip-under-mask → creation proceeds).
 const WEDGE_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_LOCK_IDENTITY_WEDGED\b|SOLEUR_GIT_CONFIG_TARGET_MASKED\b|SOLEUR_GIT_REPO_DIAG\b|SOLEUR_FEATURE_PUSH_FAILED\b|NO_GIT_REPOSITORY\b|worktree wedge:)/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_LOCK_IDENTITY_WEDGED\b|SOLEUR_GIT_CONFIG_TARGET_MASKED\b|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b|SOLEUR_GIT_REPO_DIAG\b|SOLEUR_FEATURE_PUSH_FAILED\b|NO_GIT_REPOSITORY\b|worktree wedge:)/;
 
 // Bounds: scan at most this many lines, keep at most this many matched markers, and
 // truncate any single marker line to this many chars. A wedged run emits a handful of

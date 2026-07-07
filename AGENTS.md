@@ -19,6 +19,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: hr-when-triaging-a-batch-of-issues-never] → core
 - [id: hr-all-infrastructure-provisioning-servers] → core
 - [id: hr-fresh-host-provisioning-reachable-from-terraform-apply] → core
+- [id: hr-prod-host-config-change-immutable-redeploy] → core
 - [id: hr-autonomous-loop-skill-api-budget-disclosure] → core
 - [id: hr-every-new-terraform-root-must-include-an] → core
 - [id: hr-tf-variable-no-operator-mint-default] → core
@@ -68,7 +69,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-when-an-audit-identifies-pre-existing] → rest
 - [id: wg-when-deferring-a-capability-create-a] → rest
 - [id: wg-defer-only-after-inline-triage] → rest
-- [id: wg-when-a-workflow-gap-causes-a-mistake-fix] → core
+- [id: wg-when-a-workflow-gap-causes-a-mistake-fix] → rest
 - [id: wg-every-session-error-must-produce-either] → rest
 - [id: wg-use-closes-n-in-pr-body-not-title-to] → rest
 - [id: wg-after-merging-a-pr-that-adds-or-modifies] → rest
@@ -115,4 +116,4 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 
 - [id: cm-challenge-reasoning-instead-of] → core
 - [id: cm-delegate-verbose-exploration-3-file] → core
-- [id: cm-when-proposing-to-clear-context-or] → core
+- [id: cm-when-proposing-to-clear-context-or] → rest

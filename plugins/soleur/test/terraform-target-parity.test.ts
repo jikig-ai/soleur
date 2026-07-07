@@ -551,6 +551,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.zot_push_user",
   "doppler_secret.zot_push_token",
   "betteruptime_heartbeat.registry_prd",
+  "betteruptime_heartbeat.registry_disk_prd",
   "doppler_secret.zot_heartbeat_url_prd",
   "doppler_service_token.registry",
   // #6122 (ADR-096) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net

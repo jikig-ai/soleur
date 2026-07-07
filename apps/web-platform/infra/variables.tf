@@ -124,9 +124,9 @@ variable "registry_server_type" {
 }
 
 variable "registry_volume_size" {
-  description = "Size of the zot storage block volume in GB (Hetzner minimum is 10 GB), mounted at /var/lib/zot. Holds the OCI blobs for both platform images + backfilled release tags + cosign .sig referrers — never tmpfs (reboot-durable; a wiped registry breaks cold-boot pulls). dedupe is on, so 10 GB is ample for two small images."
+  description = "Size of the zot storage block volume in GB (Hetzner minimum is 10 GB), mounted at /var/lib/zot. Holds the OCI blobs for both platform images + backfilled release tags + cosign .sig referrers — never tmpfs (reboot-durable; a wiped registry breaks cold-boot pulls). The web-platform image is ~1.5-2 GB/version and dedupe shares little across versions, so 10 GB filled at ~3 retained versions (#6122); 30 GB holds the storage.retention keep-set (10 v* + 10 sha + latest + sigs) with headroom. A bump resizes the volume in place (data survives); cloud-init-registry.yml resize2fs grows the fs on the next immutable redeploy."
   type        = number
-  default     = 10
+  default     = 30
 }
 
 # --- Epic #5274 Phase 3, Sub-PR 3.D (ADR-068) — LUKS-at-rest cutover volume ---
