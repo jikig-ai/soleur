@@ -1,0 +1,204 @@
+#cloud-config
+# #6178 (ADR-098) — dedicated Inngest singleton host cloud-init. Rendered by
+# templatefile() in inngest-host.tf. Mirrors cloud-init-registry.yml (dedicated
+# volume-backed host, cloud-init-only — NO SSH provisioner; secrets injected via a
+# scoped Doppler token, NEVER baked into user_data) and runs the self-hosted OSS
+# Inngest server (systemd unit) + host-local Redis (AOF on the volume) via the baked
+# soleur-inngest-bootstrap OCI image.
+#
+# DARK-ON-PROVISION (AC-DARK): INNGEST_POSTGRES_URI (out-of-band in the soleur-inngest
+# prd config) points at a distinct NON-PROD Postgres at provision → zero prod crons.
+# The /api/inngest boundary is HMAC signature-verify; the :8288/:8289 control API is
+# scoped by host-local nftables (below) to web hosts only (SEC-H2).
+#
+# A bare dollar-var ($n_total, $i) is left literal by terraform templatefile() — only a
+# dollar-brace interpolates. `$${VAR}` renders a literal shell dollar-brace VAR.
+package_update: true
+packages:
+  - docker.io # runs the bootstrap OCI extract + login (arm64-native; RUN-only host)
+  - nftables # host-local :8288/:8289 control-API scoping (SEC-H2)
+  - curl
+  - jq # parse `doppler secrets --only-names --json` for the boot isolation self-check
+
+groups:
+  - docker
+
+write_files:
+  # SSH hardening parity with registry / git-data / the web host's minimal set.
+  - path: /etc/ssh/sshd_config.d/01-hardening.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      MaxAuthTries 3
+      LoginGraceTime 30
+      PermitRootLogin prohibit-password
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+    owner: root:root
+    permissions: '0644'
+
+  # Host-local nftables scoping the inngest control API (:8288 events/GraphQL, :8289
+  # Connect) to the web-host private IPs ONLY — git-data (.20) + registry (.30) are
+  # dropped (AC-NFT). Rules live in OUR OWN table `inet soleur_inngest` at priority -10
+  # so they run before the main filter hook; policy accept + a targeted drop leaves SSH
+  # (22) / ICMP / everything else untouched. `iif lo` is accepted so local health checks
+  # + the heartbeat probe (curl 127.0.0.1:8288) are unaffected. Re-asserted every boot by
+  # the oneshot below (a reboot clears nftables). Modeled on cron-egress-nftables.sh.
+  - path: /usr/local/bin/inngest-nftables.sh
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      command -v nft >/dev/null || { echo "[inngest-nft] nft binary not found"; exit 1; }
+      # ${web_host_private_ips} is rendered VERBATIM into the nft saddr set (comma-joined
+      # host addresses from inngest-host.tf local.web_host_private_ips — a TF constant, not
+      # user input). `nft -f` table declarations replace our table atomically → idempotent.
+      nft -f - <<'NFTEOF'
+      table inet soleur_inngest {
+        chain input {
+          type filter hook input priority -10; policy accept;
+          iif "lo" accept
+          tcp dport { 8288, 8289 } ip saddr { ${web_host_private_ips} } accept
+          tcp dport { 8288, 8289 } drop
+        }
+      }
+      NFTEOF
+      echo "[inngest-nft] OK: :8288/:8289 scoped to web hosts (${web_host_private_ips})"
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/inngest-nftables.service
+    content: |
+      [Unit]
+      Description=Inngest control-API nftables scoping (:8288/:8289 -> web hosts only, SEC-H2)
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/inngest-nftables.sh
+      RemainAfterExit=yes
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+runcmd:
+  # Apply SSH hardening immediately.
+  - systemctl restart sshd
+
+  # Mount the Redis AOF volume by id at /mnt/data (inngest-redis.conf `dir /mnt/data/redis`).
+  # `nofail` so a volume hiccup does not wedge boot; the redis unit's RequiresMountsFor=
+  # /mnt/data pins Redis behind this mount so the AOF never lands on the ephemeral root disk.
+  - mkdir -p /mnt/data
+  - mount /dev/disk/by-id/scsi-0HC_Volume_${inngest_volume_id} /mnt/data || true
+  - echo '/dev/disk/by-id/scsi-0HC_Volume_${inngest_volume_id} /mnt/data ext4 defaults,nofail 0 2' >> /etc/fstab
+
+  # --- Doppler CLI (arm64) — the ONLY channel for the inngest secret set --------------
+  # The scoped token is NEVER baked into user_data (retrievable via the hcloud metadata
+  # API) beyond the 0600 env file below. cax11 is ARM64 → linux_arm64 build + its checksum
+  # (same pin as cloud-init-registry.yml). Egress (github release DL) is open.
+  - |
+    DOPPLER_VERSION="3.75.3"
+    DOPPLER_SHA256="f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143"
+    curl -fsSL --retry 3 "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_arm64.tar.gz" -o /tmp/doppler.tar.gz
+    echo "$${DOPPLER_SHA256}  /tmp/doppler.tar.gz" | sha256sum -c -
+    tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
+    chmod +x /usr/local/bin/doppler
+    rm /tmp/doppler.tar.gz
+  # Restricted (0600 root) env file with the scoped Doppler service token — NOT world-
+  # readable /etc/environment (mirrors registry's /etc/default/registry-doppler). The token
+  # is scoped to the ISOLATED `soleur-inngest` project's `prd` root config (a SEPARATE
+  # project — NO inheritance path to soleur/prd), so a host compromise reads ONLY the
+  # inngest secret set.
+  - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-doppler
+  - chmod 600 /etc/default/inngest-doppler
+
+  # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------
+  # So the cold-boot soleur-inngest-bootstrap OCI pull + cosign-verify authenticates even
+  # when Doppler answers empty at the boot instant (else anonymous private pull → 401 →
+  # 226/NAMESPACE abort). Same 0600 protection as the token file. Copy of the web
+  # cloud-init.yml:398 + :462-468 bake+login pattern.
+  - printf 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s\n' '${ghcr_read_user}' '${ghcr_read_token}' > /etc/default/soleur-ghcr-read
+  - chmod 600 /etc/default/soleur-ghcr-read
+
+  # Ensure docker is up before the login + container extract.
+  - systemctl enable --now docker
+
+  # Install the nftables scoping now + on every boot (a reboot clears nftables).
+  - systemctl enable --now inngest-nftables.service
+
+  # GHCR login from the baked creds so the bootstrap image pull below succeeds on a cold host.
+  - |
+    set +e
+    . /etc/default/soleur-ghcr-read 2>/dev/null || true
+    for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+    if [ -n "$GHCR_READ_USER" ] && [ -n "$GHCR_READ_TOKEN" ]; then
+      printf '%s' "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_READ_USER" --password-stdin >/dev/null 2>&1 \
+        && echo "[inngest] ghcr login ok" || echo "[inngest] ghcr login failed (bootstrap pull may 401)"
+    else
+      echo "[inngest] WARN: baked GHCR creds empty — bootstrap pull may 401"
+    fi
+
+  # --- Fail-closed boot isolation self-check (mirrors registry) ------------------------
+  # The load-bearing, fail-CLOSED defense run under the host's OWN shipped boot token: the
+  # credential MUST resolve ONLY the inngest secret set. Asserts identity (every visible
+  # non-DOPPLER secret is INNGEST_*) AND cardinality (>=3 — the TF-owned signing/event/redis
+  # keys; the 4th, INNGEST_POSTGRES_URI, is out-of-band). An over-scoped `prd`-branch token
+  # would see ~116 foreign secrets → n_total != n_inngest → refuse. On pass, drop the sentinel
+  # the bootstrap block gates on; on fail, no sentinel → the next block aborts (fail-closed).
+  - |
+    set -a; . /etc/default/inngest-doppler; set +a
+    if doppler run --project soleur-inngest --config prd -- bash -s <<'CHKEOF'
+    set -euo pipefail
+    names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
+    n_total="$(printf '%s\n' "$names" | grep -c . || true)"
+    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI)$' || true)"
+    if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 3 ]; then
+      echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
+    fi
+    echo "[inngest] boot credential isolated ($n_inngest INNGEST_ secrets, no foreign)"
+    CHKEOF
+    then
+      : > /run/soleur-inngest-doppler.ok
+    else
+      echo "[inngest] FATAL: doppler isolation self-check failed — inngest will NOT bootstrap" >&2
+    fi
+    set +e
+
+  # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
+  # Gated on the isolation sentinel above (fail-closed). Mirrors web cloud-init.yml:642-682:
+  # docker create → docker cp the script + durable-Redis assets → read INNGEST_CLI_VERSION/
+  # SHA from the image env → run it. Passes the dedicated-host env: INNGEST_CLI_ARCH=arm64
+  # (cax11 — inngest-bootstrap.sh:37/54) + SDK_URL (single stable --sdk-url to the active web
+  # backend — ADR-098 Decision 1; the bootstrap edits to consume these are done separately).
+  - |
+    set -e
+    test -f /run/soleur-inngest-doppler.ok || { echo "FATAL: doppler isolation self-check did not pass — refusing to bootstrap inngest" >&2; exit 1; }
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
+    for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+    docker pull "$IREF"
+    EXTRACT_DIR=$(mktemp -d)
+    cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
+    trap cleanup EXIT
+    docker create --name soleur-inngest-bootstrap-extract "$IREF"
+    docker cp soleur-inngest-bootstrap-extract:/inngest-bootstrap.sh "$EXTRACT_DIR/inngest-bootstrap.sh"
+    # Durable Redis assets (#5450) — stage to /tmp so the bootstrap installs + starts Redis
+    # (AOF on /mnt/data) on this fresh host.
+    docker cp soleur-inngest-bootstrap-extract:/inngest-redis.conf /tmp/inngest-redis.conf 2>/dev/null || true
+    docker cp soleur-inngest-bootstrap-extract:/inngest-redis.service /tmp/inngest-redis.service 2>/dev/null || true
+    docker cp soleur-inngest-bootstrap-extract:/inngest-redis-bootstrap.sh /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
+    docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
+    chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
+    image_env=$(docker inspect "$IREF" -f '{{range .Config.Env}}{{println .}}{{end}}')
+    chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
+    INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | head -1 | cut -d= -f2-)
+    # #6178: OVERRIDE the image-env INNGEST_CLI_SHA256 (an amd64 value) with the arm64
+    # checksum — this cax11 host downloads the linux_arm64 tarball (INNGEST_CLI_ARCH=arm64),
+    # which the amd64 SHA would reject at verify. Version is arch-independent (from the image).
+    INNGEST_CLI_SHA256="${inngest_cli_sha256_arm64}"
+    VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)
+    VECTOR_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_SHA256=' | head -1 | cut -d= -f2- || true)
+    env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
+        "INNGEST_CLI_ARCH=${inngest_cli_arch}" "SDK_URL=${sdk_url}" \
+        "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=$VECTOR_CLI_SHA256" \
+      bash "$EXTRACT_DIR/inngest-bootstrap.sh"
+    trap - EXIT
