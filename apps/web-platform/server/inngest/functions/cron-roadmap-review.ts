@@ -53,6 +53,7 @@ import {
   redactToken,
   mintInstallationToken,
   digestIssueExistsForDate,
+  injectRunDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
@@ -161,7 +162,7 @@ If any open PR touches roadmap.md, do NOT make conflicting edits. Instead, post 
 ## Output
 
 After your analysis, create a new issue with:
-- Title format: [Scheduled] Weekly Roadmap Review - YYYY-MM-DD
+- Title format: [Scheduled] Weekly Roadmap Review - {{RUN_DATE}}
 - Label: scheduled-roadmap-review
 - --milestone "Post-MVP / Later"
 
@@ -308,7 +309,7 @@ export async function cronRoadmapReviewHandler({
             spawnCwd: spawnCwd!,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
-            prompt: ROADMAP_REVIEW_PROMPT,
+            prompt: injectRunDate(ROADMAP_REVIEW_PROMPT, runStartedAt),
             maxTurnDurationMs: MAX_TURN_DURATION_MS,
             cronName: "cron-roadmap-review",
             buildSpawnEnv,

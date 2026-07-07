@@ -678,14 +678,19 @@ export async function deferIfTier2Cron(args: {
 // issue-count caught it (weeks later).
 //
 // "Produced output" = a `scheduled-<task>`-labeled issue CREATED OR UPDATED in
-// the run window. The update case matters: cron-community-monitor's DEDUP RULE
-// comments on the most-recent existing issue (instead of creating a new one)
-// when a fire from the last 24h exists — a healthy outcome that creates no new
-// issue. Filtering on updated_at (via the GitHub `since` param) credits that
-// dedup-comment as output, so a manual-trigger-same-day does NOT false-red.
-// Within a producer's ~50-min run window only the producer itself touches its
-// own labeled issues (daily-triage runs at a different hour), so updated_at
-// moving == the producer did something.
+// the run window. The update case matters: cron-campaign-calendar's comment-bump
+// path ("Do NOT create a new issue" — on a quiet day it comments a heartbeat note
+// on the existing calendar issue instead of creating one; its handler documents
+// that verifyScheduledIssueCreated "counts via updated_at"). Filtering on
+// updated_at (via the GitHub `since` param) credits that comment-bump as output,
+// so a quiet-day run does NOT false-red. (community-monitor's former in-prompt
+// dedup rule was another such consumer, but #6143 removed it — campaign-calendar
+// is now the SOLE path relying on the updated_at crediting, which is why the
+// `since`/updated_at filter below stays load-bearing rather than being tightened
+// to created_at. cron-shared.test.ts test-enforces this coupling via the
+// campaign-calendar marker assertion.) Within a producer's ~50-min run window
+// only the producer itself touches its own labeled issues (daily-triage runs at a
+// different hour), so updated_at moving == the producer did something.
 //
 // Callers gate their Sentry heartbeat on this result so a quiet producer turns
 // its OWN per-function monitor red, with no dependency on the watchdog. Reuses
@@ -731,6 +736,37 @@ export async function verifyScheduledIssueCreated(args: {
   return issues.some(
     (issue) => new Date(issue.updated_at).getTime() >= sinceMs,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Cohort digest-title date pin (#6143) — platform-injected run-date sentinel.
+//
+// Every "always-create digest" cron files an issue titled `[Scheduled] <task> -
+// <date>`. The code-level same-date dedup key is `runStartedAt.slice(0,10)`
+// (host UTC, captured in the handler), but the title date was previously derived
+// by the spawned eval from its OWN container clock. Across a UTC-midnight boundary
+// the two could diverge, so isRealScheduledDigest's exact-title match could MISS
+// (→ duplicate) or OVER-suppress. injectRunDate replaces the `{{RUN_DATE}}`
+// sentinel in each cohort prompt at spawn time with runStartedAt.slice(0,10), so
+// the ISSUE-TITLE date is PINNED byte-identical to the dedup key (both read the
+// same `step.run("run-started-at")`-memoized runStartedAt, so they agree across
+// Inngest replays/retries).
+//
+// THROWS if the sentinel is absent so a forgotten wiring is loud (a literal
+// "{{RUN_DATE}}" title would silently defeat both dedup and the output-aware
+// verify). Pins the issue-TITLE date ONLY — the sole input to the dedup key;
+// secondary agent-derived dates (digest FILE names, publish_date frontmatter,
+// audit-report paths) stay agent-derived. `{{RUN_DATE}}` is collision-free (no
+// `{{` token exists in any cohort prompt). `.replaceAll` is available (tsconfig
+// ES2022; already used above in this file).
+// ---------------------------------------------------------------------------
+export const RUN_DATE_SENTINEL = "{{RUN_DATE}}";
+
+export function injectRunDate(prompt: string, runStartedAt: string): string {
+  if (!prompt.includes(RUN_DATE_SENTINEL)) {
+    throw new Error(`injectRunDate: prompt is missing ${RUN_DATE_SENTINEL}`);
+  }
+  return prompt.replaceAll(RUN_DATE_SENTINEL, runStartedAt.slice(0, 10));
 }
 
 // ---------------------------------------------------------------------------

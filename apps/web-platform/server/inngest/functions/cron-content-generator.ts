@@ -20,6 +20,7 @@ import {
   mintInstallationToken,
   deferIfTier2Cron,
   digestIssueExistsForDate,
+  injectRunDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
@@ -104,7 +105,7 @@ Read knowledge-base/marketing/seo-refresh-queue.md and identify the highest-prio
 If ALL items have a generated_date:
   STEP 1b — Run /soleur:growth plan "Company-as-a-Service content for solo founders building with AI"
   Extract the single highest-priority P1 content suggestion.
-  If no usable topic, create issue "[Scheduled] Content Generator - <today>" with label "scheduled-content-generator" and stop.
+  If no usable topic, create issue "[Scheduled] Content Generator - {{RUN_DATE}}" with label "scheduled-content-generator" and stop.
 
 STEP 2 — Generate article:
 Run /soleur:content-writer <topic> --headless
@@ -113,6 +114,7 @@ If content-writer aborts due to FAIL citations, create issue and stop.
 STEP 3 — Generate distribution content:
 Run /soleur:social-distribute <article-path> --headless
 Ensure frontmatter has: publish_date: <today>, status: scheduled, channels: discord, x, bluesky, linkedin-company
+(NOTE: use your self-computed <today> for publish_date here — only the issue TITLE date is pre-filled by the platform.)
 
 STEP 4 — Validation runs in CI (do NOT build locally):
 This ephemeral workspace is a shallow clone with no node_modules, so a local "npx @11ty/eleventy" build cannot run here. Validation happens on the PR the platform opens from your changes after the run: CI runs "npx @11ty/eleventy" and "scripts/validate-blog-links.sh", and the PR only auto-merges once those required checks pass. Your job is to make CI green — ensure the article's Eleventy frontmatter is valid and every internal link resolves. Do NOT attempt a local build or run the validation scripts yourself.
@@ -121,7 +123,7 @@ STEP 5 — Record topic in queue:
 Update seo-refresh-queue.md with generated_date annotation.
 
 STEP 6 — Create audit issue:
-"[Scheduled] Content Generator - <today>" with label "scheduled-content-generator"
+"[Scheduled] Content Generator - {{RUN_DATE}}" with label "scheduled-content-generator"
 
 PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
 The platform commits and opens a PR for your changes automatically after the run.
@@ -300,7 +302,7 @@ export async function cronContentGeneratorHandler({
             spawnCwd: spawnCwd!,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
-            prompt: CONTENT_GENERATOR_PROMPT,
+            prompt: injectRunDate(CONTENT_GENERATOR_PROMPT, runStartedAt),
             maxTurnDurationMs: MAX_TURN_DURATION_MS,
             cronName: "cron-content-generator",
             buildSpawnEnv,

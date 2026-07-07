@@ -20,6 +20,7 @@ import {
   mintInstallationToken,
   deferIfTier2Cron,
   digestIssueExistsForDate,
+  injectRunDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
@@ -100,7 +101,7 @@ Track counters: NEW (issues created), DEDUP (existing issues commented), OVERDUE
 
 STEP 2.5 — Heartbeat audit issue (runs when NEW == 0):
 If no new issues were created, create and immediately close a heartbeat audit issue so the watchdog sees recent activity:
-  Title: "[Scheduled] Campaign Calendar - <today> (heartbeat)"
+  Title: "[Scheduled] Campaign Calendar - {{RUN_DATE}} (heartbeat)"
   Label: scheduled-campaign-calendar
   Milestone: "Post-MVP / Later"
 
@@ -272,7 +273,7 @@ export async function cronCampaignCalendarHandler({
             spawnCwd: spawnCwd!,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
-            prompt: CAMPAIGN_CALENDAR_PROMPT,
+            prompt: injectRunDate(CAMPAIGN_CALENDAR_PROMPT, runStartedAt),
             maxTurnDurationMs: MAX_TURN_DURATION_MS,
             cronName: "cron-campaign-calendar",
             buildSpawnEnv,

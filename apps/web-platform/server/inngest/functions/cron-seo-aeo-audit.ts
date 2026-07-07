@@ -54,6 +54,7 @@ import {
   mintInstallationToken,
   deferIfTier2Cron,
   digestIssueExistsForDate,
+  injectRunDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
@@ -127,7 +128,7 @@ Run /soleur:seo-aeo fix on this repository.
 
 VALIDATION runs in CI (do NOT build locally): this ephemeral workspace is a shallow clone with no node_modules, so a local "npx @11ty/eleventy" build and the validate-seo.sh / validate-csp.sh scripts cannot run here. Validation happens on the PR the platform opens from your changes after the run: CI runs the eleventy build and SEO/CSP validation, and the PR only auto-merges once those required checks pass. Do NOT attempt a local build or run the validation scripts yourself.
 
-After the audit and fix is complete, create a GitHub issue titled "[Scheduled] SEO/AEO Audit - <today>" with the label "scheduled-seo-aeo-audit" summarizing what issues were found and what fixes were applied.
+After the audit and fix is complete, create a GitHub issue titled "[Scheduled] SEO/AEO Audit - {{RUN_DATE}}" with the label "scheduled-seo-aeo-audit" summarizing what issues were found and what fixes were applied.
 
 PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
 The platform commits and opens a PR for your changes automatically after the run.
@@ -289,7 +290,7 @@ export async function cronSeoAeoAuditHandler({
             spawnCwd: spawnCwd!,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
-            prompt: SEO_AEO_AUDIT_PROMPT,
+            prompt: injectRunDate(SEO_AEO_AUDIT_PROMPT, runStartedAt),
             maxTurnDurationMs: MAX_TURN_DURATION_MS,
             cronName: "cron-seo-aeo-audit",
             buildSpawnEnv,
