@@ -12,6 +12,20 @@ status: draft
 
 # fix(security): true least-privilege Doppler isolation for the zot registry host 🐛🔒
 
+> ⚠️ **SUPERSEDED MECHANISM — read before executing any step (CTO ruling, 2026-07-07, during `/work`).**
+> This plan was authored proposing option **(b) a standalone `registry` ENVIRONMENT in `soleur`**. At
+> implementation time that was found **infeasible**: the `soleur` project is at Doppler's **4-environment
+> tier cap** (dev/prd/ci/cli) — a 5th environment needs a Team-plan upgrade (empirically confirmed:
+> `doppler environments create` → "reached its limit of 4 environments"). The `cto` agent ruled for
+> option **(a) a dedicated `soleur-registry` PROJECT** whose own `prd` root config holds only the two ZOT
+> tokens (project creation is NOT tier-blocked). **The shipped fix uses the project.** Wherever this plan
+> says `doppler_environment.registry` / `slug = "registry"` / `--config registry` / "the `registry`
+> environment", the shipped reality is `doppler_project.registry` (name `soleur-registry`) /
+> `config = "prd"` / `--project soleur-registry --config prd`. The load-bearing operator commands (AC11,
+> the Observability `discoverability_test`, the Phase-4.1 gate script, failure_modes) are CORRECTED below
+> to the shipped project; the Phase 0/1 narrative is left as the original planning record. Rationale +
+> rejected alternatives: ADR-096 (2026-07-07 amendment) and #6167.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-07-07 · **Review agents:** security-sentinel, architecture-strategist,
@@ -20,7 +34,7 @@ spec-flow-analyzer, user-impact-reviewer (all 4 confirmed the core approach isol
 **Key improvements folded in from review:**
 1. **Self-enforcing isolation (highest-value).** The isolation guarantee is now a **cloud-init
    boot-time self-assertion** (Phase 2.5) that runs under the host's *actual* boot token
-   (`doppler run --config registry`), counts non-`DOPPLER_` secrets == 2 AND asserts both are
+   (`doppler run --project soleur-registry --config prd`), counts non-`DOPPLER_` secrets == 2 AND asserts both are
    `ZOT_*`, and **`exit 1` before `docker run`** on any deviation. This closes the load-bearing gap
    all three security-lens reviewers flagged: every prior automated signal (empty-token guard,
    heartbeat, `terraform apply`) fails **open** on an over-scoped token — a token reading all 116
@@ -117,7 +131,7 @@ A `prd` **branch config cannot** achieve isolation — it always resolves the `p
 116 secrets from the branch and re-deleting every future prd secret forever is not a boundary).
 True isolation requires a boundary that does **not share the prd root**. Two candidates:
 
-| | **(a) Dedicated PROJECT `soleur-registry`** | **(b) Standalone ENVIRONMENT `registry` in `soleur` ✅ CHOSEN** |
+| | **(a) Dedicated PROJECT `soleur-registry` ✅ SHIPPED (CTO ruling 2026-07-07 — see banner)** | **(b) Standalone ENVIRONMENT `registry` in `soleur` — ❌ INFEASIBLE (4-env tier cap)** |
 |---|---|---|
 | Isolation | True — separate project, own roots. | True — the `registry` env's **own root config** holds only 2 tokens; a token scoped to it never resolves `prd`'s root. |
 | Provider resource | `doppler_project` (exists, v1.21+). | `doppler_environment` (exists; Required: project/slug/name; creates the env + its root config). |
@@ -279,9 +293,9 @@ throwaway read token and assert it sees **exactly the two** ZOT tokens, then rev
 # --plain value is unreliable). trap ensures the live throwaway token is revoked even on the FAIL
 # exit path (otherwise an over-read failure leaves a 116-secret-capable token dangling).
 resp=$(doppler configs tokens create zot-isolation-verify \
-  --project soleur --config registry --access read --json)
+  --project soleur-registry --config prd --access read --json)
 tok=$(jq -r '.key' <<<"$resp"); slug=$(jq -r '.slug' <<<"$resp")
-trap 'doppler configs tokens revoke "$slug" --project soleur --config registry >/dev/null 2>&1 || true' EXIT
+trap 'doppler configs tokens revoke "$slug" --project soleur-registry --config prd >/dev/null 2>&1 || true' EXIT
 # From a dir with NO doppler.yaml. Exclude Doppler's injected DOPPLER_* built-ins.
 names=$(DOPPLER_TOKEN="$tok" doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)
 n_total=$(printf '%s\n' "$names" | grep -c . || true)
@@ -387,7 +401,7 @@ Reference the issue number in **this PR's body** (`Ref #<audit>`), never `Closes
 - [ ] AC10 — CPO sign-off recorded (threshold = single-user incident).
 
 ### Post-merge (operator, at provisioning / task 1.8 — NOT this PR)
-- [ ] AC11 — Before flip: run the Phase-4.1 scoped-token assertion against the live `registry` config → exactly 2 non-`DOPPLER_*` secrets, BOTH `ZOT_*` (identity, not just count); token revoked after. **MANDATORY-blocking, especially on the FALLBACK path** (an operator who created a branch config under `prd` instead of a standalone environment fails here with 116). Recommended preventive sequencing: stage the operator apply — `-target` the `doppler_environment`+secrets+token first, run this assert, THEN apply the host — so the credential is proven isolated before the host ever receives it. The Phase-2.5 boot self-assert is the host-level backstop if this is skipped.
+- [ ] AC11 — Before flip: run the Phase-4.1 scoped-token assertion against the live `soleur-registry` project's `prd` config → exactly 2 non-`DOPPLER_*` secrets, BOTH `ZOT_*` (identity, not just count); token revoked after. **MANDATORY-blocking, especially on the FALLBACK path** (an operator who created a branch config under `prd` instead of the dedicated `soleur-registry` project fails here with 116). Recommended preventive sequencing: stage the operator apply — `-target` the `doppler_project`+secrets+token first, run this assert, THEN apply the host — so the credential is proven isolated before the host ever receives it. The Phase-2.5 boot self-assert is the host-level backstop if this is skipped.
 - [ ] AC12 — Post-provision hygiene: confirm no stale `prd_registry` branch config exists in Doppler and no service token minted against it during diagnosis survives (the diagnosis config was created-then-deleted per state notes; verify Doppler is clean).
 
 ## Observability
@@ -398,6 +412,12 @@ liveness_signal:
   cadence: 60s period / 30s grace (paused until Phase-3 probe cron ships)
   alert_target: Better Stack → inngest escalation policy (email)
   configured_in: apps/web-platform/infra/zot-registry.tf
+  # NOTE: the heartbeat is paused=true until the Phase-3 probe cron ships, so it is INERT for
+  # this fix's deploy window. The live no-SSH signals for THIS change are therefore (1) AC11 —
+  # the pre-boot scoped-token count/identity assert (doppler CLI, no SSH), which MUST stay
+  # MANDATORY-blocking, and (2) the Phase-2.5 boot self-assertion (host refuses to launch on a
+  # mis-scoped token — observable as "zot never comes up", ssh-free). Post-boot ROOT-CAUSE
+  # (the FATAL journald line) is on-host/SSH-only; AC11 moves the WHY before boot.
 error_reporting:
   destination: cloud-init runcmd journald on the registry host (docker/zot logs) — boot-time htpasswd build FAILS LOUD on an empty ZOT_PULL_TOKEN/ZOT_PUSH_TOKEN (cloud-init-registry.yml:118-119, unchanged)
   fail_loud: true
@@ -405,17 +425,17 @@ failure_modes:
   - mode: registry host boot token can read more than the 2 ZOT tokens (the bug this fixes)
     detection: PRIMARY = Phase-2.5 cloud-init boot self-assertion on the host's OWN token (count==2 AND both ZOT_) → host refuses to launch zot + heartbeat stays red (fail-CLOSED, ssh-free); SECONDARY = Phase-4.1 scoped-token provisioning gate (AC11)
     alert_route: host does not boot / heartbeat never greens (self-enforcing); provisioning go/no-go (AC11)
-  - mode: the `registry` environment/config is missing at apply
-    detection: `terraform apply` errors (PRIMARY: env is a managed resource; FALLBACK: `doppler run --config registry` errors loudly at boot before zot launches)
+  - mode: the `soleur-registry` project/config is missing at apply
+    detection: `terraform apply` errors (PRIMARY: the project is a managed resource; FALLBACK: `doppler run --project soleur-registry --config prd` errors loudly at boot before zot launches)
     alert_route: apply failure surfaced to operator / betteruptime heartbeat never greens
-  - mode: `doppler run --config registry` at boot yields empty tokens
+  - mode: `doppler run --project soleur-registry --config prd` at boot yields empty tokens
     detection: cloud-init fail-loud guard exits 1 before docker run (journald)
     alert_route: heartbeat stays red (no false-green)
 logs:
   where: registry-host journald (docker/zot + cloud-init runcmd)
   retention: journald default on-host
 discoverability_test:
-  command: 'tok=$(doppler configs tokens create ziso --project soleur --config registry --access read --plain); DOPPLER_TOKEN=$tok doppler secrets --only-names --json | jq -r "keys[]" | grep -c "^ZOT_\(PULL\|PUSH\)_TOKEN$"'
+  command: 'tok=$(doppler configs tokens create ziso --project soleur-registry --config prd --access read --plain); DOPPLER_TOKEN=$tok doppler secrets --only-names --json | jq -r "keys[]" | grep -c "^ZOT_\(PULL\|PUSH\)_TOKEN$"'
   expected_output: "2 (asserts IDENTITY — exactly ZOT_PULL_TOKEN + ZOT_PUSH_TOKEN; a bare non-DOPPLER count would false-pass on 2 wrong secrets)"
 ```
 
@@ -487,4 +507,4 @@ not an overlap.)
 2. `terraform validate` green with `doppler_environment.registry` + repointed secrets/token.
 3. Parity vitest suite green with `doppler_environment.registry` in OPERATOR_APPLIED_EXCLUSIONS; the synthetic-forgotten-resource non-vacuity test still FAILS on an un-excluded new resource.
 4. `git grep prd_registry apps/web-platform/infra/` → zero.
-5. Rendered cloud-init (`terraform plan` templatefile) shows `doppler run --project soleur --config registry`.
+5. Rendered cloud-init (`terraform plan` templatefile) shows `doppler run --project soleur-registry --config prd`.
