@@ -44,3 +44,27 @@ export const KB_TEXT_EXTENSIONS = ["md", "txt", "csv"] as const;
  * Real authored content (multiple sections) exceeds 500 bytes.
  */
 export const FOUNDATION_MIN_CONTENT_BYTES = 500;
+
+/**
+ * The exact KB paths the dashboard needs to derive foundation/operational card
+ * completion + first-run (`vision.md`) state. `/api/dashboard/foundation-status`
+ * stats ONLY these known paths instead of walking the whole KB tree (`buildTree`)
+ * on cold dashboard load — the previous render-blocking over-fetch.
+ *
+ * MUST stay a SUPERSET of every `kbPath` in dashboard/page.tsx's FOUNDATION_PATHS
+ * + OPERATIONAL_TASKS (plus `overview/vision.md`). The page looks each card's
+ * kbPath up in the returned map; a missing path reads as not-done. A coverage
+ * test (dashboard-foundation-status.test.ts) asserts the page's kbPaths ⊆ this.
+ */
+export const DASHBOARD_FOUNDATION_KB_PATHS = [
+  "overview/vision.md",
+  "marketing/brand-guide.md",
+  "product/business-validation.md",
+  "legal/privacy-policy.md",
+  "product/pricing-strategy.md",
+  "product/competitive-analysis.md",
+  "marketing/launch-plan.md",
+  "operations/hiring-plan.md",
+  "marketing/distribution-strategy.md",
+  "finance/financial-projections.md",
+] as const;

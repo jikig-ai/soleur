@@ -134,6 +134,75 @@ export function deriveRailTitle(conv: Conversation, messages: Message[]): string
     : deriveTitle(messages, conv.id, conv.domain_leader);
 }
 
+// One row of the `list_conversations_enriched` RPC: the full Conversation
+// column set PLUS the four short message snippets the rail needs. Replaces the
+// old unbounded `messages … IN (ids)` fetch — the RPC computes these via
+// LATERAL joins on idx_messages_conversation_created (see migration 125).
+export interface EnrichedConversationRow extends Conversation {
+  first_user_content: string | null;
+  first_assistant_content: string | null;
+  last_content: string | null;
+  last_leader: DomainLeaderId | null;
+}
+
+// Build the SYNTHETIC `Message[]` deriveTitle reads: first-user + first-
+// assistant only (deriveTitle scans for the FIRST message of each role). We
+// deliberately EXCLUDE the last-message snippet here so a conversation ending
+// in a user message cannot be mis-read as an assistant title.
+function titleMessagesFromSnippets(row: EnrichedConversationRow): Message[] {
+  const msgs: Message[] = [];
+  if (row.first_user_content != null) {
+    msgs.push(snippetMessage(row.id, "user", row.first_user_content, null));
+  }
+  if (row.first_assistant_content != null) {
+    msgs.push(snippetMessage(row.id, "assistant", row.first_assistant_content, null));
+  }
+  return msgs;
+}
+
+// Build the SYNTHETIC `Message[]` derivePreview reads: the last message only
+// (derivePreview takes the array's tail). Carries the last-message leader.
+function previewMessagesFromSnippets(row: EnrichedConversationRow): Message[] {
+  if (row.last_content == null) return [];
+  return [snippetMessage(row.id, "assistant", row.last_content, row.last_leader)];
+}
+
+// A minimal Message shaped for the derive* functions, which only read
+// `conversation_id`, `role`, `content`, and `leader_id`. Other fields are dummy
+// fillers to satisfy the type — they never influence title/preview.
+function snippetMessage(
+  conversationId: string,
+  role: Message["role"],
+  content: string,
+  leader: DomainLeaderId | null,
+): Message {
+  return {
+    id: `${conversationId}-${role}-snippet`,
+    conversation_id: conversationId,
+    role,
+    content,
+    tool_calls: null,
+    leader_id: leader,
+    created_at: "",
+  };
+}
+
+// Turn one enriched RPC row into a rail-ready ConversationWithPreview: split the
+// snippet fields off the typed Conversation, then run the UNCHANGED
+// deriveRailTitle / derivePreview against per-row synthetic message arrays.
+export function enrichConversationRow(row: EnrichedConversationRow): ConversationWithPreview {
+  const {
+    first_user_content: _fu,
+    first_assistant_content: _fa,
+    last_content: _lc,
+    last_leader: _ll,
+    ...conv
+  } = row;
+  const { text, leader } = derivePreview(previewMessagesFromSnippets(row), row.id);
+  const title = deriveRailTitle(conv, titleMessagesFromSnippets(row));
+  return { ...conv, title, preview: text, lastMessageLeader: leader };
+}
+
 export function useConversations(
   options: UseConversationsOptions = {},
 ): UseConversationsResult {
@@ -214,91 +283,49 @@ export function useConversations(
         return [];
       }
 
-      // visibility-sweep: RLS policies conversations_owner_select +
-      // conversations_shared_select (migration 075) return own +
-      // workspace-shared conversations; no app-level user_id filter needed.
+      // Single RLS-respecting RPC (migration 125, SECURITY INVOKER) replaces the
+      // old 2-query read: it returns each RLS-visible conversation PLUS only the
+      // four message snippets the rail derives a title/preview from, computed via
+      // LATERAL joins on idx_messages_conversation_created. This removes the
+      // unbounded `messages … IN (ids)` fan-out that pulled every message body
+      // for all shown conversations to the browser (the reported slowness).
       //
-      // Scope by BOTH repo_url AND the active workspace_id, matching the
-      // server-side list tool (server/conversations-tools.ts). repo_url alone
-      // cannot separate two of the OWNER'S OWN workspaces connected to the
-      // SAME repo — both rows share repo_url, and RLS (075) returns the
-      // owner's rows across all their workspaces. conversations.workspace_id
-      // (NOT NULL, mig 059) is the precise discriminator, and it matches the
-      // route's resolved workspaceId so the list query and the workspace-
-      // shared realtime channel agree on the same workspace.
-      let query = supabase
-        .from("conversations")
-        // Explicit column list = the complete `Conversation` interface field
-        // set (lib/types.ts). Rows are cast `as Conversation` and spread into
-        // ConversationWithPreview below, so every typed field must be selected;
-        // pinning the list to the typed shape trims the server-only/future
-        // columns `*` would over-fetch (audit M4). Must be a string LITERAL —
-        // supabase-js infers the row type from it, so a runtime-built/joined
-        // string degrades the result to an untyped error shape. Keep in sync
-        // with the `Conversation` interface if a column is added.
-        .select(
-          "id, user_id, domain_leader, session_id, status, total_cost_usd, input_tokens, output_tokens, last_active, created_at, archived_at, context_path, repo_url, active_workflow, workflow_ended_at, workspace_id, visibility",
-        )
-        .eq("repo_url", currentRepoUrl)
-        .eq("workspace_id", activeRepo.workspaceId)
-        .order("last_active", { ascending: false })
-        .order("created_at", { ascending: false });
-
-      // Archive filter: default "active" excludes archived conversations
-      if (archiveFilter === "active") {
-        query = query.is("archived_at", null);
-      } else if (archiveFilter === "archived") {
-        query = query.not("archived_at", "is", null);
-      }
-
-      if (statusFilter) {
-        query = query.eq("status", statusFilter);
-      }
-      if (domainFilter === "general") {
-        query = query.is("domain_leader", null);
-      } else if (domainFilter) {
-        query = query.eq("domain_leader", domainFilter);
-      }
-
-      const { data: convData, error: convError } = await query.limit(limit);
-      if (convError) {
-        setError(convError.message);
+      // Scope is still BOTH repo_url AND the active workspace_id — matching the
+      // server-side list tool (server/conversations-tools.ts). These are
+      // FUNCTIONAL rail discriminators inside the RPC, NOT a security layer:
+      // repo_url alone cannot separate two of the OWNER'S OWN workspaces on the
+      // SAME repo, and workspace_id (NOT NULL, mig 059) is the precise
+      // discriminator that also matches the route's resolved workspaceId so the
+      // list and the workspace-shared realtime channel agree. The ONLY tenant
+      // boundary is RLS-075 (conversations_owner_select/_shared_select) + the
+      // messages RLS (059), which SECURITY INVOKER preserves unchanged — the RPC
+      // returns exactly the rows the old direct client queries did.
+      const { data: rpcData, error: rpcError } = await supabase.rpc(
+        "list_conversations_enriched",
+        {
+          p_repo_url: currentRepoUrl,
+          p_workspace_id: activeRepo.workspaceId,
+          p_archive: archiveFilter,
+          p_status: statusFilter ?? null,
+          p_domain: domainFilter ?? null,
+          p_limit: limit,
+        },
+      );
+      if (rpcError) {
+        setError(rpcError.message);
         setLoading(false);
         return null;
       }
-      if (!convData || convData.length === 0) {
+      const rows = (rpcData ?? []) as EnrichedConversationRow[];
+      if (rows.length === 0) {
         setConversations([]);
         setLoading(false);
         return [];
       }
 
-      // Query 2: Fetch messages for displayed conversations
-      const ids = convData.map((c: Conversation) => c.id);
-      const { data: msgData, error: msgError } = await supabase
-        .from("messages")
-        .select("conversation_id, role, content, leader_id, created_at")
-        .in("conversation_id", ids)
-        .order("created_at", { ascending: true });
-
-      if (msgError) {
-        setError(msgError.message);
-        setLoading(false);
-        return null;
-      }
-
-      const messages = (msgData ?? []) as Message[];
-
-      // Derive titles and previews
-      const enriched: ConversationWithPreview[] = convData.map((conv: Conversation) => {
-        const { text, leader } = derivePreview(messages, conv.id);
-        const title = deriveRailTitle(conv, messages);
-        return {
-          ...conv,
-          title,
-          preview: text,
-          lastMessageLeader: leader,
-        };
-      });
+      // Derive titles and previews from the per-row snippets (title logic stays
+      // the single JS source of truth — no title semantics in SQL).
+      const enriched: ConversationWithPreview[] = rows.map(enrichConversationRow);
 
       setConversations(enriched);
       setLoading(false);

@@ -183,6 +183,16 @@ export function startMockSupabase(port: number): Promise<http.Server> {
 
       // ---- RPC endpoints ----
 
+      // The conversation rail now reads via list_conversations_enriched (mig 125,
+      // SECURITY INVOKER) instead of the direct conversations + messages queries.
+      // Default to an empty rail (mirrors the /rest/v1/conversations → [] default
+      // above); tests seeding a populated rail override this via page.route.
+      if (url.pathname === "/rest/v1/rpc/list_conversations_enriched") {
+        res.writeHead(200);
+        res.end(JSON.stringify([]));
+        return;
+      }
+
       // #4307 revocation gate: middleware calls this on every authenticated
       // request and fail-CLOSES with 503 on any error. Return a not-revoked
       // row so the gate passes for the synthetic e2e user. The RPC's real

@@ -14,7 +14,9 @@ import { renderHook, waitFor } from "@testing-library/react";
 // fetch (if a future bump moves the default below 15). The hook contract
 // is the load-bearing seam.
 
-const limitSpy = vi.fn<(n: number) => void>();
+import { makeEnrichedListRpc } from "./helpers/mock-supabase";
+
+const rpcSpy = vi.fn<(name: string, args: Record<string, unknown>) => void>();
 
 function buildConversationRows(count: number) {
   return Array.from({ length: count }, (_, i) => ({
@@ -29,46 +31,24 @@ function buildConversationRows(count: number) {
   }));
 }
 
-function buildConversationsChain(rows: ReturnType<typeof buildConversationRows>) {
-  const chain: Record<string, unknown> = {};
-  Object.assign(chain, {
-    select: vi.fn(() => chain),
-    eq: vi.fn(() => chain),
-    is: vi.fn(() => chain),
-    not: vi.fn(() => chain),
-    order: vi.fn(() => chain),
-    limit: vi.fn((n: number) => {
-      limitSpy(n);
-      return Promise.resolve({ data: rows.slice(0, n), error: null });
-    }),
-  });
-  return chain;
-}
-
-function buildMessagesChain() {
-  const chain: Record<string, unknown> = {};
-  Object.assign(chain, {
-    select: vi.fn(() => chain),
-    in: vi.fn(() => chain),
-    order: vi.fn(() => Promise.resolve({ data: [], error: null })),
-  });
-  return chain;
-}
-
 function buildSupabaseClient(rows: ReturnType<typeof buildConversationRows>) {
+  // The list read now flows through the list_conversations_enriched RPC
+  // (migration 125); `p_limit` is threaded into the RPC args (the old
+  // `.from("conversations").limit(n)` seam). The `from` throw asserts the
+  // hook no longer touches conversations/messages tables for the list fetch.
+  const rpc = makeEnrichedListRpc(rows, []);
   return {
     auth: {
       getUser: vi.fn(() =>
         Promise.resolve({ data: { user: { id: "u1" } }, error: null }),
       ),
     },
-    // Repo scope comes from GET /api/workspace/active-repo (stubbed via
-    // fetch in beforeEach), so the hook no longer reads `users` or
-    // `workspace_members`. The throw asserts that invariant.
+    rpc: vi.fn((name: string, args: Record<string, unknown>) => {
+      rpcSpy(name, args);
+      return rpc(name, args);
+    }),
     from: vi.fn((table: string) => {
-      if (table === "conversations") return buildConversationsChain(rows);
-      if (table === "messages") return buildMessagesChain();
-      throw new Error(`unexpected table: ${table}`);
+      throw new Error(`unexpected .from("${table}") during list fetch`);
     }),
     channel: vi.fn(() => {
       const ch: Record<string, unknown> = {};
@@ -82,6 +62,11 @@ function buildSupabaseClient(rows: ReturnType<typeof buildConversationRows>) {
   };
 }
 
+function lastLimitArg(): number | undefined {
+  const call = rpcSpy.mock.calls.at(-1);
+  return call?.[1]?.p_limit as number | undefined;
+}
+
 const { createClientMock } = vi.hoisted(() => ({
   createClientMock: vi.fn(),
 }));
@@ -93,7 +78,7 @@ vi.mock("@/lib/supabase/client", () => ({
 describe("useConversations({ limit })", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    limitSpy.mockClear();
+    rpcSpy.mockClear();
     // Repo scope now comes from GET /api/workspace/active-repo (ADR-044),
     // not users.repo_url. Stub it to the same repo the conversation rows
     // carry so the list query is reached.
@@ -122,7 +107,7 @@ describe("useConversations({ limit })", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    expect(limitSpy).toHaveBeenCalledWith(15);
+    expect(lastLimitArg()).toBe(15);
     expect(result.current.conversations.length).toBeLessThanOrEqual(15);
   });
 
@@ -135,7 +120,7 @@ describe("useConversations({ limit })", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    expect(limitSpy).toHaveBeenCalledWith(50);
+    expect(lastLimitArg()).toBe(50);
     expect(result.current.conversations.length).toBeLessThanOrEqual(50);
   });
 
@@ -148,7 +133,7 @@ describe("useConversations({ limit })", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    expect(limitSpy).toHaveBeenCalledWith(5);
+    expect(lastLimitArg()).toBe(5);
     expect(result.current.conversations.length).toBeLessThanOrEqual(5);
   });
 });

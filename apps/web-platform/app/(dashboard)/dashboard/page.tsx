@@ -47,47 +47,33 @@ const FOUNDATION_PATHS = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// TreeNode flattening (matches server/kb-reader.ts TreeNode interface)
+// Foundation status (existence + size for the KNOWN foundation KB paths)
 // ---------------------------------------------------------------------------
 
-interface TreeNode {
-  name: string;
-  type: "file" | "directory";
-  path?: string;
-  size?: number;
-  children?: TreeNode[];
+interface PathStat {
+  exists: boolean;
+  size: number;
 }
 
-interface FileInfo {
-  size?: number;
-}
+// ADR-067: the dashboard derives foundation-card completion only from a KNOWN
+// set of KB paths, so it fetches /api/dashboard/foundation-status (a targeted
+// stat) instead of the whole-KB-tree walk (/api/kb/tree buildTree()) that used
+// to gate first paint. It caches under its OWN key (NOT swrKeys.kbTree(), whose
+// richer payload + distinct error mapping would cross-contaminate this
+// consumer). Per-route instant warm render still holds.
+const DASHBOARD_FOUNDATION_STATUS_KEY = [
+  "/api/dashboard/foundation-status",
+  "dashboard",
+] as const;
 
-function flattenTree(
-  node: TreeNode,
-  files = new Map<string, FileInfo>(),
-): Map<string, FileInfo> {
-  if (node.type === "file" && node.path) {
-    files.set(node.path, { size: node.size });
-  }
-  for (const child of node.children ?? []) flattenTree(child, files);
-  return files;
-}
-
-// ADR-067: the dashboard reads the KB tree only to derive foundation-card
-// completion, so it caches under its OWN key (NOT the KB tab's swrKeys.kbTree(),
-// whose richer {tree,lastSync,needsReconnect} payload + distinct error-kind
-// mapping would cross-contaminate this tree-only consumer). Per-route instant
-// render still holds; the two routes are never mounted together.
-const DASHBOARD_KB_TREE_KEY = ["/api/kb/tree", "dashboard"] as const;
-
-// Carries the dashboard's KB-tree error states through SWR's single error
-// channel (503 → "provisioning", everything else → "error"; 401 → "redirect"
-// which holds the skeleton through the /login navigation rather than flashing
-// an error/empty state; a 404 returns an empty tree → no error).
-class DashKbTreeError extends Error {
+// Carries the dashboard's foundation-status error states through SWR's single
+// error channel (503 → "provisioning", everything else → "error"; 401 →
+// "redirect" which holds the skeleton through the /login navigation rather than
+// flashing an error/empty state; a 404 returns an empty map → no error).
+class DashFoundationError extends Error {
   constructor(public kind: "provisioning" | "error" | "redirect") {
     super(kind);
-    this.name = "DashKbTreeError";
+    this.name = "DashFoundationError";
   }
 }
 
@@ -153,45 +139,47 @@ export default function DashboardPage() {
   // KB state derivation (inline — extract if this grows)
   // ---------------------------------------------------------------------------
 
-  // ADR-067: cache the KB tree so returning to the dashboard renders instantly.
-  // The skeleton gates on `kbData === undefined && !kbErr` (GAP F) — a warm
-  // remount keeps kbData defined, so the first-load skeleton never re-shows.
-  const fetchDashboardKbTree = useCallback(async (): Promise<{
-    tree: TreeNode | null;
+  // ADR-067: cache the foundation status so returning to the dashboard renders
+  // instantly. The skeleton gates on `foundationData === undefined && !err`
+  // (GAP F) — a warm remount keeps it defined, so the skeleton never re-shows.
+  // This is a targeted stat of ~10 known paths, not a whole-tree walk, so it
+  // resolves far faster than the old /api/kb/tree buildTree() consumer.
+  const fetchFoundationStatus = useCallback(async (): Promise<{
+    paths: Record<string, PathStat>;
   }> => {
-    const res = await fetch("/api/kb/tree");
+    const res = await fetch("/api/dashboard/foundation-status");
     if (res.status === 401) {
       router.push("/login");
-      throw new DashKbTreeError("redirect"); // navigating away — hold skeleton
+      throw new DashFoundationError("redirect"); // navigating away — hold skeleton
     }
-    if (res.status === 503) throw new DashKbTreeError("provisioning");
+    if (res.status === 503) throw new DashFoundationError("provisioning");
     // 404 = no workspace / not connected — fall through to Command Center.
-    if (res.status === 404) return { tree: null };
-    if (!res.ok) throw new DashKbTreeError("error");
+    if (res.status === 404) return { paths: {} };
+    if (!res.ok) throw new DashFoundationError("error");
     const data = await res.json();
-    return { tree: (data?.tree as TreeNode | null) ?? null };
+    return { paths: (data?.paths as Record<string, PathStat>) ?? {} };
   }, [router]);
 
-  const { data: kbData, error: kbErr } = useSWR(
-    DASHBOARD_KB_TREE_KEY,
-    fetchDashboardKbTree,
+  const { data: foundationData, error: foundationErr } = useSWR(
+    DASHBOARD_FOUNDATION_STATUS_KEY,
+    fetchFoundationStatus,
   );
   // 401 (kind "redirect") holds the skeleton through the /login navigation.
   const isRedirecting401 =
-    kbErr instanceof DashKbTreeError && kbErr.kind === "redirect";
+    foundationErr instanceof DashFoundationError && foundationErr.kind === "redirect";
   const kbLoading =
-    kbData === undefined && (kbErr === undefined || isRedirecting401);
+    foundationData === undefined && (foundationErr === undefined || isRedirecting401);
   const kbError: "provisioning" | "error" | null =
-    kbErr instanceof DashKbTreeError
-      ? kbErr.kind === "redirect"
+    foundationErr instanceof DashFoundationError
+      ? foundationErr.kind === "redirect"
         ? null
-        : kbErr.kind
-      : kbErr
+        : foundationErr.kind
+      : foundationErr
         ? "error"
         : null;
-  const kbFiles = useMemo<Map<string, FileInfo>>(
-    () => (kbData?.tree ? flattenTree(kbData.tree) : new Map()),
-    [kbData],
+  const foundationPaths = useMemo<Record<string, PathStat>>(
+    () => foundationData?.paths ?? {},
+    [foundationData],
   );
 
   // Disconnected-with-orphans hint: when a user has disconnected their repo
@@ -264,18 +252,18 @@ export default function DashboardPage() {
   const repoDisconnected = noActiveRepo;
   const orphanedCount = orphanCount ?? 0;
 
-  const visionExists = kbFiles.has("overview/vision.md");
+  const visionExists = foundationPaths["overview/vision.md"]?.exists ?? false;
   const foundationCards: FoundationCard[] = FOUNDATION_PATHS.map((f) => ({
     ...f,
     done:
-      kbFiles.has(f.kbPath) &&
-      (kbFiles.get(f.kbPath)?.size ?? 0) >= FOUNDATION_MIN_CONTENT_BYTES,
+      (foundationPaths[f.kbPath]?.exists ?? false) &&
+      (foundationPaths[f.kbPath]?.size ?? 0) >= FOUNDATION_MIN_CONTENT_BYTES,
   }));
   const operationalCards: FoundationCard[] = OPERATIONAL_TASKS.map((t) => ({
     ...t,
     done:
-      kbFiles.has(t.kbPath) &&
-      (kbFiles.get(t.kbPath)?.size ?? 0) >= FOUNDATION_MIN_CONTENT_BYTES,
+      (foundationPaths[t.kbPath]?.exists ?? false) &&
+      (foundationPaths[t.kbPath]?.size ?? 0) >= FOUNDATION_MIN_CONTENT_BYTES,
   }));
   const allCards = [...foundationCards, ...operationalCards];
   const allTasksComplete = allCards.every((c) => c.done);
@@ -401,7 +389,7 @@ export default function DashboardPage() {
   const hasActiveFilter = statusFilter !== null || domainFilter !== null || archiveFilter !== "active";
 
   // ---------------------------------------------------------------------------
-  // Loading skeleton (shown while KB tree loads)
+  // Loading skeleton (shown while foundation status loads)
   // ---------------------------------------------------------------------------
 
   if (kbLoading) {
@@ -416,7 +404,7 @@ export default function DashboardPage() {
   }
 
   // ---------------------------------------------------------------------------
-  // Provisioning state (503 from KB tree)
+  // Provisioning state (503 from foundation status)
   // ---------------------------------------------------------------------------
 
   if (kbError === "provisioning") {
