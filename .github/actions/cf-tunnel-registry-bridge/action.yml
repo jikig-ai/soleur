@@ -33,9 +33,10 @@
 #
 # ── PREREQUISITES ──────────────────────────────────────────────────────────
 #  - The CF Access `registry_push` service token + the zot-push htpasswd creds must be in
-#    Doppler (REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET in prd_terraform, written by the operator
-#    full apply per tunnel.tf; ZOT_PUSH_USER/ZOT_PUSH_TOKEN + ZOT_REGISTRY_URL in prd, written
-#    by zot-registry.tf). All pull/decode steps fail loud if any is missing/empty.
+#    Doppler prd (root): REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET (written by the operator full
+#    apply per tunnel.tf) + ZOT_PUSH_USER/ZOT_PUSH_TOKEN + ZOT_REGISTRY_URL (written by
+#    zot-registry.tf). Both live in the `prd` root because the release DOPPLER_TOKEN is
+#    prd-scoped. All pull/decode steps fail loud if any is missing/empty.
 #
 # ── OUTPUTS (to $GITHUB_ENV, job-scoped) ───────────────────────────────────
 #  REGISTRY_BRIDGE_PID  — the cloudflared PID (for the caller's teardown).
@@ -50,7 +51,7 @@ description: 'Bring up a cloudflared TCP bridge to the private-net zot registry 
 
 inputs:
   doppler-token:
-    description: 'Doppler service token (prd_terraform, read-only). Caller forwards the DOPPLER_TOKEN repo secret. Reads the CF Access registry_push token; a second prd read fetches ZOT_PUSH_* + ZOT_REGISTRY_URL from the prd config.'
+    description: 'Doppler service token scoped to the prd root config (read-only). Caller forwards the DOPPLER_TOKEN repo secret. Reads the CF Access registry_push token AND ZOT_PUSH_* + ZOT_REGISTRY_URL — all from the prd root.'
     required: true
   cloudflared-version:
     description: 'cloudflared release version to install (e.g. 2026.5.0). Keep in sync with the SSH bridge pin.'
@@ -84,13 +85,16 @@ runs:
       env:
         DOPPLER_TOKEN: ${{ inputs.doppler-token }}
         DOPPLER_PROJECT: soleur
-        DOPPLER_CONFIG: prd_terraform
+        # `prd` (root), same config the docker-login step below reads ZOT_PUSH_* from. The
+        # release DOPPLER_TOKEN is prd-scoped and CANNOT read the prd_terraform branch (#6122
+        # cutover fix); tunnel.tf writes REGISTRY_PUSH_* to the `prd` root accordingly.
+        DOPPLER_CONFIG: prd
       run: |
         set -euo pipefail
         TOKEN_ID=$(doppler secrets get REGISTRY_PUSH_ACCESS_TOKEN_ID --plain 2>/dev/null || true)
         TOKEN_SECRET=$(doppler secrets get REGISTRY_PUSH_ACCESS_TOKEN_SECRET --plain 2>/dev/null || true)
         if [[ -z "$TOKEN_ID" || -z "$TOKEN_SECRET" ]]; then
-          echo "::error::REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET missing or empty in Doppler prd_terraform. Run the operator full terraform apply first (tunnel.tf writes both post-create)."
+          echo "::error::REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET missing or empty in Doppler prd. Run the operator full terraform apply first (tunnel.tf writes both to the prd root config post-create)."
           exit 1
         fi
         printf '::add-mask::%s\n' "$TOKEN_ID"

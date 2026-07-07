@@ -153,9 +153,21 @@ resource "cloudflare_zero_trust_access_policy" "registry_push_service_token" {
   }
 }
 
-# Publish the registry-push CF Access token to Doppler prd_terraform so the Phase-2 push
-# workflow reads it at runtime via `doppler secrets get` (like CI_SSH_ACCESS_TOKEN_ID/_SECRET)
-# — NOT a github_actions_secret (CTO load-bearing condition #2; avoids the #5566 class).
+# Publish the registry-push CF Access token to Doppler `prd` (the ROOT config) so the Phase-2
+# push workflow reads it at runtime via `doppler secrets get` — NOT a github_actions_secret
+# (CTO load-bearing condition #2; avoids the #5566 class).
+#
+# CONFIG = `prd` (root), NOT `prd_terraform` (#6122 cutover fix): the reusable-release.yml zot
+# bridge (`secrets.DOPPLER_TOKEN`) is scoped to the `prd` ROOT config — the SAME config the
+# bridge's docker-login step reads ZOT_PUSH_* from (zot-registry.tf writes those to `prd`). It
+# CANNOT read the `prd_terraform` BRANCH config (which holds the R2/AWS/Cloudflare terraform
+# creds CI must not see — least privilege). A Doppler service token reads exactly ONE config and
+# ignores DOPPLER_CONFIG, and branch-local values do NOT propagate to the root; so a token
+# written into the `prd_terraform` branch was invisible to the release token and the bridge
+# failed "REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET missing or empty". Writing to the `prd` root
+# fixes it AND keeps every branch working: branch configs (prd_terraform, prd_ghcr, …) INHERIT
+# root values. The earlier `like CI_SSH_ACCESS_TOKEN` analogy was the trap — CI_SSH runs under a
+# prd_terraform-capable workflow token; the release workflow does not.
 #
 # WRITE-ONCE (ignore_changes=[value]): cloudflare_zero_trust_access_service_token.client_secret
 # is populated ONLY at create and reads EMPTY on subsequent `terraform refresh` (#4492→#4494
@@ -167,7 +179,7 @@ resource "cloudflare_zero_trust_access_policy" "registry_push_service_token" {
 # re-creates the token → new client_secret → this re-writes Doppler on that apply).
 resource "doppler_secret" "registry_push_access_token_id" {
   project    = "soleur"
-  config     = "prd_terraform"
+  config     = "prd"
   name       = "REGISTRY_PUSH_ACCESS_TOKEN_ID"
   value      = cloudflare_zero_trust_access_service_token.registry_push.client_id
   visibility = "masked"
@@ -178,7 +190,7 @@ resource "doppler_secret" "registry_push_access_token_id" {
 
 resource "doppler_secret" "registry_push_access_token_secret" {
   project    = "soleur"
-  config     = "prd_terraform"
+  config     = "prd"
   name       = "REGISTRY_PUSH_ACCESS_TOKEN_SECRET"
   value      = cloudflare_zero_trust_access_service_token.registry_push.client_secret
   visibility = "masked"
