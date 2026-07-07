@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-06T23:03:10Z",
+  "generated_at": "2026-07-07T15:49:13Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -666,19 +666,6 @@
       "rule_text_prefix": " → core"
     },
     {
-      "id": "hr-weigh-every-decision-against-target-user-impact",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → core"
-    },
-    {
       "id": "hr-when-a-command-exits-non-zero-or-prints",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -1246,8 +1233,8 @@
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-06T23:02:47Z",
-      "first_seen": "2026-07-06T23:02:47Z",
+      "last_hit": "2026-07-07T15:49:13Z",
+      "first_seen": "2026-07-07T15:49:13Z",
       "rule_text_prefix": " → docs-only"
     },
     {
@@ -1255,18 +1242,31 @@
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 1,
+      "applied_count": 2,
       "warn_count": 0,
-      "fire_count": 1,
+      "fire_count": 2,
       "prevented_errors": 0,
-      "last_hit": "2026-07-06T22:42:05Z",
-      "first_seen": "2026-07-06T22:42:05Z",
+      "last_hit": "2026-07-07T13:41:01Z",
+      "first_seen": "2026-07-07T13:11:32Z",
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-weigh-every-decision-against-target-user-impact",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 2,
+      "warn_count": 0,
+      "fire_count": 2,
+      "prevented_errors": 0,
+      "last_hit": "2026-07-07T13:41:01Z",
+      "first_seen": "2026-07-07T12:43:34Z",
       "rule_text_prefix": " → core"
     }
   ],
   "summary": {
     "total_rules_tagged": 97,
-    "rules_unused_over_8w": 95,
+    "rules_unused_over_8w": 94,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,

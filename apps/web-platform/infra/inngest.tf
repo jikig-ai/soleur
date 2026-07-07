@@ -28,6 +28,12 @@ locals {
   # Source: https://github.com/inngest/inngest/releases/tag/v1.19.4
   inngest_cli_version = "v1.19.4"
   inngest_cli_sha256  = "d023b26659275fdbe9348b6518077ce1ea9906a449898e49ddced91bfc6fd757"
+  # #6178: the co-located web host is amd64 (baked into the soleur-inngest-bootstrap
+  # OCI image env). The dedicated inngest host (cax11) is ARM64 → it downloads the
+  # linux_arm64 tarball and MUST verify against the arm64 checksum (the amd64 SHA above
+  # would fail the verify). Both from the same signed release checksums.txt for v1.19.4:
+  #   https://github.com/inngest/inngest/releases/download/v1.19.4/checksums.txt
+  inngest_cli_sha256_arm64 = "30a3f01474cb2266c24545cdc83930baeae14232d629c87aeeb8f21118948199"
 }
 
 # ---------------- Inngest signing/event keys (random) ----------------
