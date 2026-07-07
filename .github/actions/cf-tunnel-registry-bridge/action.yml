@@ -85,21 +85,29 @@ runs:
       env:
         DOPPLER_TOKEN: ${{ inputs.doppler-token }}
         DOPPLER_PROJECT: soleur
-        # `prd` (root), same config the docker-login step below reads ZOT_PUSH_* from. The
-        # release DOPPLER_TOKEN is prd-scoped and CANNOT read the prd_terraform branch (#6122
-        # cutover fix); tunnel.tf writes REGISTRY_PUSH_* to the `prd` root accordingly.
+        # `prd` (root), same config the docker-login step below reads ZOT_PUSH_* from. The caller
+        # MUST pass a prd-scoped token (DOPPLER_TOKEN_PRD) — the generic DOPPLER_TOKEN is scoped to
+        # the `prd_terraform` branch and CANNOT read the prd root (#6122 cutover fix). tunnel.tf
+        # writes REGISTRY_PUSH_* to the `prd` root; zot-registry.tf writes ZOT_PUSH_* there too.
         DOPPLER_CONFIG: prd
       run: |
         set -euo pipefail
         TOKEN_ID=$(doppler secrets get REGISTRY_PUSH_ACCESS_TOKEN_ID --plain 2>/dev/null || true)
         TOKEN_SECRET=$(doppler secrets get REGISTRY_PUSH_ACCESS_TOKEN_SECRET --plain 2>/dev/null || true)
         if [[ -z "$TOKEN_ID" || -z "$TOKEN_SECRET" ]]; then
-          echo "::error::REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET missing or empty in Doppler prd. Run the operator full terraform apply first (tunnel.tf writes both to the prd root config post-create)."
+          echo "::error::REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET missing or empty reading Doppler soleur/prd. Confirm the caller passes the prd-scoped DOPPLER_TOKEN_PRD (not the prd_terraform-scoped DOPPLER_TOKEN) and that tunnel.tf wrote both to the prd root config."
+          # Diagnostic on failure (secret NAMES only — never values): shows whether this token can
+          # read soleur/prd at all and whether it resolves the expected keys. An auth/permission
+          # error here (captured via 2>&1) means the token is scoped to a different config.
+          echo "::group::doppler read diagnostic (names only, no values)"
+          doppler secrets --only-names 2>&1 | grep -iE 'REGISTRY_PUSH|ZOT_' | head -10 || true
+          doppler secrets --only-names 2>&1 | head -3 || true
+          echo "::endgroup::"
           exit 1
         fi
         printf '::add-mask::%s\n' "$TOKEN_ID"
         printf '::add-mask::%s\n' "$TOKEN_SECRET"
-        # APP_DOMAIN_BASE is not in prd_terraform — fall back to the canonical default exactly
+        # APP_DOMAIN_BASE is not in prd — fall back to the canonical default exactly
         # like the SSH bridge / caller verify steps (bare form exits non-zero under set -e).
         APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
 
