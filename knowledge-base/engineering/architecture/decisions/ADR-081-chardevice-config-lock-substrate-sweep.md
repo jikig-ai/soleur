@@ -101,7 +101,7 @@ and NOT an unconditional in-sandbox `rm -rf` (blind surface + no privilege).
 **Identity-authority amendment (2026-07-07, #6184).** A fresh Concierge session still
 wedged after the host sweep + host-side seed shipped — but the failing write was NOT a
 `config.lock` acquisition inside `ensure_bare_config` (which the non-bare guard skips on
-the agent workspace; see ADR-098). It was `ensure_worktree_identity` issuing a raw
+the agent workspace; see ADR-099). It was `ensure_worktree_identity` issuing a raw
 `git config --local` write to overwrite the host-seeded per-workspace **owner** identity
 with the sandbox image's `github-actions[bot]` **global** — a write that EEXISTs on the
 masked `config.lock` (RC=255), and which, had it "succeeded", would have misattributed the

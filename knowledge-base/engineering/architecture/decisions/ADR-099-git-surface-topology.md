@@ -1,4 +1,4 @@
-# ADR-098: Canonical git-surface topology — three layouts and the code paths they gate
+# ADR-099: Canonical git-surface topology — three layouts and the code paths they gate
 
 **Status:** accepted
 **Date:** 2026-07-07

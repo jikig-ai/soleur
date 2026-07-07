@@ -42,7 +42,7 @@ b251e0b80e180c022ddeaabe8c730e047d18d93dbfa3f13863e2e0b8fd0b5df4  hr-weigh-every
 fedd832f8cdb2f3c989ca014a76534d85374e2f60ee3490e37a24e2b9c7cfe8e  hr-when-a-command-exits-non-zero-or-prints
 39d35725c5303874a04a923c6777b659fd060571331d177e243facf439c8db9c  hr-when-a-plan-specifies-relative-paths-e-g
 b20e107aae1d93ce99ecf5b9ae5f069bc981b0d0317963eb13e558b73aac05c9  hr-when-a-workflow-concludes-with-an
-b79ff8ef022f91a84c4e0184a61c79382f6532a97556256f57066011976ca376  hr-when-in-a-worktree-never-read-from-bare
+c6e8f0c198680f7e0b7ccbedf03d962b6b7fae861f04c1dcb2a9027ac0745a07  hr-when-in-a-worktree-never-read-from-bare
 d49f75e348d514dd0ac018cc1593be8750e1ec4d2fc3deb5ca8d42158ba8b0a8  hr-when-triaging-a-batch-of-issues-never
 63974361ce7e40472ef7b4c7cf234972ce9fd3a4ffbfeeea14ff424544585d2d  hr-write-boundary-sentinel-sweep-all-write-sites
 5fec24ab593f1ed130c5e663784bf126f66756a1142b6caa3c346a0af5dca83b  wg-after-a-pr-merges-to-main-verify-all
@@ -50,7 +50,7 @@ d49f75e348d514dd0ac018cc1593be8750e1ec4d2fc3deb5ca8d42158ba8b0a8  hr-when-triagi
 e84867ed5753880b062a1304ef441815423cc3189ffe08572e3bc99af377f529  wg-after-merging-a-pr-that-adds-or-modifies
 c110204548405e57c1cc7089a049768f1ab2706bd6c0b7ff44e09c1676845680  wg-architecture-decision-is-a-plan-deliverable
 71e09900759121816b84c5e2ba85c9f98421103b0188d4a5a7e4b9fbc0da6199  wg-at-session-start-after-cleanup-merged
-65738d32911bdcc877da340b51a55786d3cd507a3887bf5e48d0b0a16f3cdb89  wg-at-session-start-run-bash-plugins-soleur
+eed77e1cfbd5678fb364995abec0c83bd0f6abaa5382d3ea9cc825e1a601a302  wg-at-session-start-run-bash-plugins-soleur
 862f85ee1d0465ef27e929d31cd64bb1dc3dbaeb79a55ae8949e50fe4b58dc68  wg-block-pr-ready-on-undeferred-operator-steps
 bcfab9abb9f678ddac38725bac7010de8218dc5908dabc958c3bc61c3d056278  wg-cla-signed-author-before-merge
 0c66ba0b8543f78224a5e8c3725bd7be5916846c6df4e05942b899e76c66d987  wg-dark-launch-deploy-gates

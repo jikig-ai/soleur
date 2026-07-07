@@ -588,7 +588,7 @@ verify_worktree_created() {
 # Ensure the worktree has a git identity, RESPECTING an already-present host-seeded
 # owner identity (#6184).
 #
-# IDENTITY AUTHORITY IS INVERTED BETWEEN THE TWO NON-BARE/BARE SURFACES (ADR-098):
+# IDENTITY AUTHORITY IS INVERTED BETWEEN THE TWO NON-BARE/BARE SURFACES (ADR-099):
 #   - Non-bare Concierge agent workspace (where this runs in production): the host seeds
 #     the shared config with the per-workspace OWNER as the LOCAL identity
 #     (workspace.ts), while the sandbox image bakes a `github-actions[bot]` --GLOBAL
@@ -602,7 +602,7 @@ verify_worktree_created() {
 # would have misattributed the operator's commits to `github-actions[bot]`.
 #
 # Fix (bot-aware, #6184 F1/F2): the discriminator is BOT-SHAPE, not presence — because
-# authority is inverted (ADR-098) and neither "always force global" (old — wrong on
+# authority is inverted (ADR-099) and neither "always force global" (old — wrong on
 # non-bare Concierge) nor "always respect local" (wrong on the bare CLI dev repo, which
 # frequently carries a poisoned bot LOCAL — the #2815 CLA-reject bug) is correct alone.
 #   - present NON-bot local → authoritative; return WITHOUT writing (the common Concierge
@@ -641,7 +641,7 @@ ensure_worktree_identity() {
   # an inherited `github-actions[bot]` LOCAL that every worktree inherits (learning
   # 2026-04-24-fake-git-author-bare-repo-bot-override; PR #2815 CLA reject) — respecting
   # THAT would re-open the exact bug ensure_worktree_identity was born to fix. Neither
-  # blanket rule works (ADR-098 "authority is inverted, never blanket-force"); bot-shape is
+  # blanket rule works (ADR-099 "authority is inverted, never blanket-force"); bot-shape is
   # the discriminator that is correct on both surfaces.
   if [[ -n "$local_email" && -n "$local_name" ]] && ! _identity_is_bot "$local_email" "$local_name"; then
     return 0
