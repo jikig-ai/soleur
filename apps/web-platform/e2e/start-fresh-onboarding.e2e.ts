@@ -9,66 +9,42 @@ import {
 // Mock KB tree data builders
 // ---------------------------------------------------------------------------
 
-interface TreeNode {
-  name: string;
-  type: "file" | "directory";
-  path?: string;
-  size?: number;
-  children?: TreeNode[];
-}
-
-function kbTree(...files: string[]): { tree: TreeNode } {
-  const root: TreeNode = { name: "knowledge-base", type: "directory", children: [] };
+// The dashboard now derives foundation-card + first-run state from
+// /api/dashboard/foundation-status (a { paths: { <kbPath>: {exists,size} } }
+// map), NOT the whole /api/kb/tree walk. Build that response for a set of
+// existing foundation files (size 1000 ≥ FOUNDATION_MIN_CONTENT_BYTES = done).
+function foundationPaths(
+  ...files: string[]
+): { paths: Record<string, { exists: boolean; size: number }> } {
+  const paths: Record<string, { exists: boolean; size: number }> = {};
   for (const filePath of files) {
-    const parts = filePath.split("/");
-    let current = root;
-    let pathSoFar = "";
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      pathSoFar = pathSoFar ? `${pathSoFar}/${part}` : part;
-      if (i === parts.length - 1) {
-        current.children ??= [];
-        current.children.push({ name: part, type: "file", path: pathSoFar, size: 1000 });
-      } else {
-        current.children ??= [];
-        let child = current.children.find((c) => c.name === part && c.type === "directory");
-        if (!child) {
-          child = { name: part, type: "directory", path: pathSoFar, children: [] };
-          current.children.push(child);
-        }
-        current = child;
-      }
-    }
+    paths[filePath] = { exists: true, size: 1000 };
   }
-  return { tree: root };
+  return { paths };
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Intercept /api/kb/tree and all Supabase client-side calls before navigating. */
+/** Intercept /api/dashboard/foundation-status + Supabase client calls before navigating. */
 async function setupDashboardMocks(page: Page, kbFiles: string[]) {
   // Shared auth + session + realtime stubs (see e2e/helpers/supabase-mocks.ts).
   await injectFakeSupabaseSession(page);
   await mockSupabaseAuth(page);
 
-  // KB tree API (dashboard useEffect) — onboarding-specific surface.
-  await page.route("**/api/kb/tree", async (route) => {
+  // Foundation-status API (dashboard useSWR) — onboarding-specific surface.
+  await page.route("**/api/dashboard/foundation-status*", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(kbTree(...kbFiles)),
+      body: JSON.stringify(foundationPaths(...kbFiles)),
     });
   });
 
-  // Supabase REST: conversations (useConversations hook)
-  await page.route("**/rest/v1/conversations*", async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
-  });
-
-  // Supabase REST: messages (useConversations hook)
-  await page.route("**/rest/v1/messages*", async (route) => {
+  // Supabase RPC: the conversation rail now reads via list_conversations_enriched
+  // (migration 125), replacing the direct conversations + messages queries.
+  await page.route("**/rest/v1/rpc/list_conversations_enriched*", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
 
@@ -267,21 +243,18 @@ test.describe("Start Fresh onboarding: command center state", () => {
 // ---------------------------------------------------------------------------
 
 test.describe("Start Fresh onboarding: loading and error states", () => {
-  test("shows loading skeleton while KB tree is loading", async ({ page }) => {
-    // Delay the KB tree response to observe loading state
-    await page.route("**/api/kb/tree", async (route) => {
+  test("shows loading skeleton while foundation status is loading", async ({ page }) => {
+    // Delay the foundation-status response to observe loading state
+    await page.route("**/api/dashboard/foundation-status*", async (route) => {
       await new Promise((r) => setTimeout(r, 2000));
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(kbTree()),
+        body: JSON.stringify(foundationPaths()),
       });
     });
 
-    await page.route("**/rest/v1/conversations*", async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
-    });
-    await page.route("**/rest/v1/messages*", async (route) => {
+    await page.route("**/rest/v1/rpc/list_conversations_enriched*", async (route) => {
       await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
     });
 
@@ -291,8 +264,8 @@ test.describe("Start Fresh onboarding: loading and error states", () => {
     await expect(skeleton).toBeVisible({ timeout: 5_000 });
   });
 
-  test("shows provisioning message on 503 from KB tree", async ({ page }) => {
-    await page.route("**/api/kb/tree", async (route) => {
+  test("shows provisioning message on 503 from foundation status", async ({ page }) => {
+    await page.route("**/api/dashboard/foundation-status*", async (route) => {
       await route.fulfill({
         status: 503,
         contentType: "application/json",
@@ -300,10 +273,7 @@ test.describe("Start Fresh onboarding: loading and error states", () => {
       });
     });
 
-    await page.route("**/rest/v1/conversations*", async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
-    });
-    await page.route("**/rest/v1/messages*", async (route) => {
+    await page.route("**/rest/v1/rpc/list_conversations_enriched*", async (route) => {
       await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
     });
 

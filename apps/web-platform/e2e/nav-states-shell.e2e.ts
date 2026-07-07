@@ -268,6 +268,19 @@ async function setupNavMocks(page: Page): Promise<void> {
       body: JSON.stringify(SEEDED_KB_TREE),
     }),
   );
+  // The DASHBOARD page (unlike the KB rail) now derives its foundation-card +
+  // first-run state from /api/dashboard/foundation-status (a targeted stat),
+  // NOT /api/kb/tree. Return a populated paths map so `/dashboard` renders its
+  // normal command-center chrome (vision present ⇒ not the first-run screen).
+  await page.route("**/api/dashboard/foundation-status*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        paths: { "overview/vision.md": { exists: true, size: 1000 } },
+      }),
+    }),
+  );
   await page.route("**/api/byok/**", (route) =>
     route.fulfill({
       status: 200,
