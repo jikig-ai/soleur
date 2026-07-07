@@ -63,6 +63,14 @@ inputs:
 runs:
   using: composite
   steps:
+    # The Doppler CLI is NOT pre-installed on the release/inngest runners (only jobs that
+    # explicitly install it — e.g. verify-doppler-secrets — have it). This composite's secret
+    # reads below shell out to `doppler`, so install it FIRST. Omitting this was the #6122 zot
+    # bridge failure: `doppler secrets get` errored `command not found`, which the `2>/dev/null`
+    # on the reads swallowed into an empty value → the guards misreported it as "missing secret".
+    - name: Install Doppler CLI
+      uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
     - name: Install cloudflared (SHA-pinned)
       shell: bash
       env:
@@ -92,8 +100,11 @@ runs:
         DOPPLER_CONFIG: prd
       run: |
         set -euo pipefail
-        TOKEN_ID=$(doppler secrets get REGISTRY_PUSH_ACCESS_TOKEN_ID --plain 2>/dev/null || true)
-        TOKEN_SECRET=$(doppler secrets get REGISTRY_PUSH_ACCESS_TOKEN_SECRET --plain 2>/dev/null || true)
+        # NO 2>/dev/null: a doppler error (command-not-found, auth, wrong config) must surface in
+        # the step log, not be swallowed into an empty value. `doppler secrets get --plain` writes
+        # the value only to stdout (captured), so unsuppressing stderr cannot leak it.
+        TOKEN_ID=$(doppler secrets get REGISTRY_PUSH_ACCESS_TOKEN_ID --plain || true)
+        TOKEN_SECRET=$(doppler secrets get REGISTRY_PUSH_ACCESS_TOKEN_SECRET --plain || true)
         if [[ -z "$TOKEN_ID" || -z "$TOKEN_SECRET" ]]; then
           echo "::error::REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET missing or empty reading Doppler soleur/prd. Confirm the caller passes the prd-scoped DOPPLER_TOKEN_PRD (not the prd_terraform-scoped DOPPLER_TOKEN) and that tunnel.tf wrote both to the prd root config."
           # Diagnostic on failure (secret NAMES only — never values): shows whether this token can
@@ -144,8 +155,9 @@ runs:
       # over the tunnel. --password-stdin (never argv). 127.0.0.1 is auto-insecure to docker.
       run: |
         set -euo pipefail
-        ZOT_PUSH_USER=$(doppler secrets get ZOT_PUSH_USER --plain 2>/dev/null || true)
-        ZOT_PUSH_TOKEN=$(doppler secrets get ZOT_PUSH_TOKEN --plain 2>/dev/null || true)
+        # NO 2>/dev/null (see the bridge step): a doppler error must be visible, not swallowed.
+        ZOT_PUSH_USER=$(doppler secrets get ZOT_PUSH_USER --plain || true)
+        ZOT_PUSH_TOKEN=$(doppler secrets get ZOT_PUSH_TOKEN --plain || true)
         if [[ -z "$ZOT_PUSH_USER" || -z "$ZOT_PUSH_TOKEN" ]]; then
           echo "::error::ZOT_PUSH_USER/ZOT_PUSH_TOKEN missing or empty in Doppler prd (written by zot-registry.tf on the operator full apply)."
           exit 1
