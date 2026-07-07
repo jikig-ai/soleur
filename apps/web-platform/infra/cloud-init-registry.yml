@@ -40,6 +40,12 @@ write_files:
   # dedupe + gc (safe on a singleton; gc retains the tagged sha256-<digest>.sig referrers),
   # htpasswd auth, deny-by-default accessControl (pull user = read; push user =
   # read/create/update). Usernames are terraform-interpolated (non-secret constants).
+  #
+  # http.compat ["docker2s2"] (#6122): zot is OCI-native and REJECTS Docker manifest
+  # schema2 pushes (application/vnd.docker.distribution.manifest.v2+json) with
+  # MANIFEST_INVALID unless this compat flag is set. The inngest-bootstrap image is built by
+  # plain `docker build` → docker-schema2, so it needs this; the web image is OCI (buildx) and
+  # does not. (project-zot pkg/compat/compat.go DockerManifestV2SchemaV2 = "docker2s2".)
   - path: /etc/zot/config.json
     content: |
       {
@@ -54,6 +60,7 @@ write_files:
         "http": {
           "address": "0.0.0.0",
           "port": "5000",
+          "compat": ["docker2s2"],
           "auth": { "htpasswd": { "path": "/etc/zot/htpasswd" } },
           "accessControl": {
             "repositories": {

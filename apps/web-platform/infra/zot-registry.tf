@@ -183,7 +183,7 @@ resource "doppler_secret" "zot_push_token" {
 resource "hcloud_server" "registry" {
   name        = "soleur-registry"
   server_type = var.registry_server_type # cax11 (arm64) / cx23 (amd64) — arch derived in locals
-  location    = var.location
+  location    = var.registry_location    # independent of var.location (#6122: registry is nbg1)
   image       = "ubuntu-24.04"
   keep_disk   = true
   ssh_keys    = [hcloud_ssh_key.default.id]
@@ -235,7 +235,7 @@ resource "hcloud_server" "registry" {
 resource "hcloud_volume" "registry" {
   name     = "soleur-registry-store"
   size     = var.registry_volume_size
-  location = var.location
+  location = var.registry_location # MUST match hcloud_server.registry (#6122: nbg1)
   format   = "ext4"
 
   labels = {
