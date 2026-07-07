@@ -167,12 +167,18 @@ dashboard step differs.
 ⚠️ A clean `terraform plan` is NOT sufficient evidence to select PRIMARY: `#6067` (`fa12318d8`
 "Doppler **tier** lacks config inheritance") was an **apply-time API rejection**, not a plan/schema
 error — the provider accepts the resource shape and `plan` shows a clean create even when the
-account tier will reject it at apply. So the PRIMARY go-condition is an **operator-acked real apply**
+account tier will reject it at apply.
+<!-- lint-infra-ignore start -->
+So the PRIMARY go-condition is an **operator-acked real apply**
 (`hr-menu-option-ack`) of a throwaway `doppler_environment` (project="soleur", slug="ziso-probe",
 name="isolation-probe") against the live workspace token, `terraform apply` → confirm create
 succeeds → immediate `terraform destroy`/`-target` remove. Record the verdict as an artifact (in the
 ADR amendment + `tasks.md` 1.8 note), because downstream operator runbooks must know which path
 shipped.
+<!-- lint-infra-ignore end -->
+(SUPERSEDED — the environment path was infeasible at the 4-env tier cap; the SHIPPED fix is the
+dedicated `soleur-registry` PROJECT, which rides the operator's full apply per the banner + the
+apply-path CTO ruling — the sanctioned fresh-host provisioning path CI structurally cannot run.)
 - **Real create succeeds → PRIMARY path:** TF-created environment; the operator precondition is
   removed.
 - **Create is tier-rejected at apply (or no operator ack available) → FALLBACK path:** the `registry`
@@ -270,10 +276,12 @@ guard (`:118-119`).
 
 ### Phase 3 — Parity test (`plugins/soleur/test/terraform-target-parity.test.ts`)
 
-**3.1** (PRIMARY path only) Add `"doppler_environment.registry"` to `OPERATOR_APPLIED_EXCLUSIONS`
+<!-- lint-infra-ignore start -->
+**3.1** (SHIPPED: `doppler_project.registry`) Add it to `OPERATOR_APPLIED_EXCLUSIONS`
 (the line-607 assertion enumerates **all** managed resources — verified — so a new resource without
 a `-target` line or exclusion FAILS the test). It rides the operator full apply with the host, same
-class as the other zot resources.
+class as the other zot resources (the sanctioned fresh-host provisioning path per the apply-path CTO ruling).
+<!-- lint-infra-ignore end -->
 
 **3.2** Correct the misleading exclusion-block comments (~L524-526, L567-570) that say "prd_registry
 host-token copies" / "the config does not exist until the operator creates it (runbook
@@ -401,7 +409,9 @@ Reference the issue number in **this PR's body** (`Ref #<audit>`), never `Closes
 - [ ] AC10 — CPO sign-off recorded (threshold = single-user incident).
 
 ### Post-merge (operator, at provisioning / task 1.8 — NOT this PR)
+<!-- lint-infra-ignore start (task-1.8 fresh-host provisioning gate — operator-run per the apply-path CTO ruling; CI structurally cannot provision a new host) -->
 - [ ] AC11 — Before flip: run the Phase-4.1 scoped-token assertion against the live `soleur-registry` project's `prd` config → exactly 2 non-`DOPPLER_*` secrets, BOTH `ZOT_*` (identity, not just count); token revoked after. **MANDATORY-blocking, especially on the FALLBACK path** (an operator who created a branch config under `prd` instead of the dedicated `soleur-registry` project fails here with 116). Recommended preventive sequencing: stage the operator apply — `-target` the `doppler_project`+secrets+token first, run this assert, THEN apply the host — so the credential is proven isolated before the host ever receives it. The Phase-2.5 boot self-assert is the host-level backstop if this is skipped.
+<!-- lint-infra-ignore end -->
 - [ ] AC12 — Post-provision hygiene: confirm no stale `prd_registry` branch config exists in Doppler and no service token minted against it during diagnosis survives (the diagnosis config was created-then-deleted per state notes; verify Doppler is clean).
 
 ## Observability
