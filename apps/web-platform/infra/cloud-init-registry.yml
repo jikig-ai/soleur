@@ -101,7 +101,10 @@ runcmd:
   # /etc/environment (mirrors git-data's /etc/default/git-data-doppler). The token is scoped to
   # the isolated `soleur-registry` project's `prd` root config (a SEPARATE project — NO
   # inheritance path to soleur/prd), so a host compromise reads ONLY the two ZOT tokens.
-  - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/registry-doppler
+  # HOME is REQUIRED: cloud-init runcmd runs with no $HOME, and the Doppler CLI aborts with
+  # "Doppler Error: $HOME is not defined" even when DOPPLER_CONFIG_DIR is set — so `doppler run`
+  # below (and its nested `doppler secrets` self-check) fail and zot never launches (#6122 boot fix).
+  - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/registry-doppler
   - chmod 600 /etc/default/registry-doppler
 
   # Ensure docker is up before the container launch.
