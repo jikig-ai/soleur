@@ -14,6 +14,21 @@ status: draft
 **Prod target:** `soleur-web-platform` (ref `ifsccnjhymdmidffkzhl`, Micro / 1 GB RAM, eu-west-1)
 **Lineage:** third remediation in the prod Disk IO Budget line — #3358 (migrations 038/039: slowed the pg_cron sweep, dropped `public.messages` from Realtime) → #5736 (migration 114: WAL-concentration monitor; webhook-dedup fix crushed statement WAL from ~12 GB/day to ~17 MB/day) → **this PR** (residual driver: autovacuum thrash).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-07
+**deepen-plan gates:** 4.6 User-Brand Impact ✓, 4.7 Observability ✓ (5 fields, no-ssh), 4.8 PAT-shape ✓ (none), 4.9 UI-wireframe ✓ (no UI surface), 4.55 Downtime ✓ (storage-param ALTER = `SHARE UPDATE EXCLUSIVE`, no rewrite → zero-downtime by construction).
+
+### Key improvements folded in
+1. **Postgres/Supabase semantics verified** (PG16 + Supabase docs): `scale_factor=0`+`threshold=1000`+`fillfactor=70` fires deterministically at ~1000 dead tuples, `SHARE UPDATE EXCLUSIVE` lock, no rewrite, per-table override, **no wraparound risk**, and an **ownership guardrail** (`postgres` can only ALTER owned `public` tables; `auth.*`/`realtime.*` throw `42501` — DB-level backstop for the scope boundary).
+2. **Migration-harness facts verified** against `run-migrations.sh`: filename-order apply + `_schema_migrations` tracking, `.down.sql` explicitly skipped (won't auto-RESET), filename-shape + NNN-collision guards satisfied by `123_…`.
+3. **Precedent-diff (4.4):** no autovacuum/fillfactor prior art in-repo — novel-but-standard; two independent guards (shape test + post-deploy reloptions read).
+4. **Code-review overlap corrected:** #3220/#3221 match the generic `supabase/migrations` token but are trigger-migration concerns → Acknowledge, no fold-in.
+
+### New considerations discovered
+- Ownership (`42501 must be owner`) is a free DB-level enforcement of the owned-tables-only rule — added as a Phase-1 precondition + Non-Goal reinforcement.
+- Anti-wraparound is a separate trigger — the "high threshold might be unsafe" objection is closed in User-Brand Impact.
+
 ## Overview
 
 After the June 2026 webhook-dedup fix (merged 2026-06-30), statement-attributed WAL on prod is only ~17 MB/day — the WAL problem is solved. The **residual** Disk IO Budget drain is now **autovacuum thrash**: Postgres' default autovacuum trigger (`autovacuum_vacuum_threshold = 50` + `autovacuum_vacuum_scale_factor = 0.2`) fires after only ~50 updates on a tiny table, so six 0–16-row hot-update tables are being fully vacuumed 50–142×/week. Each vacuum reads the table + **all** its indexes, writes WAL, and fsyncs — a fixed per-vacuum IOPS cost that, multiplied across six thrashing tables, is what now drains the Micro-instance budget.
@@ -54,6 +69,7 @@ The task framing lists two levers: (1) autovacuum tuning, and (2) reducing redun
 
 **If this lands broken, the user experiences:** at worst, bounded table bloat on a handful of tiny internal tables (a few extra 8 KB pages) — no user-facing surface. A pathologically-high threshold on a table that later grows could delay analyze/vacuum, but all three targets are structurally tiny (0–16 live rows) and self-limited by their own sweep/TTL logic. If the optional heartbeat-interval change were mis-tuned (scoped out here), a live session's slot could be reaped early → the next message triggers a re-acquire (already self-healed by `ws-handler-cap-hit-self-heal`).
 **If this leaks, the user's data is exposed via:** N/A — the migration sets storage parameters only; it adds no columns, touches no row data, and changes no RLS/grants.
+**Wraparound safety:** raising the dead-tuple threshold does NOT defer anti-wraparound vacuum (separate transaction-age trigger, not gated by `autovacuum_vacuum_threshold`) — the tables stay wraparound-safe (verified, Research Insights §6).
 **Brand-survival threshold:** none — infrastructure tuning, reversible, no data surface.
 **threshold: none, reason:** migration sets `reloptions` (autovacuum params + fillfactor) on 3 internal tiny tables; no new PII, columns, RLS, grants, or data movement, so no single- or aggregate-user exposure vector exists.
 
@@ -81,6 +97,8 @@ Read-only, against prod ref `ifsccnjhymdmidffkzhl` via `mcp__plugin_supabase_sup
 4. Record the baseline row set into the PR/spec so the Follow-Through probe (Phase 3) can diff against it.
 
 ### Phase 1 — Migration `123_tame_autovacuum_on_tiny_hot_tables.sql`
+
+**Precondition (ownership):** every table the migration `ALTER`s must be owned by the migration role `postgres` — true for the three targets (created by our migrations 029/037-048/049 in `public`). A stray `ALTER TABLE auth.*`/`realtime.*` would fail with `ERROR 42501 must be owner of table` (DB-level backstop for the owned-tables-only rule). The Phase-2 shape test is the pre-merge guard; this is the runtime backstop.
 
 Create `apps/web-platform/supabase/migrations/123_tame_autovacuum_on_tiny_hot_tables.sql` and its `.down.sql`. Header comment must cite: the residual-thrash diagnosis, the #3358/#5736 lineage, the 2026-05-06 learning, #5739 as the related (out-of-scope) auth-churn tracker, and the "no CONCURRENTLY" note (not needed — `ALTER TABLE … SET (…)` is fast transactional DDL, safe inside Supabase's per-migration txn).
 
@@ -127,7 +145,7 @@ Add `apps/web-platform/test/supabase-migrations/123-tame-autovacuum.test.ts` mir
 - `.github/workflows/scheduled-followthrough-sweeper.yml` — only if `SUPABASE_ACCESS_TOKEN` is not already a wired secret for the sweeper (verify first).
 
 ## Open Code-Review Overlap
-None — no open `code-review` issue references the target migration paths or the three tables (verify with the two-stage `gh issue list --label code-review --json` + `jq --arg` query at Step 1.7.5 before freeze).
+Two open `code-review` issues match the generic `supabase/migrations` path token — **#3220** (postmerge verification of trigger-bearing migrations) and **#3221** (nightly cron for env-gated integration tests). **Disposition: Acknowledge** — neither touches these three tables, autovacuum tuning, or any trigger; this migration is trigger-free storage-parameter DDL, a different concern. Both remain open. No overlap on the three target tables (`user_concurrency_slots`, `mint_rate_window`, `runtime_mint_intent`), `autovacuum`, or `touch_conversation_slot`.
 
 ## Observability
 
@@ -159,7 +177,32 @@ discoverability_test:
   expected_output: each row's reloptions array contains autovacuum_vacuum_threshold=1000, autovacuum_vacuum_scale_factor=0, fillfactor=70 (NO ssh)
 ```
 
-## Architecture Decision (ADR/C4)
+## Downtime & Cutover (deepen-plan Phase 4.55 — evaluated, no downtime)
+
+`ALTER TABLE … SET (autovacuum_* , fillfactor)` is a **storage-parameter** change: it takes a `SHARE UPDATE EXCLUSIVE` lock (NOT `ACCESS EXCLUSIVE`), performs **no table rewrite**, and does **not** block concurrent `SELECT/INSERT/UPDATE/DELETE`. It is therefore not in the Phase-4.55 downtime trigger set (no `ADD COLUMN NOT NULL DEFAULT` rewrite, no `ALTER COLUMN TYPE`, no non-`CONCURRENTLY` index, no `ADD CONSTRAINT` without `NOT VALID`, no long backfill). `fillfactor` applies to future page writes only — no rewrite, no window. **No `## Downtime & Cutover` mitigation required; zero-downtime by construction.** (Cited to the Phase-4.55 trigger definitions; the `SHARE UPDATE EXCLUSIVE` / no-rewrite claim is confirmed in the Research Insights below.)
+
+## Research Insights
+
+### Migration harness (verified against `apps/web-platform/scripts/run-migrations.sh`)
+- The runner applies unapplied `supabase/migrations/*.sql` **in filename order**, tracking applied files in `public._schema_migrations`; a new `123_*.sql` above the current high-watermark (122) applies automatically on merge via `web-platform-release.yml#migrate`. No content-SHA registration step is needed to apply (the runner keys on filename).
+- **`.down.sql` files are explicitly skipped** by the runner (`case … *.down.sql) continue ;;` at `run-migrations.sh:125` and `:251`) — so `123_*.down.sql` will NOT auto-apply and RESET the params. `.down.sql` is manual-rollback-only (`docs/migration-rollback.md`).
+- The runner enforces a **filename shape whitelist** (alphanumerics + underscore) and an **NNN-prefix collision check** (`run-migrations.sh:215-224`) — `123_tame_autovacuum_on_tiny_hot_tables.sql` satisfies both (unique `123_` prefix; snake_case name).
+- `--verify` (run by the `verify-migrations` job) fails on drift (disk file below high-watermark but untracked). Ordering is satisfied: 123 > 122.
+
+### Precedent-diff gate (Phase 4.4)
+- **No precedent** for per-table autovacuum storage parameters or `fillfactor` anywhere under `apps/web-platform/supabase/migrations/` (`grep` for `autovacuum_vacuum_threshold|fillfactor|autovacuum_vacuum_scale` returns zero). This is a **novel-but-standard** Postgres DDL pattern for this repo — reviewers should scrutinize the exact `reloptions` syntax; the shape test (Phase 2) + the post-deploy `pg_class.reloptions` read (Observability discoverability_test) are the two independent guards.
+- Closest sibling in intent: migration `038_slow_user_concurrency_slots_sweep.sql` (same disk-IO-reduction line, same table `user_concurrency_slots`) — the new migration's header should cross-reference it.
+
+### Postgres autovacuum / fillfactor semantics (verified against PostgreSQL 16 + Supabase docs)
+All six load-bearing assumptions hold:
+1. **Deterministic firing:** trigger is `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × pg_class.reltuples`; `scale_factor = 0` zeroes the size term → vacuum fires once dead tuples ≥ threshold (~1000), independent of table size. (Note: the separate `autovacuum_vacuum_insert_threshold` path can still fire on inserts — not the dominant driver here since these tables are UPDATE-heavy.) [postgresql.org/docs/16/routine-vacuuming.html §25.1.6]
+2. **Lock:** `ALTER TABLE … SET (fillfactor / autovacuum_*)` takes **`SHARE UPDATE EXCLUSIVE`**, does **not** rewrite the table, and does **not** block concurrent DML. (It self-conflicts with an in-progress VACUUM/ANALYZE on the same table — a brief serialization, not a DML block.) [postgresql.org/docs/16/sql-altertable.html]
+3. **`fillfactor` is forward-only:** no immediate rewrite; existing pages repack lazily on update/vacuum. Forcing a rewrite would need `VACUUM FULL`/`CLUSTER` — deliberately avoided (non-transactional, unnecessary at this size). [sql-createtable.html Storage Parameters]
+4. **Per-table reloptions override** the global `postgresql.conf` autovacuum GUCs for that table. [runtime-config-autovacuum.html]
+5. **Ownership guardrail (Supabase):** the migration role `postgres` is **not** a superuser but **owns** tables its own migrations created in `public` → `ALTER` on the three targets succeeds. `auth.*` / `realtime.*` are `supabase_admin`-owned → an accidental `ALTER` there throws `ERROR 42501 must be owner of table` — a natural DB-level reinforcement of the "owned tables only" scope. Per-table storage-param tuning is explicitly supported by Supabase (blog: postgres-bloat); only cluster-wide `ALTER SYSTEM` is blocked. [supabase.com/docs/guides/database/postgres/roles-superuser]
+6. **No wraparound risk:** anti-wraparound / freeze autovacuum is a **separate transaction-age trigger** (`relfrozenxid` age > `autovacuum_freeze_max_age`), NOT gated by `autovacuum_vacuum_threshold`. Raising the dead-tuple threshold to 1000 on a tiny table does not defer wraparound protection — it only defers routine dead-tuple bloat reclamation, which is the intended, bounded tradeoff. [routine-vacuuming.html §25.1.5]
+
+**Plan impact:** confirms `scale_factor = 0` + `threshold = 1000` + `fillfactor = 70` is safe and zero-downtime. The ownership guardrail (5) is added to Phase 1 as an explicit precondition; the wraparound reassurance (6) closes the only plausible "high threshold is unsafe" objection.
 
 **No ADR required.** This is reversible parameter tuning on three existing internal tables in the established disk-IO-remediation line (#3358 → #5736 → this). It creates no ownership/tenancy boundary move, no new substrate/integration pattern, no resolver/dispatch/trust-boundary change, and reverses no existing ADR. A competent engineer reading the ADR corpus + C4 would not be misled by this change.
 
