@@ -136,8 +136,9 @@ describe("TourProvider", () => {
     fireEvent.click(screen.getByText("start")); // step 0 Welcome (no route)
     expect(routerPush).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText("next")); // step 1 → /dashboard (== pathname, no push)
+    fireEvent.click(screen.getByText("next")); // step 2 org-panel → /dashboard (== pathname, no push)
     expect(routerPush).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText("next")); // step 2 → /dashboard/inbox
+    fireEvent.click(screen.getByText("next")); // step 3 → /dashboard/inbox
     expect(routerPush).toHaveBeenCalledWith("/dashboard/inbox");
   });
 

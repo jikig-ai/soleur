@@ -802,7 +802,7 @@ export default function DashboardPage() {
 
 function LeaderStrip({ onLeaderClick, getIconPath }: { onLeaderClick: (leaderId: string) => void; getIconPath: (id: DomainLeaderId) => string | null }) {
   return (
-    <>
+    <div data-tour-id="action:org-panel" className="flex flex-col items-center">
       <p className="mb-4 text-xs font-medium tracking-widest text-soleur-text-secondary">
         YOUR ORGANIZATION
       </p>
@@ -821,7 +821,7 @@ function LeaderStrip({ onLeaderClick, getIconPath }: { onLeaderClick: (leaderId:
           </button>
         ))}
       </div>
-    </>
+    </div>
   );
 }
 
