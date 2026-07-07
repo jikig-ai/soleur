@@ -653,7 +653,7 @@ ghcr_prelude_and_login() {
       logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED — private pull may fail-closed"
     fi
   else
-    logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present — skipping docker login (pre-provisioning?)"
+    logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present (baked file absent + doppler empty/unavailable) — skipping docker login"
   fi
   # The mounted $GHCR_DOCKER_CONFIG (inline auths entry) is what the cosign verifier
   # reuses; the token local goes out of scope when the function returns.

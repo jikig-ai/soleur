@@ -512,6 +512,13 @@ if grep -qE 'until ghcr_user="?\$\(timeout 45 doppler[^)]*GHCR_READ_USER' "$CD" 
 else
   no "AC20: ci-deploy ghcr_prelude_and_login must harden the doppler fallback (timeout 45 + until-retry) for both GHCR creds"
 fi
+# (5) token hygiene: baked file is deploy-owned + ci-deploy unsets the token from its env/children
+if grep -qE 'chown deploy:deploy /etc/default/soleur-ghcr-read' "$CI" \
+   && grep -qE 'unset GHCR_READ_TOKEN' "$CD"; then
+  ok "AC20: baked file is chown deploy:deploy + ci-deploy unsets GHCR_READ_TOKEN (token not in child env)"
+else
+  no "AC20: /etc/default/soleur-ghcr-read must be chown deploy:deploy AND ci-deploy must unset GHCR_READ_TOKEN after sourcing"
+fi
 
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]
