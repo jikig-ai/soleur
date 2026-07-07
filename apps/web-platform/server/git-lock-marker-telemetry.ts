@@ -1,4 +1,4 @@
-// Mirror the in-sandbox git-lock wedge markers to a QUERYABLE sink (#4826 follow-up).
+// Mirror the in-sandbox git-lock wedge markers to a QUERYABLE sink (#6184 follow-up).
 //
 // worktree-manager.sh (running INSIDE the agent sandbox) emits diagnostic markers to
 // the Bash tool's stdout/stderr when worktree creation is wedged by a masked
@@ -14,7 +14,7 @@
 //
 // Before this hook those lines went ONLY to blind agent-sandbox stdout — not mirrored
 // to any sink an operator can query (ADR-081's stated observability gap). Diagnosing the
-// #4826 wedge therefore required asking the operator to paste `findmnt` from the live
+// #6184 wedge therefore required asking the operator to paste `findmnt` from the live
 // session. This PostToolUse(Bash) hook runs SERVER-SIDE (the Node dispatch process, where
 // the pino logger ships to stdout → journald → vector → Better Stack, plus a Sentry
 // breadcrumb), scans Bash output for the markers, and re-emits each as a structured log —

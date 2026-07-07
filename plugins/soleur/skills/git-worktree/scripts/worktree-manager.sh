@@ -452,7 +452,7 @@ ensure_bare_config() {
   # EEXIST failure from atomic_git_config's clean-lock branch. `|| true` disarms set -e.
   sweep_stale_git_locks "$git_dir" || true
 
-  # NON-BARE GUARD (#4826, hardened round 5). Everything BELOW is a BARE-repo
+  # NON-BARE GUARD (#6184, hardened round 5). Everything BELOW is a BARE-repo
   # accommodation: on a bare repo `git worktree add` corrupts the shared config (see
   # header), and setting extensions.worktreeConfig=true steers those writes off it. A
   # NORMAL working clone (the Concierge workspace layout, core.bare=false) needs NONE of
@@ -857,10 +857,10 @@ install_deps() {
 
 # Auto-heal a stale, EMPTY orphan branch left behind by a prior aborted
 # create/one-shot run, so a fresh create of the same branch proceeds cleanly
-# instead of stranding the operator with a hand-cleanup step (the failure the
-# 2026-07-05 #4826 session hit: a prior aborted run had pushed
-# `feat-one-shot-4826-*` with zero commits and no PR, and the next attempt had
-# to be rescued by a manual `git push origin --delete`).
+# instead of stranding the operator with a hand-cleanup step (the failure a
+# prior aborted 2026-07-05 run hit: it had pushed `feat-one-shot-<name>-*` with
+# zero commits and no PR, and the next attempt had to be rescued by a manual
+# `git push origin --delete`).
 #
 # STRICTLY SCOPED — the auto-delete only ever fires when ALL hold:
 #   1. the branch name EXACTLY equals the one this run is about to create

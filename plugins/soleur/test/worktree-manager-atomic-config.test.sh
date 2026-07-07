@@ -246,8 +246,8 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-echo "Test 12: #4826 ensure_bare_config is a NO-OP on a normal (non-bare) repo"
-# The #4826 regression: ensure_bare_config unconditionally enabled extensions.worktreeConfig,
+echo "Test 12: #6184 ensure_bare_config is a NO-OP on a normal (non-bare) repo"
+# The #6184 regression: ensure_bare_config unconditionally enabled extensions.worktreeConfig,
 # which on a normal Concierge clone forces git to read the sandbox-masked (unreadable)
 # .git/config.worktree and fatals EVERY git command. Fix: a `.git` DIRECTORY ⇒ non-bare ⇒
 # the whole bare-accommodation is skipped, so `git worktree add` runs natively with NO
@@ -259,7 +259,7 @@ set +e; ensure_bare_config >"$TMP/ebc.out" 2>&1; EBC_RC=$?; set -e
 GIT_ROOT="$_SAVED_GIT_ROOT"
 assert_eq "0" "$EBC_RC" "ensure_bare_config returns 0 (no-op) on a non-bare repo"
 assert_eq "__ABSENT__" "$(git config --file "$WS12/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
-  "extensions.worktreeConfig NOT set on the non-bare repo (the #4826 regression is gone)"
+  "extensions.worktreeConfig NOT set on the non-bare repo (the #6184 regression is gone)"
 if git config --file "$WS12/.git/config" --get core.repositoryformatversion 2>/dev/null | grep -qx 1; then
   echo "  FAIL: repositoryformatversion bumped to 1 on a non-bare repo"; FAIL=$((FAIL + 1))
 else
@@ -267,7 +267,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-echo "Test 13: #4826 round-5 — guard STILL fires on a normal repo when GIT_ROOT is EMPTY"
+echo "Test 13: #6184 round-5 — guard STILL fires on a normal repo when GIT_ROOT is EMPTY"
 # The round-4 guard was `[[ -d "\$GIT_ROOT/.git" ]]` alone. In the live sandbox GIT_ROOT
 # resolved EMPTY (git rev-parse --show-toplevel returned nothing under the masked config),
 # so the check became `[[ -d "/.git" ]]` → false → the guard did NOT fire and the surgery

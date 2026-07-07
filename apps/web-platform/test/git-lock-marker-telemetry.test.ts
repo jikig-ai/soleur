@@ -1,4 +1,4 @@
-// Unit tests for the git-lock marker telemetry hook (#4826 observability follow-up):
+// Unit tests for the git-lock marker telemetry hook (#6184 observability follow-up):
 // the pure extractor, tool_response coercion, and the PostToolUse hook's fail-open
 // classification (wedge → error, diag-only → warn, non-Bash → no-op).
 import { describe, test, expect } from "vitest";
