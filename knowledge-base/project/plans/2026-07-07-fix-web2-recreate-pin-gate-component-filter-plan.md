@@ -9,6 +9,19 @@ lane: procedural
 
 # fix(infra): web-2-recreate pin-gate reads deploy-status `.tag`, which a non-web writer wedges
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-07
+**Passed halt gates:** 4.6 User-Brand Impact, 4.7 Observability, 4.8 PAT-shaped (clean), 4.9 UI-wireframe (n/a).
+**Live verifications (this deepen pass):**
+
+- **`app.soleur.ai/health` probed live** → `{"version":"0.200.2", …}` — public, **no CF-Access**, `.version` is a **bare semver** present in the payload. Confirms the whole approach works against production *now*: `curl -sf app/health | jq -r '.version'` → `0.200.2` → `v0.200.2` passes the strict gate.
+- **Resolver semver primitive exercised** against all 4 AC fixtures: `1.2.3`→`v1.2.3` ACCEPT; `""`/`dev`/`1.2.3-rc1`/`latest`→REJECT. Matches ACs verbatim.
+- **Cited refs resolved live:** `#6090` OPEN, `#6147` OPEN, `#6136` MERGED ("bake GHCR read-creds…"). All match plan claims.
+- **Plan-review convergence (DHH + code-simplicity + SpecFlow)** promoted the pure-`/health` approach over the issue's component-filter sketch; recorded as a User-Challenge in `decision-challenges.md`.
+
+**Key improvements over the first draft:** switched from a component-filter+fallback hybrid to pure `/health` resolution (ADR-079 #5955); resolved SpecFlow Gap 5 (host-targeting) via the `dns.tf:13` web-1 hard-pin invariant; collapsed 5 branches → 1 read + strict validate; simplified the fixture set to 4 semver cases.
+
 ## Overview
 
 The `web_2_recreate` job in `.github/workflows/apply-web-platform-infra.yml` resolves web-1's
@@ -116,6 +129,26 @@ at `:848`/`:1193`), whose test uses injectable seams. Follow that precedent (DHH
 extracted script + fixture test gives cheap regression protection on the semver guard and matches
 the sibling precedent; kept as primary. Plan-review may collapse to inline.)*
 
+### Precedent diff (deepen 4.4)
+
+The `/health` resolution is not novel — it mirrors `apply-deploy-pipeline-fix.yml:599-608` verbatim.
+Side-by-side (adopt the precedent's form exactly, only the retry-loop wrapper differs):
+
+```bash
+# PRECEDENT (apply-deploy-pipeline-fix.yml:599-608) — CTO-blessed #5955 pattern:
+HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
+RUNNING_VERSION=$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")
+TARGET_TAG="v${RUNNING_VERSION}"
+[[ "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::…"; exit 1; }
+
+# THIS PLAN — identical curl+jq+regex; only difference: wrap in the pin step's bounded retry loop
+# and hand RUNNING_VERSION to resolve-web1-known-good-tag.sh for testability.
+```
+
+**CLI-form verified live (2026-07-07):** `curl -sf https://app.soleur.ai/health | jq -r '.version'`
+→ `0.200.2` (public, no CF-Access); the strict regex accepts `v0.200.2` and rejects
+`""`/`dev`/`1.2.3-rc1`/`latest`. No fabricated tokens; the exact form is proven against production.
+
 ## SpecFlow Findings & Resolutions
 
 The SpecFlow pass audited the *hybrid* (component-filter + fallback) draft and found flow gaps.
@@ -149,6 +182,16 @@ fold in) — different purpose (fanout accept-check, not tag-pin); folding it in
 with different semantics into the diff. If plan-review judges the sweep cheap it may be promoted;
 otherwise a one-line follow-up note on #6147 tracks it. (Note: this reader's `.tag` need is also a
 last-ATTEMPT-tag read and could likewise move to `/health` in a follow-up.)
+
+## Downtime & Cutover
+
+**No new downtime-inducing operation is introduced.** This change edits only the pin-gate *read*
+step that runs **before** the pre-existing `-replace` in `web_2_recreate`; it does not alter the
+recreate's cutover semantics. web-1 (the sole serving surface — `dns.tf:13`) is only **read** via
+its public `/health`; it is never touched. web-2's blue-green recreate (born fresh into the
+placement group, then the old instance retired — per the #5274/#5887 zero-downtime cutover) is
+pre-existing and unchanged. The gate's failure mode remains **abort-before-`-replace`**, so a
+broken fix cannot take any serving surface offline.
 
 ## User-Brand Impact
 
