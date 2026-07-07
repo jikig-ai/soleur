@@ -155,6 +155,7 @@ export function RoutinesSurface() {
           role="tab"
           aria-selected={tab === "draft"}
           onClick={() => setTab("draft")}
+          data-tour-id="action:draft-routine"
           className={`-mb-px ml-auto self-center border-b-2 pb-2 text-sm ${
             tab === "draft"
               ? "border-soleur-text-primary text-soleur-text-primary"

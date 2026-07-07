@@ -1,46 +1,76 @@
 // feat-guided-tour — static step list. Pure data (no "use client").
 //
-// Each nav step's `target` is the `data-tour-id` value on the sidebar <Link>
-// (which equals the nav item's href — see app/(dashboard)/layout.tsx). The
-// Welcome step has no target (centered card, no spotlight cutout).
+// Two kinds of step:
+//   • Nav/landing steps whose `target` is a sidebar <Link>'s `data-tour-id`
+//     (equals the nav href — see app/(dashboard)/layout.tsx). These exist on
+//     every dashboard route, so they need no `route`.
+//   • Action steps that spotlight an in-page control (e.g. "start a conversation").
+//     Those controls only mount on their own route, so the step carries a
+//     `route` — TourProvider navigates there first, and the overlay polls for the
+//     `data-tour-id` target to mount before drawing the spotlight (falls back to a
+//     centered card if it never appears). Anchors are `action:<name>` data-tour-ids
+//     added at each control's render site.
+// The Welcome (first) and closing (last) steps have no target → centered card.
 
 export interface TourStep {
   /** `data-tour-id` selector value, or null for a centered (no-spotlight) card. */
   target: string | null;
   title: string;
   body: string;
+  /**
+   * Route to client-navigate to before this step is shown. Omit to stay on the
+   * current page (nav-link targets are present everywhere). The overlay waits for
+   * `target` to mount after navigation.
+   */
+  route?: string;
 }
 
 export const TOUR_STEPS: readonly TourStep[] = [
   {
     target: null,
     title: "Welcome to Soleur",
-    body: "Take a 60-second tour — we'll point out the six places you'll spend your time.",
+    body: "Take a 60-second tour — we'll stop at each tab and point out the one thing you do there.",
   },
   {
-    target: "/dashboard",
-    title: "Dashboard",
-    body: "Your home base — a live overview of what your organization is building and what needs your attention right now.",
+    target: "action:new-conversation",
+    route: "/dashboard",
+    title: "Start a conversation",
+    body: "The Dashboard is your home base. Tell your agents what you're building — type here and hit send to kick off a conversation.",
   },
   {
-    target: "/dashboard/inbox",
-    title: "Inbox",
-    body: "Email and signals from the outside world land here, triaged so nothing important slips past you.",
+    target: "action:inbox-triage",
+    route: "/dashboard/inbox",
+    title: "Triage your Inbox",
+    body: "Email and signals from the outside world land here, already triaged. Open a row to act on it, or mark it done to clear it.",
   },
   {
-    target: "/dashboard/workstream",
-    title: "Workstream",
-    body: "Track the work in flight — the conversations and tasks your agents are actively moving forward.",
+    target: "action:new-issue",
+    route: "/dashboard/workstream",
+    title: "Hand off work",
+    body: "Workstream tracks the work in flight. Hit “+ New Issue” to hand your agents something to move forward.",
   },
   {
-    target: "/dashboard/kb",
-    title: "Knowledge Base",
-    body: "Your organization's shared memory: vision, docs, and context every agent draws on to act on your behalf.",
+    target: "action:kb-tree",
+    route: "/dashboard/kb",
+    title: "Feed the Knowledge Base",
+    body: "Your organization's shared memory. Browse the tree and drop in docs and context every agent draws on to act for you.",
   },
   {
-    target: "/dashboard/routines",
-    title: "Routines",
-    body: "Schedule recurring agent work so the things that should happen every day, week, or month just happen.",
+    target: "action:draft-routine",
+    route: "/dashboard/routines",
+    title: "Automate the recurring",
+    body: "Routines make things happen on a schedule. Draft one with Concierge to run agent work every day, week, or month.",
+  },
+  {
+    target: "/dashboard/settings",
+    title: "Manage your workspace",
+    body: "Settings is where you handle your account, team, billing, and the services your agents connect to.",
+  },
+  {
+    target: null,
+    route: "/dashboard",
+    title: "You're all set",
+    body: "That's the tour. You can relaunch it anytime from the “?” menu or the support panel.",
   },
 ] as const;
 
