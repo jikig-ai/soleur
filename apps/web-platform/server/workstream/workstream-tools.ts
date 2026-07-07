@@ -41,8 +41,8 @@ export function buildWorkstreamTools(opts: BuildWorkstreamToolsOpts) {
         "List the Workstream board issues (the kanban the user sees) for the " +
           "active workspace's connected GitHub repo. Returns { issues: [...] }; " +
           "each entry carries: id (the repo issue number as a string, e.g. " +
-          "'5652'), title, description, status (backlog|todo|in_progress|" +
-          "in_review|blocked|done|cancelled), priority (urgent|high|medium|low|" +
+          "'5652'), title, description, status (backlog|ready|in_progress|" +
+          "in_review|blocked|pending|done), priority (urgent|high|medium|low|" +
           "none), assigneeRole (a leader role id like 'cto'/'coo', or null), an " +
           "optional `user` (the first assignee: { name, initials }), an optional " +
           "`live` flag, and createdAt/updatedAt. Empty when no repo is " +
