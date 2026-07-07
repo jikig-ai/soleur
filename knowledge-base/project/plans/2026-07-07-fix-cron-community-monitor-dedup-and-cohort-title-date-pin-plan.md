@@ -335,49 +335,49 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (Part 1 removal, all 3 literals)** — `cron-community-monitor.ts` contains **none** of
+- [x] **AC1 (Part 1 removal, all 3 literals)** — `cron-community-monitor.ts` contains **none** of
       `DEDUP RULE`, `within the last 24 hours`, `post your findings as a comment on the most recent
       existing issue`. Verify:
       `grep -cE 'DEDUP RULE|within the last 24 hours|post your findings as a comment on the most recent existing issue' apps/web-platform/server/inngest/functions/cron-community-monitor.ts` → `0`.
       (Whole-file grep is the correct gate — it fails unless `:45` + `:229–234` + the `:325` comment
       are all scrubbed. Scope to this ONE file; `_cron-shared.ts` legitimately still contains "DEDUP RULE".)
-- [ ] **AC2 (Part 1 regression guard)** — `cron-community-monitor.test.ts` has a describe block asserting
+- [x] **AC2 (Part 1 regression guard)** — `cron-community-monitor.test.ts` has a describe block asserting
       `SUT_SOURCE.not.toContain` for each of the three removed strings, and still asserts the prefix
       anchor `"[Scheduled] Community Monitor"` (no trailing dash) is present.
-- [ ] **AC3 (Part 1 code-level dedup intact)** — the `dedup-digest-check` step +
+- [x] **AC3 (Part 1 code-level dedup intact)** — the `dedup-digest-check` step +
       `digestIssueExistsForDate({ …, date: runStartedAt.slice(0,10) })` are unchanged.
       Verify: `grep -c 'dedup-digest-check' apps/web-platform/server/inngest/functions/cron-community-monitor.ts` → `≥1`.
-- [ ] **AC4 (Part 1 concurrency race-closer)** — community-monitor registration still carries
+- [x] **AC4 (Part 1 concurrency race-closer)** — community-monitor registration still carries
       `{ scope: "fn", limit: 1 }` (now the sole same-day TOCTOU guard). Assert the anchor in
       `cron-community-monitor.test.ts` (mirror `cron-roadmap-review.test.ts:152`).
-- [ ] **AC5 (Part 1 coupling — filter KEPT + citation + invariant)** — `_cron-shared.ts:680–688` now
+- [x] **AC5 (Part 1 coupling — filter KEPT + citation + invariant)** — `_cron-shared.ts:680–688` now
       cites campaign-calendar via the stable `counts via updated_at` marker; the `since`/`updated_at`
       filter body (`:715–733`) is unchanged; `cron-shared.test.ts`'s dedup-comment test uses fixture
       label `scheduled-campaign-calendar` and asserts `true`; and a new assertion confirms
       `cron-campaign-calendar.ts` source still contains `Do NOT create a new issue`.
-- [ ] **AC6 (Part 2 injector)** — `injectRunDate("a {{RUN_DATE}} b {{RUN_DATE}}", "2026-07-07T23:59:00Z")`
+- [x] **AC6 (Part 2 injector)** — `injectRunDate("a {{RUN_DATE}} b {{RUN_DATE}}", "2026-07-07T23:59:00Z")`
       === `"a 2026-07-07 b 2026-07-07"` with no residual sentinel, AND `injectRunDate` **throws** on a
       prompt lacking `{{RUN_DATE}}` (cron-cohort-title-date-pin.test.ts).
-- [ ] **AC7 (Part 2 cohort completeness, discovery-based)** — the discovery-based drift-guard asserts
+- [x] **AC7 (Part 2 cohort completeness, discovery-based)** — the discovery-based drift-guard asserts
       **every** `cron-*.ts` whose source contains `digestIssueExistsForDate` also contains `{{RUN_DATE}}`
       AND `injectRunDate(`. (Cross-check today: three `git grep -l` sets — `digestIssueExistsForDate`,
       `{{RUN_DATE}}`, `injectRunDate(` over `cron-*.ts` — are byte-equal and count 9; `_cron-shared.ts`
       is excluded by the `cron-*.ts` glob.)
-- [ ] **AC8 (Part 2 campaign-calendar canary)** — for `runStartedAt` `2026-07-07T…`,
+- [x] **AC8 (Part 2 campaign-calendar canary)** — for `runStartedAt` `2026-07-07T…`,
       `injectRunDate(CAMPAIGN_CALENDAR_PROMPT, …)` yields the substring
       `[Scheduled] Campaign Calendar - 2026-07-07 (heartbeat)`, equal to `${titlePrefix} ${date}${titleSuffix}`
       with `titleSuffix " (heartbeat)"` (assert in the pin test).
-- [ ] **AC9 (Part 2 secondary dates untouched)** — the sentinel did not leak into non-title dates:
+- [x] **AC9 (Part 2 secondary dates untouched)** — the sentinel did not leak into non-title dates:
       `cron-community-monitor.ts` still contains `YYYY-MM-DD-digest.md`; `cron-content-generator.ts`
       still contains `publish_date: <today>`; `cron-growth-audit.ts` still contains `<today>-content-audit.md`.
-- [ ] **AC10 (Part 2 arch-sync reconciliation)** — `cron-architecture-diagram-sync.ts`'s `:87`-style
+- [x] **AC10 (Part 2 arch-sync reconciliation)** — `cron-architecture-diagram-sync.ts`'s `:87`-style
       "use `<today>` throughout" instruction no longer applies to the issue title (title is pinned/authoritative).
-- [ ] **AC11** — targeted suite green:
+- [x] **AC11** — targeted suite green:
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-community-monitor.test.ts test/server/inngest/cron-community-monitor-dedup.test.ts test/server/inngest/cron-community-monitor-heartbeat.test.ts test/server/inngest/cron-shared.test.ts test/server/inngest/cron-cohort-dedup.test.ts test/server/inngest/cron-cohort-title-date-pin.test.ts test/server/inngest/cron-roadmap-review.test.ts`.
       (The behavioral `cron-cohort-dedup.test.ts` is a **no-regression sanity run**, not coverage of
       this PR — its mocks ignore prompt text; AC6/AC7/AC8 are the load-bearing Part-2 gates.)
-- [ ] **AC12** — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
-- [ ] **AC13 (scope guard)** — `git diff --name-only` lists only the 9 cron `.ts` files, `_cron-shared.ts`,
+- [x] **AC12** — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
+- [x] **AC13 (scope guard)** — `git diff --name-only` lists only the 9 cron `.ts` files, `_cron-shared.ts`,
       and files under `apps/web-platform/test/server/inngest/`. No cron schedule/allowlist/token or
       Sentry Terraform file modified.
 
