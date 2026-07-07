@@ -134,11 +134,13 @@ describe("TourProvider", () => {
     onb.tourCompletedAt = "x"; // suppress auto-start; drive manually
     renderProvider();
     fireEvent.click(screen.getByText("start")); // step 0 Welcome (no route)
+    // Steps 1-3 (Dashboard tab, Start a conversation, org-panel) all route to
+    // /dashboard, which equals the current pathname → no navigation.
+    fireEvent.click(screen.getByText("next")); // step 1 Dashboard tab
+    fireEvent.click(screen.getByText("next")); // step 2 start a conversation
+    fireEvent.click(screen.getByText("next")); // step 3 org-panel
     expect(routerPush).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText("next")); // step 1 → /dashboard (== pathname, no push)
-    fireEvent.click(screen.getByText("next")); // step 2 org-panel → /dashboard (== pathname, no push)
-    expect(routerPush).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText("next")); // step 3 → /dashboard/inbox
+    fireEvent.click(screen.getByText("next")); // step 4 Inbox tab → /dashboard/inbox
     expect(routerPush).toHaveBeenCalledWith("/dashboard/inbox");
   });
 

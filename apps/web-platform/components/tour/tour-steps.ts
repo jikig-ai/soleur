@@ -1,16 +1,14 @@
 // feat-guided-tour — static step list. Pure data (no "use client").
 //
-// Two kinds of step:
-//   • Nav/landing steps whose `target` is a sidebar <Link>'s `data-tour-id`
-//     (equals the nav href — see app/(dashboard)/layout.tsx). These exist on
-//     every dashboard route, so they need no `route`.
-//   • Action steps that spotlight an in-page control (e.g. "start a conversation").
-//     Those controls only mount on their own route, so the step carries a
-//     `route` — TourProvider navigates there first, and the overlay polls for the
-//     `data-tour-id` target to mount before drawing the spotlight (falls back to a
-//     centered card if it never appears). Anchors are `action:<name>` data-tour-ids
-//     added at each control's render site.
-// The Welcome (first) and closing (last) steps have no target → centered card.
+// Each section is taught in TWO steps: first its SIDEBAR TAB (target = the nav
+// <Link>'s `data-tour-id`, which equals its href — see app/(dashboard)/layout.tsx),
+// then the primary IN-PAGE ACTION on that section (target = an `action:<name>`
+// anchor at the control's render site). Both carry the section's `route` so
+// TourProvider navigates there — the tab step highlights the now-active sidebar
+// tab, the action step then spotlights the control. The overlay polls for the
+// `data-tour-id` target to mount after navigation (centered-card fallback if it
+// never appears, e.g. an empty/loading surface). Releases and Settings are
+// tab-only (no in-page action). Welcome (first) + closing (last) have no target.
 
 export interface TourStep {
   /** `data-tour-id` selector value, or null for a centered (no-spotlight) card. */
@@ -18,9 +16,8 @@ export interface TourStep {
   title: string;
   body: string;
   /**
-   * Route to client-navigate to before this step is shown. Omit to stay on the
-   * current page (nav-link targets are present everywhere). The overlay waits for
-   * `target` to mount after navigation.
+   * Route to client-navigate to before this step is shown. The overlay waits for
+   * `target` to mount after navigation. Omit only for the centered Welcome step.
    */
   route?: string;
 }
@@ -29,13 +26,21 @@ export const TOUR_STEPS: readonly TourStep[] = [
   {
     target: null,
     title: "Welcome to Soleur",
-    body: "Take a 60-second tour — we'll stop at each tab and point out the one thing you do there.",
+    body: "Take a quick tour — for each section we'll show you the sidebar tab that opens it, then the one thing you do there.",
+  },
+
+  // ── Dashboard ──────────────────────────────────────────────────────────────
+  {
+    target: "/dashboard",
+    route: "/dashboard",
+    title: "Your sidebar",
+    body: "The sidebar on the left is how you move around — click any tab to switch sections. This one is your Dashboard: home base.",
   },
   {
     target: "action:new-conversation",
     route: "/dashboard",
     title: "Start a conversation",
-    body: "The Dashboard is your home base. Tell your agents what you're building — type here and hit send to kick off a conversation.",
+    body: "Tell your agents what you're building — type here and hit send to kick off a conversation.",
   },
   {
     target: "action:org-panel",
@@ -43,40 +48,77 @@ export const TOUR_STEPS: readonly TourStep[] = [
     title: "Meet your organization",
     body: "These are your agents — CTO, CFO, CPO, CRO and more. Click any leader to talk to them directly and hand off work by function.",
   },
+
+  // ── Inbox ───────────────────────────────────────────────────────────────────
+  {
+    target: "/dashboard/inbox",
+    route: "/dashboard/inbox",
+    title: "Open your Inbox",
+    body: "Click the Inbox tab to jump here — email and signals from the outside world, already triaged.",
+  },
   {
     target: "action:inbox-triage",
     route: "/dashboard/inbox",
     title: "Triage your Inbox",
-    body: "Email and signals from the outside world land here, already triaged. Open a row to act on it, or mark it done to clear it.",
+    body: "Open a row to act on it, or mark it done to clear it. Nothing important slips past you.",
+  },
+
+  // ── Workstream ───────────────────────────────────────────────────────────────
+  {
+    target: "/dashboard/workstream",
+    route: "/dashboard/workstream",
+    title: "Open Workstream",
+    body: "Click the Workstream tab to track the work in flight — everything your agents are moving forward.",
   },
   {
     target: "action:new-issue",
     route: "/dashboard/workstream",
     title: "Hand off work",
-    body: "Workstream tracks the work in flight. Hit “+ New Issue” to hand your agents something to move forward.",
+    body: "Hit “+ New Issue” to hand your agents something to move forward.",
+  },
+
+  // ── Knowledge Base ────────────────────────────────────────────────────────────
+  {
+    target: "/dashboard/kb",
+    route: "/dashboard/kb",
+    title: "Open the Knowledge Base",
+    body: "Click the Knowledge Base tab to reach your organization's shared memory.",
   },
   {
     target: "action:kb-tree",
     route: "/dashboard/kb",
     title: "Feed the Knowledge Base",
-    body: "Your organization's shared memory. Browse the tree and drop in docs and context every agent draws on to act for you.",
+    body: "Browse the tree and drop in docs and context every agent draws on to act for you.",
+  },
+
+  // ── Routines ──────────────────────────────────────────────────────────────────
+  {
+    target: "/dashboard/routines",
+    route: "/dashboard/routines",
+    title: "Open Routines",
+    body: "Click the Routines tab to set up recurring agent work.",
   },
   {
     target: "action:draft-routine",
     route: "/dashboard/routines",
     title: "Automate the recurring",
-    body: "Routines make things happen on a schedule. Draft one with Concierge to run agent work every day, week, or month.",
+    body: "Draft a routine with Concierge to run agent work every day, week, or month.",
   },
+
+  // ── Releases + Settings (tab-only) ────────────────────────────────────────────
   {
     target: "/dashboard/releases",
+    route: "/dashboard/releases",
     title: "Keep up with Releases",
-    body: "New features and fixes land here — a running feed of what's changed in Soleur.",
+    body: "Click the Releases tab for a running feed of new features and fixes in Soleur.",
   },
   {
     target: "/dashboard/settings",
+    route: "/dashboard/settings",
     title: "Manage your workspace",
-    body: "Settings is where you handle your account, team, billing, and the services your agents connect to.",
+    body: "Click the Settings tab to handle your account, team, billing, and the services your agents connect to.",
   },
+
   {
     target: null,
     route: "/dashboard",
