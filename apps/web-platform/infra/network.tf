@@ -60,7 +60,7 @@ resource "hcloud_server_network" "registry" {
   ip        = "10.0.1.30"
 }
 
-# #6178 (ADR-098) — attach the dedicated Inngest singleton host at a stable private
+# #6178 (ADR-100) — attach the dedicated Inngest singleton host at a stable private
 # IP. web backends reach it over the private net for /api/inngest registration; the
 # host reaches each web backend's private interface via a single stable --sdk-url
 # (inngest-host.tf local.web_host_private_ips). Same ADDITIVE online-attach shape as
@@ -68,5 +68,6 @@ resource "hcloud_server_network" "registry" {
 resource "hcloud_server_network" "inngest" {
   server_id = hcloud_server.inngest.id
   subnet_id = hcloud_network_subnet.private.id
-  ip        = "10.0.1.40"
+  # single-sourced from inngest-host.tf local (was a dead local + a hardcoded copy; #6180 review).
+  ip = local.inngest_private_ip
 }

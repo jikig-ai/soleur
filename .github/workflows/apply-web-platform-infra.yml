@@ -1330,7 +1330,7 @@ jobs:
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # #6178 (ADR-098) — provision the dedicated Inngest singleton host. A dispatch-only job
+  # #6178 (ADR-100) — provision the dedicated Inngest singleton host. A dispatch-only job
   # (apply_target=inngest-host) whose -targets are STRIPPED from the per-merge coverage set
   # (terraform-target-parity.test.ts stripDispatchJobs). PURE CREATE of the net-new host set:
   # the per-PR CI apply bridges over SSH to the EXISTING web host and cannot provision a brand-
@@ -1420,10 +1420,10 @@ jobs:
               -target='random_id.inngest_event_key_dedicated' \
               -target='random_password.inngest_redis_password_dedicated' \
               -target='doppler_project.inngest' \
+              -target='doppler_environment.inngest_prd' \
               -target='doppler_secret.inngest_signing_key_dedicated' \
               -target='doppler_secret.inngest_event_key_dedicated' \
               -target='doppler_secret.inngest_redis_password_dedicated' \
-              -target='doppler_secret.inngest_heartbeat_url_dedicated' \
               -target='doppler_service_token.inngest'
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -1465,7 +1465,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           {
-            echo "## inngest-host provisioning (ADR-098, #6178)"
+            echo "## inngest-host provisioning (ADR-100, #6178)"
             echo ""
             echo "**Dispatch reason:** ${REASON:-n/a}"
             echo "**Status:** ${JOB_STATUS}"

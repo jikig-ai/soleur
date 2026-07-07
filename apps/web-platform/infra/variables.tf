@@ -126,11 +126,19 @@ variable "git_data_luks_volume_size" {
   default     = 10
 }
 
-# --- #6178 (ADR-098) — the dedicated single-host Inngest singleton scheduler ---
+# --- #6178 (ADR-100) — the dedicated single-host Inngest singleton scheduler ---
 variable "inngest_server_type" {
   description = "Hetzner server type for the dedicated Inngest host (cax11 = 2 vCPU ARM64/Ampere, 4GB RAM). ARM64: Inngest is a SINGLETON control-plane SCHEDULER (not throughput-bound) — a cron dispatcher on host-local Redis, so a small ARM box is ample; the inngest CLI pull must be the arm64 build. Verify current Hetzner pricing before budget decisions (~€4/mo CAX11 + volume — recorded via ops-advisor)."
   type        = string
   default     = "cax11"
+
+  # #6178 review (#6180): the cloud-init hardcodes INNGEST_CLI_ARCH=arm64, so the host MUST be
+  # an Ampere ARM64 (cax*) type. An override to a cx*/ccx*/cpx* (Intel/AMD) type would download
+  # the arm64 tarball onto an amd64 host and BRICK the sole scheduler at boot with no other guard.
+  validation {
+    condition     = can(regex("^cax", var.inngest_server_type))
+    error_message = "inngest_server_type must be an ARM64 Ampere type (cax*); the host's inngest CLI is pinned to the arm64 build."
+  }
 }
 
 variable "inngest_redis_volume_size" {

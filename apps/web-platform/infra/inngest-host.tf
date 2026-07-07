@@ -1,4 +1,4 @@
-# #6178 (ADR-098) — the dedicated single-host Inngest singleton control plane.
+# #6178 (ADR-100) — the dedicated single-host Inngest singleton control plane.
 #
 # One dedicated Hetzner host running the self-hosted OSS Inngest server
 # (`inngest start`, pinned v1.19.4) as a systemd unit with host-local Redis (AOF
@@ -6,7 +6,7 @@
 # private network (network.tf) at 10.0.1.40. EXTRACTED from the co-located web
 # host so exactly-one-instance is enforced by TOPOLOGY, not a runtime role-guard:
 # OSS Inngest v1.x is single-writer and two servers on the same prod Postgres
-# double-fire every cron (ADR-098 Context). This host is the prerequisite that
+# double-fire every cron (ADR-100 Context). This host is the prerequisite that
 # unblocks active-active web (web-2 pooled, #6178 / #6185).
 #
 # STRUCTURAL PRECEDENT: zot-registry.tf (ADR-096) / git-data.tf (ADR-068), NOT the
@@ -26,7 +26,7 @@
 # backend (INNGEST_POSTGRES_URI, set OUT-OF-BAND into this project's prd config — see
 # the doppler_secret block below) with an empty function registry, so it fires ZERO
 # prod crons at boot. Dark→live is a Phase-2 operator Postgres flip gated behind a
-# Redis FLUSHALL + DBSIZE==0 assertion (ADR-098 Decision 6). No window at provision.
+# Redis FLUSHALL + DBSIZE==0 assertion (ADR-100 Decision 6). No window at provision.
 
 locals {
   # Fresh private IP in 10.0.1.0/24 — web = .10/.11, git-data = .20, registry = .30.
@@ -79,7 +79,20 @@ resource "random_password" "inngest_redis_password_dedicated" {
 # `prd`), TF then managing only the secrets + token inside it.
 resource "doppler_project" "inngest" {
   name        = "soleur-inngest"
-  description = "Isolated boot-credential project for the dedicated single-host Inngest singleton (#6178, ADR-098) — its `prd` root config holds ONLY the inngest secret set (signing/event keys, Redis password, and the out-of-band Postgres URI); cross-project isolation from soleur/prd (no shared root-secret resolution path, unlike a `prd` branch config; #6122 precedent)."
+  description = "Isolated boot-credential project for the dedicated single-host Inngest singleton (#6178, ADR-100) — its `prd` root config holds ONLY the inngest secret set (signing/event keys, Redis password, and the out-of-band Postgres URI); cross-project isolation from soleur/prd (no shared root-secret resolution path, unlike a `prd` branch config; #6122 precedent)."
+}
+
+# A TF-created doppler_project is created BARE — no default dev/stg/prd configs that the
+# Doppler CLI/dashboard would auto-add — so without this the secrets below fail at apply with
+# "Doppler Error: Could not find requested config 'prd'". Creating the environment also creates
+# its same-named ROOT config, which is the isolation boundary the host boot token resolves.
+# Mirrors doppler_environment.registry_prd (zot-registry.tf, #6189/f0241a2bc — added AFTER this
+# branch's merge-base, so the initial 1:1 mirror dropped it). Basic Project-Structure resource,
+# NOT a branch config (needs no paid config-inheritance feature).
+resource "doppler_environment" "inngest_prd" {
+  project = doppler_project.inngest.name
+  slug    = "prd"
+  name    = "Production"
 }
 
 # TF owns these three values → NO ignore_changes (mirrors zot_*_token_registry, NOT the
@@ -87,7 +100,7 @@ resource "doppler_project" "inngest" {
 # `terraform apply -replace=random_id.inngest_signing_key_dedicated` (etc.).
 resource "doppler_secret" "inngest_signing_key_dedicated" {
   project    = doppler_project.inngest.name
-  config     = "prd"
+  config     = doppler_environment.inngest_prd.slug
   name       = "INNGEST_SIGNING_KEY"
   value      = "signkey-prod-${random_id.inngest_signing_key_dedicated.hex}"
   visibility = "masked"
@@ -95,7 +108,7 @@ resource "doppler_secret" "inngest_signing_key_dedicated" {
 
 resource "doppler_secret" "inngest_event_key_dedicated" {
   project    = doppler_project.inngest.name
-  config     = "prd"
+  config     = doppler_environment.inngest_prd.slug
   name       = "INNGEST_EVENT_KEY"
   value      = random_id.inngest_event_key_dedicated.hex
   visibility = "masked"
@@ -103,27 +116,27 @@ resource "doppler_secret" "inngest_event_key_dedicated" {
 
 resource "doppler_secret" "inngest_redis_password_dedicated" {
   project    = doppler_project.inngest.name
-  config     = "prd"
+  config     = doppler_environment.inngest_prd.slug
   name       = "INNGEST_REDIS_PASSWORD"
   value      = random_password.inngest_redis_password_dedicated.result
   visibility = "masked"
 }
 
-# The dedicated host's heartbeat unit (inngest-bootstrap.sh, doppler-wrapped against THIS
-# project) reads INNGEST_HEARTBEAT_URL from here — full isolation means every secret the
-# host's units resolve lives in soleur-inngest, not soleur/prd. Value is the REUSED
-# betteruptime_heartbeat.inngest_prd URL (the pusher just moves to the dedicated host; same
-# TF-clean source as the co-located inngest.tf:323). TF owns it → no ignore_changes.
-# (Vector's BETTERSTACK_LOGS_TOKEN is NOT provisioned here — the Vector observability shipper
-# is deferred on this arm64 host to a follow-up; see cloud-init-inngest.yml Vector-defer note.)
-resource "doppler_secret" "inngest_heartbeat_url_dedicated" {
-  project    = doppler_project.inngest.name
-  config     = "prd"
-  name       = "INNGEST_HEARTBEAT_URL"
-  value      = betteruptime_heartbeat.inngest_prd.url
-  visibility = "masked"
-}
-
+# INNGEST_HEARTBEAT_URL is provisioned OUT-OF-BAND at CUTOVER, NOT a TF resource — a
+# deliberate correctness choice (review #6180, data-integrity + user-impact concurred).
+# The plan REUSES betteruptime_heartbeat.inngest_prd (don't mint a new monitor); but TF-
+# provisioning its URL into soleur-inngest at DARK provision would make the dedicated host's
+# heartbeat timer push the SAME prod monitor the still-serving co-located scheduler pushes
+# — so during the (multi-day) provision→cutover window a co-located outage would be MASKED
+# GREEN by the dark host's ping. So the operator sets INNGEST_HEARTBEAT_URL (=
+# betteruptime_heartbeat.inngest_prd.url) into the soleur-inngest prd config only AT cutover
+# (Phase 2.x), when the dedicated host BECOMES the sole scheduler and the co-located pusher
+# is quiesced — one unambiguous pusher per monitor at all times. Set via `doppler secrets
+# set INNGEST_HEARTBEAT_URL` on the soleur-inngest prd config (stdin). During dark the URL is
+# absent → the dark host's heartbeat curl no-ops (no false-green). Accepted minor gap: the
+# dark host has no liveness push during dark (a dark, inert host bricking is surfaced at the
+# Phase-2 pre-flight registry-empty check, not by continuous monitoring). Same out-of-band
+# doctrine as INNGEST_POSTGRES_URI below.
 # ---------------------------------------------------------------------------------------
 # INNGEST_POSTGRES_URI — provisioned OUT-OF-BAND into THIS project's `prd` config, NOT a
 # TF resource (mirrors the co-located inngest.tf:170-194 out-of-band doctrine + the
@@ -135,7 +148,7 @@ resource "doppler_secret" "inngest_heartbeat_url_dedicated" {
 # AC-DARK: at provision this points at a DISTINCT NON-PROD Postgres backend (a fresh empty
 # database firing ZERO prod crons). It is flipped to the prod inngest Postgres ONLY at the
 # Phase-2 cutover (operator, maintenance window), immediately after a Redis FLUSHALL +
-# DBSIZE==0 assertion (ADR-098 Decision 6). Provision it BEFORE the host boots (else
+# DBSIZE==0 assertion (ADR-100 Decision 6). Provision it BEFORE the host boots (else
 # cold-boot bricks — plan 1.4/M4): set it via `doppler secrets set` on the soleur-inngest
 # prd config (stdin, never argv). Rotation: rotate the DB password in the Supabase dashboard
 # → re-set INNGEST_POSTGRES_URI in the soleur-inngest prd config.
@@ -147,7 +160,7 @@ resource "doppler_secret" "inngest_heartbeat_url_dedicated" {
 # via `terraform apply -replace=doppler_service_token.inngest`.
 resource "doppler_service_token" "inngest" {
   project = doppler_project.inngest.name
-  config  = "prd"
+  config  = doppler_environment.inngest_prd.slug
   name    = "inngest-boot"
   access  = "read"
 }
@@ -184,7 +197,7 @@ resource "hcloud_server" "inngest" {
     # minimal-blast-radius by construction).
     doppler_token = doppler_service_token.inngest.key
     # Single stable --sdk-url to the ACTIVE web backend's private interface (10.0.1.10).
-    # The degenerate no-flap case of the route-once mechanism (ADR-098 Decision 1); migrate
+    # The degenerate no-flap case of the route-once mechanism (ADR-100 Decision 1); migrate
     # to a private VIP when web-2 is pooled (Phase 4.2). Consumed by inngest-bootstrap.sh.
     sdk_url = "http://10.0.1.10:3000/api/inngest"
     # cax11 is ARM64 → the inngest CLI download must be the arm64 build (bootstrap consumes
@@ -204,7 +217,7 @@ resource "hcloud_server" "inngest" {
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
   # and omitting it preserves a clean replace-to-reprovision path (git-data.tf / zot-registry.tf
-  # rationale). CONSEQUENCE (ADR-098): this host is the SOLE scheduler, so every cloud-init edit
+  # rationale). CONSEQUENCE (ADR-100): this host is the SOLE scheduler, so every cloud-init edit
   # force-replaces it → a cron-outage window — gate all cloud-init edits to the maintenance-
   # window `apply_target=inngest-host` dispatch. The AOF volume is a SEPARATE resource that
   # survives the replace (verify re-attach on replace — git-data precedent).

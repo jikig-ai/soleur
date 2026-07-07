@@ -1,5 +1,5 @@
 ---
-adr: 098
+adr: 100
 title: Inngest as a dedicated single-host singleton control plane
 status: adopting
 date: 2026-07-07
@@ -11,7 +11,7 @@ related_adrs: [ADR-030, ADR-059, ADR-068, ADR-080, ADR-088, ADR-096]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-098: Inngest as a dedicated single-host singleton control plane
+# ADR-100: Inngest as a dedicated single-host singleton control plane
 
 > **Status `adopting`** until the Phase-4 soak (7 days, per-`(function_id, startedAt-bucket)`
 > exactly-once) verifies zero double-fire in prod. Flip `adopting → accepted` on soak success
@@ -147,9 +147,14 @@ a clean HA path (#6185).
 **Harder / accepted:** durable-trigger availability drops from potentially-2 to definitely-1 (SPOF
 — the single box down = zero crons fire until recovery; Postgres-durable state means delayed, not
 lost; redundancy deferred #6185). Every future `cloud-init-inngest.yml` change force-replaces the
-sole scheduler (no `ignore_changes[user_data]`) → a cron-outage window, gated to the
-maintenance-window dispatch; the AOF volume is a separate resource that survives the replace. The
-Phase-2 cutover carries a bounded, operator-signed-off residual window (quiesce-all → register).
+sole scheduler (no `ignore_changes[user_data]`) → a cron-outage window. **This force-replace runs
+via the operator's serialized full `terraform apply` (R2 concurrency group `terraform-apply-web-
+platform-host`), in a maintenance window — NOT the `apply_target=inngest-host` dispatch job, whose
+additive-only destroy-guard (0 resource_deletes) aborts on the `{delete,create}` a replace emits
+(the dispatch is initial-provision only). A scoped guarded `-replace` mode for the dispatch is a
+tracked follow-up if force-replaces become frequent.** The AOF volume is a separate resource that
+survives the replace. The Phase-2 cutover carries a bounded, operator-signed-off residual window
+(quiesce-all → register).
 
 **Blast radius (SEC-H3, documented not eliminated):** the signing key authorizes the entire ~60-
 function registry, several running in the web-app process with full prd env (GHCR token minter,
@@ -182,9 +187,17 @@ project + host-local Redis).
   non-isolating branch-config pattern (#6122 precedent).
 - **AP (no-SSH runbooks):** Aligned — remediation is via `apply_target=inngest-host` dispatch +
   the private-net inventory hook; no `ssh` in any new runbook (AC9).
-- **AP (fail-loud observability):** Aligned — heartbeat pushed FROM the inngest host; missed
-  heartbeat → Better Stack + P1; Vector journal → Sentry; the soak probe fail-closed via
-  Follow-Through Enrollment.
+- **AP (fail-loud observability):** Aligned at the LIVE (post-cutover) state — heartbeat pushed
+  FROM the inngest host, missed heartbeat → Better Stack + P1; the soak probe fail-closed via
+  Follow-Through Enrollment. **Phase-1 caveat (deferred, tracked):** the Vector journal→Sentry
+  shipper is DEFERRED on this cax11/ARM64 host (Vector's download URL is x86_64-hardcoded; its
+  BETTERSTACK_LOGS_TOKEN would need isolated-project provisioning), and the dark host does not push
+  the prod heartbeat during the dark window (out-of-band `INNGEST_HEARTBEAT_URL` set at cutover, to
+  avoid dual-pusher masking of the still-serving co-located scheduler — review #6180). So a DARK,
+  inert host that boot-bricks or errors is surfaced at the Phase-2 pre-flight registry-empty check,
+  not by continuous Sentry/heartbeat monitoring. Vector→Sentry + the dedicated-host heartbeat are
+  wired before the Phase-2 cutover (when this becomes the live scheduler) — the alignment claim
+  above holds from cutover onward.
 
 ## Diagram
 

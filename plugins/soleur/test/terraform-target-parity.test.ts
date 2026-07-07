@@ -566,7 +566,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "cloudflare_record.registry",
   "doppler_secret.registry_push_access_token_id",
   "doppler_secret.registry_push_access_token_secret",
-  // #6178 (ADR-098) — the dedicated Inngest singleton host. Same class as the registry/git-data
+  // #6178 (ADR-100) — the dedicated Inngest singleton host. Same class as the registry/git-data
   // hosts: net-new host resources the per-PR CI `-target` path CANNOT provision (it bridges over
   // SSH to the EXISTING web host). All applied by the operator's full apply + the
   // `apply_target=inngest-host` dispatch job (which stripDispatchJobs excludes from the coverage
@@ -584,10 +584,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "random_id.inngest_event_key_dedicated",
   "random_password.inngest_redis_password_dedicated",
   "doppler_project.inngest",
+  "doppler_environment.inngest_prd",
   "doppler_secret.inngest_signing_key_dedicated",
   "doppler_secret.inngest_event_key_dedicated",
   "doppler_secret.inngest_redis_password_dedicated",
-  "doppler_secret.inngest_heartbeat_url_dedicated",
   "doppler_service_token.inngest",
 ]);
 // Operator-applied doppler_service_token exceptions to the "every token is CI-targeted"
@@ -604,7 +604,7 @@ const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   // github_actions_secret). CI cannot apply it — no host to read it. Same class as
   // doppler_service_token.git_data.
   "doppler_service_token.registry",
-  // #6178 (ADR-098) — minted into the ISOLATED soleur-inngest project's `prd` root config
+  // #6178 (ADR-100) — minted into the ISOLATED soleur-inngest project's `prd` root config
   // (TF-created via doppler_project.inngest in the operator full apply), consumed by the inngest
   // host's cloud-init (NOT published to a CI github_actions_secret). CI cannot apply it — no host
   // to read it. Same class as doppler_service_token.git_data / .registry.

@@ -27,7 +27,7 @@ plan_review: 6-agent panel applied 2026-07-07 (shape=dedicated-host confirmed by
 4. **capture→quiesce double-fire** (dedup doesn't cross the backend switch) → capture-after-stop / subtract in-window fires (DI-H4).
 5. **The `hcloud_firewall.web` rule is a no-op** — intra-subnet is open by membership; signature-verify is the sole `/api/inngest` boundary; scope `:8288/:8289` via **host-local nftables** (SEC-H1/H2).
 6. **Signing key authorizes the whole registry** → rotate keys for the new boundary; document true blast radius (SEC-H3).
-7. Downtime & Cutover section (zero-downtime-first); ADR-098 (097 taken); complete web decommission incl. orphaned sudoers; per-`(fn,tick)`→real-field soak invariant.
+7. Downtime & Cutover section (zero-downtime-first); ADR-100 (097 taken); complete web decommission incl. orphaned sudoers; per-`(fn,tick)`→real-field soak invariant.
 
 **Load-bearing open items → Phase 0 spikes** (0.2 fan-out routing; 0.4 cron-run schema + Redis-swap safety). See `## Deepen-Plan Hardening` for the full finding→fix→AC mapping.
 
@@ -80,7 +80,7 @@ cutover (one gated orchestration, reversible); **Phase 3** decommissions web inn
 | Hook placement is an open ADR toss-up | **Forced** — the dedicated host has no app (rearm's `/api/internal/schedule-reminder` route) and no public ingress (GH-runner reaches only `deploy.soleur.ai`). Hooks **stay on the web host**. | Resolved in ADR before Phase 1; §3.1 keeps the capture subpath writable. |
 | `--sdk-url` set via ADR line | Hard-coded literal in shared `inngest-bootstrap.sh:339` (only `@@BACKEND_*@@` are substituted). | Templating it is a real cross-consumer code task (web + Vector `vector.tf:3`). |
 | `prd_inngest` (branch config) isolates secrets | A **branch config** inherits all ~116 `soleur/prd` secrets (`model.c4:361`). Zot isolation used a separate **project**. | Use a separate Doppler **project** (mirror `soleur-registry`) or drop the isolation claim. |
-| ADR-097 | **Taken** (`ADR-097-github-project-board-...`). | Use **ADR-098**. |
+| ADR-097 | **Taken** (`ADR-097-github-project-board-...`). | Use **ADR-100**. |
 | git-data durable-volume rationale "does NOT transfer" | Partly false — Redis AOF **does** live on a local block volume. | Dedicated `hcloud_volume.inngest_redis` (TR2). |
 
 ## User-Brand Impact
@@ -135,7 +135,7 @@ fidelity ≠ prod); otherwise ship the VIP. The ADR fixes the choice.
 Empirically resolved against the exact `inngest/inngest:v1.19.4` server pin (external
 Redis + Postgres, prod-fidelity) — full evidence in
 `knowledge-base/project/specs/feat-inngest-dedicated-host/phase0-empirical-spike.md`;
-decisions fixed in **ADR-098**. (Note: the app's `inngest` npm dep is the **SDK v3.54.2**;
+decisions fixed in **ADR-100**. (Note: the app's `inngest` npm dep is the **SDK v3.54.2**;
 the "v1.19.4 pin" throughout is the self-hosted **server** binary — routing/enumeration are
 server behaviors, not SDK-source-answerable.)
 
@@ -219,7 +219,7 @@ app private-interface bind before cutover (AC-FW).
   different backends (heterogeneous fleet).
 - [x] **0.2 Resolve invocation semantics (route-once vs invoke-all)** — DONE: ROUTE-ONCE
   confirmed via a two-instance Docker harness (SDK-source alone insufficient — routing is a
-  server behavior). Recorded in `## Research Insights` + ADR-098 (single-url-now, VIP-at-N>1).
+  server behavior). Recorded in `## Research Insights` + ADR-100 (single-url-now, VIP-at-N>1).
   (Connect probe **cut** — Connect is deferred.)
 - [~] **0.3 Rehearse the dangerous sequences locally** (M5): quiesce→outage→register
   timing (to size the H1 window) **and** the rollback path (T5). The riskiest
@@ -236,8 +236,8 @@ app private-interface bind before cutover (AC-FW).
   model; (c) verify whether a **populated Redis pointed at a swapped Postgres** is
   safe (DI-C1) — if not, the Redis `FLUSHALL` before 2.3 is mandatory. Until the
   soak probe is demonstrably writable, AC13 cannot gate Phase 3.
-- [x] **0.5 Output → ADR-098** (see Architecture Decision) — DONE
-  (`ADR-098-inngest-dedicated-single-host-singleton-control-plane.md`, `status: adopting`;
+- [x] **0.5 Output → ADR-100** (see Architecture Decision) — DONE
+  (`ADR-100-inngest-dedicated-single-host-singleton-control-plane.md`, `status: adopting`;
   C4 edits applied + `c4-*.test.ts` green) fixing: the fan-out
   mechanism, hooks-stay-web-host, the dark→live datastore-flip mechanism, the
   #5450 supersession, **signature-verify as the sole `/api/inngest` boundary +
@@ -295,7 +295,15 @@ steps with the quiesce gate built in (CTO #2 — fewer human decision points). P
 **low-traffic window** and **mute the Better Stack heartbeat** for the window (M6).
 
 - [ ] **2.0 Pre-flight:** re-detect the web backend (M3); confirm the dedicated host
-  is firing **zero** prod crons (still on the non-prod backend).
+  is firing **zero** prod crons (still on the non-prod backend). **Assert AC-DARK axis-3
+  directly** (review #6180, data-integrity + user-impact): query the dedicated host's
+  `:8288/v0/gql` `{ functions { id } }` and assert the function registry is **EMPTY**. The
+  host's `--sdk-url` points at the live web-1 (`10.0.1.10:3000`), so darkness axis-3 rests
+  on the dedicated host's FRESH signing key causing web-1's SDK to REJECT its sync handshake
+  (the Phase-0 spike established SDK-sync is signing-key-gated — `inngest-graphql-schema.md`
+  §auth) → empty registry. This pre-flight makes that enforcement observable rather than
+  assumed. If NON-empty → ABORT the cutover (a fresh-key sync somehow succeeded, or the host
+  self-armed prod crons) and investigate before the prod-Postgres flip.
 - [ ] **2.1 Capture** reminders from web inngest (`op=backup` then `op=capture` →
   web host `/var/lib/inngest/cutover-capture.json`).
 - [ ] **2.2 Quiesce + stop + `systemctl disable` inngest on EVERY web host that can
@@ -354,21 +362,21 @@ steps with the quiesce gate built in (CTO #2 — fewer human decision points). P
   scheduled_tick)` has **no group > 1**. Follow-Through Enrollment (Observability
   §soak). This gates §3.1 (decommission).
 - [ ] **4.2 (separate work, not this plan) Pool web-2** at LB weight > 0 — now safe.
-- [ ] **4.3 Single ADR lifecycle:** flip **ADR-098** `adopting → accepted` on soak
-  success (do NOT split the lifecycle across ADR-098 + ADR-030 — code-simplicity);
+- [ ] **4.3 Single ADR lifecycle:** flip **ADR-100** `adopting → accepted` on soak
+  success (do NOT split the lifecycle across ADR-100 + ADR-030 — code-simplicity);
   `gh issue close 6178`.
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-New **ADR-098** (ADR-097 taken) — **"Inngest as a dedicated single-host singleton
+New **ADR-100** (ADR-097 taken) — **"Inngest as a dedicated single-host singleton
 control plane"** — amending **ADR-030**. `## Decision`: extract to one dedicated
 private-net host on a distinct Postgres backend until cutover; hooks stay
 web-host-resident; fan-out mechanism per Phase-0. `## Alternatives Considered`:
 dedicated-host (chosen) vs. single-host role-guard (rejected: correlated web-1
 failure; operator chose structural impossibility) vs. in-place-every-host (rejected:
 double-fire) vs. HA-pair (deferred #6185) vs. managed Cloud (declined: residency).
-`status: adopting` until 4.1; the single lifecycle lives on ADR-098.
+`status: adopting` until 4.1; the single lifecycle lives on ADR-100.
 
 ### C4 views
 Read all three of `.../diagrams/{model.c4,views.c4,spec.c4}`. Enumerated: no new
@@ -384,7 +392,7 @@ dedicated `inngestHost -> inngest` relationship if the model distinguishes
 deployment nodes. Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
 ### Sequencing
-ADR-098 authored in Phase 0.4 (`status: adopting`); fan-out line filled from 0.2.
+ADR-100 authored in Phase 0.4 (`status: adopting`); fan-out line filled from 0.2.
 Not deferred.
 
 ## Infrastructure (IaC)
@@ -512,7 +520,7 @@ move; state in the EU Supabase project). GDPR gate satisfied by carry-forward.
   binds the private interface for `/api/inngest`.
 - [ ] **AC5** `model.c4:173` no longer contains `loopback 127.0.0.1`; C4 render +
   syntax tests pass.
-- [ ] **AC6** **ADR-098** file exists, `status: adopting`, all 5 alternatives named.
+- [ ] **AC6** **ADR-100** file exists, `status: adopting`, all 5 alternatives named.
 - [ ] **AC8** Web decommission complete: `sed -n '624,681p' cloud-init.yml | grep -c
   'inngest-bootstrap'` == 0 (range-scoped, not whole-file); no
   `/etc/sudoers.d/deploy-inngest-bootstrap` grant, no `.sudoers` mirror, no
@@ -534,7 +542,7 @@ move; state in the EU Supabase project). GDPR gate satisfied by carry-forward.
   recreate (the structural check for the port-bind claim, which is not directly
   observable via the allowed no-SSH tooling).
 - [ ] **AC13** Soak probe `inngest-double-fire-6178.sh` (per-`(fn,tick)`) exits 0
-  across 7 days → **then** §3.1 decommission lands → ADR-098 `adopting → accepted`
+  across 7 days → **then** §3.1 decommission lands → ADR-100 `adopting → accepted`
   → `gh issue close 6178`.
 
 ## Deepen-Plan Hardening (2026-07-07 — data-integrity + security triad)
@@ -594,7 +602,7 @@ root of C1/C3/H4.
   `/api/inngest` is already subnet-reachable and the rule scopes nothing. **The sole
   effective `/api/inngest` boundary is HMAC signature verification** (fail-closed —
   `client.ts:43-50`, `route.ts:87`; good). **Fix:** drop the firewall-scoping claim;
-  rewrite AC-FW (below); state in ADR-098 that signature-verify is the boundary.
+  rewrite AC-FW (below); state in ADR-100 that signature-verify is the boundary.
 - **SEC-H2 (HIGH) — inngest `:8288`/`:8289` control API is subnet-wide.** The
   (likely-unauthenticated) GraphQL admin surface at `:8288/v0/gql` is reachable by
   git-data/registry — a peer-host compromise pivots into the trigger control plane
@@ -609,7 +617,7 @@ root of C1/C3/H4.
   arbitrary-app-code execution with `SUPABASE_SERVICE_ROLE` — the separate Doppler
   project blocks *direct* secret read, not this. **Fix:** **rotate**
   `INNGEST_SIGNING_KEY`/`INNGEST_EVENT_KEY` for the new boundary (don't reuse the
-  co-located keys); document the true blast radius in ADR-098; consider a
+  co-located keys); document the true blast radius in ADR-100; consider a
   per-invocation guard on the most dangerous functions.
 - **SEC-LOW/INFO:** prefer the ADR-088 minted-token path over a static PAT for the
   baked GHCR cred; fix the stale "loopback 127.0.0.1" comment in
@@ -626,7 +634,12 @@ root of C1/C3/H4.
 - [ ] **AC-NFT:** the inngest host runs nftables scoping `:8288/:8289` to web-host
   private IPs; `.20`/`.30` are dropped; `:8288/v0/gql` auth posture documented.
 - [ ] **AC-DARK (both axes):** at provision, `INNGEST_POSTGRES_URI` ≠ prod **AND**
-  Redis `DBSIZE == 0` **AND** no app-reachable `--sdk-url` (empty function registry).
+  Redis `DBSIZE == 0` **AND** empty function registry. Axis-3 note (review #6180): `--sdk-url`
+  DOES point at the live web-1 (topologically app-reachable) — darkness axis-3 is enforced
+  **cryptographically** (the host's FRESH signing key → web-1 rejects its sync → empty registry),
+  not topologically, and is **verified** by the Phase-2.0 pre-flight registry-empty query above.
+  Pointing `--sdk-url` at a blackhole during dark was rejected: it would require a cutover-time
+  cloud-init edit, which force-replaces the singleton (ADR-100 Consequences).
 - [ ] **AC-REDIS-ZERO:** dedicated host Redis `DBSIZE == 0` immediately before the
   2.3 prod-Postgres flip (post-`FLUSHALL`).
 - [ ] **AC11 (revised):** capture is taken from **every** prod-scheduling host (incl.

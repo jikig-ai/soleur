@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Drift guard for the dedicated Inngest singleton host (#6178, ADR-098). Asserts the
+# Drift guard for the dedicated Inngest singleton host (#6178, ADR-100). Asserts the
 # load-bearing security/correctness invariants of inngest-host.tf + cloud-init-inngest.yml:
 #   - FRESH signing/event keys (AC-KEYROTATE) — NOT reused from the co-located inngest.tf.
 #   - Secrets on a SEPARATE Doppler PROJECT `soleur-inngest` (AC3), not a `prd` branch config.
 #   - hcloud_firewall.inngest is deny-all-public (zero inbound); nftables (not the cloud
 #     firewall) scopes :8288/:8289 to web-host IPs only, dropping git-data/.20 + registry/.30.
-#   - NO lifecycle.ignore_changes=[user_data] (maintenance-window force-replace, ADR-098).
+#   - NO lifecycle.ignore_changes=[user_data] (maintenance-window force-replace, ADR-100).
 #   - arm64 inngest-CLI SHA override (the amd64 image-env SHA would fail the arm64 verify).
 #   - Vector deferred on this arm64 host (documented).
 #
@@ -67,7 +67,7 @@ fi
 # 4. NO lifecycle.ignore_changes=[user_data]. Strip COMMENT lines first — the block carries a
 #    "Deliberately NO ...ignore_changes=[user_data]" prose comment a bare grep would false-match.
 if grep -vE '^[[:space:]]*#' "$HOST_TF" | grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[[^]]*user_data'; then
-  fail "hcloud_server.inngest must NOT set ignore_changes=[user_data] (ADR-098 force-replace)"
+  fail "hcloud_server.inngest must NOT set ignore_changes=[user_data] (ADR-100 force-replace)"
 else
   pass
 fi

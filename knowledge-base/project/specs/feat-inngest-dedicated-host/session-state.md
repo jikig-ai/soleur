@@ -15,9 +15,9 @@ Last updated: 2026-07-07. Branch `feat-inngest-dedicated-host`; worktree
 
 ## Done + committed this session
 
-1. **Phase 0 — spikes + ADR-098 (commit c78bbf0bb).** All three load-bearing spikes resolved
+1. **Phase 0 — spikes + ADR-100 (commit c78bbf0bb).** All three load-bearing spikes resolved
    EMPIRICALLY against the pinned `inngest/inngest:v1.19.4` **server** (Docker harness, external
-   Redis+Postgres). Evidence: `phase0-empirical-spike.md`. ADR-098 (`status: adopting`, amends
+   Redis+Postgres). Evidence: `phase0-empirical-spike.md`. ADR-100 (`status: adopting`, amends
    ADR-030); C4 edits + regenerated `model.likec4.json` (all c4-*.test.sh green). Verdicts:
    - **Fan-out = ROUTE-ONCE** → single stable `--sdk-url` now (to web-1 private `10.0.1.10`), VIP at N>1 (Phase 4.2).
    - **Cron-run enum = `runs(RunsFilterV2, timeField:STARTED_AT, functionIDs)`**; invariant `(functionID, floor(startedAt/period))`; `scheduled_tick` nonexistent. AC13 soak probe demonstrably writable.

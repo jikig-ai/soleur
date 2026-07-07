@@ -532,7 +532,7 @@ EnvironmentFile=/etc/default/inngest-server
 # Vector needs Doppler-injected BETTERSTACK_LOGS_TOKEN (and any other
 # secrets the config references). doppler run resolves them at
 # ExecStart time.
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml
+ExecStart=/usr/bin/doppler run --project @@DOPPLER_PROJECT@@ --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml
 Restart=on-failure
 RestartSec=10
 User=deploy
@@ -550,6 +550,14 @@ TimeoutStopSec=30
 [Install]
 WantedBy=multi-user.target
 VECTOREOF
+      # #6178: render the @@DOPPLER_PROJECT@@ sentinel (same bash-param-expansion as the
+      # server/redis units; default `soleur` preserves the web host). Load-bearing for the
+      # deferred arm64-Vector follow-up: without this, when the dedicated host later sets
+      # VECTOR_CLI_*, this unit would run `doppler run --project soleur` under the scoped
+      # soleur-inngest token → FAIL (or force a token-widen that defeats AC3 isolation).
+      vector_unit_content="$(cat "$VECTOR_UNIT")"
+      vector_unit_content="${vector_unit_content//@@DOPPLER_PROJECT@@/$DOPPLER_PROJECT}"
+      printf '%s\n' "$vector_unit_content" > "$VECTOR_UNIT"
 
       systemctl daemon-reload
       # `enable --now` is a no-op when the unit is already running; the

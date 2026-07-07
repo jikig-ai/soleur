@@ -1,5 +1,5 @@
 #cloud-config
-# #6178 (ADR-098) — dedicated Inngest singleton host cloud-init. Rendered by
+# #6178 (ADR-100) — dedicated Inngest singleton host cloud-init. Rendered by
 # templatefile() in inngest-host.tf. Mirrors cloud-init-registry.yml (dedicated
 # volume-backed host, cloud-init-only — NO SSH provisioner; secrets injected via a
 # scoped Doppler token, NEVER baked into user_data) and runs the self-hosted OSS
@@ -141,10 +141,12 @@ runcmd:
   # --- Fail-closed boot isolation self-check (mirrors registry) ------------------------
   # The load-bearing, fail-CLOSED defense run under the host's OWN shipped boot token: the
   # credential MUST resolve ONLY the inngest secret set. Asserts identity (every visible
-  # non-DOPPLER secret is a known INNGEST_* name) AND cardinality (>=3 — the TF-owned
-  # signing/event/redis/heartbeat-url keys + the out-of-band INNGEST_POSTGRES_URI). An over-scoped `prd`-branch token
-  # would see ~116 foreign secrets → n_total != n_inngest → refuse. On pass, drop the sentinel
-  # the bootstrap block gates on; on fail, no sentinel → the next block aborts (fail-closed).
+  # non-DOPPLER secret is a known INNGEST_* name) AND cardinality (>=4 — the 3 TF-owned
+  # signing/event/redis keys + the out-of-band INNGEST_POSTGRES_URI, all present at dark boot;
+  # INNGEST_HEARTBEAT_URL is out-of-band and set only AT cutover, so the count is 4 dark / 5 live).
+  # An over-scoped `prd`-branch token would see ~116 foreign secrets → n_total != n_inngest →
+  # refuse. On pass, drop the sentinel the bootstrap block gates on; on fail, no sentinel → the
+  # next block aborts (fail-closed).
   - |
     set -a; . /etc/default/inngest-doppler; set +a
     if doppler run --project soleur-inngest --config prd -- bash -s <<'CHKEOF'
@@ -152,7 +154,7 @@ runcmd:
     names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
     n_total="$(printf '%s\n' "$names" | grep -c . || true)"
     n_inngest="$(printf '%s\n' "$names" | grep -Ec '^INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|HEARTBEAT_URL)$' || true)"
-    if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 3 ]; then
+    if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 4 ]; then
       echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
     fi
     echo "[inngest] boot credential isolated ($n_inngest INNGEST_ secrets, no foreign)"
@@ -169,7 +171,7 @@ runcmd:
   # docker create → docker cp the script + durable-Redis assets → read INNGEST_CLI_VERSION/
   # SHA from the image env → run it. Passes the dedicated-host env: INNGEST_CLI_ARCH=arm64
   # (cax11 — inngest-bootstrap.sh:37/54) + SDK_URL (single stable --sdk-url to the active web
-  # backend — ADR-098 Decision 1; the bootstrap edits to consume these are done separately).
+  # backend — ADR-100 Decision 1; the bootstrap edits to consume these are done separately).
   - |
     set -e
     test -f /run/soleur-inngest-doppler.ok || { echo "FATAL: doppler isolation self-check did not pass — refusing to bootstrap inngest" >&2; exit 1; }

@@ -6,10 +6,10 @@ Lane: cross-domain · Threshold: single-user incident · Deferred HA: #6185 · S
 ## Phase 0 — Resolve fan-out + rehearse (local/read-only)
 
 - [ ] 0.1 Detect current prod web-inngest backend (SQLite vs Postgres) via inngest-inventory hook + pool probe; note heterogeneous-fleet branch
-- [x] 0.2 DONE — ROUTE-ONCE confirmed (Docker 2-instance harness; SDK source alone insufficient). Recorded in plan `## Research Insights` + ADR-098. Decision: single-url-now, VIP-at-N>1 (Connect probe cut)
+- [x] 0.2 DONE — ROUTE-ONCE confirmed (Docker 2-instance harness; SDK source alone insufficient). Recorded in plan `## Research Insights` + ADR-100. Decision: single-url-now, VIP-at-N>1 (Connect probe cut)
 - [~] 0.3 PARTIAL — Redis-swap + route-once rehearsed in the Phase-0 Docker harness; full quiesce→register timing + rollback (T5) rehearsed against cutover-inngest.yml in Phase-2 pre-flight (not local)
 - [x] 0.4 DONE — cron-run enum path CONFIRMED (`runs(RunsFilterV2, timeField:STARTED_AT, functionIDs)`; invariant `(functionID, floor(startedAt/period))`; scheduled_tick nonexistent). Redis-swap → FLUSHALL+DBSIZE==0 MANDATORY (empirically proven). State model reconciled. AC13 soak probe demonstrably writable. Evidence: phase0-empirical-spike.md
-- [x] 0.5 DONE — ADR-098 authored (status: adopting); C4 edits applied + c4-*.test.ts green (AC5/AC6)
+- [x] 0.5 DONE — ADR-100 authored (status: adopting); C4 edits applied + c4-*.test.ts green (AC5/AC6)
 
 ## Phase 1 — Provision on a NON-PROD dark backend (IaC)
 
@@ -48,7 +48,7 @@ Legend: [x] done+committed · [~] partial · [ ] todo.
 ## Phase 4 — Soak gate
 
 - [ ] 4.1 Soak 7d: exactly-once via the Phase-0.4-validated mechanism (real cron-run enumeration grouped by (function_id, bucket(startedAt, cron_period)) OR per-cron Sentry cron-monitor) — NOT scheduled_tick; Follow-Through Enrollment (inngest-double-fire-6178.sh must be demonstrably writable against the pin before it gates 3.1)
-- [ ] 4.3 Flip ADR-098 adopting→accepted; `gh issue close 6178`
+- [ ] 4.3 Flip ADR-100 adopting→accepted; `gh issue close 6178`
 
 ## Testing (see plan Test Scenarios)
 
