@@ -40,7 +40,7 @@ export function KbSidebarShell() {
   const collapsed = useRailCollapsed();
 
   return (
-    <div data-testid="kb-rail-tree" className="flex h-full flex-col">
+    <div data-testid="kb-rail-tree" data-tour-id="action:kb-tree" className="flex h-full flex-col">
       {collapsed ? (
         <div className="flex flex-col items-center gap-1 px-1 py-3">
           <button

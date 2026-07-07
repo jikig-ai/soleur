@@ -511,6 +511,7 @@ export default function DashboardLayout({
               </a>
               <Link
                 href="/dashboard/settings"
+                data-tour-id="/dashboard/settings"
                 title={collapsed ? "Settings" : undefined}
                 aria-current={settingsActive ? "page" : undefined}
                 className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${

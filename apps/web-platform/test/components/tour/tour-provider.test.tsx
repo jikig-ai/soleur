@@ -17,7 +17,11 @@ vi.mock("@/hooks/use-onboarding", () => ({
 }));
 
 const pathState = vi.hoisted(() => ({ path: "/dashboard" }));
-vi.mock("next/navigation", () => ({ usePathname: () => pathState.path }));
+const routerPush = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({
+  usePathname: () => pathState.path,
+  useRouter: () => ({ push: routerPush }),
+}));
 
 const track = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/analytics-client", () => ({ track }));
@@ -31,9 +35,14 @@ import { TourProvider, useTour } from "@/components/tour/tour-provider";
 function Probe() {
   const t = useTour();
   return (
-    <button type="button" data-available={t.available} onClick={() => t.startTour("test")}>
-      start
-    </button>
+    <>
+      <button type="button" data-available={t.available} onClick={() => t.startTour("test")}>
+        start
+      </button>
+      <button type="button" onClick={() => t.next()}>
+        next
+      </button>
+    </>
   );
 }
 
@@ -52,6 +61,7 @@ describe("TourProvider", () => {
     onb.onboardingCompletedAt = "2026-01-01T00:00:00Z";
     onb.tourCompletedAt = null;
     pathState.path = "/dashboard";
+    routerPush.mockClear();
     track.mockClear();
     vi.stubGlobal(
       "fetch",
@@ -118,6 +128,18 @@ describe("TourProvider", () => {
       vi.advanceTimersByTime(700);
     });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("navigates to an action step's route when advancing onto it", () => {
+    onb.tourCompletedAt = "x"; // suppress auto-start; drive manually
+    renderProvider();
+    fireEvent.click(screen.getByText("start")); // step 0 Welcome (no route)
+    expect(routerPush).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("next")); // step 1 → /dashboard (== pathname, no push)
+    fireEvent.click(screen.getByText("next")); // step 2 org-panel → /dashboard (== pathname, no push)
+    expect(routerPush).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("next")); // step 3 → /dashboard/inbox
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/inbox");
   });
 
   it("Finish persists completion via POST /api/tour/complete", () => {

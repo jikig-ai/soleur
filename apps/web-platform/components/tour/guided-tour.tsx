@@ -6,7 +6,13 @@
 // when there's no target / it's off-screen / on mobile. Focus-trapped, Escape =
 // skip, reduced-motion aware, body-scroll-locked with guaranteed teardown.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { GoldButton } from "@/components/ui/gold-button";
 import { TOUR_STEPS, TOUR_STEP_COUNT } from "./tour-steps";
 
@@ -18,6 +24,32 @@ interface Rect {
   left: number;
   width: number;
   height: number;
+}
+
+const VIEWPORT_MARGIN = 12; // min px between the card and any viewport edge
+
+// Position the card next to the spotlit target, then clamp it fully inside the
+// viewport so it can never spill off the right or bottom edge (#tour-overflow).
+// Prefers placing to the target's right; falls back to its left when there's no
+// room; finally clamps both axes into [MARGIN, size - MARGIN].
+function anchoredCardStyle(
+  rect: Rect,
+  card: { w: number; h: number },
+): React.CSSProperties {
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+  const M = VIEWPORT_MARGIN;
+
+  const rightOfTarget = rect.left + rect.width + PAD + M;
+  const leftOfTarget = rect.left - PAD - M - card.w;
+  // Fit to the right if the card's right edge stays on-screen, else go left.
+  let left =
+    rightOfTarget + card.w + M <= vw ? rightOfTarget : leftOfTarget;
+  left = Math.max(M, Math.min(left, vw - card.w - M));
+
+  const top = Math.max(M, Math.min(rect.top, vh - card.h - M));
+
+  return { top, left, maxHeight: vh - 2 * M, overflowY: "auto" };
 }
 
 export function GuidedTour({
@@ -40,6 +72,10 @@ export function GuidedTour({
   const cardRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const [rect, setRect] = useState<Rect | null>(null);
+  // Live card dimensions, so the position can be clamped fully inside the
+  // viewport (the card body grows with copy length). Seeded with a close
+  // estimate so the very first paint clamps sensibly before measurement.
+  const [cardSize, setCardSize] = useState({ w: 320, h: 240 });
   // The keyboard handler + cleanup live in a once-only ([]) effect, so they must
   // read the LIVE onSkip / current target through refs — not the first-render
   // closure (which would report step 0 on Escape and never restore focus to the
@@ -84,22 +120,47 @@ export function GuidedTour({
 
   // Re-measure on step change + capture-phase window scroll + resize + a
   // ResizeObserver on the target. requestAnimationFrame lets the rail-expand /
-  // route layout settle before the first measure.
+  // route layout settle before the first measure. Action steps navigate to a new
+  // route first, so the target may not exist on the initial measure — poll for it
+  // (up to ~2.5s) until it mounts, then attach the ResizeObserver; if it never
+  // appears, measure() has already left a centered fallback card.
   useEffect(() => {
-    let raf = requestAnimationFrame(measure);
+    let cancelled = false;
+    let raf = 0;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let ro: ResizeObserver | undefined;
     const onScroll = () => measure();
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onScroll);
-    let ro: ResizeObserver | undefined;
-    const el = step?.target
-      ? document.querySelector<HTMLElement>(`[data-tour-id="${step.target}"]`)
-      : null;
-    if (el && typeof ResizeObserver !== "undefined") {
-      ro = new ResizeObserver(() => measure());
-      ro.observe(el);
-    }
+    const deadline = Date.now() + 2500;
+
+    const poll = () => {
+      if (cancelled) return;
+      measure();
+      const targetId = step?.target;
+      if (!targetId) return; // centered step (Welcome/closing) — nothing to await
+      const el = document.querySelector<HTMLElement>(
+        `[data-tour-id="${targetId}"]`,
+      );
+      if (el) {
+        if (typeof ResizeObserver !== "undefined") {
+          ro = new ResizeObserver(() => measure());
+          ro.observe(el);
+        }
+        return;
+      }
+      if (Date.now() < deadline) {
+        pollTimer = setTimeout(() => {
+          raf = requestAnimationFrame(poll);
+        }, 100);
+      }
+    };
+    raf = requestAnimationFrame(poll);
+
     return () => {
+      cancelled = true;
       cancelAnimationFrame(raf);
+      if (pollTimer) clearTimeout(pollTimer);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onScroll);
       ro?.disconnect();
@@ -169,6 +230,22 @@ export function GuidedTour({
     cardRef.current?.focus();
   }, [stepIndex]);
 
+  // Measure the card so its anchored position can be clamped inside the viewport.
+  // Runs before paint (useLayoutEffect) on each step change / re-measure, so a
+  // taller card never renders off-screen for a frame.
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width && r.height) {
+      setCardSize((prev) =>
+        Math.abs(prev.w - r.width) > 1 || Math.abs(prev.h - r.height) > 1
+          ? { w: r.width, h: r.height }
+          : prev,
+      );
+    }
+  }, [stepIndex, rect]);
+
   const centered = rect === null;
 
   return (
@@ -210,26 +287,7 @@ export function GuidedTour({
             ? "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
             : ""
         }`}
-        style={
-          centered
-            ? undefined
-            : {
-                top: Math.min(
-                  rect.top,
-                  (typeof window !== "undefined" ? window.innerHeight : 800) -
-                    220,
-                ),
-                left:
-                  rect.left +
-                  rect.width +
-                  PAD +
-                  12 +
-                  (typeof window !== "undefined" &&
-                  rect.left + rect.width + 360 > window.innerWidth
-                    ? -(rect.width + 360)
-                    : 0),
-              }
-        }
+        style={centered || !rect ? undefined : anchoredCardStyle(rect, cardSize)}
       >
         <div className="mb-3 flex items-center justify-between gap-2">
           <span className="text-[11px] font-medium uppercase tracking-wide text-soleur-text-muted">

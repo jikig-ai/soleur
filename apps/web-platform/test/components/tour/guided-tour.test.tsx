@@ -84,9 +84,9 @@ describe("GuidedTour overlay", () => {
   });
 
   it("renders a box-shadow spotlight when the target is present with a real rect", async () => {
-    // A spotlight step (stepIndex 1 → /dashboard) with a measurable target.
+    // A spotlight step (stepIndex 1 → start-a-conversation action) with a target.
     const a = document.createElement("a");
-    a.setAttribute("data-tour-id", "/dashboard");
+    a.setAttribute("data-tour-id", "action:new-conversation");
     a.getBoundingClientRect = () =>
       ({ top: 100, left: 60, width: 200, height: 44, right: 260, bottom: 144, x: 60, y: 100, toJSON: () => ({}) }) as DOMRect;
     document.body.appendChild(a);
@@ -97,6 +97,32 @@ describe("GuidedTour overlay", () => {
       return el;
     });
     expect(spotlight.style.boxShadow).toContain("9999px");
+    a.remove();
+  });
+
+  it("clamps the card inside the viewport when the target hugs an edge", async () => {
+    (window as unknown as { innerWidth: number }).innerWidth = 1200;
+    (window as unknown as { innerHeight: number }).innerHeight = 800;
+    // Target pinned to the bottom-right corner — naive placement would push the
+    // card off both the right and bottom edges (the #tour-overflow bug).
+    const a = document.createElement("a");
+    a.setAttribute("data-tour-id", "action:new-conversation");
+    a.getBoundingClientRect = () =>
+      ({ top: 760, left: 1120, width: 70, height: 40, right: 1190, bottom: 800, x: 1120, y: 760, toJSON: () => ({}) }) as DOMRect;
+    document.body.appendChild(a);
+    setup(1);
+    const dialog = await vi.waitFor(() => {
+      const el = screen.getByRole("dialog") as HTMLElement;
+      if (!el.style.left) throw new Error("not positioned yet");
+      return el;
+    });
+    const left = parseFloat(dialog.style.left);
+    const top = parseFloat(dialog.style.top);
+    // Card (seeded 320×240 in jsdom) stays fully within the 1200×800 viewport.
+    expect(left).toBeGreaterThanOrEqual(12);
+    expect(left + 320).toBeLessThanOrEqual(1200);
+    expect(top).toBeGreaterThanOrEqual(12);
+    expect(top + 240).toBeLessThanOrEqual(800);
     a.remove();
   });
 });
