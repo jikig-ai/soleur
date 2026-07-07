@@ -542,6 +542,13 @@ if grep -qE 'timeout 15 doppler secrets get GHCR_READ' "$BOOT"; then
 else
   ok "AC21: no stale 'timeout 15 doppler secrets get GHCR_READ_*' in soleur-host-bootstrap"
 fi
+# Pin the Sentry warning emits to the same AC (so a future fetch/emit reorder keeps them):
+# both failure branches (credential_absent after retries, auth_denied on login reject) stay loud.
+if grep -qF 'ghcr_login_warn credential_absent' "$BOOT" && grep -qF 'ghcr_login_warn auth_denied' "$BOOT"; then
+  ok "AC21: bootstrap ghcr_login still emits ghcr_login_warn on both failure branches (no-SSH Sentry warning)"
+else
+  no "AC21: bootstrap ghcr_login must emit ghcr_login_warn credential_absent + auth_denied on failure"
+fi
 
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]
