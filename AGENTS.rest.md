@@ -39,7 +39,7 @@
 
 ## Review & Feedback
 
-- After merging, read files from the merged branch (`git show main:<path>`), not the bare repo directory (stale) [id: rf-after-merging-read-files-from-the-merged].
+- After merging, read files from the merged branch (`git show main:<path>`), not the bare repo directory (stale) [id: rf-after-merging-read-files-from-the-merged]. This bare-root assumption holds for local CLI dev; the Concierge agent workspace is a **non-bare** clone (`.git` is a directory) — see ADR-099 for the three git-surface layouts and which code paths each gates.
 - Never skip QA/review before merging [id: rf-never-skip-qa-review-before-merging]. Full pipeline: plan → implement → review → QA → compound → ship.
 - Before spawning review agents, push the branch to remote (`git push -u origin <branch>`) [id: rf-before-spawning-review-agents-push-the]. Review subagents use remote state; unpushed commits produce stale analysis. **Why:** 2026-04-13 — 4 of 9 reviewers analyzed pre-push state.
 - Before shipping, verify: (1) review comments resolved, (2) QA run with screenshots if UI, (3) tests pass locally [id: rf-before-shipping-verify-1-review-comments].

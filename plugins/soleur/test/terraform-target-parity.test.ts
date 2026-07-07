@@ -542,6 +542,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "random_password.zot_pull",
   "random_password.zot_push",
   "doppler_project.registry",
+  "doppler_environment.registry_prd",
   "doppler_secret.zot_pull_token_registry",
   "doppler_secret.zot_push_token_registry",
   "doppler_secret.zot_registry_url",

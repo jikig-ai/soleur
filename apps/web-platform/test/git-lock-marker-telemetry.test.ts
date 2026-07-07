@@ -1,4 +1,4 @@
-// Unit tests for the git-lock marker telemetry hook (#4826 observability follow-up):
+// Unit tests for the git-lock marker telemetry hook (#6184 observability follow-up):
 // the pure extractor, tool_response coercion, and the PostToolUse hook's fail-open
 // classification (wedge → error, diag-only → warn, non-Bash → no-op).
 import { describe, test, expect } from "vitest";
@@ -31,6 +31,21 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(UNREMOVABLE)[0]?.wedged).toBe(true);
     expect(extractGitLockMarkers(WEDGE)[0]?.wedged).toBe(true);
     expect(extractGitLockMarkers(TEMP_WEDGED)[0]?.wedged).toBe(true);
+  });
+
+  test("classifies IDENTITY_WEDGED as wedged; IDENTITY_DIAG as a benign (mirrored) marker", () => {
+    const identityWedged =
+      "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=native-eexist file=config";
+    const identityCommonDir =
+      "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=common-dir-unresolved file=config";
+    const identityDiag =
+      "SOLEUR_GIT_LOCK_IDENTITY_DIAG source=ensure_worktree_identity reason=identity-drift-set-from-global";
+    expect(extractGitLockMarkers(identityWedged)[0]?.wedged).toBe(true);
+    expect(extractGitLockMarkers(identityCommonDir)[0]?.wedged).toBe(true);
+    // Benign precondition marker: mirrored (MARKER_RE) but NOT a wedge (excluded from WEDGE_RE),
+    // so a successful drift-set never pages as wedged=true / log.error.
+    expect(extractGitLockMarkers(identityDiag).length).toBe(1);
+    expect(extractGitLockMarkers(identityDiag)[0]?.wedged).toBe(false);
   });
 
   test("matches the readiness-gate SOLEUR_GIT_REPO_DIAG forensic and treats it as wedged", () => {

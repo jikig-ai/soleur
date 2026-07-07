@@ -98,6 +98,22 @@ and NOT an unconditional in-sandbox `rm -rf` (blind surface + no privilege).
   regular lock — so the next real wedge (or a forced fixture) proves the exact mechanism
   in one event.
 
+**Identity-authority amendment (2026-07-07, #6184).** A fresh Concierge session still
+wedged after the host sweep + host-side seed shipped — but the failing write was NOT a
+`config.lock` acquisition inside `ensure_bare_config` (which the non-bare guard skips on
+the agent workspace; see ADR-099). It was `ensure_worktree_identity` issuing a raw
+`git config --local` write to overwrite the host-seeded per-workspace **owner** identity
+with the sandbox image's `github-actions[bot]` **global** — a write that EEXISTs on the
+masked `config.lock` (RC=255), and which, had it "succeeded", would have misattributed the
+operator's commits to the bot. **Resolution:** on the non-bare agent workspace the
+host-seeded **local** identity is authoritative in-sandbox; `ensure_worktree_identity` must
+not override it. It now discriminates on **bot-shape**, not presence: it returns without
+writing when a present local is non-bot (the Concierge owner), overrides a bot-shaped local
+from a human `--global` (the bare-dev #2815 case), and refuses to ever write a bot-shaped
+`--global`. Only the correcting paths route through `atomic_git_config`. This
+confirms the ADR's durable direction — **make the in-sandbox path need no config write at
+all** — extends from `ensure_bare_config` to the identity write.
+
 The **"#5912 becomes dead-code insurance" claim holds ONLY** under the assumption that the
 node is a one-time persistent-volume artifact (created once, cleared at the next quiescent
 boot/entrypoint, never re-appearing mid-container-lifetime). This is plausible — a
@@ -117,6 +133,13 @@ granularity cannot preempt it and #5912 stays load-bearing.
   explicitly the "remove the node" tracker.
 - **(iv) Vendored-SDK bwrap-arg reorder** — non-goal here; tracked separately under
   ADR-075's "durable TOCTOU closer", unrelated to the residual node.
+- **(v) Route the identity write through `atomic_git_config` (Layer A, #6184)** — rejected
+  as the primary fix. Routing the raw `git config --local` identity write around the masked
+  lock would "succeed" — at overwriting the authoritative host-seeded **owner** with the
+  sandbox `github-actions[bot]` **global**, silently misattributing the operator's commits.
+  A loud wedge is preferable to a quiet wrong-author write. The correct fix is to **not
+  write at all** when a valid local identity is present (see the identity-authority
+  amendment above); `atomic_git_config` is kept only for the genuine set-when-absent case.
 
 ## Observability (no-SSH)
 

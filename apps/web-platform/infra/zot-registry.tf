@@ -35,10 +35,19 @@ locals {
   # scheme). Published as ZOT_REGISTRY_URL.
   registry_endpoint = "${local.registry_private_ip}:5000"
 
-  # zot's OWN image is third-party (upstream project-zot), DIGEST-PINNED, ARM64 (cax11).
-  # Pulled from the PUBLIC upstream registry at boot — NEVER from our own zot (bootstrap
-  # paradox, Sharp Edges). v2.1.2 arm64; re-verify the digest on a version bump.
-  zot_image = "ghcr.io/project-zot/zot-linux-arm64@sha256:c3fc47782d98b731d5928a24182b495e28cc92f9dcf1d5317f7dbd632e10bf30"
+  # zot's OWN image is third-party (upstream project-zot), DIGEST-PINNED, v2.1.2. Pulled from
+  # the PUBLIC upstream registry at boot — NEVER from our own zot (bootstrap paradox, Sharp Edges).
+  # Arch is DERIVED from var.registry_server_type so a single var switches the whole host: `cax*`
+  # (Ampere) → arm64, anything else (`cx*`/`cpx*`) → amd64. This lets provisioning take whichever of
+  # cax11 (ARM, €5.99) / cx23 (x86, €5.49) has Hetzner stock — both are functionally identical for a
+  # store-and-serve registry (it never RUNS the amd64 platform images it holds). Re-verify BOTH
+  # digests on a version bump: `crane digest ghcr.io/project-zot/zot-linux-{arm64,amd64}:vX.Y.Z`.
+  registry_arch   = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"
+  zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64@sha256:c3fc47782d98b731d5928a24182b495e28cc92f9dcf1d5317f7dbd632e10bf30"
+  zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64@sha256:073f30d99fbdbcd8869334231c9ca45c75e535e4bdc6e28cc8a1541abe7a3f71"
+  zot_image       = local.registry_arch == "arm64" ? local.zot_image_arm64 : local.zot_image_amd64
+  # Doppler CLI (v3.75.3) per-arch SHA256 for the cloud-init download (arm64 / amd64).
+  doppler_sha256 = local.registry_arch == "arm64" ? "f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143" : "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
 
   # Non-secret, stable htpasswd usernames (constants — only the TOKENS are secret).
   zot_pull_user = "zot-pull"
@@ -74,20 +83,34 @@ resource "random_password" "zot_push" {
 # (A standalone *environment* in `soleur` was rejected: the project is at the 4-environment
 # tier cap — dev/prd/ci/cli — so a 5th env is impossible without a Doppler Team-plan upgrade.)
 #
-# PROVISIONING: `doppler_project.registry` is TF-created in the operator's full apply
-# (var.doppler_token_tf is a workplace-scope personal token; provider create-project scope is
-# verified at apply). FALLBACK if project-create is denied at apply: create the project once
-# via the dashboard (New PROJECT `soleur-registry` — NOT a config under `prd`), TF then managing
-# only the two secrets + the token inside it — identical isolation, one dashboard step. Rotate
-# via `terraform apply -replace=random_password.zot_pull`.
+# PROVISIONING (fully automated — ZERO operator CLI actions, per
+# hr-fresh-host-provisioning-reachable-from-terraform-apply): the agent's `terraform apply` stands
+# the whole isolation boundary up from empty state. Terraform creates the isolated project
+# (`doppler_project.registry`) AND its `prd` environment + root config (`doppler_environment.registry_prd`),
+# then writes the two host secrets + the boot token into that config. var.doppler_token_tf is a
+# workplace-scope personal token (create-project + create-environment scope). Rotate via
+# `terraform apply -replace=random_password.zot_pull`.
 resource "doppler_project" "registry" {
   name        = "soleur-registry"
   description = "Isolated boot-credential project for the zot registry host (#6122, ADR-096) — its `prd` root config holds ONLY the two ZOT htpasswd tokens; cross-project isolation from soleur/prd (no shared root-secret resolution path)."
 }
 
+# The `prd` environment + its root config inside the isolated project. REQUIRED for zero-operator
+# provisioning: a TF-created `doppler_project` is created BARE (no default dev/stg/prd configs that
+# the Doppler CLI/dashboard would auto-add), so without this the host secrets below fail at apply
+# with "Doppler Error: Could not find requested config 'prd'" (#6122 provisioning). Creating the
+# environment also creates its same-named root config, which is the isolation boundary the host
+# boot token resolves. Does NOT need the paid config-inheritance feature (#6067) — it is a basic
+# Project-Structure resource, not a branch config.
+resource "doppler_environment" "registry_prd" {
+  project = doppler_project.registry.name
+  slug    = "prd"
+  name    = "Production"
+}
+
 resource "doppler_secret" "zot_pull_token_registry" {
   project    = doppler_project.registry.name
-  config     = "prd"
+  config     = doppler_environment.registry_prd.slug
   name       = "ZOT_PULL_TOKEN"
   value      = random_password.zot_pull.result
   visibility = "masked"
@@ -95,7 +118,7 @@ resource "doppler_secret" "zot_pull_token_registry" {
 
 resource "doppler_secret" "zot_push_token_registry" {
   project    = doppler_project.registry.name
-  config     = "prd"
+  config     = doppler_environment.registry_prd.slug
   name       = "ZOT_PUSH_TOKEN"
   value      = random_password.zot_push.result
   visibility = "masked"
@@ -107,7 +130,7 @@ resource "doppler_secret" "zot_push_token_registry" {
 # rotate via `terraform apply -replace=doppler_service_token.registry`.
 resource "doppler_service_token" "registry" {
   project = doppler_project.registry.name
-  config  = "prd"
+  config  = doppler_environment.registry_prd.slug
   name    = "zot-registry-boot"
   access  = "read"
 }
@@ -159,7 +182,7 @@ resource "doppler_secret" "zot_push_token" {
 # --- The registry host -----------------------------------------------------------------
 resource "hcloud_server" "registry" {
   name        = "soleur-registry"
-  server_type = var.registry_server_type # cax11 = ARM64 (Ampere); zot is ARM-native
+  server_type = var.registry_server_type # cax11 (arm64) / cx23 (amd64) — arch derived in locals
   location    = var.location
   image       = "ubuntu-24.04"
   keep_disk   = true
@@ -191,6 +214,9 @@ resource "hcloud_server" "registry" {
     zot_image     = local.zot_image
     zot_pull_user = local.zot_pull_user
     zot_push_user = local.zot_push_user
+    # Host arch (arm64/amd64) → the matching Doppler CLI release build + its checksum.
+    doppler_arch   = local.registry_arch
+    doppler_sha256 = local.doppler_sha256
   }))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,

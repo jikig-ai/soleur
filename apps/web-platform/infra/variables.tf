@@ -108,7 +108,7 @@ variable "git_data_volume_size" {
 
 # --- #6122 (ADR-096) — the self-hosted zot registry host ---
 variable "registry_server_type" {
-  description = "Hetzner server type for the zot registry host (cax11 = 2 vCPU ARM64/Ampere, 4GB RAM). zot is ARM-native; a registry serving two small images needs little CPU. Verify current Hetzner pricing before budget decisions (~€4/mo CAX11 + volume — recorded via ops-advisor)."
+  description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): cax11 (2 vCPU ARM64/Ampere, 4GB, €5.99/mo) or cx23 (2 vCPU x86, 4GB, €5.49/mo). A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral — provisioning takes whichever has Hetzner stock. Recorded via ops-advisor (~€5/mo + volume)."
   type        = string
   default     = "cax11"
 }

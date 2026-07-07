@@ -14,3 +14,5 @@
 #   1. edit the body line in the sidecar
 #   2. python3 scripts/lint-rule-bodies.py --write   # regenerate the manifest
 #   3. append the ack line below with the new hash + a real reason
+hr-when-in-a-worktree-never-read-from-bare|c6e8f0c198680f7e0b7ccbedf03d962b6b7fae861f04c1dcb2a9027ac0745a07|2026-07-07|6183|Added non-bare Concierge caveat + ADR-099 pointer (clarification, not a weakening — the rule's bare-root guidance is unchanged; the caveat prevents mis-applying it to the non-bare agent workspace)
+wg-at-session-start-run-bash-plugins-soleur|eed77e1cfbd5678fb364995abec0c83bd0f6abaa5382d3ea9cc825e1a601a302|2026-07-07|6183|Added non-bare Concierge caveat + ADR-099 pointer (clarification, not a weakening — session-start hygiene guidance unchanged)
