@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Workspace git-repo readiness probe WITH forensic capture (#4826 follow-up).
+# Workspace git-repo readiness probe WITH forensic capture (#6184 follow-up).
 #
 # soleur:go's Step 0.0 readiness gate previously ran
 #   git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-inside-work-tree 2>/dev/null || true
 # and DISCARDED git's stderr. When git rejected the repo (a masked/corrupt config,
 # a broken .git, an in-flight clone) the gate fired its "workspace isn't ready"
 # message with NO record of WHY — the exact blind spot that forced a manual
-# `git rev-parse` + `findmnt` round-trip to diagnose the #4826 config.worktree case.
+# `git rev-parse` + `findmnt` round-trip to diagnose the #6184 config.worktree case.
 #
 # This script decides readiness identically (prints `SOLEUR_GIT_REPO_READY=true`
 # iff git considers the CWD a work tree or bare repo) AND, on the NOT-ready path,
