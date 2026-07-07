@@ -353,6 +353,15 @@ deliberately rejects floating tags and backs the wrong-image-tagged-with-right-v
 contract. **The deploy contract stays semver-only.** Single-file change:
 `.github/workflows/apply-deploy-pipeline-fix.yml`.
 
+**Reader inventory (#6147, 2026-07-07).** The `web_2_recreate` pin-gate in
+`apply-web-platform-infra.yml` was a second, un-swept reader of `/hooks/deploy-status` `.tag` —
+a non-web writer (an inngest watchdog restart stamping `{component:inngest,tag:latest}`) wedged
+it and hard-aborted the recreate with `got 'latest'`. It now resolves web-1's running tag from
+`app/health` `.version` via the pure `resolve-web1-known-good-tag.sh` (same strict-semver guard),
+adopting this amendment's source. Host-targeting is safe because `cloudflare_record.app`
+(`dns.tf:13`) is a single A record hard-pinned to web-1; if the multi-host rewire (#5274) lands,
+that resolver must switch to a web-1-pinned health path.
+
 ### Amendment (#5960, 2026-07-03) — loaded proof read live from the running container; poll validates the swap terminal and treats lock_contention as non-terminal
 
 Once #5955 cleared the `tag_malformed` wedge, the item-4 assert failed on

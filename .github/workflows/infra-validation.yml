@@ -216,6 +216,9 @@ jobs:
       - name: Run deploy-status fan-out verify retry tests (#6051/#6040)
         run: bash apps/web-platform/infra/deploy-status-fanout-verify.test.sh
 
+      - name: Run web-1 known-good tag resolver semver-guard tests (#6147)
+        run: bash apps/web-platform/infra/resolve-web1-known-good-tag.test.sh
+
       - name: Run firewall port-9000 deny drift-guard
         run: bash apps/web-platform/infra/firewall-9000-deny.test.sh
 
