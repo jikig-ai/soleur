@@ -6,10 +6,10 @@ Lane: cross-domain · Threshold: single-user incident · Deferred HA: #6185 · S
 ## Phase 0 — Resolve fan-out + rehearse (local/read-only)
 
 - [ ] 0.1 Detect current prod web-inngest backend (SQLite vs Postgres) via inngest-inventory hook + pool probe; note heterogeneous-fleet branch
-- [ ] 0.2 Resolve invocation semantics by reading `node_modules/inngest` routing source; local 2-instance harness only if ambiguous; record in Research Insights (Connect probe cut)
-- [ ] 0.3 Rehearse quiesce→outage→register timing + rollback (T5) locally
-- [ ] 0.4 Schema + state-model spike (v1.19.4): cron-run enumeration path + real exactly-once invariant (NO scheduled_tick — use (function_id, bucket(startedAt, cron_period)) or Sentry cron-monitors); reconciled Postgres-schedule vs Redis-queue model; populated-Redis-across-Postgres-swap safety (DI-C1/C2/M5) — GATES AC13
-- [ ] 0.5 Author ADR-098 (fan-out, hooks-stay-web-host, dark→live flip, #5450 supersedes, signature-verify sole boundary + nftables, host-compromise blast radius + key rotation); status: adopting
+- [x] 0.2 DONE — ROUTE-ONCE confirmed (Docker 2-instance harness; SDK source alone insufficient). Recorded in plan `## Research Insights` + ADR-098. Decision: single-url-now, VIP-at-N>1 (Connect probe cut)
+- [~] 0.3 PARTIAL — Redis-swap + route-once rehearsed in the Phase-0 Docker harness; full quiesce→register timing + rollback (T5) rehearsed against cutover-inngest.yml in Phase-2 pre-flight (not local)
+- [x] 0.4 DONE — cron-run enum path CONFIRMED (`runs(RunsFilterV2, timeField:STARTED_AT, functionIDs)`; invariant `(functionID, floor(startedAt/period))`; scheduled_tick nonexistent). Redis-swap → FLUSHALL+DBSIZE==0 MANDATORY (empirically proven). State model reconciled. AC13 soak probe demonstrably writable. Evidence: phase0-empirical-spike.md
+- [x] 0.5 DONE — ADR-098 authored (status: adopting); C4 edits applied + c4-*.test.ts green (AC5/AC6)
 
 ## Phase 1 — Provision on a NON-PROD dark backend (IaC)
 

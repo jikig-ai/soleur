@@ -130,6 +130,42 @@ the source is genuinely ambiguous. If route-once is confirmed, adopt multi-`--sd
 **and re-confirm on the dark host in Phase 1 before app wiring** (M2 — local
 fidelity ≠ prod); otherwise ship the VIP. The ADR fixes the choice.
 
+## Research Insights (Phase 0 spikes — RESOLVED 2026-07-07)
+
+Empirically resolved against the exact `inngest/inngest:v1.19.4` server pin (external
+Redis + Postgres, prod-fidelity) — full evidence in
+`knowledge-base/project/specs/feat-inngest-dedicated-host/phase0-empirical-spike.md`;
+decisions fixed in **ADR-098**. (Note: the app's `inngest` npm dep is the **SDK v3.54.2**;
+the "v1.19.4 pin" throughout is the self-hosted **server** binary — routing/enumeration are
+server behaviors, not SDK-source-answerable.)
+
+- **0.2 Fan-out → ROUTE-ONCE (confirmed).** Two `--sdk-url`s at the same app id collapse to ONE
+  app (SDK keys by `appName = new Inngest({id})`, `InngestCommHandler.js:1271-1300`); only one
+  instance ever executed across 4 clean sends — no invoke-all. `--sdk-url` **is repeatable**.
+  BUT the winning URL is last-writer-wins and *flaps* on re-poll → non-deterministic replica +
+  transient ingest perturbation. **Decision:** single stable `--sdk-url` (to web-1's private
+  interface now, N=1 no-flap); a private **VIP** is the deterministic primary once web-2 is
+  pooled (4.2). Multi-url is a safe-but-flappy fallback, not primary. `--sdk-url` templating
+  (1.2.1) must therefore emit a single value now (list-capable sentinel for the VIP-later path).
+- **0.4a Cron-run enumeration → YES, definitive (AC13 soak probe demonstrably writable).**
+  Top-level `runs(filter: RunsFilterV2!, orderBy, timeField: STARTED_AT)` enumerates cron runs by
+  `functionIDs` + time window with no prior run ids; `FunctionRunV2.startedAt/queuedAt/status`
+  reliable. Invariant grouping `(functionID, floor(startedAt / cron_period))`; every occupied
+  bucket must have exactly one run. `scheduled_tick` confirmed nonexistent; `cronSchedule`/
+  `eventName` are `null` on run nodes (do not use). Alternate: `eventsV2(includeInternalEvents:
+  true)` → `inngest/scheduled.timer`.
+- **0.4c Redis-swap → FLUSHALL MANDATORY (empirically proven).** With Redis retained across a
+  Postgres swap: in-flight `step.sleep`/queued jobs enqueued vs DB-A executed vs the fresh DB-B;
+  the cron schedule (Redis `{queue}:queue:sorted:cron`) kept firing vs DB-B; account-scoped
+  idempotency keys (`{cs}:a:<acct>:ik:*`, Postgres-independent) survived and mis-dedup. **A gated
+  `FLUSHALL` + `DBSIZE==0` assertion immediately before the 2.3 prod-Postgres flip is mandatory**
+  (AC-REDIS-ZERO). Plan's "SQLite-only fallback" assumption was WRONG — `inngest start` exposes
+  both `--redis-uri` and `--postgres-uri`, so the exact prod topology was tested directly.
+- **State model (reconciled — DI-M5):** schedule/config lives in **Postgres**; the armed
+  work-queue + near-term delivery + cron schedule + ~24h dedup live in per-host **Redis**. The
+  cutover flips Postgres but not Redis — that asymmetry is the root of C1/C3/H4, and why the
+  FLUSHALL gate + Σ-across-hosts capture are load-bearing.
+
 ## Downtime & Cutover (zero-downtime-first)
 
 Two offline-inducing operations trigger this gate; the plan defaults to the
@@ -181,14 +217,17 @@ app private-interface bind before cutover (AC-FW).
   dark-backend design and the Phase-2 capture/rearm shape. **Re-detected at cutover
   start** (M3) since #5450 may run in the interim. Branch if web-1/web-2 report
   different backends (heterogeneous fleet).
-- [ ] **0.2 Resolve invocation semantics (route-once vs invoke-all)** by reading
-  `node_modules/inngest` routing source; local two-instance harness only if
-  ambiguous. Record the finding in `## Research Insights`. (Connect probe **cut** —
-  Connect is deferred.)
-- [ ] **0.3 Rehearse the dangerous sequences locally** (M5): quiesce→outage→register
+- [x] **0.2 Resolve invocation semantics (route-once vs invoke-all)** — DONE: ROUTE-ONCE
+  confirmed via a two-instance Docker harness (SDK-source alone insufficient — routing is a
+  server behavior). Recorded in `## Research Insights` + ADR-098 (single-url-now, VIP-at-N>1).
+  (Connect probe **cut** — Connect is deferred.)
+- [~] **0.3 Rehearse the dangerous sequences locally** (M5): quiesce→outage→register
   timing (to size the H1 window) **and** the rollback path (T5). The riskiest
-  transitions must be exercised before the real maintenance window.
-- [ ] **0.4 Schema + state-model spike (load-bearing — DI-C2, DI-M5)** against the
+  transitions must be exercised before the real maintenance window. _(PARTIAL: the
+  Redis-swap datastore-flip + route-once were rehearsed in the Phase-0 Docker harness;
+  the full quiesce→register timing + rollback orchestration are rehearsed against the
+  `cutover-inngest.yml op=execute` artifact in Phase 2 pre-flight, not local.)_
+- [x] **0.4 Schema + state-model spike (load-bearing — DI-C2, DI-M5)** — DONE against the
   v1.19.4 pin (mirror #5450's `/v0/gql` verify): (a) confirm a real **cron-run
   enumeration path** (cron runs are schedule-triggered, not in `eventsV2→runs`) and
   redefine the exactly-once invariant against **fields that exist** (`FunctionRunV2
@@ -197,7 +236,9 @@ app private-interface bind before cutover (AC-FW).
   model; (c) verify whether a **populated Redis pointed at a swapped Postgres** is
   safe (DI-C1) — if not, the Redis `FLUSHALL` before 2.3 is mandatory. Until the
   soak probe is demonstrably writable, AC13 cannot gate Phase 3.
-- [ ] **0.5 Output → ADR-098** (see Architecture Decision) fixing: the fan-out
+- [x] **0.5 Output → ADR-098** (see Architecture Decision) — DONE
+  (`ADR-098-inngest-dedicated-single-host-singleton-control-plane.md`, `status: adopting`;
+  C4 edits applied + `c4-*.test.ts` green) fixing: the fan-out
   mechanism, hooks-stay-web-host, the dark→live datastore-flip mechanism, the
   #5450 supersession, **signature-verify as the sole `/api/inngest` boundary +
   nftables scoping (SEC-H1/H2)**, and the **inngest-host compromise blast radius +
