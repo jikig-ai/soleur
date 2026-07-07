@@ -184,8 +184,22 @@ STAGE=ghcr_login
     # preference + fail-open subshell as emit_fail; only the body differs.
     _sentry_emit "$(printf '{"message":"fresh-boot GHCR docker login failed","level":"warning","logger":"soleur-host-bootstrap","tags":{"feature":"supply-chain","op":"image-pull","stage":"ghcr_login","pull_result":"%s","host_id":"%s"}}' "$1" "$HOST_ID")"
   }
-  GHCR_USER=$(timeout 15 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null || true)
-  GHCR_TOKEN=$(timeout 15 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
+  # (#6090) Prefer the BAKED creds (cloud-init writes /etc/default/soleur-ghcr-read early in
+  # runcmd, deploy:deploy 0600) so the inngest-bootstrap + app image pulls authenticate on a
+  # cold host even when Doppler answers EMPTY at the boot instant — the same failure class the
+  # cloud-init ghcr_login (#6090) and the ci-deploy prelude (#6161) already bake against. An
+  # empty fetch here skipped docker login → anonymous inngest pull → /var/lib/inngest never
+  # created → webhook.service fails 226/NAMESPACE (it ReadWritePaths=/var/lib/inngest) → :9000
+  # never binds → the peer fan-out degrades. Hardened Doppler fallback (timeout 45 + 3-try retry).
+  GHCR_USER=""; GHCR_TOKEN=""
+  if [ -r /etc/default/soleur-ghcr-read ]; then
+    # shellcheck disable=SC1091
+    . /etc/default/soleur-ghcr-read 2>/dev/null || true
+    GHCR_USER="${GHCR_READ_USER:-}"; GHCR_TOKEN="${GHCR_READ_TOKEN:-}"
+    unset GHCR_READ_TOKEN   # keep the token out of this process env + its children
+  fi
+  [ -n "$GHCR_USER" ] || { n=0; until GHCR_USER=$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null); [ -n "$GHCR_USER" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done; }
+  [ -n "$GHCR_TOKEN" ] || { n=0; until GHCR_TOKEN=$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null); [ -n "$GHCR_TOKEN" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done; }
   if [ -n "$GHCR_USER" ] && [ -n "$GHCR_TOKEN" ]; then
     if printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null 2>&1; then
       echo "soleur-host-bootstrap: docker login ghcr.io ok"

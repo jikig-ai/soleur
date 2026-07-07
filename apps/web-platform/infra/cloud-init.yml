@@ -390,6 +390,14 @@ runcmd:
   - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/webhook-deploy
   - chmod 600 /etc/default/webhook-deploy
   - chown deploy:deploy /etc/default/webhook-deploy
+  # (#6090) Bake the scoped GHCR read-creds so ci-deploy.sh's ghcr_prelude_and_login (the
+  # app-pull + cosign-verify login) authenticates on a cold host even when Doppler answers
+  # empty at the boot instant — the app-deploy analogue of the seed-pull bake above. Same
+  # protection as webhook-deploy (deploy:deploy 0600, which already holds the strictly
+  # stronger DOPPLER_TOKEN), so no new trust boundary. ci-deploy runs as the deploy user.
+  - printf 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s\n' '${ghcr_read_user}' '${ghcr_read_token}' > /etc/default/soleur-ghcr-read
+  - chmod 600 /etc/default/soleur-ghcr-read
+  - chown deploy:deploy /etc/default/soleur-ghcr-read
 
   # Install Docker via official APT repository with GPG key verification (#1615).
   # Replaces pipe-to-shell (curl | sh) with signed APT repo -- same pattern as cloudflared above.
