@@ -684,8 +684,13 @@ jobs:
           sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane
           rm /tmp/crane.tgz
 
-          BASE="$(basename "$IMAGE")"        # e.g. soleur-web-platform
-          ZOT="127.0.0.1:5000/${BASE}"
+          # Preserve the FULL org namespace (jikig-ai/…). The pull side
+          # (ci-deploy.sh: zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") and
+          # zot-entry-gate.sh both address `jikig-ai/soleur-web-platform`. `basename` dropped
+          # the org, pushing to an orphan `soleur-web-platform` repo nothing reads → the gate
+          # MISSED and every pull fell back to GHCR (#6122 namespace fix).
+          REPO="${IMAGE#ghcr.io/}"           # e.g. jikig-ai/soleur-web-platform
+          ZOT="127.0.0.1:5000/${REPO}"
           # crane reads ~/.docker/config.json for BOTH ghcr.io (Docker login step) and
           # 127.0.0.1:5000 (cf-tunnel-registry-bridge docker login). Copy every tag the GHCR
           # build-push wrote (digest preserved → zot manifest byte-identical).
