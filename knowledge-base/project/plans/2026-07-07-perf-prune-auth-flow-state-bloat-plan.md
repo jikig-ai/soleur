@@ -12,6 +12,26 @@ supersedes_wip: 5762
 
 # ♻️ perf(db): prune unbounded `auth.flow_state` GoTrue bloat + record #5739 WAL decision
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-07 · **Review panel:** data-integrity-guardian, security-sentinel,
+architecture-strategist, code-simplicity-reviewer (+ live prod read-only schema/grant introspection
+and GoTrue source research). Unanimous verdict: **ship-safe, sound, proportionate.** Changes applied:
+
+1. **Retention window 3 days → 7 days** — matches both siblings (103/115), deletes the bespoke
+   floor-derivation apparatus, and *widens* the safety margin (simplicity Q3 + security F1).
+2. **Floor re-derived against live config** — `mailer_otp_exp` is pinned to **600s (10 min)** at
+   `configure-auth.sh:52`, not the 1-day default → 7-day floor is a ~1000× margin. Added a
+   **floor-invariant** (window must exceed the highest configured OTP/link expiry).
+3. **Phase-0 FK-child check** — `auth.saml_relay_states.flow_state_id` FKs flow_state; confirm empty.
+4. **MFA correction** — MFA/AAL2 challenges live in `auth.mfa_challenges`, NOT flow_state (security F3).
+5. **Lightweight ADR-098 promoted to in-scope** — first Soleur-owned retention on a GoTrue-managed
+   `auth` schema via a revocable grant is precedent-setting (architecture F2).
+6. **C4 citation corrected** — `auth` container (model.c4:43-44), `supabase` database (156),
+   `auth -> supabase "Validates tokens"` edge (341); "no C4 impact" conclusion unchanged.
+7. **Fails-open trade made explicit** + accepted-in-writing at p3 (security F2 / architecture F4).
+8. **#5762 → decision-challenge** (operator fenced it off; do not auto-close) + AC/prose trims.
+
 ## Overview
 
 Issue #5739 tracks the "~18% of prod WAL from Supabase Auth (GoTrue)" residual from the
@@ -60,10 +80,11 @@ disk/security win. `Closes #5739`.
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** a login that silently fails — if the prune
-  predicate were too aggressive and deleted an **in-flight** PKCE / magic-link / MFA
+  predicate were too aggressive and deleted an **in-flight** PKCE / OAuth / magic-link
   `flow_state` row, the user's OAuth callback or magic-link click would return
-  "invalid flow state" and they could not sign in. (Structurally prevented by the 3-day
-  floor — see Risks R1.)
+  "invalid flow state" and they could not sign in. (Structurally prevented by the 7-day
+  floor — see Risks R1. Note: MFA/AAL2 challenges live in `auth.mfa_challenges`, a different
+  table this prune does not touch — flow_state covers PKCE/OAuth/magic-link/SSO web flows only.)
 - **If this leaks, the user's data is exposed via:** stale `provider_access_token` /
   `provider_refresh_token` values for abandoned OAuth flows retained indefinitely in
   `auth.flow_state`. Pruning them **reduces** this exposure (data minimization); the change
@@ -91,35 +112,44 @@ verified intact — this plan does not touch it. No stale premise.
 1. Via Supabase MCP (`execute_sql`, read-only) on `ifsccnjhymdmidffkzhl`, re-confirm before
    writing SQL: (a) `postgres` still holds `DELETE` on `auth.flow_state`
    (`information_schema.role_table_grants`); (b) row-count-by-age
-   (total / older-than-3d, oldest `created_at`); (c) pgss window age + that `flow_state`
+   (total / older-than-7d, oldest `created_at`); (c) pgss window age + that `flow_state`
    INSERT WAL ≪ `refresh_tokens` INSERT WAL (confirms the bloat-not-WAL framing). Record the
    numbers into the PR body evidence block.
-2. Re-run the migration-number collision check: `git ls-tree origin/main apps/web-platform/supabase/migrations/`
+2. **FK-child check (data-integrity):** `SELECT count(*) FROM auth.saml_relay_states WHERE flow_state_id IS NOT NULL;`
+   — `auth.saml_relay_states.flow_state_id` FKs `auth.flow_state(id)` in the GoTrue schema.
+   Confirm it is **0** (Soleur has no SAML SSO wiring — grep-confirmed zero `saml_relay_states`
+   references), OR that any referenced rows are themselves > 7 days stale. This closes the only
+   referential path the DELETE could cascade/block on. Also confirm the live `mailer_otp_exp`
+   value (`configure-auth.sh:52` pins it to **600s / 10 min**, not the 1-day default) so the
+   7-day floor's margin is re-derived against the real config, not the default.
+3. Re-run the migration-number collision check: `git ls-tree origin/main apps/web-platform/supabase/migrations/`
    — confirm `124_*` is free; if taken, use the next free number and update all references.
 
 ### Phase 1 — Migration (mirror 115 / 103 shape)
 1. Create `apps/web-platform/supabase/migrations/124_prune_auth_flow_state.sql`:
    - **Header comment** (mirror 115/103 prose density): why (GoTrue never prunes flow_state;
      4.3k rows / 3.7-month backlog; 99.6% abandoned; stale OAuth tokens); the bloat-not-WAL
-     framing (cite the cadence-vs-prune learning); the 3-day floor derivation
-     (MAILER_OTP_EXP 1d + FlowStateExpiryDuration 5min ⇒ 24h absolute floor, 3d = headroom);
-     runs as `postgres` (explicit DELETE grant + rolbypassrls, no SECURITY DEFINER); atomicity
-     + idempotency notes (single-transaction runner; NO top-level BEGIN/COMMIT; cron.unschedule
-     guard + `EXCEPTION WHEN duplicate_object`).
+     framing (cite the cadence-vs-prune learning); the **7-day window** choice (matches siblings
+     103/115; the unexchangeable floor is ~10 min — live `mailer_otp_exp` 600s +
+     `FlowStateExpiryDuration` 5 min — so 7 days clears it by ~1000×; **do NOT go below 1 day**);
+     the **floor-invariant** (the window MUST exceed the highest configured OTP/link expiry —
+     revisit if `mailer_otp_exp` is ever raised toward days); runs as `postgres` (explicit DELETE
+     grant + rolbypassrls, no SECURITY DEFINER); atomicity + idempotency notes (single-transaction
+     runner; NO top-level BEGIN/COMMIT; cron.unschedule guard + `EXCEPTION WHEN duplicate_object`).
    - **Statement 1 — schedule the daily retention cron** (idempotent DO block, `cron.unschedule`
      guard, `EXCEPTION WHEN duplicate_object`):
      ```sql
      PERFORM cron.schedule(
        'auth_flow_state_retention',
        '0 4 * * *',
-       $$DELETE FROM auth.flow_state WHERE created_at < now() - interval '3 days'$$
+       $$DELETE FROM auth.flow_state WHERE created_at < now() - interval '7 days'$$
      );
      ```
    - **Statement 2 — one-time backlog purge** (immediate verifiability; the table is tiny
      ~4.3k rows so a single in-transaction DELETE is safe — unlike 115's 28k which deferred to
      the first cron run):
      ```sql
-     DELETE FROM auth.flow_state WHERE created_at < now() - interval '3 days';
+     DELETE FROM auth.flow_state WHERE created_at < now() - interval '7 days';
      ```
 2. Create `apps/web-platform/supabase/migrations/124_prune_auth_flow_state.down.sql`:
    `cron.unschedule('auth_flow_state_retention')` guarded by `IF EXISTS`. Comment that the
@@ -131,7 +161,9 @@ verified intact — this plan does not touch it. No stale premise.
    (`run-migrations.sh`, `psql --single-transaction`). Confirm apply is green and idempotent
    (re-apply is a no-op via the unschedule guard).
 2. Post-deploy (prod), read-only via Supabase MCP: the discoverability query (see Observability)
-   returns `flow_state` rows < 600, `prunable = 0`, and `cron.job` schedule `'0 4 * * *'`.
+   returns `prunable (older than 7 days) = 0` (backlog drained — the load-bearing invariant),
+   `cron.job` schedule `'0 4 * * *'`, and total `flow_state` rows bounded (~500 right after the
+   one-time purge; ~1,500 steady-state = ~7 days × ~214 flows/day, well under any bloat concern).
 
 ### Phase 3 — Record the #5739 decision
 1. PR body evidence block: post-soak measurement (legitimate volume, no loop, no short-TTL
@@ -160,10 +192,10 @@ No overlap on `auth.flow_state` / `flow_state` / `pg_cron` / `retention` in open
 
 ### Pre-merge (PR)
 - [ ] `124_prune_auth_flow_state.sql` schedules `auth_flow_state_retention` at `'0 4 * * *'`
-      with the exact predicate `DELETE FROM auth.flow_state WHERE created_at < now() - interval '3 days'`,
+      with the exact predicate `DELETE FROM auth.flow_state WHERE created_at < now() - interval '7 days'`
+      (matches siblings 103/115; well above the ~10-min unexchangeable floor),
       idempotent (unschedule guard + `EXCEPTION WHEN duplicate_object`), NO top-level BEGIN/COMMIT.
-- [ ] The predicate interval is **≥ 24h** (assert the literal is `'3 days'`, not below the
-      MAILER_OTP_EXP+FlowStateExpiry floor). `grep -c "interval '3 days'" 124_prune_auth_flow_state.sql` ≥ 1.
+      Verify: `grep -c "interval '7 days'" 124_prune_auth_flow_state.sql` ≥ 1.
 - [ ] `.down.sql` unschedules the job guarded by `IF EXISTS`.
 - [ ] Migration applies green + re-applies as a no-op on dev (idempotency).
 - [ ] PR body carries the post-soak evidence block (no-loop, legitimate-volume finding) and the
@@ -171,13 +203,14 @@ No overlap on `auth.flow_state` / `flow_state` / `pg_cron` / `retention` in open
 - [ ] No SECURITY DEFINER function introduced (postgres runs the cron directly — verified grant).
 
 ### Post-merge (operator/automated)
-- [ ] After prod migrate, Supabase MCP discoverability query returns `flow_state` row count
-      < 600 and `prunable (older than 3 days) = 0` (one-time purge drained the 3.7-month backlog).
+- [ ] After prod migrate, Supabase MCP discoverability query returns `prunable (older than 7 days) = 0`
+      (one-time purge drained the 3.7-month backlog) and total `flow_state` rows bounded
+      (~500 immediately post-purge; ≤ ~1,600 steady-state).
       *Automation:* Supabase MCP `execute_sql` read-only — automatable inline at /ship post-deploy verify.
 - [ ] `SELECT schedule FROM cron.job WHERE jobname='auth_flow_state_retention'` returns `'0 4 * * *'`.
       *Automation:* Supabase MCP read-only.
-- [ ] Auth-schema WAL share **re-measured and documented as unchanged by design** (the prune is a
-      bloat/disk play, not a WAL lever) — closes the issue's third AC honestly.
+- [ ] PR body states the auth-schema WAL share is **unchanged by design** (the prune is a bloat/disk
+      play, not a WAL lever) — discharges the issue's third AC honestly without a separate re-measure step.
 
 ## Observability
 
@@ -192,15 +225,23 @@ error_reporting:
   fail_loud: a failed DELETE leaves rows undeleted; surfaced by the row-count discoverability query (creep back up)
 failure_modes:
   - {mode: postgres loses DELETE grant on auth.flow_state after a GoTrue/platform upgrade, detection: cron.job_run_details.status='failed' with 'permission denied', alert_route: row-count creep on the discoverability query + failed-run rows}
-  - {mode: predicate deletes an in-flight flow_state row (login break), detection: single-user login failure, alert_route: structurally impossible at the 3-day floor (all flow TTLs ≪ 3d) — no user-reachable path}
+  - {mode: predicate deletes an in-flight flow_state row (login break), detection: single-user login failure, alert_route: structurally impossible at the 7-day floor (all flow TTLs ≪ 7d) — no user-reachable path}
   - {mode: migration idempotency bug leaves the cron unscheduled, detection: SELECT from cron.job returns 0 rows for jobname, alert_route: post-deploy discoverability query}
 logs:
   where: cron.job_run_details (pg_cron native); pruned after 7 days by the existing cron_job_run_details_retention job
   retention: 7 days
 discoverability_test:
-  command: "SELECT (SELECT count(*) FROM auth.flow_state) AS rows, (SELECT count(*) FROM auth.flow_state WHERE created_at < now() - interval '3 days') AS prunable, (SELECT schedule FROM cron.job WHERE jobname='auth_flow_state_retention') AS sched;  -- via Supabase MCP execute_sql, no ssh"
-  expected_output: "rows < 600, prunable = 0, sched = '0 4 * * *'"
+  command: "SELECT (SELECT count(*) FROM auth.flow_state) AS rows, (SELECT count(*) FROM auth.flow_state WHERE created_at < now() - interval '7 days') AS prunable, (SELECT schedule FROM cron.job WHERE jobname='auth_flow_state_retention') AS sched;  -- run via Supabase MCP execute_sql (ssh-free)"
+  expected_output: "prunable = 0, rows <= 1600 (~500 right after purge), sched = '0 4 * * *'"
 ```
+
+**Fails-open (accepted at p3):** this cron is partly a security/GDPR control (removing stale
+`provider_*` OAuth tokens), and on grant revocation (R2) it **fails open** — it stops pruning and
+stale tokens silently re-accumulate; `cron.job_run_details` evidence self-deletes after 7 days, so
+the standing signal is row-count creep on the discoverability query. **Accepted in writing** for a
+p3 hygiene cron rather than wiring a dedicated Sentry/Better Stack alert. A row-count tripwire
+(mirroring migration 095's `processed_github_events` monitor) is the follow-up if the security
+weight ever grows — noted, not built here.
 
 **Soak follow-through (Phase 2.9.1):** none required. Verification is **immediate** via the
 Statement-2 one-time purge (row count bounded at merge time) + the scheduled-job read — there is
@@ -208,22 +249,32 @@ no N-day time-gated close criterion, so no `scripts/followthroughs/` enrollment 
 
 ## Architecture Decision (ADR/C4)
 
-**No ADR.** This applies an established, recently-merged retention-prune pattern (migrations
-115 / 103 / 094) to one more unbounded table — it is pattern application, not a new
-architectural decision. The one decision-shaped item (declining the JWT-TTL lever) is a
-**non-change** already recorded as the issue's security rationale and sibling spec NG1; it does
-not warrant a new ADR.
+### ADR — lightweight, in scope (provisional ADR-098)
+The pg_cron *mechanism* is established (115/103/094), but this is the **first** in-repo cron to
+own retention on a **GoTrue-managed `auth` schema** table — all prior retention crons target
+`public.*`. That is a cross-boundary decision (Soleur taking over the lifecycle of a
+vendor-component-owned table, relying on a `postgres` DELETE grant a platform upgrade can revoke),
+and it is precedent-setting for the next auth-schema prune. So the plan **produces** a short ADR
+(via `/soleur:architecture` at /work time) rather than deferring or waving it off — decision:
+*Soleur owns `auth.flow_state` retention via a daily pg_cron DELETE run as `postgres`*; context:
+*GoTrue never prunes flow_state; revocable grant; 7-day floor-invariant (window must exceed the
+highest configured OTP/link expiry)*; alternatives considered: *SECURITY DEFINER owned by
+`supabase_auth_admin` (rejected — larger standing attack surface), JWT-TTL lever (deferred, NG1),
+do-nothing (rejected — unbounded bloat + stale-token retention)*. **Ordinal 098 is provisional**
+(next free is ADR-098; a sibling pipeline can claim it — /ship's ADR-ordinal collision gate
+re-verifies against `origin/main`, and any renumber sweeps this plan + tasks + ADR body together).
 
-**### C4 views — no C4 impact.** Read all three model files
-(`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`). Supabase Auth
-is already modeled: the `supabase` container carries `technology "Supabase Auth"` (model.c4:44)
-and the `webapp -> supabase "Auth and data"` / `api -> supabase "Auth and data"` edges
-(model.c4:280,334). Enumerated for this change: (a) **external human actors** — none new (no new
-sender/receiver; the prune is internal DB hygiene); (b) **external systems/vendors** — none new
-(Supabase already modeled; GoTrue is internal to the `supabase` container); (c) **containers /
-data stores** — none new (`auth.flow_state` is an internal table of the already-modeled `supabase`
-container); (d) **access relationships** — none change (`postgres → auth.flow_state` DELETE is
-intra-container, below C4 element granularity). No `.c4` edit required.
+### C4 views — no C4 impact
+Read all three model files (`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`).
+Supabase Auth is already modeled: a dedicated `auth = container "Auth Module"` with
+`technology "Supabase Auth"` (model.c4:43-44), the `supabase = database "Supabase PostgreSQL"`
+where `auth.flow_state` physically lives (model.c4:156), and the explicit
+`auth -> supabase "Validates tokens"` edge (model.c4:341). Enumerated for this change: (a)
+**external human actors** — none new (the prune is internal DB hygiene); (b) **external
+systems/vendors** — none new (Supabase/GoTrue already modeled); (c) **containers / data stores** —
+none new (`auth.flow_state` is an internal table of the already-modeled `supabase` database);
+(d) **access relationships** — none change (`postgres → auth.flow_state` DELETE is intra-database,
+below C4 element granularity). No `.c4` edit required.
 
 ## Infrastructure (IaC)
 
@@ -242,6 +293,9 @@ credentials) indefinitely; pruning expired rows removes that stale-secret retent
 processing activity**, no new data collected, no lawful-basis change, no special-category data.
 Advisory only; no Article 30 register entry required (bounding retention of an existing internal
 table, not a new activity). CLO carry-forward: the JWT-TTL security tradeoff stays deferred (NG1).
+**Principles register:** AP-009 ("never delete user data") does NOT fire — expired/abandoned
+`flow_state` rows are transient auth-flow scratch state, not user data; pruning them advances
+data-minimization rather than violating AP-009. No other AP applies as a deviation.
 
 ## Domain Review
 
@@ -262,22 +316,68 @@ Risks & Mitigations and gated by ACs.
 `components/**`, `app/**/page.tsx`, `app/**/layout.tsx`, or any UI-surface term. No wireframe
 required (`wg-ui-feature-requires-pen-wireframe` N/A — no UI surface).
 
+## Downtime & Cutover
+
+**Zero downtime — no serving surface goes offline.** The one-time backlog purge (Statement 2)
+is a fast row-level-lock `DELETE` matching only rows `created_at < now() - interval '7 days'`
+(stale/abandoned). It takes row locks on those ~4.1k stale rows only — **not** on the fresh rows
+live logins INSERT/DELETE (GoTrue touches rows < 5 min old on exchange), so it cannot block an
+in-flight sign-in. It takes **no** ACCESS EXCLUSIVE / table-level lock (a `DELETE` never does),
+completes in well under a second on this 4.3k-row table, and is not a long-held transaction. The
+daily cron `DELETE` is identically non-blocking. No `ALTER TABLE` / `ADD COLUMN` / index / rewrite
+DDL is involved — the Phase 4.55 database-lock triggers do not fire; this note is recorded
+defensively given the `single-user incident` threshold. No maintenance window needed. (The one
+referential dependent — `auth.saml_relay_states.flow_state_id` → `flow_state(id)` — is confirmed
+empty in Phase 0, so the "row locks on stale rows only" claim holds with no cascade child; if it
+were ever non-empty, a `NO ACTION` FK would surface as a visible cron error, never corruption.)
+
+## Precedent-Diff (Phase 4.4)
+
+**Pattern is NOT novel — mirrors two merged siblings.** `git grep` precedents for the pg_cron
+retention-prune shape:
+- `apps/web-platform/supabase/migrations/115_prune_cron_job_run_details.sql` (PR #5760, merged) —
+  daily `cron.schedule('…', '0 4 * * *', $$DELETE … WHERE … < now() - interval 'N days'$$)` with
+  `cron.unschedule` guard + `EXCEPTION WHEN duplicate_object`. This plan adopts that shape verbatim,
+  minus 115's Statement-1 cadence throttle (no cadence lever exists for auth — GoTrue INSERTs are
+  login-driven, not cron-driven).
+- `apps/web-platform/supabase/migrations/103_github_events_retention_7day.sql` — same idempotent
+  cron shape **plus a one-time in-transaction purge** (its Statement 2). This plan adopts 103's
+  one-time-purge choice (safe here: 4.3k rows ≪ 115's 28k, so no seq-scan-under-single-transaction
+  concern that made 115 defer its drain to the first cron run).
+
+**Scheduled-work substrate check (4.4 sub-gate):** this is a **pg_cron** job, NOT Inngest. All 5
+sibling retention jobs (115/103/094/038/076) use pg_cron; a data-plane `DELETE` that runs in-DB with
+no app context/secrets/Sentry integration is exactly what pg_cron is for. ADR-033's Inngest
+preference governs **application** scheduled work (needs app runtime); it does not apply to a
+DB-internal retention sweep. No Inngest function.
+
+**Auth-schema DELETE permissioning (precedent-diff):** no in-repo precedent prunes the `auth` schema
+(all existing crons target `public.*`). This is the one novel axis — mitigated by the Phase-0
+read-only grant re-verify (`postgres` holds explicit DELETE + `rolbypassrls`; runs as `postgres`
+like every sibling; no SECURITY DEFINER). Flagged for reviewer scrutiny.
+
 ## Risks & Mitigations
 
 - **R1 — predicate deletes an in-flight flow (login break, single-user incident).** *Mitigation:*
-  3-day floor ≫ every GoTrue flow TTL (PKCE FlowStateExpiryDuration 5 min; magic-link/recovery
-  MAILER_OTP_EXP 1 day). A row older than 3 days is unexchangeable by construction. AC asserts the
-  `'3 days'` literal; never lower below 24h. Precedent: GoTrue's own `IsExpired()` uses `created_at`.
-- **R2 — grant fragility.** `postgres`'s DELETE grant on `auth.flow_state` could be reset by a
-  future Supabase/GoTrue platform upgrade. *Mitigation:* Phase 0 read-only grant re-verify before
-  writing SQL; on revocation the cron simply errors (visible in `cron.job_run_details`) with **no
-  data risk**. No SECURITY DEFINER today (would be the fallback only if grants tighten).
+  7-day floor ≫ every GoTrue flow TTL (PKCE `FlowStateExpiryDuration` 5 min; magic-link/recovery
+  live `mailer_otp_exp` = 600s / 10 min per `configure-auth.sh:52`, NOT the 1-day default). A row
+  older than 7 days is unexchangeable by construction (~1000× margin). **Floor-invariant:** the
+  window MUST exceed the highest configured OTP/link expiry — if `mailer_otp_exp` is ever raised
+  toward days, re-derive. AC asserts the `'7 days'` literal; never lower below 1 day. Precedent:
+  GoTrue's own `IsExpired()` uses `created_at`.
+- **R2 — grant fragility (fails OPEN).** `postgres`'s DELETE grant on `auth.flow_state` could be
+  reset by a future Supabase/GoTrue platform upgrade. *Mitigation:* Phase 0 read-only grant
+  re-verify before writing SQL; on revocation the cron simply errors (visible in
+  `cron.job_run_details`) with **no data risk** — but note it **fails open**: it stops protecting
+  (stale-token minimization lapses), it does not fail closed. That trade is accepted-in-writing at
+  p3 (see Observability §Fails-open); the standing signal is row-count creep. No SECURITY DEFINER
+  today (the fallback only if grants tighten).
 - **R3 — migration-number collision mid-pipeline.** 8+ concurrent worktrees may claim `124`.
   *Mitigation:* re-check at ship after every `git merge origin/main` per
   `2026-06-30-migration-number-collision-mid-pipeline.md`; renumber `.sql`+`.down.sql` + all
   references in one edit cycle (ship's ADR/migration collision gate).
 - **R4 — retention window exceeds table age (silent DELETE 0).** *Mitigation:* N/A here — oldest
-  row is 3.7 months vs a 3-day window; the first run deletes ~4.1k rows. (Guard against the
+  row is 3.7 months vs a 7-day window; the first run deletes ~3.8k rows. (Guard against the
   `2026-06-14-pg-cron-retention-window-exceeding-table-age` failure mode by construction.)
 - **R5 — over-claiming a WAL win.** *Mitigation:* PR framed as bloat/dead-tuple + stale-secret
   minimization; auth WAL share documented as unchanged by design (Phase 3).
@@ -287,10 +387,16 @@ required (`wg-ui-feature-requires-pen-wireframe` N/A — no UI surface).
   this one is filled (single-user incident).
 - **Migration 124 is provisional.** Re-verify the free number at ship; renumber both files + all
   in-file/plan/tasks references together on collision.
-- **Coordination with sibling PR #5762:** this v2 PR `Closes #5739`; #5762 is a superseded WIP
-  draft on `feat-5739-auth-wal-reduction`. Recommend the operator/ship **close #5762 as
-  superseded** (`gh pr close 5762 --comment "superseded by #<v2>"`) — but **do NOT delete the
-  branch/worktree** (operator instruction). Not mandated by /work; surfaced for ship/operator.
+- **Coordination with sibling PR #5762 (operator decision — do NOT auto-act):** this v2 PR
+  `Closes #5739`, so merging it auto-closes the issue and leaves #5762 a draft against a closed
+  issue. The operator **explicitly fenced #5762/`feat-5739-auth-wal-reduction` off** ("do NOT
+  reuse or nuke the existing branch/PR") — that directive **overrides** the repo's default
+  never-defer-operator-actions stance for this specific PR. So /work and /ship MUST NOT
+  auto-close or delete #5762. Instead this is surfaced as a **decision-challenge**
+  (`knowledge-base/project/specs/feat-one-shot-5739-auth-wal-reduction-v2/decision-challenges.md`)
+  that /ship renders into the PR body + files as an `action-required` issue, for the operator to
+  decide #5762's disposition (close-as-superseded vs keep for its measurement record). Before
+  recommending closure, confirm v2's post-soak measurement fully subsumes #5762's mid-soak record.
 - Do NOT wrap the migration body in a top-level `BEGIN;`/`COMMIT;` — `run-migrations.sh` already
   runs `--single-transaction`; a self-issued COMMIT breaks ledger idempotency
   (`2026-05-25-migration-body-no-top-level-begin-commit.md`).
@@ -301,8 +407,8 @@ required (`wg-ui-feature-requires-pen-wireframe` N/A — no UI surface).
   ROI at p3, and the measurement shows no short-TTL refresh churn to fix. Revisit only on measured
   need with recorded CLO sign-off (baseline TTL + chosen TTL + revocation-window acceptance +
   rollback trigger + CLO attestation). Security rationale recorded per the issue's ACs.
-- **NG2 — Prune active/in-flight `flow_state` rows.** Would break live magic-link/OAuth/MFA logins.
-  The 3-day floor is the guard.
+- **NG2 — Prune active/in-flight `flow_state` rows.** Would break live magic-link / OAuth / SSO
+  logins. The 7-day floor is the guard.
 - **NG3 — Checkpoint tuning (`max_wal_size`/`checkpoint_timeout`).** Not operator-tunable on
   Supabase Micro (managed).
 - **NG4 — Any change to `refresh_tokens` / `sessions` / `mfa_amr_claims` churn.** Legitimate,
@@ -322,8 +428,8 @@ required (`wg-ui-feature-requires-pen-wireframe` N/A — no UI surface).
 1. **Idempotency:** apply 124 twice on dev → second apply is a no-op (unschedule guard); job
    exists exactly once.
 2. **Predicate safety:** on dev, insert a synthetic `flow_state` row with `created_at = now()`
-   (in-window) and one with `created_at = now() - interval '4 days'` (out-of-window); run the cron
-   body → only the 4-day row is deleted; the fresh row survives. (Synthetic fixtures on DEV only —
-   `hr-dev-prd-distinct-supabase-projects`; never seed prod.)
-3. **Backlog drain:** post-apply prod (read-only) → `prunable (older than 3 days) = 0`.
+   (in-window, must survive) and one with `created_at = now() - interval '8 days'` (out-of-window);
+   run the cron body → only the 8-day row is deleted; the fresh row survives. (Synthetic fixtures
+   on DEV only — `hr-dev-prd-distinct-supabase-projects`; never seed prod.)
+3. **Backlog drain:** post-apply prod (read-only) → `prunable (older than 7 days) = 0`.
 4. **Down migration:** apply `.down.sql` → `cron.job` has 0 rows for `auth_flow_state_retention`.
