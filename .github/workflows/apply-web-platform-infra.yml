@@ -1014,15 +1014,15 @@ jobs:
       - name: Resolve known-good image digest off-host (freeze $PINNED — AC3b TOCTOU)
         id: pin
         env:
-          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          # /health resolution needs Doppler for APP_DOMAIN_BASE (#6147).
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           # GHCR digest resolution needs an authenticated pull (private package).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
-        # Read web-1's RUNNING deploy tag off-host, GATED on web-1 being healthy and
-        # not mid-deploy (exit_code==0 — P2-1, don't pin a transient mid-deploy tag).
-        # Resolve tag → immutable @sha256 index digest EXACTLY ONCE via an
+        # Read web-1's RUNNING deploy tag off-host from its PUBLIC /health .version
+        # (#6147 — NOT the shared /hooks/deploy-status .tag slot a non-web writer can
+        # wedge to `latest`; see the run block). Resolve tag → immutable @sha256
+        # index digest EXACTLY ONCE via an
         # authenticated `docker buildx imagetools inspect` (GITHUB_TOKEN + packages:read;
         # GHCR is private, NOT anonymously pullable), and freeze it into
         # $GITHUB_ENV as PINNED so the preflight, plan -var, and apply all consume the
@@ -1030,40 +1030,48 @@ jobs:
         # apply — a moved tag would void the preflight's guarantee).
         run: |
           set -euo pipefail
-          SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-          TAG=""
+          # Resolve web-1's known-good running tag from its PUBLIC /health .version —
+          # NOT the shared https://deploy.soleur.ai/hooks/deploy-status .tag slot
+          # (#6147). That slot is a SINGLE last-write-wins object (ci-deploy.sh
+          # write_state) stamped by multiple independent writers; when a non-web
+          # writer owns it (an inngest watchdog restart stamping
+          # {component:inngest,tag:latest,exit_code:0}), the old read pinned a
+          # non-semver `latest` and hard-aborted this recreate even though web-1 was
+          # healthy. .version is the actually-running container's baked BUILD_VERSION
+          # (ADR-079 amendment #5955 — the pattern apply-deploy-pipeline-fix.yml:599
+          # already uses for this identical `.tag`=latest wedge), immune to
+          # deploy-status writer contention because it never reads the shared slot.
+          #
+          # HOST-TARGETING INVARIANT (load-bearing): app.<domain>/health must reflect
+          # web-1, not a partially-recreated web-2. This holds by construction —
+          # cloudflare_record.app (apps/web-platform/infra/dns.tf:13) is a SINGLE
+          # proxied A record hard-pinned to hcloud_server.web["web-1"], NOT a
+          # round-robin LB. The multi-host DNS rewire (one A record per host, CF
+          # round-robin) is deferred to #5274 Phase 3.D and does not exist yet.
+          # REVISIT TRIGGER: if #5274 lands and `app` becomes a round-robin record,
+          # this resolver MUST switch to a web-1-pinned health path (or re-add a host
+          # check) — app/health would no longer be guaranteed to hit web-1.
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
+          RUNNING_VERSION=""
           for i in $(seq 1 12); do
-            HTTP_CODE=$(curl -s --max-time 10 -o /tmp/pin-body -w '%{http_code}' -X GET \
-              -H "X-Signature-256: sha256=$SIGNATURE" \
-              -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-              -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-              "https://deploy.soleur.ai/hooks/deploy-status" || echo "000")
-            BODY=$(cat /tmp/pin-body 2>/dev/null || echo "")
-            if [[ -z "$BODY" ]] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
-              echo "Attempt $i/12: HTTP $HTTP_CODE non-JSON/empty deploy-status — retrying"
-              sleep 10; continue
+            # Public endpoint — NO CF-Access headers (contrast the deploy-status curl
+            # this replaces). Same endpoint web-platform-release.yml curls for its
+            # health gate. .version is a bare semver (jq '.version // ""').
+            RUNNING_VERSION=$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")
+            if [[ -n "$RUNNING_VERSION" ]]; then
+              break
             fi
-            EXIT_CODE=$(echo "$BODY" | jq -r '.exit_code // -99')
-            REASON=$(echo "$BODY" | jq -r '.reason // "unknown"')
-            if [[ "$EXIT_CODE" == "-1" ]]; then
-              echo "Attempt $i/12: web-1 deploy in flight (exit_code=-1) — waiting for a settled tag"
-              sleep 10; continue
-            fi
-            # Gate the pin on a healthy, settled web-1 (P2-1). A degraded reason (the
-            # very state this recreate fixes: ok_peer_fanout_degraded) still surfaces
-            # web-1's OWN running tag, which is known-good FOR web-1 — accept exit 0
-            # regardless of the peer-fanout reason, but never a failed web-1 deploy.
-            if [[ "$EXIT_CODE" != "0" ]]; then
-              echo "Attempt $i/12: web-1 deploy-status exit_code=$EXIT_CODE (reason=$REASON) — waiting for a healthy web-1 tag"
-              sleep 10; continue
-            fi
-            TAG=$(echo "$BODY" | jq -r '.tag // ""')
-            break
+            echo "Attempt $i/12: ${HEALTH_URL} unreachable or reported empty .version — retrying"
+            sleep 10
           done
-          if [[ ! "$TAG" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; then
-            echo "::error::could not read a valid, settled running tag from web-1 deploy-status (got '${TAG}'). Cannot resolve a known-good digest — aborting BEFORE any -replace."
-            exit 1
-          fi
+          # Strict-semver validate + prepend v, via the PURE fixture-tested resolver
+          # (apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh). It exits
+          # non-zero with a distinct ::error:: on a non-released/prerelease/`latest`
+          # version, so `set -e` aborts this step BEFORE any -replace — the safety
+          # envelope (coherence preflight, abort-before-replace) is unchanged.
+          TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$RUNNING_VERSION")
+          echo "web-1 running version=${RUNNING_VERSION} -> known-good tag=${TAG} (resolved from ${HEALTH_URL})"
           # Authenticate to GHCR before resolving — the image is a PRIVATE package,
           # so an anonymous `imagetools inspect` 401s (the pre-fix bug: the plan's
           # "live-confirmed no-auth" was a cached-docker-login false-confirm). Log in
