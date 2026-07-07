@@ -108,6 +108,27 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # Disk-capacity guard (#6122 follow-up): ping the disk-health heartbeat ONLY while /var/lib/zot
+  # is under 85% used. A filling store (or a down host / broken cron) stops the ping → Better Stack
+  # alerts BEFORE full, no SSH/df/dashboard (hr-no-dashboard-eyeball-pull-data-yourself). ${disk_heartbeat_url}
+  # is terraform-interpolated; $USE stays literal (templatefile only expands ${...}, not $VAR).
+  - path: /usr/local/bin/zot-disk-heartbeat.sh
+    content: |
+      #!/usr/bin/env bash
+      set -u
+      USE=$(df --output=pcent /var/lib/zot 2>/dev/null | tail -1 | tr -dc '0-9')
+      [ -n "$USE" ] || exit 0
+      [ "$USE" -lt 85 ] && curl -fsS -m 10 "${disk_heartbeat_url}" >/dev/null 2>&1 || true
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/cron.d/zot-disk-heartbeat
+    content: |
+      # Emit the zot disk-health heartbeat every 5 min if /var/lib/zot has headroom (#6122 follow-up).
+      */5 * * * * root /usr/local/bin/zot-disk-heartbeat.sh
+    owner: root:root
+    permissions: '0644'
+
 runcmd:
   # Apply SSH hardening immediately.
   - systemctl restart sshd
@@ -197,3 +218,8 @@ runcmd:
       sleep 2
     done
     ZOTEOF
+
+  # Disk-capacity guard: ensure cron is active and emit the first disk heartbeat now that zot is
+  # up, so Better Stack goes green within the redeploy (not after the first 5-min cron tick).
+  - systemctl enable --now cron || true
+  - bash /usr/local/bin/zot-disk-heartbeat.sh || true

@@ -217,6 +217,11 @@ resource "hcloud_server" "registry" {
     # Host arch (arm64/amd64) → the matching Doppler CLI release build + its checksum.
     doppler_arch   = local.registry_arch
     doppler_sha256 = local.doppler_sha256
+    # Disk-health heartbeat: the host pings this ONLY while /var/lib/zot is under 85% used, so
+    # a filling store (or a down host / broken cron) alerts via Better Stack absence — no SSH,
+    # no dashboard-eyeballing (hr-no-dashboard-eyeball-pull-data-yourself). Not a secret (a bare
+    # ping URL); baked into user_data like zot_image, retrievable via the hcloud metadata API.
+    disk_heartbeat_url = betteruptime_heartbeat.registry_disk_prd.url
   }))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
@@ -305,4 +310,33 @@ resource "doppler_secret" "zot_heartbeat_url_prd" {
   name       = "ZOT_HEARTBEAT_URL"
   value      = betteruptime_heartbeat.registry_prd.url
   visibility = "masked"
+}
+
+# --- Disk-capacity guard (#6122 follow-up) --------------------------------------------------
+# A SECOND heartbeat, distinct from the liveness beat above: the registry host's cron pings it
+# only while /var/lib/zot is < 85% used (cloud-init-registry.yml). A store that grows toward full
+# — the failure that #6122 hit (100% → all pushes 500 'no space left on device') — silently stops
+# the ping, and Better Stack alerts BEFORE the disk is full, without any SSH/df or dashboard poll
+# (hr-no-dashboard-eyeball-pull-data-yourself). Pairs with storage.retention (growth cap) + the
+# 30 GB volume (headroom): retention bounds growth, this catches it if bounding ever regresses.
+# period 900s / grace 600s: disk fills slowly, and 600s of grace covers the redeploy boot gap so
+# paused=false is safe (no operator UI unpause needed — the cron pings within cloud-init).
+resource "betteruptime_heartbeat" "registry_disk_prd" {
+  name       = "soleur-registry-disk-prd"
+  period     = 900
+  grace      = 600
+  call       = false
+  sms        = false
+  email      = true
+  push       = false
+  team_wait  = 0
+  team_name  = "Your team"
+  policy_id  = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
+  paused     = false
+  sort_index = 0
+
+  lifecycle {
+    # Operator UI pause (e.g. during a planned volume resize) must survive subsequent applies.
+    ignore_changes = [paused]
+  }
 }
