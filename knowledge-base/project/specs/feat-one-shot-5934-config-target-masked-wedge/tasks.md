@@ -7,40 +7,97 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
-# Tasks — worktree config-target-masked self-diagnosis (defense-in-depth) + #5934 reconciliation
+# Tasks — worktree config-target-masked wedge: observability meta-fix + target-masked pre-check + bare-under-mask correctness + self-heal + local test
 
-> **Evidence-first framing (do not skip).** Phase-1 telemetry showed the supplied premise
-> is stale: the user-facing wedge was fixed by #6183 (`696aa4649`, on `main`); the
-> `ensure_bare_config`/config-target path has zero telemetry over 30d. This work delivers
-> a defense-in-depth self-diagnosis sentinel + test + issue reconciliation ONLY. Do NOT
-> re-patch `ensure_bare_config:492`, do NOT touch `ensure_worktree_identity`, `#4826`, or
-> close `#5934`. See plan §"Explicit non-goals".
+> **Ground truth (do not re-invert).** This wedge is LIVE on current `main`, proven by an
+> operator-verbatim error: `mv: cannot move '.git/config.soleur-tmp.4' to '.git/config':
+> Device or resource busy` + `[error] worktree wedge: could not apply shared-config
+> prerequisites`. The `.git/config` rename TARGET is masked/bind-mounted; the fatal path
+> was invisible to telemetry (`headless_or_stderr` per-PID logfile sink + `[error]` prefix
+> failing `MARKER_RE` + allowlist gaps) — which is why four prior fixes (07-01 → 07-07)
+> never converged. Do NOT close `#5934` (host-side durable seed remains its scope) and do
+> NOT touch `#4826`. See plan §"Ground truth" and §"The meta-bug".
 
 ## Phase 0 — Preconditions
-- [ ] 0.1 Confirm `main` includes `696aa4649` (`git merge-base --is-ancestor 696aa4649 origin/main`).
-- [ ] 0.2 Re-grep `atomic_git_config`: confirm no `[[ -c ]]`/`stat -c%m` guard exists yet; re-derive current line numbers (do not trust frozen numbers).
-- [ ] 0.3 Read the harness idiom in `plugins/soleur/test/worktree-manager-atomic-config.test.sh` (T1–T19) to mirror for new tests.
-- [ ] 0.4 Re-run the two confirming Better Stack queries (chardevice DIAG present on `config.lock`; zero `IDENTITY_WEDGED` in 7d) to confirm diagnosis unchanged: `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 7d --grep SOLEUR_GIT_LOCK_IDENTITY_WEDGED`.
+- [ ] 0.1 Re-read `atomic_git_config` + `ensure_bare_config` in `worktree-manager.sh`;
+  re-derive line numbers for the `mv` (~419), give-up (~492), non-bare guard (~476-480),
+  `NO_GIT_REPOSITORY` gate (~84-89), `SOLEUR_FEATURE_PUSH_FAILED` (~1243). Do not trust
+  frozen numbers.
+- [ ] 0.2 Read `session-state.sh:355-378` (the `headless_or_stderr` logfile sink + `[error] `
+  prefix — the meta-bug) and `git-lock-marker-telemetry.ts` `MARKER_RE`/`WEDGE_RE` +
+  `git-lock-marker-telemetry.test.ts:107-128` (drift-guard collection pattern).
+- [ ] 0.3 Read the harness idiom in `worktree-manager-atomic-config.test.sh` (T1–T19) to
+  mirror for T20–T23.
+- [ ] 0.4 Confirm `#6191` and `#5934` are OPEN (`gh issue view`) before referencing them.
 
-## Phase 1 — D1: target-masked guard + sentinel (`worktree-manager.sh`)
-- [ ] 1.1 Add masked-target guard at the **top** of `atomic_git_config` (after target/symlink resolution, before the FR2/native/lockless fork): masked iff `[[ -c "$target" ]]` OR realpath mountpoint via the `:187-193` `stat -c%m` idiom.
-- [ ] 1.2 On masked target: emit `SOLEUR_GIT_CONFIG_TARGET_MASKED file=<base> reason=target-bind-mount`, clean up temp, and **return non-zero** (Option A — fail-loud). Do NOT attempt `mv`.
-- [ ] 1.3 Add a cheap defensive re-check before the `mv` at ~419 (belt-and-suspenders).
-- [ ] 1.4 Record the Option A vs B graceful-degrade decision in the PR body; leave `ensure_bare_config:492` block unchanged (the non-bare guard at ~478 already short-circuits non-bare).
+## Phase 1 — D1: observability meta-fix (highest priority)
+- [ ] 1.1 (a) Emit a bare `echo "SOLEUR_… …"` stdout sentinel at the `ensure_bare_config`
+  give-up (~492) AND the `atomic_git_config` rename-failure (~419-423), in addition to the
+  existing `headless_or_stderr error` line — so the conclusion is scanner-visible under the
+  headless logfile sink.
+- [ ] 1.2 (b) `git-lock-marker-telemetry.ts`: add `SOLEUR_GIT_CONFIG_TARGET_MASKED`,
+  `SOLEUR_FEATURE_PUSH_FAILED`, `NO_GIT_REPOSITORY` to `MARKER_RE`; classify the fatal ones
+  in `WEDGE_RE` (paged). Broaden the drift-guard test's collection pattern to also match
+  `echo "NO_GIT_REPOSITORY` and `echo "SOLEUR_FEATURE_*`.
+- [ ] 1.3 (c) Relax `MARKER_RE`'s `worktree wedge:` arm to tolerate an optional leading
+  `[<level>] ` prefix so the existing `[error] worktree wedge:` matches; add a test for the
+  prefixed line + each new sentinel. `tsc --noEmit` clean.
+- [ ] 1.4 Cite `hr-observability-as-plan-quality-gate` / `hr-observability-layer-citation`
+  in the PR body.
 
-## Phase 2 — D2: mask-simulation tests (`worktree-manager-atomic-config.test.sh`, RED→GREEN)
-- [ ] 2.1 T20: char-device target (`mknod config c 1 3`, or symlink→`/dev/null` for unprivileged CI). RED on pre-guard code (only generic "atomic rename failed", no new sentinel); GREEN after D1 (distinct sentinel, no `mv`). Author to fail first (`cq-write-failing-tests-before`).
-- [ ] 2.2 T21: mountpoint target (bind-mount `/dev/null`; privilege-aware skip with logged reason if CI can't `mount --bind`).
-- [ ] 2.3 T22: regression lock — char-device `config.lock` + regular `config` → still routes around (no false `SOLEUR_GIT_CONFIG_TARGET_MASKED`). Pins the observed #6183/#5912 case so D1 can't over-trigger.
-- [ ] 2.4 `shellcheck` clean on new code; full T1–T22 green.
+## Phase 2 — D2: config-target-masked pre-check (`atomic_git_config`)
+- [ ] 2.1 Add a masked-**target** guard: masked iff `[[ -c "$target" ]]` OR realpath
+  mountpoint via the `:187-193` `stat -c%m` idiom. Primary check immediately before the
+  `mv -f -- "$tmp" "$target"` (~419); defensive top-of-function check after symlink
+  resolution (~383-389) to also cover the native `git config --file` branch (~377).
+- [ ] 2.2 On masked target: emit `SOLEUR_GIT_CONFIG_TARGET_MASKED file=<base>
+  reason=target-bind-mount` on stdout, clean up `$tmp`/`$tmp.lock`, do NOT attempt `mv`,
+  return non-zero.
 
-## Phase 3 — D3/D4: telemetry mirror + issue/docs reconciliation
-- [ ] 3.1 `git-lock-marker-telemetry.ts`: add `SOLEUR_GIT_CONFIG_TARGET_MASKED` to **both** `MARKER_RE` (~48) and `WEDGE_RE` (~57). Add coverage in `git-lock-marker-telemetry.test.ts`. `tsc --noEmit` clean.
-- [ ] 3.2 `gh issue comment 5934`: scope-broadening note (user-facing wedge fixed by #6183/#6184; #5934 now = durable substrate fix + sweep telemetry gap: zero `SOLEUR_CHARDEV_SWEEP_*` in 14d while char-device keeps appearing). PR body uses `Ref #5934`, not `Closes`.
-- [ ] 3.3 `gh issue comment 6191`: cross-reference D1 as the in-sandbox sibling of #6191's host-side raw-config-write hardening.
-- [ ] 3.4 Amend `ADR-081-chardevice-config-lock-substrate-sweep.md` with the per-session-bwrap-mask finding (deploy-time host sweep can't prevent a per-session mask; durable prevention is bwrap-config-side; char-device now benign post-#6183). Read all three `.c4` files to confirm "no C4 impact" per completeness mandate.
+## Phase 3 — D3: bare-under-mask correctness (`ensure_bare_config`)
+- [ ] 3.1 Non-bare / native-add-works → SKIP the surgery. Harden the non-bare guard
+  (~476-480) so a masked-config non-bare workspace (empty `GIT_ROOT`, ambiguous
+  `--is-bare-repository`) is not misread as bare; "indeterminate under mask" resolves to the
+  safe non-bare skip when `git worktree add` can proceed natively.
+- [ ] 3.2 Genuinely bare AND target masked → fail LOUD: emit the visible
+  `SOLEUR_GIT_CONFIG_TARGET_MASKED` marker naming the host-seed remedy
+  (`remedy=host-pre-seed-.git/config-before-bwrap-mask see=#6191,#5934`) and return 1 — never
+  ship a `core.bare`-bleeding worktree.
+- [ ] 3.3 Record the fail-loud-vs-soft-skip caller contract in the PR body for plan-review.
 
-## Phase 4 — Verify & ship
-- [ ] 4.1 All ACs (AC1–AC10) satisfied; scoped `git diff` (atomic_git_config + tests + telemetry + docs/ADR only).
-- [ ] 4.2 `decision-challenges.md` (UC-1, already on disk) carried into `/ship` PR-body render + action-required issue.
-- [ ] 4.3 plan-review panel (DHH/Kieran/code-simplicity + architecture-strategist + user-impact-reviewer at single-user threshold) adjudicates Option A vs B before implementation freeze.
+## Phase 4 — D4: self-heal stale `extensions.worktreeConfig`
+- [ ] 4.1 EARLY (before the surgery block / readiness gate, alongside `sweep_stale_git_locks`
+  ~453): if `extensions.worktreeConfig=true` in `.git/config` while `.git/config.worktree`
+  is masked, unset it via `git config --file "$shared_config" --unset
+  extensions.worktreeConfig` (the `--file` form does not read the masked worktree config),
+  emitting a visible informational `SOLEUR_*` marker so a once-poisoned workspace self-heals.
+
+## Phase 5 — D5: local mknod mask-simulation test (RED→GREEN)
+- [ ] 5.1 T20: target masked (`mknod config c 1 3`, or `ln -s /dev/null config` for
+  unprivileged CI). RED on pre-fix code (generic `atomic rename failed`, no sentinel); GREEN
+  after D2 (distinct sentinel, no `mv`). Author to fail first (`cq-write-failing-tests-before`).
+  Reproduces the verbatim EBUSY locally.
+- [ ] 5.2 T21: mountpoint target (bind-mount `/dev/null`; privilege-aware skip if no
+  `mount --bind`, keeping the `-c` arm load-bearing).
+- [ ] 5.3 T22: regression lock — char-device `config.lock` + regular `config` → still routes
+  around (no false `SOLEUR_GIT_CONFIG_TARGET_MASKED`). Pins the observed #5912/#6183 case so
+  D2 can't over-trigger.
+- [ ] 5.4 T23: stale `extensions.worktreeConfig=true` + masked `config.worktree` → the early
+  self-heal (D4) unsets the key and emits its marker.
+- [ ] 5.5 `shellcheck` clean on new code; full T1–T23 green.
+
+## Phase 6 — Verify & ship
+- [ ] 6.1 All ACs (AC1–AC11) satisfied; scoped `git diff` (worktree-manager.sh + telemetry
+  + tests + docs/ADR only).
+- [ ] 6.2 `git-lock-marker-telemetry.test.ts` + `tsc --noEmit` green; the telemetry drift
+  guard passes with the new sentinels.
+- [ ] 6.3 `gh issue comment 5934`: scope note (LIVE wedge = masked config TARGET; this PR
+  adds visibility + graceful degrade; host-side durable seed remains #5934/#6191). PR body
+  uses `Ref #5934` / `Ref #6191`, NOT `Closes`.
+- [ ] 6.4 `gh issue comment 6191`: cross-reference D2/D3 as the in-sandbox sibling of the
+  host-side pre-seed.
+- [ ] 6.5 Amend `ADR-081-chardevice-config-lock-substrate-sweep.md` (masked config TARGET +
+  telemetry-blindness + host-side durable locus). Read the three `.c4` files to confirm "no
+  C4 impact".
+- [ ] 6.6 `decision-challenges.md` (corrected premise) carried into `/ship` PR-body render +
+  action-required issue.

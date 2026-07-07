@@ -3,38 +3,54 @@
 Headless-path record (no interactive operator gate). `/ship` should render these into the
 PR body and file an `action-required` issue so the operator sees the challenge.
 
-## UC-1 — Stale premise: the config-target-masked wedge was already fixed elsewhere
+## UC-1 — Corrected premise: an earlier draft wrongly declared this wedge already-fixed
 
-**Operator's stated direction:** Implement a `.git/config`-TARGET-masked fix
-(`SOLEUR_GIT_CONFIG_TARGET_MASKED` pre-check before the `mv` at `worktree-manager.sh:419`,
-graceful `ensure_bare_config` degrade, and "fix why the round-5 guard doesn't fire") as the
-resolution to a wedge that "STILL reproduces after round-5."
+**Earlier draft's stated conclusion:** The `config`-TARGET-masked path was an unobserved
+defensive hypothetical, already resolved by #6183 (`696aa4649`,
+bot-aware `ensure_worktree_identity`), because a Better Stack query showed "zero
+`worktree wedge:` events over 30 days" — so the line-492 path was "the wrong layer."
 
-**Evidence that challenges it (Phase-1, Better Stack, cited per `hr-observability-layer-citation`):**
-1. The masked node is `.git/config.lock` (`type=chardevice rdev=1:3`), **not** `.git/config`
-   (the target). No telemetry shows the target masked.
-2. **Zero** `worktree wedge: could not apply shared-config prerequisites` events over 30d —
-   the `ensure_bare_config`/line-492 path is the wrong layer (Sharp-Edge "zero events =
-   wrong layer").
-3. The real wedge was `ensure_worktree_identity`'s raw `git config --local` EEXIST
-   (plain-git RC=255, no marker), **already fixed by #6183** (`696aa4649`, merged
-   2026-07-07 14:59 UTC, on `main`).
-4. **Zero** `SOLEUR_GIT_LOCK_IDENTITY_WEDGED` events in the 7 days since #6183 — the fix is
-   holding. The char-device `config.lock` still appears but is now benign.
-5. The "round-5 guard doesn't fire" premise is false — the non-bare guard at
-   `worktree-manager.sh:478` returns 0 correctly before any `ensure_bare_config` write on
-   the non-bare Concierge clone.
+**Evidence that REFUTES it (operator-confirmed verbatim error from a sandbox running the
+DEPLOYED current-main code):**
+```
+SOLEUR_GIT_LOCK_UNREMOVABLE file=config.lock type=chardevice ... reason=non-regular-lock
+mv: cannot move '.git/config.soleur-tmp.4' to '.git/config': Device or resource busy
+[error] worktree wedge: could not apply shared-config prerequisites in .git
+```
+1. The wedge is LIVE, not hypothetical. The `mv … .git/config: Device or resource busy`
+   shows the rename **TARGET** (`.git/config`) is itself masked/bind-mounted — exactly the
+   premise the earlier draft dismissed.
+2. Reaching `worktree-manager.sh:492` proves the non-bare guard at :476-480 did NOT return
+   early → the workspace is treated as bare (or `GIT_ROOT` resolves empty under the mask +
+   `--is-bare-repository=true`). The fix must be robust to both bare and non-bare.
+3. **The "zero events/30d" was the symptom, not exoneration.** The fatal
+   `[error] worktree wedge:` is emitted via `headless_or_stderr`
+   (`.claude/hooks/lib/session-state.sh:365-369`), which in the headless sandbox appends to a
+   per-PID logfile — NOT the Bash stdout the PostToolUse telemetry hook scans. AND its
+   `[error] ` prefix fails `MARKER_RE`'s `^worktree wedge:` anchor
+   (`apps/web-platform/server/git-lock-marker-telemetry.ts:48-49`). Double-drop → the fatal
+   outcome fired every wedged run yet showed zero events. This blindness is why four prior
+   fixes (07-01 → 07-07) never converged.
 
-**Resolution taken (evidence-first, per the task's own "do not blind-patch" mandate):**
-- Did **not** re-patch the falsified `ensure_bare_config`/identity paths.
-- Delivered the genuinely-additive subset: a defense-in-depth `SOLEUR_GIT_CONFIG_TARGET_MASKED`
-  self-diagnosis sentinel (guards the unobserved config-target-masked path so a future blind
-  session self-diagnoses) + a local mask-simulation test + #5934 scope reconciliation.
-- Left #5934 **open** (durable substrate fix + a real telemetry gap: zero
-  `SOLEUR_CHARDEV_SWEEP_*` markers in 14d while the char-device keeps appearing → the host
-  sweep is not observably running / cannot prevent a per-session bwrap mask).
+**Resolution taken (evidence-first):**
+- Re-scoped the plan around the LIVE wedge, in priority order:
+  1. **Observability meta-fix** — emit the wedge conclusion as a clean `SOLEUR_*` marker on
+     stdout (not only the `headless_or_stderr` logfile); add
+     `SOLEUR_GIT_CONFIG_TARGET_MASKED`, `SOLEUR_FEATURE_PUSH_FAILED` (:1243), and the
+     `NO_GIT_REPOSITORY` gate (:84-89) to `MARKER_RE` + the drift-guard test; tolerate the
+     `[error] ` prefix on the existing `worktree wedge:` line.
+  2. **Target-masked pre-check** in `atomic_git_config` before the `mv` at :419 (reusing the
+     `-c` / `stat -c%m` idiom at :187-193) — do not attempt the doomed rename.
+  3. **Bare-under-mask correctness** — non-bare/native-add-works skips the surgery; genuinely
+     bare + masked target fails LOUD with a VISIBLE marker naming the host-seed remedy.
+  4. **Self-heal** a stale `extensions.worktreeConfig=true` (unset via `--file`-scoped git,
+     early) so a once-poisoned workspace recovers.
+  5. **Local `mknod` mask-simulation test** proving current code wedges + fixed code degrades
+     gracefully with the visible marker.
+- Left #5934 **open** — the durable host-side prevention (pre-seed `.git/config` before the
+  bwrap mask) remains its scope, coordinated with the open #6191. `Ref`, not `Closes`.
 
-**Operator action requested:** confirm whether the "still wedges" report predates #6183's
-14:59-UTC merge. If it postdates a confirmed live deploy of #6183, re-run the Concierge
-canary (#4826) and capture the fresh in-sandbox signature — a NEW post-#6183 signature would
-reopen diagnosis on a different path than this plan addresses.
+**Operator action requested:** none blocking — the verbatim error already confirms the LIVE
+signature. After merge, re-run the Concierge canary (#4826) and confirm the
+`SOLEUR_GIT_CONFIG_TARGET_MASKED` event now appears in Better Stack (the fix's whole point is
+that the wedge is no longer zero-when-firing).
