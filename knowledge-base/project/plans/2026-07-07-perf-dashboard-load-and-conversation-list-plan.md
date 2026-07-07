@@ -196,17 +196,17 @@ Touches API routes + a migration reading message content, so the gate applies. A
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] Phase 0 baseline + after numbers recorded in the PR body (network waterfall bytes/duration for the `messages` call and `/api/kb/tree`, before vs after).
-- [ ] `use-conversations` fetch issues **one** `rpc("list_conversations_enriched", …)` call and **zero** unbounded `.from("messages")` selects; grep proves the old `messages … .in(ids)` fetch is gone.
-- [ ] RPC payload carries ≤ 4 message-snippet fields per conversation (no full message arrays) — asserted in a route/RPC test against a seeded conversation with many messages.
-- [ ] Tenant-isolation test — **two cases** (data-integrity review): (a) a workspace-B user calling the RPC scoped to workspace-A retrieves **0** rows; (b) a **same-workspace member** requesting another member's **private (non-`workspace` visibility) conversation** retrieves **0 rows AND 0 message snippets**. Case (b) is load-bearing because `messages_workspace_member_select` is workspace-broad — isolation of private snippets rests entirely on the LATERAL correlating to the RLS-bounded conversation row, so the test must prove a private conversation's message bodies do not leak to a co-workspace member.
-- [ ] Migration GRANT hygiene asserted: `REVOKE ALL … FROM PUBLIC` + `FROM anon`, `GRANT EXECUTE … TO authenticated`, **no** `service_role` grant (grep the migration).
-- [ ] `shouldDropForScope`, the scope-resolve backfill, and the `CONVERSATION_CREATED_EVENT` retry loop are unchanged (git diff shows no edits to those blocks).
-- [ ] `/api/dashboard/foundation-status` returns existence+size for the known-path set only; `page.tsx` no longer calls `buildTree()`-backed `/api/kb/tree` on cold load; grep shows the dashboard KB-tree consumer removed.
-- [ ] `/api/workspace/active-repo` is fetched once per dashboard mount (dedupe verified).
-- [ ] Migration `125_*` uses plain `CREATE INDEX` (no `CONCURRENTLY`); `.down.sql` drops function + index.
-- [ ] Supabase test mocks support the new `.rpc()` chain (recursive-chain sweep done).
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes; `node node_modules/vitest/vitest.mjs run` (worktree-safe) passes for the touched specs.
+- [x] Phase 0 baseline recorded in the PR body as a STRUCTURAL (code-level) before-analysis: the O(all messages) `messages … IN(ids)` fan-out (`use-conversations.ts:277`, no `.limit()`) + the render-blocking whole-tree `buildTree()` gate (`page.tsx` `kbLoading`). Live post-deploy waterfall re-measure is the post-merge AC (needs the deployed app + a seeded dashboard).
+- [x] `use-conversations` fetch issues **one** `rpc("list_conversations_enriched", …)` call and **zero** unbounded `.from("messages")` selects (`use-conversations-rpc.test.tsx`; old `messages … .in(ids)` fetch removed).
+- [x] RPC payload carries ≤ 4 message-snippet fields per conversation (no full message arrays) — `RETURNS TABLE` shape + LATERAL `LIMIT 1` snippets asserted in `migration-125-*.test.ts`; hook derivation in `use-conversations-rpc.test.tsx`.
+- [~] Tenant-isolation — **structural proof** in `migration-125-*.test.ts` (SECURITY INVOKER, no `service_role` grant, every `messages` read LATERAL-correlated on `m.conversation_id = c.id`, no uncorrelated `IN(...)`) + the unchanged RLS anchors (075/059). The **live two-case** cross-tenant / private-snippet runtime test needs the migration applied to dev + seeded multi-tenant fixtures → carried to the post-merge dev-apply verification (CPO sign-off gate).
+- [x] Migration GRANT hygiene asserted: `REVOKE ALL … FROM PUBLIC` + `FROM anon`, `GRANT EXECUTE … TO authenticated`, **no** `service_role` grant (`migration-125-*.test.ts`).
+- [x] `shouldDropForScope`, the scope-resolve backfill, and the `CONVERSATION_CREATED_EVENT` retry loop are unchanged (only the two `.from()` list queries were replaced with the RPC call).
+- [x] `/api/dashboard/foundation-status` returns existence+size for the known-path set only; `page.tsx` no longer calls `buildTree()`-backed `/api/kb/tree` on cold load (`dashboard-foundation-status.test.ts` + `kb-reader.test.ts`).
+- [ ] ~~`/api/workspace/active-repo` fetched once per dashboard mount (dedupe).~~ **Deferred** (see Deferred): hook-invasive, low value vs the two big wins; the double fetch is pre-existing, not a regression.
+- [x] Migration `125_*` uses plain `CREATE INDEX` (no `CONCURRENTLY`); `.down.sql` drops function + index (`migration-125-*.test.ts`).
+- [x] Supabase test mocks support the new `.rpc()` chain (shared `makeEnrichedListRpc`/`enrichConversationFixtures`; full real-hook-renderer sweep).
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes; touched specs pass under `node node_modules/vitest/vitest.mjs run`.
 
 ### Post-merge (operator/automated)
 - [ ] Migration `125_*` applied to **dev** then **prd** via Supabase MCP/REST (dev≠prd per `hr-dev-prd-distinct-supabase-projects`); verify the function exists (`gh`/MCP query, no ssh) before closing.
@@ -223,6 +223,8 @@ Touches API routes + a migration reading message content, so the gate applies. A
 ## Alternatives Considered / Deferred
 - **Denormalize `title`/`preview`/`last_message_leader` onto `conversations` (trigger-maintained).** Cleanest read (single query, no snippets) but requires a write-path trigger encoding title semantics into SQL, plus a backfill migration and higher isolation risk. Rejected as primary for a perf fix; the INVOKER RPC keeps title logic in one JS place and is read-only. Revisit if the RPC's lateral cost is later shown to dominate.
 - **Phase 3 (middleware) and Phase 4 (bundle)** may split to tracked follow-up issues if the combined PR is too large or Phase 3's auth risk is non-trivial. **Deferral action:** if split, file a GitHub issue per deferred phase (what/why/re-eval criteria + milestone from `knowledge-base/product/roadmap.md`) — a deferral without a tracking issue is invisible.
+- **SHIPPED SCOPE: Phases 1 + 2 (the two reported symptoms).** Phase 3 (middleware parallelization — security-gated) and Phase 4 (bundle code-split) are **deferred to a tracked follow-up** — they are independently valuable but not on the critical path of the two reported symptoms, and Phase 3 needs a security-sentinel gate on the auth-read reordering. Consolidated into one follow-up tracker (filed at ship).
+- **`/api/workspace/active-repo` fetch dedupe (Phase 2 sub-item) — deferred.** The page's SWR active-repo fetch and the hook's internal raw `fetch` are separate. A true dedupe means threading the resolved value into the hook or converting its internal fetch to SWR — both touch the hook's delicate realtime scope-resolve/backfill timing (the `workspaceId` null→id transition that drives channel subscription). Low value (2 light calls, unchanged from before this PR — the double fetch pre-existed) vs. non-trivial regression risk to tenant-scoped realtime. Folded into the same follow-up tracker.
 
 ## Open Code-Review Overlap
 2 open code-review issues touch files this plan edits:

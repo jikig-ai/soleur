@@ -134,6 +134,25 @@ function mockFetchWithActiveRepo(treeResponse: {
   );
 }
 
+// The dashboard now derives foundation-card state from
+// /api/dashboard/foundation-status (a { paths: { <kbPath>: {exists,size} } }
+// map) instead of the whole KB tree. Build a 200 response for a set of existing
+// paths (default size 1000 ≥ FOUNDATION_MIN_CONTENT_BYTES = complete).
+function foundationResponse(
+  filePaths: string[],
+  sizes: Record<string, number> = {},
+) {
+  const paths: Record<string, { exists: boolean; size: number }> = {};
+  for (const p of filePaths) {
+    paths[p] = { exists: true, size: sizes[p] ?? 1000 };
+  }
+  return {
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ paths }),
+  };
+}
+
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
@@ -180,23 +199,14 @@ describe("Command Center", () => {
     messageBuilder = buildSupabaseQueryBuilder({ data: mockMessages });
 
     // Mock fetch for KB tree — return all foundation files so page shows Command Center
-    globalThis.fetch = mockFetchWithActiveRepo({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          tree: {
-            name: "knowledge-base",
-            type: "directory",
-            children: [
-              { name: "overview", type: "directory", children: [{ name: "vision.md", type: "file", path: "overview/vision.md", size: 1000 }] },
-              { name: "marketing", type: "directory", children: [{ name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 }] },
-              { name: "product", type: "directory", children: [{ name: "business-validation.md", type: "file", path: "product/business-validation.md", size: 1000 }] },
-              { name: "legal", type: "directory", children: [{ name: "privacy-policy.md", type: "file", path: "legal/privacy-policy.md", size: 1000 }] },
-            ],
-          },
-        }),
-    });
+    globalThis.fetch = mockFetchWithActiveRepo(
+      foundationResponse([
+        "overview/vision.md",
+        "marketing/brand-guide.md",
+        "product/business-validation.md",
+        "legal/privacy-policy.md",
+      ]),
+    );
   });
 
   it("shows operational tasks alongside foundation chips when all foundations are complete", async () => {
@@ -224,33 +234,20 @@ describe("Command Center", () => {
     messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
     // Mock KB tree with ALL files (4 foundation + 6 operational)
-    globalThis.fetch = mockFetchWithActiveRepo({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          tree: {
-            name: "knowledge-base",
-            type: "directory",
-            children: [
-              { name: "overview", type: "directory", children: [{ name: "vision.md", type: "file", path: "overview/vision.md", size: 1000 }] },
-              { name: "marketing", type: "directory", children: [
-                { name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 },
-                { name: "launch-plan.md", type: "file", path: "marketing/launch-plan.md", size: 1000 },
-                { name: "distribution-strategy.md", type: "file", path: "marketing/distribution-strategy.md", size: 1000 },
-              ] },
-              { name: "product", type: "directory", children: [
-                { name: "business-validation.md", type: "file", path: "product/business-validation.md", size: 1000 },
-                { name: "pricing-strategy.md", type: "file", path: "product/pricing-strategy.md", size: 1000 },
-                { name: "competitive-analysis.md", type: "file", path: "product/competitive-analysis.md", size: 1000 },
-              ] },
-              { name: "legal", type: "directory", children: [{ name: "privacy-policy.md", type: "file", path: "legal/privacy-policy.md", size: 1000 }] },
-              { name: "operations", type: "directory", children: [{ name: "hiring-plan.md", type: "file", path: "operations/hiring-plan.md", size: 1000 }] },
-              { name: "finance", type: "directory", children: [{ name: "financial-projections.md", type: "file", path: "finance/financial-projections.md", size: 1000 }] },
-            ],
-          },
-        }),
-    });
+    globalThis.fetch = mockFetchWithActiveRepo(
+      foundationResponse([
+        "overview/vision.md",
+        "marketing/brand-guide.md",
+        "marketing/launch-plan.md",
+        "marketing/distribution-strategy.md",
+        "product/business-validation.md",
+        "product/pricing-strategy.md",
+        "product/competitive-analysis.md",
+        "legal/privacy-policy.md",
+        "operations/hiring-plan.md",
+        "finance/financial-projections.md",
+      ]),
+    );
 
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
@@ -402,23 +399,19 @@ describe("Command Center", () => {
     conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
     messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
-    globalThis.fetch = mockFetchWithActiveRepo({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          tree: {
-            name: "knowledge-base",
-            type: "directory",
-            children: [
-              { name: "overview", type: "directory", children: [{ name: "vision.md", type: "file", path: "overview/vision.md", size: 200 }] },
-              { name: "marketing", type: "directory", children: [{ name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 }] },
-              { name: "product", type: "directory", children: [{ name: "business-validation.md", type: "file", path: "product/business-validation.md", size: 1000 }] },
-              { name: "legal", type: "directory", children: [{ name: "privacy-policy.md", type: "file", path: "legal/privacy-policy.md", size: 1000 }] },
-            ],
-          },
-        }),
-    });
+    globalThis.fetch = mockFetchWithActiveRepo(
+      // vision.md is a 200-byte stub (< FOUNDATION_MIN_CONTENT_BYTES) → Vision
+      // incomplete; the other three are complete.
+      foundationResponse(
+        [
+          "overview/vision.md",
+          "marketing/brand-guide.md",
+          "product/business-validation.md",
+          "legal/privacy-policy.md",
+        ],
+        { "overview/vision.md": 200 },
+      ),
+    );
 
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
@@ -464,21 +457,10 @@ describe("Command Center", () => {
       conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
       messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
-      // KB tree without vision.md
-      globalThis.fetch = mockFetchWithActiveRepo({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            tree: {
-              name: "knowledge-base",
-              type: "directory",
-              children: [
-                { name: "marketing", type: "directory", children: [{ name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 }] },
-              ],
-            },
-          }),
-      });
+      // Foundation status without vision.md
+      globalThis.fetch = mockFetchWithActiveRepo(
+        foundationResponse(["marketing/brand-guide.md"]),
+      );
     });
 
     it("renders the first-run input and submit button at equal min-height", async () => {

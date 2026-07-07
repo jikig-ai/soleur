@@ -58,49 +58,17 @@ vi.mock("@/lib/supabase/client", () => ({
   }),
 }));
 
-// Helper: build a KB tree structure matching the API response
-function buildMockTree(
+// Helper: build the /api/dashboard/foundation-status `paths` map (existence +
+// size for the known foundation paths) matching the API response shape.
+function buildFoundationPaths(
   filePaths: string[],
   sizes?: Record<string, number>,
-) {
-  // Build a nested TreeNode from flat paths
-  const root: Record<string, unknown> = {
-    name: "knowledge-base",
-    type: "directory",
-    children: [] as unknown[],
-  };
-
+): Record<string, { exists: boolean; size: number }> {
+  const paths: Record<string, { exists: boolean; size: number }> = {};
   for (const p of filePaths) {
-    const parts = p.split("/");
-    let current = root;
-
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      const isFile = i === parts.length - 1;
-      let children = current.children as Record<string, unknown>[];
-
-      if (isFile) {
-        children.push({
-          name: part,
-          type: "file",
-          path: p,
-          modifiedAt: new Date().toISOString(),
-          size: sizes?.[p] ?? 1000,
-        });
-      } else {
-        let dir = children.find(
-          (c) => c.name === part && c.type === "directory",
-        );
-        if (!dir) {
-          dir = { name: part, type: "directory", children: [] };
-          children.push(dir);
-        }
-        current = dir as Record<string, unknown>;
-      }
-    }
+    paths[p] = { exists: true, size: sizes?.[p] ?? 1000 };
   }
-
-  return root;
+  return paths;
 }
 
 let fetchMock: Mock;
@@ -149,7 +117,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
-      json: () => Promise.resolve({ tree: buildMockTree([]) }),
+      json: () => Promise.resolve({ paths: buildFoundationPaths([]) }),
     });
 
     const { default: DashboardPage } = await import(
@@ -169,7 +137,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
       ok: true,
       status: 200,
       json: () =>
-        Promise.resolve({ tree: buildMockTree(["overview/vision.md"]) }),
+        Promise.resolve({ paths: buildFoundationPaths(["overview/vision.md"]) }),
     });
 
     const { default: DashboardPage } = await import(
@@ -192,7 +160,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
       status: 200,
       json: () =>
         Promise.resolve({
-          tree: buildMockTree([
+          paths: buildFoundationPaths([
             "overview/vision.md",
             "marketing/brand-guide.md",
             "product/business-validation.md",
@@ -220,7 +188,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
       status: 200,
       json: () =>
         Promise.resolve({
-          tree: buildMockTree([
+          paths: buildFoundationPaths([
             "overview/vision.md",
             "marketing/brand-guide.md",
             "marketing/launch-plan.md",
@@ -253,7 +221,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
       status: 200,
       json: () =>
         Promise.resolve({
-          tree: buildMockTree([
+          paths: buildFoundationPaths([
             "overview/vision.md",
             "marketing/brand-guide.md",
           ]),
@@ -304,7 +272,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
       ok: true,
       status: 200,
       json: () =>
-        Promise.resolve({ tree: buildMockTree(["overview/vision.md"]) }),
+        Promise.resolve({ paths: buildFoundationPaths(["overview/vision.md"]) }),
     });
 
     // Conversations exist
@@ -348,7 +316,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
       status: 200,
       json: () =>
         Promise.resolve({
-          tree: buildMockTree(
+          paths: buildFoundationPaths(
             ["overview/vision.md"],
             { "overview/vision.md": 200 },
           ),
@@ -375,7 +343,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
       status: 200,
       json: () =>
         Promise.resolve({
-          tree: buildMockTree(
+          paths: buildFoundationPaths(
             [
               "overview/vision.md",
               "marketing/brand-guide.md",
@@ -438,7 +406,7 @@ describe("Start Fresh Onboarding - Conditional Rendering", () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
-      json: () => Promise.resolve({ tree: buildMockTree([]) }),
+      json: () => Promise.resolve({ paths: buildFoundationPaths([]) }),
     });
 
     const { default: DashboardPage } = await import(
@@ -465,7 +433,7 @@ describe("Start Fresh Onboarding - Conditional Rendering", () => {
       ok: true,
       status: 200,
       json: () =>
-        Promise.resolve({ tree: buildMockTree(["overview/vision.md"]) }),
+        Promise.resolve({ paths: buildFoundationPaths(["overview/vision.md"]) }),
     });
 
     const { default: DashboardPage } = await import(
@@ -490,7 +458,7 @@ describe("Start Fresh Onboarding - Conditional Rendering", () => {
       status: 200,
       json: () =>
         Promise.resolve({
-          tree: buildMockTree([
+          paths: buildFoundationPaths([
             "overview/vision.md",
             "marketing/brand-guide.md",
           ]),

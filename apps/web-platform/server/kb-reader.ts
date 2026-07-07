@@ -329,6 +329,51 @@ export async function readContent(
   return { path: relativePath, frontmatter, content };
 }
 
+export interface PathStat {
+  exists: boolean;
+  size: number;
+}
+
+// Stat a KNOWN set of relative paths — the cheap targeted alternative to
+// buildTree() for the dashboard's foundation-card completion check. Returns
+// { exists, size } per path (a missing path is `{ exists: false, size: 0 }`,
+// never an error). Reuses readContentRaw's traversal/symlink defenses: the
+// null-byte guard, the isPathInWorkspace boundary check (kbRoot), and O_NOFOLLOW
+// at open time. Reads NO content — stat only.
+async function statOnePath(kbRoot: string, relativePath: string): Promise<PathStat> {
+  if (relativePath.includes("\0")) return { exists: false, size: 0 };
+  const fullPath = path.join(kbRoot, relativePath);
+  if (!isPathInWorkspace(fullPath, kbRoot)) return { exists: false, size: 0 };
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(
+      fullPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+  } catch {
+    // Missing file (ENOENT), a symlink (ELOOP under O_NOFOLLOW), or any other
+    // open failure → treat as "does not exist" for the completion check.
+    return { exists: false, size: 0 };
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) return { exists: false, size: 0 };
+    return { exists: true, size: stat.size };
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+export async function statKnownPaths(
+  kbRoot: string,
+  relativePaths: readonly string[],
+): Promise<Record<string, PathStat>> {
+  const entries = await Promise.all(
+    relativePaths.map(async (rel) => [rel, await statOnePath(kbRoot, rel)] as const),
+  );
+  return Object.fromEntries(entries);
+}
+
 export async function searchKb(
   kbRoot: string,
   query: string,
