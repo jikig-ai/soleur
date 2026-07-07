@@ -410,7 +410,13 @@ function stripJob(workflowText: string, jobId: string): string {
  * both dispatch jobs at EVERY site that builds the base-address coverage set.
  */
 function stripDispatchJobs(workflowText: string): string {
-  return stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate");
+  // #6178: inngest_host is a dispatch-only job (apply_target=inngest-host) that -targets the
+  // net-new singleton host resources — strip it so its -targets do NOT broaden the per-merge
+  // coverage set (else a real per-merge miss could be masked).
+  return stripJob(
+    stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate"),
+    "inngest_host",
+  );
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -560,6 +566,29 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "cloudflare_record.registry",
   "doppler_secret.registry_push_access_token_id",
   "doppler_secret.registry_push_access_token_secret",
+  // #6178 (ADR-098) — the dedicated Inngest singleton host. Same class as the registry/git-data
+  // hosts: net-new host resources the per-PR CI `-target` path CANNOT provision (it bridges over
+  // SSH to the EXISTING web host). All applied by the operator's full apply + the
+  // `apply_target=inngest-host` dispatch job (which stripDispatchJobs excludes from the coverage
+  // set, below). The doppler_project.inngest + its secrets are the ISOLATED soleur-inngest project
+  // (its `prd` root holds ONLY inngest secrets — cross-project isolation from soleur/prd, #6122
+  // precedent); they are `doppler_secret`/`doppler_project`, not the CI-published token types the
+  // #5566 test forces. Fresh signing/event keys (AC-KEYROTATE — not reused from the co-located inngest.tf).
+  "hcloud_server.inngest",
+  "hcloud_volume.inngest_redis",
+  "hcloud_volume_attachment.inngest_redis",
+  "hcloud_server_network.inngest",
+  "hcloud_firewall.inngest",
+  "hcloud_firewall_attachment.inngest",
+  "random_id.inngest_signing_key_dedicated",
+  "random_id.inngest_event_key_dedicated",
+  "random_password.inngest_redis_password_dedicated",
+  "doppler_project.inngest",
+  "doppler_secret.inngest_signing_key_dedicated",
+  "doppler_secret.inngest_event_key_dedicated",
+  "doppler_secret.inngest_redis_password_dedicated",
+  "doppler_secret.inngest_heartbeat_url_dedicated",
+  "doppler_service_token.inngest",
 ]);
 // Operator-applied doppler_service_token exceptions to the "every token is CI-targeted"
 // assertion (#5566). A token belongs here ONLY when it is minted into an operator-created
@@ -575,6 +604,11 @@ const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   // github_actions_secret). CI cannot apply it — no host to read it. Same class as
   // doppler_service_token.git_data.
   "doppler_service_token.registry",
+  // #6178 (ADR-098) — minted into the ISOLATED soleur-inngest project's `prd` root config
+  // (TF-created via doppler_project.inngest in the operator full apply), consumed by the inngest
+  // host's cloud-init (NOT published to a CI github_actions_secret). CI cannot apply it — no host
+  // to read it. Same class as doppler_service_token.git_data / .registry.
+  "doppler_service_token.inngest",
 ]);
 // AUDIT-PENDING (#5577): these are un-targeted today but it is NOT yet confirmed
 // whether that is intentional (operator-applied) or a forgotten allow-list entry
