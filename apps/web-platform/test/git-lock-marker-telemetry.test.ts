@@ -18,6 +18,22 @@ const WEDGE =
   "worktree wedge: could not apply shared-config prerequisites in .git (see errors above).";
 const TEMP_WEDGED =
   'SOLEUR_GIT_LOCK_TEMP_WEDGED file=config.soleur-tmp type=temp-write-failed reason=lockless-temp-unwritable hint="glob mask"';
+// #5934 config-target-masked wedge (this PR): the LIVE root cause + the two adjacent
+// telemetry-blind markers (NO_GIT_REPOSITORY gate, SOLEUR_FEATURE_PUSH_FAILED) + the
+// [error]-prefixed "worktree wedge:" line emitted through headless_or_stderr.
+const CONFIG_TARGET_MASKED =
+  "SOLEUR_GIT_CONFIG_TARGET_MASKED file=config reason=target-bind-mount";
+const CONFIG_TARGET_MASKED_REMEDY =
+  "SOLEUR_GIT_CONFIG_TARGET_MASKED file=config reason=bare-under-mask remedy=host-pre-seed-.git/config-before-bwrap-mask see=#6191,#5934";
+const FEATURE_PUSH_FAILED = "SOLEUR_FEATURE_PUSH_FAILED branch=feat-x";
+const NO_GIT_REPO =
+  "NO_GIT_REPOSITORY: cannot run a worktree operation — the workspace has no git checkout.";
+const WEDGE_PREFIXED =
+  "[error] worktree wedge: could not apply shared-config prerequisites in .git";
+// A benign non-bare-skip-under-mask diagnostic (D3): a masked config on a non-bare clone
+// where the bare surgery is correctly skipped — mirrored, but NOT a wedge (creation proceeds).
+const MASK_SKIP =
+  'SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=non-bare-skip hint="masked config on a non-bare clone; bare surgery skipped"';
 
 describe("extractGitLockMarkers", () => {
   test("pulls each marker sentinel out of surrounding bash noise", () => {
@@ -46,6 +62,31 @@ describe("extractGitLockMarkers", () => {
     // so a successful drift-set never pages as wedged=true / log.error.
     expect(extractGitLockMarkers(identityDiag).length).toBe(1);
     expect(extractGitLockMarkers(identityDiag)[0]?.wedged).toBe(false);
+  });
+
+  test("matches the #5934 config-target-masked family and classifies it as wedged", () => {
+    expect(extractGitLockMarkers(CONFIG_TARGET_MASKED)[0]?.wedged).toBe(true);
+    expect(extractGitLockMarkers(CONFIG_TARGET_MASKED_REMEDY)[0]?.wedged).toBe(true);
+    // The remedy marker must survive verbatim (it names the host-seed fix for the operator).
+    expect(extractGitLockMarkers(CONFIG_TARGET_MASKED_REMEDY)[0]?.line).toBe(
+      CONFIG_TARGET_MASKED_REMEDY,
+    );
+  });
+
+  test("mirrors the benign SOLEUR_GIT_CONFIG_MASK_SKIP non-bare-skip diagnostic but does NOT page it (D3)", () => {
+    expect(extractGitLockMarkers(MASK_SKIP).length).toBe(1);
+    expect(extractGitLockMarkers(MASK_SKIP)[0]?.wedged).toBe(false);
+  });
+
+  test("adds SOLEUR_FEATURE_PUSH_FAILED + NO_GIT_REPOSITORY to the ingest allowlist (D1b) as wedges", () => {
+    expect(extractGitLockMarkers(FEATURE_PUSH_FAILED)[0]?.wedged).toBe(true);
+    expect(extractGitLockMarkers(NO_GIT_REPO)[0]?.wedged).toBe(true);
+  });
+
+  test("tolerates a leading [error] prefix on the worktree wedge line (D1c, headless_or_stderr sink)", () => {
+    const [m] = extractGitLockMarkers(WEDGE_PREFIXED);
+    expect(m?.line).toBe(WEDGE_PREFIXED);
+    expect(m?.wedged).toBe(true);
   });
 
   test("matches the readiness-gate SOLEUR_GIT_REPO_DIAG forensic and treats it as wedged", () => {
@@ -109,9 +150,12 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
       "../../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh",
       "../../../plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh",
     ].map((p) => readFileSync(join(__dirname, p), "utf8"));
-    // Both scripts emit `echo "SOLEUR_GIT_..."` sentinels; collect the union.
+    // Both scripts emit `echo "SOLEUR_..."` sentinels; also collect the non-SOLEUR_-prefixed
+    // fatal markers now in the allowlist (D1b): `NO_GIT_REPOSITORY` (the repo-readiness gate)
+    // and the `SOLEUR_FEATURE_*` push-failure. A renamed/added sentinel unmatched by MARKER_RE
+    // must fail CI here rather than go silently unmirrored — the exact blindness this closes.
     const sentinels = scripts.flatMap((s) =>
-      [...s.matchAll(/echo "(SOLEUR_GIT_[A-Z_]+)/g)].map((m) => m[1]),
+      [...s.matchAll(/echo "(SOLEUR_[A-Z_]+|NO_GIT_REPOSITORY)/g)].map((m) => m[1]),
     );
     const unique = [...new Set(sentinels)];
     expect(unique.length).toBeGreaterThan(0); // non-vacuous: the scripts DO emit sentinels
