@@ -26,6 +26,7 @@ mock_provider "tls" {}
 variables {
   admin_ips                    = ["203.0.113.1"]
   betterstack_api_token        = "dummy"
+  betterstack_logs_token       = "dummy"
   cf_access_client_id          = "0123456789012345678901234567890123456789.access"
   cf_access_client_secret      = "0123456789012345678901234567890123456789012345678901234567890123"
   cf_account_id                = "0123456789abcdef0123456789abcdef"

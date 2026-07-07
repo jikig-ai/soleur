@@ -8,7 +8,7 @@
 #     firewall) scopes :8288/:8289 to web-host IPs only, dropping git-data/.20 + registry/.30.
 #   - NO lifecycle.ignore_changes=[user_data] (maintenance-window force-replace, ADR-100).
 #   - arm64 inngest-CLI SHA override (the amd64 image-env SHA would fail the arm64 verify).
-#   - Vector deferred on this arm64 host (documented).
+#   - Vector WIRED on this arm64 host (arm64 build + isolated-project token, #6197).
 #
 # Run: bash apps/web-platform/infra/inngest-host.test.sh
 # Registered in .github/workflows/infra-validation.yml.
@@ -19,13 +19,15 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST_TF="${DIR}/inngest-host.tf"
 CLOUD_INIT="${DIR}/cloud-init-inngest.yml"
 INNGEST_TF="${DIR}/inngest.tf"
+VECTOR_TF="${DIR}/vector.tf"
+BOOTSTRAP="${DIR}/inngest-bootstrap.sh"
 
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
-for f in "$HOST_TF" "$CLOUD_INIT" "$INNGEST_TF"; do
+for f in "$HOST_TF" "$CLOUD_INIT" "$INNGEST_TF" "$VECTOR_TF" "$BOOTSTRAP"; do
   [ -f "$f" ] || { echo "FAIL: required file not found: $f" >&2; exit 1; }
 done
 
@@ -92,9 +94,52 @@ else
   pass
 fi
 
-# 7. Vector deferred on this arm64 host (empty VECTOR_CLI_* passed to the bootstrap).
-grep -qE 'VECTOR_CLI_VERSION=""|"VECTOR_CLI_VERSION="' "$CLOUD_INIT" \
-  && pass || fail "Vector is deferred on the arm64 host (empty VECTOR_CLI_* to skip install)"
+# 7. Vector WIRED on this arm64 host (#6197): a distinct arm64 SHA local is declared, the
+#    cloud-init OVERRIDES VECTOR_CLI_SHA256 with it, passes VECTOR_CLI_ARCH=arm64, and stages
+#    /tmp/vector.toml so the bootstrap writes the vector.service unit.
+grep -qE 'vector_sha256_arm64[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$VECTOR_TF" \
+  && grep -qF 'VECTOR_CLI_SHA256=${vector_sha256_arm64}' "$CLOUD_INIT" \
+  && grep -qF 'VECTOR_CLI_ARCH=arm64' "$CLOUD_INIT" \
+  && grep -qF ':/vector.toml /tmp/vector.toml' "$CLOUD_INIT" \
+  && pass || fail "Vector wired (arm64) — SHA local + cloud-init SHA override + VECTOR_CLI_ARCH=arm64 + /tmp/vector.toml staged"
+# The DEFERRED empty VECTOR_CLI_* form must be GONE (would skip the install).
+if grep -qE 'VECTOR_CLI_VERSION=""|"VECTOR_CLI_VERSION="' "$CLOUD_INIT"; then
+  fail "Vector must no longer be deferred (empty VECTOR_CLI_* form is gone)"
+else
+  pass
+fi
+# The templatefile must pass vector_sha256_arm64 into the cloud-init render.
+grep -qF 'vector_sha256_arm64 = local.vector_sha256_arm64' "$HOST_TF" \
+  && pass || fail "inngest-host.tf templatefile passes vector_sha256_arm64 = local.vector_sha256_arm64"
+
+# 8. inngest-bootstrap.sh arch-parameterizes the Vector install (#6197): VECTOR_CLI_ARCH
+#    defaults amd64 (web host preserved) + an arm64->aarch64 triple map applied to BOTH the
+#    download URL AND the extract path. No residual UNCONDITIONAL x86_64 literal in either.
+grep -qE 'VECTOR_CLI_ARCH="\$\{VECTOR_CLI_ARCH:-amd64\}"' "$BOOTSTRAP" \
+  && grep -qF 'aarch64-unknown-linux-musl' "$BOOTSTRAP" \
+  && grep -qF '${vec_triple}.tar.gz' "$BOOTSTRAP" \
+  && grep -qF 'vector-${vec_triple}/bin/vector' "$BOOTSTRAP" \
+  && pass || fail "inngest-bootstrap.sh arch-parameterizes Vector (VECTOR_CLI_ARCH + aarch64 triple for URL + extract)"
+# The URL/extract must NOT still hardcode vector-x86_64-unknown-linux-musl.
+if grep -qF 'vector-x86_64-unknown-linux-musl' "$BOOTSTRAP"; then
+  fail "inngest-bootstrap.sh must not hardcode vector-x86_64-unknown-linux-musl (URL/extract derive from \${vec_triple})"
+else
+  pass
+fi
+
+# 9. Boot isolation self-check admits BETTERSTACK_LOGS_TOKEN as a TOP-LEVEL alternation
+#    member (#6197). A NESTED member would match INNGEST_BETTERSTACK_LOGS_TOKEN and fail to
+#    match a bare BETTERSTACK_LOGS_TOKEN → boot-brick. The HEARTBEAT_URL)|BETTERSTACK anchor
+#    proves the token is a sibling of the INNGEST_ group, not inside it. Floor rose 4->5.
+grep -qF 'HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)' "$CLOUD_INIT" \
+  && grep -qF '"$n_inngest" -lt 5' "$CLOUD_INIT" \
+  && pass || fail "isolation self-check admits BETTERSTACK_LOGS_TOKEN (top-level) and the floor is -lt 5"
+# The old floor must be gone.
+if grep -qF '"$n_inngest" -lt 4' "$CLOUD_INIT"; then
+  fail "isolation floor must be -lt 5, not the old -lt 4"
+else
+  pass
+fi
 
 echo ""
 echo "=== inngest-host.test.sh: ${passes} passed, ${fails} failed ==="

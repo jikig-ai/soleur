@@ -125,6 +125,15 @@ jobs:
           if [[ -n "$v_sha" && ! "$v_sha" =~ ^[0-9a-f]{64}$ ]]; then
             echo "ERROR: vector_sha256 is not a 64-hex-char SHA256"; exit 1
           fi
+          # #6197: format-guard the arm64 Vector SHA local too. It is consumed via
+          # templatefile (inngest-host.tf -> cloud-init VECTOR_CLI_SHA256), NOT the image
+          # env, so it needs no GITHUB_OUTPUT — but validating it here catches format drift
+          # in the same place the amd64 SHA is guarded. The `\s*=` anchor keeps this grep from
+          # matching the sibling `vector_sha256 =` line (which is followed by ` =`, not `_arm64`).
+          v_sha_arm64=$(grep -E '^\s*vector_sha256_arm64\s*=' apps/web-platform/infra/vector.tf | sed -E 's/.*"([^"]+)".*/\1/' || true)
+          if [[ -n "$v_sha_arm64" && ! "$v_sha_arm64" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: vector_sha256_arm64 is not a 64-hex-char SHA256"; exit 1
+          fi
           printf 'vector_version=%s\n' "$v_version" >> "$GITHUB_OUTPUT"
           printf 'vector_sha256=%s\n' "$v_sha" >> "$GITHUB_OUTPUT"
 

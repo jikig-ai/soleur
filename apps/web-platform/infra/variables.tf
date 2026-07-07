@@ -294,6 +294,12 @@ variable "betterstack_paid_tier" {
   default     = false
 }
 
+variable "betterstack_logs_token" {
+  description = "Write-only Better Stack Logs ingest token (source 2457081, soleur-inngest-vector-prd). Provisioned into the ISOLATED soleur-inngest/prd project by inngest-betterstack-token.tf so the dedicated arm64 Inngest host's vector.service can ship journald->Better Stack Logs (#6197). Published to Doppler soleur/prd_terraform as TF_VAR_betterstack_logs_token (--name-transformer tf-var). NO default (hr-tf-variable-no-operator-mint-default) — the token already exists in soleur/prd; the Phase-0 gate is a read-only copy into prd_terraform."
+  type        = string
+  sensitive   = true
+}
+
 # --- PR-H (#3244) — GitHub App + KB-drift -----------------------------------
 # Post-#4150: client_id / client_secret / github_actions_token /
 # doppler_token_kb_drift variables were deleted. See plan

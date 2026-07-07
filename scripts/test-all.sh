@@ -154,6 +154,8 @@ if want_scripts; then
   # via its test seams (no docker/network/prod write). Registered here alongside
   # the destroy-guard trio since it gates the same web-2-recreate dispatch.
   run_suite "tests/scripts/web2-recreate-preflight" bash tests/scripts/test-web2-recreate-preflight.sh
+  # #6197: inngest-host-replace scoped-recreate destroy-guard (mirrors the web2-recreate gate).
+  run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
