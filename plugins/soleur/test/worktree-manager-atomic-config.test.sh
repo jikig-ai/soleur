@@ -626,5 +626,73 @@ fi
 assert_eq "__ABSENT__" "$(git config --file "$WS25/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "extensions.worktreeConfig NOT set (surgery correctly skipped on the relative-GIT_ROOT non-bare clone)"
 
+# ---------------------------------------------------------------------------
+echo "Test 25: #5934 round-3 SOURCE fix — ensure_git_root_absolute normalizes a RELATIVE/EMPTY GIT_ROOT"
+# The live round-2 wedge (post the merged-2026-07-07 non-bare-skip fix): the mask left GIT_ROOT
+# the RELATIVE string ".git", so WORKTREE_DIR became ".git/.worktrees" and verify_worktree_created
+# threw "Worktree path mismatch" (relative expected vs git's absolute --show-toplevel). Rather than
+# patch each downstream victim, the round-3 fix normalizes GIT_ROOT to ABSOLUTE ONCE at init via
+# ensure_git_root_absolute. RED (pre-fix): the helper does not exist.
+if declare -F ensure_git_root_absolute >/dev/null; then
+  WS_ABS=$(cd "$(mktemp -d "$TMP/absroot.XXXXXX")" && pwd -P); git init -q -b main "$WS_ABS" >/dev/null 2>&1
+  _SAVED_GIT_ROOT="$GIT_ROOT"; _SAVED_PWD="$PWD"
+  # (a) the operator's exact value: a relative ".git" resolves against $PWD to the absolute path.
+  cd "$WS_ABS"; GIT_ROOT=".git"; ensure_git_root_absolute
+  assert_eq "$WS_ABS/.git" "$GIT_ROOT" "relative '.git' GIT_ROOT normalized to an absolute path"
+  # (b) an EMPTY GIT_ROOT (the other mask degradation) falls back to $PWD when $PWD/.git is real.
+  GIT_ROOT=""; ensure_git_root_absolute
+  assert_eq "$WS_ABS" "$GIT_ROOT" "empty GIT_ROOT falls back to \$PWD when \$PWD/.git exists"
+  # (c) an already-absolute GIT_ROOT is left untouched (no-op on the healthy path — no regression).
+  GIT_ROOT="$WS_ABS"; ensure_git_root_absolute
+  assert_eq "$WS_ABS" "$GIT_ROOT" "already-absolute GIT_ROOT left untouched (healthy no-op)"
+  GIT_ROOT="$_SAVED_GIT_ROOT"; cd "$_SAVED_PWD"
+else
+  echo "  FAIL: ensure_git_root_absolute not defined — the round-3 SOURCE fix is missing (pre-fix RED)"; FAIL=$((FAIL + 1))
+fi
+
+# ---------------------------------------------------------------------------
+echo "Test 26: #5934 round-3 — verify_worktree_created: RELATIVE path REJECTED + new marker; ABSOLUTE GREEN"
+# End-to-end proof of the round-2 symptom and its fix, at the exact compare that emitted the
+# operator's error. A REAL worktree is created at a sibling .worktrees/<name>; git reports it
+# ABSOLUTE. GREEN first (non-destructive): the absolute expected path — what the normalized
+# GIT_ROOT now yields — verifies clean with NO failure marker. Then RED: the relative expected
+# path (the shape a relative WORKTREE_DIR produced) mismatches git's absolute --show-toplevel,
+# rejects with exit 1, and — the observability gap this PR closes — emits the previously-SILENT
+# SOLEUR_GIT_WORKTREE_VERIFY_FAILED marker carrying BOTH paths. (RED destroys the worktree via
+# the branch's cleanup remove, so it runs last.)
+MAIN26=$(cd "$(mktemp -d "$TMP/verify26.XXXXXX")" && pwd -P); git init -q -b main "$MAIN26" >/dev/null 2>&1
+git -C "$MAIN26" -c user.email=t@t.local -c user.name=t commit -q --allow-empty -m init >/dev/null 2>&1
+_SAVED_PWD="$PWD"; cd "$MAIN26"
+git worktree add -q ".worktrees/feat-26" -b feat-26 >/dev/null 2>&1
+# GREEN — absolute expected path verifies clean.
+set +e
+( verify_worktree_created "$MAIN26/.worktrees/feat-26" "feat-26" "main" ) >"$TMP/vwc26_green.out" 2>&1
+VWC26_GREEN_RC=$?
+set -e
+assert_eq "0" "$VWC26_GREEN_RC" "absolute worktree_path verifies clean (rc 0) — the normalized-GIT_ROOT outcome"
+if grep -qF 'SOLEUR_GIT_WORKTREE_VERIFY_FAILED' "$TMP/vwc26_green.out"; then
+  echo "  FAIL: healthy verify must emit NO failure marker"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: healthy (absolute) verify emitted no failure marker"; PASS=$((PASS + 1))
+fi
+# RED — relative expected path mismatches git's absolute actual (destructive on the mismatch branch).
+set +e
+( verify_worktree_created ".worktrees/feat-26" "feat-26" "main" ) >"$TMP/vwc26_red.out" 2>&1
+VWC26_RED_RC=$?
+set -e
+if (( VWC26_RED_RC != 0 )); then echo "  PASS: relative worktree_path REJECTED (rc!=0) — the round-2 symptom reproduced"; PASS=$((PASS + 1));
+else echo "  FAIL: relative worktree_path must be rejected (rc!=0)"; FAIL=$((FAIL + 1)); fi
+if grep -qF 'Worktree path mismatch' "$TMP/vwc26_red.out"; then
+  echo "  PASS: emitted the 'Worktree path mismatch' error"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected the 'Worktree path mismatch' error on the relative path"; FAIL=$((FAIL + 1))
+fi
+if grep -qE '^SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=path-mismatch .*expected=\.worktrees/feat-26 actual=/' "$TMP/vwc26_red.out"; then
+  echo "  PASS: SOLEUR_GIT_WORKTREE_VERIFY_FAILED path-mismatch marker emitted (relative expected + absolute actual)"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected the SOLEUR_GIT_WORKTREE_VERIFY_FAILED path-mismatch marker (observability gap not closed)"; FAIL=$((FAIL + 1))
+fi
+cd "$_SAVED_PWD"
+
 echo ""
 print_results

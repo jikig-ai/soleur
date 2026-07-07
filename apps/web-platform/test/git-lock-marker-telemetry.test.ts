@@ -34,6 +34,11 @@ const WEDGE_PREFIXED =
 // where the bare surgery is correctly skipped — mirrored, but NOT a wedge (creation proceeds).
 const MASK_SKIP =
   'SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=non-bare-skip hint="masked config on a non-bare clone; bare surgery skipped"';
+// #5934 round-3: verify_worktree_created's path-mismatch exit — the LIVE round-2 failure
+// (a relative GIT_ROOT made the expected path relative while git reported it absolute). Was
+// silent to every sink; now a mirrored WEDGE.
+const WORKTREE_VERIFY_FAILED =
+  "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=path-mismatch branch=feat-x expected=.git/.worktrees/feat-x actual=/workspaces/abc/.git/.worktrees/feat-x";
 
 describe("extractGitLockMarkers", () => {
   test("pulls each marker sentinel out of surrounding bash noise", () => {
@@ -81,6 +86,14 @@ describe("extractGitLockMarkers", () => {
   test("adds SOLEUR_FEATURE_PUSH_FAILED + NO_GIT_REPOSITORY to the ingest allowlist (D1b) as wedges", () => {
     expect(extractGitLockMarkers(FEATURE_PUSH_FAILED)[0]?.wedged).toBe(true);
     expect(extractGitLockMarkers(NO_GIT_REPO)[0]?.wedged).toBe(true);
+  });
+
+  test("matches SOLEUR_GIT_WORKTREE_VERIFY_FAILED (#5934 round-3) and classifies it as a wedge", () => {
+    const [m] = extractGitLockMarkers(WORKTREE_VERIFY_FAILED);
+    // The full marker (incl. the relative expected= and absolute actual= paths that name the
+    // round-2 root cause) survives verbatim for diagnosis.
+    expect(m?.line).toBe(WORKTREE_VERIFY_FAILED);
+    expect(m?.wedged).toBe(true);
   });
 
   test("tolerates a leading [error] prefix on the worktree wedge line (D1c, headless_or_stderr sink)", () => {

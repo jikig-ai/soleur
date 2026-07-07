@@ -99,6 +99,17 @@ else
   GIT_ROOT=$(git rev-parse --show-toplevel)
   # Check if we're in a worktree of a bare repo
   _common_dir=$(git rev-parse --git-common-dir 2>/dev/null)
+  # #5934 round-3: under the Concierge char-device config mask (and, benignly, at the
+  # toplevel of ANY normal clone) git returns the RELATIVE string ".git" for
+  # --git-common-dir. Left relative, the `*/.git` strip below cannot match (no slash) and
+  # GIT_ROOT collapses to the relative ".git" — which makes WORKTREE_DIR ".git/.worktrees"
+  # and detonates verify_worktree_created's absolute-vs-relative --show-toplevel compare
+  # ("Worktree path mismatch"). Resolve to ABSOLUTE here, BEFORE the strip, so the strip
+  # yields the true absolute workspace ROOT (sibling .worktrees) rather than a path buried
+  # inside .git.
+  if [[ -n "$_common_dir" && "$_common_dir" != /* ]]; then
+    _common_dir="$(cd "$_common_dir" 2>/dev/null && pwd)" || _common_dir=""
+  fi
   if [[ -n "$_common_dir" ]] && git -C "$_common_dir" rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
     IS_BARE=true
     # GIT_ROOT should point to the bare repo, not the worktree
@@ -109,6 +120,22 @@ else
     fi
   fi
 fi
+# #5934 round-3 defense-in-depth: GIT_ROOT MUST be absolute before it feeds WORKTREE_DIR
+# (and every other consumer: ensure_bare_config, copy_env_files, verify_worktree_created).
+# Any branch above can hand back a RELATIVE root (mask-degraded --show-toplevel /
+# --git-common-dir) or an EMPTY one; a relative WORKTREE_DIR then mismatches git's absolute
+# --show-toplevel in verify. Normalize a relative root against $PWD (create runs from the
+# workspace root); if it resolves empty, fall back to $PWD when that IS a real checkout. A
+# no-op for an already-absolute root (the common, healthy case).
+ensure_git_root_absolute() {
+  if [[ -n "$GIT_ROOT" && "$GIT_ROOT" != /* ]]; then
+    GIT_ROOT="$(cd "$GIT_ROOT" 2>/dev/null && pwd)" || GIT_ROOT=""
+  fi
+  if [[ -z "$GIT_ROOT" && -d "$PWD/.git" ]]; then
+    GIT_ROOT="$PWD"
+  fi
+}
+ensure_git_root_absolute
 WORKTREE_DIR="$GIT_ROOT/.worktrees"
 
 # Exit with error if running at the bare repo root (no working tree available).
@@ -644,6 +671,10 @@ verify_worktree_created() {
 
   # Check 0: Fast-fail if directory was not created at all
   if [[ ! -d "$worktree_path" ]]; then
+    # Bare stdout marker (D1a) so this failure reaches the git-lock-marker telemetry scanner
+    # — verify_worktree_created was SILENT to every sink before #5934 round-3, so the round-2
+    # relative-GIT_ROOT path-mismatch could only be diagnosed from an operator paste.
+    echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=dir-not-created branch=$branch_name expected=$worktree_path"
     echo -e "${RED}Error: Worktree directory not created at $worktree_path${NC}"
     echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
     exit 1
@@ -652,12 +683,17 @@ verify_worktree_created() {
   # Check 1: Verify the directory is a valid git worktree
   local actual_toplevel
   if ! actual_toplevel=$(git -C "$worktree_path" rev-parse --show-toplevel 2>/dev/null); then
+    echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=not-a-worktree branch=$branch_name expected=$worktree_path"
     echo -e "${RED}Error: Worktree creation failed — $worktree_path is not a valid git worktree${NC}"
     echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
     git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
     exit 1
   fi
   if [[ "$actual_toplevel" != "$worktree_path" ]]; then
+    # The #5934 round-2 LIVE failure: a RELATIVE GIT_ROOT (".git") made WORKTREE_DIR relative,
+    # so the expected path is a relative string while git reports the same location ABSOLUTE.
+    # Emit both so the relative-vs-absolute mismatch is self-diagnosable from telemetry.
+    echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=path-mismatch branch=$branch_name expected=$worktree_path actual=$actual_toplevel"
     echo -e "${RED}Error: Worktree path mismatch — expected $worktree_path, got $actual_toplevel${NC}"
     git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
     exit 1
@@ -668,6 +704,7 @@ verify_worktree_created() {
     echo -e "${YELLOW}Warning: Worktree not in git worktree list — attempting repair...${NC}"
     git worktree repair "$worktree_path" 2>/dev/null || true
     if ! git worktree list --porcelain | grep -qxF "worktree $worktree_path"; then
+      echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=unregistered branch=$branch_name expected=$worktree_path"
       echo -e "${RED}Error: Worktree directory exists but is not registered after repair${NC}"
       git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
       exit 1
@@ -677,6 +714,7 @@ verify_worktree_created() {
 
   # Check 3: Verify the branch was actually created
   if ! git show-ref --verify --quiet "refs/heads/$branch_name"; then
+    echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=branch-missing branch=$branch_name expected=$worktree_path"
     echo -e "${RED}Error: Branch $branch_name was not created despite successful worktree add${NC}"
     echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
     git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
