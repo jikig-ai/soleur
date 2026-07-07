@@ -21,6 +21,42 @@ title date == dedup key byte-exact via a shared memoized `runStartedAt`; keep-`u
 Findings folded below; two Taste challenges (drop Part 2? / tighten to `created_at`?) recorded in
 `knowledge-base/project/specs/feat-one-shot-6143-cron-dedup-cohort-followups/decision-challenges.md`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-07 · **Review depth:** 6-agent plan-review panel (DHH, Kieran,
+code-simplicity, architecture-strategist, spec-flow, cto) + a scoped `fable` advisor consult.
+Deepen-plan hard gates all pass: 4.4 (Inngest-cron canonical — modifies existing handlers, no new
+scheduled workflow) · 4.6 (User-Brand Impact, threshold `none` + scope-out) · 4.7 (Observability
+5-field schema, non-placeholder, no-ssh discoverability) · 4.8 (no PAT-shaped var) · 4.9 (no UI
+surface). 4.5/4.55 not triggered. Cited PRs/issues resolved live: #6139 MERGED, #5786/#5751/#4468
+CLOSED — all attributions accurate.
+
+### Key improvements applied (from the review pass)
+1. **Kieran HIGH — three `DEDUP RULE` literals, not one.** `cron-community-monitor.ts` carries the
+   token at `:45`, `:229–234`, AND a `#5751` code-comment `:325`. AC1's whole-file grep and AC2's
+   `not.toContain` are unpassable unless all three are scrubbed — Files-to-Edit #1 enumerates them.
+2. **campaign-calendar refutes the issue's "remove the filter" premise.** STEP 2(b) is a live
+   comment-bump output path (`git grep "counts via updated_at"` → only campaign-calendar); the
+   `updated_at`/`since` filter stays, the citation re-points to the **stable marker** `counts via
+   updated_at` (CTO P2), and a `cron-shared.test.ts` assertion **test-enforces** the coupling.
+3. **Cohort is 9, not 7** (two predicates agree; `compound-promote`/`rule-prune` correctly excluded).
+   Part 2 pins all 9; the drift-guard is **discovery-based** (`readdirSync` + `digestIssueExistsForDate`
+   grep — CTO P1) so cron #10 cannot silently escape.
+4. **`injectRunDate` throws on a missing sentinel** (advisor C2a) — a forgotten wiring is loud, not a
+   silent literal-`{{RUN_DATE}}` title that defeats dedup+verify.
+
+### New considerations discovered
+- **runStartedAt is `step.run`-memoized in all 9 crons** → the injected title date and the dedup key
+  read the SAME value, byte-identical across Inngest retries (resolves the advisor's retry-drift concern).
+- **community-monitor `YYYY-MM-DD` token collision** (arch/spec-flow): title `:220` (pin) and
+  digest-file `:196` share the literal — anchor the edit on the full title string.
+- **arch-diagram-sync `:87` "use `<today>` throughout"** competes with the pinned title (spec-flow) →
+  reconcile to file-body scope (AC10).
+- **Observability `fail_loud` narrowed** (spec-flow): the no-platform FAILED path stays green
+  (pre-existing label-vs-title asymmetry) — claim corrected.
+- Two Taste challenges (drop Part 2? / per-cron `created_at`?) rejected on code evidence + panel
+  consensus; rationale in decision-challenges.md.
+
 ## Overview
 
 **Part 1 — `cron-community-monitor` DEDUP-RULE removal (bug fix).** community-monitor carries the
