@@ -4,7 +4,10 @@ date: 2026-07-07
 status: draft
 lane: cross-domain
 brand_survival_threshold: single-user incident
+issue: 6165
+pr: 6160
 brainstorm: knowledge-base/project/brainstorms/2026-07-07-beta-conversation-capture-brainstorm.md
+validation: knowledge-base/product/validation/2026-07-07-agent-operated-crm-validation.md
 domains_assessed: [product, legal, engineering, sales, operations, finance]
 ---
 
