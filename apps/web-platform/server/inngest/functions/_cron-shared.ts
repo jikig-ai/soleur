@@ -678,14 +678,19 @@ export async function deferIfTier2Cron(args: {
 // issue-count caught it (weeks later).
 //
 // "Produced output" = a `scheduled-<task>`-labeled issue CREATED OR UPDATED in
-// the run window. The update case matters: cron-community-monitor's DEDUP RULE
-// comments on the most-recent existing issue (instead of creating a new one)
-// when a fire from the last 24h exists — a healthy outcome that creates no new
-// issue. Filtering on updated_at (via the GitHub `since` param) credits that
-// dedup-comment as output, so a manual-trigger-same-day does NOT false-red.
-// Within a producer's ~50-min run window only the producer itself touches its
-// own labeled issues (daily-triage runs at a different hour), so updated_at
-// moving == the producer did something.
+// the run window. The update case matters: cron-campaign-calendar's comment-bump
+// path ("Do NOT create a new issue" — on a quiet day it comments a heartbeat note
+// on the existing calendar issue instead of creating one; its handler documents
+// that verifyScheduledIssueCreated "counts via updated_at"). Filtering on
+// updated_at (via the GitHub `since` param) credits that comment-bump as output,
+// so a quiet-day run does NOT false-red. (community-monitor's former in-prompt
+// dedup rule was another such consumer, but #6143 removed it — campaign-calendar
+// is now the SOLE path relying on the updated_at crediting, which is why the
+// `since`/updated_at filter below stays load-bearing rather than being tightened
+// to created_at. cron-shared.test.ts test-enforces this coupling via the
+// campaign-calendar marker assertion.) Within a producer's ~50-min run window
+// only the producer itself touches its own labeled issues (daily-triage runs at a
+// different hour), so updated_at moving == the producer did something.
 //
 // Callers gate their Sentry heartbeat on this result so a quiet producer turns
 // its OWN per-function monitor red, with no dependency on the watchdog. Reuses

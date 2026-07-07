@@ -228,15 +228,18 @@ describe("verifyScheduledIssueCreated", () => {
   });
 
   it("credits a dedup-comment: issue created earlier but UPDATED this run window → true", async () => {
-    // cron-community-monitor's DEDUP RULE comments on the most-recent existing
-    // issue instead of creating a new one (manual-trigger + cron same day). That
-    // is a HEALTHY run with no new issue — updated_at moved into the window, so
-    // it must NOT false-red. Verifying on created_at would have failed here.
+    // cron-campaign-calendar's comment-bump path (STEP 2(b): "Do NOT create a new
+    // issue") comments a heartbeat note on the most-recent existing calendar issue
+    // instead of creating a new one on a quiet day. That is a HEALTHY run with no
+    // new issue — updated_at moved into the window, so it must NOT false-red.
+    // Verifying on created_at would have failed here. (community-monitor's former
+    // in-prompt dedup rule was another such consumer, removed in #6143 — see the
+    // coupling-invariant assertion below.)
     const octokit = octokitReturning([
       { updated_at: "2026-05-31T09:31:00.000Z" }, // commented this run...
     ]);
     const result = await verifyScheduledIssueCreated({
-      label: "scheduled-community-monitor",
+      label: "scheduled-campaign-calendar",
       sinceIso: RUN_START, // ...even though the issue was created earlier
       octokit,
     });
@@ -298,6 +301,31 @@ describe("verifyScheduledIssueCreated", () => {
         octokit,
       }),
     ).rejects.toThrow(/invalid sinceIso/);
+  });
+});
+
+// #6143 — coupling-invariant: campaign-calendar is the SOLE remaining consumer
+// of verifyScheduledIssueCreated's updated_at-credits-a-comment path (after
+// community-monitor's in-prompt dedup rule was removed). The `since`/updated_at
+// filter in verifyScheduledIssueCreated is load-bearing ONLY because of that
+// path. This test reads the campaign-calendar source and asserts its comment-bump
+// markers still exist — if that path is ever removed, this reddens and tells the
+// next engineer the `updated_at` filter may now be tightened to created_at.
+// (cq-test-fixtures-synthesized-only: reads the real SUT via readFileSync.)
+describe("#6143 — campaign-calendar comment-bump coupling invariant", () => {
+  it("cron-campaign-calendar.ts still carries the updated_at-crediting comment-bump path", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const campaignCalendarSource = readFileSync(
+      resolve(
+        __dirname,
+        "../../../server/inngest/functions/cron-campaign-calendar.ts",
+      ),
+      "utf-8",
+    );
+    // Stable markers (NOT the volatile "STEP 2(b)" step number):
+    expect(campaignCalendarSource).toContain("Do NOT create a new issue");
+    expect(campaignCalendarSource).toContain("counts via updated_at");
   });
 });
 
