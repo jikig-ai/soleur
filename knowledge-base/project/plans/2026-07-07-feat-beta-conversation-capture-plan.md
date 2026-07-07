@@ -279,14 +279,13 @@ At the `single-user incident` threshold the panel ran the escalated set: spec-fl
 
 **Residual acknowledged (not MVP-blocking):** within-tenant prompt-injection overwrite of the mutable head (R3 — field-diff audit deferred; operator reviews in-session at single-user scale).
 
-## Deferred Items (→ follow-up issues)
-1. **`/soleur:capture-conversation` skill** — parse a raw pasted/dictated conversation into a faceted `beta_contacts` + `interview_notes` record (Productize Candidate). *(File follow-up.)*
-2. **BYO-CRM connect** via native MCP (HubSpot first). Re-eval unified-API at ~8–10 tenants across 4+ CRMs. *(File follow-up.)*
-3. **Tester-visible records** (external-person auth surface; agent-user parity). *(File follow-up.)*
-4. **In-Soleur-UI surface** for contacts/pipeline over the store's API (wireframes required when scoped). *(File follow-up.)*
-5. **Workspace-shared visibility** (the 111 workspace-owner RLS shape) if multi-member workspaces need shared CRM. *(File follow-up.)*
-6. **USD normalization** (`amount_normalized_usd` + `fx_rate` + `fx_rate_date` + an FX source) when a reporting/forecasting consumer exists (one-line migration). *(File follow-up.)*
-7. **Field-level audit** for `beta_contacts` mutable-head overwrites (old→new diff), hardening R3's within-tenant injection risk beyond in-session operator review. *(File follow-up.)*
-8. **`jti_not_denied` omission on `email_triage_items` (mig 102) + `inbox_item` (mig 122)** — pre-existing revocation-surface gap surfaced by data-integrity P1-4; add the RESTRICTIVE policy to those tables too. *(File follow-up.)*
-9. **`/soleur:capture-conversation` skill** — parse a raw conversation into a faceted record (already listed #1; Productize Candidate).
-10. **Standalone agent-operated CRM spin-out** — tracked in #6166 (NOT-NOW; watch triggers).
+## Deferred Items (→ follow-up issues, filed)
+1. **`/soleur:capture-conversation` skill** — parse a raw conversation into a faceted record (Productize Candidate). → **#6169**
+2. **BYO-CRM connect** via native MCP (HubSpot first); re-eval unified-API at ~8–10 tenants/4+ CRMs. → **#6170**
+3. **Tester-visible records** (external-person auth surface; agent-user parity). → **#6171**
+4. **In-Soleur-UI surface** for contacts/pipeline over the store's API (wireframes required when scoped; adds `webapp -> crmStore` C4 edge). → **#6172**
+5. **Workspace-shared visibility** (the 111 workspace-owner RLS shape). → **#6173**
+6. **USD normalization** (`amount_normalized_usd`/`fx_rate`/`fx_rate_date` + FX source) when a reporting consumer exists. → **#6174**
+7. **Field-level audit** for `beta_contacts` mutable-head overwrites (R3 within-tenant injection hardening). → **#6175**
+8. **`jti_not_denied` on `email_triage_items` (102) + `inbox_item` (122)** — pre-existing revocation-surface gap (data-integrity P1-4). → **#6176**
+9. **Standalone agent-operated CRM spin-out** — NOT-NOW; watch triggers. → **#6166**
