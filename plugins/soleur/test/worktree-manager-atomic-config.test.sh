@@ -587,5 +587,44 @@ fi
 assert_eq "__ABSENT__" "$(git config --file "$WS24/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "extensions.worktreeConfig NOT set (surgery correctly skipped on the non-bare clone)"
 
+# ---------------------------------------------------------------------------
+echo "Test 24: #5934 D3 GAP — non-bare guard SKIPS when the mask leaves GIT_ROOT RELATIVE (\".git\")"
+# The predecessor D3 fix (merged 2026-07-07) recovered git_dir from \$PWD/.git ONLY when
+# GIT_ROOT was EMPTY. But the live Concierge wedge shows a DIFFERENT mask degradation: because
+# --is-bare-repository degrades to a false "true" at init, the top of the script recomputes
+# GIT_ROOT from --absolute-git-dir/--git-common-dir to the RELATIVE string ".git" (NON-empty).
+# In ensure_bare_config, git_dir then collapses to ".git" — which has no slash, so the line-532
+# `*/.git` skip cannot match — and the `-z GIT_ROOT` fallback is skipped (GIT_ROOT is non-empty),
+# so the bare surgery misfires and wedges (telemetry: branch=target-masked-precheck / bare-fail).
+# Reproduce it deterministically & unprivileged: a NON-bare repo (real `.git` DIRECTORY) with a
+# MASKED `.git/config` (symlink→/dev/null = a char device by dereference, the exact target-masked
+# signature; mknod fallback when root), GIT_ROOT=".git" (relative), CWD = the repo root.
+#   RED  (pre-fix): fallback gated on `-z GIT_ROOT` stays inert → git_dir stays ".git" → no skip
+#                   → is-bare "true" → reaches surgery → emits branch=bare-fail/target-masked, rc 1.
+#   GREEN (fixed):  `-d \$PWD/.git` fires UNCONDITIONALLY → git_dir=ABSOLUTE \$PWD/.git → line-532
+#                   skip fires → emits SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip, rc 0.
+WS25=$(mktemp -d "$TMP/relroot25.XXXXXX"); git init -q -b main "$WS25" >/dev/null 2>&1
+rm -f "$WS25/.git/config"
+if mknod "$WS25/.git/config" c 1 3 2>/dev/null; then :; else ln -s /dev/null "$WS25/.git/config"; fi
+_SAVED_GIT_ROOT="$GIT_ROOT"; _SAVED_PWD="$PWD"
+cd "$WS25"; GIT_ROOT=".git"          # the exact mask degradation: RELATIVE GIT_ROOT, CWD is the clone
+set +e; ensure_bare_config >"$TMP/ebc25.out" 2>&1; EBC25_RC=$?; set -e
+GIT_ROOT="$_SAVED_GIT_ROOT"; cd "$_SAVED_PWD"
+assert_eq "0" "$EBC25_RC" "ensure_bare_config SKIPS (rc 0) with a relative \".git\" GIT_ROOT (fallback now unconditional)"
+# Non-vacuity: the RED path emits the bare-surgery wedge sentinels; the GREEN path must NOT.
+if grep -qE 'branch=bare-fail|branch=target-masked-precheck|worktree wedge|config.soleur-tmp' "$TMP/ebc25.out"; then
+  echo "  FAIL: guard MISFIRED — reached the bare surgery on the relative-\".git\" GIT_ROOT (the D3 gap)"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: no bare-surgery wedge sentinel — surgery was not reached"; PASS=$((PASS + 1))
+fi
+# The distinguishing positive assertion: the non-bare skip path fired its benign marker.
+if grep -qF 'SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=non-bare-skip branch=non-bare-skip' "$TMP/ebc25.out"; then
+  echo "  PASS: SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip emitted (non-bare skip fired)"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected the SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip marker (skip did not fire)"; FAIL=$((FAIL + 1))
+fi
+assert_eq "__ABSENT__" "$(git config --file "$WS25/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
+  "extensions.worktreeConfig NOT set (surgery correctly skipped on the relative-GIT_ROOT non-bare clone)"
+
 echo ""
 print_results
