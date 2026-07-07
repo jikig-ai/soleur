@@ -302,23 +302,73 @@ export async function listPullRequestComments(
 // ---------------------------------------------------------------------------
 
 // GitHub `GET /repos/{owner}/{repo}/issues` returns max 100 items/page (default
-// 30). We page until a short page, capped at MAX_ISSUE_PAGES so a huge repo can
-// never spin unbounded — 5 × 100 = 500 issues covers the board comfortably.
-// SOLEUR-DEBT: if a repo legitimately exceeds the cap we silently drop the tail;
-// switch to a "show open only" or windowed read when a >500-issue repo connects.
+// 30) and — critically — includes PULL REQUESTS alongside issues. A single
+// `state=all` newest-first scan therefore spends its page budget on PRs and
+// recently-closed noise, silently dropping still-OPEN issues older than the
+// window so the board's active columns under-count. (Measured on jikig-ai/soleur
+// 2026-07-07: 238 of the newest 500 raw items were PRs, so open issues older
+// than the newest ~500 items — 4 of 5 "In progress" cards — never loaded.)
+//
+// So we split the read the way the board is shaped: OPEN issues populate every
+// active column (Backlog/Ready/In progress/In review/Blocked/Pending) and must
+// load in FULL (bounded only by a large safety cap); CLOSED issues only feed the
+// Done column, where the recently-closed are what matter, so they're windowed.
 const BOARD_PER_PAGE = 100;
-const MAX_ISSUE_PAGES = 5;
+const MAX_OPEN_PAGES = 20; // ALL open issues (2000 headroom) — active columns must be complete
+const MAX_CLOSED_PAGES = 3; // Done column: most-recently-updated ~300 closed (old closures aren't actionable)
+
+function toBoardInput(item: GhIssueResponse): BoardIssueInput {
+  return {
+    number: item.number,
+    title: item.title,
+    body: item.body ?? null,
+    assignees: item.assignees.map((a) => a.login),
+    labels: item.labels.map(normalizeLabel),
+    state: item.state === "closed" ? "closed" : "open",
+    state_reason: item.state_reason ?? null,
+    created_at: item.created_at,
+    updated_at: item.updated_at,
+  };
+}
+
+/**
+ * Page one issue `state` (query string) into `out`, skipping PRs. Returns true
+ * iff the page cap was reached with a still-FULL final page — i.e. a tail was
+ * likely dropped (a short page means we exhausted the list cleanly).
+ */
+async function pageIssuesInto(
+  out: BoardIssueInput[],
+  installationId: number,
+  owner: string,
+  repo: string,
+  query: string,
+  maxPages: number,
+): Promise<boolean> {
+  for (let page = 1; page <= maxPages; page++) {
+    const raw = await githubApiGet<GhIssueResponse[]>(
+      installationId,
+      `/repos/${owner}/${repo}/issues?${query}&per_page=${BOARD_PER_PAGE}&page=${page}`,
+    );
+    for (const item of raw) {
+      if (item.pull_request) continue; // skip PRs — board shows issues only
+      out.push(toBoardInput(item));
+    }
+    if (raw.length < BOARD_PER_PAGE) return false; // short page → exhausted, no tail
+    if (page === maxPages) return true; // full final page → tail likely dropped
+  }
+  return false;
+}
 
 /**
  * List a repo's issues for the Workstream board, narrowed to `BoardIssueInput`
  * (the shape the pure `githubIssueToWorkstreamIssue` mapper consumes).
  *
- * Contract (verified live against GitHub REST docs 2026-06-26):
- *   - `?state=all` (default is `open`) so closed → Done/Cancelled render.
- *   - `?per_page=100` (default 30) + pagination — silent truncation is a
- *     data-honesty bug; we cap explicitly (MAX_ISSUE_PAGES) and document it.
- *   - The endpoint ALSO returns pull requests — skip any item with a
- *     `pull_request` key (PRs are not board issues).
+ * Split read (see the note above BOARD_PER_PAGE):
+ *   - ALL open issues — `?state=open`, paged to completion (MAX_OPEN_PAGES is a
+ *     safety bound; hitting it is a real truncation of active work → Sentry).
+ *   - Recently-closed — `?state=closed&sort=updated&direction=desc`, windowed to
+ *     MAX_CLOSED_PAGES for the Done column (bounded BY DESIGN, not a data bug).
+ *   - The endpoint also returns PRs — items with a `pull_request` key are skipped.
  *
  * Errors PROPAGATE (githubApiGet throws on !ok) — the caller's empty-vs-throw
  * split must let a GitHub failure surface (route → 502 / tool → isError), never
@@ -330,51 +380,43 @@ export async function listRepoIssues(
   repo: string,
 ): Promise<BoardIssueInput[]> {
   const out: BoardIssueInput[] = [];
-  for (let page = 1; page <= MAX_ISSUE_PAGES; page++) {
-    const raw = await githubApiGet<GhIssueResponse[]>(
-      installationId,
-      `/repos/${owner}/${repo}/issues?state=all&per_page=${BOARD_PER_PAGE}&page=${page}`,
+
+  // Active columns: every OPEN issue must load, or the board under-counts.
+  const openTruncated = await pageIssuesInto(
+    out,
+    installationId,
+    owner,
+    repo,
+    "state=open",
+    MAX_OPEN_PAGES,
+  );
+  if (openTruncated) {
+    log.warn(
+      { owner, repo, loaded: out.length, cap: MAX_OPEN_PAGES * BOARD_PER_PAGE },
+      "Workstream OPEN-issue read hit the page cap — active columns may under-count (SOLEUR-DEBT)",
     );
-    for (const item of raw) {
-      if (item.pull_request) continue; // skip PRs — board shows issues only
-      out.push({
-        number: item.number,
-        title: item.title,
-        body: item.body ?? null,
-        assignees: item.assignees.map((a) => a.login),
-        labels: item.labels.map(normalizeLabel),
-        state: item.state === "closed" ? "closed" : "open",
-        state_reason: item.state_reason ?? null,
-        created_at: item.created_at,
-        updated_at: item.updated_at,
-      });
-    }
-    if (raw.length < BOARD_PER_PAGE) break; // short page → last page, no tail
-    if (page === MAX_ISSUE_PAGES) {
-      // We reached the page cap AND the final allowed page came back FULL
-      // (raw.length === BOARD_PER_PAGE — a short page would have broken above),
-      // so a tail beyond the cap is LIKELY and we may have dropped issues. (An
-      // exactly-full repo is indistinguishable from a real tail without a +1
-      // fetch, so we err toward signalling.) SOLEUR-DEBT: if a repo legitimately
-      // exceeds the cap we silently drop the tail; switch to a "show open only"
-      // or windowed read when a >500-issue repo connects.
-      log.warn(
-        { owner, repo, loaded: out.length, cap: MAX_ISSUE_PAGES * BOARD_PER_PAGE },
-        "Workstream issue read hit the page cap — tail issues may not be loaded (SOLEUR-DEBT)",
-      );
-      // Mirror to Sentry for parity with the no-installation reportSilentFallback
-      // path (get-workstream-issues.ts) so on-call sees the truncated read
-      // without SSH (cq-silent-fallback-must-mirror-to-sentry).
-      reportSilentFallback(
-        new Error("workstream issue read hit the page cap"),
-        {
-          feature: "github-read-tools",
-          op: "list-repo-issues-cap",
-          extra: { owner, repo, loaded: out.length },
-        },
-      );
-    }
+    // Mirror to Sentry (cq-silent-fallback-must-mirror-to-sentry) so an on-call
+    // sees a truncated active board without SSH.
+    reportSilentFallback(
+      new Error("workstream open-issue read hit the page cap"),
+      {
+        feature: "github-read-tools",
+        op: "list-repo-issues-open-cap",
+        extra: { owner, repo, loaded: out.length },
+      },
+    );
   }
+
+  // Done column only needs the recently-closed — windowed on purpose (no warn).
+  await pageIssuesInto(
+    out,
+    installationId,
+    owner,
+    repo,
+    "state=closed&sort=updated&direction=desc",
+    MAX_CLOSED_PAGES,
+  );
+
   return out;
 }
 
