@@ -170,6 +170,8 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
    Do NOT end your turn after this step. Proceed to Step 5.5.
 
 5.5. Use the **Skill tool**: `skill: soleur:qa`, args: "<plan_file_path>". QA verifies features work end-to-end by executing the plan's Test Scenarios (browser flows via Playwright MCP, API verification via Doppler + curl). If QA fails, fix the issues and re-run QA before proceeding. If the plan has no Test Scenarios section, QA skips gracefully.
+
+   > **Diagnostic loops here are self-serve — never hand the operator a data-fetch.** When QA (or any review/verification step above) surfaces a failure on a server/cron/prod surface, self-pull the error: Better Stack `SOLEUR_*` markers via `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since <N> --grep <marker>` and Sentry — never ask the operator to paste error output, run probes, or eyeball logs (the operator decides, doesn't fetch). If the needed signal is missing from telemetry, ADD a monitored stdout `SOLEUR_*` marker in the emitting code so it self-reports; do not escalate to the operator for it. Cite `hr-no-dashboard-eyeball-pull-data-yourself`. See `knowledge-base/project/learnings/workflow-patterns/2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch.md` (#5934).
 6. Use the **Skill tool**: `skill: soleur:compound`
 7. Use the **Skill tool**: `skill: soleur:ship`. Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, and cleanup.
 
