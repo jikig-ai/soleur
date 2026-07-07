@@ -199,6 +199,34 @@ async function setupNavMocks(page: Page): Promise<void> {
   });
 
   // Populated so the collapsed Chat case asserts overflow against REAL rows.
+  // The rail LIST now reads via the list_conversations_enriched RPC (mig 125):
+  // return each seeded conversation plus its message snippets (derived the same
+  // way the SQL LATERAL joins do) so the rail renders the seeded row titles.
+  // The /rest/v1/conversations + /rest/v1/messages routes below are retained for
+  // the orphan-count query + any archive/status mutation; the rail LIST no
+  // longer reads them.
+  await page.route("**/rest/v1/rpc/list_conversations_enriched*", (route) => {
+    const enriched = SEEDED_CONVERSATIONS.map((c) => {
+      const msgs = SEEDED_MESSAGES.filter((m) => m.conversation_id === c.id).sort(
+        (a, b) => a.created_at.localeCompare(b.created_at),
+      );
+      const firstUser = msgs.find((m) => m.role === "user");
+      const firstAssistant = msgs.find((m) => m.role === "assistant");
+      const last = msgs[msgs.length - 1];
+      return {
+        ...c,
+        first_user_content: firstUser?.content ?? null,
+        first_assistant_content: firstAssistant?.content ?? null,
+        last_content: last?.content ?? null,
+        last_leader: last?.leader_id ?? null,
+      };
+    });
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(enriched),
+    });
+  });
   await page.route("**/rest/v1/conversations*", (route) =>
     route.fulfill({
       status: 200,

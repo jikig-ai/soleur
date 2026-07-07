@@ -175,6 +175,20 @@ async function setupRailMocks(page: Page) {
     });
   });
 
+  // The "View all" link navigates to /dashboard, which now derives its
+  // foundation-card state from /api/dashboard/foundation-status (was the
+  // /api/kb/tree walk). Mock it so the dashboard renders deterministically
+  // instead of hitting the real (unmocked) route on nav.
+  await page.route("**/api/dashboard/foundation-status*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        paths: { "overview/vision.md": { exists: true, size: 1000 } },
+      }),
+    });
+  });
+
   // Retained for the orphan-count query + any archive/status mutation the rail
   // issues (still direct `.from("conversations")`); the rail LIST no longer
   // reads this path.
