@@ -14,6 +14,28 @@ created: 2026-07-07
 
 Tracking issue: **#6184** (NOT #4826 — see Research Reconciliation). Closes #6184. Deferred hardening: #6186.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-07. **Method:** evidence-first (Better Stack telemetry + local RC=255 reproduction) → escalated 5-agent plan-review (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow) + CTO + learnings-researcher → deepen-plan gate + citation verification.
+
+### Key improvements over the initial hypothesis
+1. **Root cause corrected twice by evidence.** The task-brief hypothesis (bind-mounted-regular lock / `_config_lock_wedged` mis-classification) and the coordinator's course-correction (sweep / `git worktree add` resilience) were both refined: telemetry shows `type=chardevice`, `git worktree add` succeeds, and the real failure is the **identity-authority inversion** (`Dockerfile:212` bot global vs `workspace.ts:246` owner local) making `ensure_worktree_identity` clobber the owner → EEXIST on the masked lock.
+2. **Primary fix flipped off "route the write" (Layer A)** — arch-strategist proved it would "succeed" at misattributing commits to `github-actions[bot]`. New primary: respect the host-seeded owner identity.
+3. **Scope trimmed** — Phase 3 write-in-place dropped (unanimous); detector unification deferred to #6186.
+4. **Sentinel emitter split** fixed (spec-flow + Kieran P0); `set -e` disarm-inside-`if!` trap fixed (Kieran HIGH); AC greps de-vacuum'd (Kieran MEDIUM ×2).
+5. **Root-of-recurrence docs added** (coordinator): canonical ADR-098 git-surface-topology + budget-gated AGENTS caveat.
+
+### Verification performed (deepen-plan)
+- All halt gates pass: 4.6 User-Brand Impact ✓, 4.7 Observability 5-field (no-SSH) ✓, 4.8 no PAT-shaped vars ✓, 4.9 N/A (no UI surface).
+- All cited learning paths (7), rule-ids (8), ADR-081 + postmortem resolve on disk (ADR-098 is a Files-to-Create).
+- Precedent-diff (4.4): the set-when-absent write reuses the established `atomic_git_config` lockless pattern (#5932) — no novel pattern-bound shape. Not a scheduled job; no network-outage/downtime trigger.
+- `git config --local ≡ --file <common-dir>/config` on both `worktreeConfig` on/off — Kieran empirically re-confirmed on git 2.53.
+
+### New considerations surfaced (deepen-plan deliverables → deepen/work + follow-ups)
+- Bare-CLI-regression check for "don't clobber local" (deepen-plan precedent-diff D.1).
+- Layer-B host-side option: remove/replace the `Dockerfile:212` bot global or set sandbox `--global` = owner at provision (audit `push-branch.ts`/`inflight-checkpoint.ts` reliance) — deepen-plan D.2; may spawn its own issue.
+- AGENTS `B_ALWAYS` at 22995/23000 — the core-rule caveat must be net-byte-neutral or paired with a loader-class-fit-verified `wg-*` demotion.
+
 ## Overview
 
 `worktree-manager.sh create`/`feature` fails in the Concierge/agent-sandbox web environment, blocking every `/soleur:one-shot` and `/soleur:go` autonomous run. Six prior rounds hardened the **bare-repo `ensure_bare_config`** path and the **sweep**, yet the wedge survived — because the actual failing path is a different, un-instrumented code path on the NON-bare layout, and it is failing for a reason the prior rounds never suspected: an **identity-authority inversion**.
