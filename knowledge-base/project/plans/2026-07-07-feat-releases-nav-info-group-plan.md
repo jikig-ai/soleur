@@ -10,6 +10,22 @@ status: planned
 
 # ✨ feat: Move "Releases" nav tab into the information/settings group
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-07
+**Sections enhanced:** Observability (converted to 5-field schema), User-Brand Impact (scoped to the diff), plan-review corrections folded in.
+
+### Key improvements (from plan-review + deepen realism pass)
+1. **Corrected the `settingsActive` framing (Kieran F1, load-bearing).** `settingsActive` is a `drill === "settings"` check, NOT `pathname.startsWith`. Verified `DrillLevel = "kb" | "settings" | "chat"` at `apps/web-platform/hooks/segment-to-drill-level.ts:12` — so `drill === "releases"` is a TypeScript error. Releases active-state uses `pathname.startsWith(RELEASES_HREF)` directly; only the active *className* is shared with Settings.
+2. **Pinned the route literal to one const (`RELEASES_HREF`)** to remove the triplication smell (filter predicate + `<Link href>` + `startsWith`) the simplicity reviewer flagged, without over-abstracting into a `NAV_ITEMS.find()` lookup.
+3. **Footer references icons directly** (`<RocketIcon />`) — verified `RocketIcon`/`StatusIcon`/`SettingsIcon` are all local components in `layout.tsx` (L835/L741/L718); the `NAV_ICONS` map is consumed only inside the primary loop.
+4. **Trimmed redundant ACs** (folded "no duplicate" into AC2; reframed `data-tour-id` as pattern-consistency, not a hypothetical tour).
+
+### Verified during deepen
+- **Design correctness (all 3 plan reviewers):** keep `NAV_ITEMS` unchanged + filter the primary loop is the lowest-drift approach; the ⌘K palette, `g l` resolver, and `?` help row all auto-follow the untouched data source.
+- **verify-the-negative:** the diff adds no server/data/auth path; the file's existing client supabase reads (L156–172) are outside the change.
+- All deepen-plan hard gates pass: User-Brand Impact (threshold none; `layout.tsx` not a sensitive path), Observability (5-field schema, no-ssh discoverability test), PAT-shape (none), UI-Wireframe (`.pen` committed).
+
 ## Overview
 
 The dashboard sidebar has two visually distinct nav groups:
@@ -35,7 +51,7 @@ If Releases is **removed** from `NAV_ITEMS`, three of its five entry points (pal
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** a Releases link that is either missing from the sidebar entirely, duplicated (rendered in both the primary group and the footer), or shows no active-highlight when on `/dashboard/releases`. Worst realistic case: the `g l` shortcut / ⌘K palette entry regresses if `NAV_ITEMS` is edited instead of just the render.
-**If this leaks, the user's data / workflow / money is exposed via:** N/A — this is client-only sidebar chrome; no data, auth, network, or persistence surface is touched.
+**If this leaks, the user's data / workflow / money is exposed via:** N/A — this change edits only the sidebar nav render (primary-loop filter + one footer `<Link>`); it adds/modifies no data, auth, network, or persistence path. (`layout.tsx` does contain pre-existing client-side supabase session/admin reads at ~L156–172 — those lines are untouched by this diff.)
 **Brand-survival threshold:** none — internal navigation chrome reposition; no sensitive path (no schema/migration/auth/API/`.sql`) in the diff, reason: single client render-position change to a nav link, fully reversible, no data or route impact.
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -81,7 +97,37 @@ If Releases is **removed** from `NAV_ITEMS`, three of its five entry points (pal
 
 ## Observability
 
-**N/A — client-only sidebar render reposition.** Phase 2.9 trigger paths (`apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, `plugins/*/scripts/`) are **not** touched; the only code edit is `apps/web-platform/app/(dashboard)/layout.tsx` (a client React layout). No new error paths, no server code, no infrastructure, no failure modes to instrument. Discoverability of a broken render is the visual/Playwright check in AC9, not a runtime signal.
+Client-only sidebar render reposition — no server code, no new server error paths, no infrastructure. The schema below reflects the honest client-side surface (the app's existing browser Sentry SDK and the pre-merge test/visual gates); no new instrumentation is added.
+
+```yaml
+liveness_signal:
+  what: The Releases <Link> renders in the sidebar footer group on every /dashboard/* route (client render); the primary nav renders the 5 remaining action tabs.
+  cadence: on every dashboard page load / client-side navigation
+  alert_target: none — no server signal; correctness is gated pre-merge by CI (vitest) + /verify visual check (AC8), not by a runtime alert
+  configured_in: apps/web-platform/app/(dashboard)/layout.tsx
+error_reporting:
+  destination: existing browser Sentry SDK (unchanged) — any render/runtime error thrown in the dashboard layout surfaces to Sentry as a client event
+  fail_loud: yes — a render error breaks the dashboard shell visibly and is captured by Sentry; there is no silent-swallow path added
+failure_modes:
+  - mode: Releases missing from the sidebar entirely (filter dropped it from the primary loop AND it was not added to the footer)
+    detection: /verify + Playwright visual (AC8); shortcuts-registry.test.ts still green proves only the palette/g-l entry, not the sidebar render
+    alert_route: pre-merge CI + /verify (fail-closed before merge)
+  - mode: Releases duplicated (rendered in both the primary group and the footer)
+    detection: grep for a single /dashboard/releases <Link> in layout.tsx (AC2) + visual (AC8)
+    alert_route: pre-merge review + /verify
+  - mode: active highlight missing/wrong on /dashboard/releases (e.g. gold instead of neutral, or no aria-current)
+    detection: /verify visual on /dashboard/releases and a sub-route
+    alert_route: /verify
+  - mode: palette / g-l regression (NAV_ITEMS accidentally edited)
+    detection: shortcuts-registry.test.ts (iterates NAV_ITEMS) fails
+    alert_route: pre-merge CI (vitest)
+logs:
+  where: browser console + Sentry breadcrumbs (existing; no new log lines added by this change)
+  retention: per existing Sentry project config (unchanged)
+discoverability_test:
+  command: cd apps/web-platform && ./node_modules/.bin/vitest run test/shortcuts-registry.test.ts
+  expected_output: suite passes — proves the Releases NAV_ITEMS entry (⌘K palette + g-l shortcut + help row) survived the move; the sidebar render position itself is verified visually via /verify (no ssh required)
+```
 
 ## Domain Review
 
