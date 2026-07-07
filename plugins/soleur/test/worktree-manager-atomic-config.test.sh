@@ -291,5 +291,142 @@ assert_eq "__ABSENT__" "$(git config --file "$WS13/.git/config" --get extensions
   "worktreeConfig NOT set with empty GIT_ROOT (no surgery ran)"
 rm -rf "$WS13/.git/config.lock"
 
+# ---------------------------------------------------------------------------
+# T14–T17 — the #6184 identity-authority inversion (non-bare Concierge wedge).
+#
+# ensure_worktree_identity was written for the bare CLI dev repo (bare repo carries a
+# bot LOCAL, operator's --GLOBAL is the human → force global over local). On the
+# non-bare Concierge workspace that topology is INVERTED: the host seeds the shared
+# config with the per-workspace OWNER as the LOCAL identity, while the sandbox image
+# bakes a github-actions[bot] --GLOBAL. The old "force global over local" logic tried
+# to overwrite the correct owner via a raw `git config --local` write → EEXIST on the
+# masked config.lock → RC=255 wedge (and, had it "succeeded", it would have
+# misattributed the operator's commits to the bot). The fix RESPECTS a present local
+# identity and only sets from global when local is ABSENT (via atomic_git_config).
+# Fixtures synthesized only (cq-test-fixtures-synthesized-only); GIT_CONFIG_GLOBAL
+# points every "global" write at an isolated file so the operator's real ~/.gitconfig
+# is never touched.
+# ---------------------------------------------------------------------------
+echo "Test 14: #6184 PRIMARY — respect the host-seeded OWNER local identity (non-bare + masked lock)"
+# Non-bare repo + linked worktree; seed the shared config with a DISTINCTIVE OWNER
+# identity; set a DIFFERENT global (the sandbox bot); plant a non-regular
+# .git/config.lock. This is the exact `local ≠ global` branch that fired the raw write
+# at old :615-616. Proxy caveat: a DIRECTORY stand-in exercises the O_CREAT|O_EXCL
+# EEXIST class (same failure git hits on the real rdev=1:3 chardevice); the true
+# chardevice node is only reachable under mknod/root (see Test 9).
+MAIN14=$(mktemp -d "$TMP/main14.XXXXXX"); git init -q -b main "$MAIN14" >/dev/null 2>&1
+git -C "$MAIN14" config user.email "owner@workspace.example"   # host-seeded OWNER (shared/common)
+git -C "$MAIN14" config user.name "Workspace Owner"
+git -C "$MAIN14" commit -q --allow-empty -m init >/dev/null 2>&1
+WT14="$MAIN14/wt"; git -C "$MAIN14" worktree add -q "$WT14" -b feat14 >/dev/null 2>&1
+FAKE_GLOBAL14="$MAIN14/fake-global"                            # isolated — never the real ~/.gitconfig
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL14" git config --global user.email "gha-bot@users.noreply.github.com"
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL14" git config --global user.name "github-actions[bot]"
+mkdir "$MAIN14/.git/config.lock"                              # masked lock — a raw --local write would EEXIST
+# Call under ACTIVE set -e (subshell) — the faithful create_worktree call context. The
+# OLD "force global over local" code attempts the raw --local write here, EEXISTs on the
+# masked lock, and set -e aborts with RC=255 (the live wedge). The fix returns 0.
+set +e
+( set -euo pipefail
+  export GIT_CONFIG_GLOBAL="$FAKE_GLOBAL14"
+  ensure_worktree_identity "$WT14"
+) >"$TMP/ewi14.out" 2>&1
+EWI14_RC=$?
+set -e
+assert_eq "0" "$EWI14_RC" "ensure_worktree_identity returns 0 under set -e (owner respected, no write attempted)"
+assert_eq "owner@workspace.example" "$(git -C "$WT14" config --local --get user.email 2>/dev/null || echo MISS)" \
+  "local user.email STILL the OWNER (not the sandbox bot global)"
+assert_eq "Workspace Owner" "$(git -C "$WT14" config --local --get user.name 2>/dev/null || echo MISS)" \
+  "local user.name STILL the OWNER (not the sandbox bot global)"
+if grep -q "SOLEUR_GIT_LOCK_IDENTITY" "$TMP/ewi14.out"; then
+  echo "  FAIL: respect-owner no-op must emit NO identity marker (drift/ wedge sentinels are for the set-from-global path only)"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: respect-owner no-op emitted no identity marker"; PASS=$((PASS + 1))
+fi
+rm -rf "$MAIN14/.git/config.lock"
+
+# ---------------------------------------------------------------------------
+echo "Test 15: #6184 set-when-absent — set from global via atomic_git_config lockless path (rc 0)"
+# Non-bare + worktree with NO local identity + a global set + a non-regular config.lock.
+# The identity must be set from global through the lockless writer and land in the
+# RESOLVED common-dir config, plus emit the benign DIAG precondition marker.
+MAIN15=$(mktemp -d "$TMP/main15.XXXXXX"); git init -q -b main "$MAIN15" >/dev/null 2>&1
+git -C "$MAIN15" -c user.email=temp@t -c user.name=temp commit -q --allow-empty -m init >/dev/null 2>&1
+WT15="$MAIN15/wt"; git -C "$MAIN15" worktree add -q "$WT15" -b feat15 >/dev/null 2>&1
+git -C "$MAIN15" config --unset user.email 2>/dev/null || true   # ensure NO local identity in the shared config
+git -C "$MAIN15" config --unset user.name 2>/dev/null || true
+FAKE_GLOBAL15="$MAIN15/fake-global"
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL15" git config --global user.email "global@dev.example"
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL15" git config --global user.name "Global Dev"
+mkdir "$MAIN15/.git/config.lock"                              # masked → atomic_git_config must route lockless
+set +e
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL15" ensure_worktree_identity "$WT15" >"$TMP/ewi15.out" 2>&1
+EWI15_RC=$?
+set -e
+assert_eq "0" "$EWI15_RC" "set-when-absent returns 0 via the lockless path"
+assert_eq "global@dev.example" "$(git config --file "$MAIN15/.git/config" --get user.email 2>/dev/null || echo MISS)" \
+  "identity set from global landed in the RESOLVED common-dir config"
+assert_eq "Global Dev" "$(git config --file "$MAIN15/.git/config" --get user.name 2>/dev/null || echo MISS)" \
+  "name set from global landed in the common-dir config"
+if grep -qF "SOLEUR_GIT_LOCK_IDENTITY_DIAG source=ensure_worktree_identity reason=identity-drift-set-from-global" "$TMP/ewi15.out"; then
+  echo "  PASS: benign DIAG precondition marker emitted on the set-from-global branch"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected the benign SOLEUR_GIT_LOCK_IDENTITY_DIAG precondition marker"; FAIL=$((FAIL + 1))
+fi
+assert_eq "true" "$([[ -d "$MAIN15/.git/config.lock" ]] && echo true || echo false)" "masked lock left untouched (lockless write)"
+rm -rf "$MAIN15/.git/config.lock"
+
+# ---------------------------------------------------------------------------
+echo "Test 16: #6184 set -e ordering — drive the FAILURE through the wrapped call site under active set -e"
+# A faithful reproduction of create_worktree's `if ! ensure_worktree_identity …; then
+# <red>; exit 1; fi`. `if !`-wrapping DISARMS errexit inside the function body, so a
+# bare failing write would silently fall through to success (vacuous green). Force
+# common-dir-unresolved (a non-repo worktree_path) and assert: the WEDGED sentinel is
+# PRINTED (survives errexit), the function returns 1, the caller emits its red error,
+# and the wrapped block exits non-zero.
+NONREPO16=$(mktemp -d "$TMP/nonrepo16.XXXXXX")               # not a git repo → --git-common-dir fails
+FAKE_GLOBAL16="$NONREPO16/fake-global"
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL16" git config --global user.email "g@dev.example"
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL16" git config --global user.name "G Dev"
+set +e
+( set -euo pipefail
+  export GIT_CONFIG_GLOBAL="$FAKE_GLOBAL16"
+  if ! ensure_worktree_identity "$NONREPO16"; then
+    echo "RED_ERROR: cannot create worktree — git identity could not be set"
+    exit 1
+  fi
+  echo "UNEXPECTED_SUCCESS"
+) >"$TMP/ewi16.out" 2>&1
+EWI16_RC=$?
+set -e
+if (( EWI16_RC != 0 )); then echo "  PASS: wrapped call site exits non-zero (graceful, not a bare abort)"; PASS=$((PASS + 1));
+else echo "  FAIL: wrapped call site must exit non-zero on the identity wedge"; FAIL=$((FAIL + 1)); fi
+if grep -qF "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=common-dir-unresolved" "$TMP/ewi16.out"; then
+  echo "  PASS: common-dir-unresolved sentinel PRINTED (survived the disarmed errexit)"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected the SOLEUR_GIT_LOCK_IDENTITY_WEDGED common-dir-unresolved sentinel"; FAIL=$((FAIL + 1))
+fi
+if grep -qF "RED_ERROR" "$TMP/ewi16.out"; then echo "  PASS: caller emitted its contextual red error"; PASS=$((PASS + 1));
+else echo "  FAIL: caller red error missing"; FAIL=$((FAIL + 1)); fi
+if grep -qF "UNEXPECTED_SUCCESS" "$TMP/ewi16.out"; then echo "  FAIL: vacuous success — the function fell through the disarmed errexit"; FAIL=$((FAIL + 1));
+else echo "  PASS: no vacuous success"; PASS=$((PASS + 1)); fi
+
+# ---------------------------------------------------------------------------
+echo "Test 17: #6184 bare-layout regression — ensure_bare_config flow unchanged on a bare repo"
+# Complements Tests 12/13: a genuine bare repo (no .git subdir) still gets the
+# bare-accommodation surgery (extensions.worktreeConfig=true) via the atomic path.
+BARE17=$(mktemp -d "$TMP/bare17.XXXXXX")
+git init -q --bare -b main "$BARE17/repo.git" >/dev/null 2>&1
+_SAVED_GIT_ROOT="$GIT_ROOT"
+GIT_ROOT="$BARE17/repo.git"
+set +e; ensure_bare_config >"$TMP/ebc17.out" 2>&1; EBC17_RC=$?; set -e
+GIT_ROOT="$_SAVED_GIT_ROOT"
+assert_eq "0" "$EBC17_RC" "ensure_bare_config returns 0 on a genuine bare repo (regression guard)"
+if git config --file "$BARE17/repo.git/config" --get extensions.worktreeConfig 2>/dev/null | grep -qx true; then
+  echo "  PASS: bare accommodation still enables extensions.worktreeConfig (bare path unchanged)"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: bare repo lost its extensions.worktreeConfig surgery — bare-layout regression"; FAIL=$((FAIL + 1))
+fi
+
 echo ""
 print_results

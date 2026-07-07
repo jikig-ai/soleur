@@ -585,37 +585,82 @@ verify_worktree_created() {
   fi
 }
 
-# Ensure the worktree uses the operator's global git identity, not the bare repo's
-# local identity. The bare repo frequently has a CI-bot identity set at the repo
-# level (e.g., `user.email=41898282+github-actions[bot]@users.noreply.github.com`)
-# which worktrees inherit and which silently produces commits that fail CLA checks
-# or misattribute authorship. This function copies the operator's --global identity
-# onto the worktree's local config so every commit made from inside the worktree
-# is authored as the real human. Idempotent: skips silently if no global identity
-# exists, or if the worktree already has a matching local identity.
-# NOTE: its `git config --local` writes can hit the shared config's lock on a bare
-# repo; it relies on a preceding ensure_bare_config() (which runs the stale-lock
-# sweep) on every current call path. A future config-writing subcommand added
-# without that precedence would reopen the EEXIST wedge — keep sweep coverage in mind.
+# Ensure the worktree has a git identity, RESPECTING an already-present host-seeded
+# owner identity (#6184).
+#
+# IDENTITY AUTHORITY IS INVERTED BETWEEN THE TWO NON-BARE/BARE SURFACES (ADR-098):
+#   - Non-bare Concierge agent workspace (where this runs in production): the host seeds
+#     the shared config with the per-workspace OWNER as the LOCAL identity
+#     (workspace.ts), while the sandbox image bakes a `github-actions[bot]` --GLOBAL
+#     (Dockerfile). So in-sandbox: LOCAL = owner (authoritative), GLOBAL = bot.
+#   - Bare CLI dev repo: the bare repo may carry a bot LOCAL and the operator's --GLOBAL
+#     is the real human.
+# The prior logic FORCED global over local — correct only for the bare dev repo, but on
+# Concierge it clobbered the correct OWNER with the bot GLOBAL via a raw per-worktree
+# `--local` config write. That write locked the shared config → O_CREAT|O_EXCL on
+# the masked config.lock (ADR-081) → EEXIST → RC=255 wedge; and had it "succeeded" it
+# would have misattributed the operator's commits to `github-actions[bot]`.
+#
+# Fix: a present, non-empty LOCAL identity is authoritative — return WITHOUT writing
+# (no lock, no wedge, correct attribution). ONLY when local is ABSENT do we set from the
+# --global, routing THAT write through atomic_git_config against the resolved common-dir
+# config so a masked config.lock cannot wedge it either. `user.*` is not an RCE-relevant
+# config key. Never re-add a raw `git config` write here (see SKILL.md Sharp Edges).
 ensure_worktree_identity() {
   local worktree_path="$1"
-  local global_email global_name
-  global_email=$(git config --global --get user.email 2>/dev/null || true)
-  global_name=$(git config --global --get user.name 2>/dev/null || true)
 
-  # No global identity configured — nothing to do; the user is responsible for
-  # their own git config.
-  [[ -z "$global_email" || -z "$global_name" ]] && return 0
-
+  # Read the worktree's LOCAL identity FIRST. On a linked worktree `--local` targets the
+  # shared common-dir config, which on Concierge is the host-seeded owner.
   local local_email local_name
   local_email=$(git -C "$worktree_path" config --local --get user.email 2>/dev/null || true)
   local_name=$(git -C "$worktree_path" config --local --get user.name 2>/dev/null || true)
 
-  if [[ "$local_email" != "$global_email" || "$local_name" != "$global_name" ]]; then
-    git -C "$worktree_path" config --local user.email "$global_email"
-    git -C "$worktree_path" config --local user.name "$global_name"
-    echo -e "${GREEN}Set worktree git identity: $global_name <$global_email>${NC}"
+  # PRIMARY: a present, non-empty local identity is the authoritative host-seeded owner.
+  # Do NOT overwrite it — this is the common Concierge path and it does zero config work.
+  if [[ -n "$local_email" && -n "$local_name" ]]; then
+    return 0
   fi
+
+  # Local identity ABSENT → fall back to the operator's --global (the bare CLI dev repo
+  # case). No global configured either — nothing to do; the user owns their git config.
+  local global_email global_name
+  global_email=$(git config --global --get user.email 2>/dev/null || true)
+  global_name=$(git config --global --get user.name 2>/dev/null || true)
+  [[ -z "$global_email" || -z "$global_name" ]] && return 0
+
+  # Benign precondition marker (DIAG-class): we are on the set-from-global branch (local
+  # absent → drift). Emitted regardless of success so post-deploy telemetry PROVES this
+  # path executes in production. NOT a wedge (excluded from WEDGE_RE in
+  # git-lock-marker-telemetry.ts). Device/path forensic only — never the identity values.
+  echo "SOLEUR_GIT_LOCK_IDENTITY_DIAG source=ensure_worktree_identity reason=identity-drift-set-from-global"
+
+  # Resolve the SHARED (common-dir) config as an ABSOLUTE path. --path-format=absolute is
+  # load-bearing: a bare `--git-common-dir` can return a RELATIVE `.git`
+  # (learning 2026-03-18-git-common-dir-vs-show-toplevel-semantics). On empty/failure,
+  # emit the wedge sentinel + return 1 — do NOT fall back to $GIT_ROOT/.git/config (wrong
+  # on the bare layout, where $GIT_ROOT has no .git/ subdir).
+  local common_dir common_config
+  common_dir=$(git -C "$worktree_path" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  if [[ -z "$common_dir" ]]; then
+    echo "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=common-dir-unresolved file=config"
+    return 1
+  fi
+  common_config="$common_dir/config"
+
+  # set -e DISCIPLINE (MANDATORY shape): `if !`-wrapping this function at the call site
+  # DISARMS errexit for the whole function body, so a bare `atomic_git_config …` failure
+  # would silently fall through to the success `return 0` (vacuous success — worse than
+  # the wedge). Each write is therefore its OWN explicit `if !` guard. The call-site wrap
+  # matters (a) to give a contextual red error + exit 1 instead of a bare abort, and
+  # (b) precisely BECAUSE it disarms errexit, forcing these per-write checks — NOT because
+  # "an echo wouldn't print" (an echo before `return 1` always flushes).
+  if ! atomic_git_config "$common_config" user.email "$global_email" \
+     || ! atomic_git_config "$common_config" user.name "$global_name"; then
+    echo "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=native-eexist file=config"
+    return 1
+  fi
+  echo -e "${GREEN}Set worktree git identity from global: $global_name <$global_email>${NC}"
+  return 0
 }
 
 # Ensure .worktrees is in .gitignore
@@ -1006,9 +1051,13 @@ create_worktree() {
     exit 1
   fi
 
-  # Force the worktree to use the operator's global git identity (not a CI-bot
-  # identity that may be set at the bare repo level).
-  ensure_worktree_identity "$worktree_path"
+  # Respect a host-seeded owner identity; only set from --global when local is absent
+  # (#6184). Wrapped in `if !` so a genuine identity wedge fails LOUD with context +
+  # exit 1 instead of a bare set -e abort (see ensure_worktree_identity's set -e note).
+  if ! ensure_worktree_identity "$worktree_path"; then
+    echo -e "${RED}Cannot create worktree — git identity could not be set (see SOLEUR_GIT_LOCK_IDENTITY_WEDGED above).${NC}" >&2
+    exit 1
+  fi
 
   # Copy environment files
   copy_env_files "$worktree_path"
@@ -1092,9 +1141,13 @@ create_for_feature() {
     exit 1
   fi
 
-  # Force the worktree to use the operator's global git identity (not a CI-bot
-  # identity that may be set at the bare repo level).
-  ensure_worktree_identity "$worktree_path"
+  # Respect a host-seeded owner identity; only set from --global when local is absent
+  # (#6184). Wrapped in `if !` so a genuine identity wedge fails LOUD with context +
+  # exit 1 instead of a bare set -e abort (see ensure_worktree_identity's set -e note).
+  if ! ensure_worktree_identity "$worktree_path"; then
+    echo -e "${RED}Cannot create worktree — git identity could not be set (see SOLEUR_GIT_LOCK_IDENTITY_WEDGED above).${NC}" >&2
+    exit 1
+  fi
 
   # Create spec directory inside the worktree so it's tracked on the feature branch
   if [[ -d "$worktree_path/knowledge-base" ]]; then
