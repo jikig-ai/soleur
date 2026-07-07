@@ -41,6 +41,18 @@ write_files:
   # htpasswd auth, deny-by-default accessControl (pull user = read; push user =
   # read/create/update). Usernames are terraform-interpolated (non-secret constants).
   #
+  # storage.retention (#6122 follow-up): gc alone only reclaims DANGLING blobs, not old
+  # TAGS — every dual-pushed release tag (v* + its 40-hex commit-sha) is retained forever,
+  # so the store grows unbounded with each deploy and the 10 GB volume fills (observed: the
+  # web-platform image is ~1.5-2 GB/version). This policy bounds it: keep `latest`, the 10
+  # most-recently-pushed v* tags and 10 most-recent commit-sha tags per repo, and ALWAYS keep
+  # every `sha256-*` tag (the cosign .sig/.att triangulation tags — deleting them would break
+  # deploy-time `cosign verify`, which fetches the signature by tag from the SAME registry it
+  # pulls the image; see ADR-087). Non-matching tags are pruned; deleteUntagged + gc then
+  # reclaim their layers after `delay`. deleteReferrers=false: cosign here uses TAG-based sigs
+  # (kept above), not Subject-field OCI referrers, so leave Subject referrers untouched.
+  # dryRun=false: prune for real. Schema: project-zot examples/README.md (retention).
+  #
   # http.compat ["docker2s2"] (#6122): zot is OCI-native and REJECTS Docker manifest
   # schema2 pushes (application/vnd.docker.distribution.manifest.v2+json) with
   # MANIFEST_INVALID unless this compat flag is set. The inngest-bootstrap image is built by
@@ -55,7 +67,24 @@ write_files:
           "dedupe": true,
           "gc": true,
           "gcDelay": "1h",
-          "gcInterval": "24h"
+          "gcInterval": "24h",
+          "retention": {
+            "dryRun": false,
+            "delay": "24h",
+            "policies": [
+              {
+                "repositories": ["**"],
+                "deleteReferrers": false,
+                "deleteUntagged": true,
+                "keepTags": [
+                  { "patterns": ["latest"] },
+                  { "patterns": ["sha256-.*"] },
+                  { "patterns": ["v.*"], "mostRecentlyPushedCount": 10 },
+                  { "patterns": ["[0-9a-f]{7,64}"], "mostRecentlyPushedCount": 10 }
+                ]
+              }
+            ]
+          }
         },
         "http": {
           "address": "0.0.0.0",
@@ -79,6 +108,28 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # Disk-capacity guard (#6122 follow-up): ping the disk-health heartbeat ONLY while /var/lib/zot
+  # is under 85% used. A filling store (or a down host / broken cron) stops the ping → Better Stack
+  # alerts BEFORE full, no SSH/df/dashboard (hr-no-dashboard-eyeball-pull-data-yourself). The
+  # disk_heartbeat_url below is terraform-interpolated; the bash $USE stays literal (templatefile
+  # only expands dollar-brace references, not plain dollar-VAR).
+  - path: /usr/local/bin/zot-disk-heartbeat.sh
+    content: |
+      #!/usr/bin/env bash
+      set -u
+      USE=$(df --output=pcent /var/lib/zot 2>/dev/null | tail -1 | tr -dc '0-9')
+      [ -n "$USE" ] || exit 0
+      [ "$USE" -lt 85 ] && curl -fsS -m 10 "${disk_heartbeat_url}" >/dev/null 2>&1 || true
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/cron.d/zot-disk-heartbeat
+    content: |
+      # Emit the zot disk-health heartbeat every 5 min if /var/lib/zot has headroom (#6122 follow-up).
+      */5 * * * * root /usr/local/bin/zot-disk-heartbeat.sh
+    owner: root:root
+    permissions: '0644'
+
 runcmd:
   # Apply SSH hardening immediately.
   - systemctl restart sshd
@@ -88,6 +139,11 @@ runcmd:
   # and the volume mountpoint is root-owned, so no chown/chmod is needed.
   - mkdir -p /var/lib/zot
   - mount /dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id} /var/lib/zot || true
+  # Grow the ext4 fs to fill the (possibly-enlarged) block device. A Hetzner volume resize
+  # (var.registry_volume_size bump) enlarges the DEVICE in place, but the pre-formatted ext4
+  # keeps its old size until resize2fs. Online-resize the mounted fs on every boot; it is a
+  # no-op when already at full size, so it is safe on an unchanged volume too (#6122 follow-up).
+  - resize2fs /dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id} || true
   - echo '/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id} /var/lib/zot ext4 defaults,nofail 0 2' >> /etc/fstab
 
   # --- Doppler CLI (${doppler_arch}) — the ONLY channel for the ZOT_* tokens ------------
@@ -163,3 +219,8 @@ runcmd:
       sleep 2
     done
     ZOTEOF
+
+  # Disk-capacity guard: ensure cron is active and emit the first disk heartbeat now that zot is
+  # up, so Better Stack goes green within the redeploy (not after the first 5-min cron tick).
+  - systemctl enable --now cron || true
+  - bash /usr/local/bin/zot-disk-heartbeat.sh || true
