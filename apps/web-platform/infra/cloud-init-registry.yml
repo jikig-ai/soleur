@@ -14,7 +14,7 @@
 # only a dollar-brace interpolates. `$${VAR}` renders a literal shell var (doppler DL).
 package_update: true
 packages:
-  - docker.io # runs the zot container (arm64-native; RUN-only host, no build → docker.io suffices, not docker-ce)
+  - docker.io # runs the zot container (RUN-only host, no build → docker.io suffices, not docker-ce)
   - apache2-utils # htpasswd -Bbn (bcrypt) — build the zot htpasswd on-host from Doppler tokens
   - curl
   - jq # parse `doppler secrets --only-names --json` for the boot-time isolation self-check (runcmd)
