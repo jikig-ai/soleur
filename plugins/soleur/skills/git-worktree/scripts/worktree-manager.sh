@@ -601,42 +601,94 @@ verify_worktree_created() {
 # the masked config.lock (ADR-081) → EEXIST → RC=255 wedge; and had it "succeeded" it
 # would have misattributed the operator's commits to `github-actions[bot]`.
 #
-# Fix: a present, non-empty LOCAL identity is authoritative — return WITHOUT writing
-# (no lock, no wedge, correct attribution). ONLY when local is ABSENT do we set from the
-# --global, routing THAT write through atomic_git_config against the resolved common-dir
-# config so a masked config.lock cannot wedge it either. `user.*` is not an RCE-relevant
-# config key. Never re-add a raw `git config` write here (see SKILL.md Sharp Edges).
+# Fix (bot-aware, #6184 F1/F2): the discriminator is BOT-SHAPE, not presence — because
+# authority is inverted (ADR-098) and neither "always force global" (old — wrong on
+# non-bare Concierge) nor "always respect local" (wrong on the bare CLI dev repo, which
+# frequently carries a poisoned bot LOCAL — the #2815 CLA-reject bug) is correct alone.
+#   - present NON-bot local → authoritative; return WITHOUT writing (the common Concierge
+#     owner path; also a human dev-local). No lock, no wedge, correct attribution.
+#   - bot-shaped or absent local → correct it from a present, NON-bot --global, routed
+#     through atomic_git_config against the resolved common-dir config so a masked
+#     config.lock cannot wedge it. A bot-shaped --global is NEVER written (that is the
+#     silent misattribution the plan rejects): a present owner-local is left intact, a
+#     fully-absent local refuses loudly (reason=bot-global-refused).
+# `user.*` is not an RCE-relevant config key. Never re-add a raw `git config` write here
+# (see SKILL.md Sharp Edges).
+# A git identity is BOT-shaped iff its name OR email carries a `[bot]` marker
+# (github-actions[bot], dependabot[bot], …) — the unambiguous CI-bot signature that the
+# GitHub Actions default committer and `actions/checkout` inject. Used by
+# ensure_worktree_identity as the authority discriminator; see its header (#6184 F1/F2).
+_identity_is_bot() {
+  [[ "${1:-}" == *'[bot]'* || "${2:-}" == *'[bot]'* ]]
+}
+
 ensure_worktree_identity() {
   local worktree_path="$1"
 
-  # Read the worktree's LOCAL identity FIRST. On a linked worktree `--local` targets the
-  # shared common-dir config, which on Concierge is the host-seeded owner.
-  local local_email local_name
+  # Read BOTH identities up front. On a linked worktree `--local` targets the shared
+  # common-dir config (on Concierge, the host-seeded owner). --global is the operator's
+  # identity locally, but the sandbox IMAGE bakes a `github-actions[bot]` --global.
+  local local_email local_name global_email global_name
   local_email=$(git -C "$worktree_path" config --local --get user.email 2>/dev/null || true)
   local_name=$(git -C "$worktree_path" config --local --get user.name 2>/dev/null || true)
+  global_email=$(git config --global --get user.email 2>/dev/null || true)
+  global_name=$(git config --global --get user.name 2>/dev/null || true)
 
-  # PRIMARY: a present, non-empty local identity is the authoritative host-seeded owner.
-  # Do NOT overwrite it — this is the common Concierge path and it does zero config work.
-  if [[ -n "$local_email" && -n "$local_name" ]]; then
+  # PRIMARY: a present, non-empty, NON-bot local identity is authoritative — the
+  # host-seeded owner on Concierge, or a human dev-local on any clone. Respect it with
+  # ZERO config work (the common Concierge path — no lock, no wedge, correct attribution).
+  # The bot-shape guard is load-bearing (#6184 F1): a bare CLI dev root FREQUENTLY carries
+  # an inherited `github-actions[bot]` LOCAL that every worktree inherits (learning
+  # 2026-04-24-fake-git-author-bare-repo-bot-override; PR #2815 CLA reject) — respecting
+  # THAT would re-open the exact bug ensure_worktree_identity was born to fix. Neither
+  # blanket rule works (ADR-098 "authority is inverted, never blanket-force"); bot-shape is
+  # the discriminator that is correct on both surfaces.
+  if [[ -n "$local_email" && -n "$local_name" ]] && ! _identity_is_bot "$local_email" "$local_name"; then
     return 0
   fi
 
-  # Local identity ABSENT → fall back to the operator's --global (the bare CLI dev repo
-  # case). No global configured either — nothing to do; the user owns their git config.
-  local global_email global_name
-  global_email=$(git config --global --get user.email 2>/dev/null || true)
-  global_name=$(git config --global --get user.name 2>/dev/null || true)
-  [[ -z "$global_email" || -z "$global_name" ]] && return 0
+  # Reached iff local is NOT authoritative (absent, partial, or bot-shaped). We can only
+  # correct it FROM a present, non-bot --global.
+  local have_global=0 global_is_bot=0
+  [[ -n "$global_email" && -n "$global_name" ]] && have_global=1
+  if (( have_global )) && _identity_is_bot "$global_email" "$global_name"; then global_is_bot=1; fi
 
-  # Benign precondition marker (DIAG-class): we are on the set-from-global branch (local
-  # absent → drift). Emitted regardless of success so post-deploy telemetry PROVES this
-  # path executes in production. NOT a wedge (excluded from WEDGE_RE in
-  # git-lock-marker-telemetry.ts). Device/path forensic only — never the identity values.
-  echo "SOLEUR_GIT_LOCK_IDENTITY_DIAG source=ensure_worktree_identity reason=identity-drift-set-from-global"
+  if (( ! have_global )); then
+    # Nothing to set from. If local is bot-shaped and uncorrectable, warn (the commit will
+    # be bot-authored and bounce at the CLA gate, hr-cla-signed-author-before-merge).
+    if [[ -n "$local_email$local_name" ]] && _identity_is_bot "$local_email" "$local_name"; then
+      headless_or_stderr warn "ensure_worktree_identity: $worktree_path has a bot-shaped local identity and no human --global to override it; commits may fail the CLA author gate."
+    fi
+    return 0   # the user owns their git config; nothing to assert
+  fi
+
+  if (( global_is_bot )); then
+    # The only --global is the sandbox bot. NEVER write it — that is the Layer-A silent
+    # misattribution the plan rejects, reached via the local-absent/​bot-local trigger.
+    # A present (owner) local, even partial, is left intact; a fully-absent local means
+    # host-seeding failed/raced (#6184 F2) → refuse LOUDLY rather than author as the bot.
+    if [[ -n "$local_email" || -n "$local_name" ]]; then
+      return 0
+    fi
+    echo "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=bot-global-refused file=config"
+    return 1
+  fi
+
+  # A human --global is available → set/override the worktree identity from it.
+  # DIAG-class precondition marker (NOT a wedge; excluded from WEDGE_RE): device/path
+  # forensic only, never the identity values. It signals the DEGRADED/fallback path (a
+  # human dev repo, or a Concierge owner-seed that went missing) — NOT the normal
+  # Concierge path, which early-returns above with no marker.
+  if [[ -n "$local_email" || -n "$local_name" ]]; then
+    echo "SOLEUR_GIT_LOCK_IDENTITY_DIAG source=ensure_worktree_identity reason=identity-drift-override-bot-local"
+  else
+    echo "SOLEUR_GIT_LOCK_IDENTITY_DIAG source=ensure_worktree_identity reason=identity-drift-set-from-global"
+  fi
 
   # Resolve the SHARED (common-dir) config as an ABSOLUTE path. --path-format=absolute is
   # load-bearing: a bare `--git-common-dir` can return a RELATIVE `.git`
-  # (learning 2026-03-18-git-common-dir-vs-show-toplevel-semantics). On empty/failure,
+  # (learning 2026-03-18-git-common-dir-vs-show-toplevel-semantics; --path-format needs
+  # git ≥ 2.31, universally present in 2026). On empty/failure,
   # emit the wedge sentinel + return 1 — do NOT fall back to $GIT_ROOT/.git/config (wrong
   # on the bare layout, where $GIT_ROOT has no .git/ subdir).
   local common_dir common_config

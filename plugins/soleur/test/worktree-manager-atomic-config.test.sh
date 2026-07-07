@@ -428,5 +428,66 @@ else
   echo "  FAIL: bare repo lost its extensions.worktreeConfig surgery — bare-layout regression"; FAIL=$((FAIL + 1))
 fi
 
+# ---------------------------------------------------------------------------
+echo "Test 18: #6184 F1 — bot-shaped LOCAL is OVERRIDDEN by a human --global (bare-dev #2815 guard)"
+# The bare CLI dev repo frequently inherits a github-actions[bot] LOCAL at the common-dir;
+# every worktree inherits it. A pure "respect present local" would keep the bot and produce
+# bot-authored commits that fail the CLA gate (#2815). The bot-aware fix must PREFER the
+# human --global over a bot-shaped local. (RED against the presence-only respect-local rule,
+# which returns 0 and keeps the bot.)
+MAIN18=$(mktemp -d "$TMP/main18.XXXXXX"); git init -q -b main "$MAIN18" >/dev/null 2>&1
+git -C "$MAIN18" config user.email "1234+github-actions[bot]@users.noreply.github.com"  # inherited BOT local
+git -C "$MAIN18" config user.name "github-actions[bot]"
+git -C "$MAIN18" commit -q --allow-empty -m init >/dev/null 2>&1
+WT18="$MAIN18/wt"; git -C "$MAIN18" worktree add -q "$WT18" -b feat18 >/dev/null 2>&1
+FAKE_GLOBAL18="$MAIN18/fake-global"                            # the HUMAN operator --global
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL18" git config --global user.email "human@dev.example"
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL18" git config --global user.name "Human Dev"
+set +e
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL18" ensure_worktree_identity "$WT18" >"$TMP/ewi18.out" 2>&1
+EWI18_RC=$?
+set -e
+assert_eq "0" "$EWI18_RC" "bot-local override returns 0"
+assert_eq "human@dev.example" "$(git config --file "$MAIN18/.git/config" --get user.email 2>/dev/null || echo MISS)" \
+  "bot-shaped local user.email OVERRIDDEN by the human global (not left as the bot)"
+assert_eq "Human Dev" "$(git config --file "$MAIN18/.git/config" --get user.name 2>/dev/null || echo MISS)" \
+  "bot-shaped local user.name OVERRIDDEN by the human global"
+if grep -qF "SOLEUR_GIT_LOCK_IDENTITY_DIAG source=ensure_worktree_identity reason=identity-drift-override-bot-local" "$TMP/ewi18.out"; then
+  echo "  PASS: override-bot-local DIAG marker emitted"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected the identity-drift-override-bot-local DIAG marker"; FAIL=$((FAIL + 1))
+fi
+
+# ---------------------------------------------------------------------------
+echo "Test 19: #6184 F2 — a bot-shaped --global is REFUSED, never silently written (no misattribution)"
+# Concierge host-seeding failed/raced → LOCAL absent, and the sandbox image --global is the
+# bot. Writing it would silently misattribute the owner's commits (the Layer-A harm). The
+# fix must REFUSE: emit the wedge sentinel + return 1 (fail loud), NOT author as the bot.
+# (RED against the pre-fix code, which sets from the bot global and returns 0.)
+MAIN19=$(mktemp -d "$TMP/main19.XXXXXX"); git init -q -b main "$MAIN19" >/dev/null 2>&1
+git -C "$MAIN19" -c user.email=temp@t -c user.name=temp commit -q --allow-empty -m init >/dev/null 2>&1
+WT19="$MAIN19/wt"; git -C "$MAIN19" worktree add -q "$WT19" -b feat19 >/dev/null 2>&1
+git -C "$MAIN19" config --unset user.email 2>/dev/null || true   # LOCAL absent (seed failed)
+git -C "$MAIN19" config --unset user.name 2>/dev/null || true
+FAKE_GLOBAL19="$MAIN19/fake-global"                              # the sandbox BOT global
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL19" git config --global user.email "gha-bot@users.noreply.github.com"
+GIT_CONFIG_GLOBAL="$FAKE_GLOBAL19" git config --global user.name "github-actions[bot]"
+set +e
+( set -euo pipefail
+  export GIT_CONFIG_GLOBAL="$FAKE_GLOBAL19"
+  ensure_worktree_identity "$WT19"
+) >"$TMP/ewi19.out" 2>&1
+EWI19_RC=$?
+set -e
+if (( EWI19_RC != 0 )); then echo "  PASS: bot-global refusal returns non-zero (fail loud)"; PASS=$((PASS + 1));
+else echo "  FAIL: bot-shaped global must be refused with a non-zero return, not written"; FAIL=$((FAIL + 1)); fi
+if grep -qF "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=bot-global-refused" "$TMP/ewi19.out"; then
+  echo "  PASS: bot-global-refused wedge sentinel emitted"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected the reason=bot-global-refused wedge sentinel"; FAIL=$((FAIL + 1))
+fi
+assert_eq "MISS" "$(git config --file "$MAIN19/.git/config" --get user.email 2>/dev/null || echo MISS)" \
+  "the bot global was NOT written into the common-dir config (no misattribution)"
+
 echo ""
 print_results

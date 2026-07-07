@@ -107,8 +107,10 @@ with the sandbox image's `github-actions[bot]` **global** — a write that EEXIS
 masked `config.lock` (RC=255), and which, had it "succeeded", would have misattributed the
 operator's commits to the bot. **Resolution:** on the non-bare agent workspace the
 host-seeded **local** identity is authoritative in-sandbox; `ensure_worktree_identity` must
-not override it. It now returns without writing when a non-empty local identity is present,
-and only the set-when-absent (bare CLI dev) path routes through `atomic_git_config`. This
+not override it. It now discriminates on **bot-shape**, not presence: it returns without
+writing when a present local is non-bot (the Concierge owner), overrides a bot-shaped local
+from a human `--global` (the bare-dev #2815 case), and refuses to ever write a bot-shaped
+`--global`. Only the correcting paths route through `atomic_git_config`. This
 confirms the ADR's durable direction — **make the in-sandbox path need no config write at
 all** — extends from `ensure_bare_config` to the identity write.
 
