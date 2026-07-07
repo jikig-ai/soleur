@@ -160,13 +160,7 @@ If any open PR touches roadmap.md, do NOT make conflicting edits. Instead, post 
 
 ## Output
 
-After your analysis, create a GitHub issue summarizing your findings.
-
-DEDUP RULE (BEFORE creating the review issue): run
-  gh issue list --label scheduled-roadmap-review --state all --json number,title,createdAt
-If any results from within the last 6 days exist, do NOT create a new issue. Instead, post your findings as a comment on the most recent existing issue and exit. This prevents duplicate issues when a manual trigger fires the same week as the natural Monday 09:00 UTC cron.
-
-If no recent duplicate exists, create a new issue with:
+After your analysis, create a new issue with:
 - Title format: [Scheduled] Weekly Roadmap Review - YYYY-MM-DD
 - Label: scheduled-roadmap-review
 - --milestone "Post-MVP / Later"

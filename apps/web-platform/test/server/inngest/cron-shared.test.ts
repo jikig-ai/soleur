@@ -227,17 +227,17 @@ describe("verifyScheduledIssueCreated", () => {
     expect(result).toBe(false);
   });
 
-  it("credits a dedup-comment: issue created last week but UPDATED this run window → true", async () => {
-    // roadmap-review's DEDUP RULE comments on the most-recent existing issue
-    // instead of creating a new one (manual-trigger + cron same week). That is
-    // a HEALTHY run with no new issue — updated_at moved into the window, so
+  it("credits a dedup-comment: issue created earlier but UPDATED this run window → true", async () => {
+    // cron-community-monitor's DEDUP RULE comments on the most-recent existing
+    // issue instead of creating a new one (manual-trigger + cron same day). That
+    // is a HEALTHY run with no new issue — updated_at moved into the window, so
     // it must NOT false-red. Verifying on created_at would have failed here.
     const octokit = octokitReturning([
       { updated_at: "2026-05-31T09:31:00.000Z" }, // commented this run...
     ]);
     const result = await verifyScheduledIssueCreated({
-      label: "scheduled-roadmap-review",
-      sinceIso: RUN_START, // ...even though the issue was created days earlier
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START, // ...even though the issue was created earlier
       octokit,
     });
     expect(result).toBe(true);
