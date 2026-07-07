@@ -147,12 +147,16 @@ a clean HA path (#6185).
 **Harder / accepted:** durable-trigger availability drops from potentially-2 to definitely-1 (SPOF
 — the single box down = zero crons fire until recovery; Postgres-durable state means delayed, not
 lost; redundancy deferred #6185). Every future `cloud-init-inngest.yml` change force-replaces the
-sole scheduler (no `ignore_changes[user_data]`) → a cron-outage window. **This force-replace runs
+sole scheduler (no `ignore_changes[user_data]`) → a cron-outage window.
+<!-- lint-infra-ignore start -->
+**This force-replace runs
 via the operator's serialized full `terraform apply` (R2 concurrency group `terraform-apply-web-
 platform-host`), in a maintenance window — NOT the `apply_target=inngest-host` dispatch job, whose
 additive-only destroy-guard (0 resource_deletes) aborts on the `{delete,create}` a replace emits
 (the dispatch is initial-provision only). A scoped guarded `-replace` mode for the dispatch is a
-tracked follow-up if force-replaces become frequent.** The AOF volume is a separate resource that
+tracked follow-up if force-replaces become frequent.**
+<!-- lint-infra-ignore end -->
+The AOF volume is a separate resource that
 survives the replace. The Phase-2 cutover carries a bounded, operator-signed-off residual window
 (quiesce-all → register).
 
