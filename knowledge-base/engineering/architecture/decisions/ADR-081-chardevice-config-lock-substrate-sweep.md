@@ -188,3 +188,49 @@ no element, edge, or actor, so no `.c4` edit is in scope.
   be silently missed (a no-op-that-looks-clean, `removed=0`). This is correct for
   today's single-level workspace layout; a future nested-workspace change must revisit
   `GIT_LOCK_SWEEP_MAXDEPTH`.
+
+## Amendment (2026-07-07, #5934 round 6) — masked config TARGET + telemetry-blindness + non-bare-guard misfire
+
+An operator-confirmed verbatim error from a sandbox on **current main** refined the model:
+
+```
+SOLEUR_GIT_LOCK_UNREMOVABLE file=config.lock type=chardevice ... reason=non-regular-lock
+mv: cannot move '.git/config.soleur-tmp.4' to '.git/config': Device or resource busy
+[error] worktree wedge: could not apply shared-config prerequisites in .git
+```
+
+1. **The masked node is the config TARGET, not only the lock.** The `mv … .git/config:
+   Device or resource busy` shows the bwrap mask covers `.git/config` itself (the rename
+   target of `atomic_git_config`'s lockless writer), so the same-dir rename EBUSYs. Fix
+   (in-sandbox, defense-in-depth): `_config_target_masked` (`[[ -c ]]` + `stat -c%m`-self
+   mountpoint idiom, reused from the sweep) pre-checks the target BEFORE the write and emits a
+   VISIBLE `SOLEUR_GIT_CONFIG_TARGET_MASKED` sentinel instead of attempting the doomed rename.
+
+2. **The fatal path was telemetry-blind (the meta-bug).** The `worktree wedge:` give-up was
+   emitted ONLY via `headless_or_stderr` → a per-PID logfile the PostToolUse
+   `git-lock-marker-telemetry` scanner never reads, AND its `[error] ` prefix failed
+   `MARKER_RE`'s `^worktree wedge:` anchor. So the wedge fired every run yet showed **zero
+   events/30d** — which is why four prior fixes (07-01 → 07-07) never converged. Fix: a bare
+   stdout `echo` at every give-up + `MARKER_RE`/`WEDGE_RE` now tolerate the `[error] ` prefix
+   and allowlist `SOLEUR_GIT_CONFIG_TARGET_MASKED`, `SOLEUR_GIT_CONFIG_MASK_SKIP`,
+   `SOLEUR_FEATURE_PUSH_FAILED`, `NO_GIT_REPOSITORY`.
+
+3. **The operator workspace is CONFIRMED NON-BARE, and the round-5 non-bare guard MISFIRED.**
+   Under the mask, `git rev-parse --show-toplevel` returns empty (→ `GIT_ROOT=""`) and
+   `--is-bare-repository` degrades (both must read the masked config), so the guard fell
+   through to the bare surgery on a normal clone and wedged. **This is the operator-facing
+   root cause.** Fix (round 6): detect non-bare by the PURE FILESYSTEM fact that `git_dir` is a
+   `.git` **directory** (plus a `$PWD/.git` fallback when `GIT_ROOT` is empty) and SKIP the
+   surgery — never trusting the mask-degraded `git rev-parse` first. Native `git worktree add`
+   then proceeds in-sandbox with no host dependency. Only a GENUINELY bare repo (gitdir IS the
+   root) consults git and can hit the rare fail-loud `branch=bare-fail` path.
+
+**Cut:** a self-heal of a stale `extensions.worktreeConfig` was scoped then removed — the flag
+is confirmed UNSET on the affected workspace and its write targets the masked path (adds risk,
+no benefit).
+
+**Durable locus unchanged:** the permanent prevention remains **host-side** — pre-seed
+`.git/config` before the bwrap mask (coordinated with the open #6191; #5934 stays OPEN). This
+amendment adds the in-sandbox visibility + graceful-degrade layer; it does not supersede the
+host-side seed. **C4 impact:** none (internal shell + telemetry hardening on already-modeled
+containers; no new element/edge/actor).

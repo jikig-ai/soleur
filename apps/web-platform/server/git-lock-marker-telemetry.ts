@@ -45,17 +45,28 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // Kept in sync with those scripts; a drift test (git-lock-marker-telemetry.test.ts) pins
 // the pattern set against the live scripts so a renamed sentinel fails CI instead of going
 // silently unmirrored.
+//   - SOLEUR_GIT_CONFIG_TARGET_MASKED — the #5934 LIVE wedge: the `.git/config` rename TARGET
+//     itself is char-device/bind-mount masked, so atomic_git_config's lockless rename EBUSYs
+//     (or a genuinely-bare repo cannot seed its config in-sandbox). A wedge.
+//   - SOLEUR_GIT_CONFIG_MASK_SKIP     — benign: a masked config on a NON-bare clone where the
+//     bare surgery was correctly skipped and native `git worktree add` proceeds. NOT a wedge.
+//   - SOLEUR_FEATURE_PUSH_FAILED      — the -u push failed → local-only branch (was dropped at ingest).
+//   - NO_GIT_REPOSITORY               — the repo-readiness gate: a repo-less workspace exits 3 (was dropped).
+// The optional leading `(?:\[[a-z]+\] )?` prefix tolerates the `[error] ` / `[warn] ` prefix that
+// headless_or_stderr stamps onto a marker when it reaches stderr instead of a bare stdout echo
+// (D1c) — so the existing `[error] worktree wedge:` give-up finally matches.
 const MARKER_RE =
-  /^(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_REPO_DIAG\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // A wedge (vs. a benign DIAG) is any marker that indicates git operations could not
-// proceed: an unremovable/masked lock, a temp-wedge, an ensure_bare_config give-up, a failed
-// identity set-from-global write, OR a readiness-gate rejection (SOLEUR_GIT_REPO_DIAG is only
-// emitted on the not-ready path). SOLEUR_GIT_LOCK_IDENTITY_WEDGED is a wedge;
-// SOLEUR_GIT_LOCK_IDENTITY_DIAG is EXCLUDED — it is the benign precondition marker, so a
-// successful drift-set must not page as wedged=true / log.error.
+// proceed: an unremovable/masked lock, a temp-wedge, a config-TARGET-masked give-up, an
+// ensure_bare_config give-up, a failed identity set-from-global write, a readiness-gate
+// rejection (SOLEUR_GIT_REPO_DIAG is only emitted on the not-ready path), a repo-less
+// workspace (NO_GIT_REPOSITORY), OR a failed feature push (SOLEUR_FEATURE_PUSH_FAILED →
+// local-only branch). EXCLUDED (benign, mirrored-not-paged): SOLEUR_GIT_LOCK_IDENTITY_DIAG
+// (precondition) and SOLEUR_GIT_CONFIG_MASK_SKIP (non-bare-skip-under-mask → creation proceeds).
 const WEDGE_RE =
-  /^(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_LOCK_IDENTITY_WEDGED\b|SOLEUR_GIT_REPO_DIAG\b|worktree wedge:)/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_LOCK_IDENTITY_WEDGED\b|SOLEUR_GIT_CONFIG_TARGET_MASKED\b|SOLEUR_GIT_REPO_DIAG\b|SOLEUR_FEATURE_PUSH_FAILED\b|NO_GIT_REPOSITORY\b|worktree wedge:)/;
 
 // Bounds: scan at most this many lines, keep at most this many matched markers, and
 // truncate any single marker line to this many chars. A wedged run emits a handful of

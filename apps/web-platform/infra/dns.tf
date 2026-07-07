@@ -52,7 +52,8 @@ resource "cloudflare_record" "ssh" {
 # #6122 (ADR-096) — registry PUSH ingress for CI via Cloudflare Tunnel (CTO ruling).
 # CI pushes container images to the private-net zot host through this hostname: it runs
 # `cloudflared access tcp --hostname registry.<base>` (CF Access service-token auth) → the
-# web host's cloudflared → http://10.0.1.30:5000 (the tunnel ingress_rule in tunnel.tf).
+# web host's cloudflared → tcp://10.0.1.30:5000 (the tunnel ingress_rule in tunnel.tf; raw
+# TCP, not http:// — cloudflared access tcp bridges a raw stream, see tunnel.tf for why).
 # Mirrors cloudflare_record.ssh 1:1. The Hetzner registry firewall stays deny-all-public —
 # push arrives via the tunnel, never a public port. Web hosts PULL direct on the private net.
 resource "cloudflare_record" "registry" {
