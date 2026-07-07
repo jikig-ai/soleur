@@ -38,6 +38,12 @@ export const TOUR_STEPS: readonly TourStep[] = [
     body: "The Dashboard is your home base. Tell your agents what you're building — type here and hit send to kick off a conversation.",
   },
   {
+    target: "action:org-panel",
+    route: "/dashboard",
+    title: "Meet your organization",
+    body: "These are your agents — CTO, CFO, CPO, CRO and more. Click any leader to talk to them directly and hand off work by function.",
+  },
+  {
     target: "action:inbox-triage",
     route: "/dashboard/inbox",
     title: "Triage your Inbox",
@@ -60,6 +66,11 @@ export const TOUR_STEPS: readonly TourStep[] = [
     route: "/dashboard/routines",
     title: "Automate the recurring",
     body: "Routines make things happen on a schedule. Draft one with Concierge to run agent work every day, week, or month.",
+  },
+  {
+    target: "/dashboard/releases",
+    title: "Keep up with Releases",
+    body: "New features and fixes land here — a running feed of what's changed in Soleur.",
   },
   {
     target: "/dashboard/settings",
