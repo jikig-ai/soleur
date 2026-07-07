@@ -17,6 +17,7 @@ packages:
   - docker.io # runs the zot container (arm64-native; RUN-only host, no build → docker.io suffices, not docker-ce)
   - apache2-utils # htpasswd -Bbn (bcrypt) — build the zot htpasswd on-host from Doppler tokens
   - curl
+  - jq # parse `doppler secrets --only-names --json` for the boot-time isolation self-check (runcmd)
 
 groups:
   - docker
@@ -97,7 +98,8 @@ runcmd:
     rm /tmp/doppler.tar.gz
   # Restricted (0600 root) env file with the scoped Doppler service token — NOT world-readable
   # /etc/environment (mirrors git-data's /etc/default/git-data-doppler). The token is scoped to
-  # the prd_registry config (only the two ZOT tokens), so a host compromise reads nothing else.
+  # the isolated `soleur-registry` project's `prd` root config (a SEPARATE project — NO
+  # inheritance path to soleur/prd), so a host compromise reads ONLY the two ZOT tokens.
   - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/registry-doppler
   - chmod 600 /etc/default/registry-doppler
 
@@ -105,16 +107,29 @@ runcmd:
   - systemctl enable --now docker
 
   # --- Build htpasswd from the Doppler tokens + launch zot -----------------------------
-  # Runs UNDER `doppler run` (scoped prd_registry) so ZOT_PULL_TOKEN/ZOT_PUSH_TOKEN are in
-  # the env. Usernames are terraform-interpolated (non-secret). FAIL LOUD on an empty token —
-  # never launch zot with a half-built htpasswd. Idempotent: `docker rm -f zot` first so a
-  # re-provision (config/token change → clean host replace) relaunches with fresh state.
+  # Runs UNDER `doppler run` (scoped to the isolated `soleur-registry` project's `prd` root)
+  # so ZOT_PULL_TOKEN/ZOT_PUSH_TOKEN are in the env. Usernames are terraform-interpolated
+  # (non-secret). FAIL LOUD on an empty token — never launch zot with a half-built htpasswd.
+  # Idempotent: `docker rm -f zot` first so a re-provision (config/token change → clean host
+  # replace) relaunches with fresh state.
   - |
     set -a
     . /etc/default/registry-doppler
     set +a
-    doppler run --project soleur --config prd_registry -- bash -s <<'ZOTEOF'
+    doppler run --project soleur-registry --config prd -- bash -s <<'ZOTEOF'
     set -euo pipefail
+    # Isolation self-check — the load-bearing, fail-CLOSED defense, run under the host's OWN
+    # shipped boot token: the credential MUST resolve EXACTLY the two ZOT tokens. Every other
+    # boot signal (the empty-token guard below, the heartbeat, `terraform apply`) fails OPEN on
+    # an over-scoped credential — a 116-secret token still populates ZOT_PULL/PUSH non-empty.
+    # This asserts cardinality (==2) AND identity (both ZOT_), on the shipped token, before any
+    # docker run. `grep -v '^DOPPLER_'` strips the DOPPLER_PROJECT/CONFIG/ENVIRONMENT built-ins.
+    names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
+    n_total="$(printf '%s\n' "$names" | grep -c . || true)"
+    n_zot="$(printf '%s\n' "$names" | grep -Ec '^ZOT_(PULL|PUSH)_TOKEN$' || true)"
+    if [ "$n_total" -ne 2 ] || [ "$n_zot" -ne 2 ]; then
+      echo "[zot] FATAL: boot credential is not isolated (sees $n_total non-DOPPLER secrets, $n_zot ZOT) — refusing to launch"; exit 1
+    fi
     [ -n "$ZOT_PULL_TOKEN" ] || { echo "[zot] FATAL: ZOT_PULL_TOKEN empty — refusing to build htpasswd"; exit 1; }
     [ -n "$ZOT_PUSH_TOKEN" ] || { echo "[zot] FATAL: ZOT_PUSH_TOKEN empty — refusing to build htpasswd"; exit 1; }
     mkdir -p /etc/zot
