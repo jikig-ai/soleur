@@ -78,8 +78,9 @@ resource "random_password" "inngest_redis_password_dedicated" {
 # the project once via the dashboard (New PROJECT `soleur-inngest` — NOT a config under
 # `prd`), TF then managing only the secrets + token inside it.
 resource "doppler_project" "inngest" {
-  name        = "soleur-inngest"
-  description = "Isolated boot-credential project for the dedicated single-host Inngest singleton (#6178, ADR-100) — its `prd` root config holds ONLY the inngest secret set (signing/event keys, Redis password, and the out-of-band Postgres URI); cross-project isolation from soleur/prd (no shared root-secret resolution path, unlike a `prd` branch config; #6122 precedent)."
+  name = "soleur-inngest"
+  # Doppler caps description at 255 chars — keep concise; full rationale is in the comments above.
+  description = "Isolated boot-credential project for the dedicated Inngest singleton (#6178, ADR-100). Its prd root config holds ONLY the inngest secret set (signing/event keys, Redis password, out-of-band Postgres URI); cross-project isolation from soleur/prd."
 }
 
 # A TF-created doppler_project is created BARE — no default dev/stg/prd configs that the
