@@ -547,6 +547,7 @@ export default function DashboardPage() {
                 name="idea"
                 type="text"
                 placeholder="What are you building?"
+                data-tour-id="action:new-conversation"
                 autoFocus
                 className="min-h-[36px] w-full border-none bg-transparent px-1 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none focus-visible:shadow-none"
                 onPaste={(e) => {
@@ -608,6 +609,7 @@ export default function DashboardPage() {
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
+          data-tour-id="action:new-conversation"
           className="mb-10 rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-6 py-3 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           New conversation
@@ -727,6 +729,7 @@ export default function DashboardPage() {
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
+          data-tour-id="action:new-conversation"
           className="min-h-[44px] rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-4 py-2 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           + New conversation

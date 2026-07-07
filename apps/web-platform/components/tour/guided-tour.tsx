@@ -84,22 +84,47 @@ export function GuidedTour({
 
   // Re-measure on step change + capture-phase window scroll + resize + a
   // ResizeObserver on the target. requestAnimationFrame lets the rail-expand /
-  // route layout settle before the first measure.
+  // route layout settle before the first measure. Action steps navigate to a new
+  // route first, so the target may not exist on the initial measure — poll for it
+  // (up to ~2.5s) until it mounts, then attach the ResizeObserver; if it never
+  // appears, measure() has already left a centered fallback card.
   useEffect(() => {
-    let raf = requestAnimationFrame(measure);
+    let cancelled = false;
+    let raf = 0;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let ro: ResizeObserver | undefined;
     const onScroll = () => measure();
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onScroll);
-    let ro: ResizeObserver | undefined;
-    const el = step?.target
-      ? document.querySelector<HTMLElement>(`[data-tour-id="${step.target}"]`)
-      : null;
-    if (el && typeof ResizeObserver !== "undefined") {
-      ro = new ResizeObserver(() => measure());
-      ro.observe(el);
-    }
+    const deadline = Date.now() + 2500;
+
+    const poll = () => {
+      if (cancelled) return;
+      measure();
+      const targetId = step?.target;
+      if (!targetId) return; // centered step (Welcome/closing) — nothing to await
+      const el = document.querySelector<HTMLElement>(
+        `[data-tour-id="${targetId}"]`,
+      );
+      if (el) {
+        if (typeof ResizeObserver !== "undefined") {
+          ro = new ResizeObserver(() => measure());
+          ro.observe(el);
+        }
+        return;
+      }
+      if (Date.now() < deadline) {
+        pollTimer = setTimeout(() => {
+          raf = requestAnimationFrame(poll);
+        }, 100);
+      }
+    };
+    raf = requestAnimationFrame(poll);
+
     return () => {
+      cancelled = true;
       cancelAnimationFrame(raf);
+      if (pollTimer) clearTimeout(pollTimer);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onScroll);
       ro?.disconnect();
