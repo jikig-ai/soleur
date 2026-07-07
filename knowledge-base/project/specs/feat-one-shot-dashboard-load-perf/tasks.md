@@ -19,7 +19,7 @@ brand_survival_threshold: single-user incident
 - [ ] 1.3 Rewrite `hooks/use-conversations.ts` `fetchConversations` to call the RPC; feed snippets into unchanged `deriveTitle`/`derivePreview`/`deriveRailTitle`; still resolve/return `workspaceId`+`repoUrl` for realtime.
 - [ ] 1.4 Verify `shouldDropForScope`, scope-resolve backfill, and `CONVERSATION_CREATED_EVENT` retry loop are untouched.
 - [ ] 1.5 Sweep supabase test mocks (`createQueryBuilder`) for `.rpc()` support (recursive chain).
-- [ ] 1.6 Tests: RPC bounded-payload test; tenant-isolation test (workspace-B → 0 workspace-A rows); title/preview parity test.
+- [ ] 1.6 Tests: RPC bounded-payload test; tenant-isolation tests — (a) workspace-B user → 0 workspace-A rows, AND (b) same-workspace member → 0 rows + 0 snippets for another member's PRIVATE (non-`workspace`) conversation (LATERAL-correlation isolation proof, since messages RLS is workspace-broad); GRANT hygiene assertion (REVOKE PUBLIC+anon, GRANT authenticated, no service_role); title/preview parity test.
 
 ## Phase 2 — De-block + de-over-fetch dashboard render (HIGH)
 - [ ] 2.1 Add `app/api/dashboard/foundation-status/route.ts` (existence+size for known paths only; `withUserRateLimit`; Sentry mirror on failure).
