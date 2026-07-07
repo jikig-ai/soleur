@@ -739,6 +739,37 @@ export async function verifyScheduledIssueCreated(args: {
 }
 
 // ---------------------------------------------------------------------------
+// Cohort digest-title date pin (#6143) — platform-injected run-date sentinel.
+//
+// Every "always-create digest" cron files an issue titled `[Scheduled] <task> -
+// <date>`. The code-level same-date dedup key is `runStartedAt.slice(0,10)`
+// (host UTC, captured in the handler), but the title date was previously derived
+// by the spawned eval from its OWN container clock. Across a UTC-midnight boundary
+// the two could diverge, so isRealScheduledDigest's exact-title match could MISS
+// (→ duplicate) or OVER-suppress. injectRunDate replaces the `{{RUN_DATE}}`
+// sentinel in each cohort prompt at spawn time with runStartedAt.slice(0,10), so
+// the ISSUE-TITLE date is PINNED byte-identical to the dedup key (both read the
+// same `step.run("run-started-at")`-memoized runStartedAt, so they agree across
+// Inngest replays/retries).
+//
+// THROWS if the sentinel is absent so a forgotten wiring is loud (a literal
+// "{{RUN_DATE}}" title would silently defeat both dedup and the output-aware
+// verify). Pins the issue-TITLE date ONLY — the sole input to the dedup key;
+// secondary agent-derived dates (digest FILE names, publish_date frontmatter,
+// audit-report paths) stay agent-derived. `{{RUN_DATE}}` is collision-free (no
+// `{{` token exists in any cohort prompt). `.replaceAll` is available (tsconfig
+// ES2022; already used above in this file).
+// ---------------------------------------------------------------------------
+export const RUN_DATE_SENTINEL = "{{RUN_DATE}}";
+
+export function injectRunDate(prompt: string, runStartedAt: string): string {
+  if (!prompt.includes(RUN_DATE_SENTINEL)) {
+    throw new Error(`injectRunDate: prompt is missing ${RUN_DATE_SENTINEL}`);
+  }
+  return prompt.replaceAll(RUN_DATE_SENTINEL, runStartedAt.slice(0, 10));
+}
+
+// ---------------------------------------------------------------------------
 // Producer-side date-dedup (#5751) — "does a REAL `${label}` digest already
 // exist for <date>?" so a second serialized invocation (the 08:00 cron + an
 // operator manual-trigger, or a doubled delivery) does NOT file a duplicate

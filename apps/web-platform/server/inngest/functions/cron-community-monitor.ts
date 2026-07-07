@@ -72,6 +72,7 @@ import {
   postSentryHeartbeat,
   resolveOutputAwareOk,
   digestIssueExistsForDate,
+  injectRunDate,
   SCHEDULED_DIGEST_TITLE_PREFIX,
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
@@ -216,7 +217,7 @@ MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP
    contextual quotes (under 100 chars) with attribution are acceptable.
    If the file already exists for today, overwrite it.
 
-5. **Create GitHub Issue** titled "[Scheduled] Community Monitor - YYYY-MM-DD"
+5. **Create GitHub Issue** titled "[Scheduled] Community Monitor - {{RUN_DATE}}"
    with label "scheduled-community-monitor". Include a condensed summary:
    platform status, key metrics, notable items, and a link to the digest file.
 
@@ -407,7 +408,7 @@ export async function cronCommunityMonitorHandler({
             spawnCwd: spawnCwd!,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
-            prompt: COMMUNITY_MONITOR_PROMPT,
+            prompt: injectRunDate(COMMUNITY_MONITOR_PROMPT, runStartedAt),
             maxTurnDurationMs: MAX_TURN_DURATION_MS,
             cronName: "cron-community-monitor",
             buildSpawnEnv,

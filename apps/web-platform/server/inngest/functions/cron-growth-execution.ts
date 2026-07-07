@@ -53,6 +53,7 @@ import {
   mintInstallationToken,
   deferIfTier2Cron,
   digestIssueExistsForDate,
+  injectRunDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
@@ -128,7 +129,7 @@ For each stale page found, run /soleur:growth fix <page-path> to apply keyword i
 
 VALIDATION runs in CI (do NOT build locally): this ephemeral workspace is a shallow clone with no node_modules, so a local "npx @11ty/eleventy" build and the validate-seo.sh script cannot run here. Validation happens on the PR the platform opens from your changes after the run: CI runs the eleventy build and SEO validation, and the PR only auto-merges once those required checks pass. Do NOT attempt a local build or run the validation scripts yourself.
 
-Then create a GitHub issue titled "[Scheduled] Growth Execution - <today>" with the label "scheduled-growth-execution" summarizing which pages were optimized and what changes were made.
+Then create a GitHub issue titled "[Scheduled] Growth Execution - {{RUN_DATE}}" with the label "scheduled-growth-execution" summarizing which pages were optimized and what changes were made.
 
 If no stale pages are found, create the issue noting "No stale pages found — all Priority 1 items are up to date."
 
@@ -295,7 +296,7 @@ export async function cronGrowthExecutionHandler({
             spawnCwd: spawnCwd!,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
-            prompt: GROWTH_EXECUTION_PROMPT,
+            prompt: injectRunDate(GROWTH_EXECUTION_PROMPT, runStartedAt),
             maxTurnDurationMs: MAX_TURN_DURATION_MS,
             cronName: "cron-growth-execution",
             buildSpawnEnv,
