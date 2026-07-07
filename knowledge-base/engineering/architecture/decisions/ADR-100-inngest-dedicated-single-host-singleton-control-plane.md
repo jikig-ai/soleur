@@ -189,15 +189,28 @@ project + host-local Redis).
   the private-net inventory hook; no `ssh` in any new runbook (AC9).
 - **AP (fail-loud observability):** Aligned at the LIVE (post-cutover) state — heartbeat pushed
   FROM the inngest host, missed heartbeat → Better Stack + P1; the soak probe fail-closed via
-  Follow-Through Enrollment. **Phase-1 caveat (deferred, tracked):** the Vector journal→Sentry
-  shipper is DEFERRED on this cax11/ARM64 host (Vector's download URL is x86_64-hardcoded; its
-  BETTERSTACK_LOGS_TOKEN would need isolated-project provisioning), and the dark host does not push
-  the prod heartbeat during the dark window (out-of-band `INNGEST_HEARTBEAT_URL` set at cutover, to
-  avoid dual-pusher masking of the still-serving co-located scheduler — review #6180). So a DARK,
-  inert host that boot-bricks or errors is surfaced at the Phase-2 pre-flight registry-empty check,
-  not by continuous Sentry/heartbeat monitoring. Vector→Sentry + the dedicated-host heartbeat are
-  wired before the Phase-2 cutover (when this becomes the live scheduler) — the alignment claim
-  above holds from cutover onward.
+  Follow-Through Enrollment. **Phase-1 caveat — RESOLVED (#6197):** the Vector journal→**Better
+  Stack Logs** shipper (NOT Sentry — Vector pivoted Sentry→Better Stack in #4273/#5526; the earlier
+  "Sentry" prose here was stale) is now WIRED on this cax11/ARM64 host: the Vector install is
+  arch-parameterized (`VECTOR_CLI_ARCH` + an `aarch64-unknown-linux-musl` triple map, mirroring the
+  Inngest-CLI arm64 pattern), an arm64 Vector SHA is pinned in `vector.tf`, and `BETTERSTACK_LOGS_TOKEN`
+  is provisioned into the isolated `soleur-inngest/prd` project via a `doppler_secret` (Approach B —
+  a sensitive no-default `var.betterstack_logs_token` from `prd_terraform`, so only the one 24-char
+  token enters shared tfstate, NOT the full `soleur/prd` map). The boot isolation self-check
+  (`cloud-init-inngest.yml`) now admits `BETTERSTACK_LOGS_TOKEN` as a TOP-LEVEL allowlist member
+  (dark-boot secret count 4→5, live 5→6); its admission criterion is "names this host's runtime
+  consumes" (not `INNGEST_`-prefixed). During the dark window the host still does not push the prod
+  heartbeat (out-of-band `INNGEST_HEARTBEAT_URL` set only at cutover, to avoid dual-pusher masking of
+  the still-serving co-located scheduler — review #6180), so a DARK, inert host that boot-bricks or
+  errors is surfaced at the Phase-2 pre-flight registry-empty check + the in-surface bootstrap-stderr
+  lines (deploy-status endpoint), not by continuous monitoring. The shipper is wired ahead of the
+  Phase-2 cutover (when this becomes the live scheduler) — the alignment claim above holds from cutover.
+- **Apply-path constraint (recorded #6197):** the additive-only `apply_target=inngest-host` dispatch
+  CANNOT force-replace the host (its destroy-guard aborts on any delete), so a cloud-init/bootstrap
+  change that force-replaces `hcloud_server.inngest` rides a NEW scoped `apply_target=inngest-host-replace`
+  dispatch (mirroring `web-2-recreate`; a sourced gate permits exactly the server + its 2 id-referencing
+  dependents and PRESERVES the durable Redis AOF volume `hcloud_volume.inngest_redis`). A net-new host
+  (sub-case where the host is not yet in tfstate) instead rides the additive `inngest-host` create.
 
 ## Diagram
 

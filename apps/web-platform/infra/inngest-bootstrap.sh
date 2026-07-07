@@ -465,6 +465,16 @@ log "bootstrap complete: inngest-server $INNGEST_CLI_VERSION active on 127.0.0.1
 
 VECTOR_CLI_VERSION="${VECTOR_CLI_VERSION:-}"
 VECTOR_CLI_SHA256="${VECTOR_CLI_SHA256:-}"
+# arm64 support (#6197): mirror the INNGEST_CLI_ARCH pattern (:37/:53-56). Default amd64
+# PRESERVES the co-located web host (cross-consumer edit — hr-type-widening-cross-consumer-grep).
+# Vector's release triple names arm64 as `aarch64` (NOT `arm64`, ≠ the Inngest CLI's
+# `linux_arm64`), so the map below translates arm64→aarch64 for Vector specifically.
+VECTOR_CLI_ARCH="${VECTOR_CLI_ARCH:-amd64}"
+case "$VECTOR_CLI_ARCH" in
+  amd64) vec_triple="x86_64-unknown-linux-musl" ;;
+  arm64) vec_triple="aarch64-unknown-linux-musl" ;;
+  *) echo "ERROR: VECTOR_CLI_ARCH must be amd64 or arm64 (got '$VECTOR_CLI_ARCH')" >&2; exit 1 ;;
+esac
 
 if [[ -z "$VECTOR_CLI_VERSION" || -z "$VECTOR_CLI_SHA256" ]]; then
   log "warn: VECTOR_CLI_VERSION + VECTOR_CLI_SHA256 unset — skipping Vector install (observability shipper deferred until next bootstrap)"
@@ -474,7 +484,7 @@ else
   readonly VECTOR_CONFIG_DIR="/etc/vector"
   readonly VECTOR_CONFIG="$VECTOR_CONFIG_DIR/vector.toml"
   readonly VECTOR_UNIT="/etc/systemd/system/vector.service"
-  readonly VECTOR_DOWNLOAD_URL="https://packages.timber.io/vector/${VECTOR_CLI_VERSION}/vector-${VECTOR_CLI_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+  readonly VECTOR_DOWNLOAD_URL="https://packages.timber.io/vector/${VECTOR_CLI_VERSION}/vector-${VECTOR_CLI_VERSION}-${vec_triple}.tar.gz"
 
   install_vector_binary() {
     local current=""
@@ -495,7 +505,7 @@ else
       return 1
     fi
     tar -xzf "$tmp/vector.tar.gz" -C "$tmp"
-    install -m 0755 "$tmp"/vector-x86_64-unknown-linux-musl/bin/vector "$VECTOR_INSTALL_PATH"
+    install -m 0755 "$tmp"/vector-${vec_triple}/bin/vector "$VECTOR_INSTALL_PATH"
     mkdir -p "$(dirname "$VECTOR_VERSION_FILE")"
     echo "$VECTOR_CLI_VERSION" > "$VECTOR_VERSION_FILE"
   }

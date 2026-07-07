@@ -206,6 +206,9 @@ resource "hcloud_server" "inngest" {
     # passes this as INNGEST_CLI_SHA256, OVERRIDING the image-env (amd64) value.
     inngest_cli_arch         = "arm64"
     inngest_cli_sha256_arm64 = local.inngest_cli_sha256_arm64
+    # #6197: arm64 Vector SHA override (cax11 downloads the aarch64 tarball; the amd64
+    # image-env SHA would fail verify). Consumed by cloud-init as VECTOR_CLI_SHA256.
+    vector_sha256_arm64 = local.vector_sha256_arm64
     # Bake the scoped GHCR read-creds (#6179/#6161) so the cold-boot soleur-inngest-bootstrap
     # OCI pull + cosign-verify authenticates even when Doppler answers empty at the boot
     # instant (else 401 → 226/NAMESPACE abort).
