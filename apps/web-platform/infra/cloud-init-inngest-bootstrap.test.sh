@@ -53,8 +53,12 @@ assert "cloud-init.yml exists" "[[ -f '$CLOUD_INIT' ]]"
 echo ""
 echo "--- AC1: pinned OCI image tag ---"
 # Shape-match only (vX.Y.Z) — the exact value is owned by the AC6 drift-guard.
-assert "docker pull line for soleur-inngest-bootstrap:vX.Y.Z exists" \
-  "grep -qE '^[[:space:]]+docker pull ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' '$CLOUD_INIT'"
+# #6122: the pin now lives in the IREF assignment (zot-primary + GHCR fallback); the
+# three consumers (pull/create/inspect) reference "$IREF".
+assert "IREF pin for soleur-inngest-bootstrap:vX.Y.Z exists" \
+  "grep -qE '^[[:space:]]+IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' '$CLOUD_INIT'"
+assert "inngest image pulled via resolved IREF" \
+  "grep -qF 'docker pull \"\$IREF\"' '$CLOUD_INIT'"
 
 # --- AC1: Config.Env sourcing ---
 echo ""
@@ -89,7 +93,7 @@ assert "drift comment clarifies pin is bootstrap-image version, not inngest-cli 
 # --- AC4: positional ordering ---
 echo ""
 echo "--- AC4: positioned BEFORE soleur-web-platform docker run ---"
-BOOTSTRAP_LINE=$(grep -nE '^[[:space:]]+docker pull ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+BOOTSTRAP_LINE=$(grep -nE '^[[:space:]]+IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 assert "bootstrap line found in cloud-init.yml"      "[[ -n '$BOOTSTRAP_LINE' ]]"
 assert "soleur-web-platform run line found"          "[[ -n '$WEBPLATFORM_LINE' ]]"
@@ -213,15 +217,17 @@ else
 fi
 
 # --- AC6b: all pin refs present AND share one tag (catches a partial bump) ---
-# Assert BOTH count==3 (docker pull/create/inspect) AND distinct==1. distinct==1
-# alone passes vacuously if a future refactor drops the refs to a single
-# surviving line; asserting the count keeps the multi-ref coupling intact.
+# #6122: the pin literal now appears in exactly 2 places — the IREF assignment (GHCR
+# ref) and the ZIREF assignment (its zot equivalent, `$ZURL/jikig-ai/…:vX.Y.Z`); the
+# create/inspect consumers follow "$IREF". Assert BOTH count==2 AND distinct==1: the
+# count catches a partial bump (IREF bumped but ZIREF left stale → the fresh-boot zot
+# pull would 404 a nonexistent tag), and distinct==1 catches a divergent value.
 echo ""
 echo "--- AC6b: pin-consistency (all soleur-inngest-bootstrap refs present + agree) ---"
 PIN_REF_COUNT=$(grep -coE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" || true)
 DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | sort -u | wc -l)
-assert "all 3 soleur-inngest-bootstrap pin refs present and share one tag (found $PIN_REF_COUNT refs, $DISTINCT_PINS distinct)" \
-  "(( PIN_REF_COUNT == 3 && DISTINCT_PINS == 1 ))"
+assert "both soleur-inngest-bootstrap pin refs (IREF + ZIREF) present and share one tag (found $PIN_REF_COUNT refs, $DISTINCT_PINS distinct)" \
+  "(( PIN_REF_COUNT == 2 && DISTINCT_PINS == 1 ))"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

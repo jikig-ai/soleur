@@ -7,6 +7,14 @@ date: 2026-07-04
 
 # ADR-087: Cosign deploy-verify: host-net ephemeral verifier over private GHCR (no container-allowlist widening)
 
+> **Note (2026-07-06, #6122):** the deploy-time cosign verifier topology decided here is
+> **unaffected** and stays active. Only the *credential-provisioning* arm (how the host authenticates
+> the private pull + `.sig` fetch, ADR-088 D1) is changing: ADR-088's App-token minter was proven
+> infeasible (GHCR refuses App tokens), so #6122 migrates the registry off GHCR to self-hosted zot.
+> When that lands, "GHCR" in this ADR becomes the zot endpoint and the mounted docker-config carries
+> the zot OIDC bearer instead of a GHCR PAT — the `--network host` + pinned-trusted-root + offline
+> verify shape is identical.
+
 ## Context
 
 `apps/web-platform/infra/ci-deploy.sh` cosign-verifies the app image signature on

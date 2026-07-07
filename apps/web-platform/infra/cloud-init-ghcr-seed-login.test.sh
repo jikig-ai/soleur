@@ -30,7 +30,9 @@ no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
 # shellcheck disable=SC2016  # intentional: grep for the LITERAL $GHCR_USER/$IMAGE_REF in the YAML.
 login_ln=$(grep -nE 'docker login ghcr\.io -u "\$GHCR_USER"' "$CI" | head -1 | cut -d: -f1 || true)
 # shellcheck disable=SC2016
-pull_ln=$(grep -nE 'until docker pull "\$IMAGE_REF"' "$CI" | head -1 | cut -d: -f1 || true)
+# #6122: the seed pull now tries the resolved ref ($REF = zot-primary or the GHCR
+# $IMAGE_REF) inside the until loop; the login-precedes-pull invariant is unchanged.
+pull_ln=$(grep -nE 'until docker pull "\$REF"' "$CI" | head -1 | cut -d: -f1 || true)
 if [ -n "$login_ln" ] && [ -n "$pull_ln" ] && [ "$login_ln" -lt "$pull_ln" ]; then
   ok "ghcr docker login (line $login_ln) precedes the seed pull (line $pull_ln)"
 else

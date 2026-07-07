@@ -83,7 +83,7 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // SSH-provisioned resource raises the count without a brittle exact-match edit —
 // the union-coverage assertion is what enforces correctness; this only guards
 // against the predicate silently collapsing to zero (e.g. a parser regression).
-const MIN_SSH_PROVISIONED = 9;
+const MIN_SSH_PROVISIONED = 10; // #6122: +terraform_data.registry_insecure_config (zot insecure-registries, running-host SSH delivery)
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
@@ -515,6 +515,47 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume.git_data_luks",
   "hcloud_volume_attachment.git_data_luks",
   "doppler_service_token.git_data",
+  // #6122 (ADR-096) — the zot registry host + its volume/network/firewall/creds/heartbeat
+  // ALL ride the operator's initial full (untargeted) `terraform apply` + drift detector,
+  // exactly like the git-data host above (CTO ruling 2026-07-06,
+  // knowledge-base/project/specs/feat-registry-oidc-migration/apply-path-cto-ruling.md).
+  // The per-PR CI `-target` path bridges over SSH to the EXISTING web host; it cannot
+  // provision a brand-new host, a new private network attach, or that host's firewall.
+  // NONE are in the workflow `-target` list. `doppler_secret.*` here (incl the prd_registry
+  // host-token copies) ride the same host apply; they are `doppler_secret`, not the
+  // CI-published `doppler_service_token`/`github_actions_secret` types the #5566 test forces.
+  "hcloud_server.registry",
+  "hcloud_volume.registry",
+  "hcloud_volume_attachment.registry",
+  "hcloud_server_network.registry",
+  "hcloud_firewall.registry",
+  "hcloud_firewall_attachment.registry",
+  "random_password.zot_pull",
+  "random_password.zot_push",
+  "doppler_secret.zot_pull_token_registry",
+  "doppler_secret.zot_push_token_registry",
+  "doppler_secret.zot_registry_url",
+  "doppler_secret.zot_pull_user",
+  "doppler_secret.zot_pull_token",
+  "doppler_secret.zot_push_user",
+  "doppler_secret.zot_push_token",
+  "betteruptime_heartbeat.registry_prd",
+  "doppler_secret.zot_heartbeat_url_prd",
+  "doppler_service_token.registry",
+  // #6122 (ADR-096) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net
+  // zot host via the EXISTING `web` Cloudflare Tunnel + a NEW dedicated CF Access service token,
+  // bridged with `cloudflared access tcp` (mirrors the SSH bridge). All operator-applied WITH the
+  // registry host (an unattended per-PR apply must not mint a push credential + DNS for a host
+  // that doesn't exist yet). The `..._config.web` ingress_rule EDIT rides the already-`-target`ed
+  // config resource (not a new resource). The two doppler_secrets carry ignore_changes=[value]
+  // (CF client_secret is write-once/empty-on-refresh, #4492) — still `doppler_secret`, not the
+  // CI-published github_actions_secret/doppler_service_token types the #5566 test forces.
+  "cloudflare_zero_trust_access_application.registry",
+  "cloudflare_zero_trust_access_service_token.registry_push",
+  "cloudflare_zero_trust_access_policy.registry_push_service_token",
+  "cloudflare_record.registry",
+  "doppler_secret.registry_push_access_token_id",
+  "doppler_secret.registry_push_access_token_secret",
 ]);
 // Operator-applied doppler_service_token exceptions to the "every token is CI-targeted"
 // assertion (#5566). A token belongs here ONLY when it is minted into an operator-created
@@ -523,6 +564,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
 // a github_actions_secret — that is the #5566 silent-un-applied class and MUST be targeted.
 const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   "doppler_service_token.git_data",
+  // #6122 (ADR-096) — minted into the operator-created `prd_registry` config, consumed by the
+  // registry host's cloud-init (NOT published to a CI github_actions_secret). CI cannot apply
+  // it — the config does not exist until the operator creates it (runbook precondition), and CI
+  // cannot provision the host that reads it. Same class as doppler_service_token.git_data.
+  "doppler_service_token.registry",
 ]);
 // AUDIT-PENDING (#5577): these are un-targeted today but it is NOT yet confirmed
 // whether that is intentional (operator-applied) or a forgotten allow-list entry
