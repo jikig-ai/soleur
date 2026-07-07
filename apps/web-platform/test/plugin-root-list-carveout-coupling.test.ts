@@ -16,11 +16,24 @@ import { EXACT_LITERAL_SAFE_COMMANDS } from "../server/safe-bash";
  * stay in lockstep.
  *
  * Without this guard the two drift silently: a future edit that emits a
- * `list`/`ls` in a shape NOT in the carve-out (a different fallback anchor, a
- * renamed script path) does not error — it just degrades from auto-approve to
- * the review gate on the CLI and, worse, is denied on the autonomous server
- * surface. That is invisible until a user hits it. This test makes such drift
- * fail loudly at CI time instead.
+ * `list`/`ls` of THIS script in a shape NOT in the carve-out — a different
+ * fallback anchor (`../../plugins/soleur`, bare `plugins/soleur`), a missing
+ * `bash ` prefix, or a trailing argument (`list --json`, `list --porcelain`) —
+ * does not error; it just degrades from a no-prompt safe-bash auto-approve to
+ * the review-gate prompt (on the CLI, and on the autonomous server before
+ * first-run consent; post-consent the autonomous-bypass still auto-approves it
+ * — the carve-out is never a hard deny). That is invisible until a user hits it.
+ * This test makes such drift fail loudly at CI time instead. Note: the
+ * `${CLAUDE_PLUGIN_ROOT}` path migration — NOT this carve-out — is what
+ * guarantees the trusted DEPLOYED script runs; the carve-out governs only the
+ * approval prompt, so drift is UX friction, never untrusted-code execution.
+ *
+ * Scope (deliberate, YAGNI): the guard covers the `${CLAUDE_PLUGIN_ROOT:-…}`
+ * default-expansion form of `worktree-manager.sh list|ls` only. A script
+ * *rename* or a var-expansion form without the `:-` default yields zero matches
+ * for that site (the site becomes unguarded) — both are larger changes that
+ * warrant their own review; extend the regex when a second read-only verb or
+ * script actually appears in a migrated skill.
  *
  * Drift-guard hygiene (learnings #4): this is a DIRECTORY WALK over the live
  * SKILL.md tree, never a hardcoded file list — a new skill that emits a
@@ -34,12 +47,25 @@ import { EXACT_LITERAL_SAFE_COMMANDS } from "../server/safe-bash";
 const REPO_ROOT = resolve(__dirname, "../../..");
 const SKILLS_ROOT = resolve(REPO_ROOT, "plugins/soleur/skills");
 
-// Matches the deployed-form read-only verb emission that MUST be a carve-out
-// member. Scoped to the ONLY read-only verb family in scope (git-worktree
-// list|ls) — YAGNI: extend the alternation only when a second read-only verb
-// actually appears in a migrated skill.
+// Matches every shape a `worktree-manager.sh list|ls` emission can take, so the
+// membership check (not the regex) decides carve-out conformance. Scoped to the
+// ONLY read-only verb family in scope (git-worktree list|ls) — YAGNI: extend the
+// alternation only when a second read-only verb appears in a migrated skill.
+//
+//  - `(?:bash )?` — the `bash ` prefix is OPTIONAL. The carve-out members carry
+//    it, but a migrated skill can also emit the no-`bash`/env-prefixed direct-exec
+//    form (this diff already uses that shape for the `feature` verb). Matching it
+//    too means a future no-`bash` `list` is EXTRACTED and fails membership (→ RED)
+//    instead of silently escaping the guard.
+//  - trailing `[^\n`|;&)>]*` — captures ANY argument tail up to a command
+//    boundary (newline, backtick, pipe, `;`, `&`, `)`, redirect). Load-bearing:
+//    without it a drifted `… list --json` would match only the `… list` prefix
+//    (a member) and pass GREEN while the real command is a non-member. Capturing
+//    the tail makes the drifted string a non-member → RED.
+// The match is `.trim()`-ed before the membership check to mirror safe-bash's
+// `candidate.trim()`, so a benign trailing space is not a false failure.
 const LIST_EMISSION =
-  /bash \$\{CLAUDE_PLUGIN_ROOT:-[^}]+\}\/skills\/git-worktree\/scripts\/worktree-manager\.sh (?:list|ls)\b/g;
+  /(?:bash )?\$\{CLAUDE_PLUGIN_ROOT:-[^}]+\}\/skills\/git-worktree\/scripts\/worktree-manager\.sh (?:list|ls)\b[^\n`|;&)>]*/g;
 
 function walkMarkdown(dir: string): string[] {
   const out: string[] = [];
@@ -59,7 +85,7 @@ function collectListEmissions(): string[] {
   for (const file of walkMarkdown(SKILLS_ROOT)) {
     const src = readFileSync(file, "utf8");
     for (const match of src.matchAll(LIST_EMISSION)) {
-      emissions.push(match[0]);
+      emissions.push(match[0].trim());
     }
   }
   return emissions;
@@ -72,7 +98,7 @@ describe("plugin-root list/ls carve-out coupling (AC5↔AC6, #6121)", () => {
     for (const cmd of emissions) {
       expect(
         EXACT_LITERAL_SAFE_COMMANDS.has(cmd),
-        `Emitted read-only command is NOT carved out (would degrade to the review gate on CLI and be DENIED on the autonomous server): ${cmd}`,
+        `Emitted read-only command is NOT carved out (degrades from a no-prompt auto-approve to the review-gate prompt on the CLI / pre-consent server): ${cmd}`,
       ).toBe(true);
     }
   });
