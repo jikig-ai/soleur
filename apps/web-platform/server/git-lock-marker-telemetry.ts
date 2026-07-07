@@ -3,10 +3,14 @@
 // worktree-manager.sh (running INSIDE the agent sandbox) emits diagnostic markers to
 // the Bash tool's stdout/stderr when worktree creation is wedged by a masked
 // `.git/config.lock`:
-//   - SOLEUR_GIT_LOCK_DIAG        — forensic (file type, owner, perms, mtime, rdev, mount)
-//   - SOLEUR_GIT_LOCK_UNREMOVABLE — a lock that could not be cleared (the wedge)
-//   - SOLEUR_GIT_LOCK_TEMP_WEDGED — the lockless-writer temp lock was ALSO masked (glob mask)
-//   - "worktree wedge: ..."       — ensure_bare_config gave up
+//   - SOLEUR_GIT_LOCK_DIAG            — forensic (file type, owner, perms, mtime, rdev, mount)
+//   - SOLEUR_GIT_LOCK_UNREMOVABLE     — a lock that could not be cleared (the wedge)
+//   - SOLEUR_GIT_LOCK_TEMP_WEDGED     — the lockless-writer temp lock was ALSO masked (glob mask)
+//   - SOLEUR_GIT_LOCK_IDENTITY_WEDGED — ensure_worktree_identity's set-from-global write could
+//                                       not be applied (reason=native-eexist|common-dir-unresolved)
+//   - SOLEUR_GIT_LOCK_IDENTITY_DIAG   — benign precondition: the set-from-global branch was taken
+//                                       (local identity absent → drift); NOT a wedge
+//   - "worktree wedge: ..."           — ensure_bare_config gave up
 //
 // Before this hook those lines went ONLY to blind agent-sandbox stdout — not mirrored
 // to any sink an operator can query (ADR-081's stated observability gap). Diagnosing the
@@ -32,20 +36,26 @@ const log = createChildLogger("git-lock-marker-telemetry");
 
 // Matches the marker sentinels emitted by two in-sandbox surfaces:
 //   - worktree-manager.sh — the git-lock wedge markers (SOLEUR_GIT_LOCK_*, "worktree wedge:")
+//     including the ensure_worktree_identity identity-authority markers
+//     (SOLEUR_GIT_LOCK_IDENTITY_WEDGED = a failed set-from-global write;
+//     SOLEUR_GIT_LOCK_IDENTITY_DIAG = the benign set-from-global precondition marker, #6184).
 //   - git-repo-readiness-diag.sh — the readiness-gate forensic (SOLEUR_GIT_REPO_DIAG),
 //     emitted by soleur:go Step 0.0 when git rejects the workspace repo (a layer ABOVE
-//     worktree creation, previously uninstrumented — #4826 round 3).
+//     worktree creation, previously uninstrumented — #6184 round 3).
 // Kept in sync with those scripts; a drift test (git-lock-marker-telemetry.test.ts) pins
 // the pattern set against the live scripts so a renamed sentinel fails CI instead of going
 // silently unmirrored.
 const MARKER_RE =
-  /^(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_REPO_DIAG\b.*|worktree wedge:.*)$/;
+  /^(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_REPO_DIAG\b.*|worktree wedge:.*)$/;
 
 // A wedge (vs. a benign DIAG) is any marker that indicates git operations could not
-// proceed: an unremovable/masked lock, a temp-wedge, an ensure_bare_config give-up, OR a
-// readiness-gate rejection (SOLEUR_GIT_REPO_DIAG is only emitted on the not-ready path).
+// proceed: an unremovable/masked lock, a temp-wedge, an ensure_bare_config give-up, a failed
+// identity set-from-global write, OR a readiness-gate rejection (SOLEUR_GIT_REPO_DIAG is only
+// emitted on the not-ready path). SOLEUR_GIT_LOCK_IDENTITY_WEDGED is a wedge;
+// SOLEUR_GIT_LOCK_IDENTITY_DIAG is EXCLUDED — it is the benign precondition marker, so a
+// successful drift-set must not page as wedged=true / log.error.
 const WEDGE_RE =
-  /^(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_REPO_DIAG\b|worktree wedge:)/;
+  /^(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_LOCK_IDENTITY_WEDGED\b|SOLEUR_GIT_REPO_DIAG\b|worktree wedge:)/;
 
 // Bounds: scan at most this many lines, keep at most this many matched markers, and
 // truncate any single marker line to this many chars. A wedged run emits a handful of

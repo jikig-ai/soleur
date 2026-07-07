@@ -33,6 +33,21 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(TEMP_WEDGED)[0]?.wedged).toBe(true);
   });
 
+  test("classifies IDENTITY_WEDGED as wedged; IDENTITY_DIAG as a benign (mirrored) marker", () => {
+    const identityWedged =
+      "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=native-eexist file=config";
+    const identityCommonDir =
+      "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=common-dir-unresolved file=config";
+    const identityDiag =
+      "SOLEUR_GIT_LOCK_IDENTITY_DIAG source=ensure_worktree_identity reason=identity-drift-set-from-global";
+    expect(extractGitLockMarkers(identityWedged)[0]?.wedged).toBe(true);
+    expect(extractGitLockMarkers(identityCommonDir)[0]?.wedged).toBe(true);
+    // Benign precondition marker: mirrored (MARKER_RE) but NOT a wedge (excluded from WEDGE_RE),
+    // so a successful drift-set never pages as wedged=true / log.error.
+    expect(extractGitLockMarkers(identityDiag).length).toBe(1);
+    expect(extractGitLockMarkers(identityDiag)[0]?.wedged).toBe(false);
+  });
+
   test("matches the readiness-gate SOLEUR_GIT_REPO_DIAG forensic and treats it as wedged", () => {
     const repoDiag =
       'SOLEUR_GIT_REPO_DIAG ready=false git_dir=dir config_worktree=chardevice config_lock=chardevice rev_parse_rc=128 config_parse_rc=128 err="fatal: bad config line 1 in file .git/config"';
