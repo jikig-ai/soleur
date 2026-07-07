@@ -152,7 +152,11 @@ resolve_linked_issues() {
       [[ -n "$iid" ]] && ids+=$'\n'"$iid"
     fi
   done
-  printf '%s\n' "$ids" | grep -v '^$' | sort -u
+  # `awk 'NF'` (not `grep -v '^$'`) drops blank lines but ALWAYS exits 0 — grep
+  # exits 1 on zero matches, which under `set -euo pipefail` makes a PR with no
+  # linked issues kill the whole script (the common case: most PRs link none),
+  # before from_pr's `[[ -z "$linked" ]]` no-op guard is ever reached.
+  printf '%s\n' "$ids" | awk 'NF' | sort -u
 }
 
 # ---- PR event -> move each linked issue ----

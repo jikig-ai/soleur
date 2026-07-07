@@ -27,8 +27,42 @@ import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import { parseConnectedRepo } from "@/server/github-repo-parse";
 import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { resolveEffectiveInstallationId } from "@/server/cc-effective-installation";
-import { listRepoIssues } from "@/server/github-read-tools";
+import { fetchBoardStatusMap, listRepoIssues } from "@/server/github-read-tools";
 import { reportSilentFallback } from "@/server/observability";
+
+/**
+ * Read the canonical GitHub Project v2 board Status map (issueNumber → Status
+ * name) for the connected repo, or null when unconfigured / not the board org /
+ * the read fails. NEVER throws — a degraded board read falls back to label
+ * derivation (mirrored to Sentry) so the tab still renders issues (Phase 2,
+ * ADR-097). Configured via SOLEUR_KANBAN_ORG + SOLEUR_KANBAN_PROJECT_NUMBER.
+ */
+async function readBoardStatuses(
+  installationId: number,
+  owner: string,
+  repo: string,
+): Promise<Map<number, string> | null> {
+  const org = process.env.SOLEUR_KANBAN_ORG?.trim();
+  const projectNumber = Number(process.env.SOLEUR_KANBAN_PROJECT_NUMBER);
+  if (!org || !Number.isFinite(projectNumber) || projectNumber <= 0) return null;
+  // The board is org-owned — only read it for repos belonging to that org.
+  if (owner.toLowerCase() !== org.toLowerCase()) return null;
+  try {
+    return await fetchBoardStatusMap(
+      installationId,
+      org,
+      projectNumber,
+      `${owner}/${repo}`,
+    );
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "workstream",
+      op: "board-status-read",
+      extra: { owner, repo, projectNumber },
+    });
+    return null; // degrade to label/state derivation
+  }
+}
 
 /**
  * Read the active workspace's connected-repo issues, mapped to the board model.
@@ -62,5 +96,20 @@ export async function getWorkstreamIssues(
 
   // Throws on any GitHub API failure (404/403/5xx) — caller surfaces 502/isError.
   const raw = await listRepoIssues(installationId, parsed.owner, parsed.repo);
-  return raw.map(githubIssueToWorkstreamIssue);
+
+  // Phase 2 (ADR-097): prefer the canonical Project v2 board Status. Degrade-safe
+  // — a null map (unconfigured / not the board org / read failed) leaves each
+  // issue to label/state derivation, so the tab never breaks on a board hiccup.
+  const boardStatuses = await readBoardStatuses(
+    installationId,
+    parsed.owner,
+    parsed.repo,
+  );
+  return raw.map((input) =>
+    githubIssueToWorkstreamIssue(
+      boardStatuses
+        ? { ...input, boardStatus: boardStatuses.get(input.number) }
+        : input,
+    ),
+  );
 }

@@ -124,6 +124,18 @@ event pull_request '{"action":"closed","pull_request":{"node_id":"PR_2","state":
 run_dispatch; assert_opt OPT_done "PR merged (Closes ref) -> Done"
 unset MOCK_PR_LINK_JSON
 
+# 11. PR event with NO linked issue -> clean no-op, exit 0 (regression: the empty
+#     `ids` pipeline used to `grep -v '^$'` which exits 1 on zero matches and,
+#     under set -euo pipefail, killed the whole script — every PR that links no
+#     issue produced a red workflow run). Asserts the real exit code (run_dispatch
+#     masks it with `|| true`, which is exactly why the original bug slipped CI).
+assert_exit0() { # $1=label ; runs dispatch and asserts a 0 exit
+  if bash "$SCRIPT" dispatch >/dev/null 2>&1; then PASS=$((PASS+1)); echo "ok   - $1"
+  else FAIL=$((FAIL+1)); echo "FAIL - $1 (dispatch exited non-zero)"; fi
+}
+event pull_request '{"action":"closed","pull_request":{"node_id":"PR_3","state":"closed","draft":false,"merged":true,"body":"No issue linked here."}}'
+assert_exit0 "PR merged with no linked issue -> clean exit 0 (no-op)"
+
 echo "-----"
 echo "$PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

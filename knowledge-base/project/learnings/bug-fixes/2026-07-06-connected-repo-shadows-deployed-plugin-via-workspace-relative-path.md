@@ -115,6 +115,46 @@ fixture regen — it is reading `/hooks/deploy-status` for the real reason and r
 rely on the existing `verifyPluginMountOnce()` boot probe + a single scaffold-time `connectedRepoShipsPlugin`
 diagnostic breadcrumb that makes the previously-silent collision observable.
 
+## Slice B (delivery half, #6121) — the F2 in-image finding
+
+**The gating unknown was "does `CLAUDE_PLUGIN_ROOT` reach the bwrap-sandboxed bash?" — and the answer is NOT what
+the SDK's `--setenv` allowlist suggests. It reaches bash by PROCESS-ENV INHERITANCE, because the SDK does not
+`--clearenv` the sandbox.** Reasoning from the committed ADR-079 canary fixture (26 `--setenv` entries, no
+`CLAUDE_PLUGIN_ROOT` among them) would have concluded — WRONGLY — that the var does not propagate, defeating the
+whole delivery half. The empirical in-image probe (drive real `query()` with a bwrap-intercepting PATH shim that
+reconstructs the *effective* sandbox-bash env by applying `--clearenv`/`--setenv`/`--unsetenv` to the shim's OWN
+process env) showed `bashSeesSentinel: true`, `clearenv: false`. **The SDK forwards a fixed ~26-var `--setenv`
+allowlist (proxy/git/tmpdir/SANDBOX_RUNTIME) AND lets everything else inherit** — bwrap isolates fs/network, not
+env; env isolation (CWE-526) is `buildAgentEnv` upstream. **Generalizable:** to answer "does env var X reach a
+bwrap-sandboxed subprocess," an argv-only capture (does `--setenv X` appear?) is INSUFFICIENT and misleads toward a
+false negative — you must model bubblewrap's actual env transform (inherit-then-`--clearenv?`-then-`--setenv`), or
+echo the var from inside a real sandboxed op. The committed gate
+(`plugin-root-sandbox-propagation-probe.mjs`) fails CLOSED on a future SDK `--clearenv`/`--unsetenv` regression.
+
+**Fail-open→fail-closed, but the unset state was unrepresentable.** The plan required the server to "fail closed if
+`CLAUDE_PLUGIN_ROOT` is unset." Tracing the two factories showed both compute `pluginPath = getPluginPath()` (a
+non-empty `/app/` default) and thread it unconditionally — so the server can never reach the `${VAR:-./plugins}`
+fallback branch. The fail-closed guarantee is the Slice-A `assertTrustedPluginPath` THROW (an untrusted/empty value
+dies before dispatch), stronger than a runtime "if unset" check. **Lesson:** before adding a defensive
+"fail-closed-if-unset" branch, trace whether the unset state is reachable — if the value is a process constant
+threaded unconditionally, the branch is untestable dead code; the real guard is the upstream type/throw invariant.
+
+**`--setenv` vs env-inheritance also validates AC2 (canary-neutrality) from a second angle.** Because
+`CLAUDE_PLUGIN_ROOT` is NOT in the `--setenv` allowlist, the ADR-079 fixture (which the projection strips of ALL
+`--setenv` anyway) is byte-identical with or without the injection — the injection cannot touch the fixture.
+
+### Slice B in-image harness gotcha
+- **The SDK's sandbox availability check needs `socat`, not just `bwrap`.** A `node:22-slim` in-image probe that
+  installed bwrap (or shimmed it) but not `socat` failed every attempt with `Sandbox required but unavailable:
+  socat not installed`, producing a false `no_sandbox_setup_captured`. **Prevention:** the in-image wrapper
+  `apt-get install socat` (bwrap itself is replaced by the capture shim, but socat must be a real binary). Mirrors
+  `sandbox-canary-verify-in-image.sh`, which already installs socat — I omitted it in the first probe iteration.
+- **A minimal `buildAgentEnv` env does not ENGAGE the sandbox in the harness** (prod's server process env carries
+  `SANDBOX_RUNTIME`/`CLAUDE_CODE_HOST_*_PROXY_PORT` the CLI reads to decide to sandbox). The committed probe seeds
+  from the ambient env then OVERLAYS `buildAgentEnv`'s output, so the `CLAUDE_PLUGIN_ROOT` under test is the real
+  code path's value while the sandbox still engages. Since propagation is env-inheritance (not var-count-dependent),
+  this scaffolding does not weaken the regression signal.
+
 ## Session Errors
 
 - **Chased the guard LOGIC for 4 rounds** when the running code was never the code being fixed. **Prevention:**

@@ -44,7 +44,7 @@ If `$ARGUMENTS` contains no `#N` substrings (e.g., a plan file path or freeform 
 
 ```bash
 SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
-  bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
+  bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
 ```
 
 If the script exits non-zero and its output contains `NO_GIT_REPOSITORY`, the workspace lost its git checkout between the Step 0 (pre) gate and now (e.g. a reclaim). STOP — do NOT spawn the planning subagent. Reply with the same honest, no-wait message from Step 0 (pre). Do not retry or improvise alternative worktree paths.
@@ -62,7 +62,7 @@ bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
 **Step 0c: Create draft PR.** After creating the feature branch, create a draft PR from inside the worktree (the script errors with "Cannot run from bare repo root" otherwise, and the Bash tool does NOT persist CWD across calls — use a single `cd && bash` to be explicit):
 
 ```bash
-cd <worktree-path> && bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr
+cd <worktree-path> && bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh draft-pr
 ```
 
 If this fails (no network, or "No commits between main and <branch>"), print a warning but continue. The branch exists locally and the `/ship` phase will create the PR after implementation commits exist.

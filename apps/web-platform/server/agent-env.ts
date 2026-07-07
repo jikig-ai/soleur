@@ -105,6 +105,21 @@ export interface BuildAgentEnvOptions {
    * both-present guard is explicit.
    */
   gitInstallationToken?: string;
+  /**
+   * The platform-deployed plugin root (`getPluginPath()` →
+   * `/app/shared/plugins/soleur` in prod), injected as `CLAUDE_PLUGIN_ROOT`.
+   * The deployed skills' `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/…`
+   * shell-outs read this var so they execute the platform-controlled script,
+   * NOT the connected repo's committed (untrusted) `./plugins/soleur/` copy
+   * (the connected-repo-shadow delivery fix — plan §Phase 2). It rides this
+   * dedicated per-dispatch param rather than `AGENT_ENV_ALLOWLIST` on purpose:
+   * the allowlist copies AMBIENT `process.env` (a whole-process constant),
+   * whereas this is a per-dispatch value threaded from
+   * `agent-runner-query-options.ts`. Keeping it out of the allowlist also
+   * prevents an ambient `process.env.CLAUDE_PLUGIN_ROOT` from leaking into the
+   * agent env. Empty/undefined is a no-op (graceful degradation).
+   */
+  pluginPath?: string;
 }
 
 export function buildAgentEnv(
@@ -172,6 +187,19 @@ export function buildAgentEnv(
     env.GIT_TERMINAL_PROMPT = "0";
     env.GIT_CONFIG_NOSYSTEM = "1";
     env.GIT_CONFIG_GLOBAL = "/dev/null";
+  }
+
+  // Deployed plugin root for the agent's `bash` shell-outs (Slice B / AC3).
+  // Injected OUTSIDE the allowlist loop and the auth switch — it is a
+  // per-dispatch platform path (getPluginPath()), NOT an ambient process.env
+  // value, so it is deliberately absent from AGENT_ENV_ALLOWLIST. The deployed
+  // skills expand `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` to run the
+  // platform-controlled worktree-manager.sh, never the untrusted connected-repo
+  // copy. Empty/undefined is a no-op (graceful degradation — the CLI surface,
+  // where the var is unset, falls back to `./plugins/soleur`). Not a secret,
+  // but treated like the other per-dispatch extras for consistency.
+  if (opts?.pluginPath) {
+    env.CLAUDE_PLUGIN_ROOT = opts.pluginPath;
   }
 
   // Auth var LAST and mutually exclusive: the credential branch is
