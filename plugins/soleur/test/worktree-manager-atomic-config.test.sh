@@ -489,5 +489,103 @@ fi
 assert_eq "MISS" "$(git config --file "$MAIN19/.git/config" --get user.email 2>/dev/null || echo MISS)" \
   "the bot global was NOT written into the common-dir config (no misattribution)"
 
+# ---------------------------------------------------------------------------
+# T20–T24 — #5934 config-TARGET-masked wedge (this PR). The verbatim live error is
+#   mv: cannot move '.git/config.soleur-tmp.N' to '.git/config': Device or resource busy
+# i.e. the rename TARGET (.git/config), not just the lock, is a char-device/bind-mount
+# masked node. atomic_git_config must detect the masked TARGET BEFORE the doomed write and
+# fail loud with a VISIBLE SOLEUR_GIT_CONFIG_TARGET_MASKED sentinel, never attempting the mv.
+#
+# Local-simulation technique (documented per plan D5): a REAL masked-target inode needs
+# mknod (CAP_MKNOD) or mount --bind (CAP_SYS_ADMIN), neither available on an unprivileged
+# runner. Portable proxy: a symlink to /dev/null makes the target a CHARACTER DEVICE by
+# dereference — `[[ -c ]]` (and git's own open) follow the symlink — which is the exact
+# `_config_target_masked` signature. When mknod IS permitted (CI root) a real char-device
+# node is used so the pre-fix `mv` genuinely EBUSYs. The RED→GREEN distinction is genuine:
+# pre-fix code emits NO sentinel and clobbers/wedges; fixed code refuses + emits the marker.
+# ---------------------------------------------------------------------------
+echo "Test 20: #5934 masked TARGET pre-check — refuse the write + emit SOLEUR_GIT_CONFIG_TARGET_MASKED, no mv"
+D=$(new_gitdir)
+TARGET_KIND=symlink
+if mknod "$D/config" c 1 3 2>/dev/null; then
+  TARGET_KIND=chardevice
+else
+  ln -s /dev/null "$D/config"          # unprivileged proxy: -c dereferences the symlink
+fi
+run_agc "$D/config" section.masked v20
+if (( AGC_RC != 0 )); then echo "  PASS: masked-target write refused (rc!=0)"; PASS=$((PASS + 1));
+else echo "  FAIL: masked-target write must fail loud (rc!=0) — pre-fix RED"; FAIL=$((FAIL + 1)); fi
+if grep -qF 'SOLEUR_GIT_CONFIG_TARGET_MASKED' "$TMP/agc.out"; then
+  echo "  PASS: SOLEUR_GIT_CONFIG_TARGET_MASKED sentinel emitted on stdout"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected SOLEUR_GIT_CONFIG_TARGET_MASKED on the masked-target path — pre-fix RED"; FAIL=$((FAIL + 1))
+fi
+if [[ "$TARGET_KIND" == symlink ]]; then
+  assert_eq "true" "$([[ -L "$D/config" ]] && echo true || echo false)" "masked symlink target left intact (destructive rename not attempted)"
+else
+  assert_eq "true" "$([[ -c "$D/config" ]] && echo true || echo false)" "masked char-device target left intact (destructive rename not attempted)"
+fi
+no_temp_leftovers "$D" "masked-target pre-check"
+
+# ---------------------------------------------------------------------------
+echo "Test 21: #5934 _config_target_masked detects char-device/mountpoint, NOT a regular file"
+if declare -F _config_target_masked >/dev/null; then
+  set +e; _config_target_masked /dev/null; M1=$?; set -e
+  assert_eq "0" "$M1" "_config_target_masked returns 0 for a character device (/dev/null)"
+  RF=$(new_gitdir); seed_config "$RF"
+  set +e; _config_target_masked "$RF/config"; M2=$?; set -e
+  assert_eq "1" "$M2" "_config_target_masked returns 1 for a regular config file (no over-trigger)"
+  MP=$(new_gitdir); : > "$MP/config"
+  if mount --bind /dev/null "$MP/config" 2>/dev/null; then
+    set +e; _config_target_masked "$MP/config"; M3=$?; set -e
+    umount "$MP/config" 2>/dev/null || true
+    assert_eq "0" "$M3" "_config_target_masked returns 0 for a bind-mount target"
+  else
+    echo "  SKIP: mount --bind not permitted (needs CAP_SYS_ADMIN) — the -c arm above is load-bearing"; SKIPPED=$((SKIPPED + 1))
+  fi
+else
+  echo "  FAIL: _config_target_masked not defined — the D2 helper is missing (pre-fix RED)"; FAIL=$((FAIL + 1))
+fi
+
+# ---------------------------------------------------------------------------
+echo "Test 22: #5934 regression — masked LOCK + regular config routes around, NO false target-masked sentinel"
+# The observed #5912/#6183 case: the masked node is the LOCK; the config TARGET is regular.
+# The existing lockless routing must still succeed and D2 must NOT over-trigger here.
+D=$(new_gitdir); seed_config "$D"
+git config --file "$D/config" section.keep k22
+if mknod "$D/config.lock" c 1 3 2>/dev/null; then :; else mkdir "$D/config.lock"; fi
+run_agc "$D/config" section.routed v22
+assert_eq "0" "$AGC_RC" "lockless write succeeds around the masked lock (regular config target)"
+assert_eq "v22" "$(get_val "$D" section.routed)" "value written past the masked lock"
+if grep -qF 'SOLEUR_GIT_CONFIG_TARGET_MASKED' "$TMP/agc.out"; then
+  echo "  FAIL: D2 over-triggered — regular config target wrongly flagged masked"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: no false SOLEUR_GIT_CONFIG_TARGET_MASKED on the regular-config-target routing case"; PASS=$((PASS + 1))
+fi
+
+# ---------------------------------------------------------------------------
+echo "Test 23: #5934 D3 — non-bare guard SKIPS surgery under a mask-degraded rev-parse (was: misfired → :492)"
+# The live wedge is on a CONFIRMED non-bare clone (.git IS a directory). Under the char-device
+# config mask, `git rev-parse --show-toplevel` returns empty (→ GIT_ROOT="") and
+# --is-bare-repository degrades, so the OLD guard (which trusted rev-parse) fell through to the
+# bare surgery and wedged the config write at :492. Reproduce the degradation deterministically
+# & unprivileged with core.bare=true (→ show-toplevel empty AND is-bare "true"), on a repo whose
+# .git IS a directory. The HARDENED guard detects non-bare via `.git`-is-a-directory and SKIPS
+# regardless of rev-parse, so native `git worktree add` (which never writes .git/config) proceeds.
+WS24=$(mktemp -d "$TMP/misfire24.XXXXXX"); git init -q -b main "$WS24" >/dev/null 2>&1
+git -C "$WS24" config core.bare true
+_SAVED_GIT_ROOT="$GIT_ROOT"; _SAVED_PWD="$PWD"
+cd "$WS24"; GIT_ROOT=""              # the exact sandbox failure: empty GIT_ROOT, CWD is the clone
+set +e; ensure_bare_config >"$TMP/ebc24.out" 2>&1; EBC24_RC=$?; set -e
+GIT_ROOT="$_SAVED_GIT_ROOT"; cd "$_SAVED_PWD"
+assert_eq "0" "$EBC24_RC" "ensure_bare_config SKIPS (rc 0) on a non-bare .git-dir despite degraded rev-parse"
+if grep -qE "mv:|worktree wedge|config.soleur-tmp" "$TMP/ebc24.out"; then
+  echo "  FAIL: guard MISFIRED — ran the surgery and wedged (the :492 regression)"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: no config-write surgery attempted (hardened .git-dir non-bare skip held)"; PASS=$((PASS + 1))
+fi
+assert_eq "__ABSENT__" "$(git config --file "$WS24/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
+  "extensions.worktreeConfig NOT set (surgery correctly skipped on the non-bare clone)"
+
 echo ""
 print_results

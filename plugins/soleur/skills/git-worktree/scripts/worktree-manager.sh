@@ -316,6 +316,26 @@ _config_lock_wedged() {
   return 0                                    # dir / mount / char-device / other -> wedged
 }
 
+# _config_target_masked <path> — rc 0 (MASKED) iff the RENAME TARGET itself is a
+# character-device OR a mountpoint — the #5934 substrate signature. This is the direct
+# cause of the verbatim live wedge:
+#   mv: cannot move '.git/config.soleur-tmp.N' to '.git/config': Device or resource busy
+# where `.git/config` (the target of atomic_git_config's same-dir rename), not merely its
+# lock, is a bind-mounted / masked node. Reuses the EXACT `[[ -c ]]` + `stat -c%m`-self
+# mountpoint idiom already proven in sweep_stale_git_locks (:187-193): `-c` (which
+# dereferences a symlink, so a symlink→/dev/null is caught too) OR realpath is its own
+# mount root. A regular file is NEVER masked (`-c` false; `stat -c%m` yields the containing
+# fs root, not the file's own path), so this cannot over-trigger on a legitimate config —
+# the load-bearing guarantee for the T22 regression (masked LOCK + regular config routes
+# around, no false positive). GNU-only stat, consistent with the sweep.
+_config_target_masked() {
+  local t="$1" rp
+  [[ -c "$t" ]] && return 0
+  rp=$(realpath -- "$t" 2>/dev/null) || rp=""
+  [[ -n "$rp" && "$(stat -c%m -- "$rp" 2>/dev/null)" == "$rp" ]] && return 0
+  return 1
+}
+
 # atomic_git_config <file> <git-config-args…> — apply a `git config --file <file>`
 # mutation without depending on <file>'s native "<file>.lock" when that lock is
 # wedged (the #5912 Concierge char-device). The targeted fix for the config.lock
@@ -369,6 +389,22 @@ atomic_git_config() {
     [[ "$_cur" == "$2" ]] && return 0
   fi
 
+  # --- D2: masked-TARGET pre-check (BEFORE any write, covering BOTH branches below) ---
+  # The #5934 LIVE wedge: `.git/config` — the write TARGET itself, not just its lock — is a
+  # char-device/bind-mount masked node, so EVERY write path fails (the native writer's own
+  # rename over the target EBUSYs, and so does the lockless same-dir rename at the mv below).
+  # Detect it here, AFTER the FR2 read-first fast path (an already-satisfied set/unset still
+  # short-circuits with no write, correct even under the mask) but BEFORE the native-vs-
+  # lockless decision, so a masked target NEVER reaches a doomed write. Checking "$file"
+  # (whose `-c` test dereferences a symlink) covers a symlinked-to-masked config too. Fail
+  # loud with the VISIBLE stdout sentinel (a bare echo, NOT headless_or_stderr — the latter's
+  # per-PID logfile sink is invisible to the git-lock-marker telemetry scanner; #5934 D1).
+  if _config_target_masked "$file"; then
+    echo "SOLEUR_GIT_CONFIG_TARGET_MASKED file=$(basename -- "$file") reason=target-bind-mount branch=target-masked-precheck hint=\"config write TARGET is a char-device/bind-mount; rename would EBUSY — host-side pre-seed needed, see #6191,#5934\""
+    headless_or_stderr error "atomic_git_config: config TARGET $file is masked (char-device/mountpoint); refusing the doomed write (see SOLEUR_GIT_CONFIG_TARGET_MASKED)."
+    return 1
+  fi
+
   # --- FR3: clean/absent lock -> native writer (keeps flock serialization) ---
   # Capture rc explicitly so the function is correct regardless of call context
   # (a bare `atomic_git_config …` call site must not abort at the git line under set -e).
@@ -415,9 +451,22 @@ atomic_git_config() {
     headless_or_stderr error "atomic_git_config: git config write to temp failed for $target (temp lock unwritable — possible glob masking)."
     return 1
   fi
+  # Defensive re-check on the RESOLVED target immediately before the rename (D2). Guard A
+  # above already refuses a masked "$file"; this covers a symlink whose resolved target is
+  # masked and any TOCTOU between the two points — so we never attempt the EBUSY-doomed mv.
+  if _config_target_masked "$target"; then
+    rm -f -- "$tmp" "$tmp.lock" 2>/dev/null || true
+    echo "SOLEUR_GIT_CONFIG_TARGET_MASKED file=$base reason=target-bind-mount branch=target-masked-precheck hint=\"resolved rename target is masked; not attempting mv — host-side pre-seed needed, see #6191,#5934\""
+    headless_or_stderr error "atomic_git_config: resolved config TARGET $target is masked; refusing the doomed rename."
+    return 1
+  fi
   # Atomic same-dir rename over the target; never touches the masked "<file>.lock".
   if ! mv -f -- "$tmp" "$target"; then
     rm -f -- "$tmp" "$tmp.lock" 2>/dev/null || true
+    # A same-dir rename of a temp we just created failing is overwhelmingly the masked-target
+    # EBUSY (the verbatim #5934 error). Emit the VISIBLE stdout sentinel (D1a) so the outcome
+    # reaches the telemetry scanner regardless of headless_or_stderr's logfile sink.
+    echo "SOLEUR_GIT_CONFIG_TARGET_MASKED file=$base reason=rename-failed branch=target-masked-precheck hint=\"same-dir atomic rename failed (likely EBUSY on a masked target); see #6191,#5934\""
     headless_or_stderr error "atomic_git_config: atomic rename failed for $target."
     return 1
   fi
@@ -439,6 +488,15 @@ ensure_bare_config() {
   if [[ ! -d "$git_dir" ]]; then
     git_dir="$GIT_ROOT"
   fi
+  # Mask-robust root fallback (#5934 D3). Under the Concierge char-device config mask,
+  # GIT_ROOT can resolve EMPTY (`git rev-parse --show-toplevel` returns nothing), which
+  # collapses git_dir to "" and misdirects every path below (the shared_config becomes
+  # "/config"). create_worktree runs from the workspace root, so when GIT_ROOT is empty and
+  # $PWD is a normal clone, recover git_dir from $PWD/.git — a pure filesystem fact that does
+  # NOT depend on reading the masked config.
+  if [[ -z "$GIT_ROOT" && -d "$PWD/.git" ]]; then
+    git_dir="$PWD/.git"
+  fi
 
   # Self-heal: sweep BEFORE the config writes below for its diagnostics + stale
   # REGULAR-lock removal (the 2026-07-01 outage class). Runs on EVERY repo (bare or
@@ -452,7 +510,7 @@ ensure_bare_config() {
   # EEXIST failure from atomic_git_config's clean-lock branch. `|| true` disarms set -e.
   sweep_stale_git_locks "$git_dir" || true
 
-  # NON-BARE GUARD (#6184, hardened round 5). Everything BELOW is a BARE-repo
+  # NON-BARE GUARD (#6184 → #5934, hardened round 6). Everything BELOW is a BARE-repo
   # accommodation: on a bare repo `git worktree add` corrupts the shared config (see
   # header), and setting extensions.worktreeConfig=true steers those writes off it. A
   # NORMAL working clone (the Concierge workspace layout, core.bare=false) needs NONE of
@@ -462,21 +520,43 @@ ensure_bare_config() {
   # command. So: proceed with the surgery ONLY when the repo is DEFINITIVELY bare;
   # default to SKIP.
   #
-  # WHY not just `[[ -d "$GIT_ROOT/.git" ]]`: that was the round-4 guard and it FAILED in
-  # the live sandbox — the surgery still ran and wedged despite the guard being present
-  # (verified: user's cleanup-merged, 2026-07-06). Root cause: `$GIT_ROOT` was empty
-  # there (its `git rev-parse --show-toplevel` resolution returned nothing under the
-  # masked config), so `[[ -d "$GIT_ROOT/.git" ]]` became `[[ -d "/.git" ]]` → false →
-  # the guard did not fire. Git's own `--is-bare-repository` is authoritative and
-  # independent of GIT_ROOT-path resolution; `${GIT_ROOT:-.}` falls back to the CWD (the
-  # workspace) when GIT_ROOT is empty. SKIP unless it returns exactly "true": a normal
-  # clone ("false"), an indeterminate/error (""), or a transiently-wedged git all skip
-  # safely — none of them want bare surgery. A genuine bare repo (CLI dev repo, no `.git`
-  # subdir) returns "true" AND has no `.git` dir, so it correctly proceeds.
+  # ROUND-6 root cause (#5934, operator-CONFIRMED non-bare workspace): the round-5 guard
+  # trusted `git rev-parse --is-bare-repository`, but under the char-device config mask that
+  # command DEGRADES — it (and `--show-toplevel`, → GIT_ROOT="") must read the masked
+  # `.git/config`, and can report a false "true" — so the guard fell through to the surgery
+  # on a NON-bare clone and wedged the config write at the give-up below. Fix: detect non-bare
+  # by a PURE FILESYSTEM fact that never reads the masked config — `git_dir` is a `.git`
+  # DIRECTORY (a normal clone) — and SKIP the surgery there. Only a GENUINELY bare repo
+  # (gitdir IS the root; no `.git` subdir) consults git, and only then can the fail-loud
+  # branch fire.
+  if [[ "$git_dir" == */.git && -d "$git_dir" ]]; then
+    # Effectively NON-BARE → the bare surgery is unneeded and native `git worktree add`
+    # (writing only to .git/worktrees/<id>/, never the masked .git/config) proceeds. If the
+    # config family IS masked, emit a BENIGN diagnostic (mirrored, NOT paged) so telemetry
+    # finally shows the graceful-degrade path fired — it records branch=non-bare-skip.
+    if _config_target_masked "$git_dir/config" || _config_target_masked "$git_dir/config.worktree"; then
+      echo "SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=non-bare-skip branch=non-bare-skip hint=\"masked .git/config on a non-bare clone; bare surgery skipped — native worktree add writes only .git/worktrees/<id>/\""
+    fi
+    return 0
+  fi
+  # git_dir is NOT a `.git` directory → a genuine bare repo (gitdir IS the root) or an
+  # indeterminate resolution. Consult git's authoritative check ONLY now; a non-"true"
+  # verdict (normal clone / indeterminate / wedged) still skips safely.
   local _bare_status
   _bare_status="$(git -C "${GIT_ROOT:-.}" rev-parse --is-bare-repository 2>/dev/null || true)"
-  if [[ -d "$GIT_ROOT/.git" || "$_bare_status" != "true" ]]; then
+  if [[ "$_bare_status" != "true" ]]; then
     return 0
+  fi
+  # GENUINELY bare AND its config is masked → the shared-config write is REQUIRED (prevents
+  # core.bare bleeding into worktrees) but IMPOSSIBLE in-sandbox. Fail LOUD + VISIBLE naming
+  # the host-seed remedy — never ship a core.bare-bleeding worktree. This is the RARE
+  # fallback (the operator's live wedge is the non-bare-skip above); the durable fix is
+  # host-side (pre-seed .git/config before the bwrap mask, #6191/#5934).
+  if _config_target_masked "$git_dir/config"; then
+    echo "SOLEUR_GIT_CONFIG_TARGET_MASKED file=config reason=bare-under-mask branch=bare-fail remedy=host-pre-seed-.git/config-before-bwrap-mask see=#6191,#5934"
+    echo "worktree wedge: bare repo config write impossible under masked .git/config in $git_dir (host-side pre-seed required; see #6191,#5934)"
+    headless_or_stderr error "worktree wedge: bare repo + masked .git/config in $git_dir — host-side pre-seed required (see #6191,#5934)."
+    return 1
   fi
 
   local shared_config="$git_dir/config"
@@ -489,6 +569,9 @@ ensure_bare_config() {
   # onto the per-worktree config instead of the wedged shared config.lock.
   if ! atomic_git_config "$shared_config" core.repositoryformatversion 1 \
      || ! atomic_git_config "$shared_config" extensions.worktreeConfig true; then
+    # Bare stdout echo (D1a) so this fatal give-up reaches the telemetry scanner even under
+    # the headless_or_stderr per-PID logfile sink that hid it from four prior fixes (#5934).
+    echo "worktree wedge: could not apply shared-config prerequisites in $git_dir (see atomic_git_config / SOLEUR_GIT_CONFIG_TARGET_MASKED / SOLEUR_GIT_LOCK_UNREMOVABLE errors above)"
     headless_or_stderr error "worktree wedge: could not apply shared-config prerequisites in $git_dir (see atomic_git_config / SOLEUR_GIT_LOCK_UNREMOVABLE errors above)."
     return 1
   fi
@@ -497,6 +580,7 @@ ensure_bare_config() {
   if git config --file "$shared_config" core.bare &>/dev/null; then
     echo -e "${BLUE}Fixing bare repo config: removing core.bare from shared config...${NC}"
     if ! atomic_git_config "$shared_config" --unset core.bare; then
+      echo "worktree wedge: could not unset core.bare in $shared_config (see errors above)"
       headless_or_stderr error "worktree wedge: could not unset core.bare in $shared_config (see errors above)."
       return 1
     fi
@@ -507,6 +591,7 @@ ensure_bare_config() {
   if git config --file "$shared_config" core.worktree &>/dev/null; then
     echo -e "${BLUE}Fixing bare repo config: removing stale core.worktree from shared config...${NC}"
     if ! atomic_git_config "$shared_config" --unset core.worktree; then
+      echo "worktree wedge: could not unset core.worktree in $shared_config (see errors above)"
       headless_or_stderr error "worktree wedge: could not unset core.worktree in $shared_config (see errors above)."
       return 1
     fi
@@ -519,6 +604,7 @@ ensure_bare_config() {
   current_bare=$(git config --file "$wt_config" core.bare 2>/dev/null || echo "")
   if [[ "$current_bare" != "true" ]]; then
     if ! atomic_git_config "$wt_config" core.bare true; then
+      echo "worktree wedge: could not set core.bare in $wt_config (see errors above)"
       headless_or_stderr error "worktree wedge: could not set core.bare in $wt_config (see errors above)."
       return 1
     fi
