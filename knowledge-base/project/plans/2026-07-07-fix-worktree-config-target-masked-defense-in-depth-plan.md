@@ -304,29 +304,36 @@ File: `plugins/soleur/test/worktree-manager-atomic-config.test.sh` (extend; T20+
 
 ## Acceptance Criteria
 
+> **Scope update (operator, 2026-07-07): D4 CUT** (self-heal of stale
+> `extensions.worktreeConfig`; refuted — the flag is confirmed UNSET on the affected non-bare
+> workspace). Priority reordered: **D3 non-bare guard-repair is THE operator-facing fix**
+> (the workspace is non-bare and the round-5 guard misfired under the mask), then D1
+> observability, D2 pre-check (secondary defense), D5 test refocused on the guard-misfire.
+
 ### Pre-merge (PR)
-- [ ] **AC1** `grep -c 'SOLEUR_GIT_CONFIG_TARGET_MASKED' worktree-manager.sh` ≥ 1 (new sentinel).
-- [ ] **AC2** A `[[ -c "$target" ]]` + `stat -c%m` mountpoint guard exists **before** the
-  `mv -f -- "$tmp" "$target"` line (verified by reading the function; T20 fails on a pre-guard
-  copy of the body).
-- [ ] **AC3** D1(b): `MARKER_RE` matches `SOLEUR_GIT_CONFIG_TARGET_MASKED`,
-  `SOLEUR_FEATURE_PUSH_FAILED`, and `NO_GIT_REPOSITORY`; D1(c): it matches a
-  `[error] worktree wedge:`-prefixed line. The drift-guard test collects and asserts all
-  emitted sentinels (incl. the non-`SOLEUR_GIT_`-prefixed ones).
-- [ ] **AC4** D1(a): a bare `echo "SOLEUR_…"` stdout sentinel is emitted at the
-  `ensure_bare_config` give-up and the `atomic_git_config` rename-failure (not only via
+- [x] **AC1** `grep -c 'SOLEUR_GIT_CONFIG_TARGET_MASKED' worktree-manager.sh` ≥ 1 (new sentinel).
+- [x] **AC2** A `_config_target_masked` (`[[ -c ]]` + `stat -c%m` mountpoint) guard exists BOTH
+  before the native-vs-lockless decision (covering both write paths) AND immediately before the
+  `mv -f -- "$tmp" "$target"` line. (T20 was RED on the pre-guard body — no sentinel.)
+- [x] **AC3** D1(b): `MARKER_RE` matches `SOLEUR_GIT_CONFIG_TARGET_MASKED`,
+  `SOLEUR_GIT_CONFIG_MASK_SKIP`, `SOLEUR_FEATURE_PUSH_FAILED`, and `NO_GIT_REPOSITORY`; D1(c): it
+  matches a `[error] worktree wedge:`-prefixed line. The drift-guard test collects and asserts
+  all emitted sentinels (incl. the non-`SOLEUR_GIT_`-prefixed `NO_GIT_REPOSITORY`).
+- [x] **AC4** D1(a): a bare `echo` stdout sentinel is emitted at all four `ensure_bare_config`
+  give-ups and the `atomic_git_config` masked-target pre-check / rename-failure (not only via
   `headless_or_stderr`).
-- [ ] **AC5** D3: genuinely-bare + masked-target path emits `SOLEUR_GIT_CONFIG_TARGET_MASKED`
-  naming the host-seed remedy and returns non-zero; non-bare/native-add-works path skips the
-  surgery (no false failure). Both branches covered by the PR-body caller-contract note.
-- [ ] **AC6** D4: a stale `extensions.worktreeConfig=true` with a masked `config.worktree`
-  is unset early via `--file`-scoped git (T23 asserts).
-- [ ] **AC7** `bash worktree-manager-atomic-config.test.sh` exits 0 with T20–T23 passing;
-  T22 asserts the observed `config.lock`-masked case still routes around (no false sentinel).
-- [ ] **AC8** `shellcheck` clean on new shell; `git-lock-marker-telemetry.test.ts` +
+- [x] **AC5** D3: genuinely-bare + masked-config path emits `SOLEUR_GIT_CONFIG_TARGET_MASKED
+  reason=bare-under-mask branch=bare-fail` naming the host-seed remedy and returns non-zero;
+  the NON-bare path (the operator's live case) SKIPS the surgery via the `.git`-is-a-directory
+  probe (mask-robust; emits benign `MASK_SKIP`). Both branches covered by the caller-contract note.
+- [x] **AC6** ~~D4 self-heal~~ — **CUT (out of scope; refuted).** Obsoleted by the D4 cut.
+- [x] **AC7** `bash worktree-manager-atomic-config.test.sh` exits 0 with T20–T23 passing
+  (68 pass / 0 fail / 2 privilege-skips); T22 asserts the observed `config.lock`-masked case
+  still routes around (no false sentinel); T23 is the D3 guard-misfire RED→GREEN.
+- [x] **AC8** `shellcheck` clean on new shell; `git-lock-marker-telemetry.test.ts` (21) +
   `tsc --noEmit` green.
-- [ ] **AC9** No edit closes `#5934` or touches `#4826`; PR body uses `Ref #5934` / `Ref #6191`.
-- [ ] **AC10** `decision-challenges.md` carries the corrected-premise entry (for `/ship`).
+- [ ] **AC9** No edit closes `#5934` or touches `#4826`; PR body uses `Ref #5934` / `Ref #6191`. (at ship)
+- [x] **AC10** `decision-challenges.md` carries the corrected-premise entry (for `/ship`).
 
 ### Post-merge (automated)
 - [ ] **AC11** `#5934` carries the scope note and remains OPEN; `#6191` carries the

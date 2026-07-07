@@ -54,3 +54,37 @@ mv: cannot move '.git/config.soleur-tmp.4' to '.git/config': Device or resource 
 signature. After merge, re-run the Concierge canary (#4826) and confirm the
 `SOLEUR_GIT_CONFIG_TARGET_MASKED` event now appears in Better Stack (the fix's whole point is
 that the wedge is no longer zero-when-firing).
+
+## UC-2 — Scope refined mid-implementation from live operator diagnostics
+
+**During implementation the operator supplied two decisive data points about the affected
+workspace, which re-prioritised the deliverables:**
+
+1. **The workspace is CONFIRMED NON-BARE** (`git rev-parse --is-bare-repository` = false,
+   `.git` is a real directory) — yet `ensure_bare_config` still reached its config write and
+   wedged. This proves the **round-5 non-bare guard MISFIRED under the mask**: `git rev-parse
+   --show-toplevel` returns empty (→ `GIT_ROOT=""`) and `--is-bare-repository` degrades because
+   both must read the masked `.git/config`. So the operator-facing fix is **not** "fail loud on
+   bare-under-mask" — it is **making the non-bare guard skip the surgery ROBUSTLY**, via a pure
+   filesystem probe (`git_dir` is a `.git` directory) that never reads the masked config. Then
+   native `git worktree add` (which writes only `.git/worktrees/<id>/`, never `.git/config`)
+   proceeds and succeeds **in-sandbox, with no host-side dependency**. This became **D3, the
+   primary deliverable**; D2 (target-masked pre-check) is retained as a secondary safety net for
+   the rare genuinely-bare case, and D1 makes both paths finally visible.
+
+2. **`extensions.worktreeConfig` is CONFIRMED UNSET** on the workspace → **D4 (self-heal of a
+   stale `extensions.worktreeConfig`) was CUT.** Its write-to-`.git/config` mechanism targets
+   the exact masked/blocked path, so it added risk without addressing the real bug. Removed
+   cleanly (no code, no test). Tracked as a defensive follow-up only if ever observed.
+
+**Marker forensics upgraded:** each marker now records WHICH branch fired —
+`branch=non-bare-skip` (benign `SOLEUR_GIT_CONFIG_MASK_SKIP`, mirrored-not-paged),
+`branch=bare-fail` (`SOLEUR_GIT_CONFIG_TARGET_MASKED`, paged), `branch=target-masked-precheck`
+(the `atomic_git_config` guard) — so telemetry finally shows the exact path taken.
+
+**Local-simulation caveat (documented in the test):** a REAL masked-target inode needs
+`mknod`/`mount --bind` (privileged), unavailable on the unprivileged runner. The portable proxy
+is a symlink→`/dev/null` (a char device by dereference, the exact `_config_target_masked`
+signature) for D2, and `core.bare=true` + empty `GIT_ROOT` to reproduce the D3 guard-misfire
+deterministically. Both give a genuine RED→GREEN (not a vacuous pass); the real-char-device arm
+is gated on `mknod` for CI-root.
