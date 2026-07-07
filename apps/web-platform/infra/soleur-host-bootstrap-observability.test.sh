@@ -520,5 +520,28 @@ else
   no "AC20: /etc/default/soleur-ghcr-read must be chown deploy:deploy AND ci-deploy must unset GHCR_READ_TOKEN after sourcing"
 fi
 
+# ── AC21 (#6090): soleur-host-bootstrap's ghcr_login is baked too (3rd/final GHCR site) ──
+# The seed pull (AC19) + app pull (AC20) bakes weren't enough: soleur-host-bootstrap.sh had a
+# THIRD unhardened `timeout 15 doppler secrets get GHCR_READ_*` login for the inngest-bootstrap
+# image pull. On a cold host it skipped docker login → anonymous inngest pull → /var/lib/inngest
+# never created → webhook.service 226/NAMESPACE → :9000 unbound → peer fan-out degraded. Fix:
+# bootstrap prefers the baked /etc/default/soleur-ghcr-read, hardened doppler fallback.
+if grep -qF '/etc/default/soleur-ghcr-read' "$BOOT"; then
+  ok "AC21: soleur-host-bootstrap ghcr_login prefers the baked /etc/default/soleur-ghcr-read"
+else
+  no "AC21: soleur-host-bootstrap ghcr_login must prefer the baked /etc/default/soleur-ghcr-read"
+fi
+if grep -qE 'until GHCR_USER=\$\(timeout 45 doppler[^)]*GHCR_READ_USER' "$BOOT" \
+   && grep -qE 'until GHCR_TOKEN=\$\(timeout 45 doppler[^)]*GHCR_READ_TOKEN' "$BOOT"; then
+  ok "AC21: soleur-host-bootstrap doppler fallback hardened — timeout 45 + until-retry for both GHCR creds"
+else
+  no "AC21: soleur-host-bootstrap must harden the doppler fallback (timeout 45 + until-retry) for both GHCR creds"
+fi
+if grep -qE 'timeout 15 doppler secrets get GHCR_READ' "$BOOT"; then
+  no "AC21: stale un-hardened 'timeout 15 doppler secrets get GHCR_READ_*' still present in soleur-host-bootstrap"
+else
+  ok "AC21: no stale 'timeout 15 doppler secrets get GHCR_READ_*' in soleur-host-bootstrap"
+fi
+
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]
