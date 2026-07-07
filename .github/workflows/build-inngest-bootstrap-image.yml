@@ -206,7 +206,11 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/cf-tunnel-registry-bridge
         with:
-          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          # DOPPLER_TOKEN_PRD, NOT the generic DOPPLER_TOKEN (#6122 cutover fix): the bridge
+          # reads REGISTRY_PUSH_* + ZOT_PUSH_* from the `prd` root config; DOPPLER_TOKEN is
+          # scoped to the `prd_terraform` branch and cannot read prd root. DOPPLER_TOKEN_PRD is
+          # the prd-scoped token (see reusable-release.yml for the full rationale).
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
           cloudflared-version: "2026.5.0"
           cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
 

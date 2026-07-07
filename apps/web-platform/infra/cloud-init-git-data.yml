@@ -133,7 +133,10 @@ runcmd:
     rm /tmp/doppler.tar.gz
   # Restricted (0600 root) env file with the Doppler service token — NOT written to
   # world-readable /etc/environment (mirrors the web host's /etc/default/webhook-deploy).
-  - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/git-data-doppler
+  # HOME is REQUIRED: cloud-init runcmd runs with no $HOME, and the Doppler CLI aborts with
+  # "Doppler Error: $HOME is not defined" even when DOPPLER_CONFIG_DIR is set — so `doppler run`
+  # below fails and the git-data host never bootstraps (same latent bug fixed for zot in #6122).
+  - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/git-data-doppler
   - chmod 600 /etc/default/git-data-doppler
 
   # --- FRESH LUKS-at-rest volume (Sub-PR 3.D cutover target) --------------------

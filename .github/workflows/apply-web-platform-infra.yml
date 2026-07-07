@@ -97,6 +97,7 @@ on:
           - manual-rerun
           - warm-standby
           - web-2-recreate
+          - inngest-host
 
 concurrency:
   # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
@@ -1325,6 +1326,148 @@ jobs:
             echo ""
             echo "**Dispatch reason:** ${REASON:-n/a}"
             echo "**Pinned image:** ${PINNED_REF:-unresolved}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # #6178 (ADR-100) — provision the dedicated Inngest singleton host. A dispatch-only job
+  # (apply_target=inngest-host) whose -targets are STRIPPED from the per-merge coverage set
+  # (terraform-target-parity.test.ts stripDispatchJobs). PURE CREATE of the net-new host set:
+  # the per-PR CI apply bridges over SSH to the EXISTING web host and cannot provision a brand-
+  # new host (registry/git-data precedent). Cloud-init-only, NO remote-exec → no operator-egress
+  # firewall dependency at apply time (reaches Hetzner's API, not SSH).
+  inngest_host:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-host'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target= filtering. The
+        # inngest set does not consume hcloud_ssh_key.default's file, but var.ssh_key_path
+        # must parse — a throwaway key satisfies it (never consumed by the apply).
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
+            exit 1
+          }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
+            exit 1
+          }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (inngest-host target set)
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # EXACTLY the inngest-host set enumerated in OPERATOR_APPLIED_EXCLUSIONS
+        # (terraform-target-parity.test.ts). Pure create — the destroy-guard below fails
+        # the dispatch on ANY resource delete (a net-new host apply must add, never remove).
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -target='hcloud_server.inngest' \
+              -target='hcloud_volume.inngest_redis' \
+              -target='hcloud_volume_attachment.inngest_redis' \
+              -target='hcloud_server_network.inngest' \
+              -target='hcloud_firewall.inngest' \
+              -target='hcloud_firewall_attachment.inngest' \
+              -target='random_id.inngest_signing_key_dedicated' \
+              -target='random_id.inngest_event_key_dedicated' \
+              -target='random_password.inngest_redis_password_dedicated' \
+              -target='doppler_project.inngest' \
+              -target='doppler_environment.inngest_prd' \
+              -target='doppler_secret.inngest_signing_key_dedicated' \
+              -target='doppler_secret.inngest_event_key_dedicated' \
+              -target='doppler_secret.inngest_redis_password_dedicated' \
+              -target='doppler_service_token.inngest'
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (inngest-host) failed (exit $rc)."
+            exit $rc
+          fi
+          set -e
+          # Additive-only guard (same filter the apply/warm-standby jobs use): a net-new
+          # host provisioning must create, never destroy. Any delete → abort BEFORE apply.
+          counts=$(terraform show -json tfplan | \
+            jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq")
+          resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
+          nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}')."
+            exit 1
+          fi
+          if [[ "$resource_deletes" -gt 0 || "$nested_deletes" -gt 0 ]]; then
+            echo "::error::inngest-host plan shows destructive change(s) (${resource_deletes} resource delete(s) + ${nested_deletes} nested-block removal(s)) — provisioning a brand-new host is additive-only. Aborting."
+            terraform show -no-color tfplan | grep -E 'will be destroyed|Plan:' | head -20 >&2
+            exit 1
+          fi
+          terraform show -no-color tfplan | grep -E '^Plan:' || true
+
+      - name: Terraform apply (inngest-host)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan
+
+      - name: Dispatch summary
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## inngest-host provisioning (ADR-100, #6178)"
+            echo ""
+            echo "**Dispatch reason:** ${REASON:-n/a}"
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"

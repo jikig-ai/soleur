@@ -97,8 +97,15 @@ resource (not a new resource). **Total #6122 resources now 24** (18 host-stack +
   is write-once/empty-on-refresh (#4492→#4494 learning). The operator full apply writes it once; a
   later refresh cannot clobber. (The raw ruling said "no ignore_changes"; that holds for the
   random_password-derived zot secrets but NOT for the write-once CF client_secret.)
-- CI reads `REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET` from Doppler `prd_terraform` at runtime (like
-  `CI_SSH_ACCESS_TOKEN_ID/_SECRET`) — NOT a `github_actions_secret` (condition #2 satisfied).
+- CI reads `REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET` from Doppler `prd` (the ROOT config) at
+  runtime — NOT a `github_actions_secret` (condition #2 satisfied). **Correction (#6122 cutover,
+  2026-07-07):** the raw ruling wrote these to `prd_terraform` "like `CI_SSH_ACCESS_TOKEN`", but
+  the reusable-release.yml zot bridge runs under a `prd`-root-scoped `DOPPLER_TOKEN` that cannot
+  read the `prd_terraform` branch (which holds the terraform creds CI must not see). The first
+  live bridge run failed "REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET missing or empty"; the tokens now
+  live in the `prd` root (inherited by every branch) alongside the `ZOT_PUSH_*` the same bridge
+  already reads there. `CI_SSH_ACCESS_TOKEN` was a false analogy — it runs under a
+  prd_terraform-capable workflow token.
 
 **Observability correction (CTO):** DROP the redundant public `https://<zot-host>/v2/`
 `discoverability_test` — the `betteruptime_heartbeat.registry_prd` push-heartbeat is the single
