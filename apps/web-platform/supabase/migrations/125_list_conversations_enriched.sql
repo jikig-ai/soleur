@@ -15,6 +15,9 @@
 -- index (LIMIT 1 per snippet). Payload drops to O(conversations).
 --
 -- SECURITY MODEL — SECURITY INVOKER (RLS-PRESERVING), NOT DEFINER.
+--   This is the first client-callable, RLS-preserving RPC in the codebase; the
+--   general pattern (INVOKER + never-service_role + correlate-on-RLS-bounded-row)
+--   is recorded in ADR-101.
 --   The two existing conversation-read RPCs (027 sum_user_mtd_cost, 037
 --   find_stuck_active_conversations) are SECURITY DEFINER + service_role-only:
 --   they intentionally BYPASS RLS for server-side aggregation and are never
@@ -114,11 +117,14 @@ as $$
   from public.conversations c
   -- First user message (for the derived title). Correlated on the RLS-bounded
   -- outer conversation; ordered by created_at ASC via idx_messages_conversation_created.
+  -- `m.id` is a deterministic tiebreaker for messages sharing an exact created_at
+  -- timestamp (possible for rapid tool-call bursts) — without it the "first"
+  -- pick is arbitrary-but-nondeterministic across runs.
   left join lateral (
     select m.content
     from public.messages m
     where m.conversation_id = c.id and m.role = 'user'
-    order by m.created_at asc
+    order by m.created_at asc, m.id asc
     limit 1
   ) fu on true
   -- First assistant message (title fallback).
@@ -126,15 +132,16 @@ as $$
     select m.content
     from public.messages m
     where m.conversation_id = c.id and m.role = 'assistant'
-    order by m.created_at asc
+    order by m.created_at asc, m.id asc
     limit 1
   ) fa on true
-  -- Last message overall (for the preview + last-message leader).
+  -- Last message overall (for the preview + last-message leader). DESC tiebreaker
+  -- mirrors the ASC ones so "last" is the deterministic complement of "first".
   left join lateral (
     select m.content, m.leader_id
     from public.messages m
     where m.conversation_id = c.id
-    order by m.created_at desc
+    order by m.created_at desc, m.id desc
     limit 1
   ) lm on true
   where c.repo_url = p_repo_url

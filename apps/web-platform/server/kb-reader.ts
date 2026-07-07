@@ -368,8 +368,13 @@ export async function statKnownPaths(
   kbRoot: string,
   relativePaths: readonly string[],
 ): Promise<Record<string, PathStat>> {
-  const entries = await Promise.all(
-    relativePaths.map(async (rel) => [rel, await statOnePath(kbRoot, rel)] as const),
+  // Bound the open-fd fan-out with the same MAX_CONCURRENT_STAT cap buildTree
+  // uses, so this export stays safe even if a future caller passes a large set
+  // (the current dashboard caller passes ~10 known paths).
+  const entries = await mapWithConcurrency(
+    [...relativePaths],
+    MAX_CONCURRENT_STAT,
+    async (rel) => [rel, await statOnePath(kbRoot, rel)] as const,
   );
   return Object.fromEntries(entries);
 }

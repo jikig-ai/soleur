@@ -389,7 +389,7 @@ export default function DashboardPage() {
   const hasActiveFilter = statusFilter !== null || domainFilter !== null || archiveFilter !== "active";
 
   // ---------------------------------------------------------------------------
-  // Loading skeleton (shown while KB tree loads)
+  // Loading skeleton (shown while foundation status loads)
   // ---------------------------------------------------------------------------
 
   if (kbLoading) {
@@ -404,7 +404,7 @@ export default function DashboardPage() {
   }
 
   // ---------------------------------------------------------------------------
-  // Provisioning state (503 from KB tree)
+  // Provisioning state (503 from foundation status)
   // ---------------------------------------------------------------------------
 
   if (kbError === "provisioning") {

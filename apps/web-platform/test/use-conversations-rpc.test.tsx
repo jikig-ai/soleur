@@ -124,6 +124,9 @@ describe("useConversations — enriched RPC fetch", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
 
+    // A successful enriched fetch must not leave a residual error (guards the
+    // hybrid where a stray messages fan-out sets rows before a later throw).
+    expect(result.current.error).toBeNull();
     const conv = result.current.conversations[0]!;
     // @-mentions stripped by deriveTitle → "Design the brand identity"
     expect(conv.title).toBe("Design the brand identity");

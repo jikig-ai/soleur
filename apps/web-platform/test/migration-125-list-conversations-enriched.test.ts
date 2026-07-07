@@ -42,9 +42,25 @@ describe("migration 125: list_conversations_enriched RPC", () => {
   });
 
   it("is SECURITY INVOKER (RLS-preserving), NOT DEFINER", () => {
-    expect(code).toMatch(/security\s+invoker/i);
+    // Non-vacuous: match `security invoker` bound to the function's language
+    // declaration, NOT the `comment on function … 'Client-callable (SECURITY
+    // INVOKER)'` string literal (which `code` retains — comment-stripping only
+    // removes `--` lines, not SQL string literals).
+    expect(code).toMatch(/language\s+sql\s+security\s+invoker/i);
     // DEFINER would bypass RLS-075 — the exact trap this RPC avoids.
     expect(code).not.toMatch(/security\s+definer/i);
+  });
+
+  it("BODY applies the outer scope predicates (not just declares the params)", () => {
+    // Signature-param presence is necessary but not sufficient: deleting the
+    // WHERE-clause use of workspace_id would pass all hook-level tests (they
+    // mock the RPC) yet bleed workspace-B conversations into the workspace-A
+    // rail — the exact functional bug the workspace_id discriminator prevents.
+    expect(code).toMatch(/c\.repo_url\s*=\s*p_repo_url/i);
+    expect(code).toMatch(/c\.workspace_id\s*=\s*p_workspace_id/i);
+    // The 'general' domain sentinel maps to domain_leader IS NULL in the SQL
+    // (verified end-to-end only against the JS mirror otherwise — pin the SQL).
+    expect(code).toMatch(/p_domain\s*=\s*'general'[\s\S]*domain_leader\s+is\s+null/i);
   });
 
   it("pins search_path = public, pg_temp (defense-in-depth)", () => {
