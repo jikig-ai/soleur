@@ -12,7 +12,7 @@
 //   5. `user` field — a PERSON distinct from the role assignee
 
 // Column vocabulary mirrors the canonical GitHub Project v2 board "Soleur Kanban"
-// (ADR-091): Backlog, Ready, In progress, In review, Blocked, Pending, Done.
+// (ADR-097): Backlog, Ready, In progress, In review, Blocked, Pending, Done.
 // The board has no Cancelled column, so closed issues fold to `done`.
 export type WorkstreamStatus =
   | "backlog"
@@ -249,7 +249,7 @@ export interface BoardIssueInput {
   state_reason: string | null;
   created_at: string;
   updated_at: string;
-  /** Canonical GitHub Project v2 board Status option name (Phase 2, ADR-091) —
+  /** Canonical GitHub Project v2 board Status option name (Phase 2, ADR-097) —
    *  e.g. "In progress"/"Pending". When present AND mappable it OVERRIDES the
    *  label/state derivation below; absent (issue not on the board, or the board
    *  read degraded) falls back to derivation. */
@@ -276,7 +276,7 @@ export const PRIORITY_LABEL_TO_PRIORITY: Record<string, WorkstreamPriority> = {
   "priority/p3-low": "low",
 };
 
-/** Canonical GitHub board Status option name → app column (ADR-091). Keyed
+/** Canonical GitHub board Status option name → app column (ADR-097). Keyed
  *  lowercase so "In progress"/"In Progress" both map. Unknown → null (fall back
  *  to label/state derivation). */
 const BOARD_STATUS_TO_WORKSTREAM: Record<string, WorkstreamStatus> = {
@@ -299,7 +299,7 @@ export function boardStatusToWorkstreamStatus(
 
 /**
  * Derive the kanban column. The canonical GitHub Project v2 board Status WINS
- * when present + mappable (ADR-091); the state+label derivation below is the
+ * when present + mappable (ADR-097); the state+label derivation below is the
  * FALLBACK for issues not on the board (or when the board read degraded). The
  * board has no Cancelled column, so every closed issue folds to `done`
  * (not_planned / duplicate closed issues render under Done).
@@ -397,7 +397,7 @@ export function githubIssueToWorkstreamIssue(
 /** Statuses that read as "closed" — the single source of truth shared by
  *  `isClosed` and the Status filter (arch review D4; mirrors `deriveColumn`'s
  *  closed branch, which now maps every closed GitHub issue to `done` since the
- *  board has no Cancelled column, ADR-091). */
+ *  board has no Cancelled column, ADR-097). */
 export const CLOSED_STATUSES: ReadonlySet<WorkstreamStatus> = new Set([
   "done",
 ]);

@@ -53,7 +53,7 @@ describe("isWorkstreamAttentionItem", () => {
       isWorkstreamAttentionItem(issue({ status: "ready", assigneeRole: "cto" })),
     ).toBe(false);
     // Closed wins even if blocked/ceo (done is resolved; the board has no
-    // Cancelled column, so closed issues fold to `done`, ADR-091):
+    // Cancelled column, so closed issues fold to `done`, ADR-097):
     expect(isWorkstreamAttentionItem(issue({ status: "done" }))).toBe(false);
     expect(
       isWorkstreamAttentionItem(

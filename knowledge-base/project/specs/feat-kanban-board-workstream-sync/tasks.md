@@ -28,7 +28,7 @@ Branch: `feat-kanban-board-workstream-sync` · Lane: cross-domain
 - [ ] 2.7 Tests: board-prefers + fallback
 
 ## ADR / C4 (deliverable, lands with Phase 2)
-- [ ] A.1 Create ADR-091 (re-confirm next free number; main max ADR-074) — board-canonical Decision + Alternatives (webhook-ingress deferred, app-labels rejected, PAT rejected)
+- [ ] A.1 Create ADR-097 (re-confirm next free number; main max ADR-074) — board-canonical Decision + Alternatives (webhook-ingress deferred, app-labels rejected, PAT rejected)
 - [ ] A.2 C4 `api -> github` edge + note Phase-1 write path is github-internal (no cross-boundary edge)
 
 ## Deferred — create tracking issues
