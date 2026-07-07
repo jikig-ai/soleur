@@ -27,16 +27,24 @@
 
 set -uo pipefail
 
-: "${SUPABASE_ACCESS_TOKEN:?SUPABASE_ACCESS_TOKEN must be set}" 2>/dev/null || {
+# Explicit check (NOT `${VAR:?}`): under a non-interactive shell the `:?`
+# expansion aborts with status 1, which the sweeper contract maps to FAIL —
+# the opposite of the intended TRANSIENT. An unprovisioned GitHub secret
+# resolves to "" in the sweeper env, so guard empty as well as unset.
+if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
   echo "TRANSIENT: SUPABASE_ACCESS_TOKEN not set" >&2
   exit 2
-}
+fi
 
 PROJECT_REF="ifsccnjhymdmidffkzhl"
 API="https://api.supabase.com/v1/projects/${PROJECT_REF}/database/query"
 
 # Pre-deploy baseline (7-day window, stats_reset 2026-06-30 12:40 UTC,
-# measured 2026-07-07). See #6168 body.
+# measured 2026-07-07). See #6168 body. This pipeline auto-merges + deploys
+# same-day, so the baseline↔deploy gap is hours (~a few residual vacuums) and
+# the gate behaves as the intended ~7-day soak. A multi-day merge slip would
+# bake more pre-fix vacuums into the delta, biasing the rate UP (never a
+# false-close) and self-correcting over subsequent weekly sweeps.
 BASELINE_ISO="2026-07-07T12:00:00Z"
 declare -A BASELINE=(
   [user_concurrency_slots]=142

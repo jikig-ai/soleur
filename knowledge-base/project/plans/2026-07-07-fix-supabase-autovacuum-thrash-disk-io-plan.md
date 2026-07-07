@@ -38,8 +38,8 @@ After the June 2026 webhook-dedup fix (merged 2026-06-30), statement-attributed 
 | table | schema | live rows | updates/7d | autovacuums/7d | write source |
 |---|---|---|---|---|---|
 | `user_concurrency_slots` | public (ours) | 0 | 6,836 | 142 | `touch_conversation_slot` heartbeat |
-| `mint_rate_window` | public (ours) | 7 | 2,613 (100% HOT) | 50 | runtime JWT mint rate-limiter |
-| `runtime_mint_intent` | public (ours) | 7 | 2,528 (100% HOT) | 49 | runtime JWT mint intent marker |
+| `mint_rate_window` | public (ours) | 7 | 2,616 (100% HOT) | 50 | runtime JWT mint rate-limiter |
+| `runtime_mint_intent` | public (ours) | 7 | 2,532 (100% HOT) | 49 | runtime JWT mint intent marker |
 | `auth.users` | auth (Supabase) | 16 | 11,737 | 108 | sign-in churn |
 | `auth.one_time_tokens` | auth (Supabase) | 5 | ~2.8k ins+del | 53 | OTP lifecycle |
 | `realtime.subscription` | realtime (Supabase) | 0 | ~2.7k ins+del | 48 | Realtime subs |

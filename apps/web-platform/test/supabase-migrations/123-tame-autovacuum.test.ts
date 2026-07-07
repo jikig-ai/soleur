@@ -65,8 +65,11 @@ describe("migration 123_tame_autovacuum_on_tiny_hot_tables (up)", () => {
         expect(v).toBeLessThanOrEqual(2000);
       });
 
-      it("zeroes autovacuum_vacuum_scale_factor", () => {
-        expect(block).toMatch(/autovacuum_vacuum_scale_factor\s*=\s*0\b/i);
+      it("zeroes autovacuum_vacuum_scale_factor (exactly 0, not 0.2)", () => {
+        // Negative lookahead is load-bearing: `\b` would match `0.2` (the
+        // default this migration exists to eliminate), making the assertion
+        // vacuous against exactly the regression it guards.
+        expect(block).toMatch(/autovacuum_vacuum_scale_factor\s*=\s*0(?![.\d])/i);
       });
 
       it("sets autovacuum_analyze_threshold to a value in [500, 2000]", () => {
@@ -77,8 +80,8 @@ describe("migration 123_tame_autovacuum_on_tiny_hot_tables (up)", () => {
         expect(v).toBeLessThanOrEqual(2000);
       });
 
-      it("zeroes autovacuum_analyze_scale_factor", () => {
-        expect(block).toMatch(/autovacuum_analyze_scale_factor\s*=\s*0\b/i);
+      it("zeroes autovacuum_analyze_scale_factor (exactly 0, not 0.1)", () => {
+        expect(block).toMatch(/autovacuum_analyze_scale_factor\s*=\s*0(?![.\d])/i);
       });
 
       it("pins fillfactor = 70", () => {
@@ -86,6 +89,18 @@ describe("migration 123_tame_autovacuum_on_tiny_hot_tables (up)", () => {
       });
     });
   }
+
+  it("alters EXACTLY the three target public tables and no others", () => {
+    // Positive scope-completeness guard: the auth.*/realtime.*/cron.* negative
+    // check below only defends the Supabase-managed direction. This asserts no
+    // stray `ALTER TABLE public.<other> SET (...)` (e.g. a large table like
+    // public.users) slips in — which would waste disk (fillfactor) or defer
+    // vacuum on a table where that is unsafe.
+    const altered = [
+      ...executable.matchAll(/ALTER\s+TABLE\s+public\.(\w+)\s+SET/gi),
+    ].map((m) => m[1].toLowerCase());
+    expect(altered.sort()).toEqual([...TARGET_TABLES].sort());
+  });
 
   it("touches ZERO Supabase-managed tables (auth.* / realtime.* / cron.*)", () => {
     expect(executable).not.toMatch(/ALTER\s+TABLE\s+auth\./i);
