@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import type { ConversationStatus } from "@/lib/types";
 import { buildSupabaseQueryBuilder } from "./mocks/supabase-query-builder";
+import { makeEnrichedListRpc } from "./helpers/mock-supabase";
 
 // Mock Supabase channel
 const mockSubscribe = vi.fn().mockReturnValue({ unsubscribe: vi.fn() });
@@ -70,6 +71,16 @@ vi.mock("@/lib/supabase/client", () => ({
         data: { user: { id: "user-1" } },
         error: null,
       }),
+    },
+    // The list read flows through the list_conversations_enriched RPC
+    // (migration 125), deriving from the current conversation/message builders.
+    rpc: async (name: string, args: Record<string, unknown>) => {
+      const conv = (await conversationBuilder) as { data: unknown[] };
+      const msg = (await messageBuilder) as { data: unknown[] };
+      return makeEnrichedListRpc(
+        (conv.data ?? []) as { id: string }[],
+        (msg.data ?? []) as { conversation_id: string; role: string; content: string; leader_id?: string | null; created_at?: string }[],
+      )(name, args);
     },
     from: (table: string) => {
       if (table === "conversations") {

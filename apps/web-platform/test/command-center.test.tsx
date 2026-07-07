@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SwrTestProvider } from "./helpers/swr-wrapper";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { buildSupabaseQueryBuilder } from "./mocks/supabase-query-builder";
+import { makeEnrichedListRpc } from "./helpers/mock-supabase";
 
 // Mock next/navigation — stable reference prevents useEffect re-fires
 const mockPush = vi.fn();
@@ -133,6 +134,25 @@ function mockFetchWithActiveRepo(treeResponse: {
   );
 }
 
+// The dashboard now derives foundation-card state from
+// /api/dashboard/foundation-status (a { paths: { <kbPath>: {exists,size} } }
+// map) instead of the whole KB tree. Build a 200 response for a set of existing
+// paths (default size 1000 ≥ FOUNDATION_MIN_CONTENT_BYTES = complete).
+function foundationResponse(
+  filePaths: string[],
+  sizes: Record<string, number> = {},
+) {
+  const paths: Record<string, { exists: boolean; size: number }> = {};
+  for (const p of filePaths) {
+    paths[p] = { exists: true, size: sizes[p] ?? 1000 };
+  }
+  return {
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ paths }),
+  };
+}
+
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
@@ -140,6 +160,20 @@ vi.mock("@/lib/supabase/client", () => ({
         data: { user: { id: "user-1" } },
         error: null,
       }),
+    },
+    // The conversation-list read now flows through the list_conversations_enriched
+    // RPC (migration 125): it derives from the current conversation/message
+    // builders' data and applies the archive/status/domain filters the hook
+    // previously issued as chained `.is`/`.not`/`.eq` calls. listRpcCalls
+    // captures the args so the filter assertions can inspect them.
+    rpc: async (name: string, args: Record<string, unknown>) => {
+      listRpcCalls.push({ name, args });
+      const conv = (await conversationBuilder) as { data: unknown[] };
+      const msg = (await messageBuilder) as { data: unknown[] };
+      return makeEnrichedListRpc(
+        (conv.data ?? []) as { id: string }[],
+        (msg.data ?? []) as { conversation_id: string; role: string; content: string; leader_id?: string | null; created_at?: string }[],
+      )(name, args);
     },
     from: (table: string) => {
       if (table === "conversations") return conversationBuilder;
@@ -152,31 +186,27 @@ vi.mock("@/lib/supabase/client", () => ({
   }),
 }));
 
+// Captures every list_conversations_enriched RPC invocation for filter-arg
+// assertions (replaces the old chained-call inspection). Reset per test.
+let listRpcCalls: { name: string; args: Record<string, unknown> }[] = [];
+
 describe("Command Center", () => {
   beforeEach(() => {
     mockPush.mockClear();
     mockChannel.mockClear();
+    listRpcCalls = [];
     conversationBuilder = buildSupabaseQueryBuilder({ data: mockConversations });
     messageBuilder = buildSupabaseQueryBuilder({ data: mockMessages });
 
     // Mock fetch for KB tree — return all foundation files so page shows Command Center
-    globalThis.fetch = mockFetchWithActiveRepo({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          tree: {
-            name: "knowledge-base",
-            type: "directory",
-            children: [
-              { name: "overview", type: "directory", children: [{ name: "vision.md", type: "file", path: "overview/vision.md", size: 1000 }] },
-              { name: "marketing", type: "directory", children: [{ name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 }] },
-              { name: "product", type: "directory", children: [{ name: "business-validation.md", type: "file", path: "product/business-validation.md", size: 1000 }] },
-              { name: "legal", type: "directory", children: [{ name: "privacy-policy.md", type: "file", path: "legal/privacy-policy.md", size: 1000 }] },
-            ],
-          },
-        }),
-    });
+    globalThis.fetch = mockFetchWithActiveRepo(
+      foundationResponse([
+        "overview/vision.md",
+        "marketing/brand-guide.md",
+        "product/business-validation.md",
+        "legal/privacy-policy.md",
+      ]),
+    );
   });
 
   it("shows operational tasks alongside foundation chips when all foundations are complete", async () => {
@@ -204,33 +234,20 @@ describe("Command Center", () => {
     messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
     // Mock KB tree with ALL files (4 foundation + 6 operational)
-    globalThis.fetch = mockFetchWithActiveRepo({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          tree: {
-            name: "knowledge-base",
-            type: "directory",
-            children: [
-              { name: "overview", type: "directory", children: [{ name: "vision.md", type: "file", path: "overview/vision.md", size: 1000 }] },
-              { name: "marketing", type: "directory", children: [
-                { name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 },
-                { name: "launch-plan.md", type: "file", path: "marketing/launch-plan.md", size: 1000 },
-                { name: "distribution-strategy.md", type: "file", path: "marketing/distribution-strategy.md", size: 1000 },
-              ] },
-              { name: "product", type: "directory", children: [
-                { name: "business-validation.md", type: "file", path: "product/business-validation.md", size: 1000 },
-                { name: "pricing-strategy.md", type: "file", path: "product/pricing-strategy.md", size: 1000 },
-                { name: "competitive-analysis.md", type: "file", path: "product/competitive-analysis.md", size: 1000 },
-              ] },
-              { name: "legal", type: "directory", children: [{ name: "privacy-policy.md", type: "file", path: "legal/privacy-policy.md", size: 1000 }] },
-              { name: "operations", type: "directory", children: [{ name: "hiring-plan.md", type: "file", path: "operations/hiring-plan.md", size: 1000 }] },
-              { name: "finance", type: "directory", children: [{ name: "financial-projections.md", type: "file", path: "finance/financial-projections.md", size: 1000 }] },
-            ],
-          },
-        }),
-    });
+    globalThis.fetch = mockFetchWithActiveRepo(
+      foundationResponse([
+        "overview/vision.md",
+        "marketing/brand-guide.md",
+        "marketing/launch-plan.md",
+        "marketing/distribution-strategy.md",
+        "product/business-validation.md",
+        "product/pricing-strategy.md",
+        "product/competitive-analysis.md",
+        "legal/privacy-policy.md",
+        "operations/hiring-plan.md",
+        "finance/financial-projections.md",
+      ]),
+    );
 
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
@@ -337,8 +354,10 @@ describe("Command Center", () => {
       expect(screen.getAllByText("Needs your decision").length).toBeGreaterThanOrEqual(1);
     });
 
-    // The query builder should have been called with .is("archived_at", null) for the default active view
-    expect(conversationBuilder.is).toHaveBeenCalledWith("archived_at", null);
+    // The active view requests the RPC with p_archive="active" (the RPC applies
+    // the archived_at IS NULL filter server-side; the archived row is excluded).
+    expect(listRpcCalls.some((c) => c.args.p_archive === "active")).toBe(true);
+    expect(screen.queryByText(/conv-archived/)).toBeNull();
   });
 
   it("shows Active and Archived toggle buttons in filter bar", async () => {
@@ -363,14 +382,16 @@ describe("Command Center", () => {
       expect(screen.getByRole("button", { name: "Archived" })).toBeInTheDocument();
     });
 
-    // Reset the mock to track the new query
+    // Reset to track the new query
     conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
+    listRpcCalls = [];
 
     fireEvent.click(screen.getByRole("button", { name: "Archived" }));
 
-    // After clicking, the hook should refetch with .not("archived_at", "is", null)
+    // After clicking, the hook refetches with p_archive="archived" (the RPC
+    // applies the archived_at IS NOT NULL filter server-side).
     await waitFor(() => {
-      expect(conversationBuilder.not).toHaveBeenCalledWith("archived_at", "is", null);
+      expect(listRpcCalls.some((c) => c.args.p_archive === "archived")).toBe(true);
     });
   });
 
@@ -378,23 +399,19 @@ describe("Command Center", () => {
     conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
     messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
-    globalThis.fetch = mockFetchWithActiveRepo({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          tree: {
-            name: "knowledge-base",
-            type: "directory",
-            children: [
-              { name: "overview", type: "directory", children: [{ name: "vision.md", type: "file", path: "overview/vision.md", size: 200 }] },
-              { name: "marketing", type: "directory", children: [{ name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 }] },
-              { name: "product", type: "directory", children: [{ name: "business-validation.md", type: "file", path: "product/business-validation.md", size: 1000 }] },
-              { name: "legal", type: "directory", children: [{ name: "privacy-policy.md", type: "file", path: "legal/privacy-policy.md", size: 1000 }] },
-            ],
-          },
-        }),
-    });
+    globalThis.fetch = mockFetchWithActiveRepo(
+      // vision.md is a 200-byte stub (< FOUNDATION_MIN_CONTENT_BYTES) → Vision
+      // incomplete; the other three are complete.
+      foundationResponse(
+        [
+          "overview/vision.md",
+          "marketing/brand-guide.md",
+          "product/business-validation.md",
+          "legal/privacy-policy.md",
+        ],
+        { "overview/vision.md": 200 },
+      ),
+    );
 
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
@@ -440,21 +457,10 @@ describe("Command Center", () => {
       conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
       messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
-      // KB tree without vision.md
-      globalThis.fetch = mockFetchWithActiveRepo({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            tree: {
-              name: "knowledge-base",
-              type: "directory",
-              children: [
-                { name: "marketing", type: "directory", children: [{ name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 }] },
-              ],
-            },
-          }),
-      });
+      // Foundation status without vision.md
+      globalThis.fetch = mockFetchWithActiveRepo(
+        foundationResponse(["marketing/brand-guide.md"]),
+      );
     });
 
     it("renders the first-run input and submit button at equal min-height", async () => {
