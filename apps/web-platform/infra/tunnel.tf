@@ -44,10 +44,19 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
     # #6122 (ADR-096) — registry PUSH ingress. The web host's cloudflared (already a
     # 10.0.1.0/24 member) proxies to the private-net zot host, so the registry host needs
     # NO cloudflared of its own. CI runs `cloudflared access tcp --hostname registry.<base>`
-    # → this rule → http://10.0.1.30:5000 (zot). First-match; MUST stay above the 404.
+    # → this rule → tcp://10.0.1.30:5000 (zot). First-match; MUST stay above the 404.
+    #
+    # `tcp://`, NOT `http://` (#6122 cutover fix): `cloudflared access tcp` bridges a RAW TCP
+    # stream over a WebSocket. With an `http://` service the origin cloudflared HTTP-proxies the
+    # WS-upgrade to zot, which doesn't speak it → the client dies "websocket: bad handshake"
+    # (the exact symptom the first live push runs hit). The sibling SSH bridge works precisely
+    # because it uses a raw-TCP service type (`ssh://localhost:22`); `tcp://` is the generic
+    # form for zot's plain-HTTP registry — crane/docker then speak HTTP over the raw forward
+    # (127.0.0.1:5000 is auto-insecure to docker). The CF Access app + service-token policy are
+    # unchanged (identical shape to the working ssh app); only the ingress transport was wrong.
     ingress_rule {
       hostname = "registry.${var.app_domain_base}"
-      service  = "http://${local.registry_endpoint}"
+      service  = "tcp://${local.registry_endpoint}"
     }
     # Catch-all rule (required by Cloudflare)
     ingress_rule {
