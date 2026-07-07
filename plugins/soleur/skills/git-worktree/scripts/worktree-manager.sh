@@ -488,13 +488,26 @@ ensure_bare_config() {
   if [[ ! -d "$git_dir" ]]; then
     git_dir="$GIT_ROOT"
   fi
-  # Mask-robust root fallback (#5934 D3). Under the Concierge char-device config mask,
-  # GIT_ROOT can resolve EMPTY (`git rev-parse --show-toplevel` returns nothing), which
-  # collapses git_dir to "" and misdirects every path below (the shared_config becomes
-  # "/config"). create_worktree runs from the workspace root, so when GIT_ROOT is empty and
-  # $PWD is a normal clone, recover git_dir from $PWD/.git — a pure filesystem fact that does
-  # NOT depend on reading the masked config.
-  if [[ -z "$GIT_ROOT" && -d "$PWD/.git" ]]; then
+  # Mask-robust root fallback (#5934 D3 follow-up). Under the Concierge char-device config
+  # mask, GIT_ROOT can resolve two ways, BOTH of which misdirect git_dir: it may resolve
+  # EMPTY (`--show-toplevel` returns nothing → git_dir collapses to "", shared_config becomes
+  # "/config"); or, because `--is-bare-repository` DEGRADES to a false "true" at init, the top
+  # of this script recomputes GIT_ROOT from `--absolute-git-dir`/`--git-common-dir` to the
+  # RELATIVE string ".git" (non-empty → git_dir collapses to ".git", which has NO slash, so the
+  # line-532 `*/.git` non-bare skip cannot match → the bare surgery misfires and wedges,
+  # telemetry branch=target-masked-precheck/bare-fail). The predecessor D3 fix (merged
+  # 2026-07-07) gated this fallback on `-z "$GIT_ROOT"`, so it caught only the EMPTY case and
+  # MISSED the relative-".git" case. The mask-proof invariant: a corrupted GIT_ROOT is ALWAYS
+  # non-absolute (empty or a relative ".git"), while a LEGITIMATE GIT_ROOT — bare or non-bare —
+  # is always an absolute path. create_worktree runs from the workspace root, so recover git_dir
+  # from the ABSOLUTE $PWD/.git whenever GIT_ROOT is non-absolute (a pure filesystem fact that
+  # does NOT read the masked config), so the line-532 `*/.git` skip fires for BOTH the empty and
+  # the relative-".git" cases. Gating on `$GIT_ROOT != /*` (not unconditional) preserves the
+  # genuine-bare path: a real bare repo carries an ABSOLUTE GIT_ROOT → fallback stays inert →
+  # its surgery still runs even if the invoking CWD happens to be an unrelated non-bare checkout.
+  # Genuine bare repos also have no `.git` subdir and linked worktrees carry `.git` as a FILE
+  # (both `-d` false), so the fallback also stays inert there when GIT_ROOT is legitimately set.
+  if [[ "$GIT_ROOT" != /* && -d "$PWD/.git" ]]; then
     git_dir="$PWD/.git"
   fi
 
