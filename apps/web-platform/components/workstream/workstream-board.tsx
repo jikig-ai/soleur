@@ -280,7 +280,7 @@ export function WorkstreamBoard() {
             )}
             {isValidating ? "Refreshing…" : "Refresh"}
           </button>
-          <GoldButton onClick={() => setNewOpen(true)}>+ New Issue</GoldButton>
+          <GoldButton onClick={() => setNewOpen(true)} data-tour-id="action:new-issue">+ New Issue</GoldButton>
         </div>
       </div>
       {refreshFailed ? (
