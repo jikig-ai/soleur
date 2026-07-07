@@ -60,42 +60,54 @@ resource "random_password" "zot_push" {
   special = false
 }
 
-# --- Host-scoped secrets: the DEDICATED `prd_registry` config (least-privilege) --------
-# The registry host builds its htpasswd from BOTH tokens at boot. It reads them via a
-# read-only service token scoped to `prd_registry` — NOT the full `prd` var.doppler_token.
-# Least-privilege (mirrors git-data-luks.tf `prd_git_data`): a pull-only host on a private
-# net is a distinct attack surface and must NOT carry the full-prd token (SUPABASE_SERVICE_ROLE,
-# GIT_* keys, PROXY_TLS_*). Doppler tokens are config-scoped, so isolation requires a
-# separate config — hence these two secrets are DUPLICATED from the `prd` client copies below.
+# --- Host-scoped boot credential: the ISOLATED `soleur-registry` project ---------------
+# The registry host builds its htpasswd from BOTH tokens at boot, reading them via a
+# read-only service token. TRUE isolation requires a boundary that does NOT share the `prd`
+# root: a Doppler *branch config* under `prd` (as the original design used) does NOT isolate —
+# every config in an environment resolves that environment's ROOT config as its base, so a
+# token "scoped" to a `prd` branch config reads the FULL prd secret set (SUPABASE_SERVICE_ROLE_KEY,
+# GIT_* keys, PROXY_TLS_* — all 116). Empirically verified (#6122). So the host credential
+# lives in a DEDICATED project `soleur-registry` whose own `prd` ROOT config holds ONLY these
+# two ZOT tokens; a read token scoped to it resolves exactly two secrets and nothing else.
+# This DEPARTS FROM — does not mirror — the `prd_git_data` / `prd_kb_drift_walker` branch-config
+# pattern, which has the identical non-isolation bug (audit + remediation tracked in #6167).
+# (A standalone *environment* in `soleur` was rejected: the project is at the 4-environment
+# tier cap — dev/prd/ci/cli — so a 5th env is impossible without a Doppler Team-plan upgrade.)
 #
-# OPERATOR NOTE (mirrors git-data-luks.tf / kb-drift.tf): the `prd_registry` config must
-# exist in the `prd` environment BEFORE `terraform apply`. The Doppler provider does not
-# manage the operator's environment+configs, so create it once via the dashboard (Project →
-# soleur → New config under `prd`, name = "prd_registry") — a documented initial-provisioning
-# runbook precondition. Rotate via `terraform apply -replace=random_password.zot_pull`.
+# PROVISIONING: `doppler_project.registry` is TF-created in the operator's full apply
+# (var.doppler_token_tf is a workplace-scope personal token; provider create-project scope is
+# verified at apply). FALLBACK if project-create is denied at apply: create the project once
+# via the dashboard (New PROJECT `soleur-registry` — NOT a config under `prd`), TF then managing
+# only the two secrets + the token inside it — identical isolation, one dashboard step. Rotate
+# via `terraform apply -replace=random_password.zot_pull`.
+resource "doppler_project" "registry" {
+  name        = "soleur-registry"
+  description = "Isolated boot-credential project for the zot registry host (#6122, ADR-096) — its `prd` root config holds ONLY the two ZOT htpasswd tokens; cross-project isolation from soleur/prd (no shared root-secret resolution path)."
+}
+
 resource "doppler_secret" "zot_pull_token_registry" {
-  project    = "soleur"
-  config     = "prd_registry"
+  project    = doppler_project.registry.name
+  config     = "prd"
   name       = "ZOT_PULL_TOKEN"
   value      = random_password.zot_pull.result
   visibility = "masked"
 }
 
 resource "doppler_secret" "zot_push_token_registry" {
-  project    = "soleur"
-  config     = "prd_registry"
+  project    = doppler_project.registry.name
+  config     = "prd"
   name       = "ZOT_PUSH_TOKEN"
   value      = random_password.zot_push.result
   visibility = "masked"
 }
 
-# Read-only service token scoped to `prd_registry` (only the two ZOT tokens). Handed to
-# the registry host cloud-init in place of the full-prd var.doppler_token. `.key` is
-# Computed/write-once (same handling as doppler_service_token.git_data); rotate via
-# `terraform apply -replace=doppler_service_token.registry`.
+# Read-only service token scoped to the isolated `soleur-registry` project's `prd` ROOT config
+# (only the two ZOT tokens). Handed to the registry host cloud-init in place of the full-prd
+# var.doppler_token. `.key` is Computed/write-once (same handling as doppler_service_token.git_data);
+# rotate via `terraform apply -replace=doppler_service_token.registry`.
 resource "doppler_service_token" "registry" {
-  project = "soleur"
-  config  = "prd_registry"
+  project = doppler_project.registry.name
+  config  = "prd"
   name    = "zot-registry-boot"
   access  = "read"
 }
