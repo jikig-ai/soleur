@@ -31,6 +31,14 @@ A cross-cutting third cost compounds both: **`middleware.ts` runs 3–4 sequenti
 
 Phases 1–2 directly answer the two reported symptoms and are the primary shipping unit. Phases 3–4 are independently valuable; if the combined PR is too large or Phase 3's auth risk is high, they split to tracked follow-ups (see Deferred).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-07
+**Key additions from deepen-plan:**
+1. **Precedent-diff (SECURITY model) — decisive.** Both existing conversation-read RPCs (`027_mtd_cost_aggregate`, `037_stuck_active_finder_rpc`) are `SECURITY DEFINER` + `SET search_path` + **service_role-only** (REVOKE from `authenticated`/`anon`) — they intentionally *bypass* RLS for server-side aggregation. There is **no precedent for a client-callable conversation-read RPC.** This confirms `SECURITY INVOKER` (RLS-preserving, GRANT EXECUTE to `authenticated`) is the correct choice here, and that copying the DEFINER precedent would be the *dangerous* path (it would bypass RLS-075 and force re-implementing tenant scope in the WHERE clause). See Phase 1 Research Insights + Architecture Decision.
+2. Hard gates verified: `## User-Brand Impact` + `## Observability` present and non-placeholder; no PAT-shaped variables; no downtime/hot-table-lock trigger (migration is `CREATE FUNCTION` + plain `CREATE INDEX` only); no new UI surface (no `.pen` required).
+3. data-integrity-guardian review of the RPC isolation design folded into Risks (below).
+
 ## Research Reconciliation — Description vs. Codebase
 
 No spec/brainstorm preceded this plan. The user description was validated against first-hand code reads + two research agents; findings **confirm and sharpen** the description.
@@ -65,6 +73,31 @@ No spec/brainstorm preceded this plan. The user description was validated agains
 - Rewrite `use-conversations.ts` `fetchConversations` to call `supabase.rpc("list_conversations_enriched", {...})` in place of the two `.from()` queries. Feed the returned snippets into the **unchanged** `deriveTitle`/`derivePreview`/`deriveRailTitle` logic (single source of truth for title semantics — no SQL title logic). The `messages`-array `.filter()` derivation collapses to per-row snippet reads.
 - **Preserve invariants:** the RPC still returns/derives `workspaceId` + `repoUrl` so the realtime `own`/`shared` channel subscriptions and `shouldDropForScope` stay **scope-equivalent** to the fetch (learnings `2026-06-16-realtime-event-guard-must-equal-fetch-query-scope.md` + `2026-06-16-realtime-connect-race-recover-via-scope-resolve-backfill.md`). Do NOT alter `shouldDropForScope`, the scope-resolve backfill, or the `CONVERSATION_CREATED_EVENT` retry loop. `.down.sql` drops the function + index.
 - Test-mock sweep (`2026-04-22-scope-by-new-column-audit-every-query-not-just-the-helper.md` + constitution): grep every `createQueryBuilder`/supabase mock for the conversations/messages chains; add `.rpc()` support (recursive chain) so the mocks don't silently drop it.
+
+#### Phase 1 — Research Insights (precedent-diff, Phase 4.4)
+
+**Precedent (git grep over `supabase/migrations/*.sql`):**
+- `027_mtd_cost_aggregate.sql:46-69` — `LANGUAGE sql SECURITY DEFINER SET search_path = public`, then `REVOKE EXECUTE … FROM PUBLIC/authenticated/anon` (service_role-only aggregation over `conversations`).
+- `037_stuck_active_finder_rpc.sql:46-64` — `language sql security definer set search_path = public, pg_temp`, `revoke all … from public; grant execute … to service_role` (RLS-bypassing cross-user scan).
+
+**Divergence + justification:** those are server-side, RLS-*bypassing*, service_role-only. `list_conversations_enriched` is **client-invoked with the user JWT** and must **preserve** tenant scope, so it diverges deliberately:
+- `SECURITY INVOKER` (not DEFINER) → RLS-075 `conversations_owner_select`/`conversations_shared_select` + messages RLS (059/075) bound the result exactly as today's direct client queries do. The client already reads both tables directly under these policies, so the `authenticated` role has the required SELECT and the LATERAL messages read is RLS-reachable.
+- `GRANT EXECUTE ON FUNCTION list_conversations_enriched(...) TO authenticated;` (the inverse of the precedents' REVOKE-all) — because this one is meant to be called by the browser client.
+- If (and only if) data-integrity review shows INVOKER cannot reach a needed row, escalate to DEFINER **with** `SET search_path = public, pg_temp` (`cq-pg-security-definer-search-path-pin-pg-temp`), an explicit tenant-scope WHERE clause reproducing RLS, REVOKE-all + a narrow GRANT, **and an ADR** — matching the precedent's hardening. This is the higher-risk path; default stays INVOKER.
+
+**Novelty flag:** no precedent for a client-callable conversation-read RPC → reviewers (data-integrity-guardian, security-sentinel) must scrutinize RLS-reachability of the LATERAL snippet reads under INVOKER and confirm a set-returning SQL function does not skip row policies.
+
+#### Research Insights — Phase 1 (precedent-diff, deepen-plan)
+
+**Precedent-diff gate (SECURITY mode).** `git grep` for existing RPCs reading `conversations`/`messages` found two precedents, both **`SECURITY DEFINER` + `SET search_path` + service_role-only** (REVOKE from `authenticated`/`anon`):
+- `027_mtd_cost_aggregate.sql:42-69` — `sum_user_mtd_cost` — `SECURITY DEFINER`, `SET search_path = public`, `REVOKE EXECUTE … FROM PUBLIC, authenticated, anon` (server-invoked cost aggregation).
+- `037_stuck_active_finder_rpc.sql:43-64` — `find_stuck_active_conversations` — `security definer`, `set search_path = public, pg_temp`, `grant execute … to service_role` only (cross-user maintenance scan).
+
+**Divergence + resolution.** Both precedents are DEFINER *because they intentionally bypass RLS* for server-side aggregation/maintenance and are never callable by the browser. This plan's RPC is the opposite: **client-callable with the user JWT**, and must *preserve* RLS. There is **no precedent for a client-callable conversation-read RPC** (novel shape — flag for reviewer scrutiny). Therefore:
+- Use **`SECURITY INVOKER`** (the function runs as the caller → RLS-075 `conversations_owner_select`/`conversations_shared_select` and the `messages` RLS bound the result exactly as the current direct client queries do). Mimicking the DEFINER precedent here would **bypass 075** and force re-implementing tenant scope in the WHERE clause — strictly higher isolation risk, and would require an ADR + `search_path` pin.
+- **GRANT hygiene inverts the precedent:** `GRANT EXECUTE ON FUNCTION list_conversations_enriched(...) TO authenticated;` (NOT the DEFINER precedents' `REVOKE … FROM authenticated`). Even under INVOKER, pin `SET search_path = public, pg_temp` (defense-in-depth; matches 037).
+- **RLS-reachability confirmation:** the client already reads `messages` directly today (`use-conversations.ts:277` Query 2 under the user JWT), so the LATERAL snippet subqueries are RLS-reachable under INVOKER — no DEFINER escalation needed. (data-integrity-guardian to confirm LATERAL/SRF does not skip RLS.)
+- Keep the app-level `.eq("repo_url")` + `.eq("workspace_id")` filters *inside* the RPC as defense-in-depth atop RLS (they are the same discriminator the current query + realtime guard use; do not drop them).
 
 ### Phase 2 — De-block + de-over-fetch the dashboard render (HIGH)
 - Add `app/api/dashboard/foundation-status/route.ts` (HTTP-only exports per `cq-nextjs-route-files-http-only-exports`) returning `{ paths: { "<kbPath>": { exists, size } } }` for **only** the `FOUNDATION_PATHS`, `OPERATIONAL_TASKS`, and `overview/vision.md` set — a targeted stat of known paths via the existing kb-reader access resolution, **not** `buildTree()`. Wrap with `withUserRateLimit`. Mirror failures to Sentry via `reportSilentFallback` (`cq-silent-fallback-must-mirror-to-sentry`).
@@ -197,4 +230,5 @@ Touches API routes + a migration reading message content, so the gate applies. A
 - A plan whose `## User-Brand Impact` section is empty or placeholder fails `deepen-plan` Phase 4.6 — this one is filled (threshold = single-user incident).
 - Do **not** widen `shouldDropForScope` to "fix" any row that appears/disappears — it is the F3 cross-workspace containment invariant; the scope-resolve backfill is the sanctioned recovery.
 - Verify the rail predicate against **existing** indexes (`idx_conversations_user_repo`, `idx_conversations_active_unarchived`) before adding a new one — avoid a redundant index.
-- Confirm the `messages` lateral snippets read is RLS-reachable under INVOKER before assuming DEFINER; DEFINER changes the trust boundary and the whole review posture (ADR + search_path pin).
+- Confirm the `messages` lateral snippets read is RLS-reachable under INVOKER before assuming DEFINER; DEFINER changes the trust boundary and the whole review posture (ADR + search_path pin). **Verified RLS anchors (deepen-plan):** `conversations` → `conversations_owner_select`/`conversations_shared_select` (075:55-60, `FOR SELECT TO authenticated`); `messages` → `messages_workspace_member_select` (059:102-104, `USING (public.is_workspace_member(workspace_id, auth.uid()))`). Under INVOKER both apply to the RPC body, so a cross-workspace conversation row or message snippet cannot leak. The `is_workspace_member`-bound messages policy is the load-bearing isolation anchor for the LATERAL read.
+- **SQL set-returning + RLS:** a `LANGUAGE sql SECURITY INVOKER` set-returning function applies the caller's row policies to every table it reads (RLS is not skipped for INVOKER). deepen-plan review must still confirm no `SECURITY DEFINER` helper is transitively called inside the body that would re-open the boundary.
