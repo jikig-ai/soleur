@@ -20,11 +20,11 @@ Legend: [x] done+committed · [~] partial · [ ] todo.
   - [x] 1.1.1 Host-local **nftables** scoping :8288/:8289 to web-host private IPs (drop .20/.30) — the cloud firewall is a no-op intra-subnet (SEC-H1/H2); verify :8288 GraphQL auth; bind :8289 loopback if Connect unused. (The `hcloud_firewall.web` rule does NOT scope /api/inngest — signature-verify is the boundary.)
   - [x] 1.1.2 New vars inngest_server_type/inngest_redis_volume_size (defaulted); document no-ignore_changes[user_data] = maintenance-window-only force-replace
   - [x] 1.1.3 Rotate INNGEST_SIGNING_KEY/INNGEST_EVENT_KEY for the new boundary (do NOT reuse co-located keys) — SEC-H3
-- [~] 1.2 `cloud-init-inngest.yml`: bake GHCR creds; extract+run inngest-bootstrap.sh; Redis on volume; heartbeat; Vector; < 32KB [PARTIAL — R1: Vector arm64 SHA + doppler-project cascade to heartbeat/vector/redis units remain]
-  - [~] 1.2.1 Template `--sdk-url` in inngest-bootstrap.sh:339 (cross-consumer sweep: web + Vector; preserve web behavior pre-Phase-3) [server unit done+tested; heartbeat/vector/redis units remain — R1]
+- [x] 1.2 `cloud-init-inngest.yml`: bake GHCR creds; extract+run inngest-bootstrap.sh; Redis on volume; heartbeat; < 32KB [R1 doppler-project cascade done, commit 5044a505d; Vector DEFERRED on arm64 → tracked follow-up]
+  - [x] 1.2.1 Template `--sdk-url` in inngest-bootstrap.sh:339 (cross-consumer sweep: web + Vector; preserve web behavior pre-Phase-3) [server + heartbeat + redis units templated + tested — R1 done, commit 5044a505d]
 - [x] 1.3 Dark state = distinct non-prod Postgres backend (drop SQLite fail-safe); provision the non-prod DB before the host
-- [~] 1.4 Secrets on a separate Doppler PROJECT (not a prd branch config); explicitly provision INNGEST_POSTGRES_URI + keys + Redis pw [core 3 secrets + project + token done; heartbeat/betterstack secrets remain — R1]
-- [ ] 1.5 Dedicated `apply_target=inngest-host` dispatch job (NOT in per-merge -target set)
+- [x] 1.4 Secrets on a separate Doppler PROJECT (not a prd branch config); explicitly provision INNGEST_POSTGRES_URI + keys + Redis pw [core 3 secrets + project + token + heartbeat URL done — R1, commit 5044a505d; BETTERSTACK_LOGS_TOKEN rides the deferred Vector]
+- [x] 1.5 Dedicated `apply_target=inngest-host` dispatch job (NOT in per-merge -target set) [done — commit 792826950; parity exclusions + inngest-host.test.sh drift guard]
 
 ## Phase 2 — Cutover (operator; one gated `op=execute`; low-traffic window; heartbeat muted)
 

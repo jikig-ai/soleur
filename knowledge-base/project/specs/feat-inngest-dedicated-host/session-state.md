@@ -1,5 +1,15 @@
 # Session state — feat-inngest-dedicated-host (#6178)
 
+> **UPDATE 2026-07-07 (later):** R1 (commit 5044a505d) + R2 (commit 792826950) are DONE —
+> **Phase 1 is COMPLETE.** The doppler-project isolation cascade (server/heartbeat/redis units
+> all target soleur-inngest; INNGEST_HEARTBEAT_URL provisioned there; self-check regex updated),
+> the apply_target=inngest-host dispatch job, terraform-target-parity exclusions, and the
+> inngest-host.test.sh drift guard all landed green (terraform validate + parity 40/0 + drift 10/0 +
+> inngest.test.sh). The R1/R2 sections below are now historical. **Vector is DEFERRED on the arm64
+> host** (a tracked follow-up — file at ship: arm64 Vector binary + BETTERSTACK_LOGS_TOKEN into
+> soleur-inngest). Remaining is post-merge only: Phase 2 operator cutover + Phase 3 soak-gated
+> decommission. Next: /review → /ship (Ref #6178, not Closes).
+
 Last updated: 2026-07-07. Branch `feat-inngest-dedicated-host`; worktree
 `.worktrees/feat-inngest-dedicated-host/`. PR #6180. Rebased onto origin/main at session start (was 4 behind).
 
