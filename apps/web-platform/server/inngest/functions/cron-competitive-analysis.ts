@@ -60,6 +60,7 @@ import {
   mintInstallationToken,
   deferIfTier2Cron,
   digestIssueExistsForDate,
+  injectRunDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
@@ -138,7 +139,7 @@ MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP
 
 Run /soleur:competitive-analysis --tiers 0,3 on this repository.
 After your analysis is complete, create a GitHub issue titled
-"[Scheduled] Competitive Analysis - <today's date in YYYY-MM-DD format>"
+"[Scheduled] Competitive Analysis - {{RUN_DATE}}"
 with the label "scheduled-competitive-analysis" summarizing your findings.
 
 PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
@@ -313,7 +314,7 @@ export async function cronCompetitiveAnalysisHandler({
             spawnCwd: spawnCwd!,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
-            prompt: COMPETITIVE_ANALYSIS_PROMPT,
+            prompt: injectRunDate(COMPETITIVE_ANALYSIS_PROMPT, runStartedAt),
             maxTurnDurationMs: MAX_TURN_DURATION_MS,
             cronName: "cron-competitive-analysis",
             buildSpawnEnv,

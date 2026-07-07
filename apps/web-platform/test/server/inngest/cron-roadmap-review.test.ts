@@ -123,8 +123,9 @@ describe("ROADMAP_REVIEW_PROMPT — anchor strings (regression-detection)", () =
 // digest (the monitor's check-in artifact). Same-day manual+cron duplicates are
 // handled code-side by digestIssueExistsForDate BEFORE the eval spawns. These
 // strings must stay absent from cron-roadmap-review.ts — scoped to THIS file
-// only, since _cron-shared.ts / cron-community-monitor.ts legitimately still
-// contain DEDUP-RULE / comment-and-exit language.
+// only, since _cron-shared.ts legitimately still contains dedup-related
+// language. (cron-community-monitor.ts's prompt-level DEDUP RULE was also
+// removed in #6143.)
 describe("output-contract fix — 6-day DEDUP RULE removed (regression guard)", () => {
   it.each([
     ["DEDUP RULE", "removed prompt-level dedup keyword"],

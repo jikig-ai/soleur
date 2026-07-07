@@ -25,6 +25,7 @@ import {
   mintInstallationToken,
   deferIfTier2Cron,
   digestIssueExistsForDate,
+  injectRunDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
@@ -84,7 +85,7 @@ const ARCHITECTURE_DIAGRAM_SYNC_PROMPT = `IMPORTANT: This is an automated CI wor
 
 MILESTONE RULE: Every gh issue create command must include --milestone. Use --milestone "Post-MVP / Later" for operational issues.
 
-Compute today's date yourself in YYYY-MM-DD format and use that literal value as <today> throughout. Do NOT use a shell command substitution to obtain the date — the containment hook denies command substitution.
+Compute today's date yourself in YYYY-MM-DD format and use that literal value as <today> for the diagram \`last-verified\` comments in Step 3. Do NOT use a shell command substitution to obtain the date — the containment hook denies command substitution. The Step 4 summary-issue title is already dated by the platform — use it verbatim, do NOT substitute <today> into it.
 
 Your job is to audit the C4 architecture diagrams stored in knowledge-base/engineering/architecture/diagrams/ and update any that have drifted from the current state of the codebase.
 
@@ -104,7 +105,7 @@ Step 3: Update stale diagrams
 For each diagram that is out of date, edit the .c4 source file directly to bring it in sync with the current codebase. Preserve the existing style and DSL conventions. Do NOT invent speculative components — only add or remove what the code clearly confirms. After each edit, leave a short comment in the diagram noting the date it was last verified: // last-verified: <today>
 
 Step 4: Record a summary issue
-After all diagrams are reviewed, create a single GitHub issue titled: "${SCHEDULED_ISSUE_TITLE_PREFIX} <today>"
+After all diagrams are reviewed, create a single GitHub issue titled: "${SCHEDULED_ISSUE_TITLE_PREFIX} {{RUN_DATE}}"
 Labels: scheduled-architecture-diagram-sync
 Milestone: Post-MVP / Later
 Body: List each diagram file, whether it was up-to-date, and any changes made. If no drift was found, note that explicitly.
@@ -252,7 +253,7 @@ export async function cronArchitectureDiagramSyncHandler({
             spawnCwd: spawnCwd!,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
-            prompt: ARCHITECTURE_DIAGRAM_SYNC_PROMPT,
+            prompt: injectRunDate(ARCHITECTURE_DIAGRAM_SYNC_PROMPT, runStartedAt),
             maxTurnDurationMs: MAX_TURN_DURATION_MS,
             cronName: "cron-architecture-diagram-sync",
             buildSpawnEnv,
