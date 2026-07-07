@@ -116,7 +116,6 @@ const NAV_ICONS: Record<string, (props: { className?: string }) => React.JSX.Ele
   "/dashboard/workstream": KanbanIcon,
   "/dashboard/kb": BookIcon,
   "/dashboard/routines": RepeatIcon,
-  "/dashboard/releases": RocketIcon,
   "/dashboard/admin/analytics": ChartIcon,
 };
 
@@ -416,9 +415,7 @@ export default function DashboardLayout({
           <>
             {/* Navigation */}
             <nav className={`flex-1 space-y-1 pt-3 ${collapsed ? "px-1" : "px-3"}`}>
-              {navItems
-                .filter((item) => item.href !== RELEASES_HREF)
-                .map((item) => {
+              {navItems.filter((item) => item.href !== RELEASES_HREF).map((item) => {
                 const active =
                   item.href === "/dashboard"
                     ? pathname === "/dashboard" || drill === "chat"
