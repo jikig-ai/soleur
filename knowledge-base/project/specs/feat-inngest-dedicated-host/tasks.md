@@ -8,13 +8,15 @@ Lane: cross-domain · Threshold: single-user incident · Deferred HA: #6185 · S
 - [ ] 0.1 Detect current prod web-inngest backend (SQLite vs Postgres) via inngest-inventory hook + pool probe; note heterogeneous-fleet branch
 - [ ] 0.2 Resolve invocation semantics by reading `node_modules/inngest` routing source; local 2-instance harness only if ambiguous; record in Research Insights (Connect probe cut)
 - [ ] 0.3 Rehearse quiesce→outage→register timing + rollback (T5) locally
-- [ ] 0.4 Author ADR-098 (fan-out mechanism, hooks-stay-web-host, dark→live flip, #5450 supersession); status: adopting
+- [ ] 0.4 Schema + state-model spike (v1.19.4): cron-run enumeration path + real exactly-once invariant (NO scheduled_tick — use (function_id, bucket(startedAt, cron_period)) or Sentry cron-monitors); reconciled Postgres-schedule vs Redis-queue model; populated-Redis-across-Postgres-swap safety (DI-C1/C2/M5) — GATES AC13
+- [ ] 0.5 Author ADR-098 (fan-out, hooks-stay-web-host, dark→live flip, #5450 supersedes, signature-verify sole boundary + nftables, host-compromise blast radius + key rotation); status: adopting
 
 ## Phase 1 — Provision on a NON-PROD dark backend (IaC)
 
 - [ ] 1.1 `inngest-host.tf`: hcloud_server.inngest (cax11 ARM64) + hcloud_volume.inngest_redis + attachment + hcloud_server_network @ 10.0.1.40 + hcloud_firewall.inngest (deny-all-public)
-  - [ ] 1.1.1 Inbound rule on `hcloud_firewall.web` for 10.0.1.40 (inngest→app path) + app private-interface bind for /api/inngest
+  - [ ] 1.1.1 Host-local **nftables** scoping :8288/:8289 to web-host private IPs (drop .20/.30) — the cloud firewall is a no-op intra-subnet (SEC-H1/H2); verify :8288 GraphQL auth; bind :8289 loopback if Connect unused. (The `hcloud_firewall.web` rule does NOT scope /api/inngest — signature-verify is the boundary.)
   - [ ] 1.1.2 New vars inngest_server_type/inngest_redis_volume_size (defaulted); document no-ignore_changes[user_data] = maintenance-window-only force-replace
+  - [ ] 1.1.3 Rotate INNGEST_SIGNING_KEY/INNGEST_EVENT_KEY for the new boundary (do NOT reuse co-located keys) — SEC-H3
 - [ ] 1.2 `cloud-init-inngest.yml`: bake GHCR creds; extract+run inngest-bootstrap.sh; Redis on volume; heartbeat; Vector; < 32KB
   - [ ] 1.2.1 Template `--sdk-url` in inngest-bootstrap.sh:339 (cross-consumer sweep: web + Vector; preserve web behavior pre-Phase-3)
 - [ ] 1.3 Dark state = distinct non-prod Postgres backend (drop SQLite fail-safe); provision the non-prod DB before the host
@@ -24,9 +26,10 @@ Lane: cross-domain · Threshold: single-user incident · Deferred HA: #6185 · S
 ## Phase 2 — Cutover (operator; one gated `op=execute`; low-traffic window; heartbeat muted)
 
 - [ ] 2.0 Re-detect web backend; confirm dedicated host firing zero prod crons
-- [ ] 2.1 Capture reminders (op=backup + op=capture)
+- [ ] 2.1 Capture reminders from ALL scheduler hosts (incl weight-0 web-2, which self-arms into its own Redis at boot) — merge/dedup on reminder_id; capture AFTER scheduler-stop (or subtract in-window terminal fires) to avoid capture→quiesce double-fire (DI-C3/H4)
 - [ ] 2.2 Quiesce + stop + `systemctl disable` inngest on ALL web hosts (incl weight-0 web-2); freeze web-2-recreate/warm-standby for the window
-- [ ] 2.3 Repoint dedicated host → prod Postgres + start (first-class datastore-flip step; confirm web quiesced immediately before)
+- [ ] 2.2b **Redis FLUSHALL + AOF truncate** on the dedicated host; assert DBSIZE==0 before the prod flip (DI-C1)
+- [ ] 2.3 Repoint dedicated host → prod Postgres + start (first-class datastore-flip step; confirm web quiesced + dedicated Redis empty immediately before)
 - [ ] 2.4 Repoint app INNGEST_BASE_URL → 10.0.1.40 at BOTH ci-deploy.sh:1341 + :1574; redeploy
 - [ ] 2.5 Rearm (op=rearm) AFTER app-repoint; assert capture==rearm==pre-cutover armed; partial-rearm branch
 - [ ] 2.6 Verify per-(fn,tick) exactly-once; rollback path stops the DEDICATED host first
@@ -41,7 +44,7 @@ Lane: cross-domain · Threshold: single-user incident · Deferred HA: #6185 · S
 
 ## Phase 4 — Soak gate
 
-- [ ] 4.1 Soak 7d: per-(function_id, scheduled_tick) no group > 1; Follow-Through Enrollment (inngest-double-fire-6178.sh)
+- [ ] 4.1 Soak 7d: exactly-once via the Phase-0.4-validated mechanism (real cron-run enumeration grouped by (function_id, bucket(startedAt, cron_period)) OR per-cron Sentry cron-monitor) — NOT scheduled_tick; Follow-Through Enrollment (inngest-double-fire-6178.sh must be demonstrably writable against the pin before it gates 3.1)
 - [ ] 4.3 Flip ADR-098 adopting→accepted; `gh issue close 6178`
 
 ## Testing (see plan Test Scenarios)

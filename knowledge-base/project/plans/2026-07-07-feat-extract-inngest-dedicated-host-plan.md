@@ -15,6 +15,22 @@ plan_review: 6-agent panel applied 2026-07-07 (shape=dedicated-host confirmed by
 
 # Plan: Extract Inngest to Its Own Dedicated Host (#6178)
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-07 (6-agent plan-review panel + data-integrity/security triad).
+**Shape:** dedicated host confirmed by operator over the single-host role-guard.
+
+**Key hardening applied (findings the style panel could not catch):**
+1. **Dark→live flips Postgres but not Redis** → gated `FLUSHALL` + zero-queue AC before the prod flip (DI-C1).
+2. **`scheduled_tick` doesn't exist** in inngest v1.19.4 → Phase-0 schema spike + redefined exactly-once invariant; the soak probe must be demonstrably writable before it gates decommission (DI-C2).
+3. **Single-host capture drops web-2's self-armed reminders** → capture from all scheduler hosts, `Σ`-reconciled (DI-C3).
+4. **capture→quiesce double-fire** (dedup doesn't cross the backend switch) → capture-after-stop / subtract in-window fires (DI-H4).
+5. **The `hcloud_firewall.web` rule is a no-op** — intra-subnet is open by membership; signature-verify is the sole `/api/inngest` boundary; scope `:8288/:8289` via **host-local nftables** (SEC-H1/H2).
+6. **Signing key authorizes the whole registry** → rotate keys for the new boundary; document true blast radius (SEC-H3).
+7. Downtime & Cutover section (zero-downtime-first); ADR-098 (097 taken); complete web decommission incl. orphaned sudoers; per-`(fn,tick)`→real-field soak invariant.
+
+**Load-bearing open items → Phase 0 spikes** (0.2 fan-out routing; 0.4 cron-run schema + Redis-swap safety). See `## Deepen-Plan Hardening` for the full finding→fix→AC mapping.
+
 ## Overview
 
 Extract the self-hosted Inngest server (Soleur's durable trigger / cron-scheduler
@@ -114,6 +130,47 @@ the source is genuinely ambiguous. If route-once is confirmed, adopt multi-`--sd
 **and re-confirm on the dark host in Phase 1 before app wiring** (M2 — local
 fidelity ≠ prod); otherwise ship the VIP. The ADR fixes the choice.
 
+## Downtime & Cutover (zero-downtime-first)
+
+Two offline-inducing operations trigger this gate; the plan defaults to the
+zero-downtime path for both and accepts only a **bounded, justified** residual.
+
+**Op A — provisioning the dedicated host (Phase 1): ZERO-DOWNTIME (blue-green).**
+The host is born fresh on a **non-prod Postgres backend** (Phase 1.3) with no app
+pointed at it — provisioning touches no serving surface. Live web inngest keeps
+firing throughout Phase 1. No window.
+
+**Op B — the scheduler switchover (Phase 2): minimal-gap blue-green + bounded
+residual.** A *fully* zero-downtime switchover is **impossible by the single-writer
+constraint** — two inngest servers on prod Postgres double-fire every cron (worse
+than a brief gap), so the forward path must quiesce the old scheduler before the
+new one takes prod Postgres. The residual is the H1 quiesce→register window:
+- **Zero-downtime parts:** the new host is already provisioned + warm (blue-green);
+  the app repoint (2.4) is a rolling redeploy; run-state is Postgres-durable so
+  nothing is *lost*.
+- **Bounded residual (accepted, with operator sign-off):** the interval from 2.2
+  (quiesce all web inngest) to functions registering after 2.4. During it, cron
+  ticks are missed and in-window reminders are dropped. Mitigations: pick a
+  **low-traffic maintenance window**; **enumerate crons that need manual
+  `trigger-cron` re-fire**; the window is bounded by the redeploy time (target
+  < 5 min); exactly-once verification (per-`(fn,tick)`) confirms no double-fire.
+- **Per-stage rollback:** 2.6 — quiesce+stop the *dedicated* host first, repoint
+  app → loopback, re-enable web inngest (reversible until §3.1 decommission, which
+  is soak-gated).
+
+**Op C — cloud-init edits force-replace the singleton (no `ignore_changes[user_data]`).**
+Every future `cloud-init-inngest.yml` change destroys+recreates the sole scheduler
+→ a cron-outage window. **Gated to the maintenance-window dispatch only**; the AOF
+volume is a separate resource that survives the replace (re-attach verified). For a
+zero-downtime config change post-#6185, the HA standby absorbs it.
+
+**Network-outage verification (gate 4.5):** the new host is deny-all-public with a
+scoped `hcloud_firewall.web` inbound for `10.0.1.40` only; the CI `apply_target`
+dispatch reaches Hetzner's API (not SSH — cloud-init-only, no `remote-exec`
+provisioner), so no operator-egress-IP firewall dependency at apply time. L3
+reachability is the private subnet membership; verify the firewall allowlist + the
+app private-interface bind before cutover (AC-FW).
+
 ## Implementation Phases
 
 ### Phase 0 — Resolve the fan-out unknown + rehearse the cutover (local/read-only)
@@ -131,9 +188,20 @@ fidelity ≠ prod); otherwise ship the VIP. The ADR fixes the choice.
 - [ ] **0.3 Rehearse the dangerous sequences locally** (M5): quiesce→outage→register
   timing (to size the H1 window) **and** the rollback path (T5). The riskiest
   transitions must be exercised before the real maintenance window.
-- [ ] **0.4 Output → ADR-098** (see Architecture Decision) fixing: the fan-out
-  mechanism, hooks-stay-web-host, the dark→live datastore-flip mechanism, and the
-  #5450 supersession. Authored before Phase-1 IaC.
+- [ ] **0.4 Schema + state-model spike (load-bearing — DI-C2, DI-M5)** against the
+  v1.19.4 pin (mirror #5450's `/v0/gql` verify): (a) confirm a real **cron-run
+  enumeration path** (cron runs are schedule-triggered, not in `eventsV2→runs`) and
+  redefine the exactly-once invariant against **fields that exist** (`FunctionRunV2
+  { id status startedAt endedAt }` — no `scheduled_tick`), or fall back to per-cron
+  Sentry cron-monitors; (b) state the reconciled Postgres-schedule vs Redis-queue
+  model; (c) verify whether a **populated Redis pointed at a swapped Postgres** is
+  safe (DI-C1) — if not, the Redis `FLUSHALL` before 2.3 is mandatory. Until the
+  soak probe is demonstrably writable, AC13 cannot gate Phase 3.
+- [ ] **0.5 Output → ADR-098** (see Architecture Decision) fixing: the fan-out
+  mechanism, hooks-stay-web-host, the dark→live datastore-flip mechanism, the
+  #5450 supersession, **signature-verify as the sole `/api/inngest` boundary +
+  nftables scoping (SEC-H1/H2)**, and the **inngest-host compromise blast radius +
+  key rotation (SEC-H3)**. Authored before Phase-1 IaC.
 
 ### Phase 1 — Provision the host on a NON-PROD dark backend (IaC; mergeable; inert on merge)
 
@@ -419,6 +487,110 @@ move; state in the EU Supabase project). GDPR gate satisfied by carry-forward.
 - [ ] **AC13** Soak probe `inngest-double-fire-6178.sh` (per-`(fn,tick)`) exits 0
   across 7 days → **then** §3.1 decommission lands → ADR-098 `adopting → accepted`
   → `gh issue close 6178`.
+
+## Deepen-Plan Hardening (2026-07-07 — data-integrity + security triad)
+
+Eight findings that survived the 6-agent style panel (they require correlating the
+cutover against inngest v1.19.4's verified state model). **All fold into Phase 0 /
+the ACs below.**
+
+**State model (must be stated + spiked in Phase 0 — data-integrity M5):** inngest's
+**schedule/config lives in Postgres**, but the **armed work-queue + near-term event
+delivery + ~24h dedup state live in per-host local Redis** (`inngest-bootstrap.sh:59-61`;
+`2026-06-18-self-enumerate-cannot-bridge-a-store-switching-cutover.md`). The plan
+flips Postgres at cutover but the queue substrate is Redis — that asymmetry is the
+root of C1/C3/H4.
+
+- **DI-C1 (CRITICAL) — dark→live flips Postgres, not Redis.** The dedicated host's
+  Redis AOF accretes queue state during the dark period (esp. if Phase 0.2/1
+  registers a function to validate fan-out); after the prod-Postgres flip those
+  stale jobs (keyed to non-prod app/run/event IDs) fire against prod. **Fix:** a
+  **gated `FLUSHALL` + AOF truncate** on the dedicated host's Redis immediately
+  before 2.3, with **AC-REDIS-ZERO** ("`DBSIZE == 0` before the prod flip"); Phase 0
+  verifies (against the v1.19.4 pin) whether a populated Redis pointed at a swapped
+  Postgres is safe at all.
+- **DI-C2 (CRITICAL) — `scheduled_tick` is not in the schema.** The v1.19.4 run
+  object is `FunctionRunV2 { id status startedAt endedAt }`
+  (`…5450/inngest-graphql-schema.md:14`); `scheduled_tick` exists nowhere. Cron runs
+  are **schedule-triggered**, so the `eventsV2→runs` enumeration (`list-runs.ts`)
+  doesn't list them. **Fix — Phase-0 schema spike** (mirror #5450's `/v0/gql`
+  verify): (a) confirm a real **cron-run enumeration path** in v1.19.4
+  (`includeInternalEvents: true`?), and (b) redefine the exactly-once invariant
+  against fields that exist — group by `(function_id, bucket(startedAt, cron_period))`
+  — OR verify exactly-once via **per-cron Sentry cron-monitors** (one check-in per
+  period; reuse `cron-inngest-cron-watchdog.ts`). Until the probe is demonstrably
+  writable against the pin, **AC13's soak gate is vapor and Phase 3 has no valid
+  trigger** — so this spike is load-bearing, not optional.
+- **DI-C3 (CRITICAL) — single-host capture drops the other host's reminders.**
+  web-2 self-arms oneshots into **its own** local Redis at boot, **independent of LB
+  weight 0** (`inngest-oneshot-and-reminder-patterns.md:121`); a capture on web-1
+  omits them, and AC11's `N==N==N` reconciles on web-1 blind to the drop. **Fix:**
+  capture from **every host that can schedule against prod** (the 2.2 quiesce set,
+  incl. weight-0 web-2), merge/dedup on `reminder_id`, define armed count as the
+  **sum across hosts** → reconciliation `Σcaptured == rearmed == Σarmed` (revises
+  AC11).
+- **DI-H4 (HIGH) — capture→quiesce double-fire.** A reminder firing between 2.1 and
+  2.2 fires on web AND rearms on the dedicated host; the `reminder_id` dedup is ~24h
+  Redis state that does **not** cross the backend switch (fresh dedicated Redis).
+  **Fix:** capture **after** scheduler-stop (a quiesce mode that halts the scheduler
+  while keeping the read API live), OR after quiesce subtract from the rearm set any
+  reminder that reached a terminal run at/after the capture timestamp
+  (**AC-NO-INWINDOW**).
+- **DI-M5 (MED) — AC-DARK is single-axis.** **Fix:** AC-DARK asserts dark on **both**
+  axes — non-prod `INNGEST_POSTGRES_URI` **and** (empty Redis queue + no
+  app-reachable `--sdk-url` / empty function registry).
+- **SEC-H1 (HIGH) — the `hcloud_firewall.web` rule for `10.0.1.40` is a no-op.**
+  Hetzner firewalls filter only the **public** interface; intra-subnet traffic is
+  open by membership (`git-data.tf:200-204`, `firewall-9000-deny.test.sh:6-8`), so
+  `/api/inngest` is already subnet-reachable and the rule scopes nothing. **The sole
+  effective `/api/inngest` boundary is HMAC signature verification** (fail-closed —
+  `client.ts:43-50`, `route.ts:87`; good). **Fix:** drop the firewall-scoping claim;
+  rewrite AC-FW (below); state in ADR-098 that signature-verify is the boundary.
+- **SEC-H2 (HIGH) — inngest `:8288`/`:8289` control API is subnet-wide.** The
+  (likely-unauthenticated) GraphQL admin surface at `:8288/v0/gql` is reachable by
+  git-data/registry — a peer-host compromise pivots into the trigger control plane
+  **without the signing key**. The cloud firewall can't scope it. **Fix:** add
+  **host-local nftables** on the inngest host's private interface allowing
+  `:8288/:8289` only from web-host private IPs (model on `cron-egress-nftables.sh`);
+  bind `:8289` to loopback if Connect is unused; **verify the `:8288` GraphQL auth
+  posture** (if unauthenticated, nftables scoping is mandatory).
+- **SEC-H3 (HIGH) — the signing key authorizes the entire ~60-function registry**,
+  several running in the web-app process with full prd env (GHCR token minter,
+  agent-spawn, bug-fixer, TF-drift). So inngest-host compromise ≈ indirect
+  arbitrary-app-code execution with `SUPABASE_SERVICE_ROLE` — the separate Doppler
+  project blocks *direct* secret read, not this. **Fix:** **rotate**
+  `INNGEST_SIGNING_KEY`/`INNGEST_EVENT_KEY` for the new boundary (don't reuse the
+  co-located keys); document the true blast radius in ADR-098; consider a
+  per-invocation guard on the most dangerous functions.
+- **SEC-LOW/INFO:** prefer the ADR-088 minted-token path over a static PAT for the
+  baked GHCR cred; fix the stale "loopback 127.0.0.1" comment in
+  `inngest-bootstrap.sh:332` (same defect AC5 fixes in C4); keep Redis loopback-bound
+  (`inngest-redis.conf:13`); keep `signature-verify.test.ts` green + add a
+  401-before-dispatch assertion now that `:3000` is subnet-reachable.
+
+### Revised / added Acceptance Criteria (supersede the versions below)
+- [ ] **AC-FW (rewritten):** the app `/api/inngest` boundary is **HMAC signature
+  verification** (`signature-verify.test.ts` green + a 401-before-dispatch
+  assertion); the plan/ADR do **not** claim the `hcloud_firewall.web` rule scopes
+  intra-subnet access (it cannot). Access scoping to web hosts is enforced by
+  **host-local nftables on the inngest host** (`:8288/:8289` from web-host IPs only).
+- [ ] **AC-NFT:** the inngest host runs nftables scoping `:8288/:8289` to web-host
+  private IPs; `.20`/`.30` are dropped; `:8288/v0/gql` auth posture documented.
+- [ ] **AC-DARK (both axes):** at provision, `INNGEST_POSTGRES_URI` ≠ prod **AND**
+  Redis `DBSIZE == 0` **AND** no app-reachable `--sdk-url` (empty function registry).
+- [ ] **AC-REDIS-ZERO:** dedicated host Redis `DBSIZE == 0` immediately before the
+  2.3 prod-Postgres flip (post-`FLUSHALL`).
+- [ ] **AC11 (revised):** capture is taken from **every** prod-scheduling host (incl.
+  weight-0 web-2), deduped on `reminder_id`; `Σcaptured == rearmed == Σarmed`.
+- [ ] **AC-NO-INWINDOW:** the rearm set excludes any reminder that reached a terminal
+  run on web at/after the capture timestamp (no capture→quiesce double-fire).
+- [ ] **AC12/AC13 (redefined):** exactly-once verified by the Phase-0-validated
+  mechanism (real cron-run enumeration grouped by `(function_id, bucket(startedAt,
+  cron_period))`, **or** per-cron Sentry cron-monitor exactly-one-check-in-per-period);
+  `scheduled_tick` is removed everywhere. The soak probe must be **demonstrably
+  writable against the v1.19.4 pin** before AC13 gates Phase-3 decommission.
+- [ ] **AC-KEYROTATE:** `INNGEST_SIGNING_KEY`/`INNGEST_EVENT_KEY` are freshly
+  generated for the dedicated host (not reused from the co-located host).
 
 ## Risks & Mitigations
 - **Double-fire at provision (arch HIGH):** dark backend is a distinct non-prod
