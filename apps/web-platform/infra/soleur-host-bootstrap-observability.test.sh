@@ -478,5 +478,47 @@ else
   no "AC19: server.tf web-host templatefile map must pass ghcr_read_user + ghcr_read_token (coupled to the cloud-init bake)"
 fi
 
+# ── AC20 (#6090): the app-pull GHCR login (ci-deploy ghcr_prelude_and_login) is baked too ──
+# The seed-pull fix (AC19) got the host to webhook_bound, but the recreate still RED'd at
+# ok_peer_fanout_degraded: ci-deploy's ghcr_prelude_and_login did a bare `doppler secrets get`
+# for the app pull + cosign verify, empty on the cold host → docker login skipped → anonymous
+# pull → cosign .sig 401 → verify_failed → app never binds :9000. Fix: cloud-init bakes
+# /etc/default/soleur-ghcr-read; ghcr_prelude_and_login prefers it, hardened doppler fallback.
+CD="$DIR/ci-deploy.sh"
+# (1) cloud-init bakes the deploy-readable GHCR cred file with the interpolated vars
+if grep -qF 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s' "$CI" \
+   && grep -qF '/etc/default/soleur-ghcr-read' "$CI" \
+   && grep -qE "'\\\$\{ghcr_read_user\}'[[:space:]]+'\\\$\{ghcr_read_token\}'" "$CI"; then
+  ok "AC20: cloud-init bakes /etc/default/soleur-ghcr-read from \${ghcr_read_user}/\${ghcr_read_token}"
+else
+  no "AC20: cloud-init must bake /etc/default/soleur-ghcr-read with the interpolated GHCR read-creds"
+fi
+# (2) the baked file is protected like webhook-deploy (deploy:deploy 0600)
+if grep -qE 'chmod 600 /etc/default/soleur-ghcr-read' "$CD" 2>/dev/null || grep -qE 'chmod 600 /etc/default/soleur-ghcr-read' "$CI"; then
+  ok "AC20: baked GHCR cred file is chmod 600 (deploy-only)"
+else
+  no "AC20: /etc/default/soleur-ghcr-read must be chmod 600"
+fi
+# (3) ci-deploy ghcr_prelude_and_login PREFERS the baked file before Doppler
+if grep -qF '/etc/default/soleur-ghcr-read' "$CD"; then
+  ok "AC20: ci-deploy ghcr_prelude_and_login sources the baked /etc/default/soleur-ghcr-read"
+else
+  no "AC20: ci-deploy ghcr_prelude_and_login must prefer the baked /etc/default/soleur-ghcr-read"
+fi
+# (4) the Doppler fallback in ci-deploy is HARDENED (timeout 45 + retry) for both GHCR creds
+if grep -qE 'until ghcr_user="?\$\(timeout 45 doppler[^)]*GHCR_READ_USER' "$CD" \
+   && grep -qE 'until ghcr_token="?\$\(timeout 45 doppler[^)]*GHCR_READ_TOKEN' "$CD"; then
+  ok "AC20: ci-deploy doppler fallback hardened — timeout 45 + until-retry for GHCR_READ_USER and GHCR_READ_TOKEN"
+else
+  no "AC20: ci-deploy ghcr_prelude_and_login must harden the doppler fallback (timeout 45 + until-retry) for both GHCR creds"
+fi
+# (5) token hygiene: baked file is deploy-owned + ci-deploy unsets the token from its env/children
+if grep -qE 'chown deploy:deploy /etc/default/soleur-ghcr-read' "$CI" \
+   && grep -qE 'unset GHCR_READ_TOKEN' "$CD"; then
+  ok "AC20: baked file is chown deploy:deploy + ci-deploy unsets GHCR_READ_TOKEN (token not in child env)"
+else
+  no "AC20: /etc/default/soleur-ghcr-read must be chown deploy:deploy AND ci-deploy must unset GHCR_READ_TOKEN after sourcing"
+fi
+
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

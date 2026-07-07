@@ -612,31 +612,51 @@ zot_gate_degraded_event() {
 # token is captured into a var and piped via --password-stdin — NEVER argv/logs, and
 # unset immediately after login so it never reaches a child process env.
 ghcr_prelude_and_login() {
-  command -v doppler >/dev/null 2>&1 || { logger -t "$LOG_TAG" "PRELUDE: doppler unavailable — skipping GHCR login + SENTRY prefetch"; return 0; }
-  [[ -n "${DOPPLER_TOKEN:-}" ]] || { logger -t "$LOG_TAG" "PRELUDE: DOPPLER_TOKEN unset — skipping GHCR login + SENTRY prefetch"; return 0; }
-  # Export only what downstream CHILDREN legitimately read from the env (SENTRY_* for
-  # the verify/pull telemetry curls; GHCR_READ_USER is a username, not a secret). The
-  # TOKEN is deliberately NOT exported — it reaches `docker login` via --password-stdin,
-  # so no child process ever gets it in its environment.
-  local k
-  for k in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY GHCR_READ_USER; do
-    # `secrets get <NAME> --plain` returns the bare value on stdout (never argv).
-    printf -v "$k" '%s' "$(doppler secrets get "$k" --plain --project soleur --config prd 2>/dev/null || true)"
-    export "$k"
-  done
-  local ghcr_token
-  ghcr_token="$(doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null || true)"
-  if [[ -n "${GHCR_READ_USER:-}" && -n "$ghcr_token" ]]; then
-    if printf '%s' "$ghcr_token" | docker login ghcr.io -u "$GHCR_READ_USER" --password-stdin >/dev/null 2>&1; then
+  # (#6090) Prefer BAKED GHCR read-creds (cloud-init writes /etc/default/soleur-ghcr-read,
+  # deploy:deploy 0600 — the app-pull analogue of the seed-pull bake) so the app pull +
+  # cosign verify authenticate on a cold host even when Doppler answers EMPTY at the boot
+  # instant (the exact #6090 failure class, one layer down: an empty fetch here skipped the
+  # login → anonymous private pull → cosign .sig fetch 401 → verify_failed → app never binds
+  # :9000 → peer fan-out degraded). Doppler stays the fallback, HARDENED (timeout 45 + 3-try
+  # retry) to match cloud-init's ghcr_login. GHCR_READ_USER is a username (safe to export);
+  # the TOKEN reaches `docker login` via --password-stdin only and is unset so no child env
+  # (docker/cosign subprocess) ever carries it.
+  local k n ghcr_user="" ghcr_token=""
+  if [[ -r /etc/default/soleur-ghcr-read ]]; then
+    # shellcheck disable=SC1091
+    . /etc/default/soleur-ghcr-read 2>/dev/null || true
+    ghcr_user="${GHCR_READ_USER:-}"; ghcr_token="${GHCR_READ_TOKEN:-}"
+    unset GHCR_READ_TOKEN   # keep the token out of THIS process env + its children
+  fi
+  if command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]]; then
+    # SENTRY_* prefetch for the verify/pull telemetry curls (dark event if absent, as today).
+    for k in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY; do
+      # `secrets get <NAME> --plain` returns the bare value on stdout (never argv).
+      printf -v "$k" '%s' "$(doppler secrets get "$k" --plain --project soleur --config prd 2>/dev/null || true)"
+      export "$k"
+    done
+    # Hardened Doppler fallback for any GHCR cred the bake did not supply.
+    if [[ -z "$ghcr_user" ]]; then
+      n=0; until ghcr_user="$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$ghcr_user" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+    fi
+    if [[ -z "$ghcr_token" ]]; then
+      n=0; until ghcr_token="$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$ghcr_token" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+    fi
+  elif [[ -z "$ghcr_user" || -z "$ghcr_token" ]]; then
+    logger -t "$LOG_TAG" "PRELUDE: doppler/DOPPLER_TOKEN unavailable and baked GHCR creds incomplete — skipping GHCR login + SENTRY prefetch"
+  fi
+  export GHCR_READ_USER="$ghcr_user"   # username, not a secret (matches prior exported behavior)
+  if [[ -n "$ghcr_user" && -n "$ghcr_token" ]]; then
+    if printf '%s' "$ghcr_token" | docker login ghcr.io -u "$ghcr_user" --password-stdin >/dev/null 2>&1; then
       logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok (private-package pull authenticated)"
     else
       logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED — private pull may fail-closed"
     fi
   else
-    logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present — skipping docker login (pre-provisioning?)"
+    logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present (baked file absent + doppler empty/unavailable) — skipping docker login"
   fi
   # The mounted $GHCR_DOCKER_CONFIG (inline auths entry) is what the cosign verifier
-  # reuses; the non-exported token local goes out of scope when the function returns.
+  # reuses; the token local goes out of scope when the function returns.
   ghcr_token=""
 }
 
