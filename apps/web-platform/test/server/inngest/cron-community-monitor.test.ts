@@ -174,7 +174,7 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
   // digestIssueExistsForDate BEFORE the eval spawns (serialized by the
   // registration's { scope: "fn", limit: 1 } concurrency). These strings must
   // stay ABSENT from cron-community-monitor.ts — scoped to THIS file only,
-  // since _cron-shared.ts legitimately still contains DEDUP-RULE language.
+  // since _cron-shared.ts legitimately still contains dedup-related language.
   // Mirrors cron-roadmap-review.test.ts's post-#6139 regression guard.
   describe("#6143 — prompt-level DEDUP RULE removed (regression guard)", () => {
     it.each([

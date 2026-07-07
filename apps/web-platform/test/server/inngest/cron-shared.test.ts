@@ -323,9 +323,13 @@ describe("#6143 — campaign-calendar comment-bump coupling invariant", () => {
       ),
       "utf-8",
     );
-    // Stable markers (NOT the volatile "STEP 2(b)" step number):
+    // Anchor on the BEHAVIOR-bearing prompt directive (STEP 2(b)'s "comment,
+    // don't create" instruction) — NOT the volatile "STEP 2(b)" step number
+    // and NOT an explanatory source comment (which a benign reword would
+    // false-red). Removing this directive removes campaign-calendar's
+    // comment-bump path → the updated_at filter becomes tightenable to
+    // created_at, which is exactly what this tripwire signals.
     expect(campaignCalendarSource).toContain("Do NOT create a new issue");
-    expect(campaignCalendarSource).toContain("counts via updated_at");
   });
 });
 
