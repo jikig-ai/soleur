@@ -222,8 +222,11 @@ logs:
   where: "GitHub Actions run logs for Web Platform Release → verify-migrations"
   retention: "GitHub Actions default log retention (90 days)"
 discoverability_test:
-  command: "gh run list --workflow 'Web Platform Release' --branch main --limit 1 --json conclusion  # then: gh run view <id> --log | grep jti_deny"
-  expected_output: "conclusion=success; grep shows 26 per-table *_jti_not_denied_policy_present checks + jti_deny_policies_count_26 all passing (no bad=1)"
+  # Locally-runnable, no-auth proxy: proves the completed drift guard names all 26
+  # tables. The live CI liveness signal is the verify-migrations job status above
+  # (gh run list --workflow 'Web Platform Release' --branch main), verified post-merge.
+  command: grep -c _jti_not_denied_policy_present apps/web-platform/supabase/verify/068_jti_deny_rls_predicate_and_revoke_rpc.sql
+  expected_output: "26"
 ```
 
 ## Architecture Decision (ADR / C4)
