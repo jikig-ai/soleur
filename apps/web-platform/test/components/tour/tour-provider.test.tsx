@@ -130,7 +130,7 @@ describe("TourProvider", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("navigates to an action step's route when advancing onto it", () => {
+  it("navigates to a step's route when advancing onto a different-route step", () => {
     onb.tourCompletedAt = "x"; // suppress auto-start; drive manually
     renderProvider();
     fireEvent.click(screen.getByText("start")); // step 0 Welcome (no route)
@@ -140,8 +140,44 @@ describe("TourProvider", () => {
     fireEvent.click(screen.getByText("next")); // step 2 start a conversation
     fireEvent.click(screen.getByText("next")); // step 3 org-panel
     expect(routerPush).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText("next")); // step 4 Inbox tab → /dashboard/inbox
-    expect(routerPush).toHaveBeenCalledWith("/dashboard/inbox");
+    fireEvent.click(screen.getByText("next")); // step 4 Inside a conversation → /dashboard/chat/new
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/chat/new");
+  });
+
+  it("does NOT navigate on the Knowledge Base TAB step — the rail is swapped once inside, so the tab is highlighted from the prior page; only the next (content) step opens the KB", () => {
+    onb.tourCompletedAt = "x"; // suppress auto-start; drive manually
+    renderProvider();
+    fireEvent.click(screen.getByText("start")); // step 0 Welcome
+    // Advance to step 10 (Concierge modal step) — the step just before the KB tab.
+    for (let i = 0; i < 10; i++) fireEvent.click(screen.getByText("next"));
+    routerPush.mockClear();
+    fireEvent.click(screen.getByText("next")); // step 11 KB tab (no route)
+    expect(routerPush).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("next")); // step 12 KB content → opens the KB
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/kb");
+  });
+
+  it("opens the New Issue dialog on its modal steps and closes it on leave (reveal event, no flicker between the two)", () => {
+    onb.tourCompletedAt = "x"; // suppress auto-start; drive manually
+    const events: boolean[] = [];
+    const handler = (e: Event) =>
+      events.push((e as CustomEvent<{ open: boolean }>).detail.open);
+    window.addEventListener("soleur:new-issue-dialog", handler);
+    try {
+      renderProvider();
+      fireEvent.click(screen.getByText("start")); // step 0
+      // Steps 1-8 carry no `reveal` → nothing dispatched yet.
+      for (let i = 0; i < 8; i++) fireEvent.click(screen.getByText("next"));
+      expect(events).toEqual([]);
+      fireEvent.click(screen.getByText("next")); // step 9 manual create (reveal → open)
+      expect(events).toEqual([true]);
+      fireEvent.click(screen.getByText("next")); // step 10 concierge (same reveal → no re-dispatch)
+      expect(events).toEqual([true]);
+      fireEvent.click(screen.getByText("next")); // step 11 KB tab (no reveal → close)
+      expect(events).toEqual([true, false]);
+    } finally {
+      window.removeEventListener("soleur:new-issue-dialog", handler);
+    }
   });
 
   it("Finish persists completion via POST /api/tour/complete", () => {

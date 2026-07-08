@@ -141,7 +141,7 @@ When creating a new skill from scratch, always run the `init_skill.py` script. T
 Usage:
 
 ```bash
-scripts/init_skill.py <skill-name> --path <output-directory>
+${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/init_skill.py <skill-name> --path <output-directory>
 ```
 
 The script:
@@ -182,13 +182,13 @@ To complete SKILL.md, answer the following questions:
 Once the skill is ready, it should be packaged into a distributable zip file that gets shared with the user. The packaging process automatically validates the skill first to ensure it meets all requirements:
 
 ```bash
-scripts/package_skill.py <path/to/skill-folder>
+${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/package_skill.py <path/to/skill-folder>
 ```
 
 Optional output directory specification:
 
 ```bash
-scripts/package_skill.py <path/to/skill-folder> ./dist
+${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/package_skill.py <path/to/skill-folder> ./dist
 ```
 
 The packaging script will:
@@ -210,7 +210,7 @@ distributed, invoke the `skill-security-scan` advisory gate against the
 newly-scaffolded SKILL.md:
 
 ```bash
-bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < <skill-folder>/SKILL.md
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh < <skill-folder>/SKILL.md
 ```
 
 Operator handling:

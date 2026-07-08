@@ -98,6 +98,7 @@ export function NewIssueDialog({
           <input
             id="new-issue-title"
             ref={inputRef}
+            data-tour-id="action:issue-create-manual"
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -132,6 +133,7 @@ export function NewIssueDialog({
               silently no-op (CPO P0). Flip the flag + wire onClick to go live. */}
           <fieldset
             disabled={!CONCIERGE_ONLINE}
+            data-tour-id="action:concierge-draft"
             aria-describedby="concierge-offline-note"
             className="mb-4 rounded-md border border-dashed border-soleur-border-default bg-soleur-bg-surface-2/40 p-3 disabled:opacity-60"
           >

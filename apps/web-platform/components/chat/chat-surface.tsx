@@ -1073,7 +1073,10 @@ export function ChatSurface({
         </div>
       )}
 
-      <div className={`shrink-0 border-t border-soleur-border-default bg-soleur-bg-base py-3 ${inputPadX} ${isFull ? "safe-bottom md:px-6" : ""}`}>
+      <div
+        data-tour-id={isFull ? "action:conversation-composer" : undefined}
+        className={`shrink-0 border-t border-soleur-border-default bg-soleur-bg-base py-3 ${inputPadX} ${isFull ? "safe-bottom md:px-6" : ""}`}
+      >
         <div className={`relative min-w-0 ${widthWrapper}`}>
           <AtMentionDropdown
             query={atQuery}

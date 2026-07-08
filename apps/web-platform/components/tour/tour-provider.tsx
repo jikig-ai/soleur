@@ -155,6 +155,26 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
     }
   }, [active, stepIndex, pathname, router]);
 
+  // Some steps reveal a component-owned modal (via a window event) so an in-modal
+  // control can be spotlit. Dispatch `{open:true}` on entering such a step and
+  // `{open:false}` when leaving to a step that doesn't share the same `reveal`
+  // (or when the tour ends). `revealRef` tracks what's currently open so moving
+  // between two steps that share a `reveal` doesn't close+reopen (flicker).
+  const revealRef = useRef<string | null>(null);
+  useEffect(() => {
+    const want = active ? (TOUR_STEPS[stepIndex]?.reveal ?? null) : null;
+    if (revealRef.current && revealRef.current !== want) {
+      window.dispatchEvent(
+        new CustomEvent(revealRef.current, { detail: { open: false } }),
+      );
+      revealRef.current = null;
+    }
+    if (want && revealRef.current !== want) {
+      window.dispatchEvent(new CustomEvent(want, { detail: { open: true } }));
+      revealRef.current = want;
+    }
+  }, [active, stepIndex]);
+
   const value: TourContextValue = {
     available: enabled,
     active,
