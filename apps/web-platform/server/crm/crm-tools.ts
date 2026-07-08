@@ -23,6 +23,11 @@ import { z } from "zod/v4";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
 import { STAGE_PROBABILITY, type Stage } from "@/server/crm/stage-probability";
+import {
+  CONTACT_COLUMNS,
+  NOTE_COLUMNS,
+  TRANSITION_COLUMNS,
+} from "@/server/crm/crm-reads";
 
 interface BuildCrmToolsOpts {
   /** Captured in closure — prevents cross-user reads/writes. */
@@ -64,14 +69,10 @@ function untrustedRowsResponse(payload: unknown): ToolTextResponse {
   };
 }
 
-const CONTACT_COLUMNS =
-  "id, user_id, name, company, role, source, stage, next_action, " +
-  "next_action_date, last_contact, amount, currency, amount_basis, " +
-  "expected_close_date, created_at, updated_at";
-
-const NOTE_COLUMNS = "id, contact_id, user_id, body, lens, occurred_at, created_at";
-
-const TRANSITION_COLUMNS = "id, contact_id, user_id, from_stage, to_stage, entered_at";
+// Column-list constants moved to server/crm/crm-reads.ts (feat-beta-crm-ui
+// #6172) so the read routes + detail RPC share the exact same set — a
+// PII-column-drift guard (crm-reads.test.ts). This is the ONLY agent-path
+// touch; the inline PII-safe write-error mapper below stays untouched.
 
 // Stage enum from the single source of truth (server/crm/stage-probability.ts).
 // A drift-guard test asserts this equals the migration CHECK set (AC8).
