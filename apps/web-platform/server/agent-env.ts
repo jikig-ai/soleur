@@ -1,5 +1,5 @@
 import { PROVIDER_CONFIG } from "./providers";
-import { assertTrustedPluginPath } from "./plugin-path";
+import { assertTrustedPluginPath, isPluginPathTestEnv } from "./plugin-path";
 
 /**
  * The auth scheme an agent run is funded by. `api_key` feeds the raw
@@ -213,20 +213,22 @@ export function buildAgentEnv(
   // ADR-093 closes (neutered redact-sentinel.sh; trigger.sh secret exfil). So:
   //   - present → validate via assertTrustedPluginPath (rejects non-/app/ in
   //     prod; returns the value unchanged) then set. This is a SECOND, distinct
-  //     call from the `:197` guard in agent-runner-query-options.ts — that one
-  //     protects the SDK `plugins:[{path}]` binding sink; THIS one protects the
-  //     exported CLAUDE_PLUGIN_ROOT bash-env sink. Both are deliberate; do not
-  //     collapse (see ADR-093 amendment + the plan's Alternatives table).
+  //     call from the `assertTrustedPluginPath` guard in `buildAgentQueryOptions`
+  //     (agent-runner-query-options.ts) — that one protects the SDK
+  //     `plugins:[{path}]` binding sink; THIS one protects the exported
+  //     CLAUDE_PLUGIN_ROOT bash-env sink. Both are deliberate; do not collapse
+  //     (see ADR-093 amendment + the plan's Alternatives table).
   //   - absent/empty in a PRODUCTION env → THROW (fail closed). Enforcement
   //     travels WITH the value-injection point, so any future buildAgentEnv
   //     caller that bypasses buildAgentQueryOptions is still covered.
   //   - absent/empty in a test env → omit (fixture ergonomics for the many
   //     no-pluginPath unit tests). The VITEST/NODE_ENV=test bypass predicate is
-  //     the canonical one in plugin-path.ts (getPluginPath /
-  //     assertTrustedPluginPath) — kept identical here so the copies cannot drift.
+  //     the shared `isPluginPathTestEnv()` from plugin-path.ts (the canonical
+  //     source getPluginPath / assertTrustedPluginPath also consume) — a single
+  //     definition so the three sinks cannot drift toward a more-permissive copy.
   if (opts?.pluginPath) {
     env.CLAUDE_PLUGIN_ROOT = assertTrustedPluginPath(opts.pluginPath);
-  } else if (!(process.env.VITEST || process.env.NODE_ENV === "test")) {
+  } else if (!isPluginPathTestEnv()) {
     throw new Error(
       "[plugin-path] CLAUDE_PLUGIN_ROOT export required for agent dispatch — pluginPath was empty/undefined",
     );

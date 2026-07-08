@@ -18,6 +18,21 @@ import path from "node:path";
 
 export const SOLEUR_PLUGIN_PATH_DEFAULT = "/app/shared/plugins/soleur";
 
+/**
+ * Canonical test-env bypass predicate for the plugin-path guard family —
+ * {@link getPluginPath}, {@link assertTrustedPluginPath}, AND the
+ * `buildAgentEnv` `CLAUDE_PLUGIN_ROOT` fail-closed injection (`agent-env.ts`,
+ * #6223). Under vitest / `node:test`, fixtures legitimately pass mkdtemp
+ * (`/tmp`, `/var/folders`) paths, so the guards no-op; production
+ * (`VITEST` unset AND `NODE_ENV !== "test"`) is where they enforce. Single
+ * source of truth so the three consumers cannot silently drift toward a
+ * more-permissive copy (a divergence here would be a security-relevant
+ * fail-open — #6223 review, 4-agent convergence).
+ */
+export function isPluginPathTestEnv(): boolean {
+  return Boolean(process.env.VITEST) || process.env.NODE_ENV === "test";
+}
+
 // Allowlisted prefixes. `/app/` covers the production container; broader
 // than `/app/shared/plugins/` to leave room for ops-driven repointing
 // (e.g. blue-green plugin rollouts) without code changes. Loosen further
@@ -32,7 +47,7 @@ export function getPluginPath(): string {
   // to construct fake `/app/*` paths. The prefix guard is a production
   // defense-in-depth check; the production env (NODE_ENV=production,
   // VITEST unset) is where it actually matters.
-  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  if (isPluginPathTestEnv()) {
     return override;
   }
   if (ALLOWED_PREFIXES.some((p) => override.startsWith(p))) {
@@ -66,7 +81,7 @@ export function getPluginPath(): string {
  * @throws if, in a production env, `p` is not an absolute `/app/` path.
  */
 export function assertTrustedPluginPath(p: string): string {
-  if (process.env.VITEST || process.env.NODE_ENV === "test") return p;
+  if (isPluginPathTestEnv()) return p;
   // Normalize `..`/`.` segments BEFORE the prefix check: a security guard must
   // not be defeated by a non-canonical path like `/app/../workspaces/x` (lexically
   // `startsWith("/app/")` but resolves outside it). `p` is still required to be

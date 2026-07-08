@@ -22,7 +22,7 @@ labels: [type/security, domain/engineering, deferred-scope-out]
 **Key improvements applied:**
 1. **Closed an AC mutation hole (spec-flow):** the original AC3 let a fail-OPEN mutant (bare `if` assignment + throw only in `else`) pass, because the positive case ran under ambient VITEST where `assertTrustedPluginPath` is a no-op. AC3 now adds prod-simulated **non-empty-invalid** throw cases (`/workspaces`, `/tmp`, relative, traversal), a prod-simulated positive, and message assertions.
 2. **Dropped the isolated `plugin-path.test.ts` guard tests (simplicity + spec-flow + architecture):** the original plan's isolated `assertTrustedPluginPath("")`/`undefined` cases are unreachable (empty is falsy → hits the throw branch before the guard; `undefined` → non-greppable `TypeError` + a type-lie), and workspace/relative/traversal are **already** covered at `plugin-path.test.ts:43-48`. Edit set: 5 files → 4 (AC numbers renumbered; the current AC4 is the new re-throw check).
-3. **Corrected the Observability capture-layer citation (architecture P1, `hr-observability-layer-citation`):** the cc-path throw is NOT caught by the sandbox-class-only catch at `cc-dispatcher.ts:2709` — it is re-thrown at `:2767` and captured upstream in `soleur-go-runner.ts` (`feature:"soleur-go-runner"`); the legacy factory captures in its own catch (`agent-runner.ts:2730`).
+3. **Corrected the Observability capture-layer citation (architecture P1, `hr-observability-layer-citation`):** the cc-path throw is NOT caught by the sandbox-class-only catch at `cc-dispatcher.ts:2709` — it is re-thrown at `:2767` and captured upstream in `soleur-go-runner.ts` (`feature:"soleur-go-runner"`); the legacy factory captures in its own catch (`agent-runner.ts:2732`).
 4. **Reframed as zero-incremental-outage-risk regression pin (architecture + security P2):** the new throw is unreachable via the current prod path (`:197` throws first for the same value), so production outage risk is **zero** — it fires only post-decoupling or via a hypothetical future direct `buildAgentEnv` caller.
 5. **Scoped AC9 precisely (architecture P2):** "export invariant pinned (non-empty + `/app`-trusted at injection) + propagation gated in CI," not a blanket "invariant pinned" — the ~28 shell sites are only transitively covered.
 
@@ -160,7 +160,7 @@ one — and cites (2) rather than re-implementing it.
       that a throw out of `buildAgentQueryOptions` is **re-thrown** by BOTH factory catches — not
       swallowed: `cc-dispatcher.ts` re-throws at `:2767` (the `:2709` catch handles only sandbox-class
       startup errors) → captured upstream in `soleur-go-runner.ts` (`feature:"soleur-go-runner"`); the
-      legacy `agent-runner.ts` factory captures in its own catch (`:2730`). This pins the Observability
+      legacy `agent-runner.ts` factory captures in its own catch (`:2732`). This pins the Observability
       claim (§Observability) that the fail-closed dispatch is Sentry-visible, not a silent crash.
 - [x] **AC5 (test-tolerance preserved)** — under the default VITEST env, existing `buildAgentEnv` /
       `buildAgentQueryOptions` tests that pass mkdtemp / no-`pluginPath` fixtures stay green (the guard is
@@ -254,7 +254,7 @@ liveness_signal:
   configured_in: "apps/web-platform/server/agent-env.ts (injection throw) + apps/web-platform/scripts/plugin-root-propagation-verify-in-image.sh (CI, .github/workflows/ci.yml)"
 
 error_reporting:
-  destination: "Sentry web-platform via SENTRY_DSN. A throw out of buildAgentQueryOptions is RE-THROWN by both factory catches (it is NOT the sandbox-class error the cc-dispatcher.ts:2709 catch handles — that block re-throws at :2767) and captured upstream: cc path in soleur-go-runner.ts (feature:'soleur-go-runner'); legacy path in agent-runner.ts's own catch (:2730)"
+  destination: "Sentry web-platform via SENTRY_DSN. A throw out of buildAgentQueryOptions is RE-THROWN by both factory catches (it is NOT the sandbox-class error the cc-dispatcher.ts:2709 catch handles — that block re-throws at :2767) and captured upstream: cc path in soleur-go-runner.ts (feature:'soleur-go-runner'); legacy path in agent-runner.ts's own catch (:2732)"
   fail_loud: "the agent run never starts; a Sentry issue carrying the '[plugin-path] CLAUDE_PLUGIN_ROOT export required' message (or assertTrustedPluginPath's '[plugin-path] Refusing untrusted') appears — not a silent degraded run. NOTE: today this Sentry-visible fail-closed behavior is provided by the :197 guard; the buildAgentEnv throw is the post-decoupling regression pin whose throw rides the SAME re-throw path"
 
 failure_modes:
@@ -344,7 +344,6 @@ None — `gh issue list --label code-review --state open` bodies reference none 
 | **Collapse the two `assertTrustedPluginPath` calls into one (`:197` only, or injection-only)** | NOT a duplication to remove — the two calls guard **distinct sinks**: `:197` protects the SDK `plugins:[{path}]` binding (in-process `hooks.json` execution, `agent-runner-query-options.ts:255`); the injection-site call protects the exported bash `CLAUDE_PLUGIN_ROOT`. Removing either re-opens its sink. The doc comment in `agent-env.ts` and this row mark the double-call **deliberate** so `/simplify` or a reviewer does not collapse it. |
 | **Make `buildAgentEnv.pluginPath` a required TS param (interface change)** | Larger blast radius (every mkdtemp/no-pluginPath test call site becomes a type error); the runtime test-tolerant throw achieves the same fail-closed guarantee with a smaller diff and preserves fixture ergonomics. |
 | **Runtime "if `CLAUDE_PLUGIN_ROOT` unset then …" branch in the deployed shell scripts** | The ADR establishes the shell layer *cannot* distinguish trusted-local-unset (CLI/worktree) from untrusted-server-unset. The distinction lives at the platform/SDK layer — hence this injection-site guard. |
-| **Collapse the two `assertTrustedPluginPath` calls into one** (`:197` + the new injection call) | REJECTED — they guard **distinct sinks**: `:197` protects the SDK `plugins:[{path}]` binding (in-process `hooks.json` execution, `agent-runner-query-options.ts:255`); the injection call protects the exported `CLAUDE_PLUGIN_ROOT` bash-env sink. Collapsing either reopens one sink. The double call is **deliberate**; a code comment + this row prevent `/simplify` or a reviewer from consolidating it. |
 
 ## Non-Goals
 

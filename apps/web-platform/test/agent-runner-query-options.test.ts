@@ -15,19 +15,16 @@
 import { describe, it, expect, vi } from "vitest";
 
 vi.mock("@/server/agent-env", () => ({
-  buildAgentEnv: vi.fn(
-    (
-      credential: { value: string; scheme: string },
-      _tokens: Record<string, string>,
-      opts?: { pluginPath?: string },
-    ) => ({
-      ANTHROPIC_API_KEY: credential.value,
-      // Mirror the real buildAgentEnv contract for the CLAUDE_PLUGIN_ROOT export
-      // so the AC3 integration pin below can assert the value survives
-      // pass-through into the final options.env (catches a downstream drop).
-      ...(opts?.pluginPath ? { CLAUDE_PLUGIN_ROOT: opts.pluginPath } : {}),
-    }),
-  ),
+  // `satisfies typeof …buildAgentEnv` pins the mock to the REAL signature so a
+  // 3rd-arg shape drift (e.g. a `pluginPath` rename) is a compile break here,
+  // not a silently-green AC3 tested on the wrong side of the mock seam.
+  buildAgentEnv: vi.fn(((credential, _tokens, opts) => ({
+    ANTHROPIC_API_KEY: credential.value,
+    // Mirror the real buildAgentEnv contract for the CLAUDE_PLUGIN_ROOT export
+    // so the AC3 integration pin below can assert the value survives
+    // pass-through into the final options.env (catches a downstream drop).
+    ...(opts?.pluginPath ? { CLAUDE_PLUGIN_ROOT: opts.pluginPath } : {}),
+  })) satisfies typeof import("@/server/agent-env").buildAgentEnv),
 }));
 
 vi.mock("@/server/sandbox-hook", () => ({

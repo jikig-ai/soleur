@@ -284,24 +284,27 @@ describe("buildAgentEnv", () => {
         ).toThrow(/CLAUDE_PLUGIN_ROOT export required/);
       });
 
-      test("prod, non-empty INVALID pluginPath → throws via assertTrustedPluginPath (not a bare assignment)", () => {
-        stubProductionEnv();
-        // Each of these would be SET verbatim by a fail-open bare assignment;
-        // a fail-closed injection routes them through assertTrustedPluginPath,
-        // which throws /plugin path/i for any non-/app/ (or relative/traversal).
-        for (const bad of [
-          "/workspaces/abc/plugins/soleur",
-          "/tmp/evil/plugins/soleur",
-          "plugins/soleur", // relative
-          "/app/../workspaces/x/plugins/soleur", // traversal → resolves outside /app/
-        ]) {
+      // One isolated, self-labeling case per invalid shape (a shared loop would
+      // throw on the first bad element and mask the rest). Each would be SET
+      // verbatim by a fail-open bare assignment; the fail-closed injection routes
+      // it through assertTrustedPluginPath, which throws /plugin path/i for any
+      // non-/app/ (or relative/traversal) value.
+      test.each([
+        "/workspaces/abc/plugins/soleur",
+        "/tmp/evil/plugins/soleur",
+        "plugins/soleur", // relative
+        "/app/../workspaces/x/plugins/soleur", // traversal → resolves outside /app/
+      ])(
+        "prod, non-empty INVALID pluginPath %s → throws via assertTrustedPluginPath (not a bare assignment)",
+        (bad) => {
+          stubProductionEnv();
           expect(() =>
             buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" }, undefined, {
               pluginPath: bad,
             }),
           ).toThrow(/plugin path/i);
-        }
-      });
+        },
+      );
 
       test("prod, valid /app pluginPath → sets it (survives validation, not only the ambient-VITEST no-op)", () => {
         stubProductionEnv();
