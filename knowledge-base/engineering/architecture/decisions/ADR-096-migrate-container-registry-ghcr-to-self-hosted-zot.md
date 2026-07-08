@@ -151,7 +151,9 @@ mitigations un-live. Both are structural, not one-off:
   `terraform apply -replace='hcloud_server.registry'` over a **5-target** set (server +
   `hcloud_server_network.registry` + `hcloud_volume_attachment.registry` +
   `hcloud_firewall_attachment.registry` + `hcloud_volume.registry`) to re-run cloud-init + apply any
-  pending storage-volume resize **without SSH**. A sourced destroy-guard
+  pending storage-volume resize **without SSH**. *(Grew to a **6-target** set — the isolated
+  `doppler_secret.registry_betterstack_logs_token` — under the #6240/#6244 amendment below.)* *(Grew to a **6-target** set — + `doppler_secret.registry_betterstack_logs_token` —
+  in the #6240/#6244 amendment below.)* A sourced destroy-guard
   (`tests/scripts/lib/registry-host-replace-gate.sh`, no `[ack-destroy]` bypass —
   `hr-menu-option-ack-not-prod-write-auth`) PRESERVES the zot OCI store volume (size-update-only,
   never delete/forget/replace) and positively asserts the new host re-attaches to its private NIC +
@@ -200,8 +202,8 @@ volume API ("~30 GB") as "not full", but that API reports the **block-device** s
   `scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK` with NO SSH. The `#6244`-suggested
   journald-`logger` interim was rejected (journald needs SSH to read — `hr-no-ssh-fallback-in-runbooks`).
   The event's fields discriminate all three competing root causes in one line: fs-not-grown
-  (`resize_ok=false` OR `fs_size_gb ≪ block_size_gb`), gc-too-slow (`resize_ok=true`, `fs≈30`,
-  `pcent≥85`), and zot-mid-write-crash (`pcent<85`, `fs≈30`, `zot_restarts>0`). Delivered by folding
+  (`resize_ok=false` OR `fs_size_gb ≪ block_size_gb`), gc-too-slow (`resize_ok=true`, `fs≈28 GiB`,
+  `pcent≥85`), and zot-mid-write-crash (`pcent<85`, `fs≈28 GiB`, `zot_restarts>0`). Delivered by folding
   the report into `zot-disk-heartbeat.sh` under a `doppler run --project soleur-registry --config prd`
   cron wrapper (token injected at run time, never baked into user_data). This adds the
   `zotRegistry → betterstack` edge in `model.c4`.

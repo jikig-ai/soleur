@@ -46,7 +46,7 @@ brand_survival_threshold: aggregate pattern
 ## Phase 6 — Post-merge verify (agent-automated, NO operator)
 - [ ] 6.1 `gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace`; wait for success.
 - [ ] 6.2 Verify private-net reachability post-replace (NIC may be down → soft reboot; crane probe IS the check).
-- [ ] 6.3 `betterstack-query.sh --since 30m --grep SOLEUR_ZOT_DISK` → `resize_ok=true`, `fs_size_gb≈30`, `pcent<85`.
+- [ ] 6.3 `betterstack-query.sh --since 30m --grep SOLEUR_ZOT_DISK` → `resize_ok=true`, `fs_size_gb≈28 GiB`, `pcent<85`.
 - [ ] 6.4 Fresh release or manual crane push probe → zero `500` / zero `no space left on device`.
 - [ ] 6.5 `soleur-registry-disk-prd` heartbeat `attributes.status==up` (Uptime API, NOT `last_event_at`); incident auto-resolves.
 - [ ] 6.6 Close #6240 + #6244 AFTER 6.3+6.4+6.5 green.

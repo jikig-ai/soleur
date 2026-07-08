@@ -140,9 +140,9 @@ success signal.
    not verified-by-hope, by the emitted `df` telemetry post-redeploy (the whole point of Phase 1).
    Competing L7 sub-hypotheses the telemetry discriminates in ONE event:
    - (a) **fs full because resize2fs never grew it to 30 GB** — `resize_ok=false` OR `fs_size_gb≈10`.
-   - (b) **fs full because gc/retention didn't reclaim** — `resize_ok=true`, `fs_size_gb≈30`, `pcent≥85`.
+   - (b) **fs full because gc/retention didn't reclaim** — `resize_ok=true`, `fs_size_gb≈28 GiB`, `pcent≥85`.
    - (c) **zot mid-write crash / OOM on the 4 GB box (dedupe on large writes)** — `pcent<85`,
-     `fs_size_gb≈30`, yet zot still 500s + `zot_health` shows restarts. (Least likely; contingent
+     `fs_size_gb≈28 GiB`, yet zot still 500s + `zot_health` shows restarts. (Least likely; contingent
      follow-up only if the telemetry shows a healthy fs.)
 
 ### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
@@ -322,8 +322,11 @@ supply-chain/alerting layer (systemic), not one user's data or session. No CPO s
   zot over the private-net bridge) IS this reachability check; if it fails on connection (not 500),
   soft-reboot the host and re-probe before concluding.
 - Read telemetry: `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m
-  --grep SOLEUR_ZOT_DISK` → confirm `resize_ok=true`, `fs_size_gb≈30`, `pcent<85`. This is the
+  --grep SOLEUR_ZOT_DISK` → confirm `resize_ok=true`, `fs_size_gb≈28 GiB`, `pcent<85`. This is the
   deterministic verdict (`hr-no-dashboard-eyeball-pull-data-yourself`), not a dashboard eyeball.
+  **GiB note:** `df -B1G` / `lsblk` report GiB (1024³), so a 30 GB (10⁹-byte) Hetzner volume surfaces
+  as `fs_size_gb`/`block_size_gb`≈28, NOT 30 — a fully-grown fs reads ≈28, do NOT misread that as a
+  resize failure (the resize block's own 2 GiB WARN tolerance already absorbs this).
 - Probe the mirror: trigger a fresh Web Platform Release OR a manual `crane` push probe → confirm the
   mirror step completes with zero `500` / zero `no space left on device`.
 - Confirm `soleur-registry-disk-prd` heartbeat `status==up` (Better Stack Uptime API,
@@ -363,17 +366,17 @@ error_reporting:
   fail_loud: "resize2fs failure emits resize_ok=false to the SOLEUR_ZOT_DISK event AND journald; boot isolation-guard FATALs (refuses to launch zot) on a wrong secret set"
 failure_modes:
   - mode: "ext4 fs full because resize2fs never grew it to the 30 GB device"
-    detection: "SOLEUR_ZOT_DISK event: resize_ok=false OR fs_size_gb≈10 while block_size_gb≈30"
+    detection: "SOLEUR_ZOT_DISK event: resize_ok=false OR fs_size_gb≈10 while block_size_gb≈28 GiB"
     alert_route: "betterstack-query.sh --grep SOLEUR_ZOT_DISK; missed-heartbeat incident"
   - mode: "ext4 fs full because gc/retention did not reclaim in time"
-    detection: "SOLEUR_ZOT_DISK event: resize_ok=true, fs_size_gb≈30, pcent≥85"
+    detection: "SOLEUR_ZOT_DISK event: resize_ok=true, fs_size_gb≈28 GiB, pcent≥85"
     alert_route: "same query + missed-heartbeat incident"
   - mode: "zot mid-write crash/OOM (dedupe on 4 GB box) with a healthy fs"
-    detection: "SOLEUR_ZOT_DISK event: pcent<85, fs_size_gb≈30, zot_restarts>0"
+    detection: "SOLEUR_ZOT_DISK event: pcent<85, fs_size_gb≈28 GiB, zot_restarts>0"
     alert_route: "same query; crane push still 500s → release job failure"
   - mode: "egress to Better Stack Logs failed (host can't self-report)"
-    detection: "ping_rc!=0 carried in the next successful SOLEUR_ZOT_DISK post; journald line"
-    alert_route: "betterstack-query.sh --grep SOLEUR_ZOT_DISK (gap in event cadence)"
+    detection: "NOTE ping_rc does NOT observe this — ping_rc is the Uptime HEARTBEAT probe (uptime.betterstack.com), a DIFFERENT host than the Logs INGEST (s2457081.eu-fsn-3.betterstackdata.com). A TOTAL egress outage is caught by the Uptime heartbeat going absent (alerting). A Logs-INGEST-ONLY outage (heartbeat host reachable, betterstackdata.com not) surfaces ONLY as a cadence gap in the SOLEUR_ZOT_DISK events on a manual betterstack-query.sh read — NO alert. (The curl retry-once + journald breadcrumb is the on-host record.)"
+    alert_route: "Uptime heartbeat absence (total egress); else a manual betterstack-query.sh --grep SOLEUR_ZOT_DISK cadence-gap check (ingest-only)"
 logs:
   where: "Better Stack Logs source 2457081 (table t520508_soleur_inngest_vector_prd_3_logs); resize breadcrumbs also journald on-host"
   retention: "Better Stack Logs plan default"
@@ -471,7 +474,7 @@ is true immediately on the `registry-host-replace` redeploy (not soak-gated).
 ### Post-merge (operator = agent-automated; NO human step)
 - [ ] `registry-host-replace` dispatched and succeeded (`gh run watch`).
 - [ ] `betterstack-query.sh --since 30m --grep SOLEUR_ZOT_DISK` returns ≥1 event with `resize_ok=true`,
-      `fs_size_gb≈30`, `pcent<85` (deterministic verdict; `hr-no-dashboard-eyeball-pull-data-yourself`).
+      `fs_size_gb≈28 GiB`, `pcent<85` (deterministic verdict; `hr-no-dashboard-eyeball-pull-data-yourself`).
 - [ ] A fresh Web Platform Release (or manual `crane` push probe) mirror step completes with zero `500`
       / zero `no space left on device`.
 - [ ] `soleur-registry-disk-prd` heartbeat `status==up` (Uptime API) and the missed-heartbeat incident
