@@ -5,7 +5,7 @@ lane: cross-domain
 issue: 6165
 pr: 6160
 plan: knowledge-base/project/plans/2026-07-07-feat-beta-conversation-capture-plan.md
-adr: knowledge-base/engineering/architecture/decisions/ADR-098-beta-crm-capture-store-per-tenant-owner-private-agent-native.md
+adr: knowledge-base/engineering/architecture/decisions/ADR-102-beta-crm-capture-store-per-tenant-owner-private-agent-native.md
 ---
 
 # Tasks: Beta-Tester Conversation Capture (#6165)
@@ -13,14 +13,14 @@ adr: knowledge-base/engineering/architecture/decisions/ADR-098-beta-crm-capture-
 Derived from the finalized (post-6-agent-review) plan. Single PR. Brand-survival threshold: single-user incident. Run RED tests before GREEN (`cq-write-failing-tests-before`).
 
 ## Phase 0 — Preconditions
-- [ ] 0.1 Confirm mig head 122 → new `123_beta_crm.sql`.
+- [ ] 0.1 Confirm mig head 125 → new `126_beta_crm.sql`.
 - [ ] 0.2 Owner-only key = `user_id = auth.uid()` (no workspace_id for MVP).
 - [ ] 0.3 Confirm imports: `getFreshTenantClient` `@/lib/supabase/tenant`, `reportSilentFallback` `@/server/observability`, `tool` `@anthropic-ai/claude-agent-sdk` (per `inbox-tools.ts`).
 - [ ] 0.4 Tool-wiring site = `server/agent-runner.ts:1749-1808` (`buildInboxTools` :1773; `buildRoutineTools` singular).
 - [ ] 0.5 `dsar-allowlist-completeness.test.ts` will force the 3 tables into the allowlist.
 - [ ] 0.6 Read `102:452-468` pg_cron idiom + confirm no `CREATE INDEX CONCURRENTLY`.
 
-## Phase 1 — Migration `123_beta_crm.sql` (+ `.down.sql`)
+## Phase 1 — Migration `126_beta_crm.sql` (+ `.down.sql`)
 - [ ] 1.1 `beta_contacts` mutable head: cols per plan; `amount_basis NOT NULL DEFAULT 'unknown'`; **NO** FX columns; `UNIQUE (id, user_id)`; `CHECK (amount IS NULL OR currency IS NOT NULL)`; per-column `-- LAWFUL_BASIS:` annotations; `stage CHECK` from `<STAGE_ENUM>`.
 - [ ] 1.2 `interview_notes` append-only: composite FK `(contact_id,user_id)→beta_contacts(id,user_id) ON DELETE CASCADE`; `lens ... cardinality(lens) >= 1` (NOT array_length); `body`, `occurred_at`, `created_at`.
 - [ ] 1.3 `beta_contact_stage_transitions` append-only: composite FK; `to_stage CHECK IN (<STAGE_ENUM>)`; `from_stage`, `entered_at`.
@@ -30,7 +30,7 @@ Derived from the finalized (post-6-agent-review) plan. Single PR. Brand-survival
 - [ ] 1.7 `updated_at` BEFORE-UPDATE trigger on `beta_contacts` (search_path pinned).
 - [ ] 1.8 pg_cron retention: `COALESCE(last_contact, created_at::date) < now() - interval '24 months'`; `WHEN undefined_table` guard.
 - [ ] 1.9 `.down.sql`: DROP tables CASCADE, functions, unschedule cron.
-- [ ] 1.T `test/supabase-migrations/123-beta-crm.test.ts`: FK/CASCADE shape; RLS `polcmd` (`='r'`, none in `'a','w','d','*'`); jti policy present; CHECK cases incl. live `lens='{}'` reject + `amount⇒currency`; composite-FK mis-stamp reject; append-only body guard (no UPDATE/DELETE on history tables).
+- [ ] 1.T `test/supabase-migrations/126-beta-crm.test.ts`: FK/CASCADE shape; RLS `polcmd` (`='r'`, none in `'a','w','d','*'`); jti policy present; CHECK cases incl. live `lens='{}'` reject + `amount⇒currency`; composite-FK mis-stamp reject; append-only body guard (no UPDATE/DELETE on history tables).
 
 ## Phase 2 — `crm` module + agent tools
 - [ ] 2.1 `server/crm/stage-probability.ts`: `STAGE_PROBABILITY` + `SCHEMA_VERSION` (enum source-of-truth).

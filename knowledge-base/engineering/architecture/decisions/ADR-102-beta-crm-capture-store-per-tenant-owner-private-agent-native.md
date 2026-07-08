@@ -1,11 +1,11 @@
-# ADR-098: Beta-CRM capture store — per-tenant Supabase, owner-private, agent-native, extraction-ready
+# ADR-102: Beta-CRM capture store — per-tenant Supabase, owner-private, agent-native, extraction-ready
 
 - **Status:** adopting (Phase 1 migration + agent path + DSAR wiring ship; the capture skill and any UI surface are deferred follow-ups)
 - **Date:** 2026-07-07
 - **Deciders:** Operator; drafted via `/soleur:go` → brainstorm → plan → this ADR. Domain sign-offs carried forward from the brainstorm §Domain Assessments (CPO, CLO, CTO, CRO, COO, CFO).
 - **Related:** ADR-066 (operator email-triage inbox — the owner-private-PII + Article-30 precedent), ADR-038/ADR-073 (workspace ownership model), mig 075 (`conversations` `visibility='private'` owner-only RLS template), mig 102 (`email_triage_items` WORM/RLS/anonymise template), #6165 (feature), #6166 (deferred standalone-product revisit), #6163 (Sourcing Options Canvas workflow). Validation: `knowledge-base/product/validation/2026-07-07-agent-operated-crm-validation.md`.
 
-> **Provisional ordinal.** ADR-098 is the next-free ordinal against `origin/main` at plan time (highest present = ADR-097). A sibling PR may claim it before this lands; `/ship`'s ADR-Ordinal Collision Gate re-verifies against `origin/main` at merge and after every Phase-7 sync. If renumbered, sweep the whole feature artifact set (`grep -rn 'ADR-098' knowledge-base/project/{plans,specs}/feat-beta-conversation-capture/` + this file + the migration/code seed) in the same edit.
+> **Ordinal.** Renumbered ADR-098 → **ADR-102** at `/work` start: sibling PR `feat-one-shot-5739-auth-wal-reduction-v2` landed `ADR-098-soleur-owns-auth-flow-state-retention.md` (plus ADR-099/100/101) between plan authoring and implementation, so 098–101 were taken; 102 was the next free ordinal against `origin/main`. The migration was likewise renumbered 123 → **126** (siblings landed 123/124/125). `/ship`'s ADR-Ordinal Collision Gate re-verifies against `origin/main` at merge and after every Phase-7 sync; on a further collision, sweep the feature artifact set (`grep -rn 'ADR-102' knowledge-base/project/{plans,specs}/feat-beta-conversation-capture/` + this file + the migration/code seed) in the same edit.
 
 ## Context
 
@@ -68,7 +68,7 @@ New **Article 30 Processing Activity PA-30** (next free; highest present = PA-29
 
 ### 8. Extraction seam — the `crm` module boundary
 
-All CRM code lives behind a single seam: `server/crm/` (data access, the RPC wrappers, the stage-probability map, the MCP tools) + a self-contained migration `123_beta_crm.sql` + the `DSAR_TABLE_ALLOWLIST` adapter entries. No Soleur-specific stage names or fields are hardcoded; the stage enum + probability map are tenant-config-shaped. This keeps the capability a liftable unit if the #6166 spin-out triggers fire, without over-building a plugin abstraction now (YAGNI: the seam is a directory + a config map, not a package boundary).
+All CRM code lives behind a single seam: `server/crm/` (data access, the RPC wrappers, the stage-probability map, the MCP tools) + a self-contained migration `126_beta_crm.sql` + the `DSAR_TABLE_ALLOWLIST` adapter entries. No Soleur-specific stage names or fields are hardcoded; the stage enum + probability map are tenant-config-shaped. This keeps the capability a liftable unit if the #6166 spin-out triggers fire, without over-building a plugin abstraction now (YAGNI: the seam is a directory + a config map, not a package boundary).
 
 ### 9. De-identified insight layer stays in git
 
@@ -104,7 +104,7 @@ Secondary data-model / mechanism alternatives, decided within the CHOSEN option:
 
 The container view gains a new data-store and a new external data subject (see the plan's `## Architecture Decision (ADR/C4)` § for the exact `model.c4` / `views.c4` edits):
 
-- **New container (data store)** `crmStore = database "Beta-CRM Store" { technology "Supabase (beta_contacts, interview_notes, beta_contact_stage_transitions, mig 123)" }` inside `infra` (mirrors `operationalInbox`; `containers` view only).
+- **New container (data store)** `crmStore = database "Beta-CRM Store" { technology "Supabase (beta_contacts, interview_notes, beta_contact_stage_transitions, mig 126)" }` inside `infra` (mirrors `operationalInbox`; `containers` view only).
 - **New external actor** `betaContact = actor "Beta Tester / Prospect" { #external }` — the third-party data subject whose conversation PII the operator captures (mirrors `emailSender`; added to **both** `context` and `containers` views, as `emailSender` is).
 - **New relationships:** `engine -> crmStore` (`crm_*` MCP tools read/write via RPC — agent-native parity, the true mirror of `engine -> operationalInbox`); `betaContact -> founder` (PII origin). **No `founder -> crmStore` edge** — no `founder -> <database>` edge exists in the model, and the MVP has no UI/API surface, so the only real `crmStore` access path is the agent; a `webapp -> crmStore` edge is added only when the deferred UI/API phase lands.
 - Validated by `c4-code-syntax.test.ts` + `c4-render.test.ts` (a `view include` on an undefined element fails there).
