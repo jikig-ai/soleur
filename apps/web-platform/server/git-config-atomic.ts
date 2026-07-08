@@ -25,12 +25,23 @@
 // `workspace-permission-lock.ts:1-10`); no in-process Mutex is added. Do NOT
 // re-state this safety as "lock-free ⇒ safe under >1 caller".
 //
-// Best-effort: NEVER throws (preserves `workspace.ts`'s current
-// non-stranding behavior). Because it never throws, the caller cannot
-// distinguish "seeded" from "masked-target aborted, unseeded" — which is WHY
-// the masked-target branch owns a CAPTURED `reportSilentFallback` Sentry event
-// (cq-silent-fallback-must-mirror-to-sentry), the sole loud signal that a
-// workspace provisioned with an unseeded identity.
+// DURABILITY: like the bash precedent (and unlike `workspace-permission-lock.ts`,
+// which owns its write fd and `fdatasync`es before rename), this helper cannot
+// fsync — git owns the temp fd inside `execFileSync`. So the forgone window is
+// POST-rename / pre-flush: a machine crash after the dir-entry swap but before
+// the data blocks journal could leave a torn config. Accepted at this severity
+// (best-effort, re-seedable owner seed; ADR-099 low-severity). The PRE-rename
+// window is safe regardless — a crash there discards the temp, leaving the old
+// config intact.
+//
+// Best-effort: NEVER throws (preserves `workspace.ts`'s current non-stranding
+// behavior). Because it never throws, the caller cannot distinguish "seeded"
+// from "aborted, unseeded" — which is WHY BOTH failure branches emit a CAPTURED
+// `reportSilentFallback` Sentry event (cq-silent-fallback-must-mirror-to-sentry):
+// the masked-target pre-check (op="masked-target") AND the generic cp/write/rename
+// failure (op="write", covering disk/perms/rename-EBUSY). Together they are the
+// loud signal for ANY cause of a workspace provisioning with an unseeded identity
+// — no unseed outcome degrades to a droppable breadcrumb.
 
 import {
   chmodSync,
@@ -149,7 +160,18 @@ export function atomicGitConfig(
     } catch {
       // tmp may not exist (cp/open failed) or was already renamed — ignore.
     }
-    log.warn(
+    // Non-stranding: provisioning falls through to today's behavior with an
+    // UNSEEDED identity — the same user-invisible degraded outcome as the
+    // masked-target branch. So mirror a CAPTURED Sentry event with the same
+    // queryable vocabulary (cq-silent-fallback-must-mirror-to-sentry); a bare
+    // log.warn yields only a droppable breadcrumb. This does NOT add an alert
+    // rule — a transient disk/perms blip stays queryable, not paging.
+    reportSilentFallback(err, {
+      feature: "git-config-atomic",
+      op: "write",
+      extra: { config },
+    });
+    log.error(
       { err, config, op: "write" },
       "git-config-atomic: write failed; identity seed skipped (non-stranding)",
     );

@@ -12,6 +12,8 @@ import {
   mkdtempSync,
   rmSync,
   writeFileSync,
+  readFileSync,
+  readdirSync,
   mkdirSync,
   existsSync,
   statSync,
@@ -84,6 +86,44 @@ describe("atomicGitConfig", () => {
     atomicGitConfig(dir, ["config", "user.name", "Owner Name"]);
     expect(cfg(dir, "user.name")).toBe("Owner Name"); // rename is lock-independent
     expect(existsSync(lock)).toBe(true); // we never touch someone else's lock
+  });
+
+  test("absent .git/config (ENOENT) — starts from an empty temp and creates a fresh config", () => {
+    const dir = freshRepo();
+    const config = join(dir, ".git", "config");
+    // Remove config entirely to drive the ENOENT → start-empty branch
+    // (configExists=false → skip copyFileSync → git creates the temp fresh).
+    rmSync(config, { force: true });
+    atomicGitConfig(dir, ["config", "user.email", "owner@example.com"]);
+    expect(existsSync(config)).toBe(true);
+    expect(readFileSync(config, "utf8")).toContain("owner@example.com");
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("argv with the leading 'config' token omitted writes identically", () => {
+    const dir = freshRepo();
+    // Docstring advertises the leading "config" subcommand token as optional.
+    atomicGitConfig(dir, ["user.email", "no-token@example.com"]);
+    expect(cfg(dir, "user.email")).toBe("no-token@example.com");
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("generic write failure fires a captured reportSilentFallback (op=write), no throw, no temp leak", () => {
+    const dir = freshRepo();
+    const config = join(dir, ".git", "config");
+    const before = readFileSync(config, "utf8");
+    // A section-less git-config key makes `git config --file` exit non-zero
+    // ("key does not contain a section") → the generic write catch. Asserts the
+    // Finding-1 fix: this unseeded-identity path emits a CAPTURED event, not a
+    // droppable breadcrumb.
+    expect(() => atomicGitConfig(dir, ["config", "nosectionkey", "x"])).not.toThrow();
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [, opts] = reportSilentFallback.mock.calls[0] as [unknown, { feature?: string; op?: string }];
+    expect(opts?.feature).toBe("git-config-atomic");
+    expect(opts?.op).toBe("write");
+    // Original config untouched (rename never happened) and no temp orphan left.
+    expect(readFileSync(config, "utf8")).toBe(before);
+    expect(readdirSync(join(dir, ".git")).some((f) => f.includes("soleur-tmp"))).toBe(false);
   });
 
   test("non-regular config target is refused: no throw, fires reportSilentFallback, config not renamed over", () => {

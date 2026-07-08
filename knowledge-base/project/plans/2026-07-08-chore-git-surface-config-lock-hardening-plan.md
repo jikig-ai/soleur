@@ -261,9 +261,9 @@ failure_modes:
   - mode: NON-REGULAR (masked) config TARGET host-side (should never occur — real anomaly)
     detection: reportSilentFallback CAPTURED Sentry event + error log (Better Stack); rename aborted
     alert_route: Sentry (captured event); existing provision-error surface
-  - mode: cp/temp-write/rename fails (disk, perms)
-    detection: git-config-atomic warn/error log + existing workspace.ts try/catch → log.warn
-    alert_route: none (non-stranding; temp cleaned up; falls through to today's behavior)
+  - mode: cp/temp-write/rename fails (disk, perms, rename-EBUSY)
+    detection: reportSilentFallback CAPTURED Sentry event (op="write") + git-config-atomic error log (Better Stack); temp cleaned up. Same unseeded-identity outcome as masked-target, so mirrored as a captured event too (no unseed cause degrades to a droppable breadcrumb; review #6211 silent-failure finding).
+    alert_route: Sentry captured event (queryable; NO dedicated alert rule — a transient disk/perms blip stays searchable, not paging); non-stranding, falls through to today's behavior
 logs:
   where: server logger (`createChildLogger("git-config-atomic")`) → Better Stack; reportSilentFallback captured Sentry event on the masked-target error path. Gate path uses existing `.claude/logs/approvals.jsonl` (1y TTL, unchanged).
   retention: Better Stack per existing platform retention; approvals.jsonl 1-year TTL via `rotate_if_needed` (unchanged by this PR).
@@ -337,7 +337,7 @@ the new helper is a deliberate blend:
 | Temp path | `${target}.${pid}.${rand}.tmp` (same dir) | `${dir}/${base}.soleur-tmp.$$` (same dir) | same-dir `${config}.soleur-tmp.${pid}.${uuid}` |
 | Seed temp w/ current content | writes full JSON (owns content) | **`cp -p` original → temp** (preserve mode/owner) | **`cp -p`/`copyFileSync` w/ mode → temp** (must seed — git's `--file` writer starts empty) |
 | Edit mechanism | `writeSync` (hand-serialized JSON) | `git config --file <tmp>` (git INI writer) | `git config --file <tmp>` (git INI writer — cannot hand-serialize INI) |
-| Durability | `fdatasyncSync(fd)` before rename | none (relies on `mv -f`) | **fdatasync not achievable** (git owns the temp fd) — acceptable: matches the bash precedent, and a crash before our rename leaves the OLD config intact (rename atomic, temp discarded = safe failure) |
+| Durability | `fdatasyncSync(fd)` before rename | none (relies on `mv -f`) | **fdatasync not achievable** (git owns the temp fd) — acceptable: matches the bash precedent. The forgone window is **post-rename / pre-flush** (crash after the dir-entry swap but before data blocks journal → possible torn config); the pre-rename window is safe regardless (temp discarded, old config intact). Accepted at this severity (best-effort, re-seedable owner seed; ADR-099 low-severity). |
 | Atomic replace | `renameSync(tmp, target)` | `mv -f` | `renameSync(tmp, config)` (Node, POSIX-atomic) |
 | Cleanup on failure | best-effort `unlinkSync(tmp)` | `rm -f tmp tmp.lock` | best-effort `unlinkSync(tmp)` |
 | Masked-target guard | n/a (settings.json unmasked) | `_config_target_masked` pre-check (blind sandbox) | ONE defensive non-regular-target check (host-side; should never fire) |
