@@ -103,6 +103,81 @@ else
   pass
 fi
 
+# The following fixtures each isolate EXACTLY ONE failing clause (mutation reasoning:
+# removing that clause from the PASS predicate would flip the fixture to PASS), so no
+# assertion is vacuous. Additional building blocks:
+FW_DELETE="$(rc_obj 'hcloud_firewall_attachment.registry' '"delete"')"
+VOL_NOOP="$(rc_obj 'hcloud_volume.registry' '"no-op"')"
+VOL_FORGET="$(rc_obj 'hcloud_volume.registry' '"forget"')"
+SERVER_UPDATE="$(rc_obj 'hcloud_server.registry' '"update"')"
+VA_DELETE_ONLY="$(rc_obj 'hcloud_volume_attachment.registry' '"delete"')"
+DATA_READ="$(rc_obj 'data.hcloud_image.registry_os' '"read"')"
+WEB_NOOP="$(rc_obj 'hcloud_server.web[\"web-1\"]' '"no-op"')"
+
+# --- Test 7 (a): FAIL — deny-all firewall stripped (firewall_attachment = ["delete"]) ---
+# server replaced + NIC create + volume-attachment create + volume no-op, but the firewall
+# attachment is deleted → the new host is naked on its public IP. ISOLATES firewall_ok==0
+# (every other clause holds: oos=0, store=0, vol=ok, server=1, nic>=1, attachment>=1).
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FW_DELETE},${VOL_NOOP}"
+if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T7(a): a firewall-stripped plan (firewall_ok==0) must ABORT (rc=1)"
+else
+  pass
+fi
+
+# --- Test 8 (b): PASS — the REAL live state: volume already 30 GB → ["no-op"] ---
+# The store volume is already resized, so a live scoped plan shows it as a no-op (not an
+# update). The gate must PASS on this — no-op is a permitted, store-preserving action.
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FW_UPDATE},${VOL_NOOP}"
+if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  pass
+else
+  fail "T8(b): the live scoped recreate with volume ['no-op'] should PASS (rc=0)"
+fi
+
+# --- Test 9 (c): FAIL — the zot store volume is FORGOTTEN (removed from state) ---
+# A `forget` drops the volume from state without destroying it — but the new host would
+# then not manage/mount it. store_destroyed counts delete OR forget → must ABORT.
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FW_UPDATE},${VOL_FORGET}"
+if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T9(c): a zot store volume forget (store_destroyed) must ABORT (rc=1)"
+else
+  pass
+fi
+
+# --- Test 10 (d): FAIL — server updated in-place, NOT replaced (no fresh cloud-init) ---
+# server = ["update"] (no delete+create) so cloud-init never re-runs. ISOLATES
+# server_replaced==0 (oos=0 since update is in-allow-set; every other clause holds).
+write_plan "${SERVER_UPDATE},${NET_REPLACE},${VA_REPLACE},${FW_UPDATE},${VOL_NOOP}"
+if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T10(d): an in-place server update (server_replaced==0) must ABORT (rc=1)"
+else
+  pass
+fi
+
+# --- Test 11 (e): PASS — a data-source ["read"] AND an out-of-allow-set ["no-op"] ---
+# The positive-action out_of_scope filter must EXCLUDE both `read` (data source) and
+# `no-op` (a stray in-graph resource): neither is a positive action, so the plan still
+# PASSes. Proves the read/no-op exclusion is load-bearing (a "!= no-op" filter that failed
+# to also exclude `read` would false-abort here).
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FW_UPDATE},${VOL_UPDATE},${DATA_READ},${WEB_NOOP}"
+if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  pass
+else
+  fail "T11(e): a plan with a data-source read + an out-of-scope no-op should still PASS (rc=0)"
+fi
+
+# --- Test 12 (f): FAIL — volume-attachment stripped (["delete"] only, no create) ---
+# The store volume is preserved, NIC + firewall OK, server replaced — but the
+# volume-attachment is not re-created, so the new host boots with /var/lib/zot UNMOUNTED
+# (a broken store). ISOLATES attachment_recreated==0 (covers FIX 2; every other clause holds).
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_DELETE_ONLY},${FW_UPDATE},${VOL_NOOP}"
+if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T12(f): a volume-attachment-stripped plan (attachment_recreated==0) must ABORT (rc=1)"
+else
+  pass
+fi
+
 echo ""
 echo "=== test-registry-host-replace-gate.sh: ${passes} passed, ${fails} failed ==="
 [ "$fails" -eq 0 ] || exit 1

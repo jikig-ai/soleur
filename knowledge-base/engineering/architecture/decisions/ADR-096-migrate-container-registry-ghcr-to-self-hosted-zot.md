@@ -134,36 +134,6 @@ provisioning-gate scoped-token count/identity assert. The identical branch-confi
 affects `prd_git_data`, `prd_kb_drift_walker`, and `prd_cla` (a **live** over-read) — audited
 separately in **#6167**; status stays **Adopting**.
 
-### Reprovisioning path + IaC alert recipient (amendment 2026-07-08)
-
-**Reprovisioning (dispatch-only `registry-host-replace`).** The Apply-path ruling above keeps every
-registry resource an `OPERATOR_APPLIED_EXCLUSION` — correct for the *initial* provision, but it left
-**no non-SSH mechanism to reprovision** the running host (the per-PR path SSH-bridges to the existing
-web host and cannot touch the registry host). A 2026-07-08 incident (`soleur-registry-disk-prd |
-Missed heartbeat`) exposed this: the zot capacity-management merge created a disk-full heartbeat +
-`storage.retention` pruning + a 30 GB volume, but none went live because the host was never
-redeployed. The fix is a sanctioned **dispatch-only** `registry-host-replace` `workflow_dispatch`
-path in `apply-web-platform-infra.yml` — a scoped `terraform apply -replace='hcloud_server.registry'`
-over the server + its 3 id-referencing dependents + the storage volume, gated by a sourced
-destroy-guard (`tests/scripts/lib/registry-host-replace-gate.sh`, no `[ack-destroy]` bypass per
-`hr-menu-option-ack-not-prod-write-auth`) that PRESERVES the zot OCI store (size-update-only, never
-delete/forget/replace) and positively asserts the new host is re-attached to its private NIC +
-deny-all firewall. This mirrors ADR-100's `inngest-host-replace` exactly (with a **deliberate**
-extra firewall-attachment target — the registry, unlike inngest, has a deny-all-public firewall that
-must re-attach on first boot). **The per-PR exclusion is unchanged**; this is a maintenance-window
-dispatch, not a per-PR apply. It re-runs cloud-init (disk-heartbeat cron + retention) and applies any
-pending volume resize in one apply — activating the merged-but-un-live mitigations without SSH
-(`hr-no-ssh-fallback-in-runbooks`, `hr-prod-host-config-change-immutable-redeploy`).
-
-**IaC alert recipient (`betteruptime_team_member.ops`).** The same incident stayed unacknowledged
-because Better Stack recipients were not managed in Terraform — only the account owner was emailed.
-`betteruptime_team_member.ops` (email `ops@jikigai.com`, `role = "responder"`, `team_name = "Your
-team"`) is added to `uptime-alerts.tf` as the **free-tier** IaC recipient path (escalation
-`betteruptime_policy` stays paid-gated, unchanged) and auto-applies per-merge via
-`-target=betteruptime_team_member.ops`. It is **inert until ops@ accepts the one-time invite** (its
-own inbox); the documented fallback if free-tier non-owner routing proves owner-only is a
-`betteruptime_outgoing_webhook` forward or a Responder-tier upgrade (expense-gated, out of scope).
-
 ### Reprovisioning path + alert recipient (amendment 2026-07-08)
 
 Two gaps surfaced when the 2026-07-08 zot capacity-management merge (`storage.retention` pruning +

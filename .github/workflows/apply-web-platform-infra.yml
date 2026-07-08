@@ -1747,8 +1747,15 @@ jobs:
         # the private NIC shows a create (re-attached) — belt-and-suspenders to the guard.
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan
+          # A mid-replace apply failure (old host destroyed, new create fails — quota/image/boot)
+          # leaves the registry DOWN. Emit a self-documenting recovery annotation, then fail hard
+          # (gating behavior unchanged). Serving is covered by the ADR-096 GHCR dark-launch
+          # fallback; the store volume is preserved (guarded), so re-dispatch re-creates the host.
+          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan; then
+            echo "::error::terraform apply (registry-host-replace) failed mid-replace — registry may be DOWN; GHCR fallback covers serving; re-dispatch registry-host-replace to recover from the preserved volume"
+            exit 1
+          fi
           VOL_DELETES=$(jq '[.resource_changes[]?
             | select(.address == "hcloud_volume.registry")
             | select(.change.actions? | any(. == "delete" or . == "forget"))] | length' tfplan.json)

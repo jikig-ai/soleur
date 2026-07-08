@@ -39,7 +39,11 @@
 #
 # PASS (rc=0) iff:
 #   out_of_scope==0 && store_destroyed==0 && volume_bad_update==0 &&
-#   server_replaced==1 && nic_recreated==1 && firewall_ok==1
+#   server_replaced==1 && nic_recreated>=1 && attachment_recreated>=1 && firewall_ok>=1
+# attachment_recreated (symmetric to nic_recreated): the hcloud_volume_attachment.registry
+# must show a `create` — if a future mis-edit dropped -target=hcloud_volume_attachment.registry
+# the new host would boot with /var/lib/zot UNMOUNTED (a broken store), yet server/nic/firewall
+# could all still pass. A no-store host is as broken as a no-NIC one, so assert it positively.
 # store_destroyed / volume_bad_update are INTENTIONALLY REDUNDANT named backstops (a store
 # delete is also an out-of-allow-set... no — the volume IS in the allow-set, so these are the
 # ONLY guard against a store destroy/replace slipping through under the allow-set) so an
@@ -99,6 +103,12 @@ registry_host_replace_gate() {
               | select(.change.actions? | index("create")) ]
             | length
           ),
+          attachment_recreated: (
+            [ $plan.resource_changes[]?
+              | select(.address == "hcloud_volume_attachment.registry")
+              | select(.change.actions? | index("create")) ]
+            | length
+          ),
           firewall_ok: (
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_firewall_attachment.registry")
@@ -115,22 +125,23 @@ registry_host_replace_gate() {
   vbad=$(echo "$counts" | jq -r '.volume_bad_update')
   replaced=$(echo "$counts" | jq -r '.server_replaced')
   nic=$(echo "$counts" | jq -r '.nic_recreated')
+  att=$(echo "$counts" | jq -r '.attachment_recreated')
   fw=$(echo "$counts" | jq -r '.firewall_ok')
 
   # Parse-validate every counter. A jq null/empty would evaluate false in the
   # arithmetic below and could silently mis-decide; fail LOUD instead.
-  for v in "$oos" "$sdel" "$vbad" "$replaced" "$nic" "$fw"; do
+  for v in "$oos" "$sdel" "$vbad" "$replaced" "$nic" "$att" "$fw"; do
     if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-      echo "registry_host_replace_gate: counter parse failed (out_of_scope='${oos}' store_destroyed='${sdel}' volume_bad_update='${vbad}' server_replaced='${replaced}' nic_recreated='${nic}' firewall_ok='${fw}')"
+      echo "registry_host_replace_gate: counter parse failed (out_of_scope='${oos}' store_destroyed='${sdel}' volume_bad_update='${vbad}' server_replaced='${replaced}' nic_recreated='${nic}' attachment_recreated='${att}' firewall_ok='${fw}')"
       return 1
     fi
   done
 
-  echo "out_of_scope=${oos} store_destroyed=${sdel} volume_bad_update=${vbad} server_replaced=${replaced} nic_recreated=${nic} firewall_ok=${fw}"
-  if [[ "$oos" -eq 0 && "$sdel" -eq 0 && "$vbad" -eq 0 && "$replaced" -eq 1 && "$nic" -ge 1 && "$fw" -ge 1 ]]; then
-    echo "registry_host_replace_gate: PASS — scoped registry-host recreate permitted (server + 3 dependents; zot store volume preserved; NIC + deny-all firewall re-attached)"
+  echo "out_of_scope=${oos} store_destroyed=${sdel} volume_bad_update=${vbad} server_replaced=${replaced} nic_recreated=${nic} attachment_recreated=${att} firewall_ok=${fw}"
+  if [[ "$oos" -eq 0 && "$sdel" -eq 0 && "$vbad" -eq 0 && "$replaced" -eq 1 && "$nic" -ge 1 && "$att" -ge 1 && "$fw" -ge 1 ]]; then
+    echo "registry_host_replace_gate: PASS — scoped registry-host recreate permitted (server + 3 dependents; zot store volume preserved; NIC + volume-attachment + deny-all firewall re-attached)"
     return 0
   fi
-  echo "registry_host_replace_gate: ABORT — plan is NOT the exact scoped registry-host recreate (out-of-scope change, zot-store destroy/replace, non-size volume update, no server replace, stripped private NIC, or stripped firewall)"
+  echo "registry_host_replace_gate: ABORT — plan is NOT the exact scoped registry-host recreate (out-of-scope change, zot-store destroy/replace, non-size volume update, no server replace, stripped private NIC, unmounted store [volume-attachment not re-created], or stripped firewall)"
   return 1
 }
