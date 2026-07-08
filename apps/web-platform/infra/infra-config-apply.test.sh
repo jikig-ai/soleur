@@ -60,6 +60,8 @@ export_valid_env_vars() {
   export CAT_INNGEST_VERIFY_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
   export INNGEST_INVENTORY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
   export GIT_LOCK_CHARDEVICE_SWEEP_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
+  export INNGEST_REGISTRY_PROBE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
+  export INNGEST_DOUBLEFIRE_PROBE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
 }
 
 assert_eq() {
@@ -225,9 +227,9 @@ test_state_file_happy_path() {
   local files_total
   files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   assert_eq "exit_code is 0" "0" "$exit_code"
-  assert_eq "files_written is 13" "13" "$files_written"
+  assert_eq "files_written is 15" "15" "$files_written"
   assert_eq "files_failed is 0" "0" "$files_failed"
-  assert_eq "files_total is 13" "13" "$files_total"
+  assert_eq "files_total is 15" "15" "$files_total"
 
   local first_file_status first_file_sha
   first_file_status=$(jq -r '.files[0].status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
@@ -397,7 +399,7 @@ test_exit_trap_unhandled() {
 # the env mapping), instead of the former upfront all-or-nothing exit 1 that
 # wrote nothing and froze every file.
 test_missing_env_partial_write() {
-  echo "TEST: one missing env var — other 10 files still written (#4804)"
+  echo "TEST: one missing env var — other 14 files still written (#4804)"
   setup
   export_valid_env_vars
   unset CAT_INFRA_CONFIG_STATE_SH_B64  # simulate host hooks.json drift on the newest key
@@ -423,14 +425,14 @@ test_missing_env_partial_write() {
     PASS=$((PASS + 1))
   fi
 
-  # State JSON counts: 12 written, 1 failed, 13 total (one env var deliberately missing)
+  # State JSON counts: 14 written, 1 failed, 15 total (one env var deliberately missing)
   local files_written files_failed files_total
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  assert_eq "files_written is 12" "12" "$files_written"
+  assert_eq "files_written is 14" "14" "$files_written"
   assert_eq "files_failed is 1" "1" "$files_failed"
-  assert_eq "files_total is 13" "13" "$files_total"
+  assert_eq "files_total is 15" "15" "$files_total"
 
   # The missing file's entry records status:failed, reason:missing_env
   local mstatus mreason
@@ -492,11 +494,11 @@ test_prod_mode_escalated_move() {
   bash "$HANDLER" 2>/dev/null || rc=$?
   assert_eq "handler exits 0 in prod mode" "0" "$rc"
 
-  # The helper must be invoked once per managed file (7 total; sudoers is
+  # The helper must be invoked once per managed file (15 total; sudoers is
   # root-managed and not in FILE_MAP, #4827 security review).
   local calls
   calls=$([[ -f "$helper_log" ]] && wc -l < "$helper_log" | tr -d ' ' || echo 0)
-  assert_eq "escalation helper invoked once per file (13)" "13" "$calls"
+  assert_eq "escalation helper invoked once per file (15)" "15" "$calls"
 
   # The handler exiting 0 proves it staged in INFRA_CONFIG_STAGING_DIR rather than
   # mktemp-ing in a root-owned dest dir (which would EACCES as non-root) — the
@@ -519,7 +521,7 @@ test_prod_mode_escalated_move() {
   local files_written exit_code
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   exit_code=$(jq -r '.exit_code' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  assert_eq "prod-mode files_written is 13" "13" "$files_written"
+  assert_eq "prod-mode files_written is 15" "15" "$files_written"
   assert_eq "prod-mode exit_code is 0" "0" "$exit_code"
 
   teardown

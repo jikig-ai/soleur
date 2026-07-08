@@ -44,12 +44,14 @@ FILE_MAP=(
   "CAT_INNGEST_VERIFY_STATE_SH_B64|/usr/local/bin/cat-inngest-verify-state.sh|755|root:root"
   "INNGEST_INVENTORY_SH_B64|/usr/local/bin/inngest-inventory.sh|755|root:root"
   "GIT_LOCK_CHARDEVICE_SWEEP_SH_B64|/usr/local/bin/git-lock-chardevice-sweep.sh|755|root:root"
+  "INNGEST_REGISTRY_PROBE_SH_B64|/usr/local/bin/inngest-registry-probe.sh|755|root:root"
+  "INNGEST_DOUBLEFIRE_PROBE_SH_B64|/usr/local/bin/inngest-doublefire-probe.sh|755|root:root"
 )
 
 # TEST_DESTDIR allows tests to redirect writes to a sandbox
 DESTDIR="${TEST_DESTDIR:-}"
 
-# Prod-mode escalation (#4827): the handler runs as User=deploy but the 7 managed
+# Prod-mode escalation (#4827): the handler runs as User=deploy but the 15 managed
 # files live in root:root 0755 dirs the deploy user cannot mktemp into (EACCES).
 # In prod mode (DESTDIR empty) we stage each decoded payload in a deploy-writable
 # dir, then escalate the atomic install to root via the pinned sudoers helper
@@ -86,7 +88,7 @@ fi; rm -f "${TMPFILES[@]}" "${STATE_FILE}.final"' EXIT
 # hooks.json env-passing atomically, the host's stale hooks.json could not pass
 # the new key, leaving its env var empty — and the upfront gate then aborted the
 # ENTIRE write, including the new hooks.json that would have re-aligned the
-# mapping. Per-file accounting lets the 7 good files (crucially the new
+# mapping. Per-file accounting lets the 15 good files (crucially the new
 # hooks.json) land while the absent one is recorded as a failure and surfaces a
 # loud exit_code=1 to the CI verify gate.
 
