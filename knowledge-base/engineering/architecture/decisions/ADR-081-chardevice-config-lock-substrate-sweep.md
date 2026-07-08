@@ -43,10 +43,16 @@ the node nor a non-`rm` path to it).
   `apps/web-platform/server/agent-runner-sandbox-config.ts` passes only **directory**
   paths to the Claude Agent SDK's `filesystem.denyRead` (sibling tenant workspaces +
   `/proc`) and only the agent's own workspace to `allowWrite`. There is no `.lock`, no
-  glob, and no file-level `/dev/null` mask anywhere in the repo sandbox config. This
-  **answers #5934's re-evaluation criterion (1): the masking is single-path, not glob**
-  — a character-device wedge is a per-path substrate artifact, which **de-risks #5912**
-  (its atomic temp file's `.lock` sibling is a fresh, never-before-masked path).
+  glob, and no file-level `/dev/null` mask anywhere in the repo sandbox config.
+  **#5934 re-evaluation criterion (1) is CLOSED: mask scope = single-path, not glob**
+  — but the *authoritative* source of that conclusion is the live `findmnt`/`touch`
+  evidence in the 2026-07-05 CORRECTION at the top of this ADR (a per-path `tmpfs[/null]`
+  bind-mount on the literal `.git/config.lock`, with a sibling `.lock` path left writable),
+  NOT this bullet's repo-config inference — the CORRECTION overturns the premise that the
+  repo passes only directory paths to `denyRead`. Either way the scope is single-path,
+  which **de-risks #5912** (its atomic temp file's `.lock` sibling is a fresh,
+  never-before-masked path). *(Consolidated 2026-07-08, #6191 — single-path stated once,
+  authoritatively; ADR-081 status unchanged.)*
 - **(b) SDK-internal bubblewrap behavior driven by our config** — **RULED OUT as the cause.**
   The SDK's file-level `/dev/null` mask fires only for a **file path** in `denyRead`; the
   repo passes only directory paths, so the SDK never receives `.git/config.lock` to mask.
