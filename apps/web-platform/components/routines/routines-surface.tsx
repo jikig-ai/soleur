@@ -15,6 +15,10 @@ import useSWR from "swr";
 
 import { ChatSurface } from "@/components/chat/chat-surface";
 import { swrKeys } from "@/lib/swr-config";
+import {
+  ROUTINE_DRAFT_TAB_EVENT,
+  type RoutineDraftTabEventDetail,
+} from "./routine-draft-tab-event";
 
 // Delay before the single post-trigger reconciliation refetch that swaps the
 // optimistic "running" row for the real terminal routine_runs row.
@@ -139,6 +143,21 @@ function StatusPill({ status }: { status: string }) {
 
 export function RoutinesSurface() {
   const [tab, setTab] = useState<"routines" | "runs" | "draft">("routines");
+
+  // The guided tour switches to the "Draft a routine" tab to spotlight the
+  // creation composer, then switches back on leave. Driven by a window event
+  // (same decoupled pattern as the rail expand / New Issue dialog) — inert when
+  // no tour is running.
+  useEffect(() => {
+    function onTourToggle(e: Event) {
+      const detail = (e as CustomEvent<RoutineDraftTabEventDetail>).detail;
+      setTab(detail?.open ? "draft" : "routines");
+    }
+    window.addEventListener(ROUTINE_DRAFT_TAB_EVENT, onTourToggle);
+    return () =>
+      window.removeEventListener(ROUTINE_DRAFT_TAB_EVENT, onTourToggle);
+  }, []);
+
   return (
     <div>
       <div
@@ -259,7 +278,7 @@ function DraftRoutineTab() {
           the PR; it goes live on merge + deploy.
         </p>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1" data-tour-id="action:draft-routine-composer">
         <ChatSurface
           variant="sidebar"
           conversationId="new"

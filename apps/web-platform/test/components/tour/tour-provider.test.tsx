@@ -180,6 +180,28 @@ describe("TourProvider", () => {
     }
   });
 
+  it("switches to the Draft-a-routine tab on the creation step and switches back on leave (reveal event)", () => {
+    onb.tourCompletedAt = "x"; // suppress auto-start; drive manually
+    const events: boolean[] = [];
+    const handler = (e: Event) =>
+      events.push((e as CustomEvent<{ open: boolean }>).detail.open);
+    window.addEventListener("soleur:routine-draft-tab", handler);
+    try {
+      renderProvider();
+      fireEvent.click(screen.getByText("start")); // step 0
+      // Advance to step 14 (the "Draft a routine" tab-button step). Steps 9-10
+      // fire the *New Issue* reveal, not this one, so our handler stays empty.
+      for (let i = 0; i < 14; i++) fireEvent.click(screen.getByText("next"));
+      expect(events).toEqual([]);
+      fireEvent.click(screen.getByText("next")); // step 15 create routine (reveal → open)
+      expect(events).toEqual([true]);
+      fireEvent.click(screen.getByText("next")); // step 16 Releases tab (no reveal → close)
+      expect(events).toEqual([true, false]);
+    } finally {
+      window.removeEventListener("soleur:routine-draft-tab", handler);
+    }
+  });
+
   it("Finish persists completion via POST /api/tour/complete", () => {
     onb.tourCompletedAt = "x"; // suppress auto-start; drive manually
     renderProvider();
