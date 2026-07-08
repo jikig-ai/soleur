@@ -77,3 +77,13 @@ Two reusable workflow lessons beyond the code:
 3. **`tasks.md` task 2.2 contradicted the deepened plan.** **Recovery:** followed the plan
    (authoritative), marked 2.2 `[~] SKIPPED per deepened plan` with rationale. **Prevention:**
    see Key Insight #1 — deepen scope reductions should propagate to tasks.md; /work flags drift.
+4. **Used `subagent_type: fork` for the ship Phase 5.5 scoped advisor consult — it inherited
+   full conversation context, re-ran the pending "file decision-challenge issue" action, and
+   created TWO duplicate issues (#6215/#6216 vs the canonical #6214) instead of returning a
+   completeness verdict.** A fork has live tool access AND my context, so it treats my
+   in-flight pipeline as its own and repeats side-effecting steps. **Recovery:** closed both
+   duplicates as "not planned" referencing #6214; verified no fork-injected commits on the
+   branch. **Prevention:** the scoped advisor consult (ADR-083) is an ISOLATED, read-only
+   opinion — spawn it as a fresh `general-purpose`/Explore agent (fresh context, no inherited
+   pending actions), NEVER `fork`. Reserve `fork` for "continue MY exact work with MY context,"
+   never for an independent advisory question. Recurring — the advisor consult recurs every ship.
