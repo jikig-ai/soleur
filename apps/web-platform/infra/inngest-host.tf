@@ -38,6 +38,17 @@ locals {
   # :8288/v0/gql trigger control plane without the signing key (SEC-H2). Comma-joined
   # for the nft `ip saddr { ... }` set rendered into inngest-nftables.sh.
   web_host_private_ips = "10.0.1.10,10.0.1.11"
+
+  # Arch DERIVED from var.inngest_server_type (mirrors zot-registry.tf local.registry_arch):
+  # `cax*` (Ampere) → arm64, anything else (`cpx*`/`cx*`) → amd64. Lets the dedicated Inngest
+  # host provision on whichever of cax11 (arm64, €5.99) / cpx22 (amd64, €19.49) has Hetzner
+  # stock — cax* arm64 was EU-wide out of stock at Phase-2 provision time (#6178). Every
+  # arch-coupled download below (inngest CLI, Vector, Doppler CLI) is selected off this local.
+  inngest_arch = startswith(var.inngest_server_type, "cax") ? "arm64" : "amd64"
+
+  # Doppler CLI (v3.75.3, pinned in cloud-init-inngest.yml) per-arch download checksum — mirrors
+  # zot-registry.tf local.doppler_sha256 (same version, same values).
+  inngest_doppler_sha256 = local.inngest_arch == "arm64" ? "f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143" : "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
 }
 
 # ---------------- Fresh signing/event/redis keys (AC-KEYROTATE, SEC-H3) ----------------
@@ -169,7 +180,7 @@ resource "doppler_service_token" "inngest" {
 # ---------------- The dedicated Inngest host ----------------
 resource "hcloud_server" "inngest" {
   name        = "soleur-inngest"
-  server_type = var.inngest_server_type # cax11 = ARM64 (Ampere); a singleton scheduler, not throughput-bound
+  server_type = var.inngest_server_type # arch derived in locals (cax*→arm64 / cpx*→amd64); a singleton scheduler, not throughput-bound
   location    = var.location
   image       = "ubuntu-24.04"
   keep_disk   = true
@@ -201,15 +212,18 @@ resource "hcloud_server" "inngest" {
     # The degenerate no-flap case of the route-once mechanism (ADR-100 Decision 1); migrate
     # to a private VIP when web-2 is pooled (Phase 4.2). Consumed by inngest-bootstrap.sh.
     sdk_url = "http://10.0.1.10:3000/api/inngest"
-    # cax11 is ARM64 → the inngest CLI download must be the arm64 build (bootstrap consumes
-    # INNGEST_CLI_ARCH; inngest-bootstrap.sh:37/54) AND verify against the arm64 checksum —
-    # the amd64 SHA baked in the OCI image env would fail the download verify. The cloud-init
-    # passes this as INNGEST_CLI_SHA256, OVERRIDING the image-env (amd64) value.
-    inngest_cli_arch         = "arm64"
-    inngest_cli_sha256_arm64 = local.inngest_cli_sha256_arm64
-    # #6197: arm64 Vector SHA override (cax11 downloads the aarch64 tarball; the amd64
-    # image-env SHA would fail verify). Consumed by cloud-init as VECTOR_CLI_SHA256.
-    vector_sha256_arm64 = local.vector_sha256_arm64
+    # Arch DERIVED from the server type (local.inngest_arch): cax* → arm64, else amd64. The
+    # bootstrap consumes INNGEST_CLI_ARCH (inngest-bootstrap.sh:37/54) and verifies the download
+    # against the matching checksum — the wrong-arch SHA fails verify. The cloud-init passes this
+    # as INNGEST_CLI_SHA256, OVERRIDING the image-env value (which is only correct for amd64).
+    inngest_cli_arch   = local.inngest_arch
+    inngest_cli_sha256 = local.inngest_arch == "arm64" ? local.inngest_cli_sha256_arm64 : local.inngest_cli_sha256
+    # #6197: Vector (journald→Better Stack) SHA, arch-matched — arm64 downloads the aarch64
+    # tarball, amd64 the x86_64 tarball; the wrong-arch SHA fails verify. Consumed as VECTOR_CLI_SHA256.
+    vector_sha256 = local.inngest_arch == "arm64" ? local.vector_sha256_arm64 : local.vector_sha256
+    # Doppler CLI download arch + checksum, both derived from local.inngest_arch.
+    doppler_arch   = local.inngest_arch
+    doppler_sha256 = local.inngest_doppler_sha256
     # Bake the scoped GHCR read-creds (#6179/#6161) so the cold-boot soleur-inngest-bootstrap
     # OCI pull + cosign-verify authenticates even when Doppler answers empty at the boot
     # instant (else 401 → 226/NAMESPACE abort).

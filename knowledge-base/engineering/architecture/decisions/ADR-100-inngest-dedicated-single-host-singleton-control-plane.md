@@ -224,3 +224,18 @@ C4 container view edited in-place (`model.c4`): the `inngest` container technolo
 annotated for the dedicated host + the `soleur-inngest` Doppler project. No new container/deployment
 node (the model does not distinguish deployment nodes). Run `c4-code-syntax.test.ts` +
 `c4-render.test.ts`.
+
+## Addendum (2026-07-08) — dual-arch provisioning; provisioned amd64/cpx22
+
+At Phase-2 provision time, Hetzner `cax11` (arm64/Ampere) was **out of stock across all EU
+datacenters** (nbg1/hel1/fsn1) — as were the cheap Intel `cx*` types — so the initial
+`apply_target=inngest-host` dispatch failed with `resource_unavailable`. The cheapest
+in-stock 4 GB amd64 type was `cpx22` (~€19.49/mo vs cax11's ~€5.99/mo).
+
+Resolution: the host was made **dual-arch**, mirroring the zot-registry pattern —
+`local.inngest_arch = startswith(var.inngest_server_type, "cax") ? "arm64" : "amd64"` selects
+the arch-matched inngest-CLI / Vector / Doppler-CLI download checksums. `var.inngest_server_type`
+default flipped `cax11` → `cpx22`, so it currently provisions **amd64 (cpx22)**. Arch is **not
+load-bearing** for this singleton scheduler (see Decision), so the earlier sections' `cax11`/ARM64
+references describe the original intent, not the deployed reality. The host reverts to cax11
+(cheaper) when Ampere restocks, via a host replace (`inngest-host-replace-gate`). See #6178.
