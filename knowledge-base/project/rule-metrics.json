@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-07T15:49:13Z",
+  "generated_at": "2026-07-08T00:28:07Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -39,7 +39,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "cq-agents-md-tier-gate",
@@ -186,19 +186,6 @@
     },
     {
       "id": "cq-union-widening-grep-three-patterns",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → rest"
-    },
-    {
-      "id": "cq-write-failing-tests-before",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -575,7 +562,33 @@
       "rule_text_prefix": " → core"
     },
     {
+      "id": "hr-prod-host-config-change-immutable-redeploy",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
       "id": "hr-ship-message-no-operator-checklist",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-ssh-diagnosis-verify-firewall",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -654,6 +667,19 @@
     },
     {
       "id": "hr-verify-repo-capability-claim-before-assert",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-weigh-every-decision-against-target-user-impact",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1144,7 +1170,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-when-an-audit-identifies-pre-existing",
@@ -1233,40 +1259,27 @@
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-07T15:49:13Z",
-      "first_seen": "2026-07-07T15:49:13Z",
+      "last_hit": "2026-07-08T00:28:07Z",
+      "first_seen": "2026-07-08T00:28:07Z",
       "rule_text_prefix": " → docs-only"
     },
     {
-      "id": "hr-ssh-diagnosis-verify-firewall",
-      "section": "Hard Rules",
+      "id": "cq-write-failing-tests-before",
+      "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 2,
+      "applied_count": 1,
       "warn_count": 0,
-      "fire_count": 2,
+      "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-07T13:41:01Z",
-      "first_seen": "2026-07-07T13:11:32Z",
-      "rule_text_prefix": " → core"
-    },
-    {
-      "id": "hr-weigh-every-decision-against-target-user-impact",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 2,
-      "warn_count": 0,
-      "fire_count": 2,
-      "prevented_errors": 0,
-      "last_hit": "2026-07-07T13:41:01Z",
-      "first_seen": "2026-07-07T12:43:34Z",
-      "rule_text_prefix": " → core"
+      "last_hit": "2026-07-08T00:06:45Z",
+      "first_seen": "2026-07-08T00:06:45Z",
+      "rule_text_prefix": " → rest"
     }
   ],
   "summary": {
-    "total_rules_tagged": 97,
-    "rules_unused_over_8w": 94,
+    "total_rules_tagged": 98,
+    "rules_unused_over_8w": 96,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,
