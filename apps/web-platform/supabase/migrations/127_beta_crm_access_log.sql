@@ -58,6 +58,12 @@ END $$;
 -- 1. beta_contact_access_log — APPEND-ONLY owner-read accountability
 -- =====================================================================
 
+-- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f)) + Art. 5(2) accountability;
+--   LIA legitimate-interest-assessments/2026-07-07-beta-crm-lia.md (inherits the
+--   parent beta_contacts basis). No content PII columns — owner id + contact
+--   reference + timestamp only. RETENTION: no independent clock; rows are erased
+--   WITH the contact via the composite-FK ON DELETE CASCADE (mig-126's 24-month
+--   pg_cron sweep of beta_contacts CASCADEs here).
 CREATE TABLE IF NOT EXISTS public.beta_contact_access_log (
   id           uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id      uuid         NOT NULL,
