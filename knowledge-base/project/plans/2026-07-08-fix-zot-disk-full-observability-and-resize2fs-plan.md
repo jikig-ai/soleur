@@ -11,6 +11,30 @@ adr: ADR-096 (amend)
 
 # 🐛 fix: zot 500 on blob-upload + remotely-queryable registry-host disk observability
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-08
+**Sections enhanced:** Premise Validation (last_event_at correction), Phase 0/1/2 (region-bound token,
+Vector reuse-vs-build, cloud-init package audit), Post-merge verify (private-NIC reachability),
+Sharp Edges (fail-loud discipline, -replace dependents). New sections: Downtime & Cutover,
+Network-Outage Deep-Dive.
+**Research agents used:** learnings-researcher (11 relevant learnings), functional-discovery (overlap
+scan). Direct file reads for the authoritative infra context.
+
+### Key Improvements
+1. Corrected the `last_event_at` premise — Better Stack heartbeats expose `attributes.status`, not
+   `last_event_at`; verify via `status==up` (learning `2026-07-08-verify-disk-fullness-…`).
+2. Reuse `disk-monitor.sh`'s threshold/cooldown/envfile shape; explicitly reject full Vector on the
+   registry host (out of scope + prior quota-dominance postmortem + Vector can't carry the bespoke
+   `resize_ok`/`zot_restarts` fields that discriminate the root cause).
+3. Added the immutable-redeploy sharp edges: `-replace` targets dependencies not dependents; a fresh
+   host can boot with the private NIC down (soft-reboot recovery).
+
+### New Considerations Discovered
+- No prior resize2fs-failure learning exists — the one-shot `compound` phase must capture it.
+- Better Stack Logs ingest tokens are region/cluster-bound — probe the region before wiring the URL.
+- Gate 4.8 (PAT-shaped variable) false-positives on `var.betterstack_logs_token` — reconciled below.
+
 ## Overview
 
 The Web Platform Release **"Mirror image GHCR→zot (crane)"** step fails on every recent `main`
@@ -120,6 +144,45 @@ success signal.
    - (c) **zot mid-write crash / OOM on the 4 GB box (dedupe on large writes)** — `pcent<85`,
      `fs_size_gb≈30`, yet zot still 500s + `zot_health` shows restarts. (Least likely; contingent
      follow-up only if the telemetry shows a healthy fs.)
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+The four L3→L7 layers are verified with artifacts (opt-outs cite concrete evidence, not "obvious"):
+- **L3 firewall:** opt-out — the failing run's `docker login 127.0.0.1:5000` succeeded and
+  `zot_bridge.outcome == success`; a firewall drop cannot return HTTP 500. Verified not-causal.
+- **L3 DNS/routing:** opt-out — loopback `127.0.0.1:5000` over the tunnel bridge; no DNS/external hop.
+- **L7 TLS/proxy:** opt-out — plain-HTTP loopback (crane treats `127.0.0.1` as insecure); no TLS chain.
+- **L7 application:** THE root cause — a genuine 500 + mid-write reset = `ENOSPC` on the zot fs,
+  confirmed post-redeploy by the `SOLEUR_ZOT_DISK` `df`/`resize`/`zot_restarts` telemetry.
+No layer above the service is dropping packets (a 500 IS a service response), so the L3→L7 ordering
+discipline holds and no phantom firewall/DNS hypotheses precede the app-layer diagnosis.
+
+## Downtime & Cutover (deepen-plan Phase 4.55)
+
+**Offline-inducing operation:** the post-merge `registry-host-replace` dispatch runs
+`terraform apply -replace=hcloud_server.registry` — a host replace that reboots/reprovisions the
+single zot registry host (~1-2 min unreachable during boot).
+
+**Surface affected:** the **CI-time zot mirror push target** + the private-net pull path — NOT a
+user-facing serving surface. Per ADR-096's GHCR dark-launch fallback, web hosts pull from GHCR when
+zot is unreachable, so a registry reboot does not take serving offline.
+
+**Zero-downtime-first evaluation:**
+- **Blue-green (second registry host, drain, cut over):** rejected as disproportionate — the zot
+  store lives on a single-attach `hcloud_volume` (no shared store without a data copy) and the
+  registry is a singleton by design (ADR-096); the reboot blast radius is already near-zero
+  (serving GHCR-fallback-covered).
+- **State-only re-address (`terraform state mv`):** N/A — this is a cloud-init + config change that
+  MUST re-run the host boot (resize2fs, guard, reporter), which a state move does not do.
+- **Chosen path:** the `registry-host-replace` dispatch (destroy-guard PRESERVES the zot volume; data
+  survives the host replace). Residual downtime ≈ the boot window (~1-2 min), bounded by the dispatch.
+
+**Residual-downtime justification + bound:** ACCEPTED because (a) serving is unaffected (GHCR
+fallback), (b) the mirror is a CI push target reached only during a release, not a user request path,
+(c) #6129's ENFORCE flip has NOT landed, so the mirror being down blocks nothing user-facing. Bound:
+one `registry-host-replace` dispatch (~2-3 min); the agent verifies reachability post-replace
+(soft-reboot fallback if the private NIC boots down). No operator sign-off needed at `aggregate
+pattern` threshold on a non-serving surface.
 
 ## User-Brand Impact
 
@@ -478,6 +541,12 @@ are NOT touched by this plan.
 - **No prior resize2fs-failure learning exists.** The one-shot `compound` phase MUST capture the
   resize-failed-silently signature + recovery once the telemetry confirms the root cause (the
   learnings search found the immutable-redeploy + disk-verify patterns but no resize2fs-specific one).
+- **deepen-plan Phase 4.8 (PAT-shaped variable halt) false-positives on `var.betterstack_logs_token`.**
+  The gate's regex `var.*_token` matches it, but `hr-github-app-auth-not-pat` targets **GitHub write
+  auth** — `betterstack_logs_token` is a write-only Better Stack Logs ingest token, not a GitHub
+  credential, and it is an **exact mirror of the already-merged `inngest-betterstack-token.tf`**
+  (#6197), which passed all gates. This is a heuristic false positive, NOT a violation; no GitHub PAT
+  is introduced anywhere in this plan.
 - **A plan whose `## User-Brand Impact` section is empty or `TODO` fails deepen-plan Phase 4.6.** This
   section is filled (threshold `aggregate pattern`).
 
