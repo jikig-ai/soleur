@@ -911,6 +911,74 @@ export async function exportSqlTable(
     });
   }
 
+  // -- beta_contacts (beta-CRM contact head; migration 126, #6165, ADR-102) --
+  // Art. 15+20: the owner-curated contact record (name/company/role/source +
+  // pipeline fields) is personal data the owner provided, held under Art. 6(1)(f)
+  // legitimate interest (LIA; PA-30). Owner-scoped by user_id. Art. 17 via
+  // user_id ON DELETE CASCADE (no anonymise RPC — ADR-102 §4).
+  {
+    const { data, error } = await service
+      .from("beta_contacts")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`beta_contacts read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "beta_contacts", {
+      ownerField: "user_id",
+    });
+    results.push({
+      table: "beta_contacts",
+      spec: DSAR_TABLE_ALLOWLIST.beta_contacts,
+      rows,
+    });
+  }
+
+  // -- interview_notes (beta-CRM dual-lens conversation notes; migration 126) --
+  // Art. 15+20: the owner-provided verbatim conversation `body` + `lens[]`, held
+  // under legitimate interest. Denormalized user_id carries the owner directly
+  // (composite FK guarantees it equals the parent's owner). Art. 17 via the
+  // composite FK ON DELETE CASCADE from beta_contacts.
+  {
+    const { data, error } = await service
+      .from("interview_notes")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`interview_notes read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "interview_notes", {
+      ownerField: "user_id",
+    });
+    results.push({
+      table: "interview_notes",
+      spec: DSAR_TABLE_ALLOWLIST.interview_notes,
+      rows,
+    });
+  }
+
+  // -- beta_contact_stage_transitions (beta-CRM velocity history; migration 126) --
+  // Art. 15 ACCESS only: controller-generated stage-change audit (from_stage/
+  // to_stage/entered_at), not user-provided content. Owner-scoped by the
+  // denormalized user_id. Art. 17 via the composite FK ON DELETE CASCADE.
+  {
+    const { data, error } = await service
+      .from("beta_contact_stage_transitions")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`beta_contact_stage_transitions read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "beta_contact_stage_transitions", {
+      ownerField: "user_id",
+    });
+    results.push({
+      table: "beta_contact_stage_transitions",
+      spec: DSAR_TABLE_ALLOWLIST.beta_contact_stage_transitions,
+      rows,
+    });
+  }
+
   // -- outbound_sends (cold-outbound WORM audit; migration 104, #5325) --
   // Art. 15: the founder is entitled to a copy of every cold send the platform
   // recorded on their behalf. Recipient + body are persisted as a keyed HMAC /
