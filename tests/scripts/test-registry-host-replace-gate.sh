@@ -203,6 +203,20 @@ else
   pass
 fi
 
+# --- Test 15 (#6244): FAIL — the logs-token secret is DELETED (secret_destroyed backstop) ---
+# An otherwise-valid scoped recreate but the logs-token secret carries ["delete"]. Because the
+# secret is in the allow-set, out_of_scope does NOT catch it — the named secret_destroyed backstop
+# must. Dropping it would pass the gate then BRICK the host: the amended 3-secret boot guard FATALs
+# without BETTERSTACK_LOGS_TOKEN, so zot never launches. Symmetric to the store_destroyed (T2/T9)
+# case. Mutation-check: removing `secret_destroyed` from the PASS predicate flips this to PASS.
+SECRET_DELETE="$(rc_obj 'doppler_secret.registry_betterstack_logs_token' '"delete"')"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FW_UPDATE},${VOL_NOOP},${SECRET_DELETE}"
+if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T15: a logs-token secret delete (secret_destroyed) must ABORT (rc=1)"
+else
+  pass
+fi
+
 echo ""
 echo "=== test-registry-host-replace-gate.sh: ${passes} passed, ${fails} failed ==="
 [ "$fails" -eq 0 ] || exit 1

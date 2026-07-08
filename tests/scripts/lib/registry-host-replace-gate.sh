@@ -42,23 +42,27 @@
 # source read (or any no-op dependency the -target set pulls in) does NOT false-abort.
 #
 # PASS (rc=0) iff:
-#   out_of_scope==0 && store_destroyed==0 && volume_bad_update==0 &&
+#   out_of_scope==0 && store_destroyed==0 && secret_destroyed==0 && volume_bad_update==0 &&
 #   server_replaced==1 && nic_recreated>=1 && attachment_recreated>=1 && firewall_ok>=1
 # attachment_recreated (symmetric to nic_recreated): the hcloud_volume_attachment.registry
 # must show a `create` — if a future mis-edit dropped -target=hcloud_volume_attachment.registry
 # the new host would boot with /var/lib/zot UNMOUNTED (a broken store), yet server/nic/firewall
 # could all still pass. A no-store host is as broken as a no-NIC one, so assert it positively.
-# store_destroyed / volume_bad_update are INTENTIONALLY REDUNDANT named backstops (a store
-# delete is also an out-of-allow-set... no — the volume IS in the allow-set, so these are the
-# ONLY guard against a store destroy/replace slipping through under the allow-set) so an
-# operator sees "the zot OCI store would be destroyed/recreated" specifically.
+# store_destroyed / secret_destroyed / volume_bad_update are INTENTIONALLY REDUNDANT named
+# backstops for allow-set members whose DELETE would otherwise be silently permitted (the volume
+# AND the logs-token secret are both in the allow-set, so out_of_scope does NOT catch their
+# destroy — these named counters do). secret_destroyed (symmetric to store_destroyed): dropping
+# doppler_secret.registry_betterstack_logs_token would pass the allow-set filter yet BRICK the new
+# host — the amended 3-secret boot guard FATALs without BETTERSTACK_LOGS_TOKEN, so zot never
+# launches. An operator sees "the zot OCI store / the logs-token secret would be destroyed"
+# specifically.
 #
 # Usage:  source tests/scripts/lib/registry-host-replace-gate.sh
 #         registry_host_replace_gate <plan-json-file>   # 0=PASS, 1=ABORT
 
 registry_host_replace_gate() {
   local plan_json="$1"
-  local counts oos sdel vbad replaced nic fw v
+  local counts oos sdel secdel vbad replaced nic att fw v
 
   if [[ ! -f "$plan_json" ]]; then
     echo "registry_host_replace_gate: plan JSON not found: ${plan_json}"
@@ -87,6 +91,16 @@ registry_host_replace_gate() {
           store_destroyed: (
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.registry")
+              | select(.change.actions? | any(. == "delete" or . == "forget")) ]
+            | length
+          ),
+          secret_destroyed: (
+            # #6244 backstop: the logs-token secret is in the allow-set (so a delete is NOT
+            # out_of_scope), but DELETING/forgetting it would pass the gate then BRICK the host —
+            # the amended 3-secret boot guard FATALs without BETTERSTACK_LOGS_TOKEN, so zot never
+            # launches. Symmetric to store_destroyed: a named, positive "must be preserved" assert.
+            [ $plan.resource_changes[]?
+              | select(.address == "doppler_secret.registry_betterstack_logs_token")
               | select(.change.actions? | any(. == "delete" or . == "forget")) ]
             | length
           ),
@@ -127,6 +141,7 @@ registry_host_replace_gate() {
   fi
   oos=$(echo "$counts" | jq -r '.out_of_scope')
   sdel=$(echo "$counts" | jq -r '.store_destroyed')
+  secdel=$(echo "$counts" | jq -r '.secret_destroyed')
   vbad=$(echo "$counts" | jq -r '.volume_bad_update')
   replaced=$(echo "$counts" | jq -r '.server_replaced')
   nic=$(echo "$counts" | jq -r '.nic_recreated')
@@ -135,18 +150,18 @@ registry_host_replace_gate() {
 
   # Parse-validate every counter. A jq null/empty would evaluate false in the
   # arithmetic below and could silently mis-decide; fail LOUD instead.
-  for v in "$oos" "$sdel" "$vbad" "$replaced" "$nic" "$att" "$fw"; do
+  for v in "$oos" "$sdel" "$secdel" "$vbad" "$replaced" "$nic" "$att" "$fw"; do
     if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-      echo "registry_host_replace_gate: counter parse failed (out_of_scope='${oos}' store_destroyed='${sdel}' volume_bad_update='${vbad}' server_replaced='${replaced}' nic_recreated='${nic}' attachment_recreated='${att}' firewall_ok='${fw}')"
+      echo "registry_host_replace_gate: counter parse failed (out_of_scope='${oos}' store_destroyed='${sdel}' secret_destroyed='${secdel}' volume_bad_update='${vbad}' server_replaced='${replaced}' nic_recreated='${nic}' attachment_recreated='${att}' firewall_ok='${fw}')"
       return 1
     fi
   done
 
-  echo "out_of_scope=${oos} store_destroyed=${sdel} volume_bad_update=${vbad} server_replaced=${replaced} nic_recreated=${nic} attachment_recreated=${att} firewall_ok=${fw}"
-  if [[ "$oos" -eq 0 && "$sdel" -eq 0 && "$vbad" -eq 0 && "$replaced" -eq 1 && "$nic" -ge 1 && "$att" -ge 1 && "$fw" -ge 1 ]]; then
-    echo "registry_host_replace_gate: PASS — scoped registry-host recreate permitted (server + 3 dependents; zot store volume preserved; NIC + volume-attachment + deny-all firewall re-attached)"
+  echo "out_of_scope=${oos} store_destroyed=${sdel} secret_destroyed=${secdel} volume_bad_update=${vbad} server_replaced=${replaced} nic_recreated=${nic} attachment_recreated=${att} firewall_ok=${fw}"
+  if [[ "$oos" -eq 0 && "$sdel" -eq 0 && "$secdel" -eq 0 && "$vbad" -eq 0 && "$replaced" -eq 1 && "$nic" -ge 1 && "$att" -ge 1 && "$fw" -ge 1 ]]; then
+    echo "registry_host_replace_gate: PASS — scoped registry-host recreate permitted (server + 3 dependents; zot store volume + logs-token secret preserved; NIC + volume-attachment + deny-all firewall re-attached)"
     return 0
   fi
-  echo "registry_host_replace_gate: ABORT — plan is NOT the exact scoped registry-host recreate (out-of-scope change, zot-store destroy/replace, non-size volume update, no server replace, stripped private NIC, unmounted store [volume-attachment not re-created], or stripped firewall)"
+  echo "registry_host_replace_gate: ABORT — plan is NOT the exact scoped registry-host recreate (out-of-scope change, zot-store destroy/replace, logs-token secret destroy/forget, non-size volume update, no server replace, stripped private NIC, unmounted store [volume-attachment not re-created], or stripped firewall)"
   return 1
 }
