@@ -29,11 +29,11 @@ set -euo pipefail
 # substitution. Default-to-empty triggers loud failure at runtime check.
 INNGEST_CLI_VERSION="${INNGEST_CLI_VERSION:-}"
 INNGEST_CLI_SHA256="${INNGEST_CLI_SHA256:-}"
-# #6178: the co-located web host is amd64; the dedicated inngest host (cax11) is
-# ARM64. Default amd64 PRESERVES the web-host behavior (cross-consumer edit —
+# #6178: the co-located web host is amd64; the dedicated inngest host is DUAL-ARCH.
+# Default amd64 PRESERVES the web-host behavior (cross-consumer edit —
 # hr-type-widening-cross-consumer-grep); the dedicated host's cloud-init passes
-# INNGEST_CLI_ARCH=arm64 AND an arch-matching INNGEST_CLI_SHA256 (the arm64 tarball
-# SHA — the amd64 image-baked SHA would fail the verify below on an arm64 download).
+# INNGEST_CLI_ARCH (arm64 on a cax* type, amd64 otherwise) AND an arch-matching
+# INNGEST_CLI_SHA256 (the wrong-arch image-baked SHA would fail the verify below).
 INNGEST_CLI_ARCH="${INNGEST_CLI_ARCH:-amd64}"
 # #6178 cross-consumer templating (defaults PRESERVE the co-located web-host behavior;
 # the dedicated inngest host overrides both). SDK_URL: the app serve URL inngest syncs +

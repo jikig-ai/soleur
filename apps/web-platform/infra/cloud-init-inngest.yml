@@ -177,9 +177,9 @@ runcmd:
   # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
   # Gated on the isolation sentinel above (fail-closed). Mirrors web cloud-init.yml:642-682:
   # docker create → docker cp the script + durable-Redis assets → read INNGEST_CLI_VERSION/
-  # SHA from the image env → run it. Passes the dedicated-host env: INNGEST_CLI_ARCH=arm64
-  # (cax11 — inngest-bootstrap.sh:37/54) + SDK_URL (single stable --sdk-url to the active web
-  # backend — ADR-100 Decision 1; the bootstrap edits to consume these are done separately).
+  # SHA from the image env → run it. Passes the dedicated-host env: INNGEST_CLI_ARCH
+  # (arch-derived — arm64 on cax*, amd64 otherwise; inngest-bootstrap.sh:37/54) + SDK_URL
+  # (single stable --sdk-url to the active web backend — ADR-100 Decision 1).
   - |
     set -e
     test -f /run/soleur-inngest-doppler.ok || { echo "FATAL: doppler isolation self-check did not pass — refusing to bootstrap inngest" >&2; exit 1; }
