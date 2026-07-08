@@ -200,19 +200,20 @@ SELECT 'kb_files_jti_not_denied_policy_present',
   FROM pg_policies WHERE schemaname='public' AND tablename='kb_files'
    AND policyname='kb_files_jti_not_denied' AND permissive='RESTRICTIVE'
 UNION ALL
--- beta_contacts (mig 126)
+-- beta-CRM tenant tables from mig 126 (#6160): each carries the ADR-068
+-- <table>_jti_not_denied RESTRICTIVE policy. Presence-asserted like every other
+-- tenant table above so a dropped policy fails CI even when the aggregate count
+-- (sentinel above) still reads 26 (#6229 bumped the count; #6232 adds these).
 SELECT 'beta_contacts_jti_not_denied_policy_present',
        CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
   FROM pg_policies WHERE schemaname='public' AND tablename='beta_contacts'
    AND policyname='beta_contacts_jti_not_denied' AND permissive='RESTRICTIVE'
 UNION ALL
--- interview_notes (mig 126)
 SELECT 'interview_notes_jti_not_denied_policy_present',
        CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
   FROM pg_policies WHERE schemaname='public' AND tablename='interview_notes'
    AND policyname='interview_notes_jti_not_denied' AND permissive='RESTRICTIVE'
 UNION ALL
--- beta_contact_stage_transitions (mig 126)
 SELECT 'beta_contact_stage_transitions_jti_not_denied_policy_present',
        CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
   FROM pg_policies WHERE schemaname='public' AND tablename='beta_contact_stage_transitions'
