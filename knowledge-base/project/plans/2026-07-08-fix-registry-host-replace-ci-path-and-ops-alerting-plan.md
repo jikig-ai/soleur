@@ -15,6 +15,24 @@ incident: "Better Stack — soleur-registry-disk-prd | Missed heartbeat (2026-07
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 <!-- Note: systemctl/resize2fs/docker-run mentions in prose QUOTE the existing cloud-init-registry.yml (host first-boot config already routed through Terraform user_data); this plan prescribes NO manual host step. All apply is via Terraform + a dispatch workflow. See the Infrastructure (IaC) section. -->
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-08. **Reviewed by:** 5-agent panel (spec-flow-analyzer, architecture-strategist, kieran-rails-reviewer, code-simplicity-reviewer, Fable scoped advisor) + deepen-plan HALT gates.
+
+**Key improvements folded in from review:**
+1. **CRITICAL (3-agent consensus):** the pending 10→30 GB `hcloud_volume.registry` resize rides into the scoped plan as a `["update"]` (server `user_data` references `volume.id`); the original 4-target gate would have **aborted the very fix**. → 5-target scope + gate permits size-update-only (this IS how the 30 GB grow goes live).
+2. **P0 (Kieran, verified against Better Stack docs):** the heartbeat API has no `last_event_at` field — verify via `attributes.status == "up"`, not an epoch-compare.
+3. **Guard hardening:** positive-action `out_of_scope` filter (excludes `read`); positive `nic_recreated`/`firewall_ok` assertions so a "server-replaced-but-stripped" plan can't PASS.
+4. **In-CI heartbeat poll → relocated:** deterministic gates in-CI + best-effort status line; authoritative bounded-poll moved to Phase 5.3 (removes a flaky prod-apply gate).
+5. **FIX B reframed:** `betteruptime_team_member` is inert until the invite is accepted; ACs assert API-verifiable state; Phase 0 checks `team_name`/seat/role.
+
+**Deepen-plan gate determinations:**
+- **4.6 User-Brand Impact / 4.7 Observability:** PASS (present, valid, no SSH).
+- **4.55 Downtime & Cutover:** FIRED (host `-replace`) → `## Downtime & Cutover` section added (zero-downtime-first: GHCR dark-launch fallback delivers zero *consumer* downtime; full blue-green is unnecessary + infeasible with a single-attach volume).
+- **4.5 Network-Outage:** FIRED on `firewall`/`timeout` keywords → deep-dive note added; no SSH provisioner in scope, no firewall/egress-IP fix needed.
+- **4.8 PAT-shaped Halt:** the regex matches `var.betterstack_api_token` / `BETTERSTACK_API_TOKEN` — these are **Better Stack vendor API tokens** (pre-existing, `main.tf:67`), NOT GitHub write credentials; the `hr-github-app-auth-not-pat` intent (GitHub App vs PAT) is inapplicable and no GitHub PAT is introduced. Documented false-positive → **no halt** (challenging the over-broad regex per `cm-challenge-reasoning-instead-of`).
+- **4.4 Precedent-Diff / 4.9 UI-Wireframe:** precedent diff (inngest gate/job) is in the Research Reconciliation table; no UI surface → skip.
+
 ## Overview
 
 A Better Stack incident fired at 2026-07-08 15:30 CEST — **`soleur-registry-disk-prd | Missed heartbeat`** — and stayed unacknowledged. This is **not a genuine disk-full event**. It is a **deploy-sequencing false positive**: the 2026-07-08 zot capacity-management merge created a NEW disk-full heartbeat resource (`betteruptime_heartbeat.registry_disk_prd`, `paused=false`) in Better Stack, but the registry **host was never redeployed** with the cloud-init that installs the `zot-disk-heartbeat.sh` self-ping cron. The heartbeat has therefore **never received a ping** (its Better Stack `status` is `pending`/`down`) — Better Stack alerts on the absence. The same missing redeploy means the merge's actual disk-full mitigations — `storage.retention` pruning and the 10→30 GB volume grow — are **also not live**, so the original registry disk-full risk (#6122: 100 % → all pushes `500 no space left on device`) remains unmitigated.
@@ -57,6 +75,16 @@ Two structural gaps produced this:
 - **H2 — the disk heartbeat is a disk-gated signal (arch-strategist MEDIUM).** `zot-disk-heartbeat.sh` pings ONLY when `/var/lib/zot < 85 %` — including the boot ping. A non-fire therefore does NOT distinguish "redeploy failed" from "disk still ≥85 %." Mitigation: the **authoritative** redeploy-success signal is the deterministic `terraform apply` (host replaced, volume 30 GB in state — verifiable from the applied plan); the heartbeat `status==up` is the observability confirmation and, post-resize+prune, is expected to fire. A non-fire after a successful apply is itself diagnostic (genuine disk-full), not a false negative.
 - **H3 — private NIC may be down after `-replace` (learning `knowledge-base/project/learnings/2026-07-07-immutable-redeploy.md`).** The disk heartbeat pings over the PUBLIC egress interface, so it proves boot+egress, not the private NIC (`10.0.1.30:5000`) for web-host pulls. The gate positively asserts the NIC is re-attached; private-net `/v2/` reachability is covered by the separate paused liveness heartbeat (Phase-3, out of scope) + GHCR fallback.
 - **H4 — no SSH provisioner in scope.** zot-registry.tf is cloud-init-only (`:19`); network.tf's server_network has no provisioner. The replace scope contains no `remote-exec`/`file`/`connection` block → the network-outage checklist's provisioner trigger does not fire; verification stays heartbeat-visible per `hr-no-ssh-fallback-in-runbooks`.
+
+### Network-Outage Deep-Dive (Phase 4.5 — fired on `firewall`/`timeout` keywords)
+
+This plan is a redeploy, not an SSH/connectivity-outage diagnosis, and the resource-shape trigger does NOT fire (no `provisioner`/`connection` block anywhere in the 5-target scope — verified in zot-registry.tf + network.tf). Layer status:
+- **L3 firewall allow-list:** the only firewall concern is `hcloud_firewall_attachment.registry` (deny-all-public) being re-attached to the new host — the gate's `firewall_ok` counter positively asserts it (verified artifact: the destroy-guard fixture (f)/firewall arm). No operator-egress-IP allow-list is involved (there is no SSH ingress to the registry — it is deny-all-public; CI never SSHes to it).
+- **L3 DNS/routing:** N/A — pull transport is by private IP `10.0.1.30`, no DNS. The Uptime API verify uses a public hostname (`uptime.betterstack.com`), a standard egress call.
+- **L7 TLS/proxy:** N/A on the private net (plain-HTTP by design, integrity via cosign digest-pinning — ADR-096). The Better Stack Uptime API is HTTPS (bounded `curl --max-time 10`).
+- **L7 application:** registry `/v2/` reachability on the private net is NOT verified from CI (deny-all-public); covered by the paused liveness heartbeat (Phase-3) + GHCR fallback (H3). No SSH fallback introduced (`hr-no-ssh-fallback-in-runbooks`).
+
+No firewall/egress-IP fix is proposed (none is needed); the `hr-ssh-diagnosis-verify-firewall` L3-before-L7 ordering is satisfied vacuously (no service-layer network fix in scope).
 
 ## Implementation Phases
 
@@ -193,6 +221,21 @@ discoverability_test:
 ```
 
 **Affected-surface note (Phase 2.9.2).** The registry host is a blind surface (deny-all-public, no SSH). The disk heartbeat is an **in-surface** probe (emitted from the host). Discrimination limit (H2): a single presence/absence signal does not, alone, separate host-down vs cron-broken vs disk->=85%; the deterministic terraform apply is the authoritative redeploy-success signal, and the paused liveness heartbeat adds host-reachability discrimination. Acceptable for this plan's scope; noted, not silently accepted.
+
+## Downtime & Cutover
+
+**Offline-inducing operation:** FIX A's `terraform apply -replace='hcloud_server.registry'` destroys and re-creates the single `hcloud_server.registry` host (Hetzner replace = power-off old, create new). Surface affected: the **zot registry** (image pull source for web-host boot/deploy + CI push), on the private net `10.0.1.30:5000`. Bounded unavailability window ≈ 2–5 min (host recreate + cloud-init).
+
+**Zero-downtime-first evaluation (the default this gate demands):**
+- **Consumer-side downtime is already zero** — this is the load-bearing fact. zot is **dark-launch-gated with an atomic GHCR fallback** (ADR-096, `model.c4:260`/`:371`): web hosts attempt zot only when it is configured + `/v2/`-reachable + login-ok, and otherwise pull the SAME `@sha256` digests from GHCR. So during the registry replace, (a) already-running web hosts keep serving users (they hold their images), and (b) any deploy/boot that needs a pull transparently falls back to GHCR. No user-facing surface and no deploy-pipeline surface goes offline during the replace.
+- **A full blue-green (second host + second volume, cut over, retire old) is unnecessary and infeasible here:** `hcloud_volume.registry` is single-attach, and the store is the registry's whole state — a true parallel host would need a volume copy. Because the GHCR fallback already delivers zero *consumer* downtime for the single-host replace, the extra blue-green machinery buys nothing. The chosen path is therefore the store-preserving in-place replace, guarded so the volume is never destroyed.
+- **The volume resize is online** — Hetzner block-volume grow + `resize2fs` (`cloud-init-registry.yml:146`) is a live resize; the volume data survives (this is a preserved, not recreated, volume — enforced by the destroy-guard).
+
+**Residual downtime accepted:** only the registry host itself is briefly unavailable, fully masked at the consumer by the GHCR fallback. No maintenance window or operator sign-off is required because there is no consumer-visible outage. Per-stage verification + rollback:
+- **Pre-apply:** the destroy-guard proves the plan is the exact scoped replace (store preserved, NIC+firewall re-attached) before any destroy.
+- **During:** GHCR fallback covers pulls (dark-launch gate).
+- **Post-apply:** deterministic apply success (host replaced, volume 30 GB, NIC attached) + heartbeat `status→up` (Phase 5.3).
+- **Rollback:** on mid-apply failure the store volume is intact; re-dispatch re-creates the host from it (Phase 5.4). No data-loss path (the guard forbids volume delete/replace).
 
 ## Architecture Decision (ADR/C4)
 
