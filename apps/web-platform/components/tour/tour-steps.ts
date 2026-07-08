@@ -8,7 +8,9 @@
 // tab, the action step then spotlights the control. The overlay polls for the
 // `data-tour-id` target to mount after navigation (centered-card fallback if it
 // never appears, e.g. an empty/loading surface). Releases and Settings are
-// tab-only (no in-page action). Welcome (first) + closing (last) have no target.
+// tab-only (no in-page action). The Knowledge Base tab step is the one exception
+// that carries NO `route` (see its note below). Welcome (first) + closing (last)
+// have no target.
 
 export interface TourStep {
   /** `data-tour-id` selector value, or null for a centered (no-spotlight) card. */
@@ -78,17 +80,20 @@ export const TOUR_STEPS: readonly TourStep[] = [
   },
 
   // ── Knowledge Base ────────────────────────────────────────────────────────────
+  // Special case: opening the KB SWAPS the sidebar rail for its file tree, so the
+  // "Knowledge Base" nav tab only exists while you're OUTSIDE the KB. This tab step
+  // therefore has NO `route` — it highlights the sidebar button from the previous
+  // section's page (Workstream); the NEXT (content) step is what navigates in.
   {
     target: "/dashboard/kb",
-    route: "/dashboard/kb",
-    title: "Open the Knowledge Base",
-    body: "Click the Knowledge Base tab to reach your organization's shared memory.",
+    title: "Find the Knowledge Base",
+    body: "This tab in the sidebar opens your organization's shared memory — click it to go in.",
   },
   {
     target: "action:kb-tree",
     route: "/dashboard/kb",
     title: "Feed the Knowledge Base",
-    body: "Browse the tree and drop in docs and context every agent draws on to act for you.",
+    body: "Here's the KB — browse the tree and drop in the docs and context every agent draws on to act for you.",
   },
 
   // ── Routines ──────────────────────────────────────────────────────────────────
