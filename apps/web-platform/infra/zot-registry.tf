@@ -20,6 +20,14 @@
 # `remote-exec` terraform_data (else the SSH-parity guard has no exclusion path); (2) no
 # zot cred is a github_actions_secret — Phase-2 CI push reads ZOT_PUSH_* via `doppler run`.
 #
+# REPROVISION-PATH (ADR-096 amendment 2026-07-08): the per-PR exclusion above is UNCHANGED,
+# but a sanctioned dispatch-only `registry-host-replace` `workflow_dispatch` path now exists
+# (apply-web-platform-infra.yml, mirroring ADR-100's inngest-host-replace) to re-run this
+# host's cloud-init + apply any pending volume resize WITHOUT SSH — a scoped, destroy-guarded
+# `terraform apply -replace='hcloud_server.registry'` that PRESERVES hcloud_volume.registry.
+# It is a maintenance-window dispatch, not a per-PR apply; these resources remain excluded
+# from the per-PR `-target=` list.
+#
 # TRANSPORT: HTTP on the private net (deny-all-public firewall below). cosign digest-
 # pinning + offline verify is the integrity guarantee (registry-agnostic — Phase-0 spike);
 # the private network is the trust boundary (plan's accepted risk: a leaked read-only
