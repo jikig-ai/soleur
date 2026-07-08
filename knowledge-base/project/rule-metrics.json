@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-08T00:28:07Z",
+  "generated_at": "2026-07-08T12:45:02Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1259,8 +1259,8 @@
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-08T00:28:07Z",
-      "first_seen": "2026-07-08T00:28:07Z",
+      "last_hit": "2026-07-08T12:45:01Z",
+      "first_seen": "2026-07-08T12:45:01Z",
       "rule_text_prefix": " → docs-only"
     },
     {
@@ -1272,8 +1272,8 @@
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-08T00:06:45Z",
-      "first_seen": "2026-07-08T00:06:45Z",
+      "last_hit": "2026-07-08T12:19:02Z",
+      "first_seen": "2026-07-08T12:19:02Z",
       "rule_text_prefix": " → rest"
     }
   ],
