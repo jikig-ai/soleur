@@ -60,6 +60,16 @@ locals {
   # Non-secret, stable htpasswd usernames (constants — only the TOKENS are secret).
   zot_pull_user = "zot-pull"
   zot_push_user = "zot-push"
+
+  # Better Stack Logs ingest endpoint for the registry host's SOLEUR_ZOT_DISK self-report
+  # (#6244). Region/cluster-bound (learning 2026-05-22): source 2457081 authenticates on the
+  # EU Falkenstein cluster `eu-fsn-3` — the EXACT endpoint vector.toml ships to (verified
+  # 2026-05-22 via authenticated POST probe: eu-fsn-3 → 202, eu-nbg-2 → 401). The registry
+  # reuses this SAME source + token (SOLEUR_ZOT_DISK is the discriminating grep marker), so no
+  # new source is provisioned. NON-secret host routing (like disk_heartbeat_url) → baked into
+  # user_data via templatefile; the token is the only secret and stays in the isolated Doppler
+  # config, so the boot isolation self-check cardinality is 3 (2 ZOT + 1 logs token), NOT 4.
+  betterstack_logs_ingest_url = "https://s2457081.eu-fsn-3.betterstackdata.com/"
 }
 
 # --- Read-only pull + read/write push credentials (TF-generated, zero human mint) ----
@@ -130,6 +140,30 @@ resource "doppler_secret" "zot_push_token_registry" {
   name       = "ZOT_PUSH_TOKEN"
   value      = random_password.zot_push.result
   visibility = "masked"
+}
+
+# Write-only Better Stack Logs ingest token in the ISOLATED soleur-registry/prd config, so the
+# registry host's zot-disk-heartbeat.sh reporter (cloud-init-registry.yml) can ship its
+# SOLEUR_ZOT_DISK disk-state event to Better Stack Logs under `doppler run --project
+# soleur-registry --config prd` — the in-surface probe for the deny-all, no-SSH host (#6244).
+# EXACT MIRROR of inngest-betterstack-token.tf (#6197, ADR-100): value from the sensitive,
+# no-default var.betterstack_logs_token (sourced from Doppler prd_terraform —
+# hr-tf-variable-no-operator-mint-default; already provisioned for #6197, only the one 24-char
+# token enters terraform.tfstate). ignore_changes=[value]: rotation is managed at the source of
+# truth, and the boot isolation self-check keys on the NAME so a rotate is safe. Reference the
+# TF-managed project + env (NOT literals) so Terraform builds the dependency edge and a `-target`
+# of this secret pulls the project/config in. Its presence is REQUIRED by the amended boot guard
+# (cardinality 3) — deleting it FATALs the bootstrap (loud fail > silent observability blind spot).
+resource "doppler_secret" "registry_betterstack_logs_token" {
+  project    = doppler_project.registry.name
+  config     = doppler_environment.registry_prd.slug
+  name       = "BETTERSTACK_LOGS_TOKEN"
+  value      = var.betterstack_logs_token
+  visibility = "masked"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
 }
 
 # Read-only service token scoped to the isolated `soleur-registry` project's `prd` ROOT config
@@ -230,6 +264,10 @@ resource "hcloud_server" "registry" {
     # no dashboard-eyeballing (hr-no-dashboard-eyeball-pull-data-yourself). Not a secret (a bare
     # ping URL); baked into user_data like zot_image, retrievable via the hcloud metadata API.
     disk_heartbeat_url = betteruptime_heartbeat.registry_disk_prd.url
+    # Better Stack Logs ingest URL for the SOLEUR_ZOT_DISK self-report (#6244). NON-secret host
+    # routing (like disk_heartbeat_url) — baked into user_data; the ONLY secret is
+    # BETTERSTACK_LOGS_TOKEN, injected at cron time via `doppler run` from the isolated config.
+    betterstack_ingest_url = local.betterstack_logs_ingest_url
   }))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
