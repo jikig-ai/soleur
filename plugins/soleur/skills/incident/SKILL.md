@@ -214,7 +214,7 @@ No public artifact is generated in MVP. Re-evaluation criteria are tracked in #3
 
 ## Phase 6 — Redaction sentinel (BLOCKING, pre-inline-emit)
 
-Run the sentinel against the unwritten draft — resolve its path fail-closed first (a missing script halts at exit 2, never a false "clean"), mirroring the `legal-generate` gate:
+Resolve the gate from the **deployed plugin root** (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy; git-root fallback for CLI/worktree), fail closed if it is unreadable, then run it against the unwritten draft. On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093). The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
 
 ```bash
 SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
@@ -222,13 +222,11 @@ SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}
 bash "$SENTINEL" <draft-tmpfile>
 ```
 
-The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
-
 `redact-sentinel.sh` is a thin shim over the hardened `redact-engine.py` (#5987): the engine NFKC-normalizes and strips zero-width/bidi/invalid-byte characters BEFORE matching (defeating compatibility-char / zero-width / soft-hyphen / prefix-homoglyph evasion), and fail-closes with a synthetic-HIGH finding on oversize input (raw or NFKC-expanded). The CLI contract — argv, exit codes, and output shape — is unchanged; the shim fails closed (exit 2) if `python3` is absent. See [ADR-095](../../../../knowledge-base/engineering/architecture/decisions/ADR-095-fail-closed-redaction-engine-contract.md) for the scope boundary (named non-goals: full TR39 homoglyph space, whitespace token-splitting, reversibly-encoded secrets).
 
 - Exit 0 → emit `sentinel: pass` and proceed to Phase 7.
 - Exit 1 → print each offset/pattern line from sentinel stdout. Prompt operator to redact. Operator iterates until sentinel exits 0. No max-iteration cap — `Ctrl-C` is the universal abort path.
-- Exit 2 → halt with the sentinel's error message; this is a skill bug OR an unmet runtime prerequisite (e.g. `python3` absent — the shim fails closed to exit 2 rather than a false "clean"/"secrets found" result).
+- Exit 2 → halt with the error message; this is a skill bug OR an unmet runtime prerequisite (e.g. `python3` absent — the shim fails closed to exit 2 rather than a false "clean"/"secrets found" result; the pre-run `[[ -r "$SENTINEL" ]]` guard also exits 2 here, with its own "sentinel not found — halt" message, before the sentinel runs).
 
 **Why pre-inline-emit (SpecFlow Critical #2):** transcripts ARE write boundaries. If the draft is emitted inline and only then scanned, the un-redacted secret has already crossed the operator transcript surface — and the conversation may be screenshot, exported, or replayed in plan-review tools. The sentinel must run before the draft is visible anywhere.
 

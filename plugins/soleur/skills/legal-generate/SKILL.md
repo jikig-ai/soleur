@@ -52,9 +52,12 @@ Contact: [contact info]"
 A generated legal draft can echo a secret or PII that was passed in as company context (a contact email, an API identifier pasted into a data-practices answer). **Presenting the draft inline in Phase 3 is a transcript write boundary** — the same fail-closed rule the incident skill enforces (`incident/SKILL.md` Phase 6): the sentinel must precede inline-emit, not just file-commit. So the redaction gate runs here, before the operator ever sees the draft.
 
 1. Write the generated draft to a `mktemp` file (do NOT emit it inline yet).
-2. Run the shared hardened engine against it. Resolve the path from the repo root — NOT a bare
-   `../incident/...` relative path, which depends on the current working directory and, from the wrong
-   CWD, exits `127` *outside* the shim (bypassing the shim's fail-closed exit-2 normalization):
+2. Run the shared hardened engine against it. Resolve the path from the **deployed plugin root**
+   (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy), falling back to the git-root for CLI/worktree
+   use — NOT a bare `../incident/...` relative path, which depends on the current working directory and,
+   from the wrong CWD, exits `127` *outside* the shim (bypassing the shim's fail-closed exit-2
+   normalization). On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative
+   path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093):
 
    ```bash
    SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"

@@ -262,10 +262,12 @@ export function GuidedTour({
         <div className="absolute inset-0 bg-black/60" aria-hidden="true" />
       ) : (
         // Single-element spotlight: a transparent hole with a viewport-filling
-        // dark box-shadow. rgba (not hex) satisfies no-raw-hex.
+        // dark box-shadow. rgba (not hex) satisfies no-raw-hex. A modest corner
+        // radius keeps the cutout a rectangle that traces the target — never a
+        // `rounded-full` pill/oval, which balloons on large targets (the KB tree).
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute rounded-full ring-2 ring-soleur-accent-gold-fill transition-all duration-200 motion-reduce:transition-none"
+          className="pointer-events-none absolute rounded-lg ring-2 ring-soleur-accent-gold-fill transition-all duration-200 motion-reduce:transition-none"
           style={{
             top: rect.top - PAD,
             left: rect.left - PAD,

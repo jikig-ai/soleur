@@ -144,6 +144,19 @@ describe("TourProvider", () => {
     expect(routerPush).toHaveBeenCalledWith("/dashboard/inbox");
   });
 
+  it("does NOT navigate on the Knowledge Base TAB step — the rail is swapped once inside, so the tab is highlighted from the prior page; only the next (content) step opens the KB", () => {
+    onb.tourCompletedAt = "x"; // suppress auto-start; drive manually
+    renderProvider();
+    fireEvent.click(screen.getByText("start")); // step 0 Welcome
+    // Advance to step 7 (Workstream action) — the step just before the KB tab.
+    for (let i = 0; i < 7; i++) fireEvent.click(screen.getByText("next"));
+    routerPush.mockClear();
+    fireEvent.click(screen.getByText("next")); // step 8 KB tab (no route)
+    expect(routerPush).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("next")); // step 9 KB content → opens the KB
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/kb");
+  });
+
   it("Finish persists completion via POST /api/tour/complete", () => {
     onb.tourCompletedAt = "x"; // suppress auto-start; drive manually
     renderProvider();
