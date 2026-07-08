@@ -8,40 +8,40 @@ brand_survival_threshold: aggregate pattern
 # Tasks
 
 ## Phase 0 — Preconditions (no writes)
-- [ ] 0.1 Read-only: `doppler secrets get BETTERSTACK_LOGS_TOKEN -p soleur -c prd_terraform --plain` resolves (STOP if absent).
-- [ ] 0.2 Confirm the reused `BETTERSTACK_LOGS_TOKEN` writes to Logs source 2457081 (table `t520508_soleur_inngest_vector_prd_3_logs`); record whether a `--table` override is needed.
-- [ ] 0.3 Probe the Better Stack Logs ingest host/region the token authenticates against (region-bound token — do not assume).
-- [ ] 0.4 Read the exact `registry-host-replace` `-target` set in `apply-web-platform-infra.yml`; confirm the 5 registry targets incl. `hcloud_volume.registry`.
+- [~] 0.1 Read-only `doppler secrets get BETTERSTACK_LOGS_TOKEN -p soleur -c prd_terraform` — NOT run in this worktree (no prod Doppler creds); `var.betterstack_logs_token` already exists (variables.tf:298, no default, provisioned for #6197). Orchestrator/Phase-6 re-confirms before dispatch.
+- [x] 0.2 Confirmed via `vector.toml` (verified 2026-05-22): the token writes to source 2457081 = table `t520508_soleur_inngest_vector_prd_3_logs` = `betterstack-query.sh` default → NO `--table` override needed.
+- [x] 0.3 Region resolved from `vector.toml`: source 2457081 is EU Falkenstein cluster `eu-fsn-3`; ingest URL `https://s2457081.eu-fsn-3.betterstackdata.com/` (baked as `local.betterstack_logs_ingest_url`).
+- [x] 0.4 Read `apply-web-platform-infra.yml`: the registry-host-replace set was 5 (server + 3 dependents + `hcloud_volume.registry`); extended to 6 with the logs-token secret.
 
 ## Phase 1 — Observability (in-surface disk probe) [#6244]
-- [ ] 1.1 Reuse `disk-monitor.sh` threshold/cooldown/envfile SHAPE; do NOT stand up full Vector (out of scope + quota + missing bespoke fields).
-- [ ] 1.2 Keep the absence-based liveness ping (<85% gate) in `zot-disk-heartbeat.sh` unchanged.
-- [ ] 1.3 Add a structured self-report emitting ONE `SOLEUR_ZOT_DISK pcent=… fs_size_gb=… block_size_gb=… resize_ok=… zot_restarts=… ping_rc=…` line to Better Stack Logs via `curl -H "Authorization: Bearer $BETTERSTACK_LOGS_TOKEN"`.
-- [ ] 1.4 Wrap the cron in `doppler run --project soleur-registry --config prd`; read `BETTERSTACK_LOGS_TOKEN` from the isolated config (NOT baked into user_data).
-- [ ] 1.5 Fail-loud guard discipline: neutralize `df`/`grep -c`/`curl` exits with sentinels that SHIP the failure (`resize_ok=false`, `ping_rc=N`), never silently swallow; cron exits 0 so it does not wedge.
+- [x] 1.1 Reuse `disk-monitor.sh` threshold/cooldown/envfile SHAPE; do NOT stand up full Vector (out of scope + quota + missing bespoke fields).
+- [x] 1.2 Keep the absence-based liveness ping (<85% gate) in `zot-disk-heartbeat.sh` unchanged.
+- [x] 1.3 Add a structured self-report emitting ONE `SOLEUR_ZOT_DISK pcent=… fs_size_gb=… block_size_gb=… resize_ok=… zot_restarts=… ping_rc=…` line to Better Stack Logs via `curl -H "Authorization: Bearer $BETTERSTACK_LOGS_TOKEN"`.
+- [x] 1.4 Wrap the cron in `doppler run --project soleur-registry --config prd`; read `BETTERSTACK_LOGS_TOKEN` from the isolated config (NOT baked into user_data).
+- [x] 1.5 Fail-loud guard discipline: neutralize `df`/`grep -c`/`curl` exits with sentinels that SHIP the failure (`resize_ok=false`, `ping_rc=N`), never silently swallow; cron exits 0 so it does not wedge.
 
 ## Phase 2 — resize2fs hardening (fail-loud) [#6240 primary]
-- [ ] 2.1 Device-wait loop before `mount` (bounded ~30×2s) — handle the attach race.
-- [ ] 2.2 Add `e2fsprogs` to `packages:` + a runcmd `dpkg -s e2fsprogs || apt-get install -y e2fsprogs` guard before the resize (packages: stage is non-fatal).
-- [ ] 2.3 Assert ext4-on-raw-device (no partition → no growpart); fail loud if a partition unexpectedly appears.
-- [ ] 2.4 Capture `df` before/after + resize2fs exit code; persist `/var/lib/zot/.resize-result` for the Phase-1 reporter.
-- [ ] 2.5 Remove `|| true` from the resize line (silent-swallow sense); on failure emit `resize_ok=false` to journald + telemetry but still launch zot (fail-loud, not fail-wedge).
-- [ ] 2.6 Assert post-resize fs size ≈ block-device size; a persistent `fs_size_gb≈10` on a 30 GB device confirms hypothesis (a).
+- [x] 2.1 Device-wait loop before `mount` (bounded ~30×2s) — handle the attach race.
+- [x] 2.2 Add `e2fsprogs` to `packages:` + a runcmd `dpkg -s e2fsprogs || apt-get install -y e2fsprogs` guard before the resize (packages: stage is non-fatal).
+- [x] 2.3 Assert ext4-on-raw-device (no partition → no growpart); fail loud if a partition unexpectedly appears.
+- [x] 2.4 Capture `df` before/after + resize2fs exit code; persist `/var/lib/zot/.resize-result` for the Phase-1 reporter.
+- [x] 2.5 Remove `|| true` from the resize line (silent-swallow sense); on failure emit `resize_ok=false` to journald + telemetry but still launch zot (fail-loud, not fail-wedge).
+- [x] 2.6 Assert post-resize fs size ≈ block-device size; a persistent `fs_size_gb≈10` on a 30 GB device confirms hypothesis (a).
 
 ## Phase 3 — gc/retention + guard amendment [#6240 defense-in-depth]
-- [ ] 3.1 `config.json`: `gcInterval` 24h→≤6h and `retention.delay` 24h→shorter; keep-set UNCHANGED (`sha256-*` cosign referrers retained).
-- [ ] 3.2 On-boot gc/retention nudge (verify zot v2.1.2 exposes a trigger before prescribing; else rely on tightened interval — `hr-verify-repo-capability-claim`).
-- [ ] 3.3 Amend the boot isolation self-check to expect exactly 3 non-DOPPLER secrets `{ZOT_PULL_TOKEN, ZOT_PUSH_TOKEN, BETTERSTACK_LOGS_TOKEN}` (cardinality + identity, fail-loud) — mirror `cloud-init-inngest.yml`.
+- [x] 3.1 `config.json`: `gcInterval` 24h→≤6h and `retention.delay` 24h→shorter; keep-set UNCHANGED (`sha256-*` cosign referrers retained).
+- [x] 3.2 On-boot gc/retention nudge (verify zot v2.1.2 exposes a trigger before prescribing; else rely on tightened interval — `hr-verify-repo-capability-claim`).
+- [x] 3.3 Amend the boot isolation self-check to expect exactly 3 non-DOPPLER secrets `{ZOT_PULL_TOKEN, ZOT_PUSH_TOKEN, BETTERSTACK_LOGS_TOKEN}` (cardinality + identity, fail-loud) — mirror `cloud-init-inngest.yml`.
 
 ## Phase 4 — Terraform wiring [#6244 + #6240]
-- [ ] 4.1 Add `doppler_secret.registry_betterstack_logs_token` in `zot-registry.tf` (isolated project/config, value `var.betterstack_logs_token`, `ignore_changes=[value]`) — mirror `inngest-betterstack-token.tf`.
-- [ ] 4.2 Extend the `registry-host-replace` `-target` set with `doppler_secret.registry_betterstack_logs_token`; confirm dependents (`hcloud_server_network`/`_volume_attachment`/`_firewall_attachment`) remain.
+- [x] 4.1 Add `doppler_secret.registry_betterstack_logs_token` in `zot-registry.tf` (isolated project/config, value `var.betterstack_logs_token`, `ignore_changes=[value]`) — mirror `inngest-betterstack-token.tf`.
+- [x] 4.2 Extend the `registry-host-replace` `-target` set with `doppler_secret.registry_betterstack_logs_token`; confirm dependents (`hcloud_server_network`/`_volume_attachment`/`_firewall_attachment`) remain.
 - [ ] 4.3 (Contingent — telemetry-driven only) bump `var.registry_volume_size` if the 30 GB fs is genuinely full after resize+gc.
 
 ## Phase 5 — Docs: ADR-096 amendment + C4 edge
-- [ ] 5.1 Amend ADR-096: isolation-guard 2→3, disk-observability delivery, resize2fs+gc remediation.
-- [ ] 5.2 Add `zotRegistry -> betterstack` edge to `model.c4` (views already include both endpoints).
-- [ ] 5.3 Run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`.
+- [x] 5.1 Amend ADR-096: isolation-guard 2→3, disk-observability delivery, resize2fs+gc remediation.
+- [x] 5.2 Add `zotRegistry -> betterstack` edge to `model.c4` (views already include both endpoints).
+- [x] 5.3 Run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
 ## Phase 6 — Post-merge verify (agent-automated, NO operator)
 - [ ] 6.1 `gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace`; wait for success.
