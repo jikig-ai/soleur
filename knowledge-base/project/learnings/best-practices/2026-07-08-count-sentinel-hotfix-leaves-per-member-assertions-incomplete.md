@@ -47,9 +47,24 @@ validation caught the stale premise and re-scoped correctly).
 
 ## Session Errors
 
-None detected. Clean run — planning, work, review (4 agents, 0 findings), and
-QA (skipped: prose scenarios, behavior already live-verified) all passed first
-try.
+- **Mid-pipeline sibling collision (#6237).** While this PR (#6236, for #6233)
+  was in its ship phase, sibling PR #6237 (for the sibling issue #6232) merged
+  the 3 beta-CRM per-table assertions to `main`, producing a content conflict in
+  `verify/068`. **Recovery:** per the `/soleur:ship` Phase 6.5 sharp edge ("a
+  sibling may have shipped your feature mid-pipeline — do NOT reflexively resolve
+  to mine"), I aborted the merge, read `origin/main`'s actual implementation,
+  found it added only 3 of the 5 tables (beta-CRM), and rebuilt this PR as the
+  **residual 2-table delta** (`workspace_activity`, `kb_files`) on top of #6237
+  rather than duplicating its work. **Prevention:** the one-shot Step 0a.5
+  collision gate only probes at pipeline START, so a sibling that ships the same
+  feature under a *different* issue (#6232 vs #6233) is invisible to it — the
+  Phase 6.5 mergeability check + read-main-before-resolving is the backstop.
+  Reinforces the Key Insight: the count-only #6229 hotfix left the per-table half
+  to be finished piecemeal (#6229 count → #6237 beta trio → #6236 last 2), which
+  is exactly the fragmentation a complete-the-guard-in-one-PR discipline avoids.
+
+Otherwise a clean run — planning, work, review (4 agents, 0 findings), and QA
+(skipped: prose scenarios, behavior live-verified) all passed first try.
 
 ## Tags
 category: best-practices

@@ -55,7 +55,8 @@ gating `deploy`.
 | agent | 2026-07-08 12:38 | #6160 (`ee58951b`, mig 126 beta-CRM) merges; live `*_jti_not_denied` policy count moves 23→26 while `verify/068` still asserts 23. `verify-migrations` starts failing on main. |
 | agent | 2026-07-08 ~13:00 | Drift discovered incidentally during #6218 post-merge verification (that PR added no migrations; its own infra applies succeeded). |
 | agent | 2026-07-08 13:19 | #6229 (`a4d8208e`) bumps the sentinel 23→26; `Web Platform Release` goes green; deploys unblocked. |
-| agent | 2026-07-08 (this PR) | #6236 completes the residual per-table drift guard (21→26 named assertions) and closes the tracking issue #6233. |
+| agent | 2026-07-08 15:31 | #6237 (`e656434f`, #6232 residual) adds the 3 beta-CRM per-table presence assertions (named set 21→24). |
+| agent | 2026-07-08 (this PR) | #6236 adds the final 2 per-table assertions (`workspace_activity` mig 076, `kb_files` mig 077) that #6237's beta-CRM scope left behind (named set 24→26 == count), and closes the tracking issue #6233. |
 
 ## Participants and Systems Involved
 
@@ -81,9 +82,11 @@ system — a sibling migration adding members to an aggregate-count-guarded set 
 
 #6229 (`a4d8208e`) bumped `jti_deny_policies_count_23` → `..._count_26`, matching
 the live schema (dev + prd both = 26). `verify-migrations` green from that commit
-onward. #6236 (this PR) adds the 5 missing per-table `*_jti_not_denied_policy_present`
-presence assertions so the named set equals the count, closing the count-vs-identity
-gap the hotfix left open.
+onward. The per-table (identity) half was then completed across two PRs: #6237
+(#6232 residual) added the 3 beta-CRM presence assertions (21→24), and #6236
+(this PR) added the final 2 (`workspace_activity` mig 076, `kb_files` mig 077),
+so the named set equals the count (24→26), closing the count-vs-identity gap the
+count-only hotfix left open.
 
 ## Recovery verification
 
