@@ -184,6 +184,25 @@ SELECT 'workspace_member_removals_jti_not_denied_policy_present',
   FROM pg_policies WHERE schemaname='public' AND tablename='workspace_member_removals'
    AND policyname='workspace_member_removals_jti_not_denied' AND permissive='RESTRICTIVE'
 UNION ALL
+-- beta-CRM tenant tables from mig 126 (#6160): each carries the ADR-068
+-- <table>_jti_not_denied RESTRICTIVE policy. Presence-asserted like every other
+-- tenant table above so a dropped policy fails CI even when the aggregate count
+-- (sentinel above) still reads 26 (#6229 bumped the count; #6232 adds these).
+SELECT 'beta_contacts_jti_not_denied_policy_present',
+       CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
+  FROM pg_policies WHERE schemaname='public' AND tablename='beta_contacts'
+   AND policyname='beta_contacts_jti_not_denied' AND permissive='RESTRICTIVE'
+UNION ALL
+SELECT 'interview_notes_jti_not_denied_policy_present',
+       CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
+  FROM pg_policies WHERE schemaname='public' AND tablename='interview_notes'
+   AND policyname='interview_notes_jti_not_denied' AND permissive='RESTRICTIVE'
+UNION ALL
+SELECT 'beta_contact_stage_transitions_jti_not_denied_policy_present',
+       CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
+  FROM pg_policies WHERE schemaname='public' AND tablename='beta_contact_stage_transitions'
+   AND policyname='beta_contact_stage_transitions_jti_not_denied' AND permissive='RESTRICTIVE'
+UNION ALL
 -- (29-31) anon-role REVOKE matrix: none of the three 068 functions
 -- must be EXECUTE-able by anon. Pre-fix, the sentinel asserted only
 -- the authenticated REVOKE matrix; an accidental future GRANT TO anon
