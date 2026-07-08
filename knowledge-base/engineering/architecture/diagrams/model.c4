@@ -16,6 +16,14 @@ model {
     description "Vendors, regulators, and counsel emailing the operator address. Their statutory/operational mail is the email-triage inbox's inbound source."
   }
 
+  // External actor — an involuntary third-party data subject whose conversation
+  // PII the operator captures in the beta-CRM (ADR-102 / mig 126). The operator
+  // is the controller; the beta tester never touches the store directly.
+  betaContact = actor "Beta Tester / Prospect" {
+    #external
+    description "A beta tester or prospect the operator is in sales/product conversations with. The origin of the third-party contact + conversation PII captured in the owner-private beta-CRM (beta_contacts / interview_notes). An involuntary data subject (Art. 14); no direct access to the store."
+  }
+
   // External actor — an UNTRUSTED pull-request author, distinct from the trusted
   // `founder` Owner above. Their PR-head code executes only in the fix-constraints
   // Stage A recovery producer (`pull_request`, contents:read, no write/secret
@@ -161,6 +169,10 @@ model {
         technology "Supabase (inbox_item, mig 122)"
         description "Severity-ranked operational-notification store (ADR-085, #6007). Mutable read/act/archive state, workspace-grain, Owner-shared reads — SEPARATE from the email-triage WORM statutory ledger. Content-minimized (title + source_ref ids only). GET /api/inbox merges it with email-triage into one severity-ordered feed (statutory pinned first)."
       }
+      crmStore = database "Beta-CRM Store" {
+        technology "Supabase (beta_contacts, interview_notes, beta_contact_stage_transitions, mig 126)"
+        description "Owner-private beta-tester / prospect CRM (ADR-102, #6165). Third-party contact PII + dual-lens conversation notes + append-only stage-transition history. Owner-only RLS; writes RPC-only via auth.uid()-pinned SECURITY DEFINER functions; the cro/cpo agents read AND write via the crm_* MCP tools (agent-native parity). 24-month retention; Art. 17 via ON DELETE CASCADE + crm_erase_contact."
+      }
       tunnel = container "Cloudflare Tunnel" {
         technology "cloudflared"
         description "Zero-trust inbound access — no exposed ports"
@@ -299,6 +311,12 @@ model {
   // same merged feed (agent-native parity).
   webapp -> operationalInbox "notifyInboxItem writes inbox_item + GET /api/inbox reads the merged feed (RLS Owner-scoped)" { technology "PostgreSQL / PostgREST" }
   engine -> operationalInbox "inbox_list agent tool reads the same merged severity-ranked feed (agent-native parity)" { technology "MCP tool → PostgREST" }
+
+  // Beta-CRM (ADR-102 / mig 126): the ONLY access path is the agent (no UI/API
+  // surface at MVP), so there is deliberately NO `founder -> crmStore` edge —
+  // add `webapp -> crmStore` only when the deferred UI/API phase lands.
+  engine -> crmStore "crm_* MCP tools read AND write the owner-private CRM via auth.uid()-pinned RPCs (agent-native parity)" { technology "MCP tool → PostgREST / RPC" }
+  betaContact -> founder "Conversation PII origin — the operator captures notes about this third party" { technology "Conversation" }
 
   // ---- fix-constraints two-stage privileged recovery boundary (ADR-074) ----
   // Trust boundary: the untrusted contributor's PR-head code runs ONLY in the

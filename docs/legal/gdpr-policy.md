@@ -186,6 +186,26 @@ For the durable, per-turn plain-language **turn summary** persisted by the Conci
 
 <!-- End: Concierge turn summaries -->
 
+<!-- Added 2026-07-07: Beta-tester / prospect CRM (#6165) -->
+
+### 3.13 Owner-private beta-tester / prospect CRM (agent-native capture store)
+
+For the operator's **owner-private** store of beta-tester / prospect conversations (Privacy Policy Section 4.7; Data Protection Disclosure Section 2.3(ad); Article 30 register Processing Activity 30; migration 126, ADR-102). Here **the Web Platform user is the controller and Jikigai is the processor** for the third-party personal data the user records:
+
+- **What it is:** three owner-only tables (RLS keyed on the user's `user_id`) holding a contact head (`beta_contacts`: name, company, role, source, pipeline stage + fields), dated dual-lens conversation notes (`interview_notes`: verbatim `body` + `lens[]` in `{sales, product}`), and an append-only stage-transition history. Written and read on the operator's behalf by the platform's `cro`/`cpo` agents through `auth.uid()`-pinned SECURITY DEFINER functions; write tools are **human-gated** (the operator approves each agent write).
+- **Data subjects:** the beta testers / prospects — **involuntary, third-party data subjects** → **Article 14 applies**. **No special-category (Article 9) data is solicited** (the free-text `body` is an incidental ingress the operator is instructed to avoid populating with Article 9 data).
+- **Lawful basis:** **Legitimate interest** (Article 6(1)(f) GDPR). Three-part test (full LIA at `knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md`):
+  - **Purpose:** give the operator a private, structured, agent-reachable home for the sales/product conversations they are already having, so records are actionable by the `cro`/`cpo` agents rather than dead documents — a routine and expected business-relationship-management purpose.
+  - **Necessity:** the least-intrusive architecture that achieves it — a per-tenant database boundary (never git-committed third-party PII, which would be an Article 17 impossibility); strict owner-only RLS; RPC-only writes with an `auth.uid()` authorization pin; a composite-FK owner guard; PII-safe observability; human-gated agent writes. No profiling or scoring of subjects.
+  - **Balancing:** the impact on a professional contact of having the operator's own conversation notes recorded is low and within the reasonable expectation of a business relationship; it is bounded by owner-only access (no other tenant can read the store), 24-month retention, an Article 14 notice, and an implementable individual erasure path. The decisive safeguard is owner-only RLS + the human-approval gate on agent writes.
+- **Article 14 information posture:** because the details are obtained in the course of a conversation (a third party the operator is in contact with), Article 14 applies and notice is **feasible** — the LIA specifies the notice mechanism (contrast Section 3.10's Article 14(5)(b) disproportionate-effort posture).
+- **Recipients / transfers:** to enable `cro`/`cpo` reasoning, record content is transmitted to **Anthropic (US)** — a Chapter V transfer under the existing Anthropic DPA (SCCs Modules 2+3; Section 6). No new sub-processor beyond the already-engaged Anthropic + Supabase.
+- **Retention and erasure:** 24 months from `last_contact` (never-contacted: from `created_at`) via in-database `pg_cron`. **Article 17:** the owner's whole store is deleted by `ON DELETE CASCADE` on account deletion (no anonymise RPC — no statutory-retention class); an individual third party's erasure is fulfilled via the auditable service-role-only `crm_erase_contact` function. Included in the owner's Article 15 + 20 self-serve export.
+- **Article 22:** no automated decision-making producing legal or similarly significant effects — the records are the operator's own notes.
+- **DPIA status:** screened at single-operator scale; the accepted residual is within-tenant prompt-injection over untrusted conversation content, mitigated by the human-approval gate on every agent write (the operator reviews each write in-session).
+
+<!-- End: Beta-tester / prospect CRM -->
+
 ## 4. Categories of Personal Data
 
 ### 4.1 Data NOT Collected by Soleur
@@ -299,7 +319,7 @@ The Soleur Plugin itself does not transfer personal data internationally. Howeve
 
 **Other services:**
 
-- **Anthropic Claude API:** API requests may be processed in the United States or other jurisdictions where Anthropic operates. Users should review Anthropic's data processing terms regarding international transfer safeguards.
+- **Anthropic Claude API:** API requests may be processed in the United States or other jurisdictions where Anthropic operates. Users should review Anthropic's data processing terms regarding international transfer safeguards. **Beta-CRM agent-read path (#6165, Section 3.13):** where the operator uses the owner-private beta-tester / prospect CRM, its record content (contact fields + verbatim conversation notes — third-party personal data) is transmitted to **Anthropic PBC (US)** so the `cro`/`cpo` agents can reason over it. This is a **Chapter V transfer** governed by the existing Anthropic DPA (EU-US Data Privacy Framework + SCCs Modules 2+3; DPA snapshot at `knowledge-base/legal/data-processing-agreements/anthropic.md`).
 - **GitHub Pages / GitHub:** GitHub infrastructure is located globally, including in the United States. GitHub (Microsoft Corporation) is certified under the **EU-US Data Privacy Framework** (adequacy decision C(2023) 4745), which provides the primary transfer mechanism. GitHub also maintains Standard Contractual Clauses as a supplementary safeguard. See [GitHub's Global Privacy Practices](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement#githubs-global-privacy-practices).
 - **Buttondown (Newsletter):** Buttondown is a US-based newsletter platform. Transfers of subscriber data (email addresses, IP addresses, referrer URL, subscription timestamps, browser/device metadata) from the EEA to the United States are governed by the **EU Standard Contractual Clauses** (European Commission Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor), incorporated by reference into Buttondown's [Data Processing Agreement](https://buttondown.com/legal/data-processing-agreement). Buttondown's DPA applies to all plan tiers, including the free tier. See also [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy).
 

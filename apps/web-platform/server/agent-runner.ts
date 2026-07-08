@@ -69,6 +69,7 @@ import { buildAccountTools } from "./account-tools";
 import { buildRoutineTools } from "./routines-tools";
 import { buildWorkstreamTools } from "./workstream/workstream-tools";
 import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
+import { buildCrmTools } from "./crm/crm-tools";
 import { getCurrentRepoUrl, getCurrentRepoStatus } from "./current-repo-url";
 import { evaluateRepoReadiness, type RepoReadiness } from "./repo-readiness";
 import {
@@ -1821,6 +1822,24 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId });
     platformTools.push(...workspaceSettingsTools.tools);
     platformToolNames.push(...workspaceSettingsTools.toolNames);
+
+    // Beta-CRM tools (feat-beta-conversation-capture #6165, ADR-102): the make-
+    // or-break agent-native read/write path for the operator's private beta-
+    // tester conversation store. Reads (list/get/note_list) are auto-approve
+    // (owner-only RLS via closure userId); writes (upsert/note_append/set_stage)
+    // are gated — the review gate is the R3 within-tenant-injection mitigation.
+    // userId is closure-captured; writes go through auth.uid()-pinned RPCs.
+    const crmTools = buildCrmTools({ userId });
+    platformTools.push(...crmTools);
+    platformToolNames.push(
+      "mcp__soleur_platform__crm_contact_list",
+      "mcp__soleur_platform__crm_contact_get",
+      "mcp__soleur_platform__crm_note_list",
+      "mcp__soleur_platform__crm_stage_transitions_list",
+      "mcp__soleur_platform__crm_contact_upsert",
+      "mcp__soleur_platform__crm_note_append",
+      "mcp__soleur_platform__crm_contact_set_stage",
+    );
 
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {

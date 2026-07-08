@@ -318,6 +318,24 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // Art. 17 erasure via user_id ON DELETE CASCADE (no anonymise RPC needed).
   inbox_item: { ownerField: "user_id", article: "15" },
 
+  // feat-beta-conversation-capture (migration 126, #6165, ADR-102) — the
+  // operator's private beta-tester/prospect CRM. beta_contacts holds the
+  // contact head (name/company/role/source + pipeline fields) and interview_notes
+  // holds verbatim dual-lens conversation notes — both are personal data the
+  // owner curated about third parties, held under Art. 6(1)(f) legitimate
+  // interest (LIA; PA-30). Art. 15+20: the owner PROVIDED this content, so it is
+  // portable. Art. 17 erasure via user_id ON DELETE CASCADE (no anonymise RPC —
+  // no statutory-retention class; ADR-102 §4). ownerField = user_id (direct).
+  beta_contacts: { ownerField: "user_id", article: "15+20" },
+  interview_notes: { ownerField: "user_id", article: "15+20" },
+
+  // beta_contact_stage_transitions (migration 126) — append-only pipeline
+  // velocity history. Art. 15 ACCESS only (not 20 portability): the row is
+  // controller-GENERATED audit evidence of stage changes (from_stage/to_stage/
+  // entered_at), not user-provided content — analogous to workspace_member_actions.
+  // user_id is the direct owner column; Art. 17 via ON DELETE CASCADE.
+  beta_contact_stage_transitions: { ownerField: "user_id", article: "15" },
+
 };
 
 /**
