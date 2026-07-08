@@ -183,7 +183,7 @@ runcmd:
   - |
     set -e
     test -f /run/soleur-inngest-doppler.ok || { echo "FATAL: doppler isolation self-check did not pass — refusing to bootstrap inngest" >&2; exit 1; }
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.18
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.19
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     docker pull "$IREF"
     EXTRACT_DIR=$(mktemp -d)

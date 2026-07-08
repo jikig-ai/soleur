@@ -177,6 +177,14 @@ jobs:
           cp apps/web-platform/infra/inngest-redis.conf "$BUILD_DIR/inngest-redis.conf"
           cp apps/web-platform/infra/inngest-redis.service "$BUILD_DIR/inngest-redis.service"
           cp apps/web-platform/infra/inngest-redis-bootstrap.sh "$BUILD_DIR/inngest-redis-bootstrap.sh"
+          # Cutover flip trio + arm-atomicity guard (#6178) — dedicated-host only;
+          # baked here, staged to /tmp at entrypoint, installed (gated on the
+          # soleur-inngest project) by inngest-bootstrap.sh.
+          cp apps/web-platform/infra/inngest-cutover-flip.sh "$BUILD_DIR/inngest-cutover-flip.sh"
+          cp apps/web-platform/infra/inngest-server-flip-guard.sh "$BUILD_DIR/inngest-server-flip-guard.sh"
+          cp apps/web-platform/infra/cat-inngest-cutover-state.sh "$BUILD_DIR/cat-inngest-cutover-state.sh"
+          cp apps/web-platform/infra/inngest-cutover-flip.service "$BUILD_DIR/inngest-cutover-flip.service"
+          cp apps/web-platform/infra/inngest-cutover-flip.timer "$BUILD_DIR/inngest-cutover-flip.timer"
 
           # Conditional Vector env block — empty pin values produce empty
           # ENV lines, which the bootstrap script's `${VECTOR_CLI_VERSION:-}`
@@ -193,10 +201,16 @@ jobs:
           COPY inngest-redis.conf /inngest-redis.conf
           COPY inngest-redis.service /inngest-redis.service
           COPY inngest-redis-bootstrap.sh /inngest-redis-bootstrap.sh
-          RUN chmod +x /inngest-bootstrap.sh /inngest-redis-bootstrap.sh
-          # The bootstrap script reads /tmp/vector.toml + /tmp/inngest-redis.*
-          # at install time; stage the OCI-bundled assets there at entrypoint.
-          ENTRYPOINT ["/bin/bash", "-c", "cp /vector.toml /tmp/vector.toml && cp /inngest-redis.conf /inngest-redis.service /inngest-redis-bootstrap.sh /tmp/ && /inngest-bootstrap.sh"]
+          COPY inngest-cutover-flip.sh /inngest-cutover-flip.sh
+          COPY inngest-server-flip-guard.sh /inngest-server-flip-guard.sh
+          COPY cat-inngest-cutover-state.sh /cat-inngest-cutover-state.sh
+          COPY inngest-cutover-flip.service /inngest-cutover-flip.service
+          COPY inngest-cutover-flip.timer /inngest-cutover-flip.timer
+          RUN chmod +x /inngest-bootstrap.sh /inngest-redis-bootstrap.sh /inngest-cutover-flip.sh /inngest-server-flip-guard.sh /cat-inngest-cutover-state.sh
+          # The bootstrap script reads /tmp/vector.toml + /tmp/inngest-redis.* +
+          # /tmp/inngest-cutover-flip.* (flip trio + guard, #6178) at install time;
+          # stage the OCI-bundled assets there at entrypoint.
+          ENTRYPOINT ["/bin/bash", "-c", "cp /vector.toml /tmp/vector.toml && cp /inngest-redis.conf /inngest-redis.service /inngest-redis-bootstrap.sh /tmp/ && cp /inngest-cutover-flip.sh /inngest-server-flip-guard.sh /cat-inngest-cutover-state.sh /inngest-cutover-flip.service /inngest-cutover-flip.timer /tmp/ && /inngest-bootstrap.sh"]
           DOCKERFILE
 
           docker build -t "$IMAGE:$TAG" "$BUILD_DIR"

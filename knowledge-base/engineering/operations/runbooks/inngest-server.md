@@ -16,6 +16,7 @@ Per ADR-030 the Inngest server runs as a single-host SQLite-backed durable trigg
 | Unpause heartbeat after first ping | [§ Unpause heartbeat](#unpause-heartbeat) |
 | Cron bug-fixer manual trigger | [§ Cron bug-fixer](#cron-bug-fixer) |
 | Fire any cron on demand | [§ On-demand cron trigger (HTTP)](#on-demand-cron-trigger-http--primary) |
+| Dedicated-host cutover (#6178) | [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178) |
 
 ## On-demand cron trigger (HTTP — PRIMARY)
 
@@ -479,6 +480,203 @@ setting).
    reminders AND could double-fire ones Postgres recorded → **forward-fix only**. On a committed
    cutover, wipe the old `/var/lib/inngest` SQLite so an accidental SQLite boot cannot replay dead
    reminders.
+
+## Dedicated-host cutover (Phase 2, `op=execute` gated sequence) — Ref #6178
+
+> **This is the ADR-100 dedicated-host extraction cutover** (move Inngest off the
+> co-located web host onto the singleton `hcloud_server.inngest` at `10.0.1.40`),
+> distinct from the same-host durable-backend cutover above. It flips the dedicated
+> host from its **dark, non-prod Postgres** backend to **prod Postgres**, gated behind a
+> Redis `FLUSHALL` + `DBSIZE==0` assertion (ADR-100 Decision 6/6a). **Every operator
+> action here is a Doppler write, a `workflow_dispatch`, or a Better Stack read — there is
+> NO `ssh`/host-shell step** (`hr-no-ssh-fallback-in-runbooks`; the dedicated host is
+> deny-all-public). Only counts + `reminder_id`s / `function_id`s ever surface in a run
+> log — never reminder bodies, actors, or connection strings.
+
+**Precondition (do this DURING the dark window, well before the maintenance window):** the
+flip oneshot (`inngest-cutover-flip.sh` + `.service`/`.timer` + `inngest-server-flip-guard.sh`)
+must already be baked into the OCI image and installed on the dark host. Installing it is a
+cloud-init/OCI change that **force-replaces the singleton** — zero prod-downtime by
+construction (the host is on the non-prod dark backend serving zero prod crons; the AOF
+Redis volume survives the replace). Never run that force-replace inside the maintenance
+window. The poll timer ships **enabled and stays enabled for the host's whole life** — the
+FSM flag (`INNGEST_CUTOVER_FLIP`) is the sole gate, so arming is pure Doppler writes with no
+`systemctl` step.
+
+### Op order (the gated sequence)
+
+`op=execute` → **operator arms the flip (Doppler) + app-repoint** → `op=rearm` → `op=verify`.
+`op=execute` automates the web-host-expressible spine (2.0 → 2.2) and then **withholds a
+SEAM** — the two operator seams (the Doppler flip arm 2.2b+2.3, and the app-repoint 2.4)
+cannot be done from CI (`hr-menu-option-ack-not-prod-write-auth`) and are printed as an
+out-of-band hand-off.
+
+1. **`op=execute`** (pre-flip orchestrator — no prod-write):
+   ```bash
+   gh workflow run cutover-inngest.yml --field op=execute
+   ```
+   It runs: **2.0** empty-registry pre-flight (aborts if the dark registry is non-empty — see
+   remediation below); **2.1** capture of still-armed reminders (records persist on-host;
+   `Σcaptured` + `reminder_id`s only in the log); **2.2** quiesce followed by a **QUIESCE HARD
+   GATE** that re-inventories the **LB-reachable host** and **fails loud + withholds the SEAM**
+   if inngest still serves there. When the gate passes it prints the SEAM with the exact
+   operator steps below, then exits 0. Read the SEAM from the run log:
+   ```bash
+   gh run view <op=execute run id> --log | grep -E '::notice::|::error::|::warning::'
+   ```
+
+   > **DI-C3 LIMITATION — web-2 is NOT auto-verified (tracked #6227).** Both 2.1
+   > capture and the 2.2 gate reach inngest via a web-host webhook that resolves over the **load
+   > balancer** to `127.0.0.1:8288` on **whichever host the LB routed to** — there is no
+   > host-targeting mechanism today (no firewall rule for web→web:8288 + no host-targeting
+   > inventory/capture hook; that per-host fan-out infra is DEFERRED, see the tracking issue).
+   > So `op=execute` positively confirms only the **LB-reachable** host. The **weight-0 warm-
+   > standby web-2 (10.0.1.11)** self-arms oneshots into its **own** Redis independent of LB
+   > weight, and is **neither captured nor quiesce-verified** by CI. **Step 1a below (web-2
+   > quiesce) is MANDATORY, not advisory** — skipping it can (a) silently drop a reminder that
+   > web-2 self-armed into its local Redis, and (b) leave a surviving web-2 scheduler
+   > double-firing against prod Postgres that `op=verify` cannot detect (it reads only the
+   > dedicated host's runs).
+
+1a. **Quiesce web-2 (MANDATORY — DI-C3, before arming the flip).** The `op=execute` gate did
+   **not** confirm web-2. Quiesce it per the plan's **web-2 freeze/recreate lifecycle**
+   (§Bounded-outage / Downtime): take web-2 **out of the warm-standby rotation and recreate it
+   onto the post-cutover config** so no surviving web-2 scheduler self-arms a reminder into its
+   local Redis. This is a lifecycle action (freeze → recreate), **not** an `ssh`/host-shell step
+   (`hr-no-ssh-fallback-in-runbooks`). Do **not** proceed to step 2 until web-2 is quiesced.
+   Tracks #6227 (real per-host web→web fan-out to auto-verify web-2).
+
+2. **Arm the flip (2.2b+2.3)** — three out-of-band Doppler writes on the **`soleur-inngest/prd`**
+   project (these carry `ignore_changes[value]`, so they are never TF-minted). The enabled 30s
+   poll timer picks up `armed` and runs the forward FSM path
+   **stop → `FLUSHALL` → assert `DBSIZE==0` → start → `done`**:
+   ```bash
+   doppler secrets set INNGEST_POSTGRES_URI=<prod-postgres-uri>                       --project soleur-inngest --config prd --no-interactive
+   doppler secrets set INNGEST_HEARTBEAT_URL=<betteruptime inngest_prd heartbeat url> --project soleur-inngest --config prd --no-interactive
+   doppler secrets set INNGEST_CUTOVER_FLIP=armed                                     --project soleur-inngest --config prd --no-interactive
+   ```
+   (Substitute the real prod URI + heartbeat URL at the terminal — do not paste them into any
+   log, PR, or run output; AC-NOBODY.)
+
+3. **Confirm the flip via Better Stack (P0-2 — NOT a host read).** The oneshot emits its
+   verify-state as a `logger -t inngest-cutover-flip` JSON line; the on-host Vector→Better Stack
+   journald shipper (source `soleur-inngest-vector-prd`) carries it off-box. Pull it
+   (`hr-no-dashboard-eyeball-pull-data-yourself`):
+   ```bash
+   doppler run -p soleur -c prd_terraform -- \
+     scripts/betterstack-query.sh --since 30m --grep inngest-cutover-flip --raw-only --limit 20
+   ```
+   Require `"exit_code":0` (with `"reason":"done"`) in the emitted line before proceeding. Do
+   **NOT** `ssh`/`cat` the deny-all-public host to read state — `cat-inngest-cutover-state.sh`
+   exists on-host as a **debug aid only**, never the operator gate. A clean flip surfaces the
+   `"reason":"done"` line within a single 30s poll of arming the flag (the timer fires the
+   oneshot every 30s), so a `--since 30m` query captures it promptly. A `"exit_code":1` /
+   `"reason":"dbsize-nonzero"` line means the DBSIZE gate tripped, and a
+   `"reason":"unexpected-exit(...)"` line means a flag-write/systemctl failure drove the flag
+   to terminal `aborted` (the ERR-trap loud-fail) → either way see **aborted-state recovery**
+   below. (These tags are on the `vector.toml` Source 4 allowlist — see the
+   `vector-pii-scrub.test.sh` drift-guard — so they are guaranteed to ship off-box.)
+
+4. **App-repoint (2.4).** Merge the `ci-deploy.sh` `INNGEST_BASE_URL` → `http://10.0.1.40:8288`
+   change (both the canary and prod sites) and redeploy the web app so the functions re-sync
+   (register) onto the dedicated host. `op=rearm`/`op=verify` precondition-check that this
+   landed (registry-non-empty).
+
+5. **`op=rearm`** (re-arm the captured reminders after the flip):
+   ```bash
+   gh workflow run cutover-inngest.yml --field op=rearm
+   ```
+   It precondition-checks 2.4 (registry non-empty), consumes the on-host capture, and
+   reconciles `Σcaptured == rearmed`; a delta **fails loud** with the missing `reminder_id`s and
+   offers a retry (in-window ticks are not auto-backfilled).
+
+6. **`op=verify`** (exactly-once):
+   ```bash
+   gh workflow run cutover-inngest.yml --field op=verify
+   ```
+   It reaches the dedicated GQL over the private net via `/hooks/inngest-doublefire-probe`
+   (P1-12 — the runner cannot curl `10.0.1.40` directly), buckets every run by
+   `(functionID, floor(startedAt / cron_period))`, and fails if any bucket has >1 run
+   (double-fire). It also auto-emits the missed-tick `soleur:trigger-cron` list for ticks that
+   fell in the quiesce→register gap (P2-16). Re-fire that list via `soleur:trigger-cron`.
+
+   > **`op=verify` caveats — read before trusting the verdict:**
+   > - **NOT a web-2 double-fire detector (P2-a / DI-C3).** The doublefire-probe reads **only the
+   >   dedicated host's** (`10.0.1.40`) run history. A surviving weight-0 web-2 scheduler fires
+   >   against prod Postgres via its **own loopback backend PRE-repoint**, whose runs never appear
+   >   on the dedicated host — so `op=verify` cannot see a web-2 double-fire. The **operator's
+   >   mandatory web-2 quiesce (step 1a)** is the control; `op=verify` does not substitute for it.
+   > - **Single global `CRON_PERIOD` (P2-c).** One `CUTOVER_CRON_PERIOD_SECONDS` (default 3600)
+   >   buckets **every** function. The exactly-once verdict is sound **only if every registered
+   >   cron period ≥ `CRON_PERIOD` and hour-aligned**; a cron firing faster than the period yields
+   >   >1 run/bucket (false-positive, blocks verify — safe) or a boundary-straddling double-fire
+   >   reads clean (false-negative — unsafe). If any cron is sub-hourly, re-run with
+   >   `CUTOVER_CRON_PERIOD_SECONDS` set to the **shortest** registered cron period.
+   > - **Non-empty registry ≠ fully synced (P3-c).** The precondition only proves the re-sync
+   >   **started**. Set `CUTOVER_REGISTRY_BASELINE` to the pre-cutover `op=inventory` `functions`
+   >   count so `op=rearm`/`op=verify` enforce `function_count ≥ baseline` (a half-sync otherwise
+   >   passes); without it, confirm the count matches the pre-cutover inventory manually.
+
+### 2.0 registry-non-empty remediation (P1-6)
+
+If `op=execute` aborts at 2.0 with `registry-probe: dark registry NON-empty`, the dark host has
+functions registered against it — flipping now would carry stray state onto prod Postgres. To
+empty the dark registry and re-run (all no-SSH):
+1. Confirm `INNGEST_POSTGRES_URI` on `soleur-inngest/prd` still points at the **non-prod dark**
+   backend (it must NOT be the prod URI yet — that is only written at step 2 above).
+2. Stop whatever dev/test backend is re-syncing functions into the dark server (typically a
+   stray `--sdk-url` pointing at the dark host), so nothing re-registers after you clear it.
+3. Clear the dark registry (re-provision the dark host via the
+   `apply_target=inngest-host-replace` dispatch, which force-replaces onto the empty dark
+   backend), then re-dispatch `op=execute`. The 2.0 probe must report `registry_empty:true`
+   before the SEAM is reachable.
+
+### Rollback sequence (P1-13) — mirrors the forward gate, stop the dedicated host FIRST
+
+1. **Stop the dedicated scheduler** — one Doppler write; the still-enabled timer stops
+   `inngest-server` on its next poll:
+   ```bash
+   doppler secrets set INNGEST_CUTOVER_FLIP=rollback --project soleur-inngest --config prd --no-interactive
+   ```
+   Confirm `"reason":"rolled-back"` / `"exit_code":0` via the same Better Stack query as step 3.
+2. **Repoint the app back to loopback** — revert the `ci-deploy.sh` `INNGEST_BASE_URL` change
+   (back to the loopback `host.docker.internal:8288`) and redeploy.
+3. **Re-enable web inngest** — run the authored reverse-op (re-enables + restarts inngest across
+   the `$CUTOVER_HOSTS` set and confirms via inventory):
+   ```bash
+   gh workflow run cutover-inngest.yml --field op=rollback
+   ```
+The capture file is retained on-host for a later retry. Rollback is data-safe only before any
+**real** (non-throwaway) reminder is armed against prod Postgres — after that, forward-fix only.
+
+### `aborted`-state recovery (P0-3)
+
+If the flip's DBSIZE gate tripped (`"exit_code":1`, `"reason":"dbsize-nonzero"`), the oneshot
+refused to start and transitioned the flag to the terminal `aborted` (the 30s poll halts — no
+re-attempt storm, and `aborted` never reads as success). The web schedulers are already
+quiesced/disabled from `op=execute` 2.2, so **recover via the same rollback path**: run
+`gh workflow run cutover-inngest.yml --field op=rollback` to bring the web schedulers back,
+fix the Redis state (the non-zero `DBSIZE` means stale dark queue state — investigate why the
+dark Redis was not empty), then re-arm from `op=execute`.
+
+### Heartbeat suppression window (P2-14)
+
+Both pushers (the co-located web scheduler and the dedicated host) are silent across the
+window — the web pusher is quiesced at 2.2 and the dedicated host only begins pinging
+`INNGEST_HEARTBEAT_URL` **after** the flip. So set a **Better Stack maintenance / suppression
+window** on the `soleur-inngest-server-prd` heartbeat spanning the cutover (or rely on the
+monitor's grace period) so the pusher-quiesce → post-flip gap does not page. Lift the
+suppression once step 3 confirms `done` and the dedicated host is pinging.
+
+### Bounded-outage note
+
+The window between 2.2 (quiesce) and functions registering after 2.4 (app-repoint) is the
+parent plan's **accepted bounded residual** (ADR-100: a fully zero-downtime switchover is
+impossible under the single-writer constraint — two schedulers on prod Postgres would
+double-fire every cron, strictly worse than a brief gap). The flip oneshot restarts inngest
+**in place** (pre-installed during dark, so the window is bounded by the restart + app-redeploy,
+target < 5 min — NOT a cold OCI pull). Ticks missed in-window are not backfilled; `op=verify`
+enumerates them for `soleur:trigger-cron` re-fire.
 
 ## Concurrency conventions
 

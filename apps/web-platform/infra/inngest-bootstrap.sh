@@ -278,6 +278,37 @@ else
   log "warn: INNGEST_DURABLE_DEGRADED — durable Redis assets not staged at /tmp/inngest-redis.* (pre-#5450 image or undelivered assets); falling back to the SQLite-only ExecStart. #5547 Gap 1/2"
 fi
 
+# Cutover flip trio + arm-atomicity guard (#6178, ADR-100) — DEDICATED HOST ONLY.
+# Gated on DOPPLER_PROJECT=soleur-inngest so the co-located web host (project `soleur`,
+# which shares this same bootstrap image) never installs the flip oneshot NOR gets a
+# start-blocking ExecStartPre guard on its inngest-server (cross-consumer safety —
+# hr-type-widening-cross-consumer-grep: the web host's INNGEST_POSTGRES_URI is prod with
+# no INNGEST_CUTOVER_FLIP, which the guard would read as "block"). Assets are staged to
+# /tmp by the OCI entrypoint (fresh-host cloud-init). This runs BEFORE the inngest-server
+# unit write + restart below so the ExecStartPre guard script exists on disk first.
+DEDICATED_FLIP=0
+if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
+  if [[ -f /tmp/inngest-cutover-flip.sh && -f /tmp/inngest-server-flip-guard.sh \
+        && -f /tmp/inngest-cutover-flip.service && -f /tmp/inngest-cutover-flip.timer ]]; then
+    log "installing cutover flip trio + arm-atomicity guard (#6178)"
+    install -m 0755 /tmp/inngest-cutover-flip.sh /usr/local/bin/inngest-cutover-flip.sh
+    install -m 0755 /tmp/inngest-server-flip-guard.sh /usr/local/bin/inngest-server-flip-guard.sh
+    # cat-inngest-cutover-state.sh is an on-host debug aid only (NOT the operator gate).
+    if [[ -f /tmp/cat-inngest-cutover-state.sh ]]; then
+      install -m 0755 /tmp/cat-inngest-cutover-state.sh /usr/local/bin/cat-inngest-cutover-state.sh
+    fi
+    # Render @@DOPPLER_PROJECT@@ in the oneshot unit (same bash-param-expansion as the
+    # server/redis/vector units); the timer carries no sentinel.
+    flip_service_content="$(cat /tmp/inngest-cutover-flip.service)"
+    flip_service_content="${flip_service_content//@@DOPPLER_PROJECT@@/$DOPPLER_PROJECT}"
+    printf '%s\n' "$flip_service_content" > /etc/systemd/system/inngest-cutover-flip.service
+    install -m 0644 /tmp/inngest-cutover-flip.timer /etc/systemd/system/inngest-cutover-flip.timer
+    DEDICATED_FLIP=1
+  else
+    log "warn: cutover flip assets not staged at /tmp/inngest-cutover-flip.* (pre-#6178 image or undelivered assets); skipping flip install"
+  fi
+fi
+
 # Write the inngest-server systemd unit. RECONCILE-ALWAYS — deliberately
 # OUTSIDE the SKIP_BINARY_INSTALL guard, matching the heartbeat-unit (and
 # Vector-unit) precedent below. An ExecStart-only change (#4652:
@@ -356,6 +387,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/inngest-server
+# @@FLIP_GUARD_EXECSTARTPRE@@ — the P1-5 arm-atomicity guard (#6178), substituted to an
+# ExecStartPre line ON THE DEDICATED HOST ONLY (empty on the co-located web host). Wrapped
+# in `doppler run` so the guard sees INNGEST_POSTGRES_URI + INNGEST_CUTOVER_FLIP; blocks a
+# prod-URI start when the flip flag is not in {armed, flipping, done}.
+@@FLIP_GUARD_EXECSTARTPRE@@
 ExecStart=/usr/bin/doppler run --project @@DOPPLER_PROJECT@@ --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
 Restart=on-failure
 RestartSec=5
@@ -410,6 +446,17 @@ fi
 unit_content="$(cat "$UNIT_FILE")"
 unit_content="${unit_content//@@BACKEND_ENV@@/$BACKEND_ENV}"
 unit_content="${unit_content//@@BACKEND_FLAGS@@/$BACKEND_FLAGS}"
+# #6178: wire the arm-atomicity ExecStartPre guard ONLY when the flip trio installed
+# (DEDICATED_FLIP=1 ⟹ DOPPLER_PROJECT=soleur-inngest AND the guard script is on disk).
+# Empty on the web host / when assets are absent, so ExecStartPre never points at a
+# missing binary. Runs under doppler run so the guard sees INNGEST_POSTGRES_URI +
+# INNGEST_CUTOVER_FLIP (P1-5).
+if [[ "${DEDICATED_FLIP:-0}" == "1" ]]; then
+  FLIP_GUARD_LINE="ExecStartPre=/usr/bin/doppler run --project ${DOPPLER_PROJECT} --config prd -- /usr/local/bin/inngest-server-flip-guard.sh"
+else
+  FLIP_GUARD_LINE=""
+fi
+unit_content="${unit_content//@@FLIP_GUARD_EXECSTARTPRE@@/$FLIP_GUARD_LINE}"
 # #6178: same bash-parameter-expansion mechanism (NOT sed — SDK_URL contains `/`).
 unit_content="${unit_content//@@SDK_URL@@/$SDK_URL}"
 unit_content="${unit_content//@@DOPPLER_PROJECT@@/$DOPPLER_PROJECT}"
@@ -437,6 +484,15 @@ systemctl enable --now inngest-heartbeat.timer
 # effect immediately rather than waiting up to 60s for the next timer fire.
 # Oneshot in `failed` state: restart re-runs ExecStart with the new unit.
 systemctl restart inngest-heartbeat.service || log "warn: heartbeat oneshot non-zero (timer will retry in 60s)"
+
+# #6178: enable the cutover flip poll timer (dedicated host only; daemon-reload above
+# already picked up the new units). It SHIPS ENABLED and is NEVER disabled for the host's
+# whole life (P0-1) — the FSM flag on soleur-inngest/prd is the sole gate, and keeping the
+# 30s poll enabled is what makes a later out-of-band rollback write observable no-SSH.
+if [[ "${DEDICATED_FLIP:-0}" == "1" ]]; then
+  systemctl enable --now inngest-cutover-flip.timer
+  log "cutover flip poll timer enabled (#6178)"
+fi
 
 # Resume from upgrade pause (if any).
 if [[ -n "${UPGRADE_FROM:-}" ]]; then

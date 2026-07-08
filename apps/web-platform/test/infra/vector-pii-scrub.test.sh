@@ -391,10 +391,14 @@ fi
 INFRA_DIR="$REPO_ROOT/apps/web-platform/infra"
 EXPECTED_TAGS=$(
   for f in "$INFRA_DIR"/*.sh; do
-    # Match a real `logger -t` invocation (line-start or piped), NOT a comment
-    # mention (e.g. ci-deploy.sh has a `# … logger -t …` doc comment) — a
-    # stdout-only script that merely documents logger -t must not be pulled in.
-    grep -qE '(^|\|)[[:space:]]*logger -t' "$f" || continue
+    # Match a real `logger -t` invocation, NOT a comment mention (e.g. ci-deploy.sh
+    # has a `# … logger -t …` doc comment) — a stdout-only script that merely
+    # documents logger -t must not be pulled in. Two real forms are accepted:
+    #   1. a direct `logger -t` at line-start or after a pipe;
+    #   2. the fixture-seam form `"${CUTOVER_LOGGER_CMD:-logger}" -t` used by
+    #      inngest-cutover-flip.sh (#6178) — the default `logger` sink wrapped so CI
+    #      can inject a recorder. Both ship to the journal under SYSLOG_IDENTIFIER.
+    grep -qE '(^|\|)[[:space:]]*logger -t|:-logger\}" -t' "$f" || continue
     grep -hoP '^\s*(readonly\s+)?LOG_TAG="\K[^"]+' "$f"
   done | sort -u
 )

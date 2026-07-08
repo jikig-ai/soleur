@@ -80,6 +80,26 @@ the three load-bearing unknowns this ADR fixes:**
 - **Option E — Managed Inngest Cloud.** Declined: EU data-residency (state must stay in the EU
   Supabase project + host-local Redis; no new sub-processor).
 
+**Flip-mechanism alternatives (Decision 6a, added 2026-07-08 Ref #6178 — all rejected):**
+- **Force-replace-with-gated-cloud-init-`FLUSHALL`.** Rejected: recreates the host mid-window (cold
+  OCI pull + cosign + bootstrap = minutes, plus 226/NAMESPACE re-pull risk), widening the bounded
+  outage residual and adding failure surface at the worst moment. The pre-installed Doppler-armed
+  oneshot flips **in place** instead.
+- **A dedicated-host webhook reached via web-host fan-out.** Rejected: a new inbound control plane on
+  the deny-all-public singleton enlarges its attack surface (SEC-H2). The Doppler-flag **poll** keeps
+  the host inbound-closed.
+- **A two-value `armed`/`done` flag** (instead of the 8-state FSM). Rejected: with only `armed`/`done`
+  there is no `rollback` value the on-host oneshot can act on, so the **no-SSH rollback is unreachable**
+  (P0-1) — the operator would have no no-SSH way to stop the dedicated scheduler. The FSM adds the
+  `rollback`/`rolled-back`/`flipping`/`flushed`/`aborted` states that make rollback, mid-flip-reboot
+  safety (the split `flipping` PRE-flush / `flushed` POST-flush checkpoints), and the DBSIZE-abort all
+  expressible.
+- **Disabling the poll timer after the forward flip** (the pre-review plan's "disable after flip").
+  Rejected for the same reason: a disabled timer can never observe a later `INNGEST_CUTOVER_FLIP=rollback`
+  write, again making the **no-SSH rollback unreachable** (P0-1). The reconciled rule is: the timer
+  ships enabled and stays enabled forever; the FSM flag is the sole gate; no step ever disables the
+  timer (the terminal-state no-ops make the steady 30s poll safe).
+
 ## Decision
 
 **Extract Inngest to one dedicated private-net Hetzner host (`hcloud_server.inngest`,
@@ -123,6 +143,56 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    immediately before the flip (DI-C1, proven mandatory above). The dark host runs on a distinct
    non-prod Postgres firing zero prod crons at boot; the SQLite fail-safe is dropped (unreachable
    on a Redis-healthy host).
+6a. **The Redis `FLUSHALL` + `DBSIZE==0` gate and the prod-Postgres flip restart execute ON the
+   dedicated host via a Doppler-flag-armed, OCI-baked oneshot (`inngest-cutover-flip`) driven by a
+   finite state machine — NOT a web-host webhook, and NOT a two-value flag** (added 2026-07-08,
+   Ref #6178, folds a post-plan flow review). The dedicated host runs **no** `adnanh/webhook` /
+   `hooks.json` / `ci-deploy.sh` and its Redis is loopback-bound (`bind 127.0.0.1`), so the web-host
+   webhook (`deploy.soleur.ai/hooks/*`) cannot `FLUSHALL` it or `systemctl restart` inngest there;
+   `INNGEST_POSTGRES_URI` is read only at `ExecStart`, so the flip needs an on-host process restart.
+   The only no-SSH primitives on the deny-all-public singleton are cloud-init `runcmd` (fires on
+   force-replace) and systemd units — so the gate is authored as an OCI-baked oneshot polled by a
+   systemd `.timer` against a Doppler flag. The mechanism is fixed as:
+   - **`INNGEST_CUTOVER_FLIP` is an 8-state FSM** on `soleur-inngest/prd` (`ignore_changes[value]`),
+     not a two-value armed/done flag:
+     `armed` → `flipping` → `flushed` → `done` (forward), `rollback` → `rolled-back` (reverse),
+     terminal `aborted` (DBSIZE-gate trip **or** an unhandled failure — see the ERR trap below),
+     and `unset`/other (no-op). `done`, `rolled-back`, `aborted`, and `unset` are idempotent no-ops.
+   - **Forward-path ordering is `stop → FLUSHALL → assert DBSIZE==0 → flushed → start`** (the dark
+     server is **stopped first** so it cannot write between the flush and the DBSIZE check). The
+     transient is **split into two checkpoints** so a crash can neither skip the flush nor re-flush a
+     prod queue (the #5450 re-flush trap, hardened):
+     - `flipping` is written `armed → flipping` **before** Redis is touched. A resume from `flipping`
+       **re-runs the WHOLE `stop → FLUSHALL → assert`** — this is SAFE because the server is still
+       stopped/dark (nothing on prod yet), and it **closes the skip-flush window** where a crash
+       between `set flipping` and the flush would otherwise resume straight into `start` against an
+       un-flushed dark Redis (stale-cron double-fire).
+     - `flushed` is written **after** the `DBSIZE==0` assert passes and **before** `start`. A resume
+       from `flushed` **only** ensures `started → done` and **NEVER** re-`FLUSHALL`s — reaching
+       `flushed` proves the flush succeeded and the queue is now on prod Postgres.
+     A non-zero `DBSIZE` aborts loud: no start, and the flag → terminal `aborted`
+     (`exit_code:1`; the poll halts — never re-attempts, never reads as success — only `done` does).
+   - **An ERR trap makes every unhandled failure loud** (`set -Eeuo pipefail`): a failure of a flag
+     write / `stop` / `start` emits an `unexpected-exit` marker **and** drives the flag to terminal
+     `aborted`, so the next 30s poll halts on the no-op instead of resuming into a no-flush false
+     `done` (the #5934 class — e.g. a `stop_server` failure after `flag → flipping` must not later
+     read as success).
+   - **The poll timer ships ENABLED and is NEVER disabled for the host's whole life.** The FSM flag
+     is the **sole** gate. Keeping the timer enabled after the forward flip is what makes a later
+     operator `INNGEST_CUTOVER_FLIP=rollback` Doppler write observable on the next 30s poll — i.e.
+     it is what makes the **no-SSH rollback reachable** (P0-1). The `done`/`rolled-back`/`aborted`/
+     `unset` no-ops make a benign 30s poll on the dark/live host safe.
+   - **An `inngest-server.service` `ExecStartPre` arm-atomicity guard** (`inngest-server-flip-guard.sh`,
+     P1-5) refuses to start (exit non-zero, blocking start) when `INNGEST_POSTGRES_URI` resolves to
+     **prod** and the flag ∉ `{armed, flipping, done}` — closing the race where the prod URI is
+     written before the gated flip and any non-arm restart (crash / `OnBootSec` / operator) would
+     otherwise bring up a **second prod scheduler** against the still-dirty dark Redis.
+   - **Flip-state is read no-SSH via Better Stack** (P0-2): the oneshot emits its verify-state as a
+     `logger -t inngest-cutover-flip` JSON line, carried off-box by the already-shipped on-host
+     Vector → Better Stack Logs journald shipper (source `soleur-inngest-vector-prd`, #6197). The
+     operator confirms `exit_code:0` by pulling that log line, **never** by reading a state file on
+     the deny-all-public host (`cat-inngest-cutover-state.sh` is an on-host debug aid only, not the
+     gate).
 7. **Exactly-once soak invariant (DI-C2, demonstrably writable — AC13 satisfied).** The soak probe
    enumerates cron runs against v1.19.4 with:
    ```graphql
@@ -224,6 +294,12 @@ C4 container view edited in-place (`model.c4`): the `inngest` container technolo
 annotated for the dedicated host + the `soleur-inngest` Doppler project. No new container/deployment
 node (the model does not distinguish deployment nodes). Run `c4-code-syntax.test.ts` +
 `c4-render.test.ts`.
+
+**No C4 change from the Decision 6a amendment (Ref #6178).** The cutover-flip oneshot is an
+**internal control mechanism on the already-modeled `inngest` node** — it adds no new
+actor/external-system/data-store and no new access edge (it reuses the modeled
+`inngestPostgres`/`inngestRedis` and the unchanged `api → inngest` relationship). Verified against
+all three `.c4` files; the amendment touches no `.c4` prose.
 
 ## Addendum (2026-07-08) — dual-arch provisioning; provisioned amd64/cpx22
 
