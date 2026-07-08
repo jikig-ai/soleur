@@ -590,6 +590,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.inngest_signing_key_dedicated",
   "doppler_secret.inngest_event_key_dedicated",
   "doppler_secret.inngest_redis_password_dedicated",
+  // #6197: arm64 Vector journal->Better Stack Logs shipper token, minted into the
+  // ISOLATED soleur-inngest project's prd root (inngest-betterstack-token.tf). Applied by
+  // the additive inngest_host dispatch job (stripDispatchJobs excludes that job from the
+  // coverage set, so this exclusions entry — not the -target line — is the load-bearing coverage).
+  "doppler_secret.inngest_betterstack_logs_token",
   "doppler_service_token.inngest",
 ]);
 // Operator-applied doppler_service_token exceptions to the "every token is CI-targeted"

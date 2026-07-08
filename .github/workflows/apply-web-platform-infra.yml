@@ -89,7 +89,7 @@ on:
       # prod-write authored by a non-technical user — `hr-menu-option-ack-not-prod-write-auth`):
       #   gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby -f reason='...'
       apply_target:
-        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000)"
+        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume)"
         required: false
         default: manual-rerun
         type: choice
@@ -98,6 +98,7 @@ on:
           - warm-standby
           - web-2-recreate
           - inngest-host
+          - inngest-host-replace
 
 concurrency:
   # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
@@ -1424,6 +1425,7 @@ jobs:
               -target='doppler_secret.inngest_signing_key_dedicated' \
               -target='doppler_secret.inngest_event_key_dedicated' \
               -target='doppler_secret.inngest_redis_password_dedicated' \
+              -target='doppler_secret.inngest_betterstack_logs_token' \
               -target='doppler_service_token.inngest'
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -1466,6 +1468,147 @@ jobs:
         run: |
           {
             echo "## inngest-host provisioning (ADR-100, #6178)"
+            echo ""
+            echo "**Dispatch reason:** ${REASON:-n/a}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ─── inngest-host scoped -replace (dispatch-only; re-run cloud-init; #6197) ────
+  # Selected by `-f apply_target=inngest-host-replace`. The additive-only `inngest_host`
+  # job above CANNOT force-replace the host (its destroy-guard aborts on any delete), so a
+  # cloud-init/bootstrap change (e.g. the arm64 Vector wiring, #6197) that force-replaces
+  # hcloud_server.inngest needs THIS scoped -replace path — mirroring web_2_recreate. The
+  # sourced inngest_host_replace_gate permits EXACTLY the server + its 2 id-referencing
+  # dependents and PRESERVES the durable Redis AOF volume (hcloud_volume.inngest_redis).
+  # ADR-100: this host is the SOLE scheduler post-cutover — gate this to the maintenance window.
+  inngest_host_replace:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-host-replace'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
+        # satisfies var.ssh_key_path (never consumed by the scoped inngest replace).
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
+            exit 1
+          }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
+            exit 1
+          }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (scoped inngest-host -replace) + destroy-guard
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Scoped -replace of the inngest server + its 2 id-referencing dependents
+        # (hcloud_server_network.inngest, hcloud_volume_attachment.inngest_redis — both
+        # interpolate the NEW server id → ForceNew replace). hcloud_volume.inngest_redis is
+        # DELIBERATELY NOT -targeted so the durable Redis AOF volume is preserved. The sourced
+        # inngest_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan JSON and
+        # ABORTS unless the plan is EXACTLY the scoped recreate.
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -replace='hcloud_server.inngest' \
+              -target='hcloud_server.inngest' \
+              -target='hcloud_server_network.inngest' \
+              -target='hcloud_volume_attachment.inngest_redis' \
+              -var="ssh_key_path=${CI_SSH_PUB}"
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (inngest-host-replace) failed (exit $rc)."
+            exit $rc
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          # Sourced gate — the SAME bytes tests/scripts/test-inngest-host-replace-gate.sh exercises.
+          # shellcheck source=tests/scripts/lib/inngest-host-replace-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-host-replace-gate.sh"
+          if ! inngest_host_replace_gate tfplan.json; then
+            echo "::error::inngest-host-replace destroy-guard ABORTED: the plan is not the exact scoped inngest-host recreate (an out-of-scope change, a Redis AOF volume destroy, or a no-op). Refusing to apply. NO [ack-destroy] bypass on this path."
+            grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          echo "inngest-host-replace plan is the exact scoped recreate. Plan summary:"
+          grep -E '^Plan:' tfplan.txt || true
+
+      - name: Terraform apply (inngest-host -replace) — Redis-volume-preserved assert
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Apply the saved, guarded plan. Post-apply: prove from the SAVED plan (the exact plan
+        # we applied) that the Redis AOF volume carries no delete action (backstop to the guard).
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan
+          VOL_DELETES=$(jq '[.resource_changes[]?
+            | select(.address == "hcloud_volume.inngest_redis")
+            | select(.change.actions? | index("delete"))] | length' tfplan.json)
+          if [[ "$VOL_DELETES" != "0" ]]; then
+            echo "::error::hcloud_volume.inngest_redis shows ${VOL_DELETES} delete action(s) in the applied plan — the Redis AOF volume must be preserved. This should have been caught by the guard; failing hard."
+            exit 1
+          fi
+          echo "Redis AOF volume preserved (0 delete actions in the applied plan)."
+
+      - name: Dispatch summary
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## inngest-host-replace (ADR-100, #6197)"
             echo ""
             echo "**Dispatch reason:** ${REASON:-n/a}"
             echo "**Status:** ${JOB_STATUS}"

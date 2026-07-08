@@ -141,20 +141,27 @@ runcmd:
   # --- Fail-closed boot isolation self-check (mirrors registry) ------------------------
   # The load-bearing, fail-CLOSED defense run under the host's OWN shipped boot token: the
   # credential MUST resolve ONLY the inngest secret set. Asserts identity (every visible
-  # non-DOPPLER secret is a known INNGEST_* name) AND cardinality (>=4 — the 3 TF-owned
-  # signing/event/redis keys + the out-of-band INNGEST_POSTGRES_URI, all present at dark boot;
-  # INNGEST_HEARTBEAT_URL is out-of-band and set only AT cutover, so the count is 4 dark / 5 live).
+  # non-DOPPLER secret is a known name THIS host's runtime consumes — NOT merely an
+  # `INNGEST_`-prefixed name: BETTERSTACK_LOGS_TOKEN is admitted because vector.service
+  # reads it, even though it carries no INNGEST_ prefix) AND cardinality (>=5 — the 3
+  # TF-owned signing/event/redis keys + the out-of-band INNGEST_POSTGRES_URI + the isolated
+  # BETTERSTACK_LOGS_TOKEN, all present at dark boot; INNGEST_HEARTBEAT_URL is out-of-band and
+  # set only AT cutover, so the count is 5 dark / 6 live).
   # An over-scoped `prd`-branch token would see ~116 foreign secrets → n_total != n_inngest →
   # refuse. On pass, drop the sentinel the bootstrap block gates on; on fail, no sentinel → the
   # next block aborts (fail-closed).
+  # NOTE (#6197): with BETTERSTACK_LOGS_TOKEN now in the admitted set, DELETING it from
+  # soleur-inngest/prd post-cutover FATALs the WHOLE bootstrap (not just Vector) — this is
+  # desirable on a DARK host: a loud boot-brick beats a silent observability blind spot. The
+  # check keys on the NAME, so value rotation is safe (the name persists across a rotate).
   - |
     set -a; . /etc/default/inngest-doppler; set +a
     if doppler run --project soleur-inngest --config prd -- bash -s <<'CHKEOF'
     set -euo pipefail
     names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
     n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|HEARTBEAT_URL)$' || true)"
-    if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 4 ]; then
+    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
+    if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
       echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
     fi
     echo "[inngest] boot credential isolated ($n_inngest INNGEST_ secrets, no foreign)"
@@ -188,13 +195,14 @@ runcmd:
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis.conf /tmp/inngest-redis.conf 2>/dev/null || true
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis.service /tmp/inngest-redis.service 2>/dev/null || true
     docker cp soleur-inngest-bootstrap-extract:/inngest-redis-bootstrap.sh /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
-    # #6178: Vector (journald->BetterStack shipper) is DEFERRED on this arm64 host — its
-    # download URL is hardcoded x86_64 (inngest-bootstrap.sh:475) and BETTERSTACK_LOGS_TOKEN
-    # would need provisioning into the isolated soleur-inngest project. This host is DARK/inert
-    # in Phase 1 (no prod crons); liveness is covered by the heartbeat-absence alert. So we do
-    # NOT stage /tmp/vector.toml (skips the Vector unit write) and pass empty VECTOR_CLI_* below
-    # (skips the binary install — inngest-bootstrap.sh:467-468 guard). Vector->Sentry error
-    # shipping is wired (arm64 Vector + token) before the Phase-2 cutover — tracked follow-up.
+    # #6197: Vector (journald->Better Stack Logs shipper) is WIRED on this arm64 host (was
+    # DEFERRED under #6178). The install is arch-parameterized (inngest-bootstrap.sh
+    # VECTOR_CLI_ARCH + aarch64 triple map) and BETTERSTACK_LOGS_TOKEN is provisioned into
+    # the isolated soleur-inngest/prd project (inngest-betterstack-token.tf; admitted by the
+    # boot isolation self-check above). Stage /tmp/vector.toml (docker-cp from the OCI image,
+    # same as web cloud-init.yml:659) so the bootstrap writes the vector.service unit; pass
+    # the arm64 Vector env (non-empty VERSION + arm64 SHA override + VECTOR_CLI_ARCH) below.
+    docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
     chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
     image_env=$(docker inspect "$IREF" -f '{{range .Config.Env}}{{println .}}{{end}}')
     chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
@@ -203,12 +211,17 @@ runcmd:
     # checksum — this cax11 host downloads the linux_arm64 tarball (INNGEST_CLI_ARCH=arm64),
     # which the amd64 SHA would reject at verify. Version is arch-independent (from the image).
     INNGEST_CLI_SHA256="${inngest_cli_sha256_arm64}"
-    # Vector deferred (see note above): pass empty VECTOR_CLI_* so the install is skipped.
-    # DOPPLER_PROJECT=soleur-inngest routes every doppler-wrapped unit (server/heartbeat/redis)
-    # at THIS host's ISOLATED project (AC3) — the scoped boot token can read only soleur-inngest.
+    # #6197: read the arch-independent Vector version from the image env (mirror the
+    # INNGEST_CLI_VERSION read above; web cloud-init.yml:677). The SHA is OVERRIDDEN with the
+    # arm64 checksum (templatefile local, mirroring the INNGEST_CLI_SHA256 override) because
+    # this cax11 host downloads the aarch64 tarball — the amd64 image-env SHA would fail verify.
+    VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)
+    # DOPPLER_PROJECT=soleur-inngest routes every doppler-wrapped unit (server/heartbeat/redis/
+    # vector) at THIS host's ISOLATED project (AC3) — the scoped boot token can read only
+    # soleur-inngest. VECTOR_CLI_ARCH=arm64 selects the aarch64 triple in the bootstrap map.
     env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
         "INNGEST_CLI_ARCH=${inngest_cli_arch}" "SDK_URL=${sdk_url}" \
         "DOPPLER_PROJECT=soleur-inngest" \
-        "VECTOR_CLI_VERSION=" "VECTOR_CLI_SHA256=" \
+        "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=${vector_sha256_arm64}" "VECTOR_CLI_ARCH=arm64" \
       bash "$EXTRACT_DIR/inngest-bootstrap.sh"
     trap - EXIT
