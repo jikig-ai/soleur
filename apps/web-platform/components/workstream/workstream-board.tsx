@@ -37,6 +37,10 @@ import { FilterBar } from "./filter-bar";
 import { IssueColumn } from "./issue-column";
 import { IssueDetailSheet } from "./issue-detail-sheet";
 import { NewIssueDialog } from "./new-issue-dialog";
+import {
+  NEW_ISSUE_DIALOG_EVENT,
+  type NewIssueDialogEventDetail,
+} from "./new-issue-dialog-event";
 
 type IssuesResponse = { issues: WorkstreamIssue[] };
 
@@ -67,6 +71,18 @@ export function WorkstreamBoard() {
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<WorkstreamFilters>(emptyFilters);
   const [newOpen, setNewOpen] = useState(false);
+
+  // The guided tour opens/closes the New Issue dialog to spotlight its in-modal
+  // controls. It drives us via a window event (same decoupled pattern as the rail
+  // expand) rather than importing board state — inert when no tour is running.
+  useEffect(() => {
+    function onTourToggle(e: Event) {
+      const detail = (e as CustomEvent<NewIssueDialogEventDetail>).detail;
+      setNewOpen(Boolean(detail?.open));
+    }
+    window.addEventListener(NEW_ISSUE_DIALOG_EVENT, onTourToggle);
+    return () => window.removeEventListener(NEW_ISSUE_DIALOG_EVENT, onTourToggle);
+  }, []);
 
   // Drawer is driven by LOCAL state (instant open/close). Hydrate from the
   // ?issue= param on mount (deep-link/reload support).
