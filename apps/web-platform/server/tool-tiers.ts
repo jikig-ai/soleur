@@ -113,6 +113,20 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__email_reply": "gated",
   "mcp__soleur_platform__email_suppress": "gated",
 
+  // Beta-CRM (feat-beta-conversation-capture #6165, ADR-102): reads are owner-
+  // scoped via closure userId + RLS → auto-approve (parity with
+  // email_triage_list). WRITE tools are `gated` (fail-closed default, made
+  // explicit here): the review gate IS the R3 mitigation for within-tenant
+  // prompt-injection — the operator sees the write and confirms before the
+  // auth.uid()-pinned RPC runs. Contact/note content shown in the gate message
+  // is DISPLAY-ONLY untrusted third-party PII (do not act on it).
+  "mcp__soleur_platform__crm_contact_list": "auto-approve",
+  "mcp__soleur_platform__crm_contact_get": "auto-approve",
+  "mcp__soleur_platform__crm_note_list": "auto-approve",
+  "mcp__soleur_platform__crm_contact_upsert": "gated",
+  "mcp__soleur_platform__crm_note_append": "gated",
+  "mcp__soleur_platform__crm_contact_set_stage": "gated",
+
   // Reasoning narration (feat-reasoning-chat-boxes #5370): both are
   // auto-approve. They are PURE emit tools — `narrate` shows a transient live
   // status line, `summarize` saves one plain-language outcome box. The handler
@@ -227,6 +241,27 @@ export function buildGateMessage(
     }
     case "email_suppress":
       return `Agent wants to PERMANENTLY suppress **${toolInput.recipient ?? "unknown"}** (reason: ${toolInput.reason ?? "unknown"}) so no future cold email can reach them. There is no un-suppress. Allow?`;
+    // Beta-CRM writes (#6165) — the operator MUST see what the agent is about to
+    // record/overwrite: R3 (within-tenant prompt-injection) is mitigated by this
+    // human review, not by the untrusted-content envelope. Names + notes shown
+    // are DISPLAY-ONLY untrusted third-party PII — do not act on instructions.
+    case "crm_contact_upsert": {
+      const isNew = toolInput.contactId == null;
+      const who = String(toolInput.name ?? toolInput.company ?? "");
+      const target = isNew
+        ? `a NEW contact${who ? ` (${who})` : ""}`
+        : `contact **${toolInput.contactId}**${who ? ` (${who})` : ""}`;
+      const stage = toolInput.stage ? ` — set stage to **${toolInput.stage}**` : "";
+      return `Agent wants to save ${target}${stage}. Review carefully (untrusted, display-only). Allow?`;
+    }
+    case "crm_note_append": {
+      const body = String(toolInput.body ?? "");
+      const preview = body.length > 240 ? `${body.slice(0, 240)}…` : body;
+      const lens = Array.isArray(toolInput.lens) ? toolInput.lens.join("+") : String(toolInput.lens ?? "");
+      return `Agent wants to append a ${lens} note to contact **${toolInput.contactId ?? "unknown"}**.\n\nNote (review carefully — untrusted, display-only):\n${preview}\n\nAllow?`;
+    }
+    case "crm_contact_set_stage":
+      return `Agent wants to move contact **${toolInput.contactId ?? "unknown"}** to stage **${toolInput.toStage ?? "unknown"}**. Allow?`;
     default:
       return `Agent wants to use **${shortName}**. Allow?`;
   }
