@@ -81,7 +81,9 @@
       { "source": "payload", "name": "inngest_wiped_volume_verify_sh_b64", "envname": "INNGEST_WIPED_VOLUME_VERIFY_SH_B64" },
       { "source": "payload", "name": "cat_inngest_verify_state_sh_b64", "envname": "CAT_INNGEST_VERIFY_STATE_SH_B64" },
       { "source": "payload", "name": "inngest_inventory_sh_b64", "envname": "INNGEST_INVENTORY_SH_B64" },
-      { "source": "payload", "name": "git_lock_chardevice_sweep_sh_b64", "envname": "GIT_LOCK_CHARDEVICE_SWEEP_SH_B64" }
+      { "source": "payload", "name": "git_lock_chardevice_sweep_sh_b64", "envname": "GIT_LOCK_CHARDEVICE_SWEEP_SH_B64" },
+      { "source": "payload", "name": "inngest_registry_probe_sh_b64", "envname": "INNGEST_REGISTRY_PROBE_SH_B64" },
+      { "source": "payload", "name": "inngest_doublefire_probe_sh_b64", "envname": "INNGEST_DOUBLEFIRE_PROBE_SH_B64" }
     ],
     "trigger-rule": {
       "match": {
@@ -215,6 +217,44 @@
     "execute-command": "/usr/local/bin/cat-inngest-verify-state.sh",
     "command-working-directory": "/",
     "include-command-output-in-response": true,
+    "http-methods": ["GET"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
+    "id": "inngest-registry-probe",
+    "execute-command": "/usr/local/bin/inngest-registry-probe.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": true,
+    "include-command-output-in-response-on-error": true,
+    "http-methods": ["GET"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
+    "id": "inngest-doublefire-probe",
+    "execute-command": "/usr/local/bin/inngest-doublefire-probe.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": true,
+    "include-command-output-in-response-on-error": true,
     "http-methods": ["GET"],
     "trigger-rule-mismatch-http-response-code": 403,
     "trigger-rule": {

@@ -88,6 +88,12 @@ on:
       - "apps/web-platform/infra/cat-inngest-verify-state.sh"
       - "apps/web-platform/infra/inngest-inventory.sh"
       - "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
+      # #6178 — the two web-host Inngest cutover probes are webhook-delivered AND
+      # registered in server.tf's deploy_pipeline_fix triggers_replace hash, so a
+      # body-only edit to either must fire this apply. Kept in sync with
+      # TRIGGER_FILES by ship-deploy-pipeline-fix-gate.test.ts.
+      - "apps/web-platform/infra/inngest-registry-probe.sh"
+      - "apps/web-platform/infra/inngest-doublefire-probe.sh"
       # #5873 — the container seccomp profile is delivered by the
       # docker_seccomp_config SSH provisioner (server.tf), whose triggers_replace
       # hashes this file. A profile-only edit must fire this apply so the new

@@ -226,7 +226,19 @@ run_inventory() {
     echo "$resp" | jq -c '.data.eventsV2.edges // []' >> "$edges_file"
     has_next=$(echo "$resp" | jq -r '.data.eventsV2.pageInfo.hasNextPage // false')
     end_cursor=$(echo "$resp" | jq -r '.data.eventsV2.pageInfo.endCursor // ""')
-    [[ "$has_next" == "true" && -n "$end_cursor" ]] || break
+    # #6218 review (data-integrity P3-b, sibling of inngest-doublefire-probe.sh): a
+    # `hasNextPage=true` page with an EMPTY endCursor must FAIL LOUD, not break-clean —
+    # a silent break truncates the inventory (undercount) and reconciliation reads clean.
+    if [[ "$has_next" == "true" ]]; then
+      if [[ -z "$end_cursor" ]]; then
+        logger -t "$LOG_TAG" "ERROR: pagination hasNextPage=true but endCursor empty on page $page — refusing to truncate" 2>/dev/null || true
+        echo "inngest-inventory: FATAL hasNextPage=true but endCursor empty on page $page — would truncate the inventory"
+        echo "ERROR: pagination hasNextPage=true but empty endCursor on page $page" >&2
+        exit 1
+      fi
+    else
+      break
+    fi
     after="$end_cursor"
     page=$((page + 1))
   done

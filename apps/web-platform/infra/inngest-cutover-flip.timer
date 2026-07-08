@@ -1,0 +1,15 @@
+[Unit]
+Description=Poll the Inngest cutover flip flag every 30s (#6178)
+
+[Timer]
+# The dedicated host has no inbound control channel; a 30s Doppler-flag poll is the only
+# no-SSH pull trigger for the flip. This timer SHIPS ENABLED and is NEVER disabled for the
+# host's whole life (P0-1): keeping it enabled is what makes a later out-of-band
+# INNGEST_CUTOVER_FLIP=rollback write observable after a forward flip. The FSM flag is the
+# sole gate — the done/rolled-back/aborted/unset no-ops make a benign 30s poll safe.
+OnBootSec=30s
+OnUnitActiveSec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

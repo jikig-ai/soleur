@@ -96,11 +96,13 @@ if parse_err != null {
 }
 '''
 
-# ---------------- Source 4: host-script journald (logger -t tags) (#5499) ----------------
-# Seven bash scripts under apps/web-platform/infra/ log operational events to
-# the journal via `logger -t <LOG_TAG>`. They run under webhook.service / cron
-# — NOT inside inngest-server.service (Source 1) nor the app container (Source 3)
-# — and their PRIORITY 5 (user.notice; ci-deploy.sh:665 is PRIORITY 4
+# ---------------- Source 4: host-script journald (logger -t tags) (#5499, #6178) ----------------
+# Twelve bash scripts under apps/web-platform/infra/ log operational events to
+# the journal via `logger -t <LOG_TAG>`. They run under webhook.service / cron on
+# the web hosts, or (the #6178 cutover trio: inngest-cutover-flip +
+# inngest-server-flip-guard) as systemd oneshot/ExecStartPre on the dedicated
+# Inngest host — NOT inside inngest-server.service (Source 1) nor the app container
+# (Source 3) — and their PRIORITY 5 (user.notice; ci-deploy.sh:665 is PRIORITY 4
 # user.warning) lines are dropped by Source 2's PRIORITY 0-2 (CRIT+) filter, so
 # they are invisible in Better Stack today. This source captures them by EXACT
 # SYSLOG_IDENTIFIER match (`logger -t <tag>` sets SYSLOG_IDENTIFIER=<tag>;
@@ -109,14 +111,14 @@ if parse_err != null {
 #
 # NO `include_matches.PRIORITY` filter (deliberate — differs from Sources 1/2):
 # these lines are PRIORITY 4-5, which Source 2 drops; the SYSLOG_IDENTIFIER
-# scoping to 7 known tags is already the narrowing. We do NOT widen
+# scoping to 12 known tags is already the narrowing. We do NOT widen
 # system_journald's PRIORITY filter — that would ship every host NOTICE+ line
 # (sshd, cron, systemd units, fail2ban) and blow the Better Stack logs quota
 # (per the 2026-06-10 quota-diagnosis learning + #5110 verdict).
 #
-# Quota (#5110 reality check): all 7 are event-driven (deploy/webhook/cron-fire),
-# not continuous request-per-line firehoses — projected tens-to-low-hundreds of
-# rows/day, well within the current ~20% headroom under the 25k/day threshold.
+# Quota (#5110 reality check): all 12 are event-driven (deploy/webhook/cron-fire/
+# cutover-flip), not continuous request-per-line firehoses — projected
+# tens-to-low-hundreds of rows/day, well within the ~20% headroom under 25k/day.
 # Adding a tag here is a quota decision; keep the list to genuinely-diagnostic
 # host scripts. The drift-guard + no-PRIORITY-filter fixtures in
 # vector-pii-scrub.test.sh pin this exact-tag set and the absent PRIORITY filter.
@@ -131,6 +133,16 @@ include_matches.SYSLOG_IDENTIFIER = [
   "inngest-wiped-volume-verify",
   "inngest-inventory",
   "git-lock-chardevice-sweep",
+  # #6178 cutover (ADR-100): the no-SSH flip-state + guard channels. Without these the
+  # `inngest-cutover-flip` marker never reaches Better Stack and the P0-2 operator gate is
+  # dead (the flip oneshot has no synchronous webhook response — Better Stack is the ONLY
+  # off-box read of the deny-all-public dedicated host). inngest-server-flip-guard emits the
+  # "refused a second prod scheduler" BLOCK event (P1-5). The two probes have a synchronous
+  # workflow-response fallback so these are for post-hoc querying (redundant but useful).
+  "inngest-cutover-flip",
+  "inngest-server-flip-guard",
+  "inngest-registry-probe",
+  "inngest-doublefire-probe",
 ]
 journal_directory = "/var/log/journal"
 batch_size = 16
