@@ -122,7 +122,7 @@ one — and cites (2) rather than re-implementing it.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (fail-closed injection)** — `buildAgentEnv` (`apps/web-platform/server/agent-env.ts`) replaces
+- [x] **AC1 (fail-closed injection)** — `buildAgentEnv` (`apps/web-platform/server/agent-env.ts`) replaces
       the silent `if (opts?.pluginPath) { env.CLAUDE_PLUGIN_ROOT = opts.pluginPath }` no-op with a
       fail-closed injection:
       - `opts.pluginPath` present → `env.CLAUDE_PLUGIN_ROOT = assertTrustedPluginPath(opts.pluginPath)`
@@ -134,7 +134,7 @@ one — and cites (2) rather than re-implementing it.
       **Acceptance is behavioral, not structural:** the AC3 prod-simulated cases (below) are RED before
       Phase 2 and GREEN after. (A `grep` for `assertTrustedPluginPath` in `agent-env.ts` is an optional
       smoke check, NOT the gate — it cannot distinguish fail-closed from fail-open.)
-- [ ] **AC2 (mutation coverage — closes the fail-OPEN hole)** — the `agent-env.test.ts` test
+- [x] **AC2 (mutation coverage — closes the fail-OPEN hole)** — the `agent-env.test.ts` test
       *"omits CLAUDE_PLUGIN_ROOT when opts.pluginPath is absent or empty"* is rewritten so a fail-OPEN
       implementation (bare `if` assignment that sets an **unvalidated** path) CANNOT pass. Using the
       `stubProductionEnv()` / `vi.unstubAllEnvs()` harness from `plugin-path.test.ts`:
@@ -149,32 +149,32 @@ one — and cites (2) rather than re-implementing it.
         validation in prod — not only in the ambient-VITEST no-op path).
       - **ambient-VITEST, absent → still omits** (`not.toHaveProperty("CLAUDE_PLUGIN_ROOT")`) — graceful
         test behavior preserved.
-- [ ] **AC3 (dispatch integration pin)** — an `agent-runner-query-options.test.ts` case asserts that for a
+- [x] **AC3 (dispatch integration pin)** — an `agent-runner-query-options.test.ts` case asserts that for a
       valid dispatch (`pluginPath: "/app/shared/plugins/soleur"`) the **final returned**
       `options.env.CLAUDE_PLUGIN_ROOT` equals that value (assert the returned object — catches any
       downstream drop/allowlist-filter after `buildAgentEnv` returns). **Positive-only by design:** a
       negative integration case cannot isolate the `buildAgentEnv` guard, because
       `assertTrustedPluginPath(args.pluginPath)` at `:197` throws first — the guard-specific negatives
       live in AC2 (unit). The T4 shared-shape drift snapshot still passes.
-- [ ] **AC4 (re-throw surfaced, not swallowed)** — a test (or an explicit code-read note in the PR) confirms
+- [x] **AC4 (re-throw surfaced, not swallowed)** — a test (or an explicit code-read note in the PR) confirms
       that a throw out of `buildAgentQueryOptions` is **re-thrown** by BOTH factory catches — not
       swallowed: `cc-dispatcher.ts` re-throws at `:2767` (the `:2709` catch handles only sandbox-class
       startup errors) → captured upstream in `soleur-go-runner.ts` (`feature:"soleur-go-runner"`); the
       legacy `agent-runner.ts` factory captures in its own catch (`:2730`). This pins the Observability
       claim (§Observability) that the fail-closed dispatch is Sentry-visible, not a silent crash.
-- [ ] **AC5 (test-tolerance preserved)** — under the default VITEST env, existing `buildAgentEnv` /
+- [x] **AC5 (test-tolerance preserved)** — under the default VITEST env, existing `buildAgentEnv` /
       `buildAgentQueryOptions` tests that pass mkdtemp / no-`pluginPath` fixtures stay green (the guard is
       a no-op in test mode).
-- [ ] **AC6 (downstream link intact + re-fires)** — `apps/web-platform/scripts/plugin-root-propagation-verify-in-image.sh`
+- [x] **AC6 (downstream link intact + re-fires)** — `apps/web-platform/scripts/plugin-root-propagation-verify-in-image.sh`
       and its `.github/workflows/ci.yml` invocation are **present and unmodified**; because this PR edits
       `agent-env.ts` (a declared propagation-input at `ci.yml:343`), the in-image propagation probe
       **re-fires on this PR** (link 2 actively re-verified, not merely cited). Verify:
       `grep -n "plugin-root-propagation" .github/workflows/ci.yml` returns ≥1.
-- [ ] **AC7 (typecheck + suites)** — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes
+- [x] **AC7 (typecheck + suites)** — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes
       (also proves the new `assertTrustedPluginPath` import in `agent-env.ts` creates no cycle);
       `./node_modules/.bin/vitest run test/agent-env.test.ts test/agent-runner-query-options.test.ts`
       green.
-- [ ] **AC8 (ADR)** — `ADR-093-…md`'s 2026-07-08 amendment is updated from "unpinned, holds by
+- [x] **AC8 (ADR)** — `ADR-093-…md`'s 2026-07-08 amendment is updated from "unpinned, holds by
       construction" → precisely **"export invariant pinned (non-empty + `/app`-trusted at the
       `buildAgentEnv` injection site) + bash propagation gated in CI"** (NOT a blanket "invariant pinned"
       — the ~28 shell sites are only transitively covered). It also records: the guard shares (does not

@@ -19,8 +19,13 @@ vi.mock("@/server/agent-env", () => ({
     (
       credential: { value: string; scheme: string },
       _tokens: Record<string, string>,
+      opts?: { pluginPath?: string },
     ) => ({
       ANTHROPIC_API_KEY: credential.value,
+      // Mirror the real buildAgentEnv contract for the CLAUDE_PLUGIN_ROOT export
+      // so the AC3 integration pin below can assert the value survives
+      // pass-through into the final options.env (catches a downstream drop).
+      ...(opts?.pluginPath ? { CLAUDE_PLUGIN_ROOT: opts.pluginPath } : {}),
     }),
   ),
 }));
@@ -238,6 +243,23 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
         pluginPath: PLUGIN,
       },
     );
+  });
+
+  // AC3 (dispatch integration pin). The CLAUDE_PLUGIN_ROOT that buildAgentEnv
+  // exports must survive verbatim into the FINAL returned options.env — asserting
+  // the returned object (not the buildAgentEnv call args) catches any downstream
+  // drop/allowlist-filter after buildAgentEnv returns. Positive-only by design:
+  // a negative case cannot isolate the buildAgentEnv guard because
+  // assertTrustedPluginPath(args.pluginPath) at :197 throws first — the
+  // guard-specific negatives live in agent-env.test.ts (AC2).
+  it("AC3: threads CLAUDE_PLUGIN_ROOT through to the final options.env", () => {
+    const opts = buildAgentQueryOptions({
+      ...minArgs,
+      pluginPath: "/app/shared/plugins/soleur",
+    });
+    expect(
+      (opts.env as Record<string, string>).CLAUDE_PLUGIN_ROOT,
+    ).toBe("/app/shared/plugins/soleur");
   });
 
   it("omits the askpass path when gitAskpassScriptPath is absent (legacy runner parity)", () => {
