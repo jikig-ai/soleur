@@ -1626,7 +1626,8 @@ jobs:
   # registry cloud-init (installs the zot-disk-heartbeat cron + storage.retention) and
   # applies any pending storage-volume resize, WITHOUT destroying the zot OCI store.
   #
-  # 5-target scope (server + its 3 id-referencing dependents + the storage volume):
+  # 6-target scope (server + its 3 id-referencing dependents + the storage volume + the isolated
+  # Better Stack Logs token secret):
   #   hcloud_server.registry             (-replace: force a fresh cloud-init boot)
   #   hcloud_server_network.registry     (network.tf — server_id ForceNew → replace; else the
   #                                        new host has no private NIC 10.0.1.30 for web pulls)
@@ -1637,6 +1638,11 @@ jobs:
   #   hcloud_volume.registry             (in-scope so the storage volume's pending size update
   #                                        can ride in; the gate PRESERVES it — size-update-only,
   #                                        NEVER delete/forget/replace)
+  #   doppler_secret.registry_betterstack_logs_token (#6244 — MUST ride the SAME dispatch: the
+  #                                        amended boot guard now expects a 3rd admitted secret
+  #                                        (BETTERSTACK_LOGS_TOKEN); without it the guard FATALs
+  #                                        and zot never launches. A pure-create on first apply,
+  #                                        no-op thereafter — the gate admits it in its allow-set.)
   # The sourced registry_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan
   # JSON and ABORTS unless the plan is EXACTLY this scoped recreate with the store preserved.
   registry_host_replace:
@@ -1718,6 +1724,7 @@ jobs:
               -target='hcloud_volume_attachment.registry' \
               -target='hcloud_firewall_attachment.registry' \
               -target='hcloud_volume.registry' \
+              -target='doppler_secret.registry_betterstack_logs_token' \
               -var="ssh_key_path=${CI_SSH_PUB}"
           rc=$?
           if [[ $rc -ne 0 ]]; then

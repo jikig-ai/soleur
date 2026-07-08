@@ -8,7 +8,7 @@
 # registry_host_replace_gate directly, so the CI decision logic is the SAME bytes the test
 # exercises (no re-derived inline copy to drift).
 #
-# SELF-CONTAINED jq: the registry replace has a small, fixed 5-member allow-set, so the
+# SELF-CONTAINED jq: the registry replace has a small, fixed 6-member allow-set, so the
 # counter logic lives inline here (same posture as inngest-host-replace-gate.sh).
 #
 # It reads a `terraform show -json <plan>` document and PERMITS EXACTLY the scoped
@@ -23,8 +23,12 @@
 #       re-planned would boot the new host WITHOUT the firewall on its public IP.)
 #   - hcloud_volume.registry             (the zot OCI store — MUST be preserved; permits ONLY
 #       an in-place size ["update"] or ["no-op"], NEVER delete/forget/replace)
+#   - doppler_secret.registry_betterstack_logs_token (#6244 — the isolated Better Stack Logs
+#       token that the amended 3-secret boot guard requires; MUST ride the SAME dispatch or the
+#       guard FATALs and zot never launches. A pure-create on first apply, no-op thereafter. No
+#       special assertion beyond allow-set membership — it just must not count as out_of_scope.)
 #
-# LARGER + STRICTER than the inngest gate (5-member allow-set, positive NIC/firewall
+# LARGER + STRICTER than the inngest gate (6-member allow-set, positive NIC/firewall
 # assertions, size-update-only volume preserve). Do NOT "simplify" it back to the inngest
 # shape — the volume + firewall + NIC assertions are load-bearing (a "server replaced but
 # NIC/firewall stripped" plan must NOT pass, or the new host boots invisible to the
@@ -69,7 +73,8 @@ registry_host_replace_gate() {
         "hcloud_server_network.registry",
         "hcloud_volume_attachment.registry",
         "hcloud_firewall_attachment.registry",
-        "hcloud_volume.registry"
+        "hcloud_volume.registry",
+        "doppler_secret.registry_betterstack_logs_token"
       ];
       $p[0] as $plan
       | {
