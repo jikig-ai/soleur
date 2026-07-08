@@ -5,9 +5,13 @@
 // pins the EXACT canonical column sets that both the agent path (crm-tools.ts)
 // and the read routes/RPC share via server/crm/crm-reads.ts.
 //
-// If a beta_contacts / interview_notes / beta_contact_stage_transitions column
-// is added or removed, this test fails on purpose — forcing a conscious review
-// of whether the new column is safe to egress to the browser (AC5 leak class).
+// This is a change-DETECTOR, not a schema-enforcer: it pins the constants to
+// hand-copied literals, so its value is diff-visibility (a column add/remove
+// shows up as a failing assertion a reviewer must consciously update), NOT
+// live DB-schema verification. If a column is added to both the constant and
+// this literal in one edit, it passes — the guard is the review friction, not
+// a DB round-trip. (Behavioral DB-shape proofs live in the gated integration
+// tests.)
 
 import { describe, expect, it } from "vitest";
 import {

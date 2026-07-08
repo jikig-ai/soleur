@@ -37,6 +37,14 @@ export type Stage = keyof typeof STAGE_PROBABILITY;
 export const STAGES = Object.keys(STAGE_PROBABILITY) as Stage[];
 
 /**
+ * The linear conversion funnel — every stage except the terminal `closed_lost`
+ * branch. Single source for both the funnel API compute (app/api/crm/funnel)
+ * and the UI (components/crm), which previously derived this filter twice
+ * (review P3-1). `closed_won` remains the terminal funnel stage.
+ */
+export const FUNNEL_STAGES = STAGES.filter((s) => s !== "closed_lost");
+
+/**
  * Bump when the stage SET changes (add/remove/rename). Lets a stored
  * `beta_contact_stage_transitions` history be read against the map version
  * that produced it. Not the app version — this is the stage-contract version.

@@ -82,6 +82,23 @@ describe("GET /api/crm/contacts/[id]", () => {
     expect(mockCaptureException).not.toHaveBeenCalled();
   });
 
+  test("a THROWN rpc rejection (network/driver) is mirrored PII-free with the surface tag, not left untagged", async () => {
+    mockRpc.mockRejectedValue(
+      Object.assign(new Error("fetch failed for Marco Ruiz"), { code: "ECONN" }),
+    );
+    const res = await call("c1");
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "detail_query_error" });
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    const [errArg, ctxArg] = mockCaptureException.mock.calls[0];
+    expect(JSON.stringify({ m: (errArg as Error).message, c: ctxArg })).not.toMatch(/Marco|fetch failed/);
+    expect((errArg as Error).message).toBe("crm-contact-detail:ECONN");
+    expect(ctxArg).toEqual({
+      tags: { surface: "crm-contact-detail" },
+      extra: { op: "detail", userId: "u1", code: "ECONN" },
+    });
+  });
+
   test("5xx PII-free (NOT 200-with-data) + PII-free Sentry mirror on a non-authz RPC error (AC3)", async () => {
     mockRpc.mockResolvedValue({
       data: null,

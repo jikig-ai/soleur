@@ -6,10 +6,13 @@
 // COMPILE error (a free drift guard). Accent hexes mirror the operator-approved
 // wireframe (knowledge-base/product/design/crm/beta-crm-pipeline.pen).
 
-import { STAGES, type Stage } from "@/server/crm/stage-probability";
+import { STAGES, FUNNEL_STAGES, type Stage } from "@/server/crm/stage-probability";
 
-export { STAGES };
+export { STAGES, FUNNEL_STAGES };
 export type { Stage };
+
+/** Neutral fallback accent for an unknown/out-of-enum stage string (defensive). */
+export const STAGE_ACCENT_FALLBACK = "#888888";
 
 /** Title-case display label per stage. */
 export const STAGE_LABEL: Record<Stage, string> = {
@@ -32,9 +35,6 @@ export const STAGE_ACCENT: Record<Stage, string> = {
   closed_won: "#3fa85f",
   closed_lost: "#c0453f",
 };
-
-/** The linear funnel order (closed_lost is a terminal branch, not a column/bar). */
-export const FUNNEL_STAGES: Stage[] = STAGES.filter((s) => s !== "closed_lost");
 
 /** Hex alpha (~15%) appended to an accent for the column background wash. */
 export const COLUMN_TINT_ALPHA = "22";

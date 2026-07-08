@@ -6,7 +6,7 @@
 // COUNTS/TIMINGS ONLY — never receives or returns note bodies or contact PII
 // beyond stage counts (AC4).
 
-import { STAGES } from "@/server/crm/stage-probability";
+import { FUNNEL_STAGES } from "@/server/crm/stage-probability";
 
 // Below this prior-stage count a conversion % is statistically meaningless at
 // beta volume — render "insufficient data" instead. prev===3 still shows (3<3
@@ -15,8 +15,9 @@ export const LOW_N_THRESHOLD = 3;
 
 const MS_PER_DAY = 86_400_000;
 
-// The linear funnel (closed_lost is a terminal branch, excluded).
-export const FUNNEL_STAGES = STAGES.filter((s) => s !== "closed_lost");
+// The linear funnel (closed_lost is a terminal branch) — single source in
+// stage-probability.ts (review P3-1).
+export { FUNNEL_STAGES };
 
 export type ContactRow = { id: string; stage: string; created_at: string };
 export type TransitionRow = {

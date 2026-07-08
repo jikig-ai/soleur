@@ -44,31 +44,48 @@ export async function GET(
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const { data, error } = await supabase.rpc("crm_get_contact_detail", {
-    p_contact_id: id,
-  });
+  try {
+    const { data, error } = await supabase.rpc("crm_get_contact_detail", {
+      p_contact_id: id,
+    });
 
-  if (error) {
-    const code = error.code ?? "";
-    if (NOT_FOUND_CODES.has(code)) {
-      // Uniform, byte-identical response for never-existed / erased / foreign.
+    if (error) {
+      const code = error.code ?? "";
+      if (NOT_FOUND_CODES.has(code)) {
+        // Uniform, byte-identical response for never-existed / erased / foreign.
+        return NextResponse.json({ error: "not_found" }, { status: 404 });
+      }
+      // Fail-closed accountability signal: the atomic read+audit RPC failed for
+      // a non-authorization reason. Never a 200-with-data; never raw PG text.
+      Sentry.captureException(new Error(`crm-contact-detail:${code || "unknown"}`), {
+        tags: { surface: "crm-contact-detail" },
+        extra: { op: "detail", userId: user.id, code: code || null },
+      });
+      return NextResponse.json({ error: "detail_query_error" }, { status: 502 });
+    }
+
+    // The RPC raises (never returns null) on missing/foreign; a null here is a
+    // defensive uniform 404, not a data leak.
+    if (data == null) {
       return NextResponse.json({ error: "not_found" }, { status: 404 });
     }
-    // Fail-closed accountability signal: the atomic read+audit RPC failed for a
-    // non-authorization reason. Never a 200-with-data; never raw PG text.
-    Sentry.captureException(new Error(`crm-contact-detail:${code || "unknown"}`), {
-      tags: { surface: "crm-contact-detail" },
-      extra: { op: "detail", userId: user.id, code: code || null },
-    });
+
+    // data is the RPC's jsonb: { contact, notes, transitions }.
+    return NextResponse.json(data);
+  } catch (e) {
+    // A thrown rejection (network/driver) — mirror PII-free with the same
+    // surface tag the sibling routes use, never leak raw text (AC5).
+    Sentry.captureException(
+      new Error(`crm-contact-detail:${(e as { code?: string })?.code ?? "throw"}`),
+      {
+        tags: { surface: "crm-contact-detail" },
+        extra: {
+          op: "detail",
+          userId: user.id,
+          code: (e as { code?: string })?.code ?? null,
+        },
+      },
+    );
     return NextResponse.json({ error: "detail_query_error" }, { status: 502 });
   }
-
-  // The RPC raises (never returns null) on missing/foreign; a null here is a
-  // defensive uniform 404, not a data leak.
-  if (data == null) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
-  }
-
-  // data is the RPC's jsonb: { contact, notes, transitions }.
-  return NextResponse.json(data);
 }

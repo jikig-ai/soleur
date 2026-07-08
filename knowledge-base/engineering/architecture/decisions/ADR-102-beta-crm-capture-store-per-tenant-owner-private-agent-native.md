@@ -143,9 +143,16 @@ code and mirrors only `{ op, userId, code }`. Missing/erased/foreign ids return 
 byte-identical `404` (no existence oracle), mirroring the RPC's uniform-42501 posture.
 
 **Compliance deltas (no new legal basis).** Art. 15 (access) is served by the owner's own
-read; Art. 5(2) accountability is now encoded (the access log); Art. 17 (erasure) is
-unchanged — `crm_erase_contact` stays service-role-only and its CASCADE now also sweeps the
-access log. No self-serve erase in v1.
+read; Art. 17 (erasure) is unchanged — `crm_erase_contact` stays service-role-only and its CASCADE
+now also sweeps the access log. No self-serve erase in v1.
+
+**Art. 5(2) audit scope (deliberate, review-noted).** The access log covers the **UI drawer's**
+note-body read (`crm_get_contact_detail`) only. The **agent** read path (`crm-tools.ts` reads
+`interview_notes` bodies directly on the tenant client — arguably a larger re-egress, PII → the LLM)
+is **NOT** logged; that gap predates this PR and is accepted for v1. So "Art. 5(2) is encoded" is
+scoped to the visual surface, not claimed comprehensive. Extending the audit to the agent detail-read
+path is a tracked post-v1 follow-up (touches the make-or-break agent path — R1-sensitive — so it gets
+its own cycle, not folded into a read-only UI PR).
 
 - **Realized relationship:** `webapp -> crmStore` — GET `/api/crm/*` RLS-owner-scoped read
   routes + the `crm_get_contact_detail` audit RPC. `crmStore` technology string updated to

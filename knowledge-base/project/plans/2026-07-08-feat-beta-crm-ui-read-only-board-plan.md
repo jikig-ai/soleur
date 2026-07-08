@@ -63,6 +63,16 @@ beta-testers' data.
 **If this leaks, the user's data is exposed via:** third-party beta-tester PII (names, companies,
 conversation-note bodies) leaked to the browser network tab / a client-side error reporter through
 a raw Postgres error `details`/`message`, or a mis-authz'd route returning another owner's rows.
+A **second egress path** is the DSAR export bundle: mig-127 adds `beta_contact_access_log` to the
+owner's Art. 15 export (`server/dsar-export.ts`), so a regression in that path's `ownerField` /
+`assertReadScope` would cross-owner-egress the access log — mitigated by the existing
+`dsar-export-cross-tenant.integration.test.ts` + `dsar-allowlist-completeness.test.ts`
+owner-scoping gates.
+
+**Audit scope (deliberate):** the Art. 5(2) access log records only the **drawer-open note-body
+read** (the atomic `crm_get_contact_detail`). The board list + funnel egress only
+`name`/`company`/`role` + stage counts (never verbatim notes), so summary-card identifier egress is
+**intentionally NOT an audited event** — accountability is scoped to the verbatim-note re-egress.
 
 **Brand-survival threshold:** `single-user incident`.
 
@@ -164,14 +174,18 @@ liveness_signal:
   what: crm route request volume + 5xx rate (owner-only, low volume)
   cadence: per-request
   alert_target: Sentry (surface tag crm-contacts / crm-contact-detail / crm-funnel)
-  configured_in: apps/web-platform/infra/sentry/*.tf (issue alert on crm-* surface 5xx)
+  # The routes EMIT the surface-tagged 5xx events (queryable now). The paging
+  # RULE is NOT in this PR: apps/web-platform/infra/sentry/issue-alerts.tf is
+  # IMPORT-ONLY (mirrors legacy-script/dashboard-created rules), so a new crm-*
+  # alert is a post-merge follow-up (tracked), not an apply-on-merge .tf change.
+  configured_in: DEFERRED — see the post-v1 follow-up tracker (crm-* Sentry issue alert)
 error_reporting:
-  destination: Sentry via Sentry.captureException + mapPgErrorCode (PII-free)
+  destination: Sentry via Sentry.captureException (PII-free — synthetic Error carrying only {op,userId,code}; the write-mapper extraction was dropped per the advisor consult, so routes inline error.code)
   fail_loud: true (route 500s surface a semantic-code ErrorCard + Retry; never silent)
 failure_modes:
   - mode: atomic detail RPC fails (read+audit are one transaction — fail-closed, no data-without-audit)
-    detection: Sentry event crm-get-contact-detail:<code>; drawer shows ErrorCard + Retry (never silent, never blank)
-    alert_route: Sentry issue alert (a failing detail RPC = both a read outage AND an accountability signal)
+    detection: Sentry event crm-contact-detail:<code> (surface tag crm-contact-detail); drawer shows ErrorCard + Retry (never silent, never blank)
+    alert_route: Sentry (queryable event now; paging rule deferred — see tracker). A failing detail RPC = both a read outage AND an accountability signal.
   - mode: route returns raw PG error
     detection: negative test (AC5) at CI; never reaches prod
     alert_route: CI gate
@@ -192,11 +206,11 @@ The plan introduces **no new server, systemd unit, cron, vendor account, secret,
 firewall rule**. Two infra-adjacent surfaces, both pipeline/IaC — zero manual provisioning:
 
 ### Terraform changes
-- **Sentry issue-alert rule** for the `crm-*` surface: fire on 5xx on `crm-contacts`/`crm-contact-detail`/`crm-funnel` AND on the `crm-log-contact-view:<code>` audit-write-failure event (the accountability-gap signal). Declared as a `sentry_*` resource in `apps/web-platform/infra/sentry/*.tf`, extending the existing Sentry root; scoped into the `apply-sentry-infra.yml` `-target=` set the same way sibling alert rules are. No new provider, no new secret (uses the existing `prd_terraform` Sentry token).
+- **Sentry issue-alert rule** for the `crm-*` surface (fire on 5xx on `crm-contacts`/`crm-contact-detail`/`crm-funnel` — the accountability-gap signal): **DEFERRED, not in this PR.** Corrected at review time (observability F1): `apps/web-platform/infra/sentry/issue-alerts.tf` is **IMPORT-ONLY** (its resources mirror rules created by the legacy script / dashboard; adding a new `sentry_issue_alert` there is not an apply-creates path). The routes emit the surface-tagged 5xx events (queryable in Sentry immediately); the paging rule is a tracked post-v1 follow-up. No new provider, no new secret.
 
 ### Apply path
 - **Migration 127**: a code-class `.sql` file applied by the existing `web-platform-release.yml#migrate` job on merge-to-main. Not new infrastructure provisioning — no `.tf`, no SSH, no dashboard.
-- **Sentry alert**: applied by the existing `apply-sentry-infra.yml` auto-apply workflow on merge of the `.tf` change. cloud-init N/A (no host).
+- **Sentry alert**: DEFERRED (see above — `issue-alerts.tf` is import-only). Tracked as a post-v1 follow-up; the surface-tagged events are queryable now. cloud-init N/A (no host).
 
 ### Distinctness / drift safeguards
 - No `dev != prd` host config here. The Sentry alert targets the prod Sentry project only (existing convention). No state-storage change.
@@ -261,7 +275,7 @@ All in this PR — no soak gate, no deferred ADR.
 
 ## Test Scenarios
 
-1. **PII-safe error (negative):** route fed a PostgrestError with a row value in `details` → body has only the semantic code; Sentry mock receives `{ op, code, userIdHash }`, no PII. (AC5)
+1. **PII-safe error (negative):** route fed a PostgrestError with a row value in `details` → body has only the semantic code; Sentry mock receives `{ op, userId, code }` (owner's own id — not third-party PII), no name/company/body. (AC5)
 2. **No existence oracle:** detail route for never-existed / erased / cross-owner id → identical `404 { error: "not_found" }`. (AC2)
 3. **Audit atomic / fail-closed:** `crm_get_contact_detail` throws (audit-table down) → detail route 5xx with a PII-free body, NO contact data returned; Sentry gets the mirror; a returned contact always has a matching audit row. (AC3)
 4. **Funnel low-N:** prior stage `reached < LOW_N_THRESHOLD` → `conversionPct: null` → view shows "insufficient data". (AC4)

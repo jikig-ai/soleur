@@ -9,9 +9,11 @@
 // apart. Honest thin-data footnote.
 
 import useSWR from "swr";
+import Link from "next/link";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
 import { ErrorCard } from "@/components/ui/error-card";
-import { STAGE_ACCENT, STAGE_LABEL, type Stage } from "./stage-style";
+import { LockIcon } from "@/components/icons";
+import { STAGE_ACCENT, STAGE_LABEL, STAGE_ACCENT_FALLBACK, type Stage } from "./stage-style";
 
 type FunnelStage = { stage: string; reached: number; conversionPct: number | null };
 type PerTransition = { from: string; to: string; avgDays: number | null };
@@ -78,7 +80,7 @@ export function FunnelView() {
         </div>
         <div className="space-y-2">
           {data.stages.map((s, i) => {
-            const accent = STAGE_ACCENT[s.stage as Stage] ?? "#888";
+            const accent = STAGE_ACCENT[s.stage as Stage] ?? STAGE_ACCENT_FALLBACK;
             const widthPct = Math.round((s.reached / maxReached) * 100);
             const rightLabel =
               i === 0
@@ -128,6 +130,17 @@ export function FunnelView() {
           perTransition={data.perTransition}
         />
       </div>
+
+      {/* Read-only escape hatch — AC11 requires the edit-via-agent hint on the
+          funnel too (not just the board + drawer). */}
+      <p className="flex items-center gap-1.5 text-xs text-soleur-text-muted">
+        <LockIcon className="h-3.5 w-3.5 shrink-0" />
+        Read-only. Update contacts by mentioning them in a{" "}
+        <Link href="/dashboard/chat" className="text-soleur-accent-gold-fg hover:underline">
+          chat with your CRO or CPO agent
+        </Link>
+        .
+      </p>
     </div>
   );
 }

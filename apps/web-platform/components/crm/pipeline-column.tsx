@@ -10,6 +10,7 @@
 //     no cards — per the approved wireframe).
 
 import { STAGE_ACCENT, STAGE_LABEL, COLUMN_TINT_ALPHA, type Stage } from "./stage-style";
+import { formatAmount } from "./format";
 import { relativeTime } from "@/lib/relative-time";
 
 export type CrmContact = {
@@ -22,20 +23,6 @@ export type CrmContact = {
   currency: string | null;
   last_contact: string | null;
 };
-
-function formatAmount(amount: number | null, currency: string | null): string {
-  if (amount == null) return "—";
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: currency ?? "USD",
-      maximumFractionDigits: 0,
-    }).format(amount);
-  } catch {
-    // Unknown/invalid currency code — never throw in render.
-    return `${amount}${currency ? ` ${currency}` : ""}`;
-  }
-}
 
 function ContactCard({
   contact,

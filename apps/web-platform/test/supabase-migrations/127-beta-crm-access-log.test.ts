@@ -147,6 +147,18 @@ describe("127_beta_crm_access_log migration shape (ADR-102 UI phase)", () => {
       expect(body).toMatch(/IF v_uid IS NULL THEN[\s\S]*?ERRCODE = '42501'/i);
     });
 
+    it("re-asserts the jti denylist IN THE BODY (SECURITY DEFINER bypasses the RESTRICTIVE RLS policy)", () => {
+      // A denied-but-unexpired JWT must not read note bodies via the rpc() path.
+      expect(body).toMatch(
+        /IF public\.is_jti_denied_from_jwt\(\) THEN[\s\S]*?ERRCODE = '42501'/i,
+      );
+      // The jti gate must sit before the head read (fail fast, no PII load).
+      const jtiPos = body.search(/is_jti_denied_from_jwt\(\)/i);
+      const readPos = body.search(/FROM public\.beta_contacts/i);
+      expect(jtiPos).toBeGreaterThanOrEqual(0);
+      expect(readPos).toBeGreaterThan(jtiPos);
+    });
+
     it("scopes the head read on user_id = auth.uid() and raises the SAME 42501 on missing/foreign (no oracle)", () => {
       expect(body).toMatch(/FROM public\.beta_contacts\s+WHERE id = p_contact_id AND user_id = v_uid/i);
       expect(body).toMatch(/IF v_contact IS NULL THEN[\s\S]*?ERRCODE = '42501'/i);

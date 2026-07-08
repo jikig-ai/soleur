@@ -26,7 +26,10 @@
 --   from PUBLIC, anon, authenticated AND service_role (the RPC runs as function
 --   owner, so it still writes). Plus the RESTRICTIVE <table>_jti_not_denied
 --   policy (068/076/077/126 shape) so a revoked/stolen founder JWT used
---   directly against PostgREST is rejected at the policy boundary.
+--   directly against PostgREST is rejected at the policy boundary. That policy
+--   covers ONLY direct table access; because crm_get_contact_detail is SECURITY
+--   DEFINER (bypasses RLS), it ALSO re-asserts is_jti_denied_from_jwt() in its
+--   body so a denied-but-unexpired JWT cannot read note bodies via the RPC path.
 --
 -- Immutability: append-only by RLS SHAPE (SELECT-only policy; INSERT only via
 --   the RPC; no UPDATE/DELETE anywhere targets it) — same design as mig-126's
@@ -146,6 +149,18 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
+  -- jti-deny gate (068/126 denylist) IN THE BODY. The RESTRICTIVE
+  -- <table>_jti_not_denied RLS policies protect ONLY direct PostgREST table
+  -- access; SECURITY DEFINER bypasses RLS, so a revoked/stolen-but-unexpired
+  -- founder JWT could otherwise read verbatim note bodies via
+  -- POST /rest/v1/rpc/crm_get_contact_detail. Re-assert the denylist here so
+  -- the migration header's "revoked JWT is rejected" claim holds on the RPC
+  -- path too. 42501 keeps the route's uniform-404 mapping intact.
+  IF public.is_jti_denied_from_jwt() THEN
+    RAISE EXCEPTION 'crm_get_contact_detail: token denied'
+      USING ERRCODE = '42501';
+  END IF;
+
   -- Ownership-scoped head read. A missing OR foreign contact both yield NULL
   -- -> the SAME 42501 (no existence oracle; mirrors the mig-126 RPCs). Scoping
   -- the WHERE on user_id = v_uid means a foreign row's PII is never even loaded.
@@ -170,7 +185,7 @@ BEGIN
   VALUES (v_uid, p_contact_id);
 
   -- Dual-lens note timeline (append-only), chronological (oldest first).
-  SELECT COALESCE(jsonb_agg(n ORDER BY n.occurred_at NULLS FIRST, n.created_at), '[]'::jsonb)
+  SELECT COALESCE(jsonb_agg(n ORDER BY n.occurred_at NULLS FIRST, n.created_at, n.id), '[]'::jsonb)
   INTO v_notes
   FROM (
     SELECT id, contact_id, user_id, body, lens, occurred_at, created_at
@@ -179,7 +194,7 @@ BEGIN
   ) n;
 
   -- Stage-transition history (append-only), chronological.
-  SELECT COALESCE(jsonb_agg(t ORDER BY t.entered_at), '[]'::jsonb)
+  SELECT COALESCE(jsonb_agg(t ORDER BY t.entered_at, t.id), '[]'::jsonb)
   INTO v_trans
   FROM (
     SELECT id, contact_id, user_id, from_stage, to_stage, entered_at

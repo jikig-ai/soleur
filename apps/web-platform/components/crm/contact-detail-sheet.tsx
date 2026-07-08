@@ -15,7 +15,8 @@ import useSWR from "swr";
 import { swrKeys } from "@/lib/swr-config";
 import { ErrorCard } from "@/components/ui/error-card";
 import { LockIcon } from "@/components/icons";
-import { STAGE_ACCENT, STAGE_LABEL, type Stage } from "./stage-style";
+import { STAGE_ACCENT, STAGE_LABEL, STAGE_ACCENT_FALLBACK, type Stage } from "./stage-style";
+import { formatAmount } from "./format";
 
 type Contact = {
   id: string;
@@ -68,19 +69,6 @@ function formatDate(str: string | null, dateOnly = false): string {
   });
 }
 
-function formatAmount(amount: number | null, currency: string | null): string {
-  if (amount == null) return "—";
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: currency ?? "USD",
-      maximumFractionDigits: 0,
-    }).format(amount);
-  } catch {
-    return `${amount}${currency ? ` ${currency}` : ""}`;
-  }
-}
-
 const LENS_LABEL: Record<string, string> = {
   sales: "What they said",
   product: "What it means",
@@ -106,9 +94,15 @@ export function ContactDetailSheet({
   const [mounted, setMounted] = useState(false);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
 
+  // revalidateOnFocus:false is load-bearing here (NOT just a perf tweak):
+  // crm_get_contact_detail INSERTs an Art. 5(2) audit row on every fetch, so a
+  // window refocus must NOT re-fire it — a focus event is not a deliberate read.
+  // A genuine re-open (card click) still re-fetches + re-audits via the default
+  // revalidateIfStale, which is correct (a re-open IS a re-egress).
   const { data, error, isLoading, mutate } = useSWR<Detail>(
     swrKeys.crmContactDetail(contactId),
     detailFetcher,
+    { revalidateOnFocus: false },
   );
 
   useEffect(() => setMounted(true), []);
@@ -221,7 +215,7 @@ function Header({
 
 function StagePill({ stage }: { stage: string }) {
   const s = stage as Stage;
-  const accent = STAGE_ACCENT[s] ?? "#888";
+  const accent = STAGE_ACCENT[s] ?? STAGE_ACCENT_FALLBACK;
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium"
@@ -338,7 +332,7 @@ function StageHistory({
         <ol className="space-y-2">
           {history.map((h, i) => {
             const s = h.stage as Stage;
-            const accent = STAGE_ACCENT[s] ?? "#888";
+            const accent = STAGE_ACCENT[s] ?? STAGE_ACCENT_FALLBACK;
             const isCurrent = i === currentIdx;
             return (
               <li key={`${h.stage}-${h.at}-${i}`} className="flex items-center gap-2 text-sm">
