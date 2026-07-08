@@ -13,6 +13,38 @@ adr: [ADR-093, ADR-095]
 
 # fix(security): migrate the security-critical residual `${CLAUDE_PLUGIN_ROOT}` families deferred out of Slice C
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-08
+**Hard gates run:** 4.6 User-Brand Impact (PASS), 4.7 Observability (applied — `plugins/*/skills/*.md`
+is not auto-skipped; 5-field schema written), 4.8 PAT-shape (PASS, none), 4.9 UI-wireframe (skip, no UI
+surface), 4.5 network-outage / 4.55 downtime (skip, N/A).
+**Review agents:** security-sentinel, spec-flow-analyzer, code-simplicity-reviewer (parallel; proportionate
+to a 3-file security doc-migration).
+
+### Key improvements folded in from review
+
+1. **incident:217 hardened** (security S1+S2) — migrated to the quoted-`$SENTINEL` + explicit `[[ -r ]]`
+   fail-closed-guard block that `legal-generate:60–62` uses for the identical `redact-sentinel.sh`. Turns
+   "mis-resolved path → halt" from probabilistic into a guaranteed in-script halt on the PIR redaction gate.
+2. **AC dual-resolution reworded** (spec-flow SF1) — the deployed `/app/…` path is not readable off-Concierge;
+   the AC now asserts readability only on the unset/fallback branch and well-formedness on the set branch
+   (the old "both readable" wording would false-fail in CI/worktree).
+3. **#6154 body-strike added** (spec-flow SF2) — a post-merge `gh issue edit 6154` step so the issue's own
+   scope reflects the three completed families (the PR-body carve-out note does not update the issue).
+4. **Enumeration honesty** (spec-flow SF3) — Non-Goals now notes `incident:35`'s repo-root `/scripts/`
+   tooling is a distinct, non-plugin-owned class outside ADR-093 / #6156.
+5. **Simplification** (C2) — the triple-counted dual-resolution proof collapsed into Phase 2; legal-generate
+   AC strengthened to a literal count (catches a dropped `:-`).
+
+### Confirmed by review (no change needed)
+
+- Both-regime closure holds; `${VAR:-literal}` carries no injection surface; `safe-bash.ts` correctly
+  needs no change (trigger.sh/redact-sentinel are not read-only list/ls verbs; if ever routed through the
+  allowlist their `$`/`{`/`}` hit the metachar denylist → fail-closed deny, never silent exec).
+- Site enumeration complete across all three files; the incident git-root fallback anchor is the correct,
+  simplest choice (matches the sibling resolving the same script + `compound:289` precedent).
+
 ## Overview
 
 Slice C (PR #6152, merged 2026-07-07, ADR-093) migrated the 14 agent-run `${CLAUDE_PLUGIN_ROOT}`
@@ -131,14 +163,30 @@ CLI/worktree) so the explanation stays honest. The `[[ -r "$SENTINEL" ]] || … 
 
 ### Site 2 — `plugins/soleur/skills/incident/SKILL.md:217`
 
+**Hardened form (mirrors legal-generate for the identical script — security review S1+S2).** Rather than a
+bare inline swap, migrate the PIR redaction gate to the same quoted-variable + explicit fail-closed-guard
+shape `legal-generate:60–62` uses. This is the highest-stakes site (it IS the PIR secret-redaction gate),
+so adding legal-generate's `[[ -r ]]` guard turns "a mis-resolved path degrades to a halt" from
+*probabilistic* (relying on `bash` exit 127 + the agent honoring the BLOCKING instruction) into a
+*guaranteed* in-script halt — at near-zero cost, and it removes the quoting-hygiene divergence between the
+two sibling sites resolving the same `redact-sentinel.sh`.
+
 ```diff
 - Run `bash scripts/redact-sentinel.sh <draft-tmpfile>` against the unwritten draft.
-+ Run `bash ${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh <draft-tmpfile>` against the unwritten draft.
++ Resolve the gate from the deployed root (deployed `${CLAUDE_PLUGIN_ROOT}`; git-root fallback for
++ CLI/worktree), fail closed if it is unreadable, then run it against the unwritten draft:
++
++ ```bash
++ SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
++ [[ -r "$SENTINEL" ]] || { echo "incident: redaction sentinel not found — halt (fail closed)"; exit 2; }
++ bash "$SENTINEL" <draft-tmpfile>
++ ```
 ```
 
 Only the agent-executed invocation at line 217 is migrated. `dry-run.sh:31` (`${SKILL_DIR}/…`,
 self-locating from `$0`) and the markdown reference-link at line 24 (`[scripts/redact-sentinel.sh](./scripts/redact-sentinel.sh)`)
-are **not** invocations and stay as-is.
+are **not** invocations and stay as-is. The exit-0/1/2 dispatch at lines 221–223 is unchanged (the
+`[[ -r ]]` guard's `exit 2` routes through the existing exit-2 "cannot-evaluate → halt" branch).
 
 ### Site 3 — `plugins/soleur/skills/trigger-cron/SKILL.md:40,43,47`
 
@@ -164,7 +212,7 @@ resolved from — so the deployed-anchor form and the worktree-CWD requirement a
 ## Files to Edit
 
 - `plugins/soleur/skills/legal-generate/SKILL.md` — Site 1 + prose touch-up (lines 55–57, 60)
-- `plugins/soleur/skills/incident/SKILL.md` — Site 2 (line 217)
+- `plugins/soleur/skills/incident/SKILL.md` — Site 2 (line 217, migrated to the hardened guard block)
 - `plugins/soleur/skills/trigger-cron/SKILL.md` — Site 3 (lines 40, 43, 47)
 
 ## Files to Create
@@ -193,6 +241,13 @@ The low-stakes agent-run families remain deferred and tracked in **#6154**:
 family enumerated there that is not one of the three security-critical sites above. The PR body MUST
 note the subset carved out so #6154's scope is honestly narrowed (do NOT close #6154).
 
+**Distinct class — not in scope, not plugin-owned (spec-flow SF3):** `incident/SKILL.md:35` invokes
+repo-root `scripts/betterstack-query.sh` and `scripts/sentry-issue.sh` via `doppler run … -- scripts/…`.
+These are **repo-root `/scripts/` tooling**, not `plugins/soleur/skills/.../scripts/` plugin-owned
+scripts — `${CLAUDE_PLUGIN_ROOT}` is not their correct anchor, and they fall **outside** ADR-093's
+plugin-owned-script vulnerability class and #6156's confirmed subset. Left as-is; noted here only to keep
+the site enumeration honest (a reviewer scanning for bare CWD-relative invocations will see them).
+
 ## Implementation Phases
 
 **Phase 1 — Migrate the three sites (contract order: redaction gate first).**
@@ -200,20 +255,22 @@ note the subset carved out so #6154's scope is honestly narrowed (do NOT close #
 2. `incident/SKILL.md` — Site 2 line 217.
 3. `trigger-cron/SKILL.md` — Site 3 lines 40/43/47.
 
-**Phase 2 — Verify guardrails untouched.**
+**Phase 2 — Verify guardrails untouched + dual-resolution proof.**
 - `git diff --stat` shows only the three SKILL.md files changed (no `safe-bash.ts`, no test files).
 - Run the four guardrail suites (see Acceptance Criteria / Test Scenarios).
-
-**Phase 3 — Dual-resolution proof (per site).**
-- For each migrated invocation, prove expansion under both regimes (see Test Scenarios 4).
+- Dual-resolution proof per site (see Test Scenario 4): the load-bearing check is the **unset** branch
+  (fallback path readable); the **set** branch is a well-formedness echo only (the deployed `/app/…`
+  path is not readable off-Concierge — do not assert `[[ -r ]]` on it). Folded into this phase rather
+  than a standalone phase (simplicity review C2 — the proof was triple-counted).
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] `grep -n 'CLAUDE_PLUGIN_ROOT' plugins/soleur/skills/legal-generate/SKILL.md` shows the Site 1
-      SENTINEL line with the git-root fallback preserved verbatim; the `$(git rev-parse --show-toplevel)/plugins/soleur`
-      substring is intact inside the `:-` default.
+- [ ] `grep -Fc '${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh' plugins/soleur/skills/legal-generate/SKILL.md`
+      returns `1` — the Site 1 SENTINEL line carries the deployed anchor with the git-root fallback
+      preserved verbatim inside the `:-` default (a literal-count assertion catches a malformed edit such
+      as a dropped `:-`, per spec-flow review; presence-only grep would miss that).
 - [ ] `grep -c 'bash scripts/redact-sentinel.sh' plugins/soleur/skills/incident/SKILL.md` returns `0`
       (the bare CWD-relative form is gone) AND `grep -c 'CLAUDE_PLUGIN_ROOT.*skills/incident/scripts/redact-sentinel.sh' plugins/soleur/skills/incident/SKILL.md` returns `1`.
 - [ ] `grep -cE '^\s*plugins/soleur/skills/trigger-cron/scripts/trigger\.sh' plugins/soleur/skills/trigger-cron/SKILL.md`
@@ -228,14 +285,21 @@ note the subset carved out so #6154's scope is honestly narrowed (do NOT close #
 - [ ] `trigger-cron-allowlist-parity.test.ts` passes (run via the package's configured runner —
       `bun:test` import; confirm `bun test plugins/soleur/test/trigger-cron-allowlist-parity.test.ts`
       per repo convention, or the plugin test entrypoint).
-- [ ] Dual-resolution proof recorded for all three sites (Test Scenario 4) — both `CLAUDE_PLUGIN_ROOT`
-      set and unset expand to a readable, correct path.
+- [ ] Dual-resolution proof recorded for all three sites (Test Scenario 4): **unset** `CLAUDE_PLUGIN_ROOT`
+      → the fallback path expands and is readable (`[[ -r <path> ]]` true); **set**
+      `CLAUDE_PLUGIN_ROOT=/app/shared/plugins/soleur` → the expansion is well-formed to the deployed path
+      (readability is NOT assertable off-Concierge, so do not `[[ -r ]]` the set branch — asserting "both
+      readable" would false-fail in a worktree/CI, per spec-flow review SF1).
 - [ ] PR body uses `Closes #6156` and a "Scope carved out of #6154" note that leaves #6154 OPEN.
 
 ### Post-merge (operator / automated)
 
 - [ ] `#6156` auto-closes on merge (via `Closes #6156`). `#6154` remains OPEN — verify with
       `gh issue view 6154 --json state` (automatable via `gh` in `/ship` post-merge; not operator-manual).
+- [ ] **Strike the three pulled-forward families from #6154's own body** (spec-flow SF2 — the PR-body
+      carve-out note does not update the issue): `gh issue edit 6154` to mark `legal-generate`, `incident`,
+      and `trigger-cron` done in #6154's checklist/scope, so a later reader does not re-migrate already-done
+      sites. Automatable via `gh` in `/ship` post-merge; not operator-manual.
 - [ ] No operator SSH / dashboard step required (pure plugin-doc change; deployed via the standard
       image-rebuild plugin deploy path per ADR-080 — not in scope to trigger here).
 
@@ -265,11 +329,47 @@ review time by `security-sentinel` + `user-impact-reviewer` (single-user-inciden
 
 ## Observability
 
-**Skipped (pure-docs).** `## Files to Edit` are `plugins/soleur/skills/*/SKILL.md` prose files — none
-under the code-class trigger paths (`apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, `plugins/*/scripts/`)
-and no new infrastructure surface. The Phase 2.9 gate skips silently for pure-docs changes. (The runtime
-behavior being hardened already emits through the existing redaction-gate exit-code contract and the
-Concierge dispatch path; this change adds no new failure mode.)
+These three skills are **operator-invoked and synchronous** — no background daemon, cron, or heartbeat.
+Their observability surface is the **conversation transcript** (operator-facing, inline), plus the CI
+test suites that pin the invocation contract. There is no dark/blind execution surface and no SSH-only
+signal. (Deepen-plan Phase 4.7 applies because SKILL.md files carry executable shell; the 5-field schema
+below is honest for a synchronous transcript-observable surface.)
+
+```yaml
+liveness_signal:
+  what: each redaction-gate invocation self-reports its disposition inline — `redact-sentinel.sh` prints
+        `sentinel: pass` (exit 0), the meta-redacted finding lines (exit 1), or the fail-closed error
+        (exit 2); `trigger.sh --dry-run` prints the curl form before any fire.
+  cadence: per invocation (synchronous, operator-triggered — not scheduled).
+  alert_target: operator transcript (inline); no async alert channel (operator is present at invocation).
+  configured_in: plugins/soleur/skills/{incident,legal-generate}/SKILL.md (gate step) and
+                 plugins/soleur/skills/trigger-cron/scripts/trigger.sh (dry-run path).
+error_reporting:
+  destination: operator transcript (inline). legal-generate's `[[ -r "$SENTINEL" ]] || { echo …; exit 2; }`
+               guard and incident's exit-2 branch print a halt message; no draft is emitted on failure.
+  fail_loud: yes — fail-closed (exit 2 halts; the draft never crosses the transcript/disk write boundary).
+failure_modes:
+  - mode: migrated `${CLAUDE_PLUGIN_ROOT:-…}` path resolves to an unreadable/absent script.
+    detection: legal-generate `[[ -r "$SENTINEL" ]]` guard (line 61) → prints "redaction sentinel not
+               found — halt (fail closed)" + exit 2, inline in the transcript.
+    alert_route: operator sees the halt inline; draft withheld.
+  - mode: trigger.sh POSTs a wrong/spoofed target or body.
+    detection: `--dry-run` prints the exact curl before firing; the route server-side-validates the event
+               against the cron allowlist and rejects non-allowlisted events.
+    alert_route: dry-run output inline; server 4xx on disallowed event.
+  - mode: (pre-fix) untrusted connected-repo script copy executes on the Concierge server.
+    detection: eliminated by this change — post-migration CLAUDE_PLUGIN_ROOT resolves the trusted
+               deployed copy; the `plugin-root-list-carveout-coupling.test.ts` drift guard + this plan's
+               dual-resolution ACs pin the invariant.
+    alert_route: CI (test suites) fail loudly if a future edit reintroduces an un-anchored form.
+logs:
+  where: conversation transcript (redaction-gate exit disposition; trigger.sh dry-run/response). These
+         are operator-invoked skills — no server-side Sentry/Better Stack log for the skill invocation itself.
+  retention: session transcript / conversation record.
+discoverability_test:
+  command: "bash plugins/soleur/skills/incident/test/redact-sentinel.test.sh && unset CLAUDE_PLUGIN_ROOT && test -r \"$(git rev-parse --show-toplevel)/plugins/soleur/skills/incident/scripts/redact-sentinel.sh\" && echo OK"
+  expected_output: "redact-sentinel.test.sh reports all tests PASS (incl. 11a/11b/11c) and the dual-resolution fallback path is readable → prints OK. (No ssh.)"
+```
 
 ## Architecture Decision (ADR/C4)
 

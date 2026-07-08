@@ -11,9 +11,16 @@ Lane: single-domain · Threshold: single-user incident (`requires_cpo_signoff: t
 - [ ] 1.2 `legal-generate/SKILL.md:55–57` — prose touch-up: describe deployed-root-first resolution
       (`${CLAUDE_PLUGIN_ROOT}` deployed, git-root fallback for CLI/worktree). Keep the `[[ -r "$SENTINEL" ]]`
       fail-closed guard (line 61) and `bash "$SENTINEL"` (line 62) unchanged.
-- [ ] 1.3 `incident/SKILL.md:217` — rewrite the agent invocation to
-      `bash ${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh <draft-tmpfile>`.
-      Do NOT touch `dry-run.sh:31` (`${SKILL_DIR}` self-locating) or the line-24 markdown reference-link.
+- [ ] 1.3 `incident/SKILL.md:217` — rewrite to the **hardened guard block** (mirrors legal-generate for
+      the identical script; security review S1+S2):
+      ```bash
+      SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
+      [[ -r "$SENTINEL" ]] || { echo "incident: redaction sentinel not found — halt (fail closed)"; exit 2; }
+      bash "$SENTINEL" <draft-tmpfile>
+      ```
+      The `[[ -r ]]` `exit 2` routes through the existing exit-2 "cannot-evaluate → halt" branch (lines
+      221–223, unchanged). Do NOT touch `dry-run.sh:31` (`${SKILL_DIR}` self-locating), the line-24
+      markdown reference-link, or the repo-root `/scripts/` invocations at line 35 (distinct non-plugin class).
 - [ ] 1.4 `trigger-cron/SKILL.md:40,43,47` — prefix each `trigger.sh` invocation with
       `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/` (preserve bare `plugins/soleur` anchor, no `bash` prefix).
       Do NOT touch the line-36 markdown reference-link or the line-63 worktree-CWD Sharp Edge.
@@ -38,6 +45,8 @@ Lane: single-domain · Threshold: single-user incident (`requires_cpo_signoff: t
 - [ ] 4.1 PR body: `Closes #6156` (body, not title) + "Scope carved out of #6154" paragraph; leave #6154 OPEN.
 - [ ] 4.2 PR body: `## Changelog` section; labels `semver:patch`, `type/security`.
 - [ ] 4.3 Post-merge: verify `#6156` closed and `#6154` still OPEN (`gh issue view` via /ship — not operator-manual).
+- [ ] 4.4 Post-merge: `gh issue edit 6154` to strike `legal-generate` / `incident` / `trigger-cron` from
+      #6154's body/checklist (spec-flow SF2 — keep the issue scope honest; automatable via /ship).
 
 ## Acceptance grep quick-ref
 
