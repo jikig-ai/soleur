@@ -13,6 +13,7 @@
 // have no target.
 
 import { NEW_ISSUE_DIALOG_EVENT } from "@/components/workstream/new-issue-dialog-event";
+import { ROUTINE_DRAFT_TAB_EVENT } from "@/components/routines/routine-draft-tab-event";
 
 export interface TourStep {
   /** `data-tour-id` selector value, or null for a centered (no-spotlight) card. */
@@ -139,7 +140,16 @@ export const TOUR_STEPS: readonly TourStep[] = [
     target: "action:draft-routine",
     route: "/dashboard/routines",
     title: "Automate the recurring",
-    body: "Draft a routine with Concierge to run agent work every day, week, or month.",
+    body: "Open “Draft a routine with Concierge” to set up agent work that runs every day, week, or month.",
+  },
+  // Opens the "Draft a routine" tab (via `reveal`) and spotlights the Concierge
+  // composer; leaving to the next step dispatches `{ open: false }` to switch back.
+  {
+    target: "action:draft-routine-composer",
+    route: "/dashboard/routines",
+    reveal: ROUTINE_DRAFT_TAB_EVENT,
+    title: "Create a routine",
+    body: "Describe the recurring work in plain language. The Concierge drafts and tests the routine, then opens a PR you approve — it goes live on merge.",
   },
 
   // ── Releases + Settings (tab-only) ────────────────────────────────────────────
