@@ -12,6 +12,8 @@
 // that carries NO `route` (see its note below). Welcome (first) + closing (last)
 // have no target.
 
+import { NEW_ISSUE_DIALOG_EVENT } from "@/components/workstream/new-issue-dialog-event";
+
 export interface TourStep {
   /** `data-tour-id` selector value, or null for a centered (no-spotlight) card. */
   target: string | null;
@@ -22,6 +24,13 @@ export interface TourStep {
    * `target` to mount after navigation. Omit only for the centered Welcome step.
    */
   route?: string;
+  /**
+   * Window event dispatched with `{ open: true }` when this step becomes active
+   * and `{ open: false }` when the tour leaves it (to a step that doesn't share
+   * the same `reveal`). Lets a step open a component-owned modal so its in-modal
+   * `target` can be spotlit (e.g. the New Issue dialog). Handled in TourProvider.
+   */
+  reveal?: string;
 }
 
 export const TOUR_STEPS: readonly TourStep[] = [
@@ -50,6 +59,12 @@ export const TOUR_STEPS: readonly TourStep[] = [
     title: "Meet your organization",
     body: "These are your agents — CTO, CFO, CPO, CRO and more. Click any leader to talk to them directly and hand off work by function.",
   },
+  {
+    target: "action:conversation-composer",
+    route: "/dashboard/chat/new",
+    title: "Inside a conversation",
+    body: "This is a conversation with your agents. Type here to reply or follow up — @-mention a leader to hand the thread to them.",
+  },
 
   // ── Inbox ───────────────────────────────────────────────────────────────────
   {
@@ -76,7 +91,24 @@ export const TOUR_STEPS: readonly TourStep[] = [
     target: "action:new-issue",
     route: "/dashboard/workstream",
     title: "Hand off work",
-    body: "Hit “+ New Issue” to hand your agents something to move forward.",
+    body: "Hit “+ New Issue” to hand your agents something to move forward. Let's open it.",
+  },
+  // These two steps open the New Issue dialog (via `reveal`) and spotlight the two
+  // ways to file work. Both carry the same `reveal` so the dialog stays open across
+  // them; leaving to the next (KB) step dispatches `{ open: false }` to close it.
+  {
+    target: "action:issue-create-manual",
+    route: "/dashboard/workstream",
+    reveal: NEW_ISSUE_DIALOG_EVENT,
+    title: "Write it yourself",
+    body: "Give the issue a title and description, then Create issue — it lands in your Backlog for an agent to pick up.",
+  },
+  {
+    target: "action:concierge-draft",
+    route: "/dashboard/workstream",
+    reveal: NEW_ISSUE_DIALOG_EVENT,
+    title: "Or let Concierge draft it",
+    body: "Prefer to describe the outcome? Concierge will draft and route the issue for you. This one's coming soon.",
   },
 
   // ── Knowledge Base ────────────────────────────────────────────────────────────
