@@ -214,7 +214,15 @@ No public artifact is generated in MVP. Re-evaluation criteria are tracked in #3
 
 ## Phase 6 — Redaction sentinel (BLOCKING, pre-inline-emit)
 
-Run `bash "${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh" <draft-tmpfile>` against the unwritten draft. The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
+Run the sentinel against the unwritten draft — resolve its path fail-closed first (a missing script halts at exit 2, never a false "clean"), mirroring the `legal-generate` gate:
+
+```bash
+SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
+[[ -r "$SENTINEL" ]] || { echo "incident: redaction sentinel not found — halt (fail closed)"; exit 2; }
+bash "$SENTINEL" <draft-tmpfile>
+```
+
+The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
 
 `redact-sentinel.sh` is a thin shim over the hardened `redact-engine.py` (#5987): the engine NFKC-normalizes and strips zero-width/bidi/invalid-byte characters BEFORE matching (defeating compatibility-char / zero-width / soft-hyphen / prefix-homoglyph evasion), and fail-closes with a synthetic-HIGH finding on oversize input (raw or NFKC-expanded). The CLI contract — argv, exit codes, and output shape — is unchanged; the shim fails closed (exit 2) if `python3` is absent. See [ADR-095](../../../../knowledge-base/engineering/architecture/decisions/ADR-095-fail-closed-redaction-engine-contract.md) for the scope boundary (named non-goals: full TR39 homoglyph space, whitespace token-splitting, reversibly-encoded secrets).
 
