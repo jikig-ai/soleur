@@ -170,11 +170,11 @@ body (not title) so it auto-closes at merge — acceptable here because the fix 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `grep -cE "_jti_not_denied_policy_present'" apps/web-platform/supabase/verify/068_jti_deny_rls_predicate_and_revoke_rpc.sql` returns **26** (was 21).
-- [ ] The count sentinel line remains `jti_deny_policies_count_26` asserting `count(*) = 26` (unchanged — do not touch the count).
-- [ ] The file contains a per-table presence assertion for each of `workspace_activity`, `kb_files`, `beta_contacts`, `interview_notes`, `beta_contact_stage_transitions`.
-- [ ] The `UNION ALL` chain is well-formed: exactly one terminal `SELECT` (no trailing `UNION ALL`); verify by piping the file through a Postgres parse (`psql -f` against a scratch DB, or the repo's existing verify-runner harness) with **0 syntax errors**.
-- [ ] Header comment enumerates all 26 tables' provenance (21 base + 076/077 + 126); no claim in the file is falsified by the assertions.
+- [x] `grep -cE "_jti_not_denied_policy_present'" apps/web-platform/supabase/verify/068_jti_deny_rls_predicate_and_revoke_rpc.sql` returns **26** (was 21).
+- [x] The count sentinel line remains `jti_deny_policies_count_26` asserting `count(*) = 26` (unchanged — do not touch the count).
+- [x] The file contains a per-table presence assertion for each of `workspace_activity`, `kb_files`, `beta_contacts`, `interview_notes`, `beta_contact_stage_transitions`.
+- [x] The `UNION ALL` chain is well-formed: verified by running the full query read-only against dev via Supabase MCP — 35 rows, 0 syntax errors, `failing_checks=0`.
+- [x] Header comment enumerates all 26 tables' provenance (21 base + 076/077 + 126); no claim in the file is falsified by the assertions.
 - [ ] PR body uses `Closes #6233`.
 
 ### Post-merge (operator/automated)
