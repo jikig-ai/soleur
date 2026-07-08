@@ -557,6 +557,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_environment.registry_prd",
   "doppler_secret.zot_pull_token_registry",
   "doppler_secret.zot_push_token_registry",
+  // #6244 — the isolated Better Stack Logs ingest token in soleur-registry/prd (same class as
+  // the two ZOT tokens above: minted into the isolated project, consumed by the registry host's
+  // cloud-init, NOT published to a per-PR CI target). Rides the registry-host-replace dispatch.
+  "doppler_secret.registry_betterstack_logs_token",
   "doppler_secret.zot_registry_url",
   "doppler_secret.zot_pull_user",
   "doppler_secret.zot_pull_token",
@@ -1269,8 +1273,9 @@ describe("web-2-recreate dispatch -target/-replace set (scoped; web-1 never targ
 
 // ─── registry-host-replace dispatch -target/-replace guard (ADR-096) ─────────
 // The `apply_target=registry-host-replace` dispatch job (`registry_host_replace`) runs a
-// SCOPED, GUARDED `terraform apply -replace='hcloud_server.registry'` + the 5 registry
-// `-target`s to re-run the registry host's cloud-init (disk-heartbeat cron + storage.retention)
+// SCOPED, GUARDED `terraform apply -replace='hcloud_server.registry'` + the 6 registry
+// `-target`s (5 host resources + the #6244 isolated Better Stack Logs token secret) to re-run
+// the registry host's cloud-init (disk-heartbeat cron + storage.retention)
 // and apply any pending storage-volume resize WITHOUT destroying the zot OCI store. This guard
 // pins the target/replace set to EXACTLY the registry addresses, proves the store volume is
 // IN the set (so its size update can ride in) yet PRESERVED by the sourced gate, and asserts
@@ -1281,6 +1286,10 @@ const REGISTRY_REPLACE_TARGETS = [
   "hcloud_volume_attachment.registry",
   "hcloud_firewall_attachment.registry",
   "hcloud_volume.registry",
+  // #6244 — the isolated Better Stack Logs token secret MUST ride the SAME dispatch: the amended
+  // 3-secret boot guard FATALs (zot never launches) if the token is absent from the isolated
+  // config when the replaced host boots. Pure-create on first apply, no-op thereafter.
+  "doppler_secret.registry_betterstack_logs_token",
 ];
 const REGISTRY_REPLACE_REPLACE = "hcloud_server.registry";
 
@@ -1296,7 +1305,7 @@ describe("registry-host-replace dispatch -target/-replace set (scoped; store pre
     replaceAddrs = extractReplaceAddrs(registryJobBlock);
   });
 
-  test("the registry_host_replace job -targets EXACTLY the 5 registry resources", () => {
+  test("the registry_host_replace job -targets EXACTLY the 6 registry-replace resources", () => {
     expect([...registryTargets].sort()).toEqual(
       [...REGISTRY_REPLACE_TARGETS].sort(),
     );
@@ -1330,7 +1339,7 @@ describe("registry-host-replace dispatch -target/-replace set (scoped; store pre
 
   test("stripDispatchJobs removes the registry_host_replace job's -targets from the coverage set", () => {
     // Belt-and-suspenders (Phase 3.3): a dispatch writer surface must not broaden the
-    // per-merge coverage anchor. After stripping, none of the 5 registry -targets appear.
+    // per-merge coverage anchor. After stripping, none of the 6 registry -targets appear.
     const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
     const strippedTargets = extractAllTargets(stripDispatchJobs(wf));
     for (const addr of REGISTRY_REPLACE_TARGETS) {
