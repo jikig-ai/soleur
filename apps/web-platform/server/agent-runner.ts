@@ -1835,6 +1835,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       "mcp__soleur_platform__crm_contact_list",
       "mcp__soleur_platform__crm_contact_get",
       "mcp__soleur_platform__crm_note_list",
+      "mcp__soleur_platform__crm_stage_transitions_list",
       "mcp__soleur_platform__crm_contact_upsert",
       "mcp__soleur_platform__crm_note_append",
       "mcp__soleur_platform__crm_contact_set_stage",

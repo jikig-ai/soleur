@@ -293,8 +293,19 @@ BEGIN
     RAISE EXCEPTION 'crm_contact_upsert: invalid amount_basis'
       USING ERRCODE = '22023';
   END IF;
+  -- Same PII-safe pre-validation for currency: a bad value must not trip the
+  -- column CHECK (whose DETAIL carries name/company). Mirrors stage/amount_basis.
+  IF p_currency IS NOT NULL AND p_currency !~ '^[A-Z]{3}$' THEN
+    RAISE EXCEPTION 'crm_contact_upsert: invalid currency (ISO 4217, ^[A-Z]{3}$)'
+      USING ERRCODE = '22023';
+  END IF;
 
   IF p_id IS NULL THEN
+    -- amount => currency (pre-validate so the table CHECK never fires with PII).
+    IF p_amount IS NOT NULL AND p_currency IS NULL THEN
+      RAISE EXCEPTION 'crm_contact_upsert: amount requires a currency'
+        USING ERRCODE = '22023';
+    END IF;
     -- INSERT: stamp user_id from auth.uid() (never a param).
     v_stage := COALESCE(p_stage, 'new');
     INSERT INTO public.beta_contacts (
@@ -323,6 +334,14 @@ BEGIN
   IF NOT FOUND OR v_row.user_id <> v_uid THEN
     RAISE EXCEPTION 'crm_contact_upsert: not authorized'
       USING ERRCODE = '42501';
+  END IF;
+
+  -- amount => currency on the POST-COALESCE effective values (pre-validate so the
+  -- table CHECK never fires with PII in its DETAIL).
+  IF COALESCE(p_amount, v_row.amount) IS NOT NULL
+     AND COALESCE(p_currency, v_row.currency) IS NULL THEN
+    RAISE EXCEPTION 'crm_contact_upsert: amount requires a currency'
+      USING ERRCODE = '22023';
   END IF;
 
   -- Partial update: unsupplied columns COALESCE-to-existing (never null a field
@@ -402,6 +421,14 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
+  -- occurred_at must not be in the future: a future-dated note would pin
+  -- last_contact forward via GREATEST and overshoot the 24-month storage-
+  -- limitation window (Art. 5(1)(e)).
+  IF v_when > now()::date THEN
+    RAISE EXCEPTION 'crm_note_append: occurred_at cannot be in the future'
+      USING ERRCODE = '22023';
+  END IF;
+
   -- Ownership re-check (missing/foreign -> same 42501, no oracle).
   SELECT * INTO v_row FROM public.beta_contacts WHERE id = p_contact_id FOR UPDATE;
   IF NOT FOUND OR v_row.user_id <> v_uid THEN
@@ -474,7 +501,14 @@ BEGIN
     INSERT INTO public.beta_contact_stage_transitions (contact_id, user_id, from_stage, to_stage)
     VALUES (p_contact_id, v_uid, v_row.stage, p_to_stage);
 
-    UPDATE public.beta_contacts SET stage = p_to_stage WHERE id = p_contact_id;
+    -- Advance last_contact to today (forward-only via GREATEST): a stage change
+    -- is pipeline activity, so it refreshes the retention clock — otherwise a
+    -- contact worked ONLY via stage changes (no notes, no upsert) would keep a
+    -- stale anchor and be silently purged by the 24-month sweep (user-impact F2).
+    UPDATE public.beta_contacts
+       SET stage = p_to_stage,
+           last_contact = GREATEST(last_contact, now()::date)
+     WHERE id = p_contact_id;
   END IF;
 END;
 $$;

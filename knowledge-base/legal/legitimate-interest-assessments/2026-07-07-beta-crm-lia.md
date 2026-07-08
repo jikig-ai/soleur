@@ -90,7 +90,7 @@ Because the contact details and conversation content are **not obtained from the
 
 ### Art. 17 path for involuntary data subjects
 
-An individual beta tester's Art. 17 erasure request is fulfilled via the auditable, service_role-only `crm_erase_contact(p_contact_id)` function, which deletes the contact and CASCADEs its notes and stage transitions — a concrete, implementable path keyed on contact identity, distinct from the owner's whole-store `ON DELETE CASCADE` on account deletion. There is **no** statutory-retention obligation on this data, so no Art. 17(3) override is claimed — erasure is a hard delete.
+An individual beta tester's Art. 17 erasure request is fulfilled via the auditable, service_role-only `crm_erase_contact(p_contact_id)` function, which deletes the contact and CASCADEs its notes and stage transitions — a concrete, implementable path keyed on contact identity, distinct from the owner's whole-store `ON DELETE CASCADE` on account deletion. The operator lookup→erase→verify→respond sequence is documented in the runbook `knowledge-base/engineering/operations/runbooks/beta-crm-third-party-erasure.md`. There is **no** statutory-retention obligation on this data, so no Art. 17(3) override is claimed — erasure is a hard delete.
 
 ### Conclusion
 

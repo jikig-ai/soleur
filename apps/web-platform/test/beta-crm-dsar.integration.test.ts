@@ -141,13 +141,75 @@ describe.skipIf(!INTEGRATION_ENABLED)("beta-CRM behavioral (dev)", () => {
     expect(salesOnly).toHaveLength(1);
     expect(salesOnly?.[0].body).toBe("sales note");
 
-    // an empty-lens note is rejected live ('{}' fails cardinality())
+    // an empty-lens note is rejected live ('{}' fails cardinality()) — pin the
+    // exact SQLSTATE so it can't pass for the wrong reason (auth/FK).
     const { error: lensErr } = await tenantA.rpc("crm_note_append", {
       p_contact_id: contactA,
       p_body: "x",
       p_lens: [],
     });
-    expect(lensErr).not.toBeNull();
+    expect(lensErr?.code).toBe("22023");
+
+    // last_contact advances forward-only: a backdated note must NOT regress it
+    // (else the retention sweep could prematurely expire an active contact).
+    const before = await tenantA.from("beta_contacts").select("last_contact").eq("id", contactA).single();
+    await tenantA.rpc("crm_note_append", {
+      p_contact_id: contactA,
+      p_body: "old note",
+      p_lens: ["product"],
+      p_occurred_at: "2001-01-01",
+    });
+    const after = await tenantA.from("beta_contacts").select("last_contact").eq("id", contactA).single();
+    expect(after.data?.last_contact).toBe(before.data?.last_contact); // unchanged (GREATEST)
+
+    // a future occurred_at is rejected (retention-overshoot guard, SQLSTATE 22023).
+    const future = await tenantA.rpc("crm_note_append", {
+      p_contact_id: contactA,
+      p_body: "x",
+      p_lens: ["sales"],
+      p_occurred_at: "2999-01-01",
+    });
+    expect(future.error?.code).toBe("22023");
+  });
+
+  test("upsert transition semantics: initial non-default + change appends one; stage-omitting partial appends none", async () => {
+    const { data: cId } = await tenantA.rpc("crm_contact_upsert", { p_name: "Trans", p_stage: "contacted" });
+    // INSERT-at-non-default-stage → exactly one transition NULL→contacted
+    let t = await tenantA.from("beta_contact_stage_transitions").select("*").eq("contact_id", cId);
+    expect(t.data).toHaveLength(1);
+    expect(t.data?.[0]).toMatchObject({ from_stage: null, to_stage: "contacted" });
+    // stage-omitting partial upsert → NO new transition, stage intact
+    await tenantA.rpc("crm_contact_upsert", { p_id: cId, p_company: "X" });
+    t = await tenantA.from("beta_contact_stage_transitions").select("*").eq("contact_id", cId);
+    expect(t.data).toHaveLength(1);
+    // stage-changing upsert → one more transition contacted→qualified
+    await tenantA.rpc("crm_contact_upsert", { p_id: cId, p_stage: "qualified" });
+    t = await tenantA.from("beta_contact_stage_transitions").select("*").eq("contact_id", cId).order("entered_at");
+    expect(t.data).toHaveLength(2);
+    expect(t.data?.[1]).toMatchObject({ from_stage: "contacted", to_stage: "qualified" });
+    // and crm_stage_transitions_list reads them back (agent read-back parity)
+    expect(t.data?.map((r) => r.to_stage)).toEqual(["contacted", "qualified"]);
+  });
+
+  test("composite-FK mis-stamp is unreachable via any granted write path (defense-in-depth)", async () => {
+    // Direct table INSERT is REVOKEd from every client role AND service_role, so
+    // even the service-role key cannot reach the composite FK to attempt a
+    // mis-stamp — it is stopped at the privilege boundary (42501/permission),
+    // one layer BEFORE the (contact_id, user_id) FK (23503) would fire. And the
+    // only granted write path — the SECURITY DEFINER RPCs — stamps user_id from
+    // auth.uid(), never a param, so a mis-stamp cannot be expressed there either.
+    // The composite FK is thus a backstop for an unreachable state; its
+    // definition (ON DELETE CASCADE, correct target) is asserted by the offline
+    // shape test. Here we prove the privilege boundary that fronts it.
+    const denied = await service.from("interview_notes").insert({
+      contact_id: contactA,
+      user_id: userB.id,
+      body: "x",
+      lens: ["sales"],
+    });
+    // service_role INSERT is REVOKEd — a mis-stamp never even reaches the FK.
+    expect(denied.error).not.toBeNull();
+    expect(["42501", "42P01"]).toContain(denied.error?.code ?? "");
   });
 
   test("AC3 — cross-tenant read deny with a positive owner-read control", async () => {

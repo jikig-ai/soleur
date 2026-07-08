@@ -72,7 +72,7 @@ beforeEach(() => {
 });
 
 describe("buildCrmTools — closure + schema hygiene", () => {
-  it("exposes exactly the six crm_* tools", () => {
+  it("exposes exactly the seven crm_* tools", () => {
     const names = buildCrmTools({ userId: "u" }).map((t) => (t as unknown as ToolStub).name);
     expect(names.sort()).toEqual(
       [
@@ -82,6 +82,7 @@ describe("buildCrmTools — closure + schema hygiene", () => {
         "crm_contact_upsert",
         "crm_note_append",
         "crm_note_list",
+        "crm_stage_transitions_list",
       ],
     );
   });
@@ -123,6 +124,22 @@ describe("reads — untrusted envelope precedes PII", () => {
     expect(from).toHaveBeenCalledWith("interview_notes");
     const q = from.mock.results[0].value as { contains: ReturnType<typeof vi.fn> };
     expect(q.contains).toHaveBeenCalledWith("lens", ["sales"]);
+  });
+
+  it("crm_stage_transitions_list reads the transitions table (controller data — NO untrusted envelope)", async () => {
+    const rows = [{ id: "t1", from_stage: null, to_stage: "qualified", entered_at: "2026-07-07" }];
+    const { tenant, from } = makeTenant({ data: rows, error: null });
+    getFreshTenantClient.mockResolvedValue(tenant);
+    const res = await getTool("crm_stage_transitions_list").handler({
+      contactId: "11111111-1111-1111-1111-111111111111",
+    });
+    expect(from).toHaveBeenCalledWith("beta_contact_stage_transitions");
+    // from_stage/to_stage/entered_at are controller-generated, not third-party
+    // free text — the single content block carries the rows without the envelope.
+    expect(res.content).toHaveLength(1);
+    expect(res.content[0].text).not.toMatch(/UNTRUSTED/i);
+    expect(res.content[0].text).toContain("qualified");
+    expect(res.isError).toBeUndefined();
   });
 });
 

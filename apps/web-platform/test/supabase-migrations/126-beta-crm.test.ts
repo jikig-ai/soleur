@@ -99,7 +99,10 @@ describe("126_beta_crm migration shape (ADR-102)", () => {
     });
 
     it("every stage-enum list in the file is byte-identical (no internal drift)", () => {
-      const lists = [...sql.matchAll(/\(\s*('new'[^)]*'closed_lost')\s*\)/gi)].map((m) =>
+      // Capture the FULL parenthesised list from 'new' to the close paren — do
+      // NOT anchor the tail on 'closed_lost', or a stage appended AFTER it in
+      // only some copies would be truncated out and the drift would slip (arch P3).
+      const lists = [...sql.matchAll(/\(\s*('new'[^)]*)\)/gi)].map((m) =>
         m[1].replace(/\s+/g, " ").trim(),
       );
       // beta_contacts.stage CHECK, to_stage CHECK, upsert validation, set_stage validation.
@@ -108,6 +111,39 @@ describe("126_beta_crm migration shape (ADR-102)", () => {
       // And the canonical list equals STAGE_ENUM in order.
       const canonical = lists[0].replace(/'/g, "").split(",").map((s) => s.trim());
       expect(canonical).toEqual(STAGE_ENUM);
+    });
+
+    it("every lens ARRAY literal is byte-identical (no internal drift)", () => {
+      // lens appears in the interview_notes CHECK and the crm_note_append
+      // validation — same class as the stage enum (code-quality P3-3 / arch P3).
+      const lens = [...sql.matchAll(/ARRAY\[\s*('sales'[^\]]*)\]/gi)].map((m) =>
+        m[1].replace(/\s+/g, " ").trim(),
+      );
+      expect(lens.length).toBeGreaterThanOrEqual(2);
+      expect(new Set(lens).size).toBe(1);
+      expect(lens[0].replace(/'/g, "").split(",").map((s) => s.trim())).toEqual(["sales", "product"]);
+    });
+
+    it("crm_contact_upsert pre-validates currency + amount=>currency (PII-safe, mirrors stage/amount_basis)", () => {
+      const body = fnBody(sql, "crm_contact_upsert");
+      expect(body).toMatch(/p_currency IS NOT NULL AND p_currency !~ '\^\[A-Z\]\{3\}\$'/i);
+      expect(body).toMatch(/crm_contact_upsert: invalid currency/i);
+      // amount => currency pre-checked on both branches (INSERT literal + UPDATE COALESCE).
+      expect(body).toMatch(/p_amount IS NOT NULL AND p_currency IS NULL/i);
+      expect(body).toMatch(/COALESCE\(p_amount, v_row\.amount\) IS NOT NULL[\s\S]*?COALESCE\(p_currency, v_row\.currency\) IS NULL/i);
+    });
+
+    it("crm_note_append rejects a future occurred_at (retention-clock overshoot guard)", () => {
+      expect(fnBody(sql, "crm_note_append")).toMatch(/v_when > now\(\)::date[\s\S]*?occurred_at cannot be in the future/i);
+    });
+
+    it("crm_contact_set_stage refreshes last_contact forward on a stage change (velocity retention floor)", () => {
+      const body = fnBody(sql, "crm_contact_set_stage");
+      expect(body).toMatch(/SET stage = p_to_stage,\s*last_contact = GREATEST\(last_contact, now\(\)::date\)/i);
+    });
+
+    it("crm_note_append advances last_contact forward-only via GREATEST (no backdated regression)", () => {
+      expect(fnBody(sql, "crm_note_append")).toMatch(/last_contact = GREATEST\(last_contact, v_when\)/i);
     });
   });
 
@@ -243,50 +279,25 @@ describe("126_beta_crm migration shape (ADR-102)", () => {
         expect(downSql).toMatch(new RegExp(`DROP TABLE IF EXISTS public\\.${t} CASCADE`, "i"));
       }
     });
+
+    it("drops the updated_at trigger function AFTER its table (else DROP FUNCTION RESTRICT raises 2BP01 and aborts rollback)", () => {
+      // A trigger records a pg_depend on its function; DROP FUNCTION defaults to
+      // RESTRICT and IF EXISTS does not suppress the dependency error, so the
+      // trigger-function drop must come after DROP TABLE beta_contacts.
+      const tableDrop = downSql.search(/DROP TABLE IF EXISTS public\.beta_contacts CASCADE/i);
+      const fnDrop = downSql.search(/DROP FUNCTION IF EXISTS public\.beta_contacts_set_updated_at/i);
+      expect(tableDrop).toBeGreaterThanOrEqual(0);
+      expect(fnDrop).toBeGreaterThan(tableDrop);
+    });
   });
 });
 
-// ---------------------------------------------------------------------
-// Behavioral integration proofs — skipped until applied to a DEDICATED dev
-// Supabase project with TENANT_INTEGRATION_TEST=1 + a live Doppler
-// DATABASE_URL_POOLER (hr-dev-prd-distinct-supabase-projects; NEVER the shared
-// dev pre-merge). Kept concrete so wiring a role-switched pg client suffices.
-//
-// Fixtures (synthesized, two tenants A & B; valid UUIDs):
-//   userA, userB in public.users; contactA owned by A.
-// ---------------------------------------------------------------------
-describe.skip("126 beta-crm — behavioral (applied dev project)", () => {
-  it("rejects an empty-lens note live ('{}' fails cardinality; array_length would have passed)", () => {
-    //   SET request.jwt.claim.sub = userA;
-    //   await expect(pg.query("SELECT public.crm_note_append($1,$2,$3)", [contactA, "hi", []]))
-    //     .rejects.toThrow(/lens must be a non-empty subset/);
-  });
-
-  it("cross-tenant read deny with a positive owner-read control (policy is load-bearing)", () => {
-    //   as A: SELECT ... WHERE id = contactA -> 1 row (positive control)
-    //   as B: SELECT ... WHERE id = contactA -> 0 rows
-    //   Dropping beta_contacts_owner_select must break the positive control (A -> 0).
-  });
-
-  it("cross-tenant write isolation: B's upsert/set_stage/note_append vs A's contact raises 42501 and leaves A unchanged", () => {
-    //   as B: crm_contact_upsert(p_id := contactA, p_name := 'x') -> 42501 not authorized
-    //   as B: crm_contact_set_stage(contactA, 'qualified')       -> 42501
-    //   as B: crm_note_append(contactA, 'x', ARRAY['sales'])     -> 42501
-    //   then as A: contactA.name/stage unchanged.
-  });
-
-  it("composite-FK mis-stamp reject: a child with a user_id != parent's owner fails the FK", () => {
-    //   INSERT INTO interview_notes(contact_id, user_id, ...) VALUES (contactA, userB, ...) -> FK violation
-  });
-
-  it("stage transitions: INSERT-at-non-default + each change appends exactly one row; a stage-omitting partial upsert appends none", () => {
-    //   crm_contact_upsert(p_stage := 'qualified') on a fresh contact -> 1 transition (NULL -> qualified)
-    //   crm_contact_upsert(p_id := c, p_name := 'x')                  -> 0 new transitions, stage intact
-    //   concurrent double set_stage via FOR UPDATE -> two consecutive rows, not two claiming the same from_stage
-  });
-
-  it("Art. 17: crm_erase_contact + account-delete CASCADE both empty all three tables", () => {
-    //   service-role crm_erase_contact(contactA) -> notes + transitions gone
-    //   auth.admin.deleteUser(userA) -> public.users CASCADE empties A's rows in all three
-  });
-});
+// Behavioral integration proofs (live-DB, DEV-only) — the empty-lens '{}' reject,
+// cross-tenant read deny + positive owner-read control, cross-tenant write
+// isolation, composite-FK mis-stamp reject, stage-transition semantics, the
+// forward-only last_contact clock, and Art. 17 CASCADE erasure — are CONCRETE,
+// RUNNABLE tests in `apps/web-platform/test/beta-crm-dsar.integration.test.ts`
+// (gated by SUPABASE_DEV_INTEGRATION=1 on a dedicated dev project,
+// hr-dev-prd-distinct-supabase-projects). This file's offline shape tests are
+// the pre-merge CI gate; the behavioral proofs live there (not as empty-bodied
+// describe.skip pseudocode here, which would false-green if un-skipped).
