@@ -53,14 +53,14 @@ existing `.cjs`, runner, or workflow (there is no `--force`); the baseline JSON 
 re-writable artifact, and only via `--refresh-baseline`:
 
 ```bash
-bash plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/constraint-scaffold/scripts/constraint-scaffold.sh
 ```
 
 Refresh the baseline after a legitimate new cross-boundary import (agent-only; clean tree required;
 captures against the `origin/main` merge-base):
 
 ```bash
-bash plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh --refresh-baseline
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/constraint-scaffold/scripts/constraint-scaffold.sh --refresh-baseline
 ```
 
 ## What it emits (into `apps/web-platform/`)

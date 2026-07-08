@@ -470,7 +470,7 @@ Archive ALL discovered artifacts regardless of how many proposals were accepted 
 Run the archival script from the repository root:
 
 ```bash
-bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh
 ```
 
 The script discovers artifacts matching the current branch's feature slug, creates archive directories, and moves each artifact with a timestamped prefix using `git mv`. It handles untracked files automatically. If the script exits non-zero, display the error and stop -- do not proceed to Step F.
@@ -589,7 +589,7 @@ User selects this when the solution represents the start of a new learning domai
 Action:
 
 1. Prompt: "What should the new skill be called? (e.g., stripe-billing, email-processing)"
-2. Run `python3 plugins/soleur/skills/skill-creator/scripts/init_skill.py [skill-name]`
+2. Run `python3 ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/init_skill.py [skill-name]`
 3. Create initial reference files with this solution as first example
 4. Confirm: "✓ Created new [skill-name] skill with this solution as first example"
 

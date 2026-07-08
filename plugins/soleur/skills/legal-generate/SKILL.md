@@ -57,7 +57,7 @@ A generated legal draft can echo a secret or PII that was passed in as company c
    CWD, exits `127` *outside* the shim (bypassing the shim's fail-closed exit-2 normalization):
 
    ```bash
-   SENTINEL="$(git rev-parse --show-toplevel)/plugins/soleur/skills/incident/scripts/redact-sentinel.sh"
+   SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
    [[ -r "$SENTINEL" ]] || { echo "legal-generate: redaction sentinel not found — halt (fail closed)"; exit 2; }
    bash "$SENTINEL" <draft-tmpfile>
    ```
