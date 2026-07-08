@@ -134,6 +134,31 @@ resource "betteruptime_policy" "uptime" {
   }
 }
 
+# ── Better Stack managed alert recipient: ops@jikigai.com ──────────────────
+#
+# ops@jikigai.com as a managed Better Stack team member so free-tier heartbeat/
+# monitor email alerts reach ops@ (not just the account owner, jean.deruelle@).
+# Root cause of the unacknowledged soleur-registry-disk-prd incident: recipients
+# were not managed in Terraform at all, so only the account owner was emailed.
+#
+# No new no-default var — the betteruptime provider authenticates via the existing
+# var.betterstack_api_token (main.tf:66-68). ops@ is the operator's own contact
+# address, not a secret. role = "responder" is the provider default and free-tier
+# valid (Phase 0.1: schema — email required, role optional, team_name optional).
+# team_name = "Your team" mirrors every other team-scoped betteruptime resource in
+# this root (the global token routes to the named team — see soleur_apex above,
+# inngest.tf:120-129 for the case-sensitivity rationale).
+#
+# INERT until ops@ accepts the one-time invite (ops@'s own inbox — analogous to
+# OAuth consent). A pending (un-accepted) member receives no alerts; free-tier
+# non-owner routing is best-effort. Documented fallback if it proves owner-only:
+# betteruptime_outgoing_webhook forward or a Responder-tier upgrade (expense-gated).
+resource "betteruptime_team_member" "ops" {
+  email     = "ops@jikigai.com"
+  role      = "responder"
+  team_name = "Your team"
+}
+
 # ── Cloudflare zone-level origin-5xx notification policy: NOT shipped ──────
 #
 # PR #4003 originally declared a `cloudflare_notification_policy` with

@@ -134,6 +134,42 @@ provisioning-gate scoped-token count/identity assert. The identical branch-confi
 affects `prd_git_data`, `prd_kb_drift_walker`, and `prd_cla` (a **live** over-read) — audited
 separately in **#6167**; status stays **Adopting**.
 
+### Reprovisioning path + alert recipient (amendment 2026-07-08)
+
+Two gaps surfaced when the 2026-07-08 zot capacity-management merge (`storage.retention` pruning +
+10→30 GB volume grow + `betteruptime_heartbeat.registry_disk_prd`) created a disk-full heartbeat in
+Better Stack but the registry **host was never redeployed** with the cloud-init that installs the
+`zot-disk-heartbeat.sh` self-ping cron — so the heartbeat never pinged, Better Stack alerted on the
+absence (`soleur-registry-disk-prd | Missed heartbeat`), and the same missing redeploy left the disk
+mitigations un-live. Both are structural, not one-off:
+
+- **Reprovisioning / apply-path.** The per-PR CI path bridges over SSH to the *existing* web host and
+  cannot provision a fresh host; the registry resources stay `OPERATOR_APPLIED_EXCLUSIONS` (the
+  binding apply-path ruling above is **unchanged**). The registry host now has a sanctioned
+  **dispatch-only `registry-host-replace`** path (`apply_target=registry-host-replace` in
+  `apply-web-platform-infra.yml`), mirroring ADR-100's `inngest-host-replace`: a scoped
+  `terraform apply -replace='hcloud_server.registry'` over a **5-target** set (server +
+  `hcloud_server_network.registry` + `hcloud_volume_attachment.registry` +
+  `hcloud_firewall_attachment.registry` + `hcloud_volume.registry`) to re-run cloud-init + apply any
+  pending storage-volume resize **without SSH**. A sourced destroy-guard
+  (`tests/scripts/lib/registry-host-replace-gate.sh`, no `[ack-destroy]` bypass —
+  `hr-menu-option-ack-not-prod-write-auth`) PRESERVES the zot OCI store volume (size-update-only,
+  never delete/forget/replace) and positively asserts the new host re-attaches to its private NIC +
+  deny-all firewall. It is a **larger, stricter** gate than inngest's (5-member allow-set vs 3;
+  positive NIC/firewall assertions; the storage volume in-scope so its size update rides in — the
+  4-target scope would have aborted the very fix). The dispatch job is stripped from the per-merge
+  parity coverage anchor (`stripDispatchJobs`).
+- **Alert recipient (free-tier IaC path).** Recipients were not managed in Terraform at all, so only
+  the account owner was emailed and the incident stayed unacknowledged.
+  `betteruptime_team_member.ops` (email `ops@jikigai.com`, `role = "responder"`,
+  `team_name = "Your team"`) is now the IaC-managed recipient in `uptime-alerts.tf`, auto-applied
+  per-merge via `-target=betteruptime_team_member.ops`. It authenticates via the existing global
+  `var.betterstack_api_token` (no new variable). Escalation `betteruptime_policy` stays paid-gated
+  (`var.betterstack_paid_tier`, unchanged). The member is **inert until ops@ accepts the one-time
+  invite** (its own inbox); if free-tier non-owner routing proves owner-only the documented fallback
+  is a `betteruptime_outgoing_webhook` forward or a Responder-tier upgrade (expense-gated, out of
+  scope). Status stays **Adopting**.
+
 ## Alternatives Considered
 
 The 7 registry-choice options are tabled above. The **apply-path** alternatives (per-PR `-target`
