@@ -1,5 +1,7 @@
 # Learning: verify disk-fullness / write-health on a deny-all-public host WITHOUT SSH
 
+> **⚠️ Correction (2026-07-08, #6240/#6244):** the source-3 signal below ("last CI push succeeded ⇒ disk accepted writes ⇒ not full") is **NOT** a fill-level proof. zot dedups blobs and a partial write can still fit, so a push can succeed on a nearly-full or full fs. In the follow-up incident the disk **was** full: the block device was 30 GB but `resize2fs` had silently failed (`|| true`), leaving the ext4 fs at ~10 GB. Block-device size (Volume API, source 1) ≠ filesystem size — for "disk full?" you MUST see the guest `df%`. This triangulation remains valid for *host-down vs cron-not-installed vs full*, but corroborate fullness with a shipped `df%` marker (`SOLEUR_ZOT_DISK`). See [best-practices/2026-07-08-disk-full-reads-as-not-full-when-you-check-block-device-not-filesystem.md](best-practices/2026-07-08-disk-full-reads-as-not-full-when-you-check-block-device-not-filesystem.md).
+
 **Date:** 2026-07-08
 **Feature:** registry-host-replace CI dispatch path + Better Stack `ops@` recipient IaC (`feat-one-shot-registry-redeploy-path-ops-alerting`). Plan `2026-07-08-fix-registry-host-replace-ci-path-and-ops-alerting-plan.md`; amends ADR-096.
 **Context:** one-shot pipeline. The `soleur-registry-disk-prd` Better Stack missed-heartbeat incident had to be diagnosed on a host with **no SSH** (deny-all-public firewall), and the redeploy verified without ever touching the box.

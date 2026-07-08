@@ -156,6 +156,20 @@ key, sample one raw row (`SELECT raw ... LIMIT 1`) before trusting the path.
 
 ## Verifying disk-fullness / write-health on a deny-all host WITHOUT SSH (registry, #6122 session)
 
+> **⚠️ Correction (#6240/#6244, 2026-07-08): triangulation does NOT prove a disk is
+> *not* full.** Source 1 (Hetzner Volume API) reports the **block-device** size — NOT
+> the guest **filesystem** size; these diverge if `resize2fs` failed. Source 3 ("the
+> last push succeeded") does **not** prove `<85%` — zot dedups blobs and a partial
+> write can still fit, so a push can succeed on a nearly-full fs. In the follow-up
+> incident the disk **was** full: the volume was grown to 30 GB but `resize2fs` had
+> silently failed (`|| true`), leaving the ext4 fs at ~10 GB. **For a "disk full?"
+> question you MUST see the guest `df%`** — ship it as telemetry
+> (`betterstack-query.sh --grep SOLEUR_ZOT_DISK` → `pcent`, `fs_size_gb`,
+> `block_size_gb`), never infer fullness from the provider API. The triangulation
+> below is still valid for *host-down vs cron-not-installed vs full*, but corroborate
+> genuine fullness with the shipped `df%` marker. Full write-up:
+> [../../../project/learnings/best-practices/2026-07-08-disk-full-reads-as-not-full-when-you-check-block-device-not-filesystem.md](../../../project/learnings/best-practices/2026-07-08-disk-full-reads-as-not-full-when-you-check-block-device-not-filesystem.md).
+
 A disk-gated **missed-heartbeat** (e.g. `soleur-registry-disk-prd`, which pings only
 while `/var/lib/zot < 85%`) is **ambiguous** on a deny-all-public host with no SSH: it
 means *either* the cron isn't installed yet (benign false positive — common right after a
