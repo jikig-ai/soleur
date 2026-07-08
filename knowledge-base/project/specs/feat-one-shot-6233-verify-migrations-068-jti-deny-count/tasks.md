@@ -12,8 +12,8 @@ Plan: `knowledge-base/project/plans/2026-07-08-fix-verify-068-jti-deny-per-table
 - [ ] 1.3 Confirm current per-table assertion count is 21: `grep -cE "_jti_not_denied_policy_present'" <file>`.
 
 ## Phase 2 — Core implementation
-- [ ] 2.1 Append 5 per-table presence assertions (mirroring existing style) for `workspace_activity`, `kb_files`, `beta_contacts`, `interview_notes`, `beta_contact_stage_transitions` — each `count(*) = 1`, RESTRICTIVE, exact `policyname` matching the migration's `CREATE POLICY` literal.
-- [ ] 2.2 Keep the `UNION ALL` chain well-formed: exactly one terminal `SELECT`, no trailing `UNION ALL`, preserve terminal `;`.
+- [ ] 2.1 Insert 5 per-table presence assertions (mirroring existing style) for `workspace_activity`, `kb_files`, `beta_contacts`, `interview_notes`, `beta_contact_stage_transitions` — each `count(*) = 1`, RESTRICTIVE, exact `policyname` matching the migration's `CREATE POLICY` literal.
+- [ ] 2.2 Insertion point is MID-CHAIN: after the last per-table assertion `workspace_member_removals_jti_not_denied_policy_present` (~line 185) and BEFORE the `-- (29-31) anon-role REVOKE matrix` block. The file's terminal SELECT is the `;`-ended `is_jti_denied_from_jwt_anon_revoke_present` anon check — keep it terminal. Do NOT append at EOF (after the `;` = syntax error). Each new row separated by `UNION ALL`; the existing `UNION ALL` before the anon block chains the last new row in.
 - [ ] 2.3 Correct the header comment so it enumerates all 26 tables' provenance (21 base + 076 `workspace_activity` + 077 `kb_files` + 126 beta trio) — the "each of the 26 tables has its own policy" claim is now literally true.
 
 ## Phase 3 — Testing / verification

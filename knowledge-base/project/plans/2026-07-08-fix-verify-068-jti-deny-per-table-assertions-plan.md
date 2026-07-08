@@ -13,6 +13,33 @@ detail_level: minimal
 
 > Spec lacks valid `lane:` (no `spec.md` for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-08
+
+**Key improvements over the base plan:**
+1. **Corrected SQL insertion point** — the file's terminal SELECT is the `;`-ended
+   `is_jti_denied_from_jwt_anon_revoke_present` anon check (verified at lines ~186-201), NOT a
+   per-table assertion. The base plan wrongly suggested making a new row terminal / appending
+   at EOF. The 5 new rows must splice **mid-chain** after `workspace_member_removals` (~line
+   185) and before the anon-REVOKE-matrix block. Phase 1, Sharp Edges, and tasks.md updated.
+2. **Observability converted to the 5-field schema** (Phase 4.7 gate) — the verify sentinel
+   is the liveness signal; failure modes now enumerate both the single-drop and the
+   count-stable-but-set-wrong (count-vs-identity) cases.
+3. **Live + CI verification pinned** (see Verification Log below): dev+prd both = 26; verify
+   green on main since `a4d8208e` (#6229).
+
+**Verification Log (deepen-plan, live-resolved):**
+- `#6229` state: `MERGED` at `2026-07-08T13:19:44Z`, mergeCommit `a4d8208e887df48ff9d68382b68092e249e4dac3`; body says `Refs #6160` (does NOT `Closes #6233`) — #6233 stays open.
+- `Web Platform Release` on main: `ee58951b`/`409cf4fa`/`957350d8` = failure; `a4d8208e`(#6229) = success; `1688bfee`(#6231) = success. Fix landed at #6229.
+- Live `pg_policies` (RESTRICTIVE `%_jti_not_denied`): prd `ifsccnjhymdmidffkzhl` = 26 (all 5 newer tables present); dev `mlwiodleouzwniehynfz` = 26 (`newer5_present = 5`).
+- Migration policy sources: 068 (21 via `DO … FOREACH t IN ARRAY tenant_tables LOOP`), 076 (`workspace_activity`), 077 (`kb_files`), 126 (`beta_contacts`/`interview_notes`/`beta_contact_stage_transitions`) → 21+1+1+3 = 26.
+- Only `verify/068_...sql` carries the count sentinel (`grep -rln jti_deny_policies_count verify/` = 1 file).
+
+**Precedent-diff (Phase 4.4):** the per-table presence assertion is not a novel pattern — it
+is the canonical form already used 21× in this same file (each row: `SELECT '<t>_jti_not_denied_policy_present', CASE WHEN count(*)=1 THEN 0 ELSE 1 END::int FROM pg_policies WHERE schemaname='public' AND tablename='<t>' AND policyname='<t>_jti_not_denied' AND permissive='RESTRICTIVE'`).
+The 5 new rows mirror it verbatim with the table name substituted. No new SQL shape introduced.
+
 ## Overview
 
 `Web Platform Release → verify-migrations` was failing on `main` at
@@ -110,11 +137,17 @@ SELECT 'beta_contact_stage_transitions_jti_not_denied_policy_present',
    AND policyname='beta_contact_stage_transitions_jti_not_denied' AND permissive='RESTRICTIVE'
 ```
 
-**SQL structure sharp edge:** the assertions form one `UNION ALL` chain. The current file's
-**final** `SELECT` has no trailing `UNION ALL`. Insert the 5 new rows so exactly one `SELECT`
-remains terminal (either append all 5 after the current last assertion — making the 5th new
-row terminal — or splice mid-chain). Preserve any terminal `;`/`ORDER BY` the file already
-has. Read the file's tail before editing (`hr-always-read-a-file-before-editing-it`).
+**SQL structure sharp edge (verified against the file 2026-07-08):** the assertions form one
+`UNION ALL` chain. The per-table block is **mid-chain**, NOT at EOF — the 21st/last per-table
+assertion is `workspace_member_removals_jti_not_denied_policy_present` (~lines 182-185),
+immediately followed by `UNION ALL` and the `-- (29-31) anon-role REVOKE matrix` block, whose
+final SELECT (`is_jti_denied_from_jwt_anon_revoke_present`) is the file's terminal statement
+and ends with `;`. **Insert the 5 new rows between the `workspace_member_removals` assertion
+and the anon-REVOKE-matrix block**, each separated by `UNION ALL`; the existing `UNION ALL`
+that precedes the anon block chains the last new row into it. Do **not** append at EOF (that
+would sit after the `;` — a syntax error) and do **not** make a new row terminal (the terminal
+SELECT must remain the `;`-ended anon check). Read the file before editing
+(`hr-always-read-a-file-before-editing-it`).
 
 ### Phase 2 — Correct the header comment
 The header block already says "Exactly 26 RESTRICTIVE policies … Each of the 26 tenant tables
@@ -166,14 +199,32 @@ learnings/specs, no new distribution surface). Scope-out recorded per Phase 2.7.
 
 ## Observability
 
-`liveness_signal`: the `verify-migrations` job in `Web Platform Release` **is** the liveness
-signal for this guard — it runs on every push to `main` that migrates, fails the pipeline
-(gating `deploy`) on any `bad > 0` row, and surfaces the failing `check_name` in the job log.
-This change strengthens that existing signal (26 per-table pinpoints vs. a single aggregate
-count). `discoverability_test` (NO ssh): `gh run view <id> --log | grep jti_deny` — the per-table
-`*_jti_not_denied_policy_present` check names name the exact drifted table on failure. No new
-error path, log call, or infra surface is introduced (verify SQL only), so the 5-field infra
-schema is not otherwise applicable.
+This change strengthens an existing CI drift gate; the sentinel itself IS the observability
+surface. No new runtime error path, log call, or infra surface is introduced (verify SQL only).
+
+```yaml
+liveness_signal:
+  what: "verify-migrations job in Web Platform Release (asserts jti_deny_policies_count_26 + 26 per-table *_jti_not_denied_policy_present checks)"
+  cadence: "every push to main that runs the migrate job"
+  alert_target: "GitHub Actions run status (red pipeline gates the deploy job)"
+  configured_in: ".github/workflows (Web Platform Release) → verify-migrations; verify SQL apps/web-platform/supabase/verify/068_jti_deny_rls_predicate_and_revoke_rpc.sql"
+error_reporting:
+  destination: "GitHub Actions job log (failing check_name + bad=1 row printed by the verify runner)"
+  fail_loud: "yes — any bad>0 row fails verify-migrations and gates deploy (no silent pass)"
+failure_modes:
+  - mode: "a future migration drops one of the 26 jti_not_denied policies"
+    detection: "count sentinel drops to 25 (bad=1) AND the dropped table's *_jti_not_denied_policy_present check returns bad=1, naming the exact table"
+    alert_route: "verify-migrations red → deploy gated → visible in Web Platform Release run"
+  - mode: "count stays 26 but the set is wrong (one dropped + one unrelated added)"
+    detection: "the dropped table's per-table presence check returns bad=1 even though the count passes (the count-vs-identity gap this plan closes)"
+    alert_route: "verify-migrations red → deploy gated"
+logs:
+  where: "GitHub Actions run logs for Web Platform Release → verify-migrations"
+  retention: "GitHub Actions default log retention (90 days)"
+discoverability_test:
+  command: "gh run list --workflow 'Web Platform Release' --branch main --limit 1 --json conclusion  # then: gh run view <id> --log | grep jti_deny"
+  expected_output: "conclusion=success; grep shows 26 per-table *_jti_not_denied_policy_present checks + jti_deny_policies_count_26 all passing (no bad=1)"
+```
 
 ## Architecture Decision (ADR / C4)
 
@@ -216,9 +267,12 @@ now — the recurring maintenance is already documented in the file header and i
   filled with threshold `none` + reason.)
 - **Do not touch the count sentinel** (`jti_deny_policies_count_26`). It is correct (live=26).
   The only edit is adding the 5 per-table rows + the header comment.
-- **Terminal `SELECT` in the `UNION ALL` chain:** appending a row with a trailing `UNION ALL`
-  and no following `SELECT` is a syntax error. Read the file tail; make exactly one `SELECT`
-  terminal; preserve any terminal `;`.
+- **Terminal `SELECT` in the `UNION ALL` chain:** the file's terminal SELECT is the
+  `;`-ended `is_jti_denied_from_jwt_anon_revoke_present` anon check — NOT a per-table
+  assertion. The per-table block is mid-chain. Insert the 5 new rows between
+  `workspace_member_removals_jti_not_denied_policy_present` and the `-- (29-31) anon-role
+  REVOKE matrix` block; keep the terminal `;` anon check terminal. Appending at EOF (after
+  the `;`) is a syntax error.
 - **Policy-name exactness:** each new assertion's `policyname` must match the migration's
   literal `CREATE POLICY <name>` (verified: `workspace_activity_jti_not_denied` mig 076,
   `kb_files_jti_not_denied` mig 077, `beta_contacts_jti_not_denied` /
