@@ -138,16 +138,17 @@ variable "git_data_luks_volume_size" {
 
 # --- #6178 (ADR-100) — the dedicated single-host Inngest singleton scheduler ---
 variable "inngest_server_type" {
-  description = "Hetzner server type for the dedicated Inngest host (cax11 = 2 vCPU ARM64/Ampere, 4GB RAM). ARM64: Inngest is a SINGLETON control-plane SCHEDULER (not throughput-bound) — a cron dispatcher on host-local Redis, so a small ARM box is ample; the inngest CLI pull must be the arm64 build. Verify current Hetzner pricing before budget decisions (~€4/mo CAX11 + volume — recorded via ops-advisor)."
+  description = "Hetzner server type for the dedicated Inngest host. Arch is DERIVED from this value (local.inngest_arch): cax* (Ampere) → arm64, cpx*/cx*/ccx* → amd64 — mirroring var.registry_server_type. Inngest is a SINGLETON control-plane SCHEDULER (not throughput-bound), so a small 2 vCPU / 4 GB box is ample. Provisions on whichever arch has Hetzner stock: cax11 (arm64, ~€5.99/mo) is cheapest; cpx22 (amd64, ~€19.49/mo) is the current default because cax* was EU-wide out of stock at Phase-2 provision time (#6178). Verify current Hetzner pricing before budget decisions — recorded via ops-advisor."
   type        = string
-  default     = "cax11"
+  default     = "cpx22"
 
-  # #6178 review (#6180): the cloud-init hardcodes INNGEST_CLI_ARCH=arm64, so the host MUST be
-  # an Ampere ARM64 (cax*) type. An override to a cx*/ccx*/cpx* (Intel/AMD) type would download
-  # the arm64 tarball onto an amd64 host and BRICK the sole scheduler at boot with no other guard.
+  # #6178: the cloud-init now DERIVES arch from this type (local.inngest_arch) and selects the
+  # matching inngest-CLI / Vector / Doppler-CLI download + checksum off it, so BOTH arm64 (cax*)
+  # and amd64 (cpx*/cx*/ccx*) boot correctly — mirrors the zot-registry.tf dual-arch host. This
+  # guard only rejects an unrecognized prefix (a typo) whose arch cannot be inferred.
   validation {
-    condition     = can(regex("^cax", var.inngest_server_type))
-    error_message = "inngest_server_type must be an ARM64 Ampere type (cax*); the host's inngest CLI is pinned to the arm64 build."
+    condition     = can(regex("^(cax|cpx|cx|ccx)", var.inngest_server_type))
+    error_message = "inngest_server_type must be a recognized Hetzner type (cax*=arm64, or cpx*/cx*/ccx*=amd64); arch is derived from the prefix."
   }
 }
 

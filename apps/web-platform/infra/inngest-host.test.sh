@@ -74,12 +74,16 @@ else
   pass
 fi
 
-# 5. arm64 inngest-CLI SHA: a distinct arm64 checksum local is declared AND the cloud-init
-#    OVERRIDES the (amd64) image-env SHA with it before running the bootstrap.
-grep -qE 'inngest_cli_sha256_arm64[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$INNGEST_TF" \
-  && grep -qF 'INNGEST_CLI_SHA256="${inngest_cli_sha256_arm64}"' "$CLOUD_INIT" \
+# 5. Dual-arch inngest-CLI SHA (#6178): BOTH the amd64 (inngest.tf) and arm64 checksums are
+#    declared; the arch is DERIVED from the server type (local.inngest_arch); and the cloud-init
+#    OVERRIDES the image-env SHA with the ARCH-MATCHED value before running the bootstrap.
+grep -qE 'inngest_cli_sha256[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$INNGEST_TF" \
+  && grep -qE 'inngest_cli_sha256_arm64[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$INNGEST_TF" \
+  && grep -qF 'startswith(var.inngest_server_type, "cax") ? "arm64" : "amd64"' "$HOST_TF" \
+  && grep -qF 'local.inngest_arch == "arm64" ? local.inngest_cli_sha256_arm64 : local.inngest_cli_sha256' "$HOST_TF" \
+  && grep -qF 'INNGEST_CLI_SHA256="${inngest_cli_sha256}"' "$CLOUD_INIT" \
   && grep -qF 'INNGEST_CLI_ARCH=${inngest_cli_arch}' "$CLOUD_INIT" \
-  && pass || fail "arm64 inngest-CLI SHA declared + overrides the image-env amd64 SHA in cloud-init"
+  && pass || fail "dual-arch inngest-CLI SHA: amd64+arm64 locals + derived arch + arch-matched cloud-init override"
 
 # 6. nftables scopes :8288/:8289 to web-host IPs only. The allowlist is the TF constant
 #    local.web_host_private_ips (host.tf), rendered into the nft saddr set via ${web_host_private_ips}.
@@ -94,23 +98,29 @@ else
   pass
 fi
 
-# 7. Vector WIRED on this arm64 host (#6197): a distinct arm64 SHA local is declared, the
-#    cloud-init OVERRIDES VECTOR_CLI_SHA256 with it, passes VECTOR_CLI_ARCH=arm64, and stages
-#    /tmp/vector.toml so the bootstrap writes the vector.service unit.
-grep -qE 'vector_sha256_arm64[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$VECTOR_TF" \
-  && grep -qF 'VECTOR_CLI_SHA256=${vector_sha256_arm64}' "$CLOUD_INIT" \
-  && grep -qF 'VECTOR_CLI_ARCH=arm64' "$CLOUD_INIT" \
+# 7. Vector WIRED, dual-arch (#6197): BOTH the amd64 (vector.tf) and arm64 SHA locals are
+#    declared; the cloud-init OVERRIDES VECTOR_CLI_SHA256 with the ARCH-MATCHED value, passes
+#    VECTOR_CLI_ARCH derived from the type, and stages /tmp/vector.toml so the bootstrap writes
+#    the vector.service unit.
+grep -qE 'vector_sha256[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$VECTOR_TF" \
+  && grep -qE 'vector_sha256_arm64[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$VECTOR_TF" \
+  && grep -qF 'VECTOR_CLI_SHA256=${vector_sha256}' "$CLOUD_INIT" \
+  && grep -qF 'VECTOR_CLI_ARCH=${inngest_cli_arch}' "$CLOUD_INIT" \
   && grep -qF ':/vector.toml /tmp/vector.toml' "$CLOUD_INIT" \
-  && pass || fail "Vector wired (arm64) — SHA local + cloud-init SHA override + VECTOR_CLI_ARCH=arm64 + /tmp/vector.toml staged"
+  && pass || fail "Vector wired dual-arch — amd64+arm64 SHA locals + arch-matched cloud-init override + VECTOR_CLI_ARCH derived + /tmp/vector.toml staged"
 # The DEFERRED empty VECTOR_CLI_* form must be GONE (would skip the install).
 if grep -qE 'VECTOR_CLI_VERSION=""|"VECTOR_CLI_VERSION="' "$CLOUD_INIT"; then
   fail "Vector must no longer be deferred (empty VECTOR_CLI_* form is gone)"
 else
   pass
 fi
-# The templatefile must pass vector_sha256_arm64 into the cloud-init render.
-grep -qF 'vector_sha256_arm64 = local.vector_sha256_arm64' "$HOST_TF" \
-  && pass || fail "inngest-host.tf templatefile passes vector_sha256_arm64 = local.vector_sha256_arm64"
+# The templatefile must pass the arch-conditional Vector SHA + the Doppler-CLI arch/checksum
+# into the cloud-init render (dual-arch).
+grep -qF 'local.inngest_arch == "arm64" ? local.vector_sha256_arm64 : local.vector_sha256' "$HOST_TF" \
+  && grep -qF 'doppler_arch' "$HOST_TF" \
+  && grep -qF 'doppler_sha256' "$HOST_TF" \
+  && grep -qF 'doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz' "$CLOUD_INIT" \
+  && pass || fail "inngest-host.tf passes arch-conditional Vector SHA + doppler_arch/sha; cloud-init uses \${doppler_arch}"
 
 # 8. inngest-bootstrap.sh arch-parameterizes the Vector install (#6197): VECTOR_CLI_ARCH
 #    defaults amd64 (web host preserved) + an arm64->aarch64 triple map applied to BOTH the
