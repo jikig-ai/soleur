@@ -52,5 +52,5 @@ Lane: single-domain · Threshold: single-user incident (`requires_cpo_signoff: t
 
 - `grep -c 'bash scripts/redact-sentinel.sh' plugins/soleur/skills/incident/SKILL.md` → `0`
 - `grep -cE '^\s*plugins/soleur/skills/trigger-cron/scripts/trigger\.sh' plugins/soleur/skills/trigger-cron/SKILL.md` → `0`
-- `grep -c '${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/trigger-cron/scripts/trigger.sh' plugins/soleur/skills/trigger-cron/SKILL.md` → `3`
+- `grep -Fc '${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/trigger-cron/scripts/trigger.sh' plugins/soleur/skills/trigger-cron/SKILL.md` → `3` (fixed-string `-F`: the `${…}` is a literal, not BRE)
 - `git diff --name-only origin/main...HEAD -- apps/web-platform/server/safe-bash.ts` → empty

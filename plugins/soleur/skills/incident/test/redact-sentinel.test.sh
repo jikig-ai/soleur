@@ -582,6 +582,25 @@ else
   echo "FAIL: Test 17: email-class flood did not complete (rc=${rc} — O(n^2) ReDoS regression)"; FAIL=$((FAIL + 1))
 fi
 
+# Test 18 — deployed-anchor coupling parity (#6156 review P2): legal-generate and incident resolve the
+# IDENTICAL redact-sentinel.sh via the ADR-093 deployment-anchored form. The anchored literal is
+# duplicated verbatim across both SKILL.md files; nothing else pins them identical (Test 11b's loose
+# `redact-sentinel\.sh` substring grep stays green even if one site drops the git-root fallback or
+# diverges the anchor). This byte-identity guard is the missing coupling fence on the fail-closed gate —
+# a future edit that de-syncs the two sites (bare `scripts/…`, `./plugins/soleur`, dropped `:-`) flips a
+# count off 1. Mirrors the coupling pattern of trigger-cron-allowlist-parity.test.ts.
+INCIDENT_SKILL="${SKILL_DIR}/SKILL.md"
+ANCHOR='${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh'
+lg_anchor=$(grep -Fc "${ANCHOR}" "${LEGAL_SKILL}" 2>/dev/null || true)
+inc_anchor=$(grep -Fc "${ANCHOR}" "${INCIDENT_SKILL}" 2>/dev/null || true)
+if [[ "${lg_anchor}" == "1" && "${inc_anchor}" == "1" ]]; then
+  echo "PASS: Test 18: deployed-anchor redact-sentinel literal is byte-identical (1×) in both legal-generate & incident SKILL.md"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 18: deployed-anchor drift — expected the ADR-093 anchored redact-sentinel literal exactly once in each (legal-generate=${lg_anchor}, incident=${inc_anchor})"
+  FAIL=$((FAIL + 1))
+fi
+
 echo
 echo "Total: ${PASS} pass, ${FAIL} fail"
 [[ "${FAIL}" -eq 0 ]]

@@ -135,16 +135,25 @@ the hole ADR-093 closes; the residual subset is its highest-stakes remainder.
 
 **If this leaks, the user's data / secrets are exposed via:** an un-redacted API key / PII in a legal
 draft or PIR crossing the transcript write boundary (the redaction gate is the sole barrier there), or
-a spoofed/redirected prod-cron POST.
+exfiltration of `INNGEST_MANUAL_TRIGGER_SECRET` (the long-lived prod-cron auth token `trigger.sh` reads
+from Doppler and sends as the `curl` Authorization header) via a spoofed/redirected prod-cron POST — a
+leaked token enables indefinite unauthorized allowlisted-cron fires, strictly worse than one bad fire.
 
 **Brand-survival threshold:** `single-user incident`. A single Concierge user's untrusted-copy execution
 of a neutered redaction gate is a secret-leak incident. → `requires_cpo_signoff: true`;
 `user-impact-reviewer` runs at review time.
 
-> Note on the change's own failure mode: `redact-sentinel.sh` is **fail-closed** (exit 2 halts). A
-> *mis-resolved* path (unreadable) therefore degrades to a halt, not a silent leak — but the whole point
-> is to guarantee the **trusted** gate runs at all, so the threshold reflects the vulnerability being
-> closed, not merely the migration's regression surface.
+> Note on the change's own failure mode and its residual (honest framing per the CTO adjudication of the
+> user-impact P1). The pre-run `[[ -r "$SENTINEL" ]]` guard catches an **absent/unreadable** path → exit 2
+> halt (fail-closed), never a silent leak. It does **not** catch a *readable-but-untrusted* copy: on the
+> Concierge server with `CLAUDE_PLUGIN_ROOT` **unset**, the `${…:-fallback}` git-root branch would resolve
+> the connected repo's untrusted copy, and `[[ -r ]]` would pass. This migration's security guarantee
+> therefore rests on the **ADR-093 invariant** — the SDK exports `CLAUDE_PLUGIN_ROOT` into the Concierge
+> autonomous-bypass bash env — **identically to the 25 merged Slice C sites**; the fallback is the correct,
+> trusted path for CLI/worktree use (var legitimately unset, git-root = operator's own checkout), so it
+> cannot be made "fail-closed on unset" at the shell layer without breaking local invocation. That
+> platform invariant is currently unpinned by any test/AC; it is **not** introduced or widened by this PR.
+> Tracked as an ADR-093 amendment + follow-up issue (see §Non-Goals); the P1 is downgraded to advisory.
 
 ## In-Scope Sites — exact before/after
 
@@ -248,6 +257,16 @@ scripts — `${CLAUDE_PLUGIN_ROOT}` is not their correct anchor, and they fall *
 plugin-owned-script vulnerability class and #6156's confirmed subset. Left as-is; noted here only to keep
 the site enumeration honest (a reviewer scanning for bare CWD-relative invocations will see them).
 
+**Platform-layer residual — the `CLAUDE_PLUGIN_ROOT` server-export invariant (review P1 → advisory, CTO-adjudicated):**
+the `${CLAUDE_PLUGIN_ROOT:-fallback}` form is fail-safe only while the SDK exports a non-empty
+`CLAUDE_PLUGIN_ROOT` into the Concierge bash env; an unset-server var would resolve the untrusted fallback
+copy past the `[[ -r ]]` guard (which catches absent, not readable-untrusted). This is an ADR-093-wide
+platform concern spanning all ~28 anchored sites + the `agent-env.ts` injection layer — **not introduced or
+widened by this PR** (identical to the 25 merged Slice C sites) and unfixable at the shell layer (the
+fallback is the legitimate CLI/worktree path). Recorded as the ADR-093 §Amendments entry (2026-07-08) and
+tracked for hardening in **#6223** (`deferred-scope-out`, architectural-pivot). See the honest §User-Brand
+Impact note above.
+
 ## Implementation Phases
 
 **Phase 1 — Migrate the three sites (contract order: redaction gate first).**
@@ -274,7 +293,7 @@ the site enumeration honest (a reviewer scanning for bare CWD-relative invocatio
 - [ ] `grep -c 'bash scripts/redact-sentinel.sh' plugins/soleur/skills/incident/SKILL.md` returns `0`
       (the bare CWD-relative form is gone) AND `grep -c 'CLAUDE_PLUGIN_ROOT.*skills/incident/scripts/redact-sentinel.sh' plugins/soleur/skills/incident/SKILL.md` returns `1`.
 - [ ] `grep -cE '^\s*plugins/soleur/skills/trigger-cron/scripts/trigger\.sh' plugins/soleur/skills/trigger-cron/SKILL.md`
-      returns `0` (no un-anchored invocation lines) AND `grep -c '${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/trigger-cron/scripts/trigger.sh' plugins/soleur/skills/trigger-cron/SKILL.md`
+      returns `0` (no un-anchored invocation lines) AND `grep -Fc '${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/trigger-cron/scripts/trigger.sh' plugins/soleur/skills/trigger-cron/SKILL.md`
       returns `3`. (The line-36 markdown reference-link `[scripts/trigger.sh](./scripts/trigger.sh)` is
       excluded by the `^\s*plugins/…` anchor.)
 - [ ] `git diff --name-only origin/main...HEAD -- apps/web-platform/server/safe-bash.ts` is empty
