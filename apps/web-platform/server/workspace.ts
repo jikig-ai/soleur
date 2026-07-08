@@ -18,6 +18,7 @@ import { generateInstallationToken, checkRepoAccess } from "./github-app";
 import { getPluginPath } from "./plugin-path";
 import { reportSilentFallback } from "./observability";
 import { seedWorktreeConfig } from "./worktree-config-seed";
+import { atomicGitConfig } from "./git-config-atomic";
 
 // Minimal structural type for the Storage remove path — avoids dragging the
 // full SupabaseClient generic into this FS/git-focused module.
@@ -230,23 +231,21 @@ export async function provisionWorkspaceWithRepo(
     );
   }
 
-  // 6. Set git identity per workspace
+  // 6. Set git identity per workspace. Route the raw `git config` writes through
+  //    the lock-free atomic writer (#6191, ADR-099 §Known latent surfaces): atomic
+  //    by rename(2), so a stale/masked `.git/config.lock` cannot EEXIST the seed.
+  //    Still best-effort — the outer try/catch → log.warn keeps a seed failure from
+  //    ever stranding provisioning (atomicGitConfig itself never throws).
   if (userName) {
     try {
-      execFileSync("git", ["config", "user.name", userName], {
-        cwd: workspacePath,
-        stdio: "pipe",
-      });
+      atomicGitConfig(workspacePath, ["config", "user.name", userName]);
     } catch (err) {
       log.warn({ err, workspaceId }, "Failed to set git user.name");
     }
   }
   if (userEmail) {
     try {
-      execFileSync("git", ["config", "user.email", userEmail], {
-        cwd: workspacePath,
-        stdio: "pipe",
-      });
+      atomicGitConfig(workspacePath, ["config", "user.email", userEmail]);
     } catch (err) {
       log.warn({ err, workspaceId }, "Failed to set git user.email");
     }
