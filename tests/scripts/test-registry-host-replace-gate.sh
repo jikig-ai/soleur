@@ -8,7 +8,7 @@
 # (server_network + volume_attachment replaced, firewall_attachment update-in-place), the
 # zot storage volume PRESERVED (a size-increasing in-place update OR no-op only), the new
 # host positively re-attached to its private NIC + deny-all firewall, and no out-of-scope
-# change. It has a LARGER allow-set (5 vs inngest's 3) and MORE positive assertions
+# change. It has a LARGER allow-set (6 vs inngest's 3) and MORE positive assertions
 # (nic_recreated / firewall_ok / volume-preserve) — do NOT simplify it to the inngest shape.
 #
 # Non-vacuity discipline (RED-verification for a gating primitive): each FAIL fixture
@@ -45,15 +45,19 @@ NET_REPLACE="$(rc_obj 'hcloud_server_network.registry' '"delete","create"')"
 VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.registry' '"delete","create"')"
 FW_UPDATE="$(rc_obj 'hcloud_firewall_attachment.registry' '"update"')"
 VOL_UPDATE="$(rc_obj 'hcloud_volume.registry' '"update"')"
+# #6244: the isolated Better Stack Logs token secret rides the SAME dispatch — a pure-create on
+# first apply. The gate must PERMIT it (allow-set member), NOT count it as out_of_scope.
+SECRET_CREATE="$(rc_obj 'doppler_secret.registry_betterstack_logs_token' '"create"')"
 
 write_plan() { printf '{"resource_changes":[%s]}' "$1" > "$TMP/plan.json"; }
 
-# --- Test 1: PASS — exact scoped recreate WITH the volume size ["update"] preserved ---
-write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FW_UPDATE},${VOL_UPDATE}"
+# --- Test 1: PASS — exact scoped recreate WITH the volume size ["update"] + the logs-token
+# secret create (the REAL post-#6244 dispatch shape) preserved ---
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FW_UPDATE},${VOL_UPDATE},${SECRET_CREATE}"
 if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
   pass
 else
-  fail "T1: exact scoped registry recreate (volume size-update preserved) should PASS (rc=0)"
+  fail "T1: exact scoped registry recreate (volume size-update + logs-token secret create) should PASS (rc=0)"
 fi
 
 # --- Test 2: FAIL — the zot store volume is DELETED (the preservation invariant) ---
@@ -174,6 +178,41 @@ fi
 write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_DELETE_ONLY},${FW_UPDATE},${VOL_NOOP}"
 if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
   fail "T12(f): a volume-attachment-stripped plan (attachment_recreated==0) must ABORT (rc=1)"
+else
+  pass
+fi
+
+# --- Test 13 (#6244): FAIL — a DIFFERENT doppler secret create is out-of-scope (exact-match) ---
+# The allow-set entry is the EXACT address doppler_secret.registry_betterstack_logs_token; a
+# stray doppler_secret create (e.g. a mis-scoped soleur/prd secret) must still ABORT. Proves the
+# allow-set entry is address-exact (IN(.address; allow[])), NOT a blanket doppler_secret permit.
+STRAY_SECRET="$(rc_obj 'doppler_secret.some_other_prd' '"create"')"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FW_UPDATE},${VOL_UPDATE},${SECRET_CREATE},${STRAY_SECRET}"
+if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T13: a stray (non-allow-set) doppler secret create must ABORT (rc=1)"
+else
+  pass
+fi
+
+# --- Test 14 (#6244): FAIL — the logs-token secret create alone is not a host recreate ---
+# server_replaced==0 (no host -replace) → ABORT even though the permitted secret is present.
+write_plan "${SECRET_CREATE}"
+if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T14: the logs-token secret create alone (no server replace) must ABORT (rc=1)"
+else
+  pass
+fi
+
+# --- Test 15 (#6244): FAIL — the logs-token secret is DELETED (secret_destroyed backstop) ---
+# An otherwise-valid scoped recreate but the logs-token secret carries ["delete"]. Because the
+# secret is in the allow-set, out_of_scope does NOT catch it — the named secret_destroyed backstop
+# must. Dropping it would pass the gate then BRICK the host: the amended 3-secret boot guard FATALs
+# without BETTERSTACK_LOGS_TOKEN, so zot never launches. Symmetric to the store_destroyed (T2/T9)
+# case. Mutation-check: removing `secret_destroyed` from the PASS predicate flips this to PASS.
+SECRET_DELETE="$(rc_obj 'doppler_secret.registry_betterstack_logs_token' '"delete"')"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FW_UPDATE},${VOL_NOOP},${SECRET_DELETE}"
+if registry_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T15: a logs-token secret delete (secret_destroyed) must ABORT (rc=1)"
 else
   pass
 fi
