@@ -214,7 +214,7 @@ No public artifact is generated in MVP. Re-evaluation criteria are tracked in #3
 
 ## Phase 6 — Redaction sentinel (BLOCKING, pre-inline-emit)
 
-Resolve the gate from the **deployed plugin root** (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy; git-root fallback for CLI/worktree), fail closed if it is unreadable, then run it against the unwritten draft. On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative `scripts/...` path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093). The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
+Resolve the gate from the **deployed plugin root** (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy; git-root fallback for CLI/worktree), fail closed if it is unreadable, then run it against the unwritten draft. On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093). The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
 
 ```bash
 SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
