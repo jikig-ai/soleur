@@ -10,7 +10,8 @@ Lane: cross-domain (no spec.md — TR fail-closed default)
 
 ## Phase 1 — lock-free TS `atomicGitConfig` (RED → GREEN)
 - [ ] 1.1 RED: create `apps/web-platform/test/git-config-atomic.test.ts` (vitest node project, `test/**/*.test.ts`); fixtures modeled on `test/worktree-config-seed.test.ts`. Cases: clean-write; other-keys-survive (cp-first invariant); pre-existing `config.lock` non-blocking + not-deleted; non-regular target refused (no throw).
-- [ ] 1.2 GREEN: create `apps/web-platform/server/git-config-atomic.ts` exporting `atomicGitConfig(cwd, args, opts?)` — resolve `.git/config`, `cp -p` → same-dir temp, `git config --file <tmp> <args>`, defensive non-regular-target check, `renameSync(tmp, config)`. Best-effort, never throws; log via `createChildLogger("git-config-atomic")`. NO stdout `SOLEUR_*` sentinels.
+- [ ] 1.2 GREEN: create `apps/web-platform/server/git-config-atomic.ts` exporting `atomicGitConfig(cwd, args, opts?)` — resolve `.git/config`, `cp -p` → same-dir temp, `git config --file <tmp> <args>`, defensive non-regular-target check → `reportSilentFallback(...)` CAPTURED Sentry event + error log (NOT a bare breadcrumb, per `cq-silent-fallback-must-mirror-to-sentry`), `renameSync(tmp, config)`. Best-effort, never throws; log via `createChildLogger("git-config-atomic")`. NO stdout `SOLEUR_*` sentinels. Module doc-comment: concurrency safety = synchronous + single-worker-per-container (NOT "lock-free"); no Mutex (multi-process/async out of scope — mirror `workspace-permission-lock.ts:1–10`).
+  - Test also asserts the masked-target branch invokes `reportSilentFallback` (spy/mock).
 
 ## Phase 2 — Route host-side writes through the helper
 - [ ] 2.1 Replace the two raw `execFileSync("git",["config","user.name"/"user.email",…])` at workspace.ts:236/246 with `atomicGitConfig(workspacePath, …)`; keep the outer try/catch→log.warn.

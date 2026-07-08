@@ -12,6 +12,23 @@ adr: [ADR-099 (amend), ADR-081 (coherence consolidation)]
 
 # chore: git-surface / config.lock hardening
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-08
+**Gates passed:** 4.4 Precedent-Diff (atomic-write pattern, side-by-side added), 4.6 User-Brand Impact (threshold none + scope-out), 4.7 Observability (5-field, `logs` added), 4.8 PAT-shape (clean), 4.9 UI-wireframe (n/a — no UI), 4.55 Downtime (no trigger).
+**Reviewers:** scoped-advisor (fable), architecture-strategist, code-simplicity-reviewer, silent-failure-hunter, verify-the-negative pass.
+
+### Key improvements applied
+1. **Writer primitive corrected** (advisor): sweep-and-write → **cp-p + temp + `git config --file` + `renameSync`** (lock-free by rename atomicity; `cp -p` first prevents dropping other keys). Precedent-diff vs `workspace-permission-lock.ts` + bash `atomic_git_config` added.
+2. **Silent-failure fix** (silent-failure-hunter): masked-target branch now emits a **captured** `reportSilentFallback` Sentry event, not a droppable breadcrumb (`cq-silent-fallback-must-mirror-to-sentry`); AC3 asserts it.
+3. **Concurrency rationale corrected** (architecture): safety is synchronous + single-worker-per-container, NOT "lock-free ⇒ safe under >1 caller"; module doc-comment mirrors `workspace-permission-lock.ts`'s multi-process-out-of-scope caveat.
+4. **Scope tightened**: dropped the manufactured `seedWorktreeConfig` 2nd-caller routing (simplicity + architecture); gate default set to **accept-the-caveat** (lower-risk close per advisor); AC4 asserts the caveat sentence.
+
+### New considerations discovered
+- **Third raw identity writer**: `push-branch.ts:101/105` sets the intentional agent/bot author — same defense-in-depth class, **scoped OUT** (not the owner seed, not ADR-099-named) as a clean same-helper follow-up.
+- **#5934 mask-scope was already answered** (single-path, ADR-081 2026-07-05 forensics) — deliverable narrows to docs consolidation.
+- **Open Taste decisions** (D1 gate resolve-vs-caveat, D2 keep-helper-vs-collapse) recorded in `decision-challenges.md`; both defaults preserve operator direction; architecture verdict "ship-ready."
+
 ## Overview
 
 Bundle two pre-audited, low-severity git-surface items into one hardening PR. Both are already
@@ -29,9 +46,10 @@ this PR *executes* those prescriptions and closes the two latent items out.
      seed). Atomic and lock-independent **by construction** — no stale-lock sweep, no TOCTOU.
   2. `.claude/hooks/prod-write-defer-gate.sh:112` — `resolve_operator_email`'s
      `git config --global --get user.email` fallback. `--global` is the **bot** identity on the
-     non-bare Concierge surface (authority inversion). Resolve via the corpus-standard **bot-shape
-     discriminator** so a `[bot]`-shaped value is never logged as the operator; fall through to
-     `unknown@local`.
+     non-bare Concierge surface (authority inversion). ADR-099 / the ARGUMENTS offer *"resolve OR
+     accept the caveat."* **Default = accept-the-caveat** (fix the misleading comment + document the
+     inversion; the path is audit-log-only and reached only under a double-unset). Active-fix
+     alternative = a bot-shape discriminator applied to both scopes. See Phase 3 + `decision-challenges.md`.
 - **#5934 (docs, `Ref` — stays OPEN)** — the durable root-cause fix (stop the Concierge sandbox
   masking `.git/config.lock`) lives in **Concierge sandbox mount/masking policy, NOT this repo**, so
   no code fix can land here. Its re-evaluation criterion — *single-path vs `*.lock` glob mask* — was
@@ -50,7 +68,7 @@ time.
 | Premise (from ARGUMENTS / issue bodies) | Reality on `origin/main` (verified) | Plan response |
 |---|---|---|
 | #5934 re-eval task = "probe/document mask scope (single-path vs glob)" | **Already answered: single-path.** Live `findmnt -T .git/config.lock` → `tmpfs[/null]` per-path bind-mount; `touch .git/config.soleur-probe.lock` succeeded (2026-07-05 learning; ADR-081 CORRECTION note L8–27). | Deliverable narrows from *probe* → *promote/consolidate* the confirmed finding + update #5934 status. No new forensic probe needed. |
-| "route workspace.ts writes through `atomic_git_config`" | `atomic_git_config` is **bash-only** (`worktree-manager.sh`); workspace.ts is host-side **TS**. No TS git-config writer exists. | Build a **lock-free TS `atomicGitConfig`** (cp-p → temp → `git config --file <tmp>` → `rename`), modeled on the blessed TS atomic-rename precedent `workspace-permission-lock.ts:11–26`. Rename-based (not sweep-based) so it is correct under >1 caller — scoped-advisor (fable) flagged that sweep+native reintroduces a TOCTOU and that adding `seedWorktreeConfig` as a 2nd caller would falsify a "single-writer" premise. NOT a shell-out to the plugin bash script. |
+| "route workspace.ts writes through `atomic_git_config`" | `atomic_git_config` is **bash-only** (`worktree-manager.sh`); workspace.ts is host-side **TS**. No TS git-config writer exists. Native `git config` is ALREADY atomic host-side (writes `config.lock`→rename) and the surface is unmasked — so the writer's genuine marginal value is narrow (see Sharp Edges "honest value"). | Build a **rename-based TS `atomicGitConfig`** (cp-p → temp → `git config --file <tmp>` → `rename`), modeled on `workspace-permission-lock.ts:11–26`. Rename-based (not sweep-based) — advisor flagged sweep reintroduces a TOCTOU / can delete a live lock. Concurrency safety comes from **synchronous + single-worker-per-container**, NOT "lock-free" (architecture-review correction). NOT a shell-out to the plugin bash script. |
 | "route the identity write through `atomic_git_config`" (naive reading) | **ADR-081 Alternative (v) EXPLICITLY REJECTED** routing the *in-sandbox identity OVERRIDE* (`ensure_worktree_identity`, bash) through `atomic_git_config` — a "successful" write there overwrites the host-seeded owner with the bot. | This PR touches only the **host-side owner SEED** (workspace.ts), which *establishes* the correct identity — a different, safe surface (ADR-099 §latent). Do **NOT** touch `ensure_worktree_identity`. See Sharp Edges. |
 | gate fix = "prefer `--local` on Concierge" (naive reading) | Blanket "respect local" **re-opens #2815** (bare-dev repos carry an inherited `[bot]` local; two review agents caught this on #6184). | Use the **bot-shape discriminator** (mirror shipped `ensure_worktree_identity` `_identity_is_bot`), not a scope flip. |
 | ADR-099 / ADR-081 already assert "C4 impact: none" | Confirmed by reading all three `.c4` files (see §Architecture Decision). | Assert no-C4-impact citing the enumeration; no `.c4` edit. |
@@ -92,13 +110,27 @@ already flows to `.claude/logs/approvals.jsonl`; this change makes that audit va
        If `.git/config` is absent, start the temp empty.
     3. Edit the temp with git's own INI writer: `git config --file <tmp> <args…>`.
     4. **Defensive masked-TARGET pre-check** (`statSync(config).isCharacterDevice()` / non-regular →
-       must never occur host-side; if it does, log a structured `error` and abort WITHOUT the rename —
-       best-effort, never throws). Then `renameSync(tmp, config)` — POSIX-atomic, never touches
+       must never occur host-side; if it does, **fail LOUD**: call `reportSilentFallback(err, { feature:
+       "git-config-atomic", op: "masked-target", extra: { config } })` from `@/server/observability`
+       (a CAPTURED Sentry event, per `cq-silent-fallback-must-mirror-to-sentry` — NOT a bare breadcrumb,
+       which drops if no event is captured) PLUS an `error` log, then abort WITHOUT the rename.
+       Best-effort, never throws.) Then `renameSync(tmp, config)` — POSIX-atomic, never touches
        `config.lock`.
   - Best-effort semantics: **never throws** (preserves workspace.ts's current non-stranding behavior);
-    a failure cleans up the temp and logs.
-  - Structured logging via `createChildLogger("git-config-atomic")` (→ Better Stack + Sentry
-    breadcrumb) — a **host-side observable** surface, so it does **NOT** emit in-sandbox stdout
+    a failure cleans up the temp and logs. Because the helper never throws, the caller cannot
+    distinguish "seeded" from "masked-target aborted, unseeded" — which is *why* the masked-target
+    branch must own a reliable **captured** Sentry event (the sole loud signal for a workspace that
+    provisioned with an unseeded identity).
+  - **Concurrency contract (mirror `workspace-permission-lock.ts:1–10`):** the helper is safe under its
+    two call sites because it is **synchronous** (`void`/`renameSync`) and the platform is
+    **single-Next.js-worker-per-container** — two calls cannot interleave in the event loop. Atomic
+    `rename(2)` prevents a *torn* write, but does **NOT** serialize a concurrent read-modify-write:
+    multi-process / any future `async` variant that awaits between `cp` and `rename` would inherit a
+    silent lost-update. State this caveat in the module doc-comment; do NOT phrase the safety as
+    "lock-free ⇒ safe under >1 caller" (architecture-review finding — that conflates atomicity with
+    RMW serialization). No in-process `Mutex` is added (out of scope at current single-worker scale).
+  - Structured logging via `createChildLogger("git-config-atomic")` (→ Better Stack) + the captured
+    Sentry event above — a **host-side observable** surface, so it does **NOT** emit in-sandbox stdout
     `SOLEUR_*` sentinels (those are for the blind sandbox scanner; adding one would trip the
     `git-lock-marker-telemetry.ts` drift guard).
   - deepen-plan Phase 4.4 precedent-diff: formalize against `worktree-manager.sh` `atomic_git_config`
@@ -117,16 +149,24 @@ already flows to `.claude/logs/approvals.jsonl`; this change makes that audit va
   (L236/L246) with `atomicGitConfig(workspacePath, ["config", "user.name", userName])` /
   `["config", "user.email", userEmail]`, keeping the existing outer try/catch→`log.warn` (the helper
   is best-effort but the call site stays defensive).
-- **Consistency (in-scope, small — clean now that the helper is rename-based):** route
-  `seedWorktreeConfig`'s writes in `worktree-config-seed.ts` (`--unset-all extensions.worktreeConfig`
-  + `core.repositoryformatversion 0`) through `atomicGitConfig` too — the paired host-side mutator on
-  the same surface. Safe under the two call sites precisely because the writer is lock-free by
-  construction (the advisor's caveat about a sweep-based helper + 2 callers does not apply). Its
-  `--get` **read** stays a raw `execFileSync` (reads never take the lock).
-- **No test-shape edits expected:** `test/workspace.test.ts` and `test/worktree-config-seed.test.ts`
-  assert config **outcomes** via `git config --get` reads (verified at plan time), not the write
-  `execFileSync` argv — routing writes through the helper leaves the resulting config values
-  identical. Adjust only if a specific assertion breaks.
+- **Scope decision — do NOT also route `seedWorktreeConfig` (worktree-config-seed.ts) through the
+  helper.** Both simplicity- and architecture-review flagged this as manufactured scope: it is NOT an
+  ADR-099-named latent site, its writes are already atomic via native `git config` host-side, and
+  adding it purely to have a "second caller" is circular (and the concurrency safety comes from
+  single-worker-synchronous execution, not from the helper). Keep #6191 scoped to the two ADR-named
+  sites. Leaving `seedWorktreeConfig` as-is has zero regression risk.
+- **No test-shape edits expected:** `test/workspace.test.ts` asserts config **outcomes** via
+  `git config --get` reads (verified at plan time), not the write `execFileSync` argv — routing the
+  seed writes through the helper leaves resulting config values identical. Adjust only if a specific
+  assertion breaks.
+- **Enumerated sibling site (scope-out, tracked):** a full `git grep` sweep found a THIRD raw
+  identity writer — `apps/web-platform/server/push-branch.ts:101/105` sets the **agent/bot** author
+  (`"Soleur Agent" / agent@soleur.ai`) before an agent push (try/catch→log.warn). It is the SAME
+  defense-in-depth class (host-side, unmasked, non-stranding) but is **deliberately** a bot-author set
+  on the push path — NOT the owner seed and NOT an ADR-099-named site. **Scoped OUT** to keep #6191
+  tight to the two prescribed sites; routing it through `atomicGitConfig` is a clean same-helper
+  follow-up (note it in the PR body as a known sibling, not folded here). Recorded so the enumeration
+  is explicit, per the "sweep all write sites, don't trust the named list" discipline.
 
 ### Phase 3 — Gate resolver: fix the authority inversion
 ADR-099 §latent offers *"resolve … or accept the caveat."* The ARGUMENTS likewise say
@@ -183,21 +223,21 @@ it to `unknown@local` — trading a known-wrong value for a differently-wrong on
 
 ## Files to Edit
 - `apps/web-platform/server/workspace.ts` — route L236/L246 through `atomicGitConfig`.
-- `apps/web-platform/server/worktree-config-seed.ts` — route seed writes through `atomicGitConfig` (consistency).
 - `.claude/hooks/prod-write-defer-gate.sh` — fix L105–107 comment (accept-caveat default) OR add bot-shape discriminator (active-fix arm).
 - `.claude/hooks/prod-write-defer-gate.test.sh` — new fixture cases **only if** the active-fix arm is chosen.
 - `knowledge-base/project/specs/feat-one-shot-5934-6191-git-surface-hardening/decision-challenges.md` — the gate resolve-vs-caveat Taste decision (for ship to surface).
 - `knowledge-base/engineering/architecture/decisions/ADR-099-git-surface-topology.md` — mark §latent items resolved.
 - `knowledge-base/engineering/architecture/decisions/ADR-081-chardevice-config-lock-substrate-sweep.md` — consolidate single-path finding.
-- (possibly) `apps/web-platform/test/workspace.test.ts`, `test/worktree-config-seed.test.ts` — argv-shape expectation updates.
+- (possibly) `apps/web-platform/test/workspace.test.ts` — only if an outcome assertion breaks (none expected).
+- SCOPE-OUT (not edited here): `apps/web-platform/server/push-branch.ts:101/105` — sibling agent/bot-author writer; noted in PR body as a clean same-helper follow-up.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 - **AC1** `apps/web-platform/server/git-config-atomic.ts` exists and exports `atomicGitConfig`; `grep -c 'export function atomicGitConfig' apps/web-platform/server/git-config-atomic.ts` == 1.
 - **AC2** No raw `git config` identity write remains at the seed site: `grep -nE 'execFileSync\("git", \["config", "user\.(name|email)"' apps/web-platform/server/workspace.ts` returns **0**; the two calls route through `atomicGitConfig` (grep ≥ 2 `atomicGitConfig(` in workspace.ts).
-- **AC3** `apps/web-platform/test/git-config-atomic.test.ts` passes under vitest, covering: clean-write; **other pre-existing config keys survive** the write (cp-first invariant); pre-existing `config.lock` does not block the write; non-regular-target refused-no-throw.
-- **AC4** Gate authority inversion addressed. **If accept-the-caveat (default):** the L105–107 comment documents the non-bare `--global`=bot inversion and cites ADR-099 §latent (`grep -c 'ADR-099' .claude/hooks/prod-write-defer-gate.sh` ≥ 1 near `resolve_operator_email`); `prod-write-defer-gate.test.sh` stays green (behavior unchanged). **If active fix:** the new fixture case (bot-shaped value, env unset) asserts resolved == `unknown@local`; suite exits 0.
+- **AC3** `apps/web-platform/test/git-config-atomic.test.ts` passes under vitest, covering: clean-write; **other pre-existing config keys survive** the write (cp-first invariant); pre-existing `config.lock` does not block the write; non-regular-target refused-no-throw AND that branch invokes `reportSilentFallback` (assert via a spy/mock — the captured-event path is what makes `fail_loud: true` real, per `cq-silent-fallback-must-mirror-to-sentry`).
+- **AC4** Gate authority inversion addressed. **If accept-the-caveat (default):** the L105–107 comment must state PLAINLY that under a double-unset the bot may be recorded as the operator in the audit log (assert the caveat sentence itself, not merely the citation — e.g. `grep -qiE 'bot.*record|record.*bot' .claude/hooks/prod-write-defer-gate.sh` AND `grep -c 'ADR-099' … ≥ 1`), so the documentation cannot regress to a bare cite; `prod-write-defer-gate.test.sh` stays green (behavior unchanged). **If active fix:** the new fixture case (bot-shaped value, env unset) asserts resolved == `unknown@local`; suite exits 0.
 - **AC5** `tsc --noEmit` clean; `vitest run` (the three named test files) green; `bash plugins/soleur/test/worktree-manager-atomic-config.test.sh` green; `test/git-lock-marker-telemetry.test.ts` green (drift guard — no new sentinels).
 - **AC6** ADR-099 §Known latent surfaces marks **both** items resolved (grep for `resolved` + `#6191` in the section). ADR-081 has a single consolidated single-path statement (no contradiction between candidate (a) and the correction).
 - **AC7** PR body uses `Closes #6191` and `Ref #5934` (NOT `Closes #5934` — durable fix not in this repo; soak not due until 2026-07-14).
@@ -215,15 +255,18 @@ liveness_signal:
   alert_target: none (defense-in-depth; existing provision-path health already covered)
   configured_in: apps/web-platform/server/git-config-atomic.ts (createChildLogger "git-config-atomic")
 error_reporting:
-  destination: server logger → Better Stack + Sentry breadcrumb (host-side, observable — NOT a blind sandbox surface)
-  fail_loud: true (non-regular/masked lock host-side → error log; best-effort, never throws)
+  destination: server logger → Better Stack + a CAPTURED Sentry event via reportSilentFallback (host-side, observable — NOT a blind sandbox surface; NOT a bare breadcrumb)
+  fail_loud: true (non-regular/masked target host-side → reportSilentFallback captured event + error log; best-effort, never throws — earned by a captured event, not a breadcrumb)
 failure_modes:
   - mode: NON-REGULAR (masked) config TARGET host-side (should never occur — real anomaly)
-    detection: git-config-atomic error log (Better Stack + Sentry breadcrumb); rename aborted
-    alert_route: Sentry breadcrumb; existing provision-error surface
+    detection: reportSilentFallback CAPTURED Sentry event + error log (Better Stack); rename aborted
+    alert_route: Sentry (captured event); existing provision-error surface
   - mode: cp/temp-write/rename fails (disk, perms)
     detection: git-config-atomic warn/error log + existing workspace.ts try/catch → log.warn
     alert_route: none (non-stranding; temp cleaned up; falls through to today's behavior)
+logs:
+  where: server logger (`createChildLogger("git-config-atomic")`) → Better Stack; reportSilentFallback captured Sentry event on the masked-target error path. Gate path uses existing `.claude/logs/approvals.jsonl` (1y TTL, unchanged).
+  retention: Better Stack per existing platform retention; approvals.jsonl 1-year TTL via `rotate_if_needed` (unchanged by this PR).
 discoverability_test:
   command: "cd apps/web-platform && ./node_modules/.bin/vitest run test/git-config-atomic.test.ts   # asserts key-preservation + lock-independence + refuse-no-throw (no ssh)"
   expected_output: "4 passed — clean-write, other-keys-survive, pre-existing-lock-non-blocking, non-regular-target refused (no throw)"
@@ -284,6 +327,25 @@ change. No gate invocation required.
 (`workspace.ts`, `prod-write-defer-gate.sh`, `worktree-config-seed.ts`, `ADR-099`, `ADR-081`,
 `git-config-atomic`) returned zero matches at plan time.
 
+## Precedent-Diff (Phase 4.4 — atomic-write / lock pattern)
+
+The TS `atomicGitConfig` is a pattern-bound behavior (atomic write sequence). Two in-repo precedents;
+the new helper is a deliberate blend:
+
+| Concern | `workspace-permission-lock.ts:106–133` (fs writer) | bash `atomic_git_config` (`worktree-manager.sh:401–500`) | New TS `atomicGitConfig` (this PR) |
+|---|---|---|---|
+| Temp path | `${target}.${pid}.${rand}.tmp` (same dir) | `${dir}/${base}.soleur-tmp.$$` (same dir) | same-dir `${config}.soleur-tmp.${pid}.${uuid}` |
+| Seed temp w/ current content | writes full JSON (owns content) | **`cp -p` original → temp** (preserve mode/owner) | **`cp -p`/`copyFileSync` w/ mode → temp** (must seed — git's `--file` writer starts empty) |
+| Edit mechanism | `writeSync` (hand-serialized JSON) | `git config --file <tmp>` (git INI writer) | `git config --file <tmp>` (git INI writer — cannot hand-serialize INI) |
+| Durability | `fdatasyncSync(fd)` before rename | none (relies on `mv -f`) | **fdatasync not achievable** (git owns the temp fd) — acceptable: matches the bash precedent, and a crash before our rename leaves the OLD config intact (rename atomic, temp discarded = safe failure) |
+| Atomic replace | `renameSync(tmp, target)` | `mv -f` | `renameSync(tmp, config)` (Node, POSIX-atomic) |
+| Cleanup on failure | best-effort `unlinkSync(tmp)` | `rm -f tmp tmp.lock` | best-effort `unlinkSync(tmp)` |
+| Masked-target guard | n/a (settings.json unmasked) | `_config_target_masked` pre-check (blind sandbox) | ONE defensive non-regular-target check (host-side; should never fire) |
+
+Novelty flagged for reviewers: the fdatasync omission (git owns the temp fd) is the one divergence
+from `workspace-permission-lock.ts`; justified by the safe-failure analysis above and the bash
+precedent's own omission.
+
 ## Risks & Sharp Edges
 
 - **DO NOT touch `ensure_worktree_identity`.** ADR-081 Alternative (v) *explicitly rejected* routing
@@ -294,8 +356,15 @@ change. No gate invocation required.
 - **Gate fix must be bot-shape, not scope-flip.** Blanket "prefer `--local`" re-opens #2815 (bare-dev
   repos carry an inherited `[bot]` local identity). The corpus-correct fix is the bot-shape
   discriminator, mirroring the shipped `ensure_worktree_identity`.
-- **Proportionality + primitive choice.** The TS `atomicGitConfig` is defense-in-depth on an
-  unmasked, non-stranding host surface — but use the **rename-based** primitive (cp-p → temp →
+- **Honest marginal value (state it in the PR body).** Both simplicity- and architecture-review noted
+  that on the `workspace.ts` surface specifically the writer removes a failure mode that barely exists:
+  native `git config` is ALREADY atomic host-side (`config.lock`→rename) and the surface is unmasked,
+  single-writer, already `try/catch→log.warn`. The writer's genuine value is: (a) executing the
+  ADR-099 §latent prescription, (b) establishing a reusable TS primitive, and (c) immunity to a *stale
+  or masked* `config.lock` (native `git config` fails EEXIST on a pre-existing lock; the temp+rename
+  path never touches it). This is real but small — a defense-in-depth appetite, not a correctness
+  requirement. **A reviewer may legitimately prefer the comment-only close** (see decision-challenges D2).
+- **Proportionality + primitive choice.** Use the **rename-based** primitive (cp-p → temp →
   `git config --file` → `renameSync`), NOT a stale-lock *sweep*. Scoped-advisor (fable) flagged that a
   sweep can delete a *live* lock and reintroduces a TOCTOU, and that "single-writer" is falsified the
   moment `seedWorktreeConfig` becomes a 2nd caller. Rename is lock-free by construction and is *less*
