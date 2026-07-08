@@ -41,7 +41,7 @@ Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human s
 1. **Audit** — see every finding (no silent green; all 5 checks always enumerated):
 
    ```bash
-   bash plugins/soleur/skills/model-launch-review/scripts/audit-models.sh
+   bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/model-launch-review/scripts/audit-models.sh
    ```
 
 2. **Resolve the current landscape from authoritative sources** — never memory. Read the
@@ -53,7 +53,7 @@ Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human s
 3. **Auto-fix** model-ID swaps (mechanical; allowlist + deletion guard; never `git add -A`):
 
    ```bash
-   bash plugins/soleur/skills/model-launch-review/scripts/audit-models.sh --fix
+   bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/model-launch-review/scripts/audit-models.sh --fix
    ```
 
    Then run the suite — config ID swaps red the coupled test fixtures; update them in the

@@ -56,14 +56,14 @@ alone.
 Scan a file:
 
 ```bash
-bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < path/to/SKILL.md
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh < path/to/SKILL.md
 ```
 
 Scan stdin content (used by `agent-finder` post-fetch / `skill-creator` post-scaffold
 integrations):
 
 ```bash
-echo "$skill_md_content" | bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
+echo "$skill_md_content" | bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh
 ```
 
 Output: markdown findings table on stdout, mandatory advisory disclaimer footer
