@@ -170,6 +170,53 @@ mitigations un-live. Both are structural, not one-off:
   is a `betteruptime_outgoing_webhook` forward or a Responder-tier upgrade (expense-gated, out of
   scope). Status stays **Adopting**.
 
+### Disk-full root cause + blind-host observability (amendment 2026-07-08, #6240/#6244)
+
+The 2026-07-08 17:20 UTC `registry-host-replace` (fresh host, PRESERVED 30 GB volume) did **not**
+fix the crane 500-on-blob-upload; the disk heartbeat still never pinged. A disk-full condition that
+survives a fresh host on a preserved volume is a **filesystem**, not a host, fault: the on-boot
+`resize2fs` was wrapped in `|| true`, so it **silently failed** and the ext4 fs on `/var/lib/zot`
+never grew to fill the 30 GB block device — it filled, zot 500'd every push with `ENOSPC`, and the
+absence-based heartbeat (pings only while `<85%`) never fired. The prior post-mortem read the Hetzner
+volume API ("~30 GB") as "not full", but that API reports the **block-device** size, never the
+**filesystem** size, and there was no `df` observability to tell them apart. Three coupled remedies:
+
+- **Boot isolation-guard cardinality 2 → 3.** The `cloud-init-registry.yml` self-check now admits a
+  third secret **`BETTERSTACK_LOGS_TOKEN`** by name (asserting `n_total == 3 && n_admitted == 3` over
+  the exact set `{ZOT_PULL_TOKEN, ZOT_PUSH_TOKEN, BETTERSTACK_LOGS_TOKEN}`), mirroring the ADR-100
+  `cloud-init-inngest.yml` precedent. Deleting the logs token post-cutover FATALs the bootstrap (loud
+  fail > silent observability blind spot); the check keys on the NAME, so value rotation is safe. The
+  token is provisioned by `doppler_secret.registry_betterstack_logs_token` (isolated `soleur-registry/prd`,
+  exact mirror of `inngest-betterstack-token.tf`, value from the no-default `var.betterstack_logs_token`)
+  and **MUST ride the SAME `registry-host-replace` dispatch** as the host replace — so the dispatch
+  `-target` set + the destroy-guard allow-set both grew 5 → 6 to include it (a 2-secret config now
+  FATALs the boot, a worse outage — the ordering is load-bearing).
+
+- **Blind-host disk observability (#6244).** The deny-all-ingress, no-SSH registry host now
+  self-reports its disk state as ONE structured **`SOLEUR_ZOT_DISK`** event
+  (`pcent`, `fs_size_gb`, `block_size_gb`, `resize_ok`, `zot_restarts`, `ping_rc`) to the **existing**
+  isolated Better Stack Logs source **2457081** (reused via the same token + region-bound ingest URL
+  `s2457081.eu-fsn-3` that `vector.toml` ships to — no new source), queryable via
+  `scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK` with NO SSH. The `#6244`-suggested
+  journald-`logger` interim was rejected (journald needs SSH to read — `hr-no-ssh-fallback-in-runbooks`).
+  The event's fields discriminate all three competing root causes in one line: fs-not-grown
+  (`resize_ok=false` OR `fs_size_gb ≪ block_size_gb`), gc-too-slow (`resize_ok=true`, `fs≈30`,
+  `pcent≥85`), and zot-mid-write-crash (`pcent<85`, `fs≈30`, `zot_restarts>0`). Delivered by folding
+  the report into `zot-disk-heartbeat.sh` under a `doppler run --project soleur-registry --config prd`
+  cron wrapper (token injected at run time, never baked into user_data). This adds the
+  `zotRegistry → betterstack` edge in `model.c4`.
+
+- **resize2fs fail-loud + gc/retention remediation (#6240).** The resize path drops `|| true`
+  (silent-swallow), waits for the volume device node (attach race), re-ensures `e2fsprogs` (the
+  cloud-init `packages:` stage is non-fatal), asserts the ext4-on-raw-device (no-partition) invariant,
+  and captures `df` before/after + the resize2fs exit code into `/var/lib/zot/.resize-result` for the
+  reporter to ship. A genuine resize failure is LOUD in telemetry (`resize_ok=false`) but does NOT
+  wedge the boot — zot still launches on the existing fs so the host stays reachable to self-report
+  (fail-loud, not fail-dark). `config.json` gc/retention tightened `gcInterval` 24h → 1h and
+  `retention.delay` 24h → 2h (keep-set + `gcDelay` unchanged) so a filling store reclaims within ~1h;
+  no on-boot gc trigger is issued (zot v2.1.2 exposes no sanctioned on-demand gc endpoint —
+  `hr-verify-repo-capability-claim`). Status stays **Adopting**.
+
 ## Alternatives Considered
 
 The 7 registry-choice options are tabled above. The **apply-path** alternatives (per-PR `-target`
