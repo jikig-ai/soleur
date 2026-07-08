@@ -108,3 +108,46 @@ The container view gains a new data-store and a new external data subject (see t
 - **New external actor** `betaContact = actor "Beta Tester / Prospect" { #external }` — the third-party data subject whose conversation PII the operator captures (mirrors `emailSender`; added to **both** `context` and `containers` views, as `emailSender` is).
 - **New relationships:** `engine -> crmStore` (`crm_*` MCP tools read/write via RPC — agent-native parity, the true mirror of `engine -> operationalInbox`); `betaContact -> founder` (PII origin). **No `founder -> crmStore` edge** — no `founder -> <database>` edge exists in the model, and the MVP has no UI/API surface, so the only real `crmStore` access path is the agent; a `webapp -> crmStore` edge is added only when the deferred UI/API phase lands.
 - Validated by `c4-code-syntax.test.ts` + `c4-render.test.ts` (a `view include` on an undefined element fails there).
+
+## UI phase (read-only) — amendment (#6172, mig 127)
+
+The deferred UI/API phase referenced above has landed as a **read-only** surface at
+`/dashboard/crm` (pipeline board + conversion funnel + contact-detail drawer). Editing
+stays conversational via the agent (`crm_*` MCP tools) — no CRUD/drag-to-stage UI (the
+visual surface's marginal value over the shipped agent capability is *scan/overview*, not
+editing; a write UI would duplicate agent capability for an audience of one).
+
+**Access path — same boundary, no new authz.** The browser cannot call in-process MCP
+tools, so the UI gets its own thin `app/api/crm/*` **GET** routes that reuse the *exact*
+owner-scoped RLS boundary: reads run on the authenticated **SSR cookie client**
+(`createClient()` + `getUser()` — NOT the agent-impersonation `getFreshTenantClient`),
+default-authed (no `PUBLIC_PATHS` entry). This realizes the reserved
+`webapp -> crmStore` edge (now in `model.c4`).
+
+**Owner-read accountability — atomic, fail-closed (mig 127).** An owner reading a
+beta-tester's verbatim notes is a PII re-egress, so it is recorded. A new append-only,
+owner-private `beta_contact_access_log` (same RLS posture as mig 126: SELECT-owner-only,
+no INSERT/UPDATE/DELETE policy, table writes REVOKEd, RESTRICTIVE jti-deny; composite FK
+`(contact_id, user_id) → beta_contacts(id, user_id) ON DELETE CASCADE` so it is swept by
+the existing `crm_erase_contact`) plus the **atomic** `crm_get_contact_detail(p_contact_id)`
+VOLATILE SECURITY DEFINER RPC: it inserts the audit row AND returns
+`{contact, notes, transitions}` jsonb **in one transaction** — fail-closed (no audit row ⇒
+no data). This makes "un-bypassable" an invariant (not a best-effort side-write), makes
+SWR-revalidation duplicate log rows semantically correct (each = a real re-egress), and
+neutralizes future prefetch phantom-reads. On RPC error the drawer renders a loud
+ErrorCard + Retry (never silent, never data-without-audit).
+
+**PII-safe errors (merge-blocking on the routes).** No route forwards raw Postgres
+`error.message`/`details` to the HTTP body or Sentry — each returns a generic semantic
+code and mirrors only `{ op, userId, code }`. Missing/erased/foreign ids return a
+byte-identical `404` (no existence oracle), mirroring the RPC's uniform-42501 posture.
+
+**Compliance deltas (no new legal basis).** Art. 15 (access) is served by the owner's own
+read; Art. 5(2) accountability is now encoded (the access log); Art. 17 (erasure) is
+unchanged — `crm_erase_contact` stays service-role-only and its CASCADE now also sweeps the
+access log. No self-serve erase in v1.
+
+- **Realized relationship:** `webapp -> crmStore` — GET `/api/crm/*` RLS-owner-scoped read
+  routes + the `crm_get_contact_detail` audit RPC. `crmStore` technology string updated to
+  include `beta_contact_access_log` (mig 126 + 127). Still **no `founder -> crmStore`** edge
+  (the founder reaches it through `webapp`).
