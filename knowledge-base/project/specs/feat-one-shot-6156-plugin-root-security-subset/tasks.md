@@ -5,13 +5,13 @@ Lane: single-domain · Threshold: single-user incident (`requires_cpo_signoff: t
 
 ## Phase 1 — Migrate the three sites (redaction gate first)
 
-- [ ] 1.1 `legal-generate/SKILL.md:60` — rewrite `SENTINEL=` to
+- [x] 1.1 `legal-generate/SKILL.md:60` — rewrite `SENTINEL=` to
       `${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh`
       (preserve git-root fallback verbatim).
-- [ ] 1.2 `legal-generate/SKILL.md:55–57` — prose touch-up: describe deployed-root-first resolution
+- [x] 1.2 `legal-generate/SKILL.md:55–57` — prose touch-up: describe deployed-root-first resolution
       (`${CLAUDE_PLUGIN_ROOT}` deployed, git-root fallback for CLI/worktree). Keep the `[[ -r "$SENTINEL" ]]`
       fail-closed guard (line 61) and `bash "$SENTINEL"` (line 62) unchanged.
-- [ ] 1.3 `incident/SKILL.md:217` — rewrite to the **hardened guard block** (mirrors legal-generate for
+- [x] 1.3 `incident/SKILL.md:217` — rewrite to the **hardened guard block** (mirrors legal-generate for
       the identical script; security review S1+S2):
       ```bash
       SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
@@ -21,24 +21,24 @@ Lane: single-domain · Threshold: single-user incident (`requires_cpo_signoff: t
       The `[[ -r ]]` `exit 2` routes through the existing exit-2 "cannot-evaluate → halt" branch (lines
       221–223, unchanged). Do NOT touch `dry-run.sh:31` (`${SKILL_DIR}` self-locating), the line-24
       markdown reference-link, or the repo-root `/scripts/` invocations at line 35 (distinct non-plugin class).
-- [ ] 1.4 `trigger-cron/SKILL.md:40,43,47` — prefix each `trigger.sh` invocation with
+- [x] 1.4 `trigger-cron/SKILL.md:40,43,47` — prefix each `trigger.sh` invocation with
       `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/` (preserve bare `plugins/soleur` anchor, no `bash` prefix).
       Do NOT touch the line-36 markdown reference-link or the line-63 worktree-CWD Sharp Edge.
 
 ## Phase 2 — Guardrail verification (no code-side change)
 
-- [ ] 2.1 `git diff --stat` shows ONLY the three SKILL.md files (no `safe-bash.ts`, no test files).
-- [ ] 2.2 `bash plugins/soleur/skills/incident/test/redact-sentinel.test.sh` — Tests 11a/11b/11c green.
-- [ ] 2.3 `cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-list-carveout-coupling.test.ts` green.
-- [ ] 2.4 `bun test plugins/soleur/test/trigger-cron-allowlist-parity.test.ts` green
+- [x] 2.1 `git diff --stat` shows ONLY the three SKILL.md files (no `safe-bash.ts`, no test files).
+- [x] 2.2 `bash plugins/soleur/skills/incident/test/redact-sentinel.test.sh` — Tests 11a/11b/11c green.
+- [x] 2.3 `cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-list-carveout-coupling.test.ts` green.
+- [x] 2.4 `bun test plugins/soleur/test/trigger-cron-allowlist-parity.test.ts` green
       (adapt to the plugin test entrypoint if `bun test` filter misses; the suite `execFileSync`s `trigger.sh`).
 
 ## Phase 3 — Dual-resolution proof (per site, from a worktree)
 
-- [ ] 3.1 For each of the 3 invocation forms: `unset CLAUDE_PLUGIN_ROOT` → path expands to the
+- [x] 3.1 For each of the 3 invocation forms: `unset CLAUDE_PLUGIN_ROOT` → path expands to the
       git-root/`plugins/soleur` fallback and `[[ -r <path> ]]` is true.
-- [ ] 3.2 For each form: `CLAUDE_PLUGIN_ROOT=/app/shared/plugins/soleur` → path expands to the deployed copy.
-- [ ] 3.3 Record both expansions in the PR body / work log.
+- [x] 3.2 For each form: `CLAUDE_PLUGIN_ROOT=/app/shared/plugins/soleur` → path expands to the deployed copy.
+- [x] 3.3 Record both expansions in the PR body / work log.
 
 ## Phase 4 — Ship prep
 
