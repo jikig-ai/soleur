@@ -40,7 +40,7 @@
 --   in-migration pg_cron (the processed_resend_events precedent, mig 102:452-468).
 --
 -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f)); LIA per
---   knowledge-base/legal/2026-07-07-beta-crm-legitimate-interest-assessment.md;
+--   knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md;
 --   PA-30 in knowledge-base/legal/article-30-register.md. Involuntary
 --   third-party data subject -> Art. 14 notice (see LIA).
 --
@@ -71,13 +71,13 @@ END $$;
 CREATE TABLE IF NOT EXISTS public.beta_contacts (
   id                   uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id              uuid         NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-  -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA 2026-07-07-beta-crm-legitimate-interest-assessment.md)
+  -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA legitimate-interest-assessments/2026-07-07-beta-crm-lia.md)
   name                 text         NULL,
-  -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA 2026-07-07-beta-crm-legitimate-interest-assessment.md)
+  -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA legitimate-interest-assessments/2026-07-07-beta-crm-lia.md)
   company              text         NULL,
-  -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA 2026-07-07-beta-crm-legitimate-interest-assessment.md)
+  -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA legitimate-interest-assessments/2026-07-07-beta-crm-lia.md)
   role                 text         NULL,
-  -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA 2026-07-07-beta-crm-legitimate-interest-assessment.md)
+  -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA legitimate-interest-assessments/2026-07-07-beta-crm-lia.md)
   source               text         NULL,
   stage                text         NOT NULL DEFAULT 'new'
                          CHECK (stage IN ('new', 'contacted', 'qualified', 'evaluating', 'committed', 'closed_won', 'closed_lost')),
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS public.interview_notes (
   id           uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
   contact_id   uuid         NOT NULL,
   user_id      uuid         NOT NULL,
-  -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA 2026-07-07-beta-crm-legitimate-interest-assessment.md)
+  -- LAWFUL_BASIS: legitimate-interest (Art. 6(1)(f); LIA legitimate-interest-assessments/2026-07-07-beta-crm-lia.md)
   body         text         NOT NULL,
   -- cardinality(), NOT array_length: array_length('{}',1) is NULL (a CHECK
   -- treats NULL as satisfied, so an empty-lens note would pass);

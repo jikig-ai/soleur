@@ -187,6 +187,19 @@ For the durable, per-turn plain-language **turn summary** persisted by the Conci
 
 <!-- End: Concierge turn summaries -->
 
+### 3.13 Owner-private beta-tester / prospect CRM (agent-native capture store)
+
+For the operator's **owner-private** store of beta-tester / prospect conversations (Privacy Policy Section 4.7; Data Protection Disclosure Section 2.3(ad); Article 30 register Processing Activity 30; migration 126, ADR-102). Here **the Web Platform user is the controller and Jikigai is the processor** for the third-party personal data recorded:
+
+- **What it is:** three owner-only tables (RLS keyed on the user's `user_id`) holding a contact head (`beta_contacts`), dated dual-lens conversation notes (`interview_notes`: verbatim `body` + `lens[]` in `{sales, product}`), and an append-only stage-transition history. Written/read on the operator's behalf by the `cro`/`cpo` agents via `auth.uid()`-pinned functions; agent write tools are **human-gated**.
+- **Data subjects:** the beta testers / prospects — **involuntary, third-party data subjects** → **Article 14 applies**. **No special-category (Article 9) data is solicited.**
+- **Lawful basis:** **Legitimate interest** (Article 6(1)(f) GDPR) — full LIA at `knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md`: routine business-relationship management; owner-only RLS + human-gated writes as the decisive safeguards; low, bounded impact within a professional relationship's reasonable expectation.
+- **Recipients / transfers:** record content is transmitted to **Anthropic (US)** for `cro`/`cpo` reasoning — a Chapter V transfer under the existing Anthropic DPA (SCCs Modules 2+3; Section 6). No new sub-processor.
+- **Retention and erasure:** 24 months from `last_contact` via in-database `pg_cron`. **Article 17:** whole-store deletion by `ON DELETE CASCADE` on account deletion; an individual third party's erasure via the auditable service-role-only `crm_erase_contact` function. Included in the owner's Article 15 + 20 export.
+- **Article 22:** no automated decision-making producing legal or similarly significant effects.
+
+<!-- End: Beta-tester / prospect CRM -->
+
 ## 4. Categories of Personal Data
 
 ### 4.1 Data NOT Collected by Soleur
