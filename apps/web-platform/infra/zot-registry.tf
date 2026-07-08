@@ -69,6 +69,7 @@ locals {
   # new source is provisioned. NON-secret host routing (like disk_heartbeat_url) → baked into
   # user_data via templatefile; the token is the only secret and stays in the isolated Doppler
   # config, so the boot isolation self-check cardinality is 3 (2 ZOT + 1 logs token), NOT 4.
+  # keep in sync with vector.toml [sinks.betterstack].uri (same source 2457081 / eu-fsn-3 endpoint).
   betterstack_logs_ingest_url = "https://s2457081.eu-fsn-3.betterstackdata.com/"
 }
 
@@ -273,6 +274,13 @@ resource "hcloud_server" "registry" {
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
   # and omitting it preserves a clean replace-to-reprovision path (git-data.tf rationale) —
   # so a zot config change re-applies via cloud-init re-provision (cloud-init is idempotent).
+
+  # #6244: the host does NOT reference doppler_secret.registry_betterstack_logs_token directly
+  # (the cron reads it at run time via `doppler run`), so there is no IMPLICIT dependency edge.
+  # The amended 3-secret boot guard FATALs (zot never launches) if that secret is not already in
+  # the isolated config when this host boots — make the ordering DETERMINISTIC (not latency-lucky
+  # on the registry-host-replace apply) by declaring it explicitly.
+  depends_on = [doppler_secret.registry_betterstack_logs_token]
 
   labels = {
     app = "soleur-web-platform"

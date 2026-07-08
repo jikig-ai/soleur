@@ -148,8 +148,13 @@ write_files:
       PCENT="$${USE:-}"; [ -n "$PCENT" ] || PCENT=-1
       FS_GB=$(df -B1G --output=size /var/lib/zot 2>/dev/null | tail -1 | tr -dc '0-9'); [ -n "$FS_GB" ] || FS_GB=0
       # Persisted on-boot resize breadcrumb (cloud-init resize block): resize_ok + block_size_gb.
+      # PARSE-ONLY (grep|cut) — never `.`-source it: a crafted file at the zot volume root would
+      # otherwise execute as root. Values are simple tokens (bool / integer), no quoting needed.
       resize_ok=unknown; block_size_gb=0
-      [ -r /var/lib/zot/.resize-result ] && . /var/lib/zot/.resize-result 2>/dev/null || true
+      if [ -r /var/lib/zot/.resize-result ]; then
+        v=$(grep -E '^resize_ok=' /var/lib/zot/.resize-result | head -1 | cut -d= -f2); [ -n "$v" ] && resize_ok=$v
+        v=$(grep -E '^block_size_gb=' /var/lib/zot/.resize-result | head -1 | cut -d= -f2); [ -n "$v" ] && block_size_gb=$v
+      fi
       # zot container restart count — >0 flags the mid-write-crash hypothesis; -1 = not found.
       ZOT_RESTARTS=$(docker inspect -f '{{.RestartCount}}' zot 2>/dev/null); [ -n "$ZOT_RESTARTS" ] || ZOT_RESTARTS=-1
       LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC host=$(hostname)"
@@ -188,8 +193,9 @@ runcmd:
   # host on the preserved volume. This block: (1) waits for the volume device node (attach
   # race the bare `mount` hid); (2) re-ensures e2fsprogs (packages: stage is non-fatal); (3)
   # asserts the ext4-on-raw-device (no-partition) invariant so `resize2fs <device>` is correct
-  # and growpart is NOT used; (4) captures df before/after + the resize2fs exit code and
-  # PERSISTS them to /var/lib/zot/.resize-result for the Phase-1 SOLEUR_ZOT_DISK reporter; (5)
+  # and growpart is NOT used; (4) PERSISTS the boot resize record to /var/lib/zot/.resize-result —
+  # the Phase-1 SOLEUR_ZOT_DISK reporter reads resize_ok + block_size_gb from it (fs_size_gb it
+  # recomputes live; df_before_gb/df_after_gb are an on-host forensic breadcrumb, not shipped); (5)
   # is LOUD in telemetry on failure (resize_ok=false) but does NOT wedge the boot — zot still
   # launches on the existing fs so the host stays reachable to self-report (fail-loud, NOT
   # fail-dark). A persistent fs_size_gb << block_size_gb is the #6240 smoking gun.
