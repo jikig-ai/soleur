@@ -146,15 +146,18 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           PRIOR_FAIL_MODE: ${{ steps.probe.outputs.failure_mode }}
           PRIOR_FAIL_DETAIL: ${{ steps.probe.outputs.failure_detail }}
-          # Inngest's OWN client-connection cap (--postgres-max-open-conns,
-          # inngest-bootstrap.sh:354, #5559). This is the ceiling on
-          # inngest-attributable sessions and the correct denominator for the
-          # leading indicator — NOT the pooler's default_pool_size (which is the
-          # server-side fan-in, dominated by Supabase infra baseline; counting
-          # total pg_stat_activity against it false-fires — #5563 follow-up, see
-          # the filtered query below). Decoupled from the default_pool_size 30→15
-          # revert by design. Bump this only if --postgres-max-open-conns changes.
-          INNGEST_CLIENT_CAP: '10'
+          # Inngest's worst-case TOTAL client-connection footprint (#6258, ADR-105).
+          # --postgres-max-open-conns is PER-POOL, not total: inngest opens ~P separate
+          # Postgres pools (queue/state/history/api), each capped independently at 5, so
+          # worst-case total = P × 5 ≤ 20 for P ≤ 4. This is the ceiling on
+          # inngest-attributable sessions and the correct denominator for the leading
+          # indicator — NOT the pooler's default_pool_size (server-side fan-in, dominated
+          # by Supabase infra baseline; counting total pg_stat_activity against it
+          # false-fires — #5563 follow-up, see the filtered query below). Decoupled from
+          # the #5562 default_pool_size 30→15 revert by design (that revert is SUPERSEDED —
+          # default_pool_size stays 30; see ADR-105). Bump this only if the per-pool cap or
+          # the confirmed pool count P changes (post-#6258 Phase-1 measurement confirms P).
+          INNGEST_CLIENT_CAP: '20'
         run: |
           set -uo pipefail
           # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from the probe step above)
@@ -217,8 +220,9 @@ jobs:
                 # Count ONLY inngest-attributable client backends: role 'postgres'
                 # (inngest connects through the session pooler as postgres.<ref>),
                 # excluding the pooler's own warm connections (app 'Supavisor*') and
-                # the mgmt-api probe. Compared against inngest's own client cap (10,
-                # --postgres-max-open-conns), NOT total pg_stat_activity vs
+                # the mgmt-api probe. Compared against inngest's worst-case TOTAL client
+                # footprint (INNGEST_CLIENT_CAP = P × per-pool cap 5 ≤ 20; #6258/ADR-105),
+                # NOT total pg_stat_activity vs
                 # default_pool_size — that total is dominated by Supabase infra
                 # baseline (Supavisor/PostgREST/pg_net/pg_cron/exporter/walsenders)
                 # and false-fires (#5563 follow-up to #5562).
@@ -340,7 +344,7 @@ jobs:
               printf -- '- **Detected at:** %s\n' "$NOW"
               printf -- '- **Run log:** %s\n\n' "$RUN_URL"
               printf '### Do NOT restart inngest-server\n\nA restart re-opens all of inngest'\''s pooler connections at once, churning MORE session connections and DEEPENING `EMAXCONNSESSION`. This issue is intentionally excluded from the auto-restart gate.\n\n'
-              printf '### Remediation (stale-session / client-cap)\n\n1. Read **Detail** above: `pool_pressure` is inngest-attributable client connections vs inngest'\''s own client cap (10); `pool_exhausted` is an actual `EMAXCONNSESSION` from the pooler. The per-backend breakdown is in the run log (`Inngest client backends: …`).\n2. Confirm the client cap holds: inngest-server runs with `--postgres-max-open-conns 10` (#5559, `inngest-bootstrap.sh:354`). If inngest-attributable connections are near 10, inngest is opening more than expected — check for a stuck/looping function holding pooled connections.\n3. If sessions are stale (idle/idle-in-transaction climbing), terminate them via the read-only Management API path (`pg_terminate_backend`) — see the **session-pool pressure/exhaustion** subsection of `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH first).\n4. The leading indicator now tracks inngest'\''s client cap (10), NOT the pooler `default_pool_size` (which is Supabase-infra-dominated) — so this alert is decoupled from the separate #5562 `default_pool_size` 30→15 revert. Refs #5558 #5559.\n'
+              printf '### Remediation (stale-session / client-cap)\n\n1. Read **Detail** above: `pool_pressure` is inngest-attributable client connections vs inngest'\''s worst-case total footprint (INNGEST_CLIENT_CAP = P × per-pool cap 5 ≤ 20); `pool_exhausted` is an actual `EMAXCONNSESSION` from the pooler. The per-backend breakdown is in the run log (`Inngest client backends: …`).\n2. Confirm the cap holds: inngest-server runs with `--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1` (#6258, ADR-105). --postgres-max-open-conns is PER-POOL (not total), so worst-case total is P×5; if inngest-attributable connections approach the cap, inngest is opening more pools than expected — check for a stuck/looping function holding pooled connections.\n3. If sessions are stale (idle/idle-in-transaction climbing), terminate them via the read-only Management API path (`pg_terminate_backend`) — see the **session-pool pressure/exhaustion** subsection of `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH first).\n4. The leading indicator tracks inngest'\''s worst-case total footprint (P × per-pool cap), NOT the pooler `default_pool_size` (which is Supabase-infra-dominated) — so this alert is decoupled from the #5562 `default_pool_size` 30→15 revert (that revert is SUPERSEDED; default_pool_size stays 30 — ADR-105). Refs #6258 #5558.\n'
             } > "$BODY_FILE"
             EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
             if [[ -n "$EXISTING" ]]; then
