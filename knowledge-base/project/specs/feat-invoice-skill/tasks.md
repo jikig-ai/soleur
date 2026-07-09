@@ -50,7 +50,7 @@ plan: knowledge-base/project/plans/2026-07-09-feat-invoice-skill-plan.md
 ## Phase 4 — Verify against Acceptance Criteria
 - [x] 4.1 Walk AC1–AC11 (esp. AC3a livemode hard-stop grep, AC4 allowed-tools scope grep, AC5a idempotency/metadata,
   AC10 hosted-link + no post-finalize abort).
-- [ ] 4.2 /work-time `/soleur:gdpr-gate` against the drafted SKILL.md (CG list).
+- [x] 4.2 /work-time `/soleur:gdpr-gate` against the drafted SKILL.md (CG list).
 - [x] 4.3 Confirm test scenarios (livemode refusal, send-fails-after-finalize no-duplicate, empty account, chase gate).
 
 ## Notes
