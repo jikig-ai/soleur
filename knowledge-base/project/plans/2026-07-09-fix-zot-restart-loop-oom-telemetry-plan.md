@@ -180,6 +180,16 @@ discoverability_test:
 ### Vendor-tier reality check
 Hetzner has no free-tier gate on server types. cx32 ≈ €7.59/mo (verify live catalog via ops-research); cpx31 is pricier with no store-and-serve benefit -> cx32 chosen.
 
+## Downtime & Cutover
+
+**Trigger (deepen-plan Phase 4.55):** the `registry_server_type` cx23→cx32 change is `ForceNew` on `hcloud_server.registry` → the `registry-host-replace` job **destroys + recreates** the host (infra reboot/replace class). The registry itself is briefly offline during the replace + cloud-init + store-scan window.
+
+**Zero-downtime evaluation (defaulted-to):** the change is **zero-downtime for the serving surface**, which is what "single-user incident" protects. The registry is NOT the sole serving path — ADR-096 gives every pull path an **atomic GHCR fallback**: during the replace, host cold-boots and CI zot-mirror pushes fall through to GHCR (non-release-blocking, #6276) and prod `/health` stays 200. The fallback IS the zero-downtime mechanism; no user request is dropped.
+
+**Why not blue-green the registry host itself:** the registry is a **volume-backed singleton** — the ~35 GB store lives on one `hcloud_volume` that cannot attach to two hosts at once, so a fresh-host-alongside cutover cannot share the store. The `registry_host_replace_gate` deliberately preserves that one volume across the `-replace` (re-attach, no re-backfill). The brief registry self-outage is therefore inherent to the sizing change and **accepted** because GHCR fully masks it.
+
+**Residual downtime:** registry-only, bounded to the replace+boot+scan window (~minutes); no serving-surface downtime, no DB-lock class, no in-flight-request drop. No maintenance window / operator sign-off required beyond the standard `registry-host-replace` dispatch — the GHCR fallback removes the user-facing risk. Recovery is proven by the Phase-3 soak (restarts plateau, `zot_anon_mb` bounded).
+
 ## Architecture Decision (ADR/C4)
 
 An architectural decision is touched (host-sizing extension of ADR-096 + adoption of the ADR-062 memory-cap pattern on a new container). Both are **extensions of accepted decisions**, not new/reversed ones — so the deliverable is a minimal amendment + a C4 description correction, in THIS PR (not a deferred issue).
@@ -247,6 +257,22 @@ Not relevant — **Product NONE**. No `## Files to Edit`/`## Files to Create` pa
 ## Open Code-Review Overlap
 
 None — checked open `code-review` issues against every planned file path (`cloud-init-registry.yml`, `zot-registry.tf`, `variables.tf`, `registry-boot-guard.test.sh`, `expenses.md`, `ADR-096`, `model.c4`); zero matches.
+
+## Deepen-Plan Research Insights
+
+**Precedent-diff (Phase 4.4) — memory cap vs ADR-062 `ci-deploy.sh`:** the prescribed form mirrors the precedent verbatim except the justified `--init` drop:
+- `ci-deploy.sh:1566-1567` → `--memory "$PROD_MEMORY_CAP" --memory-swap "$PROD_MEMORY_CAP"`, from `readonly PROD_MEMORY_CAP="${PROD_MEMORY_CAP:-4096m}"` (`:112`, env-overridable const). This plan uses the identical shape with `ZOT_MEMORY_CAP:-7168m`.
+- `ci-deploy.sh:109` comment: "`--memory-swap == --memory` disables swap growth" — the exact rationale in Phase 2.1.
+- `ci-deploy.sh:1335` uses `--init` — but that is a **Node**-container idiom (zombie-reaping a multi-process Node app). zot is a single Go binary that reaps nothing → dropping `--init` (simplicity review) is a *correct divergence* from the precedent, not an omission.
+- `ci-deploy.sh:106` names the OOM-classification telemetry as "the post-merge feedback signal to RAISE `PROD_MEMORY_CAP`" — the same loop this plan's `zot_anon_mb` provides for `ZOT_MEMORY_CAP`.
+
+**cgroup version:** `zot_anon_mb` reads `memory.stat` `anon` under the `docker-<Id>.scope` systemd cgroup (cgroup **v2**, same hierarchy `container-restart-monitor.sh` uses for `memory.events`). If the host is cgroup v1 the field would be `rss`/`total_rss` — /work must confirm cgroup v2 on the cx32 image (Hetzner Ubuntu 22.04+ defaults to v2) and guard `|| =-1` regardless.
+
+**Arch-churn negative confirmed:** `zot-registry.tf:53` `registry_arch = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"` — `cx32` does not start with `cax` → amd64, identical to cx23. No Doppler-arch download/checksum change (the plan's "no cloud-init image-arch churn" claim holds).
+
+## Enhancement Summary
+
+**Deepened:** 2026-07-09. **Gates (deepen-plan):** 4.6 User-Brand Impact PASS (threshold `none` + sensitive-path scope-out), 4.7 Observability PASS (5 fields, no-ssh discoverability), 4.8 PAT-shaped PASS (none), 4.9 UI-wireframe SKIP (no UI surface), **4.55 Downtime & Cutover FIRED** → `## Downtime & Cutover` section added (server_type→host-replace; zero-downtime for the serving surface via GHCR atomic fallback; registry-singleton volume precludes blue-green, brief self-outage accepted + GHCR-masked). **Precedent-diff:** memory cap grounded verbatim against ADR-062 `ci-deploy.sh`; `--init` drop justified. **Plan-review applied:** fable (confirmation-metric → `zot_anon_mb`; dedupe deferred), DHH (AC3/AC14 tightened, mem-field user-challenge recorded), Kieran (single-inspect fold, brace-guard scoping, `CGROUP_ROOT` escaping, `--since "5 min ago"`), simplicity (`--init` dropped, alarm concretize-or-defer).
 
 ## Sharp Edges
 

@@ -21,7 +21,7 @@ Derived from the finalized (post-review) plan. Two slices, ONE PR, ONE immutable
 
 - [ ] 1.1 Add `mem_total_mb` (`MemTotal/1024`) + `mem_used_mb` (`(MemTotal−MemAvailable)/1024`) from `/proc/meminfo` (NOT `free`). `mem_total_mb` doubles as cx32-bump verification. *(User-Challenge on these two fields recorded in `decision-challenges.md` — retained per operator direction.)*
 - [ ] 1.2 Replace the standalone `:170` inspect with ONE inspect for all container fields: `docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}}' zot` (adapted from `container-restart-monitor.sh:118-119`, NOT verbatim). Capture into one var, default whole to sentinels on empty. Emit `zot_restarts`, `state_status`, `oom_killed`, `exit_code`.
-- [ ] 1.2b Add `zot_anon_mb` from the container cgroup `memory.stat` `anon` (bytes → `/1048576`) at `$${CGROUP_ROOT}/system.slice/docker-$${ID}.scope/memory.stat`. Define `CGROUP_ROOT` in the reporter as `$${CGROUP_ROOT:-/sys/fs/cgroup}` (never bare `${CGROUP_ROOT}`). Guard `|| =-1`.
+- [ ] 1.2b Add `zot_anon_mb` from the container cgroup `memory.stat` `anon` (bytes → `/1048576`) at `$${CGROUP_ROOT}/system.slice/docker-$${ID}.scope/memory.stat` (cgroup **v2** — confirm on the cx32 image; Ubuntu 22.04+ defaults to v2). Define `CGROUP_ROOT` in the reporter as `$${CGROUP_ROOT:-/sys/fs/cgroup}` (never bare `${CGROUP_ROOT}`). Guard `|| =-1`.
 - [ ] 1.3 Add `oom_kills_5m` = `journalctl -k --since "5 min ago" 2>/dev/null | grep -ciE 'oom-kill|out of memory'` (`|| =0`).
 - [ ] 1.4 Add `zot_last_err` = `docker logs --tail 3 zot 2>&1 | tail -c 300 | tr '\n' ' '` (bounded 300 bytes, single-line; closes the non-OOM SSH dead-end).
 - [ ] 1.5 Add `boot_id` = `cat /proc/sys/kernel/random/boot_id` (disambiguates reused hostname across the replace).
@@ -30,7 +30,7 @@ Derived from the finalized (post-review) plan. Two slices, ONE PR, ONE immutable
 
 ## Phase 2 — Slice 2: remediation
 
-- [ ] 2.1 `docker run` (`:312-318`): add `--memory=7168m --memory-swap=7168m` from a named env-overridable const (NO `--init` — single Go process). Comment the headroom (8192 − ~1024 host overhead).
+- [ ] 2.1 `docker run` (`:312-318`): add `--memory=7168m --memory-swap=7168m` from a named env-overridable const `ZOT_MEMORY_CAP` (mirrors ADR-062 `PROD_MEMORY_CAP:-4096m` at `ci-deploy.sh:112`; NO `--init` — that is a Node-container idiom, zot is a single Go process). Comment the headroom (8192 − ~1024 host overhead).
 - [ ] 2.2 `variables.tf:123`: `registry_server_type` default `cx23` → `cx32`; update the description (8 GB / #6288 memory rationale). amd64→amd64 (arch derivation unchanged).
 - [ ] 2.3 `expenses.md:20` (recurring-expense gate — BEFORE PR-ready): replace the stale `CAX11 (registry) / 4.32 / approved-not-billing` row with the cx32 row (plan Files-to-Edit text; ops-research € figures); bump frontmatter `last_updated`.
 - [ ] 2.x DEFERRED: `storage.dedupe=false` — NOT in this PR (undedupe-on-flip risk); revisit as a follow-up only if the soak still shows memory pressure.
