@@ -10,6 +10,10 @@ issue: 6256
 
 Coverage = full (RPC + storage.objects + CI), operator-selected 2026-07-09.
 
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!-- The only "infra" is an ephemeral local Supabase-CLI Docker stack used as a disposable
+     test DB — not provisioned servers/vendors/DNS/secrets. IaC routing gate N/A (ADR-103). -->
+
 ## Phase 0 — Local stack + faithfulness spike (riskiest first)
 - [ ] 0.1 `supabase start` local stack; pin postgres/CLI image to the prod-matching version.
 - [ ] 0.2 Apply all migrations to the local DSN (`supabase db reset` / `run-migrations.sh`).

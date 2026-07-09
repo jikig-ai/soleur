@@ -155,6 +155,11 @@ logs:               { where: "vitest per-case report (local) / CI job log (once 
 discoverability_test: { command: "cd apps/web-platform && RLS_FUZZ_LOCAL=1 ./node_modules/.bin/vitest run test/rls-authz-fuzz.integration.test.ts", expected_output: "all cases PASS; 0 leaks; parity diff clean (NO ssh)" }
 ```
 
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!-- Phase 2.8 reviewed: the only "infra" is an EPHEMERAL local Supabase-CLI Docker stack used
+     as a disposable test DB (destroyed after each run) — not provisioned servers/vendors/DNS/secrets.
+     No Terraform surface; the IaC routing gate does not apply (local test container, per ADR-103). -->
+
 ## Scope (v1 — full coverage, operator-selected 2026-07-09)
 The review surfaced three coverage expansions beyond base-table isolation. The operator chose
 to include **all three** in v1 (no deferred blind spots):
