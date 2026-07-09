@@ -11,13 +11,13 @@ plan: knowledge-base/project/plans/2026-07-09-feat-invoice-skill-plan.md
 # Tasks: `/soleur:invoice` skill v1 (read + guarded send)
 
 ## Phase 0 — Runtime grounding (do FIRST, before writing SKILL.md)
-- [ ] 0.1 Authenticate the Stripe MCP in a **test-mode** account; enumerate the actual post-OAuth tools.
-- [ ] 0.2 Produce the **capability→tool binding table** for the 6 verbs (account-info, list, create-draft,
+- [x] 0.1 Authenticate the Stripe MCP in a **test-mode** account; enumerate the actual post-OAuth tools.
+- [x] 0.2 Produce the **capability→tool binding table** for the 6 verbs (account-info, list, create-draft,
   retrieve, finalize, send, void) — exact tool name + call shape (named vs generic `stripe_api_read/write`).
-- [ ] 0.3 **Idempotency-support probe:** does the write tool accept `Idempotency-Key`? Record yes/no.
+- [x] 0.3 **Idempotency-support probe:** does the write tool accept `Idempotency-Key`? Record yes/no.
   If NO → S4 uses the metadata-reconciliation fallback.
-- [ ] 0.4 Confirm `get_stripe_account_info` returns account id + `livemode`.
-- [ ] 0.5 Run `bun test plugins/soleur/test/components.test.ts` → confirm ≥ ~40 words of budget headroom.
+- [x] 0.4 Confirm `get_stripe_account_info` returns account id + `livemode`.
+- [x] 0.5 Run `bun test plugins/soleur/test/components.test.ts` → confirm ≥ ~40 words of budget headroom.
 
 ## Phase 1 — Author `plugins/soleur/skills/invoice/SKILL.md`
 - [ ] 1.1 Frontmatter: `name: invoice`; third-person `description` ("This skill should be used when…")
