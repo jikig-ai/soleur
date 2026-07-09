@@ -34,6 +34,15 @@ vi.mock("@/server/observability", () => ({
     (mirrorWarnWithDebounceSpy as (...x: unknown[]) => void)(...a),
 }));
 
+// #cost-attribution (plan Phase 2, AC4c) — spy the marker helper that
+// postAnthropicMessage emits into when a `markerSource` is threaded.
+const { emitClaudeCostMarkerSpy } = vi.hoisted(() => ({
+  emitClaudeCostMarkerSpy: vi.fn(),
+}));
+vi.mock("@/server/claude-cost-marker", () => ({
+  emitClaudeCostMarker: emitClaudeCostMarkerSpy,
+}));
+
 // mintInstallationToken (#5046) mints via the App-JWT probe path, NOT any
 // ambient GH_TOKEN, and threads the least-privilege scope to
 // generateInstallationToken. Mock both dependencies so the scope-threading
@@ -779,10 +788,61 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
   beforeEach(() => {
     fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
+    emitClaudeCostMarkerSpy.mockClear();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("AC4c — emits a cron:<name> SOLEUR_CLAUDE_COST marker from the response usage/model when markerSource is set", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({
+        content: [{ text: "ok" }],
+        stop_reason: "end_turn",
+        model: "claude-sonnet-5",
+        usage: {
+          input_tokens: 12,
+          output_tokens: 3,
+          cache_read_input_tokens: 4,
+          cache_creation_input_tokens: 1,
+        },
+      }),
+    );
+
+    await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 8,
+      messages: [{ role: "user", content: "ping" }],
+      markerSource: "cron-compound-promote",
+    });
+
+    expect(emitClaudeCostMarkerSpy).toHaveBeenCalledTimes(1);
+    expect(emitClaudeCostMarkerSpy.mock.calls[0][0]).toMatchObject({
+      source: "cron:cron-compound-promote",
+      model: "claude-sonnet-5",
+      input_tokens: 12,
+      output_tokens: 3,
+      cache_read_input_tokens: 4,
+      cache_creation_input_tokens: 1,
+      // /v1/messages does not return total_cost_usd → tokens-only.
+      cost_usd: null,
+      capture_status: "ok",
+    });
+  });
+
+  it("emits NO marker when markerSource is omitted (the two legacy callers)", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({ content: [{ text: "ok" }], stop_reason: "end_turn" }),
+    );
+    await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 8,
+      messages: [{ role: "user", content: "ping" }],
+    });
+    expect(emitClaudeCostMarkerSpy).not.toHaveBeenCalled();
   });
 
   it("POSTs to the messages endpoint with auth + version headers and returns {text, stopReason}", async () => {

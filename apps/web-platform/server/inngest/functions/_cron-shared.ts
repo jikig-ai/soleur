@@ -9,6 +9,7 @@ import {
   mirrorWarnWithDebounce,
 } from "@/server/observability";
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
+import { emitClaudeCostMarker } from "@/server/claude-cost-marker";
 import type { SpawnResult } from "./_cron-claude-eval-substrate";
 import type { Octokit } from "@octokit/core";
 
@@ -551,6 +552,13 @@ export async function postAnthropicMessage(args: {
   messages: Array<{ role: "user"; content: string }>;
   timeoutMs?: number;
   outputConfig?: { format: { type: "json_schema"; schema: unknown } };
+  // #cost-attribution (plan Phase 2, choke point #3): the caller's cron name.
+  // When set, a `cron:<name>` SOLEUR_CLAUDE_COST marker is emitted from the ok
+  // response's `usage`/`model` — closing per-cron attribution for the HTTP-
+  // transport crons that `spawnClaudeEval` misses (compound-promote real spend,
+  // credit-probe canary). Optional so the two existing callers/tests that omit
+  // it stay compiling.
+  markerSource?: string;
 }): Promise<{ text: string; stopReason?: string }> {
   let resp: Response;
   try {
@@ -598,7 +606,34 @@ export async function postAnthropicMessage(args: {
   const data = (await resp.json()) as {
     content?: Array<{ text?: string }>;
     stop_reason?: string;
+    model?: string;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
   };
+
+  // #cost-attribution (plan Phase 2, choke point #3): surface the response
+  // `usage`/`model` the transport otherwise discards. `/v1/messages` does NOT
+  // return `total_cost_usd`, so cost rides as null (tokens-only — acceptable per
+  // plan; the Phase-3 Admin daily report is the authoritative $ reconciliation).
+  // Fail-open — emitClaudeCostMarker never throws.
+  if (args.markerSource) {
+    emitClaudeCostMarker({
+      source: `cron:${args.markerSource}`,
+      id: args.markerSource,
+      model: data.model ?? args.model ?? null,
+      cost_usd: null,
+      input_tokens: data.usage?.input_tokens ?? null,
+      output_tokens: data.usage?.output_tokens ?? null,
+      cache_read_input_tokens: data.usage?.cache_read_input_tokens ?? null,
+      cache_creation_input_tokens: data.usage?.cache_creation_input_tokens ?? null,
+      capture_status: "ok",
+    });
+  }
+
   return { text: data.content?.[0]?.text ?? "", stopReason: data.stop_reason };
 }
 

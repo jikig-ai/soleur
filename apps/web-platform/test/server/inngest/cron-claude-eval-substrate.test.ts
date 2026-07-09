@@ -27,11 +27,14 @@ import {
   CRON_MCP_ALLOWLISTS,
   DEFAULT_CLAUDE_SETTINGS,
   ISSUE_CREATOR_BASH_ALLOWLIST,
+  parseClaudeResultLine,
+  resolveEvalCaptureStatus,
   runHookSelfTest,
   spawnClaudeEval,
   spawnSimple,
   STDOUT_TAIL_CAP_BYTES,
 } from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import { classifyEvalFatal } from "@/server/inngest/functions/_cron-shared";
 
 // #4684/#4689 — crons mkdtemp'd under os.tmpdir() (the 256 MB /tmp tmpfs in
 // prod), so a git clone of the ~100 MB soleur tree ENOSPC'd. The fix routes the
@@ -709,5 +712,105 @@ describe("cron-ux-audit restore — bash + mcp allowlists (#5199)", () => {
     expect(CRON_MCP_ALLOWLISTS["cron-legal-audit"]).toBeUndefined();
     expect(CRON_MCP_ALLOWLISTS["cron-agent-native-audit"]).toBeUndefined();
     expect(CRON_MCP_ALLOWLISTS["cron-roadmap-review"]).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// #cost-attribution (plan Phase 2) — CLI result-event parse + capture status
+// =============================================================================
+describe("parseClaudeResultLine (AC4 — result-event cost capture)", () => {
+  // Synthesized fixture mirroring the Phase-0 live `--output-format json` probe
+  // (cq-test-fixtures-synthesized-only): total_cost_usd top-level, token counts
+  // under usage, model id as the KEY of modelUsage, human text under result.
+  const okResultLine = JSON.stringify({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    result: "done: created the scheduled audit issue",
+    total_cost_usd: 0.1684685,
+    usage: {
+      input_tokens: 20070,
+      output_tokens: 4,
+      cache_read_input_tokens: 15197,
+      cache_creation_input_tokens: 6042,
+    },
+    modelUsage: { "claude-opus-4-8[1m]": { costUSD: 0.1684685 } },
+    session_id: "b7cf3a5a",
+  });
+
+  it("parses total_cost_usd, usage token fields, and the modelUsage model id", () => {
+    const parsed = parseClaudeResultLine(okResultLine);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.cost.costUsd).toBe(0.1684685);
+    expect(parsed!.cost.model).toBe("claude-opus-4-8[1m]");
+    expect(parsed!.cost.usage).toEqual({
+      input_tokens: 20070,
+      output_tokens: 4,
+      cache_read_input_tokens: 15197,
+      cache_creation_input_tokens: 6042,
+    });
+    // The human-readable result text (not raw JSON) is what folds into stdoutTail.
+    expect(parsed!.resultText).toBe("done: created the scheduled audit issue");
+  });
+
+  it("is fail-open: a non-JSON line returns null (→ no-result-event, no throw)", () => {
+    expect(parseClaudeResultLine("Reached max turns; no artifact.")).toBeNull();
+    expect(parseClaudeResultLine("{ not json")).toBeNull();
+  });
+
+  it("returns null for a non-result JSON event (e.g. an assistant delta)", () => {
+    expect(
+      parseClaudeResultLine(JSON.stringify({ type: "assistant", message: {} })),
+    ).toBeNull();
+  });
+
+  it("AC4b — I8 survives: a credit-exhaustion result event folds the error text into the tail so classifyEvalFatal still returns fatal", () => {
+    // Under --output-format json, an API error surfaces on the result event's
+    // `result` field. parseClaudeResultLine extracts it; the substrate folds it
+    // into stdoutTail; classifyEvalFatal (which reads stdoutTail) must still fire.
+    const creditLine = JSON.stringify({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      api_error_status: 400,
+      result: "API Error: Credit balance is too low",
+      modelUsage: {},
+    });
+    const parsed = parseClaudeResultLine(creditLine);
+    expect(parsed).not.toBeNull();
+    const c = classifyEvalFatal({
+      exitCode: 1,
+      abortedByTimeout: false,
+      stdoutTail: parsed!.resultText,
+      stderrTail: "",
+    });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("credit-exhausted");
+  });
+
+  it("AC4b — a benign max-turns run still classifies benign", () => {
+    const c = classifyEvalFatal({
+      exitCode: 1,
+      abortedByTimeout: false,
+      stdoutTail: "Reached max turns; no artifact this cycle.",
+      stderrTail: "",
+    });
+    expect(c.fatal).toBe(false);
+  });
+});
+
+describe("resolveEvalCaptureStatus (AC4 — positive marker status)", () => {
+  const cost = { model: null } as ReturnType<
+    typeof parseClaudeResultLine
+  >["cost"];
+
+  it("timeout wins over a parsed cost", () => {
+    expect(resolveEvalCaptureStatus(true, cost)).toBe("timeout");
+  });
+  it("a parsed cost → ok", () => {
+    expect(resolveEvalCaptureStatus(false, cost)).toBe("ok");
+  });
+  it("no parsed cost → no-result-event (never row-absence)", () => {
+    expect(resolveEvalCaptureStatus(false, null)).toBe("no-result-event");
   });
 });
