@@ -88,12 +88,14 @@ the three load-bearing unknowns this ADR fixes:**
 - **A dedicated-host webhook reached via web-host fan-out.** Rejected: a new inbound control plane on
   the deny-all-public singleton enlarges its attack surface (SEC-H2). The Doppler-flag **poll** keeps
   the host inbound-closed.
+<!-- lint-infra-ignore start -->
 - **A two-value `armed`/`done` flag** (instead of the 8-state FSM). Rejected: with only `armed`/`done`
   there is no `rollback` value the on-host oneshot can act on, so the **no-SSH rollback is unreachable**
   (P0-1) — the operator would have no no-SSH way to stop the dedicated scheduler. The FSM adds the
   `rollback`/`rolled-back`/`flipping`/`flushed`/`aborted` states that make rollback, mid-flip-reboot
   safety (the split `flipping` PRE-flush / `flushed` POST-flush checkpoints), and the DBSIZE-abort all
   expressible.
+<!-- lint-infra-ignore end -->
 - **Disabling the poll timer after the forward flip** (the pre-review plan's "disable after flip").
   Rejected for the same reason: a disabled timer can never observe a later `INNGEST_CUTOVER_FLIP=rollback`
   write, again making the **no-SSH rollback unreachable** (P0-1). The reconciled rule is: the timer
