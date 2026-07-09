@@ -68,10 +68,11 @@ export function CreatorChip({
 }) {
   const label = creatorLabel(creator);
   const glyph = creator.isSoleur ? "🤖" : "👤";
-  // Bot with no human initiator → show the word "Soleur"; otherwise initials.
+  // Bot with no human initiator → show the word "Soleur" (single-sourced from
+  // deriveCreator's display.name); otherwise the display initials.
   const text =
     creator.isSoleur && !creator.initiatorLogin
-      ? "Soleur"
+      ? creator.display.name
       : creator.display.initials;
   return (
     <span

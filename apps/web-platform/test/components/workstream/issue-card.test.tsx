@@ -86,6 +86,23 @@ describe("IssueCard", () => {
     expect(screen.getByTitle("Created by octocat")).toBeTruthy();
   });
 
+  it("shows the word 'Soleur' on a bot-created card with no known initiator", () => {
+    render(
+      <IssueCard
+        issue={issue({
+          creator: {
+            login: "soleur-ai[bot]",
+            isSoleur: true,
+            display: { name: "Soleur", initials: "SO" },
+          },
+        })}
+        onOpen={() => {}}
+      />,
+    );
+    const chip = screen.getByTitle("Created by Soleur");
+    expect(chip.textContent).toContain("Soleur");
+  });
+
   it("labels a Soleur-created card with the initiator when known", () => {
     render(
       <IssueCard

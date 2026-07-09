@@ -93,8 +93,11 @@ Two facts shaped the decision:
   marker and render plain "Soleur" (graceful, not backfilled). Email-signup users
   who connected a repo but never did GitHub-OAuth have no resolvable login, so
   their Soleur-created issues also render plain "Soleur" — this is the default for
-  that user class, surfaced via the `attribution_status` liveness signal, not an
-  edge case.
+  that user class, not an edge case. Part A observes attribution coverage via the
+  read-side `creatorAttributionCoverage` log (`get-workstream-issues.ts`); the
+  finer write-side `attribution_status` enum (`stamped | login-unresolved |
+  path-not-instrumented`) that distinguishes this null-login case from a wiring
+  gap lands with Part B.
 
 ## C4 impact
 

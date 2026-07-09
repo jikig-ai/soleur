@@ -371,7 +371,7 @@ export function deriveLive(input: BoardIssueInput): boolean {
 export function deriveUser(assignees: string[]): WorkstreamUser | undefined {
   const login = assignees[0];
   if (!login) return undefined;
-  return { name: login, initials: login.slice(0, 2).toUpperCase() };
+  return { name: login, initials: loginInitials(login) };
 }
 
 // ---------------------------------------------------------------------------
