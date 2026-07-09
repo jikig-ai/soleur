@@ -360,10 +360,26 @@ fi
 # SDK side keeps the prefixed form in its own scope). This avoids the #4116
 # EnvironmentFile-empty trap (env stays inside the doppler-run scope, not a file).
 #
-# --postgres-max-open-conns 10 stays UNDER the dedicated project's session-mode
-# pooler pool_size (15) so inngest cannot self-exhaust the pool — #5558: 25 > 15 →
-# EMAXCONNSESSION. It is ALSO the NON-SECRET durable-detection sentinel (see the
-# @@BACKEND_FLAGS@@ note below + ci-deploy.sh / inngest-inventory.sh / wiped-volume-verify).
+# Postgres pool footprint (#6258 — supersedes the #5558 "cap 10 holds total under 15"
+# invariant, which was FALSE): `inngest start` opens SEPARATE Postgres pools per
+# subsystem (queue/state/history/api), and --postgres-max-open-conns bounds each pool
+# INDEPENDENTLY, not the total. So `10` × ~3 pools ratcheted to ~31 pinned idle conns >
+# the project's session-mode pool_size (measured 30) → EMAXCONNSESSION under back-to-back
+# cutover-probe scans. The durable fix bounds TOTAL footprint + DRAINS idle conns:
+#   --postgres-max-open-conns 5   per-pool cap; worst-case total 4×5 = 20 < pool_size 30
+#                                 (still ≥5/pool for alpha-internal <10 events/sec).
+#   --postgres-max-idle-conns 2   retain ≤2 idle/pool (default 10) → pinned-idle ≤ 4×2 = 8.
+#   --postgres-conn-max-idle-time 1  close idle conns after 1 MINUTE so they RELEASE their
+#                                 Supavisor session (this is the release lever). ⚠ UNIT TRAP:
+#                                 this IntFlag is MINUTES (default 5), NOT seconds — verified
+#                                 against inngest v1.19.4 cmd/start; the plan's "SECS=30" was
+#                                 mis-labelled (30 would mean 30 MINUTES — worse than default).
+# default_pool_size stays 30 (the #5562 30→15 revert is SUPERSEDED — its premise "cap holds
+# total under 15" is falsified by the per-pool model; a 15-slot upstream while inngest bursts
+# to ~20 would GUARANTEE exhaustion). See ADR-104.
+# --postgres-max-open-conns is ALSO the NON-SECRET durable-detection sentinel and MUST stay
+# FIRST in BACKEND_FLAGS (see the @@BACKEND_FLAGS@@ note below + ci-deploy.sh /
+# inngest-inventory.sh / wiped-volume-verify; inngest.test.sh anchors on it being first).
 # ⚠ DETECTION SENTINEL — NEVER move --postgres-max-open-conns into the SHARED prefix
 # (where --sqlite-dir lives): it MUST appear in argv iff durable. Promoting it to the
 # shared prefix would make it present in BOTH branches → every parser misclassifies the
@@ -416,8 +432,10 @@ UNITEOF
 
 # #5547 Gap 2 + #5560: substitute the @@BACKEND_ENV@@ + @@BACKEND_FLAGS@@ sentinels
 # based on Redis readiness. Secrets are delivered via the ENVIRONMENT (BACKEND_ENV),
-# never argv (#5560) — BACKEND_FLAGS carries only the NON-SECRET --postgres-max-open-conns
-# durable-detection sentinel.
+# never argv (#5560) — BACKEND_FLAGS carries only NON-SECRET pool-sizing flags: the
+# --postgres-max-open-conns durable-detection sentinel (FIRST) + the #6258 idle-drain
+# knobs (--postgres-max-idle-conns / --postgres-conn-max-idle-time) that bound the total
+# per-pool footprint so cutover-probe scans cannot ratchet the pool to EMAXCONNSESSION.
 #   REDIS_READY=1 → durable: export INNGEST_REDIS_URI (from the password) so inngest
 #                   reads it from env; INNGEST_POSTGRES_URI is left in the doppler env
 #                   for inngest to read; argv carries --postgres-max-open-conns (sentinel).
@@ -436,8 +454,8 @@ UNITEOF
 # inngest as the unit's main PID (Type=simple signal/drain/`inngest pause` semantics).
 if [[ "$REDIS_READY" == "1" ]]; then
   BACKEND_ENV='export INNGEST_REDIS_URI="redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379"; '
-  BACKEND_FLAGS='--postgres-max-open-conns 10'
-  log "inngest-server ExecStart: durable backend (env-delivered URIs; --postgres-max-open-conns sentinel)"
+  BACKEND_FLAGS='--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1'
+  log "inngest-server ExecStart: durable backend (env-delivered URIs; bounded per-pool footprint open=5/idle=2/idle-time=1min; --postgres-max-open-conns sentinel FIRST) #6258"
 else
   BACKEND_ENV='unset INNGEST_POSTGRES_URI; '
   BACKEND_FLAGS=''

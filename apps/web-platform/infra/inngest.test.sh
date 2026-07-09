@@ -253,6 +253,24 @@ else
   echo "  FAIL: durable env/flags shape (env: $DURABLE_ENV | flags: $DURABLE_FLAGS)"
 fi
 
+# #6258 AC1 — the durable BACKEND_FLAGS bounds TOTAL Postgres footprint + drains idle
+# conns: it carries all THREE pool knobs, with --postgres-max-open-conns FIRST (the
+# durability sentinel; the parsers use a substring match but this test + the #5560
+# drift-guard anchor on the flag being first). Conservative fixed values safe for any
+# per-subsystem pool count P ≤ 4 (worst-case total 4×5 = 20 < pool_size 30). NOTE the
+# unit trap (#6258, verified against inngest v1.19.4 cmd/start): --postgres-conn-max-idle-time
+# is an IntFlag in MINUTES (default 5), NOT seconds — so `1` = drain idle conns after 1 min
+# (fast release of the pinned Supavisor session), NOT the plan's mis-labelled "30s".
+DURABLE_FLAGS_FULL=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | head -1 || true)
+TOTAL=$((TOTAL + 1))
+if printf '%s\n' "$DURABLE_FLAGS_FULL" | grep -qE -- "BACKEND_FLAGS='--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1'"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: durable BACKEND_FLAGS bounds total footprint (open 5 / idle 2 / idle-time 1min), sentinel --postgres-max-open-conns FIRST (#6258 AC1)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: durable BACKEND_FLAGS must be '--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1' (sentinel first) (#6258 AC1) — got: $DURABLE_FLAGS_FULL"
+fi
+
 # AC4 — the durable env fragment preserves the LITERAL $${INNGEST_REDIS_PASSWORD}
 # Doppler token, and the ExecStart re-exports the stripped $${INNGEST_SIGNING_KEY}
 # (systemd unescapes $$→$, then bash -c expands the doppler-injected env). grep -F
