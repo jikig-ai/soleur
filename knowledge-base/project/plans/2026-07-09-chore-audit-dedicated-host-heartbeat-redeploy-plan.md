@@ -372,8 +372,12 @@ logs:
   where: "GitHub Actions run logs (retained per repo policy); test output in the CI run."
   retention: "GitHub Actions default (90 days)."
 discoverability_test:
-  command: "gh workflow view apply-web-platform-infra.yml --yaml | grep -c 'git-data-host-replace' ; bash tests/scripts/test-git-data-host-replace-gate.sh"
-  expected_output: "grep count >= 1 (option present); gate test suite exits 0 (all fixtures PASS/ABORT as expected). NO ssh."
+  command: bash tests/scripts/test-git-data-host-replace-gate.sh
+  expected_output: "16 passed, 0 failed"
+  # Single, no-SSH, non-shell-active command (runnable under preflight Check 10's env -i sandbox);
+  # exit 0 + the summary line proves the destroy-guard's 16 fixtures all PASS/ABORT as specified.
+  # Option-presence is separately locked by the terraform-target-parity job<->gate parity block
+  # (grep -c 'git-data-host-replace' .github/workflows/apply-web-platform-infra.yml >= 2, AC4).
 ```
 
 Affected-surface note (2.9.2): git-data is a blind host (deny-all, no SSH), but these deliverables
