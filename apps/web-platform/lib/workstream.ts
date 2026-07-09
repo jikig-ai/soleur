@@ -52,7 +52,7 @@ export interface WorkstreamUser {
  *  asked Soleur to file it. Optional + additive: absent when the author is
  *  unknown (mirrors the `user`/`domains` optional convention). */
 export interface WorkstreamCreator {
-  /** Raw GitHub author login, e.g. "octocat" or "soleur-ai[bot]". */
+  /** Raw GitHub author login, e.g. "octocat" or the Soleur bot's `<slug>[bot]`. */
   login: string;
   /** True when the author is the Soleur GitHub-App bot (slug-derived). */
   isSoleur: boolean;
