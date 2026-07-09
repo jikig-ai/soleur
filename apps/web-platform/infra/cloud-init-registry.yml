@@ -18,7 +18,7 @@ packages:
   - apache2-utils # htpasswd -Bbn (bcrypt) — build the zot htpasswd on-host from Doppler tokens
   - curl
   - jq # parse `doppler secrets --only-names --json` for the boot-time isolation self-check (runcmd)
-  - e2fsprogs # resize2fs — grow the ext4 fs to fill the 30 GB volume (#6240). The packages: stage
+  - e2fsprogs # resize2fs — grow the ext4 fs to fill the 60 GB volume (#6240/#6247). The packages: stage
     # is NON-FATAL (failures logged, boot continues), so a runcmd dpkg-guard re-ensures it below.
 
 groups:
@@ -45,24 +45,35 @@ write_files:
   #
   # storage.retention (#6122 follow-up): gc alone only reclaims DANGLING blobs, not old
   # TAGS — every dual-pushed release tag (v* + its 40-hex commit-sha) is retained forever,
-  # so the store grows unbounded with each deploy and the 10 GB volume fills (observed: the
-  # web-platform image is ~1.5-2 GB/version). This policy bounds it: keep `latest`, the 10
-  # most-recently-pushed v* tags and 10 most-recent commit-sha tags per repo, and ALWAYS keep
-  # every `sha256-*` tag (the cosign .sig/.att triangulation tags — deleting them would break
-  # deploy-time `cosign verify`, which fetches the signature by tag from the SAME registry it
-  # pulls the image; see ADR-087). Non-matching tags are pruned; deleteUntagged + gc then
-  # reclaim their layers after `delay`. deleteReferrers=false: cosign here uses TAG-based sigs
-  # (kept above), not Subject-field OCI referrers, so leave Subject referrers untouched.
-  # dryRun=false: prune for real. Schema: project-zot examples/README.md (retention).
+  # so the store grows unbounded with each deploy and the volume fills (observed: the
+  # web-platform image is ~1.5-2 GB/version). This policy bounds it: keep `latest`, the 5
+  # most-recently-pushed v* tags and 5 most-recent commit-sha tags per repo, and the 50
+  # most-recently-pushed `sha256-*` tags (the cosign .sig/.att triangulation tags — deploy-time
+  # `cosign verify` fetches the signature by tag from the SAME registry it pulls the image, so a
+  # KEPT image's sig must never be pruned; see ADR-087). Non-matching tags are pruned;
+  # deleteUntagged + gc then reclaim their layers after `delay`. deleteReferrers=false: cosign
+  # here uses TAG-based sigs (kept above), not Subject-field OCI referrers, so leave Subject
+  # referrers untouched. dryRun=false: prune for real. Schema: project-zot examples/README.md.
   #
-  # gc/retention TIGHTENED (#6240 defense-in-depth): gcInterval 24h->1h and retention.delay
-  # 24h->2h so a filling store is reclaimed within ~1h, not once per 24h. gcDelay stays 1h (the
-  # dangling-blob SAFETY window that protects a blob just uploaded but not yet manifest-referenced
-  # during an in-flight push — shortening it risks reclaiming an in-progress layer). The keep-set
-  # (latest / sha256-* / v* x10 / commit-sha x10) is UNCHANGED. NO on-boot gc trigger is issued:
-  # zot v2.1.2 exposes no sanctioned on-demand gc HTTP endpoint (hr-verify-repo-capability-claim —
-  # no fabricated admin call), so the tightened gcInterval is the reclamation lever; the first
-  # scheduled pass runs within ~1h of boot.
+  # CAPACITY-VS-RETENTION (#6247, 2026-07-09): counts LOWERED v*/commit-sha 10->5 and the
+  # previously-UNBOUNDED `sha256-*` keep BOUNDED at mostRecentlyPushedCount 50. The 2026-07-08 fix
+  # (#6246) tightened gc/retention TIMING but left the keep-SET unchanged; SOLEUR_ZOT_DISK then
+  # showed the 30 GB fs genuinely full (resize_ok=true, pcent=100) — the keep-set (10 v* + 10 sha +
+  # unbounded sigs, per repo × 2 repos, ~1.5-2 GB/image) legitimately exceeded 30 GB, and gc cannot
+  # reclaim a blob the policy says to KEEP. Fix = grow the volume 30->60 GB (variables.tf, headroom)
+  # + this keep-set tighten (bound growth). The `sha256-*` bound at 50 caps forever-growth while
+  # sitting FAR above the true keep requirement (~12-18 sig-tags/repo at ~5-6 kept releases × 2-3
+  # referrer types), so it never prunes a kept image's sig at current scale — the load-bearing
+  # cosign-verify coupling (ADR-087): mostRecentlyPushedCount is push-ORDER heuristic and can evict
+  # out of order under the ADR-096 crane-copy backfill/re-sign path, so 50 is deliberately generous.
+  #
+  # gc/retention TIMING (#6240 defense-in-depth, UNCHANGED here): gcInterval 24h->1h and
+  # retention.delay 24h->2h so a filling store is reclaimed within ~1h, not once per 24h. gcDelay
+  # stays 1h (the dangling-blob SAFETY window that protects a blob just uploaded but not yet
+  # manifest-referenced during an in-flight push — shortening it risks reclaiming an in-progress
+  # layer). NO on-boot gc trigger is issued: zot v2.1.2 exposes no sanctioned on-demand gc HTTP
+  # endpoint (hr-verify-repo-capability-claim — no fabricated admin call), so the tightened
+  # gcInterval is the reclamation lever; the first scheduled pass runs within ~1h of boot.
   #
   # http.compat ["docker2s2"] (#6122): zot is OCI-native and REJECTS Docker manifest
   # schema2 pushes (application/vnd.docker.distribution.manifest.v2+json) with
@@ -89,9 +100,9 @@ write_files:
                 "deleteUntagged": true,
                 "keepTags": [
                   { "patterns": ["latest"] },
-                  { "patterns": ["sha256-.*"] },
-                  { "patterns": ["v.*"], "mostRecentlyPushedCount": 10 },
-                  { "patterns": ["[0-9a-f]{7,64}"], "mostRecentlyPushedCount": 10 }
+                  { "patterns": ["sha256-.*"], "mostRecentlyPushedCount": 50 },
+                  { "patterns": ["v.*"], "mostRecentlyPushedCount": 5 },
+                  { "patterns": ["[0-9a-f]{7,64}"], "mostRecentlyPushedCount": 5 }
                 ]
               }
             ]
@@ -128,8 +139,8 @@ write_files:
   #      Stack Logs (queryable via scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK, NO ssh).
   #      Its fields (pcent / fs_size_gb / block_size_gb / resize_ok / zot_restarts / ping_rc)
   #      discriminate ALL competing root causes in ONE event: fs-not-grown (resize_ok=false OR
-  #      fs_size_gb << block_size_gb), gc-too-slow (resize_ok=true, fs≈30, pcent>=85), and
-  #      zot-mid-write-crash (pcent<85, fs≈30, zot_restarts>0).
+  #      fs_size_gb << block_size_gb), gc-too-slow (resize_ok=true, fs≈60, pcent>=85), and
+  #      zot-mid-write-crash (pcent<85, fs≈60, zot_restarts>0).
   # disk_heartbeat_url + betterstack_ingest_url are terraform-interpolated (non-secret host
   # routing); BETTERSTACK_LOGS_TOKEN is injected AT CRON TIME by `doppler run` from the isolated
   # soleur-registry/prd config (NEVER baked into user_data). Plain dollar-VARs stay literal

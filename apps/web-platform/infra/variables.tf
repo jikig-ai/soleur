@@ -124,9 +124,9 @@ variable "registry_server_type" {
 }
 
 variable "registry_volume_size" {
-  description = "Size of the zot storage block volume in GB (Hetzner minimum is 10 GB), mounted at /var/lib/zot. Holds the OCI blobs for both platform images + backfilled release tags + cosign .sig referrers — never tmpfs (reboot-durable; a wiped registry breaks cold-boot pulls). The web-platform image is ~1.5-2 GB/version and dedupe shares little across versions, so 10 GB filled at ~3 retained versions (#6122); 30 GB holds the storage.retention keep-set (10 v* + 10 sha + latest + sigs) with headroom. A bump resizes the volume in place (data survives); cloud-init-registry.yml resize2fs grows the fs on the next immutable redeploy."
+  description = "Size of the zot storage block volume in GB (Hetzner minimum is 10 GB), mounted at /var/lib/zot. Holds the OCI blobs for both platform images + backfilled release tags + cosign .sig referrers — never tmpfs (reboot-durable; a wiped registry breaks cold-boot pulls). The web-platform image is ~1.5-2 GB/version and dedupe shares little across versions, so 10 GB filled at ~3 retained versions (#6122). GROWN 30→60 GB (#6247, 2026-07-09): the PRIOR storage.retention keep-set (10 v* + 10 commit-sha + latest + UNBOUNDED sigs, per repo × 2 repos) legitimately exceeded 30 GB — SOLEUR_ZOT_DISK showed resize_ok=true + pcent=100 on a fully-grown 30 GB fs (a genuine capacity limit, NOT a resize regression), so #6246's gc/retention tightening could not reclaim below the KEEP set. Even the tightened set (now 5 v* + 5 commit-sha + latest + bounded sigs) wants durable margin, so 60 GB gives headroom above it. A bump resizes the volume in place (data survives); cloud-init-registry.yml resize2fs grows the fs on the next immutable redeploy."
   type        = number
-  default     = 30
+  default     = 60
 }
 
 # --- Epic #5274 Phase 3, Sub-PR 3.D (ADR-068) — LUKS-at-rest cutover volume ---
