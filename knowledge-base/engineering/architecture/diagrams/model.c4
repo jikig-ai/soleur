@@ -257,7 +257,7 @@ model {
   }
   zotRegistry = system "Self-hosted zot registry" {
     #selfhosted
-    description "OCI-native container registry (zot) on a dedicated Hetzner host (cax11, volume-backed) on the private network (10.0.1.30:5000), behind a deny-all-public firewall — the zero-touch machine-credential registry that replaces GHCR on the pull path (ADR-096, #6122). Hosts pull the SAME @sha256 digests here (crane-copy from CI preserves them); cosign verifies the zot-stored .sig offline against the unchanged pinned root. Plain-HTTP on the private net (integrity via cosign digest-pinning, not TLS); dark-launch gated with an atomic GHCR fallback until the Phase-5 soak retires GHCR push."
+    description "OCI-native container registry (zot) on a dedicated Hetzner host (cx32, 4 vCPU / 8 GB, volume-backed) on the private network (10.0.1.30:5000), behind a deny-all-public firewall — the zero-touch machine-credential registry that replaces GHCR on the pull path (ADR-096, #6122). Host sized cx32 (#6288) with an ADR-062 --memory=7168m cap so zot's ~35 GB store boot scan cannot host-OOM restart-loop the box; the 60 GB store volume persists across the immutable host replace. Hosts pull the SAME @sha256 digests here (crane-copy from CI preserves them); cosign verifies the zot-stored .sig offline against the unchanged pinned root. Plain-HTTP on the private net (integrity via cosign digest-pinning, not TLS); dark-launch gated with an atomic GHCR fallback until the Phase-5 soak retires GHCR push."
   }
   betterstack = system "Better Stack" {
     #external
