@@ -139,8 +139,8 @@ write_files:
   #      Stack Logs (queryable via scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK, NO ssh).
   #      Its fields (pcent / fs_size_gb / block_size_gb / resize_ok / zot_restarts / ping_rc)
   #      discriminate ALL competing root causes in ONE event: fs-not-grown (resize_ok=false OR
-  #      fs_size_gb << block_size_gb), gc-too-slow (resize_ok=true, fs≈30, pcent>=85), and
-  #      zot-mid-write-crash (pcent<85, fs≈30, zot_restarts>0).
+  #      fs_size_gb << block_size_gb), gc-too-slow (resize_ok=true, fs≈60, pcent>=85), and
+  #      zot-mid-write-crash (pcent<85, fs≈60, zot_restarts>0).
   # disk_heartbeat_url + betterstack_ingest_url are terraform-interpolated (non-secret host
   # routing); BETTERSTACK_LOGS_TOKEN is injected AT CRON TIME by `doppler run` from the isolated
   # soleur-registry/prd config (NEVER baked into user_data). Plain dollar-VARs stay literal

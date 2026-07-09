@@ -19,8 +19,8 @@ date: 2026-07-04
 
 `apps/web-platform/infra/ci-deploy.sh` cosign-verifies the app image signature on
 the running host at deploy time (`verify_image_signature`, WARN mode — never
-blocks; the soak-gated WARN→ENFORCE flip is a separate future issue, #5933
-follow-up). It runs the SHA-pinned distroless cosign container
+blocks; the soak-gated WARN→ENFORCE flip is a separate future issue, #6129).
+It runs the SHA-pinned distroless cosign container
 (`ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a…` = v3.1.1) via `docker run --rm`.
 
 Issue #6005 exists because the shipped verify (PR #5977) **cannot pass on the real

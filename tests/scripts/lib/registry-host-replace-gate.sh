@@ -13,7 +13,7 @@
 #
 # It reads a `terraform show -json <plan>` document and PERMITS EXACTLY the scoped
 # registry-host recreate: a -replace of hcloud_server.registry + its 3 id-referencing
-# dependents, PLUS the storage volume in-scope (so the pending 10->30 GB resize can ride
+# dependents, PLUS the storage volume in-scope (so the pending 30->60 GB resize can ride
 # in as a size update — WITHOUT it the guard would abort the very fix the incident needs):
 #   - hcloud_server_network.registry     (network.tf; server_id is ForceNew -> replace)
 #   - hcloud_volume_attachment.registry  (zot-registry.tf; server_id is ForceNew -> replace)

@@ -117,7 +117,7 @@ assert "v* tag keep-set lowered to 5" \
 assert "commit-sha tag keep-set lowered to 5" \
   "grep -qF '\"patterns\": [\"[0-9a-f]{7,64}\"], \"mostRecentlyPushedCount\": 5' '$CI'"
 assert "no keepTags count left at the old value 10" \
-  "! grep -qF '\"mostRecentlyPushedCount\": 10' '$CI'"
+  "! grep -qE '\"mostRecentlyPushedCount\": 10\\b' '$CI'"
 
 echo ""
 echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="

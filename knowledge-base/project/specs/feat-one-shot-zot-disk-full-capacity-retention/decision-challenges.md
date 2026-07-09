@@ -24,7 +24,7 @@ from this incident PR; keep only lever A (volume 30→60 GB) + the v*/commit-sha
    failure mode — all of which vanish if the bound is dropped.
 3. **GHCR fallback does NOT rescue a zot-pruned sig on a KEPT image** (ADR-096 atomic-move fetches the
    `.sig` from whichever registry serves the pull — zot for a kept image). WARN-mode today; blocking at
-   the WARN→ENFORCE flip (#5933-follow-up).
+   the WARN→ENFORCE flip (#6129).
 4. **`mostRecentlyPushedCount` breaks under backfill/re-sign** (ADR-096's own `crane copy` path
    re-pushes old sigs out of order), and no zot mechanism ties a tag-based sig to its subject.
 

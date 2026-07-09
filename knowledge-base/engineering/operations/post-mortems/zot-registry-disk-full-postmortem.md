@@ -289,3 +289,11 @@ ADR-096 amendment + an ADR-087 consequence note. No gate/workflow change (the di
 already permits a volume `["update"]`). Verification rides the existing `SOLEUR_ZOT_DISK` telemetry:
 post-dispatch `pcent<85`, `resize_ok=true`, `fs_size_gb≈57-58`, `block_size_gb=60`, `zot_restarts`
 stops climbing, heartbeat `status==up`.
+
+**Operational caution (durable).** Between merge and the dispatch, the 12h drift detector will show
+both the `registry_volume_size` diff AND an `hcloud_server.registry` "must be replaced" (the
+`cloud-init-registry.yml` keep-set change forces `user_data`; there is deliberately no
+`ignore_changes=[user_data]`). The auto-filed drift issue emits a **generic "run `terraform apply`
+locally to update state"** — an **untargeted** apply would replace the prod registry host **OUTSIDE**
+the destroy-guard. This transient drift MUST be reconciled ONLY via the `registry-host-replace`
+dispatch, **never** the drift issue's generic apply text.

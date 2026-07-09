@@ -53,7 +53,7 @@ Derived from the finalized (deepened) plan. Apply path is the `registry-host-rep
 - [ ] 3.2 Amend `ADR-096-*.md` — "Capacity-vs-retention recurrence (2026-07-09, #6247)" (volume 30→60 +
   keep-set tighten + cosign-verify coupling constraint).
 - [ ] 3.3 (unless dropped per 0.6) `ADR-087-*.md` — one-line consequence note (sig bound must never
-  prune a kept image's sig; WARN→ENFORCE #5933 becomes blocking).
+  prune a kept image's sig; WARN→ENFORCE #6129 becomes blocking).
 - [ ] 3.4 Ship deliverable: `knowledge-base/engineering/operations/post-mortems/zot-registry-disk-full-postmortem.md`
   — record the 2026-07-09 recurrence + capacity-vs-retention resolution; update the #6247 action-item row.
 - [ ] 3.5 (optional sweep) `tests/scripts/lib/registry-host-replace-gate.sh:17` stale "10->30 GB" comment.

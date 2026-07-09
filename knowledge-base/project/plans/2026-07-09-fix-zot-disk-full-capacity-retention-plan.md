@@ -258,7 +258,7 @@ amendments to **ADR-096**, which already carries the #6240/#6244 disk-full amend
 - **ADR-087** (cosign deploy-verify) gets a one-line **consequence note** cross-referencing the new
   ADR-096 amendment: bounding `sha256-.*` retention means a mis-sized bound could prune a kept image's
   `.sig` → deploy-time `cosign verify` `UNAUTHORIZED`/fail (WARN-mode, non-blocking today; becomes
-  blocking at the future WARN→ENFORCE soak flip #5933-follow-up). No topology change to ADR-087's
+  blocking at the future WARN→ENFORCE soak flip #6129). No topology change to ADR-087's
   decision.
 
 ### C4 views
@@ -454,7 +454,7 @@ Not relevant — no UI surface in Files-to-Edit (mechanical UI-surface override 
      is retained at all, use **50** (disk cost of a larger count is negligible; 50 never prunes a kept
      image at current scale yet still caps forever-growth).
    Blast radius **today** is WARN-mode (`ci-deploy.sh`, ADR-087) → a mis-size emits a
-   `cosign_verify_event`, non-blocking; it becomes **blocking** at the WARN→ENFORCE flip (#5933-follow-up).
+   `cosign_verify_event`, non-blocking; it becomes **blocking** at the WARN→ENFORCE flip (#6129).
    **User-Challenge (ADR-084) — RECORDED.** All three deepen-plan reviewers (architecture-strategist,
    code-simplicity, + the IaC pass raised no objection to dropping it) recommend **dropping the
    `sha256-.*` bound from this PR** (keep only the volume grow + v*/commit-sha 10→5). The operator's
