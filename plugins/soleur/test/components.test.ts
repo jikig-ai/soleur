@@ -322,3 +322,46 @@ describe("Decision-principles taxonomy wiring", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// invoice skill credential-boundary defense-in-depth (ADR-107 / #6260)
+// ---------------------------------------------------------------------------
+// Skill `allowed-tools` is pre-approval only, not a sandbox. The invoice skill's
+// credential boundary (never read STRIPE_SECRET_KEY/.env/lib/stripe.ts) rests on
+// two committed layers: `disallowed-tools` in the SKILL.md (per-turn tool removal)
+// and a `Read` deny in .claude/settings.json (cross-turn). A future edit dropping
+// either silently re-opens the exfiltration residual — this guard fails CI first.
+
+describe("invoice skill credential boundary (ADR-107)", () => {
+  test("invoice SKILL.md retains disallowed-tools Bash Read Write Edit", () => {
+    const { frontmatter } = parseComponent(
+      resolve(PLUGIN_ROOT, "skills", "invoice", "SKILL.md"),
+    );
+    // YAML parses `disallowed-tools: Bash Read Write Edit` as the scalar string;
+    // a YAML-list form parses as an array — accept either shape.
+    const raw = frontmatter["disallowed-tools"];
+    const tokens = Array.isArray(raw)
+      ? raw.map(String)
+      : String(raw ?? "").split(/[\s,]+/).filter(Boolean);
+    for (const t of ["Bash", "Read", "Write", "Edit"]) {
+      expect(
+        tokens.includes(t),
+        `invoice/SKILL.md disallowed-tools must contain "${t}" (ADR-107 layer 2 — ` +
+          `per-turn removal of the exfiltration tools). Got: ${JSON.stringify(raw)}`,
+      ).toBe(true);
+    }
+  });
+
+  test(".claude/settings.json retains the secret-file Read deny globs", () => {
+    const settingsPath = resolve(PLUGIN_ROOT, "..", "..", ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const deny: string[] = settings?.permissions?.deny ?? [];
+    for (const glob of ["Read(**/.env)", "Read(**/.env.*)", "Read(**/lib/stripe.ts)"]) {
+      expect(
+        deny.includes(glob),
+        `.claude/settings.json permissions.deny must contain "${glob}" (ADR-107 layer 3 — ` +
+          `cross-turn Read deny protecting the product Stripe credential). Got: ${JSON.stringify(deny)}`,
+      ).toBe(true);
+    }
+  });
+});
