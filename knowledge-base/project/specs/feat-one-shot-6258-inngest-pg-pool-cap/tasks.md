@@ -24,7 +24,7 @@ Branch: `feat-one-shot-6258-inngest-pg-pool-cap` · lane: cross-domain · thresh
 
 ## Phase 4 — Cutover gate + decision-record correction (code/docs)
 - [ ] 4.1 `cutover-inngest.yml` op=execute — pool pre-check FIRST (before the 2.0 registry probe); gate on readiness-baseline + burst-headroom (NOT the 80% alert line); fail-closed on every non-clean state (count≥threshold / EMAXCONNSESSION / 401 / non-JSON / empty / curl-fail).
-- [ ] 4.2 `inngest.tf:201-232` — correct the #5558→#5562 decision block (remove "client cap 10 holds under 15"; record per-pool model + sequenced revert).
+- [ ] 4.2 `inngest.tf:201-232` — correct the #5558→#5562 decision block (remove "client cap 10 holds under 15"; record per-pool model + the decoupled keep-`default_pool_size`-30 posture — #5562 revert superseded, NOT executed).
 - [ ] 4.3 `runbooks/inngest-server.md:102-144` — update pool-pressure section (new flags + reconciled cap).
 - [ ] 4.4 Vector allowlist: if a new host `logger -t <tag>` is added, add to `vector.toml` Source-4 `include_matches` + drift-guard fixture. Else state "no new host tag".
 - [ ] 4.5 Author `ADR-103-inngest-postgres-footprint-per-pool-cap-and-idle-drain.md` (status: adopting; Decision + ≥3 Alternatives). Verify ADR-103 free vs origin/main at ship (ordinal provisional). Reference it in the spec FRs.
