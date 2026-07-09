@@ -77,6 +77,20 @@ independent axes so it never silently gates a host:
   `stage:"inngest_ghcr_fallback"` event (the fallback-rate alarm pages at >3/1h); zot liveness is
   a `betteruptime_heartbeat.registry_prd` push beat that pages if zot stops beating — before it
   can gate a boot (TR3).
+  - *CI push side (#6274):* the CI dual-push mirror step is **explicitly non-blocking**
+    (`continue-on-error: true` + an `exit 0` inner shell + a bounded retry to self-heal a transient
+    CF-tunnel reset) — a mirror failure degrades zot redundancy, never the release/build verdict
+    (consistent with "latency, not availability" above). A persistent miss is loud via a CI-level
+    degraded signal: `mirror_status=degraded` → `::warning::` + step summary (both workflows) + a
+    ⚠️ line on the Slack release message (`reusable-release.yml` only). The *live* fallback-rate
+    Sentry alarm the bullet above references is **design intent, not yet provisioned** — a separate
+    IaC follow-up, load-bearing at the Phase-5 GHCR-push retirement. Two post-cutover boot-gating
+    shapes the degraded signal must remain loud for: a **missing** copy (crane-copy failure) AND a
+    **present-but-unsigned** copy (cosign-sign succeeded-copy-then-failed-sign) — the latter is NOT a
+    clean miss, since the pull side would pull the present zot copy and *bypass* the atomic GHCR
+    fallback, then hard-fail signature verify. During soak `ZOT_ACTIVE=0`, so both are latent and the
+    pre-flip zot-entry-gate/soak-gate catch them; the mirror step's cosign-failure path emits a
+    re-sign-specific remediation (a bare `crane copy` backfill does not re-sign).
 - **Instant revert:** unset `ZOT_REGISTRY_URL` in Doppler `prd` → all sites revert to GHCR-primary
   with no deploy, no SSH (`zot-registry-revert.md`).
 - **Durability = reproducibility:** zot's content is 100% rebuildable (CI re-pushes) + re-backfillable
