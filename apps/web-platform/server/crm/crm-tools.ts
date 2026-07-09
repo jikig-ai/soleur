@@ -22,7 +22,7 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
-import { STAGE_PROBABILITY, type Stage } from "@/server/crm/stage-probability";
+import { STAGE_PROBABILITY, type Stage } from "@/lib/crm/stage-probability";
 import {
   CONTACT_COLUMNS,
   NOTE_COLUMNS,
@@ -74,7 +74,7 @@ function untrustedRowsResponse(payload: unknown): ToolTextResponse {
 // PII-column-drift guard (crm-reads.test.ts). This is the ONLY agent-path
 // touch; the inline PII-safe write-error mapper below stays untouched.
 
-// Stage enum from the single source of truth (server/crm/stage-probability.ts).
+// Stage enum from the single source of truth (lib/crm/stage-probability.ts).
 // A drift-guard test asserts this equals the migration CHECK set (AC8).
 const STAGE_VALUES = Object.keys(STAGE_PROBABILITY) as [Stage, ...Stage[]];
 const LENS_VALUES = ["sales", "product"] as const;
