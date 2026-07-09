@@ -356,8 +356,14 @@ logs:
   retention:       "per existing web-platform retention (unchanged)"
 
 discoverability_test:
-  command:         "cd apps/web-platform && ./node_modules/.bin/next build 2>&1 | grep -i 'unrecognized key' && echo 'FAIL: staleTimes ignored' || echo 'config OK'   # CI-gated: full build is multi-minute"
-  expected_output: "config OK"
+  # The config-recognition check (no 'Unrecognized key' for staleTimes) is a
+  # BUILD-TIME gate — it lives in `liveness_signal` above and the `next build`
+  # CI step (blocking), because it is multi-minute and not a single live probe.
+  # This runtime discoverability_test is a no-ssh, no-shell-operator liveness
+  # probe an operator can run locally to confirm the deploy target is reachable
+  # and serving (the surface this client-side caching change ships to).
+  command:         curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/login
+  expected_output: "200"
 ```
 
 ## Architecture Decision (ADR/C4)
