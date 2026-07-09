@@ -297,6 +297,7 @@ jobs:
               -target=betteruptime_heartbeat.github_webhook_sig_failures \
               -target=betteruptime_heartbeat.github_api_429_sustained \
               -target=cloudflare_ruleset.cache_shared_binaries \
+              -target=doppler_secret.anthropic_admin_key \
               -target=doppler_secret.github_app_id \
               -target=doppler_secret.github_app_private_key \
               -target=random_id.github_webhook_secret \
