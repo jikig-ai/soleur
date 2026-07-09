@@ -131,14 +131,21 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
 - **Retirement (post-soak):** remove the pull-site GHCR fallback branch (5.3), stop GHCR push +
   egress allow (5.3), retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
   `GHCR_MINTER_DISABLED` gate (5.4), then rotate + revoke the exposed classic PAT (5.5).
-- **Host sizing (factual, #6288):** `cax11`(planned, arm64)→`cx23`(live, provisioned during an
-  Ampere+cx stock outage, #6122)→**`cx32`(4 vCPU / 8 GB, #6288)**. The 4 GB cx23 restart-looped
-  zot ~4/min OOM-ing during the boot scan of the ~35 GB store (disk-independent — disk sat at
-  58–63%, not ENOSPC); cx32 adds RAM headroom above the scan working-set and adopts the **ADR-062**
-  container `--memory`/`--memory-swap` cap (7168m) so a host-level OOM cannot restart-loop the box.
+- **Host sizing + region (factual, #6288):** `cax11`(planned, arm64)→`cx23`(live nbg1, provisioned
+  during an Ampere+cx stock outage, #6122)→**`cx33`(4 vCPU / 8 GB, `hel1`, #6288)**. The 4 GB cx23
+  restart-looped zot ~4/min OOM-ing during the boot scan of the ~35 GB store (disk-independent —
+  disk sat at 58–63%, not ENOSPC). #6288 first targeted **`cx32`, which is not a real Hetzner
+  type** — that phantom `registry-host-replace` destroyed the nbg1 host then failed `server type
+  cx32 not found` (GHCR-masked). Resolution: **migrate nbg1→hel1** (the store volume is ForceNew on
+  location → destroyed + recreated fresh; the 35 GB store is a disposable GHCR mirror that re-fills
+  from GHCR) and use **`cx33`** — the real 8 GB CX-Intel type, offered in hel1 (€8.49/mo) but NOT
+  nbg1, where the cheapest 8 GB is cpx32 ~€35/mo (~6×). Applied via the guarded
+  `registry-region-migrate` dispatch (its `registry_region_migrate_gate` permits the registry's OWN
+  store-volume replace but forbids any out-of-scope destroy + preserves the logs-token secret). cx33
+  adopts the **ADR-062** container `--memory`/`--memory-swap` cap (7168m), now enforceable on 8 GB.
   NOTE the cap already equals host RAM minus the ~1 GB OS reserve, so — unlike ADR-062's web host
   where `PROD_MEMORY_CAP` is a *tunable* with headroom to raise on OOM — here the cap is a *ceiling*:
-  a working-set overrun's only remediation is a bigger host (cx42/16 GB), not a higher cap. OOM
+  a working-set overrun's only remediation is a bigger host (cx43/16 GB), not a higher cap. OOM
   confirmation keys on the MONOTONIC `memory.events oom_kill` container-cgroup counter
   (`zot_oom_kills`, survives the 4/min point-sampling race) + `exit_code=137` + the journald
   `oom_kills_5m` backstop — not the page-cache-confounded host `mem_used` nor a point-sampled anon
