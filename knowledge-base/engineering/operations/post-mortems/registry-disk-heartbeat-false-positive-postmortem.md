@@ -223,4 +223,4 @@ Every action item and follow-up so this incident cannot recur.
 | Issue | Action | Status |
 |---|---|---|
 | #6241 | Operator-only: ops@jikigai.com must ACCEPT the Better Stack team-member invite (a click in ops@'s own inbox; `betteruptime_team_member` is inert until accepted). Re-evaluate after the next Better Stack incident fires — confirm ops@ received the email. | open |
-| #6242 | Recurrence-prevention: audit whether other dedicated hosts (git-data) shipped a heartbeat/monitor without a redeploy path — same failure class as this incident. | open |
+| #6242 | Recurrence-prevention: audit whether other dedicated hosts (git-data) shipped a heartbeat/monitor without a redeploy path — same failure class as this incident. **Done:** audit found 0 hosts in the live bug-class state (only `registry_disk_prd` was, now fixed); the class is now mechanically enforced by `plugins/soleur/test/heartbeat-reprovision-parity.test.ts` (ADR-103), and git-data's missing reprovision path was added (`git-data-host-replace`). | resolved |
