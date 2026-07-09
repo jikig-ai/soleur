@@ -35,11 +35,15 @@ never armed and the orphaned heartbeat fired. It was fixed reactively — a huma
 the false-positive incident — by adding the `registry-host-replace` scoped-`-replace` dispatch
 (ADR-096 amendment). Nothing mechanically prevented a future PR from re-introducing the class.
 
+<!-- lint-infra-ignore start -->
 Brand-survival threshold: `single-user incident` — a false-positive on a data-bearing host's
 heartbeat erodes trust in the alert channel (alert fatigue → a real incident gets ignored), and the
 absence of a reprovision path means a genuine host-config fix (a LUKS keyscript fix, a Vector wiring
 change) has no sanctioned non-SSH remediation, forcing an operator-local `terraform apply -replace`
 that violates `hr-prod-host-config-change-immutable-redeploy` / `hr-no-ssh-fallback-in-runbooks`.
+This paragraph *describes* the anti-pattern the ADR prevents (the sanctioned path is the dispatch
+job); the operator-local apply is precisely what must NOT happen.
+<!-- lint-infra-ignore end -->
 
 ## Decision
 

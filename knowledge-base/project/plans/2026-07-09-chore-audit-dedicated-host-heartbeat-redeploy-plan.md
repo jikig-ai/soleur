@@ -32,9 +32,11 @@ genuine gaps remain, both squarely inside the issue's "recurrence-prevention" fr
    a one-time operator maintenance-window apply with no dispatch path. Its heartbeat
    (`git_data_prd`) is `paused = true` today (safe), so this is a **latent** gap: the moment
    #5274 PR C arms the web-host probe cron and unpauses it, *or* git-data's cloud-init needs a
+   <!-- lint-infra-ignore start -->
    config change, there is no sanctioned non-SSH way to reprovision — forcing an operator-local
    `terraform apply -replace`, which violates `hr-all-infrastructure-provisioning-servers` /
-   `hr-prod-host-config-change-immutable-redeploy`.
+   `hr-prod-host-config-change-immutable-redeploy` (describes the anti-pattern the plan closes).
+   <!-- lint-infra-ignore end -->
 2. **Nothing mechanically enforces the invariant.** The #6238 bug was caught by a human *after* a
    false-positive incident. A future PR can re-introduce the class (add a non-paused,
    host-cron-armed heartbeat with no reprovision path) and no CI gate would stop it.
@@ -291,9 +293,11 @@ relationship enumeration the C4 completeness mandate requires — not an unsuppo
 
 ## Infrastructure (IaC)
 
+<!-- lint-infra-ignore start -->
 This plan routes the new reprovision capability through IaC (a destroy-guarded `workflow_dispatch`
 job running scoped `terraform apply -replace`), NOT operator SSH — satisfying
 `hr-all-infrastructure-provisioning-servers` and `hr-prod-host-config-change-immutable-redeploy`.
+<!-- lint-infra-ignore end -->
 
 ### Terraform changes
 - **No new `.tf` resources.** The `-replace` targets the existing `hcloud_server.git_data` and its
@@ -422,10 +426,12 @@ counter line in one job log, no SSH.
 - [x] **AC11 (whole suite green):** `bash scripts/test-all.sh` exits 0; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
 
 ### Post-merge (operator)
+<!-- lint-infra-ignore start -->
 - None. No terraform apply is required by this change — the `git-data-host-replace` path is a
   *capability* added to the dispatch menu, exercised only when an operator later needs to reprovision
   git-data. Its correctness is proven pre-merge by the destroy-guard fixtures (no live apply).
   `Automation: N/A` — nothing to run at merge.
+<!-- lint-infra-ignore end -->
 
 ## Test Scenarios
 

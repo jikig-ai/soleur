@@ -76,6 +76,14 @@ export const swrKeys = {
   routinesList: () => ["/api/dashboard/routines"] as const,
   releasesList: () => ["/api/dashboard/releases"] as const,
   workstreamIssues: () => ["/api/workstream/issues"] as const,
+  // Read-only beta-CRM surfaces (feat-beta-crm-ui #6172). The first tuple
+  // element is the fetch URL (jsonFetcher reads key[0]); the detail key embeds
+  // the id in the URL so each contact caches distinctly. A null id gates the
+  // fetch (SWR convention) until a contact is selected.
+  crmContacts: () => ["/api/crm/contacts"] as const,
+  crmContactDetail: (id: string | null) =>
+    id ? ([`/api/crm/contacts/${encodeURIComponent(id)}`] as const) : null,
+  crmFunnel: () => ["/api/crm/funnel"] as const,
   conversations: (filters: {
     statusFilter?: string;
     domainFilter?: string;
