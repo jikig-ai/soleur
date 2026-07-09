@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 
-const { pushMock, replaceMock, searchParamsRef } = vi.hoisted(() => ({
+const { pushMock, replaceMock, assignMock, searchParamsRef } = vi.hoisted(() => ({
   pushMock: vi.fn(),
   replaceMock: vi.fn(),
+  // GAP E (ADR-067 staleTimes): signup verify-success now HARD-navs via
+  // window.location.assign instead of a soft router.push.
+  assignMock: vi.fn(),
   searchParamsRef: { current: new URLSearchParams() },
 }));
 
@@ -42,11 +45,26 @@ async function sendCode() {
 }
 
 describe("SignupPage — redirectTo on verify (AC1)", () => {
+  let originalLocation: Location;
   beforeEach(() => {
     vi.clearAllMocks();
     searchParamsRef.current = new URLSearchParams();
     signInWithOtpMock.mockResolvedValue({ error: null });
     verifyOtpMock.mockResolvedValue({ error: null });
+    originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: { assign: assignMock, pathname: "/signup" } as unknown as Location,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: originalLocation,
+    });
   });
 
   async function verify() {
@@ -65,18 +83,18 @@ describe("SignupPage — redirectTo on verify (AC1)", () => {
     // (middleware does not interpose /accept-terms), so signup must route
     // through /accept-terms — never straight to /invite — to avoid a T&C bypass.
     await waitFor(() =>
-      expect(pushMock).toHaveBeenCalledWith(
+      expect(assignMock).toHaveBeenCalledWith(
         `/accept-terms?redirectTo=${encodeURIComponent("/invite/tok123")}`,
       ),
     );
-    expect(pushMock).not.toHaveBeenCalledWith("/invite/tok123");
+    expect(assignMock).not.toHaveBeenCalledWith("/invite/tok123");
   });
 
   it("routes to /accept-terms (no redirectTo) when absent", async () => {
     render(<SignupPage />);
     await sendCode();
     await verify();
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/accept-terms"));
+    await waitFor(() => expect(assignMock).toHaveBeenCalledWith("/accept-terms"));
   });
 
   it("routes to bare /accept-terms when redirectTo is an open-redirect vector", async () => {
@@ -86,8 +104,8 @@ describe("SignupPage — redirectTo on verify (AC1)", () => {
     render(<SignupPage />);
     await sendCode();
     await verify();
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/accept-terms"));
-    expect(pushMock).not.toHaveBeenCalledWith("https://evil.example");
+    await waitFor(() => expect(assignMock).toHaveBeenCalledWith("/accept-terms"));
+    expect(assignMock).not.toHaveBeenCalledWith("https://evil.example");
   });
 });
 

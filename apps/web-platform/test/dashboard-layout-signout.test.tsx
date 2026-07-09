@@ -15,11 +15,15 @@ function Wrap({ children }: { children: React.ReactNode }) {
 
 const {
   pushMock,
+  assignMock,
   signOutMock,
   removeAllChannelsMock,
   reportSilentFallbackMock,
 } = vi.hoisted(() => ({
   pushMock: vi.fn(),
+  // GAP C (ADR-067 staleTimes): sign-out now HARD-navs to /login via
+  // window.location.assign instead of a soft router.push.
+  assignMock: vi.fn(),
   signOutMock: vi.fn(
     (): Promise<{ error: Error | null }> => Promise.resolve({ error: null }),
   ),
@@ -77,19 +81,34 @@ const fetchMock = vi.fn(() =>
   } as Response),
 );
 
+let originalAssign: typeof window.location.assign;
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("matchMedia", stubMatchMedia);
   fetchMock.mockClear();
   pushMock.mockClear();
+  assignMock.mockClear();
   signOutMock.mockClear();
   removeAllChannelsMock.mockClear();
   reportSilentFallbackMock.mockClear();
   signOutMock.mockImplementation(() => Promise.resolve({ error: null }));
   removeAllChannelsMock.mockImplementation(() => Promise.resolve(["ok"]));
+  // Override only window.location.assign (GAP C hard nav) so the rest of the
+  // real happy-dom location (href/pathname/origin) stays intact for the layout.
+  originalAssign = window.location.assign;
+  Object.defineProperty(window.location, "assign", {
+    configurable: true,
+    writable: true,
+    value: assignMock,
+  });
 });
 
 afterEach(() => {
+  Object.defineProperty(window.location, "assign", {
+    configurable: true,
+    writable: true,
+    value: originalAssign,
+  });
   vi.unstubAllGlobals();
   cleanup();
 });
@@ -151,7 +170,7 @@ describe("DashboardLayout — Sign out confirmation modal", () => {
       expect(signOutMock).toHaveBeenCalledTimes(1);
     });
     expect(removeAllChannelsMock).toHaveBeenCalledTimes(1);
-    expect(pushMock).toHaveBeenCalledWith("/login");
+    expect(assignMock).toHaveBeenCalledWith("/login");
   });
 
   it("still redirects when removeAllChannels rejects, and mirrors the error to Sentry", async () => {
@@ -164,7 +183,7 @@ describe("DashboardLayout — Sign out confirmation modal", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
 
     await waitFor(() => {
-      expect(pushMock).toHaveBeenCalledWith("/login");
+      expect(assignMock).toHaveBeenCalledWith("/login");
     });
 
     expect(signOutMock).toHaveBeenCalledTimes(1);
@@ -184,7 +203,7 @@ describe("DashboardLayout — Sign out confirmation modal", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
 
     await waitFor(() => {
-      expect(pushMock).toHaveBeenCalledWith("/login");
+      expect(assignMock).toHaveBeenCalledWith("/login");
     });
 
     // First call: original signOut() throws and is mirrored.
@@ -212,7 +231,7 @@ describe("DashboardLayout — Sign out confirmation modal", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
 
     await waitFor(() => {
-      expect(pushMock).toHaveBeenCalledWith("/login");
+      expect(assignMock).toHaveBeenCalledWith("/login");
     });
 
     expect(signOutMock).toHaveBeenCalledTimes(2);

@@ -86,6 +86,26 @@ function withCspHeaders(response: NextResponse, cspValue: string): NextResponse 
   return response;
 }
 
+// GAP G (ADR-067 staleTimes amendment): `Sec-Fetch-Dest` values that carry
+// cacheable NON-document payloads (RSC/API fetches send `empty`; sub-resources
+// send `script`/`style`/`image`/…). Everything else — a real `document` nav OR
+// an ABSENT header (legacy Safari < 16.4) — is treated as a document and gets
+// `no-store` (fail-closed). Module-scoped so it is allocated once, not per request.
+const NON_DOCUMENT_DESTS = new Set([
+  "empty",
+  "script",
+  "style",
+  "image",
+  "font",
+  "audio",
+  "video",
+  "object",
+  "embed",
+  "manifest",
+  "worker",
+  "sharedworker",
+]);
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -372,6 +392,29 @@ export async function middleware(request: NextRequest) {
         cspValue,
       );
     }
+  }
+
+  // GAP G (ADR-067 staleTimes amendment): defeat bfcache for authenticated
+  // documents. A hard navigation wipes the App Router *Router Cache*, but NOT
+  // the browser's back/forward cache (bfcache) — a whole-document snapshot that
+  // could restore a rendered authenticated page after sign-out + browser Back.
+  // `force-dynamic` tabs already emit no-store (Next maps revalidate=0 →
+  // no-store); this covers the non-`force-dynamic` authenticated routes (the
+  // `"use client"` dashboard/kb pages, settings/billing). We EXCLUDE only the
+  // fetch dests that carry cacheable non-document payloads (RSC/API/asset
+  // fetches send `Sec-Fetch-Dest: empty`, and `script`/`style`/`image`/etc.),
+  // so those keep their caching and the client Router Cache — which is NOT
+  // governed by Cache-Control — keeps the perf win. Everything else (a real
+  // `document` navigation, OR a request that OMITS the header — legacy Safari
+  // < 16.4 still supports bfcache but sends no `Sec-Fetch-*`) is treated as a
+  // document and gets `no-store`: FAIL-CLOSED, because a missed no-store on an
+  // authenticated document is the exact leak (a shared-device Back restoring
+  // the prior user's shell). Public paths already returned above (:134), so
+  // they never reach this line and keep their bfcache eligibility.
+  const fetchDest = request.headers.get("sec-fetch-dest");
+  if (fetchDest === null || !NON_DOCUMENT_DESTS.has(fetchDest)) {
+    response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    response.headers.set("Pragma", "no-cache");
   }
 
   return withCspHeaders(response, cspValue);

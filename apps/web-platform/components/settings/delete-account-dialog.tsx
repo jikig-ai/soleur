@@ -1,14 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 
 interface DeleteAccountDialogProps {
   userEmail: string;
 }
 
 export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
-  const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [confirmEmail, setConfirmEmail] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
@@ -37,8 +35,11 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
         return;
       }
 
-      // Redirect to login after successful deletion
-      router.push("/login?deleted=true");
+      // Redirect to login after successful deletion. GAP F (ADR-067 staleTimes):
+      // account deletion is the strongest principal-LEAVING boundary — hard-nav
+      // so the App Router Router Cache is fully wiped (a soft push would leave
+      // the deleted user's warm RSC shells reachable on this device).
+      window.location.assign("/login?deleted=true");
     } catch {
       setError("Network error. Please try again.");
       setIsDeleting(false);

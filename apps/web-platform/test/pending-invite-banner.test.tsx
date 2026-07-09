@@ -23,17 +23,35 @@ const baseProps = {
 };
 
 let fetchMock: ReturnType<typeof vi.fn>;
+// GAP E/workspace-switch (ADR-067 staleTimes): accept now HARD-navs via
+// window.location.assign (accept-invite calls set_current_workspace_id → a
+// cross-workspace boundary that must wipe the Router Cache). Decline still uses
+// router.refresh (no workspace switch).
+const assignMock = vi.fn();
+let originalLocation: Location;
 
 beforeEach(() => {
   mockRefresh.mockClear();
   mockPush.mockClear();
+  assignMock.mockClear();
   fetchMock = vi.fn(
     async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
   );
   vi.stubGlobal("fetch", fetchMock);
+  originalLocation = window.location;
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    writable: true,
+    value: { assign: assignMock, pathname: "/dashboard" } as unknown as Location,
+  });
 });
 
 afterEach(() => {
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    writable: true,
+    value: originalLocation,
+  });
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -45,13 +63,15 @@ describe("PendingInviteBanner — accept", () => {
     expect(screen.getByText(/my workspace/i)).toBeInTheDocument();
   });
 
-  it("accept success: banner unmounts AND router.push + refresh fire", async () => {
+  it("accept success: banner unmounts AND HARD-navs (window.location.assign) to settings/team", async () => {
     render(<PendingInviteBanner {...baseProps} />);
     await userEvent.click(screen.getByRole("button", { name: /^accept$/i }));
 
     expect(screen.queryByRole("button", { name: /^accept$/i })).toBeNull();
-    expect(mockPush).toHaveBeenCalledWith("/dashboard/settings/team");
-    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    // GAP E/workspace-switch: hard nav (not soft push), no router.refresh.
+    expect(assignMock).toHaveBeenCalledWith("/dashboard/settings/team");
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(mockRefresh).not.toHaveBeenCalled();
   });
 
   it("accept non-2xx: banner stays mounted, refresh NOT called", async () => {
@@ -62,7 +82,7 @@ describe("PendingInviteBanner — accept", () => {
     await userEvent.click(screen.getByRole("button", { name: /^accept$/i }));
 
     expect(screen.getByRole("button", { name: /^accept$/i })).toBeInTheDocument();
-    expect(mockPush).not.toHaveBeenCalled();
+    expect(assignMock).not.toHaveBeenCalled();
     expect(mockRefresh).not.toHaveBeenCalled();
   });
 

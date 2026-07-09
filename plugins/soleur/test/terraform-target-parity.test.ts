@@ -427,13 +427,20 @@ function stripDispatchJobs(workflowText: string): string {
   // firewall attachment), so stripping it does not change the coverage anchor today, but keeps
   // the parity boundary uniform so a FUTURE git-data -target that is NOT already an exclusion
   // cannot silently mask a per-merge miss.
+  // registry_region_migrate (#6288): the sibling of registry_host_replace for a REGION move
+  // (nbg1→hel1) — a dispatch-only scoped job whose 6 -targets are the SAME registry
+  // OPERATOR_APPLIED_EXCLUSIONS. Strip it for the identical reason: a dispatch writer surface must
+  // never broaden the per-merge coverage anchor.
   return stripJob(
     stripJob(
       stripJob(
-        stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate"),
-        "inngest_host",
+        stripJob(
+          stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate"),
+          "inngest_host",
+        ),
+        "registry_host_replace",
       ),
-      "registry_host_replace",
+      "registry_region_migrate",
     ),
     "git_data_host_replace",
   );

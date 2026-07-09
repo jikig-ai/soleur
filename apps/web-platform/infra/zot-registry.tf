@@ -372,7 +372,7 @@ resource "doppler_secret" "zot_heartbeat_url_prd" {
 # — the failure that #6122 hit (100% → all pushes 500 'no space left on device') — silently stops
 # the ping, and Better Stack alerts BEFORE the disk is full, without any SSH/df or dashboard poll
 # (hr-no-dashboard-eyeball-pull-data-yourself). Pairs with storage.retention (growth cap) + the
-# 30 GB volume (headroom): retention bounds growth, this catches it if bounding ever regresses.
+# 60 GB volume (headroom, grown 30→60 in #6247): retention bounds growth, this catches it if bounding ever regresses.
 # period 900s / grace 600s: disk fills slowly, and 600s of grace covers the redeploy boot gap so
 # paused=false is safe (no operator UI unpause needed — the cron pings within cloud-init).
 resource "betteruptime_heartbeat" "registry_disk_prd" {

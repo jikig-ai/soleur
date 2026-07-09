@@ -485,6 +485,15 @@ export function creatorLabel(creator: WorkstreamCreator): string {
   return creator.login;
 }
 
+/** The effective "created by" identity used as the CREATOR-FILTER key: the human
+ *  initiator when known, else `"Soleur"` for a bot-authored issue with no
+ *  initiator, else the human author login. So filtering by a person surfaces BOTH
+ *  the issues they opened directly AND the Soleur-created issues they initiated. */
+export function creatorFilterKey(creator: WorkstreamCreator): string {
+  if (creator.initiatorLogin) return creator.initiatorLogin;
+  return creator.isSoleur ? "Soleur" : creator.login;
+}
+
 /** First `priority/*` label (in issue order) → priority; absent → `none`. */
 export function derivePriority(labels: string[]): WorkstreamPriority {
   for (const label of labels) {
@@ -567,6 +576,8 @@ export interface WorkstreamFilters {
   unassigned: boolean;
   /** `domain/*` label values. */
   domains: Set<string>;
+  /** Creator-filter keys (`creatorFilterKey` values) — who created the issue. */
+  creators: Set<string>;
 }
 
 /** The neutral, show-everything filter state. */
@@ -578,6 +589,7 @@ export function emptyFilters(): WorkstreamFilters {
     users: new Set(),
     unassigned: false,
     domains: new Set(),
+    creators: new Set(),
   };
 }
 
@@ -605,6 +617,11 @@ export function matchesFilters(
     const hit = (i.domains ?? []).some((d) => f.domains.has(d));
     if (!hit) return false;
   }
+  // Creator (who created the issue)
+  if (f.creators.size > 0) {
+    const key = i.creator ? creatorFilterKey(i.creator) : null;
+    if (key === null || !f.creators.has(key)) return false;
+  }
   return true;
 }
 
@@ -621,7 +638,8 @@ export function hasActiveFilters(
     f.roles.size > 0 ||
     f.users.size > 0 ||
     f.unassigned ||
-    f.domains.size > 0
+    f.domains.size > 0 ||
+    f.creators.size > 0
   );
 }
 
@@ -663,6 +681,8 @@ export interface FilterOptions {
   users: string[];
   hasUnassigned: boolean;
   domains: string[];
+  /** Distinct creator-filter keys present in the loaded set (alphabetical). */
+  creators: string[];
 }
 
 /** Faceted filter options derived from the FULL loaded set (D3) — de-duplicated.
@@ -674,6 +694,7 @@ export function deriveFilterOptions(issues: WorkstreamIssue[]): FilterOptions {
   const roles = new Set<WorkstreamRole>();
   const users = new Set<string>();
   const domains = new Set<string>();
+  const creators = new Set<string>();
   let hasUnassigned = false;
   for (const i of issues) {
     priorities.add(i.priority);
@@ -681,6 +702,7 @@ export function deriveFilterOptions(issues: WorkstreamIssue[]): FilterOptions {
     if (i.user !== undefined) users.add(i.user.name);
     if (i.assigneeRole === null && i.user === undefined) hasUnassigned = true;
     for (const d of i.domains ?? []) domains.add(d);
+    if (i.creator !== undefined) creators.add(creatorFilterKey(i.creator));
   }
   return {
     priorities: PRIORITY_ORDER.filter((p) => priorities.has(p)),
@@ -688,6 +710,7 @@ export function deriveFilterOptions(issues: WorkstreamIssue[]): FilterOptions {
     users: [...users].sort(),
     hasUnassigned,
     domains: [...domains].sort(),
+    creators: [...creators].sort(),
   };
 }
 

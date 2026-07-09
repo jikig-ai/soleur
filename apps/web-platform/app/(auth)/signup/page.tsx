@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { OtpCodeStep } from "@/components/auth/OtpCodeStep";
@@ -19,7 +19,6 @@ export default function SignupPage() {
 }
 
 function SignupForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const initialEmail = searchParams.get("email") ?? "";
   const reason = searchParams.get("reason");
@@ -56,8 +55,11 @@ function SignupForm() {
     // validated redirectTo through it — accept-terms honors it as the
     // terminal hop once T&C + key are satisfied. This preserves the invite
     // target without bypassing the T&C gate.
+    // GAP E (ADR-067 staleTimes): account creation is a principal-ENTRY into an
+    // authenticated funnel — hard-nav so every funnel exit uniformly wipes the
+    // App Router Router Cache (redirectTo is safeReturnTo-sanitized above).
     onVerifySuccess: () =>
-      router.push(
+      window.location.assign(
         redirectTo
           ? `/accept-terms?redirectTo=${encodeURIComponent(redirectTo)}`
           : "/accept-terms",

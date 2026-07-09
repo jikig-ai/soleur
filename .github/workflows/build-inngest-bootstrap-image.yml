@@ -238,18 +238,58 @@ jobs:
           cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
 
       - name: Mirror inngest image GHCR→zot (docker tag + push)
+        id: zot_mirror
         if: steps.zot_bridge.outcome == 'success'
+        # The continue-on-error marker below is BELT: the zot mirror is a SECONDARY/shadow
+        # copy during the ADR-096 soak (GHCR primary + break-glass; atomic GHCR
+        # pull-side fallback), so a mirror failure must NEVER red this build. #6274:
+        # a transient `connection reset` mid blob-upload over the CF-tunnel bridge
+        # was failing the whole job. Sibling of reusable-release.yml's mirror step.
+        continue-on-error: true
         env:
           IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          set -euo pipefail
+          # No `set -e` — every failure path exits 0 so this build stays green
+          # (SUSPENDERS to the continue-on-error belt). A persistent miss surfaces
+          # as mirror_status=degraded → ::warning:: + step summary AND (#6278) a Slack
+          # ⚠️ via the "Post to Slack (inngest mirror status)" step below — degrade-only
+          # (this workflow fires on inngest-bootstrap infra changes, not a per-release
+          # operator event). Before #6278 the degrade was annotations-only; a sustained
+          # pre-cutover degrade now gets push-notification parity with reusable-release.yml.
+          set -uo pipefail
+
+          # Bounded retry to self-heal a transient TCP reset over the CF-tunnel
+          # bridge. 3 attempts, 5s then 15s backoff. Idempotent ops only (docker
+          # tag is local; docker push re-runs safely).
+          retry() {
+            local n=1 max=3 rc=0
+            local -a sleeps=(0 5 15)
+            until "$@"; do
+              rc=$?
+              if (( n >= max )); then return "$rc"; fi
+              echo "::notice::zot mirror attempt ${n}/${max} failed (rc=${rc}); retrying in ${sleeps[$n]}s"
+              sleep "${sleeps[$n]}"
+              n=$(( n + 1 ))
+            done
+          }
+
+          degraded() {
+            local rc="$1"
+            echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
+            echo "::warning::zot mirror degraded for ${ZOT:-<image>} (rc=${rc}) — build UNAFFECTED (GHCR primary/break-glass); zot redundancy reduced, backfill via 'docker pull ghcr + docker push zot'. If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+            echo "⚠️ zot mirror degraded (rc=${rc}) — inngest image push failed; GHCR unaffected, backfill needed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
           # Full org namespace (jikig-ai/…) to match the ci-deploy.sh pull path
           # (zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") + zot-entry-gate.sh. A bare
           # `soleur-inngest-bootstrap` is an orphan repo nothing reads (#6122 namespace fix).
           ZOT="127.0.0.1:5000/${IMAGE#ghcr.io/}"
-          docker tag "$IMAGE:$TAG" "$ZOT:$TAG"
-          docker push "$ZOT:$TAG"
+          retry docker tag "$IMAGE:$TAG" "$ZOT:$TAG" || degraded "$?"
+          retry docker push "$ZOT:$TAG" || degraded "$?"
+
+          echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
           echo "Pushed $ZOT:$TAG"
 
       - name: Tear down cloudflared registry bridge
@@ -261,3 +301,44 @@ jobs:
             kill "$REGISTRY_BRIDGE_PID" 2>/dev/null || true
           fi
           [[ -f /tmp/cloudflared-registry.log ]] && tail -n 200 /tmp/cloudflared-registry.log || true
+
+      - name: Post to Slack (inngest mirror status)
+        # #6278: pre-cutover push-notification parity with reusable-release.yml's mirror
+        # step. Degrade-only — this workflow has no per-release happy-path Slack (it fires
+        # on inngest-bootstrap infra changes, not an operator-triggered release), so a
+        # degrade-only ⚠️ is the minimal push signal. Before the ADR-096 Phase-5 GHCR-push
+        # retirement a sustained inngest-mirror degrade must not stay annotations-only.
+        if: steps.zot_mirror.outputs.mirror_status == 'degraded'
+        continue-on-error: true
+        env:
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
+          # Resolved image tag (internal, validated by "Resolve image tag") — env-injected,
+          # never inline-interpolated into the run script.
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -uo pipefail
+          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::SLACK_RELEASES_WEBHOOK_URL unset; skipping inngest mirror Slack notification"
+            exit 0
+          fi
+          echo "::add-mask::$WEBHOOK"
+
+          MESSAGE="⚠️ inngest-bootstrap zot mirror degraded ($TAG) — GHCR unaffected, zot redundancy reduced; backfill needed."
+          # jq --arg keeps the payload injection-inert (TAG is JSON-escaped).
+          PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
+
+          # `|| echo 000` keeps a curl transport failure (timeout, DNS) on the ::warning
+          # path — without it `set -u`/pipefail would abort before the warning is emitted.
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            --max-time 15 \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK" || echo "000")
+
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Slack notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
+          fi
