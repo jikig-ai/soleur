@@ -374,6 +374,22 @@ export async function middleware(request: NextRequest) {
     }
   }
 
+  // GAP G (ADR-067 staleTimes amendment): defeat bfcache for authenticated
+  // documents. A hard navigation wipes the App Router *Router Cache*, but NOT
+  // the browser's back/forward cache (bfcache) — a whole-document snapshot that
+  // could restore a rendered authenticated page after sign-out + browser Back.
+  // `force-dynamic` tabs already emit no-store (Next maps revalidate=0 →
+  // no-store); this covers the non-`force-dynamic` authenticated routes (the
+  // `"use client"` dashboard/kb pages, settings/billing). Scoped to top-level
+  // document navigations (`Sec-Fetch-Dest: document`) so API/RSC responses and
+  // the client Router Cache (which is NOT governed by Cache-Control — the perf
+  // win survives) are untouched. Public paths already returned above (:134), so
+  // they never reach this line and keep their bfcache eligibility.
+  if (request.headers.get("sec-fetch-dest") === "document") {
+    response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    response.headers.set("Pragma", "no-cache");
+  }
+
   return withCspHeaders(response, cspValue);
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { usePanelRef } from "react-resizable-panels";
 import useSWR from "swr";
 import { useMediaQuery } from "@/hooks/use-media-query";
@@ -68,7 +68,6 @@ export interface UseKbLayoutStateResult {
 
 export function useKbLayoutState(): UseKbLayoutStateResult {
   const pathname = usePathname();
-  const router = useRouter();
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const chatPanelRef = usePanelRef();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -90,8 +89,14 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       reportSilentFallback(err, { feature: "kb-tree", op: "fetch-tree" });
       throw new KbTreeError("unknown");
     }
-    if (res.status === 401) {
-      router.push("/login");
+    // GAP F (ADR-067 staleTimes): revocation bounce — HARD-nav to wipe the
+    // Router Cache. Detect the direct 401 AND the #4307 middleware 302→/login
+    // (fetch follows the redirect to 200 HTML, so 401-only never fires).
+    if (
+      res.status === 401 ||
+      (res.redirected && new URL(res.url).pathname === "/login")
+    ) {
+      window.location.assign("/login");
       throw new KbTreeError(null);
     }
     if (res.status === 503) throw new KbTreeError("workspace-not-ready");
@@ -111,7 +116,7 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       reportSilentFallback(err, { feature: "kb-tree", op: "fetch-tree" });
       throw new KbTreeError("unknown");
     }
-  }, [router]);
+  }, []);
 
   const {
     data: treeData,

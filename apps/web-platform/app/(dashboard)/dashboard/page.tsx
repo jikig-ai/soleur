@@ -148,8 +148,17 @@ export default function DashboardPage() {
     paths: Record<string, PathStat>;
   }> => {
     const res = await fetch("/api/dashboard/foundation-status");
-    if (res.status === 401) {
-      router.push("/login");
+    // GAP F (ADR-067 staleTimes): a session-revocation bounce is a
+    // principal-LEAVING boundary — HARD-nav to /login so the App Router Router
+    // Cache is wiped (a soft push would leave the ejected principal's warm RSC
+    // shells reachable). Detect BOTH shapes: a direct 401 from the route, AND
+    // the #4307 middleware revocation gate's 302→/login (fetch follows the
+    // redirect to 200 HTML, so a status===401-only guard silently never fires).
+    if (
+      res.status === 401 ||
+      (res.redirected && new URL(res.url).pathname === "/login")
+    ) {
+      window.location.assign("/login");
       throw new DashFoundationError("redirect"); // navigating away — hold skeleton
     }
     if (res.status === 503) throw new DashFoundationError("provisioning");

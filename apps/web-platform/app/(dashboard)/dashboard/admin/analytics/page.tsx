@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { computeMetrics, computeFunnel } from "@/lib/analytics";
 import type { UserRow, ConversationRow } from "@/lib/analytics";
 import { AnalyticsDashboard } from "@/components/analytics/analytics-dashboard";
+import { AdminAnalyticsAuthzRefresh } from "@/components/analytics/admin-analytics-authz-refresh";
 
 export default async function AdminAnalyticsPage() {
   const supabase = await createClient();
@@ -67,5 +68,13 @@ export default async function AdminAnalyticsPage() {
   const metrics = computeMetrics(users, conversations);
   const funnel = computeFunnel(users, conversations);
 
-  return <AnalyticsDashboard metrics={metrics} funnel={funnel} />;
+  return (
+    <>
+      {/* GAP H (ADR-067 staleTimes): re-validate admin authz on every entry,
+          including a warm Router-Cache restore, so a de-provisioned admin never
+          rides the cached all-tenant RSC. */}
+      <AdminAnalyticsAuthzRefresh />
+      <AnalyticsDashboard metrics={metrics} funnel={funnel} />
+    </>
+  );
 }

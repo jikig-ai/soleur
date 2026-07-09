@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
 import { safeReturnTo } from "@/lib/safe-return-to";
 import type { Repo, SetupStep } from "@/components/connect-repo/types";
@@ -50,7 +50,6 @@ const SETUP_STEPS_TEMPLATE: SetupStep[] = [
 // Main Page Component
 // ---------------------------------------------------------------------------
 export default function ConnectRepoPage() {
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [state, setState] = useState<State>(() => {
@@ -126,7 +125,10 @@ export default function ConnectRepoPage() {
         if (statusRes.ok) {
           const statusData = await statusRes.json();
           if (statusData.status === "ready") {
-            router.push("/dashboard");
+            // GAP E (ADR-067 staleTimes): hard-nav into /dashboard so the App
+            // Router Router Cache is wiped — a soft push could serve a prior
+            // principal's warm RSC shell on this device.
+            window.location.assign("/dashboard");
             return;
           }
         }
@@ -214,7 +216,8 @@ export default function ConnectRepoPage() {
             if (statusRes.ok) {
               const statusData = await statusRes.json();
               if (statusData.status === "ready") {
-                router.push("/dashboard");
+                // GAP E (ADR-067 staleTimes): hard-nav wipes the Router Cache.
+                window.location.assign("/dashboard");
                 return;
               }
             }
@@ -482,7 +485,9 @@ export default function ConnectRepoPage() {
       // Also check URL param directly (no GitHub redirect happened)
       returnPath = safeReturnTo(searchParams.get("return_to")) ?? "/dashboard";
     }
-    router.push(returnPath);
+    // GAP E (ADR-067 staleTimes): terminal entry into /dashboard (or a
+    // safeReturnTo-sanitized invite target) — hard-nav to wipe the Router Cache.
+    window.location.assign(returnPath);
   }
 
   async function handleCreateSubmit(name: string, isPrivate: boolean) {
@@ -609,11 +614,13 @@ export default function ConnectRepoPage() {
     try {
       sessionStorage.removeItem("soleur_create_flow");
     } catch { /* sessionStorage unavailable */ }
-    router.push(consumeReturnTo());
+    // GAP E (ADR-067 staleTimes): terminal entry into /dashboard — hard-nav.
+    window.location.assign(consumeReturnTo());
   }
 
   function handleViewKb() {
-    router.push("/dashboard/kb");
+    // GAP E (ADR-067 staleTimes): terminal entry into /dashboard/kb — hard-nav.
+    window.location.assign("/dashboard/kb");
   }
 
   // ---------------------------------------------------------------------------

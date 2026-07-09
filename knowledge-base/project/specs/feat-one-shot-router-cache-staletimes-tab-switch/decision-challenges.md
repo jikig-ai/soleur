@@ -38,3 +38,43 @@ isolation scope is acceptable; the cheapest descope lever is a smaller `dynamic`
 (e.g. 5-10 s) which shrinks every window, or (strongest) also refactor
 `admin/analytics` off the RSC-baked all-tenant read. CPO sign-off is required
 (`requires_cpo_signoff: true`); `user-impact-reviewer` runs at review time.
+
+**Operator decision (2026-07-09): "Ship full safe scope"** — proceed with
+`dynamic: 30` + all hard-nav conversions (GAP C/D/E incl. funnel /F incl.
+delete-account + 302-detection /G /H) + ADR-067 amendment. GAP H shipped as the
+mount-time `router.refresh()` guard (not the API+SWR refactor).
+
+## 3. Isolation invariants covered by deterministic unit tests, not Playwright e2e (Test-strategy / Taste)
+
+The plan's Phase 4 prescribed a Playwright e2e matrix (perf skeleton, cross-user
+OTP, revocation 302, real-Back/bfcache, multi-tab SIGNED_OUT, admin-deprovision).
+Implemented instead as **deterministic unit tests**, all green:
+
+- **GAP C** (sign-out hard-nav + clear-before-nav ordering + teardown-failure
+  branch): `test/swr-cache-clear-on-signout.test.tsx` (rewritten, re-pinned to
+  `window.location.assign`) + `test/dashboard-layout-signout.test.tsx`.
+- **GAP D** (sibling-tab `SIGNED_OUT` hard-nav + same-tab guard):
+  `test/use-sign-out-signed-out-listener.test.tsx`.
+- **GAP E** (OTP sign-in + signup + setup-key skip hard-nav, open-redirect-safe):
+  `test/login-redirect-cooldown.test.tsx`, `test/signup-redirect-cooldown.test.tsx`,
+  `test/components/setup-key-skip.test.tsx`.
+- **GAP G** (`no-store` on authenticated documents only, via `Sec-Fetch-Dest`;
+  public paths + non-document fetches untouched): `test/middleware.no-store.test.ts`
+  (invokes the real `middleware()`).
+- **GAP H** (admin-analytics `router.refresh()` on every mount):
+  `test/components/analytics/admin-analytics-authz-refresh.test.tsx`.
+- **Config recognition**: the plan's `next build | grep 'Unrecognized key'` is
+  CI-gated (multi-minute full build), not a vitest.
+
+**Rationale:** the headless one-shot pipeline cannot start the dev server +
+Playwright browsers to *verify* new e2e specs. Authoring them blind risks either
+(a) vacuous assertions — asserting the ABSENCE of a transient `loading.tsx`
+skeleton is exactly the "proxy, not invariant" trap the plan warns against, and
+mocked-instant API routes may never show the skeleton with OR without the fix —
+or (b) red CI on the required `e2e` check, stalling the autonomous merge. The
+unit tests assert the same observable contracts deterministically at the
+navigation-mechanism boundary (`window.location.assign` fired, `no-store` header
+present, `router.refresh()` called). **Follow-up:** a live-server Playwright pass
+(cross-user paint + real-Back bfcache + revocation 302) is a fast-follow once the
+change is on a preview deploy; `user-impact-reviewer` cross-checks the diff at
+review time.

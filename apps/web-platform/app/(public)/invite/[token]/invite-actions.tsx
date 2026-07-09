@@ -105,7 +105,13 @@ export function InviteActions({
         setError(reasonToMessage(data.error) || "Failed to accept invitation");
         return;
       }
-      router.push("/dashboard/settings/team");
+      // GAP E/workspace-switch (ADR-067 staleTimes): accept-invite calls
+      // `set_current_workspace_id` server-side, so this is a CROSS-WORKSPACE
+      // boundary for the same principal — the warm Router Cache still holds the
+      // PREVIOUS workspace's RSC. Hard-nav to wipe it (mirrors the workspace
+      // switch in components/dashboard/org-switcher-container.tsx); a soft push
+      // would render the prior workspace's cached content under the new tenant.
+      window.location.assign("/dashboard/settings/team");
     } catch {
       setError("Network error. Please try again.");
     } finally {

@@ -59,7 +59,14 @@ export function LoginForm() {
     handleVerifyOtp,
   } = useOtpFlow({
     shouldCreateUser: false,
-    onVerifySuccess: () => router.push(redirectTo ?? "/dashboard"),
+    // GAP E (ADR-067 staleTimes amendment): the default OTP sign-in verifies
+    // client-side, so success is a principal-ENTRY into an authenticated
+    // context. HARD-navigate (not a soft router.push) so the App Router Router
+    // Cache is wiped — otherwise a prior user's warm RSC shell on this device
+    // could be served to the freshly-signed-in principal (middleware does not
+    // re-run on a cache hit). `redirectTo` is already `safeReturnTo`-sanitized
+    // (:24), so assign() is open-redirect-safe.
+    onVerifySuccess: () => window.location.assign(redirectTo ?? "/dashboard"),
     onSendError: redirectIfNoAccount,
   });
 
