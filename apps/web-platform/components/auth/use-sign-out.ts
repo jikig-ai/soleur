@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSWRConfig } from "swr";
 import { createClient } from "@/lib/supabase/client";
 import { clearSwrCache } from "@/lib/swr-config";
@@ -28,6 +28,14 @@ import { reportSilentFallback } from "@/lib/client-observability";
 export function useSignOut() {
   const { mutate } = useSWRConfig();
   const [isSigningOut, setIsSigningOut] = useState(false);
+  // Set true when THIS tab's button path (handleSignOut) has taken ownership of
+  // the sign-out navigation, so the SIGNED_OUT listener below does not fire a
+  // SECOND `window.location.assign("/login")` in the same tab. Two rapid assigns
+  // to the same URL abort each other's navigation (observable as Playwright's
+  // `net::ERR_ABORTED; maybe frame was detached?`), so the button path must own
+  // exactly one hard nav. A ref (not state) because the listener reads it
+  // synchronously and it must not trigger a re-render.
+  const buttonPathNavigatingRef = useRef(false);
 
   // Defense-in-depth (ADR-067 FR4): clear the in-memory SWR cache AND hard-nav
   // to /login on ANY SIGNED_OUT auth transition, not just the explicit button
@@ -55,13 +63,15 @@ export function useSignOut() {
           })
           .finally(() => {
             // GAP D: hard-nav the sibling tab so its Router Cache is wiped too.
-            // The `pathname !== "/login"` guard suppresses the nav for a tab that
-            // is ALREADY on /login (e.g. an already-signed-out sibling that gets
-            // a repeat SIGNED_OUT). It does NOT suppress the same-tab button
-            // path: handleSignOut's own `window.location.assign` does not
-            // synchronously change `pathname`, so this listener fires a second
-            // assign("/login") in that tab — harmless (idempotent same-URL nav).
-            if (window.location.pathname !== "/login") {
+            // Skip when THIS tab's button path already owns the nav
+            // (`buttonPathNavigatingRef` — avoids the double-assign that aborts
+            // the first navigation) OR when the tab is already on /login (a
+            // repeat SIGNED_OUT on an already-signed-out sibling). In a sibling
+            // tab that did NOT click sign out, the ref is false → it hard-navs.
+            if (
+              !buttonPathNavigatingRef.current &&
+              window.location.pathname !== "/login"
+            ) {
               window.location.assign("/login");
             }
           });
@@ -72,6 +82,10 @@ export function useSignOut() {
 
   const handleSignOut = useCallback(async () => {
     setIsSigningOut(true);
+    // Take ownership of the sign-out nav BEFORE `supabase.auth.signOut()` fires
+    // SIGNED_OUT, so the listener above suppresses its redundant assign in this
+    // tab and the button path performs exactly one hard nav.
+    buttonPathNavigatingRef.current = true;
     try {
       const supabase = createClient();
       try {

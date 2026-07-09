@@ -44,6 +44,13 @@ function Harness() {
   return null;
 }
 
+let capturedHandleSignOut: (() => Promise<void>) | null = null;
+function HarnessWithButton() {
+  const { handleSignOut } = useSignOut();
+  capturedHandleSignOut = handleSignOut;
+  return null;
+}
+
 beforeEach(() => {
   assignMock.mockReset();
   authCallbackRef.current = null;
@@ -111,5 +118,30 @@ describe("useSignOut — sibling-tab SIGNED_OUT listener (GAP D)", () => {
     authCallbackRef.current!("TOKEN_REFRESHED");
     await new Promise((r) => setTimeout(r, 0));
     expect(assignMock).not.toHaveBeenCalled();
+  });
+
+  it("button-path sign-out + its own SIGNED_OUT event fires EXACTLY ONE hard nav (no double-assign)", async () => {
+    // Regression guard: the button path (handleSignOut) and the SIGNED_OUT
+    // listener both hard-nav to /login. In the SAME tab, two rapid
+    // window.location.assign("/login") calls abort each other's navigation
+    // (Playwright surfaces this as net::ERR_ABORTED). handleSignOut takes
+    // ownership via buttonPathNavigatingRef BEFORE signOut fires SIGNED_OUT, so
+    // the listener suppresses its redundant nav and exactly one assign fires.
+    render(
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <HarnessWithButton />
+      </SWRConfig>,
+    );
+    await waitFor(() => expect(authCallbackRef.current).toBeTypeOf("function"));
+
+    // Button path takes ownership synchronously at its start.
+    const p = capturedHandleSignOut!();
+    // Simulate the SIGNED_OUT event that supabase.auth.signOut() emits.
+    authCallbackRef.current!("SIGNED_OUT");
+    await p;
+    await new Promise((r) => setTimeout(r, 0));
+
+    await waitFor(() => expect(assignMock).toHaveBeenCalledWith("/login"));
+    expect(assignMock).toHaveBeenCalledTimes(1);
   });
 });
