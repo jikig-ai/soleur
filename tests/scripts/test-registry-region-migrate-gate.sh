@@ -136,6 +136,14 @@ write_plan "${SERVER_CREATE},${NET_CREATE},${VA_CREATE},${VOL_REPLACE},${FW_CREA
 if registry_region_migrate_gate "$TMP/plan.json" >/dev/null; then
   fail "T13: a stray (non-allow-set) doppler secret create must ABORT (rc=1)"; else pass; fi
 
+# --- Test 14: FAIL — a collateral destroy of ANOTHER HOST (the catastrophic class, explicit) ---
+# T4 pins a collateral volume destroy; this makes the "another prod HOST would be destroyed" case
+# explicit. A non-registry server delete has a non-allow-set address → out_of_scope>=1 → ABORT.
+WEB_DELETE="$(rc_obj 'hcloud_server.web[\"web-1\"]' '"delete"')"
+write_plan "${SERVER_CREATE},${NET_CREATE},${VA_CREATE},${VOL_REPLACE},${FW_CREATE},${WEB_DELETE}"
+if registry_region_migrate_gate "$TMP/plan.json" >/dev/null; then
+  fail "T14: a collateral destroy of a non-registry host must ABORT (rc=1)"; else pass; fi
+
 echo ""
 echo "=== test-registry-region-migrate-gate.sh: ${passes} passed, ${fails} failed ==="
 [ "$fails" -eq 0 ] || exit 1
