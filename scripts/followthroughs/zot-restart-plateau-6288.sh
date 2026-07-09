@@ -4,7 +4,7 @@
 # WHAT IT PROVES. PR #6288 ships two slices in one immutable registry-host-replace:
 #   Slice 1 — enriches the SOLEUR_ZOT_DISK reporter (cloud-init-registry.yml) with
 #     zot_restarts / state_status / oom_killed / exit_code / oom_kills_5m / zot_anon_mb /
-#     mem_*_mb / boot_id so a crash self-reports OOM-vs-not from Better Stack with NO SSH.
+#     mem_total_mb / boot_id so a crash self-reports OOM-vs-not from Better Stack with NO SSH.
 #   Slice 2 — bumps the host cx23(4 GB)->cx32(8 GB) + adds an ADR-062 --memory=7168m cap so
 #     zot's ~35 GB store boot scan cannot host-OOM restart-loop the box.
 #
@@ -16,10 +16,11 @@
 #   - oom_kills_5m == 0 across the window (journald kernel-OOM backstop)
 #   - zot_anon_mb sits comfortably below the --memory cap (near-cap = the fix under-sized)
 #
-# WHY zot_anon_mb, not host mem_used_mb (fable Change 1): a ~35 GB store scan pins page cache,
-# so host mem_used fills to near-total on cx32 regardless of whether zot's ANONYMOUS memory ever
-# starved — gating on host mem_used would rubber-stamp PASS. zot_anon_mb (container cgroup anon
-# RSS, page-cache-free) is the real pressure signal.
+# WHY zot_anon_mb, not host used-memory (fable Change 1): a ~35 GB store scan pins page cache,
+# so host used-memory fills to near-total regardless of whether zot's ANONYMOUS memory ever
+# starved — gating on it would rubber-stamp PASS. zot_anon_mb (container cgroup anon RSS,
+# page-cache-free) is the real pressure signal. (The host mem_used_mb field was dropped #6292 —
+# same page-cache-confounding reason; the reporter now emits mem_total_mb only.)
 #
 # FAIL-SAFE: any query/auth/config failure, OR not-enough-soak-yet (a fresh host reads
 # zot_restarts=0 before the scan/gc even happen — the decision rule is slope-over-a->=2h-window,

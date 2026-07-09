@@ -95,7 +95,7 @@ assert "SOLEUR_ZOT_DISK marker line emitted" "grep -qF 'SOLEUR_ZOT_DISK pcent=' 
 LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI" | head -1)"
 assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
 for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
-         mem_used_mb= mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
+         mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
          oom_kills_5m= zot_last_err= boot_id=; do
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
@@ -124,7 +124,7 @@ echo "--- structural: #6288 new-field brace-escaping (no single-brace templatefi
 # counting (no fragile PCRE lookbehind): every "${VAR" substring must be covered by a "$${VAR"
 # double-escape, so count("${VAR") must equal count("$${VAR"). A bare single-brace usage lifts the
 # single count above the double count → FAIL. Non-brace usages ($VAR) contribute 0 to both.
-for v in MEM_TOTAL_KB MEM_AVAIL_KB MEM_TOTAL MEM_USED INSPECT ID STATE_STATUS OOM_KILLED \
+for v in MEM_TOTAL_KB MEM_TOTAL INSPECT ID STATE_STATUS OOM_KILLED \
          EXIT_CODE CGROUP_ROOT ZOT_ANON_MB ZOT_OOM_KILLS OOM_KILLS_5M ZOT_LAST_ERR BOOT_ID ZOT_MEMORY_CAP; do
   n_single=$(grep -oF "\${$v" "$CI" | wc -l | tr -d ' ')
   n_double=$(grep -oF "\$\${$v" "$CI" | wc -l | tr -d ' ')

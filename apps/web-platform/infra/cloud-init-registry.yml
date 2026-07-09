@@ -166,16 +166,13 @@ write_files:
         v=$(grep -E '^resize_ok=' /var/lib/zot/.resize-result | head -1 | cut -d= -f2); [ -n "$v" ] && resize_ok=$v
         v=$(grep -E '^block_size_gb=' /var/lib/zot/.resize-result | head -1 | cut -d= -f2); [ -n "$v" ] && block_size_gb=$v
       fi
-      # (2a) Host memory pressure CONTEXT from /proc/meminfo (procps `free` is NOT in packages:).
-      # mem_total_mb also self-verifies the cx32 bump landed on a no-SSH host (~8000 vs ~4000).
-      # NOTE (#6288 User-Challenge): mem_used_mb is page-cache-confounded context, NOT the OOM
-      # confirmation signal — a large store scan pins page cache so host used fills regardless.
-      # The OOM tell is zot_anon_mb below (container anonymous RSS). Fields RETAINED per the
-      # operator's explicit #6288 direction; see decision-challenges.md.
+      # (2a) Host TOTAL memory from /proc/meminfo (procps `free` is NOT in packages:) —
+      # mem_total_mb self-verifies the cx33 bump landed on a no-SSH host (~8000 vs ~4000) and
+      # pins the host tier for interpreting the OOM decode rows.
+      # (#6292) host used-memory dropped — page-cache-confounded (a large store scan pins page cache
+      # so host used fills regardless); OOM confirmation keys on zot_anon_mb/zot_oom_kills below.
       MEM_TOTAL_KB=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null)
-      MEM_AVAIL_KB=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null)
       if [ -n "$MEM_TOTAL_KB" ]; then MEM_TOTAL=$(( MEM_TOTAL_KB / 1024 )); else MEM_TOTAL=-1; fi
-      if [ -n "$MEM_TOTAL_KB" ] && [ -n "$MEM_AVAIL_KB" ]; then MEM_USED=$(( (MEM_TOTAL_KB - MEM_AVAIL_KB) / 1024 )); else MEM_USED=-1; fi
       # (2b) zot container state — ONE inspect for ALL container fields (folds in RestartCount, so
       # zot_restarts comes from the same call — no double inspect). Mid-restart returns empty →
       # default the WHOLE capture to sentinels. Adapted from container-restart-monitor.sh:118-119
@@ -221,7 +218,7 @@ write_files:
       BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_used_mb=$MEM_USED mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
