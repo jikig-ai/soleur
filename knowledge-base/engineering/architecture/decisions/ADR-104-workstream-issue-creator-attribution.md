@@ -1,4 +1,4 @@
-# ADR-103: Workstream issue creator attribution (GitHub author + Soleur-bot detection + human-initiator marker)
+# ADR-104: Workstream issue creator attribution (GitHub author + Soleur-bot detection + human-initiator marker)
 
 - **Status:** accepted (Part A ships in this PR; Part B — the write-path
   initiator marker — lands as a follow-up, but the marker format + parser are

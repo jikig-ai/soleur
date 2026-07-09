@@ -5,7 +5,7 @@ date: 2026-07-09
 branch: feat-one-shot-workstream-issue-creator-attribution
 lane: cross-domain
 brand_survival_threshold: none
-adr: ADR-103 (provisional)
+adr: ADR-104 (provisional)
 related:
   - PR #5659 (Workstream tab reads real GitHub issues — merged)
   - ADR-097 (GitHub Project v2 board canonical issue Status)
@@ -151,7 +151,7 @@ Add a `creators: Set<string>` dimension to `WorkstreamFilters` (`lib/workstream.
 This introduces a new cross-cutting **identity/attribution convention** (a machine-parseable issue-body initiator marker) and a **bot-identity detection** rule — an architectural decision, so the ADR is a deliverable of THIS plan, not a follow-up.
 
 ### ADR
-- **Create ADR-103 (provisional ordinal)** via `/soleur:architecture`: "Workstream issue creator attribution — surface the GitHub author, detect the Soleur GitHub-App bot (slug-derived), and attribute the human initiator of bot-created issues via a durable issue-body marker." Decision records: (1) the `creator` field is derived from `raw.user.login`, distinct from the assignee; (2) bot detection is slug-derived (`getAppSlug()` + `[bot]`), never a hardcoded login; (3) the initiator marker format (`<!-- soleur:initiated-by <login> -->`) and its stamping chokepoint (`create_issue` tool). Alternatives to record: visible trailer vs HTML comment; metadata label vs body marker. Ordinal is provisional — `/ship` re-verifies against `origin/main`.
+- **Create ADR-104 (provisional ordinal)** via `/soleur:architecture`: "Workstream issue creator attribution — surface the GitHub author, detect the Soleur GitHub-App bot (slug-derived), and attribute the human initiator of bot-created issues via a durable issue-body marker." Decision records: (1) the `creator` field is derived from `raw.user.login`, distinct from the assignee; (2) bot detection is slug-derived (`getAppSlug()` + `[bot]`), never a hardcoded login; (3) the initiator marker format (`<!-- soleur:initiated-by <login> -->`) and its stamping chokepoint (`create_issue` tool). Alternatives to record: visible trailer vs HTML comment; metadata label vs body marker. Ordinal is provisional — `/ship` re-verifies against `origin/main`.
 
 ### C4 views
 Checked all three model files — `knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}` — for the feature's external actors/systems/relationships:
@@ -159,7 +159,7 @@ Checked all three model files — `knowledge-base/engineering/architecture/diagr
 - **External system (Soleur GitHub-App bot):** NOT a distinct C4 element — ADR-044 states verbatim (L646) "GitHub App (installation-token clone) is subsumed by the `github` external system — no new vendor." The relevant edge already exists: `api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL)…"` (`model.c4:361`).
 - **Data store / access relationship:** no new store; the attribution datum lives in the GitHub issue body (already reached by the existing `api -> github` edge). No actor↔surface access relationship changes.
 
-**Conclusion: no `.c4` edit required** — the human-initiator↔bot-authorship attribution follows the established ADR-044/097 precedent (prose in ADR-103, no C4 element/relationship additions). This "no C4 impact" is supported by the enumeration above (initiator actor = existing `founder`; Soleur bot = subsumed in `github`; edge = existing `api -> github`), not an unsupported "None". If a future decision promotes a first-class "Soleur GitHub-App bot" C4 element, that is a separate net-new decision requiring a `.c4` edit + `model.likec4.json` regen (pre-commit `c4-model-regenerate` hook; else `c4-model-freshness` test fails).
+**Conclusion: no `.c4` edit required** — the human-initiator↔bot-authorship attribution follows the established ADR-044/097 precedent (prose in ADR-104, no C4 element/relationship additions). This "no C4 impact" is supported by the enumeration above (initiator actor = existing `founder`; Soleur bot = subsumed in `github`; edge = existing `api -> github`), not an unsupported "None". If a future decision promotes a first-class "Soleur GitHub-App bot" C4 element, that is a separate net-new decision requiring a `.c4` edit + `model.likec4.json` regen (pre-commit `c4-model-regenerate` hook; else `c4-model-freshness` test fails).
 
 ### Sequencing
 The ADR describes the target state and ships in THIS PR's lifecycle (status `accepted` — the mechanism is live at merge, no soak gate).
@@ -220,7 +220,7 @@ Add node-unit tests for the new PURE mappers alongside the existing `lib/workstr
 - [ ] `lib/workstream.ts` imports nothing from `components/` or React (leaf invariant preserved).
 - [ ] `git grep -n dangerouslySetInnerHTML apps/web-platform/components/workstream/issue-detail-sheet.tsx apps/web-platform/components/workstream/issue-card.tsx apps/web-platform/components/workstream/assignee-chip.tsx` returns nothing (login rendered as escaped text only).
 - [ ] `deriveColumn` / ADR-097 board Status derivation is byte-unchanged (`git diff` on that region empty); ADR-044 active-workspace resolution in `get-workstream-issues.ts` remains the ONLY owner/repo/installation source (no new tenant-resolution code).
-- [ ] ADR-103 (provisional) authored documenting the attribution decision; `.c4` files unedited (so no `model.likec4.json` regen needed).
+- [ ] ADR-104 (provisional) authored documenting the attribution decision; `.c4` files unedited (so no `model.likec4.json` regen needed).
 
 ### Part B — write path (with the Phase-0 mechanism; may be a follow-up PR)
 - [ ] `appendInitiatorMarker` + `parseInitiatorLogin` + the `INITIATED_BY_MARKER` format constant all live in `lib/workstream.ts` (single-sourced emit/parse contract). `appendInitiatorMarker` strips ALL pre-existing `soleur:initiated-by` markers unconditionally (spoof defense); `parseInitiatorLogin` returns the LAST occurrence — unit tests cover `(fakeMarkerBody, null) → stripped` and `(fakeMarkerBody, "harry") → real marker wins`.
@@ -267,7 +267,7 @@ None — checked open `code-review` issues for the six target files; no open sco
 - `apps/web-platform/test/components/workstream/issue-detail-sheet.test.tsx`, `issue-card.test.tsx` — render tests.
 
 ## Files to Create
-- `knowledge-base/engineering/architecture/decisions/ADR-103-*.md` — the attribution ADR (ordinal provisional).
+- `knowledge-base/engineering/architecture/decisions/ADR-104-*.md` — the attribution ADR (ordinal provisional).
 
 ## Non-Goals / Deferred
 - Persisting the New Issue dialog's optimistic `SOLAA-N` cards or enabling the disabled "Create with Concierge" field (out of scope; gated by `CONCIERGE_ONLINE`, PR #5659).

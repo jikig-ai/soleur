@@ -47,5 +47,5 @@ lane: cross-domain
 - [ ] 6.2 CUT — see 6.1.
 
 ## Phase 7 — ADR + verification
-- [x] 7.1 Author ADR-103 (provisional) via `/soleur:architecture`; "no C4 impact" with actor/system/edge citation; no `.c4` edit.
+- [x] 7.1 Author ADR-104 (provisional) via `/soleur:architecture`; "no C4 impact" with actor/system/edge citation; no `.c4` edit.
 - [x] 7.2 tsc --noEmit clean; vitest node + component suites green; column/Status derivation byte-unchanged.
