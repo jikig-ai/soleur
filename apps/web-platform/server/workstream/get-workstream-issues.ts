@@ -23,12 +23,34 @@ import {
   githubIssueToWorkstreamIssue,
   type WorkstreamIssue,
 } from "@/lib/workstream";
+import { getAppSlug } from "@/server/github-app";
 import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import { parseConnectedRepo } from "@/server/github-repo-parse";
 import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { resolveEffectiveInstallationId } from "@/server/cc-effective-installation";
 import { fetchBoardStatusMap, listRepoIssues } from "@/server/github-read-tools";
 import { reportSilentFallback } from "@/server/observability";
+import { createChildLogger } from "@/server/logger";
+
+const log = createChildLogger("workstream-issues");
+
+/**
+ * Resolve the Soleur GitHub-App bot slug for creator attribution (`<slug>[bot]`
+ * detection). NEVER throws — a getAppSlug() failure is a SILENT graceful degrade
+ * (the issue's author renders as a plain human) mirrored to Sentry so the degrade
+ * is observable without breaking the board.
+ */
+async function resolveBotSlug(): Promise<string | null> {
+  try {
+    return await getAppSlug();
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "workstream",
+      op: "workstream-botslug-degrade",
+    });
+    return null;
+  }
+}
 
 /**
  * Read the canonical GitHub Project v2 board Status map (issueNumber → Status
@@ -105,11 +127,32 @@ export async function getWorkstreamIssues(
     parsed.owner,
     parsed.repo,
   );
-  return raw.map((input) =>
+
+  // Bot slug for creator attribution (Soleur-bot detection). Degrade-safe: a null
+  // slug renders every author as a plain human (no throw, mirrored to Sentry).
+  const botSlug = await resolveBotSlug();
+
+  const issues = raw.map((input) =>
     githubIssueToWorkstreamIssue(
       boardStatuses
         ? { ...input, boardStatus: boardStatuses.get(input.number) }
         : input,
+      botSlug,
     ),
   );
+
+  // Liveness signal (NET-NEW — this function had no success-path log). Cosmetic
+  // attribution coverage per board read; no alert target.
+  log.info(
+    {
+      creatorAttributionCoverage: {
+        total: issues.length,
+        withCreator: issues.filter((i) => i.creator).length,
+        withInitiator: issues.filter((i) => i.creator?.initiatorLogin).length,
+      },
+    },
+    "workstream board read",
+  );
+
+  return issues;
 }

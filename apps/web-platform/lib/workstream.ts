@@ -44,6 +44,26 @@ export interface WorkstreamUser {
   initials: string;
 }
 
+/** Who CREATED the issue — the GitHub author, semantically distinct from both
+ *  the role assignee and the `user` (assignee person). A human-opened issue's
+ *  author is that person's login; an issue Soleur/Concierge opened is authored
+ *  by the Soleur GitHub-App bot, in which case `isSoleur` is true and — when the
+ *  issue body carries the initiator marker — `initiatorLogin` names the human who
+ *  asked Soleur to file it. Optional + additive: absent when the author is
+ *  unknown (mirrors the `user`/`domains` optional convention). */
+export interface WorkstreamCreator {
+  /** Raw GitHub author login, e.g. "octocat" or "soleur-ai[bot]". */
+  login: string;
+  /** True when the author is the Soleur GitHub-App bot (slug-derived). */
+  isSoleur: boolean;
+  /** Human initiator login parsed from the issue-body marker (PART B) — present
+   *  only for Soleur-authored issues that carry the marker. */
+  initiatorLogin?: string;
+  /** Display chip (name + initials): the human author, a "Soleur" label, or the
+   *  human initiator when known. Reuses the WorkstreamUser chip shape. */
+  display: WorkstreamUser;
+}
+
 export interface WorkstreamIssue {
   /** The GitHub repo issue number as a string, e.g. "5652" (also the React key
    *  and the `?issue=` deep-link param). Optimistic-local cards use "SOLAA-N*". */
@@ -56,6 +76,11 @@ export interface WorkstreamIssue {
   assigneeRole: WorkstreamRole | null;
   /** A specific person (distinct from the role assignee). Optional. */
   user?: WorkstreamUser;
+  /** Who created the issue (GitHub author + Soleur-bot/initiator attribution).
+   *  Distinct from `user` (assignee). Optional + additive — absent when the
+   *  author login is unknown (e.g. pre-existing constructors that pass no
+   *  `authorLogin`). */
+  creator?: WorkstreamCreator;
   /** "Live" flag — set when an open issue carries the `in-progress` label.
    *  User-created optimistic cards never set this (spec-flow #14). */
   live?: boolean;
@@ -247,6 +272,10 @@ export interface BoardIssueInput {
   state: "open" | "closed";
   /** GitHub `state_reason`: completed | reopened | not_planned | duplicate | null. */
   state_reason: string | null;
+  /** GitHub issue author login (`raw.user.login`) — the CREATOR, distinct from
+   *  `assignees`. Optional + additive: absent for pre-existing constructors, in
+   *  which case no `creator` is derived. */
+  authorLogin?: string | null;
   created_at: string;
   updated_at: string;
   /** Canonical GitHub Project v2 board Status option name (Phase 2, ADR-097) —
@@ -345,6 +374,106 @@ export function deriveUser(assignees: string[]): WorkstreamUser | undefined {
   return { name: login, initials: login.slice(0, 2).toUpperCase() };
 }
 
+// ---------------------------------------------------------------------------
+// Creator attribution — GitHub author + Soleur-bot detection + human-initiator
+// marker (single-sourced emit/parse contract, so the write helper and the read
+// parser can never drift). All PURE + DEFENSIVE (never throw; null/false/undefined
+// on missing/malformed input), matching this module's leaf convention.
+// ---------------------------------------------------------------------------
+
+/** Canonical initiator marker. The `<!-- soleur:<verb> … -->` HTML-comment family
+ *  (sibling of `soleur:followthrough` / `soleur:auto-close-stale-scope-out`):
+ *  invisible in rendered markdown, carries no `@mention` (no spurious notify) and
+ *  no close-keyword (cannot trip GitHub autoclose). BOTH `appendInitiatorMarker`
+ *  and `parseInitiatorLogin` derive from this so the byte contract is single. */
+export const INITIATED_BY_MARKER = {
+  /** Build the exact marker line for a login. */
+  build: (login: string) => `<!-- soleur:initiated-by ${login} -->`,
+  /** Global matcher — GitHub login charset (1–39 chars, alnum + internal hyphen).
+   *  Non-line-anchored by design: it runs only on Soleur-controlled bot bodies,
+   *  and the write side strips strays so the trailing server-stamped marker wins. */
+  regex: /<!--\s*soleur:initiated-by\s+([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)\s*-->/g,
+  /** Strip pattern (any marker, malformed included) — used for unconditional strip. */
+  stripRegex: /<!--\s*soleur:initiated-by[\s\S]*?-->/g,
+} as const;
+
+/** True iff `login` is the Soleur GitHub-App bot for `botSlug` (case-insensitive
+ *  `` `${botSlug}[bot]` ``). Biases to FALSE when the slug is empty/unresolved —
+ *  a `login.endsWith("[bot]")` fallback would misclassify `dependabot[bot]` /
+ *  `renovate[bot]` as Soleur, the exact confusion this feature removes. */
+export function isSoleurBotLogin(
+  login: string | null | undefined,
+  botSlug: string | null | undefined,
+): boolean {
+  if (!login || !botSlug) return false;
+  return login.toLowerCase() === `${botSlug.toLowerCase()}[bot]`;
+}
+
+/** Extract the human initiator login from an issue body's marker, or null when
+ *  absent/malformed. Returns the LAST occurrence so a server-stamped trailing
+ *  marker wins over any smuggled one. Never throws (null body → null). */
+export function parseInitiatorLogin(
+  body: string | null | undefined,
+): string | null {
+  if (!body) return null;
+  let login: string | null = null;
+  // Fresh matcher state per call (the shared regex is /g).
+  const re = new RegExp(INITIATED_BY_MARKER.regex.source, "g");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) login = m[1];
+  return login;
+}
+
+/** WRITE-side builder (co-located with the parser so emit/parse can't drift).
+ *  Unconditionally strips ALL pre-existing `soleur:initiated-by` markers first —
+ *  even when `login` is falsy — so a smuggled fake marker in a caller-supplied
+ *  body can never survive (spoof defense; the server controls the last write).
+ *  Appends the trusted marker only when `login` is present. Never throws. */
+export function appendInitiatorMarker(
+  body: string | null | undefined,
+  login: string | null | undefined,
+): string {
+  const stripped = (body ?? "").replace(INITIATED_BY_MARKER.stripRegex, "").trimEnd();
+  if (!login) return stripped;
+  const marker = INITIATED_BY_MARKER.build(login);
+  return stripped ? `${stripped}\n\n${marker}` : marker;
+}
+
+/** Human-readable initials for a login (first 2 chars, upper) — mirrors
+ *  `deriveUser`'s rule. */
+function loginInitials(login: string): string {
+  return login.slice(0, 2).toUpperCase();
+}
+
+/** Derive the `creator` attribution from the GitHub author login + issue body +
+ *  the Soleur bot slug. Returns undefined when `authorLogin` is falsy (no chip —
+ *  graceful). For a Soleur-bot author, the body is parsed for the human initiator
+ *  (only bot bodies are trusted — a human author's body is never marker-parsed).
+ *  The display chip prefers the human initiator, then a "Soleur" label, then the
+ *  raw human author. Never throws. */
+export function deriveCreator(
+  authorLogin: string | null | undefined,
+  body: string | null | undefined,
+  botSlug: string | null | undefined,
+): WorkstreamCreator | undefined {
+  if (!authorLogin) return undefined;
+  const isSoleur = isSoleurBotLogin(authorLogin, botSlug);
+  const initiatorLogin = isSoleur
+    ? (parseInitiatorLogin(body) ?? undefined)
+    : undefined;
+  const display: WorkstreamUser = initiatorLogin
+    ? { name: initiatorLogin, initials: loginInitials(initiatorLogin) }
+    : isSoleur
+      ? { name: "Soleur", initials: "SO" }
+      : { name: authorLogin, initials: loginInitials(authorLogin) };
+  return {
+    login: authorLogin,
+    isSoleur,
+    ...(initiatorLogin ? { initiatorLogin } : {}),
+    display,
+  };
+}
+
 /** First `priority/*` label (in issue order) → priority; absent → `none`. */
 export function derivePriority(labels: string[]): WorkstreamPriority {
   for (const label of labels) {
@@ -371,9 +500,11 @@ export function deriveRole(labels: string[]): WorkstreamRole | null {
  */
 export function githubIssueToWorkstreamIssue(
   input: BoardIssueInput,
+  botSlug?: string | null,
 ): WorkstreamIssue {
   const user = deriveUser(input.assignees);
   const domains = input.labels.filter((l) => l.startsWith("domain/"));
+  const creator = deriveCreator(input.authorLogin, input.body, botSlug);
   return {
     id: String(input.number),
     title: input.title,
@@ -382,6 +513,7 @@ export function githubIssueToWorkstreamIssue(
     priority: derivePriority(input.labels),
     assigneeRole: deriveRole(input.labels),
     ...(user ? { user } : {}),
+    ...(creator ? { creator } : {}),
     ...(deriveLive(input) ? { live: true } : {}),
     ...(domains.length ? { domains } : {}),
     createdAt: input.created_at,
