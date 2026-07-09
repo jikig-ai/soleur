@@ -400,6 +400,10 @@ jobs:
               # readiness ceiling = 30−8−10 = 12. FAIL-CLOSED on EVERY non-clean state (count
               # ≥ ceiling / EMAXCONNSESSION / 401/403/non-2xx / non-JSON / empty / token-unset /
               # curl-fail) — never a false 0==0 "clean" on an unparsed count.
+              # POOL_SIZE mirrors the inngest project's Supavisor default_pool_size, kept at
+              # 30 per ADR-104 (the #5562 30→15 revert is superseded). If that decision is ever
+              # revisited (decision-challenges.md), reconcile this constant + READINESS_CEILING —
+              # a stale 30 here would over-permit the gate against a smaller live pool.
               POOL_SIZE=30
               SUPAVISOR_WARM_RESERVE=8
               EXPECTED_BURST_COST=10
@@ -409,7 +413,12 @@ jobs:
               fi
               # Endpoint pinned to api.supabase.com — NO env override (a host seam is a
               # PAT-exfil-via-redirect surface). The 2>/dev/null redirect keeps the
-              # Authorization header out of $POOL_RESP.
+              # Authorization header out of $POOL_RESP. NOTE: this block runs under
+              # `set -euo pipefail` (unlike the `set -uo` sibling in scheduled-inngest-health.yml),
+              # so the rc is captured via `|| POOL_RC=$?` — a bare `$(…)` capture + `$?`
+              # would let `set -e` abort at the assignment on a non-zero exit BEFORE the rc read,
+              # making the failure branch dead (still fail-closed via the abort, but non-diagnostic).
+              POOL_RC=0
               POOL_RESP="$(curl --silent --show-error \
                 --request POST \
                 --url "https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query" \
@@ -418,13 +427,17 @@ jobs:
                 --data '{"query":"select coalesce(application_name,'\''(none)'\'') as app, usename, state, count(*)::int as n from pg_stat_activity where backend_type = '\''client backend'\'' and query not ilike '\''%pg_stat_activity%'\'' group by 1,2,3 order by 4 desc"}' \
                 --max-time 15 \
                 -w $'\n%{http_code}' \
-                2>/dev/null)"
-              POOL_RC=$?
+                2>/dev/null)" || POOL_RC=$?
               POOL_HTTP="${POOL_RESP##*$'\n'}"
               POOL_BODY="${POOL_RESP%$'\n'*}"
               # Bounded, newline-stripped body for logs (app_name is client-settable —
               # never echo it unbounded; head -c 300 defense-in-depth against log injection).
-              POOL_BODY_SAFE="$(printf '%s' "$POOL_BODY" | tr -d '\r' | tr '\n' ' ' | head -c 300)"
+              # `sed` redacts any sbp_ Management-API PAT for parity with the sibling's scrub_pat
+              # (defense-in-depth — the response body cannot contain the request Authorization
+              # header, but a future error-body reflecting request context would). Trailing
+              # `|| true` stops a head -c 300 SIGPIPE from aborting the step under set -e/pipefail.
+              PAT_SCRUB='s/sbp_[A-Za-z0-9]{20,}/[REDACTED-PAT]/g'
+              POOL_BODY_SAFE="$(printf '%s' "$POOL_BODY" | tr -d '\r' | tr '\n' ' ' | sed -E "$PAT_SCRUB" | head -c 300 || true)"
               if [[ "$POOL_RC" != "0" ]]; then
                 echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): curl(rc=$POOL_RC) against the Management API — pool unverifiable, refusing to flip."; exit 1
               fi
@@ -438,7 +451,7 @@ jobs:
                 echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): body is not a JSON array — cannot compute a count, refusing to flip. body=${POOL_BODY_SAFE}"; exit 1
               fi
               INNGEST_CONNS=$(printf '%s' "$POOL_BODY" | jq '[.[] | select(.usename == "postgres" and (.app | startswith("Supavisor") | not) and .app != "mgmt-api") | .n] | add // 0')
-              POOL_BREAKDOWN="$(printf '%s' "$POOL_BODY" | jq -r '.[] | "\(.usename // "?")/\(.app)/\(.state // "null")=\(.n)"' | tr '\n' ' ' | head -c 300)"
+              POOL_BREAKDOWN="$(printf '%s' "$POOL_BODY" | jq -r '.[] | "\(.usename // "?")/\(.app)/\(.state // "null")=\(.n)"' | tr '\n' ' ' | sed -E "$PAT_SCRUB" | head -c 300 || true)"
               if ! [[ "$INNGEST_CONNS" =~ ^[0-9]+$ ]]; then
                 echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): inngest-attributable count non-numeric ('$INNGEST_CONNS') — refusing to flip. breakdown: ${POOL_BREAKDOWN}"; exit 1
               fi
