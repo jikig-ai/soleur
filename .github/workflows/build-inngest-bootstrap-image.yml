@@ -252,10 +252,11 @@ jobs:
         run: |
           # No `set -e` — every failure path exits 0 so this build stays green
           # (SUSPENDERS to the continue-on-error belt). A persistent miss surfaces
-          # as mirror_status=degraded → ::warning:: + step summary. No Slack step in
-          # this workflow (it fires on inngest-bootstrap infra changes, not a
-          # per-release operator event — the operator watches the run they
-          # triggered), so the degraded signal is annotations-only by design.
+          # as mirror_status=degraded → ::warning:: + step summary AND (#6278) a Slack
+          # ⚠️ via the "Post to Slack (inngest mirror status)" step below — degrade-only
+          # (this workflow fires on inngest-bootstrap infra changes, not a per-release
+          # operator event). Before #6278 the degrade was annotations-only; a sustained
+          # pre-cutover degrade now gets push-notification parity with reusable-release.yml.
           set -uo pipefail
 
           # Bounded retry to self-heal a transient TCP reset over the CF-tunnel
@@ -300,3 +301,44 @@ jobs:
             kill "$REGISTRY_BRIDGE_PID" 2>/dev/null || true
           fi
           [[ -f /tmp/cloudflared-registry.log ]] && tail -n 200 /tmp/cloudflared-registry.log || true
+
+      - name: Post to Slack (inngest mirror status)
+        # #6278: pre-cutover push-notification parity with reusable-release.yml's mirror
+        # step. Degrade-only — this workflow has no per-release happy-path Slack (it fires
+        # on inngest-bootstrap infra changes, not an operator-triggered release), so a
+        # degrade-only ⚠️ is the minimal push signal. Before the ADR-096 Phase-5 GHCR-push
+        # retirement a sustained inngest-mirror degrade must not stay annotations-only.
+        if: steps.zot_mirror.outputs.mirror_status == 'degraded'
+        continue-on-error: true
+        env:
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
+          # Resolved image tag (internal, validated by "Resolve image tag") — env-injected,
+          # never inline-interpolated into the run script.
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -uo pipefail
+          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::SLACK_RELEASES_WEBHOOK_URL unset; skipping inngest mirror Slack notification"
+            exit 0
+          fi
+          echo "::add-mask::$WEBHOOK"
+
+          MESSAGE="⚠️ inngest-bootstrap zot mirror degraded ($TAG) — GHCR unaffected, zot redundancy reduced; backfill needed."
+          # jq --arg keeps the payload injection-inert (TAG is JSON-escaped).
+          PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
+
+          # `|| echo 000` keeps a curl transport failure (timeout, DNS) on the ::warning
+          # path — without it `set -u`/pipefail would abort before the warning is emitted.
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            --max-time 15 \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK" || echo "000")
+
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Slack notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
+          fi
