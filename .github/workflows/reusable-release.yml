@@ -696,7 +696,7 @@ jobs:
           # attempts, 5s then 15s backoff. Wraps only IDEMPOTENT ops (crane copy
           # skips already-uploaded blobs; cosign sign re-runs safely).
           retry() {
-            local n=1 max=3
+            local n=1 max=3 rc=0
             local -a sleeps=(0 5 15)
             until "$@"; do
               rc=$?
@@ -710,11 +710,18 @@ jobs:
           # On any failure: record the degraded signal (output + ::warning:: + step
           # summary) and exit 0. The release job stays green; the operator sees a
           # loud, no-SSH signal (ADR-096 "latency, not availability").
+          # $2 = remediation detail. The failure modes are NOT equivalent: a
+          # crane-copy/install miss leaves the image ABSENT → the host's atomic GHCR
+          # fallback covers it cleanly; a cosign-sign failure leaves it PRESENT-BUT-
+          # UNSIGNED, which post-cutover DEFEATS that fallback (see the cosign call
+          # site). EVERY backfill must re-sign — a bare 'crane copy' does NOT write
+          # the signature referrer — so the default remediation includes cosign sign.
           degraded() {
             local rc="$1"
+            local detail="${2:-zot redundancy reduced; backfill via 'crane copy GHCR→zot && cosign sign --yes <zot>@<digest>'.}"
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
-            echo "::warning::zot mirror degraded for ${ZOT:-<image>} (rc=${rc}) — release UNAFFECTED (GHCR primary/break-glass); zot redundancy reduced, backfill via 'crane copy GHCR→zot'. If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
-            echo "⚠️ zot mirror degraded (rc=${rc}) — release OK (GHCR primary), zot redundancy reduced; backfill needed." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::zot mirror degraded for ${ZOT:-<image>} (rc=${rc}) — release UNAFFECTED (GHCR primary/break-glass). ${detail} If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+            echo "⚠️ zot mirror degraded (rc=${rc}) — release OK (GHCR primary). ${detail}" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           }
 
@@ -745,7 +752,15 @@ jobs:
           done
           # Sign the zot digest (same digest; writes a sig referrer into zot so the host's
           # offline verify — same COSIGN_IDENTITY_REGEXP — passes against the zot copy).
-          retry cosign sign --yes "${ZOT}@${DIGEST}" || degraded "$?"
+          # A cosign failure HERE (after the copies already landed) leaves the image
+          # present-but-unsigned — DISTINCT from a copy miss: post-cutover the host would
+          # pull the present zot copy (bypassing the atomic GHCR fallback) and then
+          # HARD-BLOCK on signature verify (ci-deploy.sh verify_image_signature → enforce
+          # fail). Pre-cutover (soak) ZOT_ACTIVE=0 so this is latent, and the
+          # zot-entry-gate/soak-gate catch a missing/unsigned copy before the flip. The
+          # remediation MUST re-sign, not just re-copy — hence the distinct $2 detail.
+          retry cosign sign --yes "${ZOT}@${DIGEST}" \
+            || degraded "$?" "the zot copy is PRESENT BUT UNSIGNED (not a clean miss) — re-sign to clear: 'crane copy ${IMAGE}:v${VERSION} ${ZOT}:v${VERSION} && cosign sign --yes ${ZOT}@${DIGEST}'. Post-cutover an unsigned copy would block the host boot (verify hard-fail)."
 
           echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
           echo "zot mirror ok: copied v${VERSION}, ${COMMIT_SHA}, latest to ${ZOT} and signed ${ZOT}@${DIGEST}."
