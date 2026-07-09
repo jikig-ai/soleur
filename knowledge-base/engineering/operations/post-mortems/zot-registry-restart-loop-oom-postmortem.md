@@ -55,8 +55,9 @@ degradation of a redundant path, not an outage.
 
 ## Resolution (shipped in #6288)
 
-1. **Closed the telemetry gap (load-bearing).** Enriched the reporter with `mem_used_mb`/
-   `mem_total_mb` (context), **`zot_oom_kills`** (monotonic `memory.events oom_kill` counter — the
+1. **Closed the telemetry gap (load-bearing).** Enriched the reporter with `mem_total_mb`
+   (context; `mem_used_mb` was added here too but subsequently dropped, #6292 —
+   page-cache-confounded), **`zot_oom_kills`** (monotonic `memory.events oom_kill` counter — the
    real cgroup-OOM confirmation, survives point-sampling), `zot_anon_mb` (anon-RSS context),
    `state_status`/`oom_killed`/`exit_code`, `oom_kills_5m` (journald backstop), `zot_last_err`
    (non-OOM escape), and `boot_id` (old/new-host discriminator). The next crash self-reports
