@@ -26,6 +26,7 @@ import {
   readIssueComments,
   readPullRequest,
   listPullRequestComments,
+  listRepoIssues,
 } from "../server/github-read-tools";
 
 // Capture the real fetch in beforeAll (after any sibling test file's module-scope
@@ -62,6 +63,40 @@ function mockFetchSequence(responses: Array<{ body: unknown; status?: number }>)
     });
   }) as typeof fetch;
 }
+
+describe("listRepoIssues board narrowing", () => {
+  test("threads the issue author login into authorLogin (creator attribution)", async () => {
+    // Open page: one issue authored by the Soleur bot; short page ends the open
+    // scan. Closed page: empty. (mockFetchSequence repeats the last entry.)
+    mockFetchSequence([
+      {
+        body: [
+          {
+            number: 7001,
+            title: "Optimize static pages",
+            state: "open",
+            body: "do it",
+            labels: [],
+            assignees: [{ login: "harry" }],
+            milestone: null,
+            created_at: "2026-07-01T00:00:00Z",
+            updated_at: "2026-07-02T00:00:00Z",
+            html_url: "https://github.com/o/r/issues/7001",
+            user: { login: "soleur-ai[bot]" },
+          },
+        ],
+      },
+      { body: [] },
+    ]);
+
+    const out = await listRepoIssues(12345, "o", "r");
+
+    expect(out).toHaveLength(1);
+    expect(out[0].authorLogin).toBe("soleur-ai[bot]");
+    // author is distinct from the assignee
+    expect(out[0].assignees).toEqual(["harry"]);
+  });
+});
 
 describe("readIssue narrowing", () => {
   test("returns only the agent-relevant fields", async () => {
