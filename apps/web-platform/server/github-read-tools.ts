@@ -326,6 +326,7 @@ function toBoardInput(item: GhIssueResponse): BoardIssueInput {
     labels: item.labels.map(normalizeLabel),
     state: item.state === "closed" ? "closed" : "open",
     state_reason: item.state_reason ?? null,
+    authorLogin: item.user?.login ?? null,
     created_at: item.created_at,
     updated_at: item.updated_at,
   };

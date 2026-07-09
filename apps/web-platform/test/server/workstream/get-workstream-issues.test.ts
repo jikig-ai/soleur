@@ -10,6 +10,7 @@ const resolveEffectiveInstallationId = vi.fn();
 const listRepoIssues = vi.fn();
 const fetchBoardStatusMap = vi.fn();
 const reportSilentFallback = vi.fn();
+const getAppSlug = vi.fn();
 
 vi.mock("@/server/current-repo-url", () => ({
   getCurrentRepoUrl: (...a: unknown[]) => getCurrentRepoUrl(...a),
@@ -27,6 +28,9 @@ vi.mock("@/server/github-read-tools", () => ({
 }));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: (...a: unknown[]) => reportSilentFallback(...a),
+}));
+vi.mock("@/server/github-app", () => ({
+  getAppSlug: (...a: unknown[]) => getAppSlug(...a),
 }));
 
 import { getWorkstreamIssues } from "@/server/workstream/get-workstream-issues";
@@ -52,6 +56,7 @@ beforeEach(() => {
   resolveEffectiveInstallationId.mockResolvedValue(123);
   listRepoIssues.mockResolvedValue([]);
   fetchBoardStatusMap.mockResolvedValue(new Map());
+  getAppSlug.mockResolvedValue("soleur-ai");
 });
 afterEach(() => {
   vi.clearAllMocks();
@@ -131,5 +136,46 @@ describe("getWorkstreamIssues", () => {
     const out = await getWorkstreamIssues("u1");
     expect(fetchBoardStatusMap).not.toHaveBeenCalled();
     expect(out[0].status).toBe("in_progress"); // label derivation
+  });
+
+  // --- Creator attribution (PART A) ---------------------------------------
+
+  it("threads the GitHub author into creator (human author)", async () => {
+    listRepoIssues.mockResolvedValue([rawIssue({ authorLogin: "octocat" })]);
+    const out = await getWorkstreamIssues("u1");
+    expect(out[0].creator).toEqual({
+      login: "octocat",
+      isSoleur: false,
+      display: { name: "octocat", initials: "OC" },
+    });
+  });
+
+  it("detects the slug-derived Soleur bot + surfaces the marker initiator", async () => {
+    listRepoIssues.mockResolvedValue([
+      rawIssue({
+        authorLogin: "soleur-ai[bot]",
+        body: "Optimize static pages\n<!-- soleur:initiated-by harry -->",
+      }),
+    ]);
+    const out = await getWorkstreamIssues("u1");
+    expect(out[0].creator?.isSoleur).toBe(true);
+    expect(out[0].creator?.initiatorLogin).toBe("harry");
+  });
+
+  it("degrades gracefully (author rendered as human, no throw) + mirrors when getAppSlug fails", async () => {
+    getAppSlug.mockRejectedValue(new Error("GH /app 500"));
+    listRepoIssues.mockResolvedValue([
+      rawIssue({ authorLogin: "soleur-ai[bot]" }),
+    ]);
+    const out = await getWorkstreamIssues("u1");
+    // botSlug unresolved → biases to human (isSoleur false); never throws.
+    expect(out[0].creator?.isSoleur).toBe(false);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        feature: "workstream",
+        op: "workstream-botslug-degrade",
+      }),
+    );
   });
 });

@@ -2,16 +2,21 @@ import { describe, expect, it } from "vitest";
 import {
   COLUMNS,
   STATUS_ORDER,
+  appendInitiatorMarker,
   assigneeInitials,
   boardStatusToWorkstreamStatus,
   columnAccent,
+  creatorLabel,
   deriveColumn,
+  deriveCreator,
   deriveLive,
   derivePriority,
   deriveRole,
   deriveUser,
   githubIssueToWorkstreamIssue,
   isLive,
+  isSoleurBotLogin,
+  parseInitiatorLogin,
   priorityBarClass,
   priorityLabel,
   priorityPillClass,
@@ -368,5 +373,203 @@ describe("githubIssueToWorkstreamIssue (full mapper)", () => {
         input({ state: "closed", state_reason: "not_planned" }),
       ).status,
     ).toBe("done");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Creator attribution (PART A read path) — issue author + Soleur-bot detection
+// + human-initiator marker parse. All pure + defensive (never throw).
+// ---------------------------------------------------------------------------
+
+describe("isSoleurBotLogin", () => {
+  it("matches the slug's bot login", () => {
+    expect(isSoleurBotLogin("soleur-ai[bot]", "soleur-ai")).toBe(true);
+  });
+  it("is case-insensitive", () => {
+    expect(isSoleurBotLogin("Soleur-AI[Bot]", "soleur-ai")).toBe(true);
+  });
+  it("rejects a human login", () => {
+    expect(isSoleurBotLogin("octocat", "soleur-ai")).toBe(false);
+  });
+  it("does NOT misclassify other bots (no endsWith([bot]) heuristic)", () => {
+    expect(isSoleurBotLogin("dependabot[bot]", "soleur-ai")).toBe(false);
+    expect(isSoleurBotLogin("renovate[bot]", "soleur-ai")).toBe(false);
+  });
+  it("biases to false on empty/unresolved slug", () => {
+    expect(isSoleurBotLogin("soleur-ai[bot]", null)).toBe(false);
+    expect(isSoleurBotLogin("soleur-ai[bot]", "")).toBe(false);
+    expect(isSoleurBotLogin("soleur-ai[bot]", undefined)).toBe(false);
+  });
+  it("returns false on null/empty login", () => {
+    expect(isSoleurBotLogin(null, "soleur-ai")).toBe(false);
+    expect(isSoleurBotLogin("", "soleur-ai")).toBe(false);
+  });
+});
+
+describe("parseInitiatorLogin", () => {
+  it("extracts the login from a valid marker", () => {
+    expect(
+      parseInitiatorLogin("Body\n\n<!-- soleur:initiated-by harry -->"),
+    ).toBe("harry");
+  });
+  it("tolerates surrounding whitespace and a trailing newline", () => {
+    expect(
+      parseInitiatorLogin("x\n<!--   soleur:initiated-by   octo-cat   -->\n"),
+    ).toBe("octo-cat");
+  });
+  it("returns the LAST occurrence (server-stamped wins over a smuggled one)", () => {
+    expect(
+      parseInitiatorLogin(
+        "<!-- soleur:initiated-by attacker -->\nreal\n<!-- soleur:initiated-by harry -->",
+      ),
+    ).toBe("harry");
+  });
+  it("returns null when no marker present", () => {
+    expect(parseInitiatorLogin("just a body")).toBeNull();
+  });
+  it("returns null on a malformed marker (@-prefixed / spaces)", () => {
+    expect(parseInitiatorLogin("<!-- soleur:initiated-by @harry -->")).toBeNull();
+    // Extra tokens between the login and the closing `-->` fail the anchored
+    // trailer, so a "two words" body is treated as malformed → null.
+    expect(
+      parseInitiatorLogin("<!-- soleur:initiated-by two words -->"),
+    ).toBeNull();
+  });
+  it("returns null on null/undefined body", () => {
+    expect(parseInitiatorLogin(null)).toBeNull();
+    expect(parseInitiatorLogin(undefined)).toBeNull();
+  });
+});
+
+describe("appendInitiatorMarker (write-side builder)", () => {
+  it("appends the marker when a login is present", () => {
+    const out = appendInitiatorMarker("Body", "harry");
+    expect(out).toContain("Body");
+    expect(out).toContain("<!-- soleur:initiated-by harry -->");
+    expect(parseInitiatorLogin(out)).toBe("harry");
+  });
+  it("leaves the body unchanged (no marker) when login is falsy", () => {
+    expect(appendInitiatorMarker("Body", null)).toBe("Body");
+    expect(appendInitiatorMarker("Body", "")).toBe("Body");
+    expect(appendInitiatorMarker(null, null)).toBe("");
+  });
+  it("strips a smuggled pre-existing marker even when login is falsy", () => {
+    const smuggled = "Body\n<!-- soleur:initiated-by attacker -->";
+    const out = appendInitiatorMarker(smuggled, null);
+    expect(out).not.toContain("attacker");
+    expect(parseInitiatorLogin(out)).toBeNull();
+  });
+  it("does not double-stamp — a body with a marker keeps only the trusted one", () => {
+    const withFake = "Body\n<!-- soleur:initiated-by attacker -->";
+    const out = appendInitiatorMarker(withFake, "harry");
+    expect(out).not.toContain("attacker");
+    expect(parseInitiatorLogin(out)).toBe("harry");
+    // exactly one marker
+    expect(out.match(/soleur:initiated-by/g)?.length).toBe(1);
+  });
+});
+
+describe("deriveCreator", () => {
+  it("returns undefined when authorLogin is falsy (no chip)", () => {
+    expect(deriveCreator(null, "b", "soleur-ai")).toBeUndefined();
+    expect(deriveCreator("", "b", "soleur-ai")).toBeUndefined();
+    expect(deriveCreator(undefined, "b", "soleur-ai")).toBeUndefined();
+  });
+  it("maps a human author (not the bot)", () => {
+    const c = deriveCreator("octocat", "body", "soleur-ai");
+    expect(c).toEqual({
+      login: "octocat",
+      isSoleur: false,
+      display: { name: "octocat", initials: "OC" },
+    });
+  });
+  it("maps a Soleur-bot author with no marker → Soleur, no initiator", () => {
+    const c = deriveCreator("soleur-ai[bot]", "body", "soleur-ai");
+    expect(c?.isSoleur).toBe(true);
+    expect(c?.initiatorLogin).toBeUndefined();
+    expect(c?.display).toEqual({ name: "Soleur", initials: "SO" });
+  });
+  it("maps a Soleur-bot author WITH a marker → initiator surfaced", () => {
+    const c = deriveCreator(
+      "soleur-ai[bot]",
+      "Body\n<!-- soleur:initiated-by harry -->",
+      "soleur-ai",
+    );
+    expect(c?.isSoleur).toBe(true);
+    expect(c?.initiatorLogin).toBe("harry");
+    // display prefers the human initiator
+    expect(c?.display).toEqual({ name: "harry", initials: "HA" });
+  });
+  it("does NOT parse a marker for a human author (only bot bodies are trusted)", () => {
+    const c = deriveCreator(
+      "octocat",
+      "<!-- soleur:initiated-by harry -->",
+      "soleur-ai",
+    );
+    expect(c?.isSoleur).toBe(false);
+    expect(c?.initiatorLogin).toBeUndefined();
+  });
+});
+
+describe("creatorLabel", () => {
+  it("renders the three label variants", () => {
+    expect(
+      creatorLabel(deriveCreator("octocat", "b", "soleur-ai")!),
+    ).toBe("octocat");
+    expect(
+      creatorLabel(deriveCreator("soleur-ai[bot]", "b", "soleur-ai")!),
+    ).toBe("Soleur");
+    expect(
+      creatorLabel(
+        deriveCreator(
+          "soleur-ai[bot]",
+          "<!-- soleur:initiated-by harry -->",
+          "soleur-ai",
+        )!,
+      ),
+    ).toBe("Soleur · initiated by harry");
+  });
+});
+
+describe("githubIssueToWorkstreamIssue — creator threading (PART A)", () => {
+  it("sets creator from authorLogin + botSlug", () => {
+    const out = githubIssueToWorkstreamIssue(
+      input({ authorLogin: "octocat" }),
+      "soleur-ai",
+    );
+    expect(out.creator).toEqual({
+      login: "octocat",
+      isSoleur: false,
+      display: { name: "octocat", initials: "OC" },
+    });
+  });
+  it("surfaces the initiator for a bot-authored issue with a marker", () => {
+    const out = githubIssueToWorkstreamIssue(
+      input({
+        authorLogin: "soleur-ai[bot]",
+        body: "Optimize static pages\n<!-- soleur:initiated-by harry -->",
+      }),
+      "soleur-ai",
+    );
+    expect(out.creator?.isSoleur).toBe(true);
+    expect(out.creator?.initiatorLogin).toBe("harry");
+  });
+  it("omits creator when authorLogin absent (back-compat with existing callers)", () => {
+    const out = githubIssueToWorkstreamIssue(input());
+    expect(out.creator).toBeUndefined();
+  });
+  it("treats author as human when botSlug omitted (no throw)", () => {
+    const out = githubIssueToWorkstreamIssue(
+      input({ authorLogin: "soleur-ai[bot]" }),
+    );
+    expect(out.creator?.isSoleur).toBe(false);
+  });
+  it("does not conflate creator with the assignee (user)", () => {
+    const out = githubIssueToWorkstreamIssue(
+      input({ authorLogin: "octocat", assignees: ["harry"] }),
+      "soleur-ai",
+    );
+    expect(out.user).toEqual({ name: "harry", initials: "HA" });
+    expect(out.creator?.login).toBe("octocat");
   });
 });
