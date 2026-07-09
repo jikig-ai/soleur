@@ -89,8 +89,8 @@ independent axes so it never silently gates a host:
     runtime signals (`registry:{ghcr-fallback,zot-gate-degraded}`,
     `stage:{inngest_ghcr_fallback,app_ghcr_fallback}`). It is load-bearing at the Phase-5 GHCR-push
     retirement. (Sensitivity note: it thresholds per Sentry issue-group, not a true cross-signal
-    aggregate — see the resource comment; a `sentry_metric_alert` upgrade is deferred until a
-    resolvable numeric notify target exists in the Sentry TF root.) Two post-cutover boot-gating
+    aggregate — see the resource comment; a `sentry_metric_alert` upgrade is deferred to #6285 until
+    a resolvable numeric notify target exists in the Sentry TF root.) Two post-cutover boot-gating
     shapes the degraded signal must remain loud for: a **missing** copy (crane-copy failure) AND a
     **present-but-unsigned** copy (cosign-sign succeeded-copy-then-failed-sign) — the latter is NOT a
     clean miss, since the pull side would pull the present zot copy and *bypass* the atomic GHCR

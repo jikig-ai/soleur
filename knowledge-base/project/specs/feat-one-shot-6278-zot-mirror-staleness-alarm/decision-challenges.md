@@ -23,9 +23,9 @@ dominant shared-tag correlated outage (a rolling-deploy zot miss drives many hos
 spread (<3 in every signal-group simultaneously) — the correlated-failure tail, not the mode the
 "aggregate pattern" threshold targets.
 
-**Follow-up filed:** upgrade to `sentry_metric_alert` once a resolvable numeric notify target lands
-(unblocks at the first non-founder Sentry seat — the same boundary issue-alerts.tf comments already
-defer).
+**Follow-up filed (#6285):** upgrade to `sentry_metric_alert` once a resolvable numeric notify target
+lands (dependency trigger: the first non-founder Sentry seat — the same boundary issue-alerts.tf
+comments already defer).
 
 **Rejected alternatives:** (1) Branch B — theoretically-superior aggregation, but unresolvable/
 unverifiable notify target. (2) Branch B + `data "sentry_team"` slug lookup — does not rescue

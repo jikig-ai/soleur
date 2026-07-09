@@ -29,15 +29,20 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   it("ci-deploy.sh emits the supply-chain image-pull tags + both registry values", () => {
     expect(ciDeploy).toContain(`feature: "supply-chain"`);
     expect(ciDeploy).toContain(`op: "image-pull"`);
-    // ghcr-fallback is the level-warning registry value from registry_pull_event;
-    // zot-gate-degraded is the literal from zot_gate_degraded_event.
-    expect(ciDeploy).toContain("ghcr-fallback");
+    // Pin the exact EMIT forms, not the bare tag literals: `ghcr-fallback` also
+    // appears in several ci-deploy.sh comments, so a bare `toContain("ghcr-fallback")`
+    // would stay GREEN even if the emit CALL were renamed — the silent-DARK failure
+    // this guard exists to catch. `registry_pull_event ghcr-fallback` (the call site)
+    // and `registry: "zot-gate-degraded"` (the jq tag literal) are emit-only.
+    expect(ciDeploy).toContain("registry_pull_event ghcr-fallback");
     expect(ciDeploy).toContain(`registry: "zot-gate-degraded"`);
   });
 
   it("cloud-init.yml emits both fresh-boot fallback stages (inngest + app-image)", () => {
-    expect(cloudInit).toContain("inngest_ghcr_fallback");
-    expect(cloudInit).toContain("app_ghcr_fallback");
+    // Pin the exact emit CALL forms — `app_ghcr_fallback` also appears in this PR's
+    // Phase-1b explanatory comment, so pinning the bare stage would be vacuous.
+    expect(cloudInit).toContain("soleur-boot-emit inngest_ghcr_fallback warning");
+    expect(cloudInit).toContain(`"app_ghcr_fallback" warning`);
   });
 
   it("issue-alerts.tf pins all four signal tag-values (any-match OR)", () => {
@@ -62,6 +67,11 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     expect(scoped).toMatch(/comparison_type\s*=\s*"count"/);
     expect(scoped).toMatch(/value\s*=\s*3/);
     expect(scoped).toMatch(/interval\s*=\s*"1h"/);
+    // Pin the no-SSH page target: a silent removal of the notify action would
+    // make the alarm fire-but-page-nobody (the exact Branch-B failure the CTO
+    // ruling avoided). IssueOwners→ActiveMembers reaches the solo founder.
+    expect(scoped).toContain("IssueOwners");
+    expect(scoped).toContain("ActiveMembers");
   });
 
   it("the -target wiring guards that the apply workflow creates the rule", () => {

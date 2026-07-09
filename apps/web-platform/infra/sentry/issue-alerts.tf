@@ -1349,6 +1349,18 @@ resource "sentry_issue_alert" "inbox_action_required_notify_failure" {
 # metric-alert upgrade is tracked as a follow-up (unblocks at the first non-founder
 # Sentry seat — the same boundary the sibling rules already defer).
 #
+# PER-SIGNAL grouping asymmetry (observability review, #6278): the three signals do NOT
+# group uniformly. `ghcr-fallback` (message includes registry+image+tag), `zot-gate-degraded`
+# (message includes the reason), and `app_ghcr_fallback` (dedicated `_emit` message) each
+# form their own message-group, so the >3/1h threshold is meaningful for them. But
+# `inngest_ghcr_fallback` is emitted via the SHARED `soleur-boot-emit` static message
+# ("soleur-cloud-init boot stage" — stage is a tag, not the message), so it shares one
+# issue-group with every routine boot stage; that group is effectively always >3/1h, so
+# THIS signal pages on the FIRST inngest fresh-boot fallback — over-loud, the SAFE
+# direction (never a miss). Acceptable: fresh-boot inngest zot misses are rare and any is
+# worth knowing during the soak. Giving inngest its own message-group would mean changing
+# the shared `soleur-boot-emit` grouping for ~10 boot stages — out of scope for this alarm.
+#
 # Distinct `frequency = 23` avoids Sentry POST-time exact-duplicate dedup (taken:
 # 5,10-22,30,60-62; keyed on action_match+filter_match+frequency+actions-shape, NOT
 # conditions). Events carry only registry/stage/image/host_id/zot_gate_reason tags —
