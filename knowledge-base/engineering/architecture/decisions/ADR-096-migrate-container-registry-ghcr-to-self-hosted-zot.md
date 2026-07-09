@@ -131,6 +131,13 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
 - **Retirement (post-soak):** remove the pull-site GHCR fallback branch (5.3), stop GHCR push +
   egress allow (5.3), retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
   `GHCR_MINTER_DISABLED` gate (5.4), then rotate + revoke the exposed classic PAT (5.5).
+- **Host sizing (factual, #6288):** `cax11`(planned, arm64)→`cx23`(live, provisioned during an
+  Ampere+cx stock outage, #6122)→**`cx32`(4 vCPU / 8 GB, #6288)**. The 4 GB cx23 restart-looped
+  zot ~4/min OOM-ing during the boot scan of the ~35 GB store (disk-independent — disk sat at
+  58–63%, not ENOSPC); cx32 adds RAM headroom above the scan working-set and adopts the **ADR-062**
+  container `--memory`/`--memory-swap` cap (7168m) so a host-level OOM cannot restart-loop the box.
+  Applied via the guarded `registry-host-replace` dispatch (server_type is `ForceNew`; the 60 GB
+  store volume is preserved + re-attached). The GHCR atomic fallback masks the brief replace outage.
 
 ### Credential isolation (amendment 2026-07-07, #6122)
 
