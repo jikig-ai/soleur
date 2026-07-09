@@ -64,4 +64,44 @@ describe("IssueCard", () => {
     fireEvent.click(screen.getByText("Wire the board"));
     expect(onOpen).toHaveBeenCalledWith("SOLAA-198");
   });
+
+  it("renders a creator chip only when `creator` is present", () => {
+    const { rerender } = render(
+      <IssueCard issue={issue({ creator: undefined })} onOpen={() => {}} />,
+    );
+    expect(screen.queryByTitle(/^Created by/)).toBeNull();
+
+    rerender(
+      <IssueCard
+        issue={issue({
+          creator: {
+            login: "octocat",
+            isSoleur: false,
+            display: { name: "octocat", initials: "OC" },
+          },
+        })}
+        onOpen={() => {}}
+      />,
+    );
+    expect(screen.getByTitle("Created by octocat")).toBeTruthy();
+  });
+
+  it("labels a Soleur-created card with the initiator when known", () => {
+    render(
+      <IssueCard
+        issue={issue({
+          creator: {
+            login: "soleur-ai[bot]",
+            isSoleur: true,
+            initiatorLogin: "harry",
+            display: { name: "harry", initials: "HA" },
+          },
+        })}
+        onOpen={() => {}}
+      />,
+    );
+    expect(
+      screen.getByTitle("Created by Soleur · initiated by harry"),
+    ).toBeTruthy();
+  });
 });

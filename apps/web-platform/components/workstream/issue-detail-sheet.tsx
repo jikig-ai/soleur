@@ -17,13 +17,14 @@ import { createPortal } from "react-dom";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import {
   COLUMNS,
+  creatorLabel,
   roleTitle,
   statusLabel,
   statusPillClass,
   type WorkstreamIssue,
   type WorkstreamStatus,
 } from "@/lib/workstream";
-import { AssigneeChip, UserAvatar } from "./assignee-chip";
+import { AssigneeChip, CreatorChip, UserAvatar } from "./assignee-chip";
 import { PriorityPill } from "./priority-pill";
 import { IssueConciergePanel } from "./issue-concierge-panel";
 
@@ -188,6 +189,17 @@ export function IssueDetailSheet({
                       <UserAvatar user={issue.user} />
                       <span className="text-soleur-text-secondary">
                         {issue.user.name}
+                      </span>
+                    </span>
+                  </Row>
+                )}
+
+                {issue.creator && (
+                  <Row label="Created by">
+                    <span className="flex items-center gap-2">
+                      <CreatorChip creator={issue.creator} />
+                      <span className="text-soleur-text-secondary">
+                        {creatorLabel(issue.creator)}
                       </span>
                     </span>
                   </Row>

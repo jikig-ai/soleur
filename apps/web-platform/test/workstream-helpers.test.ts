@@ -6,6 +6,7 @@ import {
   assigneeInitials,
   boardStatusToWorkstreamStatus,
   columnAccent,
+  creatorLabel,
   deriveColumn,
   deriveCreator,
   deriveLive,
@@ -507,6 +508,26 @@ describe("deriveCreator", () => {
     );
     expect(c?.isSoleur).toBe(false);
     expect(c?.initiatorLogin).toBeUndefined();
+  });
+});
+
+describe("creatorLabel", () => {
+  it("renders the three label variants", () => {
+    expect(
+      creatorLabel(deriveCreator("octocat", "b", "soleur-ai")!),
+    ).toBe("octocat");
+    expect(
+      creatorLabel(deriveCreator("soleur-ai[bot]", "b", "soleur-ai")!),
+    ).toBe("Soleur");
+    expect(
+      creatorLabel(
+        deriveCreator(
+          "soleur-ai[bot]",
+          "<!-- soleur:initiated-by harry -->",
+          "soleur-ai",
+        )!,
+      ),
+    ).toBe("Soleur · initiated by harry");
   });
 });
 

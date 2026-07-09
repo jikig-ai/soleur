@@ -474,6 +474,17 @@ export function deriveCreator(
   };
 }
 
+/** Human-readable "created by" label for a creator — the single source of truth
+ *  for the card tooltip and the detail-sheet row. Three variants:
+ *  `Soleur · initiated by <login>` / `Soleur` / the human author login. */
+export function creatorLabel(creator: WorkstreamCreator): string {
+  if (creator.isSoleur && creator.initiatorLogin) {
+    return `Soleur · initiated by ${creator.initiatorLogin}`;
+  }
+  if (creator.isSoleur) return "Soleur";
+  return creator.login;
+}
+
 /** First `priority/*` label (in issue order) → priority; absent → `none`. */
 export function derivePriority(labels: string[]): WorkstreamPriority {
   for (const label of labels) {
