@@ -4005,6 +4005,11 @@ export async function dispatchSoleurGo(
         CC_ROUTER_LEADER_ID,
         userId,
         result,
+        // Cost-attribution marker (plan Phase 1). The cc-soleur-go onResult
+        // hook receives only the accumulated `{ totalCostUsd, usage }` — the
+        // model id is not surfaced on this path, so it rides as null (the
+        // Phase-3 Admin per-model report is the authoritative reconciliation).
+        { source: "cc-soleur-go", model: null },
         leaseDelegationCtx,
       );
     },
