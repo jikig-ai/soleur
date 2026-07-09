@@ -363,6 +363,7 @@ model {
   doppler -> claude "Injects secrets" { technology "CLI" }
   auth -> supabase "Validates tokens" { technology "HTTPS" }
   api -> stripe "Checkout and webhooks" { technology "HTTPS" }
+  claude -> stripe "invoice skill: create/finalize/send/chase via hosted Stripe MCP — OAuth, operator's OWN account; distinct credential plane from the webapp -> stripe billing edge; test-mode only in v1 (ADR-107)" { technology "MCP tool → mcp.stripe.com (HTTPS)" }
   api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); the board is the canonical Status store (ADR-097). The Phase-1 lifecycle→board write path runs inside GitHub Actions (github-internal) so it needs no cross-boundary edge." { technology "HTTPS (REST + GraphQL)" }
   dashboard -> plausible "Page view events" { technology "JS snippet" }
   api -> inngest "Sends events; serves functions" { technology "HTTP private-net :8288" }
