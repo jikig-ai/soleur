@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 // feat-skip-api-key-onboarding (#4642) — AC4. The /setup-key page offers a
@@ -7,6 +7,10 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 // present and factual (separate, paid Anthropic account).
 
 const pushMock = vi.fn();
+// GAP E (ADR-067 staleTimes): the "Set up later" skip terminal hop into
+// /dashboard now HARD-navs via window.location.assign; the intermediate hop to
+// /connect-repo still uses router.push.
+const assignMock = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
   // Sibling #4641 added invite redirectTo threading via useSearchParams.
@@ -15,9 +19,24 @@ vi.mock("next/navigation", () => ({
 
 import SetupKeyPage from "@/app/(auth)/setup-key/page";
 
+let originalLocation: Location;
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal("fetch", vi.fn());
+  originalLocation = window.location;
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    writable: true,
+    value: { assign: assignMock, pathname: "/setup-key" } as unknown as Location,
+  });
+});
+
+afterEach(() => {
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    writable: true,
+    value: originalLocation,
+  });
 });
 
 describe("SetupKeyPage — Set up later (AC4)", () => {
@@ -35,7 +54,7 @@ describe("SetupKeyPage — Set up later (AC4)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /set up later/i }));
 
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/dashboard"));
+    await waitFor(() => expect(assignMock).toHaveBeenCalledWith("/dashboard"));
     expect(fetch).toHaveBeenCalledWith(
       "/api/setup-key/skip",
       expect.objectContaining({ method: "POST" }),
@@ -49,6 +68,7 @@ describe("SetupKeyPage — Set up later (AC4)", () => {
     fireEvent.click(screen.getByRole("button", { name: /set up later/i }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(assignMock).not.toHaveBeenCalled();
     expect(pushMock).not.toHaveBeenCalled();
   });
 });

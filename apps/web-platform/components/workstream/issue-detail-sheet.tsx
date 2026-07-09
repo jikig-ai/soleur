@@ -24,7 +24,7 @@ import {
   type WorkstreamIssue,
   type WorkstreamStatus,
 } from "@/lib/workstream";
-import { AssigneeChip, CreatorChip, UserAvatar } from "./assignee-chip";
+import { AssigneeChip, UserAvatar } from "./assignee-chip";
 import { PriorityPill } from "./priority-pill";
 import { IssueConciergePanel } from "./issue-concierge-panel";
 
@@ -196,11 +196,8 @@ export function IssueDetailSheet({
 
                 {issue.creator && (
                   <Row label="Created by">
-                    <span className="flex items-center gap-2">
-                      <CreatorChip creator={issue.creator} />
-                      <span className="text-soleur-text-secondary">
-                        {creatorLabel(issue.creator)}
-                      </span>
+                    <span className="text-soleur-text-secondary">
+                      {creatorLabel(issue.creator)}
                     </span>
                   </Row>
                 )}

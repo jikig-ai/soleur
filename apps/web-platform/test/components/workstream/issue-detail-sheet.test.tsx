@@ -104,6 +104,9 @@ describe("IssueDetailSheet", () => {
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("Created by")).toBeTruthy();
     expect(within(dialog).getByText("octocat")).toBeTruthy();
+    // The row shows only the username — no glyph/avatar chip in the detail sheet.
+    expect(within(dialog).queryByTitle(/^Created by/)).toBeNull();
+    expect(within(dialog).queryByText(/[👤🤖]/)).toBeNull();
   });
 
   it("renders 'Soleur · initiated by <login>' for a bot-created issue", () => {
