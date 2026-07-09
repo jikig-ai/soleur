@@ -357,6 +357,7 @@ model {
   api -> supabase "Auth and data" { technology "HTTPS" }
   claude -> supabase "Sessions and keys" { technology "HTTPS" }
   claude -> anthropic "LLM calls" { technology "HTTPS" }
+  api -> anthropic "Daily org cost/usage report (Admin API, cost-report cron)" { technology "HTTPS" }
   claude -> github "Git operations" { technology "HTTPS/SSH" }
   tunnel -> coordinator "Routes traffic" { technology "HTTPS" }
   hetzner -> claude "Hosts" { technology "Docker" }

@@ -34,6 +34,15 @@ vi.mock("@/server/observability", () => ({
     (mirrorWarnWithDebounceSpy as (...x: unknown[]) => void)(...a),
 }));
 
+// #cost-attribution (plan Phase 2, AC4c) — spy the marker helper that
+// postAnthropicMessage emits into when a `markerSource` is threaded.
+const { emitClaudeCostMarkerSpy } = vi.hoisted(() => ({
+  emitClaudeCostMarkerSpy: vi.fn(),
+}));
+vi.mock("@/server/claude-cost-marker", () => ({
+  emitClaudeCostMarker: emitClaudeCostMarkerSpy,
+}));
+
 // mintInstallationToken (#5046) mints via the App-JWT probe path, NOT any
 // ambient GH_TOKEN, and threads the least-privilege scope to
 // generateInstallationToken. Mock both dependencies so the scope-threading
@@ -58,6 +67,7 @@ import {
   ensureDedupIssue,
   ensureScheduledAuditIssue,
   formatTailForSentry,
+  getAnthropicAdminReport,
   isRealScheduledDigest,
   mintInstallationToken,
   postAnthropicMessage,
@@ -779,10 +789,61 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
   beforeEach(() => {
     fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
+    emitClaudeCostMarkerSpy.mockClear();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("AC4c — emits a cron:<name> SOLEUR_CLAUDE_COST marker from the response usage/model when markerSource is set", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({
+        content: [{ text: "ok" }],
+        stop_reason: "end_turn",
+        model: "claude-sonnet-5",
+        usage: {
+          input_tokens: 12,
+          output_tokens: 3,
+          cache_read_input_tokens: 4,
+          cache_creation_input_tokens: 1,
+        },
+      }),
+    );
+
+    await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 8,
+      messages: [{ role: "user", content: "ping" }],
+      markerSource: "cron-compound-promote",
+    });
+
+    expect(emitClaudeCostMarkerSpy).toHaveBeenCalledTimes(1);
+    expect(emitClaudeCostMarkerSpy.mock.calls[0][0]).toMatchObject({
+      source: "cron:cron-compound-promote",
+      model: "claude-sonnet-5",
+      input_tokens: 12,
+      output_tokens: 3,
+      cache_read_input_tokens: 4,
+      cache_creation_input_tokens: 1,
+      // /v1/messages does not return total_cost_usd → tokens-only.
+      cost_usd: null,
+      capture_status: "ok",
+    });
+  });
+
+  it("emits NO marker when markerSource is omitted (the two legacy callers)", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({ content: [{ text: "ok" }], stop_reason: "end_turn" }),
+    );
+    await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 8,
+      messages: [{ role: "user", content: "ping" }],
+    });
+    expect(emitClaudeCostMarkerSpy).not.toHaveBeenCalled();
   });
 
   it("POSTs to the messages endpoint with auth + version headers and returns {text, stopReason}", async () => {
@@ -1541,5 +1602,61 @@ describe("ensureDedupIssue (stable-title standing alert)", () => {
     expect(res.issueNumber).toBe(99);
     const calls = (client.request as unknown as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls.length).toBe(1); // GET only, no POST
+  });
+});
+
+// #cost-attribution (plan Phase 3, AC6 security F1) — getAnthropicAdminReport
+// MUST mirror postAnthropicMessage's two redaction properties: the network-catch
+// rethrow carries neither the admin key nor request context, and the non-ok body
+// excerpt routes through formatTailForSentry.
+describe("getAnthropicAdminReport (Admin transport redaction, security F1)", () => {
+  const ADMIN_KEY = "sk-ant-admin01-" + "synthetic";
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends x-api-key + version headers and appends array query params (group_by[])", async () => {
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    await getAnthropicAdminReport({
+      adminKey: ADMIN_KEY,
+      path: "/v1/organizations/usage_report/messages",
+      query: { starting_at: "2026-07-08", bucket_width: "1d", "group_by[]": ["model"] },
+    });
+    const [url, init] = fetchSpy.mock.calls[0] as [URL, RequestInit & { headers: Record<string, string> }];
+    expect(url.toString()).toContain("group_by%5B%5D=model");
+    expect(url.toString()).toContain("bucket_width=1d");
+    expect(init.method).toBe("GET");
+    expect(init.headers["x-api-key"]).toBe(ADMIN_KEY);
+    expect(init.headers["anthropic-version"]).toBe("2023-06-01");
+  });
+
+  it("network-catch rethrow contains NEITHER the admin key NOR request context", async () => {
+    fetchSpy.mockRejectedValue(
+      new TypeError(`fetch failed to https://api.anthropic.com with x-api-key ${ADMIN_KEY}`),
+    );
+    const err = await getAnthropicAdminReport({
+      adminKey: ADMIN_KEY,
+      path: "/v1/organizations/cost_report",
+      query: {},
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toContain(ADMIN_KEY);
+    expect((err as Error).message).toBe("Anthropic Admin API request failed (TypeError)");
+  });
+
+  it("non-ok throws a typed AnthropicApiError with the status (401/403 classifiable)", async () => {
+    fetchSpy.mockResolvedValue(new Response("forbidden", { status: 403 }));
+    const err = await getAnthropicAdminReport({
+      adminKey: ADMIN_KEY,
+      path: "/v1/organizations/cost_report",
+      query: {},
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(AnthropicApiError);
+    expect((err as AnthropicApiError).status).toBe(403);
   });
 });

@@ -594,6 +594,10 @@ export async function agentOnSpawnRequestedHandler({
                   cache_creation_input_tokens: cacheCreate,
                 },
               },
+              // Cost-attribution marker (plan Phase 1). The leader loop knows
+              // its model directly from the leader module config (the same
+              // value that keys MODEL_PRICING above).
+              { source: "leader-loop", model: leaderModule.model },
             );
             return sdkResult;
           },

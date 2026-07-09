@@ -148,6 +148,25 @@ resource "sentry_cron_monitor" "scheduled_anthropic_credit_probe" {
   timezone                = "UTC"
 }
 
+# #cost-attribution (plan Phase 3): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-anthropic-cost-report.ts`.
+# Daily 06:17 UTC pull of the Anthropic Admin cost/usage API → the
+# SOLEUR_CLAUDE_COST_DAILY marker. RED on a missed check-in OR a classified
+# 401/403 (bad admin key). A MISSING admin key self-reports GREEN + key-missing
+# marker (benign) — it does NOT flip this monitor red (obs P4). Mirrors the
+# scheduled_domain_model_drift daily cohort (60-min margin, 15-min runtime).
+resource "sentry_cron_monitor" "scheduled_anthropic_cost_report" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-anthropic-cost-report"
+  schedule                = { crontab = "17 6 * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 15
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # scheduled-cf-token-expiry-check: NOT wired this cycle. The workflow's
 # `schedule:` block is currently commented out (manual-dispatch only —
 # waiting on end-to-end validation per its own header). A cron monitor

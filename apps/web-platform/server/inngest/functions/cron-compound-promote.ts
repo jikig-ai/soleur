@@ -441,6 +441,8 @@ export async function cronCompoundPromoteHandler({
         maxTokens: ANTHROPIC_MAX_TOKENS,
         messages: [{ role: "user", content: prompt + "\n\nCorpus:\n" + JSON.stringify(corpus.entries) }],
         outputConfig: { format: { type: "json_schema", schema: CLUSTER_OUTPUT_SCHEMA } },
+        // #cost-attribution (plan Phase 2, choke point #3): real per-cron spend.
+        markerSource: "cron-compound-promote",
       });
 
       if (stopReason === "max_tokens") {
