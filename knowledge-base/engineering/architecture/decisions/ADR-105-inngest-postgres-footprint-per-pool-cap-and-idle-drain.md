@@ -106,6 +106,42 @@ standing between the flip and that outcome.
 - `status: adopting` flips to `accepted` after the Phase-5 post-deploy controlled-burst re-measurement
   confirms the bounded plateau on both web hosts (no `EMAXCONNSESSION`).
 
+## Precondition — exactly ONE prod-pool writer (added post-deploy, #6258/#5651)
+
+**The per-instance cap (≤20) is sufficient ONLY while exactly ONE inngest-server writes to the prod
+session pooler.** ADR-105 governs a *single* inngest instance's footprint; it does NOT model a
+multi-writer topology.
+
+Post-deploy verification (2026-07-09) surfaced the missing invariant: BOTH web hosts run co-located
+inngest-servers against the same 30-slot session pooler — web-1 (`10.0.1.10`) AND the weight-0
+warm-standby web-2 (`10.0.1.11`), per `inngest-host.tf:40` `web_host_private_ips`. Two writers ×
+≤20 sessions each = 30–40 ≥ `pool_size` 30 → `EMAXCONNSESSION` under the paginated cutover scans,
+with **zero** headroom for the scan's own connections. No per-instance cap or `default_pool_size`
+tweak makes two writers fit with scan headroom — the constraint is topological, not sizing.
+
+This is the exact single-writer contract `inngest-host.tf:8` records (OSS Inngest v1.x is single-writer;
+two servers on one prod Postgres is the pathology **ADR-100 / #6178** exists to eliminate). Raising
+`default_pool_size` to fit two writers is explicitly REJECTED: it would trade the visible
+`EMAXCONNSESSION` for **silent double-firing of scheduled reminders** (web-2 self-arms oneshots into
+its own Redis independent of LB weight — runbook DI-C3), which is strictly worse for the user-facing
+payload.
+
+- **Durable resolution:** complete **#6178** (dedicated singleton inngest, dark→live Postgres flip)
+  — collapses to one prod-pool writer permanently. The web-2 quiesce is the operator-manual,
+  cutover-gated step **#6230** (the automated per-host web→web fan-out #6227 was decided won't-build).
+- **This ADR's cap is NOT falsified** — it remains correct and necessary for the post-cutover single
+  writer. The incident was a topology contention ADR-105 never scoped, now recorded here as its
+  binding precondition.
+- **Verified no user harm (2026-07-09):** a read-only double-fire audit of the shared inngest backend
+  over the 14-day two-writer window found **0** duplicate event-runs and **0** duplicate cron-ticks
+  across 8,762 runs (99.6% completion) — inngest's shared-Postgres exactly-once claim prevented
+  double-execution despite the separate per-host Redis queues. The `EMAXCONNSESSION` is isolated to
+  the scan path (op=inventory/op=verify), not the reminder arm/fire path.
+
+`status: adopting` therefore does NOT flip to `accepted` on the two-writer host set (the post-deploy
+burst cannot pass while web-2 co-writes); it flips after **#6178** collapses to a single writer and
+the burst re-measures clean.
+
 ## Alternatives Considered
 
 See **Considered Options** above. The transaction pooler (`:6543`) was previously rejected (ADR-100
