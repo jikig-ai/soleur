@@ -376,7 +376,7 @@ fi
 #                                 mis-labelled (30 would mean 30 MINUTES — worse than default).
 # default_pool_size stays 30 (the #5562 30→15 revert is SUPERSEDED — its premise "cap holds
 # total under 15" is falsified by the per-pool model; a 15-slot upstream while inngest bursts
-# to ~20 would GUARANTEE exhaustion). See ADR-104.
+# to ~20 would GUARANTEE exhaustion). See ADR-105.
 # --postgres-max-open-conns is ALSO the NON-SECRET durable-detection sentinel and MUST stay
 # FIRST in BACKEND_FLAGS (see the @@BACKEND_FLAGS@@ note below + ci-deploy.sh /
 # inngest-inventory.sh / wiped-volume-verify; inngest.test.sh anchors on it being first).

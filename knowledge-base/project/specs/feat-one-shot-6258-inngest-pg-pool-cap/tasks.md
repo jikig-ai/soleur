@@ -27,11 +27,11 @@ Branch: `feat-one-shot-6258-inngest-pg-pool-cap` · lane: cross-domain · thresh
 - [x] 4.2 `inngest.tf:201-232` — correct the #5558→#5562 decision block (remove "client cap 10 holds under 15"; record per-pool model + the decoupled keep-`default_pool_size`-30 posture — #5562 revert superseded, NOT executed).
 - [x] 4.3 `runbooks/inngest-server.md:102-144` — update pool-pressure section (new flags + reconciled cap).
 - [x] 4.4 Vector allowlist: if a new host `logger -t <tag>` is added, add to `vector.toml` Source-4 `include_matches` + drift-guard fixture. Else state "no new host tag".
-- [x] 4.5 Author `ADR-104-inngest-postgres-footprint-per-pool-cap-and-idle-drain.md` (status: adopting; Decision + ≥3 Alternatives). Verify ADR-104 free vs origin/main at ship (ordinal provisional). Reference it in the spec FRs.
+- [x] 4.5 Author `ADR-105-inngest-postgres-footprint-per-pool-cap-and-idle-drain.md` (status: adopting; Decision + ≥3 Alternatives). Verify ADR-105 free vs origin/main at ship (ordinal provisional). Reference it in the spec FRs.
 
 ## Phase 5 — Deploy (immutable tag)
 - [ ] 5.1 Push `vinngest-vX.Y.Z` tag → `build-inngest-bootstrap-image.yml` → `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap vX.Y.Z`. Tag push in-PR (not operator).
-- [ ] 5.2 Post-deploy: re-run 1.3 controlled burst → confirm bounded plateau, `op=inventory` clean (no EMAXCONNSESSION). Flip ADR-104 → accepted.
+- [ ] 5.2 Post-deploy: re-run 1.3 controlled burst → confirm bounded plateau, `op=inventory` clean (no EMAXCONNSESSION). Flip ADR-105 → accepted.
 
 ## Phase 6 — Tests
 - [x] 6.1 `inngest.test.sh` — assert durable `BACKEND_FLAGS` has all 3 flags, sentinel first; SQLite branch empty.

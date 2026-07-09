@@ -49,7 +49,7 @@ WebFetch https://raw.githubusercontent.com/inngest/inngest/v1.19.4/cmd/start/cmd
 The unit discovery flipped the shipped value: `--postgres-conn-max-idle-time 1` (1 minute
 = fastest non-zero drain; `0` means *unlimited* in Go's `database/sql`, the opposite
 again). Fixed inline as a mechanical units correction (not an architecture fork — a ≤10-line
-correctness fix), then reconciled across every artifact (bootstrap, ADR-104, test, runbook,
+correctness fix), then reconciled across every artifact (bootstrap, ADR-105, test, runbook,
 health workflow) and the plan's own `SECS=30` mentions + AC1 verify grep.
 
 ## Key Insight
@@ -91,7 +91,7 @@ from paths/capabilities to flag values/units. Sibling: [[2026-05-14-plan-prescri
    net delta was +10, so every citation below the edit point shifts by exactly that).
    Prevention: known class ([[2026-06-18-doc-insertion-stales-cross-artifact-line-citations]]).
 5. **ADR ordinal collision** — plan said ADR-103; sibling #6242 merged ADR-103 while this
-   branch was open. Recovery: rebased onto origin/main, re-derived next-free = ADR-104,
+   branch was open. Recovery: rebased onto origin/main, re-derived next-free = ADR-105,
    swept all ADR-103 refs in the spec/plan. Prevention: known class (verify ADR number vs
    origin/main at ship; the plan already flagged the ordinal provisional).
 6. **One review agent returned degenerate output** (0 tool calls, echoed a system-reminder

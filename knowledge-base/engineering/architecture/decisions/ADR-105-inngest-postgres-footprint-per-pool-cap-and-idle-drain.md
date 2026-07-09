@@ -1,5 +1,5 @@
 ---
-adr: 104
+adr: 105
 title: Inngest self-hosted Postgres footprint — low per-pool cap + idle drain; keep default_pool_size at 30
 status: adopting
 date: 2026-07-09
@@ -11,7 +11,7 @@ related_adrs: [ADR-100]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-104: Inngest self-hosted Postgres footprint — low per-pool cap + idle drain; keep `default_pool_size` at 30
+# ADR-105: Inngest self-hosted Postgres footprint — low per-pool cap + idle drain; keep `default_pool_size` at 30
 
 ## Context
 

@@ -206,14 +206,14 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # (GET https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/config/database/pgbouncer
 # → {"default_pool_size":30,"pool_mode":"transaction"}).
 #
-# SUPERSEDED INVARIANT (#5558/#5559 → corrected by #6258, ADR-104): the prior record
+# SUPERSEDED INVARIANT (#5558/#5559 → corrected by #6258, ADR-105): the prior record
 # here claimed the client cap `--postgres-max-open-conns 10` bounded inngest's TOTAL
 # connection count under 15. That is FALSE. --postgres-max-open-conns is PER-POOL,
 # not total: `inngest start` opens ~P separate Postgres pools (queue/state/history/api),
 # each honouring the cap independently, so `10` × ~3 pools ratcheted to ~31 pinned idle
 # conns > pool_size 30 → EMAXCONNSESSION under back-to-back cutover-probe scans (#6258).
 #
-# CURRENT FIX (#6258, ADR-104): bound the TOTAL footprint + drain idle conns at the
+# CURRENT FIX (#6258, ADR-105): bound the TOTAL footprint + drain idle conns at the
 # CLIENT — `--postgres-max-open-conns 5 --postgres-max-idle-conns 2
 # --postgres-conn-max-idle-time 1` (idle-time in MINUTES). Worst-case total = P×5 ≤ 20
 # for P ≤ 4, comfortably under pool_size 30. See inngest-bootstrap.sh.

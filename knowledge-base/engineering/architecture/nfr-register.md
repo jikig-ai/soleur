@@ -107,7 +107,7 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 | API Routes | Not Implemented | — | No uptime monitoring |
 | Agent Runtime | Not Implemented | — | No service health tracking |
 | Supabase PostgreSQL | Implemented | Supabase Dashboard | Built-in service health monitoring |
-| Inngest session pool (durable backend) | Implemented | `scheduled-inngest-health.yml` pool-utilization probe (#5562, metric corrected #5563) | External 15-min Management-API read of `pg_stat_activity`, counting ONLY inngest-attributable client backends (not infra baseline); alerts at ~80% of inngest's worst-case TOTAL footprint (`INNGEST_CLIENT_CAP` = P × per-pool cap 5 ≤ 20; `--postgres-max-open-conns` is per-pool, #6258/ADR-104) as a leading indicator BEFORE `EMAXCONNSESSION`, and classifies the cliff as `pool_exhausted` (alert, excluded from auto-restart). Capacity/utilization monitor, not just up/down. |
+| Inngest session pool (durable backend) | Implemented | `scheduled-inngest-health.yml` pool-utilization probe (#5562, metric corrected #5563) | External 15-min Management-API read of `pg_stat_activity`, counting ONLY inngest-attributable client backends (not infra baseline); alerts at ~80% of inngest's worst-case TOTAL footprint (`INNGEST_CLIENT_CAP` = P × per-pool cap 5 ≤ 20; `--postgres-max-open-conns` is per-pool, #6258/ADR-105) as a leading indicator BEFORE `EMAXCONNSESSION`, and classifies the cliff as `pool_exhausted` (alert, excluded from auto-restart). Capacity/utilization monitor, not just up/down. |
 
 ### NFR-004: Process-Level Monitoring
 

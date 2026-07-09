@@ -395,13 +395,13 @@ jobs:
               # line (a pool at 79% passes that alert but capture+quiesce then push it over the
               # cap — the exact failure this gate exists to prevent). Assert:
               #   inngest_conns + EXPECTED_BURST_COST ≤ POOL_SIZE − SUPAVISOR_WARM_RESERVE
-              # POOL_SIZE=30 (Supavisor default_pool_size — stays 30 per ADR-104); reserve ~8
+              # POOL_SIZE=30 (Supavisor default_pool_size — stays 30 per ADR-105); reserve ~8
               # for Supavisor warm + the mgmt probe; ~10 for the capture+quiesce burst draw →
               # readiness ceiling = 30−8−10 = 12. FAIL-CLOSED on EVERY non-clean state (count
               # ≥ ceiling / EMAXCONNSESSION / 401/403/non-2xx / non-JSON / empty / token-unset /
               # curl-fail) — never a false 0==0 "clean" on an unparsed count.
               # POOL_SIZE mirrors the inngest project's Supavisor default_pool_size, kept at
-              # 30 per ADR-104 (the #5562 30→15 revert is superseded). If that decision is ever
+              # 30 per ADR-105 (the #5562 30→15 revert is superseded). If that decision is ever
               # revisited (decision-challenges.md), reconcile this constant + READINESS_CEILING —
               # a stale 30 here would over-permit the gate against a smaller live pool.
               POOL_SIZE=30
