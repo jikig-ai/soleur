@@ -800,8 +800,8 @@ describe("parseClaudeResultLine (AC4 — result-event cost capture)", () => {
 });
 
 describe("resolveEvalCaptureStatus (AC4 — positive marker status)", () => {
-  const cost = { model: null } as ReturnType<
-    typeof parseClaudeResultLine
+  const cost = { model: null } as NonNullable<
+    ReturnType<typeof parseClaudeResultLine>
   >["cost"];
 
   it("timeout wins over a parsed cost", () => {

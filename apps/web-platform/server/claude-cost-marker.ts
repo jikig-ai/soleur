@@ -65,3 +65,42 @@ export function emitClaudeCostMarker(m: ClaudeCostMarker): void {
     // fail-open: a marker-emit failure must never propagate into the caller.
   }
 }
+
+// -----------------------------------------------------------------------------
+// Daily Admin cost-report marker (plan Phase 3). Distinct `SOLEUR_CLAUDE_COST_
+// DAILY` discriminator from the per-run marker so the runbook can rank either.
+// The per-model entry is an EXPLICIT field-allowlist (named picks) — the cron
+// MUST build it this way and NEVER `...row`-spread the Admin API response, whose
+// rows carry `api_key_id`/`workspace_id` that must never reach Better Stack
+// (security F2 / GDPR field-allowlist). The type is the enforcement surface.
+export interface ClaudeCostDailyModelEntry {
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+  cost_usd: number | null;
+}
+
+export interface ClaudeCostDailyMarker {
+  // `key-missing` is the positively-dark signal emitted while the admin key is
+  // unprovisioned (obs P4) — an absent row would be mis-triageable as a
+  // regression during the code-merges-first → mint window.
+  status: "ok" | "key-missing";
+  // UTC date the report covers (`YYYY-MM-DD`), or null on the key-missing path.
+  date: string | null;
+  // Authoritative org total for the day, or null (key-missing / no data).
+  cost_usd: number | null;
+  models: ClaudeCostDailyModelEntry[];
+}
+
+/**
+ * Emit one `SOLEUR_CLAUDE_COST_DAILY` WARN marker. NEVER throws (fail-open).
+ */
+export function emitClaudeCostDailyMarker(m: ClaudeCostDailyMarker): void {
+  try {
+    log.warn({ SOLEUR_CLAUDE_COST_DAILY: true, ...m }, "claude cost daily");
+  } catch {
+    // fail-open: observability must never break the cost-report cron.
+  }
+}

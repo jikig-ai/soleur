@@ -67,6 +67,7 @@ import {
   ensureDedupIssue,
   ensureScheduledAuditIssue,
   formatTailForSentry,
+  getAnthropicAdminReport,
   isRealScheduledDigest,
   mintInstallationToken,
   postAnthropicMessage,
@@ -1601,5 +1602,61 @@ describe("ensureDedupIssue (stable-title standing alert)", () => {
     expect(res.issueNumber).toBe(99);
     const calls = (client.request as unknown as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls.length).toBe(1); // GET only, no POST
+  });
+});
+
+// #cost-attribution (plan Phase 3, AC6 security F1) — getAnthropicAdminReport
+// MUST mirror postAnthropicMessage's two redaction properties: the network-catch
+// rethrow carries neither the admin key nor request context, and the non-ok body
+// excerpt routes through formatTailForSentry.
+describe("getAnthropicAdminReport (Admin transport redaction, security F1)", () => {
+  const ADMIN_KEY = "sk-ant-admin01-" + "synthetic";
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends x-api-key + version headers and appends array query params (group_by[])", async () => {
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    await getAnthropicAdminReport({
+      adminKey: ADMIN_KEY,
+      path: "/v1/organizations/usage_report/messages",
+      query: { starting_at: "2026-07-08", bucket_width: "1d", "group_by[]": ["model"] },
+    });
+    const [url, init] = fetchSpy.mock.calls[0] as [URL, RequestInit & { headers: Record<string, string> }];
+    expect(url.toString()).toContain("group_by%5B%5D=model");
+    expect(url.toString()).toContain("bucket_width=1d");
+    expect(init.method).toBe("GET");
+    expect(init.headers["x-api-key"]).toBe(ADMIN_KEY);
+    expect(init.headers["anthropic-version"]).toBe("2023-06-01");
+  });
+
+  it("network-catch rethrow contains NEITHER the admin key NOR request context", async () => {
+    fetchSpy.mockRejectedValue(
+      new TypeError(`fetch failed to https://api.anthropic.com with x-api-key ${ADMIN_KEY}`),
+    );
+    const err = await getAnthropicAdminReport({
+      adminKey: ADMIN_KEY,
+      path: "/v1/organizations/cost_report",
+      query: {},
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toContain(ADMIN_KEY);
+    expect((err as Error).message).toBe("Anthropic Admin API request failed (TypeError)");
+  });
+
+  it("non-ok throws a typed AnthropicApiError with the status (401/403 classifiable)", async () => {
+    fetchSpy.mockResolvedValue(new Response("forbidden", { status: 403 }));
+    const err = await getAnthropicAdminReport({
+      adminKey: ADMIN_KEY,
+      path: "/v1/organizations/cost_report",
+      query: {},
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(AnthropicApiError);
+    expect((err as AnthropicApiError).status).toBe(403);
   });
 });

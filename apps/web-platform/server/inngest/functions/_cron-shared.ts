@@ -637,6 +637,60 @@ export async function postAnthropicMessage(args: {
   return { text: data.content?.[0]?.text ?? "", stopReason: data.stop_reason };
 }
 
+// #cost-attribution (plan Phase 3). GET transport for the Anthropic Admin Cost
+// & Usage API (`/v1/organizations/cost_report`, `/usage_report/messages`). Read-
+// only org-billing metadata. MUST mirror postAnthropicMessage's two redaction
+// properties (security F1): the network-catch rethrow carries neither the admin
+// key nor request context, and the non-ok body excerpt routes through
+// `formatTailForSentry`. `AnthropicApiError.status` lets the cost-report cron
+// classify 401/403 (bad admin key) as fatal vs 429/5xx (transient → retry).
+export async function getAnthropicAdminReport(args: {
+  adminKey: string;
+  path: string;
+  query: Record<string, string | string[]>;
+  timeoutMs?: number;
+}): Promise<unknown> {
+  const url = new URL(`https://api.anthropic.com${args.path}`);
+  for (const [key, value] of Object.entries(args.query)) {
+    if (Array.isArray(value)) {
+      for (const item of value) url.searchParams.append(key, item);
+    } else {
+      url.searchParams.set(key, value);
+    }
+  }
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      method: "GET",
+      headers: {
+        "x-api-key": args.adminKey,
+        "anthropic-version": "2023-06-01",
+      },
+      signal:
+        args.timeoutMs != null ? AbortSignal.timeout(args.timeoutMs) : undefined,
+    });
+  } catch (err) {
+    // Rethrow redacted (security F1): a network/abort error could carry request
+    // context — never let the admin key reach a logger/Sentry payload. Mirrors
+    // postAnthropicMessage's redact-then-throw.
+    const e = err as Error;
+    throw new Error(`Anthropic Admin API request failed (${e.name})`);
+  }
+  if (!resp.ok) {
+    let rawBody = "";
+    try {
+      rawBody = await resp.text();
+    } catch {
+      // Body unreadable — status alone still throws a typed, classifiable error.
+    }
+    throw new AnthropicApiError(
+      resp.status,
+      formatTailForSentry(rawBody)?.slice(0, 600),
+    );
+  }
+  return (await resp.json()) as unknown;
+}
+
 // ---------------------------------------------------------------------------
 // Tier-2 deferral guard (#5018 — hook-primary cron containment, D6)
 // ---------------------------------------------------------------------------
