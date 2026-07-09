@@ -55,8 +55,12 @@ export function useSignOut() {
           })
           .finally(() => {
             // GAP D: hard-nav the sibling tab so its Router Cache is wiped too.
-            // Guard against a redundant nav when this listener fires in the same
-            // tab that already called handleSignOut (which also hard-navs).
+            // The `pathname !== "/login"` guard suppresses the nav for a tab that
+            // is ALREADY on /login (e.g. an already-signed-out sibling that gets
+            // a repeat SIGNED_OUT). It does NOT suppress the same-tab button
+            // path: handleSignOut's own `window.location.assign` does not
+            // synchronously change `pathname`, so this listener fires a second
+            // assign("/login") in that tab — harmless (idempotent same-URL nav).
             if (window.location.pathname !== "/login") {
               window.location.assign("/login");
             }

@@ -57,7 +57,7 @@ function SignupForm() {
     // target without bypassing the T&C gate.
     // GAP E (ADR-067 staleTimes): account creation is a principal-ENTRY into an
     // authenticated funnel — hard-nav so every funnel exit uniformly wipes the
-    // App Router Router Cache (redirectTo is safeReturnTo-sanitized at :29).
+    // App Router Router Cache (redirectTo is safeReturnTo-sanitized above).
     onVerifySuccess: () =>
       window.location.assign(
         redirectTo

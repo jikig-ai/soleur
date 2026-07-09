@@ -6,6 +6,7 @@ import { usePanelRef } from "react-resizable-panels";
 import useSWR from "swr";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useFeatureFlag } from "@/components/feature-flags/provider";
+import { isRevocationBounce } from "@/lib/auth/revocation-bounce";
 import type { KbContextValue } from "@/components/kb/kb-context";
 import type { KbChatContextValue } from "@/components/kb/kb-chat-context";
 import { safeSession } from "@/lib/safe-session";
@@ -90,12 +91,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       throw new KbTreeError("unknown");
     }
     // GAP F (ADR-067 staleTimes): revocation bounce — HARD-nav to wipe the
-    // Router Cache. Detect the direct 401 AND the #4307 middleware 302→/login
-    // (fetch follows the redirect to 200 HTML, so 401-only never fires).
-    if (
-      res.status === 401 ||
-      (res.redirected && new URL(res.url).pathname === "/login")
-    ) {
+    // Router Cache. isRevocationBounce detects the direct 401 AND the #4307
+    // middleware 302→/login (fetch follows the redirect to 200 HTML).
+    if (isRevocationBounce(res)) {
       window.location.assign("/login");
       throw new KbTreeError(null);
     }

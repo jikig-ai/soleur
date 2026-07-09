@@ -99,6 +99,21 @@ describe("middleware GAP G — no-store on authenticated documents", () => {
     expect(res.headers.get("cache-control") ?? "").not.toMatch(/no-store/);
   });
 
+  test("authenticated request with NO Sec-Fetch-Dest header → no-store (FAIL-CLOSED for legacy Safari < 16.4 bfcache)", async () => {
+    // Legacy browsers that support bfcache but omit Sec-Fetch-* must still get
+    // no-store on authenticated documents, else browser Back restores the shell.
+    const res = await middleware(makeRequest("/dashboard/settings"));
+    expect(res.status).not.toBe(302);
+    expect(res.headers.get("cache-control")).toMatch(/no-store/);
+  });
+
+  test("authenticated static-asset fetch (Sec-Fetch-Dest: image) → NOT no-store", async () => {
+    const res = await middleware(
+      makeRequest("/dashboard/settings", { "sec-fetch-dest": "image" }),
+    );
+    expect(res.headers.get("cache-control") ?? "").not.toMatch(/no-store/);
+  });
+
   test("PUBLIC path document navigation (/login) is NOT forced no-store (public-page bfcache preserved)", async () => {
     const res = await middleware(
       makeRequest("/login", { "sec-fetch-dest": "document" }),

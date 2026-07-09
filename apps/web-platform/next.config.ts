@@ -91,7 +91,8 @@ const nextConfig: NextConfig = {
     // C/D), `components/auth/login-form.tsx` + the onboarding funnel (GAP E),
     // `components/settings/delete-account-dialog.tsx` + the in-session 401/302
     // bounces (GAP F), `middleware.ts` `no-store` for bfcache (GAP G), and
-    // `admin/analytics` mount-time re-validation (GAP H). `static` is left at
+    // `admin/analytics` all-tenant data moved off the RSC to an admin-gated
+    // API + SWR so a warm cache never paints it (GAP H). `static` is left at
     // its Next 15 default (300 s) — irrelevant to the dynamic tab bug.
     staleTimes: {
       dynamic: 30,

@@ -14,6 +14,7 @@ import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { KbChatQuoteBridgeContext } from "@/components/kb/kb-chat-quote-bridge";
 import { SelectionToolbar } from "@/components/kb/selection-toolbar";
 import { getKbExtension, isMarkdownKbPath } from "@/lib/kb-extensions";
+import { isRevocationBounce } from "@/lib/auth/revocation-bounce";
 import { classifyByExtension } from "@/lib/kb-file-kind";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
@@ -87,13 +88,9 @@ export default function KbContentPage({
         const res = await fetch(`/api/kb/content/${joinedPath}`);
         if (!cancelled) {
           // GAP F (ADR-067 staleTimes): revocation bounce — HARD-nav to wipe the
-          // Router Cache. Detect the direct 401 AND the #4307 middleware
-          // 302→/login (fetch follows the redirect to 200 HTML, so 401-only
-          // never fires).
-          if (
-            res.status === 401 ||
-            (res.redirected && new URL(res.url).pathname === "/login")
-          ) {
+          // Router Cache. isRevocationBounce detects the direct 401 AND the
+          // #4307 middleware 302→/login (fetch follows the redirect to 200 HTML).
+          if (isRevocationBounce(res)) {
             window.location.assign("/login");
             return;
           }
