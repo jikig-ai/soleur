@@ -494,7 +494,19 @@ runcmd:
     N=0
     until docker pull "$REF" > /run/soleur-pull.log 2>&1; do
       N=$((N+1))
-      [ "$N" -ge 2 ] && REF="$IMAGE_REF"   # atomic fallback to GHCR after the zot attempt
+      # #6278: on the zot→GHCR flip (REF still the zot ref, so zot WAS primary), emit a
+      # warning breadcrumb (tags.stage=app_ghcr_fallback) so the mirror-staleness
+      # fallback-rate alarm can page on a fresh-boot zot miss on the PRIMARY web
+      # container that still SUCCEEDS via GHCR (otherwise invisible — only a total pull
+      # failure emits). Uses the baked _emit — the only emitter live at this pre-bootstrap
+      # point; the inngest path (bottom of runcmd) uses soleur-boot-emit for the same
+      # `stage` tag because it runs AFTER host-bootstrap authors that binary. The guard
+      # fires exactly once: after the flip REF==IMAGE_REF, and when zot was never primary
+      # (REF started == IMAGE_REF) it never fires. Fail-open (_emit swallows all errors).
+      if [ "$N" -ge 2 ] && [ "$REF" != "$IMAGE_REF" ]; then
+        REF="$IMAGE_REF"   # atomic fallback to GHCR after the zot attempt
+        _emit "app image served via GHCR fallback (zot miss)" "app_ghcr_fallback" warning
+      fi
       [ "$N" -ge 5 ] && { printf ' | pull_err: %s' "$(tail -c 160 /run/soleur-pull.log 2>/dev/null)" >> /run/soleur-stage-detail; exit 1; }
       sleep 5
     done

@@ -82,9 +82,15 @@ independent axes so it never silently gates a host:
     CF-tunnel reset) — a mirror failure degrades zot redundancy, never the release/build verdict
     (consistent with "latency, not availability" above). A persistent miss is loud via a CI-level
     degraded signal: `mirror_status=degraded` → `::warning::` + step summary (both workflows) + a
-    ⚠️ line on the Slack release message (`reusable-release.yml` only). The *live* fallback-rate
-    Sentry alarm the bullet above references is **design intent, not yet provisioned** — a separate
-    IaC follow-up, load-bearing at the Phase-5 GHCR-push retirement. Two post-cutover boot-gating
+    ⚠️ line on the Slack release message (`reusable-release.yml`; #6278 added the same ⚠️ to
+    `build-inngest-bootstrap-image.yml`). The *live* fallback-rate Sentry alarm the bullet above
+    references is now **provisioned in #6278** — `sentry_issue_alert.zot_mirror_fallback_rate`
+    (`issue-alerts.tf`), an `event_frequency` count > 3/1h over `filter_match="any"` across the four
+    runtime signals (`registry:{ghcr-fallback,zot-gate-degraded}`,
+    `stage:{inngest_ghcr_fallback,app_ghcr_fallback}`). It is load-bearing at the Phase-5 GHCR-push
+    retirement. (Sensitivity note: it thresholds per Sentry issue-group, not a true cross-signal
+    aggregate — see the resource comment; a `sentry_metric_alert` upgrade is deferred to #6285 until
+    a resolvable numeric notify target exists in the Sentry TF root.) Two post-cutover boot-gating
     shapes the degraded signal must remain loud for: a **missing** copy (crane-copy failure) AND a
     **present-but-unsigned** copy (cosign-sign succeeded-copy-then-failed-sign) — the latter is NOT a
     clean miss, since the pull side would pull the present zot copy and *bypass* the atomic GHCR
