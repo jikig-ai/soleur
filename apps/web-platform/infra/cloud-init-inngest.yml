@@ -81,6 +81,33 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # --- #6178 boot observability: early-boot stage-marker emitter -----------------------
+  # Ships a SOLEUR_INNGEST_BOOT_STAGE marker to the Better Stack Logs HTTP ingest, INDEPENDENT
+  # of the journald->Vector shipper (which only starts LATE in the bootstrap, if at all — so a
+  # dark host that bricks BEFORE Vector is otherwise a total blind spot: no logs, deny-all-public
+  # so no SSH). URI + token mirror the vector.toml `[sinks.betterstack]` sink, so markers land in
+  # the SAME source table and are queryable via `betterstack-query.sh --grep SOLEUR_INNGEST_BOOT_STAGE`.
+  # Fail-OPEN: never blocks or fails the boot (a broken emitter must not brick the host). This POST
+  # bypasses Vector's PII scrub, so the free-form detail arg is masked here before shipping.
+  - path: /usr/local/bin/inngest-boot-phone-home.sh
+    content: |
+      #!/usr/bin/env bash
+      set +e
+      stage="$1"; detail="$2"
+      tok_file=/run/inngest-bs-logs-token
+      [ -r "$tok_file" ] || exit 0
+      bs_token="$(cat "$tok_file" 2>/dev/null)"
+      [ -n "$bs_token" ] || exit 0
+      host="$(hostname 2>/dev/null)"
+      ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+      detail="$(printf '%s' "$detail" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g' 2>/dev/null)"
+      payload="$(jq -nc --arg m SOLEUR_INNGEST_BOOT_STAGE --arg s "$stage" --arg d "$detail" --arg h "$host" --arg t "$ts" '{message:($m+" stage="+$s+" "+$d), marker:$m, stage:$s, detail:$d, host:$h, dt:$t, shipper:"cloud-init-phone-home"}' 2>/dev/null)"
+      [ -n "$payload" ] || payload="{\"message\":\"SOLEUR_INNGEST_BOOT_STAGE stage=$stage\",\"marker\":\"SOLEUR_INNGEST_BOOT_STAGE\",\"stage\":\"$stage\",\"host\":\"$host\"}"
+      curl -fsS --max-time 8 -X POST "https://s2457081.eu-fsn-3.betterstackdata.com/" -H "Authorization: Bearer $bs_token" -H "Content-Type: application/json" -d "$payload" >/dev/null 2>&1
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
 runcmd:
   # Apply SSH hardening immediately.
   - systemctl restart sshd
@@ -113,6 +140,18 @@ runcmd:
   - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-doppler
   - chmod 600 /etc/default/inngest-doppler
 
+  # --- #6178 boot observability: stage the Better Stack token + emit the FIRST marker ---
+  # Reached only if the volume mount + Doppler CLI install + scoped-token auth all succeeded,
+  # so a received `doppler-token-fetched` marker proves the boot got this far AND Doppler auth
+  # works; TOTAL marker absence localizes the failure to those earlier stages (or lost egress).
+  # 0600 in tmpfs /run (re-fetched every boot; the phone-home reads it). set +e: fail-open.
+  - |
+    set +e
+    set -a; . /etc/default/inngest-doppler; set +a
+    doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain > /run/inngest-bs-logs-token 2>/dev/null
+    chmod 600 /run/inngest-bs-logs-token 2>/dev/null
+    /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetched "arch=${inngest_cli_arch}"
+
   # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------
   # So the cold-boot soleur-inngest-bootstrap OCI pull + cosign-verify authenticates even
   # when Doppler answers empty at the boot instant (else anonymous private pull → 401 →
@@ -133,10 +172,13 @@ runcmd:
     . /etc/default/soleur-ghcr-read 2>/dev/null || true
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     if [ -n "$GHCR_READ_USER" ] && [ -n "$GHCR_READ_TOKEN" ]; then
-      printf '%s' "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_READ_USER" --password-stdin >/dev/null 2>&1 \
-        && echo "[inngest] ghcr login ok" || echo "[inngest] ghcr login failed (bootstrap pull may 401)"
+      if printf '%s' "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_READ_USER" --password-stdin >/dev/null 2>&1; then
+        echo "[inngest] ghcr login ok"; /usr/local/bin/inngest-boot-phone-home.sh ghcr-login-ok
+      else
+        echo "[inngest] ghcr login failed (bootstrap pull may 401)"; /usr/local/bin/inngest-boot-phone-home.sh ghcr-login-FAILED
+      fi
     else
-      echo "[inngest] WARN: baked GHCR creds empty — bootstrap pull may 401"
+      echo "[inngest] WARN: baked GHCR creds empty — bootstrap pull may 401"; /usr/local/bin/inngest-boot-phone-home.sh ghcr-creds-EMPTY
     fi
 
   # --- Fail-closed boot isolation self-check (mirrors registry) ------------------------
@@ -169,8 +211,10 @@ runcmd:
     CHKEOF
     then
       : > /run/soleur-inngest-doppler.ok
+      /usr/local/bin/inngest-boot-phone-home.sh isolation-check-passed
     else
       echo "[inngest] FATAL: doppler isolation self-check failed — inngest will NOT bootstrap" >&2
+      /usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED
     fi
     set +e
 
@@ -185,7 +229,16 @@ runcmd:
     test -f /run/soleur-inngest-doppler.ok || { echo "FATAL: doppler isolation self-check did not pass — refusing to bootstrap inngest" >&2; exit 1; }
     IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.19
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
-    docker pull "$IREF"
+    # #6178 boot observability: bracket the OCI pull so a pull hang/401 self-reports the STAGE
+    # (pre-oci-pull with no oci-pull-rc-* = hung; oci-pull-rc-N!=0 = failed, with masked tail).
+    /usr/local/bin/inngest-boot-phone-home.sh pre-oci-pull "$IREF"
+    set +e
+    docker pull "$IREF" > /var/log/inngest-oci-pull.log 2>&1
+    pull_rc=$?
+    set -e
+    pull_tail="$(tail -n 8 /var/log/inngest-oci-pull.log 2>/dev/null | tr '\n' '|' || true)"
+    /usr/local/bin/inngest-boot-phone-home.sh oci-pull-rc-$pull_rc "$pull_tail"
+    [ "$pull_rc" -eq 0 ] || { echo "FATAL: OCI pull failed rc=$pull_rc" >&2; exit "$pull_rc"; }
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
     trap cleanup EXIT
@@ -220,9 +273,25 @@ runcmd:
     # DOPPLER_PROJECT=soleur-inngest routes every doppler-wrapped unit (server/heartbeat/redis/
     # vector) at THIS host's ISOLATED project (AC3) — the scoped boot token can read only
     # soleur-inngest. VECTOR_CLI_ARCH (=${inngest_cli_arch}) selects the matching triple in the bootstrap map.
+    # #6178 boot observability: capture the bootstrap's combined output to a file and self-report
+    # its exit code + a masked tail. The bootstrap's own log() goes to journald->Vector, which is
+    # DOWN until the bootstrap installs+starts Vector near its end — so a mid-bootstrap failure is
+    # otherwise invisible. pre-bootstrap-run with no bootstrap-exit-* = hung; bootstrap-exit-N!=0 =
+    # the actual failure, tail masked (postgres creds / 32+hex tokens / signing keys) before ship.
+    /usr/local/bin/inngest-boot-phone-home.sh pre-bootstrap-run
+    set +e
     env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
         "INNGEST_CLI_ARCH=${inngest_cli_arch}" "SDK_URL=${sdk_url}" \
         "DOPPLER_PROJECT=soleur-inngest" \
         "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=${vector_sha256}" "VECTOR_CLI_ARCH=${inngest_cli_arch}" \
-      bash "$EXTRACT_DIR/inngest-bootstrap.sh"
+      bash "$EXTRACT_DIR/inngest-bootstrap.sh" > /var/log/inngest-bootstrap.log 2>&1
+    boot_rc=$?
+    set -e
+    boot_tail="$(tail -n 20 /var/log/inngest-bootstrap.log 2>/dev/null | tr '\n' '|' || true)"
+    /usr/local/bin/inngest-boot-phone-home.sh bootstrap-exit-$boot_rc "$boot_tail"
+    if [ "$boot_rc" -ne 0 ]; then
+      echo "FATAL: inngest bootstrap failed rc=$boot_rc (see /var/log/inngest-bootstrap.log)" >&2
+      exit "$boot_rc"
+    fi
     trap - EXIT
+    /usr/local/bin/inngest-boot-phone-home.sh bootstrap-done
