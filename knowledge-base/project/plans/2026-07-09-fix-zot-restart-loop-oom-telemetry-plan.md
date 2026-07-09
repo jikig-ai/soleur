@@ -102,7 +102,7 @@ Edit `zot-disk-heartbeat.sh` inside `cloud-init-registry.yml` (script body `:148
 - **FIXED:** across a soak window ≥ ~2h post-deploy (spans the full startup scan + first `gcInterval=1h` + `retention.delay=2h`), for the newest `boot_id`: `zot_restarts` delta ≈ 0 between events, `exit_code≠137`, `oom_kills_5m=0`, and `zot_anon_mb` peaks comfortably below `--memory`.
 - **STILL BROKEN:** `zot_restarts` climbs monotonically, OR `exit_code=137` (any `oom_killed`), OR `oom_kills_5m>0`, OR `zot_anon_mb` pins near the cap → read the decode table + `zot_last_err`; escalate host size.
 3.2 **Soak follow-through enrollment** (§2.9.1): create `scripts/followthroughs/zot-restart-plateau-6288.sh` (exit 0 when the soak holds) + the tracker `<!-- soleur:followthrough … -->` directive + `follow-through` label. **No sweeper secret edit needed** — `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` are already exported by `scheduled-followthrough-sweeper.yml:72-74`; the directive just declares `secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD` (the same creds `betterstack-query.sh` needs). Do NOT close #6288 on the immediate post-boot check.
-3.3 **Recurrence alarm** (P1-3 — covers the restart-loop liveness gap the disk heartbeat structurally cannot, P2-5). NOTE: #6278's `zot_mirror_fallback_rate` is a *Sentry* issue-alert on CI/cloud-init events — a **different data source**; `SOLEUR_ZOT_DISK` lives in Better Stack Logs, so this is a **Better Stack** alarm (on `exit_code=137` seen, or `zot_restarts` climbing across N consecutive events), NOT a `sentry_issue_alert`. deepen-plan must either (a) pin the concrete Better Stack alarm resource + threshold, or (b) **split it to a one-line follow-up issue** with re-eval criteria (per `wg-when-deferring-a-capability`) — do NOT ship a hand-waved alarm (DHH + simplicity). Sits outside the numbered ACs.
+3.3 **Recurrence alarm** (P1-3 — covers the restart-loop liveness gap the disk heartbeat structurally cannot, P2-5). NOTE: #6278's `zot_mirror_fallback_rate` is a *Sentry* issue-alert on CI/cloud-init events — a **different data source**; `SOLEUR_ZOT_DISK` lives in Better Stack Logs, so this is a **Better Stack** alarm (on `exit_code=137` seen, or `zot_restarts` climbing across N consecutive events), NOT a `sentry_issue_alert`. **RESOLVED (option b): filed as #6291.** Option (a) is not available — the `betteruptime` TF provider exposes only heartbeat/monitor/policy, NO logs-content alert resource, so a `SOLEUR_ZOT_DISK exit_code=137` content alert is a dashboard/Logs-API artifact, not Terraform-expressible. Deferred per `wg-when-deferring-a-capability` with concrete re-eval criteria; the #6288 soak probe + disk heartbeat cover the near-term. Sits outside the numbered ACs.
 
 ### Phase 4 — Apply (post-merge, automatable dispatch)
 
@@ -133,7 +133,7 @@ Ledger row text (Phase 2.3, swap € figures for ops-research-verified values be
 liveness_signal:
   what: "Better Stack heartbeat `soleur-registry-disk-prd` (absence-based, disk<85%) + the SOLEUR_ZOT_DISK structured self-report (enriched with mem/anon-RSS/OOM/exit fields this PR)"
   cadence: "5 min (cron) / heartbeat period 900s grace 600s"
-  alert_target: "Better Stack (heartbeat) + the new zot_restarts-slope / exit_code=137 recurrence alarm (Phase 3.3) -> operator"
+  alert_target: "Better Stack (heartbeat) + the #6288 soak follow-through probe (interim restart-loop coverage until it auto-closes #6288). A DURABLE zot_restarts-slope / exit_code=137 recurrence alarm is DEFERRED to #6291 (the betteruptime TF provider has no logs-content alert resource) -> so between #6288-close and #6291-land the disk heartbeat is structurally blind to restart-loops (GHCR-fallback-masked, reliability-only)."
   configured_in: "apps/web-platform/infra/cloud-init-registry.yml:148-193 (reporter+cron); zot-registry.tf:378-396 (heartbeat)"
 error_reporting:
   destination: "Better Stack Logs (isolated soleur-registry/prd source), grep marker SOLEUR_ZOT_DISK; recurrence alarm mirrors the #6278 sentry_issue_alert pattern"
@@ -141,7 +141,7 @@ error_reporting:
 failure_modes:
   - mode: "zot OOM restart-loop (host-level, current)"
     detection: "in-surface: exit_code=137 + oom_killed=false + oom_kills_5m>0 + zot_anon_mb high in SOLEUR_ZOT_DISK; loop keyed on zot_restarts delta"
-    alert_route: "Better Stack recurrence alarm -> operator; GHCR fallback covers serving meanwhile"
+    alert_route: "interim: #6288 soak probe FAIL -> operator; durable alarm deferred to #6291; GHCR fallback covers serving meanwhile"
   - mode: "zot cgroup-OOM (post --memory cap, contained)"
     detection: "exit_code=137 + oom_killed=true + oom_kills_5m>0 (container-scoped; host services + telemetry survive)"
     alert_route: "same alarm; signals the cap fired and host is protected"

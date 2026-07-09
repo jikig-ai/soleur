@@ -136,8 +136,14 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
   zot ~4/min OOM-ing during the boot scan of the ~35 GB store (disk-independent — disk sat at
   58–63%, not ENOSPC); cx32 adds RAM headroom above the scan working-set and adopts the **ADR-062**
   container `--memory`/`--memory-swap` cap (7168m) so a host-level OOM cannot restart-loop the box.
-  Applied via the guarded `registry-host-replace` dispatch (server_type is `ForceNew`; the 60 GB
-  store volume is preserved + re-attached). The GHCR atomic fallback masks the brief replace outage.
+  NOTE the cap already equals host RAM minus the ~1 GB OS reserve, so — unlike ADR-062's web host
+  where `PROD_MEMORY_CAP` is a *tunable* with headroom to raise on OOM — here the cap is a *ceiling*:
+  a working-set overrun's only remediation is a bigger host (cx42/16 GB), not a higher cap. OOM
+  confirmation keys on the MONOTONIC `memory.events oom_kill` container-cgroup counter
+  (`zot_oom_kills`, survives the 4/min point-sampling race) + `exit_code=137` + the journald
+  `oom_kills_5m` backstop — not the page-cache-confounded host `mem_used` nor a point-sampled anon
+  gauge. Applied via the guarded `registry-host-replace` dispatch (server_type is `ForceNew`; the
+  60 GB store volume is preserved + re-attached). The GHCR atomic fallback masks the brief replace outage.
 
 ### Credential isolation (amendment 2026-07-07, #6122)
 

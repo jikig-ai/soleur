@@ -191,10 +191,19 @@ write_files:
       # unlike host mem_used). cgroup v2 memory.stat `anon` in bytes → /1048576. Path mirrors
       # container-restart-monitor.sh:129-132. Guard -1 if the container/cgroup is absent (mid-restart).
       CGROUP_ROOT="$${CGROUP_ROOT:-/sys/fs/cgroup}"
-      ZOT_ANON_MB=-1
+      ZOT_ANON_MB=-1; ZOT_OOM_KILLS=-1
       if [ -n "$ID" ]; then
-        anon_bytes=$(grep -E '^anon ' "$CGROUP_ROOT/system.slice/docker-$ID.scope/memory.stat" 2>/dev/null | awk '{print $2}')
+        cg="$CGROUP_ROOT/system.slice/docker-$ID.scope"
+        anon_bytes=$(grep -E '^anon ' "$cg/memory.stat" 2>/dev/null | awk '{print $2}')
         [ -n "$anon_bytes" ] && ZOT_ANON_MB=$(( anon_bytes / 1048576 ))
+        # memory.events `oom_kill` is a MONOTONIC container-cgroup OOM-kill counter (mirrors
+        # container-restart-monitor.sh's authoritative signal). Unlike the zot_anon_mb GAUGE — a
+        # point sample that a 4/min loop sampled every 5 min systematically reads mid-scan, missing
+        # the pre-OOM peak — this counter SURVIVES the sampling race: any nonzero value on the
+        # newest boot_id means the cgroup OOM-killed zot. This is the real cgroup-OOM confirmation;
+        # zot_anon_mb stays as pressure context. `^oom_kill ` (trailing space) excludes oom_group_kill.
+        oom_k=$(grep -E '^oom_kill ' "$cg/memory.events" 2>/dev/null | awk '{print $2}')
+        [ -n "$oom_k" ] && ZOT_OOM_KILLS=$oom_k
       fi
       # (2d) journald kernel-OOM window backstop — survives the point-sampling race (kernel OOM-kill
       # entries persist the window even when inspect catches Status=running with stale exit fields).
@@ -202,13 +211,17 @@ write_files:
       # (2e) Non-OOM escape hatch (closes the no-SSH dead-end): bounded ≤300-byte single-line tail of
       # zot's own logs (zot logs at info, :128, so secret-exposure risk is low). Strip quotes/
       # backslashes too so a log line never breaks the JSON payload below. Read via the decode table.
-      ZOT_LAST_ERR=$(docker logs --tail 3 zot 2>&1 | tail -c 300 | tr '\n' ' ' | tr -d '"\\'); [ -n "$ZOT_LAST_ERR" ] || ZOT_LAST_ERR=none
+      # Whitespace-controls → space; then keep ONLY printable ASCII (drops C0/DEL control bytes AND
+      # mid-sequence-sliced UTF-8 — both invalid unescaped in a JSON string, RFC 8259 §7, so an
+      # unstripped tab-indented Go crash trace would make Better Stack reject the WHOLE payload in
+      # the exact crash case this field targets); finally drop "/\ so it can't corrupt the JSON.
+      ZOT_LAST_ERR=$(docker logs --tail 3 zot 2>&1 | tail -c 300 | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\'); [ -n "$ZOT_LAST_ERR" ] || ZOT_LAST_ERR=none
       # (2f) Boot discriminator — the immutable redeploy reuses the terraform hostname, so boot_id is
       # what cleanly separates old-host from new-host events for the automated decision rule.
       BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_used_mb=$MEM_USED mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_used_mb=$MEM_USED mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in

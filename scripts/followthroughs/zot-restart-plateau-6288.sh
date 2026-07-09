@@ -65,14 +65,22 @@ if [[ -z "$OUT" ]]; then
   echo "TRANSIENT: no SOLEUR_ZOT_DISK rows in ${WINDOW} — telemetry not observed yet (no deploy in window, or delivery not live)" >&2; exit 2
 fi
 
-# Rows are dt ASC (oldest->newest). Newest boot_id = the last row that carries a real one.
-NEWEST_BOOT="$(printf '%s\n' "$OUT" | grep -oE 'boot_id=[0-9a-fA-F-]+' | grep -v 'boot_id=unknown' | tail -1 | cut -d= -f2)"
+# betterstack-query.sh returns JSONEachRow lines `{"dt":"<iso>","raw":"..."}`; each line begins with
+# the ISO dt, so a lexical `sort` orders rows chronologically REGARDLESS of the query's ORDER BY —
+# do NOT hard-couple to the shared tool's dt-ASC default (#6251-spirit). Also strip each row's
+# free-text `zot_last_err=` tail BEFORE parsing any key=value field: zot_last_err is emitted LAST,
+# so a greedy cut from its first occurrence bounds the trusted region and a crafted zot log line
+# (containing e.g. `boot_id=`/`exit_code=137`) cannot spoof the fields the verdict keys on.
+TRUSTED="$(printf '%s\n' "$OUT" | sort | sed 's/ zot_last_err=.*//')"
+
+# Newest boot_id = the last (newest, post-sort) row carrying a real boot_id.
+NEWEST_BOOT="$(printf '%s\n' "$TRUSTED" | grep -oE 'boot_id=[0-9a-fA-F-]+' | grep -v 'boot_id=unknown' | tail -1 | cut -d= -f2)"
 if [[ -z "$NEWEST_BOOT" ]]; then
   echo "TRANSIENT: no usable boot_id in window (pre-#6288 reporter, or all-sentinel rows) — cannot scope to the newest host" >&2; exit 2
 fi
 
-# Scope to the newest boot_id, preserving dt ASC order.
-SCOPED="$(printf '%s\n' "$OUT" | grep -F "boot_id=$NEWEST_BOOT")"
+# Scope to the newest boot_id, chronological order.
+SCOPED="$(printf '%s\n' "$TRUSTED" | grep -F "boot_id=$NEWEST_BOOT")"
 n_events="$(printf '%s\n' "$SCOPED" | grep -c . || true)"
 
 # Soak-gate: enough events AND a wide-enough span. A fresh host reads zot_restarts=0 before the
@@ -85,21 +93,32 @@ if [[ -z "$first_s" || -z "$last_s" ]]; then
   echo "TRANSIENT: could not parse event timestamps ('$first_dt'..'$last_dt') — inconclusive" >&2; exit 2
 fi
 span=$(( last_s - first_s ))
+if [[ "$span" -lt 0 ]]; then
+  echo "TRANSIENT: negative span (${span}s) after chronological sort — unexpected row shape; refusing to evaluate" >&2; exit 2
+fi
 if [[ "$n_events" -lt "$MIN_EVENTS" || "$span" -lt "$MIN_SPAN_SEC" ]]; then
   echo "TRANSIENT: soak not yet filled for boot_id=$NEWEST_BOOT (${n_events} events over ${span}s; need >=${MIN_EVENTS} events and >=${MIN_SPAN_SEC}s) — slope-over-a-window rule, not a single post-boot row" >&2; exit 2
 fi
 
+# Require >=1 NON-sentinel zot_restarts sample before ANY verdict. If docker inspect returned empty
+# for the whole window (daemon fault, container never created, inspect-format drift), every row is
+# zot_restarts=-1; every FAIL check below no-ops on sentinels and the probe would PASS on ZERO valid
+# evidence — a vacuous close of #6288 while zot is actually DOWN. Treat "soak filled but no usable
+# container data" as TRANSIENT, never PASS. (observability + test-design + pattern-recognition all
+# converged on this false-PASS path.)
+restarts="$(printf '%s\n' "$SCOPED" | grep -oE 'zot_restarts=-?[0-9]+' | cut -d= -f2 | grep -vE '^-' || true)"
+if [[ -z "$restarts" ]]; then
+  echo "TRANSIENT: soak filled (${n_events} events / ${span}s) but every zot_restarts is a -1 inspect-miss sentinel for boot_id=$NEWEST_BOOT — zot may be down/absent; cannot confirm a plateau on zero valid container samples" >&2; exit 2
+fi
+
 FAILS=()
 
-# (1) restart plateau: max-min across the newest boot_id (ignore -1 inspect-miss sentinels).
-restarts="$(printf '%s\n' "$SCOPED" | grep -oE 'zot_restarts=-?[0-9]+' | cut -d= -f2 | grep -vE '^-' || true)"
-if [[ -n "$restarts" ]]; then
-  rmin="$(printf '%s\n' "$restarts" | sort -n | head -1)"
-  rmax="$(printf '%s\n' "$restarts" | sort -n | tail -1)"
-  rdelta=$(( rmax - rmin ))
-  if [[ "$rdelta" -gt "$PLATEAU_TOL" ]]; then
-    FAILS+=("zot_restarts climbed ${rmin}->${rmax} (delta ${rdelta} > tol ${PLATEAU_TOL}) — the loop did NOT plateau")
-  fi
+# (1) restart plateau: max-min across the newest boot_id (sentinels already filtered above).
+rmin="$(printf '%s\n' "$restarts" | sort -n | head -1)"
+rmax="$(printf '%s\n' "$restarts" | sort -n | tail -1)"
+rdelta=$(( rmax - rmin ))
+if [[ "$rdelta" -gt "$PLATEAU_TOL" ]]; then
+  FAILS+=("zot_restarts climbed ${rmin}->${rmax} (delta ${rdelta} > tol ${PLATEAU_TOL}) — the loop did NOT plateau")
 fi
 
 # (2) any OOM exit.
@@ -107,13 +126,21 @@ if printf '%s\n' "$SCOPED" | grep -qE 'exit_code=137'; then
   FAILS+=("exit_code=137 seen — an OOM exit; the host is still starving zot")
 fi
 
-# (3) journald kernel-OOM window backstop.
+# (3) container-cgroup OOM-kill counter (MONOTONIC memory.events oom_kill; survives the point-
+# sampling race, unlike the zot_anon_mb gauge — the real cgroup-OOM confirmation). Any nonzero on
+# the newest boot = the cgroup OOM-killed zot at least once.
+maxoomk="$(printf '%s\n' "$SCOPED" | grep -oE 'zot_oom_kills=-?[0-9]+' | cut -d= -f2 | grep -vE '^-' | sort -n | tail -1 || true)"
+if [[ -n "$maxoomk" && "$maxoomk" -gt 0 ]]; then
+  FAILS+=("zot_oom_kills reached ${maxoomk} — the container cgroup OOM-killed zot (monotonic memory.events counter)")
+fi
+
+# (4) journald kernel-OOM window backstop.
 maxoom="$(printf '%s\n' "$SCOPED" | grep -oE 'oom_kills_5m=[0-9]+' | cut -d= -f2 | sort -n | tail -1)"
 if [[ -n "$maxoom" && "$maxoom" -gt 0 ]]; then
   FAILS+=("oom_kills_5m peaked at ${maxoom} — the kernel OOM-killer fired in-window")
 fi
 
-# (4) anon RSS pressure near the --memory cap.
+# (5) anon RSS pressure near the --memory cap (context signal, backs up the monotonic counter).
 threshold=$(( CAP_MB - ANON_HEADROOM_MB ))
 maxanon="$(printf '%s\n' "$SCOPED" | grep -oE 'zot_anon_mb=-?[0-9]+' | cut -d= -f2 | grep -vE '^-' | sort -n | tail -1 || true)"
 if [[ -n "$maxanon" && "$maxanon" -gt "$threshold" ]]; then
@@ -127,5 +154,5 @@ if [[ "${#FAILS[@]}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "PASS: zot restart-loop plateaued for boot_id=$NEWEST_BOOT over ${span}s / ${n_events} events — restarts flat (delta<=${PLATEAU_TOL}), no exit_code=137, oom_kills_5m=0, zot_anon_mb below the ${CAP_MB}m cap. #6288 remediation holds."
+echo "PASS: zot restart-loop plateaued for boot_id=$NEWEST_BOOT over ${span}s / ${n_events} events (>=1 valid container sample) — restarts flat (delta<=${PLATEAU_TOL}), no exit_code=137, zot_oom_kills=0, oom_kills_5m=0, zot_anon_mb below the ${CAP_MB}m cap. #6288 remediation holds."
 exit 0
