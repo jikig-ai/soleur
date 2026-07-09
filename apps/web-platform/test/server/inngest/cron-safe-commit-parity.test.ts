@@ -75,10 +75,16 @@ const EXEMPT: Record<string, string> = {
 // Sentry heartbeat from a 1-token Anthropic canary call), so the safe-commit
 // invariant does not apply: it is neither migrated (nothing to route through
 // safeCommitAndPr) nor exempt (exemption is for crons that DO self-commit).
-// It is covered by invariant 1's directory walk (carries no blanket git-add)
-// and needs no list entry. Documented here so the cron-tier2-parity sibling-set
-// sweep sees this dependent acknowledged when EXPECTED_CRON_FUNCTIONS grows.
-const READ_ONLY_PROBES = ["cron-anthropic-credit-probe.ts"];
+// `cron-anthropic-cost-report.ts` (ADR-107) is the same class — it reads the
+// Anthropic Admin cost_report API and emits a `SOLEUR_CLAUDE_COST_DAILY` marker,
+// holding no git and opening no PR. Both are covered by invariant 1's directory
+// walk (carry no blanket git-add) and need no MIGRATED/EXEMPT entry. Documented
+// here so the cron-tier2-parity sibling-set sweep sees this dependent
+// acknowledged when EXPECTED_CRON_FUNCTIONS grows with a new read-only probe.
+const READ_ONLY_PROBES = [
+  "cron-anthropic-credit-probe.ts",
+  "cron-anthropic-cost-report.ts",
+];
 
 // Dispatch-hybrid crons (#5872 acknowledgment) — a fourth implicit class beyond
 // MIGRATED/EXEMPT/READ_ONLY_PROBES. `cron-dev-migration-drift`, `cron-terraform-drift`
