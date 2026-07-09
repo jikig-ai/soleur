@@ -290,7 +290,7 @@ export async function cronAnthropicCostReportHandler({
 // =============================================================================
 // Registration
 // =============================================================================
-// Daily, off-peak (17:06 UTC). retries:1; account-scope concurrency limits to 1
+// Daily, off-peak (06:17 UTC — `17 6 * * *`). retries:1; account-scope concurrency limits to 1
 // simultaneous cron-* invocation across the node. Manual-trigger event
 // `cron/anthropic-cost-report.manual-trigger`.
 

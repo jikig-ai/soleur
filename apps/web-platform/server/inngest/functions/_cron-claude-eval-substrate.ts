@@ -155,15 +155,20 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
 
 /**
  * Resolve the positive `capture_status` for the per-run marker (plan obs P1):
- * a timeout wins, else a parsed cost is `ok`, else `no-result-event`. Pure —
- * unit-tested (AC4).
+ * a timeout wins, else a parsed cost is `ok`, else `parse-error` when a JSON-
+ * shaped result line was seen but did not parse to a usable event ("capture
+ * broke"), else `no-result-event` (no result emitted at all). Pure — unit-tested
+ * (AC4). `sawUnparsedResultLine` defaults false so the legacy 2-arg callers/tests
+ * keep the prior ok|no-result-event|timeout behavior.
  */
 export function resolveEvalCaptureStatus(
   abortedByTimeout: boolean,
   evalCost: ParsedEvalResult["cost"] | null,
+  sawUnparsedResultLine = false,
 ): CaptureStatus {
   if (abortedByTimeout) return "timeout";
-  return evalCost ? "ok" : "no-result-event";
+  if (evalCost) return "ok";
+  return sawUnparsedResultLine ? "parse-error" : "no-result-event";
 }
 
 export const KILL_ESCALATION_MS = 5_000;
@@ -889,6 +894,12 @@ export async function spawnClaudeEval(args: {
   // model, parsed fail-open from stdout when `--output-format json` is active.
   // Stays null until a `{"type":"result",…}` line parses (→ capture_status:"ok").
   let evalCost: ParsedEvalResult["cost"] | null = null;
+  // #cost-attribution (plan Phase 2, obs P1): distinguishes "capture broke" from
+  // "genuinely no result". Set when a JSON-object-shaped stdout line (`{…}` under
+  // `--output-format json`) did NOT yield a usable `result` event — a truncated/
+  // malformed/wrong-shape result. Drives capture_status:"parse-error" so a broken
+  // capture is a queryable event, not silently folded into "no-result-event".
+  let sawUnparsedResultLine = false;
 
   // #5766: record this run as a live DB fact. upsert on entry (ON CONFLICT
   // refreshes on replay, preserving started_at), then a wall-clock heartbeat tick
@@ -967,8 +978,15 @@ export async function spawnClaudeEval(args: {
               -STDOUT_TAIL_CAP_BYTES,
             );
           } else {
-            // Non-JSON / old text format — preserve the legacy bounded tail
-            // (drop oldest). Carries the max-turns notice on the text path.
+            // A JSON-object-shaped line that did NOT parse to a `result` event
+            // (truncated / malformed / wrong-shape) is a broken capture, NOT a
+            // benign old-text line — flag it so the exit marker ships
+            // capture_status:"parse-error" (obs P1). Plain-text lines (the
+            // legacy `--print` path, e.g. the max-turns notice) do not start
+            // with `{`, so they never false-trip this.
+            if (line.trimStart().startsWith("{")) sawUnparsedResultLine = true;
+            // Preserve the legacy bounded tail (drop oldest). Carries the
+            // max-turns notice on the text path.
             stdoutTail = (stdoutTail + redacted + "\n").slice(
               -STDOUT_TAIL_CAP_BYTES,
             );
@@ -999,6 +1017,7 @@ export async function spawnClaudeEval(args: {
         const captureStatus = resolveEvalCaptureStatus(
           r.abortedByTimeout,
           evalCost,
+          sawUnparsedResultLine,
         );
         emitClaudeCostMarker({
           source: `cron:${cronName}`,

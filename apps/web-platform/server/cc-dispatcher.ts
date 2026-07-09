@@ -4006,9 +4006,13 @@ export async function dispatchSoleurGo(
         userId,
         result,
         // Cost-attribution marker (plan Phase 1). The cc-soleur-go onResult
-        // hook receives only the accumulated `{ totalCostUsd, usage }` — the
-        // model id is not surfaced on this path, so it rides as null (the
-        // Phase-3 Admin per-model report is the authoritative reconciliation).
+        // callback contract (soleur-go-runner) forwards only the accumulated
+        // `{ totalCostUsd, usage }` — the SDKResultMessage's `modelUsage` is
+        // available one layer up but is not threaded through this callback, so
+        // the marker rides `model: null` here. Attribution gap (not an SDK
+        // limitation): the Phase-3 Admin per-model report is the authoritative
+        // per-model reconciliation; threading the model through the onResult
+        // payload is a tracked follow-up.
         { source: "cc-soleur-go", model: null },
         leaseDelegationCtx,
       );

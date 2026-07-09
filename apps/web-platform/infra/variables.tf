@@ -301,12 +301,6 @@ variable "betterstack_logs_token" {
   sensitive   = true
 }
 
-variable "anthropic_admin_key" {
-  description = "#cost-attribution (plan Phase 3): read-only Anthropic Admin (org-billing) key (sk-ant-admin01-…) the daily cron-anthropic-cost-report reads to pull the Admin cost/usage API. Written to soleur/prd by anthropic-admin-key.tf. NO default (hr-tf-variable-no-operator-mint-default) — minted in the Anthropic console then published to Doppler soleur/prd_terraform as TF_VAR_anthropic_admin_key (--name-transformer tf-var). Sequenced AFTER the mint (Sharp Edge — a no-default var absent from prd_terraform fails the whole merge-apply)."
-  type        = string
-  sensitive   = true
-}
-
 # --- PR-H (#3244) — GitHub App + KB-drift -----------------------------------
 # Post-#4150: client_id / client_secret / github_actions_token /
 # doppler_token_kb_drift variables were deleted. See plan

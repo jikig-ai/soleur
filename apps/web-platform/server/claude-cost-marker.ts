@@ -1,4 +1,4 @@
-// Structured, WARN-level, fail-open Anthropic cost marker (ADR-103).
+// Structured, WARN-level, fail-open Anthropic cost marker (ADR-106).
 //
 // `SOLEUR_CLAUDE_COST` is the top-level discriminator so
 // `scripts/betterstack-query.sh --grep SOLEUR_CLAUDE_COST` matches it via its
@@ -15,13 +15,20 @@
 //
 // The silent `catch` below is the sanctioned observability-of-observability
 // exemption to `cq-silent-fallback-must-mirror-to-sentry` (documented in
-// ADR-103): a logging failure must NEVER red a cron or fail a session, and
+// ADR-106): a logging failure must NEVER red a cron or fail a session, and
 // mirroring the failure to Sentry would re-enter the same broken path.
 import pino from "pino";
 
 // Dedicated instance — NO `hooks.logMethod` (so no Sentry breadcrumb mirror).
 // `base` tags every line with the component so a Better Stack query can scope to
 // it. The default pino level is `info`, so `warn` lines always emit.
+//
+// ‼️ BOUNDARY: this instance also has NO `formatters.log` renameUserIdToHash
+// (ADR-029 PII pseudonymization) and NO `redact` paths — both are shared-logger-
+// only. The marker interfaces below MUST therefore stay free of any user id,
+// email, secret, or other regulated/sensitive field (they carry only source,
+// model, token counts, cost, a conversationId/cron correlation id, and status).
+// Adding such a field here would silently bypass ADR-029 + redaction.
 const log = pino({ base: { component: "claude-cost" } });
 
 // Where the spend originated. Session paths are fixed strings; crons are

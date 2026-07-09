@@ -204,7 +204,7 @@ three session paths funnel through (R2). Fail-open.
   // the shared-scope ring buffer; arch P2-Q4). Level WARN is still required so the
   // Vector app_container_warn_filter ships it. This silent catch is the sanctioned
   // observability-of-observability exemption to cq-silent-fallback-must-mirror-to-sentry
-  // (documented in ADR-103).
+  // (documented in ADR-106).
   import pino from "pino";
   const log = pino({ base: { component: "claude-cost" } }); // no Sentry logMethod hook
   export type ClaudeCostSource =
@@ -347,8 +347,8 @@ New low-frequency cron mirroring `cron-anthropic-credit-probe.ts`'s shape.
   add a "Querying Anthropic cost markers" section with ranked SQL — per-cron
   (`GROUP BY source`), per-model (`JSONExtractString(raw,'model')`), and the daily
   total (`SOLEUR_CLAUDE_COST_DAILY`). Include the `--grep SOLEUR_CLAUDE_COST` form.
-- [x] **ADR-033 amend + ADR-103 create** — see the `## Architecture Decision (ADR/C4)`
-  section for the full contract (ADR-033 must reconcile I8 + I5; ADR-103 records the
+- [x] **ADR-033 amend + ADR-106 create** — see the `## Architecture Decision (ADR/C4)`
+  section for the full contract (ADR-033 must reconcile I8 + I5; ADR-106 records the
   WARN + Sentry-mirror-bypass decision and the three rejected alternatives incl. the
   dispatch-hybrid rebuttal). Re-verify the next-free ordinal at `/ship` (collision
   gate); sweep the whole feature's artifacts on any renumber.
@@ -413,14 +413,18 @@ New low-frequency cron mirroring `cron-anthropic-credit-probe.ts`'s shape.
 - [x] **AC9** `betterstack-query.sh` is **unchanged** (Scope 3 satisfied by
   `--grep`) and the runbook contains a "Querying Anthropic cost markers" section
   (`grep -c 'SOLEUR_CLAUDE_COST' knowledge-base/engineering/operations/runbooks/betterstack-log-query.md >= 1`).
-- [x] **AC10** ADR-033 amended + ADR-103 created; C4 `model.c4` has the new
+- [x] **AC10** ADR-033 amended + ADR-106 created; C4 `model.c4` has the new
   `api -> anthropic … Admin API …` edge; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
 - [x] **AC11** Phase-0 findings (CLI result shape + Admin `amount` unit) are
   pinned in `## Research Insights` with the probe output or a dated doc citation.
-- [x] **AC12** `anthropic-admin-key.tf` adds a `doppler_secret` writing
-  `ANTHROPIC_ADMIN_KEY` to `soleur/prd` from no-default `var.anthropic_admin_key`
-  (mirrors `inngest-betterstack-token.tf`); `terraform validate` on the
-  web-platform root passes.
+- [ ] **AC12 (DEFERRED to the post-mint IaC follow-up — NOT in this PR)**
+  `anthropic-admin-key.tf` adds a `doppler_secret` writing `ANTHROPIC_ADMIN_KEY`
+  to `soleur/prd` from no-default `var.anthropic_admin_key` (mirrors
+  `inngest-betterstack-token.tf`). Split out of this Phases-1–4 PR per the Sharp
+  Edge (a no-default var absent from `prd_terraform` fails the whole merge-apply);
+  it lands in a follow-up that merges AFTER the vendor-console mint + the
+  `TF_VAR_anthropic_admin_key` provisioning into `prd_terraform`. Until then the
+  cost-report cron self-reports `{status:"key-missing"}` benignly.
 
 ### Post-merge (automated / verification)
 
@@ -586,10 +590,14 @@ failure_modes:
     detection: cannot — emitClaudeCostMarker is try/caught (fail-open by design)
     alert_route: none (intentional; observability must never break a run)
   - mode: substrate result-event parse fails / old text format
-    detection: SpawnResult.costUsd is undefined so the marker is skipped; the
-               ABSENCE of a cron's SOLEUR_CLAUDE_COST row in Better Stack is
-               itself the in-surface signal, queryable per-cron
-    alert_route: none inline; surfaced by a per-cron marker-presence query
+    detection: the substrate ALWAYS ships a POSITIVE SOLEUR_CLAUDE_COST marker on
+               child exit (never row-absence) — capture_status:"parse-error" when a
+               JSON-shaped result line failed to parse (capture broke) or
+               "no-result-event" when none was emitted, both with cost_usd:null.
+               Queryable per-cron in Better Stack (Layer 3: Vector app_container
+               WARN → Better Stack).
+    alert_route: none inline (fail-open); surfaced by a per-cron
+                 capture_status:parse-error / no-result-event marker query
   - mode: Admin API auth failure (bad/revoked admin key)
     detection: 401/403 classified fatal in the cost-report cron
     alert_route: Sentry monitor RED (scheduled-anthropic-cost-report)
@@ -623,7 +631,8 @@ discriminate per-cron/per-model attribution in one event).
   under the new format — Phase 0 hard-gate) and **I5** (deterministic capture —
   `SpawnResult` gains `costUsd`/`usage`/`model`; the FR10 memoized-step test stays
   green). `## Consequences`: the local-journald readability trade-off.
-- **Create ADR-103** (provisional ordinal; ADR-102 is highest, git-history-verified):
+- **Create ADR-106** (ordinal re-verified at review; ADR-105 is highest on origin/main —
+  the provisional 103 collided with merged ADR-103/104/105 and was renumbered to 106):
   the `SOLEUR_CLAUDE_COST` marker convention (pino WARN via a Sentry-mirror-bypassing
   logger so the existing Vector `app_container_warn_filter` ships it without polluting
   breadcrumbs) + the Admin Cost/Usage API integration. **Rejected alternatives to

@@ -813,4 +813,13 @@ describe("resolveEvalCaptureStatus (AC4 — positive marker status)", () => {
   it("no parsed cost → no-result-event (never row-absence)", () => {
     expect(resolveEvalCaptureStatus(false, null)).toBe("no-result-event");
   });
+  it("no cost but a JSON-shaped line failed to parse → parse-error (capture broke, distinct from no-result-event)", () => {
+    expect(resolveEvalCaptureStatus(false, null, true)).toBe("parse-error");
+  });
+  it("timeout wins even when a JSON line failed to parse", () => {
+    expect(resolveEvalCaptureStatus(true, null, true)).toBe("timeout");
+  });
+  it("a parsed cost outranks a stray unparsed line → ok", () => {
+    expect(resolveEvalCaptureStatus(false, cost, true)).toBe("ok");
+  });
 });
