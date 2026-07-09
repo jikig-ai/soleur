@@ -32,7 +32,7 @@ vi.mock("@/server/observability", () => ({
 }));
 
 import { buildCrmTools } from "@/server/crm/crm-tools";
-import { STAGE_PROBABILITY } from "@/server/crm/stage-probability";
+import { STAGE_PROBABILITY } from "@/lib/crm/stage-probability";
 
 type ToolStub = {
   name: string;

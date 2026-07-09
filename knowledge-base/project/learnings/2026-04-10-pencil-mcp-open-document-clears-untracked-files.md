@@ -55,9 +55,25 @@ Rebuilt all 6 design screens from the exported PNG screenshots that existed alon
 1. **Pencil MCP `open_document` cleared .pen file contents** -- Recovery: rebuilt all 6 screens from exported PNG screenshots using batch_design. Prevention: commit .pen files before opening; add PreToolUse hook to block opening untracked files.
 2. **Pencil MCP `get_editor_state` and `snapshot_layout` returned empty after opening** -- Recovery: investigated with direct file reads, confirmed file was overwritten. Prevention: verify post-open state and restore from git if empty.
 
+## Recurrence — 2026-07-08 (Pencil v2.9, beta-CRM-UI brainstorm #6172)
+
+Still live in Pencil **v2.9** even though the upstream tracker **#4859** ("open_document must
+refuse to overwrite non-empty .pen with empty state") is now **CLOSED** — closing the upstream
+issue did NOT fix the pinned adapter's behavior. When `ux-design-lead` iterated on an existing
+4-frame `.pen` to add a funnel artboard, every `open_document` truncated the file and each
+`batch_design` op persisted against the emptied doc, overwriting the 3 existing screens on disk.
+
+**What was different (and better) this time:** the `.pen` had been **committed first**, so recovery
+did NOT require rebuilding from PNGs. The agent reconstructed the final file by JSON-merging the
+git-HEAD originals with the newly-built frame (id-collision-checked, originals verified byte-identical)
+and **never called Pencil `save`**. This is the commit-first prevention (#1 below) paying off exactly
+as designed — the mitigation is the durable answer; do not wait for an upstream fix. A PostToolUse
+hook also auto-restored the file from HEAD (see
+`best-practices/2026-06-11-posttooluse-hooks-that-write-files-need-atomic-restore-symlink-refusal-and-orphan-gate-exemption.md`).
+
 ## Key Insight
 
-MCP tools that open files for editing should be treated as potentially destructive until verified safe. Always ensure design files are tracked in git before invoking MCP open operations. The cost of a `git add && git commit` is trivial compared to rebuilding lost designs.
+MCP tools that open files for editing should be treated as potentially destructive until verified safe. Always ensure design files are tracked in git before invoking MCP open operations. The cost of a `git add && git commit` is trivial compared to rebuilding lost designs. A CLOSED upstream bug tracker (#4859) is not evidence the behavior changed in the pinned adapter — the commit-first + JSON-merge-from-HEAD recovery is the load-bearing mitigation, not the upstream fix.
 
 ## Related Learnings
 

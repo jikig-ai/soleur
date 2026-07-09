@@ -34,6 +34,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { href: "/dashboard", label: "Dashboard", seq: "g d", accel: "d" },
   { href: "/dashboard/inbox", label: "Inbox", seq: "g i", accel: "i" },
   { href: "/dashboard/workstream", label: "Workstream", seq: "g w" }, // NO accel — ⌘W unbindable
+  { href: "/dashboard/crm", label: "CRM", seq: "g m" }, // read-only beta-CRM board (#6172); m = CRM (c/r taken)
   { href: "/dashboard/kb", label: "Knowledge Base", seq: "g k" }, // NO accel — ⌘K = palette
   { href: "/dashboard/routines", label: "Routines", seq: "g r", accel: "r" },
   { href: "/dashboard/releases", label: "Releases", seq: "g l" }, // NO accel — ⌘L is browser-reserved (address bar)

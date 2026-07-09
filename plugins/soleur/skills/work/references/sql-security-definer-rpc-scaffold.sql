@@ -40,6 +40,16 @@ BEGIN
     RAISE EXCEPTION 'not authorized' USING ERRCODE = '42501';
   END IF;
 
+  -- jti-deny re-assert (ONLY if the referenced tables carry the RESTRICTIVE
+  -- `<table>_jti_not_denied` policy, 068/126 shape). That policy protects DIRECT
+  -- PostgREST table access, NOT this fn: SECURITY DEFINER bypasses RLS, so a
+  -- denylisted-but-unexpired JWT would otherwise read/write via the rpc() path.
+  -- A RESTRICTIVE RLS policy protects rows, not RPCs — re-encode EVERY
+  -- RLS-boundary property here. Omit for RPCs over non-jti tables. (PR #6239)
+  IF public.is_jti_denied_from_jwt() THEN
+    RAISE EXCEPTION 'token denied' USING ERRCODE = '42501';
+  END IF;
+
   UPDATE public.<table>
      SET <column> = p_value
    WHERE id = p_target_id;
