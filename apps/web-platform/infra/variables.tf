@@ -42,9 +42,9 @@ variable "location" {
 }
 
 variable "registry_location" {
-  description = "Hetzner datacenter location for the zot registry host + its volume (#6122). Separate from var.location because the registry was provisioned in nbg1 (cx23 stock) during a hel1/eu-central capacity outage; keeping it independent lets a `terraform plan` show no registry drift and lets the registry move regions without disturbing the web/git-data hosts."
+  description = "Hetzner datacenter location for the zot registry host + its volume (#6122). Separate from var.location so the registry can move regions independently. Originally nbg1 (provisioned there during a hel1/eu-central cx23-stock outage). MOVED nbg1→**hel1** (#6288): the OOM remediation needs an 8 GB host, and cx33 (8 GB, ~€8.49/mo) is available in hel1 but not nbg1 (nbg1's cheapest 8 GB was cpx32 ~€35/mo). hel1 is the same eu-central network zone (10.0.1.0/24 spans it) + where the web/git-data/inngest hosts live. The location change is ForceNew on hcloud_volume.registry — the nbg1 store volume is destroyed and a fresh hel1 volume is created; the 35 GB store re-fills from GHCR (zot is a mirror; pulls fall through to GHCR meanwhile)."
   type        = string
-  default     = "nbg1"
+  default     = "hel1"
 }
 
 variable "image_name" {
@@ -114,16 +114,13 @@ variable "git_data_volume_size" {
 
 # --- #6122 (ADR-096) — the self-hosted zot registry host ---
 variable "registry_server_type" {
-  description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): cax11 (2 vCPU ARM64/Ampere, 4GB) / cx23 (2 vCPU x86, 4GB, live, ~€5.49/mo gross). A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral — provisioning takes whichever has Hetzner stock in var.registry_location (nbg1). Recorded via ops-advisor. #6288 attempted cx23→cx32 (8 GB) for OOM headroom, but **cx32 does not exist in the Hetzner catalog** (the plan's ~€6.80 figure was for a phantom type) → the registry-host-replace apply DESTROYED the old host then failed `server type cx32 not found`, leaving the registry down (GHCR-masked). Restored to cx23 here. The nbg1 8 GB reality (Hetzner API, 2026-07-09): the CHEAPEST ≥8 GB type available in nbg1 is cpx32 at ~€35.49/mo gross (~6× cx23); cpx31/cax21 (cheaper 8 GB) are NOT offered in nbg1, and the 35 GB store volume is location-locked to nbg1, so a cheap-8GB region move needs a volume migration. The Slice-2 memory remediation is therefore a cost/architecture decision (accept ~6× host cost, migrate region, or use the deferred storage.dedupe=false working-set lever) — see #6288 / the follow-up. Slice-1 telemetry (mem/OOM/exit fields) ships regardless and now confirms the OOM live from Better Stack."
+  description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): cax11 (2 vCPU ARM64/Ampere, 4GB) / cx23 (2 vCPU x86, 4GB) / cx33 (4 vCPU x86, 8GB, ~€8.49/mo net, hel1). A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral. Recorded via ops-advisor. #6288 attempted cx23→cx32 (8 GB) for OOM headroom, but **cx32 does not exist in the Hetzner catalog** (the plan's ~€6.80 figure was for a phantom type) → the registry-host-replace apply DESTROYED the old nbg1 host then failed `server type cx32 not found`. RESOLUTION (operator-chosen, #6288): migrate the registry nbg1→**hel1** and bump cx23→**cx33** (real 8 GB type, only +~€3/mo vs cx23; cheapest ≥8 GB in nbg1 was cpx32 ~€35/mo, ~6×). hel1 is where the rest of the fleet lives; the registry was only in nbg1 due to a since-resolved hel1 stock outage. cx33 is amd64 (does NOT start with `cax`) → local.registry_arch unchanged. The 35 GB zot store is a disposable GHCR MIRROR — the fresh hel1 volume re-fills from GHCR on the next CI dual-push (pulls fall through to GHCR meanwhile, non-release-blocking). The ADR-062 --memory=7168m cap (8192−1024 host reserve) is now VALID + load-bearing on the 8 GB host."
   type        = string
-  # cx23 (x86, 4 GB) — RESTORED after #6288's cx23→cx32 attempt failed (`server type cx32 not
-  # found`: cx32 is not a real Hetzner type; the phantom bump destroyed then failed to recreate the
-  # registry host). cx23 is the known-good, nbg1-available, live type. The Slice-1 OOM telemetry in
-  # cloud-init-registry.yml lands regardless of host size. The --memory=7168m cap is a harmless
-  # no-op on a 4 GB host (cgroup limit above physical RAM → host OOM-kills first, exactly as before
-  # #6288). The real 8 GB remediation is blocked on a cost/architecture decision (cpx32 ~€35/mo, or
-  # a nbg1→other-region volume migration, or storage.dedupe=false) — tracked, not silently applied.
-  default = "cx23"
+  # cx33 (x86, 8 GB, hel1) — the real OOM remediation after #6288's cx32 attempt failed (cx32 is
+  # not a real Hetzner type). cx33 is the 8 GB member of the same CX Intel line as cx23, available
+  # in hel1 at ~€8.49/mo net (+~€3/mo vs cx23). Paired with registry_location=hel1 below and the
+  # --memory=7168m cgroup cap (now enforceable on 8 GB) it fixes the boot-scan host-OOM restart-loop.
+  default = "cx33"
 }
 
 variable "registry_volume_size" {
