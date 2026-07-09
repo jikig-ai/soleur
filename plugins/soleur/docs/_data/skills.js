@@ -67,7 +67,7 @@ const SKILL_CATEGORIES = {
   "skill-security-scan": "Review & Planning",
   "ux-audit": "Review & Planning",
 
-  // Workflow (40)
+  // Workflow (41)
   "admin-ip-refresh": "Workflow",
   "agent-browser": "Workflow",
   "fix-issue": "Workflow",
@@ -80,6 +80,7 @@ const SKILL_CATEGORIES = {
   "flag-set-role": "Workflow",
   "git-worktree": "Workflow",
   incident: "Workflow",
+  invoice: "Workflow",
   "kb-search": "Workflow",
   "linear-fetch": "Workflow",
   "merge-pr": "Workflow",

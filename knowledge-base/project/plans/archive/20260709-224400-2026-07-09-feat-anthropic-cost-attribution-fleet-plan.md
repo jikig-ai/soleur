@@ -204,7 +204,7 @@ three session paths funnel through (R2). Fail-open.
   // the shared-scope ring buffer; arch P2-Q4). Level WARN is still required so the
   // Vector app_container_warn_filter ships it. This silent catch is the sanctioned
   // observability-of-observability exemption to cq-silent-fallback-must-mirror-to-sentry
-  // (documented in ADR-107).
+  // (documented in ADR-108).
   import pino from "pino";
   const log = pino({ base: { component: "claude-cost" } }); // no Sentry logMethod hook
   export type ClaudeCostSource =
@@ -347,8 +347,8 @@ New low-frequency cron mirroring `cron-anthropic-credit-probe.ts`'s shape.
   add a "Querying Anthropic cost markers" section with ranked SQL — per-cron
   (`GROUP BY source`), per-model (`JSONExtractString(raw,'model')`), and the daily
   total (`SOLEUR_CLAUDE_COST_DAILY`). Include the `--grep SOLEUR_CLAUDE_COST` form.
-- [x] **ADR-033 amend + ADR-107 create** — see the `## Architecture Decision (ADR/C4)`
-  section for the full contract (ADR-033 must reconcile I8 + I5; ADR-107 records the
+- [x] **ADR-033 amend + ADR-108 create** — see the `## Architecture Decision (ADR/C4)`
+  section for the full contract (ADR-033 must reconcile I8 + I5; ADR-108 records the
   WARN + Sentry-mirror-bypass decision and the three rejected alternatives incl. the
   dispatch-hybrid rebuttal). Re-verify the next-free ordinal at `/ship` (collision
   gate); sweep the whole feature's artifacts on any renumber.
@@ -413,7 +413,7 @@ New low-frequency cron mirroring `cron-anthropic-credit-probe.ts`'s shape.
 - [x] **AC9** `betterstack-query.sh` is **unchanged** (Scope 3 satisfied by
   `--grep`) and the runbook contains a "Querying Anthropic cost markers" section
   (`grep -c 'SOLEUR_CLAUDE_COST' knowledge-base/engineering/operations/runbooks/betterstack-log-query.md >= 1`).
-- [x] **AC10** ADR-033 amended + ADR-107 created; C4 `model.c4` has the new
+- [x] **AC10** ADR-033 amended + ADR-108 created; C4 `model.c4` has the new
   `api -> anthropic … Admin API …` edge; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
 - [x] **AC11** Phase-0 findings (CLI result shape + Admin `amount` unit) are
   pinned in `## Research Insights` with the probe output or a dated doc citation.
@@ -631,7 +631,7 @@ discriminate per-cron/per-model attribution in one event).
   under the new format — Phase 0 hard-gate) and **I5** (deterministic capture —
   `SpawnResult` gains `costUsd`/`usage`/`model`; the FR10 memoized-step test stays
   green). `## Consequences`: the local-journald readability trade-off.
-- **Create ADR-107** (ordinal re-verified at review; ADR-105 is highest on origin/main —
+- **Create ADR-108** (ordinal re-verified at review; ADR-105 is highest on origin/main —
   the provisional 103 collided with merged ADR-103/104/105 and was renumbered to 106):
   the `SOLEUR_CLAUDE_COST` marker convention (pino WARN via a Sentry-mirror-bypassing
   logger so the existing Vector `app_container_warn_filter` ships it without polluting

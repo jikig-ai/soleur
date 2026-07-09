@@ -8,6 +8,11 @@
       "Bash(git commit -F:*)",
       "Bash(bash $(git rev-parse --show-toplevel)/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh *)",
       "Bash(gh pr merge:*)"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/lib/stripe.ts)"
     ]
   },
   "env": {

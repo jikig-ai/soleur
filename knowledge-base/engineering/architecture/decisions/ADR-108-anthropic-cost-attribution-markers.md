@@ -1,11 +1,11 @@
-# ADR-107: `SOLEUR_CLAUDE_COST` marker convention + Anthropic Admin Cost/Usage integration
+# ADR-108: `SOLEUR_CLAUDE_COST` marker convention + Anthropic Admin Cost/Usage integration
 
 - **Status:** adopting (Phases 1–4 ship the markers + the daily Admin cost-report cron; the `ANTHROPIC_ADMIN_KEY` IaC + vendor-console mint are a sequenced follow-up)
 - **Date:** 2026-07-09
 - **Deciders:** Operator; drafted via `/soleur:go` → plan → this ADR. Domain: Engineering (CTO), Finance (advisory — enables per-model/per-surface spend analysis, creates no new vendor expense).
 - **Related:** ADR-033 (cron claude-eval spawn — amended with I9 for the `--output-format json` cost capture), ADR-029 (pino PII-rename boundary), `cron-anthropic-credit-probe.ts` (the `Ref #5674` follow-up this closes the attribution half of), `inngest-betterstack-token.tf` (the `doppler_secret` no-default-var precedent).
 
-> **Ordinal.** Renumbered **twice**: provisional 103 → 106 at review (ADR-103/104/105 merged after this branch was cut), then **106 → 107 at ship** after a sibling (`ADR-106-inngest-cutover-*`) landed on `origin/main` during this pipeline's ~90-min window. ADR-106 is now the highest on `origin/main`; 107 is the next free ordinal. `/ship`'s ADR-Ordinal Collision Gate + the Phase-7 post-sync re-check caught both collisions — validating that the gate must re-verify against a freshly-fetched `origin/main` at merge, not the branch base.
+> **Ordinal.** Renumbered **three times** under a fast-moving `main`: provisional 103 → 106 at review (ADR-103/104/105 merged after this branch was cut), 106 → 107 when `ADR-106-inngest-cutover-*` landed mid-pipeline, then **107 → 108 at ship** when `ADR-107-stripe-mcp-*` landed during a CI re-run. ADR-107 is now the highest on `origin/main`; 108 is the next free ordinal. Every collision was caught by the Phase-7 post-sync ADR-ordinal re-check — the load-bearing lesson: the gate MUST re-verify against a freshly-fetched `origin/main` at each merge attempt, because the collision window is the entire pipeline, not just plan/review time.
 
 ## Context
 
