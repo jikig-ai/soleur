@@ -6,7 +6,7 @@
 // COUNTS/TIMINGS ONLY — never receives or returns note bodies or contact PII
 // beyond stage counts (AC4).
 
-import { FUNNEL_STAGES } from "@/server/crm/stage-probability";
+import { FUNNEL_STAGES } from "@/lib/crm/stage-probability";
 
 // Below this prior-stage count a conversion % is statistically meaningless at
 // beta volume — render "insufficient data" instead. prev===3 still shows (3<3
