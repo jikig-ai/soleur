@@ -233,6 +233,27 @@ volume API ("~30 GB") as "not full", but that API reports the **block-device** s
   no on-boot gc trigger is issued (zot v2.1.2 exposes no sanctioned on-demand gc endpoint —
   `hr-verify-repo-capability-claim`). Status stays **Adopting**.
 
+- **Capacity-vs-retention recurrence (2026-07-09, #6247).** The #6240 fix tightened gc/retention
+  **timing** but deliberately left the keep-**set** unchanged. A recurrence followed: `SOLEUR_ZOT_DISK`
+  showed the 30 GB ext4 fs **genuinely full** (`pcent=100`, `resize_ok=true`,
+  `fs_size_gb=30=block_size_gb`, `zot_restarts` climbing) — NOT a resize regression, but the exact
+  telemetry-gated *grow-the-volume* contingency #6244 pre-registered as #6247. Root cause: the
+  `storage.retention` keep-set (`latest` + **unbounded** `sha256-.*` sig referrers + **10** `v*` + **10**
+  commit-sha, **per repo across 2 platform-image repos**, each image ~1.5–2 GB) legitimately **exceeded
+  30 GB**, and gc cannot reclaim a blob the policy says to KEEP. Resolution — **both levers, one PR, one
+  `registry-host-replace` dispatch**: (1) grow `var.registry_volume_size` **30 → 60 GB** (Hetzner
+  in-place volume resize preserving data; the fail-loud `resize2fs` grows the ext4 on the next boot);
+  (2) tighten the keep-set — `mostRecentlyPushedCount` **10 → 5** for `v*` and commit-sha, and **bound
+  the previously-absolute "ALWAYS keep every `sha256-*`" rule** at `mostRecentlyPushedCount` **50**.
+  The `sha256-.*` bound revises the prior invariant and is coupled to deploy-time `cosign verify`
+  (ADR-087): `mostRecentlyPushedCount` is push-ORDER heuristic and can evict out of order under the
+  backfill/re-sign path above, and GHCR does NOT rescue a zot-pruned sig on a **kept** image (atomic-move
+  fetches the `.sig` from whichever registry serves the pull). 50 sits far above the true keep
+  requirement (~12–18 sig-tags/repo) so it never prunes a kept image's sig at current scale; blast
+  radius today is WARN-mode (`ci-deploy.sh`), becoming blocking at the WARN→ENFORCE flip (#6129). No
+  gate/workflow change: the `registry-host-replace` destroy-guard already permits a volume `["update"]`.
+  Status stays **Adopting**.
+
 ## Alternatives Considered
 
 The 7 registry-choice options are tabled above. The **apply-path** alternatives (per-PR `-target`

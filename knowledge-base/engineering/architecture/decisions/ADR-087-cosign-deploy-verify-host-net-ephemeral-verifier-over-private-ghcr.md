@@ -159,6 +159,16 @@ the discriminating `cosign_verify_event` on failure, and echoes the verified dig
   it buys defense-in-depth that is not justified by a WARN-only, single-user path
   today. C remains the right shape to revisit **at ENFORCE time**, when a provably
   air-gapped verify step earns its complexity.
+- **Consequence note (2026-07-09, ADR-096 capacity-vs-retention amendment / #6247):** the
+  zot `storage.retention` keep-set now **bounds** the previously-unbounded `sha256-.*`
+  cosign sig-referrer tags at `mostRecentlyPushedCount` 50. This verify step fetches a
+  kept image's `.sig` **by tag from the same registry it pulls the image**, so a mis-sized
+  bound that pruned a kept image's sig would make verify `UNAUTHORIZED`/fail (WARN — non-
+  blocking today; **blocking at the WARN→ENFORCE flip, #6129**). 50 is sized far above the
+  true keep requirement (~12–18 sig-tags/repo) precisely so it never prunes a kept image's
+  sig at current scale; `mostRecentlyPushedCount` is a push-ORDER heuristic that can evict
+  out of order under the ADR-096 backfill/re-sign path, which is why the bound is generous.
+  No change to this ADR's decision or topology.
 
 ## Cost Impacts
 

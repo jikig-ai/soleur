@@ -369,23 +369,25 @@ against the finalized file list before /work.)
 
 ### Pre-merge (PR)
 
-- [ ] `variables.tf` `registry_volume_size` default is `60`; description no longer contains the
-      falsified "30 GB" / "10 v* + 10 sha" phrasing (`grep -c '30 GB' variables.tf` on that block == 0).
-- [ ] `cloud-init-registry.yml` `config.json` keepTags: `v.*` and `[0-9a-f]{7,64}` each carry
-      `"mostRecentlyPushedCount": 5`; the `sha256-.*` pattern carries a `"mostRecentlyPushedCount"`
-      (bounded — no longer count-less).
-- [ ] `gcInterval:"1h"`, `delay:"2h"`, `gcDelay:"1h"`, `deleteReferrers:false` all UNCHANGED
-      (verify the #6246 tightening is preserved).
-- [ ] `registry-boot-guard.test.sh` passes and its sha256-* assertion now asserts a BOUNDED keep-set
-      (not "UNCHANGED"); new count assertions present.
-- [ ] `terraform validate` + `terraform plan` (scoped) show `hcloud_volume.registry` as an in-place
-      `["update"]` (size 30→60), NOT delete/replace; rendered `user_data` < 32,768 bytes.
-- [ ] `test-registry-host-replace-gate.sh` still green (the size-update PASS path is Test 1 —
+- [x] `variables.tf` `registry_volume_size` default is `60`; description no longer contains the
+      falsified "30 GB … with headroom" / "10 v* + 10 sha" phrasing.
+- [x] `cloud-init-registry.yml` `config.json` keepTags: `v.*` and `[0-9a-f]{7,64}` each carry
+      `"mostRecentlyPushedCount": 5`; the `sha256-.*` pattern carries `"mostRecentlyPushedCount": 50`
+      (bounded — no longer count-less). Verified via `jq` parse of the rendered block.
+- [x] `gcInterval:"1h"`, `delay:"2h"`, `gcDelay:"1h"`, `deleteReferrers:false` all UNCHANGED
+      (verified — boot-guard test asserts each preserved).
+- [x] `registry-boot-guard.test.sh` passes (35/35) and its sha256-* assertion now asserts a BOUNDED
+      keep-set (not "UNCHANGED"); new count assertions present.
+- [x] `terraform validate` green + rendered `user_data` = 11,544 bytes < 32,768. Scoped `terraform plan`
+      showing the volume `["update"]` is run authoritatively by the `registry-host-replace` dispatch at
+      apply time (destroy-guard gate); the gate test already proves the size-update PASS path, so no
+      prod-state lock is taken from the feature worktree during the live incident.
+- [x] `test-registry-host-replace-gate.sh` still green (15/15; the size-update PASS path is Test 1 —
       unchanged, confirming no gate edit needed).
-- [ ] ADR-096 amendment + ADR-087 consequence note present; postmortem records the 2026-07-09 recurrence.
-- [ ] All three `.c4` files read; "no C4 impact" line cites the checked actors/systems/relationships;
-      C4 tests green.
-- [ ] PR body uses `Ref #6247` (NOT `Closes`).
+- [x] ADR-096 amendment + ADR-087 consequence note present; postmortem records the 2026-07-09 recurrence.
+- [x] All three `.c4` files read; "no C4 impact" confirmed (no zotRegistry description carries a
+      size/count literal); C4 tests green (23/23).
+- [ ] PR body uses `Ref #6247` (NOT `Closes`). — ship phase.
 
 ### Post-merge (operator/agent, in-session — automated, not a manual checklist)
 

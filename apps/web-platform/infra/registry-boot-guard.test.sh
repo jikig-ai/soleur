@@ -99,11 +99,25 @@ assert "cron wraps the reporter in doppler run (isolated soleur-registry/prd)" \
   "grep -qF 'doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-disk-heartbeat.sh' '$CI'"
 assert "absence-based <85% liveness ping retained" "grep -qE '\"\\\$USE\" -lt 85' '$CI'"
 
-echo "--- structural: gc/retention tightening (#6240 defense-in-depth) ---"
+echo "--- structural: gc/retention TIMING preserved (#6240 defense-in-depth) ---"
 assert "gcInterval tightened to 1h" "grep -qF '\"gcInterval\": \"1h\"' '$CI'"
 assert "gcInterval no longer 24h" "! grep -qF '\"gcInterval\": \"24h\"' '$CI'"
 assert "retention.delay tightened to 2h" "grep -qF '\"delay\": \"2h\"' '$CI'"
-assert "cosign referrer keep-set (sha256-.*) UNCHANGED" "grep -qF 'sha256-.*' '$CI'"
+assert "gcDelay dangling-blob safety window preserved at 1h" "grep -qF '\"gcDelay\": \"1h\"' '$CI'"
+assert "deleteReferrers stays false (tag-based sigs, not Subject referrers)" "grep -qF '\"deleteReferrers\": false' '$CI'"
+
+echo "--- structural: capacity-vs-retention keep-set (#6247) ---"
+# Anchor on the keepTags JSON fragments, NOT comment prose (the narrative block also names
+# sha256-* / 5 / 50). The invariant under test: the previously-UNBOUNDED sha256-.* keep is now
+# BOUNDED, and v*/commit-sha counts are lowered 10->5.
+assert "sha256-.* cosign referrer keep-set now BOUNDED (was unbounded 'keep forever')" \
+  "grep -qF '\"patterns\": [\"sha256-.*\"], \"mostRecentlyPushedCount\": 50' '$CI'"
+assert "v* tag keep-set lowered to 5" \
+  "grep -qF '\"patterns\": [\"v.*\"], \"mostRecentlyPushedCount\": 5' '$CI'"
+assert "commit-sha tag keep-set lowered to 5" \
+  "grep -qF '\"patterns\": [\"[0-9a-f]{7,64}\"], \"mostRecentlyPushedCount\": 5' '$CI'"
+assert "no keepTags count left at the old value 10" \
+  "! grep -qF '\"mostRecentlyPushedCount\": 10' '$CI'"
 
 echo ""
 echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="

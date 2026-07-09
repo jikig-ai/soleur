@@ -262,4 +262,30 @@ gc/retention tightening, and the boot-guard/secret threading all shipped in the 
 
 | Issue | Action | Status |
 |---|---|---|
-| #6247 | Telemetry-gated contingency: grow `var.registry_volume_size` beyond 30 GB ONLY if, post-redeploy, `SOLEUR_ZOT_DISK` shows the 30 GB fs is genuinely full of retention-KEEP blobs (`resize_ok=true`, `fs≈full`, `pcent>=85` after the tightened gc runs) — NOT if the resize simply had not applied (`resize_ok=false` / `fs_size_gb << block_size_gb`, which the #6246 fix itself resolves). `deferred-automation`; re-eval after the first post-#6246 `SOLEUR_ZOT_DISK` event is observed. | open |
+| #6247 | Telemetry-gated contingency: grow `var.registry_volume_size` beyond 30 GB ONLY if, post-redeploy, `SOLEUR_ZOT_DISK` shows the 30 GB fs is genuinely full of retention-KEEP blobs (`resize_ok=true`, `fs≈full`, `pcent>=85` after the tightened gc runs) — NOT if the resize simply had not applied (`resize_ok=false` / `fs_size_gb << block_size_gb`, which the #6246 fix itself resolves). `deferred-automation`; re-eval after the first post-#6246 `SOLEUR_ZOT_DISK` event is observed. | **TRIGGERED 2026-07-09** — reopened; remediated in the capacity-vs-retention recurrence PR (see below). Closes after post-dispatch `SOLEUR_ZOT_DISK` verification. |
+
+## Recurrence — capacity-vs-retention (2026-07-09, #6247)
+
+The #6247 contingency **fired**. Live `SOLEUR_ZOT_DISK` (2026-07-09 ~15:35 UTC):
+`pcent=100 fs_size_gb=30 block_size_gb=30 resize_ok=true zot_restarts=908` (climbing ~20 per
+5 min), `soleur-registry-disk-prd` heartbeat **down**. `resize_ok=true` + `fs_size_gb=30=block_size_gb`
+positively confirm this is **NOT** a resize regression — the ext4 fs is fully grown and the 30 GB is
+**genuinely full of retention-KEEP blobs**, exactly the contingency's trigger.
+
+**Residual root cause the #6246 fix did not cover.** #6246 tightened gc/retention **timing**
+(`gcInterval` 24h→1h, `delay` 24h→2h) but explicitly left the keep-**set** unchanged. That keep-set —
+`latest` + **unbounded** `sha256-.*` sig referrers + **10** `v*` + **10** commit-sha tags, **per repo
+across 2 platform-image repos** (`soleur-web-platform` + `soleur-inngest-bootstrap`), each image
+~1.5–2 GB — legitimately **exceeds 30 GB**. gc cannot reclaim a blob the retention policy says to KEEP,
+so faster gc timing could never reclaim below the KEEP set. Capacity, not timing, was the residual gap.
+
+**Resolution (both levers, one PR, one `registry-host-replace` dispatch):** (1) grow
+`var.registry_volume_size` **30 → 60 GB** (headroom; in-place Hetzner resize, data preserved; the
+fail-loud `resize2fs` grows the ext4 on next boot); (2) tighten the keep-set —
+`mostRecentlyPushedCount` **10 → 5** for `v*`/commit-sha and **bound the previously-absolute
+`sha256-.*`** at **50** (bounds forever-growth while sitting far above the ~12–18 sig-tags/repo true
+keep requirement, so no kept image's cosign sig is ever pruned — the ADR-087 coupling). Recorded as an
+ADR-096 amendment + an ADR-087 consequence note. No gate/workflow change (the dispatch destroy-guard
+already permits a volume `["update"]`). Verification rides the existing `SOLEUR_ZOT_DISK` telemetry:
+post-dispatch `pcent<85`, `resize_ok=true`, `fs_size_gb≈57-58`, `block_size_gb=60`, `zot_restarts`
+stops climbing, heartbeat `status==up`.
