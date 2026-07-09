@@ -153,3 +153,66 @@ single-arg path) silently returns empty strings. Use the multi-key form
 `JSONExtractString(raw, 'tags', 'mountpoint')` to descend into the `tags`
 object. When a tag extraction unexpectedly groups everything under one empty
 key, sample one raw row (`SELECT raw ... LIMIT 1`) before trusting the path.
+
+## Verifying disk-fullness / write-health on a deny-all host WITHOUT SSH (registry, #6122 session)
+
+> **⚠️ Correction (#6240/#6244, 2026-07-08): triangulation does NOT prove a disk is
+> *not* full.** Source 1 (Hetzner Volume API) reports the **block-device** size — NOT
+> the guest **filesystem** size; these diverge if `resize2fs` failed. Source 3 ("the
+> last push succeeded") does **not** prove `<85%` — zot dedups blobs and a partial
+> write can still fit, so a push can succeed on a nearly-full fs. In the follow-up
+> incident the disk **was** full: the volume was grown to 30 GB but `resize2fs` had
+> silently failed (`|| true`), leaving the ext4 fs at ~10 GB. **For a "disk full?"
+> question you MUST see the guest `df%`** — ship it as telemetry
+> (`betterstack-query.sh --grep SOLEUR_ZOT_DISK` → `pcent`, `fs_size_gb`,
+> `block_size_gb`), never infer fullness from the provider API. The triangulation
+> below is still valid for *host-down vs cron-not-installed vs full*, but corroborate
+> genuine fullness with the shipped `df%` marker. Full write-up:
+> [../../../project/learnings/best-practices/2026-07-08-disk-full-reads-as-not-full-when-you-check-block-device-not-filesystem.md](../../../project/learnings/best-practices/2026-07-08-disk-full-reads-as-not-full-when-you-check-block-device-not-filesystem.md).
+
+A disk-gated **missed-heartbeat** (e.g. `soleur-registry-disk-prd`, which pings only
+while `/var/lib/zot < 85%`) is **ambiguous** on a deny-all-public host with no SSH: it
+means *either* the cron isn't installed yet (benign false positive — common right after a
+host `-replace`) *or* the disk genuinely crossed 85%. You cannot `df` the box. Triangulate
+from three SSH-free sources instead of eyeballing a dashboard (`hr-no-dashboard-eyeball-pull-data-yourself`):
+
+1. **Hetzner Volume API** — `GET /v1/volumes?name=soleur-registry-store` → block-device size
+   (30 GB) + attach status (the "percent full" denominator).
+2. **Hetzner server disk metrics** — `GET /v1/servers/{id}/metrics?type=disk` → write activity;
+   near-idle = not actively filling.
+3. **The last CI release run's zot-mirror step logs** — many `pushed blob: sha256:...` with
+   NO `500 no space left on device` = the disk **accepted writes** = not full. The
+   success/failure of the **last real write attempt** is the most decisive SSH-free signal.
+
+A never-pinged disk-gated heartbeat (`last_event_at` absent → cron not installed) is **NOT**
+proof of disk-full — corroborate with an independent write-success signal (source 3) before
+concluding either way. Read liveness from `attributes.status ∈ {paused,pending,up,down}`
+(only `up` proves a ping arrived); the heartbeat API has **no `last_event_at` field**. Full
+write-up: [2026-07-08-verify-disk-fullness-write-health-on-deny-all-host-without-ssh.md](../../../project/learnings/2026-07-08-verify-disk-fullness-write-health-on-deny-all-host-without-ssh.md).
+
+## Verifying disk-fullness / write-health on a deny-all host WITHOUT SSH
+
+A **disk-gated missed-heartbeat** (e.g. `soleur-registry-disk-prd` — pings only
+while `/var/lib/zot < 85%`) is **ambiguous**: cron-not-installed false positive
+vs genuine disk-full. On a deny-all-public host with no SSH you cannot `df`.
+Do NOT conclude from the heartbeat alone — triangulate three SSH-free sources:
+
+1. **Hetzner Volume API** — `GET /v1/volumes?name=<store>` → block-device size +
+   attach status (the "percent full" denominator; rules out a detached volume).
+2. **Hetzner server disk metrics** — `GET /v1/servers/{id}/metrics?type=disk` →
+   write activity; near-idle = not actively filling.
+3. **The last CI release run's zot-mirror step logs** — many `pushed blob:
+   sha256:...` with **no** `500 no space left on device` = the disk **accepted
+   writes** = not full. The last real write attempt's outcome is the most
+   decisive SSH-free signal.
+
+A never-pinged heartbeat (`last_event_at` absent → cron simply not installed) is
+**NOT proof of disk-full** — corroborate with the independent write-success
+signal (3) before concluding either way. Serves
+`hr-no-dashboard-eyeball-pull-data-yourself`.
+
+**Heartbeat liveness = `attributes.status`, not a ping timestamp.** The Better
+Stack heartbeat API exposes `attributes.status ∈ {paused,pending,up,down}` and
+has **no `last_event_at` field**; only `status == "up"` proves a ping arrived.
+Full write-up:
+[2026-07-08-verify-disk-fullness-write-health-on-deny-all-host-without-ssh.md](../../../project/learnings/2026-07-08-verify-disk-fullness-write-health-on-deny-all-host-without-ssh.md).

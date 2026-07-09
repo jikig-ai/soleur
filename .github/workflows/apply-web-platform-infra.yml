@@ -89,7 +89,7 @@ on:
       # prod-write authored by a non-technical user — `hr-menu-option-ack-not-prod-write-auth`):
       #   gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby -f reason='...'
       apply_target:
-        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume)"
+        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume) | registry-host-replace (scoped -replace of the registry host to re-run cloud-init + apply any pending volume resize; preserves the zot storage volume)"
         required: false
         default: manual-rerun
         type: choice
@@ -99,6 +99,7 @@ on:
           - web-2-recreate
           - inngest-host
           - inngest-host-replace
+          - registry-host-replace
 
 concurrency:
   # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
@@ -383,7 +384,8 @@ jobs:
               -target=github_actions_secret.supabase_access_token \
               -target=hcloud_firewall.web \
               -target=hcloud_firewall_attachment.web \
-              -target=doppler_secret.resend_receiving_api_key
+              -target=doppler_secret.resend_receiving_api_key \
+              -target=betteruptime_team_member.ops
           rc=$?
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan failed (exit $rc)."
@@ -1609,6 +1611,214 @@ jobs:
         run: |
           {
             echo "## inngest-host-replace (ADR-100, #6197)"
+            echo ""
+            echo "**Dispatch reason:** ${REASON:-n/a}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ─── registry-host scoped -replace (dispatch-only; re-run cloud-init; ADR-096) ─
+  # Selected by `-f apply_target=registry-host-replace`. zot-registry.tf resources are
+  # OPERATOR_APPLIED_EXCLUSIONS (CTO ruling 2026-07-06) — deliberately NOT in the per-PR
+  # `-target=` allow-list, and the per-PR path bridges over SSH to the EXISTING web host so
+  # it cannot reprovision the registry host at all. This scoped -replace is the sanctioned
+  # non-SSH reprovision path (mirrors inngest_host_replace / ADR-100): it re-runs the
+  # registry cloud-init (installs the zot-disk-heartbeat cron + storage.retention) and
+  # applies any pending storage-volume resize, WITHOUT destroying the zot OCI store.
+  #
+  # 6-target scope (server + its 3 id-referencing dependents + the storage volume + the isolated
+  # Better Stack Logs token secret):
+  #   hcloud_server.registry             (-replace: force a fresh cloud-init boot)
+  #   hcloud_server_network.registry     (network.tf — server_id ForceNew → replace; else the
+  #                                        new host has no private NIC 10.0.1.30 for web pulls)
+  #   hcloud_volume_attachment.registry  (zot-registry.tf — server_id ForceNew → replace)
+  #   hcloud_firewall_attachment.registry (server_ids update-in-place; INTENTIONAL deviation
+  #                                        from inngest — else the new host loses its deny-all
+  #                                        public firewall on first boot)
+  #   hcloud_volume.registry             (in-scope so the storage volume's pending size update
+  #                                        can ride in; the gate PRESERVES it — size-update-only,
+  #                                        NEVER delete/forget/replace)
+  #   doppler_secret.registry_betterstack_logs_token (#6244 — MUST ride the SAME dispatch: the
+  #                                        amended boot guard now expects a 3rd admitted secret
+  #                                        (BETTERSTACK_LOGS_TOKEN); without it the guard FATALs
+  #                                        and zot never launches. A pure-create on first apply,
+  #                                        no-op thereafter — the gate admits it in its allow-set.)
+  # The sourced registry_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan
+  # JSON and ABORTS unless the plan is EXACTLY this scoped recreate with the store preserved.
+  registry_host_replace:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-host-replace'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
+        # satisfies var.ssh_key_path (never consumed by the scoped registry replace).
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
+            exit 1
+          }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
+            exit 1
+          }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (scoped registry-host -replace) + destroy-guard
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Scoped -replace of the registry server + its 3 id-referencing dependents + the
+        # in-scope storage volume (permitted a size-update-only, preserved by the gate). The
+        # sourced registry_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED
+        # plan JSON and ABORTS unless the plan is EXACTLY the scoped recreate.
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -replace='hcloud_server.registry' \
+              -target='hcloud_server.registry' \
+              -target='hcloud_server_network.registry' \
+              -target='hcloud_volume_attachment.registry' \
+              -target='hcloud_firewall_attachment.registry' \
+              -target='hcloud_volume.registry' \
+              -target='doppler_secret.registry_betterstack_logs_token' \
+              -var="ssh_key_path=${CI_SSH_PUB}"
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (registry-host-replace) failed (exit $rc)."
+            exit $rc
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          # Sourced gate — the SAME bytes tests/scripts/test-registry-host-replace-gate.sh exercises.
+          # shellcheck source=tests/scripts/lib/registry-host-replace-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/registry-host-replace-gate.sh"
+          if ! registry_host_replace_gate tfplan.json; then
+            echo "::error::registry-host-replace destroy-guard ABORTED: the plan is not the exact scoped registry-host recreate. Refusing to apply. Specifically verify: the zot OCI STORE volume (hcloud_volume.registry) is preserved (no delete/forget/replace), the private NIC (hcloud_server_network.registry) is re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.registry) is re-attached. NO [ack-destroy] bypass on this path."
+            grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          echo "registry-host-replace plan is the exact scoped recreate. Plan summary:"
+          grep -E '^Plan:' tfplan.txt || true
+
+      - name: Terraform apply (registry-host -replace) — store-volume-preserved assert
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Apply the saved, guarded plan. Post-apply jq backstops from the SAVED plan (the exact
+        # plan we applied): the zot store volume carries 0 delete/forget actions (preserved), and
+        # the private NIC shows a create (re-attached) — belt-and-suspenders to the guard.
+        run: |
+          set -euo pipefail
+          # A mid-replace apply failure (old host destroyed, new create fails — quota/image/boot)
+          # leaves the registry DOWN. Emit a self-documenting recovery annotation, then fail hard
+          # (gating behavior unchanged). Serving is covered by the ADR-096 GHCR dark-launch
+          # fallback; the store volume is preserved (guarded), so re-dispatch re-creates the host.
+          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan; then
+            echo "::error::terraform apply (registry-host-replace) failed mid-replace — registry may be DOWN; GHCR fallback covers serving; re-dispatch registry-host-replace to recover from the preserved volume"
+            exit 1
+          fi
+          VOL_DELETES=$(jq '[.resource_changes[]?
+            | select(.address == "hcloud_volume.registry")
+            | select(.change.actions? | any(. == "delete" or . == "forget"))] | length' tfplan.json)
+          if [[ "$VOL_DELETES" != "0" ]]; then
+            echo "::error::hcloud_volume.registry shows ${VOL_DELETES} delete/forget action(s) in the applied plan — the zot OCI store must be preserved. This should have been caught by the guard; failing hard."
+            exit 1
+          fi
+          NIC_CREATES=$(jq '[.resource_changes[]?
+            | select(.address == "hcloud_server_network.registry")
+            | select(.change.actions? | index("create"))] | length' tfplan.json)
+          if [[ "$NIC_CREATES" == "0" ]]; then
+            echo "::error::hcloud_server_network.registry shows no create action in the applied plan — the new host would have no private NIC. This should have been caught by the guard; failing hard."
+            exit 1
+          fi
+          echo "zot store volume preserved (0 delete/forget) and private NIC re-attached (create present) in the applied plan."
+
+      - name: Best-effort heartbeat status (non-gating)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # INFORMATIONAL only — MUST NOT gate the apply (Better Stack ingestion lags a fresh
+        # boot ping; the deterministic plan/apply guards above gate the job, and the
+        # authoritative bounded-poll assert lives post-merge). A never-pinged disk heartbeat
+        # reads pending/down; only `up` proves the redeploy's first ping arrived. Swallows
+        # every error so a status lookup can never fail a prod apply.
+        run: |
+          set +e
+          STATUS="unavailable (lookup failed or not yet ingested)"
+          TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null)
+          if [[ -n "$TOKEN" ]]; then
+            printf '::add-mask::%s\n' "$TOKEN"
+            BODY=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${TOKEN}" \
+              https://uptime.betterstack.com/api/v2/heartbeats 2>/dev/null)
+            if [[ -n "$BODY" ]]; then
+              S=$(printf '%s' "$BODY" | jq -r '.data[]? | select(.attributes.name=="soleur-registry-disk-prd") | .attributes.status' 2>/dev/null | head -1)
+              [[ -n "$S" ]] && STATUS="$S"
+            fi
+          fi
+          {
+            echo "## registry disk heartbeat (best-effort, non-gating)"
+            echo ""
+            echo "\`soleur-registry-disk-prd\` status: **${STATUS}**"
+            echo ""
+            echo "_Authoritative bounded-poll (status==up + incident auto-resolve) runs post-merge; this line is informational._"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Dispatch summary
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## registry-host-replace (ADR-096)"
             echo ""
             echo "**Dispatch reason:** ${REASON:-n/a}"
             echo "**Status:** ${JOB_STATUS}"

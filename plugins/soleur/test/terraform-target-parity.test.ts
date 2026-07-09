@@ -413,9 +413,21 @@ function stripDispatchJobs(workflowText: string): string {
   // #6178: inngest_host is a dispatch-only job (apply_target=inngest-host) that -targets the
   // net-new singleton host resources — strip it so its -targets do NOT broaden the per-merge
   // coverage set (else a real per-merge miss could be masked).
+  // registry_host_replace (ADR-096): a dispatch-only scoped -replace job whose 5 -targets are
+  // ALL registry OPERATOR_APPLIED_EXCLUSIONS. The coverage guards stay green whether or not it
+  // is stripped (empirically verified — its targets are already exclusions), but strip it too
+  // for the SAME reason every dispatch job is stripped: a dispatch writer surface must never
+  // broaden the per-merge coverage anchor (belt-and-suspenders; keeps the parity boundary
+  // uniform so a FUTURE registry -target that is NOT already an exclusion cannot silently mask
+  // a per-merge miss). The inngest_host_replace job carries NO -target that isn't an exclusion
+  // either, and is left folded-in historically; registry_host_replace is stripped explicitly
+  // here as the current best practice for a new dispatch job.
   return stripJob(
-    stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate"),
-    "inngest_host",
+    stripJob(
+      stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate"),
+      "inngest_host",
+    ),
+    "registry_host_replace",
   );
 }
 
@@ -545,6 +557,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_environment.registry_prd",
   "doppler_secret.zot_pull_token_registry",
   "doppler_secret.zot_push_token_registry",
+  // #6244 — the isolated Better Stack Logs ingest token in soleur-registry/prd (same class as
+  // the two ZOT tokens above: minted into the isolated project, consumed by the registry host's
+  // cloud-init, NOT published to a per-PR CI target). Rides the registry-host-replace dispatch.
+  "doppler_secret.registry_betterstack_logs_token",
   "doppler_secret.zot_registry_url",
   "doppler_secret.zot_pull_user",
   "doppler_secret.zot_pull_token",
@@ -1251,6 +1267,114 @@ describe("web-2-recreate dispatch -target/-replace set (scoped; web-1 never targ
     expect(shared).toMatch(/ROSTER_COUNT"?\s*-ne\s*2/);
     expect(shared).toMatch(
       /did not report a fresh completion[\s\S]*?exit 1/,
+    );
+  });
+});
+
+// ─── registry-host-replace dispatch -target/-replace guard (ADR-096) ─────────
+// The `apply_target=registry-host-replace` dispatch job (`registry_host_replace`) runs a
+// SCOPED, GUARDED `terraform apply -replace='hcloud_server.registry'` + the 6 registry
+// `-target`s (5 host resources + the #6244 isolated Better Stack Logs token secret) to re-run
+// the registry host's cloud-init (disk-heartbeat cron + storage.retention)
+// and apply any pending storage-volume resize WITHOUT destroying the zot OCI store. This guard
+// pins the target/replace set to EXACTLY the registry addresses, proves the store volume is
+// IN the set (so its size update can ride in) yet PRESERVED by the sourced gate, and asserts
+// the dispatch job is stripped from the per-merge coverage anchor (stripDispatchJobs).
+const REGISTRY_REPLACE_TARGETS = [
+  "hcloud_server.registry",
+  "hcloud_server_network.registry",
+  "hcloud_volume_attachment.registry",
+  "hcloud_firewall_attachment.registry",
+  "hcloud_volume.registry",
+  // #6244 — the isolated Better Stack Logs token secret MUST ride the SAME dispatch: the amended
+  // 3-secret boot guard FATALs (zot never launches) if the token is absent from the isolated
+  // config when the replaced host boots. Pure-create on first apply, no-op thereafter.
+  "doppler_secret.registry_betterstack_logs_token",
+];
+const REGISTRY_REPLACE_REPLACE = "hcloud_server.registry";
+
+describe("registry-host-replace dispatch -target/-replace set (scoped; store preserved)", () => {
+  let registryTargets: string[];
+  let registryJobBlock: string;
+  let replaceAddrs: string[];
+
+  beforeAll(() => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    registryJobBlock = extractJobBlock(wf, "registry_host_replace");
+    registryTargets = extractTargetsWithKeys(registryJobBlock);
+    replaceAddrs = extractReplaceAddrs(registryJobBlock);
+  });
+
+  test("the registry_host_replace job -targets EXACTLY the 6 registry-replace resources", () => {
+    expect([...registryTargets].sort()).toEqual(
+      [...REGISTRY_REPLACE_TARGETS].sort(),
+    );
+  });
+
+  test("the -replace address is EXACTLY the registry server", () => {
+    expect(replaceAddrs).toEqual([REGISTRY_REPLACE_REPLACE]);
+  });
+
+  test("every registry-replace target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
+    for (const t of registryTargets) {
+      const base = t.replace(/\[.*$/, "");
+      expect(OPERATOR_APPLIED_EXCLUSIONS.has(base)).toBe(true);
+    }
+  });
+
+  test("the zot store volume (hcloud_volume.registry) IS in the set (so its size update rides in)", () => {
+    // Unlike web-2-recreate (data volume EXCLUDED), the registry store volume MUST be in the
+    // -target set — the server user_data interpolates its id, and the gate PRESERVES it
+    // (size-update-only). Its presence is what lets the pending resize apply in one dispatch.
+    expect(registryTargets).toContain("hcloud_volume.registry");
+  });
+
+  test("the registry job runs the sourced registry_host_replace_gate before apply", () => {
+    expect(registryJobBlock).toContain("registry-host-replace-gate.sh");
+    expect(registryJobBlock).toContain("registry_host_replace_gate");
+    // The ONLY `ack-destroy` mentions are the prose disclaimers that there is NO bypass —
+    // there is no conditional that skips the gate on an [ack-destroy] marker.
+    expect(registryJobBlock).toContain("NO [ack-destroy] bypass");
+  });
+
+  test("stripDispatchJobs removes the registry_host_replace job's -targets from the coverage set", () => {
+    // Belt-and-suspenders (Phase 3.3): a dispatch writer surface must not broaden the
+    // per-merge coverage anchor. After stripping, none of the 6 registry -targets appear.
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    const strippedTargets = extractAllTargets(stripDispatchJobs(wf));
+    for (const addr of REGISTRY_REPLACE_TARGETS) {
+      // hcloud_volume.registry etc. are exclusions, so absence from the stripped set is the
+      // load-bearing proof the strip took effect (non-vacuity: they ARE present unstripped).
+      expect(strippedTargets.has(addr)).toBe(false);
+    }
+    // non-vacuity: the whole-file (unstripped) scan DOES see the registry server target.
+    const fullTargets = extractAllTargets(wf);
+    expect(fullTargets.has("hcloud_server.registry")).toBe(true);
+  });
+
+  test("no registry address leaked into MOVED_OPERATOR_CONSUMED", () => {
+    for (const addr of REGISTRY_REPLACE_TARGETS) {
+      expect(MOVED_OPERATOR_CONSUMED.has(addr)).toBe(false);
+    }
+  });
+});
+
+// ─── FIX B: betteruptime_team_member.ops per-merge coverage anchor ────────────
+describe("betteruptime_team_member.ops is a per-merge -targeted managed resource (FIX B)", () => {
+  test("the resource exists in uptime-alerts.tf and is covered by a per-merge -target", () => {
+    const resources = listInfraTfFiles().flatMap((f) =>
+      extractAllResources(stripComments(readFileSync(f, "utf8"))),
+    );
+    expect(resources).toContain("betteruptime_team_member.ops");
+    // It auto-applies on merge, so its -target lives in the NON-stripped apply job — the
+    // stripped coverage set (what the #5566 guard uses) must still see it.
+    const strippedTargets = extractAllTargets(
+      stripDispatchJobs(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")),
+    );
+    expect(strippedTargets.has("betteruptime_team_member.ops")).toBe(true);
+    // It is NOT an operator-applied exclusion (it is auto-appliable).
+    expect(OPERATOR_APPLIED_EXCLUSIONS.has("betteruptime_team_member.ops")).toBe(
+      false,
     );
   });
 });

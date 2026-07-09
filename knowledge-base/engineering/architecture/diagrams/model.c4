@@ -385,7 +385,12 @@ model {
   // SEPARATE Doppler project `soleur-registry` (its own `prd` root holds ONLY the 2 ZOT htpasswd
   // tokens), NOT a `prd` branch config that would inherit all 116 soleur/prd secrets. #6167 audits
   // the sibling branch-config over-reads (prd_git_data / prd_kb_drift_walker / prd_cla).
-  doppler -> zotRegistry "Injects the registry-host boot credential (scoped to the isolated soleur-registry project's prd root — only ZOT_PULL/PUSH_TOKEN, no soleur/prd inheritance)" { technology "CLI (doppler run soleur-registry)" }
+  doppler -> zotRegistry "Injects the registry-host boot credential (scoped to the isolated soleur-registry project's prd root — the 3 admitted secrets ZOT_PULL/PUSH_TOKEN + BETTERSTACK_LOGS_TOKEN, no soleur/prd inheritance)" { technology "CLI (doppler run soleur-registry)" }
+  // #6244 (ADR-096, disk-observability amendment) — the deny-all-ingress, no-SSH registry host
+  // self-reports its disk state directly to Better Stack Logs (was a heartbeat pinger only, via
+  // the web-host probe). SOLEUR_ZOT_DISK is the in-surface probe that disambiguates
+  // fs-not-grown / gc-too-slow / zot-crash without a host login.
+  zotRegistry -> betterstack "Ships disk-state observability — df% of /var/lib/zot + resize2fs before/after + zot health — as one SOLEUR_ZOT_DISK event to the isolated Logs source 2457081; token in soleur-registry/prd, queried via betterstack-query.sh --grep SOLEUR_ZOT_DISK (#6244)" { technology "curl → Better Stack Logs (HTTPS, eu-fsn-3)" }
   // #6031 / ADR-088 — control-plane GHCR installation-token minter (cron-ghcr-token-minter,
   // every 20 min). Mints a 1h packages:read App installation token and writes it to Doppler,
   // retiring the interim read:packages PAT; hosts read GHCR_READ_TOKEN unchanged.
