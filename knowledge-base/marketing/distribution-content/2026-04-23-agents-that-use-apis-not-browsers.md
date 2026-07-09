@@ -3,7 +3,7 @@ title: "Agents That Use APIs, Not Browsers"
 type: milestone-announcement
 publish_date: 2026-07-09
 channels: discord, x, bluesky, linkedin-personal, linkedin-company
-status: scheduled
+status: published
 pr_reference: "#1921"
 issue_reference: "#1944"
 roadmap_item: "Phase 3: Make it Sticky"
