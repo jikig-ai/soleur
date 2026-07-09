@@ -77,6 +77,15 @@ independent axes so it never silently gates a host:
   `stage:"inngest_ghcr_fallback"` event (the fallback-rate alarm pages at >3/1h); zot liveness is
   a `betteruptime_heartbeat.registry_prd` push beat that pages if zot stops beating — before it
   can gate a boot (TR3).
+  - *CI push side (#6274):* the CI dual-push mirror step is **explicitly non-blocking**
+    (`continue-on-error: true` + an `exit 0` inner shell + a bounded retry to self-heal a transient
+    CF-tunnel reset) — a mirror failure degrades zot redundancy, never the release/build verdict
+    (consistent with "latency, not availability" above). A persistent miss is loud via a CI-level
+    degraded signal: `mirror_status=degraded` → `::warning::` + step summary (both workflows) + a
+    ⚠️ line on the Slack release message (`reusable-release.yml` only). The *live* fallback-rate
+    Sentry alarm the bullet above references is **design intent, not yet provisioned** — a separate
+    IaC follow-up, load-bearing at the Phase-5 GHCR-push retirement (a silent miss can gate a boot
+    only post-cutover; during soak GHCR is break-glass warm).
 - **Instant revert:** unset `ZOT_REGISTRY_URL` in Doppler `prd` → all sites revert to GHCR-primary
   with no deploy, no SSH (`zot-registry-revert.md`).
 - **Durability = reproducibility:** zot's content is 100% rebuildable (CI re-pushes) + re-backfillable
