@@ -75,11 +75,25 @@ This is the gate's semantic home. Run it when the diff (`git diff --name-only or
 
 **Deterministic layer (BLOCKING).** Run the committed `nav-states-*.e2e.ts` spec in the existing `authenticated` Playwright project — real headless Chromium + real Next.js SSR seeded by the **offline mock-Supabase storageState** (`e2e/global-setup.ts` + `e2e/helpers/supabase-mocks.ts`). Zero credentials; NO `dev-signin`; never point at a live origin (CLO: synthetic fixtures only).
 
+**Browser-readiness preflight (unsupported-host guard — do this FIRST).** On a host newer than the pinned Playwright officially supports (e.g. Ubuntu 26.04 vs the `apps/web-platform` `@playwright/test` pin), a plain `playwright install` fails with `does not support chromium ... on <os>` and every test then dies at `browserType.launch: Executable doesn't exist` **before any navigation** — the false-fail that repeatedly costs a QA session its whole run. Recover automatically by retrying the install with the host-platform override, which pulls the nearest supported fallback build (verified `ubuntu26.04-x64` → `ubuntu24.04-x64`; once the fallback build is in cache the launcher resolves it at runtime with NO override, so the override stays out of the run command and can never leak onto a supported host like CI's Jammy container):
+
+```bash
+cd apps/web-platform
+npx playwright install chromium >/tmp/qa-pw-install.log 2>&1 \
+  || PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 npx playwright install chromium
+```
+
+If BOTH the plain install and the override install fail (a genuinely unsupported host with no fallback build), do NOT run the gate and do NOT spend reasoning re-deriving whether it is a regression: this is **INFRA-BLOCKED**, not a code failure. Record in the QA report — "Step 2.6 nav-states gate INFRA-BLOCKED locally (Playwright browser uninstallable on <os>); CI's containerized `e2e` job (`mcr.microsoft.com/playwright:v1.58.2-jammy`) is the authoritative gate per #5009" — and proceed. Never block the pipeline on this.
+
+Then run the gate (no override — the runtime resolves the installed build):
+
 ```bash
 cd apps/web-platform && ./node_modules/.bin/playwright test nav-states --project=authenticated --reporter=list
 ```
 
 A non-zero exit FAILS this QA run. The assertions read invariants jsdom cannot: drilled routes hide the wordmark + ThemeToggle; the collapsed rail is icon-only with no horizontal overflow; the workspace-identity band is visible (with org + repo content) in every drill state × viewport.
+
+**Discriminate a real fail from an env flake.** If the run exits non-zero, apply the #5009 discriminator (see Notes): untouched-test + failure at `page.goto`/browser-close (before any assertion) + the surface the diff actually changed still passes = pre-existing local env flake → record and defer to CI, do not "fix" unrelated tests. A launch-time `Executable doesn't exist` failure means the preflight above was skipped or its override install also failed — treat as INFRA-BLOCKED, not a regression.
 
 **Advisory vision layer (NON-BLOCKING).** Optionally drive Playwright MCP over the same routes and screenshot each, then run a vision pass for anything the deterministic assertions miss (spacing, color, truncation). This is informational only — headed MCP cannot run in autonomous `/work`/CI, so it never blocks the merge. Surface findings as notes in the QA report.
 

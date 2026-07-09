@@ -315,3 +315,19 @@ default flipped `cax11` → `cpx22`, so it currently provisions **amd64 (cpx22)*
 load-bearing** for this singleton scheduler (see Decision), so the earlier sections' `cax11`/ARM64
 references describe the original intent, not the deployed reality. The host reverts to cax11
 (cheaper) when Ampere restocks, via a host replace (`inngest-host-replace-gate`). See #6178.
+
+## Addendum (2026-07-09) — git-data is the third host to adopt the scoped `-replace` dispatch (#6242)
+
+`inngest-host-replace` (this ADR) was the **second** application of the scoped-`-replace`
+non-SSH reprovision-dispatch mechanism (ADR-096's `registry-host-replace` was the first). #6242
+adds **`git-data-host-replace`** as the **third**: a `workflow_dispatch` job running a scoped,
+destroy-guarded `terraform apply -replace='hcloud_server.git_data'` (server + private NIC + BOTH
+data volume attachments + firewall attachment; both `hcloud_volume.git_data*` and the LUKS
+passphrase preserved by OMISSION). It closes git-data's standing zero-non-SSH-reprovision-capability
+gap on the fleet's most irreplaceable data store.
+
+This is a **re-application** of the established mechanism, not a novel decision — so it carries no
+new ordinal of its own. The genuinely-new cross-cutting rule extracted from the #6238 recurrence
+(a boot-armed non-paused heartbeat MUST have a mechanically-guarded reprovision path) is recorded
+separately in **ADR-103**, whose `heartbeat-reprovision-parity` CI guard enforces it.
+
