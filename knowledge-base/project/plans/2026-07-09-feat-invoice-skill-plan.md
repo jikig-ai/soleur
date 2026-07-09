@@ -123,11 +123,11 @@ Edit the count/listing surfaces (see Files to Edit), run `scripts/sync-readme-co
 stale counts. Add the `SKILL_CATEGORIES` entry (category: finance/operations).
 
 ### Phase 3 — ADR + C4 (see Architecture Decision section) + tests
-Author ADR-103 (`status: adopting`), add the `claude → stripe` C4 edge, run component + C4 tests.
+Author ADR-104 (`status: adopting`), add the `claude → stripe` C4 edge, run component + C4 tests.
 
 ## Files to Create
 - `plugins/soleur/skills/invoice/SKILL.md`
-- `knowledge-base/engineering/architecture/decisions/ADR-103-stripe-mcp-oauth-plane-vs-product-billing-key.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-104-stripe-mcp-oauth-plane-vs-product-billing-key.md`
 
 ## Files to Edit
 - `plugins/soleur/.claude-plugin/plugin.json` — `description` component counts
@@ -145,10 +145,10 @@ Author ADR-103 (`status: adopting`), add the `claude → stripe` C4 edge, run co
 
 > **Correction to brainstorm:** the ADR was tentatively filed under the deferred v2 issue (#6264).
 > The `wg-architecture-decision-is-a-plan-deliverable` gate requires it ship **with** v1 — v1 is what
-> establishes the credential-plane boundary. Moving ADR-103 into v1 scope; #6264 updated to drop it.
+> establishes the credential-plane boundary. Moving ADR-104 into v1 scope; #6264 updated to drop it.
 
 ### ADR
-- **Create ADR-103** — "Stripe MCP OAuth plane vs product billing key for `/soleur:invoice`",
+- **Create ADR-104** — "Stripe MCP OAuth plane vs product billing key for `/soleur:invoice`",
   `status: adopting`. Decision: the invoice skill acts **exclusively** on the per-user Stripe MCP
   OAuth plane (`mcp.stripe.com`); it **never** reads or uses the product-runtime `STRIPE_SECRET_KEY`
   (Soleur's own subscription-billing credential). Rationale: two disjoint credential planes; acting on
@@ -160,15 +160,15 @@ Author ADR-103 (`status: adopting`), add the `claude → stripe` C4 edge, run co
   third party's Stripe" pattern and the likely path for autonomous/cron sends (interactive browser OAuth
   can't run headless) — **considered and deferred to #6264** (requires per-founder onboarding; out of
   the v1 interactive test-mode slice). ADR-083.
-  - **Mechanical enforcement (arch P1) — the boundary is capability-scoped, not prose.** ADR-103 records
+  - **Mechanical enforcement (arch P1) — the boundary is capability-scoped, not prose.** ADR-104 records
     that the skill's `allowed-tools` frontmatter contains **only** the Stripe MCP tools (plus, if strictly
     needed, a narrowly-scoped read) and **explicitly excludes** `Bash`, secret-file `Read`, and any
     Doppler tool — so the skill physically **cannot** read `STRIPE_SECRET_KEY`/`.env`/`lib/stripe.ts`,
     regardless of any prose prohibition. A grep on a sentence (old AC4) is not the guard; the tool scope is.
   - **`## Consequences` (arch P2) — the temporal access boundary lives with the credential boundary.**
     Record that livemode writes are **blocked in v1** pending the CG5 legal lockstep (#6264); an engineer
-    reading only ADR-103 must learn both "MCP OAuth plane, never the product key" AND "test-mode until #6264".
-  **Ordinal is provisional** — `/ship`'s ordinal-collision gate re-verifies ADR-103 against `origin/main`.
+    reading only ADR-104 must learn both "MCP OAuth plane, never the product key" AND "test-mode until #6264".
+  **Ordinal is provisional** — `/ship`'s ordinal-collision gate re-verifies ADR-104 against `origin/main`.
 - **C4 completeness check (all three `.c4` files read):**
   - External human actors — the invoice **recipient** (founder's customer) is reached by **Stripe**
     (hosted invoice), never by Soleur directly → **no new actor** (a Soleur→customer edge would be false).
@@ -177,7 +177,7 @@ Author ADR-103 (`status: adopting`), add the `claude → stripe` C4 edge, run co
   - **Changed access relationship** — the Agent Runtime now transacts with Stripe using the operator's
     own credentials: **add `claude → stripe`** ("invoice skill: create/finalize/send/chase via hosted
     Stripe MCP — OAuth, operator's OWN account; distinct credential plane from the `webapp → stripe`
-    billing edge; ADR-103"). This is the only C4 delta.
+    billing edge; ADR-104"). This is the only C4 delta.
   - Pre-existing stale "61 workflow skills" count in the `skills` container description is independent
     drift (real ≈93) — **not** corrected here (bumping to 62 would be equally wrong; a full recount is a
     separate hygiene task).
@@ -199,7 +199,7 @@ absent from the legal threshold catalog (`recommended-tools.md`) — tracked for
 
 ### Engineering (CTO) — carry-forward
 **Status:** reviewed. Skill-shaped, no net-new product code; copy `linear-fetch` idiom; credential
-plane is the sharp edge (ADR-103). Runtime tool enumeration required (Phase 0).
+plane is the sharp edge (ADR-104). Runtime tool enumeration required (Phase 0).
 
 ### Product/UX Gate
 **Tier:** none. Files to Create/Edit are markdown/JSON/`.c4`/`.js`-data — **no** UI-surface path
@@ -235,7 +235,7 @@ server-side/cron send path, the Phase 2.9 gate re-applies.
 
 **None.** The Stripe MCP is already registered (`plugin.json:38`, `mcp.stripe.com`); auth is per-user
 browser OAuth (not an IaC-provisionable secret). No new server, cron, vendor account, secret, or DNS.
-Phase 2.8 skipped. The skill must **never** introduce a `STRIPE_SECRET_KEY` dependency (ADR-103).
+Phase 2.8 skipped. The skill must **never** introduce a `STRIPE_SECRET_KEY` dependency (ADR-104).
 
 ## Open Questions (carry to /work)
 - OQ1 — standalone skill vs a new finance-write agent owner (no agent owns live Stripe writes today).
@@ -270,10 +270,10 @@ Phase 2.8 skipped. The skill must **never** introduce a `STRIPE_SECRET_KEY` depe
   specified rather than dead-ending (C3).
 - **AC6** — count-propagation: `git grep -n "<old-count>"` returns **zero** stale skill counts after
   `sync-readme-counts.sh` (plugin.json, both READMEs, brand-guide.md ×2, skills.js all consistent).
-- **AC7** — ADR-103 file exists with `status: adopting`, a `## Decision`, a `## Alternatives Considered`
+- **AC7** — ADR-104 file exists with `status: adopting`, a `## Decision`, a `## Alternatives Considered`
   table naming the three rejected options (STRIPE_SECRET_KEY / token-plane / Stripe Connect), and a
   `## Consequences` entry recording the test-mode-until-CG5 (#6264) livemode gate.
-- **AC8** — `model.c4` contains exactly one new `claude -> stripe` relationship citing ADR-103;
+- **AC8** — `model.c4` contains exactly one new `claude -> stripe` relationship citing ADR-104;
   `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
 - **AC9** — `docs/_data/skills.js` has an `invoice` → finance/ops `SKILL_CATEGORIES` entry.
 - **AC10 (hosted-link is the deliverable — advisor)** — the SKILL.md always surfaces the
@@ -315,7 +315,7 @@ sign-off → APPROVE-WITH-CHANGES), **spec-flow-analyzer** (workflow-completenes
 - CPO → duplicate guard (S4.2/AC5b) + founder-legible mode line (S2/AC3).
 - spec-flow → orphan-invoice/duplicate recovery (S4.8), idempotency keys, S5 chase-gate (C2), empty-account/finalize-reject states (C3/I2), re-entrant error table (I1).
 - fable advisor → Phase-0 idempotency-support probe + metadata-reconciliation fallback; hosted-link as guaranteed deliverable; `requires_location_inputs` stop.
-- architecture-strategist + code-simplicity (consensus P0) → **livemode hard-stop in v1** (S2/AC3a), which *removed* the live double-ack machinery (net simplification + safety); mechanical `allowed-tools` credential isolation (AC4); ADR-103 Connect alternative + Consequences; cut redundant post-finalize draft-echo (old AC10); filed C4 count-hygiene issue #6268.
+- architecture-strategist + code-simplicity (consensus P0) → **livemode hard-stop in v1** (S2/AC3a), which *removed* the live double-ack machinery (net simplification + safety); mechanical `allowed-tools` credential isolation (AC4); ADR-104 Connect alternative + Consequences; cut redundant post-finalize draft-echo (old AC10); filed C4 count-hygiene issue #6268.
 
 ## Sharp Edges
 - A plan whose `## User-Brand Impact` section is empty, `TBD`, or omits the threshold will fail
@@ -324,5 +324,5 @@ sign-off → APPROVE-WITH-CHANGES), **spec-flow-analyzer** (workflow-completenes
   expose generic `stripe_api_read`/`stripe_api_write` rather than named tools. Bind at Phase 0.
 - **`!` code-fence permission flow fails silently** (learning 2026-02-22): keep any permission-sensitive
   Bash surfaced in the skill narrative or pre-allowlisted, not buried in a `!` fence.
-- **Never touch `STRIPE_SECRET_KEY`** — it is Soleur's own account; the skill lives on the MCP OAuth plane (ADR-103).
+- **Never touch `STRIPE_SECRET_KEY`** — it is Soleur's own account; the skill lives on the MCP OAuth plane (ADR-104).
 - If v2 adds Stripe **webhook** listeners, apply the insert-first dedup pattern (learning 2026-04-22) — out of v1 scope.

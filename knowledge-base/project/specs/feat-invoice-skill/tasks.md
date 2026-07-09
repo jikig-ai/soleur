@@ -41,9 +41,9 @@ plan: knowledge-base/project/plans/2026-07-09-feat-invoice-skill-plan.md
 - [ ] 2.4 Re-grep the old count across repo (plugin.json, both READMEs, brand-guide.md ×2, skills.js) → **zero stale** (AC6).
 
 ## Phase 3 — ADR + C4 + tests
-- [ ] 3.1 Create `ADR-103-stripe-mcp-oauth-plane-vs-product-billing-key.md` (`status: adopting`; Decision;
+- [ ] 3.1 Create `ADR-104-stripe-mcp-oauth-plane-vs-product-billing-key.md` (`status: adopting`; Decision;
   3 rejected alternatives incl. Stripe Connect; `## Consequences` = test-mode-until-#6264).
-- [ ] 3.2 Add one `claude -> stripe` edge to `model.c4` citing ADR-103 (no `views.c4` change).
+- [ ] 3.2 Add one `claude -> stripe` edge to `model.c4` citing ADR-104 (no `views.c4` change).
 - [ ] 3.3 Run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`.
 - [ ] 3.4 Run `bun test plugins/soleur/test/components.test.ts` (final budget/frontmatter/voice/kebab/backtick gate).
 
@@ -55,5 +55,5 @@ plan: knowledge-base/project/plans/2026-07-09-feat-invoice-skill-plan.md
 
 ## Notes
 - Deferred to #6264 (v2): ledger reconcile, founder-side ledger, finance-write agent, **livemode enablement**
-  + 6-location GDPR lockstep, legal threshold-catalog row. **ADR-103 ships in v1** (moved out of #6264).
+  + 6-location GDPR lockstep, legal threshold-catalog row. **ADR-104 ships in v1** (moved out of #6264).
 - Stale C4 "61 skills"/"65 agents" count reconciliation tracked in #6268.
