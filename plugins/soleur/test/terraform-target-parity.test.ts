@@ -422,12 +422,20 @@ function stripDispatchJobs(workflowText: string): string {
   // a per-merge miss). The inngest_host_replace job carries NO -target that isn't an exclusion
   // either, and is left folded-in historically; registry_host_replace is stripped explicitly
   // here as the current best practice for a new dispatch job.
+  // git_data_host_replace (#6242, ADR-103): the same current best practice — its 5 -targets are
+  // ALL git-data OPERATOR_APPLIED_EXCLUSIONS (server + network + both volume attachments +
+  // firewall attachment), so stripping it does not change the coverage anchor today, but keeps
+  // the parity boundary uniform so a FUTURE git-data -target that is NOT already an exclusion
+  // cannot silently mask a per-merge miss.
   return stripJob(
     stripJob(
-      stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate"),
-      "inngest_host",
+      stripJob(
+        stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate"),
+        "inngest_host",
+      ),
+      "registry_host_replace",
     ),
-    "registry_host_replace",
+    "git_data_host_replace",
   );
 }
 

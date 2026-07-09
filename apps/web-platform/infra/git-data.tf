@@ -12,6 +12,19 @@
 # cloud-init; the post-merge readiness/cutover script (web-host-driven, over the
 # private net) verifies git + bare-repo root + hook are live BEFORE cutover
 # (hr-fresh-host-provisioning-reachable-from-terraform-apply).
+#
+# REPROVISION-PATH (ADR-103, #6242): git-data resources are OPERATOR_APPLIED_EXCLUSIONS
+# (never touched per-PR), and the per-PR path bridges over SSH to the EXISTING web host so
+# it cannot reprovision this host at all. A sanctioned dispatch-only `git-data-host-replace`
+# `workflow_dispatch` path now exists (apply-web-platform-infra.yml, mirroring
+# registry-host-replace / ADR-100 inngest-host-replace) to re-run this host's cloud-init
+# WITHOUT SSH — a scoped, destroy-guarded `terraform apply -replace='hcloud_server.git_data'`
+# that PRESERVES BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) and
+# the LUKS passphrase by OMISSION. It is a maintenance-window dispatch, not a per-PR apply;
+# these resources remain excluded from the per-PR `-target=` list. Before it, git-data had
+# ZERO non-SSH reprovision path (hr-prod-host-config-change-immutable-redeploy gap). The
+# invariant that a boot-armed heartbeat needs such a path is mechanically enforced by
+# plugins/soleur/test/heartbeat-reprovision-parity.test.ts.
 
 # --- In-band transport keypair (ED25519) ------------------------------------
 # DEDICATED key — NOT reused from tls_private_key.ci_ssh. Mirrors the ci-ssh-key.tf

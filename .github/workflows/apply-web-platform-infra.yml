@@ -89,7 +89,7 @@ on:
       # prod-write authored by a non-technical user — `hr-menu-option-ack-not-prod-write-auth`):
       #   gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby -f reason='...'
       apply_target:
-        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume) | registry-host-replace (scoped -replace of the registry host to re-run cloud-init + apply any pending volume resize; preserves the zot storage volume)"
+        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume) | registry-host-replace (scoped -replace of the registry host to re-run cloud-init + apply any pending volume resize; preserves the zot storage volume) | git-data-host-replace (scoped -replace of the git-data host to re-run cloud-init; preserves BOTH data volumes + the LUKS passphrase; #6242)"
         required: false
         default: manual-rerun
         type: choice
@@ -100,6 +100,7 @@ on:
           - inngest-host
           - inngest-host-replace
           - registry-host-replace
+          - git-data-host-replace
 
 concurrency:
   # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
@@ -1819,6 +1820,219 @@ jobs:
         run: |
           {
             echo "## registry-host-replace (ADR-096)"
+            echo ""
+            echo "**Dispatch reason:** ${REASON:-n/a}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Selected by `-f apply_target=git-data-host-replace` (#6242, ADR-103). git-data.tf +
+  # git-data-luks.tf + network.tf resources are OPERATOR_APPLIED_EXCLUSIONS (ADR-068) —
+  # deliberately NOT in the per-PR `-target=` allow-list, and the per-PR path bridges over SSH
+  # to the EXISTING web host so it cannot reprovision the git-data host at all. Before this job
+  # git-data had ZERO non-SSH reprovision path (a standing hr-prod-host-config-change-immutable-
+  # redeploy gap on the fleet's most irreplaceable data store). This scoped -replace is the
+  # sanctioned non-SSH reprovision path (mirrors registry_host_replace / inngest_host_replace):
+  # it re-runs the git-data cloud-init WITHOUT SSH and WITHOUT touching either data volume.
+  #
+  # 5-target scope (server + its 4 id-referencing dependents; BOTH data volumes + the LUKS
+  # passphrase are PRESERVED BY OMISSION — an untargeted resource cannot be planned for destroy):
+  #   hcloud_server.git_data                   (-replace: force a fresh cloud-init boot)
+  #   hcloud_server_network.git_data           (network.tf:48 — server_id ForceNew → replace;
+  #                                              else the new host has no private NIC 10.0.1.20)
+  #   hcloud_volume_attachment.git_data        (git-data.tf:194 — server_id ForceNew → replace;
+  #                                              else /mnt/git-data — plaintext bare-repo store —
+  #                                              boots UNMOUNTED)
+  #   hcloud_volume_attachment.git_data_luks   (git-data-luks.tf:90 — server_id ForceNew → replace;
+  #                                              else /mnt/git-data-luks — LUKS at-rest store —
+  #                                              boots UNMOUNTED)
+  #   hcloud_firewall_attachment.git_data      (git-data.tf:215 — server_ids update-in-place;
+  #                                              registry-style INCLUDE — else the fresh host boots
+  #                                              NAKED on its public IPv4/IPv6)
+  # LUKS re-open on fresh boot is SAFE because the passphrase is unchanged: the idempotent isLuks
+  # skip (cloud-init-git-data.yml:142-163) re-opens the existing header with no luksFormat. This
+  # holds ONLY while random_password.git_data_luks / doppler_secret.git_data_luks_key are OUT of
+  # scope — the sourced git_data_host_replace_gate's luks_passphrase_touched backstop asserts it.
+  #
+  # The sourced git_data_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan
+  # JSON and ABORTS unless the plan is EXACTLY this scoped recreate with BOTH volumes preserved.
+  git_data_host_replace:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'git-data-host-replace'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
+        # satisfies var.ssh_key_path (never consumed by the scoped git-data replace — the host is
+        # cloud-init-only, NO remote-exec provisioner, git-data.tf:9).
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
+            exit 1
+          }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
+            exit 1
+          }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (scoped git-data-host -replace) + destroy-guard
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Scoped -replace of the git-data server + its 4 id-referencing dependents. The two data
+        # volumes + the LUKS passphrase are PRESERVED BY OMISSION (not -targeted → cannot be
+        # planned for destroy). The sourced git_data_host_replace_gate (no [ack-destroy] bypass)
+        # reads the STRUCTURED plan JSON and ABORTS unless the plan is EXACTLY the scoped recreate.
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -replace='hcloud_server.git_data' \
+              -target='hcloud_server.git_data' \
+              -target='hcloud_server_network.git_data' \
+              -target='hcloud_volume_attachment.git_data' \
+              -target='hcloud_volume_attachment.git_data_luks' \
+              -target='hcloud_firewall_attachment.git_data' \
+              -var="ssh_key_path=${CI_SSH_PUB}"
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (git-data-host-replace) failed (exit $rc)."
+            exit $rc
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          # Sourced gate — the SAME bytes tests/scripts/test-git-data-host-replace-gate.sh exercises.
+          # shellcheck source=tests/scripts/lib/git-data-host-replace-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-host-replace-gate.sh"
+          if ! git_data_host_replace_gate tfplan.json; then
+            echo "::error::git-data-host-replace destroy-guard ABORTED: the plan is not the exact scoped git-data-host recreate. Refusing to apply. Specifically verify: BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) are preserved (no delete/forget/replace), the LUKS passphrase (random_password.git_data_luks + doppler_secret.git_data_luks_key) is untouched, the private NIC (hcloud_server_network.git_data) is re-created, BOTH store attachments are re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.git_data) is re-attached. NO [ack-destroy] bypass on this path."
+            grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          echo "git-data-host-replace plan is the exact scoped recreate. Plan summary:"
+          grep -E '^Plan:' tfplan.txt || true
+
+      - name: Terraform apply (git-data-host -replace) — both-volumes-preserved assert
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Apply the saved, guarded plan. Post-apply jq backstops from the SAVED plan (the exact
+        # plan we applied): BOTH data volumes carry 0 delete/forget actions (preserved), the
+        # private NIC + BOTH store attachments show a create (re-attached) — belt-and-suspenders
+        # to the guard.
+        run: |
+          set -euo pipefail
+          # A mid-replace apply failure (old host destroyed, new create fails — quota/image/boot)
+          # leaves git-data DOWN with the writer-side CAS fence offline. UNLIKE registry (GHCR
+          # fallback) / inngest (paused reminders), git-data has NO serving fallback — but BOTH
+          # volumes are preserved (guarded), so re-dispatch recovers from them. Writes FAIL, not
+          # corrupt (single-writer at replicas=1 → no split-brain). Emit a self-documenting
+          # recovery annotation, then fail hard (gating behavior unchanged).
+          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan; then
+            echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); BOTH volumes are preserved — re-dispatch git-data-host-replace to recover from them"
+            exit 1
+          fi
+          for VOL in hcloud_volume.git_data hcloud_volume.git_data_luks; do
+            VOL_DELETES=$(jq --arg v "$VOL" '[.resource_changes[]?
+              | select(.address == $v)
+              | select(.change.actions? | any(. == "delete" or . == "forget"))] | length' tfplan.json)
+            if [[ "$VOL_DELETES" != "0" ]]; then
+              echo "::error::${VOL} shows ${VOL_DELETES} delete/forget action(s) in the applied plan — the data store must be preserved. This should have been caught by the guard; failing hard."
+              exit 1
+            fi
+          done
+          NIC_CREATES=$(jq '[.resource_changes[]?
+            | select(.address == "hcloud_server_network.git_data")
+            | select(.change.actions? | index("create"))] | length' tfplan.json)
+          if [[ "$NIC_CREATES" == "0" ]]; then
+            echo "::error::hcloud_server_network.git_data shows no create action in the applied plan — the new host would have no private NIC. This should have been caught by the guard; failing hard."
+            exit 1
+          fi
+          for ATT in hcloud_volume_attachment.git_data hcloud_volume_attachment.git_data_luks; do
+            ATT_CREATES=$(jq --arg a "$ATT" '[.resource_changes[]?
+              | select(.address == $a)
+              | select(.change.actions? | index("create"))] | length' tfplan.json)
+            if [[ "$ATT_CREATES" == "0" ]]; then
+              echo "::error::${ATT} shows no create action in the applied plan — the new host would boot with that store UNMOUNTED. This should have been caught by the guard; failing hard."
+              exit 1
+            fi
+          done
+          echo "both data volumes preserved (0 delete/forget), private NIC + both store attachments re-attached (create present) in the applied plan."
+
+      - name: Post-replace readiness note (authoritative liveness is web-host-driven, non-SSH)
+        # git-data is a deny-all blind host: this CI runner canNOT SSH it, canNOT reach it over the
+        # private net, and Better Stack canNOT pull it (git_data_prd is a PUSH heartbeat, paused
+        # until #5274 PR C arms the web-host probe cron). So the AUTHORITATIVE post-replace liveness
+        # gate is NOT in this job — it is the EXISTING web-host-driven readiness/cutover check that
+        # runs `git ls-remote` over the private net to 10.0.1.20 (git-data.tf:12-14,
+        # hr-fresh-host-provisioning-reachable-from-terraform-apply). This step ONLY records the
+        # in-job deterministic guards (plan/apply asserts above) as the gate for THIS run and points
+        # the operator at the out-of-job liveness check. It NEVER SSHes the deny-all host and NEVER
+        # implies a Better Stack pull. (No best-effort heartbeat step — unlike registry — because
+        # git_data_prd is paused + its probe cron is unbuilt, so a status lookup would be useless.)
+        run: |
+          {
+            echo "## git-data-host-replace readiness (non-SSH)"
+            echo ""
+            echo "In-job gate: the destroy-guard + post-apply jq asserts (both volumes preserved, NIC + both store attachments + firewall re-attached) gated this run."
+            echo ""
+            echo "Authoritative liveness: the web-host-driven \`git ls-remote\` readiness/cutover check over the private net (10.0.1.20) — NOT SSH, NOT a Better Stack pull. git-data is a deny-all blind host."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dispatch summary
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## git-data-host-replace (ADR-103, #6242)"
             echo ""
             echo "**Dispatch reason:** ${REASON:-n/a}"
             echo "**Status:** ${JOB_STATUS}"
