@@ -370,10 +370,208 @@ test_durability_drift_guard() {
   assert_eq "ExecStart-durability parsers reference their load-bearing tokens" "" "$missing"
 }
 
+# ===========================================================================
+# #6258 (ADR-106) — bounding + markers + completeness-by-construction
+# ===========================================================================
+
+# Run the script with a logger stub that captures every marker/summary line, plus
+# fixtures. Sets globals RC, STDOUT_CAP, MARKERS_CAP (called DIRECTLY, not in $(...) — a
+# command-substitution subshell would discard the globals). $1=page-dir (all-events),
+# $2=functions-fixture, extra args = env assignments (KEY=VAL ...).
+RC=0; STDOUT_CAP=""; MARKERS_CAP=""
+run_inv_logcap() {
+  local d="$1" ff="$2"; shift 2
+  local bindir logout; bindir=$(mktemp -d); logout=$(mktemp)
+  cat > "$bindir/logger" <<STUB
+#!/usr/bin/env bash
+# skip the leading "-t <tag>" so we capture the message body only
+shift 2 2>/dev/null || true
+echo "\$*" >> "$logout"
+STUB
+  chmod +x "$bindir/logger"
+  RC=0
+  # `env "$@"` — an expanded "$@" token is NOT recognized as an assignment prefix (bash
+  # decides assignment-vs-command at parse time, before expansion), so pass extra KEY=VAL
+  # seams through `env`, which DOES apply them (with $@ empty, `env bash …` is a clean no-op).
+  STDOUT_CAP=$(PATH="$bindir:$PATH" INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" \
+    INVENTORY_NOW_MS="$NOW_MS" env "$@" bash "$TARGET" 2>/dev/null) || RC=$?
+  MARKERS_CAP=$(cat "$logout")
+  rm -rf "$bindir" "$logout"
+}
+
+# --- #6258 T1: deadline hit → exit 1 (NOT break) + TIMEOUT marker + non-JSON stdout ---
+test_deadline_abort() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  make_functions '[]' > "$ff"
+  # a next-page fixture (so the loop would continue) — deadline 0 aborts at the top of page 1.
+  make_page true "CUR1" "[$(make_edge 01A reminder.scheduled rem1 "$FUTURE_MS" "[]")]" > "$d/page-1.json"
+  run_inv_logcap "$d" "$ff" PREFLIGHT_DEADLINE_S=0; local markers="$MARKERS_CAP"
+  assert_eq "deadline hit exits 1 (loud-abort, not break)" "1" "$RC"
+  if echo "$STDOUT_CAP" | jq -e '.armed_reminders' >/dev/null 2>&1; then
+    echo "  FAIL: stdout is a jq-parseable armed_reminders object on a deadline abort (truncated false-clean)"; FAIL=$((FAIL+1));
+  else echo "  PASS: stdout NOT a jq-parseable armed_reminders object on abort"; PASS=$((PASS+1)); fi
+  if echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=deadline'; then
+    echo "  PASS: SOLEUR_INNGEST_PREFLIGHT_TIMEOUT reason=deadline emitted"; PASS=$((PASS+1));
+  else echo "  FAIL: no TIMEOUT reason=deadline marker (markers=$markers)"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6258 T2: page ceiling hit → exit 1 + reason=page_ceiling; exact-fit breaks clean ---
+test_page_ceiling_abort() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  make_functions '[]' > "$ff"
+  # 5 pages, hasNextPage true through page-4. MAX_PAGES=2 → abort when about to fetch page 3.
+  local i
+  for i in 1 2 3 4; do make_page true "CUR$i" "[$(make_edge 01P$i "cron/p$i" "" "$PAST_MS" "[]")]" > "$d/page-$i.json"; done
+  make_page false "" "[$(make_edge 01P5 reminder.scheduled rem5 "$FUTURE_MS" "[]")]" > "$d/page-5.json"
+  run_inv_logcap "$d" "$ff" INNGEST_MAX_PAGES=2; local markers="$MARKERS_CAP"
+  assert_eq "page ceiling hit exits 1 (loud-abort)" "1" "$RC"
+  if echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=page_ceiling'; then
+    echo "  PASS: SOLEUR_INNGEST_PREFLIGHT_TIMEOUT reason=page_ceiling emitted"; PASS=$((PASS+1));
+  else echo "  FAIL: no TIMEOUT reason=page_ceiling marker (markers=$markers)"; FAIL=$((FAIL+1)); fi
+  # A page-ceiling abort is a distinct trigger from the deadline — assert it also refuses to
+  # emit a truncated (false-clean) parseable body on stdout.
+  if echo "$STDOUT_CAP" | jq -e '.armed_reminders' >/dev/null 2>&1; then
+    echo "  FAIL: stdout is a jq-parseable armed_reminders object on a page-ceiling abort (false-clean)"; FAIL=$((FAIL+1));
+  else echo "  PASS: stdout NOT a jq-parseable armed_reminders object on page-ceiling abort"; PASS=$((PASS+1)); fi
+  # Exact-fit: a 2-page corpus (hasNextPage=false on page 2) with MAX_PAGES=2 breaks CLEAN.
+  local d2; d2=$(mktemp -d); trap 'rm -rf "$d" "$ff" "$d2"' RETURN
+  make_page true "CURx" "[$(make_edge 02A "cron/a" "" "$PAST_MS" "[]")]" > "$d2/page-1.json"
+  make_page false "" "[$(make_edge 02B reminder.scheduled remx "$FUTURE_MS" "[]")]" > "$d2/page-2.json"
+  local out2 rc2=0
+  out2=$(INNGEST_GQL_FIXTURE_DIR="$d2" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" INNGEST_MAX_PAGES=2 bash "$TARGET" 2>/dev/null) || rc2=$?
+  assert_eq "exact-fit corpus (pages == MAX_PAGES, last hasNextPage=false) breaks clean (exit 0)" "0" "$rc2"
+  assert_eq "exact-fit corpus still emits well-formed object" "object" "$(echo "$out2" | jq -r 'type')"
+}
+
+# --- #6258 T3: START marker is the literal first line — emitted even on a functions-query fail ---
+test_start_marker_first_on_functions_fail() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  printf '%s' '{"errors":[{"message":"connection refused"}],"data":null}' > "$ff"
+  make_page false "" "[]" > "$d/page-1.json"
+  run_inv_logcap "$d" "$ff"; local markers="$MARKERS_CAP"
+  assert_eq "functions-fail still exits 1" "1" "$RC"
+  if echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=inventory'; then
+    echo "  PASS: START marker emitted before the functions query (absence-of-START = host-down)"; PASS=$((PASS+1));
+  else echo "  FAIL: no START marker on a functions-query failure (markers=$markers)"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6258 T4: happy path → START+DONE in journald, stdout stays pure JSON (markers journald-only) ---
+test_markers_journald_only() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  make_functions '["cron-a"]' > "$ff"
+  make_page false "" "[$(make_edge 01A reminder.scheduled rem1 "$FUTURE_MS" "[]")]" > "$d/page-1.json"
+  run_inv_logcap "$d" "$ff"; local markers="$MARKERS_CAP"
+  assert_eq "happy path exits 0" "0" "$RC"
+  assert_eq "stdout stays a pure JSON object (no marker leaked to stdout)" "object" "$(echo "$STDOUT_CAP" | jq -r 'type')"
+  if echo "$STDOUT_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT'; then
+    echo "  FAIL: a SOLEUR marker leaked onto stdout (would corrupt the webhook JSON body)"; FAIL=$((FAIL+1));
+  else echo "  PASS: no SOLEUR marker on stdout (journald-only)"; PASS=$((PASS+1)); fi
+  echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=inventory' \
+    && { echo "  PASS: START in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no START in journald"; FAIL=$((FAIL+1)); }
+  echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_DONE op=inventory pages=' \
+    && { echo "  PASS: DONE (with pages) in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no DONE in journald"; FAIL=$((FAIL+1)); }
+}
+
+# --- #6258 T5: completeness DIFFERENTIAL — new-reduced ⊇ old-unbounded ---
+# old = armed derived from the all-events edges (the pre-#6258 projection); new = armed from
+# the dedicated eventNames:["reminder.scheduled"] scan. Corpus: a reminder on each of two
+# all-events pages + a cron name appearing ONLY on page 2, PLUS a reminder (rem-extra) present
+# ONLY in the dedicated scan — so the assertions are non-vacuous: if the code regressed to
+# re-deriving armed from the all-events edges, rem-extra would vanish. FROM_TS byte-identical.
+# (Fixture mode `cat`s pages, so the load-bearing completeness guards are the two structural
+# greps below — dedicated query + 365-day clamp — which are mutation-RED.)
+test_completeness_differential() {
+  local da; da=$(mktemp -d); local dr; dr=$(mktemp -d); local ff; ff=$(mktemp)
+  trap 'rm -rf "$da" "$dr" "$ff"' RETURN
+  make_functions '["cron-a","cron-b"]' > "$ff"
+  # all-events corpus (2 pages): page-1 cron/a + rem-early; page-2 cron/only-p2 + rem-late.
+  make_page true "CUR1" "[$(make_edge 01A "cron/a" "" "$PAST_MS" "[]"),$(make_edge 01R1 reminder.scheduled rem-early "$FUTURE_MS" "[]")]" > "$da/page-1.json"
+  make_page false "" "[$(make_edge 02A "cron/only-p2" "" "$PAST_MS" "[]"),$(make_edge 02R2 reminder.scheduled rem-late "$FUTURE_MS" "[]")]" > "$da/page-2.json"
+  # dedicated reminder corpus: both all-events reminders PLUS rem-extra (only the dedicated
+  # scan surfaces it — proves new armed set is NOT re-derived from all-events).
+  make_page false "" "[$(make_edge 01R1 reminder.scheduled rem-early "$FUTURE_MS" "[]"),$(make_edge 02R2 reminder.scheduled rem-late "$FUTURE_MS" "[]"),$(make_edge 03R3 reminder.scheduled rem-extra "$FUTURE_MS" "[]")]" > "$dr/page-1.json"
+
+  local old_out new_out
+  old_out=$(INNGEST_GQL_FIXTURE_DIR="$da" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null)
+  new_out=$(INNGEST_GQL_FIXTURE_DIR="$da" INNGEST_REMINDER_FIXTURE_DIR="$dr" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null)
+
+  local old_fn new_fn old_ev new_ev old_ar new_ar
+  old_fn=$(echo "$old_out" | jq -c '.functions'); new_fn=$(echo "$new_out" | jq -c '.functions')
+  old_ev=$(echo "$old_out" | jq -c '.event_names'); new_ev=$(echo "$new_out" | jq -c '.event_names')
+  old_ar=$(echo "$old_out" | jq -c '[.armed_reminders[].reminder_id]|sort'); new_ar=$(echo "$new_out" | jq -c '[.armed_reminders[].reminder_id]|sort')
+  assert_eq "functions identical (raised PAGE_SIZE is lossless)" "$old_fn" "$new_fn"
+  # reduced ⊇ old (superset) for event_names and armed_reminders
+  assert_eq "event_names: reduced ⊇ old" "true" "$(jq -nc --argjson o "$old_ev" --argjson n "$new_ev" '($o - $n) | length == 0')"
+  assert_eq "armed_reminders: reduced ⊇ old (no armed reminder dropped)" "true" "$(jq -nc --argjson o "$old_ar" --argjson n "$new_ar" '($o - $n) | length == 0')"
+  # Non-vacuity: the new armed set is sourced from the DEDICATED scan, not re-derived off
+  # all-events — rem-extra exists only in $dr, so its presence proves the code path.
+  assert_eq "armed set sourced from the dedicated reminder.scheduled scan (rem-extra present)" "true" "$(echo "$new_ar" | jq -c 'index("rem-extra") != null')"
+  assert_eq "old (all-events projection) does NOT contain the dedicated-only rem-extra" "true" "$(echo "$old_ar" | jq -c 'index("rem-extra") == null')"
+  assert_eq "cron name appearing only on page 2 present in reduced event_names" "true" "$(echo "$new_ev" | jq -c 'index("cron/only-p2") != null')"
+  # FROM_TS byte-identical: the 365-day clamp is unchanged and never narrowed for cost.
+  if grep -q '365 days ago' "$TARGET"; then echo "  PASS: FROM_TS 365-day clamp unchanged (never narrowed)"; PASS=$((PASS+1));
+  else echo "  FAIL: FROM_TS 365-day clamp missing (window narrowed for cost — completeness risk)"; FAIL=$((FAIL+1)); fi
+  if grep -qF 'eventNames:["reminder.scheduled"]' "$TARGET" || grep -qF "'[\"reminder.scheduled\"]'" "$TARGET"; then
+    echo "  PASS: dedicated reminder.scheduled query present (armed by construction)"; PASS=$((PASS+1));
+  else echo "  FAIL: no dedicated reminder.scheduled query (armed completeness not by construction)"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6258 T6: marker purity — no connection string / actor@host:port / URI in any marker ---
+test_marker_purity() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
+  make_functions '[]' > "$ff"
+  # a malformed GraphQL page → gql_error abort path; assert the marker maps to an ENUM,
+  # never the raw errors[].message verbatim, and carries no URI/DSN.
+  printf '%s' '{"errors":[{"message":"FATAL: password authentication failed for postgres://u:p@10.0.1.40:5432/db"}],"data":null}' > "$d/page-1.json"
+  run_inv_logcap "$d" "$ff"; local markers="$MARKERS_CAP"
+  local soleur_lines; soleur_lines=$(echo "$markers" | grep 'SOLEUR_INNGEST_PREFLIGHT' || true)
+  assert_eq "gql_error marker present on a malformed page" "1" "$([[ -n "$soleur_lines" ]] && echo 1 || echo 0)"
+  assert_eq "no '://' URI in any SOLEUR marker" "0" "$(echo "$soleur_lines" | grep -c '://' || true)"
+  assert_eq "no user:pass@host in any SOLEUR marker" "0" "$(echo "$soleur_lines" | grep -cE '@[^ ]+:[0-9]+' || true)"
+  assert_eq "raw GraphQL message never verbatim (reason is an enum)" "0" "$(echo "$soleur_lines" | grep -c 'password authentication' || true)"
+  if echo "$soleur_lines" | grep -q 'reason=gql_error'; then echo "  PASS: reason mapped to enum gql_error"; PASS=$((PASS+1));
+  else echo "  FAIL: reason not mapped to the gql_error enum"; FAIL=$((FAIL+1)); fi
+  # #6258 review P1: the DSN must ALSO be scrubbed from the sibling FATAL/ERROR
+  # diagnostic lines — journald (→ Better Stack) AND stdout (→ the Actions run log) —
+  # not just the SOLEUR markers. Assert against the FULL capture, not the SOLEUR subset.
+  assert_eq "no '://' URI in ANY journald line (incl. error diagnostics)" "0" "$(echo "$markers" | grep -c '://' || true)"
+  assert_eq "no user:pass@host:port DSN in ANY journald line" "0" "$(echo "$markers" | grep -cE '@[^ ]+:[0-9]+' || true)"
+  assert_eq "no '://' URI on stdout (webhook body / run log)" "0" "$(echo "$STDOUT_CAP" | grep -c '://' || true)"
+  assert_eq "no user:pass@host:port DSN on stdout" "0" "$(echo "$STDOUT_CAP" | grep -cE '@[^ ]+:[0-9]+' || true)"
+}
+
+# --- #6258 T7: connect-timeout + remaining-budget clamp present (sum-bound by construction) ---
+test_connect_timeout_and_clamp() {
+  if grep -qE 'curl[^|]*--connect-timeout' "$TARGET"; then echo "  PASS: --connect-timeout on the per-page curl"; PASS=$((PASS+1));
+  else echo "  FAIL: no --connect-timeout on the curl"; FAIL=$((FAIL+1)); fi
+  # SUM bound: the per-page curl --max-time is the REMAINING budget, not a fixed constant.
+  if grep -qE 'max-time "\$max_time"' "$TARGET" && grep -qE 'remaining=\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' "$TARGET"; then
+    echo "  PASS: per-page curl clamped to remaining budget (deadline − elapsed)"; PASS=$((PASS+1));
+  else echo "  FAIL: per-page curl not clamped to the remaining budget (sum-bound broken)"; FAIL=$((FAIL+1)); fi
+  if grep -qE 'remaining < 1 \)\) && remaining=1' "$TARGET"; then echo "  PASS: remaining budget floored ≥1"; PASS=$((PASS+1));
+  else echo "  FAIL: remaining budget not floored ≥1"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6258 T8: marker tags grep-asserted present in vector.toml allowlist (THE drift guard) ---
+test_marker_tag_in_vector_allowlist() {
+  local vector="$SCRIPT_DIR/vector.toml"
+  assert_eq "vector.toml exists" "1" "$([[ -f "$vector" ]] && echo 1 || echo 0)"
+  if grep -qE '^[[:space:]]*"inngest-inventory",' "$vector"; then echo "  PASS: inngest-inventory tag in vector.toml allowlist"; PASS=$((PASS+1));
+  else echo "  FAIL: inngest-inventory tag NOT in vector.toml (marker would not ship to Better Stack)"; FAIL=$((FAIL+1)); fi
+}
+
 test_durability_states
 test_durability_no_secret_leak
 test_durability_purity_preserved
 test_durability_drift_guard
+test_deadline_abort
+test_page_ceiling_abort
+test_start_marker_first_on_functions_fail
+test_markers_journald_only
+test_completeness_differential
+test_marker_purity
+test_connect_timeout_and_clamp
+test_marker_tag_in_vector_allowlist
 test_combined_is_pure_json_object
 test_functions_fetch_failure_is_loud
 test_functions_from_gql_shape

@@ -337,17 +337,28 @@ jobs:
               # ONCE before the cutover and ONCE after; diff the payload-free
               # projections (the runbook documents the expected diff).
               SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-              rm -f /tmp/inv-body
-              CODE=$(curl -s --max-time 30 -o /tmp/inv-body -w '%{http_code}' \
-                -X GET \
-                -H "X-Signature-256: sha256=$SIG" \
-                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-                "$BASE/inngest-inventory" || echo "000")
-              BODY=$(cat /tmp/inv-body 2>/dev/null || echo "")
+              # #6258 bounded TRANSPORT retry (Deepen Finding 11): the in-script scan is now
+              # abandon-safe (the deadline halts the loop that drives the PG load → releases the
+              # pool), so a transient two-writer 500 / a 000 stall clears on attempt-2. This wraps
+              # ONLY the transport request (000/5xx) — NOT any verdict. Fail-CLOSED after 2 attempts.
+              CODE=000; BODY=""
+              for attempt in 1 2; do
+                rm -f /tmp/inv-body
+                CODE=$(curl -s --max-time 30 -o /tmp/inv-body -w '%{http_code}' \
+                  -X GET \
+                  -H "X-Signature-256: sha256=$SIG" \
+                  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                  "$BASE/inngest-inventory" || echo "000")
+                BODY=$(cat /tmp/inv-body 2>/dev/null || echo "")
+                [[ "$CODE" == "200" ]] && break
+                if [[ "$attempt" -lt 2 ]]; then
+                  echo "::warning::inventory transport HTTP $CODE (attempt $attempt/2) — retrying in 5s (the abandon-safe scan should have released the pool)"; sleep 5
+                fi
+              done
               if [[ "$CODE" != "200" ]]; then
                 CAUSE="${BODY//[$'\n\r']/ }"
-                echo "::error::inventory returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+                echo "::error::inventory returned HTTP $CODE after 2 attempts: ${CAUSE:-<empty body>}"; exit 1
               fi
               if ! echo "$BODY" | jq -e 'type == "object" and has("functions") and has("event_names") and has("armed_reminders")' >/dev/null 2>&1; then
                 echo "::error::inventory did not return the expected {functions,event_names,armed_reminders} object"; echo "$BODY"; exit 1
@@ -612,17 +623,27 @@ jobs:
               # registry means 2.4 did not land and there is nothing to verify. This is the
               # post-2.4 NON-empty mirror of the 2.0 gate. GET the web-host registry probe.
               SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-              rm -f /tmp/verify-probe
-              CODE=$(curl -s --max-time 30 -o /tmp/verify-probe -w '%{http_code}' \
-                -X GET \
-                -H "X-Signature-256: sha256=$SIG" \
-                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-                "$BASE/inngest-registry-probe" || echo "000")
-              BODY=$(cat /tmp/verify-probe 2>/dev/null || echo "")
+              # #6258 bounded TRANSPORT retry (Finding 11): wraps ONLY the registry-probe transport
+              # request (000/5xx) — NOT the registry_empty precondition VERDICT below (a still-empty
+              # dark registry is a legitimate verdict, not a transient, and must NOT be retried).
+              CODE=000; BODY=""
+              for attempt in 1 2; do
+                rm -f /tmp/verify-probe
+                CODE=$(curl -s --max-time 30 -o /tmp/verify-probe -w '%{http_code}' \
+                  -X GET \
+                  -H "X-Signature-256: sha256=$SIG" \
+                  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                  "$BASE/inngest-registry-probe" || echo "000")
+                BODY=$(cat /tmp/verify-probe 2>/dev/null || echo "")
+                [[ "$CODE" == "200" ]] && break
+                if [[ "$attempt" -lt 2 ]]; then
+                  echo "::warning::verify registry-probe transport HTTP $CODE (attempt $attempt/2) — retrying in 5s"; sleep 5
+                fi
+              done
               if [[ "$CODE" != "200" ]]; then
                 CAUSE="${BODY//[$'\n\r']/ }"
-                echo "::error::verify precondition: registry-probe returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+                echo "::error::verify precondition: registry-probe returned HTTP $CODE after 2 attempts: ${CAUSE:-<empty body>}"; exit 1
               fi
               REG_COUNT=$(echo "$BODY" | jq -r '.function_count // 0')
               if ! echo "$BODY" | jq -e 'type=="object" and has("registry_empty")' >/dev/null 2>&1 \
@@ -669,17 +690,25 @@ jobs:
                 echo "::error::2.6 CRON_PERIOD invalid ('$CRON_PERIOD') — set CUTOVER_CRON_PERIOD_SECONDS to a positive integer ≤ the SHORTEST registered cron period (hour-aligned)."; exit 1
               fi
               echo "::warning::2.6 CRON_PERIOD=${CRON_PERIOD}s is applied to ALL functions (P2-c). The exactly-once verdict is SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s AND hour-aligned. If any cron fires faster than ${CRON_PERIOD}s, re-run op=verify with CUTOVER_CRON_PERIOD_SECONDS set to the SHORTEST registered cron period before trusting the result."
-              rm -f /tmp/verify-runs
-              CODE=$(curl -s --max-time 60 -o /tmp/verify-runs -w '%{http_code}' \
-                -X GET \
-                -H "X-Signature-256: sha256=$SIG" \
-                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-                "$BASE/inngest-doublefire-probe" || echo "000")
-              BODY=$(cat /tmp/verify-runs 2>/dev/null || echo "")
+              # #6258 bounded TRANSPORT retry (Finding 11): wraps ONLY the doublefire transport curl.
+              CODE=000; BODY=""
+              for attempt in 1 2; do
+                rm -f /tmp/verify-runs
+                CODE=$(curl -s --max-time 60 -o /tmp/verify-runs -w '%{http_code}' \
+                  -X GET \
+                  -H "X-Signature-256: sha256=$SIG" \
+                  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                  "$BASE/inngest-doublefire-probe" || echo "000")
+                BODY=$(cat /tmp/verify-runs 2>/dev/null || echo "")
+                [[ "$CODE" == "200" ]] && break
+                if [[ "$attempt" -lt 2 ]]; then
+                  echo "::warning::2.6 doublefire-probe transport HTTP $CODE (attempt $attempt/2) — retrying in 5s"; sleep 5
+                fi
+              done
               if [[ "$CODE" != "200" ]]; then
                 CAUSE="${BODY//[$'\n\r']/ }"
-                echo "::error::2.6 doublefire-probe returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+                echo "::error::2.6 doublefire-probe returned HTTP $CODE after 2 attempts: ${CAUSE:-<empty body>}"; exit 1
               fi
               if ! echo "$BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
                 echo "::error::2.6 doublefire-probe did not return a {runs:[...]} object"; echo "$BODY"; exit 1

@@ -102,6 +102,81 @@ test_default_gql_url() {
   else echo "  FAIL: default GQL URL does not target the dedicated host"; FAIL=$((FAIL + 1)); fi
 }
 
+# ===========================================================================
+# #6258 (ADR-106) — single-shot: START/DONE markers + --connect-timeout (NO deadline/ceiling)
+# ===========================================================================
+
+RC=0; STDOUT_CAP=""; MARKERS_CAP=""
+run_probe_logcap() {
+  local fixture="$1"
+  local bindir logout; bindir=$(mktemp -d); logout=$(mktemp)
+  cat > "$bindir/logger" <<STUB
+#!/usr/bin/env bash
+shift 2 2>/dev/null || true
+echo "\$*" >> "$logout"
+STUB
+  chmod +x "$bindir/logger"
+  RC=0
+  STDOUT_CAP=$(PATH="$bindir:$PATH" INNGEST_PROBE_FUNCTIONS_FIXTURE="$fixture" bash "$TARGET" 2>/dev/null) || RC=$?
+  MARKERS_CAP=$(cat "$logout")
+  rm -rf "$bindir" "$logout"
+}
+
+# --- #6258 T1: happy path emits START (before the query) + DONE, stdout stays pure JSON ---
+test_rp_markers_journald_only() {
+  echo "TEST: registry-probe — START+DONE journald-only, stdout stays pure JSON"
+  local fixture; fixture=$(mktemp)
+  make_functions '["fn-a"]' > "$fixture"
+  run_probe_logcap "$fixture"
+  if [[ "$RC" -eq 0 ]]; then echo "  PASS: happy path exits 0"; PASS=$((PASS+1)); else echo "  FAIL: rc=$RC"; FAIL=$((FAIL+1)); fi
+  if echo "$STDOUT_CAP" | jq -e 'has("registry_empty")' >/dev/null 2>&1 && ! echo "$STDOUT_CAP" | grep -q SOLEUR; then
+    echo "  PASS: stdout is a pure object, no marker leaked"; PASS=$((PASS+1));
+  else echo "  FAIL: stdout polluted (out=$STDOUT_CAP)"; FAIL=$((FAIL+1)); fi
+  echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=verify-registry' \
+    && { echo "  PASS: START in journald (before the single query)"; PASS=$((PASS+1)); } || { echo "  FAIL: no START (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); }
+  echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_DONE op=verify-registry' \
+    && { echo "  PASS: DONE in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no DONE (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); }
+  rm -f "$fixture"
+}
+
+# --- #6258 T2: START emitted even when the single query fails (absence-of-START = host-down) ---
+test_rp_start_on_failure() {
+  echo "TEST: registry-probe — START emitted even on a malformed/failed query"
+  local fixture; fixture=$(mktemp)
+  # DSN in the error message (#6258 review P1) — the fn_errs diagnostic must scrub it.
+  echo '{"errors":[{"message":"FATAL password for postgres://u:p@10.0.1.40:5432/db"}],"data":null}' > "$fixture"
+  run_probe_logcap "$fixture"
+  if [[ "$RC" -eq 1 ]]; then echo "  PASS: exits 1 on failure"; PASS=$((PASS+1)); else echo "  FAIL: rc=$RC"; FAIL=$((FAIL+1)); fi
+  echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=verify-registry' \
+    && { echo "  PASS: START marker still emitted on a failed probe"; PASS=$((PASS+1)); } || { echo "  FAIL: no START on failure (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); }
+  # The FATAL line legitimately prints the credential-less internal $GQL_URL
+  # (http://10.0.1.40:8288/…), so assert on the credential-bearing DSN shape, not bare '://'.
+  assert_eq "no user:pass@host:port DSN in ANY journald line (incl. fn_errs diagnostic)" "0" "$(echo "$MARKERS_CAP" | grep -cE '@[^ ]+:[0-9]+' || true)"
+  assert_eq "no user:pass@host:port DSN on stdout (run log)" "0" "$(echo "$STDOUT_CAP" | grep -cE '@[^ ]+:[0-9]+' || true)"
+  assert_eq "DSN host:port scrubbed from fn_errs (10.0.1.40:5432 gone)" "0" "$(echo "$MARKERS_CAP $STDOUT_CAP" | grep -c '10.0.1.40:5432' || true)"
+  rm -f "$fixture"
+}
+
+# --- #6258 T3: --connect-timeout on the single curl; NO deadline/ceiling (single-shot) ---
+test_rp_connect_timeout_no_loop() {
+  echo "TEST: registry-probe — --connect-timeout present; single-shot (no pagination loop)"
+  if grep -qE 'curl[^|]*--connect-timeout' "$TARGET"; then echo "  PASS: --connect-timeout present"; PASS=$((PASS+1));
+  else echo "  FAIL: no --connect-timeout"; FAIL=$((FAIL+1)); fi
+  # Single-shot: no `while :` cursor loop, no PREFLIGHT_DEADLINE_S (Finding 12 / Phase 0.3).
+  if ! grep -qE 'while[[:space:]]*:' "$TARGET"; then echo "  PASS: no pagination loop (single-shot)"; PASS=$((PASS+1));
+  else echo "  FAIL: unexpected pagination loop in a single-shot probe"; FAIL=$((FAIL+1)); fi
+  if ! grep -q 'PREFLIGHT_DEADLINE_S' "$TARGET"; then echo "  PASS: no deadline seam (single-shot needs none)"; PASS=$((PASS+1));
+  else echo "  FAIL: unexpected deadline seam in a single-shot probe"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6258 T4: marker tag present in vector.toml allowlist (drift guard) ---
+test_rp_marker_tag_in_vector() {
+  echo "TEST: registry-probe — inngest-registry-probe tag in vector.toml allowlist"
+  local vector="$SCRIPT_DIR/vector.toml"
+  if grep -qE '^[[:space:]]*"inngest-registry-probe",' "$vector"; then echo "  PASS: tag in vector.toml"; PASS=$((PASS+1));
+  else echo "  FAIL: tag NOT in vector.toml"; FAIL=$((FAIL+1)); fi
+}
+
 echo "=== inngest-registry-probe.sh test suite ==="
 test_empty_registry
 test_nonempty_registry
@@ -109,6 +184,10 @@ test_malformed_fails_loud
 test_bare_array_fails_loud
 test_curl_max_time
 test_default_gql_url
+test_rp_markers_journald_only
+test_rp_start_on_failure
+test_rp_connect_timeout_no_loop
+test_rp_marker_tag_in_vector
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
