@@ -142,7 +142,7 @@ guarded create→finalize behind typed-yes. Needs an ADR for the credential-plan
 
 ## Deferred (filed as follow-up issues)
 
-- `support` / customer-reply skill (money-and-customers loop slice #2).
-- `sales` / pipeline verbs skill (slice #3).
-- company-health digest — re-anchor `operator-digest` around MRR/customers/runway (slice #4).
-- `invoice` v2 — record/reconcile + founder-side ledger + finance-write agent + 3-doc GDPR lockstep.
+- #6261 — `support` / customer-reply skill (money-and-customers loop slice #2).
+- #6262 — `sales` / pipeline verbs skill (slice #3).
+- #6263 — company-health digest — re-anchor `operator-digest` around MRR/customers/runway (slice #4).
+- #6264 — `invoice` v2 — record/reconcile + founder-side ledger + finance-write agent + 3-doc GDPR lockstep.
