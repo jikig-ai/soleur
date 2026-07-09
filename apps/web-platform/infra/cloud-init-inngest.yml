@@ -108,6 +108,34 @@ write_files:
     owner: root:root
     permissions: '0755'
 
+  # --- #6178 boot observability: value-based secret redaction for the shipped log tail ---
+  # The phone-home POST bypasses Vector's PII scrub, so any log tail it ships MUST be scrubbed
+  # here first. Pattern-masking alone is incomplete (it misses non-hex tokens / redis passwords),
+  # so this redacts by KNOWN VALUE — every enumerated inngest secret (token files + the isolated
+  # soleur-inngest/prd set) is replaced literally, catching secrets of ANY format. It uses bash
+  # quoted-pattern parameter replacement (literal, not glob) so regex/glob metachars in a secret
+  # value are matched safely.
+  # Fail-open: if Doppler is unreachable the value list degrades to the token files + the pattern
+  # backstop (never errors). Reads the tail on stdin, writes the scrubbed tail on stdout.
+  - path: /usr/local/bin/inngest-redact.sh
+    content: |
+      #!/usr/bin/env bash
+      set +e
+      data="$(cat)"
+      vals=()
+      [ -r /run/inngest-bs-logs-token ] && vals+=("$(cat /run/inngest-bs-logs-token 2>/dev/null)")
+      . /etc/default/soleur-ghcr-read 2>/dev/null; vals+=("$GHCR_READ_TOKEN")
+      . /etc/default/inngest-doppler 2>/dev/null; vals+=("$DOPPLER_TOKEN")
+      if [ -n "$DOPPLER_TOKEN" ]; then
+        while IFS= read -r v; do vals+=("$v"); done < <(doppler secrets download --no-file --format json --project soleur-inngest --config prd 2>/dev/null | jq -r 'to_entries[]|select(.key|startswith("DOPPLER_")|not)|.value' 2>/dev/null)
+      fi
+      for s in "$${vals[@]}"; do
+        [ -n "$s" ] && [ "$(printf %s "$s" | wc -c)" -ge 6 ] && data="$${data//"$s"/REDACTED}"
+      done
+      printf '%s' "$data" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#[0-9a-f]{32,}#REDACTED#g; s#[A-Za-z0-9_+/-]{40,}#REDACTED#g'
+    owner: root:root
+    permissions: '0755'
+
 runcmd:
   # Apply SSH hardening immediately.
   - systemctl restart sshd
@@ -236,7 +264,7 @@ runcmd:
     docker pull "$IREF" > /var/log/inngest-oci-pull.log 2>&1
     pull_rc=$?
     set -e
-    pull_tail="$(tail -n 8 /var/log/inngest-oci-pull.log 2>/dev/null | tr '\n' '|' || true)"
+    pull_tail="$(tail -n 8 /var/log/inngest-oci-pull.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
     /usr/local/bin/inngest-boot-phone-home.sh oci-pull-rc-$pull_rc "$pull_tail"
     [ "$pull_rc" -eq 0 ] || { echo "FATAL: OCI pull failed rc=$pull_rc" >&2; exit "$pull_rc"; }
     EXTRACT_DIR=$(mktemp -d)
@@ -287,7 +315,7 @@ runcmd:
       bash "$EXTRACT_DIR/inngest-bootstrap.sh" > /var/log/inngest-bootstrap.log 2>&1
     boot_rc=$?
     set -e
-    boot_tail="$(tail -n 20 /var/log/inngest-bootstrap.log 2>/dev/null | tr '\n' '|' || true)"
+    boot_tail="$(tail -n 20 /var/log/inngest-bootstrap.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
     /usr/local/bin/inngest-boot-phone-home.sh bootstrap-exit-$boot_rc "$boot_tail"
     if [ "$boot_rc" -ne 0 ]; then
       echo "FATAL: inngest bootstrap failed rc=$boot_rc (see /var/log/inngest-bootstrap.log)" >&2
