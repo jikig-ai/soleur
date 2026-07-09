@@ -137,8 +137,21 @@ write_files:
     permissions: '0755'
 
 runcmd:
+  # --- #6178 boot observability: EARLIEST marker (Doppler-INDEPENDENT) -------------------
+  # First instruction. Stage the baked Better Stack token and phone home immediately. If this
+  # `runcmd-entered` marker arrives, cloud-init IS running my code AND the host can reach Better
+  # Stack — so the boot failure is whichever LATER marker is the last received. If not even this
+  # arrives, the host cannot POST at all (egress/TLS/clock skew) and the sink must be rethought.
+  # set +e: fail-open, never blocks boot.
+  - |
+    set +e
+    printf '%s' '${betterstack_logs_token}' > /run/inngest-bs-logs-token
+    chmod 600 /run/inngest-bs-logs-token 2>/dev/null
+    /usr/local/bin/inngest-boot-phone-home.sh runcmd-entered "host booted"
+
   # Apply SSH hardening immediately.
   - systemctl restart sshd
+  - /usr/local/bin/inngest-boot-phone-home.sh sshd-restarted
 
   # Mount the Redis AOF volume by id at /mnt/data (inngest-redis.conf `dir /mnt/data/redis`).
   # `nofail` so a volume hiccup does not wedge boot; the redis unit's RequiresMountsFor=
@@ -160,6 +173,9 @@ runcmd:
     tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
     chmod +x /usr/local/bin/doppler
     rm /tmp/doppler.tar.gz
+    command -v doppler >/dev/null 2>&1 \
+      && /usr/local/bin/inngest-boot-phone-home.sh doppler-cli-installed "$(doppler --version 2>/dev/null | head -1)" \
+      || /usr/local/bin/inngest-boot-phone-home.sh doppler-cli-install-FAILED
   # Restricted (0600 root) env file with the scoped Doppler service token — NOT world-
   # readable /etc/environment (mirrors registry's /etc/default/registry-doppler). The token
   # is scoped to the ISOLATED `soleur-inngest` project's `prd` root config (a SEPARATE
@@ -176,9 +192,13 @@ runcmd:
   - |
     set +e
     set -a; . /etc/default/inngest-doppler; set +a
-    doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain > /run/inngest-bs-logs-token 2>/dev/null
-    chmod 600 /run/inngest-bs-logs-token 2>/dev/null
-    /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetched "arch=${inngest_cli_arch}"
+    t="$(doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain 2>/dev/null)"
+    if [ -n "$t" ]; then
+      printf '%s' "$t" > /run/inngest-bs-logs-token; chmod 600 /run/inngest-bs-logs-token 2>/dev/null
+      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetched "arch=${inngest_cli_arch}"
+    else
+      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetch-FAILED "arch=${inngest_cli_arch}"
+    fi
 
   # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------
   # So the cold-boot soleur-inngest-bootstrap OCI pull + cosign-verify authenticates even

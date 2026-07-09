@@ -231,6 +231,14 @@ resource "hcloud_server" "inngest" {
     ghcr_read_token = var.ghcr_read_token
     # nftables allowlist for the :8288/:8289 control API — web hosts only (SEC-H2).
     web_host_private_ips = local.web_host_private_ips
+    # #6178 boot observability: bake the write-only Better Stack Logs ingest token so the
+    # earliest runcmd can emit a phone-home marker BEFORE Doppler/OCI/bootstrap — otherwise a
+    # failure in those early stages (or a Doppler-CLI-install failure) is a total blind spot on
+    # this deny-all-public host. Same low-sensitivity append-only token vector.service already
+    # uses; steady-state the marker token is re-fetched from Doppler (this baked copy is the
+    # pre-Doppler fallback). Retrievable via the host metadata API — acceptable for an ingest-only
+    # logs token on a deny-all host given the diagnosability it buys (weigh before widening use).
+    betterstack_logs_token = var.betterstack_logs_token
   }))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
