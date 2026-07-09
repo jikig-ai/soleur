@@ -3,7 +3,14 @@
 Derived from `knowledge-base/project/plans/2026-07-09-feat-workstream-issue-creator-attribution-plan.md`.
 lane: cross-domain
 
-## Phase 1 — Read-path pure model (lib/workstream.ts, tested first)
+> RE-SCOPE (deepen-plan, verified P0): the live Concierge files issues via `gh issue create` over Bash, NOT `create_issue`. Part A (read path) ships independently; Part B (write path) needs the Phase-0 mechanism decision and MAY be a follow-up PR. See plan + decision-challenges.md.
+
+## Phase 0 — Resolve Part B write-path mechanism (gating, REQUIRED before Phase 3-4)
+- [ ] 0.1 Confirm the live Concierge issue-creation mechanism (gh CLI over Bash vs a wired tool); check `cc-dispatcher.ts` MCP allowlist + GH_TOKEN injection.
+- [ ] 0.2 Choose mechanism A (wire `create_issue` into cc `soleur_platform` MCP server, promote #3722, redirect prompt off raw `gh`) — recommended; or interim B (marker via prompt directive on gh --body).
+- [ ] 0.3 Output the definitive list of issue-creation sites that must thread `initiatorLogin`; decide Part A-only PR vs combined.
+
+## Phase 1 — Read-path pure model (lib/workstream.ts, tested first) [PART A]
 - [ ] 1.1 Add `WorkstreamCreator` interface + optional `creator?` field on `WorkstreamIssue` (additive, mirrors `domains?`).
 - [ ] 1.2 Add `authorLogin?: string | null` to `BoardIssueInput` (body already present).
 - [ ] 1.3 Implement pure `isSoleurBotLogin(login, botSlug)` — case-insensitive `<slug>[bot]`; conservative fallback (bias false).
@@ -17,15 +24,16 @@ lane: cross-domain
 - [ ] 2.2 `get-workstream-issues.ts`: resolve `getAppSlug()` once (defensive try/catch), pass `botSlug` to mapper; tenant resolution unchanged.
 - [ ] 2.3 Confirm SWR `{ issues }` shape unchanged; wiring/degrade tests in `test/server/workstream/get-workstream-issues.test.ts` + `test/server/github-read-tools.workstream.test.ts`.
 
-## Phase 3 — Write-path initiator marker
-- [ ] 3.1 Finalize marker format `<!-- soleur:initiated-by <login> -->` (HTML comment; no @mention; no close-keyword).
-- [ ] 3.2 Add `initiatorLogin?` to `BuildGithubToolsOpts`.
-- [ ] 3.3 Implement + unit-test `appendInitiatorMarker(body, login)` (no-op on falsy login; no double-stamp); use in `create_issue` handler (github-tools.ts:110). Do NOT touch `createIssue` in github-app.ts.
+## Phase 3 — Write-path initiator marker [PART B]
+- [ ] 3.1 Put `appendInitiatorMarker` + `parseInitiatorLogin` + `INITIATED_BY_MARKER` const in `lib/workstream.ts` (single-sourced emit/parse). Marker `<!-- soleur:initiated-by <login> -->` (no @mention, no close-keyword).
+- [ ] 3.2 `appendInitiatorMarker`: strip ALL stray markers UNCONDITIONALLY (before falsy-login return); append only when login present. Unit-test spoof cases.
+- [ ] 3.3 Centralize stamping at `createIssue` REST helper (github-app.ts:1344) via additive optional `initiatorLogin?` (imports appendInitiatorMarker from leaf). Thread from every issue-creation site Phase 0 found (mechanism A: the wired cc `create_issue`).
 
-## Phase 4 — Thread human login into agent-runner
-- [ ] 4.1 Resolve login via `resolveGithubLogin` / `users.github_username` (precedent-diff vs app/api/repo/* callers).
-- [ ] 4.2 Thread `initiatorLogin` into `buildGithubTools({...})` (agent-runner.ts:1656).
-- [ ] 4.3 Defensive: null login → no marker, no throw.
+## Phase 4 — Thread human login [PART B]
+- [ ] 4.1 Resolve via `resolveGithubLogin(serviceClient, userId, github_username)` — SERVICE client, authoritative GoTrue path. Extend `.select("email, github_username")` (agent-runner.ts:1077) + equivalent in cc runtime.
+- [ ] 4.2 Thread `initiatorLogin` into every builder (buildGithubTools @1656 + cc create_issue builder).
+- [ ] 4.3 Defensive: null login → no marker, no throw; emit attribution_status enum. Note null-by-default for email-signup-no-GitHub-OAuth users.
+- [ ] 4.4 END-TO-END test: drive the real Concierge path; assert created issue body carries exactly one marker and read renders "Soleur · initiated by <login>".
 
 ## Phase 5 — Render (reuse UserAvatar + Row primitives)
 - [ ] 5.1 Detail sheet: "Created by" `<Row>` with three label variants (Soleur · initiated by X / Soleur / human login).
