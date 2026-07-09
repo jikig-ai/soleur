@@ -19,6 +19,7 @@ function baseOpts(): ReturnType<typeof deriveFilterOptions> {
     users: ["alice"],
     hasUnassigned: true,
     domains: ["domain/engineering", "domain/product"],
+    creators: ["Soleur", "octocat"],
   };
 }
 
@@ -33,6 +34,29 @@ describe("FilterBar", () => {
     expect(screen.getByRole("button", { name: /status/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /assignee/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /domain/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /created by/i })).toBeTruthy();
+  });
+
+  it("toggling a Created by checkbox calls onChange with that creator added", () => {
+    const onChange = vi.fn();
+    render(
+      <FilterBar options={opts()} filters={emptyFilters()} onChange={onChange} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /created by/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /octocat/i }));
+    const next = onChange.mock.calls[0][0] as WorkstreamFilters;
+    expect(next.creators.has("octocat")).toBe(true);
+  });
+
+  it("hides the Created by dimension when no creators are present", () => {
+    render(
+      <FilterBar
+        options={opts({ creators: [] })}
+        filters={emptyFilters()}
+        onChange={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /created by/i })).toBeNull();
   });
 
   it("hides a dimension whose option list is empty (Domain); Status always shows", () => {

@@ -1,11 +1,11 @@
-# ADR-106: `SOLEUR_CLAUDE_COST` marker convention + Anthropic Admin Cost/Usage integration
+# ADR-107: `SOLEUR_CLAUDE_COST` marker convention + Anthropic Admin Cost/Usage integration
 
 - **Status:** adopting (Phases 1–4 ship the markers + the daily Admin cost-report cron; the `ANTHROPIC_ADMIN_KEY` IaC + vendor-console mint are a sequenced follow-up)
 - **Date:** 2026-07-09
 - **Deciders:** Operator; drafted via `/soleur:go` → plan → this ADR. Domain: Engineering (CTO), Finance (advisory — enables per-model/per-surface spend analysis, creates no new vendor expense).
 - **Related:** ADR-033 (cron claude-eval spawn — amended with I9 for the `--output-format json` cost capture), ADR-029 (pino PII-rename boundary), `cron-anthropic-credit-probe.ts` (the `Ref #5674` follow-up this closes the attribution half of), `inngest-betterstack-token.tf` (the `doppler_secret` no-default-var precedent).
 
-> **Ordinal.** ADR-105 is the highest on `origin/main` (re-verified at review — ADR-103/104/105 merged after this branch was cut, colliding with the provisional 103; renumbered 103→106). 106 is the next free ordinal. `/ship`'s ADR-Ordinal Collision Gate re-verifies against `origin/main` at merge; on a collision, sweep the feature artifact set (`grep -rn 'ADR-106' knowledge-base/project/plans/2026-07-09-feat-anthropic-cost-attribution-fleet-plan.md` + this file + the ADR-033 amendment reference) in the same edit.
+> **Ordinal.** Renumbered **twice**: provisional 103 → 106 at review (ADR-103/104/105 merged after this branch was cut), then **106 → 107 at ship** after a sibling (`ADR-106-inngest-cutover-*`) landed on `origin/main` during this pipeline's ~90-min window. ADR-106 is now the highest on `origin/main`; 107 is the next free ordinal. `/ship`'s ADR-Ordinal Collision Gate + the Phase-7 post-sync re-check caught both collisions — validating that the gate must re-verify against a freshly-fetched `origin/main` at merge, not the branch base.
 
 ## Context
 

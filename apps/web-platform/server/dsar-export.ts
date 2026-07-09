@@ -979,6 +979,29 @@ export async function exportSqlTable(
     });
   }
 
+  // -- beta_contact_access_log (beta-CRM owner-read audit; migration 127, #6172) --
+  // Art. 15 ACCESS only: controller-generated Art. 5(2) accountability log of the
+  // owner's own reads of contact PII (contact_id + accessed_at), not user-provided
+  // content. Owner-scoped by the denormalized user_id. Art. 17 via the composite
+  // FK (contact_id, user_id) ON DELETE CASCADE from beta_contacts.
+  {
+    const { data, error } = await service
+      .from("beta_contact_access_log")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`beta_contact_access_log read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "beta_contact_access_log", {
+      ownerField: "user_id",
+    });
+    results.push({
+      table: "beta_contact_access_log",
+      spec: DSAR_TABLE_ALLOWLIST.beta_contact_access_log,
+      rows,
+    });
+  }
+
   // -- outbound_sends (cold-outbound WORM audit; migration 104, #5325) --
   // Art. 15: the founder is entitled to a copy of every cold send the platform
   // recorded on their behalf. Recipient + body are persisted as a keyed HMAC /

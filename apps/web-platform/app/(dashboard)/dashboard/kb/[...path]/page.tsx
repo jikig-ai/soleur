@@ -3,7 +3,6 @@
 import { useState, useEffect, useMemo, useRef, use, useContext } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { parseLikeC4Embed } from "@/lib/c4-embed";
 import { safeDecode } from "@/components/kb/kb-breadcrumb";
@@ -15,6 +14,7 @@ import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { KbChatQuoteBridgeContext } from "@/components/kb/kb-chat-quote-bridge";
 import { SelectionToolbar } from "@/components/kb/selection-toolbar";
 import { getKbExtension, isMarkdownKbPath } from "@/lib/kb-extensions";
+import { isRevocationBounce } from "@/lib/auth/revocation-bounce";
 import { classifyByExtension } from "@/lib/kb-file-kind";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
@@ -37,7 +37,6 @@ export default function KbContentPage({
   params: Promise<{ path: string[] }>;
 }) {
   const { path: pathSegments } = use(params);
-  const router = useRouter();
   const joinedPath = pathSegments.join("/");
   const extension = getKbExtension(joinedPath);
   const isMarkdown = isMarkdownKbPath(joinedPath);
@@ -88,8 +87,11 @@ export default function KbContentPage({
       try {
         const res = await fetch(`/api/kb/content/${joinedPath}`);
         if (!cancelled) {
-          if (res.status === 401) {
-            router.replace("/login");
+          // GAP F (ADR-067 staleTimes): revocation bounce — HARD-nav to wipe the
+          // Router Cache. isRevocationBounce detects the direct 401 AND the
+          // #4307 middleware 302→/login (fetch follows the redirect to 200 HTML).
+          if (isRevocationBounce(res)) {
+            window.location.assign("/login");
             return;
           }
           if (res.status === 404) {
@@ -115,7 +117,7 @@ export default function KbContentPage({
     }
     fetchContent();
     return () => { cancelled = true; };
-  }, [joinedPath, router, isMarkdown]);
+  }, [joinedPath, isMarkdown]);
 
   if (loading) {
     return (

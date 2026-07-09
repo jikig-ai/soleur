@@ -1,4 +1,4 @@
-// Structured, WARN-level, fail-open Anthropic cost marker (ADR-106).
+// Structured, WARN-level, fail-open Anthropic cost marker (ADR-107).
 //
 // `SOLEUR_CLAUDE_COST` is the top-level discriminator so
 // `scripts/betterstack-query.sh --grep SOLEUR_CLAUDE_COST` matches it via its
@@ -15,7 +15,7 @@
 //
 // The silent `catch` below is the sanctioned observability-of-observability
 // exemption to `cq-silent-fallback-must-mirror-to-sentry` (documented in
-// ADR-106): a logging failure must NEVER red a cron or fail a session, and
+// ADR-107): a logging failure must NEVER red a cron or fail a session, and
 // mirroring the failure to Sentry would re-enter the same broken path.
 import pino from "pino";
 

@@ -40,7 +40,7 @@ assert "capture arm POSTs mode=capture" "grep -qE '\"mode\":\"capture\"' '$WF'"
 # `${{ inputs.op }}` occurrence in the entire workflow AND it is the `env: OP:` assignment.
 # Any other occurrence (e.g. a raw `${{ inputs.op }}` interpolated into a run shell — the
 # injection vector) would push the count above 1 or move the sole ref off the OP: line.
-OP_REFS=$(grep -cE '\$\{\{[[:space:]]*inputs\.op' "$WF")
+OP_REFS=$(grep -cE '\$\{\{[[:space:]]*inputs\.op' "$WF" || true)
 assert "exactly one \${{ inputs.op }} reference in the whole workflow (L2)" "[[ '$OP_REFS' -eq 1 ]]"
 assert "op passed via env (the sole ref is OP: \${{ inputs.op }})" "grep -qE 'OP:[[:space:]]*\\\$\{\{[[:space:]]*inputs\.op[[:space:]]*\}\}' '$WF'"
 
@@ -52,8 +52,8 @@ assert "timeout-minutes present (>= poll budget)" "grep -qE 'timeout-minutes:[[:
 assert "no-op on the registration push (workflow_dispatch guard)" "grep -qE \"github.event_name == 'workflow_dispatch'\" '$WF'"
 
 # every curl carries --max-time (no unbounded network call)
-CURL_LINES=$(grep -c 'curl ' "$WF")
-MAXTIME_LINES=$(grep -c -- '--max-time' "$WF")
+CURL_LINES=$(grep -c 'curl ' "$WF" || true)
+MAXTIME_LINES=$(grep -c -- '--max-time' "$WF" || true)
 assert "at least one curl present" "[[ '$CURL_LINES' -ge 3 ]]"
 assert "every curl has --max-time (count parity)" "[[ '$CURL_LINES' -eq '$MAXTIME_LINES' ]]"
 
@@ -196,6 +196,81 @@ for probe in "${PROBES[@]}"; do
     assert "probe '$probe' ABSENT from OCI bake surface $(basename "$ocis")" "! grep -qF '$probe' '$ocis'"
   done
 done
+
+# ============================================================================
+# #6258 — op=execute 2.-1 POOL PRE-CHECK (Test Scenario 3). The live gate can only
+# run post-merge (a new workflow shape 404s on --ref <feature>), so assert the
+# fail-closed shape statically. Anchors are UNIQUE code substrings from the
+# ::error:: echo lines / the arithmetic guard — never the explanatory comment prose
+# (which also contains "FAIL-CLOSED"), per the grep-over-body false-match trap.
+# ============================================================================
+assert "pool pre-check reads SUPABASE_ACCESS_TOKEN (read-only mgmt API)" "grep -qF 'secrets.SUPABASE_ACCESS_TOKEN' '$WF'"
+# Ordering: the pre-check MUST run BEFORE the 2.0 registry probe (2.0 opens its own
+# GQL→Postgres connection that would otherwise be counted against the readiness baseline).
+PRECHECK_LN=$(grep -nF 'READINESS_CEILING=' "$WF" | head -1 | cut -d: -f1)
+REGPROBE_LN=$(grep -nF '2.0 empty-registry pre-flight' "$WF" | head -1 | cut -d: -f1)
+assert "case (a) 2.-1 pool pre-check runs BEFORE the 2.0 registry probe" "[[ -n '$PRECHECK_LN' && -n '$REGPROBE_LN' && '$PRECHECK_LN' -lt '$REGPROBE_LN' ]]"
+assert "case (a) clean pool below ceiling emits ::notice:: and proceeds" "grep -qF '2.-1 pool pre-check CLEAN' '$WF'"
+# (b) gates on readiness baseline + burst headroom, NOT the 80%-of-cap pressure line
+assert "case (b) gates on readiness ceiling + burst headroom (not 80%)" "grep -qF 'INNGEST_CONNS + EXPECTED_BURST_COST > POOL_SIZE - SUPAVISOR_WARM_RESERVE' '$WF'"
+assert "case (b) over-ceiling fails closed" "grep -qF 'exceeds readiness ceiling' '$WF'"
+# (c) EMAXCONNSESSION in body → fail-closed
+assert "case (c) EMAXCONNSESSION → fail-closed" "grep -qF 'pool ALREADY at the cap' '$WF'"
+# (d) 401/403/non-2xx → fail-closed
+assert "case (d) non-2xx HTTP (401/403/5xx) → fail-closed" "grep -qF '401/403 = token/scope; 5xx = pooler' '$WF'"
+# (e) non-JSON / empty / curl-fail / token-unset → fail-closed (no false 0==0 clean)
+assert "case (e1) non-JSON array body → fail-closed" "grep -qF 'body is not a JSON array' '$WF'"
+assert "case (e2) curl failure → fail-closed" "grep -qF 'pool unverifiable, refusing to flip' '$WF'"
+assert "case (e3) token unset → fail-closed" "grep -qF 'Refusing to flip against an unverifiable pool' '$WF'"
+assert "case (e4) non-numeric count → fail-closed" "grep -qF 'inngest-attributable count non-numeric' '$WF'"
+# Every non-clean state is a hard exit — >=6 distinct FAIL-CLOSED error paths.
+FAILCLOSED_N=$(grep -cF '::error::2.-1 POOL PRE-CHECK FAIL-CLOSED' "$WF" || true)
+assert "pre-check has >=6 fail-closed error paths (no silent clean on an unparsed count)" "[[ '$FAILCLOSED_N' -ge 6 ]]"
+
+# ============================================================================
+# #6258 (ADR-106) — pre-flight scan bounding: SUM-bounded timeout hierarchy,
+# abort→webhook-non-200 mapping, and the tightly-scoped bounded transport retry.
+# ============================================================================
+INV_SH="$REPO_ROOT/apps/web-platform/infra/inngest-inventory.sh"
+DF_SH="$REPO_ROOT/apps/web-platform/infra/inngest-doublefire-probe.sh"
+
+# SUM bound (Deepen Finding 1): in_script_deadline + per_page ≤ outer_curl. The per-page
+# clamp makes per_page = (deadline − elapsed) ≤ deadline, so it suffices to assert the
+# in-script DEFAULT deadline < the outer curl --max-time for each op. inventory 22 < 30,
+# doublefire 50 < 60 — an ordering-only check (deadline < outer) would be met even WITHOUT
+# the clamp, so we ALSO assert the remaining-budget clamp exists in each script.
+INV_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$INV_SH" | head -1)
+DF_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$DF_SH" | head -1)
+assert "inventory in-script deadline (22) < outer curl --max-time 30 (SUM bound)" "[[ -n '$INV_DEADLINE' && '$INV_DEADLINE' -lt 30 ]]"
+assert "doublefire in-script deadline (50) < outer curl --max-time 60 (SUM bound)" "[[ -n '$DF_DEADLINE' && '$DF_DEADLINE' -lt 60 ]]"
+assert "inventory clamps per-page curl to the remaining budget (not a fixed const)" "grep -qE 'max-time \"\\\$max_time\"' '$INV_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$INV_SH'"
+assert "doublefire clamps per-page curl to the remaining budget" "grep -qE 'max-time \"\\\$max_time\"' '$DF_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$DF_SH'"
+# outer curl budgets present (the ceiling the sum must stay under).
+assert "inventory outer curl --max-time 30 present" "grep -qE 'curl -s --max-time 30 -o /tmp/inv-body' '$WF'"
+assert "doublefire outer curl --max-time 60 present" "grep -qE 'curl -s --max-time 60 -o /tmp/verify-runs' '$WF'"
+
+# Abort → webhook NON-200 (Deepen Finding 6): a script exit 1 (deadline/ceiling loud-abort)
+# maps to a webhook non-200 ONLY IF the hook has include-command-output-in-response-on-error.
+# Then the workflow's CODE!=200 cause-branch surfaces the real SOLEUR_*_TIMEOUT text — NOT
+# the 200-branch shape guard. Assert BOTH halves of that mapping.
+assert "inventory hook returns output on error (exit 1 → non-200)" "grep -A4 '\"id\": \"inngest-inventory\"' '$HOOKS_TMPL' | grep -q 'include-command-output-in-response-on-error.*true'"
+assert "doublefire hook returns output on error (exit 1 → non-200)" "grep -A4 '\"id\": \"inngest-doublefire-probe\"' '$HOOKS_TMPL' | grep -q 'include-command-output-in-response-on-error.*true'"
+assert "registry-probe hook returns output on error (exit 1 → non-200)" "grep -A4 '\"id\": \"inngest-registry-probe\"' '$HOOKS_TMPL' | grep -q 'include-command-output-in-response-on-error.*true'"
+assert "inventory arm surfaces the non-200 CAUSE body via CODE!=200 branch" "grep -qE 'inventory returned HTTP \\\$CODE after 2 attempts' '$WF'"
+assert "verify registry-probe arm surfaces the non-200 CAUSE via CODE!=200 branch" "grep -qE 'registry-probe returned HTTP \\\$CODE after 2 attempts' '$WF'"
+assert "verify doublefire arm surfaces the non-200 CAUSE via CODE!=200 branch" "grep -qE 'doublefire-probe returned HTTP \\\$CODE after 2 attempts' '$WF'"
+
+# Bounded transport retry (Deepen Finding 11), tightly scoped: 2 attempts on the op=inventory
+# curl + the op=verify transport curls, fail-closed. The scoping is load-bearing — it must NOT
+# wrap the registry_empty precondition verdict, the DI-C3 gate (:565), or the health probe.
+RETRY_N=$(grep -cE 'for attempt in 1 2; do' "$WF" || true)
+assert "exactly 3 bounded transport retries (inventory + 2 verify curls)" "[[ '$RETRY_N' -eq 3 ]]"
+assert "retry backoff gap present (sleep 5 between attempts)" "grep -qE 'retrying in 5s' '$WF'"
+assert "retry fails CLOSED (still-non-200 after 2 attempts exits 1)" "grep -qE 'after 2 attempts' '$WF'"
+# NEGATIVE scoping: the DI-C3 execute inventory gate (:565, /tmp/exec-inv) is NOT retried.
+assert "DI-C3 execute inventory gate is NOT wrapped in a retry (single-shot)" "! grep -B2 'BASE/inngest-inventory\" || echo \"000\")' '$WF' | grep -q 'exec-inv.*for attempt'"
+# The registry_empty VERDICT (registry_empty != false) is downstream of the retry loop, un-retried.
+assert "registry_empty verdict is a separate downstream check (not inside the retry loop)" "grep -qE 'verify precondition FAILED' '$WF'"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

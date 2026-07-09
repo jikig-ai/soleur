@@ -18,7 +18,7 @@ packages:
   - apache2-utils # htpasswd -Bbn (bcrypt) — build the zot htpasswd on-host from Doppler tokens
   - curl
   - jq # parse `doppler secrets --only-names --json` for the boot-time isolation self-check (runcmd)
-  - e2fsprogs # resize2fs — grow the ext4 fs to fill the 30 GB volume (#6240). The packages: stage
+  - e2fsprogs # resize2fs — grow the ext4 fs to fill the 60 GB volume (#6240/#6247). The packages: stage
     # is NON-FATAL (failures logged, boot continues), so a runcmd dpkg-guard re-ensures it below.
 
 groups:
@@ -45,24 +45,35 @@ write_files:
   #
   # storage.retention (#6122 follow-up): gc alone only reclaims DANGLING blobs, not old
   # TAGS — every dual-pushed release tag (v* + its 40-hex commit-sha) is retained forever,
-  # so the store grows unbounded with each deploy and the 10 GB volume fills (observed: the
-  # web-platform image is ~1.5-2 GB/version). This policy bounds it: keep `latest`, the 10
-  # most-recently-pushed v* tags and 10 most-recent commit-sha tags per repo, and ALWAYS keep
-  # every `sha256-*` tag (the cosign .sig/.att triangulation tags — deleting them would break
-  # deploy-time `cosign verify`, which fetches the signature by tag from the SAME registry it
-  # pulls the image; see ADR-087). Non-matching tags are pruned; deleteUntagged + gc then
-  # reclaim their layers after `delay`. deleteReferrers=false: cosign here uses TAG-based sigs
-  # (kept above), not Subject-field OCI referrers, so leave Subject referrers untouched.
-  # dryRun=false: prune for real. Schema: project-zot examples/README.md (retention).
+  # so the store grows unbounded with each deploy and the volume fills (observed: the
+  # web-platform image is ~1.5-2 GB/version). This policy bounds it: keep `latest`, the 5
+  # most-recently-pushed v* tags and 5 most-recent commit-sha tags per repo, and the 50
+  # most-recently-pushed `sha256-*` tags (the cosign .sig/.att triangulation tags — deploy-time
+  # `cosign verify` fetches the signature by tag from the SAME registry it pulls the image, so a
+  # KEPT image's sig must never be pruned; see ADR-087). Non-matching tags are pruned;
+  # deleteUntagged + gc then reclaim their layers after `delay`. deleteReferrers=false: cosign
+  # here uses TAG-based sigs (kept above), not Subject-field OCI referrers, so leave Subject
+  # referrers untouched. dryRun=false: prune for real. Schema: project-zot examples/README.md.
   #
-  # gc/retention TIGHTENED (#6240 defense-in-depth): gcInterval 24h->1h and retention.delay
-  # 24h->2h so a filling store is reclaimed within ~1h, not once per 24h. gcDelay stays 1h (the
-  # dangling-blob SAFETY window that protects a blob just uploaded but not yet manifest-referenced
-  # during an in-flight push — shortening it risks reclaiming an in-progress layer). The keep-set
-  # (latest / sha256-* / v* x10 / commit-sha x10) is UNCHANGED. NO on-boot gc trigger is issued:
-  # zot v2.1.2 exposes no sanctioned on-demand gc HTTP endpoint (hr-verify-repo-capability-claim —
-  # no fabricated admin call), so the tightened gcInterval is the reclamation lever; the first
-  # scheduled pass runs within ~1h of boot.
+  # CAPACITY-VS-RETENTION (#6247, 2026-07-09): counts LOWERED v*/commit-sha 10->5 and the
+  # previously-UNBOUNDED `sha256-*` keep BOUNDED at mostRecentlyPushedCount 50. The 2026-07-08 fix
+  # (#6246) tightened gc/retention TIMING but left the keep-SET unchanged; SOLEUR_ZOT_DISK then
+  # showed the 30 GB fs genuinely full (resize_ok=true, pcent=100) — the keep-set (10 v* + 10 sha +
+  # unbounded sigs, per repo × 2 repos, ~1.5-2 GB/image) legitimately exceeded 30 GB, and gc cannot
+  # reclaim a blob the policy says to KEEP. Fix = grow the volume 30->60 GB (variables.tf, headroom)
+  # + this keep-set tighten (bound growth). The `sha256-*` bound at 50 caps forever-growth while
+  # sitting FAR above the true keep requirement (~12-18 sig-tags/repo at ~5-6 kept releases × 2-3
+  # referrer types), so it never prunes a kept image's sig at current scale — the load-bearing
+  # cosign-verify coupling (ADR-087): mostRecentlyPushedCount is push-ORDER heuristic and can evict
+  # out of order under the ADR-096 crane-copy backfill/re-sign path, so 50 is deliberately generous.
+  #
+  # gc/retention TIMING (#6240 defense-in-depth, UNCHANGED here): gcInterval 24h->1h and
+  # retention.delay 24h->2h so a filling store is reclaimed within ~1h, not once per 24h. gcDelay
+  # stays 1h (the dangling-blob SAFETY window that protects a blob just uploaded but not yet
+  # manifest-referenced during an in-flight push — shortening it risks reclaiming an in-progress
+  # layer). NO on-boot gc trigger is issued: zot v2.1.2 exposes no sanctioned on-demand gc HTTP
+  # endpoint (hr-verify-repo-capability-claim — no fabricated admin call), so the tightened
+  # gcInterval is the reclamation lever; the first scheduled pass runs within ~1h of boot.
   #
   # http.compat ["docker2s2"] (#6122): zot is OCI-native and REJECTS Docker manifest
   # schema2 pushes (application/vnd.docker.distribution.manifest.v2+json) with
@@ -89,9 +100,9 @@ write_files:
                 "deleteUntagged": true,
                 "keepTags": [
                   { "patterns": ["latest"] },
-                  { "patterns": ["sha256-.*"] },
-                  { "patterns": ["v.*"], "mostRecentlyPushedCount": 10 },
-                  { "patterns": ["[0-9a-f]{7,64}"], "mostRecentlyPushedCount": 10 }
+                  { "patterns": ["sha256-.*"], "mostRecentlyPushedCount": 50 },
+                  { "patterns": ["v.*"], "mostRecentlyPushedCount": 5 },
+                  { "patterns": ["[0-9a-f]{7,64}"], "mostRecentlyPushedCount": 5 }
                 ]
               }
             ]
@@ -128,8 +139,8 @@ write_files:
   #      Stack Logs (queryable via scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK, NO ssh).
   #      Its fields (pcent / fs_size_gb / block_size_gb / resize_ok / zot_restarts / ping_rc)
   #      discriminate ALL competing root causes in ONE event: fs-not-grown (resize_ok=false OR
-  #      fs_size_gb << block_size_gb), gc-too-slow (resize_ok=true, fs≈30, pcent>=85), and
-  #      zot-mid-write-crash (pcent<85, fs≈30, zot_restarts>0).
+  #      fs_size_gb << block_size_gb), gc-too-slow (resize_ok=true, fs≈60, pcent>=85), and
+  #      zot-mid-write-crash (pcent<85, fs≈60, zot_restarts>0).
   # disk_heartbeat_url + betterstack_ingest_url are terraform-interpolated (non-secret host
   # routing); BETTERSTACK_LOGS_TOKEN is injected AT CRON TIME by `doppler run` from the isolated
   # soleur-registry/prd config (NEVER baked into user_data). Plain dollar-VARs stay literal
@@ -155,9 +166,62 @@ write_files:
         v=$(grep -E '^resize_ok=' /var/lib/zot/.resize-result | head -1 | cut -d= -f2); [ -n "$v" ] && resize_ok=$v
         v=$(grep -E '^block_size_gb=' /var/lib/zot/.resize-result | head -1 | cut -d= -f2); [ -n "$v" ] && block_size_gb=$v
       fi
-      # zot container restart count — >0 flags the mid-write-crash hypothesis; -1 = not found.
-      ZOT_RESTARTS=$(docker inspect -f '{{.RestartCount}}' zot 2>/dev/null); [ -n "$ZOT_RESTARTS" ] || ZOT_RESTARTS=-1
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC host=$(hostname)"
+      # (2a) Host memory pressure CONTEXT from /proc/meminfo (procps `free` is NOT in packages:).
+      # mem_total_mb also self-verifies the cx32 bump landed on a no-SSH host (~8000 vs ~4000).
+      # NOTE (#6288 User-Challenge): mem_used_mb is page-cache-confounded context, NOT the OOM
+      # confirmation signal — a large store scan pins page cache so host used fills regardless.
+      # The OOM tell is zot_anon_mb below (container anonymous RSS). Fields RETAINED per the
+      # operator's explicit #6288 direction; see decision-challenges.md.
+      MEM_TOTAL_KB=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null)
+      MEM_AVAIL_KB=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null)
+      if [ -n "$MEM_TOTAL_KB" ]; then MEM_TOTAL=$(( MEM_TOTAL_KB / 1024 )); else MEM_TOTAL=-1; fi
+      if [ -n "$MEM_TOTAL_KB" ] && [ -n "$MEM_AVAIL_KB" ]; then MEM_USED=$(( (MEM_TOTAL_KB - MEM_AVAIL_KB) / 1024 )); else MEM_USED=-1; fi
+      # (2b) zot container state — ONE inspect for ALL container fields (folds in RestartCount, so
+      # zot_restarts comes from the same call — no double inspect). Mid-restart returns empty →
+      # default the WHOLE capture to sentinels. Adapted from container-restart-monitor.sh:118-119
+      # (adds .State.Status). Loop DETECTION keys on zot_restarts delta (reliable); the exit-reason
+      # fields are for CAUSE attribution (often stale when a 4/min loop is sampled mid-run).
+      INSPECT=$(docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}}' zot 2>/dev/null)
+      if [ -n "$INSPECT" ]; then
+        read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE <<<"$INSPECT"
+      else
+        ID=; ZOT_RESTARTS=-1; STATE_STATUS=unknown; OOM_KILLED=unknown; EXIT_CODE=-1
+      fi
+      # (2c) Container anonymous RSS — the OOM-CONFIRMATION signal (excludes reclaimable page cache,
+      # unlike host mem_used). cgroup v2 memory.stat `anon` in bytes → /1048576. Path mirrors
+      # container-restart-monitor.sh:129-132. Guard -1 if the container/cgroup is absent (mid-restart).
+      CGROUP_ROOT="$${CGROUP_ROOT:-/sys/fs/cgroup}"
+      ZOT_ANON_MB=-1; ZOT_OOM_KILLS=-1
+      if [ -n "$ID" ]; then
+        cg="$CGROUP_ROOT/system.slice/docker-$ID.scope"
+        anon_bytes=$(grep -E '^anon ' "$cg/memory.stat" 2>/dev/null | awk '{print $2}')
+        [ -n "$anon_bytes" ] && ZOT_ANON_MB=$(( anon_bytes / 1048576 ))
+        # memory.events `oom_kill` is a MONOTONIC container-cgroup OOM-kill counter (mirrors
+        # container-restart-monitor.sh's authoritative signal). Unlike the zot_anon_mb GAUGE — a
+        # point sample that a 4/min loop sampled every 5 min systematically reads mid-scan, missing
+        # the pre-OOM peak — this counter SURVIVES the sampling race: any nonzero value on the
+        # newest boot_id means the cgroup OOM-killed zot. This is the real cgroup-OOM confirmation;
+        # zot_anon_mb stays as pressure context. `^oom_kill ` (trailing space) excludes oom_group_kill.
+        oom_k=$(grep -E '^oom_kill ' "$cg/memory.events" 2>/dev/null | awk '{print $2}')
+        [ -n "$oom_k" ] && ZOT_OOM_KILLS=$oom_k
+      fi
+      # (2d) journald kernel-OOM window backstop — survives the point-sampling race (kernel OOM-kill
+      # entries persist the window even when inspect catches Status=running with stale exit fields).
+      OOM_KILLS_5M=$(journalctl -k --since "5 min ago" 2>/dev/null | grep -ciE 'oom-kill|out of memory'); [ -n "$OOM_KILLS_5M" ] || OOM_KILLS_5M=0
+      # (2e) Non-OOM escape hatch (closes the no-SSH dead-end): bounded ≤300-byte single-line tail of
+      # zot's own logs (zot logs at info, :128, so secret-exposure risk is low). Strip quotes/
+      # backslashes too so a log line never breaks the JSON payload below. Read via the decode table.
+      # Whitespace-controls → space; then keep ONLY printable ASCII (drops C0/DEL control bytes AND
+      # mid-sequence-sliced UTF-8 — both invalid unescaped in a JSON string, RFC 8259 §7, so an
+      # unstripped tab-indented Go crash trace would make Better Stack reject the WHOLE payload in
+      # the exact crash case this field targets); finally drop "/\ so it can't corrupt the JSON.
+      ZOT_LAST_ERR=$(docker logs --tail 3 zot 2>&1 | tail -c 300 | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\'); [ -n "$ZOT_LAST_ERR" ] || ZOT_LAST_ERR=none
+      # (2f) Boot discriminator — the immutable redeploy reuses the terraform hostname, so boot_id is
+      # what cleanly separates old-host from new-host events for the automated decision rule.
+      BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
+      # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
+      # key=value parsing of the fields before it.
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_used_mb=$MEM_USED mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
@@ -298,8 +362,16 @@ runcmd:
     chmod 600 /etc/zot/htpasswd
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     docker rm -f zot >/dev/null 2>&1 || true
+    # Container memory cap (ADR-062 pattern) — bounds zot's large-store (~35 GB) startup scan so a
+    # host-level OOM can't restart-loop the box (#6288). cap = host RAM (8192m on cx32) − documented
+    # host overhead (~1024m for cron+doppler+sshd+OS, lighter than ADR-062's 1.3 GB web host).
+    # --memory-swap == --memory disables swap growth → a deterministic cgroup-OOM, not swap-thrash.
+    # NO --init: zot is a single Go process (PID 1 handles SIGTERM, spawns no children) — ADR-062's
+    # Node zombie-reaping idiom buys nothing here. Env-overridable const (mirrors PROD_MEMORY_CAP).
+    ZOT_MEMORY_CAP="$${ZOT_MEMORY_CAP:-7168m}"
     docker run -d --name zot --restart unless-stopped \
       --log-driver journald \
+      --memory "$ZOT_MEMORY_CAP" --memory-swap "$ZOT_MEMORY_CAP" \
       -v /var/lib/zot:/var/lib/zot \
       -v /etc/zot/config.json:/etc/zot/config.json:ro \
       -v /etc/zot/htpasswd:/etc/zot/htpasswd:ro \

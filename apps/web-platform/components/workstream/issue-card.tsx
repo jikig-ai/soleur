@@ -6,7 +6,7 @@
 // green text, NO fill) for active seeded cards.
 
 import { isLive, type WorkstreamIssue } from "@/lib/workstream";
-import { AssigneeChip, UserAvatar } from "./assignee-chip";
+import { AssigneeChip, CreatorChip, UserAvatar } from "./assignee-chip";
 import { PriorityPill } from "./priority-pill";
 
 export function IssueCard({
@@ -44,6 +44,7 @@ export function IssueCard({
           <PriorityPill priority={issue.priority} />
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {issue.creator && <CreatorChip creator={issue.creator} />}
           <AssigneeChip role={issue.assigneeRole} />
           {issue.user && <UserAvatar user={issue.user} />}
         </div>

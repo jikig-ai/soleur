@@ -66,6 +66,10 @@ jobs:
           # prd_terraform READ-only (op=backup reads HCLOUD_TOKEN). Same secret as
           # apply-web-platform-infra.yml's read steps — NOT DOPPLER_TOKEN_WRITE.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # #6258: read-only pg_stat_activity for the op=execute 2.-1 pool pre-check
+          # (same secret + endpoint scheduled-inngest-health.yml uses; TF
+          # github_actions_secret.supabase_access_token). Read-only Management-API scope.
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           # The prod-scheduling web-host set (#6178, P1-8 / DI-C3). op=execute captures +
           # quiesce-gates this EXACT set and op=rollback re-enables it; computed ONCE here
           # so the 2.1 capture host-set and the 2.2 quiesce host-set cannot drift. MUST
@@ -333,17 +337,28 @@ jobs:
               # ONCE before the cutover and ONCE after; diff the payload-free
               # projections (the runbook documents the expected diff).
               SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-              rm -f /tmp/inv-body
-              CODE=$(curl -s --max-time 30 -o /tmp/inv-body -w '%{http_code}' \
-                -X GET \
-                -H "X-Signature-256: sha256=$SIG" \
-                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-                "$BASE/inngest-inventory" || echo "000")
-              BODY=$(cat /tmp/inv-body 2>/dev/null || echo "")
+              # #6258 bounded TRANSPORT retry (Deepen Finding 11): the in-script scan is now
+              # abandon-safe (the deadline halts the loop that drives the PG load → releases the
+              # pool), so a transient two-writer 500 / a 000 stall clears on attempt-2. This wraps
+              # ONLY the transport request (000/5xx) — NOT any verdict. Fail-CLOSED after 2 attempts.
+              CODE=000; BODY=""
+              for attempt in 1 2; do
+                rm -f /tmp/inv-body
+                CODE=$(curl -s --max-time 30 -o /tmp/inv-body -w '%{http_code}' \
+                  -X GET \
+                  -H "X-Signature-256: sha256=$SIG" \
+                  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                  "$BASE/inngest-inventory" || echo "000")
+                BODY=$(cat /tmp/inv-body 2>/dev/null || echo "")
+                [[ "$CODE" == "200" ]] && break
+                if [[ "$attempt" -lt 2 ]]; then
+                  echo "::warning::inventory transport HTTP $CODE (attempt $attempt/2) — retrying in 5s (the abandon-safe scan should have released the pool)"; sleep 5
+                fi
+              done
               if [[ "$CODE" != "200" ]]; then
                 CAUSE="${BODY//[$'\n\r']/ }"
-                echo "::error::inventory returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+                echo "::error::inventory returned HTTP $CODE after 2 attempts: ${CAUSE:-<empty body>}"; exit 1
               fi
               if ! echo "$BODY" | jq -e 'type == "object" and has("functions") and has("event_names") and has("armed_reminders")' >/dev/null 2>&1; then
                 echo "::error::inventory did not return the expected {functions,event_names,armed_reminders} object"; echo "$BODY"; exit 1
@@ -379,6 +394,82 @@ jobs:
                 echo "::error::CUTOVER_HOSTS parsed to zero hosts (value: '$CUTOVER_HOSTS')"; exit 1
               fi
               echo "::notice::execute: cutover host-set (2.1 capture == 2.2 quiesce, P1-8) = [$CUTOVER_HOSTS] (${#HOSTS[@]} host(s))"
+
+              # ---- 2.-1 POOL PRE-CHECK (#6258). Runs BEFORE the 2.0 registry probe on
+              # purpose: 2.0 itself opens a GQL→Postgres connection that would otherwise be
+              # counted against this readiness baseline. Reads inngest-attributable backends
+              # on the dedicated soleur-inngest-prd project (ref pigsfuxruiopinouvjwy) via the
+              # read-only Management API — the SAME filter scheduled-inngest-health.yml uses.
+              # GATE INTENT: refuse the flip unless the pool has enough free headroom that the
+              # 2.1 capture + 2.2 quiesce scans cannot ratchet it to EMAXCONNSESSION MID-FLIP.
+              # We gate on a READINESS BASELINE + BURST HEADROOM, NOT the 80%-of-cap pressure
+              # line (a pool at 79% passes that alert but capture+quiesce then push it over the
+              # cap — the exact failure this gate exists to prevent). Assert:
+              #   inngest_conns + EXPECTED_BURST_COST ≤ POOL_SIZE − SUPAVISOR_WARM_RESERVE
+              # POOL_SIZE=30 (Supavisor default_pool_size — stays 30 per ADR-105); reserve ~8
+              # for Supavisor warm + the mgmt probe; ~10 for the capture+quiesce burst draw →
+              # readiness ceiling = 30−8−10 = 12. FAIL-CLOSED on EVERY non-clean state (count
+              # ≥ ceiling / EMAXCONNSESSION / 401/403/non-2xx / non-JSON / empty / token-unset /
+              # curl-fail) — never a false 0==0 "clean" on an unparsed count.
+              # POOL_SIZE mirrors the inngest project's Supavisor default_pool_size, kept at
+              # 30 per ADR-105 (the #5562 30→15 revert is superseded). If that decision is ever
+              # revisited (decision-challenges.md), reconcile this constant + READINESS_CEILING —
+              # a stale 30 here would over-permit the gate against a smaller live pool.
+              POOL_SIZE=30
+              SUPAVISOR_WARM_RESERVE=8
+              EXPECTED_BURST_COST=10
+              READINESS_CEILING=$(( POOL_SIZE - SUPAVISOR_WARM_RESERVE - EXPECTED_BURST_COST ))
+              if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
+                echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): SUPABASE_ACCESS_TOKEN unset — cannot read pg_stat_activity. Refusing to flip against an unverifiable pool. Set the GH secret (TF github_actions_secret.supabase_access_token) + Doppler prd."; exit 1
+              fi
+              # Endpoint pinned to api.supabase.com — NO env override (a host seam is a
+              # PAT-exfil-via-redirect surface). The 2>/dev/null redirect keeps the
+              # Authorization header out of $POOL_RESP. NOTE: this block runs under
+              # `set -euo pipefail` (unlike the `set -uo` sibling in scheduled-inngest-health.yml),
+              # so the rc is captured via `|| POOL_RC=$?` — a bare `$(…)` capture + `$?`
+              # would let `set -e` abort at the assignment on a non-zero exit BEFORE the rc read,
+              # making the failure branch dead (still fail-closed via the abort, but non-diagnostic).
+              POOL_RC=0
+              POOL_RESP="$(curl --silent --show-error \
+                --request POST \
+                --url "https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query" \
+                --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+                --header "Content-Type: application/json" \
+                --data '{"query":"select coalesce(application_name,'\''(none)'\'') as app, usename, state, count(*)::int as n from pg_stat_activity where backend_type = '\''client backend'\'' and query not ilike '\''%pg_stat_activity%'\'' group by 1,2,3 order by 4 desc"}' \
+                --max-time 15 \
+                -w $'\n%{http_code}' \
+                2>/dev/null)" || POOL_RC=$?
+              POOL_HTTP="${POOL_RESP##*$'\n'}"
+              POOL_BODY="${POOL_RESP%$'\n'*}"
+              # Bounded, newline-stripped body for logs (app_name is client-settable —
+              # never echo it unbounded; head -c 300 defense-in-depth against log injection).
+              # `sed` redacts any sbp_ Management-API PAT for parity with the sibling's scrub_pat
+              # (defense-in-depth — the response body cannot contain the request Authorization
+              # header, but a future error-body reflecting request context would). Trailing
+              # `|| true` stops a head -c 300 SIGPIPE from aborting the step under set -e/pipefail.
+              PAT_SCRUB='s/sbp_[A-Za-z0-9]{20,}/[REDACTED-PAT]/g'
+              POOL_BODY_SAFE="$(printf '%s' "$POOL_BODY" | tr -d '\r' | tr '\n' ' ' | sed -E "$PAT_SCRUB" | head -c 300 || true)"
+              if [[ "$POOL_RC" != "0" ]]; then
+                echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): curl(rc=$POOL_RC) against the Management API — pool unverifiable, refusing to flip."; exit 1
+              fi
+              if printf '%s' "$POOL_BODY" | grep -qF 'EMAXCONNSESSION'; then
+                echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): pool ALREADY at the cap (EMAXCONNSESSION in body). Restart web-host inngest (restart-inngest-server.yml) to drop the pinned pool, re-run op=inventory clean, THEN re-run op=execute. body=${POOL_BODY_SAFE}"; exit 1
+              fi
+              if [[ "$POOL_HTTP" != 2?? ]]; then
+                echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): Management API HTTP $POOL_HTTP (401/403 = token/scope; 5xx = pooler). Refusing to flip on an unreadable pool. body=${POOL_BODY_SAFE}"; exit 1
+              fi
+              if ! printf '%s' "$POOL_BODY" | jq -e 'type == "array"' >/dev/null 2>&1; then
+                echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): body is not a JSON array — cannot compute a count, refusing to flip. body=${POOL_BODY_SAFE}"; exit 1
+              fi
+              INNGEST_CONNS=$(printf '%s' "$POOL_BODY" | jq '[.[] | select(.usename == "postgres" and (.app | startswith("Supavisor") | not) and .app != "mgmt-api") | .n] | add // 0')
+              POOL_BREAKDOWN="$(printf '%s' "$POOL_BODY" | jq -r '.[] | "\(.usename // "?")/\(.app)/\(.state // "null")=\(.n)"' | tr '\n' ' ' | sed -E "$PAT_SCRUB" | head -c 300 || true)"
+              if ! [[ "$INNGEST_CONNS" =~ ^[0-9]+$ ]]; then
+                echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): inngest-attributable count non-numeric ('$INNGEST_CONNS') — refusing to flip. breakdown: ${POOL_BREAKDOWN}"; exit 1
+              fi
+              if (( INNGEST_CONNS + EXPECTED_BURST_COST > POOL_SIZE - SUPAVISOR_WARM_RESERVE )); then
+                echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): inngest_conns=$INNGEST_CONNS + burst=$EXPECTED_BURST_COST exceeds readiness ceiling $READINESS_CEILING (pool_size $POOL_SIZE − warm $SUPAVISOR_WARM_RESERVE). Capture/quiesce would ratchet the pool over the cap mid-flip. Restart web-host inngest (restart-inngest-server.yml) + confirm op=inventory clean, THEN re-run op=execute. breakdown: ${POOL_BREAKDOWN}"; exit 1
+              fi
+              echo "::notice::2.-1 pool pre-check CLEAN — inngest_conns=$INNGEST_CONNS ≤ readiness ceiling $READINESS_CEILING (burst headroom OK). breakdown: ${POOL_BREAKDOWN}"
 
               # ---- 2.0 empty-registry pre-flight (P1-6). GET the web-host registry probe
               # (HMAC over empty body); it forwards the { functions { id } } query to the
@@ -532,17 +623,27 @@ jobs:
               # registry means 2.4 did not land and there is nothing to verify. This is the
               # post-2.4 NON-empty mirror of the 2.0 gate. GET the web-host registry probe.
               SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-              rm -f /tmp/verify-probe
-              CODE=$(curl -s --max-time 30 -o /tmp/verify-probe -w '%{http_code}' \
-                -X GET \
-                -H "X-Signature-256: sha256=$SIG" \
-                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-                "$BASE/inngest-registry-probe" || echo "000")
-              BODY=$(cat /tmp/verify-probe 2>/dev/null || echo "")
+              # #6258 bounded TRANSPORT retry (Finding 11): wraps ONLY the registry-probe transport
+              # request (000/5xx) — NOT the registry_empty precondition VERDICT below (a still-empty
+              # dark registry is a legitimate verdict, not a transient, and must NOT be retried).
+              CODE=000; BODY=""
+              for attempt in 1 2; do
+                rm -f /tmp/verify-probe
+                CODE=$(curl -s --max-time 30 -o /tmp/verify-probe -w '%{http_code}' \
+                  -X GET \
+                  -H "X-Signature-256: sha256=$SIG" \
+                  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                  "$BASE/inngest-registry-probe" || echo "000")
+                BODY=$(cat /tmp/verify-probe 2>/dev/null || echo "")
+                [[ "$CODE" == "200" ]] && break
+                if [[ "$attempt" -lt 2 ]]; then
+                  echo "::warning::verify registry-probe transport HTTP $CODE (attempt $attempt/2) — retrying in 5s"; sleep 5
+                fi
+              done
               if [[ "$CODE" != "200" ]]; then
                 CAUSE="${BODY//[$'\n\r']/ }"
-                echo "::error::verify precondition: registry-probe returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+                echo "::error::verify precondition: registry-probe returned HTTP $CODE after 2 attempts: ${CAUSE:-<empty body>}"; exit 1
               fi
               REG_COUNT=$(echo "$BODY" | jq -r '.function_count // 0')
               if ! echo "$BODY" | jq -e 'type=="object" and has("registry_empty")' >/dev/null 2>&1 \
@@ -589,17 +690,25 @@ jobs:
                 echo "::error::2.6 CRON_PERIOD invalid ('$CRON_PERIOD') — set CUTOVER_CRON_PERIOD_SECONDS to a positive integer ≤ the SHORTEST registered cron period (hour-aligned)."; exit 1
               fi
               echo "::warning::2.6 CRON_PERIOD=${CRON_PERIOD}s is applied to ALL functions (P2-c). The exactly-once verdict is SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s AND hour-aligned. If any cron fires faster than ${CRON_PERIOD}s, re-run op=verify with CUTOVER_CRON_PERIOD_SECONDS set to the SHORTEST registered cron period before trusting the result."
-              rm -f /tmp/verify-runs
-              CODE=$(curl -s --max-time 60 -o /tmp/verify-runs -w '%{http_code}' \
-                -X GET \
-                -H "X-Signature-256: sha256=$SIG" \
-                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-                "$BASE/inngest-doublefire-probe" || echo "000")
-              BODY=$(cat /tmp/verify-runs 2>/dev/null || echo "")
+              # #6258 bounded TRANSPORT retry (Finding 11): wraps ONLY the doublefire transport curl.
+              CODE=000; BODY=""
+              for attempt in 1 2; do
+                rm -f /tmp/verify-runs
+                CODE=$(curl -s --max-time 60 -o /tmp/verify-runs -w '%{http_code}' \
+                  -X GET \
+                  -H "X-Signature-256: sha256=$SIG" \
+                  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                  "$BASE/inngest-doublefire-probe" || echo "000")
+                BODY=$(cat /tmp/verify-runs 2>/dev/null || echo "")
+                [[ "$CODE" == "200" ]] && break
+                if [[ "$attempt" -lt 2 ]]; then
+                  echo "::warning::2.6 doublefire-probe transport HTTP $CODE (attempt $attempt/2) — retrying in 5s"; sleep 5
+                fi
+              done
               if [[ "$CODE" != "200" ]]; then
                 CAUSE="${BODY//[$'\n\r']/ }"
-                echo "::error::2.6 doublefire-probe returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+                echo "::error::2.6 doublefire-probe returned HTTP $CODE after 2 attempts: ${CAUSE:-<empty body>}"; exit 1
               fi
               if ! echo "$BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
                 echo "::error::2.6 doublefire-probe did not return a {runs:[...]} object"; echo "$BODY"; exit 1

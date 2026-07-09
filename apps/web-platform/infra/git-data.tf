@@ -12,6 +12,19 @@
 # cloud-init; the post-merge readiness/cutover script (web-host-driven, over the
 # private net) verifies git + bare-repo root + hook are live BEFORE cutover
 # (hr-fresh-host-provisioning-reachable-from-terraform-apply).
+#
+# REPROVISION-PATH (ADR-103, #6242): git-data resources are OPERATOR_APPLIED_EXCLUSIONS
+# (never touched per-PR), and the per-PR path bridges over SSH to the EXISTING web host so
+# it cannot reprovision this host at all. A sanctioned dispatch-only `git-data-host-replace`
+# `workflow_dispatch` path now exists (apply-web-platform-infra.yml, mirroring
+# registry-host-replace / ADR-100 inngest-host-replace) to re-run this host's cloud-init
+# WITHOUT SSH — a scoped, destroy-guarded `terraform apply -replace='hcloud_server.git_data'`
+# that PRESERVES BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) and
+# the LUKS passphrase by OMISSION. It is a maintenance-window dispatch, not a per-PR apply;
+# these resources remain excluded from the per-PR `-target=` list. Before it, git-data had
+# ZERO non-SSH reprovision path (hr-prod-host-config-change-immutable-redeploy gap). The
+# invariant that a boot-armed heartbeat needs such a path is mechanically enforced by
+# plugins/soleur/test/heartbeat-reprovision-parity.test.ts.
 
 # --- In-band transport keypair (ED25519) ------------------------------------
 # DEDICATED key — NOT reused from tls_private_key.ci_ssh. Mirrors the ci-ssh-key.tf
@@ -221,7 +234,7 @@ resource "hcloud_firewall_attachment" "git_data" {
 # Better Stack cannot PULL a deny-all-public-ingress host, so liveness is a PUSH
 # heartbeat: a web-host cron probes git-data over the private net (git ls-remote /
 # ssh) and pings this heartbeat URL on success; absence-of-ping alerts. Shape
-# mirrors betteruptime_heartbeat.inngest_prd (inngest.tf:258-288).
+# mirrors betteruptime_heartbeat.inngest_prd (inngest.tf:268-298).
 #
 # paused = true initially (same rationale as inngest_prd): until the web-host
 # probe cron is wired + deployed, the gap between apply (Better Stack starts
@@ -237,7 +250,7 @@ resource "betteruptime_heartbeat" "git_data_prd" {
   push      = false
   team_wait = 0
   # Literal name of the only team in this Better Stack workplace (case-sensitive
-  # provider lookup) — see inngest.tf:267-271.
+  # provider lookup) — see inngest.tf:277-281.
   team_name  = "Your team"
   policy_id  = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
   paused     = true
@@ -252,7 +265,7 @@ resource "betteruptime_heartbeat" "git_data_prd" {
 
 # Heartbeat URL → Doppler prd, so the (follow-up) web-host probe cron can read it
 # via the server's existing `doppler secrets download` flow. Mirrors
-# doppler_secret.inngest_heartbeat_url_prd (inngest.tf:313-319).
+# doppler_secret.inngest_heartbeat_url_prd (inngest.tf:323-329).
 #
 # TODO(#5274 PR C / follow-up): the web-host probe cron itself (git ls-remote over
 # the private net to 10.0.1.20, then curl GIT_DATA_HEARTBEAT_URL on success) needs

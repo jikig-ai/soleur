@@ -667,22 +667,75 @@ jobs:
           cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
 
       - name: Mirror image GHCR→zot (crane) + cosign-sign the zot digest
+        id: zot_mirror
         if: steps.zot_bridge.outcome == 'success'
+        # The continue-on-error marker below is BELT: the zot mirror is a SECONDARY/shadow
+        # copy during the ADR-096 soak (GHCR stays primary + break-glass; the pull
+        # side does an atomic GHCR fallback on any zot miss), so a mirror failure
+        # must NEVER red a successful release. #6274: a single `connection reset by
+        # peer` mid blob-upload over the multi-hop CF-tunnel bridge was failing the
+        # whole `release / release` job after a green deploy.
+        continue-on-error: true
         env:
           IMAGE: ${{ inputs.docker_image }}
           DIGEST: ${{ steps.docker_build.outputs.digest }}
           VERSION: ${{ steps.version.outputs.next }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
-          set -euo pipefail
+          # No `set -e` — every failure path exits 0 so the release job stays green
+          # (SUSPENDERS to the continue-on-error belt, mirroring the Sentry-audit
+          # step above). A persistent miss is NOT silently swallowed: it surfaces as
+          # mirror_status=degraded → ::warning:: + step summary + the Slack release
+          # line (consumed by the "Post to Slack (release)" step). Because this step
+          # always exits 0, `steps.zot_mirror.outcome` is always 'success' —
+          # downstream gating MUST read the explicit `mirror_status` OUTPUT.
+          set -uo pipefail
+
+          # Bounded retry to self-heal a transient mid-blob TCP reset over the
+          # multi-hop CF-tunnel bridge (crane/cosign have no built-in retry). 3
+          # attempts, 5s then 15s backoff. Wraps only IDEMPOTENT ops (crane copy
+          # skips already-uploaded blobs; cosign sign re-runs safely).
+          retry() {
+            local n=1 max=3 rc=0
+            local -a sleeps=(0 5 15)
+            until "$@"; do
+              rc=$?
+              if (( n >= max )); then return "$rc"; fi
+              echo "::notice::zot mirror attempt ${n}/${max} failed (rc=${rc}); retrying in ${sleeps[$n]}s"
+              sleep "${sleeps[$n]}"
+              n=$(( n + 1 ))
+            done
+          }
+
+          # On any failure: record the degraded signal (output + ::warning:: + step
+          # summary) and exit 0. The release job stays green; the operator sees a
+          # loud, no-SSH signal (ADR-096 "latency, not availability").
+          # $2 = remediation detail. The failure modes are NOT equivalent: a
+          # crane-copy/install miss leaves the image ABSENT → the host's atomic GHCR
+          # fallback covers it cleanly; a cosign-sign failure leaves it PRESENT-BUT-
+          # UNSIGNED, which post-cutover DEFEATS that fallback (see the cosign call
+          # site). EVERY backfill must re-sign — a bare 'crane copy' does NOT write
+          # the signature referrer — so the default remediation includes cosign sign.
+          degraded() {
+            local rc="$1"
+            local detail="${2:-zot redundancy reduced; backfill via 'crane copy GHCR→zot && cosign sign --yes <zot>@<digest>'.}"
+            echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
+            echo "::warning::zot mirror degraded for ${ZOT:-<image>} (rc=${rc}) — release UNAFFECTED (GHCR primary/break-glass). ${detail} If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+            echo "⚠️ zot mirror degraded (rc=${rc}) — release OK (GHCR primary). ${detail}" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
           # Install crane (SHA-pinned; supply-chain discipline, same as cloudflared).
           CRANE_VERSION="v0.20.2"
           CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
-          curl -fsSL -o /tmp/crane.tgz \
-            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
-          echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c -
-          sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane
-          rm /tmp/crane.tgz
+          install_crane() {
+            curl -fsSL -o /tmp/crane.tgz \
+              "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+              && echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c - \
+              && sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane
+          }
+          retry install_crane || degraded "$?"
+          rm -f /tmp/crane.tgz
 
           # Preserve the FULL org namespace (jikig-ai/…). The pull side
           # (ci-deploy.sh: zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") and
@@ -695,11 +748,22 @@ jobs:
           # 127.0.0.1:5000 (cf-tunnel-registry-bridge docker login). Copy every tag the GHCR
           # build-push wrote (digest preserved → zot manifest byte-identical).
           for TAG in "v${VERSION}" "${COMMIT_SHA}" "latest"; do
-            crane copy "${IMAGE}:${TAG}" "${ZOT}:${TAG}"
+            retry crane copy "${IMAGE}:${TAG}" "${ZOT}:${TAG}" || degraded "$?"
           done
           # Sign the zot digest (same digest; writes a sig referrer into zot so the host's
           # offline verify — same COSIGN_IDENTITY_REGEXP — passes against the zot copy).
-          cosign sign --yes "${ZOT}@${DIGEST}"
+          # A cosign failure HERE (after the copies already landed) leaves the image
+          # present-but-unsigned — DISTINCT from a copy miss: post-cutover the host would
+          # pull the present zot copy (bypassing the atomic GHCR fallback) and then
+          # HARD-BLOCK on signature verify (ci-deploy.sh verify_image_signature → enforce
+          # fail). Pre-cutover (soak) ZOT_ACTIVE=0 so this is latent, and the
+          # zot-entry-gate/soak-gate catch a missing/unsigned copy before the flip. The
+          # remediation MUST re-sign, not just re-copy — hence the distinct $2 detail.
+          retry cosign sign --yes "${ZOT}@${DIGEST}" \
+            || degraded "$?" "the zot copy is PRESENT BUT UNSIGNED (not a clean miss) — re-sign to clear: 'crane copy ${IMAGE}:v${VERSION} ${ZOT}:v${VERSION} && cosign sign --yes ${ZOT}@${DIGEST}'. Post-cutover an unsigned copy would block the host boot (verify hard-fail)."
+
+          echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
+          echo "zot mirror ok: copied v${VERSION}, ${COMMIT_SHA}, latest to ${ZOT} and signed ${ZOT}@${DIGEST}."
 
       - name: Tear down cloudflared registry bridge
         if: always()
@@ -774,6 +838,12 @@ jobs:
           VERSION: ${{ steps.version.outputs.next }}
           COMPONENT_DISPLAY: ${{ inputs.component_display }}
           RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
+          # #6274: surface a degraded zot mirror on the release message. Empty on
+          # the happy path AND when the mirror step was skipped (bridge failed) —
+          # `outputs.mirror_status` is unset there, so the append is inert. Read as
+          # OUTPUT, never `outcome` (the step always exits 0, so outcome is always
+          # 'success').
+          MIRROR_STATUS: ${{ steps.zot_mirror.outputs.mirror_status }}
         run: |
           WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
           if [ -z "$WEBHOOK" ]; then
@@ -814,6 +884,14 @@ jobs:
           # Slack mrkdwn bold is *single asterisk* (not **double**)
           MESSAGE=$(printf '*%s v%s released!*\n\n%s\n\nFull release notes: %s' \
             "$COMPONENT_DISPLAY" "$VERSION" "$BODY" "$RELEASE_URL")
+
+          # #6274: append a loud degraded-mirror line when the zot mirror step
+          # reported degraded. Additive only — the release itself is unaffected
+          # (GHCR primary + break-glass during the ADR-096 soak). ok/empty → no line.
+          if [ "${MIRROR_STATUS:-}" = "degraded" ]; then
+            MESSAGE=$(printf '%s\n\n%s' "$MESSAGE" \
+              "⚠️ zot mirror degraded — release OK (GHCR primary), zot redundancy reduced; backfill needed.")
+          fi
 
           PAYLOAD=$(jq -n \
             --arg text "$MESSAGE" \

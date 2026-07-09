@@ -12,12 +12,13 @@
 --     (REVOKED FROM authenticated, service_role only).
 --   * revoke_jti is NOT granted to authenticated (service-role-only).
 --   * my_revocation_status is granted TO authenticated.
---   * Exactly 26 RESTRICTIVE policies named *_jti_not_denied exist.
---   * Each of the 26 tenant tables has its own per-table presence
+--   * Exactly 27 RESTRICTIVE policies named *_jti_not_denied exist.
+--   * Each of the 27 tenant tables has its own per-table presence
 --     assertion (21 base from mig 068 + workspace_activity (mig 076)
 --     + kb_files (mig 077) + beta_contacts / interview_notes /
---     beta_contact_stage_transitions (mig 126)) — so the named set
---     equals the aggregate count, not just the count.
+--     beta_contact_stage_transitions (mig 126) + beta_contact_access_log
+--     (mig 127)) — so the named set equals the aggregate count, not just
+--     the count.
 
 -- (1) revoke_jti present + SECURITY DEFINER
 SELECT 'revoke_jti_fn_present' AS check_name,
@@ -73,10 +74,11 @@ SELECT 'my_revocation_status_authenticated_grant_present',
               'EXECUTE'
             ) THEN 0 ELSE 1 END::int
 UNION ALL
--- (7) Exactly 26 RESTRICTIVE jti_not_denied policies (21 base + workspace_activity
---     + kb_files from mig 076/077 + beta_contacts/interview_notes/beta_contact_stage_transitions from mig 126)
-SELECT 'jti_deny_policies_count_26',
-       CASE WHEN count(*) = 26 THEN 0 ELSE 1 END::int
+-- (7) Exactly 27 RESTRICTIVE jti_not_denied policies (21 base + workspace_activity
+--     + kb_files from mig 076/077 + beta_contacts/interview_notes/beta_contact_stage_transitions from mig 126
+--     + beta_contact_access_log from mig 127)
+SELECT 'jti_deny_policies_count_27',
+       CASE WHEN count(*) = 27 THEN 0 ELSE 1 END::int
   FROM pg_policies
  WHERE schemaname = 'public'
    AND policyname LIKE '%_jti_not_denied'
@@ -218,6 +220,12 @@ SELECT 'beta_contact_stage_transitions_jti_not_denied_policy_present',
        CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
   FROM pg_policies WHERE schemaname='public' AND tablename='beta_contact_stage_transitions'
    AND policyname='beta_contact_stage_transitions_jti_not_denied' AND permissive='RESTRICTIVE'
+UNION ALL
+-- beta_contact_access_log (mig 127, #6172) — the 27th jti_not_denied policy.
+SELECT 'beta_contact_access_log_jti_not_denied_policy_present',
+       CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
+  FROM pg_policies WHERE schemaname='public' AND tablename='beta_contact_access_log'
+   AND policyname='beta_contact_access_log_jti_not_denied' AND permissive='RESTRICTIVE'
 UNION ALL
 -- (34-36) anon-role REVOKE matrix: none of the three 068 functions
 -- must be EXECUTE-able by anon. Pre-fix, the sentinel asserted only

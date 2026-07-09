@@ -128,9 +128,8 @@ Terraform variable sequencing) and `hr-tf-variable-no-operator-mint-default`.
 - **Prevention:** One-off — these are the normal RED→GREEN transitions of TDD, not
   process errors.
 
-**[review, P1] ADR ordinal collision — planning subagent picked ADR-103 while ADR-103/104/105 were ALREADY merged on origin/main.**
-- **Recovery:** Renumbered ADR-103 → ADR-106 (commit `1f34ab409`); swept the feature's
-  artifact set for the stale ordinal.
+**[review, P1 + ship] ADR ordinal collision — collided TWICE: planning subagent picked ADR-103 while ADR-103/104/105 were ALREADY merged; then the renumbered ADR-106 collided again at ship when a sibling `ADR-106-inngest-cutover-*` landed on origin/main during the pipeline.**
+- **Recovery:** Renumbered ADR-103 → ADR-106 at review (commit `1f34ab409`), then ADR-106 → ADR-107 at ship (Phase-7 post-sync re-check caught the second collision); swept the feature's artifact set for the stale ordinal each time. The double-collision is itself the evidence: the window is the whole ~90-min pipeline, so the gate MUST re-verify at merge, not just at review.
 - **Prevention:** `plan`/`deepen-plan` MUST derive the next ADR number from a
   **freshly-fetched** `origin/main` via
   `ls knowledge-base/engineering/architecture/decisions | grep -oE 'ADR-[0-9]+' | sort -t- -k2 -n | tail -1`,

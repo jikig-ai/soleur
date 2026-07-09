@@ -88,12 +88,14 @@ the three load-bearing unknowns this ADR fixes:**
 - **A dedicated-host webhook reached via web-host fan-out.** Rejected: a new inbound control plane on
   the deny-all-public singleton enlarges its attack surface (SEC-H2). The Doppler-flag **poll** keeps
   the host inbound-closed.
+<!-- lint-infra-ignore start -->
 - **A two-value `armed`/`done` flag** (instead of the 8-state FSM). Rejected: with only `armed`/`done`
   there is no `rollback` value the on-host oneshot can act on, so the **no-SSH rollback is unreachable**
   (P0-1) — the operator would have no no-SSH way to stop the dedicated scheduler. The FSM adds the
   `rollback`/`rolled-back`/`flipping`/`flushed`/`aborted` states that make rollback, mid-flip-reboot
   safety (the split `flipping` PRE-flush / `flushed` POST-flush checkpoints), and the DBSIZE-abort all
   expressible.
+<!-- lint-infra-ignore end -->
 - **Disabling the poll timer after the forward flip** (the pre-review plan's "disable after flip").
   Rejected for the same reason: a disabled timer can never observe a later `INNGEST_CUTOVER_FLIP=rollback`
   write, again making the **no-SSH rollback unreachable** (P0-1). The reconciled rule is: the timer
@@ -315,3 +317,19 @@ default flipped `cax11` → `cpx22`, so it currently provisions **amd64 (cpx22)*
 load-bearing** for this singleton scheduler (see Decision), so the earlier sections' `cax11`/ARM64
 references describe the original intent, not the deployed reality. The host reverts to cax11
 (cheaper) when Ampere restocks, via a host replace (`inngest-host-replace-gate`). See #6178.
+
+## Addendum (2026-07-09) — git-data is the third host to adopt the scoped `-replace` dispatch (#6242)
+
+`inngest-host-replace` (this ADR) was the **second** application of the scoped-`-replace`
+non-SSH reprovision-dispatch mechanism (ADR-096's `registry-host-replace` was the first). #6242
+adds **`git-data-host-replace`** as the **third**: a `workflow_dispatch` job running a scoped,
+destroy-guarded `terraform apply -replace='hcloud_server.git_data'` (server + private NIC + BOTH
+data volume attachments + firewall attachment; both `hcloud_volume.git_data*` and the LUKS
+passphrase preserved by OMISSION). It closes git-data's standing zero-non-SSH-reprovision-capability
+gap on the fleet's most irreplaceable data store.
+
+This is a **re-application** of the established mechanism, not a novel decision — so it carries no
+new ordinal of its own. The genuinely-new cross-cutting rule extracted from the #6238 recurrence
+(a boot-armed non-paused heartbeat MUST have a mechanically-guarded reprovision path) is recorded
+separately in **ADR-103**, whose `heartbeat-reprovision-parity` CI guard enforces it.
+

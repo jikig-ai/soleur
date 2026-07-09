@@ -170,7 +170,7 @@ model {
         description "Severity-ranked operational-notification store (ADR-085, #6007). Mutable read/act/archive state, workspace-grain, Owner-shared reads — SEPARATE from the email-triage WORM statutory ledger. Content-minimized (title + source_ref ids only). GET /api/inbox merges it with email-triage into one severity-ordered feed (statutory pinned first)."
       }
       crmStore = database "Beta-CRM Store" {
-        technology "Supabase (beta_contacts, interview_notes, beta_contact_stage_transitions, mig 126)"
+        technology "Supabase (beta_contacts, interview_notes, beta_contact_stage_transitions, beta_contact_access_log; mig 126 + 127)"
         description "Owner-private beta-tester / prospect CRM (ADR-102, #6165). Third-party contact PII + dual-lens conversation notes + append-only stage-transition history. Owner-only RLS; writes RPC-only via auth.uid()-pinned SECURITY DEFINER functions; the cro/cpo agents read AND write via the crm_* MCP tools (agent-native parity). 24-month retention; Art. 17 via ON DELETE CASCADE + crm_erase_contact."
       }
       tunnel = container "Cloudflare Tunnel" {
@@ -257,7 +257,7 @@ model {
   }
   zotRegistry = system "Self-hosted zot registry" {
     #selfhosted
-    description "OCI-native container registry (zot) on a dedicated Hetzner host (cax11, volume-backed) on the private network (10.0.1.30:5000), behind a deny-all-public firewall — the zero-touch machine-credential registry that replaces GHCR on the pull path (ADR-096, #6122). Hosts pull the SAME @sha256 digests here (crane-copy from CI preserves them); cosign verifies the zot-stored .sig offline against the unchanged pinned root. Plain-HTTP on the private net (integrity via cosign digest-pinning, not TLS); dark-launch gated with an atomic GHCR fallback until the Phase-5 soak retires GHCR push."
+    description "OCI-native container registry (zot) on a dedicated Hetzner host (cx33, 4 vCPU / 8 GB, hel1, volume-backed) on the private network (10.0.1.30:5000), behind a deny-all-public firewall — the zero-touch machine-credential registry that replaces GHCR on the pull path (ADR-096, #6122). Sized cx33 in hel1 (#6288 — the plan's cx32 target does not exist as a Hetzner type; cx33 is the real 8 GB type, offered in hel1 not nbg1) with an ADR-062 --memory=7168m cap so zot's ~35 GB store boot scan cannot host-OOM restart-loop the box. The 60 GB store volume is a disposable GHCR mirror: the nbg1→hel1 migration recreates it fresh and it re-fills from GHCR on the next CI dual-push. Hosts pull the SAME @sha256 digests here (crane-copy from CI preserves them); cosign verifies the zot-stored .sig offline against the unchanged pinned root. Plain-HTTP on the private net (integrity via cosign digest-pinning, not TLS); dark-launch gated with an atomic GHCR fallback until the Phase-5 soak retires GHCR push."
   }
   betterstack = system "Better Stack" {
     #external
@@ -312,10 +312,15 @@ model {
   webapp -> operationalInbox "notifyInboxItem writes inbox_item + GET /api/inbox reads the merged feed (RLS Owner-scoped)" { technology "PostgreSQL / PostgREST" }
   engine -> operationalInbox "inbox_list agent tool reads the same merged severity-ranked feed (agent-native parity)" { technology "MCP tool → PostgREST" }
 
-  // Beta-CRM (ADR-102 / mig 126): the ONLY access path is the agent (no UI/API
-  // surface at MVP), so there is deliberately NO `founder -> crmStore` edge —
-  // add `webapp -> crmStore` only when the deferred UI/API phase lands.
+  // Beta-CRM (ADR-102): two access paths now exist. The agent WRITES + reads via
+  // crm_* MCP tools (mig 126); the read-only UI phase (mig 127, #6172) adds the
+  // `webapp -> crmStore` read edge below. Both reuse the SAME owner-scoped RLS
+  // boundary — the `webapp` path via GET /api/crm/* on the SSR cookie client,
+  // with the detail read going through the auth.uid()-pinned crm_get_contact_detail
+  // audit RPC. There is still deliberately NO `founder -> crmStore` edge (the
+  // founder reaches it only through `webapp` or the agent).
   engine -> crmStore "crm_* MCP tools read AND write the owner-private CRM via auth.uid()-pinned RPCs (agent-native parity)" { technology "MCP tool → PostgREST / RPC" }
+  webapp -> crmStore "GET /api/crm/* RLS-owner-scoped read routes (board/funnel/detail); crm_get_contact_detail logs each PII read to beta_contact_access_log (Art. 5(2))" { technology "PostgREST / RPC (SSR cookie client)" }
   betaContact -> founder "Conversation PII origin — the operator captures notes about this third party" { technology "Conversation" }
 
   // ---- fix-constraints two-stage privileged recovery boundary (ADR-074) ----
