@@ -43,17 +43,29 @@ that violates `hr-prod-host-config-change-immutable-redeploy` / `hr-no-ssh-fallb
 
 ## Decision
 
-**Every non-paused `betteruptime_heartbeat` whose arming/remediation depends on a dedicated
-Hetzner host's boot-time provisioning (an on-host cloud-init cron OR a cloud-init-installed
-systemd timer) MUST have that host's `<host>-host-replace` dispatch path** — a choice option in
+**Every `betteruptime_heartbeat` whose arming/remediation depends on a dedicated Hetzner host's
+boot-time provisioning (an on-host cloud-init cron OR a cloud-init-installed systemd timer) MUST
+have that host's `<host>-host-replace` dispatch path** — a choice option in
 `.github/workflows/apply-web-platform-infra.yml` plus a `-replace='hcloud_server.<host>'` line in
 its scoped, destroy-guarded job.
 
 The invariant is keyed on the **monitored host's remediation**, NOT the cron's file location, so it
 correctly covers inngest's systemd timer and does not misclassify git-data's web-host ping.
-Heartbeats that are `paused = true`, or whose arming is a web-host cron / app-container emit / an
-external probe, are exempt — their remediation is a web-host / container ci-deploy (which always
-exists) or an external probe, never a dedicated-host reprovision.
+Heartbeats whose arming is a web-host cron / app-container emit / an external probe are exempt —
+their remediation is a web-host / container ci-deploy (which always exists) or an external probe,
+never a dedicated-host reprovision.
+
+**The path requirement is deliberately keyed on the arming CLASS, not the declared `paused` value.**
+An earlier framing ("every *non-paused* boot-armed heartbeat MUST have a path") was tightened during
+review (security-sentinel P3 + pattern-recognition F4): 4 of the 6 heartbeats carry
+`lifecycle { ignore_changes = [paused] }`, which decouples the `.tf` `paused` value from the live
+Better Stack state — the established pattern ships a boot-armed heartbeat `paused = true` and
+UI-unpauses it after first deploy, and Terraform never reconciles the source value. Keying the path
+requirement on source `paused` would therefore leave the exact #6238 hole open (a future
+`paused = true` + `ignore_changes = [paused]` + UI-unpaused boot-armed heartbeat with no path). So a
+dedicated-host-boot heartbeat requires the path **regardless of its source `paused` value**. This is
+strictly stronger and stays green today (inngest is `paused = true` but HAS `inngest-host-replace`;
+`registry_disk_prd` is `paused = false` and HAS `registry-host-replace`).
 
 **The enforcement is a static-analysis CI test**, `plugins/soleur/test/heartbeat-reprovision-parity.test.ts`:
 it parses every `betteruptime_heartbeat` block in `apps/web-platform/infra/*.tf`, reads each

@@ -16,16 +16,16 @@
 # dependents (network + BOTH volume attachments + firewall attachment):
 #   - hcloud_server_network.git_data     (network.tf:48; server_id is ForceNew -> replace;
 #       the ONLY private-net transport path 10.0.1.20 for web-host push/pull)
-#   - hcloud_volume_attachment.git_data       (git-data.tf:194; server_id ForceNew -> replace;
+#   - hcloud_volume_attachment.git_data       (git-data.tf:207; server_id ForceNew -> replace;
 #       else /mnt/git-data — the plaintext bare-repo store — boots UNMOUNTED)
 #   - hcloud_volume_attachment.git_data_luks  (git-data-luks.tf:90; server_id ForceNew -> replace;
 #       else /mnt/git-data-luks — the LUKS at-rest store — boots UNMOUNTED)
-#   - hcloud_firewall_attachment.git_data     (git-data.tf:215; server_ids update-in-place —
+#   - hcloud_firewall_attachment.git_data     (git-data.tf:228; server_ids update-in-place —
 #       registry-style INCLUDE, NOT the inngest omission. A fresh Hetzner host has a public
 #       IPv4/IPv6; without re-attaching the deny-all firewall it boots NAKED on its public IP.)
 #
 # DELIBERATELY DIFFERENT FROM REGISTRY (the two data VOLUMES are NOT in the allow-set):
-#   - hcloud_volume.git_data       (git-data.tf:183) — plaintext bare-repo store, and
+#   - hcloud_volume.git_data       (git-data.tf:196) — plaintext bare-repo store, and
 #   - hcloud_volume.git_data_luks  (git-data-luks.tf:79) — LUKS at-rest store
 # are PRESERVED BY OMISSION: an untargeted resource cannot be planned for destroy, so leaving
 # them out of the -target set is simpler AND strictly safer than including them. Because they
@@ -98,7 +98,7 @@ git_data_host_replace_gate() {
             | length
           ),
           git_data_volume_destroyed: (
-            # Named backstop for the plaintext bare-repo store (git-data.tf:183). It is OUT of
+            # Named backstop for the plaintext bare-repo store (git-data.tf:196). It is OUT of
             # the allow-set, so out_of_scope already catches any positive action — this is the
             # operator-legible "your git history would be destroyed" line.
             [ $plan.resource_changes[]?

@@ -89,12 +89,12 @@ else
   pass
 fi
 
-# --- Test 5: FAIL — the LUKS passphrase is ROTATED (random_password update) ---
+# --- Test 5: FAIL — the LUKS passphrase is ROTATED (random_password replace: delete+create) ---
 # A rotated passphrase luksOpens a NEW header on fresh boot, stranding the existing at-rest
 # data. random_password.git_data_luks is out of the allow-set → out_of_scope AND the named
 # luks_passphrase_touched backstop both fire.
-LUKS_PW_UPDATE="$(rc_obj 'random_password.git_data_luks' '"delete","create"')"
-write_plan "${PASS_SET},${LUKS_PW_UPDATE}"
+LUKS_PW_ROTATE="$(rc_obj 'random_password.git_data_luks' '"delete","create"')"
+write_plan "${PASS_SET},${LUKS_PW_ROTATE}"
 if git_data_host_replace_gate "$TMP/plan.json" >/dev/null; then
   fail "T5: a LUKS passphrase rotation (random_password replace) must ABORT (rc=1)"
 else

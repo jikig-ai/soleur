@@ -1840,13 +1840,13 @@ jobs:
   #   hcloud_server.git_data                   (-replace: force a fresh cloud-init boot)
   #   hcloud_server_network.git_data           (network.tf:48 — server_id ForceNew → replace;
   #                                              else the new host has no private NIC 10.0.1.20)
-  #   hcloud_volume_attachment.git_data        (git-data.tf:194 — server_id ForceNew → replace;
+  #   hcloud_volume_attachment.git_data        (git-data.tf:207 — server_id ForceNew → replace;
   #                                              else /mnt/git-data — plaintext bare-repo store —
   #                                              boots UNMOUNTED)
   #   hcloud_volume_attachment.git_data_luks   (git-data-luks.tf:90 — server_id ForceNew → replace;
   #                                              else /mnt/git-data-luks — LUKS at-rest store —
   #                                              boots UNMOUNTED)
-  #   hcloud_firewall_attachment.git_data      (git-data.tf:215 — server_ids update-in-place;
+  #   hcloud_firewall_attachment.git_data      (git-data.tf:228 — server_ids update-in-place;
   #                                              registry-style INCLUDE — else the fresh host boots
   #                                              NAKED on its public IPv4/IPv6)
   # LUKS re-open on fresh boot is SAFE because the passphrase is unchanged: the idempotent isLuks

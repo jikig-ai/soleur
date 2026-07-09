@@ -328,11 +328,14 @@ Better Stack paid-tier features (`policy_id`) are already `var.betterstack_paid_
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** a botched `git-data-host-replace` dispatch (a
-  destroy-guard that wrongly permits a plan destroying `hcloud_volume.git_data` /
-  `hcloud_volume.git_data_luks`, or a `-replace` that boots git-data with the private NIC down)
-  makes a user's workspace bare-git repository (their entire commit history for that workspace)
-  inaccessible or lost.
+- **If this lands broken, the user experiences:** a botched `git-data-host-replace` dispatch —
+  a destroy-guard that wrongly permits a plan (a) destroying `hcloud_volume.git_data` /
+  `hcloud_volume.git_data_luks`, (b) **rotating the LUKS passphrase** (`random_password.git_data_luks`
+  / `doppler_secret.git_data_luks_key` in scope → the fresh boot luksOpens a NEW header, stranding
+  the existing at-rest data — the R2 vector, guarded by `luks_passphrase_touched`), or (c) a
+  `-replace` that boots git-data with the private NIC down / a store attachment unmounted — makes a
+  user's workspace bare-git repository (their entire commit history for that workspace) inaccessible
+  or lost.
 - **If this leaks, the user's workflow/data is exposed via:** n/a for the *guard* deliverables (A/B
   are static tests). For C, the `-replace` re-runs the same cloud-init that already luksOpens the
   at-rest-encrypted volume; the change adds no new exposure vector — the LUKS key stays in the

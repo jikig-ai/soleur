@@ -27,11 +27,15 @@
 //      FAILS, forcing the author to declare arming + reprovision (closes the silent-add hole).
 //   2. the manifest's declared `paused` must match the SOURCE `paused` (drift guard) — unpausing
 //      a dedicated-host-boot heartbeat in .tf without reconciling the manifest FAILS.
-//   3. for arming == "dedicated-host-boot" && !paused (SOURCE value, authoritative), the declared
-//      replace_target MUST resolve to a real choice option + `-replace='hcloud_server.<host>'`
-//      line. paused heartbeats and arming ∈ {web-host-cron, app-emit, external-probe} are exempt
-//      (their remediation is a web-host/container ci-deploy or an external probe, never a
-//      dedicated-host reprovision) — recorded with an exempt_reason.
+//   3. for arming == "dedicated-host-boot" — regardless of the declared `paused` value — the
+//      declared replace_target MUST resolve to a real choice option + `-replace='hcloud_server.
+//      <host>'` line. The path requirement is deliberately paused-INDEPENDENT for this arming
+//      class: 4 of 6 heartbeats carry `lifecycle { ignore_changes = [paused] }`, which decouples
+//      the .tf `paused` value from the live Better Stack state (boot-armed heartbeats ship
+//      paused=true and are UI-unpaused after first deploy; Terraform never reconciles it), so
+//      source `paused` is only a lower bound on liveness. arming ∈ {web-host-cron, app-emit,
+//      external-probe} are exempt (their remediation is a web-host/container ci-deploy or an
+//      external probe, never a dedicated-host reprovision) — recorded with an exempt_reason.
 //
 // Run today the guard PASSES: only registry_disk_prd is dedicated-host-boot + non-paused, and
 // registry-host-replace exists. It is the mechanical gate that would have caught #6238 (a new
@@ -247,13 +251,23 @@ function checkHeartbeatParity(
       );
     }
 
-    const requiresPath = e.arming === "dedicated-host-boot" && !d.paused;
+    // (3) arming == "dedicated-host-boot" → the replace path must exist, INDEPENDENT of the
+    // declared `paused` value. This is deliberately stricter than "non-paused MUST have a path":
+    // 4 of 6 heartbeats carry `lifecycle { ignore_changes = [paused] }` (git_data_prd,
+    // inngest_prd, registry_prd, registry_disk_prd), which DECOUPLES the .tf `paused` value from
+    // the live Better Stack state — the established pattern ships boot-armed heartbeats
+    // `paused = true` and UI-unpauses them after first deploy, and Terraform never reconciles it.
+    // So source `paused` is only a LOWER BOUND on liveness; keying the path requirement on it
+    // would leave the exact #6238 hole open (a future paused=true + ignore_changes + UI-unpaused
+    // boot-armed heartbeat with no path). Requiring the path for the whole boot-armed class closes
+    // that hole and stays green today (inngest is paused but HAS a path; registry_disk is
+    // non-paused and HAS a path). Corroborated by security-sentinel P3 + pattern-recognition F4.
+    const requiresPath = e.arming === "dedicated-host-boot";
 
-    // (3) dedicated-host-boot && !paused → the replace path must exist.
     if (requiresPath) {
       if (!e.replace_target) {
         violations.push(
-          `heartbeat "${e.name}" is arming=dedicated-host-boot and NON-PAUSED but declares no replace_target — a boot-armed non-paused heartbeat MUST have a <host>-host-replace path (the #6238 class).`,
+          `heartbeat "${e.name}" is arming=dedicated-host-boot but declares no replace_target — a boot-armed heartbeat MUST have a <host>-host-replace path regardless of its source \`paused\` value (ignore_changes=[paused] decouples source from live state; the #6238 class).`,
         );
       } else {
         if (!hasChoiceOption(workflow, e.replace_target.choice)) {
@@ -268,10 +282,12 @@ function checkHeartbeatParity(
         }
       }
     } else {
-      // Every non-(dedicated-host-boot && !paused) entry must carry an exempt_reason.
+      // Every non-dedicated-host-boot entry (web-host-cron / app-emit / external-probe) is exempt
+      // from the path requirement — its remediation is a web-host/container ci-deploy or an
+      // external probe, never a dedicated-host reprovision — and must carry an exempt_reason.
       if (!e.exempt_reason) {
         violations.push(
-          `heartbeat "${e.name}" is exempt from the path requirement (arming=${e.arming}, paused=${e.paused}) but records no exempt_reason.`,
+          `heartbeat "${e.name}" is exempt from the path requirement (arming=${e.arming}) but records no exempt_reason.`,
         );
       }
     }
@@ -289,8 +305,12 @@ describe("heartbeat reprovision-parity guard — current state (#6242, ADR-103)"
   });
 
   test("the census is exactly 6 heartbeats (matches the Audit Matrix)", () => {
+    // The `6` is the documented Audit-Matrix count and a deliberate tripwire: a sibling PR that
+    // lands a 7th heartbeat turns this RED, forcing an explicit manifest classification (the
+    // intended forcing function). The manifest length is DERIVED from the discovered count (not a
+    // second hardcoded literal) so a manifest/census reconcile is one edit here + the new row.
     expect(collectHeartbeats().length).toBe(6);
-    expect(MANIFEST.length).toBe(6);
+    expect(MANIFEST.length).toBe(collectHeartbeats().length);
   });
 
   test("registry_disk_prd is the sole dedicated-host-boot + non-paused heartbeat today", () => {
@@ -314,6 +334,25 @@ describe("heartbeat reprovision-parity guard is load-bearing (non-vacuity, AC3)"
     ];
     const violations = checkHeartbeatParity(discovered, MANIFEST, workflow);
     expect(violations.some((v) => v.includes('"rogue"') && v.includes("MANIFEST"))).toBe(true);
+  });
+
+  test("a PAUSED dedicated-host-boot heartbeat with NO replace path ALSO FAILS (paused-independence — the #6238 ignore_changes hole)", () => {
+    // The load-bearing regression guard for security-sentinel P3 / pattern-recognition F4: a
+    // boot-armed heartbeat shipped `paused=true` (+ `ignore_changes=[paused]`, UI-unpaused later)
+    // with no path is the exact #6238 shape. The path requirement MUST fire even though source
+    // paused=true. Mutation check: reverting `requiresPath` to `... && !d.paused` flips this GREEN.
+    const discovered: DiscoveredHeartbeat[] = [
+      { name: "paused_boot_prd", paused: true, file: "synthetic.tf" },
+    ];
+    const manifest: ManifestEntry[] = [
+      { name: "paused_boot_prd", arming: "dedicated-host-boot", paused: true },
+    ];
+    const violations = checkHeartbeatParity(discovered, manifest, workflow);
+    expect(
+      violations.some(
+        (v) => v.includes("paused_boot_prd") && v.includes("no replace_target"),
+      ),
+    ).toBe(true);
   });
 
   test("a non-paused dedicated-host-boot heartbeat with NO replace path FAILS the guard", () => {
