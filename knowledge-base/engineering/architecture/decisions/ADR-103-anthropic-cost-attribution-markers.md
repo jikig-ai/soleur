@@ -1,0 +1,38 @@
+# ADR-103: `SOLEUR_CLAUDE_COST` marker convention + Anthropic Admin Cost/Usage integration
+
+- **Status:** adopting (Phases 1–4 ship the markers + the daily Admin cost-report cron; the `ANTHROPIC_ADMIN_KEY` IaC + vendor-console mint are a sequenced follow-up)
+- **Date:** 2026-07-09
+- **Deciders:** Operator; drafted via `/soleur:go` → plan → this ADR. Domain: Engineering (CTO), Finance (advisory — enables per-model/per-surface spend analysis, creates no new vendor expense).
+- **Related:** ADR-033 (cron claude-eval spawn — amended with I9 for the `--output-format json` cost capture), ADR-029 (pino PII-rename boundary), `cron-anthropic-credit-probe.ts` (the `Ref #5674` follow-up this closes the attribution half of), `inngest-betterstack-token.tf` (the `doppler_secret` no-default-var precedent).
+
+> **Ordinal.** ADR-102 is the highest on `origin/main` at authoring (git-history-verified); 103 is the next free ordinal. `/ship`'s ADR-Ordinal Collision Gate re-verifies against `origin/main` at merge; on a collision, sweep the feature artifact set (`grep -rn 'ADR-103' knowledge-base/project/plans/2026-07-09-feat-anthropic-cost-attribution-fleet-plan.md` + this file + the ADR-033 amendment reference) in the same edit.
+
+## Context
+
+Anthropic spend (~$430/mo on the shared `github-claude-code-key`) could not be attributed per-cron or per-model. The key is byte-identical across Doppler configs and powers the production web-platform Inngest cron fleet plus the agent-runner / leader-loop web sessions. No structured cost marker was logged anywhere self-servable. The four downstream optimizations (Opus→Sonnet tier audit, prompt caching, spawn-only-when-work-exists, per-surface key split) are unmeasurable without per-model / per-cron cost telemetry.
+
+Better Stack ingests the app container's pino stdout via the Vector `app_container_journald` source, **filtered to pino WARN+ (level ≥ 40)** by `app_container_warn_filter`; an `info`-level line does not ship. `scripts/betterstack-query.sh --grep` already matches `raw LIKE '%…%'`.
+
+## Decision
+
+**Emit a `SOLEUR_CLAUDE_COST` structured marker at pino WARN, via a dedicated pino instance that does NOT install the `mirrorToSentry` logMethod hook, from all three Anthropic-spend choke points, plus a distinct `SOLEUR_CLAUDE_COST_DAILY` marker from a new daily Admin cost-report cron.**
+
+1. **WARN level (not INFO).** Required so the existing `app_container_warn_filter` ships the marker without a `vector.toml` change and without relaxing the global INFO filter (which would blow the 3 GB/mo Better Stack quota).
+2. **Dedicated Sentry-mirror-bypassing logger.** `logger.ts` auto-mirrors every WARN+ line to a Sentry breadcrumb on the active scope. A steady per-turn cost-marker stream would evict genuine diagnostics from the shared-scope ring buffer, so `claude-cost-marker.ts` uses its own `pino()` instance with no `hooks.logMethod`. This is the sanctioned observability-of-observability exemption to `cq-silent-fallback-must-mirror-to-sentry`: `emitClaudeCostMarker` / `emitClaudeCostDailyMarker` catch-and-swallow, because a marker-emit failure must never red a cron or fail a session, and mirroring the failure would re-enter the same broken path.
+3. **Three choke points.** (a) `cost-writer.persistTurnCost` / `persistTurnCostAwaitable` — the single funnel for all three session paths (surface the already-accumulated cost). (b) `spawnClaudeEval` — the 15 spawn-based eval crons (NEW capture via `--output-format json`; see ADR-033 I9). (c) `postAnthropicMessage` — the HTTP-transport crons `spawnClaudeEval` misses (`cron-compound-promote` real spend, `credit-probe` canary; tokens-only, `cost_usd:null`, since `/v1/messages` returns no `total_cost_usd`).
+4. **Positive `capture_status` on every substrate exit.** Row-absence is not a probe; the substrate ships `capture_status ∈ {ok, no-result-event, parse-error, timeout}` + `cost_usd:null` on a capture failure, so "capture broke" is a shipped, queryable event distinct from "genuinely $0" and "cron never ran".
+5. **Daily Admin cost-report cron.** `cron-anthropic-cost-report` pulls `GET /v1/organizations/cost_report` (authoritative org-total $) + `/usage_report/messages` (`group_by[]=model`, per-model tokens) once a day and emits `SOLEUR_CLAUDE_COST_DAILY`. The per-model entry is a **field-allowlist (named picks)** — never a `...row` spread — so `api_key_id` / `workspace_id` never reach Better Stack. Reads a read-only `ANTHROPIC_ADMIN_KEY`; self-reports `{status:"key-missing"}` benignly (positive dark marker, no page) while unprovisioned.
+
+## Rejected alternatives
+
+- **(a) Relax the global Vector INFO filter** — rejected: ships the request-log firehose, blows the 3 GB/mo quota.
+- **(b) A targeted Vector transform matching `SOLEUR_CLAUDE_COST` at INFO** — rejected: still a `vector.toml` deploy for no gain over emitting at WARN.
+- **(c) Inngest→GHA dispatch-hybrid for the Admin key** (per the 2026-06-02 credential-heavy-cron learning) — rejected: the admin key is **read-only**, execution is two trivial HTTP GETs, and the `credit-probe` precedent already calls Anthropic direct from the app container. The dispatch-hybrid learning's own scope-note warns against mis-citing it for this inverse (read-only, trivial-execution) workload.
+
+## Consequences
+
+**Easier:** the four optimizations become measurable from Better Stack alone (per-cron `GROUP BY source`, per-model `JSONExtractString(raw,'model')`, daily org total). No Anthropic Console needed.
+
+**Trade-offs:** the markers ride the same WARN lane + 3 GB/mo quota that preserves cron-failure diagnostics — session markers are per-turn, so post-deploy quota re-check is a hard gate (AC15); gate behind sampling if the measured volume is non-trivial. `tfstate` carries the admin key in cleartext (Approach B) — the state backend must stay encrypted + access-restricted; treat exposure as a rotation trigger (plan R-G).
+
+**Non-goals:** this does NOT change any model tier, cadence, or key assignment, and does NOT add spend-vs-budget alerting (the other, still-deferred half of `Ref #5674`).
