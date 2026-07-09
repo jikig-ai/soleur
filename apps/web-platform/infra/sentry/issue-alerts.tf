@@ -835,8 +835,11 @@ resource "sentry_issue_alert" "egress_blocked" {
 # child-cgroup OOM that .State.OOMKilled and the "Server startup" event-frequency
 # both miss), so paging on its event is the host-authoritative restart-rate
 # signal. The monitor does the rate thresholding host-side, so a first-seen page
-# is correct (no event_frequency condition needed — and beta2's conditions_v2
-# has no verified event_frequency support; see ADR-062).
+# is correct (no event_frequency condition needed here). NB: beta2's conditions_v2
+# DOES expose event_frequency — schema-verified in #6278 (first used by
+# zot_mirror_fallback_rate at the bottom of this file); the earlier "no verified
+# support" claim (and ADR-062:120) was stale ("no in-repo precedent" was the only
+# true part, and it no longer holds).
 #
 # op-SCOPED filter (op IS_IN, NOT feature-only): the monitor also emits
 # op=recovered (a "storm cleared" event) under the SAME feature tag; scoping to
@@ -1304,6 +1307,102 @@ resource "sentry_issue_alert" "inbox_action_required_notify_failure" {
       }
     },
   ]
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# ── zot mirror-staleness fallback-rate alarm (#6278 / ADR-096 "Loud, no-SSH signal") ──
+# APPLY-CREATED. Pages when the runtime zot→GHCR fallback / gate-degrade event rate
+# exceeds >3 in 1h (event_frequency count). The LIVE-RUNTIME complement to the
+# create-time CI degraded signal (mirror_status=degraded → Slack ⚠️ + ::warning::)
+# that merged in #6274 / PR #6276 — this pages the founder on a SUSTAINED post-cutover
+# fallback pattern (a single transient ghcr-fallback is self-healing: the host already
+# served via GHCR — runbook zot-registry-revert.md §"When to revert"). Becomes
+# load-bearing at the ADR-096 Phase-5 GHCR-push retirement, when a silently-missing or
+# unsigned zot copy can gate a host boot and this is the only no-SSH page.
+#
+# filter_match="any" over the FOUR runtime signal tag-VALUES (NOT feature+op "all"):
+# the two ci-deploy.sh signals carry feature/op, but the inngest/app fresh-boot
+# soleur-boot-emit events (cloud-init.yml) carry only `stage` — an all-match on
+# feature+op would silently exclude the boot paths. Signals:
+#   registry ∈ {ghcr-fallback, zot-gate-degraded}         (ci-deploy.sh rolling-deploy)
+#   stage    ∈ {inngest_ghcr_fallback, app_ghcr_fallback} (cloud-init.yml fresh boot)
+#
+# SENSITIVITY NOTE (CTO ruling, #6278): event_frequency thresholds PER fingerprinted
+# Sentry issue-group, not on a true cross-signal aggregate. It reliably pages on the
+# DOMINANT shared-tag correlated outage (a rolling-deploy zot miss drives many hosts
+# onto the SAME `ghcr-fallback (web:<tag>)` group → crosses 3/group); a fully-distributed
+# thin spread (<3 in EVERY signal-group simultaneously) would not page. The aggregate
+# `sentry_metric_alert` was REJECTED here — its trigger.action needs a numeric notify
+# target absent from this root (no team data source; the CI-only SENTRY_IAC_AUTH_TOKEN
+# means it is unresolvable in an autonomous session) → would risk paging nobody. The
+# metric-alert upgrade is tracked as a follow-up (unblocks at the first non-founder
+# Sentry seat — the same boundary the sibling rules already defer).
+#
+# Distinct `frequency = 23` avoids Sentry POST-time exact-duplicate dedup (taken:
+# 5,10-22,30,60-62; keyed on action_match+filter_match+frequency+actions-shape, NOT
+# conditions). Events carry only registry/stage/image/host_id/zot_gate_reason tags —
+# no user content.
+resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "zot-mirror-fallback-rate"
+  action_match = "all"
+  filter_match = "any"
+  frequency    = 23
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        value           = 3
+        interval        = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "registry"
+        match = "EQUAL"
+        value = "ghcr-fallback"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "registry"
+        match = "EQUAL"
+        value = "zot-gate-degraded"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "inngest_ghcr_fallback"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "app_ghcr_fallback"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no
+  # ownership rule on this project → falls through to ActiveMembers, paging the solo
+  # founder. Events carry only registry/stage/image/host_id — no cross-tenant content.
   actions_v2 = [
     {
       notify_email = {

@@ -11,6 +11,15 @@ labels: [priority/p3-low, domain/engineering, observability, deferred-automation
 
 # Provision the live zot mirror-staleness Sentry alarm (#6278)
 
+> **IMPLEMENTATION NOTE (supersedes the "Branch B primary" framing below).** During Phase-0
+> the `soleur:engineering:cto` agent ruled **Branch A (`sentry_issue_alert` + `event_frequency`)**
+> as the shipped mechanism, and rejected Branch B (`sentry_metric_alert`): metric-alert actions
+> require a numeric notify target that does not exist in the Sentry TF root and is unresolvable
+> in an autonomous session (CI-only auth token) → risk of paging nobody. The per-issue-group
+> sensitivity of Branch A is accepted (it reliably pages the dominant shared-tag outage) and
+> operator-surfaced; the metric-alert upgrade is a filed follow-up. Full rationale + rejected
+> alternatives: `../specs/feat-one-shot-6278-zot-mirror-staleness-alarm/decision-challenges.md`.
+
 ## Overview
 
 ADR-096 (self-hosted zot registry migration) mitigates the "zot is a boot-time SPOF"
