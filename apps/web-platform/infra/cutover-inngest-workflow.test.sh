@@ -197,6 +197,36 @@ for probe in "${PROBES[@]}"; do
   done
 done
 
+# ============================================================================
+# #6258 — op=execute 2.-1 POOL PRE-CHECK (Test Scenario 3). The live gate can only
+# run post-merge (a new workflow shape 404s on --ref <feature>), so assert the
+# fail-closed shape statically. Anchors are UNIQUE code substrings from the
+# ::error:: echo lines / the arithmetic guard — never the explanatory comment prose
+# (which also contains "FAIL-CLOSED"), per the grep-over-body false-match trap.
+# ============================================================================
+assert "pool pre-check reads SUPABASE_ACCESS_TOKEN (read-only mgmt API)" "grep -qF 'secrets.SUPABASE_ACCESS_TOKEN' '$WF'"
+# Ordering: the pre-check MUST run BEFORE the 2.0 registry probe (2.0 opens its own
+# GQL→Postgres connection that would otherwise be counted against the readiness baseline).
+PRECHECK_LN=$(grep -nF 'READINESS_CEILING=' "$WF" | head -1 | cut -d: -f1)
+REGPROBE_LN=$(grep -nF '2.0 empty-registry pre-flight' "$WF" | head -1 | cut -d: -f1)
+assert "case (a) 2.-1 pool pre-check runs BEFORE the 2.0 registry probe" "[[ -n '$PRECHECK_LN' && -n '$REGPROBE_LN' && '$PRECHECK_LN' -lt '$REGPROBE_LN' ]]"
+assert "case (a) clean pool below ceiling emits ::notice:: and proceeds" "grep -qF '2.-1 pool pre-check CLEAN' '$WF'"
+# (b) gates on readiness baseline + burst headroom, NOT the 80%-of-cap pressure line
+assert "case (b) gates on readiness ceiling + burst headroom (not 80%)" "grep -qF 'INNGEST_CONNS + EXPECTED_BURST_COST > POOL_SIZE - SUPAVISOR_WARM_RESERVE' '$WF'"
+assert "case (b) over-ceiling fails closed" "grep -qF 'exceeds readiness ceiling' '$WF'"
+# (c) EMAXCONNSESSION in body → fail-closed
+assert "case (c) EMAXCONNSESSION → fail-closed" "grep -qF 'pool ALREADY at the cap' '$WF'"
+# (d) 401/403/non-2xx → fail-closed
+assert "case (d) non-2xx HTTP (401/403/5xx) → fail-closed" "grep -qF '401/403 = token/scope; 5xx = pooler' '$WF'"
+# (e) non-JSON / empty / curl-fail / token-unset → fail-closed (no false 0==0 clean)
+assert "case (e1) non-JSON array body → fail-closed" "grep -qF 'body is not a JSON array' '$WF'"
+assert "case (e2) curl failure → fail-closed" "grep -qF 'pool unverifiable, refusing to flip' '$WF'"
+assert "case (e3) token unset → fail-closed" "grep -qF 'Refusing to flip against an unverifiable pool' '$WF'"
+assert "case (e4) non-numeric count → fail-closed" "grep -qF 'inngest-attributable count non-numeric' '$WF'"
+# Every non-clean state is a hard exit — >=6 distinct FAIL-CLOSED error paths.
+FAILCLOSED_N=$(grep -cF '::error::2.-1 POOL PRE-CHECK FAIL-CLOSED' "$WF")
+assert "pre-check has >=6 fail-closed error paths (no silent clean on an unparsed count)" "[[ '$FAILCLOSED_N' -ge 6 ]]"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -gt 0 ]] && exit 1 || exit 0

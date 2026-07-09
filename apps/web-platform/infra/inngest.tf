@@ -198,31 +198,41 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 #   apps/web-platform/infra/inngest-rls/0001_enable_rls_lockdown.sql
 #   .github/workflows/apply-inngest-rls.yml  (merge-apply + daily self-heal)
 
-# ---------------- Pooler config drift (#5558 → #5562) ----------------
+# ---------------- Pooler config + inngest pool footprint (#5558 → #6258) ------
 # During the #5558 EMAXCONNSESSION recovery, the dedicated inngest project's
 # Supavisor pooler `default_pool_size` was raised 15 → 30 LIVE via the Supabase
 # Management API. This is uncommitted out-of-band drift (it lives in the project
 # config, not in any repo file) — VERIFIED live 2026-06-18 via the Management API
 # (GET https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/config/database/pgbouncer
-# → {"default_pool_size":30,"pool_mode":"transaction"}). That raise was a stopgap.
-# The real fix — a CLIENT-side
-# cap, `--postgres-max-open-conns 10` in inngest-server's ExecStart — is already
-# merged (commit 0a6665ea1, #5559; inngest-bootstrap.sh:354) and holds inngest's
-# own connection count well under the project default of 15.
+# → {"default_pool_size":30,"pool_mode":"transaction"}).
 #
-# DECISION (#5562): REVERT `default_pool_size` to the project default (15) and
-# rely on the client cap, rather than codify the raised 30. The revert is a
-# separate out-of-band operator action (NO live mutation in the #5562 PR); this
-# comment records the decision and the invariant.
+# SUPERSEDED INVARIANT (#5558/#5559 → corrected by #6258, ADR-104): the prior record
+# here claimed the client cap `--postgres-max-open-conns 10` bounded inngest's TOTAL
+# connection count under 15. That is FALSE. --postgres-max-open-conns is PER-POOL,
+# not total: `inngest start` opens ~P separate Postgres pools (queue/state/history/api),
+# each honouring the cap independently, so `10` × ~3 pools ratcheted to ~31 pinned idle
+# conns > pool_size 30 → EMAXCONNSESSION under back-to-back cutover-probe scans (#6258).
 #
-# NOTE (#5563 follow-up): the leading-indicator pool probe in
-# .github/workflows/scheduled-inngest-health.yml is DECOUPLED from this revert.
+# CURRENT FIX (#6258, ADR-104): bound the TOTAL footprint + drain idle conns at the
+# CLIENT — `--postgres-max-open-conns 5 --postgres-max-idle-conns 2
+# --postgres-conn-max-idle-time 1` (idle-time in MINUTES). Worst-case total = P×5 ≤ 20
+# for P ≤ 4, comfortably under pool_size 30. See inngest-bootstrap.sh.
+#
+# DECISION (#6258, supersedes #5562): KEEP `default_pool_size` at 30 — do NOT revert to
+# 15. The #5562 revert's premise (that the client cap bounds inngest's *total* under 15) is
+# falsified by the per-pool model above: tightening the upstream pool to 15 while inngest's
+# worst-case burst can approach ~20 would make EMAXCONNSESSION *more* likely, not less. The
+# low client-side per-pool cap is the sole lever; the upstream stays 30 (ample headroom).
+# The #5562 revert is re-scoped to a follow-up (decision-challenges.md); no live mutation here.
+#
+# NOTE (#5563 → #6258): the leading-indicator pool probe in
+# .github/workflows/scheduled-inngest-health.yml is DECOUPLED from default_pool_size.
 # Live verification showed total pg_stat_activity is dominated by Supabase infra
 # baseline (Supavisor/PostgREST/pg_net/pg_cron/exporter/walsenders), so counting
-# it against default_pool_size false-fires. The probe now counts only
-# inngest-attributable client backends (role `postgres`, minus the pooler's own
-# Supavisor connections + the probe) against inngest's CLIENT cap (10,
-# --postgres-max-open-conns) — independent of whatever default_pool_size is set to.
+# it against default_pool_size false-fires. The probe counts only inngest-attributable
+# client backends (role `postgres`, minus the pooler's own Supavisor connections + the
+# probe) against inngest's worst-case TOTAL footprint (INNGEST_CLIENT_CAP = P × per-pool
+# cap 5 ≤ 20) — independent of whatever default_pool_size is set to.
 #
 # WHY a comment and not a TF resource: no Supabase provider is declared in
 # main.tf, and this pooler attribute lives on the OUT-OF-BAND inngest project

@@ -105,7 +105,8 @@ The external watchdog (`.github/workflows/scheduled-inngest-health.yml`) runs a
 pool-utilization probe every 15 min: it reads `pg_stat_activity` on the dedicated
 inngest Supabase project (ref `pigsfuxruiopinouvjwy`) via the Management API and
 files a `[ci/inngest-pool]` issue + Sentry `error` when **inngest-attributable**
-client connections cross ~80% of inngest's CLIENT cap (10, `--postgres-max-open-conns`)
+client connections cross ~80% of inngest's worst-case TOTAL footprint
+(`INNGEST_CLIENT_CAP` = P × per-pool cap 5 ≤ 20; #6258, ADR-104)
 — `pool_pressure`, the leading indicator — or `EMAXCONNSESSION` fires (`pool_exhausted`,
 the cliff). It counts ONLY inngest's own connections (role `postgres`, minus the
 pooler's Supavisor warm connections + the probe), NOT total `pg_stat_activity` (which
@@ -130,7 +131,7 @@ inngest-server for a `[ci/inngest-pool]` alert.** Triage (no-SSH first):
      -H "Authorization: Bearer $SUPA" -H 'Content-Type: application/json' \
      -d '{"query":"select pg_terminate_backend(pid) from pg_stat_activity where state = '\''idle'\'' and state_change < now() - interval '\''10 minutes'\''"}'
    ```
-   The durable fix is already live: inngest-server runs `--postgres-max-open-conns 10` (#5559, `inngest-bootstrap.sh:354`). The probe's leading indicator tracks THIS client cap (`INNGEST_CLIENT_CAP=10` in the workflow), not the pooler `default_pool_size` — so a `pool_pressure` alert means inngest's OWN connections approach 10 (a stuck/looping function holding pooled connections), independent of the separate #5562 `default_pool_size` 30→15 revert (see `apps/web-platform/infra/inngest.tf`).
+   The durable fix (#6258, ADR-104): inngest-server runs `--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1` (idle-time in MINUTES). `--postgres-max-open-conns` is PER-POOL, not total — inngest opens ~P separate Postgres pools (queue/state/history/api), so worst-case total = P × 5 ≤ 20; the idle-conns cap + 1-min idle drain release pinned Supavisor sessions so cutover-probe scans cannot ratchet the pool. The probe's leading indicator tracks this worst-case total (`INNGEST_CLIENT_CAP=20` in the workflow), not the pooler `default_pool_size` — so a `pool_pressure` alert means inngest's OWN connections approach the total ceiling (a stuck/looping function holding pooled connections, or more pools than expected). `default_pool_size` stays 30 — the #5562 30→15 revert is SUPERSEDED (its premise was falsified by the per-pool model; a 15-slot upstream would worsen exhaustion; see `apps/web-platform/infra/inngest.tf` + `decision-challenges.md`).
 4. **`pool_probe_unavailable`** (401/403/non-JSON) is a *soft* mode — the probe itself is degraded, not the pool. Check the printed response body in the run log; a Supabase Management-API 401 is often a validation/scope signal, not pure auth (verify the PAT in Doppler `prd` and the `SUPABASE_ACCESS_TOKEN` GH secret).
 
 ### Last-resort (host login)

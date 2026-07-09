@@ -27,7 +27,7 @@ refs: [6178, 6230, 5558, 5559, 5560, 5562, 5563, 5569]
 5. **AC4 sweeps the stale operator-facing `cap (10)` prose** at `:220`/`:343` + the stale `:354` ref, not just `INNGEST_CLIENT_CAP`. (spec-flow I6)
 
 ### New considerations discovered
-- The `inngest.tf:208-211` recorded decision ("cap 10 holds total under 15") is actively misleading and is corrected as an in-scope deliverable (Phase 4 / ADR-103).
+- The `inngest.tf:208-211` recorded decision ("cap 10 holds total under 15") is actively misleading and is corrected as an in-scope deliverable (Phase 4 / ADR-104).
 - 4th durability parser `ci-deploy.sh:1851` enumerated (substring-robust; note-only). (spec-flow M11)
 - Phase ordinals ≠ execution order for deploy/measure — `/work` follows AC ordering (AC11→AC12). (spec-flow M12)
 
@@ -133,7 +133,7 @@ Diagnosis-first, decided by production observability (`hr-no-dashboard-eyeball-p
 - `apps/web-platform/infra/vector.toml` — **conditional** (only if a new host `logger -t` tag is added).
 
 ## Files to Create
-- `knowledge-base/engineering/architecture/decisions/ADR-103-inngest-postgres-footprint-per-pool-cap-and-idle-drain.md` — the footprint-model decision (see Architecture Decision section). Ordinal provisional.
+- `knowledge-base/engineering/architecture/decisions/ADR-104-inngest-postgres-footprint-per-pool-cap-and-idle-drain.md` — the footprint-model decision (see Architecture Decision section). Ordinal provisional.
 - `knowledge-base/project/specs/feat-one-shot-6258-inngest-pg-pool-cap/decision-challenges.md` — the #5562 User-Challenge (keep `default_pool_size` at 30; revert premise falsified). `ship` renders it into the PR body + files an `action-required` follow-up issue.
 - (NO `apply-inngest-pooler-config.yml` — the `default_pool_size` revert is out of scope; see Phase 3 / #5562 re-scope.)
 
@@ -202,7 +202,7 @@ No new dark surface: the fix changes cap *semantics*, so the existing probe's `I
 Detection fires: the plan **reverses a recorded decision** — the #5558/#5559 "one client cap of 10 bounds inngest's total footprint" invariant (recorded in `inngest.tf:208-211` + runbook, not a formal ADR) is falsified by the per-pool footprint model. This is a cross-cutting invariant every consumer of the connection budget depends on (the health probe cap, the `default_pool_size` decision, the cutover gate).
 
 ### ADR
-- **ADR-103 (provisional ordinal) — "Inngest self-hosted Postgres footprint: low per-pool cap + idle drain; keep `default_pool_size` at 30"** — new ADR (the prior decision was never an ADR; it lived in `inngest.tf` comments). Records: `--postgres-max-open-conns` is per-pool not total; worst-case total = P × open; the client-side low per-pool cap + idle drain (`--postgres-max-idle-conns` + `--postgres-conn-max-idle-time`) is the sole lever; **`default_pool_size` stays 30** — the #5562 30→15 revert is superseded because its premise ("cap holds total under 15") is falsified by the per-pool model (tightening upstream to 15 while inngest bursts to ~20 worsens exhaustion). `## Alternatives Considered`: (a) transaction pooler `:6543` — rejected, breaks inngest's sqlc prepared statements (verdict 0.5, `inngest-bootstrap.sh:346`); (b) client-open-cap-alone at 10 — rejected, per-pool so does not bound total; (c) `pg_terminate_backend` idle-sweep only — rejected as the sole fix (reactive, masks the leak); (d) revert `default_pool_size` to 15 per #5562 — rejected, premise falsified, worsens the failure. **Status: adopting** — flips to `accepted` after Phase 5 post-deploy confirms the bounded plateau. Ordinal provisional (`/ship` re-verifies against origin/main; ADR-102 is the current highest — ADR-103 is next-free).
+- **ADR-104 (provisional ordinal) — "Inngest self-hosted Postgres footprint: low per-pool cap + idle drain; keep `default_pool_size` at 30"** — new ADR (the prior decision was never an ADR; it lived in `inngest.tf` comments). Records: `--postgres-max-open-conns` is per-pool not total; worst-case total = P × open; the client-side low per-pool cap + idle drain (`--postgres-max-idle-conns` + `--postgres-conn-max-idle-time`) is the sole lever; **`default_pool_size` stays 30** — the #5562 30→15 revert is superseded because its premise ("cap holds total under 15") is falsified by the per-pool model (tightening upstream to 15 while inngest bursts to ~20 worsens exhaustion). `## Alternatives Considered`: (a) transaction pooler `:6543` — rejected, breaks inngest's sqlc prepared statements (verdict 0.5, `inngest-bootstrap.sh:346`); (b) client-open-cap-alone at 10 — rejected, per-pool so does not bound total; (c) `pg_terminate_backend` idle-sweep only — rejected as the sole fix (reactive, masks the leak); (d) revert `default_pool_size` to 15 per #5562 — rejected, premise falsified, worsens the failure. **Status: adopting** — flips to `accepted` after Phase 5 post-deploy confirms the bounded plateau. Ordinal provisional (`/ship` re-verifies against origin/main; ADR-102 is the current highest — ADR-104 is next-free).
 
 ### C4 views
 Read all three model files (`model.c4`, `views.c4`, `spec.c4`). **No C4 impact** — enumeration checked and found already-modeled:
@@ -213,7 +213,7 @@ Read all three model files (`model.c4`, `views.c4`, `spec.c4`). **No C4 impact**
 - Correctness: `inngestPostgres.description` ("Dedicated project isolates connection budget") remains accurate (this fix *restores* that isolation guarantee) — no falsified element description to fix.
 
 ### Sequencing
-ADR-103 is authored now (`status: adopting`) with the conservative-values target state; it flips to `accepted` after Phase 5 post-deploy re-measurement confirms the bounded plateau. Authored in THIS feature, not postponed to a separate issue (`wg-architecture-decision-is-a-plan-deliverable`). The `default_pool_size` decision (keep 30, supersede #5562) is recorded here + in `decision-challenges.md` — no separate prod-write sequencing exists to gate.
+ADR-104 is authored now (`status: adopting`) with the conservative-values target state; it flips to `accepted` after Phase 5 post-deploy re-measurement confirms the bounded plateau. Authored in THIS feature, not postponed to a separate issue (`wg-architecture-decision-is-a-plan-deliverable`). The `default_pool_size` decision (keep 30, supersede #5562) is recorded here + in `decision-challenges.md` — no separate prod-write sequencing exists to gate.
 
 ## Domain Review
 
@@ -230,7 +230,7 @@ No cross-domain (product/marketing/sales/finance/legal/ops/support) implications
 - [ ] **AC4** `scheduled-inngest-health.yml` `INNGEST_CLIENT_CAP` (line 157) equals the post-fix worst-case total (≤ 20, per P), not 10; a comment cites the source. **AND the stale prose `10` is swept (spec-flow I6):** no operator-facing `cap (10` remains at `:220`/`:343`, and the stale `inngest-bootstrap.sh:354` line ref is corrected. Verify: `grep -cE "cap \(10|:354" .github/workflows/scheduled-inngest-health.yml` is 0 for the cap-value occurrences (the alert body no longer misreports 10).
 - [ ] **AC5** `op=execute` in `cutover-inngest.yml` runs a pool pre-check before 2.1 capture and fails closed (`::error::`, non-zero) on every non-clean state (pressure, EMAXCONNSESSION, 401/403, non-JSON/empty/curl-fail); proceeds only on a parsed count below threshold. Covered by `cutover-inngest-workflow.test.sh` (5 cases, Test Scenario 3).
 - [ ] **AC6** `inngest.tf:201-232` no longer asserts "client cap 10 holds inngest under 15"; it records the per-pool/total distinction + `default_pool_size` stays 30 (#5562 revert superseded). Verify: `grep -c 'holds inngest' apps/web-platform/infra/inngest.tf` is 0 (or the specific stale sentence is gone).
-- [ ] **AC7** `ADR-103-*.md` exists with `status: adopting`, `## Decision`, `## Alternatives Considered` (≥3), and is referenced in the spec FRs. `knowledge-base/` citations resolve (Glob).
+- [ ] **AC7** `ADR-104-*.md` exists with `status: adopting`, `## Decision`, `## Alternatives Considered` (≥3), and is referenced in the spec FRs. `knowledge-base/` citations resolve (Glob).
 - [ ] **AC8** Runbook pool-pressure section updated (no stale cap-10 "already live / holds under 15"); new flags + reconciled cap documented.
 - [ ] **AC9** All `bash <script>.test.sh` inngest suites + `apps/web-platform/infra/inngest.test.sh` green; `actionlint` clean on edited/new workflows; extracted `run:` shell `bash -c`-checked (composite/action files NOT `bash -n`'d — Sharp Edge).
 - [ ] **AC10** `decision-challenges.md` exists recording the #5562 User-Challenge (keep `default_pool_size` 30; revert premise falsified); a follow-up issue is filed re-scoping #5562. No `apply-inngest-pooler-config.yml`, no pooler PATCH. Additionally enumerate the 4th durability parser (`ci-deploy.sh:1851`, the degraded-durability discriminator — spec-flow M11) and confirm it still classifies the widened flag set as `durable` (substring-robust; note-only).
