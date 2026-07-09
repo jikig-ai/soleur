@@ -225,6 +225,26 @@ export function FilterBar({
           ))}
         </Dropdown>
       ) : null}
+
+      {/* Created by — filter by who created the issue (human author / Soleur /
+          the human who initiated a Soleur-created issue). */}
+      {options.creators.length > 0 ? (
+        <Dropdown label="Created by" activeCount={filters.creators.size}>
+          {options.creators.map((c: string) => (
+            <CheckRow
+              key={`creator-${c}`}
+              label={c}
+              checked={filters.creators.has(c)}
+              onToggle={() =>
+                onChange({
+                  ...filters,
+                  creators: toggleInSet(filters.creators, c),
+                })
+              }
+            />
+          ))}
+        </Dropdown>
+      ) : null}
     </div>
   );
 }
