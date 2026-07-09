@@ -40,7 +40,7 @@ the structural test's field list, and sweep the living ops/observability prose t
 otherwise read as if `mem_used_mb` is still emitted. It is **not** an architectural decision and
 introduces **no** new infrastructure.
 
-The field goes from 18 → 17 keys in `SOLEUR_ZOT_DISK`.
+The reporter line goes from 18 → 17 space-separated tokens (17 → 16 `key=value` fields) in `SOLEUR_ZOT_DISK`.
 
 ## Research Reconciliation — Spec vs. Codebase
 

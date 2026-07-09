@@ -5,7 +5,7 @@
 #   Slice 1 — enriches the SOLEUR_ZOT_DISK reporter (cloud-init-registry.yml) with
 #     zot_restarts / state_status / oom_killed / exit_code / oom_kills_5m / zot_anon_mb /
 #     mem_total_mb / boot_id so a crash self-reports OOM-vs-not from Better Stack with NO SSH.
-#   Slice 2 — bumps the host cx23(4 GB)->cx32(8 GB) + adds an ADR-062 --memory=7168m cap so
+#   Slice 2 — bumps the host cx23(4 GB)->cx33(8 GB) + adds an ADR-062 --memory=7168m cap so
 #     zot's ~35 GB store boot scan cannot host-OOM restart-loop the box.
 #
 # SOUND plateau signal = across a soak window that spans the full startup scan + first
