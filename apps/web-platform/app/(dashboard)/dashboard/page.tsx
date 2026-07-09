@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
 import { swrKeys, jsonFetcher } from "@/lib/swr-config";
+import { isRevocationBounce } from "@/lib/auth/revocation-bounce";
 import { useConversations } from "@/hooks/use-conversations";
 import type { ArchiveFilter } from "@/hooks/use-conversations";
 import { useOnboarding } from "@/hooks/use-onboarding";
@@ -148,8 +149,13 @@ export default function DashboardPage() {
     paths: Record<string, PathStat>;
   }> => {
     const res = await fetch("/api/dashboard/foundation-status");
-    if (res.status === 401) {
-      router.push("/login");
+    // GAP F (ADR-067 staleTimes): a session-revocation bounce is a
+    // principal-LEAVING boundary — HARD-nav to /login so the App Router Router
+    // Cache is wiped (a soft push would leave the ejected principal's warm RSC
+    // shells reachable). isRevocationBounce detects BOTH a direct 401 AND the
+    // #4307 middleware 302→/login (which fetch follows to 200 HTML).
+    if (isRevocationBounce(res)) {
+      window.location.assign("/login");
       throw new DashFoundationError("redirect"); // navigating away — hold skeleton
     }
     if (res.status === 503) throw new DashFoundationError("provisioning");
