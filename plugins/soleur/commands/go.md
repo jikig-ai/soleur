@@ -59,6 +59,19 @@ If the user wants to continue the current feature, delegate to `soleur:work` via
 
 ## Step 2: Classify and Route
 
+### Step 2.0: Harness adapter (never improvise)
+
+Before applying the routing table, detect the active harness and use the correct invocation surface. Canonical implementation: `plugins/soleur/lib/harness.ts`.
+
+| Harness | Skills | Agents | Entry command |
+|---------|--------|--------|---------------|
+| Claude Code | **Skill tool** — `soleur:<skill>` | **Task tool** — `subagent_type` | `/soleur:go` |
+| Grok Build | **Slash command** — `/<skill>` (e.g. `/one-shot`) | **spawn_subagent** | `/go` (not `/soleur:go`) |
+
+**Routing contract:** when a table row names `soleur:<skill>` or an agent, invoke it via the harness adapter (`invokeSkill` / `spawnAgent` semantics in `harness.ts`). Pass the original user input as args/prompt. **Do NOT** improvise workflow steps, explore the filesystem as a substitute, or hand-roll plan/work/review phases when a registered route exists.
+
+If harness is unknown and Skill/slash tools are unavailable, STOP and suggest `grok inspect` + `grok --trust` (Grok) or `claude --plugin-dir ./plugins/soleur` (Claude).
+
 Analyze the user input and classify intent using semantic assessment:
 
 <!-- eval-gate:block:go-routing:start -->
@@ -74,7 +87,12 @@ Analyze the user input and classify intent using semantic assessment:
 | default | Everything else — features, exploration, questions, generation, vague scope | `soleur:brainstorm` |
 <!-- eval-gate:block:go-routing:end -->
 
-If intent is clear, invoke the skill directly via the **Skill tool** with the original user input as `args`. No confirmation step. **Exception:** rows whose `Routes To` cell names an agent (e.g., `clo`) instead of a `soleur:<skill>` skill use the **Task tool** to spawn the agent — the agent's prompt receives the original user input as the task description. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
+If intent is clear, route without confirmation:
+
+- **Claude Code:** invoke via the **Skill tool** (`soleur:<skill>`, args = original user input). Agents: **Task tool** with `subagent_type` and prompt = original user input.
+- **Grok Build:** invoke via **slash command** (`/<skill>` with args appended). Agents: **spawn_subagent** with the agent id and prompt = original user input.
+
+Map `soleur:<skill>` cells in the table to Grok `/<skill>` at invocation time (strip the `soleur:` prefix). **Exception:** rows whose `Routes To` cell names an agent (e.g., `clo`) instead of a `soleur:<skill>` skill spawn that agent — never substitute a manual workflow. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
 
 **PR-vs-issue type resolution (when `#N` or a bare number is the input):** Before evaluating the `clo-attestation` and `review` rows, run `gh issue view N --json body,title,state 2>/dev/null` to determine whether `N` is an issue. If `gh issue view` succeeds AND the body satisfies the `clo-attestation` predicate, route to clo. If `gh issue view` succeeds but no `clo-attestation` match, route to `soleur:review` only after confirming `gh pr view N` ALSO succeeds (otherwise the input is a non-attestation issue — route to default/brainstorm with the issue body as context). This ordering closes the gap that caused `/soleur:go #3998` to mis-route an issue to PR review. See `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`.
 
