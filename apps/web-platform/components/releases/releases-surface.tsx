@@ -10,8 +10,9 @@
 // revalidation, StaleRefreshBar when a background refresh fails while stale data
 // is shown, ErrorCard only on the cold (`!data && error`) failure.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
+import { markReleasesSeen } from "@/lib/releases-seen";
 import { ErrorCard } from "@/components/ui/error-card";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { RefreshShimmer } from "@/components/ui/refresh-shimmer";
@@ -61,6 +62,13 @@ export function ReleasesSurface() {
   // The server returns newest-first, so the true latest is index 0 — pin the
   // "Latest" badge to its tag so it stays correct under any sort/filter.
   const latestTag = releases?.[0]?.tag;
+
+  // Viewing this feed clears the nav "new version" dot: record the latest tag as
+  // seen on this device (feat-releases-nav-badge). Idempotent — no-ops when the
+  // value is unchanged, so it won't churn on re-render.
+  useEffect(() => {
+    if (latestTag) markReleasesSeen(latestTag);
+  }, [latestTag]);
 
   const visible = useMemo(() => {
     const all = releases ?? [];

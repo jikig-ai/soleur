@@ -23,6 +23,7 @@ import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-ite
 import { InboxNavBadge } from "@/components/dashboard/inbox-nav-badge";
 import { ConversationsNavBadge } from "@/components/dashboard/conversations-nav-badge";
 import { WorkstreamNavBadge } from "@/components/dashboard/workstream-nav-badge";
+import { ReleasesNavBadge } from "@/components/dashboard/releases-nav-badge";
 import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
 import {
   isApplePlatform as detectApplePlatform,
@@ -491,7 +492,7 @@ export default function DashboardLayout({
                 data-tour-id={RELEASES_HREF}
                 title={collapsed ? "Releases" : undefined}
                 aria-current={releasesActive ? "page" : undefined}
-                className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                className={`relative flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
                   releasesActive
                     ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
                     : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
@@ -499,6 +500,11 @@ export default function DashboardLayout({
               >
                 <RocketIcon className="h-4 w-4 shrink-0" />
                 <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Releases</span>
+                {/* "New version published" cue — a calm gold dot when a web-v*
+                    release newer than this device's last-seen tag has shipped
+                    (feat-releases-nav-badge). Mounted inside the layout's
+                    <SWRConfig> so its fetch dedups with the Releases surface. */}
+                <ReleasesNavBadge collapsed={collapsed} />
               </Link>
               <a
                 href="https://soleur-ai.betteruptime.com/"
