@@ -50,6 +50,7 @@ import {
 } from "./permission-callback-bash-batch";
 import { warnSilentFallback } from "./observability";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
+import { isSupportAllowedSkill } from "./support-directive";
 
 const log = createChildLogger("permission");
 
@@ -226,6 +227,15 @@ export interface CanUseToolContext {
   repoName: string;
   session: AgentSession;
   controllerSignal: AbortSignal;
+  /**
+   * Dispatch persona (feat-wire-concierge-support-chat, ADR-109). `"support"`
+   * scopes the Skill surface to `SUPPORT_SKILL_ALLOWLIST` (default-deny). Undefined
+   * = the Command Center default (every Skill flows through `isSafeTool`). This is
+   * defense-in-depth for a model that emits a non-loaded skill despite the SDK
+   * `Options.skills` filter; the deny returns a user-relayable message (NOT a
+   * silent removal — ADR-070 reconciliation).
+   */
+  persona?: "support";
   deps: CanUseToolDeps;
 }
 
@@ -877,6 +887,40 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       }
       logPermissionDecision("canUseTool-agent", toolName, "allow");
       return allow(toolInput);
+    }
+
+    // Support-persona Skill allowlist (feat-wire-concierge-support-chat, ADR-109).
+    // Placed BEFORE the `isSafeTool` allow (which whitelists "Skill" wholesale) so
+    // a support turn can only invoke a support-appropriate skill. Default-deny: a
+    // Skill call is allowed only if the (bare↔FQN-normalized) name ∈
+    // SUPPORT_SKILL_ALLOWLIST ({kb-search}); everything else denies with a clear,
+    // model-relayable message (NOT a silent removal — ADR-070). Defense-in-depth
+    // for the emit-a-non-loaded-skill case; the SDK `Options.skills` filter is the
+    // primary lever. Non-support personas are unaffected (fall through to isSafeTool).
+    if (ctx.persona === "support" && toolName === "Skill") {
+      const requested =
+        typeof (toolInput as { skill?: unknown }).skill === "string"
+          ? ((toolInput as { skill: string }).skill)
+          : "";
+      if (isSupportAllowedSkill(requested)) {
+        logPermissionDecision("canUseTool-support-skill", toolName, "allow", requested);
+        return allow(toolInput);
+      }
+      log.info(
+        { sec: true, tool: toolName, decision: "deny-support-skill", requested },
+        "Support persona denied a non-allowlisted skill",
+      );
+      logPermissionDecision(
+        "canUseTool-support-skill",
+        toolName,
+        "deny",
+        requested || "(missing)",
+      );
+      return {
+        behavior: "deny" as const,
+        message:
+          "Support can only use app-help (knowledge-base search). For engineering work — building, fixing, or deploying — use \"Ask an agent\" (the Command Center).",
+      };
     }
 
     // Safe SDK tools (no filesystem-path inputs). See tool-path-checker.ts.
