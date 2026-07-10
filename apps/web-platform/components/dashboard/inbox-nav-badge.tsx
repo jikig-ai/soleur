@@ -16,7 +16,7 @@
 import useSWR from "swr";
 import { fetchMergedInbox } from "@/components/inbox/inbox-surface";
 import { swrKeys } from "@/lib/swr-config";
-import { NavCountBadge } from "@/components/dashboard/nav-count-badge";
+import { NavCountBadge, NavDotBadge } from "@/components/dashboard/nav-count-badge";
 import { warnSilentFallback } from "@/lib/client-observability";
 import {
   countOutstandingActionRequired,
@@ -61,17 +61,11 @@ export function InboxNavBadge({ collapsed }: { collapsed: boolean }) {
 
   // No decisions pending, but unread updates → a calm gold dot (no number).
   if (hasUnreadFyi(data)) {
-    return collapsed ? (
-      <span
-        data-testid="inbox-nav-badge-dot-collapsed"
-        aria-hidden="true"
-        className="pointer-events-none absolute right-1.5 top-1.5 hidden h-2 w-2 rounded-full bg-soleur-accent-gold-fill ring-2 ring-soleur-bg-surface-1 md:block"
-      />
-    ) : (
-      <span
-        data-testid="inbox-nav-badge-dot"
-        aria-label="New updates in your inbox"
-        className="ml-auto h-2 w-2 shrink-0 rounded-full bg-soleur-accent-gold-fill"
+    return (
+      <NavDotBadge
+        collapsed={collapsed}
+        testId="inbox-nav-badge-dot"
+        label="New updates in your inbox"
       />
     );
   }
