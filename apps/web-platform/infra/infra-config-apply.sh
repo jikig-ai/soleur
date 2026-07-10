@@ -194,6 +194,32 @@ done
 
 logger -t "$LOG_TAG" "complete: $WRITTEN_COUNT/$TOTAL_COUNT files written, $FAIL_COUNT failed"
 
+# --- Orphan-hook self-check (#6178) ---
+# A hooks.json execute-command that points at a /usr/local/bin script NOT present on
+# disk after this push is a DANGLING HOOK: the webhook (adnanh/webhook) fork/exec's a
+# missing file and returns an EMPTY HTTP 500 — silent, fast, and undiagnosable without
+# SSH. This exact drift (hooks.json advertised inngest-registry-probe but the script
+# was never delivered) fast-500'd the cutover op=verify / op=execute empty-registry
+# gate. Cross-check the JUST-WRITTEN hooks.json against on-disk scripts and fail LOUD +
+# emit a monitored marker so the drift self-reports at DELIVERY time (before it can
+# 500) instead of silently. Only /usr/local/bin/* commands are guarded — the handler
+# itself (/usr/local/bin/infra-config-apply.sh) is cloud-init/SSH-bridge delivered, not
+# FILE_MAP, but it exists on disk in prod so it passes the on-disk existence check.
+hooks_dest="${DESTDIR}/etc/webhook/hooks.json"
+if [[ -f "$hooks_dest" ]] && command -v jq >/dev/null 2>&1; then
+  while IFS= read -r cmd_path; do
+    [[ -n "$cmd_path" ]] || continue
+    case "$cmd_path" in /usr/local/bin/*) : ;; *) continue ;; esac
+    if [[ ! -e "${DESTDIR}${cmd_path}" ]]; then
+      logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_HOOK_ORPHAN dangling_hook_command=$cmd_path reason=script_not_on_disk_after_push"
+      echo "ERROR: hooks.json advertises $cmd_path but no script is on disk after this push — webhook exec of this hook would fast-500 (dangling hook)" >&2
+      [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
+      FILES_JSON+="{\"file\":\"$cmd_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"orphan_hook_command\"}"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+  done < <(jq -r '.[]."execute-command" // empty' "$hooks_dest" 2>/dev/null || true)
+fi
+
 # --- Write state file (before self-restart) ---
 END_TS=$(date +%s)
 EXIT_CODE=0

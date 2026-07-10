@@ -62,12 +62,18 @@ afterEach(() => {
 });
 
 describe("buildWorkstreamTools", () => {
-  it("registers exactly the read tool name (auto-approve namespaced id)", () => {
+  it("registers the read tool name (auto-approve) alongside the write tools", () => {
     const built = buildWorkstreamTools({ userId: "u1" });
-    expect(built.toolNames).toEqual([
+    expect(built.toolNames).toContain(
       "mcp__soleur_platform__workstream_issues_list",
-    ]);
-    expect(built.tools).toHaveLength(1);
+    );
+    // Read tool is still present + invokable (write tools covered separately).
+    expect(
+      built.tools.some(
+        (t) =>
+          (t as unknown as { name: string }).name === "workstream_issues_list",
+      ),
+    ).toBe(true);
   });
 
   it("threads userId into the accessor and returns its mapped issues (read parity)", async () => {
