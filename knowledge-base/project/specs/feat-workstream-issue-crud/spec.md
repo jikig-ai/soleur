@@ -56,9 +56,11 @@ actually manage work from the board — they must drop to GitHub.
 - **FR4 — Persisted status change.** Moving an issue's status/column persists (via label
   mutation on the issue); the UI shows an async "Syncing to Project board…" state because
   the board mirror is eventually-consistent. Wireframe: frame 17.
-- **FR5 — Close / reopen.** A "Close issue" action with a reason (Completed → Done /
-  Not planned → Cancelled) closes the issue; a closed issue offers "Reopen". Wireframe:
-  frames 18–19.
+- **FR5 — Close / reopen.** A "Close issue" action with a reason (Completed / Not planned)
+  closes the issue; the reason is recorded on GitHub (`state_reason`) and shown in the drawer,
+  but BOTH reasons fold the card to **Done** — the board model has no Cancelled column
+  (`lib/workstream.ts:16`). A closed issue offers "Reopen" (`PATCH state=open`), which leaves
+  Done and lands in the column its surviving labels derive (else Backlog). Wireframe: frames 18–19.
 - **FR6 — Creator attribution (ADR-104).** Every create funnels through `createIssue()`
   with `initiatorLogin` resolved server-side from the session (never request body),
   stamping `<!-- soleur:initiated-by <login> -->`.
