@@ -91,122 +91,56 @@ Operational: no-SSH dispatch via existing apply_target + webhook paths; verifiab
 ## Architecture Decision (ADR/C4)
 No new architectural decision. Re-uses ADR-068 §(c) contract exactly (shape-only + distinct runtime probe). No C4 change (infra script + comments + workflow updates inside existing containers).
 
-## Implementation Phases
+## Implementation Phases (collapsed per DHH mechanical review — thin probes slice)
 
-### Phase 0 — Setup & Verification (no code change)
-- [ ] In worktree, verify current state on origin/main vs worktree (pure gate, test, server.tf comments, readiness, workflows, runbooks).
-- [ ] Run `git grep -n "requires_runtime_bind_probe=true" apps/web-platform/infra/ .github/workflows/ knowledge-base/engineering/operations/runbooks/`
-- [ ] Confirm LUKS soak marker still absent in Doppler prd (re-confirm deferral of full orchestrator).
-- [ ] Read full recent learnings + ADR-068/105/106 + 2026-07-04 multi-host gate plan (Phase 5 deferral language).
-- [ ] Run `bun test apps/web-platform/infra/lb-weight-gate.test.sh` (baseline green).
-- [ ] Emit observability block skeleton (see Phase 4).
+This is a **minimal probes-first slice** (no weight shift, no drain, no LUKS soak, dark-launchable). Phases collapsed to three.
 
-**Deliverable:** Research Insights + "no change" commit or none.
+### Phase 0 — Setup & Contract Verification
+- [ ] Verify pure gate + test + server.tf HARD GATE + readiness.ts + workflows on origin/main.
+- [ ] Confirm the shape-only contract (`requires_runtime_bind_probe=true` + banner) and that the pure gate reads *only* injected env.
+- [ ] Confirm LUKS soak marker absent (full orchestrator correctly deferred).
+- [ ] Read ADR-068 + key July 2026 cutover learnings (DI-C3, no-SSH, preflight bounding).
+- [ ] Baseline tests green.
 
-### Phase 1 — Doppler sourcing wrapper (`lb-weight-gate-doppler.sh`)
-- [ ] Create `apps/web-platform/infra/lb-weight-gate-doppler.sh` (thin, set -euo pipefail, guarded doppler).
-  - Guard: `command -v doppler >/dev/null && [[ -n "${DOPPLER_TOKEN:-}" ]]`
-  - Source exactly the vars the pure gate expects (SOLEUR_PROXY_BIND, SOLEUR_PROXY_PEER_ALLOWLIST, SOLEUR_HOST_ROSTER, GIT_DATA_STORE_ENABLED, GIT_DATA_LUKS_CUTOVER_AT, GIT_DATA_LUKS_SOAK_DAYS) via `doppler secrets get --plain --project soleur --config prd` (with timeout/retry `|| true` + structured fail).
-  - `export` + `exec ./lb-weight-gate.sh "$@"` (or equivalent).
-  - Structured output + exit code propagation.
-  - `logger -t lb-weight-gate-doppler ...` for all paths.
-  - GHA-friendly (DOPPLER_TOKEN from secret; `doppler run -p soleur -c prd -- ./lb-weight-gate-doppler.sh`).
-- [ ] Add/update sibling `.test.sh` (env -i, stub doppler, assert sub_condition lines + rc + banner).
-- [ ] Minimal docs comment in the wrapper referencing the pure gate contract and "SHAPE-ONLY — NOT weight auth".
-
-**Files to edit/create:**
-- Create: `apps/web-platform/infra/lb-weight-gate-doppler.sh`
-- Edit: `apps/web-platform/infra/lb-weight-gate.test.sh` (or new doppler test)
-- (Later) reference in apply or cutover workflows.
-
-### Phase 2 — On-host runtime gate (separate from shape)
-- [ ] Create or extend on-host script (delivered via existing infra-config webhook pattern like inngest-*.sh or git-data scripts) or a new `runtime-bind-gate.sh`.
-  - Docker exec: `docker exec soleur-web-platform curl -fsS -H 'Host: localhost' http://127.0.0.1:3000/internal/readyz`
-  - Require `workspaces_writable && populated` (reuse readiness logic or call equivalent).
-  - N≥2 consecutive successes (fail-closed on any failure in window; timeout per probe).
-  - Disk attach: `ls /dev/disk/by-id/scsi-0HC_Volume_*` (or equivalent device identity) + structured output.
-  - Emit `requires_runtime_bind_ok` or `runtime_gate_fail sub_condition=...` + logger.
-- [ ] Make it callable in GHA dispatch context (or via existing host script delivery).
-- [ ] Test: real FS temp dirs (like readiness test), N-consec transients, attach failure cases.
+### Phase 1 — On-host runtime gate (thin, concrete delivery)
+- [ ] Add a thin on-host runtime gate (target < ~60 LOC, reuse existing readyz logic).
+  - `docker exec soleur-web-platform curl -fsS -H 'Host: localhost' http://127.0.0.1:3000/internal/readyz`
+  - Require `workspaces_writable && populated`.
+  - N≥2 consecutive (fail-closed).
+  - Disk attach check (`ls /dev/disk/by-id/scsi-0HC_Volume_*` or equivalent).
+  - Emit structured `runtime_gate_ok` / `runtime_gate_fail sub_condition=...`.
+- **Concrete delivery (choose one minimal path):**
+  - (Preferred) Add to existing infra-config delivery (like `inngest-*.sh`) via `infra-config-apply.sh` FILE_MAP + webhook, or
+  - Start with a CI exerciser in a recreate job parity test (no full on-host delivery yet).
+- [ ] Tests: real FS, N-consec, attach failure, using existing patterns.
 
 **Files:**
-- Create: `apps/web-platform/infra/runtime-bind-gate.sh` (or place in existing host script dir)
-- Update tests + parity if delivered via config.
+- Create (thin): `apps/web-platform/infra/runtime-bind-gate.sh` (or extend an existing delivered host script).
+- Update: relevant tests, parity, and (if chosen) `infra-config-apply.sh` / FILE_MAP.
 
-### Phase 3 — Verifiable evidence seam for #6230 web-2 quiesce
-- [ ] Extend the web-2-recreate / quiesce path (or add marker in recreate job) to emit machine-readable evidence:
-  - Timestamped `logger -t web2-quiesce "web2_quiesce_complete recreate_target=... ts=..."`
-  - Or lightweight capture JSON (similar to cat-*.sh) posted via existing deploy-status or new marker.
-- [ ] Update runbook `inngest-server.md` step 1a and SEAM to assert the evidence (e.g. "confirm marker in Better Stack / GHA summary / deploy-status reason").
-- [ ] Update `cutover-inngest.yml` comments + any DI-C3 notes to reference the new observable.
-- [ ] Add (or extend) a discoverability test (no SSH) that asserts the marker after a recreate dispatch.
+### Phase 2 — Integration, tests, comments, gates, observability
+- [ ] Use direct `doppler run -p soleur -c prd -- ./lb-weight-gate.sh` pattern (document the 6 vars in comments). No new doppler shim file.
+- [ ] Minimal fact-refresh comments only in runbooks / `cutover-inngest.yml` (note current TF + deploy-status artifacts for web-2 recreate). Heavy #6230 evidence seam deferred.
+- [ ] Add any new `logger -t` tags (if introduced by runtime gate) to `vector.toml` + tests in same change.
+- [ ] Short observability citation (reference existing pattern + "add tag if new").
+- [ ] Run gdpr-gate (Phase 2.7 of plan skill); fold minimal findings.
+- [ ] IaC / no-SSH / user-brand checks (light — script on existing dispatch paths).
+- [ ] Update tests (unit + dispatch exercise for runtime gate).
+- [ ] `<!-- lint-infra-ignore -->` only where needed for deferred orchestrator prose.
 
-**Constraint:** Do not introduce new operator manual steps. Use existing dispatch + recreate lifecycle.
+**Deliverables:** Thin runtime gate + tests + contract-preserving comments + gates passed.
 
-### Phase 4 — Observability (5-field block mandatory)
-Add to plan + implement:
+## Acceptance Criteria (updated per DHH mechanical review)
 
-```yaml
-liveness_signal:
-  what: "lb-weight-gate-doppler + runtime-bind-gate success markers + web2-quiesce evidence"
-  cadence: "per-dispatch / per-probe"
-  alert_target: "Better Stack (via Vector journald) + GHA step summary"
-  configured_in: "apps/web-platform/infra/*.sh + cutover-inngest.yml + vector.toml"
-
-error_reporting:
-  destination: "Sentry (if elevated) + structured ::error:: / gate_fail lines in GHA"
-  fail_loud: "non-zero exit + sub_condition=... or runtime_gate_fail"
-
-failure_modes:
-  - mode: "shape gate fails (sub_condition=...)"
-    detection: "gate_fail on stderr + exit 1 from doppler wrapper"
-    alert_route: "GHA failure + Better Stack"
-  - mode: "runtime gate fails (N-consec or attach)"
-    detection: "runtime_gate_fail marker or readyz non-2xx"
-    alert_route: "GHA + journald"
-  - mode: "web2 quiesce evidence missing"
-    detection: "missing marker after recreate dispatch"
-    alert_route: "followthrough / manual checklist assertion"
-
-logs:
-  where: "journald (logger -t) → Vector (app_container + host_scripts) → Better Stack; GHA logs"
-  retention: "per Vector / Better Stack policy"
-
-discoverability_test:
-  command: "doppler run -p soleur -c prd -- bash -c 'logger -t lb-weight-gate-doppler-test \"test marker\"; sleep 5; scripts/betterstack-query.sh ... | grep lb-weight-gate-doppler-test' (or equivalent no-SSH marker check)"
-  expected_output: "marker present + no error sub_conditions"
-```
-
-- Ensure any new `logger -t` tags are added to `vector.toml` allowlist + tests in same change.
-- Add `hr-observability-as-plan-quality-gate` citation.
-
-### Phase 5 — Integration, tests, runbooks, comments
-- [ ] Wire doppler wrapper call site (initially standalone `doppler run ...` or in a verify job; later orchestrator).
-- [ ] Update `server.tf` HARD GATE comment if wording needs fact refresh (only facts).
-- [ ] Update runbooks + SEAM for evidence assertion (no new prose checklists).
-- [ ] Add/update tests (unit for wrapper, dispatch exercise, gate N-consec, attach).
-- [ ] Parity test updates if targets or jobs touched.
-- [ ] `<!-- lint-infra-ignore -->` carve-outs only where prose describes the deferred orchestrator (per precedent).
-
-### Phase 6 — Cross-cutting gates & verification
-- [ ] gdpr-gate (plan Phase 2.7) — scheduling reminders + cutover integrity (Art. 32/5(2)); run and fold findings.
-- [ ] IaC routing (2.8) — this is script addition on existing dispatch paths; no new TF root or manual provisioning. Confirm no `ssh` / operator dashboard mints in phases.
-- [ ] User-brand impact section present (single-user).
-- [ ] No new operator-mint defaults.
-- [ ] Post-merge follow-through if any soak (none for this slice).
-- [ ] Verify all AGENTS hard rules (no-ssh, observability pull, bounded commands, etc.).
-
-## Acceptance Criteria
-
-- [ ] `lb-weight-gate-doppler.sh` exists, is thin, guarded, sources exactly the 6 vars the pure gate expects, propagates structured output + rc, and can be invoked via `doppler run -p soleur -c prd -- ./lb-weight-gate-doppler.sh`.
-- [ ] On-host runtime gate (N≥2 consecutive readyz writable+populated + disk attach) exists and is callable on-host; emits structured success/fail distinct from shape gate.
-- [ ] Unit + at least one dispatch exercise test green for wrapper and runtime gate (no weight changes performed).
-- [ ] Web-2 quiesce evidence is machine-readable (marker / JSON / deploy-status reason) and asserted in runbook/SEAM without SSH or eyeball.
-- [ ] Observability 5-field block present and discoverability_test is runnable with no SSH; any new logger tags allowlisted + tested.
-- [ ] Pure gate contract preserved (shape-only prints `requires_runtime_bind_probe=true`; runtime is separate required condition). server.tf / cutover comments updated only with facts.
-- [ ] gdpr-gate run; findings folded (or explicitly N/A with justification).
-- [ ] All phases respect no-SSH, immutable-redeploy, exhaust-automation, and single-user-incident posture.
-- [ ] Draft PR updates #6027 and #6230 with links; plan + tasks committed on branch.
+- [ ] Direct `doppler run -p soleur -c prd -- ./lb-weight-gate.sh` pattern documented and exercisable (no dedicated `lb-weight-gate-doppler.sh` shim created in this slice).
+- [ ] Thin on-host runtime gate (< ~60 LOC preferred) exists: docker exec readyz (writable + populated), N≥2 consecutive, disk attach check; emits structured output distinct from shape gate.
+- [ ] Runtime gate is delivered via a concrete minimal path (infra-config/webhook or CI exerciser in recreate parity test).
+- [ ] Tests green for runtime gate (real FS, N-consec, attach failure); pure gate contract preserved (`requires_runtime_bind_probe=true` banner + shape-only semantics).
+- [ ] Minimal fact-refresh comments only for #6230 web-2 recreate (heavy evidence seam deferred).
+- [ ] Any new logger tags (if any) added to vector.toml + tests in same change.
+- [ ] gdpr-gate + IaC/no-SSH/user-brand checks passed (lightweight).
+- [ ] All AGENTS hard rules respected (no-SSH, pull-your-own-data, etc.).
+- [ ] Draft PR updates #6027/#6230; plan + tasks committed.
 
 ## Test Scenarios
 
@@ -241,20 +175,17 @@ discoverability_test:
 (See Phase 4 block above — implement the 5 fields + allowlist + discoverability test.)
 
 ## Files to Create
-- `apps/web-platform/infra/lb-weight-gate-doppler.sh`
-- `apps/web-platform/infra/runtime-bind-gate.sh` (or equivalent on-host script)
+- `apps/web-platform/infra/runtime-bind-gate.sh` (thin; or extend existing delivered host script — see Phase 1)
 - `knowledge-base/project/plans/2026-07-11-feat-lb-weight-gate-doppler-and-on-host-runtime-gate-plan.md` (this file)
 - `knowledge-base/project/specs/feat-feat-6230-next-open-feature-epic/tasks.md` (post-review)
 
-## Files to Edit
-- `apps/web-platform/infra/lb-weight-gate.test.sh` (or add doppler test)
-- `.github/workflows/apply-web-platform-infra.yml` (reference wrapper if wired)
-- `.github/workflows/cutover-inngest.yml` (comments + evidence)
-- `apps/web-platform/infra/server.tf` (fact-only comment refresh if needed)
-- `knowledge-base/engineering/operations/runbooks/inngest-server.md`
-- `knowledge-base/engineering/operations/runbooks/moved-block-wedge-cutover-5887.md`
-- `apps/web-platform/infra/vector.toml` (if new logger tags)
-- Any parity / destroy-guard / followthrough tests touched
+## Files to Edit (minimal)
+- `apps/web-platform/infra/lb-weight-gate.sh` (comments only — document the 6 env vars)
+- Relevant tests + parity for runtime gate
+- (If delivery chosen) `apps/web-platform/infra/infra-config-apply.sh` or FILE_MAP
+- Minimal comment refreshes in runbooks / cutover-inngest.yml (fact only)
+- `apps/web-platform/infra/vector.toml` (only if new logger tag introduced by runtime gate)
+- `knowledge-base/engineering/operations/runbooks/*.md` (fact refresh only)
 
 ## References
 - Spec + Brainstorm (this session)

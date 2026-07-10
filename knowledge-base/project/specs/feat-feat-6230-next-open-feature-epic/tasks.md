@@ -6,7 +6,9 @@ brand_survival_threshold: single-user incident
 plan: knowledge-base/project/plans/2026-07-11-feat-lb-weight-gate-doppler-and-on-host-runtime-gate-plan.md
 ---
 
-# Tasks — lb-weight-gate-doppler.sh + on-host runtime gate
+# Tasks — on-host runtime gate (thin probes slice of #6027 / #6230 context)
+
+**Note (DHH mechanical review applied):** Dedicated Doppler shim removed (use direct `doppler run`). Heavy #6230 evidence seam deferred. Phases collapsed. Focus: thin runtime gate + concrete delivery.
 
 **Plan:** `knowledge-base/project/plans/2026-07-11-feat-lb-weight-gate-doppler-and-on-host-runtime-gate-plan.md`
 
@@ -57,23 +59,21 @@ plan: knowledge-base/project/plans/2026-07-11-feat-lb-weight-gate-doppler-and-on
 - [ ] All AGENTS hard rules (no-ssh, observability pull, bounded, etc.).
 - [ ] Post-merge verification of invariants (gate comments, ADR text).
 
-## Acceptance Criteria (from plan)
-- [ ] Doppler wrapper exists, thin, sources exact vars, propagates output, invocable via doppler run.
-- [ ] On-host runtime gate (N≥2 + attach) exists, callable, structured, distinct from shape.
-- [ ] Tests green (unit + dispatch, no weight changes).
-- [ ] Web-2 quiesce evidence machine-readable and asserted in runbook/SEAM (no SSH/eyeball).
-- [ ] Observability 5-field + discoverability (no SSH) + tag allowlist.
-- [ ] Shape-only contract preserved.
-- [ ] gdpr-gate run + folded.
-- [ ] No new operator checklists; all posture respected.
+## Acceptance Criteria (updated)
+- [ ] Direct `doppler run -p soleur -c prd -- ./lb-weight-gate.sh` pattern documented/exercisable (no dedicated shim created).
+- [ ] Thin on-host runtime gate exists (readyz N≥2 + disk attach, structured output, distinct from shape).
+- [ ] Runtime gate has concrete delivery (infra-config or CI exerciser).
+- [ ] Tests green; pure gate contract preserved.
+- [ ] Minimal fact-refresh comments only (heavy evidence seam deferred).
+- [ ] gdpr + IaC/no-SSH/user-brand gates passed (light).
 - [ ] Draft PR updates #6027/#6230; plan + tasks committed.
 
 ## Notes for /work
-- Follow research patterns exactly for Doppler (guarded, scoped, no argv leakage, fallbacks).
-- Preserve "SHAPE-ONLY — NOT weight-flip authorization" contract at every step.
-- Web-2 (weight-0, self-arming, #6230 manual) is a precondition; do not assume verified.
+- Thin runtime gate + reuse existing readyz logic.
+- Direct doppler run (no new shim).
+- Heavy #6230 evidence work deferred.
 - All verification no-SSH + pull-your-own-data.
-- New logger tags = same-change Vector + test update.
+- DHH mechanical review incorporated.
 
 **Resume after /clear:**
 `/soleur:work knowledge-base/project/plans/2026-07-11-feat-lb-weight-gate-doppler-and-on-host-runtime-gate-plan.md`
