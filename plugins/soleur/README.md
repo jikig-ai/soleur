@@ -42,7 +42,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 68 |
 | Commands | 3 |
-| Skills | 93 |
+| Skills | 94 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -267,6 +267,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `archive-kb` | Archive knowledge-base artifacts with timestamped prefixes |
 | `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
 | `git-worktree` | Manage Git worktrees for parallel development |
+| `invoice` | Get paid via your own Stripe account: list who owes you, create/send behind an approval preview, chase overdue (test mode only in v1) |
 | `merge-pr` | Autonomous single-PR merge with conflict resolution and cleanup |
 | `one-shot` | Full autonomous engineering workflow from plan to PR |
 | `pencil-setup` | Auto-detect, install, and register Pencil MCP server with Claude Code CLI |

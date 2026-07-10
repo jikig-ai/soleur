@@ -13,6 +13,27 @@ doppler run -p soleur -c prd_terraform -- \
   'SELECT count() AS n FROM remote($BS_TABLE) WHERE dt >= now() - INTERVAL 2 HOUR FORMAT JSONEachRow'
 ```
 
+## Standing alarms over this source (log-content recurrence alarms)
+
+A **log-*content* recurrence alarm** over this Better Stack Logs source is an **in-repo GitHub-Actions
+cron poller**, NOT a native Better Stack alert — query via `betterstack-query.sh` → decode/threshold
+in a `scripts/` checker → deduped `action-required` GitHub issue → Sentry self-liveness heartbeat.
+This is the reusable **"Pattern: Better Stack log-content alarms"** recorded in
+[`ADR-096` §Consequences](../../architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md)
+(the `better-uptime` TF provider has no log-alert resource, and the Telemetry v2 SQL-alert API is
+rejected for stateful/newest-scoped signals + the operator-surface reasons documented there).
+
+Live standing alarms over this source:
+
+- **`scheduled-zot-restart-loop.yml`** (#6291, every 30 min) — the zot registry restart-loop
+  recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
+  issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
+  reporter goes dark. Checker: `scripts/zot-restart-loop-alarm.sh` (shared parse helper
+  `scripts/lib/zot-telemetry-parse.sh`); self-liveness `sentry_cron_monitor.zot_restart_loop_alarm`.
+  Dry-run: `doppler run -p soleur -c prd_terraform -- bash scripts/zot-restart-loop-alarm.sh`.
+- **`scheduled-followthrough-sweeper.yml`** — one-shot soak follow-throughs (e.g.
+  `scripts/followthroughs/zot-restart-plateau-6288.sh`) recur the same query+decode shape.
+
 ## ⚠️ A "no creds" / TRANSIENT error is NOT "no access" (repeat misdiagnosis)
 
 `betterstack-query.sh` does **not** read Doppler itself — it needs the query creds
@@ -125,6 +146,62 @@ Two deliberate trade-offs:
   journald source with no matching lines is benign, and a journald-logging
   container with no matching source just isn't shipped until the config lands.
   No operator action beyond a normal deploy of both components.
+
+## Querying Anthropic cost markers (`SOLEUR_CLAUDE_COST` / `_DAILY`)
+
+The production Claude fleet emits two structured cost-marker families at pino
+**WARN** (so the same `app_container_warn_filter` ships them). Both ride the
+existing app-container → journald → Vector → Better Stack path — **no
+`betterstack-query.sh` change**; the `--grep` form already does `raw LIKE '%…%'`:
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  scripts/betterstack-query.sh --since 48h --grep SOLEUR_CLAUDE_COST --limit 20
+```
+
+- **`SOLEUR_CLAUDE_COST`** — per-turn (sessions) + per-run (crons). Emitted from
+  the `cost-writer` choke point (`source ∈ {agent-runner, cc-soleur-go,
+  leader-loop}`), the `spawnClaudeEval` substrate (`source: "cron:<name>"`,
+  `capture_status ∈ {ok, no-result-event, parse-error, timeout}`), and the
+  `postAnthropicMessage` HTTP transport (`cron:<name>`, tokens-only). A
+  `capture_status != "ok"` row is a *shipped* capture-failure event — NOT
+  row-absence — so "capture broke" is distinguishable from "genuinely \$0".
+- **`SOLEUR_CLAUDE_COST_DAILY`** — the once-a-day Admin cost-report cron
+  (`cron-anthropic-cost-report`), carrying the org-total `cost_usd` + a per-model
+  array. A `{status:"key-missing"}` row is the correct **dark** signal while
+  `ANTHROPIC_ADMIN_KEY` is unprovisioned (do NOT triage its absence as a
+  regression during the mint window).
+
+Ranked SQL (run against `remote(t520508_..._logs)`):
+
+```sql
+-- Per-cron spend/token totals over the window (per-run marker)
+SELECT JSONExtractString(raw, 'source') AS source,
+       count() AS runs,
+       sum(JSONExtractFloat(raw, 'cost_usd')) AS cost_usd
+FROM remote(t520508_..._logs)
+WHERE raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+GROUP BY source ORDER BY cost_usd DESC FORMAT JSONEachRow
+
+-- Per-model spend attribution (per-run marker)
+SELECT JSONExtractString(raw, 'model') AS model,
+       count() AS turns,
+       sum(JSONExtractFloat(raw, 'cost_usd')) AS cost_usd
+FROM remote(t520508_..._logs)
+WHERE raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+GROUP BY model ORDER BY cost_usd DESC FORMAT JSONEachRow
+
+-- Daily authoritative org total (Admin report)
+SELECT dt, JSONExtractString(raw, 'date') AS day,
+       JSONExtractFloat(raw, 'cost_usd') AS org_cost_usd
+FROM remote(t520508_..._logs)
+WHERE raw LIKE '%"SOLEUR_CLAUDE_COST_DAILY":true%'
+ORDER BY dt DESC LIMIT 30 FORMAT JSONEachRow
+```
+
+The markers carry `conversationId`/`runId`, token counts, cost, model, and
+`source` — no PII, and the daily marker is field-allowlisted so `api_key_id`/
+`workspace_id` never reach Better Stack.
 
 Two further blind spots surfaced by the cron-workspace ENOSPC incident
 (#4684/#4689): (a) the `_metrics` table stores **empty** `AggregateFunction`

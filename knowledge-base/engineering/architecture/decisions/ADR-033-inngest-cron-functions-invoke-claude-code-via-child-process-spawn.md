@@ -100,6 +100,12 @@ The decision lands with PR-1 of #3948 (proof-of-pattern `scheduled-daily-triage`
   layers without relying on Inngest's native run status. If Inngest-level failure
   alerting is ever introduced, revisit this choice.
 
+- **I9. Structured `--output-format json` for per-run cost capture.** `[Added 2026-07-09 — feat-anthropic-cost-attribution.]` `spawnClaudeEval` now requests `--output-format json` (injected at argv index, mirroring the `--strict-mcp-config` prepend, ONLY when the caller's `flags` do not already set `--output-format`) so the final `{"type":"result",…}` event carries the CLI's own authoritative `total_cost_usd` / `usage` / model (the model id is the KEY of `modelUsage`; Phase-0 live probe pinned the shape). A `SOLEUR_CLAUDE_COST` marker is emitted on EVERY child exit with a positive `capture_status` (`ok` | `no-result-event` | `parse-error` | `timeout`).
+
+  **Reconciliation with I8 (the load-bearing constraint).** The credit/auth/spawn-fault classifier `classifyEvalFatal` substring-matches `stdoutTail + stderrTail`. Under the JSON format the CLI's stdout is a single result object, NOT free text, so the substrate **extracts the result event's human-readable `.result` text (which carries the API error message on an error run) back INTO `stdoutTail`** (via the pure `parseClaudeResultLine` helper) rather than letting raw JSON crowd the bounded tail. stderr is unchanged by `--output-format`, so an Anthropic API error still reaches `stderrTail` independently. I8 classification therefore survives: a credit-exhausted / auth-failed / spawn-fault run still classifies fatal, a benign max-turns run still classifies benign (unit-pinned; Phase-0 live confirmation cited in the plan's `## Research Insights`).
+
+  **Reconciliation with I5 (deterministic capture).** `SpawnResult` gains optional `costUsd?` / `usage?` / `model?` (optional so inline-spawn sibling crons that build their own `SpawnResult` literals stay compiling). The FR10 memoized-step test stays green — the cost fields ride the same deterministically-captured exit path; a parse failure / old text format degrades the fields to `undefined` (fail-open), never a red run. Cost capture is wrapped and NEVER rethrows, so a logging failure cannot red a cron.
+
 ## Consequences
 
 **Easier:**

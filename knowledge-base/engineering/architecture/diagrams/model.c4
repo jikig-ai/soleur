@@ -257,11 +257,11 @@ model {
   }
   zotRegistry = system "Self-hosted zot registry" {
     #selfhosted
-    description "OCI-native container registry (zot) on a dedicated Hetzner host (cax11, volume-backed) on the private network (10.0.1.30:5000), behind a deny-all-public firewall — the zero-touch machine-credential registry that replaces GHCR on the pull path (ADR-096, #6122). Hosts pull the SAME @sha256 digests here (crane-copy from CI preserves them); cosign verifies the zot-stored .sig offline against the unchanged pinned root. Plain-HTTP on the private net (integrity via cosign digest-pinning, not TLS); dark-launch gated with an atomic GHCR fallback until the Phase-5 soak retires GHCR push."
+    description "OCI-native container registry (zot) on a dedicated Hetzner host (cx33, 4 vCPU / 8 GB, hel1, volume-backed) on the private network (10.0.1.30:5000), behind a deny-all-public firewall — the zero-touch machine-credential registry that replaces GHCR on the pull path (ADR-096, #6122). Sized cx33 in hel1 (#6288 — the plan's cx32 target does not exist as a Hetzner type; cx33 is the real 8 GB type, offered in hel1 not nbg1) with an ADR-062 --memory=7168m cap so zot's ~35 GB store boot scan cannot host-OOM restart-loop the box. The 60 GB store volume is a disposable GHCR mirror: the nbg1→hel1 migration recreates it fresh and it re-fills from GHCR on the next CI dual-push. Hosts pull the SAME @sha256 digests here (crane-copy from CI preserves them); cosign verifies the zot-stored .sig offline against the unchanged pinned root. Plain-HTTP on the private net (integrity via cosign digest-pinning, not TLS); dark-launch gated with an atomic GHCR fallback until the Phase-5 soak retires GHCR push."
   }
   betterstack = system "Better Stack" {
     #external
-    description "External uptime/heartbeat monitoring (BetterStackHQ/better-uptime). Apex + inngest/git-data heartbeats, and a per-host origin absence detector that probes each web host's CF-proxied hostname (web-N.app.soleur.ai/health) directly, so a dead/never-booted host pages with per-host attribution the round-robin monitors cannot give (#5933 Item 1)."
+    description "External uptime/heartbeat monitoring (BetterStackHQ/better-uptime) AND a Logs warehouse (source 2457081, ClickHouse-SQL-queryable) that CI polls read-only. Apex + inngest/git-data heartbeats, and a per-host origin absence detector that probes each web host's CF-proxied hostname (web-N.app.soleur.ai/health) directly, so a dead/never-booted host pages with per-host attribution the round-robin monitors cannot give (#5933 Item 1). The Logs source receives SOLEUR_ZOT_DISK self-reports from the deny-all registry host and is polled from GitHub Actions via betterstack-query.sh for the zot restart-loop recurrence alarm (#6291) + follow-through soak probes — log-content recurrence alarms are in-repo GH-cron pollers, not native Better Stack alerts (ADR-096)."
   }
   sigstore = system "Sigstore" {
     #external
@@ -357,12 +357,14 @@ model {
   api -> supabase "Auth and data" { technology "HTTPS" }
   claude -> supabase "Sessions and keys" { technology "HTTPS" }
   claude -> anthropic "LLM calls" { technology "HTTPS" }
+  api -> anthropic "Daily org cost/usage report (Admin API, cost-report cron)" { technology "HTTPS" }
   claude -> github "Git operations" { technology "HTTPS/SSH" }
   tunnel -> coordinator "Routes traffic" { technology "HTTPS" }
   hetzner -> claude "Hosts" { technology "Docker" }
   doppler -> claude "Injects secrets" { technology "CLI" }
   auth -> supabase "Validates tokens" { technology "HTTPS" }
   api -> stripe "Checkout and webhooks" { technology "HTTPS" }
+  claude -> stripe "invoice skill: create/finalize/send/chase via hosted Stripe MCP — OAuth, operator's OWN account; distinct credential plane from the webapp -> stripe billing edge; test-mode only in v1 (ADR-107)" { technology "MCP tool → mcp.stripe.com (HTTPS)" }
   api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); the board is the canonical Status store (ADR-097). The Phase-1 lifecycle→board write path runs inside GitHub Actions (github-internal) so it needs no cross-boundary edge." { technology "HTTPS (REST + GraphQL)" }
   dashboard -> plausible "Page view events" { technology "JS snippet" }
   api -> inngest "Sends events; serves functions" { technology "HTTP private-net :8288" }
@@ -391,6 +393,10 @@ model {
   // the web-host probe). SOLEUR_ZOT_DISK is the in-surface probe that disambiguates
   // fs-not-grown / gc-too-slow / zot-crash without a host login.
   zotRegistry -> betterstack "Ships disk-state observability — df% of /var/lib/zot + resize2fs before/after + zot health — as one SOLEUR_ZOT_DISK event to the isolated Logs source 2457081; token in soleur-registry/prd, queried via betterstack-query.sh --grep SOLEUR_ZOT_DISK (#6244)" { technology "curl → Better Stack Logs (HTTPS, eu-fsn-3)" }
+  // #6291 — CI reads back the SOLEUR_ZOT_DISK Logs source it ships to. The standing restart-loop
+  // recurrence alarm (scheduled-zot-restart-loop.yml, */30) + the follow-through soak probes poll
+  // source 2457081 over the ClickHouse SQL API; previously an un-modelled load-bearing edge.
+  github -> betterstack "Polls the SOLEUR_ZOT_DISK Logs source (ClickHouse SQL via betterstack-query.sh) for the zot restart-loop recurrence alarm + follow-through soak probes" { technology "HTTPS (ClickHouse SQL, eu-fsn-3)" }
   // #6031 / ADR-088 — control-plane GHCR installation-token minter (cron-ghcr-token-minter,
   // every 20 min). Mints a 1h packages:read App installation token and writes it to Doppler,
   // retiring the interim read:packages PAT; hosts read GHCR_READ_TOKEN unchanged.

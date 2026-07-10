@@ -69,6 +69,34 @@ const nextConfig: NextConfig = {
     // causing "Failed to parse body as FormData" for uploads >10 MB.
     // Set to 25 MB (route handler caps at 20 MB; headroom for multipart overhead).
     middlewareClientMaxBodySize: 25 * 1024 * 1024,
+    // ADR-067 amendment (2026-07-09): the RSC-shell half of instant dashboard
+    // tab-switching. Next.js 15 defaults `staleTimes.dynamic` to 0, so the
+    // App Router client Router Cache discards a dynamic route's RSC payload the
+    // instant you navigate away — returning to a tab always refetches from the
+    // server and re-shows its `loading.tsx` skeleton. `dynamic: 30` restores
+    // Next 14's reuse window: a returning tab renders instantly from the Router
+    // Cache and revalidates in the background. This composes with the SWR data
+    // cache (ADR-067 / PR #5639) — SWR caches `fetch` results, the Router Cache
+    // caches the RSC shell.
+    //
+    // ISOLATION INVARIANT (brand_survival_threshold = single-user incident): a
+    // Router-Cache HIT serves an RSC payload from client memory with NO server
+    // round-trip, so `middleware.ts` (auth gate, #4307 revocation gate, T&C
+    // consent, billing) does NOT run for cached segments. A warm cache must
+    // therefore never survive a principal boundary. There is no API to
+    // selectively evict the App Router Router Cache; the ONLY full wipe is a
+    // HARD navigation (full document load). So every navigation that enters or
+    // leaves an authenticated principal context hard-navigates
+    // (`window.location.assign`) — see `components/auth/use-sign-out.ts` (GAP
+    // C/D), `components/auth/login-form.tsx` + the onboarding funnel (GAP E),
+    // `components/settings/delete-account-dialog.tsx` + the in-session 401/302
+    // bounces (GAP F), `middleware.ts` `no-store` for bfcache (GAP G), and
+    // `admin/analytics` all-tenant data moved off the RSC to an admin-gated
+    // API + SWR so a warm cache never paints it (GAP H). `static` is left at
+    // its Next 15 default (300 s) — irrelevant to the dynamic tab bug.
+    staleTimes: {
+      dynamic: 30,
+    },
   },
   async headers() {
     return [

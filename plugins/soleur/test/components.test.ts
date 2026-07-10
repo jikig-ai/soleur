@@ -12,7 +12,7 @@ import {
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus", "fable"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const SKILL_DESCRIPTION_WORD_BUDGET = 2327; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline)
+const SKILL_DESCRIPTION_WORD_BUDGET = 2366; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline)
 const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
 
 // ---------------------------------------------------------------------------
@@ -318,6 +318,49 @@ describe("Decision-principles taxonomy wiring", () => {
         raw.includes(token),
         `ship/SKILL.md lost the "${token}" wiring — headless decision challenges would ` +
           `no longer reach the operator (regresses ADR-084's legible surface).`,
+      ).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// invoice skill credential-boundary defense-in-depth (ADR-107 / #6260)
+// ---------------------------------------------------------------------------
+// Skill `allowed-tools` is pre-approval only, not a sandbox. The invoice skill's
+// credential boundary (never read STRIPE_SECRET_KEY/.env/lib/stripe.ts) rests on
+// two committed layers: `disallowed-tools` in the SKILL.md (per-turn tool removal)
+// and a `Read` deny in .claude/settings.json (cross-turn). A future edit dropping
+// either silently re-opens the exfiltration residual — this guard fails CI first.
+
+describe("invoice skill credential boundary (ADR-107)", () => {
+  test("invoice SKILL.md retains disallowed-tools Bash Read Write Edit", () => {
+    const { frontmatter } = parseComponent(
+      resolve(PLUGIN_ROOT, "skills", "invoice", "SKILL.md"),
+    );
+    // YAML parses `disallowed-tools: Bash Read Write Edit` as the scalar string;
+    // a YAML-list form parses as an array — accept either shape.
+    const raw = frontmatter["disallowed-tools"];
+    const tokens = Array.isArray(raw)
+      ? raw.map(String)
+      : String(raw ?? "").split(/[\s,]+/).filter(Boolean);
+    for (const t of ["Bash", "Read", "Write", "Edit"]) {
+      expect(
+        tokens.includes(t),
+        `invoice/SKILL.md disallowed-tools must contain "${t}" (ADR-107 layer 2 — ` +
+          `per-turn removal of the exfiltration tools). Got: ${JSON.stringify(raw)}`,
+      ).toBe(true);
+    }
+  });
+
+  test(".claude/settings.json retains the secret-file Read deny globs", () => {
+    const settingsPath = resolve(PLUGIN_ROOT, "..", "..", ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    const deny: string[] = settings?.permissions?.deny ?? [];
+    for (const glob of ["Read(**/.env)", "Read(**/.env.*)", "Read(**/lib/stripe.ts)"]) {
+      expect(
+        deny.includes(glob),
+        `.claude/settings.json permissions.deny must contain "${glob}" (ADR-107 layer 3 — ` +
+          `cross-turn Read deny protecting the product Stripe credential). Got: ${JSON.stringify(deny)}`,
       ).toBe(true);
     }
   });

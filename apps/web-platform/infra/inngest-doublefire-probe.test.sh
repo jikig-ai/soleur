@@ -160,6 +160,146 @@ test_default_gql_url() {
   else echo "  FAIL: default GQL URL does not target the dedicated host"; FAIL=$((FAIL + 1)); fi
 }
 
+# ===========================================================================
+# #6258 (ADR-106) — bounding + markers + window-superset invariant
+# ===========================================================================
+
+RC=0; STDOUT_CAP=""; MARKERS_CAP=""
+# Run with a logger stub capturing marker lines. Sets RC/STDOUT_CAP/MARKERS_CAP globals
+# (called DIRECTLY — a $(...) subshell would discard them). $1=runs-fixture-dir, extra
+# args = KEY=VAL env seams (passed via `env`, since an expanded "$@" is not an assignment prefix).
+run_probe_logcap() {
+  local dir="$1"; shift
+  local bindir logout; bindir=$(mktemp -d); logout=$(mktemp)
+  cat > "$bindir/logger" <<STUB
+#!/usr/bin/env bash
+shift 2 2>/dev/null || true
+echo "\$*" >> "$logout"
+STUB
+  chmod +x "$bindir/logger"
+  RC=0
+  STDOUT_CAP=$(PATH="$bindir:$PATH" INNGEST_DOUBLEFIRE_RUNS_FIXTURE="$dir" env "$@" bash "$TARGET" 2>/dev/null) || RC=$?
+  MARKERS_CAP=$(cat "$logout")
+  rm -rf "$bindir" "$logout"
+}
+
+# --- #6258 T1: deadline hit → exit 1 (NOT break) + TIMEOUT reason=deadline + non-JSON stdout ---
+test_df_deadline_abort() {
+  echo "TEST: doublefire-probe — deadline hit exits 1 + TIMEOUT marker (not break)"
+  local dir; dir=$(mktemp -d)
+  make_page true "CUR1" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" > "$dir/page-1.json"
+  run_probe_logcap "$dir" PREFLIGHT_DEADLINE_S=0
+  if [[ "$RC" -eq 1 ]]; then echo "  PASS: deadline abort exits 1"; PASS=$((PASS+1)); else echo "  FAIL: deadline abort rc=$RC (want 1)"; FAIL=$((FAIL+1)); fi
+  if echo "$STDOUT_CAP" | jq -e '.runs' >/dev/null 2>&1; then
+    echo "  FAIL: stdout is a jq-parseable {runs} object on a deadline abort (false-clean)"; FAIL=$((FAIL+1));
+  else echo "  PASS: stdout NOT a jq-parseable runs object on abort"; PASS=$((PASS+1)); fi
+  if echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*op=verify-doublefire.*reason=deadline'; then
+    echo "  PASS: TIMEOUT reason=deadline marker (op=verify-doublefire)"; PASS=$((PASS+1));
+  else echo "  FAIL: no TIMEOUT reason=deadline marker (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
+  rm -rf "$dir"
+}
+
+# --- #6258 T2: page ceiling hit → exit 1 + reason=page_ceiling; exact-fit breaks clean ---
+test_df_page_ceiling_abort() {
+  echo "TEST: doublefire-probe — page ceiling exits 1 + reason=page_ceiling; exact-fit clean"
+  local dir; dir=$(mktemp -d)
+  make_page true "CUR1" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" > "$dir/page-1.json"
+  make_page true "CUR2" "[$(make_edge run-2 fn-a 2026-07-08T10:01:00Z)]" > "$dir/page-2.json"
+  make_page false "" "[$(make_edge run-3 fn-a 2026-07-08T10:02:00Z)]" > "$dir/page-3.json"
+  run_probe_logcap "$dir" INNGEST_MAX_PAGES=2
+  if [[ "$RC" -eq 1 ]]; then echo "  PASS: ceiling abort exits 1"; PASS=$((PASS+1)); else echo "  FAIL: ceiling abort rc=$RC"; FAIL=$((FAIL+1)); fi
+  if echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=page_ceiling'; then
+    echo "  PASS: TIMEOUT reason=page_ceiling marker"; PASS=$((PASS+1));
+  else echo "  FAIL: no TIMEOUT reason=page_ceiling marker (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
+  # A page-ceiling abort must also refuse to emit a truncated (false-clean) parseable body.
+  if echo "$STDOUT_CAP" | jq -e '.runs' >/dev/null 2>&1; then
+    echo "  FAIL: stdout is a jq-parseable .runs object on a page-ceiling abort (false-clean)"; FAIL=$((FAIL+1));
+  else echo "  PASS: stdout NOT a jq-parseable .runs object on page-ceiling abort"; PASS=$((PASS+1)); fi
+  # exact-fit: 2-page corpus with MAX_PAGES=2 breaks clean
+  local dir2; dir2=$(mktemp -d)
+  make_page true "CURx" "[$(make_edge r1 fn-a 2026-07-08T10:00:00Z)]" > "$dir2/page-1.json"
+  make_page false "" "[$(make_edge r2 fn-a 2026-07-08T10:01:00Z)]" > "$dir2/page-2.json"
+  local rc2=0 out2
+  out2=$(INNGEST_DOUBLEFIRE_RUNS_FIXTURE="$dir2" INNGEST_MAX_PAGES=2 bash "$TARGET" 2>/dev/null) || rc2=$?
+  if [[ "$rc2" -eq 0 ]] && echo "$out2" | jq -e '.runs | length == 2' >/dev/null 2>&1; then
+    echo "  PASS: exact-fit corpus (pages == MAX_PAGES) breaks clean (2 runs)"; PASS=$((PASS+1));
+  else echo "  FAIL: exact-fit corpus did not break clean (rc=$rc2 out=$out2)"; FAIL=$((FAIL+1)); fi
+  rm -rf "$dir" "$dir2"
+}
+
+# --- #6258 T3: happy path → START+DONE in journald, stdout stays pure JSON ---
+test_df_markers_journald_only() {
+  echo "TEST: doublefire-probe — START+DONE journald-only, stdout stays pure JSON"
+  local dir; dir=$(mktemp -d)
+  make_page false "" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" > "$dir/page-1.json"
+  run_probe_logcap "$dir"
+  if [[ "$RC" -eq 0 ]]; then echo "  PASS: happy path exits 0"; PASS=$((PASS+1)); else echo "  FAIL: happy path rc=$RC"; FAIL=$((FAIL+1)); fi
+  if echo "$STDOUT_CAP" | jq -e '.runs | type == "array"' >/dev/null 2>&1 && ! echo "$STDOUT_CAP" | grep -q SOLEUR; then
+    echo "  PASS: stdout is a pure {runs} object, no marker leaked"; PASS=$((PASS+1));
+  else echo "  FAIL: stdout polluted or missing runs (out=$STDOUT_CAP)"; FAIL=$((FAIL+1)); fi
+  echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=verify-doublefire' \
+    && { echo "  PASS: START in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no START (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); }
+  echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_DONE op=verify-doublefire pages=' \
+    && { echo "  PASS: DONE in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no DONE (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); }
+  rm -rf "$dir"
+}
+
+# --- #6258 T4: connect-timeout + remaining-budget clamp (sum-bound by construction) ---
+test_df_connect_timeout_and_clamp() {
+  echo "TEST: doublefire-probe — --connect-timeout + remaining-budget curl clamp"
+  if grep -qE 'curl[^|]*--connect-timeout' "$TARGET"; then echo "  PASS: --connect-timeout present"; PASS=$((PASS+1));
+  else echo "  FAIL: no --connect-timeout"; FAIL=$((FAIL+1)); fi
+  if grep -qE 'max-time "\$max_time"' "$TARGET" && grep -qE 'remaining=\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' "$TARGET"; then
+    echo "  PASS: per-page curl clamped to remaining budget"; PASS=$((PASS+1));
+  else echo "  FAIL: per-page curl not clamped to remaining budget"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6258 T5: window ⊇ cutover window — the time window is NEVER narrowed (Finding 5) ---
+# Narrowing INNGEST_DOUBLEFIRE_FROM/UNTIL below the operator window feeds false "missed
+# ticks" → operator re-fire → DOUBLE-FIRE. The default FROM is the 365-day clamp (⊇ any
+# realistic cutover window); cost is cut via functionIDs + page ceiling, not a narrow window.
+test_df_window_not_narrowed() {
+  echo "TEST: doublefire-probe — default window is the 365-day clamp (⊇ cutover window)"
+  if grep -q '365 days ago' "$TARGET"; then echo "  PASS: 365-day FROM clamp present (window ⊇ cutover)"; PASS=$((PASS+1));
+  else echo "  FAIL: 365-day FROM clamp missing (window may be narrowed → false missed-ticks)"; FAIL=$((FAIL+1)); fi
+  # a run inside a wide window but nominally 'old' is still observed (no client-side window narrowing).
+  local dir; dir=$(mktemp -d)
+  make_page false "" "[$(make_edge old-run fn-a 2025-09-01T00:00:00Z)]" > "$dir/page-1.json"
+  local out; out=$(INNGEST_DOUBLEFIRE_RUNS_FIXTURE="$dir" bash "$TARGET" 2>/dev/null)
+  assert_eq "an 'old' run inside the window is still observed (no false missed-tick)" "1" "$(echo "$out" | jq -r '.runs | length')"
+  # cost lever is functionIDs, not a window narrow: build_request_body carries functionIDs.
+  if grep -q 'functionIDs:\$fnids' "$TARGET"; then echo "  PASS: cost cut via functionIDs filter"; PASS=$((PASS+1));
+  else echo "  FAIL: no functionIDs filter (cost lever missing)"; FAIL=$((FAIL+1)); fi
+  rm -rf "$dir"
+}
+
+# --- #6258 T6: marker purity — no URI / actor@host:port / raw GraphQL message ---
+test_df_marker_purity() {
+  echo "TEST: doublefire-probe — marker purity (enum/count only)"
+  local dir; dir=$(mktemp -d)
+  printf '%s' '{"errors":[{"message":"FATAL password for postgres://u:p@10.0.1.40:5432/db"}],"data":null}' > "$dir/page-1.json"
+  run_probe_logcap "$dir"
+  local soleur; soleur=$(echo "$MARKERS_CAP" | grep SOLEUR_INNGEST_PREFLIGHT || true)
+  assert_eq "no '://' in any SOLEUR marker" "0" "$(echo "$soleur" | grep -c '://' || true)"
+  assert_eq "no user:pass@host:port in any SOLEUR marker" "0" "$(echo "$soleur" | grep -cE '@[^ ]+:[0-9]+' || true)"
+  assert_eq "raw GraphQL message never verbatim (reason=enum)" "0" "$(echo "$soleur" | grep -c 'password' || true)"
+  # #6258 review P1: scrub the DSN from the sibling FATAL/ERROR diagnostics too —
+  # journald (→ Better Stack) AND stdout (→ the Actions run log), not just SOLEUR markers.
+  assert_eq "no '://' URI in ANY journald line (incl. error diagnostics)" "0" "$(echo "$MARKERS_CAP" | grep -c '://' || true)"
+  assert_eq "no user:pass@host:port DSN in ANY journald line" "0" "$(echo "$MARKERS_CAP" | grep -cE '@[^ ]+:[0-9]+' || true)"
+  assert_eq "no '://' URI on stdout (run log)" "0" "$(echo "$STDOUT_CAP" | grep -c '://' || true)"
+  assert_eq "no user:pass@host:port DSN on stdout" "0" "$(echo "$STDOUT_CAP" | grep -cE '@[^ ]+:[0-9]+' || true)"
+  rm -rf "$dir"
+}
+
+# --- #6258 T7: marker tag present in vector.toml allowlist (drift guard) ---
+test_df_marker_tag_in_vector() {
+  echo "TEST: doublefire-probe — inngest-doublefire-probe tag in vector.toml allowlist"
+  local vector="$SCRIPT_DIR/vector.toml"
+  if grep -qE '^[[:space:]]*"inngest-doublefire-probe",' "$vector"; then echo "  PASS: tag in vector.toml"; PASS=$((PASS+1));
+  else echo "  FAIL: tag NOT in vector.toml (marker would not ship)"; FAIL=$((FAIL+1)); fi
+}
+
 echo "=== inngest-doublefire-probe.sh test suite ==="
 test_valid_runs_single_page
 test_pagination
@@ -169,6 +309,13 @@ test_empty_runs
 test_curl_max_time
 test_query_shape
 test_default_gql_url
+test_df_deadline_abort
+test_df_page_ceiling_abort
+test_df_markers_journald_only
+test_df_connect_timeout_and_clamp
+test_df_window_not_narrowed
+test_df_marker_purity
+test_df_marker_tag_in_vector
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

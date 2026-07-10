@@ -1,11 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { TC_BUMP_METADATA } from "@/lib/legal/tc-version";
 
 export default function AcceptTermsPage() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [accepted, setAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -44,7 +43,11 @@ export default function AcceptTermsPage() {
       }
 
       const { redirect } = await res.json();
-      router.push(redirect || "/setup-key");
+      // GAP E (ADR-067 staleTimes): recording T&C advances the authenticated
+      // onboarding funnel — hard-nav so every funnel exit uniformly wipes the
+      // App Router Router Cache (the server-returned `redirect` is trusted, and
+      // may itself be a terminal /dashboard entry).
+      window.location.assign(redirect || "/setup-key");
     } catch {
       setError("Network error. Please check your connection and try again.");
     } finally {

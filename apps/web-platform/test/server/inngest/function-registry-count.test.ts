@@ -123,6 +123,11 @@ const NON_INNGEST_MONITORS = new Set([
   // check-in from cron-egress-resolve.sh) — not an Inngest function and not
   // a GHA workflow; same "no cron-*.ts counterpart" class as the GHA pair.
   "cron-egress-resolve",
+  // #6291: GHA-fired (scheduled-zot-restart-loop.yml) — a bash-pipeline infra
+  // cron (Better Stack Logs recurrence alarm) in ADR-033 I7's uncontained
+  // class, deliberately NOT an Inngest function; its final sentry-heartbeat
+  // step pings the check-in. Same class as scheduled-realtime-probe.
+  "scheduled-zot-restart-loop",
 ]);
 
 describe("Inngest function registry — drift guards", () => {
@@ -142,7 +147,7 @@ describe("Inngest function registry — drift guards", () => {
 
   // UPDATE this number when adding/removing Inngest functions.
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(60);
+    expect(routeEntries.length).toBe(61);
   });
 
   // EVENT functions are invisible to the cron-glob guards (b)/(e) — they only

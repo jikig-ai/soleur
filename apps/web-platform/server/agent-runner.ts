@@ -2370,6 +2370,17 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
                 cache_creation_input_tokens: cacheCreationDelta,
               },
             },
+            // Cost-attribution marker (plan Phase 1). The SDK result event
+            // reports the model as the key(s) of `modelUsage` (Phase-0 CLI
+            // probe: no top-level `model` field); surface the first, or null.
+            {
+              source: "agent-runner",
+              model:
+                Object.keys(
+                  (message as { modelUsage?: Record<string, unknown> })
+                    .modelUsage ?? {},
+                )[0] ?? null,
+            },
             lease.delegationId
               ? {
                   delegationId: lease.delegationId,
