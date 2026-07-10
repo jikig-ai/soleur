@@ -15,6 +15,16 @@
 #                      is NOT the right source)
 set -euo pipefail
 
+# REDEPLOY NONCE (#6178, 2026-07-10). deploy_pipeline_fix.triggers_replace hashes
+# THIS file's content (server.tf), so bumping the nonce forces terraform to recreate
+# the terraform_data and re-run this push — re-delivering EVERY webhook-managed file.
+# Bumped because a prior push left the host with a hooks.json advertising the
+# inngest-registry-probe / inngest-doublefire-probe hooks while their scripts were
+# never installed (infra-config-status showed 13 files, both probes absent) — webhook
+# fork/exec'd a missing /usr/local/bin/inngest-registry-probe.sh and returned an empty
+# HTTP 500, fast-failing the cutover op=verify gate. The repo is lockstep; state/host
+# had drifted, so a content-hash bump is the sanctioned re-delivery lever.
+#   redeploy-nonce: 6178-deliver-missing-cutover-probes-1
 for var in WEBHOOK_SECRET CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE INFRA_DIR HOOKS_JSON_B64; do
   if [[ -z "${!var:-}" ]]; then
     echo "ERROR: required env var $var is missing or empty" >&2
