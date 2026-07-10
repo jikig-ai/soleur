@@ -1,0 +1,57 @@
+# Project-level Grok configuration for the Soleur repository.
+#
+# This file ensures consistent behavior when using Grok Build inside this repo,
+# especially for loading the local development copy of the Soleur plugin.
+
+[plugins]
+# Load the in-repository Soleur plugin.
+# This is the Grok equivalent of `claude --plugin-dir ./plugins/soleur`.
+#
+# Two mechanisms are used for reliability:
+# 1. .grok/plugins/soleur  (symlink) — first-class project plugin location
+# 2. paths below            — additional plugin directory scan
+#
+# These ensure the *local* development copy (./plugins/soleur) wins over
+# any version installed into ~/.claude/plugins/ or ~/.grok/plugins/.
+paths = ["./plugins/soleur"]
+
+# Make sure the soleur plugin is active in this project.
+# (Global config may also list it; project settings are merged with high priority.)
+enabled = ["soleur"]
+
+# Claude Code compatibility (defaults are true, listed explicitly for clarity).
+# Grok will continue to load:
+# - Hooks, permissions, and MCP servers from .claude/settings*.json
+# - Skills and commands from .claude/skills/ and the installed Claude plugins
+# - Project rules from CLAUDE.md / CLAUDE.local.md
+[compat.claude]
+skills = true
+rules = true
+agents = true
+mcps = true
+hooks = true
+
+# Project permission policy.
+# The detailed allow/deny lists and many PreToolUse guard hooks live in
+# .claude/settings.json and .claude/settings.local.json (loaded via compat above).
+#
+# You can add native Grok permission rules here if desired. They merge with
+# the Claude sources. Example:
+#
+# [permission]
+# allow = ["Bash(safe-tool:*)"]
+# deny = ["Read(**/secrets/**)"]
+
+# Recommended default permission mode for this project (very hook-heavy).
+# PreToolUse hooks (the many gate scripts) will still run and can block actions.
+permission_mode = "always-approve"
+
+# Other project-specific tuning can be added here.
+# See the full reference: ~/.grok/docs/user-guide/05-configuration.md
+#
+# Common additions for a project like this:
+# [skills]
+# paths = ["./plugins/soleur/skills"]   # (usually not needed — the plugin paths above covers it)
+#
+# [session]
+# load_envrc = true
