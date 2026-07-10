@@ -23,6 +23,20 @@ packages:
 groups:
   - docker
 
+# The inngest-server systemd unit runs as User=deploy (inngest-bootstrap.sh:184/414) and the
+# bootstrap chowns /var/lib/inngest to deploy:deploy (else SQLite CANTOPEN(14)). The web hosts
+# create `deploy` in their cloud-init (cloud-init.yml:46-53); the dedicated inngest host never
+# did, so the bootstrap aborted with `chown: invalid user: 'deploy:deploy'` and inngest never
+# started (found via the #6178 boot probe, after the HOME fix). Mirror the web deploy user;
+# `- default` preserves the distro root user (+ its hcloud-injected SSH key). deploy gets a home
+# (/home/deploy) so the unit's User=deploy `doppler run` resolves $HOME at runtime.
+users:
+  - default
+  - name: deploy
+    groups: docker
+    shell: /bin/bash
+    lock_passwd: true
+
 write_files:
   # SSH hardening parity with registry / git-data / the web host's minimal set.
   - path: /etc/ssh/sshd_config.d/01-hardening.conf
