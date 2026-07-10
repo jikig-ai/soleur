@@ -348,14 +348,11 @@ export function deriveColumn(input: BoardIssueInput): WorkstreamStatus {
     // Board has no Cancelled column — all closed issues fold to done.
     return "done";
   }
-  // open
-  if (labels.includes("blocked")) return "blocked";
-  if (labels.includes("pending")) return "pending";
-  if (labels.includes("in-progress")) return "in_progress";
-  if (labels.includes("review") || labels.includes("needs-review")) {
-    return "in_review";
+  // open — precedence + aliases single-sourced in OPEN_LABEL_PRECEDENCE so the
+  // write removal set (STATUS_LABELS) cannot drift from what this READS (AC12).
+  for (const { labels: candidates, column } of OPEN_LABEL_PRECEDENCE) {
+    if (candidates.some((l) => labels.includes(l))) return column;
   }
-  if (labels.includes("ready") || labels.includes("todo")) return "ready";
   return "backlog";
 }
 
@@ -371,16 +368,25 @@ export function deriveColumn(input: BoardIssueInput): WorkstreamStatus {
 // label. Mirrors the INITIATED_BY_MARKER single-source pattern above.
 // ---------------------------------------------------------------------------
 
-/** Every status label deriveColumn reads (the removal set for a status write). */
-export const STATUS_LABELS: readonly string[] = [
-  "blocked",
-  "pending",
-  "in-progress",
-  "review",
-  "needs-review",
-  "ready",
-  "todo",
-] as const;
+/** Ordered open-issue label→column precedence (first match wins). SINGLE SOURCE
+ *  for both `deriveColumn` (read) and `STATUS_LABELS` (the write removal set) —
+ *  they cannot drift because both derive from this one table (ADR-109 / AC12). */
+const OPEN_LABEL_PRECEDENCE: readonly {
+  labels: readonly string[];
+  column: WorkstreamStatus;
+}[] = [
+  { labels: ["blocked"], column: "blocked" },
+  { labels: ["pending"], column: "pending" },
+  { labels: ["in-progress"], column: "in_progress" },
+  { labels: ["review", "needs-review"], column: "in_review" },
+  { labels: ["ready", "todo"], column: "ready" },
+];
+
+/** Every status label `deriveColumn` reads (the removal set for a status write),
+ *  derived from OPEN_LABEL_PRECEDENCE so it can never drift from the read. */
+export const STATUS_LABELS: readonly string[] = OPEN_LABEL_PRECEDENCE.flatMap(
+  (r) => r.labels,
+);
 
 /** Canonical write-label for each column (the label ADDED after removing all
  *  STATUS_LABELS). `backlog` → none (bare removal); `done` → none (close).

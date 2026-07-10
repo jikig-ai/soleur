@@ -323,7 +323,6 @@ export function WorkstreamBoard() {
     async (id: string): Promise<void> => {
       const number = issueNumberOf(id);
       if (number === null) return;
-      const prev = issues?.find((i) => i.id === id);
       try {
         const returned = await patchIssueRequest(number, { reopen: true });
         void mutate(
@@ -339,7 +338,10 @@ export function WorkstreamBoard() {
           { revalidate: false },
         );
       } catch (e) {
-        if (prev) void mutate(undefined, { revalidate: false });
+        // Reopen makes NO optimistic pre-update (the card stays in Done until
+        // the PATCH confirms), so there is nothing to roll back — do NOT call
+        // mutate(undefined) here (it would blank the board to the skeleton with
+        // no auto-recovery). Just surface the retryable error.
         surfaceWriteError(e);
       }
     },

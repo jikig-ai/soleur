@@ -112,6 +112,19 @@ describe("PATCH /api/workstream/issues/[number]", () => {
     expect(res.status).toBe(400);
   });
 
+  it("422s an out-of-enum status instead of a silent Backlog no-op (security nit)", async () => {
+    const res = await PATCH(req({ status: "bogus" }), ctx());
+    expect(res.status).toBe(422);
+    expect(setWorkstreamIssueStatus).not.toHaveBeenCalled();
+  });
+
+  it("422s a combined title+status body rather than dropping the title", async () => {
+    const res = await PATCH(req({ title: "x", status: "ready" }), ctx());
+    expect(res.status).toBe(422);
+    expect(updateWorkstreamIssueTitle).not.toHaveBeenCalled();
+    expect(setWorkstreamIssueStatus).not.toHaveBeenCalled();
+  });
+
   it("502s and Sentry-mirrors on a write failure", async () => {
     setWorkstreamIssueStatus.mockRejectedValue(
       Object.assign(new Error("boom"), { status: 500 }),

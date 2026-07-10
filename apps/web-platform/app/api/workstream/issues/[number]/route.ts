@@ -26,7 +26,11 @@ import {
   checkWorkstreamWriteRate,
   classifyWriteError,
 } from "@/server/workstream/workstream-write-throttle";
-import type { WorkstreamIssue, WorkstreamStatus } from "@/lib/workstream";
+import {
+  STATUS_ORDER,
+  type WorkstreamIssue,
+  type WorkstreamStatus,
+} from "@/lib/workstream";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +82,19 @@ export async function PATCH(
   }
   if (!hasTitle && !hasStatus && !reopen) {
     return NextResponse.json({ error: "no_change" }, { status: 400 });
+  }
+  // Validate status against the known column set (parity with the agent tool's
+  // STATUS_ENUM) so a typo'd status 422s instead of silently landing in Backlog.
+  if (hasStatus && !STATUS_ORDER.includes(b.status as WorkstreamStatus)) {
+    return NextResponse.json({ error: "invalid_status" }, { status: 422 });
+  }
+  // Title and status/reopen are separate atomic writes — reject a combined body
+  // rather than silently dropping the title (the dispatch below applies only one).
+  if (hasTitle && (hasStatus || reopen)) {
+    return NextResponse.json(
+      { error: "title_and_status_separate" },
+      { status: 422 },
+    );
   }
 
   try {

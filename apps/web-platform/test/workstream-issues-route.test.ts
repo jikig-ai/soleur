@@ -97,6 +97,18 @@ describe("POST /api/workstream/issues", () => {
     expect(createWorkstreamIssue).not.toHaveBeenCalled();
   });
 
+  it("422s an out-of-enum status (security nit)", async () => {
+    const res = await POST(req({ title: "x", status: "bogus" }));
+    expect(res.status).toBe(422);
+    expect(createWorkstreamIssue).not.toHaveBeenCalled();
+  });
+
+  it("422s create with status=done (a new issue cannot be born closed)", async () => {
+    const res = await POST(req({ title: "x", status: "done" }));
+    expect(res.status).toBe(422);
+    expect(createWorkstreamIssue).not.toHaveBeenCalled();
+  });
+
   it("502s when the write fails", async () => {
     createWorkstreamIssue.mockRejectedValue(
       Object.assign(new Error("boom"), { status: 500 }),

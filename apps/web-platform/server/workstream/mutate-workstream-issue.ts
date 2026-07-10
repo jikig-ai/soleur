@@ -1,6 +1,10 @@
-// The single shared WRITE accessor for the Workstream board (ADR-109). BOTH the
-// HTTP write routes (app/api/workstream/issues[/[number]]) AND the agent write
-// tools (server/workstream/workstream-tools) call this — never the route.
+// The single shared WRITE seam for the Workstream board (ADR-109): the four
+// helpers below — createWorkstreamIssue / updateWorkstreamIssueTitle /
+// setWorkstreamIssueStatus / reopenWorkstreamIssue. BOTH the HTTP write routes
+// (app/api/workstream/issues[/[number]]) AND the agent write tools
+// (server/workstream/workstream-tools) call these directly — the tool never
+// self-calls the route, so the audit + anti-spoof + per-workspace resolution
+// live in exactly one place (parity between the HTTP and agent surfaces).
 //
 // NON-NEGOTIABLE invariants (the load-bearing review findings):
 //   - ALL writes route through the AUDITED seam
@@ -339,42 +343,6 @@ export async function reopenWorkstreamIssue(
   });
   logWrite("reopen", issueNumber);
   return toCanonical(res.data, botSlug);
-}
-
-// ---------------------------------------------------------------------------
-// Dispatcher — the single accessor the routes AND the MCP tools call. Keeps the
-// verb-set in one place (parity between the HTTP surface and the agent surface).
-// ---------------------------------------------------------------------------
-
-export type WorkstreamMutation =
-  | { verb: "create"; title: string; body?: string; status?: WorkstreamStatus }
-  | { verb: "update_title"; number: number; title: string }
-  | {
-      verb: "set_status";
-      number: number;
-      status: WorkstreamStatus;
-      state_reason?: CloseReason;
-    }
-  | { verb: "reopen"; number: number };
-
-export async function mutateWorkstreamIssue(
-  userId: string,
-  m: WorkstreamMutation,
-): Promise<WorkstreamIssue> {
-  switch (m.verb) {
-    case "create":
-      return createWorkstreamIssue(userId, {
-        title: m.title,
-        body: m.body,
-        status: m.status,
-      });
-    case "update_title":
-      return updateWorkstreamIssueTitle(userId, m.number, m.title);
-    case "set_status":
-      return setWorkstreamIssueStatus(userId, m.number, m.status, m.state_reason);
-    case "reopen":
-      return reopenWorkstreamIssue(userId, m.number);
-  }
 }
 
 // ---------------------------------------------------------------------------

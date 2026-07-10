@@ -26,7 +26,7 @@ import {
   checkWorkstreamWriteRate,
   classifyWriteError,
 } from "@/server/workstream/workstream-write-throttle";
-import type { WorkstreamStatus } from "@/lib/workstream";
+import { STATUS_ORDER, type WorkstreamStatus } from "@/lib/workstream";
 
 export const dynamic = "force-dynamic";
 
@@ -91,7 +91,23 @@ export async function POST(req: Request) {
     title,
   };
   if (typeof b.body === "string") input.body = b.body;
-  if (typeof b.status === "string") input.status = b.status as WorkstreamStatus;
+  if (typeof b.status === "string") {
+    // Validate against the known column set (parity with the agent tool's
+    // STATUS_ENUM) — an out-of-enum status would otherwise silently no-op into
+    // Backlog (security review nit).
+    if (!STATUS_ORDER.includes(b.status as WorkstreamStatus)) {
+      return NextResponse.json({ error: "invalid_status" }, { status: 422 });
+    }
+    // A new issue cannot be created already-closed (create never closes; "done"
+    // would yield an open Backlog card — a request/result mismatch).
+    if (b.status === "done") {
+      return NextResponse.json(
+        { error: "cannot_create_closed" },
+        { status: 422 },
+      );
+    }
+    input.status = b.status as WorkstreamStatus;
+  }
 
   try {
     const issue = await createWorkstreamIssue(user.id, input);
