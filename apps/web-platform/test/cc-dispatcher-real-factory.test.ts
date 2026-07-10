@@ -1254,6 +1254,31 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
+  // T2 (ADR-109): support persona bypasses the repo-lifecycle and runs read-only
+  // at the plugin docs root. The mirror of T10 — patchWorkspacePermissions must
+  // NOT run — plus cwd + read-only sandbox + kb-search-only skills.
+  // -------------------------------------------------------------------------
+  it("T2: support persona skips patchWorkspacePermissions and runs read-only at the plugin root", async () => {
+    await realSdkQueryFactory(makeArgs({ persona: "support" }));
+
+    // Repo-lifecycle write op is NOT invoked for support (contrast T10).
+    expect(mockPatchWorkspacePermissions).not.toHaveBeenCalled();
+
+    const opts = mockQuery.mock.calls[0][0].options;
+    // cwd is the boot-validated plugin docs root, not the user's workspace.
+    expect(opts.cwd).toBe("/app/shared/plugins/soleur");
+    // SDK skills scoped to kb-search only (support surface).
+    expect(opts.skills).toEqual(["kb-search"]);
+
+    // Sandbox built read-only, at the plugin root — allowWrite:[] is enforced
+    // inside buildAgentSandboxConfig (unit-tested T3 in agent-runner-query-options).
+    expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+      "/app/shared/plugins/soleur",
+      { allowGithubEgress: false, readOnly: true },
+    );
+  });
+
+  // -------------------------------------------------------------------------
   // T16: sandbox-required-but-unavailable substring → feature: "agent-sandbox"
   // (filtered by feature tag per learning
   // 2026-04-19-claude-agent-sdk-subprocess-exit-tag-via-stderr-substring.md)
