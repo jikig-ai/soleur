@@ -54,6 +54,30 @@ The parity-diff design routes through `soleur:engineering:review:data-integrity-
 - **Cost / maintenance:** a maintained CLI/GoTrue-version pin tracking prod; a widened parity diff that needs read-only prod catalog access (via the existing `run-verify.sh` Doppler `prd` path); the harness enumerates from the live catalog so it self-tracks new tenant tables.
 - **Open risk carried forward:** whether all 152 migrations apply cleanly to the CLI substrate is itself a parity signal — an apply failure on an out-of-band-provisioned prod object is a *finding*, not a bug to patch around (CTO risk 2).
 
+## First-run findings
+
+The harness earned its keep on the first full run: the RPC-bypass dimension (AC8)
+surfaced **4 real cross-tenant bypasses** of the same root cause — a migration
+granting EXECUTE to `service_role` only, but Supabase's default privileges left
+`authenticated` (and `anon`) a residual EXECUTE grant that `revoke ... from public`
+never removed, and the function trusts a caller-supplied `p_user_id`/reads across
+tenants:
+
+- `find_stuck_active_conversations` — returns `(id, user_id)` for **all** tenants'
+  stuck conversations to any authenticated/anon caller.
+- `acquire_conversation_slot` / `release_conversation_slot` / `touch_conversation_slot`
+  — trust `p_user_id` → an authenticated caller can occupy/exhaust, delete, or
+  keep-alive **another** tenant's concurrency slots (cap DoS).
+
+Filed as **#6306** and baselined in `test/rls-fuzz/rpc-cases.ts` via `test.fails`
+(green while tracked; flips RED the moment the grant is fixed, forcing un-baseline).
+The 18-table base matrix + storage.objects showed **no** isolation leaks — RLS on
+the workspace-isolated tables holds. One catalog caveat recorded: the
+`workspace_invitations` SELECT policy subqueries `auth.users`, which `authenticated`
+cannot read, so that table's authenticated SELECT is grant-blocked for *all*
+tenants (its write-side attacks carry the isolation proof; the parity diff checks
+whether prod shares the same `auth.users` grant posture).
+
 ## C4 impact
 
 None. The harness is dev/CI tooling outside the modeled system boundary (like the existing test suite): no external actor, no external system/vendor (all-local disposable Postgres), no product-boundary data store, no production access-relationship change. Verified against `model.c4`/`views.c4`/`spec.c4` (architecture-strategist).

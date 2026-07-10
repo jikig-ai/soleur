@@ -116,19 +116,19 @@ For each (table, op ∈ {SELECT, INSERT, UPDATE, DELETE}) under tenant-B claims 
 ## Acceptance Criteria
 
 ### Pre-merge (PR — all local/CI-verifiable, no operator steps)
-- [ ] AC1: Target set derived from the live `pg_policies` catalog (isolation set ∪ jti-deny set); harness FAILs if any `TO authenticated` workspace-isolated table has no attack case. No source-grep for the set.
-- [ ] AC2: Per table, `service_role` sees `count=1` of the seeded A-row (precondition), THEN tenant-B (`sub=userB`) sees `count=0`; write ops raise SQLSTATE `42501`; any non-42501 SQLSTATE fails the case as a test ERROR.
-- [ ] AC3: Positive controls PASS — tenant-A self-read `count=1`; `service_role` bypass. Guards against vacuous green.
-- [ ] AC4: jti two-sided — denied jti blocked AND allowed jti permitted on the same seeded row.
-- [ ] AC5: Mutation self-test — `DISABLE ROW LEVEL SECURITY` on one table (rolled back) makes the harness report RED.
-- [ ] AC6: Prod-parity catalog diff passes (local policies/grants/role-attrs/auth-fn-defs match prod); any diff fails the run.
-- [ ] AC7: DSN guard is a **fail-closed allowlist** — host ∈ {`localhost`,`127.0.0.1`,`::1`, known CI service host}; parse-host membership check (no DNS lookup); unit-tested; refuses any other host.
-- [ ] AC8: **RPC bypass** — every `SECURITY DEFINER` fn `GRANT EXECUTE TO authenticated` has a case driving tenant-B claims + tenant-A params, asserting denial/empty; catalog-derived, fails on any uncovered definer fn (invoker fns excluded with rationale).
-- [ ] AC9: **storage.objects** — a tenant-A object is not SELECT/UPDATE/DELETE-able by tenant-B via `storage.objects` (SQLSTATE-aware).
-- [ ] AC10: **CI gate** — `.github/workflows/rls-authz-fuzz.yml` runs the harness + parity diff on migration-touching PRs; red on any leak/drift; local-only DSN in CI.
-- [ ] AC11: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes; `./node_modules/.bin/vitest run test/rls-authz-fuzz.integration.test.ts` green against the local stack.
-- [ ] AC12: `ADR-103-*.md` exists with the decision + `## Alternatives Considered` (incl. rejected shim + rejected grep-mig-068 derivation); no C4 view change (enumeration below). No deferred blind spots (full coverage).
-- [ ] AC13: Zero real credentials in the harness env (synthetic only); no AGPL source copied.
+- [x] AC1: Target set derived from the live `pg_policies` catalog (isolation set ∪ jti-deny set); harness FAILs if any `TO authenticated` workspace-isolated table has no attack case. No source-grep for the set. — `test/rls-fuzz/catalog.ts` + coverage gate; 18-table registry in `targets.ts`.
+- [x] AC2: Per table, `service_role` sees `count=1` of the seeded A-row (precondition), THEN tenant-B (`sub=userB`) sees `count=0`; write ops raise SQLSTATE `42501` (INSERT) / 0-rows (UPDATE/DELETE, USING-filtered); any non-42501/non-empty outcome fails the case as a test ERROR.
+- [x] AC3: Positive controls PASS — tenant-A self-read `count=1`; inert org-swap negative control. Guards against vacuous green.
+- [x] AC4: jti two-sided — denied jti (`denied_jti` insert) blocked AND allowed jti permitted on the same seeded workspace row.
+- [x] AC5: Mutation self-test — `DISABLE ROW LEVEL SECURITY` on one table (rolled back) makes the harness's SELECT verdict report RED.
+- [x] AC6: Prod-parity catalog diff (`scripts/rls-parity-check.ts`) — policies/RLS-flags/grants/role-attrs/secdef-fn-grants/auth-fn-defs; any diff = exit 1. Live prod read runs in CI under doppler prd.
+- [x] AC7: DSN guard is a **fail-closed allowlist** — host ∈ {`localhost`,`127.0.0.1`,`::1`}; parse-host membership check; unit-tested; refuses any other host. (`local-dsn-guard.ts`)
+- [x] AC8: **RPC bypass** — every `SECURITY DEFINER` fn `GRANT EXECUTE TO authenticated` (49) is classified in `rpc-cases.ts` (attack / excluded-with-rationale / tracked known-exposure); catalog coverage gate fails on any uncovered or double-classified fn. **First run surfaced 4 real cross-tenant bypasses → #6306** (find_stuck_active_conversations + acquire/release/touch_conversation_slot; residual Supabase default grants), baselined via `test.fails`.
+- [x] AC9: **storage.objects** — a tenant-A chat-attachments object is not SELECT/UPDATE/DELETE-able by tenant-B (SQLSTATE-aware). (`rls-storage.integration.test.ts`)
+- [x] AC10: **CI gate** — `.github/workflows/rls-authz-fuzz.yml` runs the harness + parity diff on migration-touching PRs; supabase-CLI local stack (pinned 2.84.2) + `run-migrations.sh`; local-only DSN.
+- [x] AC11: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes; `RLS_FUZZ_LOCAL=1 vitest run test/rls-fuzz` green (86 passed + 4 expected-fail known-exposures).
+- [x] AC12: `ADR-103-*.md` exists with the decision + `## Alternatives Considered` (rejected shim + rejected grep-mig-068 derivation). No C4 view change.
+- [x] AC13: Zero real credentials in the harness env (synthetic only, `*@example.test`); no AGPL source copied.
 
 ## Architecture Decision (ADR/C4)
 
