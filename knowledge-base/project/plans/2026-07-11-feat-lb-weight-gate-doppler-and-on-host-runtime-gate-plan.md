@@ -18,13 +18,17 @@ refs: ["6027", "6230", "6218", "6178", "5274"]
 
 ## Overview
 
-The pure shape-only `lb-weight-gate.sh` (ADR-068 §(c)) and the warm-standby + web-2-recreate dispatch paths have shipped. The deferred orchestrator in #6027 requires:
-- A Doppler-`prd` sourcing entrypoint (`lb-weight-gate-doppler.sh`) that injects the exact env the pure gate expects and execs it.
-- A *distinct* on-host runtime-bind gate (N≥2 consecutive `docker exec ... /internal/readyz` (writable+populated) + disk attach check) before any LB weight shift or drained-host reboot.
+The pure shape-only `lb-weight-gate.sh` (ADR-068 §(c)) and the warm-standby + web-2-recreate dispatch paths have shipped.
 
-#6230 surfaced the residual: weight-0 warm-standby web-2 self-arms into its local Redis and is not auto-captured/quiesce-verified by LB-routed hooks (DI-C3). The manual web-2 freeze/recreate quiesce (via existing `apply_target=web-2-recreate`) is the accepted permanent seam. It must produce verifiable, non-SSH evidence (timestamped marker / deploy-status reason / GHA artifact) rather than remaining prose in a checklist.
+Per DHH + YAGNI mechanical reviews, this minimal slice delivers:
+- Direct `doppler run -p soleur -c prd -- ./lb-weight-gate.sh` usage (documented; no new dedicated shim).
+- Documentation that the runtime separation contract is satisfied by existing `readiness.ts` (on-host only, loopback+Host, write+populated) + the `requires_runtime_bind_probe=true` marker from the pure gate.
+- Disk attach check removed (attach proof = TF apply output per ADR-068).
+- Heavy #6230 evidence seam and gdpr-gate scoped out of this thin probes slice (deferred).
 
-**Why now:** Warm-standby + shape gate + recreate dispatch are in place. The next unshipped items explicitly listed in #6027 are the doppler wrapper and runtime gate. This is low-risk (read-mostly probes, dark-launchable, no weight/drain/rollback yet) but high-value for de-risking GA multi-host and making the #6230 manual step auditable.
+This preserves the shape-only vs runtime contract without new top-level scripts or over-scope. Low-risk, dark-launchable, uses existing surfaces. High value for contract clarity ahead of the full orchestrator.
+
+#6230 manual web-2 recreate remains the accepted permanent seam; minimal fact comments only here.
 
 **Brand-survival threshold:** single-user incident (misrouted/incompletely-attached web-2 or unquiesced scheduler state can lose scheduled reminders or route live git-data workspaces to a host without the LUKS volume).
 
