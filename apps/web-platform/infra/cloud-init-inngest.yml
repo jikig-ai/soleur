@@ -333,6 +333,7 @@ runcmd:
     # (pre-oci-pull with no oci-pull-rc-* = hung; oci-pull-rc-N!=0 = failed, with masked tail).
     /usr/local/bin/inngest-boot-phone-home.sh pre-oci-pull "$IREF"
     set +e
+    install -m 600 /dev/null /var/log/inngest-oci-pull.log   # 0600 pre-create so the redirect can't leave secrets world-readable
     docker pull "$IREF" > /var/log/inngest-oci-pull.log 2>&1
     pull_rc=$?
     set -e
@@ -380,6 +381,7 @@ runcmd:
     # the actual failure, tail masked (postgres creds / 32+hex tokens / signing keys) before ship.
     /usr/local/bin/inngest-boot-phone-home.sh pre-bootstrap-run
     set +e
+    install -m 600 /dev/null /var/log/inngest-bootstrap.log   # 0600 pre-create (secrets in the tail; see inngest-redact.sh)
     env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
         "INNGEST_CLI_ARCH=${inngest_cli_arch}" "SDK_URL=${sdk_url}" \
         "DOPPLER_PROJECT=soleur-inngest" \
