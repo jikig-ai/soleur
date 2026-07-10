@@ -1,14 +1,21 @@
-// Agent MCP tool for the Workstream board — agent-user READ parity (so an agent
-// can see the same issues the user sees). `workstream_issues_list` is read-only
-// (auto-approve) and calls the SAME shared getWorkstreamIssues() accessor the
-// dashboard route uses (no duplicated query). Mirrors server/routines-tools.ts.
-//
-// WRITE tools (create / set_status) are deferred + tracked — see the plan's
-// Deferred Work. The output INCLUDES the `user` field (Addendum item 5 read
-// parity).
+// Agent MCP tools for the Workstream board — agent-user READ + WRITE parity
+// (#5677, ADR-109). `workstream_issues_list` is read-only (auto-approve); the
+// four WRITE tools (create / set_status / update_title / close) are `gated`
+// (tool-tiers.ts) — the host review gate is the founder-confirmation surface.
+// ALL of them call the SAME shared accessors the HTTP routes use
+// (getWorkstreamIssues / mutateWorkstreamIssue helpers) — no duplicated query,
+// no `gh` shell-out. owner/repo/installation + initiatorLogin resolve
+// server-side from the operator's active workspace (never tool input).
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod/v4";
 import { getWorkstreamIssues } from "@/server/workstream/get-workstream-issues";
+import {
+  createWorkstreamIssue,
+  reopenWorkstreamIssue,
+  setWorkstreamIssueStatus,
+  updateWorkstreamIssueTitle,
+} from "@/server/workstream/mutate-workstream-issue";
 
 interface BuildWorkstreamToolsOpts {
   /** The operator the agent acts for (parity with the routines builder). */
@@ -28,13 +35,51 @@ function textResponse(payload: unknown, isError = false): ToolTextResponse {
   return body;
 }
 
+/** Shared fail-loud wrapper: a write that throws returns isError with a stable
+ *  code (never a silent success), mirroring the route's 502 posture. */
+async function writeResult(
+  fn: () => Promise<unknown>,
+): Promise<ToolTextResponse> {
+  try {
+    const issue = await fn();
+    return textResponse({ issue });
+  } catch (err) {
+    return textResponse(
+      {
+        error: "workstream_write_error",
+        message: err instanceof Error ? err.message : "unknown",
+      },
+      true,
+    );
+  }
+}
+
+// The 7 board columns as an agent-facing status enum (mirrors WorkstreamStatus).
+const STATUS_ENUM = z.enum([
+  "backlog",
+  "ready",
+  "in_progress",
+  "in_review",
+  "blocked",
+  "pending",
+  "done",
+]);
+
+const CLOSE_REASON_ENUM = z.enum(["completed", "not_planned"]);
+
 export function buildWorkstreamTools(opts: BuildWorkstreamToolsOpts) {
-  // The read IS user-scoped: it resolves the operator's active-workspace
-  // connected repo + installation token (ADR-044) — thread userId through.
+  // The reads AND writes are user-scoped: they resolve the operator's active-
+  // workspace connected repo + installation token (ADR-044) — thread userId.
   const { userId } = opts;
 
   return {
-    toolNames: ["mcp__soleur_platform__workstream_issues_list"],
+    toolNames: [
+      "mcp__soleur_platform__workstream_issues_list",
+      "mcp__soleur_platform__workstream_issue_create",
+      "mcp__soleur_platform__workstream_issue_set_status",
+      "mcp__soleur_platform__workstream_issue_update_title",
+      "mcp__soleur_platform__workstream_issue_close",
+    ],
     tools: [
       tool(
         "workstream_issues_list",
@@ -62,6 +107,92 @@ export function buildWorkstreamTools(opts: BuildWorkstreamToolsOpts) {
             );
           }
         },
+      ),
+      tool(
+        "workstream_issue_create",
+        "Create a REAL GitHub issue on the active workspace's connected repo. " +
+          "`title` is required; `body` optional; `status` optionally seeds the " +
+          "column (defaults Backlog). owner/repo + the creator attribution are " +
+          "resolved server-side (never accepted as input). Returns { issue } — " +
+          "the created issue with its real number. Gated (founder approval).",
+        {
+          title: z.string().describe("Issue title (required, non-empty)."),
+          body: z.string().optional().describe("Optional issue body/description."),
+          status: STATUS_ENUM.optional().describe(
+            "Optional seed column (defaults backlog).",
+          ),
+        },
+        async (input) =>
+          writeResult(() =>
+            createWorkstreamIssue(userId, {
+              title: input.title,
+              ...(input.body !== undefined ? { body: input.body } : {}),
+              ...(input.status !== undefined ? { status: input.status } : {}),
+            }),
+          ),
+      ),
+      tool(
+        "workstream_issue_set_status",
+        "Move an issue to a board column by number. Persists via the issue's " +
+          "labels (atomic); `done` closes the issue (optional `state_reason` " +
+          "completed|not_planned). A non-terminal column on a closed issue " +
+          "reopens it. Returns the canonical resulting { issue }. Gated.",
+        {
+          number: z.number().int().positive().describe("The issue number."),
+          status: STATUS_ENUM.describe("Target board column."),
+          state_reason: CLOSE_REASON_ENUM.optional().describe(
+            "When status=done: completed (default) or not_planned.",
+          ),
+        },
+        async (input) =>
+          writeResult(() =>
+            setWorkstreamIssueStatus(
+              userId,
+              input.number,
+              input.status,
+              input.state_reason,
+            ),
+          ),
+      ),
+      tool(
+        "workstream_issue_update_title",
+        "Edit an issue's title by number. Returns the canonical { issue }. Gated.",
+        {
+          number: z.number().int().positive().describe("The issue number."),
+          title: z.string().describe("New title (required, non-empty)."),
+        },
+        async (input) =>
+          writeResult(() =>
+            updateWorkstreamIssueTitle(userId, input.number, input.title),
+          ),
+      ),
+      tool(
+        "workstream_issue_close",
+        "Close an issue (`reason` completed|not_planned — both land it in Done; " +
+          "there is no Cancelled column) OR reopen it (`reopen: true` → the card " +
+          "leaves Done and lands where its surviving labels derive). Returns the " +
+          "canonical { issue }. Gated.",
+        {
+          number: z.number().int().positive().describe("The issue number."),
+          reason: CLOSE_REASON_ENUM.optional().describe(
+            "Close reason (default completed). Ignored when reopen=true.",
+          ),
+          reopen: z
+            .boolean()
+            .optional()
+            .describe("Reopen the issue instead of closing it."),
+        },
+        async (input) =>
+          writeResult(() =>
+            input.reopen
+              ? reopenWorkstreamIssue(userId, input.number)
+              : setWorkstreamIssueStatus(
+                  userId,
+                  input.number,
+                  "done",
+                  input.reason,
+                ),
+          ),
       ),
     ],
   };

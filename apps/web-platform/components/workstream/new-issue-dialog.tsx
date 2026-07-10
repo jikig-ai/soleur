@@ -1,41 +1,48 @@
 "use client";
 
-// "New Issue" dialog. Title is required; the card defaults to Backlog + Medium
-// priority + Unassigned. On submit the issue is inserted OPTIMISTICALLY atop
-// Backlog (local cache only — never persisted across reload, surfaced via the
-// note below). A user-created card NEVER claims "Live" (spec-flow #14 — `live`
-// is left unset and the status is Backlog).
+// "New Issue" dialog. Title is required; the issue defaults to Backlog. On
+// submit it POSTs a REAL GitHub issue (ADR-109) via the board's `onSubmit`, which
+// optimistically inserts the card and reconciles it with the returned real
+// number. Write-integrity here:
+//   - submit-disable + a single-flight ref so a double-click / slow-network
+//     double-fire cannot create two real issues (idempotency guard, spec P0-3).
+//   - empty/whitespace title blocked client-side (server also 422s).
+//   - on failure the form values are PRESERVED and an inline retry is shown (no
+//     dead-end); on success the dialog closes.
+//
+// "Create with Concierge" remains gated behind CONCIERGE_ONLINE (offline in v1) —
+// the draft backend is a tracked follow-up; the manual quick-add above is live.
 
 import { useEffect, useRef, useState } from "react";
 import { GoldButton } from "@/components/ui/gold-button";
-import type { WorkstreamIssue } from "@/lib/workstream";
 import { CONCIERGE_ONLINE } from "./concierge-flag";
-
-// Monotonic per-session counter so two creates in the same millisecond can't
-// collide on the React key (local Preview ids only; never persisted).
-let issueSeq = 0;
-function newIssueId(): string {
-  issueSeq += 1;
-  return `SOLAA-N${issueSeq}`;
-}
+import type { CreateIssueBody } from "./workstream-writes";
 
 export function NewIssueDialog({
   open,
   onClose,
-  onCreate,
+  onSubmit,
 }: {
   open: boolean;
   onClose: () => void;
-  onCreate: (issue: WorkstreamIssue) => void;
+  onSubmit: (input: CreateIssueBody) => Promise<void>;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // Synchronous single-flight guard — state flips are async, so a second submit
+  // in the same tick would still fire without this ref.
+  const inFlight = useRef(false);
 
   useEffect(() => {
     if (open) {
       setTitle("");
       setDescription("");
+      setSubmitting(false);
+      setError(null);
+      inFlight.current = false;
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
@@ -45,7 +52,7 @@ export function NewIssueDialog({
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        if (!inFlight.current) onClose();
       }
     }
     window.addEventListener("keydown", onKey);
@@ -54,24 +61,29 @@ export function NewIssueDialog({
 
   if (!open) return null;
 
-  const canSubmit = title.trim().length > 0;
+  const canSubmit = title.trim().length > 0 && !submitting;
 
-  function handleSubmit(e?: React.FormEvent) {
+  async function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
-    if (!canSubmit) return;
-    const now = new Date().toISOString();
-    onCreate({
-      id: newIssueId(),
-      title: title.trim(),
-      description: description.trim(),
-      status: "backlog",
-      priority: "medium",
-      assigneeRole: null,
-      createdAt: now,
-      updatedAt: now,
-      // No `live` — user-created cards never claim Live.
-    });
-    onClose();
+    if (inFlight.current) return; // single-flight: block the double-fire
+    if (title.trim().length === 0) return;
+    inFlight.current = true;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        title: title.trim(),
+        ...(description.trim() ? { body: description.trim() } : {}),
+      });
+      onClose();
+    } catch {
+      // Board already rolled back the optimistic card + toasted; keep the form
+      // values so the user can retry without re-typing.
+      setError("Couldn't create the issue. Please try again.");
+    } finally {
+      inFlight.current = false;
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -104,7 +116,8 @@ export function NewIssueDialog({
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Issue title"
             aria-required="true"
-            className="mb-4 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-tertiary focus:outline-none"
+            disabled={submitting}
+            className="mb-4 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-tertiary focus:outline-none disabled:opacity-60"
           />
 
           <label
@@ -119,18 +132,25 @@ export function NewIssueDialog({
             onChange={(e) => setDescription(e.target.value)}
             rows={3}
             placeholder="Optional"
-            className="mb-3 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-tertiary focus:outline-none"
+            disabled={submitting}
+            className="mb-3 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-tertiary focus:outline-none disabled:opacity-60"
           />
 
           <p className="mb-4 text-xs text-soleur-text-tertiary">
-            Adds to Backlog. Preview — new issues aren&apos;t saved yet and reset
-            on reload.
+            Adds to Backlog on your connected GitHub repo.
           </p>
 
-          {/* Disabled "Create with Concierge" field — gated behind the SAME
-              CONCIERGE_ONLINE=false flag the Concierge panel uses. Real
-              `disabled` (non-focusable + non-submittable) so it can never
-              silently no-op (CPO P0). Flip the flag + wire onClick to go live. */}
+          {error ? (
+            <p
+              role="alert"
+              className="mb-4 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-400"
+            >
+              {error}
+            </p>
+          ) : null}
+
+          {/* Disabled "Create with Concierge" — gated behind CONCIERGE_ONLINE
+              (offline in v1). Real `disabled` so it can never silently no-op. */}
           <fieldset
             disabled={!CONCIERGE_ONLINE}
             data-tour-id="action:concierge-draft"
@@ -174,12 +194,13 @@ export function NewIssueDialog({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-4 py-2 text-sm font-medium text-soleur-text-primary"
+              disabled={submitting}
+              className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-4 py-2 text-sm font-medium text-soleur-text-primary disabled:opacity-60"
             >
               Cancel
             </button>
             <GoldButton type="submit" disabled={!canSubmit}>
-              Create issue
+              {submitting ? "Creating…" : "Create issue"}
             </GoldButton>
           </div>
         </form>
