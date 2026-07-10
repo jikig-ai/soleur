@@ -181,7 +181,14 @@ runcmd:
   # is scoped to the ISOLATED `soleur-inngest` project's `prd` root config (a SEPARATE
   # project — NO inheritance path to soleur/prd), so a host compromise reads ONLY the
   # inngest secret set.
-  - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-doppler
+  # HOME is REQUIRED (#6122 boot fix — the actual dark-host boot bug, found via the #6178 boot
+  # probe): cloud-init runcmd runs with NO $HOME, and the Doppler CLI aborts with
+  # "Doppler Error: $HOME is not defined" even when DOPPLER_CONFIG_DIR is set. Without it the
+  # boot isolation self-check `doppler run` (+ its nested `doppler secrets`) and the token fetch
+  # both fail → inngest never bootstraps → the host is dark+silent+unreachable. The registry host
+  # got this fix (cloud-init-registry.yml:314-317); the inngest host never did, so it never booted.
+  # (systemd units set HOME=/root themselves, so only these cloud-init-level doppler calls need it.)
+  - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-doppler
   - chmod 600 /etc/default/inngest-doppler
 
   # --- #6178 boot observability: stage the Better Stack token + emit the FIRST marker ---
