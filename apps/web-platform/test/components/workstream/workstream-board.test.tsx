@@ -62,7 +62,7 @@ afterEach(() => {
 });
 
 describe("WorkstreamBoard", () => {
-  it("renders the 7 columns with the Preview banner", async () => {
+  it("renders the 7 columns backed by the connected repo", async () => {
     global.fetch = mockFetchOnce([
       issue({ id: "SOLAA-1", title: "Card one" }),
     ]) as unknown as typeof fetch;
@@ -81,9 +81,8 @@ describe("WorkstreamBoard", () => {
     ]) {
       expect(screen.getByRole("heading", { name: label })).toBeTruthy();
     }
-    expect(screen.getByText("Preview")).toBeTruthy();
     expect(
-      screen.getByText(/changes aren.?t saved yet/i),
+      screen.getByText(/backed by your connected GitHub repo/i),
     ).toBeTruthy();
   });
 
@@ -389,5 +388,102 @@ describe("WorkstreamBoard", () => {
     render(<Wrapped />);
     await waitFor(() => expect(screen.getByText("Issue not found")).toBeTruthy());
     expect(screen.getByRole("button", { name: /back to board/i })).toBeTruthy();
+  });
+
+  // Method-aware fetch: GET → { issues }, POST/PATCH → { issue }. Drives the
+  // optimistic→reconcile write-integrity path end-to-end (ADR-067 / AC1/AC7).
+  function methodFetch(opts: {
+    getIssues: WorkstreamIssue[];
+    write?: WorkstreamIssue;
+    writeOk?: boolean;
+    writeStatus?: number;
+  }) {
+    return vi.fn((_url: string, init?: { method?: string }) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ issues: opts.getIssues, board: undefined }),
+        });
+      }
+      return Promise.resolve({
+        ok: opts.writeOk ?? true,
+        status: opts.writeStatus ?? 200,
+        json: async () =>
+          opts.writeOk === false
+            ? { error: "workstream_write_error" }
+            : { issue: opts.write },
+      });
+    });
+  }
+
+  it("create reconciles the optimistic card with the returned REAL number (AC1/AC7)", async () => {
+    global.fetch = methodFetch({
+      getIssues: [],
+      write: issue({ id: "4321", title: "Fresh issue", status: "backlog" }),
+    }) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() =>
+      expect(screen.getByText(/No issues to display/i)).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: /new issue/i })[0]);
+    fireEvent.change(screen.getByLabelText(/title/i), {
+      target: { value: "Fresh issue" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create issue/i }));
+
+    // The card is reconciled to the real GitHub number (not the SOLAA-N temp id).
+    await waitFor(() => expect(screen.getByText("4321")).toBeTruthy());
+    expect(screen.getByText("Fresh issue")).toBeTruthy();
+  });
+
+  it("a failed status write rolls back + surfaces a retryable board toast (AC7)", async () => {
+    mockIssue = "77";
+    global.fetch = methodFetch({
+      getIssues: [issue({ id: "77", title: "Movable", status: "backlog" })],
+      writeOk: false,
+      writeStatus: 502,
+    }) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Issue 77" })).toBeTruthy(),
+    );
+
+    fireEvent.change(screen.getByLabelText("Change status"), {
+      target: { value: "blocked" },
+    });
+
+    // Failure surfaces a retryable board toast; the card rolls back to backlog.
+    await waitFor(() =>
+      expect(screen.getByText(/couldn.?t save that change/i)).toBeTruthy(),
+    );
+    expect(
+      (screen.getByLabelText("Change status") as HTMLSelectElement).value,
+    ).toBe("backlog");
+  });
+
+  it("a 403 write flips the board read-only with an honest hint (AC14)", async () => {
+    mockIssue = "77";
+    global.fetch = methodFetch({
+      getIssues: [issue({ id: "77", title: "Movable", status: "backlog" })],
+      writeOk: false,
+      writeStatus: 403,
+    }) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Issue 77" })).toBeTruthy(),
+    );
+    fireEvent.change(screen.getByLabelText("Change status"), {
+      target: { value: "blocked" },
+    });
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(/read-only access/i).length,
+      ).toBeGreaterThan(0),
+    );
   });
 });

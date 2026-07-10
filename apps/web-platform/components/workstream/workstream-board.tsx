@@ -1,21 +1,21 @@
 "use client";
 
-// The Workstream kanban board (client). SWR-fetches the read-only issue feed,
-// renders 7 columns, a search field + New Issue trigger, and a detail Sheet
-// driven by LOCAL STATE so open/close is INSTANT (no router.push navigation).
-// URL ↔ drawer sync, three moving parts:
-//   - OPEN (openIssue): pushState `?issue=<id>` — a real history entry so Back
-//     can pop it. Local state still drives the drawer, so open stays instant.
-//   - CLOSE (closeIssue): replaceState back to the bare path — strips the param
-//     WITHOUT adding an entry (closing isn't a navigation you'd want to "undo").
-//   - SYNC (popstate): re-reads ?issue from window.location.search on Back/
-//     Forward, so popping the pushed entry (→ no ?issue) closes the drawer, and
-//     deep-link/reload hydrates activeId from the same param on mount.
-// Net effect: open/close are instant AND Back closes the drawer. Mutations
-// (New Issue, status change) are optimistic + LOCAL ONLY (not persisted across
-// reload) — surfaced honestly via the "Preview" banner + a note at each action.
+// The Workstream kanban board (client). SWR-fetches the issue feed + board
+// precedence meta, renders 7 columns, a search field + New Issue trigger, and a
+// detail Sheet.
+//
+// Writes are REAL now (ADR-109) — Create / status-change / close / reopen POST/
+// PATCH the audited write endpoints. Write-integrity (the load-bearing rule at
+// single-user threshold): the optimistic cache edit is RECONCILED from GitHub's
+// returned canonical issue on success (mutate the SWR key — ADR-067, NOT
+// router.refresh alone), and ROLLED BACK on failure with a retryable surface.
+// A read-only-install 403 flips the board to a read-only state (honest hint, no
+// 403 retry loop); a 429 surfaces a distinct "slow down" toast.
+//
+// URL <-> drawer sync (unchanged): OPEN pushState ?issue=<id>; CLOSE replaceState
+// to the bare path; popstate re-reads ?issue on Back/Forward + hydrates on mount.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
@@ -41,15 +41,28 @@ import {
   NEW_ISSUE_DIALOG_EVENT,
   type NewIssueDialogEventDetail,
 } from "./new-issue-dialog-event";
+import {
+  createIssueRequest,
+  patchIssueRequest,
+  isReadOnly,
+  isRateLimited,
+  type CreateIssueBody,
+} from "./workstream-writes";
 
-type IssuesResponse = { issues: WorkstreamIssue[] };
+interface BoardMeta {
+  onKanbanOrg: boolean;
+  projectWritable: boolean;
+}
+type IssuesResponse = { issues: WorkstreamIssue[]; board?: BoardMeta };
 
-// v2 key: the v1 key ("workstream:collapsed-columns") stored a now-defunct
-// semantics where columns could be force-collapsed irrespective of the
-// content-open-by-default rule; starting fresh avoids resurrecting any stale
-// per-column collapse from that era. Empty columns are never written here — only
-// the user's explicit collapse of a CONTENT column is persisted.
 const COLLAPSED_STORAGE_KEY = "workstream:collapsed-columns-v2";
+
+// Monotonic optimistic-card id (local only; replaced by the real number on ack).
+let tempSeq = 0;
+function newTempId(): string {
+  tempSeq += 1;
+  return `SOLAA-N${tempSeq}`;
+}
 
 function readCollapsedColumns(): Set<WorkstreamStatus> {
   try {
@@ -59,9 +72,15 @@ function readCollapsedColumns(): Set<WorkstreamStatus> {
     if (!Array.isArray(parsed)) return new Set();
     return new Set(parsed as WorkstreamStatus[]);
   } catch {
-    // private mode / quota / malformed — degrade to "nothing collapsed".
     return new Set();
   }
+}
+
+/** The numeric issue number from a card id, or null for an optimistic temp card
+ *  (which cannot be PATCHed — it has no real GitHub number yet). */
+function issueNumberOf(id: string): number | null {
+  const n = Number(id);
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 export function WorkstreamBoard() {
@@ -71,10 +90,9 @@ export function WorkstreamBoard() {
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<WorkstreamFilters>(emptyFilters);
   const [newOpen, setNewOpen] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
-  // The guided tour opens/closes the New Issue dialog to spotlight its in-modal
-  // controls. It drives us via a window event (same decoupled pattern as the rail
-  // expand) rather than importing board state — inert when no tour is running.
   useEffect(() => {
     function onTourToggle(e: Event) {
       const detail = (e as CustomEvent<NewIssueDialogEventDetail>).detail;
@@ -84,15 +102,10 @@ export function WorkstreamBoard() {
     return () => window.removeEventListener(NEW_ISSUE_DIALOG_EVENT, onTourToggle);
   }, []);
 
-  // Drawer is driven by LOCAL state (instant open/close). Hydrate from the
-  // ?issue= param on mount (deep-link/reload support).
   const [activeId, setActiveId] = useState<string | null>(() =>
     searchParams.get("issue"),
   );
 
-  // Per-column collapse choice (content columns only), persisted in localStorage.
-  // Content is OPEN by default — a status is in this set ONLY if the user
-  // explicitly collapsed it. SSR-safe: read in an effect, never during render.
   const [collapsed, setCollapsed] = useState<Set<WorkstreamStatus>>(
     () => new Set(),
   );
@@ -100,7 +113,6 @@ export function WorkstreamBoard() {
     setCollapsed(readCollapsedColumns());
   }, []);
 
-  // Reconcile the drawer with the URL on Back/Forward (and deep-link history).
   useEffect(() => {
     function onPopState() {
       const param = new URLSearchParams(window.location.search).get("issue");
@@ -115,19 +127,17 @@ export function WorkstreamBoard() {
     jsonFetcher,
   );
   const issues = data?.issues;
+  const board = data?.board;
+  // Board precedence: for the dogfood org repo the Project board Status WINS
+  // over labels on read, and the label→board mirror needs a still-ungranted
+  // write scope — so a label-driven column move would snap back. Disable those
+  // moves while the grant is absent (lifts automatically once granted).
+  const boardPrecedence = Boolean(board?.onKanbanOrg && !board?.projectWritable);
 
-  // Revalidate from the server (the ErrorCard retry AND the Refresh button).
-  // Filters + search live in React state untouched by mutate(), so they survive
-  // the refetch automatically (D6). When a revalidation fails while we still
-  // hold data, SWR keeps `data` and sets `error` — that `error && data` pair is
-  // the "couldn't refresh, showing last loaded" signal below, and SWR clears
-  // `error` on the next success so the notice can never outlive the failure.
   const refetch = useCallback(() => {
     void mutate();
   }, [mutate]);
 
-  // A failed REFRESH (vs a failed first load) is "error present BUT stale data
-  // retained" — surface an honest inline notice without discarding the board.
   const refreshFailed = error != null && data != null;
 
   const resetFilters = useCallback(() => {
@@ -135,25 +145,81 @@ export function WorkstreamBoard() {
     setSearch("");
   }, []);
 
-  // Optimistic, LOCAL-ONLY insert atop Backlog (never persisted; revalidate
-  // off so a background focus-revalidate doesn't drop it mid-session).
-  const addIssue = useCallback(
-    (issue: WorkstreamIssue) => {
+  // Surface a failure honestly. A 403 flips the board read-only (no retry loop);
+  // a 429 is a distinct slow-down; anything else is a retryable board toast.
+  const surfaceWriteError = useCallback((e: unknown) => {
+    if (isReadOnly(e)) {
+      setReadOnly(true);
+      setToast("Read-only access — this install can't write issues.");
+    } else if (isRateLimited(e)) {
+      setToast("Slowing down — too many changes at once. Try again in a moment.");
+    } else {
+      setToast("Couldn't save that change. Please try again.");
+    }
+  }, []);
+
+  // CREATE — optimistic temp card atop Backlog, reconcile with the returned real
+  // issue on success, remove it on failure (the dialog shows the error/retry).
+  const createIssue = useCallback(
+    async (input: CreateIssueBody): Promise<void> => {
+      const tempId = newTempId();
+      const now = new Date().toISOString();
+      const temp: WorkstreamIssue = {
+        id: tempId,
+        title: input.title,
+        description: input.body ?? "",
+        status: input.status ?? "backlog",
+        priority: "medium",
+        assigneeRole: null,
+        createdAt: now,
+        updatedAt: now,
+      };
       void mutate(
-        (cur) => ({ issues: [issue, ...(cur?.issues ?? [])] }),
+        (cur) => ({ issues: [temp, ...(cur?.issues ?? [])], board: cur?.board }),
         { revalidate: false },
       );
+      try {
+        const returned = await createIssueRequest(input);
+        void mutate(
+          (cur) => ({
+            issues: (cur?.issues ?? []).map((i) =>
+              i.id === tempId ? returned : i,
+            ),
+            board: cur?.board,
+          }),
+          { revalidate: false },
+        );
+      } catch (e) {
+        void mutate(
+          (cur) => ({
+            issues: (cur?.issues ?? []).filter((i) => i.id !== tempId),
+            board: cur?.board,
+          }),
+          { revalidate: false },
+        );
+        surfaceWriteError(e);
+        throw e; // let the dialog keep the form + show inline retry
+      }
     },
-    [mutate],
+    [mutate, surfaceWriteError],
   );
 
-  // Optimistic, LOCAL-ONLY status move (counts recompute from cache).
+  // STATUS change (also close: status=done + reason) — optimistic move, reconcile
+  // from the returned canonical issue, roll back on failure.
   const changeStatus = useCallback(
-    (id: string, status: WorkstreamStatus) => {
+    async (
+      id: string,
+      status: WorkstreamStatus,
+      stateReason?: "completed" | "not_planned",
+    ): Promise<void> => {
+      const number = issueNumberOf(id);
+      if (number === null) return; // optimistic temp card — nothing to persist
+      const prev = issues?.find((i) => i.id === id);
       void mutate(
         (cur) =>
           cur
             ? {
+                ...cur,
                 issues: cur.issues.map((i) =>
                   i.id === id
                     ? { ...i, status, updatedAt: new Date().toISOString() }
@@ -163,13 +229,123 @@ export function WorkstreamBoard() {
             : cur,
         { revalidate: false },
       );
+      try {
+        const returned = await patchIssueRequest(number, {
+          status,
+          ...(stateReason ? { state_reason: stateReason } : {}),
+        });
+        void mutate(
+          (cur) =>
+            cur
+              ? {
+                  ...cur,
+                  issues: cur.issues.map((i) =>
+                    i.id === returned.id ? returned : i,
+                  ),
+                }
+              : cur,
+          { revalidate: false },
+        );
+      } catch (e) {
+        if (prev) {
+          void mutate(
+            (cur) =>
+              cur
+                ? {
+                    ...cur,
+                    issues: cur.issues.map((i) => (i.id === id ? prev : i)),
+                  }
+                : cur,
+            { revalidate: false },
+          );
+        }
+        surfaceWriteError(e);
+      }
     },
-    [mutate],
+    [issues, mutate, surfaceWriteError],
   );
 
-  // Open is INSTANT (local state); we pushState a `?issue=` entry so Back pops
-  // it and the popstate listener clears the drawer (vs replaceState, which left
-  // no entry to pop — Back then navigated off the board).
+  // TITLE edit — optimistic, reconcile from the returned canonical issue.
+  const updateTitle = useCallback(
+    async (id: string, title: string): Promise<void> => {
+      const number = issueNumberOf(id);
+      if (number === null) return;
+      const prev = issues?.find((i) => i.id === id);
+      void mutate(
+        (cur) =>
+          cur
+            ? {
+                ...cur,
+                issues: cur.issues.map((i) =>
+                  i.id === id ? { ...i, title } : i,
+                ),
+              }
+            : cur,
+        { revalidate: false },
+      );
+      try {
+        const returned = await patchIssueRequest(number, { title });
+        void mutate(
+          (cur) =>
+            cur
+              ? {
+                  ...cur,
+                  issues: cur.issues.map((i) =>
+                    i.id === returned.id ? returned : i,
+                  ),
+                }
+              : cur,
+          { revalidate: false },
+        );
+      } catch (e) {
+        if (prev) {
+          void mutate(
+            (cur) =>
+              cur
+                ? {
+                    ...cur,
+                    issues: cur.issues.map((i) => (i.id === id ? prev : i)),
+                  }
+                : cur,
+            { revalidate: false },
+          );
+        }
+        surfaceWriteError(e);
+        throw e; // let the inline editor keep edit mode for retry
+      }
+    },
+    [issues, mutate, surfaceWriteError],
+  );
+
+  // REOPEN — PATCH state=open; the card leaves Done and lands where its surviving
+  // labels derive. Reconcile from the returned canonical issue.
+  const reopenIssue = useCallback(
+    async (id: string): Promise<void> => {
+      const number = issueNumberOf(id);
+      if (number === null) return;
+      const prev = issues?.find((i) => i.id === id);
+      try {
+        const returned = await patchIssueRequest(number, { reopen: true });
+        void mutate(
+          (cur) =>
+            cur
+              ? {
+                  ...cur,
+                  issues: cur.issues.map((i) =>
+                    i.id === returned.id ? returned : i,
+                  ),
+                }
+              : cur,
+          { revalidate: false },
+        );
+      } catch (e) {
+        if (prev) void mutate(undefined, { revalidate: false });
+        surfaceWriteError(e);
+      }
+    },
+    [issues, mutate, surfaceWriteError],
+  );
+
   const openIssue = useCallback(
     (id: string) => {
       setActiveId(id);
@@ -185,21 +361,15 @@ export function WorkstreamBoard() {
     },
     [pathname],
   );
-  // Close strips the param WITHOUT adding a history entry (replaceState) — an
-  // explicit close isn't a navigation you'd want to "undo" via Forward.
   const closeIssue = useCallback(() => {
     setActiveId(null);
     try {
       window.history.replaceState({}, "", pathname);
     } catch {
-      /* history unavailable — local state still drives the drawer */
+      /* history unavailable */
     }
   }, [pathname]);
 
-  // Toggle a content column's collapse choice and persist it. Empty columns are
-  // collapsed by IssueColumn regardless and never reach this handler (they render
-  // no toggle), so the persisted set only ever holds user-collapsed CONTENT
-  // columns.
   const toggleCollapse = useCallback((status: WorkstreamStatus) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -211,19 +381,17 @@ export function WorkstreamBoard() {
           JSON.stringify([...next]),
         );
       } catch {
-        /* localStorage unavailable — in-memory toggle still works this session */
+        /* localStorage unavailable */
       }
       return next;
     });
   }, []);
 
-  // Faceted filter options derive from the FULL loaded set (stable, no thrash).
   const filterOptions = useMemo(
     () => deriveFilterOptions(issues ?? []),
     [issues],
   );
 
-  // Compose: text search AND the four filter dimensions, over the loaded set.
   const filtered = useMemo(
     () =>
       (issues ?? []).filter(
@@ -241,21 +409,20 @@ export function WorkstreamBoard() {
 
   return (
     <div>
-      {/* Honesty: board-level non-persistence notice (CPO P0). */}
       <div className="mb-4 flex items-center gap-2">
         <h1 className="text-2xl font-medium text-soleur-text-primary">
           Workstream
         </h1>
-        <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-amber-500/90">
-          Preview
-        </span>
+        {readOnly ? (
+          <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-amber-500/90">
+            Read-only
+          </span>
+        ) : null}
       </div>
       <p className="mb-5 text-xs text-soleur-text-tertiary">
-        Preview — changes aren&apos;t saved yet.
+        Issues are backed by your connected GitHub repo.
       </p>
 
-      {/* Top bar: search + filters + Reset/Refresh + New Issue (rendered in
-          every non-error state so the surface is never stranded). */}
       <div className="mb-5 flex flex-wrap items-center gap-2">
         <label className="relative flex items-center">
           <SearchIcon className="pointer-events-none absolute left-3 h-4 w-4 text-soleur-text-tertiary" />
@@ -296,13 +463,40 @@ export function WorkstreamBoard() {
             )}
             {isValidating ? "Refreshing…" : "Refresh"}
           </button>
-          <GoldButton onClick={() => setNewOpen(true)} data-tour-id="action:new-issue">+ New Issue</GoldButton>
+          <GoldButton
+            onClick={() => setNewOpen(true)}
+            disabled={readOnly}
+            data-tour-id="action:new-issue"
+          >
+            + New Issue
+          </GoldButton>
         </div>
       </div>
       {refreshFailed ? (
         <p className="mb-3 text-xs text-amber-500/90" role="status">
           Couldn&apos;t refresh — showing the last loaded issues.
         </p>
+      ) : null}
+      {readOnly ? (
+        <p className="mb-3 text-xs text-amber-500/90" role="status">
+          Read-only access — connect a repo whose GitHub App install has issue
+          write permission to create or move issues.
+        </p>
+      ) : null}
+      {toast ? (
+        <div
+          role="alert"
+          className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-500/90"
+        >
+          <span>{toast}</span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="rounded border border-amber-500/40 px-2 py-0.5 font-medium hover:bg-amber-500/10"
+          >
+            Dismiss
+          </button>
+        </div>
       ) : null}
 
       {error && !data ? (
@@ -314,7 +508,7 @@ export function WorkstreamBoard() {
       ) : !data ? (
         <BoardSkeleton />
       ) : issues && issues.length === 0 ? (
-        <EmptyState onNew={() => setNewOpen(true)} />
+        <EmptyState onNew={() => setNewOpen(true)} disabled={readOnly} />
       ) : filtered.length === 0 ? (
         <NoResults onReset={resetFilters} />
       ) : (
@@ -337,14 +531,19 @@ export function WorkstreamBoard() {
         issue={selected}
         loading={activeId != null && issues == null && !error}
         notFound={activeId != null && issues != null && selected == null}
+        readOnly={readOnly}
+        boardPrecedence={boardPrecedence}
+        onKanbanOrg={Boolean(board?.onKanbanOrg)}
         onClose={closeIssue}
         onChangeStatus={changeStatus}
+        onReopen={reopenIssue}
+        onUpdateTitle={updateTitle}
       />
 
       <NewIssueDialog
         open={newOpen}
         onClose={() => setNewOpen(false)}
-        onCreate={addIssue}
+        onSubmit={createIssue}
       />
     </div>
   );
@@ -363,17 +562,23 @@ function BoardSkeleton() {
   );
 }
 
-function EmptyState({ onNew }: { onNew: () => void }) {
+function EmptyState({
+  onNew,
+  disabled,
+}: {
+  onNew: () => void;
+  disabled?: boolean;
+}) {
   return (
     <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/40 py-16 text-center">
-      <p className="text-sm text-soleur-text-secondary">
-        No issues to display
-      </p>
+      <p className="text-sm text-soleur-text-secondary">No issues to display</p>
       <p className="mt-1 text-xs text-soleur-text-tertiary">
         Issues sync from your connected GitHub repo.
       </p>
       <div className="mt-4 flex justify-center">
-        <GoldButton onClick={onNew}>+ New Issue</GoldButton>
+        <GoldButton onClick={onNew} disabled={disabled}>
+          + New Issue
+        </GoldButton>
       </div>
     </div>
   );
