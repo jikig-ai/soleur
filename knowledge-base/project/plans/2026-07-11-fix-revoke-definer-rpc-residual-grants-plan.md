@@ -100,7 +100,7 @@ whose only grant statement is `revoke … on function … from public`:
 | `acquire_conversation_slot(uuid, uuid, integer)` (3-arg) | 029 | — | **N/A** — dropped by `093:42` (`DROP FUNCTION IF EXISTS`) |
 | `sum_user_mtd_cost(uuid, timestamptz)` | 027 | revoke public+authenticated+anon | SAFE (exemplar — the correct pattern) |
 | `acquire/touch/release_worktree_lease(…)` ×3 | 116 | revoke public+anon+authenticated | SAFE (exemplar) |
-| `list_conversations_enriched(…)` | 125 | revoke public+anon, **GRANT authenticated** | SAFE (intentionally authenticated-callable — different case) |
+| `list_conversations_enriched(…)` | 125 | revoke public+anon, **GRANT authenticated** | SAFE (`SECURITY INVOKER`, not DEFINER; intentionally authenticated-callable — different case) |
 
 **Audit completeness (independently confirmed by both deepen reviewers):** enumerating every non-`.down`
 migration that revokes EXECUTE from `public` but never from `anon`/`authenticated` yields exactly these 5

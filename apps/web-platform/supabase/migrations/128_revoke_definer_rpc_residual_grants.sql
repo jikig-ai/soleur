@@ -30,7 +30,8 @@
 --   * 069_jti_deny_grant_restore.sql (the pure grant-change migration +
 --     verify-sentinel + down-migration triad this file copies verbatim).
 -- 125_list_conversations_enriched.sql:172-179 records the same DEFINER
--- grant-hygiene rule; 037 is the one precedent that got it wrong.
+-- grant-hygiene rule; 037 (the finder) plus 029/036/093 (the slot RPCs) are
+-- the precedents that got it wrong — each ran revoke-from-public-only.
 --
 -- No function BODY is edited (grants only), so the existing
 -- `set search_path = public, pg_temp` pins are untouched

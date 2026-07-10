@@ -124,9 +124,15 @@ describe("verify 128_definer_rpc_residual_grants_revoked", () => {
 
   for (const { fn, args, serviceRolePositive } of TARGETS) {
     for (const role of ["anon", "authenticated", "public"] as const) {
-      it(`AC4: ${role} deny check for ${fn}(${args})`, () => {
+      it(`AC4: ${role} deny check (bound check_name + polarity) for ${fn}(${args})`, () => {
+        // Bind the check_name literal → probe → CASE polarity in ONE regex.
+        // Asserting only that the has_function_privilege probe EXISTS is
+        // vacuous: an inverted sentinel (`THEN 0 ELSE 1` — which would assert
+        // the role SHOULD have EXECUTE, a self-defeating deny check) or a row
+        // whose check_name is mislabeled would both stay green. A deny check
+        // MUST be `... THEN 1 ELSE 0` (bad=1 when the role still has EXECUTE).
         const re = new RegExp(
-          `has_function_privilege\\(\\s*'${role}'\\s*,\\s*'${sigPattern(fn, args)}'\\s*,\\s*'EXECUTE'\\s*\\)`,
+          `'${fn}_${role}_revoked'[^\\n]*,\\s*CASE\\s+WHEN\\s+has_function_privilege\\(\\s*'${role}'\\s*,\\s*'${sigPattern(fn, args)}'\\s*,\\s*'EXECUTE'\\s*\\)\\s+THEN\\s+1\\s+ELSE\\s+0`,
           "i",
         );
         expect(verifyExec).toMatch(re);
@@ -134,9 +140,13 @@ describe("verify 128_definer_rpc_residual_grants_revoked", () => {
     }
 
     if (serviceRolePositive) {
-      it(`AC4: service_role grant-present check for ${fn}(${args})`, () => {
+      it(`AC4: service_role grant-present check (bound check_name + polarity) for ${fn}(${args})`, () => {
+        // Present check MUST be `... THEN 0 ELSE 1` (bad=1 when service_role
+        // LACKS EXECUTE) — the load-bearing guard that an accidental
+        // service_role revoke breaks the reaper/slot flows. Inverting it to a
+        // deny-shaped `THEN 1 ELSE 0` would flag the correct grant as bad.
         const re = new RegExp(
-          `has_function_privilege\\(\\s*'service_role'\\s*,\\s*'${sigPattern(fn, args)}'\\s*,\\s*'EXECUTE'\\s*\\)`,
+          `'${fn}_service_role_grant_present'[^\\n]*,\\s*CASE\\s+WHEN\\s+has_function_privilege\\(\\s*'service_role'\\s*,\\s*'${sigPattern(fn, args)}'\\s*,\\s*'EXECUTE'\\s*\\)\\s+THEN\\s+0\\s+ELSE\\s+1`,
           "i",
         );
         expect(verifyExec).toMatch(re);
