@@ -350,6 +350,17 @@ describe("buildAgentQueryOptions — WorkspaceMode-driven cwd + sandbox write-se
     expect(opts.sandbox?.filesystem?.allowWrite).toEqual([]);
     expect(opts.sandbox?.filesystem?.allowWrite).not.toContain(PLUGIN);
   });
+
+  it("support: sandbox denyRead obscures the internal knowledge base (containment defense)", () => {
+    // PLUGIN = /tmp/test-workspace/plugins/soleur → internal KB is two levels up.
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("support") });
+    expect(opts.sandbox?.filesystem?.denyRead).toContain("/tmp/test-workspace/knowledge-base");
+  });
+
+  it("command_center: does NOT add the internal-KB deny (no support containment)", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("command_center") });
+    expect(opts.sandbox?.filesystem?.denyRead ?? []).not.toContain("/tmp/test-workspace/knowledge-base");
+  });
 });
 
 describe("buildAgentQueryOptions — drift-guard snapshot (T4)", () => {

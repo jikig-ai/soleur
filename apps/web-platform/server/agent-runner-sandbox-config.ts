@@ -171,9 +171,17 @@ const GITHUB_EGRESS_DOMAINS = Object.freeze([
  */
 export function buildAgentSandboxConfig(
   workspacePath: string,
-  opts?: { allowGithubEgress?: boolean; readOnly?: boolean },
+  opts?: { allowGithubEgress?: boolean; readOnly?: boolean; denyReadExtra?: readonly string[] },
 ): AgentSandboxConfig {
-  const { denyRead, degraded } = enumerateSiblingDenyPaths(workspacePath);
+  const { denyRead: siblingDeny, degraded } = enumerateSiblingDenyPaths(workspacePath);
+  // ADR-109 — support-persona containment: additional absolute paths to obscure
+  // (`--tmpfs`) from the read-only support session. The support agent runs under
+  // `--ro-bind / /` (whole FS readable) with Bash (kb-search greps), so the
+  // internal `knowledge-base/` (confidential operator post-mortems/roadmap/ADRs)
+  // is denied here at the tool/root level — NOT by prompt. Deduped with the
+  // sibling deny set. NOTE: this is defense-in-depth; the LIVE `support-live` flag
+  // stays OFF until a deployed-env QA confirms no internal-KB content leaks.
+  const denyRead = Array.from(new Set([...siblingDeny, ...(opts?.denyReadExtra ?? [])]));
   // Structured, no-SSH observability of the isolation decision per dispatch
   // (observability-coverage-reviewer §Step 4.6 — the affected surface is the
   // agent sandbox). `degraded: true` is the fail-closed broad-deny path a

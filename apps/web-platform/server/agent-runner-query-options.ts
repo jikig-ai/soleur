@@ -26,6 +26,8 @@ import type {
   Options as SDKOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 
+import path from "node:path";
+
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
 import type { WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath } from "./plugin-path";
@@ -225,6 +227,14 @@ export function buildAgentQueryOptions(
   const resolvedCwd =
     args.mode.cwdSource === "plugin" ? trustedPluginPath : args.workspacePath;
   const sandboxReadOnly = args.mode.sandboxWrite === "none";
+  // ADR-109 — support containment: obscure the internal `knowledge-base/`
+  // (confidential operator KB) from the read-only support session. The deployed
+  // repo root is the plugin root's grandparent (`getPluginPath()` =
+  // `<root>/plugins/soleur`), so the internal KB is `<root>/knowledge-base`. Only
+  // computed for the support (read-only) mode; Command Center passes nothing.
+  const denyReadExtra = sandboxReadOnly
+    ? [path.resolve(trustedPluginPath, "..", "..", "knowledge-base")]
+    : undefined;
 
   // biome-ignore lint/suspicious/noExplicitAny: SDK Options is a wide union; partial-shape build avoids re-asserting every key
   const opts: any = {
@@ -279,6 +289,8 @@ export function buildAgentQueryOptions(
       // ADR-109 — support persona runs read-only (allowWrite:[]) so a
       // cwd=pluginPath session cannot write into the shared platform plugin root.
       readOnly: sandboxReadOnly,
+      // ADR-109 — obscure the internal knowledge base from support (tool-level).
+      denyReadExtra,
     }),
     // Loaded-gun guard: both factories source args.pluginPath from getPluginPath()
     // (an absolute /app/ platform path). assertTrustedPluginPath fails LOUDLY if a

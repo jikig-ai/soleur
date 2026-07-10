@@ -1274,7 +1274,12 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // inside buildAgentSandboxConfig (unit-tested T3 in agent-runner-query-options).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
       "/app/shared/plugins/soleur",
-      { allowGithubEgress: false, readOnly: true },
+      expect.objectContaining({
+        allowGithubEgress: false,
+        readOnly: true,
+        // Internal KB obscured from the read-only support session (containment).
+        denyReadExtra: ["/app/shared/knowledge-base"],
+      }),
     );
   });
 

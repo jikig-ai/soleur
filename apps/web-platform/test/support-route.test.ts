@@ -6,7 +6,11 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 import type { WSMessage } from "@/lib/types";
 
 const h = vi.hoisted(() => ({
-  getUser: vi.fn(async () => ({ data: { user: { id: "user-1" } } })),
+  getUser: vi.fn(
+    async (): Promise<{ data: { user: { id: string } | null } }> => ({
+      data: { user: { id: "user-1" } },
+    }),
+  ),
   dispatchSoleurGo: vi.fn(),
   resolveOrCreateSupportConversation: vi.fn(async () => "conv-support-1"),
   validateOrigin: vi.fn(() => ({ valid: true, origin: "https://app" })),
