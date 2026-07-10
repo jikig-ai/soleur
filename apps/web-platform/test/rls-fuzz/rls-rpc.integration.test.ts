@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { assertLocalDsn } from "./local-dsn-guard";
 import { buildAuthenticatedClaims } from "./claim";
-import { type Verdict } from "./verdict";
+import { classifyRpcOutcome, type Verdict } from "./verdict";
 import { securityDefinerAuthenticatedFns } from "./catalog";
 import { ATTACK_SQL, EXCLUDED, KNOWN_EXPOSURES, type RpcCtx } from "./rpc-cases";
 
@@ -43,13 +43,18 @@ async function driveDenied(sqlText: string): Promise<Verdict> {
       const rows = await t.unsafe(sqlText);
       if (rows.length === 0) return { kind: "denied" };
       const v = Object.values(rows[0] as object)[0];
+      // null/false/0 = a getter returning nothing to a non-member → denied. NOTE:
+      // "" (postgres.js's representation of a void return) is deliberately NOT a
+      // denial sentinel — a void setter that returns cleanly for tenant-B MUTATED
+      // A's data, which must surface as leaked, not be masked as denied.
       if (v === null || v === false || v === 0 || v === "0") return { kind: "denied" };
       return { kind: "leaked" };
     });
-  } catch {
-    // A throw (membership/ownership guard, or param validation) means the fn did
-    // NOT perform the cross-tenant action for tenant-B → denied.
-    return { kind: "denied" };
+  } catch (err) {
+    // SQLSTATE-classify the raise: a denial code (42501/P0001/P0002) = denied; any
+    // other code (signature drift 42883, malformed uuid 22P02, validation 22023,
+    // constraint 23xxx) = the call never reached the auth boundary → test-error.
+    return classifyRpcOutcome(err as { code?: string }, 0);
   }
 }
 
@@ -75,7 +80,18 @@ async function seedRpcCtx(): Promise<RpcCtx> {
     values (${wsA}, 'work', ${convA}, 'user', 'x') returning id`;
   const [del] = await sql`insert into byok_delegations (grantor_user_id, grantee_user_id, workspace_id, created_by_user_id, daily_usd_cap_cents, hourly_usd_cap_cents)
     values (${userA}, ${userC}, ${wsA}, ${userA}, 1000, 100) returning id`;
-  return { userA, userB, userC, wsA, wsB, orgA, convA, convA2, kbFileA: kb.id, messageA: msg.id, delegationA: del.id };
+  // Poison A's workspace flags to NON-sentinel values so a leaked getter read
+  // returns a truthy/non-null value (→ leaked), distinguishable from a denial's
+  // null. Without this, the getters' defaults (debug_mode=false, ack=null,
+  // installation_id=null) equal the denial sentinel → a real leak reads as denied.
+  await sql`update workspaces set debug_mode = true, autonomous_disclosure_ack_at = now(), github_installation_id = 424242 where id = ${wsA}`;
+  const [contact] = await sql`insert into beta_contacts (user_id) values (${userA}) returning id`;
+  const [inbox] = await sql`insert into inbox_item (user_id, workspace_id, severity, source, title)
+    values (${userA}, ${wsA}, 'info', 'system', 'rls-fuzz') returning id`;
+  return {
+    userA, userB, userC, wsA, wsB, orgA, convA, convA2,
+    kbFileA: kb.id, messageA: msg.id, delegationA: del.id, contactA: contact.id, inboxA: inbox.id,
+  };
 }
 
 describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local, catalog-driven)", () => {
@@ -110,6 +126,24 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
       expect(verdict, `${name}: definer fn must deny tenant-B + tenant-A params`).toEqual({ kind: "denied" });
     });
   }
+
+  // RPC positive control — the base-table driver has AC3 (tenant-A self-read); the
+  // RPC dimension needs the mirror or the value-returning getters are vacuous (a
+  // leak of A's *default* value would read identically to a denial). Under A's own
+  // claims the poisoned getters MUST return the seeded non-sentinel value; if they
+  // returned null here, every cross-tenant getter "denial" would be green-by-default.
+  test("RPC positive control: value-returning getters return A's poisoned data under A's claims", async () => {
+    const readAsA = (sqlText: string) =>
+      rolledBack(async (t) => {
+        await t`set local role authenticated`;
+        await t.unsafe("select set_config('request.jwt.claims', $1, true)", [buildAuthenticatedClaims({ sub: ctx.userA })]);
+        const rows = await t.unsafe(sqlText);
+        return Object.values(rows[0] as object)[0];
+      });
+    expect(await readAsA(`select get_workspace_debug_mode('${ctx.wsA}')`), "A must read its own debug_mode=true").toBe(true);
+    expect(await readAsA(`select get_workspace_autonomous_ack('${ctx.wsA}')`), "A must read its own ack timestamp").not.toBeNull();
+    expect(await readAsA(`select resolve_workspace_installation_id('${ctx.wsA}')`), "A must resolve its own installation id").not.toBeNull();
+  });
 
   // EXCLUDED — documented as covered (no cross-tenant param surface). Asserting the
   // rationale is non-empty keeps the registry honest (no silent blanks).

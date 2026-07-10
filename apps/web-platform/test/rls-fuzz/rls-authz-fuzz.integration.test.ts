@@ -11,8 +11,8 @@ import {
   RLS_VIOLATION_SQLSTATE,
   type Verdict,
 } from "./verdict";
-import { isolationSet } from "./catalog";
-import { ISOLATION_TARGETS, type Ctx, type Locate } from "./targets";
+import { isolationSet, workspaceTenancyTables } from "./catalog";
+import { ISOLATION_TARGETS, EXCLUDED_ISOLATION, type Ctx, type Locate } from "./targets";
 
 // Runtime RLS/authz-fuzz harness (#6256, ADR-103). Drives a non-member tenant's
 // identity against another tenant's rows across every workspace-isolated RLS
@@ -99,6 +99,22 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local, cat
     const stale = [...registry].filter((t) => !catalog.has(t));
     expect(uncovered, `catalog-isolated tables with no attack case: ${uncovered.join(", ")}`).toEqual([]);
     expect(stale, `registry tables not in the live isolation set: ${stale.join(", ")}`).toEqual([]);
+  });
+
+  // AC1b — the broader workspace-tenancy surface (workspace_id/message_id-carrying
+  // RLS tables) is a SUPERSET of the is_workspace_member predicate set. Every such
+  // table must be a base target OR an explicit exclusion-with-rationale; a table
+  // isolated by a different predicate (is_workspace_owner, EXISTS-join) can no
+  // longer silently escape the harness (the F3 gap).
+  test("AC1b: every workspace-tenancy RLS table is targeted or excluded-with-rationale", async () => {
+    const surface = await workspaceTenancyTables(sql);
+    const targets = new Set(ISOLATION_TARGETS.map((t) => t.table));
+    const excluded = new Set(Object.keys(EXCLUDED_ISOLATION));
+    const escaped = surface.filter((t) => !targets.has(t) && !excluded.has(t));
+    expect(escaped, `workspace-tenancy tables neither targeted nor excluded: ${escaped.join(", ")}`).toEqual([]);
+    for (const [t, reason] of Object.entries(EXCLUDED_ISOLATION)) {
+      expect(reason.length, `${t}: excluded without rationale`).toBeGreaterThan(20);
+    }
   });
 
   // AC2/AC3 — per isolated table: precondition, cross-tenant denial, positive control, write-side.

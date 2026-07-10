@@ -47,14 +47,31 @@ export function classifyMutationOutcome(
 }
 
 /**
- * Classify a SECURITY DEFINER RPC bypass attempt (AC8). A membership-gated
- * definer fn RAISES (42501, or a PL/pgSQL guard exception) for a non-member
- * caller; a fn that trusts the caller-supplied tenancy param instead returns the
- * other tenant's data / performs the write = a bypass. `threw` = the call raised;
- * `returnedRows` = rows the call returned (for set-returning / read fns).
+ * SQLSTATEs that count as a genuine authorization DENIAL from a SECURITY DEFINER
+ * fn (as opposed to a param-validation error that fired BEFORE the auth check):
+ *  - 42501 insufficient_privilege — RLS / an explicit `RAISE ... USING ERRCODE = '42501'` membership guard.
+ *  - P0001 raise_exception — a plain PL/pgSQL `RAISE EXCEPTION 'not authorized…'` guard.
+ *  - P0002 no_data_found — the row was not found *within the caller's own scope*.
+ * Every OTHER caught SQLSTATE (42883 undefined_function/signature-drift, 22P02
+ * malformed uuid, 22023 param validation, 23xxx constraint, 42P01, …) means the
+ * call never reached the auth boundary → a TEST ERROR that must FAIL the case,
+ * never a silent pass. This mirrors the write-matrix's 42501-only discipline and
+ * closes the "any throw = denied" false-green (a renamed/re-signatured fn would
+ * otherwise 42883 → be scored denied while testing nothing).
  */
-export function classifyRpcOutcome(threw: boolean, returnedRows: number): Verdict {
-  if (threw) return { kind: "denied" }; // the fn rejected the cross-tenant caller
+export const RPC_DENIAL_SQLSTATES = new Set(["42501", "P0001", "P0002"]);
+
+/**
+ * Classify a SECURITY DEFINER RPC bypass attempt (AC8). `err` = the caught pg
+ * error (null = the call returned without raising); `returnedRows` = rows the
+ * call returned. A raise with a denial SQLSTATE = denied; a raise with any other
+ * SQLSTATE = test-error (fail); a clean return with rows = a bypass (leaked).
+ */
+export function classifyRpcOutcome(err: { code?: string } | null | undefined, returnedRows: number): Verdict {
+  if (err != null) {
+    if (RPC_DENIAL_SQLSTATES.has(err.code ?? "")) return { kind: "denied" };
+    return { kind: "test-error", sqlstate: err.code ?? "unknown" };
+  }
   return returnedRows === 0 ? { kind: "denied" } : { kind: "leaked" };
 }
 

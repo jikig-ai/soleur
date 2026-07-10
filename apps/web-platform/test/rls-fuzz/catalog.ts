@@ -30,6 +30,31 @@ export async function isolationSet(sql: Sql): Promise<string[]> {
   return rows.map((r) => r.tablename);
 }
 
+/**
+ * The broader workspace-tenancy surface (AC1b): every RLS-enabled `public` table
+ * carrying a `workspace_id` OR `message_id` column. This is a SUPERSET of
+ * {@link isolationSet} (which keys on the literal `is_workspace_member` predicate)
+ * — it also catches tables isolated by a different predicate (`is_workspace_owner`,
+ * an `EXISTS` join through `messages`, etc.) that the predicate-based enumerator
+ * misses. The coverage gate requires each to be a target OR an explicit
+ * exclusion-with-rationale, so a new workspace-scoped table cannot silently escape
+ * the harness the way `message_attachments`/`inbox_item` otherwise would.
+ */
+export async function workspaceTenancyTables(sql: Sql): Promise<string[]> {
+  const rows = await sql<{ tablename: string }[]>`
+    select distinct c.relname as tablename
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    join information_schema.columns col
+      on col.table_schema = 'public' and col.table_name = c.relname
+    where n.nspname = 'public'
+      and c.relkind = 'r'
+      and c.relrowsecurity
+      and col.column_name in ('workspace_id', 'message_id')
+    order by tablename`;
+  return rows.map((r) => r.tablename);
+}
+
 /** The jti-deny dimension: tables carrying a RESTRICTIVE `%_jti_not_denied` policy (mig 068). */
 export async function jtiDenySet(sql: Sql): Promise<string[]> {
   const rows = await sql<{ tablename: string }[]>`

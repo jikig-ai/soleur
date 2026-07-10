@@ -24,6 +24,10 @@ export interface RpcCtx extends Ctx {
   kbFileA: string;
   messageA: string;
   delegationA: string;
+  /** An A-owned beta-CRM contact (crm_contact_set_stage / crm_note_append target). */
+  contactA: string;
+  /** An A-owned inbox item, pinned to user_id=userA (set_inbox_item_state target). */
+  inboxA: string;
 }
 
 /**
@@ -59,11 +63,11 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   revoke_byok_delegation: (c) => `select revoke_byok_delegation('${c.delegationA}', auth.uid(), 'admin_revoke')`,
   update_byok_delegation_cap: (c) => `select update_byok_delegation_cap('${c.delegationA}',500,50, auth.uid())`,
   withdraw_byok_delegation_consent: (c) => `select withdraw_byok_delegation_consent('${c.delegationA}')`,
-  crm_contact_set_stage: () => `select crm_contact_set_stage(gen_random_uuid(),'contacted')`,
-  crm_note_append: () => `select crm_note_append(gen_random_uuid(),'body',null,null)`,
-  authorize_template: () => `select authorize_template('deadbeefdeadbeef','general.x',gen_random_uuid())`,
-  set_email_triage_status: () => `select set_email_triage_status(gen_random_uuid(),'archived')`,
-  set_inbox_item_state: () => `select set_inbox_item_state(gen_random_uuid(),'archived')`,
+  // Real A-owned resources so the OWNERSHIP guard (not a NOT-FOUND/validation
+  // error) is what rejects tenant-B — otherwise the case is vacuous (F2).
+  crm_contact_set_stage: (c) => `select crm_contact_set_stage('${c.contactA}','contacted')`,
+  crm_note_append: (c) => `select crm_note_append('${c.contactA}','body',ARRAY['sales'],null)`,
+  set_inbox_item_state: (c) => `select set_inbox_item_state('${c.inboxA}','archived')`,
   // self-target GDPR fns that MUST reject a non-self caller (they take p_user_id)
   anonymise_action_sends: (c) => `select anonymise_action_sends('${c.userA}')`,
   anonymise_template_authorizations: (c) => `select anonymise_template_authorizations('${c.userA}')`,
@@ -75,6 +79,8 @@ export const EXCLUDED: Record<string, string> = {
   grant_action_class: "founder_id = auth.uid(); grants a scope to the CALLER only",
   revoke_action_class: "founder_id = auth.uid(); revokes the CALLER's own scope",
   revoke_template_authorization: "template auths are founder-scoped by auth.uid(); no A-addressable param",
+  authorize_template: "founder_id = auth.uid(); the fn writes the CALLER's own template_authorization row (p_grant_id is a cross-ref, not a base cross-tenant read/write) — deepen in the harness-hardening follow-up",
+  set_email_triage_status: "email_triage_items is the single-founder operator inbox (resend ingest), not multi-tenant workspace data; a faithful attack needs the full ingest fixture — deepen in the harness-hardening follow-up",
   crm_contact_upsert: "founder_id = auth.uid(); p_id resolves within the caller's own founder scope (insert-if-not-owned)",
   check_my_revocation: "self-only (p_jwt_iat is the caller's own token iat)",
   my_revocation_status: "self-only; reads auth.uid()'s revocation state, no params",

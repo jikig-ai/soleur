@@ -63,6 +63,31 @@ export interface Target {
   selectAuthBlocked?: boolean;
 }
 
+/**
+ * Workspace-tenancy RLS tables (carry `workspace_id`/`message_id`) that are NOT
+ * base-matrix targets, each with a rationale (AC1b coverage gate). These are
+ * isolated by a non-`is_workspace_member` predicate or belong to a distinct
+ * isolation dimension; excluding them here (rather than letting them silently
+ * escape the predicate-based enumerator) keeps the gap TRACKED — a new
+ * workspace-scoped table reds the suite until it is a target or listed here.
+ * Deepening these into real base-table targets is tracked in the harness-hardening
+ * follow-up issue.
+ */
+export const EXCLUDED_ISOLATION: Record<string, string> = {
+  message_attachments:
+    "attachment OBJECT isolation is covered by storage.objects (AC9); the metadata-row RLS is an EXISTS-join through messages (itself a fuzzed target) — direct base-table target deferred",
+  inbox_item:
+    "workspace-owner-gated inbox; cross-tenant write is exercised via the set_inbox_item_state RPC attack (AC8) — direct base-table target deferred",
+  email_triage_items:
+    "single-founder operator inbox (resend ingest), not multi-tenant workspace data; a faithful seed needs the full ingest fixture — deferred",
+  dsar_export_jobs:
+    "GDPR DSAR export jobs; user/workspace-scoped, a distinct user-isolation dimension the base matrix (sub=userB non-member) does not model — deferred",
+  workspace_member_actions:
+    "member-action audit view; workspace-owner-gated read — direct base-table target deferred",
+  action_sends:
+    "WORM outbound-send audit; user/message-scoped (distinct user-isolation dimension), anonymise-only writes — deferred",
+};
+
 const idLocate = (id: string): Locate => ({ where: "id = $1", params: [id] });
 
 export const ISOLATION_TARGETS: Target[] = [

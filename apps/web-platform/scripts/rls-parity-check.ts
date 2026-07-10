@@ -109,22 +109,33 @@ async function main(): Promise<number> {
 
   const [local, prod] = await Promise.all([snapshot(LOCAL_DSN), snapshot(PROD_DSN)]);
 
-  let diffs = 0;
+  // FAIL only on `onlyProd`: prod carries a policy / grant / role-attr / fn that
+  // the local stack LACKS → the local stack is behind/unfaithful, and the harness
+  // could pass a denial that prod would leak (a false-green). `onlyLocal` is the
+  // safe direction — it is this PR's not-yet-deployed migration (local ahead of
+  // prod) or a stricter-than-prod local posture; reported as informational, never
+  // a gate failure. (Without this asymmetry the gate would red every migration PR
+  // once the prod token is provisioned, since those PRs are exactly the ones that
+  // put local ahead of prod.)
+  let failures = 0;
   for (const { name } of SECTIONS) {
     const { onlyLocal, onlyProd } = diffSection(local.get(name) ?? [], prod.get(name) ?? []);
-    if (onlyLocal.length || onlyProd.length) {
-      diffs += onlyLocal.length + onlyProd.length;
-      console.error(`\n=== DIFF in section "${name}" ===`);
-      for (const l of onlyProd) console.error(`  - only in PROD:  ${l}`);
-      for (const l of onlyLocal) console.error(`  + only in LOCAL: ${l}`);
+    if (onlyProd.length) {
+      failures += onlyProd.length;
+      console.error(`\n=== UNFAITHFUL (local is missing prod state) in section "${name}" ===`);
+      for (const l of onlyProd) console.error(`  - only in PROD (local lacks it): ${l}`);
+    }
+    if (onlyLocal.length) {
+      console.warn(`\n[rls-parity] info — section "${name}": ${onlyLocal.length} line(s) only in LOCAL (ahead of prod; expected for this PR's migrations):`);
+      for (const l of onlyLocal) console.warn(`  + only in LOCAL: ${l}`);
     }
   }
 
-  if (diffs > 0) {
-    console.error(`\n[rls-parity] FAIL — ${diffs} catalog difference(s) between local and prod. The local stack is not faithful; the harness's guarantee is void until this is zero.`);
+  if (failures > 0) {
+    console.error(`\n[rls-parity] FAIL — local is missing ${failures} prod catalog line(s). The local stack is not faithful to prod; the harness's guarantee is void until this is zero.`);
     return 1;
   }
-  console.log("[rls-parity] OK — local security catalog matches prod across all sections.");
+  console.log("[rls-parity] OK — the local security catalog carries every prod line (local may be ahead for this PR's migrations).");
   return 0;
 }
 
