@@ -302,6 +302,16 @@ runcmd:
   - id -u deploy >/dev/null 2>&1 || useradd -m -g deploy -G docker -s /bin/bash deploy
   - /usr/local/bin/inngest-boot-phone-home.sh deploy-user-ensured "$(id deploy 2>&1 | head -c 80)"
 
+  # #6178: pre-create /etc/default/inngest-server with the Doppler token so inngest-bootstrap.sh's
+  # "preserve" branch (inngest-bootstrap.sh:220) fires. The dedicated host has NO
+  # /etc/default/webhook-deploy (a web-host webhook.service file) that the bootstrap otherwise reads
+  # the token from — so without this it aborts 'webhook-deploy not found — cannot source DOPPLER_TOKEN'.
+  # Same content + umask 0137 (mode 0640) + root:deploy the bootstrap itself writes (:238-245); deploy
+  # must exist first (created above). The unit's User=deploy gets HOME=/home/deploy from systemd, so
+  # this env file carries DOPPLER_CONFIG_DIR (not HOME).
+  - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-server )
+  - chown root:deploy /etc/default/inngest-server
+
   # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
   # Gated on the isolation sentinel above (fail-closed). Mirrors web cloud-init.yml:642-682:
   # docker create → docker cp the script + durable-Redis assets → read INNGEST_CLI_VERSION/
