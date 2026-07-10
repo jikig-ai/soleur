@@ -1,11 +1,11 @@
-# ADR-103: Runtime authz/RLS-fuzz harness on a Supabase-CLI-local disposable stack
+# ADR-111: Runtime authz/RLS-fuzz harness on a Supabase-CLI-local disposable stack
 
 - **Status:** adopting (harness build in progress on `feat-t3mp3st-security-eval`, #6256)
 - **Date:** 2026-07-09
 - **Deciders:** Operator; drafted via `/soleur:go` → brainstorm → CLO legal-threshold → plan (4-agent review panel) → this ADR. Provisioning fork ruled by the `cto` agent mid-`/work`.
 - **Related:** #6256 (harness), #6257 (deferred user-facing defensive posture-check), ADR-064 (live-verify — the benign post-merge precedent), ADR-075/ADR-079 (agent-sandbox faithfulness; the shim anti-pattern precedent), mig 053 (`is_workspace_member` PERMISSIVE isolation policies), mig 068 (`*_jti_not_denied` RESTRICTIVE policies), `apps/web-platform/supabase/verify/068_*.sql` (the static presence-check sibling), `apps/web-platform/scripts/run-migrations.sh` (canonical filename-tracked applier). Origin: evaluating T3MP3ST (AGPL offensive red-team harness) → decision to **borrow the technique taxonomy, not adopt the tool**.
 
-> **Ordinal.** ADR-103 is the next free ordinal against `origin/main` (highest existing is ADR-102). Provisional until `/ship` — the ADR-Ordinal Collision Gate re-verifies against `origin/main` at merge and after every Phase-7 sync; on collision, sweep `grep -rn 'ADR-103' knowledge-base/project/{plans,specs}/feat-t3mp3st-security-eval/` + this file + the harness code in the same edit.
+> **Ordinal.** ADR-111 is the next free ordinal against `origin/main` (highest existing is ADR-102). Provisional until `/ship` — the ADR-Ordinal Collision Gate re-verifies against `origin/main` at merge and after every Phase-7 sync; on collision, sweep `grep -rn 'ADR-111' knowledge-base/project/{plans,specs}/feat-t3mp3st-security-eval/` + this file + the harness code in the same edit.
 
 ## Context
 

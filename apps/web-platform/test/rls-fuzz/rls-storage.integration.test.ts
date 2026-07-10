@@ -5,7 +5,7 @@ import { assertLocalDsn } from "./local-dsn-guard";
 import { buildAuthenticatedClaims } from "./claim";
 import { classifySelectOutcome, classifyMutationOutcome, isPass, type Verdict } from "./verdict";
 
-// storage.objects attachment isolation (#6256, ADR-103, AC9). message_attachments
+// storage.objects attachment isolation (#6256, ADR-111, AC9). message_attachments
 // object isolation lives in storage.objects RLS: chat-attachments objects are
 // keyed on the first path segment `(storage.foldername(name))[1] = auth.uid()`
 // (mig 068). A tenant-A object must not be SELECT/UPDATE/DELETE-able by tenant-B.

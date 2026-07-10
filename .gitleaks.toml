@@ -87,17 +87,19 @@ paths = [
   # shape). cq-test-fixtures-synthesized-only — every token under this path is
   # alnum-only after the `sk_(test|live)_` prefix and is never a real credential.
   '''plugins/soleur/skills/.*/test/fixture/\.env\.example$''',
-  # Runtime RLS-fuzz harness (#6256, ADR-103): the Supabase-CLI-local loopback
+  # Runtime RLS-fuzz harness (#6256, ADR-111): the Supabase-CLI-local loopback
   # default DSN `postgres://postgres:postgres@127.0.0.1:54322/postgres` (the CLI's
   # documented fixed credential, NOT a secret) appears in the harness's non-test
   # siblings — the parity script, the CI workflow env, and the ADR — the same way
   # it is already allowlisted in the harness's *.integration.test.ts files above.
   # These files hardcode no real credentials (the workflow reads prod via
   # `${{ secrets.* }}`); high-signal secrets here remain caught by
-  # `lint-fixture-content` (which does not match loopback postgres).
+  # `lint-fixture-content` (which does not match loopback postgres). The ADR path
+  # matches any ordinal (ADR-1NN) so ordinal-collision renumbers stay covered
+  # across the history-mode scan (the file was authored as ADR-103 before renumber).
   '''apps/web-platform/scripts/rls-parity-check\.ts$''',
   '''\.github/workflows/rls-authz-fuzz\.yml$''',
-  '''knowledge-base/engineering/architecture/decisions/ADR-103-runtime-authz-rls-fuzz-harness\.md$''',
+  '''knowledge-base/engineering/architecture/decisions/ADR-1[0-9][0-9]-runtime-authz-rls-fuzz-harness\.md$''',
 ]
 
 # ---------------------------------------------------------------------------

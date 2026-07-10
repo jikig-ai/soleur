@@ -1,4 +1,4 @@
-// Prod-vs-local security-catalog parity diff (#6256, ADR-103, AC6).
+// Prod-vs-local security-catalog parity diff (#6256, ADR-111, AC6).
 //
 // The runtime RLS-fuzz harness only proves isolation on a LOCAL disposable
 // Supabase stack. Its guarantee is only as good as that stack's faithfulness to

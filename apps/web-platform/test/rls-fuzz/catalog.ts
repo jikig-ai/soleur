@@ -1,4 +1,4 @@
-// Live-catalog derivation of the attack surface (#6256, ADR-103, AC1/AC8).
+// Live-catalog derivation of the attack surface (#6256, ADR-111, AC1/AC8).
 //
 // The target sets are enumerated from `pg_policies` / `pg_proc` on the migrated
 // DB — NEVER from a migration-source grep. mig 068 creates its jti-deny policies

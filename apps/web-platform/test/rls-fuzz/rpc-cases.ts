@@ -1,4 +1,4 @@
-// SECURITY DEFINER RPC-bypass classification (#6256, ADR-103, AC8).
+// SECURITY DEFINER RPC-bypass classification (#6256, ADR-111, AC8).
 //
 // Every `SECURITY DEFINER` fn that `authenticated` may EXECUTE (catalog.ts) must
 // appear in EXACTLY ONE of the three maps below — the coverage gate asserts

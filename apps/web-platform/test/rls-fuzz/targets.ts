@@ -1,4 +1,4 @@
-// Per-table isolation registry (#6256, ADR-103, AC1/AC2/AC3).
+// Per-table isolation registry (#6256, ADR-111, AC1/AC2/AC3).
 //
 // The catalog (catalog.ts) is the ENUMERATOR; this registry supplies the faithful
 // per-table seed + attack SQL. The driver asserts registry ⇔ catalog (AC1): a new

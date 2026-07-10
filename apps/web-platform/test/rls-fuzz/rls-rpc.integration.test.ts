@@ -7,7 +7,7 @@ import { classifyRpcOutcome, type Verdict } from "./verdict";
 import { securityDefinerAuthenticatedFns } from "./catalog";
 import { ATTACK_SQL, EXCLUDED, KNOWN_EXPOSURES, type RpcCtx } from "./rpc-cases";
 
-// SECURITY DEFINER RPC-bypass dimension (#6256, ADR-103, AC8). Drives every
+// SECURITY DEFINER RPC-bypass dimension (#6256, ADR-111, AC8). Drives every
 // authenticated-EXECUTE definer fn with tenant-B claims + tenant-A params and
 // asserts each denies (throw / empty / false / 0-rows). The catalog is the
 // enumerator; rpc-cases.ts is the classification; the coverage gate fails on any

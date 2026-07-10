@@ -14,7 +14,7 @@ import {
 import { isolationSet, workspaceTenancyTables } from "./catalog";
 import { ISOLATION_TARGETS, EXCLUDED_ISOLATION, type Ctx, type Locate } from "./targets";
 
-// Runtime RLS/authz-fuzz harness (#6256, ADR-103). Drives a non-member tenant's
+// Runtime RLS/authz-fuzz harness (#6256, ADR-111). Drives a non-member tenant's
 // identity against another tenant's rows across every workspace-isolated RLS
 // table (catalog-derived) and asserts RLS denies at the DB layer. Gated: runs
 // only with RLS_FUZZ_LOCAL=1 against a LOCAL disposable Postgres (the normal

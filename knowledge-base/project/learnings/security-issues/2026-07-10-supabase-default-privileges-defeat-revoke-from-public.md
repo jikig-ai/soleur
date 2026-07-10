@@ -29,7 +29,7 @@ RLS (the definer rights bypass RLS on the underlying tables).
 
 ## Detection & fix
 
-- Detection: the runtime RLS-fuzz harness (#6256, ADR-103) RPC dimension drives
+- Detection: the runtime RLS-fuzz harness (#6256, ADR-111) RPC dimension drives
   every `SECURITY DEFINER` + authenticated-EXECUTE fn with tenant-B claims +
   tenant-A params; a clean return / non-empty result = a bypass. `find_stuck_
   active_conversations` + `acquire/release/touch_conversation_slot` were found

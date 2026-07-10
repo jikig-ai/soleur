@@ -107,7 +107,7 @@ For each (table, op ∈ {SELECT, INSERT, UPDATE, DELETE}) under tenant-B claims 
 - `apps/web-platform/test/rls-fuzz-global-setup.ts` — vitest `globalSetup`: `supabase start`/`db reset` + apply migrations + seed synthetic tenants (folds the former standalone setup script).
 - `apps/web-platform/scripts/rls-parity-check.ts` — the prod-vs-local catalog parity diff (read-only prod introspection via the run-verify doppler path).
 - `.github/workflows/rls-authz-fuzz.yml` — CI merge gate on migration-touching PRs (Supabase-CLI local stack in the runner).
-- `knowledge-base/engineering/architecture/decisions/ADR-103-runtime-authz-rls-fuzz-harness.md`.
+- `knowledge-base/engineering/architecture/decisions/ADR-111-runtime-authz-rls-fuzz-harness.md`.
 
 ## Files to Edit
 - `apps/web-platform/package.json` — add `test:rls-fuzz` (vitest run on the harness, local DSN only) and `rls:parity` scripts. Runner is **vitest** (`./node_modules/.bin/vitest run`), typecheck `tsc --noEmit` (NOT `npm run -w`).
@@ -127,13 +127,13 @@ For each (table, op ∈ {SELECT, INSERT, UPDATE, DELETE}) under tenant-B claims 
 - [x] AC9: **storage.objects** — a tenant-A chat-attachments object is not SELECT/UPDATE/DELETE-able by tenant-B (SQLSTATE-aware). (`rls-storage.integration.test.ts`)
 - [x] AC10: **CI gate** — `.github/workflows/rls-authz-fuzz.yml` runs the harness + parity diff on migration-touching PRs; supabase-CLI local stack (pinned 2.84.2) + `run-migrations.sh`; local-only DSN.
 - [x] AC11: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes; `RLS_FUZZ_LOCAL=1 vitest run test/rls-fuzz` green (86 passed + 4 expected-fail known-exposures).
-- [x] AC12: `ADR-103-*.md` exists with the decision + `## Alternatives Considered` (rejected shim + rejected grep-mig-068 derivation). No C4 view change.
+- [x] AC12: `ADR-111-*.md` exists with the decision + `## Alternatives Considered` (rejected shim + rejected grep-mig-068 derivation). No C4 view change.
 - [x] AC13: Zero real credentials in the harness env (synthetic only, `*@example.test`); no AGPL source copied.
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-- **Create ADR-103** (in-scope `/work` task, not deferred): "Runtime authz/RLS-fuzz harness on a Supabase-CLI-local disposable stack." Decision: catalog-driven, SQLSTATE-aware claim-injection at the DB layer against a provider-detached local Supabase stack; prod-parity catalog diff as the faithfulness gate. `## Alternatives Considered`: (a) hosted Supabase dev integration test — rejected (brainstorm guardrail); (b) docker + hand-written `auth` shim — rejected (ADR-079 anti-pattern: reimplements the surface under test); (c) signed-JWT full-stack via local PostgREST — rejected (nondeterministic, tests PostgREST not the RLS invariant); (d) grep-mig-068 table derivation — rejected (dynamic `format()` loop; non-functional). Full coverage (RPC + storage.objects + CI) selected — no deferred blind spots to record. Ordinal ADR-103 provisional; `/ship` re-checks origin/main.
+- **Create ADR-111** (in-scope `/work` task, not deferred): "Runtime authz/RLS-fuzz harness on a Supabase-CLI-local disposable stack." Decision: catalog-driven, SQLSTATE-aware claim-injection at the DB layer against a provider-detached local Supabase stack; prod-parity catalog diff as the faithfulness gate. `## Alternatives Considered`: (a) hosted Supabase dev integration test — rejected (brainstorm guardrail); (b) docker + hand-written `auth` shim — rejected (ADR-079 anti-pattern: reimplements the surface under test); (c) signed-JWT full-stack via local PostgREST — rejected (nondeterministic, tests PostgREST not the RLS invariant); (d) grep-mig-068 table derivation — rejected (dynamic `format()` loop; non-functional). Full coverage (RPC + storage.objects + CI) selected — no deferred blind spots to record. Ordinal ADR-111 provisional; `/ship` re-checks origin/main.
 
 ### C4 views
 - **No C4 impact** — enumerated against `model.c4`/`views.c4`/`spec.c4`: adds no external human actor, no external system/vendor (all-local disposable Postgres), no product-boundary data store (ephemeral test DB; modeled `supabase`/`crmStore` unchanged), no production access-relationship. Like the existing test suite, it is outside the system boundary. Actors checked & unchanged: founder, emailSender, betaContact, contributor, connectedRepoPlugin. (Verified against live model by architecture-strategist.)
@@ -158,7 +158,7 @@ discoverability_test: { command: "cd apps/web-platform && RLS_FUZZ_LOCAL=1 ./nod
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 <!-- Phase 2.8 reviewed: the only "infra" is an EPHEMERAL local Supabase-CLI Docker stack used
      as a disposable test DB (destroyed after each run) — not provisioned servers/vendors/DNS/secrets.
-     No Terraform surface; the IaC routing gate does not apply (local test container, per ADR-103). -->
+     No Terraform surface; the IaC routing gate does not apply (local test container, per ADR-111). -->
 
 ## Scope (v1 — full coverage, operator-selected 2026-07-09)
 The review surfaced three coverage expansions beyond base-table isolation. The operator chose

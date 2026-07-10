@@ -12,7 +12,7 @@ Coverage = full (RPC + storage.objects + CI), operator-selected 2026-07-09.
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 <!-- The only "infra" is an ephemeral local Supabase-CLI Docker stack used as a disposable
-     test DB — not provisioned servers/vendors/DNS/secrets. IaC routing gate N/A (ADR-103). -->
+     test DB — not provisioned servers/vendors/DNS/secrets. IaC routing gate N/A (ADR-111). -->
 
 ## Phase 0 — Local stack + faithfulness spike (riskiest first)
 - [ ] 0.1 `supabase start` local stack; pin postgres/CLI image to the prod-matching version.
@@ -47,7 +47,7 @@ Coverage = full (RPC + storage.objects + CI), operator-selected 2026-07-09.
 ## Phase 5 — Wiring, guards, ADR
 - [ ] 5.1 `package.json`: add `test:rls-fuzz` + `rls:parity` (vitest / node; local DSN only).
 - [ ] 5.2 DSN fail-closed allowlist (localhost/127.0.0.1/::1/CI host; parse-host, no DNS); unit test.
-- [ ] 5.3 Author `ADR-103-runtime-authz-rls-fuzz-harness.md` (decision + `## Alternatives Considered`; no C4 change; no deferred blind spots).
+- [ ] 5.3 Author `ADR-111-runtime-authz-rls-fuzz-harness.md` (decision + `## Alternatives Considered`; no C4 change; no deferred blind spots).
 
 ## Phase 6 — Verify
 - [ ] 6.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
