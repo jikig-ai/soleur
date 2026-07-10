@@ -145,17 +145,23 @@ function parseArrayProducer(sql: string): string[] {
 }
 
 /**
- * Detect a DYNAMIC (loop/format-generated) `*_jti_not_denied` producer:
- * `format('… CREATE POLICY %I_jti_not_denied …')` or a bare
- * `CREATE POLICY %<x>_jti_not_denied`. These emit no static CREATE token and are
- * invisible to parseInlineCreates. The sanctioned loop is the one paired with the
- * `tenant_tables` ARRAY declaration; any other is a false-green hazard.
+ * Detect a DYNAMIC (loop/runtime-generated) `*_jti_not_denied` producer. These
+ * build the policy name at runtime, emit no static CREATE token, and are
+ * invisible to parseInlineCreates. Two forms are recognised:
+ *   - a bare `CREATE POLICY %<x>_jti_not_denied` (format-placeholder name), and
+ *   - any `EXECUTE … CREATE POLICY … _jti_not_denied` statement — this covers
+ *     BOTH `EXECUTE format('CREATE POLICY %I_jti_not_denied …')` and the
+ *     string-concatenation form `EXECUTE 'CREATE POLICY ' || quote_ident(t ||
+ *     '_jti_not_denied') || …` (so a future loop that swaps format() for `||`
+ *     concatenation cannot silently evade the guard).
+ * The sanctioned loop is the one paired with the `tenant_tables` ARRAY
+ * declaration; any other is a false-green hazard.
  */
 function hasDynamicJtiProducer(sql: string): boolean {
   const stripped = stripSqlLineComments(sql);
   return (
     /\bCREATE\s+POLICY\s+%[a-z0-9]*_?jti_not_denied/i.test(stripped) ||
-    /\bformat\s*\([^;]*CREATE\s+POLICY[^;]*_jti_not_denied/is.test(stripped)
+    /\bEXECUTE\b[^;]*CREATE\s+POLICY[^;]*_jti_not_denied/is.test(stripped)
   );
 }
 
@@ -362,6 +368,18 @@ describe("068-jti-deny-count parser fixtures", () => {
       sql:
         "DO $$ BEGIN FOREACH t IN ARRAY tbls LOOP\n" +
         "  EXECUTE format('CREATE POLICY %I_jti_not_denied ON public.%I AS RESTRICTIVE FOR ALL', t, t);\n" +
+        "END LOOP; END $$;",
+    };
+    expect(() => foldMigrations([rogue])).toThrow(/DYNAMIC .*producer/i);
+  });
+
+  it("fails loud on a string-concatenation dynamic producer (no format())", () => {
+    const rogue = {
+      name: "131_concat_rogue.sql",
+      sql:
+        "DO $$ BEGIN FOREACH t IN ARRAY tbls LOOP\n" +
+        "  EXECUTE 'CREATE POLICY ' || quote_ident(t || '_jti_not_denied') ||\n" +
+        "    ' ON public.' || quote_ident(t) || ' AS RESTRICTIVE FOR ALL';\n" +
         "END LOOP; END $$;",
     };
     expect(() => foldMigrations([rogue])).toThrow(/DYNAMIC .*producer/i);
