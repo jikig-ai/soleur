@@ -27,6 +27,37 @@ export function classifySelectOutcome(rowCount: number): Verdict {
   return rowCount === 0 ? { kind: "denied" } : { kind: "leaked" };
 }
 
+/**
+ * Classify a cross-tenant UPDATE/DELETE. Unlike INSERT (blocked by WITH CHECK →
+ * 42501), a cross-tenant UPDATE/DELETE is filtered by the policy USING clause:
+ * the target row is simply invisible, so the command affects ZERO rows with NO
+ * error. Denied ⇔ (0 rows affected) OR (42501 raised). Any row affected = a real
+ * modification of another tenant's data = leaked. Any other SQLSTATE = the query
+ * shape is wrong for this table = a test ERROR (never a pass).
+ */
+export function classifyMutationOutcome(
+  err: { code?: string } | null | undefined,
+  affectedRows: number,
+): Verdict {
+  if (err != null) {
+    if (err.code === RLS_VIOLATION_SQLSTATE) return { kind: "denied" };
+    return { kind: "test-error", sqlstate: err.code ?? "unknown" };
+  }
+  return affectedRows === 0 ? { kind: "denied" } : { kind: "leaked" };
+}
+
+/**
+ * Classify a SECURITY DEFINER RPC bypass attempt (AC8). A membership-gated
+ * definer fn RAISES (42501, or a PL/pgSQL guard exception) for a non-member
+ * caller; a fn that trusts the caller-supplied tenancy param instead returns the
+ * other tenant's data / performs the write = a bypass. `threw` = the call raised;
+ * `returnedRows` = rows the call returned (for set-returning / read fns).
+ */
+export function classifyRpcOutcome(threw: boolean, returnedRows: number): Verdict {
+  if (threw) return { kind: "denied" }; // the fn rejected the cross-tenant caller
+  return returnedRows === 0 ? { kind: "denied" } : { kind: "leaked" };
+}
+
 /** A verdict is a PASS for an isolation assertion only when the access was denied. */
 export function isPass(v: Verdict): boolean {
   return v.kind === "denied";

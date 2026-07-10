@@ -3,103 +3,236 @@ import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { assertLocalDsn } from "./local-dsn-guard";
 import { buildAuthenticatedClaims } from "./claim";
-import { classifyWriteOutcome, classifySelectOutcome, isPass, type Verdict } from "./verdict";
+import {
+  classifyWriteOutcome,
+  classifyMutationOutcome,
+  classifySelectOutcome,
+  isPass,
+  RLS_VIOLATION_SQLSTATE,
+  type Verdict,
+} from "./verdict";
+import { isolationSet } from "./catalog";
+import { ISOLATION_TARGETS, type Ctx, type Locate } from "./targets";
 
 // Runtime RLS/authz-fuzz harness (#6256, ADR-103). Drives a non-member tenant's
-// identity at another tenant's rows at the DB layer and asserts RLS denies.
-// Gated: runs only with RLS_FUZZ_LOCAL=1 against a LOCAL disposable Postgres
-// (the normal suite skips it — no stack in ordinary CI).
+// identity against another tenant's rows across every workspace-isolated RLS
+// table (catalog-derived) and asserts RLS denies at the DB layer. Gated: runs
+// only with RLS_FUZZ_LOCAL=1 against a LOCAL disposable Postgres (the normal
+// suite skips it — no stack in ordinary CI).
 const ENABLED = process.env.RLS_FUZZ_LOCAL === "1";
 const DSN = process.env.RLS_FUZZ_DATABASE_URL ?? "postgres://postgres:postgres@127.0.0.1:54322/postgres";
 
-// Synthetic user identities (cq-test-fixtures-synthesized-only). Fresh per run so
-// no teardown is needed against the onboarding FK web on a disposable DB — the
-// isolation OUTCOME is deterministic regardless of the specific UUID. Each
-// auth.users insert fires handle_new_user() which auto-creates that user's
-// personal org + workspace + membership → two users = two isolated tenants via
-// the REAL onboarding path. Workspace ids are discovered post-seed.
-const F = {
-  userA: randomUUID(),
-  userB: randomUUID(),
-};
-
 let sql: ReturnType<typeof postgres>;
-let wsA = "";
-let wsB = "";
+let ctx: Ctx;
+const seeded = new Map<string, Locate>();
 
-describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local)", () => {
+const ROLLBACK = Symbol("rls-fuzz-rollback");
+
+/** Set the transaction's role + forged claims, run fn, then ALWAYS roll back (attacks never persist). */
+async function attackTxn<T>(claims: string, fn: (t: postgres.TransactionSql) => Promise<T>): Promise<T> {
+  let out: T;
+  try {
+    await sql.begin(async (t) => {
+      await t`set local role authenticated`;
+      await t.unsafe("select set_config('request.jwt.claims', $1, true)", [claims]);
+      out = await fn(t);
+      return Promise.reject(ROLLBACK); // discard everything the attack touched
+    });
+  } catch (e) {
+    if (e !== ROLLBACK) throw e;
+  }
+  return out!;
+}
+
+/** Count rows matching A's seeded canonical row under the given handle/role. */
+async function countRows(h: postgres.Sql | postgres.TransactionSql, table: string, loc: Locate): Promise<number> {
+  const rows = await h.unsafe(`select count(*)::int as n from "${table}" where ${loc.where}`, loc.params as never[]);
+  return (rows[0] as unknown as { n: number }).n;
+}
+
+async function seedContext(): Promise<Ctx> {
+  const userA = randomUUID();
+  const userB = randomUUID();
+  const userC = randomUUID();
+  // Each auth.users insert fires handle_new_user() → personal org + workspace + membership.
+  await sql`insert into auth.users (id, email) values
+    (${userA}, ${`a-${userA}@example.test`}),
+    (${userB}, ${`b-${userB}@example.test`}),
+    (${userC}, ${`c-${userC}@example.test`})`;
+  const [a] = await sql`select workspace_id, (select organization_id from workspaces where id = workspace_id) as org from workspace_members where user_id = ${userA} limit 1`;
+  const [b] = await sql`select workspace_id from workspace_members where user_id = ${userB} limit 1`;
+  const wsA = a.workspace_id as string;
+  const wsB = b.workspace_id as string;
+  const orgA = a.org as string;
+  if (!wsA || !wsB || wsA === wsB || !orgA) throw new Error(`fixture seed failed: wsA=${wsA} wsB=${wsB} orgA=${orgA}`);
+  // userC joins wsA as a co-member (byok_delegations grantee must be a real member).
+  await sql`insert into workspace_members (workspace_id, user_id, role) values (${wsA}, ${userC}, 'member')`;
+  // Two A-owned conversations (parents for messages / user_concurrency_slots seed + forge).
+  const convA = randomUUID();
+  const convA2 = randomUUID();
+  await sql`insert into conversations (id, user_id, workspace_id, status, visibility) values
+    (${convA}, ${userA}, ${wsA}, 'active', 'workspace'),
+    (${convA2}, ${userA}, ${wsA}, 'active', 'workspace')`;
+  return { userA, userB, userC, wsA, wsB, orgA, convA, convA2 };
+}
+
+describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local, catalog-driven)", () => {
   beforeAll(async () => {
     assertLocalDsn(DSN); // AC7 — refuse any non-local target before connecting
     sql = postgres(DSN, { max: 1, prepare: false, onnotice: () => {} });
-    // Seed two synthetic tenants as the superuser connection (bypasses RLS) via
-    // the real onboarding path — one auth.users insert per tenant fires the
-    // personal-workspace bootstrap. Fresh UUIDs → no teardown against the FK web.
-    await sql`insert into auth.users (id, email) values (${F.userA}, ${`a-${F.userA}@example.test`}), (${F.userB}, ${`b-${F.userB}@example.test`})`;
-    // Discover each user's auto-created personal workspace.
-    const [a] = await sql`select workspace_id from workspace_members where user_id = ${F.userA} limit 1`;
-    const [b] = await sql`select workspace_id from workspace_members where user_id = ${F.userB} limit 1`;
-    wsA = a.workspace_id;
-    wsB = b.workspace_id;
-    if (!wsA || !wsB || wsA === wsB) throw new Error(`fixture seed failed: wsA=${wsA} wsB=${wsB}`);
+    ctx = await seedContext();
+    for (const t of ISOLATION_TARGETS) {
+      seeded.set(t.table, await t.seed(sql, ctx));
+    }
   });
 
   afterAll(async () => {
     if (sql) await sql.end({ timeout: 5 });
   });
 
-  /** Run a fn inside a txn scoped to `authenticated` + the given sub's claims; rolls back. */
-  async function asTenant<T>(sub: string, fn: (t: postgres.TransactionSql) => Promise<T>): Promise<T> {
-    // SET LOCAL role + set_config are transaction-scoped and reset when the txn
-    // ends, so the pooled connection returns clean regardless of commit/rollback.
-    const result = await sql.begin(async (t) => {
-      await t`set local role authenticated`;
-      await t.unsafe(`select set_config('request.jwt.claims', '${buildAuthenticatedClaims({ sub })}', true)`);
-      return fn(t);
+  // AC1 — the registry must exactly mirror the live isolation set. A new isolated
+  // table with no attack case, or a stale registry entry, fails HERE.
+  test("AC1: registry mirrors the live pg_policies isolation set (no source grep)", async () => {
+    const catalog = new Set(await isolationSet(sql));
+    const registry = new Set(ISOLATION_TARGETS.map((t) => t.table));
+    const uncovered = [...catalog].filter((t) => !registry.has(t));
+    const stale = [...registry].filter((t) => !catalog.has(t));
+    expect(uncovered, `catalog-isolated tables with no attack case: ${uncovered.join(", ")}`).toEqual([]);
+    expect(stale, `registry tables not in the live isolation set: ${stale.join(", ")}`).toEqual([]);
+  });
+
+  // AC2/AC3 — per isolated table: precondition, cross-tenant denial, positive control, write-side.
+  for (const target of ISOLATION_TARGETS) {
+    test(`isolation: ${target.table}`, async () => {
+      const loc = seeded.get(target.table)!;
+      const bClaims = buildAuthenticatedClaims({ sub: ctx.userB });
+      const aClaims = buildAuthenticatedClaims({ sub: ctx.userA });
+
+      // AC2 precondition: service_role sees exactly A's one seeded row (guards vacuous green).
+      expect(await countRows(sql, target.table, loc), `${target.table}: seed precondition`).toBe(1);
+
+      if (target.selectAuthBlocked) {
+        // The SELECT policy is grant-blocked for all authenticated (auth.users ref):
+        // A and B both hit 42501, so the SELECT dimension proves nothing about tenancy.
+        // Assert B is denied (permission error is a denial) and lean on the write-side.
+        const bBlocked = await attackTxn(bClaims, async (t): Promise<Verdict> => {
+          try {
+            return classifySelectOutcome(await countRows(t, target.table, loc));
+          } catch (err) {
+            const code = (err as { code?: string }).code;
+            return code === RLS_VIOLATION_SQLSTATE ? { kind: "denied" } : { kind: "test-error", sqlstate: code ?? "unknown" };
+          }
+        });
+        expect(bBlocked, `${target.table}: B SELECT must be denied (grant-blocked or filtered)`).toEqual({ kind: "denied" });
+      } else {
+        // AC3 positive control: tenant A CAN see its own row (falsifies a green-by-emptiness matrix).
+        const aSees = await attackTxn(aClaims, (t) => countRows(t, target.table, loc));
+        expect(aSees, `${target.table}: positive control (A self-read)`).toBe(1);
+
+        // AC2 cross-tenant SELECT: tenant B sees 0 of A's row → denied.
+        const bSees = await attackTxn(bClaims, (t) => countRows(t, target.table, loc));
+        expect(isPass(classifySelectOutcome(bSees)), `${target.table}: B SELECT verdict (saw ${bSees})`).toBe(true);
+      }
+
+      // AC2 write-side — INSERT-forge (where the table has no pre-RLS trigger): expect 42501.
+      if (target.forge) {
+        const insVerdict = await attackTxn(bClaims, async (t): Promise<Verdict> => {
+          try {
+            await target.forge!(t, ctx);
+            return classifyWriteOutcome(null); // committed → cross-tenant write went through
+          } catch (err) {
+            return classifyWriteOutcome(err as { code?: string });
+          }
+        });
+        expect(insVerdict, `${target.table}: INSERT-forge must be an RLS denial (42501)`).toEqual({ kind: "denied" });
+      }
+
+      // AC2 write-side — UPDATE A's row: USING filters it → 0 rows affected (denied).
+      const updVerdict = await attackTxn(bClaims, async (t): Promise<Verdict> => {
+        try {
+          const res = await t.unsafe(
+            `update "${target.table}" set "${target.updateCol}" = "${target.updateCol}" where ${loc.where}`,
+            loc.params as never[],
+          );
+          return classifyMutationOutcome(null, res.count);
+        } catch (err) {
+          return classifyMutationOutcome(err as { code?: string }, 0);
+        }
+      });
+      expect(updVerdict, `${target.table}: cross-tenant UPDATE must not touch A's row`).toEqual({ kind: "denied" });
+
+      // AC2 write-side — DELETE A's row: USING filters it → 0 rows affected (denied).
+      const delVerdict = await attackTxn(bClaims, async (t): Promise<Verdict> => {
+        try {
+          const res = await t.unsafe(`delete from "${target.table}" where ${loc.where}`, loc.params as never[]);
+          return classifyMutationOutcome(null, res.count);
+        } catch (err) {
+          return classifyMutationOutcome(err as { code?: string }, 0);
+        }
+      });
+      expect(delVerdict, `${target.table}: cross-tenant DELETE must not remove A's row`).toEqual({ kind: "denied" });
+
+      // AC2 tail: A's row is still present + unchanged after every write attempt.
+      expect(await countRows(sql, target.table, loc), `${target.table}: A row intact after attacks`).toBe(1);
     });
-    return result as T;
   }
 
-  test("precondition: service_role sees tenant-A's workspace row (count=1)", async () => {
-    const [{ n }] = await sql`select count(*)::int as n from workspaces where id = ${wsA}`;
-    expect(n).toBe(1); // proves the row exists + query shape is valid (guards vacuous green)
+  // AC3 — inert negative control: adding a forged org claim changes ZERO RLS
+  // decisions (documents that `sub` is the only lever; no policy reads the org claim).
+  test("AC3: claim org-swap is inert (sub is the only attacker dimension)", async () => {
+    const loc = seeded.get("workspaces")!;
+    // B with A's org id in the claim still sees nothing.
+    const bWithOrgA = buildAuthenticatedClaims({ sub: ctx.userB, organizationId: ctx.orgA });
+    const bSees = await attackTxn(bWithOrgA, (t) => countRows(t, "workspaces", loc));
+    expect(bSees, "org-swap must not grant B visibility").toBe(0);
+    // A with a bogus org id still sees its own row (org claim is not consulted).
+    const aWithBogusOrg = buildAuthenticatedClaims({ sub: ctx.userA, organizationId: randomUUID() });
+    const aSees = await attackTxn(aWithBogusOrg, (t) => countRows(t, "workspaces", loc));
+    expect(aSees, "bogus org must not revoke A's own visibility").toBe(1);
   });
 
-  test("cross-tenant SELECT denied: tenant B cannot see tenant A's workspace", async () => {
-    const n = await asTenant(F.userB, async (t) => {
-      const rows = await t`select id from workspaces where id = ${wsA}`;
-      return rows.length;
-    });
-    expect(isPass(classifySelectOutcome(n))).toBe(true); // 0 rows → denied
+  // AC4 — jti two-sided on ONE seeded row (A's own workspace, in both the isolation
+  // and jti-deny sets). An ALLOWED jti permits; a DENIED jti blocks — SAME row, so a
+  // stuck-true/stuck-false jti extractor is falsified (runtime proof of verify/068).
+  test("AC4: jti two-sided — allowed jti permits, denied jti blocks (same row)", async () => {
+    const loc = seeded.get("workspaces")!;
+    const allowedJti = randomUUID();
+    const deniedJti = randomUUID();
+
+    const permitted = await attackTxn(buildAuthenticatedClaims({ sub: ctx.userA, jti: allowedJti }), (t) =>
+      countRows(t, "workspaces", loc),
+    );
+    expect(permitted, "allowed jti: A must see its own workspace").toBe(1);
+
+    // Revoke deniedJti (SECURITY DEFINER is_jti_denied reads denied_jti regardless of RLS).
+    await sql`insert into denied_jti (jti, founder_id) values (${deniedJti}, ${ctx.userA})`;
+    const blocked = await attackTxn(buildAuthenticatedClaims({ sub: ctx.userA, jti: deniedJti }), (t) =>
+      countRows(t, "workspaces", loc),
+    );
+    expect(blocked, "denied jti: the RESTRICTIVE jti policy must block the SAME row").toBe(0);
   });
 
-  test("positive control: tenant A CAN see its own workspace", async () => {
-    const n = await asTenant(F.userA, async (t) => {
-      const rows = await t`select id from workspaces where id = ${wsA}`;
-      return rows.length;
-    });
-    expect(n).toBe(1); // A is a member → visible
-  });
-
-  // A failing statement aborts the whole txn, so postgres.js re-raises at the
-  // begin() boundary — catch there, not inside, to classify the SQLSTATE.
-  async function attemptWrite(sub: string, write: (t: postgres.TransactionSql) => Promise<void>): Promise<Verdict> {
+  // AC5 — mutation self-test: with RLS disabled on one table (rolled back), the
+  // harness's own SELECT verdict flips to leaked (RED). Proves the harness can
+  // detect a real isolation break, not just report green on an already-safe DB.
+  test("AC5: mutation self-test — disabling RLS makes the harness report RED", async () => {
+    const table = "workspace_activity";
+    const loc = seeded.get(table)!;
+    let bSeesWithRlsOff = -1;
     try {
       await sql.begin(async (t) => {
+        await t.unsafe(`alter table "${table}" disable row level security`); // superuser, before the role swap
         await t`set local role authenticated`;
-        await t.unsafe(`select set_config('request.jwt.claims', '${buildAuthenticatedClaims({ sub })}', true)`);
-        await write(t);
+        await t.unsafe("select set_config('request.jwt.claims', $1, true)", [
+          buildAuthenticatedClaims({ sub: ctx.userB }),
+        ]);
+        bSeesWithRlsOff = await countRows(t, table, loc);
+        return Promise.reject(ROLLBACK); // roll back → RLS re-enabled
       });
-      return classifyWriteOutcome(null); // committed → the cross-tenant write went through (leak)
-    } catch (err) {
-      return classifyWriteOutcome(err as { code?: string });
+    } catch (e) {
+      if (e !== ROLLBACK) throw e;
     }
-  }
-
-  test("cross-tenant write denied with SQLSTATE 42501: tenant B cannot add a member to tenant A's workspace", async () => {
-    const outcome = await attemptWrite(F.userB, async (t) => {
-      await t`insert into workspace_members (workspace_id, user_id, role) values (${wsA}, ${F.userB}, 'owner')`;
-    });
-    // MUST be an RLS denial (42501), NOT a constraint error mis-scored as denied
-    expect(outcome).toEqual({ kind: "denied" });
+    expect(bSeesWithRlsOff, "with RLS off, B must see A's row").toBeGreaterThan(0);
+    expect(isPass(classifySelectOutcome(bSeesWithRlsOff)), "harness verdict must be RED (not a pass)").toBe(false);
   });
 });
