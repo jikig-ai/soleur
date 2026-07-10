@@ -46,22 +46,30 @@ teardown() {
   unset INFRA_CONFIG_STAGING_DIR INFRA_CONFIG_INSTALL_HELPER
 }
 
+# #6178: the handler now reads each payload as a FILE PATH — hooks.json.tmpl's infra-config
+# hook uses pass-file-to-command + base64decode, so webhook writes the DECODED content to a
+# temp file and passes its PATH via the env var (this dodges the 128KB MAX_ARG_STRLEN exec-env
+# ceiling that ci-deploy.sh's ~140KB base64 blew, killing fork/exec with E2BIG). So these test
+# env vars hold PATHS to files with the already-decoded content — NOT base64 strings.
+_payload_file() {  # <content> → prints a fresh temp-file path holding exactly that content
+  local f; f=$(mktemp "${TMPDIR_ROOT}/payload.XXXXXX"); printf '%s' "$1" > "$f"; printf '%s' "$f"
+}
 export_valid_env_vars() {
-  export CI_DEPLOY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export CI_DEPLOY_WRAPPER_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export WEBHOOK_SERVICE_B64=$(echo -n "[Unit]" | base64 -w0)
-  export CAT_DEPLOY_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export HOOKS_JSON_B64=$(echo -n '{}' | base64 -w0)
-  export CAT_INFRA_CONFIG_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export INNGEST_ENUMERATE_REMINDERS_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export INNGEST_REARM_REMINDERS_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export INNGEST_WIPED_VOLUME_VERIFY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export CAT_INNGEST_VERIFY_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export INNGEST_INVENTORY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export GIT_LOCK_CHARDEVICE_SWEEP_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export INNGEST_REGISTRY_PROBE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export INNGEST_DOUBLEFIRE_PROBE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
+  export CI_DEPLOY_SH_B64=$(_payload_file "#!/bin/bash")
+  export CI_DEPLOY_WRAPPER_SH_B64=$(_payload_file "#!/bin/bash")
+  export WEBHOOK_SERVICE_B64=$(_payload_file "[Unit]")
+  export CAT_DEPLOY_STATE_SH_B64=$(_payload_file "#!/bin/bash")
+  export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(_payload_file "#!/bin/bash")
+  export HOOKS_JSON_B64=$(_payload_file '{}')
+  export CAT_INFRA_CONFIG_STATE_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_ENUMERATE_REMINDERS_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_REARM_REMINDERS_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_WIPED_VOLUME_VERIFY_SH_B64=$(_payload_file "#!/bin/bash")
+  export CAT_INNGEST_VERIFY_STATE_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_INVENTORY_SH_B64=$(_payload_file "#!/bin/bash")
+  export GIT_LOCK_CHARDEVICE_SWEEP_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_REGISTRY_PROBE_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_DOUBLEFIRE_PROBE_SH_B64=$(_payload_file "#!/bin/bash")
 }
 
 assert_eq() {
@@ -194,7 +202,7 @@ test_atomic_write() {
 
   local content="line1\nline2\nline3\nthis is the end"
   export_valid_env_vars
-  export CI_DEPLOY_SH_B64=$(echo -n "$content" | base64 -w0)
+  export CI_DEPLOY_SH_B64=$(_payload_file "$content")
 
   bash "$HANDLER"
 
@@ -257,13 +265,15 @@ test_state_file_happy_path() {
   teardown
 }
 
-# --- Test 7: State file partial failure — bad base64 ---
+# --- Test 7: State file partial failure — unreadable payload file ---
 test_state_file_partial_failure() {
-  echo "TEST: state file — partial failure with bad base64"
+  echo "TEST: state file — partial failure with an unreadable payload file"
   setup
   export_valid_env_vars
-  # Inject invalid base64 for one file
-  export CI_DEPLOY_SH_B64="!!!not-valid-base64!!!"
+  # #6178: payloads are now FILE PATHS (pass-file-to-command). Point one at a path that
+  # does not exist so the handler's cp fails (reason=payload_file_unreadable) while the
+  # rest still land — the per-file failure contract.
+  export CI_DEPLOY_SH_B64="${TMPDIR_ROOT}/does-not-exist-payload"
 
   bash "$HANDLER" 2>/dev/null || true
 
@@ -561,7 +571,7 @@ test_orphan_hook_selfcheck() {
   export_valid_env_vars
   # hooks.json referencing one DELIVERED script (inngest-inventory.sh ∈ FILE_MAP)
   # and one UNDELIVERED script (orphan-missing.sh ∉ FILE_MAP → never on disk).
-  export HOOKS_JSON_B64=$(printf '%s' '[{"id":"good","execute-command":"/usr/local/bin/inngest-inventory.sh"},{"id":"orphan","execute-command":"/usr/local/bin/orphan-missing.sh"}]' | base64 -w0)
+  export HOOKS_JSON_B64=$(_payload_file '[{"id":"good","execute-command":"/usr/local/bin/inngest-inventory.sh"},{"id":"orphan","execute-command":"/usr/local/bin/orphan-missing.sh"}]')
 
   local rc=0
   bash "$HANDLER" 2>/dev/null || rc=$?
