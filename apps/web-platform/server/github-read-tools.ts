@@ -71,7 +71,7 @@ export interface CommentSummary {
 
 interface GhUser { login: string }
 interface GhLabel { name: string }
-interface GhMilestone { title: string }
+interface GhMilestone { number: number; title: string }
 
 interface GhIssueResponse {
   number: number;
@@ -327,6 +327,9 @@ function toBoardInput(item: GhIssueResponse): BoardIssueInput {
     state: item.state === "closed" ? "closed" : "open",
     state_reason: item.state_reason ?? null,
     authorLogin: item.user?.login ?? null,
+    milestone: item.milestone
+      ? { number: item.milestone.number, title: item.milestone.title }
+      : null,
     created_at: item.created_at,
     updated_at: item.updated_at,
   };
