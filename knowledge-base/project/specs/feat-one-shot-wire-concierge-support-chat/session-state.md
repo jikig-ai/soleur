@@ -13,7 +13,38 @@ module the plan called for is NOT created. CTO also caught a P1 the plan missed:
 support at `cwd=getPluginPath()` with the default `allowWrite:[workspacePath]` would
 grant WRITE to the shared platform plugin root — support MUST set `allowWrite:[]`.
 
-## UPDATE (session 2): full safe SERVER EXECUTION CORE now landed + tested
+## UPDATE (session 3): feature is END-TO-END BUILT + tested; gated OFF pending live QA
+Full web-platform suite GREEN (12,282 tests, 0 fail). Everything is wired; the live
+backend is behind the `support-live` flag (default OFF → canned preview unchanged).
+Added this session:
+- Transport (CTO Option D): `lib/support-sse.ts` (pure frame format + client
+  parse/reduce), `app/api/support/route.ts` (authed SSE endpoint injecting an SSE
+  sink into `dispatchSoleurGo(persona:"support")`), `server/support-conversation.ts`
+  (B2 resolve-or-create). ZERO ws-handler coupling — isolation guard test proves it
+  can't disturb the Command Center WS.
+- Front-end: `use-support-chat.ts` live SSE streaming (cumulative-replace),
+  abort-on-close (S1), stream-idle watchdog (S5), empty-KB (S3) + transport-error
+  honest fallback; gated behind `support-live` (default OFF = canned, no network).
+- Copy (Phase 6): live/preview flips ATOMICALLY with the flag (subtitle, note,
+  footnote, AI-vs-Preview badge, streaming typing indicator).
+- Containment: sandbox `denyReadExtra` obscures `<root>/knowledge-base` from support.
+- Flag `support-live` added to RUNTIME_FLAGS (fail-closed OFF); flag-map fixtures swept.
+- ADR-109 updated with the transport + rollout-gate sections.
+- Tests: sse, support-conversation, support-route (persona:support/auth/CSRF/503),
+  route-isolation, live-path + fallback, T2/T3 + internal-KB-deny, copy-conditional.
+
+## The ONLY remaining work (all requires a DEPLOYED env — cannot be done here)
+1. Curate a product-help corpus at the support cwd (`getPluginPath()`-relative
+   `knowledge-base/`) so `kb-search` grounds answers instead of dead-ending, and
+   VERIFY LIVE that a support turn (a) returns real corpus-grounded text and (b)
+   leaks NO internal-KB content (post-mortems/ADRs/roadmap). This is the gating
+   precondition for flipping `support-live` ON.
+2. Provision the `support-live` Flagsmith feature + Doppler `FLAG_SUPPORT_LIVE`
+   (operator step, e.g. `soleur:flag-create support-live`) then flip ON post-QA.
+3. Live Playwright QA as a repo-less user (plan AC).
+Everything else in the plan is DONE + unit/integration-tested.
+
+## (superseded) session-2 note: full safe SERVER EXECUTION CORE landed + tested
 The entire support-scoped Concierge EXECUTION path is implemented and green
 (tsc-clean for the feature; 90 support unit/integration tests):
 - workspace-mode discriminant; required persona threaded end-to-end (dropped hop =

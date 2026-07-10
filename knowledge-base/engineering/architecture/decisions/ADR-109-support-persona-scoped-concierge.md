@@ -45,6 +45,36 @@ The support scope uses two mechanisms ADR-070 governs: (a) the `createCanUseTool
 - **B1 ephemeral (`NullConversationStore`).** Rejected by the operator in favor of B2 — B1 needs MORE dispatch surgery (skip 5 write sites) and loses the support thread on a brief disconnect.
 - **`kb-search` over the internal `knowledge-base/`.** Rejected as a ship-blocker — it would narrate the operator's confidential post-mortems/roadmap/ADRs to any end user. Support reads ONLY a curated product-help corpus, search-root-restricted (Phase 4).
 
+## Transport (CTO ruling #2 — Option D: dedicated SSE, WS untouched)
+
+The support chat is a global bubble overlay; a concurrent conversation to the
+Command Center. But the WS transport is single-per-user (`ws-handler.ts`
+`supersedeExistingUserSocket` closes any second per-user socket), so support cannot
+open its own `useWebSocket` without dropping the CC agent session. **Ruling:
+support streams over a dedicated `POST /api/support` + Server-Sent-Events response,
+sharing ZERO runtime with the WS.** It reuses `dispatchSoleurGo`'s INJECTED
+`sendToClient` — the route hands it an SSE-writing sink and passes `persona:"support"`.
+`supersedeExistingUserSocket` and the `sessions` map are untouched (the whole point).
+An **isolation guard test** asserts the support route + hook import neither, so a
+future edit can't re-introduce the CC-supersession risk. Rejected: A (multiplex — edits
+the shared router, unverifiable), B (per-channel socket key — rewrites the exact CC-
+protecting line), C (on-demand WS that supersedes CC — drops the paying agent session,
+no auto-reconnect). New: `lib/support-sse.ts` (pure frame format + client parse/reduce),
+`server/support-conversation.ts` (B2 resolve-or-create), `app/api/support/route.ts`.
+
+## Live rollout gate (`support-live` flag)
+
+The live backend is gated behind a NEW `support-live` runtime flag, default OFF: while
+OFF the bubble shows the canned interface-preview reply (no network); the copy flips
+live/preview atomically with the flag. `support-live` must NOT be flipped ON until a
+DEPLOYED-env QA confirms (a) a repo-less user gets a real corpus-grounded streamed reply
+and (b) NO internal-`knowledge-base/` content leaks. The sandbox `denyReadExtra` obscures
+`<root>/knowledge-base` from the read-only support session as tool-level defense-in-depth,
+but the broad read surface (`--ro-bind / /` + Bash) means live no-leak verification is the
+gating precondition, not code alone. A curated product-help corpus at the support cwd
+(`getPluginPath()`-relative `knowledge-base/`) is the remaining content prerequisite so
+`kb-search` grounds answers instead of dead-ending.
+
 ## Consequences
 
 - Command Center path is byte-neutral (the `command_center` branch preserves gate order, `cwd=workspacePath`, `allowWrite=[workspacePath]`).
