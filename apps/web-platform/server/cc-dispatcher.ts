@@ -18,6 +18,10 @@ import { existsSync } from "node:fs";
 import path from "path";
 
 import { ROUTINE_AUTHORING_DIRECTIVE } from "@/server/routine-authoring-directive";
+import {
+  SUPPORT_SKILLS_OPTION,
+  SUPPORT_EXTRA_DISALLOWED_TOOLS,
+} from "@/server/support-directive";
 
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
@@ -2661,7 +2665,22 @@ export const realSdkQueryFactory: QueryFactory = async (
         // autonomous bypass) and runs inside the SDK bwrap sandbox whose
         // network egress is token-derived (see buildAgentSandboxConfig).
         // Merged with the canonical [WebSearch, WebFetch] disallowed list.
-        extraDisallowedTools: CC_PATH_DISALLOWED_TOOLS,
+        //
+        // feat-wire-concierge-support-chat (ADR-109): the support persona pins a
+        // WIDER disallowed set (Edit/Write/MultiEdit/NotebookEdit/Task/Agent) so a
+        // read-only help chat cannot write under cwd=getPluginPath() nor fan out
+        // into engineering subagents. Bash stays out of the list (kb-search shells
+        // out behind the read-only safe-bash gate).
+        extraDisallowedTools:
+          args.persona === "support"
+            ? SUPPORT_EXTRA_DISALLOWED_TOOLS
+            : CC_PATH_DISALLOWED_TOOLS,
+        // SDK-native skill scope (PRIMARY lever, ADR-109). Support loads ONLY
+        // kb-search into the main-session prompt; Command Center loads every skill
+        // (undefined → SDK default). Paired with the createCanUseTool default-deny
+        // below (defense-in-depth for an emit-a-non-loaded-skill case).
+        skills:
+          args.persona === "support" ? [...SUPPORT_SKILLS_OPTION] : undefined,
         // SubagentStart sanitizer override: cc strips control chars +
         // U+2028/U+2029 (per learning
         // 2026-04-17-log-injection-unicode-line-separators.md) and
@@ -2690,6 +2709,10 @@ export const realSdkQueryFactory: QueryFactory = async (
           repoName: "",
           session,
           controllerSignal: controller.signal,
+          // feat-wire-concierge-support-chat (ADR-109) — default-deny Skill
+          // allowlist ({kb-search}) when persona=support (defense-in-depth for a
+          // model that emits a non-loaded skill despite the SDK `skills` filter).
+          persona: args.persona,
           deps: ccDeps,
         }),
         // #5772 lever 1 (ADR-070) — opt into the L3 phase-surface hint on the
@@ -2932,6 +2955,16 @@ export interface DispatchSoleurGoArgs {
    * gate — a trusted system-prompt append, never via context.content.
    */
   routineAuthoring?: boolean;
+  /**
+   * feat-wire-concierge-support-chat (ADR-109). Set to `"support"` by the
+   * ws-handler when `chatContext.type === "support"` (the in-app support chat).
+   * Threaded to the runner → realSdkQueryFactory, which bypasses the repo-
+   * lifecycle gates (support runs read-only at cwd=getPluginPath()), scopes SDK
+   * skills to kb-search, pins the support disallowed-tools, and emits the support
+   * prompt. Enum (not a safety-disabling boolean): a support turn CANNOT be
+   * expressed as "Command Center with gates off". Undefined = Command Center.
+   */
+  persona?: "support";
   /**
    * 2026-05-06 follow-up to #3338. Set by `resolveConciergeDocumentContext`
    * when the in-process PDF extractor surfaced a typed failure class. The
@@ -4045,6 +4078,9 @@ export async function dispatchSoleurGo(
       persistActiveWorkflow,
       sessionId: sessionId ?? undefined,
       routineAuthoring: args.routineAuthoring,
+      // feat-wire-concierge-support-chat — forward the support persona to the
+      // runner → realSdkQueryFactory (repo-gate bypass + skill/tool scope).
+      persona: args.persona,
       artifactPath,
       documentKind,
       documentContent,

@@ -974,6 +974,14 @@ export interface DispatchArgs {
    */
   routineAuthoring?: boolean;
   /**
+   * feat-wire-concierge-support-chat (ADR-109). `"support"` runs the Concierge
+   * as read-only in-app help: support prompt (buildSoleurGoSystemPrompt branch),
+   * SDK skills scoped to kb-search, write/fan-out tools disallowed, and the
+   * repo-lifecycle gates bypassed in realSdkQueryFactory. Forwarded to
+   * QueryFactoryArgs. Undefined = Command Center default.
+   */
+  persona?: "support";
+  /**
    * 2026-05-06 follow-up to #3338. Set when the in-process PDF extractor
    * surfaced a typed failure class (`oversized_buffer | encrypted |
    * corrupted | parse_error | empty_text | lazy_import_failed |
@@ -1045,6 +1053,11 @@ export interface QueryFactoryArgs {
   /** #5402 — routines authoring mode flag; realSdkQueryFactory appends the
    *  ROUTINE_AUTHORING_DIRECTIVE to the system prompt when true. */
   routineAuthoring?: boolean;
+  /** feat-wire-concierge-support-chat (ADR-109) — support persona. When
+   *  "support", realSdkQueryFactory bypasses the repo-lifecycle gates, runs
+   *  cwd=getPluginPath() read-only, scopes SDK skills to kb-search, and pins the
+   *  support disallowed-tools. Undefined = Command Center default. */
+  persona?: "support";
   /** Per-conversation context — real-SDK factories need these to wire the
    *  per-user `canUseTool` closure + audit logs. Tests can ignore. */
   userId: string;
@@ -2552,6 +2565,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
             documentExtractError: args.documentExtractError,
             documentExtractMeta: args.documentExtractMeta,
             workspacePath: args.workspacePath,
+            // Support persona short-circuits the builder to the support prompt.
+            persona: args.persona,
           }),
           resumeSessionId,
           pluginPath,
@@ -2559,6 +2574,9 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           userId,
           conversationId,
           routineAuthoring: args.routineAuthoring,
+          // feat-wire-concierge-support-chat — forward the support persona so
+          // realSdkQueryFactory bypasses repo gates + scopes skills/tools.
+          persona: args.persona,
           artifactPath: args.artifactPath,
           activeWorkflow: initialWorkflow,
           documentKind: args.documentKind,
