@@ -354,7 +354,7 @@ model {
   api -> kb "Reads context_queries artifacts (skill-scoped injection, web in-process)" { technology "File I/O" }
   skills -> kb "Reads/writes" { technology "File I/O" }
   agents -> kb "Reads/writes" { technology "File I/O" }
-  api -> supabase "Auth and data" { technology "HTTPS" }
+  api -> supabase "Auth and data; per-call audit_github_token_use write for every GitHub App-token use (reads AND Workstream issue writes, Art. 30 PA-16, ADR-109)" { technology "HTTPS" }
   claude -> supabase "Sessions and keys" { technology "HTTPS" }
   claude -> anthropic "LLM calls" { technology "HTTPS" }
   api -> anthropic "Daily org cost/usage report (Admin API, cost-report cron)" { technology "HTTPS" }
@@ -365,7 +365,7 @@ model {
   auth -> supabase "Validates tokens" { technology "HTTPS" }
   api -> stripe "Checkout and webhooks" { technology "HTTPS" }
   claude -> stripe "invoice skill: create/finalize/send/chase via hosted Stripe MCP — OAuth, operator's OWN account; distinct credential plane from the webapp -> stripe billing edge; test-mode only in v1 (ADR-107)" { technology "MCP tool → mcp.stripe.com (HTTPS)" }
-  api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); the board is the canonical Status store (ADR-097). The Phase-1 lifecycle→board write path runs inside GitHub Actions (github-internal) so it needs no cross-boundary edge." { technology "HTTPS (REST + GraphQL)" }
+  api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); AND writes issues — create / title / label-driven status / close-reopen — via the audited GitHub App-token client (ADR-109). The board is the canonical Status store (ADR-097); a status write is a label mutation that the board-status-sync workflow (github-internal) mirrors. owner/repo/installation resolve from the active workspace (ADR-044), never request input." { technology "HTTPS (REST + GraphQL)" }
   dashboard -> plausible "Page view events" { technology "JS snippet" }
   api -> inngest "Sends events; serves functions" { technology "HTTP private-net :8288" }
   resend -> api "Inbound email webhook (svix-verified) → email-triage ingress" { technology "HTTPS" }

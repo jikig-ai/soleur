@@ -343,6 +343,17 @@ apps/web-platform/server/auto-sync-trigger.ts
 # column, CRITICAL-2) and RLS is service-role-only (no authenticated write path).
 apps/web-platform/server/tool-attempt-telemetry.ts
 
+# feat-workstream-issue-crud (#6304, ADR-109) — the shared Workstream WRITE
+# accessor resolves the initiator's GitHub login for the ADR-104 creator marker.
+# Service-role is load-bearing for the SAME reason repo/setup/route.ts uses it:
+# resolveGithubLogin reads the provider-controlled GitHub identity via the
+# GoTrue admin API (auth.admin.getUserById is REVOKE'd from authenticated) plus
+# the users.github_username fallback. userId is server-derived from the session
+# (route auth.getUser()), NEVER request input; the value is used only to stamp
+# the attribution marker (no tenant-data read/write via service-role here — the
+# GitHub write itself goes through the audited App-token client, not Supabase).
+apps/web-platform/server/workstream/mutate-workstream-issue.ts
+
 # Cross-host WS proxy AP-2 membership re-verify (#5274 Sub-PR 3.B, ADR-068):
 # session-proxy.ts hands createServiceClient() to verifyProxiedSessionMembership
 # (session-router.ts), which reads workspace_members cross-tenant to confirm a

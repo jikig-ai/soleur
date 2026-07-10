@@ -348,15 +348,78 @@ export function deriveColumn(input: BoardIssueInput): WorkstreamStatus {
     // Board has no Cancelled column — all closed issues fold to done.
     return "done";
   }
-  // open
-  if (labels.includes("blocked")) return "blocked";
-  if (labels.includes("pending")) return "pending";
-  if (labels.includes("in-progress")) return "in_progress";
-  if (labels.includes("review") || labels.includes("needs-review")) {
-    return "in_review";
+  // open — precedence + aliases single-sourced in OPEN_LABEL_PRECEDENCE so the
+  // write removal set (STATUS_LABELS) cannot drift from what this READS (AC12).
+  for (const { labels: candidates, column } of OPEN_LABEL_PRECEDENCE) {
+    if (candidates.some((l) => labels.includes(l))) return column;
   }
-  if (labels.includes("ready") || labels.includes("todo")) return "ready";
   return "backlog";
+}
+
+// ---------------------------------------------------------------------------
+// Status-label WRITE vocabulary — single-sourced with deriveColumn's READ set
+// (arch review P1 / ADR-109). A status write REMOVES every label in
+// STATUS_LABELS then adds the ONE canonical write-label for the target column,
+// in a single atomic `setLabels` PUT (see server/workstream/
+// mutate-workstream-issue.ts). STATUS_LABELS MUST equal exactly the labels
+// deriveColumn's open branch inspects — a test asserts write-set ≡ read-set so
+// the read-derive and the write can never drift (AC12). `backlog` writes no
+// status label (bare removal); `done` is a STATE transition (close), never a
+// label. Mirrors the INITIATED_BY_MARKER single-source pattern above.
+// ---------------------------------------------------------------------------
+
+/** Ordered open-issue label→column precedence (first match wins). SINGLE SOURCE
+ *  for both `deriveColumn` (read) and `STATUS_LABELS` (the write removal set) —
+ *  they cannot drift because both derive from this one table (ADR-109 / AC12). */
+const OPEN_LABEL_PRECEDENCE: readonly {
+  labels: readonly string[];
+  column: WorkstreamStatus;
+}[] = [
+  { labels: ["blocked"], column: "blocked" },
+  { labels: ["pending"], column: "pending" },
+  { labels: ["in-progress"], column: "in_progress" },
+  { labels: ["review", "needs-review"], column: "in_review" },
+  { labels: ["ready", "todo"], column: "ready" },
+];
+
+/** Every status label `deriveColumn` reads (the removal set for a status write),
+ *  derived from OPEN_LABEL_PRECEDENCE so it can never drift from the read. */
+export const STATUS_LABELS: readonly string[] = OPEN_LABEL_PRECEDENCE.flatMap(
+  (r) => r.labels,
+);
+
+/** Canonical write-label for each column (the label ADDED after removing all
+ *  STATUS_LABELS). `backlog` → none (bare removal); `done` → none (close).
+ *  Every value is a member of STATUS_LABELS and derives back to its key via
+ *  deriveColumn (AC13 round-trip). */
+export const STATUS_WRITE_LABEL: Readonly<
+  Partial<Record<WorkstreamStatus, string>>
+> = {
+  ready: "ready",
+  in_progress: "in-progress",
+  in_review: "review",
+  blocked: "blocked",
+  pending: "pending",
+};
+
+/** True when moving to `target` CLOSES the issue (Done spans state, not labels). */
+export function isTerminalColumn(target: WorkstreamStatus): boolean {
+  return target === "done";
+}
+
+/** Compute the FULL label set for an atomic setLabels PUT that moves an issue to
+ *  `target`: preserve every NON-status label, drop all STATUS_LABELS, then add
+ *  the target's canonical write-label (none for backlog/done). Pure — the
+ *  accessor's read-modify-write feeds current labels in and PUTs the result, so
+ *  a half-failed remove-then-add can never leave a wrong column (ADR-109). */
+export function computeStatusLabels(
+  currentLabels: string[],
+  target: WorkstreamStatus,
+): string[] {
+  const statusSet = new Set<string>(STATUS_LABELS);
+  const preserved = currentLabels.filter((l) => !statusSet.has(l));
+  const write = STATUS_WRITE_LABEL[target];
+  return write ? [...preserved, write] : preserved;
 }
 
 /** Live only when the derived column is in_progress — mirrors deriveColumn so
@@ -393,8 +456,12 @@ export const INITIATED_BY_MARKER = {
    *  Non-line-anchored by design: it runs only on Soleur-controlled bot bodies,
    *  and the write side strips strays so the trailing server-stamped marker wins. */
   regex: /<!--\s*soleur:initiated-by\s+([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)\s*-->/g,
-  /** Strip pattern (any marker, malformed included) — used for unconditional strip. */
-  stripRegex: /<!--\s*soleur:initiated-by[\s\S]*?-->/g,
+  /** Strip pattern (any marker, malformed included) — used for unconditional strip.
+   *  BOUNDED quantifiers (`{0,64}` / `{0,200}?`) keep this linear: an unbounded
+   *  `\s*…[\s\S]*?-->` is O(n²) on attacker-controlled bodies with many
+   *  `<!--…initiated-by` prefixes and no closing `-->` (CodeQL js/polynomial-redos).
+   *  A real marker's gap is < 50 chars, so the caps never truncate a valid one. */
+  stripRegex: /<!--\s{0,64}soleur:initiated-by[\s\S]{0,200}?-->/g,
 } as const;
 
 /** True iff `login` is the Soleur GitHub-App bot for `botSlug` (case-insensitive
