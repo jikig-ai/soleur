@@ -389,3 +389,13 @@ runcmd:
     fi
     trap - EXIT
     /usr/local/bin/inngest-boot-phone-home.sh bootstrap-done
+    # #6178 diag: the bootstrap `systemctl restart` returns once the process is SPAWNED, not once
+    # it is HEALTHY — so bootstrap-done does not prove inngest bound :8288. Capture the service
+    # states + loopback :8288 + the inngest-server journal tail (redacted) via the phone-home
+    # (Vector journald shipping is separately unreliable on this host, so this is the visibility).
+    set +e
+    sleep 8
+    svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service 2>&1 | tr '\n' ',')"
+    lo="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:8288/ 2>&1)"
+    jl="$(journalctl -u inngest-server.service --no-pager -n 15 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 400)"
+    /usr/local/bin/inngest-boot-phone-home.sh post-boot-health "svc=[$svc] lo8288=$lo jl=[$jl]"
