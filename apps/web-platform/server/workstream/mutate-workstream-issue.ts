@@ -96,13 +96,23 @@ interface IssuesRest {
   update(p: Record<string, unknown>): Promise<{ data: GhIssuePayload }>;
   get(p: Record<string, unknown>): Promise<{ data: GhIssuePayload }>;
   setLabels(p: Record<string, unknown>): Promise<{ data: unknown }>;
+  // Picker options (edit-fields) — the options accessor reads these.
+  listLabelsForRepo(
+    p: Record<string, unknown>,
+  ): Promise<{ data: Array<{ name: string; color?: string | null }> }>;
+  listAssignees(
+    p: Record<string, unknown>,
+  ): Promise<{ data: Array<{ login: string }> }>;
+  listMilestones(
+    p: Record<string, unknown>,
+  ): Promise<{ data: Array<{ number: number; title: string }> }>;
 }
 
-interface OctokitLike {
+export interface OctokitLike {
   rest: { issues: IssuesRest };
 }
 
-interface WriteContext {
+export interface WriteContext {
   owner: string;
   repo: string;
   octokit: OctokitLike;
@@ -113,7 +123,7 @@ interface WriteContext {
 // Resolution (ADR-044) — mirrors getWorkstreamIssues exactly.
 // ---------------------------------------------------------------------------
 
-async function resolveContext(userId: string): Promise<WriteContext> {
+export async function resolveContext(userId: string): Promise<WriteContext> {
   const repoUrl = await getCurrentRepoUrl(userId);
   const parsed = parseConnectedRepo(repoUrl);
   if (!parsed) {
