@@ -186,15 +186,15 @@ comment on #6256.
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `AC1` Migration `128_*.sql` revokes EXECUTE from `anon` and `authenticated` for all 5 audited functions (grep: 5 × `from anon, authenticated`).
-- [ ] `AC2` Migration also revokes from `public` (defense-in-depth) for each target.
-- [ ] `AC3` `128_*.down.sql` exists, restores the pre-fix `anon`/`authenticated` grants (rollback-only), AND carries a `093.down`-style prod caveat that it knowingly re-opens the #6306 IDOR (grep: down file contains a "do NOT run in production" / "rollback-machinery only" marker).
-- [ ] `AC4` `verify/128_*.sql` emits, for each of the 5 targets, an `anon` deny check + an `authenticated` deny check + a `public` deny check (`bad=1` when the role still has EXECUTE), and for the 4 non-trigger targets a `service_role` grant-present check (`bad=1` when service_role LACKS EXECUTE).
-- [ ] `AC5` `verify/128_*.sql` conforms to the `(check_name, bad)` two-column contract (`run-verify.sh` parses it; every row is `(TEXT, INT)`).
-- [ ] `AC6` `128-revoke-definer-rpc-residual-grants.test.ts` passes: `cd apps/web-platform && ./node_modules/.bin/vitest run test/supabase-migrations/128-revoke-definer-rpc-residual-grants.test.ts`.
-- [ ] `AC7` Typecheck clean: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
-- [ ] `AC8` No FIX target is reachable from any authenticated/anon caller path in `server/` (grep confirms `concurrency.ts` + `agent-runner.ts` use `createServiceClient`; documented in §sibling audit).
-- [ ] `AC9` `find_stuck_active_conversations` carries a `COMMENT ON FUNCTION` documenting service-role-only intent + Ref #6306.
+- [x] `AC1` Migration `128_*.sql` revokes EXECUTE from `anon` and `authenticated` for all 5 audited functions (grep: 5 × `from anon, authenticated`).
+- [x] `AC2` Migration also revokes from `public` (defense-in-depth) for each target.
+- [x] `AC3` `128_*.down.sql` exists, restores the pre-fix `anon`/`authenticated` grants (rollback-only), AND carries a `093.down`-style prod caveat that it knowingly re-opens the #6306 IDOR (grep: down file contains a "do NOT run in production" / "rollback-machinery only" marker).
+- [x] `AC4` `verify/128_*.sql` emits, for each of the 5 targets, an `anon` deny check + an `authenticated` deny check + a `public` deny check (`bad=1` when the role still has EXECUTE), and for the 4 non-trigger targets a `service_role` grant-present check (`bad=1` when service_role LACKS EXECUTE).
+- [x] `AC5` `verify/128_*.sql` conforms to the `(check_name, bad)` two-column contract (`run-verify.sh` parses it; every row is `(TEXT, INT)`).
+- [x] `AC6` `128-revoke-definer-rpc-residual-grants.test.ts` passes: `cd apps/web-platform && ./node_modules/.bin/vitest run test/supabase-migrations/128-revoke-definer-rpc-residual-grants.test.ts` (35/35).
+- [x] `AC7` Typecheck clean: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (rc=0).
+- [x] `AC8` No FIX target is reachable from any authenticated/anon caller path in `server/` (grep confirms `concurrency.ts` + `agent-runner.ts` use `createServiceClient`; documented in §sibling audit).
+- [x] `AC9` `find_stuck_active_conversations` carries a `COMMENT ON FUNCTION` documenting service-role-only intent + Ref #6306.
 - [ ] `AC10` PR body uses `Closes #6306` (this fix is complete at merge — the migration auto-applies via `web-platform-release.yml#migrate`, and verify runs in the same pipeline; unlike ops-remediation, there is no post-merge operator write, so `Closes` is correct).
 
 ### Post-merge (pipeline-automated, no operator action)
