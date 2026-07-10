@@ -13,6 +13,24 @@ adr: ADR-109 (provisional)
 
 ✨ **feature** · cross-cutting (frontend seam + server dispatch + skill-scoping + ADR/C4) · single-user-incident threshold
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-10. Inputs: 4 parallel research agents (dispatch path, skill-scoping,
+support UI, learnings) + scoped fable advisor consult (ADR-083) + 3-reviewer pass
+(Kieran correctness, architecture-strategist, spec-flow) + installed-SDK verification.
+
+**Key improvements over the first draft:**
+1. **Provider-seam over a threaded boolean** (fable) — mode-leak becomes a compile-time type error.
+2. **Two-axis seam** (architecture Finding 1) — `dispatchSoleurGo` hard-requires a persisted row at `cc-dispatcher.ts:3087` BEFORE streaming, so "ephemeral = no DB surgery" was false; corrected to a `ConversationStore` axis and a CTO B1(ephemeral)/B2(persisted-repo-less) decision.
+3. **Corpus/internal-KB leak promoted to a ship-blocker** (architecture Finding 2) — `kb-search` over `knowledge-base/` would narrate the operator's confidential post-mortems/roadmap/ADRs to any end user; support search root must be hard-restricted to a curated corpus.
+4. **SDK-native `skills` allowlist** (deepen, sdk.d.ts:3263-3265 @ `0.3.197`) — the intended primary scoping lever, currently unused; paired with a `canUseTool` deny-with-message defense-in-depth.
+5. **Correctness fixes** (Kieran) — Edit/Write are NOT blocked by default (`CANONICAL_DISALLOWED_TOOLS` = WebSearch/WebFetch only), so support must pin `Edit,Write,MultiEdit,NotebookEdit,Task,Agent` in `disallowedTools`; keep Bash (kb-search needs it); bare↔FQN skill normalization; `help` dropped from the allowlist.
+6. **User-flow states** (spec-flow) — persona-unresolved honest degrade, close-mid-turn abort, stream-idle watchdog, empty-KB state, refusal escape-hatch; ACs re-cast as invariants not proxies.
+
+**New considerations discovered:** the dispatch-layer row dependency (not just ws-handler); the internal-KB confidentiality leak; the SDK-native `skills` lever; the reconnect-replay cliff; the ADR-070 grounding correction (deny-with-message-vs-silent-removal, precedent `permission-callback.ts:1020-1030`) + a required ADR-070 amendment.
+
+**Verified live (deepen):** installed `@anthropic-ai/claude-agent-sdk` = `0.3.197`; `disallowedTools` docstring (sdk.d.ts:1327) confirms tools are "removed from the model's context"; `skills` main-session option exists (sdk.d.ts:3263-3265) and is unused in-repo; next-free ADR ordinal = **ADR-109** (fresh `origin/main`, highest = ADR-108).
+
 ## Overview
 
 The support chat UI (`components/support/*`) shipped as an **interface-only shell**
@@ -94,7 +112,7 @@ Placed between Overview and Implementation Phases per the plan skill (spec-ficti
 | "Make the seam async / return a `Promise<string>` and await it — that one caller plus this file are the entire swap surface." (`canned-responder.ts` header) | A real Concierge reply is **streamed** (cumulative `stream` frames), not a single final string. A `Promise<string>` captures only the final text and loses live streaming/tool-progress. The seam under-specifies streaming. | Evolve the seam beyond `Promise<string>`: `use-support-chat.ts` subscribes to streamed frames (cumulative-replace, like `ws-client.ts`). Keep `canned-responder.ts` as the **flag-off / error fallback**, not the live path. Documented as a decision for plan-review. |
 | "Tests to touch: `canned-responder.test.ts`." | Blast radius is **3 test files**: `canned-responder.test.ts` (async), `support-panel.test.tsx:62` asserts `expect(fetchSpy).not.toHaveBeenCalled()` — **must invert** for a live backend, `support-launcher.test.tsx` (mount/context). | Update all three + add new server tests + sweep the **19 factory test consumers** (see Sharp Edges). |
 | `feature-flags/server.ts:61-64` comment: "Default OFF for all roles until the support backend lands." | Stale. Memory + task confirm **Doppler `FLAG_SUPPORT=1` in dev+prd** and Flagsmith `support` (220580) ON for all since 2026-06-30 — the bubble is **already live in prd** (canned). | Do NOT re-provision the flag. Update the stale comment. Verify live state at /work via `soleur:flag-list` (read-only) before relying on it — do not trust the code comment. |
-| `createConversation` can persist a support conversation. | `ws-handler.ts:900-905` **throws "No connected repository"** when `getCurrentRepoUrl(user.id)` is null; stamps `workspace_id` + `repo_url` NOT NULL. A repo-less user cannot get a conversation row at all. | `supportMode` uses a **repo-less conversation path** (reserved `context_path`, nullable `repo_url`) OR an **ephemeral no-persistence** session (see Alternatives). Bypass the repo throw in supportMode. |
+| `createConversation` can persist a support conversation. | `ws-handler.ts:900-905` **throws "No connected repository"** when `getCurrentRepoUrl(user.id)` is null (app-level; `repo_url` column itself is nullable `text`). AND `dispatchSoleurGo` requires a persisted row at `cc-dispatcher.ts:3087`/`:3151`/`:3169`/`:3498`. | Two-axis seam: support = `NullConversationStore` (B1, ephemeral) OR a `kind='support'` repo-less row (B2). **Never a sentinel `context_path`.** CTO decision — see Alternatives + Phase 2. |
 | `SupportLauncher` has the context to call a backend. | `SupportLauncher` is **context-free** — no `userId`/`orgId`/`conversationId`, no auth hook (`support-launcher.tsx`; agent report). | Thread identity/conversation context in (auth is available at `(dashboard)/layout.tsx`; support conversation id resolved on open). |
 | System-prompt directives can hang off `agent-runner`. | The support chat is a **leaderless conversation**; learning `2026-06-16-leaderless-conversation-system-prompt-seam-is-cc-dispatcher-not-agent-runner.md` proves the seam is **cc-dispatcher**, not agent-runner. A directive on agent-runner silently never fires. | Append the support directive in the **cc-dispatcher factory path** (`effectiveSystemPrompt`, `cc-dispatcher.ts:2350-2384`) + `soleur-go-runner buildSoleurGoSystemPrompt`. |
 
@@ -160,15 +178,15 @@ plan `brand_survival_threshold: single-user incident`; carried forward, not re-a
 3. Guard: `persona:"support"` has NO effect unless the caller is an authenticated user (auth enforced by the ws-handler `auth` frame + middleware). A flag-flip alone MUST NOT open support behavior server-side without the persona being set (multi-agent review probe).
 4. Because mode-leak is now a **type error** (a repo turn gets `RepoWorkspaceProvider` by construction; a support turn gets `ReadOnlyDocsProvider`), the 5-hop `routineAuthoring`-style boolean threading is avoided. The `persona` still threads to the prompt/skill-scope, but disabling safety gates is NOT expressible on the repo path.
 
-### Phase 2 — Ephemeral support conversation (v1) + repo-free execution
-**Conversation strategy: ephemeral for v1** (scoped-advisor consult, ADR-083). NO
-`conversations`/`messages` rows → the entire DB write/RLS/DSAR surface is untouched,
-halving the risky surface, and it matches today's local-state UX (no persistence across
-reload). **Reject the sentinel `context_path` variant outright** — a magic `context_path`
-in a table every downstream reader (RLS, DSAR, repo-readiness queries) assumes is
-repo-backed leaks forever. Persistence, if a product driver emerges, is an additive
-follow-up: nullable `conversations.repo_url` + a `kind` discriminator column + a real
-migration — tracked as a deferral issue, not built now.
+### Phase 2 — Conversation strategy (CTO decision B1 vs B2) + repo-free execution
+**Decide B1 (ephemeral via `NullConversationStore`) vs B2 (persisted repo-less row)** —
+the fable consult favored ephemeral to dodge RLS/DSAR, but architecture Finding 1 shows
+`dispatchSoleurGo` itself requires a persisted row at 5 write sites, so **ephemeral is
+NOT "no DB surgery"** (it needs the store abstracted through the seam AND resume
+suppressed) and **B2 may be the lower-surgery, more-robust v1**. Whichever is chosen:
+**reject the sentinel `context_path` variant outright** — a magic `context_path` in a
+table every downstream reader (RLS, DSAR, repo-readiness queries) assumes is repo-backed
+leaks forever; B2 uses a `kind='support'` discriminator + nullable `repo_url` instead.
 1. Because support is ephemeral, `createConversation` (`ws-handler.ts:886-942`) is **not
    called** on the support path — the `getCurrentRepoUrl` null-throw at `:900` is never
    reached. **BUT `dispatchSoleurGo` itself requires a persisted row (architecture
@@ -208,7 +226,8 @@ migration — tracked as a deferral issue, not built now.
 
 ### Phase 3 — Skill + tool scoping (support persona)
 1. **Support system-prompt directive** — new `SUPPORT_SYSTEM_DIRECTIVE` constant (server-side, trusted; mirror `routine-authoring-directive.ts:16-36`), **appended** to `effectiveSystemPrompt` in the cc-dispatcher factory path (`cc-dispatcher.ts:2350-2384`) when `persona:"support"`. Content: "You are Soleur Support. Answer how-do-I / navigation questions from the knowledge base and product docs. Use only `kb-search`. Never edit code, never run engineering workflows (plan/work/ship/deploy/one-shot), never touch a repository. If asked to do engineering work, explain that this is app-help support and point to the relevant app area / Command Center." **Routing-line replacement is a SEPARATE mechanism** (Kieran review #5): an *append* cannot un-say the baseline `/soleur:go` routing line already baked into `buildSoleurGoSystemPrompt` (`soleur-go-runner.ts:1291`) — so **branch `buildSoleurGoSystemPrompt`** to emit the support routing instead of `/soleur:go` when `persona:"support"`. Do not rely on the append to "replace" it (both would coexist and conflict).
-2. **Default-deny skill allowlist in `createCanUseTool`** (`permission-callback.ts`, the `isSafeTool` Skill branch ~`:883`) — the ONLY genuinely new gate. When the dispatch persona is `support`, a `Skill` call is allowed **only** if the invoked skill ∈ `SUPPORT_SKILL_ALLOWLIST` (`{ kb-search }`; **drop `help`** — it enumerates the full engineering command surface, not support-appropriate); **everything else denies** (default-deny — a new plugin skill is safe-by-default) **with a clear `message`** ("Support can only use app-help") — a graceful `{behavior:"deny", message}` the model relays (established shape at `permission-callback.ts:912-913`), NOT a silent rejection (ADR-070 reconciliation). **Bare↔FQN normalization (Kieran review #2):** the model-controlled `.skill` field can arrive `soleur:`-prefixed; anchored-strip `soleur:` before the `∈ SUPPORT_SKILL_ALLOWLIST` check (mirror `context-queries-hook.ts` Gate #1 / `phase-surface-hook.ts`) — else `soleur:kb-search` false-denies the happy path. Assert BOTH forms in the unit test. `CanUseToolDeps` gains a `persona`/allowlist input (thread from the factory at `cc-dispatcher.ts:2677`).
+2a. **SDK-native `skills` allowlist (PRIMARY lever — deepen finding, sdk.d.ts:3263-3265, installed SDK `0.3.197`).** The Agent SDK main-session `Options` has an unused-in-codebase `skills?: string[]` field: *"When provided, only skills whose names match an entry are loaded into the main session system prompt... Omit to load every discovered skill."* Setting `skills: ["kb-search"]` for `persona:"support"` **removes all other skills from the model's context** (they are never advertised) — a far cleaner scope than advertising 95 and denying at call-time, and the SDK's intended mechanism (passing `'Skill'` to `allowedTools` is deprecated *in favor of* this option per sdk.d.ts:1307). Thread a `skills?: string[]` option through `buildAgentQueryOptions` (new passthrough field) → set it on the support path. **ADR-070 note:** this is a context-reduction (surface shrink) on a NON-fail-open layer, so it MUST be paired with 2b below (a model that emits a non-loaded skill would otherwise hit the silent unknown-tool failure ADR-070 forbids).
+2b. **Default-deny skill allowlist in `createCanUseTool` (defense-in-depth for the emit-a-non-loaded-skill case)** (`permission-callback.ts`, the `isSafeTool` Skill branch ~`:883`) — the genuinely new gate that keeps ADR-070 satisfied when 2a shrinks the surface. When the dispatch persona is `support`, a `Skill` call is allowed **only** if the invoked skill ∈ `SUPPORT_SKILL_ALLOWLIST` (`{ kb-search }`; **drop `help`** — it enumerates the full engineering command surface, not support-appropriate); **everything else denies** (default-deny — a new plugin skill is safe-by-default) **with a clear `message`** ("Support can only use app-help") — a graceful `{behavior:"deny", message}` the model relays (established shape at `permission-callback.ts:912-913`), NOT a silent rejection (ADR-070 reconciliation). **Bare↔FQN normalization (Kieran review #2):** the model-controlled `.skill` field can arrive `soleur:`-prefixed; anchored-strip `soleur:` before the `∈ SUPPORT_SKILL_ALLOWLIST` check (mirror `context-queries-hook.ts` Gate #1 / `phase-surface-hook.ts`) — else `soleur:kb-search` false-denies the happy path. Assert BOTH forms in the unit test. `CanUseToolDeps` gains a `persona`/allowlist input (thread from the factory at `cc-dispatcher.ts:2677`).
 3. **`disallowedTools` — hard-remove the write/fan-out surface (Kieran review #1, HIGH).** Edit/Write are **NOT** blocked by default — `CANONICAL_DISALLOWED_TOOLS` is only `["WebSearch","WebFetch"]` (`agent-runner-query-options.ts:53`) and Edit/Write are gated only by cwd-relative `isPathInWorkspace(filePath, ctx.workspacePath)` (`permission-callback.ts:240`). Under support's `cwd = getPluginPath()`, a `Write` to a path *under* the plugin root would pass containment and be **allowed** — the exact "read-only surface that isn't" leak. So `persona:"support"` `extraDisallowedTools` MUST explicitly include **`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Task`, `Agent`** (do not rely on the cc-router's `CC_PATH_DISALLOWED_TOOLS` inheritance — pin it on the support path). **ADR-070 reconciliation (architecture Finding 4):** this silent `disallowedTools` removal is acceptable here — and NOT the "additive-hint only" violation ADR-070 forbids — because the harm ADR-070 enumerates is a *silent unknown-tool failure for a tool the paying user legitimately needs*; Edit/Write/Task/Agent are tools a support user NEVER legitimately needs, so their removal breaks no valid flow. **State this justification explicitly in ADR-109** (do not slip it in). **KEEP `Bash` (Kieran review #3):** `kb-search` shells out via Bash (`grep`, `kb-search-cache.sh`) behind the existing `resolveCcBashGate` read-only allowlist — removing Bash disables the only real support capability. WebSearch/WebFetch already in the canonical list.
 4. Allow-branch shape: every `canUseTool` allow returns `{ behavior: "allow" as const, updatedInput: toolInput }` explicitly (learning `2026-04-15-sdk-v0.2.80-zoderror-allow-shape.md`).
 
@@ -289,7 +308,8 @@ completeness enumeration below; regenerate `model.likec4.json`
 
 ### Pre-merge (PR)
 - [ ] A repo-less authenticated user can open support, ask a how-do-I question, and receive a **streamed, agent-generated, corpus-grounded** reply (no "No connected repository" / `RepoNotReadyError`). The AC asserts groundedness (the driven answer cites/derives from a real product-help artifact), not merely "a reply arrived" (spec-flow S3).
-- [ ] **canUseTool (denied layer):** in `persona:"support"`, a `Skill` call for any skill ∉ `{kb-search}` is **denied with a user-relayable message**; `kb-search` is allowed in **both** bare (`kb-search`) and FQN (`soleur:kb-search`) forms. Deterministic `createCanUseTool` unit test (not an LLM prompt — learning `2026-04-19-llm-sdk-security-tests-need-deterministic-invocation.md`).
+- [ ] **SDK `skills` allowlist (loaded layer):** in `persona:"support"`, the SDK `Options.skills` passed to `query()` is `["kb-search"]` (only that skill is loaded into the main-session prompt); asserted on the built options object.
+- [ ] **canUseTool (denied layer, defense-in-depth):** in `persona:"support"`, a `Skill` call for any skill ∉ `{kb-search}` is **denied with a user-relayable message**; `kb-search` is allowed in **both** bare (`kb-search`) and FQN (`soleur:kb-search`) forms. Deterministic `createCanUseTool` unit test (not an LLM prompt — learning `2026-04-19-llm-sdk-security-tests-need-deterministic-invocation.md`).
 - [ ] **disallowedTools (absent layer):** in `persona:"support"`, `options.disallowedTools` includes `Edit, Write, MultiEdit, NotebookEdit, Task, Agent, WebSearch, WebFetch` — asserted as a `disallowedTools`-membership post-condition (NOT a canUseTool proxy; Kieran #1/#4). `Bash` is present (kb-search needs it).
 - [ ] **Integration threading:** a real support dispatch threads `persona` all the way into `CanUseToolDeps` (not just the unit-constructed deps) — else a dropped hop allows all 95 skills while the unit test stays green (Kieran #2 / spec-flow S6).
 - [ ] No repo clone / worktree lease / `patchWorkspacePermissions` runs on a support turn (assert via the `ReadOnlyDocsProvider` — the support entry cannot construct them).
@@ -424,8 +444,8 @@ is honest + on-brand.
 
 ### Product/UX Gate
 **Tier:** advisory (modifies existing support UI — adds streaming/loading/error states
-and flips copy; **no new pages or components**; wireframes already approved 2026-06-30 in
-`knowledge-base/product/design/support/`). Pipeline/headless context → auto-accept the
+and flips copy; **no new pages or components**; wireframes already approved 2026-06-30,
+committed at `knowledge-base/product/design/support/support-chat-interface.pen`). Pipeline/headless context → auto-accept the
 advisory UX per the plan skill's ADVISORY pipeline arm; copywriter recommended for the
 persona copy flip (Phase 6). Record CPO sign-off (required by threshold).
 **Decision:** auto-accepted (pipeline); copywriter + CPO to review copy at plan/review time.

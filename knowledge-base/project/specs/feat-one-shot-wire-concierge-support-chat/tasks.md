@@ -35,7 +35,8 @@ feature; all server wiring under `apps/web-platform/**`. Threshold: single-user 
 ## Phase 3 — Skill + tool scoping
 - [ ] 3.1 `server/support-directive.ts`: `SUPPORT_SYSTEM_DIRECTIVE` (append) + `SUPPORT_SKILL_ALLOWLIST = {kb-search}` + anchored `soleur:` bare↔FQN normalizer.
 - [ ] 3.2 Branch `buildSoleurGoSystemPrompt` to emit support routing (NOT `/soleur:go`) when `persona:"support"`; append the directive only in that mode (no conflict).
-- [ ] 3.3 Default-deny skill allowlist in `createCanUseTool` (`isSafeTool` Skill branch): allow only normalized `kb-search`, else `{behavior:"deny", message}`. `CanUseToolDeps`/`CanUseToolContext` gains `persona`. Thread persona from `cc-dispatcher.ts:2677`.
+- [ ] 3.3a PRIMARY scope lever: pass SDK-native `Options.skills = ["kb-search"]` for `persona:"support"` (thread a `skills?: string[]` passthrough through `buildAgentQueryOptions`; deepen finding, sdk.d.ts:3263-3265 @ `0.3.197`) — loads only kb-search into the main-session prompt.
+- [ ] 3.3b Default-deny skill allowlist in `createCanUseTool` (`isSafeTool` Skill branch) as defense-in-depth for a model that emits a non-loaded skill: allow only normalized `kb-search`, else `{behavior:"deny", message}`. `CanUseToolDeps`/`CanUseToolContext` gains `persona`. Thread persona from `cc-dispatcher.ts:2677`.
 - [ ] 3.4 Support `extraDisallowedTools` += `Edit,Write,MultiEdit,NotebookEdit,Task,Agent` (pinned, not inherited); KEEP `Bash`; every allow returns `{behavior:"allow", updatedInput: toolInput}`.
 
 ## Phase 4 — Support answer corpus (HARD PRECONDITION — internal-KB leak blocker)
@@ -68,7 +69,7 @@ feature; all server wiring under `apps/web-platform/**`. Threshold: single-user 
 - [ ] 8.7 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` + `./node_modules/.bin/vitest run` (node `.test.ts` + jsdom `.test.tsx` projects).
 
 ## Phase 9 — ADR-109 + ADR-070 amendment + C4
-- [ ] 9.1 Author ADR-109 (two-axis seam, ephemeral/persisted decision, default-deny allowlist; ground ADR-070 in deny-with-message-vs-silent-removal `:1020-1030`; justify Edit/Write/Task/Agent disallow; reconcile ADR-093). Re-verify next-free ordinal at ship.
+- [ ] 9.1 Author ADR-109 (next-free confirmed vs fresh origin/main = 108; provisional until ship) — two-axis seam, ephemeral/persisted decision, SDK `skills`-lever + `canUseTool` two-layer scope, default-deny; ground ADR-070 in deny-with-message-vs-silent-removal `:1020-1030`; justify Edit/Write/Task/Agent disallow; reconcile ADR-093.
 - [ ] 9.2 One-paragraph amendment to ADR-070 (binds #5772 implementer).
 - [ ] 9.3 Edit `model.c4`/`views.c4` (annotate support-scoped read-only mode); `bash scripts/regenerate-c4-model.sh`; commit `model.likec4.json`; `c4-code-syntax.test.ts` + `c4-render.test.ts` green.
 
