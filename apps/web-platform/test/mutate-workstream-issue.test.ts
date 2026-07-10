@@ -80,8 +80,8 @@ function fakeOctokit() {
   const update = vi.fn(async (p: Record<string, unknown>) => ({
     data: ghIssue({ ...p, issue_number: undefined }),
   }));
-  const get = vi.fn(async () => ({ data: ghIssue() }));
-  const setLabels = vi.fn(async () => ({ data: [] }));
+  const get = vi.fn(async (_p: Record<string, unknown>) => ({ data: ghIssue() }));
+  const setLabels = vi.fn(async (_p: Record<string, unknown>) => ({ data: [] }));
   return { rest: { issues: { create, update, get, setLabels } } };
 }
 
