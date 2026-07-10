@@ -68,7 +68,11 @@ Before applying the routing table, detect the active harness and use the correct
 | Claude Code | **Skill tool** — `soleur:<skill>` | **Task tool** — `subagent_type` | `/soleur:go` |
 | Grok Build | **Slash command** — `/<skill>` (e.g. `/one-shot`) | **spawn_subagent** | `/go` (not `/soleur:go`) |
 
-**Routing contract:** when a table row names `soleur:<skill>` or an agent, invoke it via the harness adapter (`invokeSkill` / `spawnAgent` semantics in `harness.ts`). Pass the original user input as args/prompt. **Do NOT** improvise workflow steps, explore the filesystem as a substitute, or hand-roll plan/work/review phases when a registered route exists.
+**Routing contract (never improvise):** when a table row names `soleur:<skill>` or an agent, invoke it via the harness adapter (`invokeSkill` / `spawnAgent` semantics in `harness.ts` — or `routingInstructions()`). Pass the original user input as args/prompt. **Do NOT** improvise workflow steps, explore the filesystem as a substitute, or hand-roll plan/work/review phases when a registered route exists.
+
+**Grok Build harness:** entry is `/go` (slash command); agents via `spawn_subagent`. Map `soleur:<skill>` → `/<skill>` (strip prefix) at invocation time. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
+
+**Self-reference (Phase C #6323 / epic #6320):** This document + the eval-harness Grok arm were produced and shipped by invoking `/go 6320 implement and ship the next open feature` (next open = Phase C #6323) inside worktree `feat-one-shot-6323-grok-phase-c` (draft PR #6329). The routing contract above is the enforceable spec exercised by this very run. Edits to the go-routing block are gated by eval-harness (see `gated-skills.json` + `eval-gate:block:go-routing`).
 
 If harness is unknown and Skill/slash tools are unavailable, STOP and suggest `grok inspect` + `grok --trust` (Grok) or `claude --plugin-dir ./plugins/soleur` (Claude).
 
