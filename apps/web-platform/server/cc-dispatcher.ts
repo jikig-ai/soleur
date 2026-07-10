@@ -22,6 +22,7 @@ import {
   SUPPORT_SKILLS_OPTION,
   SUPPORT_EXTRA_DISALLOWED_TOOLS,
 } from "@/server/support-directive";
+import { resolveWorkspaceMode, type Persona } from "@/server/workspace-mode";
 
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
@@ -1677,6 +1678,12 @@ export const realSdkQueryFactory: QueryFactory = async (
     // when enabled+permitted; otherwise the api_key (feat-operator-cc-oauth).
     const credential = await lease.getAgentCredential();
 
+    // ADR-109 — resolve the execution mode ONCE from the required persona. Drives
+    // the repo-lifecycle skip (below), the cwd, and the sandbox write-set. A
+    // garbage/cast persona throws here (never silently falls through to the repo
+    // path); `command_center` preserves every gate in its existing order.
+    const mode = resolveWorkspaceMode(args.persona);
+
     // ADR-044 PR-1 (FR1/TR1) — resolve the ACTIVE workspace ONCE,
     // membership-verified, BEFORE the parallel consumer fan-out. Threading this
     // single id into the agent CWD, repo, installation, AND the in-dispatch
@@ -1791,7 +1798,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     // path — no regression, no over-block of repo-less chat. `!repoUrl` is
     // `repoReadiness.ok === true` (not_connected, never cloning/error), so this
     // never shadows the RepoNotReadyError gate below.
-    if (resetFromClaim && !repoUrl) {
+    if (mode.runRepoLifecycle && resetFromClaim && !repoUrl) {
       throw new WorkspaceNotReadyError({
         kind: "no-repo-switch",
         targetTeamId: resetFromClaim,
@@ -2321,17 +2328,22 @@ export const realSdkQueryFactory: QueryFactory = async (
   // depend on `workspacePath` but not on each other — parallelize so the
   // probe doesn't add latency to cold-start dispatch. See plan
   // §"Sharp Edges" and `agent-prefill-guard.ts` for the guard contract.
-  const [, prefillGuardResult] = await Promise.all([
-    patchWorkspacePermissions(workspacePath),
-    applyPrefillGuard({
-      resumeSessionId: args.resumeSessionId,
-      workspacePath,
-      userId: args.userId,
-      conversationId: args.conversationId,
-      feature: "cc-concierge",
-      leaderId: CC_ROUTER_LEADER_ID,
-    }),
-  ]);
+  //
+  // ADR-109 — the support persona runs `applyPrefillGuard` ALONE:
+  // `patchWorkspacePermissions` is a repo-lifecycle concern (chmod'ing the user's
+  // connected workspace) that a read-only, repo-less support turn must NOT run.
+  // `applyPrefillGuard` is the always-on half and stays for both personas.
+  const prefillGuardPromise = applyPrefillGuard({
+    resumeSessionId: args.resumeSessionId,
+    workspacePath,
+    userId: args.userId,
+    conversationId: args.conversationId,
+    feature: "cc-concierge",
+    leaderId: CC_ROUTER_LEADER_ID,
+  });
+  const prefillGuardResult = mode.runRepoLifecycle
+    ? (await Promise.all([patchWorkspacePermissions(workspacePath), prefillGuardPromise]))[1]
+    : await prefillGuardPromise;
   const {
     safeResumeSessionId,
     contextResetNotice,
@@ -2398,6 +2410,16 @@ export const realSdkQueryFactory: QueryFactory = async (
   // See knowledge-base/project/learnings/bug-fixes/2026-07-06-connected-repo-
   // shadows-deployed-plugin-via-workspace-relative-path.md (supersedes #6115).
   const pluginPath = getPluginPath();
+
+  // ADR-109 — the workspace path the AGENT executes against. Support runs at the
+  // plugin docs root (`cwd` + sandbox + file-tool containment all target it, so
+  // the Read tool can reach the curated product-help corpus and the sandbox
+  // denyRead is computed against a real, existing dir). Command Center uses the
+  // user's resolved workspace unchanged. `mode` drives it, so a docs cwd cannot
+  // pair with a workspace write-set. Note `workspacePath` (the user's real
+  // workspace) is still used above for the repo lifecycle / prompt context.
+  const agentWorkspacePath =
+    mode.cwdSource === "plugin" ? pluginPath : workspacePath;
 
   // Synthetic AgentSession — the only place in the cc path where an
   // AgentSession exists. Registered into `_ccBashGates` per Bash
@@ -2586,7 +2608,10 @@ export const realSdkQueryFactory: QueryFactory = async (
     // Acquired LAST (after all setup) and inside this try so the catch releases
     // it on an `sdkQuery` throw; released on every close path via
     // `handleCcCloseQuery`.
-    if (isGitDataStoreEnabled()) {
+    // ADR-109 — the worktree write-lease is a repo-lifecycle concern (it guards
+    // concurrent writes to the user's workspace git-data store). A read-only,
+    // repo-less support turn never writes, so it must NOT acquire the lease.
+    if (mode.runRepoLifecycle && isGitDataStoreEnabled()) {
       const hostId = resolveHostId();
       const worktreeLeaseHandle = await acquireAndHoldWorktreeLease(
         activeWorkspaceId,
@@ -2640,8 +2665,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
-        workspacePath,
+        // ADR-109 — agentWorkspacePath = pluginPath for support (sandbox +
+        // file-tool containment target the corpus root), the user's workspace for
+        // Command Center. `mode` drives cwd + the sandbox write-set from the same
+        // value, so a docs cwd can never pair with a workspace write-set.
+        workspacePath: agentWorkspacePath,
         pluginPath,
+        mode,
         credential,
         serviceTokens,
         // Issue A — minted GH_TOKEN (or undefined when no repo connected).
@@ -2700,7 +2730,8 @@ export const realSdkQueryFactory: QueryFactory = async (
           // attributes the cc path. `CC_ROUTER_LEADER_ID` is a
           // non-routable leader id reserved for this purpose.
           leaderId: CC_ROUTER_LEADER_ID,
-          workspacePath,
+          // ADR-109 — file-tool containment targets the corpus root for support.
+          workspacePath: agentWorkspacePath,
           // Allow the flag-gated edit_c4_diagram through canUseTool (its tier
           // is auto-approve; writeC4Diagram enforces the diagrams-dir scope).
           platformToolNames: c4ToolName ? [c4ToolName] : [],
@@ -2962,9 +2993,13 @@ export interface DispatchSoleurGoArgs {
    * lifecycle gates (support runs read-only at cwd=getPluginPath()), scopes SDK
    * skills to kb-search, pins the support disallowed-tools, and emits the support
    * prompt. Enum (not a safety-disabling boolean): a support turn CANNOT be
-   * expressed as "Command Center with gates off". Undefined = Command Center.
+   * expressed as "Command Center with gates off".
+   *
+   * REQUIRED (ADR-109 / CTO ruling): the two personas have OPPOSITE safe defaults,
+   * so there is no safe default — a dropped hop must be a compile error. Command
+   * Center callers pass `"command_center"` explicitly.
    */
-  persona?: "support";
+  persona: Persona;
   /**
    * 2026-05-06 follow-up to #3338. Set by `resolveConciergeDocumentContext`
    * when the in-process PDF extractor surfaced a typed failure class. The

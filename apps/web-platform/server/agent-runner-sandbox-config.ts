@@ -171,7 +171,7 @@ const GITHUB_EGRESS_DOMAINS = Object.freeze([
  */
 export function buildAgentSandboxConfig(
   workspacePath: string,
-  opts?: { allowGithubEgress?: boolean },
+  opts?: { allowGithubEgress?: boolean; readOnly?: boolean },
 ): AgentSandboxConfig {
   const { denyRead, degraded } = enumerateSiblingDenyPaths(workspacePath);
   // Structured, no-SSH observability of the isolation decision per dispatch
@@ -214,7 +214,15 @@ export function buildAgentSandboxConfig(
       // Full read+write of the agent's OWN workspace: it is NOT in denyRead,
       // so the base `--ro-bind / /` grants read and this `--bind` grants
       // write — no read-only `--ro-bind` shadow (the PR #5848 regression).
-      allowWrite: [workspacePath],
+      //
+      // feat-wire-concierge-support-chat (ADR-109): `readOnly` (support persona)
+      // sets `allowWrite: []` — the whole session is read-only. This is
+      // load-bearing: the support cwd is `getPluginPath()` (the shared platform
+      // plugin root), so a default `allowWrite:[workspacePath]` would grant WRITE
+      // to platform-controlled code (the CTO-flagged P1 supply-chain escape). The
+      // read-only invariant is enforced HERE (a sandbox-write fact), not merely by
+      // the cwd or the disallowedTools list.
+      allowWrite: opts?.readOnly ? [] : [workspacePath],
       // Per-sibling deny (NOT the broad "/workspaces" parent) so the own
       // workspace's rw bind is never `--tmpfs`-shadowed. See module header.
       denyRead,

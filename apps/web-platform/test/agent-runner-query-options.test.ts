@@ -33,6 +33,7 @@ vi.mock("@/server/sandbox-hook", () => ({
 
 import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
 import { buildAgentEnv } from "@/server/agent-env";
+import { resolveWorkspaceMode } from "@/server/workspace-mode";
 
 const WORKSPACE = "/tmp/test-workspace";
 const PLUGIN = "/tmp/test-workspace/plugins/soleur";
@@ -40,6 +41,7 @@ const PLUGIN = "/tmp/test-workspace/plugins/soleur";
 const minArgs = {
   workspacePath: WORKSPACE,
   pluginPath: PLUGIN,
+  mode: resolveWorkspaceMode("command_center"),
   credential: { value: "sk-test", scheme: "api_key" as const },
   serviceTokens: {} as Record<string, string>,
   systemPrompt: "you are a router",
@@ -329,6 +331,24 @@ describe("buildAgentQueryOptions — SDK skills allowlist (support scope)", () =
       "Agent",
     ]);
     expect(opts.disallowedTools).not.toContain("Bash");
+  });
+});
+
+describe("buildAgentQueryOptions — WorkspaceMode-driven cwd + sandbox write-set (ADR-109)", () => {
+  it("command_center: cwd = workspace, sandbox allowWrite = [workspace]", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("command_center") });
+    expect(opts.cwd).toBe(WORKSPACE);
+    expect(opts.sandbox?.filesystem?.allowWrite).toEqual([WORKSPACE]);
+  });
+
+  it("support: cwd = plugin root, sandbox allowWrite = [] (T3 — the P1 read-only invariant)", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("support") });
+    // cwd is the boot-validated plugin root, NOT the workspace.
+    expect(opts.cwd).toBe(PLUGIN);
+    // The write-set is EMPTY — a cwd=pluginPath session must not be able to write
+    // into the shared platform plugin root (the CTO-flagged supply-chain escape).
+    expect(opts.sandbox?.filesystem?.allowWrite).toEqual([]);
+    expect(opts.sandbox?.filesystem?.allowWrite).not.toContain(PLUGIN);
   });
 });
 

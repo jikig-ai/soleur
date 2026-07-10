@@ -51,6 +51,7 @@ import {
 import { warnSilentFallback } from "./observability";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import { isSupportAllowedSkill } from "./support-directive";
+import type { Persona } from "./workspace-mode";
 
 const log = createChildLogger("permission");
 
@@ -233,9 +234,10 @@ export interface CanUseToolContext {
    * = the Command Center default (every Skill flows through `isSafeTool`). This is
    * defense-in-depth for a model that emits a non-loaded skill despite the SDK
    * `Options.skills` filter; the deny returns a user-relayable message (NOT a
-   * silent removal — ADR-070 reconciliation).
+   * silent removal — ADR-070 reconciliation). Accepts the full `Persona` union
+   * ("command_center" | "support"); only `"support"` scopes the Skill surface.
    */
-  persona?: "support";
+  persona?: Persona;
   deps: CanUseToolDeps;
 }
 

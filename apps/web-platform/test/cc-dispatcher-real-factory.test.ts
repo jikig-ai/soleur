@@ -372,6 +372,7 @@ function makeArgs(overrides: Partial<Parameters<typeof realSdkQueryFactory>[0]> 
     cwd: "/ignored", // factory uses workspacePath
     userId: "user-1",
     conversationId: "conv-1",
+    persona: "command_center" as const,
     ...overrides,
   };
 }
@@ -490,6 +491,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // follow-up).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
       allowGithubEgress: false,
+      readOnly: false,
     });
   });
 
@@ -1059,6 +1061,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       // (b) the SAME dispatch opens GitHub egress — the two move in lockstep.
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: true,
+        readOnly: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       // Literal on purpose (canonical-literal style, do not import the
@@ -1077,6 +1080,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockGenerateInstallationToken).not.toHaveBeenCalled();
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: false,
+        readOnly: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       expect(opts.sandbox.network.allowedDomains).toEqual([]);
@@ -1093,6 +1097,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockQuery).toHaveBeenCalledOnce();
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: false,
+        readOnly: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       expect(opts.sandbox.network.allowedDomains).toEqual([]);
@@ -1287,6 +1292,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // No-token dispatch → fail-closed egress (#5041 follow-up).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
       allowGithubEgress: false,
+      readOnly: false,
     });
   });
 

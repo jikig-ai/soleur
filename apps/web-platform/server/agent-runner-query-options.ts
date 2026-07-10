@@ -27,6 +27,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
+import type { WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath } from "./plugin-path";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import { createSandboxHook } from "./sandbox-hook";
@@ -64,6 +65,17 @@ export interface SubagentStartPayloadOverride {
 export interface AgentQueryOptionsArgs {
   workspacePath: string;
   pluginPath: string;
+  /**
+   * Execution mode (feat-wire-concierge-support-chat, ADR-109). Binds cwd + the
+   * sandbox write-set together so the half-wired state is unrepresentable:
+   *  - `command_center` → cwd = workspacePath, sandbox allowWrite = [workspacePath];
+   *  - `support`        → cwd = pluginPath (read-only docs root), allowWrite = [].
+   * REQUIRED (no safe default — the two personas have opposite danger directions;
+   * see workspace-mode.ts). The legacy runner passes
+   * `resolveWorkspaceMode("command_center")` (byte-identical to the prior
+   * `cwd: workspacePath` + `allowWrite:[workspacePath]` behavior).
+   */
+  mode: WorkspaceMode;
   /**
    * The resolved agent credential (`{ value, scheme }`). Threaded as a
    * single object — NOT a bare key string — so `buildAgentEnv` injects
@@ -207,9 +219,16 @@ export function buildAgentQueryOptions(
   // Test-tolerant (mirrors getPluginPath's VITEST/NODE_ENV=test bypass).
   const trustedPluginPath = assertTrustedPluginPath(args.pluginPath);
 
+  // ADR-109 — cwd + sandbox write-set derived from the ONE mode value so a docs
+  // cwd can never pair with a non-empty write-set. Support runs at the trusted,
+  // boot-validated plugin root (read-only); Command Center at the workspace.
+  const resolvedCwd =
+    args.mode.cwdSource === "plugin" ? trustedPluginPath : args.workspacePath;
+  const sandboxReadOnly = args.mode.sandboxWrite === "none";
+
   // biome-ignore lint/suspicious/noExplicitAny: SDK Options is a wide union; partial-shape build avoids re-asserting every key
   const opts: any = {
-    cwd: args.workspacePath,
+    cwd: resolvedCwd,
     model: args.model ?? "claude-sonnet-5",
     permissionMode: args.permissionMode ?? "default",
     // settingSources: [] — defense-in-depth alongside `patchWorkspacePermissions`.
@@ -257,6 +276,9 @@ export function buildAgentQueryOptions(
     // closed (fail-closed, zero behavior change).
     sandbox: buildAgentSandboxConfig(args.workspacePath, {
       allowGithubEgress: Boolean(args.ghToken),
+      // ADR-109 — support persona runs read-only (allowWrite:[]) so a
+      // cwd=pluginPath session cannot write into the shared platform plugin root.
+      readOnly: sandboxReadOnly,
     }),
     // Loaded-gun guard: both factories source args.pluginPath from getPluginPath()
     // (an absolute /app/ platform path). assertTrustedPluginPath fails LOUDLY if a

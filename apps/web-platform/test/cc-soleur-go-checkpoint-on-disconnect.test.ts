@@ -49,6 +49,7 @@ async function seedLiveQuery(
   userId: string,
 ) {
   await runner.dispatch({
+    persona: "command_center",
     conversationId,
     userId,
     userMessage: "trigger query construction",

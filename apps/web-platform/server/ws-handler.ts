@@ -1279,6 +1279,12 @@ export async function dispatchSoleurGoForConversation(
     // buildSoleurGoSystemPrompt. Document context (path/content) is unused
     // for this mode (it carries no path).
     routineAuthoring: context?.type === "routine-authoring",
+    // feat-wire-concierge-support-chat (ADR-109) — resolve the persona from the
+    // validated chat context. `"support"` (the in-app support chat) runs the
+    // Concierge read-only with the repo-lifecycle gates bypassed and skills scoped
+    // to kb-search; everything else is the Command Center default. REQUIRED — an
+    // explicit value, never an implicit undefined.
+    persona: context?.type === "support" ? "support" : "command_center",
     ...documentArgs,
   });
   } finally {
