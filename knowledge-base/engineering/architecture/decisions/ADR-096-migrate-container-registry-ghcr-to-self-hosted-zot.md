@@ -324,37 +324,6 @@ split the decode source-of-truth off from the reporter's decode semantics. Choos
 for future log-content alarms unless a signal is a pure stateless per-bucket count with an
 email-acceptable surface.
 
-### Durable restart-loop recurrence alarm + Pattern: Better Stack log-content alarms (amendment 2026-07-10, #6291)
-
-The `SOLEUR_ZOT_DISK` reporter (above) closed the *disk-fullness* blind spot, but the
-disk-absence heartbeat `soleur-registry-disk-prd` remained structurally blind to a
-**disk-independent OOM restart-loop** (the #6288 mode — zot OOM-restart-looping ~4/min during the
-~35 GB store boot scan): that heartbeat pings only while `/var/lib/zot < 85%`, so the loop leaves it
-GREEN throughout. #6291 provisions the **durable, continuous recurrence alarm** that stands watch on
-the stream once #6288's one-shot soak follow-through auto-closes. It is a standing GitHub-Actions
-cron poller (`.github/workflows/scheduled-zot-restart-loop.yml`, `*/30 * * * *`) that queries source
-2457081 via `scripts/betterstack-query.sh` and, scoped to the newest `boot_id`, fires when
-`zot_restarts` climbs across ≥3 consecutive events, `exit_code=137` is seen, or `oom_kills_5m > 0`.
-A fire opens/updates a deduped `action-required` `[ci/zot-restart-loop]` issue with the decoded
-cause; recovery auto-closes; **producer-silence** (the token-gated reporter going dark while the
-token-free disk heartbeat + Sentry monitor stay GREEN) escalates its own `[ci/zot-telemetry-silent]`
-issue. The trusted-region parse (newest-boot scoping + `zot_last_err`-tail strip spoof-resistance) is
-shared with the #6288 soak probe via `scripts/lib/zot-telemetry-parse.sh` (one source of truth for
-the decode). The alarm's own liveness is a Sentry cron monitor (`sentry_cron_monitor.zot_restart_loop_alarm`),
-so a *dark* alarm also pages.
-
-**Pattern: Better Stack log-content alarms.** This is the reusable precedent (the follow-through
-sweeper already recurs it): **a log-*content* recurrence alarm over a Better Stack Logs source is an
-in-repo GitHub-Actions cron poller** (`betterstack-query.sh` ClickHouse-SQL read + a shell decode +
-`gh issue` + a Sentry self-liveness heartbeat), **not** a native Better Stack alert — for three
-reasons: (1) **detection fidelity** — a stateful climb + newest-`boot_id` scoping is not faithfully
-expressible as a `{{time}}`-bucketed BS threshold (a `max-min>tol` approximation false-fires on a
-single legitimate restart, and `{{time}}`-bucketing loses the newest-boot discriminator the
-hostname-reusing immutable replace requires); (2) **operator surface** — the non-technical operator's
-`operator-digest` harvests `action-required` GitHub **issues**, not BS alert emails; (3) **IaC/drift**
-— the poller is plain in-git YAML+shell (testable in CI), keeping the decode SQL from diverging from
-the reporter's decode semantics.
-
 ### Reprovisioning path + alert recipient — restart-loop alarm cross-ref (amendment 2026-07-10, #6291)
 
 The restart-loop alarm is fully automated post-merge: `apply-sentry-infra.yml` auto-applies the new

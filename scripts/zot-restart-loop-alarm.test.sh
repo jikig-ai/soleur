@@ -170,6 +170,20 @@ reset_fix
 export ZOT_FIX_MAIN="$TMP/s7.json"
 assert_case "S7 isolated single restart 5,5,6,6" 0 GREEN
 
+# --- Scenario 7b: single LARGE jump (huge max-min, but climb run < CLIMB_N) → GREEN --------
+# 5,5,200 → longest strictly-increasing consecutive run is 2 (5->200), below CLIMB_N=3, BUT
+# max-min=195. This is the fixture that DISTINGUISHES the consecutive-climb model from a
+# `max-min>tol` model: the sibling soak probe's `max-min<=tol` algorithm would FIRE here, the
+# alarm's consecutive-climb model stays GREEN. Without this case a max-min refactor ships uncaught.
+reset_fix
+{
+  zline "2026-07-10 11:00:00" "$BOOT_NEW" 5 0 0 false none
+  zline "2026-07-10 11:05:00" "$BOOT_NEW" 5 0 0 false none
+  zline "2026-07-10 11:10:00" "$BOOT_NEW" 200 0 0 false none
+} > "$TMP/s7b.json"
+export ZOT_FIX_MAIN="$TMP/s7b.json"
+assert_case "S7b single large jump 5,5,200 (max-min high, climb<N)" 0 GREEN
+
 # --- Scenario 8: all-'-1' sentinel restarts, no 137/oom → TRANSIENT (no false PASS/FIRE) --
 reset_fix
 {
@@ -216,7 +230,7 @@ export ZOT_FIX_LOOKBACK=""                   # 24h ALSO empty → never-installe
 assert_case "S12 fresh host (24h empty, 3h empty)" 2 TRANSIENT
 
 # --- Minimum-cardinality guard -----------------------------------------------------------
-EXPECTED_MIN=15
+EXPECTED_MIN=16
 echo "----"
 printf 'cases=%s pass=%s fail=%s\n' "$CASES" "$PASS" "$FAIL"
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then

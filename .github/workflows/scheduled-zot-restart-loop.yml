@@ -212,10 +212,12 @@ jobs:
         uses: ./.github/actions/sentry-heartbeat
         with:
           monitor-slug: scheduled-zot-restart-loop
-          # ok on GREEN(0)/FIRE(1)/PRODUCER-SILENT(3) — those are SUCCESSFUL evaluations that reached
-          # a verdict; error only on TRANSIENT(2) so a persistent probe fault (and a MISSING run)
-          # both alert. A FIRE is NOT a monitor error — the recurrence issue is its surface.
-          status: ${{ steps.alarm.outputs.exit_code == '2' && 'error' || 'ok' }}
+          # ok ONLY on GREEN(0)/FIRE(1)/PRODUCER-SILENT(3) — those are SUCCESSFUL evaluations that
+          # reached a verdict; error on TRANSIENT(2) so a persistent probe fault (and a MISSING run)
+          # alert. Fail-loud on ANY OTHER exit code too (an abnormal set -u/signal abort) — an
+          # unexpected exit must surface as a monitor problem, never be silently checked-in ok.
+          # A FIRE is NOT a monitor error — the recurrence issue is its surface.
+          status: ${{ (steps.alarm.outputs.exit_code == '0' || steps.alarm.outputs.exit_code == '1' || steps.alarm.outputs.exit_code == '3') && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

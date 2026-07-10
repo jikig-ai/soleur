@@ -957,9 +957,11 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
 # tight margin on a jittery GHA cron false-paged scheduled-agent-native-audit on 2026-06-15 (the run
 # succeeded and filed #5318 at 09:09 UTC; only its heartbeat was late). This monitor posts a SINGLE
 # end-of-run heartbeat within ~1-2 min of the checker finishing (a small bash probe, not a claude-eval
-# spawn), so 30 min is honest headroom while staying well under the 30-min inter-fire gap — a
-# maximally-late run is never misread as a missed next run, and a genuinely dead alarm still pages
-# within ~1h. Widen at /work only if GHA jitter false-pages. max_runtime_minutes = 10 mirrors the
+# spawn). margin (30) == the 30-min inter-fire gap BY DESIGN: this MAXIMIZES jitter tolerance (a run
+# up to 30 min late still checks in — no false page), and a genuinely dead alarm (every run skipped)
+# still pages once the margin window closes at the next expected fire (~30-60 min). A SHORTER margin
+# (< interval) would trade this jitter tolerance back for the 2026-06-15 false-page class — the wrong
+# trade for a trust-critical standing alarm. max_runtime_minutes = 10 mirrors the
 # GHA-fired small-cron cohort (scheduled_realtime_probe). Slug MUST match MONITOR_SLUG in the
 # workflow's sentry-heartbeat step (scheduled-zot-restart-loop).
 resource "sentry_cron_monitor" "zot_restart_loop_alarm" {

@@ -416,8 +416,11 @@ two-stage `--json` + standalone-`jq` form.
   (trusted-region parse, sentinel filtering, newest-boot scoping, exit 0/1/2). The alarm **mirrors
   the parse + scoping verbatim** but diverges deliberately on verdict semantics: soak probe =
   soak-gated one-shot plateau (`max-min<=tol`, closes #6288); alarm = continuous **consecutive-climb**
-  (`strictly increasing across ≥N events`, opens a standing issue, never closes #6288). Two
-  independent files (no shared lib) per the plan-skill "≤3 files → don't build shared infra" rule.
+  (`strictly increasing across ≥N events`, opens a standing issue, never closes #6288). The two
+  checkers SHARE the trusted-region parse/scoping via `scripts/lib/zot-telemetry-parse.sh` (see
+  Phase 1 / Mechanism Decision — the "≤3 files → don't build shared infra" rule is about not
+  over-abstracting convenience helpers, NOT about copy-pasting a security invariant like the
+  spoof-resistance strip across two consumers).
 - **Workflow issue-dedup pattern.** Precedent = `scheduled-inngest-health.yml` (own-title
   `[ci/<class>]` search for open-or-comment; own-title auto-close on healthy; `strip_log_injection`
   ported verbatim; final `sentry-heartbeat` step). Adopted verbatim — **no novel pattern**.
