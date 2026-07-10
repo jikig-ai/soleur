@@ -240,6 +240,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_architecture_diagram_sync \
             -target=sentry_cron_monitor.scheduled_weekly_analytics \
             -target=sentry_cron_monitor.scheduled_nag_4216_readiness \
+            -target=sentry_cron_monitor.zot_restart_loop_alarm \
             -target=sentry_uptime_monitor.soleur_apex \
             -target=sentry_uptime_monitor.soleur_www \
             -target=sentry_uptime_monitor.soleur_changelog_deep \
