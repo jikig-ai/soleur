@@ -10,6 +10,12 @@ component: apps/web-platform/supabase/verify
 
 # Verify-sentinel hardcoded counts break on a new counted object
 
+> **Update (2026-07-09, #6273):** for the `jti_deny_policies_count` sentinel
+> specifically, this is now mechanically gated at PR time by
+> `apps/web-platform/test/supabase-migrations/068-jti-deny-count-sync.test.ts`
+> (offline set-equality parse of migrations vs `verify/068`). The general lesson
+> below still holds for OTHER hardcoded verify/ sentinels that lack such a gate.
+
 ## Problem
 
 PR #6160 (beta-CRM, migration 126) correctly added 3 new RESTRICTIVE

@@ -103,3 +103,37 @@ export function NavCountBadge({
     </>
   );
 }
+
+/**
+ * Presentational "calm gold dot" — a numberless FYI cue for nav items that have
+ * something new but nothing to count (unread inbox updates, a newly-published
+ * release). Gold is used here (unlike NavCountBadge's neutral pill) because a
+ * dot can't be confused with the active-state bar. Renders the trailing dot
+ * expanded/mobile, and a ringed corner dot when collapsed — exactly one paints
+ * per viewport via `md:` toggles, mirroring NavCountBadge's two-form rule.
+ */
+export function NavDotBadge({
+  collapsed,
+  testId,
+  label,
+}: {
+  collapsed: boolean;
+  /** Base test id; the collapsed corner variant appends `-collapsed`. */
+  testId: string;
+  /** Accessible name for the expanded dot; composes with the nav label. */
+  label: string;
+}) {
+  return collapsed ? (
+    <span
+      data-testid={`${testId}-collapsed`}
+      aria-hidden="true"
+      className="pointer-events-none absolute right-1.5 top-1.5 hidden h-2 w-2 rounded-full bg-soleur-accent-gold-fill ring-2 ring-soleur-bg-surface-1 md:block"
+    />
+  ) : (
+    <span
+      data-testid={testId}
+      aria-label={label}
+      className="ml-auto h-2 w-2 shrink-0 rounded-full bg-soleur-accent-gold-fill"
+    />
+  );
+}
