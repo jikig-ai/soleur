@@ -100,7 +100,7 @@ write_files:
       [ -n "$bs_token" ] || exit 0
       host="$(hostname 2>/dev/null)"
       ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
-      detail="$(printf '%s' "$detail" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g' 2>/dev/null)"
+      detail="$(printf '%s' "$detail" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g' 2>/dev/null)"
       payload="$(jq -nc --arg m SOLEUR_INNGEST_BOOT_STAGE --arg s "$stage" --arg d "$detail" --arg h "$host" --arg t "$ts" '{message:($m+" stage="+$s+" "+$d), marker:$m, stage:$s, detail:$d, host:$h, dt:$t, shipper:"cloud-init-phone-home"}' 2>/dev/null)"
       [ -n "$payload" ] || payload="{\"message\":\"SOLEUR_INNGEST_BOOT_STAGE stage=$stage\",\"marker\":\"SOLEUR_INNGEST_BOOT_STAGE\",\"stage\":\"$stage\",\"host\":\"$host\"}"
       curl -fsS --max-time 8 -X POST "https://s2457081.eu-fsn-3.betterstackdata.com/" -H "Authorization: Bearer $bs_token" -H "Content-Type: application/json" -d "$payload" >/dev/null 2>&1
@@ -192,12 +192,16 @@ runcmd:
   - |
     set +e
     set -a; . /etc/default/inngest-doppler; set +a
-    t="$(doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain 2>/dev/null)"
+    # #6178 diag: capture WHY doppler reads fail on the host (works off-host w/ same token+env).
+    # Probe api.doppler.com reachability (DNS/connect/http) + the doppler CLI's own stderr.
+    api_probe="$(curl -sS -o /dev/null -w 'http=%%{http_code};ip=%%{remote_ip};dns=%%{time_namelookup}s;conn=%%{time_connect}s;curlrc=%%{exitcode}' --max-time 12 https://api.doppler.com/v3/me 2>&1 | head -c 160)"
+    derr="$(doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain 2>&1 1>/tmp/bstok)"; drc=$?
+    t="$(cat /tmp/bstok 2>/dev/null)"; rm -f /tmp/bstok
     if [ -n "$t" ]; then
       printf '%s' "$t" > /run/inngest-bs-logs-token; chmod 600 /run/inngest-bs-logs-token 2>/dev/null
-      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetched "arch=${inngest_cli_arch}"
+      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetched "arch=${inngest_cli_arch} apiprobe=[$api_probe]"
     else
-      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetch-FAILED "arch=${inngest_cli_arch}"
+      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetch-FAILED "drc=$drc apiprobe=[$api_probe] derr=[$(printf %s "$derr" | head -c 200)]"
     fi
 
   # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------
