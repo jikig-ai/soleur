@@ -889,6 +889,12 @@ async function createConversation(
   id?: string,
   contextPath?: string,
   activeWorkflow?: string | null,
+  // feat-wire-concierge-support-chat (ADR-109) — B2 repo-less support rows. A
+  // "support" conversation is repo-INDEPENDENT: it carries `kind='support'` +
+  // `repo_url=null`, is created even for a repo-less user (the repo-less throw
+  // below is skipped), and stays out of the Command Center rail (which scopes by
+  // repo_url). Default "command_center" preserves the existing behavior exactly.
+  kind: "command_center" | "support" = "command_center",
 ): Promise<string> {
   if (!id) id = randomUUID();
 
@@ -897,12 +903,16 @@ async function createConversation(
   // mid-session have repo_url=null; we abort rather than orphan the row
   // (plan risk R-D). See
   // 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
+  //
+  // Support conversations are repo-independent — never throw on a null repo_url,
+  // and always persist repo_url=null so they never enter the repo-scoped rail.
   const repoUrl = await getCurrentRepoUrl(userId);
-  if (!repoUrl) {
+  if (!repoUrl && kind !== "support") {
     throw new Error(
       "No connected repository — conversation insert aborted (disconnect race).",
     );
   }
+  const persistedRepoUrl = kind === "support" ? null : repoUrl;
 
   // PR-C §2.10 (#3244): tenant client. `getCurrentRepoUrl` above
   // already ran a tenant-scoped users read (Phase 2.6), so a failure
@@ -933,7 +943,8 @@ async function createConversation(
     id,
     user_id: userId,
     workspace_id: wsId,
-    repo_url: repoUrl,
+    repo_url: persistedRepoUrl,
+    kind,
     domain_leader: leaderId ?? null,
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
@@ -2235,6 +2246,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             pendingId,
             pendingContextPath,
             initialActiveWorkflow,
+            // feat-wire-concierge-support-chat — a support-context session
+            // materializes a repo-less kind='support' conversation (never throws
+            // on a missing repo; the repo-less support user is exactly who needs help).
+            pendingContext?.type === "support" ? "support" : "command_center",
           );
           session.conversationId = resolvedId;
           session.pending = undefined;
