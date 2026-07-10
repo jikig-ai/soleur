@@ -1,0 +1,100 @@
+# Runtime RLS/authz-fuzz merge gate (#6256, ADR-103).
+#
+# Spins up a LOCAL disposable Supabase-CLI stack in the runner (real GoTrue auth
+# schema + roles — the faithfulness substrate), applies the repo's migrations via
+# the canonical filename-tracked run-migrations.sh (the CLI's own migration step
+# is disabled in config.toml because the repo has duplicate numeric prefixes the
+# CLI PKs on), then runs the fuzz harness + the prod-parity catalog diff. Red on
+# any cross-tenant leak, positive-control failure, or local-vs-prod catalog drift.
+#
+# hr-dev-prd-distinct-supabase-projects: this job NEVER touches a hosted project
+# for attack traffic — the target is the ephemeral local stack. The parity step's
+# prod read is ordinary read-only catalog introspection over the run-verify
+# doppler path (skipped when the prod token secret is absent).
+name: RLS authz fuzz
+
+on:
+  pull_request:
+    paths:
+      - "apps/web-platform/supabase/migrations/**"
+      - "apps/web-platform/test/rls-fuzz/**"
+      - "apps/web-platform/scripts/rls-parity-check.ts"
+      - "apps/web-platform/package.json"
+      - ".github/workflows/rls-authz-fuzz.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rls-authz-fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rls-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # The local disposable stack DSN (loopback — the harness DSN allowlist enforces it).
+      RLS_FUZZ_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:54322/postgres
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:54322/postgres
+      # Applying this PR's own (not-yet-on-main) migrations to the throwaway stack.
+      ALLOW_UNMERGED_DEV_APPLY: "1"
+      # Present only when the prod-readonly token secret is configured; gates the parity step.
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD_READONLY }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # Pin the CLI/GoTrue version to prod's — the ADR-103 parity contract (the
+      # diff catches catalog shape; the version pin controls claim-parsing behavior).
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1.7.1
+        with:
+          version: 2.84.2
+
+      - name: Start local Supabase stack
+        working-directory: apps/web-platform
+        run: supabase start
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      # Canonical filename-tracked applier (NOT `supabase db reset` — see ADR-103).
+      - name: Apply migrations to the local stack
+        working-directory: apps/web-platform
+        run: bash scripts/run-migrations.sh
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Cache bun install (apps/web-platform)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.bun/install/cache
+            apps/web-platform/node_modules
+          key: bun-webplat-${{ runner.os }}-${{ hashFiles('apps/web-platform/bun.lock') }}
+          restore-keys: |
+            bun-webplat-${{ runner.os }}-
+
+      - name: Install web-platform dependencies
+        working-directory: apps/web-platform
+        run: bun install --frozen-lockfile
+
+      - name: Run RLS/authz-fuzz harness
+        working-directory: apps/web-platform
+        run: bun run test:rls-fuzz
+
+      # Prod-parity catalog diff — read-only introspection over the run-verify
+      # doppler path. Skipped when the prod-readonly token secret is not set (so
+      # the gate does not hard-fail before the secret is provisioned).
+      - name: Install Doppler CLI
+        if: ${{ env.DOPPLER_TOKEN != '' }}
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Prod-parity catalog diff
+        if: ${{ env.DOPPLER_TOKEN != '' }}
+        working-directory: apps/web-platform
+        run: doppler run -p soleur -c prd -- bun run rls:parity
