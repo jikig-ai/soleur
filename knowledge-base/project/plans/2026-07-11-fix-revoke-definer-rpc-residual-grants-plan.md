@@ -11,6 +11,21 @@ date: 2026-07-11
 
 # 🐛 fix(security): revoke residual anon/authenticated EXECUTE on service-role-only SECURITY DEFINER RPCs (#6306)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-11
+**Sections enhanced:** Risks & Mitigations (precedent diff), Observability command (ssh-token fix), sibling audit grounding
+**Review agents used:** data-integrity-guardian, security-sentinel (grant/RLS-focused; a full 40-agent fan-out is not warranted for a mechanical REVOKE migration)
+
+### Key Improvements
+1. Precedent-diff (Phase 4.4) grounded: the fix is a verbatim application of the `069_jti_deny_grant_restore` migration+verify+down shape and the `027`/`116` REVOKE-from-all-three exemplars — no novel pattern.
+2. Verify sentinel design pinned to the `verify/069` two-axis form: assert the deny state AND the load-bearing `service_role` positive (omitted for the trigger function).
+3. Stale-premise re-scope (rls-fuzz un-baseline) carried into Research Reconciliation + Phase 4 cross-ref, so the P1 fix does not block on the unmerged #6256 harness.
+
+### New Considerations Discovered
+- `release_slot_on_archive()` returns `trigger` → not PostgREST-RPC-exposable; included for shape-uniformity only, and its verify checks must NOT assert a `service_role` grant.
+- `CREATE OR REPLACE` does not reset privileges, so the fix is durable against future function-body edits — but only these 5 signatures are sentinel-covered (broad-class enforcement belongs to #6256).
+
 ## Overview
 
 `public.find_stuck_active_conversations(integer)` is a `SECURITY DEFINER` function whose EXECUTE
@@ -87,6 +102,21 @@ whose only grant statement is `revoke … on function … from public`:
 | `acquire/touch/release_worktree_lease(…)` ×3 | 116 | revoke public+anon+authenticated | SAFE (exemplar) |
 | `list_conversations_enriched(…)` | 125 | revoke public+anon, **GRANT authenticated** | SAFE (intentionally authenticated-callable — different case) |
 
+**Audit completeness (independently confirmed by both deepen reviewers):** enumerating every non-`.down`
+migration that revokes EXECUTE from `public` but never from `anon`/`authenticated` yields exactly these 5
+functions (migrations 029/036/037/093). The hygienic near-siblings on the same service-role path —
+`033_migrate_api_key_to_v2_rpc.sql:53-55`, `042_increment_conversation_cost_v2.sql:56`,
+`053_organizations_and_workspace_members.sql` (`is_workspace_member`, `handle_new_user`) — already
+`revoke … from public, anon, authenticated` and are correctly excluded. **Blind spot (out of scope, owned by
+the follow-up below / #6256):** this criterion cannot detect a service-role-only DEFINER function that manages
+**no grants at all** (retaining all four CREATE-time defaults incl. `public`) — a worse defect this net does
+not cover. This fix does not close the *class*, only these 5 instances.
+
+**RLS-in-caller-role trap does NOT apply (positive confirmation):** unlike the jti-deny 069 case, none of the
+5 functions is referenced inside any RLS `USING`/`WITH CHECK` clause (the only `user_concurrency_slots` policy
+is `auth.uid() = user_id`, `029:92-93`, no function call), so revoking `authenticated` cannot break policy
+evaluation. This is the exact failure mode that would make the revoke unsafe — and it is absent.
+
 **Safety of revoking `anon`/`authenticated`:** every FIX target is invoked only by server-side code
 through the **service-role** client — `server/concurrency.ts:1` (`createServiceClient`) for the slot RPCs
 and `server/agent-runner.ts:117-118` (`createServiceClient`) for the finder reaper. `release_slot_on_archive`
@@ -119,7 +149,10 @@ revoke execute on function public.<fn>(<args>) from public;
 ```
 Add a `COMMENT ON FUNCTION` on `find_stuck_active_conversations` documenting service-role-only intent + #6306.
 `128_*.down.sql` restores the pre-fix grants (`grant execute … to anon, authenticated`) purely for
-rollback machinery, mirroring `069_*.down.sql`.
+rollback machinery, mirroring `069_*.down.sql`. **It MUST carry a `093_acquire_slot_workspace_id.down.sql`-style
+prod caveat** ("KNOWINGLY re-opens the #6306 cross-tenant IDOR — do NOT run in production; rollback-machinery
+only"), because applying this down migration re-introduces the exact vulnerability being closed
+(security-sentinel P2-1).
 
 ### Phase 2 — Verify sentinel (`verify/128_definer_rpc_residual_grants_revoked.sql`)
 Follow the `(check_name TEXT, bad INT)` contract enforced by `scripts/run-verify.sh`. `UNION ALL`:
@@ -155,7 +188,7 @@ comment on #6256.
 ### Pre-merge (PR)
 - [ ] `AC1` Migration `128_*.sql` revokes EXECUTE from `anon` and `authenticated` for all 5 audited functions (grep: 5 × `from anon, authenticated`).
 - [ ] `AC2` Migration also revokes from `public` (defense-in-depth) for each target.
-- [ ] `AC3` `128_*.down.sql` exists and restores the pre-fix `anon`/`authenticated` grants (rollback-only).
+- [ ] `AC3` `128_*.down.sql` exists, restores the pre-fix `anon`/`authenticated` grants (rollback-only), AND carries a `093.down`-style prod caveat that it knowingly re-opens the #6306 IDOR (grep: down file contains a "do NOT run in production" / "rollback-machinery only" marker).
 - [ ] `AC4` `verify/128_*.sql` emits, for each of the 5 targets, an `anon` deny check + an `authenticated` deny check + a `public` deny check (`bad=1` when the role still has EXECUTE), and for the 4 non-trigger targets a `service_role` grant-present check (`bad=1` when service_role LACKS EXECUTE).
 - [ ] `AC5` `verify/128_*.sql` conforms to the `(check_name, bad)` two-column contract (`run-verify.sh` parses it; every row is `(TEXT, INT)`).
 - [ ] `AC6` `128-revoke-definer-rpc-residual-grants.test.ts` passes: `cd apps/web-platform && ./node_modules/.bin/vitest run test/supabase-migrations/128-revoke-definer-rpc-residual-grants.test.ts`.
@@ -168,6 +201,7 @@ comment on #6256.
 - [ ] `PM1` `web-platform-release.yml#migrate` applies migration 128 on merge to main (path-filtered auto-apply — no operator SSH/CLI).
 - [ ] `PM2` `verify-migrations` job runs `verify/128_*.sql` post-apply; all `bad=0` (deny state confirmed against prod).
 - [ ] `PM3` `/ship` posts a cross-ref comment on #6256 recording the rls-fuzz un-baseline follow-up (Phase 4).
+- [ ] `PM4` `/ship` files a `type/security` follow-up issue for the repo-wide `ALTER DEFAULT PRIVILEGES` / migration-lint baseline (root-cause hardening deferred from this hotfix; see Alternatives).
 
 ## Observability
 
@@ -191,7 +225,7 @@ logs:
   where: GitHub Actions run logs for the verify-migrations job (::group:: per verify file)
   retention: GitHub Actions default (90 days)
 discoverability_test:
-  command: "doppler run -c prd -- bash apps/web-platform/scripts/run-verify.sh   # runs verify/128 against prod, exit 1 on any bad>0 — NO ssh"
+  command: "doppler run -c prd -- bash apps/web-platform/scripts/run-verify.sh   # runs verify/128 against prod; exit 1 on any bad>0 (no remote shell needed)"
   expected_output: "ok 128_definer_rpc_residual_grants_revoked/<check_name> (bad=0) for every check; Verify summary: N passed, 0 failed"
 ```
 
@@ -218,6 +252,18 @@ processing activity, data flow, or external transfer**. No Article 30 register e
 posture improves. No Critical gdpr-gate finding is expected; full-skill invocation is low-value for a
 defense-strengthening grant revoke.
 
+## Risks & Mitigations (precedent diff — Phase 4.4)
+
+This is a **pattern-bound** SQL-permissioning change; the repo has an established canonical form, so the pattern is NOT novel.
+
+| Concern | Precedent (grounded) | Mitigation in this plan |
+|---|---|---|
+| Correct REVOKE shape | `027_mtd_cost_aggregate.sql:67-69` (`FROM PUBLIC; FROM authenticated; FROM anon`); `116_worktree_write_lease.sql:203-205` (`from public, anon, authenticated`) | Migration 128 revokes `anon, authenticated` + defense-in-depth `public` for each target — matches both exemplars. |
+| Pure grant-change migration + verify + down | `069_jti_deny_grant_restore.sql` + `.down.sql` + `verify/069_*.sql` | 128 copies this exact triad shape (header prose → REVOKE block → COMMENT; down restores grants; verify asserts deny + service_role positive). |
+| Service-role grant must survive | `verify/069` check (3): `has_function_privilege('service_role', …) → bad=1 if false` | verify/128 replicates the positive check for the 4 non-trigger RPCs. |
+| Intentionally-authenticated DEFINER fn misclassified as vulnerable | `125_list_conversations_enriched.sql:172-179` header documents the inverse (GRANT authenticated on purpose) | 125 explicitly excluded from the FIX set (§sibling audit) — the audit distinguishes service-role-only intent from authenticated-callable. |
+| search_path pinning on any touched DEFINER fn | `cq-pg-security-definer-search-path-pin-pg-temp`; 037 body already pins `public, pg_temp` | No function BODY is edited (grants only), so existing `set search_path` pins are untouched — no regression surface. |
+
 ## Test Scenarios
 1. **Deny state (deploy-time):** after apply, `has_function_privilege('authenticated', 'public.find_stuck_active_conversations(integer)', 'EXECUTE')` → `false` (verify/128, bad=0).
 2. **Service-role preserved:** `has_function_privilege('service_role', …)` → `true` for the 4 non-trigger RPCs — the reaper + slot flows keep working.
@@ -227,9 +273,9 @@ defense-strengthening grant revoke.
 
 ## Sharp Edges
 - **Migration ordinal is provisional.** `128` may be claimed by a sibling PR in the one-shot pipeline; the migration runner rejects duplicate numbers. /work Phase 0 re-checks next-free against `origin/main` and renumbers migration + verify + down + test together if needed.
-- **`CREATE OR REPLACE` does not reset privileges** — a later migration that re-`CREATE OR REPLACE`s any of these 5 functions will NOT re-grant anon/authenticated (grants persist across replace), so the fix is durable; but a *new* function with the same defect would slip past — the verify sentinel only covers these 5. (Broader class enforcement is the province of #6256's fuzz harness.)
+- **`CREATE OR REPLACE` preserves the ACL, but `DROP FUNCTION` + `CREATE` does NOT** — the load-bearing durability guard is **verify/128 running on every deploy**, not ACL-preservation (security-sentinel P2-2). The codebase's established habit of DROP+CREATE for signature changes is exactly why the 4-arg `acquire_conversation_slot` is on the FIX list: `093:42,50` dropped the 3-arg and re-created the 4-arg, which re-applied Supabase's default `anon`/`authenticated` grants. Any future re-issue of these 5 functions via DROP+CREATE re-opens the grant — verify/128 catches it at the release gate, which is **why verify/128 must never be removed from `web-platform-release.yml`**. The sentinel covers only these 5 signatures; a *new* defective DEFINER function is invisible until the follow-up below (or #6256) lands.
 - **`release_slot_on_archive()` returns `trigger`** — PostgREST does not expose trigger-returning functions as RPC endpoints and a direct call errors on absent `TG_*` context, so its practical disclosure risk is nil; it is included purely for shape-uniformity. Do NOT assert a `service_role` grant on it in verify/128.
-- **`has_function_privilege` role-name literals:** PUBLIC is the lowercase literal `'public'` (per `verify/069` check (5)); use exact signatures incl. arg types (`(integer)`, `(uuid, uuid, integer, uuid)`) or the check silently no-ops on a signature mismatch.
+- **`has_function_privilege` signature exactness is load-bearing (data-integrity P1):** PUBLIC is the lowercase literal `'public'` (per `verify/069` check (5)). Use the **exact current** signature incl. arg types. A wrong signature does NOT silently no-op — Postgres raises `ERROR: function "public.fn(...)" does not exist`, and `run-verify.sh` runs under `ON_ERROR_STOP=1` (`run-verify.sh:55-57`), so a stale signature **hard-fails the release pipeline on every run** (false red). Highest-risk copy error: `acquire_conversation_slot` MUST be the **4-arg** `(uuid, uuid, integer, uuid)` from `093:50` — the 3-arg `(uuid, uuid, integer)` at `029:205` was dropped at `093:42`. Do NOT copy the 3-arg form.
 - **Do not `Closes #6256`** — the rls-fuzz harness is a separate open issue; only cross-reference it.
 - A plan whose `## User-Brand Impact` section is empty or placeholder fails `deepen-plan` Phase 4.6 — this one is filled with the concrete artifact/vector/threshold.
 
@@ -237,6 +283,6 @@ defense-strengthening grant revoke.
 | Approach | Verdict |
 |---|---|
 | Fix only `find_stuck_active_conversations` (issue's literal primary) | Rejected — the sibling slot RPCs share the identical defect and carry a *worse* (write IDOR) impact; a security fix that leaves known-identical siblings exposed is half a fix at `single-user incident` threshold. Issue AC explicitly mandates the sibling audit. |
-| `ALTER DEFAULT PRIVILEGES` to stop future default grants | Rejected — does not remediate the 5 *existing* grants (the live exposure); orthogonal hardening better owned by #6256 / a dedicated migration-lint. Out of scope. |
+| `ALTER DEFAULT PRIVILEGES` to stop future default grants | Deferred, NOT silently — does not remediate the 5 *existing* grants (the live exposure), so it cannot substitute for this fix. But both deepen reviewers (security-sentinel P2-3, data-integrity blind-spot) flag that the root cause — Supabase's default `ALTER DEFAULT PRIVILEGES` granting EXECUTE to anon/authenticated on every new `public` function — remains unguarded past these 5 names. **`/ship` files a tracked follow-up issue** (label `type/security`, milestone Phase 4) for a repo-wide baseline: either an `ALTER DEFAULT PRIVILEGES … REVOKE EXECUTE … FROM anon, authenticated` migration OR a migration-lint gate that fails CI on a `revoke-from-public`-only DEFINER function. This is a concrete tracked deferral, not a soft "province of #6256" handoff. |
 | Block on #6256 to un-baseline rpc-cases.ts | Rejected — #6256 is unmerged; a P1 cross-tenant disclosure must not wait on an unrelated harness. The verify/128 sentinel is the durable guard; #6256 gets a cross-ref note. |
 | TS integration test as the primary guard | Rejected — the `verify/*.sql` sentinel (deploy-time, runs against prod) is the canonical always-on guard for grant state, per the jti-deny precedent. The TS test guards migration *content* only. |

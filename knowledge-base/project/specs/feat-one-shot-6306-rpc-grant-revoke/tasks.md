@@ -16,7 +16,8 @@ Lane: single-domain · Threshold: single-user incident · requires_cpo_signoff: 
     - `touch_conversation_slot(uuid, uuid)`
     - `release_slot_on_archive()`
 - [ ] 1.3 Add `COMMENT ON FUNCTION find_stuck_active_conversations` — service-role-only intent + Ref #6306.
-- [ ] 1.4 Create `128_revoke_definer_rpc_residual_grants.down.sql` restoring the pre-fix grants (rollback-only, mirror `069_*.down.sql`).
+- [ ] 1.4 Create `128_revoke_definer_rpc_residual_grants.down.sql` restoring the pre-fix grants (rollback-only, mirror `069_*.down.sql`). MUST carry a `093.down`-style caveat: "KNOWINGLY re-opens #6306 IDOR — do NOT run in production; rollback-machinery only".
+- [ ] 1.5 Use EXACT current signatures — `acquire_conversation_slot` is the 4-arg `(uuid, uuid, integer, uuid)` (093), NOT the dropped 3-arg (029). A wrong sig hard-fails run-verify under ON_ERROR_STOP=1.
 
 ## Phase 2 — Verify sentinel
 - [ ] 2.1 Create `apps/web-platform/supabase/verify/128_definer_rpc_residual_grants_revoked.sql` with the `(check_name, bad)` contract.
@@ -28,8 +29,9 @@ Lane: single-domain · Threshold: single-user incident · requires_cpo_signoff: 
 - [ ] 3.2 Assert migration 128 contains the anon/authenticated revoke for each of the 5 functions and verify/128 asserts the deny state.
 - [ ] 3.3 Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/supabase-migrations/128-revoke-definer-rpc-residual-grants.test.ts`.
 
-## Phase 4 — #6256 cross-reference (no code)
+## Phase 4 — Cross-reference + follow-up (no code)
 - [ ] 4.1 Record in `decision-challenges.md`: when #6256 harness lands, `rpc-cases.ts` entry for these RPCs must be a plain denial (not baselined `test.fails`).
+- [ ] 4.2 `/ship` files a `type/security` follow-up issue for the repo-wide `ALTER DEFAULT PRIVILEGES` / migration-lint baseline (root-cause hardening, deferred from this hotfix).
 
 ## Verification
 - [ ] V1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
