@@ -59,6 +59,17 @@ jobs:
       - name: Install psql client
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
 
+      # Fresh-stack content_sha bootstrap: run-migrations.sh creates the tracking
+      # table WITHOUT content_sha (mig 054 adds it later via ADD COLUMN IF NOT
+      # EXISTS), but its tracking INSERT writes content_sha from migration 001 on.
+      # On a fresh CLI DB that column does not exist until 054 runs → 001's tracking
+      # insert fails. Pre-create the table WITH content_sha so run-migrations' own
+      # CREATE-IF-NOT-EXISTS no-ops and 054's ADD-COLUMN-IF-NOT-EXISTS also no-ops.
+      - name: Bootstrap migration-tracking table (content_sha shim)
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
+            "CREATE TABLE IF NOT EXISTS public._schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now(), content_sha TEXT);"
+
       # Canonical filename-tracked applier (NOT `supabase db reset` — see ADR-111).
       # --bootstrap=skip is REQUIRED on a fresh stack: the default `auto` bootstrap
       # seeds migrations 001-010 as already-applied (they predate the runner in
