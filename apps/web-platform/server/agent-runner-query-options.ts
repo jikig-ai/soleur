@@ -166,6 +166,17 @@ export interface AgentQueryOptionsArgs {
    * because the paired `flush()` handle must escape to the close chokepoint.
    */
   toolAttemptPreToolUseHook?: HookCallback;
+  /**
+   * SDK-native skill scope (sdk.d.ts:1867 — `skills?: string[] | 'all'`). When
+   * set, ONLY the listed skills are loaded into the main-session system prompt;
+   * every other discovered skill is hidden from the model's context (a context
+   * filter, not a sandbox). Omit to load every discovered skill (the Command
+   * Center default). The support persona passes `["kb-search"]`
+   * (`SUPPORT_SKILLS_OPTION`) as the PRIMARY scope lever, paired with the
+   * `createCanUseTool` default-deny for the emit-a-non-loaded-skill case.
+   * feat-wire-concierge-support-chat Phase 3; ADR-109.
+   */
+  skills?: string[];
 }
 
 /**
@@ -318,6 +329,10 @@ export function buildAgentQueryOptions(
   };
 
   if (args.resumeSessionId) opts.resume = args.resumeSessionId;
+  // SDK-native skill scope. Set ONLY when provided so the Command Center /
+  // legacy default (load every skill) stays byte-identical and off the T4
+  // drift snapshot. Support passes `["kb-search"]`.
+  if (args.skills !== undefined) opts.skills = args.skills;
   if (args.mcpServers !== undefined) opts.mcpServers = args.mcpServers;
   if (args.allowedTools !== undefined) opts.allowedTools = args.allowedTools;
   if (args.maxTurns !== undefined) opts.maxTurns = args.maxTurns;

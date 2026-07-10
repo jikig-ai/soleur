@@ -302,6 +302,36 @@ describe("buildAgentQueryOptions — GitHub egress derived from ghToken (#5041 f
   });
 });
 
+describe("buildAgentQueryOptions — SDK skills allowlist (support scope)", () => {
+  it("omits `skills` by default (Command Center loads every skill)", () => {
+    const opts = buildAgentQueryOptions(minArgs);
+    expect("skills" in opts).toBe(false);
+  });
+
+  it("threads `skills` verbatim when provided (support passes ['kb-search'])", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, skills: ["kb-search"] });
+    expect(opts.skills).toEqual(["kb-search"]);
+  });
+
+  it("support extra-disallowed pins Edit/Write/Task/Agent alongside the canonical list, keeping Bash out of it", () => {
+    const opts = buildAgentQueryOptions({
+      ...minArgs,
+      extraDisallowedTools: ["Edit", "Write", "MultiEdit", "NotebookEdit", "Task", "Agent"],
+    });
+    expect(opts.disallowedTools).toEqual([
+      "WebSearch",
+      "WebFetch",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit",
+      "Task",
+      "Agent",
+    ]);
+    expect(opts.disallowedTools).not.toContain("Bash");
+  });
+});
+
 describe("buildAgentQueryOptions — drift-guard snapshot (T4)", () => {
   // Stable JSON serialization across Node versions per plan Enhancement #2:
   // sort keys explicitly and exclude function-valued fields (canUseTool,
