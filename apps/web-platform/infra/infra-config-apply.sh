@@ -119,7 +119,7 @@ for entry in "${FILE_MAP[@]}"; do
 
   logger -t "$LOG_TAG" "writing: $dest_path"
 
-  # Stage the decoded payload.
+  # Stage the payload.
   #  - test mode (DESTDIR set): stage IN the sandbox dest dir; same-fs mv is atomic
   #    and the sandbox dirs are writable (legacy path, unchanged).
   #  - prod mode (DESTDIR empty): stage in the deploy-writable STAGING_DIR; the
@@ -131,15 +131,21 @@ for entry in "${FILE_MAP[@]}"; do
     stage_dir="$STAGING_DIR"
   fi
 
-  # Decode to a temp file in the staging dir.
+  # #6178: the payload arrives as a FILE (pass-file-to-command + base64decode in
+  # hooks.json.tmpl), NOT a base64 string in the environment — the exec env has a
+  # 128KB per-var ceiling (MAX_ARG_STRLEN) that ci-deploy.sh's ~140KB base64 blew,
+  # killing fork/exec with E2BIG. So ${!env_var} now holds the PATH to the already-
+  # DECODED payload that webhook wrote; copy it into our own mktemp temp (so the
+  # atomic-install + cleanup contract below is unchanged and we never install the
+  # webhook temp directly). A missing/unreadable source is a per-file failure.
   tmpfile=$(mktemp "${stage_dir}/tmp.infra-config.XXXXXX")
   TMPFILES+=("$tmpfile")
 
-  if ! echo "${!env_var}" | base64 -d > "$tmpfile" 2>/dev/null; then
-    logger -t "$LOG_TAG" "FAILED: $dest_path reason=base64_decode"
-    echo "ERROR: base64 decode failed for $dest_path" >&2
+  if ! cp "${!env_var}" "$tmpfile" 2>/dev/null; then
+    logger -t "$LOG_TAG" "FAILED: $dest_path reason=payload_file_unreadable path=${!env_var}"
+    echo "ERROR: could not read webhook payload file for $dest_path (env $env_var=${!env_var})" >&2
     [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
-    FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"base64_decode\"}"
+    FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"payload_file_unreadable\"}"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     rm -f "$tmpfile"
     continue
