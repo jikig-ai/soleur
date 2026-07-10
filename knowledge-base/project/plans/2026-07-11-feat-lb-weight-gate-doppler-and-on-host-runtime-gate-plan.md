@@ -104,6 +104,9 @@ This is a **minimal probes-first slice** (no weight shift, no drain, no LUKS soa
 - [ ] Confirm the shape-only contract (`requires_runtime_bind_probe=true` + banner) and that the pure gate reads *only* injected env.
 - [ ] Confirm LUKS soak marker absent (full orchestrator correctly deferred).
 - [ ] Read ADR-068 + key July 2026 cutover learnings (DI-C3, no-SSH, preflight bounding).
+- [ ] Explicit path/glob verification (per hr-when-a-plan-specifies-relative-paths + plan skill): run and record:
+  `git ls-files | grep -E '(lb-weight-gate|readiness|server\.tf|apply-web-platform-infra|cutover-inngest|vector\.toml|inngest-server\.md|moved-block-wedge-cutover)'`
+  Paths covered: apps/web-platform/infra/lb-weight-gate.sh, apps/web-platform/server/readiness.ts, apps/web-platform/infra/server.tf, .github/workflows/apply-web-platform-infra.yml, .github/workflows/cutover-inngest.yml, apps/web-platform/infra/vector.toml, knowledge-base/engineering/operations/runbooks/inngest-server.md, knowledge-base/engineering/operations/runbooks/moved-block-wedge-cutover-5887.md.
 - [ ] Baseline tests green.
 
 ### Phase 1 — Direct Doppler sourcing + document runtime separation (no new dedicated scripts)
@@ -111,9 +114,9 @@ Per DHH + YAGNI reviews (mechanical): Do not create new top-level scripts (`lb-w
 
 - [ ] Document direct invocation: add comment near top of `lb-weight-gate.sh` showing `doppler run -p soleur -c prd -- ./lb-weight-gate.sh` (and the 6 vars it expects).
 - [ ] Extend `lb-weight-gate.test.sh` with doppler-stub cases (env -i + mock) to prove the pure gate stays doppler-free.
-- [ ] Add minimal fact-refresh comments in runbooks / cutover-inngest.yml noting that web-2 recreate produces TF + deploy-status artifacts (no new markers).
-- [ ] If any new logger tag is introduced (unlikely), add to vector.toml + test in same change.
-- [ ] Short observability description (5-field citation to existing pattern).
+- [ ] Add minimal fact-refresh comments in runbooks / cutover-inngest.yml noting that web-2 recreate produces TF + deploy-status artifacts. For #6230 evidence seam (deferred heavy work): exact emission site "in the `web-2-recreate` job (in `.github/workflows/apply-web-platform-infra.yml`) after the recreate step, or via a one-shot host script delivered by infra-config (like cat-deploy-state or new marker script), emitting `logger -t web2-quiesce-complete ts=... recreate_target=web-2` (reaches journald → Vector host_scripts_journald allowlist → Better Stack). Tag: web2-quiesce-complete. Payload example: `{"ts": "...", "recreate_target": "web-2", "status": "quiesced"}`. No new operator step; reuses existing recreate dispatch.
+- [ ] If any new logger tag is introduced (unlikely), add to vector.toml + test in same change. Explicit citation to `hr-observability-layer-citation`.
+- [ ] Concrete discoverability_test (no SSH, runnable): `doppler run -p soleur -c prd_terraform -- bash -c 'logger -t lb-weight-gate-doppler-test "test-marker-$(date +%s)"; sleep 10; scripts/betterstack-query.sh --query "logger -t lb-weight-gate-doppler-test" --recent 5m | grep -o "test-marker-[0-9]*"'` (using the canonical no-SSH betterstack-query script under prd_terraform). Confirm Vector allowlist test updated in same change for any new tags. Explicit citation: hr-observability-layer-citation.
 
 **Files (minimal):**
 - Edit: `apps/web-platform/infra/lb-weight-gate.sh` (comments)
@@ -136,9 +139,10 @@ Per DHH + YAGNI reviews (mechanical): Do not create new top-level scripts (`lb-w
 - [ ] Direct `doppler run -p soleur -c prd -- ./lb-weight-gate.sh` is documented in comments and exercisable via existing patterns (no new dedicated doppler shim file).
 - [ ] Existing readiness.ts + pure gate `requires_runtime_bind_probe=true` marker satisfy the documented shape-only vs runtime separation contract (no new dedicated runtime script created in this slice; disk attach check removed per ADR-068).
 - [ ] Test extension for doppler stub cases passes; pure gate contract preserved.
-- [ ] Minimal fact-refresh comments only in runbooks/workflows for web-2 recreate artifacts (heavy #6230 evidence seam and gdpr-gate scoped out of this thin slice).
+- [ ] Minimal fact-refresh comments only in runbooks/workflows for web-2 recreate artifacts (heavy #6230 evidence seam scoped out).
+- [ ] gdpr-gate run completed, findings: [placeholder to be filled at plan time; run /soleur:gdpr-gate against this plan + spec; no new sub-processor expected, scheduling reminders + cutover integrity already covered in existing PAs].
 - [ ] Any new logger tags (if introduced) added to vector.toml + tests in same change.
-- [ ] Observability description present (5-field citation).
+- [ ] Observability description present (5-field citation + hr-observability-layer-citation).
 - [ ] All AGENTS hard rules respected (no-SSH, pull-your-own-data, etc.).
 - [ ] Draft PR updates #6027/#6230; plan + tasks committed.
 

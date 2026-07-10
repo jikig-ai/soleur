@@ -27,10 +27,12 @@ plan: knowledge-base/project/plans/2026-07-11-feat-lb-weight-gate-doppler-and-on
 - [ ] Document direct `doppler run -p soleur -c prd -- ./lb-weight-gate.sh` + the 6 vars in comments in `lb-weight-gate.sh`.
 - [ ] Extend `lb-weight-gate.test.sh` with doppler-stub cases.
 - [ ] Minimal fact-refresh comments in runbooks / cutover-inngest.yml (web-2 recreate artifacts only).
-- [ ] If any new logger tag: add to vector.toml + test.
+- [ ] If any new logger tag: add to vector.toml + test. Explicit `hr-observability-layer-citation`.
+- [ ] Concrete discoverability_test using `scripts/betterstack-query.sh` (no SSH).
 - [ ] Short observability description.
+- [ ] gdpr-gate run (placeholder in plan; run before PR).
 
-**Note:** Per DHH + YAGNI mechanical reviews: no dedicated doppler shim, no new runtime-bind-gate.sh, no disk attach check, no heavy evidence seam, no gdpr in scope for this thin slice. Use existing readiness.ts for runtime separation.
+**Note:** Per DHH + YAGNI + Kieran mechanical reviews: no dedicated doppler shim, no new runtime script, no disk attach, heavy evidence deferred. Exact #6230 marker emission site named (web-2-recreate job or cat-deploy-state equivalent, `logger -t web2-quiesce-complete`). Use existing readiness.ts. Explicit git ls-files verification in Phase 0.
 
 ## Acceptance Criteria (updated per reviews)
 - [ ] Direct `doppler run -p soleur -c prd -- ./lb-weight-gate.sh` documented and exercisable (no new shim).
