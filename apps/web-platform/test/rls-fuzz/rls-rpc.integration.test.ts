@@ -153,50 +153,13 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
     }
   });
 
-  // KNOWN_EXPOSURES — these LEAK today (harness found them, tracked by the issue).
-  // Each denial assertion runs under test.fails: green while the exposure stands,
-  // and RED the moment the grant is fixed (assertion starts passing) → un-baseline.
-  test.fails(`KNOWN-EXPOSURE ${KNOWN_EXPOSURES.find_stuck_active_conversations.issue}: find_stuck_active_conversations leaks cross-tenant rows`, async () => {
-    const rows = await rolledBack(async (t) => {
-      await t`set local role authenticated`;
-      await t.unsafe("select set_config('request.jwt.claims', $1, true)", [bClaims()]);
-      const [r] = await t.unsafe("select count(*)::int as n from find_stuck_active_conversations(0)");
-      return (r as unknown as { n: number }).n;
-    });
-    expect(rows, "denial would be 0 cross-tenant rows").toBe(0);
-  });
-
-  test.fails(`KNOWN-EXPOSURE ${KNOWN_EXPOSURES.acquire_conversation_slot.issue}: acquire_conversation_slot writes A's slot`, async () => {
-    const status = await rolledBack(async (t) => {
-      await t`set local role authenticated`;
-      await t.unsafe("select set_config('request.jwt.claims', $1, true)", [bClaims()]);
-      const [r] = await t.unsafe(`select status from acquire_conversation_slot('${ctx.userA}','${ctx.convA2}',5,'${ctx.wsA}')`);
-      return (r as unknown as { status: string }).status;
-    });
-    expect(status, "denial would refuse the cross-tenant acquire").not.toBe("ok");
-  });
-
-  test.fails(`KNOWN-EXPOSURE ${KNOWN_EXPOSURES.release_conversation_slot.issue}: release_conversation_slot deletes A's slot`, async () => {
-    const stillPresent = await rolledBack(async (t) => {
-      await t.unsafe(`insert into user_concurrency_slots (user_id,workspace_id,conversation_id) values ('${ctx.userA}','${ctx.wsA}','${ctx.convA}') on conflict do nothing`);
-      await t`set local role authenticated`;
-      await t.unsafe("select set_config('request.jwt.claims', $1, true)", [bClaims()]);
-      await t.unsafe(`select release_conversation_slot('${ctx.userA}','${ctx.convA}')`);
-      await t`reset role`; // observe within-txn as superuser
-      const [r] = await t.unsafe(`select count(*)::int as n from user_concurrency_slots where user_id='${ctx.userA}' and conversation_id='${ctx.convA}'`);
-      return (r as unknown as { n: number }).n;
-    });
-    expect(stillPresent, "denial would leave A's slot intact").toBeGreaterThan(0);
-  });
-
-  test.fails(`KNOWN-EXPOSURE ${KNOWN_EXPOSURES.touch_conversation_slot.issue}: touch_conversation_slot updates A's slot`, async () => {
-    const touched = await rolledBack(async (t) => {
-      await t.unsafe(`insert into user_concurrency_slots (user_id,workspace_id,conversation_id) values ('${ctx.userA}','${ctx.wsA}','${ctx.convA}') on conflict do nothing`);
-      await t`set local role authenticated`;
-      await t.unsafe("select set_config('request.jwt.claims', $1, true)", [bClaims()]);
-      const [r] = await t.unsafe(`select touch_conversation_slot('${ctx.userA}','${ctx.convA}') as n`);
-      return (r as unknown as { n: number }).n;
-    });
-    expect(touched, "denial would touch 0 of A's slots").toBe(0);
-  });
+  // KNOWN_EXPOSURES is empty: the #6306 exposures (find_stuck_active_conversations
+  // + acquire/release/touch_conversation_slot) were closed by migration 128
+  // (PR #6318), which revokes the residual anon/authenticated EXECUTE. Those fns
+  // no longer appear in the securityDefinerAuthenticatedFns catalog, so the AC8
+  // coverage gate above (stale = classified − catalog) enforces their removal from
+  // all three maps. The per-fn `test.fails` denial baselines were removed here as
+  // part of that un-baselining; the deploy-time verify/128_*.sql sentinel is the
+  // durable regression guard for the closed grant. Future KNOWN_EXPOSURES entries
+  // re-introduce a parametrized `test.fails` loop over the map.
 });

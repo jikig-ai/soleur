@@ -95,8 +95,6 @@ export const EXCLUDED: Record<string, string> = {
   outbound_send_exists: "global recipient-hash / body-sha dedup namespace; not workspace-tenant scoped",
   record_outbound_send: "global recipient-hash send ledger; not workspace-tenant scoped",
   suppress_recipient: "global recipient-hash suppression ledger; not workspace-tenant scoped",
-  // trigger function — not meaningfully callable with cross-tenant params
-  release_slot_on_archive: "AFTER-trigger function on conversations; not a directly-callable RPC surface",
 };
 
 /**
@@ -105,22 +103,16 @@ export const EXCLUDED: Record<string, string> = {
  * default privileges left `authenticated` (and `anon`) an EXECUTE grant, and the
  * fn trusts caller-supplied params without an `auth.uid()` check. Tracked by the
  * issue; asserted under `test.fails` (green while exposed, RED once fixed).
+ *
+ * The #6306 exposures (find_stuck_active_conversations + acquire/release/touch_
+ * conversation_slot, plus the release_slot_on_archive trigger fn) were CLOSED by
+ * migration 128_revoke_definer_rpc_residual_grants (PR #6318): it revokes the
+ * residual anon/authenticated EXECUTE, so those fns drop out of the
+ * `securityDefinerAuthenticatedFns` catalog entirely and no longer belong in any
+ * of the three maps. Un-baselined here per the harness's own forced-un-baselining
+ * contract (this docstring, line 15-18) — the AC8 coverage gate's `stale` check
+ * (classified − catalog) fails until they are removed. Empty now (no tracked
+ * live exposure); the deploy-time `verify/128_*.sql` sentinel is the durable
+ * regression guard for the closed grant.
  */
-export const KNOWN_EXPOSURES: Record<string, { issue: string; note: string }> = {
-  find_stuck_active_conversations: {
-    issue: "#6306",
-    note: "returns (id,user_id) for ALL tenants' stuck conversations to any authenticated/anon caller",
-  },
-  acquire_conversation_slot: {
-    issue: "#6306",
-    note: "trusts p_user_id → an authenticated caller can occupy/exhaust ANOTHER tenant's concurrency slots",
-  },
-  release_conversation_slot: {
-    issue: "#6306",
-    note: "trusts p_user_id → an authenticated caller can delete ANOTHER tenant's concurrency slot",
-  },
-  touch_conversation_slot: {
-    issue: "#6306",
-    note: "trusts p_user_id → an authenticated caller can keep-alive ANOTHER tenant's concurrency slot",
-  },
-};
+export const KNOWN_EXPOSURES: Record<string, { issue: string; note: string }> = {};
