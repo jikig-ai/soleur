@@ -218,6 +218,22 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # --postgres-conn-max-idle-time 1` (idle-time in MINUTES). Worst-case total = P×5 ≤ 20
 # for P ≤ 4, comfortably under pool_size 30. See inngest-bootstrap.sh.
 #
+# ⚠ TWO-HOST CORRECTION (#6178, 2026-07-10): the "≤ 20 < 30" budget above is PER
+# HOST. During the pre-flip cutover window there are TWO co-located inngest schedulers
+# on this SHARED prod pooler — web-1 (10.0.1.10) AND web-2 (10.0.1.11, weight-0 warm
+# standby) — so the aggregate ceiling is 2 × P×5 = 40 > pool_size 30. Capping only web-1
+# (the deploy.soleur.ai active host) does NOT bound the pair, which is why op=inventory
+# still hit EMAXCONNSESSION after web-1 was capped: web-2's co-located inngest was
+# UNCAPPED (default ~10/pool) because the ADR-068 deploy fan-out is DORMANT — SOLEUR_
+# DEPLOY_PEERS is unset, so `deploy-inngest-image` only reached web-1. Only ONE host is
+# ever scanned at a time (op=inventory curls 127.0.0.1:8288 on the active host), so with
+# BOTH hosts capped the operating point is one-host-scanning (≤20) + peer-idle-drained
+# (≤8) ≈ 28 < 30. Pre-flip remediation: bring web-2 into the fan-out
+# (`apply-web-platform-infra.yml -f apply_target=warm-standby`) and redeploy the capped
+# image so BOTH schedulers honour open=5/idle=2. Post-flip this is moot — the cutover
+# STOPS both co-located inngests; the dedicated host (10.0.1.40) uses its OWN dark
+# pooler (soleur-dev), so prod-pooler inngest load goes to ~0.
+#
 # DECISION (#6258, supersedes #5562): KEEP `default_pool_size` at 30 — do NOT revert to
 # 15. The #5562 revert's premise (that the client cap bounds inngest's *total* under 15) is
 # falsified by the per-pool model above: tightening the upstream pool to 15 while inngest's

@@ -550,6 +550,42 @@ test_b64_delivery_parity() {
     FAIL=$((FAIL + 1)); fi
 }
 
+# --- #6178: orphan-hook self-check — a hooks.json execute-command pointing at a
+# /usr/local/bin script NOT on disk after the push is a DANGLING HOOK (webhook
+# fork/exec's a missing file → empty HTTP 500). The handler must flag it LOUD
+# (files[] reason=orphan_hook_command + exit 1 + SOLEUR_INFRA_CONFIG_HOOK_ORPHAN
+# marker), while a hook pointing at a delivered FILE_MAP script is NOT flagged.
+test_orphan_hook_selfcheck() {
+  echo "TEST: orphan-hook self-check — dangling hook command fails loud (#6178)"
+  setup
+  export_valid_env_vars
+  # hooks.json referencing one DELIVERED script (inngest-inventory.sh ∈ FILE_MAP)
+  # and one UNDELIVERED script (orphan-missing.sh ∉ FILE_MAP → never on disk).
+  export HOOKS_JSON_B64=$(printf '%s' '[{"id":"good","execute-command":"/usr/local/bin/inngest-inventory.sh"},{"id":"orphan","execute-command":"/usr/local/bin/orphan-missing.sh"}]' | base64 -w0)
+
+  local rc=0
+  bash "$HANDLER" 2>/dev/null || rc=$?
+  assert_eq "handler exits 1 on dangling hook" "1" "$rc"
+
+  local orphan_reason good_flagged
+  orphan_reason=$(jq -r '.files[] | select(.file == "/usr/local/bin/orphan-missing.sh") | .reason' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "orphan hook reason is orphan_hook_command" "orphan_hook_command" "$orphan_reason"
+
+  # The delivered script's hook must NOT be flagged as orphan.
+  good_flagged=$(jq -r '[.files[] | select(.file == "/usr/local/bin/inngest-inventory.sh" and .reason == "orphan_hook_command")] | length' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "delivered-script hook not flagged as orphan" "0" "$good_flagged"
+
+  if grep -q "SOLEUR_INFRA_CONFIG_HOOK_ORPHAN" "$LOGGER_LOG" 2>/dev/null; then
+    echo "  PASS: SOLEUR_INFRA_CONFIG_HOOK_ORPHAN marker emitted"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: no SOLEUR_INFRA_CONFIG_HOOK_ORPHAN marker in logger output"
+    FAIL=$((FAIL + 1))
+  fi
+
+  teardown
+}
+
 # --- Run all tests ---
 echo "=== infra-config-apply.sh test suite ==="
 test_happy_path
@@ -564,6 +600,7 @@ test_exit_trap_unhandled
 test_missing_env_partial_write
 test_prod_mode_escalated_move
 test_b64_delivery_parity
+test_orphan_hook_selfcheck
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then

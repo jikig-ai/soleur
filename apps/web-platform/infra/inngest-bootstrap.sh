@@ -368,6 +368,12 @@ fi
 # cutover-probe scans. The durable fix bounds TOTAL footprint + DRAINS idle conns:
 #   --postgres-max-open-conns 5   per-pool cap; worst-case total 4×5 = 20 < pool_size 30
 #                                 (still ≥5/pool for alpha-internal <10 events/sec).
+#                                 ⚠ PER HOST (#6178): the pre-flip cutover runs TWO
+#                                 co-located inngest schedulers on this shared pooler
+#                                 (web-1 + web-2 warm standby), so BOTH must carry this
+#                                 cap or the aggregate (2×20=40) exceeds 30. web-2 is
+#                                 reached only via the ADR-068 fan-out (SOLEUR_DEPLOY_
+#                                 PEERS); see inngest.tf "TWO-HOST CORRECTION".
 #   --postgres-max-idle-conns 2   retain ≤2 idle/pool (default 10) → pinned-idle ≤ 4×2 = 8.
 #   --postgres-conn-max-idle-time 1  close idle conns after 1 MINUTE so they RELEASE their
 #                                 Supavisor session (this is the release lever). ⚠ UNIT TRAP:
