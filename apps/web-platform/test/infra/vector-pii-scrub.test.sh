@@ -402,6 +402,15 @@ EXPECTED_TAGS=$(
     grep -hoP '^\s*(readonly\s+)?LOG_TAG="\K[^"]+' "$f"
   done | sort -u
 )
+# #6178: some legitimate SYSLOG_IDENTIFIER entries come from a systemd UNIT's binary
+# writing to stdout — NOT from a `logger -t` call in infra/*.sh — so they are not
+# derivable above. webhook.service runs `/usr/local/bin/webhook -verbose` with no
+# SyslogIdentifier override, so systemd tags its stdout SYSLOG_IDENTIFIER=webhook (the
+# binary basename). Fold these into EXPECTED so AC3 still enforces logger-tag lockstep
+# (a new/removed logger tag not mirrored here fails CI) without flagging the binary
+# channel. Keep this list to genuine unit-binary identifiers, not a drift-guard bypass.
+SYSTEMD_UNIT_IDENTIFIERS="webhook"
+EXPECTED_TAGS=$(printf '%s\n%s\n' "$EXPECTED_TAGS" "$SYSTEMD_UNIT_IDENTIFIERS" | grep -v '^$' | sort -u)
 # Array entries are quoted strings on their own lines inside the include_matches
 # block; pull the bare tag from each.
 ACTUAL_TAGS=$(echo "$HOST_SCRIPTS_BLOCK" | grep -oP '^\s*"\K[a-z0-9-]+(?="\s*,?\s*$)' | sort -u)
