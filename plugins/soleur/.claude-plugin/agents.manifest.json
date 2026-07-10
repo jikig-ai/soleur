@@ -1,0 +1,476 @@
+{
+  "schemaVersion": 1,
+  "plugin": "soleur",
+  "count": 67,
+  "agents": [
+    {
+      "id": "soleur:engineering:cto",
+      "path": "agents/engineering/cto.md",
+      "name": "cto",
+      "description": "Participates in brainstorm and planning phases to assess technical implications, flag architecture concerns, and identify engineering risks for proposed features. Use individual engineering agents (review, research, design) for focused tasks; use this agent for cross-cutting technical assessment during feature exploration.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:design:ddd-architect",
+      "path": "agents/engineering/design/ddd-architect.md",
+      "name": "ddd-architect",
+      "description": "Use this agent when you need expert guidance on Domain-Driven Design including bounded contexts, context mapping, and aggregate design. Use architecture-strategist for general architectural compliance; use this agent for bounded context and aggregate design.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:discovery:agent-finder",
+      "path": "agents/engineering/discovery/agent-finder.md",
+      "name": "agent-finder",
+      "description": "Use this agent when running /plan and the project uses a stack not covered by built-in agents. Queries external registries for community agents matching the detected stack gap. Use functional-discovery to check if a planned feature already exists; use this agent to find agents for a missing tech stack.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:discovery:functional-discovery",
+      "path": "agents/engineering/discovery/functional-discovery.md",
+      "name": "functional-discovery",
+      "description": "Use this agent when running /plan to check whether community registries already have skills or agents with similar functionality to the feature being planned. Use agent-finder for stack-gap detection; use this agent to check if a planned feature already exists in registries.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:infra:infra-security",
+      "path": "agents/engineering/infra/infra-security.md",
+      "name": "infra-security",
+      "description": "Use this agent when you need to audit domain security posture, configure DNS records, or manage Cloudflare security features (WAF, Workers, Zero Trust) via the Cloudflare MCP server. Use terraform-architect for IaC generation; use this agent for live Cloudflare configuration and security auditing.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:infra:platform-strategist",
+      "path": "agents/engineering/infra/platform-strategist.md",
+      "name": "platform-strategist",
+      "description": "Use this agent when you need to make infrastructure and deployment strategy decisions before implementation. Evaluates build pipelines, CI/CD approaches, cloud resource selection, containerization strategies, and deployment topology. Use terraform-architect for generating Terraform configs after decisions are made; use infra-security for security auditing; use this agent for strategic infrastructure planning.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:infra:terraform-architect",
+      "path": "agents/engineering/infra/terraform-architect.md",
+      "name": "terraform-architect",
+      "description": "Use this agent when you need to generate Terraform configurations or review existing .tf files for security and cost issues. Use infra-security for live Cloudflare configuration and security auditing; use this agent for Terraform code generation and review.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:prompt-engineer",
+      "path": "agents/engineering/prompt-engineer.md",
+      "name": "prompt-engineer",
+      "description": "Use this agent to author, optimize, and test prompts and agent/skill definitions -- define expected output format and success criteria, write happy/edge/failure test cases, version prompts, and remove vague qualifiers. Use the skill-creator skill for SKILL.md scaffolding and packaging, and best-practices-researcher for external prompt-engineering research; use this agent to engineer the prompt content itself.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:research:best-practices-researcher",
+      "path": "agents/engineering/research/best-practices-researcher.md",
+      "name": "best-practices-researcher",
+      "description": "Use this agent when you need to research external best practices, documentation, and examples for any technology or development practice. Use framework-docs-researcher for a specific library's API docs; use this agent for cross-source best practices research.",
+      "model": "haiku"
+    },
+    {
+      "id": "soleur:engineering:research:framework-docs-researcher",
+      "path": "agents/engineering/research/framework-docs-researcher.md",
+      "name": "framework-docs-researcher",
+      "description": "Use this agent when you need to gather documentation and best practices for specific frameworks, libraries, or dependencies. Use best-practices-researcher for general industry best practices; use this agent for a specific library's docs and source.",
+      "model": "haiku"
+    },
+    {
+      "id": "soleur:engineering:research:git-history-analyzer",
+      "path": "agents/engineering/research/git-history-analyzer.md",
+      "name": "git-history-analyzer",
+      "description": "Use this agent when you need to understand the historical context of code changes, trace code pattern origins, or analyze commit history patterns. Unlike repo-research-analyst (repo structure and docs), this agent focuses on git log archaeology.",
+      "model": "haiku"
+    },
+    {
+      "id": "soleur:engineering:research:learnings-researcher",
+      "path": "agents/engineering/research/learnings-researcher.md",
+      "name": "learnings-researcher",
+      "description": "Use this agent when you need to search institutional learnings in knowledge-base/project/learnings/ for relevant past solutions before implementing a new feature or fixing a problem. Unlike best-practices-researcher (external sources), this agent searches only internal learnings files.",
+      "model": "haiku"
+    },
+    {
+      "id": "soleur:engineering:research:repo-research-analyst",
+      "path": "agents/engineering/research/repo-research-analyst.md",
+      "name": "repo-research-analyst",
+      "description": "Use this agent when you need to research a repository's structure, documentation, and patterns -- architecture files, GitHub issues, contribution guidelines, and implementation patterns. Unlike git-history-analyzer (commit history), this agent examines repo structure, docs, issues, and templates.",
+      "model": "haiku"
+    },
+    {
+      "id": "soleur:engineering:review:agent-native-reviewer",
+      "path": "agents/engineering/review/agent-native-reviewer.md",
+      "name": "agent-native-reviewer",
+      "description": "Use this agent when reviewing code to ensure features are agent-native -- any action a user can take, an agent can also take, and anything a user can see, an agent can see. Enforces agent-user parity in capability and context.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:architecture-strategist",
+      "path": "agents/engineering/review/architecture-strategist.md",
+      "name": "architecture-strategist",
+      "description": "Use this agent when you need to analyze code changes from an architectural perspective, evaluate system design decisions, or ensure modifications align with established architectural patterns. Use ddd-architect for Domain-Driven Design modeling; use this agent for general architectural compliance review.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:code-quality-analyst",
+      "path": "agents/engineering/review/code-quality-analyst.md",
+      "name": "code-quality-analyst",
+      "description": "Use this agent when you need a formal quality report with severity-scored findings and a prioritized refactoring roadmap. Use pattern-recognition-specialist for quick pattern checks; use this agent when you need a formal report to plan refactoring work.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:code-simplicity-reviewer",
+      "path": "agents/engineering/review/code-simplicity-reviewer.md",
+      "name": "code-simplicity-reviewer",
+      "description": "Use this agent when you need a final review pass to ensure code changes are as simple and minimal as possible. Invoked after implementation to identify simplification opportunities and ensure YAGNI adherence.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:data-integrity-guardian",
+      "path": "agents/engineering/review/data-integrity-guardian.md",
+      "name": "data-integrity-guardian",
+      "description": "Use this agent when you need to review database migrations, data models, or any code that manipulates persistent data. Use data-migration-expert for ID mapping validation; use deployment-verification-agent for deploy checklists. Boundary vs gdpr-gate: see plugins/soleur/skills/review/SKILL.md §boundaries.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:data-migration-expert",
+      "path": "agents/engineering/review/data-migration-expert.md",
+      "name": "data-migration-expert",
+      "description": "Use this agent when reviewing PRs that touch database migrations, data backfills, or any code that transforms production data. Use data-integrity-guardian for general migration safety review; use this agent specifically when ID mappings or value swaps need validation.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:deployment-verification-agent",
+      "path": "agents/engineering/review/deployment-verification-agent.md",
+      "name": "deployment-verification-agent",
+      "description": "Use this agent when a PR touches production data, migrations, or behavior that could silently discard or duplicate records. Produces a pre/post-deploy checklist with SQL verification queries and rollback procedures. Use data-integrity-guardian to review the migration code; use this agent to produce the deploy-day checklist.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:dhh-rails-reviewer",
+      "path": "agents/engineering/review/dhh-rails-reviewer.md",
+      "name": "dhh-rails-reviewer",
+      "description": "Use this agent when you need a brutally honest Rails code review from the perspective of David Heinemeier Hansson. Use kieran-rails-reviewer for strict convention and taste checks; use this agent for opinionated architectural critique.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:kieran-rails-reviewer",
+      "path": "agents/engineering/review/kieran-rails-reviewer.md",
+      "name": "kieran-rails-reviewer",
+      "description": "Use this agent when you need to review Rails code changes with an extremely high quality bar. Applies Kieran's strict Rails conventions and taste preferences. Use dhh-rails-reviewer for opinionated architectural critique; use this agent for strict convention and quality checks.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:legacy-code-expert",
+      "path": "agents/engineering/review/legacy-code-expert.md",
+      "name": "legacy-code-expert",
+      "description": "Use this agent when you need to safely modify legacy code that lacks tests. It applies Michael Feathers' dependency-breaking techniques from \"Working Effectively with Legacy Code\" to identify seams, plan characterization tests, and recommend safe transformation paths.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:observability-coverage-reviewer",
+      "path": "agents/engineering/review/observability-coverage-reviewer.md",
+      "name": "observability-coverage-reviewer",
+      "description": "Use this agent when reviewing PRs that add server-side code (routes, server functions, Inngest functions, scripts, infra) or code on a non-inspectable execution surface (agent sandbox, container readiness gate, cron worker) to verify every new error path, log call, and failure mode is reachable from Sentry/Better Stack without SSH — including from the affected surface itself. Enforces hr-observability-as-plan-quality-gate, hr-no-ssh-fallback-in-runbooks, and hr-observability-layer-citation. Use silent-failure-hunter (upstream pr-review-toolkit) for the general catch-block check; use this agent for the layer-citation, runbook-SSH, and Inngest-middleware-coverage checks specific to Soleur's observability stack.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:pattern-recognition-specialist",
+      "path": "agents/engineering/review/pattern-recognition-specialist.md",
+      "name": "pattern-recognition-specialist",
+      "description": "Use this agent when you need to analyze code for design patterns, anti-patterns, naming conventions, and code duplication. This agent excels at identifying architectural patterns, detecting code smells, and ensuring consistency across the codebase.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:performance-oracle",
+      "path": "agents/engineering/review/performance-oracle.md",
+      "name": "performance-oracle",
+      "description": "Use this agent when you need to analyze code for performance issues, optimize algorithms, identify bottlenecks, or ensure scalability. This includes reviewing database queries, memory usage, caching strategies, and overall system performance. The agent should be invoked after implementing features or when performance concerns arise.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:security-sentinel",
+      "path": "agents/engineering/review/security-sentinel.md",
+      "name": "security-sentinel",
+      "description": "Use this agent when you need to perform security audits, vulnerability assessments, or security reviews of code. This includes checking for common security vulnerabilities, validating input handling, reviewing authentication/authorization implementations, scanning for hardcoded secrets, and ensuring OWASP compliance. Boundary vs gdpr-gate: see plugins/soleur/skills/review/SKILL.md §boundaries.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:semgrep-sast",
+      "path": "agents/engineering/review/semgrep-sast.md",
+      "name": "semgrep-sast",
+      "description": "Use this agent when you need deterministic static analysis security scanning using semgrep. This agent complements security-sentinel by running rule-based pattern matching to catch known vulnerability signatures, hardcoded secrets, insecure function calls, and CWE patterns that LLM-based review may miss. The caller is expected to have bootstrapped semgrep via plugins/soleur/skills/review/scripts/ensure-semgrep.sh before spawning this agent.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:test-design-reviewer",
+      "path": "agents/engineering/review/test-design-reviewer.md",
+      "name": "test-design-reviewer",
+      "description": "Use this agent when you need to evaluate test quality using Dave Farley's 8 properties of good tests. It produces a weighted Test Quality Score (1-10 per property) with letter grades and prioritized improvement recommendations.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:review:user-impact-reviewer",
+      "path": "agents/engineering/review/user-impact-reviewer.md",
+      "name": "user-impact-reviewer",
+      "description": "Use when a plan declares Brand-survival threshold as `single-user incident`. Enumerates user-facing failure modes against the plan's `## User-Brand Impact` section; rejects generic boilerplate. Use security-sentinel for OWASP/CWE scanning.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:engineering:workflow:pr-comment-resolver",
+      "path": "agents/engineering/workflow/pr-comment-resolver.md",
+      "name": "pr-comment-resolver",
+      "description": "Use this agent when you need to address comments on pull requests or code reviews by making the requested changes and reporting back on the resolution.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:finance:budget-analyst",
+      "path": "agents/finance/budget-analyst.md",
+      "name": "budget-analyst",
+      "description": "Use this agent when you need to create budget plans, analyze spending allocation, model burn rate scenarios, or review budget-to-actual variance. Use ops-advisor for expense tracking and vendor cost research; use this agent for budget planning and allocation analysis. Use cfo for cross-cutting financial strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:finance:cfo",
+      "path": "agents/finance/cfo.md",
+      "name": "cfo",
+      "description": "Orchestrates the finance domain -- assesses financial posture, recommends budgeting and reporting actions, and delegates to finance specialist agents. Use individual finance agents for focused tasks; use this agent for cross-cutting financial strategy and multi-agent coordination.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:finance:financial-reporter",
+      "path": "agents/finance/financial-reporter.md",
+      "name": "financial-reporter",
+      "description": "Use this agent when you need to generate financial summaries, cash flow statements, periodic financial reports, or investor-ready financial overviews. Use budget-analyst for budget planning; use revenue-analyst for forecasting; use this agent for synthesizing financial data into reports. Use cfo for cross-cutting financial strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:finance:revenue-analyst",
+      "path": "agents/finance/revenue-analyst.md",
+      "name": "revenue-analyst",
+      "description": "Use this agent when you need to track revenue, build financial forecasts, model P&L projections, or analyze revenue trends. Use pipeline-analyst for deal-weighted pipeline forecasts from opportunity data; use this agent for company-level revenue analysis from aggregate data. Use cfo for cross-cutting financial strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:legal:clo",
+      "path": "agents/legal/clo.md",
+      "name": "clo",
+      "description": "Orchestrates the legal domain -- assesses legal document posture, recommends actions, and delegates to legal specialist agents. Use individual legal agents for focused tasks; use this agent for cross-cutting legal strategy and multi-agent coordination.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:legal:legal-compliance-auditor",
+      "path": "agents/legal/legal-compliance-auditor.md",
+      "name": "legal-compliance-auditor",
+      "description": "Use this agent when you need to audit existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. Use legal-document-generator to create new documents; use this agent to audit existing ones; use clo for cross-cutting legal strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:legal:legal-document-generator",
+      "path": "agents/legal/legal-document-generator.md",
+      "name": "legal-document-generator",
+      "description": "Use this agent when you need to generate draft legal documents for a project or company. All output is clearly marked as a draft requiring professional legal review. Use legal-compliance-auditor to audit existing documents; use this agent to generate new ones; use clo for cross-cutting legal strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:analytics-analyst",
+      "path": "agents/marketing/analytics-analyst.md",
+      "name": "analytics-analyst",
+      "description": "Designs analytics tracking implementations, event taxonomies, A/B test plans with statistical rigor, and attribution models for marketing measurement. Use pipeline-analyst for post-MQL sales pipeline metrics; use this agent for marketing analytics.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:brand-architect",
+      "path": "agents/marketing/brand-architect.md",
+      "name": "brand-architect",
+      "description": "Use this agent when you need to define or refine a brand identity. It guides an interactive workshop covering company identity, positioning, voice and tone, visual direction, and channel-specific guidelines. Outputs a structured brand guide document to knowledge-base/marketing/brand-guide.md.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:cmo",
+      "path": "agents/marketing/cmo.md",
+      "name": "cmo",
+      "description": "Orchestrates the marketing domain -- assesses marketing posture, creates unified strategy, and delegates to specialist agents (brand, SEO, content, conversion-optimizer, paid, pricing, retention). Use individual marketing agents for focused tasks; use this agent for cross-cutting marketing strategy and multi-agent coordination.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:conversion-optimizer",
+      "path": "agents/marketing/conversion-optimizer.md",
+      "name": "conversion-optimizer",
+      "description": "Analyzes and optimizes conversion surfaces -- landing pages, signup flows, onboarding sequences, forms, popups, and paywall/upgrade screens. Use outbound-strategist for human-assisted outbound motions; use cmo for overall strategy; use this agent for product-led conversion surface optimization.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:copywriter",
+      "path": "agents/marketing/copywriter.md",
+      "name": "copywriter",
+      "description": "Writes and edits marketing copy -- landing pages, email sequences, cold outreach, social content, and copy editing. Use the content-writer skill for blog articles; use outbound-strategist for cadence strategy and audience targeting; use fact-checker for citation verification; use this agent for landing pages, emails, and short-form copy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:fact-checker",
+      "path": "agents/marketing/fact-checker.md",
+      "name": "fact-checker",
+      "description": "Verifies factual claims, statistics, and attributed quotes in drafts by fetching cited URLs and confirming source support. Use copywriter for marketing copy; use content-writer for blog articles; use this agent for citation verification.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:growth-strategist",
+      "path": "agents/marketing/growth-strategist.md",
+      "name": "growth-strategist",
+      "description": "Use this agent when you need content strategy analysis including keyword research, content auditing for search intent alignment, content gap analysis, and GEO/AEO auditing at the content level. Use seo-aeo-analyst for technical SEO audits; use competitive-intelligence for strategic competitor monitoring; use fact-checker for citation verification; use this agent for content strategy and keyword research.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:paid-media-strategist",
+      "path": "agents/marketing/paid-media-strategist.md",
+      "name": "paid-media-strategist",
+      "description": "Builds paid advertising campaigns across Google, Meta, and LinkedIn -- defines campaign structure, audience targeting, budget allocation, and ad creative variations.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:pricing-strategist",
+      "path": "agents/marketing/pricing-strategist.md",
+      "name": "pricing-strategist",
+      "description": "Designs and analyzes SaaS pricing strategy -- pricing research methods, tier design, value metric selection, and competitive pricing analysis. Use deal-architect for deal-level negotiation and proposals; use revenue-analyst for company-level revenue tracking and P&L modeling; use this agent for product pricing strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:programmatic-seo-specialist",
+      "path": "agents/marketing/programmatic-seo-specialist.md",
+      "name": "programmatic-seo-specialist",
+      "description": "Creates programmatic SEO strategies -- template design, data schemas, and page generation plans for comparison pages, alternatives pages, and other scalable content patterns. Use seo-aeo-analyst for technical SEO audits; use growth-strategist for keyword research; use this agent for template-driven page generation at scale.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:retention-strategist",
+      "path": "agents/marketing/retention-strategist.md",
+      "name": "retention-strategist",
+      "description": "Designs churn prevention flows, payment recovery sequences, referral programs, and free tool strategies for customer retention and growth loops. Use pipeline-analyst for deal-level expansion metrics; use cmo for overall strategy; use this agent for systematic retention programs.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:marketing:seo-aeo-analyst",
+      "path": "agents/marketing/seo-aeo-analyst.md",
+      "name": "seo-aeo-analyst",
+      "description": "Use this agent when you need to analyze Eleventy documentation sites for SEO and AEO (AI Engine Optimization) opportunities. Use growth-strategist for content strategy and keyword research; use programmatic-seo-specialist for scalable page generation; use this agent for technical SEO audits.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:operations:coo",
+      "path": "agents/operations/coo.md",
+      "name": "coo",
+      "description": "Orchestrates the operations domain -- assesses operational posture, recommends actions, and delegates to specialist agents (ops-advisor, ops-research, ops-provisioner). Use individual operations agents for focused tasks; use this agent for cross-cutting operations strategy and multi-agent coordination. Use cfo for financial analysis and budgeting.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:operations:ops-advisor",
+      "path": "agents/operations/ops-advisor.md",
+      "name": "ops-advisor",
+      "description": "Use this agent when you need to track operational expenses, manage domain registrations, or get hosting recommendations. Use ops-research for live research and provider comparison; use ops-provisioner for account setup; use cfo for financial analysis and budgeting; use this agent for reading and updating the expense ledger.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:operations:ops-provisioner",
+      "path": "agents/operations/ops-provisioner.md",
+      "name": "ops-provisioner",
+      "description": "Use this agent when you need to set up a new SaaS tool account via browser. Use service-automator for API/MCP-driven provisioning; use ops-research for evaluating alternatives; use ops-advisor for the expense ledger; use coo for cross-cutting operations strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:operations:ops-research",
+      "path": "agents/operations/ops-research.md",
+      "name": "ops-research",
+      "description": "Use this agent when you need to research domains, hosting providers, tools, or find cost optimization opportunities. Use ops-advisor for the expense ledger; use ops-provisioner for account setup; use coo for cross-cutting operations strategy; use this agent for live research and price comparison.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:operations:service-automator",
+      "path": "agents/operations/service-automator.md",
+      "name": "service-automator",
+      "description": "Use this agent when you need to provision third-party services via API or MCP tools. Use ops-provisioner for browser-based SaaS setup.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:product:business-validator",
+      "path": "agents/product/business-validator.md",
+      "name": "business-validator",
+      "description": "Use this agent when you need to validate a business idea through structured market research, competitive analysis, and business model assessment. Use competitive-intelligence for ongoing competitor monitoring; use spec-flow-analyzer for spec gap analysis; use cpo for cross-cutting product strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:product:competitive-intelligence",
+      "path": "agents/product/competitive-intelligence.md",
+      "name": "competitive-intelligence",
+      "description": "Use this agent when you need recurring competitive landscape monitoring and market research reports. After producing the base report, it cascades to 4 specialist agents (growth-strategist, pricing-strategist, deal-architect, programmatic-seo-specialist) to refresh downstream artifacts. Use business-validator for one-time idea validation; use this agent for ongoing competitor tracking.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:product:cpo",
+      "path": "agents/product/cpo.md",
+      "name": "cpo",
+      "description": "Orchestrates the product domain -- assesses product strategy, validates business models, and delegates to specialist agents (spec-flow-analyzer, ux-design-lead, business-validator, competitive-intelligence). Use individual product agents for focused tasks; use this agent for cross-cutting product strategy and multi-agent coordination.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:product:design:ux-design-lead",
+      "path": "agents/product/design/ux-design-lead.md",
+      "name": "ux-design-lead",
+      "description": "Use this agent when you need to create visual designs in .pen files using Pencil MCP tools. Handles wireframes, high-fidelity screens, and component design. Use business-validator for pre-build idea validation; use cpo for cross-cutting product strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:product:spec-flow-analyzer",
+      "path": "agents/product/spec-flow-analyzer.md",
+      "name": "spec-flow-analyzer",
+      "description": "Use this agent when you have a specification, plan, feature description, or technical document that needs user flow analysis and gap identification. Use business-validator for pre-build idea validation; use cpo for cross-cutting product strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:sales:cro",
+      "path": "agents/sales/cro.md",
+      "name": "cro",
+      "description": "Orchestrates the sales domain -- assesses revenue posture, recommends pipeline actions, and delegates to sales specialist agents. Use individual sales agents for focused tasks; use this agent for cross-cutting sales strategy and multi-agent coordination. Use cfo for company-level financial analysis and budgeting.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:sales:deal-architect",
+      "path": "agents/sales/deal-architect.md",
+      "name": "deal-architect",
+      "description": "Use this agent when you need to create proposals, SOWs, competitive battlecards, objection-handling playbooks, or deal negotiation frameworks. Use pricing-strategist for product pricing and tier design; use this agent for deal-level negotiation and sales collateral. Use cro for cross-cutting sales strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:sales:outbound-strategist",
+      "path": "agents/sales/outbound-strategist.md",
+      "name": "outbound-strategist",
+      "description": "Use this agent when you need to design outbound prospecting sequences, ICP targeting, lead scoring models, or multi-channel cadence strategies. Use copywriter for email copy and creative; use this agent for cadence strategy and audience targeting. Use cro for cross-cutting sales strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:sales:pipeline-analyst",
+      "path": "agents/sales/pipeline-analyst.md",
+      "name": "pipeline-analyst",
+      "description": "Use this agent when you need to analyze sales pipeline health, model revenue forecasts, define pipeline stage criteria, or review deal velocity metrics. Use analytics-analyst for marketing attribution and A/B testing; use this agent for post-MQL sales pipeline metrics. Use cro for cross-cutting sales strategy.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:support:cco",
+      "path": "agents/support/cco.md",
+      "name": "cco",
+      "description": "Orchestrates the support domain -- assesses support posture, recommends actions, and delegates to support specialist agents. Use individual support agents for focused tasks; use this agent for cross-cutting support strategy and multi-agent coordination.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:support:community-manager",
+      "path": "agents/support/community-manager.md",
+      "name": "community-manager",
+      "description": "Use this agent when you need to analyze community engagement, generate digests, or assess health metrics. Reads Discord, GitHub, X/Twitter, Bluesky, LinkedIn, and Hacker News data to produce community reports. Use social-distribute for broadcasting; use this agent for monitoring.",
+      "model": "inherit"
+    },
+    {
+      "id": "soleur:support:ticket-triage",
+      "path": "agents/support/ticket-triage.md",
+      "name": "ticket-triage",
+      "description": "Classifies and routes GitHub issues by severity and domain. Assigns priority (P1/P2/P3) and routes to the correct domain via gh CLI. Use the triage skill for triaging internal code review findings into the CLI todo system. For automated daily triage via GitHub Actions, see scheduled-daily-triage.yml.",
+      "model": "inherit"
+    }
+  ]
+}

@@ -21,6 +21,10 @@ paths = ["./plugins/soleur"]
 # Make sure the soleur plugin is active in this project.
 enabled = ["soleur"]
 
+# Agent discoverability (Phase E #6324): compat stubs are generated under
+# .grok/agents/ by plugins/soleur/scripts/sync-grok-agent-compat.ts.
+# Canonical agent sources remain in plugins/soleur/agents/**.
+
 # Claude-compat hooks, permissions, MCP servers, and project rules load by
 # default from .claude/settings*.json, CLAUDE.md, and AGENTS.md — no project
 # [compat.*] stanza is required.
