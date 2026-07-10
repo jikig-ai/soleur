@@ -35,6 +35,8 @@ import {
   appendInitiatorMarker,
   computeStatusLabels,
   githubIssueToWorkstreamIssue,
+  parseInitiatorLogin,
+  STATUS_LABELS,
   STATUS_WRITE_LABEL,
   type BoardIssueInput,
   type WorkstreamIssue,
@@ -81,6 +83,7 @@ interface GhIssuePayload {
   body: string | null;
   labels: Array<string | { name?: string | null }>;
   assignees: Array<{ login: string }>;
+  milestone: { number: number; title: string } | null;
   state: string;
   state_reason: string | null;
   user: { login: string } | null;
@@ -205,6 +208,9 @@ function toCanonical(raw: GhIssuePayload, botSlug: string | null): WorkstreamIss
     state: raw.state === "closed" ? "closed" : "open",
     state_reason: raw.state_reason ?? null,
     authorLogin: raw.user?.login ?? null,
+    milestone: raw.milestone
+      ? { number: raw.milestone.number, title: raw.milestone.title }
+      : null,
     created_at: raw.created_at,
     updated_at: raw.updated_at,
   };
@@ -266,6 +272,114 @@ export async function updateWorkstreamIssueTitle(
   });
   logWrite("update_title", issueNumber);
   return toCanonical(res.data, botSlug);
+}
+
+/** The editable non-status/non-title fields (edit-fields). Only PROVIDED keys
+ *  are written; `milestone: null` clears it; empty-body IS allowed (unlike
+ *  title). Labels edits the NON-status set only (status stays owned by the
+ *  status control — constraint #3). */
+export interface UpdateFieldsInput {
+  body?: string;
+  assignees?: string[];
+  /** GitHub milestone NUMBER, or null to clear. */
+  milestone?: number | null;
+  /** The desired NON-status labels; status labels are preserved server-side. */
+  labels?: string[];
+}
+
+/**
+ * Edit body / assignees / milestone / non-status labels in one accessor
+ * (edit-fields). body/assignees/milestone fold into ONE `issues.update` call;
+ * `labels` is a separate atomic `setLabels` PUT that PRESERVES the current
+ * status labels (so a labels edit can never change the column — the inverse of
+ * computeStatusLabels). A body edit re-stamps the ORIGINAL initiator marker
+ * recovered from the current GitHub body (ADR-104 attribution survives; any
+ * user-supplied marker is stripped — anti-spoof). Returns the canonical
+ * re-derived issue. Throws like the sibling writers (typed / octokit `.status`).
+ */
+export async function updateWorkstreamIssueFields(
+  userId: string,
+  issueNumber: number,
+  input: UpdateFieldsInput,
+): Promise<WorkstreamIssue> {
+  const { owner, repo, octokit, botSlug } = await resolveContext(userId);
+
+  // A body edit needs the current body (initiator recovery); a labels edit needs
+  // the current labels (status-label preservation). One GET covers both.
+  const needsCurrent = input.body !== undefined || input.labels !== undefined;
+  let current: GhIssuePayload | null = null;
+  if (needsCurrent) {
+    const cur = await octokit.rest.issues.get({
+      owner,
+      repo,
+      issue_number: issueNumber,
+    });
+    current = cur.data;
+  }
+
+  // body / assignees / milestone → ONE update() (only provided keys).
+  const updatePayload: Record<string, unknown> = {
+    owner,
+    repo,
+    issue_number: issueNumber,
+  };
+  let hasUpdate = false;
+  if (input.body !== undefined) {
+    const initiator = parseInitiatorLogin(current?.body ?? null);
+    updatePayload.body = appendInitiatorMarker(input.body, initiator);
+    hasUpdate = true;
+  }
+  if (input.assignees !== undefined) {
+    updatePayload.assignees = input.assignees;
+    hasUpdate = true;
+  }
+  if (input.milestone !== undefined) {
+    updatePayload.milestone = input.milestone; // number | null (null clears)
+    hasUpdate = true;
+  }
+
+  let raw: GhIssuePayload | null = null;
+  if (hasUpdate) {
+    const res = await octokit.rest.issues.update(updatePayload);
+    raw = res.data;
+  }
+
+  // labels → atomic setLabels PUT: KEEP every current status label, replace the
+  // non-status set with the user's selection (any status label the user smuggles
+  // in is dropped — they cannot change the column here, constraint #3).
+  if (input.labels !== undefined) {
+    const statusSet = new Set<string>(STATUS_LABELS);
+    const preservedStatus = labelNames(current?.labels ?? []).filter((l) =>
+      statusSet.has(l),
+    );
+    const selectedNonStatus = input.labels.filter((l) => !statusSet.has(l));
+    const nextLabels = [...new Set([...preservedStatus, ...selectedNonStatus])];
+    await octokit.rest.issues.setLabels({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      labels: nextLabels,
+    });
+    const base = raw ?? current;
+    raw = base ? { ...base, labels: nextLabels } : raw;
+  }
+
+  // Nothing provided (route guards this) → return the canonical current issue.
+  if (!raw) {
+    const cur =
+      current ??
+      (
+        await octokit.rest.issues.get({
+          owner,
+          repo,
+          issue_number: issueNumber,
+        })
+      ).data;
+    raw = cur;
+  }
+
+  logWrite("update_fields", issueNumber);
+  return toCanonical(raw, botSlug);
 }
 
 /**
