@@ -11,6 +11,7 @@ import { SupportMessage } from "./support-message";
 import {
   SUPPORT_GREETING,
   SUPPORT_PREVIEW_NOTE,
+  SUPPORT_LIVE_NOTE,
   SUPPORT_STARTER_CHIPS,
 } from "./support-persona";
 import type { SupportMessage as SupportMessageType } from "./use-support-chat";
@@ -18,9 +19,11 @@ import type { SupportMessage as SupportMessageType } from "./use-support-chat";
 export function SupportConversation({
   messages,
   onChipSelect,
+  live = false,
 }: {
   messages: SupportMessageType[];
   onChipSelect: (label: string, chipKey: string) => void;
+  live?: boolean;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const hasConversation = messages.length > 0;
@@ -40,7 +43,7 @@ export function SupportConversation({
             </p>
           </div>
           <p className="rounded-lg border border-amber-700/40 bg-soleur-bg-accent-surface px-3 py-2 text-xs text-amber-500">
-            {SUPPORT_PREVIEW_NOTE}
+            {live ? SUPPORT_LIVE_NOTE : SUPPORT_PREVIEW_NOTE}
           </p>
           <div className="flex flex-col gap-2">
             {SUPPORT_STARTER_CHIPS.map((chip) => (
@@ -61,7 +64,7 @@ export function SupportConversation({
           populated stays silent on its initial content. */}
       <div className="flex flex-col gap-4" aria-live="polite">
         {messages.map((message) => (
-          <SupportMessage key={message.id} message={message} />
+          <SupportMessage key={message.id} message={message} live={live} />
         ))}
         <div ref={bottomRef} />
       </div>

@@ -8,7 +8,11 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { SupportComposer } from "./support-composer";
 import { SupportConversation } from "./support-conversation";
-import { SUPPORT_NAME, SUPPORT_PANEL_SUBTITLE } from "./support-persona";
+import {
+  SUPPORT_NAME,
+  SUPPORT_PANEL_SUBTITLE,
+  SUPPORT_PANEL_SUBTITLE_LIVE,
+} from "./support-persona";
 import type { SupportMessage } from "./use-support-chat";
 
 export function SupportPanel({
@@ -17,6 +21,7 @@ export function SupportPanel({
   messages,
   onSend,
   onStartTour,
+  live = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -24,6 +29,8 @@ export function SupportPanel({
   onSend: (text: string, chipKey?: string) => void;
   /** feat-guided-tour: present only when the guided-tour flag is on. */
   onStartTour?: () => void;
+  /** ADR-109 — true when the live Concierge backend is enabled (support-live). */
+  live?: boolean;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
@@ -125,7 +132,7 @@ export function SupportPanel({
               {SUPPORT_NAME}
             </h2>
             <p className="text-xs text-soleur-text-muted">
-              {SUPPORT_PANEL_SUBTITLE}
+              {live ? SUPPORT_PANEL_SUBTITLE_LIVE : SUPPORT_PANEL_SUBTITLE}
             </p>
           </div>
           <button
@@ -182,10 +189,11 @@ export function SupportPanel({
           <SupportConversation
             messages={messages}
             onChipSelect={(label, chipKey) => onSend(label, chipKey)}
+            live={live}
           />
         </div>
 
-        <SupportComposer onSend={(text) => onSend(text)} />
+        <SupportComposer onSend={(text) => onSend(text)} live={live} />
       </div>
     </div>
   );

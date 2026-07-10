@@ -16,6 +16,17 @@ export const SUPPORT_COMPOSER_FOOTNOTE = "Responses are previews for now.";
 
 export const SUPPORT_PANEL_SUBTITLE = "Preview · live chat coming soon";
 
+// feat-wire-concierge-support-chat (ADR-109) — LIVE copy, shown when the
+// `support-live` flag is ON (the real Concierge backend answers). The persistent
+// "AI-generated, may be wrong" disclosure is retained so the honest framing
+// survives the flip (never silently dropped).
+export const SUPPORT_LIVE_NOTE =
+  "I'm an AI assistant — I can help you find your way around Soleur. I may not be perfect; for anything I can't answer, browse your knowledge base.";
+
+export const SUPPORT_COMPOSER_FOOTNOTE_LIVE = "Answers are AI-generated.";
+
+export const SUPPORT_PANEL_SUBTITLE_LIVE = "AI app help · always on";
+
 // Where a stuck user can actually get help today (the escape hatch baked into
 // every canned reply). Keep relative so it works in dev and prd.
 export const SUPPORT_KB_HREF = "/dashboard/kb";

@@ -56,6 +56,9 @@ describe("support live path (support-live ON)", () => {
     render(<SupportLauncher />);
     fireEvent.click(screen.getByLabelText("Open support"));
     const dialog = screen.getByRole("dialog");
+    // Live copy (Phase 6): the panel shows the live subtitle, not the preview one.
+    expect(within(dialog).getByText(/always on/i)).toBeTruthy();
+    expect(within(dialog).queryByText(/coming soon/i)).toBeNull();
     const textarea = within(dialog).getByPlaceholderText("Ask a question…");
     fireEvent.change(textarea, { target: { value: "how do I create a routine?" } });
     fireEvent.click(within(dialog).getByLabelText("Send message"));

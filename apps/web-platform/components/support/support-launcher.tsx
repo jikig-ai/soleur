@@ -68,6 +68,7 @@ export function SupportLauncher() {
         onClose={() => setOpen(false)}
         messages={messages}
         onSend={send}
+        live={Boolean(live)}
         onStartTour={
           tour.available
             ? () => {
