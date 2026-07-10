@@ -14,7 +14,9 @@ tags:
 
 ## Goal
 
-Make Soleur's workflow model pins and research-agent overrides work under **both** Claude Code and Grok Build by resolving semantic tiers (`cheap`, `standard`, `strong`, `inherit`) through a single plugin module.
+Make Soleur's workflow model pins and research-agent overrides work under **both** Claude Code and Grok Build by resolving semantic tiers (`cheap`, `standard`, `strong`, `advisor`, `inherit`) through a single plugin module.
+
+**Tier semantics (corrected):** `strong` → Opus-class judgment (never-downgrade agents, scoring upgrades). `advisor` → Fable-class scoped consult **only** at the two ADR-083 gates (`plan` Step 4.5, `ship` Phase 5.5), with Opus fallback — Fable is not a general-purpose tier.
 
 ## Non-goals
 
@@ -25,7 +27,7 @@ Make Soleur's workflow model pins and research-agent overrides work under **both
 ## User stories
 
 1. **As a Grok contributor**, when I run `/review` or `/drain-labeled-backlog`, mechanical subagent steps use an appropriate cheap Grok model, not a Claude alias that the harness ignores.
-2. **As a Claude contributor**, existing cost tiering behavior is unchanged — `cheap` resolves to `haiku`, `standard` to `sonnet`.
+2. **As a Claude contributor**, existing cost tiering behavior is unchanged — `cheap` → `haiku`, `standard` → `sonnet`, `strong` → `opus`, `advisor` → `fable` (Opus fallback at the two gates only).
 3. **As a maintainer**, when xAI or Anthropic ships a new model generation, I update one tier table row per semantic tier, not 12 workflow files.
 
 ## Implementation plan
@@ -46,7 +48,8 @@ Make Soleur's workflow model pins and research-agent overrides work under **both
 | Pin migration | 8 workflow files, 12 call sites | Per `workflow-model-pins.test.ts` allowlist |
 | Allowlist test update | `workflow-model-pins.test.ts` | Semantic tier names + parity test |
 | Research agents | 5 `engineering/research/*` agents | `haiku` → `cheap` when spawn API supports it |
-| AGENTS.md | Model Selection Policy section | Document semantic tiers; deprecate vendor alias prose |
+| AGENTS.md | Model Selection Policy section | Document semantic tiers; clarify `strong`=Opus vs `advisor`=Fable (ADR-083 only) |
+| plan/ship SKILL.md gates | Step 4.5 / Phase 5.5 spawns | Use `advisor` tier via resolver (not raw `fable`) |
 
 ### PR 3 — Audit extension (optional follow-up)
 
@@ -57,10 +60,12 @@ Make Soleur's workflow model pins and research-agent overrides work under **both
 
 ```typescript
 type Harness = "claude" | "grok" | "unknown";
-type SemanticTier = "cheap" | "standard" | "strong" | "inherit";
+type SemanticTier = "cheap" | "standard" | "strong" | "advisor" | "inherit";
 
 function detectHarness(env: NodeJS.ProcessEnv): Harness;
 function resolveModelTier(tier: SemanticTier, harness: Harness): string;
+/** `resolveAdvisorTier` — fable primary, strong (opus) fallback per ADR-083 */
+function resolveAdvisorTier(harness: Harness): string;
 ```
 
 Detection order (implementation PR validates):
@@ -75,7 +80,8 @@ Detection order (implementation PR validates):
 |---|---|---|
 | cheap | `haiku` | non-empty Grok fast model |
 | standard | `sonnet` | non-empty Grok build model |
-| strong | `fable` | non-empty Grok reasoning model |
+| strong | `opus` | non-empty Grok top reasoning model |
+| advisor | `fable` (fallback `opus`) | advisor model (fallback: `strong` map) |
 | inherit | `inherit` | `inherit` |
 
 ## Risks

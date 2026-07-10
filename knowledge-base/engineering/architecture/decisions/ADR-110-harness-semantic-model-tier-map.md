@@ -19,7 +19,7 @@ ADR-053 deliberately chose harness aliases over concrete IDs for workflow pins (
 
 ## Decision
 
-1. **Introduce four semantic tiers** for plugin spawn sites: `cheap`, `standard`, `strong`, `inherit`. Names describe **cost/role**, not vendor SKUs (ADR-053 mechanical vs judgment split preserved).
+1. **Introduce five semantic tiers** for plugin spawn sites: `cheap`, `standard`, `strong`, `advisor`, `inherit`. Names describe **cost/role**, not vendor SKUs (ADR-053 mechanical vs judgment split preserved). **`advisor` is not a general upgrade tier** — it maps to Fable only at the two ADR-083 gates (`plan` Step 4.5, `ship` Phase 5.5). **`strong` maps to Opus** for judgment-heavy never-downgrade paths (review/security/legal/C-suite agents, `agent-native-audit` scoring upgrade precedent) — distinct from the token-frugal scoped consult.
 
 2. **One resolver module** at `plugins/soleur/lib/harness-model-map.ts` maps semantic tier → harness spawn value. Harness detection is centralized (env markers + config presence); skills and workflows call the resolver — never branch on vendor inline.
 
@@ -33,12 +33,15 @@ ADR-053 deliberately chose harness aliases over concrete IDs for workflow pins (
 
 ### Initial tier map (illustrative — implementation PR validates against live docs)
 
-| Semantic | ADR-053 role | Claude Code | Grok Build |
+| Semantic | ADR-053 / policy role | Claude Code | Grok Build |
 |---|---|---|---|
-| `cheap` | Mechanical fan-out | `haiku` | fast/cheap Grok model (TBD at implementation) |
-| `standard` | Classify, parse, cluster | `sonnet` | `grok-build` or successor (TBD) |
-| `strong` | ADR-083 scoped consult only | `fable` (fallback `opus`) | reasoning-tier model (TBD) |
-| `inherit` | Judgment, operator agency | session model | session model |
+| `cheap` | Mechanical fan-out (workflow pins) | `haiku` | fast/cheap Grok model (TBD) |
+| `standard` | Classify, parse, cluster (workflow pins) | `sonnet` | `grok-build` or successor (TBD) |
+| `strong` | Never-downgrade judgment (review/security/legal/C-suite agents; `agent-native-audit` scoring upgrade) | `opus` | top reasoning model (TBD) |
+| `advisor` | ADR-083 scoped consult **only** — `plan` Step 4.5 + `ship` Phase 5.5; curated payload, not transcript | `fable` (fallback `opus`) | advisor-tier model (TBD; fallback to `strong` map) |
+| `inherit` | Judgment steps + operator session agency | session model | session model |
+
+Workflow pins (`workflow-model-pins.test.ts`) migrate only `cheap` / `standard` — never `strong`, `advisor`, or `inherit` (existing invariant). `advisor` resolves through the resolver at the two SKILL.md gate spawns; `strong` applies where agents or crons explicitly upgrade to Opus-class judgment.
 
 ## Consequences
 
