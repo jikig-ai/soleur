@@ -51,7 +51,10 @@ function SetupKeyForm() {
       // keyless state. Deliberately NOT /connect-repo: repo setup auto-fires a
       // headless sync agent that needs a key, which would orphan a stalled
       // conversation behind a misleading "ready" screen (#4642 review).
-      router.push(redirectTo ?? "/dashboard");
+      // GAP E (ADR-067 staleTimes): terminal entry into /dashboard (or a
+      // safeReturnTo-sanitized invite target) — hard-nav to wipe the Router
+      // Cache. The intermediate hop to /connect-repo below stays a soft push.
+      window.location.assign(redirectTo ?? "/dashboard");
     } catch {
       setStatus("error");
       setErrorMsg("Network error. Please try again.");

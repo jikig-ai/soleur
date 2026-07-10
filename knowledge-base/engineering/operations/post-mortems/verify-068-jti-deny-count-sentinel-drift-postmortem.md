@@ -22,6 +22,13 @@ art_33_deadline: "n/a"
 
 # Incident Overview
 
+> **Now mechanically gated (2026-07-09, #6273).** The prose "bump the sentinel
+> when adding a `*_jti_not_denied` policy" rule is superseded by a PR-time gate:
+> `apps/web-platform/test/supabase-migrations/068-jti-deny-count-sync.test.ts`
+> parses the migration + verify SQL offline and fails PR CI (set-equality, not
+> count-only) the moment a policy is added/dropped without keeping `verify/068`
+> in sync — moving detection from this deploy-time freeze to pre-merge.
+
 `verify/068_jti_deny_rls_predicate_and_revoke_rpc.sql` carries a drift sentinel
 `jti_deny_policies_count_23` asserting exactly 23 RESTRICTIVE `*_jti_not_denied`
 RLS policies. Migration 126 (beta-CRM, #6160) added 3 more such policies

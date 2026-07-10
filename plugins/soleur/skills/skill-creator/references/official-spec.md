@@ -30,7 +30,10 @@ Show concrete examples of using this Skill.
 | `name` | Yes | Skill name using lowercase letters, numbers, and hyphens only (max 64 characters). Should match the directory name. |
 | `description` | Yes | What the Skill does and when to use it (max 1024 characters). Claude uses this to decide when to apply the Skill. |
 | `allowed-tools` | No | Tools Claude can use without asking permission when this Skill is active. Example: `Read, Grep, Glob` |
+| `disallowed-tools` | No | Tools REMOVED from the pool while the skill is active. Restriction clears on the operator's next message (per-turn only). Space/comma-separated string or YAML list. |
 | `model` | No | Specific model to use when this Skill is active (e.g., `claude-sonnet-5`). Defaults to the conversation's model. |
+
+> **Security note (do not claim `allowed-tools` is a sandbox).** `allowed-tools` is **pre-approval only** — the official spec states it "does not restrict which tools are available: every tool remains callable." A skill listing only MCP tools does NOT prevent `Bash`/`Read`/`Write`; it only suppresses the prompt for the listed tools. Never write a plan/ADR/skill that claims "the skill physically cannot read X because X isn't in `allowed-tools`." Durable per-skill tool restriction requires a subagent boundary (`context: fork` + `tools:`) or a committed `.claude/settings.json` `permissions.deny` rule; `disallowed-tools` only covers the intra-turn window. See `knowledge-base/project/learnings/security-issues/2026-07-10-skill-allowed-tools-is-pre-approval-not-a-sandbox.md` (ADR-107 / #6260).
 
 ## Skill Locations & Priority
 

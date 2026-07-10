@@ -148,6 +148,25 @@ resource "sentry_cron_monitor" "scheduled_anthropic_credit_probe" {
   timezone                = "UTC"
 }
 
+# #cost-attribution (plan Phase 3): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-anthropic-cost-report.ts`.
+# Daily 06:17 UTC pull of the Anthropic Admin cost/usage API → the
+# SOLEUR_CLAUDE_COST_DAILY marker. RED on a missed check-in OR a classified
+# 401/403 (bad admin key). A MISSING admin key self-reports GREEN + key-missing
+# marker (benign) — it does NOT flip this monitor red (obs P4). Mirrors the
+# scheduled_domain_model_drift daily cohort (60-min margin, 15-min runtime).
+resource "sentry_cron_monitor" "scheduled_anthropic_cost_report" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-anthropic-cost-report"
+  schedule                = { crontab = "17 6 * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 15
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # scheduled-cf-token-expiry-check: NOT wired this cycle. The workflow's
 # `schedule:` block is currently commented out (manual-dispatch only —
 # waiting on end-to-end validation per its own header). A cron monitor
@@ -918,6 +937,38 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
   project                 = data.sentry_project.web_platform.slug
   name                    = "cron-github-cidr-refresh"
   schedule                = { crontab = "41 6 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# #6291: GHA-fired via .github/workflows/scheduled-zot-restart-loop.yml (on.schedule
+# '*/30 * * * *'). Self-liveness for the standing zot restart-loop recurrence alarm — a MISSED
+# check-in means the alarm went dark (workflow disabled / GHA outage), a ?status=error heartbeat
+# means the run's checker returned TRANSIENT (a persistent Better Stack probe fault). GREEN/FIRE/
+# PRODUCER-SILENT all check in ok:true (they are successful evaluations — a FIRE's surface is the
+# [ci/zot-restart-loop] issue, not this monitor). GHA-fired (NOT Inngest — see the workflow's
+# gate-override header: the alarm is a bash pipeline in I7's uncontained class, and the registry is
+# a separate host so an Inngest cron on the watched fleet would be a dark-alarm risk).
+#
+# checkin_margin_minutes = 30 is PINNED (not a cohort default) to absorb GHA `schedule:` jitter: a
+# tight margin on a jittery GHA cron false-paged scheduled-agent-native-audit on 2026-06-15 (the run
+# succeeded and filed #5318 at 09:09 UTC; only its heartbeat was late). This monitor posts a SINGLE
+# end-of-run heartbeat within ~1-2 min of the checker finishing (a small bash probe, not a claude-eval
+# spawn). margin (30) == the 30-min inter-fire gap BY DESIGN: this MAXIMIZES jitter tolerance (a run
+# up to 30 min late still checks in — no false page), and a genuinely dead alarm (every run skipped)
+# still pages once the margin window closes at the next expected fire (~30-60 min). A SHORTER margin
+# (< interval) would trade this jitter tolerance back for the 2026-06-15 false-page class — the wrong
+# trade for a trust-critical standing alarm. max_runtime_minutes = 10 mirrors the
+# GHA-fired small-cron cohort (scheduled_realtime_probe). Slug MUST match MONITOR_SLUG in the
+# workflow's sentry-heartbeat step (scheduled-zot-restart-loop).
+resource "sentry_cron_monitor" "zot_restart_loop_alarm" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-zot-restart-loop"
+  schedule                = { crontab = "*/30 * * * *" }
   checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
   failure_issue_threshold = 1

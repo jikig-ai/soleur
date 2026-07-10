@@ -90,8 +90,46 @@ assert ".resize-result is persisted for the reporter" \
 
 echo "--- structural: SOLEUR_ZOT_DISK self-report (#6244) ---"
 assert "SOLEUR_ZOT_DISK marker line emitted" "grep -qF 'SOLEUR_ZOT_DISK pcent=' '$CI'"
-for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc=; do
-  assert "SOLEUR_ZOT_DISK carries field ${f}" "grep -qF 'LINE=\"SOLEUR_ZOT_DISK' '$CI' && grep -qF '${f}' '$CI'"
+# Tie each field to the LINE="SOLEUR_ZOT_DISK assignment ITSELF, not anywhere-in-file (Kieran P2:
+# the old anywhere grep false-passes a field named only in a comment). LINE= is one physical line.
+LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI" | head -1)"
+assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
+for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
+         mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
+         oom_kills_5m= zot_last_err= boot_id=; do
+  assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
+done
+
+# The container fields are positionally coupled: `read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED
+# EXIT_CODE` must match the `docker inspect -f` template column order, else oom_killed/exit_code
+# transpose silently (values still look plausible in telemetry). Pin the exact 5-field template.
+assert "docker inspect -f template order matches the read target order" \
+  "grep -qF \"docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}}' zot\" '$CI'"
+assert "read targets are in the same order as the inspect template" \
+  "grep -qF 'read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE' '$CI'"
+
+# The 7168m cgroup cap is replicated (cloud-init source of truth + probe default + docs). Pin the
+# source-of-truth literal so any cap change is a conscious edit that also updates the probe/docs.
+assert "zot container --memory cap is the ZOT_MEMORY_CAP:-7168m env-overridable const" \
+  "grep -qF 'ZOT_MEMORY_CAP:-7168m' '$CI'"
+# NB: leading '--' anchor dropped so grep/ugrep doesn't parse it as an option.
+assert "docker run carries --memory + --memory-swap == the cap (deterministic cgroup-OOM)" \
+  "grep -qF 'memory \"\$ZOT_MEMORY_CAP\" --memory-swap \"\$ZOT_MEMORY_CAP\"' '$CI'"
+
+echo "--- structural: #6288 new-field brace-escaping (no single-brace templatefile leak) ---"
+# AC7: every NEW shell var must be $$-escaped wherever it is brace-formed — a single-brace ${VAR}
+# is consumed by templatefile() as a TF-var interpolation and fails `terraform plan`. Scope to the
+# NEW var names ONLY (NOT a blanket ${...} grep — the reporter legitimately carries the
+# ${disk_heartbeat_url}/${betterstack_ingest_url}/${zot_pull_user} TF interpolations). Fixed-string
+# counting (no fragile PCRE lookbehind): every "${VAR" substring must be covered by a "$${VAR"
+# double-escape, so count("${VAR") must equal count("$${VAR"). A bare single-brace usage lifts the
+# single count above the double count → FAIL. Non-brace usages ($VAR) contribute 0 to both.
+for v in MEM_TOTAL_KB MEM_TOTAL INSPECT ID STATE_STATUS OOM_KILLED \
+         EXIT_CODE CGROUP_ROOT ZOT_ANON_MB ZOT_OOM_KILLS OOM_KILLS_5M ZOT_LAST_ERR BOOT_ID ZOT_MEMORY_CAP; do
+  n_single=$(grep -oF "\${$v" "$CI" | wc -l | tr -d ' ')
+  n_double=$(grep -oF "\$\${$v" "$CI" | wc -l | tr -d ' ')
+  assert "new var \$$v is \$\$-escaped wherever brace-formed (single=$n_single double=$n_double)" \
+    "[ '$n_single' = '$n_double' ]"
 done
 assert "ships via Better Stack Logs Authorization: Bearer token" \
   "grep -qF 'Authorization: Bearer \$TOKEN' '$CI'"
@@ -99,11 +137,25 @@ assert "cron wraps the reporter in doppler run (isolated soleur-registry/prd)" \
   "grep -qF 'doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-disk-heartbeat.sh' '$CI'"
 assert "absence-based <85% liveness ping retained" "grep -qE '\"\\\$USE\" -lt 85' '$CI'"
 
-echo "--- structural: gc/retention tightening (#6240 defense-in-depth) ---"
+echo "--- structural: gc/retention TIMING preserved (#6240 defense-in-depth) ---"
 assert "gcInterval tightened to 1h" "grep -qF '\"gcInterval\": \"1h\"' '$CI'"
 assert "gcInterval no longer 24h" "! grep -qF '\"gcInterval\": \"24h\"' '$CI'"
 assert "retention.delay tightened to 2h" "grep -qF '\"delay\": \"2h\"' '$CI'"
-assert "cosign referrer keep-set (sha256-.*) UNCHANGED" "grep -qF 'sha256-.*' '$CI'"
+assert "gcDelay dangling-blob safety window preserved at 1h" "grep -qF '\"gcDelay\": \"1h\"' '$CI'"
+assert "deleteReferrers stays false (tag-based sigs, not Subject referrers)" "grep -qF '\"deleteReferrers\": false' '$CI'"
+
+echo "--- structural: capacity-vs-retention keep-set (#6247) ---"
+# Anchor on the keepTags JSON fragments, NOT comment prose (the narrative block also names
+# sha256-* / 5 / 50). The invariant under test: the previously-UNBOUNDED sha256-.* keep is now
+# BOUNDED, and v*/commit-sha counts are lowered 10->5.
+assert "sha256-.* cosign referrer keep-set now BOUNDED (was unbounded 'keep forever')" \
+  "grep -qF '\"patterns\": [\"sha256-.*\"], \"mostRecentlyPushedCount\": 50' '$CI'"
+assert "v* tag keep-set lowered to 5" \
+  "grep -qF '\"patterns\": [\"v.*\"], \"mostRecentlyPushedCount\": 5' '$CI'"
+assert "commit-sha tag keep-set lowered to 5" \
+  "grep -qF '\"patterns\": [\"[0-9a-f]{7,64}\"], \"mostRecentlyPushedCount\": 5' '$CI'"
+assert "no keepTags count left at the old value 10" \
+  "! grep -qE '\"mostRecentlyPushedCount\": 10\\b' '$CI'"
 
 echo ""
 echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="

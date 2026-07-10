@@ -105,7 +105,8 @@ The external watchdog (`.github/workflows/scheduled-inngest-health.yml`) runs a
 pool-utilization probe every 15 min: it reads `pg_stat_activity` on the dedicated
 inngest Supabase project (ref `pigsfuxruiopinouvjwy`) via the Management API and
 files a `[ci/inngest-pool]` issue + Sentry `error` when **inngest-attributable**
-client connections cross ~80% of inngest's CLIENT cap (10, `--postgres-max-open-conns`)
+client connections cross ~80% of inngest's worst-case TOTAL footprint
+(`INNGEST_CLIENT_CAP` = P × per-pool cap 5 ≤ 20; #6258, ADR-105)
 — `pool_pressure`, the leading indicator — or `EMAXCONNSESSION` fires (`pool_exhausted`,
 the cliff). It counts ONLY inngest's own connections (role `postgres`, minus the
 pooler's Supavisor warm connections + the probe), NOT total `pg_stat_activity` (which
@@ -130,8 +131,40 @@ inngest-server for a `[ci/inngest-pool]` alert.** Triage (no-SSH first):
      -H "Authorization: Bearer $SUPA" -H 'Content-Type: application/json' \
      -d '{"query":"select pg_terminate_backend(pid) from pg_stat_activity where state = '\''idle'\'' and state_change < now() - interval '\''10 minutes'\''"}'
    ```
-   The durable fix is already live: inngest-server runs `--postgres-max-open-conns 10` (#5559, `inngest-bootstrap.sh:354`). The probe's leading indicator tracks THIS client cap (`INNGEST_CLIENT_CAP=10` in the workflow), not the pooler `default_pool_size` — so a `pool_pressure` alert means inngest's OWN connections approach 10 (a stuck/looping function holding pooled connections), independent of the separate #5562 `default_pool_size` 30→15 revert (see `apps/web-platform/infra/inngest.tf`).
+   The durable fix (#6258, ADR-105): inngest-server runs `--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1` (idle-time in MINUTES). `--postgres-max-open-conns` is PER-POOL, not total — inngest opens ~P separate Postgres pools (queue/state/history/api), so worst-case total = P × 5 ≤ 20; the idle-conns cap + 1-min idle drain release pinned Supavisor sessions so cutover-probe scans cannot ratchet the pool. The probe's leading indicator tracks this worst-case total (`INNGEST_CLIENT_CAP=20` in the workflow), not the pooler `default_pool_size` — so a `pool_pressure` alert means inngest's OWN connections approach the total ceiling (a stuck/looping function holding pooled connections, or more pools than expected). `default_pool_size` stays 30 — the #5562 30→15 revert is SUPERSEDED (its premise was falsified by the per-pool model; a 15-slot upstream would worsen exhaustion; see `apps/web-platform/infra/inngest.tf` + `decision-challenges.md`).
 4. **`pool_probe_unavailable`** (401/403/non-JSON) is a *soft* mode — the probe itself is degraded, not the pool. Check the printed response body in the run log; a Supabase Management-API 401 is often a validation/scope signal, not pure auth (verify the PAT in Doppler `prd` and the `SUPABASE_ACCESS_TOKEN` GH secret).
+
+### Cutover pre-flight-hang triage (`op=inventory` / `op=verify` `HTTP 000`) — #6258, ADR-106
+
+An `op=inventory` / `op=verify` hook that returns **`HTTP 000` (empty body)** is a pre-flight scan
+that ran past its budget — a distinct failure from the `[ci/inngest-pool]` `EMAXCONNSESSION` (500)
+two-writer topology above. Since ADR-106 the scans are bounded (wall-clock deadline + page ceiling)
+and **abandon-safe** (on timeout they emit a LOUD marker and `exit 1`, releasing the pool instead of
+orphaning the scan). Triage off-box (no SSH):
+
+1. **Query the in-surface marker** (the pre-flight path is now observable):
+   ```
+   scripts/betterstack-query.sh --grep 'SOLEUR_INNGEST_PREFLIGHT' --since 1h
+   ```
+   Read the discriminator fields on the `START` / `TIMEOUT` line for the run:
+   - **No `SOLEUR_INNGEST_PREFLIGHT_START` for the run** → transport/host-down (the hook never
+     executed) — check the Cloudflare tunnel + `webhook.service`, not the scan.
+   - `TIMEOUT reason=deadline` with a progressing `pages=N`, `last_curl_exit=0` → a legitimately
+     slow scan hit the wall-clock budget. Raise `PREFLIGHT_DEADLINE_S` (and the outer curl
+     `--max-time`, keeping the sum bound) or the `INNGEST_MAX_PAGES` ceiling; do NOT narrow the window.
+   - `TIMEOUT` with `last_curl_exit=28` / `pages_timed_out>0` → a **pool-pressure STALL** (the
+     `HTTP 000` shape), NOT a slow scan — triage as `[ci/inngest-pool]` above (the durable fix is
+     #6178, gated by #6230). `reason=gql_error` with `last_curl_exit=28` is the same stall surfacing
+     via the `.data` guard.
+2. **A fast LOUD error ≠ a hang.** Since ADR-106 the correct behaviour on an over-budget scan is a
+   quick `exit 1` → webhook **non-200** with a `SOLEUR_*_TIMEOUT` cause in the run log's `::error::`.
+   That is the fix working (it releases the pool), not a regression — re-run; the bounded transport
+   retry (2 attempts) absorbs a transient two-writer 500.
+3. **`op=verify` verdict ≠ transport-200.** A green op=verify sub-probe **transport** (no 000/500 on
+   registry-probe / doublefire) is the ADR-106 success signal. The op=verify **JOB** still
+   legitimately halts at its `registry_empty` precondition on the dark pre-cutover host
+   (`cutover-inngest.yml:628-631`) — that is a verdict, not a transport hang, and a green op=verify
+   job is a post-#6178 concern. Do NOT read a `registry_empty` halt as a pre-flight hang.
 
 ### Last-resort (host login)
 
@@ -510,6 +543,16 @@ FSM flag (`INNGEST_CUTOVER_FLIP`) is the sole gate, so arming is pure Doppler wr
 SEAM** — the two operator seams (the Doppler flip arm 2.2b+2.3, and the app-repoint 2.4)
 cannot be done from CI (`hr-menu-option-ack-not-prod-write-auth`) and are printed as an
 out-of-band hand-off.
+
+> **Pre-flight scans are bounded + observable (#6258, ADR-106).** The `op=inventory` /
+> `op=verify` sub-probe scans (`inngest-inventory`, `inngest-registry-probe`,
+> `inngest-doublefire-probe`) now enforce a wall-clock deadline + page ceiling and are
+> abandon-safe (on timeout they emit `SOLEUR_INNGEST_PREFLIGHT_TIMEOUT` and `exit 1` →
+> webhook non-200, releasing the pool). If a pre-flight op returns `HTTP 000`/`500`, use the
+> **[Cutover pre-flight-hang triage](#cutover-pre-flight-hang-triage-opinventory--opverify-http-000--6258-adr-106)**
+> above — a fast LOUD `SOLEUR_*_TIMEOUT` error is the fix working, NOT a hang, and an
+> `op=verify` halt at its `registry_empty` precondition is a legitimate verdict on the dark
+> pre-cutover host, NOT a transport failure.
 
 1. **`op=execute`** (pre-flip orchestrator — no prod-write):
    ```bash

@@ -336,6 +336,15 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // user_id is the direct owner column; Art. 17 via ON DELETE CASCADE.
   beta_contact_stage_transitions: { ownerField: "user_id", article: "15" },
 
+  // beta_contact_access_log (migration 127, #6172, ADR-102 UI phase) —
+  // append-only owner-read accountability log (Art. 5(2)): who read which
+  // contact's PII, when. Art. 15 ACCESS only (not 20 portability): the row is
+  // controller-GENERATED audit evidence (contact_id + accessed_at), not
+  // user-provided content — same class as beta_contact_stage_transitions.
+  // user_id is the direct owner column; Art. 17 via the composite-FK
+  // (contact_id, user_id) ON DELETE CASCADE (swept with the contact).
+  beta_contact_access_log: { ownerField: "user_id", article: "15" },
+
 };
 
 /**

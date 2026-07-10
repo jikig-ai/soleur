@@ -85,6 +85,67 @@ describe("IssueDetailSheet", () => {
     expect(within(dialog).queryByText("User")).toBeNull();
   });
 
+  it("renders the 'Created by' row for a human author", () => {
+    render(
+      <IssueDetailSheet
+        open
+        issue={issue({
+          creator: {
+            login: "octocat",
+            isSoleur: false,
+            display: { name: "octocat", initials: "OC" },
+          },
+        })}
+        notFound={false}
+        onClose={() => {}}
+        onChangeStatus={() => {}}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Created by")).toBeTruthy();
+    expect(within(dialog).getByText("octocat")).toBeTruthy();
+    // The row shows only the username — no glyph/avatar chip in the detail sheet.
+    expect(within(dialog).queryByTitle(/^Created by/)).toBeNull();
+    expect(within(dialog).queryByText(/[👤🤖]/)).toBeNull();
+  });
+
+  it("renders 'Soleur · initiated by <login>' for a bot-created issue", () => {
+    render(
+      <IssueDetailSheet
+        open
+        issue={issue({
+          creator: {
+            login: "soleur-ai[bot]",
+            isSoleur: true,
+            initiatorLogin: "harry",
+            display: { name: "harry", initials: "HA" },
+          },
+        })}
+        notFound={false}
+        onClose={() => {}}
+        onChangeStatus={() => {}}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByText("Soleur · initiated by harry"),
+    ).toBeTruthy();
+  });
+
+  it("omits the 'Created by' row cleanly when no creator is set", () => {
+    render(
+      <IssueDetailSheet
+        open
+        issue={issue({ creator: undefined })}
+        notFound={false}
+        onClose={() => {}}
+        onChangeStatus={() => {}}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByText("Created by")).toBeNull();
+  });
+
   it("moves the card via the status select (optimistic) with a non-persistence note", () => {
     const onChangeStatus = vi.fn();
     render(

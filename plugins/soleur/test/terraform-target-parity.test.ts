@@ -422,12 +422,27 @@ function stripDispatchJobs(workflowText: string): string {
   // a per-merge miss). The inngest_host_replace job carries NO -target that isn't an exclusion
   // either, and is left folded-in historically; registry_host_replace is stripped explicitly
   // here as the current best practice for a new dispatch job.
+  // git_data_host_replace (#6242, ADR-103): the same current best practice — its 5 -targets are
+  // ALL git-data OPERATOR_APPLIED_EXCLUSIONS (server + network + both volume attachments +
+  // firewall attachment), so stripping it does not change the coverage anchor today, but keeps
+  // the parity boundary uniform so a FUTURE git-data -target that is NOT already an exclusion
+  // cannot silently mask a per-merge miss.
+  // registry_region_migrate (#6288): the sibling of registry_host_replace for a REGION move
+  // (nbg1→hel1) — a dispatch-only scoped job whose 6 -targets are the SAME registry
+  // OPERATOR_APPLIED_EXCLUSIONS. Strip it for the identical reason: a dispatch writer surface must
+  // never broaden the per-merge coverage anchor.
   return stripJob(
     stripJob(
-      stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate"),
-      "inngest_host",
+      stripJob(
+        stripJob(
+          stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate"),
+          "inngest_host",
+        ),
+        "registry_host_replace",
+      ),
+      "registry_region_migrate",
     ),
-    "registry_host_replace",
+    "git_data_host_replace",
   );
 }
 
@@ -1354,6 +1369,107 @@ describe("registry-host-replace dispatch -target/-replace set (scoped; store pre
 
   test("no registry address leaked into MOVED_OPERATOR_CONSUMED", () => {
     for (const addr of REGISTRY_REPLACE_TARGETS) {
+      expect(MOVED_OPERATOR_CONSUMED.has(addr)).toBe(false);
+    }
+  });
+});
+
+// The `apply_target=git-data-host-replace` dispatch job (`git_data_host_replace`, #6242, ADR-103)
+// runs a SCOPED, GUARDED `terraform apply -replace='hcloud_server.git_data'` + 5 `-target`s
+// (server + private NIC + BOTH volume attachments + firewall attachment) to re-run the git-data
+// host's cloud-init WITHOUT SSH. UNLIKE registry, BOTH data volumes (hcloud_volume.git_data* ) and
+// the LUKS passphrase are PRESERVED BY OMISSION — deliberately NOT in the -target set. This guard
+// pins the target/replace set to EXACTLY the 5 git-data addresses, proves NEITHER data volume is in
+// the set (the omission that preserves them), and asserts the dispatch job is stripped from the
+// per-merge coverage anchor. It locks the load-bearing invariant that the workflow's 5 `-target`
+// lines correspond 1:1 to the gate's 5-member allow-set (a drift on either side would otherwise
+// only surface at live-dispatch time).
+const GIT_DATA_REPLACE_TARGETS = [
+  "hcloud_server.git_data",
+  "hcloud_server_network.git_data",
+  "hcloud_volume_attachment.git_data",
+  "hcloud_volume_attachment.git_data_luks",
+  "hcloud_firewall_attachment.git_data",
+];
+const GIT_DATA_REPLACE_REPLACE = "hcloud_server.git_data";
+// The two data volumes preserved by OMISSION — asserted ABSENT from the -target set.
+const GIT_DATA_PRESERVED_VOLUMES = [
+  "hcloud_volume.git_data",
+  "hcloud_volume.git_data_luks",
+];
+
+describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volumes preserved by omission)", () => {
+  let gitDataTargets: string[];
+  let gitDataJobBlock: string;
+  let replaceAddrs: string[];
+
+  beforeAll(() => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    gitDataJobBlock = extractJobBlock(wf, "git_data_host_replace");
+    gitDataTargets = extractTargetsWithKeys(gitDataJobBlock);
+    replaceAddrs = extractReplaceAddrs(gitDataJobBlock);
+  });
+
+  test("the git_data_host_replace job -targets EXACTLY the 5 git-data-replace resources", () => {
+    expect([...gitDataTargets].sort()).toEqual(
+      [...GIT_DATA_REPLACE_TARGETS].sort(),
+    );
+  });
+
+  test("the -replace address is EXACTLY the git-data server", () => {
+    expect(replaceAddrs).toEqual([GIT_DATA_REPLACE_REPLACE]);
+  });
+
+  test("the target set EXACTLY equals the gate's 5-member allow-set (job↔gate parity)", () => {
+    // The load-bearing invariant: the workflow's -target lines must correspond 1:1 to the sourced
+    // gate's allow-set. Extract the allow[] array from the gate lib and compare.
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/git-data-host-replace-gate.sh"),
+      "utf8",
+    );
+    const allowBlock = gateSrc.match(/def allow:\s*\[([^\]]+)\]/);
+    expect(allowBlock).not.toBeNull();
+    const allowMembers = [...allowBlock![1].matchAll(/"([^"]+)"/g)].map(
+      (m) => m[1],
+    );
+    expect([...allowMembers].sort()).toEqual([...gitDataTargets].sort());
+  });
+
+  test("NEITHER data volume is in the -target set (preserved by omission)", () => {
+    // The deliberate divergence from registry (whose store volume IS in-scope for a resize). An
+    // untargeted resource cannot be planned for destroy, so omission is what preserves the stores.
+    for (const vol of GIT_DATA_PRESERVED_VOLUMES) {
+      expect(gitDataTargets).not.toContain(vol);
+    }
+  });
+
+  test("every git-data-replace target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
+    for (const t of gitDataTargets) {
+      const base = t.replace(/\[.*$/, "");
+      expect(OPERATOR_APPLIED_EXCLUSIONS.has(base)).toBe(true);
+    }
+  });
+
+  test("the git-data job runs the sourced git_data_host_replace_gate before apply", () => {
+    expect(gitDataJobBlock).toContain("git-data-host-replace-gate.sh");
+    expect(gitDataJobBlock).toContain("git_data_host_replace_gate");
+    // The ONLY `ack-destroy` mentions are the prose disclaimers that there is NO bypass.
+    expect(gitDataJobBlock).toContain("NO [ack-destroy] bypass");
+  });
+
+  test("stripDispatchJobs removes the git_data_host_replace job's -targets from the coverage set", () => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    const strippedTargets = extractAllTargets(stripDispatchJobs(wf));
+    for (const addr of GIT_DATA_REPLACE_TARGETS) {
+      expect(strippedTargets.has(addr)).toBe(false);
+    }
+    // non-vacuity: the whole-file (unstripped) scan DOES see the git-data server target.
+    const fullTargets = extractAllTargets(wf);
+    expect(fullTargets.has("hcloud_server.git_data")).toBe(true);
+  });
+
+  test("no git-data address leaked into MOVED_OPERATOR_CONSUMED", () => {
+    for (const addr of GIT_DATA_REPLACE_TARGETS) {
       expect(MOVED_OPERATOR_CONSUMED.has(addr)).toBe(false);
     }
   });

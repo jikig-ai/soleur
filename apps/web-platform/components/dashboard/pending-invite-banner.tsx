@@ -35,8 +35,15 @@ export function PendingInviteBanner({
         // (the SOL-49 reporter symptom: "la fenêtre … ne part pas quand on
         // accepte"). Mirrors decline's pessimistic-revert pattern below.
         setDismissed(true);
-        router.push("/dashboard/settings/team");
-        router.refresh();
+        // GAP E/workspace-switch (ADR-067 staleTimes): accept-invite calls
+        // `set_current_workspace_id` server-side (accept-invite/route.ts), so
+        // this crosses a workspace boundary for the same principal — the warm
+        // Router Cache still holds the PREVIOUS workspace's RSC in sibling tabs.
+        // HARD-nav to wipe it (a soft router.push + router.refresh only busts the
+        // current route; siblings would serve prior-workspace content). Mirrors
+        // the sibling accept path in invite/[token]/invite-actions.tsx and the
+        // workspace switch in components/dashboard/org-switcher-container.tsx.
+        window.location.assign("/dashboard/settings/team");
       } else {
         reportSilentFallback(
           new Error(`accept-invite returned ${res.status}`),

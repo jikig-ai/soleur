@@ -267,6 +267,10 @@ test.describe("ConversationsRail e2e (Phase 5a — mock-supabase)", () => {
     const dialog = page.getByRole("dialog");
     await dialog.waitFor({ state: "visible", timeout: 5_000 });
     await dialog.getByRole("button", { name: "Sign out" }).click();
-    await page.waitForURL("**/login", { timeout: 10_000 });
+    // Sign-out is now a HARD navigation (window.location.assign, ADR-067 GAP C),
+    // a full document load that detaches the current frame. `waitUntil: "commit"`
+    // resolves as soon as the /login navigation commits — robust to the frame
+    // detachment that makes the default `load` wait flake with net::ERR_ABORTED.
+    await page.waitForURL("**/login", { timeout: 10_000, waitUntil: "commit" });
   });
 });

@@ -117,10 +117,13 @@ fatals report **once**. The "Server startup" event is tagged
 host-authoritative event (`feature=container-restart-monitor`, op-scoped to
 `{restart_storm, fresh_crash_loop}`; the informational `recovered` op is
 excluded). It uses the proven `first_seen/reappeared/regression` + `tagged_event`
-pattern — **not** an `event_frequency` condition. The pinned `jianyuan/sentry@
-0.15.0-beta2` `conditions_v2` has no in-repo precedent for `event_frequency`, and
-the monitor already does the rate thresholding host-side, so a first-seen page on
-its event is both correct and lower-risk than an unverified schema. The "Server
+pattern — **not** an `event_frequency` condition. The monitor already does the rate
+thresholding host-side, so a first-seen page on its event is both correct and simpler
+than a redundant frequency condition. (Update, #6278: the pinned `jianyuan/sentry@
+0.15.0-beta2` `conditions_v2` **does** expose `event_frequency` — schema-verified via
+the cached provider binary; the first in-repo use is `zot_mirror_fallback_rate` in
+`issue-alerts.tf`. The original "no verified support" framing was stale; first-seen
+remains preferred *here* purely because the host does the thresholding.) The "Server
 startup" event-frequency remains available for AC12 verification via the Sentry
 issue stats API.
 

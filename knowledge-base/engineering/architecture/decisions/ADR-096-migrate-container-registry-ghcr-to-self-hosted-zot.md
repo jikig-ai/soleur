@@ -77,6 +77,26 @@ independent axes so it never silently gates a host:
   `stage:"inngest_ghcr_fallback"` event (the fallback-rate alarm pages at >3/1h); zot liveness is
   a `betteruptime_heartbeat.registry_prd` push beat that pages if zot stops beating — before it
   can gate a boot (TR3).
+  - *CI push side (#6274):* the CI dual-push mirror step is **explicitly non-blocking**
+    (`continue-on-error: true` + an `exit 0` inner shell + a bounded retry to self-heal a transient
+    CF-tunnel reset) — a mirror failure degrades zot redundancy, never the release/build verdict
+    (consistent with "latency, not availability" above). A persistent miss is loud via a CI-level
+    degraded signal: `mirror_status=degraded` → `::warning::` + step summary (both workflows) + a
+    ⚠️ line on the Slack release message (`reusable-release.yml`; #6278 added the same ⚠️ to
+    `build-inngest-bootstrap-image.yml`). The *live* fallback-rate Sentry alarm the bullet above
+    references is now **provisioned in #6278** — `sentry_issue_alert.zot_mirror_fallback_rate`
+    (`issue-alerts.tf`), an `event_frequency` count > 3/1h over `filter_match="any"` across the four
+    runtime signals (`registry:{ghcr-fallback,zot-gate-degraded}`,
+    `stage:{inngest_ghcr_fallback,app_ghcr_fallback}`). It is load-bearing at the Phase-5 GHCR-push
+    retirement. (Sensitivity note: it thresholds per Sentry issue-group, not a true cross-signal
+    aggregate — see the resource comment; a `sentry_metric_alert` upgrade is deferred to #6285 until
+    a resolvable numeric notify target exists in the Sentry TF root.) Two post-cutover boot-gating
+    shapes the degraded signal must remain loud for: a **missing** copy (crane-copy failure) AND a
+    **present-but-unsigned** copy (cosign-sign succeeded-copy-then-failed-sign) — the latter is NOT a
+    clean miss, since the pull side would pull the present zot copy and *bypass* the atomic GHCR
+    fallback, then hard-fail signature verify. During soak `ZOT_ACTIVE=0`, so both are latent and the
+    pre-flip zot-entry-gate/soak-gate catch them; the mirror step's cosign-failure path emits a
+    re-sign-specific remediation (a bare `crane copy` backfill does not re-sign).
 - **Instant revert:** unset `ZOT_REGISTRY_URL` in Doppler `prd` → all sites revert to GHCR-primary
   with no deploy, no SSH (`zot-registry-revert.md`).
 - **Durability = reproducibility:** zot's content is 100% rebuildable (CI re-pushes) + re-backfillable
@@ -111,6 +131,26 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
 - **Retirement (post-soak):** remove the pull-site GHCR fallback branch (5.3), stop GHCR push +
   egress allow (5.3), retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
   `GHCR_MINTER_DISABLED` gate (5.4), then rotate + revoke the exposed classic PAT (5.5).
+- **Host sizing + region (factual, #6288):** `cax11`(planned, arm64)→`cx23`(live nbg1, provisioned
+  during an Ampere+cx stock outage, #6122)→**`cx33`(4 vCPU / 8 GB, `hel1`, #6288)**. The 4 GB cx23
+  restart-looped zot ~4/min OOM-ing during the boot scan of the ~35 GB store (disk-independent —
+  disk sat at 58–63%, not ENOSPC). #6288 first targeted **`cx32`, which is not a real Hetzner
+  type** — that phantom `registry-host-replace` destroyed the nbg1 host then failed `server type
+  cx32 not found` (GHCR-masked). Resolution: **migrate nbg1→hel1** (the store volume is ForceNew on
+  location → destroyed + recreated fresh; the 35 GB store is a disposable GHCR mirror that re-fills
+  from GHCR) and use **`cx33`** — the real 8 GB CX-Intel type, offered in hel1 (€8.49/mo) but NOT
+  nbg1, where the cheapest 8 GB is cpx32 ~€35/mo (~6×). Applied via the guarded
+  `registry-region-migrate` dispatch (its `registry_region_migrate_gate` permits the registry's OWN
+  store-volume replace but forbids any out-of-scope destroy + preserves the logs-token secret). cx33
+  adopts the **ADR-062** container `--memory`/`--memory-swap` cap (7168m), now enforceable on 8 GB.
+  NOTE the cap already equals host RAM minus the ~1 GB OS reserve, so — unlike ADR-062's web host
+  where `PROD_MEMORY_CAP` is a *tunable* with headroom to raise on OOM — here the cap is a *ceiling*:
+  a working-set overrun's only remediation is a bigger host (cx43/16 GB), not a higher cap. OOM
+  confirmation keys on the MONOTONIC `memory.events oom_kill` container-cgroup counter
+  (`zot_oom_kills`, survives the 4/min point-sampling race) + `exit_code=137` + the journald
+  `oom_kills_5m` backstop — not the page-cache-confounded host `mem_used` nor a point-sampled anon
+  gauge. Applied via the guarded `registry-host-replace` dispatch (server_type is `ForceNew`; the
+  60 GB store volume is preserved + re-attached). The GHCR atomic fallback masks the brief replace outage.
 
 ### Credential isolation (amendment 2026-07-07, #6122)
 
@@ -219,6 +259,76 @@ volume API ("~30 GB") as "not full", but that API reports the **block-device** s
   no on-boot gc trigger is issued (zot v2.1.2 exposes no sanctioned on-demand gc endpoint —
   `hr-verify-repo-capability-claim`). Status stays **Adopting**.
 
+- **Capacity-vs-retention recurrence (2026-07-09, #6247).** The #6240 fix tightened gc/retention
+  **timing** but deliberately left the keep-**set** unchanged. A recurrence followed: `SOLEUR_ZOT_DISK`
+  showed the 30 GB ext4 fs **genuinely full** (`pcent=100`, `resize_ok=true`,
+  `fs_size_gb=30=block_size_gb`, `zot_restarts` climbing) — NOT a resize regression, but the exact
+  telemetry-gated *grow-the-volume* contingency #6244 pre-registered as #6247. Root cause: the
+  `storage.retention` keep-set (`latest` + **unbounded** `sha256-.*` sig referrers + **10** `v*` + **10**
+  commit-sha, **per repo across 2 platform-image repos**, each image ~1.5–2 GB) legitimately **exceeded
+  30 GB**, and gc cannot reclaim a blob the policy says to KEEP. Resolution — **both levers, one PR, one
+  `registry-host-replace` dispatch**: (1) grow `var.registry_volume_size` **30 → 60 GB** (Hetzner
+  in-place volume resize preserving data; the fail-loud `resize2fs` grows the ext4 on the next boot);
+  (2) tighten the keep-set — `mostRecentlyPushedCount` **10 → 5** for `v*` and commit-sha, and **bound
+  the previously-absolute "ALWAYS keep every `sha256-*`" rule** at `mostRecentlyPushedCount` **50**.
+  The `sha256-.*` bound revises the prior invariant and is coupled to deploy-time `cosign verify`
+  (ADR-087): `mostRecentlyPushedCount` is push-ORDER heuristic and can evict out of order under the
+  backfill/re-sign path above, and GHCR does NOT rescue a zot-pruned sig on a **kept** image (atomic-move
+  fetches the `.sig` from whichever registry serves the pull). 50 sits far above the true keep
+  requirement (~12–18 sig-tags/repo) so it never prunes a kept image's sig at current scale; blast
+  radius today is WARN-mode (`ci-deploy.sh`), becoming blocking at the WARN→ENFORCE flip (#6129). No
+  gate/workflow change: the `registry-host-replace` destroy-guard already permits a volume `["update"]`.
+  Status stays **Adopting**.
+
+### Durable restart-loop recurrence alarm (amendment 2026-07-10, #6291)
+
+The #6244 `SOLEUR_ZOT_DISK` self-report closed the *disk*-observability gap, but nothing stood
+watch on it continuously once #6288's one-shot soak follow-through
+(`zot-restart-plateau-6288.sh`) auto-closes. The disk-absence heartbeat `soleur-registry-disk-prd`
+pings **only while `/var/lib/zot < 85%`**, so a **disk-independent** OOM restart-loop (the #6288
+failure mode — zot OOM-restart-looping ~4/min during the boot scan of the ~35 GB store) leaves the
+heartbeat **GREEN** throughout. A durable, continuous recurrence alarm now closes that liveness gap:
+
+- **Mechanism = an in-repo GitHub-Actions scheduled-cron poller**
+  (`.github/workflows/scheduled-zot-restart-loop.yml`, `*/30 * * * *`) that reads the
+  `SOLEUR_ZOT_DISK` stream from Better Stack Logs source 2457081 via `betterstack-query.sh`
+  (ClickHouse SQL), evaluates three firing conditions in `scripts/zot-restart-loop-alarm.sh`
+  (scoped to the newest `boot_id`: `exit_code=137` seen, OR `zot_restarts` climbs across ≥3
+  consecutive events, OR `oom_kills_5m > 0`), and routes a fire to a deduped **`action-required`**
+  `[ci/zot-restart-loop]` GitHub issue carrying the decoded cause (host/kernel OOM vs cgroup-cap
+  contained vs non-OOM `zot_last_err`). On recovery it auto-closes. A distinct
+  `[ci/zot-telemetry-silent]` issue fires if the token-gated reporter goes dark while the
+  token-free disk heartbeat + Sentry monitor stay GREEN (the GREEN-while-broken blind spot, one
+  layer up). Its own liveness is a Sentry cron monitor (`sentry_cron_monitor.zot_restart_loop_alarm`,
+  slug `scheduled-zot-restart-loop`) so a *dark* alarm also alerts. The trusted-region parse
+  (strip the free-text `zot_last_err` tail before any key=value parse; scope to the newest
+  `boot_id`; filter `-1` inspect-miss sentinels) is extracted into one sourced helper
+  (`scripts/lib/zot-telemetry-parse.sh`) that BOTH the alarm and the #6288 soak probe consume — one
+  home for the spoof-resistance invariant.
+
+#### Pattern: Better Stack log-content alarms
+
+**A recurring, reusable precedent** (grep-findable here + cross-linked from
+`knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`): a **log-*content*
+recurrence alarm over a Better Stack Logs source is an in-repo GH-Actions cron poller** (query via
+`betterstack-query.sh` → decode/threshold in a `scripts/` checker → deduped `action-required`
+GitHub issue → Sentry self-liveness heartbeat), **NOT** a native Better Stack alert. This alarm
+(#6291) and the `scheduled-followthrough-sweeper.yml` soak probes both recur this shape. The
+`BetterStackHQ/better-uptime` Terraform provider has **no** log-alert resource (only
+`betteruptime_monitor`/`_heartbeat`/`_policy`), and even the programmatic **Telemetry v2 SQL-alert
+API** (which *does* exist — see §Alternatives) is rejected for this signal class because: (1) the
+stateful consecutive-climb condition + newest-`boot_id` scoping are not faithfully expressible as a
+single `{{time}}`-bucketed threshold; (2) the operator surface must be a digest-visible GitHub
+`action-required` issue, not an ops@ email; (3) it is not a first-class TF resource, so it would
+split the decode source-of-truth off from the reporter's decode semantics. Choose the GH-cron poller
+for future log-content alarms unless a signal is a pure stateless per-bucket count with an
+email-acceptable surface.
+
+### Reprovisioning path + alert recipient — restart-loop alarm cross-ref (amendment 2026-07-10, #6291)
+
+The restart-loop alarm is fully automated post-merge: `apply-sentry-infra.yml` auto-applies the new
+`sentry_cron_monitor` on merge, and the workflow schedule fires the first run — no operator step.
+
 ## Alternatives Considered
 
 The 7 registry-choice options are tabled above. The **apply-path** alternatives (per-PR `-target`
@@ -226,3 +336,20 @@ the whole stack; a `workflow_dispatch` warm-standby job; split-cred two-writer c
 routed to the CTO agent and rejected in `apply-path-cto-ruling.md` §"Rejected alternatives"; the
 **push-ingress** alternatives (public `/v2/` endpoint; cloudflared on the registry host) were
 rejected in the CTO's second ruling in favour of the CF-Tunnel-on-the-web-tunnel bridge.
+
+For the **restart-loop recurrence alarm (#6291)**, the **Better Stack Telemetry v2 SQL-alert API**
+was evaluated and rejected *on merits* (not on absence — the endpoints exist):
+`POST /api/v2/dashboards/{id}/charts/{cid}/alerts` and `.../explorations/{id}/alerts`, with
+`check_period` as the recurring schedule (docs `betterstack.com/docs/logs/api/…`). It can faithfully
+express the stateless conditions (`countIf(exit_code=137) > 0`, `oom_kills_5m > 0`) as
+`{{time}}`-bucketed thresholds, but it **cannot** faithfully express the stateful `zot_restarts`
+consecutive-climb scoped to the *newest* `boot_id` (a `max-min>tol` approximation false-fires on a
+single legitimate restart, and `{{time}}`-bucketing loses the newest-`boot_id` discriminator the
+hostname-reusing immutable replace requires). It is also **not** a first-class TF resource (provider
+gap confirmed) — it would be a REST-provisioned resource whose state lives in Better Stack, needing
+a bootstrap + drift handling, with its decode SQL divorced from the reporter's decode semantics; and
+its notify surface (ops@ email on the free tier) is weaker than a deduped, digest-visible
+`action-required` GitHub issue for a non-technical operator. The **dashboard** manual-config path was
+rejected outright (not version-controlled/testable; `hr-exhaust-all-automated-options-before`). See
+the `scheduled-zot-restart-loop.yml` gate-override header for the ADR-033-anchored GH-cron-vs-Inngest
+substrate rationale.

@@ -3,6 +3,7 @@ import {
   CLOSED_STATUSES,
   COLUMN_CAP_NOTICE,
   COLUMN_RENDER_CAP,
+  creatorFilterKey,
   deriveColumn,
   deriveFilterOptions,
   emptyFilters,
@@ -13,6 +14,7 @@ import {
   matchesSearch,
   STATUS_ORDER,
   type BoardIssueInput,
+  type WorkstreamCreator,
   type WorkstreamFilters,
   type WorkstreamIssue,
 } from "@/lib/workstream";
@@ -139,6 +141,81 @@ describe("matchesFilters", () => {
     expect(matchesFilters(issue({ priority: "urgent", status: "ready" }), f)).toBe(true);
     expect(matchesFilters(issue({ priority: "urgent", status: "done" }), f)).toBe(false); // fails status
     expect(matchesFilters(issue({ priority: "low", status: "ready" }), f)).toBe(false); // fails priority
+  });
+});
+
+describe("creator filter dimension", () => {
+  const human: WorkstreamCreator = {
+    login: "octocat",
+    isSoleur: false,
+    display: { name: "octocat", initials: "OC" },
+  };
+  const soleur: WorkstreamCreator = {
+    login: "soleur-ai[bot]",
+    isSoleur: true,
+    display: { name: "Soleur", initials: "SO" },
+  };
+  const soleurInitiated: WorkstreamCreator = {
+    login: "soleur-ai[bot]",
+    isSoleur: true,
+    initiatorLogin: "harry",
+    display: { name: "harry", initials: "HA" },
+  };
+
+  it("creatorFilterKey maps to the effective creator identity", () => {
+    expect(creatorFilterKey(human)).toBe("octocat");
+    expect(creatorFilterKey(soleur)).toBe("Soleur");
+    // the human initiator wins over the bot for a Soleur-initiated issue
+    expect(creatorFilterKey(soleurInitiated)).toBe("harry");
+  });
+
+  it("matchesFilters gates on the creator key (OR within, absent = excluded)", () => {
+    const f: WorkstreamFilters = {
+      ...emptyFilters(),
+      creators: new Set(["octocat"]),
+    };
+    expect(matchesFilters(issue({ creator: human }), f)).toBe(true);
+    expect(matchesFilters(issue({ creator: soleur }), f)).toBe(false);
+    // an issue with no creator is excluded when the creator filter is active
+    expect(matchesFilters(issue({ creator: undefined }), f)).toBe(false);
+  });
+
+  it("filtering a person surfaces both direct + Soleur-initiated issues", () => {
+    const f: WorkstreamFilters = {
+      ...emptyFilters(),
+      creators: new Set(["harry"]),
+    };
+    // Soleur-created but initiated by harry
+    expect(matchesFilters(issue({ creator: soleurInitiated }), f)).toBe(true);
+    // a human "harry" author would also match (key = login)
+    expect(
+      matchesFilters(
+        issue({
+          creator: {
+            login: "harry",
+            isSoleur: false,
+            display: { name: "harry", initials: "HA" },
+          },
+        }),
+        f,
+      ),
+    ).toBe(true);
+  });
+
+  it("deriveFilterOptions collects distinct creator keys (alphabetical)", () => {
+    const opts = deriveFilterOptions([
+      issue({ creator: human }),
+      issue({ creator: soleur }),
+      issue({ creator: soleurInitiated }),
+      issue({ creator: undefined }),
+    ]);
+    expect(opts.creators).toEqual(["Soleur", "harry", "octocat"]);
+  });
+
+  it("hasActiveFilters is true when a creator is selected", () => {
+    expect(
+      hasActiveFilters({ ...emptyFilters(), creators: new Set(["Soleur"]) }, ""),
+    ).toBe(true);
   });
 });
 

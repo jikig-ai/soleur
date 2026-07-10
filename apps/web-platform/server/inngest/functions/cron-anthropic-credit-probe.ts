@@ -86,6 +86,9 @@ export async function cronAnthropicCreditProbeHandler({
           maxTokens: 1,
           messages: [{ role: "user", content: "ping" }],
           timeoutMs: CANARY_TIMEOUT_MS,
+          // #cost-attribution (plan Phase 2, choke point #3): the canary's
+          // tokens-only marker (cost_usd null — 1-token ping is ~$0).
+          markerSource: CRON_NAME,
         });
         // Clean reply — liveness AND success.
         return { ok: true };
