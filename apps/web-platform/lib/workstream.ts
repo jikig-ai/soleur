@@ -456,8 +456,12 @@ export const INITIATED_BY_MARKER = {
    *  Non-line-anchored by design: it runs only on Soleur-controlled bot bodies,
    *  and the write side strips strays so the trailing server-stamped marker wins. */
   regex: /<!--\s*soleur:initiated-by\s+([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)\s*-->/g,
-  /** Strip pattern (any marker, malformed included) — used for unconditional strip. */
-  stripRegex: /<!--\s*soleur:initiated-by[\s\S]*?-->/g,
+  /** Strip pattern (any marker, malformed included) — used for unconditional strip.
+   *  BOUNDED quantifiers (`{0,64}` / `{0,200}?`) keep this linear: an unbounded
+   *  `\s*…[\s\S]*?-->` is O(n²) on attacker-controlled bodies with many
+   *  `<!--…initiated-by` prefixes and no closing `-->` (CodeQL js/polynomial-redos).
+   *  A real marker's gap is < 50 chars, so the caps never truncate a valid one. */
+  stripRegex: /<!--\s{0,64}soleur:initiated-by[\s\S]{0,200}?-->/g,
 } as const;
 
 /** True iff `login` is the Soleur GitHub-App bot for `botSlug` (case-insensitive
