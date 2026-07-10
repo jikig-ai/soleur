@@ -15,6 +15,8 @@
     "test": "vitest",
     "test:ci": "vitest run",
     "test:e2e": "npx playwright test",
+    "test:rls-fuzz": "RLS_FUZZ_LOCAL=1 vitest run test/rls-fuzz",
+    "rls:parity": "tsx scripts/rls-parity-check.ts",
     "typecheck": "tsc --noEmit",
     "hash-user-id": "bun scripts/hash-user-id.ts",
     "byok-grant": "bun scripts/byok-grant.ts",

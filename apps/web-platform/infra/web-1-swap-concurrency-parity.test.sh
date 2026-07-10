@@ -73,12 +73,17 @@ assert_member() {
     fail "$label: job '$job' not found in $(basename "$file")"
     return
   fi
-  if printf '%s\n' "$block" | grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$'; then
+  # #6178: use a here-string, NOT `printf "$block" | grep -q`. Under `set -o pipefail`
+  # a matching `grep -q` closes the pipe early → printf gets SIGPIPE (141) → the pipeline
+  # exits non-zero even on a MATCH → the `if` spuriously takes the else branch. The race
+  # only bites LARGE blocks (printf still writing when grep exits), so it flaked on the
+  # big pipeline-fix `apply` job in CI while passing locally. A here-string has no pipe.
+  if grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' <<<"$block"; then
     pass
   else
     fail "$label: job '$job' missing job-level concurrency.group: web-1-swap"
   fi
-  if printf '%s\n' "$block" | grep -qE '^[[:space:]]+cancel-in-progress:[[:space:]]*false[[:space:]]*$'; then
+  if grep -qE '^[[:space:]]+cancel-in-progress:[[:space:]]*false[[:space:]]*$' <<<"$block"; then
     pass
   else
     fail "$label: job '$job' missing cancel-in-progress: false"
@@ -132,7 +137,7 @@ fi
 routine_apply_block="$(job_block "$APPLY_INFRA_WF" "apply")"
 if [ -z "$routine_apply_block" ]; then
   fail "routine 'apply' job not found in apply-web-platform-infra.yml — negative assertion cannot run (extractor regressed or job renamed)"
-elif printf '%s\n' "$routine_apply_block" | grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$'; then
+elif grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' <<<"$routine_apply_block"; then
   fail "routine 'apply' job in apply-web-platform-infra.yml is enrolled in web-1-swap (over-serialization trap)"
 else
   pass
