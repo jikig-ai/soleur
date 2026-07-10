@@ -1,5 +1,12 @@
 # Learning: A count-only drift-sentinel hotfix leaves the per-member presence assertions incomplete
 
+> **Update (2026-07-09, #6273):** the count-vs-per-member skew described here is
+> now caught pre-merge by
+> `apps/web-platform/test/supabase-migrations/068-jti-deny-count-sync.test.ts`,
+> which asserts `|SET_M| === N === |SET_V|` — the aggregate count sentinel and
+> the per-table `*_jti_not_denied_policy_present` assertions can no longer drift
+> apart without failing PR CI.
+
 ## Problem
 
 Issue #6233 reported `verify-migrations` red on `main` at
