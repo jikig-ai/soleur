@@ -67,6 +67,9 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   // error) is what rejects tenant-B — otherwise the case is vacuous (F2).
   crm_contact_set_stage: (c) => `select crm_contact_set_stage('${c.contactA}','contacted')`,
   crm_note_append: (c) => `select crm_note_append('${c.contactA}','body',ARRAY['sales'],null)`,
+  // Atomic contact-PII read + Art.5(2) audit (mig 127); ownership-guarded → a
+  // non-owner reading another founder's contact PII must be denied (42501).
+  crm_get_contact_detail: (c) => `select crm_get_contact_detail('${c.contactA}')`,
   set_inbox_item_state: (c) => `select set_inbox_item_state('${c.inboxA}','archived')`,
   // self-target GDPR fns that MUST reject a non-self caller (they take p_user_id)
   anonymise_action_sends: (c) => `select anonymise_action_sends('${c.userA}')`,
