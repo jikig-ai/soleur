@@ -391,8 +391,25 @@ jobs:
           # #4804). So success is NOT "the proxy responded" — it is "the state
           # JSON proves every file landed". Assert the full invariant:
           #   exit_code == 0 AND files_failed == 0 AND files_written == files_total
-          # files_total is derived from the JSON (never hardcoded to the FILE_MAP
-          # length) so the gate survives future FILE_MAP additions.
+          #                 AND files_total == EXPECTED (repo FILE_MAP length)
+          #
+          # #6178 false-green fix: the prior gate compared files_written vs the
+          # JSON's OWN files_total, which passes on a STALE status from an older,
+          # smaller FILE_MAP (a webhook restart-race left the host at 13/13 clean
+          # while the repo FILE_MAP was 15 — the gate went green while the 2
+          # cutover probe scripts were NEVER delivered). Derive the EXPECTED count
+          # from the repo's infra-config-apply.sh FILE_MAP at verify time: this
+          # still auto-tracks future FILE_MAP additions (not hardcoded) AND now
+          # catches UNDER-delivery (a host that landed fewer files than the repo
+          # expects). handler_bootstrap runs before this push and updates the host
+          # handler to the current FILE_MAP, so the count is aligned on a healthy
+          # apply.
+          EXPECTED_COUNT=$(sed -n '/^FILE_MAP=(/,/^)/p' infra-config-apply.sh | grep -cE '_B64\|')
+          if [[ ! "$EXPECTED_COUNT" =~ ^[0-9]+$ || "$EXPECTED_COUNT" -eq 0 ]]; then
+            echo "::error::Could not derive EXPECTED FILE_MAP count from infra-config-apply.sh (got '$EXPECTED_COUNT')."
+            exit 1
+          fi
+          echo "Expected delivered-file count (repo FILE_MAP): $EXPECTED_COUNT"
           EXIT_CODE=""
           FILES_FAILED=""
           FILES_WRITTEN=""
@@ -413,12 +430,13 @@ jobs:
               FILES_TOTAL=$(jq -r '.files_total' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
               if [[ "$EXIT_CODE" == "0" && "$FILES_FAILED" == "0" \
                     && "$FILES_TOTAL" != "MISSING" && "$FILES_TOTAL" != "null" \
-                    && "$FILES_WRITTEN" == "$FILES_TOTAL" ]]; then
-                echo "Infra-config apply succeeded (exit_code=0, files_written=${FILES_WRITTEN}/${FILES_TOTAL}, files_failed=0 on attempt $attempt)"
+                    && "$FILES_WRITTEN" == "$FILES_TOTAL" \
+                    && "$FILES_TOTAL" == "$EXPECTED_COUNT" ]]; then
+                echo "Infra-config apply succeeded (exit_code=0, files_written=${FILES_WRITTEN}/${FILES_TOTAL}, expected=${EXPECTED_COUNT}, files_failed=0 on attempt $attempt)"
                 cat /tmp/infra-config-status-response.txt
                 break
               fi
-              echo "Attempt $attempt: exit_code=$EXIT_CODE files_failed=$FILES_FAILED files_written=$FILES_WRITTEN files_total=$FILES_TOTAL (retrying in 5s...)"
+              echo "Attempt $attempt: exit_code=$EXIT_CODE files_failed=$FILES_FAILED files_written=$FILES_WRITTEN files_total=$FILES_TOTAL expected=$EXPECTED_COUNT (retrying in 5s...)"
             elif [[ "$HTTP_CODE" == "404" ]]; then
               echo "Attempt $attempt: infra-config-status endpoint not found (HTTP 404)"
             else
@@ -452,6 +470,11 @@ jobs:
             fi
             if [[ "$FILES_TOTAL" == "MISSING" || "$FILES_TOTAL" == "null" || "$FILES_WRITTEN" != "$FILES_TOTAL" ]]; then
               echo "::error::infra-config-apply landed-files mismatch: files_written=$FILES_WRITTEN files_total=$FILES_TOTAL (expected equal and non-null)."
+              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+              exit 1
+            fi
+            if [[ "$FILES_TOTAL" != "$EXPECTED_COUNT" ]]; then
+              echo "::error::infra-config-apply UNDER-DELIVERED: host reported files_total=$FILES_TOTAL but the repo FILE_MAP expects $EXPECTED_COUNT (#6178 false-green fix — a stale/racing push left the host short of the current file set). This is NOT a pass."
               cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
               exit 1
             fi
