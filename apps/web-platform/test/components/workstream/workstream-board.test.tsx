@@ -465,6 +465,64 @@ describe("WorkstreamBoard", () => {
     ).toBe("backlog");
   });
 
+  it("a body edit reconciles from the returned canonical issue (AC1/AC7)", async () => {
+    mockIssue = "77";
+    global.fetch = methodFetch({
+      getIssues: [
+        issue({ id: "77", title: "Editable", body: "old body", status: "backlog" }),
+      ],
+      write: issue({
+        id: "77",
+        title: "Editable",
+        body: "new body",
+        description: "new body",
+        status: "backlog",
+      }),
+    }) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Issue 77" })).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByLabelText("Edit description"));
+    fireEvent.change(screen.getByLabelText("Edit description"), {
+      target: { value: "new body" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // Reconciled: the rendered description now shows the returned canonical body.
+    await waitFor(() => expect(screen.getByText("new body")).toBeTruthy());
+  });
+
+  it("a failed field write rolls back + surfaces a retryable toast (AC7)", async () => {
+    mockIssue = "77";
+    global.fetch = methodFetch({
+      getIssues: [
+        issue({ id: "77", title: "Editable", body: "old body", status: "backlog" }),
+      ],
+      writeOk: false,
+      writeStatus: 502,
+    }) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Issue 77" })).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByLabelText("Edit description"));
+    fireEvent.change(screen.getByLabelText("Edit description"), {
+      target: { value: "doomed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/couldn.?t save that change/i)).toBeTruthy(),
+    );
+    // The editor stays open for a retry (board rolled the card back).
+    expect(screen.getByLabelText("Edit description")).toBeTruthy();
+  });
+
   it("a 403 write flips the board read-only with an honest hint (AC14)", async () => {
     mockIssue = "77";
     global.fetch = methodFetch({

@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import type { WorkstreamIssue } from "@/lib/workstream";
 import { IssueDetailSheet } from "@/components/workstream/issue-detail-sheet";
+import { SwrTestProvider } from "../../helpers/swr-wrapper";
 
 function issue(over: Partial<WorkstreamIssue> = {}): WorkstreamIssue {
   return {
@@ -82,6 +83,203 @@ describe("IssueDetailSheet — display rows", () => {
       }),
     });
     expect(screen.getByText("Soleur · initiated by harry")).toBeTruthy();
+  });
+});
+
+const OPTIONS = {
+  labels: [
+    { name: "bug", color: "d73a4a" },
+    { name: "chore", color: "cccccc" },
+  ],
+  assignees: [{ login: "harry" }, { login: "ada" }],
+  milestones: [
+    { number: 1, title: "v1" },
+    { number: 2, title: "v2" },
+  ],
+};
+
+function renderEditable(
+  props: Partial<React.ComponentProps<typeof IssueDetailSheet>> = {},
+) {
+  return render(
+    <SwrTestProvider>
+      <IssueDetailSheet
+        open
+        issue={issue({
+          body: "the raw body",
+          labels: ["bug"],
+          assignees: ["harry"],
+          milestone: { number: 1, title: "v1" },
+        })}
+        notFound={false}
+        onClose={() => {}}
+        onChangeStatus={() => {}}
+        onReopen={() => {}}
+        onUpdateTitle={() => {}}
+        onUpdateFields={() => {}}
+        {...props}
+      />
+    </SwrTestProvider>,
+  );
+}
+
+describe("IssueDetailSheet — edit fields (edit-fields)", () => {
+  it("edits the description body and calls onUpdateFields with { body }", async () => {
+    const onUpdateFields = vi.fn().mockResolvedValue(undefined);
+    renderEditable({ onUpdateFields });
+    fireEvent.click(screen.getByLabelText("Edit description"));
+    const textarea = screen.getByLabelText(
+      "Edit description",
+    ) as HTMLTextAreaElement;
+    // Prefilled with the marker-STRIPPED body.
+    expect(textarea.value).toBe("the raw body");
+    fireEvent.change(textarea, { target: { value: "updated body" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(onUpdateFields).toHaveBeenCalledWith(
+        "198",
+        { body: "updated body", description: "updated body" },
+        { body: "updated body" },
+      ),
+    );
+  });
+
+  it("allows saving an EMPTY body (unlike title)", async () => {
+    const onUpdateFields = vi.fn().mockResolvedValue(undefined);
+    renderEditable({ onUpdateFields });
+    fireEvent.click(screen.getByLabelText("Edit description"));
+    fireEvent.change(screen.getByLabelText("Edit description"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(onUpdateFields).toHaveBeenCalledWith(
+        "198",
+        { body: "", description: "" },
+        { body: "" },
+      ),
+    );
+  });
+
+  it("keeps the body editor open when the save fails (retryable)", async () => {
+    const onUpdateFields = vi.fn().mockRejectedValue(new Error("boom"));
+    renderEditable({ onUpdateFields });
+    fireEvent.click(screen.getByLabelText("Edit description"));
+    fireEvent.change(screen.getByLabelText("Edit description"), {
+      target: { value: "x" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onUpdateFields).toHaveBeenCalled());
+    // Editor is still open (textarea present) for a retry.
+    expect(screen.getByLabelText("Edit description")).toBeTruthy();
+  });
+
+  it("changes the milestone via the select (number → { milestone })", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => OPTIONS,
+    }) as unknown as typeof fetch;
+    const onUpdateFields = vi.fn().mockResolvedValue(undefined);
+    renderEditable({ onUpdateFields });
+    const select = screen.getByLabelText("Change milestone");
+    // Focus triggers the lazy options fetch so v2 becomes selectable.
+    fireEvent.focus(select);
+    await waitFor(() =>
+      expect(within(select as HTMLSelectElement).getByText("v2")).toBeTruthy(),
+    );
+    fireEvent.change(select, { target: { value: "2" } });
+    await waitFor(() =>
+      expect(onUpdateFields).toHaveBeenCalledWith(
+        "198",
+        { milestone: { number: 2, title: "v2" } },
+        { milestone: 2 },
+      ),
+    );
+  });
+
+  it("clears the milestone (No milestone → null)", async () => {
+    const onUpdateFields = vi.fn().mockResolvedValue(undefined);
+    renderEditable({ onUpdateFields });
+    fireEvent.change(screen.getByLabelText("Change milestone"), {
+      target: { value: "" },
+    });
+    await waitFor(() =>
+      expect(onUpdateFields).toHaveBeenCalledWith(
+        "198",
+        { milestone: null },
+        { milestone: null },
+      ),
+    );
+  });
+
+  it("edits labels from the fetched options and saves NON-status selection", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => OPTIONS,
+    }) as unknown as typeof fetch;
+    const onUpdateFields = vi.fn().mockResolvedValue(undefined);
+    renderEditable({ onUpdateFields });
+    fireEvent.click(screen.getByLabelText("Edit labels"));
+    // The options fetch resolves and the checklist appears.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Labels editor")).toBeTruthy(),
+    );
+    // Add "chore" (bug is already selected from the issue).
+    await waitFor(() => expect(screen.getByLabelText("chore")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("chore"));
+    fireEvent.click(
+      within(screen.getByLabelText("Labels editor")).getByRole("button", {
+        name: "Save",
+      }),
+    );
+    await waitFor(() =>
+      expect(onUpdateFields).toHaveBeenCalledWith(
+        "198",
+        { labels: ["bug", "chore"] },
+        { labels: ["bug", "chore"] },
+      ),
+    );
+  });
+
+  it("edits assignees from the fetched options", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => OPTIONS,
+    }) as unknown as typeof fetch;
+    const onUpdateFields = vi.fn().mockResolvedValue(undefined);
+    renderEditable({ onUpdateFields });
+    fireEvent.click(screen.getByLabelText("Edit assignees"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Assignees editor")).toBeTruthy(),
+    );
+    await waitFor(() => expect(screen.getByLabelText("ada")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("ada"));
+    fireEvent.click(
+      within(screen.getByLabelText("Assignees editor")).getByRole("button", {
+        name: "Save",
+      }),
+    );
+    await waitFor(() =>
+      expect(onUpdateFields).toHaveBeenCalledWith(
+        "198",
+        { assignees: ["harry", "ada"] },
+        { assignees: ["harry", "ada"] },
+      ),
+    );
+  });
+
+  it("hides the field editors when onUpdateFields is absent", () => {
+    renderSheet(); // no onUpdateFields
+    expect(screen.queryByLabelText("Edit description")).toBeNull();
+    expect(screen.queryByLabelText("Edit labels")).toBeNull();
+    expect(screen.queryByLabelText("Change milestone")).toBeNull();
+  });
+
+  it("hides the field editors in read-only mode", () => {
+    renderEditable({ readOnly: true });
+    expect(screen.queryByLabelText("Edit description")).toBeNull();
+    expect(screen.queryByLabelText("Edit labels")).toBeNull();
+    expect(screen.queryByLabelText("Change milestone")).toBeNull();
   });
 });
 

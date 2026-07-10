@@ -16,7 +16,9 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import useSWR from "swr";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { jsonFetcher, swrKeys } from "@/lib/swr-config";
 import {
   COLUMNS,
   creatorLabel,
@@ -26,9 +28,23 @@ import {
   type WorkstreamIssue,
   type WorkstreamStatus,
 } from "@/lib/workstream";
+import type {
+  PatchIssueBody,
+  WorkstreamIssueOptions,
+} from "./workstream-writes";
 import { AssigneeChip, UserAvatar } from "./assignee-chip";
 import { PriorityPill } from "./priority-pill";
 import { IssueConciergePanel } from "./issue-concierge-panel";
+
+/** Optimistic patch the board merges onto the cached issue while the PATCH is in
+ *  flight; the second arg is the wire body. Split because the optimistic
+ *  milestone needs the { number, title } object the wire only carries as a
+ *  number (the drawer knows the title from the options list). */
+export type UpdateFieldsHandler = (
+  id: string,
+  optimistic: Partial<WorkstreamIssue>,
+  patch: PatchIssueBody,
+) => void | Promise<void>;
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -52,6 +68,7 @@ export function IssueDetailSheet({
   onChangeStatus,
   onReopen,
   onUpdateTitle,
+  onUpdateFields,
 }: {
   open: boolean;
   issue: WorkstreamIssue | null;
@@ -68,6 +85,9 @@ export function IssueDetailSheet({
   ) => void | Promise<void>;
   onReopen: (id: string) => void | Promise<void>;
   onUpdateTitle: (id: string, title: string) => void | Promise<void>;
+  /** Edits body/labels/assignees/milestone. Absent → those editors are hidden
+   *  (keeps pre-existing render sites that don't pass it read-only). */
+  onUpdateFields?: UpdateFieldsHandler;
 }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -78,11 +98,31 @@ export function IssueDetailSheet({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [closeMenuOpen, setCloseMenuOpen] = useState(false);
+  // Edit-fields state (reset per active issue). `optionsWanted` lazily triggers
+  // the options fetch only once a picker opens.
+  const [editingBody, setEditingBody] = useState(false);
+  const [bodyDraft, setBodyDraft] = useState("");
+  const [editingLabels, setEditingLabels] = useState(false);
+  const [labelsDraft, setLabelsDraft] = useState<string[]>([]);
+  const [editingAssignees, setEditingAssignees] = useState(false);
+  const [assigneesDraft, setAssigneesDraft] = useState<string[]>([]);
+  const [optionsWanted, setOptionsWanted] = useState(false);
   const issueId = issue?.id ?? null;
   useEffect(() => {
     setEditingTitle(false);
     setCloseMenuOpen(false);
+    setEditingBody(false);
+    setEditingLabels(false);
+    setEditingAssignees(false);
   }, [issueId]);
+
+  // Lazy picker options (labels/assignees/milestones) — fetched only after a
+  // picker opens; degrade-safe empty on the server side.
+  const canEditFields = Boolean(onUpdateFields) && !readOnly;
+  const { data: options } = useSWR<WorkstreamIssueOptions>(
+    optionsWanted && canEditFields ? swrKeys.workstreamIssueOptions() : null,
+    jsonFetcher,
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -123,6 +163,97 @@ export function IssueDetailSheet({
       setEditingTitle(false);
     } catch {
       // keep edit mode open so the user can retry (board toasted + rolled back)
+    }
+  }
+
+  function startEditBody() {
+    if (!issue || !canEditFields) return;
+    setBodyDraft(issue.body ?? issue.description ?? "");
+    setEditingBody(true);
+  }
+
+  async function saveBody() {
+    if (!issue || !onUpdateFields) return;
+    const next = bodyDraft; // empty body IS allowed (unlike title)
+    if (next === (issue.body ?? "")) {
+      setEditingBody(false);
+      return;
+    }
+    try {
+      // Optimistically update BOTH the marker-stripped body and the rendered
+      // description (the marker is server-side; the reconciled issue re-adds it).
+      await onUpdateFields(
+        issue.id,
+        { body: next, description: next },
+        { body: next },
+      );
+      setEditingBody(false);
+    } catch {
+      // keep edit mode open for retry (board toasted + rolled back)
+    }
+  }
+
+  function startEditLabels() {
+    if (!issue || !canEditFields) return;
+    setLabelsDraft(issue.labels ?? []);
+    setOptionsWanted(true);
+    setEditingLabels(true);
+  }
+
+  async function saveLabels() {
+    if (!issue || !onUpdateFields) return;
+    try {
+      await onUpdateFields(
+        issue.id,
+        { labels: labelsDraft },
+        { labels: labelsDraft },
+      );
+      setEditingLabels(false);
+    } catch {
+      // keep edit mode open for retry
+    }
+  }
+
+  function startEditAssignees() {
+    if (!issue || !canEditFields) return;
+    setAssigneesDraft(issue.assignees ?? []);
+    setOptionsWanted(true);
+    setEditingAssignees(true);
+  }
+
+  async function saveAssignees() {
+    if (!issue || !onUpdateFields) return;
+    try {
+      await onUpdateFields(
+        issue.id,
+        { assignees: assigneesDraft },
+        { assignees: assigneesDraft },
+      );
+      setEditingAssignees(false);
+    } catch {
+      // keep edit mode open for retry
+    }
+  }
+
+  async function changeMilestone(value: string) {
+    if (!issue || !onUpdateFields) return;
+    // "" → clear (null); otherwise the milestone number.
+    const number = value === "" ? null : Number(value);
+    const optimistic =
+      number === null
+        ? { milestone: null }
+        : {
+            milestone: {
+              number,
+              title:
+                options?.milestones.find((m) => m.number === number)?.title ??
+                String(number),
+            },
+          };
+    try {
+      await onUpdateFields(issue.id, optimistic, { milestone: number });
+    } catch {
+      // board toasted + rolled back
     }
   }
 
@@ -317,6 +448,109 @@ export function IssueDetailSheet({
                   <PriorityPill priority={issue.priority} />
                 </Row>
 
+                {canEditFields ? (
+                  <Row label="Milestone">
+                    <select
+                      aria-label="Change milestone"
+                      value={issue.milestone?.number ?? ""}
+                      onChange={(e) => void changeMilestone(e.target.value)}
+                      className="max-w-[180px] rounded border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1 text-xs text-soleur-text-primary focus:outline-none"
+                      onFocus={() => setOptionsWanted(true)}
+                    >
+                      <option value="">No milestone</option>
+                      {/* Ensure the current milestone is always selectable even
+                          before the options list resolves. */}
+                      {issue.milestone &&
+                      !options?.milestones.some(
+                        (m) => m.number === issue.milestone?.number,
+                      ) ? (
+                        <option value={issue.milestone.number}>
+                          {issue.milestone.title}
+                        </option>
+                      ) : null}
+                      {(options?.milestones ?? []).map((m) => (
+                        <option key={m.number} value={m.number}>
+                          {m.title}
+                        </option>
+                      ))}
+                    </select>
+                  </Row>
+                ) : null}
+
+                <Row label="Assignees">
+                  <span className="flex items-center gap-2">
+                    <span className="text-soleur-text-secondary">
+                      {issue.assignees && issue.assignees.length > 0
+                        ? issue.assignees.join(", ")
+                        : "—"}
+                    </span>
+                    {canEditFields && !editingAssignees ? (
+                      <button
+                        type="button"
+                        aria-label="Edit assignees"
+                        onClick={startEditAssignees}
+                        className="shrink-0 rounded px-1 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-primary"
+                      >
+                        Edit
+                      </button>
+                    ) : null}
+                  </span>
+                </Row>
+                {editingAssignees ? (
+                  <MultiSelectEditor
+                    ariaLabel="Assignees editor"
+                    emptyHint="No assignable users found."
+                    optionLabels={(options?.assignees ?? []).map((a) => a.login)}
+                    selected={assigneesDraft}
+                    onToggle={(v) =>
+                      setAssigneesDraft((prev) =>
+                        prev.includes(v)
+                          ? prev.filter((x) => x !== v)
+                          : [...prev, v],
+                      )
+                    }
+                    onSave={() => void saveAssignees()}
+                    onCancel={() => setEditingAssignees(false)}
+                  />
+                ) : null}
+
+                <Row label="Labels">
+                  <span className="flex flex-wrap items-center justify-end gap-1">
+                    <span className="text-soleur-text-secondary">
+                      {issue.labels && issue.labels.length > 0
+                        ? issue.labels.join(", ")
+                        : "—"}
+                    </span>
+                    {canEditFields && !editingLabels ? (
+                      <button
+                        type="button"
+                        aria-label="Edit labels"
+                        onClick={startEditLabels}
+                        className="shrink-0 rounded px-1 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-primary"
+                      >
+                        Edit
+                      </button>
+                    ) : null}
+                  </span>
+                </Row>
+                {editingLabels ? (
+                  <MultiSelectEditor
+                    ariaLabel="Labels editor"
+                    emptyHint="No labels found in this repo."
+                    optionLabels={(options?.labels ?? []).map((l) => l.name)}
+                    selected={labelsDraft}
+                    onToggle={(v) =>
+                      setLabelsDraft((prev) =>
+                        prev.includes(v)
+                          ? prev.filter((x) => x !== v)
+                          : [...prev, v],
+                      )
+                    }
+                    onSave={() => void saveLabels()}
+                    onCancel={() => setEditingLabels(false)}
+                  />
+                ) : null}
+
                 <Row label="Created">
                   <span className="text-soleur-text-secondary">
                     {formatDate(issue.createdAt)}
@@ -406,12 +640,53 @@ export function IssueDetailSheet({
 
               {/* Description */}
               <section className="mt-6">
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-soleur-text-tertiary">
-                  Description
-                </h3>
-                <div className="text-sm text-soleur-text-secondary">
-                  <MarkdownRenderer content={issue.description} />
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-soleur-text-tertiary">
+                    Description
+                  </h3>
+                  {canEditFields && !editingBody ? (
+                    <button
+                      type="button"
+                      aria-label="Edit description"
+                      onClick={startEditBody}
+                      className="rounded px-1 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-primary"
+                    >
+                      Edit
+                    </button>
+                  ) : null}
                 </div>
+                {editingBody ? (
+                  <div className="flex flex-col gap-2">
+                    <textarea
+                      aria-label="Edit description"
+                      value={bodyDraft}
+                      onChange={(e) => setBodyDraft(e.target.value)}
+                      rows={8}
+                      autoFocus
+                      className="w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5 text-sm text-soleur-text-primary focus:outline-none"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void saveBody()}
+                        className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-2.5 py-1 text-xs font-medium text-soleur-text-primary"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingBody(false)}
+                        className="rounded-md px-2.5 py-1 text-xs text-soleur-text-secondary hover:text-soleur-text-primary"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-soleur-text-secondary">
+                    <MarkdownRenderer content={issue.description} />
+                  </div>
+                )}
               </section>
 
               {/* Decision Making (Concierge) */}
@@ -430,6 +705,76 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
     <div className="flex items-center justify-between gap-3">
       <dt className="text-soleur-text-tertiary">{label}</dt>
       <dd className="text-right">{children}</dd>
+    </div>
+  );
+}
+
+/** A checkbox list + Save/Cancel for the labels/assignees multi-select editors.
+ *  Mirrors the title inline-edit interaction (edit → Save/Cancel; the board
+ *  reconciles/rolls back). Renders an empty hint when no options resolve. */
+function MultiSelectEditor({
+  ariaLabel,
+  emptyHint,
+  optionLabels,
+  selected,
+  onToggle,
+  onSave,
+  onCancel,
+}: {
+  ariaLabel: string;
+  emptyHint: string;
+  optionLabels: string[];
+  selected: string[];
+  onToggle: (value: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  // Surface any currently-selected value even if it's not in the fetched option
+  // list (e.g. a label that no longer exists in the repo picker) so a save
+  // doesn't silently drop it.
+  const values = [...new Set([...optionLabels, ...selected])];
+  return (
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 p-3"
+    >
+      {values.length === 0 ? (
+        <p className="text-xs text-soleur-text-tertiary">{emptyHint}</p>
+      ) : (
+        <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+          {values.map((v) => (
+            <label
+              key={v}
+              className="flex items-center gap-2 text-xs text-soleur-text-secondary"
+            >
+              <input
+                type="checkbox"
+                aria-label={v}
+                checked={selected.includes(v)}
+                onChange={() => onToggle(v)}
+              />
+              {v}
+            </label>
+          ))}
+        </div>
+      )}
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          onClick={onSave}
+          className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-2.5 py-1 text-xs font-medium text-soleur-text-primary"
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md px-2.5 py-1 text-xs text-soleur-text-secondary hover:text-soleur-text-primary"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }
