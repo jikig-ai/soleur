@@ -186,6 +186,12 @@ runcmd:
     echo "$${DOPPLER_SHA256}  /tmp/doppler.tar.gz" | sha256sum -c -
     tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
     chmod +x /usr/local/bin/doppler
+    # #6178: the inngest-server / flip-guard / vector / cutover-flip units hardcode
+    # ExecStart=/usr/bin/doppler (inngest-bootstrap.sh:411/473/619, inngest-cutover-flip.service:19),
+    # but cloud-init installs to /usr/local/bin — so every unit died with systemd status=203/EXEC and
+    # inngest never bound :8288 (found via the post-boot-health probe). Web hosts have doppler at
+    # /usr/bin; this host did not. Symlink so the hardcoded path resolves for all units.
+    ln -sf /usr/local/bin/doppler /usr/bin/doppler
     rm /tmp/doppler.tar.gz
     command -v doppler >/dev/null 2>&1 \
       && /usr/local/bin/inngest-boot-phone-home.sh doppler-cli-installed "$(doppler --version 2>/dev/null | head -1)" \
