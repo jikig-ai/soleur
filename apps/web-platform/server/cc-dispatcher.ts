@@ -1909,10 +1909,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     // clone and before `buildAgentQueryOptions`, is the stronger precondition. On
     // failure it surfaces a retryable error (rides the `query()`-construction catch
     // below) rather than building a doomed sandbox.
-    await ensureWorkspaceDirExists(workspacePath, {
-      feature: "cc-dispatcher",
-      userId: args.userId,
-    });
+    // ADR-109 — support runs at the plugin docs root (agentWorkspacePath), not the
+    // user's workspace, so it does NOT need the workspace dir ensured/created.
+    if (mode.runRepoLifecycle) {
+      await ensureWorkspaceDirExists(workspacePath, {
+        feature: "cc-dispatcher",
+        userId: args.userId,
+      });
+    }
 
     // #5394 Layer A (FIX 1a) + Bug 2 — gate-reordering self-heal. The
     // recoverable `error`/stale-`cloning` branch (`repoReadiness.ok === false`)
@@ -2003,7 +2007,11 @@ export const realSdkQueryFactory: QueryFactory = async (
     // the pre-heal value (used as-is when no heal runs) and lifted to the post-heal
     // `repoReadiness.ok || healed.ok` inside the heal block (where `healed` scopes).
     let confirmDbReady = repoReadiness.ok;
-    if (needsSelfHeal) {
+    // ADR-109 — the clone self-heal (and its RepoNotReadyError throw on clone
+    // failure) is a repo-lifecycle concern. A support turn runs read-only at the
+    // plugin docs root and MUST NOT be blocked by the user's repo state (a support
+    // user whose repo is mid-clone still needs app help), so skip it for support.
+    if (mode.runRepoLifecycle && needsSelfHeal) {
       let healed: RepoReadiness = repoReadiness;
       try {
         const tenant = await getFreshTenantClient(args.userId);
@@ -2190,7 +2198,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     // FAILS-OPEN (spawn) so a transient blip never blocks a healthy repo. This does
     // NOT replace the sync `gitDirValid` seam consumed by the self-heal above — it
     // is an additive re-probe of `agentReady` despite `healed.ok=true`.
+    // ADR-109 — the terminal agent-readiness gate (in-bwrap `git rev-parse`
+    // strand → RepoNotReadyError) is a repo-lifecycle concern. Short-circuit it
+    // for support so a support turn is never blocked on the user's `.git` state;
+    // `evaluateAgentReadiness` is not even invoked (matches the read-only, repo-
+    // gate-bypassed contract).
     if (
+      mode.runRepoLifecycle &&
       (await evaluateAgentReadiness(workspacePath, {
         userId: args.userId,
         activeWorkspaceId,
