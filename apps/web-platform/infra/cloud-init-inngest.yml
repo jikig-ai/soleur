@@ -291,6 +291,17 @@ runcmd:
     fi
     set +e
 
+  # #6178: ensure the deploy user+group exist BEFORE the bootstrap chowns /var/lib/inngest to
+  # deploy:deploy. The cloud-config `users:` block above did NOT create deploy on this host (the
+  # Hetzner datasource did not apply user-data users_groups — verified: bootstrap still aborted
+  # `chown: invalid user: deploy:deploy` with the block present). Create it explicitly + idempotently
+  # in runcmd, which reliably runs before the bootstrap block below. -m → /home/deploy so the
+  # inngest-server unit's User=deploy resolves $HOME at runtime.
+  - groupadd -f docker
+  - groupadd -f deploy
+  - id -u deploy >/dev/null 2>&1 || useradd -m -g deploy -G docker -s /bin/bash deploy
+  - /usr/local/bin/inngest-boot-phone-home.sh deploy-user-ensured "$(id deploy 2>&1 | head -c 80)"
+
   # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
   # Gated on the isolation sentinel above (fail-closed). Mirrors web cloud-init.yml:642-682:
   # docker create → docker cp the script + durable-Redis assets → read INNGEST_CLI_VERSION/
