@@ -7,9 +7,15 @@ issue: TBD
 branch: feat-one-shot-wire-concierge-support-chat
 worktree: .worktrees/feat-one-shot-wire-concierge-support-chat
 adr: ADR-109 (provisional)
+cpo_signoff: granted 2026-07-10 (operator, via one-shot plan gate)
 ---
 
 # Plan: Wire the Concierge into the 24/7 support chat (real agent-driven replies, support-scoped skills)
+
+> **CPO SIGN-OFF & LOCKED DECISIONS (operator, 2026-07-10) — binding on `/work`:**
+> 1. **Proceed** with the full plan and the full autonomous pipeline (plan→work→review→QA→ship→merge). Any NEW blocker discovered during work must still be surfaced.
+> 2. **Conversation persistence = B2** (persisted repo-less row: `kind='support'` discriminator + nullable `repo_url`; NOT the sentinel `context_path` variant). Chosen for lower dispatch surgery and because it resolves the reconnect-replay cliff. Implement the `ConversationStore` seam with a `PersistedSupportConversationStore` for the support path; drop the `NullConversationStore` (B1) option.
+> 3. **Answer source = curate a small product-help corpus IN THIS PR** (Phase 4 option (a)): seed a minimal how-to/navigation corpus + hard-restrict the support search root to it. The Phase 6 copy flip proceeds to **live** (NOT gated off) — support must answer live & corpus-grounded on merge. Internal `knowledge-base/` remains hard-off-limits to the support search root.
 
 ✨ **feature** · cross-cutting (frontend seam + server dispatch + skill-scoping + ADR/C4) · single-user-incident threshold
 
