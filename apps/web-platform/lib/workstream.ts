@@ -359,6 +359,63 @@ export function deriveColumn(input: BoardIssueInput): WorkstreamStatus {
   return "backlog";
 }
 
+// ---------------------------------------------------------------------------
+// Status-label WRITE vocabulary — single-sourced with deriveColumn's READ set
+// (arch review P1 / ADR-109). A status write REMOVES every label in
+// STATUS_LABELS then adds the ONE canonical write-label for the target column,
+// in a single atomic `setLabels` PUT (see server/workstream/
+// mutate-workstream-issue.ts). STATUS_LABELS MUST equal exactly the labels
+// deriveColumn's open branch inspects — a test asserts write-set ≡ read-set so
+// the read-derive and the write can never drift (AC12). `backlog` writes no
+// status label (bare removal); `done` is a STATE transition (close), never a
+// label. Mirrors the INITIATED_BY_MARKER single-source pattern above.
+// ---------------------------------------------------------------------------
+
+/** Every status label deriveColumn reads (the removal set for a status write). */
+export const STATUS_LABELS: readonly string[] = [
+  "blocked",
+  "pending",
+  "in-progress",
+  "review",
+  "needs-review",
+  "ready",
+  "todo",
+] as const;
+
+/** Canonical write-label for each column (the label ADDED after removing all
+ *  STATUS_LABELS). `backlog` → none (bare removal); `done` → none (close).
+ *  Every value is a member of STATUS_LABELS and derives back to its key via
+ *  deriveColumn (AC13 round-trip). */
+export const STATUS_WRITE_LABEL: Readonly<
+  Partial<Record<WorkstreamStatus, string>>
+> = {
+  ready: "ready",
+  in_progress: "in-progress",
+  in_review: "review",
+  blocked: "blocked",
+  pending: "pending",
+};
+
+/** True when moving to `target` CLOSES the issue (Done spans state, not labels). */
+export function isTerminalColumn(target: WorkstreamStatus): boolean {
+  return target === "done";
+}
+
+/** Compute the FULL label set for an atomic setLabels PUT that moves an issue to
+ *  `target`: preserve every NON-status label, drop all STATUS_LABELS, then add
+ *  the target's canonical write-label (none for backlog/done). Pure — the
+ *  accessor's read-modify-write feeds current labels in and PUTs the result, so
+ *  a half-failed remove-then-add can never leave a wrong column (ADR-109). */
+export function computeStatusLabels(
+  currentLabels: string[],
+  target: WorkstreamStatus,
+): string[] {
+  const statusSet = new Set<string>(STATUS_LABELS);
+  const preserved = currentLabels.filter((l) => !statusSet.has(l));
+  const write = STATUS_WRITE_LABEL[target];
+  return write ? [...preserved, write] : preserved;
+}
+
 /** Live only when the derived column is in_progress — mirrors deriveColumn so
  *  `live` is never set on a card that lands in another column (e.g. an open
  *  issue labelled BOTH `blocked` + `in-progress` resolves to `blocked`, where
