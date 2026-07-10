@@ -14,6 +14,16 @@ claude --plugin-dir ./plugins/soleur
 
 This loads the plugin directly without installation, so you can test changes immediately.
 
+With [Grok Build](https://docs.x.ai/build/overview), the same in-repo plugin loads automatically via the committed `.grok/config.toml` (project plugin path + Claude-compat hooks/MCP). From the repo root:
+
+```bash
+grok inspect   # verify soleur plugin, skills, and MCP servers are discovered
+grok --trust   # first session only: trust project hooks (or run /hooks-trust in-session)
+grok           # start an interactive session
+```
+
+Soleur is hook-heavy; without trust, PreToolUse guards from `.claude/settings.json` stay inactive.
+
 ## Contributor License Agreement
 
 Before your first pull request can be merged, you must sign the [Individual Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html) (CLA). The CLA bot will prompt you automatically on your first PR.
