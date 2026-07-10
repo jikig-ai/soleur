@@ -13,6 +13,49 @@ module the plan called for is NOT created. CTO also caught a P1 the plan missed:
 support at `cwd=getPluginPath()` with the default `allowWrite:[workspacePath]` would
 grant WRITE to the shared platform plugin root — support MUST set `allowWrite:[]`.
 
+## UPDATE (session 2): full safe SERVER EXECUTION CORE now landed + tested
+The entire support-scoped Concierge EXECUTION path is implemented and green
+(tsc-clean for the feature; 90 support unit/integration tests):
+- workspace-mode discriminant; required persona threaded end-to-end (dropped hop =
+  compile error); ~24 test files swept.
+- Repo-gate bypass in realSdkQueryFactory: for support, skip evaluateAgentReadiness
+  throw, clone self-heal, ensureWorkspaceDirExists, worktree lease, and
+  patchWorkspacePermissions (applyPrefillGuard runs alone). A support user is NEVER
+  blocked on repo state. cwd = getPluginPath(); agentWorkspacePath = plugin root.
+- Read-only sandbox: buildAgentSandboxConfig readOnly → allowWrite:[] (closes the
+  CTO P1 plugin-root write escape). T3 unit test + T2 integration test assert it.
+- Skill/tool scope: SDK skills=["kb-search"], canUseTool default-deny, disallowed
+  Edit/Write/Task/Agent (Bash kept). Support prompt via buildSoleurGoSystemPrompt.
+- Migration 128 (kind='support'); ADR-109 + ADR-070 amendment.
+
+## SAFETY BOUNDARY reached this session (why copy stays GATED)
+Phase 4 (corpus + hard search-root restriction) is the ship-blocker, and it is
+NOT safely completable without a DEPLOYED env: the read-only sandbox is
+`--ro-bind / /` (whole FS readable) and support's Bash (kb-search) can grep/cat
+absolute paths, so restricting the search root to a curated corpus — and proving
+the internal knowledge-base (`/app/shared/knowledge-base`: confidential
+post-mortems/roadmap/ADRs) is unreadable — is a broad CONTAINMENT problem whose
+correctness can only be verified live. A mistake here LEAKS confidential operator
+data. Therefore, per the plan's own groundedness gate, the support copy MUST stay
+"preview" (GATED) until live QA validates no-leak — this overrides the operator's
+"flip live now" preference on SAFETY grounds (surfaced to operator).
+
+## REMAINING for live (needs deployed-env validation)
+- Phase 4: curate product-help corpus at getPluginPath()-relative `knowledge-base/`
+  (so support kb-search finds it cwd-relative) + sandbox denyRead / path-restriction
+  for `/app/shared/knowledge-base` and other confidential trees; LIVE-verify no-leak.
+- ws-handler: createSupportConversation (kind='support', repo-less) resolve-or-create
+  on support start_session; honest-degrade (S2) if persona/workspace unresolved.
+- Front-end: use-support-chat async streaming via the existing WS transport (reuse
+  start_session with context.type='support' + chat), 5 flow states; canned-responder
+  → fallback.
+- Phase 6 copy flip — GATED until Phase 4 live-verified.
+- Observability op:support-*; C4 regen; T5 e2e-threading + T8 wire-degrade + groundedness tests.
+- Live Playwright QA as a repo-less user.
+
+Pre-existing unrelated tsc error (NOT this feature): app/internal/github-app-init/
+page.tsx → missing @/infra/github-app-manifest.json (present on main).
+
 ## DONE + unit-tested (pushed)
 - `server/support-directive.ts` — SUPPORT_SYSTEM_DIRECTIVE, SUPPORT_SKILL_ALLOWLIST
   ({kb-search}), SUPPORT_EXTRA_DISALLOWED_TOOLS, SUPPORT_SKILLS_OPTION, bare↔FQN
