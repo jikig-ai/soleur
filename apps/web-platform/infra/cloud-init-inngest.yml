@@ -405,3 +405,11 @@ runcmd:
     lo="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:8288/ 2>&1)"
     jl="$(journalctl -u inngest-server.service --no-pager -n 15 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 400)"
     /usr/local/bin/inngest-boot-phone-home.sh post-boot-health "svc=[$svc] lo8288=$lo jl=[$jl]"
+    # #6178 diag: loopback :8288 is healthy but the web-host->10.0.1.40:8288 registry-probe 500s —
+    # capture the private-net readiness: self-curl the private IP, the configured 10.0.1.x NIC
+    # addr(s), what :8288 is bound to (0.0.0.0 vs 127.0.0.1), and the nftables allowlist chain.
+    priv="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://10.0.1.40:8288/ 2>&1)"
+    nic="$(ip -o -4 addr show 2>/dev/null | grep -oE '10\.0\.1\.[0-9]+' | tr '\n' ',')"
+    bind="$(ss -tlnH 2>/dev/null | grep ':8288' | awk '{print $4}' | tr '\n' ',')"
+    nft="$(nft list chain inet soleur_inngest input 2>/dev/null | tr '\n' ' ' | head -c 160)"
+    /usr/local/bin/inngest-boot-phone-home.sh net-health "priv8288=$priv nic=[$nic] bind=[$bind] nft=[$nft]"
