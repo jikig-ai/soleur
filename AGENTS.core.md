@@ -54,6 +54,7 @@ owner: founder
 - After `/go` routes to a pipeline skill, invoke via harness — never inline SKILL.md steps [id: hr-pipeline-skills-never-inline-after-go-route] [skill-enforced: go.md Step 2.1]. **Why:** #6325.
 - Lifecycle skills (`brainstorm`, `plan`, `work`, `review`, `compound`) must invoke mandated successors when standalone — never stop at artifacts or draft PRs [id: hr-lifecycle-skills-never-inline-after-handoff] [skill-enforced: workflow-fidelity.ts + per-skill anti-bypass blocks]. **Why:** #6320.
 - After `/ship` queues merge, poll through release workflows and invoke `/postmerge` — never ask the operator to monitor deploy [id: hr-merge-deploy-monitor-without-asking] [skill-enforced: ship merge-deploy protocol + harness pollInstructions + one-shot Step 8]. Grok: AwaitShell; Claude: Monitor tool. **Why:** #6320/#4512.
+- When `mergeStateStatus` is `BEHIND`, stop CI-only polling and resync with `origin/main` before continuing — never heartbeat while behind [id: hr-pr-behind-stop-and-resync] [skill-enforced: pr-merge-poll.ts + sync-pr-behind.sh + ship Phase 7]. Grok: `sync-pr-behind.sh`; poll must read `mergeStateStatus`, not checks alone. **Why:** #6347.
 
 ## Workflow Gates
 

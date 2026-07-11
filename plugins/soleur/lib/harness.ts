@@ -8,6 +8,7 @@
  */
 
 import { pathToAgentId } from "./agent-registry";
+import { behindSyncInstructions } from "./pr-merge-poll";
 import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
 export type Harness = "claude" | "grok" | "unknown";
@@ -194,31 +195,41 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
  * Cite in ship Phase 7, postmerge Phase 2, one-shot Step 7–8.
  */
 export function pollInstructions(harness: Harness): string {
+  const behind = behindSyncInstructions(harness);
+
   switch (harness) {
     case "claude":
       return [
         "**Merge/deploy polling (Claude Code)**",
-        "- Use the **Monitor tool** with state-change + heartbeat shell loops.",
+        "- Poll `gh pr view --jq '.state,.mergeStateStatus'` — not checks alone.",
+        "- Use the **Monitor tool** with state-change + heartbeat shell loops (ship Phase 7).",
         "- NEVER Bash `run_in_background` for PR merge, CI, or release polling.",
         "- After merge: watch release workflows to `completed`, then invoke `soleur:postmerge`.",
         "- FORBIDDEN: asking the operator to watch merge/deploy status.",
+        "",
+        behind,
       ].join("\n");
 
     case "grok":
       return [
         "**Merge/deploy polling (Grok Build)**",
+        "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
         "- Use **Shell** with adequate `block_until_ms` for short `gh` probes.",
-        "- Use **AwaitShell** with a `pattern` regex for long poll loops (PR merge Phase 7, release runs, postmerge CI) — match terminal lines like `MERGED`, `completed success`, `postmerge verification complete`.",
+        "- Use **AwaitShell** with `pattern` for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `/ship` merge: poll release workflows, invoke `/postmerge <PR>`, then emit `<promise>DONE</promise>`.",
-        "- FORBIDDEN: ending the turn after `gh pr merge --auto` without polling through deploy verification.",
+        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND`.",
+        "",
+        behind,
       ].join("\n");
 
     default:
       return [
         "**Merge/deploy polling**",
-        "- Poll PR merge and release workflows to completion before ending.",
+        "- Poll PR state + mergeStateStatus; resync on BEHIND before watching checks.",
         "- Invoke postmerge verification before declaring done.",
+        "",
+        behind,
       ].join("\n");
   }
 }

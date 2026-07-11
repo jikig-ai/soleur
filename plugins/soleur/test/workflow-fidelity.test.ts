@@ -245,5 +245,6 @@ describe("workflow-fidelity sentinel markers in skills", () => {
     expect(core).toContain("hr-pipeline-skills-never-inline-after-go-route");
     expect(core).toContain("hr-lifecycle-skills-never-inline-after-handoff");
     expect(core).toContain("hr-merge-deploy-monitor-without-asking");
+    expect(core).toContain("hr-pr-behind-stop-and-resync");
   });
 });

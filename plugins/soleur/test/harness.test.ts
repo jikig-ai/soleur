@@ -208,11 +208,13 @@ describe("routingInstructions", () => {
 });
 
 describe("pollInstructions", () => {
-  test("grok documents AwaitShell merge-deploy polling", () => {
+  test("grok documents AwaitShell merge-deploy polling and BEHIND resync", () => {
     const md = pollInstructions("grok");
     expect(md).toContain("AwaitShell");
     expect(md).toContain("/postmerge");
     expect(md).toContain("NEVER ask");
+    expect(md).toContain("BEHIND");
+    expect(md).toContain("sync-pr-behind.sh");
   });
 
   test("claude documents Monitor tool merge-deploy polling", () => {

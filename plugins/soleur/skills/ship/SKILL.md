@@ -14,7 +14,8 @@ description: "This skill should be used when preparing a feature for production 
 2. After merge: poll release/deploy workflows on the merge commit to `completed` + `success`.
 3. Step 3.8: invoke `/postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) **before** Step 4 cleanup.
 4. **FORBIDDEN:** Ending the session at merge, at a red release run you did not investigate, or with "want me to watch CI?"
-5. **Harness polling:** `plugins/soleur/lib/harness.ts` → `pollInstructions()` — Claude uses **Monitor tool**; Grok uses **AwaitShell** (`pattern` for `MERGED`, `completed success`, `postmerge verification complete`) or blocking Shell with `block_until_ms`.
+5. **Harness polling:** `plugins/soleur/lib/harness.ts` → `pollInstructions()` — Claude uses **Monitor tool**; Grok uses **AwaitShell** (`pattern` for `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `postmerge verification complete`) or blocking Shell with `block_until_ms`.
+6. **BEHIND stop-and-sync:** When `mergeStateStatus` is `BEHIND`, **stop** CI-only polling and resync before continuing. Grok/ad-hoc polls: `bash plugins/soleur/scripts/sync-pr-behind.sh <PR>` from the feature worktree. Canonical spec: `plugins/soleur/lib/pr-merge-poll.ts`.
 
 See `workflow-fidelity.ts` (`SHIP_MERGE_DEPLOY_SENTINEL`, `POST_MERGE_VERIFICATION_SKILLS`) and `wg-after-a-pr-merges-to-main-verify-all`.
 <!-- ship-merge-deploy-protocol:end -->

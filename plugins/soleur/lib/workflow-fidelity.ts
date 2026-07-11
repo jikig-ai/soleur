@@ -62,6 +62,9 @@ export const LIFECYCLE_HANDOFF_SENTINEL = "lifecycle-handoff-protocol";
 export const SHIP_MERGE_DEPLOY_SENTINEL = "ship-merge-deploy-protocol";
 export const POSTMERGE_HARNESS_SENTINEL = "postmerge-harness-protocol";
 
+/** Re-export for workflow tests — BEHIND resync lives in pr-merge-poll.ts. */
+export { PR_BEHIND_SYNC_SENTINEL } from "./pr-merge-poll";
+
 export function isPipelineSkill(skill: string): skill is PipelineSkill {
   return (PIPELINE_SKILLS as readonly string[]).includes(skill);
 }
