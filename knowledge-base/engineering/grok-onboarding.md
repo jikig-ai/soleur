@@ -42,6 +42,8 @@ Project plugin config lives in `.grok/config.toml` (merged #6314). Supported pro
 
 `/go` (and `plugins/soleur/commands/go.md`) classify intent and **must** invoke registered skills or agents — never improvise filesystem exploration or ad-hoc multi-step workflows. The harness adapter at `plugins/soleur/lib/harness.ts` maps invocation surfaces; see epic children for the full fidelity stack.
 
+**Workflow fidelity:** After `/go` routes to `one-shot`, the agent must invoke `/one-shot` and run Steps 0–8 to a **merged PR** — not inline implementation + push. See `go.md` Step 2.1 (`go-post-route` block), `one-shot` anti-bypass protocol, and `plugins/soleur/lib/workflow-fidelity.ts`. Golden eval: `bun test plugins/soleur/test/workflow-fidelity.test.ts`.
+
 ## Verify discovery
 
 ```bash
@@ -77,7 +79,12 @@ Canonical sources live under `plugins/soleur/agents/**`. After editing, regenera
 cd plugins/soleur && bun run scripts/sync-grok-agent-compat.ts
 ```
 
-CI drift check: `bun run scripts/sync-grok-agent-compat.ts --check` (required in Phase F #6325).
+CI drift checks (Phase F #6325):
+
+```bash
+bash plugins/soleur/scripts/grok-fidelity-gate.sh   # full gate (CI job grok-fidelity)
+cd plugins/soleur && bun run scripts/sync-grok-agent-compat.ts --check
+```
 
 ## References
 

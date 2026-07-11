@@ -74,18 +74,91 @@ export interface Target {
  * follow-up issue.
  */
 export const EXCLUDED_ISOLATION: Record<string, string> = {
+  // Kept in EXCLUDED_ISOLATION for the AC1b coverage gate (they carry workspace_id
+  // so they surface in workspaceTenancyTables(), but none is `is_workspace_member`-
+  // keyed → none can be an AC1 base target). Four now carry a FAITHFUL bespoke attack
+  // (rls-excluded-deepened.integration.test.ts, #6307 Phase 4/AC4); two remain
+  // rationale-only exclusions (object isolation / no authenticated grant).
   message_attachments:
-    "attachment OBJECT isolation is covered by storage.objects (AC9); the metadata-row RLS is an EXISTS-join through messages (itself a fuzzed target) — direct base-table target deferred",
+    "attachment OBJECT isolation is covered by storage.objects (AC9); the metadata-row RLS is an EXISTS-join through messages (itself a fuzzed target) with an is_message_owner INSERT WITH CHECK — sharpened rationale, direct base-table target still deferred",
   inbox_item:
-    "workspace-owner-gated inbox; cross-tenant write is exercised via the set_inbox_item_state RPC attack (AC8) — direct base-table target deferred",
+    "user-or-owner-gated inbox (SELECT: user_id=auth.uid() OR workspace-owner); table-level INSERT REVOKE'd from authenticated → now fuzzed on SELECT-USING isolation (owner sees, co-member denied) in rls-excluded-deepened, plus the set_inbox_item_state RPC write attack (AC8)",
   email_triage_items:
-    "single-founder operator inbox (resend ingest), not multi-tenant workspace data; a faithful seed needs the full ingest fixture — deferred",
+    "workspace-OWNER-gated (is_email_triage_workspace_owner, mig 111 dropped the user_id policy); INSERT REVOKE'd from authenticated → now fuzzed on SELECT-USING (owner userA sees, co-member userC denied) in rls-excluded-deepened via the shared seedEmailTriageItem fixture + the set_email_triage_status RPC attack (Phase 7)",
   dsar_export_jobs:
-    "GDPR DSAR export jobs; user/workspace-scoped, a distinct user-isolation dimension the base matrix (sub=userB non-member) does not model — deferred",
+    "GDPR DSAR export jobs, user-keyed (auth.uid()=user_id), SELECT-only policy → now fuzzed on SELECT-USING (owner sees, co-member denied) in rls-excluded-deepened; INSERT default-denied (no INSERT policy) so no write-forge",
   workspace_member_actions:
-    "member-action audit view; workspace-owner-gated read — direct base-table target deferred",
+    "member-action audit; authenticated has NO table grant at all (SELECT+INSERT both revoked) → direct base-table access is grant-blocked for every tenant; cross-tenant read is fuzzed via the list_workspace_member_actions RPC attack (AC8)",
   action_sends:
-    "WORM outbound-send audit; user/message-scoped (distinct user-isolation dimension), anonymise-only writes — deferred",
+    "WORM outbound-send audit, user-keyed (user_id=auth.uid()) with a REAL INSERT WITH CHECK and BEFORE UPDATE/DELETE WORM triggers → now fuzzed with a faithful cross-tenant INSERT-forge (→42501) + SELECT-USING isolation in rls-excluded-deepened",
+};
+
+/**
+ * USER-ISOLATION dimension (AC3) — purely user-keyed tables (`user_id/founder_id =
+ * auth.uid()`) attacked by a CO-MEMBER (userC) of wsA, not the base matrix's
+ * non-member userB (whom a workspace-only policy denies even when the user_id clause
+ * is missing → the within-workspace user leak stays invisible). The catalog's
+ * userIsolationTables() enumerates the set (disjoint from AC1/AC1b by SQL
+ * construction); this registry supplies the faithful A-owned seed + attack. Each
+ * enumerated table must be a target here OR in USER_EXCLUDED (AC3 coverage gate).
+ */
+export const USER_ISOLATION_TARGETS: Target[] = [
+  {
+    // ALL PERMISSIVE (auth.uid() = user_id), no WITH CHECK → the qual governs INSERT
+    // too: a co-member forging an A-owned key is rejected by WITH CHECK (42501).
+    table: "api_keys",
+    updateCol: "encrypted_key",
+    seed: async (b, c) => {
+      const [{ id }] = await b`insert into api_keys (user_id, encrypted_key, iv, auth_tag)
+        values (${c.userA}, 'enc', 'iv', 'tag') returning id`;
+      return idLocate(id);
+    },
+    forge: (h, c) =>
+      h`insert into api_keys (user_id, encrypted_key, iv, auth_tag) values (${c.userA}, 'enc', 'iv', 'tag')`,
+  },
+  {
+    // SELECT-only PERMISSIVE (auth.uid() = user_id); no INSERT/UPDATE/DELETE policy
+    // (writes are service-role via set_current_organization_id). The load-bearing
+    // proof is SELECT-USING (owner sees, co-member sees 0); forge omitted (a
+    // co-member INSERT is default-denied by grant/policy absence, not user-isolation
+    // WITH CHECK — a vacuous denial). UPDATE/DELETE 0-rows are likewise vacuous.
+    table: "user_session_state",
+    updateCol: "current_workspace_id",
+    seed: async (b, c) => {
+      await b`insert into user_session_state (user_id, current_workspace_id) values (${c.userA}, ${c.wsA})
+        on conflict (user_id) do update set current_workspace_id = ${c.wsA}`;
+      return { where: "user_id = $1", params: [c.userA] };
+    },
+  },
+];
+
+/**
+ * User-keyed RLS tables that userIsolationTables() enumerates but are NOT full AC3
+ * targets, each with a rationale (AC3 coverage gate; same discipline as
+ * EXCLUDED_ISOLATION). A co-member base-table attack is deferred; the gate keeps the
+ * gap TRACKED — a new user-keyed table reds AC3 until it is a target or listed here.
+ * (`tc_acceptances` is NOT enumerated — RLS-enabled with zero policies — but is
+ * documented here for the reader; the AC3 gate does not require excluded ⊆ catalog.)
+ */
+export const USER_EXCLUDED: Record<string, string> = {
+  tc_acceptances:
+    "RLS ENABLED with ZERO policies (service-role-only via accept_terms/anonymise RPCs, mig 044) → owner userA reads 0 rows too, so an owner positive control is schema-impossible AND userIsolationTables (reads pg_policies) never enumerates it — documented, not a gate target",
+  beta_contacts:
+    "beta-CRM contact (mig 126), SELECT user_id=auth.uid(); writes go through the crm_* SECURITY DEFINER RPCs already fuzzed at AC8 (crm_contact_set_stage/crm_note_append/crm_get_contact_detail) — base-table co-member SELECT target deferred",
+  beta_contact_stage_transitions:
+    "beta-CRM stage-transition audit (mig 126), SELECT user_id=auth.uid(); append-only via crm_contact_set_stage (AC8) — base-table co-member target deferred",
+  beta_contact_access_log:
+    "beta-CRM Art.5(2) access log (mig 127), SELECT user_id=auth.uid(); written by crm_get_contact_detail (AC8) — base-table co-member target deferred",
+  interview_notes:
+    "founder interview notes, SELECT user_id=auth.uid(); user-scoped, no cross-tenant param surface — base-table co-member target deferred",
+  byok_delegation_acceptances:
+    "byok-delegation consent audit, SELECT user_id=auth.uid() + self INSERT; the delegation lifecycle is fuzzed via the byok_delegations base target + grant/revoke/withdraw RPCs (AC8) — base-table co-member target deferred",
+  byok_delegation_withdrawals:
+    "byok-delegation withdrawal audit, SELECT user_id=auth.uid() + self INSERT; withdrawal path fuzzed via withdraw_byok_delegation_consent (AC8) — base-table co-member target deferred",
+  team_names:
+    "user-owned team-name reservations, ALL auth.uid()=user_id; user-scoped namespace, no cross-tenant param — base-table co-member target deferred",
+  template_authorizations:
+    "template authorizations, SELECT founder_id=auth.uid(); the authorize_template write path is fuzzed as an ATTACK case (Phase 7, AC8) — base-table co-member SELECT target deferred",
 };
 
 const idLocate = (id: string): Locate => ({ where: "id = $1", params: [id] });

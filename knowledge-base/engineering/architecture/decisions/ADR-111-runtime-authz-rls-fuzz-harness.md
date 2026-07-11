@@ -37,6 +37,17 @@ A static catalog diff of {tables, columns, policies} is **insufficient**. The pa
 
 The parity-diff design routes through `soleur:engineering:review:data-integrity-guardian` — generic build agents won't independently know the role-catalog facets are load-bearing for an isolation verdict.
 
+### Deepening the attack surface (#6307, 2026-07-11)
+
+The MVP's `sub`-only attacker under `SET LOCAL ROLE authenticated` is now widened along four axes, all still catalog-enumerated (self-tracking preserved):
+
+- **User-isolation dimension** — a first-class dimension alongside workspace-isolation and jti-deny. It models a **co-member** of wsA (userC) reading another member's `user_id = auth.uid()`-keyed rows — the leak a workspace-only policy hides from the non-member (userB) attacker. `catalog.userIsolationTables()` derives the set via a SQL **set-difference partition** (`{auth.uid()+user_id/founder_id permissive policy} MINUS is_workspace_member MINUS workspace_id/message_id-carrying`), so AC1/AC1b/AC3 are disjoint **by construction** — mutual exhaustiveness is a proven property, not a human classification.
+- **Anon dimension — promotes the DB _role_ to a first-class attacker axis** (the MVP scoped the attacker to `sub` under a fixed `authenticated` role; anon widens this to the role axis: under `anon`, `auth.uid()` is NULL, so every `founder_id = auth.uid()` / membership premise a definer fn relies on evaporates). Realised as `catalog.securityDefinerAnonFns()` + a parallel **anon coverage gate** — a forward tripwire that reds if any future migration re-introduces an anon EXECUTE grant on a definer fn (the exact #6306 root cause). Scoped **enumeration-coverage only** (a green anon gate is not proof anon isolation holds under attack).
+- **`proname(args)` coverage key** — the AC8 gate keys on the catalog-derived `pg_get_function_identity_arguments` composite (with an overload guard), so an overloaded definer fn cannot collapse to one classification entry.
+- **Deepened excluded surfaces + write-side probes** — the previously rationale-only excluded tables now carry faithful bespoke attacks (owner-gated / user-keyed SELECT isolation + the `action_sends` real INSERT-forge); a **row-hijack WITH-CHECK variant** (owner reassigns the tenancy key `SET workspace_id = wsB`) probes UPDATE-policy tables the no-op self-assign could not; an **RPC self-test** proves the RPC dimension can report RED (a scratch guard-stripped definer fn over a poisoned value → `leaked`); and a **schema-pin** turns the `routine_runs`/`routine_run_progress` "intentional ops-global" claim into an enforced invariant (no tenant-identifying column may appear).
+
+The MVP's #6306 exposures were closed by migration 128 (`revoke_definer_rpc_residual_grants`, PR #6318) **before** this deepening landed, so the concrete "drive the 4 #6306 fns under anon" work is obsolete (they are revoked and absent from the catalog; the anon-EXECUTE definer set is empty). The durable half — the anon enumerator tripwire — shipped in its place.
+
 ## Alternatives Considered
 
 | Option | Verdict | Reason |
@@ -78,6 +89,26 @@ the workspace-isolated tables holds. One catalog caveat recorded: the
 cannot read, so that table's authenticated SELECT is grant-blocked for *all*
 tenants (its write-side attacks carry the isolation proof; the parity diff checks
 whether prod shares the same `auth.users` grant posture).
+
+## Deepening findings (#6307, 2026-07-11)
+
+The #6307 deepening earned its keep too — the new write-side probes surfaced **two
+more real cross-tenant exposures**, both of the same class (a write path that gates
+on ownership but fails to re-validate a tenancy reference), both baselined `test.fails`
+(forced-un-baseline contract):
+
+- **Row-hijack (AC6):** `conversations` and `kb_files` UPDATE `WITH CHECK` re-checks
+  only `user_id = auth.uid()`, not `is_workspace_member(NEW.workspace_id, …)` — so the
+  row owner can `SET workspace_id = <a workspace they don't belong to>`, re-homing
+  their row across the tenant boundary. Filed **#6334**. (`kb_share_links` /
+  `push_subscriptions`, which re-check membership, correctly deny.)
+- **RPC param (AC8, Item 2):** `authorize_template` does not validate that `p_grant_id`
+  belongs to the caller — a founder can create a `template_authorization` backed by
+  another founder's `scope_grant`. Filed **#6336** (severity pending a
+  downstream-consumer review of `template_authorizations.grant_id`).
+
+The 18-table base matrix, storage.objects, the new user-isolation dimension, and the
+deepened excluded surfaces showed **no** further leaks — RLS on those holds.
 
 ## C4 impact
 
