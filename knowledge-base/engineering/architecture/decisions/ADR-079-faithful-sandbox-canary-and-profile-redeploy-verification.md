@@ -362,6 +362,24 @@ adopting this amendment's source. Host-targeting is safe because `cloudflare_rec
 (`dns.tf:13`) is a single A record hard-pinned to web-1; if the multi-host rewire (#5274) lands,
 that resolver must switch to a web-1-pinned health path.
 
+**Third reader (#6353, 2026-07-11).** The shared off-host web-2 acceptance verify
+`apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh` (used by BOTH the `web_2_recreate`
+and `warm_standby` dispatch jobs) was the third un-swept reader of `/hooks/deploy-status` `.tag`.
+It seeded the tag it re-POSTs (`DEPLOY_TAG`) from that slot, so an inngest `restart … latest`
+writer's `latest` stamp made the fan-out POST `deploy web-platform <image> latest` → `ci-deploy.sh`
+rejects it as `tag_malformed` (`exit_code:1`), aborting **every** web-host recreate and blocking the
+#6178 Inngest cutover. **BOTH** its baseline seed AND its `_trigger_fanout` retrigger now resolve
+web-1's re-swap tag from `app/health` `.version` via the same pure `resolve-web1-known-good-tag.sh`
+(the two former `.tag` tag-sources are both removed — the retrigger's prior `.tag` re-read used a
+*looser* regex than the deploy contract, so a `v1.2.3-rc1`-shape pollutant was a latent third seam).
+The `latest`-tolerating baseline band-aid is deleted. **Invariant (now honest against the shipped
+code): `app/health` `.version` is the canonical running-tag source; the shared deploy-status `.tag`
+is acceptance-proof-only, never a tag source; the deploy contract stays semver-only.** The verify
+poll's acceptance-match `.tag` reads stay (they compare against the `/health`-resolved semver);
+after a genuine web-2 deploy the slot reflects that semver. Host-targeting invariant carried from
+the pin step (`app/health` must resolve to web-1; web-2 rides at weight 0) — the #6178 cutover this
+unblocks is the exact REVISIT TRIGGER for a web-1-pinned health path.
+
 ### Amendment (#5960, 2026-07-03) — loaded proof read live from the running container; poll validates the swap terminal and treats lock_contention as non-terminal
 
 Once #5955 cleared the `tag_malformed` wedge, the item-4 assert failed on

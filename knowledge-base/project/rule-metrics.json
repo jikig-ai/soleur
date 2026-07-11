@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-09T13:48:21Z",
+  "generated_at": "2026-07-11T18:27:13Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -43,6 +43,19 @@
     },
     {
       "id": "cq-agents-md-tier-gate",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → docs-only"
+    },
+    {
+      "id": "cq-agents-md-why-single-line",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -186,6 +199,19 @@
     },
     {
       "id": "cq-union-widening-grep-three-patterns",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → rest"
+    },
+    {
+      "id": "cq-write-failing-tests-before",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -550,6 +576,19 @@
     },
     {
       "id": "hr-observability-layer-citation",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-pipeline-skills-never-inline-after-go-route",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -949,7 +988,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-cla-signed-author-before-merge",
@@ -1238,32 +1277,6 @@
       "rule_text_prefix": " → core"
     },
     {
-      "id": "cq-agents-md-why-single-line",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 1,
-      "warn_count": 0,
-      "fire_count": 1,
-      "prevented_errors": 0,
-      "last_hit": "2026-07-09T13:48:20Z",
-      "first_seen": "2026-07-09T13:48:20Z",
-      "rule_text_prefix": " → docs-only"
-    },
-    {
-      "id": "cq-write-failing-tests-before",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 1,
-      "warn_count": 0,
-      "fire_count": 1,
-      "prevented_errors": 0,
-      "last_hit": "2026-07-09T13:26:46Z",
-      "first_seen": "2026-07-09T13:26:46Z",
-      "rule_text_prefix": " → rest"
-    },
-    {
       "id": "hr-ssh-diagnosis-verify-firewall",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -1272,14 +1285,14 @@
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-09T12:19:51Z",
-      "first_seen": "2026-07-09T12:19:51Z",
+      "last_hit": "2026-07-11T17:44:38Z",
+      "first_seen": "2026-07-11T17:44:38Z",
       "rule_text_prefix": " → core"
     }
   ],
   "summary": {
-    "total_rules_tagged": 98,
-    "rules_unused_over_8w": 95,
+    "total_rules_tagged": 99,
+    "rules_unused_over_8w": 98,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,

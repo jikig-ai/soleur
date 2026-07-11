@@ -10,11 +10,13 @@
 # host — never zero, never many), stays terminal on genuine failure/budget
 # exhaustion (no green-on-timeout), and preserves every legacy invariant.
 #
-# The network is removed from the assertion path via three injectable seams the
+# The network is removed from the assertion path via four injectable seams the
 # script honors (unset in prod → real curl / POST / wall-clock):
 #   DEPLOY_STATUS_SOURCE_CMD  writes the next fixture body to $DS_BODY_FILE, echoes HTTP code
 #   DEPLOY_POST_SINK          records each fan-out POST payload (one line per POST)
 #   DEPLOY_POST_CODE_CMD      echoes the HTTP code for each POST (defaults 202)
+#   HEALTH_SOURCE_CMD         echoes web-1's /health `.version` string (#6353 — the tag
+#                             the fan-out re-swaps is resolved from HERE, never .tag)
 # Fixtures are synthesized single-line JSON (no real tokens; cq-test-fixtures-synthesized-only).
 #
 # Run: bash apps/web-platform/infra/deploy-status-fanout-verify.test.sh
@@ -44,24 +46,35 @@ done
 # ── Test harness ────────────────────────────────────────────────────────────
 # Inputs via env:
 #   SEQ         space-separated fixture basenames (no .json). Position contract:
-#               SEQ[0] = the baseline read, SEQ[1] = the trigger's internal
-#               _get_status re-read (tag-downgrade guard), SEQ[2..] = the verify
-#               polls — so every SEQ pads two leading settled bodies before the
-#               first verify body. The popper clamps to the LAST body once the
-#               sequence is exhausted (a real static host re-emits the same
-#               deploy-status until a re-swap).
+#               SEQ[0] = the baseline read, SEQ[1..] = the verify polls. #6353
+#               removed the trigger's internal _get_status re-read (the re-swap tag
+#               now resolves from /health via HEALTH_SEQ, not the deploy-status .tag),
+#               so the trigger consumes NO deploy-status body — one leading pad, not
+#               two. Legacy SEQs that still carry a second leading `settled-v1`
+#               (start_ts=100) are harmless: that body is pre-trigger-skipped by the
+#               staleness gate (start_ts <= baseline) rather than eaten by the trigger.
+#               The popper clamps to the LAST body once the sequence is exhausted (a
+#               real static host re-emits the same deploy-status until a re-swap).
 #   WINDOW      FRESH_BOOT_WINDOW_S (default 0 → retry fires on the first degraded)
 #   RETRY_MAX   DEGRADED_RETRY_MAX (default 1)
 #   ROSTER      WEB_HOST_PRIVATE_IPS (default the 2-host single-peer roster)
 #   POST_CODES  space-separated HTTP codes returned per POST (default all 202)
 #   MAXATT      STATUS_POLL_MAX_ATTEMPTS (default 6)
 #   OPCTX       OP_CONTEXT (default recreate)
-# Outputs via globals: RC, OUT, POSTS, GHOUT
+#   HEALTH_SEQ  space-separated web-1 /health `.version` strings, popped once per
+#               _resolve_known_good_tag() call (baseline seed, initial trigger, each
+#               retrigger — clamp to last). Default "1.0.0" (matches the v1.0.0
+#               fixture family so the poll TAG==DEPLOY_TAG match still holds). A token
+#               of "-" echoes an EMPTY .version (simulates /health unreachable). This
+#               DEFAULT keeps every case network-free — with no seam the resolve would
+#               curl app.soleur.ai/health in CI (spec-flow P1).
+# Outputs via globals: RC, OUT, POSTS, POSTBODIES, GHOUT
 run_verify() {
   local tmp
   tmp="$(mktemp -d)"
   local seqf="$tmp/seq.txt" idxf="$tmp/idx" bodyf="$tmp/body"
   local sink="$tmp/posts" codef="$tmp/codes" codeidx="$tmp/codeidx" ghout="$tmp/ghout"
+  local healthf="$tmp/health.txt" hidxf="$tmp/hidx"
 
   # Each fixture is already newline-terminated → one deploy-status body per line
   # (a second echo would inject blank lines that desync the popper sequence).
@@ -76,6 +89,15 @@ run_verify() {
   local c
   for c in ${POST_CODES:-}; do echo "$c" >> "$codef"; done
   echo 1 > "$codeidx"
+
+  # /health `.version` sequence (#6353): one line per version, popped per
+  # _resolve_known_good_tag() call, clamped to the last line. Default 1.0.0 so every
+  # legacy case resolves DEPLOY_TAG=v1.0.0 (matching the v1.0.0 fixtures) with NO real
+  # network curl. "-" → an empty .version (drives the /health-unreachable abort).
+  : > "$healthf"
+  local hv
+  for hv in ${HEALTH_SEQ:-1.0.0}; do echo "$hv" >> "$healthf"; done
+  echo 1 > "$hidxf"
 
   # Stateful sequence popper: emit the i-th fixture body to $DS_BODY_FILE, clamp to
   # the last line once exhausted, advance the index file (persists across the
@@ -95,11 +117,26 @@ if [ "$n" -eq 0 ] || [ "$i" -gt "$n" ]; then printf '202'; else sed -n "${i}p" "
 echo $((i + 1)) > "$CODE_IDX"
 PC
 
+  # /health `.version` popper: emit the i-th version (clamp to last once exhausted),
+  # advance the index. A "-" line means an empty .version (the resolver then aborts
+  # loud — the /health-unreachable case). stdout is the bare version string only.
+  cat > "$tmp/health.sh" <<'HP'
+i=$(cat "$HIDX_FILE"); n=$(wc -l < "$HEALTH_FILE"); line=$i
+[ "$line" -gt "$n" ] && line=$n
+if [ "$n" -eq 0 ]; then echo $((i + 1)) > "$HIDX_FILE"; exit 0; fi
+v=$(sed -n "${line}p" "$HEALTH_FILE")
+echo $((i + 1)) > "$HIDX_FILE"
+[ "$v" = "-" ] && v=""
+printf '%s' "$v"
+HP
+
   OUT=$(
     SEQ_FILE="$seqf" IDX_FILE="$idxf" DS_BODY_FILE="$bodyf" \
     CODE_FILE="$codef" CODE_IDX="$codeidx" \
+    HEALTH_FILE="$healthf" HIDX_FILE="$hidxf" \
     DEPLOY_STATUS_SOURCE_CMD="bash $tmp/status.sh" \
     DEPLOY_POST_SINK="$sink" DEPLOY_POST_CODE_CMD="bash $tmp/postcode.sh" \
+    HEALTH_SOURCE_CMD="bash $tmp/health.sh" \
     WEBHOOK_SECRET=test CF_ACCESS_CLIENT_ID=test CF_ACCESS_CLIENT_SECRET=test \
     WEB_HOST_PRIVATE_IPS="${ROSTER:-10.0.1.10,10.0.1.11}" \
     STATUS_POLL_MAX_ATTEMPTS="${MAXATT:-6}" STATUS_POLL_INTERVAL_S=0 SETTLE_SECONDS=0 \
@@ -108,7 +145,18 @@ PC
     bash "$SCRIPT" 2>&1
   )
   RC=$?
-  if [ -f "$sink" ]; then POSTS=$(wc -l < "$sink" | tr -d ' '); else POSTS=0; fi
+  # Capture the POST-sink CONTENTS (not just the line count) BEFORE the tmp dir is
+  # removed — assertions grep $POSTBODIES for the fan-out payload (semver present,
+  # `latest` absent). A `! grep -q latest <deleted-file>` would return non-zero and
+  # `!`-flip to a vacuous GREEN (spec-flow P0); assert against this captured string
+  # with a POSITIVE anchor so an empty capture fails loudly.
+  if [ -f "$sink" ]; then
+    POSTS=$(wc -l < "$sink" | tr -d ' ')
+    POSTBODIES=$(cat "$sink")
+  else
+    POSTS=0
+    POSTBODIES=""
+  fi
   GHOUT=$(cat "$ghout" 2>/dev/null || echo "")
   rm -rf "$tmp"
 }
@@ -151,12 +199,6 @@ SEQ="settled-v1 settled-v1 degraded-v1-s200" WINDOW=0 MAXATT=8 run_verify
 if [ "$POSTS" -eq 2 ]; then pass; else fail "AC3d: static-start_ts unbound host must fire EXACTLY one retry (2 POSTs), got $POSTS. OUT: $OUT"; fi
 if [ "$RC" -eq 1 ]; then pass; else fail "AC3d: static-start_ts all-degraded should exhaust budget → exit 1, got rc=$RC"; fi
 
-# ── AC3e: _retrigger_fanout REASSIGNS DEPLOY_TAG so a newer-tag ok is accepted ──
-# A newer tag lands during the wait (retry re-read sees v1.1.0); the eventual ok
-# reports v1.1.0. Without the DEPLOY_TAG rebind, ok@v1.1.0 never matches → RED.
-SEQ="settled-v1 settled-v1 degraded-v1-s200 settled-v2-s250 ok-v2-s300" WINDOW=0 MAXATT=8 run_verify
-if [ "$RC" -eq 0 ]; then pass; else fail "AC3e: newer tag during retry should still exit 0 (DEPLOY_TAG reassigned), got rc=$RC. OUT: $OUT"; fi
-
 # ── AC3f: a non-202 re-POST is TERMINAL exit 1 (not absorbed into budget) ──
 # Initial POST 202, retry POST 403 → terminal ::error:: with recovery message.
 SEQ="settled-v1 settled-v1 degraded-v1-s200 settled-v1" WINDOW=0 MAXATT=8 POST_CODES="202 403" run_verify
@@ -179,27 +221,67 @@ if printf '%s' "$OUT" | grep -q 'exactly one peer'; then pass; else fail "AC4-ro
 SEQ="settled-v1 settled-v1 stale-ok-s50" WINDOW=0 MAXATT=5 run_verify
 if [ "$RC" -eq 1 ]; then pass; else fail "AC4-staleness: a stale ok must NOT be accepted (should exit 1 on budget), got rc=$RC"; fi
 
-# ── AC4: tag validation — a TRULY-invalid current tag (garbage) → exit 1 ──
-SEQ="garbage-tag" MAXATT=3 run_verify
-if [ "$RC" -eq 1 ]; then pass; else fail "AC4-tag: a truly-invalid baseline tag ('garbage!') should exit 1, got rc=$RC"; fi
+# ── AC4-tag (re-homed #6353): tag validation MOVED from the deploy-status `.tag` to
+# web-1's /health `.version`. A non-semver /health value aborts LOUD at the baseline
+# resolve — even when the deploy-status .tag is ALSO garbage, the .tag is never trusted
+# as the re-swap tag source, and no fan-out POST fires. ──
+SEQ="garbage-tag" HEALTH_SEQ="garbage!" MAXATT=3 run_verify
+if [ "$RC" -eq 1 ]; then pass; else fail "AC4-tag: a non-semver /health .version ('garbage!') should abort exit 1, got rc=$RC. OUT: $OUT"; fi
+if [ "$POSTS" -eq 0 ]; then pass; else fail "AC4-tag: a failed /health resolve must abort BEFORE any fan-out POST (no .tag fallback), got POSTS=$POSTS"; fi
 
-# ── AC4: tag validation — an EMPTY current tag still aborts (the comment at the guard
-# advertises "empty / garbage still abort"; garbage is covered above, empty here). ──
-SEQ="empty-tag" MAXATT=3 run_verify
-if [ "$RC" -eq 1 ]; then pass; else fail "AC4-tag-empty: an empty baseline tag should exit 1, got rc=$RC"; fi
+# ── AC4-tag-empty (re-homed #6353): an EMPTY /health `.version` (unreachable / unparsed)
+# aborts loud — never a silent fallback to the deploy-status `.tag`. ──
+SEQ="empty-tag" HEALTH_SEQ="-" MAXATT=3 run_verify
+if [ "$RC" -eq 1 ]; then pass; else fail "AC4-tag-empty: an empty /health .version should abort exit 1, got rc=$RC. OUT: $OUT"; fi
+if [ "$POSTS" -eq 0 ]; then pass; else fail "AC4-tag-empty: an empty /health resolve must abort BEFORE any fan-out POST, got POSTS=$POSTS"; fi
 
-# ── AC4-latest: web-1 on the floating :latest is TOLERATED (can't downgrade web-1) → the
-# verify proceeds to a successful web-2 fan-out instead of aborting on the baseline read. ──
-SEQ="latest-tag latest-tag ok-latest-s300" WINDOW=0 MAXATT=5 run_verify
-if [ "$RC" -eq 0 ]; then pass; else fail "AC4-latest: a 'latest' baseline tag should be tolerated and reach a successful verify (exit 0), got rc=$RC. OUT: $OUT"; fi
+# ── T-A (#6353, replaces AC4-latest): web-1's deploy-status .tag is polluted with
+# `latest` (an inngest-restart writer) but /health reports a released 1.2.3 → the
+# fan-out re-swaps web-1 at v1.2.3 (resolved from /health), NEVER `latest`. Proves the
+# core wedge fix: the tag_malformed `latest` POST no longer happens. ──
+SEQ="latest-tag latest-tag ok-v123-s300" HEALTH_SEQ="1.2.3" WINDOW=0 MAXATT=5 run_verify
+if [ "$RC" -eq 0 ]; then pass; else fail "T-A: latest .tag + /health=1.2.3 should resolve v1.2.3 and reach exit 0, got rc=$RC. OUT: $OUT"; fi
+if grep -q 'v1.2.3' <<<"$POSTBODIES"; then pass; else fail "T-A: the fan-out POST must carry the /health-resolved v1.2.3. POSTBODIES: $POSTBODIES"; fi
+if ! grep -q 'latest' <<<"$POSTBODIES"; then pass; else fail "T-A: the fan-out POST must NEVER carry the polluted `latest` tag. POSTBODIES: $POSTBODIES"; fi
 
-# ── AC4-latest-resolve: a :latest baseline whose trigger re-read reports a PINNED version
-# is a path only reachable because the baseline now tolerates `latest`. The downgrade guard
-# reassigns DEPLOY_TAG latest→vX.Y.Z (never a downgrade) and the poll matches the pinned tag.
-# Proves the durable-:latest-resolved-at-source case (guard comment / #6060) works end-to-end. ──
-SEQ="latest-tag settled-v2-s250 ok-v2-s300" WINDOW=0 MAXATT=5 run_verify
-if [ "$RC" -eq 0 ]; then pass; else fail "AC4-latest-resolve: latest baseline + pinned re-read should exit 0, got rc=$RC. OUT: $OUT"; fi
-if printf '%s' "$GHOUT" | grep -q '^deployed_tag=v1.1.0$'; then pass; else fail "AC4-latest-resolve: DEPLOY_TAG must reassign latest→v1.1.0 (emitted to GITHUB_OUTPUT). GHOUT: $GHOUT"; fi
+# ── T-B (#6353): /health unreachable (empty .version) → terminal exit 1 with a named
+# ::error:: recovery message and ZERO fan-out POSTs — NO silent fallback to the .tag
+# seed. Asserted under BOTH OP_CONTEXTs (the recovery-message wording diverges). ──
+SEQ="latest-tag" HEALTH_SEQ="-" WINDOW=0 MAXATT=3 OPCTX="recreate" run_verify
+if [ "$RC" -eq 1 ]; then pass; else fail "T-B/recreate: /health unreachable should terminal-exit 1, got rc=$RC. OUT: $OUT"; fi
+if printf '%s' "$OUT" | grep -q '::error::'; then pass; else fail "T-B/recreate: must print a named ::error::. OUT: $OUT"; fi
+if printf '%s' "$OUT" | grep -qi 'Recreate landed'; then pass; else fail "T-B/recreate: must carry the recreate recovery message. OUT: $OUT"; fi
+if [ "$POSTS" -eq 0 ] && ! grep -q 'latest' <<<"$POSTBODIES"; then pass; else fail "T-B/recreate: must NOT POST (no `latest`, no .tag fallback), got POSTS=$POSTS POSTBODIES=$POSTBODIES"; fi
+SEQ="latest-tag" HEALTH_SEQ="-" WINDOW=0 MAXATT=3 OPCTX="warm-standby" run_verify
+if [ "$RC" -eq 1 ]; then pass; else fail "T-B/warm-standby: /health unreachable should terminal-exit 1, got rc=$RC. OUT: $OUT"; fi
+if printf '%s' "$OUT" | grep -qi 'Attach landed'; then pass; else fail "T-B/warm-standby: must carry the warm-standby recovery message. OUT: $OUT"; fi
+
+# ── T-C (#6353): /health reports a non-released version ('dev', BUILD_VERSION unset) →
+# terminal exit 1 with a remediation ::error:: (minimal string-shape echo — the pure
+# resolver's own suite covers the full non-semver rejection matrix). ──
+SEQ="latest-tag" HEALTH_SEQ="dev" WINDOW=0 MAXATT=3 run_verify
+if [ "$RC" -eq 1 ]; then pass; else fail "T-C: /health='dev' should terminal-exit 1, got rc=$RC. OUT: $OUT"; fi
+if printf '%s' "$OUT" | grep -q '::error::'; then pass; else fail "T-C: non-semver /health must print a remediation ::error::. OUT: $OUT"; fi
+if [ "$POSTS" -eq 0 ]; then pass; else fail "T-C: a non-semver /health resolve must abort BEFORE any POST, got POSTS=$POSTS"; fi
+
+# ── T-D (#6353, replaces AC4-latest-resolve + AC3e): the _trigger_fanout RETRIGGER
+# re-resolves the re-swap tag from /health too. During the fresh-boot wait /health
+# advances 1.0.0 → 1.1.0; the SECOND (retrigger) POST carries v1.1.0. The deploy-status
+# .tag stays v1.0.0 throughout, so a v1.1.0 POST can ONLY have come from /health — never
+# the .tag (this is what flips RED on the unmodified script). ──
+SEQ="settled-v1 settled-v1 degraded-v1-s200 settled-v1 degraded-v1-s400" HEALTH_SEQ="1.0.0 1.0.0 1.1.0" WINDOW=0 MAXATT=8 run_verify
+if grep -q 'v1.1.0' <<<"$POSTBODIES"; then pass; else fail "T-D: the retrigger POST must carry the advanced /health v1.1.0. POSTBODIES: $POSTBODIES"; fi
+if [ "$(printf '%s\n' "$POSTBODIES" | sed -n '2p' | grep -c 'v1.1.0')" -eq 1 ]; then pass; else fail "T-D: specifically the SECOND (retrigger) POST must carry v1.1.0. POSTBODIES: $POSTBODIES"; fi
+if printf '%s' "$GHOUT" | grep -q '^deployed_tag=v1.1.0$'; then pass; else fail "T-D: DEPLOY_TAG must re-resolve latest→v1.1.0 from /health (emitted to GITHUB_OUTPUT). GHOUT: $GHOUT"; fi
+
+# ── T-D-green (#6353): the retrigger-advanced tag is ACCEPTED end-to-end. During the
+# fresh-boot wait /health advances 1.0.0 → 1.1.0; after the retrigger re-swaps at
+# v1.1.0, web-2's `ok` completion at v1.1.0 matches DEPLOY_TAG → exit 0. Restores the
+# RC==0 "advance-then-accept" coverage the deleted AC3e had (T-D above proves the POST
+# payload but ends RC=1 on an unmatched slot). ──
+SEQ="settled-v1 settled-v1 degraded-v1-s200 ok-v11-s300" HEALTH_SEQ="1.0.0 1.0.0 1.1.0" WINDOW=0 MAXATT=8 run_verify
+if [ "$RC" -eq 0 ]; then pass; else fail "T-D-green: an ok completion at the /health-advanced v1.1.0 should exit 0, got rc=$RC. OUT: $OUT"; fi
+if printf '%s' "$GHOUT" | grep -q '^deployed_tag=v1.1.0$'; then pass; else fail "T-D-green: accepted DEPLOY_TAG must be the /health-advanced v1.1.0. GHOUT: $GHOUT"; fi
 
 # ── AC4: fail-loud on an UNEXPECTED reason (exit_code=0, reason ∉ {ok, *_degraded}) ──
 SEQ="settled-v1 settled-v1 unexpected-reason-s300" WINDOW=0 MAXATT=5 run_verify
