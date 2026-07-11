@@ -99,6 +99,22 @@ Adopt a **two-tier guard** and record which tier is authoritative:
   `EXCLUDED` with a bogus rationale escapes both tiers; this is inherent to any
   allowlist and is the same escape hatch AC8 already carries — caught by review, not
   by either automated tier.
+- **Accepted residual (overload name-collision).** The authenticated-callable allowlist
+  is keyed by bare `proname` (mirroring AC8's `pg_proc.proname` keying). A NEW
+  service-role-only DEFINER **overload** whose name collides with an existing AC8 entry
+  (e.g. a 3-arg `is_workspace_owner` added beside the classified 2-arg one) is exempted
+  from the static revoke-union by name — and AC8 does not backstop it either, since its
+  coverage gate is name-keyed and its ATTACK case drives only the original signature.
+  The overload's `search_path` pin IS still checked (per-`(name,signature)` identity),
+  so it is not fully unchecked. Closing this fully requires AC8 to drive attacks
+  per-signature; deferred with AC8's name-keying. Net grant state remains AC8's
+  authoritative domain.
+- **Accepted residual (guard shares fate with its job).** The non-vacuity parity guard
+  (`staticallyUndetectedDefinerFns`) and AC8 both live in the `rls-authz-fuzz` job; if a
+  future PR deletes/disables that workflow, AC8 and its parity guard vanish together,
+  leaving only the explicitly-non-authoritative static tier green. Compensating control:
+  `rls-authz-fuzz` must remain a **branch-protection required check**; the ordinary
+  vitest floors assert the static detector runs, NOT that AC8 does.
 - **Convention cross-link.** The authenticated-callable allowlist extends **ADR-101**'s
   `GRANT EXECUTE … TO authenticated` client-callable-RPC convention.
 

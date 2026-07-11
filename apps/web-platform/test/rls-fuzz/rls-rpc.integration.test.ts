@@ -1,13 +1,12 @@
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import postgres from "postgres";
 import { assertLocalDsn } from "./local-dsn-guard";
 import { buildAuthenticatedClaims } from "./claim";
 import { classifyRpcOutcome, type Verdict } from "./verdict";
 import { securityDefinerAuthenticatedFns, allSecurityDefinerFns } from "./catalog";
-import { staticallyUndetectedDefinerFns, type CorpusFile } from "../migration-lint/definer-grants";
+import { staticallyUndetectedDefinerFns, loadForwardCorpus } from "../migration-lint/definer-grants";
 import { ATTACK_SQL, EXCLUDED, KNOWN_EXPOSURES, type RpcCtx } from "./rpc-cases";
 
 // SECURITY DEFINER RPC-bypass dimension (#6256, ADR-111, AC8). Drives every
@@ -130,10 +129,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
   test("static-tier parity: the migration-lint detector finds every live SECURITY DEFINER fn", async () => {
     const liveNames = (await allSecurityDefinerFns(sql)).map((f) => f.proname);
     expect(liveNames.length, "expected the migrated DB to expose SECURITY DEFINER fns").toBeGreaterThan(20);
-    const dir = path.join(__dirname, "../../supabase/migrations");
-    const corpus: CorpusFile[] = readdirSync(dir)
-      .filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql"))
-      .map((f) => ({ file: f, sql: readFileSync(path.join(dir, f), "utf8") }));
+    const corpus = loadForwardCorpus(path.join(__dirname, "../../supabase/migrations"));
     const undetected = staticallyUndetectedDefinerFns(liveNames, corpus);
     expect(
       undetected,

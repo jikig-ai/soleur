@@ -8,6 +8,7 @@ import {
   parseDrops,
   classifyDefinerFns,
   staticallyUndetectedDefinerFns,
+  isForwardMigrationFile,
   type CorpusFile,
 } from "./definer-grants";
 
@@ -89,6 +90,29 @@ describe("normalizeSignature", () => {
   it("returns empty string for a no-arg fn", () => {
     expect(normalizeSignature("")).toBe("");
   });
+  it("handles multi-word bare types (REVOKE side) without mangling", () => {
+    expect(normalizeSignature("double precision, timestamp with time zone")).toBe(
+      "double precision, timestamp with time zone",
+    );
+  });
+  it("matches a CREATE-side named multi-word param to its REVOKE-side bare type", () => {
+    expect(normalizeSignature("p_ts timestamp with time zone")).toBe(
+      normalizeSignature("timestamp with time zone"),
+    );
+  });
+  it("canonicalises timestamptz ↔ timestamp with time zone across sides", () => {
+    expect(normalizeSignature("p_ts timestamptz")).toBe(
+      normalizeSignature("timestamp with time zone"),
+    );
+  });
+});
+
+describe("isForwardMigrationFile", () => {
+  it("accepts forward .sql, rejects .down.sql and non-sql (the corpus filter's single source)", () => {
+    expect(isForwardMigrationFile("128_revoke.sql")).toBe(true);
+    expect(isForwardMigrationFile("128_revoke.down.sql")).toBe(false);
+    expect(isForwardMigrationFile("README.md")).toBe(false);
+  });
 });
 
 describe("extractDefinerFns", () => {
@@ -127,6 +151,17 @@ describe("extractDefinerFns", () => {
     const sql =
       "create function public.p(p_amt numeric(10,2) default 0) returns void security definer set search_path=public,pg_temp as $$ $$;";
     expect(extractDefinerFns("x.sql", sql)[0].signature).toBe("numeric(10,2)");
+  });
+
+  it("detects the `AS $$ … $$ … SECURITY DEFINER` body-form (definer AFTER the body — the #6306 blind spot)", () => {
+    // The exact form the old regex missed (it required SECURITY DEFINER *before* the
+    // body). Mirrors 017_conversation_cost_tracking's increment_conversation_cost.
+    const sql =
+      "create or replace function public.after_body(p_a uuid)\nreturns void\nas $$ begin insert into t values (p_a); end $$\nlanguage plpgsql security definer\nset search_path = public, pg_temp;";
+    const fns = extractDefinerFns("017_x.sql", sql);
+    expect(fns).toHaveLength(1);
+    expect(fns[0].name).toBe("after_body");
+    expect(fns[0].signature).toBe("uuid");
   });
 });
 
@@ -209,6 +244,21 @@ describe("classifyDefinerFns — the corpus revoke-union", () => {
     expect(fourArg?.classification).toBe("pass-union");
   });
 
+  it("same-file `DROP f(sig); CREATE f(sig)` of ONE identity resolves to the live create, NOT `dropped`", () => {
+    // Regression guard for the position-based event ordering (real case: 067
+    // check_my_revocation). A creates-before-drops-per-file scheme would rank the
+    // recreate before the DROP and silently mark this live fn `dropped`.
+    const files: CorpusFile[] = [
+      {
+        file: "900_a.sql",
+        sql: "drop function if exists public.reissue(uuid);\ncreate function public.reissue(p_x uuid) returns void security definer set search_path=public,pg_temp as $$ $$;\nrevoke all on function public.reissue(uuid) from public, anon, authenticated;",
+      },
+    ];
+    const v = verdict(files, "reissue");
+    expect(v).toHaveLength(1);
+    expect(v[0].classification).toBe("pass-union");
+  });
+
   it("excludes DROP-without-recreate (3-arg created then dropped, never recreated)", () => {
     const files: CorpusFile[] = [
       {
@@ -225,18 +275,23 @@ describe("classifyDefinerFns — the corpus revoke-union", () => {
     expect(threeArg?.classification).toBe("dropped");
   });
 
-  it("ignores a .down.sql re-grant (corpus must exclude down files upstream)", () => {
-    // The corpus builder excludes *.down.sql; this asserts that a re-grant present
-    // ONLY in a down file does not satisfy the union for a forward fn.
-    const files: CorpusFile[] = [
-      {
-        file: "900_a.sql",
-        sql: "create function public.svc(p_ws uuid) returns void security definer set search_path=public,pg_temp as $$ $$;",
-      },
-    ];
-    // caller is responsible for excluding down files; here the forward-only corpus
-    // has no revoke → violation (a down-file revoke would never be passed in).
-    expect(verdict(files, "svc")[0].classification).toBe("violation");
+  it("down-file exclusion is load-bearing: a revoke present ONLY in a down file would falsely satisfy the union", () => {
+    // classifyDefinerFns is corpus-agnostic — the down-file exclusion lives in
+    // loadForwardCorpus / isForwardMigrationFile (unit-tested separately). This test
+    // demonstrates WHY that filter is load-bearing: if a caller wrongly INCLUDED the
+    // down file, its re-grant's REVOKE would satisfy the union and mask a real gap.
+    const create: CorpusFile = {
+      file: "900_a.sql",
+      sql: "create function public.svc(p_ws uuid) returns void security definer set search_path=public,pg_temp as $$ $$;",
+    };
+    const downRevoke: CorpusFile = {
+      file: "900_a.down.sql",
+      sql: "revoke all on function public.svc(uuid) from public, anon, authenticated;",
+    };
+    // forward-only (correct): no revoke → violation
+    expect(verdict([create], "svc")[0].classification).toBe("violation");
+    // down file wrongly included (the hazard): the revoke satisfies the union → masks it
+    expect(verdict([create, downRevoke], "svc")[0].classification).toBe("pass-union");
   });
 
   it("ignores a grant embedded in a block comment / dollar body", () => {

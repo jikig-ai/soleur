@@ -116,3 +116,18 @@ export const EXCLUDED: Record<string, string> = {
  * regression guard for the closed grant.
  */
 export const KNOWN_EXPOSURES: Record<string, { issue: string; note: string }> = {};
+
+/**
+ * The names of every DEFINER fn `authenticated` may EXECUTE, per this AC8 classification
+ * registry (ATTACK ∪ EXCLUDED ∪ KNOWN_EXPOSURES). Single source of truth: the AC8
+ * coverage gate asserts this set == the live authenticated-executable catalog, and the
+ * static migration-lint (#6328, ADR-112) consumes it as its authenticated-callable
+ * allowlist — so the static tier can never bless a fn AC8 has not classified. Keyed by
+ * bare `proname` (matching pg_proc); see ADR-112 for the name-collision-on-overload
+ * residual this keying inherits from AC8.
+ */
+export const CLASSIFIED_DEFINER_FN_NAMES: ReadonlySet<string> = new Set<string>([
+  ...Object.keys(ATTACK_SQL),
+  ...Object.keys(EXCLUDED),
+  ...Object.keys(KNOWN_EXPOSURES),
+]);

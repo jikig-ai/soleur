@@ -24,15 +24,20 @@
 // body is irrelevant and its `EXECUTE 'GRANT ...'` strings must not be mistaken for
 // top-level grants.
 
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+
 export interface DefinerFn {
   file: string;
-  /** unqualified function name (public. stripped). */
+  /** unqualified function name (public. stripped, lower-cased to match pg_proc.proname). */
   name: string;
   /** type-vector signature, e.g. "uuid, uuid, integer" (param names + DEFAULT clauses stripped). */
   signature: string;
   /** the noise-stripped declaration header (CREATE … up to the body-start delimiter). */
   header: string;
   returnsTrigger: boolean;
+  /** char offset of the CREATE within the file's noise-stripped SQL (for event ordering). */
+  pos: number;
 }
 
 export interface RoleStmt {
@@ -43,11 +48,33 @@ export interface RoleStmt {
 export interface DropStmt {
   name: string;
   signature: string;
+  /** char offset of the DROP within the file's noise-stripped SQL (for event ordering). */
+  pos: number;
 }
 
 export interface CorpusFile {
   file: string;
   sql: string;
+}
+
+/**
+ * A forward (non-down) migration file. Down files re-GRANT anon/authenticated and
+ * sort lexically BEFORE their forward sibling, so they must never enter the corpus
+ * (`128_…down.sql` restores the residual grants; `run-migrations.sh:125,251` skips
+ * them for the same reason). Single source of truth for the forward-only convention,
+ * shared by the static lint AND the rls-fuzz parity guard so the two tiers cannot
+ * diverge on which files count.
+ */
+export function isForwardMigrationFile(name: string): boolean {
+  return name.endsWith(".sql") && !name.endsWith(".down.sql");
+}
+
+/** Load the forward-only migration corpus (excludes `*.down.sql`), sorted by name. */
+export function loadForwardCorpus(dir: string): CorpusFile[] {
+  return readdirSync(dir)
+    .filter(isForwardMigrationFile)
+    .sort()
+    .map((file) => ({ file, sql: readFileSync(path.join(dir, file), "utf8") }));
 }
 
 export type Classification =
@@ -178,13 +205,41 @@ function splitTopLevel(s: string): string[] {
   return parts;
 }
 
+// Canonicalise cross-spellings so a CREATE-side spelling matches its REVOKE/DROP-side
+// spelling (both hand-written, occasionally divergent). Keyed by the base type name.
 const TYPE_ALIASES: Record<string, string> = {
   int: "integer",
   int4: "integer",
   int8: "bigint",
   int2: "smallint",
   bool: "boolean",
+  decimal: "numeric",
+  varchar: "character varying",
+  char: "character",
+  float4: "real",
+  float8: "double precision",
+  timestamptz: "timestamp with time zone",
+  timetz: "time with time zone",
 };
+
+// The first word of a Postgres type. Used to decide, in a whitespace-split param,
+// whether token[0] is a param NAME (`p_x uuid`) or the START OF A (possibly
+// multi-word) TYPE with no name (`double precision`, a bare REVOKE/DROP arg). A
+// param name is never a type keyword, so "token[0] is a type head ⇒ no name" is
+// robust for both single- and multi-word types — the fix for the prior
+// "always drop token[0]" heuristic that mangled `double precision` → `precision`.
+const TYPE_HEAD_WORDS = new Set([
+  "uuid", "text", "integer", "int", "int2", "int4", "int8", "bigint", "smallint",
+  "boolean", "bool", "numeric", "decimal", "real", "double", "money", "jsonb", "json",
+  "date", "timestamp", "timestamptz", "time", "timetz", "interval", "bytea",
+  "character", "char", "varchar", "bit", "inet", "cidr", "macaddr", "xml",
+  "serial", "bigserial", "smallserial", "float", "float4", "float8",
+]);
+
+/** Strip an array `[]` or parametric `(n,m)` suffix and lower-case a type token. */
+function typeBase(token: string): string {
+  return token.replace(/(\[\]|\(.*\)).*$/, "").trim().toLowerCase();
+}
 
 function normalizeParam(param: string): string {
   // Drop the DEFAULT / `= …` clause. `\bdefault\b` (not `default\s+…`) so the clause
@@ -192,22 +247,27 @@ function normalizeParam(param: string): string {
   // string-literal default like `DEFAULT '{}'` becomes `DEFAULT` with nothing after
   // it, which `default\s+` would miss → a spurious `jsonb default` type token).
   let p = param.replace(/\s+default\b[\s\S]*$/i, "").replace(/\s*=[\s\S]*$/, "");
-  // drop a leading arg-mode keyword
+  // drop a leading arg-mode keyword (OUT params ARE kept in the vector — this corpus
+  // has none, and OUT-param identity-arg exclusion is out of scope; a future OUT
+  // param would fail LOUD as a signature mismatch, never a silent pass).
   p = p.replace(/^\s*(in|out|inout|variadic)\s+/i, "");
   p = p.trim().replace(/\s+/g, " ");
   if (p === "") return "";
-  // `name type…` vs bare `type…`: in this corpus every CREATE param is
-  // `name type` (verified: no unnamed params, no multi-word types on the param
-  // side) and every REVOKE/DROP param is a bare type. If ≥2 whitespace tokens,
-  // the first is the name → drop it; else the single token is the type.
   const tokens = p.split(" ");
-  const typeStr = (tokens.length >= 2 ? tokens.slice(1).join(" ") : tokens[0]).toLowerCase();
-  // canonicalise the base type name (handles `int` vs `integer`), preserving any
-  // `[]` / `(n,m)` suffix.
+  // token[0] is a type head → no param name, the whole thing is a (multi-word) type.
+  // Otherwise token[0] is the param name; the rest is the type.
+  const typeStr = (
+    tokens.length === 1 || TYPE_HEAD_WORDS.has(typeBase(tokens[0]))
+      ? tokens.join(" ")
+      : tokens.slice(1).join(" ")
+  ).toLowerCase();
+  // canonicalise the base type name (int↔integer, timestamptz↔timestamp with time
+  // zone, …), preserving any `[]` / `(n,m)` suffix. Normalise inner-paren whitespace
+  // so `numeric(10, 2)` (CREATE) matches `numeric(10,2)` (REVOKE).
   const suffixMatch = /^([a-z_ ]+)(\[\]|\(.*\))?$/.exec(typeStr);
-  if (!suffixMatch) return typeStr;
+  if (!suffixMatch) return typeStr.replace(/\s*,\s*/g, ",");
   const base = suffixMatch[1].trim();
-  const suffix = suffixMatch[2] ?? "";
+  const suffix = (suffixMatch[2] ?? "").replace(/\s*,\s*/g, ",");
   return (TYPE_ALIASES[base] ?? base) + suffix;
 }
 
@@ -256,18 +316,26 @@ export function extractDefinerFns(file: string, rawSql: string): DefinerFn[] {
     const parenStart = m.index! + m[0].length - 1;
     const { inner, end } = readBalancedParens(sql, parenStart);
     if (end === -1) continue;
-    // Header = CREATE … up to the statement terminator. The body was stripped to a
-    // space, so the first top-level `;` after the params is the statement end (or a
-    // `begin atomic` SQL-standard body, which carries no `;` before its own `end;`).
+    // Header = CREATE … up to the first `;` after the params. Dollar-quoted bodies
+    // were blanked by stripSqlNoise, so for the common `AS $$…$$;` form that `;` is
+    // the statement terminator. For a `BEGIN ATOMIC … END;` SQL-standard body (NOT
+    // dollar-quoted, so NOT blanked) the first `;` lands INSIDE the body — but every
+    // function-level attribute we read (SECURITY DEFINER, RETURNS, SET search_path)
+    // precedes BEGIN ATOMIC, so the truncated header still contains them. We only
+    // ever read the header for keyword presence, never the body, so the truncation is
+    // harmless (the corpus has zero BEGIN ATOMIC fns today regardless).
     const semi = sql.indexOf(";", end + 1);
     const header = sql.slice(m.index!, semi === -1 ? undefined : semi);
     if (!/\bsecurity\s+definer\b/i.test(header)) continue;
     fns.push({
       file,
-      name,
+      // lower-case to match pg_proc.proname (unquoted idents fold lower); keeps the
+      // allowlist / parity keys aligned even if a future fn is defined mixed-case.
+      name: name.toLowerCase(),
       signature: normalizeSignature(inner),
       header,
       returnsTrigger: /\breturns\s+trigger\b/i.test(header),
+      pos: m.index!,
     });
   }
   return fns;
@@ -298,7 +366,7 @@ function parseRoleStmts(
         .map((r) => r.trim().toLowerCase())
         .filter(Boolean),
     );
-    out.push({ name, signature: normalizeSignature(inner), roles });
+    out.push({ name: name.toLowerCase(), signature: normalizeSignature(inner), roles });
   }
   return out;
 }
@@ -311,6 +379,11 @@ export function parseRevokes(sql: string): RoleStmt[] {
   );
 }
 
+// NOTE: parseGrants is deliberately NOT consulted by classifyDefinerFns. The static
+// tier models only REVOKEs (the revoke-union), never net grant state — a
+// `revoke-all-3 → later GRANT to authenticated` sequence is the runtime AC8 gate's
+// domain (live `proacl`), a documented residual (see classifyDefinerFns). It is
+// exported + tested for use by callers doing their own grant introspection.
 export function parseGrants(sql: string): RoleStmt[] {
   return parseRoleStmts(
     sql,
@@ -347,7 +420,7 @@ export function parseDrops(sql: string): DropStmt[] {
     const parenStart = m.index! + m[0].length - 1;
     const { inner, end } = readBalancedParens(stripped, parenStart);
     if (end === -1) continue;
-    out.push({ name, signature: normalizeSignature(inner) });
+    out.push({ name: name.toLowerCase(), signature: normalizeSignature(inner), pos: m.index! });
   }
   return out;
 }
@@ -387,7 +460,7 @@ interface FnEvent {
  */
 export function classifyDefinerFns(
   files: CorpusFile[],
-  opts: { authenticatedCallable: Set<string>; grandfather: Set<string> },
+  opts: { authenticatedCallable: ReadonlySet<string>; grandfather: ReadonlySet<string> },
 ): DefinerVerdict[] {
   // Stable ordering: sort files by name so lexical migration order = apply order.
   const sorted = [...files].sort((a, b) => a.file.localeCompare(b.file));
@@ -395,22 +468,27 @@ export function classifyDefinerFns(
   const events = new Map<string, FnEvent[]>();
   const revokeUnion = new Map<string, Set<string>>();
 
-  // Monotonic sequence in document order (creates emitted before drops per file).
-  // A single identity is never both created and dropped in the same file, so
-  // creates-before-drops within a file cannot mis-order a real (create, drop) pair;
-  // cross-file order is what decides existence, and file sort = apply order.
-  let seq = 0;
-  sorted.forEach((f) => {
+  // Order events by TRUE source position: (fileIndex, charOffset-within-file). A
+  // single migration can `DROP FUNCTION f(sig); CREATE FUNCTION f(sig)` the SAME
+  // identity (e.g. 067 check_my_revocation) — a creates-before-drops-per-file scheme
+  // would mis-rank the recreate BEFORE the drop and mark a live fn `dropped`,
+  // silently skipping its assertions. extractDefinerFns/parseDrops both carry `pos`
+  // (offset in the identically noise-stripped SQL), so positions are comparable
+  // within a file; file sort = apply order across files. FILE_STRIDE must exceed any
+  // migration file length so cross-file order always dominates intra-file offset.
+  const FILE_STRIDE = 1e9;
+  sorted.forEach((f, fileIdx) => {
+    const base = fileIdx * FILE_STRIDE;
     for (const fn of extractDefinerFns(f.file, f.sql)) {
       const k = key(fn.name, fn.signature);
       const arr = events.get(k) ?? [];
-      arr.push({ order: seq++, kind: "create", fn });
+      arr.push({ order: base + fn.pos, kind: "create", fn });
       events.set(k, arr);
     }
     for (const d of parseDrops(f.sql)) {
       const k = key(d.name, d.signature);
       const arr = events.get(k) ?? [];
-      arr.push({ order: seq++, kind: "drop" });
+      arr.push({ order: base + d.pos, kind: "drop" });
       events.set(k, arr);
     }
     for (const r of parseRevokes(f.sql)) {
