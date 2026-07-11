@@ -15,6 +15,20 @@ type: infra
 The PR body MUST say "part of epic #6178" and MUST NOT say `Closes #6178` / `Fixes #6178` — the epic
 stays open; this is one implementation slice, not the whole cutover.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-11 · **Reviewers:** architecture-strategist, spec-flow-analyzer, code-simplicity-reviewer (all "approve"; render mechanics + C4 state + ADR-100 alignment independently re-verified via `terraform console`).
+
+### Key improvements folded in
+1. **Single render authority (simplicity + spec-flow + architecture converged).** The awk span-deletion model cannot verify the load-bearing `~}` whitespace-strip; only a real `terraform templatefile` render can. Verified the bootstrap test runs in the `deploy-script-tests` job (`infra-validation.yml:136`) which has **no** `setup-terraform` — so the render leg was "SKIP-in-CI" (not a real gate). Fix: **add one `setup-terraform` step to `deploy-script-tests`**, make the terraform render the behavioral authority, and **drop the awk span-deletion reimplementation** (keep only cheap static marker/placement checks). YAML validity is now asserted once (in the render leg), not three times.
+2. **`type = bool` is load-bearing (architecture #1).** `%{ if web_colocate_inngest }` is truthy for any non-empty string; the false-gate + the rollback `TF_VAR_web_colocate_inngest="false"` string route work ONLY because the var is `type = bool`. Added: a static assertion pinning `type = bool`, and a render leg passing the **string** `"false"` (not just the bool literal) to exercise the coercion.
+3. **Direct-negative + retention assertions (spec-flow b/c, architecture #2).** The "no enable/start" conclusion is transitive (the tests grep the invocation token, not `inngest-server.service`, because that token legitimately survives in the sudoers aliases + webhook `ReadWritePaths`). Added on the false render: no out-of-gate inngest `enable/start`/`inngest-heartbeat`; and positive **retention** that the false render still contains `--name soleur-web-platform`, `INNGEST_BASE_URL`, and the fail-closed `/run/soleur-hostscripts.ok` gate (guards an over-broad `endif`).
+4. AC3 trimmed to strip-only. C4 description line ref corrected (`:184` → `:186`).
+
+### Load-bearing facts the invariant rests on (verified this pass)
+- `inngest-bootstrap.sh` is the **sole author AND enabler** of `inngest-server.service` / `inngest-heartbeat.timer` — those units are NOT in cloud-init `write_files:`; they are written by the script (`inngest-bootstrap.sh:60-63`) and enabled at `:504-506`, reachable only via the gated `cloud-init.yml:693` invocation. Gating the invocation ⇒ no units authored ⇒ nothing to enable.
+- The `INNGEST_BASE_URL=…:8288` app-container env (`cloud-init.yml:728`) is set **unconditionally** (outside the gate). A false-render fresh host boots healthy (no health-check on inngest) but scheduled reminders silently miss until the separate repoint PR + dedicated-host-readiness land — an **ungated temporal risk** owned by epic #6178's sequencing, not a code defect in this PR.
+
 ## Overview
 
 A freshly-recreated web host currently bootstraps, enables, and starts a **co-located** Inngest server
@@ -102,13 +116,27 @@ the recreate path behind dedicated-host readiness + the separate `INNGEST_BASE_U
     existing `$${…}` escaping.
 
 - **`apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`** — two edits (see Test Strategy):
-  1. **Fix AC3** (`cloud-init.yml parses as valid YAML`): the raw file now contains col-0 `%{ … }`
-     templatefile directives, which `python3 … yaml.safe_load` rejects (`%` at col 0 = YAML directive
-     indicator → `ScannerError`, verified). Pre-strip `^%{` lines before `safe_load`; ADD a rendered-both-
-     -states YAML-validity assertion so the intent (rendered cloud-init is valid YAML) is strengthened,
-     not weakened.
-  2. **Add the toggle=false coverage** (new AC block): assert the gate markers exist and wrap exactly the
-     bootstrap item, and that the gated-false render omits the bootstrap while the gated-true render keeps it.
+  1. **Fix AC3, strip-only** (`cloud-init.yml parses as valid YAML`): the raw file now contains col-0
+     `%{ … }` templatefile directives, which `python3 … yaml.safe_load` rejects (`%` at col 0 = YAML
+     directive indicator → `ScannerError`, verified). Pre-strip `^%{` lines before `safe_load`. Do NOT
+     also bolt a rendered-validity assertion here — rendered-state YAML validity is asserted **once**, in
+     the render leg below (per code-simplicity review: same property, one home).
+  2. **Add the toggle coverage** (new AC block): a cheap portable structural check (markers present +
+     placement) plus a **terraform-render behavioral leg** that is the single authority for the gate's
+     effect (see Test Strategy). This replaces — does not add to — the awk span-deletion model.
+
+- **`.github/workflows/infra-validation.yml`** — add a `hashicorp/setup-terraform@…v4.0.0` step to the
+  **`deploy-script-tests`** job (the job that runs `cloud-init-inngest-bootstrap.test.sh` at `:184`;
+  currently it has NO terraform, unlike the `validate`/`plan` jobs). Without this, the render leg would be
+  perpetually `SKIP`-gated in CI (a "maybe-run" test is not a gate — all three review agents flagged this).
+  One step; makes the render leg authoritative.
+
+- **`apps/web-platform/infra/variables.tf`** additionally — the `type = bool` on `web_colocate_inngest` is
+  **load-bearing**: the `%{ if web_colocate_inngest }` directive is truthy for ANY non-empty string, and
+  the rollback path sets `TF_VAR_web_colocate_inngest="false"` (a string) — coerced to boolean `false`
+  ONLY because the variable is `bool`. A silent drift to `type = string` would make the false-gate
+  always-truthy. Covered by a static `type = bool` grep assertion + a render leg passing the string
+  `"false"` (below).
 
 ### Files explicitly NOT edited (guardrails)
 - `apps/web-platform/infra/inngest-bootstrap.sh` — shared with the dedicated host; the enable/start/heartbeat
@@ -145,36 +173,49 @@ Contract lands before the consumer (Phase 2) so the directive has a defined var 
 
 ## Test Strategy
 
-Primary assertions are **static + terraform-render**, matching the existing file's grep/awk + skip-when-tool-
-absent convention. There is exactly one `if`/`endif` pair and no nesting, so an awk model of the directive is
-faithful (verified to match `terraform console` output).
+**Load-bearing invariant (verified by spec-flow + architecture review):** `inngest-bootstrap.sh` is the SOLE
+author-and-enabler of the inngest systemd units — it declares `inngest-server.service` /
+`inngest-heartbeat.{service,timer}` (`inngest-bootstrap.sh:60-63`) and enables/starts them (`:504-506`);
+cloud-init.yml's `write_files:` writes ZERO inngest units (verified). Therefore gating the runcmd item that
+*invokes* the script (the only invocation, `cloud-init.yml:693`) transitively guarantees no enable/start/
+heartbeat on a fresh web host. The tests below assert the invocation-absence (the cause), and this section
+documents the transitive fact so a future edit that adds an inline inngest unit to `write_files:` is caught.
 
-**AC3 fix (raw YAML validity with directives present):**
+Design (per the review triad): **one terraform-render behavioral authority + one cheap portable structural
+smoke.** The awk span-deletion model is dropped — it re-implements Terraform and cannot exercise the
+load-bearing `~}` whitespace-strip (only a real render can). Rendered-YAML validity is asserted once, in the
+render leg.
+
+**(a) AC3 — raw-source YAML validity, strip-only:**
 ```sh
 # strip col-0 templatefile directive lines before parsing the (non-rendered) source
 grep -v '^%{' "$CLOUD_INIT" | python3 -c "import sys,yaml; yaml.safe_load(sys.stdin)"
 ```
-Plus a rendered-state check (below) so YAML validity of the *rendered* artifact is asserted directly.
+No rendered-validity assertion here — that lives once in the render leg.
 
-**New toggle coverage:**
-- **Markers present + placed:** exactly one `^%{ if web_colocate_inngest ~}$` and one `^%{ endif ~}$`; the
-  `if` line precedes `# Bootstrap Inngest server on first boot`; the `endif` line follows the block's
-  `trap - EXIT` and precedes the next `  - |` item.
-- **Span containment (gate wraps the RIGHT content):** the text between the markers CONTAINS the IREF pin
-  (`soleur-inngest-bootstrap:v…`) AND the `bash "$EXTRACT_DIR/inngest-bootstrap.sh"` invocation.
-- **Nothing outside the span co-locates Inngest:** deleting the span (`awk` from `%{ if web_colocate_inngest`
-  through `%{ endif`) yields a file with **no** `soleur-inngest-bootstrap` ref and **no** `inngest-bootstrap.sh`
-  invocation → transitively no `enable/start inngest-server.service` / `inngest-heartbeat.timer` on a fresh
-  web host. That deleted-span file also `yaml.safe_load`s clean (models `web_colocate_inngest=false`, matches
-  `terraform console`).
-- **toggle=true model:** removing only the two marker lines keeps the IREF pin present and `yaml.safe_load`s
-  clean (models `web_colocate_inngest=true`).
-- **Optional CI-authoritative leg (SKIP if `! command -v terraform`, mirroring the dash/visudo/git skips):**
-  render via `terraform console` with all templatefile vars set to placeholders and `web_colocate_inngest`
-  false/true; assert the false render lacks `soleur-inngest-bootstrap` and the true render contains it, and
-  both parse as YAML. Var list to supply: `image_name, fail2ban_sshd_local_b64, host_scripts_content_hash,
-  tunnel_token, webhook_deploy_secret, doppler_token, sentry_dsn, resend_api_key, ghcr_read_user,
-  ghcr_read_token, ci_ssh_public_key_openssh` (+ `web_colocate_inngest`).
+**(b) Cheap portable structural smoke (no terraform):**
+- exactly one `^%{ if web_colocate_inngest ~}$` and one `^%{ endif ~}$`; the `if` line precedes
+  `# Bootstrap Inngest server on first boot`; the `endif` line follows the block's `trap - EXIT` and precedes
+  the next `  - |` item.
+- static assertion pinning the toggle's type: `grep -Eq 'variable "web_colocate_inngest"' … && grep -Eq
+  'type\s*=\s*bool' …` — the `type = bool` is load-bearing for string→bool coercion (see Files to Edit).
+
+**(c) Terraform-render behavioral authority (runs in CI once `setup-terraform` is added to
+`deploy-script-tests`; SKIP locally when `! command -v terraform`, mirroring the dash/visudo/git skips):**
+render `templatefile("cloud-init.yml", { …all-vars…, web_colocate_inngest = <case> })` via `terraform
+console` for three cases and assert:
+- **`false` (bool):** render **omits** `soleur-inngest-bootstrap` AND the `inngest-bootstrap.sh` invocation
+  (→ transitively no enable/start/heartbeat); **retains** the post-block app bring-up — `--name
+  soleur-web-platform`, `INNGEST_BASE_URL`, and the fail-closed `test -f /run/soleur-hostscripts.ok` gate
+  (guards an over-broad `endif` that swallows later items); and `yaml.safe_load`s clean.
+- **`"false"` (string):** identical omission — proves `type = bool` coerces the `TF_VAR="false"` rollback
+  route to a falsey gate (NOT truthy-non-empty-string). This is the highest-value new assertion.
+- **`true` (bool):** render **contains** `soleur-inngest-bootstrap` + the bootstrap invocation; `yaml.safe_load`s clean.
+
+Var list to supply (all placeholders except the toggle; keep in sync with `server.tf`'s map — a new map var
+breaks this leg, which is the intended tripwire): `image_name, fail2ban_sshd_local_b64,
+host_scripts_content_hash, tunnel_token, webhook_deploy_secret, doppler_token, sentry_dsn, resend_api_key,
+ghcr_read_user, ghcr_read_token, ci_ssh_public_key_openssh` (+ `web_colocate_inngest`).
 
 Existing assertions that MUST stay green (the gate must not disturb them): AC1 IREF pin shape, Config.Env
 sourcing, composite EXIT-trap-calls-cleanup, AC4 positional (bootstrap precedes `--name soleur-web-platform`),
@@ -184,14 +225,19 @@ are NOT pulled into the shell snippet, verified against the awk logic), AC5 sudo
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `variables.tf` declares `web_colocate_inngest` (bool, `default = false`, non-sensitive).
+- [ ] `variables.tf` declares `web_colocate_inngest` (`type = bool`, `default = false`, non-sensitive). The
+      `type = bool` is load-bearing (string→bool coercion for the rollback route) — a static grep asserts it.
 - [ ] `server.tf`'s `cloud-init.yml` templatefile map passes `web_colocate_inngest = var.web_colocate_inngest`.
 - [ ] `cloud-init.yml` wraps the "Bootstrap Inngest server on first boot" item in col-0
       `%{ if web_colocate_inngest ~}` / `%{ endif ~}`, escaping (`$${…}`) unchanged.
-- [ ] `terraform console` render with `web_colocate_inngest=false` omits `soleur-inngest-bootstrap` +
-      `inngest-bootstrap.sh` and is `yaml.safe_load`-clean; with `=true` it includes them and is clean.
-- [ ] `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` → all PASS, 0 FAIL (AC3 fixed;
-      new toggle block green; all prior ACs green).
+- [ ] `.github/workflows/infra-validation.yml` `deploy-script-tests` job gains a `setup-terraform` step so
+      the render leg runs (not SKIPs) in CI.
+- [ ] Render leg (authoritative): `web_colocate_inngest=false` (bool) AND `="false"` (string) both **omit**
+      `soleur-inngest-bootstrap` + the `inngest-bootstrap.sh` invocation and **retain** `--name
+      soleur-web-platform` + `INNGEST_BASE_URL` + the `test -f /run/soleur-hostscripts.ok` gate, `yaml.safe_load`-clean;
+      `=true` **includes** the bootstrap, `yaml.safe_load`-clean.
+- [ ] `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` → all PASS, 0 FAIL (AC3 strip-only;
+      new structural + render toggle block green; all prior ACs green).
 - [ ] `plugins/soleur/test/cloud-init-user-data-size.test.ts` green **unmodified** (web gzip render < 21,000 B).
 - [ ] Infra `*.test.ts` (target-parity, web-hosts-fanout-parity, server-tf-set-e) green.
 - [ ] `terraform fmt -check` + `terraform validate` clean on `apps/web-platform/infra/`.
@@ -217,6 +263,12 @@ serving AND the separate `INNGEST_BASE_URL` repoint PR has landed — else a rec
 reachable scheduler. That sequencing is owned by epic #6178, not gated here.
 
 ## Infrastructure (IaC)
+
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!-- Phase 2.8 reviewed: this change introduces NO manual provisioning. It is a Terraform variable +
+     templatefile-directive edit; the quiesce mechanism is host-recreate (immutable redeploy), NOT SSH.
+     Any `systemctl`/`enable` tokens in this plan's prose describe the EXISTING inngest-bootstrap.sh
+     behavior for test-rationale purposes only — they are not new operator steps. -->
 
 ### Terraform changes
 - `apps/web-platform/infra/variables.tf` — new `web_colocate_inngest` (bool, default false, non-sensitive).
@@ -251,19 +303,19 @@ error_reporting:
   fail_loud: "true — /run/soleur-hostscripts.ok guard poweroff -f's a host whose boot failed (visible absence)"
 failure_modes:
   - mode: "directive makes raw/rendered cloud-init invalid YAML"
-    detection: "cloud-init-inngest-bootstrap.test.sh AC3 (rendered-state yaml.safe_load) + terraform validate in CI"
+    detection: "AC3 strip-only raw parse + the authoritative terraform render leg (both-state yaml.safe_load) + terraform validate in CI"
     alert_route: "CI red (pre-merge); at runtime a boot failure → fail-closed poweroff → Better Stack origin-absence page"
-  - mode: "gate over-broad — strips host-script extraction / wrong content"
-    detection: "new span-containment + size test (block still modeled) + terraform render test in CI"
+  - mode: "gate over-broad (endif swallows later items) OR under-broad (still co-locates)"
+    detection: "terraform render leg: retention asserts --name soleur-web-platform + INNGEST_BASE_URL + /run/soleur-hostscripts.ok survive false render; omission asserts no bootstrap; size test keeps block-present model"
     alert_route: "CI red (pre-merge)"
-  - mode: "gate under-broad — web host still co-locates post-cutover (double scheduler)"
+  - mode: "post-cutover recreate races the dedicated host / repoint (double-fire or missed reminders)"
     detection: "inngest-doublefire-probe.sh + inngest-enumerate-reminders.sh (existing epic probes)"
     alert_route: "Sentry / cutover-verify state (existing #6178 tooling)"
 logs:
   where: "journald → Better Stack Logs (source 2457081) via Vector on the app host"
   retention: "Better Stack Logs default"
 discoverability_test:
-  command: "echo 'templatefile(\"apps/web-platform/infra/cloud-init.yml\", {web_colocate_inngest=false, …})' | terraform console | grep -c soleur-inngest-bootstrap  # expect 0 (NO ssh)"
+  command: "printf 'templatefile(\"apps/web-platform/infra/cloud-init.yml\", {web_colocate_inngest=false, ...})' | terraform console | grep -c soleur-inngest-bootstrap   # local terminal, no remote host"
   expected_output: "0 (rendered false-state web cloud-init contains no co-located inngest bootstrap)"
 ```
 
@@ -274,7 +326,7 @@ web co-location) is already recorded in `ADR-100-inngest-dedicated-single-host-s
 This PR is one implementation slice realizing that decision — a contextual citation, not a new/amended ADR.
 
 **C4 completeness check (read all three `.c4` files):** `model.c4` models `inngest` as its own container
-(`:184`, description already cites ADR-100 + #6178 + "Extracted to its own single-host … node"); the hosting
+(element opens `:184`, description `:186` — already cites ADR-100 + #6178 + "Extracted to its own single-host … node"); the hosting
 edge `hetzner -> inngest` (`:377`) is **already annotated** `"…removed from web cloud-init — ADR-100, #6178"`;
 the `api -> inngest` HTTP event edge (`:370`, "Sends events; serves functions") correctly REMAINS (the web
 app still sends events to the dedicated host). Enumerated: external actors — none new; external systems —
@@ -299,10 +351,25 @@ None — no open `code-review` issue targets `apps/web-platform/infra/cloud-init
 
 ## Risks & Sharp Edges
 
-- **[YAML-validity, highest]** Col-0 `%{ … }` directives make the **raw** source non-`yaml.safe_load`-able
-  (`%` at col 0 = YAML directive indicator). This is expected and handled by the AC3 fix (strip `^%{` before
-  parse) + the rendered-state validity check. Do NOT try to "fix" it by indenting the directive — verified:
-  indenting BOTH fails raw-parse AND corrupts the render (mis-nested list items).
+- **[`type = bool` load-bearing, highest — architecture review]** `%{ if web_colocate_inngest }` is truthy
+  for ANY non-empty string. The rollback route sets `TF_VAR_web_colocate_inngest="false"` (a string), coerced
+  to boolean `false` ONLY because the var is `type = bool`. A silent drift to `type = string` makes the
+  false-gate always-truthy (co-location never stops). Guarded by a static `type = bool` grep AND a render leg
+  that passes the STRING `"false"` and asserts omission.
+- **[transitive invariant — spec-flow review]** The tests assert invocation-absence (no `inngest-bootstrap.sh`
+  run), NOT the unit-enable line, because the token `inngest-server.service` legitimately survives a false
+  render in the sudoers aliases (`INNGEST_RESTART/STOP/START`) and webhook `ReadWritePaths`. This is correct
+  ONLY because `inngest-bootstrap.sh` is the sole author+enabler of the units (verified: `write_files:` has
+  zero inngest units). A future edit that adds an inline inngest unit/enable to `write_files:` would pass
+  every test while breaking the invariant — flag it in review.
+- **[`INNGEST_BASE_URL` ungated temporal risk — all three reviewers]** `INNGEST_BASE_URL=…:8288` is set
+  UNCONDITIONALLY (`cloud-init.yml:728`, outside the gate). A false-render fresh host boots healthy but
+  reminders silently miss until the separate repoint PR + dedicated-host-readiness land. Nothing in THIS PR
+  mechanically blocks a premature recreate — accepted, epic-#6178-owned sequencing risk (not a code defect).
+- **[YAML-validity]** Col-0 `%{ … }` directives make the **raw** source non-`yaml.safe_load`-able
+  (`%` at col 0 = YAML directive indicator). Handled by AC3 strip-only (`grep -v '^%{'` before parse);
+  rendered-state validity is asserted once in the render leg. Do NOT "fix" it by indenting the directive —
+  verified: indenting BOTH fails raw-parse AND corrupts the render (mis-nested list items).
 - **Strip-marker form is load-bearing:** use right-strip `~}` on both `%{ if … ~}` and `%{ endif ~}`.
   Verified this produces clean YAML with no stray blank line between runcmd items in the `true` render and a
   clean list in the `false` render.
