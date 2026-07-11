@@ -38,6 +38,11 @@ Branch: `feat-one-shot-fix-container-egress-inngest-firewall` · Epic: #6178 (Re
 
 ## Phase 5 — Ship
 
-- [ ] 5.1 PR body: "part of epic #6178" (**Ref, not Closes**) + delivery-context paragraph
-  (bundle via server.tf, reaches hosts on recreate, must merge before cutover recreates,
-  inert until #6348). Open **ready, not draft**.
+- [ ] 5.1 PR body: "part of epic #6178" (**Ref, not Closes**) + **corrected** delivery-context
+  paragraph (see plan Delivery Context + `decision-challenges.md`): merging **fires**
+  `apply-web-platform-infra.yml` (path-glob `apps/web-platform/infra/**`), re-provisions
+  **web-1** via `terraform_data.cron_egress_firewall` (config-hash trigger) and **restarts its
+  live firewall** (zero-downtime — gap-free restart + inert rule); **web-2** gets the rule on
+  recreate; MUST merge before cutover recreates; inert until #6348. Open **ready, not draft**.
+- [ ] 5.2 `ship` surfaces `decision-challenges.md` (corrected delivery premise) as an
+  `action-required` issue so the operator knows the merge touches the live web-1 firewall.
