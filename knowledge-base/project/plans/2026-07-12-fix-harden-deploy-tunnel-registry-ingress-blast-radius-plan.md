@@ -12,6 +12,28 @@ date: 2026-07-12
 
 # 🐛 fix(infra): harden shared deploy tunnel against registry-origin dial storms (#6357)
 
+## Deepen-Plan Enhancement Summary
+
+**Deepened:** 2026-07-12 · **Panel:** CTO/platform-strategist, framework-docs, repo-research, learnings + plan-review (DHH, Kieran, code-simplicity).
+
+**Key corrections applied (from research + review):**
+1. **Premise falsified** — the issue's "stale/dead/migrated" origin is wrong: #6288 kept the private IP `10.0.1.30:5000`; the rule is the live ADR-096/#6122 push path. Re-scoped *remove* → *harden + correct comment*.
+2. **`connect_timeout` is an INTEGER (`5`), not `"5s"`** (Kieran, verified vs v4 provider docs; `terraform validate` is the arbiter). framework-docs initially reported a duration string — the disagreement is resolved in-plan.
+3. **Deploy-tunnel monitor deferred to #6178** — the cheap `cloudflare_notification_policy` is structurally blind to a daemon-up sibling 502; the real CF-Access synthetic is over-scope for a transient, CI-detected, self-recovered incident. Scope tightened to a single in-place `tunnel.tf` edit.
+4. **Dropped prose-testing** (comment-string drift-test + ACs) per DHH + simplicity; kept one behavioral removal-guard AC.
+
+**Gate status:** User-Brand Impact ✓ (aggregate pattern) · Observability ✓ (no-SSH probe) · PAT-halt ✓ (none) · UI-wireframe ✓ (no UI surface) · Network-outage deep-dive ✓ (below) · Precedent ✓ (`origin_request` is novel in-repo — `git grep` returned no existing use; framework-docs-verified v4 schema). Citations verified live: #6357/#6288/#6178/#6122 all OPEN.
+
+## Network-Outage Deep-Dive (L3→L7)
+
+The `## Hypotheses` section already sequences L3→L7 with the issue's self-pulled evidence as the verification artifact. Layer status:
+- **L3 firewall / private-net:** verified — dial-canceled scoped to `registry.soleur.ai` only; origin transiently absent during #6288 ForceNew region-migrate. No firewall/egress-IP drift (registry is deny-all-public + reached over the private net, not a public allowlist).
+- **L3 DNS/routing:** verified — deploy/ssh/registry share one `cfargotunnel.com` CNAME (single daemon).
+- **L7 TLS/edge:** primary hypothesis (shared-daemon HA-stream saturation) is **UNVERIFIED** — cloudflared `--metrics` were not captured; this is the observability gap deferred to #6178. `connect_timeout` mitigates every candidate mechanism.
+- **L7 app:** ruled out — the webhook binary returned 403/500 (not 502) in-window; the 502 packets never reached it.
+
+No firewall/egress-IP verification is required before implementation: the fix is an edge-config timeout, not a host-reachability change. This satisfies `hr-ssh-diagnosis-verify-firewall` (L3 verified before any L7 fix).
+
 ## Overview
 
 On 2026-07-11 (~21:06–21:16 UTC) `POST deploy.soleur.ai/hooks/deploy` returned **HTTP 502 at the
@@ -274,7 +296,7 @@ logs:
   retention: Cloudflare default; GitHub Actions run logs (90d)
 discoverability_test:
   command: 'curl -s -H "X-Signature-256: <hmac>" https://deploy.soleur.ai/hooks/deploy-status  # returns last deploy state; bad-sig POST /hooks/deploy → 403/500 not 502'
-  expected_output: last deploy state JSON (healthy) / 403 on bad sig — proves tunnel→webhook path alive without SSH
+  expected_output: last deploy state JSON (healthy) / 403 on bad sig — proves tunnel→webhook path alive without host shell access
 ```
 
 **Affected-surface note:** the true diagnostic signal for the L7-edge saturation hypothesis is
@@ -347,6 +369,11 @@ None. `gh issue list --label code-review --state open` returned no open scope-ou
   on daemon degradation, not on a single ingress route returning 502 while the daemon is up — so the
   #6357 failure mode would not be caught. The real detector (CF-Access-authed synthetic 502) carries a
   secret-surface cost. Both deferred to **#6178** rather than shipping blind detection.
+- **No in-repo `origin_request` precedent** (precedent-diff gate) — `git grep origin_request -- 'apps/**/*.tf'`
+  returns nothing; this is the first use of a per-ingress `origin_request` block in the repo. Pattern is
+  **novel**, so `terraform validate` + the captured `terraform plan` (Phase 3) are the load-bearing
+  correctness gates rather than a sibling diff. The v4 schema for the two fields was framework-docs +
+  Kieran-verified.
 - **`Closes #6357` at merge would false-resolve** — the real fix lands at **post-merge apply**; use
   `Ref #6357` + a post-apply `gh issue close` (ops-remediation close pattern).
 - **Deferred work has trackers already:** registry stability → **#6288** (open); tunnel decoupling +
