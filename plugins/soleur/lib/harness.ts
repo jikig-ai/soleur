@@ -7,6 +7,8 @@
  * Skills and go.md must call these helpers (or follow routingInstructions) — never improvise workflows.
  */
 
+import { pathToAgentId } from "./agent-registry";
+
 export type Harness = "claude" | "grok" | "unknown";
 
 /** Env vars set by Grok Build (see https://docs.x.ai/build/settings/reference). */
@@ -38,10 +40,19 @@ export function normalizeSkillName(skill: string): string {
   return skill.replace(/^soleur:/, "");
 }
 
-/** Ensure agent ids are plugin-qualified when a bare frontmatter name is passed. */
+/**
+ * Ensure agent ids are plugin-qualified when a bare or path-style name is passed.
+ * Path-style: `engineering/review/security-sentinel` → registry-qualified id.
+ */
 export function normalizeAgentName(agent: string): string {
+  if (agent.startsWith("soleur:")) {
+    return agent;
+  }
+  if (agent.includes("/")) {
+    return pathToAgentId(`agents/${agent.replace(/\.md$/, "")}.md`);
+  }
   if (agent.includes(":")) {
-    return agent.startsWith("soleur:") ? agent : `soleur:${agent}`;
+    return `soleur:${agent}`;
   }
   return agent;
 }

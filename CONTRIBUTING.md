@@ -37,6 +37,8 @@ Grok and Claude use **different slash-command namespaces** for the same plugin:
 
 Do **not** document `/soleur:go` for Grok sessions — use `/go`. Workflow routing must invoke registered skills (slash commands under Grok, Skill tool under Claude), not improvised steps. See `knowledge-base/engineering/grok-onboarding.md` and `plugins/soleur/lib/harness.ts`.
 
+**Grok agent compat:** Soleur agents are nested under `plugins/soleur/agents/**` (Claude recurses; Grok does not). After adding or renaming an agent, run `cd plugins/soleur && bun run scripts/sync-grok-agent-compat.ts` to refresh `.grok/agents/` stubs and `.claude-plugin/agents.manifest.json`.
+
 ## Contributor License Agreement
 
 Before your first pull request can be merged, you must sign the [Individual Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html) (CLA). The CLA bot will prompt you automatically on your first PR.
