@@ -46,12 +46,15 @@ done
 # ── Test harness ────────────────────────────────────────────────────────────
 # Inputs via env:
 #   SEQ         space-separated fixture basenames (no .json). Position contract:
-#               SEQ[0] = the baseline read, SEQ[1] = the trigger's internal
-#               _get_status re-read (tag-downgrade guard), SEQ[2..] = the verify
-#               polls — so every SEQ pads two leading settled bodies before the
-#               first verify body. The popper clamps to the LAST body once the
-#               sequence is exhausted (a real static host re-emits the same
-#               deploy-status until a re-swap).
+#               SEQ[0] = the baseline read, SEQ[1..] = the verify polls. #6353
+#               removed the trigger's internal _get_status re-read (the re-swap tag
+#               now resolves from /health via HEALTH_SEQ, not the deploy-status .tag),
+#               so the trigger consumes NO deploy-status body — one leading pad, not
+#               two. Legacy SEQs that still carry a second leading `settled-v1`
+#               (start_ts=100) are harmless: that body is pre-trigger-skipped by the
+#               staleness gate (start_ts <= baseline) rather than eaten by the trigger.
+#               The popper clamps to the LAST body once the sequence is exhausted (a
+#               real static host re-emits the same deploy-status until a re-swap).
 #   WINDOW      FRESH_BOOT_WINDOW_S (default 0 → retry fires on the first degraded)
 #   RETRY_MAX   DEGRADED_RETRY_MAX (default 1)
 #   ROSTER      WEB_HOST_PRIVATE_IPS (default the 2-host single-peer roster)
@@ -270,6 +273,15 @@ SEQ="settled-v1 settled-v1 degraded-v1-s200 settled-v1 degraded-v1-s400" HEALTH_
 if grep -q 'v1.1.0' <<<"$POSTBODIES"; then pass; else fail "T-D: the retrigger POST must carry the advanced /health v1.1.0. POSTBODIES: $POSTBODIES"; fi
 if [ "$(printf '%s\n' "$POSTBODIES" | sed -n '2p' | grep -c 'v1.1.0')" -eq 1 ]; then pass; else fail "T-D: specifically the SECOND (retrigger) POST must carry v1.1.0. POSTBODIES: $POSTBODIES"; fi
 if printf '%s' "$GHOUT" | grep -q '^deployed_tag=v1.1.0$'; then pass; else fail "T-D: DEPLOY_TAG must re-resolve latest→v1.1.0 from /health (emitted to GITHUB_OUTPUT). GHOUT: $GHOUT"; fi
+
+# ── T-D-green (#6353): the retrigger-advanced tag is ACCEPTED end-to-end. During the
+# fresh-boot wait /health advances 1.0.0 → 1.1.0; after the retrigger re-swaps at
+# v1.1.0, web-2's `ok` completion at v1.1.0 matches DEPLOY_TAG → exit 0. Restores the
+# RC==0 "advance-then-accept" coverage the deleted AC3e had (T-D above proves the POST
+# payload but ends RC=1 on an unmatched slot). ──
+SEQ="settled-v1 settled-v1 degraded-v1-s200 ok-v11-s300" HEALTH_SEQ="1.0.0 1.0.0 1.1.0" WINDOW=0 MAXATT=8 run_verify
+if [ "$RC" -eq 0 ]; then pass; else fail "T-D-green: an ok completion at the /health-advanced v1.1.0 should exit 0, got rc=$RC. OUT: $OUT"; fi
+if printf '%s' "$GHOUT" | grep -q '^deployed_tag=v1.1.0$'; then pass; else fail "T-D-green: accepted DEPLOY_TAG must be the /health-advanced v1.1.0. GHOUT: $GHOUT"; fi
 
 # ── AC4: fail-loud on an UNEXPECTED reason (exit_code=0, reason ∉ {ok, *_degraded}) ──
 SEQ="settled-v1 settled-v1 unexpected-reason-s300" WINDOW=0 MAXATT=5 run_verify

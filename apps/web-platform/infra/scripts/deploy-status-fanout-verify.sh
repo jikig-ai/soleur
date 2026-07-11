@@ -157,7 +157,13 @@ _resolve_known_good_tag() {
   # >&2 and exit 1 on rejection. Capture its stdout (the tag); on failure add the
   # OP_CONTEXT recovery remediation and abort LOUD. NEVER fall back to `.tag`.
   if ! tag=$(bash "$SCRIPT_DIR/resolve-web1-known-good-tag.sh" "$version"); then
-    echo "::error::deploy fan-out cannot resolve web-1's known-good re-swap tag from ${HEALTH_URL} (/health .version='${version}'). $(_recovery_msg)" >&2
+    # Strip C0 control chars from the untrusted /health value before echoing it into
+    # the runner log — mirrors resolve-web1-known-good-tag.sh:55. An embedded newline
+    # in a spoofed .version would otherwise inject a line-start `::workflow-command::`
+    # annotation (the resolver already sanitizes its OWN diagnostic; this wrapper must
+    # too, since it is reached on exactly the malformed-version path).
+    local safe_version; safe_version=$(printf '%s' "$version" | tr -d '\000-\037')
+    echo "::error::deploy fan-out cannot resolve web-1's known-good re-swap tag from ${HEALTH_URL} (/health .version='${safe_version}'). $(_recovery_msg)" >&2
     exit 1
   fi
   printf '%s' "$tag"
