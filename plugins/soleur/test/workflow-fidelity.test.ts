@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import {
@@ -27,6 +27,36 @@ import { invokeSkill, routingInstructions, pollInstructions } from "../lib/harne
 import { dispatchGoRoute, expectedGrokSlashCommand, grokTestEnv } from "../lib/go-routing";
 
 const PLUGIN_ROOT = resolve(import.meta.dir, "..");
+
+/** Snapshot and isolate harness env — CLAUDECODE wins over GROK_* in detectHarness. */
+const HARNESS_ENV_KEYS = [
+  "CLAUDECODE",
+  "GROK_HOME",
+  "GROK_AGENT",
+  "GROK_DEFAULT_MODEL",
+  "GROK_SUBAGENTS",
+] as const;
+
+let savedHarnessEnv: Record<string, string | undefined>;
+
+beforeEach(() => {
+  savedHarnessEnv = {};
+  for (const key of HARNESS_ENV_KEYS) {
+    savedHarnessEnv[key] = process.env[key];
+    delete process.env[key];
+  }
+});
+
+afterEach(() => {
+  for (const key of HARNESS_ENV_KEYS) {
+    const val = savedHarnessEnv[key];
+    if (val === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = val;
+    }
+  }
+});
 
 describe("workflow-fidelity contract", () => {
   test("implement routes to one-shot", () => {
@@ -105,55 +135,45 @@ describe("workflow-fidelity contract", () => {
   });
 
   test("one-shot invokeSkill stresses full pipeline on Grok", () => {
-    const prev = { ...process.env };
     process.env.GROK_HOME = "/home/user/.grok";
-    try {
-      const inv = invokeSkill("one-shot", "#6325 implement Phase F");
-      expect(inv.tool).toBe("slash_command");
-      expect(inv.instruction).toContain(ONE_SHOT_DONE_MARKER);
-      expect(inv.instruction).toContain("Steps 0–8");
-      expect(inv.instruction).toContain("postmerge");
-    } finally {
-      Object.assign(process.env, prev);
-    }
+    const inv = invokeSkill("one-shot", "#6325 implement Phase F");
+    expect(inv.tool).toBe("slash_command");
+    expect(inv.harness).toBe("grok");
+    expect(inv.instruction).toContain(ONE_SHOT_DONE_MARKER);
+    expect(inv.instruction).toContain("Steps 0–8");
+    expect(inv.instruction).toContain("postmerge");
+  });
+
+  test("one-shot invokeSkill is not fooled by leaked CLAUDECODE when GROK_HOME set", () => {
+    process.env.CLAUDECODE = "1";
+    process.env.GROK_HOME = "/home/user/.grok";
+    const inv = invokeSkill("one-shot", "implement");
+    // Document current precedence: CLAUDECODE wins — tests must clear it in beforeEach.
+    expect(inv.harness).toBe("claude");
+    expect(inv.tool).toBe("Skill");
   });
 
   test("ship invokeSkill stresses merge-deploy polling on Grok", () => {
-    const prev = { ...process.env };
     process.env.GROK_HOME = "/home/user/.grok";
-    try {
-      const inv = invokeSkill("ship", "");
-      expect(inv.instruction).toContain("/postmerge");
-      expect(inv.instruction).toContain("Do NOT ask the operator");
-    } finally {
-      Object.assign(process.env, prev);
-    }
+    const inv = invokeSkill("ship", "");
+    expect(inv.instruction).toContain("/postmerge");
+    expect(inv.instruction).toContain("Do NOT ask the operator");
   });
 
   test("brainstorm invokeSkill stresses handoff on Grok", () => {
-    const prev = { ...process.env };
     process.env.GROK_HOME = "/home/user/.grok";
-    try {
-      const inv = invokeSkill("brainstorm", "explore auth redesign");
-      expect(inv.tool).toBe("slash_command");
-      expect(inv.instruction).toContain("/plan");
-      expect(inv.instruction).toContain("Do NOT write product code");
-    } finally {
-      Object.assign(process.env, prev);
-    }
+    const inv = invokeSkill("brainstorm", "explore auth redesign");
+    expect(inv.tool).toBe("slash_command");
+    expect(inv.instruction).toContain("/plan");
+    expect(inv.instruction).toContain("Do NOT write product code");
   });
 
   test("work invokeSkill stresses implementation tail on Grok", () => {
-    const prev = { ...process.env };
     process.env.GROK_HOME = "/home/user/.grok";
-    try {
-      const inv = invokeSkill("work", "knowledge-base/project/plans/2026-07-11-feat-x-plan.md");
-      expect(inv.instruction).toContain("/review");
-      expect(inv.instruction).toContain("/ship");
-      expect(inv.instruction).toContain("merged PR");
-    } finally {
-      Object.assign(process.env, prev);
-    }
+    const inv = invokeSkill("work", "knowledge-base/project/plans/2026-07-11-feat-x-plan.md");
+    expect(inv.instruction).toContain("/review");
+    expect(inv.instruction).toContain("/ship");
+    expect(inv.instruction).toContain("merged PR");
   });
 
   test("implement golden path dispatches /one-shot under Grok", () => {
