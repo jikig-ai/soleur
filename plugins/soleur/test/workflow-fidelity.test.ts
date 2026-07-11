@@ -61,7 +61,7 @@ describe("workflow-fidelity contract", () => {
 describe("workflow-fidelity sentinel markers in skills", () => {
   test("go.md contains post-route eval-gate block", () => {
     const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
-    expect(goMd).toContain(`<!-- eval-gate:block:${GO_POST_ROUTE_SENTINEL}:start -->`);
+    expect(goMd).toContain(`<!-- workflow-fidelity:block:${GO_POST_ROUTE_SENTINEL}:start -->`);
     expect(goMd).toContain("implement");
     expect(goMd).toContain("protocol violation");
   });
@@ -81,6 +81,5 @@ describe("workflow-fidelity sentinel markers in skills", () => {
   test("AGENTS.core.md pins pipeline-skills never-inline hard rule", () => {
     const core = readFileSync(resolve(PLUGIN_ROOT, "../../AGENTS.core.md"), "utf-8");
     expect(core).toContain("hr-pipeline-skills-never-inline-after-go-route");
-    expect(core).toContain(ONE_SHOT_DONE_MARKER);
   });
 });

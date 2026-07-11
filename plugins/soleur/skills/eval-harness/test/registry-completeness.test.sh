@@ -56,9 +56,9 @@ reg_set="$(registry_ids | sort -u)"
 # robust invariant — this literal is the belt-and-suspenders scanner-output pin).
 expected_set=$'go-routing\nincident-threshold\nlane-inference\nticket-triage'
 if [[ "$src_set" == "$expected_set" ]]; then
-  pass "live scan characterized as exactly {go-routing, ticket-triage}"
+  pass "live scan characterized as exactly {go-routing, incident-threshold, lane-inference, ticket-triage}"
 else
-  fail "live scan characterization" "scanned ids: [$(echo "$src_set" | tr '\n' ' ')] (want: go-routing ticket-triage)"
+  fail "live scan characterization" "scanned ids: [$(echo "$src_set" | tr '\n' ' ')] (want: go-routing incident-threshold lane-inference ticket-triage)"
 fi
 
 # `|| true` inside the substitution: diff exits 1 on differences, which would otherwise

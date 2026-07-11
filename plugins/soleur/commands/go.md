@@ -94,7 +94,7 @@ Analyze the user input and classify intent using semantic assessment:
 
 ### Step 2.1: Post-route invocation fidelity (Grok Build — never bypass)
 
-<!-- eval-gate:block:go-post-route:start -->
+<!-- workflow-fidelity:block:go-post-route:start -->
 When Step 2 routes to a **pipeline skill** (`soleur:one-shot`, `soleur:drain-labeled-backlog`, `soleur:drain-prs`):
 
 0. **You are still in `/go`, not in the pipeline skill.** Routing is classification + dispatch only. The `/go` handler does **not** run one-shot Steps 0b–8, create worktrees for implementation, or write product code — even if you "know what one-shot would do next."
@@ -103,7 +103,7 @@ When Step 2 routes to a **pipeline skill** (`soleur:one-shot`, `soleur:drain-lab
 3. **`one-shot` deliverable:** merged PR + `<promise>DONE</promise>` (Step 8). Pushed code on a draft PR without review/ship is a **protocol violation**, not completion.
 4. **Child skills under `one-shot` (Grok):** invoke `/plan`, `/deepen-plan`, `/work`, `/review`, `/qa`, `/compound`, `/ship` in sequence — never substitute ad-hoc tool loops. Each skill's exit summary is a **continuation gate**, not a stopping point.
 5. **Canonical contract:** `plugins/soleur/lib/workflow-fidelity.ts` + `routingInstructions()` in `harness.ts`.
-<!-- eval-gate:block:go-post-route:end -->
+<!-- workflow-fidelity:block:go-post-route:end -->
 
 If intent is clear, route without confirmation:
 

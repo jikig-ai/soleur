@@ -60,7 +60,7 @@ export function isOneShotRoute(label: string): boolean {
 
 /**
  * Markdown block appended to harness routing instructions.
- * Cite in go.md Step 2.1 (`<!-- eval-gate:block:go-post-route:start -->`).
+ * Cite in go.md Step 2.1 (`<!-- workflow-fidelity:block:go-post-route:start -->`).
  */
 export function workflowFidelityInstructions(harness: Harness): string {
   const invokeSurface =
