@@ -14,8 +14,11 @@
 -- mechanism: a column-ACL denial and a WITH-CHECK denial are both SQLSTATE 42501,
 -- so the fuzz-green alone cannot attribute the denial to the WITH CHECK. Asserting
 -- `with_check ILIKE '%is_workspace_member%'` proves the mechanism directly. The
--- second `%auth.uid()%` clause enforces the AC that the `user_id = auth.uid()`
--- owner-binding is RETAINED (not replaced by the membership check).
+-- second clause asserts the literal `user_id = auth.uid()` owner-binding is
+-- RETAINED (not replaced by the membership check) — it matches `%user_id =
+-- auth.uid()%`, NOT a bare `%auth.uid()%` (which `is_workspace_member(workspace_id,
+-- auth.uid())` would satisfy on its own, letting a dropped owner-binding false-green).
+-- pg_policies.with_check deparses the predicate as `(user_id = auth.uid())`.
 
 -- (1) conversations UPDATE carries is_workspace_member + retains auth.uid()
 SELECT 'conversations_owner_update_with_check_member' AS check_name,
@@ -25,7 +28,7 @@ SELECT 'conversations_owner_update_with_check_member' AS check_name,
    AND policyname = 'conversations_owner_update'
    AND cmd = 'UPDATE'
    AND with_check ILIKE '%is_workspace_member%'
-   AND with_check ILIKE '%auth.uid()%'
+   AND with_check ILIKE '%user_id = auth.uid()%'
 UNION ALL
 -- (2) conversations INSERT carries is_workspace_member + retains auth.uid()
 SELECT 'conversations_owner_insert_with_check_member',
@@ -35,7 +38,7 @@ SELECT 'conversations_owner_insert_with_check_member',
    AND policyname = 'conversations_owner_insert'
    AND cmd = 'INSERT'
    AND with_check ILIKE '%is_workspace_member%'
-   AND with_check ILIKE '%auth.uid()%'
+   AND with_check ILIKE '%user_id = auth.uid()%'
 UNION ALL
 -- (3) kb_files UPDATE carries is_workspace_member + retains auth.uid()
 SELECT 'kb_files_owner_update_with_check_member',
@@ -45,4 +48,4 @@ SELECT 'kb_files_owner_update_with_check_member',
    AND policyname = 'kb_files_owner_update'
    AND cmd = 'UPDATE'
    AND with_check ILIKE '%is_workspace_member%'
-   AND with_check ILIKE '%auth.uid()%';
+   AND with_check ILIKE '%user_id = auth.uid()%';

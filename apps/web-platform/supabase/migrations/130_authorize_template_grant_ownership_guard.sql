@@ -17,7 +17,7 @@
 -- break the legitimate first-send-IS-authorization path). The
 -- `SET search_path = public, pg_temp` pin is preserved
 -- (cq-pg-security-definer-search-path-pin-pg-temp). Body is otherwise the exact
--- mig-053 definition; REVOKE/GRANT/COMMENT re-stated.
+-- mig-053 definition; REVOKE/GRANT re-stated verbatim; COMMENT updated for #6336.
 --
 -- No top-level BEGIN/COMMIT (run-migrations.sh --single-transaction).
 --

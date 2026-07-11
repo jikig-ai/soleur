@@ -101,6 +101,16 @@ Two focused migrations shipped in one PR, each with a `.down.sql` and a deploy-t
 - **If this leaks, the user's data / workflow is exposed via:** the `conversations` / `kb_files` UPDATE `WITH CHECK` tenancy-key hijack AND the `conversations` INSERT-placement injection (#6334, both write verbs), and the `authorize_template` `p_grant_id` cross-founder reference (#6336) corrupting Art. 5(2) attribution of the consent ledger.
 - **Brand-survival threshold:** `single-user incident`
 
+### Fix-introduced / residual failure modes accounted for (added at review — user-impact-reviewer + architecture-strategist)
+
+- **Pre-existing injected rows are NOT remediated by forward-only DDL (scope-out + detection).** 129/130 gate only NEW writes; a row re-homed into wsB *before* deploy stays exposed to wsB members (SELECT is never WITH-CHECK-gated), and a pre-existing cross-founder `grant_id` stays uncorrectable in the WORM ledger. **Remediation-check (run against prod post-deploy; `hr-no-dashboard-eyeball-pull-data-yourself`):**
+  - `select count(*) from conversations c where not public.is_workspace_member(c.workspace_id, c.user_id);`
+  - `select count(*) from kb_files f where not public.is_workspace_member(f.workspace_id, f.user_id);`
+  - `select count(*) from template_authorizations ta join scope_grants sg on sg.id=ta.grant_id where sg.founder_id <> ta.founder_id;`
+  If any return >0 on prod, those rows need remediation (re-home back / null the poisoned `grant_id`), not just forward-gating. **Likelihood is low:** the exposure is reachable only via crafted raw PostgREST calls — the app UI never emits a cross-workspace write. Ran on dev during `/work`: kb_files=0, template_authorizations=0; conversations=1, and that one row is a `@e.test` RLS-fuzz **seed artifact** (`seedTwoTenant` persists), not real data.
+- **Removed-member UPDATE-lockout (accepted tightening).** The new WITH CHECK re-evaluates membership on EVERY update, so a founder removed from a shared workspace keeps SELECT but loses UPDATE (42501) on rows they still own there (archive/rename/status → app error). Documented in Edge Cases; **accepted** as the correct security direction (a non-member should not mutate rows in that workspace). Non-issue for personal workspaces (owner-membership guaranteed by `handle_new_user` + mig 109 backfill; AP-015).
+- **Rollback re-opens the vuln silently.** `129.down` restores `user_id = auth.uid()`-only WITH CHECK, re-opening the re-home + INSERT-placement injection with no alert (DB migrations have no Sentry surface; verify/129 does not run on rollback). A 129 rollback MUST be paired with a re-application of the fix or a manual `run-verify.sh verify/129` run. (`130.down` is grant-preserving via CREATE OR REPLACE and needs no such note.)
+
 CPO sign-off required at plan time before `/work` begins (headless pipeline — CPO covered by the Domain Review below; confirm at the plan-review gate). `user-impact-reviewer` will be invoked at review time (single-user-incident threshold).
 
 ## Observability

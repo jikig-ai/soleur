@@ -48,6 +48,22 @@ BEGIN
     RETURN v_new_id;
   EXCEPTION
     WHEN unique_violation THEN
+      -- 23505 against template_authorizations_active_unique. Concurrent
+      -- first-send raced us; return the winner's id. Idempotent first-
+      -- writer-wins (learning 2026-05-03).
+      --
+      -- NOTE: do NOT filter by `revoked_at IS NULL` here. The partial
+      -- UNIQUE only covers active rows, so the 23505 implies an active
+      -- winner existed at INSERT time — but read-committed semantics let
+      -- a concurrent revoke land between the failed INSERT and this
+      -- SELECT, in which case `WHERE revoked_at IS NULL` would return
+      -- zero rows and force a false re-raise. Ordering by authorized_at
+      -- DESC LIMIT 1 returns the most-recent row regardless of state;
+      -- the caller (send/route.ts first_send branch) treats the returned
+      -- id as the authorization id and proceeds to writeActionSend. If
+      -- the row was just revoked, the next predicate call will detect
+      -- the revocation and surface the appropriate DenyReason. Surfaced
+      -- by PR-I multi-agent review (data-migration-expert F1).
       SELECT id INTO v_existing_id
         FROM public.template_authorizations
        WHERE founder_id = v_founder_id
@@ -55,6 +71,8 @@ BEGIN
        ORDER BY authorized_at DESC
        LIMIT 1;
       IF v_existing_id IS NULL THEN
+        -- Shouldn't happen — the 23505 by definition implies a row
+        -- exists. Re-raise rather than fabricate.
         RAISE;
       END IF;
       RETURN v_existing_id;
