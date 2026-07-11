@@ -189,6 +189,14 @@ resource "github_repository_ruleset" "ci_required" {
         context        = "rule-body-lint"
         integration_id = var.actions_integration_id
       }
+
+      # --- Tier 6: Grok fidelity gate (#6325 Phase F). Context is the JOB name
+      # `grok-fidelity` at .github/workflows/ci.yml — grok inspect contract +
+      # /go golden-path eval under Grok harness fixture.
+      required_check {
+        context        = "grok-fidelity"
+        integration_id = var.actions_integration_id
+      }
     }
 
     # Merge queue REVERTED (#5780 kill-switch, 2026-06-30). The queue was
