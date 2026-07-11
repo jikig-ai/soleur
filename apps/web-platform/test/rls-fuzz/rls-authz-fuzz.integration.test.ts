@@ -1,7 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
-import postgres from "postgres";
-import { assertLocalDsn } from "./local-dsn-guard";
+import type postgres from "postgres";
 import { buildAuthenticatedClaims } from "./claim";
 import {
   classifyWriteOutcome,
@@ -13,36 +12,24 @@ import {
 } from "./verdict";
 import { isolationSet, workspaceTenancyTables } from "./catalog";
 import { ISOLATION_TARGETS, EXCLUDED_ISOLATION, type Ctx, type Locate } from "./targets";
+import { connect, seedTwoTenant, attackAs, rolledBackRaw } from "./harness-fixture";
 
 // Runtime RLS/authz-fuzz harness (#6256, ADR-111). Drives a non-member tenant's
 // identity against another tenant's rows across every workspace-isolated RLS
 // table (catalog-derived) and asserts RLS denies at the DB layer. Gated: runs
 // only with RLS_FUZZ_LOCAL=1 against a LOCAL disposable Postgres (the normal
-// suite skips it — no stack in ordinary CI).
+// suite skips it — no stack in ordinary CI). The shared connect/seed/txn helpers
+// live in harness-fixture.ts (Item 8 — one module, no per-file forks).
 const ENABLED = process.env.RLS_FUZZ_LOCAL === "1";
 const DSN = process.env.RLS_FUZZ_DATABASE_URL ?? "postgres://postgres:postgres@127.0.0.1:54322/postgres";
 
-let sql: ReturnType<typeof postgres>;
+let sql: postgres.Sql<{}>;
 let ctx: Ctx;
 const seeded = new Map<string, Locate>();
 
-const ROLLBACK = Symbol("rls-fuzz-rollback");
-
-/** Set the transaction's role + forged claims, run fn, then ALWAYS roll back (attacks never persist). */
-async function attackTxn<T>(claims: string, fn: (t: postgres.TransactionSql) => Promise<T>): Promise<T> {
-  let out: T;
-  try {
-    await sql.begin(async (t) => {
-      await t`set local role authenticated`;
-      await t.unsafe("select set_config('request.jwt.claims', $1, true)", [claims]);
-      out = await fn(t);
-      return Promise.reject(ROLLBACK); // discard everything the attack touched
-    });
-  } catch (e) {
-    if (e !== ROLLBACK) throw e;
-  }
-  return out!;
-}
+/** Set role+claims, run fn, roll back. Thin alias over the shared attackAs (bound sql). */
+const attackTxn = <T>(claims: string, fn: (t: postgres.TransactionSql<{}>) => Promise<T>): Promise<T> =>
+  attackAs(sql, claims, fn);
 
 /** Count rows matching A's seeded canonical row under the given handle/role. */
 async function countRows(h: postgres.Sql | postgres.TransactionSql, table: string, loc: Locate): Promise<number> {
@@ -50,37 +37,10 @@ async function countRows(h: postgres.Sql | postgres.TransactionSql, table: strin
   return (rows[0] as unknown as { n: number }).n;
 }
 
-async function seedContext(): Promise<Ctx> {
-  const userA = randomUUID();
-  const userB = randomUUID();
-  const userC = randomUUID();
-  // Each auth.users insert fires handle_new_user() → personal org + workspace + membership.
-  await sql`insert into auth.users (id, email) values
-    (${userA}, ${`a-${userA}@example.test`}),
-    (${userB}, ${`b-${userB}@example.test`}),
-    (${userC}, ${`c-${userC}@example.test`})`;
-  const [a] = await sql`select workspace_id, (select organization_id from workspaces where id = workspace_id) as org from workspace_members where user_id = ${userA} limit 1`;
-  const [b] = await sql`select workspace_id from workspace_members where user_id = ${userB} limit 1`;
-  const wsA = a.workspace_id as string;
-  const wsB = b.workspace_id as string;
-  const orgA = a.org as string;
-  if (!wsA || !wsB || wsA === wsB || !orgA) throw new Error(`fixture seed failed: wsA=${wsA} wsB=${wsB} orgA=${orgA}`);
-  // userC joins wsA as a co-member (byok_delegations grantee must be a real member).
-  await sql`insert into workspace_members (workspace_id, user_id, role) values (${wsA}, ${userC}, 'member')`;
-  // Two A-owned conversations (parents for messages / user_concurrency_slots seed + forge).
-  const convA = randomUUID();
-  const convA2 = randomUUID();
-  await sql`insert into conversations (id, user_id, workspace_id, status, visibility) values
-    (${convA}, ${userA}, ${wsA}, 'active', 'workspace'),
-    (${convA2}, ${userA}, ${wsA}, 'active', 'workspace')`;
-  return { userA, userB, userC, wsA, wsB, orgA, convA, convA2 };
-}
-
 describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local, catalog-driven)", () => {
   beforeAll(async () => {
-    assertLocalDsn(DSN); // AC7 — refuse any non-local target before connecting
-    sql = postgres(DSN, { max: 1, prepare: false, onnotice: () => {} });
-    ctx = await seedContext();
+    sql = connect(DSN); // assertLocalDsn + max:1 pinned in the shared fixture
+    ctx = await seedTwoTenant(sql);
     for (const t of ISOLATION_TARGETS) {
       seeded.set(t.table, await t.seed(sql, ctx));
     }
@@ -234,21 +194,54 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — cross-tenant isolation (local, cat
   test("AC5: mutation self-test — disabling RLS makes the harness report RED", async () => {
     const table = "workspace_activity";
     const loc = seeded.get(table)!;
-    let bSeesWithRlsOff = -1;
-    try {
-      await sql.begin(async (t) => {
-        await t.unsafe(`alter table "${table}" disable row level security`); // superuser, before the role swap
-        await t`set local role authenticated`;
-        await t.unsafe("select set_config('request.jwt.claims', $1, true)", [
-          buildAuthenticatedClaims({ sub: ctx.userB }),
-        ]);
-        bSeesWithRlsOff = await countRows(t, table, loc);
-        return Promise.reject(ROLLBACK); // roll back → RLS re-enabled
-      });
-    } catch (e) {
-      if (e !== ROLLBACK) throw e;
-    }
+    const bSeesWithRlsOff = await rolledBackRaw(sql, async (t) => {
+      await t.unsafe(`alter table "${table}" disable row level security`); // superuser, before the role swap
+      await t`set local role authenticated`;
+      await t.unsafe("select set_config('request.jwt.claims', $1, true)", [
+        buildAuthenticatedClaims({ sub: ctx.userB }),
+      ]);
+      return countRows(t, table, loc); // roll back → RLS re-enabled
+    });
     expect(bSeesWithRlsOff, "with RLS off, B must see A's row").toBeGreaterThan(0);
     expect(isPass(classifySelectOutcome(bSeesWithRlsOff)), "harness verdict must be RED (not a pass)").toBe(false);
+  });
+
+  // AC10 — routine_runs / routine_run_progress are intentionally OPS-GLOBAL (SELECT
+  // policy `auth.uid() IS NOT NULL` → any authenticated user reads all rows). The
+  // harness only expresses DENIAL assertions, so an intentional-global table has no
+  // falsifiable guard — "ops-global, no PII" as prose is unfalsifiable, and a future
+  // migration adding a workspace_id/user_id (or any PII) column would leak with a
+  // green suite. This ENFORCES the invariant: the live column set must stay within a
+  // non-PII allowlist AND carry no tenant-identifying column, so either such a change
+  // reds this test (forcing a per-tenant policy) or the allowlist is deliberately
+  // widened under review.
+  test("AC10: routine_runs/routine_run_progress stay ops-global (no tenant-identifying column)", async () => {
+    const OPS_GLOBAL: Record<string, Set<string>> = {
+      routine_runs: new Set([
+        "id", "routine_id", "run_id", "status", "trigger_source", "actor_class", "actor_id",
+        "delegating_principal", "started_at", "ended_at", "duration_ms", "error_summary", "created_at",
+      ]),
+      routine_run_progress: new Set(["id", "routine_id", "run_id", "attempt", "started_at", "last_heartbeat_at"]),
+    };
+    const TENANT_COLS = ["workspace_id", "user_id", "founder_id"];
+    for (const [table, allow] of Object.entries(OPS_GLOBAL)) {
+      const rows = await sql<{ column_name: string }[]>`
+        select column_name from information_schema.columns
+        where table_schema = 'public' and table_name = ${table}`;
+      const live = rows.map((r) => r.column_name);
+      const tenant = live.filter((c) => TENANT_COLS.includes(c));
+      expect(tenant, `${table}: grew a tenant-identifying column — global-read is now a per-tenant leak`).toEqual([]);
+      const unlisted = live.filter((c) => !allow.has(c));
+      expect(
+        unlisted,
+        `${table}: new column(s) outside the non-PII allowlist — review global-read safety before widening: ${unlisted.join(", ")}`,
+      ).toEqual([]);
+    }
+    // Reconcile with AC1b: no workspace_id means these must NOT surface in the
+    // workspace-tenancy set (else a silent exclusion there would defeat AC1b).
+    const wsTenancy = new Set(await workspaceTenancyTables(sql));
+    for (const table of Object.keys(OPS_GLOBAL)) {
+      expect(wsTenancy.has(table), `${table}: unexpectedly in workspaceTenancyTables — reconcile with AC1b`).toBe(false);
+    }
   });
 });

@@ -28,6 +28,10 @@ export interface RpcCtx extends Ctx {
   contactA: string;
   /** An A-owned inbox item, pinned to user_id=userA (set_inbox_item_state target). */
   inboxA: string;
+  /** An A-owned email_triage_item (wsA-owner-gated; set_email_triage_status target). */
+  emailTriageA: string;
+  /** An A-owned scope_grant (authorize_template p_grant_id cross-founder-ref target). */
+  scopeGrantA: string;
 }
 
 /**
@@ -71,6 +75,11 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   // non-owner reading another founder's contact PII must be denied (42501).
   crm_get_contact_detail: (c) => `select crm_get_contact_detail('${c.contactA}')`,
   set_inbox_item_state: (c) => `select set_inbox_item_state('${c.inboxA}','archived')`,
+  // workspace-OWNER-gated (is_email_triage_workspace_owner, mig 111) on a REAL
+  // A-owned triage item → a non-owner tenant-B caller raises 42501 "not authorized"
+  // (same error for missing + non-owner, no existence oracle). The seed makes it a
+  // real row so the denial is the owner-guard, not P0002 no_data_found (#6307 Item 2).
+  set_email_triage_status: (c) => `select set_email_triage_status('${c.emailTriageA}','archived')`,
   // self-target GDPR fns that MUST reject a non-self caller (they take p_user_id)
   anonymise_action_sends: (c) => `select anonymise_action_sends('${c.userA}')`,
   anonymise_template_authorizations: (c) => `select anonymise_template_authorizations('${c.userA}')`,
@@ -82,8 +91,7 @@ export const EXCLUDED: Record<string, string> = {
   grant_action_class: "founder_id = auth.uid(); grants a scope to the CALLER only",
   revoke_action_class: "founder_id = auth.uid(); revokes the CALLER's own scope",
   revoke_template_authorization: "template auths are founder-scoped by auth.uid(); no A-addressable param",
-  authorize_template: "founder_id = auth.uid(); the fn writes the CALLER's own template_authorization row (p_grant_id is a cross-ref, not a base cross-tenant read/write) — deepen in the harness-hardening follow-up",
-  set_email_triage_status: "email_triage_items is the single-founder operator inbox (resend ingest), not multi-tenant workspace data; a faithful attack needs the full ingest fixture — deepen in the harness-hardening follow-up",
+  authorize_template: "founder_id = auth.uid() → the fn writes the CALLER's OWN template_authorization row (a generic 'non-null ⇒ leaked' classifier is wrong here — B writing B's own row is legal). NOT in the generic ATTACK loop; the security property (a founder cannot back an authorization with a grant they do not own via the p_grant_id cross-ref) is fuzzed by the dedicated bespoke test in rls-rpc.integration.test.ts (#6307 Item 2)",
   crm_contact_upsert: "founder_id = auth.uid(); p_id resolves within the caller's own founder scope (insert-if-not-owned)",
   check_my_revocation: "self-only (p_jwt_iat is the caller's own token iat)",
   my_revocation_status: "self-only; reads auth.uid()'s revocation state, no params",
@@ -114,5 +122,18 @@ export const EXCLUDED: Record<string, string> = {
  * (classified − catalog) fails until they are removed. Empty now (no tracked
  * live exposure); the deploy-time `verify/128_*.sql` sentinel is the durable
  * regression guard for the closed grant.
+ *
+ * ANON DIMENSION (#6307 Item 4, reconciled against the merged tree): the issue's
+ * premise — "the 4 #6306 fns are EXECUTE-granted to anon too; drive them under
+ * anon" — is OBSOLETE. Mig 128 revoked those grants from anon AND authenticated,
+ * and `securityDefinerAnonFns` currently returns ZERO fns (no public definer fn is
+ * anon-executable), so there is no concrete anon exposure to baseline here. The
+ * durable half of Item 4 shipped instead: the `securityDefinerAnonFns` enumerator +
+ * the AC7 anon coverage gate (rls-rpc.integration.test.ts) — the forward tripwire
+ * that reds if any future migration re-introduces an anon EXECUTE grant (the exact
+ * #6306 root cause). Full anon ATTACK-coverage (driving these maps under anon with
+ * re-reasoned `EXCLUDED` rationales) becomes actionable only once an anon-executable
+ * definer fn exists; the tripwire surfaces that, so no speculative issue is filed
+ * for an empty set.
  */
 export const KNOWN_EXPOSURES: Record<string, { issue: string; note: string }> = {};
