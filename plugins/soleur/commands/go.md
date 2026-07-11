@@ -97,6 +97,7 @@ Analyze the user input and classify intent using semantic assessment:
 <!-- eval-gate:block:go-post-route:start -->
 When Step 2 routes to a **pipeline skill** (`soleur:one-shot`, `soleur:drain-labeled-backlog`, `soleur:drain-prs`):
 
+0. **You are still in `/go`, not in the pipeline skill.** Routing is classification + dispatch only. The `/go` handler does **not** run one-shot Steps 0b–8, create worktrees for implementation, or write product code — even if you "know what one-shot would do next."
 1. **Your very next action** MUST invoke that skill via the harness adapter — Grok: slash command (`/one-shot <args>`); Claude: Skill tool (`soleur:one-shot`). Do **not** read the skill's SKILL.md and execute a subset of its steps with Write/Edit/Shell yourself.
 2. **Do NOT end your turn** after routing, worktree creation, or a pushed draft PR. Those are mid-pipeline checkpoints, not deliverables.
 3. **`one-shot` deliverable:** merged PR + `<promise>DONE</promise>` (Step 8). Pushed code on a draft PR without review/ship is a **protocol violation**, not completion.

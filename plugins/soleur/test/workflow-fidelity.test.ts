@@ -77,4 +77,10 @@ describe("workflow-fidelity sentinel markers in skills", () => {
     expect(workflowFidelityInstructions("grok")).toContain("/one-shot");
     expect(workflowFidelityInstructions("grok")).toContain("FORBIDDEN");
   });
+
+  test("AGENTS.core.md pins pipeline-skills never-inline hard rule", () => {
+    const core = readFileSync(resolve(PLUGIN_ROOT, "../../AGENTS.core.md"), "utf-8");
+    expect(core).toContain("hr-pipeline-skills-never-inline-after-go-route");
+    expect(core).toContain(ONE_SHOT_DONE_MARKER);
+  });
 });

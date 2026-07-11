@@ -48,6 +48,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: hr-github-app-auth-not-pat] → core
 - [id: hr-monitor-not-run-in-background-for-polling] → core
 - [id: hr-verify-repo-capability-claim-before-assert] → core
+- [id: hr-pipeline-skills-never-inline-after-go-route] → core
 
 ## Workflow Gates
 
