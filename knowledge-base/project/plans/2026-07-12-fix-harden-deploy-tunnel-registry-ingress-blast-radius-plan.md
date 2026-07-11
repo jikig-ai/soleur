@@ -295,8 +295,14 @@ logs:
   where: Cloudflare tunnel edge (GraphQL/Logpush, edge-side); cloudflared --metrics on host (deferred → #6178)
   retention: Cloudflare default; GitHub Actions run logs (90d)
 discoverability_test:
-  command: 'curl -s -H "X-Signature-256: <hmac>" https://deploy.soleur.ai/hooks/deploy-status  # returns last deploy state; bad-sig POST /hooks/deploy → 403/500 not 502'
-  expected_output: last deploy state JSON (healthy) / 403 on bad sig — proves tunnel→webhook path alive without host shell access
+  command: curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/health
+  expected_output: "200"
+  # The command above is the no-cred, no-SSH runnable probe: HTTP 200 from /health proves web-1
+  # (which runs the shared cloudflared daemon this change tunes) is serving. Deploy-path-specific
+  # verification (needs HMAC creds; run in postmerge / AC 4.4): a bad-sig POST to
+  # deploy.soleur.ai/hooks/deploy returns the webhook's 403/500 (NOT a tunnel 502), and GET
+  # deploy.soleur.ai/hooks/deploy-status (X-Signature-256 HMAC) returns the last deploy state —
+  # proving the tunnel→webhook path is healthy without host shell access.
 ```
 
 **Affected-surface note:** the true diagnostic signal for the L7-edge saturation hypothesis is
