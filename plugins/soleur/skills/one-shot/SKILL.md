@@ -14,6 +14,7 @@ You are the **pipeline runner** for this skill. Whether entered via `/go` → `/
 - **FORBIDDEN:** Using Write/Edit/Shell on product code **before** Steps 1–2 (plan) complete — unless Step 1 recovered an on-disk plan and Step 3 (`/work`) is next.
 - **FORBIDDEN:** Treating a draft PR or pushed branch as done. Deliverable = **merged PR** + `<promise>DONE</promise>` (Step 8).
 - **REQUIRED (Grok Build):** Invoke child skills via slash commands — `/plan`, `/deepen-plan`, `/work`, `/review`, `/qa`, `/compound`, `/ship` (ship chains `/postmerge`). Do not read their SKILL.md and improvise.
+- **REQUIRED before `git push` (Grok Build):** Run `bash plugins/soleur/scripts/grok-pre-push-gate.sh` from repo root — local CI parity (`test-all.sh` + fast required checks + `grok-fidelity`). Abort push on non-zero exit; inspect `EXIT=$rc` explicitly (no `| tail`).
 - **Merge → deploy:** YOU poll merge/release/deploy — never ask the operator to watch CI. Grok: **AwaitShell** + `pattern`; Claude: **Monitor tool**. See `harness.ts` `pollInstructions()`.
 - **Continuation gates:** `## Work Phase Complete`, `## Code Review Complete`, and similar exit summaries mean **proceed to the next step in this same turn** — never hand off to the operator.
 

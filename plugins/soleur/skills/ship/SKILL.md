@@ -1181,6 +1181,16 @@ The CI workflow [`.github/workflows/pr-auto-close-scanner.yml`](../../../../.git
 
 The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE intentional — those are not traps and should be kept. The trap pattern is auto-close keyword + #N where the issue is NOT in the intentional `ISSUE_NUMBER` set, OR where the form is a checkbox / prose / code-fence rather than the canonical body line.
 
+<!-- grok-pre-push-gate:start -->
+**Grok Build pre-push gate (mandatory before `git push`).** When the harness is Grok (`GROK_HOME` / `GROK_AGENT`), run from repo root and inspect exit code explicitly (do not pipe through `tail`):
+
+```bash
+bash plugins/soleur/scripts/grok-pre-push-gate.sh > /tmp/grok-pre-push-gate.log 2>&1; rc=$?; echo "EXIT=$rc"
+```
+
+Abort Phase 6 if `rc != 0`. The gate mirrors reproducible CI: fast required jobs, `scripts/test-all.sh` (the `test` check), `web-platform` build, and `grok-fidelity`. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 `test-all.sh` already ran (Phase 4 is mid-pipeline; this gate is the push-time recheck).
+<!-- grok-pre-push-gate:end -->
+
 Push the branch to remote. Get the branch name first:
 
 ```bash

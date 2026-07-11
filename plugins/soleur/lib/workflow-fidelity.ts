@@ -55,6 +55,10 @@ export const ONE_SHOT_DONE_MARKER = "<promise>DONE</promise>";
 /** Sentinel markers skills/docs must retain — drift-guarded in tests. */
 export const GO_POST_ROUTE_SENTINEL = "go-post-route";
 export const ONE_SHOT_ANTI_BYPASS_SENTINEL = "one-shot-anti-bypass-protocol";
+export const GROK_PRE_PUSH_GATE_SENTINEL = "grok-pre-push-gate";
+
+/** Repo-relative path — run from root before `git push` under Grok Build. */
+export const GROK_PRE_PUSH_GATE_SCRIPT = "plugins/soleur/scripts/grok-pre-push-gate.sh";
 export const BRAINSTORM_ANTI_BYPASS_SENTINEL = "brainstorm-anti-bypass-protocol";
 export const PLAN_ANTI_BYPASS_SENTINEL = "plan-anti-bypass-protocol";
 export const WORK_ANTI_BYPASS_SENTINEL = "work-anti-bypass-protocol";
@@ -144,7 +148,7 @@ export function workflowFidelityInstructions(harness: Harness): string {
     harness,
   );
 
-  return [
+  const lines = [
     "**Workflow fidelity (never bypass)**",
     `- After \`/go\` routes to a pipeline skill (\`one-shot\`, \`brainstorm\`, \`drain-*\`), your **next action** MUST be that skill's ${invokeSurface} — not reading SKILL.md and executing steps selectively.`,
     `- **FORBIDDEN after routing to \`brainstorm\`:** product code (Write/Edit/Shell); ending after spec/brainstorm doc without handoff. **REQUIRED next:** ${brainstormNext}.`,
@@ -154,7 +158,15 @@ export function workflowFidelityInstructions(harness: Harness): string {
     `- **\`${ONE_SHOT_DONE_MARKER}\` gate:** emit ONLY after merge + release workflows + \`/postmerge\` verification complete — not at draft PR, not at merge alone.`,
     `- **Deliverables:** brainstorm = artifacts + handoff; plan = plan file + \`/work\`; work/one-shot = **merged PR + healthy deploy**. Draft PRs are checkpoints only.`,
     "- Skill exit summaries (`## Work Phase Complete`, `## Review Phase Complete`) are **continuation gates**, not turn boundaries.",
-  ].join("\n");
+  ];
+
+  if (harness === "grok") {
+    lines.push(
+      `- **Before \`git push\`:** run \`bash ${GROK_PRE_PUSH_GATE_SCRIPT}\` from repo root (local CI parity: \`test-all.sh\` + fast required checks + \`grok-fidelity\`). Abort push on non-zero exit; do not wait for CI.`,
+    );
+  }
+
+  return lines.join("\n");
 }
 
 /** Strengthen skill invocation text for pipeline and handoff skills. */

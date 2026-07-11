@@ -9,6 +9,8 @@ import {
   resolveGoSkillRoute,
   ONE_SHOT_DONE_MARKER,
   GO_POST_ROUTE_SENTINEL,
+  GROK_PRE_PUSH_GATE_SCRIPT,
+  GROK_PRE_PUSH_GATE_SENTINEL,
   ONE_SHOT_ANTI_BYPASS_SENTINEL,
   BRAINSTORM_ANTI_BYPASS_SENTINEL,
   PLAN_ANTI_BYPASS_SENTINEL,
@@ -125,6 +127,8 @@ describe("workflow-fidelity contract", () => {
     expect(md).toContain("AwaitShell");
     expect(md).toContain("/postmerge");
     expect(md).toContain("never ask the operator");
+    expect(md).toContain(GROK_PRE_PUSH_GATE_SCRIPT);
+    expect(md).toContain("test-all.sh");
   });
 
   test("pollInstructions maps Grok to AwaitShell and Claude to Monitor", () => {
@@ -248,6 +252,7 @@ describe("workflow-fidelity sentinel markers in skills", () => {
     const oneShot = readFileSync(resolve(PLUGIN_ROOT, "skills/one-shot/SKILL.md"), "utf-8");
     expect(ship).toContain(SHIP_MERGE_DEPLOY_SENTINEL);
     expect(ship).toContain("AwaitShell");
+    expect(ship).toContain(GROK_PRE_PUSH_GATE_SENTINEL);
     expect(postmerge).toContain(POSTMERGE_HARNESS_SENTINEL);
     expect(oneShot).toContain("postmerge verification complete");
   });
@@ -258,13 +263,38 @@ describe("workflow-fidelity sentinel markers in skills", () => {
     expect(md).toContain("/brainstorm");
     expect(md).toContain("FORBIDDEN");
     expect(md).toContain("/work");
+    expect(md).toContain(GROK_PRE_PUSH_GATE_SCRIPT);
+  });
+
+  test("grok-pre-push-gate.sh mirrors CI test aggregator before push", () => {
+    const gate = readFileSync(
+      resolve(PLUGIN_ROOT, "scripts/grok-pre-push-gate.sh"),
+      "utf-8",
+    );
+    expect(gate).toContain("scripts/test-all.sh");
+    expect(gate).toContain("grok-fidelity-gate.sh");
+    expect(gate).toContain("readme-counts");
+  });
+
+  test("grok-fidelity-gate.sh runs AGENTS rule-budget lint when not skipped", () => {
+    const gate = readFileSync(
+      resolve(PLUGIN_ROOT, "scripts/grok-fidelity-gate.sh"),
+      "utf-8",
+    );
+    expect(gate).toContain("lint-agents-rule-budget.py");
+    expect(gate).toContain("GROK_FIDELITY_SKIP_BUDGET");
   });
 
   test("AGENTS.core.md pins pipeline, lifecycle, and merge-deploy hard rules", () => {
     const core = readFileSync(resolve(PLUGIN_ROOT, "../../AGENTS.core.md"), "utf-8");
     expect(core).toContain("hr-pipeline-skills-never-inline-after-go-route");
-    expect(core).toContain("hr-lifecycle-skills-never-inline-after-handoff");
-    expect(core).toContain("hr-merge-deploy-monitor-without-asking");
-    expect(core).toContain("hr-pr-behind-stop-and-resync");
+    expect(core).toContain("BEHIND");
+    expect(core).toContain("resync main");
+    expect(core).not.toContain("hr-lifecycle-skills-never-inline-after-handoff");
+    const syncScript = readFileSync(
+      resolve(PLUGIN_ROOT, "scripts/sync-pr-behind.sh"),
+      "utf-8",
+    );
+    expect(syncScript).toContain("mergeStateStatus");
   });
 });
