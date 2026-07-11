@@ -171,27 +171,44 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
   // cross-founder reference). Seed is a REAL A-owned grant (ctx.scopeGrantA), driven
   // as B; the check runs IN-txn before rollback. Owner positive control below proves
   // the fn works (the guard is ownership, not not-found).
-  // EXPOSURE confirmed live (harness working as designed): authorize_template does
-  // NOT validate p_grant_id ownership, so B DOES create a row referencing A's grant
-  // → the `toBe(0)` assertion fails today → test.fails is green. When the ownership
-  // check lands, B can no longer create the row → assertion passes → test.fails reds
-  // → forces un-baseline. Tracked by #6336.
-  test.fails("authorize_template EXPOSURE (baselined, #6336): tenant-B CAN back an authorization with tenant-A's grant", async () => {
-    const rowsUnderB = await rolledBackRaw(sql, async (t) => {
+  // Fixed by migration 130 (#6336): authorize_template now re-derives p_grant_id
+  // ownership (RAISE 42501 if the grant is not owned by auth.uid()) before the
+  // INSERT, so tenant-B can no longer back an authorization with tenant-A's grant.
+  // Un-baselined: plain test() asserting B creates 0 rows.
+  test("authorize_template DENIES tenant-B backing an authorization with tenant-A's grant (#6336)", async () => {
+    const { rows: rowsUnderB, err } = await rolledBackRaw(sql, async (t) => {
       await t`set local role authenticated`;
       await t.unsafe("select set_config('request.jwt.claims', $1, true)", [buildAuthenticatedClaims({ sub: ctx.userB })]);
+      let caught: { code?: string } | null = null;
       try {
-        await t.unsafe(`select authorize_template('h-${ctx.messageA}', 'general.attack', '${ctx.scopeGrantA}')`);
-      } catch {
-        // a raise is itself a denial — the 0-rows assertion below still holds.
+        // Wrap in a SAVEPOINT: the ownership guard RAISEs 42501, which aborts
+        // the enclosing transaction; without a subtransaction the follow-up
+        // count query would fail with 25P02. The savepoint contains the abort so
+        // the outer txn stays usable. postgres.js's savepoint RE-THROWS after
+        // `ROLLBACK TO`, so this try/catch is still load-bearing even with the
+        // savepoint. Non-vacuous: pre-fix the RPC does NOT raise → the INSERT is
+        // retained in the outer txn → count=1 → RED.
+        await t.savepoint((sp) =>
+          sp.unsafe(`select authorize_template('h-${ctx.messageA}', 'general.attack', '${ctx.scopeGrantA}')`),
+        );
+      } catch (e) {
+        caught = e as { code?: string };
       }
       const r = await t.unsafe(
         `select count(*)::int as n from template_authorizations where grant_id = $1 and founder_id = $2`,
         [ctx.scopeGrantA, ctx.userB],
       );
-      return (r[0] as unknown as { n: number }).n;
+      return { rows: (r[0] as unknown as { n: number }).n, err: caught };
     });
     expect(rowsUnderB, "tenant-B must not create a template_authorization backed by tenant-A's grant").toBe(0);
+    // The zero-rows must be BECAUSE the ownership guard denied (42501/P0001/P0002),
+    // not a wrong-reason failure (42883 signature drift, 22023 validation, 23xxx
+    // constraint) that also yields count=0 → false-green. Route the caught error
+    // through the harness SQLSTATE classifier, mirroring the row-hijack sibling.
+    expect(
+      classifyRpcOutcome(err, rowsUnderB),
+      "tenant-B's zero rows must be a 42501 ownership denial, not a wrong-reason error",
+    ).toEqual({ kind: "denied" });
   });
 
   // authorize_template owner positive control — proves the fn works (the p_grant_id
