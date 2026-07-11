@@ -91,6 +91,12 @@ describe("normalizeAgentName", () => {
   test("already qualified unchanged", () => {
     expect(normalizeAgentName("soleur:legal:clo")).toBe("soleur:legal:clo");
   });
+
+  test("path-style agent resolves via registry", () => {
+    expect(normalizeAgentName("engineering/review/security-sentinel")).toBe(
+      "soleur:engineering:review:security-sentinel",
+    );
+  });
 });
 
 describe("formatSkillInvocation", () => {

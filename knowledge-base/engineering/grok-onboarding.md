@@ -45,10 +45,44 @@ Project plugin config lives in `.grok/config.toml` (merged #6314). Supported pro
 ## Verify discovery
 
 ```bash
-grok inspect | grep -E 'soleur|agents|skills'
+grok inspect | grep -E 'soleur|Agents \(|skills'
 ```
 
-Today Grok may show fewer agents than Claude until Phase E (agent discoverability) lands. Skills and the three commands should appear after #6314 config.
+After Phase E (#6324), **67** Soleur agents appear as `soleur:<domain>:…` **project** rows in the `Agents` section (generated compat stubs under `.grok/agents/`). Skills and the three commands (`/go`, `/sync`, `/help`) load via the in-repo plugin.
+
+### Subagents
+
+Enable subagent spawning in user config (`~/.grok/config.toml` — project config cannot set `[subagents]`):
+
+```toml
+[subagents]
+enabled = true
+```
+
+Or set `GROK_SUBAGENTS=1` for a single session. Without this, `spawn_subagent` instructions in skills are inert.
+
+### Spawning domain agents
+
+```text
+spawn_subagent agent=soleur:engineering:review:security-sentinel prompt="Review the auth changes in PR #123"
+```
+
+Qualified IDs match Claude's `Task` `subagent_type` names. The harness adapter (`plugins/soleur/lib/harness.ts`) emits the same IDs under Grok.
+
+### Adding or renaming agents
+
+Canonical sources live under `plugins/soleur/agents/**`. After editing, regenerate Grok compat artifacts:
+
+```bash
+cd plugins/soleur && bun run scripts/sync-grok-agent-compat.ts
+```
+
+CI drift checks (Phase F #6325):
+
+```bash
+bash plugins/soleur/scripts/grok-fidelity-gate.sh   # full gate (CI job grok-fidelity)
+cd plugins/soleur && bun run scripts/sync-grok-agent-compat.ts --check
+```
 
 ## References
 

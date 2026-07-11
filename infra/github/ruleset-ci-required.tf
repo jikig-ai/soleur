@@ -15,7 +15,7 @@
 #
 # Strict policy preserved (strict_required_status_checks_policy = true).
 #
-# Job-name contract: the 18 `context` strings below are public ABI for the
+# Job-name contract: the 19 `context` strings below are public ABI for the
 # branch-protection gate. A workflow job rename (`lint fixture content` ->
 # `lint-fixture-content`) silently un-requires the check until this resource
 # is updated in the same PR. See ADR-032 Sharp Edges.
@@ -187,6 +187,14 @@ resource "github_repository_ruleset" "ci_required" {
       # AGENTS bodies (see scripts/required-checks.txt note + ADR-092 residual).
       required_check {
         context        = "rule-body-lint"
+        integration_id = var.actions_integration_id
+      }
+
+      # --- Tier 6: Grok fidelity gate (#6325 Phase F). Context is the JOB name
+      # `grok-fidelity` at .github/workflows/ci.yml — grok inspect contract +
+      # /go golden-path eval under Grok harness fixture.
+      required_check {
+        context        = "grok-fidelity"
         integration_id = var.actions_integration_id
       }
     }
