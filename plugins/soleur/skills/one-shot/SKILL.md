@@ -5,6 +5,22 @@ description: "This skill should be used when running the full autonomous enginee
 
 Run these steps in order. Do not do anything else.
 
+<!-- one-shot-anti-bypass-protocol:start -->
+## Anti-bypass protocol (load-bearing — especially Grok Build)
+
+You are the **pipeline runner** for this skill. Whether entered via `/go` → `/one-shot` or direct `/one-shot`:
+
+- **FORBIDDEN:** Cherry-picking steps (e.g. 0b worktree + inline implementation + push, then stopping).
+- **FORBIDDEN:** Using Write/Edit/Shell on product code **before** Steps 1–2 (plan) complete — unless Step 1 recovered an on-disk plan and Step 3 (`/work`) is next.
+- **FORBIDDEN:** Treating a draft PR or pushed branch as done. Deliverable = **merged PR** + `<promise>DONE</promise>` (Step 8).
+- **REQUIRED (Grok Build):** Invoke child skills via slash commands — `/plan`, `/deepen-plan`, `/work`, `/review`, `/qa`, `/compound`, `/ship`. Do not read their SKILL.md and improvise.
+- **Continuation gates:** `## Work Phase Complete`, `## Code Review Complete`, and similar exit summaries mean **proceed to the next step in this same turn** — never hand off to the operator.
+
+See `plugins/soleur/lib/workflow-fidelity.ts` and `go.md` Step 2.1 (`go-post-route` block).
+
+**Harness adapter (Steps 1–8 child skills):** Use `plugins/soleur/lib/harness.ts` — Grok Build invokes `/plan`, `/work`, `/review`, `/ship`, etc.; Claude Code uses the **Skill tool** (`soleur:plan`, `soleur:work`, …). Never substitute ad-hoc Write/Edit/Shell loops for a registered child skill.
+<!-- one-shot-anti-bypass-protocol:end -->
+
 **Step 0 (pre): Workspace readiness gate.** Before anything else, confirm a usable git repository exists — `one-shot` can be invoked directly (not only via `/soleur:go`), so it must self-guard. Run `git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-inside-work-tree 2>/dev/null || true`. If **neither** prints `true`, the workspace has no git checkout (in the Soleur web / Concierge env, a connected repo still cloning in the background or a failed setup leaves a repo-less `/workspaces/<id>`). STOP immediately — do NOT run the collision checks, do NOT create a worktree, do NOT spawn the planning subagent. Reply with the honest, no-wait message: "Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening, reconnect your repository in **Settings → Repository**." This prevents the missing-repo flail where the agent improvised dozens of exploration commands.
 
 <decision_gate>

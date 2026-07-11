@@ -5,3 +5,4 @@
 {"vars": {"input": "Before we vendor this dependency — is its AGPL license going to be a problem for our closed-source product?", "golden_label": "legal-threshold"}}
 {"vars": {"input": "Can you review PR #4502 and check whether the auth changes are sound?", "golden_label": "review"}}
 {"vars": {"input": "I'd like to add a dark-mode toggle to the settings page — where should we start?", "golden_label": "default"}}
+{"vars": {"input": "#6325 implement Phase F", "golden_label": "implement"}}

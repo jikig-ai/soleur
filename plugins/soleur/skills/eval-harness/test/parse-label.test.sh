@@ -108,14 +108,14 @@ loadenum() {
 
 # promptfoo's file:// var handling is version-dependent: it may pass the literal
 # `file://...` ref OR the RESOLVED FILE CONTENTS (JSON array text). Both must work.
-loadenum "file://enums/go-routes.json"     7 "fix" "loadEnum file:// literal ref (one promptfoo shape)"
+loadenum "file://enums/go-routes.json"     8 "fix" "loadEnum file:// literal ref (one promptfoo shape)"
 loadenum "file://enums/triage-levels.json" 3 "P1"  "loadEnum file:// triage-levels"
-loadenum "enums/go-routes.json"            7 "fix" "loadEnum bare relative path"
+loadenum "enums/go-routes.json"            8 "fix" "loadEnum bare relative path"
 # The resolved-contents shape — what promptfoo actually passes when it resolves a
 # defaultTest.vars file:// ref to the file's CONTENTS. Regression guard for the
 # gate-vacuous bug (loadEnum must JSON.parse a JSON-array-text string, not treat it
 # as a path). JSON array text as a string.
-loadenum '["fix","drain","clo-attestation","review","legal-threshold","incident","default"]' 7 "fix" "loadEnum JSON-array-text contents (promptfoo file:// resolved-contents shape)"
+loadenum '["fix","drain","clo-attestation","review","legal-threshold","incident","implement","default"]' 8 "fix" "loadEnum JSON-array-text contents (promptfoo file:// resolved-contents shape)"
 loadenum '[ "a", "b", "c" ]'               3 "a"   "loadEnum whitespaced JSON-array-text contents"
 loadenum "__ARRAY__"                       3 "a"   "loadEnum direct array passthrough"
 loadenum "file://enums/does-not-exist.json" 0 "null" "loadEnum unreadable file -> [] (gate fails closed)"
