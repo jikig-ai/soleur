@@ -71,13 +71,12 @@ const HIJACK_TARGETS: HijackTarget[] = [
   },
 ];
 
-// The two exposures the hijack SURFACES (harness found them; #6307 Phase 5). Both
-// have an UPDATE WITH CHECK of `user_id = auth.uid()` ONLY — no is_workspace_member
-// re-check on the NEW workspace_id — so the owner can re-home the row into a
-// workspace it does not belong to. Baselined as test.fails (KNOWN_EXPOSURES contract:
-// green while tracked, RED once the WITH CHECK is fixed → forces un-baseline).
-// Tracked by #6334 (filed from this run).
-const HIJACK_EXPOSURES = new Set(["conversations", "kb_files"]);
+// Fixed by migration 129 (#6334): conversations & kb_files UPDATE WITH CHECK now
+// re-check is_workspace_member(NEW.workspace_id, auth.uid()), so the owner can no
+// longer re-home a row into a non-member workspace. The exposures are un-baselined —
+// the loop's `else` branch runs a plain test() asserting the hijack is DENIED (42501).
+// Any table re-added here reverts to the test.fails baseline contract.
+const HIJACK_EXPOSURES = new Set<string>([]);
 
 const seeded = new Map<string, Locate>();
 
