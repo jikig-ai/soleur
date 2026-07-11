@@ -50,15 +50,15 @@ owner: founder
 - Runbooks MUST NOT prescribe `ssh`, `docker exec`, `journalctl`, or any interactive in-host step as a PRIMARY debug action [id: hr-no-ssh-fallback-in-runbooks] [skill-enforced: plan/work/ship review-agent + hook ship-runbook-ssh-gate.sh] [hook-enforced: lefthook lint-infra-no-human-steps.py]. PRIMARY = a no-SSH probe (Sentry, `gh run view`); SSH-class goes in a "Last-resort diagnosis" section ONLY, after 3 tries. Class: a plan/spec/runbook with a human-run terraform/SSH/reboot/verify step fails CI. **Why:** #4116.
 - Every new server-side feature MUST cite which observability layer covers each failure mode in its `## Observability` block [id: hr-observability-layer-citation] [skill-enforced: plan/deepen-plan Phase 2.9 + review-agent silent-failure-hunter]. Layer list + rationale: `agents/engineering/review/observability-coverage-reviewer.md`. A failure mode without a layer cite is rejected at plan-write time. **Why:** #4116.
 - For any polling/heartbeat loop where intermediate state matters (CI, PR merge, release, health), use the Monitor tool — never Bash `run_in_background` [id: hr-monitor-not-run-in-background-for-polling] [hook-enforced: .claude/hooks/background-poll-prefer-monitor.sh] [skill-enforced: ship Phase 7]. Backgrounded poll loops detach and fail silently; `run_in_background` is only for one-shot wait-then-exit or builds. **Why:** #4512.
-- Before asserting a limiting claim about THIS repo's tools/skills ("Y doesn't exist") or that an external entity is fake, verify first (grep/read source; WebSearch) or phrase as a question [id: hr-verify-repo-capability-claim-before-assert]. **Why:** #4819, #5706.
-- After `/go` routes to a pipeline skill (`one-shot`, `drain-*`), invoke it via the harness adapter — never inline a subset of its SKILL.md steps. `/go` dispatches only; `one-shot` deliverable = merged PR + `<promise>DONE</promise>` [id: hr-pipeline-skills-never-inline-after-go-route] [skill-enforced: go.md Step 2.1 + workflow-fidelity.test.ts]. **Why:** #6325.
+- Before asserting — in your own output OR a subagent prompt — a limiting/negative claim about THIS repo's tools/scripts/skills/flags ("Y doesn't exist"), OR that a named external system/model/paper/product is fake/hallucinated, verify first (grep/read repo source; WebSearch a post-cutoff entity) or phrase it as a question [id: hr-verify-repo-capability-claim-before-assert]. Trigger is semantic: a confident false claim trips it either way. **Why:** #4819, #5706.
+- After `/go` routes to a pipeline skill, invoke via harness — never inline SKILL.md steps [id: hr-pipeline-skills-never-inline-after-go-route] [skill-enforced: go.md Step 2.1]. **Why:** #6325.
 
 ## Workflow Gates
 
 - Zero agents until user confirms direction [id: wg-zero-agents-until-user-confirms]. Present a concise summary first, ask if they want to go deeper, only then launch research. Exception: passive domain routing (below).
 - At session start, run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list` (bare root or any worktree) [id: wg-at-session-start-run-bash-plugins-soleur]. If none exists, create one with `... --yes create <name>` first. Bare root (local dev; Concierge non-bare — ADR-099) — never `git pull`/`git checkout` from it.
 - At session start (after `cleanup-merged` fetches main), refresh `.mcp.json` at the bare root: `git show main:.mcp.json > .mcp.json` [id: wg-at-session-start-after-cleanup-merged]. Claude Code reads it from CWD on startup to discover MCP servers; bare repos have no working tree, so manual sync is required.
-- `/ship` Phase 5.5 blocks PR-ready when the PR body cites operator actions without `Tracks #NNNN`/`Refs #NNNN` to OPEN deferred-automation issues [id: wg-block-pr-ready-on-undeferred-operator-steps] [skill-enforced: ship Phase 5.5]. **Why:** #4066.
+- `/ship` Phase 5.5 blocks PR-ready when the PR body has operator-action references without `Tracks #NNNN`/`Refs #NNNN` companions to OPEN deferred-automation issues [id: wg-block-pr-ready-on-undeferred-operator-steps] [skill-enforced: ship Phase 5.5 Undeferred Operator-Step Gate]. **Why:** PR-H #4066; full spec in plugins/soleur/skills/ship/SKILL.md.
 
 ## Compliance Tier
 
@@ -66,10 +66,10 @@ owner: founder
 
 ## Passive Domain Routing
 
-- When a user message contains a clear domain signal unrelated to the current task, route by signal orthogonality: spawn multiple leaders ONLY for distinct asks across different domains; spawn a single leader for single-domain signals. Spawn via `run_in_background: true` per `brainstorm-domain-config.md` [id: pdr-when-a-user-message-contains-a-clear]. **Why:** #2853.
+- When a user message contains a clear domain signal unrelated to the current task, route by signal orthogonality: spawn leaders per distinct domain ask via `run_in_background: true` per `brainstorm-domain-config.md` [id: pdr-when-a-user-message-contains-a-clear]. **Why:** #2853.
 - Do not route on trivial messages ("yes", "continue", "looks good") or when the domain signal IS the current task's topic [id: pdr-do-not-route-on-trivial-messages-yes].
 
 ## Communication
 
-- Challenge reasoning instead of validating [id: cm-challenge-reasoning-instead-of]. No flattery.
+- Challenge reasoning, not validating [id: cm-challenge-reasoning-instead-of]. No flattery.
 - Delegate verbose exploration (3+ file reads) to subagents [id: cm-delegate-verbose-exploration-3-file]. Keep main context for edits.
