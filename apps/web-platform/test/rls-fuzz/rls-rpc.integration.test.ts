@@ -1,8 +1,10 @@
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
+import path from "node:path";
 import type postgres from "postgres";
 import { buildAuthenticatedClaims } from "./claim";
 import { classifyRpcOutcome, type Verdict } from "./verdict";
-import { securityDefinerAuthenticatedFns, securityDefinerAnonFns, type SecDefFn } from "./catalog";
+import { securityDefinerAuthenticatedFns, securityDefinerAnonFns, allSecurityDefinerFns, type SecDefFn } from "./catalog";
+import { staticallyUndetectedDefinerFns, loadForwardCorpus } from "../migration-lint/definer-grants";
 import { ATTACK_SQL, EXCLUDED, KNOWN_EXPOSURES, type RpcCtx } from "./rpc-cases";
 import { connect, seedRpcCtx, rolledBackRaw } from "./harness-fixture";
 
@@ -94,6 +96,22 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
     // a fn must not be double-classified
     const dupes = [...Object.keys(ATTACK_SQL)].filter((f) => EXCLUDED[f] || KNOWN_EXPOSURES[f]);
     expect(dupes, `double-classified: ${dupes.join(", ")}`).toEqual([]);
+  });
+
+  // Non-vacuity / live-catalog parity (#6328, ADR-112). The subordinate static
+  // pre-filter (test/migration-lint/definer-grants.ts) claims "zero silent skips" —
+  // this makes that claim real rather than self-referential by proving the static
+  // detector matches EVERY live SECURITY DEFINER fn from migration source. A live fn
+  // it misses means the static tier under-detects and must not be trusted.
+  test("static-tier parity: the migration-lint detector finds every live SECURITY DEFINER fn", async () => {
+    const liveNames = (await allSecurityDefinerFns(sql)).map((f) => f.proname);
+    expect(liveNames.length, "expected the migrated DB to expose SECURITY DEFINER fns").toBeGreaterThan(20);
+    const corpus = loadForwardCorpus(path.join(__dirname, "../../supabase/migrations"));
+    const undetected = staticallyUndetectedDefinerFns(liveNames, corpus);
+    expect(
+      undetected,
+      `the static migration-lint detector under-detects live DEFINER fns (fix extractDefinerFns in test/migration-lint/definer-grants.ts): ${undetected.join(", ")}`,
+    ).toEqual([]);
   });
 
   // AC7 anon coverage gate — ENUMERATION-COVERAGE ONLY (documented scope). Every
