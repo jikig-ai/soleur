@@ -1,5 +1,6 @@
 # ADR-111: Runtime authz/RLS-fuzz harness on a Supabase-CLI-local disposable stack
 
+- **Amended by:** [ADR-112](./ADR-112-definer-grant-hygiene-two-tier-guard.md) (#6328) — names this harness's **AC8** gate the *authoritative* durable guard for SECURITY DEFINER grant hygiene, adds a static no-stack pre-filter subordinate to it, and adds a non-vacuity/live-catalog-parity assertion to `rls-rpc.integration.test.ts`.
 - **Status:** adopting (harness build in progress on `feat-t3mp3st-security-eval`, #6256)
 - **Date:** 2026-07-09
 - **Deciders:** Operator; drafted via `/soleur:go` → brainstorm → CLO legal-threshold → plan (4-agent review panel) → this ADR. Provisioning fork ruled by the `cto` agent mid-`/work`.

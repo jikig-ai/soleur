@@ -319,6 +319,25 @@ export function parseGrants(sql: string): RoleStmt[] {
   );
 }
 
+/**
+ * Non-vacuity / live-catalog-parity check (ADR-112, plan Phase 4 / AC10). Returns
+ * the names of live SECURITY DEFINER functions that the static detector does NOT
+ * find over `corpus`. A non-empty result means the static tier under-detects
+ * relative to the authoritative live catalog and must not be trusted — it is the
+ * guard that keeps "zero silent skips" from being self-referential (the static tier
+ * grading its own homework). Callers pass `securityDefinerAuthenticatedFns` /
+ * `allSecurityDefinerFns` catalog names from the migrated DB.
+ */
+export function staticallyUndetectedDefinerFns(
+  liveNames: string[],
+  corpus: CorpusFile[],
+): string[] {
+  const detected = new Set(
+    corpus.flatMap((c) => extractDefinerFns(c.file, c.sql)).map((f) => f.name),
+  );
+  return [...new Set(liveNames)].filter((n) => !detected.has(n)).sort();
+}
+
 export function parseDrops(sql: string): DropStmt[] {
   const stripped = stripSqlNoise(sql);
   const out: DropStmt[] = [];

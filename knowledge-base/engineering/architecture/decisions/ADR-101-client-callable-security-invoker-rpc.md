@@ -4,10 +4,11 @@ title: Client-callable SECURITY INVOKER RPC pattern (RLS-preserving reads)
 status: accepted
 date: 2026-07-07
 amends: none
+amended_by: [ADR-112]
 supersedes: none
 issue: none
 related: []
-related_adrs: [ADR-044]
+related_adrs: [ADR-044, ADR-112]
 brand_survival_threshold: single-user incident
 ---
 

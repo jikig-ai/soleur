@@ -7,6 +7,7 @@ import {
   parseGrants,
   parseDrops,
   classifyDefinerFns,
+  staticallyUndetectedDefinerFns,
   type CorpusFile,
 } from "./definer-grants";
 
@@ -274,5 +275,24 @@ describe("classifyDefinerFns — the corpus revoke-union", () => {
     expect(
       verdict(files, "legacy", { grandfather: new Set(["legacy"]) })[0].classification,
     ).toBe("grandfather");
+  });
+});
+
+describe("staticallyUndetectedDefinerFns — non-vacuity / live-catalog parity (ADR-112, AC10)", () => {
+  const corpus: CorpusFile[] = [
+    {
+      file: "900_a.sql",
+      sql: "create function public.alpha(p_a uuid) returns void security definer set search_path=public,pg_temp as $$ $$;\ncreate function public.beta() returns trigger security definer set search_path=public,pg_temp as $$ begin return new; end $$;",
+    },
+  ];
+
+  it("returns [] when every live DEFINER fn is statically detected", () => {
+    expect(staticallyUndetectedDefinerFns(["alpha", "beta"], corpus)).toEqual([]);
+  });
+
+  it("FIRES: a live DEFINER fn the static detector misses is reported (proves the guard is not vacuous)", () => {
+    // `ghost` exists in the live catalog but not in source → the static tier
+    // under-detects → the parity guard must surface it.
+    expect(staticallyUndetectedDefinerFns(["alpha", "beta", "ghost"], corpus)).toEqual(["ghost"]);
   });
 });
