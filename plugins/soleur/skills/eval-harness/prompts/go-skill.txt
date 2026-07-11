@@ -10,9 +10,10 @@ Routing table:
 | review | "review PR", "check this code", PR number reference (when `#N` resolves via `gh pr view N` — confirm PR-vs-issue type before routing) | `soleur:review` |
 | legal-threshold | The user input mentions an inbound vendor MSA, DSAR (data subject access request) / right-to-be-forgotten / data deletion request / account deletion request / data export request / "what data do you have on me", AI vendor terms / vendor AI review, OSS license question (GPL/AGPL/SSPL/copyleft), OR a personal-data exposure / unauthorized access / PII leak that crosses a statutory clock (GDPR Art. 33 72h) — events that exceed founder-grade compliance helping and warrant a downstream specialist | `clo` agent (Task spawn; the Assess phase emits the threshold catalog from `knowledge-base/legal/recommended-tools.md`) |
 | incident | The user describes a live or recent production incident (outage, customer-impact, Sentry alert) needing classification + PIR. NOTE: pure data breaches without an operational outage route to `legal-threshold` above (statutory clock takes precedence); use `incident` for ops-postmortem scope (uptime, latency, error-rate). | `soleur:incident` |
-| default | Everything else — features, exploration, questions, generation, vague scope | `soleur:brainstorm` |
+| implement | User asks to **implement**, **build**, or **ship** a scoped feature, issue, or phase (e.g. "implement Phase F", "#6325 implement", "ship this feature") — concrete deliverables, not open-ended exploration | `soleur:one-shot` |
+| default | Everything else — features, exploration, questions, generation, vague scope without implement/build/ship intent | `soleur:brainstorm` |
 
-Respond with ONLY the single route token (one of: fix, drain, clo-attestation, review, legal-threshold, incident, default). No explanation, no punctuation, no extra words.
+Respond with ONLY the single route token (one of: fix, drain, clo-attestation, review, legal-threshold, incident, implement, default). No explanation, no punctuation, no extra words.
 
 User request: {{input}}
 Route:

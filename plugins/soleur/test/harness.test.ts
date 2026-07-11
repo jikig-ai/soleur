@@ -138,6 +138,13 @@ describe("invokeSkill", () => {
     expect(inv.command).toBe("/drain-labeled-backlog --label security");
     expect(inv.instruction).toContain("slash command");
   });
+
+  test("one-shot invocation includes pipeline completion suffix", () => {
+    process.env.GROK_HOME = "/home/user/.grok";
+    const inv = invokeSkill("one-shot", "implement Phase F");
+    expect(inv.instruction).toContain("<promise>DONE</promise>");
+    expect(inv.instruction).toContain("Steps 0–8");
+  });
 });
 
 describe("spawnAgent", () => {
@@ -190,6 +197,7 @@ describe("routingInstructions", () => {
     expect(md).toContain("/go");
     expect(md).toContain("**not** `/soleur:go`");
     expect(md).toContain("spawn_subagent");
+    expect(md).toContain("Workflow fidelity");
   });
 
   test("unknown suggests grok inspect", () => {

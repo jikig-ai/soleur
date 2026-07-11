@@ -3,19 +3,13 @@
  *
  * Mirrors the eval-gate routing table in plugins/soleur/commands/go.md.
  * Golden-path eval (Phase F #6325) asserts Grok slash_command dispatch fidelity.
+ * Anti-bypass contract (#6338): routes resolve via workflow-fidelity.ts.
  */
 
-import { invokeSkill, spawnAgent, type Harness, type SkillInvocation, type AgentSpawn } from "./harness";
+import { invokeSkill, spawnAgent, type SkillInvocation, type AgentSpawn } from "./harness";
+import { GO_SKILL_ROUTES, resolveGoSkillRoute } from "./workflow-fidelity";
 
-/** Skill routes from go.md routing table (soleur: prefix stripped at dispatch). */
-export const GO_SKILL_ROUTES: Record<string, string> = {
-  fix: "one-shot",
-  drain: "drain-labeled-backlog",
-  "drain-prs": "drain-prs",
-  review: "review",
-  incident: "incident",
-  default: "brainstorm",
-};
+export { GO_SKILL_ROUTES, resolveGoSkillRoute };
 
 /** Agent routes (spawn_subagent / Task — never improvised workflows). */
 export const GO_AGENT_ROUTES: Record<string, string> = {
@@ -32,8 +26,7 @@ export function resolveGoRoute(label: string): GoRouteTarget {
   if (label in GO_AGENT_ROUTES) {
     return { kind: "agent", agent: GO_AGENT_ROUTES[label] };
   }
-  const skill = GO_SKILL_ROUTES[label] ?? GO_SKILL_ROUTES.default;
-  return { kind: "skill", skill };
+  return { kind: "skill", skill: resolveGoSkillRoute(label) };
 }
 
 export type GoDispatch =

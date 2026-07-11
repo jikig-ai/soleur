@@ -8,6 +8,7 @@
  */
 
 import { pathToAgentId } from "./agent-registry";
+import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
 export type Harness = "claude" | "grok" | "unknown";
 
@@ -109,6 +110,8 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
   const name = normalizeSkillName(skill);
   const trimmedArgs = args?.trim();
 
+  const pipelineSuffix = pipelineInvocationSuffix(name);
+
   if (harness === "grok") {
     const command = trimmedArgs ? `/${name} ${trimmedArgs}` : `/${name}`;
     return {
@@ -118,7 +121,8 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
       args: trimmedArgs,
       instruction:
         `Invoke the registered skill via slash command \`${command}\`. ` +
-        "Do NOT improvise workflow steps — run the skill to completion.",
+        "Do NOT improvise workflow steps — run the skill to completion." +
+        pipelineSuffix,
     };
   }
 
@@ -131,7 +135,8 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
     instruction:
       `Invoke via the **Skill tool** with skill \`${command}\`` +
       (trimmedArgs ? ` and args: \`${trimmedArgs}\`` : "") +
-      ". Do NOT improvise workflow steps.",
+      ". Do NOT improvise workflow steps." +
+      pipelineSuffix,
   };
 }
 
@@ -188,6 +193,8 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
  * Markdown snippet for go.md / eval-harness — embed at routing time.
  */
 export function routingInstructions(harness: Harness): string {
+  const fidelity = workflowFidelityInstructions(harness);
+
   switch (harness) {
     case "claude":
       return [
@@ -196,6 +203,8 @@ export function routingInstructions(harness: Harness): string {
         "- Agents: **Task tool** with `subagent_type`.",
         "- Commands: `/soleur:go`, `/soleur:sync`, `/soleur:help`.",
         "- **Never improvise** when a route names a `soleur:<skill>` or agent — invoke it.",
+        "",
+        fidelity,
       ].join("\n");
 
     case "grok":
@@ -205,6 +214,8 @@ export function routingInstructions(harness: Harness): string {
         "- Agents: **spawn_subagent** (not Task).",
         "- Commands: `/go`, `/sync`, `/help` — **not** `/soleur:go`.",
         "- **Never improvise** — invoke the registered slash command or subagent.",
+        "",
+        fidelity,
       ].join("\n");
 
     default:
@@ -212,6 +223,8 @@ export function routingInstructions(harness: Harness): string {
         "**Harness: unknown** — default to Claude conventions.",
         "- Skills: Skill tool (`soleur:<skill>`). Agents: Task tool.",
         "- If tools are missing, run `grok inspect` and `grok --trust` from repo root.",
+        "",
+        fidelity,
       ].join("\n");
   }
 }
