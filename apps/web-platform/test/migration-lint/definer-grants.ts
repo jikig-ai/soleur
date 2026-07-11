@@ -365,7 +365,12 @@ interface FnEvent {
 }
 
 /**
- * Classify every SECURITY DEFINER function across the (forward-only) corpus.
+ * Classify every SECURITY DEFINER function across the corpus.
+ *
+ * CALLER CONTRACT: pass FORWARD migrations only — exclude `*.down.sql`. Down files
+ * sort lexically BEFORE their forward `.sql` and re-GRANT anon/authenticated
+ * (`128_…down.sql` restores the residual grants), which would poison the
+ * revoke-union; `run-migrations.sh:125,251` skips them for the same reason.
  *
  * Identity = (name, type-signature). For each identity, the LATEST create/drop
  * event decides existence (a DROP-without-later-recreate is excluded — the dropped
