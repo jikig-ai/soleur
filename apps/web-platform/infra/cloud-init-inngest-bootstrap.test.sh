@@ -130,11 +130,15 @@ else
   echo "  SKIP: dash not installed (POSIX portability check skipped — CI will exercise it)"
 fi
 
-# --- AC3: YAML round-trip ---
+# --- AC3: YAML round-trip (raw source, templatefile directives stripped) ---
+# #6178: cloud-init.yml now carries col-0 `%{ if web_colocate_inngest ~}` / `%{ endif ~}`
+# templatefile directives. YAML rejects `%` at column 0 (directive indicator → ScannerError),
+# so strip those directive lines before parsing the NON-rendered source. Rendered-state YAML
+# validity is asserted once, in the AC7 terraform-render leg — the single home for that property.
 echo ""
-echo "--- AC3: cloud-init.yml YAML round-trip ---"
-assert "cloud-init.yml parses as valid YAML" \
-  "python3 -c \"import yaml; yaml.safe_load(open('$CLOUD_INIT'))\""
+echo "--- AC3: cloud-init.yml YAML round-trip (directives stripped) ---"
+assert "cloud-init.yml (templatefile directives stripped) parses as valid YAML" \
+  "grep -v '^%{' '$CLOUD_INIT' | python3 -c \"import sys,yaml; yaml.safe_load(sys.stdin)\""
 
 # --- AC5: sudoers byte-parity between source file and cloud-init inline (#4144) ---
 # The same Cmnd_Alias/Defaults/deploy lines live in three places:
@@ -228,6 +232,89 @@ PIN_REF_COUNT=$(grep -coE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$C
 DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | sort -u | wc -l)
 assert "both soleur-inngest-bootstrap pin refs (IREF + ZIREF) present and share one tag (found $PIN_REF_COUNT refs, $DISTINCT_PINS distinct)" \
   "(( PIN_REF_COUNT == 2 && DISTINCT_PINS == 1 ))"
+
+# --- AC7: web_colocate_inngest gate (#6178) — structural smoke ---
+# The "Bootstrap Inngest server on first boot" runcmd item is wrapped in a col-0
+# templatefile `%{ if web_colocate_inngest ~}` / `%{ endif ~}` directive pair so a
+# freshly-created web host with the toggle false does NOT co-locate inngest.
+echo ""
+echo "--- AC7: web_colocate_inngest gate — structural ---"
+VARS_TF="$SCRIPT_DIR/variables.tf"
+assert "exactly one col-0 '%{ if web_colocate_inngest ~}' directive" \
+  "(( \$(grep -cE '^%\{ if web_colocate_inngest ~\}$' '$CLOUD_INIT') == 1 ))"
+assert "exactly one col-0 '%{ endif ~}' directive" \
+  "(( \$(grep -cE '^%\{ endif ~\}$' '$CLOUD_INIT') == 1 ))"
+IF_LINE=$(grep -nE '^%\{ if web_colocate_inngest ~\}$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+COMMENT_LINE=$(grep -nE 'Bootstrap Inngest server on first boot' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+ENDIF_LINE=$(grep -nE '^%\{ endif ~\}$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+TRAP_DISARM_LINE=$(grep -nE 'disarm, else the composite trap' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+assert "if-directive precedes the bootstrap comment"        "(( IF_LINE < COMMENT_LINE ))"
+assert "endif-directive follows the block's trap disarm"    "(( ENDIF_LINE > TRAP_DISARM_LINE ))"
+# `type = bool` is LOAD-BEARING: Terraform's `%{ if }` directive HCL-bool-converts its
+# operand — the canonical string "false" coerces to boolean false (the rollback route
+# TF_VAR_web_colocate_inngest="false"), and a non-bool string fails CLOSED at plan time
+# ("condition must be of type bool"). `type = bool` pins the variable-boundary contract;
+# the render leg's "false" (string) case exercises the coercion end-to-end.
+assert "web_colocate_inngest declared type = bool (load-bearing string→bool coercion)" \
+  "awk '/variable \"web_colocate_inngest\"/,/^}/' '$VARS_TF' | grep -qE 'type[[:space:]]*=[[:space:]]*bool'"
+
+# --- AC7: web_colocate_inngest gate — terraform render authority ---
+# The single behavioral authority for the gate's effect. A real `terraform templatefile`
+# render is the ONLY thing that exercises the load-bearing `~}` whitespace-strip; the
+# rendered-YAML validity property also lives here (not duplicated in AC3). SKIP locally
+# when terraform is absent — CI's deploy-script-tests job supplies it via setup-terraform.
+echo ""
+echo "--- AC7: web_colocate_inngest gate — terraform render authority ---"
+if command -v terraform >/dev/null 2>&1; then
+  RENDER_SCRATCH=$(mktemp -d)
+  # Render the web cloud-init with a given web_colocate_inngest value into $2.
+  # All map vars are placeholders EXCEPT the toggle; keep in sync with server.tf's
+  # templatefile map — a new map var breaks this render (the intended tripwire).
+  render_ci() {
+    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="t", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ghcr_read_user="u", ghcr_read_token="g", ci_ssh_public_key_openssh="k", web_colocate_inngest=%s })\n' \
+      "$CLOUD_INIT" "$1" | terraform -chdir="$RENDER_SCRATCH" console 2>/dev/null > "$2"
+  }
+  # yaml.safe_load a rendered doc, stripping terraform console's `<<EOT … EOT` heredoc wrapper.
+  render_yaml_ok() {
+    python3 - "$1" <<'PY'
+import sys, yaml
+L = open(sys.argv[1]).read().splitlines()
+body = "\n".join(L[1:-1]) if (L and L[0].lstrip().startswith("<<")) else "\n".join(L)
+yaml.safe_load(body)
+PY
+  }
+  # false (bool) and "false" (string, the rollback route) must BOTH gate off.
+  for CASE in 'false' '"false"'; do
+    OUT="$RENDER_SCRATCH/render.txt"
+    render_ci "$CASE" "$OUT"
+    assert "render web_colocate_inngest=$CASE OMITS soleur-inngest-bootstrap image pull" \
+      "! grep -qF 'soleur-inngest-bootstrap' '$OUT'"
+    assert "render web_colocate_inngest=$CASE OMITS the inngest-bootstrap.sh invocation" \
+      "! grep -qF 'EXTRACT_DIR/inngest-bootstrap.sh' '$OUT'"
+    assert "render web_colocate_inngest=$CASE RETAINS --name soleur-web-platform (app bring-up)" \
+      "grep -qF 'name soleur-web-platform' '$OUT'"
+    assert "render web_colocate_inngest=$CASE RETAINS INNGEST_BASE_URL" \
+      "grep -qF 'INNGEST_BASE_URL' '$OUT'"
+    # Retention token = the poweroff item's UNIQUE fail-closed action string (cloud-init.yml
+    # ~:710), NOT the bare 'soleur-hostscripts.ok' (which also appears in pre-gate comments
+    # :440/:527 and would match regardless of endif placement — user-impact-review hardening
+    # against a vacuous retention assertion).
+    assert "render web_colocate_inngest=$CASE RETAINS fail-closed 'refusing to start app' poweroff gate" \
+      "grep -qF 'refusing to start app' '$OUT'"
+    assert "render web_colocate_inngest=$CASE is valid YAML" "render_yaml_ok '$OUT'"
+  done
+  # true (bool) keeps the co-located bootstrap.
+  TRUE_OUT="$RENDER_SCRATCH/render-true.txt"
+  render_ci true "$TRUE_OUT"
+  assert "render web_colocate_inngest=true INCLUDES soleur-inngest-bootstrap image pull" \
+    "grep -qF 'soleur-inngest-bootstrap' '$TRUE_OUT'"
+  assert "render web_colocate_inngest=true INCLUDES the inngest-bootstrap.sh invocation" \
+    "grep -qF 'EXTRACT_DIR/inngest-bootstrap.sh' '$TRUE_OUT'"
+  assert "render web_colocate_inngest=true is valid YAML" "render_yaml_ok '$TRUE_OUT'"
+  rm -rf "$RENDER_SCRATCH"
+else
+  echo "  SKIP: terraform not installed (render authority skipped — CI deploy-script-tests provides it via setup-terraform)"
+fi
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

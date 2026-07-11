@@ -164,6 +164,10 @@ resource "hcloud_server" "web" {
     # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
     # block in ci-ssh-key.tf for the rationale.
     ci_ssh_public_key_openssh = local.ci_ssh_pubkey
+    # #6178 — gates the "Bootstrap Inngest server on first boot" runcmd item via a
+    # templatefile `%{ if web_colocate_inngest }` directive. Default false (dedicated
+    # scheduler, ADR-100). Bool is load-bearing (see variables.tf).
+    web_colocate_inngest = var.web_colocate_inngest
   }))
 
   # cloud-init and ssh_keys are create-time attributes. After import,
