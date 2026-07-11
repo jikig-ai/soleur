@@ -54,9 +54,24 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
     # form for zot's plain-HTTP registry — crane/docker then speak HTTP over the raw forward
     # (127.0.0.1:5000 is auto-insecure to docker). The CF Access app + service-token policy are
     # unchanged (identical shape to the working ssh app); only the ingress transport was wrong.
+    #
+    # NOT STALE (#6357): this rule is the LIVE registry-push path — do NOT remove or repoint it.
+    # #6288 moved the zot registry REGION nbg1→hel1 and recreated its store volume, but the origin
+    # private IP `10.0.1.30:5000` is UNCHANGED (the 10.0.1.0/24 net spans hel1; zot-registry.tf
+    # `registry_private_ip = "10.0.1.30"`). Removing this rule breaks CI registry push; repointing
+    # is a no-op. A `dial tcp 10.0.1.30:5000: operation was canceled` here means the origin is
+    # transiently DOWN (registry stability = #6288), NOT that the config is wrong.
     ingress_rule {
       hostname = "registry.${var.app_domain_base}"
       service  = "tcp://${local.registry_endpoint}"
+      origin_request {
+        # Fail-fast so a DOWN registry origin (#6288) doesn't pile up ~30s-held dials that
+        # saturate the shared tunnel daemon's HA-stream budget and degrade the sibling
+        # deploy-webhook route (the 2026-07-11 502; #6357). Mitigation, not cure — root cause is
+        # registry stability (#6288); full deploy-tunnel decoupling + metrics are #6178.
+        connect_timeout   = 5    # INTEGER seconds (NOT "5s") — bounds the TCP dial only
+        no_happy_eyeballs = true # origin is a v4 literal → drop the v4/v6 parallel-dial fan-out
+      }
     }
     # Catch-all rule (required by Cloudflare)
     ingress_rule {
