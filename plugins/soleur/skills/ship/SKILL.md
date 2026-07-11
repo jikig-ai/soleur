@@ -5,6 +5,21 @@ description: "This skill should be used when preparing a feature for production 
 
 # ship Skill
 
+<!-- ship-merge-deploy-protocol:start -->
+## Merge → deploy protocol (load-bearing — especially Grok Build)
+
+**You own merge through production verification — never ask the operator to monitor.**
+
+1. Phase 7: poll PR merge to `MERGED` (auto-merge queue, BEHIND sync, required-check failure exit).
+2. After merge: poll release/deploy workflows on the merge commit to `completed` + `success`.
+3. Step 3.8: invoke `/postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) **before** Step 4 cleanup.
+4. **FORBIDDEN:** Ending the session at merge, at a red release run you did not investigate, or with "want me to watch CI?"
+5. **Harness polling:** `plugins/soleur/lib/harness.ts` → `pollInstructions()` — Claude uses **Monitor tool**; Grok uses **AwaitShell** (`pattern` for `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `postmerge verification complete`) or blocking Shell with `block_until_ms`.
+6. **BEHIND stop-and-sync:** When `mergeStateStatus` is `BEHIND`, **stop** CI-only polling and resync before continuing. Grok/ad-hoc polls: `bash plugins/soleur/scripts/sync-pr-behind.sh <PR>` from the feature worktree. Canonical spec: `plugins/soleur/lib/pr-merge-poll.ts`.
+
+See `workflow-fidelity.ts` (`SHIP_MERGE_DEPLOY_SENTINEL`, `POST_MERGE_VERIFICATION_SKILLS`) and `wg-after-a-pr-merges-to-main-verify-all`.
+<!-- ship-merge-deploy-protocol:end -->
+
 **Purpose:** Enforce the full feature lifecycle before creating a PR, preventing missed steps like forgotten /compound runs and uncommitted artifacts. Version bumping is handled by CI at merge time via semver labels.
 
 **CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call. This avoids Claude Code's security prompt for command substitution.
@@ -1166,6 +1181,16 @@ The CI workflow [`.github/workflows/pr-auto-close-scanner.yml`](../../../../.git
 
 The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE intentional — those are not traps and should be kept. The trap pattern is auto-close keyword + #N where the issue is NOT in the intentional `ISSUE_NUMBER` set, OR where the form is a checkbox / prose / code-fence rather than the canonical body line.
 
+<!-- grok-pre-push-gate:start -->
+**Grok Build pre-push gate (mandatory before `git push`).** When the harness is Grok (`GROK_HOME` / `GROK_AGENT`), run from repo root and inspect exit code explicitly (do not pipe through `tail`):
+
+```bash
+bash plugins/soleur/scripts/grok-pre-push-gate.sh > /tmp/grok-pre-push-gate.log 2>&1; rc=$?; echo "EXIT=$rc"
+```
+
+Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 test-all.sh already ran (Phase 4 is mid-pipeline; this gate is the push-time recheck).
+<!-- grok-pre-push-gate:end -->
+
 Push the branch to remote. Get the branch name first:
 
 ```bash
@@ -1425,7 +1450,14 @@ Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks report
 
 After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
 
-**HARD GATE: Use the Monitor tool, NEVER Bash `run_in_background`.** The Monitor tool streams each stdout line as a real-time notification (state-change visibility). Bash `run_in_background` is opaque until completion — the agent and operator see nothing until the entire loop finishes or fails, which defeats the purpose of heartbeat polling. If you catch yourself reaching for `Bash` with `run_in_background: true` for a polling loop, stop — that is the failure mode this gate exists to block. **Why:** PR #4512 — the agent used `Bash run_in_background` for release monitoring; the background task failed silently with exit code 1, producing zero visibility into the release state. The Monitor tool would have surfaced every state transition as it happened.
+**HARD GATE — harness-aware polling (see `ship-merge-deploy-protocol` above).**
+
+- **Claude Code:** Use the **Monitor tool**, NEVER Bash `run_in_background`. The Monitor tool streams each stdout line as a real-time notification (state-change visibility).
+- **Grok Build:** Use **AwaitShell** with a `pattern` matching poll output (`MERGED`, `CLOSED`, `completed success`, `TIMEOUT`), or **Shell** with `block_until_ms` ≥ loop duration. NEVER ask the operator to watch merge status.
+
+Bash `run_in_background` is forbidden on all harnesses — opaque until completion (#4512).
+
+**Claude — Monitor tool loop** (Grok: same loop body via AwaitShell/Shell per `pollInstructions()`):
 
 Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes). The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it in stderr), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured "main moving faster than CI" warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). See "Auto-sync on BEHIND" and "Required-check failure exit" below:
 
@@ -2028,11 +2060,12 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **Step 3:** Display the warning and ask: "Run `terraform apply` now, or defer with justification?" If deferred, record the justification in the PR body.
 
-3.8. **Chain to postmerge verification (CONTINUATION GATE — MUST complete before Step 4).** After release workflows pass and migration verification completes, invoke `/soleur:postmerge` to verify production health, Sentry cron monitors, and file freshness:
+3.8. **Chain to postmerge verification (CONTINUATION GATE — MUST complete before Step 4).** After release workflows pass and migration verification completes, invoke postmerge to verify production health, Sentry cron monitors, and file freshness:
 
-   ```
-   skill: soleur:postmerge <PR-number>
-   ```
+   - **Claude Code:** `skill: soleur:postmerge <PR-number>`
+   - **Grok Build:** `/postmerge <PR-number>`
+
+   **Do NOT ask the operator** whether to run postmerge or monitor deploy — invoke it in the same turn.
 
    If postmerge reports any FAILED phase (production health, Sentry warning, browser regression), display the failures prominently but do NOT block cleanup — the deploy has already happened; the signal is for immediate operator attention, not rollback.
 

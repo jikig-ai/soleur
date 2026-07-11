@@ -86,6 +86,14 @@ bash plugins/soleur/scripts/grok-fidelity-gate.sh   # full gate (CI job grok-fid
 cd plugins/soleur && bun run scripts/sync-grok-agent-compat.ts --check
 ```
 
+**Run `grok-pre-push-gate.sh` locally before every `git push` under Grok Build:**
+
+```bash
+bash plugins/soleur/scripts/grok-pre-push-gate.sh > /tmp/grok-pre-push-gate.log 2>&1; rc=$?; echo "EXIT=$rc"
+```
+
+The gate mirrors reproducible CI: fast required jobs (`readme-counts`, `adr-ordinals`, `rule-body-lint`, `lockfile-sync`, …), `scripts/test-all.sh` (the `test` required check), `web-platform` build, and `grok-fidelity-gate.sh`. CI-only checks (CodeQL, CLA, e2e, tenant-integration) still run on GitHub. Claude Code gets commit-time lint via lefthook; Grok does not — running only `grok-fidelity-gate.sh` misses the `test-scripts` shard (e.g. `B_ALWAYS` budget).
+
 ## References
 
 - CONTRIBUTING.md — contributor quickstart

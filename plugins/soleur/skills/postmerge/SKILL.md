@@ -5,6 +5,18 @@ description: "This skill should be used when verifying a merged PR deployed corr
 
 # postmerge Skill
 
+<!-- postmerge-harness-protocol:start -->
+## Harness adapter (Claude vs Grok Build)
+
+Invoke via **Claude:** `soleur:postmerge <PR>` | **Grok:** `/postmerge <PR>`.
+
+**Polling CI / health checks without asking the operator:**
+- **Claude Code:** Monitor tool for Phase 2 main CI and Phase 3 health retries.
+- **Grok Build:** AwaitShell with `pattern` (`completed success`, `postmerge verification complete`) or Shell with `block_until_ms`.
+
+Canonical: `plugins/soleur/lib/harness.ts` → `pollInstructions()`. Parent skills (`ship` Step 3.8, `one-shot` Step 8) MUST invoke postmerge before `<promise>DONE</promise>`.
+<!-- postmerge-harness-protocol:end -->
+
 **Purpose:** Enforce post-merge verification so bugs that only appear in production context are caught immediately after merge -- not days later. This closes the "last mile" gap where QA passes locally but production diverges (stale files, unapplied migrations, CSP violations from injected scripts).
 
 **CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call.
@@ -37,7 +49,7 @@ Check the latest CI run on main triggered by the merge:
 gh run list --branch main --limit 3 --json databaseId,status,conclusion,headSha
 ```
 
-Find the run matching the merge commit SHA. If no matching run yet, use the **Monitor tool** with a polling loop (max 5 minutes). Do NOT use foreground `sleep`:
+Find the run matching the merge commit SHA. If no matching run yet, poll with the harness adapter (max 5 minutes) — **Claude:** Monitor tool; **Grok:** AwaitShell/Shell per `pollInstructions()`. Do NOT ask the operator to watch CI. Do NOT use Bash `run_in_background`:
 
 ```bash
 for i in $(seq 1 20); do

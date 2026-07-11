@@ -3,6 +3,10 @@ name: compound
 description: "This skill should be used when documenting a recently solved problem to compound your team's knowledge."
 ---
 
+<!-- lifecycle-handoff-protocol:start -->
+**Lifecycle handoff (standalone `/compound` before ship):** When compound runs as the pre-ship step in the implementation tail, invoke `/ship` next — artifacts archived here are a checkpoint, not completion. Parent orchestrators (`work`, `one-shot`) own progression when active.
+<!-- lifecycle-handoff-protocol:end -->
+
 # /compound
 
 Coordinate multiple subagents working in parallel to document a recently solved problem.
