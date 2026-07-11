@@ -150,6 +150,13 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      # #6178: the cloud-init-inngest-bootstrap drift-guard (below) now includes an
+      # AC7 terraform-render leg that is the SINGLE behavioral authority for the
+      # web_colocate_inngest gate (only a real `terraform templatefile` render exercises
+      # the load-bearing `~}` whitespace-strip). Without terraform on PATH the leg SKIPs
+      # (a "maybe-run" test is not a gate) — this step makes it run for real in CI.
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+
       - name: Run ci-deploy.sh tests
         run: bash apps/web-platform/infra/ci-deploy.test.sh
 

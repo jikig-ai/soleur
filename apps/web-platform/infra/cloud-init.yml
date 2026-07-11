@@ -633,7 +633,12 @@ runcmd:
     printf '%s\n' "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=cloud-init" \
       > /mnt/data/plugins/soleur/.seed-complete
 
+%{ if web_colocate_inngest ~}
   # Bootstrap Inngest server on first boot (#4118, Tier 1).
+  # #6178: this whole runcmd item is gated behind web_colocate_inngest (default false).
+  # When false (post-cutover), a freshly-created web host does NOT extract/run
+  # inngest-bootstrap.sh, so inngest-server.service / inngest-heartbeat.timer are never
+  # authored or enabled — scheduling lives on the dedicated soleur-inngest host (ADR-100).
   # Pinned image tag = the soleur-inngest-bootstrap OCI image version (the
   # bootstrap-script SHAPE version), NOT the inngest-cli version (the latter is
   # sourced from the image's Config.Env at run time). This pin MUST be bumped to
@@ -692,6 +697,7 @@ runcmd:
         "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=$VECTOR_CLI_SHA256" \
       bash "$EXTRACT_DIR/inngest-bootstrap.sh"
     trap - EXIT  # #6090: disarm, else the composite trap mislabels terminal-block failures as inngest_bootstrap.
+%{ endif ~}
 
   - |
     set -e
