@@ -45,7 +45,7 @@ host-recreate the quiesce mechanism (no SSH) satisfies `hr-prod-host-config-chan
 
 ### Why this is SAFE TO MERGE (verified)
 - `hcloud_server.web` (`server.tf:93`, `for_each = var.web_hosts`) carries
-  `lifecycle { ignore_changes = [user_data, ssh_keys, image, placement_group_id] }` (`server.tf:195-196`)
+  `lifecycle { ignore_changes = [user_data, ssh_keys, image, placement_group_id] }` (`server.tf:200`)
   — applies to **every** existing web instance, so a `cloud-init.yml` edit does NOT re-render `user_data`
   on any running host. New config lands only on a fresh **create** (a recreate).
 - The auto-apply workflow `apply-web-platform-infra.yml` is `-target=`-scoped to specific

@@ -250,9 +250,11 @@ ENDIF_LINE=$(grep -nE '^%\{ endif ~\}$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 TRAP_DISARM_LINE=$(grep -nE 'disarm, else the composite trap' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 assert "if-directive precedes the bootstrap comment"        "(( IF_LINE < COMMENT_LINE ))"
 assert "endif-directive follows the block's trap disarm"    "(( ENDIF_LINE > TRAP_DISARM_LINE ))"
-# `type = bool` is LOAD-BEARING: `%{ if web_colocate_inngest }` is truthy for ANY
-# non-empty string, so the rollback route TF_VAR_web_colocate_inngest="false" (a string)
-# gates correctly ONLY because the variable coerces the string to boolean false.
+# `type = bool` is LOAD-BEARING: Terraform's `%{ if }` directive HCL-bool-converts its
+# operand — the canonical string "false" coerces to boolean false (the rollback route
+# TF_VAR_web_colocate_inngest="false"), and a non-bool string fails CLOSED at plan time
+# ("condition must be of type bool"). `type = bool` pins the variable-boundary contract;
+# the render leg's "false" (string) case exercises the coercion end-to-end.
 assert "web_colocate_inngest declared type = bool (load-bearing string→bool coercion)" \
   "awk '/variable \"web_colocate_inngest\"/,/^}/' '$VARS_TF' | grep -qE 'type[[:space:]]*=[[:space:]]*bool'"
 
@@ -293,8 +295,12 @@ PY
       "grep -qF 'name soleur-web-platform' '$OUT'"
     assert "render web_colocate_inngest=$CASE RETAINS INNGEST_BASE_URL" \
       "grep -qF 'INNGEST_BASE_URL' '$OUT'"
-    assert "render web_colocate_inngest=$CASE RETAINS fail-closed /run/soleur-hostscripts.ok gate" \
-      "grep -qF 'soleur-hostscripts.ok' '$OUT'"
+    # Retention token = the poweroff item's UNIQUE fail-closed action string (cloud-init.yml
+    # ~:710), NOT the bare 'soleur-hostscripts.ok' (which also appears in pre-gate comments
+    # :440/:527 and would match regardless of endif placement — user-impact-review hardening
+    # against a vacuous retention assertion).
+    assert "render web_colocate_inngest=$CASE RETAINS fail-closed 'refusing to start app' poweroff gate" \
+      "grep -qF 'refusing to start app' '$OUT'"
     assert "render web_colocate_inngest=$CASE is valid YAML" "render_yaml_ok '$OUT'"
   done
   # true (bool) keeps the co-located bootstrap.

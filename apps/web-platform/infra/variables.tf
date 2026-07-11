@@ -343,9 +343,10 @@ variable "ghcr_read_token" {
 # behavior). Default false: scheduling lives on the dedicated soleur-inngest host
 # (10.0.1.40, ADR-100). Recreate-onto-false-config is the quiesce mechanism
 # (hr-prod-host-config-change-immutable-redeploy); rollback = set true + recreate.
-# `type = bool` is LOAD-BEARING: the cloud-init `%{ if web_colocate_inngest }`
-# directive is truthy for ANY non-empty string, so a drift to `type = string` would
-# make the rollback route `TF_VAR_web_colocate_inngest="false"` (a string) always-truthy.
+# `type = bool` is LOAD-BEARING: Terraform's `%{ if }` directive HCL-bool-converts its
+# operand — the string "false" coerces to boolean false, so the rollback route
+# `TF_VAR_web_colocate_inngest="false"` gates OFF correctly (and a non-bool string fails
+# closed at plan time). Pinning `type = bool` keeps the variable-boundary contract explicit.
 variable "web_colocate_inngest" {
   description = "When true, a freshly-created web host bootstraps + enables the co-located inngest-server.service (pre-cutover). Default false: scheduling lives on the dedicated soleur-inngest host (10.0.1.40, ADR-100, #6178). Recreate is the quiesce mechanism (hr-prod-host-config-change-immutable-redeploy)."
   type        = bool
