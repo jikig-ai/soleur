@@ -6,6 +6,7 @@ import {
   invokeSkill,
   spawnAgent,
   routingInstructions,
+  pollInstructions,
   normalizeSkillName,
   normalizeAgentName,
 } from "../lib/harness";
@@ -203,5 +204,20 @@ describe("routingInstructions", () => {
   test("unknown suggests grok inspect", () => {
     const md = routingInstructions("unknown");
     expect(md).toContain("grok inspect");
+  });
+});
+
+describe("pollInstructions", () => {
+  test("grok documents AwaitShell merge-deploy polling", () => {
+    const md = pollInstructions("grok");
+    expect(md).toContain("AwaitShell");
+    expect(md).toContain("/postmerge");
+    expect(md).toContain("NEVER ask");
+  });
+
+  test("claude documents Monitor tool merge-deploy polling", () => {
+    const md = pollInstructions("claude");
+    expect(md).toContain("Monitor tool");
+    expect(md).toContain("postmerge");
   });
 });

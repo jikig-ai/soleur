@@ -13,7 +13,8 @@ You are the **pipeline runner** for this skill. Whether entered via `/go` → `/
 - **FORBIDDEN:** Cherry-picking steps (e.g. 0b worktree + inline implementation + push, then stopping).
 - **FORBIDDEN:** Using Write/Edit/Shell on product code **before** Steps 1–2 (plan) complete — unless Step 1 recovered an on-disk plan and Step 3 (`/work`) is next.
 - **FORBIDDEN:** Treating a draft PR or pushed branch as done. Deliverable = **merged PR** + `<promise>DONE</promise>` (Step 8).
-- **REQUIRED (Grok Build):** Invoke child skills via slash commands — `/plan`, `/deepen-plan`, `/work`, `/review`, `/qa`, `/compound`, `/ship`. Do not read their SKILL.md and improvise.
+- **REQUIRED (Grok Build):** Invoke child skills via slash commands — `/plan`, `/deepen-plan`, `/work`, `/review`, `/qa`, `/compound`, `/ship` (ship chains `/postmerge`). Do not read their SKILL.md and improvise.
+- **Merge → deploy:** YOU poll merge/release/deploy — never ask the operator to watch CI. Grok: **AwaitShell** + `pattern`; Claude: **Monitor tool**. See `harness.ts` `pollInstructions()`.
 - **Continuation gates:** `## Work Phase Complete`, `## Code Review Complete`, and similar exit summaries mean **proceed to the next step in this same turn** — never hand off to the operator.
 
 See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`, `ONE_SHOT_CHILD_SKILLS`) and `go.md` Step 2.1 (`go-post-route` block).
@@ -189,10 +190,15 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 
    > **Diagnostic loops here are self-serve — never hand the operator a data-fetch.** When QA (or any review/verification step above) surfaces a failure on a server/cron/prod surface, self-pull the error: Better Stack `SOLEUR_*` markers via `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since <N> --grep <marker>` and Sentry — never ask the operator to paste error output, run probes, or eyeball logs (the operator decides, doesn't fetch). If the needed signal is missing from telemetry, ADD a monitored stdout `SOLEUR_*` marker in the emitting code so it self-reports; do not escalate to the operator for it. Cite `hr-no-dashboard-eyeball-pull-data-yourself`. See `knowledge-base/project/learnings/workflow-patterns/2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch.md` (#5934).
 6. Use the **Skill tool**: `skill: soleur:compound`
-7. Use the **Skill tool**: `skill: soleur:ship`. Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, and cleanup.
+7. Use the **Skill tool**: `skill: soleur:ship` (Grok: `/ship`). Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, release-workflow polling, **postmerge verification (Step 3.8)**, and cleanup.
 
-   **The merge/CI wait is owned by ship Phase 7 — never hand-roll it.** Do NOT do the change inline and skip invoking `soleur:ship`, and do NOT issue `gh pr merge` or poll `gh pr`/`gh run` yourself. Ship Phase 7 enforces a HARD GATE (use the **Monitor tool**, NEVER Bash `run_in_background`) for the merge and post-merge release polling; bypassing ship bypasses that gate and reintroduces the silent-background-failure mode of PR #4512 (per `hr-monitor-not-run-in-background-for-polling`, also hook-enforced by `background-poll-prefer-monitor.sh`). Even for a trivial change there is no compressed fast-path: run Steps 3-8 as written and let ship own the wait.
-8. Output `<promise>DONE</promise>` when PR is merged and release workflows pass
+   **The merge → deploy wait is owned by ship — never hand-roll it and never ask the operator.** Do NOT skip invoking `soleur:ship`, do NOT issue `gh pr merge` yourself, and do NOT end the turn at MERGED. Ship Phase 7 polls merge + release workflows; Step 3.8 invokes `soleur:postmerge` before cleanup.
+
+   **Harness polling:** Claude → **Monitor tool** (NEVER Bash `run_in_background`). Grok → **AwaitShell** with `pattern` matching terminal poll output, or Shell with adequate `block_until_ms`. Canonical: `plugins/soleur/lib/harness.ts` → `pollInstructions()`.
+
+   > **CONTINUATION GATE:** When ship finishes (including postmerge Step 3.8), proceed immediately to step 8 — do NOT ask "want me to monitor deploy?" or hand off to the operator.
+
+8. Output `<promise>DONE</promise>` **only when** PR is merged, release workflows passed, and **postmerge Phase 7** printed `postmerge verification complete!`. If ship returned without postmerge, invoke `/postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) before emitting DONE.
 
 CRITICAL RULE: If a completion promise is set, you may ONLY output it when the statement is completely and unequivocally TRUE. Do not output false promises to escape the loop.
 

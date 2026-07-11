@@ -42,11 +42,14 @@ export const ONE_SHOT_CHILD_SKILLS = [
 ] as const;
 
 /** Standalone skills with mandatory successor invokes (not full orchestrators). */
-export const HANDOFF_SKILLS = ["plan", "work", "review", "compound"] as const;
+export const HANDOFF_SKILLS = ["plan", "work", "review", "compound", "ship"] as const;
 
 export type HandoffSkill = (typeof HANDOFF_SKILLS)[number];
 
-/** Emitted only after PR merge + release checks (one-shot Step 8). */
+/** Post-merge production verification — ship Step 3.8, one-shot Step 8 prerequisite. */
+export const POST_MERGE_VERIFICATION_SKILLS = ["postmerge"] as const;
+
+/** Emitted only after merge + release workflows + postmerge verification (one-shot Step 8). */
 export const ONE_SHOT_DONE_MARKER = "<promise>DONE</promise>";
 
 /** Sentinel markers skills/docs must retain — drift-guarded in tests. */
@@ -56,6 +59,8 @@ export const BRAINSTORM_ANTI_BYPASS_SENTINEL = "brainstorm-anti-bypass-protocol"
 export const PLAN_ANTI_BYPASS_SENTINEL = "plan-anti-bypass-protocol";
 export const WORK_ANTI_BYPASS_SENTINEL = "work-anti-bypass-protocol";
 export const LIFECYCLE_HANDOFF_SENTINEL = "lifecycle-handoff-protocol";
+export const SHIP_MERGE_DEPLOY_SENTINEL = "ship-merge-deploy-protocol";
+export const POSTMERGE_HARNESS_SENTINEL = "postmerge-harness-protocol";
 
 export function isPipelineSkill(skill: string): skill is PipelineSkill {
   return (PIPELINE_SKILLS as readonly string[]).includes(skill);
@@ -101,6 +106,8 @@ export function mandatorySuccessors(skill: string): readonly string[] {
       return ["compound"];
     case "compound":
       return ["ship"];
+    case "ship":
+      return [...POST_MERGE_VERIFICATION_SKILLS];
     default:
       return [];
   }
@@ -140,7 +147,9 @@ export function workflowFidelityInstructions(harness: Harness): string {
     `- **FORBIDDEN after routing to \`brainstorm\`:** product code (Write/Edit/Shell); ending after spec/brainstorm doc without handoff. **REQUIRED next:** ${brainstormNext}.`,
     `- **FORBIDDEN after routing to \`one-shot\`:** inline implementation before Steps 1–8 complete; ending after push/draft PR; reporting "done" without \`${ONE_SHOT_DONE_MARKER}\`.`,
     `- **FORBIDDEN on standalone \`plan\` / \`work\`:** implementing or pushing without the mandated successor chain. \`plan\` → \`/work\`; \`work\` → ${workTail}.`,
-    `- **Deliverables:** brainstorm = artifacts + handoff; plan = plan file + \`/work\`; work/one-shot = **merged PR**. Draft PRs are checkpoints only.`,
+    `- **Merge → deploy (never ask the operator):** after \`/ship\` queues merge, YOU poll through release workflows and invoke \`/postmerge\` — do not ask "want me to monitor?" or end the turn at MERGED.`,
+    `- **\`${ONE_SHOT_DONE_MARKER}\` gate:** emit ONLY after merge + release workflows + \`/postmerge\` verification complete — not at draft PR, not at merge alone.`,
+    `- **Deliverables:** brainstorm = artifacts + handoff; plan = plan file + \`/work\`; work/one-shot = **merged PR + healthy deploy**. Draft PRs are checkpoints only.`,
     "- Skill exit summaries (`## Work Phase Complete`, `## Review Phase Complete`) are **continuation gates**, not turn boundaries.",
   ].join("\n");
 }
@@ -151,7 +160,8 @@ export function pipelineInvocationSuffix(skill: string): string {
     return (
       ` Run **all** Steps 0–8 to completion. ` +
       `Do NOT implement product code inline. ` +
-      `Emit \`${ONE_SHOT_DONE_MARKER}\` only after merge.`
+      `Poll merge→deploy yourself; invoke /postmerge after /ship. ` +
+      `Emit \`${ONE_SHOT_DONE_MARKER}\` only after postmerge completes.`
     );
   }
   if (skill === "brainstorm") {
@@ -169,9 +179,18 @@ export function pipelineInvocationSuffix(skill: string): string {
   }
   if (skill === "work") {
     return (
-      " Run implementation then the post-work tail (/review → /compound → /ship). " +
-      "Do NOT stop after push — merged PR is the deliverable."
+      " Run implementation then the post-work tail (/review → /compound → /ship → /postmerge). " +
+      "Do NOT stop after push — merged PR + deploy verification is the deliverable."
     );
+  }
+  if (skill === "ship") {
+    return (
+      " Poll merge and release workflows to completion; invoke /postmerge before cleanup. " +
+      "Do NOT ask the operator to monitor — you own the wait."
+    );
+  }
+  if (skill === "postmerge") {
+    return " Run all postmerge phases through Phase 7 report — production health gate.";
   }
   if (isPipelineSkill(skill)) {
     return " Run the skill's full pipeline — do not stop after the first phase.";

@@ -53,6 +53,7 @@ owner: founder
 - Before asserting — in your own output OR a subagent prompt — a limiting/negative claim about THIS repo's tools/scripts/skills/flags ("Y doesn't exist"), OR that a named external system/model/paper/product is fake/hallucinated, verify first (grep/read repo source; WebSearch a post-cutoff entity) or phrase it as a question [id: hr-verify-repo-capability-claim-before-assert]. Trigger is semantic: a confident false claim trips it either way. **Why:** #4819, #5706.
 - After `/go` routes to a pipeline skill, invoke via harness — never inline SKILL.md steps [id: hr-pipeline-skills-never-inline-after-go-route] [skill-enforced: go.md Step 2.1]. **Why:** #6325.
 - Lifecycle skills (`brainstorm`, `plan`, `work`, `review`, `compound`) must invoke mandated successors when standalone — never stop at artifacts or draft PRs [id: hr-lifecycle-skills-never-inline-after-handoff] [skill-enforced: workflow-fidelity.ts + per-skill anti-bypass blocks]. **Why:** #6320.
+- After `/ship` queues merge, poll through release workflows and invoke `/postmerge` — never ask the operator to monitor deploy [id: hr-merge-deploy-monitor-without-asking] [skill-enforced: ship merge-deploy protocol + harness pollInstructions + one-shot Step 8]. Grok: AwaitShell; Claude: Monitor tool. **Why:** #6320/#4512.
 
 ## Workflow Gates
 
