@@ -3,6 +3,10 @@ name: review
 description: "This skill should be used when performing exhaustive code reviews using multi-agent analysis, ultra-thinking, and worktrees."
 ---
 
+<!-- lifecycle-handoff-protocol:start -->
+**Lifecycle handoff (standalone `/review`):** When no parent orchestrator (`one-shot`, `work`) owns the pipeline, invoke `/compound` then `/ship` after review — do not end at the review summary. In pipeline mode, emit the compact `## Review Phase Complete` marker only (see Step 3 pipeline detection).
+<!-- lifecycle-handoff-protocol:end -->
+
 > **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill's engine lives at [`workflows/review.workflow.js`](./workflows/review.workflow.js) — deterministic change-class fan-out, per-finding adversarial verification, and CONCUR-gated filing. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/review/workflows/review.workflow.js", args: "<PR#>" })`. See [`workflows/README.md`](./workflows/README.md). The prose skill below stays the default; the two coexist during calibration.
 
 # Review Command

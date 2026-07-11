@@ -21,8 +21,8 @@ cd "$PLUGIN_ROOT"
 echo "==> sync-grok-agent-compat --check"
 bun run scripts/sync-grok-agent-compat.ts --check
 
-echo "==> grok inspect contract + golden-path eval"
-bun test test/grok-inspect-contract.test.ts test/go-routing-golden-path.test.ts
+echo "==> grok inspect contract + golden-path + lifecycle fidelity eval"
+bun test test/grok-inspect-contract.test.ts test/go-routing-golden-path.test.ts test/workflow-fidelity.test.ts
 
 if command -v grok >/dev/null 2>&1; then
   echo "==> live grok inspect contract (CLI on PATH)"

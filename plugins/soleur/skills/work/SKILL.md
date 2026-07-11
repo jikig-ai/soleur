@@ -3,6 +3,19 @@ name: work
 description: "This skill should be used when executing work plans efficiently while maintaining quality and finishing features."
 ---
 
+<!-- work-anti-bypass-protocol:start -->
+## Anti-bypass protocol (load-bearing — especially Grok Build)
+
+You are the **implementation orchestrator** for standalone `/work` and one-shot Step 3:
+
+- **FORBIDDEN:** Pushing a branch and reporting "done" without `/review` → `/compound` → `/ship`.
+- **FORBIDDEN:** Treating `## Work Phase Complete` as a turn boundary when you own the pipeline (see Invocation Mode below).
+- **REQUIRED (Grok Build):** Invoke `/review`, `/compound`, `/ship` via slash commands — never hand-roll ship steps.
+- **Deliverable:** merged PR (standalone) or return to parent one-shot (pipeline mode).
+
+See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`) and Phase 4 Invocation Mode below.
+<!-- work-anti-bypass-protocol:end -->
+
 # Work Plan Execution Command
 
 Execute a work plan efficiently while maintaining quality and finishing features.

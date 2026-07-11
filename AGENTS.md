@@ -49,6 +49,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: hr-monitor-not-run-in-background-for-polling] → core
 - [id: hr-verify-repo-capability-claim-before-assert] → core
 - [id: hr-pipeline-skills-never-inline-after-go-route] → core
+- [id: hr-lifecycle-skills-never-inline-after-handoff] → core
 
 ## Workflow Gates
 

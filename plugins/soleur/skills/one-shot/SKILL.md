@@ -16,7 +16,7 @@ You are the **pipeline runner** for this skill. Whether entered via `/go` → `/
 - **REQUIRED (Grok Build):** Invoke child skills via slash commands — `/plan`, `/deepen-plan`, `/work`, `/review`, `/qa`, `/compound`, `/ship`. Do not read their SKILL.md and improvise.
 - **Continuation gates:** `## Work Phase Complete`, `## Code Review Complete`, and similar exit summaries mean **proceed to the next step in this same turn** — never hand off to the operator.
 
-See `plugins/soleur/lib/workflow-fidelity.ts` and `go.md` Step 2.1 (`go-post-route` block).
+See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`, `ONE_SHOT_CHILD_SKILLS`) and `go.md` Step 2.1 (`go-post-route` block).
 
 **Harness adapter (Steps 1–8 child skills):** Use `plugins/soleur/lib/harness.ts` — Grok Build invokes `/plan`, `/work`, `/review`, `/ship`, etc.; Claude Code uses the **Skill tool** (`soleur:plan`, `soleur:work`, …). Never substitute ad-hoc Write/Edit/Shell loops for a registered child skill.
 <!-- one-shot-anti-bypass-protocol:end -->
