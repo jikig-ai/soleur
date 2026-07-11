@@ -164,6 +164,24 @@ export async function securityDefinerAuthenticatedFns(sql: Sql): Promise<SecDefF
 }
 
 /**
+ * EVERY `SECURITY DEFINER` function in `public` (regardless of who may EXECUTE it) —
+ * the non-vacuity/parity superset of {@link securityDefinerAuthenticatedFns}. The
+ * static migration-lint pre-filter (test/migration-lint/definer-grants.ts, #6328,
+ * ADR-112) must detect all of these from migration source; a live fn it fails to
+ * match means the static tier under-detects and cannot be trusted (parity guard).
+ */
+export async function allSecurityDefinerFns(sql: Sql): Promise<SecDefFn[]> {
+  return sql<SecDefFn[]>`
+    select p.proname,
+           pg_get_function_identity_arguments(p.oid) as args
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.prosecdef
+    order by p.proname, args`;
+}
+
+/**
  * The anon-EXECUTE definer set — every `SECURITY DEFINER` public fn the `anon`
  * (unauthenticated) role may EXECUTE. A DISTINCT dimension from the authenticated
  * set: under anon `auth.uid()` is NULL, so every `founder_id = auth.uid()` /
