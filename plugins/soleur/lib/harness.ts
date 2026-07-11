@@ -8,6 +8,7 @@
  */
 
 import { pathToAgentId } from "./agent-registry";
+import { behindSyncInstructions } from "./pr-merge-poll";
 import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
 export type Harness = "claude" | "grok" | "unknown";
@@ -190,10 +191,55 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
 }
 
 /**
+ * Harness-specific guidance for merge → release → deploy polling loops.
+ * Cite in ship Phase 7, postmerge Phase 2, one-shot Step 7–8.
+ */
+export function pollInstructions(harness: Harness): string {
+  const behind = behindSyncInstructions(harness);
+
+  switch (harness) {
+    case "claude":
+      return [
+        "**Merge/deploy polling (Claude Code)**",
+        "- Poll `gh pr view --jq '.state,.mergeStateStatus'` — not checks alone.",
+        "- Use the **Monitor tool** with state-change + heartbeat shell loops (ship Phase 7).",
+        "- NEVER Bash `run_in_background` for PR merge, CI, or release polling.",
+        "- After merge: watch release workflows to `completed`, then invoke `soleur:postmerge`.",
+        "- FORBIDDEN: asking the operator to watch merge/deploy status.",
+        "",
+        behind,
+      ].join("\n");
+
+    case "grok":
+      return [
+        "**Merge/deploy polling (Grok Build)**",
+        "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
+        "- Use **Shell** with adequate `block_until_ms` for short `gh` probes.",
+        "- Use **AwaitShell** with `pattern` for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`.",
+        "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
+        "- After `/ship` merge: poll release workflows, invoke `/postmerge <PR>`, then emit `<promise>DONE</promise>`.",
+        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND`.",
+        "",
+        behind,
+      ].join("\n");
+
+    default:
+      return [
+        "**Merge/deploy polling**",
+        "- Poll PR state + mergeStateStatus; resync on BEHIND before watching checks.",
+        "- Invoke postmerge verification before declaring done.",
+        "",
+        behind,
+      ].join("\n");
+  }
+}
+
+/**
  * Markdown snippet for go.md / eval-harness — embed at routing time.
  */
 export function routingInstructions(harness: Harness): string {
   const fidelity = workflowFidelityInstructions(harness);
+  const polling = pollInstructions(harness);
 
   switch (harness) {
     case "claude":
@@ -205,6 +251,8 @@ export function routingInstructions(harness: Harness): string {
         "- **Never improvise** when a route names a `soleur:<skill>` or agent — invoke it.",
         "",
         fidelity,
+        "",
+        polling,
       ].join("\n");
 
     case "grok":
@@ -216,6 +264,8 @@ export function routingInstructions(harness: Harness): string {
         "- **Never improvise** — invoke the registered slash command or subagent.",
         "",
         fidelity,
+        "",
+        polling,
       ].join("\n");
 
     default:
@@ -225,6 +275,8 @@ export function routingInstructions(harness: Harness): string {
         "- If tools are missing, run `grok inspect` and `grok --trust` from repo root.",
         "",
         fidelity,
+        "",
+        polling,
       ].join("\n");
   }
 }

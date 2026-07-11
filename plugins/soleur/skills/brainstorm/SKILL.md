@@ -3,6 +3,19 @@ name: brainstorm
 description: "This skill should be used when exploring requirements and approaches through collaborative dialogue before planning implementation."
 ---
 
+<!-- brainstorm-anti-bypass-protocol:start -->
+## Anti-bypass protocol (load-bearing — especially Grok Build)
+
+You are the **exploration orchestrator**. Whether entered via `/go` (default route) → `/brainstorm` or direct `/brainstorm`:
+
+- **FORBIDDEN:** Product code (Write/Edit/Shell on implementation files). Brainstorm answers **WHAT**, not **HOW**.
+- **FORBIDDEN:** Ending after spec/brainstorm doc without a lifecycle handoff — artifacts alone are not deliverables.
+- **REQUIRED (Grok Build):** Invoke successors via slash commands — `/plan` (default) or `/one-shot` (when requirements are already clear). Do not read their SKILL.md and improvise.
+- **Harness adapter:** `plugins/soleur/lib/harness.ts` — Grok uses `/plan`, `/one-shot`; Claude uses Skill tool (`soleur:plan`, `soleur:one-shot`).
+
+See `plugins/soleur/lib/workflow-fidelity.ts` (`BRAINSTORM_CHILD_SKILLS`) and `go.md` Step 2.1 (`go-post-route` block).
+<!-- brainstorm-anti-bypass-protocol:end -->
+
 # Brainstorm a Feature or Improvement
 
 **Note: The current year is 2026.** Use this when dating brainstorm documents.

@@ -16,3 +16,5 @@
 #   3. append the ack line below with the new hash + a real reason
 hr-when-in-a-worktree-never-read-from-bare|c6e8f0c198680f7e0b7ccbedf03d962b6b7fae861f04c1dcb2a9027ac0745a07|2026-07-07|6183|Added non-bare Concierge caveat + ADR-099 pointer (clarification, not a weakening — the rule's bare-root guidance is unchanged; the caveat prevents mis-applying it to the non-bare agent workspace)
 wg-at-session-start-run-bash-plugins-soleur|eed77e1cfbd5678fb364995abec0c83bd0f6abaa5382d3ea9cc825e1a601a302|2026-07-07|6183|Added non-bare Concierge caveat + ADR-099 pointer (clarification, not a weakening — session-start hygiene guidance unchanged)
+hr-pipeline-skills-never-inline-after-go-route|b9e25473eb36c56dfc0aa07e7f09ccbaa4b936e73915aaa1288f2bf40b29fd1e|2026-07-11|6347|consolidated lifecycle/merge/BEHIND into harness rule (workflow-fidelity.ts) — clarification not weakening
+wg-block-pr-ready-on-undeferred-operator-steps|9739a528c692e513a2e4e2f3248aecf6339e516a22582e1de917fe97cdd136fc|2026-07-11|6347|demoted wg-* core→rest for B_ALWAYS headroom; ship Phase 5.5 gate unchanged
