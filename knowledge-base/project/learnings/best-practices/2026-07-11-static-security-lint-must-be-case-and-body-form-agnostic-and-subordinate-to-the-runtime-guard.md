@@ -79,3 +79,30 @@ For any **static** security/compliance lint over source text:
   false backstop.
 
 See ADR-112, `apps/web-platform/test/migration-lint/definer-grants.ts`.
+
+## Session Errors
+
+- **`normalizeSignature` DEFAULT-strip bug** — a string-literal default (`DEFAULT '{}'`)
+  was blanked to whitespace by `stripSqlNoise` BEFORE `normalizeParam` ran, so
+  `default\s+<value>` found no trailing token and left a spurious `jsonb default` type
+  → CREATE≠REVOKE signature mismatch → false violation on `record_workspace_activity`.
+  **Recovery:** `\bdefault\b` (strip the clause regardless of trailing content).
+  **Prevention:** when two passes both mutate a string (noise-strip then normalize),
+  test the SECOND pass on the FIRST pass's output, not on raw input.
+- **Source-parser event-ordering (two iterations)** — v1 keyed order on
+  `rawSql.indexOf(strippedHeader)` (never matches → −1 → huge order); v2's
+  creates-before-drops-per-file `seq` counter still mis-ranked a same-identity
+  `DROP f(sig); CREATE f(sig)` in ONE file (067 check_my_revocation) as `dropped`,
+  silently skipping its assertion. **Recovery:** order events by TRUE source position
+  `(fileIndex, charOffset)` in the identically-stripped SQL. **Prevention:** for any
+  "latest wins" resolution over interleaved event kinds, order by real position — never
+  by emission order of separate parse passes. Caught by a unit test (v1) and by
+  multi-agent review against the real corpus (v2) — verify a lint against ground truth,
+  not its own green run.
+- **tsc caught 2 post-review-fix errors** (`verdict()` missing arg after a refactor;
+  `ReadonlySet` passed where `Set` was typed). **Prevention:** none needed — the
+  `./node_modules/.bin/tsc --noEmit` gate worked exactly as designed.
+- **Plan-phase (forwarded):** IaC-routing hook false-positived on "operator/console"
+  prose in a no-infra security plan (resolved via the documented `iac-routing-ack`
+  opt-out); one accidental bare-repo-path write (corrected); deepen-plan Observability
+  gate needed the 5-field CI-check schema. All hook-caught-and-corrected.
