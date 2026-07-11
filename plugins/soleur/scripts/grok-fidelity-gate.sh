@@ -12,6 +12,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 PLUGIN_ROOT="$REPO_ROOT/plugins/soleur"
 
+# Root package.json provides shared deps (e.g. yaml for agent-registry imports).
+cd "$REPO_ROOT"
+bun install --frozen-lockfile
+
 cd "$PLUGIN_ROOT"
 
 echo "==> sync-grok-agent-compat --check"

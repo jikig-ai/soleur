@@ -15,7 +15,7 @@
 #
 # Strict policy preserved (strict_required_status_checks_policy = true).
 #
-# Job-name contract: the 18 `context` strings below are public ABI for the
+# Job-name contract: the 19 `context` strings below are public ABI for the
 # branch-protection gate. A workflow job rename (`lint fixture content` ->
 # `lint-fixture-content`) silently un-requires the check until this resource
 # is updated in the same PR. See ADR-032 Sharp Edges.
