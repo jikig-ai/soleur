@@ -83,7 +83,7 @@ Adopt a **two-tier guard** and record which tier is authoritative:
    is DEFERRED** as optional defense-in-depth pending a **live role-scope probe**
    (Supabase applies ADP under `supabase_admin`; a mis-scoped ADP is a silent no-op
    and would itself be false-confidence — `hr-verify-repo-capability-claim-before-assert`).
-   Tracked separately (issue filed with this PR).
+   Tracked separately in **#6340**.
 
 ## Consequences
 
