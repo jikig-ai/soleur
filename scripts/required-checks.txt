@@ -93,6 +93,10 @@ adr-ordinals
 # .github/actions/bot-pr-with-synthetic-checks/action.yml + ADR-092.
 rule-body-lint
 
+# #6325 Phase F — Grok fidelity gate. ci.yml `grok-fidelity` job: grok inspect
+# contract + /go golden-path eval. Always-runs; installs Grok CLI on ubuntu-latest.
+grok-fidelity
+
 # #4384 — legal-doc-cross-document-gate.yml jobs.enforce. Always-runs (no
 # path filter post-#4384) — synthetic needed for bot PRs only.
 enforce

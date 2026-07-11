@@ -77,7 +77,12 @@ Canonical sources live under `plugins/soleur/agents/**`. After editing, regenera
 cd plugins/soleur && bun run scripts/sync-grok-agent-compat.ts
 ```
 
-CI drift check: `bun run scripts/sync-grok-agent-compat.ts --check` (required in Phase F #6325).
+CI drift checks (Phase F #6325):
+
+```bash
+bash plugins/soleur/scripts/grok-fidelity-gate.sh   # full gate (CI job grok-fidelity)
+cd plugins/soleur && bun run scripts/sync-grok-agent-compat.ts --check
+```
 
 ## References
 
