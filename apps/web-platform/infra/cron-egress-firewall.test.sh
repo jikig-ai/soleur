@@ -152,6 +152,20 @@ assert_grep "default-drop terminal rule present" 'counter drop comment "soleur-e
 assert_grep "DNS pin accept rule" 'udp dport 53 ip daddr @soleur_egress_dns accept' "$LOADER"
 assert_grep "DNS exfil drop is logged" 'egress-dns-exfil' "$LOADER"
 assert_grep "host-gateway :8288 accept" 'tcp dport 8288 accept' "$LOADER"
+# Dedicated Inngest host egress (#6178, ADR-100 cutover): the container must be
+# allowed to reach the dedicated host 10.0.1.40:8288. Paren-safe ERE pattern —
+# stop before the `(#6178)` comment tail (an unescaped `(` is an ERE group).
+assert_grep "dedicated inngest host :8288 accept (#6178)" \
+  'ip daddr 10\.0\.1\.40 tcp dport 8288 accept comment "soleur-egress: dedicated inngest host' "$LOADER"
+# Line-order: the dedicated-host accept MUST precede the terminal default drop
+# (first-match-wins), mirroring the RESOLVE_LINE < DROP_LINE block above.
+DEDICATED_LINE="$(grep -n 'ip daddr 10\.0\.1\.40 tcp dport 8288 accept' "$LOADER" | head -1 | cut -d: -f1)"
+DROP_RULE_LINE="$(grep -n 'counter drop comment "soleur-egress: default drop"' "$LOADER" | head -1 | cut -d: -f1)"
+if [[ -n "$DEDICATED_LINE" && -n "$DROP_RULE_LINE" && "$DEDICATED_LINE" -lt "$DROP_RULE_LINE" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: dedicated inngest host accept precedes the default drop (line $DEDICATED_LINE < $DROP_RULE_LINE)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: dedicated inngest host accept must precede the default drop (dedicated=$DEDICATED_LINE drop=$DROP_RULE_LINE)"
+fi
 assert_grep "bridge gateway derived, not hardcoded" 'docker network inspect bridge' "$LOADER"
 assert_grep "IPv6 bypass guard" 'EnableIPv6' "$LOADER"
 assert_grep "jump rule scoped to the bridge interface" 'iifname "\$BRIDGE_IF" counter jump SOLEUR-EGRESS' "$LOADER"
