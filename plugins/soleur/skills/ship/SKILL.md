@@ -1188,7 +1188,7 @@ The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE 
 bash plugins/soleur/scripts/grok-pre-push-gate.sh > /tmp/grok-pre-push-gate.log 2>&1; rc=$?; echo "EXIT=$rc"
 ```
 
-Abort Phase 6 if `rc != 0`. The gate mirrors reproducible CI: fast required jobs, `scripts/test-all.sh` (the `test` check), `web-platform` build, and `grok-fidelity`. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 `test-all.sh` already ran (Phase 4 is mid-pipeline; this gate is the push-time recheck).
+Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 test-all.sh already ran (Phase 4 is mid-pipeline; this gate is the push-time recheck).
 <!-- grok-pre-push-gate:end -->
 
 Push the branch to remote. Get the branch name first:
