@@ -178,6 +178,26 @@ else
   echo "  SKIP: visudo not installed locally — CI will exercise the validation step"
 fi
 
+# --- #6178 no-SSH web-host quiesce/enable grants (INNGEST_QUIESCE + INNGEST_ENABLE) ---
+# The dedicated-host cutover 2.2 gap: operators have no SSH, so `op=quiesce-web`
+# stop+disables the co-located web scheduler and `op=rollback` re-enables it, both via
+# ci-deploy.sh handlers over the deploy webhook (mirrors INNGEST_RESTART #4538). Assert
+# the two NEW verbs (disable via INNGEST_QUIESCE; enable via INNGEST_ENABLE) pin the EXACT
+# fully-resolved /usr/bin/systemctl argv (no wildcards — sudo-rs safe) + NOPASSWD to deploy.
+# `stop` reuses the pre-existing INNGEST_STOP (#5450) overlap; `start` (enable handler)
+# reuses the pre-existing INNGEST_START (#5450) grant — no new start grant is added.
+echo ""
+echo "--- #6178 INNGEST_QUIESCE / INNGEST_ENABLE pinned grants ---"
+assert "INNGEST_QUIESCE alias defined"                    "grep -qE '^Cmnd_Alias INNGEST_QUIESCE = ' '$SUDOERS_SRC'"
+assert "INNGEST_QUIESCE pins exact stop argv (wildcard-free)"    "grep -qF '/usr/bin/systemctl stop inngest-server.service' '$SUDOERS_SRC'"
+assert "INNGEST_QUIESCE pins exact disable argv (wildcard-free)" "grep -qF '/usr/bin/systemctl disable inngest-server.service' '$SUDOERS_SRC'"
+assert "INNGEST_QUIESCE granted NOPASSWD to deploy"       "grep -qE '^deploy ALL=\\(root\\) NOPASSWD: INNGEST_QUIESCE\$' '$SUDOERS_SRC'"
+assert "INNGEST_ENABLE alias pins exact enable argv"      "grep -qE '^Cmnd_Alias INNGEST_ENABLE = /usr/bin/systemctl enable inngest-server.service\$' '$SUDOERS_SRC'"
+assert "INNGEST_ENABLE granted NOPASSWD to deploy"        "grep -qE '^deploy ALL=\\(root\\) NOPASSWD: INNGEST_ENABLE\$' '$SUDOERS_SRC'"
+# sudo-rs rejects wildcards — the new alias lines must contain no literal '*'.
+QE_LINES=$(grep -E '^Cmnd_Alias INNGEST_(QUIESCE|ENABLE) = ' "$SUDOERS_SRC" || true)
+assert "new quiesce/enable alias argv are wildcard-free" "[[ -n \"\$QE_LINES\" ]] && ! printf '%s' \"\$QE_LINES\" | grep -qF '*'"
+
 # --- AC6: pin matches latest published vinngest-v* git tag (#4675 drift-guard) ---
 # Durable mechanical replacement for the manual "bump the cloud-init pin on each
 # bootstrap-image release" step — forgotten 10 consecutive times (v1.0.1…v1.1.10)

@@ -101,6 +101,19 @@ write_files:
       Cmnd_Alias INNGEST_START = /usr/bin/systemctl start inngest-server.service
       deploy ALL=(root) NOPASSWD: INNGEST_START
 
+      # #6178 — no-SSH web-host scheduler quiesce (stop+disable) via ci-deploy.sh's
+      # `quiesce inngest _ _` handler (op=quiesce-web). Full rationale in the mirrored
+      # deploy-inngest-bootstrap.sudoers; the `stop` overlaps INNGEST_STOP intentionally,
+      # `disable` is the genuinely-new verb. Pinned, wildcard-free (sudo-rs safe).
+      Cmnd_Alias INNGEST_QUIESCE = /usr/bin/systemctl stop inngest-server.service, /usr/bin/systemctl disable inngest-server.service
+      deploy ALL=(root) NOPASSWD: INNGEST_QUIESCE
+
+      # #6178 — no-SSH reverse re-enable via ci-deploy.sh's `enable inngest _ _` handler
+      # (op=rollback only). Restores the [Install] symlink a quiesce-disable removed; the
+      # start half reuses INNGEST_START (#5450). Pinned, wildcard-free (sudo-rs safe).
+      Cmnd_Alias INNGEST_ENABLE = /usr/bin/systemctl enable inngest-server.service
+      deploy ALL=(root) NOPASSWD: INNGEST_ENABLE
+
       # #4827 — permits infra-config-apply.sh to escalate the atomic install of
       # its managed files into root:root dest dirs the deploy user cannot write.
       # Fixed helper path, no argument wildcards (sudo-rs safe); the helper's
