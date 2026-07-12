@@ -411,6 +411,7 @@ CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
 WEBHOOK_SERVICE="$SCRIPT_DIR/webhook.service"
 assert "cloud-init.yml + webhook.service exist" "[[ -f '$CLOUD_INIT' && -f '$WEBHOOK_SERVICE' ]]"
 
+# shellcheck disable=SC2034  # CI_RWP/WS_RWP are consumed inside assert's `eval "$condition"` (SC can't see through eval)
 CI_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//')"
 WS_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//')"
 
