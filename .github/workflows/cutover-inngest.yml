@@ -50,10 +50,12 @@ jobs:
     timeout-minutes: 30
     # op=arm / op=rollback write a prod secret to soleur-inngest/prd (the arm-flip / reverse
     # flip, #6369). They gate on the `inngest-cutover` GitHub Environment (required-reviewer
-    # rule, TF-provisioned in inngest-arm-write-token.tf) so the DOPPLER_TOKEN_INNGEST_ARM
-    # environment secret resolves ONLY after a human approves the dispatch — the ack that
-    # hr-menu-option-ack-not-prod-write-auth requires. Every other op evaluates to '' (no
-    # environment gate), preserving their existing behaviour.
+    # rule, TF-provisioned in inngest-arm-write-token.tf): declaring `environment: inngest-cutover`
+    # holds the run in "Waiting" until a human approves the dispatch — the ack that
+    # hr-menu-option-ack-not-prod-write-auth requires. (DOPPLER_TOKEN_INNGEST_ARM itself is a repo
+    # secret, not an environment secret — the TF App cannot write env secrets; the reviewer gate on
+    # the JOB is what enforces the ack.) Every other op evaluates to '' (no environment gate),
+    # preserving their existing behaviour.
     environment: ${{ (inputs.op == 'arm' || inputs.op == 'rollback') && 'inngest-cutover' || '' }}
     # SAME group as deploy/restart — these inngest host ops share the host state
     # slot and must not interleave (P1a).
@@ -86,8 +88,9 @@ jobs:
           # (op=arm writes INNGEST_POSTGRES_URI/INNGEST_HEARTBEAT_URL/INNGEST_CUTOVER_FLIP=armed;
           # op=rollback writes INNGEST_CUTOVER_FLIP=rollback). A conditional expression injects it
           # EMPTY for every other dispatch — a bash comment cannot scope a step-env var (security F2/C5).
-          # It is a GitHub ENVIRONMENT secret (inngest-cutover), so it only resolves once the
-          # required-reviewer gate is approved on an op=arm/op=rollback dispatch.
+          # It is a repo secret; the op=arm/op=rollback JOB declares `environment: inngest-cutover`,
+          # which holds the run for the required-reviewer approval before any step (incl. this write)
+          # runs — the gate is on the JOB, not the secret (the TF App cannot write env secrets).
           DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'arm' || inputs.op == 'rollback') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
           # #6258: read-only pg_stat_activity for the op=execute 2.-1 pool pre-check
           # (same secret + endpoint scheduled-inngest-health.yml uses; TF
@@ -680,7 +683,7 @@ jobs:
               # ::add-mask::'d on its own capture line and every write reads from stdin (never argv,
               # which /proc/<pid>/cmdline exposes).
               if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
-                echo "::error::op=arm: DOPPLER_TOKEN_INNGEST_ARM is empty — the inngest-cutover environment secret did not resolve. Approve the environment required-reviewer gate on this dispatch, or the per-merge apply has not yet published the token (gh api repos/:owner/:repo/environments/inngest-cutover/secrets). Refusing to arm."; exit 1
+                echo "::error::op=arm: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch; if it is still empty, the per-merge apply has not yet published the token — check 'gh secret list | grep DOPPLER_TOKEN_INNGEST_ARM'). Refusing to arm."; exit 1
               fi
 
               # G1 — pre-write FSM-state guard (DI-C2, P1 — prevents PROD-Redis re-FLUSHALL data loss).
@@ -1076,7 +1079,7 @@ jobs:
 
               # ---- Half (A): the no-SSH reverse flip write (#6369). Behind the environment gate.
               if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
-                echo "::error::op=rollback: DOPPLER_TOKEN_INNGEST_ARM is empty — the inngest-cutover environment secret did not resolve. Approve the required-reviewer gate on this dispatch. Refusing the reverse flip write."; exit 1
+                echo "::error::op=rollback: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch; else check 'gh secret list | grep DOPPLER_TOKEN_INNGEST_ARM'). Refusing the reverse flip write."; exit 1
               fi
               # G1' decides ONLY whether to WRITE the reverse flip — it must NOT gate Half (B). Half (B),
               # the web re-enable, is the pre-#6369 UNCONDITIONAL reverse of 2.2 quiesce and the documented
