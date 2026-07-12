@@ -546,11 +546,14 @@ FSM flag (`INNGEST_CUTOVER_FLIP`) is the sole gate, so arming is pure Doppler wr
 
 ### Op order (the gated sequence)
 
-`op=execute` → **operator arms the flip (Doppler) + app-repoint** → `op=rearm` → `op=verify`.
-`op=execute` automates the web-host-expressible spine (2.0 → 2.2) and then **withholds a
-SEAM** — the two operator seams (the Doppler flip arm 2.2b+2.3, and the app-repoint 2.4)
-cannot be done from CI (`hr-menu-option-ack-not-prod-write-auth`) and are printed as an
-out-of-band hand-off.
+`op=execute` → **`op=arm` (no-SSH flip arm)** → **operator app-repoint (2.4)** → `op=rearm` →
+`op=verify`. `op=execute` automates the web-host-expressible spine (2.0 → 2.2) and then
+**withholds a SEAM**. As of #6369 the flip arm (2.2b/2.3) is **no longer an operator Doppler
+write** — it is the no-SSH **`op=arm`** dispatch (a prod-write behind explicit dispatch + the
+`inngest-cutover` GitHub Environment required-reviewer gate, which satisfies
+`hr-menu-option-ack-not-prod-write-auth`: the dispatch + approval IS the ack). The remaining true
+operator seams are **2.2a** (web-2 freeze/recreate lifecycle) and **2.4** (app-repoint, a code
+merge) — both printed in the SEAM as an out-of-band hand-off.
 
 > **`op=quiesce-web` (#6178) — the no-SSH remediation when the 2.2 gate reports STILL
 > RUNNING.** The `op=execute` 2.2 gate only CHECKS (inventory non-200 = quiesced); it has no
@@ -630,36 +633,70 @@ out-of-band hand-off.
    step 2 until web-2 is recreated. Tracks #6227 (real per-host web→web fan-out to auto-verify
    web-2).
 
-2. **Arm the flip (2.2b+2.3)** — three out-of-band Doppler writes on the **`soleur-inngest/prd`**
-   project (these carry `ignore_changes[value]`, so they are never TF-minted). The enabled 30s
-   poll timer picks up `armed` and runs the forward FSM path
-   **stop → `FLUSHALL` → assert `DBSIZE==0` → start → `done`**:
+2. **Arm the flip (2.2b/2.3) — dispatch the no-SSH `op=arm` verb (#6369).** This REPLACES the
+   former three manual Doppler writes. `op=arm` performs all three writes on
+   **`soleur-inngest/prd`** itself and confirms the on-host FSM reached `done` via Better Stack,
+   with **no secret value ever echoed** (AC-NOBODY):
    ```bash
-   doppler secrets set INNGEST_POSTGRES_URI=<prod-postgres-uri>                       --project soleur-inngest --config prd --no-interactive
-   doppler secrets set INNGEST_HEARTBEAT_URL=<betteruptime inngest_prd heartbeat url> --project soleur-inngest --config prd --no-interactive
-   doppler secrets set INNGEST_CUTOVER_FLIP=armed                                     --project soleur-inngest --config prd --no-interactive
+   gh workflow run cutover-inngest.yml --field op=arm
    ```
-   (Substitute the real prod URI + heartbeat URL at the terminal — do not paste them into any
-   log, PR, or run output; AC-NOBODY.)
+   Then **approve the `inngest-cutover` GitHub Environment required-reviewer gate** on the run —
+   that approval IS the prod-write ack (`hr-menu-option-ack-not-prod-write-auth`; the dispatch +
+   approval replace the old Doppler-console write). What `op=arm` does, in order:
+   - **G1 pre-write FSM-state guard (DI-C2):** refuses to arm over a non-safe
+     `INNGEST_CUTOVER_FLIP` state (armed/flipping/flushed/done) — a second arm would re-`FLUSHALL`
+     the now-PROD Redis and wipe the live cron queue.
+   - **G2 read-through sources (ADR-100 6b):** reads `INNGEST_POSTGRES_URI` +
+     `INNGEST_HEARTBEAT_URL` **from `prd_terraform`** via the existing read-only `DOPPLER_TOKEN`
+     (the canonical prod values already live there — **no operator seed**), masking each value.
+   - **G3 positive prod-URI assertion (DI-C3):** asserts the value differs from the current dark
+     `soleur-inngest/prd` URI, uses the `:5432` session pooler (never `:6543`), and targets the
+     prod host — all value-silent.
+   - **G4/G5 writes:** `INNGEST_POSTGRES_URI` → `INNGEST_HEARTBEAT_URL` → `INNGEST_CUTOVER_FLIP`
+     set to `armed` (last), each via **stdin** (never argv), exit-gated. The enabled 30s poll
+     timer then drives the forward FSM **stop → `FLUSHALL` → assert `DBSIZE==0` → start → `done`**.
+   - **G6 confirm:** polls Better Stack for the `logger -t inngest-cutover-flip` line, time-bounded
+     to the arm moment (so a stale prior terminal line cannot false-succeed), requiring `"flag":"done"`
+     / `"exit_code":0` (the FSM state lives in the `flag` field; `reason` is a cause string like
+     `flip-complete`); it FAILS LOUD on `aborted`/`rolled-back`/timeout (**do NOT proceed to 2.4**
+     in that case — see aborted-state recovery below).
 
-3. **Confirm the flip via Better Stack (P0-2 — NOT a host read).** The oneshot emits its
-   verify-state as a `logger -t inngest-cutover-flip` JSON line; the on-host Vector→Better Stack
-   journald shipper (source `soleur-inngest-vector-prd`) carries it off-box. Pull it
-   (`hr-no-dashboard-eyeball-pull-data-yourself`):
+   > **No operator secret-seed (#6369 / ADR-100 Decision 6b).** The prod `INNGEST_POSTGRES_URI`
+   > already lives in `prd_terraform` (canonical, `:5432`, distinct from the dark value), so op=arm
+   > reads it **read-through** — there is **no `INNGEST_POSTGRES_URI_PROD` seed and no pre-window
+   > human write**. The only new credential is the TF-provisioned read/write token
+   > (`doppler_service_token.inngest_arm_write`) published as the `inngest-cutover` **environment**
+   > secret `DOPPLER_TOKEN_INNGEST_ARM` (required-reviewer gated).
+
+3. **Independent confirm / troubleshooting (optional — op=arm already gates on this).** op=arm
+   only exits 0 after Better Stack shows the FSM `done`. To re-read the line yourself
+   (`hr-no-dashboard-eyeball-pull-data-yourself`), or if op=arm failed loud at G6:
    ```bash
    doppler run -p soleur -c prd_terraform -- \
      scripts/betterstack-query.sh --since 30m --grep inngest-cutover-flip --raw-only --limit 20
    ```
-   Require `"exit_code":0` (with `"reason":"done"`) in the emitted line before proceeding. Do
-   **NOT** `ssh`/`cat` the deny-all-public host to read state — `cat-inngest-cutover-state.sh`
-   exists on-host as a **debug aid only**, never the operator gate. A clean flip surfaces the
-   `"reason":"done"` line within a single 30s poll of arming the flag (the timer fires the
-   oneshot every 30s), so a `--since 30m` query captures it promptly. A `"exit_code":1` /
-   `"reason":"dbsize-nonzero"` line means the DBSIZE gate tripped, and a
-   `"reason":"unexpected-exit(...)"` line means a flag-write/systemctl failure drove the flag
-   to terminal `aborted` (the ERR-trap loud-fail) → either way see **aborted-state recovery**
-   below. (These tags are on the `vector.toml` Source 4 allowlist — see the
-   `vector-pii-scrub.test.sh` drift-guard — so they are guaranteed to ship off-box.)
+   A clean flip surfaces a `"flag":"done"` line (with `"reason":"flip-complete"`) within a single 30s poll of arming. A
+   `"reason":"dbsize-nonzero"` line means the DBSIZE gate tripped; a `"reason":"unexpected-exit(...)"`
+   line means a flag-write/systemctl failure drove the flag to terminal `aborted` (the ERR-trap
+   loud-fail) → either way see **aborted-state recovery** below. Do **NOT** `ssh`/`cat` the
+   deny-all-public host to read state — `cat-inngest-cutover-state.sh` exists on-host as a **debug
+   aid only**, never the operator gate. (These tags are on the `vector.toml` Source 4 allowlist —
+   see the `vector-pii-scrub.test.sh` drift-guard — so they are guaranteed to ship off-box.)
+
+3b. **Post-cutover: revoke the arm-write token (#6369, security F4/D6 — after AC17).** Once
+   `op=verify` confirms exactly-once on the dedicated host, `DOPPLER_TOKEN_INNGEST_ARM` is a
+   **standing read+write handle to the now-armed prod `INNGEST_POSTGRES_URI`** on
+   `soleur-inngest/prd`. Rotate + revoke it (no-SSH); there is **no seed to delete** (reads are
+   read-through):
+   ```bash
+   # (a) mint a fresh key + orphan the old one (propagates to the env secret in the same apply):
+   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+     terraform -chdir=apps/web-platform/infra apply -replace=doppler_service_token.inngest_arm_write
+   # (b) revoke the orphaned key so no standing prod-DSN read handle survives:
+   doppler configs tokens revoke --project soleur-inngest --config prd --slug <orphaned-token-slug> --yes
+   ```
+   The next per-merge apply keeps a fresh `inngest-cutover` env secret available for a future
+   cutover; the required-reviewer gate means it cannot be used without an approved dispatch.
 
 4. **App-repoint (2.4).** Merge the `ci-deploy.sh` `INNGEST_BASE_URL` → `http://10.0.1.40:8288`
    change (both the canary and prod sites) and redeploy the web app so the functions re-sync
@@ -717,28 +754,36 @@ empty the dark registry and re-run (all no-SSH):
 
 ### Rollback sequence (P1-13) — mirrors the forward gate, stop the dedicated host FIRST
 
-1. **Stop the dedicated scheduler** — one Doppler write; the still-enabled timer stops
-   `inngest-server` on its next poll:
+1. **Dispatch `op=rollback` (no-SSH — it now does BOTH halves, #6369).** As of #6369 `op=rollback`
+   first writes `INNGEST_CUTOVER_FLIP=rollback` on `soleur-inngest/prd` itself (the still-enabled
+   timer then stops `inngest-server` on its next poll), confirms `"flag":"rolled-back"` /
+   `"exit_code":0` via Better Stack (time-bounded), and THEN runs the web re-enable fan-out
+   (step 3 below) **only after that confirm** — so the dedicated scheduler is proven stopped before
+   the web schedulers come back (no two-live-scheduler double-fire; on an unconfirmed rolled-back it
+   fails loud and withholds the web re-enable). Half (A) writes `rollback` when the forward flip is
+   armed or progressing (`armed`/`flipping`/`flushed`/`done`), behind the same `inngest-cutover`
+   environment required-reviewer gate; it writes ONLY the flip value (never re-writes
+   POSTGRES_URI/HEARTBEAT). For a non-forward state (`aborted`/`unset`) there is nothing to reverse
+   and it proceeds straight to the web re-enable (the documented aborted-state / P0-3 recovery):
    ```bash
-   doppler secrets set INNGEST_CUTOVER_FLIP=rollback --project soleur-inngest --config prd --no-interactive
+   gh workflow run cutover-inngest.yml --field op=rollback   # then APPROVE the inngest-cutover environment gate
    ```
-   Confirm `"reason":"rolled-back"` / `"exit_code":0` via the same Better Stack query as step 3.
+   There is **no separate operator Doppler write** — the dedicated-host stop is now folded into
+   this single dispatch.
 2. **Repoint the app back to loopback** — revert the `ci-deploy.sh` `INNGEST_BASE_URL` change
    (back to the loopback `host.docker.internal:8288`) and redeploy.
 
 <!-- lint-infra-ignore start -->
 
-3. **Re-enable web inngest** — run the authored reverse-op. `op=rollback` issues a SINGLE
-   no-SSH `enable inngest _ _` fan-out (enable + start + verify-serving-and-enabled in ONE
+3. **Re-enable web inngest — Half (B) of the SAME `op=rollback` dispatch from step 1** (it runs
+   automatically after the `rolled-back` confirm; no second dispatch needed). `op=rollback` issues
+   a SINGLE no-SSH `enable inngest _ _` fan-out (enable + start + verify-serving-and-enabled in ONE
    flock-held ci-deploy.sh handler, #6178) across the `$CUTOVER_HOSTS` set, then POLLS
    `/hooks/deploy-status` for the terminal `reason=enabled` verdict. The `enable` verb restores
    the `[Install]` symlink the 2.2 disable removed (a `restart` never touches it) so the web
    scheduler survives a reboot — **no operator `systemctl` step is needed** (this is the no-SSH
    reverse of `op=quiesce-web`; there is deliberately no two-POST enable+restart, which would
-   race the `flock -n` and could leave the unit enabled-but-stopped reported as success):
-   ```bash
-   gh workflow run cutover-inngest.yml --field op=rollback
-   ```
+   race the `flock -n` and could leave the unit enabled-but-stopped reported as success).
    web-2 is re-enabled by the fan-out but its verdict is acceptance-only (DI-C3) — confirm web-2
    via its freeze/recreate lifecycle. On `inngest_enable_failed` / `inngest_start_failed` /
    `inngest_reenable_unverified` / `enabled_peer_fanout_unaccepted`, pull `reason=` from
