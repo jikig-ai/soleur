@@ -411,11 +411,21 @@ CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
 WEBHOOK_SERVICE="$SCRIPT_DIR/webhook.service"
 assert "cloud-init.yml + webhook.service exist" "[[ -f '$CLOUD_INIT' && -f '$WEBHOOK_SERVICE' ]]"
 
+# Exactly ONE ReadWritePaths= line per file — makes the head -1 extraction below safe.
+# systemd ACCUMULATES RWP directives, so a future 2nd (mandatory) `/var/lib/inngest` line
+# would slip past the token asserts and silently re-open the 226/NAMESPACE bug; a REMOVED
+# line would abort under set -e/pipefail instead of a labeled FAIL. (#6363 review: security
+# + architecture + code-quality converged.)
+CI_RWP_COUNT="$(grep -cE '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" || true)"
+WS_RWP_COUNT="$(grep -cE '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" || true)"
+assert "cloud-init.yml has exactly one ReadWritePaths= line (head -1 safety)" "[[ \"\$CI_RWP_COUNT\" -eq 1 ]]"
+assert "webhook.service has exactly one ReadWritePaths= line (head -1 safety)" "[[ \"\$WS_RWP_COUNT\" -eq 1 ]]"
+
 # CI_RWP/WS_RWP are consumed inside assert's `eval "$condition"` (SC can't see through eval).
 # shellcheck disable=SC2034
-CI_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//')"
+CI_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
 # shellcheck disable=SC2034
-WS_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//')"
+WS_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
 
 assert "cloud-init RWP marks /var/lib/inngest optional (-prefix)" \
   "grep -qE -- '(^|[[:space:]])-/var/lib/inngest([[:space:]]|\$)' <<< \"\$CI_RWP\""
