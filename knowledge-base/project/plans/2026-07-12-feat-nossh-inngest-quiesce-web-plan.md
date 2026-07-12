@@ -470,39 +470,39 @@ Immediate — the ADR-100 amendment ships in THIS PR (it is a deliverable, not a
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `deploy-inngest-bootstrap.sudoers` grants `INNGEST_QUIESCE` (pinned stop+disable) and
+- [x] `deploy-inngest-bootstrap.sudoers` grants `INNGEST_QUIESCE` (pinned stop+disable) and
       `INNGEST_ENABLE` (pinned enable) NOPASSWD to `deploy`; `visudo -cf` passes; each argv is
       wildcard-free (grep asserts the exact `/usr/bin/systemctl … inngest-server.service`).
-- [ ] `verify_inngest_quiesced` asserts **not-serving (ALL /health probes fail, PESSIMISTIC) AND
+- [x] `verify_inngest_quiesced` asserts **not-serving (ALL /health probes fail, PESSIMISTIC) AND
       unit-inactive AND not-`enabled`** — a disable-failure on a unit WITH an `[Install]` section
       fails closed as `inngest_still_enabled` (benign `static`/no-`[Install]` tolerated). Verifying
       serving-only would defeat the disable (data-integrity P1-A).
-- [ ] `ci-deploy.sh` accepts `quiesce inngest _ _` → reason `quiesced` exit 0 on not-serving-and-
+- [x] `ci-deploy.sh` accepts `quiesce inngest _ _` → reason `quiesced` exit 0 on not-serving-and-
       not-enabled; `inngest_still_serving` / `inngest_still_enabled` exit 1 otherwise; tolerates
       already-stopped + a disable non-zero (verify is the gate); rejects non-inngest component.
-- [ ] `ci-deploy.sh` accepts `enable inngest _ _` = enable + start + verify-serving-and-enabled in
+- [x] `ci-deploy.sh` accepts `enable inngest _ _` = enable + start + verify-serving-and-enabled in
       ONE flock-held handler (reuses the pre-existing `INNGEST_START` grant); reason `enabled` exit
       0. `restart` semantics UNCHANGED (no re-enable folded in — a security + correctness
       regression guard).
-- [ ] `cutover-inngest.yml` `op:` options include `quiesce-web`; the `quiesce-web)` arm POSTs
+- [x] `cutover-inngest.yml` `op:` options include `quiesce-web`; the `quiesce-web)` arm POSTs
       `quiesce inngest _ _`+`peers` and **POLLS `/hooks/deploy-status`** for terminal
       `reason==quiesced` (FRESH_FLOOR-anchored, budget ≥ TimeoutStopSec 180 + verify) as the
       primary gate, with an inventory-non-200 SECONDARY confirm (LB-scoped, DI-C3 caveat). It does
       NOT probe immediately after the 202 (races the async stop).
-- [ ] `op=quiesce-web` failure verdicts (`inngest_still_serving`/`inngest_still_enabled`/
+- [x] `op=quiesce-web` failure verdicts (`inngest_still_serving`/`inngest_still_enabled`/
       `quiesced_peer_fanout_unaccepted`/UNKNOWN) each print a no-SSH forward action (spec-flow
       Finding 2) — no branch resolves to an operator host-shell step.
-- [ ] `op=execute` 2.2 remediation (`:561`,`:596`) references `op=quiesce-web`, not an operator
+- [x] `op=execute` 2.2 remediation (`:561`,`:596`) references `op=quiesce-web`, not an operator
       host-shell step; the 2.2-PASSED notice (`:599`) + 2.2a SEAM (`:605`) state web-2 is ACTed by
       the fan-out but freeze/recreate remains MANDATORY (spec-flow Finding 4).
-- [ ] `op=rollback` issues a SINGLE `enable inngest _ _` POST (enable+start) and POLLS
+- [x] `op=rollback` issues a SINGLE `enable inngest _ _` POST (enable+start) and POLLS
       deploy-status for `reason==enabled` — NOT a two-POST enable+restart (flock race, arch P1-1);
       the operator re-enable SEAM (`:800-802`) is removed.
-- [ ] Runbook documents `op=quiesce-web`; the 2.2 + rollback steps contain no operator host-shell
+- [x] Runbook documents `op=quiesce-web`; the 2.2 + rollback steps contain no operator host-shell
       step (`hr-no-ssh-fallback-in-runbooks` satisfied for the cutover flow).
-- [ ] ADR-100 amended (no-SSH quiesce/re-enable verbs + rejected fold-into-restart).
-- [ ] `ci-deploy.test.sh` + `cutover-inngest-workflow.test.sh` + sudoers pin test green.
-- [ ] `decision-challenges.md` written (the restart≠enable User-Challenge) for `ship`.
+- [x] ADR-100 amended (no-SSH quiesce/re-enable verbs + rejected fold-into-restart).
+- [x] `ci-deploy.test.sh` + `cutover-inngest-workflow.test.sh` + sudoers pin test green.
+- [x] `decision-challenges.md` written (the restart≠enable User-Challenge) for `ship`.
 
 ### Post-merge (operator/CI)
 - [ ] DPF auto-apply (`apply-deploy-pipeline-fix.yml`) lands the new sudoers + ci-deploy.sh on
