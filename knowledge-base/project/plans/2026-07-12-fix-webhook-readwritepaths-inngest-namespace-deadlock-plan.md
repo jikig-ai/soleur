@@ -336,9 +336,15 @@ logs:
   where: "Sentry events (baked DSN); web-1 /hooks/deploy-status; GH Actions run log for web-2-recreate"
   retention: "Sentry default; deploy-status is live/transient"
 discoverability_test:
-  command: "gh run view <web-2-recreate-run-id> --log  # off-host acceptance step must show reason flip ok_peer_fanout_degraded → ok; NO ssh"
-  expected_output: "web-2 :9000 bound; web-1 deploy-status reason=ok; no webhook_bound fatal in Sentry"
+  command: "curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 https://soleur.ai"
+  expected_output: "200"
 ```
+
+The `discoverability_test.command` is a runnable, no-SSH **baseline** probe (prod reachable → the
+observability layer that will carry the fix's green signal is up). The **fix-specific** acceptance
+is inherently post-merge and non-pre-runnable: after merge, `gh run view <web-2-recreate run id>
+--log` must show the off-host acceptance step's `reason` flip `ok_peer_fanout_degraded → ok` (web-2
+`:9000` bound) with no `webhook_bound` fatal in Sentry — tracked in `tasks.md` Phase 6.
 
 Affected-surface note (§2.9.2): web-2 fresh boot is a deny-all blind surface. The `webhook_bound` beacon
 is emitted **from** the host (in-surface probe via the baked DSN), with a `stage` structured tag that
