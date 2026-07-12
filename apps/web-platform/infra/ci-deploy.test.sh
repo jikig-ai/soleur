@@ -2556,6 +2556,7 @@ run_quiesce_pessimism() {
 }
 TOTAL=$((TOTAL + 1))
 PESS_STATE=$(mktemp)
+# shellcheck disable=SC2034  # PESS_RC captured only to swallow expected non-zero under set -e; asserted via state file
 run_quiesce_pessimism "$PESS_STATE" && PESS_RC=0 || PESS_RC=$?
 read_state_reason_and_exit "$PESS_STATE" PESS_REASON PESS_EXIT
 if [[ "$PESS_REASON" == "inngest_still_serving" && "$PESS_EXIT" == "1" ]]; then
@@ -2575,6 +2576,18 @@ TOTAL=$((TOTAL + 1))
 # Scope to the restart handler ONLY (it now precedes the quiesce/enable handlers, which
 # legitimately DO enable/disable). Range: the restart handler comment → the quiesce handler comment.
 RESTART_BLOCK=$(awk '/^# --- Restart action handler/,/^# --- Quiesce action handler/' "$DEPLOY_SCRIPT")
+# Non-vacuity guard: if either marker comment is renamed the awk range is empty and the
+# purity grep below passes for the WRONG reason. Prove the block was actually captured —
+# non-empty AND containing the restart handler's own `systemctl restart` — before trusting
+# the enable/disable-absence assertion.
+TOTAL=$((TOTAL + 1))
+if [[ -n "$RESTART_BLOCK" ]] && printf '%s\n' "$RESTART_BLOCK" | grep -qE 'systemctl restart'; then
+  PASS=$((PASS + 1))
+  echo "  PASS: restart-purity guard captured a non-empty block containing 'systemctl restart' (awk range not vacuous)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: restart-purity awk range captured empty/wrong block (marker renamed?) — the purity grep would pass vacuously"
+fi
 if ! printf '%s\n' "$RESTART_BLOCK" | grep -qE 'systemctl (enable|disable)'; then
   PASS=$((PASS + 1))
   echo "  PASS: restart handler stays pure (no enable/disable folded in) — #6178 regression guard"
@@ -2850,12 +2863,13 @@ QDG_ATTEMPTS_COUNT=$(grep -cE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" 
 QDG_INTERVAL_COUNT=$(grep -cE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" || true)
 QDG_MAX_POLLS_COUNT=$(grep -cE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" || true)
 QDG_POLL_INTERVAL_COUNT=$(grep -cE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" || true)
+QDG_STOP_COUNT=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -cE '^TimeoutStopSec=[0-9]+' || true)
 QDG_OK=1
 QDG_WHY=""
 for pair in "attempts:$QDG_ATTEMPTS" "interval:$QDG_INTERVAL" "stop:$QDG_STOP" "qmax:$QDG_MAX_POLLS" "qint:$QDG_POLL_INTERVAL"; do
   if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then QDG_OK=0; QDG_WHY="non-integer extraction: ${pair%%:*}"; fi
 done
-for pair in "attempts:$QDG_ATTEMPTS_COUNT" "interval:$QDG_INTERVAL_COUNT" "qmax:$QDG_MAX_POLLS_COUNT" "qint:$QDG_POLL_INTERVAL_COUNT"; do
+for pair in "attempts:$QDG_ATTEMPTS_COUNT" "interval:$QDG_INTERVAL_COUNT" "stop:$QDG_STOP_COUNT" "qmax:$QDG_MAX_POLLS_COUNT" "qint:$QDG_POLL_INTERVAL_COUNT"; do
   if [[ "$QDG_OK" -eq 1 && "${pair#*:}" -ne 1 ]]; then QDG_OK=0; QDG_WHY="expected exactly one match for ${pair%%:*} (got ${pair#*:})"; fi
 done
 QDG_LEFT=""; QDG_RIGHT=""

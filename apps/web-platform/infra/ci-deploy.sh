@@ -1049,6 +1049,17 @@ verify_inngest_health() {
   return 0
 }
 
+# Single-source "is the inngest unit enabled at boot?" (enabled|enabled-runtime).
+# Both verify_inngest_quiesced (fail-branch) and the enable handler (ok-branch) use this
+# so the set of enabled-like states stays defined in ONE place. Exotic states
+# (indirect/alias/generated/static/disabled) are intentionally NOT "enabled" here.
+inngest_unit_enabled() {
+  case "$(systemctl is-enabled inngest-server.service 2>/dev/null || true)" in
+    enabled|enabled-runtime) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Verify inngest-server is QUIESCED (#6178, op=quiesce-web). The goal state is
 # NOT-serving AND NOT-enabled — verifying only not-serving is a proxy that defeats the
 # disable's purpose (data-integrity P1-A): a disable-failure on a unit WITH an [Install]
@@ -1099,12 +1110,10 @@ verify_inngest_quiesced() {
   local enabled_state
   enabled_state=$(systemctl is-enabled inngest-server.service 2>/dev/null || true)
   logger -t "$LOG_TAG" "INNGEST_QUIESCE: is-enabled=${enabled_state:-<empty>}"
-  case "$enabled_state" in
-    enabled|enabled-runtime)
-      logger -t "$LOG_TAG" "INNGEST_QUIESCE: unit STILL ENABLED (state=$enabled_state) — a reboot would re-arm it"
-      return 2
-      ;;
-  esac
+  if inngest_unit_enabled; then
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: unit STILL ENABLED (state=$enabled_state) — a reboot would re-arm it"
+    return 2
+  fi
   return 0
 }
 
@@ -1343,14 +1352,11 @@ if [[ "$ACTION" == "enable" ]]; then
   # Symmetric to the quiesce verify: confirm the unit is now ENABLED (is-enabled query,
   # read-only). Not-enabled after an enable is a re-arm failure (a reboot would drop it).
   ENABLED_STATE=$(systemctl is-enabled inngest-server.service 2>/dev/null || true)
-  case "$ENABLED_STATE" in
-    enabled|enabled-runtime) : ;;
-    *)
-      logger -t "$LOG_TAG" "FAILED: enable — unit is not enabled afterward (state=${ENABLED_STATE:-<empty>})"
-      final_write_state 1 "inngest_reenable_unverified"
-      exit 1
-      ;;
-  esac
+  if ! inngest_unit_enabled; then
+    logger -t "$LOG_TAG" "FAILED: enable — unit is not enabled afterward (state=${ENABLED_STATE:-<empty>})"
+    final_write_state 1 "inngest_reenable_unverified"
+    exit 1
+  fi
 
   if ! fan_out_to_peers; then
     logger -t "$LOG_TAG" "FAILED: enable — a peer fan-out was NOT accepted (unreachable/rejected)"

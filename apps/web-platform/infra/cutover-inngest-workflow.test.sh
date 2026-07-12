@@ -155,6 +155,14 @@ assert "2.2 gate failure remediation no longer instructs an operator 'systemctl 
 # quiesce-web's own failure verdicts each carry a no-SSH forward action (spec-flow F2).
 assert "quiesce-web failure verdicts print a no-SSH forward action (Do NOT SSH)" "grep -qE 'Do NOT SSH the host' '$WF'"
 
+# #6178 Fix-1 (observability P2) — BOTH deploy-status poll loops (quiesce-web + rollback)
+# FAST-FAIL on a TERMINAL-but-unrecognized reason (exit_code != -1 yet matched no enumerated
+# case branch) instead of polling to the full timeout. Without this a reason rename silently
+# degrades to a $((MAX_POLLS * POLL_INTERVAL))s timeout with no actionable error. Assert both
+# loops carry the fast-fail (count == 2, one per loop).
+UNREC_N=$(grep -cE '::error::unrecognized terminal reason' "$WF" || true)
+assert "both poll loops fast-fail on an unrecognized terminal reason (quiesce + rollback)" "[[ '$UNREC_N' -eq 2 ]]"
+
 # AC-NOSSH — no ssh in any new command.
 assert "no 'ssh ' command anywhere in the workflow (AC-NOSSH)" "! grep -qE '(^|[^[:alnum:]])ssh[[:space:]]' '$WF'"
 

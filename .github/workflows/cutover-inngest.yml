@@ -694,7 +694,10 @@ jobs:
                     if [ "$EXIT_CODE" == "-1" ]; then
                       echo "Attempt $i/$QMAX_POLLS: quiesce still running (reason=$REASON)"
                     else
-                      echo "Attempt $i/$QMAX_POLLS: inngest reason=$REASON exit_code=$EXIT_CODE — waiting for the quiesced verdict"
+                      # TERMINAL (exit_code != -1) but the reason matched no enumerated verdict —
+                      # fast-fail instead of polling to the full timeout (a reason rename would
+                      # otherwise silently degrade to a $((QMAX_POLLS * QPOLL_INTERVAL))s wait).
+                      echo "::error::unrecognized terminal reason $REASON (exit_code=$EXIT_CODE) — quiesce-web reached a terminal state that matched no known verdict; failing fast. Pull reason= from /hooks/deploy-status + Better Stack (logger -t ci-deploy). Do NOT SSH the host."; echo "$BODY" | jq .; exit 1
                     fi
                     ;;
                 esac
@@ -966,7 +969,10 @@ jobs:
                     if [ "$EXIT_CODE" == "-1" ]; then
                       echo "Attempt $i/$RMAX_POLLS: enable still running (reason=$REASON)"
                     else
-                      echo "Attempt $i/$RMAX_POLLS: inngest reason=$REASON exit_code=$EXIT_CODE — waiting for the enabled verdict"
+                      # TERMINAL (exit_code != -1) but the reason matched no enumerated verdict —
+                      # fast-fail instead of polling to the full timeout (a reason rename would
+                      # otherwise silently degrade to a $((RMAX_POLLS * RPOLL_INTERVAL))s wait).
+                      echo "::error::unrecognized terminal reason $REASON (exit_code=$EXIT_CODE) — rollback enable reached a terminal state that matched no known verdict; failing fast. Pull reason= from /hooks/deploy-status + Better Stack (logger -t ci-deploy). Do NOT SSH the host."; echo "$BODY" | jq .; exit 1
                     fi
                     ;;
                 esac
