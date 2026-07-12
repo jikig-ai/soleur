@@ -210,6 +210,45 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    `eventsV2(includeInternalEvents:true)` surfaces `inngest/scheduled.timer` internal events with
    nested runs; the top-level `runs` query is cleaner.) `scheduled_tick` is removed everywhere.
 
+### Amendment (2026-07-12, Ref #6178) — no-SSH web-host scheduler quiesce/re-enable
+
+The Phase-2 cutover's web-host scheduler **quiesce** (forward) and **re-enable** (rollback) are
+performed **no-SSH** via the existing deploy webhook + pinned sudoers verbs — operators have no
+SSH access (`hr-no-ssh-fallback-in-runbooks`). This mirrors the `INNGEST_RESTART` (#4538) no-SSH
+restart precedent and the private-net deploy fan-out (ADR-068, #5274):
+
+- **`op=quiesce-web`** → ci-deploy.sh's `quiesce inngest _ _` handler runs the pinned
+  `INNGEST_QUIESCE` sudoers verbs (`systemctl stop` + `systemctl disable inngest-server.service`),
+  fanned out per-host over the private net. It verifies not-serving **AND** unit-inactive **AND**
+  not-enabled (the `disable` removes the `[Install]` symlink so a mid-window reboot cannot re-arm
+  the old scheduler → the double-fire this prevents), then the workflow POLLS `/hooks/deploy-status`
+  for the synchronous `quiesced` verdict (the unit's `TimeoutStopSec=180` makes an immediate probe
+  race the async stop).
+- **`op=rollback`** → ci-deploy.sh's `enable inngest _ _` handler runs the pinned `INNGEST_ENABLE`
+  verb (`systemctl enable`) + the pre-existing `INNGEST_START` (#5450) verb (`systemctl start`) +
+  a serving-and-enabled verify, in ONE flock-held handler, then polls deploy-status for `enabled`.
+
+**Rejected alternative — fold re-enable into the shared `restart` handler.** Tempting (op=rollback's
+existing `restart` would then re-enable "for free"), but **unsafe post-cutover**: the web hosts'
+inngest is intentionally disabled (10.0.1.40 is the sole scheduler), so a routine
+`restart-inngest-server.yml` restart (LB-routed to a web host) with a re-enable folded in would
+RE-ENABLE the deliberately-disabled web scheduler → a second live scheduler on prod Postgres →
+double-fire. `restart` MUST stay pure; only the deliberate `op=rollback` re-enables, via a distinct
+`enable` verb. (Note also arch P2-4: even a PURE `restart` is unsafe on a web host post-cutover — it
+STARTS the disabled unit for a transient double-fire, because the `ExecStartPre` flip-guard blocks
+only the dedicated host. The web verbs to use post-cutover are `op=quiesce-web`/`op=rollback`, never
+`restart`.)
+
+**Security blast-radius expansion (security review P2).** The single shared webhook deploy secret
+now authorizes a scheduler-**disable** (and, via `enable`, a fleet-wide **re-arm**), not just
+deploy/restart — inside the existing "deploy secret == prod-write" boundary, but the secret-rotation
+cadence should reflect the wider authority. The peer fan-out path
+(`http://<ip>:9000/hooks/deploy-peer`) is HMAC + L3-firewall only (no CF-Access), so confirm the
+web→web:9000 firewall source-restricts to peer hosts (already proven live by the deploy fan-out;
+`firewall-9000-deny`). No new ADR ordinal — this is an extension of ADR-100's decision, not a new
+architecture. No C4 impact (the `deploy-webhook → ci-deploy → inngest-server` control edge already
+exists; `quiesce`/`enable` are additional verbs on the SAME edge, not a new relationship).
+
 ## Consequences
 
 **Easier:** active-active web becomes structurally safe (web-2 poolable at 4.2); inngest failure

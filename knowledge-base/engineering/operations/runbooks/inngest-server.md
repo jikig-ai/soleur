@@ -544,6 +544,30 @@ SEAM** — the two operator seams (the Doppler flip arm 2.2b+2.3, and the app-re
 cannot be done from CI (`hr-menu-option-ack-not-prod-write-auth`) and are printed as an
 out-of-band hand-off.
 
+> **`op=quiesce-web` (#6178) — the no-SSH remediation when the 2.2 gate reports STILL
+> RUNNING.** The `op=execute` 2.2 gate only CHECKS (inventory non-200 = quiesced); it has no
+> path to actually STOP the old co-located scheduler. When the gate fails with
+> `2.2 QUIESCE HARD GATE FAILED / STILL RUNNING`, run `op=quiesce-web` (below) to
+> stop+disable inngest across the host-set over the private net (HMAC + CF-Access, **no
+> SSH**), then re-run `op=execute`. Operators have no SSH — this replaces the old operator
+> host-shell stop-and-disable step (`hr-no-ssh-fallback-in-runbooks`). op=quiesce-web POLLS
+> `/hooks/deploy-status` for each host's synchronous `quiesced` verdict (not-serving AND
+> unit-inactive AND not-enabled) — it does NOT immediate-probe (the unit's
+> `TimeoutStopSec=180` means the async stop can lag the 202). Its own failure verdicts each
+> print a no-SSH forward action: `inngest_still_serving`/`inngest_still_enabled` (persistent
+> = the unit is being RESURRECTED → pull `reason=` from `/hooks/deploy-status` + Better Stack
+> `logger -t ci-deploy` and investigate what restarts/re-enables it — do **not** SSH);
+> `quiesced_peer_fanout_unaccepted` (a peer 202 was not accepted → check the peer host + the
+> web→web:9000 firewall + re-dispatch); UNKNOWN/000 (webhook unreachable → check
+> CF-Access/HMAC + re-dispatch). NB the two "quiesce" meanings differ:
+> `INNGEST_CUTOVER_QUIESCE` (Doppler arming-quiesce, blocks new reminders into the old
+> SQLite — the same-host cutover above) vs `op=quiesce-web` (stop-and-disable the scheduler
+> **process**).
+>
+> ```bash
+> gh workflow run cutover-inngest.yml --field op=quiesce-web   # no-SSH stop+disable across the host-set; poll deploy-status for reason=quiesced
+> ```
+
 > **Pre-flight scans are bounded + observable (#6258, ADR-106).** The `op=inventory` /
 > `op=verify` sub-probe scans (`inngest-inventory`, `inngest-registry-probe`,
 > `inngest-doublefire-probe`) now enforce a wall-clock deadline + page ceiling and are
@@ -562,8 +586,11 @@ out-of-band hand-off.
    remediation below); **2.1** capture of still-armed reminders (records persist on-host;
    `Σcaptured` + `reminder_id`s only in the log); **2.2** quiesce followed by a **QUIESCE HARD
    GATE** that re-inventories the **LB-reachable host** and **fails loud + withholds the SEAM**
-   if inngest still serves there. When the gate passes it prints the SEAM with the exact
-   operator steps below, then exits 0. Read the SEAM from the run log:
+   if inngest still serves there. If the gate fails (`STILL RUNNING`), run **`op=quiesce-web`**
+   (the no-SSH stop+disable across the host-set — see the op-order note above) and re-run
+   `op=execute`; the gate is a CHECK, `op=quiesce-web` is the ACT. When the gate passes it
+   prints the SEAM with the exact operator steps below, then exits 0. Read the SEAM from the
+   run log:
    ```bash
    gh run view <op=execute run id> --log | grep -E '::notice::|::error::|::warning::'
    ```
@@ -581,13 +608,19 @@ out-of-band hand-off.
    > double-firing against prod Postgres that `op=verify` cannot detect (it reads only the
    > dedicated host's runs).
 
-1a. **Quiesce web-2 (MANDATORY — DI-C3, before arming the flip).** The `op=execute` gate did
-   **not** confirm web-2. Quiesce it per the plan's **web-2 freeze/recreate lifecycle**
-   (§Bounded-outage / Downtime): take web-2 **out of the warm-standby rotation and recreate it
-   onto the post-cutover config** so no surviving web-2 scheduler self-arms a reminder into its
-   local Redis. This is a lifecycle action (freeze → recreate), **not** an `ssh`/host-shell step
-   (`hr-no-ssh-fallback-in-runbooks`). Do **not** proceed to step 2 until web-2 is quiesced.
-   Tracks #6227 (real per-host web→web fan-out to auto-verify web-2).
+1a. **Quiesce web-2 (MANDATORY — DI-C3, before arming the flip).** `op=quiesce-web` (when run)
+   now stop+disables web-2's SCHEDULER too (an ACT over the private net — a real improvement
+   over operator-only web-2 handling), **but the freeze/recreate lifecycle STILL REMAINS
+   MANDATORY**: CI cannot VERIFY web-2 (LB-scoped) AND web-2's local reminders were never
+   captured (2.1 capture is also LB-scoped) — a fan-out stop does not capture/re-arm them, and
+   web-2 self-arms oneshots into its OWN Redis independent of LB weight. So do **not** read a
+   green `op=quiesce-web` as "web-2 handled." Recreate web-2 per the plan's **web-2
+   freeze/recreate lifecycle** (§Bounded-outage / Downtime): take web-2 **out of the warm-standby
+   rotation and recreate it onto the post-cutover config** so no surviving web-2 scheduler
+   self-arms a reminder into its local Redis. This is a lifecycle action (freeze → recreate),
+   **not** an `ssh`/host-shell step (`hr-no-ssh-fallback-in-runbooks`). Do **not** proceed to
+   step 2 until web-2 is recreated. Tracks #6227 (real per-host web→web fan-out to auto-verify
+   web-2).
 
 2. **Arm the flip (2.2b+2.3)** — three out-of-band Doppler writes on the **`soleur-inngest/prd`**
    project (these carry `ignore_changes[value]`, so they are never TF-minted). The enabled 30s
@@ -684,13 +717,31 @@ empty the dark registry and re-run (all no-SSH):
    Confirm `"reason":"rolled-back"` / `"exit_code":0` via the same Better Stack query as step 3.
 2. **Repoint the app back to loopback** — revert the `ci-deploy.sh` `INNGEST_BASE_URL` change
    (back to the loopback `host.docker.internal:8288`) and redeploy.
-3. **Re-enable web inngest** — run the authored reverse-op (re-enables + restarts inngest across
-   the `$CUTOVER_HOSTS` set and confirms via inventory):
+3. **Re-enable web inngest** — run the authored reverse-op. `op=rollback` issues a SINGLE
+   no-SSH `enable inngest _ _` fan-out (enable + start + verify-serving-and-enabled in ONE
+   flock-held ci-deploy.sh handler, #6178) across the `$CUTOVER_HOSTS` set, then POLLS
+   `/hooks/deploy-status` for the terminal `reason=enabled` verdict. The `enable` verb restores
+   the `[Install]` symlink the 2.2 disable removed (a `restart` never touches it) so the web
+   scheduler survives a reboot — **no operator `systemctl` step is needed** (this is the no-SSH
+   reverse of `op=quiesce-web`; there is deliberately no two-POST enable+restart, which would
+   race the `flock -n` and could leave the unit enabled-but-stopped reported as success):
    ```bash
    gh workflow run cutover-inngest.yml --field op=rollback
    ```
+   web-2 is re-enabled by the fan-out but its verdict is acceptance-only (DI-C3) — confirm web-2
+   via its freeze/recreate lifecycle. On `inngest_enable_failed` / `inngest_start_failed` /
+   `inngest_reenable_unverified` / `enabled_peer_fanout_unaccepted`, pull `reason=` from
+   `/hooks/deploy-status` + Better Stack (`logger -t ci-deploy`) — do **not** SSH the host.
 The capture file is retained on-host for a later retry. Rollback is data-safe only before any
 **real** (non-throwaway) reminder is armed against prod Postgres — after that, forward-fix only.
+
+> **Do NOT target a web host with `restart-inngest-server.yml` after the cutover completes
+> (arch P2-4).** Post-cutover the web hosts' inngest is intentionally stopped+disabled
+> (10.0.1.40 is the sole scheduler). A routine `restart-inngest-server.yml` restart is
+> LB-routed to a web host and would START its disabled unit → a TRANSIENT second scheduler on
+> prod Postgres (double-fire), independent of any enable-folding — the `inngest-server`
+> `ExecStartPre` flip-guard blocks only the DEDICATED host, not web hosts. The only web verb to
+> touch post-cutover is `op=quiesce-web` (forward) / `op=rollback` (reverse), never `restart`.
 
 ### `aborted`-state recovery (P0-3)
 
