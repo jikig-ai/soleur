@@ -249,6 +249,61 @@ web→web:9000 firewall source-restricts to peer hosts (already proven live by t
 architecture. No C4 impact (the `deploy-webhook → ci-deploy → inngest-server` control edge already
 exists; `quiesce`/`enable` are additional verbs on the SAME edge, not a new relationship).
 
+### Amendment (2026-07-12, Ref #6369) — Decision 6b: no-SSH `op=arm` arm-flip + reverse write
+
+The Phase-2 cutover's **arm-flip** (the three writes to `soleur-inngest/prd`:
+`INNGEST_POSTGRES_URI`, `INNGEST_HEARTBEAT_URL`, then `INNGEST_CUTOVER_FLIP=armed` last — the last
+was the operator SEAM at `cutover-inngest.yml`) is now performed **no-SSH** by
+`cutover-inngest.yml op=arm`, and the reverse `INNGEST_CUTOVER_FLIP=rollback` write is folded into
+the existing `op=rollback` verb. This removes the last operator secret-write seam from the cutover.
+
+- **Trust / ack (reconciles `hr-menu-option-ack-not-prod-write-auth`).** `op=arm`/`op=rollback` are
+  prod-writes behind an **explicit dispatch** (same trust model as `op=quiesce-web`/`op=rollback`)
+  **plus** a GitHub **Environment** (`inngest-cutover`) required-reviewer protection rule. The
+  dispatch + the reviewer approval IS the explicit per-command go-ahead the hard rule requires; the
+  rule kept the flip out of `op=execute`'s *auto-run* spine, not out of a separately-dispatched,
+  human-approved verb. There is **no interactive pre-write value confirmation, by design** —
+  AC-NOBODY forbids echoing the values.
+- **Provisioning (reconciles `hr-all-infrastructure-provisioning`).** The write **token** is
+  TF-provisioned (`doppler_service_token.inngest_arm_write`, read/write on the isolated
+  `soleur-inngest/prd`, published as the `inngest-cutover` **environment** secret
+  `DOPPLER_TOKEN_INNGEST_ARM`). This is the **first CI-consumed read/write token into the isolated
+  `soleur-inngest` project** — prior tokens there are read-only host-boot (`inngest-host.tf:173`);
+  CI can now WRITE `soleur-inngest/prd`. The token is a **standing read handle to the armed prod
+  DSN** once op=arm runs, so it is revoked post-cutover.
+- **Source-of-truth: read-through, no seed (CTO decision at /work).** The two source *values*
+  remain out-of-band (they are not TF `doppler_secret` resources — dark-window heartbeat masking +
+  a DB password TF never minted, `inngest-host.tf:137-166`). op=arm reads them **read-through from
+  `soleur/prd_terraform`** via the workflow's existing read-only `DOPPLER_TOKEN` (the same
+  config-scoped read `op=backup` uses for `HCLOUD_TOKEN`). The prod `INNGEST_POSTGRES_URI` already
+  lives in `prd_terraform` (SHA-identical to canonical `prd`, `:5432` session pooler, distinct from
+  the dark value), so there is **no operator secret-seed step and no stale-copy rotation-drift
+  trap**. Reading the live canonical source at arm-time makes freshness *structural*; the G3
+  positive prod-URI assertion (prod ≠ dark, `:5432` not `:6543`, prod host) + the G1 pre-write
+  FSM-state guard remain the defense against writing a wrong/dark value. **Rejected:** (A) seed a
+  narrow `INNGEST_POSTGRES_URI_PROD` config — removes no existing exposure (the value is already
+  CI-readable) while adding a forbidden human pre-window seed + a drift trap that could arm a dead
+  DSN and stall every user's crons; (B) a workflow step copying `prd_terraform`→narrow — machinery
+  to relocate an already-readable value, inheriting (A)'s drift risk.
+
+**Post-cutover revoke.**
+<!-- lint-infra-ignore start -->
+After `op=verify` confirms exactly-once (AC17), the write token is rotated + revoked
+(`terraform apply -replace=doppler_service_token.inngest_arm_write` + `doppler configs tokens
+revoke` the orphaned key) so no standing prod-DSN read handle survives (runbook § Rollback / Op
+order 3b).
+<!-- lint-infra-ignore end -->
+
+**No C4 change (enumeration).** op=arm is a new *instance* of an already-modeled relationship, not a
+new one: `doppler` (system), `betterstack` (system), `github`, `inngest`/`inngestPostgres`/
+`inngestRedis` (containers/stores) are all in `model.c4`; the CI/TF→Doppler secret-**write**
+relationship already exists at the C4 altitude (TF applies writes to Doppler via
+`doppler_service_token.write`; the precedent write edge is `inngest -> doppler "Writes GHCR_READ_TOKEN"`,
+`model.c4:404` — a Doppler-write edge, distinct from the `doppler -> inngest "Injects secrets"`
+injection edge). op=arm writing `soleur-inngest/prd` is another edge of the same write relationship
+type, not a new relationship — so no `model.c4`/`views.c4` edit. No new ADR ordinal
+— this is an extension of ADR-100's Decision 6, mirroring the Ref #6178 amendment above.
+
 ## Consequences
 
 **Easier:** active-active web becomes structurally safe (web-2 poolable at 4.2); inngest failure

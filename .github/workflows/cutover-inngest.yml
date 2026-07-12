@@ -28,6 +28,7 @@ on:
           - inventory
           - execute
           - quiesce-web
+          - arm
           - verify
           - rollback
   # push trigger scoped to this file forces GitHub to register the workflow in
@@ -47,15 +48,28 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # op=arm / op=rollback write a prod secret to soleur-inngest/prd (the arm-flip / reverse
+    # flip, #6369). They gate on the `inngest-cutover` GitHub Environment (required-reviewer
+    # rule, TF-provisioned in inngest-arm-write-token.tf) so the DOPPLER_TOKEN_INNGEST_ARM
+    # environment secret resolves ONLY after a human approves the dispatch — the ack that
+    # hr-menu-option-ack-not-prod-write-auth requires. Every other op evaluates to '' (no
+    # environment gate), preserving their existing behaviour.
+    environment: ${{ (inputs.op == 'arm' || inputs.op == 'rollback') && 'inngest-cutover' || '' }}
     # SAME group as deploy/restart — these inngest host ops share the host state
     # slot and must not interleave (P1a).
     concurrency:
       group: deploy-inngest-restart
       cancel-in-progress: false
     steps:
-      # Doppler CLI is needed only by op=backup (reads HCLOUD_TOKEN from the
-      # prd_terraform-scoped DOPPLER_TOKEN); installing it is harmless for the
-      # webhook ops. SHA-pinned, matching web-platform-release.yml.
+      # op=arm/op=rollback confirm the on-host flip FSM via Better Stack Logs
+      # (scripts/betterstack-query.sh); checkout makes that script available. Harmless
+      # (no-op source read) for the webhook ops. SHA-pinned.
+      - name: Checkout (for betterstack-query.sh — op=arm/rollback FSM confirm)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # Doppler CLI is needed by op=backup (reads HCLOUD_TOKEN from the prd_terraform-scoped
+      # DOPPLER_TOKEN) and op=arm/op=rollback (source read-through + arm-token writes +
+      # betterstack-query.sh cred injection); installing it is harmless for the webhook
+      # ops. SHA-pinned, matching web-platform-release.yml.
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
       - name: Run cutover host op via webhook
@@ -64,9 +78,17 @@ jobs:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          # prd_terraform READ-only (op=backup reads HCLOUD_TOKEN). Same secret as
+          # prd_terraform READ-only (op=backup reads HCLOUD_TOKEN; op=arm/op=rollback read the
+          # source values read-through + betterstack-query.sh creds). Same secret as
           # apply-web-platform-infra.yml's read steps — NOT DOPPLER_TOKEN_WRITE.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # #6369 — the read/write token for the arm-flip writes to the ISOLATED soleur-inngest/prd
+          # (op=arm writes INNGEST_POSTGRES_URI/INNGEST_HEARTBEAT_URL/INNGEST_CUTOVER_FLIP=armed;
+          # op=rollback writes INNGEST_CUTOVER_FLIP=rollback). A conditional expression injects it
+          # EMPTY for every other dispatch — a bash comment cannot scope a step-env var (security F2/C5).
+          # It is a GitHub ENVIRONMENT secret (inngest-cutover), so it only resolves once the
+          # required-reviewer gate is approved on an op=arm/op=rollback dispatch.
+          DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'arm' || inputs.op == 'rollback') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
           # #6258: read-only pg_stat_activity for the op=execute 2.-1 pool pre-check
           # (same secret + endpoint scheduled-inngest-health.yml uses; TF
           # github_actions_secret.supabase_access_token). Read-only Management-API scope.
@@ -82,6 +104,36 @@ jobs:
         run: |
           set -euo pipefail
           BASE="https://deploy.soleur.ai/hooks"
+
+          # Shared no-SSH confirm of the on-host inngest-cutover-flip FSM terminal state via Better
+          # Stack Logs (source 2457081), used by op=arm (G6) and op=rollback (#6369). The emitter
+          # (apps/web-platform/infra/inngest-cutover-flip.sh:125-137, `emit_state exit_code dbsize
+          # reason flag`) puts the TERMINAL STATE in the `flag` field (done/aborted/rolled-back) and
+          # a CAUSE in `reason` (flip-complete/dbsize-nonzero/…) — so we key on `"flag":"<state>"`,
+          # NOT `reason` (which never equals `done`/`aborted`). Arg $1 = floor timestamp in the
+          # `betterstack-query.sh` literal `--since` form `YYYY-MM-DD HH:MM:SS` (its ClickHouse cast
+          # rejects the ISO `T…Z` form). Echoes EXACTLY one terminal token to stdout: done |
+          # rolled-back | aborted | timeout. NEVER echoes a raw Better Stack row (a value could ride
+          # along) — only the extracted flag token. A confirm-PATH (query) failure is announced on
+          # stderr distinctly from an FSM-not-terminal state, so a timeout names the right subsystem.
+          confirm_flip_state() {
+            local since="$1" i rows raw rc
+            for i in $(seq 1 40); do   # 40 x 15s = 600s (30s on-host timer + FLUSHALL/assert + journald->Vector->BS latency)
+              rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep inngest-cutover-flip --limit 50 2>/dev/null)
+              rc=$?
+              if [[ "$rc" -ne 0 ]]; then
+                echo "::warning::confirm: betterstack-query.sh returned non-zero (the CONFIRM PATH failed, NOT the on-host FSM) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
+              fi
+              raw=$(printf '%s\n' "$rows" | jq -r 'try (.raw) catch empty' 2>/dev/null || true)
+              # aborted first (fail-safe if somehow both terminal flags appear in the window).
+              if printf '%s\n' "$raw" | grep -qE '"flag":"aborted"'; then echo "aborted"; return 0; fi
+              if printf '%s\n' "$raw" | grep -E '"flag":"rolled-back"' | grep -qE '"exit_code":0'; then echo "rolled-back"; return 0; fi
+              if printf '%s\n' "$raw" | grep -E '"flag":"done"' | grep -qE '"exit_code":0'; then echo "done"; return 0; fi
+              echo "confirm: awaiting a terminal FSM flag (attempt $i/40 since $since)" >&2
+              sleep 15
+            done
+            echo "timeout"; return 0
+          }
 
           case "$OP" in
             enumerate)
@@ -599,20 +651,136 @@ jobs:
               fi
               echo "::notice::2.2 QUIESCE HARD GATE PASSED: the LB-REACHABLE host(s) POSITIVELY confirmed not-serving (fail-closed). SCOPE (DI-C3, tracked #6227): this LB-routed path did NOT individually probe the weight-0 warm-standby web-2 (10.0.1.11). op=quiesce-web (when run) now stop+disables web-2's scheduler too (an ACT), but CI still cannot VERIFY web-2 AND web-2's local reminders were never captured — the MANDATORY web-2 freeze/recreate step in the SEAM below is NOT superseded; do NOT read a green op=quiesce-web as 'web-2 handled'."
 
-              # ---- SEAM: operator maintenance-window steps (NOT executed by CI —
-              # hr-menu-option-ack-not-prod-write-auth). Print the exact hand-off; no
-              # secrets / bodies / connection strings are echoed (AC-NOBODY), only step text.
-              echo "::notice::SEAM — operator maintenance-window steps (run OUT-OF-BAND; CI will not perform these prod-writes):"
+              # ---- SEAM: operator maintenance-window steps. As of #6369 the 2.2b/2.3 arm-flip is NO
+              # LONGER an out-of-band Doppler write — it is the no-SSH `op=arm` dispatch (a prod-write
+              # behind explicit dispatch + the inngest-cutover environment required-reviewer gate, which
+              # satisfies hr-menu-option-ack-not-prod-write-auth: the dispatch + approval IS the ack).
+              # The remaining true operator seams are 2.2a (web-2 lifecycle) and 2.4 (app-repoint).
+              # This block still echoes only step text; no secrets / bodies / connection strings (AC-NOBODY).
+              echo "::notice::SEAM — operator maintenance-window steps (2.2a web-2 lifecycle + 2.4 app-repoint are operator; 2.2b/2.3 arm-flip is now the no-SSH op=arm dispatch):"
               echo "  2.2a WEB-2 QUIESCE — MANDATORY, NOT AUTO-VERIFIED (DI-C3, tracked #6227). op=quiesce-web (when run) now stop+disables web-2's SCHEDULER over the private net (an ACT — a real improvement over operator-only web-2 handling), BUT CI still cannot VERIFY web-2 (LB-scoped) AND web-2's local reminders were NEVER captured (2.1 capture is also LB-scoped). The weight-0 warm-standby web-2 (10.0.1.11) self-arms oneshots into its OWN Redis independent of LB weight. So the web-2 freeze/recreate lifecycle REMAINS MANDATORY — do NOT read a green op=quiesce-web as 'web-2 handled'. Before arming the flip you MUST recreate web-2 onto the post-cutover config: take web-2 OUT of the warm-standby rotation and recreate it so no surviving web-2 scheduler self-arms a reminder into its local Redis. RISK IF SKIPPED: a reminder self-armed on an un-quiesced web-2 is silently dropped at cutover (its local Redis is never captured/re-armed). This is a lifecycle action (freeze → recreate), NOT a host shell step (AC-NOSSH). Do NOT proceed to arm the flip until web-2 is recreated. Tracks #6227 (real per-host fan-out to auto-verify web-2)."
-              echo "  2.2b+2.3 ARM THE FLIP — three Doppler writes on soleur-inngest/prd (the enabled 30s poll timer picks them up):"
-              echo "    1) doppler secrets set INNGEST_POSTGRES_URI=<prod-postgres-uri>   --project soleur-inngest --config prd"
-              echo "    2) doppler secrets set INNGEST_HEARTBEAT_URL=<betteruptime inngest_prd heartbeat url> --project soleur-inngest --config prd"
-              echo "    3) doppler secrets set INNGEST_CUTOVER_FLIP=armed               --project soleur-inngest --config prd"
-              echo "     Then CONFIRM the flip via Better Stack (the on-host Vector→Better Stack shipper carries the 'inngest-cutover-flip' log line): require exit_code:0 (P0-2). Do NOT SSH/cat the deny-all-public host to read state."
+              echo "  2.2b+2.3 ARM THE FLIP — NO LONGER a manual Doppler write. Dispatch the no-SSH op=arm verb: it writes the 3 values on soleur-inngest/prd (INNGEST_POSTGRES_URI + INNGEST_HEARTBEAT_URL read-through from prd_terraform, then INNGEST_CUTOVER_FLIP=armed LAST — the enabled 30s poll timer picks it up), then CONFIRMS the on-host FSM reached done (exit_code:0) via Better Stack. No secret is echoed (AC-NOBODY; #6369). Run: gh workflow run cutover-inngest.yml --field op=arm  (then APPROVE the inngest-cutover environment required-reviewer gate — that approval IS the prod-write ack)."
               echo "  2.4 APP-REPOINT — merge the ci-deploy.sh INNGEST_BASE_URL → http://10.0.1.40:8288 change (canary + prod sites) and redeploy so functions re-sync onto the dedicated host."
               echo "  THEN: op=rearm (re-arm the Σ=$SIGMA_CAPTURED captured reminders; gated on registry-non-empty) → op=verify (exactly-once)."
-              echo "  ROLLBACK / aborted-recovery (P0-1/P0-3/P1-13): (1) doppler secrets set INNGEST_CUTOVER_FLIP=rollback --project soleur-inngest --config prd (the enabled timer stops the dedicated scheduler; confirm rolled-back via Better Stack); (2) revert the ci-deploy.sh INNGEST_BASE_URL repoint back to loopback + redeploy; (3) run op=rollback — a SINGLE no-SSH 'enable inngest _ _' fan-out that re-enables (restores the [Install] symlink the 2.2 disable removed) AND starts the web scheduler across [$CUTOVER_HOSTS] in one flock-held handler, then polls deploy-status for the 'enabled' verdict. No operator systemctl step is needed (op=quiesce-web/op=rollback are the no-SSH quiesce/re-enable verbs)."
+              echo "  ROLLBACK / aborted-recovery (P0-1/P0-3/P1-13): (1) dispatch op=rollback — it now writes INNGEST_CUTOVER_FLIP=rollback on soleur-inngest/prd NO-SSH (via the inngest-cutover environment token, value on stdin), confirms rolled-back via Better Stack, THEN runs the SINGLE no-SSH 'enable inngest _ _' fan-out that re-enables (restores the [Install] symlink the 2.2 disable removed) AND starts the web scheduler across [$CUTOVER_HOSTS] in one flock-held handler, polling deploy-status for the 'enabled' verdict; (2) revert the ci-deploy.sh INNGEST_BASE_URL repoint back to loopback + redeploy. No operator Doppler write or systemctl step is needed (op=arm/op=rollback/op=quiesce-web are the no-SSH arm/reverse/quiesce verbs)."
               echo "::notice::execute complete — SEAM emitted. CI performed NO prod-write; the flip + app-repoint are the operator's maintenance-window steps."
+              ;;
+
+            arm)
+              # op=arm (#6369) — the no-SSH arm-flip: the three Doppler writes on soleur-inngest/prd
+              # that were op=execute's 2.2b/2.3 operator SEAM (:607-611). FORWARD-ONLY — the reverse
+              # INNGEST_CUTOVER_FLIP=rollback write lives in op=rollback (ADR-100 Decision 6b keeps the
+              # symmetric forward/reverse pair as SEPARATE verbs). A prod-write behind explicit
+              # dispatch (same trust model as op=quiesce-web/op=rollback) PLUS the inngest-cutover
+              # environment required-reviewer gate. The two SOURCE values are read read-through from
+              # soleur/prd_terraform via the existing read-only DOPPLER_TOKEN (CTO 2026-07-12 /
+              # ADR-100 6b: the prod DSN is already CI-readable there, SHA-identical to canonical prd;
+              # no operator seed). Writes go to the ISOLATED soleur-inngest/prd via the read/write
+              # DOPPLER_TOKEN_INNGEST_ARM. AC-NOBODY: no value is EVER echoed — every source value is
+              # ::add-mask::'d on its own capture line and every write reads from stdin (never argv,
+              # which /proc/<pid>/cmdline exposes).
+              if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
+                echo "::error::op=arm: DOPPLER_TOKEN_INNGEST_ARM is empty — the inngest-cutover environment secret did not resolve. Approve the environment required-reviewer gate on this dispatch, or the per-merge apply has not yet published the token (gh api repos/:owner/:repo/environments/inngest-cutover/secrets). Refusing to arm."; exit 1
+              fi
+
+              # G1 — pre-write FSM-state guard (DI-C2, P1 — prevents PROD-Redis re-FLUSHALL data loss).
+              # Re-arming over armed/flipping/flushed/done re-drives the on-host FSM stop -> FLUSHALL
+              # against the now-PROD Redis, wiping the live cron sorted-set + in-flight jobs. FAIL-CLOSED
+              # on a read error (user-impact F1 / DI): a swallowed read must NOT be mistaken for a safe
+              # `unset`. First PROVE the config is readable via a Doppler built-in (DOPPLER_PROJECT,
+              # always present, not a secret) — if THAT read fails it is a read/API failure, refuse. Only
+              # then read the flip; a missing flip on a proven-readable config is a genuine safe first-arm.
+              # The deploy-inngest-restart concurrency group (cancel-in-progress:false) serializes
+              # dispatches, so this read is TOCTOU-safe. The flip state is a public enum (not a secret).
+              if ! DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get DOPPLER_PROJECT -p soleur-inngest -c prd --plain >/dev/null 2>&1; then
+                echo "::error::op=arm: G1 — cannot read soleur-inngest/prd (config-readability probe failed: read/API/auth failure). A swallowed read must NOT be treated as a safe pre-arm state; refusing FAIL-CLOSED. Retry once the read path is healthy. Do NOT SSH the host."; exit 1
+              fi
+              CUR_FLIP=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "unset")
+              case "$CUR_FLIP" in
+                ""|unset|aborted|rolled-back)
+                  echo "::notice::op=arm: G1 pre-write FSM-state guard passed (config readability proven; INNGEST_CUTOVER_FLIP is a safe pre-arm state: '${CUR_FLIP:-unset}')" ;;
+                *)
+                  echo "::error::op=arm: G1 REFUSING — INNGEST_CUTOVER_FLIP is already '$CUR_FLIP' on soleur-inngest/prd (armed/flipping/flushed/done). Re-arming would re-drive stop -> FLUSHALL against the PROD Redis and wipe the live cron queue (DI-C2). If a prior arm is mid-flight, let it reach done; if it aborted, drive it via op=rollback to rolled-back before re-arming. Do NOT SSH the host."; exit 1 ;;
+              esac
+
+              # G2 — read the two SOURCE values read-through from prd_terraform (existing DOPPLER_TOKEN),
+              # masking EACH on its OWN capture line (security F7 — never batch; a mid-sequence set -e
+              # exit must not leave an unmasked captured value in scope before its mask lands).
+              PG=$(doppler secrets get INNGEST_POSTGRES_URI --plain 2>/dev/null || true)
+              printf '::add-mask::%s\n' "$PG"
+              HB=$(doppler secrets get INNGEST_HEARTBEAT_URL --plain 2>/dev/null || true)
+              printf '::add-mask::%s\n' "$HB"
+              if [[ -z "$PG" || -z "$HB" ]]; then
+                echo "::error::op=arm: a source value (INNGEST_POSTGRES_URI / INNGEST_HEARTBEAT_URL) is empty or unreadable from prd_terraform via DOPPLER_TOKEN. Refusing to arm (no value echoed)."; exit 1
+              fi
+
+              # G3 — positive prod-URI assertion (DI-C3, P1 — the :5432/:6543 guard alone MISSES the
+              # dark backend; both dark and prod DSNs use :5432). Read the CURRENT (dark)
+              # INNGEST_POSTGRES_URI from soleur-inngest/prd via the arm token, mask it, and assert the
+              # value we are about to write DIFFERS from dark AND targets the prod session pooler. All
+              # comparisons value-silent (only booleans/tokens reach the log).
+              PG_DARK=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_POSTGRES_URI -p soleur-inngest -c prd --plain 2>/dev/null || true)
+              printf '::add-mask::%s\n' "$PG_DARK"
+              # FAIL-CLOSED on an empty/failed dark read (observability F1 / user-impact / DI): the
+              # config is proven readable by G1, so an empty PG_DARK is anomalous — and the prod!=dark
+              # equality below is the ONLY guard that distinguishes prod from dark (both are :5432 Supabase).
+              # An empty PG_DARK would make `$PG == ""` false and SILENTLY pass the equality — the exact
+              # §User-Brand-Impact failure (flip onto the dark backend). Refuse instead.
+              if [[ -z "$PG_DARK" ]]; then
+                echo "::error::op=arm: G3 — could not read the current dark INNGEST_POSTGRES_URI from soleur-inngest/prd (empty despite a readable config). Cannot assert prod != dark; refusing FAIL-CLOSED (no value echoed). Do NOT SSH the host."; exit 1
+              fi
+              case "$PG" in
+                *:6543*) echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI uses the :6543 transaction pooler; inngest sqlc requires the :5432 session pooler (inngest-host.tf:157). Refusing (no value echoed)."; exit 1 ;;
+              esac
+              case "$PG" in
+                *:5432*) : ;;
+                *) echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not contain the :5432 session-pooler port. Refusing (no value echoed)."; exit 1 ;;
+              esac
+              # Positive prod-project pin (C3/D3): assert PG targets the TF-known prod inngest Postgres
+              # project ref (pigsfuxruiopinouvjwy — variables.tf:270; NOT a secret, a Supabase project ref
+              # that appears in the pooler host + user). This is stronger than a bare `supabase` substring:
+              # a drifted-but-Supabase :5432 non-dark value (e.g. a staging project) is rejected. The dark
+              # backend is a DISTINCT project so it does NOT contain this ref. Value-silent (PG never echoed).
+              case "$PG" in
+                *pigsfuxruiopinouvjwy*) : ;;
+                *) echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not target the TF-known prod inngest Postgres project (ref pigsfuxruiopinouvjwy). Refusing (no value echoed)."; exit 1 ;;
+              esac
+              if [[ "$PG" == "$PG_DARK" ]]; then
+                echo "::error::op=arm: G3 REFUSING — the prod INNGEST_POSTGRES_URI equals the CURRENT dark soleur-inngest/prd value. Arming this would flip onto the DARK backend (a mis-config/no-op) and FLUSHALL the host Redis onto the wrong Postgres (DI-C3, the §User-Brand-Impact failure). Refusing BEFORE any write (no value echoed)."; exit 1
+              fi
+              echo "::notice::op=arm: G3 positive prod-URI assertion passed (prod != dark, :5432 session pooler, prod project-ref present — all value-silent)"
+
+              # G4 — write the two DATA secrets FIRST, each via stdin (never argv), each exit-gated
+              # before the next. Order is a correctness invariant: the URIs must land before `armed`.
+              printf '%s' "$PG" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_POSTGRES_URI -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_POSTGRES_URI to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
+              echo "::notice::op=arm: G4 wrote INNGEST_POSTGRES_URI to soleur-inngest/prd (value not echoed)"
+              printf '%s' "$HB" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_HEARTBEAT_URL to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
+              echo "::notice::op=arm: G4 wrote INNGEST_HEARTBEAT_URL to soleur-inngest/prd (value not echoed)"
+
+              # G5 — arm LAST. The enabled 30s on-host .timer picks up `armed` and drives the FSM
+              # armed -> flipping -> flushed -> done (ADR-100 Decision 6a). `armed` is a literal, not a
+              # secret, but use the same stdin form for a uniform (test-asserted) write shape.
+              ARM_TS=$(date +%s)
+              printf '%s' 'armed' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G5 — writing INNGEST_CUTOVER_FLIP=armed FAILED (both URIs already landed). Re-dispatch op=arm — G1 will allow re-arm from a non-terminal state. Do NOT SSH the host."; exit 1; }
+              echo "::notice::op=arm: G5 armed — INNGEST_CUTOVER_FLIP=armed written LAST to soleur-inngest/prd. The on-host 30s timer now drives the flip FSM."
+
+              # G6 — confirm the on-host FSM reached `done` via Better Stack (AC9; security F1 + DI-Q4).
+              # TIME-BOUND to >= the armed-write moment (ARM_TS captured just before G5) so a stale
+              # terminal line from a prior run/dry-run on the SAME source cannot false-succeed. The
+              # shared confirm_flip_state keys on the emitter's `flag` field (done/aborted/rolled-back),
+              # NOT `reason` (which is a cause string, never `done`) — and uses the space-timestamp form
+              # betterstack-query.sh's ClickHouse cast accepts. It never echoes a raw row.
+              ARM_ISO=$(date -u -d "@$ARM_TS" +'%Y-%m-%d %H:%M:%S')
+              G6_STATE=$(confirm_flip_state "$ARM_ISO")
+              case "$G6_STATE" in
+                done)
+                  echo "::notice::op=arm: G6 — FSM confirmed done (flag:done exit_code:0) via Better Stack (since $ARM_ISO)" ;;
+                aborted|rolled-back)
+                  echo "::error::op=arm: G6 — the on-host FSM reached terminal '$G6_STATE' (NOT done) since $ARM_ISO. The cutover flip FAILED on-host (e.g. DBSIZE!=0 abort / FLUSHALL-failed / unexpected-exit). REMEDIATION: confirm the dark backend + DBSIZE via op=inventory; do NOT proceed to 2.4 (app-repoint). Inspect the inngest-cutover-flip Better Stack line. Do NOT SSH the host."; exit 1 ;;
+                *)  # timeout — could be the FSM OR the confirm path (a ::warning:: fired above if the query failed)
+                  echo "::error::op=arm: G6 — no terminal FSM flag (done/aborted) within 600s since $ARM_ISO (armed WAS written). If the on-host 30s timer looks healthy, re-run scripts/betterstack-query.sh manually (runbook §3) to rule out a confirm-path failure (a betterstack-query.sh ::warning:: above names that case). Do NOT proceed to 2.4. Do NOT SSH the host."; exit 1 ;;
+              esac
+              echo "::notice::op=arm complete — arm-flip written no-SSH (3 values, armed last) + FSM confirmed done. Remaining cutover steps: op=rearm (re-arm captured reminders) -> op=verify (exactly-once), plus the operator 2.4 app-repoint. NO secret value was echoed (AC-NOBODY)."
               ;;
 
             quiesce-web)
@@ -888,13 +1056,16 @@ jobs:
               ;;
 
             rollback)
-              # op=rollback — the AUTHORED reverse of 2.2 quiesce (P1-13): re-enable +
-              # restart inngest on EVERY $CUTOVER_HOSTS host, then confirm via inventory. The
-              # DEDICATED-host stop half of rollback is the operator's Doppler
-              # INNGEST_CUTOVER_FLIP=rollback write (D.5 step 1) — NOT a CI prod-write. This
-              # arm only drives the web hosts, which the runner reaches via the deploy hook
-              # over the private net (no SSH). This is also the P0-3 `aborted`-state recovery
-              # (the DBSIZE gate disabled the web schedulers; this brings them back).
+              # op=rollback — the AUTHORED reverse of the cutover (P1-13). As of #6369 it has TWO
+              # halves: (A) the DEDICATED-host stop is now a NO-SSH Doppler write
+              # INNGEST_CUTOVER_FLIP=rollback on soleur-inngest/prd (folded here from the former
+              # operator SEAM D.5 step 1 — the enabled on-host timer picks it up and drives the FSM to
+              # rolled-back); (B) the WEB re-enable + restart across EVERY $CUTOVER_HOSTS host via the
+              # deploy hook over the private net (no SSH). op=rollback stays a SEPARATE verb from op=arm
+              # (ADR-100 Decision 6b forward/reverse symmetry). Half (A) is value-silent + behind the same
+              # inngest-cutover environment required-reviewer gate + conditional DOPPLER_TOKEN_INNGEST_ARM
+              # as op=arm; it writes ONLY the flip value (never POSTGRES_URI/HEARTBEAT). This is also the
+              # P0-3 `aborted`-state recovery (the DBSIZE gate disabled the web schedulers; (B) restores them).
               if [[ -z "${CUTOVER_HOSTS:-}" ]]; then
                 echo "::error::CUTOVER_HOSTS is empty — refusing to run rollback against an empty host-set"; exit 1
               fi
@@ -902,6 +1073,49 @@ jobs:
               if [[ "${#HOSTS[@]}" -lt 1 ]]; then
                 echo "::error::CUTOVER_HOSTS parsed to zero hosts (value: '$CUTOVER_HOSTS')"; exit 1
               fi
+
+              # ---- Half (A): the no-SSH reverse flip write (#6369). Behind the environment gate.
+              if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
+                echo "::error::op=rollback: DOPPLER_TOKEN_INNGEST_ARM is empty — the inngest-cutover environment secret did not resolve. Approve the required-reviewer gate on this dispatch. Refusing the reverse flip write."; exit 1
+              fi
+              # G1' decides ONLY whether to WRITE the reverse flip — it must NOT gate Half (B). Half (B),
+              # the web re-enable, is the pre-#6369 UNCONDITIONAL reverse of 2.2 quiesce and the documented
+              # P0-3 aborted-state recovery, so it runs for EVERY state (arch review P1). Write `rollback`
+              # when the forward flip is armed OR progressing (∈ {armed,flipping,flushed,done}) — armed
+              # included so a pending arm is stopped before the timer completes it; idempotent-skip when
+              # already rollback/rolled-back; for a non-forward state (unset/empty/aborted) there is nothing
+              # on the dedicated host to reverse. Fail-CLOSED on a read error (a swallowed read must not be
+              # mistaken for 'unset'). The flip state is a public enum — not masked.
+              if ! DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get DOPPLER_PROJECT -p soleur-inngest -c prd --plain >/dev/null 2>&1; then
+                echo "::error::op=rollback: cannot read soleur-inngest/prd (config-readability probe failed). Refusing the reverse-flip decision FAIL-CLOSED; retry once the read path is healthy. Do NOT SSH the host."; exit 1
+              fi
+              RB_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "unset")
+              case "$RB_CUR" in
+                armed|flipping|flushed|done)
+                  echo "::notice::op=rollback: G1' — forward flip is '$RB_CUR'; writing the reverse flip to stop the dedicated scheduler BEFORE re-enabling the web schedulers (prevents two live schedulers double-firing prod crons)."
+                  RB_TS=$(date +%s)
+                  printf '%s' 'rollback' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=rollback: writing INNGEST_CUTOVER_FLIP=rollback FAILED. Re-dispatch op=rollback. Do NOT SSH the host."; exit 1; }
+                  echo "::notice::op=rollback: wrote INNGEST_CUTOVER_FLIP=rollback to soleur-inngest/prd (no value echoed) — the enabled on-host timer stops the dedicated scheduler and drives the FSM to rolled-back."
+                  # BLOCKING confirm: the dedicated scheduler MUST be confirmed stopped BEFORE Half (B)
+                  # re-enables the web schedulers — else both run and double-fire prod crons (user-impact
+                  # F2 / DI, an exactly-once violation). On timeout, FAIL (exit 1) WITHOUT re-enabling web:
+                  # that leaves at most ONE potentially-live scheduler (the dedicated one), never two.
+                  RB_ISO=$(date -u -d "@$RB_TS" +'%Y-%m-%d %H:%M:%S')
+                  RB_STATE=$(confirm_flip_state "$RB_ISO")
+                  case "$RB_STATE" in
+                    rolled-back)
+                      echo "::notice::op=rollback: FSM confirmed rolled-back (flag:rolled-back exit_code:0) via Better Stack (since $RB_ISO) — dedicated scheduler stopped; safe to re-enable the web schedulers." ;;
+                    *)
+                      echo "::error::op=rollback: the FSM did not confirm rolled-back within 600s (state='$RB_STATE'; the write DID land). WITHHOLDING the web re-enable to avoid two live schedulers double-firing prod crons — at most one scheduler is live now. Verify the dedicated scheduler stopped via the inngest-cutover-flip Better Stack line (re-run scripts/betterstack-query.sh, runbook §3), then re-dispatch op=rollback. Do NOT SSH the host."; exit 1 ;;
+                  esac
+                  ;;
+                rollback|rolled-back)
+                  echo "::notice::op=rollback: INNGEST_CUTOVER_FLIP is already '$RB_CUR' — the dedicated scheduler is stopping/stopped; skipping the (idempotent) reverse write, proceeding to the web re-enable." ;;
+                *)
+                  echo "::notice::op=rollback: INNGEST_CUTOVER_FLIP is '${RB_CUR:-unset}' (not armed/forward-progressed) — nothing on the dedicated host to reverse (aborted = already stopped by the DBSIZE gate; unset = never armed). This is the documented P0-3 aborted-state recovery; proceeding to the web re-enable." ;;
+              esac
+
+              # ---- Half (B): the web re-enable + restart fan-out (the pre-#6369 behaviour).
               echo "::notice::rollback: re-enabling inngest across host-set [$CUTOVER_HOSTS] (${#HOSTS[@]} host(s)) — reverse of 2.2 quiesce (P1-13)"
               # The reverse of 2.2 quiesce is now a SINGLE no-SSH `enable inngest _ _` verb
               # (ci-deploy.sh) = enable + start + verify-serving-and-enabled in ONE flock-held
