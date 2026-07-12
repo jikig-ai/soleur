@@ -743,6 +743,14 @@ The capture file is retained on-host for a later retry. Rollback is data-safe on
 > `ExecStartPre` flip-guard blocks only the DEDICATED host, not web hosts. The only web verb to
 > touch post-cutover is `op=quiesce-web` (forward) / `op=rollback` (reverse), never `restart`.
 
+> **Editor guard — a "no-SSH cutover" claim must be verified verb-by-verb (#6178).** Any host
+> mutation this runbook performs (quiesce/stop/disable, enable/start, a future drain/pause) needs
+> its OWN no-SSH webhook verb + pinned sudoers grant — an existing verb for a *different* mutation
+> (e.g. `restart`) does NOT make the cutover no-SSH; that asymmetry is exactly what left 2.2
+> quiesce on operator SSH. Re-arm uses `enable` (restores the `[Install]` symlink `disable`
+> removed), never `restart` (which leaves the unit enabled-at-runtime but dropped on reboot). Before
+> claiming no-SSH, list every mutation and confirm each has a verb.
+
 ### `aborted`-state recovery (P0-3)
 
 If the flip's DBSIZE gate tripped (`"exit_code":1`, `"reason":"dbsize-nonzero"`), the oneshot
