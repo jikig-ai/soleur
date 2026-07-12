@@ -4,26 +4,26 @@ Plan: `knowledge-base/project/plans/2026-07-12-fix-webhook-readwritepaths-innges
 Lane: cross-domain (TR2 fail-closed default — no spec.md on branch; change is genuinely single-domain infra)
 
 ## Phase 1 — RED: regression test (lock the invariant before fixing)
-- [ ] 1.1 Add assertions to `apps/web-platform/infra/inngest.test.sh` (confirm exact host at /work):
-  - [ ] 1.1.1 `cloud-init.yml` webhook.service `ReadWritePaths` contains `-/var/lib/inngest` and NOT the bare ` /var/lib/inngest ` token
-  - [ ] 1.1.2 standalone `webhook.service` `ReadWritePaths` contains `-/var/lib/inngest`
-  - [ ] 1.1.3 lockstep parity: the two `ReadWritePaths=` token lists are byte-identical (modulo YAML indent)
-- [ ] 1.2 Run the test; confirm it FAILS on the current mandatory form (`cq-write-failing-tests-before`)
+- [x] 1.1 Add assertions to `apps/web-platform/infra/inngest.test.sh` (confirmed host; CI-registered infra-validation.yml:299):
+  - [x] 1.1.1 `cloud-init.yml` webhook.service `ReadWritePaths` contains `-/var/lib/inngest` and NOT the bare ` /var/lib/inngest ` token
+  - [x] 1.1.2 standalone `webhook.service` `ReadWritePaths` contains `-/var/lib/inngest`
+  - [x] 1.1.3 lockstep parity: the two `ReadWritePaths=` token lists are byte-identical (modulo YAML indent)
+- [x] 1.2 Ran the test; confirmed 4 FAILs on the current mandatory form (`cq-write-failing-tests-before`)
 
 ## Phase 2 — GREEN: apply the `-` prefix + comment alignment (both lockstep copies)
-- [ ] 2.1 `apps/web-platform/infra/cloud-init.yml:245` → `-/var/lib/inngest`; update comment L239-244 to the "optional; becomes real ReadWritePath once inngest-bootstrap creates it" rationale
-- [ ] 2.2 `apps/web-platform/infra/webhook.service:45` → `-/var/lib/inngest`; fold inngest into the existing vector `-`-optional rationale (L32-34 + L40-44), cite #4257 + #6090
-- [ ] 2.3 Re-run Phase 1 test → GREEN
+- [x] 2.1 `apps/web-platform/infra/cloud-init.yml` webhook.service RWP → `-/var/lib/inngest`; comment updated with the "optional; becomes real ReadWritePath once inngest-bootstrap creates it" rationale (#6090)
+- [x] 2.2 `apps/web-platform/infra/webhook.service` RWP → `-/var/lib/inngest`; folded inngest into the vector `-`-optional rationale, cited #4257 + #6090
+- [x] 2.3 Re-ran Phase 1 test → GREEN (86/86)
 
 ## Phase 3 — Comment-accuracy sweep (severed causal chain)
-- [ ] 3.1 `apps/web-platform/infra/soleur-host-bootstrap.sh:191-193` — annotate the 226/NAMESPACE clause as severed by the `-`-optional fix (keep GHCR rationale)
-- [ ] 3.2 `apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh:526` — same annotation
+- [x] 3.1 `apps/web-platform/infra/soleur-host-bootstrap.sh` — annotated the 226/NAMESPACE clause as severed by the `-`-optional fix (kept GHCR rationale)
+- [x] 3.2 `apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh` — same annotation (69/69 still green)
 
 ## Phase 4 — Verify death-stage emit coverage (observability, no SSH)
-- [ ] 4.1 Confirm the `226/NAMESPACE` abort at the webhook enable step (`cloud-init.yml:578`) still surfaces a named baked-DSN emit (L581 `webhook_bound` beacon fires, or add a named emit at L578); no anonymous abort
+- [x] 4.1 Confirmed: `cloud-init.yml:581` `soleur-wait-ready port 9000 webhook_bound || exit 1` fires immediately after the webhook enable (:578) — a named baked-DSN beacon already covers the abort; no anonymous abort, no new emit needed
 
 ## Phase 5 — Full-suite + AC verification (pre-merge)
-- [ ] 5.1 `bash apps/web-platform/infra/inngest.test.sh` passes; `infra-config-apply.test.sh` + `infra-config-install.test.sh` still pass
+- [x] 5.1 `inngest.test.sh` 86/86; `infra-config-apply.test.sh` 63; `infra-config-install.test.sh` 29; observability 69; firewall-9000 1; cron-egress-firewall 197 + 6 more sibling infra suites — all green (0 failures). cloud-init schema failure is pre-existing (Terraform template; origin/main fails identically)
 - [ ] 5.2 Walk AC1–AC8 (see plan); PR body `Closes #6090`
 
 ## Phase 6 — Post-merge: fresh web-2-recreate + off-host green (automated)
