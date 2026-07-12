@@ -1049,6 +1049,74 @@ verify_inngest_health() {
   return 0
 }
 
+# Single-source "is the inngest unit enabled at boot?" (enabled|enabled-runtime).
+# Both verify_inngest_quiesced (fail-branch) and the enable handler (ok-branch) use this
+# so the set of enabled-like states stays defined in ONE place. Exotic states
+# (indirect/alias/generated/static/disabled) are intentionally NOT "enabled" here.
+inngest_unit_enabled() {
+  case "$(systemctl is-enabled inngest-server.service 2>/dev/null || true)" in
+    enabled|enabled-runtime) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Verify inngest-server is QUIESCED (#6178, op=quiesce-web). The goal state is
+# NOT-serving AND NOT-enabled — verifying only not-serving is a proxy that defeats the
+# disable's purpose (data-integrity P1-A): a disable-failure on a unit WITH an [Install]
+# section would pass as quiesced while still enabled → a mid-window reboot re-arms the old
+# scheduler → the exact double-fire the disable prevents.
+#
+# Return codes (the handler maps them to reasons):
+#   0 = quiesced (not-serving AND unit-inactive AND not-enabled)
+#   1 = still serving/active  → inngest_still_serving
+#   2 = still enabled         → inngest_still_enabled
+#
+# The /health poll is the MIRROR-IMAGE polarity of verify_inngest_health: that helper
+# breaks on the FIRST success; this one must declare not-serving ONLY when EVERY probe
+# fails. Return-on-first-failure is WRONG — a briefly-busy live scheduler (e.g. a GC
+# pause) would false-read as quiesced. Probe budget is env-overridable (tests) and
+# drift-guarded against the workflow poll window (ci-deploy.test.sh #6178).
+verify_inngest_quiesced() {
+  local max_attempts="${QUIESCE_PROBE_ATTEMPTS:-10}"
+  local interval="${QUIESCE_PROBE_INTERVAL:-3}"
+  local i served=0
+
+  for i in $(seq 1 "$max_attempts"); do
+    if curl -sf --max-time 5 http://127.0.0.1:8288/health >/dev/null 2>&1; then
+      logger -t "$LOG_TAG" "INNGEST_QUIESCE: /health SERVED on attempt $i/$max_attempts — STILL RUNNING"
+      served=1
+      break
+    fi
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: /health down (attempt $i/$max_attempts)"
+    sleep "$interval"
+  done
+
+  if [[ "$served" -eq 1 ]]; then
+    return 1
+  fi
+
+  # /health is down across EVERY probe. ALSO require the unit to be inactive — the
+  # double-fire risk is the scheduler EXECUTING queued jobs, which can outlive /health
+  # in a shutdown/crash-loop window (arch P2-3). is-active is read-only (no sudo).
+  if systemctl is-active --quiet inngest-server.service; then
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: /health down but unit is STILL ACTIVE — not quiesced"
+    return 1
+  fi
+
+  # Not-serving confirmed. Now assert NOT-enabled (the load-bearing half). is-enabled is
+  # read-only (no sudo). `static` / no-[Install] / `masked` are benign (the unit cannot
+  # auto-start on boot) → OK; only `enabled`/`enabled-runtime` (a live [Install] symlink)
+  # is a FAIL — a mid-window reboot would re-arm the old scheduler.
+  local enabled_state
+  enabled_state=$(systemctl is-enabled inngest-server.service 2>/dev/null || true)
+  logger -t "$LOG_TAG" "INNGEST_QUIESCE: is-enabled=${enabled_state:-<empty>}"
+  if inngest_unit_enabled; then
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: unit STILL ENABLED (state=$enabled_state) — a reboot would re-arm it"
+    return 2
+  fi
+  return 0
+}
+
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
 declare -A ALLOWED_IMAGES=(
   [web-platform]="ghcr.io/jikig-ai/soleur-web-platform"
@@ -1078,7 +1146,8 @@ fi
 read -r ACTION COMPONENT IMAGE TAG <<< "$SSH_ORIGINAL_COMMAND"
 
 # Validate action
-if [[ "$ACTION" != "deploy" ]] && [[ "$ACTION" != "restart" ]]; then
+if [[ "$ACTION" != "deploy" ]] && [[ "$ACTION" != "restart" ]] \
+   && [[ "$ACTION" != "quiesce" ]] && [[ "$ACTION" != "enable" ]]; then
   logger -t "$LOG_TAG" "REJECTED: unknown action '$ACTION'"
   echo "Error: unknown action '$ACTION'" >&2
   final_write_state 1 "action_unknown"
@@ -1095,6 +1164,25 @@ if [[ "$ACTION" == "restart" ]]; then
     exit 1
   fi
   logger -t "$LOG_TAG" "ACCEPTED: restart $COMPONENT"
+elif [[ "$ACTION" == "quiesce" ]]; then
+  # quiesce inngest _ _ — no-SSH web-host scheduler stop+disable (#6178, op=quiesce-web).
+  # Only inngest is quiescible (the dedicated-host cutover 2.2 gap).
+  if [[ "$COMPONENT" != "inngest" ]]; then
+    logger -t "$LOG_TAG" "REJECTED: component '$COMPONENT' is not quiescible"
+    echo "Error: component '$COMPONENT' is not quiescible" >&2
+    final_write_state 1 "component_not_quiescible"
+    exit 1
+  fi
+  logger -t "$LOG_TAG" "ACCEPTED: quiesce $COMPONENT"
+elif [[ "$ACTION" == "enable" ]]; then
+  # enable inngest _ _ — no-SSH reverse re-enable+start (#6178, op=rollback only).
+  if [[ "$COMPONENT" != "inngest" ]]; then
+    logger -t "$LOG_TAG" "REJECTED: component '$COMPONENT' is not enableable"
+    echo "Error: component '$COMPONENT' is not enableable" >&2
+    final_write_state 1 "component_not_enableable"
+    exit 1
+  fi
+  logger -t "$LOG_TAG" "ACCEPTED: enable $COMPONENT"
 else
   # deploy action — validate image and tag
   # Validate component exists in allowlist
@@ -1178,6 +1266,107 @@ if [[ "$ACTION" == "restart" ]]; then
     final_write_state 1 "inngest_health_failed"
     exit 1
   fi
+fi
+
+# --- Quiesce action handler (#6178, op=quiesce-web) ---
+# No-SSH web-host scheduler stop+disable. The stop + disable are TOLERATED non-zero
+# (an already-stopped/absent unit, or a unit with no [Install] section, must NOT fail
+# the op) — verify_inngest_quiesced is the real gate. Each tolerated sudo call is guarded
+# with `if ! sudo …; then` so a non-zero return under `set -e` cannot abort BEFORE
+# final_write_state (which would leave a stale "running" state + no reason off-host —
+# an hr-observability-as-plan-quality-gate regression). Mirrors the restart handler's
+# set +e/-e-around-verify pattern verbatim.
+if [[ "$ACTION" == "quiesce" ]]; then
+  echo "Quiescing inngest-server.service (stop + disable)..."
+  if ! sudo /usr/bin/systemctl stop inngest-server.service; then
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: stop returned non-zero (already-stopped/absent tolerated — verify is the gate)"
+  fi
+  if ! sudo /usr/bin/systemctl disable inngest-server.service; then
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: disable returned non-zero (no [Install]/already-disabled tolerated — the enabled-state assertion in verify is the gate)"
+  fi
+
+  set +e
+  verify_inngest_quiesced
+  VERIFY_RC=$?
+  set -e
+  case "$VERIFY_RC" in
+    0) : ;;  # not-serving AND not-enabled — quiesced
+    2)
+      logger -t "$LOG_TAG" "FAILED: quiesce — inngest still ENABLED (reboot would re-arm)"
+      final_write_state 1 "inngest_still_enabled"
+      exit 1
+      ;;
+    *)
+      logger -t "$LOG_TAG" "FAILED: quiesce — inngest still SERVING/active"
+      final_write_state 1 "inngest_still_serving"
+      exit 1
+      ;;
+  esac
+
+  # Fan the SAME `quiesce inngest _ _` out to every peer web host over the private net
+  # (mirrors the deploy fan-out; peers receive on /hooks/deploy-peer → no re-fan). A peer
+  # 202 is SPAWN-ACCEPTANCE only, NOT proof the peer quiesced (the peer's own verdict lands
+  # on the PEER's deploy-status slot, unreadable here — DI-C3). So a non-accepted 202 =
+  # an UNREACHABLE/REJECTED peer, not an un-quiesced one. Single-host default:
+  # SOLEUR_DEPLOY_PEERS unset → fan_out_to_peers returns 0 immediately (dormant).
+  if ! fan_out_to_peers; then
+    logger -t "$LOG_TAG" "FAILED: quiesce — a peer fan-out was NOT accepted (unreachable/rejected)"
+    final_write_state 1 "quiesced_peer_fanout_unaccepted"
+    exit 1
+  fi
+
+  logger -t "$LOG_TAG" "SUCCESS: quiesce $COMPONENT"
+  final_write_state 0 "quiesced"
+  exit 0
+fi
+
+# --- Enable action handler (#6178, op=rollback reverse) ---
+# The TRUE inverse of quiesce: enable + start + verify-serving-and-enabled in ONE
+# flock-held handler (fixes the two-POST enable+restart flock race — arch P1-1). `restart`
+# STAYS PURE (never re-enables); only this deliberate `enable` verb re-arms, so it MUST be
+# reachable ONLY via op=rollback (security regression guard). The start half reuses the
+# pre-existing INNGEST_START (#5450) grant — a restart is not needed because quiesce stopped
+# the unit.
+if [[ "$ACTION" == "enable" ]]; then
+  echo "Re-enabling inngest-server.service (enable + start)..."
+  if ! sudo /usr/bin/systemctl enable inngest-server.service; then
+    logger -t "$LOG_TAG" "FAILED: systemctl enable inngest-server.service"
+    final_write_state 1 "inngest_enable_failed"
+    exit 1
+  fi
+  if ! sudo /usr/bin/systemctl start inngest-server.service; then
+    logger -t "$LOG_TAG" "FAILED: systemctl start inngest-server.service"
+    final_write_state 1 "inngest_start_failed"
+    exit 1
+  fi
+
+  set +e
+  verify_inngest_health
+  VERIFY_RC=$?
+  set -e
+  if [[ "$VERIFY_RC" -ne 0 ]]; then
+    logger -t "$LOG_TAG" "FAILED: enable — inngest not serving after start"
+    final_write_state 1 "inngest_reenable_unverified"
+    exit 1
+  fi
+  # Symmetric to the quiesce verify: confirm the unit is now ENABLED (is-enabled query,
+  # read-only). Not-enabled after an enable is a re-arm failure (a reboot would drop it).
+  ENABLED_STATE=$(systemctl is-enabled inngest-server.service 2>/dev/null || true)
+  if ! inngest_unit_enabled; then
+    logger -t "$LOG_TAG" "FAILED: enable — unit is not enabled afterward (state=${ENABLED_STATE:-<empty>})"
+    final_write_state 1 "inngest_reenable_unverified"
+    exit 1
+  fi
+
+  if ! fan_out_to_peers; then
+    logger -t "$LOG_TAG" "FAILED: enable — a peer fan-out was NOT accepted (unreachable/rejected)"
+    final_write_state 1 "enabled_peer_fanout_unaccepted"
+    exit 1
+  fi
+
+  logger -t "$LOG_TAG" "SUCCESS: enable $COMPONENT"
+  final_write_state 0 "enabled"
+  exit 0
 fi
 
 # Check available disk space (minimum 5GB required for image pull + extraction)

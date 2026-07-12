@@ -130,11 +130,38 @@ assert "verify buckets by floor(startedAt / cron_period) (no scheduled_tick)" "g
 assert "verify auto-emits the missed-tick trigger-cron list (P2-16)" "grep -qE 'soleur:trigger-cron' '$WF'"
 assert "workflow contains NO 'scheduled_tick' anywhere (AC-VERIFY)" "! grep -qE 'scheduled_tick' '$WF'"
 
-# D.6 / AC-ROLLBACK (P1-13) — op=rollback re-enables inngest across the host-set
-# (reverse of 2.2) and confirms via inventory.
-assert "rollback re-enables inngest on the host-set (restart fan-out)" "grep -qE 'restart inngest _ latest' '$WF'"
-assert "rollback confirms via the inventory hook" "grep -qE 'BASE/inngest-inventory\"' '$WF'"
+# D.6 / AC-ROLLBACK (P1-13) — op=rollback re-enables inngest across the host-set via a
+# SINGLE no-SSH `enable inngest _ _` fan-out (enable+start+verify in one flock-held handler,
+# #6178) and POLLS deploy-status for the `enabled` verdict — NOT a two-POST enable+restart
+# (flock race, arch P1-1) and NOT a bare inventory probe.
+assert "rollback issues a SINGLE 'enable inngest _ _' fan-out (#6178)" "grep -qE 'enable inngest _ _' '$WF'"
+assert "rollback does NOT POST 'restart inngest _ latest' (no two-POST flock race)" "! grep -qE 'restart inngest _ latest' '$WF'"
+assert "rollback POLLS deploy-status for the enabled verdict" "grep -qE 'reason=enabled' '$WF'"
+assert "rollback does NOT print an operator systemctl re-enable SEAM (#6178)" "! grep -qE 'systemctl enable inngest-server.service' '$WF'"
 assert "rollback iterates the SAME \$CUTOVER_HOSTS set (P1-13)" "grep -qE 'reverse of 2.2 quiesce' '$WF'"
+
+# #6178 — op=quiesce-web: the no-SSH stop+disable of the co-located web scheduler that
+# closes the cutover 2.2 gap (operators have no SSH). It is a constrained choice + a real
+# case arm; POSTs `quiesce inngest _ _` + peers to /hooks/deploy and POLLS deploy-status for
+# the terminal `quiesced` verdict (NOT a bare inventory probe raced against the async stop).
+assert "choice includes quiesce-web (#6178)" "grep -qE '^[[:space:]]+-[[:space:]]*quiesce-web\$' '$WF'"
+assert "case arm: quiesce-web)" "grep -qE '^[[:space:]]+quiesce-web\\)' '$WF'"
+assert "quiesce-web POSTs 'quiesce inngest _ _' with peers fan-out" "grep -qE '\"command\":\"quiesce inngest _ _\",\"peers\"' '$WF'"
+assert "quiesce-web POLLS deploy-status for the quiesced verdict (not a bare inventory probe)" "grep -qE 'reason=quiesced' '$WF'"
+assert "quiesce-web freshness-anchors the poll (FRESH_FLOOR)" "grep -qE 'FRESH_FLOOR=\\\$\\(\\(TRIGGER_TS - 60\\)\\)' '$WF'"
+# 2.2 HARD GATE failure remediation now points at op=quiesce-web, NOT an operator host-shell step.
+assert "2.2 gate failure remediation references op=quiesce-web (no-SSH)" "grep -qE 'op=quiesce-web' '$WF'"
+assert "2.2 gate failure remediation no longer instructs an operator 'systemctl disable' host step" "! grep -qE 'stop \\+ systemctl disable inngest\\) on the LB-reachable host' '$WF'"
+# quiesce-web's own failure verdicts each carry a no-SSH forward action (spec-flow F2).
+assert "quiesce-web failure verdicts print a no-SSH forward action (Do NOT SSH)" "grep -qE 'Do NOT SSH the host' '$WF'"
+
+# #6178 Fix-1 (observability P2) — BOTH deploy-status poll loops (quiesce-web + rollback)
+# FAST-FAIL on a TERMINAL-but-unrecognized reason (exit_code != -1 yet matched no enumerated
+# case branch) instead of polling to the full timeout. Without this a reason rename silently
+# degrades to a $((MAX_POLLS * POLL_INTERVAL))s timeout with no actionable error. Assert both
+# loops carry the fast-fail (count == 2, one per loop).
+UNREC_N=$(grep -cE '::error::unrecognized terminal reason' "$WF" || true)
+assert "both poll loops fast-fail on an unrecognized terminal reason (quiesce + rollback)" "[[ '$UNREC_N' -eq 2 ]]"
 
 # AC-NOSSH — no ssh in any new command.
 assert "no 'ssh ' command anywhere in the workflow (AC-NOSSH)" "! grep -qE '(^|[^[:alnum:]])ssh[[:space:]]' '$WF'"

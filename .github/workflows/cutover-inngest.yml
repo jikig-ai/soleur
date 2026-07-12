@@ -27,6 +27,7 @@ on:
           - backup
           - inventory
           - execute
+          - quiesce-web
           - verify
           - rollback
   # push trigger scoped to this file forces GitHub to register the workflow in
@@ -558,8 +559,8 @@ jobs:
               # STILL_RUNNING **and** UNKNOWN both withhold the SEAM + exit non-zero. On the
               # DEDICATED host the inngest-server ExecStartPre flip-guard (P1-5) additionally
               # blocks a second prod scheduler on a dedicated-host restart — but it does NOT stop
-              # a surviving WEB-host scheduler, so this gate + the operator stop+disable + the
-              # operator web-2 freeze/recreate are what cover the web hosts.
+              # a surviving WEB-host scheduler, so this gate + the no-SSH op=quiesce-web
+              # stop+disable + the operator web-2 freeze/recreate are what cover the web hosts.
               GSIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
               QUIESCE_PROBES="${CUTOVER_QUIESCE_PROBES:-3}"
               STILL_RUNNING=0
@@ -593,16 +594,16 @@ jobs:
                 echo "quiesce check (LB-reachable host): UNREADABLE (no HTTP answer across ${QUIESCE_PROBES} probe(s)) — UNKNOWN, fail-closed"
               fi
               if [[ "$STILL_RUNNING" -gt 0 || "$UNKNOWN_COUNT" -gt 0 ]]; then
-                echo "::error::2.2 QUIESCE HARD GATE FAILED (P1-7): the LB-reachable host is still-running=$STILL_RUNNING / UNKNOWN=$UNKNOWN_COUNT. WITHHOLDING THE SEAM (fail-closed) — quiesce (stop + systemctl disable inngest) on the LB-reachable host, ensure it is reachable, confirm, then re-run op=execute. Arming the flip now could create a second live scheduler on prod Postgres."
+                echo "::error::2.2 QUIESCE HARD GATE FAILED (P1-7): the LB-reachable host is still-running=$STILL_RUNNING / UNKNOWN=$UNKNOWN_COUNT. WITHHOLDING THE SEAM (fail-closed). NO-SSH REMEDIATION: run 'gh workflow run cutover-inngest.yml --field op=quiesce-web' (stop+disables inngest across the host-set over the private net, no SSH), confirm it reports 'quiesced', then re-run op=execute. If UNKNOWN (000) the webhook was unreachable — check CF-Access/HMAC + the run log and re-dispatch. Arming the flip now could create a second live scheduler on prod Postgres. Do NOT SSH the host."
                 exit 1
               fi
-              echo "::notice::2.2 QUIESCE HARD GATE PASSED: the LB-REACHABLE host(s) POSITIVELY confirmed not-serving (fail-closed). SCOPE (DI-C3, tracked #6227): this LB-routed path did NOT individually probe the weight-0 warm-standby web-2 (10.0.1.11); web-2 quiesce is the MANDATORY operator step in the SEAM below (web-2 freeze/recreate), NOT auto-verified here."
+              echo "::notice::2.2 QUIESCE HARD GATE PASSED: the LB-REACHABLE host(s) POSITIVELY confirmed not-serving (fail-closed). SCOPE (DI-C3, tracked #6227): this LB-routed path did NOT individually probe the weight-0 warm-standby web-2 (10.0.1.11). op=quiesce-web (when run) now stop+disables web-2's scheduler too (an ACT), but CI still cannot VERIFY web-2 AND web-2's local reminders were never captured — the MANDATORY web-2 freeze/recreate step in the SEAM below is NOT superseded; do NOT read a green op=quiesce-web as 'web-2 handled'."
 
               # ---- SEAM: operator maintenance-window steps (NOT executed by CI —
               # hr-menu-option-ack-not-prod-write-auth). Print the exact hand-off; no
               # secrets / bodies / connection strings are echoed (AC-NOBODY), only step text.
               echo "::notice::SEAM — operator maintenance-window steps (run OUT-OF-BAND; CI will not perform these prod-writes):"
-              echo "  2.2a WEB-2 QUIESCE — MANDATORY, NOT AUTO-VERIFIED (DI-C3, tracked #6227). The 2.2 gate above probed only the LB-reachable host; the weight-0 warm-standby web-2 (10.0.1.11) self-arms oneshots into its OWN Redis independent of LB weight and was NOT individually confirmed quiesced by CI. Before arming the flip you MUST quiesce web-2 per the plan's web-2 freeze/recreate lifecycle (§Downtime): take web-2 OUT of the warm-standby rotation and recreate it onto the post-cutover config so no surviving web-2 scheduler self-arms a reminder into its local Redis. RISK IF SKIPPED: a reminder self-armed on an un-quiesced web-2 is silently dropped at cutover (its local Redis is never captured/re-armed). This is a lifecycle action (freeze → recreate), NOT a host shell step (AC-NOSSH). Do NOT proceed to arm the flip until web-2 is quiesced. Tracks #6227 (real per-host fan-out to auto-verify web-2)."
+              echo "  2.2a WEB-2 QUIESCE — MANDATORY, NOT AUTO-VERIFIED (DI-C3, tracked #6227). op=quiesce-web (when run) now stop+disables web-2's SCHEDULER over the private net (an ACT — a real improvement over operator-only web-2 handling), BUT CI still cannot VERIFY web-2 (LB-scoped) AND web-2's local reminders were NEVER captured (2.1 capture is also LB-scoped). The weight-0 warm-standby web-2 (10.0.1.11) self-arms oneshots into its OWN Redis independent of LB weight. So the web-2 freeze/recreate lifecycle REMAINS MANDATORY — do NOT read a green op=quiesce-web as 'web-2 handled'. Before arming the flip you MUST recreate web-2 onto the post-cutover config: take web-2 OUT of the warm-standby rotation and recreate it so no surviving web-2 scheduler self-arms a reminder into its local Redis. RISK IF SKIPPED: a reminder self-armed on an un-quiesced web-2 is silently dropped at cutover (its local Redis is never captured/re-armed). This is a lifecycle action (freeze → recreate), NOT a host shell step (AC-NOSSH). Do NOT proceed to arm the flip until web-2 is recreated. Tracks #6227 (real per-host fan-out to auto-verify web-2)."
               echo "  2.2b+2.3 ARM THE FLIP — three Doppler writes on soleur-inngest/prd (the enabled 30s poll timer picks them up):"
               echo "    1) doppler secrets set INNGEST_POSTGRES_URI=<prod-postgres-uri>   --project soleur-inngest --config prd"
               echo "    2) doppler secrets set INNGEST_HEARTBEAT_URL=<betteruptime inngest_prd heartbeat url> --project soleur-inngest --config prd"
@@ -610,8 +611,120 @@ jobs:
               echo "     Then CONFIRM the flip via Better Stack (the on-host Vector→Better Stack shipper carries the 'inngest-cutover-flip' log line): require exit_code:0 (P0-2). Do NOT SSH/cat the deny-all-public host to read state."
               echo "  2.4 APP-REPOINT — merge the ci-deploy.sh INNGEST_BASE_URL → http://10.0.1.40:8288 change (canary + prod sites) and redeploy so functions re-sync onto the dedicated host."
               echo "  THEN: op=rearm (re-arm the Σ=$SIGMA_CAPTURED captured reminders; gated on registry-non-empty) → op=verify (exactly-once)."
-              echo "  ROLLBACK / aborted-recovery (P0-1/P0-3/P1-13): (1) doppler secrets set INNGEST_CUTOVER_FLIP=rollback --project soleur-inngest --config prd (the enabled timer stops the dedicated scheduler; confirm rolled-back via Better Stack); (2) revert the ci-deploy.sh INNGEST_BASE_URL repoint back to loopback + redeploy; (3) systemctl enable inngest-server.service on EVERY web host in [$CUTOVER_HOSTS] (reverse of the operator-side 2.2 disable — restores the [Install] symlink so the scheduler survives a reboot), THEN run op=rollback (restarts web inngest across the host-set; op=rollback also prints this enable reminder)."
+              echo "  ROLLBACK / aborted-recovery (P0-1/P0-3/P1-13): (1) doppler secrets set INNGEST_CUTOVER_FLIP=rollback --project soleur-inngest --config prd (the enabled timer stops the dedicated scheduler; confirm rolled-back via Better Stack); (2) revert the ci-deploy.sh INNGEST_BASE_URL repoint back to loopback + redeploy; (3) run op=rollback — a SINGLE no-SSH 'enable inngest _ _' fan-out that re-enables (restores the [Install] symlink the 2.2 disable removed) AND starts the web scheduler across [$CUTOVER_HOSTS] in one flock-held handler, then polls deploy-status for the 'enabled' verdict. No operator systemctl step is needed (op=quiesce-web/op=rollback are the no-SSH quiesce/re-enable verbs)."
               echo "::notice::execute complete — SEAM emitted. CI performed NO prod-write; the flip + app-repoint are the operator's maintenance-window steps."
+              ;;
+
+            quiesce-web)
+              # op=quiesce-web (#6178) — the no-SSH remediation for a `2.2 QUIESCE HARD GATE
+              # FAILED / STILL RUNNING` verdict. Operators have NO SSH, so the co-located web
+              # scheduler cannot be stop+disabled by hand (hr-no-ssh-fallback-in-runbooks).
+              # POSTs `quiesce inngest _ _` + peers to /hooks/deploy (HMAC + CF-Access) which
+              # fans the stop+disable out per-host over the private net (mirrors op=rollback's
+              # restart fan-out), then re-run op=execute. This is a prod-write behind explicit
+              # dispatch (same trust model as op=rollback).
+              if [[ -z "${CUTOVER_HOSTS:-}" ]]; then
+                echo "::error::CUTOVER_HOSTS is empty — refusing to run quiesce-web against an empty host-set"; exit 1
+              fi
+              IFS=',' read -r -a HOSTS <<< "$CUTOVER_HOSTS"
+              if [[ "${#HOSTS[@]}" -lt 1 ]]; then
+                echo "::error::CUTOVER_HOSTS parsed to zero hosts (value: '$CUTOVER_HOSTS')"; exit 1
+              fi
+              echo "::notice::quiesce-web: stop+disabling inngest across host-set [$CUTOVER_HOSTS] (${#HOSTS[@]} host(s)) — no-SSH remediation for the 2.2 gate"
+              PAYLOAD=$(printf '{"command":"quiesce inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
+              SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              rm -f /tmp/quiesce-body
+              CODE=$(curl -s --max-time 60 -o /tmp/quiesce-body -w '%{http_code}' \
+                -X POST -H "Content-Type: application/json" \
+                -H "X-Signature-256: sha256=$SIG" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                -d "$PAYLOAD" \
+                "$BASE/deploy" || echo "000")
+              if [[ "$CODE" != "202" ]]; then
+                CAUSE="$(tr -d '\n\r' < /tmp/quiesce-body 2>/dev/null)"
+                echo "::error::quiesce-web webhook rejected (HTTP $CODE): ${CAUSE:-<empty body>}. UNKNOWN (000) means the webhook was unreachable — check CF-Access/HMAC + the run log, then re-dispatch. Do NOT SSH the host."; exit 1
+              fi
+              echo "::notice::quiesce-web: fan-out accepted (202) for [$CUTOVER_HOSTS] — polling deploy-status for the host-side quiesced verdict (do NOT immediate-probe: TimeoutStopSec=180 means the async stop can lag the 202)"
+              # POLL /hooks/deploy-status for the LB-reachable host's terminal inngest verdict.
+              # The host writes `quiesced` only AFTER its own verify_inngest_quiesced passes
+              # (not-serving AND unit-inactive AND not-enabled), so reason==quiesced/exit_code==0
+              # is the authoritative synchronous not-serving proof — STRONGER than the LB-routed
+              # inventory read. FRESH_FLOOR anchors on this trigger so a stale prior green isn't
+              # read (deploy-state is a single slot).
+              TRIGGER_TS=$(date +%s)
+              FRESH_FLOOR=$((TRIGGER_TS - 60))
+              GSIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              # Poll window ≥ host quiesce worst case (verify attempts × (interval+5) +
+              # TimeoutStopSec 180 + margin) — drift-guarded by ci-deploy.test.sh (#6178). The
+              # distinct QMAX_POLLS/QPOLL_INTERVAL names keep that grep unambiguous. 120×5=600s.
+              QMAX_POLLS=120
+              QPOLL_INTERVAL=5
+              QUIESCED=0
+              for i in $(seq 1 "$QMAX_POLLS"); do
+                rm -f /tmp/quiesce-status
+                curl -s --max-time 10 -o /tmp/quiesce-status -w '%{http_code}' \
+                  -X GET \
+                  -H "X-Signature-256: sha256=$GSIG" \
+                  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                  "$BASE/deploy-status" >/dev/null || true
+                BODY=$(cat /tmp/quiesce-status 2>/dev/null || echo "")
+                if [ -z "$BODY" ] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
+                  echo "Attempt $i/$QMAX_POLLS: non-JSON/empty deploy-status — retrying"; sleep "$QPOLL_INTERVAL"; continue
+                fi
+                EXIT_CODE=$(echo "$BODY" | jq -r '.exit_code // -99')
+                REASON=$(echo "$BODY" | jq -r '.reason // "unknown"')
+                COMPONENT=$(echo "$BODY" | jq -r '.component // "unknown"')
+                START_TS=$(echo "$BODY" | jq -r '.start_ts // 0')
+                if [ "$COMPONENT" != "inngest" ]; then
+                  echo "Attempt $i/$QMAX_POLLS: last op was for $COMPONENT, not inngest — waiting"; sleep "$QPOLL_INTERVAL"; continue
+                fi
+                if [ "$START_TS" -lt "$FRESH_FLOOR" ]; then
+                  echo "Attempt $i/$QMAX_POLLS: state predates this trigger (start_ts=$START_TS < floor=$FRESH_FLOOR) — waiting"; sleep "$QPOLL_INTERVAL"; continue
+                fi
+                case "$REASON" in
+                  quiesced)
+                    echo "::notice::quiesce-web: host-side QUIESCED confirmed (reason=quiesced exit_code=$EXIT_CODE) — inngest not-serving AND not-enabled on the LB-reachable host"; QUIESCED=1; break ;;
+                  inngest_still_serving|inngest_still_enabled)
+                    echo "::error::2.2 quiesce FAILED (reason=$REASON): a persistent still-serving/still-enabled means the unit is being RESURRECTED — pull reason= from /hooks/deploy-status + Better Stack (logger -t ci-deploy) and investigate what restarts/re-enables it (e.g. a stray deploy re-enabling the unit). Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+                  quiesced_peer_fanout_unaccepted)
+                    echo "::error::2.2 quiesce: a PEER fan-out was NOT accepted (unreachable/HMAC-rejected — this is NON-ACCEPTANCE, NOT peer-not-quiesced; the peer's own verdict lands on the peer's deploy-status slot, DI-C3). Check the peer host's reachability + the run log, then re-dispatch. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+                  *)
+                    if [ "$EXIT_CODE" == "-1" ]; then
+                      echo "Attempt $i/$QMAX_POLLS: quiesce still running (reason=$REASON)"
+                    else
+                      # TERMINAL (exit_code != -1) but the reason matched no enumerated verdict —
+                      # fast-fail instead of polling to the full timeout (a reason rename would
+                      # otherwise silently degrade to a $((QMAX_POLLS * QPOLL_INTERVAL))s wait).
+                      echo "::error::unrecognized terminal reason $REASON (exit_code=$EXIT_CODE) — quiesce-web reached a terminal state that matched no known verdict; failing fast. Pull reason= from /hooks/deploy-status + Better Stack (logger -t ci-deploy). Do NOT SSH the host."; echo "$BODY" | jq .; exit 1
+                    fi
+                    ;;
+                esac
+                sleep "$QPOLL_INTERVAL"
+              done
+              if [[ "$QUIESCED" -ne 1 ]]; then
+                echo "::error::quiesce-web did not reach the terminal 'quiesced' verdict within $((QMAX_POLLS * QPOLL_INTERVAL))s. If the webhook was UNKNOWN/unreachable, re-dispatch; otherwise pull reason= from /hooks/deploy-status + Better Stack (logger -t ci-deploy). Do NOT SSH the host."; exit 1
+              fi
+              # SECONDARY confirm (LB-scoped, DI-C3): an inventory-non-200 mirrors the 2.2 gate's
+              # classification. The deploy-status `quiesced` reason above is the PRIMARY gate
+              # (host-side synchronous verify, stronger than the LB-routed inventory read).
+              GSIG2=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              rm -f /tmp/quiesce-inv
+              ICODE=$(curl -s --max-time 30 -o /tmp/quiesce-inv -w '%{http_code}' \
+                -X GET \
+                -H "X-Signature-256: sha256=$GSIG2" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                "$BASE/inngest-inventory" || echo "000")
+              if [[ "$ICODE" == "200" ]]; then
+                echo "::warning::quiesce-web: SECONDARY inventory read still returns HTTP 200 on the LB-reachable host — the host-side deploy-status reported quiesced but the LB may have routed this read to a still-serving host. Re-run op=execute's 2.2 gate to re-confirm before arming."
+              else
+                echo "::notice::quiesce-web: SECONDARY inventory confirm HTTP $ICODE (non-200) on the LB-reachable host — consistent with quiesced (DI-C3 LB-scoped)."
+              fi
+              # DI-C3 / web-2 scope (spec-flow Finding 4): the fan-out ACTs on web-2 but CI
+              # cannot VERIFY web-2 (LB-scoped) AND web-2's local reminders were never captured.
+              echo "::notice::quiesce-web complete (LB-reachable host verified quiesced via deploy-status). SCOPE (DI-C3): op=quiesce-web now stop+disables web-2's scheduler (an ACT), but CI cannot VERIFY web-2 AND web-2's local reminders were never captured — the operator web-2 freeze/recreate lifecycle (op=execute 2.2a) REMAINS MANDATORY. Do NOT read this green as 'web-2 handled'. Now re-run op=execute."
               ;;
 
             verify)
@@ -789,23 +902,16 @@ jobs:
               if [[ "${#HOSTS[@]}" -lt 1 ]]; then
                 echo "::error::CUTOVER_HOSTS parsed to zero hosts (value: '$CUTOVER_HOSTS')"; exit 1
               fi
-              echo "::notice::rollback: restarting inngest across host-set [$CUTOVER_HOSTS] (${#HOSTS[@]} host(s)) — reverse of 2.2 quiesce (P1-13)"
-              # SEAM (operator, out-of-band): the 2.2 quiesce was `systemctl stop + disable`
-              # (operator-side; CI has no stop/disable verb over the webhook). The webhook
-              # `restart` action below only runs `systemctl restart` — it STARTS a disabled unit
-              # but leaves the [Install] WantedBy symlink removed, so the web scheduler would
-              # silently drop on the next web-host reboot. The enable half of the reverse is
-              # therefore ALSO operator-side (mirroring the operator-side disable) and MUST run
-              # for a durable rollback:
-              echo "::notice::SEAM — operator: re-enable inngest so it survives a reboot (mirrors the operator-side 2.2 disable; run on EVERY host in [$CUTOVER_HOSTS], incl weight-0 web-2):"
-              echo "  systemctl enable inngest-server.service   # restores the [Install] symlink the 2.2 disable removed"
-              echo "  (the restart fan-out below then STARTS it; the enable is what makes it durable across reboots)"
-              # `restart inngest _ latest` = systemctl restart inngest-server (ci-deploy.sh
-              # restart action) — STARTS the (now operator-re-enabled) web scheduler, but does
-              # NOT itself re-enable it (systemctl restart never touches the [Install] symlink);
-              # the peers fan-out forwards it to every host over the private net (mirrors
-              # web-platform-release.yml).
-              PAYLOAD=$(printf '{"command":"restart inngest _ latest","peers":"%s"}' "$CUTOVER_HOSTS")
+              echo "::notice::rollback: re-enabling inngest across host-set [$CUTOVER_HOSTS] (${#HOSTS[@]} host(s)) — reverse of 2.2 quiesce (P1-13)"
+              # The reverse of 2.2 quiesce is now a SINGLE no-SSH `enable inngest _ _` verb
+              # (ci-deploy.sh) = enable + start + verify-serving-and-enabled in ONE flock-held
+              # handler. This is deliberately NOT two POSTs (an enable POST then a restart POST):
+              # the second POST races `flock -n` and can leave the unit enabled-but-stopped,
+              # reported as success (arch P1-1 / DI P2-C). The enable verb re-arms the
+              # [Install] symlink a quiesce-disable removed (a `restart` never touches it) so the
+              # web scheduler survives a reboot — no operator systemctl step. The peers fan-out
+              # forwards it to every host over the private net.
+              PAYLOAD=$(printf '{"command":"enable inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
               SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
               rm -f /tmp/rollback-body
               CODE=$(curl -s --max-time 60 -o /tmp/rollback-body -w '%{http_code}' \
@@ -817,28 +923,67 @@ jobs:
                 "$BASE/deploy" || echo "000")
               if [[ "$CODE" != "202" ]]; then
                 CAUSE="$(tr -d '\n\r' < /tmp/rollback-body 2>/dev/null)"
-                echo "::error::rollback restart webhook rejected (HTTP $CODE): ${CAUSE:-<empty body>}"; exit 1
+                echo "::error::rollback enable webhook rejected (HTTP $CODE): ${CAUSE:-<empty body>}. The webhook was unreachable — check CF-Access/HMAC + the run log, then re-dispatch. Do NOT SSH the host."; exit 1
               fi
-              echo "::notice::rollback: restart-inngest fan-out accepted (202) for [$CUTOVER_HOSTS] (the deploy peers path forwards the restart to EVERY host's private IP — this fan-out IS per-host)"
-              # Inventory confirm (HONESTY-SCOPED, DI-C3, tracked #6227): the
-              # restart above is a real per-host fan-out (peers), but this CONFIRM read resolves
-              # over the LB to 127.0.0.1:8288 on the LB-reachable host only — there is no
-              # host-targeting inventory hook (deferred infra). A 200 = inngest is serving the
-              # GQL again on the LB-reachable host; we do NOT claim per-host confirmation for
-              # weight-0 web-2 (the operator confirms web-2 via its freeze/recreate lifecycle).
+              echo "::notice::rollback: enable fan-out accepted (202) for [$CUTOVER_HOSTS] (the deploy peers path forwards enable+start to EVERY host's private IP — this fan-out IS per-host) — polling deploy-status for the host-side enabled verdict"
+              # POLL /hooks/deploy-status for the LB-reachable host's terminal inngest verdict —
+              # mirror the op=quiesce-web poll so the receiving host's inngest_enable_failed /
+              # inngest_start_failed / inngest_reenable_unverified / enabled_peer_fanout_unaccepted
+              # verdict is reachable from the run (not a fire-and-forget 202). FRESH_FLOOR-anchored.
+              TRIGGER_TS=$(date +%s)
+              FRESH_FLOOR=$((TRIGGER_TS - 60))
               GSIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-              rm -f /tmp/rollback-inv
-              ICODE=$(curl -s --max-time 30 -o /tmp/rollback-inv -w '%{http_code}' \
-                -X GET \
-                -H "X-Signature-256: sha256=$GSIG" \
-                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-                "$BASE/inngest-inventory" || echo "000")
-              if [[ "$ICODE" == "200" ]]; then
-                echo "::notice::rollback: inngest confirmed LIVE on the LB-reachable host (inventory HTTP 200). SCOPE (DI-C3): weight-0 web-2 not individually confirmed here — verify web-2 via its freeze/recreate lifecycle."
-              else
-                echo "::notice::rollback: inventory HTTP $ICODE on the LB-reachable host (async restart may still be settling; re-check, and confirm web-2 via its freeze/recreate lifecycle)."
+              RMAX_POLLS=120
+              RPOLL_INTERVAL=5
+              ENABLED=0
+              for i in $(seq 1 "$RMAX_POLLS"); do
+                rm -f /tmp/rollback-status
+                curl -s --max-time 10 -o /tmp/rollback-status -w '%{http_code}' \
+                  -X GET \
+                  -H "X-Signature-256: sha256=$GSIG" \
+                  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                  "$BASE/deploy-status" >/dev/null || true
+                BODY=$(cat /tmp/rollback-status 2>/dev/null || echo "")
+                if [ -z "$BODY" ] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
+                  echo "Attempt $i/$RMAX_POLLS: non-JSON/empty deploy-status — retrying"; sleep "$RPOLL_INTERVAL"; continue
+                fi
+                EXIT_CODE=$(echo "$BODY" | jq -r '.exit_code // -99')
+                REASON=$(echo "$BODY" | jq -r '.reason // "unknown"')
+                COMPONENT=$(echo "$BODY" | jq -r '.component // "unknown"')
+                START_TS=$(echo "$BODY" | jq -r '.start_ts // 0')
+                if [ "$COMPONENT" != "inngest" ]; then
+                  echo "Attempt $i/$RMAX_POLLS: last op was for $COMPONENT, not inngest — waiting"; sleep "$RPOLL_INTERVAL"; continue
+                fi
+                if [ "$START_TS" -lt "$FRESH_FLOOR" ]; then
+                  echo "Attempt $i/$RMAX_POLLS: state predates this trigger (start_ts=$START_TS < floor=$FRESH_FLOOR) — waiting"; sleep "$RPOLL_INTERVAL"; continue
+                fi
+                case "$REASON" in
+                  enabled)
+                    echo "::notice::rollback: host-side ENABLED confirmed (reason=enabled exit_code=$EXIT_CODE) — inngest re-enabled + serving on the LB-reachable host"; ENABLED=1; break ;;
+                  inngest_enable_failed|inngest_start_failed|inngest_reenable_unverified)
+                    echo "::error::rollback re-enable FAILED (reason=$REASON): pull reason= from /hooks/deploy-status + Better Stack (logger -t ci-deploy) and investigate. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+                  enabled_peer_fanout_unaccepted)
+                    echo "::error::rollback: a PEER enable fan-out was NOT accepted (unreachable/HMAC-rejected — NON-ACCEPTANCE, not peer-not-enabled; DI-C3). Check the peer host + re-dispatch. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+                  *)
+                    if [ "$EXIT_CODE" == "-1" ]; then
+                      echo "Attempt $i/$RMAX_POLLS: enable still running (reason=$REASON)"
+                    else
+                      # TERMINAL (exit_code != -1) but the reason matched no enumerated verdict —
+                      # fast-fail instead of polling to the full timeout (a reason rename would
+                      # otherwise silently degrade to a $((RMAX_POLLS * RPOLL_INTERVAL))s wait).
+                      echo "::error::unrecognized terminal reason $REASON (exit_code=$EXIT_CODE) — rollback enable reached a terminal state that matched no known verdict; failing fast. Pull reason= from /hooks/deploy-status + Better Stack (logger -t ci-deploy). Do NOT SSH the host."; echo "$BODY" | jq .; exit 1
+                    fi
+                    ;;
+                esac
+                sleep "$RPOLL_INTERVAL"
+              done
+              if [[ "$ENABLED" -ne 1 ]]; then
+                echo "::error::rollback did not reach the terminal 'enabled' verdict within $((RMAX_POLLS * RPOLL_INTERVAL))s. If the webhook was unreachable, re-dispatch; otherwise pull reason= from /hooks/deploy-status + Better Stack. Do NOT SSH the host."; exit 1
               fi
+              # web-2 is ACTed by the fan-out but its verdict is acceptance-only (DI-C3, same
+              # honesty as quiesce) — the LB-reachable host is the only one CI positively verified.
+              echo "::notice::rollback complete (LB-reachable host verified enabled via deploy-status). SCOPE (DI-C3): web-2 is re-enabled by the fan-out but not individually VERIFIED here — confirm web-2 via its freeze/recreate lifecycle."
               ;;
 
             *)
