@@ -44,16 +44,17 @@
 # API (same posture as doppler_service_token.write / .inngest / .registry). State-loss recovery
 # is `-replace` (mints a new token, orphans the old one — revoke manually).
 #
-# Human ack (D5/C4): unlike doppler_service_token.write (a repo-wide github_actions_secret
-# readable by every workflow), this key is published as a GitHub ENVIRONMENT secret under the
-# `inngest-cutover` environment with a REQUIRED-REVIEWER protection rule. A workflow_dispatch is
-# only repo `actions:write` — weaker than the Doppler-console credentials the manual arm-write
-# required; the environment's required-reviewer gate restores that human ack. The op=arm /
-# op=rollback jobs declare `environment: inngest-cutover`, so the reviewer must approve the
-# dispatch before the token resolves. The dispatch + environment approval IS the ack; there is
-# no interactive pre-write value confirmation, by design (AC-NOBODY forbids echoing the values).
+# Human ack (D5/C4): a workflow_dispatch alone is only repo `actions:write` — weaker than the
+# Doppler-console credentials the manual arm-write required. The `inngest-cutover` GitHub
+# Environment (below) carries a REQUIRED-REVIEWER protection rule, and the op=arm / op=rollback
+# jobs declare `environment: inngest-cutover`, so the run is held in "Waiting" for reviewer
+# approval BEFORE any step executes — that approval IS the human ack. (The token itself is a
+# repo-level github_actions_secret, not an environment secret, because the TF App cannot write
+# environment secrets — see the resource comment below; the reviewer gate lives on the JOB, so
+# the ack holds regardless.) There is no interactive pre-write value confirmation, by design
+# (AC-NOBODY forbids echoing the values).
 #
-# autonomy-considered: provider-mint-applied (App auth + doppler_service_token + github env secret).
+# autonomy-considered: provider-mint-applied (App auth + doppler_service_token + github repo secret).
 
 resource "doppler_service_token" "inngest_arm_write" {
   project = doppler_project.inngest.name         # by-reference (builds the dep edge; NOT a bare string literal)
@@ -75,15 +76,23 @@ resource "github_repository_environment" "inngest_cutover" {
   }
 }
 
-# The write token published as an ENVIRONMENT secret (NOT a repo-wide github_actions_secret —
-# that would be readable by every workflow, defeating the required-reviewer scoping). Resolvable
-# ONLY to a job that declares `environment: inngest-cutover` and passed the reviewer gate.
-# NO lifecycle.ignore_changes → a `-replace` rotation of the token propagates the new key here in
-# the same apply (do NOT add ignore_changes = [plaintext_value]: it would strand the secret on
-# the old, soon-revoked key).
-resource "github_actions_environment_secret" "doppler_token_inngest_arm" {
+# The write token published as a REPO-level github_actions_secret. It was originally an ENVIRONMENT
+# secret (github_actions_environment_secret) so it would resolve ONLY in a job that passed the
+# inngest-cutover reviewer gate — but the TF GitHub App lacks permission to write ENVIRONMENT
+# secrets: the first apply failed 403 "Resource not accessible by integration" on
+# `environments/inngest-cutover/secrets/public-key`, while repo secrets (see
+# `github_actions_secret.doppler_token_write`) DO apply cleanly under the same App. So the token is
+# a repo secret and the required-reviewer HUMAN-ACK is preserved a DIFFERENT way: the op=arm /
+# op=rollback JOB declares `environment: inngest-cutover` (the github_repository_environment above),
+# which holds the run in "Waiting" for reviewer approval BEFORE any step executes — independent of
+# where the secret lives. Residual exposure: the token is readable by every workflow (the same
+# exposure class as doppler_token_write, an equally read/write Doppler token), bounded by the
+# conditional injection (`inputs.op == 'arm' && secrets.DOPPLER_TOKEN_INNGEST_ARM || ''`) and the
+# post-cutover revoke. Upgrade back to an environment secret if the App is later granted
+# environment-secret write. NO lifecycle.ignore_changes → a `-replace` rotation of the token
+# propagates the new key here in the same apply (do NOT add ignore_changes = [plaintext_value]).
+resource "github_actions_secret" "doppler_token_inngest_arm" {
   repository      = "soleur"
-  environment     = github_repository_environment.inngest_cutover.environment
   secret_name     = "DOPPLER_TOKEN_INNGEST_ARM"
   plaintext_value = doppler_service_token.inngest_arm_write.key
 }

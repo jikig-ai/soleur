@@ -266,11 +266,15 @@ the existing `op=rollback` verb. This removes the last operator secret-write sea
   AC-NOBODY forbids echoing the values.
 - **Provisioning (reconciles `hr-all-infrastructure-provisioning`).** The write **token** is
   TF-provisioned (`doppler_service_token.inngest_arm_write`, read/write on the isolated
-  `soleur-inngest/prd`, published as the `inngest-cutover` **environment** secret
-  `DOPPLER_TOKEN_INNGEST_ARM`). This is the **first CI-consumed read/write token into the isolated
-  `soleur-inngest` project** — prior tokens there are read-only host-boot (`inngest-host.tf:173`);
-  CI can now WRITE `soleur-inngest/prd`. The token is a **standing read handle to the armed prod
-  DSN** once op=arm runs, so it is revoked post-cutover.
+  `soleur-inngest/prd`, published as the repo secret `DOPPLER_TOKEN_INNGEST_ARM`). The human-ack
+  gate is the `inngest-cutover` GitHub **Environment** (required-reviewer) declared on the op=arm /
+  op=rollback **job** — the run waits for approval before any step executes. (The token is a repo
+  secret rather than an environment secret because the TF GitHub App lacks permission to write
+  environment secrets — a first-apply 403; the reviewer gate on the job preserves the ack either
+  way. Fixed forward in #6369-followup.) This is the **first CI-consumed read/write token into the
+  isolated `soleur-inngest` project** — prior tokens there are read-only host-boot
+  (`inngest-host.tf:173`); CI can now WRITE `soleur-inngest/prd`. The token is a **standing read
+  handle to the armed prod DSN** once op=arm runs, so it is revoked post-cutover.
 - **Source-of-truth: read-through, no seed (CTO decision at /work).** The two source *values*
   remain out-of-band (they are not TF `doppler_secret` resources — dark-window heartbeat masking +
   a DB password TF never minted, `inngest-host.tf:137-166`). op=arm reads them **read-through from
