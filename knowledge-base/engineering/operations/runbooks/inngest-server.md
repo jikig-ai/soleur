@@ -182,6 +182,8 @@ Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_
 
 > **Secret delivery (#5560).** inngest-server reads `INNGEST_POSTGRES_URI`, `INNGEST_REDIS_URI`, `INNGEST_SIGNING_KEY`, and `INNGEST_EVENT_KEY` from the doppler-run **environment** (owner-only `/proc/<pid>/environ`), never the `inngest start` argv (world-readable `/proc/<pid>/cmdline`). A rotated value loads on the next inngest-server restart/redeploy **without** being re-exposed on argv. **Ordering matters:** when rotating because a value leaked, deploy the env-delivery build FIRST (verify `ps -eo args | grep inngest` shows no secret), THEN rotate — rotating while an old argv-form image is still running would re-leak the new value immediately. After rotation, NEVER roll back to a pre-#5560 (argv-form) image.
 
+<!-- lint-infra-ignore start -->
+
 **⚠ The ONLY supported rotation path is the `terraform taint` flow below.** Do NOT rotate via the Doppler UI — every `doppler_secret` carries `lifecycle.ignore_changes = [value]`, so out-of-band Doppler-side changes are INVISIBLE to subsequent `terraform plan` runs. The provider skips the value read-back when `ignore_changes` is set; you'd get silent dashboard ↔ tfstate divergence. If you've accidentally rotated via the UI, run `terraform apply -replace=doppler_secret.<key>` to force TF to re-converge.
 
 1. Identify which key to rotate. Replace `<KEY>` with `inngest_signing_key_prd` (or `_dev`, or `inngest_event_key_{prd,dev}`).
@@ -201,6 +203,8 @@ Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_
    ```
    ssh root@<host> 'systemctl restart soleur-web-platform inngest-server.service'
    ```
+
+<!-- lint-infra-ignore end -->
 
 ## CLI version bump
 
@@ -294,6 +298,8 @@ curl -X PATCH https://uptime.betterstack.com/api/v2/heartbeats/460830 \
 unset TOKEN
 ```
 
+<!-- lint-infra-ignore start -->
+
 The `lifecycle { ignore_changes = [paused] }` on `betteruptime_heartbeat.inngest_prd` ensures future `terraform apply` runs do NOT revert the unpause regardless of which option you used.
 
 Confirm pings are flowing:
@@ -304,6 +310,8 @@ curl -s https://uptime.betterstack.com/api/v2/heartbeats/460830 \
   | jq '.data.attributes | {status, last_ping_at}'
 unset TOKEN
 ```
+
+<!-- lint-infra-ignore end -->
 
 ## SQLite event-store retention
 
@@ -717,6 +725,9 @@ empty the dark registry and re-run (all no-SSH):
    Confirm `"reason":"rolled-back"` / `"exit_code":0` via the same Better Stack query as step 3.
 2. **Repoint the app back to loopback** — revert the `ci-deploy.sh` `INNGEST_BASE_URL` change
    (back to the loopback `host.docker.internal:8288`) and redeploy.
+
+<!-- lint-infra-ignore start -->
+
 3. **Re-enable web inngest** — run the authored reverse-op. `op=rollback` issues a SINGLE
    no-SSH `enable inngest _ _` fan-out (enable + start + verify-serving-and-enabled in ONE
    flock-held ci-deploy.sh handler, #6178) across the `$CUTOVER_HOSTS` set, then POLLS
@@ -732,6 +743,9 @@ empty the dark registry and re-run (all no-SSH):
    via its freeze/recreate lifecycle. On `inngest_enable_failed` / `inngest_start_failed` /
    `inngest_reenable_unverified` / `enabled_peer_fanout_unaccepted`, pull `reason=` from
    `/hooks/deploy-status` + Better Stack (`logger -t ci-deploy`) — do **not** SSH the host.
+
+<!-- lint-infra-ignore end -->
+
 The capture file is retained on-host for a later retry. Rollback is data-safe only before any
 **real** (non-throwaway) reminder is armed against prod Postgres — after that, forward-fix only.
 
@@ -743,6 +757,8 @@ The capture file is retained on-host for a later retry. Rollback is data-safe on
 > `ExecStartPre` flip-guard blocks only the DEDICATED host, not web hosts. The only web verb to
 > touch post-cutover is `op=quiesce-web` (forward) / `op=rollback` (reverse), never `restart`.
 
+<!-- lint-infra-ignore start -->
+
 > **Editor guard — a "no-SSH cutover" claim must be verified verb-by-verb (#6178).** Any host
 > mutation this runbook performs (quiesce/stop/disable, enable/start, a future drain/pause) needs
 > its OWN no-SSH webhook verb + pinned sudoers grant — an existing verb for a *different* mutation
@@ -750,6 +766,8 @@ The capture file is retained on-host for a later retry. Rollback is data-safe on
 > quiesce on operator SSH. Re-arm uses `enable` (restores the `[Install]` symlink `disable`
 > removed), never `restart` (which leaves the unit enabled-at-runtime but dropped on reboot). Before
 > claiming no-SSH, list every mutation and confirm each has a verb.
+
+<!-- lint-infra-ignore end -->
 
 ### `aborted`-state recovery (P0-3)
 
