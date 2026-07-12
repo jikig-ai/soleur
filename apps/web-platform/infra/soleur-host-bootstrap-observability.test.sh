@@ -524,8 +524,10 @@ fi
 # The seed pull (AC19) + app pull (AC20) bakes weren't enough: soleur-host-bootstrap.sh had a
 # THIRD unhardened `timeout 15 doppler secrets get GHCR_READ_*` login for the inngest-bootstrap
 # image pull. On a cold host it skipped docker login → anonymous inngest pull → /var/lib/inngest
-# never created → webhook.service 226/NAMESPACE → :9000 unbound → peer fan-out degraded. Fix:
-# bootstrap prefers the baked /etc/default/soleur-ghcr-read, hardened doppler fallback.
+# never created. (The "→ webhook.service 226/NAMESPACE → :9000 unbound → peer fan-out degraded"
+# downstream is SEVERED as of #6090 — webhook.service now marks /var/lib/inngest `-`-optional; an
+# absent dir no longer wedges the unit. This bake still matters when web_colocate_inngest is ON.)
+# Fix: bootstrap prefers the baked /etc/default/soleur-ghcr-read, hardened doppler fallback.
 if grep -qF '/etc/default/soleur-ghcr-read' "$BOOT"; then
   ok "AC21: soleur-host-bootstrap ghcr_login prefers the baked /etc/default/soleur-ghcr-read"
 else

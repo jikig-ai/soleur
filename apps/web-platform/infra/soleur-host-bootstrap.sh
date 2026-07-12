@@ -189,8 +189,11 @@ STAGE=ghcr_login
   # cold host even when Doppler answers EMPTY at the boot instant — the same failure class the
   # cloud-init ghcr_login (#6090) and the ci-deploy prelude (#6161) already bake against. An
   # empty fetch here skipped docker login → anonymous inngest pull → /var/lib/inngest never
-  # created → webhook.service fails 226/NAMESPACE (it ReadWritePaths=/var/lib/inngest) → :9000
-  # never binds → the peer fan-out degrades. Hardened Doppler fallback (timeout 45 + 3-try retry).
+  # created. (The old downstream "→ webhook.service 226/NAMESPACE → :9000 never binds → peer
+  # fan-out degrades" chain is SEVERED as of #6090: webhook.service now marks /var/lib/inngest
+  # `-`-optional, so an absent dir no longer wedges the unit. This baked-creds path still matters
+  # when web_colocate_inngest is ON — the inngest pull itself needs auth.) Hardened Doppler
+  # fallback (timeout 45 + 3-try retry).
   GHCR_USER=""; GHCR_TOKEN=""
   if [ -r /etc/default/soleur-ghcr-read ]; then
     # shellcheck disable=SC1091
