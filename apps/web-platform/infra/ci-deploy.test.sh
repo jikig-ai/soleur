@@ -92,6 +92,37 @@ MOCK
 create_mock_systemctl() {
   cat > "$1/systemctl" << 'MOCK'
 #!/bin/bash
+# Verb-aware systemctl mock (#6178). The quiesce/enable verify helpers issue
+# read-only `is-active`/`is-enabled` queries whose OUTPUT + exit code drive the
+# quiesce/enable verdict, so a blanket exit-0 mock would mask them. Per-verb fail
+# toggles let a test drive a TOLERATED stop/disable non-zero vs a GENUINE failure.
+verb="$1"
+case "$verb" in
+  is-active)
+    # `is-active [--quiet] <unit>`. Default: inactive (systemd exit 3). A test that
+    # needs "unit still ACTIVE despite /health down" (arch P2-3) arms MOCK_SYSTEMCTL_ACTIVE=1.
+    if [[ "${MOCK_SYSTEMCTL_ACTIVE:-}" == "1" ]]; then echo active; exit 0; fi
+    echo inactive; exit 3
+    ;;
+  is-enabled)
+    # Echo the unit's enabled-state; exit 0 iff enabled (systemd convention).
+    # Default "disabled" (a clean quiesced unit). Tests override via
+    # MOCK_SYSTEMCTL_ENABLED_STATE (e.g. static | enabled).
+    state="${MOCK_SYSTEMCTL_ENABLED_STATE:-disabled}"
+    echo "$state"
+    case "$state" in enabled|enabled-runtime) exit 0 ;; *) exit 1 ;; esac
+    ;;
+  show)
+    # `show -p ExecStart …` — no output (the durable-backend branch stays skipped
+    # in tests, matching pre-#6178 blanket-mock behavior).
+    exit 0
+    ;;
+  stop)    [[ "${MOCK_SYSTEMCTL_STOP_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+  disable) [[ "${MOCK_SYSTEMCTL_DISABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+  enable)  [[ "${MOCK_SYSTEMCTL_ENABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+  start)   [[ "${MOCK_SYSTEMCTL_START_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+esac
+# restart + any other verb honor the legacy blanket fail toggle (existing tests).
 if [[ "${MOCK_SYSTEMCTL_FAIL:-}" == "1" ]]; then
   exit 1
 fi
@@ -385,6 +416,18 @@ case "$URL" in
     exit 0
     ;;
   *"8288/health"*)
+    # Counter-driven serve schedule (#6178 quiesce pessimism): serve 200 ONLY on the
+    # probe numbers in MOCK_CURL_INNGEST_HEALTH_SERVE_ON (csv), fail otherwise. Lets a
+    # test drive "fail on probe 1, serve on probe 2" to prove the quiesce verify keeps
+    # probing (all-probes-must-fail) instead of early-returning quiesced on probe 1.
+    if [[ -n "${MOCK_CURL_INNGEST_HEALTH_COUNTER:-}" ]]; then
+      _n=$(cat "$MOCK_CURL_INNGEST_HEALTH_COUNTER" 2>/dev/null || echo 0); _n=$((_n + 1))
+      printf '%s' "$_n" > "$MOCK_CURL_INNGEST_HEALTH_COUNTER"
+      if [[ ",${MOCK_CURL_INNGEST_HEALTH_SERVE_ON:-}," == *",$_n,"* ]]; then
+        write_body '{"status":200,"message":"OK"}'; exit 0
+      fi
+      exit 1
+    fi
     if [[ "${MOCK_CURL_INNGEST_HEALTH_FAIL:-}" == "1" ]]; then
       exit 1
     fi
@@ -2391,6 +2434,155 @@ assert_state_contains "deploy inngest restart latest rejected as image_mismatch"
   "image_mismatch" "1" \
   "deploy inngest restart latest"
 
+# --- Quiesce / enable action tests (#6178 — no-SSH web-host scheduler quiesce) ---
+echo ""
+echo "--- Quiesce / enable action (#6178) ---"
+
+# AC-Q1: quiesce inngest succeeds → not-serving (health fails) AND not-enabled (default
+# is-enabled=disabled) → reason quiesced, exit 0. The verify is the gate.
+assert_state_contains "quiesce inngest succeeds (not-serving + not-enabled)" \
+  "quiesced" "0" \
+  "quiesce inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
+
+# AC-Q2: already-stopped idempotency — the sudo stop exits non-zero (absent/already-down)
+# but is TOLERATED; the verify (health down, unit disabled) still declares quiesced.
+assert_state_contains "quiesce tolerates an already-stopped/absent unit (stop non-zero)" \
+  "quiesced" "0" \
+  "quiesce inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_STOP_FAIL=1"
+
+# AC-Q3: BENIGN disable tolerance — disable exits non-zero on a unit with NO [Install]
+# section (is-enabled → static). Tolerated → quiesced, exit 0.
+assert_state_contains "quiesce tolerates a benign disable non-zero (is-enabled=static)" \
+  "quiesced" "0" \
+  "quiesce inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_DISABLE_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=static"
+
+# AC-Q4: GENUINE disable failure fail-closed (data-integrity P1-A) — disable fails AND
+# is-enabled still reports `enabled` (a unit WITH an [Install] section) → the serving-only
+# verify would MISS this; the enabled-state assertion catches it → inngest_still_enabled, exit 1.
+assert_state_contains "quiesce fails closed when the unit stays enabled (inngest_still_enabled)" \
+  "inngest_still_enabled" "1" \
+  "quiesce inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_DISABLE_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# AC-Q5: still-serving fail-closed — the default mock serves /health 200 → the goal
+# state (not-serving) is unmet → inngest_still_serving, exit 1.
+assert_state_contains "quiesce fails closed when inngest still serves (inngest_still_serving)" \
+  "inngest_still_serving" "1" \
+  "quiesce inngest _ _"
+
+# AC-Q6: unit still ACTIVE despite /health down (arch P2-3) — a scheduler executing
+# queued jobs can outlive /health; the is-active assertion catches it → inngest_still_serving.
+assert_state_contains "quiesce fails closed when /health is down but the unit is still active" \
+  "inngest_still_serving" "1" \
+  "quiesce inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_ACTIVE=1"
+
+# AC-Q7: non-inngest component rejected (mirror component_not_restartable).
+assert_state_contains "quiesce web-platform rejected (component_not_quiescible)" \
+  "component_not_quiescible" "1" \
+  "quiesce web-platform _ _"
+
+# AC-E1: enable inngest = enable + start + verify-serving-and-enabled → enabled, exit 0.
+# Default mock: /health 200 (serving); is-enabled=enabled (re-enable confirmed).
+assert_state_contains "enable inngest succeeds (enable + start + verify serving+enabled)" \
+  "enabled" "0" \
+  "enable inngest _ _" \
+  "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# AC-E2: enable is idempotent — an already-enabled unit (enable exits 0) still verifies → enabled.
+assert_state_contains "enable is idempotent on an already-enabled unit" \
+  "enabled" "0" \
+  "enable inngest _ _" \
+  "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# AC-E3: start failure fail-closed → inngest_start_failed, exit 1.
+assert_state_contains "enable fails closed when start fails (inngest_start_failed)" \
+  "inngest_start_failed" "1" \
+  "enable inngest _ _" \
+  "export MOCK_SYSTEMCTL_START_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# AC-E4: enable failure fail-closed → inngest_enable_failed, exit 1.
+assert_state_contains "enable fails closed when enable fails (inngest_enable_failed)" \
+  "inngest_enable_failed" "1" \
+  "enable inngest _ _" \
+  "export MOCK_SYSTEMCTL_ENABLE_FAIL=1"
+
+# AC-E5: started but not serving (health fails) → inngest_reenable_unverified, exit 1.
+assert_state_contains "enable fails closed when serving is unverified (inngest_reenable_unverified)" \
+  "inngest_reenable_unverified" "1" \
+  "enable inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# AC-E6: served but unit not enabled after enable (is-enabled=disabled) → inngest_reenable_unverified.
+assert_state_contains "enable fails closed when the unit is not enabled afterward" \
+  "inngest_reenable_unverified" "1" \
+  "enable inngest _ _" \
+  "export MOCK_SYSTEMCTL_ENABLED_STATE=disabled"
+
+# AC-E7: non-inngest component rejected.
+assert_state_contains "enable web-platform rejected (component_not_enableable)" \
+  "component_not_enableable" "1" \
+  "enable web-platform _ _"
+
+# AC-Q8: PESSIMISTIC not-serving (all probes must fail) — a return-on-first-failure impl
+# would falsely read quiesced. Bespoke: use a REAL multi-count seq (the shared mock returns
+# only "1") so the verify loop runs >1 probe; health FAILS on probe 1 then SERVES on probe 2.
+# The correct all-probes-must-fail impl continues past the probe-1 failure, sees the probe-2
+# serve, and declares still-serving. A naive early-return-on-first-failure would wrongly
+# declare quiesced after probe 1.
+run_quiesce_pessimism() {
+  (
+    export SSH_ORIGINAL_COMMAND="quiesce inngest _ _"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$1"
+    create_base_mocks "$MOCK_DIR"
+    rm -f "$MOCK_DIR/seq"   # use the REAL multi-count seq, not the single-"1" mock
+    # Small probe budget so the real multi-iteration loop stays fast.
+    export QUIESCE_PROBE_ATTEMPTS=3 QUIESCE_PROBE_INTERVAL=0
+    # Health: fail on probe 1, serve on probe 2 (counter file).
+    export MOCK_CURL_INNGEST_HEALTH_COUNTER="$MOCK_DIR/hcount"
+    export MOCK_CURL_INNGEST_HEALTH_SERVE_ON="2"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    bash "$DEPLOY_SCRIPT" >/dev/null 2>&1
+  )
+}
+TOTAL=$((TOTAL + 1))
+PESS_STATE=$(mktemp)
+run_quiesce_pessimism "$PESS_STATE" && PESS_RC=0 || PESS_RC=$?
+read_state_reason_and_exit "$PESS_STATE" PESS_REASON PESS_EXIT
+if [[ "$PESS_REASON" == "inngest_still_serving" && "$PESS_EXIT" == "1" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: quiesce verify is PESSIMISTIC (a serve on probe 2 blocks quiesced) — reason=$PESS_REASON"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: quiesce pessimism (expected inngest_still_serving/1; got $PESS_REASON/$PESS_EXIT)"
+  echo "        state: $(cat "$PESS_STATE")"
+fi
+rm -f "$PESS_STATE"
+
+# Wiring guard: `restart` STAYS PURE — it must NEVER fold in an enable/re-enable (a
+# post-cutover restart-inngest-server.yml on a web host would otherwise re-arm the
+# deliberately-disabled scheduler → double-fire; Premise #3 + security regression guard).
+TOTAL=$((TOTAL + 1))
+# Scope to the restart handler ONLY (it now precedes the quiesce/enable handlers, which
+# legitimately DO enable/disable). Range: the restart handler comment → the quiesce handler comment.
+RESTART_BLOCK=$(awk '/^# --- Restart action handler/,/^# --- Quiesce action handler/' "$DEPLOY_SCRIPT")
+if ! printf '%s\n' "$RESTART_BLOCK" | grep -qE 'systemctl (enable|disable)'; then
+  PASS=$((PASS + 1))
+  echo "  PASS: restart handler stays pure (no enable/disable folded in) — #6178 regression guard"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: restart handler must NOT enable/disable inngest (re-arm footgun; Premise #3)"
+fi
+
 # Regression guard for #5062: the long-running foreground docker children
 # (prune/pull) MUST close the FD-200 advisory lock (`200>&-`) so an orphaned
 # child (bash SIGKILLed mid-`docker pull`, TERM trap never dispatched) cannot
@@ -2637,6 +2829,47 @@ if [[ "$DG_OK" -eq 1 ]]; then
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: client/server budget drift guard (#5145): $DG_WHY (health=$DG_HEALTH interval=$DG_INTERVAL cron=$DG_CRON stop=$DG_STOP MAX_POLLS=$DG_MAX_POLLS POLL_INTERVAL=$DG_POLL_INTERVAL left=$DG_LEFT right=$DG_RIGHT; files: ci-deploy.sh, inngest-bootstrap.sh, .github/workflows/restart-inngest-server.yml)"
+fi
+
+# #6178 quiesce-web poll drift guard (sibling of the #5145 restart guard): the
+# op=quiesce-web deploy-status poll window in cutover-inngest.yml must cover the host-side
+# quiesce worst case: verify_inngest_quiesced attempts × (interval + 5 per-probe curl tail)
+# + TimeoutStopSec (the systemd stop the webhook fires asynchronously can consume before the
+# host writes `quiesced`) + a webhook/flock/client-curl margin. Extracted BY SHAPE (not
+# pinned literals) — the distinct QMAX_POLLS/QPOLL_INTERVAL names in the quiesce-web arm keep
+# this grep unambiguous vs the other polls in that workflow.
+TOTAL=$((TOTAL + 1))
+CUTOVER_WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/cutover-inngest.yml"
+QDG_ATTEMPTS=$(grep -oE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
+QDG_INTERVAL=$(grep -oE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
+QDG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+QDG_MAX_POLLS=$(grep -oE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+QDG_POLL_INTERVAL=$(grep -oE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+# Exactly-one-assignment guards so a duplicate/zero match can't silently skew the inequality.
+QDG_ATTEMPTS_COUNT=$(grep -cE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" || true)
+QDG_INTERVAL_COUNT=$(grep -cE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" || true)
+QDG_MAX_POLLS_COUNT=$(grep -cE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" || true)
+QDG_POLL_INTERVAL_COUNT=$(grep -cE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" || true)
+QDG_OK=1
+QDG_WHY=""
+for pair in "attempts:$QDG_ATTEMPTS" "interval:$QDG_INTERVAL" "stop:$QDG_STOP" "qmax:$QDG_MAX_POLLS" "qint:$QDG_POLL_INTERVAL"; do
+  if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then QDG_OK=0; QDG_WHY="non-integer extraction: ${pair%%:*}"; fi
+done
+for pair in "attempts:$QDG_ATTEMPTS_COUNT" "interval:$QDG_INTERVAL_COUNT" "qmax:$QDG_MAX_POLLS_COUNT" "qint:$QDG_POLL_INTERVAL_COUNT"; do
+  if [[ "$QDG_OK" -eq 1 && "${pair#*:}" -ne 1 ]]; then QDG_OK=0; QDG_WHY="expected exactly one match for ${pair%%:*} (got ${pair#*:})"; fi
+done
+QDG_LEFT=""; QDG_RIGHT=""
+if [[ "$QDG_OK" -eq 1 ]]; then
+  QDG_LEFT=$((QDG_MAX_POLLS * QDG_POLL_INTERVAL))
+  QDG_RIGHT=$((QDG_ATTEMPTS * (QDG_INTERVAL + 5) + QDG_STOP + 60))
+  if [[ "$QDG_LEFT" -lt "$QDG_RIGHT" ]]; then QDG_OK=0; QDG_WHY="quiesce-web poll window ${QDG_LEFT}s < host worst case ${QDG_RIGHT}s"; fi
+fi
+if [[ "$QDG_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: op=quiesce-web poll window (${QDG_LEFT}s) covers host quiesce worst case (${QDG_RIGHT}s) — #6178 drift guard"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: quiesce-web poll drift guard (#6178): $QDG_WHY (attempts=$QDG_ATTEMPTS interval=$QDG_INTERVAL stop=$QDG_STOP QMAX_POLLS=$QDG_MAX_POLLS QPOLL_INTERVAL=$QDG_POLL_INTERVAL; files: ci-deploy.sh, inngest-bootstrap.sh, .github/workflows/cutover-inngest.yml)"
 fi
 
 echo ""
