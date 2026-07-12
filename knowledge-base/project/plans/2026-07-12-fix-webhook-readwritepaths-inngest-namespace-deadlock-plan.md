@@ -20,6 +20,27 @@ date: 2026-07-12
 
 🐛 **Bug** · P1 · `apps/web-platform/infra` · closes #6090 (this peel)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-12 · **Threshold:** aggregate pattern · **Lane:** cross-domain (TR2 default)
+
+**Hard gates (all PASS):** 4.6 User-Brand Impact ✓ · 4.7 Observability (5-field, no-SSH discoverability) ✓ ·
+4.8 PAT-shaped scan (none) ✓ · 4.9 UI-wireframe (no UI surface → skip) ✓. Conditional gates fired &
+satisfied: **4.5 Network-Outage** (SSH/firewall in Hypotheses) and **4.55 Downtime & Cutover** (web-2
+`-replace`) — subsections added below; telemetry emitted.
+
+### Key improvements over the plan draft
+1. **Precedent-diff (Phase 4.4) grounded:** the `-`-optional fix is not novel — `webhook.service:40-44`
+   already documents the identical `-/var/lib/vector` / `-/etc/vector` treatment (PR #4257). Side-by-side
+   diff added under Design Decision Research Insights.
+2. **Lockstep discovery elevated to a first-class risk:** two byte-identical RWP copies
+   (`cloud-init.yml:245` templated + `webhook.service:45` non-templated) — the reason Option A is rejected.
+3. **Network-Outage Deep-Dive + Downtime & Cutover** subsections prove the change is neither a
+   connectivity fault nor a serving-surface outage (web-2 is a weight-0, no-ingress standby; blue-green
+   by construction).
+4. All load-bearing line citations (245 / 578 / 581 / 636 / `variables.tf:350` / workflow `:1209`)
+   re-verified live in this pass.
+
 ## Overview
 
 A fresh web-2 boot dies with a deterministic systemd **226/NAMESPACE** unit failure: `webhook.service`'s
@@ -115,6 +136,39 @@ the baked-DSN `webhook_bound` beacon. The L3→L7 ladder is explicitly ruled out
 Diagnosis is **off-host only** (baked-DSN boot beacons + Better Stack markers). **No SSH to the deny-all
 hosts** (`hr-no-ssh-fallback-in-runbooks`).
 
+### Network-Outage Deep-Dive (Phase 4.5 — gate fired)
+
+The gate fired on the "SSH"/"firewall" substrings. Resource-shape sub-trigger also considered: the
+`web-2-recreate` apply `-replace`s `hcloud_server.web["web-2"]`, and `deploy_pipeline_fix` carries `file`
++ `remote-exec` provisioners — BUT the web-2 verification is deliberately **off-host** (web-2 has no
+public ingress; the fan-out + acceptance run over web-1's `/hooks/deploy-status`, no SSH into web-2).
+Layer-by-layer verification status:
+
+| Layer | Status | Artifact / rationale |
+| --- | --- | --- |
+| L3 firewall allow-list | **not implicated** | `:9000` is a local bind that never occurs; no outbound at the failing step. `hcloud_firewall.web` unchanged (this PR touches only the systemd unit). |
+| L3 DNS / routing | **not implicated** | no name resolution / route exercised by the webhook enable step. |
+| L7 TLS / proxy | **not implicated** | no HTTPS in the failing path. |
+| L7 application (systemd) | **root cause** | `226/NAMESPACE` = config-time mount-namespace refusal, not connectivity. Off-host signal = baked-DSN `webhook_bound` beacon + web-1 deploy-status `reason`. |
+
+No firewall/egress mutation is proposed; per `hr-ssh-diagnosis-verify-firewall` the L3 layer is verified
+(unchanged) before the service-layer fix.
+
+## Downtime & Cutover (Phase 4.55 — gate fired)
+
+**Offline-inducing operation:** `apply_target=web-2-recreate` performs a scoped `terraform -replace` of
+`hcloud_server.web["web-2"]` (a host-replace, which triggers the reboot/replace class).
+
+**Surface affected:** web-2 only — a **weight-0 warm-standby with no public ingress** that is **not
+currently serving traffic** (it never bound `:9000`, which is the bug). web-1 continues serving throughout.
+
+**Zero-downtime path (default, satisfied by construction):** blue-green. web-2 is born fresh from cloud-init
+into the private network / placement group; there is no user traffic to drain (weight-0, no ingress), and
+web-1 is untouched. The `-replace` is scoped to the single web-2 address set — nothing else is destroyed
+or rebooted. Per-stage rollback: if the recreate fails, web-2 simply stays absent (its prior state), web-1
+unaffected; re-run is idempotent. **Residual user-facing downtime: none.** No maintenance window or
+operator sign-off required — no serving surface goes offline.
+
 ## Design Decision — `-`-optional (Option B), not a templatefile guard (Option A)
 
 The task offered two shapes. **Choose Option B (`-/var/lib/inngest`) decisively.**
@@ -142,6 +196,31 @@ The task offered two shapes. **Choose Option B (`-/var/lib/inngest`) decisively.
 
 Not ADR-worthy: this restores an existing boot invariant using an established in-file precedent; no
 ownership / substrate / resolver / trust-boundary changes (see Architecture Decision below).
+
+### Research Insights — precedent diff (Phase 4.4)
+
+The `-`-optional form is the canonical in-repo pattern for a `ReadWritePaths` target that a later
+bootstrap step creates. Verbatim precedent at `apps/web-platform/infra/webhook.service:40-44`:
+
+```
+# `-` prefix on /var/lib/vector + /etc/vector marks them optional:
+# systemd silently ignores the path if absent, instead of refusing to set up
+# the mount namespace (which on prior PR #4257 took webhook.service down
+# entirely until the dirs were created). Once inngest-bootstrap.sh creates
+# them on first v1.1.x deploy, they become real ReadWritePaths.
+```
+
+Side-by-side (current → fixed), identical token in both lockstep files:
+
+```
+- ReadWritePaths=… /etc/webhook /var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
++ ReadWritePaths=… /etc/webhook -/var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
+```
+
+`/var/lib/inngest` is created by the **same** `inngest-bootstrap.sh` that creates the vector dirs
+(`inngest-bootstrap.sh:123` `mkdir -p /var/lib/inngest`) — so it belongs in the same optional class. The
+fix simply extends the #4257 decision to the one sibling token that was left mandatory. **Not novel; no
+"pattern is novel" caveat needed.**
 
 ## Implementation Phases
 
