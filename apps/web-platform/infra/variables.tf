@@ -83,7 +83,13 @@ variable "web_hosts" {
   }))
   default = {
     "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
-    "web-2" = { location = "hel1", private_ip = "10.0.1.11" }
+    # web-2 sits in a DIFFERENT DC from web-1's hel1 (DC-failure resilience). A same-DC
+    # warm standby gives no protection against a hel1 outage, and a `-replace` recreate
+    # DURING a hel1 capacity shortage destroyed web-2 then could not re-place it, wedging
+    # every apply-on-merge on `resource_unavailable` (2026-07-13, #6374 follow-on). fsn1 is
+    # eu-central (10.0.1.0/24 spans it, network.tf) + EU (CLO T-1). Cross-DC hosts cannot
+    # share the location-scoped web_spread placement group — server.tf gates that.
+    "web-2" = { location = "fsn1", private_ip = "10.0.1.11" }
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])

@@ -109,7 +109,11 @@ resource "hcloud_server" "web" {
   # Spread across distinct physical hosts within the EU location (HA). Attaching to
   # the RUNNING web-1 forces a power-off → maintenance-window apply (an in-place
   # reboot, NOT a replace — verify `0 to destroy` in the plan before applying).
-  placement_group_id = hcloud_placement_group.web_spread.id
+  # A Hetzner placement group is LOCATION-scoped: a host in a different DC than web-1
+  # cannot join web_spread, so it gets null. That is not a downgrade — a cross-DC host
+  # is already spread from web-1 at the DC level (stronger HA than same-DC spread), and
+  # it stays placeable when web-1's DC is capacity-starved (2026-07-13: web-2 hel1→fsn1).
+  placement_group_id = each.value.location == var.web_hosts["web-1"].location ? hcloud_placement_group.web_spread.id : null
 
   # #5921 — the 22 bootstrap scripts + hooks.json were REMOVED from this map (they blew
   # the 32,768-byte Hetzner user_data cap). They are now baked into var.image_name and
