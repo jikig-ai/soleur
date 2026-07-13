@@ -351,14 +351,16 @@ jobs:
           #   pool          → [ci/inngest-pool]              session-pool pressure/exhaustion (do-NOT-restart remediation)
           #   pool-probe    → [ci/inngest-pool-probe]        the pool probe itself is degraded (401/scope/non-JSON) — NOT pool-hot
           #   liveness-probe→ [ci/inngest-probe-unavailable] the LIVENESS probe path is unavailable (404/000/403 — deploy race /
-          #                   CF-Access / webhook.service degrade). SOFT — NO restart, and a DISTINCT title from
-          #                   [ci/inngest-down] so it never pollutes the Defect-3 age gate (#6374).
+          #                   CF-Access / webhook.service degrade) OR the watchdog's own secrets are unset (secret_unset).
+          #                   SOFT — NO restart, and a DISTINCT title from [ci/inngest-down] so it never pollutes the
+          #                   Defect-3 age gate (#6374). secret_unset routes here (not `down`): the watchdog could not
+          #                   probe, so a restart it never dispatched must not be claimed, and this must not seed the age gate.
           #   down          → [ci/inngest-down]              the liveness restart body (down / unhealthy)
           case "$FAIL_MODE" in
-            pool_pressure|pool_exhausted) ISSUE_CLASS="pool" ;;
-            pool_probe_unavailable)       ISSUE_CLASS="pool-probe" ;;
-            probe_unavailable)            ISSUE_CLASS="liveness-probe" ;;
-            *)                            ISSUE_CLASS="down" ;;
+            pool_pressure|pool_exhausted)    ISSUE_CLASS="pool" ;;
+            pool_probe_unavailable)          ISSUE_CLASS="pool-probe" ;;
+            probe_unavailable|secret_unset)  ISSUE_CLASS="liveness-probe" ;;
+            *)                               ISSUE_CLASS="down" ;;
           esac
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
@@ -454,7 +456,10 @@ jobs:
               # human-attention label (idempotent — guarded on label absence so we escalate
               # once, not every */15 cycle). The Sentry heartbeat keeps paging regardless
               # (it keys off failure_mode, not dispatch).
-              if [[ "$RESTART_OK" == "false" ]]; then
+              if [[ "$RESTART_OK" == "true" ]]; then
+                # A restart WAS dispatched this cycle (the age gate permitted it) — truthful claim.
+                gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Restart re-dispatched. Run: ${RUN_URL}"
+              elif [[ "$RESTART_OK" == "false" ]]; then
                 HAS_ESCALATION=$(gh issue view "$EXISTING" --repo "$GH_REPO" --json labels --jq '[.labels[].name] | index("ci/inngest-restart-exhausted") // empty')
                 if [[ -z "$HAS_ESCALATION" ]]; then
                   gh label create "ci/inngest-restart-exhausted" --repo "$GH_REPO" \

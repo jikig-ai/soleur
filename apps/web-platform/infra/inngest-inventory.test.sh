@@ -428,6 +428,20 @@ test_liveness_only_fails_loud_on_down() {
   else echo "  FAIL: liveness down did not emit the FATAL sentinel"; FAIL=$((FAIL+1)); fi
 }
 
+# #6374 review (security-sentinel): the FATAL body liveness mode returns on a real down is
+# the webhook response (include-command-output-in-response-on-error) → it MUST scrub a DSN in
+# the functions-query errors[].message (the #6283 class, pinned here for the LIVENESS path —
+# the pre-existing DSN test only covered the eventsV2 read path).
+test_liveness_only_scrubs_dsn_from_fatal() {
+  local ff; ff=$(mktemp); trap 'rm -f "$ff"' RETURN
+  printf '%s' '{"errors":[{"message":"FATAL: password authentication failed for postgres://u:p@10.0.1.40:5432/db"}],"data":null}' > "$ff"
+  local out rc=0
+  out=$(run_inv_liveness "$ff") || rc=$?
+  assert_eq "liveness DSN-in-error exits non-zero (fail-loud)" "1" "$rc"
+  if [[ "$out" == *"postgres://u:p@10.0.1.40"* ]]; then echo "  FAIL: DSN leaked verbatim into the liveness FATAL webhook body (#6283 regression)"; FAIL=$((FAIL+1));
+  else echo "  PASS: DSN scrubbed from the liveness FATAL webhook body"; PASS=$((PASS+1)); fi
+}
+
 # ===========================================================================
 # #6258 (ADR-106) — bounding + markers + completeness-by-construction
 # ===========================================================================
@@ -621,6 +635,7 @@ test_marker_tag_in_vector_allowlist() {
 test_liveness_only_skips_eventsv2
 test_liveness_only_durability_enum
 test_liveness_only_fails_loud_on_down
+test_liveness_only_scrubs_dsn_from_fatal
 test_durability_states
 test_durability_no_secret_leak
 test_durability_purity_preserved

@@ -106,7 +106,10 @@ function workflowHeartbeatSlugs(): string[] {
   for (const file of readdirSync(WORKFLOWS_DIR)) {
     if (!file.endsWith(".yml") && !file.endsWith(".yaml")) continue;
     const src = readFileSync(join(WORKFLOWS_DIR, file), "utf-8");
-    for (const m of src.matchAll(/^\s*monitor-slug:\s*([a-z0-9-]+)\s*$/gm)) {
+    // Tolerate an optionally-quoted slug + an optional trailing inline comment so a future
+    // emitter written `monitor-slug: "foo"` or `monitor-slug: foo  # note` cannot silently
+    // drop from the parity set (fail-open) — the exact class this guard exists to prevent.
+    for (const m of src.matchAll(/^\s*monitor-slug:\s*"?([a-z0-9-]+)"?\s*(?:#.*)?$/gm)) {
       slugs.add(m[1]);
     }
   }

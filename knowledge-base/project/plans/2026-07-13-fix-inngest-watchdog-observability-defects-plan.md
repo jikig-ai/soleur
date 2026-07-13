@@ -146,6 +146,8 @@ No cross-domain (product/marketing/sales/finance/legal/ops/support) implications
 
 ## Observability
 
+> **As-shipped correction (post-implementation):** this block was authored before the Option A/B fork was resolved. The shipped fix uses **Option A** — `inngest-inventory.sh` `INVENTORY_LIVENESS_ONLY` mode (the cheap `/v0/gql functions` query + `durability_state`, no eventsV2) exposed via the new `/hooks/inngest-liveness` GET hook — NOT a new `inngest-health.sh` / `curl /health` script. The liveness verdict rides the functions-query path; the on-host `curl 127.0.0.1:8288/health` HARD gate remains ci-deploy's boot gate. Heartbeat step is at `scheduled-inngest-health.yml` final step (`monitor-slug: scheduled-inngest-health`); the journald tag reuses the already-Better-Stack-allowlisted `inngest-inventory` tag (no vector.toml change). The `inngest-health.sh` / `/health` references below reflect the pre-decision Option-B draft.
+
 ```yaml
 liveness_signal:
   what: "scheduled-inngest-health.yml posts a Sentry Crons heartbeat (ok|error) each */15 run to the scheduled-inngest-health monitor"
