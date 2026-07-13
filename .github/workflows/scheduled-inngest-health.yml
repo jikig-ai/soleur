@@ -49,6 +49,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
+      # #6374: check out so the probe + age-gate steps can source the extracted,
+      # unit-tested classifier/age-gate helpers (scripts/inngest-liveness-classify.sh,
+      # scripts/inngest-restart-age-gate.sh) — the decision logic is out of the inline
+      # workflow bash and under scripts/*.test.sh coverage.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - id: probe
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
@@ -70,13 +75,19 @@ jobs:
             record_failure "secret_unset" "WEBHOOK_DEPLOY_SECRET / CF_ACCESS_* not set — cannot probe the inngest health hook."
           fi
 
-          # Health signal: the inngest-inventory hook GETs /v0/gql. HTTP 200 with a
-          # JSON object carrying .functions == inngest is up. 500 / __FETCH_FAILED__
-          # / non-JSON == inngest-server is down or /v0/gql unreachable.
-          # Probe up to 3x (8s apart) and only declare down if ALL fail — a single
-          # transient blip (CF Access hiccup, inventory timeout under load) must
-          # NOT trigger an unnecessary restart. Mirrors scheduled-realtime-probe's
-          # in-run retry resilience (its 5x SUBSCRIBED loop).
+          # Health signal (#6374 Defect 2): GET the LIVENESS-only hook, which runs
+          # inngest-inventory.sh in INVENTORY_LIVENESS_ONLY mode — the cheap /v0/gql
+          # functions query + durability_state ONLY, decoupled from the heavy 365-day
+          # eventsV2 scan whose faults false-positived as inngest_down (the #6374 root
+          # cause) while the executor kept firing crons. The extracted, unit-tested
+          # classifier (scripts/inngest-liveness-classify.sh) maps (HTTP code, body) →
+          # mode, distinguishing a GENUINE down (our FATAL sentinel body → inngest_down,
+          # restart) from a broken/undeployed probe path (404/000/403 with no sentinel →
+          # probe_unavailable, NO restart — the deploy-race tolerance / relocated
+          # false-positive fix). Probe up to 3x (8s apart): a single transient blip or a
+          # cold-start empty registry (functions_count==0) must NOT churn a restart.
+          # shellcheck source=/dev/null
+          source "$GITHUB_WORKSPACE/scripts/inngest-liveness-classify.sh"
           if [[ -z "$fail_mode" ]]; then
             SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
             last_mode=""; last_detail=""; healthy="no"
@@ -87,30 +98,38 @@ jobs:
                 -H "X-Signature-256: sha256=$SIG" \
                 -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
                 -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-                "https://deploy.soleur.ai/hooks/inngest-inventory" || echo "000")
+                "https://deploy.soleur.ai/hooks/inngest-liveness" || echo "000")
               BODY=$(cat /tmp/health-body 2>/dev/null || echo "")
-              if [[ "$CODE" != "200" ]]; then
-                cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
-                last_mode="inngest_down"; last_detail="attempt ${attempt}/3: inventory hook HTTP ${CODE}: ${cause:-<empty body>}"
-              elif ! printf '%s' "$BODY" | jq -e 'type == "object" and (.functions | type == "array")' >/dev/null 2>&1; then
-                cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
-                last_mode="inngest_unhealthy"; last_detail="attempt ${attempt}/3: inventory 200 but no functions array: ${cause}"
-              else
+              MODE=$(classify_liveness_mode "$CODE" "$BODY")
+              if [[ "$MODE" == "healthy" ]]; then
                 fn=$(printf '%s' "$BODY" | jq -r '.functions | length')
                 echo "Inngest healthy on attempt ${attempt}/3: functions=${fn}"
+                # On a healthy body, read the no-SSH durability surface (#5553): a
+                # constrained enum. An OLDER on-host script (pre-#5553) lacks the field →
+                # coerce to "absent" (benign, self-heals on next deploy). "unknown" means a
+                # redeployed host whose parser could not read the ExecStart (a read failure).
+                dstate=$(printf '%s' "$BODY" | jq -r '.durability_state // "absent"' 2>/dev/null || echo "absent")
                 healthy="yes"; break
               fi
-              echo "Probe attempt ${attempt}/3 failed (${last_mode}); retrying…"
+              cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
+              case "$MODE" in
+                cold_start)
+                  # functions_count==0 grace (#6374): a live-but-empty registry is legitimate
+                  # transiently after a restart. Retry; only a PERSISTENT empty registry across
+                  # all 3 attempts declares inngest_unhealthy (the Defect-3 age gate is the backstop).
+                  last_mode="inngest_unhealthy"; last_detail="attempt ${attempt}/3: liveness 200 but functions registry EMPTY (cold start) — grace/retry" ;;
+                inngest_down)
+                  last_mode="inngest_down"; last_detail="attempt ${attempt}/3: liveness hook HTTP ${CODE} inngest unreachable: ${cause:-<empty body>}" ;;
+                inngest_unhealthy)
+                  last_mode="inngest_unhealthy"; last_detail="attempt ${attempt}/3: liveness 200 but no functions array: ${cause}" ;;
+                probe_unavailable)
+                  last_mode="probe_unavailable"; last_detail="attempt ${attempt}/3: liveness probe path unavailable (HTTP ${CODE}, not a well-formed down) — deploy-race window or CF-Access/webhook.service degrade: ${cause:-<empty body>}" ;;
+                *)
+                  last_mode="probe_unavailable"; last_detail="attempt ${attempt}/3: unclassified probe response (HTTP ${CODE}): ${cause:-<empty body>}" ;;
+              esac
+              echo "Probe attempt ${attempt}/3: ${MODE}; retrying…"
               [[ "$attempt" -lt 3 ]] && sleep 8
             done
-            # On a healthy body, read the no-SSH durability surface (#5553). The
-            # inventory hook emits durability_state as a constrained enum; an OLDER
-            # on-host script (pre-#5553) lacks the field → coerce to "absent" (benign,
-            # self-heals on next deploy). A literal "unknown" means a redeployed host
-            # whose on-host parser could not read the ExecStart (a real read failure).
-            if [[ "$healthy" == "yes" ]]; then
-              dstate=$(printf '%s' "$BODY" | jq -r '.durability_state // "absent"' 2>/dev/null || echo "absent")
-            fi
             [[ "$healthy" == "no" ]] && record_failure "$last_mode" "$last_detail"
           fi
 
@@ -272,12 +291,40 @@ jobs:
             echo "::error::Inngest pool probe: ${fail_mode} — ${fail_detail_safe}"
           fi
 
-      # Auto-restart is dispatched ONLY for the down-family (inngest_down /
-      # inngest_unhealthy). pool_pressure / pool_exhausted / pool_probe_unavailable
-      # are structurally EXCLUDED — a restart churns more session connections and
-      # worsens EMAXCONNSESSION (#5558). Do NOT add pool modes to this gate.
-      - name: Auto-dispatch inngest restart (failure)
+      # Restart give-up AGE gate (#6374 Defect 3). Runs BEFORE the dispatch step for the
+      # down-family only. Reads the open [ci/inngest-down] issue's createdAt (ONE gh read,
+      # zero writes) and emits restart_ok via the extracted, unit-tested age-gate helper:
+      #   no open issue (first failure) → true (dispatch once)
+      #   age < GIVE_UP_WINDOW (~45 min ≈ 3 */15 cycles) → true
+      #   age >= GIVE_UP_WINDOW → false (give up — restarts exhausted)
+      # An age gate sidesteps the counter's chicken-and-egg (dispatch runs before the issue
+      # exists) + RMW clobber; recovery auto-closes the issue → next episode resets the age.
+      - name: Restart give-up age gate (#6374 Defect 3)
+        id: agegate
         if: steps.poolprobe.outputs.failure_mode == 'inngest_down' || steps.poolprobe.outputs.failure_mode == 'inngest_unhealthy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source "$GITHUB_WORKSPACE/scripts/inngest-restart-age-gate.sh"
+          GIVE_UP_WINDOW_MIN=45
+          CREATED=$(gh issue list --repo "$GH_REPO" --label ci/inngest-down --state open --json createdAt --jq '.[0].createdAt // empty')
+          RESTART_OK=$(restart_ok_from_age "$CREATED" "$GIVE_UP_WINDOW_MIN" "$(date -u +%s)")
+          echo "restart_ok=$RESTART_OK" >> "$GITHUB_OUTPUT"
+          echo "give-up age gate: restart_ok=$RESTART_OK (open [ci/inngest-down] createdAt='${CREATED:-<none>}', window=${GIVE_UP_WINDOW_MIN}m)"
+
+      # Auto-restart is dispatched ONLY for the down-family (inngest_down /
+      # inngest_unhealthy) AND while the age gate permits (restart_ok == 'true'). At
+      # give-up the dispatch is suppressed and the file-issue step escalates (loud
+      # "restarts exhausted" comment + human-attention label); the Sentry heartbeat keeps
+      # paging (it keys off failure_mode, not dispatch). pool_pressure / pool_exhausted /
+      # pool_probe_unavailable / probe_unavailable are structurally EXCLUDED — a restart
+      # churns more session connections (#5558) or a broken probe is not a real down.
+      # Do NOT add pool/probe modes to this gate.
+      - name: Auto-dispatch inngest restart (failure)
+        if: (steps.poolprobe.outputs.failure_mode == 'inngest_down' || steps.poolprobe.outputs.failure_mode == 'inngest_unhealthy') && steps.agegate.outputs.restart_ok == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -294,24 +341,58 @@ jobs:
           GH_REPO: ${{ github.repository }}
           FAIL_MODE: ${{ steps.poolprobe.outputs.failure_mode }}
           FAIL_DETAIL: ${{ steps.poolprobe.outputs.failure_detail }}
+          RESTART_OK: ${{ steps.agegate.outputs.restart_ok }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
           set -euo pipefail
-          # Branch the tracking issue on failure-mode CLASS, three distinct titles so
+          # Branch the tracking issue on failure-mode CLASS, four distinct titles so
           # auto-close never cross-matches:
-          #   pool  → [ci/inngest-pool]       session-pool pressure/exhaustion (do-NOT-restart remediation)
-          #   probe → [ci/inngest-pool-probe] the probe itself is degraded (401/scope/non-JSON) — NOT pool-hot;
-          #           a distinct title so an operator is not misled into pool remediation when the pool is fine
-          #   down  → [ci/inngest-down]       the existing liveness restart body
+          #   pool          → [ci/inngest-pool]              session-pool pressure/exhaustion (do-NOT-restart remediation)
+          #   pool-probe    → [ci/inngest-pool-probe]        the pool probe itself is degraded (401/scope/non-JSON) — NOT pool-hot
+          #   liveness-probe→ [ci/inngest-probe-unavailable] the LIVENESS probe path is unavailable (404/000/403 — deploy race /
+          #                   CF-Access / webhook.service degrade) OR the watchdog's own secrets are unset (secret_unset).
+          #                   SOFT — NO restart, and a DISTINCT title from [ci/inngest-down] so it never pollutes the
+          #                   Defect-3 age gate (#6374). secret_unset routes here (not `down`): the watchdog could not
+          #                   probe, so a restart it never dispatched must not be claimed, and this must not seed the age gate.
+          #   down          → [ci/inngest-down]              the liveness restart body (down / unhealthy)
           case "$FAIL_MODE" in
-            pool_pressure|pool_exhausted) ISSUE_CLASS="pool" ;;
-            pool_probe_unavailable)       ISSUE_CLASS="probe" ;;
-            *)                            ISSUE_CLASS="down" ;;
+            pool_pressure|pool_exhausted)    ISSUE_CLASS="pool" ;;
+            pool_probe_unavailable)          ISSUE_CLASS="pool-probe" ;;
+            probe_unavailable|secret_unset)  ISSUE_CLASS="liveness-probe" ;;
+            *)                               ISSUE_CLASS="down" ;;
           esac
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
-          if [[ "$ISSUE_CLASS" == "probe" ]]; then
+          if [[ "$ISSUE_CLASS" == "liveness-probe" ]]; then
+            # #6374 Defect 2: the LIVENESS probe path is unavailable (deploy-race window
+            # before /hooks/inngest-liveness lands, or a CF-Access / webhook.service
+            # degrade). SOFT — NO restart dispatched, and a title DISTINCT from
+            # [ci/inngest-down] so the Defect-3 age gate is never polluted. p2: the probe
+            # is dark, not a confirmed inngest-down. The Sentry heartbeat stays `ok` for
+            # this mode (see the check-in step) so a transient deploy-race window does not
+            # false-page — this issue is the surviving soft signal.
+            ISSUE_TITLE="[ci/inngest-probe-unavailable] Inngest liveness probe unavailable"
+            ISSUE_SEARCH='in:title "[ci/inngest-probe-unavailable] Inngest liveness probe unavailable"'
+            gh label create "ci/inngest-probe-unavailable" --repo "$GH_REPO" \
+              --description "External watchdog: the inngest LIVENESS probe path is unavailable (deploy race / CF-Access — NOT a confirmed down)" --color "5319E7" 2>/dev/null || true
+            {
+              printf '## Inngest liveness probe unavailable\n\n'
+              printf -- '- **Failure mode:** `%s`\n' "$FAIL_MODE"
+              printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
+              printf -- '- **Detected at:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf '### The probe path is unavailable — this is NOT a confirmed inngest-down\n\nThe `/hooks/inngest-liveness` GET returned a non-200 with no well-formed body (404/000/403). Most common cause: the **deploy-race window** right after the #6374 merge — the repointed workflow is live but the on-host hook has not landed yet (it ships async via the infra-config push). It also fires on a Cloudflare Access or `webhook.service` degrade. NO restart is dispatched (a restart cannot fix a broken probe path), and this does NOT open a `[ci/inngest-down]` issue.\n\n'
+              printf '### Remediation\n\n1. If this is right after the #6374 merge, WAIT one infra-config push cycle — `curl https://deploy.soleur.ai/hooks/inngest-liveness` (HMAC + CF-Access) should return the liveness JSON once the hook lands; the watchdog then auto-closes this issue.\n2. Otherwise check CF-Access / `webhook.service` health per `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
+            } > "$BODY_FILE"
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            if [[ -n "$EXISTING" ]]; then
+              gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Liveness probe still unavailable at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Run: ${RUN_URL}"
+            else
+              gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+                --label "ci/inngest-probe-unavailable" --label "priority/p2-medium" --body-file "$BODY_FILE"
+            fi
+          elif [[ "$ISSUE_CLASS" == "pool-probe" ]]; then
             ISSUE_TITLE="[ci/inngest-pool-probe] Inngest pool probe unavailable"
             ISSUE_SEARCH='in:title "[ci/inngest-pool-probe] Inngest pool probe unavailable"'
             gh label create "ci/inngest-pool-probe" --repo "$GH_REPO" \
@@ -368,7 +449,29 @@ jobs:
             } > "$BODY_FILE"
             EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
             if [[ -n "$EXISTING" ]]; then
-              gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Restart re-dispatched. Run: ${RUN_URL}"
+              # #6374 Defect 3: the comment text must be TRUTHFUL about whether a restart
+              # was actually dispatched (the age gate may have suppressed it). When
+              # restart_ok=false (>= GIVE_UP_WINDOW), escalate ONCE at the boundary: a loud
+              # "restarts exhausted" comment REPLACES the "re-dispatched" text + add a
+              # human-attention label (idempotent — guarded on label absence so we escalate
+              # once, not every */15 cycle). The Sentry heartbeat keeps paging regardless
+              # (it keys off failure_mode, not dispatch).
+              if [[ "$RESTART_OK" == "true" ]]; then
+                # A restart WAS dispatched this cycle (the age gate permitted it) — truthful claim.
+                gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Restart re-dispatched. Run: ${RUN_URL}"
+              elif [[ "$RESTART_OK" == "false" ]]; then
+                HAS_ESCALATION=$(gh issue view "$EXISTING" --repo "$GH_REPO" --json labels --jq '[.labels[].name] | index("ci/inngest-restart-exhausted") // empty')
+                if [[ -z "$HAS_ESCALATION" ]]; then
+                  gh label create "ci/inngest-restart-exhausted" --repo "$GH_REPO" \
+                    --description "External watchdog gave up auto-restarting inngest (>= give-up window) — human root-cause needed" --color "B60205" 2>/dev/null || true
+                  gh issue edit "$EXISTING" --repo "$GH_REPO" --add-label "ci/inngest-restart-exhausted" 2>/dev/null || true
+                  gh issue comment "$EXISTING" --repo "$GH_REPO" --body "🚨 RESTARTS EXHAUSTED at ${NOW} — inngest still \`${FAIL_MODE}\` after repeated auto-restarts (issue age >= 45 min). Auto-restart is now SUPPRESSED (a restart is not fixing it); human root-cause needed — likely a lost \`inngest-redis.service\` (durable backend crash-loop) or a config regression. See the #5542 incident + \`knowledge-base/engineering/operations/runbooks/inngest-server.md\`. Detail: ${FAIL_DETAIL}. Run: ${RUN_URL}"
+                else
+                  gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still \`${FAIL_MODE}\` at ${NOW}; auto-restart remains suppressed (age gate). Detail: ${FAIL_DETAIL}. Run: ${RUN_URL}"
+                fi
+              else
+                gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Restart re-dispatched. Run: ${RUN_URL}"
+              fi
             else
               gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
                 --label "ci/inngest-down" --label "priority/p1-high" --body-file "$BODY_FILE"
@@ -402,6 +505,13 @@ jobs:
             --search 'in:title "[ci/inngest-pool-probe] Inngest pool probe unavailable"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_PROBE" ]]; then
             gh issue close "$STALE_PROBE" --repo "$GH_REPO" --comment "Inngest pool probe healthy again at ${NOW}. Run: ${RUN_URL}"
+          fi
+          # #6374: close the liveness-probe-unavailable issue once the probe path is
+          # reachable AND healthy again (the deploy-race window closed / CF-Access recovered).
+          STALE_LIVENESS_PROBE=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/inngest-probe-unavailable] Inngest liveness probe unavailable"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE_LIVENESS_PROBE" ]]; then
+            gh issue close "$STALE_LIVENESS_PROBE" --repo "$GH_REPO" --comment "Inngest liveness probe reachable + healthy again at ${NOW}. Run: ${RUN_URL}"
           fi
 
       # --- #5553: continuous between-deploy durability detector ---------------
@@ -478,7 +588,13 @@ jobs:
         uses: ./.github/actions/sentry-heartbeat
         with:
           monitor-slug: scheduled-inngest-health
-          status: ${{ steps.poolprobe.outputs.failure_mode == '' && 'ok' || 'error' }}
+          # #6374: `probe_unavailable` (a broken/undeployed probe path — the deploy-race
+          # window, CF-Access/webhook.service degrade) checks in `ok`, NOT `error`. It is a
+          # SOFT signal surfaced via the [ci/inngest-probe-unavailable] issue, not a page —
+          # so a transient post-merge deploy-race tick does NOT false-page the operator
+          # (the relocated-false-positive fix). Only a CONFIRMED down/unhealthy/pool state
+          # flips the heartbeat to `error` → Sentry monitor-failure page.
+          status: ${{ (steps.poolprobe.outputs.failure_mode == '' || steps.poolprobe.outputs.failure_mode == 'probe_unavailable') && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

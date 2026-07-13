@@ -91,6 +91,18 @@ NOW_MS="${INVENTORY_NOW_MS:-$(date +%s%3N)}"
 FIXTURE_DIR="${INNGEST_GQL_FIXTURE_DIR:-}"
 REMINDER_FIXTURE_DIR="${INNGEST_REMINDER_FIXTURE_DIR:-}"
 FUNCTIONS_FIXTURE="${INVENTORY_FUNCTIONS_FIXTURE:-}"
+# --- Liveness-only mode (#6374, Defect 2) ---
+# The external inngest health watchdog (.github/workflows/scheduled-inngest-health.yml)
+# invokes this script through the /hooks/inngest-liveness hook with INVENTORY_LIVENESS_ONLY
+# set. In that mode we run ONLY the cheap /v0/gql `functions` liveness query + the
+# durability_state read and SKIP the heavy paginated eventsV2 scan (the 365-day read whose
+# deadline/page-ceiling/pool/gateway faults false-positived as inngest_down while the cron
+# executor kept firing — the #6374 root cause). The heavy full-inventory path is unchanged
+# for the cutover-baseline caller (/hooks/inngest-inventory, no flag). functions fail-loud
+# and durability purity are preserved verbatim; only the eventsV2 scans are elided
+# (event_names / armed_reminders emit as empty arrays — they are cutover-baseline fields,
+# not liveness signals).
+LIVENESS_ONLY="${INVENTORY_LIVENESS_ONLY:-}"
 
 # --- Bounding seams (#6258, ADR-106) ---
 # In-script wall-clock deadline. Default 22s < the outer curl 30s (cutover-inngest.yml:341);
@@ -396,6 +408,21 @@ run_inventory() {
     exit 1
   fi
   functions=$(echo "$fn_body" | jq -c '[ .data.functions[] | (.name // .slug // .id // empty) ] | sort')
+
+  # --- Liveness-only short-circuit (#6374): skip the heavy eventsV2 scans entirely.
+  # functions (above) + durability_state are the ONLY liveness signals; event_names /
+  # armed_reminders are cutover-baseline fields, emitted empty here. This decouples the
+  # liveness verdict from the 365-day read path whose faults caused the #6374 false-positive.
+  if [[ -n "$LIVENESS_ONLY" ]]; then
+    local durability_state_lo fn_count_lo
+    durability_state_lo=$(derive_durability_state)
+    fn_count_lo=$(echo "$functions" | jq 'length')
+    logger -t "$LOG_TAG" "liveness: functions=$fn_count_lo durability=$durability_state_lo mode=liveness_only" 2>/dev/null || true
+    _pf_done_marker
+    jq -nc --argjson f "$functions" --arg d "$durability_state_lo" \
+      '{functions:$f, event_names:[], armed_reminders:[], durability_state:$d}'
+    return 0
+  fi
 
   # --- bounded scans: spool + collapse via file I/O (no argv size limit, #5523) ---
   local pf_tmp

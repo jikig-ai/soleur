@@ -152,6 +152,29 @@
     }
   },
   {
+    "id": "inngest-liveness",
+    "__comment": "#6374 Defect 2: the EXTERNAL inngest health watchdog's lightweight liveness probe. Runs the ALREADY-STAGED inngest-inventory.sh in INVENTORY_LIVENESS_ONLY mode (static-string env source) so it executes ONLY the cheap /v0/gql functions query + durability_state and SKIPS the heavy 365-day eventsV2 scan whose faults false-positived as inngest_down (the #6374 root cause). Same script as /hooks/inngest-inventory — no new FILE_MAP row / push-infra-config payload / vector.toml tag (the inngest-inventory journald tag already covers it). include-command-output-in-response-on-error surfaces the FATAL body on a real down so the watchdog can classify inngest_down vs a broken/undeployed probe (404/000).",
+    "execute-command": "/usr/local/bin/inngest-inventory.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": true,
+    "include-command-output-in-response-on-error": true,
+    "http-methods": ["GET"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "pass-environment-to-command": [
+      { "source": "string", "name": "1", "envname": "INVENTORY_LIVENESS_ONLY" }
+    ],
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
     "id": "inngest-enumerate-reminders",
     "execute-command": "/usr/local/bin/inngest-enumerate-reminders.sh",
     "command-working-directory": "/",
