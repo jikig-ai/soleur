@@ -622,9 +622,12 @@ ghcr_prelude_and_login() {
   # the TOKEN reaches `docker login` via --password-stdin only and is unset so no child env
   # (docker/cosign subprocess) ever carries it.
   local k n ghcr_user="" ghcr_token=""
-  if [[ -r /etc/default/soleur-ghcr-read ]]; then
+  # SOLEUR_GHCR_READ_FILE overrides the baked-cred path for tests ONLY; production is the
+  # unchanged /etc/default/soleur-ghcr-read (cloud-init writes it deploy:deploy 0600).
+  local ghcr_read_file="${SOLEUR_GHCR_READ_FILE:-/etc/default/soleur-ghcr-read}"
+  if [[ -r "$ghcr_read_file" ]]; then
     # shellcheck disable=SC1091
-    . /etc/default/soleur-ghcr-read 2>/dev/null || true
+    . "$ghcr_read_file" 2>/dev/null || true
     ghcr_user="${GHCR_READ_USER:-}"; ghcr_token="${GHCR_READ_TOKEN:-}"
     unset GHCR_READ_TOKEN   # keep the token out of THIS process env + its children
   fi
@@ -650,7 +653,30 @@ ghcr_prelude_and_login() {
     if printf '%s' "$ghcr_token" | docker login ghcr.io -u "$ghcr_user" --password-stdin >/dev/null 2>&1; then
       logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok (private-package pull authenticated)"
     else
-      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED — private pull may fail-closed"
+      # §1A (#6090 recurrence, web-2 fsn1 warm-standby 2026-07-13): the baked GHCR read token
+      # is PRESENT but STALE — a fresh host's baked /etc/default/soleur-ghcr-read token ages
+      # out by deploy time, and the EMPTY-only Doppler fallback above only re-fetches an
+      # ABSENT cred, never a present-but-invalid one. Pre-fix, this login just failed non-
+      # fatally → anonymous private pull → registry 401 → Sentry `image pull failed
+      # (auth_denied)` → image_pull_failed → the warm standby never serves. Fix: on a login
+      # FAILURE (not only EMPTY), re-fetch the CURRENT creds from Doppler (hardened timeout
+      # 45 + 3-try idiom, mirroring the EMPTY path) and retry docker login ONCE. Fail-open: a
+      # retry miss still lets the pull's own failure path + pull_failure_event surface loudly.
+      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED with baked/first creds — re-fetching current creds from Doppler and retrying"
+      if command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]]; then
+        local du="" dt=""
+        n=0; until du="$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$du" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+        n=0; until dt="$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$dt" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+        if [[ -n "$du" && -n "$dt" ]] && printf '%s' "$dt" | docker login ghcr.io -u "$du" --password-stdin >/dev/null 2>&1; then
+          export GHCR_READ_USER="$du"   # the cosign :ro docker config now authenticates with the retried cred
+          logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok after Doppler re-fetch (recovered stale baked cred)"
+        else
+          logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io STILL FAILED after Doppler re-fetch — private pull may fail-closed"
+        fi
+        dt=""   # keep the retried token out of any child process env
+      else
+        logger -t "$LOG_TAG" "PRELUDE: docker login failed and doppler/DOPPLER_TOKEN unavailable — cannot re-fetch; private pull may fail-closed"
+      fi
     fi
   else
     logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present (baked file absent + doppler empty/unavailable) — skipping docker login"
