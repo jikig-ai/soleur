@@ -217,6 +217,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_compound_promote \
             -target=sentry_cron_monitor.scheduled_stale_deferred_scope_outs \
             -target=sentry_cron_monitor.scheduled_inngest_cron_watchdog \
+            -target=sentry_cron_monitor.scheduled_inngest_health \
             -target=sentry_cron_monitor.scheduled_bug_fixer \
             -target=sentry_cron_monitor.scheduled_content_generator \
             -target=sentry_cron_monitor.scheduled_ux_audit \

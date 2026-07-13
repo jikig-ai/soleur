@@ -23,6 +23,11 @@ const MONITORS_TF = resolve(
   __dirname,
   "../../../infra/sentry/cron-monitors.tf",
 );
+const WORKFLOWS_DIR = resolve(__dirname, "../../../../../.github/workflows");
+const APPLY_SENTRY_WORKFLOW = resolve(
+  WORKFLOWS_DIR,
+  "apply-sentry-infra.yml",
+);
 
 // Per ADR-033's prefix table, oneshot-* functions must declare NO monitor
 // slug (a crontab monitor pages MISSED forever after the single fire).
@@ -83,6 +88,128 @@ function iacResourceCount(): number {
   const tf = readFileSync(MONITORS_TF, "utf-8");
   return [...tf.matchAll(/^resource "sentry_cron_monitor" /gm)].length;
 }
+
+// ---------------------------------------------------------------------------
+// #6374 — GHA-workflow heartbeat-slug parity. The Inngest-cron guard above is
+// one-way (code → IaC). GHA workflows (scheduled-inngest-health, realtime-probe,
+// terraform-drift, …) heartbeat to Sentry via the `sentry-heartbeat` action with
+// a `monitor-slug:` — and those slugs ALSO need (a) a matching sentry_cron_monitor
+// in cron-monitors.tf AND (b) that resource in the apply-sentry-infra.yml
+// `-target=` allowlist (the workflow builds a SAVED plan against an explicit
+// -target set, so a monitor not in the list is declared-but-never-applied —
+// heartbeats into the void, the exact #6374 root cause). Guard BOTH clauses.
+// ---------------------------------------------------------------------------
+
+// Every `monitor-slug: <slug>` used by a .github/workflows/*.yml sentry-heartbeat step.
+function workflowHeartbeatSlugs(): string[] {
+  const slugs = new Set<string>();
+  for (const file of readdirSync(WORKFLOWS_DIR)) {
+    if (!file.endsWith(".yml") && !file.endsWith(".yaml")) continue;
+    const src = readFileSync(join(WORKFLOWS_DIR, file), "utf-8");
+    for (const m of src.matchAll(/^\s*monitor-slug:\s*([a-z0-9-]+)\s*$/gm)) {
+      slugs.add(m[1]);
+    }
+  }
+  return [...slugs].sort();
+}
+
+// Map each cron-monitor `name` (the Sentry slug) → its Terraform resource id, so a
+// workflow slug can be checked against the apply-sentry-infra.yml -target list
+// (which references the resource id, e.g. sentry_cron_monitor.scheduled_inngest_health).
+function tfSlugToResourceId(tf: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const re =
+    /^resource\s+"sentry_cron_monitor"\s+"([a-z0-9_]+)"\s*\{([\s\S]*?)^\}/gm;
+  for (const m of tf.matchAll(re)) {
+    const resourceId = m[1];
+    const nameMatch = m[2].match(/\n\s*name\s*=\s*"([a-z0-9-]+)"/);
+    if (nameMatch) map.set(nameMatch[1], resourceId);
+  }
+  return map;
+}
+
+// Resource ids present in the apply-sentry-infra.yml `-target=` allowlist.
+function applyTargetResourceIds(workflow: string): Set<string> {
+  const ids = new Set<string>();
+  for (const m of workflow.matchAll(
+    /-target=sentry_cron_monitor\.([a-z0-9_]+)/g,
+  )) {
+    ids.add(m[1]);
+  }
+  return ids;
+}
+
+// Pure gap detector (both clauses). Extracted so the deliberately-broken-fixture
+// tests can exercise EACH clause without mutating the tree.
+function workflowSlugGaps(
+  slugs: string[],
+  tf: string,
+  workflow: string,
+): { missingMonitor: string[]; missingTarget: string[] } {
+  const slugToId = tfSlugToResourceId(tf);
+  const targets = applyTargetResourceIds(workflow);
+  const missingMonitor: string[] = [];
+  const missingTarget: string[] = [];
+  for (const slug of slugs) {
+    const resourceId = slugToId.get(slug);
+    if (!resourceId) {
+      missingMonitor.push(slug);
+      continue; // no resource → the -target question is moot
+    }
+    if (!targets.has(resourceId)) missingTarget.push(slug);
+  }
+  return { missingMonitor, missingTarget };
+}
+
+describe("Sentry GHA-workflow heartbeat-slug parity (#6374)", () => {
+  it("discovers the known workflow-heartbeat slug cohort (anti-vacuity)", () => {
+    const slugs = workflowHeartbeatSlugs();
+    expect(slugs.length).toBeGreaterThanOrEqual(4);
+    expect(slugs).toContain("scheduled-inngest-health");
+    expect(slugs).toContain("scheduled-realtime-probe");
+  });
+
+  it("every workflow heartbeat slug has a cron-monitor AND an apply -target entry", () => {
+    const tf = readFileSync(MONITORS_TF, "utf-8");
+    const workflow = readFileSync(APPLY_SENTRY_WORKFLOW, "utf-8");
+    const { missingMonitor, missingTarget } = workflowSlugGaps(
+      workflowHeartbeatSlugs(),
+      tf,
+      workflow,
+    );
+    expect(
+      missingMonitor,
+      `workflow heartbeat slug(s) with NO sentry_cron_monitor in cron-monitors.tf ` +
+        `(Sentry silently drops check-ins to unknown slugs — the error heartbeat ` +
+        `pages nowhere): ${missingMonitor.join(", ")}`,
+    ).toEqual([]);
+    expect(
+      missingTarget,
+      `workflow heartbeat slug(s) whose sentry_cron_monitor is NOT in the ` +
+        `apply-sentry-infra.yml -target= allowlist (declared but never applied ` +
+        `— the monitor never materializes): ${missingTarget.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("clause A: a broken fixture (slug missing from cron-monitors.tf) is caught", () => {
+    const tf = 'resource "sentry_cron_monitor" "foo" {\n  name = "foo"\n}\n';
+    const workflow = "-target=sentry_cron_monitor.foo";
+    const { missingMonitor } = workflowSlugGaps(["orphan-slug"], tf, workflow);
+    expect(missingMonitor).toEqual(["orphan-slug"]);
+  });
+
+  it("clause B: a broken fixture (monitor present but not in -target) is caught", () => {
+    const tf = 'resource "sentry_cron_monitor" "bar" {\n  name = "bar-slug"\n}\n';
+    const workflow = "-target=sentry_cron_monitor.something_else";
+    const { missingMonitor, missingTarget } = workflowSlugGaps(
+      ["bar-slug"],
+      tf,
+      workflow,
+    );
+    expect(missingMonitor).toEqual([]);
+    expect(missingTarget).toEqual(["bar-slug"]);
+  });
+});
 
 describe("Sentry cron-monitor IaC parity", () => {
   it("discovers a sane slug universe (anti-vacuity: the extractor must find the known cohort)", () => {
