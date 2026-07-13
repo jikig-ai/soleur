@@ -215,3 +215,23 @@ silently dropped at cutover.
 consenting installation grants it, so a `GITHUB_APP_PRIVATE_KEY` leak post-multi-tenant reads
 every consenting tenant's packages. (The minted *token* remains 1h/single-install/read-only; the
 App *permission set* is what widens.) CPO-accepted as the prerequisite for zero-touch onboarding.
+
+### Amendment — baked-token staleness vs. minter TTL (#6090 recurrence, 2026-07-13)
+
+A minted read token is short-lived (1h) and rotated into `GHCR_READ_TOKEN` frequently, but a
+fresh Hetzner host **bakes** the value present at `user_data` render time into
+`/etc/default/soleur-ghcr-read`. On a warm standby that is created and then deployed-to minutes-
+to-hours later (e.g. a `web-2-recreate` followed by a release fan-out), the baked snapshot can go
+**stale-but-present** by deploy time. The consuming login paths originally re-fetched from Doppler
+**only when the baked value was EMPTY** — never when a present-but-expired token made `docker
+login` *fail*. Result (web-2 fsn1 warm standby, 2026-07-13): a non-fatal baked-login failure →
+anonymous private pull → registry 401 → Sentry `image pull failed (auth_denied)` → the standby
+never served.
+
+Consequence for this decision: consumers of the minted read token MUST treat a baked value as a
+cache that can expire, and re-fetch the CURRENT Doppler value + retry `docker login` on a login
+**FAILURE**, not only on EMPTY. Implemented (fail-open) in both login sites:
+`apps/web-platform/infra/ci-deploy.sh` (`ghcr_prelude_and_login`, the deploy path that actually
+failed) and `apps/web-platform/infra/cloud-init.yml` (the seed-pull `ghcr_login` block, the boot-
+path variant of the same class). No change to the minter, the token TTL, or the App permission
+set — this is a consumer-side staleness-tolerance note only.

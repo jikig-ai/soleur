@@ -486,7 +486,17 @@ runcmd:
       elif printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin > /run/soleur-ghcr-login.log 2>&1; then
         printf 'ghcr_login_ok' > /run/soleur-stage-detail
       else
-        printf 'ghcr_login_fail: %s' "$(tail -c 140 /run/soleur-ghcr-login.log 2>/dev/null)" > /run/soleur-stage-detail
+        # §1A (#6090): stale-but-present baked token fails login → re-fetch Doppler + retry once
+        # (mirrors ci-deploy.sh ghcr_prelude_and_login); still in the set +e subshell = fail-open.
+        RU=""; RT=""
+        n=0; until RU=$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null); [ -n "$RU" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done
+        n=0; until RT=$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null); [ -n "$RT" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done
+        if [ -n "$RU" ] && [ -n "$RT" ] && printf '%s' "$RT" | docker login ghcr.io -u "$RU" --password-stdin > /run/soleur-ghcr-login.log 2>&1; then
+          GHCR_USER="$RU"
+          printf 'ghcr_login_ok_refetch' > /run/soleur-stage-detail
+        else
+          printf 'ghcr_login_fail: %s' "$(tail -c 140 /run/soleur-ghcr-login.log 2>/dev/null)" > /run/soleur-stage-detail
+        fi
       fi
       # #6122/ADR-096: also log in to zot (dark — only when ZOT_* present) so the seed pull can
       # prefer it; login persists for the app + inngest pulls (bootstrap's zot_login is too late).

@@ -257,6 +257,29 @@ if [[ "${1:-}" == "inspect" ]]; then
   done
 fi
 
+# §1A (#6090 recurrence): docker login handler. Records each authenticated-login
+# attempt's USER (never the token) to MOCK_LOGIN_ARGS_FILE so a test can assert the
+# ghcr_prelude re-fetch-on-FAILURE path retried with the Doppler credential. Fails the
+# login iff the --password-stdin token equals MOCK_GHCR_LOGIN_FAIL_TOKEN (simulates a
+# present-but-STALE baked GHCR token → registry 401), else succeeds. Runs BEFORE the
+# mode case so it works in every mode; default (no fail-token armed) = login ok, matching
+# the pre-existing fall-through behavior every legacy login relied on.
+if [[ "${1:-}" == "login" ]]; then
+  _luser=""; _stdin=0; _prev=""
+  for _a in "$@"; do
+    [[ "$_a" == "--password-stdin" ]] && _stdin=1
+    [[ "$_prev" == "-u" ]] && _luser="$_a"
+    _prev="$_a"
+  done
+  _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$(cat)"
+  [[ -n "${MOCK_LOGIN_ARGS_FILE:-}" ]] && printf 'LOGIN:%s\n' "$_luser" >> "$MOCK_LOGIN_ARGS_FILE"
+  if [[ -n "${MOCK_GHCR_LOGIN_FAIL_TOKEN:-}" && "$_ltok" == "${MOCK_GHCR_LOGIN_FAIL_TOKEN}" ]]; then
+    echo "denied: authentication required" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
 # #6122: capture docker pull targets (MOCK_PULL_ARGS_FILE) so a test can assert WHICH
 # registry was pulled, and simulate a zot-only pull failure (MOCK_ZOT_PULL_FAIL) to
 # exercise the atomic GHCR fallback. Runs BEFORE the mode case so it works in default
@@ -3172,6 +3195,36 @@ else
   echo "  FAIL: L2 (rc=$L2_RC lease_present=$L2_LEASE; expected nonzero rc + lease retained)"
 fi
 rm -rf "$DTMP"
+
+# --- §1A (#6090 recurrence): ghcr_prelude re-fetches Doppler creds + retries docker
+# login on a baked-login FAILURE, not only when the baked value is EMPTY. Root cause of
+# web-2's fsn1 warm-standby not serving (2026-07-13): the fresh host's baked GHCR read
+# token in /etc/default/soleur-ghcr-read went STALE by deploy time; the EMPTY-only guard
+# never re-fetched the valid current Doppler cred → `docker login` failed (non-fatal) →
+# anonymous private pull → Sentry `image pull failed (auth_denied)` → image_pull_failed.
+# Faithful repro: a PRESENT-but-stale baked token whose login 401s; the fix must retry
+# with the Doppler cred (mock-GHCR_READ_USER). Under the pre-fix EMPTY-only code only ONE
+# login (the stale baked one) is attempted → this asserts the SECOND (Doppler) login.
+echo "--- §1A: baked-login failure → Doppler re-fetch + retry ---"
+S1A_DIR=$(mktemp -d)
+printf 'GHCR_READ_USER=baked-stale-user\nGHCR_READ_TOKEN=STALE_BAKED_TOKEN\n' > "$S1A_DIR/soleur-ghcr-read"
+export SOLEUR_GHCR_READ_FILE="$S1A_DIR/soleur-ghcr-read"
+export MOCK_GHCR_LOGIN_FAIL_TOKEN="STALE_BAKED_TOKEN"
+export MOCK_LOGIN_ARGS_FILE="$S1A_DIR/logins.txt"
+: > "$MOCK_LOGIN_ARGS_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
+TOTAL=$((TOTAL + 1))
+if grep -q '^LOGIN:baked-stale-user$' "$MOCK_LOGIN_ARGS_FILE" \
+   && grep -q '^LOGIN:mock-GHCR_READ_USER$' "$MOCK_LOGIN_ARGS_FILE"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: baked-login failure triggers Doppler re-fetch + retry (stale baked login, then Doppler login)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: expected a Doppler re-fetch + retry login (LOGIN:mock-GHCR_READ_USER) after the stale baked login failed"
+  echo "        logins captured:"; sed 's/^/          /' "$MOCK_LOGIN_ARGS_FILE"
+fi
+unset SOLEUR_GHCR_READ_FILE MOCK_GHCR_LOGIN_FAIL_TOKEN MOCK_LOGIN_ARGS_FILE
+rm -rf "$S1A_DIR"
 
 # Restore strict mode for the summary/exit.
 set -e -o pipefail

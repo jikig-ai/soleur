@@ -51,12 +51,17 @@ const HETZNER_CAP = 32_768;
 // call-sites, the ghcr_login baked-cred + hardened doppler fallback) and #6122's registry-migration
 // inline logic (the seed-block zot login + /run/soleur-image-ref resolution + the inngest IREF — all
 // MUST live in cloud-init since the seed pull runs pre-bootstrap, so a baked helper can't cover it).
-// Merged render ~19.3 KB. Re-baselined to 21,000 B: still a KB-scale re-inlining tripwire (a
-// re-inlined ≥1.7 KB blob trips it) and ~11.8 KB below HETZNER_CAP. When this climbs further, prefer
-// baking new host logic over inline cloud-init (the #5921 pattern) before raising again.
+// Merged render ~19.3 KB. Re-baselined to 21,500 B (#6090 recurrence, §1A): the deploy-path
+// auth_denied fix adds a fail-open Doppler re-fetch+retry to the seed-block ghcr_login on a
+// baked-login FAILURE (not only EMPTY). Like the original ghcr_login baked-cred fallback, this
+// MUST live inline in cloud-init (the seed pull runs pre-bootstrap, so a baked helper can't cover
+// it), so baking-instead-of-inline is not available here — the sanctioned path is a modest
+// re-baseline. Measured render ~21.06 KB; 21,500 B keeps a KB-scale re-inlining tripwire (a
+// re-inlined ~1.5+ KB blob trips it) and ~11.3 KB below HETZNER_CAP. When this climbs further,
+// prefer baking new host logic over inline cloud-init (the #5921 pattern) before raising again.
 // FLOOR is non-vacuity: a broken model gzipping near-nothing fails loudly. #5921's bake-and-extract
 // is RETAINED underneath — base64gzip is layered on top, not a reversal.
-const WEB_GZIP_BUDGET = 21_000;
+const WEB_GZIP_BUDGET = 21_500;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
