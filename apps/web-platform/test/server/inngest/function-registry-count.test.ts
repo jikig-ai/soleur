@@ -128,6 +128,13 @@ const NON_INNGEST_MONITORS = new Set([
   // class, deliberately NOT an Inngest function; its final sentry-heartbeat
   // step pings the check-in. Same class as scheduled-realtime-probe.
   "scheduled-zot-restart-loop",
+  // #6374: GHA-fired (scheduled-inngest-health.yml, on.schedule '*/15') — the
+  // EXTERNAL inngest health watchdog. It MUST be external to Inngest (a
+  // self-hosted inngest cron cannot detect inngest being down — the #5542 blind
+  // spot), so it has no cron-*.ts counterpart and declares no SENTRY_MONITOR_SLUG
+  // const; its final sentry-heartbeat step pings the check-in. Same class as
+  // scheduled-realtime-probe / scheduled-zot-restart-loop.
+  "scheduled-inngest-health",
 ]);
 
 describe("Inngest function registry — drift guards", () => {
