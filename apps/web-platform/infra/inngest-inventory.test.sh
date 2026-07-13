@@ -371,6 +371,64 @@ test_durability_drift_guard() {
 }
 
 # ===========================================================================
+# #6374 (Defect 2) — INVENTORY_LIVENESS_ONLY mode: the external health watchdog
+# reuses THIS script as a lightweight liveness probe. In liveness mode it runs
+# ONLY the cheap /v0/gql functions query + durability_state and SKIPS the heavy
+# paginated eventsV2 scan (the false-positive source: a deadline/pool/gateway
+# fault on the 365-day read declared inngest_down while the executor kept firing
+# crons — the #6374 root cause). Emits {functions, event_names:[], armed_reminders:[],
+# durability_state}. functions/durability purity + fail-loud on a real down are unchanged.
+# ===========================================================================
+
+# Run in liveness-only mode. Deliberately passes NO INNGEST_GQL_FIXTURE_DIR: if the
+# script wrongly ran the eventsV2 scan it would curl 127.0.0.1:8288 (no inngest in CI)
+# and loud-abort exit 1 — so a clean exit 0 with empty event scans PROVES the scan was
+# skipped. $1 = functions-fixture file, plus optional trailing KEY=VAL durability seams.
+run_inv_liveness() {
+  local ff="$1"; shift
+  INVENTORY_LIVENESS_ONLY=1 INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" \
+    env "$@" bash "$TARGET" 2>/dev/null
+}
+
+# --- #6374 T-L1: liveness mode returns functions + empty event scans, exit 0, NO eventsV2 ---
+test_liveness_only_skips_eventsv2() {
+  local ff; ff=$(mktemp); trap 'rm -f "$ff"' RETURN
+  make_functions '["cron-daily-triage","cron-bug-fixer"]' > "$ff"
+  local out rc=0
+  # No fixture dir + no network: if eventsV2 ran it would abort exit 1.
+  out=$(run_inv_liveness "$ff" INVENTORY_EXECSTART='/usr/bin/inngest start --postgres-max-open-conns 10' INVENTORY_REDIS_ACTIVE=active) || rc=$?
+  assert_eq "liveness mode exits 0 without an eventsV2 fixture (heavy scan skipped)" "0" "$rc"
+  assert_eq "liveness functions still projected + sorted" "cron-bug-fixer,cron-daily-triage" "$(echo "$out" | jq -r '.functions | join(",")')"
+  assert_eq "liveness event_names is empty (eventsV2 skipped)" "[]" "$(echo "$out" | jq -c '.event_names')"
+  assert_eq "liveness armed_reminders is empty (eventsV2 skipped)" "[]" "$(echo "$out" | jq -c '.armed_reminders')"
+  assert_eq "liveness preserves durability_state enum" "durable" "$(echo "$out" | jq -r '.durability_state')"
+  assert_eq "liveness body is a 4-key object" "object" "$(echo "$out" | jq -r 'type')"
+}
+
+# --- #6374 T-L2: liveness mode preserves the full durability enum (advisory wiring) ---
+test_liveness_only_durability_enum() {
+  local ff; ff=$(mktemp); trap 'rm -f "$ff"' RETURN
+  make_functions '["cron-a"]' > "$ff"
+  assert_eq "liveness degraded (sentinel present, redis inactive)" "degraded" \
+    "$(run_inv_liveness "$ff" INVENTORY_EXECSTART='--postgres-max-open-conns 10' INVENTORY_REDIS_ACTIVE=inactive | jq -r '.durability_state')"
+  assert_eq "liveness sqlite_only (no sentinel)" "sqlite_only" \
+    "$(run_inv_liveness "$ff" INVENTORY_EXECSTART='/usr/bin/inngest start' INVENTORY_REDIS_ACTIVE=inactive | jq -r '.durability_state')"
+}
+
+# --- #6374 T-L3: a genuinely-down inngest still fails LOUD in liveness mode (no false-clean) ---
+test_liveness_only_fails_loud_on_down() {
+  local ff; ff=$(mktemp); trap 'rm -f "$ff"' RETURN
+  # functions query returns a GraphQL error envelope (inngest unreachable) → must exit 1
+  # with the FATAL sentinel body, NOT a false-clean {functions:[]}.
+  printf '%s' '{"errors":[{"message":"connection refused"}],"data":null}' > "$ff"
+  local out rc=0
+  out=$(run_inv_liveness "$ff") || rc=$?
+  assert_eq "liveness down exits non-zero (fail-loud, no false-clean)" "1" "$rc"
+  if [[ "$out" == *"FATAL /v0/gql functions"* ]]; then echo "  PASS: liveness down emits the FATAL sentinel (classifier maps to inngest_down)"; PASS=$((PASS+1));
+  else echo "  FAIL: liveness down did not emit the FATAL sentinel"; FAIL=$((FAIL+1)); fi
+}
+
+# ===========================================================================
 # #6258 (ADR-106) — bounding + markers + completeness-by-construction
 # ===========================================================================
 
@@ -560,6 +618,9 @@ test_marker_tag_in_vector_allowlist() {
   else echo "  FAIL: inngest-inventory tag NOT in vector.toml (marker would not ship to Better Stack)"; FAIL=$((FAIL+1)); fi
 }
 
+test_liveness_only_skips_eventsv2
+test_liveness_only_durability_enum
+test_liveness_only_fails_loud_on_down
 test_durability_states
 test_durability_no_secret_leak
 test_durability_purity_preserved
