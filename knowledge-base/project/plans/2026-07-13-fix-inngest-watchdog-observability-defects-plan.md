@@ -62,19 +62,38 @@ This plan fixes three distinct, code-verified defects and closes the readiness-g
 
 ### Phase 1 — Defect 1: close the delivery gap (page the operator)
 1. Add `resource "sentry_cron_monitor" "scheduled_inngest_health"` to `cron-monitors.tf` — `name = "scheduled-inngest-health"` (matches the heartbeat slug at `scheduled-inngest-health.yml:480`), `schedule = { crontab = "*/15 * * * *" }`, `checkin_margin_minutes` sized for a 15-min cadence (deepen-plan picks the exact value from the file's cohort conventions; a tight margin is correct — inngest-down is a brand-survival outage), `max_runtime_minutes` = 8 (matches the job's `timeout-minutes`), `failure_issue_threshold = 1`, `recovery_threshold = 1`, `timezone = "UTC"`. With `threshold=1`, a single `?status=error` OR a missed check-in opens a Sentry monitor-failure issue → pages the operator within ~15-30 min (vs 14h).
-2. **Structural guard (fold-in, do not defer):** add a parity test asserting every `sentry-heartbeat` `monitor-slug:` used by a `.github/workflows/*.yml` has a matching `sentry_cron_monitor.name` in `cron-monitors.tf`. This is the GHA-workflow counterpart to `sentry-monitor-iac-parity.test.ts` (which covers only `server/inngest/functions/`). Makes "heartbeat into the void" structurally impossible for future workflows.
-3. Confirm the failure path pages: cron-monitor failures notify project members by default (same mechanism 40+ sibling monitors rely on). If deepen-plan finds cron-monitor paging is insufficient in this project's config, add a belt-and-suspenders `sentry_issue_alert` (a tagged Sentry EVENT from the workflow via the ingest API + a `feature=inngest-watchdog`/`op=inngest-down` `notify_email` rule) — decided in deepen-plan, not pre-committed.
+2. **Add `-target=sentry_cron_monitor.scheduled_inngest_health` to `.github/workflows/apply-sentry-infra.yml`** (see Infrastructure → Apply path — without this the monitor is declared but never applied).
+3. **Structural guard (fold-in, do not defer):** extend a parity test to assert every `sentry-heartbeat` `monitor-slug:` used by a `.github/workflows/*.yml` has (a) a matching `sentry_cron_monitor.name` in `cron-monitors.tf` AND (b) that resource name in the `apply-sentry-infra.yml` `-target=` allowlist. This is the GHA-workflow counterpart to `sentry-monitor-iac-parity.test.ts` (which covers only `server/inngest/functions/`). [SIMPLIFICATION per review] Population today is ONE workflow — prefer extending the existing `sentry-monitor-iac-parity.test.ts` with the workflow-slug + `-target` clauses over a whole new test file; only create a separate file if that proves awkward. Makes "heartbeat into the void" (and "applied nowhere") structurally impossible.
+4. **Paging is confirmed sufficient — do NOT add a `sentry_issue_alert` [deepen-plan resolved].** The verification agent confirmed against `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md:476-480` that `sentry_cron_monitor` failures page **on their own** via `failure_issue_threshold` (this is how the #4650 missed-check-in regression was caught) — identical posture to all 20+ siblings; no cron-monitor-failure `sentry_issue_alert` exists or is needed. **De-risk (pre-merge, not post-merge):** because the default project notification path is not itself in IaC, pull one piece of live evidence that a sibling cron-monitor failure actually notified `ops@jikigai.com` (Sentry monitor-notification history via `scripts/sentry-issue.sh`) BEFORE relying on it. If that evidence cannot be obtained, THEN add the `sentry_issue_alert` fallback (tagged Sentry event from the workflow + `feature=inngest-watchdog`/`op=inngest-down` `notify_email` rule). Default path: monitor-only.
 
 ### Phase 2 — Defect 2: true liveness probe (decouple from the eventsV2 read path)
-1. Add on-host `apps/web-platform/infra/inngest-health.sh` (mirrors `inngest-registry-probe.sh` structure + `#5503` journald-only purity): curl `http://127.0.0.1:8288/health` (the ci-deploy HARD gate) with a short `--max-time`; optionally the lightweight `/v0/gql { functions { id } }` query (NOT the eventsV2 scan) to distinguish "process up but API degraded"; emit a small pure-JSON body `{ healthy: bool, functions_count: int, durability_state: <enum> }` (reuse `derive_durability_state` — a cheap `systemctl` read). Enum/count only; never ExecStart/URI/raw error text.
-2. Register a `/hooks/inngest-health` webhook in `hooks.json.tmpl` + wire its `inngest_health_sh_b64` payload through the infra-config push (mirrors the 8 existing inngest hooks). Delivered via the immutable infra-config path (`hr-prod-host-config-change-immutable-redeploy`) — no SSH.
-3. Repoint the watchdog's **liveness** verdict (`scheduled-inngest-health.yml` probe step) from `/hooks/inngest-inventory` to `/hooks/inngest-health`. Keep the 3× retry resilience. `healthy=false`/non-200 → `inngest_down`; `functions_count==0` on a live server → `inngest_unhealthy`. Move the `durability_state` read to the health hook (or keep both — deepen-plan decides). The heavy `inngest-inventory` hook reverts to **cutover-baseline only** and is no longer a liveness gate.
-4. Update `inngest-inventory.test.sh`/add `inngest-health.test.sh` fixtures for the new script.
+
+**[DESIGN — deepen-plan] Two options; DEFAULT to Option A (smaller surface, preserves durability wiring).**
+
+- **Option A (default, per simplicity + spec-flow review): a liveness-only mode inside the existing `inngest-inventory.sh`.** That script (`:124,314-398`) ALREADY runs the lightweight `/v0/gql { functions { id name slug } }` loopback query, already fails LOUD on a non-array, and already emits `durability_state` via `derive_durability_state` — Defect 2 is *solely* that this cheap path is bundled with the heavy paginated `eventsV2` scan (`:227-296`). Add an `INVENTORY_LIVENESS_ONLY` guard that skips the eventsV2 scan (emit `event_names:[]`, `armed_reminders:[]`) and returns `{ functions, functions_count, durability_state }`. Repoint the watchdog to invoke that mode (a query param on the existing hook, or one small `inngest-liveness` hook id in `hooks.json.tmpl` that runs the **already-staged** `inngest-inventory.sh` with the env flag — reusing `INNGEST_INVENTORY_SH_B64`, **no new payload, no `push-infra-config.sh`/`FILE_MAP`/`vector.toml` edits**). The heavy inventory path stays intact for cutover baseline. **This naturally preserves `durability_state` and the `steps.probe.outputs.durability_state` wiring (see C-invariants below) and keeps the `inngest-inventory` journald tag that is already Better Stack-allowlisted.** Optionally add a `curl 127.0.0.1:8288/health` line inside this mode as a marginal upgrade — not required to close Defect 2 (the root cause was eventsV2, not the functions query).
+- **Option B (SRP-cleaner, more surface): a new `apps/web-platform/infra/inngest-health.sh` + `/hooks/inngest-health` webhook** mirroring the 8 existing inngest hooks. If chosen, it MUST also emit `durability_state` in the exact enum, AND Files-to-Edit MUST additionally include `push-infra-config.sh` (payload key), `infra-config-apply.sh` (FILE_MAP row), `apps/web-platform/infra/vector.toml` (add `inngest-health` to the `SYSLOG_IDENTIFIER` allowlist `:127-153`), and `apps/web-platform/test/infra/vector-pii-scrub.test.sh` (drift fixture) — otherwise the Better Stack journald destination is silently dropped (observability P1).
+
+**Invariants BOTH options MUST satisfy:**
+1. **[C-invariant, spec-flow C1-C5] Preserve `durability_state`.** The liveness verdict body MUST still emit `durability_state` in the exact enum `durable|degraded|sqlite_only|unknown|absent`, and `steps.probe.outputs.durability_state` (read at `scheduled-inngest-health.yml:111-113`, gated at `:414` advisory-open and `:460` auto-close) MUST still resolve — else the #5553 between-deploy detector silently dies AND open `[ci/inngest-degraded-durability]` issues never auto-close. Emit `durability_state` whenever the process is live, independent of the functions-query outcome. Add fixtures: a `degraded` body still opens the advisory; a `durable` body still auto-closes it.
+2. **[Deploy-race tolerance, architecture Hazard 2 + observability P1] Distinguish a broken/undeployed probe path from a real down.** The consumer (repointed workflow) goes live at merge; the producer (on-host mode/hook) lands async via `apply-deploy-pipeline-fix.yml`. A `*/15` tick in that window (or a CF-Access/`webhook.service` degrade) returns 404/000/non-200 → must be classified `probe_unavailable` (a soft alert, **NO restart**), NOT `inngest_down`. Only a **well-formed body with `healthy:false`/missing `.functions`** declares `inngest_down`. Gate the restart dispatch on a well-formed down body, never on a bare non-200.
+3. **[functions_count==0 grace, observability P2] Cold-start churn guard.** A live-but-empty registry (`{functions:[]}`) is legitimate transiently after a restart; add a short grace/retry before declaring `inngest_unhealthy` so a post-restart cold start doesn't self-perpetuate. Note the Defect-3 cap is the backstop.
+
+Keep the 3× in-run retry resilience. Update the relevant test (`inngest-inventory.test.sh` for Option A; new `inngest-health.test.sh` for Option B) with the liveness-only + durability + probe-unavailable fixtures.
 
 ### Phase 3 — Defect 3: cap the restart loop + escalate
-1. Persist a restart counter across stateless `*/15` runs using the open `[ci/inngest-down]` tracking issue as the store: a `<!-- restart-dispatch-count: N -->` marker in the issue body (or count restart-dispatch comments), incremented each dispatch.
-2. Gate the "Auto-dispatch inngest restart" step on `N < RESTART_CAP` (e.g. 3). At/after the cap, **stop dispatching** and escalate: post a loud "restarts exhausted — manual/root-cause needed" comment, keep the Sentry error heartbeat firing (Phase 1 keeps paging), and label the issue for human attention. Reset is automatic — recovery auto-closes the issue (`:378-405`), so the next incident opens a fresh issue with N=0.
-3. Ensure `restart-inngest-server.yml` dispatch remains excluded for pool modes (already correct, `:275-278`) — do NOT widen.
+
+**[REDESIGN — deepen-plan] Use an issue-AGE gate, NOT a body counter.** The spec-flow review (A1-A7) found the counter approach has an ordering hazard: the auto-dispatch step (`scheduled-inngest-health.yml:279-288`) runs BEFORE the tracking issue is created (`:290-376`), so there is no store to read/write on the first failure, and a `gh issue edit --body` marker RMW risks clobber + races. An age gate sidesteps all of it (one read, zero writes, no chicken-and-egg):
+
+1. **Insert a count-free gate step BEFORE the dispatch step.** Read the open `[ci/inngest-down]` issue's `createdAt` (`gh issue list --label ci/inngest-down --state open --json number,createdAt`). Emit a `restart_ok` output:
+   - Issue absent (first failure of the episode) → `restart_ok=true` (dispatch once).
+   - Issue present AND age < GIVE_UP_WINDOW (≈45 min ≈ 3 `*/15` cycles) → `restart_ok=true`.
+   - Issue present AND age ≥ GIVE_UP_WINDOW → `restart_ok=false` (give up).
+2. Gate the dispatch step `if:` on `restart_ok == 'true'` AND the existing down-family predicate. At/after give-up: **stop dispatching** and escalate — the file-issue step's down-branch (`:361-375`) must, when `restart_ok=false`, **replace** its hardcoded "Restart re-dispatched" comment (`:371`) with a loud "restarts exhausted (>N min) — inngest still down, human root-cause needed" comment (thread `restart_ok` through as a step output so the comment text is truthful — spec-flow A3/B2) and add a human-attention label (idempotent; escalate the comment once at the boundary, not every cycle — B3).
+3. **Paging continues at give-up:** the Sentry heartbeat status keys off `failure_mode` (`:481`), not off whether a dispatch happened, so Phase 1's monitor keeps paging — state this as the explicit reason (B1).
+4. **Reset:** recovery auto-closes the issue (`:378-405`) → next episode opens a fresh issue → age resets naturally. Add resilience for a failed `gh issue close` (spec-flow B4): the age gate is self-correcting (a stale-open capped issue that recovers still auto-closes on the next healthy run), so no marker-reset step is needed — an advantage over the counter.
+5. **[Contingency, spec-flow B5]** The age gate bounds churn per-episode; it only prevents the ~14× churn when **Phase 2's stable probe is in place** (a flapping false-positive re-opens/re-closes the issue, resetting the age). State that Phase 3's effectiveness is contingent on Phase 2.
+6. **[Write-boundary sweep, architecture (b)]** `restart-inngest-server.yml` is also dispatched from a SECOND site — `inngest-watchdog-restart-dispatch.yml:49` (the #4650 D1-B label path). Phase 3 caps only the `*/15` loop site (the churn source). Document the label path as explicitly out-of-churn-scope (`hr-write-boundary-sentinel-sweep-all-write-sites`).
+7. Ensure `restart-inngest-server.yml` dispatch remains excluded for pool modes (already correct, `:275-278`) — do NOT widen.
 
 ### Phase 4 — Readiness-gate inngest awareness
 1. Add a cheap `[ci/inngest-down]`-open-issue awareness check to the readiness surface the operator's turn-1 actually hits. Concrete candidates (deepen-plan DECIDES; default target = the surface that already runs a prod-facing check): (a) `postmerge/SKILL.md` prod-health verification; (b) an additive advisory in `commands/go.md` / `one-shot` Step 0 readiness preamble. Check = `gh issue list --label ci/inngest-down --state open` (+ optionally probe `/hooks/inngest-health`) → surface a one-line advisory, do NOT hard-block the turn.
@@ -86,20 +105,22 @@ This plan fixes three distinct, code-verified defects and closes the readiness-g
 - File a tracking issue only for any sub-scope deepen-plan/plan-review defers (none anticipated; the parity guard and readiness check are folded in). #6178 (extract inngest to HA host) already exists — this plan is its observability counterpart, not the extraction.
 
 ## Files to Edit
-- `.github/workflows/scheduled-inngest-health.yml` — repoint liveness to `/hooks/inngest-health` (Defect 2); add restart-cap + escalate logic (Defect 3).
+*(Option A = reuse inventory liveness mode, the default; Option B = new health hook. Option A has the smaller list.)*
+- `.github/workflows/scheduled-inngest-health.yml` — repoint liveness to the liveness-only probe with probe-unavailable/deploy-race tolerance (Defect 2); add the age-gate + escalate logic (Defect 3).
 - `apps/web-platform/infra/sentry/cron-monitors.tf` — add `scheduled_inngest_health` monitor (Defect 1).
-- `apps/web-platform/infra/hooks.json.tmpl` — register `/hooks/inngest-health` + `inngest_health_sh_b64` payload (Defect 2).
-- `apps/web-platform/infra/infra-config-apply.sh` (+ `.test.sh`) — wire the new script's base64 payload delivery (mirror existing inngest hooks).
-- `apps/web-platform/infra/infra-config-install.sh` (if it installs hook scripts) — install `inngest-health.sh`.
-- `plugins/soleur/skills/postmerge/SKILL.md` **or** `plugins/soleur/commands/go.md` / `plugins/soleur/skills/one-shot/SKILL.md` — readiness inngest-awareness check (Phase 4; surface decided in deepen-plan).
+- **`.github/workflows/apply-sentry-infra.yml` — add `-target=sentry_cron_monitor.scheduled_inngest_health` to the allowlist (Defect 1 BLOCKER; without it the monitor never applies).**
+- `apps/web-platform/infra/inngest-inventory.sh` (+ `inngest-inventory.test.sh`) — **Option A:** add `INVENTORY_LIVENESS_ONLY` mode (skip eventsV2; keep functions + durability_state) + fixtures.
+- `apps/web-platform/infra/hooks.json.tmpl` — **Option A:** add one small `inngest-liveness` hook id running the already-staged `inngest-inventory.sh` with the env flag (reuse `INNGEST_INVENTORY_SH_B64` — no new payload); **Option B:** register `/hooks/inngest-health` + payload.
+- `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts` — extend to cover GHA-workflow heartbeat slugs + the `apply-sentry-infra.yml` `-target=` allowlist (Phase 1.3; prefer extending over a new file since the workflow-heartbeat population is one).
+- `plugins/soleur/skills/postmerge/SKILL.md` **or** `plugins/soleur/commands/go.md` / `plugins/soleur/skills/one-shot/SKILL.md` — readiness inngest-awareness check (Phase 4; surface decided in deepen-plan/work).
+- **Option B ONLY (if the new-hook route is chosen):** `apps/web-platform/infra/push-infra-config.sh` (payload key), `apps/web-platform/infra/infra-config-apply.sh` (FILE_MAP row), `apps/web-platform/infra/vector.toml` (add `inngest-health` to the `SYSLOG_IDENTIFIER` allowlist), `apps/web-platform/test/infra/vector-pii-scrub.test.sh` (drift fixture).
 
 ## Files to Create
-- `apps/web-platform/infra/inngest-health.sh` — lightweight on-host `/health` liveness probe (Defect 2).
-- `apps/web-platform/infra/inngest-health.test.sh` — unit fixtures for the health script.
-- `apps/web-platform/test/server/inngest/sentry-workflow-heartbeat-iac-parity.test.ts` (or a `.test.sh` under `apps/web-platform/test/`) — GHA-workflow-heartbeat-slug ↔ monitor parity guard (Phase 1.2). Runner/path per the repo's discovery globs (verify `vitest.config.ts` include globs before choosing the path).
+- **Option B ONLY:** `apps/web-platform/infra/inngest-health.sh` + `apps/web-platform/infra/inngest-health.test.sh`.
+- *(No new parity-test file — fold the workflow-slug guard into the existing `sentry-monitor-iac-parity.test.ts`. No new inngest-health.sh under Option A.)*
 
 ## Open Code-Review Overlap
-None. (`gh issue list --label code-review --state open` scanned against the file list above at plan time; no open scope-out touches these files. Re-verify at Step 2 of deepen-plan.)
+None. (`gh issue list --label code-review --state open` scanned against the file list at plan time; no open scope-out touches these files. `/work` re-verifies the final list.)
 
 ## Domain Review
 
@@ -113,12 +134,12 @@ No cross-domain (product/marketing/sales/finance/legal/ops/support) implications
 - `apps/web-platform/infra/sentry/cron-monitors.tf`: add one `sentry_cron_monitor "scheduled_inngest_health"`. Provider `jianyuan/sentry` (pinned, existing). No new sensitive variables — uses existing `var.sentry_org` + `data.sentry_project.web_platform`.
 
 ### Apply path
-- **cloud-init + auto-apply.** `apply-sentry-infra.yml` fires on merge to `main` touching `cron-monitors.tf` (`:46`) and applies the untargeted cron+uptime monitor scope — the new monitor is created automatically, **no operator step**. Blast radius: additive (one new monitor); zero downtime.
-- The `/hooks/inngest-health` hook + `inngest-health.sh` land via the **infra-config push** (immutable-redeploy path, `hr-prod-host-config-change-immutable-redeploy`) — base64 payload → `hooks.json` + on-host script, no SSH. Same delivery as the 8 existing inngest hooks.
+- **[CORRECTED — deepen-plan BLOCKER]** `apply-sentry-infra.yml` does NOT apply an untargeted monitor scope. It builds a **saved plan against an explicit `-target=` allowlist** (`apply-sentry-infra.yml:196-265`, `-out=tfplan`; apply consumes `tfplan`, so plan-targets == apply-targets — ADR-031's 2026-05-29 amendment). A new `sentry_cron_monitor.scheduled_inngest_health` that is **not** added to that `-target=` list will **never be applied** — the monitor never materializes and Defect 1 ships unfixed while CI stays green. **Therefore `.github/workflows/apply-sentry-infra.yml` is a required Files-to-Edit: add `-target=sentry_cron_monitor.scheduled_inngest_health` next to the existing `scheduled_inngest_cron_watchdog` target (`:219`).** Additive/create-only → no `[ack-destroy]` needed. With that, the monitor applies on merge — no operator step.
+- The health-liveness change lands via the **infra-config push** (immutable-redeploy path, `hr-prod-host-config-change-immutable-redeploy`) — no SSH. Delivery wiring (verified): the script's base64 payload key goes in `push-infra-config.sh`, and the on-host `FILE_MAP` row goes in `infra-config-apply.sh` (format `ENV_VAR|dest|mode|owner:group`); `apply-deploy-pipeline-fix.yml:407` derives `EXPECTED_COUNT` from the FILE_MAP `_B64|` rows and fails LOUD if the script doesn't land (the #6178 false-green guard) — so no separate count edit, but the FILE_MAP row is mandatory. A new HTTP-exposed hook also needs a `hooks.json.tmpl` block (the orphan-hook self-check `infra-config-apply.sh:203-226` fails LOUD if hooks.json advertises a script not written this push — hooks.json + FILE_MAP must land together).
 
 ### Distinctness / drift safeguards
 - New monitor is apply-created (not import-only), so it needs no `lifecycle.ignore_changes` beyond sibling convention; adopt whatever the two most-recent cron-monitor blocks use.
-- The GHA-workflow-heartbeat parity test (Phase 1.2) is the drift safeguard: a workflow heartbeat slug without a monitor fails CI.
+- **[CORRECTED — deepen-plan BLOCKER]** The Phase-1.2 parity guard must assert the workflow heartbeat slug is present in `cron-monitors.tf` **AND in the `apply-sentry-infra.yml` `-target=` allowlist** — a guard that checks only `cron-monitors.tf` passes green while the monitor is never applied (the exact `-target`-allowlist-sweep Sharp Edge). Guard both, or the structural fix does not close the gap.
 
 ### Vendor-tier reality check
 - Sentry Crons monitors are in-tier (40+ already provisioned). No paid-tier gate. `notify_email` (the repo's paging convention) is in-tier.
@@ -141,9 +162,15 @@ failure_modes:
   - mode: "inngest process up but API degraded (functions query fails / count 0)"
     detection: "inngest-health.sh lightweight /v0/gql functions probe → inngest_unhealthy"
     alert_route: "same monitor error check-in + [ci/inngest-down] issue (NO longer conflated with the heavy eventsV2 read path)"
-  - mode: "restart loop exhausted (N failed restarts didn't clear)"
-    detection: "restart-dispatch counter on the tracking issue >= RESTART_CAP"
-    alert_route: "loud escalation comment + human-attention label; Sentry error heartbeat keeps paging"
+  - mode: "health-probe path broken / not-yet-deployed (404/000/CF-Access) — NOT inngest-down"
+    detection: "liveness probe returns non-200 / non-well-formed body → classified probe_unavailable (deploy-race window or webhook.service degrade)"
+    alert_route: "soft probe-unavailable alert; NO restart dispatched (distinguishes broken probe from real down — closes the relocated false-positive)"
+  - mode: "restart give-up reached (inngest still down after GIVE_UP_WINDOW)"
+    detection: "open [ci/inngest-down] issue age >= ~45 min at the age-gate step (single gh read, no counter/marker)"
+    alert_route: "loud 'restarts exhausted' comment replaces the 're-dispatched' text + human-attention label; Sentry error heartbeat keeps paging (status keys off failure_mode, not dispatch)"
+  - mode: "post-restart cold start (live-but-empty registry)"
+    detection: "functions_count==0 with a short grace/retry before declaring inngest_unhealthy"
+    alert_route: "grace absorbs the transient; the age gate is the churn backstop"
   - mode: "watchdog itself stops running (workflow disabled / dropped)"
     detection: "missed Sentry check-in on scheduled-inngest-health (margin window)"
     alert_route: "Sentry missed-check-in notification → operator"
@@ -151,7 +178,7 @@ failure_modes:
     detection: "sentry-workflow-heartbeat-iac-parity test fails in CI"
     alert_route: "CI red on the PR — structural, pre-merge"
 logs:
-  where: "GitHub Actions run log (workflow); on-host journald tag inngest-health (→ Better Stack via Vector allowlist, mirror inngest-inventory's #5526 allowlisting); Sentry monitor history"
+  where: "GitHub Actions run log (workflow, incl. the hook response body dumped into ::error:: at scheduled-inngest-health.yml:84,91,122 — no SSH); on-host journald: Option A keeps the inngest-inventory tag (ALREADY Better Stack-allowlisted in vector.toml, #5526 — no vector change); Option B MUST add inngest-health to vector.toml SYSLOG_IDENTIFIER + drift fixture or the Better Stack destination is silently dropped; Sentry monitor history"
   retention: "GHA default; Better Stack per retention tier; Sentry monitor check-in history"
 discoverability_test:
   command: "gh workflow run scheduled-inngest-health.yml && gh run watch  # then confirm the scheduled-inngest-health monitor shows the check-in in Sentry — NO ssh"
@@ -162,20 +189,24 @@ discoverability_test:
 
 This is a **monitoring-policy refinement within the existing inngest observability architecture** (ADR-030 self-hosted inngest, ADR-031 Sentry-as-IaC, ADR-033 Inngest-cron substrate) — not a new substrate, tenancy, resolver, or trust boundary. It does not reverse a recorded decision.
 
-- **ADR:** No NEW ADR required. Add a short **amendment note to ADR-031 (Sentry-as-IaC)** recording that GHA-workflow heartbeat slugs are now parity-guarded (Phase 1.2) — the same "silent unknown-slug drop" class ADR-031 already governs for Inngest functions. Deepen-plan/plan-review confirms whether an amendment vs. a one-line ADR reference is warranted.
+- **ADR:** No NEW ADR required (confirmed by architecture review — no new substrate/vendor/trust-boundary/tenancy, reverses no decision). Add a short **amendment note to `ADR-031-sentry-as-iac.md`** recording the GHA-workflow-heartbeat-slug + `-target`-allowlist parity guard (Phase 1.3) — ADR-031 already carries 6+ amendment entries for exactly this class. **ALSO add a one-line amendment to `ADR-030-inngest-as-durable-trigger-layer.md`** recording that the external watchdog now rides the same `/health`/loopback liveness signal ADR-030 defines (Defect 2 moves the authoritative liveness signal onto ADR-030 territory). **Cite ADRs by filename slug, not bare number** — the decisions dir has colliding ordinals (two ADR-030/031/033).
 - **C4 views:** No C4 impact. Checked all three model files (`model.c4`, `views.c4`, `spec.c4`) for the external actors/systems/relationships this change could touch: (a) external human actors — none new (operator already modeled as the alert recipient); (b) external systems — Sentry + Better Stack + Inngest-server are already modeled as the observability edge; this change adds no new vendor/integration, only a new monitor resource + a new loopback health probe *inside* the already-modeled host boundary; (c) data stores — none; (d) access relationships — unchanged. A new `sentry_cron_monitor` and an on-host `/health` curl are instances of already-modeled element types, so no `.c4` element/edge/view is added. (Verified at plan time; deepen-plan re-reads the three `.c4` files to confirm before freezing "no C4 impact.")
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR / CI)
 - [ ] `cron-monitors.tf` contains `sentry_cron_monitor "scheduled_inngest_health"` with `name = "scheduled-inngest-health"` matching `scheduled-inngest-health.yml`'s heartbeat `monitor-slug`. (`grep` both; assert equality.)
-- [ ] New parity test fails when a `.github/workflows/*.yml` `sentry-heartbeat` `monitor-slug` has no matching `sentry_cron_monitor.name`; passes on the current tree. (Verify with a deliberately-broken fixture.)
-- [ ] `inngest-health.sh` exists, is executable, emits pure JSON on the success path (no non-JSON to stdout/stderr — mirror the inventory-hook webhook-body contract), and emits enum/count only (no ExecStart string, no URI, no raw GraphQL error). `inngest-health.test.sh` green.
-- [ ] `scheduled-inngest-health.yml` liveness probe targets `/hooks/inngest-health` (not `/hooks/inngest-inventory`); the heavy `eventsV2` read path is no longer on the liveness verdict.
-- [ ] Restart-dispatch step is gated on a restart counter `< RESTART_CAP`; at the cap it escalates (loud comment + human-attention label) and does NOT dispatch. (Unit-test the counter parse/increment + the cap branch with fixtures — the LLM/network is out of the assertion path.)
-- [ ] `hooks.json.tmpl` + infra-config payload wiring register `inngest-health` following the existing inngest-hook pattern; `infra-config-apply.test.sh` green.
+- [ ] **`apply-sentry-infra.yml` `-target=` allowlist contains `sentry_cron_monitor.scheduled_inngest_health`** (BLOCKER — else the monitor is declared but never applied). `grep` the workflow.
+- [ ] Parity test fails when a `.github/workflows/*.yml` heartbeat `monitor-slug` lacks EITHER a matching `sentry_cron_monitor.name` in `cron-monitors.tf` OR an entry in the `apply-sentry-infra.yml` `-target=` list; passes on the current tree. (Verify with a deliberately-broken fixture for each clause.)
+- [ ] **Live evidence pulled pre-merge** that a sibling `sentry_cron_monitor` failure actually notified `ops@jikigai.com` (Sentry monitor-notification history) — OR the `sentry_issue_alert` fallback is added. Do not treat "monitor applied" as "operator paged".
+- [ ] Liveness probe no longer rides the heavy `eventsV2` read: Option A `INVENTORY_LIVENESS_ONLY` skips eventsV2 (fixture asserts no eventsV2 call) / Option B `inngest-health.sh` exists; either emits pure JSON, enum/count only (no ExecStart/URI/raw GraphQL error). Relevant `.test.sh` green.
+- [ ] **`durability_state` preserved:** the liveness body emits the exact enum `durable|degraded|sqlite_only|unknown|absent`; a `degraded` fixture still opens the `[ci/inngest-degraded-durability]` advisory (`:414`) and a `durable` fixture still auto-closes it (`:460`).
+- [ ] **Deploy-race tolerance:** a 404/000/non-well-formed probe response classifies `probe_unavailable` and does NOT dispatch a restart; only a well-formed `healthy:false`/missing-`.functions` body → `inngest_down`. (Unit-test with fixtures.)
+- [ ] **Restart give-up is age-gated:** dispatch suppressed when the open `[ci/inngest-down]` issue age ≥ GIVE_UP_WINDOW; at give-up the escalation comment REPLACES the "re-dispatched" text and adds the human-attention label. First-failure (no issue) still dispatches once. (Unit-test the age-gate branches — LLM/network out of the assertion path.)
+- [ ] Option B ONLY: `push-infra-config.sh` payload + `infra-config-apply.sh` FILE_MAP row + `vector.toml` allowlist + `vector-pii-scrub.test.sh` fixture all updated; `infra-config-apply.test.sh` + vector drift test green.
 - [ ] Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (NOT `npm run -w`). Tests via the package's actual runner (`vitest` for `.ts`; `.test.sh` for shell).
 - [ ] Readiness inngest-awareness check added at the deepen-plan-chosen surface; if in `commands/go.md`, it is OUTSIDE the eval-gated routing block.
+- [ ] ADR-031 + ADR-030 amendment-log entries added (by filename slug).
 - [ ] PR body uses `Ref #6374` (not `Closes`).
 
 ### Post-merge (operator/automated)
@@ -205,3 +236,44 @@ This is a **monitoring-policy refinement within the existing inngest observabili
 - `checkin_margin_minutes` on a `*/15` monitor: too tight false-pages on GHA scheduler jitter (see `scheduled-realtime-probe`'s 1440-min widening for a dropped run), too loose delays detection. Size it from the file's cohort conventions and the 15-min inter-fire gap.
 - Test path/runner: verify `apps/web-platform/vitest.config.ts` include globs before placing the parity `.test.ts` (co-located component-style paths are silently skipped); shell tests use the `.test.sh` convention. Typecheck is in-package `tsc`, never `npm run -w`.
 - New on-host script MUST honor the inventory hook's webhook-body purity: pure JSON to stdout on success, markers/summary to journald only, enum/count only (no ExecStart/URI/raw GraphQL error).
+
+## Enhancement Summary
+
+**Deepened on:** 2026-07-13
+**Sections enhanced:** Infrastructure/Apply-path, Phases 1-3, Files to Edit, Observability, Architecture Decision, Acceptance Criteria
+**Review agents used:** observability-coverage-reviewer, architecture-strategist (×2, incl. flow analysis), code-simplicity-reviewer, verification/Explore. All findings code-verified.
+
+### Key improvements (from convergent review)
+1. **BLOCKER fixed — apply-target allowlist.** `apply-sentry-infra.yml` uses a `-target=` saved-plan allowlist, NOT an untargeted apply — a new monitor is declared-but-never-applied unless added there. Corrected the false "auto-created" claim; added `apply-sentry-infra.yml` to Files-to-Edit; extended the parity guard to assert the `-target` membership too (else the guard is green while the monitor never applies).
+2. **BLOCKER fixed — deploy-race false-positive.** Consumer (repointed workflow) goes live at merge; producer (on-host probe) lands async — a tick in the window would 404 → false `inngest_down` → false restart. Phase 2 now classifies 404/000/non-well-formed as `probe_unavailable` (no restart); only a well-formed down body → `inngest_down`.
+3. **Paging path resolved (not deferred).** Verification confirmed (runbook `cloud-scheduled-tasks.md:476-480` + the #4650 precedent) that `sentry_cron_monitor` failures page on their own via `failure_issue_threshold` — no `sentry_issue_alert` needed. Dropped it from default scope; added a PRE-merge live-evidence check that a sibling monitor failure actually emailed the operator.
+4. **Defect 2 simplified + durability preserved.** Default is now Option A: an `INVENTORY_LIVENESS_ONLY` mode inside the existing `inngest-inventory.sh` (skip eventsV2, keep functions + `durability_state`) — no new script/hook/payload/vector.toml churn, and it naturally preserves the `steps.probe.outputs.durability_state` wiring the #5553 between-deploy detector + `[ci/inngest-degraded-durability]` auto-close depend on (spec-flow C1-C5). Option B (new hook) retained with its full wiring cost (incl. vector.toml + drift fixture) documented.
+5. **Defect 3 redesigned — age gate, not counter.** The body-marker counter had an ordering hazard (dispatch step runs before the issue exists) + RMW clobber/race (spec-flow A1-A7). Replaced with a single-read issue-AGE gate (give up after ~45 min), which sidesteps all of it and self-corrects on recovery.
+
+### New considerations discovered
+- Phase 3's churn-cap is contingent on Phase 2's stable probe (a flapping false-positive resets the per-episode age).
+- Second restart-dispatch site (`inngest-watchdog-restart-dispatch.yml:49`, #4650 label path) documented as out-of-churn-scope per `hr-write-boundary-sentinel-sweep-all-write-sites`.
+- `functions_count==0` needs a cold-start grace/retry before `inngest_unhealthy` to avoid self-perpetuating churn.
+- ADRs cited by filename slug (decisions dir has colliding ordinals); add a one-line ADR-030 amendment (liveness now rides `/health`) in addition to the ADR-031 amendment.
+- Delivery wiring corrected: `push-infra-config.sh` (payload) + `infra-config-apply.sh` (FILE_MAP) — NOT `infra-config-install.sh`; `apply-deploy-pipeline-fix.yml:407` count guard auto-adjusts.
+
+## Enhancement Summary (deepen-plan)
+
+**Deepened:** 2026-07-13. **Review panel (5 parallel agents):** observability-coverage-reviewer, architecture-strategist (×2: design + workflow-flow), code-simplicity-reviewer, verify-negatives/Sentry-paging researcher. All findings code-verified.
+
+### Blockers fixed inline
+1. **`apply-sentry-infra.yml` uses a `-target=` allowlist, not an untargeted apply** — the new monitor would have been declared but NEVER applied (Defect 1 ships unfixed while CI stays green). Added the workflow to Files-to-Edit + required the `-target=` entry AND extended the parity guard to assert allowlist membership. (Architecture Hazard 1.)
+2. **Contract-before-consumer deploy race** — the repointed workflow goes live at merge but the on-host probe lands async; a `*/15` tick in the window would 404 → false `inngest_down` → false restart (relocating the very false-positive Defect 2 fixes). Added the `probe_unavailable` classification + "gate restart on a well-formed down body, never a bare non-200" invariant. (Architecture Hazard 2 + observability P1.)
+
+### Simplifications adopted
+- **Defect 2 defaults to a liveness-only mode inside the existing `inngest-inventory.sh`** (skip eventsV2, keep functions + `durability_state`) rather than a whole new script/hook/payload/vector.toml/2-test stack. Preserves the `durability_state` wiring for free and needs no Better Stack allowlist change. New-hook route retained as Option B with its full wiring cost made explicit. (Simplicity Q1; the SRP tradeoff from architecture (a) is noted.)
+- **Defect 3 uses an issue-AGE gate, not a body-marker counter** — sidesteps the ordering hazard (dispatch step runs before the issue exists), the `gh issue edit --body` RMW clobber/race, and the corrupt-marker fail-safe. One `gh` read, zero writes. (Simplicity Q3 + spec-flow A1-A7.)
+- **No belt-and-suspenders `sentry_issue_alert`** — cron-monitor `failure_issue_threshold` paging is documented-to-work (runbook `cloud-scheduled-tasks.md:476-480`; caught the #4650 regression). Kept as a fallback only if pre-merge live evidence can't confirm the notification reaches `ops@`. (Simplicity Q4 + verify agent.)
+- **No new parity-test file** — fold the workflow-slug guard into the existing `sentry-monitor-iac-parity.test.ts` (workflow-heartbeat population is one). (Simplicity Q2.)
+
+### New considerations surfaced
+- **Durability-surface regression risk (spec-flow C1-C5):** repointing liveness away from the inventory hook silently kills the #5553 between-deploy detector and orphans `[ci/inngest-degraded-durability]` issues unless `durability_state` is preserved in the exact enum and the `:414`/`:460` gates still resolve. Now an explicit invariant + AC.
+- **Second restart-dispatch site** (`inngest-watchdog-restart-dispatch.yml:49`, the #4650 label path) documented as out-of-churn-scope (`hr-write-boundary-sentinel-sweep-all-write-sites`).
+- **Phase 3 is contingent on Phase 2:** a flapping false-positive defeats a per-episode age gate; only the stable probe truly ends the churn.
+- **ADR:** add amendment-log entries to BOTH `ADR-031-sentry-as-iac.md` (parity guard) and `ADR-030-inngest-as-durable-trigger-layer.md` (liveness now rides `/health`); cite by filename slug (ordinal collisions exist).
+- **Vendor doc note:** Sentry cron-monitor default-notification routing is NOT in IaC — hence the pre-merge live-evidence AC rather than a blind trust.

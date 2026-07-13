@@ -15,19 +15,26 @@ lane: cross-domain
 
 ## Phase 1 — Defect 1: delivery gap (page the operator)
 - [ ] 1.1 Add `sentry_cron_monitor "scheduled_inngest_health"` (name `scheduled-inngest-health`, `*/15` crontab, margin/runtime/threshold per 0.2, threshold=1) to `cron-monitors.tf`.
-- [ ] 1.2 Write GHA-workflow-heartbeat-slug ↔ monitor parity test (counterpart to `sentry-monitor-iac-parity.test.ts`); verify red on a broken fixture, green on the tree. Confirm runner/path against `vitest.config.ts` globs.
-- [ ] 1.3 Confirm cron-monitor failure pages the operator; if insufficient, add belt-and-suspenders tagged-event `sentry_issue_alert` (decide in deepen-plan).
+- [ ] 1.2 **[BLOCKER] Add `-target=sentry_cron_monitor.scheduled_inngest_health` to `.github/workflows/apply-sentry-infra.yml`** (`:219` cohort) — without it the monitor is declared but never applied (saved-plan `-target=` allowlist, not untargeted).
+- [ ] 1.3 Extend `sentry-monitor-iac-parity.test.ts` to assert workflow heartbeat slugs have BOTH a `sentry_cron_monitor.name` AND an `apply-sentry-infra.yml` `-target=` entry; red on a broken fixture per clause. (Fold in — do not create a new file.)
+- [ ] 1.4 Pull pre-merge live evidence a sibling cron-monitor failure notified `ops@jikigai.com` (Sentry monitor-notification history). If unobtainable, add the `sentry_issue_alert` fallback. Default: monitor-only (paging documented at `cloud-scheduled-tasks.md:476-480`).
 
-## Phase 2 — Defect 2: true liveness probe
-- [ ] 2.1 Create `apps/web-platform/infra/inngest-health.sh` — curl `127.0.0.1:8288/health` (+ lightweight `/v0/gql functions`); emit pure JSON `{healthy, functions_count, durability_state}`; enum/count only; journald-only markers.
-- [ ] 2.2 Create `apps/web-platform/infra/inngest-health.test.sh` fixtures (healthy / process-down / api-degraded; assert eventsV2 is NOT on the liveness path).
-- [ ] 2.3 Register `/hooks/inngest-health` in `hooks.json.tmpl` + wire `inngest_health_sh_b64` through infra-config-apply (+ `.test.sh`) and infra-config-install.
-- [ ] 2.4 Repoint `scheduled-inngest-health.yml` liveness probe from `/hooks/inngest-inventory` to `/hooks/inngest-health`; keep 3× retry; move durability read to the health hook (or keep both per deepen-plan).
+## Phase 2 — Defect 2: true liveness probe (DEFAULT = Option A, reuse inventory)
+- [ ] 2.1 **Option A (default):** add `INVENTORY_LIVENESS_ONLY` mode to `inngest-inventory.sh` — skip the eventsV2 scan (emit `event_names:[]`, `armed_reminders:[]`), keep the `/v0/gql functions` query + `durability_state`; return `{functions,functions_count,durability_state}`. Optionally add a `127.0.0.1:8288/health` line. (Option B alt: new `inngest-health.sh` + `/hooks/inngest-health` + push-infra-config payload + infra-config-apply FILE_MAP + vector.toml allowlist + vector drift fixture.)
+- [ ] 2.2 Extend `inngest-inventory.test.sh` (Option A) with liveness-only + durability + probe-unavailable fixtures; assert eventsV2 is NOT called in liveness mode.
+- [ ] 2.3 Wire the probe: `hooks.json.tmpl` — Option A adds a small `inngest-liveness` hook running the already-staged `inngest-inventory.sh` with the env flag (reuse `INNGEST_INVENTORY_SH_B64`, no new payload).
+- [ ] 2.4 Repoint `scheduled-inngest-health.yml` liveness to the liveness-only probe; keep 3× retry. **Deploy-race tolerance:** 404/000/non-well-formed → `probe_unavailable` (NO restart); only a well-formed `healthy:false`/missing-`.functions` → `inngest_down`. functions_count==0 → grace/retry before `inngest_unhealthy`.
+- [ ] 2.5 **Preserve durability wiring:** `steps.probe.outputs.durability_state` still resolves; `degraded` fixture opens `[ci/inngest-degraded-durability]` (`:414`), `durable` fixture auto-closes it (`:460`).
 
-## Phase 3 — Defect 3: restart cap + escalate
-- [ ] 3.1 Add restart-dispatch counter persisted on the `[ci/inngest-down]` issue (`<!-- restart-dispatch-count: N -->` marker or comment count).
-- [ ] 3.2 Gate the auto-dispatch step on `N < RESTART_CAP`; at the cap, suppress dispatch + escalate (loud comment + human-attention label). Unit-test the counter + cap branch (no LLM/network in the assertion path).
-- [ ] 3.3 Confirm pool modes stay excluded from the restart gate (unchanged).
+## Phase 3 — Defect 3: restart give-up (issue-AGE gate, NOT a counter)
+- [ ] 3.1 Insert a count-free gate step BEFORE the dispatch step: read the open `[ci/inngest-down]` issue `createdAt`; emit `restart_ok` (absent→true / age<GIVE_UP_WINDOW≈45min→true / age≥window→false).
+- [ ] 3.2 Gate the dispatch `if:` on `restart_ok=='true'` + the down-family predicate. At give-up: the file-issue down-branch REPLACES its "Restart re-dispatched" comment (`:371`) with a loud "restarts exhausted" comment (thread `restart_ok` as output for truthful text) + human-attention label (escalate once at the boundary).
+- [ ] 3.3 Paging continues at give-up (heartbeat keys off `failure_mode`, not dispatch). Reset is self-correcting via auto-close (no marker reset needed).
+- [ ] 3.4 Document `inngest-watchdog-restart-dispatch.yml:49` (D1-B label path) as out-of-churn-scope. Note Phase 3 effectiveness is contingent on Phase 2's stable probe.
+- [ ] 3.5 Confirm pool modes stay excluded from the restart gate (unchanged, `:275-278`).
+
+## Phase 3.6 — ADR amendments
+- [ ] 3.6 Add amendment-log entries to `ADR-031-sentry-as-iac.md` (parity guard) and `ADR-030-inngest-as-durable-trigger-layer.md` (liveness rides `/health`). Cite by filename slug.
 
 ## Phase 4 — Readiness-gate inngest awareness
 - [ ] 4.1 Decide insertion surface (postmerge prod-health / go preamble / one-shot Step 0) in deepen-plan; add `gh issue list --label ci/inngest-down --state open` advisory (+ optional `/hooks/inngest-health` probe). Advisory, never hard-block.
