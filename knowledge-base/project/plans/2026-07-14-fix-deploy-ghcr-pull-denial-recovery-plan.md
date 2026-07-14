@@ -18,6 +18,39 @@ refs: ["#6395", "#6396", "#6090", "#6031", "#6122", "ADR-088", "ADR-096", "ADR-0
 
 # fix(infra): deploy GHCR `image_pull_failed` — recover on pull-denial, not only login-failure (§1A gap)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-14
+**Review panel:** architecture-strategist, security-sentinel,
+observability-coverage-reviewer, code-simplicity-reviewer (all grounded in
+`ci-deploy.sh`). Gates run: 4.5 network-outage (fired — see deep-dive), 4.6
+user-brand (pass), 4.7 observability (pass), 4.8 PAT-shaped (fired — documented
+exception, below), 4.9 UI-wireframe (n/a).
+
+### Key changes from review
+
+1. **Helper return contract (P1-B):** `refetch_ghcr_and_relogin` must make the
+   `docker login` result its exit status — §1A's inline body falls through to
+   `dt=""` (returns 0 always). The extraction is NOT byte-identical; it adds the
+   return contract. Helper now echoes a staged result (`recovered` /
+   `refetch_unavailable` / `relogin_failed`).
+2. **Classifier input type (P2-E / security P1):** `_pull_result_is_auth_denied`
+   must receive stderr **content** (`tail -c 400 "$perr"`), not the tempfile
+   path, or recovery silently no-ops.
+3. **Single event, `recovery_stage`-tagged (P1-A / simplicity / observability):**
+   no `not_recovered` second event; `pull_failure_event` gains a `recovery_stage`
+   tag so ONE event per failure discriminates the branch; the new breadcrumb
+   fires only on recovered-success.
+4. **cosign continuity (P2-F):** the relogin writes the SAME `$GHCR_DOCKER_CONFIG`
+   the verifier mounts `:ro`, so a recovered pull doesn't 401 the `.sig` fetch
+   (new AC13).
+5. **DRY (P2-G) + temp cleanup (P2-H):** one `_ghcr_pull_or_recover` at both GHCR
+   sites; `rm -f "$perr"` on every return.
+6. **Scope cut (simplicity Rec1):** Phase 4 (cloud-init boot-path parity) deferred
+   to a follow-up — recreate-only, contributes nothing to the running-host P1.
+7. **ADR re-homing (P2-C/D):** normative MUST → ADR-096 (owns the interim GHCR
+   path); ADR-088 keeps only the factual note; AP-016 register updated.
+
 ## Overview
 
 The `web-platform-release` deploy job fails at the `deploy` step with
@@ -119,6 +152,30 @@ ruling out the lower layers with artifacts:
    Phase 0: Better Stack Vector query for the `ci-deploy` PRELUDE lines + Sentry
    `op:image-pull pull_result:auth_denied` grouped by `host_id`.
 
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5 — gate fired on "SSH"/"timeout")
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall / egress | **verified — not the fault** | Off-host `docker pull` of the denied tags → HTTP **200** (issue evidence); GHCR returns HTTP status, not `ECONNREFUSED`/`EHOSTUNREACH`/timeout. A reachable-but-401 registry rules out egress-IP/firewall drift. No `hcloud firewall` change proposed. |
+| L3 DNS / routing | **verified — not the fault** | `ghcr.io` resolves + TLS-handshakes (the 401/200 responses prove the request reached GHCR origin). |
+| L7 TLS / proxy | **N/A** | Host→ghcr.io is direct over the host's unrestricted egress (ADR-087 B′); no CF edge on the pull path. |
+| L7 application / auth | **THE FAULT** | `pull_result=auth_denied` = credential capability failure. /work Phase 0 pulls the `ci-deploy` PRELUDE lines (Vector→Better Stack, #6396) + Sentry `op:image-pull` by `host_id` to confirm the login-ok/pull-deny branch. |
+
+Ordering discipline honored: L3/L4 confirmed healthy *before* the L7 auth
+hypothesis — the fault is genuinely application-layer credential capability, not a
+lower-layer connectivity drop. No sshd/fail2ban/firewall fix is in scope.
+
+### Deepen-plan Phase 4.8 disposition (PAT-shaped-variable gate)
+
+The 4.8 gate fired on `var.ghcr_read_token`. **Sanctioned exception, not a
+regression:** this is the GHCR `read:packages` *pull* credential, which GitHub
+*requires* be a user PAT — App installation tokens cannot pull private GHCR (the
+exact fact this issue turns on; ADR-088 superseded, ADR-087 D1). It is a READ
+credential, not GitHub-write auth, and the plan introduces **no new** PAT
+variable — it references the existing, architecturally-mandated one. AP-016
+already records this as the interim exception to `hr-github-app-auth-not-pat`;
+Phase 5 updates AP-016's stale "multi-tenant target" clause. Telemetry emitted.
+
 ## Root-cause verification gate (/work Phase 0 — diagnosis-first, no SSH)
 
 Per the recurring-prod-symptom discipline (a fix that survived a prior fix must
@@ -156,89 +213,167 @@ Factor the credential recovery out of §1A's inline retry into a reusable helper
 so the pull site can call the identical logic (no duplication):
 
 ```bash
-# refetch_ghcr_and_relogin: re-fetch the CURRENT prd GHCR read cred and re-run
-# docker login. Returns 0 on a successful login, 1 otherwise. Fail-open callers.
-# Token via --password-stdin only; never argv/logs; unset after. Re-exports
-# GHCR_READ_USER so the :ro cosign docker config (mounted at verify) authenticates
-# with the retried cred. Guarded on doppler + DOPPLER_TOKEN (prd-root scoped).
-refetch_ghcr_and_relogin() { ... }   # body mirrors ci-deploy.sh:669-679
+# refetch_ghcr_and_relogin: re-fetch the CURRENT prd GHCR read cred, re-run
+# docker login into the SAME docker config the cosign verifier mounts, and
+# return a STAGE code so the caller can discriminate the failure.
+# Echoes on stdout one of: recovered | refetch_unavailable | relogin_failed
+# Returns 0 iff stage==recovered.
+# Token via --password-stdin only; never argv/logs; kept `local` + unset after so
+# no child process env carries it. On success re-exports GHCR_READ_USER (username,
+# not a secret) so the :ro cosign docker config authenticates with the retried
+# cred. Guarded on doppler + DOPPLER_TOKEN (prd-root scoped).
+refetch_ghcr_and_relogin() {
+  command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]] || { printf refetch_unavailable; return 1; }
+  local du="" dt="" n=0
+  n=0; until du="$(timeout 45 doppler secrets get GHCR_READ_USER  --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$du" ]]; do n=$((n+1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+  n=0; until dt="$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$dt" ]]; do n=$((n+1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+  [[ -n "$du" && -n "$dt" ]] || { dt=""; printf refetch_unavailable; return 1; }
+  # docker login writes $GHCR_DOCKER_CONFIG (the SAME file verify_image_signature
+  # mounts :ro) — the auth ENTRY is what cosign needs, not just the username.
+  if printf '%s' "$dt" | docker login ghcr.io -u "$du" --password-stdin >/dev/null 2>&1; then
+    export GHCR_READ_USER="$du"; dt=""; printf recovered; return 0    # login status IS the exit status
+  fi
+  dt=""; printf relogin_failed; return 1
+}
 ```
 
-Replace the inline body at `ci-deploy.sh:669-679` (§1A) with a call to this
-helper — behavior byte-identical, one source of truth.
+**Load-bearing (P1-B, architecture review):** the extraction is NOT
+byte-identical to §1A. §1A's inline body ends at `dt=""` (`ci-deploy.sh:679`),
+whose exit status (0) would make the function `return 0` on every path — the
+`docker login` result is never surfaced. The helper MUST make the login status
+its return status (as above), or the pull-site gate `… && refetch_ghcr_and_relogin`
+would retry the pull against a still-bad cred and muddy the `recovered` signal.
+
+Then replace the inline body at `ci-deploy.sh:669-679` (§1A) with a call to this
+helper — §1A's observable behavior (recover on login FAILURE) is preserved; the
+helper just adds the return contract §1A never needed inline.
 
 ### Phase 2 — Recover at the pull site (`pull_image_with_fallback`, `ci-deploy.sh:750-782`)
 
-On a **GHCR** `docker pull` failure classified `auth_denied`, attempt recovery
-before giving up. Applies to BOTH GHCR pull branches (the zot→GHCR atomic
-fallback at `:765` and the zot-dark GHCR path at `:775`):
+Wrap the GHCR pull + recovery in ONE helper called at BOTH GHCR pull sites (the
+zot→GHCR atomic fallback at `:765` and the zot-dark GHCR path at `:775`) — do NOT
+inline the block twice (P2-G: same drift risk the classifier extraction avoids).
+The zot leg (`:755`) is NOT wrapped — zot-down already has the atomic GHCR
+fallback and the zot cred is a different class/registry (recovery is
+GHCR-credential-scoped).
 
 ```bash
-# after a GHCR `docker pull … 2>"$perr"` fails:
-if _pull_result_is_auth_denied "$perr" && refetch_ghcr_and_relogin; then
-  if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
-    pull_auth_recovery_event "${IMAGE}:${TAG}" recovered   # discriminating breadcrumb
-    return 0
+# _ghcr_pull_or_recover <perr>: pull ${IMAGE}:${TAG} from GHCR; on an AUTH-denied
+# failure, re-fetch the prd cred, relogin, retry the pull ONCE. Returns 0 on
+# success. On failure, sets the global RECOVERY_STAGE for the caller's
+# pull_failure_event tag (empty when no recovery was attempted). Retry-once, no loop.
+_ghcr_pull_or_recover() {
+  local perr="$1"
+  RECOVERY_STAGE=""
+  docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr" && return 0
+  # classify the STDERR CONTENT (not the file path — P2-E/security): the predicate
+  # reuses pull_failure_event's regex (ci-deploy.sh:525), extracted to one source.
+  if _pull_result_is_auth_denied "$(tail -c 400 "$perr" 2>/dev/null)"; then
+    local stage; stage="$(refetch_ghcr_and_relogin)"   # recovered|refetch_unavailable|relogin_failed
+    if [[ "$stage" == "recovered" ]]; then
+      if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+        pull_auth_recovery_event "${IMAGE}:${TAG}" recovered   # info breadcrumb, distinct op
+        return 0
+      fi
+      RECOVERY_STAGE="pull_still_denied"                       # relogin ok but retry pull still denied
+    else
+      RECOVERY_STAGE="$stage"                                  # refetch_unavailable|relogin_failed
+    fi
   fi
-fi
-pull_auth_recovery_event "${IMAGE}:${TAG}" not_recovered   # only when a recovery was attempted
-pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr")"
-return 1
+  return 1
+}
 ```
 
-- `_pull_result_is_auth_denied` reuses the existing classifier regex in
-  `pull_failure_event` (`ci-deploy.sh:525`) — extract it to a tiny predicate so
-  the two agree by construction (do NOT duplicate the regex).
-- **zot** pull failures are NOT auth-recovered here — the atomic GHCR fallback
-  already covers zot-down, and the zot cred is a different class/registry; recovery
-  targets only the GHCR credential. (zot is dark in prod today anyway.)
+Call site (both `:765` and `:775`), fail-open, temp-file cleanup preserved (P2-H):
+
+```bash
+if _ghcr_pull_or_recover "$perr"; then rm -f "$perr"; return 0; fi
+# pull_failure_event carries RECOVERY_STAGE as a tag so ONE event per failure
+# discriminates the root cause (no second event — simplicity + P1-A).
+pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null)" "${RECOVERY_STAGE:-}"
+rm -f "$perr"; return 1
+```
+
+- `_pull_result_is_auth_denied` reuses the classifier regex in `pull_failure_event`
+  (`ci-deploy.sh:525`) — extract it to a tiny predicate that greps its **content**
+  argument so the two agree by construction (do NOT duplicate the regex).
+- **No `not_recovered` second event** (P1-A + simplicity): a non-auth pull failure
+  (network/manifest_unknown) never enters the recovery branch, so `RECOVERY_STAGE`
+  stays empty and `pull_failure_event` fires exactly as today. Only an auth-denied
+  miss carries a non-empty `RECOVERY_STAGE`.
+- **cosign continuity (P2-F):** `refetch_ghcr_and_relogin`'s `docker login` writes
+  the retried auth ENTRY into the same `$GHCR_DOCKER_CONFIG` that
+  `verify_image_signature` mounts `:ro` — so a recovered pull does not then 401 the
+  `.sig` fetch. Re-exporting `GHCR_READ_USER` (username) alone is insufficient; the
+  auth entry is what cosign needs.
 - Retry the pull exactly **once** (no loop). Fail-open: on recovery miss, the
   terminal state is the unchanged `image_pull_failed` — never worse than today.
 
-### Phase 3 — Discriminating recovery telemetry (`pull_auth_recovery_event`)
+### Phase 3 — Discriminating recovery telemetry (`recovery_stage`)
 
-Add a fail-open, env-guarded Sentry breadcrumb (mirror `pull_failure_event`'s
-transport + `host_id` tag) fired ONLY when a pull-site auth recovery is
-attempted. One event answers, without SSH, the exact question the incident was
-blind to: **did recovery fire, and did it succeed?**
+The recovery must be diagnosable in ONE event per outcome (observability P1: a
+boolean `recovered|not_recovered` cannot distinguish the competing root causes).
+Two additions:
 
-- Tags: `feature:supply-chain op:image-pull-recovery host_id:<id> outcome:{recovered|not_recovered}`.
-- `level`: `info` on `recovered`, `warning` on `not_recovered`.
-- This is the affected-surface (host, operator-blind) discriminating probe
-  mandated by plan Phase 2.9.2 — it decides the root cause the moment it ships.
+1. **`pull_auth_recovery_event "${IMAGE}:${TAG}" recovered`** — a fail-open,
+   env-guarded Sentry breadcrumb (mirror `pull_failure_event`'s transport +
+   `host_id` tag; build the payload with `jq -n --arg`, never string-interpolate;
+   NEVER include raw docker stderr) fired ONLY on a **recovered-success**. Tags:
+   `feature:supply-chain op:image-pull-recovery host_id:<id>`, `level:info`. The
+   distinct `op` keeps recovered-successes OUT of the WEB-PLATFORM-59 failure
+   grouping.
+2. **`pull_failure_event` gains an optional `recovery_stage` arg** (3rd param)
+   surfaced as a Sentry tag. On an auth-denied miss the caller passes
+   `refetch_unavailable | relogin_failed | pull_still_denied` (from the helper's
+   staged return); on a non-auth failure it is empty (byte-identical to today).
+   So ONE failure event pins the branch — no second event on the miss path.
 
-### Phase 4 — Boot-path parity (`cloud-init.yml` seed `ghcr_login`, `:471-498`) — secondary
+This is the affected-surface (host, operator-blind) discriminating probe mandated
+by plan Phase 2.9.2 — one event decides the root cause the moment it ships:
+`recovered` (baked cred was login-ok/pull-deny, now healed), `pull_still_denied`
+(relogin succeeded but the `prd` cred itself cannot pull — escalate to PAT
+rotation), `relogin_failed` / `refetch_unavailable` (Doppler/token path).
 
-Mirror the pull-denial tolerance in the cold-boot seed-pull block (the boot
-variant of the same class, per #6090's dual-site precedent: on a seed `docker
-pull` denial, re-fetch `prd` + relogin + retry once). **Effect is deferred to
-host recreate** — `cloud-init.yml` is baked `user_data` with
-`ignore_changes=[user_data]`, so this does NOT land on running hosts and is NOT
-delivered by `apply-deploy-pipeline-fix.yml`. Included for parity so the next
-fresh host boots self-healing; the acute deploy-path fix is Phases 1-3.
+### Phase 4 — DEFERRED: boot-path parity (`cloud-init.yml` seed `ghcr_login`) → follow-up
 
-### Phase 5 — Config-source reconciliation (verification, not re-plumb)
+**Cut from this PR (simplicity review Rec1).** The boot seed-pull is the same
+login-ok/pull-deny class, but `cloud-init.yml` is baked `user_data` with
+`ignore_changes=[user_data]` — the change lands ONLY on host recreate, contributes
+**nothing** to the running-host P1, is NOT delivered by
+`apply-deploy-pipeline-fix.yml`, and adds a higher-blast-radius fresh-host
+provisioning edit + a new test file to a hotfix. File a tracked follow-up issue
+("boot-path GHCR seed-pull denial parity, mirroring ci-deploy.sh #6400"; may be
+mooted by zot/ADR-096). The acute fix is Phases 1-3.
+
+### Phase 5 — Config-source reconciliation + register/doc hygiene (verification)
 
 The baked snapshot is only a boot cache; the durable recovery is the re-fetch.
-Reconcile the source anyway so a fresh recreate bakes a pull-capable cred:
+Reconcile the source + correct the stale records:
 
 - /work verify (read-only, API): confirm `prd_terraform.GHCR_READ_TOKEN` (the
-  `TF_VAR_ghcr_read_token` baked source) is the **same pull-capable PAT** as
-  `prd.GHCR_READ_TOKEN`. If it diverges (e.g. an App token left from #6031
+  `TF_VAR_ghcr_read_token` baked source) is the **same pull-capable, `read:packages`-only
+  PAT** as `prd.GHCR_READ_TOKEN`. If it diverges (e.g. an App token left from #6031
   minter experiments), file a follow-up to re-align `prd_terraform` (no code
   change; the recovery already covers the running fleet).
 - In-PR doc fix: correct the stale App-minted claim in
   `2026-07-13-…-stale-baked-cred.md:71` (see Research Reconciliation).
+- In-PR register fix (P2-D): update `principles-register.md` AP-016 — it still
+  names the App-installation-token minter as "the multi-tenant target," which the
+  confirmed root cause (App tokens cannot pull private GHCR) makes infeasible for
+  the pull leg; record that the forward direction is ADR-096/zot. Leaving it stale
+  makes the register contradict the ADR this PR amends.
 
 ## Files to Edit
 
 - `apps/web-platform/infra/ci-deploy.sh` — extract `refetch_ghcr_and_relogin`
-  (Phase 1); pull-site auth recovery in `pull_image_with_fallback` (Phase 2);
-  `pull_auth_recovery_event` + `_pull_result_is_auth_denied` predicate (Phase 3).
+  (Phase 1, with explicit staged return); `_ghcr_pull_or_recover` + pull-site
+  recovery at both GHCR sites (Phase 2); `pull_auth_recovery_event` +
+  `_pull_result_is_auth_denied` predicate + `pull_failure_event` `recovery_stage`
+  arg (Phase 3).
 - `apps/web-platform/infra/ci-deploy.test.sh` — RED-first tests (see Test Scenarios).
-- `apps/web-platform/infra/cloud-init.yml` — seed-pull denial tolerance (Phase 4, parity).
-- `apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh` — parity test for Phase 4.
-- `knowledge-base/engineering/architecture/decisions/ADR-088-control-plane-installation-token-minter-for-private-ghcr-reads.md` — amend the staleness section (see ADR/C4).
+- `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md` — record the normative login≠pull-capability recovery contract for the interim GHCR break-glass path it owns (see ADR/C4).
+- `knowledge-base/engineering/architecture/decisions/ADR-088-control-plane-installation-token-minter-for-private-ghcr-reads.md` — factual note in the staleness section (why App tokens can't pull); NOT the normative MUST (P2-C).
+- `knowledge-base/engineering/architecture/principles-register.md` — update AP-016 (minter can't pull GHCR; forward is ADR-096/zot) (P2-D).
 - `knowledge-base/project/learnings/2026-07-13-web-2-fsn1-fresh-boot-image-pull-auth-denied-stale-baked-cred.md` — correct line 71 (stale App-minted claim).
 
 ## Files to Create
@@ -260,21 +395,37 @@ Reconcile the source anyway so a fresh recreate bakes a pull-capable cred:
 - **AC2:** a mock case where BOTH pulls deny (recovery miss) → `pull_image_with_fallback`
   returns 1, `final_write_state 1 "image_pull_failed"` path is reached (terminal
   state unchanged from today — fail-open proven).
-- **AC3:** the auth-denied classifier used by the pull-site retry is the SAME
-  predicate `pull_failure_event` uses (grep proves one regex, not two).
+- **AC3:** the auth-denied classifier `_pull_result_is_auth_denied` is the SAME
+  regex `pull_failure_event` uses (grep proves one regex, not two) AND it
+  classifies stderr **content** — a mock passing the stderr *content* string
+  matches, and the pull-site caller passes `tail -c 400 "$perr"` (not the path),
+  so recovery is not a silent no-op (security/P2-E).
 - **AC4:** zot-active mock: a zot pull failure still falls back to GHCR (existing
   behavior) and the new recovery does NOT fire on the zot leg (recovery is
   GHCR-cred-scoped).
-- **AC5:** `pull_auth_recovery_event` fires with `host_id` + `outcome` tag only
-  when a recovery is attempted; asserted via the Sentry-store mock-trace harness
-  (deterministic, no live network).
+- **AC5:** on a **recovered-success** `pull_auth_recovery_event` fires once
+  (`op:image-pull-recovery`, `host_id` tag, level info); on an auth-denied **miss**
+  NO second event fires — `pull_failure_event` carries the `recovery_stage` tag
+  (`refetch_unavailable|relogin_failed|pull_still_denied`); a non-auth failure
+  carries an empty `recovery_stage`. Asserted via the Sentry-store mock-trace
+  harness (deterministic, no live network).
 - **AC6:** `refetch_ghcr_and_relogin` never places the token on argv or in logs
-  (grep the function body: token reaches `docker login` only via
-  `--password-stdin`, and is unset after) — reuses §1A's discipline.
-- **AC7:** `bash -n` on `ci-deploy.sh` + the `cloud-init.yml` extracted `run:`
-  snippet; `ci-deploy.test.sh` + `cloud-init-ghcr-seed-login.test.sh` pass locally
-  (invoke via `bash <file>.test.sh` — the repo convention; verify at /work).
-- **AC8:** ADR-088 amendment + the corrected learning line committed in the same PR.
+  (grep the function body: token is `local`, reaches `docker login` only via
+  `--password-stdin`, and is unset after); `pull_auth_recovery_event` payload is
+  built with `jq -n --arg` and contains NO raw docker stderr — reuses §1A +
+  `pull_failure_event` discipline.
+- **AC7:** `bash -n` on `ci-deploy.sh`; `ci-deploy.test.sh` passes locally (invoke
+  via `bash ci-deploy.test.sh` — the repo convention; verify at /work).
+- **AC13 (cosign continuity, P2-F):** a mock asserts the recovered pull's
+  `docker login` writes into the SAME `$GHCR_DOCKER_CONFIG` that
+  `verify_image_signature` mounts `:ro`, so a recovered pull does not then 401 the
+  cosign `.sig` fetch.
+- **AC14 (helper return contract, P1-B):** `refetch_ghcr_and_relogin` returns
+  non-zero (and echoes `relogin_failed`/`refetch_unavailable`) when relogin does
+  NOT succeed — a mock with a failing `docker login` proves the retry pull is NOT
+  attempted (guards against the §1A `dt=""`-fallthrough return-0 bug).
+- **AC8:** ADR-096 recovery-contract note + ADR-088 factual note + AP-016 update +
+  the corrected learning line committed in the same PR.
 - **AC9:** `ship-deploy-pipeline-fix-gate.test.ts` parity: `ci-deploy.sh` is in
   both `apply-deploy-pipeline-fix.yml`'s `paths:` filter and `server.tf`'s
   `deploy_pipeline_fix` `triggers_replace` set (both already true — assert
@@ -297,23 +448,26 @@ Reconcile the source anyway so a fresh recreate bakes a pull-capable cred:
 
 ```yaml
 liveness_signal:
-  what: "web-platform-release deploy job reaches reason=ok AND prod /health .version advances; recovery events show outcome=recovered when the gap is exercised"
+  what: "web-platform-release deploy job reaches reason=ok AND prod /health .version advances; a recovered gap emits op:image-pull-recovery (recovered)"
   cadence: "every deploy (per merge to main touching apps/web-platform/**)"
-  alert_target: "Sentry WEB-PLATFORM-59 (image pull failed auth_denied) — existing; recovery breadcrumb narrows next occurrence"
-  configured_in: "apps/web-platform/infra/ci-deploy.sh (pull_failure_event, pull_auth_recovery_event); .github/workflows/web-platform-release.yml (deploy gate)"
+  alert_target: "Sentry WEB-PLATFORM-59 (image pull failed auth_denied) — existing; recovery_stage tag narrows next occurrence"
+  configured_in: "apps/web-platform/infra/ci-deploy.sh (pull_failure_event + recovery_stage tag, pull_auth_recovery_event); .github/workflows/web-platform-release.yml (deploy gate)"
 error_reporting:
-  destination: "Sentry (op:image-pull, op:image-pull-recovery) + Better Stack via #6396 Vector host-journald shipping"
-  fail_loud: "pull_failure_event on total failure (unchanged); pull_auth_recovery_event outcome=not_recovered (level=warning) when recovery was attempted and missed"
+  destination: "Sentry (op:image-pull with recovery_stage tag, op:image-pull-recovery) + Better Stack via #6396 Vector host-journald shipping"
+  fail_loud: "pull_failure_event (error) on total failure, now tagged recovery_stage; recovered-success emits op:image-pull-recovery (info) — one event per outcome, no double-emit"
 failure_modes:
-  - mode: "baked/first cred logs in but cannot pull (App token or revoked snapshot)"
-    detection: "PRELUDE 'docker login … ok' followed by IMAGE_PULL_FAIL auth_denied (Vector->Better Stack); recovery breadcrumb outcome tag"
-    alert_route: "Sentry WEB-PLATFORM-59; recovery outcome=recovered downgrades to info"
-  - mode: "prd cred itself invalid/rotated-away (recovery re-fetch also fails)"
-    detection: "pull_auth_recovery_event outcome=not_recovered + pull_failure_event auth_denied, both host_id-tagged"
-    alert_route: "Sentry WEB-PLATFORM-59 (error) — escalate to prd GHCR_READ_TOKEN rotation"
+  - mode: "baked/first cred logs in but cannot pull (App token or revoked snapshot) — the target bug"
+    detection: "pull_auth_recovery_event op:image-pull-recovery (recovered, host_id-tagged, level info); PRELUDE 'docker login … ok' then IMAGE_PULL_FAIL (Vector)"
+    alert_route: "no page — recovered is info; the recovery firing at all is the signal the baked cred is stale"
+  - mode: "prd cred itself cannot pull (login-ok but pull-deny even after re-fetch — e.g. an App token clobbered prd)"
+    detection: "pull_failure_event recovery_stage=pull_still_denied, host_id-tagged (relogin succeeded, retry pull still denied)"
+    alert_route: "Sentry WEB-PLATFORM-59 (error) — escalate to prd GHCR_READ_TOKEN rotation / verify prd holds a read:packages PAT"
+  - mode: "prd cred unfetchable / relogin fails (Doppler transient, revoked token)"
+    detection: "pull_failure_event recovery_stage=relogin_failed | refetch_unavailable, host_id-tagged"
+    alert_route: "Sentry WEB-PLATFORM-59 (error) — check Doppler prd GHCR_READ_{USER,TOKEN}"
   - mode: "DOPPLER_TOKEN unreadable in deploy exec context (regression)"
-    detection: "PRELUDE 'doppler/DOPPLER_TOKEN unavailable' line in Vector logs"
-    alert_route: "Better Stack log query (no native alert); surfaced in deploy-status reason"
+    detection: "recovery_stage=refetch_unavailable + PRELUDE 'doppler/DOPPLER_TOKEN unavailable' line in Vector logs"
+    alert_route: "Sentry WEB-PLATFORM-59 (error) + Better Stack log query; surfaced in deploy-status reason"
 logs:
   where: "host journald (ci-deploy tag) -> Vector -> Better Stack Logs source 2457081 (#6396); Sentry store API"
   retention: "Better Stack Logs default; Sentry event retention"
@@ -346,28 +500,32 @@ No new Terraform resource, secret, vendor, cron, DNS, or host. Delivery uses the
   `/hooks/infra-config` (no SSH, no image pull needed to land it). The workflow's
   "Redeploy to load applied profile" step no-ops for a script-only change
   (seccomp unchanged); the concurrent/next `web-platform-release` deploy exercises
-  the new recovery path. `cloud-init.yml` (Phase 4) is **not** auto-applied —
-  `ignore_changes=[user_data]` means it lands only on host recreate.
+  the new recovery path. (The boot-path `cloud-init.yml` parity was cut to a
+  follow-up — Phase 4; it would land only on host recreate anyway.)
 - **Drift / distinctness safeguards:** the running fleet is recovered by the
   re-fetch at deploy time (baked snapshot is a cache); no state file touched.
 - **Vendor-tier reality check:** none — no provider resource created.
 
 ## Architecture Decision (ADR/C4)
 
-This refines the **credential-recovery contract** established by ADR-088's
-#6090/#6395 staleness amendment — it is an amendment, not a new ADR and not a
-deferred issue.
+This records a **credential-recovery contract** for the interim GHCR pull path.
+Per the architecture review (P2-C), the live normative MUST is homed in **ADR-096**
+(which owns the interim GHCR break-glass path), NOT buried in the `superseded`
+ADR-088.
 
 ### ADR
 
-Amend `ADR-088-…` staleness section (the existing "#6090 recurrence,
-2026-07-13" amendment) to add: *"Login-success is not proof of pull capability. A
-credential that `docker login`s but cannot `docker pull` (a GitHub App
-installation token, or any login/pull capability split) makes login-outcome-gated
-recovery a false gate. Consumers MUST also re-fetch + relogin + retry on a
-`docker pull` **auth-denial**, not only on a login **failure**."* Status stays
-`superseded` (ADR-096/zot is the forward path); this hardens the interim GHCR path
-ADR-096 keeps as break-glass through soak.
+- **ADR-096 (normative, primary):** add to the interim-GHCR-path section: *"On the
+  interim GHCR pull path, login-success is not proof of pull capability. A
+  credential that `docker login`s but cannot `docker pull` (a GitHub App
+  installation token, or any login/pull capability split) makes login-outcome-gated
+  recovery a false gate. The host MUST re-fetch the `prd` cred + relogin + retry the
+  pull once on a `docker pull` **auth-denial**, not only on a login **failure** —
+  until zot retires this path."*
+- **ADR-088 (factual note only):** in its existing staleness section, cross-link
+  the above with the factual "why" (App installation tokens can't pull GHCR).
+  Status stays `superseded`; it does not carry a current-governing MUST.
+- **AP-016 register update:** see Phase 5 (P2-D).
 
 ### C4 views
 
@@ -414,17 +572,21 @@ two-stage `gh issue list --json` + standalone `jq --arg` pattern before freezing
 1. **login-ok / pull-deny → recovered:** mock `docker login` success + first
    GHCR pull `denied` + second pull success ⇒ deploy proceeds (AC1). *This is the
    scenario `main` fails.*
-2. **login-ok / pull-deny / re-fetch-login fails:** recovery attempted, second
-   pull still denies ⇒ `image_pull_failed`, fail-open, `outcome=not_recovered`
-   breadcrumb (AC2/AC5).
-3. **§1A path unchanged:** baked `docker login` FAILS → §1A (now via
+2. **login-ok / relogin-ok / retry-pull still denies:** recovery attempted,
+   `prd` cred also cannot pull ⇒ `image_pull_failed`, fail-open, single
+   `pull_failure_event` tagged `recovery_stage=pull_still_denied` (AC2/AC5).
+3. **relogin fails:** `refetch_ghcr_and_relogin` returns non-zero, retry pull NOT
+   attempted, `pull_failure_event` tagged `relogin_failed` (AC14).
+4. **§1A path unchanged:** baked `docker login` FAILS → §1A (now via
    `refetch_ghcr_and_relogin`) recovers → login ok → pull ok. Regression parity
    with existing §1A tests.
-4. **zot active, zot pull fails:** atomic GHCR fallback still works; recovery
+5. **zot active, zot pull fails:** atomic GHCR fallback still works; recovery
    does not fire on the zot leg (AC4).
-5. **token hygiene:** grep-assert `--password-stdin`-only + unset (AC6).
-6. **boot-path parity (Phase 4):** `cloud-init-ghcr-seed-login.test.sh` login-ok
-   / seed-pull-deny → retry-after-relogin.
+6. **token hygiene + no-stderr-leak:** grep-assert `--password-stdin`-only +
+   local + unset; recovery event payload built with `jq -n --arg`, no raw
+   stderr (AC6).
+7. **cosign continuity:** recovered pull's login writes `$GHCR_DOCKER_CONFIG`;
+   the `:ro`-mounted verify leg authenticates (AC13).
 
 ## Alternatives Considered
 

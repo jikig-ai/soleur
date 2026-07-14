@@ -26,50 +26,61 @@ before consumers). Fail-open is a contract, not a nicety — assert it.
 
 - [ ] 1.1 (RED) Add `ci-deploy.test.sh` case: baked `docker login` FAILS →
   §1A recovers via the new helper (regression parity with existing §1A test).
-- [ ] 1.2 Extract `refetch_ghcr_and_relogin()` (re-fetch prd GHCR cred, hardened
-  timeout45/3-try; `docker login --password-stdin`; re-export `GHCR_READ_USER`;
-  unset token). Guard on doppler + `DOPPLER_TOKEN`.
+- [ ] 1.2 Add `refetch_ghcr_and_relogin()`: re-fetch prd GHCR cred (hardened
+  timeout45/3-try); `docker login --password-stdin` into `$GHCR_DOCKER_CONFIG`;
+  token `local` + unset; on success `export GHCR_READ_USER`; **echo a staged
+  result** (`recovered|refetch_unavailable|relogin_failed`) and **return the
+  login status** (NOT §1A's `dt=""`-fallthrough return-0 — P1-B/AC14). Guard on
+  doppler + `DOPPLER_TOKEN`.
 - [ ] 1.3 Replace §1A inline body (`ci-deploy.sh:669-679`) with a call to the
-  helper — byte-identical behavior. (GREEN 1.1.)
+  helper — §1A observable behavior preserved. (GREEN 1.1.)
 
-## Phase 2 — Pull-site recovery (`pull_image_with_fallback`)
+## Phase 2 — Pull-site recovery (`_ghcr_pull_or_recover`)
 
 - [ ] 2.1 (RED) `ci-deploy.test.sh`: mock `docker login` ok + first GHCR pull
-  `denied` + second pull ok ⇒ `pull_image_with_fallback web` returns 0, exactly
-  one re-login + one pull retry (AC1). Fails on `main`.
-- [ ] 2.2 (RED) mock: both pulls deny ⇒ returns 1, `image_pull_failed` terminal
-  state unchanged (AC2, fail-open).
-- [ ] 2.3 Extract `_pull_result_is_auth_denied` predicate from
-  `pull_failure_event`'s classifier (`ci-deploy.sh:525`) — one regex (AC3).
-- [ ] 2.4 In both GHCR pull branches (`:765`, `:775`): on `auth_denied`, call
-  `refetch_ghcr_and_relogin` + retry the pull once before
-  `pull_failure_event`+return 1. Do NOT touch the zot pull leg (AC4). (GREEN
-  2.1/2.2.)
+  `denied` + second pull ok ⇒ returns 0, exactly one re-login + one pull retry
+  (AC1). Fails on `main`.
+- [ ] 2.2 (RED) mock: login-ok/relogin-ok/retry-pull still denies ⇒ returns 1,
+  `image_pull_failed`, one `pull_failure_event` tagged `recovery_stage=pull_still_denied`
+  (AC2). Also: relogin fails ⇒ retry pull NOT attempted (AC14).
+- [ ] 2.3 Extract `_pull_result_is_auth_denied` from `pull_failure_event`'s
+  classifier (`ci-deploy.sh:525`) — ONE regex, classifies stderr **content**
+  (predicate receives `tail -c 400 "$perr"`, not the path — AC3).
+- [ ] 2.4 Add `_ghcr_pull_or_recover` and call it at BOTH GHCR pull sites
+  (`:765`, `:775`); do NOT wrap the zot leg (`:755`) (AC4). `rm -f "$perr"` on
+  every return (P2-H). (GREEN 2.1/2.2.)
 
 ## Phase 3 — Discriminating recovery telemetry
 
-- [ ] 3.1 (RED) Sentry-store mock-trace assert: `pull_auth_recovery_event` fires
-  with `host_id` + `outcome` tag only when recovery is attempted (AC5).
+- [ ] 3.1 (RED) Sentry-store mock-trace: recovered-success emits ONE
+  `pull_auth_recovery_event` (`op:image-pull-recovery`, host_id, info); auth miss
+  emits NO second event — `pull_failure_event` carries `recovery_stage` tag
+  (AC5).
 - [ ] 3.2 Add `pull_auth_recovery_event` (mirror `pull_failure_event` transport;
-  `op:image-pull-recovery`; `level` info/warning by outcome). (GREEN 3.1.)
+  `jq -n --arg`; no raw stderr) + add optional `recovery_stage` arg to
+  `pull_failure_event` surfaced as a tag. (GREEN 3.1.)
+- [ ] 3.3 (RED/GREEN) AC13: recovered pull's login writes `$GHCR_DOCKER_CONFIG`;
+  cosign `:ro` verify leg authenticates.
 
-## Phase 4 — Boot-path parity (`cloud-init.yml`) — secondary
+## Phase 4 — DEFERRED (cloud-init boot-path parity → follow-up issue)
 
-- [ ] 4.1 (RED) `cloud-init-ghcr-seed-login.test.sh`: seed login-ok / seed-pull
-  deny → retry-after-relogin.
-- [ ] 4.2 Mirror the pull-denial tolerance in the seed `ghcr_login` block
-  (`cloud-init.yml:471-498`). Note in-PR: lands only on host recreate.
+- [ ] 4.1 File a follow-up issue: "boot-path GHCR seed-pull denial parity
+  mirroring ci-deploy.sh #6400" (recreate-only; may be mooted by zot/ADR-096).
+  NOT in this PR (simplicity review Rec1).
 
-## Phase 5 — Config reconciliation + docs
+## Phase 5 — Config reconciliation + register/doc hygiene
 
 - [ ] 5.1 Verify (read-only API) `prd_terraform.GHCR_READ_TOKEN` is the same
-  pull-capable PAT as `prd.GHCR_READ_TOKEN`; file a follow-up if it diverges.
+  pull-capable `read:packages` PAT as `prd.GHCR_READ_TOKEN`; file a follow-up if
+  it diverges.
 - [ ] 5.2 Correct the stale App-minted claim in
   `knowledge-base/project/learnings/2026-07-13-web-2-fsn1-fresh-boot-image-pull-auth-denied-stale-baked-cred.md`
   (~line 71).
-- [ ] 5.3 Amend ADR-088 staleness section with the login≠pull-capability
-  recovery contract (see plan ADR/C4). Verify no C4 change needed (enumeration
-  cited in plan).
+- [ ] 5.3 ADR-096: add the normative login≠pull-capability recovery contract for
+  the interim GHCR path; ADR-088: factual note only (P2-C). Verify no C4 change
+  (enumeration cited in plan).
+- [ ] 5.4 Update `knowledge-base/engineering/architecture/principles-register.md`
+  AP-016: minter can't pull GHCR; forward is ADR-096/zot (P2-D).
 
 ## Phase 6 — Follow-through + verify
 
@@ -79,9 +90,9 @@ before consumers). Fail-open is a contract, not a nicety — assert it.
 - [ ] 6.2 Add the `<!-- soleur:followthrough … -->` directive + `follow-through`
   label to #6400; wire any new `secrets=` into
   `.github/workflows/scheduled-followthrough-sweeper.yml`.
-- [ ] 6.3 `bash -n` ci-deploy.sh; run `ci-deploy.test.sh`,
-  `cloud-init-ghcr-seed-login.test.sh`, `ship-deploy-pipeline-fix-gate.test.ts`
-  (AC7/AC9). Confirm the exact runners via `package.json`/repo convention at /work.
+- [ ] 6.3 `bash -n` ci-deploy.sh; run `ci-deploy.test.sh` and
+  `ship-deploy-pipeline-fix-gate.test.ts` (AC7/AC9). Confirm the exact runners via
+  `package.json`/repo convention at /work.
 
 ## Notes
 
