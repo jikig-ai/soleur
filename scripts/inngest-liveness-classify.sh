@@ -19,9 +19,14 @@
 #                      caller graces/retries before declaring inngest_unhealthy)
 #   inngest_unhealthy  200 but no .functions array (malformed / proxy body) — restart family
 #   inngest_down       any code + the inngest-inventory.sh FATAL sentinel (functions query
-#                      failed → inngest unreachable) — restart family
-#   probe_unavailable  non-200 WITHOUT our FATAL sentinel (404 undeployed hook, 000 conn
-#                      refused, 403 CF-Access, gateway 5xx) — soft alert, NO restart
+#                      failed AND loopback /health != 200 → wedged/down) — restart family
+#   functions_query_degraded  any code + the inngest-inventory.sh DEGRADED sentinel (the
+#                      /v0/gql functions read transiently failed but loopback /health=200 →
+#                      inngest-server IS serving; #6407) — SOFT, NO restart, own soft issue
+#                      class. A sustained degraded state escalates to inngest_down in the
+#                      watchdog (persistence-escalation ceiling), not here.
+#   probe_unavailable  non-200 WITHOUT our FATAL/DEGRADED sentinel (404 undeployed hook, 000
+#                      conn refused, 403 CF-Access, gateway 5xx) — soft alert, NO restart
 
 # $1 = HTTP status code (string; "000" for a curl transport failure), $2 = response body.
 classify_liveness_mode() {
@@ -36,10 +41,15 @@ classify_liveness_mode() {
     fi
     return 0
   fi
-  # Non-200. Our script prints this exact sentinel on a real functions-query failure
-  # (inngest-inventory.sh run_inventory "FATAL /v0/gql functions …"); the webhook wraps
-  # it as a 500 with the body attached (include-command-output-in-response-on-error).
-  if printf '%s' "$body" | grep -qF 'inngest-inventory: FATAL'; then
+  # Non-200. Our script prints one of two distinct sentinels when the /v0/gql functions
+  # query fails (webhook wraps the non-zero exit body — include-command-output-in-response-
+  # on-error). DEGRADED (checked FIRST) = functions read blipped but loopback /health=200,
+  # so inngest IS serving (#6407): SOFT, no restart. FATAL = functions read failed AND
+  # /health != 200 (wedged/down): restart family. The prefixes are distinct (grep -qF, no
+  # shared boundary) so order is safe; DEGRADED-first documents the soft path as primary.
+  if printf '%s' "$body" | grep -qF 'inngest-inventory: DEGRADED'; then
+    echo "functions_query_degraded"
+  elif printf '%s' "$body" | grep -qF 'inngest-inventory: FATAL'; then
     echo "inngest_down"
   else
     echo "probe_unavailable"

@@ -1262,6 +1262,13 @@ LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
 flock -n 200 || {
   logger -t "$LOG_TAG" "REJECTED: another deploy in progress"
+  # #6407 Defect C — observability marker for the restart/deploy lock-contention path. A
+  # loser here means another deploy/restart already holds the critical section and will bring
+  # the component current — benign, NOT a failure (the restart-verify poll treats
+  # reason=lock_contention as non-terminal per ADR-079 #5960). Journald-only (tag ci-deploy →
+  # Vector Source 4 → Better Stack). Observability ONLY — the final_write_state stamp below is
+  # UNCHANGED (kept consistent with the deploy path; the consumer/poll adjudicates it).
+  logger -t "$LOG_TAG" "SOLEUR_INNGEST_RESTART_LOCK_CONTENTION action=$ACTION component=$COMPONENT outcome=deferred_to_in_flight" 2>/dev/null || true
   echo "Error: another deploy in progress" >&2
   final_write_state 1 "lock_contention"
   exit 1

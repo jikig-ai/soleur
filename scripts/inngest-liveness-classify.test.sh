@@ -39,6 +39,12 @@ assert_eq "200 + non-JSON body → inngest_unhealthy" "inngest_unhealthy" \
 assert_eq "500 + inventory FATAL sentinel → inngest_down (restart)" "inngest_down" \
   "$(classify_liveness_mode 500 'inngest-inventory: FATAL /v0/gql functions query failed or non-array (errors=[connection refused]); is inngest-server.service up?')"
 
+# #6407 Defect A: a TRANSIENT functions-query failure corroborated by loopback /health=200
+# yields the DEGRADED sentinel (inngest-server is serving; the /v0/gql read blipped). Must
+# classify functions_query_degraded — a SOFT mode, NO restart (distinct from inngest_down).
+assert_eq "500 + inventory DEGRADED sentinel → functions_query_degraded (soft, NO restart)" "functions_query_degraded" \
+  "$(classify_liveness_mode 500 'inngest-inventory: DEGRADED /v0/gql functions query transiently unreachable but /health=200 (errors=[__FETCH_FAILED__]) — soft, no restart')"
+
 # Deploy race / broken probe path: non-200 WITHOUT our FATAL sentinel — the hook is
 # not deployed yet (404), CF-Access/webhook.service degrade (403/000), gateway 5xx.
 # Must be probe_unavailable → NO restart (closes the relocated false-positive).
@@ -55,6 +61,8 @@ assert_eq "502 gateway (no FATAL sentinel) → probe_unavailable" "probe_unavail
 assert_eq "is_restart_family inngest_down → yes" "yes" "$(is_restart_family inngest_down && echo yes || echo no)"
 assert_eq "is_restart_family inngest_unhealthy → yes" "yes" "$(is_restart_family inngest_unhealthy && echo yes || echo no)"
 assert_eq "is_restart_family probe_unavailable → no" "no" "$(is_restart_family probe_unavailable && echo yes || echo no)"
+# #6407: functions_query_degraded is SOFT — excluded from the restart family (no churn).
+assert_eq "is_restart_family functions_query_degraded → no" "no" "$(is_restart_family functions_query_degraded && echo yes || echo no)"
 assert_eq "is_restart_family cold_start → no" "no" "$(is_restart_family cold_start && echo yes || echo no)"
 assert_eq "is_restart_family healthy → no" "no" "$(is_restart_family healthy && echo yes || echo no)"
 
