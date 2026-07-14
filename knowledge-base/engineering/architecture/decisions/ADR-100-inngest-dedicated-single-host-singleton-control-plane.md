@@ -330,6 +330,14 @@ The AOF volume is a separate resource that
 survives the replace. The Phase-2 cutover carries a bounded, operator-signed-off residual window
 (quiesce-all → register).
 
+**Regression back-ref (#6396):** defaulting `web_colocate_inngest = false` (#6178) silently dropped
+the co-located web-host Vector journald/host_metrics shipper — a fresh web host installed Vector
+ONLY inside the `%{ if web_colocate_inngest }` block, so post-cutover web hosts shipped **no** logs
+to Better Stack. #6396 re-adds the shipper independently (ungated, baked into
+`soleur-host-bootstrap.sh`, fail-open) + a terminal serving-block no-SSH cause breadcrumb + `host_id`
+on `pull_failure_event`. See ADR-082 Item 5 (this is the decision that caused the regression #6396
+closes).
+
 **Blast radius (SEC-H3, documented not eliminated):** the signing key authorizes the entire ~60-
 function registry, several running in the web-app process with full prd env (GHCR token minter,
 agent-spawn, bug-fixer, TF-drift). Inngest-host compromise ≈ indirect arbitrary-app-code execution

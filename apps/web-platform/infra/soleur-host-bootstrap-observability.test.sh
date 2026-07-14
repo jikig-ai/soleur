@@ -552,5 +552,146 @@ else
   no "AC21: bootstrap ghcr_login must emit ghcr_login_warn credential_absent + auth_denied on failure"
 fi
 
+# ── AC22 (#6396): ungated web-host Vector install (decoupled from web_colocate_inngest) ──
+# ADR-100 defaulted web_colocate_inngest=false, so a fresh web host installed NO Vector and
+# shipped NO logs. The shipper is now baked into soleur-host-bootstrap.sh (authors
+# /usr/local/bin/soleur-vector-install) and invoked fail-open at end-of-cloud-init.
+DOCKERFILE="$DIR/../Dockerfile"
+VECTOR_TF="$DIR/vector.tf"
+VECTOR_TOML="$DIR/vector.toml"
+# (1) bootstrap authors the installer exactly once (baked, 0 user_data body)
+n_vi=$( (grep -cE 'cat > /usr/local/bin/soleur-vector-install <<' "$BOOT") || true )
+if [ "$n_vi" = 1 ]; then
+  ok "AC22: soleur-host-bootstrap authors /usr/local/bin/soleur-vector-install once (baked)"
+else
+  no "AC22: bootstrap must author /usr/local/bin/soleur-vector-install exactly once (found $n_vi)"
+fi
+# (2) cloud-init call site: fail-open + wall-clock-bounded, at end-of-chain
+if grep -qE "timeout 60 sh -c 'soleur-vector-install' \|\| true" "$CI"; then
+  ok "AC22: cloud-init invokes 'timeout 60 sh -c soleur-vector-install || true' (fail-open + bounded)"
+else
+  no "AC22: cloud-init must call the ungated Vector install fail-open + timeout-bounded"
+fi
+# (3) the call site is the LAST runcmd — AFTER the terminal cloud_init_complete breadcrumb
+vi_ln=$( (grep -nE "timeout 60 sh -c 'soleur-vector-install'" "$CI" | head -1 | cut -d: -f1) || true )
+cc_ln=$( (grep -nF 'soleur-boot-emit cloud_init_complete info' "$CI" | head -1 | cut -d: -f1) || true )
+if [ -n "$vi_ln" ] && [ -n "$cc_ln" ] && [ "$vi_ln" -gt "$cc_ln" ]; then
+  ok "AC22: Vector install runcmd (line $vi_ln) is AFTER cloud_init_complete (line $cc_ln) — end-of-chain"
+else
+  no "AC22: Vector install must be end-of-chain, after cloud_init_complete (vi=$vi_ln cc=$cc_ln)"
+fi
+# (4) web-host unit carries EnvironmentFile=/etc/default/webhook-deploy (the DOPPLER_TOKEN source
+#     — spec-flow P0; NOT the inngest-only /etc/default/inngest-server), and NO After=inngest
+if grep -qE 'EnvironmentFile=/etc/default/webhook-deploy' "$BOOT" \
+   && ! awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" | grep -qF 'After=network-online.target inngest-server.service'; then
+  ok "AC22: web-host vector.service uses EnvironmentFile=/etc/default/webhook-deploy (no inngest coupling)"
+else
+  no "AC22: web vector.service must carry EnvironmentFile=/etc/default/webhook-deploy (DOPPLER_TOKEN source) + no After=inngest-server.service"
+fi
+# (5) bootstrap stages vector.toml, rendering @@HOST_NAME@@ from the TF-injected SOLEUR_HOST_NAME
+if grep -qE 's\|@@HOST_NAME@@\|\$\{SOLEUR_HOST_NAME:-\$\(hostname\)\}\|g' "$BOOT"; then
+  ok "AC22: bootstrap renders @@HOST_NAME@@ → \${SOLEUR_HOST_NAME:-\$(hostname)} at staging"
+else
+  no "AC22: bootstrap must render @@HOST_NAME@@ from SOLEUR_HOST_NAME (per-host discriminator)"
+fi
+# (6) cloud-init passes SOLEUR_HOST_NAME='${host_name}' to the bootstrap invocation
+if grep -qF "SOLEUR_HOST_NAME='\${host_name}'" "$CI"; then
+  ok "AC22: cloud-init passes SOLEUR_HOST_NAME='\${host_name}' to bootstrap (TF per-host injection)"
+else
+  no "AC22: bootstrap invocation must pass SOLEUR_HOST_NAME='\${host_name}'"
+fi
+# (7) server.tf injects the per-host host_name templatefile var (distinct per host)
+if grep -qE 'host_name\s*=\s*each\.key == "web-1" \? "soleur-web-platform" : "soleur-\$\{each\.key\}"' "$TF"; then
+  ok "AC22: server.tf injects per-host host_name (web-1→soleur-web-platform, web-N→soleur-web-N)"
+else
+  no "AC22: server.tf templatefile map must inject a per-host host_name var"
+fi
+# (8) delivery lockstep: vector.toml in host_script_files AND baked by the Dockerfile COPY
+if awk '/host_script_files = \[/,/^  \]/' "$TF" | grep -qF -- '"vector.toml"'; then
+  ok "AC22: vector.toml is in server.tf host_script_files"
+else
+  no "AC22: vector.toml must be in server.tf host_script_files (baked-set membership)"
+fi
+if grep -qF '/app/infra/vector.toml' "$DOCKERFILE"; then
+  ok "AC22: Dockerfile bakes /app/infra/vector.toml (lockstep with host_script_files)"
+else
+  no "AC22: Dockerfile COPY must include /app/infra/vector.toml (host_scripts_content_hash lockstep)"
+fi
+# (9) vector.toml carries the @@HOST_NAME@@ sentinel (both transforms), no bare inngest literal
+n_hn=$( (grep -cF '.host_name = "@@HOST_NAME@@"' "$VECTOR_TOML") || true )
+if [ "$n_hn" = 2 ] && ! grep -qF '.host_name = "soleur-inngest-prd"' "$VECTOR_TOML"; then
+  ok "AC22: vector.toml carries @@HOST_NAME@@ at both host_name sites (no bare soleur-inngest-prd)"
+else
+  no "AC22: vector.toml must carry @@HOST_NAME@@ at both host_name sites (found $n_hn; no bare literal)"
+fi
+# (10) inngest path renders @@HOST_NAME@@ → soleur-inngest-prd (byte-identical to pre-#6396)
+if grep -qF "sed -i 's|@@HOST_NAME@@|soleur-inngest-prd|g'" "$DIR/inngest-bootstrap.sh"; then
+  ok "AC22: inngest-bootstrap renders @@HOST_NAME@@ → soleur-inngest-prd (host_name unchanged)"
+else
+  no "AC22: inngest-bootstrap must render @@HOST_NAME@@ → soleur-inngest-prd on its Vector config"
+fi
+# (11) version/sha drift guard: the baked installer's pin equals vector.tf locals (both arches)
+tf_ver=$( (awk -F'"' '/vector_version[[:space:]]*=/ { print $2; exit }' "$VECTOR_TF") || true )
+tf_sha=$( (awk -F'"' '/vector_sha256[[:space:]]*=/ { print $2; exit }' "$VECTOR_TF") || true )
+tf_sha_arm=$( (awk -F'"' '/vector_sha256_arm64[[:space:]]*=/ { print $2; exit }' "$VECTOR_TF") || true )
+if [ -n "$tf_ver" ] && grep -qF "VECTOR_VERSION=\"$tf_ver\"" "$BOOT" \
+   && [ -n "$tf_sha" ] && grep -qF "$tf_sha" "$BOOT" \
+   && [ -n "$tf_sha_arm" ] && grep -qF "$tf_sha_arm" "$BOOT"; then
+  ok "AC22: baked soleur-vector-install pins match vector.tf (version=$tf_ver + both arch sha256)"
+else
+  no "AC22: baked installer version/sha must equal vector.tf locals (ver=$tf_ver amd64+arm64 sha)"
+fi
+
+# ── AC23 (#6396): terminal serving-block boot-emit trap (DC-2) ──
+# The cloud-init terminal docker-run block had NO named soleur-boot-emit fatal trap: a doppler
+# download exit 1 / docker run set -e abort reached only the SSH-only cloud-init-output.log.
+# (1) composite EXIT trap armed with a mutable stage + TMPENV-safe cleanup (arm-time TMPENV unset)
+# NOTE: cloud-init.yml escapes the shell `${TMPENV:-}` as `$${TMPENV:-}` so terraform's
+# templatefile() renders it back to `${TMPENV:-}` on the host (else the render fails). Match the
+# SOURCE form (`$$`).
+if grep -qE "trap 'rc=\\\$\?; rm -f \"\\\$\\\$\{TMPENV:-\}\"; \[ \"\\\$rc\" = 0 \] \|\| soleur-boot-emit \"\\\$stage\" fatal' EXIT" "$CI"; then
+  ok "AC23: terminal-block EXIT trap armed (rm -f \$\${TMPENV:-} + soleur-boot-emit \$stage fatal)"
+else
+  no "AC23: terminal block must arm 'trap rc=\$?; rm -f \${TMPENV:-}; [ \$rc = 0 ] || soleur-boot-emit \$stage fatal EXIT'"
+fi
+# (2) armed EARLY: stage=terminal_preamble appears BEFORE the hostscripts poweroff test
+tp_ln=$( (grep -nF 'stage=terminal_preamble' "$CI" | head -1 | cut -d: -f1) || true )
+hs_ln=$( (grep -nF 'refusing to start app' "$CI" | head -1 | cut -d: -f1) || true )
+if [ -n "$tp_ln" ] && [ -n "$hs_ln" ] && [ "$tp_ln" -lt "$hs_ln" ]; then
+  ok "AC23: stage=terminal_preamble armed (line $tp_ln) before the hostscripts poweroff (line $hs_ln)"
+else
+  no "AC23: trap must be armed (stage=terminal_preamble) before the hostscripts poweroff (tp=$tp_ln hs=$hs_ln)"
+fi
+# (3) explicit hostscripts_incomplete emit BEFORE the poweroff -f (poweroff bypasses the EXIT trap)
+if grep -qE 'soleur-boot-emit hostscripts_incomplete fatal;.*poweroff -f' "$CI"; then
+  ok "AC23: explicit soleur-boot-emit hostscripts_incomplete fatal precedes the hostscripts poweroff -f"
+else
+  no "AC23: the hostscripts test must emit hostscripts_incomplete fatal BEFORE its poweroff -f (poweroff skips the trap)"
+fi
+# (4) mutable stage advances through doppler_download and docker_run
+if grep -qF 'stage=doppler_download' "$CI" && grep -qF 'stage=docker_run' "$CI"; then
+  ok "AC23: mutable stage advances (doppler_download, docker_run)"
+else
+  no "AC23: the trap stage must advance through doppler_download + docker_run"
+fi
+# (5) disarm (trap - EXIT) AFTER docker_run/rm-TMPENV, BEFORE the self-emitting egress probe
+dr_ln=$( (grep -nF 'stage=docker_run' "$CI" | head -1 | cut -d: -f1) || true )
+# find the disarm that sits between docker_run and the egress probe
+ep_ln=$( (grep -nF 'cron-egress-enforce-probe.sh' "$CI" | head -1 | cut -d: -f1) || true )
+disarm_ln=$( (awk -v a="$dr_ln" -v b="$ep_ln" 'NR>a && NR<b && /^    trap - EXIT$/ {print NR; exit}' "$CI") || true )
+if [ -n "$disarm_ln" ]; then
+  ok "AC23: EXIT trap disarmed (line $disarm_ln) between docker_run and the self-emitting egress probe"
+else
+  no "AC23: the EXIT trap must be disarmed (trap - EXIT) after docker_run and before the egress probe (dr=$dr_ln ep=$ep_ln)"
+fi
+# (6) all four terminal stages the Sentry issue-alert filters on are the ones this block emits
+for st in terminal_preamble hostscripts_incomplete doppler_download docker_run; do
+  if grep -qF "$st" "$CI"; then
+    ok "AC23: terminal stage '$st' present in cloud-init (wired to the Phase-5b Sentry alert)"
+  else
+    no "AC23: terminal stage '$st' missing from cloud-init (breaks the Sentry issue-alert filter lockstep)"
+  fi
+done
+
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

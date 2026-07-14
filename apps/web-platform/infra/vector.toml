@@ -341,7 +341,12 @@ if exists(.CONTAINER_NAME) {
   .source_kind = "journald"
 }
 .shipper = "vector"
-.host_name = "soleur-inngest-prd"
+# @@HOST_NAME@@ (#6396): per-host Better Stack discriminator. ALL hosts multiplex into
+# the ONE Logs source 2457081 — host_name is the sole discriminator. The inngest path
+# (inngest-bootstrap.sh) renders this to `soleur-inngest-prd` (byte-identical to pre-#6396);
+# the ungated web-host path (soleur-host-bootstrap.sh) renders the TF-injected per-host
+# server name (`soleur-web-platform`/`soleur-web-2`). Keep both render sites in lockstep.
+.host_name = "@@HOST_NAME@@"
 '''
 
 # ---------------- Transform: host_metrics → flat log shape ----------------
@@ -355,7 +360,8 @@ inputs = ["host_metrics"]
 source = '''
 .source_kind = "host_metrics"
 .shipper = "vector"
-.host_name = "soleur-inngest-prd"
+# @@HOST_NAME@@ (#6396) — see the tag_journald note above; rendered per-host at install.
+.host_name = "@@HOST_NAME@@"
 
 metric_name = "unknown"
 if exists(.name) {

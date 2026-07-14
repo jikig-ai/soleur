@@ -530,10 +530,13 @@ pull_failure_event() {
   logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
-    payload="$(jq -n --arg ref "$ref" --arg r "$pull_result" \
+    # #6396: tag host_id so a deploy-path pull failure is host-attributable from Sentry alone
+    # (PR #6395 had to cross-reference the release aggregate JSON to pin it to web-2). The
+    # readonly HOST_ID global (:137-157) is empty-safe; jq emits an empty-string tag if unset.
+    payload="$(jq -n --arg ref "$ref" --arg r "$pull_result" --arg h "${HOST_ID:-}" \
       '{message: ("image pull failed (" + $r + ") " + $ref),
         level: "error", platform: "other", logger: "ci-deploy",
-        tags: {feature: "supply-chain", op: "image-pull", pull_result: $r},
+        tags: {feature: "supply-chain", op: "image-pull", pull_result: $r, host_id: $h},
         extra: {ref: $ref}}' 2>/dev/null)" || return 0
     curl -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \

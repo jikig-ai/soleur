@@ -291,7 +291,7 @@ if command -v terraform >/dev/null 2>&1; then
   # All map vars are placeholders EXCEPT the toggle; keep in sync with server.tf's
   # templatefile map — a new map var breaks this render (the intended tripwire).
   render_ci() {
-    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="t", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ghcr_read_user="u", ghcr_read_token="g", ci_ssh_public_key_openssh="k", web_colocate_inngest=%s })\n' \
+    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="t", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ghcr_read_user="u", ghcr_read_token="g", ci_ssh_public_key_openssh="k", web_colocate_inngest=%s, host_name="soleur-web-platform" })\n' \
       "$CLOUD_INIT" "$1" | terraform -chdir="$RENDER_SCRATCH" console 2>/dev/null > "$2"
   }
   # yaml.safe_load a rendered doc, stripping terraform console's `<<EOT … EOT` heredoc wrapper.
@@ -321,6 +321,11 @@ PY
     # against a vacuous retention assertion).
     assert "render web_colocate_inngest=$CASE RETAINS fail-closed 'refusing to start app' poweroff gate" \
       "grep -qF 'refusing to start app' '$OUT'"
+    # #6396: the Vector shipper is DECOUPLED from web_colocate_inngest — a fresh ungated web host
+    # installs Vector via the end-of-chain soleur-vector-install runcmd (baked in
+    # soleur-host-bootstrap.sh), NOT the gated inngest path. This RETAINS on the gated-OFF render.
+    assert "render web_colocate_inngest=$CASE RETAINS ungated 'soleur-vector-install' (#6396)" \
+      "grep -qF 'soleur-vector-install' '$OUT'"
     assert "render web_colocate_inngest=$CASE is valid YAML" "render_yaml_ok '$OUT'"
   done
   # true (bool) keeps the co-located bootstrap.

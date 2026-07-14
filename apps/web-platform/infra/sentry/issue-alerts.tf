@@ -1428,3 +1428,85 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
     ignore_changes = [environment]
   }
 }
+
+# web-host terminal serving-block boot FATAL (#6396). The cloud-init terminal `docker run` block
+# emits `soleur-boot-emit <stage> fatal` (tags.stage ∈ {terminal_preamble, hostscripts_incomplete,
+# doppler_download, docker_run}) on a no-SSH boot abort. This is the SOLE PAGE for a dead web-2
+# WARM STANDBY: web-2 takes no app.soleur.ai traffic, so `betteruptime_monitor.app` (LB surface,
+# A-record → web-1) stays GREEN on a dead standby, and the #5933 per-host origin uptime probe was
+# RETIRED (dns.tf) — no other signal fires. Pages on the FIRST occurrence (a serving-host boot
+# failure is high-severity), NOT a rate. The four stage tags are emitted ONLY at fatal level by the
+# terminal-block EXIT trap + the explicit hostscripts_incomplete emit, so the stage filter alone
+# selects fatal terminal-block failures (no separate level filter needed).
+#
+# GROUPING NOTE (mirrors zot_mirror_fallback_rate:1352): these events use the SHARED
+# `soleur-boot-emit` message ("soleur-cloud-init boot stage"; stage is a tag, not the message), so
+# they share ONE issue-group with routine boot stages — that group is effectively always active, so
+# event_frequency value=1 pages on the first event that MATCHES the fatal-stage filter. Over-loud in
+# the SAFE direction (never a miss); a fatal terminal-block boot is always worth paging.
+#
+# Distinct `frequency = 24` avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-23,30,60-62).
+# Events carry only stage/host_id/region tags — no user content.
+resource "sentry_issue_alert" "web_terminal_boot_fatal" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "web-host-terminal-boot-fatal"
+  action_match = "all"
+  filter_match = "any"
+  frequency    = 24
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        value           = 1
+        interval        = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "terminal_preamble"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "hostscripts_incomplete"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "doppler_download"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "docker_run"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
+  # on this project → falls through to ActiveMembers, paging the solo founder. Events carry only
+  # stage/host_id/region — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
