@@ -1,9 +1,9 @@
 ---
 title: "Workstream board: empty columns collapse by default"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-08-11
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#5668"
 ---
 
