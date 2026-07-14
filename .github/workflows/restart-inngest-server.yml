@@ -37,6 +37,10 @@ jobs:
       group: deploy-inngest-restart
       cancel-in-progress: false
     steps:
+      # #6407 (code-review Finding B): check out the repo so the restart-poll classifier
+      # helper (scripts/inngest-restart-poll-classify.sh) is on disk for the Verify step
+      # to source via $GITHUB_WORKSPACE.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Trigger restart via webhook
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
@@ -74,6 +78,11 @@ jobs:
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
+          # #6407 (Finding B): pure per-frame classifier + budget-expiry adjudicators
+          # (classify_restart_frame / deploy_status_confirms_fresh_inngest /
+          # liveness_confirms_healthy) live in a sourceable, unit-tested helper.
+          # shellcheck source=/dev/null
+          source "$GITHUB_WORKSPACE/scripts/inngest-restart-poll-classify.sh"
           SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
           # Client window must exceed ci-deploy.sh's server-side verify worst
           # case (#5145). Verify gates on /health (process liveness); the
@@ -122,46 +131,46 @@ jobs:
             # state before this run's webhook exec writes "running". Only
             # honor terminal states written at/after FRESH_FLOOR.
             START_TS=$(echo "$BODY" | jq -r '.start_ts // 0')
-            case "$EXIT_CODE" in
-              0)
-                if [ "$COMPONENT" = "inngest" ]; then
-                  if [ "$START_TS" -lt "$FRESH_FLOOR" ]; then
-                    echo "Attempt $i/$MAX_POLLS: state predates this trigger (start_ts=$START_TS < floor=$FRESH_FLOOR) — waiting"
-                  else
-                    echo "::notice::Inngest restart completed successfully (reason=$REASON)"
-                    echo "$BODY" | jq .
-                    exit 0
-                  fi
-                else
-                  echo "Attempt $i/$MAX_POLLS: last operation was for $COMPONENT, not inngest"
-                fi
+            # #6407 (Finding B): the per-frame decision is the pure, unit-tested
+            # classify_restart_frame; this case only reproduces the side effects.
+            verdict=$(classify_restart_frame "$EXIT_CODE" "$COMPONENT" "$START_TS" "$FRESH_FLOOR" "$REASON")
+            case "$verdict" in
+              success)
+                echo "::notice::Inngest restart completed successfully (reason=$REASON)"
+                echo "$BODY" | jq .
+                exit 0
                 ;;
-              -1)
+              terminal_fail)
+                echo "::error::Restart failed (exit_code=$EXIT_CODE, reason=$REASON)"
+                echo "$BODY" | jq .
+                exit 1
+                ;;
+              lock_contention)
+                # #6407 (ADR-079 #5960): a flock loser means a concurrent deploy/restart
+                # already holds the critical section and will bring inngest current — this is
+                # NON-TERMINAL, not a restart failure. Keep polling for a fresh
+                # component=inngest terminal success; the budget-expiry STATE re-read
+                # adjudicates if none arrives. Any OTHER failure reason still fails loud above.
+                only_lock_contention="yes"
+                echo "Attempt $i/$MAX_POLLS: reason=lock_contention (a concurrent deploy/restart holds the lock) — NON-TERMINAL, keep polling for the winner's terminal…"
+                ;;
+              predates)
+                echo "Attempt $i/$MAX_POLLS: state predates this trigger (start_ts=$START_TS < floor=$FRESH_FLOOR) — waiting"
+                ;;
+              still_running)
                 echo "Attempt $i/$MAX_POLLS: restart still running (reason=$REASON)"
                 ;;
-              -2)
+              no_prior)
                 echo "Attempt $i/$MAX_POLLS: no prior deploy/restart recorded"
                 ;;
-              -3)
+              corrupt)
                 echo "Attempt $i/$MAX_POLLS: corrupt state read, retrying"
                 ;;
-              *)
-                if [ "$COMPONENT" = "inngest" ]; then
-                  if [ "$START_TS" -lt "$FRESH_FLOOR" ]; then
-                    echo "Attempt $i/$MAX_POLLS: state predates this trigger (start_ts=$START_TS < floor=$FRESH_FLOOR) — waiting"
-                  elif [ "$REASON" = "lock_contention" ]; then
-                    # #6407 (ADR-079 #5960): a flock loser means a concurrent deploy/restart
-                    # already holds the critical section and will bring inngest current — this is
-                    # NON-TERMINAL, not a restart failure. Keep polling for a fresh
-                    # component=inngest terminal success; the budget-expiry STATE re-read
-                    # adjudicates if none arrives. Any OTHER failure reason still fails loud below.
-                    only_lock_contention="yes"
-                    echo "Attempt $i/$MAX_POLLS: reason=lock_contention (a concurrent deploy/restart holds the lock) — NON-TERMINAL, keep polling for the winner's terminal…"
-                  else
-                    echo "::error::Restart failed (exit_code=$EXIT_CODE, reason=$REASON)"
-                    echo "$BODY" | jq .
-                    exit 1
-                  fi
+              other_component)
+                # exit_code==0 → "last operation was for X, not inngest"; a failure frame
+                # for a non-inngest component → "waiting for inngest". Preserve both strings.
+                if [ "$EXIT_CODE" = "0" ]; then
+                  echo "Attempt $i/$MAX_POLLS: last operation was for $COMPONENT, not inngest"
                 else
                   echo "Attempt $i/$MAX_POLLS: last state is for $COMPONENT (exit_code=$EXIT_CODE), waiting for inngest"
                 fi
@@ -186,25 +195,23 @@ jobs:
               -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
               "https://deploy.soleur.ai/hooks/deploy-status" || echo "000")
             FINAL_BODY=$(cat /tmp/status-body 2>/dev/null || echo "")
-            if [ "$FINAL_CODE" = "200" ] && echo "$FINAL_BODY" | jq -e . >/dev/null 2>&1; then
-              F_EXIT=$(echo "$FINAL_BODY" | jq -r '.exit_code // -99')
-              F_COMPONENT=$(echo "$FINAL_BODY" | jq -r '.component // "unknown"')
+            # #6407 (Finding B): the fresh-inngest confirmation is the pure, unit-tested
+            # deploy_status_confirms_fresh_inngest; the message fields are re-read here.
+            if [ "$(deploy_status_confirms_fresh_inngest "$FINAL_CODE" "$FINAL_BODY" "$FRESH_FLOOR")" = "yes" ]; then
               F_REASON=$(echo "$FINAL_BODY" | jq -r '.reason // "unknown"')
               F_START=$(echo "$FINAL_BODY" | jq -r '.start_ts // 0')
-              [ "$F_START" -eq "$F_START" ] 2>/dev/null || F_START=0
-              if [ "$F_COMPONENT" = "inngest" ] && [ "$F_EXIT" = "0" ] && [ "$F_START" -ge "$FRESH_FLOOR" ]; then
-                # SOLEUR_INNGEST_RESTART_LOCK_CONTENTION: benign supersede confirmed via a fresh
-                # inngest success (greppable in the run log; the host-side journald marker is in
-                # ci-deploy.sh).
-                echo "SOLEUR_INNGEST_RESTART_LOCK_CONTENTION action=restart component=inngest outcome=superseded_confirmed_current"
-                echo "::notice::restart superseded by in-flight deploy/restart (inngest confirmed current: reason=$F_REASON start_ts=$F_START)"
-                exit 0
-              fi
+              # SOLEUR_INNGEST_RESTART_LOCK_CONTENTION: benign supersede confirmed via a fresh
+              # inngest success (greppable in the run log; the host-side journald marker is in
+              # ci-deploy.sh).
+              echo "SOLEUR_INNGEST_RESTART_LOCK_CONTENTION action=restart component=inngest outcome=superseded_confirmed_current"
+              echo "::notice::restart superseded by in-flight deploy/restart (inngest confirmed current: reason=$F_REASON start_ts=$F_START)"
+              exit 0
             fi
             # deploy-status did not confirm a fresh inngest success — corroborate via the
             # liveness hook (an independent "inngest IS serving" signal: 200 + a non-empty
-            # functions registry, the classifier's healthy shape inlined — this workflow does
-            # not check out the repo so the classifier cannot be sourced).
+            # functions registry). The healthy-shape check is the pure, unit-tested
+            # liveness_confirms_healthy (#6407 Finding B); the non-empty requirement is
+            # load-bearing (a cold-start empty registry must NOT confirm).
             rm -f /tmp/liveness-body
             LIVE_SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
             LIVE_CODE=$(curl -s --max-time 10 -o /tmp/liveness-body -w '%{http_code}' \
@@ -214,7 +221,7 @@ jobs:
               -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
               "https://deploy.soleur.ai/hooks/inngest-liveness" || echo "000")
             LIVE_BODY=$(cat /tmp/liveness-body 2>/dev/null || echo "")
-            if [ "$LIVE_CODE" = "200" ] && echo "$LIVE_BODY" | jq -e 'type == "object" and (.functions | type == "array") and (.functions | length > 0)' >/dev/null 2>&1; then
+            if [ "$(liveness_confirms_healthy "$LIVE_CODE" "$LIVE_BODY")" = "yes" ]; then
               echo "SOLEUR_INNGEST_RESTART_LOCK_CONTENTION action=restart component=inngest outcome=superseded_confirmed_current"
               echo "::notice::restart superseded by in-flight deploy/restart (inngest liveness healthy: functions registered)"
               exit 0
