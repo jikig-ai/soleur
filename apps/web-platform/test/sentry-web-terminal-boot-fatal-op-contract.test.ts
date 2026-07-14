@@ -68,8 +68,9 @@ describe("web-host-terminal-boot-fatal alert op contract", () => {
     expect(scoped).toMatch(/value\s*=\s*1/);
     expect(scoped).toMatch(/interval\s*=\s*"1h"/);
     // Every filter selects on key = "stage" (the shared soleur-boot-emit events tag the region).
+    // Whitespace-tolerant so a `terraform fmt` re-alignment doesn't break a behavior-unchanged test.
     expect(scoped).not.toMatch(/key\s*=\s*"(?!stage")/);
-    expect(scoped).toContain(`key   = "stage"`);
+    expect(scoped).toMatch(/key\s*=\s*"stage"/);
     // No-SSH page target: a silent removal would make the alarm fire-but-page-nobody.
     expect(scoped).toContain("IssueOwners");
     expect(scoped).toContain("ActiveMembers");

@@ -604,7 +604,7 @@ else
       # Stack host_name. The inngest path pins the literal `soleur-inngest-prd` (byte-identical
       # to pre-#6396 — all hosts multiplex into Logs source 2457081; host_name is the sole
       # discriminator). The ungated web-host path renders the TF-injected per-host server name.
-      # Keep in lockstep with vector.toml:344,358 (the two @@HOST_NAME@@ sites).
+      # Keep in lockstep with the two @@HOST_NAME@@ sites in vector.toml (tag_journald + tag_metrics).
       sed -i 's|@@HOST_NAME@@|soleur-inngest-prd|g' "$VECTOR_CONFIG"
       chown -R deploy:deploy /var/lib/vector
       # Log the sha256 of the installed config so cat-deploy-state's

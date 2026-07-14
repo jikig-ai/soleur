@@ -345,6 +345,17 @@ cat > /usr/local/bin/soleur-vector-install <<'VINEOF'
   CFG=/etc/vector/vector.toml
   UNIT=/etc/systemd/system/vector.service
 
+  # #6396: on a (deprecated) web_colocate_inngest=true host the inngest path already installed +
+  # started an inngest-OWNED vector.service (host_name=soleur-inngest-prd,
+  # EnvironmentFile=/etc/default/inngest-server). Do NOT clobber it — the two Vector paths are
+  # made mutually exclusive by THIS runtime guard, not by runcmd ordering (a template gate can't
+  # negate the string-"false" rollback value cleanly). Default hosts (colocate=false) have no
+  # such unit, so the web install proceeds.
+  if [ -f "$UNIT" ] && grep -q '/etc/default/inngest-server' "$UNIT" 2>/dev/null; then
+    echo "soleur-vector-install: inngest-owned vector.service present; skipping web install" >&2
+    exit 0
+  fi
+
   [ -f /opt/soleur/vector.toml ] || { echo "soleur-vector-install: staged config missing; skipping" >&2; exit 0; }
   mkdir -p /etc/vector /var/lib/vector
   install -m 0644 /opt/soleur/vector.toml "$CFG"
@@ -372,6 +383,11 @@ cat > /usr/local/bin/soleur-vector-install <<'VINEOF'
   # host), NOT /etc/default/inngest-server (inngest-only). Without it `doppler run` has no token
   # → Vector never starts → fail-open masks it → silent absent host_name source (spec-flow P0).
   # Project is always `soleur` for a web host (dev!=prd; web reads --config prd).
+  # doppler is resolved via `command -v` (NOT a hardcoded /usr/bin/doppler): on the web host the
+  # doppler CLI is tarball-installed to /usr/local/bin (cloud-init.yml), NOT /usr/bin — every
+  # sibling web-host unit (cron-egress-firewall.service etc.) uses this same resolution to avoid
+  # a 203/EXEC crash-loop. Fail-open else-branch: if doppler/token is somehow absent, exec vector
+  # directly (it starts but the Better Stack sink 401s — ships nothing — rather than crash-looping).
   cat > "$UNIT" <<'UNITEOF'
 [Unit]
 Description=Vector observability shipper (journald + host_metrics -> Better Stack Logs)
@@ -381,7 +397,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/webhook-deploy
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml
+ExecStart=/bin/sh -c 'D="$(command -v doppler || true)"; if [ -n "$D" ] && [ -n "$DOPPLER_TOKEN" ]; then exec "$D" run --project soleur --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml; else exec /usr/local/bin/vector --config /etc/vector/vector.toml; fi'
 Restart=on-failure
 RestartSec=10
 User=deploy

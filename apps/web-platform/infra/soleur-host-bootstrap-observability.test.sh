@@ -566,14 +566,19 @@ if [ "$n_vi" = 1 ]; then
 else
   no "AC22: bootstrap must author /usr/local/bin/soleur-vector-install exactly once (found $n_vi)"
 fi
-# (2) cloud-init call site: fail-open + wall-clock-bounded, at end-of-chain
-if grep -qE "timeout 60 sh -c 'soleur-vector-install' \|\| true" "$CI"; then
-  ok "AC22: cloud-init invokes 'timeout 60 sh -c soleur-vector-install || true' (fail-open + bounded)"
+# (2) cloud-init call site: fail-open + wall-clock-bounded, at end-of-chain. The outer `timeout`
+#     MUST strictly exceed the helper's inner `curl --max-time N` — else a slow cold-boot tarball
+#     fetch is SIGTERM-truncated into a silently-absent Better Stack source (perf review P2).
+outer_to=$( (grep -oE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | head -1 | grep -oE '[0-9]+') || true )
+inner_ct=$( (grep -oE 'curl -fsSL --max-time [0-9]+' "$BOOT" | head -1 | grep -oE '[0-9]+$') || true )
+if grep -qE "timeout [0-9]+ sh -c 'soleur-vector-install' \|\| true" "$CI" \
+   && [ -n "$outer_to" ] && [ -n "$inner_ct" ] && [ "$outer_to" -gt "$inner_ct" ]; then
+  ok "AC22: cloud-init Vector install is fail-open + timeout-bounded; outer timeout ${outer_to}s > inner curl ${inner_ct}s"
 else
-  no "AC22: cloud-init must call the ungated Vector install fail-open + timeout-bounded"
+  no "AC22: ungated Vector install must be 'timeout N sh -c … || true' with outer N (${outer_to:-?}) > inner curl --max-time (${inner_ct:-?})"
 fi
 # (3) the call site is the LAST runcmd — AFTER the terminal cloud_init_complete breadcrumb
-vi_ln=$( (grep -nE "timeout 60 sh -c 'soleur-vector-install'" "$CI" | head -1 | cut -d: -f1) || true )
+vi_ln=$( (grep -nE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | head -1 | cut -d: -f1) || true )
 cc_ln=$( (grep -nF 'soleur-boot-emit cloud_init_complete info' "$CI" | head -1 | cut -d: -f1) || true )
 if [ -n "$vi_ln" ] && [ -n "$cc_ln" ] && [ "$vi_ln" -gt "$cc_ln" ]; then
   ok "AC22: Vector install runcmd (line $vi_ln) is AFTER cloud_init_complete (line $cc_ln) — end-of-chain"
@@ -587,6 +592,25 @@ if grep -qE 'EnvironmentFile=/etc/default/webhook-deploy' "$BOOT" \
   ok "AC22: web-host vector.service uses EnvironmentFile=/etc/default/webhook-deploy (no inngest coupling)"
 else
   no "AC22: web vector.service must carry EnvironmentFile=/etc/default/webhook-deploy (DOPPLER_TOKEN source) + no After=inngest-server.service"
+fi
+# (4b) ExecStart resolves doppler via `command -v` — NOT a hardcoded /usr/bin/doppler. On the web
+#      host doppler is tarball-installed to /usr/local/bin (cloud-init), so a hardcoded /usr/bin
+#      path is a 203/EXEC crash-loop → Vector never runs → silent absent source (code-quality P1).
+#      Mirrors every sibling web-host unit (cron-egress-firewall.service etc.).
+if awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qF 'ExecStart=/bin/sh -c ' \
+   && awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qF 'command -v doppler' \
+   && ! awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qE '^ExecStart=/usr/bin/doppler'; then
+  ok "AC22: web vector.service ExecStart resolves doppler via 'command -v' (no hardcoded /usr/bin/doppler crash-loop)"
+else
+  no "AC22: web vector.service ExecStart must resolve doppler via 'command -v' (web host has doppler at /usr/local/bin, NOT /usr/bin)"
+fi
+# (4c) the helper skips when an inngest-OWNED vector.service already exists (deprecated
+#      web_colocate_inngest=true host) — mutual exclusion enforced at runtime, not by runcmd order.
+if awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" \
+   | grep -qE "grep -q '/etc/default/inngest-server' \"\\\$UNIT\""; then
+  ok "AC22: helper skips install when an inngest-owned vector.service is present (no clobber on colocate hosts)"
+else
+  no "AC22: soleur-vector-install must skip when /etc/systemd/system/vector.service is inngest-owned (colocate mutual-exclusion)"
 fi
 # (5) bootstrap stages vector.toml, rendering @@HOST_NAME@@ from the TF-injected SOLEUR_HOST_NAME
 if grep -qE 's\|@@HOST_NAME@@\|\$\{SOLEUR_HOST_NAME:-\$\(hostname\)\}\|g' "$BOOT"; then
@@ -630,17 +654,37 @@ if grep -qF "sed -i 's|@@HOST_NAME@@|soleur-inngest-prd|g'" "$DIR/inngest-bootst
 else
   no "AC22: inngest-bootstrap must render @@HOST_NAME@@ → soleur-inngest-prd on its Vector config"
 fi
-# (11) version/sha drift guard: the baked installer's pin equals vector.tf locals (both arches)
+# (11) version/sha drift guard: the baked installer's pin equals vector.tf locals, with each sha
+#      BOUND TO ITS ARCH case-branch (an amd64↔arm64 sha swap must go RED — presence-anywhere
+#      would silently pass while the runtime `got=VEC_SHA` check fails on the mis-bound arch;
+#      test-design P2). vector.tf `_arm64` line does NOT satisfy the plain `vector_sha256=` awk.
 tf_ver=$( (awk -F'"' '/vector_version[[:space:]]*=/ { print $2; exit }' "$VECTOR_TF") || true )
 tf_sha=$( (awk -F'"' '/vector_sha256[[:space:]]*=/ { print $2; exit }' "$VECTOR_TF") || true )
 tf_sha_arm=$( (awk -F'"' '/vector_sha256_arm64[[:space:]]*=/ { print $2; exit }' "$VECTOR_TF") || true )
 if [ -n "$tf_ver" ] && grep -qF "VECTOR_VERSION=\"$tf_ver\"" "$BOOT" \
-   && [ -n "$tf_sha" ] && grep -qF "$tf_sha" "$BOOT" \
-   && [ -n "$tf_sha_arm" ] && grep -qF "$tf_sha_arm" "$BOOT"; then
-  ok "AC22: baked soleur-vector-install pins match vector.tf (version=$tf_ver + both arch sha256)"
+   && [ -n "$tf_sha" ] && grep -qE "x86_64-unknown-linux-musl\";[[:space:]]*VEC_SHA=\"$tf_sha\"" "$BOOT" \
+   && [ -n "$tf_sha_arm" ] && grep -qE "aarch64-unknown-linux-musl\";[[:space:]]*VEC_SHA=\"$tf_sha_arm\"" "$BOOT"; then
+  ok "AC22: baked pins match vector.tf, each sha bound to its arch branch (version=$tf_ver; amd64+arm64 sha256)"
 else
-  no "AC22: baked installer version/sha must equal vector.tf locals (ver=$tf_ver amd64+arm64 sha)"
+  no "AC22: baked installer version/sha must equal vector.tf locals with amd64 sha on the x86_64 branch AND arm64 sha on the aarch64 branch"
 fi
+# (12) hardening-directive parity between the two hand-maintained vector.service heredocs (web in
+#      soleur-host-bootstrap.sh, inngest in inngest-bootstrap.sh). A future hardening add to one
+#      must propagate to the other — else a dropped ProtectSystem/sandbox line is a silent
+#      regression (pattern-recognition P3). Only shared sandbox directives (the intended
+#      divergences — After=/EnvironmentFile=/ExecStart — are excluded).
+INNGEST_BS="$DIR/inngest-bootstrap.sh"
+parity_ok=1
+for d in 'Type=simple' 'Restart=on-failure' 'RestartSec=10' 'User=deploy' 'Group=deploy' \
+         'SupplementaryGroups=systemd-journal' 'MemoryMax=256M' 'CPUQuota=50%' \
+         'ProtectSystem=strict' 'ProtectHome=read-only' 'PrivateTmp=true' \
+         'ReadWritePaths=/var/lib/vector' 'ReadOnlyPaths=/etc/vector' 'TimeoutStopSec=30' \
+         'WantedBy=multi-user.target'; do
+  if ! grep -qF "$d" "$BOOT" || ! grep -qF "$d" "$INNGEST_BS"; then
+    parity_ok=0; no "AC22: vector.service hardening directive '$d' missing from web+inngest parity set"
+  fi
+done
+[ "$parity_ok" = 1 ] && ok "AC22: web + inngest vector.service share all 15 sandbox/hardening directives (parity)"
 
 # ── AC23 (#6396): terminal serving-block boot-emit trap (DC-2) ──
 # The cloud-init terminal docker-run block had NO named soleur-boot-emit fatal trap: a doppler
@@ -684,14 +728,23 @@ if [ -n "$disarm_ln" ]; then
 else
   no "AC23: the EXIT trap must be disarmed (trap - EXIT) after docker_run and before the egress probe (dr=$dr_ln ep=$ep_ln)"
 fi
-# (6) all four terminal stages the Sentry issue-alert filters on are the ones this block emits
-for st in terminal_preamble hostscripts_incomplete doppler_download docker_run; do
-  if grep -qF "$st" "$CI"; then
-    ok "AC23: terminal stage '$st' present in cloud-init (wired to the Phase-5b Sentry alert)"
+# (6) all four terminal stages the Sentry issue-alert filters on are EMITTED by this block.
+#     Match the EMIT construct, not the bare token (every stage also appears in comment prose, so a
+#     bare `grep -qF "$st"` false-passes even if the real emit were deleted — test-design P2).
+#     terminal_preamble/doppler_download/docker_run are set via `stage=<x>` (the trap emits $stage);
+#     hostscripts_incomplete is the explicit `soleur-boot-emit hostscripts_incomplete fatal`.
+for st in terminal_preamble doppler_download docker_run; do
+  if grep -qF "stage=$st" "$CI"; then
+    ok "AC23: terminal stage '$st' is a real 'stage=' assignment (trap emits it; wired to the Sentry alert)"
   else
-    no "AC23: terminal stage '$st' missing from cloud-init (breaks the Sentry issue-alert filter lockstep)"
+    no "AC23: terminal stage '$st' must be a real 'stage=$st' assignment (not comment prose)"
   fi
 done
+if grep -qF 'soleur-boot-emit hostscripts_incomplete fatal' "$CI"; then
+  ok "AC23: terminal stage 'hostscripts_incomplete' is a real soleur-boot-emit call (wired to the Sentry alert)"
+else
+  no "AC23: 'hostscripts_incomplete' must be a real soleur-boot-emit call (not comment prose)"
+fi
 
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

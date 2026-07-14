@@ -796,10 +796,13 @@ runcmd:
     soleur-boot-emit cloud_init_complete info
 
   # #6396: ungated Vector observability install — the LAST runcmd item, AFTER the app binds
-  # :80/:3000 (cloud_init_complete above) and AFTER the web_colocate_inngest gate block, so
-  # the two Vector paths never both fire and observing the boot can never delay serving. Fail-open
-  # + wall-clock-bounded: `timeout` caps a hung fetch/unit-start; the `sh -c` subshell + `|| true`
-  # contain any non-zero exit AND the leaked `set -e` from the plugin-seed block (:651, never
-  # disarmed). Decouples web-host log shipping from web_colocate_inngest (default-false, ADR-100);
-  # Vector backfills from the journald cursor, so end-of-chain placement loses no logs.
-  - timeout 60 sh -c 'soleur-vector-install' || true
+  # :80/:3000 (cloud_init_complete above). On a (deprecated) web_colocate_inngest=true host the
+  # helper detects the inngest-owned vector.service and skips (mutual exclusion is enforced INSIDE
+  # soleur-vector-install, not by this runcmd's position). Fail-open + wall-clock-bounded:
+  # `timeout 180` caps a hung fetch/unit-start (must exceed the helper's inner `curl --max-time
+  # 120` so a slow cold-boot tarball fetch is not SIGTERM-truncated into a silently-absent source);
+  # the `sh -c` subshell + `|| true` contain any non-zero exit AND the leaked `set -e` from the
+  # plugin-seed block (:651, never disarmed). Runs after serving, so the longer bound adds no
+  # user-facing latency. Decouples web-host log shipping from web_colocate_inngest (default-false,
+  # ADR-100); Vector backfills from the journald cursor, so end-of-chain placement loses no logs.
+  - timeout 180 sh -c 'soleur-vector-install' || true
