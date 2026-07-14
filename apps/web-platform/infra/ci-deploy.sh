@@ -533,8 +533,9 @@ _pull_result_is_auth_denied() {
 # can echo the registry Authorization header (security-sentinel #7). Fail-open.
 # #6400: optional 3rd arg recovery_stage — on an auth-denied MISS the pull-site
 # caller passes refetch_unavailable|relogin_failed|pull_still_denied so ONE event
-# discriminates the root-cause branch (no second event on the miss path). Empty
-# on a non-auth failure (byte-identical Sentry tag surface to pre-#6400).
+# discriminates the root-cause branch (no second event on the miss path). The tag is
+# an empty string on a non-auth failure — grouping is unchanged (op/pull_result
+# identical to pre-#6400; Sentry fingerprinting is message/culprit-based, not tag-based).
 pull_failure_event() {
   local ref="$1" detail_raw="${2:-}" recovery_stage="${3:-}" pull_result
   if   _pull_result_is_auth_denied "$detail_raw"; then pull_result="auth_denied"
@@ -652,11 +653,13 @@ zot_gate_degraded_event() {
 # load-bearing difference from §1A's inline body, whose trailing `dt=""` (exit 0)
 # would make the function return 0 on every path and muddy the `recovered` signal
 # the pull-site gate keys on). Token via --password-stdin only; kept `local` + unset
-# after so no child process env carries it. On success re-exports GHCR_READ_USER
-# (username, not a secret) and the retried auth ENTRY lands in the SAME
-# $GHCR_DOCKER_CONFIG the prelude wrote (same `docker login ghcr.io`, unchanged
-# HOME/DOCKER_CONFIG) — so a recovered pull does not then 401 the cosign .sig fetch
-# (P2-F). Guarded on doppler + DOPPLER_TOKEN (prd-root scoped).
+# after so no child process env carries it. The recovered auth ENTRY is carried by
+# the `docker login ghcr.io` filesystem write into $GHCR_DOCKER_CONFIG (persists past
+# the `$(…)` subshell this helper runs in) — the SAME file the prelude wrote and the
+# cosign verifier mounts :ro, so a recovered pull does not then 401 the .sig fetch
+# (P2-F). (The `export GHCR_READ_USER` below is defensive-only — it is swallowed by the
+# subshell and no downstream reader consumes the env var; the docker-config write is
+# what authenticates.) Guarded on doppler + DOPPLER_TOKEN (prd-root scoped).
 refetch_ghcr_and_relogin() {
   command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]] || { printf refetch_unavailable; return 1; }
   local du="" dt="" n=0
@@ -823,7 +826,8 @@ _ghcr_pull_or_recover() {
   # classify the stderr CONTENT (tail -c 400), never the path — else recovery no-ops (P2-E).
   if _pull_result_is_auth_denied "$(tail -c 400 "$perr" 2>/dev/null)"; then
     # `|| true`: helper returns non-zero on a miss; a bare assignment would abort the
-    # deploy under set -euo. We parse the stage STRING (rc is captured into RECOVERY_STAGE below).
+    # deploy under set -euo. We parse the stage STRING (that string, not the rc, is what
+    # gets copied into RECOVERY_STAGE below; the rc is discarded via `|| true`).
     local stage; stage="$(refetch_ghcr_and_relogin)" || true   # recovered|refetch_unavailable|relogin_failed
     if [[ "$stage" == "recovered" ]]; then
       if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
