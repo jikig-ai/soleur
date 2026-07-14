@@ -1017,6 +1017,30 @@ assert_pull_failure() {
 
 assert_pull_failure
 
+# #6396: pull_failure_event carries tags.host_id so a deploy-path `image pull failed` is host-
+# attributable from Sentry alone (PR #6395 had to cross-reference the release aggregate JSON to
+# pin it to web-2). Assert the wiring at the source, scoped to the pull_failure_event body: the
+# payload builder must thread the readonly HOST_ID global (empty-safe) into the tags object.
+# Runtime HOST_ID resolution is unit-tested (host-identity.test.ts) and its docker-run injection
+# is proven by assert_soleur_host_id above; this guards the ONE remaining seam — host_id reaching
+# the pull_failure_event Sentry payload. Body-scoped so an unrelated `host_id` (e.g. the other
+# Sentry emits, which do NOT tag host_id) cannot satisfy it vacuously.
+assert_pull_failure_host_id() {
+  TOTAL=$((TOTAL + 1))
+  local body
+  body="$(awk '/^pull_failure_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
+  if printf '%s' "$body" | grep -qE -- '--arg h "\$\{HOST_ID:-\}"' \
+     && printf '%s' "$body" | grep -qE 'host_id: \$h'; then
+    PASS=$((PASS + 1))
+    echo "  PASS: pull_failure_event threads --arg h \"\${HOST_ID:-}\" into tags.host_id (#6396)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: pull_failure_event must pass --arg h \"\${HOST_ID:-}\" AND put host_id: \$h in tags (#6396)"
+  fi
+}
+
+assert_pull_failure_host_id
+
 # Canary crash on start: docker run fails for canary
 assert_canary_crash() {
   TOTAL=$((TOTAL + 1))

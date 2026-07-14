@@ -557,7 +557,7 @@ runcmd:
     # runcmd (set -e) before the app starts. Secret via single-quote interpolation, same as
     # doppler_token below (trusted operator value, generated ASCII — no shell metachar).
     trap - EXIT
-    WEBHOOK_DEPLOY_SECRET='${webhook_deploy_secret}' SOLEUR_SENTRY_DSN='${sentry_dsn}' sh "$SEED/soleur-host-bootstrap.sh" "$SEED"
+    WEBHOOK_DEPLOY_SECRET='${webhook_deploy_secret}' SOLEUR_SENTRY_DSN='${sentry_dsn}' SOLEUR_HOST_NAME='${host_name}' sh "$SEED/soleur-host-bootstrap.sh" "$SEED"
     rm -rf "$SEED"
     set +e  # H3 (#6090): scope set -e — runcmd is ONE /bin/sh; leak = silent abort (plan).
   # END host-script extraction (#5921)
@@ -729,15 +729,22 @@ runcmd:
 
   - |
     set -e
+    # #6396: terminal-block boot-emit trap. Mutable `stage` names the failing region in one
+    # SSH-free Sentry event; fires on exit-1/set-e aborts. The two poweroff paths bypass the
+    # EXIT trap and are handled explicitly (see below). Rationale: ADR-082 Item 5.
+    stage=terminal_preamble
+    trap 'rc=$?; rm -f "$${TMPENV:-}"; [ "$rc" = 0 ] || soleur-boot-emit "$stage" fatal' EXIT
     # Fail-closed gate (#5921): the host-script extraction block above writes
     # /run/soleur-hostscripts.ok ONLY after hash-verify + all installs + all assertions
     # pass. runcmd is NOT under a top-level set -e, so a failed extraction still reaches
     # here — refuse to bring the app up (which would serve with an unconfigured egress
     # firewall / missing deploy scripts) and poweroff so the host is visibly absent to the
     # provision-armed Better Stack uptime check.
-    test -f /run/soleur-hostscripts.ok || { echo "FATAL: host-script extraction incomplete; refusing to start app" >&2; poweroff -f; }
+    # #6396: poweroff -f is signal death, so the EXIT trap does NOT run — emit explicitly.
+    test -f /run/soleur-hostscripts.ok || { soleur-boot-emit hostscripts_incomplete fatal; echo "FATAL: host-script extraction incomplete; refusing to start app" >&2; poweroff -f; }
     # Source token from the restricted env file (avoids exposing it in /proc/<pid>/cmdline)
     set -a; . /etc/default/webhook-deploy; set +a
+    stage=doppler_download
     TMPENV=$(mktemp /tmp/doppler-env.XXXXXX)
     chmod 600 "$TMPENV"
     if ! doppler secrets download --no-file --format docker --project soleur --config prd > "$TMPENV"; then
@@ -752,6 +759,7 @@ runcmd:
     # still omitted to avoid regressing unrelated tools that may exec
     # from /tmp — if future hardening flips it on, grep for other
     # exec-from-/tmp call sites first.
+    stage=docker_run
     docker run -d \
       --name soleur-web-platform \
       --log-driver journald \
@@ -766,6 +774,9 @@ runcmd:
       -p 0.0.0.0:3000:3000 \
       "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
     rm -f "$TMPENV"
+    # #6396: disarm the EXIT trap before the self-emitting egress probe (spanning it would
+    # double-emit); the trap-covered region fails via exit-1/set-e, never poweroff.
+    trap - EXIT
     # Fresh-host post-container egress-enforcement probe (#5933; details in the script
     # header). Fail-closed: a non-enforcing host poweroffs rather than serve an open
     # exfil path. The probe emits an SSH-free Sentry event before exiting non-zero.
@@ -775,3 +786,9 @@ runcmd:
     fi
     # #6090: reached serving host (poweroff → Better Stack).
     soleur-boot-emit cloud_init_complete info
+
+  # #6396: ungated Vector install — LAST runcmd item, AFTER the app binds :80/:3000. Fail-open +
+  # wall-clock-bounded (`timeout 180` > the helper's inner `curl --max-time 120`; `sh -c` subshell
+  # + `|| true` contain any exit + the leaked plugin-seed `set -e`). Decoupled from
+  # web_colocate_inngest (the helper skips an inngest-owned unit). Rationale: ADR-082 Item 5.
+  - timeout 180 sh -c 'soleur-vector-install' || true

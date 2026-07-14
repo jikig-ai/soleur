@@ -56,6 +56,12 @@ locals {
     # large (~6.8 KB) for cloud-init user_data (32,768-byte cap; already ~29.6 KB). The
     # running host gets it byte-for-byte from terraform_data.cosign_trusted_root below.
     "cosign-trusted-root.json",
+    # Vector shipper config (#6396) — baked so the ungated web-host Vector install
+    # (soleur-host-bootstrap.sh authors /usr/local/bin/soleur-vector-install, run fail-open
+    # at end-of-cloud-init) can render + install it to /etc/vector/vector.toml. Carries the
+    # @@HOST_NAME@@ sentinel resolved per-host at install. This decouples web-host log shipping
+    # from web_colocate_inngest (default-false post-ADR-100), which otherwise ships NO logs.
+    "vector.toml",
   ]
 
   # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
@@ -172,6 +178,14 @@ resource "hcloud_server" "web" {
     # templatefile `%{ if web_colocate_inngest }` directive. Default false (dedicated
     # scheduler, ADR-100). Bool is load-bearing (see variables.tf).
     web_colocate_inngest = var.web_colocate_inngest
+    # #6396 — TF-derived per-host Better Stack host_name, injected into the bootstrap
+    # invocation (SOLEUR_HOST_NAME) and rendered into the ungated web-host vector.toml's
+    # @@HOST_NAME@@ sentinel. MUST equal each host's server name (`name` above) so web-1 and
+    # web-2 resolve to DISTINCT sources in the shared Logs source 2457081 — a generic/duplicate
+    # OS hostname would collapse them. NOT runtime $(hostname): cloud-init sets no explicit
+    # hostname:/fqdn: and relies on Hetzner seeding hostname=server-name, which is not guaranteed
+    # distinct on a re-imaged host.
+    host_name = each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"
   }))
 
   # cloud-init and ssh_keys are create-time attributes. After import,

@@ -202,6 +202,7 @@ COPY --from=builder \
   /app/infra/journald-soleur.conf \
   /app/infra/soleur-host-bootstrap.sh \
   /app/infra/cosign-trusted-root.json \
+  /app/infra/vector.toml \
   /opt/soleur/host-scripts/
 RUN chown -R 1001:1001 /opt/soleur
 

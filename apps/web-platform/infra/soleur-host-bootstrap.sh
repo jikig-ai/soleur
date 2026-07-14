@@ -302,6 +302,129 @@ chmod 0755 /usr/local/bin/soleur-wait-ready
 STAGE=bootstrap_complete
 _sentry_emit "$(printf '{"message":"soleur-host-bootstrap complete","level":"info","tags":{"stage":"bootstrap_complete","host_id":"%s","region":"bootstrap"}}' "$HOST_ID")"
 
+# ---------------------------------------------------------------------------
+# Vector observability shipper — UNGATED web-host path (#6396). ADR-100 moved
+# scheduling off the web host (web_colocate_inngest default false), so a fresh
+# web host installs NO Vector via the inngest path and ships NO logs. This
+# decouples the shipper: stage the baked config here (SEED is rm -rf'd after
+# bootstrap), then author /usr/local/bin/soleur-vector-install for the ungated,
+# fail-open, timeout-bounded end-of-cloud-init run (AFTER the app binds :80/:3000,
+# so observing the boot can NEVER break serving). Same journald/host_metrics data
+# class already ships from the inngest source — no new processor.
+#
+# The STAGING below is under `set -e` + emit_fail ON PURPOSE: vector.toml is a
+# hash-verified baked file (host_scripts_content_hash gate), so its absence is a
+# coherence violation (fail-closed, like every other baked asset). The RUNTIME
+# install (binary download, unit start) is where fail-open lives — see the helper.
+STAGE=vector_stage; FAILED_FILE=vector.toml
+mkdir -p /opt/soleur /etc/vector
+# Persist the shared config with @@HOST_NAME@@ resolved to THIS host's TF-injected server
+# name (SOLEUR_HOST_NAME, passed by cloud-init). Distinct per host so web-1/web-2 do not
+# collapse into one host_name in the shared Better Stack source 2457081.
+sed "s|@@HOST_NAME@@|${SOLEUR_HOST_NAME:-$(hostname)}|g" "$SEED/vector.toml" > /opt/soleur/vector.toml
+
+STAGE=vector_install_author; FAILED_FILE=soleur-vector-install
+cat > /usr/local/bin/soleur-vector-install <<'VINEOF'
+#!/bin/sh
+# Fail-open Vector installer for the ungated web-host path (#6396). Invoked once at
+# end-of-cloud-init as `timeout 60 sh -c 'soleur-vector-install' || true`, AFTER the app
+# container binds :80/:3000. Vector is observability, NEVER serving-critical: EVERY step
+# here is swallowed (the outer ( set +e … ) || true), so a slow/failed fetch or unit start
+# can never wedge the boot. Idempotent: version-pinned + sha-verified + skip-on-match.
+( set +e
+  # Pin MUST stay in lockstep with vector.tf locals (vector_version / vector_sha256[_arm64]);
+  # soleur-host-bootstrap-observability.test.sh AC22 asserts byte-identity vs vector.tf.
+  VECTOR_VERSION="0.43.1"
+  case "$(uname -m)" in
+    x86_64|amd64)  VEC_TRIPLE="x86_64-unknown-linux-musl";  VEC_SHA="8a3cc62d18ec88bb8433159d1d3455d3c77fefff73ce46d4f8cc464e100f65f1" ;;
+    aarch64|arm64) VEC_TRIPLE="aarch64-unknown-linux-musl"; VEC_SHA="365bab73244780083eb95b3e42161a9179f23a0811ffa6180f613c3af06ed8e6" ;;
+    *) echo "soleur-vector-install: unsupported arch $(uname -m); skipping" >&2; exit 0 ;;
+  esac
+  BIN=/usr/local/bin/vector
+  VERFILE=/var/lib/vector/version
+  CFG=/etc/vector/vector.toml
+  UNIT=/etc/systemd/system/vector.service
+
+  # #6396: on a (deprecated) web_colocate_inngest=true host the inngest path already installed +
+  # started an inngest-OWNED vector.service (host_name=soleur-inngest-prd,
+  # EnvironmentFile=/etc/default/inngest-server). Do NOT clobber it — the two Vector paths are
+  # made mutually exclusive by THIS runtime guard, not by runcmd ordering (a template gate can't
+  # negate the string-"false" rollback value cleanly). Default hosts (colocate=false) have no
+  # such unit, so the web install proceeds.
+  if [ -f "$UNIT" ] && grep -q '/etc/default/inngest-server' "$UNIT" 2>/dev/null; then
+    echo "soleur-vector-install: inngest-owned vector.service present; skipping web install" >&2
+    exit 0
+  fi
+
+  [ -f /opt/soleur/vector.toml ] || { echo "soleur-vector-install: staged config missing; skipping" >&2; exit 0; }
+  mkdir -p /etc/vector /var/lib/vector
+  install -m 0644 /opt/soleur/vector.toml "$CFG"
+  chown -R deploy:deploy /var/lib/vector 2>/dev/null || true
+
+  cur=""; [ -f "$VERFILE" ] && cur="$(cat "$VERFILE" 2>/dev/null)"
+  if [ "$cur" != "$VECTOR_VERSION" ] || [ ! -x "$BIN" ]; then
+    tmp="$(mktemp -d)" || exit 0
+    url="https://packages.timber.io/vector/${VECTOR_VERSION}/vector-${VECTOR_VERSION}-${VEC_TRIPLE}.tar.gz"
+    if curl -fsSL --max-time 120 -o "$tmp/v.tgz" "$url"; then
+      got="$(sha256sum "$tmp/v.tgz" | awk '{print $1}')"
+      if [ "$got" = "$VEC_SHA" ]; then
+        if tar -xzf "$tmp/v.tgz" -C "$tmp" && install -m 0755 "$tmp/vector-${VEC_TRIPLE}/bin/vector" "$BIN"; then
+          printf '%s\n' "$VECTOR_VERSION" > "$VERFILE"
+        fi
+      else
+        echo "soleur-vector-install: sha mismatch (exp $VEC_SHA got $got); skipping" >&2
+      fi
+    fi
+    rm -rf "$tmp"
+  fi
+  [ -x "$BIN" ] || { echo "soleur-vector-install: vector binary absent; skipping unit" >&2; exit 0; }
+
+  # Web-host unit — DOPPLER_TOKEN comes from /etc/default/webhook-deploy (present on EVERY web
+  # host), NOT /etc/default/inngest-server (inngest-only). Without it `doppler run` has no token
+  # → Vector never starts → fail-open masks it → silent absent host_name source (spec-flow P0).
+  # Project is always `soleur` for a web host (dev!=prd; web reads --config prd).
+  # doppler is resolved via `command -v` (NOT a hardcoded /usr/bin/doppler): on the web host the
+  # doppler CLI is tarball-installed to /usr/local/bin (cloud-init.yml), NOT /usr/bin — every
+  # sibling web-host unit (cron-egress-firewall.service etc.) uses this same resolution to avoid
+  # a 203/EXEC crash-loop. Fail-open else-branch: if doppler/token is somehow absent, exec vector
+  # directly (it starts but the Better Stack sink 401s — ships nothing — rather than crash-looping).
+  cat > "$UNIT" <<'UNITEOF'
+[Unit]
+Description=Vector observability shipper (journald + host_metrics -> Better Stack Logs)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/webhook-deploy
+ExecStart=/bin/sh -c 'D="$(command -v doppler || true)"; if [ -n "$D" ] && [ -n "$DOPPLER_TOKEN" ]; then exec "$D" run --project soleur --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml; else exec /usr/local/bin/vector --config /etc/vector/vector.toml; fi'
+Restart=on-failure
+RestartSec=10
+User=deploy
+Group=deploy
+SupplementaryGroups=systemd-journal
+MemoryMax=256M
+CPUQuota=50%
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/lib/vector
+ReadOnlyPaths=/etc/vector
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+  systemctl daemon-reload 2>/dev/null || true
+  # enable + restart --no-block (NOT enable --now: --now no-ops on an already-running unit and
+  # keeps a stale config; --no-block keeps the fail-open install off the serving-latency path).
+  systemctl enable vector.service 2>/dev/null || true
+  systemctl restart --no-block vector.service 2>/dev/null || true
+) || true
+exit 0
+VINEOF
+chmod 0755 /usr/local/bin/soleur-vector-install
+
 # Sentinel LAST: extraction + install proven complete. The terminal `docker run` block gates
 # on this file; without it the host poweroffs (fail-closed) instead of serving with an
 # unconfigured egress firewall / missing deploy scripts.
