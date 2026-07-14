@@ -19,6 +19,15 @@ art_33_deadline: "n/a"
 - `agent` — Claude Code did this autonomously (no operator ack required).
 - `human` — Operator did this directly.
 
+> **Correction (2026-07-14, #6400).** This PIR's "no user-facing / production
+> impact (weight-0 web-2)" framing was **incomplete**. The same GHCR
+> `auth_denied` class also froze the **web-1 prod** deploy leg (prod stuck on
+> `0.213.2` for ~10+ hours) — a deploy outage, not merely a web-2 resilience
+> gap. §1A (this PIR's fix) recovered the `docker login` symptom but not the
+> `docker pull` root cause (login-ok/pull-deny). Superseding analysis + the
+> durable structural fix:
+> [`2026-07-14-web-platform-deploy-ghcr-pull-denial-outage-postmortem.md`](./2026-07-14-web-platform-deploy-ghcr-pull-denial-outage-postmortem.md).
+
 # Incident Overview
 
 The **web-2 warm-standby host** (fsn1, LB weight-0) failed to serve after the #6393 hel1→fsn1 relocation `-replace`. **No user-facing / production impact:** web-2 serves zero production traffic; web-1 (the sole live origin) was unaffected throughout. The impact was purely a **resilience gap** — zero cross-DC failover coverage while web-2 was down. Classified as an availability/resilience incident (not a data-exposure incident): Art. 33/34 do not apply.
