@@ -328,14 +328,16 @@ jobs:
             # (a missed escalation page for that cycle). Degrade a gh blip to empty CREATED instead:
             # empty → restart_ok_from_age treats it as first-occurrence soft (self-heals next */15 tick).
             CREATED=$(gh issue list --repo "$GH_REPO" --label ci/inngest-functions-degraded --state open --json createdAt --jq '.[0].createdAt // empty' 2>/dev/null || true)
-            # restart_ok_from_age → "true" while age < window (or no issue = first occurrence);
-            # "false" once age >= window. Invert: escalate to inngest_down when it returns false.
-            AGE_OK=$(restart_ok_from_age "$CREATED" "$GIVE_UP_WINDOW_MIN" "$(date -u +%s)")
-            if [[ "$AGE_OK" == "false" ]]; then
-              eff_mode="inngest_down"
+            # Escalation decision via the extracted, unit-tested resolver (#6407 review, test-design
+            # Finding A): functions_query_degraded stays soft while the open-issue age < window (or on
+            # first occurrence), and reclassifies to inngest_down once age >= window. The `gh` read
+            # stays here (outside the pure seam) so the decision itself is deterministically testable
+            # in inngest-restart-age-gate.test.sh.
+            eff_mode=$(resolve_effective_failure_mode "$FAIL_MODE" "$CREATED" "$GIVE_UP_WINDOW_MIN" "$(date -u +%s)")
+            if [[ "$eff_mode" == "inngest_down" ]]; then
               eff_detail="ESCALATED (#6407): functions_query_degraded sustained >= ${GIVE_UP_WINDOW_MIN}m (open [ci/inngest-functions-degraded] age) — /health=200 but /v0/gql functions permanently wedged; reclassified to inngest_down (restart + page). ${FAIL_DETAIL}"
             fi
-            echo "functions-degraded escalation gate: age_ok=$AGE_OK created='${CREATED:-<none>}' window=${GIVE_UP_WINDOW_MIN}m → effective_mode=$eff_mode"
+            echo "functions-degraded escalation gate: created='${CREATED:-<none>}' window=${GIVE_UP_WINDOW_MIN}m → effective_mode=$eff_mode"
           fi
           { printf '%s\n' "failure_mode=${eff_mode}"; printf '%s\n' "failure_detail=${eff_detail}"; } >> "$GITHUB_OUTPUT"
 

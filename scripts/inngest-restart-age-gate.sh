@@ -27,3 +27,27 @@ restart_ok_from_age() {
   local age_min=$(( (now_epoch - created_epoch) / 60 ))
   if (( age_min < window_min )); then echo "true"; else echo "false"; fi
 }
+
+# resolve_effective_failure_mode — persistence-escalation resolver for the functions_query_degraded
+# soft mode (#6407). A SUSTAINED functions_query_degraded (loopback /health=200 but the /v0/gql
+# functions query PERMANENTLY wedged) must not be soft-masked forever: once the open
+# [ci/inngest-functions-degraded] issue is >= GIVE_UP_WINDOW minutes old, reclassify the cycle's
+# verdict to inngest_down (restart + page). First occurrence stays soft. All OTHER modes pass
+# through unchanged. Reuses restart_ok_from_age for the age math (single source of truth) — "true"
+# while age < window (or no issue = first occurrence) keeps it soft; "false" at/after the window
+# escalates. Pure (age injected); the caller keeps the ONE `gh issue list` read outside the seam so
+# the decision itself is deterministically unit-testable (#6407 review, test-design Finding A).
+#   $1 = the current cycle's failure_mode
+#   $2 = the open [ci/inngest-functions-degraded] issue createdAt (ISO-8601) or "" (none open)
+#   $3 = GIVE_UP_WINDOW minutes
+#   $4 = now epoch seconds (injected for deterministic tests)
+# echoes the effective failure_mode.
+resolve_effective_failure_mode() {
+  local failure_mode="$1" created="$2" window_min="$3" now_epoch="$4"
+  if [[ "$failure_mode" != "functions_query_degraded" ]]; then echo "$failure_mode"; return 0; fi
+  if [[ "$(restart_ok_from_age "$created" "$window_min" "$now_epoch")" == "false" ]]; then
+    echo "inngest_down"
+  else
+    echo "functions_query_degraded"
+  fi
+}
