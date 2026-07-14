@@ -45,11 +45,19 @@ classify_liveness_mode() {
   # query fails (webhook wraps the non-zero exit body — include-command-output-in-response-
   # on-error). DEGRADED (checked FIRST) = functions read blipped but loopback /health=200,
   # so inngest IS serving (#6407): SOFT, no restart. FATAL = functions read failed AND
-  # /health != 200 (wedged/down): restart family. The prefixes are distinct (grep -qF, no
-  # shared boundary) so order is safe; DEGRADED-first documents the soft path as primary.
-  if printf '%s' "$body" | grep -qF 'inngest-inventory: DEGRADED'; then
+  # /health != 200 (wedged/down): restart family. The prefixes are distinct so order is safe;
+  # DEGRADED-first documents the soft path as primary.
+  #
+  # ANCHOR the match to line-start (^), NOT an unanchored substring: both sentinel lines embed
+  # the scrubbed `(errors=<fn_errs>)` GraphQL payload, and a hard-down FATAL line whose errors
+  # text happened to CONTAIN the literal substring "inngest-inventory: DEGRADED" would, under an
+  # unanchored `grep -F`, misclassify a real down as soft → no restart (down masked). fn_errs is
+  # newline-scrubbed by inngest-inventory.sh's _pf_scrub, so it can never start a line; anchoring
+  # to ^ means only a genuine sentinel line (which begins with its own prefix) matches. The FATAL
+  # line begins with "inngest-inventory: FATAL", so ^inngest-inventory: DEGRADED cannot match it.
+  if printf '%s' "$body" | grep -qE '^inngest-inventory: DEGRADED'; then
     echo "functions_query_degraded"
-  elif printf '%s' "$body" | grep -qF 'inngest-inventory: FATAL'; then
+  elif printf '%s' "$body" | grep -qE '^inngest-inventory: FATAL'; then
     echo "inngest_down"
   else
     echo "probe_unavailable"

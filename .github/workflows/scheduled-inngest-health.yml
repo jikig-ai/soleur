@@ -322,7 +322,12 @@ jobs:
             # shellcheck source=/dev/null
             source "$GITHUB_WORKSPACE/scripts/inngest-restart-age-gate.sh"
             GIVE_UP_WINDOW_MIN=45
-            CREATED=$(gh issue list --repo "$GH_REPO" --label ci/inngest-functions-degraded --state open --json createdAt --jq '.[0].createdAt // empty')
+            # `|| true` (#6407 review F2, pattern-recognition): under `set -euo pipefail` a transient
+            # gh API failure (rate-limit / 5xx) in this substitution would ABORT the effmode step, so
+            # it never writes $GITHUB_OUTPUT and the always() heartbeat reads failure_mode='' → 'ok'
+            # (a missed escalation page for that cycle). Degrade a gh blip to empty CREATED instead:
+            # empty → restart_ok_from_age treats it as first-occurrence soft (self-heals next */15 tick).
+            CREATED=$(gh issue list --repo "$GH_REPO" --label ci/inngest-functions-degraded --state open --json createdAt --jq '.[0].createdAt // empty' 2>/dev/null || true)
             # restart_ok_from_age → "true" while age < window (or no issue = first occurrence);
             # "false" once age >= window. Invert: escalate to inngest_down when it returns false.
             AGE_OK=$(restart_ok_from_age "$CREATED" "$GIVE_UP_WINDOW_MIN" "$(date -u +%s)")

@@ -204,7 +204,9 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2
 ```
 A `mode=degraded health_code=200` line confirms inngest is serving (soft); a `mode=down
 health_code=<000|5xx>` line is a genuine down (the classifier routes it to `inngest_down` →
-restart). No SSH — the marker rides Vector Source 4 → Better Stack Logs source 2457081.
+restart). No SSH — the marker rides Vector Source 4 → Better Stack Logs source 2457081. For a
+second no-SSH signal, a GET of `https://deploy.soleur.ai/hooks/deploy-status` (HMAC + CF-Access)
+shows `services.inngest_server`.
 
 ### Restart `reason=lock_contention` is BENIGN (not a restart failure)
 
@@ -216,32 +218,6 @@ current — benign, not a failure. Per ADR-079 amendment #5960 (applied to the r
 terminal success, and at budget expiry does a FINAL STATE re-read (`/hooks/deploy-status` for a
 fresh inngest success, or `/hooks/inngest-liveness` healthy) before exiting benign — an
 unconfirmed state fails loud (`UNVERIFIED`, exit 1). Marker (tag `ci-deploy`):
-```
-doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_RESTART_LOCK_CONTENTION
-```
-
-## External watchdog: functions-query degraded + restart `lock_contention` — #6407
-
-Two no-SSH behaviors added by #6407 (completes #6374). Both are self-reported to Better Stack; no host login is required to triage either.
-
-### `[ci/inngest-functions-degraded]` — the soft functions-query mode
-
-The external watchdog's liveness probe runs a cheap `/v0/gql functions` query. That query can transiently fail (a curl transport blip → the `__FETCH_FAILED__` envelope) **while inngest-server is UP and processing events** — the #6407 false positive. Before declaring a hard `inngest_down`, the on-host probe (`inngest-inventory.sh` in `INVENTORY_LIVENESS_ONLY` mode) now CORROBORATES the failed functions read against the SAME loopback server's `/health` endpoint:
-
-- **`/health` = 200** (inngest IS serving; only the GQL read blipped): emits the soft `inngest-inventory: DEGRADED` sentinel → the classifier maps it to mode **`functions_query_degraded`** → **NO restart**, **NO `[ci/inngest-down]` P1**, the Sentry heartbeat stays `ok`. A soft `[ci/inngest-functions-degraded]` issue (p2) is filed and **auto-closes on the next healthy `*/15` tick**. This is expected and usually self-resolves.
-- **`/health` != 200** (wedged or stopped): keeps the `inngest-inventory: FATAL` sentinel → `inngest_down` → restart dispatched (a restart recovers a wedge). Unchanged from #6374.
-
-**Persistence-escalation ceiling.** A SUSTAINED `functions_query_degraded` (the narrow `/health`-ok-but-functions-permanently-wedged residual) must not be soft-masked forever. Once the open `[ci/inngest-functions-degraded]` issue is **≥ ~45 min old** (3 `*/15` cycles), the watchdog reclassifies the cycle's verdict to `inngest_down` → restart + Sentry page. First occurrence = soft; sustained = escalates.
-
-**Triage (no-SSH).** Query Better Stack Logs (source `soleur-inngest-vector-prd`, tag `inngest-inventory`) for the verdict marker:
-```
-doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_LIVENESS_VERDICT
-```
-`mode=degraded health_code=200` confirms the soft path (inngest serving; blip). `mode=down health_code=<000|5xx>` is a genuine down that correctly restarts. A GET of `https://deploy.soleur.ai/hooks/deploy-status` (HMAC + CF-Access) shows `services.inngest_server` for a second no-SSH signal.
-
-### Restart `reason=lock_contention` is benign (not a failed restart)
-
-When the watchdog dispatches `restart-inngest-server.yml`, the restart sends `restart inngest _ latest` to `ci-deploy.sh`, whose non-blocking `flock -n 200` loser stamps `reason=lock_contention` exit 1. That means **another deploy/restart already holds the critical section and will bring inngest current** — benign, not a failure. The restart-verify poll now treats `reason=lock_contention` (for a fresh `component=inngest` frame) as **NON-TERMINAL** (ADR-079 amendment #5960, the same treatment the web-platform-release deploy poll already uses): it keeps polling for a fresh terminal success and, at budget expiry, does ONE final STATE re-read (`/hooks/deploy-status` fresh inngest success OR `/hooks/inngest-liveness` healthy) before exiting benign — an unconfirmed state fails loud (`UNVERIFIED`, exit 1), never a false-clean. Better Stack marker (tag `ci-deploy`):
 ```
 doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_RESTART_LOCK_CONTENTION
 ```
