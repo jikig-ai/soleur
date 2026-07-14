@@ -46,6 +46,19 @@ managed registry. Then:
    follow it). zot is plain-HTTP on the private net, so a zot-pulled digest needs
    `insecure-registries` (Edge A) + cosign `--allow-insecure-registry` (Edge B); cosign
    digest-pinning is the integrity guard, not TLS.
+
+   > **Interim-GHCR pull-recovery contract (normative, #6400).** On the interim GHCR
+   > pull path (live as break-glass until the Phase-5 GHCR retirement), **`docker login`
+   > success is NOT proof of `docker pull` capability.** A credential that logs in but
+   > cannot pull — a GitHub App installation token (the exact ADR-088 limitation), or
+   > any login/pull capability split (a rotated/revoked baked snapshot that still
+   > login-succeeds) — makes login-outcome-gated recovery a **false gate**: the login
+   > passes, recovery is skipped, and the pull denies. The host therefore MUST re-fetch
+   > the `prd` GHCR credential, `docker login` again, and **retry the pull once on a
+   > `docker pull` auth-denial**, not only on a login **failure**. Implemented at the
+   > pull site (`ci-deploy.sh` `_ghcr_pull_or_recover`), fail-open (a recovery miss leaves
+   > the unchanged `image_pull_failed` terminal state), retry exactly once. This contract
+   > retires with the GHCR pull path at Phase 5.
 3. **cosign (Phase 4):** unchanged trust anchor — same pinned cosign SHA, same offline
    `trusted_root.json`, same GitHub-Actions-OIDC identity regexp. Registry-agnostic (Phase-0
    proved a read-only user fetches a zot-stored `.sig` and gc does not reap it).

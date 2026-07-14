@@ -291,6 +291,25 @@ if [[ "${1:-}" == "pull" ]]; then
     echo "manifest unknown" >&2
     exit 1
   fi
+  # #6400: simulate a login-ok/pull-DENY GHCR credential so the pull-site recovery
+  # (_ghcr_pull_or_recover) can be exercised. MOCK_GHCR_PULL_DENY_ALWAYS=1 denies every
+  # GHCR pull (recovery-miss / fail-open scenario); MOCK_GHCR_PULL_DENY_COUNT_FILE holds
+  # an integer countdown decremented per GHCR pull — deny while >0, then succeed (the
+  # login-ok/pull-deny→recovered scenario: count=1 ⇒ first pull denies, retry succeeds).
+  if [[ "$_pref" == ghcr.io/* ]]; then
+    if [[ "${MOCK_GHCR_PULL_DENY_ALWAYS:-}" == "1" ]]; then
+      echo "denied: requested access to the resource is denied" >&2
+      exit 1
+    fi
+    if [[ -n "${MOCK_GHCR_PULL_DENY_COUNT_FILE:-}" && -f "${MOCK_GHCR_PULL_DENY_COUNT_FILE}" ]]; then
+      _dn=$(cat "$MOCK_GHCR_PULL_DENY_COUNT_FILE" 2>/dev/null || echo 0)
+      if [[ "$_dn" =~ ^[0-9]+$ ]] && (( _dn > 0 )); then
+        echo $(( _dn - 1 )) > "$MOCK_GHCR_PULL_DENY_COUNT_FILE"
+        echo "denied: requested access to the resource is denied" >&2
+        exit 1
+      fi
+    fi
+  fi
 fi
 
 case "$mode" in
@@ -410,6 +429,18 @@ for ((i=0; i<${#ARGS[@]}; i++)); do
     http*) URL="${ARGS[$i]}" ;;
   esac
 done
+
+# #6400: capture Sentry store POST bodies so a test can assert the emitted event
+# shape (op tag, level, recovery_stage) for pull_failure_event / pull_auth_recovery_event.
+# The ci-deploy Sentry POST is `curl … -X POST https://…/store/ … -d "$payload"`.
+if [[ "$URL" == *"/store/"* && -n "${MOCK_SENTRY_CAPTURE_FILE:-}" ]]; then
+  _pl=""
+  for ((j=0; j<${#ARGS[@]}; j++)); do
+    [[ "${ARGS[$j]}" == "-d" ]] && _pl="${ARGS[$((j+1))]}"
+  done
+  printf '%s\n' "$_pl" >> "$MOCK_SENTRY_CAPTURE_FILE"
+  exit 0
+fi
 
 # Legacy /health failure path used by existing rollback tests.
 if [[ "${MOCK_CURL_CANARY_FAIL:-}" == "1" ]] && [[ "$URL" == *"localhost:3001/health"* ]]; then
@@ -3249,6 +3280,128 @@ else
 fi
 unset SOLEUR_GHCR_READ_FILE MOCK_GHCR_LOGIN_FAIL_TOKEN MOCK_LOGIN_ARGS_FILE
 rm -rf "$S1A_DIR"
+
+# --- #6400: recover at the GHCR PULL site on a login-ok/pull-deny credential ---
+# Root cause: §1A recovers only on a docker LOGIN failure, but the production
+# `image pull failed (auth_denied)` fires one step later at `docker pull` — a
+# credential that logs in but cannot pull (a GitHub App token, or a revoked baked
+# snapshot) bypasses §1A entirely. These assert the pull-site recovery in
+# _ghcr_pull_or_recover: re-fetch the prd cred + relogin + retry the pull ONCE.
+
+echo "--- #6400 AC1: GHCR login-ok/pull-deny → re-fetch + retry → recovered ---"
+T6400=$(mktemp -d)
+echo 1 > "$T6400/deny-count"   # first GHCR pull denies, retry (after relogin) succeeds
+export MOCK_GHCR_PULL_DENY_COUNT_FILE="$T6400/deny-count"
+export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
+TOTAL=$((TOTAL + 1))
+AC1_GHCR_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$AC1_GHCR_PULLS" -eq 2 ]] \
+   && grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && ! grep -q 'image pull failed' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: recovered — 2 GHCR pulls (deny+retry), recovery event, no failure event"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC1 (ghcr_pulls=$AC1_GHCR_PULLS; expected 2 + recovery event, no failure event)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_DENY_COUNT_FILE MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6400"
+
+echo "--- #6400 AC2: relogin ok but retry pull still denies → fail-open, pull_still_denied ---"
+T6400=$(mktemp -d)
+export MOCK_GHCR_PULL_DENY_ALWAYS=1   # both pulls deny (recovery miss)
+export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && AC2_RC=0 || AC2_RC=$?
+TOTAL=$((TOTAL + 1))
+AC2_GHCR_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$AC2_RC" -ne 0 ]] && [[ "$AC2_GHCR_PULLS" -eq 2 ]] \
+   && grep -q 'image pull failed' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && grep -q 'pull_still_denied' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: fail-open — rc=$AC2_RC, 2 GHCR pulls, single failure event tagged pull_still_denied, no recovery event"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC2 (rc=$AC2_RC ghcr_pulls=$AC2_GHCR_PULLS; expected nonzero + 2 pulls + pull_still_denied)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6400"
+
+echo "--- #6400 AC14: relogin FAILS → retry pull NOT attempted (guards §1A dt='' return-0 bug) ---"
+T6400=$(mktemp -d)
+export MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_GHCR_LOGIN_FAIL_TOKEN="mock-GHCR_READ_TOKEN"   # the re-fetched prd token also fails login
+export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
+TOTAL=$((TOTAL + 1))
+AC14_GHCR_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$AC14_GHCR_PULLS" -eq 1 ]] \
+   && grep -q 'relogin_failed' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: relogin failure → exactly 1 GHCR pull (no retry), failure tagged relogin_failed"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC14 (ghcr_pulls=$AC14_GHCR_PULLS; expected 1 + relogin_failed, no recovery)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_GHCR_LOGIN_FAIL_TOKEN MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6400"
+
+echo "--- #6400 AC4: recovery is GHCR-cred-scoped — does NOT fire on the zot leg ---"
+T6400=$(mktemp -d)
+export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1   # zot active, zot pull fails → atomic GHCR fallback
+export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
+TOTAL=$((TOTAL + 1))
+# zot pull attempted (and failed) + GHCR fallback pulled once + NO recovery fired (GHCR
+# cred was fine); the zot denial itself never triggers a GHCR re-fetch.
+if grep -q '^PULL:10.0.1.30:5000/' "$MOCK_PULL_ARGS_FILE" \
+   && grep -q '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" \
+   && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: zot-fail → GHCR fallback (unchanged); recovery did not fire on the zot leg"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC4"; echo "        pulls:"; sed 's/^/          /' "$MOCK_PULL_ARGS_FILE"
+fi
+unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6400"
+
+echo "--- #6400 AC3/AC6/AC13: single classifier, content-not-path, token hygiene, cosign continuity ---"
+# AC3: ONE auth-denied regex, shared by the classifier + the recovery gate.
+TOTAL=$((TOTAL + 1))
+REGEX_COUNT=$(grep -cE 'unauthorized\|authentication required\|denied\|forbidden' "$DEPLOY_SCRIPT")
+# _ghcr_pull_or_recover classifies stderr CONTENT (tail -c 400 "$perr"), not the path.
+if [[ "$REGEX_COUNT" -eq 1 ]] \
+   && grep -qE '_pull_result_is_auth_denied "\$\(tail -c 400 "\$perr"' "$DEPLOY_SCRIPT" \
+   && grep -q 'pull_failure_event .* "\${RECOVERY_STAGE:-}"' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1)); echo "  PASS: single regex; recovery gate classifies content; recovery_stage threaded to pull_failure_event"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC3 (regex_count=$REGEX_COUNT — expected 1 + content-classify + recovery_stage arg)"
+fi
+# AC6: token hygiene — refetch helper reaches docker login via --password-stdin only,
+# token is local + unset; recovery event payload is jq -n --arg with no raw stderr.
+TOTAL=$((TOTAL + 1))
+HELPER_BODY=$(awk '/^refetch_ghcr_and_relogin\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
+RECOV_BODY=$(awk '/^pull_auth_recovery_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
+if printf '%s' "$HELPER_BODY" | grep -q -- '--password-stdin' \
+   && printf '%s' "$HELPER_BODY" | grep -q 'local du="" dt=""' \
+   && printf '%s' "$HELPER_BODY" | grep -qE 'printf .*"\$dt" \| docker login' \
+   && ! printf '%s' "$HELPER_BODY" | grep -qE 'docker login[^|]*\$dt' \
+   && printf '%s' "$RECOV_BODY" | grep -q 'jq -n --arg' \
+   && ! printf '%s' "$RECOV_BODY" | grep -qE 'detail_raw|tail -c 400|\$perr'; then
+  PASS=$((PASS + 1)); echo "  PASS: token via --password-stdin + local; recovery payload jq -n --arg, no raw stderr"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC6 token/stderr hygiene"
+fi
+# AC13: cosign continuity — the recovery relogin targets ghcr.io (the registry the
+# cosign :ro $GHCR_DOCKER_CONFIG authenticates), so a recovered pull does not 401 the .sig.
+TOTAL=$((TOTAL + 1))
+if printf '%s' "$HELPER_BODY" | grep -q 'docker login ghcr.io'; then
+  PASS=$((PASS + 1)); echo "  PASS: recovery relogin writes ghcr.io auth into the same \$GHCR_DOCKER_CONFIG (cosign continuity)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC13 — recovery relogin must target ghcr.io"
+fi
 
 # Restore strict mode for the summary/exit.
 set -e -o pipefail

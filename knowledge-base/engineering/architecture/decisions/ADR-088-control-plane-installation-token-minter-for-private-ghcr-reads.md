@@ -23,6 +23,14 @@ supersedes: "ADR-087 D1 (credential-provisioning choice only; ADR-087 Design Bâ€
 > and the #6122 brainstorm/spec. The interim machine-account classic PAT stays live until the zot
 > pull path is validated end-to-end (do NOT revoke early). ADR-087 (the deploy-time verifier
 > topology) is unaffected.
+>
+> **Factual note (#6400):** the `login-ok / pull-deny` split documented above is the exact
+> failure class that a login-outcome-gated deploy recovery cannot catch â€” a credential that
+> `docker login`s but cannot `docker pull` bypasses any recover-on-login-failure gate. The
+> **normative** recovery contract (re-fetch + relogin + retry the pull once on a pull auth-denial,
+> not only a login failure) is homed in **[ADR-096](./ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md)**
+> (which owns the interim GHCR break-glass path); this ADR stays `superseded` and carries only
+> the factual "why," not a current-governing MUST.
 
 ## Context
 

@@ -514,29 +514,46 @@ cosign_verify_event() {
   fi
 }
 
+# _pull_result_is_auth_denied <stderr-content>: the SINGLE source of truth for
+# "is this docker pull stderr a credential-capability denial?" (#6400). Both
+# pull_failure_event's classifier AND the pull-site recovery gate
+# (_ghcr_pull_or_recover) call this predicate so they agree BY CONSTRUCTION — a
+# second copy of the regex would drift (cq/paren-safety class). It classifies the
+# stderr CONTENT passed as $1, never a file path: the caller must pass
+# `tail -c 400 "$perr"`, not "$perr", or the match silently no-ops (security/P2-E).
+_pull_result_is_auth_denied() {
+  printf '%s' "${1:-}" | grep -qiE 'unauthorized|authentication required|denied|forbidden'
+}
+
 # pull_failure_event: loud, no-SSH page on an authenticated PRIVATE-pull denial
 # (#6005). Every deploy + fresh boot now hard-depends on a valid GHCR credential
 # (M2 SPOF), so a pull auth failure must be Sentry/Better-Stack-diagnosable, not
 # journald-only (hr-no-ssh-fallback-in-runbooks). The raw docker stderr is SCRUBBED
 # to a coarse classification BEFORE it enters the payload — a 401/403 daemon error
 # can echo the registry Authorization header (security-sentinel #7). Fail-open.
+# #6400: optional 3rd arg recovery_stage — on an auth-denied MISS the pull-site
+# caller passes refetch_unavailable|relogin_failed|pull_still_denied so ONE event
+# discriminates the root-cause branch (no second event on the miss path). The tag is
+# an empty string on a non-auth failure — grouping is unchanged (op/pull_result
+# identical to pre-#6400; Sentry fingerprinting is message/culprit-based, not tag-based).
 pull_failure_event() {
-  local ref="$1" detail_raw="${2:-}" pull_result
-  if   printf '%s' "$detail_raw" | grep -qiE 'unauthorized|authentication required|denied|forbidden'; then pull_result="auth_denied"
+  local ref="$1" detail_raw="${2:-}" recovery_stage="${3:-}" pull_result
+  if   _pull_result_is_auth_denied "$detail_raw"; then pull_result="auth_denied"
   elif printf '%s' "$detail_raw" | grep -qiE 'manifest unknown|not found|no such manifest'; then pull_result="manifest_unknown"
   elif printf '%s' "$detail_raw" | grep -qiE 'timeout|timed out|temporary failure|no route|connection refused'; then pull_result="network"
   else pull_result="pull_failed"
   fi
-  logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result"
+  logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result recovery_stage=${recovery_stage:-none}"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
     # #6396: tag host_id so a deploy-path pull failure is host-attributable from Sentry alone
     # (PR #6395 had to cross-reference the release aggregate JSON to pin it to web-2). The
     # readonly HOST_ID global (:137-157) is empty-safe; jq emits an empty-string tag if unset.
-    payload="$(jq -n --arg ref "$ref" --arg r "$pull_result" --arg h "${HOST_ID:-}" \
+    # #6400: recovery_stage tag surfaces the recovery branch on an auth-denied miss.
+    payload="$(jq -n --arg ref "$ref" --arg r "$pull_result" --arg h "${HOST_ID:-}" --arg rs "$recovery_stage" \
       '{message: ("image pull failed (" + $r + ") " + $ref),
         level: "error", platform: "other", logger: "ci-deploy",
-        tags: {feature: "supply-chain", op: "image-pull", pull_result: $r, host_id: $h},
+        tags: {feature: "supply-chain", op: "image-pull", pull_result: $r, host_id: $h, recovery_stage: $rs},
         extra: {ref: $ref}}' 2>/dev/null)" || return 0
     curl -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
@@ -544,6 +561,32 @@ pull_failure_event() {
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
       -d "$payload" 2>/dev/null \
       || logger -t "$LOG_TAG" "IMAGE_PULL: Sentry POST failed"
+  fi
+}
+
+# pull_auth_recovery_event <ref> <stage>: fail-open, env-guarded Sentry breadcrumb
+# fired ONLY on a recovered-success at the GHCR pull site (#6400). Distinct
+# op:image-pull-recovery + level:info keeps recovered-successes OUT of the
+# WEB-PLATFORM-59 (op:image-pull, error) failure grouping — the recovery firing at
+# all IS the signal the baked cred was login-ok/pull-deny. host_id-tagged (#6396).
+# NEVER includes raw docker stderr; payload built with jq -n --arg. Same store
+# transport as pull_failure_event.
+pull_auth_recovery_event() {
+  local ref="$1" stage="${2:-recovered}"
+  logger -t "$LOG_TAG" "IMAGE_PULL_RECOVERED: ref=$ref stage=$stage"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg ref "$ref" --arg s "$stage" --arg h "${HOST_ID:-}" \
+      '{message: ("image pull recovered (" + $s + ") " + $ref),
+        level: "info", platform: "other", logger: "ci-deploy",
+        tags: {feature: "supply-chain", op: "image-pull-recovery", recovery_stage: $s, host_id: $h},
+        extra: {ref: $ref}}' 2>/dev/null)" || return 0
+    curl -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "IMAGE_PULL_RECOVERY: Sentry POST failed"
   fi
 }
 
@@ -600,6 +643,33 @@ zot_gate_degraded_event() {
       -d "$payload" 2>/dev/null \
       || logger -t "$LOG_TAG" "ZOT_GATE: Sentry POST failed"
   fi
+}
+
+# refetch_ghcr_and_relogin (#6400): re-fetch the CURRENT prd GHCR read credential,
+# re-run `docker login ghcr.io` into the SAME docker config the cosign verifier
+# mounts :ro, and return a STAGE code so the caller can discriminate the failure.
+# Echoes on stdout exactly one of: recovered | refetch_unavailable | relogin_failed
+# Returns 0 IFF stage==recovered (the login status IS the exit status — this is the
+# load-bearing difference from §1A's inline body, whose trailing `dt=""` (exit 0)
+# would make the function return 0 on every path and muddy the `recovered` signal
+# the pull-site gate keys on). Token via --password-stdin only; kept `local` + unset
+# after so no child process env carries it. The recovered auth ENTRY is carried by
+# the `docker login ghcr.io` filesystem write into $GHCR_DOCKER_CONFIG (persists past
+# the `$(…)` subshell this helper runs in) — the SAME file the prelude wrote and the
+# cosign verifier mounts :ro, so a recovered pull does not then 401 the .sig fetch
+# (P2-F). (The `export GHCR_READ_USER` below is defensive-only — it is swallowed by the
+# subshell and no downstream reader consumes the env var; the docker-config write is
+# what authenticates.) Guarded on doppler + DOPPLER_TOKEN (prd-root scoped).
+refetch_ghcr_and_relogin() {
+  command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]] || { printf refetch_unavailable; return 1; }
+  local du="" dt="" n=0
+  n=0; until du="$(timeout 45 doppler secrets get GHCR_READ_USER  --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$du" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+  n=0; until dt="$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$dt" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+  [[ -n "$du" && -n "$dt" ]] || { dt=""; printf refetch_unavailable; return 1; }
+  if printf '%s' "$dt" | docker login ghcr.io -u "$du" --password-stdin >/dev/null 2>&1; then
+    export GHCR_READ_USER="$du"; dt=""; printf recovered; return 0
+  fi
+  dt=""; printf relogin_failed; return 1
 }
 
 # ghcr_prelude_and_login: fetch the deploy-time secrets the pull + verify + telemetry
@@ -666,19 +736,20 @@ ghcr_prelude_and_login() {
       # 45 + 3-try idiom, mirroring the EMPTY path) and retry docker login ONCE. Fail-open: a
       # retry miss still lets the pull's own failure path + pull_failure_event surface loudly.
       logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED with baked/first creds — re-fetching current creds from Doppler and retrying"
-      if command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]]; then
-        local du="" dt=""
-        n=0; until du="$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$du" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
-        n=0; until dt="$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$dt" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
-        if [[ -n "$du" && -n "$dt" ]] && printf '%s' "$dt" | docker login ghcr.io -u "$du" --password-stdin >/dev/null 2>&1; then
-          export GHCR_READ_USER="$du"   # the cosign :ro docker config now authenticates with the retried cred
-          logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok after Doppler re-fetch (recovered stale baked cred)"
-        else
-          logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io STILL FAILED after Doppler re-fetch — private pull may fail-closed"
-        fi
-        dt=""   # keep the retried token out of any child process env
+      # #6400: §1A's inline re-fetch/relogin is now the shared refetch_ghcr_and_relogin
+      # helper (identical observable behavior — recover on a login FAILURE — plus the
+      # staged return the pull-site gate needs). The helper self-guards on
+      # doppler/DOPPLER_TOKEN (stage=refetch_unavailable when absent) and keeps the
+      # retried token out of any child env.
+      # `|| true` is load-bearing: ci-deploy runs under `set -euo pipefail`, and the
+      # helper returns non-zero on a recovery miss — a bare assignment would abort the
+      # whole deploy on that nonzero (we parse the stage STRING, the rc is irrelevant here).
+      local prelude_stage
+      prelude_stage="$(refetch_ghcr_and_relogin)" || true
+      if [[ "$prelude_stage" == "recovered" ]]; then
+        logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok after Doppler re-fetch (recovered stale baked cred)"
       else
-        logger -t "$LOG_TAG" "PRELUDE: docker login failed and doppler/DOPPLER_TOKEN unavailable — cannot re-fetch; private pull may fail-closed"
+        logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io STILL FAILED after Doppler re-fetch (stage=$prelude_stage) — private pull may fail-closed"
       fi
     fi
   else
@@ -738,6 +809,39 @@ zot_gate_and_login() {
   ztoken=""
 }
 
+# _ghcr_pull_or_recover <perr> (#6400): pull ${IMAGE}:${TAG} from GHCR; on an
+# AUTH-denied failure (classified from the stderr CONTENT, not the file path),
+# re-fetch the prd cred, relogin, and retry the pull EXACTLY ONCE before giving up.
+# Returns 0 on success (first pull OR recovered retry). On failure returns 1 and
+# sets the global RECOVERY_STAGE for the caller's pull_failure_event tag (empty when
+# no recovery was attempted — a non-auth failure never enters the branch, so
+# pull_failure_event fires byte-identically to pre-#6400). Fail-open: a recovery miss
+# leaves the caller's terminal image_pull_failed state unchanged. No loop — retrying
+# a genuinely-invalid prd cred would burn the deploy window (Sharp Edge). The
+# `200>&-` closes the FD-200 advisory lock for the pull children (#5062), preserved.
+_ghcr_pull_or_recover() {
+  local perr="$1"
+  RECOVERY_STAGE=""
+  docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr" && return 0
+  # classify the stderr CONTENT (tail -c 400), never the path — else recovery no-ops (P2-E).
+  if _pull_result_is_auth_denied "$(tail -c 400 "$perr" 2>/dev/null)"; then
+    # `|| true`: helper returns non-zero on a miss; a bare assignment would abort the
+    # deploy under set -euo. We parse the stage STRING (that string, not the rc, is what
+    # gets copied into RECOVERY_STAGE below; the rc is discarded via `|| true`).
+    local stage; stage="$(refetch_ghcr_and_relogin)" || true   # recovered|refetch_unavailable|relogin_failed
+    if [[ "$stage" == "recovered" ]]; then
+      if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+        pull_auth_recovery_event "${IMAGE}:${TAG}" recovered   # info breadcrumb, distinct op
+        return 0
+      fi
+      RECOVERY_STAGE="pull_still_denied"                       # relogin ok but retry pull still denied
+    else
+      RECOVERY_STAGE="$stage"                                  # refetch_unavailable|relogin_failed
+    fi
+  fi
+  return 1
+}
+
 # pull_image_with_fallback <image_kind>: pull $IMAGE:$TAG zot-primary with an ATOMIC
 # GHCR fallback (#6122/ADR-096). image_kind ∈ {web, inngest} (beacon tag only). On
 # success it reassigns the GLOBAL IMAGE to the registry-qualified repo actually pulled,
@@ -762,21 +866,23 @@ pull_image_with_fallback() {
     # cosign follows the GHCR RepoDigest with NO insecure flag). This is the soak gate's
     # watched event; surfaced loudly, not journald-only.
     logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} — falling back to GHCR"
-    if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+    # #6400: GHCR fallback leg now recovers on a login-ok/pull-deny cred (retry once).
+    if _ghcr_pull_or_recover "$perr"; then
       registry_pull_event ghcr-fallback "$image_kind" "$TAG"
       rm -f "$perr" 2>/dev/null || true
       return 0
     fi
-    pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)"
+    pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
     rm -f "$perr" 2>/dev/null || true
     return 1
   fi
-  # zot dark (not configured/unreachable) → unchanged GHCR path, no new beacon.
-  if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+  # zot dark (not configured/unreachable) → unchanged GHCR path, now with pull-site
+  # recovery (#6400): a baked cred that logs in but cannot pull is re-fetched + retried.
+  if _ghcr_pull_or_recover "$perr"; then
     rm -f "$perr" 2>/dev/null || true
     return 0
   fi
-  pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)"
+  pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
   rm -f "$perr" 2>/dev/null || true
   return 1
 }
