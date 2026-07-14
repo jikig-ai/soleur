@@ -729,15 +729,9 @@ runcmd:
 
   - |
     set -e
-    # #6396: arm the terminal-block boot-emit trap EARLY (right after `set -e`) so the
-    # `. /etc/default/webhook-deploy` source + `mktemp` region are covered. Mutable `stage`
-    # names the failing region in ONE SSH-free Sentry event (tags.stage). The EXIT trap fires
-    # on `exit 1` / `set -e` aborts (doppler_download, docker_run); the two `poweroff -f` paths
-    # (hostscripts test, egress probe) are signal death that bypasses the EXIT trap and are
-    # handled explicitly — the hostscripts test emits `hostscripts_incomplete` inline, and the
-    # egress probe self-emits + is spanned by the `trap - EXIT` disarm just before it. Every
-    # stage this trap can emit is wired to the Phase-5b Sentry issue-alert — the SOLE page for a
-    # dead web-2 warm standby (no standing uptime coverage; #5933 retired the per-host probe).
+    # #6396: terminal-block boot-emit trap. Mutable `stage` names the failing region in one
+    # SSH-free Sentry event; fires on exit-1/set-e aborts. The two poweroff paths bypass the
+    # EXIT trap and are handled explicitly (see below). Rationale: ADR-082 Item 5.
     stage=terminal_preamble
     trap 'rc=$?; rm -f "$${TMPENV:-}"; [ "$rc" = 0 ] || soleur-boot-emit "$stage" fatal' EXIT
     # Fail-closed gate (#5921): the host-script extraction block above writes
@@ -780,10 +774,8 @@ runcmd:
       -p 0.0.0.0:3000:3000 \
       "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
     rm -f "$TMPENV"
-    # #6396: disarm the EXIT trap BEFORE the egress-enforce-probe — that probe self-emits its
-    # own SSH-free Sentry event and poweroffs, so spanning it would double-emit/mis-tag. The
-    # trap-covered region (terminal_preamble, doppler_download, docker_run) fails via exit 1 /
-    # set -e (never poweroff), so the EXIT trap fired there correctly.
+    # #6396: disarm the EXIT trap before the self-emitting egress probe (spanning it would
+    # double-emit); the trap-covered region fails via exit-1/set-e, never poweroff.
     trap - EXIT
     # Fresh-host post-container egress-enforcement probe (#5933; details in the script
     # header). Fail-closed: a non-enforcing host poweroffs rather than serve an open
@@ -795,14 +787,8 @@ runcmd:
     # #6090: reached serving host (poweroff → Better Stack).
     soleur-boot-emit cloud_init_complete info
 
-  # #6396: ungated Vector observability install — the LAST runcmd item, AFTER the app binds
-  # :80/:3000 (cloud_init_complete above). On a (deprecated) web_colocate_inngest=true host the
-  # helper detects the inngest-owned vector.service and skips (mutual exclusion is enforced INSIDE
-  # soleur-vector-install, not by this runcmd's position). Fail-open + wall-clock-bounded:
-  # `timeout 180` caps a hung fetch/unit-start (must exceed the helper's inner `curl --max-time
-  # 120` so a slow cold-boot tarball fetch is not SIGTERM-truncated into a silently-absent source);
-  # the `sh -c` subshell + `|| true` contain any non-zero exit AND the leaked `set -e` from the
-  # plugin-seed block (:651, never disarmed). Runs after serving, so the longer bound adds no
-  # user-facing latency. Decouples web-host log shipping from web_colocate_inngest (default-false,
-  # ADR-100); Vector backfills from the journald cursor, so end-of-chain placement loses no logs.
+  # #6396: ungated Vector install — LAST runcmd item, AFTER the app binds :80/:3000. Fail-open +
+  # wall-clock-bounded (`timeout 180` > the helper's inner `curl --max-time 120`; `sh -c` subshell
+  # + `|| true` contain any exit + the leaked plugin-seed `set -e`). Decoupled from
+  # web_colocate_inngest (the helper skips an inngest-owned unit). Rationale: ADR-082 Item 5.
   - timeout 180 sh -c 'soleur-vector-install' || true

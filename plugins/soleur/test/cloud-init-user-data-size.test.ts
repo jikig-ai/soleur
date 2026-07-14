@@ -57,11 +57,15 @@ const HETZNER_CAP = 32_768;
 // MUST live inline in cloud-init (the seed pull runs pre-bootstrap, so a baked helper can't cover
 // it), so baking-instead-of-inline is not available here — the sanctioned path is a modest
 // re-baseline. Measured render ~21.06 KB; 21,500 B keeps a KB-scale re-inlining tripwire (a
-// re-inlined ~1.5+ KB blob trips it) and ~11.3 KB below HETZNER_CAP. When this climbs further,
+// re-inlined ~1.5+ KB blob trips it) and ~11 KB below HETZNER_CAP. When this climbs further,
 // prefer baking new host logic over inline cloud-init (the #5921 pattern) before raising again.
 // FLOOR is non-vacuity: a broken model gzipping near-nothing fails loudly. #5921's bake-and-extract
 // is RETAINED underneath — base64gzip is layered on top, not a reversal.
-const WEB_GZIP_BUDGET = 21_500;
+// #6396: +~140 B modest re-baseline (21,500 → 21,800). The Vector-shipper BODIES are baked into
+// soleur-host-bootstrap.sh (0 user_data, #5921 pattern); the irreducible inline cost is the
+// terminal-block boot-emit trap + the ungated `soleur-vector-install` call site + per-host
+// SOLEUR_HOST_NAME injection — necessary call-sites, not a re-inlined blob. Comments trimmed first.
+const WEB_GZIP_BUDGET = 21_800;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
@@ -377,13 +381,16 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root", () => {
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml", () => {
     // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
     // enforcement probe, #5933 item 3).
     // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
     // HOST image (not the app image) + installed to /etc/soleur by the bootstrap (#6005,
     // ADR-087). A data file, not a script.
-    expect(serverTfBakedSet().length).toBe(27);
+    // +1 (=28): vector.toml — the Vector shipper config baked for the ungated web-host
+    // install (soleur-vector-install renders + installs it to /etc/vector/vector.toml, #6396).
+    // A data file, not a script.
+    expect(serverTfBakedSet().length).toBe(28);
   });
 
   // #5922 release break: the Dockerfile bakes the host-scripts via
