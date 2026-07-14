@@ -67,7 +67,7 @@ artifacts (`soleur-host-bootstrap.sh` OCI-baked, `cloud-init.yml` user_data) —
 - [ ] 7.0 **Coherence ordering (P1):** merge → build/publish new `soleur-web-platform` image → normal deploy to web-1 → THEN dispatch `web-2-recreate`. (Else `web2-recreate-preflight.sh:98` COHERENCE MISMATCH abort.)
 - [ ] 7.1 web-2 verify: `web-2-recreate` dispatch → `deploy-status-fanout-verify.sh` `reason==ok` off-host; Sentry breadcrumb trail shows `cloud_init_complete` for web-2 host_id; Better Stack source 2457081 non-zero for `host_name='soleur-web-2'`.
 - [ ] 7.2 **web-1 blind-origin gap (HIGH — close, don't silently defer):** schedule ADR-068 blue-green promote-web-2 + recreate-web-1-as-standby (zero live poweroff) so web-1 ships logs. Deliverable 1 is half-met at ship (web-2 only) until this runs.
-- [ ] 7.3 File a `follow-through`-labelled tracking issue: fires the `host_name='soleur-web-1'` Better Stack source check after web-1 recreate + folds it into the host-recreate runbook.
+- [x] 7.3 File a `follow-through`-labelled tracking issue: fires the `host_name='soleur-web-1'` Better Stack source check after web-1 recreate + folds it into the host-recreate runbook. → **#6405** (filed at ship-prep; AC15).
 
 ## Acceptance Criteria (post-condition gates)
 
