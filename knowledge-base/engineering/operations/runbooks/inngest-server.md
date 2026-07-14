@@ -176,6 +176,52 @@ ssh root@<host> 'journalctl -u inngest-server.service -n 50 | grep -i "conn\|poo
 A host-level restart is the WRONG lever here (it worsens `EMAXCONNSESSION`); the
 host login is for log inspection only, not remediation.
 
+## External watchdog: functions-query degraded + restart `lock_contention` — #6407
+
+Two soft/benign states the external inngest health watchdog handles WITHOUT paging or
+churning a restart. Both are no-SSH — read Better Stack + the GitHub issue, never the host.
+
+### `[ci/inngest-functions-degraded]` — `/v0/gql functions` transiently degraded (SOFT, NO restart)
+
+**What it means.** The watchdog's cheap `/v0/gql functions` liveness read transiently failed
+(a curl transport blip → the `__FETCH_FAILED__` envelope), but the on-host probe corroborated
+the SAME loopback server's `/health` and got **HTTP 200** — inngest-server is UP and processing
+events; only the functions read blipped. The classifier maps this to the soft mode
+`functions_query_degraded`: **NO restart is dispatched, NO `[ci/inngest-down]` P1 is filed, and
+the Sentry heartbeat stays `ok`** (no page). This is the #6407 false-positive class (the FATAL
+sentinel used to fire `inngest_down` → restart even though inngest was healthy).
+
+**Expected resolution.** Self-heals on the next `*/15` tick (the issue auto-closes on recovery).
+
+**Persistence-escalation ceiling.** If the degraded state PERSISTS for ≥ ~45 min (3 `*/15`
+cycles — the `/health`-ok-but-functions-permanently-wedged residual), the watchdog reclassifies
+the verdict to `inngest_down`: it dispatches a restart AND flips the heartbeat to `error` (page).
+First occurrence is soft; a sustained one is never masked forever.
+
+**How to see it (no-SSH).** Query Better Stack for the verdict marker (tag `inngest-inventory`):
+```
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_LIVENESS_VERDICT
+```
+A `mode=degraded health_code=200` line confirms inngest is serving (soft); a `mode=down
+health_code=<000|5xx>` line is a genuine down (the classifier routes it to `inngest_down` →
+restart). No SSH — the marker rides Vector Source 4 → Better Stack Logs source 2457081. For a
+second no-SSH signal, a GET of `https://deploy.soleur.ai/hooks/deploy-status` (HMAC + CF-Access)
+shows `services.inngest_server`.
+
+### Restart `reason=lock_contention` is BENIGN (not a restart failure)
+
+When the watchdog dispatches `restart-inngest-server.yml` and the restart's verify poll reads
+`reason=lock_contention` for `component=inngest`, it means **another deploy/restart already
+holds the `ci-deploy.sh` critical section** (FD-200 `flock -n 200` loser) and will bring inngest
+current — benign, not a failure. Per ADR-079 amendment #5960 (applied to the restart poll in
+#6407), the poll treats it as NON-TERMINAL: it keeps polling for a fresh `component=inngest`
+terminal success, and at budget expiry does a FINAL STATE re-read (`/hooks/deploy-status` for a
+fresh inngest success, or `/hooks/inngest-liveness` healthy) before exiting benign — an
+unconfirmed state fails loud (`UNVERIFIED`, exit 1). Marker (tag `ci-deploy`):
+```
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_RESTART_LOCK_CONTENTION
+```
+
 ## Key rotation
 
 Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_id` resources.

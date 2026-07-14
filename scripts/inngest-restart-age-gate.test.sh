@@ -44,5 +44,29 @@ assert_eq "issue age 3h (>> 45) → restart_ok=false" "false" \
 assert_eq "unparseable createdAt → restart_ok=true (fail-open, never strand a real down)" "true" \
   "$(restart_ok_from_age "not-a-date" "$WINDOW" "$NOW_EPOCH")"
 
+# --- #6407 persistence-escalation resolver (test-design Finding A) ---
+# Non-degraded modes pass through unchanged (the resolver only escalates the soft mode).
+assert_eq "resolve: inngest_down passes through unchanged" "inngest_down" \
+  "$(resolve_effective_failure_mode "inngest_down" "2026-07-12T23:00:00Z" "$WINDOW" "$NOW_EPOCH")"
+assert_eq "resolve: probe_unavailable passes through unchanged" "probe_unavailable" \
+  "$(resolve_effective_failure_mode "probe_unavailable" "" "$WINDOW" "$NOW_EPOCH")"
+assert_eq "resolve: empty mode passes through unchanged" "" \
+  "$(resolve_effective_failure_mode "" "" "$WINDOW" "$NOW_EPOCH")"
+
+# functions_query_degraded, FIRST occurrence (no open issue) → stays soft.
+assert_eq "resolve: functions_query_degraded + no open issue → stays soft (first occurrence)" "functions_query_degraded" \
+  "$(resolve_effective_failure_mode "functions_query_degraded" "" "$WINDOW" "$NOW_EPOCH")"
+
+# functions_query_degraded, issue age BELOW the window → stays soft (no premature escalation).
+assert_eq "resolve: functions_query_degraded + age 10 min (< 45) → stays soft" "functions_query_degraded" \
+  "$(resolve_effective_failure_mode "functions_query_degraded" "2026-07-13T01:50:00Z" "$WINDOW" "$NOW_EPOCH")"
+
+# functions_query_degraded SUSTAINED past the window → ESCALATE to inngest_down (restart + page).
+# The safety ceiling: a /health=200-but-functions-permanently-wedged inngest is never soft-masked forever.
+assert_eq "resolve: functions_query_degraded + age exactly 45 min → ESCALATE to inngest_down" "inngest_down" \
+  "$(resolve_effective_failure_mode "functions_query_degraded" "2026-07-13T01:15:00Z" "$WINDOW" "$NOW_EPOCH")"
+assert_eq "resolve: functions_query_degraded + age 3h (>> 45) → ESCALATE to inngest_down" "inngest_down" \
+  "$(resolve_effective_failure_mode "functions_query_degraded" "2026-07-12T23:00:00Z" "$WINDOW" "$NOW_EPOCH")"
+
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

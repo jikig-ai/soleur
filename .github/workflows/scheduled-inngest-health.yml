@@ -120,6 +120,14 @@ jobs:
                   last_mode="inngest_unhealthy"; last_detail="attempt ${attempt}/3: liveness 200 but functions registry EMPTY (cold start) — grace/retry" ;;
                 inngest_down)
                   last_mode="inngest_down"; last_detail="attempt ${attempt}/3: liveness hook HTTP ${CODE} inngest unreachable: ${cause:-<empty body>}" ;;
+                functions_query_degraded)
+                  # #6407 Defect A: the /v0/gql functions read transiently failed BUT the
+                  # host corroborated loopback /health=200 (inngest-server IS serving; DEGRADED
+                  # sentinel). SOFT — NO restart, own [ci/inngest-functions-degraded] issue class.
+                  # Retry across all 3 attempts (a genuine transient may recover to healthy); a
+                  # SUSTAINED degraded state escalates to inngest_down downstream (the
+                  # persistence-escalation ceiling in the "Resolve effective failure mode" step).
+                  last_mode="functions_query_degraded"; last_detail="attempt ${attempt}/3: /v0/gql functions transiently unreachable but /health=200 (inngest-server serving) — soft, no restart: ${cause:-<empty body>}" ;;
                 inngest_unhealthy)
                   last_mode="inngest_unhealthy"; last_detail="attempt ${attempt}/3: liveness 200 but no functions array: ${cause}" ;;
                 probe_unavailable)
@@ -291,6 +299,48 @@ jobs:
             echo "::error::Inngest pool probe: ${fail_mode} — ${fail_detail_safe}"
           fi
 
+      # Persistence-escalation resolver (#6407, R6). A sustained functions_query_degraded
+      # (loopback /health=200 but the /v0/gql functions query PERMANENTLY wedged) must not be
+      # soft-masked forever. Reuse the age-gate timestamp logic against the
+      # [ci/inngest-functions-degraded] issue: first occurrence = soft (no restart); once the
+      # issue age >= GIVE_UP_WINDOW (~45 min ≈ 3 */15 cycles, matching the down-family window)
+      # RECLASSIFY the cycle's verdict to inngest_down (restart + page). All OTHER modes pass
+      # through unchanged. This step is the SINGLE SOURCE OF TRUTH downstream consumers read
+      # (agegate / dispatch / file-issue / auto-close / heartbeat) so the escalation reaches
+      # every consumer (union-widening).
+      - name: Resolve effective failure mode (functions-degraded escalation, #6407)
+        id: effmode
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAIL_MODE: ${{ steps.poolprobe.outputs.failure_mode }}
+          FAIL_DETAIL: ${{ steps.poolprobe.outputs.failure_detail }}
+        run: |
+          set -euo pipefail
+          eff_mode="$FAIL_MODE"; eff_detail="$FAIL_DETAIL"
+          if [[ "$FAIL_MODE" == "functions_query_degraded" ]]; then
+            # shellcheck source=/dev/null
+            source "$GITHUB_WORKSPACE/scripts/inngest-restart-age-gate.sh"
+            GIVE_UP_WINDOW_MIN=45
+            # `|| true` (#6407 review F2, pattern-recognition): under `set -euo pipefail` a transient
+            # gh API failure (rate-limit / 5xx) in this substitution would ABORT the effmode step, so
+            # it never writes $GITHUB_OUTPUT and the always() heartbeat reads failure_mode='' → 'ok'
+            # (a missed escalation page for that cycle). Degrade a gh blip to empty CREATED instead:
+            # empty → restart_ok_from_age treats it as first-occurrence soft (self-heals next */15 tick).
+            CREATED=$(gh issue list --repo "$GH_REPO" --label ci/inngest-functions-degraded --state open --json createdAt --jq '.[0].createdAt // empty' 2>/dev/null || true)
+            # Escalation decision via the extracted, unit-tested resolver (#6407 review, test-design
+            # Finding A): functions_query_degraded stays soft while the open-issue age < window (or on
+            # first occurrence), and reclassifies to inngest_down once age >= window. The `gh` read
+            # stays here (outside the pure seam) so the decision itself is deterministically testable
+            # in inngest-restart-age-gate.test.sh.
+            eff_mode=$(resolve_effective_failure_mode "$FAIL_MODE" "$CREATED" "$GIVE_UP_WINDOW_MIN" "$(date -u +%s)")
+            if [[ "$eff_mode" == "inngest_down" ]]; then
+              eff_detail="ESCALATED (#6407): functions_query_degraded sustained >= ${GIVE_UP_WINDOW_MIN}m (open [ci/inngest-functions-degraded] age) — /health=200 but /v0/gql functions permanently wedged; reclassified to inngest_down (restart + page). ${FAIL_DETAIL}"
+            fi
+            echo "functions-degraded escalation gate: created='${CREATED:-<none>}' window=${GIVE_UP_WINDOW_MIN}m → effective_mode=$eff_mode"
+          fi
+          { printf '%s\n' "failure_mode=${eff_mode}"; printf '%s\n' "failure_detail=${eff_detail}"; } >> "$GITHUB_OUTPUT"
+
       # Restart give-up AGE gate (#6374 Defect 3). Runs BEFORE the dispatch step for the
       # down-family only. Reads the open [ci/inngest-down] issue's createdAt (ONE gh read,
       # zero writes) and emits restart_ok via the extracted, unit-tested age-gate helper:
@@ -301,7 +351,7 @@ jobs:
       # exists) + RMW clobber; recovery auto-closes the issue → next episode resets the age.
       - name: Restart give-up age gate (#6374 Defect 3)
         id: agegate
-        if: steps.poolprobe.outputs.failure_mode == 'inngest_down' || steps.poolprobe.outputs.failure_mode == 'inngest_unhealthy'
+        if: steps.effmode.outputs.failure_mode == 'inngest_down' || steps.effmode.outputs.failure_mode == 'inngest_unhealthy'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -324,7 +374,7 @@ jobs:
       # churns more session connections (#5558) or a broken probe is not a real down.
       # Do NOT add pool/probe modes to this gate.
       - name: Auto-dispatch inngest restart (failure)
-        if: (steps.poolprobe.outputs.failure_mode == 'inngest_down' || steps.poolprobe.outputs.failure_mode == 'inngest_unhealthy') && steps.agegate.outputs.restart_ok == 'true'
+        if: (steps.effmode.outputs.failure_mode == 'inngest_down' || steps.effmode.outputs.failure_mode == 'inngest_unhealthy') && steps.agegate.outputs.restart_ok == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -335,12 +385,12 @@ jobs:
             echo "::warning::restart dispatch failed — the tracking issue below carries the escalation."
 
       - name: File or comment tracking issue (failure)
-        if: steps.poolprobe.outputs.failure_mode != ''
+        if: steps.effmode.outputs.failure_mode != ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          FAIL_MODE: ${{ steps.poolprobe.outputs.failure_mode }}
-          FAIL_DETAIL: ${{ steps.poolprobe.outputs.failure_detail }}
+          FAIL_MODE: ${{ steps.effmode.outputs.failure_mode }}
+          FAIL_DETAIL: ${{ steps.effmode.outputs.failure_detail }}
           RESTART_OK: ${{ steps.agegate.outputs.restart_ok }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -356,10 +406,17 @@ jobs:
           #                   Defect-3 age gate (#6374). secret_unset routes here (not `down`): the watchdog could not
           #                   probe, so a restart it never dispatched must not be claimed, and this must not seed the age gate.
           #   down          → [ci/inngest-down]              the liveness restart body (down / unhealthy)
+          #   functions-degraded → [ci/inngest-functions-degraded] the /v0/gql functions read
+          #                   transiently failed BUT loopback /health=200 (inngest IS serving;
+          #                   #6407). SOFT — NO restart, DISTINCT title from [ci/inngest-down] so
+          #                   the age gate is never polluted. MANDATORY arm BEFORE the `*)→down`
+          #                   default: without it a functions_query_degraded verdict falls through
+          #                   to `down` → a false [ci/inngest-down] P1 (the exact #6407 regression).
           case "$FAIL_MODE" in
             pool_pressure|pool_exhausted)    ISSUE_CLASS="pool" ;;
             pool_probe_unavailable)          ISSUE_CLASS="pool-probe" ;;
             probe_unavailable|secret_unset)  ISSUE_CLASS="liveness-probe" ;;
+            functions_query_degraded)        ISSUE_CLASS="functions-degraded" ;;
             *)                               ISSUE_CLASS="down" ;;
           esac
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
@@ -391,6 +448,36 @@ jobs:
             else
               gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
                 --label "ci/inngest-probe-unavailable" --label "priority/p2-medium" --body-file "$BODY_FILE"
+            fi
+          elif [[ "$ISSUE_CLASS" == "functions-degraded" ]]; then
+            # #6407 Defect A: the /v0/gql functions read transiently failed but the host
+            # corroborated loopback /health=200 (inngest-server IS serving). SOFT — NO restart
+            # dispatched, own title DISTINCT from [ci/inngest-down] so the age gate is never
+            # polluted. Do NOT reuse the [ci/inngest-probe-unavailable] class — its "probe path
+            # unavailable / deploy-race / CF-Access" body is inaccurate for THIS mode (here the
+            # probe path IS reachable and /health=200; only the functions query blipped). The
+            # Sentry heartbeat stays `ok` for this mode. A SUSTAINED degraded state escalates to
+            # inngest_down via the persistence gate (this issue's age) — see the effmode step.
+            ISSUE_TITLE="[ci/inngest-functions-degraded] Inngest functions query transiently degraded"
+            ISSUE_SEARCH='in:title "[ci/inngest-functions-degraded] Inngest functions query transiently degraded"'
+            gh label create "ci/inngest-functions-degraded" --repo "$GH_REPO" \
+              --description "External watchdog: /v0/gql functions read transiently failed but /health=200 (inngest serving) — soft, NO restart" --color "5319E7" 2>/dev/null || true
+            {
+              printf '## Inngest functions query transiently degraded\n\n'
+              printf -- '- **Failure mode:** `%s`\n' "$FAIL_MODE"
+              printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
+              printf -- '- **Detected at:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf '### The /v0/gql functions read blipped, but inngest IS serving — NOT a confirmed inngest-down\n\nThe on-host liveness probe corroborated the failed `/v0/gql functions` query against the loopback `/health` endpoint on the SAME inngest-server and got **HTTP 200** — inngest-server is up and processing events; only the cheap functions read transiently failed (a curl transport blip → `__FETCH_FAILED__`). NO restart is dispatched (the server is healthy), and this does NOT open a `[ci/inngest-down]` P1. If `/health` had NOT returned 200, this would have stayed `inngest_down` (restart).\n\n'
+              printf '### Persistence-escalation ceiling\n\nIf this degraded state persists for >= ~45 min (3 `*/15` cycles), the watchdog reclassifies it to `inngest_down` (dispatch restart + Sentry page) — a `/health`-ok-but-functions-permanently-wedged residual is not soft-masked forever. First occurrence = soft; sustained = escalates.\n\n'
+              printf '### Remediation\n\nUsually self-resolves on the next `*/15` tick (auto-closes on recovery). If it persists, query Better Stack for `SOLEUR_INNGEST_LIVENESS_VERDICT mode=degraded` (tag `inngest-inventory`) and check inngest-server function registration per `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
+            } > "$BODY_FILE"
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            if [[ -n "$EXISTING" ]]; then
+              gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Functions query still degraded at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. /health=200 (inngest serving); NO restart. Run: ${RUN_URL}"
+            else
+              gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+                --label "ci/inngest-functions-degraded" --label "priority/p2-medium" --body-file "$BODY_FILE"
             fi
           elif [[ "$ISSUE_CLASS" == "pool-probe" ]]; then
             ISSUE_TITLE="[ci/inngest-pool-probe] Inngest pool probe unavailable"
@@ -470,7 +557,12 @@ jobs:
                   gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still \`${FAIL_MODE}\` at ${NOW}; auto-restart remains suppressed (age gate). Detail: ${FAIL_DETAIL}. Run: ${RUN_URL}"
                 fi
               else
-                gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Restart re-dispatched. Run: ${RUN_URL}"
+                # No-claim-on-empty (2026-07-13 untruthful-comment learning): RESTART_OK is
+                # empty only if the age gate did not run for this verdict (a defense-in-depth
+                # dead-branch for an excluded/escalated mode reaching the down class without the
+                # gate). Do NOT assert "Restart re-dispatched" — a restart that may not have been
+                # dispatched must never be claimed. State the uncertainty; the heartbeat pages.
+                gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. (Restart-dispatch status unavailable this cycle — see the run log; the Sentry heartbeat continues to page.) Run: ${RUN_URL}"
               fi
             else
               gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
@@ -479,7 +571,7 @@ jobs:
           fi
 
       - name: Auto-close tracking issue (healthy)
-        if: steps.poolprobe.outputs.failure_mode == ''
+        if: steps.effmode.outputs.failure_mode == ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -512,6 +604,14 @@ jobs:
             --search 'in:title "[ci/inngest-probe-unavailable] Inngest liveness probe unavailable"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_LIVENESS_PROBE" ]]; then
             gh issue close "$STALE_LIVENESS_PROBE" --repo "$GH_REPO" --comment "Inngest liveness probe reachable + healthy again at ${NOW}. Run: ${RUN_URL}"
+          fi
+          # #6407: close the functions-degraded issue once the /v0/gql functions read is
+          # healthy again (the transient blip cleared). Without this close the soft issue rots
+          # open forever (state-machine Q4 dead-end).
+          STALE_FUNCTIONS_DEGRADED=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/inngest-functions-degraded] Inngest functions query transiently degraded"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE_FUNCTIONS_DEGRADED" ]]; then
+            gh issue close "$STALE_FUNCTIONS_DEGRADED" --repo "$GH_REPO" --comment "Inngest /v0/gql functions query healthy again at ${NOW}. Run: ${RUN_URL}"
           fi
 
       # --- #5553: continuous between-deploy durability detector ---------------
@@ -594,7 +694,12 @@ jobs:
           # so a transient post-merge deploy-race tick does NOT false-page the operator
           # (the relocated-false-positive fix). Only a CONFIRMED down/unhealthy/pool state
           # flips the heartbeat to `error` → Sentry monitor-failure page.
-          status: ${{ (steps.poolprobe.outputs.failure_mode == '' || steps.poolprobe.outputs.failure_mode == 'probe_unavailable') && 'ok' || 'error' }}
+          # #6407: `functions_query_degraded` (/v0/gql functions blipped but /health=200 —
+          # inngest IS serving) is ALSO soft → `ok` (surfaced via [ci/inngest-functions-degraded],
+          # not a page). Reads the effmode SOURCE OF TRUTH: a SUSTAINED degraded state is
+          # reclassified to inngest_down there → falls through to `error` here (the escalation
+          # DOES page). Without this arm the soft mode would false-page every */15.
+          status: ${{ (steps.effmode.outputs.failure_mode == '' || steps.effmode.outputs.failure_mode == 'probe_unavailable' || steps.effmode.outputs.failure_mode == 'functions_query_degraded') && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

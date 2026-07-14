@@ -443,6 +443,44 @@ test_liveness_only_scrubs_dsn_from_fatal() {
 }
 
 # ===========================================================================
+# #6407 (Defect A) — loopback /health corroboration before declaring inngest_down.
+# In LIVENESS_ONLY mode, a transient /v0/gql functions failure is corroborated
+# against the SAME loopback server's /health endpoint (seam INVENTORY_INNGEST_HEALTH_CODE):
+#   /health=200  → inngest IS serving; the GQL read blipped → SOFT DEGRADED sentinel
+#                  (classifier → functions_query_degraded → NO restart). #6407 false positive.
+#   /health !=200 → wedged/stopped → keep the FATAL sentinel (inngest_down → restart recovers).
+# ===========================================================================
+
+# --- #6407 T-H1: functions-query fail + /health=200 → DEGRADED (soft, no restart) ---
+test_liveness_health_200_degrades() {
+  local ff; ff=$(mktemp); trap 'rm -f "$ff"' RETURN
+  printf '%s' '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}' > "$ff"
+  local out rc=0
+  out=$(run_inv_liveness "$ff" INVENTORY_INNGEST_HEALTH_CODE=200) || rc=$?
+  assert_eq "functions-fail + /health=200 exits non-zero (webhook surfaces the soft body)" "1" "$rc"
+  if [[ "$out" == *"inngest-inventory: DEGRADED"* ]]; then echo "  PASS: emits the DEGRADED soft sentinel (classifier → functions_query_degraded)"; PASS=$((PASS+1));
+  else echo "  FAIL: no DEGRADED sentinel on /health=200 corroboration (would false-page as inngest_down)"; FAIL=$((FAIL+1)); fi
+  if [[ "$out" == *"inngest-inventory: FATAL"* ]]; then echo "  FAIL: emitted FATAL despite /health=200 (the #6407 false down)"; FAIL=$((FAIL+1));
+  else echo "  PASS: did NOT emit FATAL when /health=200"; PASS=$((PASS+1)); fi
+}
+
+# --- #6407 T-H2: functions-query fail + /health != 200 → real down/wedged preserved (FATAL) ---
+test_liveness_health_non200_stays_fatal() {
+  local ff; ff=$(mktemp); trap 'rm -f "$ff"' RETURN
+  printf '%s' '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}' > "$ff"
+  local code
+  for code in 000 503; do
+    local out rc=0
+    out=$(run_inv_liveness "$ff" INVENTORY_INNGEST_HEALTH_CODE="$code") || rc=$?
+    assert_eq "functions-fail + /health=$code exits non-zero" "1" "$rc"
+    if [[ "$out" == *"inngest-inventory: FATAL"* ]]; then echo "  PASS: /health=$code keeps FATAL (real down/wedged → restart preserved)"; PASS=$((PASS+1));
+    else echo "  FAIL: /health=$code did not emit FATAL (masked a real down)"; FAIL=$((FAIL+1)); fi
+    if [[ "$out" == *"inngest-inventory: DEGRADED"* ]]; then echo "  FAIL: /health=$code emitted DEGRADED (would soft-mask a real down)"; FAIL=$((FAIL+1));
+    else echo "  PASS: /health=$code did NOT soft-mask (no DEGRADED)"; PASS=$((PASS+1)); fi
+  done
+}
+
+# ===========================================================================
 # #6258 (ADR-106) — bounding + markers + completeness-by-construction
 # ===========================================================================
 
@@ -636,6 +674,8 @@ test_liveness_only_skips_eventsv2
 test_liveness_only_durability_enum
 test_liveness_only_fails_loud_on_down
 test_liveness_only_scrubs_dsn_from_fatal
+test_liveness_health_200_degrades
+test_liveness_health_non200_stays_fatal
 test_durability_states
 test_durability_no_secret_leak
 test_durability_purity_preserved

@@ -135,3 +135,22 @@ A heartbeat was emitted to a Sentry monitor slug that did not exist in IaC (page
 ## Action Items & Follow-ups
 
 _No action items — incident fully resolved in the source PR with no residual work._
+
+## Residual vector — #6407 (functions-query transient)
+
+**Discovered:** 2026-07-14, after 6 recurrences of `[ci/inngest-down]` in ~2 days (2026-07-12 → 07-14), each a false-positive P1 whose dispatched auto-restart then RED-failed.
+
+**What #6374 did not close.** #6374 decoupled the liveness verdict from the heavy 365-day `eventsV2` read (the original false-positive path). It did NOT anticipate the **cheap `/v0/gql functions` liveness query ITSELF transiently failing**: a curl transport blip makes `fetch_functions()` emit `{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}`, which trips the fail-loud FATAL guard (`inngest-inventory.sh`) → the webhook wraps it as HTTP 500 + FATAL body → the classifier maps any `inngest-inventory: FATAL` body to `inngest_down` → restart family. The watchdog's 3× retry (8s apart) does not help a transport blip persisting ~24s. During run 29334263944 the deploy-status payload showed `services.inngest_server="active"`, `restart_count:0`, `sandbox_canary.verdict="pass"`, and Better Stack showed inngest live-processing events throughout — a healthy process, a transient GQL read. **The FATAL exit happened BEFORE any process-liveness check** — the independent "is the HTTP server serving?" signal that would falsify the down verdict was never consulted.
+
+**Compounding failure — the failed remediation.** The dispatched restart sent `restart inngest _ latest` to `ci-deploy.sh`, whose FD-200 advisory `flock -n 200` is non-blocking; a loser wrote `final_write_state 1 "lock_contention"` exit 1, and the restart-verify poll latched it as a terminal failure → `::error::Restart failed` → RED. But `lock_contention` on a restart means another deploy/restart already holds the critical section and will bring inngest current — benign. The sibling web-platform-release deploy poll already treated `lock_contention` as non-terminal (ADR-079 amendment #5960); the restart poll never got that treatment.
+
+**Fix (#6407).**
+1. **`/health` corroboration before `inngest_down`.** In `INVENTORY_LIVENESS_ONLY` mode, before emitting the FATAL sentinel on a functions-query failure, `inngest-inventory.sh` probes the SAME loopback server's `/health` (the endpoint `ci-deploy.sh verify_inngest_health` gates on). `/health=200` (server serving; GQL read blipped) → a new **soft** `inngest-inventory: DEGRADED` sentinel → classifier mode `functions_query_degraded` (NO restart, own `[ci/inngest-functions-degraded]` soft issue, heartbeat `ok`). `/health != 200` (wedged/stopped) → keep FATAL → `inngest_down` → restart (recovers a wedge). `systemctl is-active`/ExecStart were rejected — both read for a wedged/stopped unit; `/health` is the only same-signal-class corroborator.
+2. **Persistence-escalation ceiling.** A SUSTAINED `functions_query_degraded` (health-ok but functions permanently wedged) escalates to `inngest_down` after ~45 min (reusing the #6374 age-gate logic against the new issue title) — never soft-masked forever.
+3. **Union-widening.** The new soft mode is routed through EVERY watchdog consumer (probe `case`, `ISSUE_CLASS` case before the `*)→down` default, heartbeat `ok` allowlist, auto-close, persistence gate) so it neither falls through to a false `[ci/inngest-down]` P1 nor rots a soft issue open.
+4. **Restart poll `lock_contention` non-terminal (ADR-079 #5960).** `restart-inngest-server.yml`'s verify poll treats `reason=lock_contention` for `component=inngest` as non-terminal + does a final STATE re-read at budget expiry before exiting benign; an unconfirmed state fails loud.
+5. **Observability.** Journald `SOLEUR_INNGEST_LIVENESS_VERDICT` (mode/health_code/functions/durability) and `SOLEUR_INNGEST_RESTART_LOCK_CONTENTION` (action/component/outcome) markers (Vector Source 4 → Better Stack) self-report both decisions.
+
+**GDPR.** N/A — the watchdog and restart path move no user content (process-liveness + open-issue metadata only). Art. 33/34 not engaged (consistent with the primary incident above).
+
+**References.** ADR-030 #6374 log entry (refined 2026-07-14 #6407); ADR-079 amendment #5960; runbook `## External watchdog: functions-query degraded + restart lock_contention — #6407`.

@@ -77,6 +77,10 @@ set -euo pipefail
 readonly LOG_TAG="inngest-inventory"
 
 GQL_URL="${INNGEST_GQL_URL:-http://127.0.0.1:8288/v0/gql}"
+# #6407 Defect A — loopback /health endpoint used to CORROBORATE a functions-query failure
+# in LIVENESS_ONLY mode before declaring a hard down. Same loopback server + same /health
+# path that ci-deploy.sh verify_inngest_health gates on (ci-deploy.sh:1002).
+INNGEST_HEALTH_URL="${INNGEST_HEALTH_URL:-http://127.0.0.1:8288/health}"
 # Cost lever (#6258 Deepen Finding 3): raise PAGE_SIZE (lossless round-trip cut) — the ONLY
 # completeness-preserving lever. Never narrow FROM_TS. Env-overridable for tests.
 PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-500}"
@@ -403,6 +407,34 @@ run_inventory() {
     fn_keys=$(echo "$fn_body" | jq -c '((.data // {}) | keys)' 2>/dev/null || echo '[]')
     _pf_timeout_marker gql_error 0 0 0
     logger -t "$LOG_TAG" "ERROR: /v0/gql functions unreachable or non-array: errors=$fn_errs data_keys=$fn_keys" 2>/dev/null || true
+    # #6407 Defect A — /health corroboration (LIVENESS_ONLY only). The external watchdog's
+    # cheap /v0/gql functions curl can transiently fail (a transport blip → the
+    # __FETCH_FAILED__ envelope) while inngest-server is UP and processing events. Before
+    # declaring a hard down (→ inngest_down → restart + [ci/inngest-down] P1), corroborate
+    # against the SAME loopback server's /health endpoint (the one ci-deploy.sh
+    # verify_inngest_health gates on):
+    #   /health=200  → the HTTP server IS serving; the GQL read blipped → emit a SOFT DEGRADED
+    #                  sentinel (classifier → functions_query_degraded → NO restart). #6407.
+    #   /health !=200 → wedged/stopped → keep the FATAL sentinel (inngest_down → restart, which
+    #                  recovers a wedge). is-active/ExecStart are NOT specificity-correct here
+    #                  (both read for a wedged/stopped unit); /health is the only same-signal-
+    #                  class corroborator. The full-inventory (non-liveness) caller keeps the
+    #                  original fail-loud FATAL — corroboration is a liveness-verdict concern only.
+    if [[ -n "$LIVENESS_ONLY" ]]; then
+      local health_code durability_state_dg verdict_mode
+      health_code="${INVENTORY_INNGEST_HEALTH_CODE-$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$INNGEST_HEALTH_URL" 2>/dev/null || echo 000)}"
+      durability_state_dg=$(derive_durability_state)
+      if [[ "$health_code" == "200" ]]; then verdict_mode="degraded"; else verdict_mode="down"; fi
+      # #6407 Defect C — SOLEUR_INNGEST_LIVENESS_VERDICT marker (journald-only; tag
+      # inngest-inventory → Vector Source 4 → Better Stack). Enum/count fields only (mode +
+      # HTTP code + count + durability enum) — never a raw GraphQL errors[].message (#5503 purity).
+      logger -t "$LOG_TAG" "SOLEUR_INNGEST_LIVENESS_VERDICT mode=$verdict_mode health_code=$health_code functions=0 durability=$durability_state_dg" 2>/dev/null || true
+      if [[ "$health_code" == "200" ]]; then
+        echo "inngest-inventory: DEGRADED /v0/gql functions query transiently unreachable but /health=200 (errors=$fn_errs) — soft, no restart"
+        echo "DEGRADED: /v0/gql functions transiently unreachable, /health=200 (errors=$fn_errs)" >&2
+        exit 1
+      fi
+    fi
     echo "inngest-inventory: FATAL /v0/gql functions query failed or non-array (errors=$fn_errs data_keys=$fn_keys); is inngest-server.service up? — refusing to emit a false-clean empty functions baseline"
     echo "ERROR: /v0/gql functions non-array (errors=$fn_errs data_keys=$fn_keys)" >&2
     exit 1
