@@ -659,8 +659,20 @@ discoverability_test:
   command: |
     doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
       --since 30m --grep SOLEUR_PRIVATE_NIC --limit 20
-  expected_output: "at least one line with nic_ok=true, zot_store_mounted=true, and converged_by in
-                    {already, reboot}. NO ssh."
+  expected_output: "POST-DEPLOY (after AC14): at least one row whose raw STARTS
+                    {\"message\":\"SOLEUR_PRIVATE_NIC — carrying nic_ok=true, zot_store_mounted=true,
+                    converged_by in {already, reboot}. NO ssh.
+                    PRE-DEPLOY the marker does not exist on the host, so zero GENUINE rows is the
+                    correct result — but the raw query is NOT zero-noise, and that matters:
+                    CORRECTED at /work after running it live. `--grep` is an unanchored
+                    `raw LIKE '%SOLEUR_PRIVATE_NIC%'` over a source EVERY host multiplexes into, so
+                    it returns any row that merely CONTAINS the string. Run 2026-07-15 it returned 3
+                    rows — all Vector-shipped GitHub webhook payloads of THIS PR, because the PR body
+                    quotes the marker. Those rows even contain the literal `nic_ok=true` (inside the
+                    quoted body), so a naive substring match on this output FALSE-PASSES.
+                    Read the verdict from `bash scripts/zot-restart-loop-alarm.sh`
+                    (NIC_ALARM_VERDICT), which anchors on the {\"message\":\" envelope and rejects
+                    foreign rows — never eyeball this raw output."
 ```
 
 **Why a new signal, not a new threshold (`hr-observability-layer-citation`):** both live signals are
