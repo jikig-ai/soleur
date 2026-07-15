@@ -122,8 +122,17 @@ independent axes so it never silently gates a host:
     soak is a flat count over `START..now`); the soak's FAIL set is **4-of-5** (the Sentry-dark mode
     emits nothing at all — #6437 — and is caught only by the soak's insufficient-sample arm); and
     fresh-boot coverage is **partial** (a `/v2/` probe miss emits nothing, and there is no `app_zot`
-    liveness beacon, so the soak has no denominator of expected boots). The soak is therefore
-    **necessary but not sufficient** to authorize 5.3–5.5. **Window — opens at task 1.8, for 3 of the 4 signals:**
+    liveness beacon, so the soak has no denominator of expected boots — #6462). The soak is therefore
+    **necessary but not sufficient** to authorize 5.3–5.5.
+    ⚠ **The soak is also not yet ENROLLED, and #6435 did not enroll it.** `sweep-followthroughs.sh`
+    enumerates `--label follow-through --state open` and reads a `soleur:followthrough` directive from
+    the issue body; #6122 carries neither, and no issue references `zot-soak-6122.sh`, so the sweeper
+    never invokes it. (It was additionally committed mode 100644 — a latent second defect, fixed in
+    #6435 and now class-guarded by `scripts/followthrough-exec-bit.test.sh`.) This is deliberate: the
+    cutover has not happened (`registry:"zot"` = 0 events/30d) and the soak's `START` is an unpinned
+    placeholder, so enrolling early would emit a daily TRANSIENT that never converges. **Enrolling the
+    soak — label + directive + a pinned `START` — is a precondition of Phase 5 that 5.3 must not
+    proceed without.** Until then the gate's verdict is not merely insufficient; it is absent. **Window — opens at task 1.8, for 3 of the 4 signals:**
     `zot-gate-degraded` fires precisely where `ZOT_ACTIVE` stays 0 (probe_unreachable /
     creds_absent / login_failed, `ci-deploy.sh:790/799/807`), and the two cloud-init fresh-boot
     signals gate on `ZURL` + a `/v2/` probe with **no** `ZOT_ACTIVE` at all (`ZOT_ACTIVE` does not

@@ -47,10 +47,24 @@
 #     happened". This gate counts BAD events but has no DENOMINATOR of expected boots.
 #   - Consequence: a PASS here is evidence, not authorization. See ADR-096.
 #
-# ⚠ HISTORY: this file was committed mode 100644 and therefore NEVER RAN — sweep-followthroughs.sh
-# rejects a non-executable probe before exec and prints to stderr only (no comment, no exit code).
-# No query in this file executed between its creation and #6435. scripts/followthrough-exec-bit.test.sh
-# now guards the whole probe class.
+# ⚠ NOT YET ENROLLED — no query in this file has ever executed, and THIS PR DOES NOT CHANGE THAT.
+# Two independent reasons, in the order they bite:
+#   1. UNREACHABLE (the operative one). sweep-followthroughs.sh enumerates
+#      `gh issue list --label follow-through --state open` and reads a `soleur:followthrough`
+#      directive from each body. #6122 carries neither the label nor a directive, and no issue
+#      in the repo references this script — so the sweeper never calls run_one for it at all.
+#   2. NON-EXECUTABLE (latent, fixed by #6435). The file was committed mode 100644. Had it ever
+#      been enrolled, sweep-followthroughs.sh would have rejected it at its `[[ ! -x "$script" ]]`
+#      guard BEFORE the `env -i` exec, via fail() — which is `printf ... >&2` and nothing else —
+#      then `return 0`: no run, no exit code, no comment on the tracker, no TRANSIENT bucket.
+#      scripts/followthrough-exec-bit.test.sh now guards that for the whole probe class.
+#
+# Enrollment is deliberately deferred, NOT an oversight: the cutover has not happened
+# (registry:"zot" = 0 events over 30d — zot has never served a pull), and START below is still
+# the unpinned placeholder. Enrolling now would make the daily sweeper post a TRANSIENT comment
+# to the tracker every day forever without ever converging. Enrollment = add the `follow-through`
+# label + the directive at the bottom of this header to the tracker, AND pin START, at cutover.
+# #6122 owns the cutover UTC and the enrollment decision.
 #
 # Exit semantics (per sweep-followthroughs.sh contract):
 #   0 = PASS       (zero fallbacks AND sufficient zot sample; sweeper closes the tracker)

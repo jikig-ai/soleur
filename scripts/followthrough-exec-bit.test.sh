@@ -2,12 +2,19 @@
 # Guards that every scripts/followthroughs/*.sh is committed executable (100755).
 #
 # Why this exists (#6435): zot-soak-6122.sh shipped as mode 100644 — the sole non-100755
-# outlier in the probe set — and so NEVER RAN once in its life. sweep-followthroughs.sh
-# rejects a non-executable probe at an `[[ ! -x "$script" ]]` guard BEFORE the `env -i` exec,
-# via fail() which is `printf ... >&2` and nothing else, then `return 0`. No run, no exit
-# code, no comment on the tracker, no TRANSIENT bucket. The tracker just sits open while its
-# gate is silently inert — an hr-no-dashboard-eyeball-pull-data-yourself surface, discoverable
-# only by reading the sweeper job's stderr.
+# outlier in the probe set. sweep-followthroughs.sh rejects a non-executable probe at an
+# `[[ ! -x "$script" ]]` guard BEFORE the `env -i` exec, via fail() which is `printf ... >&2`
+# and nothing else, then `return 0`. No run, no exit code, no comment on the tracker, no
+# TRANSIENT bucket — the tracker just sits open while its gate is silently inert, an
+# hr-no-dashboard-eyeball-pull-data-yourself surface discoverable only by reading the
+# sweeper job's stderr.
+#
+# Scope note (do not overstate this gate): mode 100644 was a LATENT defect on that probe, not
+# the reason it never ran — it is also unenrolled (no tracker carries its directive), so the
+# sweeper never reaches the exec-bit guard for it. This gate closes the executability half for
+# the whole class, so the next probe cannot ship dead-on-arrival. It does NOT prove a probe is
+# reachable; an orphaned probe passes this gate while running never. Reachability is tracked
+# separately.
 #
 # Asserts the INDEX mode (git ls-files -s), not the worktree bit (test -x): the bug was
 # committed as 100644, and a worktree-only chmod that never reaches the index would satisfy

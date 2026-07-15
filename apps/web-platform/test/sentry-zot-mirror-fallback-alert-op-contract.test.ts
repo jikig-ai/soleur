@@ -40,9 +40,15 @@ const soak = readFileSync(
 // other kind is added — which is how a test gets deleted instead of fixed.
 function alarmFilterSet(): Set<string> {
   const start = tf.indexOf('resource "sentry_issue_alert" "zot_mirror_fallback_rate"');
+  if (start === -1) throw new Error("zot_mirror_fallback_rate resource not found in issue-alerts.tf");
   const resource = tf.slice(start);
   const filtersStart = resource.indexOf("filters_v2 = [");
+  if (filtersStart === -1) throw new Error("filters_v2 block not found on zot_mirror_fallback_rate");
   const filtersEnd = resource.indexOf("\n  ]", filtersStart);
+  // Same fail-loud rationale as soakFailQueries: a -1 here would slice to the end of the FILE,
+  // collecting every tagged_event of every OTHER alert resource below this one — silently
+  // inflating the "watched set" and turning the parity assertion into noise.
+  if (filtersEnd === -1) throw new Error("filters_v2 block is not closed as expected");
   const block = resource.slice(filtersStart, filtersEnd);
   const set = new Set<string>();
   const re = /tagged_event\s*=\s*\{[^}]*?key\s*=\s*"([^"]+)"[^}]*?value\s*=\s*"([^"]+)"[^}]*?\}/g;
@@ -58,7 +64,15 @@ function alarmFilterSet(): Set<string> {
 // with every query deleted. A comment cannot live inside the array.
 function soakFailQueries(): Map<string, string> {
   const start = soak.indexOf("declare -A FAIL_QUERIES=(");
-  const block = soak.slice(start, soak.indexOf("\n)", start));
+  // Fail LOUD on a missing/renamed block rather than silently widening. `indexOf` returns -1
+  // when the anchor moves (e.g. the closing paren gets indented), and `slice(start, -1)` would
+  // then scope the "array block" to nearly the whole FILE — where the header prose names all
+  // four signal literals, so the extraction could pass while the array is gone. That is the
+  // vacuity this test exists to prevent, so it must not be reachable through the test itself.
+  if (start === -1) throw new Error("FAIL_QUERIES array block not found in zot-soak-6122.sh");
+  const end = soak.indexOf("\n)", start);
+  if (end === -1) throw new Error("FAIL_QUERIES array block is not closed by a column-0 ')'");
+  const block = soak.slice(start, end);
   const out = new Map<string, string>();
   for (const m of block.matchAll(/^\s*\[[a-z_]+\]='([^']+)'/gm)) {
     const query = m[1];
