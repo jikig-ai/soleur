@@ -6,8 +6,8 @@ import { describe, it, expect } from "vitest";
 // Cross-artifact contract test for the zot mirror-staleness fallback-rate alarm
 // (#6278 / ADR-096 "Loud, no-SSH signal").
 //
-// The `zot-mirror-fallback-rate` Sentry issue-alert pages when the runtime
-// zot→GHCR fallback / gate-degrade event rate exceeds >3 / 1h (event_frequency),
+// The `zot-mirror-fallback-rate` Sentry issue-alert pages on the FIRST runtime
+// zot→GHCR fallback / gate-degrade event (event_frequency count > 0 / 1h, #6285),
 // matching the OR of FOUR runtime signals (filter_match="any"):
 //   - registry == "ghcr-fallback"      (ci-deploy.sh rolling-deploy pull fallback)
 //   - registry == "zot-gate-degraded"  (ci-deploy.sh dark-gate degrade beacon)
@@ -56,7 +56,10 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     expect(tf).toContain(
       'resource "sentry_issue_alert" "zot_mirror_fallback_rate"',
     );
-    // Aggregate-rate intent: event_frequency count > 3 within 1h (not a first_seen page).
+    // Fire-on-first intent: event_frequency count > 0 within 1h (#6285). value MUST stay 0 —
+    // any value > 0 is fleet-shape-dependent and silently unreachable whenever the per-group
+    // event count cannot exceed it. See the resource comment in issue-alerts.tf for the
+    // mechanism; do NOT "normalize" this to the value = 1 used by web_terminal_boot_fatal.
     const block = tf.slice(
       tf.indexOf('resource "sentry_issue_alert" "zot_mirror_fallback_rate"'),
     );
@@ -65,7 +68,7 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     expect(scoped).toMatch(/filter_match\s*=\s*"any"/);
     expect(scoped).toContain("event_frequency");
     expect(scoped).toMatch(/comparison_type\s*=\s*"count"/);
-    expect(scoped).toMatch(/value\s*=\s*3/);
+    expect(scoped).toMatch(/value\s*=\s*0/);
     expect(scoped).toMatch(/interval\s*=\s*"1h"/);
     // Pin the no-SSH page target: a silent removal of the notify action would
     // make the alarm fire-but-page-nobody (the exact Branch-B failure the CTO
