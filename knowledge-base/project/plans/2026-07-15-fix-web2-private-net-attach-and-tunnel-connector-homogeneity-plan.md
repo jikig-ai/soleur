@@ -13,6 +13,38 @@ adr: ADR-113 (next-free verified against origin/main 2026-07-15; re-verify at /s
 >
 > **This is v2.** A 5-agent panel + a scoped advisor consult falsified four v1 claims by **measurement**. Every correction is marked `v2:` inline. v1's largest phase (per-host SSH ingress) is **cut** — see `## Alternatives Considered`.
 
+## Implementation Record (v3 — what /work actually found and shipped)
+
+> Deviations from the plan-as-written, recorded at implementation time. The plan is authoritative
+> for INTENT; every literal below was re-derived by running it.
+
+**The blast radius is 100%, not ~50% — the plan's central quantitative model is falsified.**
+The plan reasons throughout from a two-connector load-balance (~50% of `registry.` attempts land
+on the unattached web-2), and AC13/AC14's `N≥5` exists to defeat that coin-flip. Measured across
+the last 14 completed `web-platform-release.yml` runs: **14/14** show `bridge conclusion=success`
+(masked) + `mirror=skipped`. The bridge fails on **every** release with
+`Get "http://127.0.0.1:5000/v2/": context deadline exceeded`. **zot has never been backfilled.**
+14/14 under a fair 50/50 is ~0.006% likely, so something pins `registry.` to one replica. The fix
+is unchanged and the `N≥5` gate stays (conservative), but the *why* is unexplained and is now an
+explicit open question on the I2 issue (#6441) — candidate (b) depends on it.
+
+**Deviations, each justified inline in the ACs / code:**
+
+| # | Plan said | Shipped | Why |
+|---|---|---|---|
+| 1 | AC5: `zot_mirror` has **no** `if:` gate | `if: steps.docker_build.outcome == 'success'` | No gate ⇒ runs on releases that built no image ⇒ empty IMAGE/DIGEST ⇒ crane fails ⇒ **false** "degraded". Intent (a failed bridge reaches Slack) fully met. Guarded by T5. |
+| 2 | AC6: `grep -c continue-on-error` returns **7** | Returns **9** (5 directives + 4 comment mentions) | Re-measured. AC's own prescription (read the two steps) is what binds. |
+| 3 | P2: thread `host_creates` through `_run_gate` (~54 sites) | Separate `_run_host_creates_gate` | `_run_gate`'s rc encodes ack semantics; the HALT is ack-INDEPENDENT so it cannot use that rc. Keeps T1–T28 byte-unchanged for zero lost signal (`host_creates`=0 in all of them). |
+| 4 | (not in plan) | `server-tf-set-e.test.sh` extended | The guard arms on `inline = [` and was **blind** to the `inline = local.*` form P2c introduces — a silent bypass. Now resolves the indirection, fails closed on unvalidated ones, and asserts 1 tripwire per web-1 connection block. Its floor was a loose **13** against an actual **18**; corrected to the measured **19**. |
+| 5 | (not in plan) | T4/T5 added to `reusable-release-zot-mirror-retry.test.sh` | P3's whole behaviour was otherwise untested. Mutation-proven: neutralizing the branch reds T4; `!= 'success'` reds T5. |
+
+**Verified-as-stated (no drift):** `tfplan-hcloud-server-create.json` → `host_creates=1`;
+`tfplan-hcloud-server-location-replace.json` → `host_creates=0, resource_deletes=1`;
+real-baseline → `0` (and it does record `hcloud_server.web` **unkeyed** — stale, pre-`for_each`);
+web-2 `private_net` → `[]`, web-1 → `10.0.1.10`; **1** tunnel / **2** connectors / 8 conns;
+**12** `connection { host }` blocks (ADR-068's "11" is stale); both `web_host` `-target`s dead;
+ADR-008's `app.` route → **0** ingress rules; ADR-068:354-357 states the invariant verbatim.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-07-15
@@ -741,14 +773,29 @@ retry in the bridge (new replica per attempt; ~3% residual at N=5) is ~10 more l
    `[ack-destroy]` cannot bypass it), and the `::error::` text names a **per-type** remediation —
    including that `hcloud_server.registry` / a new `web-3` have **no dispatch path** and require the
    operator-local full apply **before** the code merges.
-5. **AC5 (P3 reaches the Slack line).** `zot_mirror` has **no** `if:` gate; it branches internally
-   on `steps.zot_bridge.outcome == 'failure'`; and `reusable-release.yml:846` still reads
-   `steps.zot_mirror.outputs.mirror_status` (i.e. the id the Slack append consumes is preserved).
+5. **AC5 (P3 reaches the Slack line).** `zot_mirror` is gated on
+   `steps.docker_build.outcome == 'success'` — **NOT** on `zot_bridge`; it branches internally on
+   `steps.zot_bridge.outcome == 'failure'`; and the Slack append still reads
+   `steps.zot_mirror.outputs.mirror_status` (i.e. the id it consumes is preserved).
    *v1's AC — "a step exists writing `mirror_status=degraded`" — was a proxy that passes while the
    Slack ⚠️ stays silent.*
+
+   > **v3 CORRECTION (at /work, implementation-time).** v2 required *"`zot_mirror` has **no** `if:`
+   > gate"*. **Implemented as `if: steps.docker_build.outcome == 'success'` instead** — the same
+   > gate `zot_bridge` itself carries. Dropping the gate ENTIRELY would run the step on releases
+   > that never built an image (`docker_build` is gated on
+   > `steps.version.outputs.next != '' && inputs.docker_image != ''`), where `IMAGE`/`DIGEST` are
+   > empty and crane fails → a **FALSE "zot mirror degraded"** on a release that never intended to
+   > mirror. `docker_build` success is exactly the precondition that guarantees those are
+   > populated. The goal ("a failed bridge must reach the Slack line") is fully met: the bridge no
+   > longer gates this step. Regression-guarded by T5 in
+   > `reusable-release-zot-mirror-retry.test.sh`.
 6. **AC6 (ADR-096 not reversed).** `continue-on-error: true` is still present on the `zot_bridge`
    and `zot_mirror` steps. **Verify by reading those two steps** — *not* `grep -c` over the file,
-   which returns **7** (`:364, :656, :678, :818, :834`, …) and cannot express the scope.
+   which returns **9** (measured at /work; of those only **5** are actual directives — `:364, :656,
+   :678, :818, :834` — the other 4 are comment prose mentioning the marker) and cannot express the
+   scope. *(v2 asserted 7; re-measured to 9. The AC's own point stands and is strengthened: the
+   count is not the evidence, reading the two steps is.)*
 7. **AC7 (stale targets gone).** `grep -c -- '-target=cloudflare_record.web_host'
    .github/workflows/apply-web-platform-infra.yml || true` returns **0** (it returns **1** today).
    *v1 also asserted `git grep '"web_host"' -- '*.tf'` → 0, which already passes on `origin/main`

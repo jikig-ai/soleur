@@ -6,7 +6,7 @@ date: 2026-07-15
 amends: [ADR-008, ADR-068]
 supersedes: none
 issue: 6416
-related: [6400, 6122, 6288, 6357]
+related: [6400, 6122, 6288, 6357, 6440, 6441, 6442, 6443]
 related_adrs: [ADR-008, ADR-068, ADR-096]
 ---
 
@@ -41,6 +41,42 @@ What *is* per-backend is the **(hostname + CF Access app + service token + CI br
 quadruple. That is deliberate least-privilege, not accident — `tunnel.tf:148-151` gives the
 registry its own token *"so registry-write access rotates/revokes independently of host-shell
 + webhook access"*. **That layering is correct and stays.**
+
+### Observed blast radius — worse than the load-balancing model predicts
+
+The two-connector model predicts the `registry.` ingress fails ~50% of the time (the share of
+requests landing on the unattached web-2). **The measured rate is 100%.** Across the last 14
+completed `web-platform-release.yml` runs at fix time:
+
+| bridge step `conclusion` | mirror step | count |
+|---|---|---|
+| `success` (forced by `continue-on-error`) | **skipped** | **14/14** |
+
+The bridge's real failure, from the job log:
+
+```
+Error response from daemon: Get "http://127.0.0.1:5000/v2/": context deadline exceeded
+```
+
+cloudflared's local forward opened; the connector that answered had no route to
+`10.0.1.30:5000`. **zot has never been backfilled** — every deploy silently fell through to
+GHCR, so the ADR-096 zot-primary path was dead end-to-end while reporting green.
+
+Two things this evidence settles, and one it does not:
+
+- **It settles that the masking is total, not partial.** `continue-on-error` forces the
+  bridge's `conclusion` to `success`; the mirror's `if: steps.zot_bridge.outcome == 'success'`
+  then skips it; a skipped step emits nothing, so `mirror_status` stays unset and the Slack
+  degraded line — which reads that output *by step id* — stays inert. Every layer that could
+  have reported the failure was, by construction, silent.
+- **It settles that the step `conclusion` field is unusable as evidence here.** Any probe or
+  alert reading it is reading a value the platform is contractually obliged to falsify.
+- **It does NOT settle why the rate is 100% rather than ~50%.** A 14/14 run of coin flips is
+  ~0.006% likely, so requests are not being distributed evenly across the two connectors —
+  something is pinning `registry.` to the unattached replica, or web-1's connector is not
+  serving that route. That is unexplained and matters for I2 candidate (b) (which assumes a
+  connector can be removed from rotation deliberately). It is called out in #6441 rather than
+  guessed at here.
 
 ### The actual defect
 
@@ -94,7 +130,7 @@ registers *before* its private NIC exists — the same race `cloud-init.yml:445`
 
 Enforcement is therefore a runtime gate (cloud-init must block `cloudflared service install`
 until the NIC is up, with a bounded boot window). **Not shipped in #6416; no phase of that PR
-claims to enforce I1.** It is candidate (b) under I2 below.
+claims to enforce I1.** It is candidate (b) under I2 below, tracked in #6441.
 
 ### I2 — Ingress services MUST be origin-relative for any host-specific route
 
@@ -120,7 +156,7 @@ tripwire (in-band `hostname` assertion) are anchored to a stated invariant inste
 **Negative / accepted.** I1 and I2 are **recorded but not enforced** here. `ssh.` remains
 host-nondeterministic across two connectors; the in-band `hostname` assertion converts that
 from a silent wrong-host write into a loud apply failure, which is a strict improvement but
-not a fix. Tracked as the I2 issue.
+not a fix. Tracked in #6441; the audit of what may already have been written to the wrong host is #6440.
 
 **Load-bearing constraint for any I2 implementation.** Do **NOT** repoint the 12
 `terraform_data.*` `connection { host }` blocks to `10.0.1.10`. They dial web-1's **public**
@@ -136,7 +172,7 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 | Candidate | Assessment |
 |---|---|
 | **(a) Per-host private-net-relative ingress** (`ssh-web-1.` → `ssh://10.0.1.10:22`) | **Disfavoured.** Requires the `-d "$SERVER_IP"` NAT rework, a new TF output for the private address, two cloudflared listeners + two NAT rules, 12 connection blocks, CF Access, DNS, and an `ssh.` retirement. ADR-068:378-384 already rejected the adjacent per-host-tunnel shape. |
-| **(b) Single-connector gate — enforce I1 at runtime** ⭐ | **Leading.** web-2 does not run cloudflared until its NIC is up (and, on a warm standby, not at all). One connector ⇒ `localhost:` and `ssh.` are deterministic **by construction**, and it is the only shape that makes I1 well-formed. Evidence it is safe: the tunnel carries **no `app.` ingress rule** (`grep -c 'hostname = "app\.' tunnel.tf` → **0**) — it is purely a *management plane*; `app.soleur.ai` is a **direct proxied A record** to web-1 (`dns.tf:13-20`), never through the tunnel. Break-glass is preserved (`tunnel.tf:4`: operator SSH uses the direct A record + `admin_ips` firewall). `server.tf:188` already computes the per-host discriminator, so the gate is ~1 line. **Open risks to price:** `deploy.` fan-out reaches web-2 through the tunnel, so gating web-2 out interacts with ADR-068 Option B (the fan-out targets peers over the private net, so it should hold — but must be proven); and on promotion web-2 *would* need the token, while no web-2 promotion runbook exists (pre-existing gap). |
+| **(b) Single-connector gate — enforce I1 at runtime** ⭐ (#6441) | **Leading.** web-2 does not run cloudflared until its NIC is up (and, on a warm standby, not at all). One connector ⇒ `localhost:` and `ssh.` are deterministic **by construction**, and it is the only shape that makes I1 well-formed. Evidence it is safe: the tunnel carries **no `app.` ingress rule** (`grep -c 'hostname = "app\.' tunnel.tf` → **0**) — it is purely a *management plane*; `app.soleur.ai` is a **direct proxied A record** to web-1 (`dns.tf:13-20`), never through the tunnel. Break-glass is preserved (`tunnel.tf:4`: operator SSH uses the direct A record + `admin_ips` firewall). `server.tf:188` already computes the per-host discriminator, so the gate is ~1 line. **Open risks to price:** `deploy.` fan-out reaches web-2 through the tunnel, so gating web-2 out interacts with ADR-068 Option B (the fan-out targets peers over the private net, so it should hold — but must be proven); and on promotion web-2 *would* need the token, while no web-2 promotion runbook exists (pre-existing gap). |
 
 ## Alternatives Considered
 
