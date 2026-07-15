@@ -38,12 +38,16 @@
   `--log-driver journald`; real bound is `SystemMaxUse=1G`. Re-pointing would leave the
   register wrong *and* freshly "verified".
 
-### Open decision — BLOCKS Step 3 (/work)
-- **UC-1**: CPO (blocking) + DHH argue Phase 4 (`ci-deploy.sh`, #6437) must be its own PR
+### Resolved decision — UC-1 APPLIED (no longer blocks /work)
+- **UC-1**: CPO (blocking) + DHH argued Phase 4 (`ci-deploy.sh`, #6437) must be its own PR
   — it is the only phase that can cause an `app.soleur.ai` outage (~22-line no-container
   window at `:1884-1907`). Plan left it NOT applied, citing an "operator's stated
   direction" (*"as one batch"*) that originated in the one-shot args, **not** from the
-  operator. Escalated to the operator before any code is written.
+  operator. Escalated to the operator before any code was written.
+- **Outcome: the operator chose the split; UC-1 is APPLIED.** This branch is **PR-A**
+  (#6456: #6436, #6429, #6446, #6447 — jointly inert, no runtime path). Phase 4 / #6437 is
+  **DEFERRED to PR-B by design — do not implement it here.** PR-A ACs green: AC1–AC6, AC11,
+  AC13–AC16. Nothing in this section blocks /work.
 
 ### Components Invoked
 - soleur:plan, soleur:plan-review (via one-shot planning subagent, terminated on limit)

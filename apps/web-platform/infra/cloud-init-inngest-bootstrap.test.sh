@@ -333,8 +333,16 @@ PY
   INFRA_VALIDATION_WF="$SCRIPT_DIR/../../../.github/workflows/infra-validation.yml"
   assert "infra-validation.yml schema-checks the STRIPPED render, never the raw template (#6446/#6426)" \
     "! grep -qE '^[[:space:]]*cloud-init schema -c cloud-init\.yml[[:space:]]*$' '$INFRA_VALIDATION_WF'"
-  assert "infra-validation.yml still schema-checks the directive-stripped source (#6426)" \
-    "grep -qF 'cloud-init schema -c /tmp/cloud-init.stripped.yml' '$INFRA_VALIDATION_WF'"
+  # The POSITIVE half asserts that schema coverage EXISTS — deliberately NOT which mechanism
+  # provides it. Pinning `-c /tmp/cloud-init.stripped.yml` would pin main's *implementation*
+  # (a temp-file path) and red any strictly-better replacement: #6458 replaces the step
+  # wholesale with a render-then-validate script, which is this same invariant done properly.
+  # A drift guard must fail on SILENT LOSS of coverage, never on a deliberate upgrade of it.
+  # Both alternates are anchored on a line-leading command — prose cannot produce one, and
+  # both workflows name these very tokens in their explanatory comments (the instance-4 trap
+  # in 2026-07-15-narrowing-is-not-anchoring…: a bare substring here would be vacuous).
+  assert "infra-validation.yml still schema-checks a NON-raw cloud-init source (#6426 stripped | #6458 rendered)" \
+    "grep -qE '^[[:space:]]*(cloud-init schema -c /tmp/cloud-init\.stripped\.yml|bash .*validate-infra-templates\.sh)' '$INFRA_VALIDATION_WF'"
 
   # --- #6446: cloud-init schema on the RENDERED doc ---
   # infra-validation.yml used to run `cloud-init schema -c cloud-init.yml` against the RAW

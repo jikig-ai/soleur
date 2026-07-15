@@ -640,9 +640,18 @@ them. These are the gates.)*
       redeploys the last-good `ci-deploy.sh`. (CPO condition 2.) *(UC-1 makes this cheaper
       to honour: PR-B is revert-granular — reverting it no longer drags the C4 model, the
       citation sweep, and the alert audit with it, which was the reviewers' 4th argument.)*
-- [x] **AC13** `infra-validation.yml` no longer contains `cloud-init schema -c cloud-init.yml`;
-      `cloud-init-inngest-bootstrap.test.sh` contains a `cloud-init schema` on a **rendered**
-      path with a visible SKIP arm.
+- [x] **AC13** — **AMENDED at /work (merge of origin/main).** The plan's shape was "DELETE the
+      raw-source step". #6426 landed on main mid-pipeline and fixed #6446 differently: KEEP the
+      step, strip its col-0 `%{` directive lines, schema-check the remainder — coverage that
+      needs no terraform. The two are complementary, so both were kept (operator call): the step
+      is **kept-and-stripped, not gone**. The literal claim still holds — `infra-validation.yml`
+      contains no `cloud-init schema -c cloud-init.yml` (its target is now
+      `/tmp/cloud-init.stripped.yml`) — and `cloud-init-inngest-bootstrap.test.sh` contains a
+      `cloud-init schema` on a **rendered** path with a visible SKIP arm. The guard flipped to
+      match: it asserts the step never points at the UNSTRIPPED template again, plus that schema
+      coverage still exists via *some* non-raw source — deliberately mechanism-agnostic, so
+      #6458's render-then-validate replacement passes rather than reds. Both halves are
+      mutation-verified in `cloud-init-inngest-bootstrap.test.sh` (AC7 leg, 69/69).
 - [x] **AC14** `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` passes;
       headroom did not regress below the **76 B** measured at 0.1.
 - [x] **AC15** — **AMENDED at /work.** Plan said "six tracking issues (D-1, D-3, D-4, D-5,
