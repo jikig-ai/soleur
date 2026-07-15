@@ -882,9 +882,11 @@ pull_image_with_fallback() {
     #
     # So do NOT retire that alarm here — NARROW its filters_v2 to the signals that still
     # emit. Retiring it blinds the survivors, and zot-gate-degraded is currently its
-    # HIGHEST-volume signal. This deletion also kills the soak gate's rolling leg
-    # (zot-soak-6122.sh:57) while its fresh-boot leg (:58) survives — re-point the soak in
-    # the same slice (#6427).
+    # HIGHEST-volume signal. This deletion also kills the soak gate's FAIL_QUERIES[rolling]
+    # entry (zot-soak-6122.sh) while its three other entries survive — re-point the soak in
+    # the same slice (#6427). NOTE the soak's FAIL set is now FOUR entries, not two
+    # ([rolling] [gate] [freshboot] [appboot], #6435); anchor on the array keys, not on line
+    # numbers, and expect its parity test to go RED until the soak and the alarm agree again.
     logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} — falling back to GHCR"
     # #6400: GHCR fallback leg now recovers on a login-ok/pull-deny cred (retry once).
     if _ghcr_pull_or_recover "$perr"; then
