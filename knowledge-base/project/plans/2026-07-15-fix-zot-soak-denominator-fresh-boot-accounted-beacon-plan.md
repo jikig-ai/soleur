@@ -42,15 +42,26 @@ The **mechanism is sound** and the citations are clean. A verify-the-negative sw
 9. **Closing #6500 is itself the authorization act.** Now warned on both sides.
 10. **D3's evidence was corrected** before #6500 was filed; two of six claims were false.
 
+### The live-data pass — three "verified" facts were wrong
+
+The observability review queried **Sentry itself** instead of reading the plan's prose, and refuted three claims the plan presented as measured:
+
+11. **🔴 `_emit` is structurally dark before `cloud-init.yml:408` — a live, shipping bug (now #6505, P1).** `_emit` sources `/etc/default/webhook-deploy` (`:322`); that file is created at `:408`. Under `dash` (`/bin/sh` in runcmd) a `.` on a missing file **aborts the shell**, and `|| true` swallows it — reproduced locally, `bash` does not do this. Hence `runcmd_start` = **0 events** despite firing unconditionally on 9 boots. **The whole #6090 early-fatal trap region (`pkg_audit`/`doppler_dl`/`apt_update`/`apt_install`/`runcmd_early`) has never emitted once.** Worse, `cloud-init.yml:3-11` *reasons from that silence* ("runcmd_start never did → death was in the config phase") to justify an architectural change — an unsound inference. Same defect class as #6462, one layer down. **This plan is unaffected** (`:542 > :408`, proven live by the `ghcr_login` fatal in the same block) — but its C4 premise cited two dark signals as evidence, and that is now corrected.
+12. **"9 `bootstrap_complete` events, EVER" was a misread — and it was the foundation of the floor decision.** All 9 land in `2026-07-07..07-13`; the emitter shipped `2026-07-06`. That is **~1.3 boots/day — frequent, not rare.** The "permanently unpassable wall" argument is false, and the "nothing schedules a rebuild" worry is moot. The soak header's own `:35-37` caveat warned against exactly this over-read. Floor of 1 is still correct, so no code changed — but it now rests on the **category-error** argument (`MIN_SAMPLE` counts a different quantity), which the numbers cannot touch.
+13. **`app_zot` had no alert route** while the Observability section named one for it. Split per signal; the residual window (probe retires at #6462-close, soak enrolls at #6122-cutover) is now stated. It fails closed, so it can delay a revoke, never authorize one.
+
+Plus: the `discoverability_test` expected output was **unreachable** (per-signal counts and the floor are on mutually exclusive branches — no run prints both), and the alarm's mute-safety argument does not extend to `app_ghcr_served`, the first signal that is both stable-grouped and expected-noisy.
+
 ### New considerations discovered
 
 - **`appserved ⊇ appboot`** — every path emitting `app_ghcr_fallback` also emits `app_ghcr_served`, so one bad boot contributes **2** to `FALLBACKS`. Harmless to the verdict, misleading to a reader. Commented (Phase 5.7).
 - **The `image_ref` wart's justification expired** with the byte budget. Decision kept; reason rewritten (boot-path risk ≫ a cosmetic tag).
-- **Nothing schedules a rebuild**, so the floor and the follow-through probe may both sit without evidence indefinitely. Escalated to #6122 as an explicit ask.
+- ~~Nothing schedules a rebuild, so the floor may sit without evidence indefinitely.~~ **Withdrawn** — refuted by finding 12; the fleet recreates ~daily on its own. The #6122 ask was retracted in-thread.
 
 ### Coverage gaps (stated, not hidden)
 
 - **architecture-strategist died on an API error** and returned no findings. C1's architecture was independently covered by the simplicity reviewer (which weighed and rejected the repo-local-`grep` alternative); the ADR/C4 dimensions carry only the original panel's review.
+- **The pattern across this whole pass:** every defect found was a *claim*, not a mechanism. The mechanism verified 10/10 with zero drift; the citations verified clean. What failed was the plan's **facts about the world** (byte budget, boot frequency, which signals are live) and its **checks** (an AC set that could not detect its own feature). A plan whose thesis is *"prose is not a fix"* shipped prose in the two places it could not see itself: its evidence and its gates.
 - The **Byte Budget Δ column** remains a carried estimate against the old baseline; only the 21,784 baseline is measured. Phase 3 step 3 re-measures.
 - **`stage:"bootstrap_complete"` → 9 events** is a live-Sentry claim, unverifiable from a static tree; the soak header (`:35`) documents it and is the only source.
 
@@ -92,13 +103,25 @@ That is the whole denominator. It converges naturally as hosts recreate, imports
 >
 > **Half of this callout (do not reuse `MIN_SAMPLE`) is the load-bearing part. Read it first.**
 >
-> **1 — Never reuse `MIN_SAMPLE`. This is the difference between a gate and a wall.** `MIN_SAMPLE` (default 3, `:108`) means *zot-served pulls per image* and is dominated by **rolling deploys** — frequent. `count(app_zot)` counts **fresh host boots** only, which are *rebuild-triggered, not periodic* — and the soak header's own live measurement is **9 `bootstrap_complete` events in total, ever** (`:35`). Requiring ≥3 full web-host recreates inside a soak window, when **nothing in this plan or #6122 schedules a single rebuild**, makes the gate **permanently unpassable** — `exit 1` daily, forever. A gate that structurally cannot pass gets bypassed, which is worse than no gate.
+> **1 — Never reuse `MIN_SAMPLE` — because it counts a DIFFERENT QUANTITY.** `MIN_SAMPLE` (default 3, `:108`) means *zot-served pulls per image*, dominated by rolling deploys. `count(app_zot)` counts **fresh host boots**. Reusing one threshold across two different quantities is a category error regardless of the numbers — that, and not scarcity, is the reason.
 >
-> **2 — But do not make it a knob either (revised at deepen; the earlier draft prescribed `MIN_BOOTS="${ZOT_SOAK_MIN_BOOTS:-1}"`).** A knob's value is its *range*, and this one's legal range is exactly `{1}`:
-> - `0` → the vacuous-pass hole (the floor stops being a floor).
-> - `>1` → the permanently-unpassable wall proven in (1).
+> > #### ⚠ CORRECTED AT DEEPEN — the original argument here was built on a misread, and live data refuted it
+> >
+> > This callout previously argued: *"the soak header's own live measurement is **9 `bootstrap_complete` events in total, ever** (`:35`) … requiring ≥3 full web-host recreates, when nothing schedules a rebuild, makes the gate **permanently unpassable** — `exit 1` daily, forever."*
+> >
+> > **False.** A live Sentry census run during deepen found all 9 events fall in **2026-07-07 → 07-13**, and the emitter only shipped **2026-07-06** (`560168055`, #6092). So it is not "9 ever" — it is **9 fresh boots in 7 days, ~1.3/day**. Fresh boots are **frequent**. A floor of 3 would clear in ~3 days; nothing is permanently unpassable, and the "nothing schedules a rebuild" worry is moot — the fleet recreates on its own.
+> >
+> > **How the misread happened, and why it matters more than the number:** the soak header at `:35-37` carries an explicit caveat — *"(Caveat, so the evidence is not over-read: that beacon comes from a FOURTH emitter, `_sentry_emit` …)"* — and the plan over-read it in exactly the way its own cited source warned against. A count with no denominator was used to argue about a gate whose entire subject is counts with no denominator. **`:35` is a bare event count over an unstated window; it was never a statement about rarity.**
+> >
+> > **No code change is forced:** a floor of 1 is safe either way, and everything below stands on the category-error argument, which is independent of the numbers. The scarcity reasoning is deleted rather than repaired.
+> >
+> > *Silver lining:* because boots are ~daily, the follow-through probe's `count(bootstrap_complete) == 0 → TRANSIENT` guard will reliably clear — the probe is sound **because** this premise was wrong.
 >
-> A knob with one legal value is a **constant wearing a costume** — plus a default, a `^[1-9][0-9]*$` guard, a validation branch, and an AC leg to defend the costume.
+> **2 — But do not make it a knob either (revised at deepen; the earlier draft prescribed `MIN_BOOTS="${ZOT_SOAK_MIN_BOOTS:-1}"`).** The floor's job is narrow: **prove the emitter is alive and the flip was exercised on the boot path.** One zot-served fresh boot proves exactly that; a second proves nothing new. Proving the flip **at volume** is the existing sample arm's job, and it keeps `MIN_SAMPLE`. So the useful range is `{1}` — `0` disarms it, and `>1` buys no additional evidence for this arm's question while delaying the gate.
+>
+> A knob with one useful value is a **constant wearing a costume** — plus a default, a `^[1-9][0-9]*$` guard, a validation branch, and an AC leg to defend the costume.
+>
+> *(Note the correction above: `>1` is no longer the "unpassable wall" the first draft claimed — at ~1.3 boots/day a floor of 3 would clear in ~3 days. The case against a knob no longer rests on that, and does not need to.)*
 >
 > **Worse, it is a bypass surface on a gate that authorizes an irreversible act.** Note `:113-115` — the soak's own comment on `MIN_SAMPLE` — records that *"the sweeper's `env -i` cannot forward this var, but … enrollment is deferred, so every near-term run is a **manual** one where it IS settable — exactly when the retirement decision gets made."* So env knobs on this script **are** reachable by the person making the call. `ZOT_SOAK_MIN_BOOTS=0` would silently disarm the denominator at precisely the moment it matters. A hardcoded `== 0` has no such surface.
 >
@@ -106,7 +129,7 @@ That is the whole denominator. It converges naturally as hosts recreate, imports
 >
 > **What the floor actually proves,** and why `1` is sufficient: *the beacon emits, and the flip was exercised on the boot path.* One zot-served fresh boot proves both. Proving the flip **at volume** is the existing sample arm's job, and it keeps `MIN_SAMPLE`.
 >
-> #6122 should schedule ≥1 deliberate web recreate inside the soak window as an explicit 5.x step (Phase 7.3) — otherwise the floor has no evidence to converge on.
+> ~~#6122 should schedule ≥1 deliberate web recreate inside the soak window as an explicit 5.x step — otherwise the floor has no evidence to converge on.~~ **WITHDRAWN at deepen** — this rested on the "9 boots ever" misread. At ~1.3 boots/day the fleet recreates on its own and the floor converges without a scheduled rebuild. A deliberate recreate is still *nice* (it makes convergence deterministic rather than incidental) but it is **not a precondition**, and #6122 should not be blocked on it. The ask was retracted on the #6122 thread.
 
 ---
 
@@ -341,7 +364,13 @@ All three model files were **read in full** (not grepped for the feature noun). 
 
 **Decision: do not edit `.c4` in this PR.** This is a reasoned deferral, not an unsupported "None":
 
-1. **The edge is already true on `main`.** `_emit` has POSTed to Sentry from the boot path for four live signals (`runcmd_start`, `on_err` fatal, `app_ghcr_fallback`, plus `bootstrap_complete` via `_sentry_emit`). This PR adds a **5th call site on an existing emitter** — it introduces no edge.
+1. **The edge is already true on `main`** — but ⚠ **the original justification for this was FALSE and is corrected here (deepen, live Sentry census).** The claim was: *"`_emit` has POSTed to Sentry from the boot path for four live signals (`runcmd_start`, `on_err` fatal, `app_ghcr_fallback`, plus `bootstrap_complete` via `_sentry_emit`)."* Measured reality:
+   - `runcmd_start` → **0 events**. Structurally dark: `_emit` sources `/etc/default/webhook-deploy` (`:322`), which is not created until `:408`, and under `dash` (`/bin/sh` in runcmd) a `.` on a missing file aborts the shell — swallowed by `|| true`. **Every `_emit` call site before `:408` is dark.** Filed as **#6505** (P1); out of scope here.
+   - `app_ghcr_fallback` → **0 events** — but that is 0 *occurrences*, not darkness (it sits after `:408`).
+   - `bootstrap_complete` → 9 events, but from **`_sentry_emit`** in `soleur-host-bootstrap.sh` — a **different emitter**. It was never evidence about `_emit`.
+   - **`on_err` fatal → live**: `stage:"pull"` (2) and `stage:"ghcr_login"` (2), one landing at `2026-07-07T09:47:15`, the same second as that boot's `bootstrap_complete`.
+   
+   **The conclusion survives on corrected evidence:** the `hetzner -> sentry` edge is real on `main` today, proven by the `on_err` fatals — which are emitted from **the same extraction block this PR inserts into**, after `:408`. So this PR adds a **5th call site on an existing, locally-proven-live emitter** and introduces no edge. *This is the strongest available evidence that the beacons will actually fire* — and it is stronger than what the plan originally cited, because it is the same code path rather than a neighbouring one.
 2. **The rule doesn't reach it.** `wg-architecture-decision-is-a-plan-deliverable` scopes to an ownership/tenancy boundary move, a new substrate/trust boundary, or a reversal/extension of an ADR. A 5th call site is none.
 3. **Half a plane is worse than none.** Shipping `sentry` with exactly one inbound edge asserts a *falsehood* — a reader infers the webapp doesn't report to Sentry — where silence asserted nothing. Uniformly-absent is a legible gap.
 
@@ -376,9 +405,12 @@ No new infrastructure, no new secret, no new vendor, no operator step.
 ```yaml
 liveness_signal:
   what: "stage:\"app_zot\" (zot-served fresh boot) + stage:\"app_ghcr_served\" (GHCR-served fresh boot) — exactly one per successful boot"
-  cadence: "once per fresh host boot (rebuild-triggered, not periodic)"
-  alert_target: "sentry_issue_alert.zot_mirror_fallback_rate → IssueOwners → ActiveMembers (reaches the solo founder, no SSH)"
-  configured_in: "apps/web-platform/infra/cloud-init.yml (emit) + apps/web-platform/infra/sentry/issue-alerts.tf (page)"
+  cadence: "once per fresh host boot. MEASURED LIVE (deepen): ~1.3/day — 9 boots 2026-07-07..07-13, emitter shipped 07-06. Rebuild-triggered, but frequent; NOT rare."
+  # CORRECTED AT DEEPEN: the two signals have DIFFERENT alert routes. The earlier single
+  # alert_target line covered app_zot with an alarm that cannot see it (hr-observability-layer-citation).
+  alert_target_app_ghcr_served: "sentry_issue_alert.zot_mirror_fallback_rate (5th tagged_event, added by this PR) → IssueOwners → ActiveMembers (reaches the solo founder, no SSH)"
+  alert_target_app_zot: "NONE — and deliberately so. app_zot is a HEALTH signal; paging on a healthy boot is noise. Its ABSENCE is the alarm, and absence cannot be paged on by an issue-alert. Absence is detected by (a) the soak's zero-evidence floor — which is UNENROLLED and will not run until #6122 pins the cutover UTC, and (b) accounted-beacon-live-6462.sh, which retires when #6462 closes. Accepted: between probe-retirement and soak-enrollment, a silently-dark app_zot has no live detector. It fails CLOSED (floor -> exit 1) the moment the soak does run, so it cannot authorize a revoke — it can only delay one."
+  configured_in: "apps/web-platform/infra/cloud-init.yml (emit) + apps/web-platform/infra/sentry/issue-alerts.tf (page, app_ghcr_served only)"
 
 error_reporting:
   destination: "Sentry (org jikigai-eu, de.sentry.io) via the baked-DSN _emit store API"
@@ -403,8 +435,13 @@ logs:
   retention: "Sentry 90 days"
 
 discoverability_test:
-  command: "SENTRY_AUTH_TOKEN=<tok> GH_TOKEN=<tok> ZOT_SOAK_START=2026-07-15T00:00:00 bash scripts/followthroughs/zot-soak-6122.sh; echo \"exit=$?\""
-  expected_output: "Prints per-signal counts including app-served=<n>, plus 'zot-served fresh boots=<n> (need >=1)'. exit 0 PASS / 1 FAIL / 2 TRANSIENT. NO ssh."
+  # CORRECTED AT DEEPEN. The earlier expected_output claimed BOTH the per-signal counts AND the
+  # floor message in one run. They are on MUTUALLY EXCLUSIVE branches: per-signal counts print
+  # only when FALLBACKS > 0 (:211-216); the floor is only reached when FALLBACKS == 0 (after the
+  # :218 exit). No run can print both, so the old expectation could never be met.
+  # Secret handling: doppler run, not an inline token (hr-never-paste-secrets-via-bang-prefix).
+  command: "doppler run -p soleur -c prd -- env ZOT_SOAK_START=2026-07-15T00:00:00 bash scripts/followthroughs/zot-soak-6122.sh; echo \"exit=$?\""
+  expected_output: "EXACTLY ONE branch prints. Today (no fallbacks, no beacon deployed yet) expect the floor: 'FAIL(no-freshboot-evidence): 0 fallbacks, but NO zot-served fresh boot since <START>...' -> exit 1. If FALLBACKS > 0 instead, expect the per-signal breakdown (rolling=/gate-degraded=/freshboot=/appboot=/appserved=) -> exit 1, and the floor is never reached. exit 0 PASS / 1 FAIL / 2 TRANSIENT. NO ssh."
 ```
 
 ### Affected-surface observability (§2.9.2)
@@ -512,11 +549,17 @@ Add the op-contract pins for the 5th signal (`alarm.size` 5, `soakFailQueries().
 
 Add the 5th `tagged_event` + update the `:1334-1335` comment. `terraform validate` / `fmt -check` in `apps/web-platform/infra/sentry/`.
 
+**Also extend the mute-safety paragraph** (found at deepen). The alarm's own doc says *"IF THIS GETS NOISY, MUTE THE ISSUE"* and argues muting is safe by construction — that argument does **not** hold for `app_ghcr_served`, which is the first signal that is both:
+- **stable-grouped** — a *static* message string means Sentry mints **one issue group forever** (unlike `ghcr-fallback`, which mints a fresh group per deploy, making a mute self-expiring), and
+- **expected-noisy** — the ADR note this plan adds tells the operator these pages are expected pre-cutover and to *"not investigate separately"*.
+
+Together those invite a single click that **permanently kills the page for the DOMINANT GHCR-served path** — the exact hole #6462 exists to close. Say so in the paragraph. (The soak query is unaffected: Discover counts muted issues, so there is no false-PASS route — the loss is paging, not the gate.)
+
 ### Phase 5 — The soak
 
 1. `FAIL_QUERIES[appserved]='stage:"app_ghcr_served"'` (**bare**).
 2. Cardinality floor `!= 4` → `!= 5` — condition **and** message. ⚠ **Two separate literals.** The condition is `${#FAIL_QUERIES[@]} != 4` (`:181`); the message (`:182`) says **`expected 4`** and does *not* contain the string `!= 4`. Sweeping only the condition leaves the operator-facing message on the irreversible gate saying "expected 4" while the condition requires 5. AC6 pins both.
-3. **The liveness floor**, after the `FALLBACKS` exit, before/beside the sample arm: guard `APP_ZOT` as a string **before** any arithmetic (`:151` returns `TRANSIENT`), then `(( APP_ZOT == 0 ))` → `exit 1`. **Hardcode the floor — do NOT add a knob and do NOT reuse `MIN_SAMPLE`** (Overview callout: `MIN_SAMPLE`=3 counts rolling-deploy pulls and would be a permanently unpassable wall; a knob's only legal value here is `1`, and it would be a bypass surface since near-term runs are manual per `:113-115`).
+3. **The liveness floor**, after the `FALLBACKS` exit, before/beside the sample arm: guard `APP_ZOT` as a string **before** any arithmetic (`:151` returns `TRANSIENT`), then `(( APP_ZOT == 0 ))` → `exit 1`. **Hardcode the floor — do NOT add a knob and do NOT reuse `MIN_SAMPLE`** (Overview callout: `MIN_SAMPLE` counts *zot-served pulls per image* — a **different quantity** from fresh boots, so reusing it is a category error regardless of the numbers; and a knob's only useful value here is `1`, making it a bypass surface since near-term runs are manual per `:113-115`).
 4. **The C1 blocker arm**, immediately before the final PASS → `exit 1` FAIL(blocked). Use `BLOCKER=6500`.
 5. `secrets=` in the header directive gains `GH_TOKEN`.
 6. Header: the **5-of-7** ratio (C3), the 7th path, the C4/#6437 residuals. Sweep 4→5 prose.
