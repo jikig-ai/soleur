@@ -327,6 +327,16 @@ export async function updateWorkstreamIssueFields(
     current = cur.data;
   }
 
+  // Recover the ORIGINAL initiator up-front, from the server-fetched current
+  // body (NOT from `input`). Hoisted out of the body-edit branch so identity
+  // recovery is never gated on a user-controlled condition — the guard below
+  // only decides whether a body edit happens, but CodeQL's name-based
+  // js/user-controlled-bypass-of-sensitive-action heuristic reads a `login`
+  // computed inside a user-gated branch as a bypassable security check.
+  // Unconditional recovery is also plainly correct: when no body edit is
+  // requested the value is simply unused.
+  const initiator = parseInitiatorLogin(current?.body ?? null);
+
   // body / assignees / milestone → ONE update() (only provided keys).
   const updatePayload: Record<string, unknown> = {
     owner,
@@ -335,7 +345,6 @@ export async function updateWorkstreamIssueFields(
   };
   let hasUpdate = false;
   if (input.body !== undefined) {
-    const initiator = parseInitiatorLogin(current?.body ?? null);
     updatePayload.body = appendInitiatorMarker(input.body, initiator);
     hasUpdate = true;
   }
