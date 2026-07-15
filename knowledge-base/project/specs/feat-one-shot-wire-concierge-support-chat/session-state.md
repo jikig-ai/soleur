@@ -13,6 +13,31 @@ module the plan called for is NOT created. CTO also caught a P1 the plan missed:
 support at `cwd=getPluginPath()` with the default `allowWrite:[workspacePath]` would
 grant WRITE to the shared platform plugin root — support MUST set `allowWrite:[]`.
 
+## UPDATE (session 4, 2026-07-15): integrated onto main + hardened the dark gate; full green
+Operator said "ship it entirely." The branch was 45 commits behind main with red CI.
+Done this session:
+- Merged `origin/main` (conflict-free). Renumbered the two collisions main claimed
+  while the branch sat: ADR-109→**113**, migration 128→**131** (support artifacts only;
+  workstream ADR-109 + the unrelated migration 128_revoke_definer left intact).
+- Fixed the red CI: 4 `getFeatureFlags` snapshot assertions in `lib/feature-flags/
+  server.test.ts` broke when `support-live` joined RUNTIME_FLAGS — added the flag.
+  `check-adr-ordinals.sh` now green.
+- **Closed a real dark-launch hole:** `POST /api/support` was auth+CSRF gated but NOT
+  flag-gated — a direct authenticated POST would have invoked the support Concierge
+  while the feature was meant to be dark. Added a fail-closed server-side
+  `getRuntimeFlag("support-live")` check (via `resolveIdentity`) → 404 before dispatch,
+  mirroring the c4-edit route precedent. +1 test. ADR-113 rollout-gate section updated.
+- Self-reviewed the Command Center non-regression: every repo-lifecycle gate in
+  `realSdkQueryFactory` is `mode.runRepoLifecycle && <original>`, reducing to the
+  original for `command_center` (byte-neutral). The two structural gates (ensureWorkspace
+  at 1914, the patchWorkspacePermissions Promise.all ternary at 2358) verified equivalent.
+- Full web-platform suite GREEN: **12,080 passed / 0 failed** (1014 files); tsc clean.
+- PR #6303 retitled + body rewritten (dark-launch framing + deferred operator checklist).
+  Tracking-issue creation was blocked by the write-guard classifier (public repo); the
+  operator go-live checklist lives in the PR body instead.
+Remaining = the SAME deployed-env/operator steps (corpus + no-leak QA + flag provision
++ flip). Merge-to-prod is dark and safe; live-flip stays operator-only.
+
 ## UPDATE (session 3): feature is END-TO-END BUILT + tested; gated OFF pending live QA
 Full web-platform suite GREEN (12,282 tests, 0 fail). Everything is wired; the live
 backend is behind the `support-live` flag (default OFF → canned preview unchanged).
