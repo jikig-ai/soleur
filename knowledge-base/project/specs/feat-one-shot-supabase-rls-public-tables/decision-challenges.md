@@ -39,6 +39,14 @@ The plan adds an hourly self-heal cron to `apply-inngest-rls-dev.yml`, intended 
 
 **Gated on Phase 0.7** (confirm goose cannot run without a pin bump). If CPO rejects the trade, keep the cron — but then DC-1 and the Phase-5 CI annunciation become **mandatory**, not optional.
 
+### GATE RESOLVED — 2026-07-15 (implementation)
+
+**Phase 0.7 verified live: the gate's precondition HOLDS.** `apps/web-platform/infra/cloud-init-inngest.yml:330` pins `IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.19` — a concrete version tag, **not** `:latest`. (The other bootstrap consumer, `cloud-init.yml:693`, is likewise pinned at `v1.1.20`.) Goose therefore **cannot** run without a deliberate, reviewable in-PR pin bump; there is no background path that creates a 15th table.
+
+**⇒ The hourly cron was NOT added** (task 2.7's condition is false by verification, not by preference). `apply-inngest-rls-dev.yml` ships with **no `schedule:`**, and instead carries `apps/web-platform/infra/cloud-init-inngest.yml` in its `paths:` — so a pin bump triggers a **deterministic** re-apply on the only event that can create a new Inngest table. That is strictly tighter than a probabilistic 1h poll, and Phase 5 now retires **no cron** (the #4707 rot mode).
+
+This resolution is **within** the plan's stated scope (Phase 2: *"Hourly self-heal cron is conditional on Phase 0.7"*), so it required no scope change. The residual ≤24h detection widening is unchanged and still routes to **#3366** (escalated to P1 with evidence). DC-1 remains open for CPO — it argues #3366 should be *built* now rather than escalated; note that if CPO declines DC-1, the detection layer for a 15th table is time-to-human-PR (**unbounded**), which is the honest accounting and the strongest argument for the Phase-5 drop (#6488).
+
 ---
 
 ## DC-3 — Merge the two workflows into a matrix (recorded dissent)
