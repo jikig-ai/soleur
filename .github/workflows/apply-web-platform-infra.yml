@@ -367,8 +367,6 @@ jobs:
               -target=betteruptime_monitor.soleur_apex \
               -target=betteruptime_policy.uptime \
               -target=betteruptime_monitor.app \
-              -target=cloudflare_record.web_host \
-              -target=betteruptime_monitor.web_host \
               -target=random_id.inngest_signing_key_prd \
               -target=random_id.inngest_signing_key_dev \
               -target=random_id.inngest_event_key_prd \
@@ -418,11 +416,43 @@ jobs:
           # the two counters above). Source of truth:
           # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
           reboot_updates=$(echo "$counts" | jq -r '.reboot_updates')
+          # host_creates (#6416): a pure `+ create` of an hcloud_server /
+          # hcloud_volume. INVISIBLE to all three counters above (no delete, no
+          # nested-block shrinkage, not an ["update"]). This apply path must
+          # NEVER birth a host: `-target` is transitive at the RESOURCE level, so
+          # cloudflare_record.app (dns.tf) and hcloud_firewall_attachment.web
+          # (firewall.tf) each pull the whole hcloud_server.web for_each map —
+          # but the map's hcloud_server_network attachments are NOT
+          # target-reachable. That asymmetry is exactly how soleur-web-2 came up
+          # with no private-net IP, unable to reach zot at 10.0.1.30:5000, while
+          # still serving ~50% of the CF tunnel's connector replicas. Such a host
+          # also boots with NO firewall (hcloud provider 1.63.0:
+          # hcloud_firewall_attachment does not attach before first boot, unlike
+          # hcloud_server.firewall_ids). Source of truth:
+          # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+          host_creates=$(echo "$counts" | jq -r '.host_creates')
           # Validate counters parsed correctly — empty values from a jq
           # failure would silently evaluate false in the `-gt 0` test and
           # let destructive plans slip past the guard.
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}')."
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}')."
+            exit 1
+          fi
+          # HALT on a host create — evaluated OUTSIDE the destroy_count sum below
+          # and BEFORE it, so `[ack-destroy]` cannot bypass this one. Rationale:
+          # ack is the right resolution for an intended nested-block removal, but
+          # an unattended per-PR apply is never the right place to birth a host —
+          # the dispatch jobs that legitimately create one are not gated here.
+          # This is a TRIPWIRE, not a routine gate: host_creates == 0 on every
+          # normal merge, so it is a no-op until the #6416 drift class recurs.
+          if [[ "$host_creates" -gt 0 ]]; then
+            echo "::error::terraform plan would CREATE ${host_creates} hcloud_server/hcloud_volume resource(s) on the per-PR apply path. This path must never birth a host: the server is target-reachable but its hcloud_server_network attachment is not, so the host would come up with no private-net IP (and, transiently, no firewall) — the #6416 failure mode."
+            echo "::error::Remediation depends on WHICH host is being created (see the plan output above):"
+            echo "::error::  • hcloud_server.web[\"web-2\"] / its volume → dispatch 'gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby -f reason=...' (it targets the network attach + volume, and pulls the server transitively)."
+            echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host'."
+            echo "::error::  • hcloud_server.registry → NO dispatch creates it (registry-host-replace and registry-region-migrate are both scoped -replace and need the resource already in state). Run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
+            echo "::error::  • a legitimate new host (e.g. web-3 added to var.web_hosts) → NO dispatch creates it either (warm-standby's targets are hardcoded to web-2). Run the operator-local full apply BEFORE the code merges, or EVERY subsequent merge will HALT here — not just this PR's."
+            grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi
           destroy_count=$((resource_deletes + nested_deletes + reboot_updates))
