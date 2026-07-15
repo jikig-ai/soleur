@@ -11,8 +11,9 @@
 **Adopting.** The IaC foundations (Phase 1), dual-push (Phase 2), and the dark-launch pull-site
 flip (Phase 3) are merged. The flip is inert until the operator provisions (1.8) + backfills
 (1.9) zot and the entry gate (`zot-entry-gate.sh`) passes. This ADR flips to **accepted** after
-the Phase-5 soak (`zot-soak-6122.sh`: ≥7 days, zero ghcr-fallback, sufficient zot sample) and
-GHCR-push retirement (5.3–5.5).
+the Phase-5 soak (`zot-soak-6122.sh`: ≥7 days, zero fallback events across all four watched
+signals, sufficient zot sample — necessary but not sufficient; see the alarm-parity note below)
+and GHCR-push retirement (5.3–5.5).
 
 ## Context
 
@@ -110,8 +111,19 @@ independent axes so it never silently gates a host:
     never fire** — the count is per Sentry issue-group, `registry_pull_event` mints a fresh group per
     deploy (the tag is in the message), so the per-group count is bounded by fleet size, not a rate;
     #6285 corrected it to 0, the only fleet-independent setting (see the resource comment). Parity:
-    `zot-soak-6122.sh` FAILs this gate on >=1 fallback, so any threshold above 0 is strictly less
-    sensitive than the gate it pre-warns. **Window — opens at task 1.8, for 3 of the 4 signals:**
+    `zot-soak-6122.sh` FAILs on ≥1 event across the **same four signals** this alarm matches, pinned
+    by `sentry-zot-mirror-fallback-alert-op-contract.test.ts`. **This parity claim was FALSE from
+    #6278 until #6435:** the soak queried only `registry:"ghcr-fallback"` and
+    `stage:"inngest_ghcr_fallback"` — `registry:"zot-gate-degraded"` and `stage:"app_ghcr_fallback"`
+    were counted by nothing, so an intermittently-degraded fleet could PASS the soak. Corrected there;
+    recorded rather than silently edited, because the earlier text asserted the coverage it lacked.
+    **Scope of the corrected claim — do NOT restate this as "the gate matches the alarm" and stop:**
+    window/threshold parity is **not** pinned (the alarm is a 1h-rolling per-issue-group count; the
+    soak is a flat count over `START..now`); the soak's FAIL set is **4-of-5** (the Sentry-dark mode
+    emits nothing at all — #6437 — and is caught only by the soak's insufficient-sample arm); and
+    fresh-boot coverage is **partial** (a `/v2/` probe miss emits nothing, and there is no `app_zot`
+    liveness beacon, so the soak has no denominator of expected boots). The soak is therefore
+    **necessary but not sufficient** to authorize 5.3–5.5. **Window — opens at task 1.8, for 3 of the 4 signals:**
     `zot-gate-degraded` fires precisely where `ZOT_ACTIVE` stays 0 (probe_unreachable /
     creds_absent / login_failed, `ci-deploy.sh:790/799/807`), and the two cloud-init fresh-boot
     signals gate on `ZURL` + a `/v2/` probe with **no** `ZOT_ACTIVE` at all (`ZOT_ACTIVE` does not
