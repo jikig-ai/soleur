@@ -100,4 +100,15 @@ describe("buildWorkstreamTools", () => {
     const parsed = JSON.parse(res.content[0].text) as { error: string };
     expect(parsed.error).toBe("workstream_query_error");
   });
+
+  it("surfaces a degraded read as isError, NOT a misleading empty board (AC6)", async () => {
+    const { WorkstreamDegradedError } = await import("@/lib/workstream");
+    getWorkstreamIssues.mockRejectedValue(
+      new WorkstreamDegradedError("workstream read degraded"),
+    );
+    const res = await getListTool().handler();
+    expect(res.isError).toBe(true);
+    const parsed = JSON.parse(res.content[0].text) as { error: string };
+    expect(parsed.error).toBe("workstream_query_error");
+  });
 });
