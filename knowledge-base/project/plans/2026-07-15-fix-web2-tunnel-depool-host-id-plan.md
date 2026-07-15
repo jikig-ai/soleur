@@ -259,16 +259,49 @@ Reinforcing: `hcloud_server.web` is **not** in the push-triggered `-target=` all
 
 > **The `[skip-deploy-fix-apply]` kill switch is LOAD-BEARING, not optional** (v1/v2 called it optional — wrong). `apply-deploy-pipeline-fix.yml:288-293` runs `terraform apply -target=terraform_data.deploy_pipeline_fix` with **no `-replace` and no taint**; the provisioner re-runs only when `triggers_replace` changes. So the merge-triggered racing run **consumes** the hash change, and a later dispatch sees identical contents → **no diff → no-op → nothing lands on web-1.** The kill switch is the only thing that leaves the hash unconsumed. (It reads `github.event.head_commit.message` at `:173`, empty on `workflow_dispatch` → it correctly never suppresses step 4 itself.) The advisor's "self-healing race" reading holds for *correctness* but not for *delivery* — the copy is destroyed either way, but the trigger is spent.
 
-**Phase 7 sequence** — all `gh` CLI, no operator step:
+<!-- lint-infra-ignore start -->
+<!-- Everything down to the closing marker below is the SUPERSEDED single-PR sequence plus
+     the note explaining why it was abandoned. It is provenance, not a runbook: the split
+     removed the freeze, the kill switch and the digest wait outright, and the live sequence is
+     scripts/followthroughs/web2-tunnel-depool-6425.sh. Fenced because the no-human-steps linter
+     matches actor+imperative co-occurrence and cannot tell a live instruction from a record of
+     one we deliberately did not follow. -->
 
-0. **Engage the merge-freeze / edit-lock** (`guardrails.sh`). `ADR-068:873-879` records that an operator recovery dispatch pending on `web-1-swap` **can be cancelled by a subsequent routine push**; because we use `Ref` not `Closes`, a cancelled de-pool presents as a *stall*, not a failure. (Both workflows share `terraform-apply-web-platform-host` with `cancel-in-progress: false`, so step 3 **queues** rather than being cancelled — the freeze covers the ADR's distinct `web-1-swap` case.)
+> **SUPERSEDED 2026-07-15 — the operator ruled on UC-1 and this shipped as TWO PRs.** The
+> sequence below (freeze → kill switch → digest wait → de-pool → DPF push) was the *compensated*
+> single-PR shape. Splitting **dissolved** its compensations rather than making them work:
+>
+> - **PR A** (#6426) is the connector gate + census + guard + ADRs. It touches **no**
+>   `local.host_script_files` member, so `host_scripts_content_hash` never moves: the coherence
+>   preflight passes against web-1's CURRENT image and the de-pool runs the moment the merge
+>   lands. **No digest wait** (that was step 2). And PR A changes no deploy-pipeline-fix trigger,
+>   so there is no hash for a racing apply to consume — **no kill switch** (that was step 1's
+>   `[skip-deploy-fix-apply]`, and the box above calling it "LOAD-BEARING, not optional" applies
+>   only to the abandoned single-PR shape).
+> - **PR B** (#6478) is the host identity. `cat-deploy-state.sh` IS a baked member, so **B** is
+>   the PR that moves the hash. It needs no post-merge script at all: merged after A's de-pool,
+>   its push lands on web-1 deterministically because only one connector is left to answer
+>   (that was step 4).
+>
+> **The live sequence is a script, not prose:** `scripts/followthroughs/web2-tunnel-depool-6425.sh`
+> — census → de-pool dispatch → assert AC1 (census == 1) → resolve #6425. Idempotent,
+> `--dry-run` supported. Then merge PR B.
+>
+> The note below was right, and the operator acted on it: the plan's own principle was
+> *"de-pool first"*, and the single-PR shape made that principle unexecutable — the de-pool had
+> to wait on a release that existed only because of the other deliverable.
+
+**Phase 7 sequence (ABANDONED single-PR shape)** — all `gh` CLI, no operator step:
+
+0. **Engage the merge-freeze / edit-lock** (`guardrails.sh`). `ADR-068` records that a recovery dispatch pending on `web-1-swap` can be cancelled by a subsequent routine push; because we use `Ref` not `Closes`, a cancelled de-pool presents as a *stall*, not a failure.
 1. **Merge with `[skip-deploy-fix-apply]` in the merge commit** — mandatory, per the box above.
-2. **Wait for the web-1 release to land the new digest** (`web-platform-release.yml`); confirm `curl -s https://app.soleur.ai/health | jq -r .version` equals the new semver. **This gates the coherence preflight** — without it, step 3 aborts.
-3. **De-pool:** `gh workflow run apply-web-platform-infra.yml -f apply_target=web-2-recreate -f reason='#6425 …'` → verify **AC1** + **AC6**.
-4. **Deliver deliverable 2:** `gh workflow run apply-deploy-pipeline-fix.yml -f reason='#6425 post-de-pool push'` → now deterministic (web-2 is de-pooled) **and** non-no-op (the hash was never consumed) → verify **AC13/AC14**.
+2. **Wait for the web-1 release to land the new digest**; confirm `curl -s https://app.soleur.ai/health | jq -r .version` equals the new semver. **This gates the coherence preflight.**
+3. **De-pool:** `gh workflow run apply-web-platform-infra.yml -f apply_target=web-2-recreate` → verify **AC1** + **AC6**.
+4. **Deliver deliverable 2:** `gh workflow run apply-deploy-pipeline-fix.yml` → deterministic (web-2 de-pooled) and non-no-op (hash unconsumed) → verify **AC13/AC14**.
 5. `gh issue close 6425` **only after AC1 passes**. Release the freeze.
 
-> **Steps 1-2 exist only because both deliverables ship together.** Deliverable 1 alone is hash-neutral and could de-pool immediately. See `decision-challenges.md` **UC-1** — three reviewers independently recommended splitting; the operator's stated scope is retained as the default and the compensations above make it correct.
+> **Steps 1-2 exist only because both deliverables ship together.** Deliverable 1 alone is hash-neutral and could de-pool immediately. See `decision-challenges.md` **UC-1** — three reviewers independently recommended splitting; the operator ruled to split, and steps 0-2 and 4 ceased to exist.
+<!-- lint-infra-ignore end -->
 
 ### Risk: the `-replace` blast radius (P0-2 — v1 understated this)
 
@@ -636,9 +669,14 @@ Canonical home for the facts this plan turns on. Other sections cite; they do no
 - **A templatefile var referenced inside ANY `%{ if }` branch must be in the vars map.** `MakeTemplateFileFunc` pre-checks `expr.Variables()`, and a `ConditionalExpr`'s walk covers both branches. The gate suppresses the render, never the key requirement. Corollary: any test that hardcodes the var map (`cloud-init-inngest-bootstrap.test.sh:294`) breaks on a new var — by design.
 - **`include-command-output-in-response-on-error: true` means the FAILURE bodies are the alert surface.** For `inngest-inventory.sh`, the paths that fire the watchdog's `inngest_down` are plain-text `exit 1`, not the JSON emits. Diagnostics added only to the success paths are invisible exactly when they matter.
 - **A `-target` apply with no `-replace`/taint re-runs a provisioner only when `triggers_replace` moves.** Whoever consumes the hash first wins; a later dispatch against identical contents is a silent no-op.
+<!-- lint-infra-ignore start -->
+<!-- Lessons, not instructions. `operator-digest` is a SKILL NAME; the linter's \boperator\b
+     actor pattern matches inside it, which is a false positive on every line that names the
+     skill. Nothing in this list tells anyone to run anything. -->
 - **A log marker is not an alert route.** `operator-digest` harvests only `action-required`-labelled issues — never PR bodies, never workflow logs.
 - **`cat-deploy-state.sh` is baked; `inngest-inventory.sh` is not.** Editing the former moves `host_scripts_content_hash` and arms the `web-2-recreate` coherence preflight.
 - **Don't cite shell line ranges in comments.** The existing `durability_state` guard's `ci-deploy.sh:277-287` citation is already stale. Cite function names. (v1 propagated three such errors.)
+<!-- lint-infra-ignore end -->
 - **`inngest-inventory.sh` serves two hooks** (`/hooks/inngest-inventory`, `/hooks/inngest-liveness` with `INVENTORY_LIVENESS_ONLY=1`). `host_id` on only the full path leaves the watchdog's surface blind.
 - **`hcloud_server.web` is `OPERATOR_APPLIED_EXCLUSIONS`** (`terraform-target-parity.test.ts:482`), `-target`ed at exactly one line (`:1150`). Adding it to the push allow-list would put the live web hosts on the per-merge apply path.
 - A plan whose `## User-Brand Impact` is empty or placeholder fails `deepen-plan` Phase 4.6. It is filled.
