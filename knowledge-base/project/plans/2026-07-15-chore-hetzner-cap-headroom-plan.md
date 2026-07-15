@@ -236,9 +236,18 @@ failure changes the plan, so they run first.
       for an address absent from state exits 0 and plans a plain **create** (architecture
       review established this; verify independently — it is the basis for treating
       `git-data-host-replace` as live rather than dead).
-- [ ] **P0.3 — test discovery.** Confirm whether `scripts/test-all.sh` globs `tests/scripts/`.
-      If yes, Phase 2.5's `infra-validation.yml` step is a no-op; if no, it is mandatory.
-      **Do not assume — the whole deliverable's CI coverage rides on this.**
+- [x] **P0.3 — test discovery. RESOLVED 2026-07-15: NEITHER path auto-discovers.**
+      `scripts/test-all.sh:218`'s bash `*.test.sh` glob covers `plugins/soleur/test/`,
+      `plugins/soleur/skills/*/test/`, `plugins/soleur/scripts/`, `.claude/hooks/`,
+      `apps/cla-evidence/scripts/`, `apps/web-platform/scripts/{,lib/}`, and
+      `scripts/lib/` — **`tests/scripts/` is NOT in the glob.** `tests/scripts/` suites
+      run only via **hand-maintained explicit `run_suite` lines** (`test-all.sh:144-146`,
+      e.g. `run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh`).
+      **→ Phase 2.5 is MANDATORY, and its target is `scripts/test-all.sh`** (an explicit
+      `run_suite` line matching `:144-146`), **not** `infra-validation.yml` (which serves
+      `apps/web-platform/infra/*.test.sh` — the wrong directory once Phase 1 relocates the
+      gate to `tests/scripts/`). Without this line the test ships dead: green PR, zero
+      coverage, AC1 green only because a human ran it locally.
 - [ ] **P0.4 — sourced-gate precedent.** Read `tests/scripts/lib/web2-recreate-gate.sh` and
       match its shape (function export, sourcing contract, exit semantics).
 - [ ] **P0.5 — follow-through exit semantics.** Read `.github/workflows/scheduled-followthrough-sweeper.yml`
@@ -318,14 +327,18 @@ operator cost/HA decision); (3) stock is time-varying — re-run later. Do NOT b
   > It needs the gate most of all. **Re-verify this terraform behaviour at Phase 0**
   > before relying on it (the reviewer verified it; this plan's author did not).
 
-2.5 **Wire the test into CI — non-optional.** `scripts/test-all.sh:219` globs
-    `apps/web-platform/scripts/*.test.sh` but **NOT** `infra/*.test.sh`; infra tests run
-    from a **hand-maintained explicit list** in `.github/workflows/infra-validation.yml:167-200`
-    (one `run:` step per file, no glob). Without this the gate's test ships dead — green
-    PR, zero coverage, AC1 passing only because a human ran it locally. Add the step.
-    (`tests/scripts/` discovery: confirm at Phase 0 whether `test-all.sh` already globs
-    it; if so, 2.5 is satisfied by the relocation in Phase 1 and this step is a no-op —
-    **verify, do not assume**.)
+2.5 **Register the test in CI — MANDATORY (P0.3 resolved: nothing auto-discovers it).**
+    Add an explicit line to `scripts/test-all.sh` in the `tests/scripts/` block, matching
+    the sibling form at `:144-146`:
+
+```bash
+run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-preflight-gate.sh
+```
+
+    `tests/scripts/` is **not** covered by the `*.test.sh` glob at `:218`, and
+    `infra-validation.yml` is the wrong home once Phase 1 relocates the gate out of
+    `apps/web-platform/infra/`. **Without this line the deliverable's test never runs.**
+    Place it inside the same `want_*` guard as its siblings.
 
 ### Phase 3 — Amend the hard rule
 
@@ -380,7 +393,7 @@ operator cost/HA decision); (3) stock is time-varying — re-run later. Do NOT b
 | `tests/scripts/lib/stock-preflight-gate.sh` | **new** — sourced gate exposing `stock_preflight <type> <location>` (matches `web2-recreate-gate.sh`) |
 | `tests/scripts/test-stock-preflight-gate.sh` | **new** — 6 cases, fail-closed coverage |
 | `.github/workflows/apply-web-platform-infra.yml` | gate into **5** destroy-shaped steps (`:1165`, `:1583`, `:1744`, `:1877`, `:2079`) |
-| `.github/workflows/infra-validation.yml` | **add the test step** — the list at `:167-200` is hand-maintained, not a glob. **Without this the test ships dead.** (No-op only if Phase 0 proves `test-all.sh` already discovers `tests/scripts/`.) |
+| `scripts/test-all.sh` | **add an explicit `run_suite` line** in the `tests/scripts/` block (match `:144-146`). **P0.3 proved nothing auto-discovers `tests/scripts/`** — the glob at `:218` excludes it. Without this the test ships dead. **NOT** `infra-validation.yml` — that serves `apps/web-platform/infra/*.test.sh`, the wrong directory after Phase 1's relocation. |
 | `plugins/soleur/test/terraform-target-parity.test.ts` *(or a sibling)* | coverage-enumeration test for AC3 + `EXCLUSION_ALLOWLIST` |
 | `AGENTS.core.md` | amend `hr-prod-host-config-change-immutable-redeploy` in place (≤600 B, byte-neutral) |
 | `apps/web-platform/infra/variables.tf` | 2 `validation` blocks (`location`, `registry_location`) |
@@ -439,10 +452,11 @@ or `app/**/layout.tsx`** — the mechanical UI escalation does not fire.
 - [ ] **AC15** The API-blip abort is a **distinct** message from the stock-miss abort
       (`grep -q 'cannot PROVE stock'`), so an operator does not read a blip as a real
       shortage and file a spurious #6463 duplicate.
-- [ ] **AC16** The gate's test actually runs in CI — not just locally. Either
-      `grep -q 'test-stock-preflight-gate' .github/workflows/infra-validation.yml`, **or**
-      P0.3 proved `scripts/test-all.sh` discovers `tests/scripts/`. **One of the two must
-      hold**; a green PR with a dead test is the failure mode this AC exists for.
+- [ ] **AC16** The gate's test actually runs in CI — not just locally:
+      `grep -c 'test-stock-preflight-gate' scripts/test-all.sh` == 1.
+      **P0.3 proved nothing auto-discovers `tests/scripts/`** (the `:218` glob excludes it;
+      siblings are registered by hand at `:144-146`), so this line is the only thing
+      standing between the deliverable and a green PR with zero coverage.
 
 ### Post-merge (operator)
 
