@@ -241,7 +241,7 @@ touches no `.tf` in the live-origin graph.
 
 | Candidate | Assessment |
 |---|---|
-| **(a) Per-host private-net-relative ingress** (`ssh-web-1.` → `ssh://10.0.1.10:22`) | **Disfavoured.** Needs the `-d "$SERVER_IP"` NAT rework (below), a new TF output for the private address, two cloudflared listeners + two NAT rules, 11 connection blocks, CF Access, DNS, and an `ssh.` retirement. **ADR-068:378-384 already rejected the adjacent per-host-tunnel shape.** |
+| **(a) Per-host private-net-relative ingress** (`ssh-web-1.` → `ssh://10.0.1.10:22`) | **Disfavoured.** Needs the `-d "$SERVER_IP"` NAT rework (below), a new TF output for the private address, two cloudflared listeners + two NAT rules, 12 connection blocks, CF Access, DNS, and an `ssh.` retirement. **ADR-068:378-384 already rejected the adjacent per-host-tunnel shape.** |
 | **(b) Single-connector gate — enforce I1 at runtime** ⭐ | **Leading candidate.** web-2 does not run cloudflared until its NIC is up (and, on a warm standby, not at all). One connector ⇒ `localhost:` and `ssh.` deterministic **by construction**. Evidence it is safe: the tunnel carries **no `app.` ingress rule** (`grep -c 'hostname = "app\.' tunnel.tf` → **0**) — it is purely *management-plane*; `app.soleur.ai` is a **direct proxied A record** to web-1 (`dns.tf:13-20`), never through the tunnel; break-glass is preserved (`tunnel.tf:4`: *"Operator/admin SSH still uses the direct A record + admin_ips firewall"*). `server.tf:188` **already** computes the per-host discriminator, so the gate is ~1 line. **This is also the ONLY shape that makes I1 well-formed** (arch-strategist P1-4). **Open risks to price:** `deploy.` fan-out reaches web-2 through the tunnel (H7), so gating web-2 out interacts with ADR-068 Option B — the fan-out targets peers over the **private net**, so it should hold, **but must be proven**; and on promotion web-2 *would* need the token, while **no web-2 promotion runbook exists** (pre-existing gap). |
 
 ### C4 views
@@ -639,10 +639,12 @@ retry in the bridge (new replica per attempt; ~3% residual at N=5) is ~10 more l
   invariant"** (v1's framing was false; `:354-357` states it verbatim). The real gap: it solved
   connector-nondeterminism for the **deploy path only** and never generalized to `ssh.`/`registry.`.
   ADR-113 **cites** its rejection of per-host tunnels (`:378-384`) rather than re-deciding it.
+  **Also correct its stale count** at `:383`: "the 11 SSH provisioners" → **12** (measured; see the
+  Count-drift callout under §Prior art).
 - **ADR-096** — cite as precedent; **Decision text unchanged**. *v2: its stated **premise** is
   falsified exactly as ADR-008's is (`:41`, `:199` say "**the** web host's cloudflared (already a
   10.0.1.0/24 member)" — singular, and false for web-2). An optional non-blocking premise note is
-  permitted; AC8 is relaxed accordingly so it does not **forbid** the correction.*
+  permitted; **AC9** is relaxed accordingly so it does not **forbid** the correction.*
 - Apply the 4 `.c4` edits; run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 - Correct `tunnel.tf:58-63`.
 - **File the separate P1 issue:** *"Audit web-1 vs web-2 for the 12 provisioner-applied host

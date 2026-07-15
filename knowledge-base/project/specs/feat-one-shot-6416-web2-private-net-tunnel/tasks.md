@@ -57,7 +57,7 @@ brand_survival_threshold: single-user incident
 
 - [ ] 4.1 Author **ADR-113** via `/soleur:architecture`: the `localhost:`-category-error finding; **I1** as a **runtime** precondition (it is falsified by construction as an apply-time one — the token is granted at server-create, the attach always lands after); **I2**; the per-hostname anti-pattern; both candidate implementations. Status `adopting`. **Cite** ADR-068:378-384's rejection of per-host tunnels — do not re-decide it.
 - [ ] 4.2 Amend **ADR-008** → `superseded-in-part` (precedent: ADR-043). Two staleness proofs: single-host `localhost:` routes, and its claimed `app.` route does not exist.
-- [ ] 4.3 Amend **ADR-068** → **extend the already-stated finding** (`:354-357` states connector nondeterminism verbatim) to `ssh.`/`registry.`. Do **not** frame it as an omission.
+- [ ] 4.3 Amend **ADR-068** → **extend the already-stated finding** (`:354-357` states connector nondeterminism verbatim) to `ssh.`/`registry.`. Do **not** frame it as an omission. **Also correct its stale count** at `:383`: "the 11 SSH provisioners" → **12** (measured: 12 `terraform_data.*` `connection { host }` blocks in `server.tf`; a 13th, `deploy_pipeline_fix`, has none).
 - [ ] 4.4 **ADR-096:** leave `## Decision` unchanged (precedent, vindicated). An optional non-blocking note on its falsified singular-connector premise is permitted. → **AC9**
 - [ ] 4.5 `model.c4`: amend the `platform.infra.tunnel` description + add `tunnel -> zotRegistry`, `hetzner -> tunnel`, `github -> tunnel`. No new `include` needed (all three are already in the `containers` view). Run `c4-code-syntax.test.ts` + `c4-render.test.ts`. → **AC8**
 - [ ] 4.6 Correct the `tunnel.tf:58-63` misattribution comment (comment-only; no resource diff).
