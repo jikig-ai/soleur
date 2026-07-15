@@ -211,3 +211,17 @@ leaves it undefined, so its `PreToolUse` array is byte-unchanged (AC5 drift
 snapshot). Observe-only + fail-open: the hook always returns `{}` and never
 mutates `canUseTool`/`disallowedTools`; a flush DB failure mirrors to Sentry via
 `reportSilentFallback` and never fails the agent turn. Retention: 90d pg_cron.
+
+## Amendment (2026-07-10, ADR-113 — support-persona scope)
+
+The support-persona Concierge (ADR-113) uses two tool-scoping mechanisms this ADR
+governs, both reconciled as compliant. (1) Its `createCanUseTool` default-deny
+returns a graceful `{behavior:"deny", message}` the model relays — this is the
+sanctioned deny-with-message shape, NOT the silent phase-scope deny this ADR
+forbids. (2) It silently removes `Edit/Write/MultiEdit/NotebookEdit/Task/Agent`
+via `disallowedTools`; that silent removal is acceptable here — and NOT the
+additive-hint-only violation this ADR forbids — because those are tools a support
+end-user NEVER legitimately needs, so their removal breaks no valid flow. The
+harm this ADR enumerates (a silent unknown-tool failure for a tool the paying user
+legitimately needs) does not arise. This carve-out is scoped to `persona:"support"`
+only; the Command Center path is unchanged.

@@ -279,6 +279,7 @@ function makeArgs(overrides: Partial<Parameters<typeof realSdkQueryFactory>[0]> 
     cwd: "/ignored",
     userId: "user-1",
     conversationId: "conv-1",
+    persona: "command_center" as const,
     ...overrides,
   };
 }
