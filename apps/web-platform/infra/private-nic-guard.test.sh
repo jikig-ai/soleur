@@ -484,8 +484,9 @@ assert "zot-registry.tf passes private_ip into templatefile (asserts the ARGUMEN
 # IP also appears in comments (tunnel.tf, dns.tf, server.tf) and in server.tf's
 # `docker info | grep '10.0.1.30:5000'` probe string. The invariant that matters is that the
 # address is ASSIGNED from one place, so assert the assignment shape. NOTE the scope is
-# deliberately narrow: `:5000`-suffixed endpoint copies (docker-daemon.json, cloud-init.yml,
-# server.tf) are a SEPARATE pre-existing surface — see the tracking issue in the PR body.
+# deliberately narrow: the `:5000`-suffixed ENDPOINT copies (docker-daemon.json, cloud-init.yml,
+# server.tf) are a SEPARATE pre-existing surface with its own silent-drift failure — tracked in
+# #6448. Do NOT widen this assert to cover them without fixing that first: it would go red.
 ASSIGNS="$(grep -rhoE '^\s*ip\s*=\s*"10\.0\.1\.30"' "$SCRIPT_DIR"/*.tf | wc -l | tr -d ' ')"
 assert "no .tf hardcodes 'ip = \"10.0.1.30\"' any more (single-sourced via local)" \
   "[[ '$ASSIGNS' == '0' ]]"
