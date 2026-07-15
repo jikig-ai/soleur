@@ -19,9 +19,10 @@ warm and current.
 
 ## When to revert
 
-- The **fallback-rate alarm** fires (see below): a spike of `registry:"ghcr-fallback"` /
-  `stage:"inngest_ghcr_fallback"` events means hosts are *trying* zot and failing — every
-  such deploy/boot took the slower fallback path and zot is degraded.
+- The **fallback-rate alarm** fires (see below). Since #6285 it pages on the **first**
+  matching event, not a spike: a `registry:"ghcr-fallback"` / `stage:"inngest_ghcr_fallback"` /
+  `stage:"app_ghcr_fallback"` event means a host *tried* zot and failed — that deploy/boot took
+  the slower fallback path and zot is degraded.
 - zot host down / unreachable / R2-backed storage fault / cert/htpasswd rotation broke pull
   auth, and you want to stop hosts from attempting zot at all (each attempt adds a probe +
   a failed pull before falling back).
@@ -40,8 +41,15 @@ warm and current.
   > made #6400 look like "zot mysteriously down".
 - Any Phase-5 retirement step (5.3 fallback-branch removal) is discovered premature.
 
-Note: a *single* transient `ghcr-fallback` is self-healing — the host already fell back to
-GHCR and served correctly. Revert is for a *sustained* zot degradation, not one blip.
+Note: a *single* transient `ghcr-fallback` is self-healing — the host already fell back to GHCR
+and served correctly, so a one-blip page is **not** by itself a reason to revert. But since
+#6285 the alarm pages on that blip **by design** (a per-group threshold above 0 is silently
+unreachable on this signal's grouping — see the resource comment), so **do not dismiss the page
+as noise**: triage it. Revert is for a *sustained* zot degradation. **If the noise is
+`zot-gate-degraded (probe_unreachable)` pre-cutover, mute that Sentry ISSUE — never the rule**
+(the rule also carries `ghcr-fallback`, the only no-SSH page gating the irreversible 5.5 PAT
+revoke; a per-issue mute cannot pre-suppress it because `ghcr-fallback` mints a fresh group per
+deploy). The real fix for `probe_unreachable` is the zot host, not the alarm.
 
 ## Immediate revert (≈30 s, no deploy) — unset the gate
 
@@ -82,8 +90,8 @@ doppler secrets set ZOT_REGISTRY_URL "10.0.1.30:5000" --project soleur --config 
 
 The soak gate (`scripts/followthroughs/zot-soak-6122.sh`) is a **7-day cumulative** close
 condition. The fallback-rate alarm is a **real-time page** so a live zot degradation is
-caught in minutes, not at the next daily sweep. Arm it in Sentry at cutover (it targets
-events that do not exist pre-flip):
+caught in minutes, not at the next daily sweep. It is **already live** — apply-created and
+armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at cutover:
 
 - **Signal:** three warning tags, all `feature:supply-chain op:image-pull`:
   - `registry:"ghcr-fallback"` — a host *attempted* zot and the pull failed, then fell back
@@ -94,11 +102,15 @@ events that do not exist pre-flip):
     (probe unreachable / pull creds absent / login failed), so the deploy used GHCR WITHOUT
     ever running a zot pull (ci-deploy.sh `zot_gate_degraded_event`). This catches the
     host-up-heartbeat-green-but-pull-cred-broken case the other two miss.
-- **Alert rule (Sentry issue/metric alert):** notify (page) when the count of events matching
-  `registry:"ghcr-fallback" OR stage:"inngest_ghcr_fallback" OR registry:"zot-gate-degraded"`
-  exceeds **X = 3 events in Y = 1 hour**. A healthy post-cutover fleet emits ZERO; a low
-  threshold is intentional — any sustained fallback/degradation means zot cannot serve and
-  every affected host paid the fallback cost (or silently reverted to GHCR).
+- **Alert rule** — `sentry_issue_alert.zot_mirror_fallback_rate`, APPLY-CREATED and live now
+  (it is **not** armed at cutover; `zot-gate-degraded` emits pre-flip today). It pages on the
+  **first** event matching any of the FOUR signals: `registry:{"ghcr-fallback",
+  "zot-gate-degraded"}` / `stage:{"inngest_ghcr_fallback", "app_ghcr_fallback"}`
+  (`event_frequency count > 0 / 1h`, `filter_match = "any"`). Fire-on-first is required, not a
+  preference: the count is per Sentry issue-group and `ghcr-fallback` mints a fresh group per
+  deploy, so any threshold above 0 is unreachable on that signal (#6285). It also matches
+  `zot-soak-6122.sh`, which FAILs the Phase-5 gate on >=1 fallback. A healthy post-cutover fleet
+  emits ZERO.
 - **On page:** confirm zot health, then run the Immediate revert above if the degradation is
   not resolving. Do not wait for the soak sweep.
 

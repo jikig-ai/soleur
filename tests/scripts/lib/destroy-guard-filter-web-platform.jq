@@ -3,7 +3,7 @@
 # or single-block surfaces in the current apply allow-list (verified
 # 2026-05-25 via apps/web-platform/infra/*.tf inspection — closes #4419);
 # a sixth surface (#5911) counts reboot-forcing in-place updates on
-# hcloud_server.*:
+# hcloud_server.*; a seventh (#6416) counts host/volume CREATES:
 #
 #   1. cloudflare_ruleset.*                              .rules
 #   2. cloudflare_zero_trust_tunnel_cloudflared_config.* .config[0].ingress_rule
@@ -12,6 +12,8 @@
 #   5. cloudflare_zero_trust_access_policy.*             .include
 #   6. hcloud_server.* reboot-forcing in-place update    placement_group_id /
 #                                                        server_type (#5911)
+#   7. hcloud_server.* / hcloud_volume.* host BIRTH  actions incl. "create"
+#                                                        (create OR replace; #6416)
 #
 # The HIGHEST-impact case is (1) — removing the ACME carve-out
 # (cloudflare_ruleset.seo_page_redirects.rules[10] at seo-rulesets.tf)
@@ -51,11 +53,14 @@
 #
 # Input: `terraform show -json <plan>` document.
 # Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int,
-#          web2_out_of_scope_changes: int, web2_server_replaced: int}.
-# The last two are ADDITIVE (web-2-recreate scoped guard, this PR); the first
-# three are byte-unchanged so the apply / warm_standby / manual-rerun consumers
-# that read only them keep working. Only the web_2_recreate job's sourced gate
-# (tests/scripts/lib/web2-recreate-gate.sh) reads the web2_* keys.
+#          web2_out_of_scope_changes: int, web2_server_replaced: int,
+#          host_creates: int}.
+# Every key past the first three is ADDITIVE; the first three are byte-unchanged
+# so the apply / warm_standby / manual-rerun consumers that read only them keep
+# working. Only the web_2_recreate job's sourced gate
+# (tests/scripts/lib/web2-recreate-gate.sh) reads the web2_* keys. Only the
+# `apply` job reads host_creates (#6416) — and evaluates it OUTSIDE the
+# destroy_count sum, so `[ack-destroy]` cannot bypass it.
 #
 # Each `_count($side)` helper uses `$side` value-binding (jq 1.7+; safe on
 # jq 1.8.x). NOT the call-by-name filter-arg shape that crashed v1 of
@@ -194,6 +199,73 @@ def web2_allow: [
     [ .resource_changes[]?
       | select(.address == "hcloud_server.web[\"web-2\"]")
       | select((.change.actions? | index("delete")) and (.change.actions? | index("create"))) ]
+    | length
+  ),
+  # 7th surface (#6416): a pure `+ create` of a host/volume on the per-PR apply
+  # path. INVISIBLE to every counter above — no delete (resource_deletes=0), no
+  # nested-block shrinkage (nested_deletes=0), and not an ["update"]
+  # (reboot_updates=0). Measured against tfplan-hcloud-server-create.json.
+  #
+  # HOW THE DRIFT HAPPENS: `-target` is transitive at the RESOURCE level
+  # (verified, TF 1.10.5), so EVERY allow-listed resource referencing ANY
+  # hcloud_server.web instance pulls the whole for_each map — web-2 included.
+  # There are TWO such pullers, not one: cloudflare_record.app (dns.tf:16) AND
+  # hcloud_firewall_attachment.web (firewall.tf:93). cloudflare_record.app is
+  # UNREMOVABLE (it is the apex A record for app.soleur.ai), so the pull cannot
+  # be broken by trimming the allow-list — it must be GUARDED here instead.
+  # That transitive pull-in is `-target` SEMANTICS, not a resource bug.
+  #
+  # WHY IT MATTERS (#6416): the per-PR apply created soleur-web-2 but NOT its
+  # hcloud_server_network attachment (not target-reachable), so the host booted
+  # public-IP-only and could never reach zot. A `+ create` also boots WITHOUT a
+  # firewall: hcloud provider 1.63.0 documents that hcloud_firewall_attachment
+  # (unlike hcloud_server.firewall_ids) does NOT attach before first boot. Tunnel
+  # topology + measured failure rates: ADR-114 (do not restate them here).
+  #
+  # TYPE-scoped (not address) for the same defense-in-depth reason
+  # reboot_updates is: it covers hcloud_server.git_data / .inngest / .registry
+  # and every hcloud_volume, not just hcloud_server.web.
+  #
+  # `index("create")`, NOT `== ["create"]`. This counts EVERY action shape that
+  # BIRTHS a host: ["create"], ["delete","create"] (a -replace), and
+  # ["create","delete"] (create_before_destroy). An earlier draft used the exact
+  # form, reasoning "a -replace is already counted by resource_deletes → no
+  # double-count". That reasoning is FALSE here, and dangerously so:
+  # host_creates is NOT a term in the workflow's destroy_count sum, so there is
+  # nothing to double-count against — the exactness bought nothing and cost the
+  # guarantee. Worse, a -replace trips resource_deletes, and the destroy gate
+  # then PRINTS "Add [ack-destroy] to acknowledge". An author acking a legitimate
+  # sibling change (say a ruleset-rule removal in the same merge) would ack the
+  # host rebirth through with it — and a reborn host has no
+  # hcloud_server_network attach, which is #6416 reproducing THROUGH the guard
+  # built to prevent it. The reboot_updates surface already learned this lesson
+  # (#5911's steer says "do NOT add [ack-destroy]"); host REBIRTH must get the
+  # same treatment. Caught at review by security-sentinel.
+  #
+  # Not double-counted in practice either: a -replace increments BOTH
+  # resource_deletes (via index("delete")) and host_creates, but they are
+  # evaluated by two INDEPENDENT gates — the HALT fires first and unconditionally,
+  # so the destroy gate's count is never reached. MEASURED against
+  # tfplan-hcloud-server-location-replace.json: resource_deletes=1,
+  # host_creates=1 (T30).
+  #
+  # KNOWN-UNCOVERED (declared, not accidental): a create/delete of
+  # hcloud_server_network against an EXISTING host is invisible to all 7
+  # surfaces. The server create catches the born-unattached case that caused
+  # #6416, but detaching a live host's private NIC would pass. That is the I1
+  # runtime-precondition gap tracked in #6441, not a counter this filter can add.
+  #
+  # BACKWARD-COMPAT: additive key. The apply / warm_standby / manual-rerun
+  # consumers that read only resource_deletes/nested_deletes/reboot_updates stay
+  # byte-unchanged. Only the `apply` job reads host_creates, and it evaluates the
+  # HALT OUTSIDE the destroy_count sum — there is deliberately NO [ack-destroy]
+  # bypass (a host create is never the right thing to type past on an unattended
+  # per-PR apply; the dispatch jobs that legitimately create/replace are separate
+  # jobs and do not read this key).
+  host_creates: (
+    [ .resource_changes[]?
+      | select(.type == "hcloud_server" or .type == "hcloud_volume")
+      | select(.change.actions? | index("create")) ]
     | length
   )
 }
