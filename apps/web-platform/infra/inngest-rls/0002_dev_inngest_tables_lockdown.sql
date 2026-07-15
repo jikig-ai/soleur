@@ -112,10 +112,23 @@ BEGIN
     -- hard-coded (a literal goose_db_version_id_seq goes stale the next time goose adds
     -- an identity column). anon retaining USAGE/SELECT on a serial sequence is residual
     -- surface. Scoped to relkind='S' and to this table — never a schema-wide scan.
+    --
+    -- BOTH classid AND refclassid are pinned to pg_class, and deptype to a/i, on purpose.
+    -- A sequence carries several pg_depend rows: an ownership row on its table
+    -- (refclassid=pg_class, deptype='a' for serial / 'i' for identity) AND a normal row on
+    -- its SCHEMA (refclassid=pg_namespace, deptype='n'). Without the refclassid pin, the
+    -- schema row's refobjid — a pg_namespace oid — is joined against pg_class.oid. Those
+    -- counters share a space, so a collision could match an unrelated relation; if its
+    -- relname happened to equal an allowlisted name, this loop would revoke on a sequence
+    -- owned by an APP table. On a co-tenanted project that is precisely the blast radius
+    -- this whole artifact exists to prevent, so the join is pinned rather than trusted.
     FOR seq IN
       SELECT s.relname
       FROM pg_class s
-      JOIN pg_depend d  ON d.objid = s.oid AND d.classid = 'pg_class'::regclass
+      JOIN pg_depend d  ON d.objid = s.oid
+                       AND d.classid = 'pg_class'::regclass
+                       AND d.refclassid = 'pg_class'::regclass
+                       AND d.deptype IN ('a', 'i')
       JOIN pg_class tc  ON tc.oid = d.refobjid
       JOIN pg_namespace tn ON tn.oid = tc.relnamespace
       WHERE s.relkind = 'S'
