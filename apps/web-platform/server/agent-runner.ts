@@ -214,6 +214,7 @@ import {
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
 import { classifySandboxStartupError } from "./sandbox-startup-classifier";
 import { checkpointInflightWorkForConversation } from "./inflight-checkpoint";
+import { resolveWorkspaceMode } from "./workspace-mode";
 
 export { abortSession, abortAllUserSessions, abortAllSessions };
 
@@ -2081,6 +2082,9 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       options: buildAgentQueryOptions({
         workspacePath,
         pluginPath,
+        // Legacy domain-leader runner is always Command Center execution:
+        // workspace cwd + workspace write (byte-identical to the prior default).
+        mode: resolveWorkspaceMode("command_center"),
         credential,
         serviceTokens,
         systemPrompt: effectiveSystemPrompt,

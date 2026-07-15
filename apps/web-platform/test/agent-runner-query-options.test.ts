@@ -33,6 +33,7 @@ vi.mock("@/server/sandbox-hook", () => ({
 
 import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
 import { buildAgentEnv } from "@/server/agent-env";
+import { resolveWorkspaceMode } from "@/server/workspace-mode";
 
 const WORKSPACE = "/tmp/test-workspace";
 const PLUGIN = "/tmp/test-workspace/plugins/soleur";
@@ -40,6 +41,7 @@ const PLUGIN = "/tmp/test-workspace/plugins/soleur";
 const minArgs = {
   workspacePath: WORKSPACE,
   pluginPath: PLUGIN,
+  mode: resolveWorkspaceMode("command_center"),
   credential: { value: "sk-test", scheme: "api_key" as const },
   serviceTokens: {} as Record<string, string>,
   systemPrompt: "you are a router",
@@ -299,6 +301,65 @@ describe("buildAgentQueryOptions — GitHub egress derived from ghToken (#5041 f
   it("empty-string ghToken → fully closed (graceful-degradation parity with GH_TOKEN injection)", () => {
     const opts = buildAgentQueryOptions({ ...minArgs, ghToken: "" });
     expect(opts.sandbox?.network?.allowedDomains).toEqual([]);
+  });
+});
+
+describe("buildAgentQueryOptions — SDK skills allowlist (support scope)", () => {
+  it("omits `skills` by default (Command Center loads every skill)", () => {
+    const opts = buildAgentQueryOptions(minArgs);
+    expect("skills" in opts).toBe(false);
+  });
+
+  it("threads `skills` verbatim when provided (support passes ['kb-search'])", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, skills: ["kb-search"] });
+    expect(opts.skills).toEqual(["kb-search"]);
+  });
+
+  it("support extra-disallowed pins Edit/Write/Task/Agent alongside the canonical list, keeping Bash out of it", () => {
+    const opts = buildAgentQueryOptions({
+      ...minArgs,
+      extraDisallowedTools: ["Edit", "Write", "MultiEdit", "NotebookEdit", "Task", "Agent"],
+    });
+    expect(opts.disallowedTools).toEqual([
+      "WebSearch",
+      "WebFetch",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit",
+      "Task",
+      "Agent",
+    ]);
+    expect(opts.disallowedTools).not.toContain("Bash");
+  });
+});
+
+describe("buildAgentQueryOptions — WorkspaceMode-driven cwd + sandbox write-set (ADR-113)", () => {
+  it("command_center: cwd = workspace, sandbox allowWrite = [workspace]", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("command_center") });
+    expect(opts.cwd).toBe(WORKSPACE);
+    expect(opts.sandbox?.filesystem?.allowWrite).toEqual([WORKSPACE]);
+  });
+
+  it("support: cwd = plugin root, sandbox allowWrite = [] (T3 — the P1 read-only invariant)", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("support") });
+    // cwd is the boot-validated plugin root, NOT the workspace.
+    expect(opts.cwd).toBe(PLUGIN);
+    // The write-set is EMPTY — a cwd=pluginPath session must not be able to write
+    // into the shared platform plugin root (the CTO-flagged supply-chain escape).
+    expect(opts.sandbox?.filesystem?.allowWrite).toEqual([]);
+    expect(opts.sandbox?.filesystem?.allowWrite).not.toContain(PLUGIN);
+  });
+
+  it("support: sandbox denyRead obscures the internal knowledge base (containment defense)", () => {
+    // PLUGIN = /tmp/test-workspace/plugins/soleur → internal KB is two levels up.
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("support") });
+    expect(opts.sandbox?.filesystem?.denyRead).toContain("/tmp/test-workspace/knowledge-base");
+  });
+
+  it("command_center: does NOT add the internal-KB deny (no support containment)", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("command_center") });
+    expect(opts.sandbox?.filesystem?.denyRead ?? []).not.toContain("/tmp/test-workspace/knowledge-base");
   });
 });
 

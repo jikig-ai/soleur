@@ -6,14 +6,19 @@
 
 import { useId, useState } from "react";
 import { GOLD_GRADIENT } from "@/components/ui/constants";
-import { SUPPORT_COMPOSER_FOOTNOTE } from "./support-persona";
+import {
+  SUPPORT_COMPOSER_FOOTNOTE,
+  SUPPORT_COMPOSER_FOOTNOTE_LIVE,
+} from "./support-persona";
 
 const MAX_CHARS = 2000;
 
 export function SupportComposer({
   onSend,
+  live = false,
 }: {
   onSend: (text: string) => void;
+  live?: boolean;
 }) {
   const [value, setValue] = useState("");
   const textareaId = useId();
@@ -59,7 +64,7 @@ export function SupportComposer({
         </button>
       </div>
       <p className="mt-1.5 text-[11px] text-soleur-text-muted">
-        {SUPPORT_COMPOSER_FOOTNOTE}
+        {live ? SUPPORT_COMPOSER_FOOTNOTE_LIVE : SUPPORT_COMPOSER_FOOTNOTE}
       </p>
     </div>
   );

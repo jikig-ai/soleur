@@ -372,6 +372,7 @@ function makeArgs(overrides: Partial<Parameters<typeof realSdkQueryFactory>[0]> 
     cwd: "/ignored", // factory uses workspacePath
     userId: "user-1",
     conversationId: "conv-1",
+    persona: "command_center" as const,
     ...overrides,
   };
 }
@@ -490,6 +491,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // follow-up).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
       allowGithubEgress: false,
+      readOnly: false,
     });
   });
 
@@ -1059,6 +1061,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       // (b) the SAME dispatch opens GitHub egress — the two move in lockstep.
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: true,
+        readOnly: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       // Literal on purpose (canonical-literal style, do not import the
@@ -1077,6 +1080,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockGenerateInstallationToken).not.toHaveBeenCalled();
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: false,
+        readOnly: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       expect(opts.sandbox.network.allowedDomains).toEqual([]);
@@ -1093,6 +1097,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockQuery).toHaveBeenCalledOnce();
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: false,
+        readOnly: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       expect(opts.sandbox.network.allowedDomains).toEqual([]);
@@ -1249,6 +1254,36 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
+  // T2 (ADR-113): support persona bypasses the repo-lifecycle and runs read-only
+  // at the plugin docs root. The mirror of T10 — patchWorkspacePermissions must
+  // NOT run — plus cwd + read-only sandbox + kb-search-only skills.
+  // -------------------------------------------------------------------------
+  it("T2: support persona skips patchWorkspacePermissions and runs read-only at the plugin root", async () => {
+    await realSdkQueryFactory(makeArgs({ persona: "support" }));
+
+    // Repo-lifecycle write op is NOT invoked for support (contrast T10).
+    expect(mockPatchWorkspacePermissions).not.toHaveBeenCalled();
+
+    const opts = mockQuery.mock.calls[0][0].options;
+    // cwd is the boot-validated plugin docs root, not the user's workspace.
+    expect(opts.cwd).toBe("/app/shared/plugins/soleur");
+    // SDK skills scoped to kb-search only (support surface).
+    expect(opts.skills).toEqual(["kb-search"]);
+
+    // Sandbox built read-only, at the plugin root — allowWrite:[] is enforced
+    // inside buildAgentSandboxConfig (unit-tested T3 in agent-runner-query-options).
+    expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+      "/app/shared/plugins/soleur",
+      expect.objectContaining({
+        allowGithubEgress: false,
+        readOnly: true,
+        // Internal KB obscured from the read-only support session (containment).
+        denyReadExtra: ["/app/shared/knowledge-base"],
+      }),
+    );
+  });
+
+  // -------------------------------------------------------------------------
   // T16: sandbox-required-but-unavailable substring → feature: "agent-sandbox"
   // (filtered by feature tag per learning
   // 2026-04-19-claude-agent-sdk-subprocess-exit-tag-via-stderr-substring.md)
@@ -1287,6 +1322,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // No-token dispatch → fail-closed egress (#5041 follow-up).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
       allowGithubEgress: false,
+      readOnly: false,
     });
   });
 

@@ -84,6 +84,7 @@ describe("consumeStream — RuntimeAuthError JWT-deny propagation (#4440)", () =
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-jwt-deny",
       userId: "user-A",
       userMessage: "hi",
@@ -122,6 +123,7 @@ describe("consumeStream — RuntimeAuthError JWT-deny propagation (#4440)", () =
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-jwt-deny-null",
       userId: "user-B",
       userMessage: "hi",
@@ -149,6 +151,7 @@ describe("consumeStream — RuntimeAuthError JWT-deny propagation (#4440)", () =
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-mint-fail",
       userId: "user-C",
       userMessage: "hi",
@@ -177,6 +180,7 @@ describe("consumeStream — RuntimeAuthError JWT-deny propagation (#4440)", () =
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-generic",
       userId: "user-D",
       userMessage: "hi",
