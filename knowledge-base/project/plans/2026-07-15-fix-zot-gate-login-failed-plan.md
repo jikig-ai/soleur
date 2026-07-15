@@ -395,10 +395,16 @@ never depended on the H3/H4 outcome.
   create/destroy of any other `-target`-excluded resource. Run with the canonical triplet (see §Infrastructure).
 - **AC9** ADR-115 amended (see §Architecture Decision); `knowledge-base/engineering/architecture/decisions/ADR-115-dedicated-host-private-nic-boot-convergence.md` contains the credential-convergence extension.
 
-### Post-apply (fully automated — no human step)
+### Post-apply (verification automated; gated behind an operator-authorized dispatch)
 
 > **Renamed from "Post-merge" at /work.** Merging applies nothing here (see §Infrastructure → Apply path);
-> these gates bind after the `registry-host-replace` dispatch, which this pipeline fires itself.
+> these gates bind after the `registry-host-replace` dispatch.
+>
+> **Corrected 2026-07-15 (#6497).** This section previously read "fully automated — no human step" and
+> claimed the pipeline fires the dispatch itself. That was wrong. The dispatch destroys and recreates
+> `hcloud_server.registry`, so firing it is a destructive prod write and requires explicit operator
+> authorization per `hr-menu-option-ack-not-prod-write-auth`. The AC10–AC12 gates below are automated;
+> the dispatch that precedes them is not self-authorizing. See §Infrastructure → Apply path.
 
 - **AC10 (probe-wiring / liveness — NOT fix-confirmation)** After the dispatch replaces the registry host, the
   next `SOLEUR_ZOT_DISK` self-report carries `htpasswd_pull_matches` and `htpasswd_push_matches` as
@@ -601,10 +607,24 @@ deny-all firewall both forbid — so the host is replaced, per `hr-prod-host-con
 
 **The real path** (ADR-096 amendment 2026-07-08, `zot-registry.tf:24-30`): a sanctioned dispatch-only
 `registry-host-replace` `workflow_dispatch` that runs a scoped, destroy-guarded, `-replace`-scoped apply
-preserving `hcloud_volume.registry`. The pipeline fires it via `gh workflow run` — CI executes the apply;
-nothing here is handed to a human (`hr-exhaust-all-automated-options-before`). Post-merge sequence:
-merge → `gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f
-reason='#6497 …'` → AC10/AC11 verify.
+preserving `hcloud_volume.registry`. CI executes the apply — no human runs Terraform and no host config is
+hand-edited, which is what `hr-exhaust-all-automated-options-before` requires, and the dispatch existing at
+all satisfies it. But **firing** the dispatch is a destructive prod write (`hcloud_server.registry` is
+destroyed and recreated), so the `gh workflow run` call itself requires explicit operator authorization per
+`hr-menu-option-ack-not-prod-write-auth`. Automating the *execution* is not the same as self-authorizing the
+*trigger*; the two rules do not conflict, they govern different halves of the step. Post-merge sequence:
+merge → **ask the operator** → `gh workflow run apply-web-platform-infra.yml -f
+apply_target=registry-host-replace -f reason='#6497 …'` → AC10/AC11 verify.
+
+> **The dispatch is additionally gated on live Hetzner stock (learned 2026-07-15, run 29445579672).** The
+> `-replace` destroys before it creates, so the #6457 stock preflight refuses to apply when the planned
+> `server_type` is not orderable in its target location — otherwise the destroy succeeds, the create fails
+> `resource_unavailable`, and the registry strands with its zot store volume detached (#6393 → ~10h prod
+> deploy freeze, #6400). The first authorized dispatch aborted exactly there: destroy-guard PASS, then
+> `stock-preflight ABORT: server_type 'cx33' is NOT orderable in 'hel1' today (orderable in EU: <none>)`.
+> Nothing applied; the apply step never ran. **Consequence for planning:** AC10–AC12 cannot be scheduled
+> deterministically — they bind whenever cx33 stock returns, which is time-varying (cx33 went
+> orderable → nowhere in ~3h on 2026-07-15). Re-dispatch until the preflight passes. Do NOT bypass it.
 
 **Verified at /work against real prod state** (read-only `terraform plan`, mirroring the dispatch job's exact
 `-replace`/`-target` set, then the REAL gate run over the plan JSON):
