@@ -25,7 +25,14 @@
 # (the exact rot that left #4707 orphaned for 45 days). Durable schema-wide
 # detection belongs to the advisor scan (#3366), not here.
 #
-# SECURITY: SUPABASE_ACCESS_TOKEN is injected via env (never argv). Untrusted
+# SECURITY: SUPABASE_ACCESS_TOKEN reaches this job via `env:` from `secrets.*` — it is
+# never written into the workflow file, a repo file, or a workflow_dispatch input. It IS
+# interpolated into curl's argv (`--header "Authorization: Bearer ${...}"`), so it is
+# visible to a local `ps` for the life of each call; the previous claim here — "injected
+# via env (never argv)" — was stronger than the code and is corrected rather than
+# quietly enforced. Accepted, in parity with the prd sibling this was copied from: the
+# runner is ephemeral and single-tenant, so there is no local process to read it, and
+# `--header @-` on stdin would fork the shared HTTP plumbing for no real gain. Untrusted
 # response bodies flow through strip_log_injection + scrub_pat before any echo. The
 # Management API endpoint is pinned to api.supabase.com (no env override — an
 # overridable host is a PAT-exfil-via-redirect seam). PROJECT_REF is a pinned
@@ -183,6 +190,23 @@ jobs:
               record_failure "gate_violation" "allowlist-scoped catalog gate: violations=${violations} (expected 0 over the 14; checks RLS-on + postgres-owned + no anon/authenticated SELECT/INSERT/UPDATE/DELETE/TRUNCATE). body=$(sanitize "$(printf '%s' "$gate" | head -c 300)")"
             else
               echo "Authoritative gate PASS: violations=0 over the 14 allowlisted tables (RLS-enabled, postgres-owned, no anon/authenticated DML or TRUNCATE)."
+            fi
+          fi
+
+          # SEQUENCE-grant gate. The table gate above is scoped `relkind in ('r','p')` and
+          # therefore NEVER evaluates relkind='S' — yet plan T1 claims "Sequences owned by
+          # the 14 carry no anon/authenticated grant" is ASSERTED. It was not: 0002 revokes
+          # them, but nothing verified the revoke. anon holding USAGE/SELECT/UPDATE on a
+          # serial sequence is residual surface (security P2) and the whole point of 0002's
+          # pg_depend derivation. Same derivation as 0002 (deptype a=serial, i=identity), so
+          # the gate polices exactly the set the migration touches.
+          if [[ -z "$fail_mode" ]]; then
+            seqgate="$(query "select count(*) as violations from pg_class s join pg_namespace n on n.oid=s.relnamespace join pg_depend d on d.objid=s.oid and d.classid='pg_class'::regclass and d.refclassid='pg_class'::regclass and d.deptype in ('a','i') join pg_class tc on tc.oid=d.refobjid where n.nspname='public' and s.relkind='S' and tc.relname = ANY(${ALLOW}) and (has_sequence_privilege('anon',s.oid,'USAGE') or has_sequence_privilege('anon',s.oid,'SELECT') or has_sequence_privilege('anon',s.oid,'UPDATE') or has_sequence_privilege('authenticated',s.oid,'USAGE') or has_sequence_privilege('authenticated',s.oid,'SELECT') or has_sequence_privilege('authenticated',s.oid,'UPDATE'))")"
+            seq_violations="$(printf '%s' "$seqgate" | jq -r '.[0].violations // "err"' 2>/dev/null)"
+            if [[ "$seq_violations" != "0" ]]; then
+              record_failure "seq_gate_violation" "sequence-grant gate: violations=${seq_violations} (expected 0 over sequences owned by the 14; checks anon/authenticated USAGE/SELECT/UPDATE). body=$(sanitize "$(printf '%s' "$seqgate" | head -c 300)")"
+            else
+              echo "Sequence-grant gate PASS: violations=0 (no anon/authenticated USAGE/SELECT/UPDATE on sequences owned by the 14)."
             fi
           fi
 

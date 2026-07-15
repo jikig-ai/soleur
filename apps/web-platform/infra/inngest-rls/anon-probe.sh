@@ -34,7 +34,18 @@ pass=0; fail=0
 ok()  { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
 
-scrub() { printf '%s' "$1" | sed -E 's/(eyJ|sbp_)[A-Za-z0-9._-]{10,}/REDACTED/g' | LC_ALL=C tr -d '\000-\037\177'; }
+# Mirrors the sibling strip_log_injection in apply-inngest-rls-dev.yml /
+# scheduled-inngest-health.yml: the C0/DEL strip alone leaves U+2028/U+2029 (line/
+# paragraph separators), U+FEFF (BOM) and U+0085 (NEL) — all of which terminate a line
+# in a log viewer. Not exploitable today (every body here comes from a hardcoded path),
+# fixed for PARITY so the two scrubbers cannot diverge silently.
+# Escape sequences only, never literal separators (cq-regex-unicode-separators-escape-only).
+scrub() {
+  printf '%s' "$1" \
+    | sed -E 's/(eyJ|sbp_)[A-Za-z0-9._-]{10,}/REDACTED/g' \
+    | LC_ALL=C tr -d '\000-\037\177' \
+    | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+}
 
 # owner_query <sql> -> JSON. Runs as `postgres` via the Management API. This is the
 # read-back oracle: strictly stronger than a service_role read (it is the table owner
@@ -119,7 +130,8 @@ else
       d="$(anon_req DELETE "/goose_db_version?version_id=eq.0")"
       echo "       (anon DELETE returned HTTP ${d%%|*} — deliberately NOT an assertion: 204 is expected even when denied)"
       i="$(anon_req POST "/goose_db_version" '{"version_id":999999,"is_applied":true}')"
-      echo "       (anon INSERT returned HTTP ${i%%|*} — deliberately NOT an assertion)"
+      i_code="${i%%|*}"; i_body="${i#*|}"
+      echo "       (anon INSERT returned HTTP ${i_code})"
 
       after="$(owner_query "select count(*) as n from public.goose_db_version" | jq -r '.[0].n // "err"' 2>/dev/null)"
       after_v0="$(owner_query "select count(*) as n from public.goose_db_version where version_id = 0" | jq -r '.[0].n // "err"' 2>/dev/null)"
@@ -134,6 +146,20 @@ else
         ok "T3 anon INSERT had NO effect (owner read-back: no version_id=999999 row)"
       else
         bad "T3 anon INSERT MUTATED STATE: ${bogus} row(s) with version_id=999999 — anon write is OPEN"
+      fi
+      # WHY the status IS asserted for INSERT but deliberately NOT for DELETE (the 204
+      # trap above): `bogus == 0` proves the row is ABSENT, not that anon was DENIED.
+      # PostgREST validates the PAYLOAD before the grant gate, so the day goose adds a
+      # NOT NULL column to goose_db_version this hardcoded body becomes invalid and the
+      # INSERT is rejected 400/422 — the row is absent for the WRONG reason and the
+      # read-back passes while proving nothing about anon's privileges. A GRANT denial
+      # is 401/403. Asserting that is what makes this a lockdown probe rather than a
+      # payload-shape probe. (Unlike DELETE, whose 204-on-deny makes its status
+      # meaningless, INSERT's status is a sound discriminator.)
+      if [[ "$i_code" == "401" || "$i_code" == "403" ]]; then
+        ok "T3 anon INSERT was GRANT-denied (HTTP ${i_code}) — the missing row is proven to be a privilege denial, not a payload rejection"
+      else
+        bad "T3 anon INSERT returned HTTP ${i_code}, expected 401/403 (grant denial). 400/422 = PostgREST rejected the payload BEFORE the grant gate (has goose_db_version gained a NOT NULL column?) — the absent row then proves nothing. body=$(scrub "$(printf '%s' "$i_body" | head -c 120)")"
       fi
     fi
   fi

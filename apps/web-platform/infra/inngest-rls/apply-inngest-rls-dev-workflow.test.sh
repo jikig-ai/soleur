@@ -174,6 +174,23 @@ checks = {
     # (52 app tables hold anon grants by design) and would fail forever.
     "dev_gate_scoped":        "relname = ANY(" in dev_run or "relname = any(" in dev_run,
     "dev_gate_coverage":      "gate_coverage" in dev_run,
+    # The table gate is scoped relkind in ('r','p') and never evaluates relkind='S',
+    # so sequence grants need their own term or plan T1's "sequences owned by the 14
+    # carry no anon/authenticated grant" is asserted by nothing.
+    "dev_gate_sequences":     "has_sequence_privilege" in dev_run,
+
+    # --- The PRD gate's semantics are the DELIBERATE INVERSION of dev's ------------
+    # Six dev_gate_* assertions and ZERO prd_gate_* — on the artifact targeting the
+    # BRAND-SURVIVAL-CRITICAL project. These pin prd's terms, and pin that its gate is
+    # SCHEMA-WIDE: on a dedicated Inngest project an allowlist-scoped gate would silently
+    # stop covering every table a future Inngest version ships. That inversion is the
+    # whole reason these are two workflows and not a matrix — so it must be asserted,
+    # in BOTH directions, or a copy-paste can quietly converge them.
+    "prd_gate_grants":        "has_table_privilege" in prd_run,
+    "prd_gate_truncate":      "TRUNCATE" in prd_run.upper(),
+    "prd_gate_rls":           "relrowsecurity" in prd_run,
+    "prd_gate_owner":         "pg_get_userbyid" in prd_run,
+    "prd_gate_schemawide":    "relname = ANY(" not in prd_run and "relname = any(" not in prd_run,
 
     # --- Annunciation: a red run MUST reach the operator --------------------------
     # The filer must gate on failure() ALONE. `failure() && ...failure_mode != ''`
@@ -244,6 +261,12 @@ assert "dev gate asserts relrowsecurity" "[[ $(probe dev_gate_rls) == yes ]]"
 assert "dev gate asserts postgres ownership" "[[ $(probe dev_gate_owner) == yes ]]"
 assert "dev gate is allowlist-scoped (a schema-wide gate never reaches 0 on dev)" "[[ $(probe dev_gate_scoped) == yes ]]"
 assert "dev gate has a coverage guard (violations=0 over 0 rows is vacuous)" "[[ $(probe dev_gate_coverage) == yes ]]"
+assert "dev gate asserts sequence grants (the table gate never evaluates relkind='S')" "[[ $(probe dev_gate_sequences) == yes ]]"
+assert "prd gate asserts grants (has_table_privilege), not just RLS" "[[ $(probe prd_gate_grants) == yes ]]"
+assert "prd gate asserts TRUNCATE" "[[ $(probe prd_gate_truncate) == yes ]]"
+assert "prd gate asserts relrowsecurity" "[[ $(probe prd_gate_rls) == yes ]]"
+assert "prd gate asserts postgres ownership" "[[ $(probe prd_gate_owner) == yes ]]"
+assert "prd gate is SCHEMA-WIDE (scoping it would stop covering future Inngest tables)" "[[ $(probe prd_gate_schemawide) == yes ]]"
 
 # --- Annunciation -------------------------------------------------------------
 assert "dev issue filer gates on failure() alone (a probe/timeout failure must still file)" "[[ $(probe dev_filer_on_failure_alone) == yes ]]"

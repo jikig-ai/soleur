@@ -116,12 +116,19 @@ BEGIN
     -- BOTH classid AND refclassid are pinned to pg_class, and deptype to a/i, on purpose.
     -- A sequence carries several pg_depend rows: an ownership row on its table
     -- (refclassid=pg_class, deptype='a' for serial / 'i' for identity) AND a normal row on
-    -- its SCHEMA (refclassid=pg_namespace, deptype='n'). Without the refclassid pin, the
-    -- schema row's refobjid — a pg_namespace oid — is joined against pg_class.oid. Those
-    -- counters share a space, so a collision could match an unrelated relation; if its
-    -- relname happened to equal an allowlisted name, this loop would revoke on a sequence
-    -- owned by an APP table. On a co-tenanted project that is precisely the blast radius
-    -- this whole artifact exists to prevent, so the join is pinned rather than trusted.
+    -- its SCHEMA (refclassid=pg_namespace, deptype='n').
+    --
+    -- HONEST ACCOUNTING of the refclassid pin (corrected 2026-07-15 — the previous comment
+    -- overstated its causal story): the `deptype IN ('a','i')` filter in this SAME join
+    -- ALREADY excludes the deptype='n' schema row, so removing the refclassid pin returns
+    -- an IDENTICAL result set today. The pin is not load-bearing; it is DEFENCE IN DEPTH,
+    -- and it is kept deliberately. pg_namespace and pg_class oids are drawn from one shared
+    -- counter, so IF the deptype filter is ever widened (e.g. to pick up a new dependency
+    -- kind), an unpinned refobjid could join a pg_namespace oid against pg_class.oid and
+    -- collide with an unrelated relation; if that relation's relname happened to equal an
+    -- allowlisted name, this loop would revoke on a sequence owned by an APP table. On a
+    -- co-tenanted project that is the exact blast radius this artifact exists to prevent,
+    -- so the join stays pinned rather than trusted to a filter two edits away from changing.
     FOR seq IN
       SELECT s.relname
       FROM pg_class s
@@ -149,13 +156,16 @@ BEGIN
   --    adding the name above — the window is time-to-PR, NOT self-healing) or an APP
   --    table that lost RLS (routed to the advisor scan, issue #3366). The workflow gate
   --    surfaces this count as a non-fatal signal.
-  --    This query reads relkind='r' schema-wide, which is safe precisely because it
-  --    emits no DDL — it only counts.
+  --    This query reads relkind IN ('r','p') schema-wide, which is safe precisely because
+  --    it emits no DDL — it only counts.
+  --    relkind must match the workflow's equivalent gate, which uses ('r','p'). This
+  --    report said 'r' alone and so MISSED a partitioned non-allowlisted table — the two
+  --    counts would disagree, and the quieter one was the human-facing NOTICE.
   SELECT count(*) INTO n_other
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname = 'public'
-    AND c.relkind = 'r'
+    AND c.relkind IN ('r', 'p')
     AND c.relrowsecurity = false
     AND NOT (c.relname = ANY(allow));
 
