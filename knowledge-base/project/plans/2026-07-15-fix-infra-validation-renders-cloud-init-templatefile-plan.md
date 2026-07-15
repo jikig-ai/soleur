@@ -113,7 +113,7 @@ Every row below was mechanically verified this session. Several correct the task
 | Is `hooks.json.tmpl` validated today? | **No.** It is referenced by `ci-deploy.test.sh` / `cutover-inngest-workflow.test.sh` / `infra-config-apply.test.sh`, but none render-and-parse it. A malformed `hooks.json.tmpl` reaches prod unvalidated. | Set (A) covers it. Net-new coverage, free. |
 | *(prior art)* `private-nic-guard.test.sh:87` blanket assertion `! grep -qE '\$\{[A-Za-z0-9_.]+\}'` | **Would FALSE-FAIL on a full-file render.** TF-escaped `$${DOPPLER_SHA256}` legitimately renders to `${DOPPLER_SHA256}`. That assertion only survives in its own file because those shell seams use `:-` defaults, which break its `\}` anchor (its own comment says so). | Scope the residual assertion to the **derived stub var names**, not a blanket `${…}` pattern. Verified: 0 stub-var leaks; 4 legitimate shell `${…}` survive. |
 | *(prior art)* AC7's hardcoded map — "a new map var breaks this render (**the intended tripwire**)" | Acceptable in an advisory test; **fatal in the gate**. A gate that reds when someone adds a var re-creates #6454 verbatim. | Auto-derive the map; replace the accidental tripwire with an **explicit** template↔`.tf` cross-check. |
-| *(task brief)* Proof = a PR touching `apps/*/infra/**` goes green | **Trap.** `detect-changes` derives the matrix from the diff. A PR touching **only** the workflow yields `directories == '[]'` → `validate` is **skipped** → reads green. That is the forbidden outcome. | The PR **must** touch a real `apps/*/infra/**` file. Encoded as AC9. |
+| *(task brief)* Proof = a PR touching `apps/*/infra/**` goes green | **Trap.** `detect-changes` derives the matrix from the diff. A PR touching **only** the workflow yields `directories == '[]'` → `validate` is **skipped** → reads green. That is the forbidden outcome. | The PR **must** touch a real `apps/*/infra/**` file. Encoded as AC10. |
 | *(issue)* "consider promoting to required" | **Not directly feasible.** `validate` is a matrix job; check names (`validate (apps/web-platform/infra)`) are dynamic and cannot be pinned in `infra/github/ruleset-ci-required.tf`. Needs an `if: always()` aggregator (precedent: `tenant-integration-required`) + a TF apply. | **Follow-up issue** (Non-Goals). Mitigated in-scope — see below. |
 | Is `validate` a required check? | **No** — absent from `ruleset-ci-required.tf`'s 18 contexts. Precisely why it survived red. | See mitigation. |
 | Does `guard-script-fixture-tests` run always? | **Yes — and it is REQUIRED** (ruleset 14145388), on `pull_request` **and** `merge_group`, with no path filter. | **Load-bearing:** the anti-no-op proof lives *here*, not in the advisory job. |
@@ -159,7 +159,13 @@ failure_modes:
     detection:     "terraform console exits non-zero; its message is surfaced verbatim -> script exit 2"
     alert_route:   "validate job red on the PR"
   - mode:          "Template references a var the .tf templatefile map does not pass (breaks at APPLY, not validate)"
-    detection:     "cross-check: derived template identifiers not a subset of .tf map keys -> script exit 4"
+    detection:     "terraform console fails to render -> script exit 2, its message surfaced verbatim"
+    alert_route:   "validate job red on the PR"
+  - mode:          "A template has no templatefile() call site, an ambiguous one, or a referent escaping the infra root"
+    detection:     "anchored, comment-proof attribution -> script exit 4"
+    alert_route:   "validate job red on the PR"
+  - mode:          "A templatefile() call site exists that discovery cannot parse (silent under-coverage)"
+    detection:     "independent floor: count of templatefile( calls vs parsed referents -> script exit 5"
     alert_route:   "validate job red on the PR"
   - mode:          "Gate silently validates nothing (the #6454 class recurring)"
     detection:     "script asserts validated_count == |A union B|; mismatch -> script exit 5"
@@ -185,7 +191,7 @@ discoverability_test:
 
 The `validated N/N` line is not decoration: it is the machine-checkable evidence that the gate **ran** rather than skipped, and AC10 greps CI logs for it. `N` is `|A ∪ B|` = **5** today (4 cloud-inits + `hooks.json.tmpl`) and grows on its own as templatefiles are added — so the assertion is the **computed equality N==N**, never the literal `5`. (Plan-review catch: pinning `5/5` anywhere would go stale the moment #6448 lands — the #6454 shape one layer up.)
 
-**Exit-code contract** (every path is loud; none is a skip): `0` pass · `1` validation failed · `2` render failed (terraform's message surfaced) · `3` stub var leaked into rendered output · `4` template↔`.tf` drift · `5` counter mismatch (silent-skip guard) · `6` required tooling absent (fail-closed).
+**Exit-code contract** (every path is loud; none is a skip): `0` pass · `1` validation failed · `2` render failed (terraform's message surfaced, alongside the derived stub map) · `3` stub var leaked into rendered output · `4` attribution failure (absent/ambiguous call site, empty map, referent escaping the root) · `5` coverage shortfall (counter mismatch, or a call site discovery cannot read) · `6` required tooling absent (fail-closed).
 
 ## Design Decision 1: how templates are discovered (principled vs. filename)
 
@@ -271,7 +277,9 @@ This is a conscious trade against combinatorial blowup. **Deliverable:** the scr
 ## Files to Edit
 
 - **`.github/workflows/infra-validation.yml`** — rewrite the `Validate cloud-init schema` step to call the script; **move it after `setup-terraform`**; add `terraform_wrapper: false`; add the `infra-validate-required` aggregator job.
-- **`apps/web-platform/infra/cloud-init.yml`** — **a one-line comment only**, noting that the shared CI gate now renders this file via `templatefile()` and schema-checks the **rendered** doc. Two jobs: it is honest documentation at the point of confusion, and it **touches `apps/*/infra/**` so this PR's own `validate` matrix is non-empty** (AC11 — without such a touch the matrix is `[]`, `validate` is *skipped*, and a skip is a failure of this task). The comment must contain **no `%{`** — per `work/SKILL.md` §6.1, Terraform's directive scanner does not skip prose, so a `%{` in a comment would break the render. (No `${…}` either.)
+- **`apps/web-platform/infra/server.tf`** — **a comment only**, at the `templatefile()` call site, noting that the shared CI gate renders this file and schema-checks the **rendered** doc. Two jobs: it is honest documentation at the point of confusion, and it **touches `apps/*/infra/**` so this PR's own `validate` matrix is non-empty** (AC10 — without such a touch the matrix is `[]`, `validate` is *skipped*, and a skip is a failure of this task).
+
+  > *Relocated at review.* The plan put this comment **inside `cloud-init.yml`**. That is not free: `cloud-init.yml` is baked into `user_data` against Hetzner's 32,768-byte cap, and `plugins/soleur/test/cloud-init-user-data-size.test.ts` enforces a `WEB_GZIP_BUDGET` with **under ~300 bytes of headroom**. An 8-line comment cost ~276 gzipped bytes and turned that test red (22,076 vs a 21,800 budget) — caught by CI, not by the plan's own "the comment is inert" reasoning, which checked *rendered semantic content* (byte-identical) and never considered *size*. The note moved to `server.tf`, which costs no `user_data` bytes and is arguably the better home anyway: it sits where the render is actually invoked. **`cloud-init.yml` is effectively comment-frozen** — treat any addition to it as a byte-budget change. The comment must still contain **no `%{`** (Terraform's directive scanner does not skip prose) — that constraint now applies to `server.tf`'s comment only as a matter of taste, since `.tf` files are not templates.
 
 **Cut at plan-review — the `cloud-init-inngest-bootstrap.test.sh` refactor.** My draft repointed that suite's AC7 `render_ci()` at the shared script to delete its hardcoded map. The simplicity panel was right and I have dropped it:
 
@@ -371,7 +379,7 @@ Implement `.github/scripts/validate-infra-templates.sh`:
 
 ## Acceptance Criteria
 
-Trimmed at plan-review from 16 to 10. Every AC below is a **checkable post-condition**, not a paraphrase of a phase instruction. **No AC pins a literal file count** — the panel correctly caught that `5/5` hardcoded into an AC is the #6454 shape one layer up (it goes stale the moment #6448 adds a template). Counts are asserted as *computed equality*, with today's value quoted only as context.
+Trimmed at plan-review from 16 to 11 (AC1-AC10 pre-merge + AC11 post-merge). Every AC below is a **checkable post-condition**, not a paraphrase of a phase instruction. **No AC pins a literal file count** — the panel correctly caught that `5/5` hardcoded into an AC is the #6454 shape one layer up (it goes stale the moment #6448 adds a template). Counts are asserted as *computed equality*, with today's value quoted only as context.
 
 ### Pre-merge (PR)
 
@@ -381,7 +389,7 @@ Trimmed at plan-review from 16 to 10. Every AC below is a **checkable post-condi
 - [x] **AC4 (the filed bug)** — F1 (`%{ if … ~}` at column 1) exits **0** through the script, while `cloud-init schema -c` on the same raw file exits **1**. Encodes the exact before/after. — **VERIFIED** on the fixture *and* on the real `apps/web-platform/infra/cloud-init.yml`: raw exit 1, script exit 0.
 - [x] **AC5 (silent-skip guard)** — F5 → exit 5; the script never reports success having validated fewer members than it discovered. — **VERIFIED.**
 - [x] **AC6 (fail-closed)** — F8 (terraform absent) → exit 6, and the output contains **no** `SKIP`. — **VERIFIED** (F8 isolates the terraform-absent branch via a PATH carrying cloud-init but not terraform, and asserts the message names `terraform`).
-- [x] **AC7 (arm selection — the render's load-bearing justification)** — for `cloud-init.yml` the script validates **both** the `true` arm and the `false` arm (the **default** production doc per `variables.tf`), and both pass. This is the property a directive-strip provably cannot deliver (Design Decision 0); without it the render is not worth its cost. — **VERIFIED: 803 / 739 lines.** *(Plan-time PoC measured 795/731; this PR's own 8-line `cloud-init.yml` comment accounts for the +8 on both arms. The load-bearing property is that the arms **differ** — proving both are really rendered — not the literal counts, per this section's own no-pinned-literals rule.)*
+- [x] **AC7 (arm selection — the render's load-bearing justification)** — for `cloud-init.yml` the script validates **both** the `true` arm (795 lines) and the `false` arm (731 lines, the **default** production doc per `variables.tf`), and both pass. This is the property a directive-strip provably cannot deliver (Design Decision 0); without it the render is not worth its cost. — **VERIFIED.** *(These are the plan's original PoC numbers. /work briefly measured 803/739 while a documentation comment sat in `cloud-init.yml`; review removed it — it cost ~276 gzipped bytes against a `WEB_GZIP_BUDGET` with under ~300 bytes of headroom and reddened `cloud-init-user-data-size.test.ts`. The note moved to `server.tf`'s call site, which costs no user_data. See Non-Goal 7.)*
 - [x] **AC8 (principled, not filename-bound — load-bearing)** — F9: a `.tf` declaring `templatefile("…/some-config.json", …)` plus that JSON template is discovered from the **call site alone** and validated, with no filename-list entry anywhere. This is what keeps #6448 from re-opening #6454. *(The panel correctly cut my companion `grep`-the-script-for-absent-strings check as a purity ritual — F9 tests the behavior, which is what matters.)* — **VERIFIED.**
 - [x] **AC9** — `bash .github/scripts/test/run-all.sh` exits 0; `guard-script-fixture-tests` green. — **VERIFIED locally:** `ALL FIXTURE TESTS PASS` (the new suite auto-discovered by the `test-*.sh` glob, 19/19). CI leg confirmed at AC10.
 - [ ] **AC10 (proof-of-fix — the whole point)** — on PR #6458's own run: `gh run view <id> --json jobs` shows job `validate (apps/web-platform/infra)` with `conclusion == "success"` **and** `status == "completed"` (**not** `skipped`), its log contains the `validated N/N` line, and `infra-validate-required` is green. All three: conclusion alone cannot distinguish pass from skip.
@@ -396,8 +404,8 @@ Trimmed at plan-review from 16 to 10. Every AC below is a **checkable post-condi
 
 | # | Scenario | Expect | Status |
 | --- | --- | --- | --- |
-| T1 | `cloud-init.yml`, bool `true` | render → `Valid schema` (803 lines as shipped; 795 at plan time, +8 = this PR's comment) | **verified** |
-| T2 | `cloud-init.yml`, bool `false` (**default** prod doc) | render → `Valid schema` (739 lines as shipped; 731 at plan time, +8) | **verified** |
+| T1 | `cloud-init.yml`, bool `true` | render 795 lines → `Valid schema` | **verified** |
+| T2 | `cloud-init.yml`, bool `false` (**default** prod doc) | render 731 lines → `Valid schema` | **verified** |
 | T3 | Other three cloud-inits | render → `Valid schema` | **verified** |
 | T4 | `hooks.json.tmpl` (`${jsonencode(...)}`) | render → JSON VALID (**new coverage**) | **verified** |
 | T5 | Anchored attribution vs. `ci-ssh-key.tf`'s prose comment | maps to `server.tf`, comment ignored | **verified** |
@@ -436,7 +444,7 @@ Recorded so cut scope is not silently re-added, and so the one rejection is audi
 4. `hooks.json.tmpl`'s "13 real `${…}`" → **13 occurrences of 1 var**.
 5. AC8's `grep`-the-script-for-absent-strings → **cut** (purity ritual; F9 tests the behavior).
 6. The `cloud-init-inngest-bootstrap.test.sh` `render_ci()` refactor → **cut** (justification contradicted my own text; replaced by a one-line comment for the matrix touch).
-7. ACs 16 → 10; step-ordering / scope-policing / follow-up-ceremony ACs cut or demoted to phase steps.
+7. ACs 16 → 11; step-ordering / scope-policing / follow-up-ceremony ACs cut or demoted to phase steps.
 8. Keep the extracted script + fixture suite in the **required, path-filter-free** job — the panel independently verified this is load-bearing (`run-all.sh:9` globs `test-*.sh`; `pr-quality-guards.yml:19` runs it; `ruleset-ci-required.tf:126` pins it required).
 
 **Adopted from the strong-model consult:**
@@ -452,11 +460,11 @@ Recorded so cut scope is not silently re-added, and so the one rejection is audi
 1. **Flipping the ruleset to make `infra-validate-required` required.** The aggregator job itself **ships here** (Phase 3) — only the `ruleset-ci-required.tf` entry + `terraform apply` defer, because that is an admin/apply action, not a code change. Shipping the aggregator now means the follow-up is a one-line ruleset edit rather than a second structural edit to the same workflow. → **file issue**
 2. **N ≥ 2 bool combinatorics.** all-true/all-false covers 2 of 2^N. Complete for today's corpus (N=1, verified); a documented narrowing if that changes. → **file issue**
 3. **The hardcoded stub map in `cloud-init-inngest-bootstrap.test.sh`'s AC7 leg.** Pre-existing; it will false-red that *advisory suite* when someone adds a templatefile var to `server.tf`. My draft refactored it; plan-review cut that as scope creep (my own text concedes the tripwire is "acceptable in an advisory test"). The shared script is available to it later. → **file issue**
-4. **#6448** (docker-daemon.json insecure-registries drift, "fails SILENT") — explicitly out of scope. This plan is designed to *help* it, not block it: when #6448 converts `docker-daemon.json` to a `templatefile()`, discovery covers it automatically (proven by simulation, T9).
+4. **#6448** (docker-daemon.json insecure-registries drift, "fails SILENT") — explicitly out of scope. This plan is designed to *help* it, not block it: when #6448 converts `docker-daemon.json` to a `templatefile()`, discovery covers it automatically (proven by simulation, T10).
    **Hand-off note for #6448's author** (observed while verifying, not acted on): `registry-insecure-config.test.sh` greps `DJ_ZOT_IP` out of the **raw** `docker-daemon.json`. Once that file becomes a templatefile, the raw grep will read `${registry_private_ip}` rather than an IP, so that probe must move to the **rendered** doc as part of #6448. This plan does not touch that file, that probe, or `docker-daemon.json`, and `.github/scripts/validate-infra-templates.sh` is available to #6448 as the render helper. → **note on the issue**
 5. **Fixing the self-referential probe** in `registry-insecure-config.test.sh` (asserts `CI_ZOT_IP == DJ_ZOT_IP` rather than against `local.registry_private_ip`, so real drift passes green). That is #6448's scope. Verified untouched and still passing here (Phase 3 do-no-harm step).
 6. **#6415 / #6400** — later PRs in this session's sequence. Out of scope. #6454 is the unblocker that merges first.
-7. **Changing the BEHAVIOR of any `cloud-init*.yml`, `docker-daemon.json`, or `*.tf`.** They are correct as written for this bug; the workflow was wrong. *(Clarified at /work: the draft read "Editing any `cloud-init*.yml`…", which contradicted this plan's own **Files to Edit** — that section mandates a one-line `cloud-init.yml` comment, both as documentation at the point of confusion and as the `apps/*/infra/**` touch AC10 needs to keep the matrix non-empty. The comment is inert: it adds no directive, no interpolation, and the rendered arms still pass schema. No file's rendered behavior changes.)*
+7. **Changing the BEHAVIOR of any `cloud-init*.yml`, `docker-daemon.json`, or `*.tf`.** They are correct as written for this bug; the workflow was wrong. *(Twice-revised. The draft read "Editing any `cloud-init*.yml`…", contradicting **Files to Edit**, which mandated a `cloud-init.yml` comment. /work clarified the rule to "changing BEHAVIOR" on the grounds that the comment was inert — verified by diffing the rendered arms, which were byte-identical. **That reasoning was incomplete and CI caught it:** `cloud-init.yml` is baked into a size-capped `user_data`, so a comment is inert in content but NOT in bytes, and it reddened the `WEB_GZIP_BUDGET` test. The comment moved to `server.tf`'s call site. As shipped, `cloud-init.yml` is untouched — the original Non-Goal holds literally after all.)*
 
 ## Domain Review
 

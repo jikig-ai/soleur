@@ -144,6 +144,19 @@ resource "hcloud_server" "web" {
   # receives the gzipped form; its readiness gates fail-closed if decode ever produced a
   # non-#cloud-config. Byte-exact size is confirmed at `terraform plan`. See ADR-080 (amended
   # for the web host).
+  # (#6454) cloud-init.yml is a Terraform templatefile() SOURCE, not literal YAML: it
+  # carries a `%{ if web_colocate_inngest ~}` directive at column 1, and YAML reads a
+  # leading '%' as a directive indicator — so schema-checking that file RAW always fails.
+  # CI renders it via `terraform console` and schema-checks the RENDERED document; see
+  # .github/scripts/validate-infra-templates.sh. Both directive arms are validated, and
+  # the false arm (variables.tf default) is the doc real web hosts boot.
+  #
+  # This note lives HERE, at the call site, and deliberately NOT inside cloud-init.yml:
+  # that file is baked into user_data against Hetzner's 32,768-byte cap, and the
+  # base64gzip'd budget (plugins/soleur/test/cloud-init-user-data-size.test.ts,
+  # WEB_GZIP_BUDGET) has under ~300 bytes of headroom — an 8-line comment there costs
+  # ~276 gzipped bytes and reds that test. cloud-init.yml is effectively comment-frozen;
+  # .tf files cost nothing.
   user_data = base64gzip(templatefile("${path.module}/cloud-init.yml", {
     image_name = var.image_name
     # Keep-inline: fail2ban is reloaded early (at the package-audit stage, before Docker) so

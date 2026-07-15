@@ -14,6 +14,11 @@ on:
       - "apps/*/infra/**"
       - "infra/**"
       - ".github/workflows/infra-validation.yml"
+      # (#6454) The render-then-validate gate and its fixture suite. Without these,
+      # editing the validator would not run the validator's own tests — the job that
+      # proves the gate works would be skipped by the very PR changing the gate.
+      - ".github/scripts/validate-infra-templates.sh"
+      - ".github/scripts/test/fixtures-validate-infra-templates.sh"
       # ci-deploy.test.sh cross-file drift guard (#5145) reads the restart
       # workflow's poll budget; without this path the guard never fires on
       # client-side edits (deploy-script-tests job is ungated).
@@ -83,7 +88,9 @@ jobs:
       # terraform_wrapper: false is load-bearing here, not hygiene: the wrapper
       # wraps stdout, and `Validate infra templates` below decodes
       # `terraform console` output byte-for-byte. deploy-script-tests sets it for
-      # exactly this reason (see its comment ~line 160).
+      # exactly this reason (see the `deploy-script-tests` job's setup-terraform step;
+      # deliberately cited by job name, not line number — this PR's own +lines shifted
+      # that comment and a bare line reference is self-invalidating).
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
@@ -157,14 +164,26 @@ jobs:
   # contexts in infra/github/ruleset-ci-required.tf — which is precisely why it
   # survived being red from #6344 onward with nobody blocked.
   #
-  # This is the static-named gate a matrix job cannot be. `if: always()` means it
-  # ALWAYS reports a status, so making it required cannot deadlock a PR that
-  # touches no infra (see 2026-03-20-github-required-checks-skip-ci-synthetic-status).
-  # Precedent: `tenant-integration-required` (ruleset-ci-required.tf:177).
+  # This is the static-named gate a matrix job cannot be, and the second clause is
+  # the anti-silent-skip guard at JOB level: infra changed but validate did not
+  # succeed (skipped/cancelled/failure) -> red.
   #
-  # The second clause is the anti-silent-skip guard at JOB level: infra changed
-  # but validate did not succeed (skipped/cancelled/failure) -> red. Flipping the
-  # ruleset to make this required is a one-line admin follow-up.
+  # DO NOT make this a required context yet — it would deadlock every non-infra PR.
+  # `if: always()` is a JOB-level condition: it only guarantees the job runs once the
+  # WORKFLOW runs. This workflow still carries a top-level `paths:` filter (see `on:`),
+  # so a PR touching no infra never triggers it, no context is ever posted, and a
+  # required check sits at "Expected — Waiting for status" forever. This workflow also
+  # has no `merge_group:` trigger, so the context would never post on the queue's temp
+  # ref either.
+  #
+  # `tenant-integration-required` (ruleset-ci-required.tf) is the precedent to COPY,
+  # and it is the counter-example to the shortcut: that workflow DROPPED its
+  # workflow-level `paths:` filter and moved path detection into its `detect-changes`
+  # job precisely so the always-run gate reports on every PR. Making this required is
+  # therefore NOT a one-line ruleset edit — the prerequisites are: drop `paths:` here
+  # (keep the heavy matrix gated on `detect-changes`), add `merge_group:`, register the
+  # context in ruleset-ci-required.tf AND scripts/required-checks.txt (bot PRs block
+  # otherwise). Tracked as a follow-up.
   infra-validate-required:
     name: infra-validate-required
     needs: [detect-changes, validate]
@@ -212,9 +231,35 @@ jobs:
       # merge-blocking gate. terraform_wrapper: false keeps `terraform console` stdout
       # byte-clean so the render leg's heredoc-strip (render_yaml_ok, which depends on the
       # last output line being exactly `EOT`) is not corrupted by the default log wrapper.
+      # terraform_version pinned (#6454): this step was unpinned and floated to latest
+      # while every other setup-terraform here pins env.TERRAFORM_VERSION. The template
+      # fixtures below assert on `terraform console`'s encoding behaviour, so a silent
+      # major bump would red them for a non-reason.
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
+
+      # #6454. Fixture suite for .github/scripts/validate-infra-templates.sh. It lives
+      # HERE, not in `guard-script-fixture-tests` (which auto-globs
+      # .github/scripts/test/test-*.sh), because it needs terraform + cloud-init and that
+      # job is a bare-bash runner that is REQUIRED, merge_group-triggered and path-filter-
+      # free. Adding apt there would put a package-mirror dependency on the merge-queue
+      # critical path for every PR in the repo, docs-only included — a worse failure mode
+      # than the bug being fixed. Hence the file is named `fixtures-*` to stay out of that
+      # glob; see the contract note in .github/scripts/test/run-all.sh.
+      #
+      # Trade-off recorded honestly: deploy-script-tests is ADVISORY, so this suite does
+      # not block merge today. Gate CORRECTNESS being advisory is the same property that
+      # let #6454 live for four days — tracked by the follow-up that makes
+      # infra-validate-required a real required context.
+      - name: Install cloud-init (for the infra-template fixture suite)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+
+      - name: Fixture tests for validate-infra-templates.sh (#6454)
+        run: bash .github/scripts/test/fixtures-validate-infra-templates.sh
 
       - name: Run ci-deploy.sh tests
         run: bash apps/web-platform/infra/ci-deploy.test.sh

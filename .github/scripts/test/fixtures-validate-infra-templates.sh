@@ -553,6 +553,146 @@ OUT=$(PATH="$STUBBIN" bash "$EXEC" "$D" 2>&1); RC=$?
 assert_rc "F16-unsubstituted-render-reds" 3
 assert_out "F16-names-the-leaked-var" 'greeting'
 
+# ---------------------------------------------------------------------------
+# F17 — the WRAPPED `templatefile(` call style. `terraform fmt` accepts it, so a
+# line-based discovery grep finds ZERO referents, the template silently leaves the
+# corpus, and the N/N counter stays self-consistent while covering less. Reproduced
+# against the real corpus: hooks.json.tmpl vanished and the gate reported a happy
+# `4/4`. The single most dangerous shape in this suite — it is a SILENT false-green,
+# where every other failure here is loud.
+# ---------------------------------------------------------------------------
+D=$(newdir f17)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+runcmd:
+  - echo ${greeting}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  ud = templatefile(
+    "${path.module}/cloud-init.yml",
+    { greeting = var.greeting }
+  )
+}
+EOF
+run_check "$D"
+assert_rc "F17-wrapped-call-style-discovered" 0
+assert_out "F17-counted-the-template" "1/1"
+
+# F18 — a call site discovery CANNOT parse (non-${path.module} referent) must red,
+# not shrink the corpus silently. This is the independent completeness floor: the
+# N/N counter cannot catch under-discovery because both sides come from the same
+# pass, so the floor is the second opinion.
+D=$(newdir f18)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+runcmd:
+  - echo ${greeting}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  tpl = "${path.module}/cloud-init.yml"
+  ud  = templatefile(local.tpl, { greeting = var.greeting })
+}
+EOF
+run_check "$D"
+assert_rc "F18-unparseable-call-site-reds" 5
+assert_out "F18-names-the-shortfall" "discovery parsed only"
+
+# F18b — the floor must NOT fire on a corpus whose .tf merely MENTIONS
+# templatefile() in prose. ci-ssh-key.tf's real comment does exactly this, and so
+# does server.tf's own #6454 note; a bare `grep -c 'templatefile('` counts them and
+# reds a correct corpus. (The same comment-matching trap the anchored attribution
+# pattern exists to dodge — easy to reintroduce in a new guard.)
+D=$(newdir f18b)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+runcmd:
+  - echo ${greeting}
+EOF
+cat > "$D/main.tf" <<'EOF'
+# server.tf reads this output into the `templatefile()` interpolation map so
+# `cloud-init.yml`'s `${ci_ssh_public_key_openssh}` resolves at plan time.
+# Another mention: templatefile() is used below.
+locals {
+  ud = templatefile("${path.module}/cloud-init.yml", {
+    greeting = var.greeting
+  })
+}
+EOF
+run_check "$D"
+assert_rc "F18b-prose-mentions-do-not-red" 0
+
+# F19 — a referent escaping the infra root. `[^"]+` happily captures a traversal;
+# without a containment guard the gate reads an out-of-root file, classifies it
+# "raw", and COUNTS IT AS VALIDATED — manufacturing a green N/N out of a file that
+# is not a template at all.
+D=$(newdir f19)
+cat > "$D/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/../../../../../../../etc/passwd", { x = var.x })
+}
+EOF
+run_check "$D"
+assert_rc "F19-traversal-referent-reds" 4
+assert_out "F19-names-containment" "plain basename"
+
+# F20 — a brace inside a STRING VALUE is not structural. Counting it truncates the
+# map early and silently drops a real key -> exit 2 on a correct .tf.
+D=$(newdir f20)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+runcmd:
+  - echo ${greeting} ${farewell}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/cloud-init.yml", {
+    greeting = "hi}there"
+    farewell = var.farewell
+  })
+}
+EOF
+run_check "$D"
+assert_rc "F20-brace-in-string-value-passes" 0
+
+# F21 — the LEFT-strip directive form `%{~ if x ~}` is legal Terraform. A bool regex
+# anchored on `%{ if` misses it, the key types as a string, and a bare `"x"`
+# condition is a type error -> exit 2 on a correct template.
+# Uses a JSON template deliberately: `%{~` strips the PRECEDING whitespace,
+# including the newline, so in YAML it glues the previous line to the next and the
+# document is legitimately invalid — which would fail the fixture for a reason that
+# has nothing to do with the typing under test. JSON has no such sensitivity, so
+# the only thing that can red this is the bool typing.
+D=$(newdir f21)
+cat > "$D/conf.json" <<'EOF'
+{
+  "mode": "%{~ if enable_x ~}on%{~ else ~}off%{~ endif ~}"
+}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  cfg = templatefile("${path.module}/conf.json", {
+    enable_x = var.enable_x
+  })
+}
+EOF
+run_check "$D"
+assert_rc "F21-left-strip-directive-passes" 0
+
+# F22 — a root with no templates still emits the summary line. AC10 greps for
+# `rendered+validated N/N`; a root that prints only prose is indistinguishable from
+# a gate that never ran, which is the exact ambiguity the line exists to remove.
+D=$(newdir f22)
+cat > "$D/main.tf" <<'EOF'
+locals {
+  nothing = "here"
+}
+EOF
+run_check "$D"
+assert_rc "F22-empty-root-passes" 0
+assert_out "F22-emits-summary-line" "rendered+validated 0/0"
+
 echo ""
 echo "Results: $PASS pass, $FAIL fail"
 [[ "$FAIL" -eq 0 ]] || exit 1

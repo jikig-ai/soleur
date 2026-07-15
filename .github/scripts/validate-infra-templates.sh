@@ -29,19 +29,32 @@
 # docker-daemon.json be covered the day it becomes a templatefile(), with no
 # edit here.
 #
-# TERRAFORM IS THE GRAMMAR AUTHORITY
-# ----------------------------------
-# The script never pre-judges Terraform's expression grammar. It derives map
-# KEYS from the .tf call site (the authoritative statement of what
-# templatefile() actually receives — loop-locals and function names can never
-# enter it) and TYPES from the body, then renders and lets `terraform console`
-# rule. A missing key, a bad type, or an expression shape we mis-derived all
-# surface as terraform's own message, verbatim, at exit 2. Guessing is how a
-# fix re-creates #6454.
+# TERRAFORM RULES ON GRAMMAR; THE STUB MAP IS STILL A GUESS
+# ---------------------------------------------------------
+# KEYS come from the .tf call site — the authoritative statement of what
+# templatefile() actually receives, so loop-locals and function names can never
+# enter the map. Nothing is rendered blind: `terraform console` judges every
+# expression and its message is surfaced verbatim at exit 2.
+#
+# But TYPES are derived by regex from the body, and that IS a guess — this
+# script types exactly two things, bool (a key named in a `%{ if ... }`
+# condition) and string (everything else). Known narrowings, all of which fail
+# LOUD at exit 2 rather than mis-validating, none present in today's corpus:
+#   - a list/map var (`%{ for h in hosts ~}`) stubs as "x" -> "Iteration over
+#     non-iterable value";
+#   - a key compared with an operator the carve-out misses (`%{ if n >= 2 }`,
+#     `%{ if length(xs) > 0 }`) mis-types.
+# Because these red a CORRECT template — the #6454 dynamic — the exit-2 branch
+# prints the derived stub map next to terraform's error, so the gate's guess is
+# visible at the moment it is wrong. If exit 2 or exit 4 ever fires on a .tf that
+# is genuinely correct, replace the derivation with a declared per-template var
+# map rather than patching the regex further.
 #
 # EXIT CONTRACT — every path is loud; none is a skip:
 #   0 pass · 1 validation failed · 2 render failed · 3 stub var leaked
-#   4 template<->.tf drift · 5 counter mismatch · 6 tooling absent
+#   4 attribution failure (absent/ambiguous call site, empty or escaping map)
+#   5 coverage shortfall (counter mismatch, or a call site discovery cannot read)
+#   6 tooling absent
 #
 # Tests: .github/scripts/test/test-validate-infra-templates.sh (runs in the
 # REQUIRED, path-filter-free `guard-script-fixture-tests` job).
@@ -77,11 +90,25 @@ shopt -s nullglob
 TF_FILES=("$ROOT"/*.tf)
 MEMBERS=()
 
-# (A) templatefile() referents
+# (A) templatefile() referents.
+#
+# Read the .tf files as a STREAM, not line-by-line: `terraform fmt` happily
+# accepts the wrapped call style
+#
+#   hooks_json = templatefile(
+#     "${path.module}/hooks.json.tmpl",
+#     { webhook_deploy_secret = var.webhook_deploy_secret }
+#   )
+#
+# and a line-based grep finds ZERO referents in it — the template silently leaves
+# the corpus, the count drops 5/5 -> 4/4, and BOTH numbers stay self-consistent so
+# the counter below cannot see it. That is #6454's own class: green having checked
+# less. `-z` + a `\s*` that may span newlines makes the match line-independent.
 if [[ ${#TF_FILES[@]} -gt 0 ]]; then
   while IFS= read -r ref; do
     [[ -n "$ref" ]] && MEMBERS+=("$ref")
-  done < <(grep -hoP 'templatefile\(\s*"\$\{path\.module\}/\K[^"]+' "${TF_FILES[@]}" 2>/dev/null | sort -u)
+  done < <(grep -hozP 'templatefile\(\s*"\$\{path\.module\}/\K[^"]+' "${TF_FILES[@]}" 2>/dev/null \
+             | tr '\0' '\n' | sort -u)
 fi
 
 # (B) cloud-init*.yml present
@@ -95,12 +122,55 @@ if [[ ${#MEMBERS[@]} -gt 0 ]]; then
   mapfile -t MEMBERS < <(printf '%s\n' "${MEMBERS[@]}" | sort -u)
 fi
 
+# Containment: a referent must be a plain basename inside ROOT. `[^"]+` above will
+# happily capture `../../../../etc/passwd`, which then gets read, classified "raw",
+# and COUNTED AS VALIDATED — manufacturing a green N/N out of files that are not
+# templates at all. Reject anything with a path separator or a leading dot.
+for m in "${MEMBERS[@]}"; do
+  if [[ "$m" == */* || "$m" == .* || "$m" == *\\* ]]; then
+    echo "ERROR: templatefile() referent '$m' is not a plain basename within $ROOT" >&2
+    echo "  Refusing to read outside the infra root." >&2
+    exit 4
+  fi
+done
+
 if [[ ${#MEMBERS[@]} -eq 0 ]]; then
+  # Emit the summary line here too. AC10 greps for `rendered+validated N/N`, and a
+  # root that prints only prose is indistinguishable from a gate that never ran —
+  # the exact ambiguity the line exists to remove. 0/0 is the honest answer.
   echo "no infra templates in $ROOT (no templatefile() referents, no cloud-init*.yml)"
+  echo "infra template validation: rendered+validated 0/0 file(s) in $ROOT"
   exit 0
 fi
 
 DISCOVERED=${#MEMBERS[@]}
+
+# INDEPENDENT discovery floor. The counter at the bottom compares VALIDATED against
+# DISCOVERED — but both are derived from the SAME discovery pass, so it is
+# mathematically incapable of noticing a template that discovery never found. This
+# floor is the second, independent opinion: count `templatefile(` occurrences with a
+# trivially-robust grep and require discovery to have found at least that many. If a
+# call site exists that discovery cannot parse, this reds instead of shrinking
+# silently.
+if [[ ${#TF_FILES[@]} -gt 0 ]]; then
+  # Strip comments BEFORE counting. A bare `grep -c 'templatefile('` also matches
+  # PROSE — `ci-ssh-key.tf`'s comment says "`templatefile()` interpolation map", and
+  # server.tf's own #6454 note names it too — so the floor would red a correct corpus.
+  # (Same trap the anchored attribution pattern below exists to dodge; it is easy to
+  # reintroduce in a new guard.) `sed` here can also truncate at a `#` inside a string
+  # literal, which can only LOSE a call — biasing the floor toward under-counting, i.e.
+  # toward a weaker guard rather than a false red. That asymmetry is deliberate.
+  tf_calls=$(sed -E 's|//.*$||; s|#.*$||' "${TF_FILES[@]}" 2>/dev/null \
+               | grep -c 'templatefile(' || true)
+  set_a_count=$(grep -hozP 'templatefile\(\s*"\$\{path\.module\}/\K[^"]+' "${TF_FILES[@]}" 2>/dev/null \
+                  | tr '\0' '\n' | grep -c . || true)
+  if [[ "$set_a_count" -lt "$tf_calls" ]]; then
+    echo "ERROR: found $tf_calls 'templatefile(' call(s) in $ROOT/*.tf but discovery parsed only $set_a_count referent(s)." >&2
+    echo "  A call site exists that discovery cannot read — it would be silently unvalidated." >&2
+    echo "  (Non-\${path.module} referents, e.g. templatefile(local.p, …), are not yet supported.)" >&2
+    exit 5
+  fi
+fi
 
 # --- Fail closed on missing tooling (deliberately NOT a self-SKIP) ---------
 # An advisory test may skip; a gate may not. A gate that skips when its tools
@@ -189,14 +259,27 @@ for base in "${MEMBERS[@]}"; do
 
   # --- attribute the member to its .tf call site (anchored, comment-proof)
   pat=$(tf_call_pattern "$base")
+  # Attribution must be line-INDEPENDENT for the same reason discovery is: the
+  # wrapped call style (`templatefile(\n  "${path.module}/x.yml",`) is fmt-clean, and
+  # a line-based `grep -nP` finds no site -> exit 4 on a correct .tf. Match against
+  # the whole file with -z, take the BYTE offset with -b, and convert it to a line
+  # number by counting newlines before it. (-H is still load-bearing when grep gets
+  # exactly one file: without it the filename prefix is omitted and the line number
+  # would be parsed as the filename.)
   sites=""
-  if [[ ${#TF_FILES[@]} -gt 0 ]]; then
-    # -H is load-bearing: grep omits the filename prefix when handed exactly ONE
-    # file, so `${sites%%:*}` would parse the LINE NUMBER as the filename. The
-    # real infra roots ship many *.tf and would have masked this forever.
-    sites=$(grep -nHP "$pat" "${TF_FILES[@]}" 2>/dev/null)
-  fi
-  n_sites=$(printf '%s' "$sites" | grep -c . )
+  for tf in "${TF_FILES[@]}"; do
+    # `-z` makes the match line-independent; `-b` gives the byte offset, which we
+    # convert to a line number for the awk extractor below. The `tr` is required:
+    # -z output is NUL-separated, and a downstream grep would call it binary and
+    # refuse to print.
+    while IFS= read -r off; do
+      [[ -z "$off" ]] && continue
+      ln=$(( $(head -c "$off" "$tf" | tr -cd '\n' | wc -c) + 1 ))
+      sites+="${tf}:${ln}"$'\n'
+    done < <(grep -zboaP "$pat" "$tf" 2>/dev/null | tr '\0' '\n' | sed -nE 's/^([0-9]+):.*/\1/p')
+  done
+  sites=$(printf '%s' "$sites" | sed '/^[[:space:]]*$/d')
+  n_sites=$(printf '%s' "$sites" | grep -c . || true)
 
   if [[ "$n_sites" -eq 0 ]]; then
     echo "ERROR [$base]: has template syntax but NO templatefile() call site in $ROOT/*.tf" >&2
@@ -229,51 +312,53 @@ for base in "${MEMBERS[@]}"; do
   # never be mistaken for a var — the false-red a body-scanner would ship.
   #
   # Extract the map body by tracking brace DEPTH from the `{` that opens the
-  # templatefile map to its matching `}`. A line-based `NR > start` scan that
-  # stops at `^\s*\})` gets three ordinary shapes wrong, each a false-red on a
-  # CORRECT file (the #6454 dynamic this script exists to end):
-  #   - a ONE-LINE map (`templatefile("...", { greeting = var.greeting })`) —
-  #     ordinary Terraform style — yields an empty map, then exit 4;
-  #   - a nested value whose `})` lands at column 0 truncates the map early, so
-  #     a real key goes missing and the render dies at exit 2;
-  #   - starting at the call-site LINE instead of the map BRACE captures the
-  #     enclosing `user_data = base64gzip(templatefile(...` as a phantom key.
-  # Depth-tracking from the brace handles all three.
+  # templatefile map to its matching `}`. Four ordinary shapes each defeat a
+  # simpler scan, and every one of them is a false-red on a CORRECT file — the
+  # #6454 dynamic this script exists to end:
+  #   - a ONE-LINE map (`templatefile("...", { greeting = var.greeting })`);
+  #   - a nested value whose `})` lands at column 0 (truncates the map early);
+  #   - a brace inside a STRING value (`greeting = "hi}there"`) — not structural;
+  #   - the WRAPPED call, where `templatefile(` and the filename are on different
+  #     lines (fmt-clean, and it silently dropped a whole template from the corpus).
+  # Hence an explicit state machine rather than line anchors:
+  #   0 find `templatefile(`  ->  1 skip the quoted filename arg (may span lines)
+  #                           ->  2 find the map `{`  ->  3 accumulate to its match
   map_text=$(awk -v start="$tf_line" '
-    BEGIN { state = 0; depth = 0 }
+    BEGIN { state = 0; depth = 0; qseen = 0; instr = 0 }
     NR < start { next }
     {
       line = $0
       if (state == 0) {
         i = index(line, "templatefile(")
         if (i == 0) next
-        rest = substr(line, i)
-        # Skip PAST the quoted filename argument before hunting the map brace:
-        # the path is "${path.module}/<name>", which itself contains a `{`, and
-        # a naive scan latches onto THAT and treats the filename as the map.
-        q1 = index(rest, "\"")
-        if (q1 == 0) next
-        q2 = index(substr(rest, q1 + 1), "\"")
-        if (q2 == 0) next
-        line = substr(rest, q1 + q2 + 1)
+        line = substr(line, i + 13)
         state = 1
       }
       out = ""
       n = length(line)
       for (j = 1; j <= n; j++) {
         c = substr(line, j, 1)
+        prev = (j > 1) ? substr(line, j - 1, 1) : ""
         if (state == 1) {
-          if (c == "{") { state = 2; depth = 1 }
+          # Skip the filename argument. It is "${path.module}/<name>" — which
+          # contains a `{` of its own, so hunting the map brace before the closing
+          # quote latches onto the filename and treats it as the map.
+          if (c == "\"" && prev != "\\") { qseen++; if (qseen == 2) state = 2 }
           continue
         }
-        if (c == "{") { depth++ }
-        else if (c == "}") {
+        if (state == 2) {
+          if (c == "{") { state = 3; depth = 1 }
+          continue
+        }
+        if (c == "\"" && prev != "\\") { instr = !instr }
+        if (c == "{" && !instr) { depth++ }
+        else if (c == "}" && !instr) {
           depth--
           if (depth == 0) { if (length(out)) print out; exit }
         }
         out = out c
       }
-      if (state == 2 && length(out)) print out
+      if (state == 3 && length(out)) print out
     }' "$tf_file")
 
   # Keys are `ident =` at the start of a line OR after a `,`/`{` (one-line maps
@@ -300,7 +385,10 @@ for base in "${MEMBERS[@]}"; do
   # condition expression instead and treat any map key named in it as a bool,
   # EXCEPT one adjacent to a comparison operator (`%{ if tier == "prod" ~}`
   # makes tier a string, and stubbing it `true` would be the type error).
-  if_exprs=$(grep -oP '(?<!%)%\{\s*(?:if|elseif)\s+\K[^~}]*' "$path" 2>/dev/null || true)
+  # `~?` covers the LEFT-strip form `%{~ if x ~}` — legal Terraform, and without it the
+  # key types as a string and `!"x"` / a bare `"x"` condition is a type error: exit 2 on a
+  # correct template.
+  if_exprs=$(grep -oP '(?<!%)%\{~?\s*(?:if|elseif)\s+\K[^~}]*' "$path" 2>/dev/null || true)
 
   bools=()
   strings=()
@@ -353,6 +441,12 @@ for base in "${MEMBERS[@]}"; do
       echo "ERROR [$base$label]: terraform failed to render the template." >&2
       echo "  Terraform is the authority on its own grammar; its message follows verbatim:" >&2
       sed 's/^/  | /' "$TMP/console.err" >&2
+      # The stub map is THIS SCRIPT's guess, and terraform's error blames the
+      # template — so on a mis-type the operator reads "cloud-init.yml:3: condition
+      # must be bool" about a template that is perfectly correct. Print the map so
+      # the guess is visible next to the complaint.
+      echo "  Derived stub map (this gate's guess — types are inferred, see header):" >&2
+      echo "    { $map }" >&2
       exit 2
     fi
 
