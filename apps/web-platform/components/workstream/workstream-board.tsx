@@ -140,6 +140,11 @@ export function WorkstreamBoard() {
   }, [mutate]);
 
   const refreshFailed = error != null && data != null;
+  // First-load degrade (502 before any data): the board shows <ErrorCard>. Guard
+  // the New-Issue buttons so an optimistic create can't flip `data` non-null and
+  // resurrect the false <EmptyState> under the amber banner when its POST then
+  // fails against the same cold backend (rollback → { issues: [] }).
+  const firstLoadFailed = error != null && data == null;
 
   const resetFilters = useCallback(() => {
     setFilters(emptyFilters());
@@ -527,7 +532,7 @@ export function WorkstreamBoard() {
           </button>
           <GoldButton
             onClick={() => setNewOpen(true)}
-            disabled={readOnly}
+            disabled={readOnly || firstLoadFailed}
             data-tour-id="action:new-issue"
           >
             + New Issue
@@ -570,7 +575,10 @@ export function WorkstreamBoard() {
       ) : !data ? (
         <BoardSkeleton />
       ) : issues && issues.length === 0 ? (
-        <EmptyState onNew={() => setNewOpen(true)} disabled={readOnly} />
+        <EmptyState
+          onNew={() => setNewOpen(true)}
+          disabled={readOnly || firstLoadFailed}
+        />
       ) : filtered.length === 0 ? (
         <NoResults onReset={resetFilters} />
       ) : (

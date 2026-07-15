@@ -23,6 +23,25 @@ export type WorkstreamStatus =
   | "pending"
   | "done";
 
+/**
+ * A DEGRADED workstream read (transient resolve failure / lost grant) — as
+ * distinct from an honest-empty board. The board accessor throws this instead
+ * of returning `[]` so the read surfaces LOUDLY: the HTTP route 502s (SWR keeps
+ * the prior issues + shows the "showing the last loaded issues" banner rather
+ * than a false EmptyState) and the agent tool returns `isError`. Client-safe:
+ * this module is a declared leaf (no React / `components/` / server-only
+ * imports), so a bare `extends Error` adds nothing to the client bundle. Sole
+ * purpose is the route's `instanceof`-skip of its re-capture (the mirror already
+ * fired at the degrade source) + a mirror-precedes-throw test anchor — no
+ * `status`/`code` fields (the route always 502s).
+ */
+export class WorkstreamDegradedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkstreamDegradedError";
+  }
+}
+
 export type WorkstreamPriority = "urgent" | "high" | "medium" | "low" | "none";
 
 /** Role assignee ids — the agent organization's leaders (+ CEO/founder). */
