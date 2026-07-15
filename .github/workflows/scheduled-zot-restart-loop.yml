@@ -264,9 +264,19 @@ jobs:
             printf '### What it confirms\n\nThis is the empirical H2 verdict: `hcloud_server_network` is an ADDITIVE ONLINE ATTACH that landed after the guest configured its network. No terraform ordering can fix that (the attach needs a created server, and a created server is already booting) — which is why the convergence lives on the host. See ADR-115.\n\n'
             printf '### Action\n\nNone urgent. Triage: if `reboot_count` climbs toward the cap (2) across boots, the race is worsening and the bounded wait may need lengthening. Reproduce (no SSH):\n\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_PRIVATE_NIC --limit 50\n```\n'
           } > "$BODY_FILE"
+          # CREATE-ONLY — deliberately NOT create-or-comment like the FIRE/SILENT steps.
+          # reboot_count lives on the ROOT DISK, so once a host self-heals it emits reboot_count>0
+          # on EVERY subsequent tick for the life of that instance. A create-or-comment shape would
+          # therefore post ~48 comments/day, forever, on an issue whose own body says "Action: None
+          # urgent" — and the operator would mute `ci/registry-private-nic`, which ALSO carries the
+          # terminal FIRE. The standing signal is the OPEN ISSUE, not a comment stream.
+          #
+          # Lifecycle: opens once per host instance that self-heals; the NIC-GREEN auto-close
+          # closes it when a replace gives the host a fresh root disk (=> reboot_count=0). That is
+          # the correct span for "this instance experienced the race".
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
           if [[ -n "$EXISTING" ]]; then
-            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Self-heal observed again at ${NOW} — ${DETAIL}. Run: ${RUN_URL}"
+            echo "::notice::private-NIC self-heal advisory already open as #${EXISTING} — not commenting (create-only; the open issue IS the standing signal)."
           else
             gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
               --label "ci/registry-private-nic" --label "observability" --label "domain/engineering" \
