@@ -148,9 +148,16 @@ on a passing AC.
       validate` → success. The `sentry_issue_alert` deprecation warning is **expected** (beta2
       deprecates it for `sentry_alert`; ADR-031 NG9 forbids that until GA) — do not "fix" it.
       *Not TR1 evidence* (it passes `value = -1` too) — this only catches HCL breakage.
-- [ ] **AC6** ADR-096: `grep -c 'deferred to #6285' <adr> || true` → **0**; and one line contains
-      **both** `ZOT_REGISTRY_URL` and `5.3` (same-line — a bare `5.3` grep matches 3 pre-existing
-      lines and is vacuous)
+- [ ] **AC6** ADR-096, **positive-first** (all three verified live — the two positives are absent on
+      `origin/main`, so they fail pre-fix):
+      `grep -c 'opens when \`ZOT_REGISTRY_URL\` is set' <adr>` → **1** ·
+      `grep -c 'closes at task' <adr>` → **1** ·
+      `grep -c 'deferred to #6285' <adr> || true` → **0**.
+      *Two shapes deliberately NOT used:* a **same-line** `ZOT_REGISTRY_URL` + `5.3` grep is
+      unsatisfiable — markdown wraps them onto different lines. And an **absence-grep for the stale
+      `> 3/1h`** false-fails correct work: the corrected ADR legitimately quotes it to explain what
+      shipped wrong ("Its threshold shipped as `> 3/1h` and could never fire"). That is the
+      self-reference trap — AC3 was designed around it; AC6 v2 was not, and it fired here.
 - [ ] **AC7** `grep -c 'zot_mirror_fallback_rate' .github/workflows/apply-sentry-infra.yml` → **≥1**
       (the `-target` at `:265` must survive, else this merges green and never applies)
 - [ ] **AC8** `git diff --name-only origin/main...HEAD | grep -cE 'destroy-guard|scope-guard|counter-sentry' || true`

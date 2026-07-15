@@ -1322,14 +1322,10 @@ resource "sentry_issue_alert" "inbox_action_required_notify_failure" {
 }
 
 # ── zot mirror-staleness fallback-rate alarm (#6278 / ADR-096 "Loud, no-SSH signal") ──
-# APPLY-CREATED. Pages when the runtime zot→GHCR fallback / gate-degrade event rate
-# exceeds >3 in 1h (event_frequency count). The LIVE-RUNTIME complement to the
-# create-time CI degraded signal (mirror_status=degraded → Slack ⚠️ + ::warning::)
-# that merged in #6274 / PR #6276 — this pages the founder on a SUSTAINED post-cutover
-# fallback pattern (a single transient ghcr-fallback is self-healing: the host already
-# served via GHCR — runbook zot-registry-revert.md §"When to revert"). Becomes
-# load-bearing at the ADR-096 Phase-5 GHCR-push retirement, when a silently-missing or
-# unsigned zot copy can gate a host boot and this is the only no-SSH page.
+# APPLY-CREATED. Pages on the FIRST runtime zot→GHCR fallback / gate-degrade event
+# (event_frequency count > 0 in 1h). The LIVE-RUNTIME complement to the create-time CI
+# degraded signal (mirror_status=degraded → Slack ⚠️ + ::warning::) that merged in
+# #6274 / PR #6276.
 #
 # filter_match="any" over the FOUR runtime signal tag-VALUES (NOT feature+op "all"):
 # the two ci-deploy.sh signals carry feature/op, but the inngest/app fresh-boot
@@ -1338,28 +1334,37 @@ resource "sentry_issue_alert" "inbox_action_required_notify_failure" {
 #   registry ∈ {ghcr-fallback, zot-gate-degraded}         (ci-deploy.sh rolling-deploy)
 #   stage    ∈ {inngest_ghcr_fallback, app_ghcr_fallback} (cloud-init.yml fresh boot)
 #
-# SENSITIVITY NOTE (CTO ruling, #6278): event_frequency thresholds PER fingerprinted
-# Sentry issue-group, not on a true cross-signal aggregate. It reliably pages on the
-# DOMINANT shared-tag correlated outage (a rolling-deploy zot miss drives many hosts
-# onto the SAME `ghcr-fallback (web:<tag>)` group → crosses 3/group); a fully-distributed
-# thin spread (<3 in EVERY signal-group simultaneously) would not page. The aggregate
-# `sentry_metric_alert` was REJECTED here — its trigger.action needs a numeric notify
-# target absent from this root (no team data source; the CI-only SENTRY_IAC_AUTH_TOKEN
-# means it is unresolvable in an autonomous session) → would risk paging nobody. The
-# metric-alert upgrade is tracked as a follow-up (unblocks at the first non-founder
-# Sentry seat — the same boundary the sibling rules already defer).
+# ═══ WHY value = 0, AND WHY IT MUST STAY 0 (#6285) ═══
 #
-# PER-SIGNAL grouping asymmetry (observability review, #6278): the three signals do NOT
-# group uniformly. `ghcr-fallback` (message includes registry+image+tag), `zot-gate-degraded`
-# (message includes the reason), and `app_ghcr_fallback` (dedicated `_emit` message) each
-# form their own message-group, so the >3/1h threshold is meaningful for them. But
-# `inngest_ghcr_fallback` is emitted via the SHARED `soleur-boot-emit` static message
-# ("soleur-cloud-init boot stage" — stage is a tag, not the message), so it shares one
-# issue-group with every routine boot stage; that group is effectively always >3/1h, so
-# THIS signal pages on the FIRST inngest fresh-boot fallback — over-loud, the SAFE
-# direction (never a miss). Acceptable: fresh-boot inngest zot misses are rare and any is
-# worth knowing during the soak. Giving inngest its own message-group would mean changing
-# the shared `soleur-boot-emit` grouping for ~10 boot stages — out of scope for this alarm.
+# MECHANISM. `event_frequency` counts the whole Sentry ISSUE-GROUP's events over the
+# interval — `filters_v2` gate whether an event evaluates the rule, they do NOT scope
+# the count. And `registry_pull_event` embeds the unique deploy tag in the MESSAGE
+# (ci-deploy.sh: "image pulled from <reg> (<img>:<tag>)"), so Sentry mints a FRESH
+# issue-group per deploy. The per-group count is therefore bounded by the pulling fleet
+# size — it is NOT a rate.
+#
+# INVARIANT. Any value > 0 is fleet-shape-dependent and silently unreachable whenever
+# the per-group event count cannot exceed it. Sentry compounds this: it short-circuits
+# new groups outright when value > 1 ("Assumes that the first event in a group will
+# always be below the threshold" — sentry/rules/conditions/event_frequency.py), then
+# compares with a STRICT `current_value > value`. value = 0 is the ONLY fleet-
+# independent setting: it fires on the first event of any group, at any fleet size.
+# This is what the original >3/1h got wrong — it could never fire on the rolling-deploy
+# signal, on any fleet smaller than four pullers.
+#
+# DO NOT normalize to the `value = 1` used by web_terminal_boot_fatal below. That works
+# there ONLY because its shared `soleur-boot-emit` group is never new (always already
+# >1). On a fresh per-deploy group, value = 1 means ">1" and a single event does NOT
+# page.
+#
+# CHANGE-TRIGGER. Do not raise above 0 without re-deriving against ci-deploy.sh's
+# message construction. Parity: zot-soak-6122.sh FAILs the Phase-5 gate on >=1 fallback
+# — a threshold above 0 is strictly less sensitive than the gate it exists to pre-warn.
+#
+# GROUPING is per-signal asymmetric (`ghcr-fallback` fresh per deploy; `zot-gate-degraded`
+# per reason; `app_ghcr_fallback` a dedicated static message; `inngest_ghcr_fallback` the
+# shared always-hot `soleur-boot-emit` group) — irrelevant at value = 0, where every group
+# pages on its first event uniformly. Relevant again only if value is ever raised.
 #
 # Distinct `frequency = 23` avoids Sentry POST-time exact-duplicate dedup (taken:
 # 5,10-22,30,60-62; keyed on action_match+filter_match+frequency+actions-shape, NOT
@@ -1377,7 +1382,7 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
     {
       event_frequency = {
         comparison_type = "count"
-        value           = 3
+        value           = 0
         interval        = "1h"
       }
     },

@@ -865,6 +865,14 @@ pull_image_with_fallback() {
     # zot attempted but failed → ATOMIC fallback to GHCR (IMAGE stays the ghcr ref, so
     # cosign follows the GHCR RepoDigest with NO insecure flag). This is the soak gate's
     # watched event; surfaced loudly, not journald-only.
+    #
+    # RETIREMENT TRIPWIRE (#6285): removing this fallback branch is ADR-096 task 5.3, and
+    # it permanently darkens 3 of the 4 signals watched by
+    # sentry_issue_alert.zot_mirror_fallback_rate (infra/sentry/issue-alerts.tf) — retire
+    # that alarm in the SAME PR, or it survives as a green-looking rule that can never
+    # fire. It also removes both events zot-soak-6122.sh reads (:57-58), so re-point or
+    # retire the soak gate too (#6427) — left alone it FAILs open forever. NOT darkened:
+    # zot_gate_degraded_event (:630) is emitted by the GATE, not this pull path.
     logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} — falling back to GHCR"
     # #6400: GHCR fallback leg now recovers on a login-ok/pull-deny cred (retry once).
     if _ghcr_pull_or_recover "$perr"; then
