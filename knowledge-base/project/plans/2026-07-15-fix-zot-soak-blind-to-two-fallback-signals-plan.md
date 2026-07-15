@@ -164,9 +164,9 @@ only `.data | length`, never dereferencing a row. `host_id` is a Hetzner VM inst
 person. `_emit`'s free-form `detail` is structurally unreachable on an `app_ghcr_fallback` event
 (emit at `N>=2`; `pull_err` append at `N>=5`, which exits into `on_err` emitting `stage=pull`).
 
-**Brand-survival threshold:** `single-user incident` — **because of Phase 4**, not because the guarded
-action is irreversible. (That weaker argument was rejected at review: by it, every test guarding an
-irreversible action inherits the threshold and it stops discriminating.) Status quo is a *known-false*
+- **Brand-survival threshold:** `single-user incident` — **because of Phase 4**, not because the
+guarded action is irreversible. (That weaker argument was rejected at review: by it, every test
+guarding an irreversible action inherits the threshold and it stops discriminating.) Status quo is a *known-false*
 parity claim, documented in #6435. A broken landing is a *believed-true* one, because this PR writes
 the assurance into ADR-096. Combined with the prefix trap — which reads as coverage in the header, the
 ADR, and the runbook while matching zero events forever — **a broken landing is strictly worse than
@@ -241,10 +241,12 @@ logs:
   where: sweeper issue comment; GH Actions job log. Emits: Sentry + `logger -t ci-deploy` → Better Stack
   retention: Sentry per-project; GH Actions ~90d
 discoverability_test:
-  command: |
-    cd apps/web-platform && ./node_modules/.bin/vitest run \
-      test/sentry-zot-mirror-fallback-alert-op-contract.test.ts
-  expected_output: "Test Files 1 passed" — incl. the parity leg. NO ssh.
+  # Single shell-safe invocation, runnable from the repo root with NO ssh and no
+  # shell-active tokens (`&&`, pipes, substitution) — preflight Check 10 executes this
+  # verbatim under `env -i` + a 15s cap and REFUSES to run a command containing them.
+  # The earlier `cd apps/web-platform && ...` form was rejected on the `&&`.
+  command: ./apps/web-platform/node_modules/.bin/vitest run --root apps/web-platform test/sentry-zot-mirror-fallback-alert-op-contract.test.ts
+  expected_output: "Test Files  1 passed" — incl. the parity leg + the tag-key pins. NO ssh.
 ```
 
 ## Implementation Phases
