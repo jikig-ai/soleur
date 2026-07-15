@@ -13,56 +13,6 @@ set -euo pipefail
 #   {"exit_code":-3,"reason":"corrupt_state"}   -- state file unparseable
 # Exit-code protocol defined in ci-deploy.sh header (#2205).
 
-# Identify the host that answered this read (#6425). deploy.soleur.ai is a Cloudflare
-# Tunnel hostname and Cloudflare selects a connector per edge colo, so a read of
-# /hooks/deploy-status answers from whichever connector the caller's colo picked —
-# NOT necessarily the host the caller meant. Without this field a wrong-host answer is
-# indistinguishable from a correct one, which is exactly what made #6425 cost 16h.
-# Resolved from the Hetzner metadata service (the hcloud_server id — the SAME value
-# terraform knows, so AC13 can assert identity against a TF-known value rather than
-# self-consistency), with /etc/machine-id as a reboot-stable fallback.
-#
-# SOLEUR-DEBT: 2nd of 3 resolve_host_id copies (ci-deploy.sh source-of-truth, this,
-# inngest-inventory.sh). Kept in sync by test_host_id_drift_guard, NOT a shared sourced
-# lib — sourcing works in infra (ci-deploy.sh sources its env file), but DISTRIBUTING a new script costs
-# ~11 surfaces (push-infra-config.sh, hooks.json.tmpl, infra-config-apply.sh FILE_MAP,
-# infra-config-install.sh DEST_SPEC + its 2 hardcoded counts, server.tf triggers_replace,
-# apply-deploy-pipeline-fix.yml paths, ship-deploy-pipeline-fix-gate.test.ts,
-# ship/SKILL.md) plus the bake path. Upgrade trigger: a 4th copy OR any consumer outside
-# infra/. Tracked: #6465.
-resolve_host_id() {
-  if [[ -n "${SOLEUR_HOST_ID_OVERRIDE:-}" ]]; then
-    printf '%s' "$SOLEUR_HOST_ID_OVERRIDE"
-    return 0
-  fi
-  local url="${SOLEUR_HOST_ID_METADATA_URL:-http://169.254.169.254/hetzner/v1/metadata/instance-id}"
-  local id
-  id=$(curl -sf --max-time 3 "$url" 2>/dev/null || true)
-  if [[ "$id" =~ ^[0-9]+$ ]]; then
-    printf 'hetzner-%s' "$id"
-    return 0
-  fi
-  id=$(tr -d '[:space:]' < /etc/machine-id 2>/dev/null || true)
-  if [[ -n "$id" ]]; then
-    # HASHED, never raw: machine-id(5) says the value "should be considered confidential and
-    # must not be exposed in untrusted environments" — systemd's own guidance is to hash it
-    # per-application (sd_id128_get_machine_app_specific). This fallback now reaches an HTTP
-    # response body and journald -> Vector -> Better Stack (a third-party vendor), which the
-    # ci-deploy.sh original never did. Hashing is LOSSLESS here: host_id only ever needs to be
-    # STABLE and COMPARABLE (same-host vs different-host), never reversible.
-    printf 'machine-%s' "$(printf '%s' "$id" | sha256sum | cut -c1-12)"
-    return 0
-  fi
-  return 1
-}
-# `|| true` is load-bearing: this script is `set -euo pipefail`, and resolve_host_id
-# return 1s when metadata is unreachable AND /etc/machine-id is unreadable. A bare
-# assignment would abort the hook and turn /hooks/deploy-status into a non-200 — losing
-# the whole state read to protect one field. An empty host_id is emitted instead: an
-# ABSENT field is indistinguishable from an old script, an empty one is not.
-HOST_ID="$(resolve_host_id || true)"
-readonly HOST_ID
-
 # Best-effort: systemctl may be unavailable in non-systemd contexts (local
 # tests, containers). `systemctl is-active` prints a canonical state word to
 # stdout and exits non-zero for inactive/failed; the `|| true` swallows the
@@ -391,8 +341,7 @@ jq -nc \
   --argjson sc "$SANDBOX_CANARY" \
   --arg sps "$SECCOMP_PROFILE_SHA256" \
   --argjson sl "$SECCOMP_LIVE" \
-  --arg hid "$HOST_ID" \
-  '$base + $cr + $cd + $sl + {host_id: $hid, sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
+  '$base + $cr + $cd + $sl + {sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,

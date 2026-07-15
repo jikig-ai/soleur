@@ -1,32 +1,30 @@
 #!/usr/bin/env bash
-# Post-merge sequence for #6425 — de-pool web-2 from the shared Cloudflare Tunnel and
-# deliver the host-identity scripts, then verify the invariant and close the issue.
+# Post-merge sequence for #6425 PR A — de-pool web-2 from the shared Cloudflare Tunnel,
+# verify the single-connector invariant (ADR-114 I1), and resolve the issue.
 #
-# This is a SCRIPT, not an operator checklist (hr-ship-message-no-operator-checklist +
-# hr-multi-step-post-merge-bootstrap-script): every step below is `gh`/`curl`/`jq`. It is
-# idempotent and safe to re-run — each stage checks whether it is already satisfied first.
+# A SCRIPT, not an operator checklist (hr-ship-message-no-operator-checklist +
+# hr-multi-step-post-merge-bootstrap-script). Idempotent: re-running after a completed
+# de-pool is a no-op that just re-verifies.
 #
-# WHY THE SEQUENCE IS NOT "MERGE AND DISPATCH" (two P0s, both real):
+# WHY THIS IS SHORT — the two-PR split is what made it short.
+# An earlier single-PR shape carried two compensations that no longer exist here, because
+# PR A is provably HASH-NEUTRAL (it touches no member of local.host_script_files; the
+# host-identity scripts moved to PR B):
 #
-#   P0-a — the de-pool aborts if dispatched too early. `web-2-recreate` runs a coherence
-#   preflight that recomputes local.host_scripts_content_hash from the merged checkout and
-#   asserts it equals the hash baked into web-1's CURRENTLY RUNNING image (PINNED). This PR
-#   edits cat-deploy-state.sh, which IS a member of local.host_script_files (server.tf:19), so
-#   the hash MOVES at merge. Until web-1 is redeployed with the new digest the two disagree and
-#   the preflight exits 1 — loudly, before anything is destroyed. Hence STAGE 1: wait for the
-#   release to land on web-1 before dispatching. This is a REAL gate, not a courtesy sleep.
+#   * No release-digest wait. `web-2-recreate`'s coherence preflight compares
+#     local.host_scripts_content_hash against the hash baked into web-1's RUNNING image.
+#     PR A does not move that hash, so the preflight passes against the CURRENT image and
+#     the de-pool can run the moment the merge lands. (The single-PR shape edited
+#     cat-deploy-state.sh — a baked member — so it had to wait ~40 min for a release to
+#     land first, or the preflight aborted the de-pool. That was P0-a.)
+#   * No `[skip-deploy-fix-apply]` kill switch. PR A changes no deploy-pipeline-fix trigger,
+#     so there is no triggers_replace hash for a racing merge-apply to consume. (That was
+#     P0-b: the racing run spent the trigger against a coin-flipped host, making the later
+#     dispatch a silent no-op.)
 #
-#   P0-b — the DPF re-push silently no-ops if the merge consumed its trigger.
-#   apply-deploy-pipeline-fix.yml applies `-target=terraform_data.deploy_pipeline_fix` with NO
-#   -replace and NO taint, so the provisioner re-runs only when triggers_replace CHANGES. The
-#   merge-triggered run consumes the hash change (pushing to a COIN-FLIPPED host), after which
-#   a later dispatch sees identical contents → no diff → nothing lands on web-1. The
-#   `[skip-deploy-fix-apply]` kill switch in the merge commit is what leaves the trigger
-#   unconsumed; STAGE 0 verifies it was actually used rather than assuming.
-#
-# ORDERING: de-pool BEFORE the re-push. The coin flip poisons its own remediation channel —
-# push-infra-config.sh POSTs to the same coin-flipped deploy. hostname — so the push is only
-# deterministic once exactly one connector remains.
+# Splitting dissolved both rather than compensating for them — which is why 3 of 7 plan
+# reviewers asked for it. PR B (host identity) needs no post-merge script at all: once
+# web-2 is de-pooled, its merge-triggered push lands on web-1 deterministically.
 #
 # Usage:  bash scripts/followthroughs/web2-tunnel-depool-6425.sh [--dry-run]
 # Needs:  gh (authed), doppler (authed; prd_terraform read), jq, curl.
@@ -37,20 +35,7 @@ DRY_RUN=""
 
 REPO="${GH_REPO:-jikig-ai/soleur}"
 ISSUE=6425
-HEALTH_URL="https://app.soleur.ai/health"
-POLL_INTERVAL_S="${POLL_INTERVAL_S:-60}"
-DIGEST_DEADLINE_S="${DIGEST_DEADLINE_S:-2400}"   # 40 min: release build + deploy + verify
-APPLY_DEADLINE_S="${APPLY_DEADLINE_S:-1800}"     # 30 min: the recreate apply
-
-# The repo runs TWO interleaved release trains — `web-v0.214.4` (the web app) and `v3.211.12`
-# (the plugin). `gh release view` with no filter returns whichever is newest, which is often the
-# PLUGIN. app.soleur.ai/health reports the bare web semver ("0.214.4"), so comparing it against
-# an unfiltered latest-release would never match and STAGE 1 would burn its full deadline and
-# then die. Filter to the web train and strip the prefix.
-latest_web_version() {
-  gh release list --repo "$REPO" --limit 30 --json tagName --jq '[.[].tagName | select(startswith("web-v"))][0] // empty' 2>/dev/null \
-    | sed 's/^web-v//'
-}
+APPLY_DEADLINE_S="${APPLY_DEADLINE_S:-1800}"   # 30 min: the recreate apply
 
 say()  { printf '\n=== %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
@@ -61,7 +46,7 @@ command -v gh >/dev/null      || die "gh not on PATH"
 command -v doppler >/dev/null || die "doppler not on PATH"
 command -v jq >/dev/null      || die "jq not on PATH"
 
-# --- census helpers (the AC1 authority; classifier is unit-tested) ---------------------------
+# --- census (the AC1 authority; the classifier is pure + unit-tested) -------------------------
 CENSUS_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/tunnel-connector-census.sh"
 [[ -f "$CENSUS_LIB" ]] || die "census lib not found at $CENSUS_LIB"
 # shellcheck source=../tunnel-connector-census.sh
@@ -82,65 +67,25 @@ census_now() {  # echoes "<verdict> <count>"; never exits non-zero on an API fai
   classify_connector_census "$code" "$body"
 }
 
-
 # =============================================================================================
-say "STAGE 0 — preconditions"
+say "STAGE 0 — where are we?"
 
-BASELINE=$(census_now); info "connector census now: $BASELINE"
+BASELINE=$(census_now); info "connector census: $BASELINE"
 case "$BASELINE" in
   "ok 1")
-    info "Census already 1 — web-2 is de-pooled. Nothing to do here."
-    info "Skipping to STAGE 3 (deliverable-2 delivery + AC13/AC14)."
+    info "Already exactly one connector — the de-pool has run. Re-verifying and resolving."
     SKIP_DEPOOL=1 ;;
-  "multi_connector"*) info "Two+ connectors — the de-pool has not run yet. Proceeding." ;;
-  *) die "census is '$BASELINE' — refusing to proceed on an unreadable/zero census. Investigate first." ;;
+  "multi_connector"*)
+    info "More than one connector — the de-pool has not run yet. Proceeding." ;;
+  *)
+    die "census is '$BASELINE'. Refusing to act on an unreadable or zero census — dispatching
+    a de-pool against an unknown connector state is the coin flip #6425 is about. Investigate
+    first: an unreadable census is usually an expired CF_API_TOKEN in Doppler prd_terraform;
+    a genuine zero means the tunnel is already fully dark." ;;
 esac
 
-# P0-b guard: prove the kill switch was actually used, rather than trusting the merge message.
-if [[ -z "${SKIP_DEPOOL:-}" ]]; then
-  MERGE_MSG=$(gh api "repos/$REPO/commits?sha=main&per_page=20" --jq '.[].commit.message' 2>/dev/null | head -40 || true)
-  if ! printf '%s' "$MERGE_MSG" | grep -qF '[skip-deploy-fix-apply]'; then
-    info "WARNING: no [skip-deploy-fix-apply] in the last 20 main commits."
-    info "If the merge-triggered apply-deploy-pipeline-fix run already consumed the"
-    info "triggers_replace hash, STAGE 3's dispatch will be a NO-OP (P0-b) and AC13/AC14"
-    info "will fail on a stale host. STAGE 3 asserts the outcome, so this is a warning."
-  else
-    info "kill switch present in a recent main commit — the DPF trigger should be unconsumed."
-  fi
-fi
-
 # =============================================================================================
-say "STAGE 1 — wait for the web-1 release digest (gates the coherence preflight, P0-a)"
-
-if [[ -n "$DRY_RUN" ]]; then
-  # The poll loop below blocks for up to DIGEST_DEADLINE_S. A --dry-run that waits 40 minutes
-  # is not a dry run — report the gate and the live delta, then move on.
-  live=$(curl -s --max-time 15 "$HEALTH_URL" | jq -r '.version // empty' 2>/dev/null || true)
-  want=$(latest_web_version || true)
-  info "DRY-RUN: would poll $HEALTH_URL until .version == latest release"
-  info "DRY-RUN: live=${live:-<unreadable>}  latest-release=${want:-<unreadable>}"
-elif [[ -n "${SKIP_DEPOOL:-}" ]]; then
-  info "de-pool already done; skipping the digest gate."
-else
-  EXPECTED_VERSION="${EXPECTED_VERSION:-}"
-  if [[ -z "$EXPECTED_VERSION" ]]; then
-    EXPECTED_VERSION=$(latest_web_version || true)
-  fi
-  [[ -n "$EXPECTED_VERSION" ]] || die "cannot resolve the expected release version (set EXPECTED_VERSION=)"
-  info "expecting app.soleur.ai/health .version == $EXPECTED_VERSION"
-
-  deadline=$(( $(date +%s) + DIGEST_DEADLINE_S ))
-  while :; do
-    live=$(curl -s --max-time 15 "$HEALTH_URL" | jq -r '.version // empty' 2>/dev/null || true)
-    info "live version: ${live:-<unreadable>}"
-    [[ "$live" == "$EXPECTED_VERSION" ]] && { info "digest landed on web-1."; break; }
-    (( $(date +%s) >= deadline )) && die "release digest did not land within ${DIGEST_DEADLINE_S}s (live=${live:-none}, want=$EXPECTED_VERSION). The de-pool would abort on the coherence preflight — investigate the release before re-running."
-    sleep "$POLL_INTERVAL_S"
-  done
-fi
-
-# =============================================================================================
-say "STAGE 2 — de-pool web-2 (scoped dispatch; data volume preserved)"
+say "STAGE 1 — de-pool web-2 (scoped dispatch; data volume preserved)"
 
 if [[ -n "${SKIP_DEPOOL:-}" ]]; then
   info "skipped (census already 1)."
@@ -151,43 +96,40 @@ else
   if [[ -z "$DRY_RUN" ]]; then
     info "dispatched; waiting for the run to complete…"
     sleep 20
-    RID=$(gh run list --repo "$REPO" --workflow=apply-web-platform-infra.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+    RID=$(gh run list --repo "$REPO" --workflow=apply-web-platform-infra.yml \
+      --event=workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')
     info "run: https://github.com/$REPO/actions/runs/$RID"
     timeout "$APPLY_DEADLINE_S" gh run watch "$RID" --repo "$REPO" --exit-status \
-      || die "the web-2-recreate run failed or timed out — see the run log. If it aborted on the coherence preflight, the release digest had not landed (P0-a). If it failed on resource_unavailable, the DC is capacity-starved: flip var.web_hosts[\"web-2\"].location off the starved DC and re-dispatch (the documented 2026-07-13 remedy)."
+      || die "the web-2-recreate run failed or timed out — see the run log.
+    If it failed on 'resource_unavailable', the DC is capacity-starved: web-2 was destroyed
+    and cannot be re-placed, which WEDGES every apply-on-merge (the 2026-07-13 / #6374
+    precedent). Documented lever: flip var.web_hosts[\"web-2\"].location off the starved DC
+    and re-dispatch — each apply re-plans from scratch, so the flip unwedges it."
   fi
 fi
 
 # =============================================================================================
-say "STAGE 2b — AC1: the invariant (vantage-independent)"
+say "STAGE 2 — AC1: the invariant (vantage-independent)"
 
 if [[ -n "$DRY_RUN" ]]; then
   info "DRY-RUN: would assert census == 'ok 1'"
 else
+  # web-2's cloudflared re-registers within seconds of boot if the gate did not apply, so a
+  # brief retry loop distinguishes "still settling" from "the gate is not in the image".
   for attempt in 1 2 3 4 5; do
     V=$(census_now); info "attempt $attempt: census = $V"
     [[ "$V" == "ok 1" ]] && break
-    (( attempt == 5 )) && die "AC1 FAILED: census is '$V', expected 'ok 1'. web-2 may still hold a connector (its cloudflared re-registers within seconds of boot if the gate did not apply). Check that the merged server.tf carries web_tunnel_connector = each.key == \"web-1\"."
+    (( attempt == 5 )) && die "AC1 FAILED: census is '$V', expected 'ok 1'.
+    web-2 still holds a connector. Check that the merged server.tf carries
+    web_tunnel_connector = each.key == \"web-1\", and that the recreate actually re-rendered
+    user_data (it renders only at CREATE — lifecycle.ignore_changes covers it otherwise)."
     sleep 30
   done
-  info "AC1 PASS — exactly one connector."
+  info "AC1 PASS — exactly one connector. deploy./ssh./registry. ingress is now deterministic."
 fi
 
 # =============================================================================================
-say "STAGE 3 — deliver deliverable 2 (now deterministic: web-2 is de-pooled)"
-
-run gh workflow run apply-deploy-pipeline-fix.yml --repo "$REPO" \
-  -f reason="#6425 post-de-pool push of cat-deploy-state.sh + inngest-inventory.sh host_id"
-if [[ -z "$DRY_RUN" ]]; then
-  sleep 20
-  RID2=$(gh run list --repo "$REPO" --workflow=apply-deploy-pipeline-fix.yml --limit 1 --json databaseId --jq '.[0].databaseId')
-  info "run: https://github.com/$REPO/actions/runs/$RID2"
-  timeout "$APPLY_DEADLINE_S" gh run watch "$RID2" --repo "$REPO" --exit-status \
-    || die "the deploy-pipeline-fix run failed — see the run log."
-fi
-
-# =============================================================================================
-say "STAGE 4 — close #6425 (only after AC1 passed)"
+say "STAGE 3 — resolve #$ISSUE (only after AC1 passed)"
 
 if [[ -n "$DRY_RUN" ]]; then
   info "DRY-RUN: would close #$ISSUE"
@@ -202,8 +144,9 @@ else
       info "#$ISSUE already $STATE"
     fi
   else
-    die "refusing to close #$ISSUE — final census is '$FINAL', not 'ok 1'."
+    die "refusing to resolve #$ISSUE — final census is '$FINAL', not 'ok 1'."
   fi
 fi
 
-say "DONE — #6425 post-merge sequence complete."
+say "DONE — web-2 is de-pooled and the invariant is verified."
+info "PR B (host identity) can merge now: its push lands on web-1 deterministically."

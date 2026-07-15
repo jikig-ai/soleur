@@ -43,6 +43,35 @@ Both compensations are encoded in the plan's Phase 7 so the operator's direction
 
 **Split.** But the operator's direction is the default and the plan implements it correctly. This needs an operator decision, not an agent's.
 
+### RESOLVED — 2026-07-15: the operator chose the SPLIT
+
+The challenge was surfaced at review time and the operator ruled: **split into two PRs.** The
+reviewers were right, and the split did what they said it would — it **dissolved** both P0s
+rather than compensating for them:
+
+| | Single PR (the compensated shape) | Split (shipped) |
+|---|---|---|
+| **P0-a** coherence preflight aborts the de-pool | Wait ~40 min for the release digest to land on web-1 first | **Gone.** PR A touches no `host_script_files` member, so the hash never moves and the preflight passes against the CURRENT image. De-pool runs the moment the merge lands. |
+| **P0-b** DPF re-push is a silent no-op | `[skip-deploy-fix-apply]` in the merge commit — mandatory, and easy to forget | **Gone.** PR A changes no deploy-pipeline-fix trigger, so there is no hash for a racing apply to consume. PR B's push lands on web-1 deterministically *because web-2 is already de-pooled*. |
+
+Concretely:
+
+- **PR A** (#6426) — the connector gate + the standing census + the restart-workflow guard +
+  ADR-068/ADR-114/C4. **Hash-neutral** (verified: no member of `local.host_script_files` is
+  touched). Its post-merge script lost the digest wait, the kill switch, and the DPF stage —
+  ~200 lines → ~150, and every remaining line does something.
+- **PR B** — host identity on the read surfaces (`cat-deploy-state.sh` is a baked member, so
+  **this** is the PR that moves the hash) + ADR-082. **Needs no post-merge script at all.**
+
+The P1 also ships faster: PR A can de-pool immediately instead of waiting on a release.
+
+**The lesson worth keeping:** the plan's own principle was *"de-pool first"*, and the single-PR
+shape made that principle unexecutable — the de-pool had to wait on a release that only
+existed because of the other deliverable. Three reviewers converged on the split independently;
+the counter-signal (the advisor consult) argued only that merge-first was forced anyway, which
+was true and beside the point. When a plan needs two mandatory compensations to keep its own
+stated ordering legal, that is the shape telling you it is two changes.
+
 ---
 
 ## UC-2 — `web_tunnel_connector_host` variable vs. hardcoded `each.key == "web-1"` (Taste)

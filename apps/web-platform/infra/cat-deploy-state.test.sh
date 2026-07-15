@@ -7,14 +7,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="$SCRIPT_DIR/cat-deploy-state.sh"
 
-# #6425: MANDATORY, not a convenience. Every test below runs `bash "$TARGET"`, and the target
-# now resolves a host_id. Without this override each invocation issues resolve_host_id's
-# `curl --max-time 3` at the link-local metadata address, which BLACKHOLES off-host (measured:
-# a full 3.0s per call). It also pins determinism: runners have /etc/machine-id, so an unset
-# override falls through to a nondeterministic `machine-<id>`. Tests that exercise resolution
-# itself set their own value inline (a local assignment wins over this export).
-export SOLEUR_HOST_ID_OVERRIDE="hetzner-test-1"
-
 PASS=0
 FAIL=0
 TOTAL=0
@@ -294,40 +286,6 @@ SL7=$(PATH="$MOCK7:$PATH" CI_DEPLOY_STATE="$TMP/ok.state" \
 rm -rf "$MOCK7"; rm -f "$NONJSON_HOST" "$NONJSON_INSPECT"
 assert "case7 empty-hash guard → matches false (not a sha256(\"\") true-match)" \
   "[[ \$(printf '%s' '$SL7' | jq -r .seccomp_profile_loaded_matches_host) == 'false' ]]"
-
-# --- #6425: host_id on the read surface ---
-# deploy.soleur.ai is a tunnel hostname whose connector Cloudflare picks per edge colo, so a
-# response that does not identify its own emitter cannot be told apart from a wrong-host answer.
-# SOLEUR_HOST_ID_OVERRIDE is MANDATORY here: CI runners have /etc/machine-id, so an unset
-# override falls through to a nondeterministic `machine-<id>`.
-HID_OUT=$(CI_DEPLOY_STATE="$TMP/ok.state" SOLEUR_HOST_ID_OVERRIDE="hetzner-4242" bash "$TARGET")
-assert "host_id is emitted top-level" \
-  "[[ \$(printf '%s' '$HID_OUT' | jq -r .host_id) == 'hetzner-4242' ]]"
-assert "host_id does not disturb the exit_code sentinel (#2205)" \
-  "[[ \$(printf '%s' '$HID_OUT' | jq -r .exit_code) == '0' ]]"
-
-# A state file is written by ci-deploy.sh but is attacker-shaped input to THIS reader: it is
-# merged in as $base. jq's `+` is right-wins and the host_id literal is last in the merge chain,
-# so a state file carrying its own host_id must NOT be able to forge the answer.
-printf '%s\n' '{"exit_code":0,"host_id":"evil-forged","services":{}}' > "$TMP/hostile-hid.state"
-HID_CLOBBER=$(CI_DEPLOY_STATE="$TMP/hostile-hid.state" SOLEUR_HOST_ID_OVERRIDE="hetzner-4242" bash "$TARGET")
-assert "a state-file host_id CANNOT clobber the resolved one" \
-  "[[ \$(printf '%s' '$HID_CLOBBER' | jq -r .host_id) == 'hetzner-4242' ]]"
-
-# Fail-soft: resolve_host_id return-1s when metadata is unreachable AND machine-id is unreadable.
-# `set -euo pipefail` + a bare assignment would abort the hook (non-200), losing the entire state
-# read to protect one field. Point the metadata seam at a closed port to prove the read survives
-# an unreachable metadata service and still exits 0 with parseable JSON.
-# `|| NOMETA_RC=$?` is load-bearing: this suite is `set -euo pipefail`, so a bare
-# `X=$(cmd); RC=$?` ABORTS the whole suite the moment cmd is non-zero — meaning RC could only
-# ever hold 0 and the "exit 0" assertion below could never fail. That is a false-PASS anchor
-# (the fea871b40 class), not a test. The `||` catches the failure so the rc is real.
-NOMETA_RC=0
-HID_NOMETA=$(CI_DEPLOY_STATE="$TMP/ok.state" SOLEUR_HOST_ID_OVERRIDE="" \
-  SOLEUR_HOST_ID_METADATA_URL="http://127.0.0.1:1/dead" bash "$TARGET") || NOMETA_RC=$?
-assert "unreachable metadata does not abort the hook (exit 0)" "[[ '$NOMETA_RC' == '0' ]]"
-assert "unreachable metadata still emits parseable JSON with a host_id key" \
-  "printf '%s' '$HID_NOMETA' | jq -e 'has(\"host_id\")' >/dev/null"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
