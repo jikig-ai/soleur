@@ -265,7 +265,7 @@ fi
 # mode case so it works in every mode; default (no fail-token armed) = login ok, matching
 # the pre-existing fall-through behavior every legacy login relied on.
 if [[ "${1:-}" == "login" ]]; then
-  _luser=""; _stdin=0; _prev=""
+  _lreg="${2:-}"; _luser=""; _stdin=0; _prev=""
   for _a in "$@"; do
     [[ "$_a" == "--password-stdin" ]] && _stdin=1
     [[ "$_prev" == "-u" ]] && _luser="$_a"
@@ -273,6 +273,13 @@ if [[ "${1:-}" == "login" ]]; then
   done
   _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$(cat)"
   [[ -n "${MOCK_LOGIN_ARGS_FILE:-}" ]] && printf 'LOGIN:%s\n' "$_luser" >> "$MOCK_LOGIN_ARGS_FILE"
+  # #6483: fail the ZOT login with a caller-supplied stderr so a test can exercise each
+  # zot_login_class enum member. Registry-scoped (never ghcr.io) so arming it cannot
+  # perturb the GHCR legs the #6400/#6090 tests assert on.
+  if [[ -n "${MOCK_ZOT_LOGIN_FAIL_STDERR:-}" && "$_lreg" == "10.0.1.30:5000" ]]; then
+    printf '%s\n' "${MOCK_ZOT_LOGIN_FAIL_STDERR}" >&2
+    exit 1
+  fi
   if [[ -n "${MOCK_GHCR_LOGIN_FAIL_TOKEN:-}" && "$_ltok" == "${MOCK_GHCR_LOGIN_FAIL_TOKEN}" ]]; then
     echo "denied: authentication required" >&2
     exit 1
@@ -3402,6 +3409,137 @@ if printf '%s' "$HELPER_BODY" | grep -q 'docker login ghcr.io'; then
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: AC13 — recovery relogin must target ghcr.io"
 fi
+
+# --- #6483: zot login failure is DISCRIMINATING (WEB-PLATFORM-5B) -----------------------
+# The gate discarded `docker login` stderr (`>/dev/null 2>&1`), so `login_failed` was one
+# undifferentiated bucket for bad-credential / authz-denial / transport / TLS. These assert
+# the stderr CONTENT classifies into a fixed enum, that 401 and 403 land in DIFFERENT
+# buckets (the H3-vs-H4 discriminator this exists to provide), and that raw stderr never
+# reaches the Sentry payload.
+
+# Arms a zot-configured deploy whose ZOT login fails with a caller-supplied stderr, and
+# captures the Sentry POST bodies. Echoes nothing; the caller greps the capture file.
+run_deploy_zot_login_stderr() {
+  local sentry_file="$1" zot_stderr="$2"
+  (
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    export MOCK_ZOT_CONFIGURED=1
+    export MOCK_ZOT_LOGIN_FAIL_STDERR="$zot_stderr"
+    export MOCK_SENTRY_CAPTURE_FILE="$sentry_file"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    bash "$DEPLOY_SCRIPT" >/dev/null 2>&1 || true
+  )
+}
+
+# T-5B-1..5: one case per zot_login_class enum member. Each asserts the gate still emits
+# login_failed AND that the specific class rides along.
+assert_zot_login_class() {
+  local label="$1" stderr="$2" want_class="$3" want_http="${4:-}"
+  TOTAL=$((TOTAL + 1))
+  local sf; sf=$(mktemp)
+  run_deploy_zot_login_stderr "$sf" "$stderr"
+  local ok=1
+  grep -q 'zot gate degraded (login_failed)' "$sf" || ok=0
+  grep -q "\"zot_login_class\": *\"${want_class}\"" "$sf" || ok=0
+  if [[ -n "$want_http" ]]; then
+    grep -q "\"zot_login_http\": *\"${want_http}\"" "$sf" || ok=0
+  fi
+  if [[ "$ok" == "1" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: ${label} → zot_login_class=${want_class}${want_http:+ http=$want_http}"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: ${label} — expected zot_login_class=${want_class}${want_http:+ + zot_login_http=$want_http}"
+    echo "        sentry:"; sed 's/^/          /' "$sf"
+  fi
+  rm -f "$sf"
+}
+
+echo "--- #6483 T-5B-1..5: docker login stderr classifies into the zot_login_class enum ---"
+assert_zot_login_class "401 stale htpasswd (H3)" \
+  'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 401 Unauthorized' \
+  'authn_rejected' '401'
+assert_zot_login_class "403 accessControl denial (H4)" \
+  'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 403 Forbidden' \
+  'authz_denied' '403'
+assert_zot_login_class "insecure-registries gap" \
+  'Error response from daemon: Get "https://10.0.1.30:5000/v2/": http: server gave HTTP response to HTTPS client' \
+  'tls_mismatch'
+assert_zot_login_class "transport failure" \
+  'Error response from daemon: Get "http://10.0.1.30:5000/v2/": dial tcp 10.0.1.30:5000: connect: connection refused' \
+  'transport'
+assert_zot_login_class "unrecognized stderr" \
+  'Error response from daemon: something entirely unexpected happened' \
+  'unclassified'
+
+# T-5B-6 (task 1.2): the enum's whole purpose is discriminating power. A tls_mismatch that
+# collapses into authn_rejected would send the operator hunting a credential bug that does
+# not exist.
+echo "--- #6483 T-5B-6: tls_mismatch must NOT classify as authn_rejected ---"
+TOTAL=$((TOTAL + 1))
+SF_TLS=$(mktemp)
+run_deploy_zot_login_stderr "$SF_TLS" 'Error response from daemon: Get "https://10.0.1.30:5000/v2/": http: server gave HTTP response to HTTPS client'
+if grep -q '"zot_login_class": *"tls_mismatch"' "$SF_TLS" \
+   && ! grep -q '"zot_login_class": *"authn_rejected"' "$SF_TLS"; then
+  PASS=$((PASS + 1)); echo "  PASS: tls_mismatch stays out of the authn_rejected bucket"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: tls_mismatch collapsed into authn_rejected (enum has no discriminating power)"
+  echo "        sentry:"; sed 's/^/          /' "$SF_TLS"
+fi
+rm -f "$SF_TLS"
+
+# T-5B-7 (task 1.2b — LOAD-BEARING): the precedent classifier _pull_result_is_auth_denied
+# (:530) greps 'unauthorized|denied|forbidden' as ONE bucket. Copying it verbatim collapses
+# H3 (401, stale htpasswd) and H4 (403, accessControl) together and the probe cannot tell
+# which fix to apply — reintroducing the exact ambiguity #6483 exists to remove.
+echo "--- #6483 T-5B-7: 403 must NOT classify as authn_rejected (H3/H4 split) ---"
+TOTAL=$((TOTAL + 1))
+SF_403=$(mktemp)
+run_deploy_zot_login_stderr "$SF_403" 'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 403 Forbidden'
+if grep -q '"zot_login_class": *"authz_denied"' "$SF_403" \
+   && ! grep -q '"zot_login_class": *"authn_rejected"' "$SF_403"; then
+  PASS=$((PASS + 1)); echo "  PASS: 403 → authz_denied, distinct from 401 → authn_rejected"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: 403 collapsed into authn_rejected — H3 and H4 are indistinguishable"
+  echo "        sentry:"; sed 's/^/          /' "$SF_403"
+fi
+rm -f "$SF_403"
+
+# T-5B-8 (task 1.3): payload hygiene. A registry error string can echo a username, so the
+# enum is the ONLY thing that may cross the boundary — never the raw stderr.
+echo "--- #6483 T-5B-8: raw docker login stderr never reaches the Sentry payload ---"
+TOTAL=$((TOTAL + 1))
+SF_HYG=$(mktemp)
+run_deploy_zot_login_stderr "$SF_HYG" 'Error response from daemon: login attempt failed with status: 401 Unauthorized SENTINEL_LEAK_CANARY_zot-pull'
+if grep -q '"zot_login_class": *"authn_rejected"' "$SF_HYG" \
+   && ! grep -q 'SENTINEL_LEAK_CANARY' "$SF_HYG"; then
+  PASS=$((PASS + 1)); echo "  PASS: stderr classified to the enum; raw stderr absent from the payload"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: raw docker login stderr leaked into the Sentry payload"
+  echo "        sentry:"; sed 's/^/          /' "$SF_HYG"
+fi
+rm -f "$SF_HYG"
+
+# T-5B-9 (task 1.6): the 14 live WEB-PLATFORM-5B events carry no host attribution, so
+# "which host" was unanswerable. Reuses the #6396 host_id precedent from pull_failure_event.
+echo "--- #6483 T-5B-9: zot_gate_degraded_event carries host_id ---"
+TOTAL=$((TOTAL + 1))
+SF_HID=$(mktemp)
+run_deploy_zot_login_stderr "$SF_HID" 'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 401 Unauthorized'
+if grep -q 'zot gate degraded (login_failed)' "$SF_HID" && grep -q '"host_id":' "$SF_HID"; then
+  PASS=$((PASS + 1)); echo "  PASS: zot_gate_degraded_event is host-attributable"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: zot_gate_degraded_event has no host_id tag"
+  echo "        sentry:"; sed 's/^/          /' "$SF_HID"
+fi
+rm -f "$SF_HID"
 
 # Restore strict mode for the summary/exit.
 set -e -o pipefail

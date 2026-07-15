@@ -624,7 +624,44 @@ registry_pull_event() {
   fi
 }
 
-# zot_gate_degraded_event <reason>: WARNING beacon for when zot is CONFIGURED
+# _zot_login_failure_class <stderr-content> (#6483): classify a FAILED zot `docker login`
+# into a fixed enum. Takes the stderr CONTENT as $1 (the caller passes `tail -c 400 "$zerr"`,
+# never the path — the precedent's security/P2-E trap).
+#
+# NOT _pull_result_is_auth_denied (:530). That predicate greps
+# 'unauthorized|denied|forbidden' as ONE bucket, which is correct for its job (is this an
+# auth problem at all?) and wrong for this one: it collapses 401 and 403 together, and the
+# 401-vs-403 split is the ENTIRE discriminating value here. 401 ⇒ the host's boot-baked
+# htpasswd no longer matches the token (a credential-lifecycle defect, fixed in Terraform);
+# 403 ⇒ the credential is fine and zot's accessControl is rejecting the user (a config
+# defect, fixed in cloud-init). Same symptom, different subsystem, opposite fix. Copying the
+# precedent verbatim would reproduce the exact ambiguity #6483 exists to remove.
+#
+# Order is load-bearing: authn before authz, because dockerd renders a 401 as
+# "denied: authentication required" — a bare 'denied' match would steal it into authz.
+_zot_login_failure_class() {
+  local e="${1:-}"
+  if printf '%s' "$e" | grep -qiE '\b401\b|unauthorized|authentication required|incorrect username or password'; then
+    printf 'authn_rejected'
+  elif printf '%s' "$e" | grep -qiE '\b403\b|forbidden|denied|access to the resource is denied'; then
+    printf 'authz_denied'
+  elif printf '%s' "$e" | grep -qiE 'server gave HTTP response to HTTPS client'; then
+    printf 'tls_mismatch'
+  elif printf '%s' "$e" | grep -qiE 'connection refused|no route to host|context deadline exceeded|i/o timeout|timed out|timeout'; then
+    printf 'transport'
+  else
+    printf 'unclassified'
+  fi
+}
+
+# _zot_login_http_status <stderr-content> (#6483): scrape the HTTP status dockerd echoes on a
+# login rejection ("failed with status: 401 Unauthorized"). Empty when absent — a transport
+# failure never reached a server, so it HAS no status, and an empty tag says exactly that.
+_zot_login_http_status() {
+  printf '%s' "${1:-}" | grep -oE 'status:[[:space:]]*[45][0-9]{2}' | grep -oE '[45][0-9]{2}' | head -1 || true
+}
+
+# zot_gate_degraded_event <reason> [login_class] [login_http]: WARNING beacon for when zot is CONFIGURED
 # (ZOT_REGISTRY_URL present) but the dark-launch gate could not activate it — the fleet
 # silently reverts to the GHCR path on the frequent rolling-deploy path WITHOUT a
 # registry=ghcr-fallback pull event (the pull path never attempts zot, so pull_image_with_
@@ -634,14 +671,22 @@ registry_pull_event() {
 # when ZOT_REGISTRY_URL is set. reason ∈ {probe_unreachable, creds_absent, login_failed}.
 # Fail-open, same Sentry store transport as pull_failure_event.
 zot_gate_degraded_event() {
-  local reason="$1"
+  local reason="$1" login_class="${2:-}" login_http="${3:-}"
   logger -t "$LOG_TAG" "ZOT_GATE_DEGRADED: reason=$reason (configured but inactive — GHCR path)"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
-    payload="$(jq -n --arg r "$reason" \
+    # #6483: zot_login_class + zot_login_http make `login_failed` DIAGNOSABLE — it was one
+    # undifferentiated bucket for credential/authz/transport/TLS, so 14 live WEB-PLATFORM-5B
+    # events could not say which. Both are empty for the non-login reasons
+    # (probe_unreachable, creds_absent), which have no login outcome to report.
+    # host_id reuses the #6396 pull_failure_event precedent: the beacon carried no host
+    # attribution, so "which host" was unanswerable from Sentry alone. HOST_ID is empty-safe.
+    # ONLY the enum + status code cross this boundary — never the raw stderr, which can echo
+    # a username (and, from some registries, the attempted credential).
+    payload="$(jq -n --arg r "$reason" --arg h "${HOST_ID:-}" --arg lc "$login_class" --arg lh "$login_http" \
       '{message: ("zot gate degraded (" + $r + ") — configured but inactive, using GHCR"),
         level: "warning", platform: "other", logger: "ci-deploy",
-        tags: {feature: "supply-chain", op: "image-pull", registry: "zot-gate-degraded", zot_gate_reason: $r}}' 2>/dev/null)" || return 0
+        tags: {feature: "supply-chain", op: "image-pull", registry: "zot-gate-degraded", zot_gate_reason: $r, host_id: $h, zot_login_class: $lc, zot_login_http: $lh}}' 2>/dev/null)" || return 0
     curl -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
@@ -805,13 +850,25 @@ zot_gate_and_login() {
     zot_gate_degraded_event creds_absent
     return 0
   fi
-  if printf '%s' "$ztoken" | docker login "$ZOT_REGISTRY_URL" -u "$zuser" --password-stdin >/dev/null 2>&1; then
+  # #6483: capture the login stderr instead of discarding it. `>/dev/null 2>&1` here was the
+  # reason WEB-PLATFORM-5B was undiagnosable: it destroyed the one datum that says WHICH
+  # failure this is, at the source, and the registry host is deny-all/no-SSH so zot's own
+  # auth log is not shipped either. The stderr is classified to a fixed enum before anything
+  # leaves this function; the raw text is never emitted and dies with the temp file.
+  local zerr; zerr="$(mktemp)"
+  if printf '%s' "$ztoken" | docker login "$ZOT_REGISTRY_URL" -u "$zuser" --password-stdin >/dev/null 2>"$zerr"; then
     ZOT_ACTIVE=1
     logger -t "$LOG_TAG" "ZOT_GATE: active — docker login $ZOT_REGISTRY_URL ok (zot-primary)"
   else
-    logger -t "$LOG_TAG" "ZOT_GATE: docker login $ZOT_REGISTRY_URL FAILED — GHCR path (fallback)"
-    zot_gate_degraded_event login_failed
+    local zdetail zclass zhttp
+    zdetail="$(tail -c 400 "$zerr" 2>/dev/null || true)"
+    zclass="$(_zot_login_failure_class "$zdetail")"
+    zhttp="$(_zot_login_http_status "$zdetail")"
+    zdetail=""
+    logger -t "$LOG_TAG" "ZOT_GATE: docker login $ZOT_REGISTRY_URL FAILED class=$zclass http=${zhttp:-none} — GHCR path (fallback)"
+    zot_gate_degraded_event login_failed "$zclass" "$zhttp"
   fi
+  rm -f "$zerr"
   ztoken=""
 }
 

@@ -216,9 +216,37 @@ write_files:
       # (2f) Boot discriminator — the immutable redeploy reuses the terraform hostname, so boot_id is
       # what cleanly separates old-host from new-host events for the automated decision rule.
       BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
+      # (2g) #6483 — htpasswd-vs-Doppler divergence detector. THE decisive, no-SSH signal for the
+      # WEB-PLATFORM-5B class: /etc/zot/htpasswd is baked ONCE at boot from these tokens, so a
+      # rotation (or a boot that raced the secret write) leaves the host authenticating against a
+      # value no client still presents — and nothing else on this deny-all host can report it.
+      # Comparing Doppler to Doppler proves nothing (both copies derive from the same
+      # random_password and agree BY CONSTRUCTION even when both have drifted from the host); the
+      # only comparison with evidentiary value is host-htpasswd vs the CURRENT token, which is
+      # exactly this. `htpasswd -vb` verifies a password against the file and emits only a fixed
+      # status line ("Password for user X correct." / "password verification failed") — the token
+      # is NEVER printed; verified on ubuntu:24.04 (the shipped host image): exit 0 = match,
+      # exit 3 = mismatch. Output is discarded regardless; a BOOLEAN is all that crosses the
+      # boundary. apache2-utils is already in `packages:` (:18), so htpasswd is on the host.
+      # Both tokens are in the env: the cron wraps this under `doppler run --project
+      # soleur-registry --config prd`, whose isolated config holds exactly these three secrets.
+      # Expected under H3: htpasswd_pull_matches=false htpasswd_push_matches=true — the E4
+      # asymmetry (crane/cosign push authenticating while the pull login is rejected), proven
+      # from inside the host rather than inferred from the outside.
+      if [ -f /etc/zot/htpasswd ]; then
+        htpasswd -vb /etc/zot/htpasswd "${zot_pull_user}" "$ZOT_PULL_TOKEN" >/dev/null 2>&1 && HTP_PULL=true || HTP_PULL=false
+        htpasswd -vb /etc/zot/htpasswd "${zot_push_user}" "$ZOT_PUSH_TOKEN" >/dev/null 2>&1 && HTP_PUSH=true || HTP_PUSH=false
+      else
+        # Distinct from false: the file is absent, not diverged. Never conflate "cannot tell"
+        # with "does not match" — a missing htpasswd is a different (worse) defect.
+        HTP_PULL=unknown; HTP_PUSH=unknown
+      fi
+      # An unset token would make -vb fail and read as a spurious mismatch; say so instead.
+      [ -n "$${ZOT_PULL_TOKEN:-}" ] || HTP_PULL=unknown
+      [ -n "$${ZOT_PUSH_TOKEN:-}" ] || HTP_PUSH=unknown
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
