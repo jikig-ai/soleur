@@ -9,22 +9,28 @@
 // shown that the user's own repo didn't produce.
 //
 // Empty-vs-throw (load-bearing — CPO / observability):
-//   - The throw-guarantee is scoped to the GitHub LIST call only: once we have a
-//     repo + installation, a listRepoIssues failure (404/403/5xx) THROWS so the
-//     route → 502 and the tool → isError. A list failure must NEVER masquerade
-//     as "no issues."
-//   - return [] (honest empty board) when no repo is connected OR no installation
-//     id resolves (lost grant — mirrored to Sentry here). NOTE: the upstream
-//     resolvers (getCurrentRepoUrl, resolveInstallationId) FAIL-OPEN to null on
-//     transient DB/auth errors too — those also collapse to [] here, but they
-//     mirror to Sentry UPSTREAM, so a degraded resolve is still observable.
+//   - `[]` is reserved STRICTLY for (a) no repo connected, and (b) a connected
+//     repo whose listRepoIssues genuinely yields zero issues. Nothing else.
+//   - EVERY degraded read THROWS `WorkstreamDegradedError` (route → 502, tool →
+//     isError), so a degrade can never masquerade as "no issues." Previously a
+//     transient resolve failure (cold token cache / connection pool → repoUrl
+//     null-from-error; or a lost/blipped installation) collapsed to a 200 `[]`,
+//     and SWR replaced the board's data with the empty payload → a FALSE
+//     "No issues to display" flash mid-refresh. Now those paths mirror to Sentry
+//     AND throw, so SWR keeps the prior issues + shows the amber "showing the
+//     last loaded issues" banner instead. The GitHub LIST failure already threw.
+//   - Every throw site mirrors to Sentry FIRST (mirror-precedes-throw): the HTTP
+//     route skips re-capture for WorkstreamDegradedError to avoid a double event,
+//     and the agent-tool caller does no capture of its own — so the source mirror
+//     is the sole Sentry event on both callers.
 
 import {
   githubIssueToWorkstreamIssue,
+  WorkstreamDegradedError,
   type WorkstreamIssue,
 } from "@/lib/workstream";
 import { getAppSlug } from "@/server/github-app";
-import { getCurrentRepoUrl } from "@/server/current-repo-url";
+import { readCurrentRepoUrlResult } from "@/server/current-repo-url";
 import { parseConnectedRepo } from "@/server/github-repo-parse";
 import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { resolveEffectiveInstallationId } from "@/server/cc-effective-installation";
@@ -94,7 +100,25 @@ async function readBoardStatuses(
 export async function getWorkstreamIssues(
   userId: string,
 ): Promise<WorkstreamIssue[]> {
-  const repoUrl = await getCurrentRepoUrl(userId);
+  const { url: repoUrl, degraded } = await readCurrentRepoUrlResult(userId);
+  if (degraded) {
+    // P2: the current repo couldn't be resolved due to a TRANSIENT failure
+    // (cold token cache → RuntimeAuthError, or a cold connection pool →
+    // workspaces query error). It is already mirrored upstream at WARN/ERROR
+    // under feature:repo-scope (ADR-059), but that shared quiet signal is not
+    // queryable under the board's own feature — so mirror a workstream-scoped
+    // event FIRST (mirror-precedes-throw; the route skips re-capture for the
+    // typed error, the agent tool does no capture), THEN throw so this surfaces
+    // as a 502/isError instead of a false empty board.
+    reportSilentFallback(new Error("current repo unresolved (degraded read)"), {
+      feature: "workstream",
+      op: "repo-unresolved",
+      extra: { userId },
+    });
+    throw new WorkstreamDegradedError(
+      "workstream read degraded: current repo unresolved",
+    );
+  }
   const parsed = parseConnectedRepo(repoUrl);
   if (!parsed) return []; // honest empty: no repo connected
 
@@ -105,15 +129,18 @@ export async function getWorkstreamIssues(
     repoUrl,
   });
   if (installationId === null) {
-    // repoUrl present but no installation resolvable (revoked/lost grant) — this
-    // is a degraded read, not "no issues": mirror to Sentry, then empty board
-    // (cq-silent-fallback-must-mirror-to-sentry).
+    // P1: repoUrl present but no installation resolvable (revoked/lost grant OR
+    // a transient RPC blip) — a DEGRADED read, not "no issues". Mirror to Sentry
+    // FIRST (cq-silent-fallback-must-mirror-to-sentry; mirror-precedes-throw),
+    // then throw so the board 502s instead of flashing a false EmptyState.
     reportSilentFallback(new Error("no installation for connected repo"), {
       feature: "workstream",
       op: "no-installation",
       extra: { userId },
     });
-    return [];
+    throw new WorkstreamDegradedError(
+      "workstream read degraded: no installation for connected repo",
+    );
   }
 
   // Throws on any GitHub API failure (404/403/5xx) — caller surfaces 502/isError.
