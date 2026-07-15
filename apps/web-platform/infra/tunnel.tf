@@ -46,18 +46,13 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
     # `cloudflared access tcp --hostname registry.<base>` → this rule → tcp://10.0.1.30:5000
     # (zot). First-match; MUST stay above the 404.
     #
-    # (#6416) This comment used to read "THE web host's cloudflared (already a 10.0.1.0/24
-    # member)" — singular, and false. This is ONE tunnel with MULTIPLE connector replicas
-    # (web-1 and web-2 both run cloudflared against it; `cloudflared tunnel info` showed 2
-    # connectors / 8 QUIC conns), and Cloudflare load-balances across them. So this rule is
-    # correct ONLY while EVERY connector host is a 10.0.1.0/24 member — that is ADR-114's
-    # invariant I1 (connector homogeneity). web-2 had NO private-net attachment, so ~50% of
-    # registry-bridge attempts landed on a connector with no route to 10.0.1.30 and failed.
-    #
-    # This rule is nonetheless the RIGHT pattern and the one to generalize: its service is
-    # private-net-RELATIVE (10.0.1.30), so whichever replica answers proxies to the correct
-    # origin. Contrast `ssh://localhost:22` below, which is connector-relative and therefore
-    # host-NONdeterministic (ADR-114 I2).
+    # (#6416) "A web-host cloudflared connector", NOT "THE web host's" — this is ONE tunnel with
+    # MULTIPLE connector replicas, and CF load-balances across them. So this rule is correct only
+    # while EVERY connector host is a 10.0.1.0/24 member (ADR-114 invariant I1); web-2 was not.
+    # It is nonetheless the RIGHT pattern and the one to generalize — its service is
+    # private-net-RELATIVE, so whichever replica answers proxies to the correct origin. Contrast
+    # `ssh://localhost:22` below, which is connector-relative and host-NONdeterministic (I2).
+    # Failure rates and the topology rationale live in ADR-114 — do not restate them here.
     #
     # `tcp://`, NOT `http://` (#6122 cutover fix): `cloudflared access tcp` bridges a RAW TCP
     # stream over a WebSocket. With an `http://` service the origin cloudflared HTTP-proxies the

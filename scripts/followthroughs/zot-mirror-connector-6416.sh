@@ -2,8 +2,10 @@
 # Follow-through verification for #6416 (web-2 private-net attach + tunnel
 # connector homogeneity + the un-masked zot mirror signal).
 #
-# WHAT WAS BROKEN (measured 2026-07-15, last 14 completed release runs):
-#   bridge conclusion = success   mirror = skipped     ... 14/14
+# WHAT WAS BROKEN (measured 2026-07-15, 16 most recent completed release runs that
+# built an image):
+#   bridge conclusion = success   mirror = skipped   ... 15
+#   bridge conclusion = success   mirror = success   ...  1
 # The bridge carries `continue-on-error: true`, so its CONCLUSION is forced to
 # "success" even when it truly failed. The mirror was gated
 # `if: steps.zot_bridge.outcome == 'success'`, so it SKIPPED — and a skipped step
@@ -12,7 +14,8 @@
 #   Error response from daemon: Get "http://127.0.0.1:5000/v2/": context deadline
 #   exceeded (Client.Timeout exceeded while awaiting headers)
 # i.e. cloudflared's local forward opened, but the CF tunnel connector that answered
-# had no route to zot at 10.0.1.30:5000. zot has therefore NEVER been backfilled.
+# had no route to zot at 10.0.1.30:5000. zot has therefore been backfilled at most once
+# across that window — every other release fell silently through to GHCR.
 #
 # THE TWO SIGNALS THIS PROBE READS, and why:
 #
@@ -34,12 +37,14 @@
 #      resolved `127.0.0.1:5000/...`.
 #
 # WHY N=5. #6416's mechanism is statistical: the ONE tunnel load-balances across
-# connector replicas, so a fix could look green by luck. Observed reality is worse
-# than the ~50% that model predicts (14/14 failed), which makes any green mirror
-# already strong evidence — but N=5 consecutive stays the conservative gate. Runs
-# where docker_build did not succeed are NOT data points (no image was built, so
-# there was nothing to mirror); counting them green would manufacture a PASS out of
-# inactivity.
+# connector replicas, so a fix could look green by luck. The observed pre-fix rate is
+# ~94% failure (15 of 16) — heavily skewed toward the unattached replica, but NOT
+# pinned: one run did succeed, which is why a single green mirror proves nothing and
+# N=5 consecutive is the gate. (An earlier draft of this header said "14/14" and
+# inferred pinning; a later run falsified it. A rate quoted from a snapshot is a claim
+# with a timestamp.) Runs where docker_build did not succeed are NOT data points — no
+# image was built, so there was nothing to mirror; counting them green would
+# manufacture a PASS out of inactivity.
 #
 # Exit semantics (per sweep-followthroughs.sh contract):
 #   0 = PASS       (>=5 consecutive clean mirrors; sweeper closes #6416)
@@ -184,7 +189,7 @@ done <<<"$RUNS"
 
 if [[ "$ok" -ge "$NEED" ]]; then
   echo "PASS: ${ok}/${NEED} consecutive releases ran the zot mirror with no degraded signal."
-  echo "  Baseline for contrast: 14/14 releases before the fix skipped the mirror entirely."
+  echo "  Baseline for contrast: 15 of the 16 releases before the fix skipped the mirror entirely."
   exit 0
 fi
 

@@ -71,20 +71,30 @@ echo "=== ${#EXPECTED_SITES[@]} sites all carry the canonical [ack-destroy] rege
 WF="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
 hc_fail=0
 
+# The three literals below are the workflow's SOURCE TEXT, matched with `grep -F`. The single
+# quotes are load-bearing: the text contains `$host_creates` verbatim, and letting the shell
+# expand it would search for the empty string and pass vacuously — the exact false-green this
+# block exists to prevent.
+# shellcheck disable=SC2016
+HALT_PATTERN='if [[ "$host_creates" -gt 0 ]]; then'
+# shellcheck disable=SC2016
+SUM_PATTERN='destroy_count=$((resource_deletes + nested_deletes + reboot_updates))'
+# shellcheck disable=SC2016
+NUMERIC_PATTERN='! "$host_creates" =~ ^[0-9]+$'
+
 # (1) The HALT exists at all.
-if grep -qF 'if [[ "$host_creates" -gt 0 ]]; then' "$WF"; then
+if grep -qF "$HALT_PATTERN" "$WF"; then
   echo "[ok] host_creates HALT present"
 else
   echo "[FAIL] host_creates HALT missing from apply-web-platform-infra.yml — a per-PR apply can birth an unattached host (#6416)" >&2
   hc_fail=$((hc_fail + 1))
 fi
 
-# (2) The HALT precedes the destroy_count sum. This is what makes it
-# ack-INDEPENDENT: `[ack-destroy]` is parsed and consulted only by the destroy
-# gate below the sum, so a HALT above it cannot be typed past. Order is the
-# guarantee — assert the order, not just the presence.
-halt_line=$(grep -nF 'if [[ "$host_creates" -gt 0 ]]; then' "$WF" | head -1 | cut -d: -f1)
-sum_line=$(grep -nF 'destroy_count=$((resource_deletes + nested_deletes + reboot_updates))' "$WF" | head -1 | cut -d: -f1)
+# (2) The HALT precedes the destroy_count sum. This is what makes it ack-INDEPENDENT:
+# `[ack-destroy]` is parsed and consulted only by the destroy gate below the sum, so a HALT
+# above it cannot be typed past. Order is the guarantee — assert the order, not just presence.
+halt_line=$(grep -nF "$HALT_PATTERN" "$WF" | head -1 | cut -d: -f1)
+sum_line=$(grep -nF "$SUM_PATTERN" "$WF" | head -1 | cut -d: -f1)
 if [[ -n "$halt_line" && -n "$sum_line" && "$halt_line" -lt "$sum_line" ]]; then
   echo "[ok] host_creates HALT (line $halt_line) precedes the destroy_count sum (line $sum_line) — no [ack-destroy] bypass"
 else
@@ -92,10 +102,10 @@ else
   hc_fail=$((hc_fail + 1))
 fi
 
-# (3) host_creates is in the fail-closed numeric validation. Without it an empty
-# value from a jq failure evaluates false in the `-gt 0` test and the guard ships
-# fail-OPEN — the exact hazard that block's own comment documents.
-if grep -qF '! "$host_creates" =~ ^[0-9]+$' "$WF"; then
+# (3) host_creates is in the fail-closed numeric validation. Without it an empty value from a
+# jq failure evaluates false in the `-gt 0` test and the guard ships fail-OPEN — the exact
+# hazard that block's own comment documents.
+if grep -qF "$NUMERIC_PATTERN" "$WF"; then
   echo "[ok] host_creates is in the numeric-parse validation (fail-closed)"
 else
   echo "[FAIL] host_creates missing from the numeric-parse validation — a jq failure would silently evaluate false and let a host create through" >&2

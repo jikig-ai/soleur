@@ -18,17 +18,35 @@ adr: ADR-114 (next-free verified against origin/main 2026-07-15; re-verify at /s
 > Deviations from the plan-as-written, recorded at implementation time. The plan is authoritative
 > for INTENT; every literal below was re-derived by running it.
 
-**The blast radius is 100%, not ~50% — the plan's central quantitative model is falsified.**
-The plan reasons throughout from a two-connector load-balance (~50% of `registry.` attempts land
-on the unattached web-2), and AC13/AC14's `N≥5` exists to defeat that coin-flip. Measured across
-the last 14 completed `web-platform-release.yml` runs: **14/14** show `bridge conclusion=success`
-(masked) + `mirror=skipped`. The bridge fails on **every** release with
-`Get "http://127.0.0.1:5000/v2/": context deadline exceeded`. **zot has never been backfilled.**
-14/14 under a fair 50/50 is ~0.006% likely, so something pins `registry.` to one replica. The fix
-is unchanged and the `N≥5` gate stays (conservative), but the *why* is unexplained and is now an
-explicit open question on the I2 issue (#6441) — candidate (b) depends on it.
+**The blast radius is ~94% — BOTH the plan's model and my first correction were wrong.**
+The plan reasons throughout from a two-connector load-balance (~50% of `registry.` attempts
+land on the unattached web-2), and AC13/AC14's `N≥5` exists to defeat that coin-flip. Measured
+across the 16 most recent completed `web-platform-release.yml` runs that built an image:
+**15 skipped, 1 succeeded** — the bridge fails ~94% of the time with
+`Get "http://127.0.0.1:5000/v2/": context deadline exceeded`, and zot has been backfilled at
+most once in that window.
 
-**Deviations, each justified inline in the ACs / code:**
+> **Two corrections, both recorded rather than smoothed over.** (1) The plan's ~50% is wrong:
+> 15-of-16 under a fair coin is ~0.03% likely. (2) My own first correction — "the measured rate
+> is **100%**, so something **pins** `registry.` to one replica" — is ALSO wrong: a later run
+> succeeded, and a pinned route cannot succeed. Review caught it by re-running the
+> measurement I had asserted from a snapshot 40 minutes earlier. The honest statement is a
+> heavy ~94% skew toward the unattached replica, mechanism unexplained, tracked as an open
+> question on #6441 (I2 candidate (b) assumes a connector can be removed from rotation
+> predictably — that assumption needs the mechanism). **Do not re-quote 100% or ~50%.**
+
+**P2c (the wrong-host tripwire) is CUT.** Five review agents converged: it was not fail-closed
+(Terraform dials a new SSH session per provisioner block, so the assert certified a different
+session than the writes — a *certified* green lie); it asserted on runtime `$(hostname)`, which
+**ADR-082:196-199 explicitly rejected** for this exact host pair and `server.tf:236` calls "not
+guaranteed", against a web-1 value **never measured**; its guard did not check the ordering its
+own message claimed (mutation-proven); and it could not even execute on this merge (no
+`triggers_replace` input changed), so its first run would land on an unrelated future PR and
+taint 12 resources. Per the plan's own rule — the one that already cut v1's P2b — delete beat
+fix. Moved to #6441 with the better design review surfaced: assert the TF-authoritative
+instance-id, in the SAME session as each write.
+
+**Deviations, each justified inline in the ACs / code:****Deviations, each justified inline in the ACs / code:**
 
 | # | Plan said | Shipped | Why |
 |---|---|---|---|

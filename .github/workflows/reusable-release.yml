@@ -649,7 +649,9 @@ jobs:
       # crane + cosign auto-treat loopback (127.0.0.1) as an insecure registry → plain-HTTP
       # zot over the raw-TCP forward needs no extra flag (Phase-0 spike evidence). This block
       # is additive: a zot/bridge failure must not fail the GHCR release (the whole block is
-      # gated on zot_bridge.outcome and the teardown is if:always()).
+        # (#6416) Gated on `docker_build.outcome`; the BRIDGE outcome is branched on
+        # INTERNALLY below, so a bridge failure reaches degraded() instead of skipping into
+        # silence. Do NOT re-gate this step on zot_bridge — that was the #6416 defect.
       - name: Bridge to zot registry (CF Tunnel)
         id: zot_bridge
         if: steps.docker_build.outcome == 'success'

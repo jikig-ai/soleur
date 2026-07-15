@@ -425,7 +425,7 @@ jobs:
           # but the map's hcloud_server_network attachments are NOT
           # target-reachable. That asymmetry is exactly how soleur-web-2 came up
           # with no private-net IP, unable to reach zot at 10.0.1.30:5000, while
-          # still serving ~50% of the CF tunnel's connector replicas. Such a host
+          # still serving as a CF tunnel connector replica (ADR-114 I1). Such a host
           # also boots with NO firewall (hcloud provider 1.63.0:
           # hcloud_firewall_attachment does not attach before first boot, unlike
           # hcloud_server.firewall_ids). Source of truth:
@@ -451,7 +451,8 @@ jobs:
             echo "::error::  • hcloud_server.web[\"web-2\"] / its volume → dispatch 'gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby -f reason=...' (it targets the network attach + volume, and pulls the server transitively)."
             echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host'."
             echo "::error::  • hcloud_server.registry → NO dispatch creates it (registry-host-replace and registry-region-migrate are both scoped -replace and need the resource already in state). Run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
-            echo "::error::  • a legitimate new host (e.g. web-3 added to var.web_hosts) → NO dispatch creates it either (warm-standby's targets are hardcoded to web-2). Run the operator-local full apply BEFORE the code merges, or EVERY subsequent merge will HALT here — not just this PR's."
+            echo "::error::  • a legitimate new host (e.g. web-3 added to var.web_hosts) → NO dispatch creates it either (warm-standby's targets are hardcoded to web-2). It needs an operator-local full apply BEFORE the code merges, or EVERY subsequent merge HALTs here — not just this PR's."
+            echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. That is the only bypass — [ack-destroy] deliberately does NOT reach this HALT. Use it to unblock merges while the correct dispatch/apply above is arranged; it skips the apply, it does not perform it."
             grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi

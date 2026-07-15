@@ -41,9 +41,9 @@ brand_survival_threshold: single-user incident
 
 ## Phase 2c — Wrong-host tripwire (ships with Phase 1)
 
-- [x] 2c.1 Add a **fail-closed `hostname` assertion** to the SSH-provisioner preflight in `apps/web-platform/infra/server.tf`: each `terraform_data.*` declared for web-1 asserts in-band that the shell it reached **is** `soleur-web-platform`; mismatch → abort red.
-- [x] 2c.2 **Do NOT touch `connection { host }`** (see the header warning).
-- [x] 2c.3 Note the priced objection in the PR body: this converts a silent ~50% wrong-host write into a loud ~50% apply failure. A red apply beats a green lie. Bounded re-dial retry is the escape hatch if it bites.
+- [~] 2c.1 Add a **fail-closed `hostname` assertion** to the SSH-provisioner preflight in `apps/web-platform/infra/server.tf`: each `terraform_data.*` declared for web-1 asserts in-band that the shell it reached **is** `soleur-web-platform`; mismatch → abort red.
+- [~] 2c.2 **Do NOT touch `connection { host }`** (see the header warning).
+- [~] 2c.3 Note the priced objection in the PR body: this converts a silent ~50% wrong-host write into a loud ~50% apply failure. A red apply beats a green lie. Bounded re-dial retry is the escape hatch if it bites.
 
 ## Phase 3 — Un-mask the CI signal (ADR-096-consistent)
 
@@ -85,6 +85,11 @@ brand_survival_threshold: single-user incident
 - [ ] 6.6 `/soleur:ship` — re-verify the ADR ordinal at the collision gate.
 
 ## Implementation notes (/work, 2026-07-15)
+
+- **Phase 2c — CUT at review (marked `[~]`).** Five agents converged that the tripwire was
+  unsound: not fail-closed (per-provisioner SSH sessions), keyed on a primitive ADR-082 already
+  rejected, guard blind to the ordering it claimed, and unable to run on this merge at all.
+  Moved to #6441. See the plan's Implementation Record.
 
 - **0.2** — recorded via the CF API rather than `cloudflared tunnel info` (no local tunnel auth):
   tunnel `soleur-web-platform` healthy, **2 connectors / 8 QUIC conns** (4 per replica). Confirms

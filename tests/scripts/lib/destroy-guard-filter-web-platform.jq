@@ -12,8 +12,8 @@
 #   5. cloudflare_zero_trust_access_policy.*             .include
 #   6. hcloud_server.* reboot-forcing in-place update    placement_group_id /
 #                                                        server_type (#5911)
-#   7. hcloud_server.* / hcloud_volume.* pure `+ create` actions==["create"]
-#                                                        (#6416)
+#   7. hcloud_server.* / hcloud_volume.* host BIRTH  actions incl. "create"
+#                                                        (create OR replace; #6416)
 #
 # The HIGHEST-impact case is (1) — removing the ACME carve-out
 # (cloudflare_ruleset.seo_page_redirects.rules[10] at seo-rulesets.tf)
@@ -217,11 +217,10 @@ def web2_allow: [
   #
   # WHY IT MATTERS (#6416): the per-PR apply created soleur-web-2 but NOT its
   # hcloud_server_network attachment (not target-reachable), so the host booted
-  # public-IP-only and could never reach zot at 10.0.1.30:5000. It then served
-  # ~50% of the single CF tunnel's connector replicas, silently failing every
-  # registry-bridge that happened to land on it. A `+ create` also boots WITHOUT
-  # a firewall: hcloud provider 1.63.0 documents that hcloud_firewall_attachment
-  # (unlike hcloud_server.firewall_ids) does NOT attach before first boot.
+  # public-IP-only and could never reach zot. A `+ create` also boots WITHOUT a
+  # firewall: hcloud provider 1.63.0 documents that hcloud_firewall_attachment
+  # (unlike hcloud_server.firewall_ids) does NOT attach before first boot. Tunnel
+  # topology + measured failure rates: ADR-114 (do not restate them here).
   #
   # TYPE-scoped (not address) for the same defense-in-depth reason
   # reboot_updates is: it covers hcloud_server.git_data / .inngest / .registry
