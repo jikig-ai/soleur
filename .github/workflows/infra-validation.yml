@@ -18,6 +18,13 @@ on:
       # workflow's poll budget; without this path the guard never fires on
       # client-side edits (deploy-script-tests job is ungated).
       - ".github/workflows/restart-inngest-server.yml"
+      # apply-inngest-rls-dev-workflow.test.sh asserts the PAIR of RLS apply
+      # workflows (path routing, project pinning, issue/concurrency identity).
+      # Without these paths, an edit to either workflow — including re-widening
+      # the prd `paths:` glob that used to auto-apply 0001 to Inngest prd — would
+      # never run the guard that catches it.
+      - ".github/workflows/apply-inngest-rls.yml"
+      - ".github/workflows/apply-inngest-rls-dev.yml"
   workflow_dispatch:
 
 permissions:
@@ -343,6 +350,16 @@ jobs:
 
       - name: Run inngest-rls lockdown SQL shape guards
         run: bash apps/web-platform/infra/inngest-rls/inngest-rls.test.sh
+
+      - name: Run apply-inngest-rls{,-dev}.yml workflow shape guards
+        run: bash apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh
+
+      # Proves the step above's sequence-DDL guard still FAILS on the catastrophe it
+      # claims to catch. It is the only check standing between an unbound sequence loop
+      # and a schema-wide REVOKE on the app's co-tenanted tables, so its non-vacuity is
+      # itself worth a gate. Mutates a sandbox copy only — never the tracked SQL.
+      - name: Run inngest-rls sequence-guard mutation attestation
+        run: bash apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
 
       - name: Run git-data writer-side CAS fence tests
         run: bash apps/web-platform/infra/git-data-pre-receive.test.sh

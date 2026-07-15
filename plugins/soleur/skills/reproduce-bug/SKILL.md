@@ -103,6 +103,7 @@ mcp__plugin_soleur_pw__browser_take_screenshot({ filename: "bug-[issue]-reproduc
 - [ ] Include screenshots showing the bug reproduction
 - [ ] List console errors if any
 - [ ] Document the exact reproduction steps
+- [ ] **Execute the mechanism, do not infer it.** A reproduction confirms the *symptom*, not the story attached to it. Before recording a root cause, run the mechanism itself. If it has a quantitative precondition (buffer size, timeout, rate limit, row count), check the repro's own numbers actually clear it; and A/B a **single** variable — a comparison whose two cases differ in two ways names no cause. State confidence explicitly ("symptom reproduced; mechanism inferred, not tested"), because an untested mechanism written in the indicative becomes fact on the next read. For hook defects specifically, drive the real hook with a synthetic payload (`jq -nc '{tool_name, tool_input}' | bash .claude/hooks/<hook>.sh`) instead of reasoning about it — seconds of work, and it exercises the actual code path. **Why:** #6501 — `iac-plan-write-guard`'s broken ack bypass was diagnosed as SIGPIPE+`pipefail`, reproduced ("48KB plan → denied / small doc → allowed"), documented, and wrong: pipe capacity is 64KB so the blamed 48KB never blocks, and the two cases differed in *tool* (`Edit` vs `Write`), not bytes. The recorded fix would have changed nothing. See `knowledge-base/project/learnings/2026-07-15-a-reproduced-symptom-does-not-validate-the-mechanism-you-attached-to-it.md`.
 
 ## Phase 4: Report Back
 
