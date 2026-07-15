@@ -111,8 +111,11 @@ STUB
 chmod +x "$STUB_DIR/crane"
 
 # Run the extracted mirror block once; echo "<rc> <mirror_status> <warn|nowarn> <crane_copies>".
+# $2 = BRIDGE_OUTCOME (#6416), defaulting to the healthy-bridge case so T1-T3 keep
+# describing crane behavior only.
 run_mirror() {
   local mode="$1"
+  local bridge_outcome="${2:-success}"
   local out="$TMP/ghout.$RANDOM" summary="$TMP/ghsum.$RANDOM"
   local log="$TMP/log.$RANDOM" count="$TMP/cranecount.$RANDOM"
   : > "$out"; : > "$summary"; : > "$count"
@@ -125,6 +128,7 @@ run_mirror() {
   DIGEST="sha256:deadbeef" \
   VERSION="1.2.3" \
   COMMIT_SHA="abc123def" \
+  BRIDGE_OUTCOME="$bridge_outcome" \
   PATH="$STUB_DIR:$PATH" \
     bash "$MIRROR_BLOCK" > "$log" 2>&1
   rc=$?
@@ -154,6 +158,34 @@ assert_eq "transient rc/status/warn" "$(echo "$out2" | cut -d' ' -f1-3)" "0 ok n
 echo "T3: happy path -> mirror_status=ok, exit 0, no ::warning::"
 out3="$(run_mirror always_ok)"
 assert_eq "happy rc/status/warn" "$(echo "$out3" | cut -d' ' -f1-3)" "0 ok nowarn"
+
+# ---------------------------------------------------------------------------
+# T4/T5 (#6416) — the bridge-outcome branch.
+#
+# Before #6416 this step carried `if: steps.zot_bridge.outcome == 'success'`, so a
+# FAILED bridge SKIPPED the step entirely. A skipped step runs no emitter, so
+# `steps.zot_mirror.outputs.mirror_status` stayed unset and the Slack ⚠️ that reads
+# it (by step id) said nothing — zot silently never received images while the
+# release stayed green. The gate now keys on docker_build and the bridge is handled
+# INSIDE the step, so the degraded signal reaches the same output the Slack line
+# already consumes.
+#
+# The crane-copy count is the load-bearing half of T4: it proves the branch exits
+# BEFORE attempting a mirror there is no bridge for, rather than merely arriving at
+# the same status the long way round (which would pass against an implementation
+# that ignored BRIDGE_OUTCOME entirely — crane would fail anyway and emit degraded).
+# ---------------------------------------------------------------------------
+
+# T4 — bridge failed: report degraded WITHOUT attempting any crane copy, exit 0.
+echo "T4: bridge failure -> mirror_status=degraded, ::warning::, exit 0, ZERO crane copies"
+assert_eq "bridge failure" "$(run_mirror always_ok failure)" "0 degraded warn 0"
+
+# T5 — bridge SKIPPED (docker_build failed upstream): `== 'failure'` must not fire on
+# 'skipped'. Pins the choice of `== 'failure'` over `!= 'success'`: the latter would
+# label a build failure a "zot mirror degraded", which is a misleading thing to say
+# about a release that never produced an image. Here the mirror proceeds normally.
+echo "T5: bridge skipped -> not treated as a bridge failure (no false degraded)"
+assert_eq "bridge skipped" "$(run_mirror always_ok skipped)" "0 ok nowarn 3"
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="

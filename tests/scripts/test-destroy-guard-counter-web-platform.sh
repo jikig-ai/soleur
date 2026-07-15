@@ -123,6 +123,40 @@ _run_gate() {
   echo "$rdel:$ndel:$rupd:$dcount:$rc"
 }
 
+# 7th surface (#6416): the `host_creates` HALT. Deliberately a SECOND, SEPARATE
+# rc source rather than a 6th field threaded through _run_gate, for two reasons:
+#
+#   1. _run_gate's "$rdel:$ndel:$rupd:$dcount:$rc" string encodes the ack
+#      semantics (rc=1 iff dcount>0 && !ack). The host_creates HALT is
+#      ack-INDEPENDENT and sits OUTSIDE the destroy_count sum, so it cannot be
+#      expressed by that rc at all — it needs its own.
+#   2. Widening the string would touch ~54 counter-string assertions across
+#      T1–T28 for zero added signal: host_creates is 0 in every one of them.
+#
+# Mirrors apply-web-platform-infra.yml's host_creates block exactly. Takes NO
+# head_msg parameter — that absence IS the ack-independence, structurally: the
+# workflow's HALT never reads HEAD_MSG. T29b proves it against a live
+# [ack-destroy] message. Returns "hc:rc".
+_run_host_creates_gate() {
+  local fixture="$1"
+  local counts hc rc=0
+  if ! counts=$(jq -f "$FILTER" < "$fixture" 2>/dev/null); then
+    echo "ERROR:99"
+    return
+  fi
+  hc=$(echo "$counts" | jq -r '.host_creates')
+  # Fail-closed numeric validation: an empty value from a jq failure would
+  # silently evaluate false in the `-gt 0` test and let a host create slip past.
+  if [[ ! "$hc" =~ ^[0-9]+$ ]]; then
+    echo "PARSE:1"
+    return
+  fi
+  if [[ "$hc" -gt 0 ]]; then
+    rc=1
+  fi
+  echo "$hc:$rc"
+}
+
 if [[ ! -f "$FILTER" ]]; then
   echo "ERROR: $FILTER does not exist — RED phase expected this." >&2
   exit 1
@@ -332,14 +366,23 @@ t_hcloud_noop_attr_update_passes() {
   fi
 }
 
-# T18: CREATE of a 2nd host (hcloud_server.web["web-2"]) — a legit new host,
-# not a reboot. reboot clause selects only ["update"], so rupd=0.
-t_hcloud_create_passes() {
+# T18: CREATE of a 2nd host (hcloud_server.web["web-2"]) is not a REBOOT — the
+# reboot clause selects only ["update"], so rupd=0. That invariant is unchanged
+# and still worth pinning.
+#
+# What T18 no longer claims (#6416): this fixture used to be named "a legit new
+# host" and its 0:0:0:0:0 was read as "…therefore the plan is fine". It is not.
+# A `+ create` of hcloud_server on the per-PR apply path is exactly the drift
+# that left soleur-web-2 alive with NO private-net attachment — invisible to
+# resource_deletes, nested_deletes AND reboot_updates alike. The reboot gate
+# passing it is correct; the CONCLUSION that it was therefore legitimate was the
+# codified belief this plan overturns. T29 is where that plan shape now HALTs.
+t_hcloud_create_is_not_a_reboot() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-hcloud-server-create.json" "feat: add web-2 host")
   if [[ "$out" == "0:0:0:0:0" ]]; then
-    _report "T18 hcloud_server create (web-2 add) is not a reboot (rupd=0)" ok
+    _report "T18 hcloud_server create is not a REBOOT (rupd=0; legitimacy is T29's call, not this gate's)" ok
   else
-    _report "T18 hcloud_server create is not a reboot" fail "got '$out' want '0:0:0:0:0'"
+    _report "T18 hcloud_server create is not a REBOOT" fail "got '$out' want '0:0:0:0:0'"
   fi
 }
 
@@ -507,6 +550,109 @@ t_web2_volume_forget_aborts() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# 7th surface (#6416): `host_creates` — a pure `+ create` of an hcloud_server /
+# hcloud_volume on the per-PR apply path.
+#
+# Why a 7th counter was needed: `-target` is transitive at the RESOURCE level, so
+# every allow-listed resource referencing ANY hcloud_server.web instance
+# (cloudflare_record.app at dns.tf:16, hcloud_firewall_attachment.web at
+# firewall.tf:93) pulls the whole for_each map — web-2 included. A pure create
+# has no delete, no nested-block shrinkage and no ["update"], so all three
+# existing counters read 0 and the plan sails through. That is how web-2 was born
+# on a per-PR apply WITHOUT its hcloud_server_network attachment (#6416): the
+# attachment is not itself target-reachable, so the host came up on the public
+# IP only and could never reach zot at 10.0.1.30:5000.
+#
+# The gate is a TRIPWIRE, not a routine gate: host_creates == 0 on every normal
+# merge (T30/T31 pin that), so this costs nothing until the drift recurs.
+# ---------------------------------------------------------------------------
+
+# T29 (RED→GREEN anchor): the exact plan shape from #6416 — a per-PR
+# `hcloud_server.web["web-2"]` create — HALTs. Reuses the EXISTING
+# tfplan-hcloud-server-create.json fixture (measured host_creates=1); T18 above
+# asserts the same fixture is invisible to all three legacy counters, so this
+# pair is the whole argument for the 7th surface in two tests.
+t_host_create_halts() {
+  local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-hcloud-server-create.json")
+  if [[ "$out" == "1:1" ]]; then
+    _report "T29 per-PR hcloud_server create HALTs (hc=1 rc=1 — the #6416 drift shape)" ok
+  else
+    _report "T29 per-PR hcloud_server create HALTs" fail "got '$out' want '1:1'"
+  fi
+}
+
+# T29b (no ack bypass): the SAME fixture with a line-anchored [ack-destroy].
+# _run_gate returns rc=0 (the legacy gate never even fires — dcount=0), while the
+# host_creates gate still returns rc=1. Proves the HALT sits OUTSIDE the
+# destroy_count sum and has no ack path: an operator cannot type their way past a
+# host create the way they can past a nested-block removal (T11).
+t_host_create_no_ack_bypass() {
+  local msg
+  msg=$'feat: add web-2 host\n\n[ack-destroy]\n\nRefs #6416.'
+  local legacy; legacy=$(_run_gate "$FIXTURES/tfplan-hcloud-server-create.json" "$msg")
+  local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-hcloud-server-create.json")
+  if [[ "$legacy" == "0:0:0:0:0" && "$out" == "1:1" ]]; then
+    _report "T29b [ack-destroy] cannot bypass the host_creates HALT (legacy rc=0, host_creates rc=1)" ok
+  else
+    _report "T29b [ack-destroy] cannot bypass the host_creates HALT" fail \
+      "got legacy='$legacy' (want '0:0:0:0:0') host_creates='$out' (want '1:1')"
+  fi
+}
+
+# T30 (a REPLACE births a host and must HALT): a location change forces a REPLACE
+# (["delete","create"]). It DESTROYS AND RE-CREATES the host — and the reborn host
+# has no hcloud_server_network attach, exactly like a fresh create. So it must trip
+# host_creates.
+#
+# This test asserted the OPPOSITE until review (`0:0`, "not double-counted"). That
+# was wrong, and it was the guard's most dangerous hole: a replace trips
+# resource_deletes, the destroy gate then prints "Add [ack-destroy] to
+# acknowledge", and an author acking a legitimate sibling change in the same merge
+# would ack the host rebirth through with it — #6416 reproducing THROUGH the guard.
+# There was never a double-count to avoid: host_creates is not a term in the
+# workflow's destroy_count sum, and the HALT is evaluated first and
+# unconditionally, so the destroy gate's count is never reached on this plan.
+t_host_replace_halts() {
+  local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-hcloud-server-location-replace.json")
+  if [[ "$out" == "1:1" ]]; then
+    _report "T30 hcloud_server REPLACE HALTs (hc=1 rc=1 — a reborn host is an unattached host)" ok
+  else
+    _report "T30 hcloud_server REPLACE HALTs" fail "got '$out' want '1:1'"
+  fi
+}
+
+# T31 (no false-fire on the steady state): the captured real baseline must read
+# host_creates=0, i.e. the tripwire is silent on a normal merge.
+t_host_creates_baseline_zero() {
+  if [[ ! -f "$FIXTURES/tfplan-web-platform-real-baseline.json" ]]; then
+    _report "T31 captured real baseline yields host_creates=0" fail "fixture missing"
+    return
+  fi
+  local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-web-platform-real-baseline.json")
+  if [[ "$out" == "0:0" ]]; then
+    _report "T31 captured real baseline yields host_creates=0 (tripwire silent on normal merges)" ok
+  else
+    _report "T31 captured real baseline yields host_creates=0" fail "got '$out' want '0:0'"
+  fi
+}
+
+# T32 (fail-closed, not fail-open): a malformed plan document must ABORT, never
+# coast. Mirrors the workflow's numeric-parse validation — the block whose own
+# comment warns that "empty values from a jq failure would silently evaluate
+# false in the `-gt 0` test and let destructive plans slip past the guard".
+t_host_creates_parse_failure_fails_closed() {
+  local tmp; tmp=$(mktemp)
+  printf 'not json at all' > "$tmp"
+  local out; out=$(_run_host_creates_gate "$tmp")
+  rm -f "$tmp"
+  if [[ "$out" == "ERROR:99" ]]; then
+    _report "T32 malformed plan document fails CLOSED (rc!=0, never a silent pass)" ok
+  else
+    _report "T32 malformed plan document fails CLOSED" fail "got '$out' want 'ERROR:99'"
+  fi
+}
+
 t_ruleset_rule_removal_trips
 t_tunnel_ingress_removal_trips
 t_zone_settings_header_removal_trips
@@ -524,7 +670,7 @@ t_hcloud_placement_group_after_unknown_trips
 t_hcloud_server_type_update_trips
 t_hcloud_location_replace_no_double_count
 t_hcloud_noop_attr_update_passes
-t_hcloud_create_passes
+t_hcloud_create_is_not_a_reboot
 t_hcloud_reboot_ack_allows
 t_web2_scoped_replace_passes
 t_web2_web1_replace_aborts
@@ -535,6 +681,11 @@ t_web2_web1_inplace_nonplacement_aborts
 t_web2_substring_collision_aborts
 t_web2_no_ack_destroy_bypass
 t_web2_volume_forget_aborts
+t_host_create_halts
+t_host_create_no_ack_bypass
+t_host_replace_halts
+t_host_creates_baseline_zero
+t_host_creates_parse_failure_fails_closed
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
