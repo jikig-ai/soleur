@@ -24,7 +24,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
 const ciDeploy = readFileSync(join(here, "../infra/ci-deploy.sh"), "utf8");
 const cloudInit = readFileSync(join(here, "../infra/cloud-init.yml"), "utf8");
-<<<<<<< HEAD
 // Repo root is three levels up from apps/web-platform/test (precedent: the
 // apply-sentry-infra.yml read in the last leg of this file).
 const soak = readFileSync(
@@ -224,8 +223,14 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     // Pin the no-SSH page target: a silent removal of the notify action would
     // make the alarm fire-but-page-nobody (the exact Branch-B failure the CTO
     // ruling avoided). IssueOwners→ActiveMembers reaches the solo founder.
-    expect(scoped).toContain("IssueOwners");
-    expect(scoped).toContain("ActiveMembers");
+    //
+    // Anchored on the HCL assignment, NOT toContain(). This file carries in-BODY
+    // comments naming both literals (":260" explains IssueOwners' fallthrough), so a
+    // bare toContain() is satisfied by that prose — mutation-testing proved the whole
+    // actions_v2 block could be deleted with the suite still 10/10 green. Prose cannot
+    // produce `^\s*target_type =`.
+    expect(scoped).toMatch(/^\s*target_type\s*=\s*"IssueOwners"/m);
+    expect(scoped).toMatch(/^\s*fallthrough_type\s*=\s*"ActiveMembers"/m);
   });
 
   // --- Parity: the soak gate must count every signal the alarm watches -------
@@ -328,14 +333,22 @@ describe("sandbox-startup-failure alert op contract (#6429)", () => {
     // invites a fix straight back into the off-by-one — the zot sibling documents the
     // same semantics for the same reason.
     const withComment = scopeResourceWithComment("sandbox_startup_failure");
+    // /strict/i alone is inert — the inline comment on the `value` line carries "STRICT",
+    // so it passed even with this whole paragraph deleted. The paragraph-level claim is
+    // what this pins. Deliberately NOT asserting the exact `current_value > value` quote:
+    // that pins Sentry's INTERNAL variable naming into a regex over our comment, so an
+    // upstream rename would force the comment to stay stale to keep the test green.
+    expect(withComment).toMatch(/BaseEventFrequencyCondition/);
     expect(withComment).toMatch(/strict/i);
-    expect(withComment).toMatch(/current_value > value/);
   });
 
   it("pins the no-SSH page target (fire-but-page-nobody guard)", () => {
     const scoped = scopeResource("sandbox_startup_failure");
-    expect(scoped).toContain("IssueOwners");
-    expect(scoped).toContain("ActiveMembers");
+    // Anchored, not toContain() — see the zot sibling above. The in-body comment at
+    // issue-alerts.tf:260 names both literals, so toContain() passed with actions_v2
+    // deleted entirely: this "fire-but-page-nobody guard" guarded nothing.
+    expect(scoped).toMatch(/^\s*target_type\s*=\s*"IssueOwners"/m);
+    expect(scoped).toMatch(/^\s*fallthrough_type\s*=\s*"ActiveMembers"/m);
   });
 
   it("keeps the sandbox emitter EXCEPTION-shaped so its issue-group stays stack-keyed", () => {
@@ -349,16 +362,26 @@ describe("sandbox-startup-failure alert op contract (#6429)", () => {
     // straight to reportSilentFallback, so the branch below decides the shape.
     // T3: switching the Error arm to captureMessage must fail this.
     const errorArm = observability.slice(
-      observability.indexOf("if (err instanceof Error)"),
+      // Anchor on the FUNCTION, not the first `instanceof Error` in the file — there are
+      // four, and the others (warnSilentFallback et al.) do NOT pass `user`. Anchoring
+      // positionally means "whatever check comes first", which is not what this guards.
+      observability.indexOf("export function reportSilentFallback"),
     );
+    expect(observability.indexOf("export function reportSilentFallback")).toBeGreaterThan(-1);
     const armEnd = errorArm.indexOf("} else if");
     const scoped = armEnd === -1 ? errorArm : errorArm.slice(0, armEnd);
-    expect(scoped).toContain("Sentry.captureException");
+    // Pin the CALL, not the bare symbol. `toContain("Sentry.captureException")` is inert:
+    // the arm also holds a `typeof Sentry.captureException === "function"` guard line, so
+    // it passed even under the captureMessage mutation — only the `.not` below caught it.
+    expect(scoped).toMatch(/Sentry\.captureException\(\s*err/);
     expect(scoped).not.toContain("Sentry.captureMessage");
     // event_unique_user_frequency counts DISTINCT `event.user` — with no user
     // scope every tenant collapses into one identity and the threshold can never
     // be crossed by a fleet-wide outage.
-    expect(scoped).toContain("user");
+    // Pin the shorthand property, not the bare word — `toContain("user")` is satisfied by
+    // any `user`-containing identifier or comment in the slice (e.g. renaming
+    // `transformedExtra` to `userExtra` would silence it while `, user` was dropped).
+    expect(scoped).toMatch(/,\s*user\s*\}/);
   });
 });
 
