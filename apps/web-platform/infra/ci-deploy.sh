@@ -628,35 +628,61 @@ registry_pull_event() {
 # into a fixed enum. Takes the stderr CONTENT as $1 (the caller passes `tail -c 400 "$zerr"`,
 # never the path — the precedent's security/P2-E trap).
 #
-# NOT _pull_result_is_auth_denied (:530). That predicate greps
-# 'unauthorized|denied|forbidden' as ONE bucket, which is correct for its job (is this an
-# auth problem at all?) and wrong for this one: it collapses 401 and 403 together, and the
-# 401-vs-403 split is the ENTIRE discriminating value here. 401 ⇒ the host's boot-baked
-# htpasswd no longer matches the token (a credential-lifecycle defect, fixed in Terraform);
-# 403 ⇒ the credential is fine and zot's accessControl is rejecting the user (a config
-# defect, fixed in cloud-init). Same symptom, different subsystem, opposite fix. Copying the
-# precedent verbatim would reproduce the exact ambiguity #6483 exists to remove.
+# NOT _pull_result_is_auth_denied (:530). That predicate greps 'unauthorized|denied|forbidden'
+# as ONE bucket — correct for its job (is this an auth problem at all?), wrong for this one,
+# which must say WHICH failure so the operator knows which subsystem to fix.
 #
-# Order is load-bearing: authn before authz, because dockerd renders a 401 as
-# "denied: authentication required" — a bare 'denied' match would steal it into authz.
+# MEASURED against the pinned zot (v2.1.2, the digest at zot-registry.tf:55) with this repo's
+# exact accessControl, not inferred: `docker login` issues exactly ONE request, GET /v2/, and
+# zot answers it 200 or 401 — NEVER 403. A user with ZERO accessControl policies still gets
+# `Login Succeeded` (200); zot enforces authz at the MANIFEST endpoint (/v2/<repo>/manifests/
+# <tag> → 403), which the login path never touches. Consequences, both load-bearing:
+#
+#   1. `authz_denied` is effectively unreachable here, so it matches ONLY a literal `403`.
+#      Bare 'denied'/'forbidden' are deliberately NOT matched: they have no true positive on
+#      this path and DO have false ones — `connect: permission denied` is a SOCKET error
+#      (ICMP admin-prohibited → EACCES), and an early bare-'denied' arm would steal it from
+#      `transport` and send the operator hunting an authz bug that does not exist. The arm is
+#      kept, narrowed, purely as a defensive tripwire (a future zot, or an interposed proxy,
+#      could answer 403) — a 403 must never be silently read as an authn failure.
+#   2. A BROKEN accessControl is NOT observable here at all: login SUCCEEDS, ZOT_ACTIVE=1, and
+#      the failure surfaces later at pull time. See the H4 note in the plan — the login probe
+#      is the wrong layer for it, and `zot-entry-gate.sh` is where zot's real 403 lives.
+#
+# Ordering is therefore NOT load-bearing for correctness anymore (the arms are disjoint on
+# real input), but authn stays first because the distribution/GHCR shape `denied:
+# authentication required` renders a 401 with the word 'denied' in it — a 401 must land in
+# `authn_rejected` even if a future arm reintroduces a bare 'denied'.
+#
+# `transport` is the arm that will actually fire most on THIS fleet — private-NIC convergence
+# (#6415) yields `network is unreachable`; zot OOM/restart (tracked as zot_oom_kills) yields
+# `connection reset by peer` / `EOF` mid-connection. Leaving those in `unclassified` would
+# recreate the undifferentiated bucket #6483 exists to drain.
 _zot_login_failure_class() {
   local e="${1:-}"
   if printf '%s' "$e" | grep -qiE '\b401\b|unauthorized|authentication required|incorrect username or password'; then
     printf 'authn_rejected'
-  elif printf '%s' "$e" | grep -qiE '\b403\b|forbidden|denied|access to the resource is denied'; then
+  elif printf '%s' "$e" | grep -qiE '\b403\b'; then
     printf 'authz_denied'
-  elif printf '%s' "$e" | grep -qiE 'server gave HTTP response to HTTPS client'; then
+  elif printf '%s' "$e" | grep -qiE 'server gave HTTP response to HTTPS client|x509:|tls: failed to verify'; then
     printf 'tls_mismatch'
-  elif printf '%s' "$e" | grep -qiE 'connection refused|no route to host|context deadline exceeded|i/o timeout|timed out|timeout'; then
+  elif printf '%s' "$e" | grep -qiE 'connection refused|no route to host|network is unreachable|connection reset|broken pipe|: EOF|no such host|temporary failure in name resolution|context deadline exceeded|i/o timeout|timed out|timeout|permission denied'; then
     printf 'transport'
+  elif printf '%s' "$e" | grep -qiE '\b5[0-9]{2}\b'; then
+    printf 'server_error'
   else
     printf 'unclassified'
   fi
 }
 
 # _zot_login_http_status <stderr-content> (#6483): scrape the HTTP status dockerd echoes on a
-# login rejection ("failed with status: 401 Unauthorized"). Empty when absent — a transport
-# failure never reached a server, so it HAS no status, and an empty tag says exactly that.
+# login rejection ("failed with status: 401 Unauthorized"). The `status:` anchor is what keeps
+# a host:port (`10.0.1.30:5000`, `dial tcp 127.0.0.1:15999`) from being scraped as a code —
+# verified. Empty means ONLY "no status was rendered in this stderr"; it does NOT imply a
+# transport failure — dockerd also renders a bare `unauthorized: authentication required` with
+# no status: prefix, which is a real 401 with an empty tag here. `zot_login_class` is the
+# authoritative field; `zot_login_http` is corroboration when present. Matches 5xx too, so a
+# server_error carries its code.
 _zot_login_http_status() {
   printf '%s' "${1:-}" | grep -oE 'status:[[:space:]]*[45][0-9]{2}' | grep -oE '[45][0-9]{2}' | head -1 || true
 }
@@ -820,8 +846,13 @@ ghcr_prelude_and_login() {
 # the SAME $GHCR_DOCKER_CONFIG the cosign verifier mounts :ro — so Edge B (insecure .sig
 # fetch auth) is satisfied ATOMICALLY with the pull cred. Fail-open: never aborts the
 # deploy. Runs AFTER ghcr_prelude_and_login (which already prefetched SENTRY_* + guarded
-# doppler/DOPPLER_TOKEN). Token reaches `docker login` via --password-stdin (never argv),
-# and login output is >/dev/null 2>&1 so no trace/secret leaks.
+# doppler/DOPPLER_TOKEN). Token reaches `docker login` via --password-stdin (never argv).
+# #6483: login stderr is NO LONGER discarded — the old `>/dev/null 2>&1` here is exactly why
+# WEB-PLATFORM-5B was undiagnosable. It is captured to a 0600 temp file, classified to a fixed
+# enum (_zot_login_failure_class), and destroyed; only the enum + an HTTP status code reach a
+# sink, never the raw text. Keeping the old "output is discarded so nothing leaks" claim would
+# have left this function carrying a false comment about its own security posture — the very
+# defect class this change exists to fix.
 zot_gate_and_login() {
   ZOT_ACTIVE=0
   command -v doppler >/dev/null 2>&1 || return 0

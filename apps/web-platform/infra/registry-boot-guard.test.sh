@@ -96,9 +96,35 @@ LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI" | head -1)"
 assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
 for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
          mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
-         oom_kills_5m= zot_last_err= boot_id=; do
+         oom_kills_5m= zot_last_err= boot_id= htpasswd_pull_matches= htpasswd_push_matches=; do
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
+
+# --- #6483: the htpasswd-divergence probe -------------------------------------------------
+# zot-disk-heartbeat.sh runs `set -u`. A BARE "$ZOT_PULL_TOKEN" on an unset token raises
+# `unbound variable` and EXITS the script before $LINE is built — taking the ENTIRE
+# SOLEUR_ZOT_DISK self-report dark (every field above, not just the probe's) and bypassing the
+# trailing `exit 0` that exists so the cron can never wedge. `|| HTP_PULL=false` does NOT
+# rescue it: an expansion error is not a command failure. Since this heartbeat's ABSENCE is
+# itself an alarm, that failure pages "host down" when only the probe broke. This shipped in
+# #6483's first draft and was caught at review — pin it so it cannot come back.
+PROBE_BLOCK="$(awk '/_htp_verify\(\) \{/,/^      fi$/' "$CI")"
+assert "htpasswd probe block found" "[ -n \"\$PROBE_BLOCK\" ]"
+assert "probe never expands a token BARE (set -u would kill the whole heartbeat)" \
+  "! grep -qE '\"\\\$(ZOT_PULL_TOKEN|ZOT_PUSH_TOKEN)\"' <<<\"\$PROBE_BLOCK\""
+assert "probe expands both tokens with a :- default" \
+  "[ \"\$(grep -cE '\\\$\\\$\\{ZOT_(PULL|PUSH)_TOKEN:-\\}' <<<\"\$PROBE_BLOCK\")\" -ge 2 ]"
+# `unknown` must be the DEFAULT, not a post-hoc correction: "cannot tell" is never conflated
+# with "does not match". htpasswd -vb exits 3 on a real mismatch but 6 on user-absent and 127
+# if apache2-utils vanished — collapsing every non-zero into `false` would report a confident
+# "the credential diverged" when a cloud-init edit merely renamed the htpasswd user, sending
+# the operator to rotate a credential that was never stale (measured on ubuntu:24.04).
+assert "probe defaults both fields to unknown before probing" \
+  "grep -qE 'HTP_PULL=unknown; *HTP_PUSH=unknown' <<<\"\$PROBE_BLOCK\""
+assert "probe maps ONLY exit 3 to false (not every non-zero)" \
+  "grep -qE '^\\s*3\\) printf .false. ;;' <<<\"\$PROBE_BLOCK\""
+assert "probe emits a boolean/sentinel only — never the token" \
+  "! grep -qE 'printf .*ZOT_(PULL|PUSH)_TOKEN|echo .*ZOT_(PULL|PUSH)_TOKEN' <<<\"\$PROBE_BLOCK\""
 
 # The container fields are positionally coupled: `read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED
 # EXIT_CODE` must match the `docker inspect -f` template column order, else oom_killed/exit_code

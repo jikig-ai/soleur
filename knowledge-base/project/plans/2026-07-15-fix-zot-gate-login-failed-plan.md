@@ -37,6 +37,68 @@ pass), 4.7 (observability, pass), 4.8 (PAT-shaped, pass), 4.9 (UI wireframe, N/A
    fire on a routine apply.
 5. **`htpasswd -vb` semantics verified live** (exit 0/3, token never printed) rather than asserted from memory.
 
+### What post-implementation review changed (2026-07-15, PR #6484)
+
+Multi-agent review found **three P1s the plan, the deepen pass, and a green suite all missed** — two of them
+defects the implementation introduced, one a latent data-loss hazard the ADR amendment would have *mandated*.
+Recorded here because each is a reusable lesson, not a one-off:
+
+1. **The probe killed the telemetry line it rode on.** `zot-disk-heartbeat.sh` runs `set -u`; the first draft
+   expanded `"$ZOT_PULL_TOKEN"` bare, so an unset token raised `unbound variable` and **exited the script
+   before `$LINE` was built** — taking the entire `SOLEUR_ZOT_DISK` self-report dark (disk, OOM, boot_id,
+   everything) and bypassing the trailing `exit 0` that exists so the cron can never wedge. `|| HTP_PULL=false`
+   does not rescue an expansion error. The `unknown` guards written for exactly that case sat eight lines too
+   late — dead code. Since heartbeat *absence* is itself an alarm, it would have paged "host down" when only
+   the probe broke. **Lesson:** a guard against a fail-mode must be a *precondition*, never a post-hoc
+   correction; and an observability probe must fail safe on its own instrument.
+2. **H4 was never a live hypothesis, and the classifier arm defending it was net-harmful.** Running the pinned
+   zot digest with this repo's exact `accessControl` showed `docker login` (`GET /v2/`) answers 200-or-401 and
+   **never 403** — a policy-less user still gets `Login Succeeded`; authz lives at the manifest endpoint. So
+   the plan's whole H3-vs-H4 apparatus was a false dichotomy derived from *reading zot's config* instead of
+   *measuring zot*. Worse, the `authz_denied` arm's bare `denied` had zero true positives here and stole
+   `connect: permission denied` (a SOCKET error) from `transport` — while the arm that will actually fire most
+   on this fleet (private-NIC → `network is unreachable`; zot OOM → `connection reset`) fell through to
+   `unclassified`, the very bucket #6483 exists to drain. **Lesson:** a hypothesis about a vendored service's
+   response codes is a claim to measure against the pinned image; one `docker run` settled it.
+3. **The ADR amendment mandated a landmine on git-data.** Written as a class-wide MUST inside an ADR whose
+   Status says "registry host only", it would have required `replace_triggered_by = [random_password.
+   git_data_luks]` — replacing the host on a passphrase rotation and `luksOpen`-ing the NEW key against volumes
+   encrypted with the OLD one, permanently bricking the fleet's most irreplaceable data. The first draft's own
+   comment ("Mirrors `random_password.git_data_luks`") pointed straight at it, and the existing first blocker
+   does not reach the replace primitive. Fixed by scoping the MUST + adding a SECOND normative blocker.
+   **Lesson:** when generalizing a rule, the blast radius generalizes too — and the sibling the code already
+   names as analogous is the first place to check.
+
+4. **The drift guards did not pin what their names claimed — and only mutation testing found it.** The suite was
+   green; three of the guards were vacuous:
+   - **Block-scoped, not attribute-scoped.** Each assertion grepped the whole ~90-line `hcloud_server.registry`
+     block, so it only proved a token appeared *somewhere in the resource*. Moving `random_password.zot_pull`
+     from `replace_triggered_by` into `depends_on` — a plausible tidy-up — left the suite **22/22 green** while
+     the assertion literally named *"replace_triggered_by names random_password.zot_pull"* was **false**, and
+     rotating the pull token (the exact WEB-PLATFORM-5B credential) no longer replaced the host. **The bug this
+     file exists to guard, fully reintroduced, under a green guard.** Fixed by extracting each attribute's list
+     body and matching within it.
+   - **The comment strip was full-line only.** Its own comment claimed "the guard can never pass on explanatory
+     prose". With zero `lifecycle`/`depends_on` and the tokens named in *trailing* comments, the suite was
+     **22/22 green**. `zot-registry.tf` uses trailing comments, so the idiom is live in the guarded file. Fixed
+     with `sed 's/[[:space:]]#.*$//'`; the mutation now yields 8 failures.
+   - **A key-presence grep standing in for a value assertion.** `grep '"host_id":'` matches `"host_id":""`
+     because jq always emits the key — attribution could be gutted entirely and the test stayed green. The
+     #6396 precedent it claimed to reuse asserts a non-empty value *and carries a comment warning about this
+     exact vacuity*. The lesson was cited and not applied.
+   **Lesson:** a green guard proves nothing about the guard. Mutate the defect back in and watch it go RED —
+   for the drift class specifically, mutate a SIBLING attribute in, not just the anchor out.
+
+Also corrected: a stale `>/dev/null 2>&1 so no trace/secret leaks` comment this PR falsified (the same
+false-comment class the PR exists to fix), the probe collapsing `rc=6` (user renamed) into a confident "credential
+diverged", an `alert_route` citing a Sentry poller for a Better Stack field, and the line citations this PR's own
+insertions staled.
+
+**The through-line across all four:** every one was a *claim* that a green signal appeared to support — a
+comment claiming an edge, a hypothesis claiming a response code, an ADR claiming a scope, a test claiming an
+invariant. The plan's own thesis ("a comment that documents a guarantee the code does not provide is what let
+this ship") turned out to describe the plan, the implementation, and the tests as much as the original bug.
+
 ### New considerations discovered
 
 - The `depends_on` gap is a literal single-element list at `:289` — confirmed, not a strawman.
@@ -127,11 +189,29 @@ Reachability was established **before** any auth hypothesis, per `hr-ssh-diagnos
 | H0 | Firewall / private-net route to `10.0.1.30:5000` | **Excluded** — E3: zot logs a well-formed HTTP request from the deploying host's docker at the exact failing second. The `/v2/` probe also passes (the gate reached the login branch at all). |
 | H1 | `insecure-registries` missing → docker attempts HTTPS | **Excluded** — E8 + E3 (an HTTPS ClientHello to an HTTP port does not produce a clean access log with a `docker/29.6.1` User-Agent). |
 | H2 | Doppler / tfstate credential drift | **Excluded** — E5, all three planes agree. |
-| H3 | **htpasswd `zot-pull` entry stale vs the rotated token** | **LEADING** — uniquely explains E2+E4+E5 together. Confirmed structurally by the absent `replace_triggered_by`. Decided empirically by the Phase 1 probe. |
-| H4 | zot `accessControl` denies `zot-pull` at `/v2/` (403 authz, not 401 authn) | **Live, lower** — would also explain push-works/pull-fails. Discriminated by the Phase 1 `zot_login_http` status field (401 ⇒ H3, 403 ⇒ H4). |
+| H3 | **htpasswd `zot-pull` entry stale vs the rotated token** | **THE hypothesis** — uniquely explains E2+E4+E5 together. Confirmed structurally by the absent `replace_triggered_by`. Now the ONLY hypothesis this call site can discriminate (H4 is falsified below). |
+| H4 | zot `accessControl` denies `zot-pull` at `/v2/` (403 authz, not 401 authn) | **FALSIFIED at /work — not observable here at all.** ~~Live, lower.~~ |
 
-H3 and H4 are **both** discriminated by one Phase 1 event. The plan does not guess between them: Phase 2 is
-written to fix H3 (the structurally-proven defect) and Phase 2b is the H4 arm, gated on the probe's verdict.
+**H4 is dead, and the plan's "H3 vs H4" framing was a false dichotomy.** Measured at /work against the pinned
+zot (v2.1.2, the `zot-registry.tf:55` digest) with this repo's exact `accessControl`: `docker login` issues
+exactly one request — `GET /v2/` — and zot answers it **200 or 401, never 403**. A user with **zero**
+accessControl policies still gets `Login Succeeded`; zot enforces authz at `/v2/<repo>/manifests/<tag>`
+(measured: 403), which the login path never touches. So a broken accessControl does not produce `login_failed`
+at all — login SUCCEEDS, `ZOT_ACTIVE=1`, and the failure surfaces later at pull time under a different signal.
+
+Two things follow, both applied:
+
+- **Phase 2b is struck** (see below) — it was gated on a verdict (`zot_login_http=403`) the probe cannot emit.
+- **The classifier's `authz_denied` arm was net-harmful as originally written.** Matching bare
+  `denied`/`forbidden` gave it zero true positives here and one real false positive:
+  `connect: permission denied` is a SOCKET error (EACCES), which it stole from `transport`. It now matches a
+  literal `403` only, as a defensive tripwire.
+
+**Why this matters beyond H4:** the plan reasoned about zot's authz from its config file rather than from zot's
+behavior. `accessControl` *looks* like it gates `/v2/` — the config says `"**": { policies: [...],
+defaultPolicy: [] }` — and it does not. A hypothesis about a vendored service's response codes is a claim to
+measure against the pinned image, not to derive from its config. One `docker run` of the pinned digest settled
+what the whole H3/H4 apparatus was built to decide.
 
 ## User-Brand Impact
 
@@ -225,13 +305,39 @@ Per `plan` §2.9.2, the probe must discriminate **all** competing hypotheses in 
    Doppler and are baked into the htpasswd at boot, so rotation is only safe because `replace_triggered_by`
    forces the redeploy. A comment that documents a guarantee the code does not provide is what let this ship.
 
-### Phase 2b — H4 arm (conditional on the Phase 1 verdict)
+### Phase 2b — H4 arm — **STRUCK at /work (the hypothesis is falsified, not merely unlikely)**
 
-If the probe returns `zot_login_http=403` / `zot_login_class=authz_denied` **and** `htpasswd_pull_matches=true`,
-H3 is refuted and the defect is zot's `accessControl` (`cloud-init-registry.yml:116-126`) rejecting `zot-pull` at
-the `/v2/` base route. In that case the fix is the accessControl policy, not the credential lifecycle. Phase 2's
-`replace_triggered_by` + `depends_on` remain correct and still ship — they are proven latent defects independent
-of which hypothesis wins.
+This phase said: if the probe returns `zot_login_http=403` + `zot_login_class=authz_denied` while
+`htpasswd_pull_matches=true`, then H3 is refuted and the defect is zot's `accessControl`
+(`cloud-init-registry.yml:116-126`) rejecting `zot-pull` at the `/v2/` base route.
+
+**That verdict can never arrive.** Measured at /work against the pinned zot image (v2.1.2, the digest at
+`zot-registry.tf:55`) running this repo's exact `accessControl` block:
+
+| request | credential | status |
+|---|---|---|
+| `GET /v2/` (**the only request `docker login` makes**) | anonymous | 401 |
+| `GET /v2/` | valid, `read` policy | 200 |
+| `GET /v2/` | valid, **zero accessControl policy** | **200** |
+| `GET /v2/` | valid user, wrong password | 401 |
+| `/v2/<repo>/manifests/<tag>` | valid, zero policy | **403** |
+
+zot does **not** apply `accessControl` to the `/v2/` base route — it enforces at the manifest endpoint. So the
+login path answers 200-or-401 and 403 is unreachable there. Two consequences the plan had backwards:
+
+1. **H4 was never a live hypothesis for this defect.** A broken `accessControl` does not produce
+   `login_failed` at all: the login SUCCEEDS, `ZOT_ACTIVE=1`, and the failure appears later at pull time as a
+   different signal. The probe was at the wrong layer to see it, so "H3 vs H4, decided by the probe" was a false
+   dichotomy — H3 was the only hypothesis the login path can discriminate.
+2. **The classifier's `authz_denied` arm was net-harmful as written.** Matching bare `denied`/`forbidden` gave
+   it zero true positives on this path and a real false positive: `connect: permission denied` is a SOCKET error
+   (ICMP admin-prohibited → EACCES), which it stole from `transport` — pointing the operator at an accessControl
+   bug that cannot exist. The arm now matches a literal `403` only, purely as a tripwire.
+
+If a zot accessControl defect is ever suspected, the observable is `zot-entry-gate.sh`'s manifest probe (which
+currently folds a 403 into "tag does not resolve"), not this gate. Phase 2's `replace_triggered_by` +
+`depends_on` ship regardless, exactly as the plan said — they are proven latent defects, and their justification
+never depended on the H3/H4 outcome.
 
 ### Phase 3 — Regression tests
 
@@ -324,10 +430,32 @@ error_reporting:
 failure_modes:
   - mode: htpasswd diverged from the rotated Doppler token (H3 — this defect)
     detection: SOLEUR_ZOT_DISK htpasswd_pull_matches=false  [layer: Better Stack Logs]
-    alert_route: zot-soak GH-cron poller (scripts/followthroughs/zot-soak-6122.sh)
+    alert_route: |
+      NONE TODAY — on-demand query only (betterstack-query.sh --grep SOLEUR_ZOT_DISK).
+      CORRECTED AT /work: this field originally cited scripts/followthroughs/zot-soak-6122.sh
+      as its alert route. That script polls SENTRY (API="https://sentry.io/api/0"), so it
+      cannot see a Better Stack field, contains no htpasswd query, and is not enrolled. The
+      citation was fiction, and `git grep htpasswd_pull_matches` returns zero consumers.
+      Saying so plainly beats naming a route that does not exist — an unread probe that CLAIMS
+      an alert route is the same defect class as the false comment this whole PR exists to fix.
+      Wiring a standing poller is tracked separately (see §Follow-ups): the natural host is
+      scripts/zot-restart-loop-alarm.sh, which already polls Better Stack for SOLEUR_ZOT_DISK
+      and is enrolled via .github/workflows/scheduled-zot-restart-loop.yml — but it is a
+      418-line fail-safe alarm ("NEVER FIRE on zero valid evidence") whose new leg needs its
+      own false-positive profile, an `unknown`-vs-`false` policy, and RED tests. That is a
+      design task, not a line to bolt on inside this PR.
   - mode: zot rejects zot-pull at /v2/ on authz, not authn (H4)
-    detection: Sentry tag zot_login_http=403 + zot_login_class=authz_denied  [layer: Sentry]
-    alert_route: WEB-PLATFORM-5B (zot_mirror_fallback_rate, live since #6424)
+    detection: |
+      FALSIFIED AT /work — NOT OBSERVABLE ON THE LOGIN PATH, and no longer a live hypothesis.
+      Measured against the pinned zot (v2.1.2, the digest at zot-registry.tf:55) running this
+      repo's exact accessControl: `docker login` issues exactly ONE request, GET /v2/, and zot
+      answers 200 or 401 there — never 403. A user with ZERO accessControl policies still gets
+      `Login Succeeded`; zot enforces authz at /v2/<repo>/manifests/<tag> (measured: 403),
+      which the login path never touches. So a broken accessControl does not degrade the gate
+      at all — login SUCCEEDS, ZOT_ACTIVE=1, and the failure surfaces later at PULL time under
+      a different signal. The login probe is the wrong layer for H4; zot-entry-gate.sh
+      (manifest endpoint) is where zot's real 403 lives.
+    alert_route: n/a — see the pull-time modes; Phase 2b is struck (below).
   - mode: insecure-registries missing on a host → docker login attempts HTTPS
     detection: Sentry tag zot_login_class=tls_mismatch + host_id  [layer: Sentry]
     alert_route: WEB-PLATFORM-5B
@@ -655,14 +783,22 @@ must not classify as `authn_rejected`) should be extended with a sibling case: *
   enclosing **job** and that job's **trigger** (`on: push` vs `workflow_dispatch`), or grep the exclusion
   contract (`git grep -n OPERATOR_APPLIED_EXCLUSION`) — the two together, never the bare address grep.
 - **The `registry-host-replace` destroy-guard has a 6-member allow-set, so ANY new `depends_on` edge on
-  `hcloud_server.registry` is a potential dispatch-abort.** `out_of_scope` counts positive actions
+  `hcloud_server.registry` lands in its blast radius.** `out_of_scope` counts positive actions
   (create/update/delete/forget) on addresses outside that set; `no-op` and `read` are excluded. The two ZOT
   token secrets this plan adds to `depends_on` are absent from the allow-set, so they are safe *only* while
-  they are no-op. Verified so against live prod state at /work (gate PASS, `out_of_scope=0`). **A fresh
-  stand-up that must CREATE them would abort the dispatch** — which is honest fail-loud behavior and is left
-  as-is deliberately: widening a guard whose whole value is narrowness, on a case that has not occurred, trades
-  a real guarantee for a hypothetical convenience. If it ever fires, add both addresses to the allow-set +
-  `-target` set together (the `#6244` `registry_betterstack_logs_token` precedent shows the exact shape).
+  they plan as no-op. Verified so against live prod state at /work (gate PASS, `out_of_scope=0`).
+  **CORRECTED AT /work — the trigger this Sharp Edge originally named ("a fresh stand-up that must CREATE
+  them") is unreachable**, so the fail-loud-vs-widen trade it described was a trade against nothing: with no
+  host in state the plan is a bare `create`, so `server_replaced=0` aborts first, and
+  `apply-web-platform-infra.yml:453` says no dispatch creates this host at all (that is the operator-local
+  full apply's job). The **reachable** trigger is Doppler drift: a hand-edited or deleted
+  `doppler_secret.zot_{pull,push}_token_registry` plans as `create`/`update` → `out_of_scope` → ABORT. That
+  abort is **correct** — the credential the host bakes its htpasswd from has diverged from Terraform, and a
+  scoped host-replace is precisely the wrong move while that is true. Do NOT widen the allow-set: `#6244` is
+  not the precedent (its secret was a genuine pending CREATE against an already-existing host; these cannot
+  acquire one on this path), and its `-target` companion is redundant here anyway since `-target` pulls the
+  `depends_on` closure in automatically. The rationale now lives in the gate's own header, next to the
+  allow-set it explains, rather than only in this plan — which is archived.
 - **A `terraform plan` + the REAL gate function is cheap, read-only, and settles in one shot what the plan
   could only argue.** `terraform show -json <plan>` piped through the sourced
   `tests/scripts/lib/registry-host-replace-gate.sh` gave the authoritative verdict on AC8, the depends_on

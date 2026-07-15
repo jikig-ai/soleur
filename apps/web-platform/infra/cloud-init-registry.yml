@@ -233,17 +233,35 @@ write_files:
       # Expected under H3: htpasswd_pull_matches=false htpasswd_push_matches=true — the E4
       # asymmetry (crane/cosign push authenticating while the pull login is rejected), proven
       # from inside the host rather than inferred from the outside.
+      # `unknown` is the DEFAULT, not a fallback: "cannot tell" is never conflated with
+      # "does not match" (a missing htpasswd is a different, worse defect than a diverged one).
+      # Every token expansion below uses `:-` — this script runs `set -u` (:151), where a BARE
+      # "$ZOT_PULL_TOKEN" on an unset token raises `unbound variable` and EXITS the script
+      # BEFORE $LINE is built, taking the whole SOLEUR_ZOT_DISK heartbeat dark (pcent, boot_id,
+      # OOM decode — everything) and bypassing the `exit 0` at the end that exists so the cron
+      # can never wedge. `|| HTP_PULL=false` does NOT rescue it: an expansion error is not a
+      # command failure. That would be a probe that kills the telemetry line it rides on — and
+      # since this heartbeat's ABSENCE is itself an alarm, it would page "host down" when only
+      # the probe broke. The guards are therefore preconditions, never post-hoc corrections.
+      # Gate on the EXIT CODE, not on zero-vs-nonzero. Measured on ubuntu:24.04 (the shipped
+      # host image): 0 = match, 3 = password mismatch, 6 = user absent from the file, 1 = file
+      # unreadable, 127 = htpasswd itself missing. ONLY 3 is a real divergence. Collapsing
+      # every non-zero into `false` would report a confident "the credential diverged" when a
+      # cloud-init edit renamed the htpasswd user (rc=6) — sending the operator to rotate a
+      # credential that was never stale, which is the inverse of this probe's job.
+      _htp_verify() {
+        htpasswd -vb /etc/zot/htpasswd "$1" "$2" >/dev/null 2>&1
+        case "$?" in
+          0) printf 'true' ;;
+          3) printf 'false' ;;
+          *) printf 'unknown' ;;
+        esac
+      }
+      HTP_PULL=unknown; HTP_PUSH=unknown
       if [ -f /etc/zot/htpasswd ]; then
-        htpasswd -vb /etc/zot/htpasswd "${zot_pull_user}" "$ZOT_PULL_TOKEN" >/dev/null 2>&1 && HTP_PULL=true || HTP_PULL=false
-        htpasswd -vb /etc/zot/htpasswd "${zot_push_user}" "$ZOT_PUSH_TOKEN" >/dev/null 2>&1 && HTP_PUSH=true || HTP_PUSH=false
-      else
-        # Distinct from false: the file is absent, not diverged. Never conflate "cannot tell"
-        # with "does not match" — a missing htpasswd is a different (worse) defect.
-        HTP_PULL=unknown; HTP_PUSH=unknown
+        [ -n "$${ZOT_PULL_TOKEN:-}" ] && HTP_PULL=$(_htp_verify "${zot_pull_user}" "$${ZOT_PULL_TOKEN:-}")
+        [ -n "$${ZOT_PUSH_TOKEN:-}" ] && HTP_PUSH=$(_htp_verify "${zot_push_user}" "$${ZOT_PUSH_TOKEN:-}")
       fi
-      # An unset token would make -vb fail and read as a spurious mismatch; say so instead.
-      [ -n "$${ZOT_PULL_TOKEN:-}" ] || HTP_PULL=unknown
-      [ -n "$${ZOT_PUSH_TOKEN:-}" ] || HTP_PUSH=unknown
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
       LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"

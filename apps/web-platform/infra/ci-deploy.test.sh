@@ -35,9 +35,19 @@ readonly TEST_PATH_BASE="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 #   default        - healthy endpoint (200 / OK); honor MOCK_CURL_CANARY_FAIL
 #                    to fail the localhost:3001 canary probe
 
+# #6483: capture what reaches journald when MOCK_LOGGER_CAPTURE_FILE is armed. The journald
+# tag `ci-deploy` is shipped OFF-BOX to Better Stack by vector.toml (allowlisted, unscrubbed),
+# so it is a real credential boundary — but the mock discarded everything, so no test could
+# assert on it. Sentry had a full-sink purity assertion and journald had none; per
+# 2026-07-09-sanitized-marker-alongside-raw-sibling-diagnostic-leaks-and-purity-test-scope, a
+# purity assertion must cover the WHOLE sink. Default stays exit-0/no-capture so the 137
+# pre-existing tests are untouched.
 create_mock_logger() {
   cat > "$1/logger" << 'MOCK'
 #!/bin/bash
+if [[ -n "${MOCK_LOGGER_CAPTURE_FILE:-}" ]]; then
+  printf '%s\n' "$*" >> "$MOCK_LOGGER_CAPTURE_FILE"
+fi
 exit 0
 MOCK
   chmod +x "$1/logger"
@@ -3419,8 +3429,10 @@ fi
 
 # Arms a zot-configured deploy whose ZOT login fails with a caller-supplied stderr, and
 # captures the Sentry POST bodies. Echoes nothing; the caller greps the capture file.
+# $3 (optional): a journald capture file. Armed only by the purity test — every other caller
+# leaves it empty so the logger mock keeps its historic discard-everything behavior.
 run_deploy_zot_login_stderr() {
-  local sentry_file="$1" zot_stderr="$2"
+  local sentry_file="$1" zot_stderr="$2" logger_file="${3:-}"
   (
     export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
     MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
@@ -3432,6 +3444,7 @@ run_deploy_zot_login_stderr() {
     export MOCK_ZOT_CONFIGURED=1
     export MOCK_ZOT_LOGIN_FAIL_STDERR="$zot_stderr"
     export MOCK_SENTRY_CAPTURE_FILE="$sentry_file"
+    [[ -n "$logger_file" ]] && export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
     create_base_mocks "$MOCK_DIR"
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
@@ -3462,13 +3475,16 @@ assert_zot_login_class() {
   rm -f "$sf"
 }
 
+# The 401 fixture is byte-accurate — reproduced against the pinned zot (v2.1.2) with this
+# repo's exact accessControl. Measured there: GET /v2/ (the ONLY request docker login makes)
+# answers 200 or 401 and NEVER 403, even for a user with zero accessControl policies.
 echo "--- #6483 T-5B-1..5: docker login stderr classifies into the zot_login_class enum ---"
-assert_zot_login_class "401 stale htpasswd (H3)" \
+assert_zot_login_class "401 stale htpasswd (H3 — the live defect)" \
   'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 401 Unauthorized' \
   'authn_rejected' '401'
-assert_zot_login_class "403 accessControl denial (H4)" \
-  'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 403 Forbidden' \
-  'authz_denied' '403'
+assert_zot_login_class "bare 401 shape with no status: prefix" \
+  'Error response from daemon: Get "http://10.0.1.30:5000/v2/": unauthorized: authentication required' \
+  'authn_rejected'
 assert_zot_login_class "insecure-registries gap" \
   'Error response from daemon: Get "https://10.0.1.30:5000/v2/": http: server gave HTTP response to HTTPS client' \
   'tls_mismatch'
@@ -3478,6 +3494,35 @@ assert_zot_login_class "transport failure" \
 assert_zot_login_class "unrecognized stderr" \
   'Error response from daemon: something entirely unexpected happened' \
   'unclassified'
+
+# T-5B-5b..5f: the transport shapes THIS fleet actually produces. `transport` is the arm most
+# likely to fire in production — private-NIC convergence (#6415) yields `network is
+# unreachable`; a zot OOM/restart (tracked as zot_oom_kills/zot_restarts on the same host)
+# severs a live connection. Leaving these in `unclassified` would recreate the exact
+# undifferentiated bucket #6483 exists to drain, on the fleet's most probable failures.
+echo "--- #6483 T-5B-5b..5f: the transport shapes this fleet actually produces ---"
+assert_zot_login_class "private NIC not up (#6415 class)" \
+  'Error response from daemon: Get "http://10.0.1.30:5000/v2/": dial tcp 10.0.1.30:5000: connect: network is unreachable' \
+  'transport'
+assert_zot_login_class "zot OOM/restart mid-connection" \
+  'Error response from daemon: Get "http://10.0.1.30:5000/v2/": read tcp 10.0.1.10:44444->10.0.1.30:5000: read: connection reset by peer' \
+  'transport'
+assert_zot_login_class "connection closed mid-flight" \
+  'Error response from daemon: Get "http://10.0.1.30:5000/v2/": EOF' \
+  'transport'
+assert_zot_login_class "DNS failure" \
+  'Error response from daemon: Get "http://registry.internal:5000/v2/": dial tcp: lookup registry.internal: no such host' \
+  'transport'
+# A socket-layer block (ICMP admin-prohibited -> EACCES) renders as "permission denied". This
+# is the false positive a bare 'denied' in the authz arm would create: it is a NETWORK fault,
+# and misfiling it as authz_denied sends the operator hunting an accessControl bug that does
+# not exist.
+assert_zot_login_class "socket blocked (permission denied is NOT authz)" \
+  'Error response from daemon: Get "http://10.0.1.30:5000/v2/": dial tcp 10.0.1.30:5000: connect: permission denied' \
+  'transport'
+assert_zot_login_class "zot 5xx (OOM/restart window)" \
+  'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 500 Internal Server Error' \
+  'server_error' '500'
 
 # T-5B-6 (task 1.2): the enum's whole purpose is discriminating power. A tls_mismatch that
 # collapses into authn_rejected would send the operator hunting a credential bug that does
@@ -3495,19 +3540,23 @@ else
 fi
 rm -f "$SF_TLS"
 
-# T-5B-7 (task 1.2b — LOAD-BEARING): the precedent classifier _pull_result_is_auth_denied
-# (:530) greps 'unauthorized|denied|forbidden' as ONE bucket. Copying it verbatim collapses
-# H3 (401, stale htpasswd) and H4 (403, accessControl) together and the probe cannot tell
-# which fix to apply — reintroducing the exact ambiguity #6483 exists to remove.
-echo "--- #6483 T-5B-7: 403 must NOT classify as authn_rejected (H3/H4 split) ---"
+# T-5B-7: a DEFENSIVE tripwire, not the H3/H4 discriminator it was originally written as.
+# Measured against the pinned zot: GET /v2/ (the only request docker login makes) never
+# answers 403 — zot enforces accessControl at the MANIFEST endpoint, and a policy-less user
+# still gets `Login Succeeded`. So this asserts only that IF a 403 ever appears here (a future
+# zot, an interposed proxy), it is not silently read as an authentication failure. The arm
+# matches a literal 403 ONLY; bare 'denied'/'forbidden' are deliberately unmatched because
+# they have no true positive on this path and would steal `permission denied` (a socket
+# error) from `transport` — see T-5B-5f.
+echo "--- #6483 T-5B-7: a literal 403 must NOT be read as authn_rejected (defensive) ---"
 TOTAL=$((TOTAL + 1))
 SF_403=$(mktemp)
 run_deploy_zot_login_stderr "$SF_403" 'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 403 Forbidden'
 if grep -q '"zot_login_class": *"authz_denied"' "$SF_403" \
    && ! grep -q '"zot_login_class": *"authn_rejected"' "$SF_403"; then
-  PASS=$((PASS + 1)); echo "  PASS: 403 → authz_denied, distinct from 401 → authn_rejected"
+  PASS=$((PASS + 1)); echo "  PASS: literal 403 → authz_denied, never authn_rejected"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: 403 collapsed into authn_rejected — H3 and H4 are indistinguishable"
+  FAIL=$((FAIL + 1)); echo "  FAIL: 403 collapsed into authn_rejected"
   echo "        sentry:"; sed 's/^/          /' "$SF_403"
 fi
 rm -f "$SF_403"
@@ -3527,19 +3576,51 @@ else
 fi
 rm -f "$SF_HYG"
 
+# T-5B-8b: the OTHER sink. journald tag `ci-deploy` is allowlisted by vector.toml and shipped
+# to Better Stack UNSCRUBBED, so it is a credential boundary exactly like the Sentry POST — but
+# it had no purity assertion at all, because the logger mock discarded everything. A future
+# edit appending $zdetail to the ZOT_GATE logger line would ship raw stderr off-box with the
+# whole suite green. Asserts against the FULL journald capture, not a prefix (the scope half of
+# 2026-07-09-sanitized-marker-alongside-raw-sibling-diagnostic-leaks-and-purity-test-scope).
+echo "--- #6483 T-5B-8b: raw login stderr never reaches journald either ---"
+TOTAL=$((TOTAL + 1))
+JD=$(mktemp -d); SF_J="$JD/sentry.txt"; LG_J="$JD/logger.txt"; : > "$LG_J"
+run_deploy_zot_login_stderr "$SF_J" 'Error response from daemon: login attempt failed with status: 401 Unauthorized SENTINEL_LEAK_CANARY_zot-pull' "$LG_J"
+if grep -q 'ZOT_GATE' "$LG_J" \
+   && grep -q 'class=authn_rejected' "$LG_J" \
+   && ! grep -q 'SENTINEL_LEAK_CANARY' "$LG_J"; then
+  PASS=$((PASS + 1)); echo "  PASS: journald carries the enum; raw stderr absent from the whole sink"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: journald purity — expected ZOT_GATE + class=authn_rejected, no canary"
+  echo "        journald:"; sed 's/^/          /' "$LG_J" | head -20
+fi
+rm -rf "$JD"
+
 # T-5B-9 (task 1.6): the 14 live WEB-PLATFORM-5B events carry no host attribution, so
 # "which host" was unanswerable. Reuses the #6396 host_id precedent from pull_failure_event.
-echo "--- #6483 T-5B-9: zot_gate_degraded_event carries host_id ---"
+# Assert the WIRING at the source, body-scoped — mirroring assert_pull_failure_host_id (:1076)
+# exactly rather than restating it, because that precedent already solved this problem and
+# documented why.
+#
+# A runtime `grep '"host_id":'` over the payload is VACUOUS: jq always emits the key, so it
+# matches `"host_id":""` and passes with attribution gutted (verified — `--arg h ""` left the
+# first draft of this test green), leaving "which host" exactly as unanswerable as the 14 live
+# WEB-PLATFORM-5B events it cites. But a runtime NON-EMPTY assert is the opposite error: it
+# fails for a reason that is not a defect. resolve_host_id (:137) reads real host identity
+# (IMDS / machine-id), which the mock environment cannot supply, so HOST_ID is legitimately
+# empty in-suite and non-empty on a real host. Runtime resolution is unit-tested elsewhere
+# (host-identity.test.ts); the ONE seam this needs to guard is host_id reaching THIS payload.
+# Body-scoped so the sibling emits that also tag host_id (:562, :588, :715) cannot satisfy it.
+echo "--- #6483 T-5B-9: zot_gate_degraded_event threads HOST_ID into its payload ---"
 TOTAL=$((TOTAL + 1))
-SF_HID=$(mktemp)
-run_deploy_zot_login_stderr "$SF_HID" 'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 401 Unauthorized'
-if grep -q 'zot gate degraded (login_failed)' "$SF_HID" && grep -q '"host_id":' "$SF_HID"; then
-  PASS=$((PASS + 1)); echo "  PASS: zot_gate_degraded_event is host-attributable"
+ZGD_BODY="$(awk '/^zot_gate_degraded_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
+if [[ -n "$ZGD_BODY" ]] \
+   && printf '%s' "$ZGD_BODY" | grep -qE -- '--arg h "\$\{HOST_ID:-\}"' \
+   && printf '%s' "$ZGD_BODY" | grep -qE 'host_id: \$h'; then
+  PASS=$((PASS + 1)); echo "  PASS: zot_gate_degraded_event threads --arg h \"\${HOST_ID:-}\" into tags.host_id"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: zot_gate_degraded_event has no host_id tag"
-  echo "        sentry:"; sed 's/^/          /' "$SF_HID"
+  FAIL=$((FAIL + 1)); echo "  FAIL: zot_gate_degraded_event must pass --arg h \"\${HOST_ID:-}\" AND put host_id: \$h in tags"
 fi
-rm -f "$SF_HID"
 
 # Restore strict mode for the summary/exit.
 set -e -o pipefail

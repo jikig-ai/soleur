@@ -82,7 +82,7 @@ locals {
 # The host's /etc/zot/htpasswd is a SEPARATE plane and does NOT follow from that. It is
 # baked exactly once — at boot, by cloud-init-registry.yml's runcmd — from these values,
 # read via the Doppler CLI. The token values are deliberately kept out of user_data
-# (see :252-254), so Terraform has NO data edge from random_password to
+# (see :263-265), so Terraform has NO data edge from random_password to
 # hcloud_server.registry and cannot know a rotation staled the bake.
 # hcloud_server.registry's lifecycle.replace_triggered_by is what supplies that edge: it
 # replaces the host so the htpasswd is re-baked from the new value in the SAME apply.
@@ -295,12 +295,16 @@ resource "hcloud_server" "registry" {
 
   # #6483: the ONLY edge from the pull/push credentials to this host. The tokens are read at
   # boot via the Doppler CLI and baked into /etc/zot/htpasswd once; they are deliberately
-  # absent from user_data (:252-254), so Terraform sees no data dependency and a rotation
+  # absent from user_data (:263-265), so Terraform sees no data dependency and a rotation
   # would leave the host serving the OLD htpasswd forever while both Doppler copies show the
   # new value — the WEB-PLATFORM-5B defect. Naming the resources here forces the bake to
   # follow the value: a rotation replaces the host in the same apply.
   # SAFE on a routine apply: random_password has no `keepers`, so these are stable and fire
-  # only under an explicit `-replace` (verified: `grep -n keepers zot-registry.tf` → none).
+  # only under an explicit `-replace` (verify with `grep -nE '^\s*keepers' zot-registry.tf` →
+  # no hits; a bare `grep -n keepers` also matches this very comment).
+  # The edge fires ONLY on the operator's untargeted full apply — the registry-host-replace
+  # dispatch hardcodes `-replace='hcloud_server.registry'` and does not target these, so a
+  # rotation is not plannable there. See the ADR-115 amendment (#6483).
   lifecycle {
     replace_triggered_by = [
       random_password.zot_pull,

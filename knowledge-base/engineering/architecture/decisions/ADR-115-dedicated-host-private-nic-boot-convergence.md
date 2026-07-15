@@ -17,7 +17,15 @@ brand_survival_threshold: single-user incident
 ## Status
 
 **Accepted — for the REGISTRY host only.** Explicitly **not** class-wide: see the normative
-blocker below. Extending it to git-data or inngest requires clearing that blocker first.
+blockers below. Extending it to git-data or inngest requires clearing them first.
+
+**Amended 2026-07-15 (#6483)** to cover boot-baked *credentials* alongside the private NIC —
+also registry-host-scoped, and carrying a **second** normative blocker of its own, because the
+amendment's `replace_triggered_by` edge is a different primitive from this ADR's guarded
+reboot and the first blocker does not reach it. Both blockers are load-bearing and neither
+subsumes the other: the first bounds *rebooting* a host whose storage unlock lives in
+`runcmd`; the second bounds *replacing* a host whose persistent state was encrypted from the
+value being rotated.
 
 ## Context
 
@@ -101,8 +109,12 @@ cost of missing it was total: the registry host's `/etc/zot/htpasswd` is boot-ba
 **no convergence edge of any kind** and **no self-report**, so zot served zero pulls for its
 entire existence while the fleet reported green. Extending the decision:
 
-> **A boot-baked value on a dedicated, deny-all, no-SSH host MUST have (a) an edge that
-> reconverges it when its SOURCE changes, and (b) a self-report of its match state.**
+> **On the REGISTRY host, a boot-baked value MUST have (a) an edge that reconverges it when
+> its SOURCE changes, and (b) a self-report of its match state.**
+>
+> Scoped to the registry host on purpose — this ADR's Status is explicitly not class-wide, and
+> the generalization is actively unsafe for at least one sibling (see the second blocker
+> below). A class-wide version of this rule needs its own ADR, carrying its own blockers.
 >
 > Two permitted edges — pick by whether silent self-repair is acceptable:
 > 1. **`lifecycle.replace_triggered_by`** on the host, naming the source resource — an
@@ -112,27 +124,77 @@ entire existence while the fleet reported green. Extending the decision:
 >    auditability, and only under the reboot blocker below if the primitive is a reboot.
 >
 > (b) is **not optional under either**. An edge without a self-report is a claim; #6483's root
-> cause was precisely a *comment* asserting an edge (`zot-registry.tf:78-80`: "rotation …
-> re-propagates htpasswd + Doppler in ONE apply") that the code did not implement. A
-> boot-baked value whose match state is unobservable will eventually diverge silently, and on
-> a no-SSH host there is no path to find out. The htpasswd probe emits a **boolean**
-> (`htpasswd_pull_matches`) — never the credential, never a hash of it.
+> cause was precisely a *comment* asserting an edge (the pre-#6483 `random_password.zot_pull`
+> header in `zot-registry.tf`: "rotation … re-propagates htpasswd + Doppler in ONE apply")
+> that the code did not implement. A boot-baked value whose match state is unobservable will
+> eventually diverge silently, and on a no-SSH host there is no path to find out. The htpasswd
+> probe emits a **boolean** (`htpasswd_pull_matches`) — never the credential, never a hash.
 
-**Scope note — the normative blocker does NOT fire for #6483.** That blocker constrains the
-**reboot primitive**, and this amendment's edge (1) ships no reboot: `replace_triggered_by` is
-a Terraform-driven replace, so the host boots once, fresh, through the ordinary cloud-init
-path. The `runcmd`-storage-unlock hazard the blocker protects against is a *re-*boot hazard
-and is not reachable from here. Edge (2) remains fully bound by it.
+### SECOND NORMATIVE BLOCKER (binding on edge (1) — the replace primitive)
+
+> **`replace_triggered_by` MUST NOT name a source value that EXISTING PERSISTENT STATE was
+> encrypted from, derived from, or is otherwise unrecoverable without.**
+>
+> **git-data is excluded, and the exclusion is not cosmetic.** `random_password.git_data_luks`
+> (`git-data-luks.tf:31`) is structurally identical to `random_password.zot_pull` — #6483's
+> own code comment even says *"Mirrors `random_password.git_data_luks`"* — and its value is
+> boot-baked exactly the same way (`cloud-init-git-data.yml:163`,
+> `cryptsetup luksOpen --key-file -`). So the naive generalization is not just permitted by
+> the first blocker (which constrains reboots, not replaces): it is *invited* by the analogy
+> the code already draws. It is also catastrophic. A replace on rotation boots a fresh host
+> that runs `luksOpen` with the NEW passphrase against volumes still encrypted with the OLD
+> one — the data survives and becomes **permanently unopenable**. That directly inverts the
+> existing design, which preserves the passphrase deliberately:
+> `apply-web-platform-infra.yml:2059-2060` — *"BOTH data volumes + the LUKS passphrase are
+> PRESERVED BY OMISSION — an untargeted resource cannot be planned for destroy"*.
+>
+> The asymmetry that makes edge (1) safe for zot and lethal for git-data: **the registry's
+> store is disposable** (`model.c4:260` — a GHCR mirror that re-fills from CI's dual-push), so
+> a stale htpasswd costs a re-bake and nothing else. git-data's volumes are the fleet's most
+> irreplaceable state. The primitive is the same; the blast radius is not.
+>
+> Litmus before adding edge (1) anywhere: *if this host were replaced right now and the new
+> one booted with the new value, what existing bytes become unreadable?* Any answer other than
+> "none" excludes the host.
+
+**Scope note — the FIRST (reboot) blocker does not fire for #6483.** It constrains the
+**reboot primitive**, and edge (1) ships no reboot: `replace_triggered_by` is a
+Terraform-driven replace, so the host boots once, fresh, through the ordinary cloud-init path.
+The `runcmd`-storage-unlock hazard it protects against is a *re-*boot hazard, unreachable from
+here (the registry's store is plain ext4, `cloud-init-registry.yml`; there is no `luksOpen` on
+this host). Edge (2) remains fully bound by it. The second blocker above exists precisely
+because that reasoning, left alone, would have exempted the replace primitive from every guard
+this ADR has.
 
 **Authority note (parallel to the one below).** Where this ADR had to *earn* self-reboot
 authority — `hr-prod-host-config-change-immutable-redeploy` does not bless a host deciding to
 reboot itself — edge (1) needs no such argument: an externally-driven `-replace` of a prod host
-on a config change is the literal case that rule sanctions. On this host the replace is
-executed by the `registry-host-replace` `workflow_dispatch` (ADR-096 amendment 2026-07-08), not
-a per-PR apply: every `zot-registry.tf` resource is an `OPERATOR_APPLIED_EXCLUSION`
-(`zot-registry.tf:16-19`, CTO apply-path ruling 2026-07-06), so a merge alone applies **nothing
-here**. Any future ADR that adds a `replace_triggered_by` edge to this host must say how the
-replace is dispatched, or the edge is inert — which is exactly the trap #6483's plan fell into.
+on a config change is the literal case that rule sanctions.
+
+**Which apply fires the edge (state this precisely, or the edge is inert).** Two DIFFERENT
+applies are easy to conflate here, and #6483 conflated them:
+
+- **Deploying a cloud-init/user_data change** (what #6483 itself does) runs through the
+  `registry-host-replace` `workflow_dispatch` (ADR-096 amendment 2026-07-08). That job
+  hardcodes `-replace='hcloud_server.registry'`, so it replaces the host *unconditionally* —
+  `replace_triggered_by` contributes nothing on that path.
+- **Firing the edge** (a credential rotation causing the replace) does **not** happen there.
+  The dispatch's six `-target`s exclude `random_password.zot_pull`/`zot_push`, so a rotation
+  is not even plannable through it, and `grep -rn "replace=random_password.zot" .github/
+  scripts/` returns zero — no rotation dispatch exists. The edge fires only in the **untargeted
+  operator full apply** of the `OPERATOR_APPLIED_EXCLUSION` contract (`zot-registry.tf:16-19`,
+  CTO apply-path ruling 2026-07-06) — which runs **no destroy-guard at all**. A merge applies
+  nothing here either way.
+
+So the edge is real but its trigger lives on the least-guarded path in the system. That is
+acceptable *today* — the pull path is dark and the store is disposable — and it is exactly the
+kind of fact that stops being acceptable after the Phase-5 cutover.
+
+**Requirement on any future ADR** adding a `replace_triggered_by` edge to a host: name the
+apply that fires it and the guard that apply runs. An edge whose trigger is unreachable is a
+comment, and a comment asserting an edge the code does not provide is the defect #6483 exists
+to fix. This paragraph is written as the worked example of its own rule — the first draft of
+this amendment named the dispatch, and the dispatch cannot fire the edge.
 
 ### NORMATIVE BLOCKER (binding on any future extension of this ADR)
 
@@ -184,7 +246,7 @@ an empty dir (404s fleet-wide) while `nic_ok=true`.
 
 | Alternative | Verdict |
 | --- | --- |
-| **`cloud-init clean --logs && cloud-init init --local`** (the issue's own proposal) | **Rejected — three verified failure modes.** (a) `cloud-init-registry.yml:294` appends fstab with a bare `echo >>` and no `grep -q` guard (git-data's `:170` has one) ⇒ duplicate mounts on every re-run. (b) `clean` wipes the datasource semaphore, so a transient IMDS failure on the re-run yields `DataSourceNone` ⇒ default network config ⇒ **the public NIC is lost too** ⇒ unrecoverable on a deny-all no-SSH host. (c) it re-runs the fail-closed isolation check (FATAL at `:351-353`), so a Doppler blip means zot never relaunches. *The proposed cure for a transient IMDS blip is triggered by a transient IMDS blip.* |
+| **`cloud-init clean --logs && cloud-init init --local`** (the issue's own proposal) | **Rejected — three verified failure modes.** (a) `cloud-init-registry.yml` appends fstab (the `>> /etc/fstab` runcmd) with a bare `echo >>` and no `grep -q` guard (git-data's `:170` has one) ⇒ duplicate mounts on every re-run. (b) `clean` wipes the datasource semaphore, so a transient IMDS failure on the re-run yields `DataSourceNone` ⇒ default network config ⇒ **the public NIC is lost too** ⇒ unrecoverable on a deny-all no-SSH host. (c) it re-runs the fail-closed isolation check (the fail-closed isolation FATAL), so a Doppler blip means zot never relaunches. *The proposed cure for a transient IMDS blip is triggered by a transient IMDS blip.* |
 | **A netplan drop-in as the converge primitive** | **Rejected.** Its trigger is a strict subset of the reboot's, and it is the lower-fidelity path (the reboot gets correct MTU/routes from cloud-init's own renderer). Unbudgeted, it would re-apply every 5 min, bouncing **public** egress on a deny-all no-SSH host — invisible to a 25-min absence window. That is #6400's own signature, self-inflicted. |
 | **Fix it in Terraform** (ordering, or a reboot in the dispatch job) | **Rejected.** No ordering can win an additive online attach. And the registry resources are an `OPERATOR_APPLIED_EXCLUSION`, so a dispatch-job reboot leaves the primary provisioning path uncovered. |
 | **A `Type=oneshot` unit instead of `/etc/cron.d`** | **Rejected.** A boot-only oneshot cannot heal an attach that lands *later* (H2, the leading hypothesis). `/etc/cron.d` is this host's established cadence and already carries the `doppler run` wrapper. It also avoids the oneshot-liveness trap where `inactive` reads as healthy. |
