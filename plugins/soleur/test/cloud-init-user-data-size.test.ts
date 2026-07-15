@@ -65,7 +65,18 @@ const HETZNER_CAP = 32_768;
 // soleur-host-bootstrap.sh (0 user_data, #5921 pattern); the irreducible inline cost is the
 // terminal-block boot-emit trap + the ungated `soleur-vector-install` call site + per-host
 // SOLEUR_HOST_NAME injection — necessary call-sites, not a re-inlined blob. Comments trimmed first.
-const WEB_GZIP_BUDGET = 21_800;
+// #6425: +100 B modest re-baseline (21,800 → 21,900). Measured 21,716 → 21,784 (+68 B) for the
+// col-0 `%{ if web_tunnel_connector ~}` / `%{ endif ~}` connector gate + its one-line pointer
+// comment. This is the one addition the "prefer baking over inline" guidance above CANNOT absorb:
+// a templatefile directive is evaluated at RENDER time by terraform, so it is irreducibly inline —
+// baking it into soleur-host-bootstrap.sh would move it to boot time, after the token is already
+// in user_data, defeating the gate's security half. Full rationale lives in server.tf (not
+// byte-budgeted); cloud-init.yml carries only a pointer. Comments trimmed first (an earlier draft
+// cost +516 B). At 21,800 the headroom was 16 B — below the noise floor of any future edit, which
+// would have made the NEXT infra change fail CI for no defect. 21,900 keeps the guard's actual
+// purpose intact: a KB-scale re-inlining (~1.5+ KB, the failure mode this exists to catch) still
+// trips it, and it stays ~10.9 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 21_900;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/

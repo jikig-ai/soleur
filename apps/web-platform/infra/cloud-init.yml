@@ -588,10 +588,13 @@ runcmd:
 
   # Register cloudflared as a systemd service with the tunnel token.
   # The token encodes tunnel configuration managed remotely via Terraform.
+  # #6425: gated to the ingress host (rationale: server.tf web_tunnel_connector; ADR-114).
+%{ if web_tunnel_connector ~}
   - cloudflared service install ${tunnel_token}
 
   # #6090 H4: baked readiness poll (enable returns 0 before connect).
   - soleur-wait-ready service cloudflared cloudflared_ready || exit 1
+%{ endif ~}
 
   # Install webhook binary (adnanh/webhook v2.8.2) with checksum verification
   - |
