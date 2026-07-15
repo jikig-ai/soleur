@@ -22,3 +22,24 @@
 
 ### Components Invoked
 `soleur:plan` · `soleur:plan-review` · `soleur:deepen-plan` · agents: Explore ×2, learnings-researcher, dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, architecture-strategist, spec-flow-analyzer, cto, cpo · Supabase Management API (read-only, 3 projects), `doppler`, `gh`, `git`
+
+## Implement Phase
+- Status: complete. Artifacts: `apps/web-platform/infra/inngest-rls/{0002_dev_inngest_tables_lockdown.sql, inngest-rls.test.sh, apply-inngest-rls-dev-workflow.test.sh, anon-probe.sh}` + `.github/workflows/apply-inngest-rls-dev.yml`.
+- **Live state is AHEAD of the branch.** The lockdown is already applied to soleur-dev (`mlwiodleouzwniehynfz`); the advisor went 14 → 0. PR #6485's CI green on `f2e361405` attests that SHA only, not the applied state and not the review commits.
+
+## Review Phase
+- Status: complete. 4 agents; Test Quality Score 8.75/10 (B). P1 + P2-1..P2-5 + a 13-item P3 batch all applied inline and committed (`48e10b1b4` → `e88e64a0c`).
+
+## Crash & Resume (2026-07-15)
+- A laptop crash at 18:26:44Z killed the parent mid-Step-4. The "apply review findings" subagent had committed 66s earlier, so no work was lost — but the review's VERIFY step died in flight, leaving the P2-1 guard's value claim unattested.
+- **What the crash actually destroyed was evidence, not code.** The M3/M6 mutation labels existed only in the dead session's context; nothing on disk recorded them. They were recoverable only because they were re-derivable from the guard's own two detection arms (`relkind='S'`, `pg_sequences`).
+
+### Verification (re-run at `e88e64a0c`, post-crash)
+- `inngest-rls.test.sh` 46 pass / 0 fail · `apply-inngest-rls-dev-workflow.test.sh` 48 pass / 0 fail. No CI hardcodes expected counts.
+- **M3/M6 mutation-RED: ATTESTED, and now permanent.** Both mutations drive `check_sequence_ddl_is_allowlist_bound` RED, each failing *exactly one* check — the guard is the only thing in 46 checks standing between an unbound sequence loop and a schema-wide `REVOKE ALL` across the app's 52 co-tenanted tables. Negative controls (M3b/M6b) stay GREEN, so it keys on the binding, not on sequence code generally.
+- Committed as `inngest-rls-mutation.test.sh` + an `infra-validation.yml` gate (`cedbee2b9`) rather than left ad-hoc: the ad-hoc form is exactly what the crash destroyed. Self-verified against a neutered always-GREEN guard — the harness fails on exactly M3/M6 and exits 1. Mutations hit a sandbox mirror, never the tracked SQL.
+- Still unbacked by a runnable harness: the three older `mutation-proven 2026-07-15` comments in `inngest-rls.test.sh` (lines ~116, ~142, ~182) covering `check_no_schemawide_ddl_loop` and the block-comment hole. The new harness is structured to extend to them.
+
+### Open Questions (carried, not blocking)
+- **DC-1** (CTO/CPO dissent: build #3366 now vs escalate) remains open-for-CPO in `decision-challenges.md`. Surfaced-for-decision, not blocking; #3366 is escalated to P1.
+- **#6488** (post-cutover drop of the 14 tables + atomic retirement of `0002`) is OPEN, labeled `action-required`, and confirmed the deliberate follow-on — out of scope for #6485.
