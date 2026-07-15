@@ -51,13 +51,14 @@
 # none of the five watched signals. It shares soleur-boot-emit's {stage,host_id,region} shape,
 # so it demonstrates the bare-vs-prefixed behaviour and covers [freshboot]'s schema; it does
 # NOT independently cover `_emit`'s {stage,image_ref,host_id,detail}, which [appboot] and
-# [appserved] ride.
+# [appserved] ride. Both are pinned by the op-contract test's tag-key legs instead — see
+# that file.)
+#
 # ⚠ Do NOT read "9 events" as a statement about how RARE fresh boots are. Those 9 span
 # 2026-07-07..07-13 and the emitter only shipped 2026-07-06 (560168055, #6092) — that is ~1.3
 # boots/DAY, not 9 ever. It is a bare count over an unstated window, cited here ONLY as
 # bare-vs-prefixed evidence. #6462's first draft misread it as scarcity and built a whole
 # threshold argument on top; the number cannot carry that weight.
-# Both are pinned by the op-contract test's tag-key legs instead — see that file.)
 # The FAIL set (whole query strings, not just the tag values) is pinned against the alarm by
 # apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts, so drift on
 # either side fails CI rather than silently darkening this gate.
@@ -271,10 +272,16 @@ fi
 # reached the fleet". app_zot is the positive evidence: it fires on every zot-served fresh
 # boot, so count(app_zot) == 0 here means the fleet is UNOBSERVED, not clean.
 #
-# ⚠ Guard the string BEFORE any arithmetic. sentry_count echoes the bare word TRANSIENT on a
-# non-200 (:151) and on a shape mismatch (:159); an arithmetic zero-test would resolve that
-# unset word to 0 and read it as "no evidence" → a FAIL that is really a probe failure. The
-# regex guard is what keeps the sentinel alive (same hazard the MIN_SAMPLE comment documents).
+# ⚠ Guard the string BEFORE any arithmetic. `sentry_count` (defined above) echoes the bare
+# word TRANSIENT on a non-200 and on a jq shape mismatch; an arithmetic zero-test on that word
+# errors under `set -u` — and absent `set -u` would read it as 0, i.e. "no evidence" → a FAIL
+# that is really a probe failure. The regex guard is what keeps the sentinel alive (the same
+# hazard the MIN_SAMPLE comment documents).
+#
+# Name-anchored, NOT `:NNN` — this file's own header says line citations rot, and an earlier
+# draft of THIS comment proved it: it cited :151/:159, which its own PR then shifted 35 lines
+# onto a DECOY (the MIN_SAMPLE regex guard, which also echoes TRANSIENT and so falsely
+# confirms). Cite names; they are grep-able and they do not move.
 # (Deliberately does not quote the zero-test literal: AC7b greps for it and a comment copy
 # would make the count 2 — the same false-match class the FAIL_QUERIES/body-grep notes warn of.)
 APP_ZOT=$(sentry_count 'stage:"app_zot"')
@@ -309,11 +316,19 @@ if [[ "$ZOT_WEB" -lt "$MIN_SAMPLE" || "$ZOT_INNGEST" -lt "$MIN_SAMPLE" ]]; then
   exit 1
 fi
 
-# ── The BLOCKER arm (#6462 C1). The soak's exit code IS the authorization artifact for an
-# IRREVERSIBLE act (5.3 rotates AND revokes the GHCR PAT — after it, a fleet that still needs
-# GHCR can pull from neither registry, with no rollback). A gate that returns 0 while a
-# KNOWN-FATAL path is open is not made trustworthy by carrying a comment about it. #6462's
-# own thesis is that prose is not a fix, so this is enforced in the exit code.
+# ── The BLOCKER arm (#6462 C1).
+#
+# ⚠ READ WITH the header's "a PASS here is evidence, not authorization". Both are true and they
+# do NOT contradict: this gate is a NECESSARY condition, never a sufficient one. A human still
+# adjudicates 5.3 against the 5-of-7 ratio and the two disclosed residuals. What this arm adds
+# is a FLOOR under that decision — exit 0 is a precondition the adjudicator needs, so a gate
+# that returns 0 while a KNOWN-FATAL path is open hands them a green light it has not earned.
+# The exit code can VETO a retirement; it cannot bless one. A gate is not made trustworthy by
+# carrying a comment about the fatal path it ignores — #6462's thesis is that prose is not a
+# fix — so the veto lives in the exit code.
+#
+# 5.3 rotates AND revokes the GHCR PAT: after it, a fleet that still needs GHCR can pull from
+# neither registry, with no rollback.
 #
 # #6500: the dedicated inngest host (cloud-init-inngest.yml:337) hard-pins a ghcr.io ref with
 # NO zot path and a fail-closed pull (:349), and reports to Better Stack rather than the
@@ -325,7 +340,16 @@ fi
 # pinned warning on the issue. Do not close it to make this gate pass, and do not delete this
 # arm to make this gate pass; the arm existing is the point.
 BLOCKER=6500
-st=$(gh issue view "$BLOCKER" --json state --jq .state 2>/dev/null)
+# ⚠ --repo is NOT optional. sweep-followthroughs.sh runs this under `env -i` forwarding ONLY
+# the directive's secrets= names, so the workflow's GH_REPO is STRIPPED and `gh` falls back to
+# resolving the repo from the CWD's git remote. Under the sweeper that resolves correctly —
+# but the header states enrollment is deferred, so every near-term run is a MANUAL one from an
+# uncontrolled CWD, which is exactly when the retirement decision gets made. A run from
+# another checkout would read a DIFFERENT repo's #6500, and the OPEN/CLOSED allowlist below
+# cannot catch that: a wrong-repo CLOSED is a well-formed answer to the wrong question, and it
+# would authorize the revoke. Pinning the repo makes the arm's correctness a stated fact
+# rather than a CWD invariant.
+st=$(gh issue view "$BLOCKER" --repo jikig-ai/soleur --json state --jq .state 2>/dev/null)
 # ⚠ Fail SAFE on an unreadable state. A gate must never read "I could not measure" as "the
 # measurement is false" — treating an unknown state as CLOSED would PASS the gate during a
 # GitHub outage while the 7th path is still live. TRANSIENT is correct here (the probe could
