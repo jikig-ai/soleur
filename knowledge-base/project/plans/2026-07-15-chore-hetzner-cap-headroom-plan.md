@@ -596,8 +596,30 @@ bound "no bypass" to the *new* step anyway).
       > Same class as `hr-when-a-plan-specifies-relative-paths-e-g` (plan authoritative for
       > intent, never for the literal command) and the documented
       > "grep-assertion-over-script-body false-matches its own comments" learning.
-- [ ] **AC5** `cd apps/web-platform/infra && terraform validate` passes, **and** a
-      `terraform plan` with the live `hel1` values does not error on the new validations.
+- [x] **AC5** `cd apps/web-platform/infra && terraform fmt -check && terraform validate` passes
+      (both do), **and** the live values provably pass the new validations.
+
+      > **Corrected at /work (2026-07-15) — `terraform validate` CANNOT see variable
+      > validations.** Empirically established on the pinned **Terraform v1.10.5**:
+      > `TF_VAR_location=us-east terraform validate` returns **"Success! The configuration is
+      > valid." (rc=0)**; only `terraform plan` evaluates a `validation` block
+      > (`Error: Invalid value for variable`, rc=1). So AC5's `validate` half is a real check
+      > of config consistency but proves **nothing** about residency, and **T8 as written was
+      > false**. Verified by the right mechanism instead, in three parts:
+      > 1. **Condition logic** — a scratch root carrying the identical
+      >    `contains(["nbg1","fsn1","hel1"], var.location)` block: `plan` with `us-east`
+      >    **rejects** (rc=1), `plan` with the `hel1` default **passes** (rc=0).
+      > 2. **Live values pass** — both defaults are `hel1` ∈ the allow-set, and **Doppler
+      >    `prd_terraform` defines neither `LOCATION` nor `REGISTRY_LOCATION`** (checked
+      >    against its 152 names), so `--name-transformer tf-var` injects no `TF_VAR_location`
+      >    / `TF_VAR_registry_location` override. The defaults are what applies ⇒ the
+      >    tightening cannot fail-closed on the live config.
+      > 3. **The real gate is the merge-path plan**, which runs `terraform plan` on every
+      >    merge and therefore exercises both validations for free — as the plan's own
+      >    "Apply path: None required" section already says.
+      >
+      > A local `terraform plan` against the real root was deliberately not run: it needs the
+      > R2 backend + prod creds to prove something parts 1-2 already establish offline.
 - [ ] **AC6** `python3 scripts/lint-agents-rule-budget.py` → **exit 0** (it already enforces
       both `B_ALWAYS_REJECT=23000` and `PER_RULE_CAP=600`; do not restate its constants).
       Rule id unchanged: `grep -c 'hr-prod-host-config-change-immutable-redeploy' AGENTS.core.md` == 1.
@@ -642,8 +664,8 @@ Invocation is `source tests/scripts/lib/stock-preflight-gate.sh; stock_preflight
 | T5 | `/v1/server_types?name=…` → 0 results | exit 1 (unknown type → fail-closed) |
 | T6 | unknown location | exit 1 (fail-closed) |
 | T7 | fetch returns 500 | exit 1 + the **distinct** `cannot PROVE stock` message |
-| T8 | `terraform validate` with `location = "us-east"` | rejected by the new validation |
-| T9 | `terraform validate` with live `hel1` values | passes |
+| T8 | ~~`terraform validate`~~ **`terraform plan`** with `location = "us-east"` | rejected (`Error: Invalid value for variable`). **Corrected at /work:** `terraform validate` returns rc=0 "Success" here — it does **not** evaluate `validation` blocks (proven on the pinned TF v1.10.5). Asserting via `validate` would have been a vacuously-green residency test. |
+| T9 | `terraform plan` with live `hel1` values | passes. Live values are the `hel1` defaults — Doppler `prd_terraform` defines no `LOCATION`/`REGISTRY_LOCATION`, so no `TF_VAR_*` override exists. Exercised for free by the merge-path plan. |
 
 ## Risks & Mitigations
 

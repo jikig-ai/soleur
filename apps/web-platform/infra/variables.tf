@@ -39,12 +39,29 @@ variable "location" {
   description = "Hetzner datacenter location (web + git-data hosts). NOT the registry — that has its own var.registry_location so the two can diverge (#6122: the registry lives in nbg1, provisioned during a hel1 capacity outage)."
   type        = string
   default     = "hel1"
+  # EU residency (#6453). var.web_hosts pins its per-host location (:94-96) but this
+  # scalar — which places the git-data host and is overridable by TF_VAR_location —
+  # carried no check at all. Hetzner's /v1/datacenters really does return ash-dc1 (US),
+  # hil-dc1 (US) and sin-dc1 (Singapore), so an unvalidated var is one typo away from a
+  # non-EU prod host. Config-phase only: no resource is created, modified or destroyed.
+  validation {
+    condition     = contains(["nbg1", "fsn1", "hel1"], var.location)
+    error_message = "location must be an EU Hetzner DC (nbg1/fsn1/hel1) — GDPR residency (CLO T-1, GA-blocking). A non-EU host is rejected before it is created, not after it holds data."
+  }
 }
 
 variable "registry_location" {
   description = "Hetzner datacenter location for the zot registry host + its volume (#6122). Separate from var.location so the registry can move regions independently. Originally nbg1 (provisioned there during a hel1/eu-central cx23-stock outage). MOVED nbg1→**hel1** (#6288): the OOM remediation needs an 8 GB host, and cx33 (8 GB, ~€8.49/mo) is available in hel1 but not nbg1 (nbg1's cheapest 8 GB was cpx32 ~€35/mo). hel1 is the same eu-central network zone (10.0.1.0/24 spans it) + where the web/git-data/inngest hosts live. The location change is ForceNew on hcloud_volume.registry — the nbg1 store volume is destroyed and a fresh hel1 volume is created; the 35 GB store re-fills from GHCR (zot is a mirror; pulls fall through to GHCR meanwhile)."
   type        = string
   default     = "hel1"
+  # EU residency (#6453) — same rule as var.location above, enforced separately because
+  # the two deliberately diverge (the registry moved nbg1 -> hel1 independently, #6288).
+  # This var is the TARGET of the registry-region-migrate dispatch, i.e. the one location
+  # an operator changes by hand, which makes it the likeliest to receive a non-EU value.
+  validation {
+    condition     = contains(["nbg1", "fsn1", "hel1"], var.registry_location)
+    error_message = "registry_location must be an EU Hetzner DC (nbg1/fsn1/hel1) — GDPR residency (CLO T-1, GA-blocking). The zot store mirrors GHCR artifacts; it is rejected before it lands outside the EU."
+  }
 }
 
 variable "image_name" {
