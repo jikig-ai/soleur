@@ -266,15 +266,38 @@ blocking a *parked* phase, not an active one.
 
 | Item | Why deferred | Re-evaluation criteria |
 |---|---|---|
-| **Blue-green via add/drain/remove** (`web-3` semantics — distinct keys + generated names + IP allocation, replacing `-replace`) | The only non-racy fix, and the *only* thing that would make the issue's blue-green ask real. But it is an IaC redesign of three load-bearing hosts that amends `hr-prod-host-config-change-immutable-redeploy` and ADR-103 — **it warrants its own ADR**, not a line in this issue. | A stock-blocked recreate strands the fleet a **third** time. |
+| **Blue-green via add/drain/remove** (`web-3` semantics — distinct keys + generated names + IP allocation, replacing `-replace`) — filed as **#6459** | The only non-racy fix, and the *only* thing that would make the issue's blue-green ask real. But it is an IaC redesign of three load-bearing hosts that amends `hr-prod-host-config-change-immutable-redeploy` and ADR-103 — **it warrants its own ADR**, not a line in this issue. | A stock-blocked recreate strands the fleet a **third** time. |
 | **Location override on recreate dispatches** (re-place into a sibling eu-central DC instead of wedging) | The generalized #6393 fix; distinct from headroom, and needs its own risk review (cross-DC hosts cannot share the location-scoped placement group). | Any recreate blocked on `resource_unavailable`. |
 | **Fresh-boot readiness assertions** per host | Three postmortems in two weeks (07-06 errexit, 07-13 auth-denied, 07-14 zot NIC — a **14-day silent outage**) show fresh boots fail *silently* while all health gates read green. Any born-new strategy **assumes** a fresh host boots correctly; the evidence says that is not safe. Partially addressed by ADR-115's `soleur-private-nic-guard.sh`. "Remembering is not a control" — the assertion must be automated, not a runbook step. | Before any add/drain/remove work lands. |
 | **git-data birth** | Wanted (ADR-068 `adopting`; code built, wired, dark), but gated behind the cap **and** #6416 **and** ADR-115's `luksOpen`-doesn't-survive-reboot blocker. Its GA trigger #5274 is "Post-MVP / Later". | Cap raised **and** #6416 closed **and** ADR-115 blocker cleared. |
 
 ## Productize Candidate
 
-`Productize Candidate: fleet-capacity-audit` — a periodic reconcile of live
-Hetzner resources vs. IaC vs. `expenses.md`. All three drifts found here
-(unmanaged host, `active` rows for an unborn host, stale region) are the same
-class and were found only by hand-probing during a brainstorm.
+`Productize Candidate: fleet-capacity-audit` — **filed as #6460.** A periodic
+read-only reconcile of live Hetzner resources vs. IaC vs. `expenses.md`. All three
+drifts found here (unmanaged host, `active` rows for an unborn host, stale region)
+are the same class and were found only by hand-probing during a brainstorm — and an
+ADR corpus grew on top of one of them.
+
+## Phase 3.55 — Visual Design
+
+**Genuinely not applicable.** Scope is pure infrastructure (Hetzner slots, a
+Terraform validation, a workflow tripwire, an AGENTS.md rule amendment, a ledger
+reconcile). No UI surface per `references/ui-surface-terms.md` — no page,
+component, modal, banner, nav, flow, or email template. This is the trigger
+boundary, not a skipped gate.
+
+## Session Notes
+
+- **Roadmap drift left unfixed, deliberately.** `roadmap-reconcile.sh validate`
+  reports `STALE_STATUS|phase 4|roadmap=43o/160c|milestone=51o/165c`. Not corrected
+  here: the reconcile module is read-only by design and routes to a dedicated
+  roadmap-review cron that opens its own reviewed PR, and folding a roadmap sync
+  into a Hetzner-cap PR would be unrelated scope. Phase-4 counts have no bearing on
+  this brainstorm's domain assessments.
+- **Operator scope reversal recorded.** The operator selected all four scope items,
+  including the cap-headroom preflight. Item 4 is **dropped** with reasoning
+  (Decision 3) after the CTO established that a `-replace` frees its own slot. The
+  operator should confirm the reversal — it is the one place this brainstorm
+  overrides an explicit selection.
 </content>
