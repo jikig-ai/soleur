@@ -153,6 +153,7 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-writer-1",
       conversationId: "conv-writer-1",
       userMessage: "hi",
@@ -192,6 +193,7 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-writer-2",
       conversationId: "conv-writer-2",
       userMessage: "hi",
@@ -223,6 +225,7 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-stale-1",
       conversationId: "conv-stale-1",
       userMessage: "hi",
@@ -264,6 +267,7 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-key-1",
       conversationId: "conv-key-1",
       userMessage: "hi",
@@ -307,6 +311,7 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-noid-1",
       conversationId: "conv-noid-1",
       userMessage: "hi",

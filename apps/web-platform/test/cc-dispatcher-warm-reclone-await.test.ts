@@ -209,6 +209,7 @@ describe("dispatchSoleurGo — warm-dispatch reclone await (#5715)", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     const p = dispatchSoleurGo({
+      persona: "command_center",
       ...BASE_ARGS,
       conversationId: "conv-warm-s1",
       sendToClient,
@@ -239,6 +240,7 @@ describe("dispatchSoleurGo — warm-dispatch reclone await (#5715)", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       ...BASE_ARGS,
       conversationId: "conv-warm-s2",
       sendToClient,
@@ -260,6 +262,7 @@ describe("dispatchSoleurGo — warm-dispatch reclone await (#5715)", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       ...BASE_ARGS,
       conversationId: "conv-cold-s3",
       sendToClient,
@@ -284,6 +287,7 @@ describe("dispatchSoleurGo — warm-dispatch reclone await (#5715)", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       ...BASE_ARGS,
       conversationId: "conv-warm-s4",
       sendToClient,
@@ -309,6 +313,7 @@ describe("dispatchSoleurGo — warm-dispatch reclone await (#5715)", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       ...BASE_ARGS,
       conversationId: "conv-warm-s5",
       sendToClient,
@@ -326,6 +331,7 @@ describe("dispatchSoleurGo — warm-dispatch reclone await (#5715)", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       ...BASE_ARGS,
       conversationId: "conv-warm-s5b",
       sendToClient,

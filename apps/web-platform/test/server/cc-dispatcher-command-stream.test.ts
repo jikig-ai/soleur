@@ -190,6 +190,7 @@ describe("command_stream RUNNER forwarding (AC5)", () => {
       },
     });
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-1",
       userId: "user-1",
       userMessage: "hi",

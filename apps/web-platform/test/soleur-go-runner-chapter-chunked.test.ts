@@ -131,6 +131,7 @@ const baseDispatchArgs = (
   conversationId,
   userId: "u1",
   userMessage,
+  persona: "command_center" as const,
   currentRouting: { kind: "soleur_go_pending" } as ConversationRouting,
   events,
   persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
