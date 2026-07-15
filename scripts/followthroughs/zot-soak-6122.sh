@@ -6,18 +6,86 @@
 # GHCR push/egress can be retired (tasks 5.3-5.5) and ADR-096 flips adopting → accepted
 # (5.6). This script is that gate. It PASSES (closes the tracker) only when, over the
 # window from just-after cutover to now, Sentry shows:
-#   (a) ZERO ghcr-fallback events for EITHER image, on the rolling-deploy path
-#       (ci-deploy.sh registry_pull_event, tag registry:"ghcr-fallback") AND the
-#       fresh-boot path (cloud-init soleur-boot-emit, tag stage:"inngest_ghcr_fallback");
+#   (a) ZERO fallback events across ALL FOUR signals the companion alarm
+#       (sentry_issue_alert.zot_mirror_fallback_rate) watches — see FAIL_QUERIES below;
 #   (b) a MIN_SAMPLE of zot-served pulls PER image (registry:"zot" image:"web" /
 #       image:"inngest") — so a vacuous "zero fallbacks because nothing deployed" cannot
 #       close the tracker. Proof the flip was actually exercised.
 #
+# The four watched signals and their emitters (anchored on EMIT NAMES, not line numbers —
+# ADR-096 mandates this; line citations rot). FOUR emit functions across three files, in TWO
+# schema families (feature/op-prefixed vs bare-stage) — that split is the whole reason the
+# queries differ:
+#   registry:"ghcr-fallback"       ci-deploy.sh  `registry_pull_event ghcr-fallback`
+#                                  jq tags: {feature, op, registry, image}
+#   registry:"zot-gate-degraded"   ci-deploy.sh  `zot_gate_degraded_event`
+#                                  jq tags: {feature, op, registry, zot_gate_reason}
+#   stage:"inngest_ghcr_fallback"  cloud-init.yml calls `soleur-boot-emit inngest_ghcr_fallback`
+#                                  (defined in soleur-host-bootstrap.sh) tags: {stage, host_id, region}
+#   stage:"app_ghcr_fallback"      cloud-init.yml `_emit ... "app_ghcr_fallback" warning`
+#                                  tags: {stage, image_ref, host_id, detail}
+#
+# ⚠ THE PREFIX ASYMMETRY IS DELIBERATE. Do NOT "normalize" the queries to a common prefix.
+# ci-deploy.sh's jq payload carries feature+op, so the registry: queries are prefixed. NEITHER
+# boot-path emitter (`soleur-boot-emit` nor `_emit`) writes feature or op — they are separate
+# emitters that happen to share that gap — so the stage: queries MUST be bare. Sentry tag
+# matching is EXACT: prefixing a stage: query makes it match zero events forever, silently
+# restoring the blindness this gate exists to catch. Verify against BOTH boot emitters' tag
+# schemas above before touching a query — one of them is not enough.
+# Proven live on the bare-vs-prefixed question: stage:"bootstrap_complete" → 9 events; the
+# same query prefixed with feature/op → 0. (Caveat, so the evidence is not over-read: that
+# beacon comes from a FOURTH emitter, `_sentry_emit` in soleur-host-bootstrap.sh, which emits
+# none of the four watched signals. It shares soleur-boot-emit's {stage,host_id,region} shape,
+# so it demonstrates the bare-vs-prefixed behaviour and covers [freshboot]'s schema; it does
+# NOT independently cover `_emit`'s {stage,image_ref,host_id,detail}, which [appboot] rides.
+# Both are pinned by the op-contract test's tag-key legs instead — see that file.)
+# The FAIL set (whole query strings, not just the tag values) is pinned against the alarm by
+# apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts, so drift on
+# either side fails CI rather than silently darkening this gate.
+#
+# ⚠ WHAT THIS GATE CANNOT SEE — it is NECESSARY BUT NOT SUFFICIENT to authorize 5.3-5.5.
+# There are SIX ways the fleet can end up GHCR-served; this gate's FAIL set covers FOUR:
+#   COVERED (the four FAIL_QUERIES below): rolling-deploy pull fallback; gate-degraded;
+#     inngest fresh-boot fallback; app fresh-boot fallback (post-probe-hit branch only).
+#   NOT COVERED 1/2 — Sentry-dark. ci-deploy.sh returns early when doppler, DOPPLER_TOKEN, or
+#     ZOT_REGISTRY_URL is absent, BEFORE every zot_gate_degraded_event call site: the fleet
+#     emits NOTHING to Sentry (journald only). Caught ONLY by the insufficient-sample arm
+#     below — which is why that arm must keep exit 1. Tracked: #6437.
+#   NOT COVERED 2/2 — fresh-boot (web) probe-miss. If cloud-init's /v2/ probe MISSES, the ref
+#     stays the GHCR ref, the pull succeeds first try, and the emit's guard (N>=2 && REF !=
+#     IMAGE_REF) never fires — so that path emits nothing at all. Presumed the dominant
+#     fresh-boot path (no fresh-boot fallback events have ever been observed; inferred from the
+#     rolling-deploy gate's 34-of-38 probe_unreachable reasons — a DIFFERENT emitter on a
+#     DIFFERENT path, so this is an inference, not a measurement). There is also no app_zot
+#     liveness beacon (inngest has one via `soleur-boot-emit inngest_zot`), so "0 fresh-boot
+#     fallbacks" is indistinguishable from "no fresh boot happened": this gate counts BAD
+#     events but has no DENOMINATOR of expected boots. Tracked: #6462.
+#   - Consequence: a PASS here is evidence, not authorization. See ADR-096.
+#
+# ⚠ NOT YET ENROLLED — no query in this file has ever executed, and THIS PR DOES NOT CHANGE THAT.
+# Two independent reasons, in the order they bite:
+#   1. UNREACHABLE (the operative one). sweep-followthroughs.sh enumerates
+#      `gh issue list --label follow-through --state open` and reads a `soleur:followthrough`
+#      directive from each body. #6122 carries neither the label nor a directive, and no issue
+#      in the repo references this script — so the sweeper never calls run_one for it at all.
+#   2. NON-EXECUTABLE (latent, fixed by #6435). The file was committed mode 100644. Had it ever
+#      been enrolled, sweep-followthroughs.sh would have rejected it at its `[[ ! -x "$script" ]]`
+#      guard BEFORE the `env -i` exec, via fail() — which is `printf ... >&2` and nothing else —
+#      then `return 0`: no run, no exit code, no comment on the tracker, no TRANSIENT bucket.
+#      scripts/followthrough-exec-bit.test.sh now guards that for the whole probe class.
+#
+# Enrollment is deliberately deferred, NOT an oversight: the cutover has not happened
+# (registry:"zot" = 0 events over 30d — zot has never served a pull), and START below is still
+# the unpinned placeholder. Enrolling now would make the daily sweeper post a TRANSIENT comment
+# to the tracker every day forever without ever converging. Enrollment = add the `follow-through`
+# label + the directive at the bottom of this header to the tracker, AND pin START, at cutover.
+# #6122 owns the cutover UTC and the enrollment decision.
+#
 # Exit semantics (per sweep-followthroughs.sh contract):
 #   0 = PASS       (zero fallbacks AND sufficient zot sample; sweeper closes the tracker)
-#   1 = FAIL       (>=1 ghcr-fallback OR insufficient zot sample — leave open: a real
-#                   fallback is a regression to investigate; an insufficient sample means
-#                   keep soaking, do NOT retire GHCR yet)
+#   1 = FAIL       (>=1 fallback on any watched signal OR insufficient zot sample — leave
+#                   open: a real fallback is a regression to investigate; an insufficient
+#                   sample means keep soaking, do NOT retire GHCR yet)
 #   * = TRANSIENT  (Sentry API unreachable / auth / parse failure; retry next sweep)
 #
 # Required env: SENTRY_AUTH_TOKEN (wire as secrets.SENTRY_IAC_AUTH_TOKEN in the sweeper).
@@ -26,17 +94,49 @@
 
 set -uo pipefail
 
-: "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
+# Fail-safe env check. Deliberately NOT `: "${VAR:?msg}"` — under a non-interactive shell
+# that word-expansion aborts with status 1, which this contract reads as FAIL ("criteria not
+# met") when the truth is "the probe could not run". An unprovisioned env must never be able
+# to report a verdict on an irreversible retirement. See followthrough-convention.md.
+if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
+  echo "TRANSIENT: SENTRY_AUTH_TOKEN is unset or empty — cannot query Sentry (declare it in the directive's secrets= clause)" >&2
+  exit 2
+fi
 
 ORG="jikigai-eu"
 API="https://sentry.io/api/0"
 MIN_SAMPLE="${ZOT_SOAK_MIN_SAMPLE:-3}"   # min zot-served pulls per image to prove exercise
+# Validate before use. `[[ -lt ]]` does ARITHMETIC evaluation, which coerces a non-numeric to
+# 0 and evaluates a command substitution: MIN_SAMPLE=0, "", or "abc" all make the sample arm
+# below pass vacuously and print "Safe to retire GHCR" with zero evidence — silently disabling
+# the ONLY detector for the Sentry-dark mode (#6437). `a[$(cmd)]` would also execute cmd with
+# the Sentry token in-process. The sweeper's `env -i` cannot forward this var, but the header
+# says enrollment is deferred, so every near-term run is a manual one where it IS settable —
+# exactly when the retirement decision gets made.
+if [[ ! "$MIN_SAMPLE" =~ ^[1-9][0-9]*$ ]]; then
+  echo "TRANSIENT: ZOT_SOAK_MIN_SAMPLE must be a positive integer (got '$MIN_SAMPLE') — refusing to report a verdict." >&2
+  exit 2
+fi
 
 # Absolute window start — PIN THIS to just after the cutover flip (the same UTC the
 # operator records in the revert runbook). Placeholder until pinned; the earliest= gate in
 # the issue directive still defers the first real check to >=7 days after cutover.
 START="${ZOT_SOAK_START:-<POST_CUTOVER_UTC>}"
 END=$(date -u +%Y-%m-%dT%H:%M:%S)
+
+# Own the unpinned-START case rather than delegating it to Sentry's date parser. Until START
+# is pinned it holds the literal placeholder above; today's fail-safety rests on Sentry 400ing
+# that string — an unverified vendor behaviour this gate must not bet an irreversible
+# retirement on.
+#
+# NOTE: this proves START is a TIMESTAMP, not that it is the RIGHT one. Nothing here asserts
+# START <= cutover_utc, and a START pinned LATE is a false-PASS route: it excludes flip-day
+# fallbacks while the remaining days still clear MIN_SAMPLE. The window bound is
+# operator-asserted and unverified. Tracked on #6122 (which owns the true cutover UTC).
+if [[ ! "$START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+  echo "TRANSIENT: START is unpinned ($START) — pin ZOT_SOAK_START in this script to the cutover UTC before this gate can report a verdict." >&2
+  exit 2
+fi
 
 # sentry_count <query> → echoes the event count for the window, or "TRANSIENT" on error.
 sentry_count() {
@@ -49,30 +149,82 @@ sentry_count() {
   status=$(printf '%s' "$resp" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
   body=$(printf '%s' "$resp" | sed '$d')
   if [[ "$status" != "200" ]]; then echo "TRANSIENT"; return; fi
-  n=$(printf '%s' "$body" | jq -r '.data | length // 0' 2>/dev/null)
+  # Require .data to BE an array. The previous form took `length` with an alternative-operator
+  # default of zero, which yields a plain 0 for an unexpected payload shape (an error object has
+  # no .data → length of null → 0). That 0 is numeric, so it sailed through the guard below as a
+  # COUNTED ZERO — a false-PASS route on the one gate protecting an irreversible action. (The
+  # default was also dead code: `length` never returns null.) On a shape mismatch jq now errors →
+  # empty → TRANSIENT.
+  n=$(printf '%s' "$body" | jq -r 'if (.data | type) == "array" then (.data | length) else error("no data array") end' 2>/dev/null)
   [[ "$n" =~ ^[0-9]+$ ]] && echo "$n" || echo "TRANSIENT"
 }
 
-# --- (a) ghcr-fallback events (rolling deploy + fresh boot), per image. Zero required. ---
-FB_ROLLING=$(sentry_count 'feature:supply-chain op:image-pull registry:"ghcr-fallback"')
-FB_FRESHBOOT=$(sentry_count 'stage:"inngest_ghcr_fallback"')
+# --- (a) Fallback events across ALL FOUR watched signals. Zero required. ---
+#
+# Declared, guarded, and summed by ONE loop, so "declared but never counted" — the #6435
+# defect — is structurally unrepresentable rather than policed by a reviewer's attention.
+# ⚠ [freshboot] and [appboot] are BARE stage: queries. NEVER prefix them (see the header).
+declare -A FAIL_QUERIES=(
+  [rolling]='feature:supply-chain op:image-pull registry:"ghcr-fallback"'
+  [gate]='feature:supply-chain op:image-pull registry:"zot-gate-degraded"'
+  [freshboot]='stage:"inngest_ghcr_fallback"'
+  [appboot]='stage:"app_ghcr_fallback"'
+)
+
+# Runtime cardinality floor. The array above makes "declared but never counted" unrepresentable
+# only in SOURCE; at RUNTIME an absent/emptied FAIL_QUERIES iterates zero times and yields
+# FALLBACKS=0 -> PASS. `set -u` does NOT rescue this: expanding "${!FAIL_QUERIES[@]}" on an
+# unset array exits 0 with zero iterations (verified, bash 5.3.9), and there is no `set -e` to
+# abort a failed `declare`. Without this line the only thing between "the array is gone" and
+# "retire GHCR" is a CI test that parses source text — but CI parses while the sweeper
+# executes. Mirrors the same floor in scripts/followthrough-exec-bit.test.sh.
+if (( ${#FAIL_QUERIES[@]} != 4 )); then
+  echo "TRANSIENT: FAIL_QUERIES has ${#FAIL_QUERIES[@]} entries, expected 4 — refusing to report a verdict on a partial FAIL set." >&2
+  exit 2
+fi
+
+declare -A COUNTS
+FALLBACKS=0
+# Sorted for deterministic output; the array above stays the single source of truth.
+for k in $(printf '%s\n' "${!FAIL_QUERIES[@]}" | sort); do
+  n=$(sentry_count "${FAIL_QUERIES[$k]}")
+  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+    echo "TRANSIENT: Sentry query '$k' failed (window $START..$END) — retry next sweep." >&2
+    exit 2
+  fi
+  COUNTS[$k]=$n
+  FALLBACKS=$(( FALLBACKS + n ))
+done
+
 # --- (b) zot-served sample per image. >= MIN_SAMPLE required (proof of exercise). ---
 ZOT_WEB=$(sentry_count 'feature:supply-chain op:image-pull registry:"zot" image:"web"')
 ZOT_INNGEST=$(sentry_count 'feature:supply-chain op:image-pull registry:"zot" image:"inngest"')
 
-for v in "$FB_ROLLING" "$FB_FRESHBOOT" "$ZOT_WEB" "$ZOT_INNGEST"; do
+for v in "$ZOT_WEB" "$ZOT_INNGEST"; do
   if [[ "$v" == "TRANSIENT" ]]; then
     echo "TRANSIENT: Sentry query failed (window $START..$END) — retry next sweep." >&2
     exit 2
   fi
 done
 
-FALLBACKS=$(( FB_ROLLING + FB_FRESHBOOT ))
 if [[ "$FALLBACKS" -gt 0 ]]; then
-  echo "FAIL: $FALLBACKS ghcr-fallback event(s) since $START (rolling=$FB_ROLLING freshboot=$FB_FRESHBOOT) — a host could not pull from zot. Investigate before retiring GHCR (do NOT proceed to 5.3-5.5)."
+  # Per-signal counts, not just the total: the remediation differs by signal.
+  # gate-degraded = zot was never ATTEMPTED (the gate degraded → fleet silently on GHCR;
+  #   chase the mirror/network path — #6416 / #6288).
+  # ghcr-fallback = zot WAS attempted and the pull failed (chase the pull path).
+  # inngest_/app_ghcr_fallback = a fresh boot could not pull from zot.
+  echo "FAIL: $FALLBACKS fallback event(s) since $START (rolling=${COUNTS[rolling]} gate-degraded=${COUNTS[gate]} inngest-freshboot=${COUNTS[freshboot]} app-freshboot=${COUNTS[appboot]}) — the fleet was served by GHCR. Investigate before retiring GHCR (do NOT proceed to 5.3-5.5)."
   exit 1
 fi
 
+# ⚠ This arm MUST keep `exit 1` (FAIL). Do NOT "fix" it to exit 2 (TRANSIENT) on the
+# reasoning that a thin sample just means "not enough deploys yet" — that is not the only
+# route here. In the Sentry-dark mode (#6437) ci-deploy.sh returns before every
+# zot_gate_degraded_event call site, so the fleet emits NOTHING: FALLBACKS=0 with no degrade
+# event, and this sample arm is the ONLY detector. TRANSIENT would make a silently
+# unconfigured fleet report "retry next sweep" forever instead of blocking the retirement.
+# The sample arm is a floor on GOOD evidence, not a ceiling on BAD — except here, where it is
+# the only ceiling.
 if [[ "$ZOT_WEB" -lt "$MIN_SAMPLE" || "$ZOT_INNGEST" -lt "$MIN_SAMPLE" ]]; then
   echo "FAIL(insufficient-sample): zot-served pulls web=$ZOT_WEB inngest=$ZOT_INNGEST (need >=$MIN_SAMPLE each) — zero fallbacks so far, but keep soaking until each image has been served by zot enough times to be conclusive."
   exit 1
