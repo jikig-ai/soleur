@@ -63,10 +63,14 @@ never been runnable.
 - **A cap-headroom preflight.** Explicitly dropped — it guards a non-existent
   capability and would fail every recreate today. (Operator originally selected it;
   reversed with reasoning in the brainstorm's Decision 3.)
-- **Building durable automation for the Console limit-raise.** A real browser attempt hit
-  a `/_ray/pow` proof-of-work gate returning 429, with no Console credentials anywhere and
-  no Hetzner session in the persistent profile. Negative ROI for a once-ever action. The
-  operator filed it directly on 2026-07-15.
+- **Building durable automation for the Console limit-raise.** A real browser attempt
+  reached the live login form: the `/_ray/pow` interstitial **auto-cleared** and
+  `accounts.hetzner.com/login` rendered. The gate is that **no Hetzner Console credential
+  exists** — Doppler holds only `HCLOUD_TOKEN` (an API token that cannot reach the limits
+  form) across `prd_terraform`/`prd`/`dev`, and the account password lives solely in the
+  operator's personal password manager. Storing a root infra-account password for an agent
+  to use is an operator **security decision**, not a blocker to route around. Negative ROI
+  for a once-ever action. Filed as **#6481** on 2026-07-15.
 - **Blue-green / add-drain-remove.** Warrants its own ADR; deferred.
 - **git-data birth.** Blocked by **stock** above all (cax11 → 0 of 3 EU DCs, so it cannot
   be born at ANY cap), plus ADR-115's `luksOpen` blocker; GA trigger #5274 is "Post-MVP /
@@ -135,14 +139,28 @@ never been runnable.
 
 **G3 — REQUESTED by the operator 2026-07-15. Pending Hetzner review (vendor-side, days).**
 
-It was verified operator-only by a real attempt, not assumed: `console.hetzner.cloud`
-301s to `console.hetzner.com`, and `accounts.hetzner.com/login` redirects to **`/_ray/pow`
-returning HTTP 429** — a proof-of-work anti-bot gate that rate-limits a non-browser client
-before a login form ever renders. Compounding it: `GET /v1/limits` → **404** (no API to
-read or raise a quota), **no Hetzner Console credentials exist in Doppler** (only
-`HCLOUD_TOKEN`, an API token that cannot reach the limits form), and the persistent
-playwright-mcp profile holds 65 domains — Cloudflare, Better Stack, Sentry, Resend, GitHub,
-Google — and **zero Hetzner**, so there was no session to reuse.
+It was verified operator-only by a real attempt, not assumed — and the **first recorded
+reason was wrong**. This spec previously claimed `accounts.hetzner.com/login` redirects to
+`/_ray/pow` returning **HTTP 429**, an anti-bot wall blocking the run. **Not reproducible
+on 2026-07-15:** the PoW interstitial **auto-cleared on the first attempt** and the run
+reached the real login form (client-number + password fields, no active session). The
+conclusion survives; the reason does not.
+
+`playwright-attempt: navigated https://console.hetzner.cloud/ (301 → console.hetzner.com).
+The /_ray/pow interstitial at accounts.hetzner.com AUTO-CLEARED and the run reached
+accounts.hetzner.com/login. Gate reached: a CREDENTIAL WALL with no credential in
+existence — Doppler holds only HCLOUD_TOKEN across prd_terraform/prd/dev, an API token
+that cannot reach the limits form; the persistent playwright-mcp profile holds 65 domains
+(Cloudflare, Better Stack, Sentry, Resend, GitHub, Google) and ZERO Hetzner, so there was
+no session to reuse. GET /v1/limits → 404 while GET /v1/pricing → 200 with the same token,
+proving the 404 is a real absence and not an auth artifact. The account password lives only
+in the operator's personal password manager.`
+
+"No credential exists" is **not** one of the enumerated human gates
+(CAPTCHA/OTP/TOTP/passkey/push-MFA/card/hardware). It is operator-only because storing the
+root infra-account password in Doppler for an agent to use is a **security decision for the
+operator** — not a technical blocker. Recorded this way deliberately: had the 429 claim
+been taken at face value, the standing reason would have been fiction.
 
 **Detection of approval is impossible by construction, and that is stated rather than
 papered over.** `/v1/limits` re-probed post-request: still 404. No follow-through can be
@@ -156,14 +174,38 @@ option (#6416's gap).
 
 ## Acceptance Criteria
 
+> **The plan is authoritative for the ACs** — see
+> `knowledge-base/project/plans/2026-07-15-chore-hetzner-cap-headroom-plan.md`
+> (`## Acceptance Criteria`, trimmed 16 → 9 at plan-review). This list is the
+> goal-level view; each box below was re-verified against the tree at ship, not
+> ticked from the plan's prose.
+
 - [x] `hcloud server list` returns 4 — **done 2026-07-15**
-- [ ] Snapshot `408787015` has a retention expiry set (open remainder of G1)
-- [ ] `expenses.md` has no `active` rows for non-existent resources (git-data `:14-16`
-      → `approved-not-billing`); web-2 `:17-19` reads fsn1
-- [ ] `AGENTS.core.md:26` names the no-rollback danger; rule id unchanged
-- [x] Server limit raise **requested** 2026-07-15 (operator; Console PoW-gated — evidence in G3 above). Approval is **not** verifiable by API (`/v1/limits` 404) — consumer-discovered at the next additive create.
-- [ ] Residency validation covers `var.location` + `var.registry_location`
-- [ ] Stock preflight shipped **or** explicitly dropped with the API finding recorded
+- [x] ~~Snapshot `408787015` has a retention expiry set~~ — **obsolete, not open.**
+      FR1 was dropped: the snapshot was **deleted in-session** (operator decision), which
+      satisfies the CLO's expiry requirement with zero machinery. There is no retention to
+      set on an object that no longer exists. G1 is CLOSED.
+- [x] `expenses.md` has no `active` rows for non-existent resources (git-data
+      → `approved-not-billing`); web-2 reads fsn1
+      — verified: git-data `active` rows = **0**; web-2 rows = **3**, all fsn1.
+- [x] `AGENTS.core.md` names the no-rollback danger; rule id unchanged (occurrences = **1**),
+      with the ADR-092 / AP-017 hash-bound body ack appended (`rule-body-lint` is an
+      always-run **required** check).
+- [x] Server limit raise **requested** 2026-07-15 (operator). Gate was a **missing Console
+      credential**, not the PoW wall — evidence in G3 above. Approval is **not** verifiable
+      by API (`/v1/limits` 404) — consumer-discovered at the next additive create.
+      Tracked as **#6481** (`action-required`).
+- [x] Residency validation covers `var.location` + `var.registry_location`
+      (`variables.tf:47-50`, `:61-64`).
+- [x] Stock preflight **shipped** — `tests/scripts/lib/stock-preflight-gate.sh` wired into
+      all **five** destroy-shaped paths, with a hermetic synthesized-fixture suite
+      registered in `scripts/test-all.sh`.
+
+**Post-merge (operator, not a merge blocker):**
+
+- [ ] **AC13** — Hetzner Console limit raise (servers 5 → 10, plus the volume limit).
+      Vendor-side and **unverifiable by construction**; filed as **#6481**. See G3 for the
+      attempt evidence and why no tracker can poll it.
 
 ## Open Risks
 
@@ -171,6 +213,13 @@ option (#6416's gap).
   window it cannot close.
 - **Fresh-boot reliability** — three postmortems in two weeks show fresh boots fail
   *silently* while health gates read green. Any born-new strategy inherits this.
-- **`hermes-agent` purpose is unknown** — the snapshot makes the destroy reversible,
-  which is what makes proceeding acceptable.
+- **`hermes-agent` purpose is unknown and the destroy is NOT reversible.** An earlier
+  draft of this line read *"the snapshot makes the destroy reversible, which is what makes
+  proceeding acceptable"* — that is **false as of 2026-07-15**: snapshot `408787015` was
+  deleted the same day (operator decision, FR1 dropped). **THERE IS NO ROLLBACK.** What
+  makes proceeding acceptable is no longer reversibility but the deliberate trade recorded
+  in G1 — retaining an unaudited 40 GB disk of unknown provenance with no expiry is
+  continued processing (CLO), and every enforcement mechanism available was worse than the
+  risk. If something breaks and the cause is unclear, **suspect this host first — it cannot
+  be restored.** Disclosed in `expenses.md`.
 </content>

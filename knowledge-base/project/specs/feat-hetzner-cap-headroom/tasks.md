@@ -99,8 +99,12 @@ plan's "Preconditions — RESOLVED" section. Nothing left to probe.
 ## Phase 6 — Limit-raise issue
 
 - [x] **6.1** [#6481] File the `action-required` issue with the **playwright-attempt evidence line**
-      (301→console.hetzner.com; `accounts.hetzner.com/login` → `/_ray/pow` **429** PoW gate;
-      `/v1/limits` **404**; no Console creds in Doppler; profile has 65 domains, **zero** Hetzner).
+      (301→console.hetzner.com; the `/_ray/pow` interstitial **AUTO-CLEARED** and the run reached
+      the real `accounts.hetzner.com/login` form; gate = a **credential wall with no credential in
+      existence**; `/v1/limits` **404** while `/v1/pricing` **200** on the same token, proving a real
+      absence not an auth artifact; no Console creds in Doppler; profile has 65 domains, **zero**
+      Hetzner). *(Corrected: an earlier draft recorded a `/_ray/pow` **429** anti-bot wall — not
+      reproducible on 2026-07-15. Conclusion unchanged, reason replaced.)*
 - [x] **6.2** State plainly that it is **unverifiable-by-construction** and **NOT** tracked —
       `action-required` has no sweeper (9+ open, oldest 2026-07-08, incl. #6406). Do not claim
       otherwise. The honest mechanism is the consumer discovering the cap at plan time.
