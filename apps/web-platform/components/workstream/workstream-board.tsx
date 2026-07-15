@@ -141,9 +141,11 @@ export function WorkstreamBoard() {
 
   const refreshFailed = error != null && data != null;
   // First-load degrade (502 before any data): the board shows <ErrorCard>. Guard
-  // the New-Issue buttons so an optimistic create can't flip `data` non-null and
-  // resurrect the false <EmptyState> under the amber banner when its POST then
-  // fails against the same cold backend (rollback → { issues: [] }).
+  // the TOOLBAR New-Issue button (the only create trigger rendered in this state)
+  // so an optimistic create can't flip `data` non-null and resurrect the false
+  // <EmptyState> when its POST then fails against the same cold backend (rollback
+  // → { issues: [] }). The EmptyState button needs no guard — it only renders
+  // when `data != null`, where `firstLoadFailed` is definitionally false.
   const firstLoadFailed = error != null && data == null;
 
   const resetFilters = useCallback(() => {
@@ -575,10 +577,7 @@ export function WorkstreamBoard() {
       ) : !data ? (
         <BoardSkeleton />
       ) : issues && issues.length === 0 ? (
-        <EmptyState
-          onNew={() => setNewOpen(true)}
-          disabled={readOnly || firstLoadFailed}
-        />
+        <EmptyState onNew={() => setNewOpen(true)} disabled={readOnly} />
       ) : filtered.length === 0 ? (
         <NoResults onReset={resetFilters} />
       ) : (
