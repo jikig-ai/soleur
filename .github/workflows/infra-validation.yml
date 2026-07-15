@@ -307,6 +307,9 @@ jobs:
       - name: Run cutover-inngest.yml workflow tests
         run: bash apps/web-platform/infra/cutover-inngest-workflow.test.sh
 
+      - name: Run restart-inngest-server.yml self-trigger guard tests (#6425)
+        run: bash apps/web-platform/infra/restart-inngest-workflow-guard.test.sh
+
       - name: Run inngest-rls lockdown SQL shape guards
         run: bash apps/web-platform/infra/inngest-rls/inngest-rls.test.sh
 
