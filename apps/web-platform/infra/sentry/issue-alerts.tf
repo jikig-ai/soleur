@@ -1416,10 +1416,24 @@ resource "sentry_issue_alert" "inbox_action_required_notify_failure" {
 #       until the flip and not to investigate them separately.
 # Together those invite exactly one click that permanently blinds the page for the DOMINANT
 # GHCR-served path (a /v2/ probe-miss, where the GHCR pull succeeds first try) — the hole
-# #6462 exists to close. If it is noisy, fix the probe (#6416 / #6288) or pin the soak's
-# START past the cutover; do not mute this group. Muting does NOT create a false soak PASS
-# (Discover counts muted issues), so the loss is paging only — but paging is the entire
-# point of this signal pre-cutover.
+# #6462 exists to close. Muting does NOT create a false soak PASS (Discover counts muted
+# issues), so the loss is paging only — but paging is the entire point of this signal
+# pre-cutover.
+#
+# The honest levers, in order (an earlier draft of this comment offered "pin the soak's START
+# past the cutover" — that is a CATEGORY ERROR and was removed: START is ZOT_SOAK_START, read
+# only in zot-soak-6122.sh's sentry_count URL; THIS rule has no window and is completely
+# unaffected by it. Do not reach for it):
+#   1. Fix the probe (#6416 / #6288). This is the root cause and it also removes the noise
+#      from `zot-gate-degraded`, which already pages on the SAME probe_unreachable condition
+#      on ~34-of-38 rolling deploys — i.e. the operator is ALREADY being paged near-daily by
+#      that signal, and app_ghcr_served is an increment on existing noise, not a new class.
+#   2. If it must be quieted before then, mute `zot-gate-degraded`'s group (safe: it groups on
+#      a stable reason literal) — NOT this one, and never the RULE.
+#   3. If THIS group must be quieted, split it into its own sentry_issue_alert resource so it
+#      can be tuned without touching ghcr-fallback. That is a real fix, not a mute, and it
+#      costs a -target= entry + the op-contract's alarm⇔soak parity (which currently pins
+#      alarm.size == soakFailQueries().size == 5). Deferred, not dismissed: see #6462's PR.
 #
 # Distinct `frequency = 23` avoids Sentry POST-time exact-duplicate dedup (taken:
 # 5,10-22,30,60-62; keyed on action_match+filter_match+frequency+actions-shape, NOT

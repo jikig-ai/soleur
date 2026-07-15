@@ -32,9 +32,28 @@ fi
 
 ORG="jikigai-eu"
 API="https://sentry.io/api/0"
-# Absolute window start. The beacon ships with this PR, so anything before the merge cannot
-# carry it; a fixed start avoids a rolling window that silently forgets early evidence.
-START="${BEACON_PROBE_START:-2026-07-15T00:00:00}"
+
+# ⚠ START MUST BE PINNED TO THE POST-APPLY UTC, AND THIS SCRIPT REFUSES A VERDICT UNTIL IT IS.
+#
+# The beacon ships with this PR, so no boot before the apply can carry it — while
+# bootstrap_complete has fired on every fresh boot since 2026-07-06 (#6092). So a START that
+# is merely "merge day, midnight" admits boots from the pre-beacon gap: they increment BOOTS,
+# emit no beacon, and drive BOOTS>0 && BEACONS==0 → "the beacon is DARK" on a PERFECTLY
+# HEALTHY fleet. Note the perverse asymmetry — ZERO boots gives a correct TRANSIENT, but ONE
+# stray pre-beacon boot gives a false FAIL. The window breaks precisely when it is polluted.
+#
+# That is this probe's own defect class (cannot distinguish "not reported" from "broken")
+# reproduced inside the probe. An earlier draft hardcoded a guessed date; the sibling soak
+# builds an entire ceremony around exactly this hazard (a <POST_CUTOVER_UTC> placeholder plus
+# a regex gate that refuses a verdict on an unpinned window) and this now mirrors it.
+#
+# Pin it in the directive on #6462: `BEACON_PROBE_START=<apply UTC>`. The sweeper forwards it
+# via the directive's secrets= clause (env -i strips everything else).
+START="${BEACON_PROBE_START:-<POST_APPLY_UTC>}"
+if [[ ! "$START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+  echo "TRANSIENT: START is unpinned ($START) — set BEACON_PROBE_START to the post-apply UTC in #6462's followthrough directive. Refusing to report a verdict on a window that predates the beacon: a pre-beacon boot would be counted as evidence the beacon is dark." >&2
+  exit 2
+fi
 END="$(date -u +%Y-%m-%dT%H:%M:%S)"
 
 # Mirrors zot-soak-6122.sh's sentry_count contract exactly, including the TRANSIENT sentinel
