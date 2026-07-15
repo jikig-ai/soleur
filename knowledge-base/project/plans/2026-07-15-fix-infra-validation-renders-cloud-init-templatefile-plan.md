@@ -321,9 +321,10 @@ Implement `.github/scripts/validate-infra-templates.sh`:
    - **KEYS** = the templatefile map keys, via awk starting **after** the `{` (not at the `templatefile(` line — that captures the enclosing `user_data =` assignment as a phantom key) and stopping at `^\s*\}\)`. **TYPES** from the body: a key matching `%{ if <key>` → bool, else string. Build the map (`key="x"` / `key=true|false`).
    - Render both bool arms: `printf 'jsonencode(templatefile("%s", { … }))\n' | terraform -chdir="$(mktemp -d)" console | jq -r . | jq -r .`. **Non-zero → exit 2, surfacing terraform's message verbatim** (terraform is the grammar authority; the script never guesses). No `<<EOT` surgery — see Design Decision 3.
    - Assert **no map key** survives as `${key}` in the rendered doc → exit 3. *Not* a blanket `${…}` grep, which false-fails on legitimately-rendered `$${SHELL_VAR}`.
-   - Validate by type: `cloud-init*.yml` → `cloud-init schema -c`; `*.json`/`*.json.tmpl` → JSON parse; else → render-only. `validated++` per arm.
-5. Assert `validated == files_present` → else **exit 5**.
+   - Validate by type: `cloud-init*.yml` → `cloud-init schema -c`; `*.json`/`*.json.tmpl` → JSON parse; else → render-only.
 5. Assert `validated == |A ∪ B|` → else **exit 5**.
+
+   > *Corrected at /work:* the draft read `validated++` **per arm** here while asserting `validated == files_present` in the next step — those contradict, since `cloud-init.yml` is one file with two arms and would count 2 against a discovered 1, hard-failing exit 5 on a correct corpus. The Observability block's `rendered\+validated ([0-9]+)/\1 file\(s\)` settles it: the counter is **per file**, incremented once all of that file's arms validate. Implemented per-file. (The draft also carried two steps numbered `5`; merged.)
 6. Print `infra template validation: rendered+validated N/N file(s) in <dir>` and the bool count.
 7. Run Phase 1's fixtures. **Verify GREEN.**
 
@@ -374,15 +375,15 @@ Trimmed at plan-review from 16 to 10. Every AC below is a **checkable post-condi
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** — `bash .github/scripts/validate-infra-templates.sh apps/web-platform/infra` exits **0**, and its `validated N/N` line has **N == the number of discovered members** (today: 5 — 4 cloud-inits + `hooks.json.tmpl`). The script asserts the equality itself; the AC must not restate the literal.
-- [ ] **AC2 (anti-no-op, load-bearing)** — F2 (renders to `runcmd: "a-string"`) → script exits **1**. *The single most valuable fixture here: a gate that cannot fail is not a gate.*
-- [ ] **AC3 (anti-no-op)** — F3 (malformed rendered YAML) → exit 1; F9 (malformed rendered JSON) → exit 1.
-- [ ] **AC4 (the filed bug)** — F1 (`%{ if … ~}` at column 1) exits **0** through the script, while `cloud-init schema -c` on the same raw file exits **1**. Encodes the exact before/after.
-- [ ] **AC5 (silent-skip guard)** — F5 → exit 5; the script never reports success having validated fewer members than it discovered.
-- [ ] **AC6 (fail-closed)** — F8 (terraform absent) → exit 6, and the output contains **no** `SKIP`.
-- [ ] **AC7 (arm selection — the render's load-bearing justification)** — for `cloud-init.yml` the script validates **both** the `true` arm (795 lines) and the `false` arm (731 lines, the **default** production doc per `variables.tf`), and both pass. This is the property a directive-strip provably cannot deliver (Design Decision 0); without it the render is not worth its cost.
-- [ ] **AC8 (principled, not filename-bound — load-bearing)** — F9: a `.tf` declaring `templatefile("…/some-config.json", …)` plus that JSON template is discovered from the **call site alone** and validated, with no filename-list entry anywhere. This is what keeps #6448 from re-opening #6454. *(The panel correctly cut my companion `grep`-the-script-for-absent-strings check as a purity ritual — F9 tests the behavior, which is what matters.)*
-- [ ] **AC9** — `bash .github/scripts/test/run-all.sh` exits 0; `guard-script-fixture-tests` green.
+- [x] **AC1** — `bash .github/scripts/validate-infra-templates.sh apps/web-platform/infra` exits **0**, and its `validated N/N` line has **N == the number of discovered members** (today: 5 — 4 cloud-inits + `hooks.json.tmpl`). The script asserts the equality itself; the AC must not restate the literal. — **VERIFIED:** `rendered+validated 5/5 file(s)`, exit 0. All three matrix-selectable roots pass (`apps/cla-evidence/infra` and `infra/github` correctly report `no infra templates`, exit 0).
+- [x] **AC2 (anti-no-op, load-bearing)** — F2 (renders to `runcmd: "a-string"`) → script exits **1**. *The single most valuable fixture here: a gate that cannot fail is not a gate.* — **VERIFIED.**
+- [x] **AC3 (anti-no-op)** — F3 (malformed rendered YAML) → exit 1; F9 (malformed rendered JSON) → exit 1. — **VERIFIED** (both, plus F9b proves the JSON leg passes a well-formed doc, so F9 cannot pass merely by never discovering the file).
+- [x] **AC4 (the filed bug)** — F1 (`%{ if … ~}` at column 1) exits **0** through the script, while `cloud-init schema -c` on the same raw file exits **1**. Encodes the exact before/after. — **VERIFIED** on the fixture *and* on the real `apps/web-platform/infra/cloud-init.yml`: raw exit 1, script exit 0.
+- [x] **AC5 (silent-skip guard)** — F5 → exit 5; the script never reports success having validated fewer members than it discovered. — **VERIFIED.**
+- [x] **AC6 (fail-closed)** — F8 (terraform absent) → exit 6, and the output contains **no** `SKIP`. — **VERIFIED** (F8 isolates the terraform-absent branch via a PATH carrying cloud-init but not terraform, and asserts the message names `terraform`).
+- [x] **AC7 (arm selection — the render's load-bearing justification)** — for `cloud-init.yml` the script validates **both** the `true` arm and the `false` arm (the **default** production doc per `variables.tf`), and both pass. This is the property a directive-strip provably cannot deliver (Design Decision 0); without it the render is not worth its cost. — **VERIFIED: 803 / 739 lines.** *(Plan-time PoC measured 795/731; this PR's own 8-line `cloud-init.yml` comment accounts for the +8 on both arms. The load-bearing property is that the arms **differ** — proving both are really rendered — not the literal counts, per this section's own no-pinned-literals rule.)*
+- [x] **AC8 (principled, not filename-bound — load-bearing)** — F9: a `.tf` declaring `templatefile("…/some-config.json", …)` plus that JSON template is discovered from the **call site alone** and validated, with no filename-list entry anywhere. This is what keeps #6448 from re-opening #6454. *(The panel correctly cut my companion `grep`-the-script-for-absent-strings check as a purity ritual — F9 tests the behavior, which is what matters.)* — **VERIFIED.**
+- [x] **AC9** — `bash .github/scripts/test/run-all.sh` exits 0; `guard-script-fixture-tests` green. — **VERIFIED locally:** `ALL FIXTURE TESTS PASS` (the new suite auto-discovered by the `test-*.sh` glob, 19/19). CI leg confirmed at AC10.
 - [ ] **AC10 (proof-of-fix — the whole point)** — on PR #6458's own run: `gh run view <id> --json jobs` shows job `validate (apps/web-platform/infra)` with `conclusion == "success"` **and** `status == "completed"` (**not** `skipped`), its log contains the `validated N/N` line, and `infra-validate-required` is green. All three: conclusion alone cannot distinguish pass from skip.
 
 ### Post-merge
@@ -395,8 +396,8 @@ Trimmed at plan-review from 16 to 10. Every AC below is a **checkable post-condi
 
 | # | Scenario | Expect | Status |
 | --- | --- | --- | --- |
-| T1 | `cloud-init.yml`, bool `true` | render 795 lines → `Valid schema` | **verified** |
-| T2 | `cloud-init.yml`, bool `false` (**default** prod doc) | render 731 lines → `Valid schema` | **verified** |
+| T1 | `cloud-init.yml`, bool `true` | render → `Valid schema` (803 lines as shipped; 795 at plan time, +8 = this PR's comment) | **verified** |
+| T2 | `cloud-init.yml`, bool `false` (**default** prod doc) | render → `Valid schema` (739 lines as shipped; 731 at plan time, +8) | **verified** |
 | T3 | Other three cloud-inits | render → `Valid schema` | **verified** |
 | T4 | `hooks.json.tmpl` (`${jsonencode(...)}`) | render → JSON VALID (**new coverage**) | **verified** |
 | T5 | Anchored attribution vs. `ci-ssh-key.tf`'s prose comment | maps to `server.tf`, comment ignored | **verified** |
@@ -451,11 +452,11 @@ Recorded so cut scope is not silently re-added, and so the one rejection is audi
 1. **Flipping the ruleset to make `infra-validate-required` required.** The aggregator job itself **ships here** (Phase 3) — only the `ruleset-ci-required.tf` entry + `terraform apply` defer, because that is an admin/apply action, not a code change. Shipping the aggregator now means the follow-up is a one-line ruleset edit rather than a second structural edit to the same workflow. → **file issue**
 2. **N ≥ 2 bool combinatorics.** all-true/all-false covers 2 of 2^N. Complete for today's corpus (N=1, verified); a documented narrowing if that changes. → **file issue**
 3. **The hardcoded stub map in `cloud-init-inngest-bootstrap.test.sh`'s AC7 leg.** Pre-existing; it will false-red that *advisory suite* when someone adds a templatefile var to `server.tf`. My draft refactored it; plan-review cut that as scope creep (my own text concedes the tripwire is "acceptable in an advisory test"). The shared script is available to it later. → **file issue**
-3. **#6448** (docker-daemon.json insecure-registries drift, "fails SILENT") — explicitly out of scope. This plan is designed to *help* it, not block it: when #6448 converts `docker-daemon.json` to a `templatefile()`, discovery covers it automatically (proven by simulation, T9).
-   **Hand-off note for #6448's author** (observed while verifying, not acted on): `registry-insecure-config.test.sh` greps `DJ_ZOT_IP` out of the **raw** `docker-daemon.json`. Once that file becomes a templatefile, the raw grep will read `${registry_private_ip}` rather than an IP, so that probe must move to the **rendered** doc as part of #6448. This plan does not touch that file, that probe, or `docker-daemon.json` (AC15), and `.github/scripts/validate-infra-templates.sh` is available to #6448 as the render helper. → **note on the issue**
-4. **Fixing the self-referential probe** in `registry-insecure-config.test.sh` (asserts `CI_ZOT_IP == DJ_ZOT_IP` rather than against `local.registry_private_ip`, so real drift passes green). That is #6448's scope. Verified untouched and still passing here (AC13).
-5. **#6415 / #6400** — later PRs in this session's sequence. Out of scope. #6454 is the unblocker that merges first.
-6. **Editing any `cloud-init*.yml`, `docker-daemon.json`, or `*.tf`.** They are correct as written for this bug; the workflow was wrong.
+4. **#6448** (docker-daemon.json insecure-registries drift, "fails SILENT") — explicitly out of scope. This plan is designed to *help* it, not block it: when #6448 converts `docker-daemon.json` to a `templatefile()`, discovery covers it automatically (proven by simulation, T9).
+   **Hand-off note for #6448's author** (observed while verifying, not acted on): `registry-insecure-config.test.sh` greps `DJ_ZOT_IP` out of the **raw** `docker-daemon.json`. Once that file becomes a templatefile, the raw grep will read `${registry_private_ip}` rather than an IP, so that probe must move to the **rendered** doc as part of #6448. This plan does not touch that file, that probe, or `docker-daemon.json`, and `.github/scripts/validate-infra-templates.sh` is available to #6448 as the render helper. → **note on the issue**
+5. **Fixing the self-referential probe** in `registry-insecure-config.test.sh` (asserts `CI_ZOT_IP == DJ_ZOT_IP` rather than against `local.registry_private_ip`, so real drift passes green). That is #6448's scope. Verified untouched and still passing here (Phase 3 do-no-harm step).
+6. **#6415 / #6400** — later PRs in this session's sequence. Out of scope. #6454 is the unblocker that merges first.
+7. **Changing the BEHAVIOR of any `cloud-init*.yml`, `docker-daemon.json`, or `*.tf`.** They are correct as written for this bug; the workflow was wrong. *(Clarified at /work: the draft read "Editing any `cloud-init*.yml`…", which contradicted this plan's own **Files to Edit** — that section mandates a one-line `cloud-init.yml` comment, both as documentation at the point of confusion and as the `apps/*/infra/**` touch AC10 needs to keep the matrix non-empty. The comment is inert: it adds no directive, no interpolation, and the rendered arms still pass schema. No file's rendered behavior changes.)*
 
 ## Domain Review
 

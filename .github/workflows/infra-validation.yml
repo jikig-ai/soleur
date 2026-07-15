@@ -80,20 +80,39 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Validate cloud-init schema
-        run: |
-          if [[ -f cloud-init.yml ]]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
-            cloud-init schema -c cloud-init.yml
-          else
-            echo "No cloud-init.yml found, skipping"
-          fi
-        working-directory: ${{ matrix.directory }}
-
+      # terraform_wrapper: false is load-bearing here, not hygiene: the wrapper
+      # wraps stdout, and `Validate infra templates` below decodes
+      # `terraform console` output byte-for-byte. deploy-script-tests sets it for
+      # exactly this reason (see its comment ~line 160).
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # #6454. This step used to run `cloud-init schema -c cloud-init.yml` against
+      # the RAW Terraform templatefile, so it was red on EVERY PR touching
+      # apps/*/infra/** from #6344 until this fix — and, being pull_request-only,
+      # invisible on main. It also only ever looked at ONE file (`if [[ -f
+      # cloud-init.yml ]]`), leaving three cloud-inits and hooks.json.tmpl
+      # unvalidated. The script renders each templatefile via `terraform console`
+      # and validates the RENDERED document, which is what work/SKILL.md §6.1 has
+      # prescribed all along. It must run AFTER setup-terraform (it needs
+      # terraform on PATH). No continue-on-error: that yields conclusion=success
+      # over outcome=failure, which is how a gate goes quiet.
+      #
+      # MATRIX_DIR goes through `env:`, never `${{ }}` inside `run:`. The matrix
+      # values are path prefixes derived from the PR diff, and detect-changes'
+      # sed only collapses them to `apps/<name>/infra` where <name> is [^/]+ —
+      # so a fork PR adding `apps/evil;id/infra/x.tf` would carry shell
+      # metacharacters straight into this shell. The step this replaced used
+      # `working-directory:` (not a shell context) and had no such surface.
+      - name: Validate infra templates (render-then-validate)
+        env:
+          MATRIX_DIR: ${{ matrix.directory }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+          bash "$GITHUB_WORKSPACE/.github/scripts/validate-infra-templates.sh" "$MATRIX_DIR"
 
       - name: Terraform format check
         run: terraform fmt -check -recursive .
@@ -132,6 +151,40 @@ jobs:
             echo "No main.test.sh in this directory; skipping."
           fi
         working-directory: ${{ matrix.directory }}
+
+  # #6454. `validate` is a MATRIX job, so its check names are dynamic
+  # (`validate (apps/web-platform/infra)`) and cannot be pinned as required
+  # contexts in infra/github/ruleset-ci-required.tf — which is precisely why it
+  # survived being red from #6344 onward with nobody blocked.
+  #
+  # This is the static-named gate a matrix job cannot be. `if: always()` means it
+  # ALWAYS reports a status, so making it required cannot deadlock a PR that
+  # touches no infra (see 2026-03-20-github-required-checks-skip-ci-synthetic-status).
+  # Precedent: `tenant-integration-required` (ruleset-ci-required.tf:177).
+  #
+  # The second clause is the anti-silent-skip guard at JOB level: infra changed
+  # but validate did not succeed (skipped/cancelled/failure) -> red. Flipping the
+  # ruleset to make this required is a one-line admin follow-up.
+  infra-validate-required:
+    name: infra-validate-required
+    needs: [detect-changes, validate]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail closed if validate did not succeed when it should have
+        env:
+          DIRS: ${{ needs.detect-changes.outputs.directories }}
+          RESULT: ${{ needs.validate.result }}
+        run: |
+          if [[ "$DIRS" == "[]" ]]; then
+            echo "No infra directories changed; nothing to validate."
+            exit 0
+          fi
+          if [[ "$RESULT" != "success" ]]; then
+            echo "validate did not succeed (result=$RESULT) while infra changed: $DIRS"
+            exit 1
+          fi
+          echo "validate succeeded for: $DIRS"
 
   deploy-script-tests:
     runs-on: ubuntu-24.04

@@ -1,4 +1,12 @@
 #cloud-config
+# (#6454) This file is a Terraform templatefile(), NOT a literal cloud-config: the directive at
+# `if web_colocate_inngest` below sits at column 1, and YAML reads a leading percent sign as a
+# directive indicator — so schema-checking this file RAW always fails. CI renders it via
+# `terraform console` first and schema-checks the RENDERED document; see
+# .github/scripts/validate-infra-templates.sh. Both directive arms are validated, and the
+# false arm is the default production doc (variables.tf). Keep Terraform directive syntax out
+# of comments here — the directive scanner does not skip prose.
+
 # (#6090) package_update:/packages: were REMOVED here and moved into an instrumented early-runcmd
 # apt block (STAGE=apt_update/apt_install, under the top-armed trap + `timeout`s). recreate
 # 28819237402 proved web-2 dies in the opaque config phase (bootcmd_start fired, runcmd_start never
