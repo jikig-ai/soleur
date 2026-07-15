@@ -299,12 +299,25 @@ logs:
   where: GitHub Actions run logs; Inngest host journald -> Vector -> Better Stack Logs source 2457081
   retention: GH Actions default; Better Stack per existing source config
 discoverability_test:
-  command: >-
-    gh run list --workflow=apply-inngest-rls-dev.yml --limit 1 --json conclusion,createdAt
-    && gh run list --workflow=apply-inngest-rls.yml --limit 1 --json conclusion,createdAt
-  expected_output: 'both conclusions "success" (the second is AC-P1: this PR mutates Inngest prd)'
+  command: gh run list --workflow=apply-inngest-rls.yml --limit 1 --json conclusion --jq '.[0].conclusion'
+  expected_output: 'success'
 ```
 *(No `ssh` anywhere — `hr-no-ssh-fallback-in-runbooks`.)*
+
+**Why this command targets the prd sibling, not `apply-inngest-rls-dev.yml` (corrected 2026-07-15).**
+The previous command chained both workflows with `&&` and could **never run**: `/ship`'s preflight
+Check 10 rejects any `discoverability_test.command` containing a shell-active token (`&&`, `|`, `;`,
+`$(`…) before executing it, so the field was declared-verifiable but unverified — the exact class
+Check 10 exists to catch. It was also unrunnable on its own terms pre-merge: `apply-inngest-rls-dev.yml`
+ships **in this PR** and does not exist on the default branch, so
+`gh run list --workflow=apply-inngest-rls-dev.yml` returns `HTTP 404` until this merges.
+
+The command above is therefore scoped to what is genuinely observable **now**, and it is not a
+throwaway: it is the live check for **AC-P1** (this PR re-pins `apply-inngest-rls.yml`; prd's latest
+run must still be `success`). The dev workflow's own signal is **only discoverable post-merge** —
+`/soleur:postmerge` verifies it, and the same command with `--workflow=apply-inngest-rls-dev.yml`
+becomes the standing operator probe once the workflow is on `main`. Check 10 has no decision-matrix
+row for a PR that *introduces* its own observability surface; tracked as #6504.
 
 ---
 
