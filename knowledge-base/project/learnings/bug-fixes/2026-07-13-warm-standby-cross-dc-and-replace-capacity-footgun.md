@@ -34,3 +34,11 @@ Prod itself stayed healthy throughout (web-1 untouched), which is exactly why th
 - **Default HA/standby hosts to distinct DCs** (within the same EU network zone for private-net + GDPR). Same-DC redundancy is not redundancy against the failure modes that matter (DC outage, DC capacity).
 - **Treat a host `-replace` during a suspected capacity window as high-risk.** Prefer capacity-check-first or create-before-destroy for a singleton; at minimum, know that a failed create leaves the host gone AND wedges applies.
 - **Workflow improvement (follow-on):** the `apply-web-platform-infra` `web-2-recreate` path should surface the destroy-then-can't-recreate risk (and ideally pre-check target-DC capacity or offer a relocate-instead option) rather than silently destroying first. Tracked for the recreate-path hardening.
+
+## See also
+
+- `../2026-07-15-replace-shaped-ops-are-net-zero-on-the-resource-they-exhaust.md` —
+  #6453 proposed a `free_slots == 0` preflight in response to this incident. It would
+  not have caught it: this failure threw `resource_unavailable` (per-DC stock), not
+  `resource_limit_exceeded` (account cap), and a `-replace` frees its own slot by
+  destroying first, so the cap never engages on a recreate.

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-15T09:11:44Z",
+  "generated_at": "2026-07-15T12:39:24Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1285,8 +1285,8 @@
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-15T08:53:25Z",
-      "first_seen": "2026-07-15T08:53:25Z",
+      "last_hit": "2026-07-15T12:21:44Z",
+      "first_seen": "2026-07-15T12:21:44Z",
       "rule_text_prefix": " → core"
     }
   ],
