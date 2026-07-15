@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Guards that every scripts/followthroughs/*.sh is committed executable (100755).
 #
-# Why this exists (#6435): zot-soak-6122.sh shipped as mode 100644 — the only one of
-# 26 probes that was not 100755 — and so NEVER RAN once in its life. sweep-followthroughs.sh
+# Why this exists (#6435): zot-soak-6122.sh shipped as mode 100644 — the sole non-100755
+# outlier in the probe set — and so NEVER RAN once in its life. sweep-followthroughs.sh
 # rejects a non-executable probe at an `[[ ! -x "$script" ]]` guard BEFORE the `env -i` exec,
 # via fail() which is `printf ... >&2` and nothing else, then `return 0`. No run, no exit
 # code, no comment on the tracker, no TRANSIENT bucket. The tracker just sits open while its
@@ -46,8 +46,10 @@ while IFS= read -r line; do
   fi
 done <<< "$listing"
 
-# Minimum-cardinality guard: a probe set that silently shrinks to zero would make every
-# assertion above vacuous. 26 probes exist as of #6435; assert we saw a plausible floor.
+# Minimum-cardinality guard: a probe set that silently shrinks would make every assertion
+# above vacuous. Deliberately a loose floor, not an exact count — the probe set grows with
+# every follow-through, so an exact expected-N here would rot into a false RED on the next
+# one. The floor only has to be high enough that a broken glob (which yields 0) fails.
 if (( checked < 10 )); then
   fail "only $checked probe(s) checked — expected the full scripts/followthroughs/*.sh set; the glob or listing is broken"
 fi
