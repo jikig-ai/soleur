@@ -89,7 +89,7 @@ HOST_ID=""
 
 # SOLEUR-DEBT: 3rd of 3 resolve_host_id copies (ci-deploy.sh source-of-truth,
 # cat-deploy-state.sh, this). Kept in sync by test_host_id_drift_guard, NOT a shared sourced
-# lib — sourcing works in infra (ci-deploy.sh:703), but DISTRIBUTING a new script costs ~11
+# lib — sourcing works in infra (ci-deploy.sh sources its env file), but DISTRIBUTING a new script costs ~11
 # surfaces (push-infra-config.sh, hooks.json.tmpl, infra-config-apply.sh FILE_MAP,
 # infra-config-install.sh DEST_SPEC + its 2 hardcoded counts, server.tf triggers_replace,
 # apply-deploy-pipeline-fix.yml paths, ship-deploy-pipeline-fix-gate.test.ts, ship/SKILL.md)
@@ -108,7 +108,13 @@ resolve_host_id() {
   fi
   id=$(tr -d '[:space:]' < /etc/machine-id 2>/dev/null || true)
   if [[ -n "$id" ]]; then
-    printf 'machine-%s' "$id"
+    # HASHED, never raw: machine-id(5) says the value "should be considered confidential and
+    # must not be exposed in untrusted environments" — systemd's own guidance is to hash it
+    # per-application (sd_id128_get_machine_app_specific). This fallback now reaches an HTTP
+    # response body and journald -> Vector -> Better Stack (a third-party vendor), which the
+    # ci-deploy.sh original never did. Hashing is LOSSLESS here: host_id only ever needs to be
+    # STABLE and COMPARABLE (same-host vs different-host), never reversible.
+    printf 'machine-%s' "$(printf '%s' "$id" | sha256sum | cut -c1-12)"
     return 0
   fi
   return 1
@@ -226,8 +232,8 @@ _pf_timeout_marker() {  # $1=reason(enum) $2=pages $3=pages_timed_out $4=last_cu
 # spool cleaned; the non-zero exit maps to a webhook non-200 (hooks.json.tmpl:140).
 _pf_abort() {  # $1=reason $2=pages $3=pages_timed_out $4=last_curl_exit
   _pf_timeout_marker "$1" "$2" "$3" "$4"
-  echo "inngest-inventory: FATAL preflight scan aborted reason=$1 pages_scanned=$2 (deadline_s=$PREFLIGHT_DEADLINE_S page_ceiling=$MAX_PAGES from=$FROM_TS) host_id=$HOST_ID — refusing to emit a truncated (false-clean) inventory"
-  echo "ERROR: preflight scan aborted reason=$1 pages_scanned=$2 host_id=$HOST_ID" >&2
+  echo "inngest-inventory: FATAL host_id=$HOST_ID preflight scan aborted reason=$1 pages_scanned=$2 (deadline_s=$PREFLIGHT_DEADLINE_S page_ceiling=$MAX_PAGES from=$FROM_TS) — refusing to emit a truncated (false-clean) inventory"
+  echo "ERROR: host_id=$HOST_ID preflight scan aborted reason=$1 pages_scanned=$2" >&2
   exit 1
 }
 
@@ -315,8 +321,8 @@ run_events_scan() {
       gql_msg=$(printf '%s' "$gql_msg" | _pf_scrub)
       _pf_timeout_marker gql_error "$page" "$timed_out" "$last_curl_exit"
       logger -t "$LOG_TAG" "ERROR: malformed GraphQL response on page $page: errors=$err_msgs data_keys=$data_keys" 2>/dev/null || true
-      echo "inngest-inventory: FATAL malformed GraphQL response on page $page (from=$FROM_TS) host_id=$HOST_ID: ${gql_msg:-eventsV2 missing; check the inngest Time bound / endpoint}"
-      echo "ERROR: malformed GraphQL response on page $page: errors=$err_msgs data_keys=$data_keys host_id=$HOST_ID" >&2
+      echo "inngest-inventory: FATAL host_id=$HOST_ID malformed GraphQL response on page $page (from=$FROM_TS): ${gql_msg:-eventsV2 missing; check the inngest Time bound / endpoint}"
+      echo "ERROR: host_id=$HOST_ID malformed GraphQL response on page $page: errors=$err_msgs data_keys=$data_keys" >&2
       exit 1
     fi
     # Append this page's edges array as ONE JSON value (one line) to the spool file.
@@ -329,8 +335,8 @@ run_events_scan() {
       if [[ -z "$end_cursor" ]]; then
         _pf_timeout_marker gql_error "$page" "$timed_out" "$last_curl_exit"
         logger -t "$LOG_TAG" "ERROR: pagination hasNextPage=true but endCursor empty on page $page — refusing to truncate" 2>/dev/null || true
-        echo "inngest-inventory: FATAL hasNextPage=true but endCursor empty on page $page host_id=$HOST_ID — would truncate the inventory"
-        echo "ERROR: pagination hasNextPage=true but empty endCursor on page $page host_id=$HOST_ID" >&2
+        echo "inngest-inventory: FATAL host_id=$HOST_ID hasNextPage=true but endCursor empty on page $page — would truncate the inventory"
+        echo "ERROR: host_id=$HOST_ID pagination hasNextPage=true but empty endCursor on page $page" >&2
         exit 1
       fi
       # Page ceiling — gate as "about to fetch page > MAX_PAGES WHILE hasNextPage=true" so a
@@ -468,13 +474,13 @@ run_inventory() {
       # HTTP code + count + durability enum) — never a raw GraphQL errors[].message (#5503 purity).
       logger -t "$LOG_TAG" "SOLEUR_INNGEST_LIVENESS_VERDICT mode=$verdict_mode health_code=$health_code functions=0 durability=$durability_state_dg host_id=$HOST_ID" 2>/dev/null || true
       if [[ "$health_code" == "200" ]]; then
-        echo "inngest-inventory: DEGRADED /v0/gql functions query transiently unreachable but /health=200 (errors=$fn_errs) host_id=$HOST_ID — soft, no restart"
-        echo "DEGRADED: /v0/gql functions transiently unreachable, /health=200 (errors=$fn_errs) host_id=$HOST_ID" >&2
+        echo "inngest-inventory: DEGRADED host_id=$HOST_ID /v0/gql functions query transiently unreachable but /health=200 (errors=$fn_errs) — soft, no restart"
+        echo "DEGRADED: host_id=$HOST_ID /v0/gql functions transiently unreachable, /health=200 (errors=$fn_errs)" >&2
         exit 1
       fi
     fi
-    echo "inngest-inventory: FATAL /v0/gql functions query failed or non-array (errors=$fn_errs data_keys=$fn_keys) host_id=$HOST_ID; is inngest-server.service up? — refusing to emit a false-clean empty functions baseline"
-    echo "ERROR: /v0/gql functions non-array (errors=$fn_errs data_keys=$fn_keys) host_id=$HOST_ID" >&2
+    echo "inngest-inventory: FATAL host_id=$HOST_ID /v0/gql functions query failed or non-array (errors=$fn_errs data_keys=$fn_keys); is inngest-server.service up? — refusing to emit a false-clean empty functions baseline"
+    echo "ERROR: host_id=$HOST_ID /v0/gql functions non-array (errors=$fn_errs data_keys=$fn_keys)" >&2
     exit 1
   fi
   functions=$(echo "$fn_body" | jq -c '[ .data.functions[] | (.name // .slug // .id // empty) ] | sort')

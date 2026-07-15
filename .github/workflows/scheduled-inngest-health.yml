@@ -724,6 +724,13 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # doppler is NOT preinstalled on ubuntu-latest. Without this the census step's
+      # `doppler secrets get` hits `command not found`, its `|| true` swallows it, the creds
+      # read empty, and the census reports census_unavailable — green, silent, forever. The
+      # census_unavailable-never-pages rule (correct on its own terms) is exactly what would
+      # hide it. A detector that cannot fire is the failure this whole PR exists to close.
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
       - name: Census tunnel connectors (ADR-114 I1)
         id: census
         env:
@@ -737,6 +744,10 @@ jobs:
 
           CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN --project soleur --config prd_terraform --plain 2>/dev/null || true)
           CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID --project soleur --config prd_terraform --plain 2>/dev/null || true)
+          # GHA auto-masks `secrets.*` but NOT values fetched at runtime. Mask before first use
+          # so the next diagnostic someone adds to this step cannot print the token.
+          # (Precedent: apply-web-platform-infra.yml's mask-before-use.)
+          [[ -n "$CF_API_TOKEN" ]] && echo "::add-mask::$CF_API_TOKEN"
           if [[ -z "$CF_API_TOKEN" || -z "$CF_ACCOUNT_ID" ]]; then
             # Unreadable creds are census_unavailable — NOT zero connectors. Fail soft.
             echo "verdict=census_unavailable" >> "$GITHUB_OUTPUT"
@@ -779,9 +790,17 @@ jobs:
           # greps is how the last 16h investigation started. The action-required issue below is
           # the alert.
           echo "SOLEUR_ORIGIN_HOST_CHURN verdict=$VERDICT count=$COUNT tunnel=${TUNNEL_ID:0:8}"
-          echo "$EVIDENCE" | while IFS= read -r line; do
-            [[ -n "$line" ]] && echo "SOLEUR_ORIGIN_HOST_CHURN connector $line"
-          done
+          # Guard on non-empty rather than filtering inside the loop. Under `set -euo pipefail`
+          # a `while read` whose last body command is a false `[[ -n "$line" ]]` exits 1, so an
+          # EMPTY $EVIDENCE failed this step — and $EVIDENCE is empty precisely and only on
+          # zero_connectors. A plain-expression `if:` carries an implicit `success() &&`, so the
+          # failing step skipped the paging step below: the one verdict meaning "deploy., ssh.
+          # and registry. are ALL dark" would have filed nothing at all.
+          if [[ -n "$EVIDENCE" ]]; then
+            while IFS= read -r line; do
+              [[ -n "$line" ]] && echo "SOLEUR_ORIGIN_HOST_CHURN connector $line"
+            done <<< "$EVIDENCE"
+          fi
 
       - name: File action-required on a broken connector invariant
         # ONLY the two REAL connector verdicts page. census_unavailable is deliberately excluded:
@@ -804,7 +823,10 @@ jobs:
             --color "B60205" 2>/dev/null || true
 
           if [[ "$VERDICT" == "multi_connector" ]]; then
-            ISSUE_TITLE="[ci/tunnel-connector-drift] Tunnel has ${COUNT} connectors — ingress origin is non-deterministic"
+            # No ${COUNT} in the title: it must be stable across a 2->3 transition, or the
+            # dedupe re-collides and files a second issue for the same condition.
+            ISSUE_TITLE="[ci/tunnel-connector-drift] Tunnel has MORE THAN ONE connector — ingress origin is non-deterministic"
+            ISSUE_SEARCH="in:title \"$ISSUE_TITLE\""
             {
               printf '## More than one connector is registered on the tunnel\n\n'
               printf -- '- **Connectors:** `%s` (invariant: exactly 1)\n' "$COUNT"
@@ -817,6 +839,7 @@ jobs:
             } > "$BODY_FILE"
           else
             ISSUE_TITLE="[ci/tunnel-connector-drift] Tunnel has ZERO live connectors — every tunnel-routed surface is dark"
+            ISSUE_SEARCH="in:title \"$ISSUE_TITLE\""
             {
               printf '## The tunnel has no live connectors\n\n'
               printf -- '- **Connectors:** `0` (invariant: exactly 1)\n'
@@ -831,8 +854,7 @@ jobs:
           # issues carrying it. The sibling ci/inngest-* labels this workflow files are NOT
           # harvested — so without this label the alert would be detected and then discarded
           # into a log nobody reads until the next 16h investigation.
-          ISSUE_SEARCH="in:title \"[ci/tunnel-connector-drift]\""
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" \
               --body "Still \`${VERDICT}\` (connectors=${COUNT}) at ${NOW}. Run: ${RUN_URL}"

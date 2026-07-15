@@ -951,8 +951,9 @@ Phase 4b (continuous checkpoint).
 > survived the coin flip; everything else silently did not. De-pooling does not reverse Option B
 > — the fan-out is retained unchanged; only the entry point becomes deterministic.
 >
-> **(2) The falsified contract.** `:720-722` ("the off-host runner cannot read web-2 directly")
-> and `:826` ("web-2 `:9000` is private-net-deny") are **false under two connectors**: the
+> **(2) The falsified contract.** Two claims in this ADR — *"the off-host runner cannot read
+> web-2 directly"* and *"web-2 `:9000` is private-net-deny"* (grep them; line numbers move) —
+> are **false under two connectors**: the
 > warm-standby verify can POST to web-2 and read web-1, or vice versa, and report either as
 > fact. Those lines described the intent, not the behavior. De-pooling makes them true for the
 > first time — this amendment *repairs* the verification design rather than weakening it.

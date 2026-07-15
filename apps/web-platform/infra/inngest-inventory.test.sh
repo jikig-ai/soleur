@@ -215,7 +215,7 @@ test_functions_fetch_failure_is_loud() {
   local out rc=0
   out=$(INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" INVENTORY_NOW_MS="$NOW_MS" bash "$TARGET" 2>/dev/null) || rc=$?
   assert_eq "non-array functions read exits non-zero (no false-clean baseline)" "1" "$rc"
-  if [[ "$out" == *"FATAL /v0/gql functions"* ]]; then echo "  PASS: emits a diagnosable FATAL cause"; PASS=$((PASS+1));
+  if [[ "$out" == "inngest-inventory: FATAL "* && "$out" == *"/v0/gql functions"* ]]; then echo "  PASS: emits a diagnosable FATAL cause"; PASS=$((PASS+1));
   else echo "  FAIL: no FATAL cause on degraded functions read"; FAIL=$((FAIL+1)); fi
   if [[ "$out" == *'"functions":[]'* ]]; then echo "  FAIL: emitted a false-clean empty functions object"; FAIL=$((FAIL+1));
   else echo "  PASS: did NOT emit a false-clean functions baseline"; PASS=$((PASS+1)); fi
@@ -392,16 +392,36 @@ test_host_id_success_x_failure_axis() {
     SOLEUR_HOST_ID_OVERRIDE=hetzner-777
   assert_eq "FATAL exits non-zero" "1" "$RC"
   case "$STDOUT_CAP" in
-    *"FATAL /v0/gql functions"*"host_id=hetzner-777"*) echo "  PASS: FATAL plain-text body carries host_id (the alert surface)"; PASS=$((PASS+1));;
-    *) echo "  FAIL: FATAL body has no host_id — an anonymous inngest_down P1, the #6425 defect"; echo "    body: $STDOUT_CAP"; FAIL=$((FAIL+1));;
+    "inngest-inventory: FATAL host_id=hetzner-777 "*"/v0/gql functions"*) echo "  PASS: FATAL body carries host_id BEFORE the unbounded errors= payload (the alert surface)"; PASS=$((PASS+1));;
+    *) echo "  FAIL: FATAL body has no host_id, or host_id sits after the unbounded errors= payload — the watchdog truncates the body at 400 chars (scheduled-inngest-health.yml), so a few ordinary GraphQL errors push host_id out of the alert and it goes anonymous again: the #6425 defect"; echo "    body: $STDOUT_CAP"; FAIL=$((FAIL+1));;
+  esac
+
+  # --- FAILURE arm 2b: host_id must survive the watchdog's TRUNCATION, not just be present ---
+  # scheduled-inngest-health.yml reads the failure body as
+  #   cause=$(strip_log_injection "$(printf '%s' "$BODY" | tr '\n' ' ' | head -c 400)")
+  # `fn_errs` is the scrubbed GraphQL errors[] — UNBOUNDED. So "host_id is in the body" is NOT
+  # the property that matters; "host_id is in the first 400 chars" is. An earlier revision put
+  # host_id AFTER fn_errs and passed every other arm here, because those arms use the 20-char
+  # `__FETCH_FAILED__` fixture — a few ordinary GraphQL errors pushed host_id out of the alert
+  # and the P1 went anonymous again (the exact #6425 defect). This arm uses a realistic
+  # multi-error payload so field ORDER is pinned, not just field presence.
+  LONG_ERRS='["connection refused dialing postgres backend 10.0.1.40:5432 pool exhausted after 30s","context deadline exceeded while awaiting response headers from upstream registry","failed to resolve function registry: transient DNS failure resolving inngest.internal","panic recovered in function loader: index out of range reading manifest"]'
+  jq -nc --argjson e "$LONG_ERRS" '{errors:($e | map({message:.})), data:null}' > "$ff"
+  run_inv_logcap "$d" "$ff" INVENTORY_LIVENESS_ONLY=1 INVENTORY_INNGEST_HEALTH_CODE=500 \
+    SOLEUR_HOST_ID_OVERRIDE=hetzner-777
+  TRUNCATED=$(printf '%s' "$STDOUT_CAP" | tr '\n' ' ' | head -c 400)
+  case "$TRUNCATED" in
+    *"host_id=hetzner-777"*) echo "  PASS: host_id survives the watchdog's 400-char truncation on a realistic multi-error FATAL"; PASS=$((PASS+1));;
+    *) echo "  FAIL: host_id truncated OUT of the alert — the P1 the watchdog files names no host (#6425 defect reintroduced by field order)"; echo "    alert sees: $TRUNCATED"; FAIL=$((FAIL+1));;
   esac
 
   # --- FAILURE arm 3: FATAL on the NON-liveness (full inventory) path ---
+  printf '%s' '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}' > "$ff"
   run_inv_logcap "$d" "$ff" SOLEUR_HOST_ID_OVERRIDE=hetzner-777
   assert_eq "full-inventory FATAL exits non-zero" "1" "$RC"
   case "$STDOUT_CAP" in
-    *"FATAL /v0/gql functions"*"host_id=hetzner-777"*) echo "  PASS: full-inventory FATAL body carries host_id"; PASS=$((PASS+1));;
-    *) echo "  FAIL: full-inventory FATAL body has no host_id"; FAIL=$((FAIL+1));;
+    "inngest-inventory: FATAL host_id=hetzner-777 "*"/v0/gql functions"*) echo "  PASS: full-inventory FATAL body carries host_id before the unbounded payload"; PASS=$((PASS+1));;
+    *) echo "  FAIL: full-inventory FATAL body has no host_id, or it sits after the unbounded errors= payload (truncated out of the 400-char alert)"; FAIL=$((FAIL+1));;
   esac
 }
 
@@ -534,7 +554,7 @@ test_liveness_only_fails_loud_on_down() {
   local out rc=0
   out=$(run_inv_liveness "$ff") || rc=$?
   assert_eq "liveness down exits non-zero (fail-loud, no false-clean)" "1" "$rc"
-  if [[ "$out" == *"FATAL /v0/gql functions"* ]]; then echo "  PASS: liveness down emits the FATAL sentinel (classifier maps to inngest_down)"; PASS=$((PASS+1));
+  if [[ "$out" == "inngest-inventory: FATAL "* && "$out" == *"/v0/gql functions"* ]]; then echo "  PASS: liveness down emits the FATAL sentinel (classifier maps to inngest_down)"; PASS=$((PASS+1));
   else echo "  FAIL: liveness down did not emit the FATAL sentinel"; FAIL=$((FAIL+1)); fi
 }
 

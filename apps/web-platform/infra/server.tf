@@ -165,9 +165,13 @@ resource "hcloud_server" "web" {
     #
     # The predicate is `each.key == "web-1"` — the in-file idiom (`name` above, `host_name`
     # below) — NOT a variable. A knob here would look like a promotion switch and isn't:
-    # dns.tf pins web["web-1"] in four places plus the LB weight, so promotion must move all
-    # of them in lockstep. A lone connector flip would yield a connector on web-2 while the A
-    # record still points at web-1 — ingress split, at 3am. The coupling is recorded in ADR-068.
+    # `web["web-1"]` is pinned 23 times across 5 files (`grep -c 'web\["web-1"\]' *.tf`:
+    # server.tf 15 provisioner/attachment hosts, outputs.tf 4, placement-group.tf 2,
+    # dns.tf 1 (the app A record), ci-ssh-key.tf 1). Promotion must move all of them in
+    # lockstep; a lone connector flip would put the connector on web-2 while the A record
+    # still points at web-1 — ingress split, at 3am. The coupling is recorded in ADR-068.
+    # (No load balancer exists yet — ADR-068 §(c)'s LB weight is future-tense, so it is NOT
+    # part of this coupling today. Fold it in when the LB actually lands.)
     #
     # `tunnel_token` above stays in this map unconditionally and is NOT ternary'd to "":
     # templatefile pre-checks expr.Variables() across BOTH branches of the `if` directive, so

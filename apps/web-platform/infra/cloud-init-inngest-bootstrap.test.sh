@@ -385,6 +385,17 @@ PY
   # keeps the binary and stays promotable without an image change.
   assert "render web_tunnel_connector=false RETAINS ungated 'apt-get install -y cloudflared'" \
     "grep -qF 'apt-get install -y cloudflared' '$CONN_OFF'"
+  # RETENTION TOKENS BELOW THE endif — the assertions above cannot constrain the gate's LOWER
+  # boundary, because the apt-install token sits ABOVE the `%{ if }`. Without these, moving the
+  # `%{ endif ~}` DOWN swallows the webhook install + its fail-closed :9000 poll and every
+  # assertion here still passes — a de-pooled host would boot permanently undeployable and
+  # would not even fail closed (the poll it needs to fail on is inside the swallowed region).
+  # AC7 gets this for free (all four of its retention tokens sit below its endif); this gate's
+  # geometry does not, so the lower boundary must be pinned explicitly.
+  assert "render web_tunnel_connector=false RETAINS the webhook install (gate must not over-reach)" \
+    "grep -qF 'webhook-linux-amd64.tar.gz' '$CONN_OFF'"
+  assert "render web_tunnel_connector=false RETAINS the webhook checksum fail-closed guard" \
+    "grep -qF 'soleur-boot-emit webhook_checksum fatal' '$CONN_OFF'"
   # Column-0 hazard: an indented `%{ if ~}` leaves its leading spaces after the `~` trim and
   # corrupts runcmd: list indentation. safe_load is what catches it.
   assert "render web_tunnel_connector=false is valid YAML (column-0 directive hazard)" \

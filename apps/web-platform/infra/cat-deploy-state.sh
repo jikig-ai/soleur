@@ -24,7 +24,7 @@ set -euo pipefail
 #
 # SOLEUR-DEBT: 2nd of 3 resolve_host_id copies (ci-deploy.sh source-of-truth, this,
 # inngest-inventory.sh). Kept in sync by test_host_id_drift_guard, NOT a shared sourced
-# lib — sourcing works in infra (ci-deploy.sh:703), but DISTRIBUTING a new script costs
+# lib — sourcing works in infra (ci-deploy.sh sources its env file), but DISTRIBUTING a new script costs
 # ~11 surfaces (push-infra-config.sh, hooks.json.tmpl, infra-config-apply.sh FILE_MAP,
 # infra-config-install.sh DEST_SPEC + its 2 hardcoded counts, server.tf triggers_replace,
 # apply-deploy-pipeline-fix.yml paths, ship-deploy-pipeline-fix-gate.test.ts,
@@ -44,7 +44,13 @@ resolve_host_id() {
   fi
   id=$(tr -d '[:space:]' < /etc/machine-id 2>/dev/null || true)
   if [[ -n "$id" ]]; then
-    printf 'machine-%s' "$id"
+    # HASHED, never raw: machine-id(5) says the value "should be considered confidential and
+    # must not be exposed in untrusted environments" — systemd's own guidance is to hash it
+    # per-application (sd_id128_get_machine_app_specific). This fallback now reaches an HTTP
+    # response body and journald -> Vector -> Better Stack (a third-party vendor), which the
+    # ci-deploy.sh original never did. Hashing is LOSSLESS here: host_id only ever needs to be
+    # STABLE and COMPARABLE (same-host vs different-host), never reversible.
+    printf 'machine-%s' "$(printf '%s' "$id" | sha256sum | cut -c1-12)"
     return 0
   fi
   return 1

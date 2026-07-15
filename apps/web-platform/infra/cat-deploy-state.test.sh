@@ -318,8 +318,13 @@ assert "a state-file host_id CANNOT clobber the resolved one" \
 # `set -euo pipefail` + a bare assignment would abort the hook (non-200), losing the entire state
 # read to protect one field. Point the metadata seam at a closed port to prove the read survives
 # an unreachable metadata service and still exits 0 with parseable JSON.
+# `|| NOMETA_RC=$?` is load-bearing: this suite is `set -euo pipefail`, so a bare
+# `X=$(cmd); RC=$?` ABORTS the whole suite the moment cmd is non-zero — meaning RC could only
+# ever hold 0 and the "exit 0" assertion below could never fail. That is a false-PASS anchor
+# (the fea871b40 class), not a test. The `||` catches the failure so the rc is real.
+NOMETA_RC=0
 HID_NOMETA=$(CI_DEPLOY_STATE="$TMP/ok.state" SOLEUR_HOST_ID_OVERRIDE="" \
-  SOLEUR_HOST_ID_METADATA_URL="http://127.0.0.1:1/dead" bash "$TARGET"); NOMETA_RC=$?
+  SOLEUR_HOST_ID_METADATA_URL="http://127.0.0.1:1/dead" bash "$TARGET") || NOMETA_RC=$?
 assert "unreachable metadata does not abort the hook (exit 0)" "[[ '$NOMETA_RC' == '0' ]]"
 assert "unreachable metadata still emits parseable JSON with a host_id key" \
   "printf '%s' '$HID_NOMETA' | jq -e 'has(\"host_id\")' >/dev/null"
