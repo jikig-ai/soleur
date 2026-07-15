@@ -62,12 +62,10 @@ set -uo pipefail
 # that word-expansion aborts with status 1, which this contract reads as FAIL ("criteria not
 # met") when the truth is "the probe could not run". An unprovisioned env must never be able
 # to report a verdict on an irreversible retirement. See followthrough-convention.md.
-for v in SENTRY_AUTH_TOKEN; do
-  if [[ -z "${!v:-}" ]]; then
-    echo "TRANSIENT: $v is unset or empty — cannot query Sentry (declare it in the directive's secrets= clause)" >&2
-    exit 2
-  fi
-done
+if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
+  echo "TRANSIENT: SENTRY_AUTH_TOKEN is unset or empty — cannot query Sentry (declare it in the directive's secrets= clause)" >&2
+  exit 2
+fi
 
 ORG="jikigai-eu"
 API="https://sentry.io/api/0"
