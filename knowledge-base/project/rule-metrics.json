@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-15T09:11:44Z",
+  "generated_at": "2026-07-15T14:43:55Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -43,19 +43,6 @@
     },
     {
       "id": "cq-agents-md-tier-gate",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → docs-only"
-    },
-    {
-      "id": "cq-agents-md-why-single-line",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -199,19 +186,6 @@
     },
     {
       "id": "cq-union-widening-grep-three-patterns",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → rest"
-    },
-    {
-      "id": "cq-write-failing-tests-before",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -706,6 +680,19 @@
     },
     {
       "id": "hr-verify-repo-capability-claim-before-assert",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-weigh-every-decision-against-target-user-impact",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1277,22 +1264,35 @@
       "rule_text_prefix": " → core"
     },
     {
-      "id": "hr-weigh-every-decision-against-target-user-impact",
-      "section": "Hard Rules",
+      "id": "cq-agents-md-why-single-line",
+      "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
       "applied_count": 1,
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-15T08:53:25Z",
-      "first_seen": "2026-07-15T08:53:25Z",
-      "rule_text_prefix": " → core"
+      "last_hit": "2026-07-15T14:43:09Z",
+      "first_seen": "2026-07-15T14:43:09Z",
+      "rule_text_prefix": " → docs-only"
+    },
+    {
+      "id": "cq-write-failing-tests-before",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 1,
+      "warn_count": 0,
+      "fire_count": 1,
+      "prevented_errors": 0,
+      "last_hit": "2026-07-15T13:24:21Z",
+      "first_seen": "2026-07-15T13:24:21Z",
+      "rule_text_prefix": " → rest"
     }
   ],
   "summary": {
     "total_rules_tagged": 99,
-    "rules_unused_over_8w": 98,
+    "rules_unused_over_8w": 97,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,
