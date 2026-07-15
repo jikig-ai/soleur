@@ -129,6 +129,7 @@ describe("soleur-go-runner — emits onToolProgress heartbeat (server layer 1)",
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-1",
       userId: "u1",
       userMessage: "summarize this pdf",
@@ -168,6 +169,7 @@ describe("soleur-go-runner — emits onToolProgress heartbeat (server layer 1)",
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-4",
       userId: "u1",
       userMessage: "summarize",
@@ -306,6 +308,7 @@ describe("cc-dispatcher — forwards tool_progress WS message (server layer 2)",
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-tp",
       conversationId: "conv-tp",
       userMessage: "summarize this PDF",
@@ -347,6 +350,7 @@ describe("cc-dispatcher — forwards tool_progress WS message (server layer 2)",
 
       const sendToClient = vi.fn().mockReturnValue(true);
       await dispatchSoleurGo({
+        persona: "command_center",
         userId: "u-tp3",
         conversationId: "conv-tp3",
         userMessage: "long read",

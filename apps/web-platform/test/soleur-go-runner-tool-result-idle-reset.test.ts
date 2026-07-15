@@ -93,6 +93,7 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-A",
       userId: "u1",
       userMessage: "summarize this pdf",
@@ -158,6 +159,7 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-B",
       userId: "u1",
       userMessage: "loop",
@@ -222,6 +224,7 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-C",
       userId: "u1",
       userMessage: "hi",
@@ -277,6 +280,7 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-D",
       userId: "u1",
       userMessage: "summarize",
@@ -327,6 +331,7 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-E",
       userId: "u1",
       userMessage: "resume",
@@ -379,6 +384,7 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-F",
       userId: "u1",
       userMessage: "summarize",

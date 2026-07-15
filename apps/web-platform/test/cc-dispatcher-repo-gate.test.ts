@@ -153,6 +153,7 @@ describe("cc-dispatcher repo-readiness gate — dispatch catch (#5394)", () => {
     const sendToClient = vi.fn().mockReturnValue(true);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-cloning",
       conversationId: "conv-1",
       userMessage: "hi",
@@ -180,6 +181,7 @@ describe("cc-dispatcher repo-readiness gate — dispatch catch (#5394)", () => {
     const sendToClient = vi.fn().mockReturnValue(true);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-error",
       conversationId: "conv-1",
       userMessage: "hi",
@@ -200,6 +202,7 @@ describe("cc-dispatcher repo-readiness gate — dispatch catch (#5394)", () => {
     );
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-no-mirror",
       conversationId: "conv-1",
       userMessage: "hi",
@@ -223,6 +226,7 @@ describe("cc-dispatcher repo-readiness gate — dispatch catch (#5394)", () => {
     __setCcRunnerForTests(stubRunnerThrowing(new Error("router exploded")));
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-generic",
       conversationId: "conv-1",
       userMessage: "hi",
@@ -241,6 +245,7 @@ describe("cc-dispatcher repo-readiness gate — dispatch catch (#5394)", () => {
     const onSessionIdPersisted = vi.fn();
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-survive",
       conversationId: "conv-1",
       userMessage: "hi",
@@ -263,6 +268,7 @@ describe("cc-dispatcher repo-readiness gate — dispatch catch (#5394)", () => {
     const onSessionIdPersisted = vi.fn();
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-clears",
       conversationId: "conv-1",
       userMessage: "hi",
