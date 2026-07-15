@@ -383,10 +383,17 @@ means the shared security lib needs **no fork and no edit** (v1 had no route to 
 
 ### Pre-merge (PR)
 
-- **AC1** `gzip -9 -c apps/web-platform/infra/cloud-init-registry.yml | base64 -w0 | wc -c` < 32768.
-  *(Baseline 14,560; 18 KB headroom. Caveat per `kieran`: this measures the **raw template**, not the
-  rendered `user_data`, and `gzip -9` ≠ Terraform's `base64gzip` default ≈ `-6`. It cannot realistically
-  false-pass at this headroom, but it is a proxy — the exact figure comes from `terraform plan`.)*
+- **AC1** ~~`gzip -9 -c apps/web-platform/infra/cloud-init-registry.yml | base64 -w0 | wc -c` < 32768.~~
+  **CORRECTED at `/work`.** `kieran`'s caveat said the raw-template proxy "cannot realistically
+  false-pass at this headroom" — but the proxy was never necessary. The **real** figure is
+  measurable locally by rendering via `terraform console` and gzipping the render, so the AC now
+  asserts the actual artifact instead of a stand-in:
+  - **Measured:** rendered + `gzip -6` + base64 = **20,080 bytes** vs the 32,768 cap (~12.6 KB
+    headroom). Raw-template `gzip -9` reads 20,040 — i.e. the proxy was *optimistic* by 40 bytes,
+    harmless here but directionally wrong, which is exactly why a proxy shouldn't gate.
+  - **Verified at `/work`:** the render also passes `cloud-init schema -c` (`Valid schema`) with
+    zero unrendered `${...}` left. Validating the RAW template would false-FAIL on the
+    un-rendered interpolations.
 - **AC2** `bash apps/web-platform/infra/private-nic-guard.test.sh` exits 0, covering all seven Phase
   4.1 behavioral cases.
 - **AC3** **Healthy ⇒ zero mutation.** The `ip_present=true` fixture reaches `converged_by=already`
@@ -397,8 +404,19 @@ means the shared security lib needs **no fork and no edit** (v1 had no route to 
 - **AC5** Phase 1.1 is asserted by the **`templatefile` argument** (`private_ip = local.registry_private_ip`),
   **not** `grep -c 'private_ip'` — which returns **2 on an unmodified file** (`:40`, `:44`) and cannot
   detect whether the phase happened (`kieran` P1-4).
-- **AC6** **`10.0.1.30` appears exactly once** across `apps/web-platform/infra/*.tf` (single-source,
-  Phase 1.2).
+- **AC6** ~~**`10.0.1.30` appears exactly once** across `apps/web-platform/infra/*.tf`.~~
+  **CORRECTED at `/work` — as written this gate was UNPASSABLE, and it is the plan's own
+  `grep`-matches-its-own-comments trap** (the same class the plan flags elsewhere for `.sh`
+  bodies). The literal legitimately appears in prose in `tunnel.tf:47,60-62`, `dns.tf:55`,
+  `server.tf:553` — and in live code at `server.tf:608` (`docker info | grep '10.0.1.30:5000'`,
+  a docker-daemon probe string, not an address definition). Single-sourcing cannot and should
+  not delete any of those. The invariant that actually matters is that the address is
+  **defined** once, so the AC now asserts the **assignment shape**:
+  - **zero** `ip = "10.0.1.30"` assignments remain in any `*.tf` (was 1, at `network.tf:60`);
+  - `network.tf` reads `ip = local.registry_private_ip`;
+  - exactly **one** non-comment `"10.0.1.30"` literal survives — the local at
+    `zot-registry.tf:40`. Counted with `^[^#]*` so a commented mention can never satisfy or
+    break the gate.
 - **AC7** `bash scripts/zot-restart-loop-alarm.test.sh` green **with the new NIC branches covered** —
   specifically, a fixture where the NIC guard is **silent while `SOLEUR_ZOT_DISK` still flows** must
   **FIRE**, not go GREEN (the `spec-flow` P0 regression).

@@ -177,7 +177,8 @@ run_guard() {
   done
   export STUB_IMDS_BODY
   export STUB_IMDS_RC="$imds_rc"
-  export STUB_MOUNTPOINT_RC=$([[ "$store" == "true" ]] && echo 0 || echo 1)
+  local mp_rc; mp_rc=$([[ "$store" == "true" ]] && echo 0 || echo 1)
+  export STUB_MOUNTPOINT_RC="$mp_rc"
   export STUB_TRACE="$root/trace"
   export STUB_EMIT="$root/emit"
   export STUB_MOUNT_FLAG="$root/mount-healed"
@@ -187,8 +188,11 @@ run_guard() {
   PATH="$BIN:$PATH" SOLEUR_NIC_TEST_ROOT="$root" BETTERSTACK_LOGS_TOKEN=synthetic-token \
     bash "$RENDERED" >/dev/null 2>&1
 
+  # Consumed by the assert() conditions below via eval — shellcheck cannot see through that.
+  # shellcheck disable=SC2034
   TRACE="$(cat "$root/trace" 2>/dev/null || true)"
   EMIT="$(cat "$root/emit" 2>/dev/null || true)"
+  # shellcheck disable=SC2034
   COUNTER="$(cat "$root/var/lib/soleur/private-nic-reboots" 2>/dev/null || true)"
 }
 
