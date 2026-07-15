@@ -61,13 +61,23 @@ rationale is factually false (see Non-Goals / brainstorm Key Decisions 3-4).
 
 - **FR1** — `event_frequency.value` = `0` on `sentry_issue_alert.zot_mirror_fallback_rate`, so any
   issue-group with >=1 matching event pages, independent of fingerprinting.
-- **FR2** — The threshold comment states: message embeds the unique tag → fresh group per deploy;
-  fleet = 2 hosts → max 2 events/group; therefore `>3` was unreachable; and `value = 0` matches
-  `zot-soak-6122.sh`'s zero-tolerance gate.
-- **FR3** — `ADR-096:103-106` amended: the alarm's value window is the **`ZOT_ACTIVE=1` soak**, and
-  it **closes at task 5.3** (which removes the pull-site GHCR fallback branch, after which all four
-  signals go permanently dark). Remove the "deferred to #6285 until a resolvable numeric notify
-  target exists" clause.
+- **FR2** — The threshold comment states the **mechanism** (message embeds the unique deploy tag →
+  fresh issue-group per deploy → the per-group count is bounded by fleet size, not a rate), the
+  **invariant** (any `value > 0` is fleet-shape-dependent and silently unreachable whenever the
+  per-group count cannot exceed it; `value = 0` is the only fleet-independent setting), the
+  **sibling contrast** (`web_terminal_boot_fatal`'s `value = 1` works only on an always-hot group),
+  and a **change-trigger**. It must contain **NO host count** — a count rots the day web-3 lands,
+  which is exactly how the original comment rotted. *(Revised — v1 of this spec demanded "fleet = 2
+  hosts → max 2 events/group", i.e. the very rot the plan forbids.)*
+- **FR3** — `ADR-096` amended: the window **opens at task 1.8** (`ZOT_REGISTRY_URL` set in Doppler
+  `prd`) for **3 of the 4 signals** — `zot-gate-degraded` fires where `ZOT_ACTIVE` stays 0, and the
+  two cloud-init fresh-boot signals gate on `ZURL` + probe with no `ZOT_ACTIVE` at all; only
+  `registry:ghcr-fallback` requires the flip. It **closes at task 5.3** for those three (5.3 deletes
+  **three** fallback branches across two files); `zot-gate-degraded` survives, so 5.3 must **narrow**
+  the alarm's `filters_v2`, never retire it. Also correct the false `betteruptime_heartbeat.registry_prd`
+  zot-liveness claim (zero consumers, `paused = true`) and remove the "deferred to #6285" clause.
+  *(Revised — v1 of this spec said the window is the `ZOT_ACTIVE=1` soak and that all four signals go
+  dark at 5.3. Both false; see the plan's v2 header.)*
 - **FR4** — #6285 updated + closed with the verified findings; four spin-off issues filed.
 
 ## Technical Requirements

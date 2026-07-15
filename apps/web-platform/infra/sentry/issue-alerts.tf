@@ -1345,12 +1345,14 @@ resource "sentry_issue_alert" "inbox_action_required_notify_failure" {
 #
 # INVARIANT. Any value > 0 is fleet-shape-dependent and silently unreachable whenever
 # the per-group event count cannot exceed it. Sentry compounds this: it short-circuits
-# new groups outright when value > 1 ("Assumes that the first event in a group will
-# always be below the threshold" — sentry/rules/conditions/event_frequency.py), then
-# compares with a STRICT `current_value > value`. value = 0 is the ONLY fleet-
+# the FIRST EVENT of a new group when value > 1 ("Assumes that the first event in a
+# group will always be below the threshold" — sentry/rules/conditions/event_frequency.py),
+# then compares with a STRICT `current_value > value`. value = 0 is the ONLY fleet-
 # independent setting: it fires on the first event of any group, at any fleet size.
-# This is what the original >3/1h got wrong — it could never fire on the rolling-deploy
-# signal, on any fleet smaller than four pullers.
+# This is what the original >3/1h got wrong: on the rolling-deploy signal it needed 4+
+# events in ONE group, and each deploy mints its own group sized by the puller count.
+# (Not literally unfireable — re-deploying the SAME tag within the hour reuses the group
+# — but a first-miss on a fresh tag, the case that matters, could never page.)
 #
 # DO NOT normalize to the `value = 1` used by web_terminal_boot_fatal below. That works
 # there ONLY because its shared `soleur-boot-emit` group is never new (always already
@@ -1362,9 +1364,20 @@ resource "sentry_issue_alert" "inbox_action_required_notify_failure" {
 # — a threshold above 0 is strictly less sensitive than the gate it exists to pre-warn.
 #
 # GROUPING is per-signal asymmetric (`ghcr-fallback` fresh per deploy; `zot-gate-degraded`
-# per reason; `app_ghcr_fallback` a dedicated static message; `inngest_ghcr_fallback` the
-# shared always-hot `soleur-boot-emit` group) — irrelevant at value = 0, where every group
-# pages on its first event uniformly. Relevant again only if value is ever raised.
+# per reason — 3 fixed literals; `app_ghcr_fallback` a dedicated static message;
+# `inngest_ghcr_fallback` the shared always-hot `soleur-boot-emit` group). It no longer
+# affects WHETHER a group pages at value = 0 — every group fires on its first event — but
+# it is load-bearing for HOW to quiet noise safely (below). Relevant to the threshold again
+# only if value is ever raised.
+#
+# IF THIS GETS NOISY, MUTE THE ISSUE — NEVER THE RULE. All four signals share one rule
+# (filter_match = "any"), so muting the RULE to escape `zot-gate-degraded` noise also kills
+# `ghcr-fallback` — the only no-SSH page gating the IRREVERSIBLE ADR-096 5.5 PAT
+# rotate+revoke. Muting the noisy Sentry ISSUE is safe by construction here:
+# `zot-gate-degraded` groups on a stable reason literal, so a mute pins to that group only;
+# `ghcr-fallback` mints a FRESH group per deploy, so no pre-existing mute can ever
+# pre-suppress it. Pre-cutover the dominant noise is `probe_unreachable` — that is zot's
+# probe genuinely failing (the real fix is the zot host, not the alarm).
 #
 # Distinct `frequency = 23` avoids Sentry POST-time exact-duplicate dedup (taken:
 # 5,10-22,30,60-62; keyed on action_match+filter_match+frequency+actions-shape, NOT
@@ -1444,7 +1457,7 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
 # terminal-block EXIT trap + the explicit hostscripts_incomplete emit, so the stage filter alone
 # selects fatal terminal-block failures (no separate level filter needed).
 #
-# GROUPING NOTE (mirrors zot_mirror_fallback_rate:1352): these events use the SHARED
+# GROUPING NOTE (mirrors zot_mirror_fallback_rate:1364): these events use the SHARED
 # `soleur-boot-emit` message ("soleur-cloud-init boot stage"; stage is a tag, not the message), so
 # they share ONE issue-group with routine boot stages — that group is effectively always active, so
 # event_frequency value=1 pages on the first event that MATCHES the fatal-stage filter. Over-loud in

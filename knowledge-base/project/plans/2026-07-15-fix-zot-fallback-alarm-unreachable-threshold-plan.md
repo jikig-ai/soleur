@@ -56,9 +56,77 @@ the omission is deliberate.
 - `terraform validate` passes `value = 0` — **and also `value = -1`**. It type-checks a `number`.
 
 Both are proxies, not the invariant. **Residual risk:** the read is of Sentry **OSS**;
-`jikigai-eu.sentry.io` is **SaaS** and need not be the same build. Mitigated by AC7 (live-fire) and
+`jikigai-eu.sentry.io` is **SaaS** and need not be the same build. Mitigated by AC11 (live-fire) and
 by CI failing loudly. Ladder if wrong: `value = 1` → corrected metric alert at `alert_threshold = 0`.
 **Never re-ship `3`.**
+
+## User-Brand Impact
+
+**If this lands broken, the user experiences:** nothing directly — and that is why the miss is
+invisible. The fleet keeps deploying successfully off the GHCR fallback; the first signal is the
+7-day soak sweeper failing at day 7, resetting the Phase-5 cutover by a week.
+
+**If this lands *working but muted*, the user experiences a full deploy/recovery outage.** All four
+signals share one rule (`filter_match = "any"`). If the founder mutes the **rule** to escape the
+`zot-gate-degraded` noise this makes live, `registry:ghcr-fallback` — the only no-SSH page gating
+the **irreversible** ADR-096 5.5 PAT rotate+revoke — dies with it. The cutover then proceeds on a
+false green: 5.3 deletes the fallback branch, 5.5 revokes the PAT, and a host that cannot pull from
+zot has **no image source**. Mitigated in this PR: the `.tf` comment and the revert runbook both
+now say **mute the ISSUE, never the rule**, and explain why that is safe by construction
+(gate-degraded groups on a stable reason literal; `ghcr-fallback` mints a fresh group per deploy,
+so no pre-existing mute can pre-suppress it).
+
+**If this leaks, the user's data is exposed via:** N/A. Both emitters carry fixed literals +
+`image_kind` + a git tag + a 3-literal reason — no user content, no credential, no PII. `value`
+changes **notification**, not **capture**: these events already flow to Sentry today regardless of
+the threshold, so this diff cannot mint a new exposure vector.
+
+**Brand-survival threshold:** `single-user incident` (auto per #5175).
+
+> **CPO flag (recorded, not overridden):** the *direct* vector terminates in migration-schedule
+> integrity, not a single-user incident — the GHCR fallback is by-design safe degradation. The
+> `single-user incident` classification is carried by the **indirect** mute-coupling vector above,
+> which `user-impact-reviewer` surfaced at PR review and the plan originally missed.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: sentry_issue_alert.zot_mirror_fallback_rate pages on the FIRST event of any of its 4 signals
+  cadence: event-driven; frequency=23 throttles re-notification per (rule, issue-group)
+  alert_target: IssueOwners → ActiveMembers fallthrough (unchanged; no numeric target — NG3)
+  configured_in: apps/web-platform/infra/sentry/issue-alerts.tf (applied via apply-sentry-infra.yml:265)
+error_reporting:
+  destination: Sentry (jikigai-eu, EU cluster) — this change IS the error-reporting layer
+  fail_loud: true — value=0 is fire-on-first; value=3 WAS the silent-failure mode
+failure_modes:
+  - mode: alarm still cannot fire (threshold wrong / not applied)
+    detection: AC1-AC3 (source) + AC10 (reads the LIVE rule, not the file) + AC11 (proves it FIRES)
+    alert_route: CI fails on AC; AC10/AC11 self-pull post-merge
+  - mode: alarm fires but pages nobody
+    detection: AC10 projects `.actions` and asserts non-empty
+    alert_route: unchanged IssueOwners fallthrough (no notify-target change in this PR)
+  - mode: rule muted to escape noise → ghcr-fallback page dies silently
+    detection: none automated — this is the residual brand risk
+    alert_route: mitigated by doc (mute-the-issue-not-the-rule) in the .tf comment + revert runbook
+  - mode: host is Sentry-dark (no Doppler/DOPPLER_TOKEN, or SENTRY_* prefetch soft-fails at :711)
+    detection: NOT this alarm — `logger -t ci-deploy` → journald → Vector → Better Stack
+      (`vector.toml:129` allowlists the tag). Tracked in #6437.
+    alert_route: Better Stack log query; ci-deploy.sh:1049/:1056 FATAL bounds the Doppler-less case
+logs:
+  where: Sentry issue-group events (registry/stage/image/zot_gate_reason tags); no new log surface
+  retention: Sentry default (unchanged)
+discoverability_test:
+  command: >
+    curl -sS -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN"
+    "https://sentry.io/api/0/projects/jikigai-eu/web-platform/rules/"
+    | jq '.[] | select(.name|test("zot")) | {conditions, actions}'
+  expected_output: 'conditions[0].value == 0 AND actions non-empty (NO ssh; token read-only from Doppler prd_terraform)'
+```
+
+**Soak follow-through: not required.** #6285 closes on threshold-fixed + applied + fired
+(AC10/AC11). The 7-day zero-fallback soak is **#6122's** gate, already enrolled via
+`zot-soak-6122.sh`.
 
 ## Changes
 
@@ -178,7 +246,13 @@ on a passing AC.
 - [ ] **AC11 — live-fire (the only AC that proves the alarm FIRES).** POST one synthetic event
       mirroring `ci-deploy.sh:630-646` with a **novel** reason so it forms a fresh group:
       `{feature: "supply-chain", op: "image-pull", registry: "zot-gate-degraded",
-      zot_gate_reason: "synthetic_ac_probe_6285"}` → confirm the rule fires (an email arrives).
+      zot_gate_reason: "synthetic_ac_probe_6285"}` → confirm the rule fires **via the Sentry API**
+      (poll the synthetic issue's activity feed for a triggered-rule entry). **Do NOT verify by
+      reading the founder's inbox** — that is an operator step, and this section is automated
+      (`hr-never-label-any-step-as-manual-without`). AC11 is also the ONLY check that catches the
+      residual TR1 mode AC10 cannot: SaaS **accepts and stores** `value: 0` but never fires (a
+      server-side coercion, or a build whose new-group short-circuit differs from OSS `master`) —
+      AC10 reads the stored value back and would PASS.
       **Safe on three independent grounds:** (1) `zot-gate-degraded` is matched by **none** of
       `zot-soak-6122.sh`'s four queries (`:57,58,60,61`) — verified live, Sentry tag matching is
       exact (`registry:"zot"` → 0 while `registry:"zot-gate-degraded"` → 31); (2) fired pre-cutover,
@@ -193,8 +267,8 @@ on a passing AC.
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | Sentry rejects `value = 0` at apply | Low — one-leg source read (see TR1); OSS-vs-SaaS gap real | CI fails loudly. Ladder: `value = 1` → metric alert at `alert_threshold = 0`. Never `3`. |
-| **Alarm goes live on merge and pages ~2-3×/day** | **Certain** — `ZOT_REGISTRY_URL` is set and `zot-gate-degraded` emitted **31 events in the last 7 days** (`probe_unreachable`) | **Accepted, operator-ruled: these are true signal.** The probe has been unreachable for 7+ days while every deploy silently falls back to GHCR, and **#6435 proves the soak is blind to this signal** — this alarm is its *only* coverage. Throttled by `frequency = 23` (the group is stable, so the throttle does apply here). |
-| Page-rate on `ghcr-fallback` post-flip | Bounded by **deploy rate**, not `frequency` | The group is **fresh per deploy**, so `frequency = 23` throttles only within one deploy. Intended: every fallback FAILs the soak gate anyway. |
+| **Alarm goes live on merge and pages several×/day** | **Certain** — `ZOT_REGISTRY_URL` is set and `zot-gate-degraded` emitted **31 events over the 4 days to 2026-07-15** (`probe_unreachable`), incl. **9 in the last 24h** | **Accepted, operator-ruled: these are true signal.** The probe has been unreachable for days while every deploy silently falls back to GHCR, and **#6435 proves the soak is blind to this signal** — this alarm is its *only* coverage. **Rate correction:** the operator ruled on "~2-3/day", which was understated — the emit is once per `ci-deploy.sh` run per host, so it is **deploy-rate-bound (~7-9 events/day observed)**. `frequency = 23` throttles it (the reason-keyed group is stable) but pages land per 23-min bucket, so expect **~4-8/day**, and up to 3 concurrent reason-groups each with an independent bucket (reason-space is bounded at 3 literals). The decision's *rationale* is unaffected; the mute-coupling mitigation above is what makes the higher rate safe. |
+| Page-rate on `ghcr-fallback` post-flip | Bounded by **2× deploy rate**, not `frequency` | The message embeds `$img`, so each deploy mints **two** groups (`web:<tag>` and `inngest:<tag>`), each throttled separately. `frequency = 23` throttles only within one deploy's group. Intended: every fallback FAILs the soak gate anyway. |
 | Sibling `sandbox_startup_failure:1233` may share the defect | Unknown — **not traced** | Out of scope, #6429. (v1 pinned a file-wide count here; dropped — it coupled this PR to #6429's landing order.) |
 
 ## Infrastructure (IaC)

@@ -866,13 +866,19 @@ pull_image_with_fallback() {
     # cosign follows the GHCR RepoDigest with NO insecure flag). This is the soak gate's
     # watched event; surfaced loudly, not journald-only.
     #
-    # RETIREMENT TRIPWIRE (#6285): removing this fallback branch is ADR-096 task 5.3, and
-    # it permanently darkens 3 of the 4 signals watched by
-    # sentry_issue_alert.zot_mirror_fallback_rate (infra/sentry/issue-alerts.tf) — retire
-    # that alarm in the SAME PR, or it survives as a green-looking rule that can never
-    # fire. It also removes both events zot-soak-6122.sh reads (:57-58), so re-point or
-    # retire the soak gate too (#6427) — left alone it FAILs open forever. NOT darkened:
-    # zot_gate_degraded_event (:630) is emitted by the GATE, not this pull path.
+    # RETIREMENT TRIPWIRE (#6285): ADR-096 task 5.3 deletes this branch. That darkens exactly
+    # ONE of the four signals watched by sentry_issue_alert.zot_mirror_fallback_rate
+    # (infra/sentry/issue-alerts.tf): registry:"ghcr-fallback", emitted just below. The other
+    # two pull-fallback signals live in cloud-init.yml (app_ghcr_fallback,
+    # inngest_ghcr_fallback) — a separate fresh-boot path, separate deletions; they fire on
+    # the zot MISS, before any GHCR pull, so "stop GHCR push" does not darken them either.
+    # zot_gate_degraded_event (:630) is GATE-emitted and survives 5.3 outright.
+    #
+    # So do NOT retire that alarm here — NARROW its filters_v2 to the signals that still
+    # emit. Retiring it blinds the survivors, and zot-gate-degraded is currently its
+    # HIGHEST-volume signal. This deletion also kills the soak gate's rolling leg
+    # (zot-soak-6122.sh:57) while its fresh-boot leg (:58) survives — re-point the soak in
+    # the same slice (#6427).
     logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} — falling back to GHCR"
     # #6400: GHCR fallback leg now recovers on a login-ok/pull-deny cred (retry once).
     if _ghcr_pull_or_recover "$perr"; then

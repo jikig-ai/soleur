@@ -87,9 +87,15 @@ independent axes so it never silently gates a host:
   any zot miss (probe fail / login fail / pull fail) — a zot outage degrades latency, not
   availability, for the entire soak + break-glass period.
 - **Loud, no-SSH signal:** every fallback emits a Sentry `registry:"ghcr-fallback"` /
-  `stage:"inngest_ghcr_fallback"` event (the fallback-rate alarm pages on the first one); zot liveness is
-  a `betteruptime_heartbeat.registry_prd` push beat that pages if zot stops beating — before it
-  can gate a boot (TR3).
+  `stage:"inngest_ghcr_fallback"` event (the fallback-rate alarm pages on the first one).
+  **Correction (#6285):** zot liveness was assigned here to a `betteruptime_heartbeat.registry_prd`
+  push beat "that pages if zot stops beating — before it can gate a boot (TR3)". **That layer does
+  not exist yet:** `ZOT_HEARTBEAT_URL` (`zot-registry.tf:359`) has **zero consumers** repo-wide — no
+  pinger cron was ever written — and the resource ships `paused = true` (`:350`). Live evidence: 31
+  `zot-gate-degraded (probe_unreachable)` events over the 4 days to 2026-07-15, none of which paged
+  anything. Until the pinger ships, `sentry_issue_alert.zot_mirror_fallback_rate` is the **only**
+  zot-liveness coverage — which is why its threshold being unreachable (#6285) mattered. (`paused`
+  is under `ignore_changes`, so the live pause state is not verifiable from the repo.)
   - *CI push side (#6274):* the CI dual-push mirror step is **explicitly non-blocking**
     (`continue-on-error: true` + an `exit 0` inner shell + a bounded retry to self-heal a transient
     CF-tunnel reset) — a mirror failure degrades zot redundancy, never the release/build verdict
@@ -105,12 +111,21 @@ independent axes so it never silently gates a host:
     deploy (the tag is in the message), so the per-group count is bounded by fleet size, not a rate;
     #6285 corrected it to 0, the only fleet-independent setting (see the resource comment). Parity:
     `zot-soak-6122.sh` FAILs this gate on >=1 fallback, so any threshold above 0 is strictly less
-    sensitive than the gate it pre-warns. **Window:** it opens when `ZOT_REGISTRY_URL` is set in
-    Doppler `prd` (task 1.8) — *not* at the `ZOT_ACTIVE=1` flip, since `zot_gate_degraded_event`
-    fires precisely on the paths where `ZOT_ACTIVE` stays 0 (probe_unreachable / creds_absent /
-    login_failed); the three pull-fallback signals additionally require the flip. It **closes at task
-    5.3** for those three (5.3 deletes the emitting branch — retire the alarm in that same PR;
-    `zot-gate-degraded` survives, being gate-emitted). Two post-cutover boot-gating
+    sensitive than the gate it pre-warns. **Window — opens at task 1.8, for 3 of the 4 signals:**
+    `zot-gate-degraded` fires precisely where `ZOT_ACTIVE` stays 0 (probe_unreachable /
+    creds_absent / login_failed, `ci-deploy.sh:790/799/807`), and the two cloud-init fresh-boot
+    signals gate on `ZURL` + a `/v2/` probe with **no** `ZOT_ACTIVE` at all (`ZOT_ACTIVE` does not
+    occur in `cloud-init.yml`) — so all three go live as soon as `ZOT_REGISTRY_URL` is set in
+    Doppler `prd`, *before* the flip. Only `registry:ghcr-fallback` (`ci-deploy.sh:857`) requires
+    `ZOT_ACTIVE=1`. Note the 1.8→1.9 window (URL set, creds not yet backfilled) therefore pages on
+    `app_ghcr_fallback` as well as `zot-gate-degraded`. Each signal is additionally gated on the
+    emitting host having Doppler + `DOPPLER_TOKEN` + a resolved `SENTRY_*` prefetch
+    (`ci-deploy.sh:707,776-777`); a host missing either is Sentry-dark and reports only via
+    `logger -t ci-deploy` → Better Stack (#6437). **Closes:** task 5.3 deletes the pull-site
+    fallback **branches** — three of them across two files (`ci-deploy.sh:857`,
+    `cloud-init.yml:536`, `:695`), not one — darkening those three signals. `zot-gate-degraded`
+    survives 5.3 (gate-emitted). **Do NOT retire the alarm at 5.3 — narrow its `filters_v2` to the
+    surviving signal(s);** retiring it blinds `zot-gate-degraded`. Two post-cutover boot-gating
     shapes the degraded signal must remain loud for: a **missing** copy (crane-copy failure) AND a
     **present-but-unsigned** copy (cosign-sign succeeded-copy-then-failed-sign) — the latter is NOT a
     clean miss, since the pull side would pull the present zot copy and *bypass* the atomic GHCR
