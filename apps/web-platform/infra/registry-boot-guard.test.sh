@@ -151,6 +151,18 @@ assert "the cap is read from the container's live cgroup memory.max" \
   "grep -qF 'cap_bytes=\$(cat \"\$cg/memory.max\" 2>/dev/null)' '$CI'"
 assert "zot_memory_cap_mb is reported in the SOLEUR_ZOT_DISK payload" \
   "grep -qF 'zot_memory_cap_mb=\$ZOT_MEMORY_CAP_MB' '$CI'"
+# UNCAPPED must be distinguishable from UNKNOWN. cap_mb cannot express it: -1 is the parse lib's
+# drop-sentinel (zot-telemetry-parse.sh:48 drops every negative) and 0 would read as "capped at
+# nothing". Collapsing them makes an uncapped container look mid-restart, so the gate assumes a cap
+# and can never alarm on zot running with none — #6288's root condition, invisible.
+assert "memory.max=='max' reports zot_memory_capped=false (UNCAPPED), distinct from unknown" \
+  "grep -qE '^ *max\\) *ZOT_MEMORY_CAPPED=false' '$CI'"
+assert "a numeric memory.max reports zot_memory_capped=true" \
+  "grep -qF 'ZOT_MEMORY_CAPPED=true' '$CI'"
+assert "zot_memory_capped defaults to unknown (cgroup absent != uncapped)" \
+  "grep -qF 'ZOT_MEMORY_CAPPED=unknown' '$CI'"
+assert "zot_memory_capped is reported in the SOLEUR_ZOT_DISK payload" \
+  "grep -qF 'zot_memory_capped=\$ZOT_MEMORY_CAPPED' '$CI'"
 # NB: leading '--' anchor dropped so grep/ugrep doesn't parse it as an option.
 assert "docker run carries --memory + --memory-swap == the cap (deterministic cgroup-OOM)" \
   "grep -qF 'memory \"\$ZOT_MEMORY_CAP\" --memory-swap \"\$ZOT_MEMORY_CAP\"' '$CI'"
