@@ -184,6 +184,11 @@ checks = {
         step_if(dev, "File or comment tracking issue").replace(" ", "") == "failure()",
     # ...and an empty failure_mode must still carry a mode into the issue body.
     "dev_fail_mode_defaulted": "probe_or_infra_failure" in str(dev),
+    # The non-allowlisted-table REPORT must leave the run log. It was a bare echo in a
+    # GREEN run, so a goose pin-bump creating a 15th anon-truncatable table reached
+    # nobody. Must be an OUTPUT that a step consumes into the tracking issue.
+    "dev_other_n_output":     "other_n=" in dev_run,
+    "dev_other_n_annunciated": "steps.apply.outputs.other_n" in str(dev),
 
     # --- No collision with the prd workflow's issue/label/concurrency identity ---
     "titles_differ":          ("[ci/inngest-rls-dev]" in dev_run) and ("[ci/inngest-rls-dev]" not in prd_run),
@@ -243,6 +248,8 @@ assert "dev gate has a coverage guard (violations=0 over 0 rows is vacuous)" "[[
 # --- Annunciation -------------------------------------------------------------
 assert "dev issue filer gates on failure() alone (a probe/timeout failure must still file)" "[[ $(probe dev_filer_on_failure_alone) == yes ]]"
 assert "dev defaults an empty failure_mode to probe_or_infra_failure" "[[ $(probe dev_fail_mode_defaulted) == yes ]]"
+assert "dev emits the non-allowlisted-table count as a step output" "[[ $(probe dev_other_n_output) == yes ]]"
+assert "dev annunciates the non-allowlisted-table count (not a bare echo in a green run)" "[[ $(probe dev_other_n_annunciated) == yes ]]"
 
 # --- Identity collision -------------------------------------------------------
 assert "issue titles differ (a green prd run must not close dev's failure issue)" "[[ $(probe titles_differ) == yes ]]"

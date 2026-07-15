@@ -285,7 +285,7 @@ error_reporting:
 failure_modes:
   - mode: A 15th Inngest table appears (goose pin bump) with RLS off and anon grants
     detection: the gate's separate non-allowlisted-RLS-disabled count is >0 (reported, non-fatal)
-    alert_route: "[ci/inngest-rls-dev] issue + the Phase-4.3 advisor scan. HONEST WINDOW: NOT <=1h -- the allowlist is static, so healing requires a human PR adding the 15th name. The window is time-to-human-PR (unbounded). v1 claimed self-heal in two places; that was false by construction for an allowlist design, and the aborting subset assertion made it worse by also halting the 14."
+    alert_route: "The dedicated NON-FATAL issue '[ci/inngest-rls-dev] non-allowlisted RLS-disabled tables on soleur-dev', filed/commented by apply-inngest-rls-dev.yml's report step from the apply step's other_n output; auto-closed when the count returns to 0. CORRECTION (review, 2026-07-15): this row previously claimed '[ci/inngest-rls-dev] issue + the Phase-4.3 advisor scan' -- BOTH were inert. The apply-failure filer needs failure() and other_n>0 does not fail the apply; the advisor scan is #3366, which this plan ESCALATES rather than builds. The count was a bare echo in a green run log, i.e. this failure mode annunciated NOWHERE. The report step is the fix. HONEST WINDOW: NOT <=1h -- the allowlist is static, so healing requires a human PR adding the 15th name. The window is time-to-human-PR (unbounded). v1 claimed self-heal in two places; that was false by construction for an allowlist design, and the aborting subset assertion made it worse by also halting the 14."
   - mode: 0001 is pointed at a co-tenanted project
     detection: workflow project-name preflight (.name != 'soleur-inngest-prd') OR the in-DB app-distinctive guard
     alert_route: workflow failure before any REVOKE executes (guard precedes the revoke loop; asserted statically)
@@ -294,7 +294,7 @@ failure_modes:
     alert_route: existing scheduled-inngest-health.yml watchdog (*/15) -> [ci/inngest-down]
   - mode: An APP table loses RLS in dev
     detection: the non-allowlisted count reported by the gate
-    alert_route: routed to #3366's advisor scan. NOT a hard failure of this workflow -- v1 aborted the Inngest lockdown on unrelated app-schema drift, which is fail-closed on the wrong axis.
+    alert_route: "Same non-fatal '[ci/inngest-rls-dev] non-allowlisted RLS-disabled tables on soleur-dev' issue as the row above (the two modes are indistinguishable from the count alone; the issue body carries the triage fork). Durable schema-wide detection remains #3366's advisor scan, which is ESCALATED by this plan, NOT built by it -- so #3366 is a FUTURE route, not a live one. NOT a hard failure of this workflow -- v1 aborted the Inngest lockdown on unrelated app-schema drift, which is fail-closed on the wrong axis."
 logs:
   where: GitHub Actions run logs; Inngest host journald -> Vector -> Better Stack Logs source 2457081
   retention: GH Actions default; Better Stack per existing source config
@@ -319,7 +319,7 @@ discoverability_test:
 | **Disturbing the in-flight cutover** | No DSN, Doppler, or Inngest-config change. G3's `PG_DARK` comes from Doppler, not the DB; the FSM's flush is Redis-only. A Postgres posture change on soleur-dev cannot reach any cutover guard. |
 | **A 15th goose table before cutover** | **Honest accounting:** the window is **unbounded** (time-to-human-PR), not ≤1h — the allowlist is static. Bounded in practice because goose runs only on a deliberate image-pin bump (Phase 0.7), and the pin path is a workflow trigger (Phase 2). This is the real cost of co-tenancy and the strongest argument for Phase 5. |
 | **GDPR verdict is point-in-time** | Phase 0.2 re-checks and escalates **in parallel** while still applying (halting would leave data anon-truncatable and burn the clock). |
-| **Phase 5 rots** (~70% likely) | Machine-checkable trigger + CI annunciation from `op=arm` + named owner + 60-day backstop. Evidence: #4707, orphaned 45 days in this same subsystem. |
+| **Phase 5 rots** (~70% likely) | Machine-checkable trigger + named owner + 60-day backstop. ⚠️ **"CI annunciation from `op=arm`" is NOT a live mitigation** — `cutover-inngest.yml` is in neither this PR's diff nor its `## Files to Edit`; that annunciation is **to be built by [#6488](https://github.com/jikig-ai/soleur/issues/6488)** (deferred). Counting it as present mitigation is exactly the #4707 mechanism this row cites as evidence. Evidence: #4707, orphaned 45 days in this same subsystem. |
 
 ---
 

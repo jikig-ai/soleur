@@ -205,9 +205,16 @@ jobs:
           # time-to-PR, NOT self-healing); an app table losing RLS is triaged via the
           # advisor scan (#3366). Deliberately NOT a failure: aborting the Inngest
           # lockdown on unrelated app-schema drift is fail-closed on the wrong axis.
+          #
+          # ANNUNCIATION: emitted as an OUTPUT and routed to a non-fatal tracking issue
+          # by the reporting step below. A bare `echo` here reached NOBODY — the run is
+          # green, so a goose pin-bump creating a 15th anon-truncatable table just
+          # scrolled past in the log. `err` (the report query itself failing) is
+          # annunciated too rather than being swallowed as "not >0".
           if [[ -z "$fail_mode" ]]; then
             other="$(query "select count(*) as n from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity=false and not (c.relname = ANY(${ALLOW}))")"
             other_n="$(printf '%s' "$other" | jq -r '.[0].n // "err"' 2>/dev/null)"
+            echo "other_n=$(sanitize "$other_n")" >> "$GITHUB_OUTPUT"
             echo "REPORT (non-fatal): non-allowlisted RLS-disabled public tables=${other_n} (expected 0; >0 is triage input for the advisor scan #3366, not a failure of this lockdown)."
           fi
 
@@ -322,6 +329,62 @@ jobs:
             gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
               --label "ci/inngest-rls-dev" --label "priority/p1-high" --body-file "$BODY_FILE"
           fi
+
+      # NON-FATAL drift annunciation (distinct from the apply-failure issue above).
+      # `other_n > 0` used to be a bare echo in a GREEN run, and the plan claimed it
+      # was routed to "[ci/inngest-rls-dev] issue + the Phase-4.3 advisor scan" —
+      # BOTH were inert: the filer above needs failure(), and the advisor scan is
+      # #3366, which this plan escalates rather than builds. So a goose pin-bump
+      # creating a 15th anon-truncatable table annunciated NOWHERE.
+      #
+      # Deliberately NOT a failure of the apply: aborting the Inngest lockdown on
+      # unrelated app-schema drift is fail-closed on the wrong axis. And deliberately
+      # a DISTINCT title from the apply-failure issue — the success step below closes
+      # any open issue matching THAT title, so sharing it would let the next green run
+      # auto-close this drift report while the drift is still live.
+      - name: Report non-allowlisted RLS-disabled tables (non-fatal)
+        if: always() && steps.apply.outputs.other_n != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OTHER_N: ${{ steps.apply.outputs.other_n }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search string is intentional
+          set -euo pipefail
+          TITLE="[ci/inngest-rls-dev] non-allowlisted RLS-disabled tables on soleur-dev"
+          SEARCH='in:title "[ci/inngest-rls-dev] non-allowlisted RLS-disabled tables on soleur-dev"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$SEARCH" --json number --jq '.[0].number // empty')
+          if [[ "$OTHER_N" == "0" ]]; then
+            # Self-healing: the drift is gone (a 15th table was allowlisted, or the app
+            # table regained RLS). Close the report rather than leaving green cruft open.
+            if [[ -n "$EXISTING" ]]; then
+              gh issue close "$EXISTING" --repo "$GH_REPO" --comment "Resolved at ${NOW}: non-allowlisted RLS-disabled public tables back to 0. Run: ${RUN_URL}"
+            fi
+            exit 0
+          fi
+          MSG="**${OTHER_N}** non-allowlisted public table(s) on soleur-dev have RLS disabled, as of ${NOW}. (\`err\` means the report query itself failed.) Run: ${RUN_URL}"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$MSG"
+            exit 0
+          fi
+          gh label create "ci/inngest-rls-dev" --repo "$GH_REPO" \
+            --description "Apply of the soleur-dev dark-Inngest RLS lockdown failed" --color "B60205" 2>/dev/null || true
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Non-allowlisted RLS-disabled tables on soleur-dev\n\n'
+            printf '%s\n\n' "$MSG"
+            printf 'This is a REPORT, not an apply failure — the lockdown of the 14 allowlisted tables verified clean. The allowlist-driven revoke structurally cannot touch these tables.\n\n'
+            printf '### What this means\n\n'
+            printf 'Either (a) a **15th goose table** exists — the bootstrap image pin at `apps/web-platform/infra/cloud-init-inngest.yml` was bumped and Inngest shipped a new table. It is anon-reachable (incl. TRUNCATE) until its name is added to the allowlist. This is NOT self-healing: the window is time-to-PR. Or (b) an **app table lost RLS**, which is advisor-scan territory (#3366).\n\n'
+            printf '### Remediation\n\n'
+            printf '1. Identify them: `select c.relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname=%s and c.relkind in (%s,%s) and c.relrowsecurity=false;`\n' "'public'" "'r'" "'p'"
+            printf '2. If goose shipped it: add the name to the allowlist in ALL THREE places — `apply-inngest-rls-dev.yml` (ALLOW), `0002_dev_inngest_tables_lockdown.sql` (allow), `inngest-rls.test.sh` (ALLOW_14) — and update the cardinality guard. Merging re-applies the lockdown.\n'
+            printf '3. If it is an app table: triage via #3366; do NOT add it to this allowlist.\n'
+          } > "$BODY_FILE"
+          gh issue create --repo "$GH_REPO" --title "$TITLE" \
+            --label "ci/inngest-rls-dev" --label "priority/p2-medium" --body-file "$BODY_FILE"
 
       - name: Auto-close tracking issue (success)
         if: success()
