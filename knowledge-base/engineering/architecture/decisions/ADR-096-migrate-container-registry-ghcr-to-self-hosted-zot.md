@@ -119,8 +119,10 @@ independent axes so it never silently gates a host:
     recorded rather than silently edited, because the earlier text asserted the coverage it lacked.
     **Scope of the corrected claim — do NOT restate this as "the gate matches the alarm" and stop:**
     window/threshold parity is **not** pinned (the alarm is a 1h-rolling per-issue-group count; the
-    soak is a flat count over `START..now`); the soak's FAIL set is **4-of-5** (the Sentry-dark mode
-    emits nothing at all — #6437 — and is caught only by the soak's insufficient-sample arm); and
+    soak is a flat count over `START..now`); the soak's FAIL set covers **four of the six** ways the
+    fleet can end up GHCR-served — uncovered are the Sentry-dark mode (emits nothing at all — #6437 —
+    caught only by the soak's insufficient-sample arm) and the fresh-boot `/v2/` probe-miss path
+    (emits nothing at all — #6462); and
     fresh-boot coverage is **partial** (a `/v2/` probe miss emits nothing, and there is no `app_zot`
     liveness beacon, so the soak has no denominator of expected boots — #6462). The soak is therefore
     **necessary but not sufficient** to authorize 5.3–5.5.
