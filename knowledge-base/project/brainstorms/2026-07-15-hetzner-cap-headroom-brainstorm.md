@@ -244,11 +244,30 @@ future**, restoring the probe-host option #6416 lost. **And** the raise is still
 required to reach steady state (cap 5 < need 6). Not either/or — sequence both,
 reclaim first because it needs no vendor.
 
-Where all three converge, and it is the finding that matters most: **the cap has
-silently pinned ADR-068 Phase 3 at zero.** `GIT_DATA_STORE_ENABLED` is unflippable
-because the host cannot be born at 5/5. That is a more consequential cost than the
-diagnostics gap the issue leads with — though "Post-MVP / Later" means it is
-blocking a *parked* phase, not an active one.
+Where all three converge: **the cap has silently pinned ADR-068 Phase 3 at zero.**
+`GIT_DATA_STORE_ENABLED` is unflippable because the host cannot be born at 5/5.
+
+> **[Corrected 2026-07-15, at plan time — this convergence is WRONG.]** All three
+> leaders (and this document) assumed the **cap** is what blocks git-data. It is not.
+> `git_data_server_type` defaults to **`cax11`** (`variables.tf:113`), and a live probe
+> of `GET /v1/datacenters` shows the **entire ARM `cax` line (cax11/21/31/41) is
+> orderable in ZERO of the 3 EU datacenters**. **git-data cannot be born at ANY server
+> cap** — the binding constraint is *stock*, not quota. This corroborates
+> `expenses.md:22`'s note that cax11 was "EU-wide out of stock" at inngest-provision
+> time; it still is, months later.
+>
+> Three consequences: (1) "raise the cap → unblocks ADR-068 Phase 3" is **false** —
+> raise the cap for probe hosts and web-3, not for git-data; (2) the
+> platform-strategist's "the reclaim only funds git-data's unborn slot" **dissolves** —
+> git-data cannot claim the slot, so the reclaimed slot is genuine free headroom
+> (the CPO's conclusion, reached on grounds neither leader argued); (3) the **stock**
+> preflight (Decision 4) is the load-bearing item, not the cap raise.
+>
+> Same probe found **`cx33` is orderable in exactly one DC globally (`hel1-dc2`)**, so
+> **web-2 (cx33 @ fsn1) is currently un-recreatable** — `web-2-recreate` would strand
+> the fleet today, a verbatim #6393 repeat in the DC #6393 fled *to*. Filed as **#6463**.
+> This is the sharpest vindication of choosing stock-preflight over cap-preflight: the
+> cap check would return green while the apply destroyed web-2.
 
 ## Capability Gaps
 
