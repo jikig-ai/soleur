@@ -600,16 +600,25 @@ t_host_create_no_ack_bypass() {
   fi
 }
 
-# T30 (no double-count): a location change forces a REPLACE (["delete","create"]),
-# already counted by resource_deletes (T16 pins rdel=1). host_creates selects
-# actions == ["create"] EXACTLY, so a replace does NOT also trip it — the two
-# counters partition the space instead of overlapping.
-t_host_replace_not_double_counted() {
+# T30 (a REPLACE births a host and must HALT): a location change forces a REPLACE
+# (["delete","create"]). It DESTROYS AND RE-CREATES the host — and the reborn host
+# has no hcloud_server_network attach, exactly like a fresh create. So it must trip
+# host_creates.
+#
+# This test asserted the OPPOSITE until review (`0:0`, "not double-counted"). That
+# was wrong, and it was the guard's most dangerous hole: a replace trips
+# resource_deletes, the destroy gate then prints "Add [ack-destroy] to
+# acknowledge", and an author acking a legitimate sibling change in the same merge
+# would ack the host rebirth through with it — #6416 reproducing THROUGH the guard.
+# There was never a double-count to avoid: host_creates is not a term in the
+# workflow's destroy_count sum, and the HALT is evaluated first and
+# unconditionally, so the destroy gate's count is never reached on this plan.
+t_host_replace_halts() {
   local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-hcloud-server-location-replace.json")
-  if [[ "$out" == "0:0" ]]; then
-    _report "T30 hcloud_server REPLACE not double-counted by host_creates (hc=0; rdel covers it)" ok
+  if [[ "$out" == "1:1" ]]; then
+    _report "T30 hcloud_server REPLACE HALTs (hc=1 rc=1 — a reborn host is an unattached host)" ok
   else
-    _report "T30 hcloud_server REPLACE not double-counted by host_creates" fail "got '$out' want '0:0'"
+    _report "T30 hcloud_server REPLACE HALTs" fail "got '$out' want '1:1'"
   fi
 }
 
@@ -674,7 +683,7 @@ t_web2_no_ack_destroy_bypass
 t_web2_volume_forget_aborts
 t_host_create_halts
 t_host_create_no_ack_bypass
-t_host_replace_not_double_counted
+t_host_replace_halts
 t_host_creates_baseline_zero
 t_host_creates_parse_failure_fails_closed
 

@@ -101,7 +101,14 @@ while read -r run_id created_at; do
   # Docker image")` matches BOTH — emitting a third field, shifting `mirror` onto the
   # post-step's "success", and reporting a false PASS against a run whose mirror was
   # actually skipped. (Observed: that is exactly what the unanchored form did here.)
-  # `[...][0]` pins each extraction to exactly one value so the TSV is always 2 fields.
+  # `[...][0]` pins each extraction to exactly one value.
+  #
+  # `// "absent"` is a DISTINCT sentinel from any real conclusion, and is handled
+  # explicitly below — never allowed to fall through. An earlier draft let "absent"
+  # reach the `!= "skipped"` test, so a RENAMED OR DELETED mirror step counted as a
+  # clean run: 5 of those would have PASSed and auto-closed #6416 while zot was not
+  # being mirrored at all. That is #6416's own defect class (absence read as health)
+  # reproduced inside the probe built to prove #6416 fixed. Caught at review.
   steps=$(gh api "repos/${GH_REPO}/actions/jobs/${job_id}" --jq '
     [([.steps[] | select(.name | startswith("Build and push Docker image")) | .conclusion][0] // "absent"),
      ([.steps[] | select(.name | startswith("Mirror image GHCR"))           | .conclusion][0] // "absent")] | @tsv' 2>/dev/null)
@@ -109,15 +116,15 @@ while read -r run_id created_at; do
     skipped_runs=$((skipped_runs + 1))
     continue
   fi
-  # Shape guard: anything other than exactly 2 fields means the extraction drifted
-  # (a renamed step, a new matching step). Fail TRANSIENT rather than silently read
-  # the wrong column — the false-PASS mode this probe exists to avoid.
-  if [[ "$(awk -F'\t' '{print NF}' <<<"$steps")" != "2" ]]; then
-    echo "TRANSIENT: step extraction returned $(awk -F'\t' '{print NF}' <<<"$steps") fields, expected 2 (step names drifted?): $steps" >&2
-    exit 2
-  fi
   build=$(cut -f1 <<<"$steps")
   mirror=$(cut -f2 <<<"$steps")
+
+  # Step-drift: the extraction found no step by that name. NEVER a data point — the
+  # probe cannot report a verdict about a step it did not locate.
+  if [[ "$mirror" == "absent" || "$build" == "absent" ]]; then
+    echo "TRANSIENT: run ${run_id} — could not locate the build ('${build}') and/or mirror ('${mirror}') step by name; they were probably renamed. Update this probe's startswith() anchors before trusting any verdict." >&2
+    exit 2
+  fi
 
   # No image built ⇒ nothing to mirror ⇒ not a data point.
   if [[ "$build" != "success" ]]; then
@@ -127,29 +134,49 @@ while read -r run_id created_at; do
 
   # PRIMARY signal — unmaskable, straight from the API.
   if [[ "$mirror" == "skipped" ]]; then
-    echo "FAIL: run ${run_id} (${created_at}) built an image but SKIPPED the zot mirror."
-    echo "  A skip means the mirror is gated on zot_bridge again — the #6416 silent-skip is back:"
-    echo "  the bridge's conclusion is forced to 'success' by continue-on-error, so nothing reds,"
-    echo "  the mirror never runs, mirror_status stays unset, and the Slack degraded line stays inert."
-    echo "  zot is not being backfilled. Check reusable-release.yml: zot_mirror must be gated on"
-    echo "  steps.docker_build.outcome, and branch on steps.zot_bridge.outcome INTERNALLY."
+    echo "FAIL: run ${run_id} (${created_at}) built an image but SKIPPED the zot mirror — zot is not being backfilled."
+    echo "  Two causes produce this, check in order:"
+    echo "   1. A step between docker_build and the mirror FAILED. The mirror's plain \`if:\` carries an"
+    echo "      implicit success(), so e.g. a cosign (Fulcio/Rekor) flake short-circuits it. Read the"
+    echo "      job's step list first — this is the more common cause and is NOT a code regression."
+    echo "   2. The #6416 silent-skip regressed: zot_mirror gated on zot_bridge again. The bridge's"
+    echo "      conclusion is forced to 'success' by continue-on-error, so nothing reds, the mirror"
+    echo "      never runs, mirror_status stays unset, and the Slack degraded line stays inert."
+    echo "      Fix: gate zot_mirror on steps.docker_build.outcome and branch on the bridge INTERNALLY."
     exit 1
   fi
 
-  # SECONDARY signal — anchored on the interpolated runtime value, never the bare
-  # phrase (which also appears in echoed step SOURCE and would false-FAIL).
   logs=$(gh api "repos/${GH_REPO}/actions/jobs/${job_id}/logs" 2>/dev/null)
   if [[ -z "$logs" ]]; then
     skipped_runs=$((skipped_runs + 1))   # logs aged out (~90d): not evidence either way
     continue
   fi
-  if grep -qE '::warning::zot mirror degraded for 127\.0\.0\.1:5000/' <<<"$logs"; then
+
+  # DEGRADED — anchored on the interpolated runtime value, never the bare phrase
+  # (which also appears in echoed step SOURCE and would false-FAIL). The `<image>`
+  # alternate covers degraded() firing before ZOT is assigned: its emitter reads
+  # `${ZOT:-<image>}`, so a future call site above that assignment would emit the
+  # literal `<image>` and slip an IP-only anchor — counting a degraded run as clean.
+  if grep -qE '::warning::zot mirror degraded for (127\.0\.0\.1:5000/[^ ]*|<image>) \(rc=' <<<"$logs"; then
     echo "FAIL: run ${run_id} (${created_at}) reports a DEGRADED zot mirror."
-    grep -oE '::warning::zot mirror degraded for 127\.0\.0\.1:5000/[^"]{0,120}' <<<"$logs" | head -2 | sed 's/^/  /'
+    grep -oE '::warning::zot mirror degraded for [^ ]+ \(rc=[^)]*\)' <<<"$logs" | head -2 | sed 's/^/  /'
     echo "  If rc=bridge: the CF tunnel connector serving registry.soleur.ai could not route to"
     echo "  10.0.1.30:5000. Verify EVERY web host is a 10.0.1.0/24 member (ADR-114 I1):"
     echo "    hcloud server describe soleur-web-2 -o json | jq .private_net    # must NOT be []"
     exit 1
+  fi
+
+  # POSITIVE LIVENESS — the run must prove the mirror actually COMPLETED, not merely
+  # that no failure was found. Without this, any change that stops the mirror from
+  # emitting at all (step renamed, run block restructured, log-read silently broken)
+  # reads as "no degraded found" → clean → PASS → the sweeper closes #6416 on the
+  # ABSENCE of a signal. That is #6416's own defect class; a probe built to prove the
+  # fix must not reproduce it. Source-safe: the emitter echoes `to ${ZOT} and`, so
+  # only a real interpolated emit matches the literal IP.
+  if ! grep -qE 'zot mirror ok: copied .* to 127\.0\.0\.1:5000/' <<<"$logs"; then
+    echo "TRANSIENT: run ${run_id} ran the mirror (conclusion=${mirror}) but emitted neither a degraded warning nor the success marker." >&2
+    echo "  The probe cannot certify a run whose producer left no trace — refusing to count it clean." >&2
+    exit 2
   fi
 
   ok=$((ok + 1))

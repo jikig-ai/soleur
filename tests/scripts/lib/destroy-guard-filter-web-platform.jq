@@ -227,21 +227,46 @@ def web2_allow: [
   # reboot_updates is: it covers hcloud_server.git_data / .inngest / .registry
   # and every hcloud_volume, not just hcloud_server.web.
   #
-  # actions == ["create"] EXACTLY: a -replace serializes as ["delete","create"]
-  # and is already counted by resource_deletes → no double-count. MEASURED
-  # against tfplan-hcloud-server-location-replace.json: host_creates=0,
-  # resource_deletes=1.
+  # `index("create")`, NOT `== ["create"]`. This counts EVERY action shape that
+  # BIRTHS a host: ["create"], ["delete","create"] (a -replace), and
+  # ["create","delete"] (create_before_destroy). An earlier draft used the exact
+  # form, reasoning "a -replace is already counted by resource_deletes → no
+  # double-count". That reasoning is FALSE here, and dangerously so:
+  # host_creates is NOT a term in the workflow's destroy_count sum, so there is
+  # nothing to double-count against — the exactness bought nothing and cost the
+  # guarantee. Worse, a -replace trips resource_deletes, and the destroy gate
+  # then PRINTS "Add [ack-destroy] to acknowledge". An author acking a legitimate
+  # sibling change (say a ruleset-rule removal in the same merge) would ack the
+  # host rebirth through with it — and a reborn host has no
+  # hcloud_server_network attach, which is #6416 reproducing THROUGH the guard
+  # built to prevent it. The reboot_updates surface already learned this lesson
+  # (#5911's steer says "do NOT add [ack-destroy]"); host REBIRTH must get the
+  # same treatment. Caught at review by security-sentinel.
+  #
+  # Not double-counted in practice either: a -replace increments BOTH
+  # resource_deletes (via index("delete")) and host_creates, but they are
+  # evaluated by two INDEPENDENT gates — the HALT fires first and unconditionally,
+  # so the destroy gate's count is never reached. MEASURED against
+  # tfplan-hcloud-server-location-replace.json: resource_deletes=1,
+  # host_creates=1 (T30).
+  #
+  # KNOWN-UNCOVERED (declared, not accidental): a create/delete of
+  # hcloud_server_network against an EXISTING host is invisible to all 7
+  # surfaces. The server create catches the born-unattached case that caused
+  # #6416, but detaching a live host's private NIC would pass. That is the I1
+  # runtime-precondition gap tracked in #6441, not a counter this filter can add.
   #
   # BACKWARD-COMPAT: additive key. The apply / warm_standby / manual-rerun
   # consumers that read only resource_deletes/nested_deletes/reboot_updates stay
   # byte-unchanged. Only the `apply` job reads host_creates, and it evaluates the
   # HALT OUTSIDE the destroy_count sum — there is deliberately NO [ack-destroy]
   # bypass (a host create is never the right thing to type past on an unattended
-  # per-PR apply; the dispatch jobs that legitimately create are not gated).
+  # per-PR apply; the dispatch jobs that legitimately create/replace are separate
+  # jobs and do not read this key).
   host_creates: (
     [ .resource_changes[]?
       | select(.type == "hcloud_server" or .type == "hcloud_volume")
-      | select(.change.actions == ["create"]) ]
+      | select(.change.actions? | index("create")) ]
     | length
   )
 }
