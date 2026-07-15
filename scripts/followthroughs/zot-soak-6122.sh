@@ -13,18 +13,25 @@
 #       close the tracker. Proof the flip was actually exercised.
 #
 # The four watched signals and their emitters (anchored on EMIT NAMES, not line numbers —
-# ADR-096 mandates this; line citations rot):
-#   registry:"ghcr-fallback"       ci-deploy.sh   `registry_pull_event ghcr-fallback`
-#   registry:"zot-gate-degraded"   ci-deploy.sh   `zot_gate_degraded_event`
-#   stage:"inngest_ghcr_fallback"  cloud-init.yml `soleur-boot-emit inngest_ghcr_fallback`
-#   stage:"app_ghcr_fallback"      cloud-init.yml `soleur-boot-emit app_ghcr_fallback`
+# ADR-096 mandates this; line citations rot). NOTE there are THREE distinct emitters, with
+# two different tag schemas — that asymmetry is the whole reason the queries differ:
+#   registry:"ghcr-fallback"       ci-deploy.sh  `registry_pull_event ghcr-fallback`
+#                                  jq tags: {feature, op, registry, image}
+#   registry:"zot-gate-degraded"   ci-deploy.sh  `zot_gate_degraded_event`
+#                                  jq tags: {feature, op, registry, zot_gate_reason}
+#   stage:"inngest_ghcr_fallback"  cloud-init.yml calls `soleur-boot-emit inngest_ghcr_fallback`
+#                                  (defined in soleur-host-bootstrap.sh) tags: {stage, host_id, region}
+#   stage:"app_ghcr_fallback"      cloud-init.yml `_emit ... "app_ghcr_fallback" warning`
+#                                  tags: {stage, image_ref, host_id, detail}
 #
 # ⚠ THE PREFIX ASYMMETRY IS DELIBERATE. Do NOT "normalize" the queries to a common prefix.
-# ci-deploy.sh's jq payload carries feature+op, so the registry: queries are prefixed.
-# cloud-init.yml's _emit writes only {stage,image_ref,host_id,detail} — no feature, no op —
-# so the stage: queries MUST be bare. Sentry tag matching is EXACT: prefixing a stage: query
-# makes it match zero events forever, silently restoring the blindness this gate exists to
-# catch. Proven live: stage:"bootstrap_complete" → 9 events; the same query prefixed → 0.
+# ci-deploy.sh's jq payload carries feature+op, so the registry: queries are prefixed. NEITHER
+# boot-path emitter (`soleur-boot-emit` nor `_emit`) writes feature or op — they are separate
+# emitters that happen to share that gap — so the stage: queries MUST be bare. Sentry tag
+# matching is EXACT: prefixing a stage: query makes it match zero events forever, silently
+# restoring the blindness this gate exists to catch. Verify against BOTH emitters' tag
+# schemas above before touching a query — one of them is not enough.
+# Proven live: stage:"bootstrap_complete" → 9 events; the same query prefixed → 0.
 # The FAIL set (whole query strings, not just the tag values) is pinned against the alarm by
 # apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts, so drift on
 # either side fails CI rather than silently darkening this gate.
