@@ -3,6 +3,19 @@ name: work
 description: "This skill should be used when executing work plans efficiently while maintaining quality and finishing features."
 ---
 
+<!-- work-anti-bypass-protocol:start -->
+## Anti-bypass protocol (load-bearing — especially Grok Build)
+
+You are the **implementation orchestrator** for standalone `/work` and one-shot Step 3:
+
+- **FORBIDDEN:** Pushing a branch and reporting "done" without `/review` → `/compound` → `/ship`.
+- **FORBIDDEN:** Treating `## Work Phase Complete` as a turn boundary when you own the pipeline (see Invocation Mode below).
+- **REQUIRED (Grok Build):** Invoke `/review`, `/compound`, `/ship` via slash commands — never hand-roll ship steps.
+- **Deliverable:** merged PR (standalone) or return to parent one-shot (pipeline mode).
+
+See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`) and Phase 4 Invocation Mode below.
+<!-- work-anti-bypass-protocol:end -->
+
 # Work Plan Execution Command
 
 Execute a work plan efficiently while maintaining quality and finishing features.
@@ -606,6 +619,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    1. **cloud-init schema**: For each modified `cloud-init.yml`:
       `cloud-init schema -c <file>` -- validates YAML syntax AND cloud-init schema in one step. Warnings about missing datasource are expected; only non-zero exit codes are failures. If `cloud-init` is not installed locally, warn and continue.
+      - **When the `cloud-init.yml` is a Terraform `templatefile()` (interpolated in `server.tf`/`git-data.tf`/etc.), `cloud-init schema` on the RAW file always fails on the un-rendered `${...}` — validate the RENDERED output instead.** Render via `terraform console` (`printf 'templatefile("<abs>", { <full var map> })\n' | terraform -chdir="$(mktemp -d)" console`), strip the `<<EOT … EOT` wrapper, then `cloud-init schema -c <rendered>`. In the source template, shell `${VAR}`/`${VAR:-x}` must be `$${...}` (double-dollar escapes the TF interpolation) and `%{` must NOT appear at all — **including inside comments** (TF's directive scanner does not skip prose). Run the render after every edit; it catches both escaping traps. See `knowledge-base/project/learnings/best-practices/2026-07-14-cloud-init-templatefile-escaping-and-ci-deploy-payload-testing.md`.
 
    2. **Terraform format**: For each infra directory with modified `.tf` files:
       `terraform fmt -check <dir>` -- exit 0 means formatted; exit 3 means violations. Fix with `terraform fmt <dir>`.

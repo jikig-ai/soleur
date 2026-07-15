@@ -133,6 +133,14 @@ include_matches.SYSLOG_IDENTIFIER = [
   "inngest-wiped-volume-verify",
   "inngest-inventory",
   "git-lock-chardevice-sweep",
+  # #6178 webhook-exec diagnosis: the adnanh/webhook binary runs `-verbose`
+  # (webhook.service ExecStart) and logs each hook match + command execution + any
+  # fork/exec error to journald as SYSLOG_IDENTIFIER=webhook. Without this, a hook that
+  # returns its success code (e.g. /hooks/infra-config → 202) while its command
+  # SILENTLY fails to exec is undiagnosable off-box — exactly the state that stalled the
+  # cutover infra-config delivery (handler never ran, host stuck at 13/15). Shipping the
+  # webhook channel makes that exec failure self-report to Better Stack.
+  "webhook",
   # #6178 cutover (ADR-100): the no-SSH flip-state + guard channels. Without these the
   # `inngest-cutover-flip` marker never reaches Better Stack and the P0-2 operator gate is
   # dead (the flip oneshot has no synchronous webhook response — Better Stack is the ONLY
@@ -333,7 +341,12 @@ if exists(.CONTAINER_NAME) {
   .source_kind = "journald"
 }
 .shipper = "vector"
-.host_name = "soleur-inngest-prd"
+# @@HOST_NAME@@ (#6396): per-host Better Stack discriminator. ALL hosts multiplex into
+# the ONE Logs source 2457081 — host_name is the sole discriminator. The inngest path
+# (inngest-bootstrap.sh) renders this to `soleur-inngest-prd` (byte-identical to pre-#6396);
+# the ungated web-host path (soleur-host-bootstrap.sh) renders the TF-injected per-host
+# server name (`soleur-web-platform`/`soleur-web-2`). Keep both render sites in lockstep.
+.host_name = "@@HOST_NAME@@"
 '''
 
 # ---------------- Transform: host_metrics → flat log shape ----------------
@@ -347,7 +360,8 @@ inputs = ["host_metrics"]
 source = '''
 .source_kind = "host_metrics"
 .shipper = "vector"
-.host_name = "soleur-inngest-prd"
+# @@HOST_NAME@@ (#6396) — see the tag_journald note above; rendered per-host at install.
+.host_name = "@@HOST_NAME@@"
 
 metric_name = "unknown"
 if exists(.name) {

@@ -46,11 +46,11 @@ fi
 out=$(node "$GATE" --dry-run --target go-routing --repeat 5)
 if [[ "$(echo "$out" | jqget dry_run)" == "true" ]]; then
   calls=$(echo "$out" | jqget estimated_api_calls)
-  # 2 (current+candidate) x 3 models x (7 corpus + 1 target) x 5 repeat = 240
-  if [[ "$calls" == "240" ]]; then
+  # 2 (current+candidate) x 3 models x (8 corpus + 1 target) x 5 repeat = 270
+  if [[ "$calls" == "270" ]]; then
     pass "--dry-run estimate (go-routing, repeat 5) = $calls"
   else
-    fail "--dry-run estimate" "estimated_api_calls=$calls (want 240)"
+    fail "--dry-run estimate" "estimated_api_calls=$calls (want 270)"
   fi
 else
   fail "--dry-run" "got: $out"

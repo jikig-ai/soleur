@@ -16,10 +16,12 @@ own surfaces.
 1. **`soleur:go` routing accuracy** — does the routing table produce the correct route token?
 2. **ticket-triage P-level accuracy** — does the priority rubric produce the correct P1/P2/P3?
 
+**Grok Build arm (Phase C #6323):** The harness now covers Grok slash-command + `spawn_subagent` semantics for `/go` routes (in addition to Claude Skill/Task). Golden assertions and regression tests exercise the adapter contract from `lib/harness.ts` (detect via GROK_* markers or argv). The go-routing target in `gated-skills.json` + eval-gate block in `go.md` are the source; projections feed the skill arm for both harnesses. See plan 2026-07-11-feat-grok-phase-c-go-md-eval-harness-plan.md and self-ref in `go.md`.
+
 <decision_gate>
 **API budget.** Each `npx promptfoo eval --repeat 3` run calls the Anthropic API against the key in
 your session — 2 arms × 3 models × the target's golden tasks × 3 repeats. At the current task counts
-that is ≈ **126 API calls** for go-routing (7 tasks) and ≈ **108** for ticket-triage (6 tasks), so
+that is ≈ **144 API calls** for go-routing (8 tasks) and ≈ **108** for ticket-triage (6 tasks), so
 ≈ **230 to run both**. Cost scales with the model mix (one arm runs Opus), the task count, and the
 `--repeat` value (outputs are single tokens, so per-call cost is small — the first full run was well
 under $1). This harness is **opt-in and manual** — it is deliberately NOT wired into per-PR CI (that
@@ -105,7 +107,7 @@ and the additive recipe for adding a new target. In short:
 ```bash
 cd plugins/soleur/skills/eval-harness
 bash scripts/gen-models.sh                                            # refresh model IDs from the registry
-npx promptfoo eval -c promptfooconfig.go-routing.yaml --repeat 3      # ~126 API calls (7 tasks)
+npx promptfoo eval -c promptfooconfig.go-routing.yaml --repeat 3      # ~144 API calls (8 tasks)
 npx promptfoo eval -c promptfooconfig.ticket-triage.yaml --repeat 3   # ~108 API calls (6 tasks)
 npx promptfoo eval -c promptfooconfig.tool-selection.yaml --repeat 5  # ~450 API calls (15 tasks) — manual only
 ```

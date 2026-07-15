@@ -589,6 +589,39 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
   timezone                = "UTC"
 }
 
+# #6374: GHA-fired via .github/workflows/scheduled-inngest-health.yml (on.schedule
+# '*/15 * * * *'). The EXTERNAL inngest health watchdog (#5542 crash-loop incident).
+# This monitor was MISSING — the workflow's error heartbeat (its final step, POSTing
+# ?status=error to the `scheduled-inngest-health` slug) had NO sentry_cron_monitor
+# resource, so Sentry silently dropped the check-ins and the P1 [ci/inngest-down] alarm
+# ran ~14h unseen (the operator was never paged). This resource closes that delivery
+# gap: with failure_issue_threshold=1, a SINGLE ?status=error OR a missed check-in opens
+# a Sentry monitor-failure issue → pages the operator within one cadence (~15-30 min).
+#
+# GHA-fired (NOT Inngest — a self-hosted inngest cron cannot detect inngest being down;
+# that blind spot is the exact #5542 failure this watchdog closes; see the workflow's
+# gate-override header). checkin_margin_minutes = 15 == the `*/15` inter-fire gap BY
+# DESIGN (the zot_restart_loop_alarm precedent): margin == interval MAXIMIZES jitter
+# tolerance (a run up to one interval late still checks in — no false page on GHA
+# `schedule:` jitter), while a genuinely dark alarm (every run skipped) still pages once
+# the window closes at the next expected fire. inngest-down is a brand-survival outage,
+# so the margin is kept tight to the cadence rather than widened. max_runtime_minutes = 8
+# matches the job's `timeout-minutes: 8`. Slug MUST match the `monitor-slug` in the
+# workflow's sentry-heartbeat step (parity-asserted by
+# apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts, which also
+# asserts this resource is in the apply-sentry-infra.yml -target= allowlist).
+resource "sentry_cron_monitor" "scheduled_inngest_health" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-inngest-health"
+  schedule                = { crontab = "*/15 * * * *" }
+  checkin_margin_minutes  = 15
+  max_runtime_minutes     = 8
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # 2026-06-02: Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts`.
 # Proactive prod Disk-IO early-warning monitor. A MISSED check-in means the

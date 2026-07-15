@@ -48,6 +48,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: hr-github-app-auth-not-pat] → core
 - [id: hr-monitor-not-run-in-background-for-polling] → core
 - [id: hr-verify-repo-capability-claim-before-assert] → core
+- [id: hr-pipeline-skills-never-inline-after-go-route] → core
 
 ## Workflow Gates
 
@@ -76,7 +77,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-plan-prescribed-skills-must-run-inline] → rest
 - [id: wg-architecture-decision-is-a-plan-deliverable] → rest
 - [id: wg-end-of-work-emit-resume-prompt] → rest
-- [id: wg-block-pr-ready-on-undeferred-operator-steps] → core
+- [id: wg-block-pr-ready-on-undeferred-operator-steps] → rest
 - [id: wg-pm-class-followthrough-for-operator-dogfood] → rest
 - [id: wg-record-recurring-vendor-expense-before-ready] → rest
 - [id: wg-ui-feature-requires-pen-wireframe] → docs-only

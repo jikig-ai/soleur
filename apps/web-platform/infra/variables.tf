@@ -83,7 +83,13 @@ variable "web_hosts" {
   }))
   default = {
     "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
-    "web-2" = { location = "hel1", private_ip = "10.0.1.11" }
+    # web-2 sits in a DIFFERENT DC from web-1's hel1 (DC-failure resilience). A same-DC
+    # warm standby gives no protection against a hel1 outage, and a `-replace` recreate
+    # DURING a hel1 capacity shortage destroyed web-2 then could not re-place it, wedging
+    # every apply-on-merge on `resource_unavailable` (2026-07-13, #6374 follow-on). fsn1 is
+    # eu-central (10.0.1.0/24 spans it, network.tf) + EU (CLO T-1). Cross-DC hosts cannot
+    # share the location-scoped web_spread placement group — server.tf gates that.
+    "web-2" = { location = "fsn1", private_ip = "10.0.1.11" }
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])
@@ -336,4 +342,19 @@ variable "ghcr_read_token" {
   description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN; consumed by ci-deploy.sh (host pull + cosign .sig fetch auth) + cloud-init fresh-boot login. NO default."
   type        = string
   sensitive   = true
+}
+
+# #6178 — post-cutover web-host scheduling toggle. When true, a freshly-CREATED web
+# host bootstraps + enables the co-located inngest-server.service (pre-cutover
+# behavior). Default false: scheduling lives on the dedicated soleur-inngest host
+# (10.0.1.40, ADR-100). Recreate-onto-false-config is the quiesce mechanism
+# (hr-prod-host-config-change-immutable-redeploy); rollback = set true + recreate.
+# `type = bool` is LOAD-BEARING: Terraform's `%{ if }` directive HCL-bool-converts its
+# operand — the string "false" coerces to boolean false, so the rollback route
+# `TF_VAR_web_colocate_inngest="false"` gates OFF correctly (and a non-bool string fails
+# closed at plan time). Pinning `type = bool` keeps the variable-boundary contract explicit.
+variable "web_colocate_inngest" {
+  description = "When true, a freshly-created web host bootstraps + enables the co-located inngest-server.service (pre-cutover). Default false: scheduling lives on the dedicated soleur-inngest host (10.0.1.40, ADR-100, #6178). Recreate is the quiesce mechanism (hr-prod-host-config-change-immutable-redeploy)."
+  type        = bool
+  default     = false
 }

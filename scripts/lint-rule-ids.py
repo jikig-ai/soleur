@@ -47,6 +47,10 @@ HR_RETIREMENT_ALLOWLIST = frozenset({
     "hr-never-fake-git-author",
     "hr-in-github-actions-run-blocks-never-use",
     "hr-github-actions-workflow-notifications",
+    # #6347 — consolidated into hr-pipeline-skills-never-inline-after-go-route.
+    "hr-lifecycle-skills-never-inline-after-handoff",
+    "hr-merge-deploy-monitor-without-asking",
+    "hr-pr-behind-stop-and-resync",
 })
 
 

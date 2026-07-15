@@ -514,26 +514,46 @@ cosign_verify_event() {
   fi
 }
 
+# _pull_result_is_auth_denied <stderr-content>: the SINGLE source of truth for
+# "is this docker pull stderr a credential-capability denial?" (#6400). Both
+# pull_failure_event's classifier AND the pull-site recovery gate
+# (_ghcr_pull_or_recover) call this predicate so they agree BY CONSTRUCTION — a
+# second copy of the regex would drift (cq/paren-safety class). It classifies the
+# stderr CONTENT passed as $1, never a file path: the caller must pass
+# `tail -c 400 "$perr"`, not "$perr", or the match silently no-ops (security/P2-E).
+_pull_result_is_auth_denied() {
+  printf '%s' "${1:-}" | grep -qiE 'unauthorized|authentication required|denied|forbidden'
+}
+
 # pull_failure_event: loud, no-SSH page on an authenticated PRIVATE-pull denial
 # (#6005). Every deploy + fresh boot now hard-depends on a valid GHCR credential
 # (M2 SPOF), so a pull auth failure must be Sentry/Better-Stack-diagnosable, not
 # journald-only (hr-no-ssh-fallback-in-runbooks). The raw docker stderr is SCRUBBED
 # to a coarse classification BEFORE it enters the payload — a 401/403 daemon error
 # can echo the registry Authorization header (security-sentinel #7). Fail-open.
+# #6400: optional 3rd arg recovery_stage — on an auth-denied MISS the pull-site
+# caller passes refetch_unavailable|relogin_failed|pull_still_denied so ONE event
+# discriminates the root-cause branch (no second event on the miss path). The tag is
+# an empty string on a non-auth failure — grouping is unchanged (op/pull_result
+# identical to pre-#6400; Sentry fingerprinting is message/culprit-based, not tag-based).
 pull_failure_event() {
-  local ref="$1" detail_raw="${2:-}" pull_result
-  if   printf '%s' "$detail_raw" | grep -qiE 'unauthorized|authentication required|denied|forbidden'; then pull_result="auth_denied"
+  local ref="$1" detail_raw="${2:-}" recovery_stage="${3:-}" pull_result
+  if   _pull_result_is_auth_denied "$detail_raw"; then pull_result="auth_denied"
   elif printf '%s' "$detail_raw" | grep -qiE 'manifest unknown|not found|no such manifest'; then pull_result="manifest_unknown"
   elif printf '%s' "$detail_raw" | grep -qiE 'timeout|timed out|temporary failure|no route|connection refused'; then pull_result="network"
   else pull_result="pull_failed"
   fi
-  logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result"
+  logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result recovery_stage=${recovery_stage:-none}"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
-    payload="$(jq -n --arg ref "$ref" --arg r "$pull_result" \
+    # #6396: tag host_id so a deploy-path pull failure is host-attributable from Sentry alone
+    # (PR #6395 had to cross-reference the release aggregate JSON to pin it to web-2). The
+    # readonly HOST_ID global (:137-157) is empty-safe; jq emits an empty-string tag if unset.
+    # #6400: recovery_stage tag surfaces the recovery branch on an auth-denied miss.
+    payload="$(jq -n --arg ref "$ref" --arg r "$pull_result" --arg h "${HOST_ID:-}" --arg rs "$recovery_stage" \
       '{message: ("image pull failed (" + $r + ") " + $ref),
         level: "error", platform: "other", logger: "ci-deploy",
-        tags: {feature: "supply-chain", op: "image-pull", pull_result: $r},
+        tags: {feature: "supply-chain", op: "image-pull", pull_result: $r, host_id: $h, recovery_stage: $rs},
         extra: {ref: $ref}}' 2>/dev/null)" || return 0
     curl -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
@@ -541,6 +561,32 @@ pull_failure_event() {
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
       -d "$payload" 2>/dev/null \
       || logger -t "$LOG_TAG" "IMAGE_PULL: Sentry POST failed"
+  fi
+}
+
+# pull_auth_recovery_event <ref> <stage>: fail-open, env-guarded Sentry breadcrumb
+# fired ONLY on a recovered-success at the GHCR pull site (#6400). Distinct
+# op:image-pull-recovery + level:info keeps recovered-successes OUT of the
+# WEB-PLATFORM-59 (op:image-pull, error) failure grouping — the recovery firing at
+# all IS the signal the baked cred was login-ok/pull-deny. host_id-tagged (#6396).
+# NEVER includes raw docker stderr; payload built with jq -n --arg. Same store
+# transport as pull_failure_event.
+pull_auth_recovery_event() {
+  local ref="$1" stage="${2:-recovered}"
+  logger -t "$LOG_TAG" "IMAGE_PULL_RECOVERED: ref=$ref stage=$stage"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg ref "$ref" --arg s "$stage" --arg h "${HOST_ID:-}" \
+      '{message: ("image pull recovered (" + $s + ") " + $ref),
+        level: "info", platform: "other", logger: "ci-deploy",
+        tags: {feature: "supply-chain", op: "image-pull-recovery", recovery_stage: $s, host_id: $h},
+        extra: {ref: $ref}}' 2>/dev/null)" || return 0
+    curl -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "IMAGE_PULL_RECOVERY: Sentry POST failed"
   fi
 }
 
@@ -599,6 +645,33 @@ zot_gate_degraded_event() {
   fi
 }
 
+# refetch_ghcr_and_relogin (#6400): re-fetch the CURRENT prd GHCR read credential,
+# re-run `docker login ghcr.io` into the SAME docker config the cosign verifier
+# mounts :ro, and return a STAGE code so the caller can discriminate the failure.
+# Echoes on stdout exactly one of: recovered | refetch_unavailable | relogin_failed
+# Returns 0 IFF stage==recovered (the login status IS the exit status — this is the
+# load-bearing difference from §1A's inline body, whose trailing `dt=""` (exit 0)
+# would make the function return 0 on every path and muddy the `recovered` signal
+# the pull-site gate keys on). Token via --password-stdin only; kept `local` + unset
+# after so no child process env carries it. The recovered auth ENTRY is carried by
+# the `docker login ghcr.io` filesystem write into $GHCR_DOCKER_CONFIG (persists past
+# the `$(…)` subshell this helper runs in) — the SAME file the prelude wrote and the
+# cosign verifier mounts :ro, so a recovered pull does not then 401 the .sig fetch
+# (P2-F). (The `export GHCR_READ_USER` below is defensive-only — it is swallowed by the
+# subshell and no downstream reader consumes the env var; the docker-config write is
+# what authenticates.) Guarded on doppler + DOPPLER_TOKEN (prd-root scoped).
+refetch_ghcr_and_relogin() {
+  command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]] || { printf refetch_unavailable; return 1; }
+  local du="" dt="" n=0
+  n=0; until du="$(timeout 45 doppler secrets get GHCR_READ_USER  --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$du" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+  n=0; until dt="$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$dt" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
+  [[ -n "$du" && -n "$dt" ]] || { dt=""; printf refetch_unavailable; return 1; }
+  if printf '%s' "$dt" | docker login ghcr.io -u "$du" --password-stdin >/dev/null 2>&1; then
+    export GHCR_READ_USER="$du"; dt=""; printf recovered; return 0
+  fi
+  dt=""; printf relogin_failed; return 1
+}
+
 # ghcr_prelude_and_login: fetch the deploy-time secrets the pull + verify + telemetry
 # need INTO this script's OWN env, then authenticate the host docker daemon to the
 # now-PRIVATE GHCR packages (#6005). Runs BEFORE the first `docker pull` — the
@@ -622,9 +695,12 @@ ghcr_prelude_and_login() {
   # the TOKEN reaches `docker login` via --password-stdin only and is unset so no child env
   # (docker/cosign subprocess) ever carries it.
   local k n ghcr_user="" ghcr_token=""
-  if [[ -r /etc/default/soleur-ghcr-read ]]; then
+  # SOLEUR_GHCR_READ_FILE overrides the baked-cred path for tests ONLY; production is the
+  # unchanged /etc/default/soleur-ghcr-read (cloud-init writes it deploy:deploy 0600).
+  local ghcr_read_file="${SOLEUR_GHCR_READ_FILE:-/etc/default/soleur-ghcr-read}"
+  if [[ -r "$ghcr_read_file" ]]; then
     # shellcheck disable=SC1091
-    . /etc/default/soleur-ghcr-read 2>/dev/null || true
+    . "$ghcr_read_file" 2>/dev/null || true
     ghcr_user="${GHCR_READ_USER:-}"; ghcr_token="${GHCR_READ_TOKEN:-}"
     unset GHCR_READ_TOKEN   # keep the token out of THIS process env + its children
   fi
@@ -650,7 +726,31 @@ ghcr_prelude_and_login() {
     if printf '%s' "$ghcr_token" | docker login ghcr.io -u "$ghcr_user" --password-stdin >/dev/null 2>&1; then
       logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok (private-package pull authenticated)"
     else
-      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED — private pull may fail-closed"
+      # §1A (#6090 recurrence, web-2 fsn1 warm-standby 2026-07-13): the baked GHCR read token
+      # is PRESENT but STALE — a fresh host's baked /etc/default/soleur-ghcr-read token ages
+      # out by deploy time, and the EMPTY-only Doppler fallback above only re-fetches an
+      # ABSENT cred, never a present-but-invalid one. Pre-fix, this login just failed non-
+      # fatally → anonymous private pull → registry 401 → Sentry `image pull failed
+      # (auth_denied)` → image_pull_failed → the warm standby never serves. Fix: on a login
+      # FAILURE (not only EMPTY), re-fetch the CURRENT creds from Doppler (hardened timeout
+      # 45 + 3-try idiom, mirroring the EMPTY path) and retry docker login ONCE. Fail-open: a
+      # retry miss still lets the pull's own failure path + pull_failure_event surface loudly.
+      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED with baked/first creds — re-fetching current creds from Doppler and retrying"
+      # #6400: §1A's inline re-fetch/relogin is now the shared refetch_ghcr_and_relogin
+      # helper (identical observable behavior — recover on a login FAILURE — plus the
+      # staged return the pull-site gate needs). The helper self-guards on
+      # doppler/DOPPLER_TOKEN (stage=refetch_unavailable when absent) and keeps the
+      # retried token out of any child env.
+      # `|| true` is load-bearing: ci-deploy runs under `set -euo pipefail`, and the
+      # helper returns non-zero on a recovery miss — a bare assignment would abort the
+      # whole deploy on that nonzero (we parse the stage STRING, the rc is irrelevant here).
+      local prelude_stage
+      prelude_stage="$(refetch_ghcr_and_relogin)" || true
+      if [[ "$prelude_stage" == "recovered" ]]; then
+        logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok after Doppler re-fetch (recovered stale baked cred)"
+      else
+        logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io STILL FAILED after Doppler re-fetch (stage=$prelude_stage) — private pull may fail-closed"
+      fi
     fi
   else
     logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present (baked file absent + doppler empty/unavailable) — skipping docker login"
@@ -709,6 +809,39 @@ zot_gate_and_login() {
   ztoken=""
 }
 
+# _ghcr_pull_or_recover <perr> (#6400): pull ${IMAGE}:${TAG} from GHCR; on an
+# AUTH-denied failure (classified from the stderr CONTENT, not the file path),
+# re-fetch the prd cred, relogin, and retry the pull EXACTLY ONCE before giving up.
+# Returns 0 on success (first pull OR recovered retry). On failure returns 1 and
+# sets the global RECOVERY_STAGE for the caller's pull_failure_event tag (empty when
+# no recovery was attempted — a non-auth failure never enters the branch, so
+# pull_failure_event fires byte-identically to pre-#6400). Fail-open: a recovery miss
+# leaves the caller's terminal image_pull_failed state unchanged. No loop — retrying
+# a genuinely-invalid prd cred would burn the deploy window (Sharp Edge). The
+# `200>&-` closes the FD-200 advisory lock for the pull children (#5062), preserved.
+_ghcr_pull_or_recover() {
+  local perr="$1"
+  RECOVERY_STAGE=""
+  docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr" && return 0
+  # classify the stderr CONTENT (tail -c 400), never the path — else recovery no-ops (P2-E).
+  if _pull_result_is_auth_denied "$(tail -c 400 "$perr" 2>/dev/null)"; then
+    # `|| true`: helper returns non-zero on a miss; a bare assignment would abort the
+    # deploy under set -euo. We parse the stage STRING (that string, not the rc, is what
+    # gets copied into RECOVERY_STAGE below; the rc is discarded via `|| true`).
+    local stage; stage="$(refetch_ghcr_and_relogin)" || true   # recovered|refetch_unavailable|relogin_failed
+    if [[ "$stage" == "recovered" ]]; then
+      if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+        pull_auth_recovery_event "${IMAGE}:${TAG}" recovered   # info breadcrumb, distinct op
+        return 0
+      fi
+      RECOVERY_STAGE="pull_still_denied"                       # relogin ok but retry pull still denied
+    else
+      RECOVERY_STAGE="$stage"                                  # refetch_unavailable|relogin_failed
+    fi
+  fi
+  return 1
+}
+
 # pull_image_with_fallback <image_kind>: pull $IMAGE:$TAG zot-primary with an ATOMIC
 # GHCR fallback (#6122/ADR-096). image_kind ∈ {web, inngest} (beacon tag only). On
 # success it reassigns the GLOBAL IMAGE to the registry-qualified repo actually pulled,
@@ -733,21 +866,23 @@ pull_image_with_fallback() {
     # cosign follows the GHCR RepoDigest with NO insecure flag). This is the soak gate's
     # watched event; surfaced loudly, not journald-only.
     logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} — falling back to GHCR"
-    if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+    # #6400: GHCR fallback leg now recovers on a login-ok/pull-deny cred (retry once).
+    if _ghcr_pull_or_recover "$perr"; then
       registry_pull_event ghcr-fallback "$image_kind" "$TAG"
       rm -f "$perr" 2>/dev/null || true
       return 0
     fi
-    pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)"
+    pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
     rm -f "$perr" 2>/dev/null || true
     return 1
   fi
-  # zot dark (not configured/unreachable) → unchanged GHCR path, no new beacon.
-  if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+  # zot dark (not configured/unreachable) → unchanged GHCR path, now with pull-site
+  # recovery (#6400): a baked cred that logs in but cannot pull is re-fetched + retried.
+  if _ghcr_pull_or_recover "$perr"; then
     rm -f "$perr" 2>/dev/null || true
     return 0
   fi
-  pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)"
+  pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
   rm -f "$perr" 2>/dev/null || true
   return 1
 }
@@ -1049,6 +1184,74 @@ verify_inngest_health() {
   return 0
 }
 
+# Single-source "is the inngest unit enabled at boot?" (enabled|enabled-runtime).
+# Both verify_inngest_quiesced (fail-branch) and the enable handler (ok-branch) use this
+# so the set of enabled-like states stays defined in ONE place. Exotic states
+# (indirect/alias/generated/static/disabled) are intentionally NOT "enabled" here.
+inngest_unit_enabled() {
+  case "$(systemctl is-enabled inngest-server.service 2>/dev/null || true)" in
+    enabled|enabled-runtime) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Verify inngest-server is QUIESCED (#6178, op=quiesce-web). The goal state is
+# NOT-serving AND NOT-enabled — verifying only not-serving is a proxy that defeats the
+# disable's purpose (data-integrity P1-A): a disable-failure on a unit WITH an [Install]
+# section would pass as quiesced while still enabled → a mid-window reboot re-arms the old
+# scheduler → the exact double-fire the disable prevents.
+#
+# Return codes (the handler maps them to reasons):
+#   0 = quiesced (not-serving AND unit-inactive AND not-enabled)
+#   1 = still serving/active  → inngest_still_serving
+#   2 = still enabled         → inngest_still_enabled
+#
+# The /health poll is the MIRROR-IMAGE polarity of verify_inngest_health: that helper
+# breaks on the FIRST success; this one must declare not-serving ONLY when EVERY probe
+# fails. Return-on-first-failure is WRONG — a briefly-busy live scheduler (e.g. a GC
+# pause) would false-read as quiesced. Probe budget is env-overridable (tests) and
+# drift-guarded against the workflow poll window (ci-deploy.test.sh #6178).
+verify_inngest_quiesced() {
+  local max_attempts="${QUIESCE_PROBE_ATTEMPTS:-10}"
+  local interval="${QUIESCE_PROBE_INTERVAL:-3}"
+  local i served=0
+
+  for i in $(seq 1 "$max_attempts"); do
+    if curl -sf --max-time 5 http://127.0.0.1:8288/health >/dev/null 2>&1; then
+      logger -t "$LOG_TAG" "INNGEST_QUIESCE: /health SERVED on attempt $i/$max_attempts — STILL RUNNING"
+      served=1
+      break
+    fi
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: /health down (attempt $i/$max_attempts)"
+    sleep "$interval"
+  done
+
+  if [[ "$served" -eq 1 ]]; then
+    return 1
+  fi
+
+  # /health is down across EVERY probe. ALSO require the unit to be inactive — the
+  # double-fire risk is the scheduler EXECUTING queued jobs, which can outlive /health
+  # in a shutdown/crash-loop window (arch P2-3). is-active is read-only (no sudo).
+  if systemctl is-active --quiet inngest-server.service; then
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: /health down but unit is STILL ACTIVE — not quiesced"
+    return 1
+  fi
+
+  # Not-serving confirmed. Now assert NOT-enabled (the load-bearing half). is-enabled is
+  # read-only (no sudo). `static` / no-[Install] / `masked` are benign (the unit cannot
+  # auto-start on boot) → OK; only `enabled`/`enabled-runtime` (a live [Install] symlink)
+  # is a FAIL — a mid-window reboot would re-arm the old scheduler.
+  local enabled_state
+  enabled_state=$(systemctl is-enabled inngest-server.service 2>/dev/null || true)
+  logger -t "$LOG_TAG" "INNGEST_QUIESCE: is-enabled=${enabled_state:-<empty>}"
+  if inngest_unit_enabled; then
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: unit STILL ENABLED (state=$enabled_state) — a reboot would re-arm it"
+    return 2
+  fi
+  return 0
+}
+
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
 declare -A ALLOWED_IMAGES=(
   [web-platform]="ghcr.io/jikig-ai/soleur-web-platform"
@@ -1078,7 +1281,8 @@ fi
 read -r ACTION COMPONENT IMAGE TAG <<< "$SSH_ORIGINAL_COMMAND"
 
 # Validate action
-if [[ "$ACTION" != "deploy" ]] && [[ "$ACTION" != "restart" ]]; then
+if [[ "$ACTION" != "deploy" ]] && [[ "$ACTION" != "restart" ]] \
+   && [[ "$ACTION" != "quiesce" ]] && [[ "$ACTION" != "enable" ]]; then
   logger -t "$LOG_TAG" "REJECTED: unknown action '$ACTION'"
   echo "Error: unknown action '$ACTION'" >&2
   final_write_state 1 "action_unknown"
@@ -1095,6 +1299,25 @@ if [[ "$ACTION" == "restart" ]]; then
     exit 1
   fi
   logger -t "$LOG_TAG" "ACCEPTED: restart $COMPONENT"
+elif [[ "$ACTION" == "quiesce" ]]; then
+  # quiesce inngest _ _ — no-SSH web-host scheduler stop+disable (#6178, op=quiesce-web).
+  # Only inngest is quiescible (the dedicated-host cutover 2.2 gap).
+  if [[ "$COMPONENT" != "inngest" ]]; then
+    logger -t "$LOG_TAG" "REJECTED: component '$COMPONENT' is not quiescible"
+    echo "Error: component '$COMPONENT' is not quiescible" >&2
+    final_write_state 1 "component_not_quiescible"
+    exit 1
+  fi
+  logger -t "$LOG_TAG" "ACCEPTED: quiesce $COMPONENT"
+elif [[ "$ACTION" == "enable" ]]; then
+  # enable inngest _ _ — no-SSH reverse re-enable+start (#6178, op=rollback only).
+  if [[ "$COMPONENT" != "inngest" ]]; then
+    logger -t "$LOG_TAG" "REJECTED: component '$COMPONENT' is not enableable"
+    echo "Error: component '$COMPONENT' is not enableable" >&2
+    final_write_state 1 "component_not_enableable"
+    exit 1
+  fi
+  logger -t "$LOG_TAG" "ACCEPTED: enable $COMPONENT"
 else
   # deploy action — validate image and tag
   # Validate component exists in allowlist
@@ -1145,6 +1368,13 @@ LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
 flock -n 200 || {
   logger -t "$LOG_TAG" "REJECTED: another deploy in progress"
+  # #6407 Defect C — observability marker for the restart/deploy lock-contention path. A
+  # loser here means another deploy/restart already holds the critical section and will bring
+  # the component current — benign, NOT a failure (the restart-verify poll treats
+  # reason=lock_contention as non-terminal per ADR-079 #5960). Journald-only (tag ci-deploy →
+  # Vector Source 4 → Better Stack). Observability ONLY — the final_write_state stamp below is
+  # UNCHANGED (kept consistent with the deploy path; the consumer/poll adjudicates it).
+  logger -t "$LOG_TAG" "SOLEUR_INNGEST_RESTART_LOCK_CONTENTION action=$ACTION component=$COMPONENT outcome=deferred_to_in_flight" 2>/dev/null || true
   echo "Error: another deploy in progress" >&2
   final_write_state 1 "lock_contention"
   exit 1
@@ -1178,6 +1408,107 @@ if [[ "$ACTION" == "restart" ]]; then
     final_write_state 1 "inngest_health_failed"
     exit 1
   fi
+fi
+
+# --- Quiesce action handler (#6178, op=quiesce-web) ---
+# No-SSH web-host scheduler stop+disable. The stop + disable are TOLERATED non-zero
+# (an already-stopped/absent unit, or a unit with no [Install] section, must NOT fail
+# the op) — verify_inngest_quiesced is the real gate. Each tolerated sudo call is guarded
+# with `if ! sudo …; then` so a non-zero return under `set -e` cannot abort BEFORE
+# final_write_state (which would leave a stale "running" state + no reason off-host —
+# an hr-observability-as-plan-quality-gate regression). Mirrors the restart handler's
+# set +e/-e-around-verify pattern verbatim.
+if [[ "$ACTION" == "quiesce" ]]; then
+  echo "Quiescing inngest-server.service (stop + disable)..."
+  if ! sudo /usr/bin/systemctl stop inngest-server.service; then
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: stop returned non-zero (already-stopped/absent tolerated — verify is the gate)"
+  fi
+  if ! sudo /usr/bin/systemctl disable inngest-server.service; then
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: disable returned non-zero (no [Install]/already-disabled tolerated — the enabled-state assertion in verify is the gate)"
+  fi
+
+  set +e
+  verify_inngest_quiesced
+  VERIFY_RC=$?
+  set -e
+  case "$VERIFY_RC" in
+    0) : ;;  # not-serving AND not-enabled — quiesced
+    2)
+      logger -t "$LOG_TAG" "FAILED: quiesce — inngest still ENABLED (reboot would re-arm)"
+      final_write_state 1 "inngest_still_enabled"
+      exit 1
+      ;;
+    *)
+      logger -t "$LOG_TAG" "FAILED: quiesce — inngest still SERVING/active"
+      final_write_state 1 "inngest_still_serving"
+      exit 1
+      ;;
+  esac
+
+  # Fan the SAME `quiesce inngest _ _` out to every peer web host over the private net
+  # (mirrors the deploy fan-out; peers receive on /hooks/deploy-peer → no re-fan). A peer
+  # 202 is SPAWN-ACCEPTANCE only, NOT proof the peer quiesced (the peer's own verdict lands
+  # on the PEER's deploy-status slot, unreadable here — DI-C3). So a non-accepted 202 =
+  # an UNREACHABLE/REJECTED peer, not an un-quiesced one. Single-host default:
+  # SOLEUR_DEPLOY_PEERS unset → fan_out_to_peers returns 0 immediately (dormant).
+  if ! fan_out_to_peers; then
+    logger -t "$LOG_TAG" "FAILED: quiesce — a peer fan-out was NOT accepted (unreachable/rejected)"
+    final_write_state 1 "quiesced_peer_fanout_unaccepted"
+    exit 1
+  fi
+
+  logger -t "$LOG_TAG" "SUCCESS: quiesce $COMPONENT"
+  final_write_state 0 "quiesced"
+  exit 0
+fi
+
+# --- Enable action handler (#6178, op=rollback reverse) ---
+# The TRUE inverse of quiesce: enable + start + verify-serving-and-enabled in ONE
+# flock-held handler (fixes the two-POST enable+restart flock race — arch P1-1). `restart`
+# STAYS PURE (never re-enables); only this deliberate `enable` verb re-arms, so it MUST be
+# reachable ONLY via op=rollback (security regression guard). The start half reuses the
+# pre-existing INNGEST_START (#5450) grant — a restart is not needed because quiesce stopped
+# the unit.
+if [[ "$ACTION" == "enable" ]]; then
+  echo "Re-enabling inngest-server.service (enable + start)..."
+  if ! sudo /usr/bin/systemctl enable inngest-server.service; then
+    logger -t "$LOG_TAG" "FAILED: systemctl enable inngest-server.service"
+    final_write_state 1 "inngest_enable_failed"
+    exit 1
+  fi
+  if ! sudo /usr/bin/systemctl start inngest-server.service; then
+    logger -t "$LOG_TAG" "FAILED: systemctl start inngest-server.service"
+    final_write_state 1 "inngest_start_failed"
+    exit 1
+  fi
+
+  set +e
+  verify_inngest_health
+  VERIFY_RC=$?
+  set -e
+  if [[ "$VERIFY_RC" -ne 0 ]]; then
+    logger -t "$LOG_TAG" "FAILED: enable — inngest not serving after start"
+    final_write_state 1 "inngest_reenable_unverified"
+    exit 1
+  fi
+  # Symmetric to the quiesce verify: confirm the unit is now ENABLED (is-enabled query,
+  # read-only). Not-enabled after an enable is a re-arm failure (a reboot would drop it).
+  ENABLED_STATE=$(systemctl is-enabled inngest-server.service 2>/dev/null || true)
+  if ! inngest_unit_enabled; then
+    logger -t "$LOG_TAG" "FAILED: enable — unit is not enabled afterward (state=${ENABLED_STATE:-<empty>})"
+    final_write_state 1 "inngest_reenable_unverified"
+    exit 1
+  fi
+
+  if ! fan_out_to_peers; then
+    logger -t "$LOG_TAG" "FAILED: enable — a peer fan-out was NOT accepted (unreachable/rejected)"
+    final_write_state 1 "enabled_peer_fanout_unaccepted"
+    exit 1
+  fi
+
+  logger -t "$LOG_TAG" "SUCCESS: enable $COMPONENT"
+  final_write_state 0 "enabled"
+  exit 0
 fi
 
 # Check available disk space (minimum 5GB required for image pull + extraction)
