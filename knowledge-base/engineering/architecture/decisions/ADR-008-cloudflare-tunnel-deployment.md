@@ -3,12 +3,12 @@ adr: ADR-008
 title: Cloudflare Tunnel Deployment
 status: superseded-in-part
 date: 2026-03-27
-superseded_by: [ADR-113]
+superseded_by: [ADR-114]
 ---
 
 # ADR-008: Cloudflare Tunnel Deployment
 
-> **Status: superseded-in-part by [ADR-113](./ADR-113-one-tunnel-many-connectors-ingress-must-be-origin-relative.md) (2026-07-15, #6416).**
+> **Status: superseded-in-part by [ADR-114](./ADR-114-one-tunnel-many-connectors-ingress-must-be-origin-relative.md) (2026-07-15, #6416).**
 > The zero-trust posture below — outbound-only tunnel, all inbound firewall rules removed
 > except ICMP, HMAC-validated webhook — **remains in force**. What is superseded is this ADR's
 > **single-host assumption**, visible in the `localhost:` routes of its Decision.
@@ -17,7 +17,7 @@ superseded_by: [ADR-113]
 >
 > 1. **The `localhost:` framing predates multi-host.** Written 2026-03-27, when exactly one
 >    host ran cloudflared. There are now **2 connector replicas** on the one tunnel, and
->    ADR-113 establishes that `localhost:` in a multi-replica tunnel does not mean *"this
+>    ADR-114 establishes that `localhost:` in a multi-replica tunnel does not mean *"this
 >    host"* — it means *"whichever replica answers."*
 > 2. **The `app.soleur.ai → localhost:3000` route does not exist.**
 >    `grep -c 'hostname = "app\.' apps/web-platform/infra/tunnel.tf` → **0**. `app.soleur.ai`
@@ -26,7 +26,7 @@ superseded_by: [ADR-113]
 >    and `registry.` (the last added by ADR-096).
 >
 > Read the Decision below as historical. For current tunnel topology and the normative rules
-> on ingress addressing, see ADR-113.
+> on ingress addressing, see ADR-114.
 
 ## Context
 

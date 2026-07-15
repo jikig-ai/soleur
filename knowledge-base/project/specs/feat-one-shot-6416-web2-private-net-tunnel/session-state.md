@@ -16,7 +16,7 @@
 - Self-audit pass caught three further defects (stale ADR-107 after renumbering, AC8/AC9 mislabel, unthreaded self-instruction). All swept; fixes in 18c212fe6.
 
 ### Decisions
-- ADR-113 (next-free verified): KEEP ONE TUNNEL. The operator's premise ("a tunnel for each backend") is inverted — one tunnel is already the design and is correct. Records `localhost:`-as-category-error, invariant I1 (restated as a runtime precondition after review proved the construction-time form falsified), and I2.
+- ADR-114 (next-free verified): KEEP ONE TUNNEL. The operator's premise ("a tunnel for each backend") is inverted — one tunnel is already the design and is correct. Records `localhost:`-as-category-error, invariant I1 (restated as a runtime precondition after review proved the construction-time form falsified), and I2.
 - Amend ADR-008 (`superseded-in-part`) and ADR-068 (extend + fix stale count). ADR-096 is vindicated, not amended.
 - Restore web-2 via the existing `warm-standby` dispatch — it already targets the missing resource. No new Terraform.
 - `host_creates` HALT: fail-closed, no ack bypass. Guard rather than break the dependency (pull is resource-level `-target` semantics).

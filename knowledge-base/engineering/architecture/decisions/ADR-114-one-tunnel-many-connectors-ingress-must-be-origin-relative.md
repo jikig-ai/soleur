@@ -1,5 +1,5 @@
 ---
-adr: 113
+adr: 114
 title: One tunnel, many connectors — tunnel ingress must be origin-relative, not connector-relative
 status: accepted
 date: 2026-07-15
@@ -10,7 +10,7 @@ related: [6400, 6122, 6288, 6357, 6440, 6441, 6442, 6443]
 related_adrs: [ADR-008, ADR-068, ADR-096]
 ---
 
-# ADR-113: One tunnel, many connectors — tunnel ingress must be origin-relative, not connector-relative
+# ADR-114: One tunnel, many connectors — tunnel ingress must be origin-relative, not connector-relative
 
 ## Context
 
@@ -106,7 +106,7 @@ replacement) — a deploy-path outage.
 
 **This ADR cites that rejection rather than re-deciding it.** The real gap in ADR-068 is
 narrower: it solved connector nondeterminism **for the deploy path only** and never
-generalized to `ssh.` / `registry.`. That generalization is what ADR-113 records.
+generalized to `ssh.` / `registry.`. That generalization is what ADR-114 records.
 
 ## Decision
 

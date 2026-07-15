@@ -147,7 +147,7 @@ while read -r run_id created_at; do
     echo "FAIL: run ${run_id} (${created_at}) reports a DEGRADED zot mirror."
     grep -oE '::warning::zot mirror degraded for 127\.0\.0\.1:5000/[^"]{0,120}' <<<"$logs" | head -2 | sed 's/^/  /'
     echo "  If rc=bridge: the CF tunnel connector serving registry.soleur.ai could not route to"
-    echo "  10.0.1.30:5000. Verify EVERY web host is a 10.0.1.0/24 member (ADR-113 I1):"
+    echo "  10.0.1.30:5000. Verify EVERY web host is a 10.0.1.0/24 member (ADR-114 I1):"
     echo "    hcloud server describe soleur-web-2 -o json | jq .private_net    # must NOT be []"
     exit 1
   fi

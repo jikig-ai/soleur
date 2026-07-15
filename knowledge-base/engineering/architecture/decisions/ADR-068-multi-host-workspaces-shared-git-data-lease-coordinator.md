@@ -386,10 +386,10 @@ fixes for every per-step plan:
 > which silently misses deploys (a fix then hits ~50% stale code, invisibly): a
 > single-user-incident trap the threshold exists to prevent.
 
-> **Extension ([ADR-113](./ADR-113-one-tunnel-many-connectors-ingress-must-be-origin-relative.md), 2026-07-15, #6416) — the finding above generalizes beyond the deploy path.**
+> **Extension ([ADR-114](./ADR-114-one-tunnel-many-connectors-ingress-must-be-origin-relative.md), 2026-07-15, #6416) — the finding above generalizes beyond the deploy path.**
 > Nothing above is retracted. This ADR correctly stated the multi-connector fact — *"both
 > hosts run cloudflared on that ONE tunnel, so a POST load-balances to ONE connector
-> non-deterministically"* — and correctly rejected per-host tunnels (A). ADR-113 **cites**
+> non-deterministically"* — and correctly rejected per-host tunnels (A). ADR-114 **cites**
 > that rejection rather than re-deciding it.
 >
 > The gap is narrower: **Option B solved connector nondeterminism for the `deploy.` route
@@ -403,7 +403,7 @@ fixes for every per-step plan:
 > - **`ssh.` → `ssh://localhost:22`** is connector-relative and therefore host-NONdeterministic.
 >   The 12 `web-1`-scoped provisioners below can land on the wrong host.
 >
-> ADR-113 records this as two normative invariants (I1 connector homogeneity, I2 origin-relative
+> ADR-114 records this as two normative invariants (I1 connector homogeneity, I2 origin-relative
 > ingress) plus the anti-pattern that a per-hostname ingress does **not** pin a connector.
 >
 > **Count correction (measured 2026-07-15).** "the 11 SSH provisioners" above is **stale** —

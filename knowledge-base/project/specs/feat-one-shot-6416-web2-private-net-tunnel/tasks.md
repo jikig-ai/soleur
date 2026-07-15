@@ -18,7 +18,7 @@ brand_survival_threshold: single-user incident
 
 - [x] 0.1 Confirm live state read-only: `hcloud server describe soleur-web-2 -o json | jq '.private_net'` → expect `[]`; `soleur-web-platform` → `10.0.1.10`. **If web-2 is already attached, STOP and re-scope** (stale premise).
 - [x] 0.2 `cloudflared tunnel info soleur-web-platform` → record the connector count (expect 2). Attach the output to the PR body.
-- [x] 0.3 Re-verify `ADR-113` is still next-free against `origin/main`. If not, renumber **and sweep** the plan + this file + AC8/AC9 in the same edit.
+- [x] 0.3 Re-verify `ADR-114` is still next-free against `origin/main`. If not, renumber **and sweep** the plan + this file + AC8/AC9 in the same edit.
 
 ## Phase 1 — Restore the attachment (agent-run; no new Terraform)
 
@@ -55,14 +55,14 @@ brand_survival_threshold: single-user incident
 
 ## Phase 4 — Architecture record
 
-- [x] 4.1 Author **ADR-113** via `/soleur:architecture`: the `localhost:`-category-error finding; **I1** as a **runtime** precondition (it is falsified by construction as an apply-time one — the token is granted at server-create, the attach always lands after); **I2**; the per-hostname anti-pattern; both candidate implementations. Status `adopting`. **Cite** ADR-068:378-384's rejection of per-host tunnels — do not re-decide it.
+- [x] 4.1 Author **ADR-114** via `/soleur:architecture`: the `localhost:`-category-error finding; **I1** as a **runtime** precondition (it is falsified by construction as an apply-time one — the token is granted at server-create, the attach always lands after); **I2**; the per-hostname anti-pattern; both candidate implementations. Status `adopting`. **Cite** ADR-068:378-384's rejection of per-host tunnels — do not re-decide it.
 - [x] 4.2 Amend **ADR-008** → `superseded-in-part` (precedent: ADR-043). Two staleness proofs: single-host `localhost:` routes, and its claimed `app.` route does not exist.
 - [x] 4.3 Amend **ADR-068** → **extend the already-stated finding** (`:354-357` states connector nondeterminism verbatim) to `ssh.`/`registry.`. Do **not** frame it as an omission. **Also correct its stale count** at `:383`: "the 11 SSH provisioners" → **12** (measured: 12 `terraform_data.*` `connection { host }` blocks in `server.tf`; a 13th, `deploy_pipeline_fix`, has none).
 - [x] 4.4 **ADR-096:** leave `## Decision` unchanged (precedent, vindicated). An optional non-blocking note on its falsified singular-connector premise is permitted. → **AC9**
 - [x] 4.5 `model.c4`: amend the `platform.infra.tunnel` description + add `tunnel -> zotRegistry`, `hetzner -> tunnel`, `github -> tunnel`. No new `include` needed (all three are already in the `containers` view). Run `c4-code-syntax.test.ts` + `c4-render.test.ts`. → **AC8**
 - [x] 4.6 Correct the `tunnel.tf:58-63` misattribution comment (comment-only; no resource diff).
 - [x] 4.7 File the **audit** issue: "Audit web-1 vs web-2 for the 12 provisioner-applied host configs — Terraform state may be false." Labels `type/bug`, `priority/p1-high`, `domain/engineering`. Unblocked by Phase 2c. → **AC10**
-- [x] 4.8 File the **I2** issue: "Deterministic tunnel origin for host-specific routes (ADR-113 I2)." Must carry candidate (b) as the leading shape; the `-d "$SERVER_IP"` NAT rework + a new TF output for the private address + two-listener/two-NAT-rule requirement if (a); ADR-068's prior rejection; `WEB_HOST_PRIVATE_IPS` single-sourcing; the `ssh.`-retirement follow-up; the ADR-082 stale `monitored = false` note. → **AC10**
+- [x] 4.8 File the **I2** issue: "Deterministic tunnel origin for host-specific routes (ADR-114 I2)." Must carry candidate (b) as the leading shape; the `-d "$SERVER_IP"` NAT rework + a new TF output for the private address + two-listener/two-NAT-rule requirement if (a); ADR-068's prior rejection; `WEB_HOST_PRIVATE_IPS` single-sourcing; the `ssh.`-retirement follow-up; the ADR-082 stale `monitored = false` note. → **AC10**
 
 ## Phase 4b — File the adjacent findings (file, do not execute)
 

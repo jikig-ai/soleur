@@ -6,7 +6,7 @@ type: fix
 issue: 6416
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
-adr: ADR-113 (next-free verified against origin/main 2026-07-15; re-verify at /ship)
+adr: ADR-114 (next-free verified against origin/main 2026-07-15; re-verify at /ship)
 ---
 
 > **Lane note:** `knowledge-base/project/specs/feat-one-shot-6416-web2-private-net-tunnel/spec.md` does not exist (no brainstorm preceded this one-shot). Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).
@@ -37,6 +37,23 @@ explicit open question on the I2 issue (#6441) — candidate (b) depends on it.
 | 3 | P2: thread `host_creates` through `_run_gate` (~54 sites) | Separate `_run_host_creates_gate` | `_run_gate`'s rc encodes ack semantics; the HALT is ack-INDEPENDENT so it cannot use that rc. Keeps T1–T28 byte-unchanged for zero lost signal (`host_creates`=0 in all of them). |
 | 4 | (not in plan) | `server-tf-set-e.test.sh` extended | The guard arms on `inline = [` and was **blind** to the `inline = local.*` form P2c introduces — a silent bypass. Now resolves the indirection, fails closed on unvalidated ones, and asserts 1 tripwire per web-1 connection block. Its floor was a loose **13** against an actual **18**; corrected to the measured **19**. |
 | 5 | (not in plan) | T4/T5 added to `reusable-release-zot-mirror-retry.test.sh` | P3's whole behaviour was otherwise untested. Mutation-proven: neutralizing the branch reds T4; `!= 'success'` reds T5. |
+
+**The predicted ADR ordinal collision FIRED — ADR-113 → ADR-114.** The plan's Risks table listed
+*"ADR-113 ordinal collides with a sibling PR"*. It did: while this branch was in flight,
+`origin/main` landed **ADR-113-support-persona-scoped-concierge** (itself renumbered 109→113 at
+its own merge, same day). Renumbered to the next-free **ADR-114** and swept in one edit: the ADR
+file + frontmatter, `server.tf`, `tunnel.tf`, `cf-tunnel-registry-bridge/action.yml`, `model.c4`
+(+ regenerated `model.likec4.json`), ADR-008's `superseded_by` + link, ADR-068's extension link,
+the probe script, this plan, `tasks.md`, and the **filed issues #6440/#6441** (bodies + #6441's
+title). Deliberately **not** swept: `2026-07-12-feat-inngest-op-arm-…-plan.md`, which also
+mentions ADR-113 — those refs are hypothetical, predate this branch, and mean *main's* concierge
+ADR. A blind repo-wide `s/ADR-113/ADR-114/` would have corrupted them.
+
+> Sharp edge banked: the collision check itself misfired first. `git ls-tree origin/main … | grep -c 'ADR-113' || true`
+> printed `1` — which I initially read as "one match, collision" but was in fact **`grep -c`'s exit
+> code 1 (no match) leaking through `||`**, on a run where there genuinely *was* no collision yet.
+> The plan's own Sharp Edges already warn that `grep -c` returning 0 exits 1. Verify an ordinal by
+> **listing the filenames**, never by counting them.
 
 **Verified-as-stated (no drift):** `tfplan-hcloud-server-create.json` → `host_creates=1`;
 `tfplan-hcloud-server-location-replace.json` → `host_creates=0, resource_deletes=1`;
@@ -231,13 +248,13 @@ replacement) = deploy-path outage… collides with 3.D's ingress rewire"* — an
 > exact "assert what a command returns without running it" defect this plan's own Sharp Edges warn
 > about. The ADR-068 amendment (P4.3) should correct the count.)*
 
-**Two consequences.** (1) ADR-113 must **cite** ADR-068's rejection of per-host tunnels, never
+**Two consequences.** (1) ADR-114 must **cite** ADR-068's rejection of per-host tunnels, never
 re-decide it as novel. (2) **v1's P2b was re-proposing an explicitly-rejected alternative** — the
 exact trap the Phase 0.6 ADR-corpus grep exists to catch, missed at plan time and caught by the
-panel. The real gap in ADR-068 is narrower and is what ADR-113 closes: **it solved connector
+panel. The real gap in ADR-068 is narrower and is what ADR-114 closes: **it solved connector
 nondeterminism for the DEPLOY path only and never generalized to `ssh.` / `registry.`**
 
-### Normative content of ADR-113
+### Normative content of ADR-114
 
 - **I1 — Connector homogeneity (runtime precondition).** *A host must not serve as a tunnel
   connector unless it can serve **every** ingress rule* — concretely, its private NIC is up.
@@ -261,7 +278,7 @@ nondeterminism for the DEPLOY path only and never generalized to `ssh.` / `regis
 
 ### Sequencing — I1/I2 implementation deferred, ADR is NOT
 
-`wg-architecture-decision-is-a-plan-deliverable` is satisfied: **ADR-113 is authored now**, states
+`wg-architecture-decision-is-a-plan-deliverable` is satisfied: **ADR-114 is authored now**, states
 the category-error finding + I1/I2 + the anti-pattern as normative, cites ADR-068's prior
 rejection, and records the two candidate implementations with evidence. Status `adopting`.
 
@@ -459,7 +476,7 @@ would abort a `set -e` script.
 
 ### Soak follow-through enrollment
 
-ADR-113 flips `adopting → accepted` only after a soak ⇒ a soak-gated close criterion, which MUST
+ADR-114 flips `adopting → accepted` only after a soak ⇒ a soak-gated close criterion, which MUST
 be enrolled, not remembered:
 
 - **Script:** `scripts/followthroughs/zot-mirror-connector-6416.sh` — exit 0 when, over ≥7 days
@@ -662,7 +679,7 @@ retry in the bridge (new replica per attempt; ~3% residual at N=5) is ~10 more l
 
 ### P4 — Architecture record
 
-- Author **ADR-113** via `/soleur:architecture` (next-free verified; re-verify at `/ship`).
+- Author **ADR-114** via `/soleur:architecture` (next-free verified; re-verify at `/ship`).
 - **Amend ADR-008** — `superseded-in-part` (precedent: `ADR-043:3`, so no new status value). Two
   independent staleness proofs: its Decision hardcodes single-host `localhost:` routes (dated
   2026-03-27), **and** its claimed `app.soleur.ai → localhost:3000` route **does not exist**
@@ -670,7 +687,7 @@ retry in the bridge (new replica per attempt; ~3% residual at N=5) is ~10 more l
 - **Amend ADR-068** — **v2: as "extend the already-stated finding", NOT "state the omitted
   invariant"** (v1's framing was false; `:354-357` states it verbatim). The real gap: it solved
   connector-nondeterminism for the **deploy path only** and never generalized to `ssh.`/`registry.`.
-  ADR-113 **cites** its rejection of per-host tunnels (`:378-384`) rather than re-deciding it.
+  ADR-114 **cites** its rejection of per-host tunnels (`:378-384`) rather than re-deciding it.
   **Also correct its stale count** at `:383`: "the 11 SSH provisioners" → **12** (measured; see the
   Count-drift callout under §Prior art).
 - **ADR-096** — cite as precedent; **Decision text unchanged**. *v2: its stated **premise** is
@@ -683,7 +700,7 @@ retry in the bridge (new replica per attempt; ~3% residual at N=5) is ~10 more l
   configs — Terraform state may be false."* Labels `type/bug`, `priority/p1-high`,
   `domain/engineering` (all verified). **v2: unblocked by P2c** (it runs behind a fail-closed
   identity assertion), not blocked on the cut P2b.
-- **File the I2 issue:** *"Deterministic tunnel origin for host-specific routes (ADR-113 I2)."*
+- **File the I2 issue:** *"Deterministic tunnel origin for host-specific routes (ADR-114 I2)."*
   Must carry: candidate (b) as the leading shape; the `-d "$SERVER_IP"` NAT rework + a new TF output
   for the private address + two-listener/two-NAT-rule requirement if (a); ADR-068:378-384's prior
   rejection; the `WEB_HOST_PRIVATE_IPS` three-sources-of-truth cleanup; the `ssh.`-retirement
@@ -731,7 +748,7 @@ retry in the bridge (new replica per attempt; ~3% residual at N=5) is ~10 more l
 | `.github/actions/cf-tunnel-registry-bridge/action.yml` | P3 — header `:3-5` stale twice (singular "the web host's cloudflared"; `http://` should be `tcp://`) |
 | `apps/web-platform/infra/tunnel.tf` | P4 — comment correction at `:58-63` (comment-only; **no resource diff**) |
 | `knowledge-base/engineering/architecture/diagrams/model.c4` | P4 — tunnel description amend + 3 edges |
-| `.../decisions/ADR-008-cloudflare-tunnel-deployment.md` | P4 — `superseded-in-part` by ADR-113 |
+| `.../decisions/ADR-008-cloudflare-tunnel-deployment.md` | P4 — `superseded-in-part` by ADR-114 |
 | `.../decisions/ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md` | P4 — **extend** the already-stated finding to `ssh.`/`registry.` |
 | `.github/workflows/scheduled-followthrough-sweeper.yml` | P5 — `secrets=` wiring if absent |
 
@@ -746,7 +763,7 @@ retry in the bridge (new replica per attempt; ~3% residual at N=5) is ~10 more l
 
 | File | Purpose |
 |---|---|
-| `knowledge-base/engineering/architecture/decisions/ADR-113-*.md` | P4 — the tunnel-topology decision |
+| `knowledge-base/engineering/architecture/decisions/ADR-114-*.md` | P4 — the tunnel-topology decision |
 | `scripts/followthroughs/zot-mirror-connector-6416.sh` | P5 — soak probe |
 
 ## Acceptance Criteria
@@ -791,20 +808,24 @@ retry in the bridge (new replica per attempt; ~3% residual at N=5) is ~10 more l
    > longer gates this step. Regression-guarded by T5 in
    > `reusable-release-zot-mirror-retry.test.sh`.
 6. **AC6 (ADR-096 not reversed).** `continue-on-error: true` is still present on the `zot_bridge`
-   and `zot_mirror` steps. **Verify by reading those two steps** — *not* `grep -c` over the file,
-   which returns **9** (measured at /work; of those only **5** are actual directives — `:364, :656,
-   :678, :818, :834` — the other 4 are comment prose mentioning the marker) and cannot express the
-   scope. *(v2 asserted 7; re-measured to 9. The AC's own point stands and is strengthened: the
-   count is not the evidence, reading the two steps is.)*
+   and `zot_mirror` steps. **Verify by parsing the YAML and reading those two steps** — never
+   `grep -c` over the file.
+
+   > **v3 (measured at /work).** v2 asserted the grep returns **7**. It returned **9** before this
+   > PR and **10** after — because the raw count includes *comment prose* mentioning the marker
+   > (only **5** lines are actual `continue-on-error:` directives). This PR's own added comment
+   > moved the number, which is the point: **the total is not evidence and must not be pinned.**
+   > A file-wide count cannot express "these two steps", and any AC quoting it is stale the moment
+   > anyone writes the phrase in a comment. Assert the two steps' parsed values instead.
 7. **AC7 (stale targets gone).** `grep -c -- '-target=cloudflare_record.web_host'
    .github/workflows/apply-web-platform-infra.yml || true` returns **0** (it returns **1** today).
    *v1 also asserted `git grep '"web_host"' -- '*.tf'` → 0, which already passes on `origin/main`
    and proves nothing — cut.*
-8. **AC8 (ADR + C4).** `ADR-113-*.md` exists (**re-check after any `/ship` renumber and sweep this
+8. **AC8 (ADR + C4).** `ADR-114-*.md` exists (**re-check after any `/ship` renumber and sweep this
    plan + `tasks.md` + AC8/AC9 together**); `model.c4` contains a `tunnel -> zotRegistry` edge;
    `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
-9. **AC9 (ADR amendments).** ADR-008 is `superseded-in-part` by ADR-113; ADR-068 gains the
-   generalization paragraph and ADR-113 cites its per-host-tunnel rejection. **ADR-096's `##
+9. **AC9 (ADR amendments).** ADR-008 is `superseded-in-part` by ADR-114; ADR-068 gains the
+   generalization paragraph and ADR-114 cites its per-host-tunnel rejection. **ADR-096's `##
    Decision` text is unchanged** *(v2: relaxed from v1's `git diff ADR-096 == 0`, which would have
    forbidden correcting its falsified singular-connector premise).*
 10. **AC10 (audit + I2 issues filed).** Both exist with the labels named in P4.
@@ -841,11 +862,11 @@ consult (Step 4.5). All rulings applied.
 | Source | Ruling / finding | Disposition |
 |---|---|---|
 | CTO Q1 + terraform-architect | Guard, don't break the dependency (`server_ids` is a genuine data dependency; `cloudflare_record.app` births web-2 anyway; provider 1.63.0 forbids >1 attachment per firewall) | Applied — P2 |
-| CTO Q2 | One tunnel; `localhost:` is the category error; per-hostname ingress does **not** pin a connector | Applied — ADR-113 |
+| CTO Q2 | One tunnel; `localhost:` is the category error; per-hostname ingress does **not** pin a connector | Applied — ADR-114 |
 | CTO Q3 | Addressing inline, audit separate | **Overridden** by DHH + code-simplicity + advisor (below): the coupling premise was false. Audit stays separate; addressing → I2 issue |
 | CTO Q5 | Threshold `single-user incident` (false-assurance multiplier) | Applied |
 | DHH (P0) | **P2b does not work** — the `-d "$SERVER_IP"` NAT scope; and the coupling argument is contradicted 165 lines earlier | Applied — P2b **cut** |
-| DHH / code-simplicity | 6 ACs assert absence-of-work; ADR-107/113 drift; Architecture section writes ADR-113 twice | Applied — v1's AC3/AC6/AC10/AC11/AC2c + AC8's second half **cut**; v1's AC3b/3c/3d **dissolved** with P2b; 5 new ACs added for panel findings (T18, fail-open, per-type remediation, N≥5 evidence) ⇒ v2 = 14 ACs, all re-derived by **running** them; ordinal swept; section trimmed |
+| DHH / code-simplicity | 6 ACs assert absence-of-work; ADR-107/113 drift; Architecture section writes ADR-114 twice | Applied — v1's AC3/AC6/AC10/AC11/AC2c + AC8's second half **cut**; v1's AC3b/3c/3d **dissolved** with P2b; 5 new ACs added for panel findings (T18, fail-open, per-type remediation, N≥5 evidence) ⇒ v2 = 14 ACs, all re-derived by **running** them; ordinal swept; section trimmed |
 | code-simplicity | The `hostname` assertion is the only **runtime evidence** and is wanted even if (a) ships; §Observability contradicted §P2 | Applied — P2c; failure_modes rewritten |
 | Kieran (P0, measured) | `_run_gate` = 3 counters + sum + rc (not 5); ~54 sites widen; `:235` vs `:238`; **T18 inverts**; AC1's fixture already exists; AC6 returns **7**; T10 retro-proof is **0** | Applied — P2 harness block + ACs |
 | architecture-strategist (P1-4) | **I1 is falsified by construction** — the token is granted at server-create, the attach always lands after; `host_creates` does not enforce I1 | Applied — I1 restated as a **runtime** precondition; **no phase claims to enforce it** |
@@ -888,7 +909,7 @@ checked against issue bodies via `jq --arg path … | contains($path)`. Zero mat
 | Guard ships fail-open on a jq hiccup | AC3 — `host_creates` in the numeric validation (`:424-427`), whose own comment documents exactly this failure mode. |
 | The T18 change looks like "weakening a test" to a reviewer | It is the codified belief this plan overturns. AC2 makes the intent explicit and the PR body must say so. |
 | P2c turns a silent wrong-host write into a ~50% red apply | Priced and accepted — a red apply beats a green lie. Bounded re-dial retry is the escape hatch if it bites. |
-| ADR-113 ordinal collides with a sibling PR | `/ship`'s ADR-Ordinal Collision Gate re-verifies against `origin/main`; on renumber sweep plan + `tasks.md` + AC8/AC9 **in the same edit**. |
+| ADR-114 ordinal collides with a sibling PR | `/ship`'s ADR-Ordinal Collision Gate re-verifies against `origin/main`; on renumber sweep plan + `tasks.md` + AC8/AC9 **in the same edit**. |
 
 ## Alternatives Considered
 
@@ -896,7 +917,7 @@ checked against issue bodies via `jq --arg path … | contains($path)`. Zero mat
 |---|---|---|
 | A tunnel per backend (the operator's framing) | **Rejected** | Premise inverted — we already have one tunnel, and one tunnel is *right* (CF load-balancing across replicas is the contract). Per-backend tunnels multiply tokens/Access apps/DNS/cloudflared **and do not solve determinism**. **ADR-068:378-384 already rejected the adjacent shape** (risks REPLACING the live tunnel; `config_src` forces replacement ⇒ deploy-path outage). |
 | **v1's P2b — per-host `ssh-web-*` ingress + repointed connection blocks** | **CUT (3× P0)** | Breaks the `-d "$SERVER_IP"` NAT match ⇒ every provisioner dies ⇒ **main wedged**; its coupling premise was contradicted by this plan's own H5; "additive" was additive on the wrong axis (`connection.host` is a swap); and it re-proposed an ADR-068-rejected shape. → **I2 issue** (candidate (a), disfavoured). |
-| Per-host hostnames pointed at `ssh://localhost:22` | **Rejected — DOES NOT WORK** | The hostname selects the **tunnel**; CF then load-balances. Recorded as a normative anti-pattern in ADR-113. |
+| Per-host hostnames pointed at `ssh://localhost:22` | **Rejected — DOES NOT WORK** | The hostname selects the **tunnel**; CF then load-balances. Recorded as a normative anti-pattern in ADR-114. |
 | Dedicated cloudflared on the zot host | **Rejected** | ADR-096 §Decision: "no cloudflared on the registry host". Reversing needs its own ADR and expands the deny-all host's blast radius. |
 | Allowlist the leaf (`hcloud_server_network.web`) | **Rejected — most expensive wrong answer** | Needs an ADR-068 amendment + **four coupled hand-maintained sets** (`OPERATOR_APPLIED_EXCLUSIONS` `:498`, `MOVED_OPERATOR_CONSUMED` `:955-960`, the subset test `:1021`, the warm-standby guard `:1112`), weakens the #5877 moved-block anchor (`:402-411`), and **legitimizes per-PR host creation** — leaving the unfirewalled-first-boot race (P4b#1) intact. |
 | Break the transitive pull in `firewall.tf` | **Rejected — dead twice over** | `cloudflare_record.app` births web-2 regardless; provider **1.63.0** forbids >1 `hcloud_firewall_attachment` per firewall; and splitting it destroy+creates the live attachment ⇒ **a window where web-1 has no firewall**. |

@@ -175,7 +175,7 @@ model {
       }
       tunnel = container "Cloudflare Tunnel" {
         technology "cloudflared (ONE tunnel, N connector replicas — 2 today: web-1 + web-2)"
-        description "Zero-trust inbound access — no exposed ports. Exactly ONE tunnel (tunnel.tf) with THREE ingress rules — deploy. → http://localhost:9000, ssh. → ssh://localhost:22, registry. → tcp://10.0.1.30:5000 — and MULTIPLE connector replicas: every web host runs cloudflared against that single tunnel, so Cloudflare load-balances each request across them. A hostname selects the TUNNEL, not the connector, so `localhost:` means 'whichever replica answered', NOT 'this host' (ADR-113). Correctness therefore requires connector homogeneity: every connector host must be a 10.0.1.0/24 member or origin-relative routes like registry. fail on ~50% of attempts (#6416 — web-2 had no private-net attachment, so CI's zot mirror silently skipped every release). Management plane only: app.soleur.ai does NOT traverse the tunnel (direct CF-proxied A record to web-1, dns.tf), and there is no cloudflared on the zot/git-data/inngest hosts (ADR-096)."
+        description "Zero-trust inbound access — no exposed ports. Exactly ONE tunnel (tunnel.tf) with THREE ingress rules — deploy. → http://localhost:9000, ssh. → ssh://localhost:22, registry. → tcp://10.0.1.30:5000 — and MULTIPLE connector replicas: every web host runs cloudflared against that single tunnel, so Cloudflare load-balances each request across them. A hostname selects the TUNNEL, not the connector, so `localhost:` means 'whichever replica answered', NOT 'this host' (ADR-114). Correctness therefore requires connector homogeneity: every connector host must be a 10.0.1.0/24 member or origin-relative routes like registry. fail on ~50% of attempts (#6416 — web-2 had no private-net attachment, so CI's zot mirror silently skipped every release). Management plane only: app.soleur.ai does NOT traverse the tunnel (direct CF-proxied A record to web-1, dns.tf), and there is no cloudflared on the zot/git-data/inngest hosts (ADR-096)."
       }
       hetzner = container "Compute" {
         technology "Hetzner Cloud"
@@ -360,13 +360,13 @@ model {
   api -> anthropic "Daily org cost/usage report (Admin API, cost-report cron)" { technology "HTTPS" }
   claude -> github "Git operations" { technology "HTTPS/SSH" }
   tunnel -> coordinator "Routes traffic" { technology "HTTPS" }
-  // #6416 / ADR-113 — the tunnel's three ingress rules, made explicit. The registry edge is
+  // #6416 / ADR-114 — the tunnel's three ingress rules, made explicit. The registry edge is
   // the ONLY origin-relative one (it addresses 10.0.1.30 directly), which is why it is the
   // pattern to generalize; the other two are connector-relative (`localhost:`) and therefore
   // resolve to whichever replica CF load-balanced onto, NOT to a chosen host.
-  tunnel -> zotRegistry "registry. ingress → tcp://10.0.1.30:5000. ORIGIN-RELATIVE: whichever connector replica answers proxies to the correct zot host — but ONLY if that replica is a 10.0.1.0/24 member (ADR-113 I1). #6416: web-2 was not, so CI's registry bridge failed on ~50% of releases and the zot mirror silently skipped (masked green by continue-on-error)." { technology "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)" }
+  tunnel -> zotRegistry "registry. ingress → tcp://10.0.1.30:5000. ORIGIN-RELATIVE: whichever connector replica answers proxies to the correct zot host — but ONLY if that replica is a 10.0.1.0/24 member (ADR-114 I1). #6416: web-2 was not, so CI's registry bridge failed on ~50% of releases and the zot mirror silently skipped (masked green by continue-on-error)." { technology "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)" }
   github -> tunnel "CI reaches the deny-all-public zot host to dual-push release images, and reaches web-1's shell for the 12 terraform_data SSH provisioners — both ONLY through this tunnel, via CF Access service tokens (separate tokens per route, so registry-write rotates independently of host-shell access)" { technology "cloudflared access tcp/ssh (CF Access service token)" }
-  hetzner -> tunnel "Every web host runs a cloudflared connector against the ONE tunnel (2 replicas today). CF load-balances across them, so ssh:// and deploy. ingress land non-deterministically — the reason the deploy path needs ADR-068's private-net fan-out and the SSH provisioners carry an in-band hostname tripwire (ADR-113 I2)." { technology "cloudflared (outbound QUIC, 4 conns/replica)" }
+  hetzner -> tunnel "Every web host runs a cloudflared connector against the ONE tunnel (2 replicas today). CF load-balances across them, so ssh:// and deploy. ingress land non-deterministically — the reason the deploy path needs ADR-068's private-net fan-out and the SSH provisioners carry an in-band hostname tripwire (ADR-114 I2)." { technology "cloudflared (outbound QUIC, 4 conns/replica)" }
   hetzner -> claude "Hosts" { technology "Docker" }
   doppler -> claude "Injects secrets" { technology "CLI" }
   auth -> supabase "Validates tokens" { technology "HTTPS" }

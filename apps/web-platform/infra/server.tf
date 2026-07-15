@@ -96,8 +96,8 @@ locals {
   # replica answered". With cloudflared running on BOTH web-1 and web-2 against that single
   # tunnel, roughly half of these provisioner sessions can land on the WRONG host and
   # silently apply web-1's host config there. A hostname in the ingress rule cannot fix
-  # this: the hostname selects the TUNNEL, then CF load-balances (ADR-113, normative
-  # anti-pattern). The deterministic-origin fix is tracked as ADR-113 I2.
+  # this: the hostname selects the TUNNEL, then CF load-balances (ADR-114, normative
+  # anti-pattern). The deterministic-origin fix is tracked as ADR-114 I2.
   #
   # This assertion is therefore the ONLY runtime evidence that a run reached web-1: a
   # tunnel.tf grep proves config SHAPE, never that a packet landed — that would have to
@@ -118,7 +118,7 @@ locals {
   #
   # Do NOT "fix" the connection blocks to dial 10.0.1.10 instead: the bridge's
   # `-d "$SERVER_IP"` NAT rule would stop matching, the runner would blackhole RFC1918,
-  # and every provisioner would die — wedging main. See ADR-113 I2 candidate (a).
+  # and every provisioner would die — wedging main. See ADR-114 I2 candidate (a).
   #
   # The expected value MUST stay in lockstep with this file's own per-host discriminator
   # (`host_name = each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"`).
@@ -131,7 +131,7 @@ locals {
   # make this assertion decorative. That is the exact #5089/#5101 trap.
   web1_hostname_assert = [
     "set -e",
-    "if [ \"$(hostname)\" != \"soleur-web-platform\" ]; then echo \"FATAL (#6416): SSH provisioner reached host '$(hostname)', expected 'soleur-web-platform'. The CF tunnel load-balanced this session onto the wrong connector replica, so web-1 host config was NOT applied here. Re-run the apply; if it recurs, see ADR-113 I2 (deterministic tunnel origin for host-specific routes).\" >&2; exit 1; fi",
+    "if [ \"$(hostname)\" != \"soleur-web-platform\" ]; then echo \"FATAL (#6416): SSH provisioner reached host '$(hostname)', expected 'soleur-web-platform'. The CF tunnel load-balanced this session onto the wrong connector replica, so web-1 host config was NOT applied here. Re-run the apply; if it recurs, see ADR-114 I2 (deterministic tunnel origin for host-specific routes).\" >&2; exit 1; fi",
   ]
 }
 
