@@ -224,8 +224,8 @@ zot was built to survive — every host would fail to pull and the platform woul
 **boolean** match result and an HTTP status code — never a token, never a hash of a token. `docker login` stderr
 is classified to a fixed enum before it reaches Sentry, so a credential can never ride out in an error string.
 
-**Brand-survival threshold:** `aggregate pattern` — no single-user incident is reachable from this path (the
-fallback holds); the risk is fleet-wide loss of registry redundancy.
+- **Brand-survival threshold:** `aggregate pattern` — no single-user incident is reachable from this path (the
+  fallback holds); the risk is fleet-wide loss of registry redundancy. Operator-confirmed at /go routing time.
 
 ## Implementation Phases
 
@@ -473,19 +473,27 @@ logs:
          scripts/betterstack-query.sh)
 
 discoverability_test:
-  command: |
-    doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
-      --since 30m --grep SOLEUR_ZOT_DISK --limit 1
-  expected_output: |
-    A SOLEUR_ZOT_DISK line carrying htpasswd_pull_matches / htpasswd_push_matches as
-    well-formed booleans (or `unknown` when the file or a token is absent — deliberately
-    distinct from `false`, which means "read it, and it diverged").
-    NOTE (corrected at /work): there is NO pre-fix reading of `false` to be had. The probe
-    ships inside cloud-init user_data, so deploying it forces the host replace that re-bakes
-    htpasswd — `true` is the expected post-replace value under BOTH H3 and H4 and proves only
-    that the probe is wired. AC11 (zero new WEB-PLATFORM-5B + a registry:zot pull) is the fix
-    gate. This probe's real job is ONGOING: it is what makes a FUTURE credential rotation's
-    divergence visible within 5 min instead of never.
+  # Single-line on purpose. A `command: |` block scalar is mis-parsed by preflight Check 10:
+  # its continuation regex (`^[[:space:]]+[^[:space:]]`) matches ANY indented line, so it
+  # swallows the following `expected_output:` key into the command — which then trips the
+  # shell-active-token reject on that key's own `|`. One line parses cleanly and, more to the
+  # point, is a command an operator can actually paste.
+  command: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep SOLEUR_ZOT_DISK --limit 1
+  # Concrete + matchable on purpose: preflight Check 10 RUNS this command and substring-matches
+  # stdout against this value. A prose paragraph here would never match and would fail the
+  # check for a non-defect. `SOLEUR_ZOT_DISK` is the field-independent invariant — the host is
+  # self-reporting at all. Verified live at /ship: exit 0, a real line returned.
+  expected_output: SOLEUR_ZOT_DISK
+  # Post-replace, that line additionally carries htpasswd_pull_matches / htpasswd_push_matches
+  # as `true` / `false` / `unknown` (`unknown` = cannot tell — file or token absent, or a
+  # non-mismatch htpasswd exit; deliberately distinct from `false` = read it, and it diverged).
+  interpretation: |
+    There is NO pre-fix reading of `false` to be had. The probe ships inside cloud-init
+    user_data, so deploying it forces the host replace that re-bakes htpasswd — `true` is the
+    expected post-replace value under BOTH H3 and H4 and proves only that the probe is wired.
+    AC11 (zero new WEB-PLATFORM-5B + a registry:zot pull) is the fix gate. This probe's real
+    job is ONGOING: it is what makes a FUTURE credential rotation's divergence visible within
+    5 min instead of never — but only once something polls it (see the H3 alert_route above).
 ```
 
 Secondary, also SSH-free (Sentry side, EU host — note `sentry.io` 404s for this org and
