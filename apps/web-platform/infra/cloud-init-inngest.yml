@@ -358,8 +358,8 @@ runcmd:
     # VECTOR_CLI_ARCH + aarch64 triple map) and BETTERSTACK_LOGS_TOKEN is provisioned into
     # the isolated soleur-inngest/prd project (inngest-betterstack-token.tf; admitted by the
     # boot isolation self-check above). Stage /tmp/vector.toml (docker-cp from the OCI image,
-    # same as the identical `docker cp soleur-inngest-bootstrap-extract:/vector.toml
-    # /tmp/vector.toml` line in web cloud-init.yml) so the bootstrap writes vector.service; pass
+    # same as the identical `soleur-inngest-bootstrap-extract:/vector.toml` docker-cp line
+    # in web cloud-init.yml) so the bootstrap writes the vector.service unit; pass
     # the arm64 Vector env (non-empty VERSION + arm64 SHA override + VECTOR_CLI_ARCH) below.
     docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
     chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
