@@ -400,11 +400,17 @@ model {
   // self-reports its disk state directly to Better Stack Logs (was a heartbeat pinger only, via
   // the web-host probe). SOLEUR_ZOT_DISK is the in-surface probe that disambiguates
   // fs-not-grown / gc-too-slow / zot-crash without a host login.
-  zotRegistry -> betterstack "Ships disk-state observability — df% of /var/lib/zot + resize2fs before/after + zot health — as one SOLEUR_ZOT_DISK event to the isolated Logs source 2457081; token in soleur-registry/prd, queried via betterstack-query.sh --grep SOLEUR_ZOT_DISK (#6244)" { technology "curl → Better Stack Logs (HTTPS, eu-fsn-3)" }
+  // #6415 / ADR-115 — a SECOND event type on this same edge: SOLEUR_PRIVATE_NIC. The host
+  // self-asserts that its private IP is configured. It is emitted FROM the affected (blind)
+  // surface because a NIC-less host keeps PUBLIC egress, so every off-host signal stays green
+  // while the fleet's primary pull path is dead (#6400: 14 days).
+  zotRegistry -> betterstack "Ships disk-state observability — df% of /var/lib/zot + resize2fs before/after + zot health — as one SOLEUR_ZOT_DISK event, plus a SOLEUR_PRIVATE_NIC private-NIC convergence event (#6415), to the isolated Logs source 2457081; token in soleur-registry/prd, queried via betterstack-query.sh --grep SOLEUR_ZOT_DISK|SOLEUR_PRIVATE_NIC (#6244/#6415)" { technology "curl → Better Stack Logs (HTTPS, eu-fsn-3)" }
   // #6291 — CI reads back the SOLEUR_ZOT_DISK Logs source it ships to. The standing restart-loop
   // recurrence alarm (scheduled-zot-restart-loop.yml, */30) + the follow-through soak probes poll
   // source 2457081 over the ClickHouse SQL API; previously an un-modelled load-bearing edge.
-  github -> betterstack "Polls the SOLEUR_ZOT_DISK Logs source (ClickHouse SQL via betterstack-query.sh) for the zot restart-loop recurrence alarm + follow-through soak probes" { technology "HTTPS (ClickHouse SQL, eu-fsn-3)" }
+  // #6415 — the same alarm now ALSO polls SOLEUR_PRIVATE_NIC and carries an independent NIC
+  // verdict (not folded into its exit code, so a NIC fire is never mis-reported as a probe fault).
+  github -> betterstack "Polls the SOLEUR_ZOT_DISK + SOLEUR_PRIVATE_NIC Logs sources (ClickHouse SQL via betterstack-query.sh) for the zot restart-loop recurrence alarm, the private-NIC convergence alarm (#6415), and follow-through soak probes" { technology "HTTPS (ClickHouse SQL, eu-fsn-3)" }
   // #6031 / ADR-088 — control-plane GHCR installation-token minter (cron-ghcr-token-minter,
   // every 20 min). Mints a 1h packages:read App installation token and writes it to Doppler,
   // retiring the interim read:packages PAT; hosts read GHCR_READ_TOKEN unchanged.
