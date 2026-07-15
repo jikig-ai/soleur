@@ -82,13 +82,6 @@ census_now() {  # echoes "<verdict> <count>"; never exits non-zero on an API fai
   classify_connector_census "$code" "$body"
 }
 
-web1_hcloud_id() {  # the id terraform holds for hcloud_server.web["web-1"] — AC13's expected value
-  local ht
-  ht=$(doppler secrets get HCLOUD_TOKEN --project soleur --config prd_terraform --plain 2>/dev/null || true)
-  [[ -n "$ht" ]] || return 1
-  curl -s --max-time 20 -H "Authorization: Bearer $ht" 'https://api.hetzner.cloud/v1/servers' \
-    | jq -r '.servers[] | select(.name == "soleur-web-platform") | .id' 2>/dev/null || true
-}
 
 # =============================================================================================
 say "STAGE 0 — preconditions"
@@ -191,24 +184,6 @@ if [[ -z "$DRY_RUN" ]]; then
   info "run: https://github.com/$REPO/actions/runs/$RID2"
   timeout "$APPLY_DEADLINE_S" gh run watch "$RID2" --repo "$REPO" --exit-status \
     || die "the deploy-pipeline-fix run failed — see the run log."
-fi
-
-# =============================================================================================
-say "STAGE 3b — AC13/AC14: host_id identifies web-1 (an identity assertion, not self-consistency)"
-
-if [[ -n "$DRY_RUN" ]]; then
-  info "DRY-RUN: would assert /hooks/deploy-status + /hooks/inngest-liveness host_id == hetzner-<web-1 id>"
-else
-  W1=$(web1_hcloud_id || true)
-  if [[ -z "$W1" ]]; then
-    info "WARNING: could not read web-1's hcloud id — AC13/AC14 degrade to self-consistency."
-  else
-    EXPECT="hetzner-$W1"
-    info "expected host_id (from the Hetzner API, the same value terraform holds): $EXPECT"
-    info "NOTE: reading the hooks needs the CF-Access service token + webhook HMAC — the"
-    info "  probe below is the same shape scheduled-inngest-health.yml uses. If creds are"
-    info "  absent here, the */15 watchdog asserts it on the next tick regardless."
-  fi
 fi
 
 # =============================================================================================

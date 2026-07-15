@@ -183,7 +183,7 @@ changes nothing.
 recognized as the correct pattern rather than a lucky one. #6416's guard (`host_creates`) and
 tripwire (in-band `hostname` assertion) are anchored to a stated invariant instead of folklore.
 
-**Negative / accepted.** I1 and I2 are **recorded but not enforced** here. `ssh.` remains
+**Negative / accepted.** *(AMENDED 2026-07-15 by #6425 — I1 is now ENFORCED via the single-connector gate; I2 remains violated-but-inert. See the amendment below. The text as originally written follows.)* I1 and I2 are **recorded but not enforced** here. `ssh.` remains
 host-nondeterministic across two connectors; the in-band `hostname` assertion converts that
 from a silent wrong-host write into a loud apply failure, which is a strict improvement but
 not a fix. Tracked in #6441; the audit of what may already have been written to the wrong host is #6440.
@@ -197,7 +197,47 @@ provisioners work *because* they dial that public IP and the kernel hijacks it. 
 RFC1918 stops the NAT rule matching, the runner blackholes, and **every provisioner dies** —
 and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 
-### Candidate implementations for I2 — assessed in #6441
+> **Amendment (2026-07-15, #6425 — candidate (b) shipped; I1 is now ENFORCED).**
+> The "recorded but not enforced" status above and the candidate assessment below are
+> **superseded**. #6425 shipped **candidate (b)**, the single-connector gate:
+> `server.tf`'s `web_tunnel_connector = each.key == "web-1"` gates `cloudflared service
+> install`, so only the designated ingress host registers a connector. Read this ADR's
+> Consequences with that in mind — ADR-068's amendment delegates the invariant *here*, so the
+> two documents contradicted each other until this note existed.
+>
+> **What changed, precisely:**
+> - **I1 is enforced**, and substantively rather than vacuously: web-1 *is* a connector and
+>   *can* serve every ingress rule. The gate eliminates the risky population — a fresh host
+>   that boots `cloudflared` before its private NIC exists (the token rides `user_data` at
+>   create; the network attach always lands after). That race is unfixable at construction
+>   time, which is why (b) was called "the only shape that makes I1 well-formed".
+> - **I2 is NOT satisfied — it is made inert.** `ssh://localhost:22` and
+>   `http://localhost:9000` are unchanged and still connector-relative, so I2's antecedent
+>   still fires. They are not "genuinely host-agnostic routes"; they are routes only one host
+>   can currently answer. **I2's violation is latent, gated behind I1 holding.** Anything that
+>   re-pools a second connector re-manifests it immediately.
+> - The normative anti-pattern below **stands**: a per-hostname ingress does not pin a
+>   connector, and the 12 `connection { host }` blocks must not be repointed.
+>
+> **The un-taken complement (worth filing against #6466).** Candidate (a) was disfavoured for
+> needing the `-d "$SERVER_IP"` NAT rework — but that rework is forced by per-host *hostname*
+> multiplexing (`ssh-web-1.` needs its own bridge, port and NAT rule), **not** by an
+> RFC1918 service address. Keeping ONE hostname and repointing the ingress *service* to
+> `10.0.1.x` touches nothing client-side: the runner still dials the public `SERVER_IP`, the
+> NAT still matches, cloudflared simply dials the private address instead of `localhost`.
+> That is the pattern `tunnel.tf` already calls "the RIGHT pattern and the one to generalize"
+> for `registry.`. It is not a replacement for de-pooling — origin-relative ingress *depends*
+> on I1 (#6416 broke `registry.` exactly this way) — it is the complement that would make
+> determinism survive connector count **structurally**, and would restore the availability
+> #6425 trades away. Today the only thing between a GA re-pool and a #6425 recurrence is this
+> ADR plus the `*/15` census alarm.
+>
+> **Standing enforcement:** `scripts/tunnel-connector-census.sh` + the `connector_census` job
+> in `scheduled-inngest-health.yml` file an `action-required` issue whenever the live
+> connector count leaves 1. Vantage-independent — a response-poll cannot detect a second
+> connector, because selection is colo-sticky.
+
+### Candidate implementations for I2 — assessed in #6441 (SUPERSEDED — see the amendment above; (b) shipped in #6425)
 
 Two shapes are on the table: **(a)** per-host private-net-relative ingress (`ssh-web-1.` →
 `ssh://10.0.1.10:22`) — **disfavoured**, it needs the `-d "$SERVER_IP"` NAT rework and
