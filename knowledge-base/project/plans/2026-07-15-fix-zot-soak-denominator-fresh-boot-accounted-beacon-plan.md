@@ -84,11 +84,11 @@ This is the issue's own literal minimum-closure wording, and it is **mathematica
 1. **Dead by construction.** `app_ghcr_served` becomes a `FAIL_QUERIES` entry. The soak `exit 1`s when `FALLBACKS > 0` (`:210-218`), and `FALLBACKS` sums every entry. So **every line after `:218` has `count(app_ghcr_served) == 0` as a precondition** → `ACCOUNTED = count(app_zot) + count(app_ghcr_served)` is *identically* `count(app_zot)`. The addition is arithmetic theater.
 2. **Or it masks a real FAIL.** Placed *before* the `FALLBACKS` exit: 10 boots, 3 GHCR-served, 2 beacons dropped → `ACCOUNTED=8 < EXPECTED=10` → `exit 2` TRANSIENT instead of `exit 1` FAIL. It downgrades the exact signal this PR exists to raise. **Both placements are wrong.**
 3. **It saturates into a false PASS.** `sentry_count` uses `per_page=100` and counts `.data | length` with **no pagination** (`:146`, `:158`) — every count is `min(true, 100)`. Harmless for the existing `> 0` tests; **load-bearing** the moment you compare two counters. Real ACCOUNTED=100 / EXPECTED=150 → reported 100 vs 100 → no shortfall → **false PASS on the arm whose only job is catching an unobserved fleet.** `START` is absolute and the window grows unbounded — a *when*, not an *if*.
-4. **Its only unique domain is its own worst failure.** What it catches that the floor doesn't is *partial* beacon loss (`MIN_SAMPLE <= ACCOUNTED < EXPECTED`) — precisely what a fail-open `_emit` produces by design. With `START` absolute, one dropped beacon poisons the window **permanently**: TRANSIENT daily, forever. A gate that structurally cannot pass gets bypassed.
+4. **Its only unique domain is its own worst failure.** What it catches that the floor doesn't is *partial* beacon loss (`MIN_BOOTS <= ACCOUNTED < EXPECTED`) — precisely what a fail-open `_emit` produces by design. With `START` absolute, one dropped beacon poisons the window **permanently**: TRANSIENT daily, forever. A gate that structurally cannot pass gets bypassed.
 
-**The floor dominates it on every non-degenerate case, with a *better* exit code.** Beacon dark (typo, DSN unresolved, curl fails, cloud-init never reached the fleet) → `app_zot == 0` → `exit 1` **FAIL**, not TRANSIENT. And `MIN_SAMPLE` (3) is far below the 100 saturation ceiling, so the floor is **immune to proof 3**.
+**The floor dominates it on every non-degenerate case, with a *better* exit code.** Beacon dark (typo, DSN unresolved, curl fails, cloud-init never reached the fleet) → `app_zot == 0` → `exit 1` **FAIL**, not TRANSIENT. And `MIN_BOOTS` (1) is far below the 100 saturation ceiling, so the floor is **immune to proof 3**.
 
-**On deviating from the issue:** `accounted == expected` is a proposed **mechanism** for the goal *"never PASS on an unobserved fleet"*. This plan meets that goal, better. The mechanism was specified before `app_ghcr_served` existed to make the probe-miss path loud — once the FAIL query carries hole 1, the denominator's remaining job is narrow: **prove the emitter is alive**, which is exactly `count(app_zot) >= MIN_SAMPLE`. **This deviates from the issue's literal text and is surfaced as a User-Challenge** in `specs/<branch>/decision-challenges.md` for operator ratification — not silently omitted.
+**On deviating from the issue:** `accounted == expected` is a proposed **mechanism** for the goal *"never PASS on an unobserved fleet"*. This plan meets that goal, better. The mechanism was specified before `app_ghcr_served` existed to make the probe-miss path loud — once the FAIL query carries hole 1, the denominator's remaining job is narrow: **prove the emitter is alive**, which is exactly `count(app_zot) >= MIN_BOOTS`. **This deviates from the issue's literal text and is surfaced as a User-Challenge** in `specs/<branch>/decision-challenges.md` for operator ratification — not silently omitted.
 
 Cutting it dissolves: `bootstrap_complete`/EXPECTED, the `START` collision, the non-convergence flaw, the ADR sequencing precondition, the #6122 hard gate, an AC, 2 Risks rows, and 2 Alternatives rows.
 
@@ -181,7 +181,7 @@ Hole 3 could be closed by prefixing the boot emit with `feature`/`op`/`registry`
 
 The soak counts the bare query directly instead. Complexity lands in the never-executed, zero-blast-radius script rather than the boot path — honoring the issue's own rationale for a separate PR.
 
-> **Do NOT sum the boot query into `ZOT_WEB`** (a plan-v2 idea, cut). It is (a) **dead** — post-`FALLBACKS`-exit the floor already guarantees `ZOT_WEB >= count(app_zot) >= MIN_SAMPLE`; (b) a **false-PASS route** — a dark beacon leaves `ZOT_WEB = rolling + 0`, which rolling deploys alone push past `MIN_SAMPLE` → PASS on an unobserved fleet; and (c) **unsound** — `sentry_count` returns the *string* `TRANSIENT` (`:151`), and `$(( ))` resolves that bare word as unset → **0**, destroying the sentinel (the hazard `:109-115` already documents).
+> **Do NOT sum the boot query into `ZOT_WEB`** (a plan-v2 idea, cut). It is (a) **dead** — post-`FALLBACKS`-exit the floor already guarantees `ZOT_WEB >= count(app_zot) >= MIN_BOOTS`; (b) a **false-PASS route** — a dark beacon leaves `ZOT_WEB = rolling + 0`, which rolling deploys alone push past `MIN_SAMPLE` → PASS on an unobserved fleet; and (c) **unsound** — `sentry_count` returns the *string* `TRANSIENT` (`:151`), and `$(( ))` resolves that bare word as unset → **0**, destroying the sentinel (the hazard `:109-115` already documents).
 
 ### D3 — 🔴 The dedicated inngest host: a SEVENTH GHCR-served path, and it is fatal
 
@@ -221,10 +221,10 @@ fi
 
 ### D5 — Denominator source: the beacon itself, nothing else
 
-`count(stage:"app_zot") >= MIN_SAMPLE`. No second emitter, no `bootstrap_complete`, no cross-file invariant.
+`count(stage:"app_zot") >= MIN_BOOTS`. No second emitter, no `bootstrap_complete`, no cross-file invariant.
 
 - **Converges naturally** as hosts recreate — the thing a soak *is*.
-- **Immune to the `per_page=100` saturation** that killed the counter-comparison (`MIN_SAMPLE` = 3 ≪ 100).
+- **Immune to the `per_page=100` saturation** that killed the counter-comparison (`MIN_BOOTS` = 1 ≪ 100).
 - **Imports no `START` constraint.** A wider window only counts *more* `app_zot`; a late-landing beacon just means the floor takes longer to satisfy. The `START` collision the counter-comparison created **does not exist here**.
 - Catches every case the reversed arm caught, with a **stronger** exit code (`exit 1` FAIL, not TRANSIENT).
 
@@ -297,7 +297,7 @@ liveness_signal:
 
 error_reporting:
   destination: "Sentry (org jikigai-eu, de.sentry.io) via the baked-DSN _emit store API"
-  fail_loud: "false — _emit is deliberately fail-open (never blocks boot). The soak's MIN_SAMPLE floor is what makes a dark emit LOUD: a beacon that never POSTs drives app_zot to 0 → exit 1 FAIL → the retirement stays blocked."
+  fail_loud: "false — _emit is deliberately fail-open (never blocks boot). The soak's MIN_BOOTS floor is what makes a dark emit LOUD: a beacon that never POSTs drives app_zot to 0 → exit 1 FAIL → the retirement stays blocked."
 
 failure_modes:
   - mode: "Fresh boot served by GHCR because the /v2/ probe missed (the DOMINANT path — today emits nothing)"
@@ -307,7 +307,7 @@ failure_modes:
     detection: "stage:\"app_ghcr_fallback\" (existing) AND stage:\"app_ghcr_served\" (new)"
     alert_route: "same alarm (both filters) → page; soak counts both → exit 1"
   - mode: "The beacon is dark (typo'd stage, DSN unresolved, curl fails, cloud-init never reached the fleet, ZOT_REGISTRY_URL regressed)"
-    detection: "count(stage:\"app_zot\") < MIN_SAMPLE — no second emitter needed; a dark beacon cannot manufacture evidence"
+    detection: "count(stage:\"app_zot\") < MIN_BOOTS — no second emitter needed; a dark beacon cannot manufacture evidence"
     alert_route: "soak liveness floor → exit 1 FAIL (never PASS on an unobserved fleet)"
   - mode: "5.3 retires GHCR while the dedicated inngest host still pulls it fail-closed (the 7th path, D3)"
     detection: "the C1 blocker arm reads the D3 issue's OPEN state via gh"
@@ -319,7 +319,7 @@ logs:
 
 discoverability_test:
   command: "SENTRY_AUTH_TOKEN=<tok> GH_TOKEN=<tok> ZOT_SOAK_START=2026-07-15T00:00:00 bash scripts/followthroughs/zot-soak-6122.sh; echo \"exit=$?\""
-  expected_output: "Prints per-signal counts including app-served=<n>, plus 'zot-served fresh boots=<n> (need >=3)'. exit 0 PASS / 1 FAIL / 2 TRANSIENT. NO ssh."
+  expected_output: "Prints per-signal counts including app-served=<n>, plus 'zot-served fresh boots=<n> (need >=1)'. exit 0 PASS / 1 FAIL / 2 TRANSIENT. NO ssh."
 ```
 
 ### Affected-surface observability (§2.9.2)
@@ -363,7 +363,7 @@ Other six domains: not relevant (no user-facing surface, pricing, contract, copy
 | File | Change |
 |---|---|
 | `apps/web-platform/infra/cloud-init.yml` | **+1 code line** between the `:542`/`:544` literals, **and trim+merge the `:525-533` comment** to fund its rationale (Byte Budget step 1). |
-| `scripts/followthroughs/zot-soak-6122.sh` | `FAIL_QUERIES[appserved]='stage:"app_ghcr_served"'`; cardinality floor `!= 4` → `!= 5` (condition **and** message); **the `app_zot >= MIN_SAMPLE` liveness floor**; **the C1 blocker arm**; `secrets=` gains `GH_TOKEN`; header: `NOT COVERED 2/2` → the **5-of-7** ratio (C3) incl. the 7th path; sweep "FOUR watched signals" 4→5 (`:9-44`, ~6 places — read each hit, do not blind-replace). |
+| `scripts/followthroughs/zot-soak-6122.sh` | `FAIL_QUERIES[appserved]='stage:"app_ghcr_served"'`; cardinality floor `!= 4` → `!= 5` (condition **and** message); **the new `MIN_BOOTS` knob** (`MIN_BOOTS="${ZOT_SOAK_MIN_BOOTS:-1}"`, validated `^[1-9][0-9]*$` per `:116`) **+ the `app_zot >= MIN_BOOTS` liveness floor**; **the C1 blocker arm**; `secrets=` gains `GH_TOKEN`; header: `NOT COVERED 2/2` → the **5-of-7** ratio (C3) incl. the 7th path; sweep "FOUR watched signals" 4→5 (`:9-44`, ~6 places — read each hit, do not blind-replace). |
 | `apps/web-platform/infra/sentry/issue-alerts.tf` | 5th `tagged_event`: `key = "stage"`, `value = "app_ghcr_served"`. Keep `filter_match = "any"` + `value = 0`. **Also update the enumerating comment at `:1334-1335`.** |
 | `apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` | `alarm.size` 4→5 (`:203`); `soakFailQueries().size` 4→5 (`:204`); flat **bare** whole-query pin `soakQueryFor("app_ghcr_served") === 'stage:"app_ghcr_served"'`; emit-**call-form** pin; `value = "app_ghcr_served"` tf pin. |
 | `plugins/soleur/test/cloud-init-user-data-size.test.ts` | **New leg: pin the emit ORDERING on the CALL FORM** — `indexOf('"app_ghcr_served" warning') < indexOf('IMAGE_REF="$REF"')` (mirrors the AC5 `verifyIdx < runIdx` idiom). **Not** the bare token — the merged comment defeats it (D1). |
@@ -423,11 +423,12 @@ Add the 5th `tagged_event` + update the `:1334-1335` comment. `terraform validat
 
 1. `FAIL_QUERIES[appserved]='stage:"app_ghcr_served"'` (**bare**).
 2. Cardinality floor `!= 4` → `!= 5` — condition **and** message.
-3. **The liveness floor**, after the `FALLBACKS` exit, before/beside the sample arm: guard `APP_ZOT` as a string **before** any arithmetic (`:151` returns `TRANSIENT`), then `(( APP_ZOT < MIN_SAMPLE ))` → `exit 1`.
-4. **The C1 blocker arm**, immediately before the final PASS → `exit 1` FAIL(blocked).
-5. `secrets=` in the header directive gains `GH_TOKEN`.
-6. Header: the **5-of-7** ratio (C3), the 7th path, the C4/#6437 residuals. Sweep 4→5 prose.
-7. `bash -n` + `shellcheck` if available.
+3. **Declare the new knob** beside `MIN_SAMPLE` (`:108`): `MIN_BOOTS="${ZOT_SOAK_MIN_BOOTS:-1}"`, validated with the same `^[1-9][0-9]*$` guard as `:116` (an unvalidated knob is the vacuous-pass hole that guard exists to close). **It is a NEW knob — do not reuse `MIN_SAMPLE`** (see the Overview callout: `MIN_SAMPLE`=3 counts rolling-deploy pulls; `count(app_zot)` counts fresh boots, of which there have been 9 *ever* → a 3-floor is a permanently unpassable wall).
+4. **The liveness floor**, after the `FALLBACKS` exit, before/beside the sample arm: guard `APP_ZOT` as a string **before** any arithmetic (`:151` returns `TRANSIENT`), then `(( APP_ZOT < MIN_BOOTS ))` → `exit 1`.
+5. **The C1 blocker arm**, immediately before the final PASS → `exit 1` FAIL(blocked).
+6. `secrets=` in the header directive gains `GH_TOKEN`.
+7. Header: the **5-of-7** ratio (C3), the 7th path, the C4/#6437 residuals. Sweep 4→5 prose.
+8. `bash -n` + `shellcheck` if available.
 
 ### Phase 6 — GREEN + the follow-through probe
 
@@ -458,7 +459,8 @@ Add the 5th `tagged_event` + update the `:1334-1335` comment. `terraform validat
 4. **AC4 — the op contract holds at 5.** `bun test apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` passes with `alarm.size === 5` and `soakFailQueries().size === 5`.
 5. **AC5 — the new query is BARE (the prefix trap).** `soakQueryFor("app_ghcr_served") === 'stage:"app_ghcr_served"'`, asserted in the test. Prefixing matches zero events forever.
 6. **AC6 — the runtime floor moved in lockstep.** `grep -c '${#FAIL_QUERIES\[@\]} != 5'` == 1 **and** `grep -c '!= 4'` == 0. (CI parses source; the sweeper executes — this gap is the bug class this issue is about.)
-7. **AC7 — the arms return the right codes.** A shell stub harness overriding `sentry_count` asserts: dark beacon (`app_zot=0`, no fallbacks) → **`exit 1`** (FAIL, *never* 0, *never* 2); `app_zot >= MIN_SAMPLE` + D3 issue OPEN → **`exit 1`** FAIL(blocked); `app_zot >= MIN_SAMPLE` + blocker CLOSED + sample OK → `exit 0`.
+7. **AC7 — the arms return the right codes.** A shell stub harness overriding `sentry_count` asserts: dark beacon (`app_zot=0`, no fallbacks) → **`exit 1`** (FAIL, *never* 0, *never* 2); `app_zot >= MIN_BOOTS` + D3 issue OPEN → **`exit 1`** FAIL(blocked); `app_zot >= MIN_BOOTS` + blocker CLOSED + sample OK → `exit 0`.
+7b. **AC7b — the liveness floor is a gate, not a wall.** `MIN_BOOTS` is its own knob defaulting to **1**: `grep -c 'MIN_BOOTS="${ZOT_SOAK_MIN_BOOTS:-1}"'` == 1, and the floor's comparison names `MIN_BOOTS`, **not** `MIN_SAMPLE` (`grep -c 'APP_ZOT < MIN_SAMPLE'` == 0). A 3-floor on fresh-boot count — 9 such events *ever* — is `exit 1` daily forever, and a gate that structurally cannot pass gets bypassed. The knob is validated `^[1-9][0-9]*$` (an unvalidated knob is a vacuous-pass hole). **Distinct from AC8:** the pre-existing *sample* arm keeps `MIN_SAMPLE`.
 8. **AC8 — the insufficient-sample arm keeps `exit 1`.** `grep -c 'FAIL(insufficient-sample)'` == 1, arm still `exit 1` — the only detector for the #6437 Sentry-dark mode. **Do not "fix" it to TRANSIENT.**
 9. **AC9 — no arithmetic on an unguarded count.** Every `sentry_count` result is string-guarded (`=~ ^[0-9]+$`) **before** any `(( ))` / `$(( ))` use — `:151` returns the bare word `TRANSIENT`, which arithmetic silently coerces to **0** (the hazard `:109-115` documents). Verify by reading each new call site.
 10. **AC10 — the D3 blocker is tracked AND enforced.** The issue exists with `priority/p1-high`, is linked from #6122, **and its number appears in the soak's C1 arm** (`grep -c '<N>' scripts/followthroughs/zot-soak-6122.sh` ≥ 1). A deferral without a tracking issue is invisible; a known-fatal path without an exit-code gate is prose.
@@ -491,7 +493,7 @@ Add the 5th `tagged_event` + update the `:1334-1335` comment. `terraform validat
 
 | Approach | Why not |
 |---|---|
-| **`accounted == expected ⇒ TRANSIENT on shortfall`** (the issue's literal wording) | Degenerate four ways; strictly dominated by the `MIN_SAMPLE` floor, which has a *better* exit code and is saturation-immune. See `## Reversed During Planning`. **Surfaced as a User-Challenge.** |
+| **`accounted == expected ⇒ TRANSIENT on shortfall`** (the issue's literal wording) | Degenerate four ways; strictly dominated by the `MIN_BOOTS` floor, which has a *better* exit code and is saturation-immune. See `## Reversed During Planning`. **Surfaced as a User-Challenge.** |
 | **Gate the emit on `[ -n "$ZURL" ]`** to avoid pre-cutover pages | Premise false — ZURL is already set (3 proofs, incl. `ADR-096:139-145`). Always-open ⇒ protects nothing while an AC certifies it does; and it would asymmetrically gate a numerator against its denominator. |
 | **Prefix the boot emit** with `feature`/`op`/`registry` | Breaks a deliberate, live-proven asymmetry; changes `_emit`'s schema (shared with the fatal path); cannot fit the byte budget. → **D2** |
 | **Sum the boot query into `ZOT_WEB`** | Dead (the floor subsumes it), a false-PASS route (dark beacon + rolling deploys ⇒ PASS), and unsound (`TRANSIENT` → 0). → **D2** |
