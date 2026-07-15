@@ -140,6 +140,13 @@ export function WorkstreamBoard() {
   }, [mutate]);
 
   const refreshFailed = error != null && data != null;
+  // First-load degrade (502 before any data): the board shows <ErrorCard>. Guard
+  // the TOOLBAR New-Issue button (the only create trigger rendered in this state)
+  // so an optimistic create can't flip `data` non-null and resurrect the false
+  // <EmptyState> when its POST then fails against the same cold backend (rollback
+  // → { issues: [] }). The EmptyState button needs no guard — it only renders
+  // when `data != null`, where `firstLoadFailed` is definitionally false.
+  const firstLoadFailed = error != null && data == null;
 
   const resetFilters = useCallback(() => {
     setFilters(emptyFilters());
@@ -527,7 +534,7 @@ export function WorkstreamBoard() {
           </button>
           <GoldButton
             onClick={() => setNewOpen(true)}
-            disabled={readOnly}
+            disabled={readOnly || firstLoadFailed}
             data-tour-id="action:new-issue"
           >
             + New Issue

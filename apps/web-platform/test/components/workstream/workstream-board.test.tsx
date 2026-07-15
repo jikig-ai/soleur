@@ -544,4 +544,28 @@ describe("WorkstreamBoard", () => {
       ).toBeGreaterThan(0),
     );
   });
+
+  // AC7 — a degraded first-load (502, no prior data) shows the ErrorCard and
+  // must NOT let a New-Issue create resurrect the false EmptyState: the toolbar
+  // "+ New Issue" button is disabled while `error && !data`. (FINDING 2)
+  it("disables + New Issue on a first-load degrade so it can't resurrect EmptyState", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: false, json: async () => ({}) }) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+
+    // First-load failure → ErrorCard (never a false EmptyState).
+    await waitFor(() =>
+      expect(screen.getByText(/failed to load the board/i)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/no issues to display/i)).toBeNull();
+
+    // The only New-Issue trigger on screen (toolbar) is disabled, so an
+    // optimistic create can't flip `data` non-null and re-render EmptyState.
+    const newIssueBtn = screen.getByRole("button", {
+      name: /new issue/i,
+    }) as HTMLButtonElement;
+    expect(newIssueBtn.disabled).toBe(true);
+  });
 });

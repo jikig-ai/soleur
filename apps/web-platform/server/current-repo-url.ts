@@ -25,11 +25,18 @@ import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
  *
  * Returns `null` when the workspace has no repo OR on transient error —
  * callers treat both identically (disconnect semantics fail-closed).
+ *
+ * DEGRADE-AWARE variant: {@link readCurrentRepoUrlResult} exposes WHY the url is
+ * null (`degraded`) so a caller that must distinguish an honest "no repo" from a
+ * transient resolve failure (the Workstream board — a degraded read must 502,
+ * never render a false empty board) can do so. `getCurrentRepoUrl` stays the
+ * thin `.url` wrapper — its ~11 existing consumers, none of which inspect the
+ * null reason, are unchanged.
  */
-export async function getCurrentRepoUrl(
+export async function readCurrentRepoUrlResult(
   userId: string,
   workspaceId?: string | null,
-): Promise<string | null> {
+): Promise<{ url: string | null; degraded: boolean }> {
   let tenant;
   try {
     tenant = await getFreshTenantClient(userId);
@@ -41,13 +48,14 @@ export async function getCurrentRepoUrl(
       // ownership-mismatch false-positive flood (the WS resume handler reads
       // this and used to misread the resulting null as a repo-scope mismatch).
       // The genuine query-error path below stays at error level. (#5290 /
-      // ADR-059 false-positive remediation.)
+      // ADR-059 false-positive remediation.) Keep the WARN-vs-ERROR split.
       warnSilentFallback(err, {
         feature: "repo-scope",
         op: "read-current-repo-url.tenant-mint",
         extra: { userId },
       });
-      return null;
+      // Transient — DEGRADED, not "no repo".
+      return { url: null, degraded: true };
     }
     throw err;
   }
@@ -67,7 +75,8 @@ export async function getCurrentRepoUrl(
       op: "read-current-repo-url",
       extra: { userId, workspaceId: targetWorkspaceId },
     });
-    return null;
+    // Transient query error — DEGRADED, not "no repo".
+    return { url: null, degraded: true };
   }
 
   // Normalize on return — the choke point for every server consumer
@@ -76,7 +85,18 @@ export async function getCurrentRepoUrl(
   // migration couldn't normalize.
   const raw = (data?.repo_url as string | null | undefined) ?? null;
   const normalized = normalizeRepoUrl(raw);
-  return normalized.length > 0 ? normalized : null;
+  // A null/empty repo_url is an HONEST empty (no repo connected) — NOT degraded.
+  return {
+    url: normalized.length > 0 ? normalized : null,
+    degraded: false,
+  };
+}
+
+export async function getCurrentRepoUrl(
+  userId: string,
+  workspaceId?: string | null,
+): Promise<string | null> {
+  return (await readCurrentRepoUrlResult(userId, workspaceId)).url;
 }
 
 /**
