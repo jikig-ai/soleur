@@ -3,6 +3,19 @@ name: plan
 description: "This skill should be used when transforming feature descriptions into well-structured project plans following conventions."
 ---
 
+<!-- plan-anti-bypass-protocol:start -->
+## Anti-bypass protocol (load-bearing — especially Grok Build)
+
+You are the **planning orchestrator**. Whether entered from `/brainstorm`, `/one-shot` Step 1, or direct `/plan`:
+
+- **FORBIDDEN:** Implementing product code (Write/Edit/Shell) before the plan artifact and tasks are written.
+- **FORBIDDEN:** Ending after saving `plans/` + `tasks.md` without invoking `/work` — the plan is a checkpoint, not a deliverable.
+- **REQUIRED (Grok Build):** Invoke `/work <plan-path>` (or `/deepen-plan` when the plan requests it) via slash command — never substitute ad-hoc implementation.
+- **Harness adapter:** `plugins/soleur/lib/harness.ts` — Grok uses `/work`, `/deepen-plan`; Claude uses Skill tool.
+
+See `plugins/soleur/lib/workflow-fidelity.ts` (`HANDOFF_SKILLS`, `mandatorySuccessors('plan')`).
+<!-- plan-anti-bypass-protocol:end -->
+
 # Create a plan for a new feature or bug fix
 
 ## Introduction

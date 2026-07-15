@@ -217,6 +217,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_compound_promote \
             -target=sentry_cron_monitor.scheduled_stale_deferred_scope_outs \
             -target=sentry_cron_monitor.scheduled_inngest_cron_watchdog \
+            -target=sentry_cron_monitor.scheduled_inngest_health \
             -target=sentry_cron_monitor.scheduled_bug_fixer \
             -target=sentry_cron_monitor.scheduled_content_generator \
             -target=sentry_cron_monitor.scheduled_ux_audit \
@@ -240,6 +241,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_architecture_diagram_sync \
             -target=sentry_cron_monitor.scheduled_weekly_analytics \
             -target=sentry_cron_monitor.scheduled_nag_4216_readiness \
+            -target=sentry_cron_monitor.zot_restart_loop_alarm \
             -target=sentry_uptime_monitor.soleur_apex \
             -target=sentry_uptime_monitor.soleur_www \
             -target=sentry_uptime_monitor.soleur_changelog_deep \
@@ -261,6 +263,7 @@ jobs:
             -target=sentry_issue_alert.github_webhook_founder_ambiguous \
             -target=sentry_issue_alert.inbox_action_required_notify_failure \
             -target=sentry_issue_alert.zot_mirror_fallback_rate \
+            -target=sentry_issue_alert.web_terminal_boot_fatal \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then

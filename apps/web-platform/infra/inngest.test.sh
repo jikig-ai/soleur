@@ -396,6 +396,50 @@ RESTART_LINE=$(grep -nE '^systemctl restart inngest-server.service' "$BOOTSTRAP_
 assert "bootstrap runs inngest-redis-bootstrap.sh (REDIS_READY probe) BEFORE the inngest-server restart" \
   "[[ -n '$REDIS_RUN_LINE' && -n '$RESTART_LINE' && '$REDIS_RUN_LINE' -lt '$RESTART_LINE' ]]"
 
+# --- #6090: webhook.service ReadWritePaths /var/lib/inngest must be `-`-optional ---
+# On web_colocate_inngest=false (default since the co-located-inngest gate), the
+# inngest-bootstrap runcmd block that CREATES /var/lib/inngest is gated off, so a
+# MANDATORY RWP token makes systemd fail webhook.service with 226/NAMESPACE on a
+# fresh host (:9000 never binds -> ok_peer_fanout_degraded -> web-2 undeployed).
+# The `-` prefix marks the dir optional (systemd ignores it if absent), mirroring
+# the -/var/lib/vector precedent (PR #4257). Both lockstep copies must match:
+#   - cloud-init.yml (baked at first boot)
+#   - webhook.service (base64-delivered to running web-1 via deploy_pipeline_fix).
+echo ""
+echo "--- #6090: webhook RWP /var/lib/inngest -optional (both lockstep copies) ---"
+CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
+WEBHOOK_SERVICE="$SCRIPT_DIR/webhook.service"
+assert "cloud-init.yml + webhook.service exist" "[[ -f '$CLOUD_INIT' && -f '$WEBHOOK_SERVICE' ]]"
+
+# Exactly ONE ReadWritePaths= line per file — makes the head -1 extraction below safe.
+# systemd ACCUMULATES RWP directives, so a future 2nd (mandatory) `/var/lib/inngest` line
+# would slip past the token asserts and silently re-open the 226/NAMESPACE bug; a REMOVED
+# line would abort under set -e/pipefail instead of a labeled FAIL. (#6363 review: security
+# + architecture + code-quality converged.)
+# shellcheck disable=SC2034  # consumed via assert's eval, below
+CI_RWP_COUNT="$(grep -cE '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" || true)"
+# shellcheck disable=SC2034
+WS_RWP_COUNT="$(grep -cE '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" || true)"
+assert "cloud-init.yml has exactly one ReadWritePaths= line (head -1 safety)" "[[ \"\$CI_RWP_COUNT\" -eq 1 ]]"
+assert "webhook.service has exactly one ReadWritePaths= line (head -1 safety)" "[[ \"\$WS_RWP_COUNT\" -eq 1 ]]"
+
+# CI_RWP/WS_RWP are consumed inside assert's `eval "$condition"` (SC can't see through eval).
+# shellcheck disable=SC2034
+CI_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
+# shellcheck disable=SC2034
+WS_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
+
+assert "cloud-init RWP marks /var/lib/inngest optional (-prefix)" \
+  "grep -qE -- '(^|[[:space:]])-/var/lib/inngest([[:space:]]|\$)' <<< \"\$CI_RWP\""
+assert "cloud-init RWP has NO mandatory (bare) /var/lib/inngest" \
+  "! grep -qE -- '(^|[[:space:]])/var/lib/inngest([[:space:]]|\$)' <<< \"\$CI_RWP\""
+assert "webhook.service RWP marks /var/lib/inngest optional (-prefix)" \
+  "grep -qE -- '(^|[[:space:]])-/var/lib/inngest([[:space:]]|\$)' <<< \"\$WS_RWP\""
+assert "webhook.service RWP has NO mandatory (bare) /var/lib/inngest" \
+  "! grep -qE -- '(^|[[:space:]])/var/lib/inngest([[:space:]]|\$)' <<< \"\$WS_RWP\""
+assert "RWP token lists byte-identical across both lockstep copies" \
+  "[[ -n \"\$CI_RWP\" && \"\$CI_RWP\" == \"\$WS_RWP\" ]]"
+
 # --- `terraform fmt -check` for HCL hygiene ---
 echo ""
 echo "--- terraform fmt -check ---"

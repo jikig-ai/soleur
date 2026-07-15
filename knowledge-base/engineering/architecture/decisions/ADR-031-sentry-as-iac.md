@@ -271,6 +271,23 @@ observability layer** — `observability-coverage-reviewer` must not accept it a
 `failure_modes:` layer citation. Runbook
 `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`.
 
+**Amendment (2026-07-13, #6374) — GHA-workflow-heartbeat-slug parity guard extends the
+`-target` allowlist invariant.** The existing Inngest-cron parity guard
+(`sentry-monitor-iac-parity.test.ts`) was one-way (`server/inngest/functions/` slugs →
+`cron-monitors.tf`) and explicitly EXCLUDED GHA-workflow heartbeat slugs. The #6374 P1
+outage (a `[ci/inngest-down]` alarm ran ~14h unseen) root-caused to exactly that gap: the
+`scheduled-inngest-health.yml` workflow POSTed a Sentry heartbeat to the slug
+`scheduled-inngest-health`, but no `sentry_cron_monitor` resource carried that `name`, so
+Sentry silently dropped the error check-in and the operator was never paged. The parity test
+now ALSO asserts every `.github/workflows/*.yml` `monitor-slug:` has BOTH (a) a matching
+`sentry_cron_monitor.name` in `cron-monitors.tf` AND (b) that resource in the
+`apply-sentry-infra.yml` `-target=` allowlist — because the auto-apply builds a SAVED plan
+against an explicit `-target` set (2026-05-29 amendment above), a monitor absent from that
+list is declared-but-never-applied (green CI, dark alarm). Guarding only clause (a) would
+pass while the monitor never materialised; both clauses are load-bearing. This makes
+"heartbeat into the void" and "applied nowhere" structurally impossible for GHA workflows,
+mirroring the Inngest-cron guard.
+
 ## Consequences
 
 ### Positive

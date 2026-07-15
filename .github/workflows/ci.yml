@@ -553,6 +553,28 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
+  # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
+  grok-fidelity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Install Grok CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL https://x.ai/cli/install.sh | bash
+          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          grok --version
+
+      - name: Grok fidelity gate (inspect contract + golden-path eval)
+        run: bash plugins/soleur/scripts/grok-fidelity-gate.sh
+
   # Synthetic aggregator.
   #
   # LOAD-BEARING SUB-VALUE — this job is NOT redundant with

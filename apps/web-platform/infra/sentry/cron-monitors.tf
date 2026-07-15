@@ -589,6 +589,39 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
   timezone                = "UTC"
 }
 
+# #6374: GHA-fired via .github/workflows/scheduled-inngest-health.yml (on.schedule
+# '*/15 * * * *'). The EXTERNAL inngest health watchdog (#5542 crash-loop incident).
+# This monitor was MISSING — the workflow's error heartbeat (its final step, POSTing
+# ?status=error to the `scheduled-inngest-health` slug) had NO sentry_cron_monitor
+# resource, so Sentry silently dropped the check-ins and the P1 [ci/inngest-down] alarm
+# ran ~14h unseen (the operator was never paged). This resource closes that delivery
+# gap: with failure_issue_threshold=1, a SINGLE ?status=error OR a missed check-in opens
+# a Sentry monitor-failure issue → pages the operator within one cadence (~15-30 min).
+#
+# GHA-fired (NOT Inngest — a self-hosted inngest cron cannot detect inngest being down;
+# that blind spot is the exact #5542 failure this watchdog closes; see the workflow's
+# gate-override header). checkin_margin_minutes = 15 == the `*/15` inter-fire gap BY
+# DESIGN (the zot_restart_loop_alarm precedent): margin == interval MAXIMIZES jitter
+# tolerance (a run up to one interval late still checks in — no false page on GHA
+# `schedule:` jitter), while a genuinely dark alarm (every run skipped) still pages once
+# the window closes at the next expected fire. inngest-down is a brand-survival outage,
+# so the margin is kept tight to the cadence rather than widened. max_runtime_minutes = 8
+# matches the job's `timeout-minutes: 8`. Slug MUST match the `monitor-slug` in the
+# workflow's sentry-heartbeat step (parity-asserted by
+# apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts, which also
+# asserts this resource is in the apply-sentry-infra.yml -target= allowlist).
+resource "sentry_cron_monitor" "scheduled_inngest_health" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-inngest-health"
+  schedule                = { crontab = "*/15 * * * *" }
+  checkin_margin_minutes  = 15
+  max_runtime_minutes     = 8
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # 2026-06-02: Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts`.
 # Proactive prod Disk-IO early-warning monitor. A MISSED check-in means the
@@ -937,6 +970,38 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
   project                 = data.sentry_project.web_platform.slug
   name                    = "cron-github-cidr-refresh"
   schedule                = { crontab = "41 6 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# #6291: GHA-fired via .github/workflows/scheduled-zot-restart-loop.yml (on.schedule
+# '*/30 * * * *'). Self-liveness for the standing zot restart-loop recurrence alarm — a MISSED
+# check-in means the alarm went dark (workflow disabled / GHA outage), a ?status=error heartbeat
+# means the run's checker returned TRANSIENT (a persistent Better Stack probe fault). GREEN/FIRE/
+# PRODUCER-SILENT all check in ok:true (they are successful evaluations — a FIRE's surface is the
+# [ci/zot-restart-loop] issue, not this monitor). GHA-fired (NOT Inngest — see the workflow's
+# gate-override header: the alarm is a bash pipeline in I7's uncontained class, and the registry is
+# a separate host so an Inngest cron on the watched fleet would be a dark-alarm risk).
+#
+# checkin_margin_minutes = 30 is PINNED (not a cohort default) to absorb GHA `schedule:` jitter: a
+# tight margin on a jittery GHA cron false-paged scheduled-agent-native-audit on 2026-06-15 (the run
+# succeeded and filed #5318 at 09:09 UTC; only its heartbeat was late). This monitor posts a SINGLE
+# end-of-run heartbeat within ~1-2 min of the checker finishing (a small bash probe, not a claude-eval
+# spawn). margin (30) == the 30-min inter-fire gap BY DESIGN: this MAXIMIZES jitter tolerance (a run
+# up to 30 min late still checks in — no false page), and a genuinely dead alarm (every run skipped)
+# still pages once the margin window closes at the next expected fire (~30-60 min). A SHORTER margin
+# (< interval) would trade this jitter tolerance back for the 2026-06-15 false-page class — the wrong
+# trade for a trust-critical standing alarm. max_runtime_minutes = 10 mirrors the
+# GHA-fired small-cron cohort (scheduled_realtime_probe). Slug MUST match MONITOR_SLUG in the
+# workflow's sentry-heartbeat step (scheduled-zot-restart-loop).
+resource "sentry_cron_monitor" "zot_restart_loop_alarm" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-zot-restart-loop"
+  schedule                = { crontab = "*/30 * * * *" }
   checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
   failure_issue_threshold = 1

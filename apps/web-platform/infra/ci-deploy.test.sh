@@ -92,6 +92,37 @@ MOCK
 create_mock_systemctl() {
   cat > "$1/systemctl" << 'MOCK'
 #!/bin/bash
+# Verb-aware systemctl mock (#6178). The quiesce/enable verify helpers issue
+# read-only `is-active`/`is-enabled` queries whose OUTPUT + exit code drive the
+# quiesce/enable verdict, so a blanket exit-0 mock would mask them. Per-verb fail
+# toggles let a test drive a TOLERATED stop/disable non-zero vs a GENUINE failure.
+verb="$1"
+case "$verb" in
+  is-active)
+    # `is-active [--quiet] <unit>`. Default: inactive (systemd exit 3). A test that
+    # needs "unit still ACTIVE despite /health down" (arch P2-3) arms MOCK_SYSTEMCTL_ACTIVE=1.
+    if [[ "${MOCK_SYSTEMCTL_ACTIVE:-}" == "1" ]]; then echo active; exit 0; fi
+    echo inactive; exit 3
+    ;;
+  is-enabled)
+    # Echo the unit's enabled-state; exit 0 iff enabled (systemd convention).
+    # Default "disabled" (a clean quiesced unit). Tests override via
+    # MOCK_SYSTEMCTL_ENABLED_STATE (e.g. static | enabled).
+    state="${MOCK_SYSTEMCTL_ENABLED_STATE:-disabled}"
+    echo "$state"
+    case "$state" in enabled|enabled-runtime) exit 0 ;; *) exit 1 ;; esac
+    ;;
+  show)
+    # `show -p ExecStart …` — no output (the durable-backend branch stays skipped
+    # in tests, matching pre-#6178 blanket-mock behavior).
+    exit 0
+    ;;
+  stop)    [[ "${MOCK_SYSTEMCTL_STOP_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+  disable) [[ "${MOCK_SYSTEMCTL_DISABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+  enable)  [[ "${MOCK_SYSTEMCTL_ENABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+  start)   [[ "${MOCK_SYSTEMCTL_START_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+esac
+# restart + any other verb honor the legacy blanket fail toggle (existing tests).
 if [[ "${MOCK_SYSTEMCTL_FAIL:-}" == "1" ]]; then
   exit 1
 fi
@@ -226,6 +257,29 @@ if [[ "${1:-}" == "inspect" ]]; then
   done
 fi
 
+# §1A (#6090 recurrence): docker login handler. Records each authenticated-login
+# attempt's USER (never the token) to MOCK_LOGIN_ARGS_FILE so a test can assert the
+# ghcr_prelude re-fetch-on-FAILURE path retried with the Doppler credential. Fails the
+# login iff the --password-stdin token equals MOCK_GHCR_LOGIN_FAIL_TOKEN (simulates a
+# present-but-STALE baked GHCR token → registry 401), else succeeds. Runs BEFORE the
+# mode case so it works in every mode; default (no fail-token armed) = login ok, matching
+# the pre-existing fall-through behavior every legacy login relied on.
+if [[ "${1:-}" == "login" ]]; then
+  _luser=""; _stdin=0; _prev=""
+  for _a in "$@"; do
+    [[ "$_a" == "--password-stdin" ]] && _stdin=1
+    [[ "$_prev" == "-u" ]] && _luser="$_a"
+    _prev="$_a"
+  done
+  _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$(cat)"
+  [[ -n "${MOCK_LOGIN_ARGS_FILE:-}" ]] && printf 'LOGIN:%s\n' "$_luser" >> "$MOCK_LOGIN_ARGS_FILE"
+  if [[ -n "${MOCK_GHCR_LOGIN_FAIL_TOKEN:-}" && "$_ltok" == "${MOCK_GHCR_LOGIN_FAIL_TOKEN}" ]]; then
+    echo "denied: authentication required" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
 # #6122: capture docker pull targets (MOCK_PULL_ARGS_FILE) so a test can assert WHICH
 # registry was pulled, and simulate a zot-only pull failure (MOCK_ZOT_PULL_FAIL) to
 # exercise the atomic GHCR fallback. Runs BEFORE the mode case so it works in default
@@ -236,6 +290,25 @@ if [[ "${1:-}" == "pull" ]]; then
   if [[ "${MOCK_ZOT_PULL_FAIL:-}" == "1" && "$_pref" == 10.0.1.30:5000/* ]]; then
     echo "manifest unknown" >&2
     exit 1
+  fi
+  # #6400: simulate a login-ok/pull-DENY GHCR credential so the pull-site recovery
+  # (_ghcr_pull_or_recover) can be exercised. MOCK_GHCR_PULL_DENY_ALWAYS=1 denies every
+  # GHCR pull (recovery-miss / fail-open scenario); MOCK_GHCR_PULL_DENY_COUNT_FILE holds
+  # an integer countdown decremented per GHCR pull — deny while >0, then succeed (the
+  # login-ok/pull-deny→recovered scenario: count=1 ⇒ first pull denies, retry succeeds).
+  if [[ "$_pref" == ghcr.io/* ]]; then
+    if [[ "${MOCK_GHCR_PULL_DENY_ALWAYS:-}" == "1" ]]; then
+      echo "denied: requested access to the resource is denied" >&2
+      exit 1
+    fi
+    if [[ -n "${MOCK_GHCR_PULL_DENY_COUNT_FILE:-}" && -f "${MOCK_GHCR_PULL_DENY_COUNT_FILE}" ]]; then
+      _dn=$(cat "$MOCK_GHCR_PULL_DENY_COUNT_FILE" 2>/dev/null || echo 0)
+      if [[ "$_dn" =~ ^[0-9]+$ ]] && (( _dn > 0 )); then
+        echo $(( _dn - 1 )) > "$MOCK_GHCR_PULL_DENY_COUNT_FILE"
+        echo "denied: requested access to the resource is denied" >&2
+        exit 1
+      fi
+    fi
   fi
 fi
 
@@ -357,6 +430,18 @@ for ((i=0; i<${#ARGS[@]}; i++)); do
   esac
 done
 
+# #6400: capture Sentry store POST bodies so a test can assert the emitted event
+# shape (op tag, level, recovery_stage) for pull_failure_event / pull_auth_recovery_event.
+# The ci-deploy Sentry POST is `curl … -X POST https://…/store/ … -d "$payload"`.
+if [[ "$URL" == *"/store/"* && -n "${MOCK_SENTRY_CAPTURE_FILE:-}" ]]; then
+  _pl=""
+  for ((j=0; j<${#ARGS[@]}; j++)); do
+    [[ "${ARGS[$j]}" == "-d" ]] && _pl="${ARGS[$((j+1))]}"
+  done
+  printf '%s\n' "$_pl" >> "$MOCK_SENTRY_CAPTURE_FILE"
+  exit 0
+fi
+
 # Legacy /health failure path used by existing rollback tests.
 if [[ "${MOCK_CURL_CANARY_FAIL:-}" == "1" ]] && [[ "$URL" == *"localhost:3001/health"* ]]; then
   exit 1
@@ -385,6 +470,18 @@ case "$URL" in
     exit 0
     ;;
   *"8288/health"*)
+    # Counter-driven serve schedule (#6178 quiesce pessimism): serve 200 ONLY on the
+    # probe numbers in MOCK_CURL_INNGEST_HEALTH_SERVE_ON (csv), fail otherwise. Lets a
+    # test drive "fail on probe 1, serve on probe 2" to prove the quiesce verify keeps
+    # probing (all-probes-must-fail) instead of early-returning quiesced on probe 1.
+    if [[ -n "${MOCK_CURL_INNGEST_HEALTH_COUNTER:-}" ]]; then
+      _n=$(cat "$MOCK_CURL_INNGEST_HEALTH_COUNTER" 2>/dev/null || echo 0); _n=$((_n + 1))
+      printf '%s' "$_n" > "$MOCK_CURL_INNGEST_HEALTH_COUNTER"
+      if [[ ",${MOCK_CURL_INNGEST_HEALTH_SERVE_ON:-}," == *",$_n,"* ]]; then
+        write_body '{"status":200,"message":"OK"}'; exit 0
+      fi
+      exit 1
+    fi
     if [[ "${MOCK_CURL_INNGEST_HEALTH_FAIL:-}" == "1" ]]; then
       exit 1
     fi
@@ -950,6 +1047,30 @@ assert_pull_failure() {
 }
 
 assert_pull_failure
+
+# #6396: pull_failure_event carries tags.host_id so a deploy-path `image pull failed` is host-
+# attributable from Sentry alone (PR #6395 had to cross-reference the release aggregate JSON to
+# pin it to web-2). Assert the wiring at the source, scoped to the pull_failure_event body: the
+# payload builder must thread the readonly HOST_ID global (empty-safe) into the tags object.
+# Runtime HOST_ID resolution is unit-tested (host-identity.test.ts) and its docker-run injection
+# is proven by assert_soleur_host_id above; this guards the ONE remaining seam — host_id reaching
+# the pull_failure_event Sentry payload. Body-scoped so an unrelated `host_id` (e.g. the other
+# Sentry emits, which do NOT tag host_id) cannot satisfy it vacuously.
+assert_pull_failure_host_id() {
+  TOTAL=$((TOTAL + 1))
+  local body
+  body="$(awk '/^pull_failure_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
+  if printf '%s' "$body" | grep -qE -- '--arg h "\$\{HOST_ID:-\}"' \
+     && printf '%s' "$body" | grep -qE 'host_id: \$h'; then
+    PASS=$((PASS + 1))
+    echo "  PASS: pull_failure_event threads --arg h \"\${HOST_ID:-}\" into tags.host_id (#6396)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: pull_failure_event must pass --arg h \"\${HOST_ID:-}\" AND put host_id: \$h in tags (#6396)"
+  fi
+}
+
+assert_pull_failure_host_id
 
 # Canary crash on start: docker run fails for canary
 assert_canary_crash() {
@@ -2391,6 +2512,168 @@ assert_state_contains "deploy inngest restart latest rejected as image_mismatch"
   "image_mismatch" "1" \
   "deploy inngest restart latest"
 
+# --- Quiesce / enable action tests (#6178 — no-SSH web-host scheduler quiesce) ---
+echo ""
+echo "--- Quiesce / enable action (#6178) ---"
+
+# AC-Q1: quiesce inngest succeeds → not-serving (health fails) AND not-enabled (default
+# is-enabled=disabled) → reason quiesced, exit 0. The verify is the gate.
+assert_state_contains "quiesce inngest succeeds (not-serving + not-enabled)" \
+  "quiesced" "0" \
+  "quiesce inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
+
+# AC-Q2: already-stopped idempotency — the sudo stop exits non-zero (absent/already-down)
+# but is TOLERATED; the verify (health down, unit disabled) still declares quiesced.
+assert_state_contains "quiesce tolerates an already-stopped/absent unit (stop non-zero)" \
+  "quiesced" "0" \
+  "quiesce inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_STOP_FAIL=1"
+
+# AC-Q3: BENIGN disable tolerance — disable exits non-zero on a unit with NO [Install]
+# section (is-enabled → static). Tolerated → quiesced, exit 0.
+assert_state_contains "quiesce tolerates a benign disable non-zero (is-enabled=static)" \
+  "quiesced" "0" \
+  "quiesce inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_DISABLE_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=static"
+
+# AC-Q4: GENUINE disable failure fail-closed (data-integrity P1-A) — disable fails AND
+# is-enabled still reports `enabled` (a unit WITH an [Install] section) → the serving-only
+# verify would MISS this; the enabled-state assertion catches it → inngest_still_enabled, exit 1.
+assert_state_contains "quiesce fails closed when the unit stays enabled (inngest_still_enabled)" \
+  "inngest_still_enabled" "1" \
+  "quiesce inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_DISABLE_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# AC-Q5: still-serving fail-closed — the default mock serves /health 200 → the goal
+# state (not-serving) is unmet → inngest_still_serving, exit 1.
+assert_state_contains "quiesce fails closed when inngest still serves (inngest_still_serving)" \
+  "inngest_still_serving" "1" \
+  "quiesce inngest _ _"
+
+# AC-Q6: unit still ACTIVE despite /health down (arch P2-3) — a scheduler executing
+# queued jobs can outlive /health; the is-active assertion catches it → inngest_still_serving.
+assert_state_contains "quiesce fails closed when /health is down but the unit is still active" \
+  "inngest_still_serving" "1" \
+  "quiesce inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_ACTIVE=1"
+
+# AC-Q7: non-inngest component rejected (mirror component_not_restartable).
+assert_state_contains "quiesce web-platform rejected (component_not_quiescible)" \
+  "component_not_quiescible" "1" \
+  "quiesce web-platform _ _"
+
+# AC-E1: enable inngest = enable + start + verify-serving-and-enabled → enabled, exit 0.
+# Default mock: /health 200 (serving); is-enabled=enabled (re-enable confirmed).
+assert_state_contains "enable inngest succeeds (enable + start + verify serving+enabled)" \
+  "enabled" "0" \
+  "enable inngest _ _" \
+  "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# AC-E2: enable is idempotent — an already-enabled unit (enable exits 0) still verifies → enabled.
+assert_state_contains "enable is idempotent on an already-enabled unit" \
+  "enabled" "0" \
+  "enable inngest _ _" \
+  "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# AC-E3: start failure fail-closed → inngest_start_failed, exit 1.
+assert_state_contains "enable fails closed when start fails (inngest_start_failed)" \
+  "inngest_start_failed" "1" \
+  "enable inngest _ _" \
+  "export MOCK_SYSTEMCTL_START_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# AC-E4: enable failure fail-closed → inngest_enable_failed, exit 1.
+assert_state_contains "enable fails closed when enable fails (inngest_enable_failed)" \
+  "inngest_enable_failed" "1" \
+  "enable inngest _ _" \
+  "export MOCK_SYSTEMCTL_ENABLE_FAIL=1"
+
+# AC-E5: started but not serving (health fails) → inngest_reenable_unverified, exit 1.
+assert_state_contains "enable fails closed when serving is unverified (inngest_reenable_unverified)" \
+  "inngest_reenable_unverified" "1" \
+  "enable inngest _ _" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# AC-E6: served but unit not enabled after enable (is-enabled=disabled) → inngest_reenable_unverified.
+assert_state_contains "enable fails closed when the unit is not enabled afterward" \
+  "inngest_reenable_unverified" "1" \
+  "enable inngest _ _" \
+  "export MOCK_SYSTEMCTL_ENABLED_STATE=disabled"
+
+# AC-E7: non-inngest component rejected.
+assert_state_contains "enable web-platform rejected (component_not_enableable)" \
+  "component_not_enableable" "1" \
+  "enable web-platform _ _"
+
+# AC-Q8: PESSIMISTIC not-serving (all probes must fail) — a return-on-first-failure impl
+# would falsely read quiesced. Bespoke: use a REAL multi-count seq (the shared mock returns
+# only "1") so the verify loop runs >1 probe; health FAILS on probe 1 then SERVES on probe 2.
+# The correct all-probes-must-fail impl continues past the probe-1 failure, sees the probe-2
+# serve, and declares still-serving. A naive early-return-on-first-failure would wrongly
+# declare quiesced after probe 1.
+run_quiesce_pessimism() {
+  (
+    export SSH_ORIGINAL_COMMAND="quiesce inngest _ _"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$1"
+    create_base_mocks "$MOCK_DIR"
+    rm -f "$MOCK_DIR/seq"   # use the REAL multi-count seq, not the single-"1" mock
+    # Small probe budget so the real multi-iteration loop stays fast.
+    export QUIESCE_PROBE_ATTEMPTS=3 QUIESCE_PROBE_INTERVAL=0
+    # Health: fail on probe 1, serve on probe 2 (counter file).
+    export MOCK_CURL_INNGEST_HEALTH_COUNTER="$MOCK_DIR/hcount"
+    export MOCK_CURL_INNGEST_HEALTH_SERVE_ON="2"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    bash "$DEPLOY_SCRIPT" >/dev/null 2>&1
+  )
+}
+TOTAL=$((TOTAL + 1))
+PESS_STATE=$(mktemp)
+# shellcheck disable=SC2034  # PESS_RC captured only to swallow expected non-zero under set -e; asserted via state file
+run_quiesce_pessimism "$PESS_STATE" && PESS_RC=0 || PESS_RC=$?
+read_state_reason_and_exit "$PESS_STATE" PESS_REASON PESS_EXIT
+if [[ "$PESS_REASON" == "inngest_still_serving" && "$PESS_EXIT" == "1" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: quiesce verify is PESSIMISTIC (a serve on probe 2 blocks quiesced) — reason=$PESS_REASON"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: quiesce pessimism (expected inngest_still_serving/1; got $PESS_REASON/$PESS_EXIT)"
+  echo "        state: $(cat "$PESS_STATE")"
+fi
+rm -f "$PESS_STATE"
+
+# Wiring guard: `restart` STAYS PURE — it must NEVER fold in an enable/re-enable (a
+# post-cutover restart-inngest-server.yml on a web host would otherwise re-arm the
+# deliberately-disabled scheduler → double-fire; Premise #3 + security regression guard).
+TOTAL=$((TOTAL + 1))
+# Scope to the restart handler ONLY (it now precedes the quiesce/enable handlers, which
+# legitimately DO enable/disable). Range: the restart handler comment → the quiesce handler comment.
+RESTART_BLOCK=$(awk '/^# --- Restart action handler/,/^# --- Quiesce action handler/' "$DEPLOY_SCRIPT")
+# Non-vacuity guard: if either marker comment is renamed the awk range is empty and the
+# purity grep below passes for the WRONG reason. Prove the block was actually captured —
+# non-empty AND containing the restart handler's own `systemctl restart` — before trusting
+# the enable/disable-absence assertion.
+TOTAL=$((TOTAL + 1))
+if [[ -n "$RESTART_BLOCK" ]] && printf '%s\n' "$RESTART_BLOCK" | grep -qE 'systemctl restart'; then
+  PASS=$((PASS + 1))
+  echo "  PASS: restart-purity guard captured a non-empty block containing 'systemctl restart' (awk range not vacuous)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: restart-purity awk range captured empty/wrong block (marker renamed?) — the purity grep would pass vacuously"
+fi
+if ! printf '%s\n' "$RESTART_BLOCK" | grep -qE 'systemctl (enable|disable)'; then
+  PASS=$((PASS + 1))
+  echo "  PASS: restart handler stays pure (no enable/disable folded in) — #6178 regression guard"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: restart handler must NOT enable/disable inngest (re-arm footgun; Premise #3)"
+fi
+
 # Regression guard for #5062: the long-running foreground docker children
 # (prune/pull) MUST close the FD-200 advisory lock (`200>&-`) so an orphaned
 # child (bash SIGKILLed mid-`docker pull`, TERM trap never dispatched) cannot
@@ -2637,6 +2920,48 @@ if [[ "$DG_OK" -eq 1 ]]; then
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: client/server budget drift guard (#5145): $DG_WHY (health=$DG_HEALTH interval=$DG_INTERVAL cron=$DG_CRON stop=$DG_STOP MAX_POLLS=$DG_MAX_POLLS POLL_INTERVAL=$DG_POLL_INTERVAL left=$DG_LEFT right=$DG_RIGHT; files: ci-deploy.sh, inngest-bootstrap.sh, .github/workflows/restart-inngest-server.yml)"
+fi
+
+# #6178 quiesce-web poll drift guard (sibling of the #5145 restart guard): the
+# op=quiesce-web deploy-status poll window in cutover-inngest.yml must cover the host-side
+# quiesce worst case: verify_inngest_quiesced attempts × (interval + 5 per-probe curl tail)
+# + TimeoutStopSec (the systemd stop the webhook fires asynchronously can consume before the
+# host writes `quiesced`) + a webhook/flock/client-curl margin. Extracted BY SHAPE (not
+# pinned literals) — the distinct QMAX_POLLS/QPOLL_INTERVAL names in the quiesce-web arm keep
+# this grep unambiguous vs the other polls in that workflow.
+TOTAL=$((TOTAL + 1))
+CUTOVER_WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/cutover-inngest.yml"
+QDG_ATTEMPTS=$(grep -oE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
+QDG_INTERVAL=$(grep -oE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
+QDG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+QDG_MAX_POLLS=$(grep -oE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+QDG_POLL_INTERVAL=$(grep -oE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+# Exactly-one-assignment guards so a duplicate/zero match can't silently skew the inequality.
+QDG_ATTEMPTS_COUNT=$(grep -cE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" || true)
+QDG_INTERVAL_COUNT=$(grep -cE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" || true)
+QDG_MAX_POLLS_COUNT=$(grep -cE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" || true)
+QDG_POLL_INTERVAL_COUNT=$(grep -cE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" || true)
+QDG_STOP_COUNT=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -cE '^TimeoutStopSec=[0-9]+' || true)
+QDG_OK=1
+QDG_WHY=""
+for pair in "attempts:$QDG_ATTEMPTS" "interval:$QDG_INTERVAL" "stop:$QDG_STOP" "qmax:$QDG_MAX_POLLS" "qint:$QDG_POLL_INTERVAL"; do
+  if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then QDG_OK=0; QDG_WHY="non-integer extraction: ${pair%%:*}"; fi
+done
+for pair in "attempts:$QDG_ATTEMPTS_COUNT" "interval:$QDG_INTERVAL_COUNT" "stop:$QDG_STOP_COUNT" "qmax:$QDG_MAX_POLLS_COUNT" "qint:$QDG_POLL_INTERVAL_COUNT"; do
+  if [[ "$QDG_OK" -eq 1 && "${pair#*:}" -ne 1 ]]; then QDG_OK=0; QDG_WHY="expected exactly one match for ${pair%%:*} (got ${pair#*:})"; fi
+done
+QDG_LEFT=""; QDG_RIGHT=""
+if [[ "$QDG_OK" -eq 1 ]]; then
+  QDG_LEFT=$((QDG_MAX_POLLS * QDG_POLL_INTERVAL))
+  QDG_RIGHT=$((QDG_ATTEMPTS * (QDG_INTERVAL + 5) + QDG_STOP + 60))
+  if [[ "$QDG_LEFT" -lt "$QDG_RIGHT" ]]; then QDG_OK=0; QDG_WHY="quiesce-web poll window ${QDG_LEFT}s < host worst case ${QDG_RIGHT}s"; fi
+fi
+if [[ "$QDG_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: op=quiesce-web poll window (${QDG_LEFT}s) covers host quiesce worst case (${QDG_RIGHT}s) — #6178 drift guard"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: quiesce-web poll drift guard (#6178): $QDG_WHY (attempts=$QDG_ATTEMPTS interval=$QDG_INTERVAL stop=$QDG_STOP QMAX_POLLS=$QDG_MAX_POLLS QPOLL_INTERVAL=$QDG_POLL_INTERVAL; files: ci-deploy.sh, inngest-bootstrap.sh, .github/workflows/cutover-inngest.yml)"
 fi
 
 echo ""
@@ -2925,6 +3250,158 @@ else
   echo "  FAIL: L2 (rc=$L2_RC lease_present=$L2_LEASE; expected nonzero rc + lease retained)"
 fi
 rm -rf "$DTMP"
+
+# --- §1A (#6090 recurrence): ghcr_prelude re-fetches Doppler creds + retries docker
+# login on a baked-login FAILURE, not only when the baked value is EMPTY. Root cause of
+# web-2's fsn1 warm-standby not serving (2026-07-13): the fresh host's baked GHCR read
+# token in /etc/default/soleur-ghcr-read went STALE by deploy time; the EMPTY-only guard
+# never re-fetched the valid current Doppler cred → `docker login` failed (non-fatal) →
+# anonymous private pull → Sentry `image pull failed (auth_denied)` → image_pull_failed.
+# Faithful repro: a PRESENT-but-stale baked token whose login 401s; the fix must retry
+# with the Doppler cred (mock-GHCR_READ_USER). Under the pre-fix EMPTY-only code only ONE
+# login (the stale baked one) is attempted → this asserts the SECOND (Doppler) login.
+echo "--- §1A: baked-login failure → Doppler re-fetch + retry ---"
+S1A_DIR=$(mktemp -d)
+printf 'GHCR_READ_USER=baked-stale-user\nGHCR_READ_TOKEN=STALE_BAKED_TOKEN\n' > "$S1A_DIR/soleur-ghcr-read"
+export SOLEUR_GHCR_READ_FILE="$S1A_DIR/soleur-ghcr-read"
+export MOCK_GHCR_LOGIN_FAIL_TOKEN="STALE_BAKED_TOKEN"
+export MOCK_LOGIN_ARGS_FILE="$S1A_DIR/logins.txt"
+: > "$MOCK_LOGIN_ARGS_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
+TOTAL=$((TOTAL + 1))
+if grep -q '^LOGIN:baked-stale-user$' "$MOCK_LOGIN_ARGS_FILE" \
+   && grep -q '^LOGIN:mock-GHCR_READ_USER$' "$MOCK_LOGIN_ARGS_FILE"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: baked-login failure triggers Doppler re-fetch + retry (stale baked login, then Doppler login)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: expected a Doppler re-fetch + retry login (LOGIN:mock-GHCR_READ_USER) after the stale baked login failed"
+  echo "        logins captured:"; sed 's/^/          /' "$MOCK_LOGIN_ARGS_FILE"
+fi
+unset SOLEUR_GHCR_READ_FILE MOCK_GHCR_LOGIN_FAIL_TOKEN MOCK_LOGIN_ARGS_FILE
+rm -rf "$S1A_DIR"
+
+# --- #6400: recover at the GHCR PULL site on a login-ok/pull-deny credential ---
+# Root cause: §1A recovers only on a docker LOGIN failure, but the production
+# `image pull failed (auth_denied)` fires one step later at `docker pull` — a
+# credential that logs in but cannot pull (a GitHub App token, or a revoked baked
+# snapshot) bypasses §1A entirely. These assert the pull-site recovery in
+# _ghcr_pull_or_recover: re-fetch the prd cred + relogin + retry the pull ONCE.
+
+echo "--- #6400 AC1: GHCR login-ok/pull-deny → re-fetch + retry → recovered ---"
+T6400=$(mktemp -d)
+echo 1 > "$T6400/deny-count"   # first GHCR pull denies, retry (after relogin) succeeds
+export MOCK_GHCR_PULL_DENY_COUNT_FILE="$T6400/deny-count"
+export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
+TOTAL=$((TOTAL + 1))
+AC1_GHCR_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$AC1_GHCR_PULLS" -eq 2 ]] \
+   && grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && ! grep -q 'image pull failed' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: recovered — 2 GHCR pulls (deny+retry), recovery event, no failure event"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC1 (ghcr_pulls=$AC1_GHCR_PULLS; expected 2 + recovery event, no failure event)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_DENY_COUNT_FILE MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6400"
+
+echo "--- #6400 AC2: relogin ok but retry pull still denies → fail-open, pull_still_denied ---"
+T6400=$(mktemp -d)
+export MOCK_GHCR_PULL_DENY_ALWAYS=1   # both pulls deny (recovery miss)
+export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && AC2_RC=0 || AC2_RC=$?
+TOTAL=$((TOTAL + 1))
+AC2_GHCR_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$AC2_RC" -ne 0 ]] && [[ "$AC2_GHCR_PULLS" -eq 2 ]] \
+   && grep -q 'image pull failed' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && grep -q 'pull_still_denied' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: fail-open — rc=$AC2_RC, 2 GHCR pulls, single failure event tagged pull_still_denied, no recovery event"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC2 (rc=$AC2_RC ghcr_pulls=$AC2_GHCR_PULLS; expected nonzero + 2 pulls + pull_still_denied)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6400"
+
+echo "--- #6400 AC14: relogin FAILS → retry pull NOT attempted (guards §1A dt='' return-0 bug) ---"
+T6400=$(mktemp -d)
+export MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_GHCR_LOGIN_FAIL_TOKEN="mock-GHCR_READ_TOKEN"   # the re-fetched prd token also fails login
+export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
+TOTAL=$((TOTAL + 1))
+AC14_GHCR_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$AC14_GHCR_PULLS" -eq 1 ]] \
+   && grep -q 'relogin_failed' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: relogin failure → exactly 1 GHCR pull (no retry), failure tagged relogin_failed"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC14 (ghcr_pulls=$AC14_GHCR_PULLS; expected 1 + relogin_failed, no recovery)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_GHCR_LOGIN_FAIL_TOKEN MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6400"
+
+echo "--- #6400 AC4: recovery is GHCR-cred-scoped — does NOT fire on the zot leg ---"
+T6400=$(mktemp -d)
+export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1   # zot active, zot pull fails → atomic GHCR fallback
+export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
+TOTAL=$((TOTAL + 1))
+# zot pull attempted (and failed) + GHCR fallback pulled once + NO recovery fired (GHCR
+# cred was fine); the zot denial itself never triggers a GHCR re-fetch.
+if grep -q '^PULL:10.0.1.30:5000/' "$MOCK_PULL_ARGS_FILE" \
+   && grep -q '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" \
+   && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: zot-fail → GHCR fallback (unchanged); recovery did not fire on the zot leg"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC4"; echo "        pulls:"; sed 's/^/          /' "$MOCK_PULL_ARGS_FILE"
+fi
+unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6400"
+
+echo "--- #6400 AC3/AC6/AC13: single classifier, content-not-path, token hygiene, cosign continuity ---"
+# AC3: ONE auth-denied regex, shared by the classifier + the recovery gate.
+TOTAL=$((TOTAL + 1))
+REGEX_COUNT=$(grep -cE 'unauthorized\|authentication required\|denied\|forbidden' "$DEPLOY_SCRIPT")
+# _ghcr_pull_or_recover classifies stderr CONTENT (tail -c 400 "$perr"), not the path.
+if [[ "$REGEX_COUNT" -eq 1 ]] \
+   && grep -qE '_pull_result_is_auth_denied "\$\(tail -c 400 "\$perr"' "$DEPLOY_SCRIPT" \
+   && grep -q 'pull_failure_event .* "\${RECOVERY_STAGE:-}"' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1)); echo "  PASS: single regex; recovery gate classifies content; recovery_stage threaded to pull_failure_event"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC3 (regex_count=$REGEX_COUNT — expected 1 + content-classify + recovery_stage arg)"
+fi
+# AC6: token hygiene — refetch helper reaches docker login via --password-stdin only,
+# token is local + unset; recovery event payload is jq -n --arg with no raw stderr.
+TOTAL=$((TOTAL + 1))
+HELPER_BODY=$(awk '/^refetch_ghcr_and_relogin\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
+RECOV_BODY=$(awk '/^pull_auth_recovery_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
+if printf '%s' "$HELPER_BODY" | grep -q -- '--password-stdin' \
+   && printf '%s' "$HELPER_BODY" | grep -q 'local du="" dt=""' \
+   && printf '%s' "$HELPER_BODY" | grep -qE 'printf .*"\$dt" \| docker login' \
+   && ! printf '%s' "$HELPER_BODY" | grep -qE 'docker login[^|]*\$dt' \
+   && printf '%s' "$RECOV_BODY" | grep -q 'jq -n --arg' \
+   && ! printf '%s' "$RECOV_BODY" | grep -qE 'detail_raw|tail -c 400|\$perr'; then
+  PASS=$((PASS + 1)); echo "  PASS: token via --password-stdin + local; recovery payload jq -n --arg, no raw stderr"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC6 token/stderr hygiene"
+fi
+# AC13: cosign continuity — the recovery relogin targets ghcr.io (the registry the
+# cosign :ro $GHCR_DOCKER_CONFIG authenticates), so a recovered pull does not 401 the .sig.
+TOTAL=$((TOTAL + 1))
+if printf '%s' "$HELPER_BODY" | grep -q 'docker login ghcr.io'; then
+  PASS=$((PASS + 1)); echo "  PASS: recovery relogin writes ghcr.io auth into the same \$GHCR_DOCKER_CONFIG (cosign continuity)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC13 — recovery relogin must target ghcr.io"
+fi
 
 # Restore strict mode for the summary/exit.
 set -e -o pipefail

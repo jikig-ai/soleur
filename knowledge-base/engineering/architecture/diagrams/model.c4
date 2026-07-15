@@ -261,7 +261,7 @@ model {
   }
   betterstack = system "Better Stack" {
     #external
-    description "External uptime/heartbeat monitoring (BetterStackHQ/better-uptime). Apex + inngest/git-data heartbeats, and a per-host origin absence detector that probes each web host's CF-proxied hostname (web-N.app.soleur.ai/health) directly, so a dead/never-booted host pages with per-host attribution the round-robin monitors cannot give (#5933 Item 1)."
+    description "External uptime/heartbeat monitoring (BetterStackHQ/better-uptime) AND a Logs warehouse (source 2457081, ClickHouse-SQL-queryable) that CI polls read-only. Apex + inngest/git-data heartbeats, and a per-host origin absence detector that probes each web host's CF-proxied hostname (web-N.app.soleur.ai/health) directly, so a dead/never-booted host pages with per-host attribution the round-robin monitors cannot give (#5933 Item 1). The Logs source receives SOLEUR_ZOT_DISK self-reports from the deny-all registry host and is polled from GitHub Actions via betterstack-query.sh for the zot restart-loop recurrence alarm (#6291) + follow-through soak probes — log-content recurrence alarms are in-repo GH-cron pollers, not native Better Stack alerts (ADR-096)."
   }
   sigstore = system "Sigstore" {
     #external
@@ -354,7 +354,7 @@ model {
   api -> kb "Reads context_queries artifacts (skill-scoped injection, web in-process)" { technology "File I/O" }
   skills -> kb "Reads/writes" { technology "File I/O" }
   agents -> kb "Reads/writes" { technology "File I/O" }
-  api -> supabase "Auth and data" { technology "HTTPS" }
+  api -> supabase "Auth and data; per-call audit_github_token_use write for every GitHub App-token use (reads AND Workstream issue writes, Art. 30 PA-16, ADR-109)" { technology "HTTPS" }
   claude -> supabase "Sessions and keys" { technology "HTTPS" }
   claude -> anthropic "LLM calls" { technology "HTTPS" }
   api -> anthropic "Daily org cost/usage report (Admin API, cost-report cron)" { technology "HTTPS" }
@@ -365,7 +365,7 @@ model {
   auth -> supabase "Validates tokens" { technology "HTTPS" }
   api -> stripe "Checkout and webhooks" { technology "HTTPS" }
   claude -> stripe "invoice skill: create/finalize/send/chase via hosted Stripe MCP — OAuth, operator's OWN account; distinct credential plane from the webapp -> stripe billing edge; test-mode only in v1 (ADR-107)" { technology "MCP tool → mcp.stripe.com (HTTPS)" }
-  api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); the board is the canonical Status store (ADR-097). The Phase-1 lifecycle→board write path runs inside GitHub Actions (github-internal) so it needs no cross-boundary edge." { technology "HTTPS (REST + GraphQL)" }
+  api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); AND writes issues — create / title / label-driven status / close-reopen — via the audited GitHub App-token client (ADR-109). The board is the canonical Status store (ADR-097); a status write is a label mutation that the board-status-sync workflow (github-internal) mirrors. owner/repo/installation resolve from the active workspace (ADR-044), never request input." { technology "HTTPS (REST + GraphQL)" }
   dashboard -> plausible "Page view events" { technology "JS snippet" }
   api -> inngest "Sends events; serves functions" { technology "HTTP private-net :8288" }
   resend -> api "Inbound email webhook (svix-verified) → email-triage ingress" { technology "HTTPS" }
@@ -374,10 +374,11 @@ model {
   inngest -> inngestPostgres "Config + run history" { technology "PostgreSQL session pooler :5432" }
   inngest -> inngestRedis "Durable queue + run-state" { technology "Redis (AOF)" }
   inngest -> betterstack "Ships journald + host_metrics via Vector (arm64, aarch64 build) to the isolated Logs source 2457081; token in soleur-inngest/prd (ADR-100 Phase-1 caveat resolved, #6197)" { technology "Vector → Better Stack Logs (HTTPS)" }
+  hetzner -> betterstack "Ships journald + host_metrics via Vector to the shared Logs source 2457081 (per-host host_name discriminator; token BETTERSTACK_LOGS_TOKEN in soleur/prd); ungated from web_colocate_inngest so every web host ships logs post-ADR-100 (#6396)" { technology "Vector → Better Stack Logs (HTTPS)" }
   hetzner -> inngest "Hosts (dedicated single-host node, private-net 10.0.1.40; removed from web cloud-init — ADR-100, #6178)" { technology "systemd" }
   hetzner -> zotRegistry "Pulls app image + baked bootstrap scripts/hooks + the cosign .sig at boot/deploy — zot-primary, dark-launch gated (attempts zot only when configured + /v2/-reachable + login ok); the SAME @sha256 digest dual-pushed from CI; verify is offline against the unchanged pinned root, no live sigstore call (ADR-096, #6122)" { technology "Docker/zot (private-net, plain-HTTP + insecure-registries)" }
   hetzner -> ghcr "Atomic fallback pull when zot is unconfigured/unreachable — dual-pushed + break-glass through the Phase-5 soak, then retired; authenticated (read:packages), immutable @sha256 digest, offline cosign verify (#5921, #5887, #6005)" { technology "Docker/GHCR (authenticated, fallback)" }
-  betterstack -> hetzner "Per-host origin uptime probe (web-N.app.soleur.ai/health, CF-proxied) — absence detector (#5933 Item 1)" { technology "HTTPS via CF edge" }
+  betterstack -> hetzner "Origin uptime probe at the LB-fronted app.soleur.ai surface (betteruptime_monitor.app/soleur_apex) — covers web-1 (the app A-record → web-1, dns.tf); the #5933 per-host web-<n> probe was RETIRED (CF 521, no per-host origin vhost). web-2 warm standby has NO standing uptime coverage — its dead-boot page is the #6396 Sentry terminal-stage issue-alert" { technology "HTTPS via CF edge" }
   github -> sigstore "Keyless-signs the released app image digest (cosign, OIDC→Fulcio→Rekor) (#5933 Item 4)" { technology "HTTPS (cosign)" }
   // NOTE: the former `hetzner -> sigstore` verify edge was REMOVED (#6005/ADR-087) — it was
   // falsified: with a pinned local trusted_root.json + offline verify the host makes NO live
@@ -393,6 +394,10 @@ model {
   // the web-host probe). SOLEUR_ZOT_DISK is the in-surface probe that disambiguates
   // fs-not-grown / gc-too-slow / zot-crash without a host login.
   zotRegistry -> betterstack "Ships disk-state observability — df% of /var/lib/zot + resize2fs before/after + zot health — as one SOLEUR_ZOT_DISK event to the isolated Logs source 2457081; token in soleur-registry/prd, queried via betterstack-query.sh --grep SOLEUR_ZOT_DISK (#6244)" { technology "curl → Better Stack Logs (HTTPS, eu-fsn-3)" }
+  // #6291 — CI reads back the SOLEUR_ZOT_DISK Logs source it ships to. The standing restart-loop
+  // recurrence alarm (scheduled-zot-restart-loop.yml, */30) + the follow-through soak probes poll
+  // source 2457081 over the ClickHouse SQL API; previously an un-modelled load-bearing edge.
+  github -> betterstack "Polls the SOLEUR_ZOT_DISK Logs source (ClickHouse SQL via betterstack-query.sh) for the zot restart-loop recurrence alarm + follow-through soak probes" { technology "HTTPS (ClickHouse SQL, eu-fsn-3)" }
   // #6031 / ADR-088 — control-plane GHCR installation-token minter (cron-ghcr-token-minter,
   // every 20 min). Mints a 1h packages:read App installation token and writes it to Doppler,
   // retiring the interim read:packages PAT; hosts read GHCR_READ_TOKEN unchanged.

@@ -16,6 +16,7 @@ import { readFileSync, existsSync } from "fs";
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const SHIP_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/ship/SKILL.md");
 const AGENTS_CORE = resolve(REPO_ROOT, "AGENTS.core.md");
+const AGENTS_REST = resolve(REPO_ROOT, "AGENTS.rest.md");
 const AGENTS_INDEX = resolve(REPO_ROOT, "AGENTS.md");
 const FIXTURE_DIR = resolve(
   REPO_ROOT,
@@ -89,6 +90,7 @@ function undeferredCount(body: string): number {
 let SHIP_TEXT: string;
 let GATE_SECTION: string;
 let CORE_TEXT: string;
+let REST_TEXT: string;
 let INDEX_TEXT: string;
 let FIXTURE_PR_H_TEXT: string;
 let FIXTURE_MIXED_TEXT: string;
@@ -112,6 +114,7 @@ beforeAll(() => {
   SHIP_TEXT = readFileSync(SHIP_SKILL, "utf8");
   GATE_SECTION = getGateSection(SHIP_TEXT);
   CORE_TEXT = readFileSync(AGENTS_CORE, "utf8");
+  REST_TEXT = readFileSync(AGENTS_REST, "utf8");
   INDEX_TEXT = readFileSync(AGENTS_INDEX, "utf8");
   FIXTURE_PR_H_TEXT = readFileSync(FIXTURE_PR_H, "utf8");
   FIXTURE_MIXED_TEXT = readFileSync(FIXTURE_MIXED, "utf8");
@@ -200,10 +203,10 @@ describe("TC-5: sentinel detection in linked-issue body", () => {
   });
 });
 
-describe("TC-6: cross-reference invariant in AGENTS.core.md", () => {
-  test(`AGENTS.core.md contains the wg-* gate ID ≥2 times (rule body + cross-ref in ${RULE_ID})`, () => {
-    const hits = CORE_TEXT.match(new RegExp(GATE_ID, "g")) || [];
-    expect(hits.length).toBeGreaterThanOrEqual(2);
+describe("TC-6: cross-reference invariant (core cross-ref + rest body)", () => {
+  test("AGENTS.rest.md contains the wg-* gate rule body", () => {
+    const line = REST_TEXT.split("\n").find((l) => l.includes(`[id: ${GATE_ID}]`));
+    expect(line).toBeDefined();
   });
 
   test(`hr-never-label rule body references the new wg-* gate ID`, () => {
@@ -213,8 +216,8 @@ describe("TC-6: cross-reference invariant in AGENTS.core.md", () => {
     expect(ruleLine!).toContain(GATE_ID);
   });
 
-  test("AGENTS.md pointer-index contains the new wg-* gate ID → core", () => {
-    expect(INDEX_TEXT).toContain(`[id: ${GATE_ID}] → core`);
+  test("AGENTS.md pointer-index contains the new wg-* gate ID → rest", () => {
+    expect(INDEX_TEXT).toContain(`[id: ${GATE_ID}] → rest`);
   });
 });
 
@@ -303,7 +306,7 @@ describe("TC-11: copy/copies verb-morphology", () => {
 
 describe("TC-9: new gate rule body fits within byte cap", () => {
   test("wg-block-pr-ready-on-undeferred-operator-steps body ≤600 B", () => {
-    const line = CORE_TEXT.split("\n").find((l) => l.includes(`[id: ${GATE_ID}]`));
+    const line = REST_TEXT.split("\n").find((l) => l.includes(`[id: ${GATE_ID}]`));
     expect(line).toBeDefined();
     expect(Buffer.byteLength(line!, "utf8")).toBeLessThanOrEqual(600);
   });

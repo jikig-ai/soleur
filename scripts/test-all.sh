@@ -134,6 +134,13 @@ if want_scripts; then
   run_suite "scripts/content-publisher" bash scripts/test-content-publisher.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
+  run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh
+  # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
+  # these sourceable classifiers/gates were previously orphan suites (run only when invoked
+  # manually), so a regression to the watchdog decision logic would have shipped with green CI.
+  run_suite "scripts/inngest-liveness-classify" bash scripts/inngest-liveness-classify.test.sh
+  run_suite "scripts/inngest-restart-age-gate" bash scripts/inngest-restart-age-gate.test.sh
+  run_suite "scripts/inngest-restart-poll-classify" bash scripts/inngest-restart-poll-classify.test.sh
   run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh

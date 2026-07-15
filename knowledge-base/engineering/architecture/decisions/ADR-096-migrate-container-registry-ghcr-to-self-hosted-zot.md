@@ -46,6 +46,19 @@ managed registry. Then:
    follow it). zot is plain-HTTP on the private net, so a zot-pulled digest needs
    `insecure-registries` (Edge A) + cosign `--allow-insecure-registry` (Edge B); cosign
    digest-pinning is the integrity guard, not TLS.
+
+   > **Interim-GHCR pull-recovery contract (normative, #6400).** On the interim GHCR
+   > pull path (live as break-glass until the Phase-5 GHCR retirement), **`docker login`
+   > success is NOT proof of `docker pull` capability.** A credential that logs in but
+   > cannot pull — a GitHub App installation token (the exact ADR-088 limitation), or
+   > any login/pull capability split (a rotated/revoked baked snapshot that still
+   > login-succeeds) — makes login-outcome-gated recovery a **false gate**: the login
+   > passes, recovery is skipped, and the pull denies. The host therefore MUST re-fetch
+   > the `prd` GHCR credential, `docker login` again, and **retry the pull once on a
+   > `docker pull` auth-denial**, not only on a login **failure**. Implemented at the
+   > pull site (`ci-deploy.sh` `_ghcr_pull_or_recover`), fail-open (a recovery miss leaves
+   > the unchanged `image_pull_failed` terminal state), retry exactly once. This contract
+   > retires with the GHCR pull path at Phase 5.
 3. **cosign (Phase 4):** unchanged trust anchor — same pinned cosign SHA, same offline
    `trusted_root.json`, same GitHub-Actions-OIDC identity regexp. Registry-agnostic (Phase-0
    proved a read-only user fetches a zot-stored `.sig` and gc does not reap it).
@@ -280,6 +293,55 @@ volume API ("~30 GB") as "not full", but that API reports the **block-device** s
   gate/workflow change: the `registry-host-replace` destroy-guard already permits a volume `["update"]`.
   Status stays **Adopting**.
 
+### Durable restart-loop recurrence alarm (amendment 2026-07-10, #6291)
+
+The #6244 `SOLEUR_ZOT_DISK` self-report closed the *disk*-observability gap, but nothing stood
+watch on it continuously once #6288's one-shot soak follow-through
+(`zot-restart-plateau-6288.sh`) auto-closes. The disk-absence heartbeat `soleur-registry-disk-prd`
+pings **only while `/var/lib/zot < 85%`**, so a **disk-independent** OOM restart-loop (the #6288
+failure mode — zot OOM-restart-looping ~4/min during the boot scan of the ~35 GB store) leaves the
+heartbeat **GREEN** throughout. A durable, continuous recurrence alarm now closes that liveness gap:
+
+- **Mechanism = an in-repo GitHub-Actions scheduled-cron poller**
+  (`.github/workflows/scheduled-zot-restart-loop.yml`, `*/30 * * * *`) that reads the
+  `SOLEUR_ZOT_DISK` stream from Better Stack Logs source 2457081 via `betterstack-query.sh`
+  (ClickHouse SQL), evaluates three firing conditions in `scripts/zot-restart-loop-alarm.sh`
+  (scoped to the newest `boot_id`: `exit_code=137` seen, OR `zot_restarts` climbs across ≥3
+  consecutive events, OR `oom_kills_5m > 0`), and routes a fire to a deduped **`action-required`**
+  `[ci/zot-restart-loop]` GitHub issue carrying the decoded cause (host/kernel OOM vs cgroup-cap
+  contained vs non-OOM `zot_last_err`). On recovery it auto-closes. A distinct
+  `[ci/zot-telemetry-silent]` issue fires if the token-gated reporter goes dark while the
+  token-free disk heartbeat + Sentry monitor stay GREEN (the GREEN-while-broken blind spot, one
+  layer up). Its own liveness is a Sentry cron monitor (`sentry_cron_monitor.zot_restart_loop_alarm`,
+  slug `scheduled-zot-restart-loop`) so a *dark* alarm also alerts. The trusted-region parse
+  (strip the free-text `zot_last_err` tail before any key=value parse; scope to the newest
+  `boot_id`; filter `-1` inspect-miss sentinels) is extracted into one sourced helper
+  (`scripts/lib/zot-telemetry-parse.sh`) that BOTH the alarm and the #6288 soak probe consume — one
+  home for the spoof-resistance invariant.
+
+#### Pattern: Better Stack log-content alarms
+
+**A recurring, reusable precedent** (grep-findable here + cross-linked from
+`knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`): a **log-*content*
+recurrence alarm over a Better Stack Logs source is an in-repo GH-Actions cron poller** (query via
+`betterstack-query.sh` → decode/threshold in a `scripts/` checker → deduped `action-required`
+GitHub issue → Sentry self-liveness heartbeat), **NOT** a native Better Stack alert. This alarm
+(#6291) and the `scheduled-followthrough-sweeper.yml` soak probes both recur this shape. The
+`BetterStackHQ/better-uptime` Terraform provider has **no** log-alert resource (only
+`betteruptime_monitor`/`_heartbeat`/`_policy`), and even the programmatic **Telemetry v2 SQL-alert
+API** (which *does* exist — see §Alternatives) is rejected for this signal class because: (1) the
+stateful consecutive-climb condition + newest-`boot_id` scoping are not faithfully expressible as a
+single `{{time}}`-bucketed threshold; (2) the operator surface must be a digest-visible GitHub
+`action-required` issue, not an ops@ email; (3) it is not a first-class TF resource, so it would
+split the decode source-of-truth off from the reporter's decode semantics. Choose the GH-cron poller
+for future log-content alarms unless a signal is a pure stateless per-bucket count with an
+email-acceptable surface.
+
+### Reprovisioning path + alert recipient — restart-loop alarm cross-ref (amendment 2026-07-10, #6291)
+
+The restart-loop alarm is fully automated post-merge: `apply-sentry-infra.yml` auto-applies the new
+`sentry_cron_monitor` on merge, and the workflow schedule fires the first run — no operator step.
+
 ## Alternatives Considered
 
 The 7 registry-choice options are tabled above. The **apply-path** alternatives (per-PR `-target`
@@ -287,3 +349,20 @@ the whole stack; a `workflow_dispatch` warm-standby job; split-cred two-writer c
 routed to the CTO agent and rejected in `apply-path-cto-ruling.md` §"Rejected alternatives"; the
 **push-ingress** alternatives (public `/v2/` endpoint; cloudflared on the registry host) were
 rejected in the CTO's second ruling in favour of the CF-Tunnel-on-the-web-tunnel bridge.
+
+For the **restart-loop recurrence alarm (#6291)**, the **Better Stack Telemetry v2 SQL-alert API**
+was evaluated and rejected *on merits* (not on absence — the endpoints exist):
+`POST /api/v2/dashboards/{id}/charts/{cid}/alerts` and `.../explorations/{id}/alerts`, with
+`check_period` as the recurring schedule (docs `betterstack.com/docs/logs/api/…`). It can faithfully
+express the stateless conditions (`countIf(exit_code=137) > 0`, `oom_kills_5m > 0`) as
+`{{time}}`-bucketed thresholds, but it **cannot** faithfully express the stateful `zot_restarts`
+consecutive-climb scoped to the *newest* `boot_id` (a `max-min>tol` approximation false-fires on a
+single legitimate restart, and `{{time}}`-bucketing loses the newest-`boot_id` discriminator the
+hostname-reusing immutable replace requires). It is also **not** a first-class TF resource (provider
+gap confirmed) — it would be a REST-provisioned resource whose state lives in Better Stack, needing
+a bootstrap + drift handling, with its decode SQL divorced from the reporter's decode semantics; and
+its notify surface (ops@ email on the free tier) is weaker than a deduped, digest-visible
+`action-required` GitHub issue for a non-technical operator. The **dashboard** manual-config path was
+rejected outright (not version-controlled/testable; `hr-exhaust-all-automated-options-before`). See
+the `scheduled-zot-restart-loop.yml` gate-override header for the ADR-033-anchored GH-cron-vs-Inngest
+substrate rationale.

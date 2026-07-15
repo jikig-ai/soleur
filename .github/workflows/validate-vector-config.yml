@@ -82,6 +82,28 @@ jobs:
           SENTRY_USERID_PEPPER: dummy
         run: vector validate --no-environment --config-toml apps/web-platform/infra/vector.toml
 
+      # #6396: the shared vector.toml carries a @@HOST_NAME@@ sentinel rendered per-host at
+      # install (soleur-host-bootstrap.sh → per-host server name; inngest-bootstrap.sh →
+      # soleur-inngest-prd). The raw sentinel is a valid VRL string literal (validated above);
+      # this ALSO proves every rendered per-host value parses (defense against a future edit that
+      # renders into a syntactically-significant position).
+      - name: Schema validate rendered @@HOST_NAME@@ (#6396)
+        env:
+          VECTOR_STRICT_ENV_VARS: "false"
+          BETTERSTACK_LOGS_TOKEN: dummy
+          SENTRY_USERID_PEPPER: dummy
+        run: |
+          set -euo pipefail
+          f=apps/web-platform/infra/vector.toml
+          grep -qF '@@HOST_NAME@@' "$f" || { echo "FAIL: @@HOST_NAME@@ sentinel missing from $f (#6396)"; exit 1; }
+          for hn in soleur-web-platform soleur-web-2 soleur-inngest-prd; do
+            r=$(mktemp --suffix=.toml)
+            sed "s|@@HOST_NAME@@|$hn|g" "$f" > "$r"
+            echo "validating rendered host_name=$hn"
+            vector validate --no-environment --config-toml "$r"
+            rm -f "$r"
+          done
+
       # `vector validate` silently ignores misspelled filter SUB-keys (probe-
       # verified on pinned 0.43.1: `mountpoints.include` singular is a silent
       # no-op that would restore 27-mountpoint ingest and re-blow the Better

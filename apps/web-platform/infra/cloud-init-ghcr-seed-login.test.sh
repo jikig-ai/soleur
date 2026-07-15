@@ -58,5 +58,16 @@ if grep -qE '\$\{sentry_dsn\}' "$CI"; then ok "cloud-init.yml references \${sent
 if grep -qE '^\s*sentry_dsn\s*=\s*var\.sentry_dsn' "$SRV"; then ok "server.tf passes sentry_dsn to the templatefile"; else no "server.tf must pass sentry_dsn = var.sentry_dsn (else templatefile() fails)"; fi
 if grep -qE 'variable "sentry_dsn"' "$VARS"; then ok "variables.tf declares variable \"sentry_dsn\""; else no "variables.tf must declare variable \"sentry_dsn\""; fi
 
+# 4. §1A (#6090 recurrence): the seed login must re-fetch Doppler creds + retry docker
+# login on a baked-login FAILURE, not only when the baked value is EMPTY. A PRESENT-but-
+# STALE baked token (fresh host's token aged out) otherwise fails login non-fatally →
+# anonymous private pull → stage=pull denied. Mirrors ci-deploy.sh ghcr_prelude_and_login.
+if grep -qE "printf 'ghcr_login_ok_refetch'" "$CI" \
+   && grep -qE 'until RT=.*doppler secrets get GHCR_READ_TOKEN' "$CI"; then
+  ok "seed login re-fetches Doppler creds + retries docker login on a baked-login FAILURE (§1A)"
+else
+  no "seed login must re-fetch Doppler creds + retry docker login on a baked-login FAILURE (§1A), not only when the baked value is EMPTY"
+fi
+
 echo "=== cloud-init-ghcr-seed-login: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

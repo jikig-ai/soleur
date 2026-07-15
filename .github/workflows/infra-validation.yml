@@ -150,6 +150,19 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      # #6178: the cloud-init-inngest-bootstrap drift-guard (below) includes an AC7
+      # terraform-render leg — the behavioral authority for the web_colocate_inngest gate
+      # (only a real `terraform templatefile` render exercises the load-bearing `~}`
+      # whitespace-strip). Without terraform on PATH the leg SKIPs; this step makes it
+      # execute (a broken gate then reds this job's log). NOTE: deploy-script-tests is an
+      # advisory job (not in ruleset-ci-required.tf) — this is a visible-red signal, not a
+      # merge-blocking gate. terraform_wrapper: false keeps `terraform console` stdout
+      # byte-clean so the render leg's heredoc-strip (render_yaml_ok, which depends on the
+      # last output line being exactly `EOT`) is not corrupted by the default log wrapper.
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_wrapper: false
+
       - name: Run ci-deploy.sh tests
         run: bash apps/web-platform/infra/ci-deploy.test.sh
 

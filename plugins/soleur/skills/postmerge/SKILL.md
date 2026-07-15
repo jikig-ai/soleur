@@ -5,6 +5,18 @@ description: "This skill should be used when verifying a merged PR deployed corr
 
 # postmerge Skill
 
+<!-- postmerge-harness-protocol:start -->
+## Harness adapter (Claude vs Grok Build)
+
+Invoke via **Claude:** `soleur:postmerge <PR>` | **Grok:** `/postmerge <PR>`.
+
+**Polling CI / health checks without asking the operator:**
+- **Claude Code:** Monitor tool for Phase 2 main CI and Phase 3 health retries.
+- **Grok Build:** AwaitShell with `pattern` (`completed success`, `postmerge verification complete`) or Shell with `block_until_ms`.
+
+Canonical: `plugins/soleur/lib/harness.ts` → `pollInstructions()`. Parent skills (`ship` Step 3.8, `one-shot` Step 8) MUST invoke postmerge before `<promise>DONE</promise>`.
+<!-- postmerge-harness-protocol:end -->
+
 **Purpose:** Enforce post-merge verification so bugs that only appear in production context are caught immediately after merge -- not days later. This closes the "last mile" gap where QA passes locally but production diverges (stale files, unapplied migrations, CSP violations from injected scripts).
 
 **CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call.
@@ -37,7 +49,7 @@ Check the latest CI run on main triggered by the merge:
 gh run list --branch main --limit 3 --json databaseId,status,conclusion,headSha
 ```
 
-Find the run matching the merge commit SHA. If no matching run yet, use the **Monitor tool** with a polling loop (max 5 minutes). Do NOT use foreground `sleep`:
+Find the run matching the merge commit SHA. If no matching run yet, poll with the harness adapter (max 5 minutes) — **Claude:** Monitor tool; **Grok:** AwaitShell/Shell per `pollInstructions()`. Do NOT ask the operator to watch CI. Do NOT use Bash `run_in_background`:
 
 ```bash
 for i in $(seq 1 20); do
@@ -131,6 +143,20 @@ curl -sfS -H "Authorization: Bearer ${SENTRY_TOKEN}" \
 - If Sentry API is unreachable or returns non-200: warn and skip (do not block on Sentry outages).
 
 **Graceful degradation:** This check is advisory. A Sentry API failure does not block the postmerge pipeline.
+
+### Inngest liveness awareness (#6374)
+
+Surface any OPEN inngest-down alarm so the operator is never told "prod is healthy" while the durable trigger layer (armed reminders + all `server/inngest/functions/` crons) is dark. The external watchdog (`scheduled-inngest-health.yml`) files `[ci/inngest-down]` on a confirmed down; this is a cheap read that needs no Sentry token:
+
+```bash
+gh issue list --label ci/inngest-down --state open \
+  --json number,title,createdAt --jq '.[] | "#\(.number) \(.title) (opened \(.createdAt))"'
+```
+
+- If it prints an open issue: surface a one-line advisory — "ADVISORY: inngest reports down (`#<n>`) — armed reminders and scheduled crons may not be firing; the external watchdog is auto-restarting / escalating. Do not assume scheduled work ran." Include it prominently in the Phase 7 report.
+- If empty: silent (no line needed).
+
+**Advisory only — never hard-block the turn.** inngest-down does not block all work; the operator retains agency. (An optional deeper probe — `curl` the `/hooks/inngest-liveness` HMAC+CF-Access hook — is available for a live verdict but is not required here; the open-issue read is the cheap default.)
 
 ## Phase 3.6: Sentry Error-Count Delta (Fix Efficacy)
 

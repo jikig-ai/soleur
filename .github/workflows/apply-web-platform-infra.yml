@@ -355,6 +355,9 @@ jobs:
               -target=github_actions_secret.doppler_token_kb_drift \
               -target=doppler_service_token.write \
               -target=github_actions_secret.doppler_token_write \
+              -target=doppler_service_token.inngest_arm_write \
+              -target=github_repository_environment.inngest_cutover \
+              -target=github_actions_secret.doppler_token_inngest_arm \
               -target=tls_private_key.ci_ssh \
               -target=doppler_secret.deploy_ssh_private_key \
               -target=doppler_secret.ghcr_read_user \

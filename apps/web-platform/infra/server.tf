@@ -56,6 +56,12 @@ locals {
     # large (~6.8 KB) for cloud-init user_data (32,768-byte cap; already ~29.6 KB). The
     # running host gets it byte-for-byte from terraform_data.cosign_trusted_root below.
     "cosign-trusted-root.json",
+    # Vector shipper config (#6396) — baked so the ungated web-host Vector install
+    # (soleur-host-bootstrap.sh authors /usr/local/bin/soleur-vector-install, run fail-open
+    # at end-of-cloud-init) can render + install it to /etc/vector/vector.toml. Carries the
+    # @@HOST_NAME@@ sentinel resolved per-host at install. This decouples web-host log shipping
+    # from web_colocate_inngest (default-false post-ADR-100), which otherwise ships NO logs.
+    "vector.toml",
   ]
 
   # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
@@ -109,7 +115,11 @@ resource "hcloud_server" "web" {
   # Spread across distinct physical hosts within the EU location (HA). Attaching to
   # the RUNNING web-1 forces a power-off → maintenance-window apply (an in-place
   # reboot, NOT a replace — verify `0 to destroy` in the plan before applying).
-  placement_group_id = hcloud_placement_group.web_spread.id
+  # A Hetzner placement group is LOCATION-scoped: a host in a different DC than web-1
+  # cannot join web_spread, so it gets null. That is not a downgrade — a cross-DC host
+  # is already spread from web-1 at the DC level (stronger HA than same-DC spread), and
+  # it stays placeable when web-1's DC is capacity-starved (2026-07-13: web-2 hel1→fsn1).
+  placement_group_id = each.value.location == var.web_hosts["web-1"].location ? hcloud_placement_group.web_spread.id : null
 
   # #5921 — the 22 bootstrap scripts + hooks.json were REMOVED from this map (they blew
   # the 32,768-byte Hetzner user_data cap). They are now baked into var.image_name and
@@ -164,6 +174,18 @@ resource "hcloud_server" "web" {
     # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
     # block in ci-ssh-key.tf for the rationale.
     ci_ssh_public_key_openssh = local.ci_ssh_pubkey
+    # #6178 — gates the "Bootstrap Inngest server on first boot" runcmd item via a
+    # templatefile `%{ if web_colocate_inngest }` directive. Default false (dedicated
+    # scheduler, ADR-100). Bool is load-bearing (see variables.tf).
+    web_colocate_inngest = var.web_colocate_inngest
+    # #6396 — TF-derived per-host Better Stack host_name, injected into the bootstrap
+    # invocation (SOLEUR_HOST_NAME) and rendered into the ungated web-host vector.toml's
+    # @@HOST_NAME@@ sentinel. MUST equal each host's server name (`name` above) so web-1 and
+    # web-2 resolve to DISTINCT sources in the shared Logs source 2457081 — a generic/duplicate
+    # OS hostname would collapse them. NOT runtime $(hostname): cloud-init sets no explicit
+    # hostname:/fqdn: and relies on Hetzner seeding hostname=server-name, which is not guaranteed
+    # distinct on a re-imaged host.
+    host_name = each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"
   }))
 
   # cloud-init and ssh_keys are create-time attributes. After import,
