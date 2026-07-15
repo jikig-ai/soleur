@@ -101,7 +101,7 @@ Cutting it dissolves: `bootstrap_complete`/EXPECTED, the `START` collision, the 
 | cloud-init user_data headroom is comfortable | **FALSE, and both sources are stale.** The test's own comment says "~21.06 KB" (`cloud-init-user-data-size.test.ts:59`); a research pass reported ~21,106 B. **Measured live: 21,716 B vs a 21,800 B budget = 84 B.** | Design driven by measurement. See **Byte Budget** — the full design was applied to a scratch copy and **measured passing**. |
 | "Bake the beacon into `soleur-host-bootstrap.sh` for 0 user_data cost" | **Impossible.** The app seed pull runs **pre-bootstrap** — `soleur-host-bootstrap.sh` is *extracted from the image the pull fetches* (`:546-561`). A baked helper cannot cover the pull that fetches it (`:55-58` says so). | Inline is the only option; the byte budget is load-bearing, not a preference. |
 | The soak documents **six** ways the fleet can be GHCR-served (`:46-63`) | **There is a SEVENTH, and it is fatal.** See D3. | Not fixed here. **Machine-enforced** via the C1 blocker arm + filed as a P1. |
-| Hole 1 is web-only | The inngest path (`:695-698`) has the same shape, **but** its block is gated `%{ if web_colocate_inngest ~}`, `default = false` (`variables.tf:356-360`) → **dead code on the real fleet**. `FAIL_QUERIES[freshboot]` is a structurally dead query today. | D3 — out of scope, evidence-backed. |
+| Hole 1 is web-only | The **colocated** inngest path (`:695-698`) has the same shape, **but** its block is gated `%{ if web_colocate_inngest ~}`, `default = false` (`variables.tf:373-377`, re-verified) → **dead code on the real fleet**. `FAIL_QUERIES[freshboot]` is a structurally dead query today. The **dedicated** host (`inngest-host.tf:181`, unconditional) is the live one — and is GHCR-only. | D3 — out of scope, evidence-backed. |
 
 ---
 
@@ -187,12 +187,17 @@ The soak counts the bare query directly instead. Complexity lands in the never-e
 
 Surfaced during planning. **Bigger than #6462 and not fixable here.**
 
-- `cloud-init-inngest.yml:330` hard-pins `IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.19` — **no zot path, no probe, no fallback**.
-- `:337-343` is **fail-closed**: `[ "$pull_rc" -eq 0 ] || { echo "FATAL…"; exit "$pull_rc"; }`.
-- `:254` logs into `ghcr.io` with the **baked** `GHCR_READ_TOKEN`.
-- It reports via `inngest-boot-phone-home.sh`, **not** the Sentry `stage:` schema → **the soak is structurally blind to it**.
-- `cloud-init-inngest-bootstrap.test.sh:58-59` **enforces** the `ghcr.io` ref in CI.
-- The image **is** mirrored to zot (`zot-entry-gate.sh:56`) — the host just never asks.
+> **Re-verified against `main` 2026-07-15 (post-rebase).** Line numbers below are the *current* ones — the originals had drifted. Two claims this section originally carried were **falsified** on re-verification and are corrected in place; see the struck bullets. The D3 conclusion is **unchanged and strengthened**.
+
+- `cloud-init-inngest.yml:337` hard-pins `IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.19` — **no zot path, no probe, no fallback**. A case-insensitive sweep for `zot|ZURL|ZIREF|/v2/|soleur-boot-emit` across the whole file returns **0 hits**.
+- `:349` is **fail-closed**: `[ "$pull_rc" -eq 0 ] || { echo "FATAL: OCI pull failed rc=$pull_rc" >&2; exit "$pull_rc"; }`.
+- `:260` logs into `ghcr.io` with the **baked** `GHCR_READ_TOKEN` (written at render time from the templatefile var, `:245`). The login is fail-**open** (`set +e`, `:256` — emits `ghcr-login-FAILED` and continues), so **a revoked PAT degrades silently into a 401 at the fail-closed pull → FATAL**. Fail-open login feeding a fail-closed pull is what makes this abrupt rather than diagnosable.
+- It reports via `inngest-boot-phone-home.sh` (`:107-122`) to **Better Stack** (`:121`), **not** the Sentry `stage:` schema → **the soak is structurally blind to it**. `cloud-init-inngest.yml` contains **zero** `soleur-boot-emit` calls. *Doubly moot:* the host never attempts zot, so it could not emit `inngest_ghcr_fallback` even if it were wired to Sentry.
+- ~~`cloud-init-inngest-bootstrap.test.sh:58-59` enforces the `ghcr.io` ref in CI.~~ **FALSE — corrected.** That test's `CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"` (`:25`) points at the **colocated** block (which already has `ZIREF`), *not* the dedicated file its filename implies. The only test reading the dedicated file (`inngest-host.test.sh:20`) has **zero** `ghcr`/`IREF`/`zot` assertions. **No CI test governs the dedicated file at all** — so nothing blocks the fix. Do not claim a test does.
+- ~~The image **is** mirrored to zot (`zot-entry-gate.sh:56`).~~ **Overstated — corrected.** `:56` is a pre-flip go/no-go gate that checks `manifest_resolves` (`:48-54`) and **blocks the flip on a miss**. It establishes that zot is *expected* to carry the image, not that it does today.
+- **Tag skew (new, same root cause as the falsified claim).** The dedicated host pins `v1.1.19` (`:337`); the colocated block pins `v1.1.20` (`cloud-init.yml:693,699`). The AC6b pin-consistency guard (`cloud-init-inngest-bootstrap.test.sh:251-254`) only counts refs in `cloud-init.yml`, so **the dedicated pin is ungoverned and has silently fallen a version behind**. The file has no CI owner.
+
+**Liveness — the load-bearing check.** `hcloud_server.inngest` (`inngest-host.tf:181`) is **unconditional**: no `count`, no `for_each`, no variable gate; rendered at `:201` and wired into the fleet (`network.tf:76`, firewall `:303`, volume `:274`) at 10.0.1.40. Contrast the colocated block, which *is* dead (`variables.tf:373-377`, `web_colocate_inngest` `default = false`). **A fresh dedicated inngest host boots this GHCR-only path today.**
 
 **Consequence: 5.3 revokes the PAT ⇒ the next fresh inngest-host boot 401s ⇒ `exit $pull_rc` ⇒ the host never comes up — while this soak reports PASS.**
 
@@ -209,7 +214,7 @@ So: while the D3 tracking issue is **OPEN**, the soak **must not `exit 0`**. Fea
 Shape (place immediately before the final PASS):
 
 ```sh
-BLOCKER=<D3 issue number>
+BLOCKER=6500   # filed 2026-07-15 — the D3 blocker; see Phase 1
 st=$(gh issue view "$BLOCKER" --json state --jq .state 2>/dev/null)
 [[ "$st" == "OPEN" || "$st" == "CLOSED" ]] || { echo "TRANSIENT: cannot read #$BLOCKER state" >&2; exit 2; }
 if [[ "$st" == "OPEN" ]]; then
@@ -379,9 +384,11 @@ Other six domains: not relevant (no user-facing surface, pricing, contract, copy
 
 ## Issues to File (`wg-when-deferring-a-capability-create-a`)
 
+> ✅ **Filed 2026-07-15 as #6500.** Milestone `Post-MVP / Later`. Wired into the C1 arm (D4) as `BLOCKER=6500`.
+
 | Issue | Content |
 |---|---|
-| **Dedicated inngest host hard-pins a GHCR ref with no zot path — blocks ADR-096 5.3** | D3 verbatim: `cloud-init-inngest.yml:330` + fail-closed `:337-343` + CI enforcement (`cloud-init-inngest-bootstrap.test.sh:58-59`) + already-mirrored (`zot-entry-gate.sh:56`). Labels: `priority/p1-high`, `domain/engineering`, `observability`. Link as a retirement precondition on #6122. **Its number is hard-wired into the soak's C1 blocker arm.** Closes when the inngest host pulls zot-primary with a GHCR fallback **and** reports on the Sentry `stage:` schema. |
+| **#6500 — Dedicated inngest host hard-pins a GHCR ref with no zot path — blocks ADR-096 5.3** | D3 as re-verified: `cloud-init-inngest.yml:337` (GHCR-only, 0 zot hits file-wide) + fail-closed pull `:349` + fail-open baked-token login `:260` + Better-Stack-not-Sentry reporting `:107-122` + **live, unconditional host** (`inngest-host.tf:181`) + **no CI owner** (`cloud-init-inngest-bootstrap.test.sh:25` reads `cloud-init.yml`, not this file) + resulting **tag skew** (v1.1.19 vs colocated v1.1.20). Labels: `priority/p1-high`, `domain/engineering`, `observability`. Link as a retirement precondition on #6122. **Its number is hard-wired into the soak's C1 blocker arm.** Closes when the inngest host pulls zot-primary with a GHCR fallback **and** reports on the Sentry `stage:` schema. <br>⚠ **Do NOT claim CI enforces the GHCR ref** — that premise was falsified on re-verification (see D3). Nothing blocks the fix. |
 
 ---
 
@@ -396,9 +403,13 @@ Other six domains: not relevant (no user-facing surface, pricing, contract, copy
 3. Confirm `set -e` is active (`:462`) and `_emit` returns 0.
 4. `gh issue view 6462 --json state` → OPEN.
 
-### Phase 1 — File the D3 blocker issue **FIRST** (C2)
+### Phase 1 — File the D3 blocker issue **FIRST** (C2) — ✅ **DONE: #6500**
 
 Its number is cited by the ADR amendment **and hard-wired into the C1 blocker arm** — it must exist before either references it.
+
+**Filed 2026-07-15 as #6500** (`priority/p1-high`, `domain/engineering`, `observability`; milestone `Post-MVP / Later`, matching #6122/#6462). Use **6500** in the C1 arm (D4) and the ADR amendment.
+
+> **Premise re-verification changed the issue's content** (see the D3 note). Two of the six original evidence claims did not survive: CI does **not** enforce the GHCR ref on the dedicated file (nothing governs it at all), and `zot-entry-gate.sh:56` *requires* the mirror rather than proving it. The conclusion held and strengthened — the host is live and unconditional (`inngest-host.tf:181`). Remaining step: link #6500 as a retirement precondition on #6122 (Phase 7.3).
 
 ### Phase 2 — RED (`cq-write-failing-tests-before`)
 
@@ -463,7 +474,7 @@ Add the 5th `tagged_event` + update the `:1334-1335` comment. `terraform validat
 7b. **AC7b — the liveness floor is a gate, not a wall.** `MIN_BOOTS` is its own knob defaulting to **1**: `grep -c 'MIN_BOOTS="${ZOT_SOAK_MIN_BOOTS:-1}"'` == 1, and the floor's comparison names `MIN_BOOTS`, **not** `MIN_SAMPLE` (`grep -c 'APP_ZOT < MIN_SAMPLE'` == 0). A 3-floor on fresh-boot count — 9 such events *ever* — is `exit 1` daily forever, and a gate that structurally cannot pass gets bypassed. The knob is validated `^[1-9][0-9]*$` (an unvalidated knob is a vacuous-pass hole). **Distinct from AC8:** the pre-existing *sample* arm keeps `MIN_SAMPLE`.
 8. **AC8 — the insufficient-sample arm keeps `exit 1`.** `grep -c 'FAIL(insufficient-sample)'` == 1, arm still `exit 1` — the only detector for the #6437 Sentry-dark mode. **Do not "fix" it to TRANSIENT.**
 9. **AC9 — no arithmetic on an unguarded count.** Every `sentry_count` result is string-guarded (`=~ ^[0-9]+$`) **before** any `(( ))` / `$(( ))` use — `:151` returns the bare word `TRANSIENT`, which arithmetic silently coerces to **0** (the hazard `:109-115` documents). Verify by reading each new call site.
-10. **AC10 — the D3 blocker is tracked AND enforced.** The issue exists with `priority/p1-high`, is linked from #6122, **and its number appears in the soak's C1 arm** (`grep -c '<N>' scripts/followthroughs/zot-soak-6122.sh` ≥ 1). A deferral without a tracking issue is invisible; a known-fatal path without an exit-code gate is prose.
+10. **AC10 — the D3 blocker is tracked AND enforced.** **#6500** exists with `priority/p1-high` (✅ filed), is linked from #6122, **and its number appears in the soak's C1 arm** (`grep -c '6500' scripts/followthroughs/zot-soak-6122.sh` ≥ 1). A deferral without a tracking issue is invisible; a known-fatal path without an exit-code gate is prose.
 11. **AC11 — ADR-096 does not over-claim (the repeat-offence gate).** The amended region contains `#6437`, names the **7th** path, and states coverage as **5 of 7** — not "COVERED". Status still `Adopting`. *ADR-096 already had to publicly correct one over-claim; this AC exists so it does not happen twice.*
 12. **AC12 — the follow-through probe is enrolled and executable.** `test -x scripts/followthroughs/accounted-beacon-live-6462.sh`; `bash scripts/followthrough-exec-bit.test.sh` passes; #6462 carries the `follow-through` label + directive.
 13. **AC13 — full suite green.** `bash scripts/test-all.sh` exits 0.
