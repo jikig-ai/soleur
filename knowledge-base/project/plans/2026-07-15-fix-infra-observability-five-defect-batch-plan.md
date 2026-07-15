@@ -96,6 +96,33 @@ hiding it.
 
 ## User-Brand Impact
 
+> **v3 / UC-1 — READ THIS FIRST.** Everything below this callout describes **PR-B**
+> (Phase 4, `ci-deploy.sh`). It was written when the batch was one PR. **PR-A carries none
+> of it** — the split exists precisely because that risk is Phase 4's alone.
+
+### PR-A (this PR — #6436, #6429, #6446, #6447)
+
+- **Brand-survival threshold:** `none`, reason: PR-A has no runtime path.
+- Scope-out (canonical form for the ship gate):
+  threshold: none, reason: PR-A changes a C4 model, comments/citations, a CI workflow step, and two test files; no user-facing code executes any of it, and its one production artifact (the Sentry alert rule) affects an operator paging threshold rather than user-facing behaviour.
+
+**If this lands broken, the user experiences:** nothing. No PR-A file is on a request path,
+a boot path, or a deploy path. The one artifact that reaches production is
+`sentry/issue-alerts.tf` (auto-applied by `apply-sentry-infra.yml`), and its blast radius is
+an **operator paging threshold**, not user-facing behaviour: worst case the founder is paged
+one tenant later than intended — which is exactly the pre-existing state this PR fixes. The
+`sandbox-startup-failure` rule keeps its notify action either way (pinned by a mutation-tested
+contract assertion after review found the original check vacuous).
+
+**If this leaks, the user's data is exposed via:** no surface. PR-A adds no credential, no
+env var, no log sink, and no new data path. The live read-back it performs is a read-only GET.
+
+**Recovery path:** `git revert` of PR-A restores the prior comments/C4/CI step;
+`apply-sentry-infra.yml` re-applies the reverted threshold on the next push to main. Nothing
+to roll back at the container layer because nothing was deployed.
+
+### PR-B (Phase 4 / #6437 — NOT this PR)
+
 **If this lands broken, the user experiences:** `app.soleur.ai` **down** — not a stale
 image. *(v1 said "stranded on the previous image"; the CPO falsified it and the code
 confirms.)* `ci-deploy.sh` does `docker stop` (`:1884`) → `docker rm` (`:1885`) →
@@ -189,6 +216,36 @@ Phase 4.1 adds one line to `soleur-host-bootstrap.sh`, which is **baked into the
 `## Risks`.
 
 ## Observability
+
+> **v3 / UC-1 — scope.** The `liveness_signal` + `discoverability_test` below are **PR-B's**
+> (Phase 4 introduces `sentry_source`; PR-A does not). PR-A's own block is first.
+
+### PR-A observability (this PR)
+
+```yaml
+liveness_signal:
+  what: >
+    The sandbox-startup-failure alert's stored threshold and notify action, read back
+    live from Sentry. PR-A's only artifact that reaches production is the alert rule;
+    everything else (C4, comments, CI step, tests) has no runtime signal by construction.
+  cadence: on merge (apply-sentry-infra.yml auto-applies the sentry root)
+  alert_target: >
+    The rule IS the alert. Its own reachability is the property under change:
+    value = 2 under Sentry's strict `>` fires at >=3 distinct tenants.
+  configured_in: apps/web-platform/infra/sentry/issue-alerts.tf
+discoverability_test:
+  command: bash plugins/soleur/test/c4-model-freshness.test.sh
+  expected_output: ALL TESTS PASSED
+```
+
+Note the honest limitation: the alert's live state is **auth-gated** (Sentry API token), so it
+cannot be a no-credential one-liner. The read-back was performed this session and is recorded
+verbatim under `## Verification Results` (24 live rules; prod still shows the pre-fix
+`value=3`). The runnable command above is the **C4 freshness byte-diff** — the real gate for
+PR-A's other production artifact, and the one the plan's AC2 originally missed by naming two
+filesystem-mocking tests instead.
+
+### PR-B observability (Phase 4 / #6437 — NOT this PR)
 
 ```yaml
 liveness_signal:
