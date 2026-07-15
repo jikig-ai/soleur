@@ -13,7 +13,26 @@ requires_cpo_signoff: true
 
 **Ref #6425** (not `Closes` — the de-pool executes post-merge; see Phase 7).
 
-> Revised after a 7-reviewer panel + a scoped advisor consult. The panel falsified six of v1's claims and produced two P0s. See `## Review Corrections` for what changed and why — several are lessons, not just edits.
+> Revised after a 7-reviewer panel + a scoped advisor consult, then deepened. The panel falsified **27** v1/v2 claims and produced **four P0s**. See `## Review Corrections` — several are lessons, not just edits.
+
+## Enhancement Summary
+
+**Deepened:** 2026-07-15 · **Panel:** dhh · kieran · code-simplicity · architecture-strategist · spec-flow-analyzer · cto (devex) · cpo (sign-off) + a Fable advisor consult.
+
+### Key improvements over v1
+
+1. **The root cause was confirmed live, not argued.** The Cloudflare API census found 2 connectors on tunnel `6410c1ec`, colo-split fra* (web-2/fsn1) vs ams*+hel* (web-1/hel1) — independently corroborating the EU-vs-US vantage evidence.
+2. **The deliverable was saved from missing its own incident.** `host_id` on the JSON emits alone would not have appeared in the 2026-07-15 probe, which returned `FATAL __FETCH_FAILED__` — a plain-text `exit 1` path. AC3 now covers the **success × failure** axis.
+3. **A GA time-bomb was removed.** v1 bound the connector to ADR-068 §(c); §(c) clears at GA → web-2 re-joins → #6425 recurs *while web-2 serves users*. The gate is now *designated ingress host*, which never clears.
+4. **The apply path was made executable.** Two independent P0s (the coherence preflight aborting the de-pool; the racing run consuming the `triggers_replace` hash and making the re-push a no-op) are now compensated — or dissolved entirely by the split recorded in `decision-challenges.md` UC-1.
+5. **The detector gap was closed.** v1 ran the vantage-independent census once, by hand, then relied on a single-vantage poll it had itself declared worthless. The census is now a standing 15-min watchdog check filing an `action-required` issue — the only wire into `operator-digest`.
+
+### New considerations discovered
+
+- The de-pool's blast radius is the **apply pipeline**, not a serving surface (`## Downtime & Cutover`) — and the failure mode is "nothing happens," not "half a host."
+- `/hooks/infra-config` is a **coin-flipped WRITE** self-verified against a *separately* coin-flipped read; `ssh.soleur.ai` carries the seccomp/AppArmor applies. Both are worse than the reported symptom.
+- Two in-code root-cause attributions (`tunnel.tf:58-64` "registry transiently DOWN"; `:68-71` the 2026-07-11 502) may be misdiagnoses of this same coin flip — probe prescribed, conclusion withheld.
+- Three defects in Soleur's own tooling surfaced (see `decision-challenges.md`), including a `plan-review` sentinel where declaring the **higher** threshold silently buys **less** review.
 
 ## Overview
 
@@ -95,6 +114,21 @@ L3→L7 order was honoured, which is what made the diagnosis cheap:
 3. **"Host was reprovisioned" — REFUTED.** Store 333MB→0, root_avail 50G→70G, canary reset = a different host answering.
 4. **"Inngest is down" — REFUTED.** Watchdog read `functions=61`.
 5. **#6400 `image_pull_failed` / #6357 share this root cause — UNVERIFIED. Do not assert.**
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+Gate fired on two triggers: the prose names `502` (#6357), and the **resource-shape trigger** — Phase 7 drives `terraform apply` on `apply-deploy-pipeline-fix.yml`'s `terraform_data.*` targets, which carry `connection { type = "ssh" }` + `provisioner` blocks, making SSH a hard apply-time dependency the prose-only scan would miss (the #3061 class). Layer-by-layer verification status per `plan-network-outage-checklist.md`:
+
+| Layer | Status | Artifact |
+|---|---|---|
+| **L3 — firewall allow-list vs. current egress IP** | **Not applicable to the de-pool, but load-bearing for Phase 7 step 4.** `apply-deploy-pipeline-fix.yml` does **not** need the runner IP in `var.admin_ips` — it bridges SSH through the CF Tunnel (`:33-42`) with the `ci_ssh` Access service token. The de-pool itself (`web-2-recreate`) is a Hetzner-API call and traverses **no** SSH. | `apply-deploy-pipeline-fix.yml:33-42`; `server.tf` provisioners pin `host = hcloud_server.web["web-1"].ipv4_address` (direct IP, not the tunnel) |
+| **L3 — DNS / routing** | **VERIFIED — and this is the root cause.** `dig deploy.soleur.ai` → 188.114.97.2 / 188.114.96.2 (Cloudflare anycast). Origin is chosen at the **edge**, not by DNS, so DNS is correct and irrelevant. Checked *before* any service-layer hypothesis, per `hr-ssh-diagnosis-verify-firewall`. | Operator-pulled 2026-07-15 08:50–09:05 UTC |
+| **L7 — TLS / proxy** | **VERIFIED.** CF edge terminates TLS; the tunnel is an outbound-only connector (no inbound port). The defect is **connector selection**, not TLS. Confirmed live: 2 connectors, colo-split fra* vs ams*/hel*. | Cloudflare API census, `## Overview` |
+| **L7 — application** | **VERIFIED.** Both origins are healthy *as applications* — web-1 answers correctly, web-2 answers as an unprovisioned host (#6415/#6416). No application fault exists; `functions=61` on web-1. | Watchdog run 29400873473 |
+
+**No gaps.** The L3→L7 ordering was honoured and is precisely why the diagnosis was cheap once the census ran: L3 ruled DNS/firewall out immediately, leaving edge-side connector selection as the only remaining explanation for two deterministic-but-opposite verdicts on one URL.
+
+**One SSH-adjacent risk this surfaces:** `ssh.soleur.ai` → `ssh://localhost:22` is itself coin-flipped, so `apply-deploy-pipeline-fix.yml`'s SSH-bridged applies (`terraform_data.docker_seccomp_config`, `apparmor_bwrap_profile`) can land on web-2 **today**. De-pooling fixes this as a side effect — and it is why Phase 7 step 4 runs *after* the de-pool.
 
 ### Hypothesis 5 — probe prescribed, conclusion withheld
 
@@ -260,6 +294,42 @@ With that disclosed and the lever recorded, the acceptance is sound.
 N/A — no new vendor resource. `CF_API_TOKEN` verified **live** as `active` with Tunnel scope, readable from Doppler `prd_terraform`.
 
 ---
+
+## Downtime & Cutover
+
+Required by deepen-plan Phase 4.55 — the plan drives `-replace='hcloud_server.web["web-2"]'`, which is the **infra reboot/replace class** trigger (a `must be replaced` on an `hcloud_server`).
+
+### The offline-inducing operation and the surface it affects
+
+`terraform apply -replace='hcloud_server.web["web-2"]'` (job `web_2_recreate`) **destroys and recreates web-2**. Enumerating every surface web-2 currently serves:
+
+| Surface | Does web-2 serve it? | Effect of the replace |
+|---|---|---|
+| `app.soleur.ai` (all user traffic) | **No** — A record pinned to `hcloud_server.web["web-1"].ipv4_address` (`dns.tf:16`) | **None** |
+| Cloudflare LB pool | **No — and there is no LB.** Zero `cloudflare_load_balancer` / `default_pool_ids` resources exist in the entire root (verified by CPO). Web-2 is *stronger* than weight-0: it is in no pool because no pool exists | **None** |
+| `/workspaces` (per-user worktrees) | **No** — host-local NVMe; no user's lease resolves to web-2 (ADR-068 §(c) gate has never cleared) | **None** |
+| Private-net deploy fan-out peer | Yes, nominally — but dormant; and web-2 is the subject of open #6415/#6416 (not provisioned) | Transient; the fan-out is a no-op at the current single-serving-host state |
+| **`deploy.soleur.ai` / `ssh.soleur.ai` / `registry.soleur.ai` (the rogue connector)** | **Yes — ~half the vantages** | **This is the thing being deleted.** During the window the tunnel drops to one connector, which **is the target state** |
+
+### Zero-downtime path — evaluated, and it is the default
+
+**The operation is zero-downtime by construction for every legitimate serving surface.** No blue-green, rolling, or expand-contract cutover is required, because web-2 serves no legitimate surface to drain:
+
+- **No drain needed** — no user traffic, no LB pool, no lease-holding worktrees.
+- **The only traffic web-2 answers is the defect itself.** Removing it is the fix, not an outage. Framing the connector loss as "downtime" would be a category error: those vantages were being served *wrongly*.
+- **web-1 is untouched.** The `-replace` is scoped to `hcloud_server.web["web-2"]` + 3 web-2 targets; `hcloud_server.web["web-1"]` is not in the target set, and `user_data`/`image` sit in its `ignore_changes` anyway.
+- **The data volume is preserved** — `hcloud_volume.workspaces["web-2"]` is deliberately not targeted (`:1143-1144`), asserted 0-destroy post-apply from the *saved* plan (`:1189-1195`).
+- **Blue-green was considered and rejected as churn:** provisioning a fresh web-3 and retiring web-2 would achieve the identical end state at strictly higher cost and risk (a second host in a capacity-constrained DC), to drain a host that serves nothing.
+
+**Residual downtime: none.** No maintenance window is required and no operator sign-off on downtime is sought, because no serving surface goes offline.
+
+### The real availability risk is to the APPLY PIPELINE, not to a serving surface
+
+Stated plainly so the zero-downtime finding is not read as "risk-free": if the `-replace` destroys web-2 during an fsn1 capacity shortage and cannot re-place it, **every infra apply-on-merge wedges** on `resource_unavailable` (`variables.tf:86-92`; `hcloud_server.web` is reachable in the per-PR apply path as a dependency of the targeted `hcloud_firewall_attachment.web`, `ADR-068:531-533`). That is a **CI/deploy-plane** outage, not a user-facing one — and it is the one accepted risk in this plan.
+
+- **Lever:** flip `var.web_hosts["web-2"].location` off the starved DC and re-dispatch (the documented 2026-07-13 remedy).
+- **Per-stage verification:** the `web2_*` destroy-guard counters + the coherence preflight both **abort before anything is destroyed** — the failure mode is "nothing happens," not "half a host."
+- **Rollback:** see Risks — re-pooling costs a second full recreate (the token bakes into the systemd unit at first boot and `ignore_changes=[user_data]` blocks a config-only revert). **A bad de-pool is not quickly undoable.**
 
 ## Observability
 
@@ -465,8 +535,8 @@ Checked 62 open `code-review` issues against every Files-to-Edit path. Two `serv
 | `.github/workflows/restart-inngest-server.yml` | `:30` dispatch guard |
 | `.github/workflows/scheduled-inngest-health.yml` | connector census + `action-required` issue on `!= 1` |
 | `.github/workflows/apply-inngest-rls.yml` | triage; guard if it writes prod on self-trigger |
-| `…/decisions/ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md` | amendment (5 items) |
-| `…/decisions/ADR-082-fresh-web2-boot-observability.md` | Item 5 |
+| `knowledge-base/engineering/architecture/decisions/ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md` | amendment (5 items) |
+| `knowledge-base/engineering/architecture/decisions/ADR-082-fresh-web2-boot-observability.md` | Item 5 — read-surface `host_id` extension |
 | `knowledge-base/engineering/architecture/diagrams/model.c4` | `tunnel` element description; `tunnel -> hetzner` edge |
 
 ## Files to Create
