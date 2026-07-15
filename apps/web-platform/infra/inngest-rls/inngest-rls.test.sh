@@ -97,9 +97,16 @@ check_no_privileged_revoke() {
 # fragments and flag any fragment that BOTH (a) scans the catalog for ORDINARY or
 # PARTITIONED tables schema-wide and (b) contains an EXECUTE (i.e. emits DDL).
 #
-# Legitimately NOT flagged: 0002's non-allowlisted REPORT reads relkind='r'
-# schema-wide but emits no DDL, and 0002's sequence loop emits DDL but scans
-# relkind='S' scoped to one allowlisted table.
+# Legitimately NOT flagged: 0002's non-allowlisted REPORT reads relkind='r'/'p'
+# schema-wide but emits no DDL.
+#
+# ⚠️ BLIND SPOT, ENFORCED ELSEWHERE — DO NOT "fix" it here. The source disjunction
+# below lists relkind 'r'/'p' but NOT 'S', so a sequence loop that emits DDL is
+# invisible to THIS check. Do NOT add an `'s'` term to the disjunction: 0002's
+# sequence loop legitimately emits DDL over relkind='S', so a bare `'s'` term would
+# false-RED correct code, and the tempting "fix" is to delete the guard. The
+# sequence loop's actual invariant (bound to the allowlist, never schema-wide) is
+# asserted POSITIVELY by check_sequence_ddl_is_allowlist_bound below.
 #
 # ⚠️ awk RS=";" is load-bearing — do NOT "simplify" this to `tr ';' '\n'` piped
 # into `read -r`. That reads LINES, not fragments: the catalog source and the
@@ -124,6 +131,35 @@ check_no_schemawide_ddl_loop() {
   else
     printf '%s\n' "$offenders"
     bad "[$LABEL] FORBIDDEN: a schema-wide table-catalog scan emits DDL — would reach the app's 52 tables"
+  fi
+}
+
+# The relkind='S' half of the invariant above (0002 ONLY — 0001's schema-wide
+# pg_sequences sweep is CORRECT on its dedicated project).
+#
+# 0002's sequence loop emits DDL over relkind='S' and is safe ONLY because of its
+# `AND tc.relname = t` join back to the allowlist loop variable. Deleting that one
+# line leaves the loop schema-wide over EVERY sequence in `public` — revoking
+# anon/authenticated USAGE on the APP's serial sequences and breaking dev inserts —
+# and check_no_schemawide_ddl_loop stays GREEN (proven by mutation 2026-07-15).
+#
+# Asserted POSITIVELY (the binding must be PRESENT) rather than by forbidding an
+# 'S' term: a negative formulation would false-RED the correct implementation.
+check_sequence_ddl_is_allowlist_bound() {
+  local unbound
+  unbound="$(printf '%s' "$CODE" | tr '[:upper:]' '[:lower:]' | awk '
+    BEGIN { RS = ";" }
+    /execute/ &&
+    (/relkind[ \t]*=[ \t]*.s./ || /pg_sequences/) &&
+    !/relname[ \t]*=/ && !/pg_get_serial_sequence/ {
+      gsub(/[ \t\n]+/, " ")
+      print "       unbound sequence-DDL fragment:" substr($0, 1, 150)
+    }')"
+  if [[ -z "$unbound" ]]; then
+    ok "[$LABEL] sequence-revoke DDL is bound to the allowlist (never a schema-wide sequence sweep)"
+  else
+    printf '%s\n' "$unbound"
+    bad "[$LABEL] FORBIDDEN: a sequence loop emits DDL without an allowlist join — would revoke the app's sequences"
   fi
 }
 
@@ -323,6 +359,7 @@ profile_0002() {
     "FORBIDDEN: ALTER DEFAULT PRIVILEGES present — on a CO-TENANTED project this kills the dev app"
 
   check_no_schemawide_ddl_loop
+  check_sequence_ddl_is_allowlist_bound
 
   check_absent 'FORCE[[:space:]]+ROW[[:space:]]+LEVEL[[:space:]]+SECURITY' \
     "no FORCE ROW LEVEL SECURITY (owner bypass keeps Inngest working)" \
