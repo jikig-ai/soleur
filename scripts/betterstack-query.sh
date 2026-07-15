@@ -80,6 +80,15 @@ export BS_TABLE="${BS_TABLE:-t520508_soleur_inngest_vector_prd_3_logs}"
 # the runbook (betterstack-log-query.md §Query mechanics). Verified disjoint on 2026-07-15:
 # 891 rows / 891 distinct / 0 dupes over 7d, archive ending 19:13:46 and hot starting
 # 19:15:02 — so UNION ALL does not double-count (load-bearing: soak gates COUNT events).
+#
+# An explicit BS_TABLE_S3 (env OR --table-s3) always wins; S3_EXPLICIT records that so the
+# post-flag re-derivation below cannot clobber it. Seeding the sentinel from the ENV here —
+# not only from the flag — is load-bearing: otherwise `BS_TABLE_S3=other_s3` is accepted,
+# silently ignored, and the caller gets rows from the DEFAULT archive with no error, because
+# the derived name exists and the query succeeds. That is this script's own headline bug
+# (asks for X, gets Y, exit 0) reintroduced one level down.
+S3_EXPLICIT=0
+[[ -n "${BS_TABLE_S3:-}" ]] && S3_EXPLICIT=1
 export BS_TABLE_S3="${BS_TABLE_S3:-${BS_TABLE%_logs}_s3}"
 
 run_sql() {
@@ -107,7 +116,6 @@ fi
 
 # --- Mode 2: convenience flags ---
 SINCE="1h"; UNTIL=""; LIMIT=100; RAW_ONLY=0; NO_ARCHIVE=0
-S3_EXPLICIT=0
 GREPS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -124,8 +132,32 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Re-derive the archive name AFTER flag parsing so `--table` and `--table-s3` are
-# order-independent: an explicit --table-s3 always wins, whichever side it was passed on.
-(( S3_EXPLICIT )) || BS_TABLE_S3="${BS_TABLE%_logs}_s3"
+# order-independent: an explicit --table-s3 (or BS_TABLE_S3 env) always wins, whichever
+# side it was passed on.
+if (( ! S3_EXPLICIT )); then
+  # Only the `_logs` suffix has a known `_s3` counterpart. The runbook documents `_metrics`
+  # and `_spans` tables too; guessing `<name>_metrics_s3` for those would invent a table the
+  # caller never named — silently querying the wrong source if it happens to exist. Demand
+  # an explicit archive name instead of guessing.
+  if [[ "$BS_TABLE" != *_logs ]]; then
+    if (( NO_ARCHIVE )); then
+      BS_TABLE_S3=""   # unused on this path; nothing to derive.
+    else
+      cat >&2 <<EOF
+betterstack-query.sh: cannot derive an archive table from BS_TABLE='${BS_TABLE}'.
+
+Only <name>_logs has a known <name>_s3 counterpart. For any other table, name the archive
+explicitly or opt out of it:
+
+  --table-s3 <archive_table>   (or BS_TABLE_S3=<archive_table>)
+  --no-archive                 (hot window only — returns ~40 minutes; see the header)
+EOF
+      exit 64
+    fi
+  else
+    BS_TABLE_S3="${BS_TABLE%_logs}_s3"
+  fi
+fi
 export BS_TABLE_S3
 
 # Build the WHERE clause. `dt` is the ClickHouse event-time column.
@@ -158,17 +190,31 @@ fi
 # LIMIT apply to the COMBINED set — pushing them inside either arm would truncate each
 # half independently and interleave wrongly.
 #
+# LIMIT takes the NEWEST rows (inner ORDER BY dt DESC), then the outer ORDER BY dt ASC
+# restores chronological output. Both halves are load-bearing:
+#   - DESC inner: before the archive arm existed the window was structurally <=40 min, so
+#     LIMIT effectively never bound and ASC+LIMIT was harmless. Against a real 24h window it
+#     bites — the runbook's own `--since 48h --grep SOLEUR_CLAUDE_COST --limit 20` would
+#     answer "show me recent costs" with the OLDEST 20 markers, i.e. ~48h stale. "Most
+#     recent N" is what every caller of a log tail means.
+#   - ASC outer: callers (and humans) read oldest->newest; flipping output order would be a
+#     silent behavior change for anything parsing the stream positionally.
+#
 # FAIL LOUD, never silently hot-only: returning a short answer to `--since 24h` is the
 # exact failure this fix exists to remove, and it is invisible at the call site (a caller
 # counting events sees "not yet filled", not "your window was truncated"). If the archive
 # arm errors, the whole query errors and the caller must opt out deliberately with
 # --no-archive rather than be handed partial data it will read as complete.
 if (( NO_ARCHIVE )); then
-  run_sql "SELECT dt, raw FROM remote(${BS_TABLE}) WHERE ${WHERE} ORDER BY dt ASC LIMIT ${LIMIT} FORMAT JSONEachRow"
+  run_sql "SELECT dt, raw FROM (
+  SELECT dt, raw FROM remote(${BS_TABLE}) WHERE ${WHERE} ORDER BY dt DESC LIMIT ${LIMIT}
+) ORDER BY dt ASC FORMAT JSONEachRow"
 else
   run_sql "SELECT dt, raw FROM (
-  SELECT dt, raw FROM remote(${BS_TABLE}) WHERE ${WHERE}
-  UNION ALL
-  SELECT dt, raw FROM s3Cluster(primary, ${BS_TABLE_S3}) WHERE _row_type = 1 AND (${WHERE})
-) ORDER BY dt ASC LIMIT ${LIMIT} FORMAT JSONEachRow"
+  SELECT dt, raw FROM (
+    SELECT dt, raw FROM remote(${BS_TABLE}) WHERE ${WHERE}
+    UNION ALL
+    SELECT dt, raw FROM s3Cluster(primary, ${BS_TABLE_S3}) WHERE _row_type = 1 AND (${WHERE})
+  ) ORDER BY dt DESC LIMIT ${LIMIT}
+) ORDER BY dt ASC FORMAT JSONEachRow"
 fi

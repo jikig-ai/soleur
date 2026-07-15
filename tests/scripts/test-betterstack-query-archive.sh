@@ -44,6 +44,19 @@ capture_sql() {
   ' _ "$TARGET" "$@" 2>/dev/null
 }
 
+# Same, but the curl stub exits non-zero — used to prove the failure propagates to the
+# caller rather than being swallowed (the script runs under `set -uo pipefail`, NOT -e).
+run_with_failing_curl() {
+  BETTERSTACK_QUERY_HOST=stub \
+  BETTERSTACK_QUERY_USERNAME=stub \
+  BETTERSTACK_QUERY_PASSWORD=stub \
+  bash -c '
+    curl() { return 22; }
+    source "$1" "${@:2}"
+  ' _ "$TARGET" "$@" >/dev/null 2>&1
+  printf '%s' "$?"
+}
+
 # --- 1. default (mode 2) unions hot + archive ---
 sql="$(capture_sql --since 24h --grep MARKER)"
 case "$sql" in
@@ -66,13 +79,17 @@ case "$sql" in
   *) bad "archive arm filters _row_type = 1" "got: ${sql:0:180}" ;;
 esac
 
-# ORDER BY / LIMIT must apply to the COMBINED set, not inside either arm — otherwise each
-# half is truncated independently and the merge interleaves wrongly.
-outer="${sql##*)}"
-case "$outer" in
-  *"ORDER BY dt ASC"*"LIMIT"*) ok "ORDER BY + LIMIT apply to the combined set" ;;
-  *) bad "ORDER BY + LIMIT apply to the combined set" "outer tail: ${outer:0:120}" ;;
-esac
+# LIMIT must apply to the COMBINED set, never inside an arm: a per-arm LIMIT truncates each
+# half independently, so the merged result silently drops rows the caller matched. Pin it
+# structurally — exactly one LIMIT, and nothing before the UNION ALL carries one. (Ordering
+# itself is asserted precisely below, in the newest-N check.)
+lim_count="$(grep -o 'LIMIT' <<<"$sql" | wc -l | tr -d ' ')"
+arms_before_union="${sql%%UNION ALL*}"
+if [[ "$lim_count" == "1" && "$arms_before_union" != *LIMIT* ]]; then
+  ok "LIMIT applies once, to the combined set (not per-arm)"
+else
+  bad "LIMIT applies once, to the combined set (not per-arm)" "count=$lim_count hot_arm_has_limit=$([[ "$arms_before_union" == *LIMIT* ]] && echo yes || echo no)"
+fi
 
 # The time predicate must reach BOTH arms — a hot-only WHERE would drag the whole archive.
 hits="$(grep -o 'INTERVAL 24 HOUR' <<<"$sql" | wc -l | tr -d ' ')"
@@ -119,6 +136,49 @@ case "$raw" in
     ok "raw SQL substitutes \$BS_TABLE_S3 before \$BS_TABLE" ;;
   *) bad "raw SQL substitutes \$BS_TABLE_S3 before \$BS_TABLE" "got: ${raw:0:160}" ;;
 esac
+
+# --- 5. BS_TABLE_S3 as an ENV VAR is honored in mode 2, not just as a flag ---
+# Regression pin: the sentinel was originally set only by --table-s3, so the post-flag
+# re-derivation clobbered an env-supplied BS_TABLE_S3. The caller then queried the DEFAULT
+# archive and got rows from the wrong source with NO error (the derived name exists, so the
+# query succeeds) — this script's own headline bug, one level down. BS_TABLE's env override
+# already survived both modes; BS_TABLE_S3's must too.
+sql_env="$(BS_TABLE_S3=my_custom_archive_s3 capture_sql --since 1h)"
+case "$sql_env" in
+  *"s3Cluster(primary, my_custom_archive_s3)"*) ok "BS_TABLE_S3 env override honored in mode 2" ;;
+  *) bad "BS_TABLE_S3 env override honored in mode 2" "override dropped: ${sql_env:0:180}" ;;
+esac
+
+# --- 6. LIMIT takes the NEWEST rows, output stays chronological ---
+# ASC+LIMIT was harmless while the window was structurally <=40min; against a real 24h it
+# returns the OLDEST N ("recent costs" -> 48h-stale markers).
+sql_lim="$(capture_sql --since 48h --limit 20)"
+inner_desc=0 outer_asc=0
+[[ "$sql_lim" == *"ORDER BY dt DESC LIMIT 20"* ]] && inner_desc=1
+[[ "${sql_lim##*LIMIT 20}" == *"ORDER BY dt ASC"* ]] && outer_asc=1
+if (( inner_desc && outer_asc )); then ok "LIMIT takes newest N (inner DESC), output re-sorted ASC"
+else bad "LIMIT takes newest N (inner DESC), output re-sorted ASC" "inner_desc=$inner_desc outer_asc=$outer_asc :: ${sql_lim:0:220}"; fi
+
+# --- 7. a non-_logs table refuses to guess an archive name ---
+out_rc="$(BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+  bash "$TARGET" --since 1h --table t520508_foo_metrics >/dev/null 2>&1; printf '%s' "$?")"
+if [[ "$out_rc" == "64" ]]; then ok "non-_logs table errors rather than inventing <name>_s3"
+else bad "non-_logs table errors rather than inventing <name>_s3" "expected rc=64, got $out_rc"; fi
+
+# ...but --no-archive on a non-_logs table is fine (nothing to derive).
+sql_nl="$(capture_sql --since 1h --table t520508_foo_metrics --no-archive)"
+case "$sql_nl" in
+  *"remote(t520508_foo_metrics)"*) ok "--no-archive works on a non-_logs table" ;;
+  *) bad "--no-archive works on a non-_logs table" "got: ${sql_nl:0:140}" ;;
+esac
+
+# --- 8. failure propagates (fail-loud is the PR's headline claim; pin it) ---
+# Guards against a future run_sql refactor swallowing the status. No `set -e` here, so this
+# is not self-evident from reading the script.
+rc_u="$(run_with_failing_curl --since 1h)"
+rc_n="$(run_with_failing_curl --since 1h --no-archive)"
+if [[ "$rc_u" != "0" && "$rc_n" != "0" ]]; then ok "a failing query exits non-zero (both arms)"
+else bad "a failing query exits non-zero (both arms)" "union rc=$rc_u no-archive rc=$rc_n"; fi
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
