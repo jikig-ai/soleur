@@ -111,7 +111,7 @@ independent axes so it never silently gates a host:
     never fire** — the count is per Sentry issue-group, `registry_pull_event` mints a fresh group per
     deploy (the tag is in the message), so the per-group count is bounded by fleet size, not a rate;
     #6285 corrected it to 0, the only fleet-independent setting (see the resource comment). Parity:
-    `zot-soak-6122.sh` FAILs on ≥1 event across the **same four signals** this alarm matches, pinned
+    `zot-soak-6122.sh` FAILs on ≥1 event across the **same five signals** this alarm matches, pinned
     by `sentry-zot-mirror-fallback-alert-op-contract.test.ts`. **This parity claim was FALSE from
     #6278 until #6435:** the soak queried only `registry:"ghcr-fallback"` and
     `stage:"inngest_ghcr_fallback"` — `registry:"zot-gate-degraded"` and `stage:"app_ghcr_fallback"`
@@ -119,13 +119,52 @@ independent axes so it never silently gates a host:
     recorded rather than silently edited, because the earlier text asserted the coverage it lacked.
     **Scope of the corrected claim — do NOT restate this as "the gate matches the alarm" and stop:**
     window/threshold parity is **not** pinned (the alarm is a 1h-rolling per-issue-group count; the
-    soak is a flat count over `START..now`); the soak's FAIL set covers **four of the six** ways the
-    fleet can end up GHCR-served — uncovered are the Sentry-dark mode (emits nothing at all — #6437 —
-    caught only by the soak's insufficient-sample arm) and the fresh-boot `/v2/` probe-miss path
-    (emits nothing at all — #6462); and
-    fresh-boot coverage is **partial** (a `/v2/` probe miss emits nothing, and there is no `app_zot`
-    liveness beacon, so the soak has no denominator of expected boots — #6462). The soak is therefore
-    **necessary but not sufficient** to authorize 5.3–5.5.
+    soak is a flat count over `START..now`); the soak's FAIL set covers **five of the seven** ways the
+    fleet can end up GHCR-served.
+
+    **Amended by #6462 — read the RATIO, not the delta.** #6462 added `stage:"app_ghcr_served"` (a
+    5th FAIL signal, covering the fresh-boot `/v2/` probe-miss path that previously emitted nothing)
+    and `stage:"app_zot"` (the missing **denominator** — a liveness beacon that makes "0 fallbacks"
+    distinguishable from "no fresh boot happened"). It also **surfaced a seventh path**. So coverage
+    moved **4-of-6 → 5-of-7**: the numerator and the denominator both rose, and the count of
+    known-uncovered paths is **unchanged at 2**. This is deliberately NOT restated as "COVERED" —
+    the passage above records that this ADR already asserted coverage it lacked once, and a reader
+    must be able to see the residual count without inferring it from "+1 signal".
+
+    The two remaining uncovered paths:
+    - **Sentry-dark** (#6437) — `ci-deploy.sh` returns early before every `zot_gate_degraded_event`
+      call site when doppler / `DOPPLER_TOKEN` / `ZOT_REGISTRY_URL` is absent: the fleet emits
+      nothing at all. Caught ONLY by the soak's insufficient-sample arm, which is why that arm must
+      keep `exit 1`.
+    - **The dedicated inngest host** (#6500, surfaced by #6462) — a **live** host
+      (`hcloud_server.inngest` is unconditional, `inngest-host.tf:181`) whose
+      `cloud-init-inngest.yml:337` hard-pins a `ghcr.io` ref with no zot path, no `/v2/` probe and
+      no fallback, and whose pull is **fail-closed** (`:349`). It reports via
+      `inngest-boot-phone-home.sh` to Better Stack, not the Sentry `stage:` schema, so every query
+      in the soak is structurally blind to it. **Task 5.3 revokes the PAT ⇒ its next fresh boot
+      401s ⇒ the host never comes up.** Unlike #6437 this residual is **machine-enforced, not
+      merely disclosed**: the soak's blocker arm reads #6500's state via `gh` and refuses `exit 0`
+      while it is OPEN. Closing #6500 is therefore an **authorization act** — see the pinned note
+      on that issue.
+
+    The soak remains **necessary but not sufficient** to authorize 5.3–5.5, and this ADR stays
+    **Adopting**.
+
+    *Debt recorded, not deferred silently:* the **Sentry plane is unmodelled in C4**
+    (`hetzner -> sentry`, `webapp -> sentry`). The edge is already true on `main` — `_emit` has
+    POSTed from the boot path for the `on_err` fatals (`stage:"pull"`, `stage:"ghcr_login"`), and
+    #6462 adds a 5th call site on that same emitter rather than a new edge — so this is
+    pre-existing debt, not #6462's. It should be modelled **whole** in a docs-only PR; shipping
+    `sentry` with a single inbound edge would assert a falsehood (that the webapp does not report
+    to Sentry) where silence asserts nothing.
+
+    *Expected pages between merge and cutover:* a web-host recreate that misses the `/v2/` probe
+    now fires `zot_mirror_fallback_rate` via `app_ghcr_served`. That is **expected** and shares a
+    root cause with #6416 / #6288 — do not investigate it separately. ⚠ But do **not** mute the
+    `app_ghcr_served` issue to quiet it: unlike `ghcr-fallback` (which regroups per deploy, so a
+    mute self-expires) it is stable-grouped on a static message, so a mute is permanent and would
+    blind the dominant GHCR-served path — the exact hole #6462 closes. See the mute-safety
+    carve-out in `issue-alerts.tf`.
     ⚠ **The soak is also not yet ENROLLED, and #6435 did not enroll it.** `sweep-followthroughs.sh`
     enumerates `--label follow-through --state open` and reads a `soleur:followthrough` directive from
     the issue body; #6122 carries neither, and no issue references `zot-soak-6122.sh`, so the sweeper

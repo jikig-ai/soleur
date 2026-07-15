@@ -961,11 +961,20 @@ pull_image_with_fallback() {
     # watched event; surfaced loudly, not journald-only.
     #
     # RETIREMENT TRIPWIRE (#6285): ADR-096 task 5.3 deletes this branch. That darkens exactly
-    # ONE of the four signals watched by sentry_issue_alert.zot_mirror_fallback_rate
-    # (infra/sentry/issue-alerts.tf): registry:"ghcr-fallback", emitted just below. The other
-    # two pull-fallback signals live in cloud-init.yml (app_ghcr_fallback,
-    # inngest_ghcr_fallback) — a separate fresh-boot path, separate deletions; they fire on
-    # the zot MISS, before any GHCR pull, so "stop GHCR push" does not darken them either.
+    # ONE of the FIVE signals watched by sentry_issue_alert.zot_mirror_fallback_rate
+    # (infra/sentry/issue-alerts.tf): registry:"ghcr-fallback", emitted just below.
+    #
+    # The other pull-fallback signals live in cloud-init.yml — a separate fresh-boot path,
+    # separate deletions. Their survival across 5.3 is NOT uniform, so do not read them as one
+    # group:
+    #   app_ghcr_fallback / inngest_ghcr_fallback — fire on the zot MISS, before any GHCR pull
+    #     succeeds, so "stop GHCR push" does not darken them.
+    #   app_ghcr_served (#6462) — DIFFERENT. It fires AFTER the pull loop resolves, and on its
+    #     dominant route (a /v2/ probe-miss) the GHCR pull SUCCEEDED. Once 5.3 revokes the PAT
+    #     that pull 401s instead, so the boot takes the N>=5 -> exit 1 path and dies emitting no
+    #     app_ghcr_served at all. It is not "darkened by push retirement" like its siblings —
+    #     it is darkened by the boot failing. Post-5.3, its silence means the opposite of
+    #     healthy. This is precisely why the soak must be trustworthy BEFORE 5.3, not after.
     # zot_gate_degraded_event (:630) is GATE-emitted and survives 5.3 outright.
     #
     # So do NOT retire that alarm here — NARROW its filters_v2 to the signals that still

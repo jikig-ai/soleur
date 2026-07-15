@@ -23,9 +23,18 @@ warm and current.
   matching event, not a spike: a `registry:"ghcr-fallback"` / `stage:"inngest_ghcr_fallback"` /
   `stage:"app_ghcr_fallback"` event means a host *tried* zot and failed — that deploy/boot took
   the slower fallback path and zot is degraded.
+  > ⚠ **`stage:"app_ghcr_served"` (#6462) does NOT belong in that list — it means the opposite.**
+  > Its dominant route is a `/v2/` **probe-miss**, where zot was **never attempted** and the GHCR
+  > pull succeeded first try. Triaging it as "tried zot and failed" sends you down the pull path
+  > when the fault is the probe. It shares the *next* bullet's semantics (zot unreachable), so
+  > read it there. Distinguish by its sibling: `app_ghcr_served` **with** `app_ghcr_fallback` =
+  > zot was tried and failed (this bullet); `app_ghcr_served` **without** it = the probe missed
+  > (next bullet).
 - zot host down / unreachable / R2-backed storage fault / cert/htpasswd rotation broke pull
   auth, and you want to stop hosts from attempting zot at all (each attempt adds a probe +
-  a failed pull before falling back).
+  a failed pull before falling back). A `stage:"app_ghcr_served"` event with **no**
+  accompanying `stage:"app_ghcr_fallback"` is the fresh-boot form of this: the `/v2/` probe
+  missed, so the boot never tried zot (#6416 / #6288 are the standing probe-miss trackers).
   > **RULE OUT THE PRIVATE NIC FIRST (#6415 / ADR-115).** "zot is unreachable" is exactly how
   > #6400 presented, and the cause was that the host held no `10.0.1.30` at all — zot itself was
   > healthy on `:5000`. Reverting to GHCR-primary here would **mask** that: it stops the failing
@@ -104,8 +113,9 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
     host-up-heartbeat-green-but-pull-cred-broken case the other two miss.
 - **Alert rule** — `sentry_issue_alert.zot_mirror_fallback_rate`, APPLY-CREATED and live now
   (it is **not** armed at cutover; `zot-gate-degraded` emits pre-flip today). It pages on the
-  **first** event matching any of the FOUR signals: `registry:{"ghcr-fallback",
-  "zot-gate-degraded"}` / `stage:{"inngest_ghcr_fallback", "app_ghcr_fallback"}`
+  **first** event matching any of the FIVE signals: `registry:{"ghcr-fallback",
+  "zot-gate-degraded"}` / `stage:{"inngest_ghcr_fallback", "app_ghcr_fallback",
+  "app_ghcr_served"}`
   (`event_frequency count > 0 / 1h`, `filter_match = "any"`). Fire-on-first is required, not a
   preference: the count is per Sentry issue-group and `ghcr-fallback` mints a fresh group per
   deploy, so any threshold above 0 is unreachable on that signal (#6285). It also matches
