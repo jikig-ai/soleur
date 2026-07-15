@@ -53,7 +53,7 @@ const WORKFLOW = resolve(
 // exclusion with a reason — an undeclared option fails the coverage test, so an author
 // adding a path must make a conscious call rather than silently skipping the gate.
 //
-// NOTE ON SHAPE: modelled on terraform-target-parity.test.ts:81, but that allowlist holds
+// NOTE ON SHAPE: modelled on terraform-target-parity.test.ts:79, but that allowlist holds
 // terraform RESOURCE names — a different axis. Borrow the shape, not the set.
 const EXCLUSION_ALLOWLIST = new Map<string, string>([
   [
@@ -67,12 +67,20 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
   ],
   [
     "warm-standby",
-    // The ADDITIVE 6-target apply (job `warm_standby`): hcloud_server_network.web["web-2"],
-    // hcloud_volume.workspaces["web-2"], hcloud_volume_attachment.workspaces["web-2"]. It
-    // never targets hcloud_server.web, so it needs no stock and cannot strand anything. It
-    // is also the ESCAPE PATH the gate's own abort message points operators at — gating it
+    // The ADDITIVE apply (job `warm_standby`). Its -target list (:788-796) does not NAME
+    // hcloud_server.web — but do NOT reason from that: terraform -target pulls dependencies,
+    // hcloud_server_network.web["web-2"] carries `server_id = hcloud_server.web[each.key].id`
+    // (network.tf:41), and the workflow's own :451 says warm-standby "pulls the server
+    // transitively" and recommends it as THE remediation for a missing web-2. So it CAN
+    // create the server, and it CAN need stock.
+    //
+    // It is excluded anyway, on the sound ground: its own destroy guard (:820-830) asserts
+    // resource_deletes==0 && nested_deletes==0 && reboot_updates==0, so it is structurally
+    // incapable of destroying first. A stock miss there is a failed create with the fleet
+    // intact — recoverable, not a strand. Identical to the `inngest-host` reasoning below.
+    // It is also the ESCAPE PATH the gate's own abort message points operators at — gating it
     // would close the exit the tripwire exists to open.
-    "additive, no destroy, no stock required; it is the gate's own escape path",
+    "additive-only by its own destroy guard (resource_deletes==0, :820-830) — it CAN pull hcloud_server.web transitively (:451), but can never destroy first, so a stock miss is recoverable, not a strand; it is also the gate's own escape path",
   ],
   [
     "inngest-host",
@@ -115,7 +123,15 @@ function jobBody(job: Job): string {
 }
 
 const callsGate = (job: Job) => /\bstock_preflight_gate\s+tfplan\.json\b/.test(jobBody(job));
-const sourcesGate = (job: Job) => jobBody(job).includes("stock-preflight-gate.sh");
+// Anchored on the `source` COMMAND, never the bare filename. Every call site carries a
+// `# shellcheck source=tests/scripts/lib/stock-preflight-gate.sh` directive immediately
+// above the real `source` line, so a bare `.includes("stock-preflight-gate.sh")` is
+// satisfied by the COMMENT alone — deleting all five real `source` lines left this suite
+// green. That blind spot maps to the worst runtime failure this gate has: unsourced =>
+// `stock_preflight_gate` is undefined => rc 127 => `if !` => abort on EVERY dispatch of all
+// five destroy paths. A gate that always fails is an outage, not a tripwire.
+const sourcesGate = (job: Job) =>
+  /^\s*source\s+\S*stock-preflight-gate\.sh/m.test(jobBody(job));
 const readsToken = (job: Job) =>
   /doppler secrets get HCLOUD_TOKEN\b/.test(jobBody(job)) &&
   /\bexport HCLOUD_TOKEN\b/.test(jobBody(job));

@@ -201,9 +201,21 @@ N/A — no new vendor resource.
 ```yaml
 liveness_signal:
   what: The stock preflight step's own PASS/ABORT annotation in the recreate dispatch job
-  cadence: on every web-2-recreate / inngest-host-replace / registry-host-replace dispatch
+  cadence: >-
+    on every web-2-recreate / inngest-host-replace / registry-host-replace /
+    registry-region-migrate / git-data-host-replace dispatch
   alert_target: the dispatching operator (workflow run status — a fail-closed abort is red)
-  configured_in: .github/workflows/apply-web-platform-infra.yml (the three destroy-guard steps)
+  configured_in: >-
+    .github/workflows/apply-web-platform-infra.yml (all FIVE destroy-guard steps —
+    corrected at review: this block was authored when the plan still wired three, and
+    understated coverage by two paths incl. git-data-host-replace, which the plan's own
+    reconciliation table argues "needs the gate most")
+  note: >-
+    The PASS half is a real emit, not aspirational — stock_preflight_gate echoes
+    "stock-preflight PASS: N planned server create(s) orderable..." on success and a distinct
+    "0 planned server creates" line on the no-op path. Added at review: without them only the
+    ABORT half existed, so a gate that had rotted into a silent no-op was indistinguishable
+    in the run log from a gate that ran and passed.
 error_reporting:
   destination: GitHub Actions annotation (::error::) + non-zero exit
   fail_loud: true — fail-closed, no [ack-destroy] bypass (matches :1775, :1613, :2170)
@@ -224,13 +236,27 @@ logs:
   retention: GitHub default (90d)
 discoverability_test:
   command: >-
-    export HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain);
+    HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain);
+    export HCLOUD_TOKEN;
+    read -r WEB2_TYPE WEB2_LOC < <(hcloud server describe soleur-web-2 -o format='{{.ServerType.Name}} {{.Datacenter.Location.Name}}');
     source tests/scripts/lib/stock-preflight-gate.sh;
-    stock_preflight "$(hcloud server describe soleur-web-2 -o format='{{.ServerType.Name}}')" fsn1; echo "exit=$?"
+    stock_preflight "$WEB2_TYPE" "$WEB2_LOC"; echo "exit=$?"
   expected_output: >-
-    "exit=1 while web-2's type is unorderable in fsn1 (true today; #6463). Derives the type
-    from LIVE fleet state rather than hardcoding cx33 — stock AND the pinned type both move.
-    exit=0 once stock returns or #6463 repins the type."
+    The abort names the SHORTAGE specifically:
+    "stock-preflight ABORT: server_type 'cx33' is NOT orderable in 'fsn1' today" (exit=1;
+    true today, #6463). exit=0 once stock returns or #6463 repins the type.
+  why_the_message_and_not_the_code: >-
+    Corrected at review. The old form pinned `exit=1`, which is the UNIVERSAL fail-closed
+    code — stock_preflight returns 1 for empty args, an unreachable /server_types, an unknown
+    type, an unreachable /datacenters, an unknown location AND a real stock miss. So `hcloud`
+    missing (=> empty $() => empty args) or a failed Doppler read both produced "exit=1" and
+    the test "passed" while proving nothing. Pinning the distinct message is the only form
+    that distinguishes "the gate works" from "the gate is broken or absent" — the same bar
+    the gate's own header sets when it insists the blip and shortage messages stay DISTINCT.
+    The token read is also split off `export` (a bare `export X=$(cmd)` masks cmd's exit
+    code), and the LOCATION is now derived live alongside the type: the old form hardcoded
+    `fsn1` while boasting it avoided hardcoding `cx33` — but #6463's remediation is a type/DC
+    change, so the location moves too.
 ```
 
 No `ssh` in the discoverability test. The preflight is inspectable from any machine with
@@ -638,11 +664,27 @@ bound "no bypass" to the *new* step anyway).
 - [x] **AC7** *(merged with old AC8 — one invariant, one parser, anchored to the Service column)*
       `awk -F'|' '$2 ~ /git-data/ && $6 ~ /active/ {n++} END {print n+0}' knowledge-base/operations/expenses.md` → **0**
       (returns **3** today — the three real git-data rows; the registry row correctly drops out).
-- [x] **AC9** *(positive assertion — the old negative `/hel1/` grep was a landmine that
-      Phase 5.2's own mandated migration prose would trip)*
-      `awk -F'|' '$2 ~ /\(web-2/ {n++} END {print n+0}'` == **3** **and**
-      `awk -F'|' '$2 ~ /\(web-2/ && $8 ~ /fsn1/ {n++} END {print n+0}'` == **3**
-      (today: 3 and 0).
+- [x] **AC9** *(row-count only — the region half was CUT at review as vacuous)*
+      `awk -F'|' '$2 ~ /\(web-2/ {n++} END {print n+0}'` == **3** (verified: 3).
+
+      > **The second clause was removed at review (2026-07-15) — it could not fail.** It read
+      > `$2 ~ /\(web-2/ && $8 ~ /fsn1/` == 3, but **`$8` is the Notes column; this table has no
+      > Region field.** All three web-2 rows contain BOTH `hel1` and `fsn1` in `$8` — because
+      > Phase 5.2's own mandated correction prose says *"Region corrected hel1 → fsn1"*.
+      > Proven at review by reverting the region markers back to `**hel1**`: the clause still
+      > returned 3 and still passed. It asserted nothing.
+      >
+      > This is the *mirror image* of the defect AC9 was written to fix. The plan already knew
+      > the negative `/hel1/` grep was "a landmine that Phase 5.2's own migration prose would
+      > trip" — the positive `/fsn1/` grep trips on that identical prose, just silently.
+      > Same class as the documented "grep assertion over a script body false-matches its own
+      > comments" learning, applied to a markdown ledger.
+      >
+      > **No awk over this table can assert region**, so the honest options were (a) add a
+      > Region column, or (b) state that region is prose-only. Taking (b): the region
+      > correction is human-verifiable in the Notes and was confirmed correct at review by
+      > reading the rows. **The data is right; only the guard was inert.** Recorded rather than
+      > left as a green tick over a check that cannot fail.
 - [x] **AC16** The gate's test actually runs in CI — not just locally:
       `grep -c 'test-stock-preflight-gate' scripts/test-all.sh` == 1. Nothing auto-discovers
       `tests/scripts/` (the `:218` glob excludes it; siblings hand-registered at `:144-146`),

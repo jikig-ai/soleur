@@ -47,7 +47,7 @@
 # availability. A blocked recreate is recoverable; a stranded fleet is a deploy freeze.
 
 # EU allow-set — mirrors the residency validation at
-# apps/web-platform/infra/variables.tf:94-96 (GDPR residency, CLO T-1). /v1/datacenters
+# apps/web-platform/infra/variables.tf:111-113 (GDPR residency, CLO T-1). /v1/datacenters
 # also returns ash-dc1 (US), hil-dc1 (US) and sin-dc1 (Singapore); an unfiltered
 # "orderable elsewhere" suggestion would advise putting a prod host in Singapore.
 STOCK_PREFLIGHT_EU_LOCATIONS="${STOCK_PREFLIGHT_EU_LOCATIONS:-nbg1 fsn1 hel1}"
@@ -59,10 +59,15 @@ _stock_fetch() {
   curl -sS --max-time 20 -H "Authorization: Bearer ${HCLOUD_TOKEN:-}" "${HCLOUD_API}$1"
 }
 
-# _stock_eu_locations_for <server_types_json> <datacenters_json> <type_id>
+# _stock_eu_locations_for <datacenters_json> <type_id>
 # Echoes the EU-filtered location names where <type_id> is orderable (space-separated).
+# NOTE: deliberately takes ONLY what it reads. An earlier signature also declared a leading
+# <server_types_json> that the body never bound — a dead positional is an attractive nuisance
+# here, because a future maintainer dropping the unused arg at the call site would shift
+# $2/$3 and silently corrupt the "orderable in EU:" list, i.e. the one line an operator reads
+# mid-incident.
 _stock_eu_locations_for() {
-  local dcs_json="$2" type_id="$3" out=() loc
+  local dcs_json="$1" type_id="$2" out=() loc
   local all
   all=$(printf '%s' "$dcs_json" | jq -r --argjson i "$type_id" \
     '.datacenters[] | select(.server_types.available | index($i)) | .location.name' 2>/dev/null | sort -u)
@@ -85,6 +90,24 @@ stock_preflight() {
 
   if [[ -z "$want_type" || -z "$want_loc" ]]; then
     echo "::error::stock-preflight ABORT: called without server_type/location (got '${want_type}'/'${want_loc}'). Fail-closed." >&2
+    return 1
+  fi
+
+  # Shape-guard both values BEFORE they reach a URL query. `want_type` is interpolated into
+  # `/server_types?name=${want_type}`, so a value carrying `&name=` (or `#`, or a space) would
+  # make Hetzner answer about a DIFFERENT type than terraform is about to order — the gate
+  # returns green and the create still fails, i.e. exactly the stranding it exists to prevent.
+  # var.git_data_server_type and var.registry_server_type carry no terraform validation (only
+  # inngest_server_type does, variables.tf:173), so the plan JSON is not a trusted source of
+  # shape here. Real Hetzner ids are lowercase alnum (cx33, cpx41, cax11); locations are
+  # lowercase alnum with an optional dash (fsn1, hel1, ash-dc1). Anything else fails closed —
+  # a value we cannot safely ask about is not evidence of availability.
+  if [[ ! "$want_type" =~ ^[a-z0-9]+$ ]]; then
+    echo "::error::stock-preflight ABORT: server_type '${want_type}' is not a valid Hetzner type name (expected lowercase alphanumeric). Fail-closed — a value that cannot be safely queried must never authorize a destroy." >&2
+    return 1
+  fi
+  if [[ ! "$want_loc" =~ ^[a-z0-9-]+$ ]]; then
+    echo "::error::stock-preflight ABORT: location '${want_loc}' is not a valid Hetzner location name (expected lowercase alphanumeric/dash). Fail-closed." >&2
     return 1
   fi
 
@@ -123,7 +146,7 @@ stock_preflight() {
     return 0
   fi
 
-  elsewhere=$(_stock_eu_locations_for "$types_json" "$dcs_json" "$type_id")
+  elsewhere=$(_stock_eu_locations_for "$dcs_json" "$type_id")
   echo "::error::stock-preflight ABORT: server_type '${want_type}' is NOT orderable in '${want_loc}' today (orderable in EU: ${elsewhere:-<none>}). A -replace DESTROYS before it creates — this recreate would strand the fleet with no rollback (#6393, #6463)." >&2
   # The warm-standby tine is load-bearing: hcloud_server_network.web is a SEPARATE
   # for_each'd resource — an ADDITIVE online attach (apps/web-platform/infra/network.tf:9-13),
@@ -132,16 +155,29 @@ stock_preflight() {
   # web-2's private IP was restored 2026-07-13 without recreating it. Omitting this tine funnels
   # a free repair into #6463 (a cost/HA escalation) — the opposite of the intent.
   #
-  # ...but it is WEB-2-SPECIFIC: apply_target=warm-standby targets hcloud_server_network.web
-  # ["web-2"], hcloud_volume.workspaces["web-2"] and hcloud_volume_attachment.workspaces
-  # ["web-2"] and NOTHING else (apply-web-platform-infra.yml:791-796). Offering it on the
-  # inngest/registry/git-data aborts would point an operator at a dispatch that does nothing
-  # for their host — misdirection in the one message they read during a prod abort. So the
-  # gate suppresses it for any other address. _STOCK_TINE_ADDR is set per-address by
-  # stock_preflight_gate; when UNSET (a direct operator probe — the plan's
-  # discoverability_test) the tine stands, because web-2 is that probe's documented subject.
-  if [[ -z "${_STOCK_TINE_ADDR+x}" || "${_STOCK_TINE_ADDR}" == 'hcloud_server.web["web-2"]' ]]; then
+  # ...but it is WEB-2-SPECIFIC. apply_target=warm-standby's six -target's
+  # (apply-web-platform-infra.yml:788-796) are hcloud_network.private,
+  # hcloud_network_subnet.private, hcloud_server_network.web["web-1"],
+  # hcloud_server_network.web["web-2"], hcloud_volume.workspaces["web-2"] and
+  # hcloud_volume_attachment.workspaces["web-2"] — the web-2-specific half is what makes the
+  # tine relevant, and NOTHING it targets helps the inngest/registry/git-data hosts. Offering
+  # it on those aborts would point an operator at a dispatch that does nothing for their host
+  # — misdirection in the one message they read during a prod abort.
+  #
+  # _STOCK_TINE_ADDR is set per-address by stock_preflight_gate, so every PRODUCTION path
+  # (all five) knows its host exactly: web-2 gets the tine, everyone else is suppressed.
+  #
+  # A DIRECT `stock_preflight <type> <location>` call takes no address and therefore cannot
+  # know the host — the operator probe and the test suite are the only such callers. Silently
+  # suppressing there would strip the tine from the plan's own documented web-2 probe;
+  # emitting it unconditionally misdirects a non-web-2 probe (`stock_preflight cax11 fsn1`
+  # for git-data was observed claiming a web-2-only dispatch would help). So the unknown-host
+  # variant is emitted CONDITIONALLY-WORDED instead: it names web-2 as the precondition, which
+  # is correct whichever host the operator is probing.
+  if [[ "${_STOCK_TINE_ADDR:-}" == 'hcloud_server.web["web-2"]' ]]; then
     echo "::error::  - If you only need the private NIC or the /workspaces volume re-attached, this is NOT a recreate: dispatch apply_target=warm-standby (additive, no destroy, no stock required). See apply-web-platform-infra.yml:451." >&2
+  elif [[ -z "${_STOCK_TINE_ADDR+x}" ]]; then
+    echo "::error::  - If this host is web-2 AND you only need its private NIC or /workspaces volume re-attached, that is NOT a recreate: dispatch apply_target=warm-standby (additive, no destroy, no stock required; web-2 ONLY — it does nothing for inngest/registry/git-data). See apply-web-platform-infra.yml:451." >&2
   fi
   echo "::error::  - If the host genuinely must be reborn: see #6463 (type/DC change is an operator cost/HA decision)." >&2
   echo "::error::  - Stock is time-varying (cx33 went orderable->nowhere in ~3h on 2026-07-15) — re-run later." >&2
@@ -161,6 +197,15 @@ stock_preflight() {
 #   - filter .change.actions | index("create"). A no-op entry ALSO carries
 #     after.server_type, so an unfiltered gate would preflight untouched hosts.
 #     (delete+create -> both actions present, so a -replace is correctly caught.)
+#     NOTE: this relies on jq's `index()` returning 0 for `["create"]` and 0 being TRUTHY in
+#     jq (only false/null are falsy). In most languages 0 is falsy — had jq followed that
+#     convention, every pure-create plan would silently skip the gate. T13/T13b pin it.
+#
+# `@tsv` IS LOAD-BEARING — do NOT "simplify" it to @csv or a join("\t"). It escapes
+# tab/newline/CR/backslash inside values, which is the only reason a hostile or odd
+# `.address` cannot (a) split into extra fields and mis-pair a server_type with the wrong
+# location, or (b) smuggle a newline into the `echo "::error::..."` below and forge a
+# GitHub Actions workflow command. Field delimiters are the sole surviving real tabs.
 stock_preflight_gate() {
   local plan_json="$1" pairs n=0 rc=0 addr stype sloc
 
@@ -173,17 +218,48 @@ stock_preflight_gate() {
     return 1
   fi
 
-  pairs=$(jq -r '
+  # Every hcloud_server entry MUST carry an ARRAY .change.actions. jq's `null | index(...)`
+  # returns null (it does NOT error), so an entry missing .change.actions is silently dropped
+  # by the select below — a server create that vanishes from the work-list rather than
+  # fail-closing. Assert the shape explicitly instead of inferring it from an empty result.
+  if jq -e '[.resource_changes[]
+              | select(.type == "hcloud_server")
+              | select((.change.actions | type) != "array")] | length > 0' \
+       "$plan_json" >/dev/null 2>&1; then
+    echo "::error::stock-preflight ABORT: an hcloud_server entry in '${plan_json}' has no array .change.actions — cannot classify create-vs-no-op. Fail-closed: an unclassifiable plan is not evidence of safety." >&2
+    return 1
+  fi
+
+  # `if ! pairs=$(jq …)` — NEVER a bare assignment. jq exits 5 on a runtime error (e.g.
+  # `.resource_changes` present but a string, so `.resource_changes[]` cannot iterate), and a
+  # bare assignment + `2>/dev/null` swallows that into an empty `pairs`, which the emptiness
+  # branch below would read as "nothing to preflight" and authorize the destroy. The sibling
+  # gate does exactly this check for exactly this reason — web2-recreate-gate.sh:51-54:
+  # "A jq null/empty would evaluate false in the arithmetic below and could silently
+  # mis-decide; fail LOUD instead."
+  if ! pairs=$(jq -r '
     .resource_changes[]
     | select(.type == "hcloud_server")
     | select(.change.actions | index("create"))
     | [.address, (.change.after.server_type // ""), (.change.after.location // "")]
     | @tsv
-  ' "$plan_json" 2>/dev/null)
+  ' "$plan_json" 2>/dev/null); then
+    echo "::error::stock-preflight ABORT: jq extraction failed on '${plan_json}' — cannot enumerate planned server creates. Fail-closed: a plan we cannot read is not evidence of availability." >&2
+    return 1
+  fi
 
   if [[ -z "$pairs" ]]; then
     # No server create planned => nothing to preflight. A pure in-place update, a
     # volume-only plan, or a no-op is legitimately out of this gate's scope.
+    #
+    # This MUST announce itself. On all five call sites the preceding destroy-guard has
+    # already asserted the plan IS the exact scoped recreate, so a server create is
+    # guaranteed present — an empty extraction there means the jq broke (a provider field
+    # rename, a terraform-show-json shape change), NOT a legitimate no-op. Returning 0
+    # silently would make a rotted gate indistinguishable from a passing one in the run log,
+    # which is the one place an operator looks. Every sibling gate echoes a positive line on
+    # its success path for this reason (web2-recreate-gate.sh:69,71).
+    echo "stock-preflight: 0 planned server creates in '${plan_json}' — nothing to preflight (in-place update / volume-only / no-op)." >&2
     return 0
   fi
 
@@ -202,8 +278,22 @@ stock_preflight_gate() {
     fi
   done <<<"$pairs"
 
+  # NOT dead code, and NOT a legitimate no-op. `pairs` was non-empty, yet no line yielded an
+  # address — i.e. jq emitted tab-only rows (`[null,null,null] | @tsv` => "\t\t"), so every
+  # iteration hit the `-z "$addr"` continue and n stayed 0. Reaching here means the extraction
+  # produced structurally unusable rows for a plan the destroy-guard already proved is a
+  # scoped recreate. Fail closed: returning 0 here silently authorized the destroy.
   if [[ "$n" -eq 0 ]]; then
-    return 0
+    echo "::error::stock-preflight ABORT: extracted $(printf '%s' "$pairs" | grep -c '') row(s) from '${plan_json}' but none carried a resource address. Fail-closed: an unreadable plan is not evidence of availability." >&2
+    return 1
+  fi
+
+  # Positive liveness. The plan's Observability block declares the gate's liveness_signal as
+  # "the stock preflight step's own PASS/ABORT annotation" — without this line only the ABORT
+  # half existed, and a gate that is silent on success cannot be distinguished from a gate
+  # that has rotted into a no-op. Mirrors the sibling gates' `PASS —` lines.
+  if [[ "$rc" -eq 0 ]]; then
+    echo "stock-preflight PASS: ${n} planned server create(s) orderable in target location(s)." >&2
   fi
   return "$rc"
 }

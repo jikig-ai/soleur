@@ -257,10 +257,49 @@ stock_preflight_gate "$TMP/plan.json" >/dev/null 2>&1 && pass || fail "T11: a vo
 
 # ---------------------------------------------------------------------------
 # T12 — malformed / missing plan => rc 1 (fail-closed)
+#
+# Each case asserts its DISTINCT message, not just rc. Every fail-closed path returns 1, so
+# an rc-only assertion cannot tell "the guard I am testing fired" from "some other guard
+# fired first" — deleting the missing-plan guard entirely left this block GREEN (control
+# fell through to the .resource_changes check, rc-equivalent but message-divergent, telling
+# the operator the file is malformed when it is actually absent). That is the same
+# misdiagnosis class T7 exists to prevent; T12/T12b/T13 now hold the same bar as T5/T6/T7.
 # ---------------------------------------------------------------------------
-stock_preflight_gate "$TMP/does-not-exist.json" >/dev/null 2>&1 && fail "T12: a missing plan must fail closed" || pass
+out=$(stock_preflight_gate "$TMP/does-not-exist.json" 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T12: a missing plan must fail closed, got $rc"
+grep -q "missing or unreadable" <<<"$out" && pass || fail "T12: a MISSING plan must say so, not report a malformed document. out=$out"
+
 echo '{"not":"a plan"}' > "$TMP/bad.json"
-stock_preflight_gate "$TMP/bad.json" >/dev/null 2>&1 && fail "T12b: a non-plan document must fail closed" || pass
+out=$(stock_preflight_gate "$TMP/bad.json" 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T12b: a non-plan document must fail closed, got $rc"
+grep -q "no .resource_changes" <<<"$out" && pass || fail "T12b: a non-plan document must name the missing .resource_changes. out=$out"
+
+# T12c — .resource_changes present but NOT an array => jq runtime error (exit 5).
+# A bare `pairs=$(jq …)` + 2>/dev/null swallows that into an empty extraction, which the
+# emptiness branch reads as "nothing to preflight" => rc 0 => the destroy proceeds unguarded.
+# Mirrors the sibling's own guard (web2-recreate-gate.sh:51-54).
+echo '{"resource_changes":"hello"}' > "$TMP/scalar.json"
+out=$(stock_preflight_gate "$TMP/scalar.json" 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T12c: a non-array .resource_changes must fail closed (jq exits 5), got $rc"
+grep -q "jq extraction failed" <<<"$out" && pass || fail "T12c: a failed extraction must say so. out=$out"
+
+# T12d — an hcloud_server with NO .change.actions. jq's `null | index("create")` returns
+# null (it does not error), so `select` silently DROPS the entry and the work-list comes back
+# empty => rc 0. A planned server create must never vanish from the work-list.
+echo '{"resource_changes":[{"address":"hcloud_server.web[\"web-2\"]","type":"hcloud_server"}]}' > "$TMP/noactions.json"
+out=$(stock_preflight_gate "$TMP/noactions.json" 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T12d: an hcloud_server with no .change.actions must fail closed, got $rc"
+grep -q "no array .change.actions" <<<"$out" && pass || fail "T12d: must name the unclassifiable entry. out=$out"
+
+# T12e — tab-only extraction rows (address/type/location all null => `[null,null,null]|@tsv`
+# emits "\t\t"). `pairs` is non-empty so the emptiness branch is skipped, every iteration
+# hits the `-z addr` continue, and n stays 0 — which previously returned 0 SILENTLY.
+cat > "$TMP/nulladdr.json" <<'JSON'
+{"resource_changes":[{"address":null,"type":"hcloud_server","change":{"actions":["create"],"after":{"server_type":null,"location":null}}}]}
+JSON
+out=$(stock_preflight_gate "$TMP/nulladdr.json" 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T12e: rows with no resource address must fail closed, got $rc"
+grep -q "none carried a resource address" <<<"$out" && pass || fail "T12e: must name the addressless rows. out=$out"
 
 # ---------------------------------------------------------------------------
 # T13 — a create whose after{} lacks server_type => rc 1 (cannot prove stock)
@@ -270,6 +309,19 @@ cat > "$TMP/plan.json" <<'JSON'
 JSON
 out=$(stock_preflight_gate "$TMP/plan.json" 2>&1); rc=$?
 [[ "$rc" -eq 1 ]] && pass || fail "T13: a create with no server_type must fail closed, got $rc"
+grep -q "carries no server_type/location" <<<"$out" && pass || fail "T13: must name the unprovable target, not fall through to another guard's message. out=$out"
+
+# ---------------------------------------------------------------------------
+# T13b — git-data plans a plain CREATE (a -replace on an address NOT in state exits 0 and
+# plans a create). This is the headline justification for gating the 5th path — it was
+# argued in prose and encoded nowhere. Assert the gate actually catches that shape.
+# ---------------------------------------------------------------------------
+FETCH_MODE=ok
+p=$(plan_with 'hcloud_server.git_data' '["create"]' arm11 eu-a)
+out=$(stock_preflight_gate "$p" 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T13b: an unorderable git-data plain-create must abort, got $rc"
+grep -q "NOT orderable in 'eu-a'" <<<"$out" && pass || fail "T13b: must fire the stock-miss abort. out=$out"
+grep -q "warm-standby" <<<"$out" && fail "T13b: warm-standby is web-2-only; it must not be offered on the git-data path" || pass
 
 # ---------------------------------------------------------------------------
 # T14 — NON-VACUITY: prove the suite reads .available and not .supported.
@@ -280,6 +332,20 @@ out=$(stock_preflight_gate "$TMP/plan.json" 2>&1); rc=$?
 sup=$(fixture_dcs | jq -r '[.datacenters[] | select(.name=="eu-a-dc1") | .server_types.supported[]] | length')
 avl=$(fixture_dcs | jq -r '[.datacenters[] | select(.name=="eu-a-dc1") | .server_types.available[]] | length')
 [[ "$sup" -gt 0 && "$avl" -eq 0 ]] && pass || fail "T14: fixture must keep supported!=available (supported=$sup available=$avl) or the suite cannot catch a .supported regression"
+
+# Minimum-cardinality floor. This suite is a linear accumulate-then-tally script, so a
+# mid-file `exit`, a truncation, or a block silently removed leaves `fails` at 0 and the
+# runner reports GREEN — truncating everything after T1 yielded "1 passed, 0 failed", EXIT 0.
+# `fails -eq 0` proves nothing was WRONG; it cannot prove anything RAN. The `.ts` sibling
+# already carries MIN_APPLY_TARGET_OPTIONS / MIN_GATED_TARGETS sentinels for exactly this;
+# the asymmetry was the tell. `-lt` (not `-ne`) so adding cases never trips it.
+MIN_ASSERTIONS=50
+if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
+  echo "stock-preflight-gate: FAIL — only $passes assertion(s) ran, expected >= ${MIN_ASSERTIONS}." >&2
+  echo "  The suite did not run to completion (truncation / early exit / removed block)." >&2
+  echo "  A green tally over a truncated suite is a false PASS on a gate that guards prod destroys." >&2
+  exit 1
+fi
 
 echo "stock-preflight-gate: $passes passed, $fails failed"
 [ "$fails" -eq 0 ] || exit 1

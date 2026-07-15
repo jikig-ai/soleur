@@ -187,7 +187,11 @@ option (#6416's gap).
       set on an object that no longer exists. G1 is CLOSED.
 - [x] `expenses.md` has no `active` rows for non-existent resources (git-data
       → `approved-not-billing`); web-2 reads fsn1
-      — verified: git-data `active` rows = **0**; web-2 rows = **3**, all fsn1.
+      — verified: git-data `active` rows = **0**; web-2 rows = **3**.
+      *(Region is **prose-only** — this table has no Region column, so no awk can assert it.
+      An earlier `$8 ~ /fsn1/` check here was vacuous: `$8` is Notes, and the correction prose
+      "Region corrected hel1 → fsn1" satisfies it unconditionally. The rows were read by hand
+      at review and are correct; see the plan's AC9 note.)*
 - [x] `AGENTS.core.md` names the no-rollback danger; rule id unchanged (occurrences = **1**),
       with the ADR-092 / AP-017 hash-bound body ack appended (`rule-body-lint` is an
       always-run **required** check).

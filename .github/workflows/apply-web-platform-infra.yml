@@ -1212,6 +1212,10 @@ jobs:
           # fail-closed on EVERY dispatch (a gate that always fails is an outage, not a
           # tripwire). Read-only; never echoed. Precedent: cutover-inngest.yml:359.
           HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
             exit 1
@@ -1651,6 +1655,10 @@ jobs:
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
           HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
             exit 1
@@ -1835,6 +1843,10 @@ jobs:
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
           HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
             exit 1
@@ -2041,7 +2053,7 @@ jobs:
           fi
           # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447). The
           # guard above proves the plan's SHAPE; it cannot prove the create is FEASIBLE.
-          # This path carries NO -replace flag (:1944-1945) — the var.registry_location change
+          # This path carries NO -replace flag (:2023-2024) — the var.registry_location change
           # itself forces the replacement — but the destroy-then-create ordering, and therefore
           # the stranding risk, is identical: no stock in the TARGET region => the old registry
           # is destroyed and the new one never lands (#6393 -> ~10h prod deploy freeze, #6400).
@@ -2053,6 +2065,10 @@ jobs:
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
           HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
             exit 1
@@ -2279,6 +2295,10 @@ jobs:
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
           HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
             exit 1
