@@ -151,10 +151,19 @@ evaluate_nic() {
   #   (b) forgery — any producer that logs attacker-influenced text into the shared source.
   # Either way the row survives the tail strip, carries no nic_ok, and the function would fall
   # through to GREEN — fabricating a verdict from ZERO real rows, precisely when the guard is
-  # dark, and then AUTO-CLOSING a live issue. Anchor on the marker starting the `raw` field: a
-  # real emit is a direct POST of {"message":"SOLEUR_PRIVATE_NIC …"}, so `raw` STARTS with the
-  # marker; a nested/foreign line never does.
-  trusted="$(printf '%s\n' "$main" | zot_trusted_region | grep -F '"raw":"SOLEUR_PRIVATE_NIC ' || true)"
+  # dark, and then AUTO-CLOSING a live issue.
+  #
+  # THIS IS NOT THEORETICAL — verified live 2026-07-15: `--grep SOLEUR_PRIVATE_NIC` returned 3
+  # rows, none of them emissions. They were Vector-shipped GitHub webhook payloads of the PR that
+  # ADDED this guard, because the PR body contains the marker as a literal string.
+  #
+  # The anchor is the ENVELOPE, captured from a real row rather than assumed: the host POSTs
+  # {"message":"SOLEUR_PRIVATE_NIC …"} and Better Stack stores that JSON as `raw`, so a genuine
+  # emission's raw STARTS with {"message":"<marker> . A Vector-shipped journald row's raw starts
+  # with {"PRIORITY":"6",… and buries the marker deep inside a nested .message — so it can never
+  # satisfy this prefix. Verified both directions against production: 3/3 real rows match, 0/3
+  # contaminated rows match.
+  trusted="$(printf '%s\n' "$main" | zot_trusted_region | grep -F '"raw":"{\"message\":\"SOLEUR_PRIVATE_NIC ' || true)"
 
   if [[ -z "$trusted" ]]; then
     # INDEPENDENT absence probe. Deliberately NOT the zot PRODUCER_SILENT branch above: that one

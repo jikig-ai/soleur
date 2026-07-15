@@ -66,8 +66,15 @@ BOOT_OLD="bbbbbbbb-0000-0000-0000-000000000001"
 # zline <dt> <boot> <restarts> <exit_code> <oom5m> <oomkilled> <lasterr>
 # Emits one JSONEachRow-shaped SOLEUR_ZOT_DISK row (dt-prefixed for lexical sort). zot_last_err
 # is LAST (free-text), matching the real emit so the trusted-region strip is exercised.
+#
+# ENVELOPE SHAPE IS LOAD-BEARING (captured from production 2026-07-15, not assumed): the host
+# POSTs {"message":"<marker> …"} and Better Stack stores THAT JSON as `raw` — so a real row is
+# {"dt":"…","raw":"{\"message\":\"SOLEUR_ZOT_DISK …\"}"}, NOT a flat "raw":"SOLEUR_ZOT_DISK …".
+# The earlier flat fixture passed 45 assertions while the NIC membership anchor it was supposed
+# to validate would have rejected EVERY real row in production. A fixture that does not mirror
+# the producer's actual bytes validates nothing.
 zline() {
-  printf '{"dt":"%s","raw":"SOLEUR_ZOT_DISK pcent=1 zot_restarts=%s ping_rc=0 mem_total_mb=7751 zot_anon_mb=35 zot_oom_kills=0 state_status=running oom_killed=%s exit_code=%s oom_kills_5m=%s boot_id=%s host=soleur-registry zot_last_err=%s"}\n' \
+  printf '{"dt":"%s","raw":"{\\"message\\":\\"SOLEUR_ZOT_DISK pcent=1 zot_restarts=%s ping_rc=0 mem_total_mb=7751 zot_anon_mb=35 zot_oom_kills=0 state_status=running oom_killed=%s exit_code=%s oom_kills_5m=%s boot_id=%s host=soleur-registry zot_last_err=%s\\"}"}\n' \
     "$1" "$3" "$6" "$4" "$5" "$2" "$7"
 }
 
@@ -105,7 +112,7 @@ reset_fix() {
 # store_mounted is PARAMETERIZED (defaults true): hardcoding it would make the store-unmounted
 # fault — the one that 404s the whole fleet while nic_ok=true — inexpressible as a fixture.
 nline() {
-  printf '{"dt":"%s","raw":"SOLEUR_PRIVATE_NIC nic_ok=%s converged_by=%s imds_rc=%s imds_nets=%s reboot_count=%s zot_store_mounted=%s uptime_s=%s boot_id=%s zot_last_err=%s"}\n' \
+  printf '{"dt":"%s","raw":"{\\"message\\":\\"SOLEUR_PRIVATE_NIC nic_ok=%s converged_by=%s imds_rc=%s imds_nets=%s reboot_count=%s zot_store_mounted=%s uptime_s=%s boot_id=%s zot_last_err=%s\\"}"}\n' \
     "$1" "$3" "$4" "$5" "$6" "$7" "${10:-true}" "$8" "$2" "$9"
 }
 
@@ -468,8 +475,17 @@ assert_nic_cause_contains "N16 cause says NOT terminal — the uptime gate has n
 reset_fix
 export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
 export ZOT_FIX_CONTROL="$TMP/ctl2.json"
-{ zline "2026-07-10 10:05:00" "$BOOT_NEW" 5 0 0 false "GET /v2/SOLEUR_PRIVATE_NIC/manifests/x 404"; } > "$TMP/n17.json"
-export NIC_FIX_MAIN="$TMP/n17.json"          # the ONLY 'NIC' row is a contaminated zot row
+{
+  # (a) cross-stream: a zot row whose free-text tail quotes the NIC marker.
+  zline "2026-07-10 10:05:00" "$BOOT_NEW" 5 0 0 false "GET /v2/SOLEUR_PRIVATE_NIC/manifests/x 404"
+  # (b) foreign-producer: a Vector-shipped journald row that merely CONTAINS the marker. Shape
+  # captured from production 2026-07-15 — this is literally what `--grep SOLEUR_PRIVATE_NIC`
+  # returned while this PR was open: the GitHub webhook payload of the PR that added the guard,
+  # because the PR body contains the marker as a literal string. raw starts {"PRIORITY":"6",…
+  # and buries the marker inside a nested .message, so the envelope anchor rejects it.
+  printf '{"dt":"2026-07-10 10:06:00","raw":"{\\"PRIORITY\\":\\"6\\",\\"_SYSTEMD_UNIT\\":\\"inngest-server.service\\",\\"host_name\\":\\"soleur-inngest-prd\\",\\"shipper\\":\\"vector\\",\\"message\\":\\"{\\\\\\"body\\\\\\":\\\\\\"...SOLEUR_PRIVATE_NIC nic_ok=true converged_by=already reboot_count=0 boot_id=%s...\\\\\\"}\\"}"}\n' "$BOOT_NEW"
+} > "$TMP/n17.json"
+export NIC_FIX_MAIN="$TMP/n17.json"          # NO genuine NIC row — both are foreign
 { nline "2026-07-09 20:00:00" "$BOOT_NEW" true already 0 1 0 99999 none; } > "$TMP/n17look.json"
 export NIC_FIX_LOOKBACK="$TMP/n17look.json"  # the guard WAS alive in the last 24h
 assert_nic_case "N17 contaminated zot row is not a NIC row → silent, not a fabricated green" SILENT
