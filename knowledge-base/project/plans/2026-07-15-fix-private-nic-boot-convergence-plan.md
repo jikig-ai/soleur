@@ -711,8 +711,13 @@ Relationship: **extends ADR-103** (reprovision *path* → guest-side *convergenc
 ADR-096/ADR-100** (dispatch mechanism); **inherits ADR-082's** fail-open, in-surface,
 discriminating-telemetry doctrine. **No collision** (verified by `architecture` + `kieran`).
 
-**Ordinal provisional.** ADR-115 is next-free vs `origin/main` (highest ADR-112), but `adr-ordinals` is
-not a required check; `/ship` re-verifies. **If renumbered, sweep the artifact set in the same edit**
+**Ordinal provisional — and it DID collide (resolved at /work: 113 → 115).** A sibling claimed ADR-113
+on `main` mid-flight (#6303, merged after this branch's base) and an in-flight PR (#6421) already held
+114, so this ADR is **115**. The plan's original note that "`adr-ordinals` is not a required check" was
+**FALSE** — it is required (`scripts/required-checks.txt:76`, job in `ci.yml`); it would have caught the
+collision, but only at CI, *after* the write + sweep cost was already paid. The class is well-known:
+`git log --all --grep='renumber ADR'` returns **18** commits, and it is already tracked by #5744 / #5951.
+**If renumbered, sweep the artifact set in the same edit**
 (`grep -rn 'ADR-115' knowledge-base/project/{plans,specs}/feat-one-shot-6415-…/`) — AC11 names the
 ordinal.
 
