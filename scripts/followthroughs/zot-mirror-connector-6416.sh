@@ -162,9 +162,17 @@ while read -r run_id created_at; do
   # alternate covers degraded() firing before ZOT is assigned: its emitter reads
   # `${ZOT:-<image>}`, so a future call site above that assignment would emit the
   # literal `<image>` and slip an IP-only anchor — counting a degraded run as clean.
-  if grep -qE '::warning::zot mirror degraded for (127\.0\.0\.1:5000/[^ ]*|<image>) \(rc=' <<<"$logs"; then
+  #
+  # BOTH `::warning::` and `##[warning]` are accepted, and that is load-bearing:
+  # GitHub RENDERS a `::warning::` workflow command as `##[warning]` in the job log.
+  # The emitter's SOURCE echo carries the literal `::warning::`; the REAL emit carries
+  # `##[warning]`. An anchor matching only `::warning::` therefore matches the source
+  # and MISSES every real degraded run — verified against release run 29411418298,
+  # whose genuine emit reads:
+  #   ##[warning]zot mirror degraded for 127.0.0.1:5000/... (rc=bridge) — release UNAFFECTED
+  if grep -qE '(::warning::|##\[warning\])zot mirror degraded for (127\.0\.0\.1:5000/[^ ]*|<image>) \(rc=' <<<"$logs"; then
     echo "FAIL: run ${run_id} (${created_at}) reports a DEGRADED zot mirror."
-    grep -oE '::warning::zot mirror degraded for [^ ]+ \(rc=[^)]*\)' <<<"$logs" | head -2 | sed 's/^/  /'
+    grep -oE '(::warning::|##\[warning\])zot mirror degraded for [^ ]+ \(rc=[^)]*\)' <<<"$logs" | head -2 | sed 's/^/  /'
     echo "  If rc=bridge: the CF tunnel connector serving registry.soleur.ai could not route to"
     echo "  10.0.1.30:5000. Verify EVERY web host is a 10.0.1.0/24 member (ADR-114 I1):"
     echo "    hcloud server describe soleur-web-2 -o json | jq .private_net    # must NOT be []"
@@ -174,11 +182,21 @@ while read -r run_id created_at; do
   # POSITIVE LIVENESS — the run must prove the mirror actually COMPLETED, not merely
   # that no failure was found. Without this, any change that stops the mirror from
   # emitting at all (step renamed, run block restructured, log-read silently broken)
-  # reads as "no degraded found" → clean → PASS → the sweeper closes #6416 on the
-  # ABSENCE of a signal. That is #6416's own defect class; a probe built to prove the
-  # fix must not reproduce it. Source-safe: the emitter echoes `to ${ZOT} and`, so
-  # only a real interpolated emit matches the literal IP.
-  if ! grep -qE 'zot mirror ok: copied .* to 127\.0\.0\.1:5000/' <<<"$logs"; then
+  # reads as "no degraded found" → clean → PASS → the sweeper auto-resolves #6416 on
+  # the ABSENCE of a signal. That is #6416's own defect class; a probe built to prove
+  # the fix must not reproduce it.
+  #
+  # `copied v[0-9][^ ]*,` — the INTERPOLATED version is load-bearing, not decoration.
+  # The release job log contains the PR/commit MESSAGE (via the release-notes body),
+  # and #6421's own commit prose quotes this very anchor:
+  #   marker ("zot mirror ok: copied ... to 127.0.0.1:5000/")
+  # A `copied .* to 127.0.0.1:5000/` anchor MATCHES that sentence. Combined with the
+  # `::warning::`-only degraded anchor above, the two composed into a FALSE PASS on a
+  # genuinely degraded run (verified against 29411418298: degraded missed, liveness
+  # satisfied by the echoed commit message → counted clean). Requiring `v<version>,`
+  # cannot be satisfied by prose — only `echo "zot mirror ok: copied v${VERSION}, ..."`
+  # produces it.
+  if ! grep -qE 'zot mirror ok: copied v[0-9][^ ]*, .* to 127\.0\.0\.1:5000/' <<<"$logs"; then
     echo "TRANSIENT: run ${run_id} ran the mirror (conclusion=${mirror}) but emitted neither a degraded warning nor the success marker." >&2
     echo "  The probe cannot certify a run whose producer left no trace — refusing to count it clean." >&2
     exit 2
