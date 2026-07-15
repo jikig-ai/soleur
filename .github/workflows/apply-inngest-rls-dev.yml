@@ -270,13 +270,23 @@ jobs:
           # identity preflight of its own, so it must never carry a second copy.
         run: bash apps/web-platform/infra/inngest-rls/anon-probe.sh
 
+      # Gated on failure() ALONE — deliberately NOT on `failure_mode != ''`.
+      # The probe runs in a SEPARATE step: when anon-probe.sh exits 1, the apply step
+      # has ALREADY succeeded with an EMPTY failure_mode, so the old
+      # `failure() && steps.apply.outputs.failure_mode != ''` was FALSE — a red run
+      # that filed no issue, closed no issue, and (there is NO schedule here, by
+      # design) was caught by nothing later. The same hole swallowed a job
+      # timeout/OOM. The probe is the authoritative proof that the reachable front
+      # door is shut; its failure is strictly worse than most fail_modes that DO file.
       - name: File or comment tracking issue (failure)
-        if: failure() && steps.apply.outputs.failure_mode != ''
+        if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          FAIL_MODE: ${{ steps.apply.outputs.failure_mode }}
-          FAIL_DETAIL: ${{ steps.apply.outputs.failure_detail }}
+          # Defaulted: an empty output means the apply step never recorded a mode —
+          # i.e. the probe step or the runner itself failed.
+          FAIL_MODE: ${{ steps.apply.outputs.failure_mode || 'probe_or_infra_failure' }}
+          FAIL_DETAIL: ${{ steps.apply.outputs.failure_detail || 'The apply step recorded no failure_mode — the anon client-path probe (anon-probe.sh) failed, or the job timed out / was killed. The lockdown itself may be applied and clean; what is UNPROVEN is that the PostgREST front door is shut. See the run log.' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # shellcheck disable=SC2016  # literal single-quoted GitHub search string is intentional
@@ -302,6 +312,7 @@ jobs:
             printf '1. Re-run this workflow (workflow_dispatch) — the SQL is idempotent.\n'
             printf '2. gate_coverage means the allowlist no longer matches 14 tables. If the Phase-5 drop has landed, retire this workflow and 0002 together.\n'
             printf '3. If owner_access_broken or owner_write_broken: apply the break-glass DISABLE ROW LEVEL SECURITY per affected table (grants stay revoked, so anon stays locked out), then investigate the connection role.\n'
+            printf '4. probe_or_infra_failure means the apply step recorded no mode: the anon client-path probe failed, or the job timed out/was killed. Read the run log — the catalog gate may be green while the PostgREST front door is UNPROVEN.\n'
             printf '4. Do NOT fix this by adding ALTER DEFAULT PRIVILEGES to 0002 — soleur-dev is co-tenanted and that would break every future dev app migration.\n'
           } > "$BODY_FILE"
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')

@@ -107,6 +107,14 @@ def uses_list(wf):
                 out.append(str(step["uses"]))
     return out
 
+def step_if(wf, name_substr):
+    """The `if:` of the first step whose name contains name_substr ('' if none)."""
+    for job in (wf.get("jobs") or {}).values():
+        for step in (job.get("steps") or []):
+            if name_substr in str(step.get("name") or ""):
+                return str(step.get("if") or "")
+    return ""
+
 def group(wf):
     c = wf.get("concurrency")
     return (c or {}).get("group", "") if isinstance(c, dict) else str(c or "")
@@ -167,6 +175,16 @@ checks = {
     "dev_gate_scoped":        "relname = ANY(" in dev_run or "relname = any(" in dev_run,
     "dev_gate_coverage":      "gate_coverage" in dev_run,
 
+    # --- Annunciation: a red run MUST reach the operator --------------------------
+    # The filer must gate on failure() ALONE. `failure() && ...failure_mode != ''`
+    # meant a probe-step failure (or a job timeout/OOM) filed NOTHING: the apply step
+    # had already succeeded with an empty failure_mode. There is no schedule here to
+    # catch it later, so the red run was the only signal and it annunciated nowhere.
+    "dev_filer_on_failure_alone":
+        step_if(dev, "File or comment tracking issue").replace(" ", "") == "failure()",
+    # ...and an empty failure_mode must still carry a mode into the issue body.
+    "dev_fail_mode_defaulted": "probe_or_infra_failure" in str(dev),
+
     # --- No collision with the prd workflow's issue/label/concurrency identity ---
     "titles_differ":          ("[ci/inngest-rls-dev]" in dev_run) and ("[ci/inngest-rls-dev]" not in prd_run),
     "labels_differ":          ("ci/inngest-rls-dev" in dev_run) and ("ci/inngest-rls-dev" not in prd_run),
@@ -221,6 +239,10 @@ assert "dev gate asserts relrowsecurity" "[[ $(probe dev_gate_rls) == yes ]]"
 assert "dev gate asserts postgres ownership" "[[ $(probe dev_gate_owner) == yes ]]"
 assert "dev gate is allowlist-scoped (a schema-wide gate never reaches 0 on dev)" "[[ $(probe dev_gate_scoped) == yes ]]"
 assert "dev gate has a coverage guard (violations=0 over 0 rows is vacuous)" "[[ $(probe dev_gate_coverage) == yes ]]"
+
+# --- Annunciation -------------------------------------------------------------
+assert "dev issue filer gates on failure() alone (a probe/timeout failure must still file)" "[[ $(probe dev_filer_on_failure_alone) == yes ]]"
+assert "dev defaults an empty failure_mode to probe_or_infra_failure" "[[ $(probe dev_fail_mode_defaulted) == yes ]]"
 
 # --- Identity collision -------------------------------------------------------
 assert "issue titles differ (a green prd run must not close dev's failure issue)" "[[ $(probe titles_differ) == yes ]]"
