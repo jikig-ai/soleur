@@ -1199,6 +1199,34 @@ jobs:
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
+          # #6453 STOCK preflight — a TRIPWIRE, not a routine gate (posture matches :447).
+          # The guard above proves the plan is the EXACT scoped recreate; it cannot prove the
+          # create is FEASIBLE. A -replace DESTROYS first, so with no DC stock the destroy
+          # succeeds, the create fails resource_unavailable, and the fleet strands with NO
+          # rollback (#6393 -> ~10h web-1 prod deploy freeze, PIR corrected #6400). The account
+          # CAP never engages here — a -replace frees its own slot — which is why #6453's
+          # original cap preflight was dropped: it returns green on exactly this failure.
+          # Rationale + the load-bearing available-vs-supported trap live in the gate lib.
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read the gate would
+          # fail-closed on EVERY dispatch (a gate that always fails is an outage, not a
+          # tripwire). Read-only; never echoed. Precedent: cutover-inngest.yml:359.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::web-2-recreate stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above for the free warm-standby repair path and #6463). Refusing to apply — the destroy would succeed and the create would not. NO [ack-destroy] bypass on this path."
+            exit 1
+          fi
           echo "web-2-recreate plan is the exact scoped recreate. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
@@ -1616,6 +1644,32 @@ jobs:
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
+          # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447). The
+          # guard above proves the plan's SHAPE; it cannot prove the create is FEASIBLE. A
+          # -replace DESTROYS first, so with no DC stock the destroy succeeds, the create fails
+          # resource_unavailable, and the fleet strands with no rollback (#6393 -> ~10h prod
+          # deploy freeze, #6400). The account CAP never engages — a -replace frees its own
+          # slot. Full rationale + the available-vs-supported trap: the gate lib's header.
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
+          # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
+          # cutover-inngest.yml:359.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::inngest-host-replace stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above). Refusing to apply — the destroy would succeed and the create would not, stranding the inngest host with its Redis AOF volume detached (#6393, #6463). NO [ack-destroy] bypass on this path."
+            exit 1
+          fi
           echo "inngest-host-replace plan is the exact scoped recreate. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
@@ -1776,6 +1830,32 @@ jobs:
           if ! registry_host_replace_gate tfplan.json; then
             echo "::error::registry-host-replace destroy-guard ABORTED: the plan is not the exact scoped registry-host recreate. Refusing to apply. Specifically verify: the zot OCI STORE volume (hcloud_volume.registry) is preserved (no delete/forget/replace), the private NIC (hcloud_server_network.registry) is re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.registry) is re-attached. NO [ack-destroy] bypass on this path."
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447). The
+          # guard above proves the plan's SHAPE; it cannot prove the create is FEASIBLE. A
+          # -replace DESTROYS first, so with no DC stock the destroy succeeds, the create fails
+          # resource_unavailable, and the fleet strands with no rollback (#6393 -> ~10h prod
+          # deploy freeze, #6400). The account CAP never engages — a -replace frees its own
+          # slot. Full rationale + the available-vs-supported trap: the gate lib's header.
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
+          # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
+          # cutover-inngest.yml:359.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::registry-host-replace stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above). Refusing to apply — the destroy would succeed and the create would not, stranding the registry with its zot store volume detached (#6393, #6463). NO [ack-destroy] bypass on this path."
             exit 1
           fi
           echo "registry-host-replace plan is the exact scoped recreate. Plan summary:"
@@ -1969,6 +2049,35 @@ jobs:
           if ! registry_region_migrate_gate tfplan.json; then
             echo "::error::registry-region-migrate destroy-guard ABORTED: the plan is not the exact scoped registry region migration. Refusing to apply. Verify: ONLY the registry's own 6 resources change (no out-of-scope create/update/destroy), the logs-token secret is preserved, and the server + fresh store volume + private NIC + volume-attachment + deny-all firewall are all CREATED in the new region. NO [ack-destroy] bypass on this path."
             grep -E 'will be destroyed|must be replaced|will be created|Plan:' tfplan.txt | head -40 >&2
+            exit 1
+          fi
+          # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447). The
+          # guard above proves the plan's SHAPE; it cannot prove the create is FEASIBLE.
+          # This path carries NO -replace flag (:2023-2024) — the var.registry_location change
+          # itself forces the replacement — but the destroy-then-create ordering, and therefore
+          # the stranding risk, is identical: no stock in the TARGET region => the old registry
+          # is destroyed and the new one never lands (#6393 -> ~10h prod deploy freeze, #6400).
+          # This is the path stock most obviously governs: the target region is operator-chosen,
+          # and change.after.location gives the gate that target for free. Full rationale + the
+          # available-vs-supported trap: the gate lib's header.
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
+          # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
+          # cutover-inngest.yml:359.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::registry-region-migrate stock-preflight ABORTED: the registry's server_type is not orderable in the TARGET region (var.registry_location; see the ::error:: lines above). Refusing to apply — the old registry would be destroyed and the new one would not land (#6393, #6463). Pick a region where the type is orderable, or wait for stock. NO [ack-destroy] bypass on this path."
             exit 1
           fi
           echo "registry-region-migrate plan is the exact scoped migration. Plan summary:"
@@ -2171,6 +2280,34 @@ jobs:
           if ! git_data_host_replace_gate tfplan.json; then
             echo "::error::git-data-host-replace destroy-guard ABORTED: the plan is not the exact scoped git-data-host recreate. Refusing to apply. Specifically verify: BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) are preserved (no delete/forget/replace), the LUKS passphrase (random_password.git_data_luks + doppler_secret.git_data_luks_key) is untouched, the private NIC (hcloud_server_network.git_data) is re-created, BOTH store attachments are re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.git_data) is re-attached. NO [ack-destroy] bypass on this path."
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447).
+          # This path needs the gate MOST, and not for the -replace reason the others do:
+          # `terraform plan -replace=<addr>` on an address NOT in state exits 0 with no warning
+          # and plans a plain CREATE. hcloud_server.git_data is declared unconditionally
+          # (git-data.tf:118) and the host has never been born, so this dispatch tries to CREATE
+          # git-data — with a cax11 type that was orderable in 0 of 3 EU DCs on 2026-07-15. It
+          # is a live path that fails, not dead code. Full rationale + the available-vs-supported
+          # trap: the gate lib's header.
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
+          # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
+          # cutover-inngest.yml:359.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::git-data-host-replace stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above). If git-data has never been born, this dispatch plans a plain CREATE — and cax11 has had no EU stock, so it cannot be born at any account cap. Refusing to apply (#6393, #6463). NO [ack-destroy] bypass on this path."
             exit 1
           fi
           echo "git-data-host-replace plan is the exact scoped recreate. Plan summary:"

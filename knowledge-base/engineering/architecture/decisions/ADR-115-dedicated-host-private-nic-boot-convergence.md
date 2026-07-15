@@ -6,7 +6,8 @@ date: 2026-07-15
 amends: none
 supersedes: none
 issue: 6415
-related: [6400, 6405, 6288, 6122, 6242]
+amended_by: [6497]
+related: [6400, 6405, 6288, 6122, 6242, 6497]
 related_adrs: [ADR-096, ADR-100, ADR-103, ADR-068, ADR-082]
 brand_survival_threshold: single-user incident
 ---
@@ -16,7 +17,15 @@ brand_survival_threshold: single-user incident
 ## Status
 
 **Accepted — for the REGISTRY host only.** Explicitly **not** class-wide: see the normative
-blocker below. Extending it to git-data or inngest requires clearing that blocker first.
+blockers below. Extending it to git-data or inngest requires clearing them first.
+
+**Amended 2026-07-15 (#6497)** to cover boot-baked *credentials* alongside the private NIC —
+also registry-host-scoped, and carrying a **second** normative blocker of its own, because the
+amendment's `replace_triggered_by` edge is a different primitive from this ADR's guarded
+reboot and the first blocker does not reach it. Both blockers are load-bearing and neither
+subsumes the other: the first bounds *rebooting* a host whose storage unlock lives in
+`runcmd`; the second bounds *replacing* a host whose persistent state was encrypted from the
+value being rotated.
 
 ## Context
 
@@ -47,6 +56,12 @@ Three facts make this a structural problem rather than a one-off:
    the deploy pipeline is an actively misleading proxy (asserting deploy success as proof of zot
    reachability *is* the #6400 failure).
 
+<!-- lint-infra-ignore start -->
+<!-- Descriptive, not prescriptive: Context point 3 and the paragraph below it DESCRIBE the
+     apply path and the pre-ADR failure mode this decision exists to remove. They prescribe no
+     operator step — the whole point of the ADR is that the host converges itself. These lines
+     are pre-existing (unchanged since #6415); #6497's edit to this file merely un-grandfathered
+     the changed-files lint, surfacing them. -->
 3. **The fix must live on the host.** The registry resources are an `OPERATOR_APPLIED_EXCLUSION`
    (`zot-registry.tf:16-22`): they are applied by the operator's **full untargeted** apply plus
    the 12h drift detector, **not** the per-PR `-target=` list (which bridges over SSH to the
@@ -58,6 +73,7 @@ Point 3 is the headline: today a from-empty `terraform apply` can yield an unrea
 that needs an operator to notice and reboot it. That violates
 `hr-fresh-host-provisioning-reachable-from-terraform-apply`. **That, not "IMDS resilience", is
 the decision this ADR records.**
+<!-- lint-infra-ignore end -->
 
 ## Decision
 
@@ -74,6 +90,10 @@ A dedicated Hetzner host whose function depends on the private network **MUST**:
    ip_present=false && imds_nets>0 && uptime_s>600 && reboot_count<2
    ```
 
+<!-- lint-infra-ignore start -->
+<!-- Descriptive, not prescriptive: these bullets explain WHY the self-converge gate has the
+     shape it does. "trains the operator to ignore it" is an argument about alarm fatigue, not
+     an instruction to anyone. Pre-existing since #6415. -->
    - **IMDS corroboration** — never reboot on zero evidence. A standing alarm that fires on its
      own probe fault trains the operator to ignore it; a *host* that reboots on its own probe
      fault is the same mistake with teeth.
@@ -83,6 +103,7 @@ A dedicated Hetzner host whose function depends on the private network **MUST**:
    - **Counter on the ROOT disk**, keyed by instance-id, **literal cap 2**, written **before**
      the reboot. A cap of 2 makes a storm *definitionally* impossible, so no cooldown is needed.
      A host replace gives a new root disk ⇒ a fresh budget, for free.
+<!-- lint-infra-ignore end -->
 3. **Emit a discriminating event on EVERY run** over the host's existing telemetry transport.
 
 The single-sourcing of the IP is part of the decision, not an implementation detail: baking the
@@ -91,6 +112,101 @@ baked copy drift, the guard bakes a wrong `EXPECTED_IP`, `ip_present` is false f
 *corroborates* (the network genuinely is attached), and the guard **reboots a healthy host to
 the cap and then goes terminal**. The IP therefore has exactly one definition
 (`local.registry_private_ip`).
+
+### Amendment (2026-07-15, #6497): boot-baked CREDENTIALS need a convergence edge too
+
+The decision above is written for one kind of boot-time state (the private NIC) and one
+primitive (a guarded self-reboot). #6497 showed the *generalizable* half was missed, and the
+cost of missing it was total: the registry host's `/etc/zot/htpasswd` is boot-baked state with
+**no convergence edge of any kind** and **no self-report**, so zot served zero pulls for its
+entire existence while the fleet reported green. Extending the decision:
+
+> **On the REGISTRY host, a boot-baked value MUST have (a) an edge that reconverges it when
+> its SOURCE changes, and (b) a self-report of its match state.**
+>
+> Scoped to the registry host on purpose — this ADR's Status is explicitly not class-wide, and
+> the generalization is actively unsafe for at least one sibling (see the second blocker
+> below). A class-wide version of this rule needs its own ADR, carrying its own blockers.
+>
+> Two permitted edges — pick by whether silent self-repair is acceptable:
+> 1. **`lifecycle.replace_triggered_by`** on the host, naming the source resource — an
+>    externally-driven immutable redeploy. Correct when the divergence should be *visible and
+>    audited* rather than quietly healed. This is what #6497 shipped for the htpasswd.
+> 2. **Cron self-convergence**, like this ADR's NIC guard — correct when availability outranks
+>    auditability, and only under the reboot blocker below if the primitive is a reboot.
+>
+> (b) is **not optional under either**. An edge without a self-report is a claim; #6497's root
+> cause was precisely a *comment* asserting an edge (the pre-#6497 `random_password.zot_pull`
+> header in `zot-registry.tf`: "rotation … re-propagates htpasswd + Doppler in ONE apply")
+> that the code did not implement. A boot-baked value whose match state is unobservable will
+> eventually diverge silently, and on a no-SSH host there is no path to find out. The htpasswd
+> probe emits a **boolean** (`htpasswd_pull_matches`) — never the credential, never a hash.
+
+### SECOND NORMATIVE BLOCKER (binding on edge (1) — the replace primitive)
+
+> **`replace_triggered_by` MUST NOT name a source value that EXISTING PERSISTENT STATE was
+> encrypted from, derived from, or is otherwise unrecoverable without.**
+>
+> **git-data is excluded, and the exclusion is not cosmetic.** `random_password.git_data_luks`
+> (`git-data-luks.tf:31`) is structurally identical to `random_password.zot_pull` — #6497's
+> own code comment even says *"Mirrors `random_password.git_data_luks`"* — and its value is
+> boot-baked exactly the same way (`cloud-init-git-data.yml:163`,
+> `cryptsetup luksOpen --key-file -`). So the naive generalization is not just permitted by
+> the first blocker (which constrains reboots, not replaces): it is *invited* by the analogy
+> the code already draws. It is also catastrophic. A replace on rotation boots a fresh host
+> that runs `luksOpen` with the NEW passphrase against volumes still encrypted with the OLD
+> one — the data survives and becomes **permanently unopenable**. That directly inverts the
+> existing design, which preserves the passphrase deliberately:
+> `apply-web-platform-infra.yml:2059-2060` — *"BOTH data volumes + the LUKS passphrase are
+> PRESERVED BY OMISSION — an untargeted resource cannot be planned for destroy"*.
+>
+> The asymmetry that makes edge (1) safe for zot and lethal for git-data: **the registry's
+> store is disposable** (`model.c4:260` — a GHCR mirror that re-fills from CI's dual-push), so
+> a stale htpasswd costs a re-bake and nothing else. git-data's volumes are the fleet's most
+> irreplaceable state. The primitive is the same; the blast radius is not.
+>
+> Litmus before adding edge (1) anywhere: *if this host were replaced right now and the new
+> one booted with the new value, what existing bytes become unreadable?* Any answer other than
+> "none" excludes the host.
+
+**Scope note — the FIRST (reboot) blocker does not fire for #6497.** It constrains the
+**reboot primitive**, and edge (1) ships no reboot: `replace_triggered_by` is a
+Terraform-driven replace, so the host boots once, fresh, through the ordinary cloud-init path.
+The `runcmd`-storage-unlock hazard it protects against is a *re-*boot hazard, unreachable from
+here (the registry's store is plain ext4, `cloud-init-registry.yml`; there is no `luksOpen` on
+this host). Edge (2) remains fully bound by it. The second blocker above exists precisely
+because that reasoning, left alone, would have exempted the replace primitive from every guard
+this ADR has.
+
+**Authority note (parallel to the one below).** Where this ADR had to *earn* self-reboot
+authority — `hr-prod-host-config-change-immutable-redeploy` does not bless a host deciding to
+reboot itself — edge (1) needs no such argument: an externally-driven `-replace` of a prod host
+on a config change is the literal case that rule sanctions.
+
+**Which apply fires the edge (state this precisely, or the edge is inert).** Two DIFFERENT
+applies are easy to conflate here, and #6497 conflated them:
+
+- **Deploying a cloud-init/user_data change** (what #6497 itself does) runs through the
+  `registry-host-replace` `workflow_dispatch` (ADR-096 amendment 2026-07-08). That job
+  hardcodes `-replace='hcloud_server.registry'`, so it replaces the host *unconditionally* —
+  `replace_triggered_by` contributes nothing on that path.
+- **Firing the edge** (a credential rotation causing the replace) does **not** happen there.
+  The dispatch's six `-target`s exclude `random_password.zot_pull`/`zot_push`, so a rotation
+  is not even plannable through it, and `grep -rn "replace=random_password.zot" .github/
+  scripts/` returns zero — no rotation dispatch exists. The edge fires only in the **untargeted
+  operator full apply** of the `OPERATOR_APPLIED_EXCLUSION` contract (`zot-registry.tf:15-21`,
+  CTO apply-path ruling 2026-07-06) — which runs **no destroy-guard at all**. A merge applies
+  nothing here either way.
+
+So the edge is real but its trigger lives on the least-guarded path in the system. That is
+acceptable *today* — the pull path is dark and the store is disposable — and it is exactly the
+kind of fact that stops being acceptable after the Phase-5 cutover.
+
+**Requirement on any future ADR** adding a `replace_triggered_by` edge to a host: name the
+apply that fires it and the guard that apply runs. An edge whose trigger is unreachable is a
+comment, and a comment asserting an edge the code does not provide is the defect #6497 exists
+to fix. This paragraph is written as the worked example of its own rule — the first draft of
+this amendment named the dispatch, and the dispatch cannot fire the edge.
 
 ### NORMATIVE BLOCKER (binding on any future extension of this ADR)
 
@@ -108,11 +224,16 @@ discovered during planning belongs in the durable artifact, because the ADR outl
 
 ### Authority note
 
+<!-- lint-infra-ignore start -->
+<!-- Descriptive, not prescriptive: this paragraph states what
+     hr-prod-host-config-change-immutable-redeploy does NOT authorize. The only imperative in
+     it is a negation ("does not bless a self-reboot"). Pre-existing since #6415. -->
 `hr-prod-host-config-change-immutable-redeploy` does **not** bless a self-reboot. It
 acknowledges a reboot may be *needed* during an operator-driven `-replace`; it does not
 authorize a host to **decide to reboot itself**. This ADR earns that authority on its own
 merits — bounded, corroborated, capped, counter on the root disk, emitted before acting — not
 by citing a rule that does not say it.
+<!-- lint-infra-ignore end -->
 
 ## Consequences
 
@@ -142,11 +263,13 @@ an empty dir (404s fleet-wide) while `nic_ok=true`.
 
 | Alternative | Verdict |
 | --- | --- |
-| **`cloud-init clean --logs && cloud-init init --local`** (the issue's own proposal) | **Rejected — three verified failure modes.** (a) `cloud-init-registry.yml:294` appends fstab with a bare `echo >>` and no `grep -q` guard (git-data's `:170` has one) ⇒ duplicate mounts on every re-run. (b) `clean` wipes the datasource semaphore, so a transient IMDS failure on the re-run yields `DataSourceNone` ⇒ default network config ⇒ **the public NIC is lost too** ⇒ unrecoverable on a deny-all no-SSH host. (c) it re-runs the fail-closed isolation check (FATAL at `:351-353`), so a Doppler blip means zot never relaunches. *The proposed cure for a transient IMDS blip is triggered by a transient IMDS blip.* |
+| **`cloud-init clean --logs && cloud-init init --local`** (the issue's own proposal) | **Rejected — three verified failure modes.** (a) `cloud-init-registry.yml` appends fstab (the `>> /etc/fstab` runcmd) with a bare `echo >>` and no `grep -q` guard (git-data's `:170` has one) ⇒ duplicate mounts on every re-run. (b) `clean` wipes the datasource semaphore, so a transient IMDS failure on the re-run yields `DataSourceNone` ⇒ default network config ⇒ **the public NIC is lost too** ⇒ unrecoverable on a deny-all no-SSH host. (c) it re-runs the fail-closed isolation check (the fail-closed isolation FATAL), so a Doppler blip means zot never relaunches. *The proposed cure for a transient IMDS blip is triggered by a transient IMDS blip.* |
 | **A netplan drop-in as the converge primitive** | **Rejected.** Its trigger is a strict subset of the reboot's, and it is the lower-fidelity path (the reboot gets correct MTU/routes from cloud-init's own renderer). Unbudgeted, it would re-apply every 5 min, bouncing **public** egress on a deny-all no-SSH host — invisible to a 25-min absence window. That is #6400's own signature, self-inflicted. |
 | **Fix it in Terraform** (ordering, or a reboot in the dispatch job) | **Rejected.** No ordering can win an additive online attach. And the registry resources are an `OPERATOR_APPLIED_EXCLUSION`, so a dispatch-job reboot leaves the primary provisioning path uncovered. |
 | **A `Type=oneshot` unit instead of `/etc/cron.d`** | **Rejected.** A boot-only oneshot cannot heal an attach that lands *later* (H2, the leading hypothesis). `/etc/cron.d` is this host's established cadence and already carries the `doppler run` wrapper. It also avoids the oneshot-liveness trap where `inactive` reads as healthy. |
 | **Ship git-data + inngest too** (the issue's stated scope) | **Rejected on safety** — see the normative blocker. Both hosts also fail *loudly* today, so they lack the silent-failure property that motivates #6415. |
+| **(#6497) An SSH provisioner that rewrites `/etc/zot/htpasswd` in place** | **Rejected.** `hr-no-ssh-fallback-in-runbooks`, and the host's deny-all firewall makes it impossible anyway. It would also re-introduce the `remote-exec` shape that `zot-registry.tf:19-21` names as a load-bearing condition of the OPERATOR_APPLIED_EXCLUSION contract (cloud-init-only, no `remote-exec` terraform_data — else the SSH-parity guard has no exclusion path). The cure would break the contract that lets these resources exist. |
+| **(#6497) A cron that re-converges the htpasswd from Doppler** (mirroring this ADR's NIC guard — genuinely zero-downtime, no replace) | **Rejected for the credential case.** It would *silently repair* a rotation, destroying the immutable-redeploy audit trail and masking the exact divergence the #6497 probe exists to surface. The NIC case differs on the merits: an unreachable host cannot be fixed any other way, whereas a stale credential has a clean externally-driven edge (`replace_triggered_by`). Availability outranks auditability for the NIC; the reverse holds for a credential. Revisit only if zot moves onto the live pull path AND replace-window downtime becomes unacceptable — at which point blue-green, not silent convergence, is the honest answer. |
 | **An off-host probe as required-for-close** | **Deferred** (#6415 stays open for it). It is greenfield: the web-host delivery site is unresolved (`ignore_changes=[user_data]` ⇒ not cloud-init), its arming is blocked (`ignore_changes=[paused]` makes a source flip a **no-op**), the cadence mismatches (`period=60/grace=30` vs a 60s cron floor ⇒ flapping), and `betterstack_paid_tier=false` ⇒ email-only, no escalation. |
 
 ## Observability

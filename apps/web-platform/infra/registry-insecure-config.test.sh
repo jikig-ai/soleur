@@ -82,6 +82,75 @@ DJ_ZOT_IP="$(python3 -c 'import json; print((json.load(open("'"$DAEMON_JSON"'"))
 assert "cloud-init inline daemon.json and docker-daemon.json agree on the zot endpoint (found ci='$CI_ZOT_IP' dj='$DJ_ZOT_IP')" \
   "[[ -n \"\$CI_ZOT_IP\" && \"\$CI_ZOT_IP\" == \"\$DJ_ZOT_IP\" ]]"
 
+# --- #6497: the registry host's credential-convergence edges -----------------------------
+# WEB-PLATFORM-5B root cause: /etc/zot/htpasswd is baked once at boot from the two Doppler
+# tokens, but hcloud_server.registry's templatefile() passes only the non-secret USERNAMES —
+# zero references to random_password.*.result. Terraform therefore has no data edge from the
+# password to the host and cannot know the bake is stale, so a rotation updates both Doppler
+# copies while the host keeps serving the old htpasswd. These guard the two edges that close
+# it. Comments are stripped before matching so the guard can never pass on explanatory prose
+# (the false-match class from 2026-06-03-drift-guard-assertion-false-passes-on-comment-prose).
+ZOT_TF="$DIR/zot-registry.tf"
+
+# Extract hcloud_server.registry's block, stripping BOTH full-line comments AND trailing ones.
+# The trailing strip is load-bearing, not tidiness: a first draft of this guard stripped only
+# full-line prose, and a mutation with ZERO lifecycle/depends_on but the tokens named in
+# TRAILING comments (`n2 = "x" # random_password.zot_pull,`) passed 22/22 green. zot-registry.tf
+# uses trailing comments elsewhere, so the idiom is live in this very file.
+# The col-0 `}` terminator is guaranteed by `terraform fmt -check -recursive .`
+# (.github/workflows/infra-validation.yml) — without that gate an indented closing brace would
+# let this awk over-collect into the next resource block.
+REG_BLOCK="$(awk '
+  /^resource "hcloud_server" "registry"/ { inb=1 }
+  inb { print }
+  inb && /^}/ { exit }
+' "$ZOT_TF" | grep -vE '^[[:space:]]*#' | sed 's/[[:space:]]#.*$//')"
+
+assert "hcloud_server.registry block extracted (non-empty)" \
+  "[[ -n \"\$REG_BLOCK\" ]]"
+
+# `[[:space:]]*=` not ` = `: terraform fmt re-aligns equals signs when a block gains an
+# attribute, which would silently blind a single-space-anchored guard.
+assert "hcloud_server.registry declares lifecycle.replace_triggered_by" \
+  "printf '%s' \"\$REG_BLOCK\" | grep -qE 'replace_triggered_by[[:space:]]*=[[:space:]]*\['"
+
+# Scope each assertion to the ATTRIBUTE it names, not the whole ~90-line resource block. A
+# block-wide grep only proves the token appears SOMEWHERE in the resource — so moving
+# random_password.zot_pull out of replace_triggered_by and into depends_on (a plausible
+# tidy-up) left the suite 22/22 green while the assertion literally named
+# "replace_triggered_by names random_password.zot_pull" was FALSE, and rotating the PULL token
+# — the exact WEB-PLATFORM-5B credential — no longer replaced the host. The bug this file
+# guards was fully reintroduced under a green guard. An assertion must pin the thing its own
+# name claims.
+RTB_LIST="$(printf '%s\n' "$REG_BLOCK" | awk '/replace_triggered_by[[:space:]]*=[[:space:]]*\[/{f=1} f{print} f && /\]/{exit}')"
+DEP_LIST="$(printf '%s\n' "$REG_BLOCK" | awk '/^[[:space:]]*depends_on[[:space:]]*=[[:space:]]*\[/{f=1} f{print} f && /\]/{exit}')"
+
+assert "replace_triggered_by list body extracted (non-empty)" "[[ -n \"\$RTB_LIST\" ]]"
+assert "depends_on list body extracted (non-empty)" "[[ -n \"\$DEP_LIST\" ]]"
+
+# List-form tolerant (one-per-line or inline) so terraform fmt collapsing/expanding the list
+# cannot flip the guard.
+assert "replace_triggered_by names random_password.zot_pull (rotation re-bakes htpasswd)" \
+  "printf '%s' \"\$RTB_LIST\" | grep -qE 'random_password\.zot_pull[[:space:]]*(,|\]|\$)'"
+
+assert "replace_triggered_by names random_password.zot_push" \
+  "printf '%s' \"\$RTB_LIST\" | grep -qE 'random_password\.zot_push[[:space:]]*(,|\]|\$)'"
+
+# The host reads both tokens at boot via the Doppler CLI, so TF sees no implicit edge and is
+# free to boot the server before the secret writes land — racing the htpasswd bake against
+# the token write on a fresh stand-up. #6244 added the betterstack entry for exactly this
+# reason and never generalized it to the two secrets that actually gate the bake.
+for _s in registry_betterstack_logs_token zot_pull_token_registry zot_push_token_registry; do
+  assert "hcloud_server.registry depends_on names doppler_secret.$_s" \
+    "printf '%s' \"\$DEP_LIST\" | grep -qE 'doppler_secret\.${_s}[[:space:]]*(,|\]|\$)'"
+done
+
+# The comment at zot-registry.tf:78-80 asserted a guarantee the code did not provide — a
+# rotation updated Doppler and left the host's htpasswd untouched. That false comment is
+# what let this ship; assert it is gone rather than merely contradicted.
+assert "the false 'one apply re-propagates htpasswd' rotation claim is gone" \
+  "! grep -qF 're-propagates htpasswd + Doppler in ONE apply' \"\$ZOT_TF\""
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]
