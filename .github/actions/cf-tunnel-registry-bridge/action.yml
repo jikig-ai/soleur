@@ -2,7 +2,19 @@
 # container images to the private-net zot registry host (#6122 / ADR-096). The Hetzner
 # registry firewall denies all public ingress; the runner reaches zot ONLY through the
 # existing `web` Cloudflare Tunnel (tunnel.tf `registry.${app_domain_base}` ingress_rule →
-# the web host's cloudflared → http://10.0.1.30:5000).
+# a web-host cloudflared connector → tcp://10.0.1.30:5000).
+#
+# (#6416) Two corrections to this header, both load-bearing:
+#   • `tcp://`, not `http://` — tunnel.tf:49-56 documents at length why an `http://` service
+#     breaks `cloudflared access tcp` ("websocket: bad handshake"); that WAS the #6122
+#     cutover bug, so describing it as http:// here re-plants the exact trap.
+#   • "A web-host cloudflared connector", not "THE web host's cloudflared" — the singular
+#     was the false assumption behind #6416. There is ONE tunnel with MULTIPLE connector
+#     replicas (web-1 and web-2 both run cloudflared against it), and CF load-balances
+#     across them. This ingress only works if EVERY replica can route to 10.0.1.30 — i.e.
+#     if every connector host is a 10.0.1.0/24 member. web-2 was not, so ~50% of bridge
+#     attempts landed on a connector with no path to zot and failed. See ADR-113 (I1:
+#     connector homogeneity; I2: deterministic origin for host-specific routes).
 #
 # Sibling of `.github/actions/cf-tunnel-ssh-bridge` (#4177), but SIMPLER: the docker client
 # connects to a real `127.0.0.1:5000` listener, so there is NO iptables NAT redirect (that
