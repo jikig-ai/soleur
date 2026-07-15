@@ -13,12 +13,15 @@ vi.mock("@/lib/supabase/server", () => ({
 const updateWorkstreamIssueTitle = vi.fn();
 const setWorkstreamIssueStatus = vi.fn();
 const reopenWorkstreamIssue = vi.fn();
+const updateWorkstreamIssueFields = vi.fn();
 vi.mock("@/server/workstream/mutate-workstream-issue", async (io) => ({
   ...(await io<typeof import("@/server/workstream/mutate-workstream-issue")>()),
   updateWorkstreamIssueTitle: (...a: unknown[]) =>
     updateWorkstreamIssueTitle(...a),
   setWorkstreamIssueStatus: (...a: unknown[]) => setWorkstreamIssueStatus(...a),
   reopenWorkstreamIssue: (...a: unknown[]) => reopenWorkstreamIssue(...a),
+  updateWorkstreamIssueFields: (...a: unknown[]) =>
+    updateWorkstreamIssueFields(...a),
 }));
 
 import { PATCH } from "@/app/api/workstream/issues/[number]/route";
@@ -40,6 +43,7 @@ beforeEach(() => {
   updateWorkstreamIssueTitle.mockResolvedValue({ id: "42", title: "New" });
   setWorkstreamIssueStatus.mockResolvedValue({ id: "42", status: "blocked" });
   reopenWorkstreamIssue.mockResolvedValue({ id: "42", status: "ready" });
+  updateWorkstreamIssueFields.mockResolvedValue({ id: "42", title: "New" });
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -139,6 +143,84 @@ describe("PATCH /api/workstream/issues/[number]", () => {
     );
     const res = await PATCH(req({ status: "ready" }), ctx());
     expect(res.status).toBe(403);
+  });
+
+  it("dispatches a body edit to updateWorkstreamIssueFields", async () => {
+    await PATCH(req({ body: "new body" }), ctx());
+    expect(updateWorkstreamIssueFields).toHaveBeenCalledWith("user-9", 42, {
+      body: "new body",
+    });
+  });
+
+  it("dispatches labels/assignees/milestone together in one fields call", async () => {
+    await PATCH(
+      req({ labels: ["bug"], assignees: ["harry"], milestone: 3 }),
+      ctx(),
+    );
+    expect(updateWorkstreamIssueFields).toHaveBeenCalledWith("user-9", 42, {
+      labels: ["bug"],
+      assignees: ["harry"],
+      milestone: 3,
+    });
+  });
+
+  it("allows milestone:null (clear) through as a field", async () => {
+    await PATCH(req({ milestone: null }), ctx());
+    expect(updateWorkstreamIssueFields).toHaveBeenCalledWith("user-9", 42, {
+      milestone: null,
+    });
+  });
+
+  it("allows an empty body (unlike title)", async () => {
+    const res = await PATCH(req({ body: "" }), ctx());
+    expect(res.status).toBe(200);
+    expect(updateWorkstreamIssueFields).toHaveBeenCalledWith("user-9", 42, {
+      body: "",
+    });
+  });
+
+  it("422s a non-array assignees", async () => {
+    const res = await PATCH(req({ assignees: "harry" }), ctx());
+    expect(res.status).toBe(422);
+    expect(updateWorkstreamIssueFields).not.toHaveBeenCalled();
+  });
+
+  it("422s a non-string-array labels", async () => {
+    const res = await PATCH(req({ labels: [1, 2] }), ctx());
+    expect(res.status).toBe(422);
+    expect(updateWorkstreamIssueFields).not.toHaveBeenCalled();
+  });
+
+  it("422s a non-positive / non-integer milestone", async () => {
+    expect((await PATCH(req({ milestone: 0 }), ctx())).status).toBe(422);
+    expect((await PATCH(req({ milestone: -3 }), ctx())).status).toBe(422);
+    expect((await PATCH(req({ milestone: 1.5 }), ctx())).status).toBe(422);
+    expect((await PATCH(req({ milestone: "x" }), ctx())).status).toBe(422);
+    expect(updateWorkstreamIssueFields).not.toHaveBeenCalled();
+  });
+
+  it("422s combining a field with title (keeps title atomic)", async () => {
+    const res = await PATCH(req({ title: "x", body: "y" }), ctx());
+    expect(res.status).toBe(422);
+    expect(updateWorkstreamIssueFields).not.toHaveBeenCalled();
+    expect(updateWorkstreamIssueTitle).not.toHaveBeenCalled();
+  });
+
+  it("422s combining a field with status (keeps status atomic)", async () => {
+    const res = await PATCH(req({ status: "ready", labels: ["bug"] }), ctx());
+    expect(res.status).toBe(422);
+    expect(updateWorkstreamIssueFields).not.toHaveBeenCalled();
+    expect(setWorkstreamIssueStatus).not.toHaveBeenCalled();
+  });
+
+  it("never accepts owner/repo alongside a fields edit (AC5)", async () => {
+    await PATCH(
+      req({ body: "hi", owner: "attacker", repo: "evil" }),
+      ctx(),
+    );
+    expect(updateWorkstreamIssueFields).toHaveBeenCalledWith("user-9", 42, {
+      body: "hi",
+    });
   });
 
   it("throttles after the per-user budget (429) (AC15)", async () => {

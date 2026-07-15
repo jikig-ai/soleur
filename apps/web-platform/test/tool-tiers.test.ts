@@ -69,6 +69,31 @@ describe("getToolTier", () => {
 
 });
 
+describe("workstream edit-fields tool tiers (agent-user parity)", () => {
+  test("workstream_issue_update_fields is gated (real GitHub write)", () => {
+    expect(
+      getToolTier("mcp__soleur_platform__workstream_issue_update_fields"),
+    ).toBe("gated");
+  });
+
+  test("workstream_issue_options is auto-approve (read-only discovery)", () => {
+    expect(
+      getToolTier("mcp__soleur_platform__workstream_issue_options"),
+    ).toBe("auto-approve");
+  });
+
+  test("update_fields gate message names the edited fields", () => {
+    const msg = buildGateMessage(
+      "mcp__soleur_platform__workstream_issue_update_fields",
+      { number: 7, labels: ["bug"], milestone: null, assignees: ["harry"] },
+    );
+    expect(msg).toContain("#7");
+    expect(msg).toContain("bug");
+    expect(msg).toContain("harry");
+    expect(msg).toMatch(/milestone/i);
+  });
+});
+
 describe("buildGateMessage", () => {
   test("trigger workflow message includes workflow_id and ref", () => {
     const msg = buildGateMessage(

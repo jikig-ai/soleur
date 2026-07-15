@@ -47,6 +47,7 @@ import {
   isReadOnly,
   isRateLimited,
   type CreateIssueBody,
+  type PatchIssueBody,
 } from "./workstream-writes";
 
 interface BoardMeta {
@@ -317,6 +318,65 @@ export function WorkstreamBoard() {
     [issues, mutate, surfaceWriteError],
   );
 
+  // FIELDS edit (body/labels/assignees/milestone) — optimistic merge of the
+  // provided fields, reconcile from the returned canonical issue, roll back on
+  // failure. Mirrors updateTitle's shape; the optimistic shape is passed in
+  // because the milestone patch is a number while the card holds { number, title }.
+  const updateFields = useCallback(
+    async (
+      id: string,
+      optimistic: Partial<WorkstreamIssue>,
+      patch: PatchIssueBody,
+    ): Promise<void> => {
+      const number = issueNumberOf(id);
+      if (number === null) return;
+      const prev = issues?.find((i) => i.id === id);
+      void mutate(
+        (cur) =>
+          cur
+            ? {
+                ...cur,
+                issues: cur.issues.map((i) =>
+                  i.id === id ? { ...i, ...optimistic } : i,
+                ),
+              }
+            : cur,
+        { revalidate: false },
+      );
+      try {
+        const returned = await patchIssueRequest(number, patch);
+        void mutate(
+          (cur) =>
+            cur
+              ? {
+                  ...cur,
+                  issues: cur.issues.map((i) =>
+                    i.id === returned.id ? returned : i,
+                  ),
+                }
+              : cur,
+          { revalidate: false },
+        );
+      } catch (e) {
+        if (prev) {
+          void mutate(
+            (cur) =>
+              cur
+                ? {
+                    ...cur,
+                    issues: cur.issues.map((i) => (i.id === id ? prev : i)),
+                  }
+                : cur,
+            { revalidate: false },
+          );
+        }
+        surfaceWriteError(e);
+        throw e; // let the inline editor keep edit mode for retry
+      }
+    },
+    [issues, mutate, surfaceWriteError],
+  );
+
   // REOPEN — PATCH state=open; the card leaves Done and lands where its surviving
   // labels derive. Reconcile from the returned canonical issue.
   const reopenIssue = useCallback(
@@ -540,6 +600,7 @@ export function WorkstreamBoard() {
         onChangeStatus={changeStatus}
         onReopen={reopenIssue}
         onUpdateTitle={updateTitle}
+        onUpdateFields={updateFields}
       />
 
       <NewIssueDialog

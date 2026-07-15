@@ -51,6 +51,7 @@ import {
   createWorkstreamIssue,
   reopenWorkstreamIssue,
   setWorkstreamIssueStatus,
+  updateWorkstreamIssueFields,
   updateWorkstreamIssueTitle,
   WorkstreamWriteError,
 } from "@/server/workstream/mutate-workstream-issue";
@@ -217,6 +218,113 @@ describe("updateWorkstreamIssueTitle", () => {
     await expect(updateWorkstreamIssueTitle("u", 42, "  ")).rejects.toMatchObject(
       { status: 422 },
     );
+  });
+});
+
+describe("updateWorkstreamIssueFields — body (marker preserved)", () => {
+  it("recovers the ORIGINAL initiator from the current body and re-stamps it (AC4)", async () => {
+    octo.rest.issues.get.mockResolvedValue({
+      data: ghIssue({
+        body: "old text\n<!-- soleur:initiated-by ada -->",
+      }),
+    });
+    await updateWorkstreamIssueFields("u", 42, { body: "brand new body" });
+    const upd = octo.rest.issues.update.mock.calls[0][0];
+    expect(upd.body).toContain("brand new body");
+    expect(upd.body).toContain("<!-- soleur:initiated-by ada -->");
+  });
+
+  it("strips a user-supplied spoof marker in the new body (anti-spoof, AC4)", async () => {
+    octo.rest.issues.get.mockResolvedValue({
+      data: ghIssue({ body: "x\n<!-- soleur:initiated-by ada -->" }),
+    });
+    await updateWorkstreamIssueFields("u", 42, {
+      body: "text\n<!-- soleur:initiated-by victim -->",
+    });
+    const body = octo.rest.issues.update.mock.calls[0][0].body as string;
+    expect(body).not.toContain("victim");
+    expect(body).toContain("<!-- soleur:initiated-by ada -->");
+  });
+
+  it("keeps an empty body allowed (unlike title) — no marker when current had none", async () => {
+    octo.rest.issues.get.mockResolvedValue({ data: ghIssue({ body: "prior" }) });
+    await updateWorkstreamIssueFields("u", 42, { body: "" });
+    expect(octo.rest.issues.update.mock.calls[0][0].body).toBe("");
+  });
+});
+
+describe("updateWorkstreamIssueFields — labels (status preserved)", () => {
+  it("PUTs currentStatusLabels ∪ selectedNonStatus (status labels survive) (AC3)", async () => {
+    octo.rest.issues.get.mockResolvedValue({
+      data: ghIssue({ labels: ["in-progress", "domain/engineering", "bug"] }),
+    });
+    await updateWorkstreamIssueFields("u", 42, {
+      labels: ["domain/product", "chore"],
+    });
+    const put = octo.rest.issues.setLabels.mock.calls[0][0];
+    // The status label is preserved (column unchanged)…
+    expect(put.labels).toContain("in-progress");
+    // …the selected non-status labels replace the old non-status set…
+    expect(put.labels).toContain("domain/product");
+    expect(put.labels).toContain("chore");
+    // …and the OLD non-status labels are gone.
+    expect(put.labels).not.toContain("domain/engineering");
+    expect(put.labels).not.toContain("bug");
+    expect(octo.rest.issues.setLabels).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores any STATUS label a user smuggles into the selection (cannot move column)", async () => {
+    octo.rest.issues.get.mockResolvedValue({
+      data: ghIssue({ labels: ["blocked"] }),
+    });
+    await updateWorkstreamIssueFields("u", 42, {
+      labels: ["in-progress", "bug"],
+    });
+    const put = octo.rest.issues.setLabels.mock.calls[0][0].labels as string[];
+    // The smuggled `in-progress` did NOT enter the set; the current `blocked`
+    // status label survives (column stays blocked).
+    expect(put).toContain("blocked");
+    expect(put).not.toContain("in-progress");
+    expect(put).toContain("bug");
+  });
+});
+
+describe("updateWorkstreamIssueFields — assignees + milestone", () => {
+  it("sets assignees and milestone in ONE update() call", async () => {
+    await updateWorkstreamIssueFields("u", 42, {
+      assignees: ["harry"],
+      milestone: 7,
+    });
+    expect(octo.rest.issues.update).toHaveBeenCalledTimes(1);
+    const upd = octo.rest.issues.update.mock.calls[0][0];
+    expect(upd.assignees).toEqual(["harry"]);
+    expect(upd.milestone).toBe(7);
+    // No body key when body not provided.
+    expect(upd.body).toBeUndefined();
+  });
+
+  it("clears the milestone with milestone:null", async () => {
+    await updateWorkstreamIssueFields("u", 42, { milestone: null });
+    expect(octo.rest.issues.update.mock.calls[0][0].milestone).toBeNull();
+  });
+
+  it("routes through the AUDITED client + workspace owner/repo (AC3/AC5)", async () => {
+    await updateWorkstreamIssueFields("user-1", 42, { assignees: [] });
+    expect(createGitHubAppClient).toHaveBeenCalledWith(555, "user-1");
+    const upd = octo.rest.issues.update.mock.calls[0][0];
+    expect(upd.owner).toBe("acme");
+    expect(upd.repo).toBe("widgets");
+  });
+
+  it("returns the canonical re-derived issue", async () => {
+    octo.rest.issues.update.mockResolvedValue({
+      data: ghIssue({ number: 99, assignees: [{ login: "harry" }] }),
+    });
+    const issue = await updateWorkstreamIssueFields("u", 99, {
+      assignees: ["harry"],
+    });
+    expect(issue.id).toBe("99");
+    expect(issue.assignees).toEqual(["harry"]);
   });
 });
 

@@ -89,6 +89,25 @@ export interface WorkstreamIssue {
    *  constructors stay valid (arch review D1). Distinct from `assigneeRole`,
    *  which collapses only the FIRST domain label into a role. */
   domains?: string[];
+  // -------------------------------------------------------------------------
+  // EDITABLE fields (feat-workstream-issue-edit-fields) — what the detail drawer
+  // needs to DISPLAY + EDIT the remaining GitHub fields. All OPTIONAL + additive
+  // so every pre-existing WorkstreamIssue construction site stays valid; the
+  // mapper populates them from the narrowed GitHub payload.
+  // -------------------------------------------------------------------------
+  /** Full issue body with the initiator marker STRIPPED (ADR-104) — the text a
+   *  user edits in the drawer. Distinct from `description` (kept verbatim for the
+   *  read-render; the marker is invisible in rendered markdown). */
+  body?: string;
+  /** Every NON-status label on the issue (all labels minus STATUS_LABELS) — the
+   *  set the labels editor owns. Status labels stay owned by the status control
+   *  (they are excluded here so the labels editor can never change the column). */
+  labels?: string[];
+  /** All assignee logins (the editor's multi-select value). `user` remains the
+   *  first assignee rendered as a person chip. */
+  assignees?: string[];
+  /** The issue's milestone, or null when none. */
+  milestone?: { number: number; title: string } | null;
   createdAt: string; // ISO-8601
   updatedAt: string; // ISO-8601
 }
@@ -283,6 +302,9 @@ export interface BoardIssueInput {
    *  label/state derivation below; absent (issue not on the board, or the board
    *  read degraded) falls back to derivation. */
   boardStatus?: string;
+  /** The issue's milestone ({ number, title }) or null. OPTIONAL + additive —
+   *  absent for pre-existing constructors, which map to `milestone: null`. */
+  milestone?: { number: number; title: string } | null;
 }
 
 /** `domain/*` label → role chip. First matching label (in issue order) wins. */
@@ -592,6 +614,14 @@ export function githubIssueToWorkstreamIssue(
   const user = deriveUser(input.assignees);
   const domains = input.labels.filter((l) => l.startsWith("domain/"));
   const creator = deriveCreator(input.authorLogin, input.body, botSlug);
+  // Non-status labels: everything the labels editor owns (STATUS_LABELS stay
+  // owned by the status control, so they're excluded here — the inverse of
+  // computeStatusLabels' preservation). Single-sourced via STATUS_LABELS.
+  const statusSet = new Set<string>(STATUS_LABELS);
+  const nonStatusLabels = input.labels.filter((l) => !statusSet.has(l));
+  // Marker-stripped body for the drawer's textarea (appendInitiatorMarker with a
+  // null login strips every marker + trims — never re-stamps).
+  const body = appendInitiatorMarker(input.body ?? "", null);
   return {
     id: String(input.number),
     title: input.title,
@@ -599,6 +629,10 @@ export function githubIssueToWorkstreamIssue(
     status: deriveColumn(input),
     priority: derivePriority(input.labels),
     assigneeRole: deriveRole(input.labels),
+    body,
+    labels: nonStatusLabels,
+    assignees: input.assignees,
+    milestone: input.milestone ?? null,
     ...(user ? { user } : {}),
     ...(creator ? { creator } : {}),
     ...(deriveLive(input) ? { live: true } : {}),

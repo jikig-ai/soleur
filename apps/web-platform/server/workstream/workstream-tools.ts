@@ -1,19 +1,22 @@
 // Agent MCP tools for the Workstream board — agent-user READ + WRITE parity
-// (#5677, ADR-109). `workstream_issues_list` is read-only (auto-approve); the
-// four WRITE tools (create / set_status / update_title / close) are `gated`
-// (tool-tiers.ts) — the host review gate is the founder-confirmation surface.
-// ALL of them call the SAME shared accessors the HTTP routes use
-// (getWorkstreamIssues / mutateWorkstreamIssue helpers) — no duplicated query,
-// no `gh` shell-out. owner/repo/installation + initiatorLogin resolve
-// server-side from the operator's active workspace (never tool input).
+// (#5677, ADR-109). Read tools `workstream_issues_list` + `workstream_issue_options`
+// are auto-approve; the WRITE tools (create / set_status / update_title / close /
+// update_fields) are `gated` (tool-tiers.ts) — the host review gate is the
+// founder-confirmation surface. ALL of them call the SAME shared accessors the
+// HTTP routes use (getWorkstreamIssues / getWorkstreamIssueOptions /
+// mutateWorkstreamIssue helpers) — no duplicated query, no `gh` shell-out.
+// owner/repo/installation + initiatorLogin resolve server-side from the
+// operator's active workspace (never tool input).
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 import { getWorkstreamIssues } from "@/server/workstream/get-workstream-issues";
+import { getWorkstreamIssueOptions } from "@/server/workstream/get-workstream-issue-options";
 import {
   createWorkstreamIssue,
   reopenWorkstreamIssue,
   setWorkstreamIssueStatus,
+  updateWorkstreamIssueFields,
   updateWorkstreamIssueTitle,
 } from "@/server/workstream/mutate-workstream-issue";
 
@@ -75,9 +78,11 @@ export function buildWorkstreamTools(opts: BuildWorkstreamToolsOpts) {
   return {
     toolNames: [
       "mcp__soleur_platform__workstream_issues_list",
+      "mcp__soleur_platform__workstream_issue_options",
       "mcp__soleur_platform__workstream_issue_create",
       "mcp__soleur_platform__workstream_issue_set_status",
       "mcp__soleur_platform__workstream_issue_update_title",
+      "mcp__soleur_platform__workstream_issue_update_fields",
       "mcp__soleur_platform__workstream_issue_close",
     ],
     tools: [
@@ -101,6 +106,29 @@ export function buildWorkstreamTools(opts: BuildWorkstreamToolsOpts) {
             return textResponse(
               {
                 error: "workstream_query_error",
+                message: err instanceof Error ? err.message : "unknown",
+              },
+              true,
+            );
+          }
+        },
+      ),
+      tool(
+        "workstream_issue_options",
+        "List the valid EDIT options for the active workspace's connected repo so " +
+          "you can pick real values before an update: returns { labels: [{name," +
+          "color}] (NON-status labels only — status is owned by set_status), " +
+          "assignees: [{login}], milestones: [{number,title}] }. Degrade-safe " +
+          "(empty arrays when no repo/grant). Read-only.",
+        {},
+        async () => {
+          try {
+            const options = await getWorkstreamIssueOptions(userId);
+            return textResponse(options);
+          } catch (err) {
+            return textResponse(
+              {
+                error: "workstream_options_error",
                 message: err instanceof Error ? err.message : "unknown",
               },
               true,
@@ -165,6 +193,47 @@ export function buildWorkstreamTools(opts: BuildWorkstreamToolsOpts) {
           writeResult(() =>
             updateWorkstreamIssueTitle(userId, input.number, input.title),
           ),
+      ),
+      tool(
+        "workstream_issue_update_fields",
+        "Edit an issue's body, assignees, milestone, and/or NON-status labels by " +
+          "number (any combination in one call — only provided fields change). " +
+          "`labels` sets the non-status label set (status stays owned by " +
+          "set_status; call workstream_issue_options for valid names). `milestone` " +
+          "is a milestone NUMBER or null to clear. A body edit preserves the " +
+          "original initiator attribution. Returns the canonical { issue }. Gated.",
+        {
+          number: z.number().int().positive().describe("The issue number."),
+          body: z
+            .string()
+            .optional()
+            .describe("New issue body/description (empty string allowed)."),
+          labels: z
+            .array(z.string())
+            .optional()
+            .describe("Desired NON-status labels (replaces the non-status set)."),
+          assignees: z
+            .array(z.string())
+            .optional()
+            .describe("Assignee logins (replaces the assignee set)."),
+          milestone: z
+            .number()
+            .int()
+            .positive()
+            .nullable()
+            .optional()
+            .describe("Milestone number, or null to clear."),
+        },
+        async (input) => {
+          const fields: Parameters<typeof updateWorkstreamIssueFields>[2] = {};
+          if (input.body !== undefined) fields.body = input.body;
+          if (input.labels !== undefined) fields.labels = input.labels;
+          if (input.assignees !== undefined) fields.assignees = input.assignees;
+          if (input.milestone !== undefined) fields.milestone = input.milestone;
+          return writeResult(() =>
+            updateWorkstreamIssueFields(userId, input.number, fields),
+          );
+        },
       ),
       tool(
         "workstream_issue_close",
