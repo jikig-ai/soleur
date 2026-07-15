@@ -79,6 +79,21 @@ its T4/T5 were the only non-vacuous new tests in the first pass.
 
 ### 3. A probe that finds no failure has not found success.
 
+> **Post-merge addendum — the shipped probe had two more of these, found only against a REAL
+> log.** Ten agents reviewed it and missed them, because they are unobservable until a real
+> post-fix job log exists. (a) The degraded anchor required a literal `::warning::`, but GitHub
+> **renders** a `::warning::` workflow command as `##[warning]` in the job log — so the anchor
+> matched the emitter's echoed SOURCE and missed every real emit. (b) The liveness anchor
+> `copied .* to 127.0.0.1:5000/` matched **the PR's own commit message**, which the release job
+> log carries via the release-notes body and which quotes the anchor verbatim. Composed, they
+> counted a genuinely degraded run as clean. Fixed in PR #6451.
+>
+> **Two rules fall out.** An anchor over a CI job log must be validated against a **real emit**,
+> never the emitter's source — and must account for the platform **rendering** workflow commands
+> (`::warning::` → `##[warning]`). And because the job log contains the PR/commit body, **any
+> anchor a commit message could quote is unsafe by construction**; require an interpolated
+> runtime value (`copied v[0-9]`) that only the real `echo` can produce.
+
 The follow-through probe had **three false-verdict bugs found during work and two more at
 review** — every one a different way to certify silence:
 
@@ -201,12 +216,18 @@ one artifact and have every point-of-use *point* at it.
   hyphen. Would have auto-resolved issue #6416 at squash merge while the harm was live, defeating
   the `Ref`-not-`Closes` discipline the tasks file explicitly chose. — **Recovery:** rewrote the
   body and both commit messages (`auto-resolves issue #N`).
-  > **Then I did it a third time — in the commit that captures THIS learning.** The compound
-  > commit body said *"…that would have closed #6416 at merge"* while describing the trap. Caught
-  > only because I ran the scan again out of habit. Three violations in one session, by an author
-  > who had just written the rule down, is the strongest possible evidence that **the prose rule
-  > does not work and the scan is the control.** The scan is cheap (one `grep -oniE`) and the
-  > failure is silent and irreversible-at-merge.
+  > **It happened FIVE times in one session**, by an author who had just written the rule down:
+  > (1) the PR body, (2)+(3) two commit bodies, (4) the commit that captures THIS learning
+  > (*"…that would have closed #6416 at merge"* — while describing the trap), and (5) the body of
+  > the follow-up PR that fixes the probe (*"the probe is what auto-resolves #6416 on soak
+  > evidence"* — describing the correct behaviour, with auto-merge already queued, so that one
+  > would actually have fired).
+  >
+  > **Every single one was prose describing the correct behaviour.** That is the point: the
+  > natural way to *write about* an auto-close is to use the keyword next to the number. Intent
+  > cannot avoid this trap, vigilance cannot, and having authored the rule minutes earlier cannot.
+  > Only a mechanical scan catches it. The scan is one `grep -oniE`; the failure is silent and
+  > irreversible at merge.
   — **Prevention:** the rule exists (2026-06-29 learning) and `/ship`'s `auto-close-scan.sh`
   catches commit bodies — but it runs at **ship**, and both the PR body (authored at review) and
   the compound commit (authored after) precede it. **Run the scan at every authoring site, not
