@@ -17,6 +17,43 @@ blocks: ADR-096 tasks 5.3–5.5 (irreversible GHCR retirement — rotates AND re
 >
 > **This plan was cut roughly in half by a 6-agent review panel.** Two structural errors it originally contained (a dark-launch gate built on a false premise; a denominator arm that is mathematically degenerate) are recorded in `## Reversed During Planning` rather than quietly deleted — the *reasons* they were wrong are the most transferable content here.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-15
+**Deepened after:** a laptop crash killed the planning session; the plan survived only as an untracked file. Committed to #6479 first, then rebased onto `origin/main` (4 commits behind — which turned out to matter).
+**Research agents used:** verify-the-negative sweep · citation/rule-ID verification · observability-coverage-reviewer · test-design-reviewer · code-simplicity-reviewer · learnings-researcher · architecture-strategist *(died on an API error mid-run — see Coverage Gaps)*
+
+**Gates:** 4.6 User-Brand Impact ✅ · 4.7 Observability 5-field ✅ · 4.8 PAT-shaped variable ✅ · 4.9 UI-wireframe ✅ (non-UI) · 4.5 Network-outage — **fired** (8 trigger tokens), dispositioned by `## Hypotheses` (no network-layer fix is proposed at any layer), telemetry emitted · 4.55 Downtime & Cutover — **not triggered**, verified not assumed: `lifecycle { ignore_changes = [user_data, …] }` (`server.tf:241-243`) sits inside `hcloud_server.web` (`:99`-`:248`) and so covers every `for_each` host.
+
+### What held up
+
+The **mechanism is sound** and the citations are clean. A verify-the-negative sweep of 10 load-bearing absolute claims returned **10/10 CONFIRMS with zero line-number drift** — `_emit`'s `( … ) || true` (`:339`) really cannot propagate nonzero; `set -e` really is active at the insertion point; `REF`/`IMAGE_REF` really is a sound discriminator; the anchors really are unique and adjacent. A citation pass found **no fabricated or retired rule IDs, no false attributions, no drifted file:line cites** across an unusually large sample.
+
+### Key improvements
+
+1. **The AC set was rebuilt — it could not detect its own feature's absence.** AC1 passed on a beaconless tree (`indexOf` → `-1`, and `-1 < 31470`), and no other AC covered existence, so the whole pre-merge set was satisfiable with the one code line missing. Added the existence pin + both `toBeGreaterThan(-1)` guards (mirroring `cloud-init-user-data-size.test.ts:312-316` *in full* rather than its last line), added AC1b's `toHaveLength(1)`, and moved the legs into Phase 2 so they actually go RED.
+2. **AC7's harness was infeasible as specified.** `sentry_count` is defined at `:142` top-level with no source-and-override seam, so the prescribed stub loses. Re-specified on the seam that exists (PATH-stub `curl` + `gh`), proven working end-to-end.
+3. **AC9 — the plan's worst hazard (`TRANSIENT` → 0 → false PASS → PAT revoked) — was guarded by an eyeball.** Folded into AC7's harness as a real assertion (HTTP 500 → `exit 2`).
+4. **Every grep AC was unscoped, and the plan quotes its own patterns.** Repo-wide, `!= 4` matches 4 files. Scoped them all; qualified the generic patterns.
+5. **AC6 checked half its own change** — the message (`:182`) says `expected 4` and contains no `!= 4`.
+6. **`MIN_BOOTS` dropped from knob to hardcoded `== 0`.** Legal range is `{1}`, and since near-term runs are manual (`:113-115`), a knob is a **bypass surface** on a gate authorizing an irreversible act.
+7. **Two Files-to-Edit rows were mis-specified as numeral sweeps when both are semantic** — see the `ci-deploy.sh` and `zot-registry-revert.md` rows. Both would have made an operator-facing artifact *lie*.
+8. **The byte budget — the plan's self-declared "binding constraint" — was void.** Re-derived: 116 B headroom, not 84.
+9. **Closing #6500 is itself the authorization act.** Now warned on both sides.
+10. **D3's evidence was corrected** before #6500 was filed; two of six claims were false.
+
+### New considerations discovered
+
+- **`appserved ⊇ appboot`** — every path emitting `app_ghcr_fallback` also emits `app_ghcr_served`, so one bad boot contributes **2** to `FALLBACKS`. Harmless to the verdict, misleading to a reader. Commented (Phase 5.7).
+- **The `image_ref` wart's justification expired** with the byte budget. Decision kept; reason rewritten (boot-path risk ≫ a cosmetic tag).
+- **Nothing schedules a rebuild**, so the floor and the follow-through probe may both sit without evidence indefinitely. Escalated to #6122 as an explicit ask.
+
+### Coverage gaps (stated, not hidden)
+
+- **architecture-strategist died on an API error** and returned no findings. C1's architecture was independently covered by the simplicity reviewer (which weighed and rejected the repo-local-`grep` alternative); the ADR/C4 dimensions carry only the original panel's review.
+- The **Byte Budget Δ column** remains a carried estimate against the old baseline; only the 21,784 baseline is measured. Phase 3 step 3 re-measures.
+- **`stage:"bootstrap_complete"` → 9 events** is a live-Sentry claim, unverifiable from a static tree; the soak header (`:35`) documents it and is the only source.
+
 ## Overview
 
 `scripts/followthroughs/zot-soak-6122.sh` is the gate that authorizes ADR-096 tasks 5.3–5.5. Those tasks are **irreversible**: they rotate *and revoke* the GHCR PAT. After them, a fleet that still needs GHCR can pull from neither registry, with no rollback.
@@ -44,20 +81,32 @@ After the pull loop, `REF == IMAGE_REF` **iff GHCR served** (covering *both* the
 ```sh
 APP_ZOT=$(sentry_count 'stage:"app_zot"')
 [[ "$APP_ZOT" =~ ^[0-9]+$ ]] || { echo "TRANSIENT: Sentry query 'app_zot' failed — retry next sweep." >&2; exit 2; }
-if (( APP_ZOT < MIN_BOOTS )); then
-  echo "FAIL(no-freshboot-evidence): 0 fallbacks, but only $APP_ZOT zot-served fresh boot(s) since $START (need >=$MIN_BOOTS). The fleet is UNOBSERVED, not clean. Most likely cause: this cloud-init predates START — merge + recreate a web host inside the window."; exit 1
+if (( APP_ZOT == 0 )); then
+  echo "FAIL(no-freshboot-evidence): 0 fallbacks, but NO zot-served fresh boot since $START. The fleet is UNOBSERVED, not clean. Most likely cause: this cloud-init predates START — merge + recreate a web host inside the window."; exit 1
 fi
 ```
 
 That is the whole denominator. It converges naturally as hosts recreate, imports no cross-file invariant, no window collision, and no human adjudication.
 
-> ### ⚠ `MIN_BOOTS` is a NEW knob, default **1** — do NOT reuse `MIN_SAMPLE`
+> ### ⚠ The floor is a HARDCODED `== 0` — NOT `MIN_SAMPLE`, and NOT a new knob either
 >
-> This is the difference between a gate and a wall. `MIN_SAMPLE` (default 3, `:108`) means *zot-served pulls per image* and is dominated by **rolling deploys** — frequent. `count(app_zot)` counts **fresh host boots** only, which are *rebuild-triggered, not periodic* — and the soak header's own live measurement is **9 `bootstrap_complete` events in total, ever** (`:35`). Requiring ≥3 full web-host recreates inside a soak window, when **nothing in this plan or #6122 schedules a single rebuild**, makes the gate **permanently unpassable** — `exit 1` daily, forever. A gate that structurally cannot pass gets bypassed, which is worse than no gate.
+> **Half of this callout (do not reuse `MIN_SAMPLE`) is the load-bearing part. Read it first.**
 >
-> So: `MIN_BOOTS="${ZOT_SOAK_MIN_BOOTS:-1}"`, validated with the same `^[1-9][0-9]*$` guard as `:116` (an unvalidated knob is the vacuous-pass hole that guard exists to close). **One** zot-served fresh boot is sufficient evidence for what this arm actually proves: *the beacon emits, and the flip was exercised on the boot path.* Proving the flip at volume is the existing sample arm's job, and it keeps `MIN_SAMPLE`.
+> **1 — Never reuse `MIN_SAMPLE`. This is the difference between a gate and a wall.** `MIN_SAMPLE` (default 3, `:108`) means *zot-served pulls per image* and is dominated by **rolling deploys** — frequent. `count(app_zot)` counts **fresh host boots** only, which are *rebuild-triggered, not periodic* — and the soak header's own live measurement is **9 `bootstrap_complete` events in total, ever** (`:35`). Requiring ≥3 full web-host recreates inside a soak window, when **nothing in this plan or #6122 schedules a single rebuild**, makes the gate **permanently unpassable** — `exit 1` daily, forever. A gate that structurally cannot pass gets bypassed, which is worse than no gate.
 >
-> #6122 should schedule ≥1 deliberate web recreate inside the soak window as an explicit 5.x step (Phase 7.3).
+> **2 — But do not make it a knob either (revised at deepen; the earlier draft prescribed `MIN_BOOTS="${ZOT_SOAK_MIN_BOOTS:-1}"`).** A knob's value is its *range*, and this one's legal range is exactly `{1}`:
+> - `0` → the vacuous-pass hole (the floor stops being a floor).
+> - `>1` → the permanently-unpassable wall proven in (1).
+>
+> A knob with one legal value is a **constant wearing a costume** — plus a default, a `^[1-9][0-9]*$` guard, a validation branch, and an AC leg to defend the costume.
+>
+> **Worse, it is a bypass surface on a gate that authorizes an irreversible act.** Note `:113-115` — the soak's own comment on `MIN_SAMPLE` — records that *"the sweeper's `env -i` cannot forward this var, but … enrollment is deferred, so every near-term run is a **manual** one where it IS settable — exactly when the retirement decision gets made."* So env knobs on this script **are** reachable by the person making the call. `ZOT_SOAK_MIN_BOOTS=0` would silently disarm the denominator at precisely the moment it matters. A hardcoded `== 0` has no such surface.
+>
+> **Why `MIN_SAMPLE` legitimately stays a knob and this does not:** `MIN_SAMPLE`'s range is genuinely open (3, 5, 10 are all meaningful evidence thresholds), so its guard closes a real hole. This floor's range is not. Do not "mirror the sibling" for symmetry — the sibling earns its shape.
+>
+> **What the floor actually proves,** and why `1` is sufficient: *the beacon emits, and the flip was exercised on the boot path.* One zot-served fresh boot proves both. Proving the flip **at volume** is the existing sample arm's job, and it keeps `MIN_SAMPLE`.
+>
+> #6122 should schedule ≥1 deliberate web recreate inside the soak window as an explicit 5.x step (Phase 7.3) — otherwise the floor has no evidence to converge on.
 
 ---
 
@@ -84,11 +133,11 @@ This is the issue's own literal minimum-closure wording, and it is **mathematica
 1. **Dead by construction.** `app_ghcr_served` becomes a `FAIL_QUERIES` entry. The soak `exit 1`s when `FALLBACKS > 0` (`:210-218`), and `FALLBACKS` sums every entry. So **every line after `:218` has `count(app_ghcr_served) == 0` as a precondition** → `ACCOUNTED = count(app_zot) + count(app_ghcr_served)` is *identically* `count(app_zot)`. The addition is arithmetic theater.
 2. **Or it masks a real FAIL.** Placed *before* the `FALLBACKS` exit: 10 boots, 3 GHCR-served, 2 beacons dropped → `ACCOUNTED=8 < EXPECTED=10` → `exit 2` TRANSIENT instead of `exit 1` FAIL. It downgrades the exact signal this PR exists to raise. **Both placements are wrong.**
 3. **It saturates into a false PASS.** `sentry_count` uses `per_page=100` and counts `.data | length` with **no pagination** (`:146`, `:158`) — every count is `min(true, 100)`. Harmless for the existing `> 0` tests; **load-bearing** the moment you compare two counters. Real ACCOUNTED=100 / EXPECTED=150 → reported 100 vs 100 → no shortfall → **false PASS on the arm whose only job is catching an unobserved fleet.** `START` is absolute and the window grows unbounded — a *when*, not an *if*.
-4. **Its only unique domain is its own worst failure.** What it catches that the floor doesn't is *partial* beacon loss (`MIN_BOOTS <= ACCOUNTED < EXPECTED`) — precisely what a fail-open `_emit` produces by design. With `START` absolute, one dropped beacon poisons the window **permanently**: TRANSIENT daily, forever. A gate that structurally cannot pass gets bypassed.
+4. **Its only unique domain is its own worst failure.** What it catches that the floor doesn't is *partial* beacon loss (`1 <= ACCOUNTED < EXPECTED`) — precisely what a fail-open `_emit` produces by design. With `START` absolute, one dropped beacon poisons the window **permanently**: TRANSIENT daily, forever. A gate that structurally cannot pass gets bypassed.
 
-**The floor dominates it on every non-degenerate case, with a *better* exit code.** Beacon dark (typo, DSN unresolved, curl fails, cloud-init never reached the fleet) → `app_zot == 0` → `exit 1` **FAIL**, not TRANSIENT. And `MIN_BOOTS` (1) is far below the 100 saturation ceiling, so the floor is **immune to proof 3**.
+**The floor dominates it on every non-degenerate case, with a *better* exit code.** Beacon dark (typo, DSN unresolved, curl fails, cloud-init never reached the fleet) → `app_zot == 0` → `exit 1` **FAIL**, not TRANSIENT. And the floor (1) is far below the 100 saturation ceiling, so the floor is **immune to proof 3**.
 
-**On deviating from the issue:** `accounted == expected` is a proposed **mechanism** for the goal *"never PASS on an unobserved fleet"*. This plan meets that goal, better. The mechanism was specified before `app_ghcr_served` existed to make the probe-miss path loud — once the FAIL query carries hole 1, the denominator's remaining job is narrow: **prove the emitter is alive**, which is exactly `count(app_zot) >= MIN_BOOTS`. **This deviates from the issue's literal text and is surfaced as a User-Challenge** in `specs/<branch>/decision-challenges.md` for operator ratification — not silently omitted.
+**On deviating from the issue:** `accounted == expected` is a proposed **mechanism** for the goal *"never PASS on an unobserved fleet"*. This plan meets that goal, better. The mechanism was specified before `app_ghcr_served` existed to make the probe-miss path loud — once the FAIL query carries hole 1, the denominator's remaining job is narrow: **prove the emitter is alive**, which is exactly `count(app_zot) >= 1`. **This deviates from the issue's literal text and is surfaced as a User-Challenge** in `specs/<branch>/decision-challenges.md` for operator ratification — not silently omitted.
 
 Cutting it dissolves: `bootstrap_complete`/EXPECTED, the `START` collision, the non-convergence flaw, the ADR sequencing precondition, the #6122 hard gate, an AC, 2 Risks rows, and 2 Alternatives rows.
 
@@ -187,7 +236,12 @@ Cutting it dissolves: `bootstrap_complete`/EXPECTED, the `START` collision, the 
 
 **Pin the ordering by a test — on the CALL FORM, not the bare token.** ⚠ A naive `indexOf("app_ghcr_served") < indexOf('IMAGE_REF="$REF"')` is **defeated by this plan's own comment-merge**: the merged rationale sits *above* `:542` and must name the beacon, so `indexOf` would return the *comment's* offset and the pin would pass even if the code line sat below `:544` — the exact failure it exists to catch. Pin `'"app_ghcr_served" warning'` (the op-contract test already knows this class at `:151`). `IMAGE_REF="$REF"` is unique to `:544`, so the right operand is safe.
 
-**Accepted wart (comment it, don't fix it):** `_emit` tags `image_ref` from `$IMAGE_REF` (`:334`), still the **GHCR** ref at the insertion point — so the `app_zot` beacon carries `image_ref: ghcr.io/…`, the wrong registry on the event asserting zot served it. Harmless to the gate (only `stage:` is queried); misleading forensics. A temp var costs bytes the budget cannot fund.
+**Accepted wart (comment it, don't fix it).** `_emit` tags `image_ref` from `$IMAGE_REF` (`:334`), still the **GHCR** ref at the insertion point — so the `app_zot` beacon carries `image_ref: ghcr.io/…`, the wrong registry on the event asserting zot served it.
+
+*Re-verified at deepen, and the justification was rewritten — the old one has expired:*
+- **The wart is real.** `_emit:334` interpolates `"$IMAGE_REF"` directly; it does **not** read `/run/soleur-image-ref` (which `:543` populates with the correct served ref).
+- **It is genuinely gate-harmless.** `image_ref` appears in `zot-soak-6122.sh` only inside **comments** (`:26`, `:40`) — never in a query. And the *real* pulls do use the correct ref: `:642`, `:660`, `:780` all read `/run/soleur-image-ref`. The damage is one misleading Sentry tag; forensics only.
+- ⚠ **The old reason — *"a temp var costs bytes the budget cannot fund"* — is now FALSE.** The byte budget was re-derived post-rebase: 116 B of headroom (see Byte Budget). A temp var is affordable. **Keep the wart anyway, for the real reason:** the insertion site is `cloud-init.yml`'s boot path, the highest-blast-radius file in the repo — a malformed line means **no host boots at all** — and the defect it would fix is a cosmetic tag on an event nothing queries. That trade is not worth taking on this PR. Recorded explicitly so a future reader who notices the headroom does not "fix" it and reintroduce boot-path risk for a comment.
 
 ### D2 — Keep the emit BARE
 
@@ -199,7 +253,7 @@ Hole 3 could be closed by prefixing the boot emit with `feature`/`op`/`registry`
 
 The soak counts the bare query directly instead. Complexity lands in the never-executed, zero-blast-radius script rather than the boot path — honoring the issue's own rationale for a separate PR.
 
-> **Do NOT sum the boot query into `ZOT_WEB`** (a plan-v2 idea, cut). It is (a) **dead** — post-`FALLBACKS`-exit the floor already guarantees `ZOT_WEB >= count(app_zot) >= MIN_BOOTS`; (b) a **false-PASS route** — a dark beacon leaves `ZOT_WEB = rolling + 0`, which rolling deploys alone push past `MIN_SAMPLE` → PASS on an unobserved fleet; and (c) **unsound** — `sentry_count` returns the *string* `TRANSIENT` (`:151`), and `$(( ))` resolves that bare word as unset → **0**, destroying the sentinel (the hazard `:109-115` already documents).
+> **Do NOT sum the boot query into `ZOT_WEB`** (a plan-v2 idea, cut). It is (a) **dead** — post-`FALLBACKS`-exit the floor already guarantees `ZOT_WEB >= count(app_zot) >= 1`; (b) a **false-PASS route** — a dark beacon leaves `ZOT_WEB = rolling + 0`, which rolling deploys alone push past `MIN_SAMPLE` → PASS on an unobserved fleet; and (c) **unsound** — `sentry_count` returns the *string* `TRANSIENT` (`:151`), and `$(( ))` resolves that bare word as unset → **0**, destroying the sentinel (the hazard `:109-115` already documents).
 
 ### D3 — 🔴 The dedicated inngest host: a SEVENTH GHCR-served path, and it is fatal
 
@@ -242,12 +296,20 @@ fi
 
 `exit 1` (FAIL), not 2 — the criteria *are* met; the retirement is *blocked*. TRANSIENT means "the probe could not run" (`:89`), which is not the case.
 
+**The unreadable case must stay `exit 2`, never 0.** The `[[ "$st" == "OPEN" || "$st" == "CLOSED" ]]` guard is the load-bearing line: a gate must never read *"I could not measure"* as *"the measurement is false."* That inversion is the shape behind every P1 in `knowledge-base/project/learnings/2026-07-15-self-healing-guard-on-a-blind-host-must-fail-safe-on-its-own-instrument.md`. Here it would PASS the gate during a GitHub API outage while the 7th path is still live. AC7 pins it.
+
+> ### ⚠ Closing #6500 IS the authorization act — surfaced at deepen
+>
+> The arm reads issue **state**, not fixedness. `closed-as-not-planned`, a partial fix, or routine backlog tidying all flip the soak from `exit 1 FAIL(blocked)` toward `exit 0` — and `exit 0` is what authorizes the **irreversible** PAT rotate-and-revoke. The plan states #6500's close condition but never said that *closing it is the act*. Both sides now carry the warning: a comment beside `BLOCKER=6500` in the soak, and a pinned note on #6500 itself (posted 2026-07-15).
+>
+> This is the residual risk of proxying a code condition through an issue's state, and it is accepted deliberately: #6500's close condition is two-part (*pulls zot-primary with a GHCR fallback* **and** *reports on the Sentry `stage:` schema*), and a repo-local `grep` on `cloud-init-inngest.yml` — the token-free, network-free alternative — can only ever test the first half.
+
 ### D5 — Denominator source: the beacon itself, nothing else
 
-`count(stage:"app_zot") >= MIN_BOOTS`. No second emitter, no `bootstrap_complete`, no cross-file invariant.
+`count(stage:"app_zot") >= 1` — a hardcoded floor, no knob (see the Overview callout).. No second emitter, no `bootstrap_complete`, no cross-file invariant.
 
 - **Converges naturally** as hosts recreate — the thing a soak *is*.
-- **Immune to the `per_page=100` saturation** that killed the counter-comparison (`MIN_BOOTS` = 1 ≪ 100).
+- **Immune to the `per_page=100` saturation** that killed the counter-comparison (the floor is 1 ≪ 100).
 - **Imports no `START` constraint.** A wider window only counts *more* `app_zot`; a late-landing beacon just means the floor takes longer to satisfy. The `START` collision the counter-comparison created **does not exist here**.
 - Catches every case the reversed arm caught, with a **stronger** exit code (`exit 1` FAIL, not TRANSIENT).
 
@@ -320,7 +382,7 @@ liveness_signal:
 
 error_reporting:
   destination: "Sentry (org jikigai-eu, de.sentry.io) via the baked-DSN _emit store API"
-  fail_loud: "false — _emit is deliberately fail-open (never blocks boot). The soak's MIN_BOOTS floor is what makes a dark emit LOUD: a beacon that never POSTs drives app_zot to 0 → exit 1 FAIL → the retirement stays blocked."
+  fail_loud: "false — _emit is deliberately fail-open (never blocks boot). The soak's zero-evidence floor is what makes a dark emit LOUD: a beacon that never POSTs drives app_zot to 0 → exit 1 FAIL → the retirement stays blocked."
 
 failure_modes:
   - mode: "Fresh boot served by GHCR because the /v2/ probe missed (the DOMINANT path — today emits nothing)"
@@ -330,7 +392,7 @@ failure_modes:
     detection: "stage:\"app_ghcr_fallback\" (existing) AND stage:\"app_ghcr_served\" (new)"
     alert_route: "same alarm (both filters) → page; soak counts both → exit 1"
   - mode: "The beacon is dark (typo'd stage, DSN unresolved, curl fails, cloud-init never reached the fleet, ZOT_REGISTRY_URL regressed)"
-    detection: "count(stage:\"app_zot\") < MIN_BOOTS — no second emitter needed; a dark beacon cannot manufacture evidence"
+    detection: "count(stage:\"app_zot\") == 0 — no second emitter needed; a dark beacon cannot manufacture evidence"
     alert_route: "soak liveness floor → exit 1 FAIL (never PASS on an unobserved fleet)"
   - mode: "5.3 retires GHCR while the dedicated inngest host still pulls it fail-closed (the 7th path, D3)"
     detection: "the C1 blocker arm reads the D3 issue's OPEN state via gh"
@@ -386,13 +448,13 @@ Other six domains: not relevant (no user-facing surface, pricing, contract, copy
 | File | Change |
 |---|---|
 | `apps/web-platform/infra/cloud-init.yml` | **+1 code line** between the `:542`/`:544` literals, **and trim+merge the `:525-533` comment** to fund its rationale (Byte Budget step 1). |
-| `scripts/followthroughs/zot-soak-6122.sh` | `FAIL_QUERIES[appserved]='stage:"app_ghcr_served"'`; cardinality floor `!= 4` → `!= 5` (condition **and** message); **the new `MIN_BOOTS` knob** (`MIN_BOOTS="${ZOT_SOAK_MIN_BOOTS:-1}"`, validated `^[1-9][0-9]*$` per `:116`) **+ the `app_zot >= MIN_BOOTS` liveness floor**; **the C1 blocker arm**; `secrets=` gains `GH_TOKEN`; header: `NOT COVERED 2/2` → the **5-of-7** ratio (C3) incl. the 7th path; sweep "FOUR watched signals" 4→5 (`:9-44`, ~6 places — read each hit, do not blind-replace). |
+| `scripts/followthroughs/zot-soak-6122.sh` | `FAIL_QUERIES[appserved]='stage:"app_ghcr_served"'`; cardinality floor `!= 4` → `!= 5` (condition **and** message); **the `(( APP_ZOT == 0 ))` liveness floor** (hardcoded — **no knob**, see the Overview callout); **the C1 blocker arm**; `secrets=` gains `GH_TOKEN`; header: `NOT COVERED 2/2` → the **5-of-7** ratio (C3) incl. the 7th path; sweep "FOUR watched signals" 4→5 (`:9-44`, ~6 places — read each hit, do not blind-replace). |
 | `apps/web-platform/infra/sentry/issue-alerts.tf` | 5th `tagged_event`: `key = "stage"`, `value = "app_ghcr_served"`. Keep `filter_match = "any"` + `value = 0`. **Also update the enumerating comment at `:1334-1335`.** |
 | `apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` | `alarm.size` 4→5 (`:203`); `soakFailQueries().size` 4→5 (`:204`); flat **bare** whole-query pin `soakQueryFor("app_ghcr_served") === 'stage:"app_ghcr_served"'`; emit-**call-form** pin; `value = "app_ghcr_served"` tf pin. |
 | `plugins/soleur/test/cloud-init-user-data-size.test.ts` | **New leg: pin the emit ORDERING on the CALL FORM** — `indexOf('"app_ghcr_served" warning') < indexOf('IMAGE_REF="$REF"')` (mirrors the AC5 `verifyIdx < runIdx` idiom). **Not** the bare token — the merged comment defeats it (D1). |
 | `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md` | Amend ~`:114-145` (see ADR section) incl. the 5-of-7 ratio, the C4-debt note, the expected-page note. Status stays **Adopting**. |
-| `knowledge-base/engineering/operations/runbooks/zot-registry-revert.md` | `:24`, `:108` enumerate the signal set → 4→5 sweep. |
-| `apps/web-platform/infra/ci-deploy.sh` | `:872` comment names "two pull-fallback signals" → three. **Comment only.** |
+| `knowledge-base/engineering/operations/runbooks/zot-registry-revert.md` | ⚠ **NOT a 4→5 sweep — the two sites are semantically different (corrected at deepen).** `:108` **is** a genuine four-signal enumeration of the alarm's watched set → 4→5 is correct there. **`:22-25` is NOT**: it is a deliberate **three**-signal list (`ghcr-fallback` / `inngest_ghcr_fallback` / `app_ghcr_fallback`) under the predicate *"a host **tried** zot and failed"*, and `zot-gate-degraded` is excluded on purpose because its semantics differ. `app_ghcr_served`'s **dominant path is probe-miss — zot was never attempted**, which is the `zot-gate-degraded` semantic, not tried-and-failed. Adding it to `:22-25` files it under a predicate that is **false for it** and tells an operator, *mid-incident*, to chase the pull path when the fault is the probe. It belongs in the **second** bullet (`:26-28`, "zot unreachable") or nowhere. |
+| `apps/web-platform/infra/ci-deploy.sh` | ⚠ **Re-cited and re-scoped at deepen — the old `:872` cite was wrong AND the edit was mis-specified.** `:872` is `zot_gate_degraded_event probe_unreachable` inside the `/v2/` probe, not a signal enumeration. The real text is **`:963-969`**, the `RETIREMENT TRIPWIRE (#6285)` block — the comment telling a future reader which signals survive task 5.3, *the exact irreversible action this plan gates*. **And it is not a "two → three" numeral bump:** the sentence reads *"they fire on the zot MISS, before any GHCR pull, so 'stop GHCR push' does not darken them either"* — a survival claim that is **FALSE for `app_ghcr_served`**, which fires *after* the pull loop resolves, and whose dominant probe-miss path sees the GHCR pull **succeed**. Post-5.3 that path emits no `app_ghcr_served` at all: it takes `N>=5 → exit 1` and the host dies beacon-less (D1 row 4). Appending a third name to a sentence whose predicate does not hold for it makes the tripwire **lie**. Needs a distinguishing clause, not a numeral. **Comment only** — but load-bearing comment. |
 
 ## Files to Create
 
@@ -433,12 +495,14 @@ Its number is cited by the ADR amendment **and hard-wired into the C1 blocker ar
 
 Add the op-contract pins for the 5th signal (`alarm.size` 5, `soakFailQueries().size` 5, the bare whole-query pin, the call-form pin, the tf pin). **Run → RED** (nothing emits `app_ghcr_served` yet).
 
+**Also add AC1's legs HERE — moved from Phase 3 step 4 at deepen.** The existence pin, both `toBeGreaterThan(-1)` guards, the ordering assert, and AC1b's `toHaveLength(1)`. This matters: on today's tree the *unguarded* ordering assert goes **GREEN with no beacon** (`-1 < 31470`), so writing it in Phase 3 — after the emit lands — means it never goes RED and never proves it can fail. Writing it in Phase 2 surfaces the vacuity immediately: the existence leg must go **RED** now, and if the ordering leg passes while existence fails, the guards are missing.
+
 ### Phase 3 — The emit (the contract)
 
 1. **Trim + merge the `:525-533` comment first.**
 2. Insert the single code line between the literals, with the merged rationale (note the `image_ref` wart).
 3. **Run `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts`** → PASS (projected ≈21,788 with the trim+merge; ≈21,876 without — both under 21,900). **Re-measure rather than trusting either projection.** If it somehow does not fit: shrink the comment. **Do not raise the budget** (Byte Budget step 4).
-4. Add the **call-form** ordering pin leg.
+4. AC1's legs were written in **Phase 2** — re-run them here; they must flip RED → GREEN. (Do **not** author them at this step: on a beaconless tree the unguarded ordering assert passes, so a pin written after the emit never proves it can fail.)
 5. **Render-verify the templatefile** — a parse error means no host boots:
    `printf 'templatefile("%s", { <full var map> })\n' "$PWD/apps/web-platform/infra/cloud-init.yml" | terraform -chdir="$(mktemp -d)" console`
    Confirm no `%{` introduced (even in comments) and any shell `${VAR}` is `$${VAR}`.
@@ -451,12 +515,12 @@ Add the 5th `tagged_event` + update the `:1334-1335` comment. `terraform validat
 ### Phase 5 — The soak
 
 1. `FAIL_QUERIES[appserved]='stage:"app_ghcr_served"'` (**bare**).
-2. Cardinality floor `!= 4` → `!= 5` — condition **and** message.
-3. **Declare the new knob** beside `MIN_SAMPLE` (`:108`): `MIN_BOOTS="${ZOT_SOAK_MIN_BOOTS:-1}"`, validated with the same `^[1-9][0-9]*$` guard as `:116` (an unvalidated knob is the vacuous-pass hole that guard exists to close). **It is a NEW knob — do not reuse `MIN_SAMPLE`** (see the Overview callout: `MIN_SAMPLE`=3 counts rolling-deploy pulls; `count(app_zot)` counts fresh boots, of which there have been 9 *ever* → a 3-floor is a permanently unpassable wall).
-4. **The liveness floor**, after the `FALLBACKS` exit, before/beside the sample arm: guard `APP_ZOT` as a string **before** any arithmetic (`:151` returns `TRANSIENT`), then `(( APP_ZOT < MIN_BOOTS ))` → `exit 1`.
-5. **The C1 blocker arm**, immediately before the final PASS → `exit 1` FAIL(blocked).
-6. `secrets=` in the header directive gains `GH_TOKEN`.
-7. Header: the **5-of-7** ratio (C3), the 7th path, the C4/#6437 residuals. Sweep 4→5 prose.
+2. Cardinality floor `!= 4` → `!= 5` — condition **and** message. ⚠ **Two separate literals.** The condition is `${#FAIL_QUERIES[@]} != 4` (`:181`); the message (`:182`) says **`expected 4`** and does *not* contain the string `!= 4`. Sweeping only the condition leaves the operator-facing message on the irreversible gate saying "expected 4" while the condition requires 5. AC6 pins both.
+3. **The liveness floor**, after the `FALLBACKS` exit, before/beside the sample arm: guard `APP_ZOT` as a string **before** any arithmetic (`:151` returns `TRANSIENT`), then `(( APP_ZOT == 0 ))` → `exit 1`. **Hardcode the floor — do NOT add a knob and do NOT reuse `MIN_SAMPLE`** (Overview callout: `MIN_SAMPLE`=3 counts rolling-deploy pulls and would be a permanently unpassable wall; a knob's only legal value here is `1`, and it would be a bypass surface since near-term runs are manual per `:113-115`).
+4. **The C1 blocker arm**, immediately before the final PASS → `exit 1` FAIL(blocked). Use `BLOCKER=6500`.
+5. `secrets=` in the header directive gains `GH_TOKEN`.
+6. Header: the **5-of-7** ratio (C3), the 7th path, the C4/#6437 residuals. Sweep 4→5 prose.
+7. **Comment the `FALLBACKS` subsumption** (found at deepen): every path that emits `app_ghcr_fallback` **also** emits `app_ghcr_served` (D1 row 3), so `appserved ⊇ appboot` and one bad boot now contributes **2** to `FALLBACKS` and double-fires the alarm. Harmless to the verdict (both `> 0` → FAIL) but a future reader will misread `FALLBACKS` as an event count. One clause in the `FAIL_QUERIES` comment: *`appserved ⊇ appboot` — `FALLBACKS` is a tripwire sum, not an event count; the two stay separate for remediation routing.*
 8. `bash -n` + `shellcheck` if available.
 
 ### Phase 6 — GREEN + the follow-through probe
@@ -482,17 +546,50 @@ Add the 5th `tagged_event` + update the `:1334-1335` comment. `terraform validat
 
 ### Pre-merge (PR)
 
-1. **AC1 — the beacon is in the right place, pinned by a test on the CALL FORM.** A leg in `cloud-init-user-data-size.test.ts` asserts `indexOf('"app_ghcr_served" warning') < indexOf('IMAGE_REF="$REF"')`. **Not** the bare token (the merged comment sits above `:542` and would satisfy it vacuously — D1).
+> ### ⚠ The AC set was REBUILT at deepen. Read this first.
+>
+> A test-design pass proved **AC1 passed on a tree with no beacon in it at all** — and that no other AC covered existence, so **the entire pre-merge AC set was satisfiable with this plan's central deliverable absent from `cloud-init.yml`.** Demonstrated, not theorised:
+>
+> ```
+> indexOf('"app_ghcr_served" warning') = -1     (does not exist)
+> indexOf('IMAGE_REF="$REF"')          = 31470
+> AC1 as written  (-1 < 31470)         => TRUE  <-- PASSES WITH NO BEACON
+> ```
+>
+> `indexOf` returns `-1` on a miss and `-1` is less than every real offset. A typo'd stage, a renamed stage, or the line never being written all satisfied it. It failed *safe* in prod (`app_zot=0` → the floor → `exit 1` forever), so it would not have caused the outage — it would have shipped the PR **dead**, and #6462's whole thesis is that a gate certifying something it did not check is the defect.
+>
+> **The plan reasoned about vacuity better than any of its checks did.** It reversed two whole arms for being degenerate and caught that a bare-token pin would be defeated by its own comment-merge — then shipped an AC a missing file satisfies. The rigor was aimed at the design, not at the verification. That asymmetry is fixed below.
+
+1. **AC1 — the beacon EXISTS and is in the right place.** Two legs, because ordering alone is vacuous:
+   - **Existence** (the leg the earlier draft omitted): `expect(cloudInit).toContain('"app_ghcr_served" warning')`. This mirrors the identical in-repo pin at `sentry-zot-mirror-fallback-alert-op-contract.test.ts:195` (`expect(cloudInit).toContain(\`"app_ghcr_fallback" warning\`)`), whose own comment (`:192-193`) already records *why* the bare stage would be vacuous.
+   - **Ordering**, guarded: `expect(servedIdx).toBeGreaterThan(-1)` **and** `expect(refIdx).toBeGreaterThan(-1)` **before** `expect(servedIdx).toBeLessThan(refIdx)`. This mirrors `cloud-init-user-data-size.test.ts:312-316` **in full** — the earlier draft copied its last line and dropped the two `toBeGreaterThan(-1)` guards that make it non-vacuous.
+   - Pin the **call form** (`'"app_ghcr_served" warning'`), never the bare token: the merged comment sits above `:542` and names the beacon (D1). Verified: `IMAGE_REF="$REF"` is **unique** in `cloud-init.yml` (`:544`; the other two `IMAGE_REF=` at `:313`/`:463` are `='${image_name}'`), and `:534-545` contains no `${...}` interpolation, so raw text == rendered text and `indexOf`-returns-first is safe.
+   - ⚠ **This leg belongs in Phase 2 (RED), not Phase 3.** On today's tree it goes GREEN with no beacon — which is exactly how the `-1` bug survived to review. Adding it after the emit lands means it never goes RED and never proves it can fail.
+
+1b. **AC1b — the ordering pin cannot be defeated by quoting.** `expect(block.match(/"app_ghcr_served" warning/g)).toHaveLength(1)`. If a future comment quotes the emit call verbatim, `indexOf` silently returns the comment's offset and the pin passes while the code line sits below `:544`. Today four separate paragraphs *ask* a reader not to do that; this line makes CI say it. Self-enforcing beats narrated.
 2. **AC2 — the byte budget holds, and it was not raised.** `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` passes **with `WEB_GZIP_BUDGET` still at `21_900`** — `git diff` touches no budget constant (`grep -c 'WEB_GZIP_BUDGET = ' <diff>` == 0). There is 116 B of headroom for a ~44 B line; a re-baseline here would retire the tripwire, and #6426 already spent the `21_800 → 21_900` step for unrelated reasons. Trim+merge of `:525-533` is expected but **no longer byte-mandatory** (see Byte Budget) — its absence is a style call, a budget bump is not.
 3. **AC3 — the templatefile renders.** The `terraform console` render (Phase 3.5) exits 0.
 4. **AC4 — the op contract holds at 5.** `bun test apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` passes with `alarm.size === 5` and `soakFailQueries().size === 5`.
 5. **AC5 — the new query is BARE (the prefix trap).** `soakQueryFor("app_ghcr_served") === 'stage:"app_ghcr_served"'`, asserted in the test. Prefixing matches zero events forever.
-6. **AC6 — the runtime floor moved in lockstep.** `grep -c '${#FAIL_QUERIES\[@\]} != 5'` == 1 **and** `grep -c '!= 4'` == 0. (CI parses source; the sweeper executes — this gap is the bug class this issue is about.)
-7. **AC7 — the arms return the right codes.** A shell stub harness overriding `sentry_count` asserts: dark beacon (`app_zot=0`, no fallbacks) → **`exit 1`** (FAIL, *never* 0, *never* 2); `app_zot >= MIN_BOOTS` + D3 issue OPEN → **`exit 1`** FAIL(blocked); `app_zot >= MIN_BOOTS` + blocker CLOSED + sample OK → `exit 0`.
-7b. **AC7b — the liveness floor is a gate, not a wall.** `MIN_BOOTS` is its own knob defaulting to **1**: `grep -c 'MIN_BOOTS="${ZOT_SOAK_MIN_BOOTS:-1}"'` == 1, and the floor's comparison names `MIN_BOOTS`, **not** `MIN_SAMPLE` (`grep -c 'APP_ZOT < MIN_SAMPLE'` == 0). A 3-floor on fresh-boot count — 9 such events *ever* — is `exit 1` daily forever, and a gate that structurally cannot pass gets bypassed. The knob is validated `^[1-9][0-9]*$` (an unvalidated knob is a vacuous-pass hole). **Distinct from AC8:** the pre-existing *sample* arm keeps `MIN_SAMPLE`.
-8. **AC8 — the insufficient-sample arm keeps `exit 1`.** `grep -c 'FAIL(insufficient-sample)'` == 1, arm still `exit 1` — the only detector for the #6437 Sentry-dark mode. **Do not "fix" it to TRANSIENT.**
-9. **AC9 — no arithmetic on an unguarded count.** Every `sentry_count` result is string-guarded (`=~ ^[0-9]+$`) **before** any `(( ))` / `$(( ))` use — `:151` returns the bare word `TRANSIENT`, which arithmetic silently coerces to **0** (the hazard `:109-115` documents). Verify by reading each new call site.
-10. **AC10 — the D3 blocker is tracked AND enforced.** **#6500** exists with `priority/p1-high` (✅ filed), is linked from #6122, **and its number appears in the soak's C1 arm** (`grep -c '6500' scripts/followthroughs/zot-soak-6122.sh` ≥ 1). A deferral without a tracking issue is invisible; a known-fatal path without an exit-code gate is prose.
+> ⚠ **SCOPE EVERY GREP AC TO `scripts/followthroughs/zot-soak-6122.sh`.** The earlier draft left AC6/AC7b/AC8 unscoped, and **this plan quotes their patterns in its own prose**, so a repo-wide run matches the plan itself and can never pass. Measured today: `!= 4` → **4 files** (the soak, this plan, and two unrelated plans); `FAIL(insufficient-sample)` → **2** (soak + this plan). Scoped, each is unique and satisfiable. A pattern with no file argument is not an assertion — it is a judgment call at verification time, which is how a gate authorizing an irreversible PAT revoke gets waved through. AC10 already scoped correctly; the rest now match it.
+
+6. **AC6 — the runtime floor moved in lockstep, condition AND message.** Against `scripts/followthroughs/zot-soak-6122.sh` only:
+   - `grep -c '${#FAIL_QUERIES\[@\]} != 5'` == 1 and `grep -c '${#FAIL_QUERIES\[@\]} != 4'` == 0 — use the **qualified** pattern, not bare `!= 4`, which is dangerously generic even when scoped.
+   - `grep -c 'expected 5'` == 1 **and** `grep -c 'expected 4'` == 0. The message (`:182`) says `expected 4` and does **not** contain `!= 4`, so a condition-only sweep leaves the gate's operator-facing text contradicting its own condition. This leg is the half the earlier draft missed.
+   
+   (CI parses source; the sweeper executes — this gap is the bug class this issue is about.)
+7. **AC7 — the arms return the right exit codes, proven by a harness that actually works.** ⚠ **The earlier draft specified "a shell stub harness overriding `sentry_count`". That is INFEASIBLE and was proven so:** `sentry_count` is defined at `:142` at top level, which overwrites any pre-export; there is no `BASH_SOURCE` guard, no `main()`, and the script `exit`s at top level (`:234`), so there is no source-and-override seam. `export -f`, `BASH_ENV`, and pre-definition all lose to `:142`. As written this AC would have been quietly downgraded at implementation to "I read it and it looks right" — the exact failure class this plan exists to reject.
+   
+   **Use the seam that exists: PATH-stub `curl`** (dispatch on the `query=` in the URL), plus **PATH-stub `gh`** for the C1 arm (otherwise AC7 hits the network in CI). Verified working end-to-end against the real script, real `jq` parse path included. Assert:
+   - dark beacon (`app_zot=0`, no fallbacks) → **`exit 1`** (FAIL — *never* 0, *never* 2)
+   - `app_zot >= 1` + `gh` reports #6500 **OPEN** → **`exit 1`** FAIL(blocked)
+   - `app_zot >= 1` + #6500 **CLOSED** + sample OK → **`exit 0`**
+   - **HTTP 500 → `sentry_count` yields the bare word `TRANSIENT` → `exit 2`, never 0** (this is AC9, folded in — see below)
+   - `gh` unreadable / non-OPEN-non-CLOSED → **`exit 2`** TRANSIENT, never 0. *A gate must never read "I could not measure" as "the measurement is false"* — the failure shape behind every P1 in `knowledge-base/project/learnings/2026-07-15-self-healing-guard-on-a-blind-host-must-fail-safe-on-its-own-instrument.md`.
+7b. **AC7b — the floor is a gate, not a wall, and not a knob.** Against the soak only: `grep -c 'APP_ZOT == 0'` == 1, and **no knob is introduced** — `grep -c 'ZOT_SOAK_MIN_BOOTS'` == 0. ⚠ **The earlier draft's negative grep (`grep -c 'APP_ZOT < MIN_SAMPLE'` == 0) was near-vacuous** — it pinned one spelling, evaded by `[[ -lt ]]`/`((APP_ZOT<MIN_SAMPLE))`/`$MIN_SAMPLE`, and was **already 0** before a line was written. A negative grep for a string nobody would write is not a test. The *semantic* is proven by AC7's harness instead: a `MIN_SAMPLE`-reuse bug yields `1 < 3` → `exit 1` on a healthy fleet, which the harness catches. **Distinct from AC8:** the pre-existing *sample* arm legitimately keeps `MIN_SAMPLE`.
+8. **AC8 — the insufficient-sample arm keeps `exit 1`.** Against the soak only: `grep -c 'FAIL(insufficient-sample)'` == 1, arm still `exit 1` — the only detector for the #6437 Sentry-dark mode. **Do not "fix" it to TRANSIENT.**
+9. **AC9 — no arithmetic on an unguarded count. FOLDED INTO AC7 — do not verify by reading.** Every `sentry_count` result is string-guarded (`=~ ^[0-9]+$`) **before** any `(( ))` / `$(( ))` use — `:151` returns the bare word `TRANSIENT`, which arithmetic silently coerces to **0** (the hazard `:109-115` documents, and `knowledge-base/project/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md` generalises: *"bash arithmetic is a thin wrapper around C `long`… if unset, it evaluates to `0`"*). ⚠ **The earlier draft guarded the single worst bug in the plan — `TRANSIENT` → 0 → false PASS → PAT revoked — with an eyeball** ("verify by reading each new call site"), while documenting the hazard three times. AC7's `curl` stub makes it a real test for free: HTTP 500 → assert `exit 2`. The plan's most-documented hazard becomes the gate's own exit code. Reading each new call site remains a *review* step, not the AC.
+10. **AC10 — the D3 blocker is tracked AND enforced.** **#6500** exists with `priority/p1-high` (✅ filed), is linked from #6122, **and its number is wired into the soak's C1 arm**: `grep -c 'BLOCKER=6500' scripts/followthroughs/zot-soak-6122.sh` == 1. ⚠ Pin `BLOCKER=6500`, not bare `6500` — a bare-number grep matches a byte count, a line number, or a timestamp fragment. A deferral without a tracking issue is invisible; a known-fatal path without an exit-code gate is prose.
 11. **AC11 — ADR-096 does not over-claim (the repeat-offence gate).** The amended region contains `#6437`, names the **7th** path, and states coverage as **5 of 7** — not "COVERED". Status still `Adopting`. *ADR-096 already had to publicly correct one over-claim; this AC exists so it does not happen twice.*
 12. **AC12 — the follow-through probe is enrolled and executable.** `test -x scripts/followthroughs/accounted-beacon-live-6462.sh`; `bash scripts/followthrough-exec-bit.test.sh` passes; #6462 carries the `follow-through` label + directive.
 13. **AC13 — full suite green.** `bash scripts/test-all.sh` exits 0.
@@ -522,7 +619,7 @@ Add the 5th `tagged_event` + update the `:1334-1335` comment. `terraform validat
 
 | Approach | Why not |
 |---|---|
-| **`accounted == expected ⇒ TRANSIENT on shortfall`** (the issue's literal wording) | Degenerate four ways; strictly dominated by the `MIN_BOOTS` floor, which has a *better* exit code and is saturation-immune. See `## Reversed During Planning`. **Surfaced as a User-Challenge.** |
+| **`accounted == expected ⇒ TRANSIENT on shortfall`** (the issue's literal wording) | Degenerate four ways; strictly dominated by the zero-evidence floor (`APP_ZOT == 0`), which has a *better* exit code and is saturation-immune. See `## Reversed During Planning`. **Surfaced as a User-Challenge.** |
 | **Gate the emit on `[ -n "$ZURL" ]`** to avoid pre-cutover pages | Premise false — ZURL is already set (3 proofs, incl. `ADR-096:139-145`). Always-open ⇒ protects nothing while an AC certifies it does; and it would asymmetrically gate a numerator against its denominator. |
 | **Prefix the boot emit** with `feature`/`op`/`registry` | Breaks a deliberate, live-proven asymmetry; changes `_emit`'s schema (shared with the fatal path); cannot fit the byte budget. → **D2** |
 | **Sum the boot query into `ZOT_WEB`** | Dead (the floor subsumes it), a false-PASS route (dark beacon + rolling deploys ⇒ PASS), and unsound (`TRANSIENT` → 0). → **D2** |
