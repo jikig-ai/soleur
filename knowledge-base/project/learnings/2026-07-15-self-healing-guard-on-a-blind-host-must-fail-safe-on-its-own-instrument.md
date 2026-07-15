@@ -98,6 +98,19 @@ Three properties made it invisible:
   mutant it should catch and confirm it does.**
 - **Stubbing `sleep` turns a lost wait-bound into an infinite spin**, not a slow test — bound the run
   with `timeout` (resolved ABSOLUTE; `PATH=x timeout …` looks `timeout` up through the stripped PATH).
+- **The `set -u` expansion-order variant (#6483).** Same class, one layer earlier: this guard *acted
+  on a fact it did not read*; #6483's htpasswd probe **never reached the read**. A bare
+  `"$ZOT_PULL_TOKEN"` inside `zot-disk-heartbeat.sh`'s `set -u` raises `unbound variable` and exits
+  **before `$LINE` is built** — taking the whole `SOLEUR_ZOT_DISK` heartbeat dark and bypassing the
+  trailing `exit 0` that exists so the cron can never wedge. Since this heartbeat's **absence** is
+  itself an alarm, the probe would page *"host down"* when only the probe broke. Two traps worth
+  carrying: **`|| VAR=false` does not rescue it** (an expansion error is not a command failure, so
+  the `||` never runs — a reviewer scanning for a fallback finds one), and the `unknown` guards
+  written for exactly that case sat **8 lines too late**, i.e. dead code that reads as coverage.
+  **Rule: under `set -u`, default at the expansion site (`"$${VAR:-}"`) — a guard against a failure
+  mode must be a PRECONDITION, never a post-hoc correction.** The mirror of this file's
+  "short-circuit guard must sit after the recovery it gates".
+  → [2026-07-15-false-comment-shipped-the-bug-then-plan-guard-adr-and-tests-each-restated-it.md](./2026-07-15-false-comment-shipped-the-bug-then-plan-guard-adr-and-tests-each-restated-it.md) §1
 
 ## Session Errors
 

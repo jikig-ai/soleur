@@ -182,7 +182,7 @@ applies are easy to conflate here, and #6483 conflated them:
   The dispatch's six `-target`s exclude `random_password.zot_pull`/`zot_push`, so a rotation
   is not even plannable through it, and `grep -rn "replace=random_password.zot" .github/
   scripts/` returns zero — no rotation dispatch exists. The edge fires only in the **untargeted
-  operator full apply** of the `OPERATOR_APPLIED_EXCLUSION` contract (`zot-registry.tf:16-19`,
+  operator full apply** of the `OPERATOR_APPLIED_EXCLUSION` contract (`zot-registry.tf:15-21`,
   CTO apply-path ruling 2026-07-06) — which runs **no destroy-guard at all**. A merge applies
   nothing here either way.
 

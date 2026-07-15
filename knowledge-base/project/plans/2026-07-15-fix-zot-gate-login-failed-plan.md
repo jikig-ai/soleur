@@ -560,7 +560,7 @@ deny-all firewall both forbid — so the host is replaced, per `hr-prod-host-con
 > *"The apply is executed by the merge-triggered `apply-web-platform-infra.yml` workflow; no human runs a
 > command."* **That is false, and believing it would have shipped a fix that never applied.** Every resource in
 > `zot-registry.tf` is an `OPERATOR_APPLIED_EXCLUSION` under the CTO apply-path ruling of 2026-07-06
-> (`zot-registry.tf:16-19`): they are deliberately **NOT** in the per-PR CI `-target=` list, because the per-PR
+> (`zot-registry.tf:15-21`): they are deliberately **NOT** in the per-PR CI `-target=` list, because the per-PR
 > path bridges over SSH to the existing web host and cannot provision a dedicated host. Merging this PR
 > therefore lands the code and changes **nothing** on the registry host — AC10/AC11 would have been "verifying"
 > a fix that had not been applied, and the `htpasswd_pull_matches` probe would never even ship.
