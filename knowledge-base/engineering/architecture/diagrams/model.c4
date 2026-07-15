@@ -174,8 +174,8 @@ model {
         description "Owner-private beta-tester / prospect CRM (ADR-102, #6165). Third-party contact PII + dual-lens conversation notes + append-only stage-transition history. Owner-only RLS; writes RPC-only via auth.uid()-pinned SECURITY DEFINER functions; the cro/cpo agents read AND write via the crm_* MCP tools (agent-native parity). 24-month retention; Art. 17 via ON DELETE CASCADE + crm_erase_contact."
       }
       tunnel = container "Cloudflare Tunnel" {
-        technology "cloudflared (ONE tunnel, N connector replicas — 2 today: web-1 + web-2)"
-        description "Zero-trust inbound access — no exposed ports. ONE tunnel (tunnel.tf) with THREE ingress rules (deploy./ssh./registry.) and MULTIPLE connector replicas: every web host runs cloudflared against it, so CF load-balances across them and `localhost:` means 'whichever replica answered', not 'this host'. Correctness therefore requires every connector host to be a 10.0.1.0/24 member — see ADR-114 (I1/I2) for the invariants and #6416 for the failure. Management plane only: app.soleur.ai does NOT traverse the tunnel (direct CF-proxied A record, dns.tf); no cloudflared on zot/git-data/inngest (ADR-096)."
+        technology "cloudflared (ONE tunnel, exactly ONE connector — the designated ingress host, web-1)"
+        description "Zero-trust inbound access — no exposed ports. ONE tunnel (tunnel.tf) with THREE ingress rules (deploy./ssh./registry.). INVARIANT (ADR-114 I1, enforced #6425): exactly ONE connector is registered — only the designated ingress host (web-1) runs cloudflared (server.tf web_tunnel_connector); other web hosts install the binary and register nothing. This is what makes `localhost:` ingress mean 'this host'. CF binds ingress to a TUNNEL and picks a connector per edge colo, so a SECOND connector silently makes every non-fan-out route (deploy-status, inngest-liveness, infra-config WRITEs, ssh.) answer from whichever replica the caller's colo selected — #6425 (16h of false inngest-down alarms), #6416. The invariant is NOT tied to ADR-068 §(c) (LB weight); re-pooling needs full infra-config + SSH re-delivery (#6466), never a weight flip. Standing guard: the */15 connector census in scheduled-inngest-health.yml (vantage-independent; a response-poll is colo-sticky and proves nothing). Management plane only: app.soleur.ai does NOT traverse the tunnel (direct CF-proxied A record, dns.tf); no cloudflared on zot/git-data/inngest (ADR-096)."
       }
       hetzner = container "Compute" {
         technology "Hetzner Cloud"
@@ -360,13 +360,19 @@ model {
   api -> anthropic "Daily org cost/usage report (Admin API, cost-report cron)" { technology "HTTPS" }
   claude -> github "Git operations" { technology "HTTPS/SSH" }
   tunnel -> coordinator "Routes traffic" { technology "HTTPS" }
+  // #6425: the tunnel's ACTUAL ingress delivery, previously unmodelled — `tunnel -> coordinator`
+  // above models the DEFERRED 3.D rewire, not today's path. deploy./ssh. resolve `localhost:` at
+  // the connector, so this edge terminates on whichever host holds the connector. That is exactly
+  // why the single-connector invariant (ADR-114 I1) is a correctness property and not hygiene:
+  // with two connectors this one arrow silently forks to an arbitrary host.
+  tunnel -> hetzner "deploy. → localhost:9000 (webhook) and ssh. → localhost:22 on the DESIGNATED INGRESS HOST. `localhost:` is connector-relative, so this edge lands on whichever host runs cloudflared — deterministic only because exactly one does (#6425). /hooks/deploy then fans out to peers over the private net (ADR-068 Option B); deploy-status, inngest-liveness and infra-config do NOT fan out, so they answer from the connector host alone." { technology "cloudflared ingress → localhost (origin-relative)" }
   // #6416 / ADR-114 — the tunnel's three ingress rules, made explicit. The registry edge is
   // the ONLY origin-relative one (it addresses 10.0.1.30 directly), which is why it is the
   // pattern to generalize; the other two are connector-relative (`localhost:`) and therefore
   // resolve to whichever replica CF load-balanced onto, NOT to a chosen host.
   tunnel -> zotRegistry "registry. ingress → tcp://10.0.1.30:5000. ORIGIN-RELATIVE — whichever connector replica answers proxies to the correct zot host, but ONLY if that replica is a 10.0.1.0/24 member (ADR-114 I1). #6416: web-2 was not, so CI's registry bridge failed and the zot mirror silently skipped (masked green by continue-on-error)." { technology "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)" }
   github -> tunnel "CI reaches the deny-all-public zot host to dual-push release images, and reaches web-1's shell for the 12 terraform_data SSH provisioners — both ONLY through this tunnel, via CF Access service tokens (separate tokens per route, so registry-write rotates independently of host-shell access)" { technology "cloudflared access tcp/ssh (CF Access service token)" }
-  hetzner -> tunnel "Every web host runs a cloudflared connector against the ONE tunnel (2 replicas today). CF load-balances across them, so ssh:// and deploy. ingress land non-deterministically — the reason the deploy path needs ADR-068's private-net fan-out and the SSH provisioners carry an in-band hostname tripwire (ADR-114 I2)." { technology "cloudflared (outbound QUIC, 4 conns/replica)" }
+  hetzner -> tunnel "ONLY the designated ingress host (web-1) runs a cloudflared connector — gated by server.tf's web_tunnel_connector (#6425). One connector ⇒ ssh:// and deploy. ingress are deterministic BY CONSTRUCTION (ADR-114 I1). Until 2026-07-15 every web host registered one, so CF picked an origin per edge colo and those routes landed non-deterministically; ADR-068's private-net fan-out (deploy only) and the SSH provisioners' in-band hostname tripwire (ADR-114 I2) are the DETECTION/absorption layers retained underneath — de-pooling is prevention, not their replacement." { technology "cloudflared (outbound QUIC, 4 conns from the single connector)" }
   hetzner -> claude "Hosts" { technology "Docker" }
   doppler -> claude "Injects secrets" { technology "CLI" }
   auth -> supabase "Validates tokens" { technology "HTTPS" }
