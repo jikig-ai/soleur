@@ -98,34 +98,52 @@ Cutting it dissolves: `bootstrap_complete`/EXPECTED, the `START` collision, the 
 
 | Claim | Reality (verified) | Response |
 |---|---|---|
-| cloud-init user_data headroom is comfortable | **FALSE, and both sources are stale.** The test's own comment says "~21.06 KB" (`cloud-init-user-data-size.test.ts:59`); a research pass reported ~21,106 B. **Measured live: 21,716 B vs a 21,800 B budget = 84 B.** | Design driven by measurement. See **Byte Budget** — the full design was applied to a scratch copy and **measured passing**. |
+| cloud-init user_data headroom is comfortable | **Was FALSE at plan time; now PARTLY TRUE — main moved.** The test's own comment says "~21.06 KB" (`cloud-init-user-data-size.test.ts:59`); a research pass reported ~21,106 B. Plan-time measurement: 21,716 B vs a 21,800 B budget = 84 B. **Re-measured post-rebase 2026-07-15: 21,784 B vs a 21,900 B budget = 116 B.** | Design driven by measurement. See **Byte Budget** — re-derived after the rebase; headroom *grew*, and the design is no longer budget-bound. |
 | "Bake the beacon into `soleur-host-bootstrap.sh` for 0 user_data cost" | **Impossible.** The app seed pull runs **pre-bootstrap** — `soleur-host-bootstrap.sh` is *extracted from the image the pull fetches* (`:546-561`). A baked helper cannot cover the pull that fetches it (`:55-58` says so). | Inline is the only option; the byte budget is load-bearing, not a preference. |
 | The soak documents **six** ways the fleet can be GHCR-served (`:46-63`) | **There is a SEVENTH, and it is fatal.** See D3. | Not fixed here. **Machine-enforced** via the C1 blocker arm + filed as a P1. |
 | Hole 1 is web-only | The **colocated** inngest path (`:695-698`) has the same shape, **but** its block is gated `%{ if web_colocate_inngest ~}`, `default = false` (`variables.tf:373-377`, re-verified) → **dead code on the real fleet**. `FAIL_QUERIES[freshboot]` is a structurally dead query today. The **dedicated** host (`inngest-host.tf:181`, unconditional) is the live one — and is GHCR-only. | D3 — out of scope, evidence-backed. |
 
 ---
 
-## Byte Budget — the binding constraint
+## Byte Budget — no longer the binding constraint (re-derived 2026-07-15 post-rebase)
 
-`plugins/soleur/test/cloud-init-user-data-size.test.ts` asserts the base64gzip'd rendered `user_data` < `WEB_GZIP_BUDGET = 21_800`. Measured live (by forcing the assertion to report):
+> ### ⚠ RE-DERIVED — main moved under this section; the old numbers are void
+>
+> This section was written against `WEB_GZIP_BUDGET = 21_800` / baseline **21,716** (84 B headroom). **Both moved before this branch rebased.** `e333a9384` (*"de-pool web-2 from the shared Cloudflare Tunnel"*, #6426 PR A) re-baselined the budget `21_800 → 21_900` **and** grew `cloud-init.yml` — a change this plan does not own and did not anticipate.
+>
+> **Re-measured on the rebased tree** (forcing `WEB_GZIP_BUDGET = 1` in a temp copy → `Received: 21784`, `22 pass / 1 fail` = the forced failure only):
+>
+> | | plan-time | **now** | Δ |
+> |---|---|---|---|
+> | budget | 21,800 | **21,900** | +100 |
+> | baseline | 21,716 | **21,784** | +68 |
+> | **headroom** | 84 B | **116 B** | **+32 B** |
+>
+> **The consequence is a reversal.** The row below claiming *"code line + 1 terse comment → **blows by 8 B**"* is **false against the current baseline**: at ~+92 B it lands at ≈21,876 and **fits, with ~24 B to spare**. Every variant now fits. The design is **not budget-bound** — the trim+merge is now a *preference*, not a necessity.
 
-| Variant | Size | vs budget |
-|---|---|---|
-| **baseline (main)** | **21,716** | 84 B headroom |
-| bare code line only | 21,760 | fits, +44 B |
-| code line + 1 terse comment | 21,808 | **blows by 8 B** |
-| ✅ **VERIFIED — trim+merge the `:525-533` comment → 5 lines, + the beacon, + 2 comment lines** | **≈21,720** | **≈80 B headroom — PASSES** (real test: `23 pass / 0 fail`) |
+`plugins/soleur/test/cloud-init-user-data-size.test.ts` asserts the base64gzip'd rendered `user_data` < `WEB_GZIP_BUDGET = 21_900`.
 
-**The line gzips to only ~44 B** — every token it uses (`_emit`, `$IMAGE_REF`, `$REF`) already exists nearby. The cost is entirely in the **comment**. Dropping the reversed `ZURL` gate gives ~24 B back.
+| Variant | Δ vs baseline | Projected size | vs 21,900 budget |
+|---|---|---|---|
+| **baseline (rebased main)** | — | **21,784** *(measured)* | 116 B headroom |
+| bare code line only | +44 | ≈21,828 | fits, ~72 B spare |
+| code line + 1 terse comment | +92 | ≈21,876 | **fits, ~24 B spare** *(was: blows by 8 B)* |
+| trim+merge the `:525-533` comment + beacon + 2 comment lines | +4 | ≈21,788 | fits, ~112 B spare |
 
-**Strategy — trim-first (the #6396 precedent: "Comments trimmed first"). It goes net ≈neutral; no re-baseline needed.**
+> ⚠ **The Δ column is carried from the plan-time measurement against the OLD baseline — it is an estimate, not a measurement.** gzip is context-sensitive, so the deltas can shift when surrounding bytes change. Only the **21,784 baseline** is measured on the current tree. Phase 3 step 3 re-measures the real variant; treat the projections as a sanity range, not a result.
 
-1. **Trim + merge the 9-line comment at `:525-533`** — it already explains the `REF`/`IMAGE_REF` relationship the new line depends on. Merging documents *both* emits and reclaims what the new line costs.
+**The line gzips to only ~44 B** — every token it uses (`_emit`, `$IMAGE_REF`, `$REF`) already exists nearby. The cost is entirely in the **comment**.
+
+**Strategy — trim-first anyway (the #6396 precedent: "Comments trimmed first"), but for *hygiene*, not survival.**
+
+1. **Trim + merge the 9-line comment at `:525-533`** — it already explains the `REF`/`IMAGE_REF` relationship the new line depends on. Merging documents *both* emits and reclaims what the new line costs. **Now optional on byte grounds** — keep it because it leaves the tripwire meaningful and the rationale in one place, not because the budget forces it.
 2. Insert the code line.
-3. **Re-measure**: force `WEB_GZIP_BUDGET = 1` in a *temp copy*, `bun test`, read `Received:`. Then run the real test.
-4. **Only if trimming cannot recover it**: modest re-baseline `21_800 → 21_900` with a `#6462` rationale, in the `#6396` shape (`:65-67`). Baking is not available (see Reconciliation) — the circumstance `:55-58` sanctions a re-baseline for.
+3. **Re-measure**: force `WEB_GZIP_BUDGET = 1` in a *temp copy*, `bun test`, read `Received:`. Then run the real test. **This is the only number that counts.**
+4. **Do NOT re-baseline.** The former step 4 (`21_800 → 21_900`) is **already spent** — #6426 took it, for its own unrelated reasons. Burning it again (`21_900 → 22_000`) on a change with 116 B of headroom would be exactly the reflex the note below warns against. If the measured variant somehow does not fit, that is a signal to shrink the change, not the tripwire.
 
-> **Do NOT** raise the budget without attempting step 1. The budget's job is to be a re-inlining tripwire; raising it on reflex retires the tripwire.
+> **Do NOT** raise the budget. The budget's job is to be a re-inlining tripwire; raising it on reflex retires the tripwire. With 116 B of headroom for a ~44 B line, there is no case for touching it.
+>
+> **Lesson worth keeping:** this section was the plan's self-declared *"binding constraint"*, and it was invalidated by an unrelated PR between planning and implementation. Byte-budget arithmetic has a short shelf life — **re-measure at implementation time; never trust a carried number** (which is exactly why Phase 0 step 1 exists).
 
 ---
 
@@ -398,7 +416,7 @@ Other six domains: not relevant (no user-facing surface, pricing, contract, copy
 
 ### Phase 0 — Preconditions
 
-1. Re-measure the baseline: force `WEB_GZIP_BUDGET = 1` in a **temp copy**, `bun test`, read `Received:`. **Expect 21,716.** If it differs, main moved — re-derive the Byte Budget.
+1. Re-measure the baseline: force `WEB_GZIP_BUDGET = 1` in a **temp copy**, `bun test`, read `Received:`. **Expect 21,784** against a **21,900** budget (✅ done 2026-07-15 post-rebase — main *had* moved; the Byte Budget was re-derived, headroom 84 → 116 B). If it differs again, main moved again — re-derive before proceeding.
 2. Confirm the insertion anchors are still the `: > /run/soleur-stage-detail` / `IMAGE_REF="$REF"` **literals** (anchor on literals, not line numbers — ADR-096 mandates it).
 3. Confirm `set -e` is active (`:462`) and `_emit` returns 0.
 4. `gh issue view 6462 --json state` → OPEN.
@@ -419,7 +437,7 @@ Add the op-contract pins for the 5th signal (`alarm.size` 5, `soakFailQueries().
 
 1. **Trim + merge the `:525-533` comment first.**
 2. Insert the single code line between the literals, with the merged rationale (note the `image_ref` wart).
-3. **Run `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts`** → PASS (~21,720). If over, re-measure and use Byte Budget step 4.
+3. **Run `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts`** → PASS (projected ≈21,788 with the trim+merge; ≈21,876 without — both under 21,900). **Re-measure rather than trusting either projection.** If it somehow does not fit: shrink the comment. **Do not raise the budget** (Byte Budget step 4).
 4. Add the **call-form** ordering pin leg.
 5. **Render-verify the templatefile** — a parse error means no host boots:
    `printf 'templatefile("%s", { <full var map> })\n' "$PWD/apps/web-platform/infra/cloud-init.yml" | terraform -chdir="$(mktemp -d)" console`
@@ -465,7 +483,7 @@ Add the 5th `tagged_event` + update the `:1334-1335` comment. `terraform validat
 ### Pre-merge (PR)
 
 1. **AC1 — the beacon is in the right place, pinned by a test on the CALL FORM.** A leg in `cloud-init-user-data-size.test.ts` asserts `indexOf('"app_ghcr_served" warning') < indexOf('IMAGE_REF="$REF"')`. **Not** the bare token (the merged comment sits above `:542` and would satisfy it vacuously — D1).
-2. **AC2 — the byte budget holds and trim-first was attempted.** `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` passes; the diff shows the `:525-533` comment trimmed/merged.
+2. **AC2 — the byte budget holds, and it was not raised.** `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` passes **with `WEB_GZIP_BUDGET` still at `21_900`** — `git diff` touches no budget constant (`grep -c 'WEB_GZIP_BUDGET = ' <diff>` == 0). There is 116 B of headroom for a ~44 B line; a re-baseline here would retire the tripwire, and #6426 already spent the `21_800 → 21_900` step for unrelated reasons. Trim+merge of `:525-533` is expected but **no longer byte-mandatory** (see Byte Budget) — its absence is a style call, a budget bump is not.
 3. **AC3 — the templatefile renders.** The `terraform console` render (Phase 3.5) exits 0.
 4. **AC4 — the op contract holds at 5.** `bun test apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` passes with `alarm.size === 5` and `soakFailQueries().size === 5`.
 5. **AC5 — the new query is BARE (the prefix trap).** `soakQueryFor("app_ghcr_served") === 'stage:"app_ghcr_served"'`, asserted in the test. Prefixing matches zero events forever.
