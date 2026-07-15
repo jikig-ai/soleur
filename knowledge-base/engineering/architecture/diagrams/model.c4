@@ -393,7 +393,7 @@ model {
   // self-reports its disk state directly to Better Stack Logs (was a heartbeat pinger only, via
   // the web-host probe). SOLEUR_ZOT_DISK is the in-surface probe that disambiguates
   // fs-not-grown / gc-too-slow / zot-crash without a host login.
-  // #6415 / ADR-113 — a SECOND event type on this same edge: SOLEUR_PRIVATE_NIC. The host
+  // #6415 / ADR-115 — a SECOND event type on this same edge: SOLEUR_PRIVATE_NIC. The host
   // self-asserts that its private IP is configured. It is emitted FROM the affected (blind)
   // surface because a NIC-less host keeps PUBLIC egress, so every off-host signal stays green
   // while the fleet's primary pull path is dead (#6400: 14 days).

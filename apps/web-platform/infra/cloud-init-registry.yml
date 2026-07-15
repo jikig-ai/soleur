@@ -242,7 +242,7 @@ write_files:
     owner: root:root
     permissions: '0644'
 
-  # --- #6415 / ADR-113: private-NIC boot converger ----------------------------------------
+  # --- #6415 / ADR-115: private-NIC boot converger ----------------------------------------
   # Root cause of the 2026-07-14 outage (#6400). hcloud_server_network is an ADDITIVE ONLINE
   # ATTACH (network.tf:9-13) — it needs a created server, and a created server is already
   # booting, so NO terraform ordering can guarantee the attach lands before cloud-init's
@@ -250,9 +250,12 @@ write_files:
   # with ONLY the public eth0 and the host holds no 10.0.1.30.
   #
   # Why that went unseen for ~14 days: a NIC-less host keeps PUBLIC egress, so the disk
-  # heartbeat kept pinging green; and the boot readiness poll targets localhost:5000 (:379-382),
-  # which succeeds because zot binds 0.0.0.0:5000 (:375). Every existing signal is structurally
-  # blind to this — hence a NEW signal, not a re-thresholded old one.
+  # heartbeat kept pinging green; and the boot readiness poll targets `localhost:5000` (the
+  # `curl … http://localhost:5000/v2/` loop in the zot-launch runcmd below), which succeeds
+  # because zot binds `0.0.0.0:5000` (its `-p 0.0.0.0:5000:5000` publish). Every existing signal
+  # is structurally blind to this — hence a NEW signal, not a re-thresholded old one.
+  # (Anchors are named rather than line-cited on purpose: this block's own insertion shifted
+  # every later line, and the original numeric citations rotted immediately.)
   #
   # This is the ON-HOST layer deliberately: the registry resources are an
   # OPERATOR_APPLIED_EXCLUSION (zot-registry.tf:16-22), applied by the operator's full
@@ -284,12 +287,24 @@ write_files:
       R="$${SOLEUR_NIC_TEST_ROOT:-}"
       REBOOT_CAP=2
       COUNTER_FILE="$R/var/lib/soleur/private-nic-reboots"
+      # (0) PROBE RESOLUTION — load-bearing, and the reason this guard has its own PATH.
+      # `ip` and `reboot` live in /usr/sbin, which is NOT on cron's default PATH (/usr/bin:/bin).
+      # The cron.d block below declares a full PATH, but resolve explicitly anyway and FAIL SAFE:
+      # if the probe binary is missing, we have NO local fact — and "the probe never ran" must
+      # never be conflated with "the IP is absent". Conflating them is fatal here: `curl` lives in
+      # /usr/bin and WOULD still resolve, so IMDS would corroborate (the network genuinely IS
+      # attached) and the reboot gate would be fully satisfied ON A HEALTHY HOST — then, budget
+      # spent, the guard would emit the terminal signature forever and the runbook would tell an
+      # operator to destroy and recreate a healthy production registry. This is the guard's own
+      # doctrine (never act on zero corroborating evidence) applied to its own instrument.
+      IP_BIN=$(command -v ip 2>/dev/null || true)
+      PROBE_OK=true; [ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] || PROBE_OK=false
       # (1) Trigger predicate — the LOCAL FACT ALONE. The IP is baked at template time, so this
       # has ZERO runtime dependencies: IMDS is telemetry and corroboration, NEVER the trigger.
       # -w + -F: exact word, fixed string — so 10.0.1.3 can never match inside 10.0.1.30, and
       # the dots are not treated as regex wildcards.
       ip_present=false
-      if ip -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED_IP"; then ip_present=true; fi
+      if [ "$PROBE_OK" = true ] && "$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED_IP"; then ip_present=true; fi
       # (2) Bounded wait — the same shape as the volume device-wait in runcmd below (~30 x 2s).
       # Under the leading hypothesis (H2) the attach lands AFTER boot, so give it a chance to
       # arrive before we consider acting. Only runs when the IP is already absent.
@@ -304,7 +319,7 @@ write_files:
       # operator's own recovery — not just this guard's. runcmd is PER-INSTANCE and does NOT
       # re-run on reboot, so the device-wait + mount + resize2fs below all skip and only the
       # `nofail` fstab entry mounts the store; a slow volume node then means the mount silently
-      # fails and zot (--restart unless-stopped, :369) bind-mounts an EMPTY root-disk dir => 404
+      # fails and zot (launched `--restart unless-stopped`) bind-mounts an EMPTY root-disk dir => 404
       # for every image while nic_ok=true. `mount -a` alone is NOT enough: zot may already be
       # running against the empty dir, so it needs the restart.
       ZOT_STORE_MOUNTED=false
@@ -313,8 +328,16 @@ write_files:
       else
         mount -a >/dev/null 2>&1 || true
         if mountpoint -q /var/lib/zot 2>/dev/null; then
-          ZOT_STORE_MOUNTED=true
-          docker restart zot >/dev/null 2>&1 || true
+          # The mount landed — but zot is STILL bound to the old (empty) dir: bind mounts are
+          # rprivate, so the new mount does not propagate into a running container. Report
+          # zot_store_mounted=true ONLY if the restart actually re-resolved the bind. Setting it
+          # true before the restart would report a healthy store while zot keeps 404-ing every
+          # image — a green signal over a dead pull path, i.e. #6400's exact shape.
+          if docker restart zot >/dev/null 2>&1; then
+            ZOT_STORE_MOUNTED=true
+          else
+            echo "[nic] SOLEUR_PRIVATE_NIC store remounted but 'docker restart zot' FAILED — zot is still bound to the empty root-disk dir" >&2
+          fi
         fi
       fi
       # (4) Facts (pure reads).
@@ -339,8 +362,19 @@ write_files:
       IMDS_RC=0
       IMDS_BODY=$(curl -sf -m 5 http://169.254.169.254/hetzner/v1/metadata/private-networks 2>/dev/null) || IMDS_RC=$?
       IMDS_NETS=0
+      IMDS_HAS_EXPECTED=false
       if [ "$IMDS_RC" -eq 0 ] && [ -n "$IMDS_BODY" ]; then
         IMDS_NETS=$(printf '%s\n' "$IMDS_BODY" | grep -cE '^[[:space:]]*network_id:' || true)
+        # Corroborate on the EXPECTED ADDRESS, not merely "some network is attached". IMDS already
+        # tells us the address, so using the weaker predicate throws that away — and the weaker
+        # one is what makes a drifted EXPECTED_IP dangerous: a wrong constant would be
+        # *corroborated* (a network genuinely IS attached), and the guard would reboot a healthy
+        # host to its cap and then go terminal. Keying on the address makes that structurally
+        # unreachable rather than a convention two future edits can break. imds_nets stays as a
+        # separate emit field so H1/H2 discrimination is unchanged.
+        # The `-?` is load-bearing: IMDS returns a YAML LIST, so the address line is `- ip: <addr>`
+        # on the first key of each entry and `  ip: <addr>` would never appear.
+        printf '%s\n' "$IMDS_BODY" | grep -qE "^[[:space:]]*-?[[:space:]]*ip:[[:space:]]*$EXPECTED_IP[[:space:]]*$" && IMDS_HAS_EXPECTED=true
       fi
       printf '%s' "$IMDS_NETS" | grep -qE '^[0-9]+$' || IMDS_NETS=0
       # (6) Converge — ONE primitive. Never reboot on zero corroborating evidence (the
@@ -352,18 +386,32 @@ write_files:
       NIC_OK=false
       CONVERGED_BY=none
       DO_REBOOT=false
-      if [ "$ip_present" = true ]; then
+      if [ "$PROBE_OK" != true ]; then
+        # Zero evidence: we never read the local fact. NOT "the IP is absent" — do not reboot.
+        CONVERGED_BY=probe-fault
+      elif [ "$ip_present" = true ]; then
         NIC_OK=true
         CONVERGED_BY=already
-      elif [ "$IMDS_NETS" -gt 0 ] && [ "$UPTIME_S" -gt 600 ] && [ "$REBOOT_COUNT" -lt "$REBOOT_CAP" ]; then
-        # Counter written BEFORE the reboot (fail-safe ordering): a crash between the write and
-        # the reboot costs one budget unit, never an unbounded loop.
+      elif [ "$IMDS_HAS_EXPECTED" = true ] && [ "$UPTIME_S" -gt 600 ] && [ "$REBOOT_COUNT" -lt "$REBOOT_CAP" ]; then
+        # The budget must be DURABLE before we grant reboot authority. An unchecked write is a
+        # reboot loop: if the root fs is read-only (ext4 errors=remount-ro) or full, the counter
+        # never persists, every boot re-reads 0, and the cap NEVER binds — the box power-cycles
+        # forever. So: write atomically (rename(2), so a reader sees the old or the new file and
+        # never a torn one), fsync the dirent, VERIFY it landed, and only then reboot.
         REBOOT_COUNT=$((REBOOT_COUNT + 1))
-        mkdir -p "$(dirname "$COUNTER_FILE")"
-        printf 'instance_id=%s\ncount=%s\n' "$INSTANCE_ID" "$REBOOT_COUNT" > "$COUNTER_FILE"
-        sync "$COUNTER_FILE" 2>/dev/null || true
-        CONVERGED_BY=reboot
-        DO_REBOOT=true
+        if mkdir -p "$(dirname "$COUNTER_FILE")" 2>/dev/null \
+           && printf 'instance_id=%s\ncount=%s\n' "$INSTANCE_ID" "$REBOOT_COUNT" > "$COUNTER_FILE.tmp" 2>/dev/null \
+           && mv -f "$COUNTER_FILE.tmp" "$COUNTER_FILE" 2>/dev/null \
+           && grep -qxF "count=$REBOOT_COUNT" "$COUNTER_FILE" 2>/dev/null; then
+          sync "$(dirname "$COUNTER_FILE")" 2>/dev/null || true
+          CONVERGED_BY=reboot
+          DO_REBOOT=true
+        else
+          # The budget is not durable => rebooting would be unbounded. Refuse, and say why: an
+          # unwritable root fs is itself a high-value signal.
+          REBOOT_COUNT=$((REBOOT_COUNT - 1))
+          CONVERGED_BY=counter-unwritable
+        fi
       fi
       # (7) Emit ALWAYS — success AND failure. The field set discriminates every competing
       # hypothesis in ONE event:
@@ -405,7 +453,18 @@ write_files:
       # boot-only check would emit a false failure and heal nothing. It also catches a NIC lost
       # later. flock -n so a slow tick (the bounded wait) can never stack with the next one, and
       # so the boot invocation and the cron cannot race.
-      */5 * * * * root set -a; . /etc/default/registry-doppler; set +a; flock -n /run/lock/soleur-private-nic-guard.lock doppler run --project soleur-registry --config prd -- /usr/local/bin/soleur-private-nic-guard.sh
+      #
+      # PATH IS LOAD-BEARING. cron's default is /usr/bin:/bin (_PATH_DEFPATH) — it does NOT include
+      # /usr/sbin, where BOTH `ip` and `reboot` live. Without this line the guard's probe silently
+      # resolves nothing under cron while `curl` (in /usr/bin) still resolves, so IMDS corroborates
+      # and the reboot gate is satisfied ON A HEALTHY HOST. The boot invocation runs under
+      # cloud-init's richer PATH, so the post-merge check would pass green and the box would page
+      # 10 minutes later. The sibling disk-heartbeat cron is not cover for this: it uses no
+      # /usr/sbin binary, so this guard is the host's first cron consumer of one.
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      # Offset from the disk heartbeat's `*/5` so the two `doppler run` processes are not
+      # concurrently resident (the host budgets ~1024m for cron+doppler+sshd+OS).
+      2-59/5 * * * * root set -a; . /etc/default/registry-doppler; set +a; flock -n /run/lock/soleur-private-nic-guard.lock doppler run --project soleur-registry --config prd -- /usr/local/bin/soleur-private-nic-guard.sh
     owner: root:root
     permissions: '0644'
 

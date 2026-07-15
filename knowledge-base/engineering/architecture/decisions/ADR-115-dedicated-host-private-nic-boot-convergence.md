@@ -1,5 +1,5 @@
 ---
-adr: 113
+adr: 115
 title: Dedicated hosts self-converge their private NIC at boot and self-report it
 status: accepted
 date: 2026-07-15
@@ -11,7 +11,7 @@ related_adrs: [ADR-096, ADR-100, ADR-103, ADR-068, ADR-082]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-113: Dedicated hosts self-converge their private NIC at boot and self-report it
+# ADR-115: Dedicated hosts self-converge their private NIC at boot and self-report it
 
 ## Status
 
@@ -40,8 +40,9 @@ Three facts make this a structural problem rather than a one-off:
 
 2. **A NIC-less host is invisible to every existing signal.** It retains **public** egress, so
    `registry_disk_prd` keeps pinging green; and the boot readiness poll targets `localhost:5000`
-   (`cloud-init-registry.yml:379-382`), which succeeds because zot binds `0.0.0.0:5000` (`:375`).
-   Neither can be re-thresholded into covering this — they are structurally blind, not
+   (the `curl … http://localhost:5000/v2/` loop in `cloud-init-registry.yml`'s zot-launch
+   `runcmd`), which succeeds because zot binds `0.0.0.0:5000` (its `-p 0.0.0.0:5000:5000`
+   publish). Neither can be re-thresholded into covering this — they are structurally blind, not
    mis-tuned. Compounding it, the ADR-096 GHCR fallback means **deploys keep succeeding**, so
    the deploy pipeline is an actively misleading proxy (asserting deploy success as proof of zot
    reachability *is* the #6400 failure).
@@ -151,9 +152,20 @@ an empty dir (404s fleet-wide) while `nic_ok=true`.
 ## Observability
 
 `SOLEUR_PRIVATE_NIC` is emitted every 5 min plus once at boot, over the **existing** Better Stack
-Logs transport (no new sink, no new secret). Nine fields, read by
-`scripts/zot-restart-loop-alarm.sh` → `scheduled-zot-restart-loop.yml` → a deduped
-`action-required` issue.
+Logs transport (no new sink, no new secret), read by `scripts/zot-restart-loop-alarm.sh` →
+`scheduled-zot-restart-loop.yml` → a deduped `action-required` issue.
+
+**The Better Stack POST is the ONLY channel.** This host runs no Vector agent, no rsyslog
+forwarder and no MTA, so cron discards job stderr and the boot invocation's stderr lands in
+on-box `/var/log/cloud-init-output.log` — unreachable on a deny-all, no-SSH box. Every `echo >&2`
+in the guard is therefore a **breadcrumb for a post-mortem, not a layer**: do not cite it as
+fail-loud cover. The absence probe in the alarm is what covers a dead emit, which is why it
+cross-checks the sibling `SOLEUR_ZOT_DISK` producer rather than assuming "no rows = fresh host".
+
+Nine fields. Eight are read by the alarm (`nic_ok`, `converged_by`, `imds_rc`, `imds_nets`,
+`reboot_count`, `zot_store_mounted`, `uptime_s`, and `boot_id` via the newest-boot scoping);
+`zot_last_err` is not parsed by design — it **bounds the trusted region** and is stripped before
+any key=value read.
 
 The field set discriminates every competing hypothesis in **one** event:
 

@@ -45,7 +45,7 @@ same net are reachable. A **soft reboot** brings the NIC up (cloud-init re-runs 
 the attachment present). A down container gives connection *refused*; an unconfigured NIC gives
 *timeout* + ping loss — use that to distinguish.
 
-> **AUTOMATED for the registry host as of 2026-07-15 (#6415 / ADR-113).** The instruction this
+> **AUTOMATED for the registry host as of 2026-07-15 (#6415 / ADR-115).** The instruction this
 > section used to carry — *"always verify private-net reachability after a `-replace`"* — was an
 > **operator-memory dependency**, and it failed exactly as you would expect: #6400 is this same
 > sharp edge, unnoticed for **~14 days** because nobody remembered to check and no signal could
@@ -65,7 +65,7 @@ the attachment present). A down container gives connection *refused*; an unconfi
 > race is real and the guard healed it (it also files an advisory issue, because a successful
 > self-heal emits `nic_ok=true` and would otherwise be invisible).
 >
-> **Still manual for `git-data` and `inngest`** — the guard is registry-only. ADR-113 carries a
+> **Still manual for `git-data` and `inngest`** — the guard is registry-only. ADR-115 carries a
 > normative blocker: a reboot primitive must not ship to a host whose storage unlock lives in
 > `runcmd` without a reboot-safe equivalent, and git-data's `luksOpen` does (no `crypttab`,
 > fstab `nofail`), so a reboot would silently unmount the store. For those two hosts the

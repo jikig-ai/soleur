@@ -31,7 +31,7 @@ Three self-inflicted issues, all caught and corrected in-session by the planning
 - **Scope cut from the issue's ask (registry + git-data + inngest) to registry-only, on safety.** A
   reboot primitive on git-data would silently unmount the LUKS store (`luksOpen` lives in `runcmd`,
   which is per-instance and does not re-run on reboot; no `crypttab` repo-wide; fstab carries
-  `nofail`). Recorded as a normative blocker inside ADR-113, since the ADR outlives this plan.
+  `nofail`). Recorded as a normative blocker inside ADR-115, since the ADR outlives this plan.
 - **Netplan converge path deleted; a guarded reboot is the sole primitive.** Both review panels fired
   on it; its trigger was a strict subset of the reboot's, and it had no budget (would re-apply every
   5 min, bouncing public egress invisibly — #6400's own signature, self-inflicted).

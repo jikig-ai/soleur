@@ -25,6 +25,19 @@ warm and current.
 - zot host down / unreachable / R2-backed storage fault / cert/htpasswd rotation broke pull
   auth, and you want to stop hosts from attempting zot at all (each attempt adds a probe +
   a failed pull before falling back).
+  > **RULE OUT THE PRIVATE NIC FIRST (#6415 / ADR-115).** "zot is unreachable" is exactly how
+  > #6400 presented, and the cause was that the host held no `10.0.1.30` at all — zot itself was
+  > healthy on `:5000`. Reverting to GHCR-primary here would **mask** that: it stops the failing
+  > pulls, so the fleet looks fine while the registry stays broken. That is the 14-day shape.
+  > One query, no SSH:
+  > ```
+  > doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+  >   --since 3h --grep SOLEUR_PRIVATE_NIC --limit 20
+  > ```
+  > `nic_ok=false` ⇒ this is a NIC fault, **not** a zot fault: re-dispatch
+  > `registry-host-replace` instead of reverting. A **down container gives connection
+  > *refused*; an unconfigured NIC gives *timeout* + ping loss** — that distinguisher is what
+  > made #6400 look like "zot mysteriously down".
 - Any Phase-5 retirement step (5.3 fallback-branch removal) is discovered premature.
 
 Note: a *single* transient `ghcr-fallback` is self-healing — the host already fell back to

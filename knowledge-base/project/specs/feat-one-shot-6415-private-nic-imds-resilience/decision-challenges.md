@@ -113,7 +113,7 @@ Applied without a gate (eng-panel correctness/simplification, one right answer):
 | **P0-2** | `last_err` ≠ `zot_last_err` → spoof strip **never fires**; R8/AC8/AC9 mutually incompatible; lib absent from Files to Edit | kieran, code-simplicity (**independent ×2**) | `scripts/lib/zot-telemetry-parse.sh:27` `sed 's/ zot_last_err=.*//'` (literal) |
 | **P0-3** | netplan step 5 has **no budget** → re-applies every 5 min indefinitely, bouncing public egress; 25-min absence window never trips → invisible to every alarm | architecture; converges with dhh + code-simplicity "cut netplan" | `registry_disk_prd` period=900/grace=600 |
 | **P1-1** | Self-heal has **no alarm consumer**: `converged_by=netplan\|reboot` ⇒ `nic_ok=true` ⇒ no alarm → the race becomes silently self-healed and never reported (**lost ceiling**) | architecture | plan Phase 3.1 fires on `nic_ok=false` only |
-| **P1-2** | ADR-113's class-wide `MUST` + LUKS blocker living only in Deferred Items → a future agent applies the reboot to git-data | architecture | ADR outlives the plan/issue |
+| **P1-2** | ADR-115's class-wide `MUST` + LUKS blocker living only in Deferred Items → a future agent applies the reboot to git-data | architecture | ADR outlives the plan/issue |
 | **P1-3** | Boot anchor wrong: `DOPPLER_TOKEN` is written at **`:317-318`**, not by the CLI install → `doppler run` resolves nothing, POST dies, `\|\| true` swallows it **silently** | kieran (sharper than architecture's `:305`→`:309`) | `cloud-init-registry.yml:317-318` |
 | **P1-4** | **AC5 false-passes on an unmodified file** — `grep -c 'private_ip' zot-registry.tf` returns **2** today (`:40`, `:44`) | kieran | must assert the `templatefile` argument |
 | **P1-5** | **AC8 false-passes on an unmodified file** — the alarm already sources the lib | kieran | `scripts/zot-restart-loop-alarm.sh:54` |
@@ -127,7 +127,7 @@ Applied without a gate (eng-panel correctness/simplification, one right answer):
 | **P2** | AC1 measures the **raw template**, not rendered `user_data`; `gzip -9` ≠ Terraform's `base64gzip` (default ≈ `-6`) | kieran | cannot false-pass at 18 KB headroom, but doesn't measure the thing the cap applies to |
 | **P2** | Reboot cap **"1–2" unpinned** — T5/T6 unwritable against a range | kieran, code-simplicity | pin to a literal |
 
-**Verified-correct by the panel (no change owed):** ADR-113 ordinal is free (highest ADR-112 on
+**Verified-correct by the panel (no change owed):** ADR-115 ordinal is free (highest ADR-112 on
 `origin/main`); the heartbeat-parity manifest claim + AC7 are sound (`bun test plugins/soleur/`
 recursion via `scripts/test-all.sh:211`); the `cloud-init clean` rejection is well-founded
 (`cloud-init-registry.yml:294` bare `echo >>` vs git-data `:170` guarded); the git-data LUKS safety

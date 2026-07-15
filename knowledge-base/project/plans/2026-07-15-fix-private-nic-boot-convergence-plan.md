@@ -174,9 +174,13 @@ Phase 1.4 gate **fired** (`unreachable`). L3→L7 order per `hr-ssh-diagnosis-ve
   **no fix of any kind reaches production**.
 - **A worse failure this plan must not create:** a mis-parsed healthy state ⇒ self-inflicted reboots.
   Bounded by the counter (≤2 per instance) + an exact-word predicate (**AC3/AC4**).
-- **If this leaks, the user's data is exposed via:** *no new vector.* Only **non-secret host routing**
-  (a private RFC1918 address already baked into `user_data`, retrievable from the hcloud metadata API
-  — `zot-registry.tf:266`). The one secret on the emit path (`BETTERSTACK_LOGS_TOKEN`) is **not
+- **If this leaks, the user's data is exposed via:** *no new vector.* **Non-secret host routing** —
+  and, CORRECTED at /work, that means the host's **v4 addresses, public and private**: `zot_last_err`
+  carries `ip -4 -o addr show` output, which includes the public `eth0` address, not only the private
+  RFC1918 one the original bullet claimed. The exposure delta is nil regardless: Better Stack already
+  observes this host's public IPv4 as the **source address of every SOLEUR_ZOT_DISK POST**, and a
+  server IP is not personal data under Art. 4(1) — so the conclusion stands, but the premise it rested
+  on was false. The one secret on the emit path (`BETTERSTACK_LOGS_TOKEN`) is **not
   baked** — injected at cron time via `doppler run --project soleur-registry --config prd` (`:241`).
   Isolation cardinality stays **3** (`:348-353`).
 - **Brand-survival threshold:** `single-user incident`
@@ -349,7 +353,7 @@ CODEOWNERS, #2196 rate-limiter — neither touches these files.)
 
 ### Phase 5 — ADR + learning
 
-- **5.1** **ADR-113** (next free ordinal; highest on `origin/main` is ADR-112). See below.
+- **5.1** **ADR-115** (next free ordinal; highest on `origin/main` is ADR-112). See below.
 - **5.2** `learnings/2026-07-07-immutable-redeploy.md` **Sharp edge 2** — its manual *"always verify
   private-net reachability after a `-replace`"* is exactly the operator-memory dependency this
   removes. Point it at the guard + `SOLEUR_PRIVATE_NIC`.
@@ -373,7 +377,7 @@ CODEOWNERS, #2196 rate-limiter — neither touches these files.)
 | File | Purpose |
 | --- | --- |
 | `apps/web-platform/infra/private-nic-guard.test.sh` | behavioral + structural guard test |
-| `knowledge-base/engineering/architecture/decisions/ADR-113-dedicated-host-private-nic-boot-convergence.md` | decision record |
+| `knowledge-base/engineering/architecture/decisions/ADR-115-dedicated-host-private-nic-boot-convergence.md` | decision record |
 
 **Path verification:** every Files-to-Edit path confirmed via `git ls-files` / `ls` at plan-write time.
 `scripts/lib/zot-telemetry-parse.sh` is **deliberately absent** — renaming the field to `zot_last_err`
@@ -427,7 +431,7 @@ means the shared security lib needs **no fork and no edit** (v1 had no route to 
   **behavior**, not the field name).
 - **AC10** A successful self-heal (`converged_by=reboot`, `nic_ok=true`) fires the **advisory** branch,
   not the terminal one, and does not file a duplicate.
-- **AC11** `ADR-113-*.md` exists, `status: accepted`, contains the **normative LUKS blocker** (below),
+- **AC11** `ADR-115-*.md` exists, `status: accepted`, contains the **normative LUKS blocker** (below),
   and its `## Diagram` cites the three-`.c4` enumeration. *(Sweep this AC if the ordinal is renumbered.)*
 - **AC12** `bash tests/scripts/test-registry-host-replace-gate.sh` passes **unchanged** (no new TF
   resource ⇒ `-target` set unchanged).
@@ -492,9 +496,11 @@ User-Brand Impact — **applied**).
 
 **Assessed — no regulated-data surface.** The canonical regex (schemas, migrations, auth, API routes,
 `.sql`) matches nothing. Triggers (a)/(c)/(d) do not fire. Trigger **(b) fires** (`single-user
-incident`), so the gate was **assessed rather than skipped**: the only data is a **private RFC1918
-address** already in `user_data` and retrievable from the hcloud metadata API — **not personal data**
-under Art. 4(1). No new processing activity; **no Art. 30 entry required**. `BETTERSTACK_LOGS_TOKEN`
+incident`), so the gate was **assessed rather than skipped**: the only data is the host's own **v4
+addresses** (public + private) — server IPs, **not personal data** under Art. 4(1), and the public one
+is already observable as the source address of every existing POST. No new processing activity; **no
+Art. 30 entry required**. *(Corrected at /work: the original "only a private RFC1918 address" framing
+understated the payload. The conclusion is unchanged; the premise was wrong.)* `BETTERSTACK_LOGS_TOKEN`
 unchanged, still injected at cron time.
 
 ## Infrastructure (IaC)
@@ -610,9 +616,13 @@ liveness_signal:
 error_reporting:
   destination: "Better Stack Logs source 2457081 (the existing SOLEUR_ZOT_DISK sink), curl + Bearer
                 BETTERSTACK_LOGS_TOKEN injected by `doppler run --project soleur-registry --config prd`"
-  fail_loud: "yes — emits on BOTH success and failure; a failed POST retries once then leaves a
-              journald breadcrumb (the :227 shape). Fail-OPEN toward serving (|| true at the boot call
-              site): observing the boot must never break it."
+  fail_loud: "yes for a REACHED emit; the POST is the ONLY channel. CORRECTED at /work: this host
+              runs no Vector agent, no rsyslog forwarder and no MTA, so cron DISCARDS job stderr and
+              the boot stderr lands in on-box /var/log/cloud-init-output.log — unreachable on a
+              deny-all no-SSH box. The `echo >&2` breadcrumbs are post-mortem material, NOT a layer.
+              A dead emit is covered by the alarm's absence probe (which cross-checks the sibling
+              SOLEUR_ZOT_DISK producer), not by journald. Fail-OPEN toward serving (|| true at the
+              boot call site): observing the boot must never break it."
 
 failure_modes:
   - mode: "IMDS unreachable at boot (H1 — the issue's framing)"
@@ -641,7 +651,8 @@ failure_modes:
     alert_route: "new absence branch -> action-required issue"
 
 logs:
-  where: "Better Stack Logs source 2457081 (scripts/betterstack-query.sh); journald fallback breadcrumb"
+  where: "Better Stack Logs source 2457081 (scripts/betterstack-query.sh) — the ONLY off-box channel.
+          journald is on-box only (no shipper on this host) and is NOT a fallback layer."
   retention: "per the existing Better Stack Logs source — unchanged"
 
 discoverability_test:
@@ -670,7 +681,7 @@ all**.
 
 ### ADR
 
-**Create `ADR-113-dedicated-host-private-nic-boot-convergence.md`.**
+**Create `ADR-115-dedicated-host-private-nic-boot-convergence.md`.**
 
 > **Decision:** a dedicated Hetzner host whose function depends on the private net MUST self-verify its
 > expected private IP after boot, converge it within a bounded budget, and emit a discriminating
@@ -700,9 +711,9 @@ Relationship: **extends ADR-103** (reprovision *path* → guest-side *convergenc
 ADR-096/ADR-100** (dispatch mechanism); **inherits ADR-082's** fail-open, in-surface,
 discriminating-telemetry doctrine. **No collision** (verified by `architecture` + `kieran`).
 
-**Ordinal provisional.** ADR-113 is next-free vs `origin/main` (highest ADR-112), but `adr-ordinals` is
+**Ordinal provisional.** ADR-115 is next-free vs `origin/main` (highest ADR-112), but `adr-ordinals` is
 not a required check; `/ship` re-verifies. **If renumbered, sweep the artifact set in the same edit**
-(`grep -rn 'ADR-113' knowledge-base/project/{plans,specs}/feat-one-shot-6415-…/`) — AC11 names the
+(`grep -rn 'ADR-115' knowledge-base/project/{plans,specs}/feat-one-shot-6415-…/`) — AC11 names the
 ordinal.
 
 ### C4 views
@@ -726,7 +737,7 @@ workflow + a static test (**no runtime data-flow**); this adds a runtime event t
 
 ### Sequencing
 
-True **at merge** for the code; true **on the host** after AC14. ADR-113 is authored **now**,
+True **at merge** for the code; true **on the host** after AC14. ADR-115 is authored **now**,
 `accepted` for registry, with the normative blocker gating the rest of the class.
 
 ## Risks & Mitigations
@@ -770,7 +781,7 @@ Each needs a GitHub issue **in the same PR** (what, why, re-evaluation criteria,
    flapping (widening `period` is a TF change the parity manifest asserts); and
    `betterstack_paid_tier=false` ⇒ **email-only, no escalation** (`variables.tf:301`).
 2. **Generalize the guard to git-data + inngest.** **Blocked** on a reboot-safe LUKS unlock for
-   git-data (see the ADR-113 normative blocker).
+   git-data (see the ADR-115 normative blocker).
 3. **Web hosts (`10.0.1.10/.11`).** They share the race **and the silent-failure property** —
    `model.c4:380` (`hetzner -> ghcr`, *"Atomic fallback pull when zot is unconfigured/unreachable"*)
    means a web host booting NIC-less falls back to GHCR and **deploys keep working**: the identical

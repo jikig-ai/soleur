@@ -110,7 +110,7 @@ is **deferred** — see `decision-challenges.md` UC-1.
 
 ## Phase 5 — ADR + learning
 
-- [x] **5.1** Create `knowledge-base/engineering/architecture/decisions/ADR-113-dedicated-host-private-nic-boot-convergence.md`.
+- [x] **5.1** Create `knowledge-base/engineering/architecture/decisions/ADR-115-dedicated-host-private-nic-boot-convergence.md`.
   - [x] Decision + the `hr-fresh-host-provisioning-reachable-from-terraform-apply` headline.
   - [x] **NORMATIVE BLOCKER** (required): the reboot primitive **MUST NOT** ship to a host whose storage
         unlock lives in `runcmd` without a reboot-safe equivalent (`crypttab`/keyscript); **git-data is
@@ -179,7 +179,7 @@ is **deferred** — see `decision-challenges.md` UC-1.
       `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep SOLEUR_PRIVATE_NIC --limit 20`
       ⇒ ≥1 event with `nic_ok=true`, `zot_store_mounted=true`.
 - [ ] **8.3** **Record `converged_by`** — it is the empirical H1-vs-H2 verdict (`already` ⇒ no race this
-      boot; `reboot` ⇒ the race is real and the guard healed it). Write it into ADR-113.
+      boot; `reboot` ⇒ the race is real and the guard healed it). Write it into ADR-115.
 - [ ] **8.4** **Zero rows ⇒ do NOT read as "no signal"** (ambiguous across ≥6 causes). Run
       `bash scripts/zot-restart-loop-alarm.sh` — its control-marker → LOOKBACK → PRODUCER_SILENT ladder
       discriminates them.
