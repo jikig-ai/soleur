@@ -169,7 +169,7 @@ one artifact and have every point-of-use *point* at it.
 - **Rates:** re-run before quoting; single-source the figure; write the falsifier into the
   artifact ("do not re-quote X").
 - **Runtime primitives:** grep the ADR corpus before gating on one.
-- **Drift guards over HCL — two more sub-cases (#6483).** This file's thesis ("pin the thing you
+- **Drift guards over HCL — two more sub-cases (#6497).** This file's thesis ("pin the thing you
   are named after") has a scoping dimension it did not cover. **(a) A guard scoped to a BLOCK does
   not pin an ATTRIBUTE.** An assertion literally named *"replace_triggered_by names
   `random_password.zot_pull`"* grepped the whole ~90-line resource; relocating the token into

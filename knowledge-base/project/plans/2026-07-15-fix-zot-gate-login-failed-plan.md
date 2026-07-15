@@ -5,7 +5,8 @@ type: bug
 lane: single-domain
 branch: feat-one-shot-zot-gate-login-failed
 sentry_issue: WEB-PLATFORM-5B
-related_issues: [6122, 6416, 6421, 6424, 6452]
+issue: 6497
+related_issues: [6122, 6400, 6408, 6415, 6416, 6421, 6424, 6452]
 related_adrs: [ADR-096, ADR-115]
 brand_survival_threshold: aggregate pattern
 requires_cpo_signoff: false
@@ -58,7 +59,7 @@ Recorded here because each is a reusable lesson, not a one-off:
    *measuring zot*. Worse, the `authz_denied` arm's bare `denied` had zero true positives here and stole
    `connect: permission denied` (a SOCKET error) from `transport` — while the arm that will actually fire most
    on this fleet (private-NIC → `network is unreachable`; zot OOM → `connection reset`) fell through to
-   `unclassified`, the very bucket #6483 exists to drain. **Lesson:** a hypothesis about a vendored service's
+   `unclassified`, the very bucket #6497 exists to drain. **Lesson:** a hypothesis about a vendored service's
    response codes is a claim to measure against the pinned image; one `docker run` settled it.
 3. **The ADR amendment mandated a landmine on git-data.** Written as a class-wide MUST inside an ADR whose
    Status says "registry host only", it would have required `replace_triggered_by = [random_password.
@@ -216,9 +217,29 @@ what the whole H3/H4 apparatus was built to decide.
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** nothing directly — the GHCR fallback is atomic and hosts keep
-booting the correct signed digest. The harm is latent and identical to the #6421 postmortem's: the redundancy
-ADR-096 exists to provide **does not exist**, and the fleet reports green. If GHCR degraded — the exact scenario
-zot was built to survive — every host would fail to pull and the platform would not deploy or recover.
+booting the correct signed digest. The redundancy ADR-096 exists to provide **does not exist**, and the fleet
+reports green.
+
+> **UPDATED AT /ship (2026-07-15) — the counterfactual stopped being hypothetical.** This section originally
+> read "If GHCR degraded — the exact scenario zot was built to survive — every host would fail to pull and the
+> platform would not deploy or recover," and filed the harm as *latent*. **GHCR is degrading right now.**
+> **#6400** (P1, open) has the web host failing `image_pull_failed` against GHCR; prod is pinned to 0.214.7 /
+> `e333a938` since 14:49Z, two consecutive releases (`v0.214.8`, `v0.214.9`) failed to cut over, and the next
+> runtime PR is blocked. GHCR also denied pulls on 2026-07-13/14 (#6408), freezing the pipeline ~10h. "GHCR
+> degrades" is a live, recurring event class — not a thought experiment — and the redundancy built to survive it
+> has never once been armed.
+>
+> **This does NOT make the plan a fix for #6400, and it must not be claimed as one** (#6400 is a GHCR-side auth
+> defect; this is the zot login). What it changes is the *urgency* and the *honesty of the framing*: this is not
+> a tidy-up of a dormant feature, it is condition 1 of the 3 that must hold for zot to serve a pull —
+> (1) login works ← this plan; (2) zot holds the tag ← #6416; (3) the host reaches zot on the private net ←
+> #6415 / ADR-115. `pull_image_with_fallback` pulls zot-primary when `ZOT_ACTIVE=1` and only falls through to
+> GHCR otherwise, so with all three met, a GHCR denial is a non-event instead of a deploy freeze.
+>
+> The blast-radius argument for the host replace is **unchanged and still holds** — the pull path is dark today
+> (`ZOT_ACTIVE=0` fleet-wide), so replacing the registry host costs nothing that is currently working. If
+> anything #6400 strengthens it: the window in which this change is free is the same window in which its absence
+> is being felt.
 
 **If this leaks, the user's data/workflow is exposed via:** no new exposure. The probe added in Phase 1 emits a
 **boolean** match result and an HTTP status code — never a token, never a hash of a token. `docker login` stderr
@@ -583,7 +604,7 @@ deny-all firewall both forbid — so the host is replaced, per `hr-prod-host-con
 `terraform apply -replace='hcloud_server.registry'` preserving `hcloud_volume.registry`. It is fired with
 `gh workflow run` — a CLI call this pipeline makes itself; it is **not** an operator handoff
 (`hr-exhaust-all-automated-options-before`). Post-merge sequence: merge → `gh workflow run
-apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason='#6483 …'` → AC10/AC11 verify.
+apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason='#6497 …'` → AC10/AC11 verify.
 
 **Verified at /work against real prod state** (read-only `terraform plan`, mirroring the dispatch job's exact
 `-replace`/`-target` set, then the REAL gate run over the plan JSON):

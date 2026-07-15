@@ -216,7 +216,7 @@ write_files:
       # (2f) Boot discriminator — the immutable redeploy reuses the terraform hostname, so boot_id is
       # what cleanly separates old-host from new-host events for the automated decision rule.
       BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
-      # (2g) #6483 — htpasswd-vs-Doppler divergence detector. THE decisive, no-SSH signal for the
+      # (2g) #6497 — htpasswd-vs-Doppler divergence detector. THE decisive, no-SSH signal for the
       # WEB-PLATFORM-5B class: /etc/zot/htpasswd is baked ONCE at boot from these tokens, so a
       # rotation (or a boot that raced the secret write) leaves the host authenticating against a
       # value no client still presents — and nothing else on this deny-all host can report it.

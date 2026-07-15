@@ -82,7 +82,7 @@ DJ_ZOT_IP="$(python3 -c 'import json; print((json.load(open("'"$DAEMON_JSON"'"))
 assert "cloud-init inline daemon.json and docker-daemon.json agree on the zot endpoint (found ci='$CI_ZOT_IP' dj='$DJ_ZOT_IP')" \
   "[[ -n \"\$CI_ZOT_IP\" && \"\$CI_ZOT_IP\" == \"\$DJ_ZOT_IP\" ]]"
 
-# --- #6483: the registry host's credential-convergence edges -----------------------------
+# --- #6497: the registry host's credential-convergence edges -----------------------------
 # WEB-PLATFORM-5B root cause: /etc/zot/htpasswd is baked once at boot from the two Doppler
 # tokens, but hcloud_server.registry's templatefile() passes only the non-secret USERNAMES —
 # zero references to random_password.*.result. Terraform therefore has no data edge from the

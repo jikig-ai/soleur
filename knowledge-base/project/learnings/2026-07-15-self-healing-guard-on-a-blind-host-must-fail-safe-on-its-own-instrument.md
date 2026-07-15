@@ -98,8 +98,8 @@ Three properties made it invisible:
   mutant it should catch and confirm it does.**
 - **Stubbing `sleep` turns a lost wait-bound into an infinite spin**, not a slow test — bound the run
   with `timeout` (resolved ABSOLUTE; `PATH=x timeout …` looks `timeout` up through the stripped PATH).
-- **The `set -u` expansion-order variant (#6483).** Same class, one layer earlier: this guard *acted
-  on a fact it did not read*; #6483's htpasswd probe **never reached the read**. A bare
+- **The `set -u` expansion-order variant (#6497).** Same class, one layer earlier: this guard *acted
+  on a fact it did not read*; #6497's htpasswd probe **never reached the read**. A bare
   `"$ZOT_PULL_TOKEN"` inside `zot-disk-heartbeat.sh`'s `set -u` raises `unbound variable` and exits
   **before `$LINE` is built** — taking the whole `SOLEUR_ZOT_DISK` heartbeat dark and bypassing the
   trailing `exit 0` that exists so the cron can never wedge. Since this heartbeat's **absence** is

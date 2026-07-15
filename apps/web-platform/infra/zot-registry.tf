@@ -87,7 +87,7 @@ locals {
 # hcloud_server.registry's lifecycle.replace_triggered_by is what supplies that edge: it
 # replaces the host so the htpasswd is re-baked from the new value in the SAME apply.
 # Without it a rotation silently diverges the host from Doppler and every pull login is
-# rejected forever, with no signal saying why — which is exactly what #6483 / Sentry
+# rejected forever, with no signal saying why — which is exactly what #6497 / Sentry
 # WEB-PLATFORM-5B was. Mirrors random_password.git_data_luks.
 resource "random_password" "zot_pull" {
   length  = 40
@@ -293,7 +293,7 @@ resource "hcloud_server" "registry" {
   # and omitting it preserves a clean replace-to-reprovision path (git-data.tf rationale) —
   # so a zot config change re-applies via cloud-init re-provision (cloud-init is idempotent).
 
-  # #6483: the ONLY edge from the pull/push credentials to this host. The tokens are read at
+  # #6497: the ONLY edge from the pull/push credentials to this host. The tokens are read at
   # boot via the Doppler CLI and baked into /etc/zot/htpasswd once; they are deliberately
   # absent from user_data (:263-265), so Terraform sees no data dependency and a rotation
   # would leave the host serving the OLD htpasswd forever while both Doppler copies show the
@@ -304,7 +304,7 @@ resource "hcloud_server" "registry" {
   # no hits; a bare `grep -n keepers` also matches this very comment).
   # The edge fires ONLY on the operator's untargeted full apply — the registry-host-replace
   # dispatch hardcodes `-replace='hcloud_server.registry'` and does not target these, so a
-  # rotation is not plannable there. See the ADR-115 amendment (#6483).
+  # rotation is not plannable there. See the ADR-115 amendment (#6497).
   lifecycle {
     replace_triggered_by = [
       random_password.zot_pull,
@@ -317,7 +317,7 @@ resource "hcloud_server" "registry" {
   # The amended 3-secret boot guard FATALs (zot never launches) if that secret is not already in
   # the isolated config when this host boots — make the ordering DETERMINISTIC (not latency-lucky
   # on the registry-host-replace apply) by declaring it explicitly.
-  # #6483: the two ZOT token secrets are read at boot through the same Doppler CLI path and
+  # #6497: the two ZOT token secrets are read at boot through the same Doppler CLI path and
   # GATE the htpasswd bake, so they need the identical treatment — the #6244 fix was made for
   # one secret and never generalized. Without them a fresh stand-up (or this host's own
   # replace) may boot before the secret writes land and bake an htpasswd from a stale read.

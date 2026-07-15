@@ -35,7 +35,7 @@ readonly TEST_PATH_BASE="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 #   default        - healthy endpoint (200 / OK); honor MOCK_CURL_CANARY_FAIL
 #                    to fail the localhost:3001 canary probe
 
-# #6483: capture what reaches journald when MOCK_LOGGER_CAPTURE_FILE is armed. The journald
+# #6497: capture what reaches journald when MOCK_LOGGER_CAPTURE_FILE is armed. The journald
 # tag `ci-deploy` is shipped OFF-BOX to Better Stack by vector.toml (allowlisted, unscrubbed),
 # so it is a real credential boundary — but the mock discarded everything, so no test could
 # assert on it. Sentry had a full-sink purity assertion and journald had none; per
@@ -283,7 +283,7 @@ if [[ "${1:-}" == "login" ]]; then
   done
   _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$(cat)"
   [[ -n "${MOCK_LOGIN_ARGS_FILE:-}" ]] && printf 'LOGIN:%s\n' "$_luser" >> "$MOCK_LOGIN_ARGS_FILE"
-  # #6483: fail the ZOT login with a caller-supplied stderr so a test can exercise each
+  # #6497: fail the ZOT login with a caller-supplied stderr so a test can exercise each
   # zot_login_class enum member. Registry-scoped (never ghcr.io) so arming it cannot
   # perturb the GHCR legs the #6400/#6090 tests assert on.
   if [[ -n "${MOCK_ZOT_LOGIN_FAIL_STDERR:-}" && "$_lreg" == "10.0.1.30:5000" ]]; then
@@ -3420,7 +3420,7 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: AC13 — recovery relogin must target ghcr.io"
 fi
 
-# --- #6483: zot login failure is DISCRIMINATING (WEB-PLATFORM-5B) -----------------------
+# --- #6497: zot login failure is DISCRIMINATING (WEB-PLATFORM-5B) -----------------------
 # The gate discarded `docker login` stderr (`>/dev/null 2>&1`), so `login_failed` was one
 # undifferentiated bucket for bad-credential / authz-denial / transport / TLS. These assert
 # the stderr CONTENT classifies into a fixed enum, that 401 and 403 land in DIFFERENT
@@ -3478,7 +3478,7 @@ assert_zot_login_class() {
 # The 401 fixture is byte-accurate — reproduced against the pinned zot (v2.1.2) with this
 # repo's exact accessControl. Measured there: GET /v2/ (the ONLY request docker login makes)
 # answers 200 or 401 and NEVER 403, even for a user with zero accessControl policies.
-echo "--- #6483 T-5B-1..5: docker login stderr classifies into the zot_login_class enum ---"
+echo "--- #6497 T-5B-1..5: docker login stderr classifies into the zot_login_class enum ---"
 assert_zot_login_class "401 stale htpasswd (H3 — the live defect)" \
   'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 401 Unauthorized' \
   'authn_rejected' '401'
@@ -3499,8 +3499,8 @@ assert_zot_login_class "unrecognized stderr" \
 # likely to fire in production — private-NIC convergence (#6415) yields `network is
 # unreachable`; a zot OOM/restart (tracked as zot_oom_kills/zot_restarts on the same host)
 # severs a live connection. Leaving these in `unclassified` would recreate the exact
-# undifferentiated bucket #6483 exists to drain, on the fleet's most probable failures.
-echo "--- #6483 T-5B-5b..5f: the transport shapes this fleet actually produces ---"
+# undifferentiated bucket #6497 exists to drain, on the fleet's most probable failures.
+echo "--- #6497 T-5B-5b..5f: the transport shapes this fleet actually produces ---"
 assert_zot_login_class "private NIC not up (#6415 class)" \
   'Error response from daemon: Get "http://10.0.1.30:5000/v2/": dial tcp 10.0.1.30:5000: connect: network is unreachable' \
   'transport'
@@ -3527,7 +3527,7 @@ assert_zot_login_class "zot 5xx (OOM/restart window)" \
 # T-5B-6 (task 1.2): the enum's whole purpose is discriminating power. A tls_mismatch that
 # collapses into authn_rejected would send the operator hunting a credential bug that does
 # not exist.
-echo "--- #6483 T-5B-6: tls_mismatch must NOT classify as authn_rejected ---"
+echo "--- #6497 T-5B-6: tls_mismatch must NOT classify as authn_rejected ---"
 TOTAL=$((TOTAL + 1))
 SF_TLS=$(mktemp)
 run_deploy_zot_login_stderr "$SF_TLS" 'Error response from daemon: Get "https://10.0.1.30:5000/v2/": http: server gave HTTP response to HTTPS client'
@@ -3548,7 +3548,7 @@ rm -f "$SF_TLS"
 # matches a literal 403 ONLY; bare 'denied'/'forbidden' are deliberately unmatched because
 # they have no true positive on this path and would steal `permission denied` (a socket
 # error) from `transport` — see T-5B-5f.
-echo "--- #6483 T-5B-7: a literal 403 must NOT be read as authn_rejected (defensive) ---"
+echo "--- #6497 T-5B-7: a literal 403 must NOT be read as authn_rejected (defensive) ---"
 TOTAL=$((TOTAL + 1))
 SF_403=$(mktemp)
 run_deploy_zot_login_stderr "$SF_403" 'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 403 Forbidden'
@@ -3563,7 +3563,7 @@ rm -f "$SF_403"
 
 # T-5B-8 (task 1.3): payload hygiene. A registry error string can echo a username, so the
 # enum is the ONLY thing that may cross the boundary — never the raw stderr.
-echo "--- #6483 T-5B-8: raw docker login stderr never reaches the Sentry payload ---"
+echo "--- #6497 T-5B-8: raw docker login stderr never reaches the Sentry payload ---"
 TOTAL=$((TOTAL + 1))
 SF_HYG=$(mktemp)
 run_deploy_zot_login_stderr "$SF_HYG" 'Error response from daemon: login attempt failed with status: 401 Unauthorized SENTINEL_LEAK_CANARY_zot-pull'
@@ -3582,7 +3582,7 @@ rm -f "$SF_HYG"
 # edit appending $zdetail to the ZOT_GATE logger line would ship raw stderr off-box with the
 # whole suite green. Asserts against the FULL journald capture, not a prefix (the scope half of
 # 2026-07-09-sanitized-marker-alongside-raw-sibling-diagnostic-leaks-and-purity-test-scope).
-echo "--- #6483 T-5B-8b: raw login stderr never reaches journald either ---"
+echo "--- #6497 T-5B-8b: raw login stderr never reaches journald either ---"
 TOTAL=$((TOTAL + 1))
 JD=$(mktemp -d); SF_J="$JD/sentry.txt"; LG_J="$JD/logger.txt"; : > "$LG_J"
 run_deploy_zot_login_stderr "$SF_J" 'Error response from daemon: login attempt failed with status: 401 Unauthorized SENTINEL_LEAK_CANARY_zot-pull' "$LG_J"
@@ -3611,7 +3611,7 @@ rm -rf "$JD"
 # empty in-suite and non-empty on a real host. Runtime resolution is unit-tested elsewhere
 # (host-identity.test.ts); the ONE seam this needs to guard is host_id reaching THIS payload.
 # Body-scoped so the sibling emits that also tag host_id (:562, :588, :715) cannot satisfy it.
-echo "--- #6483 T-5B-9: zot_gate_degraded_event threads HOST_ID into its payload ---"
+echo "--- #6497 T-5B-9: zot_gate_degraded_event threads HOST_ID into its payload ---"
 TOTAL=$((TOTAL + 1))
 ZGD_BODY="$(awk '/^zot_gate_degraded_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
 if [[ -n "$ZGD_BODY" ]] \

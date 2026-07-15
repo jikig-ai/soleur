@@ -624,7 +624,7 @@ registry_pull_event() {
   fi
 }
 
-# _zot_login_failure_class <stderr-content> (#6483): classify a FAILED zot `docker login`
+# _zot_login_failure_class <stderr-content> (#6497): classify a FAILED zot `docker login`
 # into a fixed enum. Takes the stderr CONTENT as $1 (the caller passes `tail -c 400 "$zerr"`,
 # never the path — the precedent's security/P2-E trap).
 #
@@ -657,7 +657,7 @@ registry_pull_event() {
 # `transport` is the arm that will actually fire most on THIS fleet — private-NIC convergence
 # (#6415) yields `network is unreachable`; zot OOM/restart (tracked as zot_oom_kills) yields
 # `connection reset by peer` / `EOF` mid-connection. Leaving those in `unclassified` would
-# recreate the undifferentiated bucket #6483 exists to drain.
+# recreate the undifferentiated bucket #6497 exists to drain.
 _zot_login_failure_class() {
   local e="${1:-}"
   if printf '%s' "$e" | grep -qiE '\b401\b|unauthorized|authentication required|incorrect username or password'; then
@@ -675,7 +675,7 @@ _zot_login_failure_class() {
   fi
 }
 
-# _zot_login_http_status <stderr-content> (#6483): scrape the HTTP status dockerd echoes on a
+# _zot_login_http_status <stderr-content> (#6497): scrape the HTTP status dockerd echoes on a
 # login rejection ("failed with status: 401 Unauthorized"). The `status:` anchor is what keeps
 # a host:port (`10.0.1.30:5000`, `dial tcp 127.0.0.1:15999`) from being scraped as a code —
 # verified. Empty means ONLY "no status was rendered in this stderr"; it does NOT imply a
@@ -701,7 +701,7 @@ zot_gate_degraded_event() {
   logger -t "$LOG_TAG" "ZOT_GATE_DEGRADED: reason=$reason (configured but inactive — GHCR path)"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
-    # #6483: zot_login_class + zot_login_http make `login_failed` DIAGNOSABLE — it was one
+    # #6497: zot_login_class + zot_login_http make `login_failed` DIAGNOSABLE — it was one
     # undifferentiated bucket for credential/authz/transport/TLS, so 14 live WEB-PLATFORM-5B
     # events could not say which. Both are empty for the non-login reasons
     # (probe_unreachable, creds_absent), which have no login outcome to report.
@@ -847,7 +847,7 @@ ghcr_prelude_and_login() {
 # fetch auth) is satisfied ATOMICALLY with the pull cred. Fail-open: never aborts the
 # deploy. Runs AFTER ghcr_prelude_and_login (which already prefetched SENTRY_* + guarded
 # doppler/DOPPLER_TOKEN). Token reaches `docker login` via --password-stdin (never argv).
-# #6483: login stderr is NO LONGER discarded — the old `>/dev/null 2>&1` here is exactly why
+# #6497: login stderr is NO LONGER discarded — the old `>/dev/null 2>&1` here is exactly why
 # WEB-PLATFORM-5B was undiagnosable. It is captured to a 0600 temp file, classified to a fixed
 # enum (_zot_login_failure_class), and destroyed; only the enum + an HTTP status code reach a
 # sink, never the raw text. Keeping the old "output is discarded so nothing leaks" claim would
@@ -881,7 +881,7 @@ zot_gate_and_login() {
     zot_gate_degraded_event creds_absent
     return 0
   fi
-  # #6483: capture the login stderr instead of discarding it. `>/dev/null 2>&1` here was the
+  # #6497: capture the login stderr instead of discarding it. `>/dev/null 2>&1` here was the
   # reason WEB-PLATFORM-5B was undiagnosable: it destroyed the one datum that says WHICH
   # failure this is, at the source, and the registry host is deny-all/no-SSH so zot's own
   # auth log is not shipped either. The stderr is classified to a fixed enum before anything

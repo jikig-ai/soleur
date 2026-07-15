@@ -28,7 +28,7 @@
 #       guard FATALs and zot never launches. A pure-create on first apply, no-op thereafter. No
 #       special assertion beyond allow-set membership — it just must not count as out_of_scope.)
 #
-# DELIBERATELY ABSENT (#6483) — doppler_secret.zot_pull_token_registry / zot_push_token_registry.
+# DELIBERATELY ABSENT (#6497) — doppler_secret.zot_pull_token_registry / zot_push_token_registry.
 # hcloud_server.registry gained an explicit `depends_on` on both (zot-registry.tf), so `-target`
 # pulls them into this plan's dependency closure. They are NOT allow-set members, and that is the
 # point: they are already applied and stable, so they plan as `no-op` and the positive-action

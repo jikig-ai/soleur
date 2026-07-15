@@ -3,7 +3,7 @@ title: A false comment shipped the bug — then the plan, the implementation, th
 date: 2026-07-15
 category: best-practices
 module: apps/web-platform/infra, knowledge-base/engineering/architecture/decisions
-issue: 6483
+issue: 6497
 pr: 6484
 problem_type: best_practice
 component: infrastructure
@@ -31,7 +31,7 @@ tags:
 
 ## Problem
 
-#6483 / Sentry **WEB-PLATFORM-5B**: zot's `docker login` failed on every deploy, the fleet
+#6497 / Sentry **WEB-PLATFORM-5B**: zot's `docker login` failed on every deploy, the fleet
 silently took the GHCR path, and the `login_failed` beacon was one undifferentiated bucket that
 could not say *which* failure. Root cause: `/etc/zot/htpasswd` is baked **once, at boot**, by
 `cloud-init-registry.yml`'s runcmd, from the two Doppler tokens read via the Doppler CLI. The
@@ -71,7 +71,7 @@ model, writing confident replacement prose, and the green signal in front of the
 neighbour of the property they mean.
 
 This is the **fourth consecutive session** to ship this class ([#6421][l-6421], [#6424][l-6424],
-[#6452][l-6452], now #6483) — every one authored with the prior learnings in context. See §9.
+[#6452][l-6452], now #6497) — every one authored with the prior learnings in context. See §9.
 
 ---
 
@@ -308,7 +308,7 @@ unconditionally and `replace_triggered_by` contributes **nothing**; a rotation i
 plannable there. The edge fires **only** on the operator's untargeted full apply, which runs **no
 destroy-guard at all**. The edge is real, and its trigger lives on the least-guarded path in the
 system. *The first draft of the amendment named the dispatch — and the dispatch cannot fire the
-edge.* An edge whose trigger is unreachable is a comment, which is the defect #6483 exists to fix.
+edge.* An edge whose trigger is unreachable is a comment, which is the defect #6497 exists to fix.
 
 ## 7. A probe that ships inside the mutation's own payload cannot observe the pre-mutation state
 

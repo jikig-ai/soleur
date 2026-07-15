@@ -6,8 +6,8 @@ date: 2026-07-15
 amends: none
 supersedes: none
 issue: 6415
-amended_by: [6483]
-related: [6400, 6405, 6288, 6122, 6242, 6483]
+amended_by: [6497]
+related: [6400, 6405, 6288, 6122, 6242, 6497]
 related_adrs: [ADR-096, ADR-100, ADR-103, ADR-068, ADR-082]
 brand_survival_threshold: single-user incident
 ---
@@ -19,7 +19,7 @@ brand_survival_threshold: single-user incident
 **Accepted — for the REGISTRY host only.** Explicitly **not** class-wide: see the normative
 blockers below. Extending it to git-data or inngest requires clearing them first.
 
-**Amended 2026-07-15 (#6483)** to cover boot-baked *credentials* alongside the private NIC —
+**Amended 2026-07-15 (#6497)** to cover boot-baked *credentials* alongside the private NIC —
 also registry-host-scoped, and carrying a **second** normative blocker of its own, because the
 amendment's `replace_triggered_by` edge is a different primitive from this ADR's guarded
 reboot and the first blocker does not reach it. Both blockers are load-bearing and neither
@@ -101,10 +101,10 @@ baked copy drift, the guard bakes a wrong `EXPECTED_IP`, `ip_present` is false f
 the cap and then goes terminal**. The IP therefore has exactly one definition
 (`local.registry_private_ip`).
 
-### Amendment (2026-07-15, #6483): boot-baked CREDENTIALS need a convergence edge too
+### Amendment (2026-07-15, #6497): boot-baked CREDENTIALS need a convergence edge too
 
 The decision above is written for one kind of boot-time state (the private NIC) and one
-primitive (a guarded self-reboot). #6483 showed the *generalizable* half was missed, and the
+primitive (a guarded self-reboot). #6497 showed the *generalizable* half was missed, and the
 cost of missing it was total: the registry host's `/etc/zot/htpasswd` is boot-baked state with
 **no convergence edge of any kind** and **no self-report**, so zot served zero pulls for its
 entire existence while the fleet reported green. Extending the decision:
@@ -119,12 +119,12 @@ entire existence while the fleet reported green. Extending the decision:
 > Two permitted edges — pick by whether silent self-repair is acceptable:
 > 1. **`lifecycle.replace_triggered_by`** on the host, naming the source resource — an
 >    externally-driven immutable redeploy. Correct when the divergence should be *visible and
->    audited* rather than quietly healed. This is what #6483 shipped for the htpasswd.
+>    audited* rather than quietly healed. This is what #6497 shipped for the htpasswd.
 > 2. **Cron self-convergence**, like this ADR's NIC guard — correct when availability outranks
 >    auditability, and only under the reboot blocker below if the primitive is a reboot.
 >
-> (b) is **not optional under either**. An edge without a self-report is a claim; #6483's root
-> cause was precisely a *comment* asserting an edge (the pre-#6483 `random_password.zot_pull`
+> (b) is **not optional under either**. An edge without a self-report is a claim; #6497's root
+> cause was precisely a *comment* asserting an edge (the pre-#6497 `random_password.zot_pull`
 > header in `zot-registry.tf`: "rotation … re-propagates htpasswd + Doppler in ONE apply")
 > that the code did not implement. A boot-baked value whose match state is unobservable will
 > eventually diverge silently, and on a no-SSH host there is no path to find out. The htpasswd
@@ -136,7 +136,7 @@ entire existence while the fleet reported green. Extending the decision:
 > encrypted from, derived from, or is otherwise unrecoverable without.**
 >
 > **git-data is excluded, and the exclusion is not cosmetic.** `random_password.git_data_luks`
-> (`git-data-luks.tf:31`) is structurally identical to `random_password.zot_pull` — #6483's
+> (`git-data-luks.tf:31`) is structurally identical to `random_password.zot_pull` — #6497's
 > own code comment even says *"Mirrors `random_password.git_data_luks`"* — and its value is
 > boot-baked exactly the same way (`cloud-init-git-data.yml:163`,
 > `cryptsetup luksOpen --key-file -`). So the naive generalization is not just permitted by
@@ -157,7 +157,7 @@ entire existence while the fleet reported green. Extending the decision:
 > one booted with the new value, what existing bytes become unreadable?* Any answer other than
 > "none" excludes the host.
 
-**Scope note — the FIRST (reboot) blocker does not fire for #6483.** It constrains the
+**Scope note — the FIRST (reboot) blocker does not fire for #6497.** It constrains the
 **reboot primitive**, and edge (1) ships no reboot: `replace_triggered_by` is a
 Terraform-driven replace, so the host boots once, fresh, through the ordinary cloud-init path.
 The `runcmd`-storage-unlock hazard it protects against is a *re-*boot hazard, unreachable from
@@ -172,9 +172,9 @@ reboot itself — edge (1) needs no such argument: an externally-driven `-replac
 on a config change is the literal case that rule sanctions.
 
 **Which apply fires the edge (state this precisely, or the edge is inert).** Two DIFFERENT
-applies are easy to conflate here, and #6483 conflated them:
+applies are easy to conflate here, and #6497 conflated them:
 
-- **Deploying a cloud-init/user_data change** (what #6483 itself does) runs through the
+- **Deploying a cloud-init/user_data change** (what #6497 itself does) runs through the
   `registry-host-replace` `workflow_dispatch` (ADR-096 amendment 2026-07-08). That job
   hardcodes `-replace='hcloud_server.registry'`, so it replaces the host *unconditionally* —
   `replace_triggered_by` contributes nothing on that path.
@@ -192,7 +192,7 @@ kind of fact that stops being acceptable after the Phase-5 cutover.
 
 **Requirement on any future ADR** adding a `replace_triggered_by` edge to a host: name the
 apply that fires it and the guard that apply runs. An edge whose trigger is unreachable is a
-comment, and a comment asserting an edge the code does not provide is the defect #6483 exists
+comment, and a comment asserting an edge the code does not provide is the defect #6497 exists
 to fix. This paragraph is written as the worked example of its own rule — the first draft of
 this amendment named the dispatch, and the dispatch cannot fire the edge.
 
@@ -251,8 +251,8 @@ an empty dir (404s fleet-wide) while `nic_ok=true`.
 | **Fix it in Terraform** (ordering, or a reboot in the dispatch job) | **Rejected.** No ordering can win an additive online attach. And the registry resources are an `OPERATOR_APPLIED_EXCLUSION`, so a dispatch-job reboot leaves the primary provisioning path uncovered. |
 | **A `Type=oneshot` unit instead of `/etc/cron.d`** | **Rejected.** A boot-only oneshot cannot heal an attach that lands *later* (H2, the leading hypothesis). `/etc/cron.d` is this host's established cadence and already carries the `doppler run` wrapper. It also avoids the oneshot-liveness trap where `inactive` reads as healthy. |
 | **Ship git-data + inngest too** (the issue's stated scope) | **Rejected on safety** — see the normative blocker. Both hosts also fail *loudly* today, so they lack the silent-failure property that motivates #6415. |
-| **(#6483) An SSH provisioner that rewrites `/etc/zot/htpasswd` in place** | **Rejected.** `hr-no-ssh-fallback-in-runbooks`, and the host's deny-all firewall makes it impossible anyway. It would also re-introduce the `remote-exec` shape that `zot-registry.tf:19-21` names as a load-bearing condition of the OPERATOR_APPLIED_EXCLUSION contract (cloud-init-only, no `remote-exec` terraform_data — else the SSH-parity guard has no exclusion path). The cure would break the contract that lets these resources exist. |
-| **(#6483) A cron that re-converges the htpasswd from Doppler** (mirroring this ADR's NIC guard — genuinely zero-downtime, no replace) | **Rejected for the credential case.** It would *silently repair* a rotation, destroying the immutable-redeploy audit trail and masking the exact divergence the #6483 probe exists to surface. The NIC case differs on the merits: an unreachable host cannot be fixed any other way, whereas a stale credential has a clean externally-driven edge (`replace_triggered_by`). Availability outranks auditability for the NIC; the reverse holds for a credential. Revisit only if zot moves onto the live pull path AND replace-window downtime becomes unacceptable — at which point blue-green, not silent convergence, is the honest answer. |
+| **(#6497) An SSH provisioner that rewrites `/etc/zot/htpasswd` in place** | **Rejected.** `hr-no-ssh-fallback-in-runbooks`, and the host's deny-all firewall makes it impossible anyway. It would also re-introduce the `remote-exec` shape that `zot-registry.tf:19-21` names as a load-bearing condition of the OPERATOR_APPLIED_EXCLUSION contract (cloud-init-only, no `remote-exec` terraform_data — else the SSH-parity guard has no exclusion path). The cure would break the contract that lets these resources exist. |
+| **(#6497) A cron that re-converges the htpasswd from Doppler** (mirroring this ADR's NIC guard — genuinely zero-downtime, no replace) | **Rejected for the credential case.** It would *silently repair* a rotation, destroying the immutable-redeploy audit trail and masking the exact divergence the #6497 probe exists to surface. The NIC case differs on the merits: an unreachable host cannot be fixed any other way, whereas a stale credential has a clean externally-driven edge (`replace_triggered_by`). Availability outranks auditability for the NIC; the reverse holds for a credential. Revisit only if zot moves onto the live pull path AND replace-window downtime becomes unacceptable — at which point blue-green, not silent convergence, is the honest answer. |
 | **An off-host probe as required-for-close** | **Deferred** (#6415 stays open for it). It is greenfield: the web-host delivery site is unresolved (`ignore_changes=[user_data]` ⇒ not cloud-init), its arming is blocked (`ignore_changes=[paused]` makes a source flip a **no-op**), the cadence mismatches (`period=60/grace=30` vs a 60s cron floor ⇒ flapping), and `betterstack_paid_tier=false` ⇒ email-only, no escalation. |
 
 ## Observability

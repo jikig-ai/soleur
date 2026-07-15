@@ -100,14 +100,14 @@ for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
 
-# --- #6483: the htpasswd-divergence probe -------------------------------------------------
+# --- #6497: the htpasswd-divergence probe -------------------------------------------------
 # zot-disk-heartbeat.sh runs `set -u`. A BARE "$ZOT_PULL_TOKEN" on an unset token raises
 # `unbound variable` and EXITS the script before $LINE is built — taking the ENTIRE
 # SOLEUR_ZOT_DISK self-report dark (every field above, not just the probe's) and bypassing the
 # trailing `exit 0` that exists so the cron can never wedge. `|| HTP_PULL=false` does NOT
 # rescue it: an expansion error is not a command failure. Since this heartbeat's ABSENCE is
 # itself an alarm, that failure pages "host down" when only the probe broke. This shipped in
-# #6483's first draft and was caught at review — pin it so it cannot come back.
+# #6497's first draft and was caught at review — pin it so it cannot come back.
 PROBE_BLOCK="$(awk '/_htp_verify\(\) \{/,/^      fi$/' "$CI")"
 assert "htpasswd probe block found" "[ -n \"\$PROBE_BLOCK\" ]"
 assert "probe never expands a token BARE (set -u would kill the whole heartbeat)" \
