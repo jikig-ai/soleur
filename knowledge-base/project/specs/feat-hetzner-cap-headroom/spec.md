@@ -103,14 +103,39 @@ never been runnable.
 - **TR4** — Do not add `[ack-destroy]`-style overrides; existing recreate guards
   have none.
 
+## Status — G1 is DONE (2026-07-15, in-session)
+
+**The reclaim already shipped. Do not re-plan it.**
+
+- `hermes-agent` destroyed 2026-07-15. **Fleet is 4/5 — one free slot**, first time.
+- Snapshot **`408787015`** (`hermes-agent-pre-reclaim-20260715T124535Z`, 6.56 GB of a
+  40 GB disk) retained as rollback. **Still needs a retention expiry** (CLO: a snapshot
+  of unknown data is continued processing) — that is now the open remainder of G1.
+- Both primary IPs were `auto_delete=true` → no orphaned IP billing (verified).
+- `expenses.md` row added **at retirement** (~USD 9.7 lifetime shadow spend recorded).
+- **Purpose never established.** At reclaim it was steadily transmitting ~410 MiB/day
+  outbound (711 B/s out vs 448 B/s in, ~0.43 pps, CPU avg 1.9%) — a low-rate outbound
+  producer reporting somewhere unknown. Operator authorised the destroy with the
+  snapshot as cover. **If something breaks and the cause is unclear, suspect this
+  first and rebuild from `408787015`.**
+
+**G3 is blocked on the operator and cannot be automated** — verified, not assumed:
+`GET /v1/limits` → 404 (no API); **no Hetzner Console credentials exist in Doppler**
+(only `HCLOUD_TOKEN`, an API token); Console is OAuth + MFA + probable Turnstile; no
+precedent for infra-provider console automation. Console → Limits → "Request change →
+Limit increase", ask **server limit → 10**, and raise the **volume** limit in the same
+form (separate counter).
+
 ## Acceptance Criteria
 
-- [ ] `hcloud server list` returns 4; a `hermes-agent` snapshot exists with an expiry.
-- [ ] `expenses.md` has no `active` rows for non-existent resources; web-2 reads fsn1.
-- [ ] `AGENTS.core.md:26` names the no-rollback danger; rule id unchanged.
-- [ ] Server limit raised (or the request filed and tracked).
-- [ ] Residency validation covers `var.location` + `var.registry_location`.
-- [ ] Stock preflight shipped **or** explicitly dropped with the API finding recorded.
+- [x] `hcloud server list` returns 4 — **done 2026-07-15**
+- [ ] Snapshot `408787015` has a retention expiry set (open remainder of G1)
+- [ ] `expenses.md` has no `active` rows for non-existent resources (git-data `:14-16`
+      → `approved-not-billing`); web-2 `:17-19` reads fsn1
+- [ ] `AGENTS.core.md:26` names the no-rollback danger; rule id unchanged
+- [ ] Server limit raised (or the request filed and tracked)
+- [ ] Residency validation covers `var.location` + `var.registry_location`
+- [ ] Stock preflight shipped **or** explicitly dropped with the API finding recorded
 
 ## Open Risks
 
