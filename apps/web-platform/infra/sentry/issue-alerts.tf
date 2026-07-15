@@ -1218,6 +1218,34 @@ resource "sentry_issue_alert" "outbound_email_send_failure" {
 # valid values incl. 1h). Distinct frequency=22 avoids Sentry POST-time
 # exact-duplicate dedup (keyed on action-shape + frequency + match — see the auth
 # rules' comment above).
+#
+# ═══ WHY value = 2 AND NOT 3 (#6429) ═══
+#
+# `value` is compared with a STRICT `current_value > value` — `event_unique_user_frequency`
+# extends the same BaseEventFrequencyCondition as `event_frequency`, whose strict-`>`
+# semantics zot_mirror_fallback_rate documents below
+# (sentry/rules/conditions/event_frequency.py). So `value = 2` means ">2 distinct users",
+# i.e. it fires at **≥3** — the stated intent above. It shipped as `3`, which fires at ≥4:
+# a silent off-by-one against its own comment, and #6429's real defect. Do NOT "restore"
+# this to 3 to match the "≥3" prose — the prose is the intent, `2` is how you spell it.
+#
+# NOT the zot rule's defect (#6429's filed premise, falsified). That rule is
+# `event_frequency` — a count of EVENTS in one issue-group, which a high-cardinality
+# message breaks by minting a fresh group per event. This one counts DISTINCT USERS, and
+# its group is stack-keyed (reportSilentFallback routes an Error to captureException), so
+# the group is stable and the threshold is reachable. The discriminator is CAPTURE SHAPE,
+# not the condition name: message-event → grouped on the message; exception-event →
+# grouped on the stack. Guarded by sentry-zot-mirror-fallback-alert-op-contract.test.ts.
+#
+# Sentry also short-circuits the first event of a NEW group when value > 1 ("Assumes that
+# the first event in a group will always be below the threshold"). Harmless here: a
+# brand-new group has exactly one distinct user, already below 3.
+#
+# The corrected frequency-rule sweep (#6429's generalizable ask): this file has TWO
+# `event_frequency` rules — zot_mirror_fallback_rate (value = 0, the #6285 fix) and
+# web_terminal_boot_fatal (value = 1, reachable only because its shared `soleur-boot-emit`
+# group is always already hot) — plus THIS ONE `event_unique_user_frequency`. The issue's
+# "three event_frequency rules" was wrong on both the count and every line it cited.
 resource "sentry_issue_alert" "sandbox_startup_failure" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug
@@ -1230,7 +1258,7 @@ resource "sentry_issue_alert" "sandbox_startup_failure" {
     {
       event_unique_user_frequency = {
         comparison_type = "count"
-        value           = 3
+        value           = 2 # STRICT `>`: fires at ≥3 distinct tenants (#6429)
         interval        = "1h"
       }
     },
@@ -1457,7 +1485,8 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
 # terminal-block EXIT trap + the explicit hostscripts_incomplete emit, so the stage filter alone
 # selects fatal terminal-block failures (no separate level filter needed).
 #
-# GROUPING NOTE (mirrors zot_mirror_fallback_rate:1364): these events use the SHARED
+# GROUPING NOTE (mirrors the GROUPING paragraph of zot_mirror_fallback_rate above): these
+# events use the SHARED
 # `soleur-boot-emit` message ("soleur-cloud-init boot stage"; stage is a tag, not the message), so
 # they share ONE issue-group with routine boot stages — that group is effectively always active, so
 # event_frequency value=1 pages on the first event that MATCHES the fatal-stage filter. Over-loud in
