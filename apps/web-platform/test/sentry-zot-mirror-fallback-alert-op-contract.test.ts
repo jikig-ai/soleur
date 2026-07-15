@@ -44,12 +44,15 @@ function alarmFilterSet(): Set<string> {
   const resource = tf.slice(start);
   const filtersStart = resource.indexOf("filters_v2 = [");
   if (filtersStart === -1) throw new Error("filters_v2 block not found on zot_mirror_fallback_rate");
-  const filtersEnd = resource.indexOf("\n  ]", filtersStart);
-  // Same fail-loud rationale as soakFailQueries: a -1 here would slice to the end of the FILE,
-  // collecting every tagged_event of every OTHER alert resource below this one — silently
-  // inflating the "watched set" and turning the parity assertion into noise.
-  if (filtersEnd === -1) throw new Error("filters_v2 block is not closed as expected");
-  const block = resource.slice(filtersStart, filtersEnd);
+  // Indentation-tolerant for the same reason as soakFailQueries: a hard-coded "\n  ]" is
+  // coupled to `terraform fmt`'s current two-space output. A reindent would not return -1 —
+  // it would find the NEXT column-2 `]` (actions_v2's), silently widening the block. Harmless
+  // only by luck today (actions_v2 holds no tagged_event); a future quoted filter there would
+  // over-collect into the watched set and make this parity assertion noise.
+  const filtersRest = resource.slice(filtersStart);
+  const filtersEnd = filtersRest.search(/\n[ \t]*\]/);
+  if (filtersEnd === -1) throw new Error("filters_v2 block is not closed");
+  const block = filtersRest.slice(0, filtersEnd);
   const set = new Set<string>();
   const re = /tagged_event\s*=\s*\{[^}]*?key\s*=\s*"([^"]+)"[^}]*?value\s*=\s*"([^"]+)"[^}]*?\}/g;
   for (const m of block.matchAll(re)) set.add(`${m[1]}:${m[2]}`);
@@ -58,10 +61,20 @@ function alarmFilterSet(): Set<string> {
 
 // --- Derived extraction: the soak's FAIL set ---------------------------------
 //
-// Parses the `declare -A FAIL_QUERIES=( ... )` block. Scoping to the array block
-// (rather than the whole file) is structural, not stylistic: the script header
-// names all four signals in prose, so any whole-file assertion would stay GREEN
-// with every query deleted. A comment cannot live inside the array.
+// Parses the `declare -A FAIL_QUERIES=( ... )` block.
+//
+// What actually excludes the script's header prose is the REGEX SHAPE below
+// (`[key]='...'`), not the block scoping — the header names all four signal
+// literals, but in prose that the regex cannot match, so a whole-file scope
+// would yield 0 and go RED, not vacuously green. (An earlier version of this
+// comment claimed the opposite, and also claimed "a comment cannot live inside
+// the array" — bash accepts comments inside an array assignment. Both were
+// wrong, and crediting the scoping for safety it does not provide is what made
+// a fragile scope implementation look adequate.)
+//
+// The block scoping's real and load-bearing job is excluding SIBLING ARRAYS:
+// a `WARN_QUERIES` next door must not be counted as part of the FAIL set, or
+// this test reports coverage the script's summing loop does not have.
 function soakFailQueries(): Map<string, string> {
   const start = soak.indexOf("declare -A FAIL_QUERIES=(");
   // Fail LOUD on a missing/renamed block rather than silently widening. `indexOf` returns -1
@@ -70,9 +83,16 @@ function soakFailQueries(): Map<string, string> {
   // four signal literals, so the extraction could pass while the array is gone. That is the
   // vacuity this test exists to prevent, so it must not be reachable through the test itself.
   if (start === -1) throw new Error("FAIL_QUERIES array block not found in zot-soak-6122.sh");
-  const end = soak.indexOf("\n)", start);
-  if (end === -1) throw new Error("FAIL_QUERIES array block is not closed by a column-0 ')'");
-  const block = soak.slice(start, end);
+  // Stop at the FIRST closing paren at any indentation. A literal indexOf("\n)") does NOT
+  // merely risk -1 — if FAIL_QUERIES' own paren is indented, it SKIPS PAST IT and lands on
+  // the next column-0 paren, i.e. a SIBLING array's. The block then swallows both arrays and
+  // this test reports all four signals while the script's loop sums only the ones actually in
+  // FAIL_QUERIES. That is #6435 reintroduced THROUGH ITS OWN REGRESSION TEST, green all the
+  // way. Verified: the indexOf form extracts 4 from a 2-entry FAIL_QUERIES + 2-entry sibling.
+  const rest = soak.slice(start);
+  const end = rest.search(/\n[ \t]*\)/);
+  if (end === -1) throw new Error("FAIL_QUERIES array block is not closed");
+  const block = rest.slice(0, end);
   const out = new Map<string, string>();
   for (const m of block.matchAll(/^\s*\[[a-z_]+\]='([^']+)'/gm)) {
     const query = m[1];
@@ -106,6 +126,25 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     // and `registry: "zot-gate-degraded"` (the jq tag literal) are emit-only.
     expect(ciDeploy).toContain("registry_pull_event ghcr-fallback");
     expect(ciDeploy).toContain(`registry: "zot-gate-degraded"`);
+  });
+
+  // The soak's bare `stage:"..."` queries depend on the TAG KEY being literally `stage` in
+  // both boot emitters. Nothing else pins that key: the legs below pin each emit CALL form and
+  // the parity legs pin the query STRING, so renaming the key (stage -> boot_stage) while
+  // keeping the value literal leaves every other assertion GREEN — and the soak's stage:
+  // queries then match zero events FOREVER.
+  //
+  // That is a silent false-PASS route on an irreversible action, and unlike the registry:
+  // queries there is no canary: registry: shares its feature/op prefix with the ZOT_WEB/
+  // ZOT_INNGEST sample queries, so a broken prefix drives the sample to 0 and FAILs the soak.
+  // The stage: queries have no such self-validation, so the key is pinned here instead.
+  it("both boot emitters tag with the literal key `stage` (the soak's bare stage: queries depend on it)", () => {
+    // cloud-init.yml `_emit` -> tags:{stage,image_ref,host_id,detail}; emits app_ghcr_fallback.
+    expect(cloudInit).toContain('"tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s"}');
+    // soleur-host-bootstrap.sh `soleur-boot-emit` -> tags:{stage,host_id,region}; emits
+    // inngest_ghcr_fallback. A separate emitter that happens to share the no-feature/op gap.
+    const bootstrap = readFileSync(join(here, "../infra/soleur-host-bootstrap.sh"), "utf8");
+    expect(bootstrap).toContain('"tags":{"stage":"%s","host_id":"%s","region":"cloud-init"}');
   });
 
   it("cloud-init.yml emits both fresh-boot fallback stages (inngest + app-image)", () => {
