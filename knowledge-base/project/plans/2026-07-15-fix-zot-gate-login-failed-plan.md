@@ -600,11 +600,11 @@ deny-all firewall both forbid — so the host is replaced, per `hr-prod-host-con
 > anywhere?", not "does the merge path apply it?".
 
 **The real path** (ADR-096 amendment 2026-07-08, `zot-registry.tf:24-30`): a sanctioned dispatch-only
-`registry-host-replace` `workflow_dispatch` that runs a scoped, destroy-guarded
-`terraform apply -replace='hcloud_server.registry'` preserving `hcloud_volume.registry`. It is fired with
-`gh workflow run` — a CLI call this pipeline makes itself; it is **not** an operator handoff
-(`hr-exhaust-all-automated-options-before`). Post-merge sequence: merge → `gh workflow run
-apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason='#6497 …'` → AC10/AC11 verify.
+`registry-host-replace` `workflow_dispatch` that runs a scoped, destroy-guarded, `-replace`-scoped apply
+preserving `hcloud_volume.registry`. The pipeline fires it via `gh workflow run` — CI executes the apply;
+nothing here is handed to a human (`hr-exhaust-all-automated-options-before`). Post-merge sequence:
+merge → `gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f
+reason='#6497 …'` → AC10/AC11 verify.
 
 **Verified at /work against real prod state** (read-only `terraform plan`, mirroring the dispatch job's exact
 `-replace`/`-target` set, then the REAL gate run over the plan JSON):

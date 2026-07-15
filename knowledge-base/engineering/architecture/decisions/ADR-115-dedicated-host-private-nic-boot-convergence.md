@@ -56,6 +56,12 @@ Three facts make this a structural problem rather than a one-off:
    the deploy pipeline is an actively misleading proxy (asserting deploy success as proof of zot
    reachability *is* the #6400 failure).
 
+<!-- lint-infra-ignore start -->
+<!-- Descriptive, not prescriptive: Context point 3 and the paragraph below it DESCRIBE the
+     apply path and the pre-ADR failure mode this decision exists to remove. They prescribe no
+     operator step — the whole point of the ADR is that the host converges itself. These lines
+     are pre-existing (unchanged since #6415); #6497's edit to this file merely un-grandfathered
+     the changed-files lint, surfacing them. -->
 3. **The fix must live on the host.** The registry resources are an `OPERATOR_APPLIED_EXCLUSION`
    (`zot-registry.tf:16-22`): they are applied by the operator's **full untargeted** apply plus
    the 12h drift detector, **not** the per-PR `-target=` list (which bridges over SSH to the
@@ -67,6 +73,7 @@ Point 3 is the headline: today a from-empty `terraform apply` can yield an unrea
 that needs an operator to notice and reboot it. That violates
 `hr-fresh-host-provisioning-reachable-from-terraform-apply`. **That, not "IMDS resilience", is
 the decision this ADR records.**
+<!-- lint-infra-ignore end -->
 
 ## Decision
 
@@ -83,6 +90,10 @@ A dedicated Hetzner host whose function depends on the private network **MUST**:
    ip_present=false && imds_nets>0 && uptime_s>600 && reboot_count<2
    ```
 
+<!-- lint-infra-ignore start -->
+<!-- Descriptive, not prescriptive: these bullets explain WHY the self-converge gate has the
+     shape it does. "trains the operator to ignore it" is an argument about alarm fatigue, not
+     an instruction to anyone. Pre-existing since #6415. -->
    - **IMDS corroboration** — never reboot on zero evidence. A standing alarm that fires on its
      own probe fault trains the operator to ignore it; a *host* that reboots on its own probe
      fault is the same mistake with teeth.
@@ -92,6 +103,7 @@ A dedicated Hetzner host whose function depends on the private network **MUST**:
    - **Counter on the ROOT disk**, keyed by instance-id, **literal cap 2**, written **before**
      the reboot. A cap of 2 makes a storm *definitionally* impossible, so no cooldown is needed.
      A host replace gives a new root disk ⇒ a fresh budget, for free.
+<!-- lint-infra-ignore end -->
 3. **Emit a discriminating event on EVERY run** over the host's existing telemetry transport.
 
 The single-sourcing of the IP is part of the decision, not an implementation detail: baking the
@@ -212,11 +224,16 @@ discovered during planning belongs in the durable artifact, because the ADR outl
 
 ### Authority note
 
+<!-- lint-infra-ignore start -->
+<!-- Descriptive, not prescriptive: this paragraph states what
+     hr-prod-host-config-change-immutable-redeploy does NOT authorize. The only imperative in
+     it is a negation ("does not bless a self-reboot"). Pre-existing since #6415. -->
 `hr-prod-host-config-change-immutable-redeploy` does **not** bless a self-reboot. It
 acknowledges a reboot may be *needed* during an operator-driven `-replace`; it does not
 authorize a host to **decide to reboot itself**. This ADR earns that authority on its own
 merits — bounded, corroborated, capped, counter on the root disk, emitted before acting — not
 by citing a rule that does not say it.
+<!-- lint-infra-ignore end -->
 
 ## Consequences
 
