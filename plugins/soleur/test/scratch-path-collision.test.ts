@@ -27,9 +27,11 @@
 // race exists — say that it is accepted and why.
 //
 // DOCUMENTED LIMITATIONS (deliberate, not oversights):
-//   - Scope is `skills/*/SKILL.md`. Sibling prescriptive shell outside that glob is NOT
-//     scanned (e.g. `skills/incident/scripts/dry-run.sh`). Widening the glob is a separate
-//     change; a follow-up tracks it.
+//   - Scope is `skills/*/SKILL.md` PLUS `skills/*/scripts/*.sh`. The scripts glob is not
+//     optional garnish: `rclone/scripts/check_setup.sh` echoes the same install command
+//     `rclone/SKILL.md` documents, so a SKILL.md-only sweep silently drifts the two apart —
+//     that happened during this PR's own sweep. Prescriptive shell outside these two globs
+//     is still unscanned.
 //   - This cannot see paths an agent IMPROVISES at runtime — the ~30 ad-hoc `/tmp/*.log`
 //     paths in `.claude/logs/approvals.jsonl` were never written in any SKILL.md. Only a
 //     PreToolUse Bash hook can reach those; a follow-up tracks it.
@@ -41,6 +43,7 @@
 //     not an instruction to write there. It needs no waiver precisely because the write-verb
 //     anchor already excludes it. If such a value ever becomes a write target, the verb
 //     alternations will catch it.
+import { Glob } from "bun";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -150,9 +153,13 @@ describe("scratch-path-collision (#6486)", () => {
   });
 
   test("no skill prescribes a deterministic /tmp scratch path", () => {
-    const skills = discoverSkills();
-    // Non-vacuity: an empty glob would make every assertion below pass silently.
-    expect(skills.length).toBeGreaterThan(0);
+    const scripts = Array.from(new Glob("skills/*/scripts/*.sh").scanSync(PLUGIN_ROOT));
+    const skills = [...discoverSkills(), ...scripts];
+    // Non-vacuity: an empty glob would make every assertion below pass silently. Assert BOTH
+    // populations independently — a single `skills.length > 0` would stay green if the
+    // scripts glob silently resolved to nothing.
+    expect(discoverSkills().length).toBeGreaterThan(0);
+    expect(scripts.length).toBeGreaterThan(0);
 
     const offenders: string[] = [];
     for (const rel of skills) {

@@ -136,7 +136,11 @@ if [[ -z "$TOKEN" ]]; then
   exit 2
 fi
 
-HTTP_CODE=$(curl -sS -o /tmp/trigger-cron-resp.$$ -w '%{http_code}' \
+# mktemp, not $$: a PID is predictable and reused across concurrent runs in shared shells
+# (same reason token-efficiency-report.sh:36-56 rejected it). See ADR-009 Amendment.
+RESP=$(mktemp -t trigger-cron-resp.XXXXXXXX)
+trap 'rm -f "$RESP"' EXIT INT TERM
+HTTP_CODE=$(curl -sS -o "$RESP" -w '%{http_code}' \
   -X POST "$ROUTE_URL" \
   -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
