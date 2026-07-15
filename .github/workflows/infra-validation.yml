@@ -85,7 +85,22 @@ jobs:
           if [[ -f cloud-init.yml ]]; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
-            cloud-init schema -c cloud-init.yml
+            # cloud-init.yml is a Terraform templatefile(), so it is NOT a YAML document until
+            # rendered: a col-0 `%{ if ... ~}` directive is a YAML *directive indicator*, and the
+            # parser aborts on it ("while scanning a directive") before reading a single key.
+            # This step has therefore been validating nothing since the first col-0 directive
+            # landed (#6344, 2026-07-11) — it just had not re-run on main to show it. #6425's
+            # second directive pair surfaced it by moving the first error from :665 to :592.
+            #
+            # Strip the directive lines and validate the remainder. The `${...}` interpolations
+            # survive: they sit inside scalars, so they parse fine un-rendered. This checks the
+            # schema of everything that ISN'T the gate; the gates' RENDERED YAML validity is
+            # covered behind terraform by cloud-init-inngest-bootstrap.test.sh (AC5/AC7 both
+            # yaml.safe_load every render), which is the only authority that can see the `~}`
+            # whitespace trim. Anchored ^%\{ so an indented (broken) directive is NOT stripped —
+            # it stays visible to this parser rather than being hidden by its own guard.
+            grep -vE '^%\{' cloud-init.yml > /tmp/cloud-init.stripped.yml
+            cloud-init schema -c /tmp/cloud-init.stripped.yml
           else
             echo "No cloud-init.yml found, skipping"
           fi
@@ -306,6 +321,9 @@ jobs:
 
       - name: Run cutover-inngest.yml workflow tests
         run: bash apps/web-platform/infra/cutover-inngest-workflow.test.sh
+
+      - name: Run restart-inngest-server.yml self-trigger guard tests (#6425)
+        run: bash apps/web-platform/infra/restart-inngest-workflow-guard.test.sh
 
       - name: Run inngest-rls lockdown SQL shape guards
         run: bash apps/web-platform/infra/inngest-rls/inngest-rls.test.sh

@@ -142,6 +142,7 @@ if want_scripts; then
   run_suite "scripts/inngest-liveness-classify" bash scripts/inngest-liveness-classify.test.sh
   run_suite "scripts/inngest-restart-age-gate" bash scripts/inngest-restart-age-gate.test.sh
   run_suite "scripts/inngest-restart-poll-classify" bash scripts/inngest-restart-poll-classify.test.sh
+  run_suite "scripts/tunnel-connector-census" bash scripts/tunnel-connector-census.test.sh
   # Stock preflight gate (#6453). Registered HERE because nothing auto-discovers
   # tests/scripts/ — the bash *.test.sh glob further down does NOT include it, and
   # infra-validation.yml only lists apps/web-platform/infra/*.test.sh. Without this line

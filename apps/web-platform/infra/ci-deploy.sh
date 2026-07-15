@@ -148,7 +148,13 @@ resolve_host_id() {
   fi
   id=$(tr -d '[:space:]' < /etc/machine-id 2>/dev/null || true)
   if [[ -n "$id" ]]; then
-    printf 'machine-%s' "$id"
+    # HASHED, never raw: machine-id(5) says the value "should be considered confidential and
+    # must not be exposed in untrusted environments" — systemd's own guidance is to hash it
+    # per-application (sd_id128_get_machine_app_specific). This fallback now reaches an HTTP
+    # response body and journald -> Vector -> Better Stack (a third-party vendor), which the
+    # ci-deploy.sh original never did. Hashing is LOSSLESS here: host_id only ever needs to be
+    # STABLE and COMPARABLE (same-host vs different-host), never reversible.
+    printf 'machine-%s' "$(printf '%s' "$id" | sha256sum | cut -c1-12)"
     return 0
   fi
   return 1
