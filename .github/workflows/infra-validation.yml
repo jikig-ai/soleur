@@ -223,6 +223,9 @@ jobs:
       - name: Run registry boot-guard + disk-observability tests (#6240/#6244)
         run: bash apps/web-platform/infra/registry-boot-guard.test.sh
 
+      - name: Run registry private-NIC boot-converger tests (#6415)
+        run: bash apps/web-platform/infra/private-nic-guard.test.sh
+
       - name: Run deploy fan-out peer-list parity drift-guard
         run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
 

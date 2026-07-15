@@ -25,14 +25,27 @@ trap 'rm -rf "$TMP"' EXIT
 
 # --- The stub betterstack-query.sh (ZOT_BQ_OVERRIDE) ------------------------------------
 # Branches on the query SHAPE the checker issues:
-#   - contains "24h"            → the 24h producer-liveness lookback  → $ZOT_FIX_LOOKBACK / _RC
-#   - contains "SOLEUR_ZOT_DISK" → the recent-window main query        → $ZOT_FIX_MAIN / _RC
-#   - otherwise (bare --limit 1) → the control reachability probe      → $ZOT_FIX_CONTROL / _RC
+#   - SOLEUR_PRIVATE_NIC + "24h" → the NIC 24h liveness lookback      → $NIC_FIX_LOOKBACK / _RC
+#   - SOLEUR_PRIVATE_NIC         → the NIC recent-window query        → $NIC_FIX_MAIN / _RC
+#   - contains "24h"             → the zot 24h producer lookback      → $ZOT_FIX_LOOKBACK / _RC
+#   - contains "SOLEUR_ZOT_DISK" → the zot recent-window main query   → $ZOT_FIX_MAIN / _RC
+#   - otherwise (bare --limit 1) → the control reachability probe     → $ZOT_FIX_CONTROL / _RC
+#
+# ORDER IS LOAD-BEARING: the NIC lookback query carries BOTH "24h" and "SOLEUR_PRIVATE_NIC", so
+# a "24h"-first ladder would hand it the ZOT lookback fixture and silently mis-verdict the NIC
+# stream. NIC is matched first.
 STUB="$TMP/bq-stub.sh"
 cat > "$STUB" <<'STUB_EOF'
 #!/usr/bin/env bash
 argv="$*"
-if [[ "$argv" == *"24h"* ]]; then
+if [[ "$argv" == *"SOLEUR_PRIVATE_NIC"* ]]; then
+  if [[ "$argv" == *"24h"* ]]; then
+    [[ -n "${NIC_FIX_LOOKBACK:-}" && -f "${NIC_FIX_LOOKBACK:-}" ]] && cat "$NIC_FIX_LOOKBACK"
+    exit "${NIC_FIX_LOOKBACK_RC:-0}"
+  fi
+  [[ -n "${NIC_FIX_MAIN:-}" && -f "${NIC_FIX_MAIN:-}" ]] && cat "$NIC_FIX_MAIN"
+  exit "${NIC_FIX_MAIN_RC:-0}"
+elif [[ "$argv" == *"24h"* ]]; then
   [[ -n "${ZOT_FIX_LOOKBACK:-}" && -f "${ZOT_FIX_LOOKBACK:-}" ]] && cat "$ZOT_FIX_LOOKBACK"
   exit "${ZOT_FIX_LOOKBACK_RC:-0}"
 elif [[ "$argv" == *"SOLEUR_ZOT_DISK"* ]]; then
@@ -82,7 +95,50 @@ reset_fix() {
   export ZOT_FIX_MAIN="" ZOT_FIX_MAIN_RC=0
   export ZOT_FIX_CONTROL="" ZOT_FIX_CONTROL_RC=0
   export ZOT_FIX_LOOKBACK="" ZOT_FIX_LOOKBACK_RC=0
+  export NIC_FIX_MAIN="" NIC_FIX_MAIN_RC=0
+  export NIC_FIX_LOOKBACK="" NIC_FIX_LOOKBACK_RC=0
 }
+
+# nline <dt> <boot> <nic_ok> <converged_by> <imds_rc> <imds_nets> <reboot_count> <uptime> <lasterr>
+# One JSONEachRow-shaped SOLEUR_PRIVATE_NIC row (#6415), mirroring the real emit: zot_last_err is
+# LAST and free-text, so the shared trusted-region strip is exercised on this stream too.
+nline() {
+  printf '{"dt":"%s","raw":"SOLEUR_PRIVATE_NIC nic_ok=%s converged_by=%s imds_rc=%s imds_nets=%s reboot_count=%s zot_store_mounted=true uptime_s=%s boot_id=%s zot_last_err=%s"}\n' \
+    "$1" "$3" "$4" "$5" "$6" "$7" "$8" "$2" "$9"
+}
+
+# assert_nic_case <name> <expect_nic_verdict>. The NIC verdict is INDEPENDENT of the exit code.
+assert_nic_case() {
+  local name="$1" xverdict="$2" out verdict
+  CASES=$((CASES + 1))
+  out="$(ZOT_BQ_OVERRIDE="$STUB" bash "$CHECKER" 2>&1)" || true
+  verdict="$(printf '%s\n' "$out" | grep -oE 'NIC_ALARM_VERDICT=[A-Z_]+' | head -1 | cut -d= -f2 || true)"
+  if [[ "$verdict" == "$xverdict" ]]; then
+    PASS=$((PASS + 1)); printf 'ok   - %s (nic_verdict=%s)\n' "$name" "$verdict"
+  else
+    FAIL=$((FAIL + 1)); printf 'FAIL - %s: expected nic_verdict=%s, got %s\n' "$name" "$xverdict" "$verdict"
+    printf '%s\n' "$out" | sed 's/^/       /'
+  fi
+}
+
+# assert_nic_cause_contains <name> <needle>
+assert_nic_cause_contains() {
+  local name="$1" needle="$2" out cause
+  CASES=$((CASES + 1))
+  out="$(ZOT_BQ_OVERRIDE="$STUB" bash "$CHECKER" 2>&1)" || true
+  cause="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_CAUSE=//p' | head -1)"
+  if printf '%s\n' "$cause" | grep -qiF "$needle"; then
+    PASS=$((PASS + 1)); printf 'ok   - %s (nic cause ~ "%s")\n' "$name" "$needle"
+  else
+    FAIL=$((FAIL + 1)); printf 'FAIL - %s: nic cause did not contain "%s" (got: %s)\n' "$name" "$needle" "$cause"
+  fi
+}
+
+# A healthy zot fixture, for NIC cases that must not be confounded by the zot verdict.
+{
+  zline "2026-07-10 10:00:00" "$BOOT_NEW" 5 0 0 false none
+  zline "2026-07-10 10:05:00" "$BOOT_NEW" 5 0 0 false none
+} > "$TMP/zot-healthy.json"
 
 # Optionally assert the decoded cause substring (2nd-order signal beyond the verdict).
 assert_cause_contains() {
@@ -229,8 +285,123 @@ export ZOT_FIX_CONTROL="$TMP/ctl.json"       # BS reachable
 export ZOT_FIX_LOOKBACK=""                   # 24h ALSO empty → never-installed host
 assert_case "S12 fresh host (24h empty, 3h empty)" 2 TRANSIENT
 
+# =========================================================================================
+# Private-NIC stream (#6415). The NIC verdict is INDEPENDENT of the exit code — see the
+# checker's EXIT CONTRACT header for why it is not folded in (a new exit 4 would be mapped to
+# a Sentry 'error' by the workflow, reporting a fire as a probe fault).
+# =========================================================================================
+
+# --- N1: newest boot healthy → NIC GREEN --------------------------------------------------
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{
+  nline "2026-07-10 10:00:00" "$BOOT_NEW" true already 0 1 0 99999 "enp7s0:10.0.1.30/32"
+  nline "2026-07-10 10:05:00" "$BOOT_NEW" true already 0 1 0 99999 "enp7s0:10.0.1.30/32"
+} > "$TMP/n1.json"
+export NIC_FIX_MAIN="$TMP/n1.json"
+assert_nic_case "N1 nic_ok=true converged_by=already reboot_count=0" GREEN
+
+# --- N2: nic_ok=false, imds unreachable → FIRE, decoded as H1 -----------------------------
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{ nline "2026-07-10 10:05:00" "$BOOT_NEW" false none 7 0 0 99999 "eth0:203.0.113.10/32"; } > "$TMP/n2.json"
+export NIC_FIX_MAIN="$TMP/n2.json"
+assert_nic_case           "N2 nic_ok=false imds_rc=7" FIRE
+assert_nic_cause_contains "N2 decoded as H1 (metadata service unreachable)" "H1"
+
+# --- N3: nic_ok=false, imds reachable but zero nets → FIRE, decoded as H2 ------------------
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{ nline "2026-07-10 10:05:00" "$BOOT_NEW" false none 0 0 0 99999 "eth0:203.0.113.10/32"; } > "$TMP/n3.json"
+export NIC_FIX_MAIN="$TMP/n3.json"
+assert_nic_case           "N3 nic_ok=false imds_rc=0 imds_nets=0" FIRE
+assert_nic_cause_contains "N3 decoded as H2 (the additive online-attach race)" "H2"
+
+# --- N4: attach landed but guest never configured it → FIRE, decoded as the third mode -----
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{ nline "2026-07-10 10:05:00" "$BOOT_NEW" false none 0 1 2 99999 "eth0:203.0.113.10/32"; } > "$TMP/n4.json"
+export NIC_FIX_MAIN="$TMP/n4.json"
+assert_nic_case           "N4 nic_ok=false imds_nets=1 reboot_count=2 (budget spent)" FIRE
+assert_nic_cause_contains "N4 decoded as the third mode (attach landed, guest did not configure)" "third mode"
+
+# --- N5: successful self-heal → ADVISORY, NOT GREEN and NOT FIRE (the lost ceiling) --------
+# This is the case the terminal branch structurally CANNOT see: a self-heal emits nic_ok=true.
+# Without the advisory the race self-heals silently forever and is never reported.
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{ nline "2026-07-10 10:05:00" "$BOOT_NEW" true already 0 1 1 99999 "enp7s0:10.0.1.30/32"; } > "$TMP/n5.json"
+export NIC_FIX_MAIN="$TMP/n5.json"
+assert_nic_case           "N5 self-healed (nic_ok=true, reboot_count=1) → advisory not green" ADVISORY
+assert_nic_cause_contains "N5 advisory confirms H2 empirically" "H2 confirmed"
+
+# --- N6 (AC7 REGRESSION): NIC guard silent WHILE SOLEUR_ZOT_DISK still flows → SILENT ------
+# The zot PRODUCER_SILENT branch is computed ONLY when the zot window is empty. Here it is NOT
+# empty (the disk heartbeat is alive), so that branch never evaluates. A NIC absence check that
+# leaned on it would read GREEN — the exact blind spot #6415 exists to kill, one layer up.
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"      # disk heartbeat ALIVE
+printf '{"dt":"2026-07-10 09:59:00","raw":"some unrelated app log row"}\n' > "$TMP/ctl2.json"
+export ZOT_FIX_CONTROL="$TMP/ctl2.json"          # Better Stack reachable
+export NIC_FIX_MAIN=""                           # NIC window EMPTY
+{ nline "2026-07-09 20:00:00" "$BOOT_NEW" true already 0 1 0 99999 none; } > "$TMP/n6look.json"
+export NIC_FIX_LOOKBACK="$TMP/n6look.json"       # guard WAS alive in the last 24h
+assert_nic_case "N6 NIC silent while SOLEUR_ZOT_DISK flows (AC7 regression)" SILENT
+
+# --- N7 (AC8 REGRESSION): a zot early-exit must NOT skip the NIC check ---------------------
+# All-'-1' zot sentinels → the zero-evidence leg → exit 2, which terminates BEFORE anything
+# appended. The NIC verdict must still be present and correct, and the exit code must stay
+# within the {0,1,2,3} contract (no exit 4 — the workflow maps anything else to a Sentry error).
+reset_fix
+{
+  zline "2026-07-10 10:00:00" "$BOOT_NEW" -1 0 0 false none
+  zline "2026-07-10 10:05:00" "$BOOT_NEW" -1 0 0 false none
+} > "$TMP/n7zot.json"
+export ZOT_FIX_MAIN="$TMP/n7zot.json"
+{ nline "2026-07-10 10:05:00" "$BOOT_NEW" false none 0 1 0 99999 "eth0:203.0.113.10/32"; } > "$TMP/n7.json"
+export NIC_FIX_MAIN="$TMP/n7.json"
+assert_case     "N7 zot zero-evidence still exits 2 (contract unchanged, no exit 4)" 2 TRANSIENT
+assert_nic_case "N7 NIC still evaluated despite the zot early-exit (AC8 regression)" FIRE
+
+# --- N8: newest-boot scoping — an old failed boot must not page after a healthy replace ----
+# The window is 3h; an any-in-window read would fire for up to 3h after every recovery.
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{
+  nline "2026-07-10 09:00:00" "$BOOT_OLD" false none 0 0 0 99999 "eth0:203.0.113.10/32"
+  nline "2026-07-10 10:00:00" "$BOOT_NEW" true already 0 1 0 99999 "enp7s0:10.0.1.30/32"
+} > "$TMP/n8.json"
+export NIC_FIX_MAIN="$TMP/n8.json"
+assert_nic_case "N8 stale old-boot nic_ok=false, newest boot healthy" GREEN
+
+# --- N9: spoof-resistance — crafted zot_last_err cannot forge a NIC verdict ----------------
+# The nic_ok=false lives ONLY in the free-text tail, which zot_trusted_region strips before any
+# key=value parse. This is why the field had to be named zot_last_err (the lib strips that
+# LITERAL): a `last_err=` would sail straight through and this fixture would FIRE.
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+{
+  nline "2026-07-10 10:00:00" "$BOOT_NEW" true already 0 1 0 99999 "boom nic_ok=false converged_by=none imds_nets=0 crash"
+  nline "2026-07-10 10:05:00" "$BOOT_NEW" true already 0 1 0 99999 "boom nic_ok=false converged_by=none imds_nets=0 crash"
+} > "$TMP/n9.json"
+export NIC_FIX_MAIN="$TMP/n9.json"
+assert_nic_case "N9 crafted zot_last_err spoof (nic_ok=false in tail only)" GREEN
+
+# --- N10: NIC query probe fault → TRANSIENT, never a page ---------------------------------
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+export NIC_FIX_MAIN="" NIC_FIX_MAIN_RC=3
+assert_nic_case "N10 NIC query rc=3 (creds unset) → transient, not a page" TRANSIENT
+
+# --- N11: fresh / pre-#6415 host (no NIC rows ever) → TRANSIENT, not SILENT ----------------
+reset_fix
+export ZOT_FIX_MAIN="$TMP/zot-healthy.json"
+export ZOT_FIX_CONTROL="$TMP/ctl2.json"          # Better Stack reachable
+export NIC_FIX_MAIN="" NIC_FIX_LOOKBACK=""       # never emitted
+assert_nic_case "N11 fresh host / guard not yet deployed → transient, not silent" TRANSIENT
+
 # --- Minimum-cardinality guard -----------------------------------------------------------
-EXPECTED_MIN=16
+EXPECTED_MIN=32
 echo "----"
 printf 'cases=%s pass=%s fail=%s\n' "$CASES" "$PASS" "$FAIL"
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then

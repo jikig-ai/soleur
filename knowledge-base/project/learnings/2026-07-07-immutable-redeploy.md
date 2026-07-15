@@ -42,9 +42,34 @@ the additive online-attach can land after cloud-init's network stage. Symptom (o
 peer on the private net, the new host is **100% ping loss + TCP connection timeout** at its private IP,
 while `hcloud server describe` shows it running and attached, and *other* freshly-created hosts on the
 same net are reachable. A **soft reboot** brings the NIC up (cloud-init re-runs the network stage with
-the attachment present). **Always verify private-net reachability after a `-replace`** — don't trust the
-control-plane "attached" state. A down container gives connection *refused*; an unconfigured NIC gives
+the attachment present). A down container gives connection *refused*; an unconfigured NIC gives
 *timeout* + ping loss — use that to distinguish.
+
+> **AUTOMATED for the registry host as of 2026-07-15 (#6415 / ADR-113).** The instruction this
+> section used to carry — *"always verify private-net reachability after a `-replace`"* — was an
+> **operator-memory dependency**, and it failed exactly as you would expect: #6400 is this same
+> sharp edge, unnoticed for **~14 days** because nobody remembered to check and no signal could
+> tell them. Remembering is not a control.
+>
+> The registry host now converges its own private NIC (`soleur-private-nic-guard.sh`, every 5 min
+> + at boot) and emits `SOLEUR_PRIVATE_NIC` on every run, which
+> `scripts/zot-restart-loop-alarm.sh` turns into a deduped `action-required` issue. **Do not
+> hand-verify the registry after a `-replace`** — read the event instead (no SSH):
+>
+> ```
+> doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+>   --since 30m --grep SOLEUR_PRIVATE_NIC --limit 20
+> ```
+>
+> `converged_by=already` ⇒ no race on this boot; `converged_by=reboot` / `reboot_count>0` ⇒ the
+> race is real and the guard healed it (it also files an advisory issue, because a successful
+> self-heal emits `nic_ok=true` and would otherwise be invisible).
+>
+> **Still manual for `git-data` and `inngest`** — the guard is registry-only. ADR-113 carries a
+> normative blocker: a reboot primitive must not ship to a host whose storage unlock lives in
+> `runcmd` without a reboot-safe equivalent, and git-data's `luksOpen` does (no `crypttab`,
+> fstab `nofail`), so a reboot would silently unmount the store. For those two hosts the
+> verify-after-`-replace` instruction above still stands.
 
 ## Sharp edge 3 — watch the store volume, and the diagnosis path
 
