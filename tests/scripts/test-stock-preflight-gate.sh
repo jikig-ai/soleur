@@ -223,6 +223,30 @@ out=$(stock_preflight_gate "$p" 2>&1); rc=$?
 [[ "$rc" -eq 0 ]] && pass || fail "T10: a no-op host must NOT be preflighted (unfiltered gate would abort). rc=$rc out=$out"
 
 # ---------------------------------------------------------------------------
+# T10b — the warm-standby tine is WEB-2-SPECIFIC and must not be offered elsewhere.
+# apply_target=warm-standby targets ONLY hcloud_server_network.web["web-2"],
+# hcloud_volume.workspaces["web-2"] and hcloud_volume_attachment.workspaces["web-2"]
+# (apply-web-platform-infra.yml:791-796). Suggesting it on an inngest/registry/git-data
+# abort points the operator at a dispatch that does nothing for their host — misdirection
+# in the one message they read while a prod recreate is blocked. The #6463 tine, by
+# contrast, is generic and MUST survive on every path.
+# ---------------------------------------------------------------------------
+FETCH_MODE=ok
+p=$(plan_with 'hcloud_server.registry' '["delete","create"]' alpha33 eu-b)
+out=$(stock_preflight_gate "$p" 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T10b: an unorderable registry recreate must abort, got $rc"
+grep -q "warm-standby" <<<"$out" && fail "T10b: warm-standby is web-2-only; offering it on the registry path misdirects the operator" || pass
+grep -q "#6463" <<<"$out" && pass || fail "T10b: the generic #6463 tine must survive on non-web-2 paths"
+grep -q "NOT orderable in 'eu-b'" <<<"$out" && pass || fail "T10b: the stock-miss abort itself must still fire"
+
+# T10c — web-2 KEEPS the tine when routed through the gate (guards over-suppression:
+# a fix that drops the tine everywhere would satisfy T10b while breaking T2's contract).
+p=$(plan_with 'hcloud_server.web["web-2"]' '["delete","create"]' alpha33 eu-b)
+out=$(stock_preflight_gate "$p" 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T10c: an unorderable web-2 recreate must abort, got $rc"
+grep -q "warm-standby" <<<"$out" && pass || fail "T10c: web-2 MUST still get the free-repair tine through the gate path"
+
+# ---------------------------------------------------------------------------
 # T11 — no server create planned => rc 0 (out of scope, not fail-closed)
 # ---------------------------------------------------------------------------
 FETCH_MODE=ok

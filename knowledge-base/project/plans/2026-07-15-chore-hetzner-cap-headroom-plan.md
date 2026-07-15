@@ -579,9 +579,23 @@ bound "no bypass" to the *new* step anyway).
       (mirroring `terraform-target-parity.test.ts:81`) so an exclusion is **declared**,
       not silently skipped — and so a future target auto-enrolls.
       **This is what prevents a 5th dispatch path shipping without the gate.**
-- [ ] **AC4** *(folded from old AC4 — self-maintaining, no rotting baseline)* No bypass
+- [x] **AC4** *(folded from old AC4 — self-maintaining, no rotting baseline)* No bypass
       introduced by this PR:
-      `git diff origin/main -- .github/workflows/apply-web-platform-infra.yml | grep -c '^+.*ack-destroy'` == 0.
+      `git diff origin/main -- .github/workflows/apply-web-platform-infra.yml | grep '^+' | grep -F 'ack-destroy' | grep -vE '^\+\s*(#|echo )' | wc -l` == **0**.
+
+      > **Corrected at /work (2026-07-15) — the plan-quoted command was self-contradictory.**
+      > The original bare-token form (`grep -c '^+.*ack-destroy'` == 0) is unsatisfiable
+      > *given this plan's own Phase 2.3*, which mandates the sibling idiom "NO `[ack-destroy]`
+      > bypass on this path" in each new step's abort message (matching `:1775`, `:1613`,
+      > `:2170`). A bare-token grep cannot tell "introduces a bypass" from "declares there is
+      > none" — it scored **10** against a diff that adds zero bypasses, all 10 being `echo`
+      > prose. Anchored instead on the **syntactic construct** a real bypass requires (a
+      > conditional on `$HEAD_MSG`, the file's only true bypass at `:465`), excluding comment
+      > and `echo` prose. Mutation-proven at /work: injecting
+      > `if [[ "$HEAD_MSG" =~ \[ack-destroy\] ]]` scores **1**; the real diff scores **0**.
+      > Same class as `hr-when-a-plan-specifies-relative-paths-e-g` (plan authoritative for
+      > intent, never for the literal command) and the documented
+      > "grep-assertion-over-script-body false-matches its own comments" learning.
 - [ ] **AC5** `cd apps/web-platform/infra && terraform validate` passes, **and** a
       `terraform plan` with the live `hel1` values does not error on the new validations.
 - [ ] **AC6** `python3 scripts/lint-agents-rule-budget.py` → **exit 0** (it already enforces

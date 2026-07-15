@@ -131,7 +131,18 @@ stock_preflight() {
   # private-NIC or /workspaces-volume repair is NOT a recreate and needs NO stock. That is how
   # web-2's private IP was restored 2026-07-13 without recreating it. Omitting this tine funnels
   # a free repair into #6463 (a cost/HA escalation) — the opposite of the intent.
-  echo "::error::  - If you only need the private NIC or the /workspaces volume re-attached, this is NOT a recreate: dispatch apply_target=warm-standby (additive, no destroy, no stock required). See apply-web-platform-infra.yml:451." >&2
+  #
+  # ...but it is WEB-2-SPECIFIC: apply_target=warm-standby targets hcloud_server_network.web
+  # ["web-2"], hcloud_volume.workspaces["web-2"] and hcloud_volume_attachment.workspaces
+  # ["web-2"] and NOTHING else (apply-web-platform-infra.yml:791-796). Offering it on the
+  # inngest/registry/git-data aborts would point an operator at a dispatch that does nothing
+  # for their host — misdirection in the one message they read during a prod abort. So the
+  # gate suppresses it for any other address. _STOCK_TINE_ADDR is set per-address by
+  # stock_preflight_gate; when UNSET (a direct operator probe — the plan's
+  # discoverability_test) the tine stands, because web-2 is that probe's documented subject.
+  if [[ -z "${_STOCK_TINE_ADDR+x}" || "${_STOCK_TINE_ADDR}" == 'hcloud_server.web["web-2"]' ]]; then
+    echo "::error::  - If you only need the private NIC or the /workspaces volume re-attached, this is NOT a recreate: dispatch apply_target=warm-standby (additive, no destroy, no stock required). See apply-web-platform-infra.yml:451." >&2
+  fi
   echo "::error::  - If the host genuinely must be reborn: see #6463 (type/DC change is an operator cost/HA decision)." >&2
   echo "::error::  - Stock is time-varying (cx33 went orderable->nowhere in ~3h on 2026-07-15) — re-run later." >&2
   echo "::error::  Do NOT bypass." >&2
@@ -184,7 +195,8 @@ stock_preflight_gate() {
       rc=1
       continue
     fi
-    if ! stock_preflight "$stype" "$sloc"; then
+    # _STOCK_TINE_ADDR scopes the web-2-only warm-standby suggestion to web-2's address.
+    if ! _STOCK_TINE_ADDR="$addr" stock_preflight "$stype" "$sloc"; then
       echo "::error::  ...while preflighting ${addr} (${stype} @ ${sloc})." >&2
       rc=1
     fi
