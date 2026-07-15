@@ -53,7 +53,25 @@ locals {
   registry_arch   = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"
   zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64@sha256:c3fc47782d98b731d5928a24182b495e28cc92f9dcf1d5317f7dbd632e10bf30"
   zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64@sha256:073f30d99fbdbcd8869334231c9ca45c75e535e4bdc6e28cc8a1541abe7a3f71"
-  zot_image       = local.registry_arch == "arm64" ? local.zot_image_arm64 : local.zot_image_amd64
+
+  # zot's container memory cap, DERIVED from the host it will actually run on (ADR-062:
+  # cap = host RAM − ~1024m for cron+doppler+sshd+OS). It was previously a hardcoded
+  # `7168m` literal in cloud-init-registry.yml, with NOTHING tying it to
+  # var.registry_server_type — the same missing-data-edge shape as the htpasswd bug this
+  # host's replace_triggered_by exists to fix (#6497), and just as silent. Switching the
+  # var to a 4 GB type would have left a 7168m cap on a 4096m host: the cgroup limit can
+  # never bind, so zot is free to take the host down instead of being contained — which is
+  # precisely the uncapped-on-4GB condition of the #6288 restart-loop. Deriving it means
+  # the cap cannot disagree with the host, whatever the var says.
+  #
+  # `memory` is GB from the live catalog, so the value tracks Hetzner rather than a map
+  # that rots. It is also a phantom-type tripwire: #6288 set this var to `cx32`, a type
+  # that does not exist, and the apply DESTROYED the registry host before failing
+  # `server type cx32 not found` on the create. This data source resolves at PLAN time, so
+  # a nonexistent type now fails before anything is destroyed.
+  registry_host_reserve_mb = 1024
+  registry_memory_cap_mb   = data.hcloud_server_type.registry.memory * 1024 - local.registry_host_reserve_mb
+  zot_image                = local.registry_arch == "arm64" ? local.zot_image_arm64 : local.zot_image_amd64
   # Doppler CLI (v3.75.3) per-arch SHA256 for the cloud-init download (arm64 / amd64).
   doppler_sha256 = local.registry_arch == "arm64" ? "f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143" : "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
 
@@ -89,6 +107,14 @@ locals {
 # Without it a rotation silently diverges the host from Doppler and every pull login is
 # rejected forever, with no signal saying why — which is exactly what #6497 / Sentry
 # WEB-PLATFORM-5B was. Mirrors random_password.git_data_luks.
+# The registry host's server type, read from the live Hetzner catalog so local.registry_
+# memory_cap_mb tracks the real host instead of a hand-maintained type→RAM map. Read-only;
+# creates nothing. Resolves at PLAN time, which is what makes it a phantom-type tripwire
+# (see the local's comment: #6288's `cx32` destroyed a host before failing on the create).
+data "hcloud_server_type" "registry" {
+  name = var.registry_server_type
+}
+
 resource "random_password" "zot_pull" {
   length  = 40
   special = false
@@ -271,6 +297,12 @@ resource "hcloud_server" "registry" {
     # Host arch (arm64/amd64) → the matching Doppler CLI release build + its checksum.
     doppler_arch   = local.registry_arch
     doppler_sha256 = local.doppler_sha256
+    # zot's cgroup memory cap, derived from THIS host's real RAM (see local.registry_
+    # memory_cap_mb). Baked into user_data on purpose: that gives Terraform the data edge
+    # the hardcoded literal never had, so a server_type change re-renders user_data and
+    # re-bakes a matching cap on the replaced host, in the same apply. Non-secret (a
+    # number), same class as zot_image.
+    zot_memory_cap_mb = local.registry_memory_cap_mb
     # Disk-health heartbeat: the host pings this ONLY while /var/lib/zot is under 85% used, so
     # a filling store (or a down host / broken cron) alerts via Better Stack absence — no SSH,
     # no dashboard-eyeballing (hr-no-dashboard-eyeball-pull-data-yourself). Not a secret (a bare
