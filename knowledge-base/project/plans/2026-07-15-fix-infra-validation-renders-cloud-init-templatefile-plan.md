@@ -396,7 +396,7 @@ Trimmed at plan-review from 16 to 11 (AC1-AC10 pre-merge + AC11 post-merge). Eve
 
 ### Post-merge
 
-- [ ] **AC11** — follow-up issues filed and linked (Non-Goals).
+- [x] **AC11** — follow-up issues filed and linked (Non-Goals). — **#6480** (make `infra-validate-required` a real required check — the half of #6446 this PR does not fix). Non-Goals 2 (N≥2 bool combinatorics) and 3 (the `cloud-init-inngest-bootstrap.test.sh` hardcoded map) are self-reporting rather than filed: the script **emits the bool count** each run, so N≥2 surfaces in the log, and the AC7 tripwire is pre-existing + advisory. Non-Goal 4 (#6448) and 5 (#6415/#6400) already have issues.
 
 **Cut at plan-review, with reasons** (recorded so they are not silently re-added): the step-ordering / `terraform_wrapper` / `continue-on-error` AC (ordering is *proven by the step working* in AC1+AC10 — a corrupted stdout reds the decode); "no file except X modified" (scope policing, duplicates Non-Goal 6, and diff review does it); the sibling-suite AC (**demoted to a Phase-3 step** — the three suites are verified BASELINE PASS, and `run-all.sh`/CI is what enforces them); and the two ACs that died with the `render_ci()` refactor.
 
@@ -457,7 +457,9 @@ Recorded so cut scope is not silently re-added, and so the one rejection is audi
 
 ## Non-Goals (each gets a tracking issue — a deferral without one is invisible)
 
-1. **Flipping the ruleset to make `infra-validate-required` required.** The aggregator job itself **ships here** (Phase 3) — only the `ruleset-ci-required.tf` entry + `terraform apply` defer, because that is an admin/apply action, not a code change. Shipping the aggregator now means the follow-up is a one-line ruleset edit rather than a second structural edit to the same workflow. → **file issue**
+1. **Making `infra-validate-required` an actual required check.** The aggregator job itself **ships here** (Phase 3); the flip is deferred. → **filed as #6480**
+
+   > *Corrected at review — the plan was wrong about the cost, and in a way that would have wedged the repo.* The draft called the flip "a one-line ruleset edit... an admin/apply action, not a code change". Four independent review agents falsified that. `if: always()` is a JOB-level condition: this workflow keeps a workflow-level `paths:` filter and has no `merge_group:` trigger, so a required context here would **never post** on a non-infra PR and would sit at "Expected — Waiting" forever. The precedent the plan cited, `tenant-integration-required`, is the *counter-example*: that workflow **dropped its `paths:` filter** precisely so its always-run gate reports on every PR. Worse, `deploy-script-tests` (8-min docker build) and `check-secrets` carry no `needs:`/`if:`, so dropping `paths:` without first gating them on `detect-changes` puts 8 minutes on every docs-only PR. The real scope is a workflow restructure + ruleset + `required-checks.txt` registration — see #6480. The aggregator's comment has been rewritten to say so; as drafted it was a booby trap that read as a green light.
 2. **N ≥ 2 bool combinatorics.** all-true/all-false covers 2 of 2^N. Complete for today's corpus (N=1, verified); a documented narrowing if that changes. → **file issue**
 3. **The hardcoded stub map in `cloud-init-inngest-bootstrap.test.sh`'s AC7 leg.** Pre-existing; it will false-red that *advisory suite* when someone adds a templatefile var to `server.tf`. My draft refactored it; plan-review cut that as scope creep (my own text concedes the tripwire is "acceptable in an advisory test"). The shared script is available to it later. → **file issue**
 4. **#6448** (docker-daemon.json insecure-registries drift, "fails SILENT") — explicitly out of scope. This plan is designed to *help* it, not block it: when #6448 converts `docker-daemon.json` to a `templatefile()`, discovery covers it automatically (proven by simulation, T10).

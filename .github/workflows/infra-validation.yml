@@ -183,7 +183,9 @@ jobs:
   # therefore NOT a one-line ruleset edit — the prerequisites are: drop `paths:` here
   # (keep the heavy matrix gated on `detect-changes`), add `merge_group:`, register the
   # context in ruleset-ci-required.tf AND scripts/required-checks.txt (bot PRs block
-  # otherwise). Tracked as a follow-up.
+  # otherwise). And `deploy-script-tests` + `check-secrets` currently have NO
+  # `needs:`/`if:`, so dropping `paths:` without gating them on `detect-changes` puts
+  # an 8-minute docker build on every docs-only PR. Tracked in #6480.
   infra-validate-required:
     name: infra-validate-required
     needs: [detect-changes, validate]
