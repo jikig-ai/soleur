@@ -48,7 +48,9 @@ never been runnable.
   inventory, restoring the probe-host option with zero vendor dependency.
 - **G2** — Reconcile the phantom git-data ledger rows and mark the dead
   `git-data-host-replace` path as not-yet-runnable.
-- **G3** — Raise the account server limit to 10 (need is 6; a limit is free).
+- **G3** — Raise the account server limit to 10. **Rationale: probe/scratch hosts only** —
+  not git-data (stock-blocked: cax11 is orderable in 0 EU DCs) and not web-3 (births via an
+  operator-local apply, outside CI). A limit is free (Hetzner bills per running server).
 - **G4** — Amend `hr-prod-host-config-change-immutable-redeploy` to name the
   no-rollback danger of `-replace`.
 - **G5** — Add a **stock** preflight to the existing destroy-guard steps, if a
@@ -61,20 +63,22 @@ never been runnable.
 - **A cap-headroom preflight.** Explicitly dropped — it guards a non-existent
   capability and would fail every recreate today. (Operator originally selected it;
   reversed with reasoning in the brainstorm's Decision 3.)
-- **Building durable automation for the Console limit-raise.** Not production-safe
-  (OAuth + MFA + probable Turnstile, no precedent) and negative ROI for a once-ever
-  action. Routed to `ops-provisioner` as a **one-shot execution** instead.
+- **Building durable automation for the Console limit-raise.** A real browser attempt hit
+  a `/_ray/pow` proof-of-work gate returning 429, with no Console credentials anywhere and
+  no Hetzner session in the persistent profile. Negative ROI for a once-ever action. The
+  operator filed it directly on 2026-07-15.
 - **Blue-green / add-drain-remove.** Warrants its own ADR; deferred.
-- **git-data birth.** Gated behind the cap **and** #6416 **and** ADR-115's
-  `luksOpen` blocker; GA trigger #5274 is "Post-MVP / Later".
+- **git-data birth.** Blocked by **stock** above all (cax11 → 0 of 3 EU DCs, so it cannot
+  be born at ANY cap), plus ADR-115's `luksOpen` blocker; GA trigger #5274 is "Post-MVP /
+  Later".
 - **Role consolidation.** Would reverse ADR-100/096/068 to avoid a browser form.
 
 ## Functional Requirements
 
-- **FR1** — Snapshot `hermes-agent` before destroy, reusing the codified pattern at
-  `.github/workflows/cutover-inngest.yml:355-373` (`op=backup` → `create_image`,
-  #5509). The snapshot MUST carry a retention expiry (a snapshot of personal data
-  is continued processing).
+- **FR1** — ~~Snapshot retention follow-through~~ **DROPPED** (operator, 2026-07-15).
+  The snapshot was taken (reusing `cutover-inngest.yml:355-373`), the destroy was made
+  reversible by it, and it was then deleted rather than enrolled in a 30-day soak. See
+  the G1 note above for why every enrollment mechanism was worse than the risk.
 - **FR2** — Run the read-only reclaim preconditions (inbound-DNS grep for
   `178.105.181.90`, `primary-ip list`, 7d network metrics) and record the results
   before destroying.
@@ -84,18 +88,23 @@ never been runnable.
   `:17-19` web-2 hel1 → fsn1.
 - **FR5** — Amend `hr-prod-host-config-change-immutable-redeploy` (`AGENTS.core.md:26`)
   in place. Do **not** mint a new rule id.
-- **FR6** — Stock preflight in the existing plan-time destroy-guard steps
-  (`:1165` web-2, `:1583` inngest, `:1744` registry), **tripwire** posture
-  (match `:447`), fail-closed with no `[ack-destroy]` bypass (match `:1775`).
+- **FR6** — Stock preflight in the existing plan-time destroy-guard steps — **FIVE, not
+  three**: gate call sites `:1197` (web-2), `:1614` (inngest), `:1776` (registry), `:1969`
+  (registry-region-migrate), `:2171` (git-data-host-replace — NOT dead code: a `-replace`
+  on a not-in-state address plans a plain **create**). **Tripwire** posture (match `:447`),
+  fail-closed, no `[ack-destroy]` bypass (match `:1775`). **SHIPPED** as
+  `tests/scripts/lib/stock-preflight-gate.sh` + a 32-case hermetic suite.
 
 ## Technical Requirements
 
 - **TR1** — The stock check MUST assert the **live** value, not a plan target
   (`best-practices/2026-06-18-capacity-monitor-threshold-from-live-value-not-plan-target.md`).
-- **TR2** — `GET /v1/limits` is **404**; free slots can only be derived from
-  `GET /v1/servers` count vs. a hardcoded cap — itself a drift risk. Prefer
-  `/v1/datacenters` for per-DC availability. **Mechanics unverified — confirm first;
-  if no clean surface exists, drop FR6 and let FR5 carry the workstream.**
+- **TR2** — **RESOLVED: FR6 is buildable and shipped.** `GET /v1/datacenters` exposes
+  `server_types.available` (orderable NOW) distinctly from `.supported` (24/DC). Use
+  `.available` — `.supported` would pass the live trap, as does the `hcloud` CLI's
+  `server-type list -o columns=name,location`. Resolve the type via `?name=<type>`, never
+  `?per_page=50` (which encodes "≤50 types" and fails CLOSED if one lands on page 2).
+  `GET /v1/limits` is 404 — the drop-clause did not fire.
 - **TR3** — Extend the EU-DC `contains(["nbg1","fsn1","hel1"], …)` validation
   (currently `variables.tf:94-96`, `web_hosts` only) to `var.location` (`:38`) and
   `var.registry_location` (`:44`). `inngest_server_type`'s validation (`:156`) is an
@@ -108,16 +117,21 @@ never been runnable.
 **The reclaim already shipped. Do not re-plan it.**
 
 - `hermes-agent` destroyed 2026-07-15. **Fleet is 4/5 — one free slot**, first time.
-- Snapshot **`408787015`** (`hermes-agent-pre-reclaim-20260715T124535Z`, 6.56 GB of a
-  40 GB disk) retained as rollback. **Still needs a retention expiry** (CLO: a snapshot
-  of unknown data is continued processing) — that is now the open remainder of G1.
+- Snapshot `408787015` was taken, then **DELETED the same day** (operator decision).
+  **THERE IS NO ROLLBACK.** Retaining an unaudited disk of unknown provenance without an
+  expiry is continued processing (CLO); Hetzner images carry no TTL; and every enforcement
+  mechanism available was worse than the risk (the follow-through sweeper only *closes*
+  trackers, is `--state open` so `Closes #6453` would kill the enrollment at merge, and
+  arming it with a Hetzner credential would hand that credential to all 28 follow-through
+  scripts via an editable issue body). G1 is CLOSED — nothing remains.
 - Both primary IPs were `auto_delete=true` → no orphaned IP billing (verified).
 - `expenses.md` row added **at retirement** (~USD 9.7 lifetime shadow spend recorded).
 - **Purpose never established.** At reclaim it was steadily transmitting ~410 MiB/day
   outbound (711 B/s out vs 448 B/s in, ~0.43 pps, CPU avg 1.9%) — a low-rate outbound
-  producer reporting somewhere unknown. Operator authorised the destroy with the
-  snapshot as cover. **If something breaks and the cause is unclear, suspect this
-  first and rebuild from `408787015`.**
+  producer reporting somewhere unknown. Operator authorised the destroy, then authorised
+  deleting the snapshot. **If something breaks and the cause is unclear, suspect this host
+  first — but it CANNOT be restored.** That is the accepted cost of not retaining
+  unaudited data.
 
 **G3 — REQUESTED by the operator 2026-07-15. Pending Hetzner review (vendor-side, days).**
 
