@@ -136,6 +136,11 @@ if want_scripts; then
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
   run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh
   run_suite "scripts/followthrough-exec-bit" bash scripts/followthrough-exec-bit.test.sh
+  # #6462: exit-code harness for the zot soak's decision arms. Registered explicitly because
+  # this runner enumerates suites by hand — an unregistered .test.sh is an ORPHAN that never
+  # gates (the #5417 class). The soak authorizes an irreversible PAT revoke, so its arms
+  # returning the right codes is not optional coverage.
+  run_suite "scripts/zot-soak-6122-arms" bash scripts/followthroughs/zot-soak-6122.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
