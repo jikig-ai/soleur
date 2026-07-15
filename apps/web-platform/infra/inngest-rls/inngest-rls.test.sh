@@ -229,13 +229,33 @@ profile_0001() {
       "negative guard missing app-distinctive table ${t}"
   done
 
-  # Inngest ships GENERIC nouns (apps, events, functions, history, migrations,
-  # traces) and has no namespace discipline. A guard on `users`/`conversations`
-  # would make 0001 RAISE on prd forever the day goose ships public.users —
-  # killing the ADR-030 I8 self-heal. The guard MUST use app-distinctive names.
-  check_absent "to_regclass\('public\.(users|conversations)'\)" \
-    "negative guard avoids generic nouns (users/conversations) Inngest could create" \
-    "FORBIDDEN: negative guard uses a generic noun — a future goose table would break the prd lockdown permanently"
+  # Inngest ships GENERIC nouns and has no namespace discipline. If the NEGATIVE
+  # guard (0c) ever names one, 0001 RAISEs on prd FOREVER — killing the ADR-030 I8
+  # self-heal. The guard MUST use app-distinctive names only.
+  #
+  # The forbidden set is ALLOW_14 — the names Inngest is PROVEN to ship (re-derived
+  # from the live catalog), each of which would break prd the moment it is added —
+  # plus users/conversations, generic nouns goose could plausibly ship later.
+  # (The prior assertion checked ONLY users/conversations: the wrong set twice over.
+  # Inngest ships NEITHER, while `events`/`apps`/`functions` — which it DOES ship —
+  # passed the guard freely. Mutation-verified 2026-07-15.)
+  #
+  # DISCRIMINATOR: `IS NOT NULL` (0c, the negative guard) vs `IS NULL` (0b, the
+  # positive sentinel). goose_db_version and function_runs are in ALLOW_14 AND
+  # legitimately appear in 0b — asserting on the bare to_regclass() call would
+  # false-RED the correct file. Scope to the NEGATIVE construct only.
+  local neg_offenders=() nt flat
+  flat="$(printf '%s' "$CODE" | tr '\n' ' ' | tr -s ' ')"
+  for nt in "${ALLOW_14[@]}" users conversations; do
+    if printf '%s' "$flat" | grep -iqE "to_regclass\('public\.${nt}'\)[[:space:]]+IS[[:space:]]+NOT[[:space:]]+NULL"; then
+      neg_offenders+=("$nt")
+    fi
+  done
+  if [[ "${#neg_offenders[@]}" -eq 0 ]]; then
+    ok "[$LABEL] negative guard names no Inngest-shipped/generic noun (checked ${#ALLOW_14[@]}+2 names against the IS NOT NULL construct)"
+  else
+    bad "[$LABEL] FORBIDDEN: negative guard names Inngest-shipped table(s): ${neg_offenders[*]} — 0001 would RAISE on prd permanently, killing the ADR-030 I8 self-heal"
+  fi
 
   # Ordering: the guard is worthless if it runs AFTER the revoke loop. Assert the
   # byte-offset of the app-distinctive guard precedes the FIRST REVOKE.
