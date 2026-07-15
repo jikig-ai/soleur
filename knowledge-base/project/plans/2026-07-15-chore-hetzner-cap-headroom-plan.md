@@ -23,20 +23,25 @@ What the probes found instead is worse than the issue described, and it reshapes
 this plan: **the fleet's recreate paths are blocked by DC *stock*, not by the quota,
 and two of them are blocked right now.**
 
-G1 (reclaim `hermes-agent`) already shipped in-session — fleet is 4/5. This plan
-covers the remainder.
+**Shipped in-session:** G1 (reclaim `hermes-agent`) — fleet is 4/5 — and the snapshot
+decision (taken, then **deleted**; the ledger discloses no rollback exists). This plan covers
+the remainder: **the stock gate** (the deliverable), the hard-rule amendment **+ its required
+ADR-092 ack**, the residency-validation gap, the phantom ledger rows, and an honestly-labelled
+operator issue for the limit raise.
 
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim | Reality (live-probed 2026-07-15) | Plan response |
 |---|---|---|
-| Spec/brainstorm: "raise the cap → unblocks ADR-068 Phase 3 (git-data)" | **False.** `git_data_server_type` = `cax11` (`variables.tf:113`); the entire ARM `cax` line is orderable in **0 of 3 EU DCs**. git-data cannot be born at **any** cap. | Corrected in the brainstorm (inline note). Cap raise is justified by probe hosts + web-3 **only**. Removed git-data from the raise's rationale. |
+| Spec/brainstorm: "raise the cap → unblocks ADR-068 Phase 3 (git-data)" | **False.** `git_data_server_type` = `cax11` (`variables.tf:113`); the entire ARM `cax` line is orderable in **0 of 3 EU DCs**. git-data cannot be born at **any** cap. | Corrected in the brainstorm (inline note). Cap raise is justified by **probe hosts only** — not git-data (stock-blocked), and not web-3 either (see Phase 6.3: web-3 births via an operator-local full apply, outside CI, ungated). |
 | Brainstorm: "reclaim only funds git-data's unborn slot" (platform-strategist) | **Dissolved.** git-data cannot claim the slot (no cax11 stock). The reclaimed slot is genuine free headroom. | No action — the reclaim already shipped and is now better-justified than when authorised. |
 | Spec: "steady-state need is 6 (5 permanent incl. git-data + 1 ephemeral)" | Permanent is **4** while cax11 has no EU stock. Need is **5** (4 + 1 ephemeral); 6 if git-data ever becomes orderable. | Still ask **10** — a limit is free and the ask is one-shot. Rationale changes, number does not. |
-| FR6/TR2: "stock preflight mechanics UNVERIFIED; `/v1/limits` is 404" | **Buildable.** `GET /v1/datacenters` exposes `server_types.available` (orderable now) vs `.supported` (24). hel1 = 14 available of 24. | FR6 **ships**. TR2's drop-clause does not fire. |
+| FR6/TR2: "stock preflight mechanics UNVERIFIED; `/v1/limits` is 404" | **Buildable.** `GET /v1/datacenters` exposes `server_types.available` (orderable now) vs `.supported` (24/DC). hel1 was 14-of-24 available; **12 three hours later**. | FR6 **ships**. TR2's drop-clause does not fire. The volatility is why the gate queries live and its tests use fixtures. |
+| Draft: "`B_ALWAYS` 22757 is over the 22000 critical cap (#6461), so a new rule is unaffordable" | **False.** `lint-agents-rule-budget.py:74-75` → `WARN=20000`, `REJECT=23000`; `:69` — *"Reject raised 22000 → 23000 in #4599."* Linter **exits 0**; ~243 B headroom. The 22000 came from a **stale rubric** in `compound/SKILL.md`, not from running the script. | Byte argument **removed** from Phase 3.3 — amending still wins, on the "headroom is the wrong frame" argument alone. The stale rubric is now #6461's actual subject. |
+| Draft: "`git-data-host-replace` is dead code (a scoped `-replace` needs the resource in state)" | **False.** `terraform plan -replace=<addr>` on an address **not in state** exits 0 and plans a plain **create**. `hcloud_server.git_data` is declared unconditionally → that dispatch tries to **create** git-data into a 5-cap with a type orderable in 0 EU DCs. | Wired into the gate — **5 paths, not 4**. It needs the gate most. |
 | Spec AC: "`hcloud server list` returns 4" | Done 2026-07-15. | Marked `[x]`. |
 | `expenses.md:14-16` / `:17-19` line refs | Still accurate — the hermes row was inserted at `:24`, after both. | No renumbering needed. |
-| Snapshot retention "expiry" | Hetzner images have **no TTL field** (`PUT /v1/images/{id}` accepts only `description`/`labels`/`type`). | Implement as a **follow-through enrollment** (Phase 2.9.1), the repo's native soak-gated pattern — not a label-only note. |
+| Snapshot retention "expiry" | Hetzner images have **no TTL field** (`PUT /v1/images/{id}` accepts only `description`/`labels`/`type`). The follow-through sweeper **cannot delete** — it only comments/closes (`sweep-followthroughs.sh:220-273`), is `--state open` (so `Closes #6453` would kill the enrollment at merge), and has no Hetzner credential by design (all 28 existing scripts are read-only probes). | **Dropped the enrollment; deleted the snapshot in-session** (operator decision). Every enforcement mechanism available was worse than the risk. |
 
 ### The finding that reshapes the plan
 
@@ -47,13 +52,21 @@ fsn1-dc14 orderable NOW:  ccx33 ccx43 cpx32 ccx13 cpx22 cpx52 cpx62 ccx63 ccx53 
 hel1-dc2  orderable NOW:  ccx33 cx23 ccx43 cpx32 ccx13 cpx22 cpx52 cpx62 cx33 ccx63 ccx53 cpx12 cpx42 ccx23
 ```
 
-- **`cx33` is orderable in exactly one DC globally: `hel1-dc2`.** `web-2` is `cx33 @ fsn1`
+- **`cx33` was orderable in exactly one DC globally (`hel1-dc2`).** `web-2` is `cx33 @ fsn1`
   → **`web-2-recreate` would strand the fleet today.** A verbatim #6393 repeat, in the DC
-  #6393 fled *to*. Remediation filed as **#6463** (cost/HA tradeoff — operator's call).
-- **`cax11` is orderable in 0 of 3 EU DCs** → git-data unborn regardless of cap.
+  #6393 fled *to*. Remediation filed as **#6463**.
+- **`cax11` orderable in 0 of 3 EU DCs** → git-data unborn regardless of cap.
 
-**The stock preflight is therefore not speculative — it fires on two live paths today.**
-A cap preflight would have returned green on both.
+> **Re-probed ~3h later, same session: `cx33` is now orderable in ZERO datacenters** (hel1
+> dropped 14 → 12 available). **web-2 is un-recreatable *everywhere*, not just fsn1**, and
+> #6463's "move it to hel1" option evaporated. **This volatility is the thesis, not a
+> footnote:** a type/DC pin is not a durable fix — whatever we pin to can go unorderable
+> within hours. It is why (a) the gate must query **live** on every dispatch, (b) its tests
+> must be **synthesized fixtures** (a live-bound suite is red by lunchtime), and (c) the
+> durable fix is the *shape* — create-before-destroy (#6459) — not the pin.
+
+**The stock preflight is therefore not speculative — it fires on live paths today.**
+A cap preflight would have returned green on every one of them.
 
 ## User-Brand Impact
 
@@ -63,9 +76,13 @@ Carried forward verbatim from the brainstorm/spec — not re-authored.
   blocks re-placement, and apply-on-merge wedges — so if `web-1` degrades in that window
   users hit a full outage with no failover, no ability to deploy a fix, and no free slot
   to diagnose from, while the HA posture reads healthy because `web-1` is still up.
-- **If this leaks, the user's data/workflow is exposed via:** snapshot `408787015` holds
-  an unaudited 40 GB disk of unknown provenance; retained without expiry it is continued
-  processing of data we never inventoried (CLO).
+- **If this leaks, the user's data/workflow is exposed via:** ~~snapshot `408787015`~~ —
+  **closed 2026-07-15.** The snapshot held an unaudited 40 GB disk of unknown provenance;
+  retaining it without an expiry would have been continued processing of data we never
+  inventoried (CLO). It was **deleted in-session** (operator decision) rather than enrolled
+  in a follow-through, because every available enforcement mechanism was worse than the risk
+  (see Phase 5). Residual exposure: **none from the snapshot**; the accepted cost is that
+  hermes-agent is now unrecoverable.
 - **Brand-survival threshold:** `single-user incident`.
 
 **Adjudicated, not speculative:** the 2026-07-13 PIR's "no user-facing impact" framing
@@ -130,17 +147,29 @@ ADR named as its deliverable**.
 (`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`) for
 this change's external actors, external systems, containers, and access relationships:
 
-- **External human actors:** none added or changed — this is operator-facing infra with
-  no new correspondent, reviewer, or recipient role.
-- **External systems:** **Hetzner Cloud** is the only vendor touched, and it is already
-  modelled as the hosting substrate; no new vendor edge (the limit-raise is a change to
-  an existing account's quota, not a new integration).
-- **Containers / data stores:** none added. `hermes-agent` was never modelled (it was
-  never in IaC — that absence is the subject of #6460); removing it changes no modelled
-  element. `soleur-git-data` remains modelled-but-unborn — **not corrected here**,
-  because the phantom-corpus cleanup is tracked in #6460 and correcting the C4 for a
-  host that may yet be born (once cax11 restocks) would be premature.
-- **Access relationships:** none change — no actor↔surface access is added or widened.
+- **External human actors:** none added or changed — operator-facing infra, no new
+  correspondent, reviewer, or recipient role.
+- **External systems:** none touched. **Hetzner is not modelled as an external system at
+  all** — `model.c4:180` models it as `platform.infra.hetzner`, a `container "Compute"`
+  (`technology "Hetzner Cloud"`) **inside** the platform boundary, carrying no `#external`
+  tag (the `#external` systems are the top-level declarations at `model.c4:222-268`). There
+  is no Hetzner vendor edge for a quota change to touch. *(The earlier draft claimed Hetzner
+  "is already modelled as an external system" — false premise, correct conclusion; corrected
+  at review.)*
+- **Containers / data stores:** none added. `hermes-agent` was **never** modelled (verified:
+  zero case-insensitive hits across all three `.c4` files) — that absence is #6460's subject;
+  removing it changes no modelled element. `soleur-git-data` (`model.c4:210`) is
+  modelled-but-unborn — **correctly so, and deliberately not corrected here**: it sits inside
+  the block `model.c4:197` explicitly marks `(ADR-068, #5274 — adopting)`, alongside
+  `coordinator` (`:202`), `scheduler` (`:206`, `technology "Nomad (Phase 4a)"`) and
+  `sessionStore` (`:214`) — **all four unborn by design**. The model documents ADR-068's
+  *target* state; singling out git-data would make the block **less** internally consistent.
+  The corpus-level question is #6460's.
+- **Access relationships:** none change. The gate adds a CI→Hetzner-API read, but rides a
+  **pre-existing** edge — same workflow, same token, read-only. *(Note: that CI→Hetzner
+  control-plane edge is itself unmodelled today — `github`'s only edges are `→ webapp`,
+  `→ tunnel`, `→ sigstore`, `→ betterstack` — a pre-existing gap this plan does not create;
+  belongs to #6460's model-accuracy sweep.)*
 
 ## Infrastructure (IaC)
 
@@ -196,64 +225,62 @@ logs:
 discoverability_test:
   command: >-
     export HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain);
-    bash apps/web-platform/infra/scripts/stock-preflight.sh cx33 fsn1; echo "exit=$?"
-  expected_output: "exit=1 (cx33 is not orderable in fsn1 today — the #6463 trap). `... cx33 hel1` → exit=0."
+    source tests/scripts/lib/stock-preflight-gate.sh;
+    stock_preflight "$(hcloud server describe soleur-web-2 -o format='{{.ServerType.Name}}')" fsn1; echo "exit=$?"
+  expected_output: >-
+    "exit=1 while web-2's type is unorderable in fsn1 (true today; #6463). Derives the type
+    from LIVE fleet state rather than hardcoding cx33 — stock AND the pinned type both move.
+    exit=0 once stock returns or #6463 repins the type."
 ```
 
 No `ssh` in the discoverability test. The preflight is inspectable from any machine with
 the read-only token.
 
-### Soak Follow-Through Enrollment (FR1)
+### Soak Follow-Through Enrollment — N/A (no soak-gated criterion remains)
 
-The snapshot-retention decision **is** a soak-gated close criterion ("no incident traced
-to `hermes-agent` for N days → delete snapshot `408787015`"), so it enrolls per Phase 2.9.1:
+Phase 2.9.1's trigger does not fire: this plan has **no post-deploy soak / time-gated close
+criterion**. The one candidate — snapshot `408787015`'s retention — was resolved by
+**deleting the snapshot in-session** rather than enrolling a 30-day soak.
 
-- **Script:** `scripts/followthroughs/hermes-snapshot-retention-6453.sh` — exits 0 when the
-  soak holds (snapshot older than the window AND no reopened incident), which is the signal
-  to delete.
-- **Directive** on #6453: `<!-- soleur:followthrough script=scripts/followthroughs/hermes-snapshot-retention-6453.sh earliest=2026-08-14 secrets=HCLOUD_TOKEN -->` + the `follow-through` label.
-- **Sweeper wiring:** `HCLOUD_TOKEN` must be added to `.github/workflows/scheduled-followthrough-sweeper.yml`'s `secrets=` allow-set if not already present.
+**Why the enrollment was the wrong tool**, in case a future plan reaches for it here:
 
-30 days is the window: long enough that a low-rate outbound producer's absence would have
-surfaced, short enough to bound the retention of unaudited data (CLO).
+1. **Semantics inverted.** Exit 0 = PASS = the sweeper **closes the tracker**
+   (`sweep-followthroughs.sh:220-233`). The draft treated exit 0 as "the signal to delete".
+   It is terminal, not a signal — on 2026-08-14 the sweeper would have posted PASS, closed
+   #6453 (the only record of the pending deletion), and retained the disk forever.
+2. **No actuator exists.** The sweeper's vocabulary is `comment` and `close`; permissions are
+   `contents: read, issues: write`; all 28 existing scripts are read-only probes. Wiring
+   `HCLOUD_TOKEN` into `secrets=` would hand a Hetzner credential to **every** follow-through
+   script on every sweep, gated only by a directive parsed from an **editable issue body**.
+3. **The enrollment would never have fired.** The sweeper lists `--state open`; PR #6457
+   carries `Closes #6453`, so merge would have closed the tracker first.
+
+`Closes #6453` is therefore safe — nothing depends on the issue staying open.
 
 ## Open Code-Review Overlap
 
 **None.** `gh issue list --label code-review --state open --json number,title,body --limit 200`
 returned no issue body containing any path in `## Files to Edit`.
 
-## Phase 0 — Preconditions (verify BEFORE coding; each can re-shape a later phase)
+## Preconditions — RESOLVED at plan-review (no Phase 0; nothing left to probe)
 
-These are the plan's unverified load-bearing assumptions. Each is a cheap probe whose
-failure changes the plan, so they run first.
+All five original preconditions were resolved or cut by the review panel. Recorded here as
+findings, not as gates:
 
-- [ ] **P0.1 — plan JSON availability (gates FR6's whole wiring).** Read the destroy-guard
-      steps at `apply-web-platform-infra.yml` `:1165`, `:1583`, `:1744`, `:1877`, `:2079`.
-      Confirm a `terraform show -json` output is available in each, and that a `-replace`
-      create carries `server_type` + `location` in `.resource_changes[].change.after`.
-      **If not, re-shape Phase 2.1 before coding.**
-- [ ] **P0.2 — `-replace` on a not-in-state address.** Confirm `terraform plan -replace=<addr>`
-      for an address absent from state exits 0 and plans a plain **create** (architecture
-      review established this; verify independently — it is the basis for treating
-      `git-data-host-replace` as live rather than dead).
-- [x] **P0.3 — test discovery. RESOLVED 2026-07-15: NEITHER path auto-discovers.**
-      `scripts/test-all.sh:218`'s bash `*.test.sh` glob covers `plugins/soleur/test/`,
-      `plugins/soleur/skills/*/test/`, `plugins/soleur/scripts/`, `.claude/hooks/`,
-      `apps/cla-evidence/scripts/`, `apps/web-platform/scripts/{,lib/}`, and
-      `scripts/lib/` — **`tests/scripts/` is NOT in the glob.** `tests/scripts/` suites
-      run only via **hand-maintained explicit `run_suite` lines** (`test-all.sh:144-146`,
-      e.g. `run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh`).
-      **→ Phase 2.5 is MANDATORY, and its target is `scripts/test-all.sh`** (an explicit
-      `run_suite` line matching `:144-146`), **not** `infra-validation.yml` (which serves
-      `apps/web-platform/infra/*.test.sh` — the wrong directory once Phase 1 relocates the
-      gate to `tests/scripts/`). Without this line the test ships dead: green PR, zero
-      coverage, AC1 green only because a human ran it locally.
-- [ ] **P0.4 — sourced-gate precedent.** Read `tests/scripts/lib/web2-recreate-gate.sh` and
-      match its shape (function export, sourcing contract, exit semantics).
-- [ ] **P0.5 — follow-through exit semantics.** Read `.github/workflows/scheduled-followthrough-sweeper.yml`
-      + `scripts/followthroughs/reconcile-ff-only-sentry-4977.sh` and confirm the exit-code
-      convention before authoring FR1's script (the plan asserts "exit 0 = soak held = delete";
-      **verify that matches the sweeper's actual interpretation**).
+- **Plan JSON availability — RESOLVED, PASSES.** `terraform show -json tfplan > tfplan.json`
+  runs in **all five** paths (`:1193`, `:1610`, `:1772`, `:1965`, `:2167`), each immediately
+  before its sourced gate (`:1197`, `:1614`, `:1776`, `:1969`, `:2171`) and before any apply.
+  Fixture-proven: `tests/scripts/fixtures/tfplan-web2-recreate-scoped.json` carries
+  `after.server_type="cx33"`, `after.location="fsn1"`, with `after_unknown` **null** for both
+  — known at plan time for create, delete+create, and no-op alike. **Phase 2.1 is sound.**
+- **`-replace` on a not-in-state address — settled, no probe needed.** The repo already
+  treats `git-data-host-replace` as live: `tests/scripts/lib/git-data-host-replace-gate.sh`
+  exists and is sourced at `:2168`. The plan does not get to re-adjudicate a shipped, gated,
+  tested job as dead code.
+- **Test discovery — RESOLVED: nothing auto-discovers `tests/scripts/`.** The `test-all.sh:218`
+  glob excludes it; siblings are hand-registered at `:144-146`. See Phase 2.5 + AC16.
+- **Sourced-gate precedent / follow-through semantics — cut.** "Read the file you are copying"
+  is not a probe. FR1 is dropped entirely (below), so the sweeper's semantics no longer apply.
 
 ## Implementation Phases
 
@@ -283,39 +310,102 @@ pattern and lands outside test discovery.
   - fail-closed on any resolution/API failure
   - **read-only**; needs only `HCLOUD_TOKEN`
 
-1.3 **Abort message** (per CTO — the plan previously left this underspecified, and CPO
-    conditioned sign-off on the escape path being present). On a stock miss, emit the
-    orderable locations for the target type — **already in the same `/v1/datacenters`
-    response, no extra call** — so the abort is a fork, not a wall:
+1.3 **Abort message.** CPO conditioned sign-off on the escape path. **Three review
+    corrections are folded in — the first draft's option (1) was fabricated:**
+
+  - **`workflow_dispatch` has NO location input** (`apply-web-platform-infra.yml:76-104` —
+    inputs are `reason` + `apply_target` only). "Re-dispatch against another location" is
+    not a thing an operator can do; location lives in `var.web_hosts` (`variables.tf:92`)
+    and changing it is a code edit + merged PR — i.e. the same option as #6463. **Cut it.**
+  - **The missing tine — the highest-leverage edit in this plan.** `warm-standby`
+    (`:791-796`) is an **additive** 6-target job: it targets
+    `hcloud_server_network.web["web-2"]`, `hcloud_volume.workspaces["web-2"]`, and
+    `hcloud_volume_attachment.workspaces["web-2"]` — **not** `hcloud_server.web`. No
+    destroy, **no stock requirement, works today**. This is how web-2's private IP was
+    restored on 2026-07-13 without recreating the host (`created` unchanged). The workflow
+    already says so at **`:451`** — four lines below the `:447` this plan cites for tripwire
+    posture. Without this tine the gate converts a **repairable** condition into a #6463
+    escalation, which is the opposite of the sign-off condition.
+  - **Filter the "orderable elsewhere" list to the EU allow-set** (`["nbg1","fsn1","hel1"]`,
+    the same set as Phase 4). `/v1/datacenters` returns `ash-dc1`, `hil-dc1`, `sin-dc1` — a
+    naive enumeration would advise putting a prod host in **Singapore**. This couples Phase 4
+    to Phase 1 deliberately.
 
 ```
 ::error::stock-preflight ABORT: server_type 'cx33' is NOT orderable in 'fsn1' today
-(orderable: hel1). A -replace DESTROYS before it creates — this recreate would strand the
-fleet with no rollback (#6393, #6463). Options: (1) re-dispatch against a location where
-cx33 is orderable; (2) if this host must stay in fsn1, see #6463 (type/DC change is an
-operator cost/HA decision); (3) stock is time-varying — re-run later. Do NOT bypass.
+(orderable in EU: <none|hel1|...>). A -replace DESTROYS before it creates — this recreate
+would strand the fleet with no rollback (#6393, #6463).
+  • If you only need the private NIC or the /workspaces volume re-attached, this is NOT a
+    recreate — dispatch `apply_target=warm-standby` (additive, no destroy, no stock needed).
+    See apply-web-platform-infra.yml:451.
+  • If the host genuinely must be reborn: see #6463 (type/DC change — operator cost/HA call).
+  • Stock is time-varying — re-run later.
+Do NOT bypass.
 ```
 
-  The **API-blip** mode MUST be a distinct message, or operators read a blip as a real
-  shortage and open a spurious #6463 dup:
+  The **API-blip** mode is a distinct message, or operators read a blip as a real shortage:
   `::error::stock-preflight ABORT: cannot PROVE stock for '<type>' in '<loc>' (Hetzner API unreachable). An unreachable API is not evidence of availability. Re-dispatch.`
+
+1.4 **Mockable fetch seam — REQUIRED (`cq-test-fixtures-synthesized-only`).** The gate MUST
+    route every HTTP call through one indirection so the test can stub it:
+
+```bash
+HCLOUD_API="${HCLOUD_API:-https://api.hetzner.cloud/v1}"
+_stock_fetch() { curl -sS -H "Authorization: Bearer ${HCLOUD_TOKEN}" "${HCLOUD_API}$1"; }
+```
+
+  The test sources the gate and redefines `_stock_fetch` to `cat` a synthesized fixture →
+  all cases hermetic, offline, deterministic, no token. **This is not optional polish:**
+  sibling gates declare the posture explicitly (`tests/scripts/test-git-data-host-replace-gate.sh:17-21`
+  — *"Deterministic; no network. All fixtures are SYNTHESIZED"*), and a live-bound test is
+  **red as of this session** — `cx33` went from "orderable in hel1" to **orderable NOWHERE**
+  within ~3 hours. The plan's own Sharp Edge forbids encoding today's stock as a constant.
+
+1.5 **Resolve the type by name, not by paging.** Use `/v1/server_types?name=<type>`
+    (live-verified: `name=cx33` → 1 result; `name=bogus99` → 0). **Not** `?per_page=50`,
+    which silently encodes "Hetzner has ≤50 types" and fails **closed** if a type ever lands
+    on page 2 — aborting a legitimate recreate. Unknown-type detection becomes `length == 0`.
 
 ### Phase 2 — Wire the gate into **all five** destroy-shaped paths + CI discovery
 
-2.1 `apply-web-platform-infra.yml` — source the gate and call it from the existing
-    plan-time destroy-guard steps. Derive `server_type`/`location` from the terraform
-    plan JSON already produced in those steps (do **not** re-read `variables.tf` — a
-    `TF_VAR_*` can override a default; the plan is what actually applies).
-    **VERIFY FIRST (Phase 0 precondition):** confirm the plan JSON is available in each
-    step and that a `-replace` create carries `server_type`/`location` in
-    `.resource_changes[].change.after`. If it does not, re-shape this phase before
-    coding — this is FR6's load-bearing assumption and it is **not yet verified**.
+2.0 **P0 — the gate cannot reach `HCLOUD_TOKEN` as the workflow stands.** Every gate call
+    site's step `env:` is **`DOPPLER_TOKEN` only** (`:1168-1169`, `:1747-1748`, …), and the
+    `source` + gate invocation run **outside** the `doppler run` wrapper (`:1194-1197`).
+    `stock_preflight` would therefore fail-closed on **every dispatch** — a fail-closed gate
+    that fails 100% of the time is an outage, not a tripwire. **This is the single most
+    damaging defect the review found.** Add to each of the five steps, before the gate call
+    (precedent: `cutover-inngest.yml:359`):
+
+```bash
+HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)
+export HCLOUD_TOKEN
+```
+
+2.1 Source the gate and call it from the existing destroy-guard steps. Derive
+    `server_type`/`location` from the **terraform plan JSON** already produced there
+    (`terraform show -json tfplan > tfplan.json` at `:1193`, `:1610`, `:1772`, `:1965`,
+    `:2167`) — **not** `variables.tf`, because a `TF_VAR_*` can override a default and the
+    plan is what actually applies. For `registry-region-migrate`, `after.location` is the
+    **target** region for free, which independently vindicates this choice.
+    **Two MUSTs from the fixture review:**
+    - **Filter `select(.type == "hcloud_server")` first, and match `.address` exactly.**
+      Sibling entries carry `change.after` **without** these keys —
+      `hcloud_server_network.web["web-2"]` → `after` keys `["ip"]`;
+      `hcloud_volume_attachment.workspaces["web-2"]` → `["volume_id"]`. A naive
+      `.resource_changes[] | .change.after.server_type` yields `null` for 2-5 entries per
+      path. A `tfplan-web2-recreate-substring-collision.json` fixture already guards the
+      address-matching class.
+    - **Filter on `.change.actions | index("create")`** — a `no-op` entry also carries
+      `after.server_type`, so an unfiltered gate would preflight untouched hosts.
 2.2 Tripwire framing in the step comment, matching `:447` in posture ("This is a
     TRIPWIRE, not a routine gate").
 2.3 **No `[ack-destroy]` bypass** — matches `:1775`, `:1613`, `:2170`.
-2.4 **Five paths, not three.** `:1165` (web-2), `:1583` (inngest), `:1744` (registry),
-    `:1877` (registry-region-migrate — destroy-then-create with a *target region*), and
-    **`:2079` (git-data-host-replace)**.
+2.4 **Five paths, not three.** Gate call sites are `:1197` (web-2), `:1614` (inngest),
+    `:1776` (registry), `:1969` (registry-region-migrate), `:2171` (git-data-host-replace)
+    — those are where 2.1 edits; the `:1165`/`:1583`/… anchors cited earlier are job/comment
+    headers, not the edit points. Note `registry-region-migrate` carries **no `-replace`
+    flag** (`:1944-1945`) — it is a **pure create** driven by the location change. Still
+    correctly gated; the plan's "`-replace`-shaped" description of it was wrong.
 
   > **Corrected — the "dead code" premise was FALSE.** The plan previously skipped
   > `git-data-host-replace` on the belief that a scoped `-replace` requires the resource
@@ -340,18 +430,48 @@ run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-pre
     `apps/web-platform/infra/`. **Without this line the deliverable's test never runs.**
     Place it inside the same `want_*` guard as its siblings.
 
-### Phase 3 — Amend the hard rule
+### Phase 2.6 — The coverage-enumeration test (AC3's home)
+
+**This phase exists because AC3 had none** — the plan's own anti-regression control ("what
+prevents a 5th dispatch path shipping without the gate") was unassigned. Author it modelled
+on `plugins/soleur/test/terraform-target-parity.test.ts`, which already parses this workflow.
+Read the recreate-shaped targets from the `apply_target.options` enum (`:97-104`, 8 items)
+and assert each has the gate in its job body, with an explicit `EXCLUSION_ALLOWLIST`
+(shape borrowed from `terraform-target-parity.test.ts:79` — note that allowlist holds
+terraform **resource names**, a different axis, so borrow the shape, not the set).
+
+### Phase 3 — Amend the hard rule (+ its required WORM ack)
 
 3.1 Amend `hr-prod-host-config-change-immutable-redeploy` (`AGENTS.core.md:26`) **in
     place** — same id — to name the no-rollback danger: `-replace` destroys before it
     creates, so any create-failure (DC stock, cloud-init, name collision) strands the
     fleet with no rollback; verify target-type stock in the target location first.
-3.2 Keep the body **≤ 600 B** (`lint-agents-rule-budget.py` rejects above).
-3.3 **Measure `B_ALWAYS` before and after.** It is **22757 B** today — already over the
-    22000 critical threshold (#6461). The amendment MUST be byte-neutral-or-negative;
-    if it grows the body, trim redundant prose in the same rule (preserving per-issue
-    mechanism labels after each `#N`). **Do not add a new rule** — a new pointer costs
-    ~50-60 B of always-loaded budget that does not exist.
+
+3.2 **P0 — the ADR-092 / AP-017 body ack. Without it the PR CANNOT MERGE.**
+    `rule-body-lint` is an **always-run required check** (pinned in terraform,
+    `ci.yml:170-193`): *any* edit to an `hr-*`/`wg-*` rule **body** is human-gated by a
+    per-change, hash-bound WORM ack. This rule's body hash is pinned at
+    `.claude/rule-body-hashes.txt:34`. **"It's a strengthening, not a weakening" does not
+    exempt it** — ADR-092 Decision 2 requires the ack for all hard-rule bodies regardless
+    (existing acks include ones reasoned *"clarification, not a weakening"*). After 3.1:
+    1. `python3 scripts/lint-rule-bodies.py --write` → regenerate `.claude/rule-body-hashes.txt`
+    2. Append the hash-bound ack to `.claude/rule-weakening-acks.txt`
+    3. Verify: `git fetch --no-tags origin main && python3 scripts/lint-rule-bodies.py --check --base "$(git merge-base origin/main HEAD)"`
+       (the gate re-derives the hash and BLOCKS a stale/hand-edited manifest)
+
+    > **Architectural note worth knowing:** ADR-092 makes **ADD** the ungated primitive and
+    > **EDIT** the gated one. Phase 3.3's choice to amend rather than add routed this change
+    > onto the WORM-acked path. That choice is still right — but on the "wrong frame"
+    > argument alone, **not** on byte grounds (below).
+
+3.3 **Do not add a new rule** — because "headroom" is the wrong frame for a danger the cap
+    does not cause. **NOT because of byte budget: that argument was false.**
+    `lint-agents-rule-budget.py:74-75` sets `B_ALWAYS_WARN = 20000`, `B_ALWAYS_REJECT = 23000`,
+    and `:69` records *"Reject raised 22000 → 23000 in #4599."* Measured **B_ALWAYS = 22757**,
+    linter **exit 0** — WARN tier, ~243 B headroom. The earlier draft asserted "already over
+    the 22000 critical threshold" by copying a **stale rubric** from `compound/SKILL.md`
+    instead of running the linter it describes (that staleness is now #6461). Byte-neutrality
+    remains good discipline; it is not a constraint that forces a design.
 
 ### Phase 4 — Residency validation
 
@@ -362,29 +482,50 @@ run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-pre
 4.3 Verify current values pass (`hel1` both) — a tightening that fails closed on live
     config would break the next apply.
 
-### Phase 5 — Ledger reconcile + follow-through enrollment
+### Phase 5 — Ledger reconcile
 
 5.1 `expenses.md:14-16` — git-data host/IPv4/LUKS volume: `active` → `approved-not-billing`
     (~$5.12/mo phantom). Add a note: the host has never existed; **cax11 is orderable in
     0 EU DCs**, so it cannot be born at any cap.
 5.2 `expenses.md:17-19` — web-2 `hel1` → `fsn1` (stale since #6393). Reference #6463.
-5.3 Author `scripts/followthroughs/hermes-snapshot-retention-6453.sh`; add the
-    `soleur:followthrough` directive + `follow-through` label to #6453; wire `HCLOUD_TOKEN`
-    into the sweeper's `secrets=` if absent.
+
+> **FR1 (snapshot retention follow-through) is DROPPED — operator decision, 2026-07-15.**
+> Snapshot `408787015` was **deleted in-session** instead, and the `expenses.md` hermes row
+> now discloses **no rollback exists**. Three review findings converged to kill the
+> enrollment: (a) exit 0 makes the sweeper **close** the tracker with a green PASS while
+> nothing deletes — the CLO control would have retired itself silently; (b) the sweeper is
+> `--state open` and PR #6457 carries `Closes #6453`, so the enrollment would never have
+> fired **once**; (c) giving the sweeper a write-capable Hetzner credential would hand it to
+> **all 28** follow-through scripts, gated only by a directive parsed from an **editable
+> issue body** — inverting the security model the convention documents. Deleting now costs
+> the rollback (accepted knowingly) and buys the CLO's expiry with zero machinery.
+> **Consequence: `Closes #6453` in the PR body is now safe** — no enrollment depends on the
+> issue staying open.
 
 ### Phase 6 — Limit-raise tracking
 
-6.1 Add the `action-required` label + an operator-facing issue for the Console limit raise
-    (server → 10, **and** the volume limit — separate counter). It is **verified**
-    operator-only:
-    `playwright-attempt: not applicable — no Hetzner Console credentials exist in Doppler
-    (only HCLOUD_TOKEN, an API token that cannot reach the limits form); GET /v1/limits → 404;
-    Console is OAuth + MFA + probable Turnstile; no precedent for infra-provider console
-    automation.`
-    Per the plan skill's automation-feasibility gate, the absence of credentials — not an
-    a-priori "console-gated" assertion — is the evidence.
-6.2 The raise's rationale is **probe hosts + web-3 only**. Do **not** justify it by
-    git-data (stock-blocked, not cap-blocked).
+6.1 File the `action-required` issue for the Console limit raise (server → 10, **and** the
+    volume limit — a separate counter). **Verified operator-only** — a real attempt was made
+    (2026-07-15), not an a-priori assertion:
+    `playwright-attempt: navigated https://console.hetzner.cloud/ (301 → console.hetzner.com) and https://accounts.hetzner.com/login → redirects to /_ray/pow returning HTTP 429 — a proof-of-work anti-bot gate. Additionally: GET /v1/limits → 404 (no API); NO Hetzner Console credentials exist in Doppler (only HCLOUD_TOKEN, an API token that cannot reach the limits form); the persistent playwright-mcp profile holds 65 domains (Cloudflare, Better Stack, Sentry, Resend, GitHub, Google…) and ZERO Hetzner — no session to reuse.`
+
+6.2 **Be honest that this rots — do NOT claim it is tracked.** The earlier draft said
+    *"tracked by the `action-required` issue — not left to memory."* **That is false:**
+    `action-required` has **no sweeper** (grep across `.github/workflows/`, `scripts/`,
+    `.claude/hooks/` returns only unrelated hits), and the backlog proves it — 9+ open,
+    oldest **2026-07-08**, including **#6406**. `GET /v1/limits` is 404, so there is **no
+    API to poll** and no non-destructive probe (the only empirical test is attempting a 6th
+    create). The raise is **unverifiable-by-construction**; state that plainly. The honest
+    mechanism is the **consumer**: whoever next adds web-3 or a probe host discovers the cap
+    at plan time. Say so, and drop the tracking claim.
+
+6.3 The raise's rationale is **probe hosts only**. **Not git-data** (stock-blocked, not
+    cap-blocked). **And not web-3 either** — `for_each = var.web_hosts` fans out four
+    resources, no `apply_target` creates web-3, and the workflow documents (`:454`) that it
+    needs an **operator-local full apply before the code merges, or EVERY subsequent merge
+    HALTs**. That birth path runs outside CI where this gate never executes, and **AC3
+    structurally cannot see it** (adding web-3 to `var.web_hosts` adds zero `apply_target`
+    options). Name this; #6459 is its natural owner.
 
 ## Files to Edit
 
@@ -397,9 +538,9 @@ run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-pre
 | `plugins/soleur/test/terraform-target-parity.test.ts` *(or a sibling)* | coverage-enumeration test for AC3 + `EXCLUSION_ALLOWLIST` |
 | `AGENTS.core.md` | amend `hr-prod-host-config-change-immutable-redeploy` in place (≤600 B, byte-neutral) |
 | `apps/web-platform/infra/variables.tf` | 2 `validation` blocks (`location`, `registry_location`) |
-| `knowledge-base/operations/expenses.md` | `:14-16` status flip; `:17-19` region fix |
-| `scripts/followthroughs/hermes-snapshot-retention-6453.sh` | **new** — soak probe |
-| `.github/workflows/scheduled-followthrough-sweeper.yml` | add `HCLOUD_TOKEN` to `secrets=` if absent |
+| `knowledge-base/operations/expenses.md` | `:14-16` status flip; `:17-19` region fix (the hermes no-rollback disclosure already landed) |
+| `.claude/rule-body-hashes.txt` | regenerate via `python3 scripts/lint-rule-bodies.py --write` after the AGENTS.core.md edit |
+| `.claude/rule-weakening-acks.txt` | **append** the hash-bound ack (ADR-092 / AP-017 — the `rule-body-lint` **required** check) |
 
 ## Files to Create
 
@@ -408,11 +549,25 @@ or `app/**/layout.tsx`** — the mechanical UI escalation does not fire.
 
 ## Acceptance Criteria
 
+**Trimmed 16 → 9 at plan-review.** Cut: **AC2/AC14/AC15** (live-stock-bound — `cx33` went
+from "orderable in hel1" to **orderable nowhere** within ~3h of the probe; they are RED as
+written, and their assertions belong in AC1's synthesized fixtures); **AC8** (unsatisfiable —
+`/git-data/` unanchored matches the `Hetzner CX33 (registry)` row, whose Notes read *"where
+the web/git-data/inngest hosts live"*, and which is correctly `active`); **AC10** (tests the
+plan document's own links, not the deliverable — green before a line of code); **AC11/AC12**
+(FR1 dropped); **AC4** (folded into AC3 — a hardcoded `== 23` baseline rots, and it never
+bound "no bypass" to the *new* step anyway).
+
 ### Pre-merge (PR)
 
-- [ ] **AC1** `bash apps/web-platform/infra/stock-preflight.test.sh` passes all 5 cases.
-- [ ] **AC2** `bash apps/web-platform/infra/scripts/stock-preflight.sh cx33 fsn1; echo $?` → `1`
-      (the live #6463 trap) and `... cx33 hel1` → `0`. Both with `HCLOUD_TOKEN` exported.
+- [ ] **AC1** `bash tests/scripts/test-stock-preflight-gate.sh` passes **all 6 cases**,
+      **hermetic** — no network, no `HCLOUD_TOKEN`, all fixtures synthesized via the
+      `_stock_fetch` seam (`cq-test-fixtures-synthesized-only`; sibling posture at
+      `tests/scripts/test-git-data-host-replace-gate.sh:17-21`). Cases: orderable → 0;
+      not-orderable → 1 **and the abort names the `warm-standby` tine + `#6463`**;
+      unknown type → 1; unknown location → 1; API 500 → 1 with the **distinct**
+      `cannot PROVE stock` message; non-EU DC (e.g. `sin`) **filtered out** of the
+      orderable-elsewhere list.
 - [ ] **AC3** *(reshaped per CTO — the old `grep -c … >= 4` did NOT bind a preflight to a
       **path**; four calls inside one job would pass it.)* A **coverage-enumeration test**
       asserts every recreate-shaped `apply_target` option has the gate in its job body.
@@ -424,39 +579,31 @@ or `app/**/layout.tsx`** — the mechanical UI escalation does not fire.
       (mirroring `terraform-target-parity.test.ts:81`) so an exclusion is **declared**,
       not silently skipped — and so a future target auto-enrolls.
       **This is what prevents a 5th dispatch path shipping without the gate.**
-- [ ] **AC4** No bypass token added:
-      `grep -c 'ack-destroy' .github/workflows/apply-web-platform-infra.yml` == **23**
-      (the `origin/main` baseline, measured 2026-07-15). The token legitimately appears 23×
-      elsewhere in the file, so an absolute `== 0` would false-fail a correct implementation.
-      The invariant is *unchanged*, not *absent*.
+- [ ] **AC4** *(folded from old AC4 — self-maintaining, no rotting baseline)* No bypass
+      introduced by this PR:
+      `git diff origin/main -- .github/workflows/apply-web-platform-infra.yml | grep -c '^+.*ack-destroy'` == 0.
 - [ ] **AC5** `cd apps/web-platform/infra && terraform validate` passes, **and** a
       `terraform plan` with the live `hel1` values does not error on the new validations.
-- [ ] **AC6** `python3 scripts/lint-agents-rule-budget.py` passes, **and** `B_ALWAYS` after
-      ≤ `B_ALWAYS` before (baseline **22757 B**). Rule id unchanged:
-      `grep -c 'hr-prod-host-config-change-immutable-redeploy' AGENTS.core.md` == 1 and
-      `grep -c 'hr-destroy-requires-headroom' AGENTS*.md` == 0.
-- [ ] **AC7** `grep -cE '^\| Hetzner (CAX11 \(git-data\)|Primary IPv4 \(git-data\)|Volume \(git-data)' knowledge-base/operations/expenses.md` == 3 **and** none of those 3 rows contains `| active |`.
-- [ ] **AC8** Zero `active` rows for git-data: `awk -F'|' '/git-data/ && $6 ~ /active/' knowledge-base/operations/expenses.md | wc -l` == 0.
-- [ ] **AC9** web-2 rows read fsn1:
-      `awk -F'|' '/\(web-2/ && /hel1/' knowledge-base/operations/expenses.md | wc -l` == 0.
-- [ ] **AC10** Every `knowledge-base/` path cited in this plan resolves:
-      `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <plan> | xargs -I{} bash -c '[[ -f "{}" ]] || echo BROKEN: {}'` → empty.
-- [ ] **AC11** `bash scripts/followthroughs/hermes-snapshot-retention-6453.sh; echo $?` → non-zero today (soak window has not elapsed; `earliest=2026-08-14`).
-- [ ] **AC12** #6453 carries the `soleur:followthrough` directive + `follow-through` label.
-- [ ] **AC14** *(CPO sign-off condition — the escape path)* The stock-miss abort names the
-      **orderable locations for the target type** and points at #6463. Verify:
-      `stock_preflight cx33 fsn1 2>&1 | grep -q 'orderable: hel1'` **and**
-      `... | grep -q '#6463'`. The data comes from the `/v1/datacenters` response the gate
-      already fetched — no extra call. **This is what makes the abort a fork instead of a
-      wall**, and CPO conditioned sign-off on it.
-- [ ] **AC15** The API-blip abort is a **distinct** message from the stock-miss abort
-      (`grep -q 'cannot PROVE stock'`), so an operator does not read a blip as a real
-      shortage and file a spurious #6463 duplicate.
+- [ ] **AC6** `python3 scripts/lint-agents-rule-budget.py` → **exit 0** (it already enforces
+      both `B_ALWAYS_REJECT=23000` and `PER_RULE_CAP=600`; do not restate its constants).
+      Rule id unchanged: `grep -c 'hr-prod-host-config-change-immutable-redeploy' AGENTS.core.md` == 1.
+- [ ] **AC7** *(merged with old AC8 — one invariant, one parser, anchored to the Service column)*
+      `awk -F'|' '$2 ~ /git-data/ && $6 ~ /active/ {n++} END {print n+0}' knowledge-base/operations/expenses.md` → **0**
+      (returns **3** today — the three real git-data rows; the registry row correctly drops out).
+- [ ] **AC9** *(positive assertion — the old negative `/hel1/` grep was a landmine that
+      Phase 5.2's own mandated migration prose would trip)*
+      `awk -F'|' '$2 ~ /\(web-2/ {n++} END {print n+0}'` == **3** **and**
+      `awk -F'|' '$2 ~ /\(web-2/ && $8 ~ /fsn1/ {n++} END {print n+0}'` == **3**
+      (today: 3 and 0).
 - [ ] **AC16** The gate's test actually runs in CI — not just locally:
-      `grep -c 'test-stock-preflight-gate' scripts/test-all.sh` == 1.
-      **P0.3 proved nothing auto-discovers `tests/scripts/`** (the `:218` glob excludes it;
-      siblings are registered by hand at `:144-146`), so this line is the only thing
-      standing between the deliverable and a green PR with zero coverage.
+      `grep -c 'test-stock-preflight-gate' scripts/test-all.sh` == 1. Nothing auto-discovers
+      `tests/scripts/` (the `:218` glob excludes it; siblings hand-registered at `:144-146`),
+      so this one line is all that stands between the deliverable and a green PR with **zero
+      coverage**.
+- [ ] **AC17** *(the required check — distinct from AC6's byte lint)* ADR-092 / AP-017 body ack:
+      `git fetch --no-tags origin main && python3 scripts/lint-rule-bodies.py --check --base "$(git merge-base origin/main HEAD)"` → **exit 0**, **and**
+      `grep -c 'hr-prod-host-config-change-immutable-redeploy' .claude/rule-weakening-acks.txt` == 1.
+      **Without this the PR cannot merge** — `rule-body-lint` is always-run and required.
 
 ### Post-merge (operator)
 
@@ -466,16 +613,23 @@ or `app/**/layout.tsx`** — the mechanical UI escalation does not fire.
 
 ## Test Scenarios
 
-| # | Scenario | Expected |
+**All gate cases are FIXTURE-driven** (via the `_stock_fetch` seam) — never live stock.
+`cx33` moved from "orderable in hel1" to **orderable nowhere** within ~3h of the original
+probe; a live-bound suite is red by lunchtime and violates `cq-test-fixtures-synthesized-only`.
+Invocation is `source tests/scripts/lib/stock-preflight-gate.sh; stock_preflight <type> <loc>`
+— **not** the standalone `stock-preflight.sh` path, which Phase 1 forbids.
+
+| # | Scenario (synthesized fixture) | Expected |
 |---|---|---|
-| T1 | `stock-preflight.sh cx33 hel1` | exit 0 |
-| T2 | `stock-preflight.sh cx33 fsn1` | exit 1 + `::error::` (live #6463 trap) |
-| T3 | `stock-preflight.sh cax11 hel1` | exit 1 (ARM line, 0 EU DCs) |
-| T4 | `stock-preflight.sh bogus99 hel1` | exit 1 (unknown type → fail-closed) |
-| T5 | `stock-preflight.sh cx33 atlantis` | exit 1 (unknown location → fail-closed) |
-| T6 | API returns 500 (mocked) | exit 1 (fail-closed — unavailable API ≠ available stock) |
-| T7 | `terraform validate` with `location = "us-east"` | rejected by the new validation |
-| T8 | `terraform validate` with live `hel1` values | passes |
+| T1 | type present in `available` for the DC | exit 0 |
+| T2 | type absent from `available`, present elsewhere in EU | exit 1; abort names the **`warm-standby` tine**, `#6463`, and the EU-filtered orderable list |
+| T3 | type absent everywhere (the cax11/cx33 shape) | exit 1; abort reads `orderable in EU: <none>` |
+| T4 | type orderable only in a **non-EU** DC (`sin`) | exit 1; `sin` **filtered out** of the suggestion — never advise a Singapore prod host |
+| T5 | `/v1/server_types?name=…` → 0 results | exit 1 (unknown type → fail-closed) |
+| T6 | unknown location | exit 1 (fail-closed) |
+| T7 | fetch returns 500 | exit 1 + the **distinct** `cannot PROVE stock` message |
+| T8 | `terraform validate` with `location = "us-east"` | rejected by the new validation |
+| T9 | `terraform validate` with live `hel1` values | passes |
 
 ## Risks & Mitigations
 
@@ -518,6 +672,25 @@ or `app/**/layout.tsx`** — the mechanical UI escalation does not fire.
   preflight built on `supported` would pass on the #6463 trap. Use `available`.
 - Each Hetzner **location** maps to exactly one **datacenter** (`fsn1 → fsn1-dc14`), so there is
   no sibling-DC fallback within a location. Resolve location → its single DC; do not assume a set.
-- Stock is **time-varying**. `cx33 @ fsn1` may return. Do not encode today's availability as a
-  constant — the preflight must query live, every dispatch.
+- Stock is **time-varying on an HOURS timescale** — `cx33` went from "orderable in hel1" to
+  **orderable nowhere** within ~3h of the first probe, in this same session. Never encode
+  today's availability as a constant: the gate queries live every dispatch, and its **tests
+  use synthesized fixtures** (`cq-test-fixtures-synthesized-only`). The first draft of this
+  plan wrote this very Sharp Edge and then encoded live stock in 6 assertions — do not repeat it.
+- **Run the linter; don't quote a rubric that describes it.** The first draft asserted
+  `B_ALWAYS` was "over the 22000 critical threshold" by copying `compound/SKILL.md`'s rubric.
+  The real linter is `WARN=20000 / REJECT=23000` (`:74-75`, raised in #4599) and **exits 0**.
+  The rubric is stale (#6461). A number you typed is not a number you ran.
+- **`available` ≠ `supported`.** `supported` (24/EU DC) is what a DC *can* host; `available`
+  (12-14, moving) is what is *orderable now*. A gate built on `supported` passes the live
+  trap. Same trap in the CLI: `hcloud server-type list -o columns=name,location` reports the
+  **supported** set — it would have said `cx33 → fsn1,nbg1,hel1` while cx33 was orderable nowhere.
+- **A `-replace` on an address not in state plans a plain CREATE** (exit 0, no warning). That
+  is why `git-data-host-replace` is a live failing path, not dead code.
+- **Not every web-2 repair is a recreate.** `hcloud_server_network.web` is a separate
+  `for_each`'d resource — an *additive online attach* (`network.tf:9-13`), deliberately not an
+  inline `network {}` block (which would force-replace the host). `apply_target=warm-standby`
+  re-attaches the NIC + volume with **no destroy and no stock requirement** — that is how
+  web-2's IP was restored on 07-13 without recreating it (`created` unchanged). Documented at
+  `apply-web-platform-infra.yml:451`.
 </content>
