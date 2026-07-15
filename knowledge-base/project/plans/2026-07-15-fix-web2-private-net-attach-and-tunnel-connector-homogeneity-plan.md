@@ -13,6 +13,53 @@ adr: ADR-113 (next-free verified against origin/main 2026-07-15; re-verify at /s
 >
 > **This is v2.** A 5-agent panel + a scoped advisor consult falsified four v1 claims by **measurement**. Every correction is marked `v2:` inline. v1's largest phase (per-host SSH ingress) is **cut** — see `## Alternatives Considered`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-15
+**Reviewers/agents used:** CTO (Phase 2.5) · terraform-architect (2.8) · repo-research-analyst ·
+learnings-researcher · Explore · 5-agent plan-review panel (DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer) · scoped `fable` advisor consult (Step 4.5) ·
+verify-the-negative + post-edit self-audit passes (4.45)
+
+**Gates fired:** 4.5 Network-Outage Deep-Dive (`unreachable`/`firewall`/`timeout`/`handshake` +
+the resource-shape trigger: `terraform_data.*` carries `provisioner "remote-exec"` +
+`connection { type = "ssh" }`) · **4.55 Downtime & Cutover** (deploy/router class). **Passed:**
+4.6 User-Brand Impact · 4.7 Observability (5/5 fields, no `ssh ` in `discoverability_test`) ·
+4.8 PAT-shaped variable · 4.9 UI-wireframe (no UI surface → skip). Telemetry emitted for both fires.
+
+### Key improvements over v1
+
+1. **Root cause corrected and widened.** `-target` traversal is **RESOURCE-level, not
+   instance-level** (reproduced on TF 1.10.5), and there are **two** pullers — not one. The
+   decisive one, `cloudflare_record.app` (`dns.tf:16`), is **unremovable**, which is *why* a guard
+   is the only fix and Options B/C/D all die.
+2. **v1's largest phase (P2b) cut.** It **did not work** — repointing `connection.host` to a
+   private IP breaks the bridge's `-d "$SERVER_IP"` NAT match ⇒ every provisioner dies ⇒ main
+   wedged. Its coupling premise was contradicted by the plan's own H5, and **ADR-068:378-384 had
+   already rejected the shape**. Replaced by a ~10-LoC fail-closed `hostname` tripwire — the only
+   **runtime evidence** in the plan.
+3. **P3's fix was itself broken.** Step outputs are namespaced by step id, so v1's "new step"
+   would have left the Slack ⚠️ inert — the exact defect P3 exists to fix. Corrected to branching
+   *inside* `zot_mirror`, preserving the output contract.
+4. **I1 restated as a RUNTIME precondition.** As v1 phrased it, I1 was **falsified by
+   construction** (the token is granted at server-create; the attach always lands after). No phase
+   now claims to enforce it.
+5. **Four v1 claims falsified by measurement** — AC6 returned **7** (not 2); the "T10 free
+   retro-proof" measured **0**; `_run_gate` emits **3 counters + a sum + rc** (not 5); and **T18
+   already asserts PASS on the exact shape the guard must HALT**.
+
+### New considerations discovered
+
+- **T18 encodes the belief this plan overturns** — a test blessing a per-PR web-2 create.
+- **The drift detector isn't blind, it's drowned** (exit 2 is its permanent steady state) ⇒ it
+  cannot be the guard's backstop ⇒ the guard must be a pre-apply HALT.
+- **`deploy.` IS on the tunnel path** (H7) ⇒ **P1 corrodes its own acceptance evidence** ⇒ AC13/AC14
+  need N≥5, not a single green run.
+- **A RED warm-standby run can mean the attach LANDED** (attach-proof runs before verify) ⇒ a
+  reflexive recreate would destroy a good attach.
+- **`hcloud_firewall_attachment` does not attach before first boot** ⇒ a per-PR-born host boots
+  unfirewalled (filed, and it independently reinforces the guard ruling).
+
 ## Overview
 
 `soleur-web-2` (warm standby, fsn1) is attached to **no** Hetzner private network (`privIP=-`), so
@@ -59,7 +106,7 @@ a single tunnel with **connector-relative** ingress and **two** replicas ⇒ non
 | "Verify the `registry.*`/`ssh.*` ingress is served by a private-net-attached origin (web-1)" | **Not expressible today.** CF load-balances across HA replicas; `server.tf:158` gives BOTH hosts the same token (`for_each`, no `each.key` conditional). You cannot pin the answering origin. | Re-framed as a determinism decision — `## Architecture Decision`. |
 | "Consider failing the release loud (not `continue-on-error`-masked)" | **Contradicts ADR-096**, which explicitly binds the mirror non-blocking. The *real* gap is narrower: `zot_mirror` is `if: steps.zot_bridge.outcome == 'success'` and `degraded()` lives **inside** it, so a **bridge** failure makes the mirror **skip** and nothing emits. | **Do not make it blocking.** Fix the loudness gap (P3). |
 | `tunnel.tf:62` blames `dial tcp 10.0.1.30:5000: operation was canceled` on "the origin is transiently DOWN (#6288)" | **Misattribution.** An unattached web-2 produces the identical error on ~50% of dials. | Correct the comment (P4). |
-| Issue scope: registry push only | **Incomplete.** `cf-tunnel-ssh-bridge/action.yml:208` NAT-redirects web-1's public IP into the shared tunnel, so the 11 web-1-scoped `terraform_data.*` provisioners can land on **web-2** while state records web-1. | Carries the threshold. P2c tripwire; audit filed as its own P1 issue. |
+| Issue scope: registry push only | **Incomplete.** `cf-tunnel-ssh-bridge/action.yml:208` NAT-redirects web-1's public IP into the shared tunnel, so the 12 web-1-scoped `terraform_data.*` provisioners can land on **web-2** while state records web-1. | Carries the threshold. P2c tripwire; audit filed as its own P1 issue. |
 
 ## Hypotheses
 
@@ -142,6 +189,15 @@ It chose Option B and **explicitly REJECTED per-host tunnels** (`:378-384`) — 
 `cloudflared.web` risks REPLACING the live tunnel (import artifact, `config_src` forces
 replacement) = deploy-path outage… collides with 3.D's ingress rewire"* — and even records that
 *"the 11 SSH provisioners are all web-1-scoped"* (`:383`).
+
+> **Count drift (measured).** ADR-068's "11" is **stale** — `server.tf` now carries **12**
+> `terraform_data.*` `connection { host = hcloud_server.web["web-1"].ipv4_address }` blocks
+> (`:238, :278, :322, :369, :447, :520, :575, :720, :974, :1025, :1054, :1112`), all on web-1's
+> **public** IP. A 13th `terraform_data` (`deploy_pipeline_fix`, `:820`) has no `connection {}` at
+> all. Quoted verbatim above as ADR-068 wrote it; the **12** is the live number this plan uses
+> everywhere else. *(v1 said 11 throughout — caught by the Phase 4.45 verify-the-negative pass, the
+> exact "assert what a command returns without running it" defect this plan's own Sharp Edges warn
+> about. The ADR-068 amendment (P4.3) should correct the count.)*
 
 **Two consequences.** (1) ADR-113 must **cite** ADR-068's rejection of per-host tunnels, never
 re-decide it as novel. (2) **v1's P2b was re-proposing an explicitly-rejected alternative** — the
@@ -261,6 +317,78 @@ the sole live origin, then terminal exit 1. A release does one.
 ### Vendor-tier reality check
 
 No new vendor resource; no tier gate. Hetzner private-network attachment is free and additive.
+
+## Downtime & Cutover
+
+*(deepen-plan Phase 4.55 — gate FIRES: the deploy/router class. P1's dispatch re-swaps the web-1
+container, and the `web-2-recreate` escalation is a `-replace` of an `hcloud_server`.)*
+
+**Offline-inducing operation + surface.** Two, both on the **management/serving** surface:
+
+1. **P1 `warm-standby` — a container re-swap of `soleur-web-platform` (web-1), the SOLE live
+   serving origin** for `app.soleur.ai` (`dns.tf:13-20`, a single proxied A record). Not a host
+   replace: `hcloud_server.web` is untargeted by the job, and `ignore_changes[placement_group_id]`
+   + the `reboot_updates == 0` guard keep a reboot out.
+2. **The `web-2-recreate` escalation — a `-replace` of `hcloud_server.web["web-2"]`.** web-2 is
+   weight-0, drained, and in **no serving pool** (`server.tf:196-216`, the ADR-068 §(c) LB-weight
+   gate), so this is **zero ingress impact by construction**.
+
+**Zero-downtime path — evaluated and adopted as the default.**
+
+| Operation | Zero-downtime path | Adopted? |
+|---|---|---|
+| web-2 recreate | **Blue-green by construction** — web-2 is drained/weight-0; nothing routes to it. | ✅ Default. No window needed. |
+| web-1 re-swap | **The existing rolling container swap at the CURRENT tag** — the identical mechanism every release performs (`/hooks/deploy` → `ci-deploy.sh`), serialized by the `web-1-swap` mutex. The tag does not change, so this is an idempotent redeploy, not a version cutover. | ✅ Default. Residual = one ordinary deploy's swap window. |
+| The attach itself (`hcloud_server_network.web["web-2"]`) | **Additive online attach** — `network.tf:10-13` records that a separate `hcloud_server_network` resource is used *precisely so* an inline `network {}` block cannot force-replace the host. Pure `+create`. | ✅ Default. Zero downtime. |
+
+**No new downtime is introduced by this plan.** P1 rides an existing, continuously-exercised
+path; there is no maintenance window to request and no operator sign-off for downtime is needed.
+
+**Residual risk — the failure path, not the happy path** (architecture-strategist Q1(a)):
+`deploy-status-fanout-verify.sh:16-21` waits `FRESH_BOOT_WINDOW_S=600` then re-POSTs once
+(`DEGRADED_RETRY_MAX=1`) ⇒ **up to 2 swap cycles** of the sole live origin before a terminal exit 1.
+A release does one. Each cycle is an ordinary deploy swap, so the exposure is *2× a normal deploy
+window*, not an outage — but it is not "identical to a release" and the plan does not claim so.
+
+**Per-stage verification + rollback.**
+
+| Stage | Verification | Rollback |
+|---|---|---|
+| Attach applied | The job's own attach-proof step asserts state presence and `::error::`s otherwise | Attach is additive; nothing to roll back. A stray attach is harmless. |
+| web-1 re-swapped | `HEALTH_URL` = `https://app.soleur.ai/health` — the **only** single-origin signal (H7: `deploy-status` is host-local and goes nondeterministic after P1) | Re-POST at the prior tag (the tag never changed — there is nothing to revert to) |
+| web-2 recreate (escalation only) | Attach proof + `:9000` bind | web-2 is drained; a failed recreate leaves the serving path untouched |
+
+**Explicit non-adoption:** no residual-downtime acceptance is requested, so no bounded maintenance
+window and no operator sign-off are required for this plan.
+
+## Network-Outage Deep-Dive
+
+*(deepen-plan Phase 4.5 — gate FIRES on `unreachable`, `firewall`, `timeout`, `handshake`. Also
+fires on the resource-shape trigger: the plan drives `terraform apply` on `terraform_data.*`
+resources carrying `provisioner "remote-exec"` + `connection { type = "ssh" }` — an implicit
+SSH dependency the prose scan alone would not catch.)*
+
+Layer-by-layer status of `## Hypotheses`, per `hr-ssh-diagnosis-verify-firewall` (L3 → L7; a layer
+above that drops packets is invisible to layers below):
+
+| Layer | Status | Verification artifact |
+|---|---|---|
+| **L3 — firewall allow-list** | ✅ **verified — not the cause**, with artifact (a valid opt-out) | Intra-`hcloud_network` traffic is **not subject to `hcloud_firewall` at all** — those rules bind the **public** interface only (`2026-07-02-multi-host-ga-cutover-review-mechanisms.md`). Corroborated by the issue body: web-1 → `10.0.1.30:5000` is REACHABLE *now*, under the same firewall. The failure is **absence of an interface**, not a filtered packet. |
+| **L3 — DNS / routing** | ✅ verified — not a discriminator | `registry.soleur.ai` is a proxied CNAME to the tunnel (`dns.tf:59`); resolution is identical for both replicas, so it cannot explain a per-replica split. |
+| **L3 — private-net membership** | ✅ **ROOT CAUSE** | `hcloud server describe soleur-web-2 -o json \| jq '.private_net'` → `[]` (issue: `privIP=-`) vs `soleur-web-platform` → `10.0.1.10`. Re-confirmed at P0.1. |
+| **L7 — TLS / proxy (CF edge)** | ✅ verified — not the cause | The ingress rule is live and correct (`tunnel.tf:64-75`); #6357 already disproved a "stale rule" premise. The edge terminates identically regardless of which replica answers. |
+| **L7 — application (zot origin)** | ✅ verified — not the cause | web-1 → `nc -z 10.0.1.30 5000` REACHABLE at the same instant web-2 → UNREACHABLE (issue body). A per-replica split cannot be an origin-down symptom. |
+| **L7 — connector selection** | ✅ **CO-CAUSE** | `server.tf:158` grants both hosts the same token inside `for_each` with no `each.key` conditional ⇒ 2 HA replicas; CF load-balances. Confirmed at P0.2 via `cloudflared tunnel info`. |
+
+**Ordering discipline satisfied:** L3 was verified **before** any L7 hypothesis was drafted, and
+the L3 finding (absent interface) is what makes the L7 connector-selection co-cause legible. **No
+service-layer fix (sshd, fail2ban) is proposed** — consistent with `hr-ssh-diagnosis-verify-firewall`,
+which exists precisely to stop the L7-first inversion.
+
+**Gap closed by this deep-dive:** the plan's own `tunnel.tf:58-63` comment attributes the symptom
+to an L7 cause ("the origin is transiently DOWN — #6288") when the evidence is L3 (absent
+interface). That misattribution is an instance of the exact inversion this gate guards against,
+and correcting it is an in-scope task (P4).
 
 ## Observability
 
@@ -418,7 +546,7 @@ host_creates: (
 ### P2c — In-band wrong-host tripwire (replaces the cut P2b), ships WITH P1
 
 > **v2 CUT (unanimous).** v1's **P2b** (per-host `ssh-web-*` ingress + DNS + CF Access + bridge
-> param + repointing 11 `terraform_data.*` connection blocks) is **cut and filed as its own
+> param + repointing 12 `terraform_data.*` connection blocks) is **cut and filed as its own
 > issue**. Four independent findings, three of them P0:
 >
 > 1. **It does not work.** `cf-tunnel-ssh-bridge/action.yml:165` sets
@@ -428,7 +556,7 @@ host_creates: (
 >    **only because** they dial that public IP and the kernel hijacks it — the action's own comment
 >    says the design holds *"with no server.tf connection.host change"*. Repointing to `10.0.1.10`
 >    ⇒ the NAT rule stops matching ⇒ the runner blackholes RFC1918 ⇒ **every provisioner dies**.
->    Those 11 are `-target`ed by the **per-PR merge** `apply` job ⇒ **main wedged**. v1 never
+>    Those 12 are `-target`ed by the **per-PR merge** `apply` job ⇒ **main wedged**. v1 never
 >    mentioned `-d "$SERVER_IP"`.
 > 2. **The coupling argument was refuted by this plan's own text.** v1: "P1 makes web-2 answer more
 >    routes successfully ⇒ must ship together". P1 grants private-net membership, changing exactly
@@ -517,7 +645,7 @@ retry in the bridge (new replica per attempt; ~3% residual at N=5) is ~10 more l
   permitted; AC8 is relaxed accordingly so it does not **forbid** the correction.*
 - Apply the 4 `.c4` edits; run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 - Correct `tunnel.tf:58-63`.
-- **File the separate P1 issue:** *"Audit web-1 vs web-2 for the 11 provisioner-applied host
+- **File the separate P1 issue:** *"Audit web-1 vs web-2 for the 12 provisioner-applied host
   configs — Terraform state may be false."* Labels `type/bug`, `priority/p1-high`,
   `domain/engineering` (all verified). **v2: unblocked by P2c** (it runs behind a fail-closed
   identity assertion), not blocked on the cut P2b.
@@ -576,7 +704,7 @@ retry in the bridge (new replica per attempt; ~3% residual at N=5) is ~10 more l
 **Deliberately NOT in this table:**
 
 - `plugins/soleur/test/terraform-target-parity.test.ts` — needs **no** change; its exclusion sets become true rather than aspirational. `tfplan-web-platform-real-baseline.json` needs no re-capture (only its counter string widens).
-- `dns.tf`, `cf-tunnel-ssh-bridge/action.yml`, the 11 `connection { host }` blocks — **P2b is cut**; these move to the I2 issue.
+- `dns.tf`, `cf-tunnel-ssh-bridge/action.yml`, the 12 `connection { host }` blocks — **P2b is cut**; these move to the I2 issue.
 - `ADR-096` Decision text — precedent, not implicated (an optional premise note is permitted; see P4).
 - `ADR-082`, `WEB_HOST_PRIVATE_IPS`, the registry-bridge origin-discriminator — cut as adjacency / instrumentation for a hypothesis P1 retires.
 
@@ -668,7 +796,7 @@ consult (Step 4.5). All rulings applied.
 | CTO Q3 | Addressing inline, audit separate | **Overridden** by DHH + code-simplicity + advisor (below): the coupling premise was false. Audit stays separate; addressing → I2 issue |
 | CTO Q5 | Threshold `single-user incident` (false-assurance multiplier) | Applied |
 | DHH (P0) | **P2b does not work** — the `-d "$SERVER_IP"` NAT scope; and the coupling argument is contradicted 165 lines earlier | Applied — P2b **cut** |
-| DHH / code-simplicity | 6 ACs assert absence-of-work; ADR-107/113 drift; Architecture section writes ADR-113 twice | Applied — ACs 14→11 (+ v1's AC3b/3c/3d dissolved with P2b); ordinal swept; section trimmed |
+| DHH / code-simplicity | 6 ACs assert absence-of-work; ADR-107/113 drift; Architecture section writes ADR-113 twice | Applied — v1's AC3/AC6/AC10/AC11/AC2c + AC8's second half **cut**; v1's AC3b/3c/3d **dissolved** with P2b; 5 new ACs added for panel findings (T18, fail-open, per-type remediation, N≥5 evidence) ⇒ v2 = 14 ACs, all re-derived by **running** them; ordinal swept; section trimmed |
 | code-simplicity | The `hostname` assertion is the only **runtime evidence** and is wanted even if (a) ships; §Observability contradicted §P2 | Applied — P2c; failure_modes rewritten |
 | Kieran (P0, measured) | `_run_gate` = 3 counters + sum + rc (not 5); ~54 sites widen; `:235` vs `:238`; **T18 inverts**; AC1's fixture already exists; AC6 returns **7**; T10 retro-proof is **0** | Applied — P2 harness block + ACs |
 | architecture-strategist (P1-4) | **I1 is falsified by construction** — the token is granted at server-create, the attach always lands after; `host_creates` does not enforce I1 | Applied — I1 restated as a **runtime** precondition; **no phase claims to enforce it** |

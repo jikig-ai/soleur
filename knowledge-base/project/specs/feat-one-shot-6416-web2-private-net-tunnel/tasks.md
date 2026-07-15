@@ -61,7 +61,7 @@ brand_survival_threshold: single-user incident
 - [ ] 4.4 **ADR-096:** leave `## Decision` unchanged (precedent, vindicated). An optional non-blocking note on its falsified singular-connector premise is permitted. → **AC9**
 - [ ] 4.5 `model.c4`: amend the `platform.infra.tunnel` description + add `tunnel -> zotRegistry`, `hetzner -> tunnel`, `github -> tunnel`. No new `include` needed (all three are already in the `containers` view). Run `c4-code-syntax.test.ts` + `c4-render.test.ts`. → **AC8**
 - [ ] 4.6 Correct the `tunnel.tf:58-63` misattribution comment (comment-only; no resource diff).
-- [ ] 4.7 File the **audit** issue: "Audit web-1 vs web-2 for the 11 provisioner-applied host configs — Terraform state may be false." Labels `type/bug`, `priority/p1-high`, `domain/engineering`. Unblocked by Phase 2c. → **AC10**
+- [ ] 4.7 File the **audit** issue: "Audit web-1 vs web-2 for the 12 provisioner-applied host configs — Terraform state may be false." Labels `type/bug`, `priority/p1-high`, `domain/engineering`. Unblocked by Phase 2c. → **AC10**
 - [ ] 4.8 File the **I2** issue: "Deterministic tunnel origin for host-specific routes (ADR-113 I2)." Must carry candidate (b) as the leading shape; the `-d "$SERVER_IP"` NAT rework + a new TF output for the private address + two-listener/two-NAT-rule requirement if (a); ADR-068's prior rejection; `WEB_HOST_PRIVATE_IPS` single-sourcing; the `ssh.`-retirement follow-up; the ADR-082 stale `monitored = false` note. → **AC10**
 
 ## Phase 4b — File the adjacent findings (file, do not execute)
