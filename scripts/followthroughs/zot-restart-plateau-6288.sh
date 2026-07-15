@@ -144,10 +144,22 @@ if [[ -n "$maxoom" && "$maxoom" -gt 0 ]]; then
 fi
 
 # (5) anon RSS pressure near the --memory cap (context signal, backs up the monotonic counter).
-threshold=$(( CAP_MB - ANON_HEADROOM_MB ))
+# The cap is REPORTED by the host (zot_memory_cap_mb, read from the container's live cgroup
+# memory.max), not assumed here. It used to default to a hardcoded 7168 — correct only while
+# the host was cx33. The cap is now derived from var.registry_server_type
+# (zot-registry.tf local.registry_memory_cap_mb), so on a 4 GB host it is 3072. A gate holding
+# the stale 7168 would test zot_anon_mb against 7168-1024=6144 on a container the kernel kills
+# at 3072: unreachable, so it PASSES a starved host — a gate that does not pin the thing it
+# names. Fall back to CAP_MB only when the host reports nothing (older boot with no such
+# field); a reported cap always wins.
+reported_cap="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values zot_memory_cap_mb | sort -n | tail -1)"
+effective_cap="${reported_cap:-$CAP_MB}"
+cap_source="reported by host"
+[[ -z "$reported_cap" ]] && cap_source="assumed (host reported none)"
+threshold=$(( effective_cap - ANON_HEADROOM_MB ))
 maxanon="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values zot_anon_mb | sort -n | tail -1)"
 if [[ -n "$maxanon" && "$maxanon" -gt "$threshold" ]]; then
-  FAILS+=("zot_anon_mb peaked at ${maxanon} MB (> cap ${CAP_MB} - headroom ${ANON_HEADROOM_MB} = ${threshold}) — the --memory cap is under-sized")
+  FAILS+=("zot_anon_mb peaked at ${maxanon} MB (> cap ${effective_cap} [${cap_source}] - headroom ${ANON_HEADROOM_MB} = ${threshold}) — the --memory cap is under-sized")
 fi
 
 if [[ "${#FAILS[@]}" -gt 0 ]]; then
@@ -157,5 +169,5 @@ if [[ "${#FAILS[@]}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "PASS: zot restart-loop plateaued for boot_id=$NEWEST_BOOT over ${span}s / ${n_events} events (>=1 valid container sample) — restarts flat (delta<=${PLATEAU_TOL}), no exit_code=137, zot_oom_kills=0, oom_kills_5m=0, zot_anon_mb below the ${CAP_MB}m cap. #6288 remediation holds."
+echo "PASS: zot restart-loop plateaued for boot_id=$NEWEST_BOOT over ${span}s / ${n_events} events (>=1 valid container sample) — restarts flat (delta<=${PLATEAU_TOL}), no exit_code=137, zot_oom_kills=0, oom_kills_5m=0, zot_anon_mb below the ${effective_cap}m cap [${cap_source}]. #6288 remediation holds."
 exit 0
