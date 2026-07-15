@@ -66,7 +66,15 @@ no auto-reconnect). New: `lib/support-sse.ts` (pure frame format + client parse/
 
 The live backend is gated behind a NEW `support-live` runtime flag, default OFF: while
 OFF the bubble shows the canned interface-preview reply (no network); the copy flips
-live/preview atomically with the flag. `support-live` must NOT be flipped ON until a
+live/preview atomically with the flag. **The gate is enforced server-side, not only in
+the front-end:** `POST /api/support` re-checks `getRuntimeFlag("support-live", …)` (via
+the fail-closed `resolveIdentity`) and returns 404 while OFF, BEFORE resolving a
+conversation or invoking `dispatchSoleurGo`. This is load-bearing — the route is
+authenticated-reachable independently of the React flag, so without the server check a
+direct POST would invoke the support Concierge (and its kb-search read surface) while the
+feature is meant to be dark. So a dark merge genuinely keeps the backend inert: the code
+ships to prod but the endpoint 404s until an operator flips the flag. `support-live` must
+NOT be flipped ON until a
 DEPLOYED-env QA confirms (a) a repo-less user gets a real corpus-grounded streamed reply
 and (b) NO internal-`knowledge-base/` content leaks. The sandbox `denyReadExtra` obscures
 `<root>/knowledge-base` from the read-only support session as tool-level defense-in-depth,

@@ -14,6 +14,8 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { resolveIdentity } from "@/lib/feature-flags/identity";
+import { getRuntimeFlag } from "@/lib/feature-flags/server";
 import { dispatchSoleurGo } from "@/server/cc-dispatcher";
 import { resolveOrCreateSupportConversation } from "@/server/support-conversation";
 import { formatSupportSseFrame } from "@/lib/support-sse";
@@ -36,6 +38,22 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
   const userId = user.id;
+
+  // SECURITY BOUNDARY (ADR-113 "Live rollout gate"): the live Concierge backend
+  // is gated behind `support-live`, default OFF. The front-end only calls this
+  // route when the flag is ON, but the endpoint is authenticated-reachable on
+  // its own, so it MUST re-check server-side — otherwise a direct POST would
+  // invoke the support Concierge (and its kb-search read surface) while the
+  // feature is meant to be dark. `resolveIdentity` fails CLOSED (env mirror
+  // FLAG_SUPPORT_LIVE=0), so a Flagsmith outage can only ever DENY. While OFF the
+  // route is invisible (404) — the client shows its canned interface-preview.
+  const identity = await resolveIdentity(supabase);
+  if (!(await getRuntimeFlag("support-live", identity))) {
+    return new Response(JSON.stringify({ error: "Not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   const body = (await request.json().catch(() => null)) as { message?: unknown } | null;
   const message = typeof body?.message === "string" ? body.message.trim() : "";

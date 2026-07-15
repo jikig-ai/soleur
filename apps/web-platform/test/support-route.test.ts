@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   dispatchSoleurGo: vi.fn(),
   resolveOrCreateSupportConversation: vi.fn(async () => "conv-support-1"),
   validateOrigin: vi.fn(() => ({ valid: true, origin: "https://app" })),
+  getRuntimeFlag: vi.fn(async () => true),
+  resolveIdentity: vi.fn(async () => ({ userId: "user-1", role: "prd", orgId: null })),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -23,6 +25,8 @@ vi.mock("@/lib/auth/validate-origin", () => ({
   validateOrigin: h.validateOrigin,
   rejectCsrf: () => new Response("csrf", { status: 403 }),
 }));
+vi.mock("@/lib/feature-flags/identity", () => ({ resolveIdentity: h.resolveIdentity }));
+vi.mock("@/lib/feature-flags/server", () => ({ getRuntimeFlag: h.getRuntimeFlag }));
 vi.mock("@/server/cc-dispatcher", () => ({ dispatchSoleurGo: h.dispatchSoleurGo }));
 vi.mock("@/server/support-conversation", () => ({
   resolveOrCreateSupportConversation: h.resolveOrCreateSupportConversation,
@@ -57,6 +61,7 @@ describe("POST /api/support", () => {
     h.getUser.mockResolvedValue({ data: { user: { id: "user-1" } } });
     h.validateOrigin.mockReturnValue({ valid: true, origin: "https://app" });
     h.resolveOrCreateSupportConversation.mockResolvedValue("conv-support-1");
+    h.getRuntimeFlag.mockResolvedValue(true);
   });
 
   it("dispatches with persona:'support' and the resolved conversation, streaming the sink frames as SSE", async () => {
@@ -78,6 +83,15 @@ describe("POST /api/support", () => {
     expect(sse).toContain(`"type":"stream"`);
     expect(sse).toContain(`"content":"hi"`);
     expect(sse).toContain(`"type":"session_ended"`);
+  });
+
+  it("404 (dark) when support-live is OFF — never invokes the Concierge", async () => {
+    h.getRuntimeFlag.mockResolvedValue(false);
+    const res = await POST(req({ message: "read your internal roadmap" }));
+    expect(res.status).toBe(404);
+    expect(h.getRuntimeFlag).toHaveBeenCalledWith("support-live", expect.anything());
+    expect(h.dispatchSoleurGo).not.toHaveBeenCalled();
+    expect(h.resolveOrCreateSupportConversation).not.toHaveBeenCalled();
   });
 
   it("401 when unauthenticated", async () => {
