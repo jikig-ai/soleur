@@ -505,9 +505,21 @@ terraform **resource names**, a different axis, so borrow the shape, not the set
 ### Phase 6 — Limit-raise tracking
 
 6.1 File the `action-required` issue for the Console limit raise (server → 10, **and** the
-    volume limit — a separate counter). **Verified operator-only** — a real attempt was made
-    (2026-07-15), not an a-priori assertion:
-    `playwright-attempt: navigated https://console.hetzner.cloud/ (301 → console.hetzner.com) and https://accounts.hetzner.com/login → redirects to /_ray/pow returning HTTP 429 — a proof-of-work anti-bot gate. Additionally: GET /v1/limits → 404 (no API); NO Hetzner Console credentials exist in Doppler (only HCLOUD_TOKEN, an API token that cannot reach the limits form); the persistent playwright-mcp profile holds 65 domains (Cloudflare, Better Stack, Sentry, Resend, GitHub, Google…) and ZERO Hetzner — no session to reuse.`
+    volume limit — a separate counter). **DONE at /work: #6481.** Verified operator-only by a
+    fresh attempt (a plan-declared operator gate is UNVERIFIED until re-attempted — the
+    Playwright-first hard gate fires even when the plan pre-declares the step):
+    `playwright-attempt: navigated https://console.hetzner.cloud/ (301 → console.hetzner.com). The Heray proof-of-work interstitial at accounts.hetzner.com/_ray/pow AUTO-CLEARED and the run reached the real login form at accounts.hetzner.com/login (client-number + password fields, no active session). Gate reached: a CREDENTIAL WALL with no credential in existence — Doppler holds only HCLOUD_TOKEN across prd_terraform/prd/dev, an API token that cannot reach the limits form. GET /v1/limits → 404 while GET /v1/pricing → 200 with the same token, proving the 404 is a real absence and not an auth artifact. The account password lives only in the operator's personal password manager.`
+
+    > **The plan's original evidence line was WRONG and is corrected above.** It asserted the
+    > PoW gate *"returns HTTP 429"* and blocked the run. **Not reproducible on 2026-07-15** —
+    > the PoW cleared on the first attempt and the run reached the login form. The conclusion
+    > (operator-only) survives, but for a different reason: the gate is the **missing
+    > credential**, not the bot check. This is exactly why the hard gate requires a fresh
+    > attempt rather than honoring a plan-declared handoff: had the 429 claim been taken at
+    > face value, the recorded reason would have been fiction. Note "no credential exists" is
+    > not one of the enumerated human gates (CAPTCHA/OTP/TOTP/passkey/push-MFA/card/hardware)
+    > — it is operator-only because storing the root infra-account password in Doppler for an
+    > agent to use is a **security decision for the operator**, not a blocker to route around.
 
 6.2 **Be honest that this rots — do NOT claim it is tracked.** The earlier draft said
     *"tracked by the `action-required` issue — not left to memory."* **That is false:**
@@ -560,7 +572,7 @@ bound "no bypass" to the *new* step anyway).
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** `bash tests/scripts/test-stock-preflight-gate.sh` passes **all 6 cases**,
+- [x] **AC1** `bash tests/scripts/test-stock-preflight-gate.sh` passes **all 6 cases**,
       **hermetic** — no network, no `HCLOUD_TOKEN`, all fixtures synthesized via the
       `_stock_fetch` seam (`cq-test-fixtures-synthesized-only`; sibling posture at
       `tests/scripts/test-git-data-host-replace-gate.sh:17-21`). Cases: orderable → 0;
@@ -568,7 +580,7 @@ bound "no bypass" to the *new* step anyway).
       unknown type → 1; unknown location → 1; API 500 → 1 with the **distinct**
       `cannot PROVE stock` message; non-EU DC (e.g. `sin`) **filtered out** of the
       orderable-elsewhere list.
-- [ ] **AC3** *(reshaped per CTO — the old `grep -c … >= 4` did NOT bind a preflight to a
+- [x] **AC3** *(reshaped per CTO — the old `grep -c … >= 4` did NOT bind a preflight to a
       **path**; four calls inside one job would pass it.)* A **coverage-enumeration test**
       asserts every recreate-shaped `apply_target` option has the gate in its job body.
       Model it on `plugins/soleur/test/terraform-target-parity.test.ts`, which already
@@ -620,23 +632,23 @@ bound "no bypass" to the *new* step anyway).
       >
       > A local `terraform plan` against the real root was deliberately not run: it needs the
       > R2 backend + prod creds to prove something parts 1-2 already establish offline.
-- [ ] **AC6** `python3 scripts/lint-agents-rule-budget.py` → **exit 0** (it already enforces
+- [x] **AC6** `python3 scripts/lint-agents-rule-budget.py` → **exit 0** (it already enforces
       both `B_ALWAYS_REJECT=23000` and `PER_RULE_CAP=600`; do not restate its constants).
       Rule id unchanged: `grep -c 'hr-prod-host-config-change-immutable-redeploy' AGENTS.core.md` == 1.
-- [ ] **AC7** *(merged with old AC8 — one invariant, one parser, anchored to the Service column)*
+- [x] **AC7** *(merged with old AC8 — one invariant, one parser, anchored to the Service column)*
       `awk -F'|' '$2 ~ /git-data/ && $6 ~ /active/ {n++} END {print n+0}' knowledge-base/operations/expenses.md` → **0**
       (returns **3** today — the three real git-data rows; the registry row correctly drops out).
-- [ ] **AC9** *(positive assertion — the old negative `/hel1/` grep was a landmine that
+- [x] **AC9** *(positive assertion — the old negative `/hel1/` grep was a landmine that
       Phase 5.2's own mandated migration prose would trip)*
       `awk -F'|' '$2 ~ /\(web-2/ {n++} END {print n+0}'` == **3** **and**
       `awk -F'|' '$2 ~ /\(web-2/ && $8 ~ /fsn1/ {n++} END {print n+0}'` == **3**
       (today: 3 and 0).
-- [ ] **AC16** The gate's test actually runs in CI — not just locally:
+- [x] **AC16** The gate's test actually runs in CI — not just locally:
       `grep -c 'test-stock-preflight-gate' scripts/test-all.sh` == 1. Nothing auto-discovers
       `tests/scripts/` (the `:218` glob excludes it; siblings hand-registered at `:144-146`),
       so this one line is all that stands between the deliverable and a green PR with **zero
       coverage**.
-- [ ] **AC17** *(the required check — distinct from AC6's byte lint)* ADR-092 / AP-017 body ack:
+- [x] **AC17** *(the required check — distinct from AC6's byte lint)* ADR-092 / AP-017 body ack:
       `git fetch --no-tags origin main && python3 scripts/lint-rule-bodies.py --check --base "$(git merge-base origin/main HEAD)"` → **exit 0**, **and**
       `grep -c 'hr-prod-host-config-change-immutable-redeploy' .claude/rule-weakening-acks.txt` == 1.
       **Without this the PR cannot merge** — `rule-body-lint` is always-run and required.
@@ -644,8 +656,18 @@ bound "no bypass" to the *new* step anyway).
 ### Post-merge (operator)
 
 - [ ] **AC13** Hetzner Console → Limits → "Request change → Limit increase": **server → 10**, and raise the **volume** limit.
-      `Automation: not feasible because no Hetzner Console credentials exist in Doppler (only HCLOUD_TOKEN, an API token that cannot reach the limits form); GET /v1/limits → 404 (probed); Console is OAuth + MFA + probable Turnstile; no precedent for infra-provider console automation.`
-      Tracked by the `action-required` issue from Phase 6.1 — not left to memory.
+      **Filed as #6481** (`action-required`, Post-MVP / Later) with the full attempt evidence.
+      `Automation: not feasible because no Hetzner Console credential exists in Doppler (only HCLOUD_TOKEN, an API token that cannot reach the limits form) — verified across prd_terraform/prd/dev; GET /v1/limits → 404 while GET /v1/pricing → 200 with the same token (the 404 is a real absence, not an auth artifact). See the corrected playwright-attempt line in Phase 6.1: the PoW interstitial CLEARED and the run reached the login form, so the gate is the missing credential, NOT the "429 anti-bot wall" this plan originally claimed.`
+
+      > **Dropped the tracking claim — it contradicted this plan's own Phase 6.2.** AC13 read
+      > *"Tracked by the `action-required` issue — not left to memory."* Phase 6.2 says in
+      > terms that this is **false**: `action-required` has **no sweeper** (grep across
+      > `.github/workflows/`, `scripts/`, `.claude/hooks/` returns only unrelated hits; 9+ open,
+      > oldest 2026-07-08, incl. #6406), and with `/v1/limits` → 404 there is **no API to poll**
+      > and no non-destructive probe — the only empirical test is attempting a 6th create. The
+      > raise is **unverifiable by construction**. The honest mechanism is the **consumer**:
+      > whoever next needs a probe host discovers the cap at plan time. #6481 says so in its
+      > own body rather than posing as a tracker.
 
 ## Test Scenarios
 
