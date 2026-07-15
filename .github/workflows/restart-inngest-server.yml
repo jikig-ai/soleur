@@ -27,6 +27,11 @@ permissions:
 
 jobs:
   restart:
+    # #6425: the push trigger above exists SOLELY to register the workflow in the Actions UI —
+    # it must never perform the op. Without this guard, editing this file on main restarts
+    # inngest-server in PRODUCTION as a side effect of the edit. Same idiom as
+    # cutover-inngest.yml:48 and deploy-inngest-image.yml:29 (the job no-ops on push).
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     # Hygiene cap (#5159): the poll budget below is 600s; 30min wall leaves
     # ample headroom over the poll ceiling. No timeout-minutes key existed

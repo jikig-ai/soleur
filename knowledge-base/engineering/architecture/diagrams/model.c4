@@ -174,8 +174,8 @@ model {
         description "Owner-private beta-tester / prospect CRM (ADR-102, #6165). Third-party contact PII + dual-lens conversation notes + append-only stage-transition history. Owner-only RLS; writes RPC-only via auth.uid()-pinned SECURITY DEFINER functions; the cro/cpo agents read AND write via the crm_* MCP tools (agent-native parity). 24-month retention; Art. 17 via ON DELETE CASCADE + crm_erase_contact."
       }
       tunnel = container "Cloudflare Tunnel" {
-        technology "cloudflared (ONE tunnel, N connector replicas — 2 today: web-1 + web-2)"
-        description "Zero-trust inbound access — no exposed ports. ONE tunnel (tunnel.tf) with THREE ingress rules (deploy./ssh./registry.) and MULTIPLE connector replicas: every web host runs cloudflared against it, so CF load-balances across them and `localhost:` means 'whichever replica answered', not 'this host'. Correctness therefore requires every connector host to be a 10.0.1.0/24 member — see ADR-114 (I1/I2) for the invariants and #6416 for the failure. Management plane only: app.soleur.ai does NOT traverse the tunnel (direct CF-proxied A record, dns.tf); no cloudflared on zot/git-data/inngest (ADR-096)."
+        technology "cloudflared (ONE tunnel, exactly ONE connector — the designated ingress host, web-1)"
+        description "Zero-trust inbound access — no exposed ports. ONE tunnel (tunnel.tf) with THREE ingress rules (deploy./ssh./registry.). INVARIANT (ADR-114 I1, enforced #6425): exactly ONE connector is registered — only the designated ingress host (web-1) runs cloudflared (server.tf web_tunnel_connector); other web hosts install the binary and register nothing. This is what makes `localhost:` ingress mean 'this host'. CF binds ingress to a TUNNEL and picks a connector per edge colo, so a SECOND connector silently makes every non-fan-out route (deploy-status, inngest-liveness, infra-config WRITEs, ssh.) answer from whichever replica the caller's colo selected — #6425 (16h of false inngest-down alarms), #6416. The invariant is NOT tied to ADR-068 §(c) (LB weight); re-pooling needs full infra-config + SSH re-delivery (#6466), never a weight flip. Standing guard: the */15 connector census in scheduled-inngest-health.yml (vantage-independent; a response-poll is colo-sticky and proves nothing). Management plane only: app.soleur.ai does NOT traverse the tunnel (direct CF-proxied A record, dns.tf); no cloudflared on zot/git-data/inngest (ADR-096)."
       }
       hetzner = container "Compute" {
         technology "Hetzner Cloud"
@@ -262,6 +262,13 @@ model {
   betterstack = system "Better Stack" {
     #external
     description "External uptime/heartbeat monitoring (BetterStackHQ/better-uptime) AND a Logs warehouse (source 2457081, ClickHouse-SQL-queryable) that CI polls read-only. Apex + inngest/git-data heartbeats, and a per-host origin absence detector that probes each web host's CF-proxied hostname (web-N.app.soleur.ai/health) directly, so a dead/never-booted host pages with per-host attribution the round-robin monitors cannot give (#5933 Item 1). The Logs source receives SOLEUR_ZOT_DISK self-reports from the deny-all registry host and is polled from GitHub Actions via betterstack-query.sh for the zot restart-loop recurrence alarm (#6291) + follow-through soak probes — log-content recurrence alarms are in-repo GH-cron pollers, not native Better Stack alerts (ADR-096)."
+  }
+  // The error-tracking + alerting plane, managed as IaC (ADR-031, apps/web-platform/infra/sentry/).
+  // Modeled late (#6436): it was absent while the narrower `betterstack` was present, so the C4
+  // implied the platform had no alerting at all.
+  sentry = system "Sentry" {
+    #external
+    description "Error tracking + alerting, Sentry-as-IaC (ADR-031; apps/web-platform/infra/sentry/, auto-applied on push to main by apply-sentry-infra.yml — its `paths:` filter is issue-alerts.tf/cron-monitors.tf/uptime-monitors.tf, so versions/main/variables changes do NOT auto-apply). Org `jikigai-eu` on the EU/DE cluster. TWO distinct hostname classes: the Terraform/dashboard API is the ORG SUBDOMAIN (`https://<org>.sentry.io/api/`, see main.tf's provider block — NOT `eu.sentry.io`, whose regional host rewrites `-eu`-suffixed slugs to the literal `eu` org via an activeorg-cookie hijack, 302→401, breaking every read/write); DSN ingest is `de.sentry.io` (DE residency, Art. 30 PA8 §(e)). Holds the LARGER of the two paging surfaces: the issue alerts (issue-alerts.tf), the cron monitors (cron-monitors.tf — one per scheduled workflow, `failure_issue_threshold` opens an issue on a missed check-in) and the uptime monitors (uptime-monitors.tf). It is a no-SSH paging path — a host that never finished booting still pages through here. It is deliberately NOT the only one: `betterstack` is a SECOND-SOURCE vendor that pages independently precisely so a Sentry outage is survivable (see its own edge to founder). Do not 'consolidate' the two — the redundancy is the design."
   }
   sigstore = system "Sigstore" {
     #external
@@ -360,13 +367,19 @@ model {
   api -> anthropic "Daily org cost/usage report (Admin API, cost-report cron)" { technology "HTTPS" }
   claude -> github "Git operations" { technology "HTTPS/SSH" }
   tunnel -> coordinator "Routes traffic" { technology "HTTPS" }
+  // #6425: the tunnel's ACTUAL ingress delivery, previously unmodelled — `tunnel -> coordinator`
+  // above models the DEFERRED 3.D rewire, not today's path. deploy./ssh. resolve `localhost:` at
+  // the connector, so this edge terminates on whichever host holds the connector. That is exactly
+  // why the single-connector invariant (ADR-114 I1) is a correctness property and not hygiene:
+  // with two connectors this one arrow silently forks to an arbitrary host.
+  tunnel -> hetzner "deploy. → localhost:9000 (webhook) and ssh. → localhost:22 on the DESIGNATED INGRESS HOST. `localhost:` is CONNECTOR-relative — the ADR-114 I2 anti-pattern — so this edge lands on whichever host runs cloudflared. It is deterministic ONLY because exactly one host does (#6425): I1 makes I2's violation inert, it does not repair it. Contrast the registry. edge, which is genuinely origin-relative (10.0.1.30). /hooks/deploy then fans out to peers over the private net (ADR-068 Option B); deploy-status, inngest-liveness and infra-config do NOT fan out, so they answer from the connector host alone." { technology "cloudflared ingress → localhost (CONNECTOR-relative — I2 violation, inert while I1 holds)" }
   // #6416 / ADR-114 — the tunnel's three ingress rules, made explicit. The registry edge is
   // the ONLY origin-relative one (it addresses 10.0.1.30 directly), which is why it is the
   // pattern to generalize; the other two are connector-relative (`localhost:`) and therefore
   // resolve to whichever replica CF load-balanced onto, NOT to a chosen host.
   tunnel -> zotRegistry "registry. ingress → tcp://10.0.1.30:5000. ORIGIN-RELATIVE — whichever connector replica answers proxies to the correct zot host, but ONLY if that replica is a 10.0.1.0/24 member (ADR-114 I1). #6416: web-2 was not, so CI's registry bridge failed and the zot mirror silently skipped (masked green by continue-on-error)." { technology "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)" }
   github -> tunnel "CI reaches the deny-all-public zot host to dual-push release images, and reaches web-1's shell for the 12 terraform_data SSH provisioners — both ONLY through this tunnel, via CF Access service tokens (separate tokens per route, so registry-write rotates independently of host-shell access)" { technology "cloudflared access tcp/ssh (CF Access service token)" }
-  hetzner -> tunnel "Every web host runs a cloudflared connector against the ONE tunnel (2 replicas today). CF load-balances across them, so ssh:// and deploy. ingress land non-deterministically — the reason the deploy path needs ADR-068's private-net fan-out and the SSH provisioners carry an in-band hostname tripwire (ADR-114 I2)." { technology "cloudflared (outbound QUIC, 4 conns/replica)" }
+  hetzner -> tunnel "ONLY the designated ingress host (web-1) runs a cloudflared connector — gated by server.tf's web_tunnel_connector (#6425). One connector ⇒ ssh:// and deploy. ingress are deterministic BY CONSTRUCTION (ADR-114 I1). Until 2026-07-15 every web host registered one, so CF picked an origin per edge colo and those routes landed non-deterministically; ADR-068's private-net fan-out (deploy only) and the SSH provisioners' in-band hostname tripwire (ADR-114 I2) are the DETECTION/absorption layers retained underneath — de-pooling is prevention, not their replacement." { technology "cloudflared (outbound QUIC, 4 conns from the single connector)" }
   hetzner -> claude "Hosts" { technology "Docker" }
   doppler -> claude "Injects secrets" { technology "CLI" }
   auth -> supabase "Validates tokens" { technology "HTTPS" }
@@ -411,6 +424,30 @@ model {
   // #6415 — the same alarm now ALSO polls SOLEUR_PRIVATE_NIC and carries an independent NIC
   // verdict (not folded into its exit code, so a NIC fire is never mis-reported as a probe fault).
   github -> betterstack "Polls the SOLEUR_ZOT_DISK + SOLEUR_PRIVATE_NIC Logs sources (ClickHouse SQL via betterstack-query.sh) for the zot restart-loop recurrence alarm, the private-NIC convergence alarm (#6415), and follow-through soak probes" { technology "HTTPS (ClickHouse SQL, eu-fsn-3)" }
+
+  // ---- Sentry — the LARGER of two alerting planes (#6436, ADR-031) --------
+  // Three emitters + a paging exit. It is NOT the only exit: `betterstack` pages
+  // independently (see its edge to founder) — that second source exists so a Sentry
+  // outage is survivable, and it is the property most worth not "simplifying" away.
+  //
+  // Deliberately NO `inngest -> sentry` edge: the Inngest Server host has no Sentry path
+  // — its Vector sink was pivoted OFF Sentry's HTTP envelope endpoint onto Better Stack
+  // Logs after ~6 PR cycles of interop failures (#4273; grep `[sinks.betterstack]` in
+  // inngest.tf and the pivot note in inngest-bootstrap.sh). The Inngest-FIRED crons'
+  // check-ins are posted by the code `api` serves (the `api -> inngest "serves functions"`
+  // edge above), i.e. on the `webapp` edge below — EXCEPT the two Inngest-dispatched
+  // monitors noted on the `github` edge, which check in from GitHub Actions.
+  // Anchored on grep-able tokens, not line numbers — #6447's own rule, which this PR's
+  // first draft broke here by minting fresh `file:<N>` citations into the C4.
+  hetzner -> sentry "Host-side fatal + deploy telemetry, POSTed straight to the store API with the baked ${sentry_dsn} — the boot fatal-emit trap armed at the TOP of `runcmd:` in cloud-init.yml (before Doppler exists), ci-deploy.sh's deploy/sandbox-canary/cosign-verify/zot-fallback events, and container-restart-monitor.sh. Fail-open and SSH-free by construction: this is how a host that never finished booting still pages" { technology "HTTPS (Sentry store API, X-Sentry-Auth sentry_version=7)" }
+  webapp -> sentry "Exceptions + debounced warns via the @sentry/nextjs SDK (sentry.client.config.ts / sentry.server.config.ts / instrumentation.ts, SENTRY_DSN) — the stack-keyed capture shape the issue alerts group on; AND the Inngest-fired crons' end-of-run check-ins (`postSentryHeartbeat` in _cron-shared.ts → /api/{id}/cron/{slug}/{key}/?status=ok|error, bounded retry #5728) that satisfy the 43 Inngest-substrate sentry_cron_monitors" { technology "HTTPS (Sentry SDK envelope + cron check-in API)" }
+  github -> sentry "CI is both an emitter and the applier: the ./.github/actions/sentry-heartbeat composite posts ok|error check-ins from 5 workflows — 3 GHA-`schedule:`-fired (scheduled-inngest-health, -zot-restart-loop, -realtime-probe) and 2 `workflow_dispatch`-only that Inngest DISPATCHES per ADR-033 (scheduled-terraform-drift, -domain-model-drift). Those 2 are the third substrate: Inngest-scheduled but GHA-executed, so their check-in rides this edge, not webapp's. Of 48 cron monitors, 5 check in from here and 43 from webapp. apply-sentry-infra.yml also auto-applies the sentry root on push to main via the jianyuan/sentry provider (ADR-031 — no dashboard step; its `paths:` filter is the 3 rule files, not the whole root)" { technology "HTTPS (cron check-in API + Terraform provider, SENTRY_AUTH_TOKEN)" }
+  sentry -> founder "Pages the operator — the LARGER of two independent exits (betterstack is the other; a Sentry outage is survivable BY DESIGN). Issue alerts route actions_v2 notify_email → target_type IssueOwners with fallthrough_type ActiveMembers — 21 of the 22 rules; `byok_cap_exceeded` deliberately sets fallthrough_type NoOne. NB IssueOwners has no ownership rule on this project, so the fallthrough is what actually reaches a human: a NoOne rule fires and pages nobody, by design there and a defect anywhere else. The cron monitors open an issue on a missed/failed check-in (failure_issue_threshold = 1) and the uptime monitors on downtime, both of which then fire that same email route" { technology "Sentry issue alert → email notification" }
+  // The second-source exit. Load-bearing: uptime-alerts.tf's apex monitor says it plainly
+  // — "independent vendor from Sentry. If Sentry itself is degraded ... this monitor still
+  // pages." Absent from the model until #6436's review noticed the new sentry->founder edge
+  // had claimed exclusivity it does not have.
+  betterstack -> founder "Pages the operator INDEPENDENTLY of Sentry — the second source. The apex uptime monitor and the inngest/git-data heartbeats alert on downtime/missed beats; on the free tier this is email to the managed recipient, escalating via betteruptime_policy when var.betterstack_paid_tier is set. This is the exit that survives a Sentry-side outage, which is the entire reason the vendor is duplicated" { technology "Better Stack monitor/heartbeat → email (+ policy escalation on paid tier)" }
   // #6031 / ADR-088 — control-plane GHCR installation-token minter (cron-ghcr-token-minter,
   // every 20 min). Mints a 1h packages:read App installation token and writes it to Doppler,
   // retiring the interim read:packages PAT; hosts read GHCR_READ_TOKEN unchanged.

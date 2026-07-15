@@ -255,6 +255,22 @@ be invoked*; only the runner answers *can it run*.
 - **Rates:** re-run before quoting; single-source the figure; write the falsifier into the
   artifact ("do not re-quote X").
 - **Runtime primitives:** grep the ADR corpus before gating on one.
+- **Drift guards over HCL — two more sub-cases (#6497).** This file's thesis ("pin the thing you
+  are named after") has a scoping dimension it did not cover. **(a) A guard scoped to a BLOCK does
+  not pin an ATTRIBUTE.** An assertion literally named *"replace_triggered_by names
+  `random_password.zot_pull`"* grepped the whole ~90-line resource; relocating the token into
+  `depends_on` (a plausible tidy-up) left the suite **22/22 green** with the named assertion FALSE
+  and the guarded bug fully reintroduced. **(b) A full-line comment strip is not a comment strip.**
+  Stripping only `^[[:space:]]*#` let a mutation with **zero HCL** pass, tokens named in *trailing*
+  comments — under a test comment claiming *"the guard can never pass on explanatory prose"*, in a
+  file where the trailing-comment idiom is live. **Rule for the drift class: mutate a SIBLING
+  attribute IN, not just the anchor OUT.** Deleting the anchor tests the loud failure mode everyone
+  guards; **relocation** tests over-collection, which is what reads as coverage. Companion nuance:
+  when an assert is vacuous, check the strong version is *satisfiable* on correct code before
+  "asserting harder" — a runtime non-empty `host_id` assert fails for a non-defect, and the
+  precedent (`assert_pull_failure_host_id`) had already solved it by asserting the **source shape**
+  and documenting the seam.
+  → [2026-07-15-false-comment-shipped-the-bug-then-plan-guard-adr-and-tests-each-restated-it.md](./2026-07-15-false-comment-shipped-the-bug-then-plan-guard-adr-and-tests-each-restated-it.md) §5
 
 ## Session Errors
 

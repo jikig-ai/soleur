@@ -142,6 +142,17 @@ if want_scripts; then
   run_suite "scripts/inngest-liveness-classify" bash scripts/inngest-liveness-classify.test.sh
   run_suite "scripts/inngest-restart-age-gate" bash scripts/inngest-restart-age-gate.test.sh
   run_suite "scripts/inngest-restart-poll-classify" bash scripts/inngest-restart-poll-classify.test.sh
+  run_suite "scripts/tunnel-connector-census" bash scripts/tunnel-connector-census.test.sh
+  # Stock preflight gate (#6453). Registered HERE because nothing auto-discovers
+  # tests/scripts/ — the bash *.test.sh glob further down does NOT include it, and
+  # infra-validation.yml only lists apps/web-platform/infra/*.test.sh. Without this line
+  # the gate that stands between a -replace and a stranded fleet ships with zero coverage.
+  run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-preflight-gate.sh
+  # EU residency allow-set parity (#6453 review). {nbg1,fsn1,hel1} is replicated across three
+  # terraform validations + the stock gate's default; nothing pinned them together, and the
+  # gate's own suite overrides the value to stay hermetic, so the shipped default was asserted
+  # nowhere. Drift makes the gate advise a location terraform rejects.
+  run_suite "tests/scripts/eu-location-allowset-parity" bash tests/scripts/test-eu-location-allowset-parity.sh
   run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh

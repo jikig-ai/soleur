@@ -56,8 +56,14 @@
 #   5 coverage shortfall (counter mismatch, or a call site discovery cannot read)
 #   6 tooling absent
 #
-# Tests: .github/scripts/test/test-validate-infra-templates.sh (runs in the
-# REQUIRED, path-filter-free `guard-script-fixture-tests` job).
+# Tests: .github/scripts/test/fixtures-validate-infra-templates.sh — named
+# `fixtures-*`, NOT `test-*`, to stay OUT of run-all.sh's `test-*.sh` glob. That glob
+# feeds `guard-script-fixture-tests`, a REQUIRED, path-filter-free bare-bash job; this
+# suite needs terraform + cloud-init, and apt-installing them there would put a package
+# mirror on the merge queue's critical path for every PR in the repo. So it runs in
+# infra-validation.yml's `deploy-script-tests` job instead, which is ADVISORY — this
+# suite does not block merge today. See the step comment there and the contract note in
+# run-all.sh; #6480 tracks making the gate a real required context.
 
 set -uo pipefail
 

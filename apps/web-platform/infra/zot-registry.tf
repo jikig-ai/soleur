@@ -76,8 +76,19 @@ locals {
 # --- Read-only pull + read/write push credentials (TF-generated, zero human mint) ----
 # random_password (NOT random_id) → printable, htpasswd/URL-safe. special=false keeps the
 # token free of chars that break `docker login -p` / htpasswd. NO ignore_changes anywhere
-# downstream (TF owns the values) → rotation via `terraform apply -replace=random_password.zot_pull`
-# re-propagates htpasswd + Doppler in ONE apply. Mirrors random_password.git_data_luks.
+# downstream (TF owns the values), so `terraform apply -replace=random_password.zot_pull`
+# updates BOTH Doppler copies (soleur/prd + soleur-registry/prd) in one apply.
+#
+# The host's /etc/zot/htpasswd is a SEPARATE plane and does NOT follow from that. It is
+# baked exactly once — at boot, by cloud-init-registry.yml's runcmd — from these values,
+# read via the Doppler CLI. The token values are deliberately kept out of user_data
+# (see :263-265), so Terraform has NO data edge from random_password to
+# hcloud_server.registry and cannot know a rotation staled the bake.
+# hcloud_server.registry's lifecycle.replace_triggered_by is what supplies that edge: it
+# replaces the host so the htpasswd is re-baked from the new value in the SAME apply.
+# Without it a rotation silently diverges the host from Doppler and every pull login is
+# rejected forever, with no signal saying why — which is exactly what #6497 / Sentry
+# WEB-PLATFORM-5B was. Mirrors random_password.git_data_luks.
 resource "random_password" "zot_pull" {
   length  = 40
   special = false
@@ -282,12 +293,39 @@ resource "hcloud_server" "registry" {
   # and omitting it preserves a clean replace-to-reprovision path (git-data.tf rationale) —
   # so a zot config change re-applies via cloud-init re-provision (cloud-init is idempotent).
 
+  # #6497: the ONLY edge from the pull/push credentials to this host. The tokens are read at
+  # boot via the Doppler CLI and baked into /etc/zot/htpasswd once; they are deliberately
+  # absent from user_data (:263-265), so Terraform sees no data dependency and a rotation
+  # would leave the host serving the OLD htpasswd forever while both Doppler copies show the
+  # new value — the WEB-PLATFORM-5B defect. Naming the resources here forces the bake to
+  # follow the value: a rotation replaces the host in the same apply.
+  # SAFE on a routine apply: random_password has no `keepers`, so these are stable and fire
+  # only under an explicit `-replace` (verify with `grep -nE '^\s*keepers' zot-registry.tf` →
+  # no hits; a bare `grep -n keepers` also matches this very comment).
+  # The edge fires ONLY on the operator's untargeted full apply — the registry-host-replace
+  # dispatch hardcodes `-replace='hcloud_server.registry'` and does not target these, so a
+  # rotation is not plannable there. See the ADR-115 amendment (#6497).
+  lifecycle {
+    replace_triggered_by = [
+      random_password.zot_pull,
+      random_password.zot_push,
+    ]
+  }
+
   # #6244: the host does NOT reference doppler_secret.registry_betterstack_logs_token directly
   # (the cron reads it at run time via `doppler run`), so there is no IMPLICIT dependency edge.
   # The amended 3-secret boot guard FATALs (zot never launches) if that secret is not already in
   # the isolated config when this host boots — make the ordering DETERMINISTIC (not latency-lucky
   # on the registry-host-replace apply) by declaring it explicitly.
-  depends_on = [doppler_secret.registry_betterstack_logs_token]
+  # #6497: the two ZOT token secrets are read at boot through the same Doppler CLI path and
+  # GATE the htpasswd bake, so they need the identical treatment — the #6244 fix was made for
+  # one secret and never generalized. Without them a fresh stand-up (or this host's own
+  # replace) may boot before the secret writes land and bake an htpasswd from a stale read.
+  depends_on = [
+    doppler_secret.registry_betterstack_logs_token,
+    doppler_secret.zot_pull_token_registry,
+    doppler_secret.zot_push_token_registry,
+  ]
 
   labels = {
     app = "soleur-web-platform"
