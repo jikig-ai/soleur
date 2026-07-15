@@ -20,6 +20,35 @@ Spec lacks valid `lane:` (no `spec.md` on this branch) — defaulted to `cross-d
 > agents each falsified a claim this plan asserted; where that changes an instruction it is marked
 > **⚠**, because those are the places an implementer's intuition will be wrong too.
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-15 · **Gates:** 4.4 precedent-diff, 4.5 network (fired), 4.6 user-brand (pass),
+4.7 observability (pass), 4.8 PAT-shape (pass), 4.9 UI-wireframe (skip, no UI surface), 4.55 downtime
+(skip, no serving surface).
+**Reviewers:** CTO · spec-flow · code-simplicity · kieran · `fable` consult · gdpr-gate ·
+learnings-researcher · repo-research-analyst.
+
+### Key improvements
+1. **P0 closed** — the parity test pinned only 2 of 4 queries; `stage:"inngest_ghcr_fallback"` was
+   pinned by nothing, and prefixing it left the suite GREEN while the soak silently stopped counting
+   inngest fresh-boot fallbacks. Now pins all four, flat.
+2. **Phase 0 added and then generalized** — the probe is mode 100644 (1 of 26) and has never
+   executed; the fix is a CI check over all probes, not a one-file `chmod`.
+3. **A fold-in was cut that would have shipped a regression** — downgrading the insufficient-sample
+   arm to TRANSIENT would have disarmed the only detector for the Sentry-dark mode (#6437).
+4. **Scope honesty** — the plan now states what it does *not* fix (no denominator; the dominant
+   fresh-boot probe-miss path emits nothing) and declares the gate **necessary but not sufficient**
+   for 5.5, rather than implying closure.
+5. **Cut ~⅓** on the finding that the plan's own length was a correctness risk.
+
+### New considerations discovered
+- `sentry_count:53` already normalizes to `^[0-9]+$`/`TRANSIENT` — three revisions reasoned wrongly
+  about the guard because a one-line contract 20 lines up was invisible under the volume.
+- The session's `grep` is a **ugrep shell function**; CI is GNU grep 3.12, and they diverge on this
+  plan's own ACs. All ACs now pin `/usr/bin/grep`.
+- `declare -A` has direct sibling precedent (`autovacuum-thrash-6168.sh:49-53`); the CI mode check
+  has none.
+
 ## THE ONE THING TO GET RIGHT ⚠
 
 **`stage:"app_ghcr_fallback"` must be queried BARE. `registry:"zot-gate-degraded"` must be PREFIXED.**
@@ -98,6 +127,30 @@ strictly better and its claims honest. It does not make it sufficient — and th
   while degraded deploys stay invisible → both arms pass → **PASS** → GHCR retired → PAT revoked.
   The sample arm is a floor on *good* evidence, not a ceiling on *bad* — **except** for the
   Sentry-dark mode, where it is the only ceiling. That exception is why Phase 3c exists.
+
+## Hypotheses
+
+The network gate fires on `unreachable` (`probe_unreachable` is the reason on 34 of the first 38 live
+degraded events). **This plan makes no causal claim about the zot outage and proposes no
+network-layer fix — it makes the soak *count* the outage rather than diagnose it.** The L3→L7
+checklist is therefore satisfied by *attribution*, and the ordering discipline is honoured: no
+service-layer hypothesis is advanced at all, so none can precede an L3 check.
+
+1. **L3 — firewall / private-net membership.** *Not diagnosed here; owned by #6416* (OPEN,
+   `follow-through`): "web-2 missing private-net IP → zot mirror push unreachable". ADR-114 I1
+   requires every connector host to be a `10.0.1.0/24` member; `model.c4:367` records the same
+   failure. **Opt-out artifact:** the root cause is already isolated to a named, open, tracked issue
+   with an ADR invariant attached — re-diagnosing it inside an observability PR duplicates #6416.
+2. **L3 — routing / zot host liveness.** *Not diagnosed here; owned by #6288* (OPEN): zot container
+   restart-loops (~4/min), likely OOM. Consistent with `registry:"zot"` = **0 over 30d**.
+3. **L7 — application.** Not advanced as a hypothesis. Note the evidence that *would* bear on it:
+   3 `login_failed` vs 34 `probe_unreachable` proves the probe **does** intermittently reach zot's
+   `/v2/`, so the outage is not a hard pin — evidence *for* the intermittent regime this plan guards,
+   and *against* a single permanent cause.
+
+**Absence-of-signal note** (checklist §"absence is itself a signal"): `registry:"zot"` = 0/30d is
+decisive that zot has never served a pull — which is why today's verdict would be FAIL-on-sample if
+the probe could run at all, and why the blind-signal defect is *latent* rather than currently biting.
 
 ## User-Brand Impact
 
@@ -416,6 +469,50 @@ processing activity → no Art. 30 entry; no Art. 9 risk; no lawful-basis gap. N
 | Adding signals makes the soak harder to pass; an early `START` false-FAILs on pre-flip events | **Accept — the asymmetry is the point.** A false-FAIL costs a soak restart; a false-PASS costs an irreversible retirement. But *a gate that cannot pass gets bypassed* — hence 0.4's legible message |
 | **Partial Sentry outage defeats the FAIL set** — every FAIL-side emit is fail-open by construction, and `ci-deploy.sh:878` records `zot-gate-degraded` as the highest-volume signal, i.e. first shed | Out of scope (the emit sites' fail-open contract is deliberate — telemetry must never block a boot). 2.3 closes the probe-side half; the emit-side half is #6437's. **Named in the ADR** rather than left implicit |
 | `MIN_SAMPLE=3` is not a fleet-coverage claim (3 pulls to the *same* host passes; `host_id` is tagged but unused) | One comment line at the constant; folded into the denominator issue |
+
+## Research Insights (deepen pass)
+
+### Precedent diff — the two patterns this plan introduces
+
+**1. `declare -A FAIL_QUERIES` — precedent EXISTS, in the same directory. Adopt verbatim.**
+`scripts/followthroughs/autovacuum-thrash-6168.sh:49-53` already uses the identical shape in a sibling
+follow-through probe:
+
+```bash
+declare -A BASELINE=(
+  [user_concurrency_slots]=142
+  [mint_rate_window]=50
+  [runtime_mint_intent]=49
+)
+```
+
+Both files carry `#!/usr/bin/env bash` (verified), so `declare -A` (bash 4+) is safe — local is bash
+5.3.9, and the sweeper invokes the script directly, honouring its shebang. **The array refactor is
+therefore not a novel pattern**; it is the house form for a probe's declared constant set. This
+materially strengthens 2.1 — it was proposed on design grounds (make "run but never counted"
+unrepresentable) and turns out to match existing precedent.
+
+**2. CI file-mode check — NO PRECEDENT. Novel; flag for reviewer scrutiny.**
+`git grep 'ls-files -s|100755'` over `scripts/*.test.sh`, `tests/`, and `plugins/soleur/test/` returns
+**nothing** — no existing test or workflow asserts a file's mode. Per gate 4.4, this is recorded so
+reviewers scrutinize it rather than assume a precedent exists. Design notes for /work:
+
+- Assert via `git ls-files -s` (the **index** mode), not `test -x` (the **worktree** bit). The bug is
+  committed as `100644`; a worktree-only `chmod` that never reaches the index would satisfy `test -x`
+  locally and still ship broken. `core.fileMode=true` here (verified), but the index is the artifact
+  CI and the sweeper consume.
+- Host it in `ci.yml` (the general gate) rather than `infra-validation.yml` (scoped to infra roots) —
+  `scripts/followthroughs/` is neither infra nor app.
+- Mutation-prove it: `git update-index --chmod=-x` a sibling, see RED, revert. An unproven mode gate
+  is the same "never mutated RED" defect the house learning documents.
+
+### Cross-artifact literal check
+
+The four signal literals (`ghcr-fallback`, `zot-gate-degraded`, `inngest_ghcr_fallback`,
+`app_ghcr_fallback`) must be identical across five artifacts: the two emit sites
+(`ci-deploy.sh`, `cloud-init.yml`), `issue-alerts.tf`, the soak's `FAIL_QUERIES`, and the op-contract
+test. The first three plus the test are already pinned by the existing 5 legs; this plan adds the
+fourth. **No paraphrase anywhere** — grep each literal across all five before ship.
 
 ## Files to Edit
 
