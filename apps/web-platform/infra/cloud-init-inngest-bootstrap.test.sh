@@ -262,11 +262,21 @@ echo "--- AC7: web_colocate_inngest gate — structural ---"
 VARS_TF="$SCRIPT_DIR/variables.tf"
 assert "exactly one col-0 '%{ if web_colocate_inngest ~}' directive" \
   "(( \$(grep -cE '^%\{ if web_colocate_inngest ~\}$' '$CLOUD_INIT') == 1 ))"
-assert "exactly one col-0 '%{ endif ~}' directive" \
-  "(( \$(grep -cE '^%\{ endif ~\}$' '$CLOUD_INIT') == 1 ))"
+# #6425 added a SECOND col-0 pair (web_tunnel_connector), so a global `endif == 1` count is
+# no longer the invariant — BALANCE is. `%{ endif ~}` is anonymous, so per-block closure is
+# pinned by locating this block's own endif relative to its if-line (below), not by counting.
+assert "col-0 '%{ if ~}' / '%{ endif ~}' directives balance" \
+  "(( \$(grep -cE '^%\{ if .+ ~\}$' '$CLOUD_INIT') == \$(grep -cE '^%\{ endif ~\}$' '$CLOUD_INIT') ))"
+# #6425's connector gate — asserted here (not in the render block) so it still gates where
+# terraform is absent. Column 0 is load-bearing: an indented directive leaves its leading
+# spaces behind after the `~` trim and corrupts the runcmd: list.
+assert "exactly one col-0 '%{ if web_tunnel_connector ~}' directive (#6425)" \
+  "(( \$(grep -cE '^%\{ if web_tunnel_connector ~\}$' '$CLOUD_INIT') == 1 ))"
 IF_LINE=$(grep -nE '^%\{ if web_colocate_inngest ~\}$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 COMMENT_LINE=$(grep -nE 'Bootstrap Inngest server on first boot' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-ENDIF_LINE=$(grep -nE '^%\{ endif ~\}$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+# The first endif AT OR AFTER this block's if — `head -1` of the file would since #6425 return
+# the web_tunnel_connector pair's endif (which sits earlier) and false-FAIL the ordering assert.
+ENDIF_LINE=$(awk -v s="$IF_LINE" 'NR > s && /^%\{ endif ~\}$/ { print NR; exit }' "$CLOUD_INIT")
 TRAP_DISARM_LINE=$(grep -nE 'disarm, else the composite trap' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 assert "if-directive precedes the bootstrap comment"        "(( IF_LINE < COMMENT_LINE ))"
 assert "endif-directive follows the block's trap disarm"    "(( ENDIF_LINE > TRAP_DISARM_LINE ))"
@@ -287,12 +297,18 @@ echo ""
 echo "--- AC7: web_colocate_inngest gate — terraform render authority ---"
 if command -v terraform >/dev/null 2>&1; then
   RENDER_SCRATCH=$(mktemp -d)
-  # Render the web cloud-init with a given web_colocate_inngest value into $2.
-  # All map vars are placeholders EXCEPT the toggle; keep in sync with server.tf's
+  # Render the web cloud-init into $2. $1 = web_colocate_inngest; $3 = web_tunnel_connector
+  # (defaults true = web-1, the connector host, so AC7's call sites stay two-arg).
+  # All map vars are placeholders EXCEPT the toggles; keep in sync with server.tf's
   # templatefile map — a new map var breaks this render (the intended tripwire).
+  # stderr is NOT swallowed: a render error must surface, not present as an empty file
+  # whose assertions fail with a misleading "OMITS" pass (#6425).
   render_ci() {
-    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="t", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ghcr_read_user="u", ghcr_read_token="g", ci_ssh_public_key_openssh="k", web_colocate_inngest=%s, host_name="soleur-web-platform" })\n' \
-      "$CLOUD_INIT" "$1" | terraform -chdir="$RENDER_SCRATCH" console 2>/dev/null > "$2"
+    local colocate="$1" out="$2" connector="${3:-true}"
+    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="TT_SENTINEL_6425", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ghcr_read_user="u", ghcr_read_token="g", ci_ssh_public_key_openssh="k", web_colocate_inngest=%s, web_tunnel_connector=%s, host_name="soleur-web-platform" })\n' \
+      "$CLOUD_INIT" "$colocate" "$connector" | terraform -chdir="$RENDER_SCRATCH" console > "$out"
+    # A truncated/empty render makes every `! grep` assertion pass vacuously.
+    [[ -s "$out" ]] || { echo "  FATAL: render produced no output (colocate=$colocate connector=$connector)"; return 1; }
   }
   # yaml.safe_load a rendered doc, stripping terraform console's `<<EOT … EOT` heredoc wrapper.
   render_yaml_ok() {
@@ -336,6 +352,48 @@ PY
   assert "render web_colocate_inngest=true INCLUDES the inngest-bootstrap.sh invocation" \
     "grep -qF 'EXTRACT_DIR/inngest-bootstrap.sh' '$TRUE_OUT'"
   assert "render web_colocate_inngest=true is valid YAML" "render_yaml_ok '$TRUE_OUT'"
+
+  # --- AC5 (#6425): web_tunnel_connector gate — terraform render authority ---
+  # ONE connector per tunnel is the invariant (ADR-114 I1/I2). Cloudflare binds ingress
+  # to a TUNNEL and then picks a connector per edge colo, so a second cloudflared replica
+  # makes every `localhost:` / `ssh.` ingress mean "whichever replica answered" rather than
+  # "this host". Gating registration to the designated ingress host makes it deterministic
+  # BY CONSTRUCTION — this render is the only authority that exercises the `~}` trim.
+  echo ""
+  echo "--- AC5: web_tunnel_connector gate — terraform render authority (#6425) ---"
+  CONN_ON="$RENDER_SCRATCH/render-conn-on.txt"
+  render_ci false "$CONN_ON" true
+  assert "render web_tunnel_connector=true INCLUDES the cloudflared service install" \
+    "grep -qF 'cloudflared service install' '$CONN_ON'"
+  assert "render web_tunnel_connector=true INCLUDES the tunnel token" \
+    "grep -qF 'TT_SENTINEL_6425' '$CONN_ON'"
+  assert "render web_tunnel_connector=true INCLUDES the cloudflared readiness poll" \
+    "grep -qF 'soleur-wait-ready service cloudflared' '$CONN_ON'"
+  assert "render web_tunnel_connector=true is valid YAML" "render_yaml_ok '$CONN_ON'"
+
+  CONN_OFF="$RENDER_SCRATCH/render-conn-off.txt"
+  render_ci false "$CONN_OFF" false
+  assert "render web_tunnel_connector=false OMITS the cloudflared service install" \
+    "! grep -qF 'cloudflared service install' '$CONN_OFF'"
+  # The security half of the gate: a de-pooled host's rendered user_data must not carry
+  # the live tunnel token at all (user_data is readable from the host's own metadata service).
+  assert "render web_tunnel_connector=false OMITS the tunnel token entirely" \
+    "! grep -qF 'TT_SENTINEL_6425' '$CONN_OFF'"
+  assert "render web_tunnel_connector=false OMITS the cloudflared readiness poll" \
+    "! grep -qF 'soleur-wait-ready service cloudflared' '$CONN_OFF'"
+  # The apt install stays UNGATED — only tunnel REGISTRATION is gated, so a de-pooled host
+  # keeps the binary and stays promotable without an image change.
+  assert "render web_tunnel_connector=false RETAINS ungated 'apt-get install -y cloudflared'" \
+    "grep -qF 'apt-get install -y cloudflared' '$CONN_OFF'"
+  # Column-0 hazard: an indented `%{ if ~}` leaves its leading spaces after the `~` trim and
+  # corrupts runcmd: list indentation. safe_load is what catches it.
+  assert "render web_tunnel_connector=false is valid YAML (column-0 directive hazard)" \
+    "render_yaml_ok '$CONN_OFF'"
+  # The render cannot see WHICH host maps to which toggle value — and that mapping is the
+  # risk that darkens web-1 (AC5's inverted-predicate catastrophe). Pin it at the source.
+  assert "server.tf pins the connector predicate to web-1 (each.key == \"web-1\")" \
+    "grep -qE 'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*\"web-1\"' '$SCRIPT_DIR/server.tf'"
+
   rm -rf "$RENDER_SCRATCH"
 else
   echo "  SKIP: terraform not installed (render authority skipped — CI deploy-script-tests provides it via setup-terraform)"
