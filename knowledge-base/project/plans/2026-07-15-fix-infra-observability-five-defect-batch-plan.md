@@ -649,9 +649,22 @@ them. These are the gates.)*
       `/tmp/cloud-init.stripped.yml`) — and `cloud-init-inngest-bootstrap.test.sh` contains a
       `cloud-init schema` on a **rendered** path with a visible SKIP arm. The guard flipped to
       match: it asserts the step never points at the UNSTRIPPED template again, plus that schema
-      coverage still exists via *some* non-raw source — deliberately mechanism-agnostic, so
-      #6458's render-then-validate replacement passes rather than reds. Both halves are
-      mutation-verified in `cloud-init-inngest-bootstrap.test.sh` (AC7 leg, 69/69).
+      coverage still exists via a non-raw source. **That second half is a two-item ALLOWLIST, not
+      a general "any mechanism" check** — it accepts main's `-c /tmp/cloud-init.stripped.yml` or a
+      line-leading `bash …validate-infra-templates.sh` (the path #6458 currently uses; it does not
+      exist on this branch). A *third* mechanism, or #6458 renaming its script, reds the guard and
+      must be added here — deliberate: a workflow-text grep structurally cannot verify that a
+      script it merely calls performs the check, so the allowlist is the honest ceiling. Because
+      naming a script is not evidence it schema-checks, the second alternate is **self-validating**
+      (conditional: costs nothing until #6458 lands) — review caught that without it, swapping the
+      stripped step for a call to the not-yet-existent script greened the guard while coverage was
+      GONE, contradicting its own contract. Verified empirically (not by reading) in
+      `cloud-init-inngest-bootstrap.test.sh` — the file's own `--- AC7: web_colocate_inngest gate ---`
+      render leg, whose label is internal to that file and unrelated to this plan's AC7:
+      baseline 69/69; delete the stripped line → 68/69; revert to raw → 67/69 (both halves);
+      comment the command out → 68/69; call a *missing* script → 69/70; script exists but is a
+      stub → 69/70; `bash -n` lint-only decoy → 68/69; #6458's real form (script exists AND runs
+      `cloud-init schema`) → 70/70 green.
 - [x] **AC14** `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` passes;
       headroom did not regress below the **76 B** measured at 0.1.
 - [x] **AC15** — **AMENDED at /work.** Plan said "six tracking issues (D-1, D-3, D-4, D-5,

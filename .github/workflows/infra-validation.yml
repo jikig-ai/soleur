@@ -178,11 +178,16 @@ jobs:
         with:
           terraform_wrapper: false
 
-      # #6446: the AC7 render leg also runs `cloud-init schema` on the RENDERED document.
-      # This is the coverage that moved here when infra-validation.yml's raw-source schema
-      # step was deleted (it validated a Terraform template as YAML — structurally
-      # incapable; see the comment on the `validate` job above). Without the binary the
-      # leg SKIPs visibly rather than false-greening; this step makes it execute.
+      # #6446: the render leg in cloud-init-inngest-bootstrap.test.sh also runs `cloud-init
+      # schema` on the RENDERED document. This does NOT replace the `validate` job's
+      # raw-source step above (:83-105) — that step is KEPT and directive-stripped. An
+      # earlier draft of this PR deleted it; #6426 landed a different fix for #6446 on main
+      # mid-pipeline (keep the step, strip the col-0 `%{` lines, schema-check the remainder)
+      # and both were kept, an operator call. They are complementary: the stripped check
+      # catches schema errors in the non-gate body with no terraform needed, and the rendered
+      # check catches what stripping structurally cannot see (`permissions: 384` is valid
+      # YAML and schema-invalid). Without the binary the leg SKIPs visibly rather than
+      # false-greening; this step makes it execute.
       - name: Install cloud-init (rendered-schema check in the AC7 render leg)
         run: |
           sudo apt-get update -qq

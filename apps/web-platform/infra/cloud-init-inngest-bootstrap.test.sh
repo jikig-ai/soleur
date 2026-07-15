@@ -333,16 +333,33 @@ PY
   INFRA_VALIDATION_WF="$SCRIPT_DIR/../../../.github/workflows/infra-validation.yml"
   assert "infra-validation.yml schema-checks the STRIPPED render, never the raw template (#6446/#6426)" \
     "! grep -qE '^[[:space:]]*cloud-init schema -c cloud-init\.yml[[:space:]]*$' '$INFRA_VALIDATION_WF'"
-  # The POSITIVE half asserts that schema coverage EXISTS — deliberately NOT which mechanism
-  # provides it. Pinning `-c /tmp/cloud-init.stripped.yml` would pin main's *implementation*
-  # (a temp-file path) and red any strictly-better replacement: #6458 replaces the step
-  # wholesale with a render-then-validate script, which is this same invariant done properly.
-  # A drift guard must fail on SILENT LOSS of coverage, never on a deliberate upgrade of it.
-  # Both alternates are anchored on a line-leading command — prose cannot produce one, and
-  # both workflows name these very tokens in their explanatory comments (the instance-4 trap
-  # in 2026-07-15-narrowing-is-not-anchoring…: a bare substring here would be vacuous).
+  # The POSITIVE half asserts schema coverage EXISTS. It is a two-item ALLOWLIST, NOT a general
+  # "any mechanism" check — a workflow-text grep structurally cannot verify that a script it
+  # merely CALLS performs the check, so an allowlist is the honest ceiling. It accepts main's
+  # stripped step or a line-leading `bash …validate-infra-templates.sh` (#6458's current path).
+  # A third mechanism, or #6458 renaming its script, reds this and must be added here.
+  # Pinning `-c /tmp/cloud-init.stripped.yml` ALONE would pin main's *implementation* (a
+  # temp-file path) and red #6458 for a deliberate UPGRADE of the coverage this guard protects.
+  # A drift guard must fail on SILENT LOSS of coverage, never on an upgrade of it.
+  #
+  # Anchored on a line-leading command: prose cannot produce one, and BOTH workflows name these
+  # tokens in explanatory comments (the instance-4 trap in 2026-07-15-narrowing-is-not-anchoring…
+  # — a bare substring here would be vacuous). `[^-]` after `bash ` rejects lint-only decoys:
+  # `bash -n <script>` syntax-checks and validates nothing.
   assert "infra-validation.yml still schema-checks a NON-raw cloud-init source (#6426 stripped | #6458 rendered)" \
-    "grep -qE '^[[:space:]]*(cloud-init schema -c /tmp/cloud-init\.stripped\.yml|bash .*validate-infra-templates\.sh)' '$INFRA_VALIDATION_WF'"
+    "grep -qE '^[[:space:]]*(cloud-init schema -c /tmp/cloud-init\.stripped\.yml|bash [^-].*validate-infra-templates\.sh)' '$INFRA_VALIDATION_WF'"
+  # The second alternate is SELF-VALIDATING: naming the script is not evidence it schema-checks.
+  # Without this, swapping the stripped step for a `bash …validate-infra-templates.sh` line
+  # greens the guard while coverage is GONE (the script does not exist on this branch) — a
+  # silent loss, the exact thing the contract above forbids. `bash <missing>` would red the
+  # `validate` matrix job, but that job's check name is dynamic and cannot be a required
+  # context — the "red for days, nobody blocked" pathology this guard backstops (see #6473).
+  # Conditional, so it costs nothing until #6458 lands.
+  VALIDATE_TEMPLATES_SH="$SCRIPT_DIR/../../../.github/scripts/validate-infra-templates.sh"
+  if grep -qE '^[[:space:]]*bash [^-].*validate-infra-templates\.sh' "$INFRA_VALIDATION_WF"; then
+    assert "validate-infra-templates.sh exists and actually runs cloud-init schema (#6458)" \
+      "[[ -x '$VALIDATE_TEMPLATES_SH' ]] && grep -q 'cloud-init schema' '$VALIDATE_TEMPLATES_SH'"
+  fi
 
   # --- #6446: cloud-init schema on the RENDERED doc ---
   # infra-validation.yml used to run `cloud-init schema -c cloud-init.yml` against the RAW
