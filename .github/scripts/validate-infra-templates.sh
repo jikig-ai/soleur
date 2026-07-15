@@ -214,18 +214,76 @@ for base in "${MEMBERS[@]}"; do
   rest=${sites#*:}
   tf_line=${rest%%:*}
 
+  # Belt-and-braces: an empty tf_file would make the awk below read STDIN and
+  # hang forever (a wedged CI job burns the whole runner timeout and reports
+  # nothing — strictly worse than a red one). The exit-4 branches above already
+  # make this unreachable; keep the guard so a future edit to them degrades to a
+  # loud failure instead of a hang.
+  if [[ -z "$tf_file" || ! -f "$tf_file" || ! "$tf_line" =~ ^[0-9]+$ ]]; then
+    echo "ERROR [$base]: could not resolve a call site (file='$tf_file' line='$tf_line')" >&2
+    exit 4
+  fi
+
   # --- KEYS from the .tf map, TYPES from the body (Design Decision 2c).
-  # Start AFTER the call-site line: the naive form captures the enclosing
-  # `user_data = base64gzip(templatefile(...` assignment as a phantom key.
   # Only real map keys can enter, so a `%{ for x in list ~}` loop-local can
   # never be mistaken for a var — the false-red a body-scanner would ship.
-  keys=$(awk -v start="$tf_line" '
-    NR > start {
-      if ($0 ~ /^[[:space:]]*\}\)/) exit
-      print
-    }' "$tf_file" \
-    | grep -oE '^[[:space:]]*[a-z_][a-zA-Z0-9_]*[[:space:]]*=' \
-    | grep -oE '[a-z_][a-zA-Z0-9_]*' \
+  #
+  # Extract the map body by tracking brace DEPTH from the `{` that opens the
+  # templatefile map to its matching `}`. A line-based `NR > start` scan that
+  # stops at `^\s*\})` gets three ordinary shapes wrong, each a false-red on a
+  # CORRECT file (the #6454 dynamic this script exists to end):
+  #   - a ONE-LINE map (`templatefile("...", { greeting = var.greeting })`) —
+  #     ordinary Terraform style — yields an empty map, then exit 4;
+  #   - a nested value whose `})` lands at column 0 truncates the map early, so
+  #     a real key goes missing and the render dies at exit 2;
+  #   - starting at the call-site LINE instead of the map BRACE captures the
+  #     enclosing `user_data = base64gzip(templatefile(...` as a phantom key.
+  # Depth-tracking from the brace handles all three.
+  map_text=$(awk -v start="$tf_line" '
+    BEGIN { state = 0; depth = 0 }
+    NR < start { next }
+    {
+      line = $0
+      if (state == 0) {
+        i = index(line, "templatefile(")
+        if (i == 0) next
+        rest = substr(line, i)
+        # Skip PAST the quoted filename argument before hunting the map brace:
+        # the path is "${path.module}/<name>", which itself contains a `{`, and
+        # a naive scan latches onto THAT and treats the filename as the map.
+        q1 = index(rest, "\"")
+        if (q1 == 0) next
+        q2 = index(substr(rest, q1 + 1), "\"")
+        if (q2 == 0) next
+        line = substr(rest, q1 + q2 + 1)
+        state = 1
+      }
+      out = ""
+      n = length(line)
+      for (j = 1; j <= n; j++) {
+        c = substr(line, j, 1)
+        if (state == 1) {
+          if (c == "{") { state = 2; depth = 1 }
+          continue
+        }
+        if (c == "{") { depth++ }
+        else if (c == "}") {
+          depth--
+          if (depth == 0) { if (length(out)) print out; exit }
+        }
+        out = out c
+      }
+      if (state == 2 && length(out)) print out
+    }' "$tf_file")
+
+  # Keys are `ident =` at the start of a line OR after a `,`/`{` (one-line maps
+  # and nested objects put several on one line). `(?!=)` excludes `==`, so a
+  # comparison never reads as an assignment. Keys harvested from a NESTED object
+  # are phantoms, but templatefile() tolerates unused map keys (verified), so a
+  # phantom is inert — whereas a MISSING key fails loud at exit 2. Bias
+  # permissive.
+  keys=$(printf '%s\n' "$map_text" \
+    | grep -oP '(?:^|[,{])\s*\K[a-z_][a-zA-Z0-9_]*(?=\s*=(?!=))' \
     | sort -u)
 
   n_keys=$(printf '%s' "$keys" | grep -c .)
@@ -235,12 +293,22 @@ for base in "${MEMBERS[@]}"; do
     exit 4
   fi
 
-  # A key used as `%{ if <key> ...}` is a bool; everything else stubs as "x".
+  # TYPES: a key referenced by a `%{ if ... }` / `%{ elseif ... }` directive is a
+  # bool. Matching only `%{ if <key>` (key immediately after `if`) misreads
+  # `%{ if !flag ~}` and `%{ if a && b ~}` — both ordinary — as strings, and the
+  # render then dies at exit 2 on a correct template. Harvest the whole
+  # condition expression instead and treat any map key named in it as a bool,
+  # EXCEPT one adjacent to a comparison operator (`%{ if tier == "prod" ~}`
+  # makes tier a string, and stubbing it `true` would be the type error).
+  if_exprs=$(grep -oP '(?<!%)%\{\s*(?:if|elseif)\s+\K[^~}]*' "$path" 2>/dev/null || true)
+
   bools=()
   strings=()
   while IFS= read -r k; do
     [[ -z "$k" ]] && continue
-    if grep -qP "%\{[[:space:]]*if[[:space:]]+${k}\b" "$path" 2>/dev/null; then
+    if [[ -n "$if_exprs" ]] \
+      && grep -qP "\b${k}\b" <<<"$if_exprs" \
+      && ! grep -qP "(\b${k}\b\s*(==|!=|<|>))|((==|!=|<|>)\s*\b${k}\b)" <<<"$if_exprs"; then
       bools+=("$k")
     else
       strings+=("$k")
@@ -300,9 +368,20 @@ for base in "${MEMBERS[@]}"; do
     # seams (`${DOPPLER_SHA256}`, `${TMPENV:-...}`) which TF-escaped `$${...}`
     # correctly renders TO. private-nic-guard.test.sh's blanket assertion only
     # survives in its own file because those seams use `:-` defaults.
+    #
+    # Terraform always substitutes a key that IS in the map, so this cannot fire
+    # on a healthy render. It is the backstop for the case where the decode hands
+    # back the RAW template — i.e. we would be validating un-rendered text while
+    # believing it rendered, which is #6454 itself. Skip a key the source escapes
+    # as `$${key}`: that renders to a literal `${key}` BY DESIGN and is a shell
+    # seam, not a leak (only reachable when a lowercase shell var collides with a
+    # map key name).
     for k in "${strings[@]}" "${bools[@]}"; do
+      grep -qF "\$\${$k}" "$path" 2>/dev/null && continue
       if grep -qF "\${$k}" "$rendered" 2>/dev/null; then
         echo "ERROR [$base$label]: stub var \${$k} survived into the rendered document" >&2
+        echo "  The render did not substitute it. If the decode returned the RAW template," >&2
+        echo "  this gate would be validating un-rendered text — the #6454 defect itself." >&2
         exit 3
       fi
     done

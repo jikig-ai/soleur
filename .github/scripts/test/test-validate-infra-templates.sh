@@ -27,7 +27,12 @@ trap 'rm -rf "$TMP"' EXIT
 # --- Harness ---
 RC=0
 OUT=""
-run_check() { OUT=$(bash "$EXEC" "$1" 2>&1); RC=$?; }
+# `timeout` is load-bearing, not hygiene: a mutation that makes the SUT read
+# STDIN (an empty filename handed to awk) HANGS instead of failing, and an
+# un-timed harness hangs with it — so a mutation test reports "still running"
+# rather than a verdict, and a wedged gate would burn the CI runner's whole
+# budget. 120s is ~7x the full suite's real runtime (~18s).
+run_check() { OUT=$(timeout 120 bash "$EXEC" "$1" 2>&1); RC=$?; }
 
 ok() { echo "PASS [$1]"; PASS=$((PASS + 1)); }
 bad() { echo "FAIL [$1]: $2"; echo "  rc=$RC out=$OUT"; FAIL=$((FAIL + 1)); }
@@ -143,7 +148,11 @@ runcmd:
 EOF
 run_check "$D"
 assert_rc "F4-escapes-take-raw-path" 0
-assert_not_out "F4-no-false-drift" "exit 4"
+# Assert the POSITIVE: that the raw path is what ran. A negative-space
+# `assert_not_out "exit 4"` here is unfalsifiable — the SUT never prints the
+# string "exit 4" on any path, so it passes against empty output and certifies
+# nothing.
+assert_out "F4-took-raw-path" "raw — no template syntax"
 
 # ---------------------------------------------------------------------------
 # F5 — silent-skip guard (the #6454 class recurring). Two discovered members,
@@ -207,6 +216,11 @@ locals {
 EOF
 run_check "$D"
 assert_rc "F6a-no-call-site-reds" 4
+# `assert_rc 4` ALONE cannot tell the no-call-site branch from the empty-var-map
+# branch — both exit 4. Verified: with both attribution checks deleted, this
+# fixture still exits 4 via the empty-map branch, so the rc assert alone
+# certifies a neighbour of what it names. Pin the message.
+assert_out "F6a-names-the-right-branch" "NO templatefile() call site"
 
 D=$(newdir f6b)
 cat > "$D/cloud-init.yml" <<'EOF'
@@ -230,6 +244,7 @@ locals {
 EOF
 run_check "$D"
 assert_rc "F6b-ambiguous-call-site-reds" 4
+assert_out "F6b-names-the-right-branch" "ambiguous var map"
 
 # ---------------------------------------------------------------------------
 # F7 — arm selection. THE property justifying the render over a directive-strip
@@ -283,7 +298,14 @@ for b in bash sh grep egrep awk sed jq mktemp rm cat printf echo wc sort head ta
 done
 OUT=$(PATH="$FAKEBIN" bash "$EXEC" "$D" 2>&1); RC=$?
 assert_rc "F8-tooling-absent-fails-closed" 6
-assert_not_out "F8-no-self-skip" "SKIP"
+# Case-insensitive, and asserted against the FULL output: a case-sensitive
+# `assert_not_out "SKIP"` was unfalsifiable here (the SUT's message says
+# "not skipping", lowercase, so the needle could never match either way).
+if grep -Fqi "skip" <<<"$OUT" && ! grep -Fqi "not skipping" <<<"$OUT"; then
+  bad "F8-no-self-skip" "output mentions skipping without the fail-closed disclaimer"
+else
+  ok "F8-no-self-skip"
+fi
 assert_out "F8-names-terraform" "terraform"
 
 # ---------------------------------------------------------------------------
@@ -347,6 +369,189 @@ EOF
 run_check "$D"
 assert_rc "F10-empty-dir-passes" 0
 assert_out "F10-explicit-message" "no infra templates"
+
+# ---------------------------------------------------------------------------
+# F11-F14 — FALSE-RED guards. Each input below is a CORRECT template that an
+# earlier revision of the gate rejected. A gate that reds a correct file is the
+# #6454 dynamic itself (operators learn the red light means nothing), so these
+# matter as much as the anti-no-op fixtures: F2/F3 prove the gate can fail,
+# F11-F14 prove it doesn't fail on good input.
+# ---------------------------------------------------------------------------
+
+# F11 — a ONE-LINE templatefile map. Ordinary Terraform style. A line-based
+# scan starting AFTER the call-site line never sees these keys → empty map → 4.
+D=$(newdir f11)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+runcmd:
+  - echo ${greeting}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/cloud-init.yml", { greeting = var.greeting })
+}
+EOF
+run_check "$D"
+assert_rc "F11-one-line-map-passes" 0
+
+# F11b — one-line map with MULTIPLE keys, comma-separated. A line-anchored key
+# regex finds only the first and the render dies on the missing one.
+D=$(newdir f11b)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+runcmd:
+  - echo ${greeting} ${farewell}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/cloud-init.yml", { greeting = var.a, farewell = var.b })
+}
+EOF
+run_check "$D"
+assert_rc "F11b-one-line-multi-key-passes" 0
+
+# F12 — a nested map value whose closing `})` lands at column 0. A scan that
+# stops at the first `^\s*\})` truncates the map, dropping a real key.
+D=$(newdir f12)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+runcmd:
+  - echo ${greeting}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/cloud-init.yml", {
+    cfg = jsonencode({
+      a = 1
+})
+    greeting = var.greeting
+  })
+}
+EOF
+run_check "$D"
+assert_rc "F12-nested-brace-value-passes" 0
+
+# F13 — a NEGATED bool directive. Matching only `%{ if <key>` types this key as
+# a string, and `!"x"` is a Terraform type error → exit 2 on a correct file.
+D=$(newdir f13)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+package_update: false
+%{ if !skip_extra ~}
+runcmd:
+  - echo included
+%{ endif ~}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/cloud-init.yml", {
+    skip_extra = var.skip_extra
+  })
+}
+EOF
+run_check "$D"
+assert_rc "F13-negated-bool-passes" 0
+
+# F14 — a COMPOUND bool directive. Only the first identifier follows `if`, so
+# the second types as a string → `true && "x"` → exit 2 on a correct file.
+D=$(newdir f14)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+package_update: false
+%{ if enable_a && enable_b ~}
+runcmd:
+  - echo included
+%{ endif ~}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/cloud-init.yml", {
+    enable_a = var.a
+    enable_b = var.b
+  })
+}
+EOF
+run_check "$D"
+assert_rc "F14-compound-bool-passes" 0
+
+# F14b — a key COMPARED to a string in a directive is a STRING, not a bool.
+# Typing it bool would make `true == "prod"` a type error. Guards the
+# comparison carve-out in the bool heuristic.
+D=$(newdir f14b)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+package_update: false
+%{ if tier == "prod" ~}
+runcmd:
+  - echo prod
+%{ endif ~}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/cloud-init.yml", {
+    tier = var.tier
+  })
+}
+EOF
+run_check "$D"
+assert_rc "F14b-compared-key-stays-string" 0
+
+# F15 — a TF-escaped `$${greeting}` colliding with a map key name renders to a
+# literal `${greeting}` BY DESIGN (it is a shell seam). The leak check must not
+# read that as an unsubstituted stub → exit 0, not exit 3.
+D=$(newdir f15)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+runcmd:
+  - echo "$${greeting}"
+  - echo ${greeting}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/cloud-init.yml", {
+    greeting = var.greeting
+  })
+}
+EOF
+run_check "$D"
+assert_rc "F15-escaped-collision-not-a-leak" 0
+
+# F16 — exit 3 for real. The leak check is the backstop for a decode that hands
+# back the RAW template: we would then be schema-checking un-rendered text while
+# believing it rendered, which is #6454 itself. Terraform always substitutes a
+# key that is in the map, so the only honest way to reach this is to inject a
+# renderer that returns the template un-substituted. Stub `terraform` on PATH to
+# emit the double-JSON-encoded RAW body the real console would emit for a
+# rendered doc.
+D=$(newdir f16)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+runcmd:
+  - echo ${greeting}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  ud = templatefile("${path.module}/cloud-init.yml", {
+    greeting = var.greeting
+  })
+}
+EOF
+STUBBIN="$TMP/stubbin-f16"
+mkdir -p "$STUBBIN"
+for b in bash sh grep egrep awk sed jq mktemp rm cat printf echo wc sort head tail tr dirname basename chmod find cp mv test env cloud-init python3; do
+  src=$(command -v "$b" 2>/dev/null) && ln -sf "$src" "$STUBBIN/$b" 2>/dev/null
+done
+# Double-encode: the SUT decodes with `jq -r . | jq -r .`, mirroring the real
+# console's re-quoting of the jsonencode result.
+jq -Rs . < "$D/cloud-init.yml" | jq -Rs . > "$TMP/f16-payload"
+cat > "$STUBBIN/terraform" <<EOF
+#!/usr/bin/env bash
+cat "$TMP/f16-payload"
+EOF
+chmod +x "$STUBBIN/terraform"
+OUT=$(PATH="$STUBBIN" bash "$EXEC" "$D" 2>&1); RC=$?
+assert_rc "F16-unsubstituted-render-reds" 3
+assert_out "F16-names-the-leaked-var" 'greeting'
 
 echo ""
 echo "Results: $PASS pass, $FAIL fail"
