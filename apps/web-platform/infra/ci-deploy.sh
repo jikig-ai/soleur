@@ -975,7 +975,8 @@ pull_image_with_fallback() {
     #     app_ghcr_served at all. It is not "darkened by push retirement" like its siblings —
     #     it is darkened by the boot failing. Post-5.3, its silence means the opposite of
     #     healthy. This is precisely why the soak must be trustworthy BEFORE 5.3, not after.
-    # zot_gate_degraded_event (:630) is GATE-emitted and survives 5.3 outright.
+    # zot_gate_degraded_event (defined below; name-anchored — the prior `:630` cite had rotted onto
+    # a bare comment line) is GATE-emitted and survives 5.3 outright.
     #
     # So do NOT retire that alarm here — NARROW its filters_v2 to the signals that still
     # emit. Retiring it blinds the survivors, and zot-gate-degraded is currently its

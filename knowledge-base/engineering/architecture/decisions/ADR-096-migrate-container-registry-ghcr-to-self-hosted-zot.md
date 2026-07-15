@@ -119,8 +119,13 @@ independent axes so it never silently gates a host:
     recorded rather than silently edited, because the earlier text asserted the coverage it lacked.
     **Scope of the corrected claim — do NOT restate this as "the gate matches the alarm" and stop:**
     window/threshold parity is **not** pinned (the alarm is a 1h-rolling per-issue-group count; the
-    soak is a flat count over `START..now`); the soak's FAIL set covers **five of the seven** ways the
-    fleet can end up GHCR-served.
+    soak is a flat count over `START..now`); the soak's FAIL set covers **five of the seven KNOWN** ways
+    the fleet can end up GHCR-served. ⚠ *Known*, not total — the count went **6 → 7 by discovery inside
+    #6462** (nobody had looked at the dedicated inngest host until then), which is direct evidence the
+    enumeration is **not closed**. Treat 7 as a lower bound and the ratio as *what we can currently see*,
+    never *what exists*. For the same reason "machine-enforced" (below) means enforced against **accident**
+    — a deliberate close of #6500 with the code still GHCR-only is caught by the soak's code-corroboration
+    conjunct, but nothing defends against an 8th path nobody has found.
 
     **Amended by #6462 — read the RATIO, not the delta.** #6462 added `stage:"app_ghcr_served"` (a
     5th FAIL signal, covering the fresh-boot `/v2/` probe-miss path that previously emitted nothing)
@@ -150,7 +155,7 @@ independent axes so it never silently gates a host:
     The soak remains **necessary but not sufficient** to authorize 5.3–5.5, and this ADR stays
     **Adopting**.
 
-    *Debt recorded, not deferred silently:* the **Sentry plane is unmodelled in C4**
+    *Debt recorded and TRACKED (#6510):* the **Sentry plane is unmodelled in C4**
     (`hetzner -> sentry`, `webapp -> sentry`). The edge is already true on `main` — `_emit` has
     POSTed from the boot path for the `on_err` fatals (`stage:"pull"`, `stage:"ghcr_login"`), and
     #6462 adds a 5th call site on that same emitter rather than a new edge — so this is

@@ -64,7 +64,10 @@
 # either side fails CI rather than silently darkening this gate.
 #
 # ⚠ WHAT THIS GATE CANNOT SEE — it is NECESSARY BUT NOT SUFFICIENT to authorize 5.3-5.5.
-# There are SEVEN ways the fleet can end up GHCR-served; this gate's FAIL set covers FIVE.
+# There are SEVEN KNOWN ways the fleet can end up GHCR-served; this gate's FAIL set covers FIVE.
+# ⚠ KNOWN, not total: the count went 6 → 7 by DISCOVERY inside #6462 (nobody had looked at the
+# dedicated inngest host). That is direct evidence the enumeration is not closed. Treat 7 as a
+# lower bound and the ratio as "what we can currently see", never "what exists".
 #
 # ⚠ READ THE RATIO, NOT THE DELTA: #6462 closed one gap (fresh-boot probe-miss) and SURFACED
 # a new one (the dedicated inngest host), so coverage went 4-of-6 → 5-of-7. The numerator AND
@@ -195,7 +198,7 @@ sentry_count() {
   [[ "$n" =~ ^[0-9]+$ ]] && echo "$n" || echo "TRANSIENT"
 }
 
-# --- (a) Fallback events across ALL FOUR watched signals. Zero required. ---
+# --- (a) Fallback events across ALL FIVE watched signals. Zero required. ---
 #
 # Declared, guarded, and summed by ONE loop, so "declared but never counted" — the #6435
 # defect — is structurally unrepresentable rather than policed by a reviewer's attention.

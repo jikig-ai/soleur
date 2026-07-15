@@ -102,15 +102,35 @@ condition. The fallback-rate alarm is a **real-time page** so a live zot degrada
 caught in minutes, not at the next daily sweep. It is **already live** — apply-created and
 armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at cutover:
 
-- **Signal:** three warning tags, all `feature:supply-chain op:image-pull`:
+- **Signal:** five warning tags. ⚠ They are NOT all `feature:supply-chain op:image-pull` — the
+  prefix split is deliberate and the earlier "all `feature:supply-chain op:image-pull`" framing
+  was wrong: only the `registry:` pair carries that prefix (ci-deploy.sh's jq payload writes
+  `feature`/`op`), while every `stage:` query is **bare** because neither boot-path emitter
+  writes those tags. Sentry tag matching is exact — a prefixed `stage:` query matches nothing.
   - `registry:"ghcr-fallback"` — a host *attempted* zot and the pull failed, then fell back
     (ci-deploy.sh `registry_pull_event`, rolling deploy);
-  - `stage:"inngest_ghcr_fallback"` — same, on the fresh-boot inngest path (cloud-init
-    `soleur-boot-emit`);
   - `registry:"zot-gate-degraded"` — zot is CONFIGURED but the gate could not activate it
     (probe unreachable / pull creds absent / login failed), so the deploy used GHCR WITHOUT
     ever running a zot pull (ci-deploy.sh `zot_gate_degraded_event`). This catches the
-    host-up-heartbeat-green-but-pull-cred-broken case the other two miss.
+    host-up-heartbeat-green-but-pull-cred-broken case the others miss.
+  - `stage:"inngest_ghcr_fallback"` — a fresh-boot inngest pull attempted zot and fell back
+    (cloud-init `soleur-boot-emit`). **Bare**, no prefix.
+  - `stage:"app_ghcr_fallback"` — same, on the fresh-boot web/app path (cloud-init `_emit`).
+    **Bare**.
+  - `stage:"app_ghcr_served"` (#6462) — a fresh boot was served by GHCR *at all*. **Bare**, and
+    the only one of the five that fires when zot was NEVER ATTEMPTED (the `/v2/` probe missed
+    and the GHCR pull succeeded first try — the dominant path, previously invisible). Triage it
+    by its sibling: **with** `app_ghcr_fallback` = zot tried and failed → chase the pull;
+    **without** = the probe missed → chase the probe (#6416 / #6288).
+- **The soak gate can now FAIL for three reasons, not one** (#6462). If you are here because
+  `zot-soak-6122.sh` failed, read its message before assuming a fallback occurred:
+  | Message | Means | Do |
+  |---|---|---|
+  | `FAIL: N fallback event(s)` | a host really was GHCR-served | this runbook — triage by signal, above |
+  | `FAIL(no-freshboot-evidence)` | **zero fallbacks AND zero zot-served fresh boots** — the fleet is UNOBSERVED, not clean. `cloud-init.yml` is `ignore_changes`-pinned, so the beacon only ships on a rebuild | do NOT revert zot. Recreate a web host inside the window, or wait — the fleet recreates ~1.3×/day |
+  | `FAIL(blocked)` / `FAIL(blocker-closed-but-condition-unmet)` | the soak's criteria hold, but #6500 (the dedicated inngest host: GHCR-only, fail-closed, invisible to these queries) is still open — or was closed while the code still shows no zot path | do NOT revert zot, and do NOT close #6500 to clear it. Fix the inngest host |
+  Only the first row is a zot problem. The other two are the gate refusing to authorize an
+  irreversible PAT revoke on evidence it does not have — that is the gate working.
 - **Alert rule** — `sentry_issue_alert.zot_mirror_fallback_rate`, APPLY-CREATED and live now
   (it is **not** armed at cutover; `zot-gate-degraded` emits pre-flip today). It pages on the
   **first** event matching any of the FIVE signals: `registry:{"ghcr-fallback",
