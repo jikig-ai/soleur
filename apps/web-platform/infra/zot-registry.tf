@@ -269,6 +269,13 @@ resource "hcloud_server" "registry" {
     # routing (like disk_heartbeat_url) — baked into user_data; the ONLY secret is
     # BETTERSTACK_LOGS_TOKEN, injected at cron time via `doppler run` from the isolated config.
     betterstack_ingest_url = local.betterstack_logs_ingest_url
+    # #6415 — the host's OWN expected private IP, baked at template time so the private-NIC
+    # guard's trigger predicate is a pure LOCAL read with zero runtime dependencies (IMDS is
+    # telemetry, never the trigger). Non-secret host routing, same class as zot_image: this
+    # RFC1918 address is already in user_data and retrievable from the hcloud metadata API.
+    # Single-sourced with hcloud_server_network.registry.ip (network.tf) — see the drift
+    # rationale there; a drifted copy would reboot a healthy host.
+    private_ip = local.registry_private_ip
   }))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,

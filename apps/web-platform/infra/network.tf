@@ -57,7 +57,14 @@ resource "hcloud_server_network" "git_data" {
 resource "hcloud_server_network" "registry" {
   server_id = hcloud_server.registry.id
   subnet_id = hcloud_network_subnet.private.id
-  ip        = "10.0.1.30"
+  # #6415 — SINGLE-SOURCED from local.registry_private_ip (was a hardcoded copy of the same
+  # literal while the comment above already pointed at the local). cloud-init now bakes that
+  # same local into the host's private-NIC guard as its EXPECTED_IP, which promotes this
+  # constant to REBOOT AUTHORITY: if the two literals drift, the guard bakes a wrong
+  # EXPECTED_IP, ip_present is false forever, IMDS *corroborates* (the network genuinely is
+  # attached), and the guard reboots a HEALTHY host to its cap and then goes terminal. Same
+  # "dead local + hardcoded copy" shape inngest-host.tf fixed after the #6180 review.
+  ip = local.registry_private_ip
 }
 
 # #6178 (ADR-100) — attach the dedicated Inngest singleton host at a stable private
