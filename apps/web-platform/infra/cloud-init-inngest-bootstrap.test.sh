@@ -303,6 +303,37 @@ body = "\n".join(L[1:-1]) if (L and L[0].lstrip().startswith("<<")) else "\n".jo
 yaml.safe_load(body)
 PY
   }
+  # --- #6446: cloud-init schema on the RENDERED doc ---
+  # infra-validation.yml used to run `cloud-init schema -c cloud-init.yml` against the RAW
+  # templatefile() source. That is structurally incapable: the file is a Terraform template,
+  # not YAML. It survived for years only because `${...}` interpolations sit inside values and
+  # parse as ordinary scalars — false-green. The first column-0 `%{ if ... ~}` directive turned
+  # it false-RED (`%` is YAML's reserved directive indicator, so the parser aborts before
+  # cloud-init ever sees the doc), and it stayed red on every infra PR because `validate` is
+  # not a required check. This leg already holds the only real render, so the check belongs
+  # here — the schema is a property of the RENDERED state, which is what boots a host.
+  # Deleting the raw-source step without this would drop the coverage entirely.
+  cloud_init_schema_ok() {
+    local stripped="$1.schema.yml"
+    # Same heredoc-strip as render_yaml_ok — terraform console wraps output in `<<EOT … EOT`.
+    python3 - "$1" "$stripped" <<'PY'
+import sys
+L = open(sys.argv[1]).read().splitlines()
+body = "\n".join(L[1:-1]) if (L and L[0].lstrip().startswith("<<")) else "\n".join(L)
+open(sys.argv[2], "w").write(body + "\n")
+PY
+    # Warnings (e.g. no datasource) are expected; only a non-zero exit is a failure.
+    cloud-init schema -c "$stripped"
+  }
+  # Resolve availability ONCE and SKIP visibly — never fold the absence into a passing
+  # assert, which would read as coverage that never ran (the #6446 failure mode itself).
+  HAVE_CLOUD_INIT=0
+  if command -v cloud-init >/dev/null 2>&1; then
+    HAVE_CLOUD_INIT=1
+  else
+    echo "  SKIP: cloud-init not installed (rendered-schema checks skipped — CI's deploy-script-tests installs it)"
+  fi
+
   # false (bool) and "false" (string, the rollback route) must BOTH gate off.
   for CASE in 'false' '"false"'; do
     OUT="$RENDER_SCRATCH/render.txt"
@@ -327,6 +358,14 @@ PY
     assert "render web_colocate_inngest=$CASE RETAINS ungated 'soleur-vector-install' (#6396)" \
       "grep -qF 'soleur-vector-install' '$OUT'"
     assert "render web_colocate_inngest=$CASE is valid YAML" "render_yaml_ok '$OUT'"
+    # #6446: YAML-parseable is necessary but NOT sufficient — a doc can safe_load and
+    # still be rejected by cloud-init's own schema (a malformed write_files entry, a
+    # bad runcmd shape). This is the check infra-validation.yml was structurally unable
+    # to perform against the raw template.
+    if (( HAVE_CLOUD_INIT )); then
+      assert "render web_colocate_inngest=$CASE passes cloud-init schema" \
+        "cloud_init_schema_ok '$OUT'"
+    fi
   done
   # true (bool) keeps the co-located bootstrap.
   TRUE_OUT="$RENDER_SCRATCH/render-true.txt"
@@ -336,6 +375,10 @@ PY
   assert "render web_colocate_inngest=true INCLUDES the inngest-bootstrap.sh invocation" \
     "grep -qF 'EXTRACT_DIR/inngest-bootstrap.sh' '$TRUE_OUT'"
   assert "render web_colocate_inngest=true is valid YAML" "render_yaml_ok '$TRUE_OUT'"
+  if (( HAVE_CLOUD_INIT )); then
+    assert "render web_colocate_inngest=true passes cloud-init schema" \
+      "cloud_init_schema_ok '$TRUE_OUT'"
+  fi
   rm -rf "$RENDER_SCRATCH"
 else
   echo "  SKIP: terraform not installed (render authority skipped — CI deploy-script-tests provides it via setup-terraform)"

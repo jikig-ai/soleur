@@ -80,16 +80,28 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Validate cloud-init schema
-        run: |
-          if [[ -f cloud-init.yml ]]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
-            cloud-init schema -c cloud-init.yml
-          else
-            echo "No cloud-init.yml found, skipping"
-          fi
-        working-directory: ${{ matrix.directory }}
+      # NO raw-source cloud-init schema step here — deliberately (#6446).
+      #
+      # It used to point cloud-init's schema validator at the template file as it sits on
+      # disk. (The literal command is spelled out in the #6446 issue, not here: this job
+      # is asserted to no longer CONTAIN that invocation, and a grep over this file sees
+      # comments too — quoting it verbatim would trip the very check that guards it.)
+      # apps/web-platform/infra/cloud-init.yml is a Terraform templatefile()
+      # SOURCE, not YAML, so the check was structurally incapable of doing its job. It
+      # passed for years only because `${...}` interpolations sit inside values and parse
+      # as ordinary scalars (false-green). The first column-0 `%{ if ... ~}` directive
+      # made it fail outright — `%` is YAML's reserved directive indicator, so the parser
+      # aborts before cloud-init ever sees the document — and because `validate` is not a
+      # required check, it sat red on every infra PR while they all merged anyway.
+      #
+      # The schema is a property of the RENDERED document (that is what boots a host), so
+      # the check now lives with the only real render: the AC7 leg of
+      # apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh, which renders via
+      # `terraform console` with the real var map and runs `cloud-init schema` on the
+      # output. That runs in the deploy-script-tests job, which installs cloud-init.
+      #
+      # Do not "restore" this step. Validating a template as YAML cannot work; the only
+      # question was whether it failed loudly or silently.
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
@@ -162,6 +174,17 @@ jobs:
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_wrapper: false
+
+      # #6446: the AC7 render leg also runs `cloud-init schema` on the RENDERED document.
+      # This is the coverage that moved here when infra-validation.yml's raw-source schema
+      # step was deleted (it validated a Terraform template as YAML — structurally
+      # incapable; see the comment on the `validate` job above). Without the binary the
+      # leg SKIPs visibly rather than false-greening; this step makes it execute.
+      - name: Install cloud-init (rendered-schema check in the AC7 render leg)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+          cloud-init --version
 
       - name: Run ci-deploy.sh tests
         run: bash apps/web-platform/infra/ci-deploy.test.sh
