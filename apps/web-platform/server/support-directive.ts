@@ -1,5 +1,5 @@
 // Support-persona scoping constants (feat-wire-concierge-support-chat, Phase 3;
-// ADR-109). Mirrors `routine-authoring-directive.ts`: a TRUSTED server-side
+// ADR-113). Mirrors `routine-authoring-directive.ts`: a TRUSTED server-side
 // system-prompt append, plus the tool/skill allowlist the dispatch path pins for
 // `persona: "support"`.
 //

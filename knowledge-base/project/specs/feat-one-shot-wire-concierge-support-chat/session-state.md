@@ -2,13 +2,13 @@
 
 ## Plan Phase
 - Plan: knowledge-base/project/plans/2026-07-10-feat-wire-concierge-support-chat-plan.md
-- Status: complete (CPO-signed; **Phase 1 SUPERSEDED by ADR-109 / CTO ruling — see below**)
+- Status: complete (CPO-signed; **Phase 1 SUPERSEDED by ADR-113 / CTO ruling — see below**)
 
 ## Architecture decision (CTO, binding — 2026-07-10)
 The plan's Phase-1 `ExecutionEnvironment` provider-seam extraction was **rejected**
 by the CTO agent in favor of **Hardened B**: a REQUIRED `persona` discriminant →
 `resolveWorkspaceMode()` union driving the repo-gate skip + cwd + sandbox write-set.
-Recorded in ADR-109 (+ ADR-070 amendment). The `server/execution-environment.ts`
+Recorded in ADR-113 (+ ADR-070 amendment). The `server/execution-environment.ts`
 module the plan called for is NOT created. CTO also caught a P1 the plan missed:
 support at `cwd=getPluginPath()` with the default `allowWrite:[workspacePath]` would
 grant WRITE to the shared platform plugin root — support MUST set `allowWrite:[]`.
@@ -29,7 +29,7 @@ Added this session:
   footnote, AI-vs-Preview badge, streaming typing indicator).
 - Containment: sandbox `denyReadExtra` obscures `<root>/knowledge-base` from support.
 - Flag `support-live` added to RUNTIME_FLAGS (fail-closed OFF); flag-map fixtures swept.
-- ADR-109 updated with the transport + rollout-gate sections.
+- ADR-113 updated with the transport + rollout-gate sections.
 - Tests: sse, support-conversation, support-route (persona:support/auth/CSRF/503),
   route-isolation, live-path + fallback, T2/T3 + internal-KB-deny, copy-conditional.
 
@@ -57,7 +57,7 @@ The entire support-scoped Concierge EXECUTION path is implemented and green
   CTO P1 plugin-root write escape). T3 unit test + T2 integration test assert it.
 - Skill/tool scope: SDK skills=["kb-search"], canUseTool default-deny, disallowed
   Edit/Write/Task/Agent (Bash kept). Support prompt via buildSoleurGoSystemPrompt.
-- Migration 128 (kind='support'); ADR-109 + ADR-070 amendment.
+- Migration 131 (kind='support'); ADR-113 + ADR-070 amendment.
 
 ## SAFETY BOUNDARY reached this session (why copy stays GATED)
 Phase 4 (corpus + hard search-root restriction) is the ship-blocker, and it is
@@ -96,12 +96,12 @@ page.tsx → missing @/infra/github-app-manifest.json (present on main).
 - `createCanUseTool` default-deny Skill allowlist for `persona:"support"` (before the
   isSafeTool wholesale allow; deny-with-message; bare+FQN). (6 tests + 14 regression) [Phase 3.3b/3.4]
 - `buildSoleurGoSystemPrompt` support short-circuit (no /soleur:go, no artifact/sticky). (4 tests) [Phase 3.2]
-- `server/workspace-mode.ts` — resolveWorkspaceMode discriminant (never-throw, impossible-state coupling). (4 tests) [ADR-109 T1]
+- `server/workspace-mode.ts` — resolveWorkspaceMode discriminant (never-throw, impossible-state coupling). (4 tests) [ADR-113 T1]
 - `persona` threaded (optional today — MUST upgrade to REQUIRED per CTO) through
   DispatchSoleurGoArgs → runner DispatchArgs → QueryFactoryArgs; consumed for SDK
   skills scope + createCanUseTool persona + support disallowed-tools. tsc clean.
 - Migration 128 `conversations.kind` discriminator (B2 repo-less support rows) + down.
-- ADR-109 + ADR-070 amendment.
+- ADR-113 + ADR-070 amendment.
 
 ## REMAINING (NOT started — large, needs LIVE validation the plan mandates)
 1. Upgrade `persona` optional→REQUIRED `Persona` on the 3 dispatch interfaces + the

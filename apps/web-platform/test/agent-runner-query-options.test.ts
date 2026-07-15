@@ -334,7 +334,7 @@ describe("buildAgentQueryOptions — SDK skills allowlist (support scope)", () =
   });
 });
 
-describe("buildAgentQueryOptions — WorkspaceMode-driven cwd + sandbox write-set (ADR-109)", () => {
+describe("buildAgentQueryOptions — WorkspaceMode-driven cwd + sandbox write-set (ADR-113)", () => {
   it("command_center: cwd = workspace, sandbox allowWrite = [workspace]", () => {
     const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("command_center") });
     expect(opts.cwd).toBe(WORKSPACE);

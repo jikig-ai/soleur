@@ -975,11 +975,11 @@ export interface DispatchArgs {
    */
   routineAuthoring?: boolean;
   /**
-   * feat-wire-concierge-support-chat (ADR-109). `"support"` runs the Concierge
+   * feat-wire-concierge-support-chat (ADR-113). `"support"` runs the Concierge
    * as read-only in-app help: support prompt (buildSoleurGoSystemPrompt branch),
    * SDK skills scoped to kb-search, write/fan-out tools disallowed, and the
    * repo-lifecycle gates bypassed in realSdkQueryFactory. Forwarded to
-   * QueryFactoryArgs. REQUIRED (ADR-109) — no safe default; `"command_center"`
+   * QueryFactoryArgs. REQUIRED (ADR-113) — no safe default; `"command_center"`
    * is the explicit Command Center value.
    */
   persona: Persona;
@@ -1055,7 +1055,7 @@ export interface QueryFactoryArgs {
   /** #5402 — routines authoring mode flag; realSdkQueryFactory appends the
    *  ROUTINE_AUTHORING_DIRECTIVE to the system prompt when true. */
   routineAuthoring?: boolean;
-  /** feat-wire-concierge-support-chat (ADR-109) — support persona. When
+  /** feat-wire-concierge-support-chat (ADR-113) — support persona. When
    *  "support", realSdkQueryFactory bypasses the repo-lifecycle gates, runs
    *  cwd=getPluginPath() read-only, scopes SDK skills to kb-search, and pins the
    *  support disallowed-tools. REQUIRED — no safe default; Command Center passes
@@ -1270,7 +1270,7 @@ export interface BuildSoleurGoSystemPromptArgs {
    */
   documentExtractMeta?: DocumentExtractMeta;
   /**
-   * Dispatch persona (feat-wire-concierge-support-chat, ADR-109). When
+   * Dispatch persona (feat-wire-concierge-support-chat, ADR-113). When
    * `"support"`, the builder short-circuits to the Soleur Support prompt: it does
    * NOT emit the Command Center `/soleur:go` routing line (a downstream append
    * cannot un-say it — Kieran review #5), and it ignores artifact / sticky-
@@ -1302,7 +1302,7 @@ const PDF_INLINE_EXCLUSION_CLAUSE =
 export function buildSoleurGoSystemPrompt(
   args: BuildSoleurGoSystemPromptArgs = {},
 ): string {
-  // Support persona short-circuit (ADR-109). Emits the Soleur Support prompt
+  // Support persona short-circuit (ADR-113). Emits the Soleur Support prompt
   // instead of the Command Center router — no `/soleur:go` routing, no artifact
   // or sticky-workflow scoping. The SUPPORT_SYSTEM_DIRECTIVE is the trusted,
   // server-side scope; the `<user-input>` data-framing line is retained.

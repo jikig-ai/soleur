@@ -1,5 +1,5 @@
--- 128_conversations_kind_support.down.sql
--- Reverts 128_conversations_kind_support.sql.
+-- 131_conversations_kind_support.down.sql
+-- Reverts 131_conversations_kind_support.sql.
 -- NOTE: dropping the column discards any 'support' discriminator on existing
 -- support conversations; those rows remain but become indistinguishable from
 -- command_center rows (they keep repo_url = NULL, so the CC rail still hides

@@ -1,4 +1,4 @@
-// POST /api/support route handler (ADR-109, CTO Option D test #2). Dispatch +
+// POST /api/support route handler (ADR-113, CTO Option D test #2). Dispatch +
 // auth + conversation are mocked; asserts the route calls dispatchSoleurGo with
 // persona:"support" and streams the injected sink's frames as SSE.
 

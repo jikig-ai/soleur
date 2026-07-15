@@ -68,7 +68,7 @@ export interface AgentQueryOptionsArgs {
   workspacePath: string;
   pluginPath: string;
   /**
-   * Execution mode (feat-wire-concierge-support-chat, ADR-109). Binds cwd + the
+   * Execution mode (feat-wire-concierge-support-chat, ADR-113). Binds cwd + the
    * sandbox write-set together so the half-wired state is unrepresentable:
    *  - `command_center` → cwd = workspacePath, sandbox allowWrite = [workspacePath];
    *  - `support`        → cwd = pluginPath (read-only docs root), allowWrite = [].
@@ -188,7 +188,7 @@ export interface AgentQueryOptionsArgs {
    * Center default). The support persona passes `["kb-search"]`
    * (`SUPPORT_SKILLS_OPTION`) as the PRIMARY scope lever, paired with the
    * `createCanUseTool` default-deny for the emit-a-non-loaded-skill case.
-   * feat-wire-concierge-support-chat Phase 3; ADR-109.
+   * feat-wire-concierge-support-chat Phase 3; ADR-113.
    */
   skills?: string[];
 }
@@ -221,13 +221,13 @@ export function buildAgentQueryOptions(
   // Test-tolerant (mirrors getPluginPath's VITEST/NODE_ENV=test bypass).
   const trustedPluginPath = assertTrustedPluginPath(args.pluginPath);
 
-  // ADR-109 — cwd + sandbox write-set derived from the ONE mode value so a docs
+  // ADR-113 — cwd + sandbox write-set derived from the ONE mode value so a docs
   // cwd can never pair with a non-empty write-set. Support runs at the trusted,
   // boot-validated plugin root (read-only); Command Center at the workspace.
   const resolvedCwd =
     args.mode.cwdSource === "plugin" ? trustedPluginPath : args.workspacePath;
   const sandboxReadOnly = args.mode.sandboxWrite === "none";
-  // ADR-109 — support containment: obscure the internal `knowledge-base/`
+  // ADR-113 — support containment: obscure the internal `knowledge-base/`
   // (confidential operator KB) from the read-only support session. The deployed
   // repo root is the plugin root's grandparent (`getPluginPath()` =
   // `<root>/plugins/soleur`), so the internal KB is `<root>/knowledge-base`. Only
@@ -286,10 +286,10 @@ export function buildAgentQueryOptions(
     // closed (fail-closed, zero behavior change).
     sandbox: buildAgentSandboxConfig(args.workspacePath, {
       allowGithubEgress: Boolean(args.ghToken),
-      // ADR-109 — support persona runs read-only (allowWrite:[]) so a
+      // ADR-113 — support persona runs read-only (allowWrite:[]) so a
       // cwd=pluginPath session cannot write into the shared platform plugin root.
       readOnly: sandboxReadOnly,
-      // ADR-109 — obscure the internal knowledge base from support (tool-level).
+      // ADR-113 — obscure the internal knowledge base from support (tool-level).
       denyReadExtra,
     }),
     // Loaded-gun guard: both factories source args.pluginPath from getPluginPath()

@@ -1,5 +1,5 @@
 // B2 repo-less support-conversation resolve-or-create (feat-wire-concierge-support-
-// chat, ADR-109). Used by the SSE support route (POST /api/support) — the CTO's
+// chat, ADR-113). Used by the SSE support route (POST /api/support) — the CTO's
 // Option-D transport does NOT go through ws-handler's start_session, so support
 // conversation materialization lives here.
 //

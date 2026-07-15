@@ -1,5 +1,5 @@
--- 128_conversations_kind_support.sql
--- feat-wire-concierge-support-chat (Phase 2, ADR-109): B2 persisted repo-less
+-- 131_conversations_kind_support.sql
+-- feat-wire-concierge-support-chat (Phase 2, ADR-113): B2 persisted repo-less
 -- support conversations.
 --
 -- The 24/7 support chat routes through the same Concierge dispatch
@@ -34,7 +34,7 @@ ALTER TABLE public.conversations
   CHECK (kind IN ('command_center', 'support'));
 
 COMMENT ON COLUMN public.conversations.kind IS
-  'Conversation kind discriminator (feat-wire-concierge-support-chat / ADR-109). '
+  'Conversation kind discriminator (feat-wire-concierge-support-chat / ADR-113). '
   '''command_center'' (default) = the repo-scoped Concierge/Command-Center '
   'conversation. ''support'' = a repo-less in-app support-chat conversation '
   '(repo_url NULL). Readers that enumerate Command-Center conversations MUST '

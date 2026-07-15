@@ -1,6 +1,6 @@
 "use client";
 
-// feat-wire-concierge-support-chat (ADR-109) — the support chat now streams REAL
+// feat-wire-concierge-support-chat (ADR-113) — the support chat now streams REAL
 // agent-driven replies from the Concierge over the dedicated SSE transport
 // (POST /api/support, CTO Option D — decoupled from the Command Center WebSocket).
 // State lives here (owned by the always-mounted launcher) so the thread is

@@ -1,5 +1,5 @@
 // POST /api/support — the in-app support chat's streaming transport
-// (feat-wire-concierge-support-chat, ADR-109 / CTO Option D).
+// (feat-wire-concierge-support-chat, ADR-113 / CTO Option D).
 //
 // This route is DELIBERATELY decoupled from the Command Center WebSocket
 // (server/ws-handler.ts): the WS is single-per-user (supersedeExistingUserSocket)

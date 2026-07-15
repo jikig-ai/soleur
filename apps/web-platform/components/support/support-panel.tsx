@@ -29,7 +29,7 @@ export function SupportPanel({
   onSend: (text: string, chipKey?: string) => void;
   /** feat-guided-tour: present only when the guided-tour flag is on. */
   onStartTour?: () => void;
-  /** ADR-109 — true when the live Concierge backend is enabled (support-live). */
+  /** ADR-113 — true when the live Concierge backend is enabled (support-live). */
   live?: boolean;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);

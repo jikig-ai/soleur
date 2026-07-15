@@ -1,4 +1,4 @@
-// buildSoleurGoSystemPrompt support-persona branch (Phase 3.2, ADR-109).
+// buildSoleurGoSystemPrompt support-persona branch (Phase 3.2, ADR-113).
 // The append cannot un-say the baseline `/soleur:go` routing line already baked
 // into the Command Center prompt (Kieran review #5), so the builder itself must
 // emit support routing when persona==="support".

@@ -174,7 +174,7 @@ export function buildAgentSandboxConfig(
   opts?: { allowGithubEgress?: boolean; readOnly?: boolean; denyReadExtra?: readonly string[] },
 ): AgentSandboxConfig {
   const { denyRead: siblingDeny, degraded } = enumerateSiblingDenyPaths(workspacePath);
-  // ADR-109 — support-persona containment: additional absolute paths to obscure
+  // ADR-113 — support-persona containment: additional absolute paths to obscure
   // (`--tmpfs`) from the read-only support session. The support agent runs under
   // `--ro-bind / /` (whole FS readable) with Bash (kb-search greps), so the
   // internal `knowledge-base/` (confidential operator post-mortems/roadmap/ADRs)
@@ -223,7 +223,7 @@ export function buildAgentSandboxConfig(
       // so the base `--ro-bind / /` grants read and this `--bind` grants
       // write — no read-only `--ro-bind` shadow (the PR #5848 regression).
       //
-      // feat-wire-concierge-support-chat (ADR-109): `readOnly` (support persona)
+      // feat-wire-concierge-support-chat (ADR-113): `readOnly` (support persona)
       // sets `allowWrite: []` — the whole session is read-only. This is
       // load-bearing: the support cwd is `getPluginPath()` (the shared platform
       // plugin root), so a default `allowWrite:[workspacePath]` would grant WRITE

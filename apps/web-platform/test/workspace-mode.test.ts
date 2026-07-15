@@ -1,5 +1,5 @@
 // resolveWorkspaceMode — the single pure discriminant driving support's
-// read-only, repo-gate-bypassed execution (CTO ruling, ADR-109, T1).
+// read-only, repo-gate-bypassed execution (CTO ruling, ADR-113, T1).
 // Pure module, no app runtime.
 
 import { describe, it, expect } from "vitest";

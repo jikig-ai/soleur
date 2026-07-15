@@ -1,5 +1,5 @@
 // resolveOrCreateSupportConversation — B2 repo-less support conversation
-// resolve-or-create for the SSE route (ADR-109). Deterministic — the tenant
+// resolve-or-create for the SSE route (ADR-113). Deterministic — the tenant
 // client + workspace resolver are mocked.
 
 import { vi, describe, it, expect, beforeEach } from "vitest";

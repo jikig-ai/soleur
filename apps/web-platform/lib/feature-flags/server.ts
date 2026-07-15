@@ -64,7 +64,7 @@ const RUNTIME_FLAGS = {
   // preview reply is gated SEPARATELY by `support-live` below. Fail-closed:
   // FLAG_SUPPORT=0 mirror.
   support: "FLAG_SUPPORT",
-  // feat-wire-concierge-support-chat (ADR-109) — gates the LIVE Concierge backend
+  // feat-wire-concierge-support-chat (ADR-113) — gates the LIVE Concierge backend
   // for the support chat (SSE via POST /api/support, support-scoped skills). Default
   // OFF for all roles: while OFF the bubble shows the canned interface-preview reply
   // (no network). Flip ON only AFTER the Phase-4 product-help corpus + search-root

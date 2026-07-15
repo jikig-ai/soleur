@@ -1,4 +1,4 @@
-// Live support path (ADR-109): with `support-live` ON, sending a message calls
+// Live support path (ADR-113): with `support-live` ON, sending a message calls
 // POST /api/support and renders the streamed Concierge reply. Inverts the old
 // "no network call" assertion (Phase 8.2).
 

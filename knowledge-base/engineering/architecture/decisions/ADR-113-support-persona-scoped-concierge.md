@@ -1,11 +1,11 @@
-# ADR-109: Support-persona scoped Concierge — required-persona discriminant, `WorkspaceMode` derivation, repo-gate + sandbox-write bypass, skill/tool scope
+# ADR-113: Support-persona scoped Concierge — required-persona discriminant, `WorkspaceMode` derivation, repo-gate + sandbox-write bypass, skill/tool scope
 
 - **Status:** adopting (feat-wire-concierge-support-chat — scoping core + discriminant + migration landed; repo-gate/sandbox wiring, ws-handler support-conversation creation, front-end streaming, product-help corpus, and live QA are sequenced within the same atomic feature branch)
 - **Date:** 2026-07-10
 - **Deciders:** Operator (CPO sign-off at plan time — single-user-incident threshold; chose full plan + B2 persistence + curate-corpus-now); **CTO agent (binding ruling on the repo-gate mechanism — this ADR supersedes the plan's Phase 1)**. Domain: Engineering (CTO), Product (CPO).
 - **Related:** ADR-070 (two-tier fail-open / deny-with-message-not-silent-removal — reconciled below), ADR-093 (`getPluginPath()` boot-validated read-only cwd chokepoint), ADR-086/#6046 (`context_queries` web port), ADR-044 (active-workspace resolver), `agent-runner-query-options.ts` (the typed-field/derivation idiom this follows), `routine-authoring-directive.ts` (the trusted system-prompt-append precedent), plan `knowledge-base/project/plans/2026-07-10-feat-wire-concierge-support-chat-plan.md`.
 
-> **Ordinal.** Next-free = **109** (highest on a freshly-fetched `origin/main` = ADR-108). Provisional until ship; re-verify against `origin/main` at each merge attempt (the collision window is the whole pipeline — see ADR-108's ordinal note).
+> **Ordinal.** Resolved to **113** at merge-time (2026-07-15): while this branch sat, `origin/main` claimed 109 (workstream-issue-writes), 110, 111, and 112, so the original provisional 109 was renumbered to the next-free 113 (highest on `origin/main` = ADR-112). Re-verify against `origin/main` if the merge is deferred again.
 
 ## Context
 
@@ -32,7 +32,7 @@ Run the Concierge under a **required `persona` discriminant** (`"command_center"
 
 6. **Support prompt.** `buildSoleurGoSystemPrompt` short-circuits to the Soleur Support prompt when `persona:"support"` — it does NOT emit the Command Center `/soleur:go` routing line (a downstream append cannot un-say it) and ignores artifact/sticky-workflow scoping.
 
-7. **Persistence = B2 (operator-decided).** A real `conversations` row with `kind='support'` (migration 128) + null `repo_url`, so `dispatchSoleurGo`'s persisted-row requirements (ownership probe, workspace_id read, messages FK) are satisfied without dispatch-persistence surgery, and the reconnect-replay cliff is resolved naturally.
+7. **Persistence = B2 (operator-decided).** A real `conversations` row with `kind='support'` (migration 131) + null `repo_url`, so `dispatchSoleurGo`'s persisted-row requirements (ownership probe, workspace_id read, messages FK) are satisfied without dispatch-persistence surgery, and the reconnect-replay cliff is resolved naturally.
 
 ## ADR-070 reconciliation
 

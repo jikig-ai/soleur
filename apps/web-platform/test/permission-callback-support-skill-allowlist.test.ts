@@ -1,5 +1,5 @@
 /**
- * Support-persona Skill allowlist in `createCanUseTool` (Phase 3.3b, ADR-109).
+ * Support-persona Skill allowlist in `createCanUseTool` (Phase 3.3b, ADR-113).
  *
  * Deterministic unit test — exercises the canUseTool branch directly, NO SDK/LLM
  * invocation (learning 2026-04-19-llm-sdk-security-tests-need-deterministic-invocation.md).

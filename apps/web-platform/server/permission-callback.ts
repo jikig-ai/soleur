@@ -229,7 +229,7 @@ export interface CanUseToolContext {
   session: AgentSession;
   controllerSignal: AbortSignal;
   /**
-   * Dispatch persona (feat-wire-concierge-support-chat, ADR-109). `"support"`
+   * Dispatch persona (feat-wire-concierge-support-chat, ADR-113). `"support"`
    * scopes the Skill surface to `SUPPORT_SKILL_ALLOWLIST` (default-deny). Undefined
    * = the Command Center default (every Skill flows through `isSafeTool`). This is
    * defense-in-depth for a model that emits a non-loaded skill despite the SDK
@@ -891,7 +891,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       return allow(toolInput);
     }
 
-    // Support-persona Skill allowlist (feat-wire-concierge-support-chat, ADR-109).
+    // Support-persona Skill allowlist (feat-wire-concierge-support-chat, ADR-113).
     // Placed BEFORE the `isSafeTool` allow (which whitelists "Skill" wholesale) so
     // a support turn can only invoke a support-appropriate skill. Default-deny: a
     // Skill call is allowed only if the (bare↔FQN-normalized) name ∈

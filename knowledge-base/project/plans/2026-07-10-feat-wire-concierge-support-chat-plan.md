@@ -6,7 +6,7 @@ requires_cpo_signoff: true
 issue: TBD
 branch: feat-one-shot-wire-concierge-support-chat
 worktree: .worktrees/feat-one-shot-wire-concierge-support-chat
-adr: ADR-109 (provisional)
+adr: ADR-113 (provisional)
 cpo_signoff: granted 2026-07-10 (operator, via one-shot plan gate)
 ---
 
@@ -35,7 +35,7 @@ support UI, learnings) + scoped fable advisor consult (ADR-083) + 3-reviewer pas
 
 **New considerations discovered:** the dispatch-layer row dependency (not just ws-handler); the internal-KB confidentiality leak; the SDK-native `skills` lever; the reconnect-replay cliff; the ADR-070 grounding correction (deny-with-message-vs-silent-removal, precedent `permission-callback.ts:1020-1030`) + a required ADR-070 amendment.
 
-**Verified live (deepen):** installed `@anthropic-ai/claude-agent-sdk` = `0.3.197`; `disallowedTools` docstring (sdk.d.ts:1327) confirms tools are "removed from the model's context"; `skills` main-session option exists (sdk.d.ts:3263-3265) and is unused in-repo; next-free ADR ordinal = **ADR-109** (fresh `origin/main`, highest = ADR-108).
+**Verified live (deepen):** installed `@anthropic-ai/claude-agent-sdk` = `0.3.197`; `disallowedTools` docstring (sdk.d.ts:1327) confirms tools are "removed from the model's context"; `skills` main-session option exists (sdk.d.ts:3263-3265) and is unused in-repo; next-free ADR ordinal = **ADR-113** (fresh `origin/main`, highest = ADR-108).
 
 ## Overview
 
@@ -169,7 +169,7 @@ plan `brand_survival_threshold: single-user incident`; carried forward, not re-a
 1. `soleur:flag-list` (read-only) — confirm `support` = ON in prd Flagsmith + Doppler `FLAG_SUPPORT=1` (do not re-provision; do not trust the stale `server.ts` comment).
 2. `git grep -rln "realSdkQueryFactory\|dispatchSoleurGo" apps/web-platform/test/` → **19 files** (list in Sharp Edges). Every new import/arg on the factory must add an inert default mock to each.
 3. Read the `routineAuthoring` 5-hop threading (`ws-handler.ts:1281` → `cc-dispatcher.ts:2934` DispatchArgs → `:2362` prompt-append → `:4047` runner pass → `soleur-go-runner.ts:974/1046/2536`). `supportMode` mirrors this exactly; enumerate the hops in a call-site comment so a dropped hop (→ silently-inert directive) is auditable.
-4. Read ADR-070 (two-tier fail-open), ADR-086/#6046 (context-queries web port), ADR-093 (`getPluginPath()` chokepoint + `assertTrustedPluginPath`). The support skill-deny is a **product-persona deny-with-message** (graceful; model relays it) — distinct from ADR-070's forbidden *silent* phase-scope deny. Reconcile in ADR-109.
+4. Read ADR-070 (two-tier fail-open), ADR-086/#6046 (context-queries web port), ADR-093 (`getPluginPath()` chokepoint + `assertTrustedPluginPath`). The support skill-deny is a **product-persona deny-with-message** (graceful; model relays it) — distinct from ADR-070's forbidden *silent* phase-scope deny. Reconcile in ADR-113.
 5. `sed -n '878,890p' permission-callback.ts` — confirm the `isSafeTool(toolName)` Skill allow branch is the chokepoint for the skill-name allowlist.
 
 ### Phase 1 — `ExecutionEnvironment` seam + support entry (no threaded safety-disabling boolean)
@@ -234,7 +234,7 @@ leaks forever; B2 uses a `kind='support'` discriminator + nullable `repo_url` in
 1. **Support system-prompt directive** — new `SUPPORT_SYSTEM_DIRECTIVE` constant (server-side, trusted; mirror `routine-authoring-directive.ts:16-36`), **appended** to `effectiveSystemPrompt` in the cc-dispatcher factory path (`cc-dispatcher.ts:2350-2384`) when `persona:"support"`. Content: "You are Soleur Support. Answer how-do-I / navigation questions from the knowledge base and product docs. Use only `kb-search`. Never edit code, never run engineering workflows (plan/work/ship/deploy/one-shot), never touch a repository. If asked to do engineering work, explain that this is app-help support and point to the relevant app area / Command Center." **Routing-line replacement is a SEPARATE mechanism** (Kieran review #5): an *append* cannot un-say the baseline `/soleur:go` routing line already baked into `buildSoleurGoSystemPrompt` (`soleur-go-runner.ts:1291`) — so **branch `buildSoleurGoSystemPrompt`** to emit the support routing instead of `/soleur:go` when `persona:"support"`. Do not rely on the append to "replace" it (both would coexist and conflict).
 2a. **SDK-native `skills` allowlist (PRIMARY lever — deepen finding, sdk.d.ts:3263-3265, installed SDK `0.3.197`).** The Agent SDK main-session `Options` has an unused-in-codebase `skills?: string[]` field: *"When provided, only skills whose names match an entry are loaded into the main session system prompt... Omit to load every discovered skill."* Setting `skills: ["kb-search"]` for `persona:"support"` **removes all other skills from the model's context** (they are never advertised) — a far cleaner scope than advertising 95 and denying at call-time, and the SDK's intended mechanism (passing `'Skill'` to `allowedTools` is deprecated *in favor of* this option per sdk.d.ts:1307). Thread a `skills?: string[]` option through `buildAgentQueryOptions` (new passthrough field) → set it on the support path. **ADR-070 note:** this is a context-reduction (surface shrink) on a NON-fail-open layer, so it MUST be paired with 2b below (a model that emits a non-loaded skill would otherwise hit the silent unknown-tool failure ADR-070 forbids).
 2b. **Default-deny skill allowlist in `createCanUseTool` (defense-in-depth for the emit-a-non-loaded-skill case)** (`permission-callback.ts`, the `isSafeTool` Skill branch ~`:883`) — the genuinely new gate that keeps ADR-070 satisfied when 2a shrinks the surface. When the dispatch persona is `support`, a `Skill` call is allowed **only** if the invoked skill ∈ `SUPPORT_SKILL_ALLOWLIST` (`{ kb-search }`; **drop `help`** — it enumerates the full engineering command surface, not support-appropriate); **everything else denies** (default-deny — a new plugin skill is safe-by-default) **with a clear `message`** ("Support can only use app-help") — a graceful `{behavior:"deny", message}` the model relays (established shape at `permission-callback.ts:912-913`), NOT a silent rejection (ADR-070 reconciliation). **Bare↔FQN normalization (Kieran review #2):** the model-controlled `.skill` field can arrive `soleur:`-prefixed; anchored-strip `soleur:` before the `∈ SUPPORT_SKILL_ALLOWLIST` check (mirror `context-queries-hook.ts` Gate #1 / `phase-surface-hook.ts`) — else `soleur:kb-search` false-denies the happy path. Assert BOTH forms in the unit test. `CanUseToolDeps` gains a `persona`/allowlist input (thread from the factory at `cc-dispatcher.ts:2677`).
-3. **`disallowedTools` — hard-remove the write/fan-out surface (Kieran review #1, HIGH).** Edit/Write are **NOT** blocked by default — `CANONICAL_DISALLOWED_TOOLS` is only `["WebSearch","WebFetch"]` (`agent-runner-query-options.ts:53`) and Edit/Write are gated only by cwd-relative `isPathInWorkspace(filePath, ctx.workspacePath)` (`permission-callback.ts:240`). Under support's `cwd = getPluginPath()`, a `Write` to a path *under* the plugin root would pass containment and be **allowed** — the exact "read-only surface that isn't" leak. So `persona:"support"` `extraDisallowedTools` MUST explicitly include **`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Task`, `Agent`** (do not rely on the cc-router's `CC_PATH_DISALLOWED_TOOLS` inheritance — pin it on the support path). **ADR-070 reconciliation (architecture Finding 4):** this silent `disallowedTools` removal is acceptable here — and NOT the "additive-hint only" violation ADR-070 forbids — because the harm ADR-070 enumerates is a *silent unknown-tool failure for a tool the paying user legitimately needs*; Edit/Write/Task/Agent are tools a support user NEVER legitimately needs, so their removal breaks no valid flow. **State this justification explicitly in ADR-109** (do not slip it in). **KEEP `Bash` (Kieran review #3):** `kb-search` shells out via Bash (`grep`, `kb-search-cache.sh`) behind the existing `resolveCcBashGate` read-only allowlist — removing Bash disables the only real support capability. WebSearch/WebFetch already in the canonical list.
+3. **`disallowedTools` — hard-remove the write/fan-out surface (Kieran review #1, HIGH).** Edit/Write are **NOT** blocked by default — `CANONICAL_DISALLOWED_TOOLS` is only `["WebSearch","WebFetch"]` (`agent-runner-query-options.ts:53`) and Edit/Write are gated only by cwd-relative `isPathInWorkspace(filePath, ctx.workspacePath)` (`permission-callback.ts:240`). Under support's `cwd = getPluginPath()`, a `Write` to a path *under* the plugin root would pass containment and be **allowed** — the exact "read-only surface that isn't" leak. So `persona:"support"` `extraDisallowedTools` MUST explicitly include **`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Task`, `Agent`** (do not rely on the cc-router's `CC_PATH_DISALLOWED_TOOLS` inheritance — pin it on the support path). **ADR-070 reconciliation (architecture Finding 4):** this silent `disallowedTools` removal is acceptable here — and NOT the "additive-hint only" violation ADR-070 forbids — because the harm ADR-070 enumerates is a *silent unknown-tool failure for a tool the paying user legitimately needs*; Edit/Write/Task/Agent are tools a support user NEVER legitimately needs, so their removal breaks no valid flow. **State this justification explicitly in ADR-113** (do not slip it in). **KEEP `Bash` (Kieran review #3):** `kb-search` shells out via Bash (`grep`, `kb-search-cache.sh`) behind the existing `resolveCcBashGate` read-only allowlist — removing Bash disables the only real support capability. WebSearch/WebFetch already in the canonical list.
 4. Allow-branch shape: every `canUseTool` allow returns `{ behavior: "allow" as const, updatedInput: toolInput }` explicitly (learning `2026-04-15-sdk-v0.2.80-zoderror-allow-shape.md`).
 
 ### Phase 4 — Support answer source (HARD PRECONDITION — confidential-KB leak, architecture Finding 2)
@@ -303,8 +303,8 @@ Flip preview → live (keep honest guardrails where still true — e.g. "AI assi
 5. **Factory cold-start sweep** — every new import/arg on `realSdkQueryFactory` adds an inert default to the **19** factory test consumers (Phase 0 list); the full-suite `vitest run` exit gate is the backstop (learning `2026-06-03-dispatcher-factory-new-import-sweep-all-exercising-test-files.md`).
 6. Typecheck/test commands: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` and `./node_modules/.bin/vitest run <path>` (NOT `npm run -w`; NOT bun test — `bunfig.toml` ignores). Test file paths must match `vitest.config.ts` `include:` (`test/**/*.test.ts(x)`).
 
-### Phase 9 — ADR-109 + C4 (see `## Architecture Decision`)
-Author ADR-109 (support-persona scoped Concierge mode + repo-gate bypass + skill
+### Phase 9 — ADR-113 + C4 (see `## Architecture Decision`)
+Author ADR-113 (support-persona scoped Concierge mode + repo-gate bypass + skill
 allowlist), reconciling ADR-070 (graceful deny-with-message ≠ silent phase deny) and
 ADR-093 (`getPluginPath()` read-only cwd). Update the three `.c4` model files per the
 completeness enumeration below; regenerate `model.likec4.json`
@@ -329,7 +329,7 @@ completeness enumeration below; regenerate `model.likec4.json`
 - [ ] All 3 support test files updated + new server tests pass; the 19 factory test consumers still pass under `vitest run` (full-suite exit gate).
 - [ ] `## Observability` block present with support `op:` slugs; every un-recovered support server path mirrors to Sentry; discoverability test is ssh-free.
 - [ ] `support` flag NOT re-provisioned; behavior is inert when the flag is off (fallback copy) and when `supportMode` is not set server-side.
-- [ ] ADR-109 authored (reconciles ADR-070 + ADR-093); the three `.c4` files updated per the completeness enumeration; `model.likec4.json` regenerated; C4 validation tests green.
+- [ ] ADR-113 authored (reconciles ADR-070 + ADR-093); the three `.c4` files updated per the completeness enumeration; `model.likec4.json` regenerated; C4 validation tests green.
 - [ ] `tsc --noEmit` + `vitest run` green; `grep -rnE '#[0-9a-fA-F]{3,6}' components/support/` returns nothing (token-only styling preserved).
 
 ### Post-merge (operator / automatable)
@@ -378,7 +378,7 @@ a **resolver/dispatch change** (repo-coupled gates bypassed under a mode flag), 
 architectural. ADR is a deliverable of THIS plan, not a follow-up.
 
 ### ADR
-Author **ADR-109 (provisional ordinal — re-verify next-free vs origin/main at ship;
+Author **ADR-113 (provisional ordinal — re-verify next-free vs origin/main at ship;
 `/ship` ADR-Ordinal Collision Gate owns the final number)**: "Support-persona scoped
 Concierge mode — repo-gate bypass + skill-name allowlist + graceful deny." Its
 `## Decision` + `## Alternatives Considered` records: reuse the `SoleurGoRunner`/
@@ -424,7 +424,7 @@ Per the completeness mandate, READ all three `.c4` files
   `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
 ### Sequencing
-ADR-109 is authored now describing the target state; it ships in this feature's
+ADR-113 is authored now describing the target state; it ships in this feature's
 lifecycle (no deferral).
 
 ## Domain Review
@@ -491,7 +491,7 @@ is the safer default if persistence has no strong product justification.
 - **Deploy trigger:** all server wiring under `apps/web-platform/**` (triggers `web-platform-release.yml`); a `plugins/`-only change would not deploy.
 - **Cumulative streaming:** reuse the WS `stream` cumulative-replace protocol; do not invent a support-only delta protocol.
 - **C4:** editing `.c4` requires `bash scripts/regenerate-c4-model.sh` + committing `model.likec4.json`, else CI `test-scripts` c4-model-freshness fails (not caught by tsc/vitest).
-- **ADR ordinal:** ADR-109 is provisional; re-verify next-free vs origin/main at ship. If renumbered, sweep this plan + tasks.md + specs for the old ordinal in the same edit.
+- **ADR ordinal:** ADR-113 is provisional; re-verify next-free vs origin/main at ship. If renumbered, sweep this plan + tasks.md + specs for the old ordinal in the same edit.
 
 ## Open Code-Review Overlap
 
@@ -531,7 +531,7 @@ Tests:
 - The 19 factory consumers (inert-default sweep).
 
 Architecture:
-- `knowledge-base/engineering/architecture/decisions/ADR-109-*.md` (new).
+- `knowledge-base/engineering/architecture/decisions/ADR-113-*.md` (new).
 - `knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4}` + regenerated `model.likec4.json`.
 
 ## Files to Create
@@ -540,5 +540,5 @@ Architecture:
 - `apps/web-platform/test/execution-environment.test.ts` (provider behavior parity)
 - `apps/web-platform/test/cc-dispatcher-support-mode.test.ts`
 - `apps/web-platform/test/permission-callback-support-skill-allowlist.test.ts`
-- `knowledge-base/engineering/architecture/decisions/ADR-109-support-persona-scoped-concierge-mode.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-113-support-persona-scoped-concierge-mode.md`
 - (v1) a minimal support WS client hook (front-end). No Supabase migration in v1 (ephemeral).

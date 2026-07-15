@@ -889,7 +889,7 @@ async function createConversation(
   id?: string,
   contextPath?: string,
   activeWorkflow?: string | null,
-  // feat-wire-concierge-support-chat (ADR-109) — B2 repo-less support rows. A
+  // feat-wire-concierge-support-chat (ADR-113) — B2 repo-less support rows. A
   // "support" conversation is repo-INDEPENDENT: it carries `kind='support'` +
   // `repo_url=null`, is created even for a repo-less user (the repo-less throw
   // below is skipped), and stays out of the Command Center rail (which scopes by
@@ -1290,7 +1290,7 @@ export async function dispatchSoleurGoForConversation(
     // buildSoleurGoSystemPrompt. Document context (path/content) is unused
     // for this mode (it carries no path).
     routineAuthoring: context?.type === "routine-authoring",
-    // feat-wire-concierge-support-chat (ADR-109) — resolve the persona from the
+    // feat-wire-concierge-support-chat (ADR-113) — resolve the persona from the
     // validated chat context. `"support"` (the in-app support chat) runs the
     // Concierge read-only with the repo-lifecycle gates bypassed and skills scoped
     // to kb-search; everything else is the Command Center default. REQUIRED — an

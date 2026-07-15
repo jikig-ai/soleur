@@ -68,8 +68,8 @@ feature; all server wiring under `apps/web-platform/**`. Threshold: single-user 
 - [ ] 8.6 Groundedness assertion: driven "how do I create a routine?" reply has NO internal-KB content.
 - [ ] 8.7 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` + `./node_modules/.bin/vitest run` (node `.test.ts` + jsdom `.test.tsx` projects).
 
-## Phase 9 — ADR-109 + ADR-070 amendment + C4
-- [ ] 9.1 Author ADR-109 (next-free confirmed vs fresh origin/main = 108; provisional until ship) — two-axis seam, ephemeral/persisted decision, SDK `skills`-lever + `canUseTool` two-layer scope, default-deny; ground ADR-070 in deny-with-message-vs-silent-removal `:1020-1030`; justify Edit/Write/Task/Agent disallow; reconcile ADR-093.
+## Phase 9 — ADR-113 + ADR-070 amendment + C4
+- [ ] 9.1 Author ADR-113 (next-free confirmed vs fresh origin/main = 108; provisional until ship) — two-axis seam, ephemeral/persisted decision, SDK `skills`-lever + `canUseTool` two-layer scope, default-deny; ground ADR-070 in deny-with-message-vs-silent-removal `:1020-1030`; justify Edit/Write/Task/Agent disallow; reconcile ADR-093.
 - [ ] 9.2 One-paragraph amendment to ADR-070 (binds #5772 implementer).
 - [ ] 9.3 Edit `model.c4`/`views.c4` (annotate support-scoped read-only mode); `bash scripts/regenerate-c4-model.sh`; commit `model.likec4.json`; `c4-code-syntax.test.ts` + `c4-render.test.ts` green.
 

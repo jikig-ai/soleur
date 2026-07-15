@@ -1,4 +1,4 @@
-// Pure SSE transport helpers for the support chat (ADR-109, CTO Option D).
+// Pure SSE transport helpers for the support chat (ADR-113, CTO Option D).
 // Server: WSMessage -> `data: …\n\n` frame. Client: reassemble split chunks +
 // reduce dispatch frames into support reply state. No I/O — fully deterministic.
 

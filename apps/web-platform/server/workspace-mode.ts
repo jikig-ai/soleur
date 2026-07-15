@@ -2,7 +2,7 @@
 // Concierge dispatch runs the repo lifecycle (Command Center) or read-only from
 // the platform docs root (in-app support chat).
 //
-// feat-wire-concierge-support-chat, ADR-109 (CTO ruling: "Hardened B" — a
+// feat-wire-concierge-support-chat, ADR-113 (CTO ruling: "Hardened B" — a
 // required `persona` discriminant computed ONCE into a discriminated union, with
 // the repo-gate skip + cwd + sandbox write-set all DERIVED from that one value,
 // rather than the plan's ExecutionEnvironment provider-seam extraction of the

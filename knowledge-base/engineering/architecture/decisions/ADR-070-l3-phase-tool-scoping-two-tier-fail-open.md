@@ -212,9 +212,9 @@ snapshot). Observe-only + fail-open: the hook always returns `{}` and never
 mutates `canUseTool`/`disallowedTools`; a flush DB failure mirrors to Sentry via
 `reportSilentFallback` and never fails the agent turn. Retention: 90d pg_cron.
 
-## Amendment (2026-07-10, ADR-109 — support-persona scope)
+## Amendment (2026-07-10, ADR-113 — support-persona scope)
 
-The support-persona Concierge (ADR-109) uses two tool-scoping mechanisms this ADR
+The support-persona Concierge (ADR-113) uses two tool-scoping mechanisms this ADR
 governs, both reconciled as compliant. (1) Its `createCanUseTool` default-deny
 returns a graceful `{behavior:"deny", message}` the model relays — this is the
 sanctioned deny-with-message shape, NOT the silent phase-scope deny this ADR

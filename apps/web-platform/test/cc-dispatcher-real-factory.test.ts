@@ -1254,7 +1254,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
-  // T2 (ADR-109): support persona bypasses the repo-lifecycle and runs read-only
+  // T2 (ADR-113): support persona bypasses the repo-lifecycle and runs read-only
   // at the plugin docs root. The mirror of T10 — patchWorkspacePermissions must
   // NOT run — plus cwd + read-only sandbox + kb-search-only skills.
   // -------------------------------------------------------------------------

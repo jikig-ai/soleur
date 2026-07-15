@@ -1,4 +1,4 @@
-// Pure SSE transport helpers for the support chat (ADR-109, CTO Option D —
+// Pure SSE transport helpers for the support chat (ADR-113, CTO Option D —
 // dedicated POST /api/support + Server-Sent Events, fully decoupled from the
 // Command Center WebSocket). No I/O here — the route and the hook wire these to
 // a ReadableStream / fetch body reader respectively.

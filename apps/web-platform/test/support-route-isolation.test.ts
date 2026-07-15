@@ -1,4 +1,4 @@
-// SAFETY-CRITICAL isolation guard (ADR-109, CTO Option D test #4).
+// SAFETY-CRITICAL isolation guard (ADR-113, CTO Option D test #4).
 //
 // The whole point of the SSE transport is that a support turn CANNOT disturb the
 // paying Command Center WebSocket. That guarantee holds only while the support

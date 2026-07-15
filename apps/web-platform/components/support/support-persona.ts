@@ -16,7 +16,7 @@ export const SUPPORT_COMPOSER_FOOTNOTE = "Responses are previews for now.";
 
 export const SUPPORT_PANEL_SUBTITLE = "Preview · live chat coming soon";
 
-// feat-wire-concierge-support-chat (ADR-109) — LIVE copy, shown when the
+// feat-wire-concierge-support-chat (ADR-113) — LIVE copy, shown when the
 // `support-live` flag is ON (the real Concierge backend answers). The persistent
 // "AI-generated, may be wrong" disclosure is retained so the honest framing
 // survives the flip (never silently dropped).
