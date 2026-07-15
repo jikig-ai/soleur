@@ -209,6 +209,22 @@ the CI trusted-root staleness gate (`cosign-trusted-root-staleness.test.sh`).
   ship (web-2 only); web-1 ships logs after its next ADR-068 blue-green recreate (tracked). The
   fail-open Vector install can never wedge the boot; the terminal-block trap PAGES a dead web-2
   standby that otherwise has no standing uptime coverage (the #5933 per-host probe was retired).
+- **Item 5 amendment (2026-07-15, #6425) — host attribution extends to the READ surfaces.**
+  #6396 gave per-host attribution to *pushed* signals (journald `host_name`, the boot-fatal Sentry
+  emits, `pull_failure` `host_id`). The **pull** surfaces had none: `/hooks/deploy-status` and
+  `/hooks/inngest-liveness` answer over the Cloudflare Tunnel, which selects a connector per edge
+  colo, so a read could be served by a host the caller never meant — and the response did not say
+  which. Both now emit `host_id` (the hcloud id terraform knows), on the **success × failure**
+  axis: the failure bodies are the ones the watchdog reads
+  (`hooks.json.tmpl` `include-command-output-in-response-on-error`), and the 2026-07-15 incident
+  was a plain-text `FATAL __FETCH_FAILED__` — so `host_id` on the JSON success emits alone would
+  have been absent from the very incident that motivated it. This closes the ADR's attribution
+  story: **pushed signals say who sent them; pulled signals now say who answered.**
+  > **The stale `monitored = false` note above (`:91`, `:104`) is about the per-host uptime
+  > MONITOR, not the connector.** Do not read "web-2 unmonitored until cutover" as "web-2 is
+  > inert": until #6425 it ran a live connector and answered management-plane reads ~50% of the
+  > time while carrying no monitor at all — unmonitored **and** load-bearing. Since #6425 it runs
+  > no connector (ADR-114 I1), which is what finally makes the `monitored=false` posture honest.
 
 ## C4 impact
 

@@ -142,6 +142,7 @@ if want_scripts; then
   run_suite "scripts/inngest-liveness-classify" bash scripts/inngest-liveness-classify.test.sh
   run_suite "scripts/inngest-restart-age-gate" bash scripts/inngest-restart-age-gate.test.sh
   run_suite "scripts/inngest-restart-poll-classify" bash scripts/inngest-restart-poll-classify.test.sh
+  run_suite "scripts/tunnel-connector-census" bash scripts/tunnel-connector-census.test.sh
   run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh

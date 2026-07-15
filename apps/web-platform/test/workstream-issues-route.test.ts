@@ -28,6 +28,16 @@ vi.mock("@/server/workstream/get-workstream-issues", () => ({
   getWorkstreamIssues: (...a: unknown[]) => getWorkstreamIssues(...a),
 }));
 
+const captureException = vi.fn();
+// Explicit method set (not a spread of the real module — @sentry/nextjs
+// re-exports via getters that `{...actual}` doesn't copy). These are the only
+// Sentry methods reached by this file's code paths: the route GET/POST catch
+// (captureException) and the write-rate limiter's rejection log (addBreadcrumb).
+vi.mock("@sentry/nextjs", () => ({
+  captureException: (...a: unknown[]) => captureException(...a),
+  addBreadcrumb: vi.fn(),
+}));
+
 import { POST, GET } from "@/app/api/workstream/issues/route";
 import { __resetWorkstreamWriteThrottleForTest } from "@/server/workstream/workstream-write-throttle";
 
@@ -157,5 +167,22 @@ describe("GET /api/workstream/issues", () => {
     getWorkstreamIssues.mockRejectedValue(new Error("gh down"));
     const res = await GET();
     expect(res.status).toBe(502);
+    // A generic (non-degraded) error keeps its route-level Sentry capture.
+    expect(captureException).toHaveBeenCalledTimes(1);
+  });
+
+  it("502s a degraded read but does NOT double-captureException it (AC5)", async () => {
+    const { WorkstreamDegradedError } = await import("@/lib/workstream");
+    // board meta resolves (beforeEach) so Promise.all rejects deterministically
+    // on the accessor throw, not on a board-meta race.
+    getWorkstreamIssues.mockRejectedValue(
+      new WorkstreamDegradedError("workstream read degraded"),
+    );
+    const res = await GET();
+    expect(res.status).toBe(502);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toBe("workstream_query_error");
+    // Already mirrored at the degrade source — the route must NOT re-capture.
+    expect(captureException).not.toHaveBeenCalled();
   });
 });

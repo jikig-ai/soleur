@@ -703,3 +703,180 @@ jobs:
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
+
+  # ---------------------------------------------------------------------------
+  # #6425 — Cloudflare Tunnel connector census. The standing regression guard for
+  # ADR-114 I1 (one connector per tunnel).
+  #
+  # WHY THIS IS A SEPARATE JOB, AND WHY IT IS HERE:
+  # The probe job above reads a tunnel-routed hostname from ONE vantage. Connector selection
+  # is colo-STICKY, so that read cannot detect a second connector no matter how many times it
+  # runs — on 2026-07-15, 10/10 identical EU reads "proved" inngest was down while a US runner
+  # read it healthy. Both were true, about different hosts. This census asks Cloudflare's
+  # control plane how many connectors are registered; the answer does not depend on who asks
+  # or from where. It is the ONLY vantage-independent instrument, and it is the check that
+  # would have caught #6425 on day one and every day after.
+  #
+  # It does NOT depend on `probe` — a wedged inngest must not blind the connector guard (and a
+  # second connector is frequently the CAUSE of a probe failure, not a consequence).
+  connector_census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # doppler is NOT preinstalled on ubuntu-latest. Without this the census step's
+      # `doppler secrets get` hits `command not found`, its `|| true` swallows it, the creds
+      # read empty, and the census reports census_unavailable — green, silent, forever. The
+      # census_unavailable-never-pages rule (correct on its own terms) is exactly what would
+      # hide it. A detector that cannot fire is the failure this whole PR exists to close.
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Census tunnel connectors (ADR-114 I1)
+        id: census
+        env:
+          # prd_terraform holds CF_API_TOKEN (Tunnel scope) + CF_ACCOUNT_ID. Read via Doppler
+          # rather than duplicating them into GH Actions secrets: two copies of a credential
+          # drift, and `secrets.DOPPLER_TOKEN` is already the read-only token for this config.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          source scripts/tunnel-connector-census.sh
+
+          CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN --project soleur --config prd_terraform --plain 2>/dev/null || true)
+          CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID --project soleur --config prd_terraform --plain 2>/dev/null || true)
+          # GHA auto-masks `secrets.*` but NOT values fetched at runtime. Mask before first use
+          # so the next diagnostic someone adds to this step cannot print the token.
+          # (Precedent: apply-web-platform-infra.yml's mask-before-use.)
+          [[ -n "$CF_API_TOKEN" ]] && echo "::add-mask::$CF_API_TOKEN"
+          if [[ -z "$CF_API_TOKEN" || -z "$CF_ACCOUNT_ID" ]]; then
+            # Unreadable creds are census_unavailable — NOT zero connectors. Fail soft.
+            echo "verdict=census_unavailable" >> "$GITHUB_OUTPUT"
+            echo "count=-1" >> "$GITHUB_OUTPUT"
+            echo "detail=doppler read failed for CF_API_TOKEN/CF_ACCOUNT_ID" >> "$GITHUB_OUTPUT"
+            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 reason=doppler_read_failed"
+            exit 0
+          fi
+
+          TUNNEL_ID=$(curl -s --max-time 20 -H "Authorization: Bearer $CF_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/cfd_tunnel?name=soleur-web-platform" \
+            | jq -r '.result[0].id // empty' 2>/dev/null || true)
+          if [[ -z "$TUNNEL_ID" ]]; then
+            echo "verdict=census_unavailable" >> "$GITHUB_OUTPUT"
+            echo "count=-1" >> "$GITHUB_OUTPUT"
+            echo "detail=could not resolve tunnel id for soleur-web-platform" >> "$GITHUB_OUTPUT"
+            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 reason=tunnel_id_unresolved"
+            exit 0
+          fi
+
+          RESP=$(curl -s --max-time 20 -w '\n%{http_code}' -H "Authorization: Bearer $CF_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/connections" || printf '\n000')
+          CODE=$(printf '%s' "$RESP" | tail -1)
+          BODY=$(printf '%s' "$RESP" | sed '$d')
+
+          read -r VERDICT COUNT <<<"$(classify_connector_census "$CODE" "$BODY")"
+          EVIDENCE=$(describe_connectors "$BODY")
+
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "detail=http=$CODE connectors=$COUNT" >> "$GITHUB_OUTPUT"
+          {
+            echo "evidence<<CENSUS_EOF"
+            echo "${EVIDENCE:-(no live connectors)}"
+            echo "CENSUS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          # Agent-facing breadcrumb, mirroring SOLEUR_INNGEST_LIVENESS_VERDICT / SOLEUR_ZOT_DISK.
+          # This is a DIAGNOSTIC marker in the run log, NOT an alert route — a log marker nobody
+          # greps is how the last 16h investigation started. The action-required issue below is
+          # the alert.
+          echo "SOLEUR_ORIGIN_HOST_CHURN verdict=$VERDICT count=$COUNT tunnel=${TUNNEL_ID:0:8}"
+          # Guard on non-empty rather than filtering inside the loop. Under `set -euo pipefail`
+          # a `while read` whose last body command is a false `[[ -n "$line" ]]` exits 1, so an
+          # EMPTY $EVIDENCE failed this step — and $EVIDENCE is empty precisely and only on
+          # zero_connectors. A plain-expression `if:` carries an implicit `success() &&`, so the
+          # failing step skipped the paging step below: the one verdict meaning "deploy., ssh.
+          # and registry. are ALL dark" would have filed nothing at all.
+          if [[ -n "$EVIDENCE" ]]; then
+            while IFS= read -r line; do
+              [[ -n "$line" ]] && echo "SOLEUR_ORIGIN_HOST_CHURN connector $line"
+            done <<< "$EVIDENCE"
+          fi
+
+      - name: File action-required on a broken connector invariant
+        # ONLY the two REAL connector verdicts page. census_unavailable is deliberately excluded:
+        # a token expiry or API blip must never page the operator against a healthy tunnel (the
+        # #6374 relocated-false-positive class). It surfaces in the run log breadcrumb instead.
+        if: steps.census.outputs.verdict == 'multi_connector' || steps.census.outputs.verdict == 'zero_connectors'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERDICT: ${{ steps.census.outputs.verdict }}
+          COUNT: ${{ steps.census.outputs.count }}
+          EVIDENCE: ${{ steps.census.outputs.evidence }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u +'%Y-%m-%d %H:%M UTC')
+          BODY_FILE=$(mktemp)
+          gh label create "ci/tunnel-connector-drift" --repo "$GH_REPO" \
+            --description "Tunnel connector census != 1 — ingress origin is non-deterministic (ADR-114 I1)" \
+            --color "B60205" 2>/dev/null || true
+
+          if [[ "$VERDICT" == "multi_connector" ]]; then
+            # No ${COUNT} in the title: it must be stable across a 2->3 transition, or the
+            # dedupe re-collides and files a second issue for the same condition.
+            ISSUE_TITLE="[ci/tunnel-connector-drift] Tunnel has MORE THAN ONE connector — ingress origin is non-deterministic"
+            ISSUE_SEARCH="in:title \"$ISSUE_TITLE\""
+            {
+              printf '## More than one connector is registered on the tunnel\n\n'
+              printf -- '- **Connectors:** `%s` (invariant: exactly 1)\n' "$COUNT"
+              printf -- '- **Detected at:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf '### What this means\n\nCloudflare binds ingress to a **tunnel**, then picks a connector **per edge colo**. With more than one connector, `localhost:` ingress no longer means "this host" — it means "whichever replica answered". Only `/hooks/deploy` fans out to peers, so everything else is now coin-flipped:\n\n- `/hooks/deploy-status` + `/hooks/inngest-liveness` read a **random host** (a freshly-recreated non-primary host has no `inngest-inventory.sh` at all → false `inngest_down` P1s)\n- `/hooks/infra-config` is a coin-flipped **WRITE**, self-verified against a separately coin-flipped read\n- `ssh.soleur.ai` lands the seccomp/apparmor SSH bridge on a **random host** — a sandbox-escape control update can silently land on the wrong host while CI reports green\n\nThis is the #6425 regression. Users are not directly affected (`app.soleur.ai` is a direct A record to web-1, never through the tunnel).\n\n'
+              printf '### Live connectors\n\n```\n%s\n```\n\n' "$EVIDENCE"
+              printf 'Colo geography attributes a connector to a host (`origin_ip` is null on this endpoint): `ams*`/`hel*` = hel1 = **web-1**; `fra*` = fsn1 = **web-2**.\n\n'
+              printf '### Remediation\n\n1. A non-primary host is running `cloudflared`. Expected cause: a recreate that bypassed the `web_tunnel_connector` gate (`server.tf`), a predicate regression, or a hand-run `cloudflared`.\n2. Re-assert the gate and recreate the offending host via `apply-web-platform-infra.yml` (`apply_target=web-2-recreate`).\n3. Do **not** "fix" this by adding a per-hostname ingress rule — ADR-114 records that as a normative anti-pattern: a per-hostname rule does not pin a connector.\n4. Re-pooling a host is NOT a weight flip and is blocked on #6466 (host-addressability).\n\nRefs #6425, ADR-114 (I1/I2), ADR-068.\n'
+            } > "$BODY_FILE"
+          else
+            ISSUE_TITLE="[ci/tunnel-connector-drift] Tunnel has ZERO live connectors — every tunnel-routed surface is dark"
+            ISSUE_SEARCH="in:title \"$ISSUE_TITLE\""
+            {
+              printf '## The tunnel has no live connectors\n\n'
+              printf -- '- **Connectors:** `0` (invariant: exactly 1)\n'
+              printf -- '- **Detected at:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf '### What this means\n\nCloudflare answered and reported **no** live connectors — this is a well-formed census, not a failed read. Every tunnel-routed surface is dark: `deploy.soleur.ai` (the deploy pipeline), `ssh.soleur.ai` (the SSH bridge), `registry.soleur.ai`.\n\n**`app.soleur.ai` is unaffected** — it is a direct CF-proxied A record to web-1 and never traverses the tunnel. So users are still served; what is lost is the ability to deploy to and remediate the host serving them.\n\n'
+              printf '### Remediation\n\n1. Check `cloudflared` on the designated ingress host (web-1). It is `restart-on-failure` under systemd, so a total absence points at the host, not the process.\n2. `app.soleur.ai` still resolves directly, so user-facing checks will look green — do not read that as "the tunnel is fine".\n3. Since #6425 only the designated ingress host runs a connector by construction, so there is no second connector to absorb this. That trade is deliberate and recorded in ADR-068: a silent-wrong-answer mode was traded for a loud-total-outage mode.\n\nRefs #6425, ADR-114 (I1), ADR-068.\n'
+            } > "$BODY_FILE"
+          fi
+
+          # `action-required` is load-bearing, not decoration: operator-digest harvests ONLY
+          # issues carrying it. The sibling ci/inngest-* labels this workflow files are NOT
+          # harvested — so without this label the alert would be detected and then discarded
+          # into a log nobody reads until the next 16h investigation.
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Still \`${VERDICT}\` (connectors=${COUNT}) at ${NOW}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/tunnel-connector-drift" --label "action-required" --label "priority/p1-high" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Auto-resolve the drift issue once the invariant is restored
+        if: steps.census.outputs.verdict == 'ok'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Self-closing, mirroring the sibling inngest-down issue's recovery comment. An
+          # action-required issue that outlives its cause trains the operator to ignore the label.
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search 'in:title "[ci/tunnel-connector-drift]"' \
+            --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [[ -n "$EXISTING" ]]; then
+            gh issue close "$EXISTING" --repo "$GH_REPO" \
+              --comment "Connector invariant restored (census = 1) at $(date -u +'%Y-%m-%d %H:%M UTC'). Run: ${RUN_URL}"
+          fi

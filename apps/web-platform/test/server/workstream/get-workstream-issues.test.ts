@@ -4,7 +4,7 @@ import type { BoardIssueInput } from "@/lib/workstream";
 // The accessor's IO collaborators are ALL mocked — there are NO live network
 // calls. We assert the empty-vs-throw contract and the mapping wiring.
 
-const getCurrentRepoUrl = vi.fn();
+const readCurrentRepoUrlResult = vi.fn();
 const resolveInstallationId = vi.fn();
 const resolveEffectiveInstallationId = vi.fn();
 const listRepoIssues = vi.fn();
@@ -13,7 +13,7 @@ const reportSilentFallback = vi.fn();
 const getAppSlug = vi.fn();
 
 vi.mock("@/server/current-repo-url", () => ({
-  getCurrentRepoUrl: (...a: unknown[]) => getCurrentRepoUrl(...a),
+  readCurrentRepoUrlResult: (...a: unknown[]) => readCurrentRepoUrlResult(...a),
 }));
 vi.mock("@/server/resolve-installation-id", () => ({
   resolveInstallationId: (...a: unknown[]) => resolveInstallationId(...a),
@@ -51,7 +51,10 @@ function rawIssue(over: Partial<BoardIssueInput> = {}): BoardIssueInput {
 }
 
 beforeEach(() => {
-  getCurrentRepoUrl.mockResolvedValue("https://github.com/acme/widgets");
+  readCurrentRepoUrlResult.mockResolvedValue({
+    url: "https://github.com/acme/widgets",
+    degraded: false,
+  });
   resolveInstallationId.mockResolvedValue(123);
   resolveEffectiveInstallationId.mockResolvedValue(123);
   listRepoIssues.mockResolvedValue([]);
@@ -64,20 +67,43 @@ afterEach(() => {
 });
 
 describe("getWorkstreamIssues", () => {
-  it("returns [] (honest empty) when no repo is connected — no reader call", async () => {
-    getCurrentRepoUrl.mockResolvedValue(null);
+  it("returns [] (honest empty) when no repo is connected — no reader call (AC3)", async () => {
+    readCurrentRepoUrlResult.mockResolvedValue({ url: null, degraded: false });
     const out = await getWorkstreamIssues("u1");
     expect(out).toEqual([]);
     expect(listRepoIssues).not.toHaveBeenCalled();
     expect(reportSilentFallback).not.toHaveBeenCalled();
   });
 
-  it("returns [] AND mirrors to Sentry when repo present but installation is null", async () => {
-    resolveEffectiveInstallationId.mockResolvedValue(null);
+  it("returns [] (honest empty) for a connected repo whose reader yields zero issues (AC3)", async () => {
+    listRepoIssues.mockResolvedValue([]);
     const out = await getWorkstreamIssues("u1");
     expect(out).toEqual([]);
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("THROWS + mirrors (op:repo-unresolved) BEFORE the throw on a P2 degraded read (AC1)", async () => {
+    const { WorkstreamDegradedError } = await import("@/lib/workstream");
+    readCurrentRepoUrlResult.mockResolvedValue({ url: null, degraded: true });
+    // mirror-precedes-throw: the report fires and no install/list call happens.
+    await expect(getWorkstreamIssues("u1")).rejects.toBeInstanceOf(
+      WorkstreamDegradedError,
+    );
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ feature: "workstream", op: "repo-unresolved" }),
+    );
+    expect(resolveInstallationId).not.toHaveBeenCalled();
     expect(listRepoIssues).not.toHaveBeenCalled();
-    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
+  it("THROWS + mirrors (op:no-installation) when repo present but installation is null (P1, AC2)", async () => {
+    const { WorkstreamDegradedError } = await import("@/lib/workstream");
+    resolveEffectiveInstallationId.mockResolvedValue(null);
+    await expect(getWorkstreamIssues("u1")).rejects.toBeInstanceOf(
+      WorkstreamDegradedError,
+    );
+    expect(listRepoIssues).not.toHaveBeenCalled();
     expect(reportSilentFallback).toHaveBeenCalledWith(
       expect.any(Error),
       expect.objectContaining({ feature: "workstream", op: "no-installation" }),
