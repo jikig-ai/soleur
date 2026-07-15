@@ -50,8 +50,9 @@ resource "doppler_service_token" "ghcr_minter" {
 }
 
 # Surfaces the write token into the minter runtime via the existing single
-# `--config prd` env-file path (cloud-init.yml:554). NO ignore_changes: a `-replace`
-# rotation of the token must reach the runtime in the same apply.
+# `--config prd` env-file path — the `> /etc/default/webhook-deploy` write in
+# cloud-init.yml. NO ignore_changes: a `-replace` rotation of the token must
+# reach the runtime in the same apply.
 resource "doppler_secret" "ghcr_minter_doppler_token" {
   project = "soleur"
   config  = "prd"

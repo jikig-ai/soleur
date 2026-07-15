@@ -115,6 +115,47 @@ function soakFailSet(): Set<string> {
 
 const soakQueryFor = (signal: string) => soakFailQueries().get(signal);
 
+const observability = readFileSync(join(here, "../server/observability.ts"), "utf8");
+
+// Scope a `resource "sentry_issue_alert" "<name>"` BODY out of issue-alerts.tf —
+// from its header to its own column-0 closing brace.
+//
+// The lower bound is load-bearing, not tidiness. Terminating at the NEXT `\nresource `
+// header (the obvious shape, and what this did first) runs past the resource's own `}`
+// and swallows the following rule's entire leading comment block. That made the
+// boot-fatal GROUPING-anchor assertion vacuous: zot's scope contained web_terminal_boot_fatal's
+// `# GROUPING NOTE (mirrors ...)` POINTER, which satisfied a /^#\s*GROUPING\b/m intended to
+// find the paragraph the pointer names — so deleting the real paragraph still passed.
+// Nested HCL braces are indented, so a column-0 `\n}` is unambiguously the resource's own.
+function scopeResource(name: string): string {
+  const header = `resource "sentry_issue_alert" "${name}"`;
+  const start = tf.indexOf(header);
+  if (start === -1) throw new Error(`resource not found in issue-alerts.tf: ${name}`);
+  const block = tf.slice(start);
+  const end = block.search(/\n\}\n/);
+  if (end === -1) throw new Error(`resource block is not closed: ${name}`);
+  return block.slice(0, end);
+}
+
+// Every rule's rationale lives in the contiguous `#` comment block ABOVE its
+// `resource` header, so scopeResource() cannot see it. Walk back to the top of
+// that block. Assertions about comment anchors MUST use this — slicing from the
+// header alone silently yields a near-empty string, and a `not.toMatch()` against
+// it passes vacuously (the exact false-green this file's subject matter is about).
+function scopeResourceWithComment(name: string): string {
+  const header = `resource "sentry_issue_alert" "${name}"`;
+  const start = tf.indexOf(header);
+  if (start === -1) throw new Error(`resource not found in issue-alerts.tf: ${name}`);
+  const lines = tf.slice(0, start).split("\n");
+  let i = lines.length - 1;
+  while (i > 0 && (lines[i - 1].startsWith("#") || lines[i - 1].trim() === "#")) i--;
+  const comment = lines.slice(i).join("\n");
+  if (!comment.trim().startsWith("#")) {
+    throw new Error(`no leading comment block found for resource: ${name}`);
+  }
+  return `${comment}\n${scopeResource(name)}`;
+}
+
 describe("zot-mirror-fallback-rate alert op contract", () => {
   it("ci-deploy.sh emits the supply-chain image-pull tags + both registry values", () => {
     expect(ciDeploy).toContain(`feature: "supply-chain"`);
@@ -182,8 +223,14 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     // Pin the no-SSH page target: a silent removal of the notify action would
     // make the alarm fire-but-page-nobody (the exact Branch-B failure the CTO
     // ruling avoided). IssueOwners→ActiveMembers reaches the solo founder.
-    expect(scoped).toContain("IssueOwners");
-    expect(scoped).toContain("ActiveMembers");
+    //
+    // Anchored on the HCL assignment, NOT toContain(). This file carries in-BODY
+    // comments naming both literals (":260" explains IssueOwners' fallthrough), so a
+    // bare toContain() is satisfied by that prose — mutation-testing proved the whole
+    // actions_v2 block could be deleted with the suite still 10/10 green. Prose cannot
+    // produce `^\s*target_type =`.
+    expect(scoped).toMatch(/^\s*target_type\s*=\s*"IssueOwners"/m);
+    expect(scoped).toMatch(/^\s*fallthrough_type\s*=\s*"ActiveMembers"/m);
   });
 
   // --- Parity: the soak gate must count every signal the alarm watches -------
@@ -245,6 +292,117 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     );
     expect(wf).toContain(
       "-target=sentry_issue_alert.zot_mirror_fallback_rate",
+    );
+  });
+});
+
+// ── #6429 ────────────────────────────────────────────────────────────────────
+// The filed issue claimed `sandbox_startup_failure` shared the zot rule's
+// `event_frequency` defect. It does not: it uses `event_unique_user_frequency`,
+// whose group is stack-keyed (captureException), not message-keyed — so the
+// high-cardinality-message unreachability that broke the zot rule cannot apply.
+// The REAL defect is an off-by-one between the rule's stated intent and its
+// config. Both Sentry conditions extend BaseEventFrequencyCondition, whose
+// `passes()` compares with a STRICT `current_value > value`
+// (sentry/rules/conditions/event_frequency.py) — the same semantics
+// zot_mirror_fallback_rate's comment already documents.
+describe("sandbox-startup-failure alert op contract (#6429)", () => {
+  it("fires at its STATED intent: >2 distinct tenants == the comment's >=3", () => {
+    // BODY ONLY — deliberately not scopeResourceWithComment(). The rule's rationale
+    // comment necessarily spells out "value = 2 and not 3", so a bare /value\s*=\s*2/
+    // over comment+body matches the PROSE and stays green with the config reverted to
+    // 3. That false-pass was caught by mutation-testing this very assertion. Anchor on
+    // the HCL assignment at line-start: a comment line begins with `#` and can never
+    // match `^\s*value`.
+    const body = scopeResource("sandbox_startup_failure");
+    // Guard the condition CLASS: the discriminator vs the zot rule (RR-1). If this
+    // ever became event_frequency, the count would be events-per-group rather than
+    // distinct tenants and the threshold below would mean something else entirely.
+    expect(body).toContain("event_unique_user_frequency");
+    expect(body).toMatch(/comparison_type\s*=\s*"count"/);
+    expect(body).toMatch(/interval\s*=\s*"1h"/);
+    // RED pre-fix: value = 3 under a strict `>` fires at >=4 tenants, contradicting
+    // the resource comment's ">=3 distinct tenants".
+    expect(body).toMatch(/^\s*value\s*=\s*2\b/m);
+    expect(body).not.toMatch(/^\s*value\s*=\s*3\b/m);
+  });
+
+  it("states the strict-`>` semantics inline so the 2 cannot be 'corrected' to 3", () => {
+    // Separate from the threshold assertion above on purpose: this one SHOULD read the
+    // comment. An unexplained `2` beside prose promising ">=3" reads as a typo and
+    // invites a fix straight back into the off-by-one — the zot sibling documents the
+    // same semantics for the same reason.
+    const withComment = scopeResourceWithComment("sandbox_startup_failure");
+    // /strict/i alone is inert — the inline comment on the `value` line carries "STRICT",
+    // so it passed even with this whole paragraph deleted. The paragraph-level claim is
+    // what this pins. Deliberately NOT asserting the exact `current_value > value` quote:
+    // that pins Sentry's INTERNAL variable naming into a regex over our comment, so an
+    // upstream rename would force the comment to stay stale to keep the test green.
+    expect(withComment).toMatch(/BaseEventFrequencyCondition/);
+    expect(withComment).toMatch(/strict/i);
+  });
+
+  it("pins the no-SSH page target (fire-but-page-nobody guard)", () => {
+    const scoped = scopeResource("sandbox_startup_failure");
+    // Anchored, not toContain() — see the zot sibling above. The in-body comment at
+    // issue-alerts.tf:260 names both literals, so toContain() passed with actions_v2
+    // deleted entirely: this "fire-but-page-nobody guard" guarded nothing.
+    expect(scoped).toMatch(/^\s*target_type\s*=\s*"IssueOwners"/m);
+    expect(scoped).toMatch(/^\s*fallthrough_type\s*=\s*"ActiveMembers"/m);
+  });
+
+  it("keeps the sandbox emitter EXCEPTION-shaped so its issue-group stays stack-keyed", () => {
+    // Capture-shape rule (RR-4): a message-event (captureMessage / a raw /store/
+    // POST carrying `message:`) is grouped ON THE MESSAGE, so a high-cardinality
+    // token in it mints a fresh group per event and ANY threshold > 0 becomes
+    // unreachable — the zot rule's defect. An exception-event is stack-keyed and
+    // its group is stable, which is what makes this rule's `> 2` meaningful.
+    //
+    // Both emit sites (agent-runner.ts, cc-dispatcher.ts) hand a caught `err`
+    // straight to reportSilentFallback, so the branch below decides the shape.
+    // T3: switching the Error arm to captureMessage must fail this.
+    const errorArm = observability.slice(
+      // Anchor on the FUNCTION, not the first `instanceof Error` in the file — there are
+      // four, and the others (warnSilentFallback et al.) do NOT pass `user`. Anchoring
+      // positionally means "whatever check comes first", which is not what this guards.
+      observability.indexOf("export function reportSilentFallback"),
+    );
+    expect(observability.indexOf("export function reportSilentFallback")).toBeGreaterThan(-1);
+    const armEnd = errorArm.indexOf("} else if");
+    const scoped = armEnd === -1 ? errorArm : errorArm.slice(0, armEnd);
+    // Pin the CALL, not the bare symbol. `toContain("Sentry.captureException")` is inert:
+    // the arm also holds a `typeof Sentry.captureException === "function"` guard line, so
+    // it passed even under the captureMessage mutation — only the `.not` below caught it.
+    expect(scoped).toMatch(/Sentry\.captureException\(\s*err/);
+    expect(scoped).not.toContain("Sentry.captureMessage");
+    // event_unique_user_frequency counts DISTINCT `event.user` — with no user
+    // scope every tenant collapses into one identity and the threshold can never
+    // be crossed by a fleet-wide outage.
+    // Pin the shorthand property, not the bare word — `toContain("user")` is satisfied by
+    // any `user`-containing identifier or comment in the slice (e.g. renaming
+    // `transformedExtra` to `userExtra` would silence it while `, user` was dropped).
+    expect(scoped).toMatch(/,\s*user\s*\}/);
+  });
+});
+
+describe("web-host-terminal-boot-fatal comment anchors (#6429 / #6424 repeat-offence)", () => {
+  it("anchors its GROUPING NOTE on the paragraph NAME, not a rottable line number", () => {
+    const scoped = scopeResourceWithComment("web_terminal_boot_fatal");
+    const noteAt = scoped.indexOf("GROUPING NOTE");
+    // Fail loud rather than slicing from -1 — a negative index yields the last
+    // character and turns every assertion below into a vacuous pass.
+    expect(noteAt).toBeGreaterThan(-1);
+    const note = scoped.slice(noteAt);
+    // #6424 "repaired" this reference TO THE WRONG LINE (:1364 is the last line of
+    // the CHANGE-TRIGGER paragraph; GROUPING starts two lines later) inside the very
+    // PR whose purpose was fixing comment rot. A line number cannot survive an edit
+    // above it; a paragraph name can. This is the fix, not a guard around the rot.
+    expect(note).not.toMatch(/zot_mirror_fallback_rate:\d+/);
+    expect(note).toMatch(/GROUPING paragraph/i);
+    // The named paragraph must actually exist in the sibling it points at —
+    // otherwise the anchor is just a prettier flavour of the same rot.
+    expect(scopeResourceWithComment("zot_mirror_fallback_rate")).toMatch(
+      /^#\s*GROUPING\b/m,
     );
   });
 });
