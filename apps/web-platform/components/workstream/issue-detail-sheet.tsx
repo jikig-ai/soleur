@@ -49,10 +49,12 @@ export type UpdateFieldsHandler = (
 function formatDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", {
+  return d.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
   });
 }
 
@@ -391,14 +393,14 @@ export function IssueDetailSheet({
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
               <dl className="space-y-3 text-sm">
                 <Row label="Status">
-                  <div className="flex items-center gap-2">
+                  {statusDisabled ? (
                     <span className={statusPillClass(issue.status)}>
                       {statusLabel(issue.status)}
                     </span>
+                  ) : (
                     <select
                       aria-label="Change status"
                       value={issue.status}
-                      disabled={statusDisabled}
                       onChange={(e) =>
                         onChangeStatus(
                           issue.id,
@@ -413,7 +415,7 @@ export function IssueDetailSheet({
                         </option>
                       ))}
                     </select>
-                  </div>
+                  )}
                 </Row>
 
                 <Row label="Assignee (role)">

@@ -24,6 +24,7 @@ function fakeOctokit(over: {
   assignees?: Array<{ login: string }>;
   milestones?: Array<{ number: number; title: string }>;
 } = {}) {
+  // Single-page mocks (<100 items) — the accessor's page loop breaks after page 1.
   return {
     rest: {
       issues: {
@@ -71,6 +72,42 @@ describe("getWorkstreamIssueOptions", () => {
       { number: 1, title: "v1" },
       { number: 2, title: "v2" },
     ]);
+  });
+
+  it("paginates labels so an out-of-first-page label is still offered (F1)", async () => {
+    // Page 1 = 100 labels (==per_page → keep going); page 2 = 50 incl "area/deep"
+    // (<100 → stop). A single per_page:100 fetch would have hidden "area/deep".
+    const page1 = Array.from({ length: 100 }, (_, i) => ({
+      name: `area/${i}`,
+      color: "ededed",
+    }));
+    const page2 = Array.from({ length: 49 }, (_, i) => ({
+      name: `area/1${i}`,
+      color: "ededed",
+    }));
+    page2.push({ name: "area/deep", color: "ededed" });
+    const octo = {
+      rest: {
+        issues: {
+          listLabelsForRepo: vi.fn(async (p: { page: number }) =>
+            p.page === 1 ? { data: page1 } : p.page === 2 ? { data: page2 } : { data: [] },
+          ),
+          listAssignees: vi.fn(async () => ({ data: [] })),
+          listMilestones: vi.fn(async () => ({ data: [] })),
+        },
+      },
+    };
+    resolveContext.mockResolvedValue({
+      owner: "acme",
+      repo: "widgets",
+      octokit: octo,
+      botSlug: null,
+    });
+    const out = await getWorkstreamIssueOptions("u");
+    expect(out.labels.map((l) => l.name)).toContain("area/deep");
+    expect(out.labels.length).toBe(150);
+    // Stopped at page 2 (returned <100), did not fetch page 3.
+    expect(octo.rest.issues.listLabelsForRepo).toHaveBeenCalledTimes(2);
   });
 
   it("degrades to empty arrays + reports when resolution throws (never throws)", async () => {

@@ -28,27 +28,55 @@ const EMPTY: WorkstreamIssueOptions = {
   milestones: [],
 };
 
+/** Walk all pages of a paginated list call (per_page:100) up to a defensive cap.
+ *  A repo's label/assignee/milestone counts are naturally far below the cap, so
+ *  this fetches the FULL set — a single per_page:100 page would hide out-of-page
+ *  labels from the picker (review F1). */
+async function fetchAllPages<T>(
+  fetchPage: (page: number) => Promise<{ data: T[] }>,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let page = 1; page <= 20; page++) {
+    const { data } = await fetchPage(page);
+    out.push(...data);
+    if (data.length < 100) break;
+  }
+  return out;
+}
+
 export async function getWorkstreamIssueOptions(
   userId: string,
 ): Promise<WorkstreamIssueOptions> {
   try {
     const { owner, repo, octokit } = await resolveContext(userId);
-    const [labelsRes, assigneesRes, milestonesRes] = await Promise.all([
-      octokit.rest.issues.listLabelsForRepo({ owner, repo, per_page: 100 }),
-      octokit.rest.issues.listAssignees({ owner, repo, per_page: 100 }),
-      octokit.rest.issues.listMilestones({
-        owner,
-        repo,
-        state: "all",
-        per_page: 100,
-      }),
+    const [labelsData, assigneesData, milestonesData] = await Promise.all([
+      fetchAllPages((page) =>
+        octokit.rest.issues.listLabelsForRepo({
+          owner,
+          repo,
+          per_page: 100,
+          page,
+        }),
+      ),
+      fetchAllPages((page) =>
+        octokit.rest.issues.listAssignees({ owner, repo, per_page: 100, page }),
+      ),
+      fetchAllPages((page) =>
+        octokit.rest.issues.listMilestones({
+          owner,
+          repo,
+          state: "all",
+          per_page: 100,
+          page,
+        }),
+      ),
     ]);
     const statusSet = new Set<string>(STATUS_LABELS);
-    const labels = labelsRes.data
+    const labels = labelsData
       .filter((l) => !statusSet.has(l.name))
       .map((l) => ({ name: l.name, color: l.color ?? "" }));
-    const assignees = assigneesRes.data.map((a) => ({ login: a.login }));
-    const milestones = milestonesRes.data.map((m) => ({
+    const assignees = assigneesData.map((a) => ({ login: a.login }));
+    const milestones = milestonesData.map((m) => ({
       number: m.number,
       title: m.title,
     }));

@@ -329,16 +329,16 @@ describe("IssueDetailSheet — inline title edit (AC: FR3)", () => {
 });
 
 describe("IssueDetailSheet — board precedence + read-only (AC11/AC14)", () => {
-  it("disables the status select on the org board while the grant is absent, but Close still works", () => {
+  it("hides the status select on the org board while the grant is absent (read-only pill), but Close still works", () => {
     const onChangeStatus = vi.fn();
     renderSheet({
       onKanbanOrg: true,
       boardPrecedence: true,
       onChangeStatus,
     });
-    expect(
-      (screen.getByLabelText("Change status") as HTMLSelectElement).disabled,
-    ).toBe(true);
+    // No editable status control while board precedence holds — the status
+    // shows as a read-only pill instead (no duplicate label + control).
+    expect(screen.queryByLabelText("Change status")).toBeNull();
     // Close/reopen remain available.
     fireEvent.click(screen.getByRole("button", { name: /close issue/i }));
     fireEvent.click(screen.getByRole("button", { name: /completed/i }));
@@ -363,11 +363,10 @@ describe("IssueDetailSheet — board precedence + read-only (AC11/AC14)", () => 
     expect(screen.getByText(/Project board/i)).toBeTruthy();
   });
 
-  it("read-only disables status + hides write affordances with a hint", () => {
+  it("read-only shows status as a pill + hides write affordances with a hint", () => {
     renderSheet({ readOnly: true });
-    expect(
-      (screen.getByLabelText("Change status") as HTMLSelectElement).disabled,
-    ).toBe(true);
+    // No editable status control in read-only mode — status renders as a pill.
+    expect(screen.queryByLabelText("Change status")).toBeNull();
     expect(screen.queryByRole("button", { name: /close issue/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /edit title/i })).toBeNull();
     expect(screen.getByText(/read-only access/i)).toBeTruthy();
