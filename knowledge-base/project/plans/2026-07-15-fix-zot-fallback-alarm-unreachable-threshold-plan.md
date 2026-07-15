@@ -112,7 +112,9 @@ failure_modes:
   - mode: host is Sentry-dark (no Doppler/DOPPLER_TOKEN, or SENTRY_* prefetch soft-fails at :711)
     detection: NOT this alarm — `logger -t ci-deploy` → journald → Vector → Better Stack
       (`vector.toml:129` allowlists the tag). Tracked in #6437.
-    alert_route: Better Stack log query; ci-deploy.sh:1049/:1056 FATAL bounds the Doppler-less case
+    alert_route: Better Stack log query; ci-deploy.sh's `FATAL: Doppler CLI not installed` /
+      `FATAL: DOPPLER_TOKEN not set` guards bound the Doppler-less case (grep the literals — line
+      numbers here rotted once already when this PR's own +14 lines shifted them)
 logs:
   where: Sentry issue-group events (registry/stage/image/zot_gate_reason tags); no new log surface
   retention: Sentry default (unchanged)

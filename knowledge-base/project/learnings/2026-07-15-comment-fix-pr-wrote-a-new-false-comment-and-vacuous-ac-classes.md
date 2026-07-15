@@ -2,7 +2,7 @@
 title: A comment-fix PR's dominant failure mode is writing a NEW false comment — plus the vacuous-AC and ship-gate-trim classes
 date: 2026-07-15
 category: best-practices
-module: apps/web-platform/infra/sentry, apps/web-platform/infra/ci-deploy.sh, plugins/soleur/skills/{plan,review}
+module: apps/web-platform/infra/sentry, apps/web-platform/infra/ci-deploy.sh, apps/web-platform/infra/cloud-init.yml, plugins/soleur/skills/{plan,review}
 issue: 6285
 pr: 6424
 problem_type: best_practice
@@ -10,10 +10,12 @@ component: documentation
 symptoms:
   - "retirement tripwire claims 'darkens 3 of the 4 signals' when it darkens 1"
   - "acceptance criterion returns 0 pre-fix and post-fix — structurally cannot fail"
+  - "a 'comment-only, zero risk' cloud-init edit goes 272 B over WEB_GZIP_BUDGET and turns the required test check red"
+  - "the one failing check diagnosed is not a required check; the two that block the merge go unexamined"
 root_cause: inadequate_documentation
 resolution_type: documentation_update
 severity: high
-tags: [comment-rot, acceptance-criteria, sentry, adr, doc-drift, review-catches, ship-gates]
+tags: [comment-rot, acceptance-criteria, sentry, adr, doc-drift, review-catches, ship-gates, user-data-budget, ci-triage]
 synced_to: [review]
 ---
 
@@ -72,9 +74,14 @@ live right now). The correct action is to **NARROW `filters_v2`**, never retire.
 If a signal survives, the alarm cannot be retired. Both sentences were mine, three lines apart.
 
 **Root cause:** `ADR-096:151` defines task 5.3 as *"remove the pull-site GHCR fallback **branch**"* —
-**singular**. There are **three** such branches across two files (`ci-deploy.sh:857`,
-`cloud-init.yml:536`, `:695`). I inherited the singular framing and asserted plural consequences off
-it, without counting.
+**singular**. There are **three** such branches across two files: the `ZOT_ACTIVE` branch in
+`ci-deploy.sh` (emits `registry:"ghcr-fallback"`) and the two fresh-boot branches in `cloud-init.yml`
+(emitting `app_ghcr_fallback` / `inngest_ghcr_fallback`). I inherited the singular framing and
+asserted plural consequences off it, without counting.
+
+*(This paragraph originally cited them as `ci-deploy.sh:857`, `cloud-init.yml:536`, `:695` — and
+`:536` was already wrong, the branch being at `:535`. A learning about miscounted claims, carrying a
+miscounted claim. Re-anchored on emit names per Learning B.)*
 
 > **Rule.** When a comment/doc asserts *"doing X darkens/breaks/removes **N of M** things"*,
 > enumerate the M and grep each one's emitter/definition. The **N is the most fragile claim** in the
@@ -206,6 +213,60 @@ second half standing.
 
 Caught by `observability-coverage-reviewer`.
 
+## I — "comment-only" is not free when the file ships inside a size-capped payload
+
+I described this PR's `cloud-init.yml` edits as *"comments only"* to preflight and *"comment-only, no
+behavior"* to the review agents — asserting **zero risk** twice, and both times reasoning only about
+whether the text could be *interpreted* (`0` occurrences of `${` or `%{`, so no template injection).
+Neither pass asked what the bytes **cost**.
+
+`apps/web-platform/infra/cloud-init.yml` is not a file that sits on disk — `server.tf` wraps its
+render in `base64gzip()` and Hetzner stores the result as `user_data` under a hard 32,768 B cap, with
+a deliberate sub-cap ratchet (`plugins/soleur/test/cloud-init-user-data-size.test.ts`,
+`WEB_GZIP_BUDGET = 21_800`). **Comments in that file are shipped over the wire to every host.** My 11
+lines of tripwire comment pushed the gzipped payload to 22,104 B — **272 B over budget**, turning
+`test-bun` (and therefore the required `test` aggregator) red and blocking the merge.
+
+The budget's own rationale had already said so, in the last three words of its comment block:
+
+```
+// #6396: +~140 B modest re-baseline (21,500 → 21,800). ... the irreducible inline cost is the
+// terminal-block boot-emit trap + the ungated `soleur-vector-install` call site + per-host
+// SOLEUR_HOST_NAME injection — necessary call-sites, not a re-inlined blob. Comments trimmed first.
+```
+
+> **Rule.** Before adding a comment to a file that is *rendered into* a payload (cloud-init/user_data,
+> a baked image layer, an embedded script, a serialized blob), grep for a size budget over it
+> (`git grep -l '<basename>' -- '**/test/**'` — the same reflex Learning C prescribes for pinned
+> literals). "Comment-only" answers *"can it execute?"*; it does not answer *"what does it weigh?"*
+> Fix by **trimming to fit, never by re-baselining the budget** — a ratchet re-based for comments has
+> stopped being a ratchet. The 11 lines became two one-line pointers into the free copy of the same
+> text (`ci-deploy.sh` is a CI script, not user_data, so its full tripwire costs nothing), landing at
+> ~21,720 B with the budget untouched.
+
+Caught by CI, **not** by preflight or by any of the four review agents — all of whom had been handed
+my "comment-only, zero risk" framing as a pre-verified fact to confirm rather than re-derive.
+
+## J — when several checks fail at once, diagnose each one independently
+
+Three checks failed on #6424: `test`, `test-bun`, and `validate (apps/web-platform/infra)`. I spent
+the entire debugging stretch on `validate` — and got the right answer (genuinely pre-existing; see
+#6446). But:
+
+- **`validate` was never the blocker.** It is not a required status check. `test` was. I confirmed the
+  irrelevant failure and left the two that actually blocked the merge **unexamined**.
+- **The real blocker was mine** (Learning I) — the one conclusion my "pre-existing" framing made me
+  least likely to reach.
+- **My control test used the wrong validator.** I ran `python3 -c yaml.safe_load` where CI runs
+  `cloud-init schema -c`; both happened to fail, so the *conclusion* was accidentally right while the
+  *reasoning* was invalid. Two failures touching one file had two different causes.
+
+> **Rule.** A confirmed-pre-existing failure in file X does not make a second failure touching file X
+> pre-existing too — "same file" is not a shared root cause. Before diagnosing any red check, ask
+> **which of these actually blocks the merge** (`gh api repos/{owner}/{repo}/rules/branches/main`) and
+> start there. And run the **exact command CI runs**: a control test with a different tool proves
+> nothing about the tool that failed, even when both go red.
+
 ## Solution
 
 All eight corrected inline in commit `1fa77dec2` (no scope-outs; every finding was `pr-introduced`):
@@ -265,11 +326,42 @@ own carve-out against its N**, and **re-derive the prescription from the correct
    **Recovery:** amended + retitled #6437.
    **Prevention:** when filing an observability gap, trace the emit's **credential source**, not just
    its call site.
-9. **Ran a plain `python3 -c yaml.safe_load` on a Terraform `templatefile()` cloud-init.yml** and
-   briefly read the parse error as my own regression.
-   **Recovery:** control-tested `origin/main` (fails identically at `:664`).
-   **Prevention:** already documented — validate the RENDERED output; the raw file always fails on
-   un-rendered `${...}`.
+9. **Ran a plain `python3 -c yaml.safe_load` on a Terraform `templatefile()` cloud-init.yml** — the
+   wrong validator (CI runs `cloud-init schema -c`) — and briefly read the parse error as my own
+   regression. My first write-up of this error then asserted *"the raw file always fails on
+   un-rendered `${...}`"*, **which is itself false**: `${...}` sits inside values and parses as an
+   ordinary YAML scalar. The break is the **column-1 `%{ if ... ~}`** directive from #6344 — `%`
+   starts a YAML *directive* (`%YAML`, `%TAG`), so the parser aborts there. A false prevention line,
+   in the learning file about false comments — Learning A's class, one layer up.
+   **Recovery:** control-tested `origin/main` with the **exact CI command**; corrected the mechanism
+   and filed #6446.
+   **Prevention:** run the command CI runs, verbatim. And when writing a `**Prevention:**` line that
+   states a mechanism, grep the mechanism — a prevention line is a comment, and inherits every
+   failure mode of one.
+10. **Told preflight and four review agents that the `cloud-init.yml` edits were "comments only /
+    comment-only, no behavior — zero risk"**, having only checked that the text could not be
+    *interpreted* (no `${`/`%{`). `cloud-init.yml` renders into base64gzip'd Hetzner `user_data` under
+    a sub-cap ratchet; the 11 comment lines went **272 B over `WEB_GZIP_BUDGET`** and turned the
+    required `test` check red. I supplied the false framing as a *pre-verified fact to confirm rather
+    than re-derive*, so no reviewer re-checked it.
+    **Recovery:** compressed to two one-line pointers into `ci-deploy.sh`'s free copy; ~21,720 B,
+    budget untouched, 2131/2131 green.
+    **Prevention:** Learning I — grep for a size budget before commenting into a rendered payload;
+    trim to fit, never re-baseline. Corollary: every "pre-verified, please confirm" claim handed to a
+    reviewer suppresses the check it names — spend them only on things actually verified.
+11. **Diagnosed the one failing check that did not block the merge, and never opened the two that
+    did.** Burned the whole pre-compaction stretch proving `validate` pre-existing (correct, #6446)
+    while `test`/`test-bun` — required, and **mine** — sat unexamined.
+    **Recovery:** read the required-check list (`gh api .../rules/branches/main`), then the actual
+    logs.
+    **Prevention:** Learning J — check which failures block, start there, and never let one
+    confirmed-pre-existing failure vouch for a second one in the same file.
+12. **Hit the hook-denial trap a third time.** A `gh issue create` missing `--milestone` was denied,
+    and the deny rejected the *entire* Bash call — taking the `cat > /tmp/...` heredoc in the same
+    call with it, so the retry failed on a file that had never been written.
+    **Recovery:** wrote the body with the Write tool, then ran `gh issue create` alone.
+    **Prevention:** never chain file-creation and a hook-gated command in one Bash call; a PreToolUse
+    deny is all-or-nothing, so the "setup" half silently never happened.
 
 ## Related
 
@@ -279,4 +371,11 @@ own carve-out against its N**, and **re-derive the prescription from the correct
   false-PASS the irreversible GHCR-retirement gate — higher value than the fix itself), **#6436**
   (Sentry unmodeled in C4), **#6437** (ci-deploy Sentry-dark paths), **#6429** (sibling
   `sandbox_startup_failure` may share the unreachable-threshold defect), **#6427** (retargeted: 5.3
-  must retire/re-point the soak).
+  must retire/re-point the soak), **#6445** (ship trailer-parse gate + preflight Check 10
+  false-positives), **#6446** (Learning J — `validate`'s cloud-init schema step has been red on every
+  infra PR since #6344 and merges anyway; it validates the raw templatefile and isn't required),
+  **#6447** (Learning B in the wild — `ghcr-minter-doppler-token.tf:53` cites `cloud-init.yml:554`;
+  the real target is `:408`).
+- Learning I's budget: `plugins/soleur/test/cloud-init-user-data-size.test.ts` (`WEB_GZIP_BUDGET`,
+  `HETZNER_CAP`) — the ratchet that caught it, and whose own comment already said *"Comments trimmed
+  first."*

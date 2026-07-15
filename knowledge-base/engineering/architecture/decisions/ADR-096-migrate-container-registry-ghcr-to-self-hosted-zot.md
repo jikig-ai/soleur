@@ -122,8 +122,12 @@ independent axes so it never silently gates a host:
     emitting host having Doppler + `DOPPLER_TOKEN` + a resolved `SENTRY_*` prefetch
     (`ci-deploy.sh:707,776-777`); a host missing either is Sentry-dark and reports only via
     `logger -t ci-deploy` → Better Stack (#6437). **Closes:** task 5.3 deletes the pull-site
-    fallback **branches** — three of them across two files (`ci-deploy.sh:857`,
-    `cloud-init.yml:536`, `:695`), not one — darkening those three signals. `zot-gate-degraded`
+    fallback **branches** — three of them across two files, not one: the `ZOT_ACTIVE` branch in
+    `ci-deploy.sh` (emits `registry:"ghcr-fallback"`), plus the two fresh-boot branches in
+    `cloud-init.yml` (emitting `app_ghcr_fallback` and `inngest_ghcr_fallback`) — darkening those
+    three signals. Anchored on emit names, not line numbers: this enumeration is the claim 5.3
+    acts on, and a line-number citation into `cloud-init.yml` rots on the next insertion above it
+    (#6447 is that failure in the wild). `zot-gate-degraded`
     survives 5.3 (gate-emitted). **Do NOT retire the alarm at 5.3 — narrow its `filters_v2` to the
     surviving signal(s);** retiring it blinds `zot-gate-degraded`. Two post-cutover boot-gating
     shapes the degraded signal must remain loud for: a **missing** copy (crane-copy failure) AND a
