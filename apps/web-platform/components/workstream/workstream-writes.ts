@@ -22,6 +22,20 @@ export interface PatchIssueBody {
   status?: WorkstreamStatus;
   state_reason?: "completed" | "not_planned";
   reopen?: boolean;
+  // Edit-fields group (any combination in one request; the route rejects
+  // combining these with title/status/reopen). Empty body IS allowed.
+  body?: string;
+  labels?: string[];
+  assignees?: string[];
+  /** Milestone number, or null to clear. */
+  milestone?: number | null;
+}
+
+/** The picker options served by GET /api/workstream/issues/options. */
+export interface WorkstreamIssueOptions {
+  labels: Array<{ name: string; color: string }>;
+  assignees: Array<{ login: string }>;
+  milestones: Array<{ number: number; title: string }>;
 }
 
 async function toError(res: Response): Promise<WorkstreamWriteClientError> {

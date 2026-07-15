@@ -27,7 +27,8 @@ export type PermissionLayer =
   | "canUseTool-plugin-mcp"
   | "canUseTool-deny-default"
   | "canUseTool-bash"
-  | "canUseTool-soleur-go-ux";
+  | "canUseTool-soleur-go-ux"
+  | "canUseTool-support-skill";
 
 export function logPermissionDecision(
   layer: PermissionLayer,

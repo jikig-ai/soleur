@@ -31,6 +31,18 @@ Live standing alarms over this source:
   reporter goes dark. Checker: `scripts/zot-restart-loop-alarm.sh` (shared parse helper
   `scripts/lib/zot-telemetry-parse.sh`); self-liveness `sentry_cron_monitor.zot_restart_loop_alarm`.
   Dry-run: `doppler run -p soleur -c prd_terraform -- bash scripts/zot-restart-loop-alarm.sh`.
+  - **Also reads `SOLEUR_PRIVATE_NIC`** (#6415 / ADR-115) — the registry host's own assertion
+    that its private IP (`10.0.1.30`) is configured. Carried as an **independent** verdict
+    (`NIC_ALARM_VERDICT`, deliberately NOT in the exit code) and firing three deduped
+    `[ci/registry-private-nic]` classes: *host has no private NIC* (terminal),
+    *boot race self-healed* (advisory — a successful heal emits `nic_ok=true`, so the terminal
+    branch structurally cannot see it), and *guard went dark* (absence).
+    Query: `… --grep SOLEUR_PRIVATE_NIC`. Decode: `imds_rc!=0` → H1 (metadata-service blip);
+    `imds_rc=0 && imds_nets=0` → H2 (the `hcloud_server_network` additive online-attach race);
+    `imds_nets>0 && converged_by!=already` → the attach landed and the guest never configured it.
+    **If zot is reported unreachable, rule the private NIC out FIRST** — #6400 was 14 days of
+    "zot mysteriously down" that was actually a missing NIC, and a NIC-less host keeps public
+    egress so every other signal here stays green.
 - **`scheduled-followthrough-sweeper.yml`** — one-shot soak follow-throughs (e.g.
   `scripts/followthroughs/zot-restart-plateau-6288.sh`) recur the same query+decode shape.
 

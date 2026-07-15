@@ -41,10 +41,18 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
       hostname = "ssh.${var.app_domain_base}"
       service  = "ssh://localhost:22"
     }
-    # #6122 (ADR-096) — registry PUSH ingress. The web host's cloudflared (already a
-    # 10.0.1.0/24 member) proxies to the private-net zot host, so the registry host needs
-    # NO cloudflared of its own. CI runs `cloudflared access tcp --hostname registry.<base>`
-    # → this rule → tcp://10.0.1.30:5000 (zot). First-match; MUST stay above the 404.
+    # #6122 (ADR-096) — registry PUSH ingress. A web-host cloudflared connector proxies to
+    # the private-net zot host, so the registry host needs NO cloudflared of its own. CI runs
+    # `cloudflared access tcp --hostname registry.<base>` → this rule → tcp://10.0.1.30:5000
+    # (zot). First-match; MUST stay above the 404.
+    #
+    # (#6416) "A web-host cloudflared connector", NOT "THE web host's" — this is ONE tunnel with
+    # MULTIPLE connector replicas, and CF load-balances across them. So this rule is correct only
+    # while EVERY connector host is a 10.0.1.0/24 member (ADR-114 invariant I1); web-2 was not.
+    # It is nonetheless the RIGHT pattern and the one to generalize — its service is
+    # private-net-RELATIVE, so whichever replica answers proxies to the correct origin. Contrast
+    # `ssh://localhost:22` below, which is connector-relative and host-NONdeterministic (I2).
+    # Failure rates and the topology rationale live in ADR-114 — do not restate them here.
     #
     # `tcp://`, NOT `http://` (#6122 cutover fix): `cloudflared access tcp` bridges a RAW TCP
     # stream over a WebSocket. With an `http://` service the origin cloudflared HTTP-proxies the

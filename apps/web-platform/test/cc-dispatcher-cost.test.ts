@@ -146,6 +146,7 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-cost-1",
       conversationId: "conv-cost-1",
       userMessage: "hi",
@@ -196,6 +197,7 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-cost-2",
       conversationId: "conv-cost-2",
       userMessage: "hi",

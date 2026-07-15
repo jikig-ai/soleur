@@ -533,6 +533,7 @@ runcmd:
       # (REF started == IMAGE_REF) it never fires. Fail-open (_emit swallows all errors).
       if [ "$N" -ge 2 ] && [ "$REF" != "$IMAGE_REF" ]; then
         REF="$IMAGE_REF"   # atomic fallback to GHCR after the zot attempt
+        # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
         _emit "app image served via GHCR fallback (zot miss)" "app_ghcr_fallback" warning
       fi
       [ "$N" -ge 5 ] && { printf ' | pull_err: %s' "$(tail -c 160 /run/soleur-pull.log 2>/dev/null)" >> /run/soleur-stage-detail; exit 1; }
@@ -690,6 +691,7 @@ runcmd:
     # #6122/ADR-096: prefer zot (dark; host already logged in by soleur-host-bootstrap.sh);
     # all 3 refs follow IREF, zot miss ⇒ GHCR fallback; soleur-boot-emit records the registry.
     ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
+    # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
     if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
       ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.20"
       if docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_ghcr_fallback warning; fi
