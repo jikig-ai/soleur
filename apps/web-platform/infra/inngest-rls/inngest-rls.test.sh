@@ -110,7 +110,7 @@ check_no_privileged_revoke() {
 # (IGNORECASE is gawk-only; this must also work under mawk).
 check_no_schemawide_ddl_loop() {
   local offenders
-  offenders="$(printf '%s' "$CODE" | tr 'A-Z' 'a-z' | awk '
+  offenders="$(printf '%s' "$CODE" | tr '[:upper:]' '[:lower:]' | awk '
     BEGIN { RS = ";" }
     /execute/ &&
     (/pg_tables/ || /pg_matviews/ ||

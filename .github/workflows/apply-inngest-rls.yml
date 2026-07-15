@@ -45,8 +45,15 @@ name: "Apply: Inngest RLS lockdown"
 on:
   push:
     branches: [main]
+    # NARROWED 2026-07-15 (was 'apps/web-platform/infra/inngest-rls/**'). That glob
+    # matched EVERY file in the directory, so an edit to a dev-only artifact (0002,
+    # anon-probe.sh, the shape guards) auto-applied THIS workflow's 0001 against
+    # soleur-inngest-prd — the brand-survival-critical durable trigger layer. This
+    # workflow applies 0001 and nothing else, so its trigger must name 0001 and
+    # nothing else. Keep it that way: re-widening to '**' re-opens that blast radius.
+    # The dev counterpart is .github/workflows/apply-inngest-rls-dev.yml.
     paths:
-      - 'apps/web-platform/infra/inngest-rls/**'
+      - 'apps/web-platform/infra/inngest-rls/0001_enable_rls_lockdown.sql'
       - '.github/workflows/apply-inngest-rls.yml'
   schedule:
     - cron: '17 * * * *'   # hourly — self-healing re-apply (no-op when clean). Shrinks the cosmetic rls_disabled_in_public advisor-recurrence window on a new Inngest table from <=24h to <=1h. NOT the 15-min health watchdog cadence.
@@ -79,6 +86,8 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           # Pinned ref of the DEDICATED Inngest project. NEVER the web-platform project.
           PROJECT_REF: pigsfuxruiopinouvjwy
+          # Asserted against the project's own identity record before any REVOKE.
+          PROJECT_NAME: soleur-inngest-prd
           SQL_FILE: apps/web-platform/infra/inngest-rls/0001_enable_rls_lockdown.sql
         run: |
           set -uo pipefail
@@ -104,6 +113,35 @@ jobs:
           fi
           if [[ ! -f "$SQL_FILE" ]]; then
             record_failure "sql_missing" "Migration file $SQL_FILE not found in checkout."
+          fi
+
+          # PROJECT-IDENTITY PREFLIGHT (PRIMARY guard; added 2026-07-15) — fail-closed.
+          # 0001 is a schema-wide REVOKE-all. Its in-SQL sentinel infers project identity
+          # from TABLE CONTENTS ("goose tables exist => Inngest-only project"), an inference
+          # the dark Inngest backend on soleur-dev FALSIFIED: soleur-dev satisfies it too.
+          # This binds ref -> project via Supabase's OWN identity record instead of guessing
+          # from schema contents, and catches a mis-pinned or rotated ref.
+          #
+          # Response shape verified live 2026-07-15 against all three projects: 200 returns a
+          # top-level string .name. Both failure modes yield an EMPTY .name (404 -> {"message":
+          # "Not Found"}, 401 -> {"message":"Unauthorized"}), so a bare name-equality test is
+          # already fail-closed — but we assert HTTP 200 SEPARATELY so an unreachable API is
+          # reported as `identity_unreachable`, not silently mis-reported as a wrong project.
+          if [[ -z "$fail_mode" ]]; then
+            id_resp="$(curl --silent --show-error --url "$API/v1/projects/${PROJECT_REF}" \
+              --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+              --max-time 30 -w $'\n%{http_code}' 2>/dev/null)"
+            id_code="${id_resp##*$'\n'}"; id_body="${id_resp%$'\n'*}"
+            if [[ "$id_code" != "200" ]]; then
+              record_failure "identity_unreachable" "project-identity preflight HTTP ${id_code} for ref ${PROJECT_REF}: $(sanitize "$(printf '%s' "$id_body" | head -c 200)")"
+            else
+              actual_name="$(printf '%s' "$id_body" | jq -r '.name // empty' 2>/dev/null)"
+              if [[ "$actual_name" != "$PROJECT_NAME" ]]; then
+                record_failure "identity_mismatch" "ref ${PROJECT_REF} resolves to project '$(sanitize "$actual_name")', expected '${PROJECT_NAME}' — REFUSING to apply a schema-wide REVOKE to the wrong project."
+              else
+                echo "Project-identity preflight PASS: ${PROJECT_REF} is '${PROJECT_NAME}'."
+              fi
+            fi
           fi
 
           # POST the SQL as role postgres. Retry with backoff on SQLSTATE 55P03

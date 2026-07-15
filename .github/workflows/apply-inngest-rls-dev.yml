@@ -1,0 +1,308 @@
+# Apply the soleur-dev DARK-Inngest RLS lockdown (0002) — the CO-TENANTED project.
+#
+# WHY THIS IS A SEPARATE WORKFLOW AND NOT A MATRIX WITH apply-inngest-rls.yml:
+# the two share only HTTP plumbing; their GATES are fundamentally different.
+# apply-inngest-rls.yml's gate is schema-wide (`every public table must have zero
+# anon grants`), which is correct on the DEDICATED Inngest project. Pointed at
+# soleur-dev it would report violations≈52 FOREVER, because the app's 52 dev tables
+# hold anon grants BY DESIGN. This gate is therefore ALLOWLIST-SCOPED to the 14
+# dark-Inngest tables. A matrix would need a third variable carrying a SQL
+# predicate, plus divergent pg_default_acl posture and lifetimes (prd permanent;
+# this one is retired at the Phase-5 drop). Refactoring a brand-survival-critical
+# prd workflow to accommodate a transient one is the wrong trade.
+#
+# LIFETIME: TRANSIENT. soleur-dev hosts Inngest's tables only until the cutover
+# (`op=arm` writes the prod DSN). This workflow + 0002 are retired ATOMICALLY with
+# the Phase-5 `DROP TABLE` — if the tables go and this stays, 0002's sentinel RAISEs
+# forever; if this stays after the co-tenancy ends, it goes GREEN forever defending
+# nothing, and green cruft never annunciates.
+#
+# NO SCHEDULE, BY DESIGN: goose can only re-run on a deliberate bootstrap image-pin
+# bump (the image is pinned at cloud-init-inngest.yml:330), which is a reviewable PR
+# — so that file is in `paths:` below and a re-apply is DETERMINISTIC on the only
+# event that can create a 15th table. An hourly poll would be a probabilistic
+# substitute for a deterministic trigger, and would then need retiring in Phase 5
+# (the exact rot that left #4707 orphaned for 45 days). Durable schema-wide
+# detection belongs to the advisor scan (#3366), not here.
+#
+# SECURITY: SUPABASE_ACCESS_TOKEN is injected via env (never argv). Untrusted
+# response bodies flow through strip_log_injection + scrub_pat before any echo. The
+# Management API endpoint is pinned to api.supabase.com (no env override — an
+# overridable host is a PAT-exfil-via-redirect seam). PROJECT_REF is a pinned
+# literal and is NEVER interpolated from github.event.* or inputs.*. All uses: are
+# SHA-pinned.
+
+name: "Apply: Inngest RLS lockdown (soleur-dev)"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web-platform/infra/inngest-rls/0002_dev_inngest_tables_lockdown.sql'
+      - 'apps/web-platform/infra/inngest-rls/anon-probe.sh'
+      - '.github/workflows/apply-inngest-rls-dev.yml'
+      # The ONLY path that can create a 15th goose table (bootstrap image pin).
+      - 'apps/web-platform/infra/cloud-init-inngest.yml'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you re-running? (manual re-apply only)"
+        required: false
+
+# DISTINCT from apply-inngest-rls.yml's `apply-inngest-rls` group: a shared group
+# would serialise the dev apply behind the prd hourly cron for no reason.
+concurrency:
+  group: apply-inngest-rls-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write   # file/comment a tracking issue when the apply does not verify clean
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # DISTINCT kill-switch token from the prd workflow's [skip-inngest-rls-apply] —
+    # a shared token would disable BOTH lockdowns with one commit message.
+    if: ${{ !contains(github.event.head_commit.message, '[skip-inngest-rls-dev-apply]') }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Apply dev lockdown + allowlist-scoped verification
+        id: apply
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          # Pinned literal — the CO-TENANTED dev project. NEVER interpolated.
+          PROJECT_REF: mlwiodleouzwniehynfz
+          PROJECT_NAME: soleur-dev
+          SQL_FILE: apps/web-platform/infra/inngest-rls/0002_dev_inngest_tables_lockdown.sql
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-inngest-health.yml)
+
+          # Anti-exfil helpers — copied VERBATIM from scheduled-inngest-health.yml
+          # (bash functions do not cross GH-Actions steps; cq-regex-unicode-separators-escape-only).
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+          scrub_pat() {
+            printf '%s' "$1" | sed -E 's/sbp_[A-Za-z0-9]{20,}/sbp_REDACTED/g'
+          }
+          sanitize() { scrub_pat "$(strip_log_injection "$1")"; }
+
+          API="https://api.supabase.com"   # pinned — NO env override (PAT-exfil-via-redirect seam)
+          ALLOW="ARRAY['apps','event_batches','events','function_finishes','function_runs','functions','goose_db_version','history','migrations','queue_snapshot_chunks','spans','trace_runs','traces','worker_connections']"
+          fail_mode=""; fail_detail=""
+          record_failure() { if [[ -z "$fail_mode" ]]; then fail_mode="$1"; fail_detail="$2"; fi; }
+
+          if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
+            record_failure "secret_unset" "SUPABASE_ACCESS_TOKEN not set — cannot reach the Management API."
+          fi
+          if [[ ! -f "$SQL_FILE" ]]; then
+            record_failure "sql_missing" "Migration file $SQL_FILE not found in checkout."
+          fi
+
+          # PROJECT-IDENTITY PREFLIGHT — fail-closed, and the PRIMARY project guard.
+          # 0002's in-SQL sentinel only proves "the goose tables exist"; it CANNOT prove
+          # which project we are on (soleur-inngest-prd satisfies it too). This binds
+          # ref -> project via Supabase's OWN identity record. Response shape verified
+          # live 2026-07-15: 200 returns a top-level string .name. Both failure modes
+          # return an EMPTY .name (404 Not Found / 401 Unauthorized), so name-equality is
+          # already fail-closed — HTTP 200 is asserted SEPARATELY so an unreachable API
+          # reports as `identity_unreachable` rather than as a wrong-project mismatch.
+          if [[ -z "$fail_mode" ]]; then
+            id_resp="$(curl --silent --show-error --url "$API/v1/projects/${PROJECT_REF}" \
+              --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+              --max-time 30 -w $'\n%{http_code}' 2>/dev/null)"
+            id_code="${id_resp##*$'\n'}"; id_body="${id_resp%$'\n'*}"
+            if [[ "$id_code" != "200" ]]; then
+              record_failure "identity_unreachable" "project-identity preflight HTTP ${id_code} for ref ${PROJECT_REF}: $(sanitize "$(printf '%s' "$id_body" | head -c 200)")"
+            else
+              actual_name="$(printf '%s' "$id_body" | jq -r '.name // empty' 2>/dev/null)"
+              if [[ "$actual_name" != "$PROJECT_NAME" ]]; then
+                record_failure "identity_mismatch" "ref ${PROJECT_REF} resolves to project '$(sanitize "$actual_name")', expected '${PROJECT_NAME}' — REFUSING to apply."
+              else
+                echo "Project-identity preflight PASS: ${PROJECT_REF} is '${PROJECT_NAME}'."
+              fi
+            fi
+          fi
+
+          # POST the SQL as role postgres. No 55P03 retry loop (cut from the prd
+          # sibling): this target is an idle, zero-traffic, pre-cutover host, so lock
+          # contention is not a realistic failure mode. A lock_timeout failure here is a
+          # loud, retryable no-op (the SQL is idempotent) — re-run the workflow.
+          if [[ -z "$fail_mode" ]]; then
+            payload="$(jq -nc --rawfile q "$SQL_FILE" '{query:$q}')"
+            resp="$(curl --silent --show-error --request POST \
+              --url "$API/v1/projects/${PROJECT_REF}/database/query" \
+              --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+              --header "Content-Type: application/json" \
+              --data "$payload" --max-time 60 -w $'\n%{http_code}' 2>/dev/null)"
+            code="${resp##*$'\n'}"; body="${resp%$'\n'*}"
+            if [[ "$code" == 2?? ]]; then
+              echo "Dev lockdown applied (HTTP ${code})."
+            else
+              record_failure "apply_error" "Management API HTTP ${code}: $(sanitize "$(printf '%s' "$body" | tr '\n' ' ' | head -c 400)")"
+            fi
+          fi
+
+          query() {
+            curl --silent --show-error --request POST \
+              --url "$API/v1/projects/${PROJECT_REF}/database/query" \
+              --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+              --header "Content-Type: application/json" \
+              --data "$(jq -nc --arg q "$1" '{query:$q}')" --max-time 30 2>/dev/null
+          }
+
+          # AUTHORITATIVE gate — ALLOWLIST-SCOPED to the 14. A table is a violation if:
+          #   - RLS is not enabled, OR
+          #   - it is not owned by postgres (enabling RLS on a non-owner table would block
+          #     Inngest's own postgres connection — owner-bypass only helps the owner), OR
+          #   - anon OR authenticated holds ANY of SELECT/INSERT/UPDATE/DELETE/TRUNCATE.
+          # Checking GRANTS and not merely relrowsecurity is load-bearing: RLS does NOT
+          # gate TRUNCATE (privilege-gated, not policy-gated) and PostgREST has no TRUNCATE
+          # verb — so this catalog gate is the ONLY place the anon wipe vector can be
+          # proven closed. relrowsecurity alone would leave it open and look green.
+          if [[ -z "$fail_mode" ]]; then
+            gate="$(query "select count(*) as violations from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relname = ANY(${ALLOW}) and (c.relrowsecurity=false or pg_get_userbyid(c.relowner)<>'postgres' or has_table_privilege('anon',c.oid,'SELECT') or has_table_privilege('anon',c.oid,'INSERT') or has_table_privilege('anon',c.oid,'UPDATE') or has_table_privilege('anon',c.oid,'DELETE') or has_table_privilege('anon',c.oid,'TRUNCATE') or has_table_privilege('authenticated',c.oid,'SELECT') or has_table_privilege('authenticated',c.oid,'INSERT') or has_table_privilege('authenticated',c.oid,'UPDATE') or has_table_privilege('authenticated',c.oid,'DELETE') or has_table_privilege('authenticated',c.oid,'TRUNCATE'))")"
+            violations="$(printf '%s' "$gate" | jq -r '.[0].violations // "err"' 2>/dev/null)"
+            if [[ "$violations" != "0" ]]; then
+              record_failure "gate_violation" "allowlist-scoped catalog gate: violations=${violations} (expected 0 over the 14; checks RLS-on + postgres-owned + no anon/authenticated SELECT/INSERT/UPDATE/DELETE/TRUNCATE). body=$(sanitize "$(printf '%s' "$gate" | head -c 300)")"
+            else
+              echo "Authoritative gate PASS: violations=0 over the 14 allowlisted tables (RLS-enabled, postgres-owned, no anon/authenticated DML or TRUNCATE)."
+            fi
+          fi
+
+          # Coverage guard: the gate above is vacuous if it matches ZERO rows (e.g. the
+          # tables were dropped, or a rename made the allowlist stale) — count(*) over an
+          # empty set is 0, which is indistinguishable from "all clean". Assert the gate
+          # actually SAW all 14.
+          if [[ -z "$fail_mode" ]]; then
+            seen="$(query "select count(*) as n from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relname = ANY(${ALLOW})")"
+            seen_n="$(printf '%s' "$seen" | jq -r '.[0].n // "err"' 2>/dev/null)"
+            if [[ "$seen_n" == "14" ]]; then
+              echo "Gate coverage PASS: all 14 allowlisted tables present and evaluated."
+            else
+              record_failure "gate_coverage" "the allowlist matched ${seen_n} tables, expected 14 — violations=0 would be VACUOUS. If the Phase-5 drop has happened, retire this workflow and 0002 (see the header)."
+            fi
+          fi
+
+          # REPORT-ONLY (non-fatal): non-allowlisted RLS-disabled public tables. A 15th
+          # goose table needs a human PR adding its name to the allowlist (the window is
+          # time-to-PR, NOT self-healing); an app table losing RLS is triaged via the
+          # advisor scan (#3366). Deliberately NOT a failure: aborting the Inngest
+          # lockdown on unrelated app-schema drift is fail-closed on the wrong axis.
+          if [[ -z "$fail_mode" ]]; then
+            other="$(query "select count(*) as n from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity=false and not (c.relname = ANY(${ALLOW}))")"
+            other_n="$(printf '%s' "$other" | jq -r '.[0].n // "err"' 2>/dev/null)"
+            echo "REPORT (non-fatal): non-allowlisted RLS-disabled public tables=${other_n} (expected 0; >0 is triage input for the advisor scan #3366, not a failure of this lockdown)."
+          fi
+
+          # Owner liveness — read AND write, proving owner-bypass under non-forced RLS.
+          # The write round-trip is ROLLBACKed: zero side effects. This is the check that
+          # would catch "the lockdown locked Inngest out of its own scheduler state".
+          if [[ -z "$fail_mode" ]]; then
+            live="$(query "begin; set local role postgres; select count(*) as n from public.events; rollback")"
+            if printf '%s' "$live" | jq -e '.[0].n != null' >/dev/null 2>&1; then
+              echo "postgres-liveness PASS (read): owner can read public.events."
+            else
+              record_failure "owner_access_broken" "postgres-liveness read failed — Inngest owner access may be broken. body=$(sanitize "$(printf '%s' "$live" | head -c 300)")"
+            fi
+          fi
+          if [[ -z "$fail_mode" ]]; then
+            w="$(query "begin; set local role postgres; insert into public.events (event_id, event_name, event_ts) values ('rls-lockdown-probe', 'rls/lockdown.probe', now()); rollback")"
+            if printf '%s' "$w" | grep -qE '42501|permission denied'; then
+              record_failure "owner_write_broken" "owner INSERT was DENIED under non-forced RLS — the dark Inngest host cannot write its scheduler state. body=$(sanitize "$(printf '%s' "$w" | head -c 300)")"
+            else
+              echo "postgres-liveness PASS (write): owner INSERT accepted under non-forced RLS (rolled back)."
+            fi
+          fi
+
+          # anon denial in-DB — the Management API runs as postgres and bypasses RLS, so
+          # SET LOCAL ROLE anon is the correct simulation of the client path.
+          if [[ -z "$fail_mode" ]]; then
+            anon="$(query "begin; set local role anon; select count(*) from public.events; rollback")"
+            if printf '%s' "$anon" | grep -qF '42501'; then
+              echo "anon read-test PASS: permission denied for public.events as anon."
+            else
+              record_failure "anon_still_reads" "anon read-test did NOT return permission-denied (42501). body=$(sanitize "$(printf '%s' "$anon" | head -c 300)")"
+            fi
+          fi
+
+          fail_mode_safe="$(sanitize "$fail_mode")"
+          fail_detail_safe="$(sanitize "$fail_detail")"
+          { echo "failure_mode=${fail_mode_safe}"; echo "failure_detail=${fail_detail_safe}"; } >> "$GITHUB_OUTPUT"
+          if [[ -n "$fail_mode_safe" ]]; then
+            echo "::error::soleur-dev Inngest RLS apply failed: ${fail_mode_safe} — ${fail_detail_safe}"
+            exit 1
+          fi
+          echo "soleur-dev Inngest RLS lockdown verified: violations=0 over the 14, owner alive, anon denied."
+
+      # HTTP client-path probes (T2/T3/T4.4). Runs AFTER the gate: the probes include a
+      # deliberately destructive anon write against a REAL row, which is only safe once
+      # anon is provably denied (the script also re-checks read-denial before writing).
+      - name: Probe the anon client path (PostgREST)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT_REF: mlwiodleouzwniehynfz
+        run: bash apps/web-platform/infra/inngest-rls/anon-probe.sh
+
+      - name: File or comment tracking issue (failure)
+        if: failure() && steps.apply.outputs.failure_mode != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAIL_MODE: ${{ steps.apply.outputs.failure_mode }}
+          FAIL_DETAIL: ${{ steps.apply.outputs.failure_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search string is intentional
+          set -euo pipefail
+          # DISTINCT title + label from apply-inngest-rls.yml. A verbatim copy would let a
+          # green PRD run auto-close THIS project's failure issue (that workflow closes any
+          # open issue matching its own title on success).
+          ISSUE_TITLE="[ci/inngest-rls-dev] soleur-dev Inngest RLS lockdown apply failed"
+          ISSUE_SEARCH='in:title "[ci/inngest-rls-dev] soleur-dev Inngest RLS lockdown apply failed"'
+          gh label create "ci/inngest-rls-dev" --repo "$GH_REPO" \
+            --description "Apply of the soleur-dev dark-Inngest RLS lockdown failed" --color "B60205" 2>/dev/null || true
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## soleur-dev Inngest RLS lockdown apply failed\n\n'
+            printf -- '- Failure mode: %s\n' "$FAIL_MODE"
+            printf -- '- Detail: %s\n' "$FAIL_DETAIL"
+            printf -- '- Detected at: %s\n' "$NOW"
+            printf -- '- Run log: %s\n\n' "$RUN_URL"
+            printf '### What this means\n\n'
+            printf 'The 14 dark-Inngest tables on soleur-dev (project mlwiodleouzwniehynfz) may be reachable by anon/authenticated via PostgREST. The live vector is WRITE, not read: anon INSERT/UPDATE/DELETE/TRUNCATE on the scheduler state the in-flight cutover depends on. owner_access_broken / owner_write_broken is the inverse case — the lockdown may have locked the dark Inngest host out of its own state; see the break-glass block in 0002_dev_inngest_tables_lockdown.sql.\n\n'
+            printf '### Remediation (no-SSH)\n\n'
+            printf '1. Re-run this workflow (workflow_dispatch) — the SQL is idempotent.\n'
+            printf '2. gate_coverage means the allowlist no longer matches 14 tables. If the Phase-5 drop has landed, retire this workflow and 0002 together.\n'
+            printf '3. If owner_access_broken or owner_write_broken: apply the break-glass DISABLE ROW LEVEL SECURITY per affected table (grants stay revoked, so anon stays locked out), then investigate the connection role.\n'
+            printf '4. Do NOT fix this by adding ALTER DEFAULT PRIVILEGES to 0002 — soleur-dev is co-tenanted and that would break every future dev app migration.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/inngest-rls-dev" --label "priority/p1-high" --body-file "$BODY_FILE"
+          fi
+
+      - name: Auto-close tracking issue (success)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search string is intentional
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          STALE=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/inngest-rls-dev] soleur-dev Inngest RLS lockdown apply failed"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE" ]]; then
+            gh issue close "$STALE" --repo "$GH_REPO" --comment "soleur-dev Inngest RLS lockdown verified clean again at ${NOW}. Run: ${RUN_URL}"
+          fi
