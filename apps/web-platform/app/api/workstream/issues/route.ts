@@ -26,7 +26,11 @@ import {
   checkWorkstreamWriteRate,
   classifyWriteError,
 } from "@/server/workstream/workstream-write-throttle";
-import { STATUS_ORDER, type WorkstreamStatus } from "@/lib/workstream";
+import {
+  STATUS_ORDER,
+  WorkstreamDegradedError,
+  type WorkstreamStatus,
+} from "@/lib/workstream";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +49,12 @@ export async function GET() {
     ]);
     return NextResponse.json({ issues, board });
   } catch (e) {
-    Sentry.captureException(e, { tags: { surface: "workstream-issues" } });
+    // A WorkstreamDegradedError already mirrored to Sentry at the degrade source
+    // (mirror-precedes-throw) — skip re-capture to avoid a double event. Genuine
+    // GitHub-LIST failures (not degraded) keep their route-level capture.
+    if (!(e instanceof WorkstreamDegradedError)) {
+      Sentry.captureException(e, { tags: { surface: "workstream-issues" } });
+    }
     return NextResponse.json(
       { error: "workstream_query_error" },
       { status: 502 },
