@@ -85,8 +85,10 @@
 #     below — which is why that arm must keep exit 1. Tracked: #6437.
 #   NOT COVERED 2/2 — the DEDICATED INNGEST HOST (the 7th path, surfaced by #6462). It is a
 #     LIVE host (hcloud_server.inngest is unconditional — inngest-host.tf:181) whose
-#     cloud-init-inngest.yml:337 hard-pins a ghcr.io ref with NO zot path, NO /v2/ probe and
-#     NO fallback, and whose pull is FAIL-CLOSED (:349). It reports via
+#     cloud-init-inngest.yml hard-pins a ghcr.io ref (`IREF=ghcr.io/...`) with NO zot path, NO
+#     /v2/ probe and NO fallback, and whose pull is FAIL-CLOSED (`[ "$pull_rc" -eq 0 ] || exit`).
+#     Name-anchored: #6500 exists to rewrite that file, so any :NNN here rots on its own fix.
+#     It reports via
 #     inngest-boot-phone-home.sh to Better Stack, NOT the Sentry `stage:` schema — so every
 #     query in this file is structurally blind to it, and it could not emit
 #     inngest_ghcr_fallback even if it were wired to Sentry (it never attempts zot).
@@ -334,7 +336,7 @@ fi
 # neither registry, with no rollback.
 #
 # #6500: the dedicated inngest host (cloud-init-inngest.yml:337) hard-pins a ghcr.io ref with
-# NO zot path and a fail-closed pull (:349), and reports to Better Stack rather than the
+# NO zot path and a fail-closed pull, and reports to Better Stack rather than the
 # Sentry `stage:` schema — so every query in this file is structurally blind to it. It is a
 # LIVE host (hcloud_server.inngest is unconditional, inngest-host.tf:181). Revoke the PAT and
 # its next fresh boot 401s and never comes up, while this soak reports PASS.
