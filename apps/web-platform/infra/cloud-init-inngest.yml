@@ -235,9 +235,13 @@ runcmd:
   # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------
   # So the cold-boot soleur-inngest-bootstrap OCI pull + cosign-verify authenticates even
   # when Doppler answers empty at the boot instant (else anonymous private pull → 401 →
-  # 226/NAMESPACE abort). Same 0600 protection as the token file. Copy of the web
-  # bake+login pattern in cloud-init.yml: the `> /etc/default/soleur-ghcr-read` bake
-  # feeding the `STAGE=ghcr_login` seed-pull login.
+  # 226/NAMESPACE abort). Same 0600 protection as the token file. Mirrors the web
+  # cloud-init's `> /etc/default/soleur-ghcr-read` bake — but the hosts diverge
+  # downstream: there the file is write-only at boot and is consumed later by
+  # ci-deploy.sh (its baked-cred path), while that host's `STAGE=ghcr_login` seed-pull
+  # authenticates from the template-interpolated vars directly. Here the file IS sourced
+  # for the login below. (An earlier draft said the web bake "feeds" that seed-pull login.
+  # It does not — the bake→login relationship holds on THIS host only.)
   - printf 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s\n' '${ghcr_read_user}' '${ghcr_read_token}' > /etc/default/soleur-ghcr-read
   - chmod 600 /etc/default/soleur-ghcr-read
 

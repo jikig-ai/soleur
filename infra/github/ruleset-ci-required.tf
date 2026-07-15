@@ -36,9 +36,10 @@
 # #5780 briefly added a second rule sibling — a `merge_queue` block adopting a
 # GitHub merge queue for `main` to fix the strict-up-to-date BEHIND starvation.
 # It was REVERTED (2026-06-30) and is NOT present: CodeQL reports no status
-# context on `merge_group`, so a queue and a blocking required `CodeQL` check are
-# mutually exclusive (see `codeql-1537-revisit-watch.yml:3-8`, and the kill-switch
-# record on the `merge_queue REVERTED` comment below). `rules` therefore holds
+# context on `merge_group` in ANY setup mode, so a queue and a blocking required
+# `CodeQL` check are mutually exclusive (see the `codeql-action#1537` note in
+# codeql-1537-revisit-watch.yml, and the kill-switch record on the
+# `Merge queue REVERTED` comment below). `rules` therefore holds
 # exactly ONE rule type today. Any code/probe that reads the
 # required-status-checks rule MUST still select by type
 # (`select(.type=="required_status_checks")`), never a positional `.rules[0]` —
@@ -209,9 +210,17 @@ resource "github_repository_ruleset" "ci_required" {
     # PRs — #5808/#5794/#5798 — were stuck). All 15 OTHER required contexts DID
     # report on the temp ref, so PR-1's `merge_group` wiring is correct; the
     # gap is CodeQL-on-`merge_group` only. Reverting to direct-merge restores
-    # CodeQL coverage (it runs on `pull_request`). Re-adopt the queue ONLY
-    # after CodeQL is converted to *advanced* setup (a `codeql.yml` workflow
-    # with an `on: merge_group` trigger) so the `CodeQL` context posts on the
-    # temp ref. Tracked in #5780; see the PIR + ADR-032 amendment.
+    # CodeQL coverage (it runs on `pull_request`).
+    #
+    # DO NOT re-adopt the queue by "converting CodeQL to advanced setup". This
+    # comment said exactly that until #6446's review; it is FALSE and following
+    # it re-creates the deadlock this kill-switch exists for. The PIR is the
+    # authority: "CodeQL does not report a status on `merge_group` in ANY setup
+    # mode, so advanced setup does not fix it. The queue and a blocking required
+    # CodeQL check are mutually exclusive; decision is to keep CodeQL required
+    # and not adopt the queue." (codeql-action#1537, open since 2023 — the
+    # `codeql-1537-revisit-watch` workflow polls it.) Re-adoption is unblocked
+    # only if upstream ships `merge_group` status reporting. Tracked in #5780;
+    # see the PIR + ADR-032 amendment.
   }
 }

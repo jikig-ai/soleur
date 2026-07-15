@@ -303,6 +303,16 @@ body = "\n".join(L[1:-1]) if (L and L[0].lstrip().startswith("<<")) else "\n".jo
 yaml.safe_load(body)
 PY
   }
+  # --- #6446: the raw-source step must not come back ---
+  # This IS the guard infra-validation.yml's comment points at. Without it, "Do not
+  # restore this step" was a promise with no enforcement — and the comment claimed a
+  # check that did not exist, which is precisely the false-claim class this batch fixes.
+  # Anchored on `run:` so this test's own prose (and the workflow's explanatory comment)
+  # cannot satisfy it — a bare-literal grep would match the comments and false-PASS.
+  INFRA_VALIDATION_WF="$SCRIPT_DIR/../../../.github/workflows/infra-validation.yml"
+  assert "infra-validation.yml does not schema-check the raw templatefile source (#6446)" \
+    "! grep -qE '^[[:space:]]*(run:|-)?[[:space:]]*cloud-init schema -c cloud-init\.yml' '$INFRA_VALIDATION_WF'"
+
   # --- #6446: cloud-init schema on the RENDERED doc ---
   # infra-validation.yml used to run `cloud-init schema -c cloud-init.yml` against the RAW
   # templatefile() source. That is structurally incapable: the file is a Terraform template,
@@ -330,8 +340,19 @@ PY
   HAVE_CLOUD_INIT=0
   if command -v cloud-init >/dev/null 2>&1; then
     HAVE_CLOUD_INIT=1
+  elif [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+    # In CI the binary is installed by deploy-script-tests, so its absence means that
+    # wiring regressed — FAIL loudly rather than SKIP. A bare SKIP false-greens here:
+    # proven by masking cloud-init off PATH with CI=true, which exited 0 ("50/50 passed,
+    # OK") with the 3 schema asserts silently gone. "Visible in a green advisory job's
+    # log" is not visible. That is #6446's own failure mode — coverage that isn't there —
+    # reintroduced with a longer fuse, so this arm IS the drift guard for the install step.
+    # Mirrors the AC6 tag-reachability precedent above.
+    assert "cloud-init installed in CI (rendered-schema guard must not silently disarm)" "false"
+    echo "        cloud-init absent in a CI run — verify the 'Install cloud-init' step on"
+    echo "        deploy-script-tests in .github/workflows/infra-validation.yml."
   else
-    echo "  SKIP: cloud-init not installed (rendered-schema checks skipped — CI's deploy-script-tests installs it)"
+    echo "  SKIP: cloud-init not installed locally (rendered-schema checks skipped — CI installs it and FAILs if absent)"
   fi
 
   # false (bool) and "false" (string, the rollback route) must BOTH gate off.
