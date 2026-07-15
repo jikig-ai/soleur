@@ -119,12 +119,26 @@ never been runnable.
   snapshot as cover. **If something breaks and the cause is unclear, suspect this
   first and rebuild from `408787015`.**
 
-**G3 is blocked on the operator and cannot be automated** — verified, not assumed:
-`GET /v1/limits` → 404 (no API); **no Hetzner Console credentials exist in Doppler**
-(only `HCLOUD_TOKEN`, an API token); Console is OAuth + MFA + probable Turnstile; no
-precedent for infra-provider console automation. Console → Limits → "Request change →
-Limit increase", ask **server limit → 10**, and raise the **volume** limit in the same
-form (separate counter).
+**G3 — REQUESTED by the operator 2026-07-15. Pending Hetzner review (vendor-side, days).**
+
+It was verified operator-only by a real attempt, not assumed: `console.hetzner.cloud`
+301s to `console.hetzner.com`, and `accounts.hetzner.com/login` redirects to **`/_ray/pow`
+returning HTTP 429** — a proof-of-work anti-bot gate that rate-limits a non-browser client
+before a login form ever renders. Compounding it: `GET /v1/limits` → **404** (no API to
+read or raise a quota), **no Hetzner Console credentials exist in Doppler** (only
+`HCLOUD_TOKEN`, an API token that cannot reach the limits form), and the persistent
+playwright-mcp profile holds 65 domains — Cloudflare, Better Stack, Sentry, Resend, GitHub,
+Google — and **zero Hetzner**, so there was no session to reuse.
+
+**Detection of approval is impossible by construction, and that is stated rather than
+papered over.** `/v1/limits` re-probed post-request: still 404. No follow-through can be
+enrolled (no signal to read); `action-required` has no sweeper. The fleet is at **4**, so
+the only empirical test is a create that would exceed 5 — which for the CX line would
+currently fail on *stock* anyway, confounding the signal. **The raise is therefore
+consumer-discovered:** whoever next needs an additive host finds out then, via a clean
+non-destructive `resource_limit_exceeded`. Acceptable because the stock preflight means a
+*recreate* never depended on the cap — the raise only buys back the additive/probe-host
+option (#6416's gap).
 
 ## Acceptance Criteria
 
@@ -133,7 +147,7 @@ form (separate counter).
 - [ ] `expenses.md` has no `active` rows for non-existent resources (git-data `:14-16`
       → `approved-not-billing`); web-2 `:17-19` reads fsn1
 - [ ] `AGENTS.core.md:26` names the no-rollback danger; rule id unchanged
-- [ ] Server limit raised (or the request filed and tracked)
+- [x] Server limit raise **requested** 2026-07-15 (operator; Console PoW-gated — evidence in G3 above). Approval is **not** verifiable by API (`/v1/limits` 404) — consumer-discovered at the next additive create.
 - [ ] Residency validation covers `var.location` + `var.registry_location`
 - [ ] Stock preflight shipped **or** explicitly dropped with the API finding recorded
 
