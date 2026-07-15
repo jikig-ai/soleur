@@ -29,6 +29,48 @@ revision: v2 (post 6-agent plan-review — see ## Plan-Review Consolidation)
 > **Lane note:** no spec.md existed on this branch at plan time, so `lane:` defaulted to
 > `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-15 · **Agents used:** `Explore`, `learnings-researcher`, `cto` (research);
+`dhh`, `kieran`, `code-simplicity`, `architecture-strategist`, `spec-flow-analyzer`, `cpo` (review);
+a `sonnet` verify-the-negative sweep (Phase 4.45).
+
+### Gates run
+
+| Gate | Result |
+| --- | --- |
+| **4.5** Network-Outage Deep-Dive | **Fired** (`unreachable`) → `## Network-Outage Deep-Dive` added; all four L3→L7 layers carry artifacts; **no gap to close**. Telemetry emitted. |
+| **4.55** Downtime & Cutover | **Fired** (AC14 `-replace`s a running `hcloud_server`) → **was a real gap**; `## Downtime & Cutover` added. Telemetry emitted. |
+| **4.6** User-Brand Impact | Pass — section present, threshold `single-user incident`, re-grounded per CPO C1. |
+| **4.7** Observability 5-field | Pass — all 5 fields present, non-placeholder; `discoverability_test.command` is **ssh-free**. |
+| **4.8** PAT-shaped variable | Pass — no PAT-shaped vars/literals. |
+| **4.9** UI wireframe | **Skipped** — zero UI-surface files in Files to Edit/Create (the lone glob hit is prose *explaining* their absence). |
+
+### Key improvements over v1
+
+1. **Netplan converge path deleted** — both panels fired on it; the reboot is the sole primitive and the
+   only one verified in production. R3(MTU) + R5 + Phase 0.1–0.3 dissolve. (~-60/-75 guard LOC.)
+2. **L3 deferred** — v1's precedent claim was **false** (`apply-web-platform-infra.yml:2198-2206`: the
+   probe cron is *"unbuilt"*); its `paused` flip was a **Terraform no-op** (`ignore_changes=[paused]`),
+   so L3 would have shipped **inert behind a green AC**.
+3. **`last_err` → `zot_last_err`** — the lib strips a **literal**; v1's spoof guard never fired.
+4. **The emit→human leg is now asserted** — v1 edited the alarm and tested none of it; the
+   `PRODUCER_SILENT` branch is keyed on `SOLEUR_ZOT_DISK`, so a dead NIC guard read **GREEN**.
+5. **`network.tf:60` single-sourced** — `10.0.1.30` was dual-sourced; drift would **reboot a healthy
+   host** (the new R3, and the real highest-severity risk — v1 mis-ranked R2).
+
+### New considerations discovered
+
+- **The registry is off the user-serving path** (`model.c4:260`, `:380`) — the replace is
+  zero-downtime *by construction* via the atomic GHCR fallback. **But #6400's fallback was itself
+  degraded**, which is why that outage escalated → a **fallback-health precondition** now gates AC14.
+- **A pre-existing latent bug** (`runcmd` never re-runs on reboot ⇒ only `nofail` mounts the store)
+  is fixed in 2 lines; it was reachable from *any* reboot cause, not just this plan's.
+- **Verify-the-negative sweep: 12/12 CONFIRMS** (no Sentry emitter on the registry; no `crypttab`
+  repo-wide; `ZOT_HEARTBEAT_URL` zero code consumers; no glob auto-discovery in `infra-validation.yml`;
+  no SSH provisioner on the registry; the `sed` literal). One citation drift found and fixed
+  (`variables.tf:298` → `:301`, the `default = false` line).
+
 ## Overview
 
 The 2026-07-14 zot outage (#6400): the registry host booted **without its private NIC**.
@@ -476,7 +518,64 @@ and no guard-suite sweep is owed (AC12 asserts the gate still passes).
 No new vendor resource. **No `betteruptime_heartbeat` added or unpaused** ⇒
 `heartbeat-reprovision-parity.test.ts` stays green **untouched** (v1's AC7 manifest-reconcile obligation
 disappears with L3). Recorded for the L3 follow-up: `betterstack_paid_tier` defaults **false**
-(`variables.tf:298`) ⇒ `policy_id = null` ⇒ **email-only, no escalation** (`architecture` P2).
+(`variables.tf:301`) ⇒ `policy_id = null` ⇒ **email-only, no escalation** (`architecture` P2).
+
+## Downtime & Cutover
+
+*(deepen-plan Phase 4.55 — fires because AC14 `-replace`s a running `hcloud_server`, the
+infra-reboot/replace class. Zero-downtime-first is the default; residual downtime needs a
+justification + a bounded window.)*
+
+**Offline-inducing operation:** `registry-host-replace` destroys and recreates
+`hcloud_server.registry` (the cloud-init `user_data` edit is `ForceNew`). **Surface affected: the
+image-pull path — NOT the user-serving path.**
+
+**Zero-downtime evaluation (the default, and it holds here — verified, not assumed):**
+
+| Question | Verified answer |
+| --- | --- |
+| Is the registry on the **user serving** path? | **No.** `model.c4:260` — zot "replaces GHCR on the **pull path**". Web serving is unaffected by a registry outage; no user request touches `10.0.1.30`. |
+| What happens to the **deploy** path during the window? | **Atomic fallback, not an outage.** `model.c4:380`: `hetzner -> ghcr` *"Atomic fallback pull when zot is unconfigured/unreachable — dual-pushed + break-glass through the Phase-5 soak"*. `ci-deploy.sh:80`: an empty `ZOT_REGISTRY_URL` ⇒ zot disabled ⇒ pulls fall through to GHCR. `apply-web-platform-infra.yml:1837` states it outright: *"pulls fall through to GHCR meanwhile"*. |
+| Is the store lost / does it need a re-fill? | **No.** `registry-host-replace` *"preserves the zot storage volume"* (only `user_data` is ForceNew); the gate enforces `store_destroyed==0` (`registry-host-replace-gate.sh:44`). |
+| Blue-green instead? | **Evaluated and rejected as disproportionate.** A blue-green registry would need a second host **and** a re-pointing of `10.0.1.30` — but that private IP *is* the stable contract: `hcloud_server_network.registry` pins it, `local.registry_endpoint` bakes it into the web hosts' `insecure-registries` docker config (`server.tf:608`), and `tunnel.tf:47` targets `tcp://10.0.1.30:5000`. Moving it is itself a multi-surface cutover — strictly more risk than a ~2–5 min fallback window on a path that already has an atomic fallback. The store volume also cannot attach to two servers at once. |
+
+**Verdict: zero user-facing serving downtime by construction.** The residual is a ~2–5 min window in
+which a deploy landing concurrently pulls from **GHCR instead of zot** — *slower, not broken*. No
+maintenance window or operator sign-off is owed for the serving surface, because it is not touched.
+
+**Precondition (load-bearing — the #6400 compounding factor).** The fallback's atomicity is what makes
+this zero-downtime, and **in #6400 the GHCR fallback was itself degraded** (`image_pull_failed`, prod
+pinned to `0.213.2`) — which is precisely why the registry outage escalated. So the replace is only
+zero-downtime **if the fallback is healthy at that moment**:
+
+- **Before firing AC14, verify the GHCR fallback path is green** (a recent successful deploy, or a
+  GHCR pull of the current digest). If the fallback is degraded, the replace window becomes a **real
+  deploy outage with no path** — defer the replace until the fallback is restored.
+- This is a **read-only precondition**, no new tooling: the deploy pipeline's own recent success is
+  the artifact.
+
+**Rollback:** none in-place (ForceNew, no-SSH). Recovery is revert → merge → re-dispatch (AC15's
+`nic_ok=false` branch). The store volume survives every arm of this.
+
+## Network-Outage Deep-Dive
+
+*(deepen-plan Phase 4.5 — fires on `unreachable`. Layer-by-layer verification status; the full
+hypothesis set with artifacts is in `## Hypotheses`.)*
+
+| Layer | Status | Artifact |
+| --- | --- | --- |
+| **L3 — firewall allow-list** | **Verified, not implicated** | The registry firewall filters the **public** interface only; intra-`hcloud_network` `10.0.1.0/24` traffic is **open by membership and needs no allow rule** (`zot-registry.tf:312-313`). A firewall rule cannot produce "host holds no `10.0.1.30`". Distinct from the #2681 admin-IP-drift class: no operator egress IP is involved — both endpoints are inside the private net. |
+| **L3 — DNS / routing** | **Verified, N/A by construction** | No DNS resolution participates; consumers target the **literal** `10.0.1.30` (`zot-registry.tf:40`, `tunnel.tf:47`, `server.tf:608`). The missing **address/route on the guest** *is* the fault (L3), not a resolution error. |
+| **L7 — TLS / proxy** | **Verified, not implicated** | zot is **plain HTTP** on the private net (`zot-registry.tf:31`); the cloudflared ingress rule (`tunnel.tf:45-47`) targets `tcp://10.0.1.30:5000` and was **unchanged** across the incident. The target address was correct — the address did not exist on any host. |
+| **L7 — application (zot)** | **Verified, explicitly excluded** | #6400 records zot "running fine, `:5000`". Structurally confirmed: binds `0.0.0.0:5000` (`:375`); readiness polls `localhost:5000` (`:379-382`) — **both succeed on a NIC-less host**. This is *why* the outage presented as "zot mysteriously down". |
+
+**Ordering discipline honored:** the fault is **L3** and every L7 hypothesis is excluded with an
+artifact — the inverse of the #2654 malformed shape. **No gap needs closing before implementation.**
+
+**The distinguisher this class turns on** (from `2026-07-07-immutable-redeploy.md` Sharp edge 2, and
+the reason "zot is down" was the wrong first hypothesis): **a down container gives connection
+*refused*; an unconfigured NIC gives *timeout* + ping loss.** The plan's guard makes this
+determination unnecessary next time — `SOLEUR_PRIVATE_NIC` answers it directly.
 
 ## Observability
 
@@ -651,7 +750,7 @@ Each needs a GitHub issue **in the same PR** (what, why, re-evaluation criteria,
    via the Better Stack API (already called at `apply-web-platform-infra.yml:1803`); the **cadence
    mismatch** — `period=60/grace=30` needs a ping ≤90s vs a **60s cron floor** + 2 HTTP round trips ⇒
    flapping (widening `period` is a TF change the parity manifest asserts); and
-   `betterstack_paid_tier=false` ⇒ **email-only, no escalation** (`variables.tf:298`).
+   `betterstack_paid_tier=false` ⇒ **email-only, no escalation** (`variables.tf:301`).
 2. **Generalize the guard to git-data + inngest.** **Blocked** on a reboot-safe LUKS unlock for
    git-data (see the ADR-113 normative blocker).
 3. **Web hosts (`10.0.1.10/.11`).** They share the race **and the silent-failure property** —

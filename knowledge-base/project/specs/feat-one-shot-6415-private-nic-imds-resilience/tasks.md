@@ -138,7 +138,7 @@ is **deferred** — see `decision-challenges.md` UC-1.
       manifest in the same PR, **or** arm via the Better Stack API — already called at
       `apply-web-platform-infra.yml:1803`); the **cadence mismatch** (`period=60/grace=30` needs a ping
       ≤90s vs a 60s cron floor + 2 round trips ⇒ flapping); `betterstack_paid_tier=false` ⇒
-      **email-only, no escalation** (`variables.tf:298`).
+      **email-only, no escalation** (`variables.tf:301`).
 - [ ] **6.2** **Generalize to git-data + inngest** — blocked on a reboot-safe LUKS unlock.
 - [ ] **6.3** **Web hosts (`10.0.1.10/.11`)** — they share the race **and** the silent-failure property
       (`model.c4:380` GHCR atomic fallback ⇒ deploys keep working ⇒ identical 14-day shape). Needs the
