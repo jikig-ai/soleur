@@ -62,13 +62,34 @@ def triggers(wf):
 def paths(wf):
     return (triggers(wf).get("push") or {}).get("paths") or []
 
-def step_env(wf, key):
+def env_values(wf, key):
+    """EVERY declaration of `key` — workflow-, job-, and step-level.
+
+    Deliberately NOT "the first match". PROJECT_REF used to be declared TWICE (the
+    apply step and the probe step) and the old first-match step_env() only ever
+    inspected the apply step's copy: the probe step's ref — which aims a
+    deliberately destructive anon DELETE/INSERT and has NO identity preflight of
+    its own — was asserted by nothing. dev_no_prd_ref caught drift to the Inngest
+    prd ref only; drift to ifsccnjhymdmidffkzhl (the APP prd project) or any other
+    ref passed silently.
+    """
+    out = []
+    if key in (wf.get("env") or {}):
+        out.append(str(wf["env"][key]))
     for job in (wf.get("jobs") or {}).values():
+        if key in (job.get("env") or {}):
+            out.append(str(job["env"][key]))
         for step in (job.get("steps") or []):
             env = step.get("env") or {}
             if key in env:
-                return str(env[key])
-    return ""
+                out.append(str(env[key]))
+    return out
+
+def env_all_eq(wf, key, literal):
+    # `vals and ...` is load-bearing: all([]) is True, so a key that vanished
+    # entirely would PASS vacuously.
+    vals = env_values(wf, key)
+    return bool(vals) and all(v == literal for v in vals)
 
 def all_run_text(wf):
     out = []
@@ -112,16 +133,25 @@ checks = {
     "dev_no_wildcard_glob":   not any(p.rstrip("/").endswith("**") for p in paths(dev)),
 
     # --- Project pinning: literal refs, never interpolated ---
-    "dev_ref_pinned":         step_env(dev, "PROJECT_REF") == "mlwiodleouzwniehynfz",
-    "prd_ref_pinned":         step_env(prd, "PROJECT_REF") == "pigsfuxruiopinouvjwy",
-    "dev_ref_not_interp":     "${{" not in step_env(dev, "PROJECT_REF"),
+    # EVERY declaration must equal the literal, not merely the first one.
+    "dev_ref_pinned":         env_all_eq(dev, "PROJECT_REF", "mlwiodleouzwniehynfz"),
+    "prd_ref_pinned":         env_all_eq(prd, "PROJECT_REF", "pigsfuxruiopinouvjwy"),
+    "dev_ref_not_interp":     bool(env_values(dev, "PROJECT_REF")) and
+                              all("${{" not in v for v in env_values(dev, "PROJECT_REF")),
+    # Belt-and-braces after env_all_eq: catches the ref appearing anywhere at all,
+    # including in a `run:` body where no env key would surface it.
     "dev_no_prd_ref":         "pigsfuxruiopinouvjwy" not in open(sys.argv[2]).read(),
+    # The APP prd project. env_all_eq already pins every PROJECT_REF declaration;
+    # this asserts the co-tenanted app's ref is not named anywhere in the file.
+    "dev_no_app_prd_ref":     "ifsccnjhymdmidffkzhl" not in open(sys.argv[2]).read(),
     "dev_no_0001":            "0001_enable_rls_lockdown" not in open(sys.argv[2]).read(),
-    "dev_applies_0002":       "0002_dev_inngest_tables_lockdown.sql" in step_env(dev, "SQL_FILE"),
+    "dev_applies_0002":       bool(env_values(dev, "SQL_FILE")) and
+                              all("0002_dev_inngest_tables_lockdown.sql" in v
+                                  for v in env_values(dev, "SQL_FILE")),
 
     # --- Identity preflight (the PRIMARY project guard) ---
-    "dev_identity_name":      step_env(dev, "PROJECT_NAME") == "soleur-dev",
-    "prd_identity_name":      step_env(prd, "PROJECT_NAME") == "soleur-inngest-prd",
+    "dev_identity_name":      env_all_eq(dev, "PROJECT_NAME", "soleur-dev"),
+    "prd_identity_name":      env_all_eq(prd, "PROJECT_NAME", "soleur-inngest-prd"),
     "dev_identity_call":      "/v1/projects/" in dev_run and "identity_mismatch" in dev_run,
     "prd_identity_call":      "/v1/projects/" in prd_run and "identity_mismatch" in prd_run,
 
@@ -144,9 +174,14 @@ checks = {
     "killswitch_differs":     "[skip-inngest-rls-dev-apply]" in str(dev),
 
     # --- Probe wiring + supply chain ---
+    # `uses_list(wf) and ...` is load-bearing: all([]) is True, so stripping every
+    # `uses:` from a workflow made this PASS vacuously (GREEN 37/0, mutation-proven
+    # 2026-07-15). Both workflows check out the repo, so an empty list is itself a defect.
     "dev_runs_probe":         "anon-probe.sh" in dev_run,
-    "dev_uses_sha_pinned":    all(("@" in u and len(u.split("@")[1].split()[0]) == 40) for u in uses_list(dev)),
-    "prd_uses_sha_pinned":    all(("@" in u and len(u.split("@")[1].split()[0]) == 40) for u in uses_list(prd)),
+    "dev_uses_sha_pinned":    bool(uses_list(dev)) and
+                              all(("@" in u and len(u.split("@")[1].split()[0]) == 40) for u in uses_list(dev)),
+    "prd_uses_sha_pinned":    bool(uses_list(prd)) and
+                              all(("@" in u and len(u.split("@")[1].split()[0]) == 40) for u in uses_list(prd)),
 }
 print("yes" if checks[sys.argv[3]] else "no")
 PY
@@ -168,7 +203,8 @@ assert "dev paths carry no '**' wildcard" "[[ $(probe dev_no_wildcard_glob) == y
 assert "dev PROJECT_REF is the pinned soleur-dev literal" "[[ $(probe dev_ref_pinned) == yes ]]"
 assert "prd PROJECT_REF is the pinned soleur-inngest-prd literal" "[[ $(probe prd_ref_pinned) == yes ]]"
 assert "dev PROJECT_REF is not interpolated from event/input" "[[ $(probe dev_ref_not_interp) == yes ]]"
-assert "dev workflow never names the prd project ref" "[[ $(probe dev_no_prd_ref) == yes ]]"
+assert "dev workflow never names the Inngest-prd project ref" "[[ $(probe dev_no_prd_ref) == yes ]]"
+assert "dev workflow never names the APP-prd project ref (ifsccnjhymdmidffkzhl)" "[[ $(probe dev_no_app_prd_ref) == yes ]]"
 assert "dev workflow never applies 0001" "[[ $(probe dev_no_0001) == yes ]]"
 assert "dev workflow applies 0002" "[[ $(probe dev_applies_0002) == yes ]]"
 

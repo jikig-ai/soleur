@@ -66,6 +66,18 @@ jobs:
     # DISTINCT kill-switch token from the prd workflow's [skip-inngest-rls-apply] —
     # a shared token would disable BOTH lockdowns with one commit message.
     if: ${{ !contains(github.event.head_commit.message, '[skip-inngest-rls-dev-apply]') }}
+    env:
+      # Pinned literal — the CO-TENANTED dev project. NEVER interpolated from
+      # github.event.* or inputs.*.
+      #
+      # Declared ONCE, at JOB level, deliberately. It used to be declared per-step
+      # (apply + probe), and the shape guard's step_env() returned only the FIRST
+      # match — so the probe step's copy was asserted by NOTHING. A drift there
+      # would have pointed a deliberately destructive anon DELETE/INSERT at an
+      # unintended project, and the probe step has no identity preflight of its own.
+      # One declaration = one thing to drift, and the guard now asserts EVERY
+      # occurrence anyway (apply-inngest-rls-dev-workflow.test.sh: env_all_eq).
+      PROJECT_REF: mlwiodleouzwniehynfz
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -73,8 +85,7 @@ jobs:
         id: apply
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          # Pinned literal — the CO-TENANTED dev project. NEVER interpolated.
-          PROJECT_REF: mlwiodleouzwniehynfz
+          # PROJECT_REF is inherited from the job-level env above (declared once).
           PROJECT_NAME: soleur-dev
           SQL_FILE: apps/web-platform/infra/inngest-rls/0002_dev_inngest_tables_lockdown.sql
         run: |
@@ -254,7 +265,9 @@ jobs:
       - name: Probe the anon client path (PostgREST)
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          PROJECT_REF: mlwiodleouzwniehynfz
+          # PROJECT_REF is inherited from the job-level env (declared once) — this
+          # step fires a deliberately destructive anon DELETE/INSERT and has no
+          # identity preflight of its own, so it must never carry a second copy.
         run: bash apps/web-platform/infra/inngest-rls/anon-probe.sh
 
       - name: File or comment tracking issue (failure)
