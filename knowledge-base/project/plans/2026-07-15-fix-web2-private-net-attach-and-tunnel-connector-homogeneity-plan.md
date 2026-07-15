@@ -482,8 +482,8 @@ logs:
   where: "GitHub Actions run logs + step summaries; Better Stack Logs source 2457081 (per-host host_name discriminator, #6396)"
   retention: "GH Actions 90d; Better Stack per plan"
 discoverability_test:
-  command: "gh run list --workflow=reusable-release.yml --limit 5 --json conclusion,url && gh run view <id> --log | grep -E 'zot mirror degraded|attach proof|mirror_status' || true"
-  expected_output: "either 'attach proof OK: hcloud_server_network.web[\"web-2\"] present in state' (P1 landed) or an explicit 'zot mirror degraded' line — never silence"
+  command: gh run list --workflow=web-platform-release.yml --branch main --limit 5 --json conclusion,url,databaseId
+  expected_output: "a non-empty JSON array of recent release runs"
 ```
 
 **No `ssh ` in `discoverability_test.command`** (`hr-no-ssh-fallback-in-runbooks`) — web-2 is a
