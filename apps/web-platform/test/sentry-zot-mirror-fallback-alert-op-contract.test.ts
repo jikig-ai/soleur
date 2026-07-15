@@ -24,6 +24,96 @@ const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
 const ciDeploy = readFileSync(join(here, "../infra/ci-deploy.sh"), "utf8");
 const cloudInit = readFileSync(join(here, "../infra/cloud-init.yml"), "utf8");
+// Repo root is three levels up from apps/web-platform/test (precedent: the
+// apply-sentry-infra.yml read in the last leg of this file).
+const soak = readFileSync(
+  join(here, "../../../scripts/followthroughs/zot-soak-6122.sh"),
+  "utf8",
+);
+
+// --- Derived extraction: the alarm's watched signal set -----------------------
+//
+// Scoped to the `filters_v2 = [ ... ]` block, NOT the whole resource block. A
+// value-only regex over the resource returns the right four today only
+// INCIDENTALLY (event_frequency's `value = 0` is unquoted and actions_v2 uses
+// `target_type`), and would over-collect the first time a quoted filter of any
+// other kind is added — which is how a test gets deleted instead of fixed.
+function alarmFilterSet(): Set<string> {
+  const start = tf.indexOf('resource "sentry_issue_alert" "zot_mirror_fallback_rate"');
+  if (start === -1) throw new Error("zot_mirror_fallback_rate resource not found in issue-alerts.tf");
+  const resource = tf.slice(start);
+  const filtersStart = resource.indexOf("filters_v2 = [");
+  if (filtersStart === -1) throw new Error("filters_v2 block not found on zot_mirror_fallback_rate");
+  // Indentation-tolerant for the same reason as soakFailQueries: a hard-coded "\n  ]" is
+  // coupled to `terraform fmt`'s current two-space output. A reindent would not return -1 —
+  // it would find the NEXT column-2 `]` (actions_v2's), silently widening the block. Harmless
+  // only by luck today (actions_v2 holds no tagged_event); a future quoted filter there would
+  // over-collect into the watched set and make this parity assertion noise.
+  const filtersRest = resource.slice(filtersStart);
+  const filtersEnd = filtersRest.search(/\n[ \t]*\]/);
+  if (filtersEnd === -1) throw new Error("filters_v2 block is not closed");
+  const block = filtersRest.slice(0, filtersEnd);
+  const set = new Set<string>();
+  const re = /tagged_event\s*=\s*\{[^}]*?key\s*=\s*"([^"]+)"[^}]*?value\s*=\s*"([^"]+)"[^}]*?\}/g;
+  for (const m of block.matchAll(re)) set.add(`${m[1]}:${m[2]}`);
+  return set;
+}
+
+// --- Derived extraction: the soak's FAIL set ---------------------------------
+//
+// Parses the `declare -A FAIL_QUERIES=( ... )` block.
+//
+// What actually excludes the script's header prose is the REGEX SHAPE below
+// (`[key]='...'`), not the block scoping — the header names all four signal
+// literals, but in prose that the regex cannot match, so a whole-file scope
+// would yield 0 and go RED, not vacuously green. (An earlier version of this
+// comment claimed the opposite, and also claimed "a comment cannot live inside
+// the array" — bash accepts comments inside an array assignment. Both were
+// wrong, and crediting the scoping for safety it does not provide is what made
+// a fragile scope implementation look adequate.)
+//
+// The block scoping's real and load-bearing job is excluding SIBLING ARRAYS:
+// a `WARN_QUERIES` next door must not be counted as part of the FAIL set, or
+// this test reports coverage the script's summing loop does not have.
+function soakFailQueries(): Map<string, string> {
+  const start = soak.indexOf("declare -A FAIL_QUERIES=(");
+  // Fail LOUD on a missing/renamed block rather than silently widening. `indexOf` returns -1
+  // when the anchor moves (e.g. the closing paren gets indented), and `slice(start, -1)` would
+  // then scope the "array block" to nearly the whole FILE — where the header prose names all
+  // four signal literals, so the extraction could pass while the array is gone. That is the
+  // vacuity this test exists to prevent, so it must not be reachable through the test itself.
+  if (start === -1) throw new Error("FAIL_QUERIES array block not found in zot-soak-6122.sh");
+  // Stop at the FIRST closing paren at any indentation. A literal indexOf("\n)") does NOT
+  // merely risk -1 — if FAIL_QUERIES' own paren is indented, it SKIPS PAST IT and lands on
+  // the next column-0 paren, i.e. a SIBLING array's. The block then swallows both arrays and
+  // this test reports all four signals while the script's loop sums only the ones actually in
+  // FAIL_QUERIES. That is #6435 reintroduced THROUGH ITS OWN REGRESSION TEST, green all the
+  // way. Verified: the indexOf form extracts 4 from a 2-entry FAIL_QUERIES + 2-entry sibling.
+  const rest = soak.slice(start);
+  const end = rest.search(/\n[ \t]*\)/);
+  if (end === -1) throw new Error("FAIL_QUERIES array block is not closed");
+  const block = rest.slice(0, end);
+  const out = new Map<string, string>();
+  for (const m of block.matchAll(/^\s*\[[a-z_]+\]='([^']+)'/gm)) {
+    const query = m[1];
+    // Exactly one tag in each query is quoted — the signal tag. feature:supply-chain
+    // and op:image-pull are bare, so this projection cannot pick them up.
+    const sig = query.match(/([a-z_]+):"([^"]+)"/);
+    if (sig) out.set(sig[2], query);
+  }
+  return out;
+}
+
+function soakFailSet(): Set<string> {
+  const set = new Set<string>();
+  for (const [, query] of soakFailQueries()) {
+    const m = query.match(/([a-z_]+):"([^"]+)"/);
+    if (m) set.add(`${m[1]}:${m[2]}`);
+  }
+  return set;
+}
+
+const soakQueryFor = (signal: string) => soakFailQueries().get(signal);
 
 describe("zot-mirror-fallback-rate alert op contract", () => {
   it("ci-deploy.sh emits the supply-chain image-pull tags + both registry values", () => {
@@ -36,6 +126,25 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     // and `registry: "zot-gate-degraded"` (the jq tag literal) are emit-only.
     expect(ciDeploy).toContain("registry_pull_event ghcr-fallback");
     expect(ciDeploy).toContain(`registry: "zot-gate-degraded"`);
+  });
+
+  // The soak's bare `stage:"..."` queries depend on the TAG KEY being literally `stage` in
+  // both boot emitters. Nothing else pins that key: the legs below pin each emit CALL form and
+  // the parity legs pin the query STRING, so renaming the key (stage -> boot_stage) while
+  // keeping the value literal leaves every other assertion GREEN — and the soak's stage:
+  // queries then match zero events FOREVER.
+  //
+  // That is a silent false-PASS route on an irreversible action, and unlike the registry:
+  // queries there is no canary: registry: shares its feature/op prefix with the ZOT_WEB/
+  // ZOT_INNGEST sample queries, so a broken prefix drives the sample to 0 and FAILs the soak.
+  // The stage: queries have no such self-validation, so the key is pinned here instead.
+  it("both boot emitters tag with the literal key `stage` (the soak's bare stage: queries depend on it)", () => {
+    // cloud-init.yml `_emit` -> tags:{stage,image_ref,host_id,detail}; emits app_ghcr_fallback.
+    expect(cloudInit).toContain('"tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s"}');
+    // soleur-host-bootstrap.sh `soleur-boot-emit` -> tags:{stage,host_id,region}; emits
+    // inngest_ghcr_fallback. A separate emitter that happens to share the no-feature/op gap.
+    const bootstrap = readFileSync(join(here, "../infra/soleur-host-bootstrap.sh"), "utf8");
+    expect(bootstrap).toContain('"tags":{"stage":"%s","host_id":"%s","region":"cloud-init"}');
   });
 
   it("cloud-init.yml emits both fresh-boot fallback stages (inngest + app-image)", () => {
@@ -75,6 +184,58 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     // ruling avoided). IssueOwners→ActiveMembers reaches the solo founder.
     expect(scoped).toContain("IssueOwners");
     expect(scoped).toContain("ActiveMembers");
+  });
+
+  // --- Parity: the soak gate must count every signal the alarm watches -------
+  //
+  // #6435: zot-soak-6122.sh queried only 2 of the 4 signals in the alarm's filter
+  // set. registry:"zot-gate-degraded" and stage:"app_ghcr_fallback" were counted by
+  // NOTHING, so an intermittently-degraded fleet produced FALLBACKS=0 with a
+  // sufficient zot sample => PASS => GHCR retired (ADR-096 5.3-5.5, which rotates
+  // AND revokes the PAT — no rollback) while the fleet was intermittently GHCR-served.
+  //
+  // The alarm and the soak are the two consumers of the same four literals; the emit
+  // sites are pinned by the legs above. This leg makes the soak — the only unpinned
+  // consumer, and the one gating an irreversible action — drift-proof.
+  it("the soak gate's FAIL set equals the alarm's watched signal set (derived, both sides)", () => {
+    const alarm = alarmFilterSet();
+    // Guard against a vacuous pass if either extraction silently yields nothing.
+    expect(alarm.size).toBe(4);
+    expect(soakFailQueries().size).toBe(4);
+    // Derived equality on BOTH sides — deliberately no canonical list here. A
+    // WATCHED constant would be a third source of truth, not a parity test; this
+    // shape gives "a 5th signal added to the alarm breaks CI" for free.
+    expect(soakFailSet()).toEqual(alarm);
+  });
+
+  // The set-equality leg above projects each query down to its (key, value) pair,
+  // which STRUCTURALLY DISCARDS the query prefix — so it cannot catch a prefix that
+  // silently matches zero events forever. These four flat pins are the only thing
+  // that can. Keep them flat and duplicated: a loop over a table hides a missing
+  // entry, which is exactly how the 2-of-4 blindness survived review in the first
+  // place. Duplication beats cleverness in a pin.
+  //
+  // THE PREFIX ASYMMETRY IS DELIBERATE AND LOAD-BEARING:
+  //   ci-deploy.sh's jq payload carries feature+op, so the registry: queries are prefixed.
+  //   cloud-init.yml's _emit writes only {stage,image_ref,host_id,detail} — NO feature/op —
+  //   so the stage: queries MUST be bare. Sentry tag matching is exact: prefixing a
+  //   stage: query makes it match zero events FOREVER, silently restoring the very
+  //   blindness this PR removes. Proven live: stage:"bootstrap_complete" => 9 events,
+  //   feature:supply-chain op:image-pull stage:"bootstrap_complete" => 0.
+  it("pins the WHOLE query string for all four signals (the prefix trap)", () => {
+    expect(soakQueryFor("ghcr-fallback")).toBe(
+      'feature:supply-chain op:image-pull registry:"ghcr-fallback"',
+    );
+    expect(soakQueryFor("zot-gate-degraded")).toBe(
+      'feature:supply-chain op:image-pull registry:"zot-gate-degraded"',
+    );
+    // BARE — no feature/op. See the asymmetry note above.
+    expect(soakQueryFor("inngest_ghcr_fallback")).toBe(
+      'stage:"inngest_ghcr_fallback"',
+    );
+    expect(soakQueryFor("app_ghcr_fallback")).toBe(
+      'stage:"app_ghcr_fallback"',
+    );
   });
 
   it("the -target wiring guards that the apply workflow creates the rule", () => {
