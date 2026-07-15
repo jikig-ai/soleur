@@ -83,6 +83,56 @@ locals {
   host_scripts_content_hash = sha256(join("", sort([
     for f in local.host_script_files : filesha256("${path.module}/${f}")
   ])))
+
+  # #6416 — in-band wrong-host tripwire for the 12 web-1 SSH provisioners below.
+  #
+  # WHY THIS CANNOT BE PROVEN STATICALLY. Every `connection { host =
+  # hcloud_server.web["web-1"].ipv4_address }` below dials web-1's PUBLIC IP, and the CI
+  # bridge (.github/actions/cf-tunnel-ssh-bridge) installs
+  # `iptables -t nat -A OUTPUT -d "$SERVER_IP" --dport 22 -j REDIRECT` to hijack exactly
+  # that address into a local cloudflared listener. From there the ONE Cloudflare tunnel
+  # (tunnel.tf) picks a CONNECTOR REPLICA. Its `ssh.` ingress is `ssh://localhost:22`, and
+  # `localhost:` in a multi-replica tunnel does NOT mean "this host" — it means "whichever
+  # replica answered". With cloudflared running on BOTH web-1 and web-2 against that single
+  # tunnel, roughly half of these provisioner sessions can land on the WRONG host and
+  # silently apply web-1's host config there. A hostname in the ingress rule cannot fix
+  # this: the hostname selects the TUNNEL, then CF load-balances (ADR-113, normative
+  # anti-pattern). The deterministic-origin fix is tracked as ADR-113 I2.
+  #
+  # This assertion is therefore the ONLY runtime evidence that a run reached web-1: a
+  # tunnel.tf grep proves config SHAPE, never that a packet landed — that would have to
+  # hold across the CF edge, the Access policy, the bridge `--hostname`, and the NAT rule.
+  #
+  # PRICED TRADE-OFF: it converts a silent ~50% wrong-host WRITE into a loud ~50% apply
+  # FAILURE. That is a strict improvement — a red apply beats a green lie. If flakiness
+  # bites, the escape hatch is a bounded re-dial retry in the bridge (a new replica per
+  # attempt), which touches no .tf.
+  #
+  # FAIL-CLOSED BY CONSTRUCTION: this is its own provisioner, declared BEFORE the
+  # `file`/`remote-exec` provisioners that write, so a mismatch aborts before any bytes
+  # land on the wrong host (Terraform runs provisioners in declaration order). The `if`
+  # form is explicit rather than relying on errexit — Terraform joins `inline` into ONE
+  # script with NO implicit `set -e` and fails only on the LAST command's exit, so a
+  # `test … || …` probe would be errexit-exempt and decorative. A missing or empty
+  # `hostname` also trips it.
+  #
+  # Do NOT "fix" the connection blocks to dial 10.0.1.10 instead: the bridge's
+  # `-d "$SERVER_IP"` NAT rule would stop matching, the runner would blackhole RFC1918,
+  # and every provisioner would die — wedging main. See ADR-113 I2 candidate (a).
+  #
+  # The expected value MUST stay in lockstep with this file's own per-host discriminator
+  # (`host_name = each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"`).
+  # `set -e` first, matching every other remote-exec inline block in this file and
+  # keeping server-tf-set-e.test.sh's convention intact (that guard resolves this
+  # `inline = local.*` indirection explicitly). It is belt-and-braces here — the
+  # assertion below is the ONLY element, so the joined script's last command IS the
+  # `if`, and a mismatch exits 1 regardless — but it must stay: the moment anyone
+  # appends a second element, "fails only on the LAST command's exit" would silently
+  # make this assertion decorative. That is the exact #5089/#5101 trap.
+  web1_hostname_assert = [
+    "set -e",
+    "if [ \"$(hostname)\" != \"soleur-web-platform\" ]; then echo \"FATAL (#6416): SSH provisioner reached host '$(hostname)', expected 'soleur-web-platform'. The CF tunnel load-balanced this session onto the wrong connector replica, so web-1 host config was NOT applied here. Re-run the apply; if it recurs, see ADR-113 I2 (deterministic tunnel origin for host-specific routes).\" >&2; exit 1; fi",
+  ]
 }
 
 resource "hcloud_ssh_key" "default" {
@@ -241,6 +291,12 @@ resource "terraform_data" "disk_monitor_install" {
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
+  }
+
   provisioner "file" {
     source      = "${path.module}/disk-monitor.sh"
     destination = "/usr/local/bin/disk-monitor.sh"
@@ -279,6 +335,12 @@ resource "terraform_data" "resource_monitor_install" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
   }
 
   provisioner "file" {
@@ -323,6 +385,12 @@ resource "terraform_data" "container_restart_monitor_install" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
   }
 
   provisioner "file" {
@@ -370,6 +438,12 @@ resource "terraform_data" "fail2ban_tuning" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
   }
 
   # Ensure fail2ban is installed before dropping the jail.d override. The
@@ -450,6 +524,12 @@ resource "terraform_data" "journald_persistent" {
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
+  }
+
   # The drop-in dir does NOT exist by default on Ubuntu — systemd ships
   # /etc/systemd/journald.conf but not the journald.conf.d/ subdir, and the
   # `file` provisioner (scp) does not create remote parents. On the existing
@@ -523,6 +603,12 @@ resource "terraform_data" "cosign_trusted_root" {
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
+  }
+
   provisioner "remote-exec" {
     inline = [
       "set -e",
@@ -576,6 +662,12 @@ resource "terraform_data" "registry_insecure_config" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
   }
 
   provisioner "remote-exec" {
@@ -721,6 +813,12 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
   }
 
   # The two scripts are on-disk files → straight scp. hooks.json is NOT: it is a
@@ -977,6 +1075,12 @@ resource "terraform_data" "docker_seccomp_config" {
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
+  }
+
   provisioner "remote-exec" {
     inline = [
       "set -e",
@@ -1028,6 +1132,12 @@ resource "terraform_data" "apparmor_bwrap_profile" {
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
+  }
+
   provisioner "file" {
     source      = "${path.module}/apparmor-soleur-bwrap.profile"
     destination = "/etc/apparmor.d/soleur-bwrap"
@@ -1055,6 +1165,12 @@ resource "terraform_data" "orphan_reaper_install" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
   }
 
   provisioner "file" {
@@ -1113,6 +1229,12 @@ resource "terraform_data" "cron_egress_firewall" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  # #6416 — assert this session actually reached web-1 BEFORE anything is written.
+  # Must stay the FIRST provisioner in this block. See local.web1_hostname_assert.
+  provisioner "remote-exec" {
+    inline = local.web1_hostname_assert
   }
 
   # `file` (scp) does NOT create remote parents and /etc/soleur is not shipped
