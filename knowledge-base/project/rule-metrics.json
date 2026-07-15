@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-12T13:38:49Z",
+  "generated_at": "2026-07-15T09:11:44Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -627,6 +627,19 @@
       "rule_text_prefix": " → core"
     },
     {
+      "id": "hr-ssh-diagnosis-verify-firewall",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
       "id": "hr-tagged-build-workflow-needs-initial-tag-push",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -693,19 +706,6 @@
     },
     {
       "id": "hr-verify-repo-capability-claim-before-assert",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → core"
-    },
-    {
-      "id": "hr-weigh-every-decision-against-target-user-impact",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1277,7 +1277,7 @@
       "rule_text_prefix": " → core"
     },
     {
-      "id": "hr-ssh-diagnosis-verify-firewall",
+      "id": "hr-weigh-every-decision-against-target-user-impact",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1285,8 +1285,8 @@
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-12T12:06:13Z",
-      "first_seen": "2026-07-12T12:06:13Z",
+      "last_hit": "2026-07-15T08:53:25Z",
+      "first_seen": "2026-07-15T08:53:25Z",
       "rule_text_prefix": " → core"
     }
   ],
