@@ -363,5 +363,33 @@ if [[ "$st" == "OPEN" ]]; then
   exit 1
 fi
 
+# ⚠ CLOSED is not the same as FIXED — corroborate it against the code.
+#
+# The arm above reads issue STATE, so a careless close (closed-as-not-planned, backlog tidying,
+# a partial fix) would flip the gate toward exit 0 and authorize the revoke. An earlier draft
+# accepted that residual with prose, arguing a repo-local grep could only test the first half of
+# #6500's two-part close condition (zot-primary pull AND Sentry `stage:` reporting).
+#
+# That argument was FALSE, and #6500's own body refutes it: its evidence is the sweep
+# `zot|ZURL|ZIREF|/v2/|soleur-boot-emit` → 0 hits — and `soleur-boot-emit` IS the second half.
+# Both halves are greppable.
+#
+# So AND the two rather than replacing either: they fail in OPPOSITE directions. Issue-state
+# fails on a careless close but sees the world (e.g. whether the zot mirror is actually
+# populated — #6500's own "Caveat on the zot mirror"); the grep fails when the code looks right
+# but the mirror is empty, and cannot be closed by accident. Neither subsumes the other.
+INNGEST_CI="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)/apps/web-platform/infra/cloud-init-inngest.yml"
+if [[ ! -f "$INNGEST_CI" ]]; then
+  echo "TRANSIENT: cannot read $INNGEST_CI to corroborate #$BLOCKER's closure — refusing to authorize on issue state alone." >&2
+  exit 2
+fi
+# (a) a zot pull path exists at all, and (b) it reports on the Sentry `stage:` schema the
+# queries above depend on. Same terms as #6500's filed evidence, so the gate and the issue
+# cannot drift apart on what "fixed" means.
+if ! grep -qiE 'zot|ZURL|ZIREF|/v2/' "$INNGEST_CI" || ! grep -q 'soleur-boot-emit' "$INNGEST_CI"; then
+  echo "FAIL(blocker-closed-but-condition-unmet): #$BLOCKER is CLOSED, but $INNGEST_CI still shows no zot pull path and/or no soleur-boot-emit reporting — the 7th GHCR-served path is still open in the CODE. Closing the issue does not retire the path. Re-open #$BLOCKER or fix the host before 5.3."
+  exit 1
+fi
+
 echo "PASS: 0 ghcr-fallbacks, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each), $APP_ZOT zot-served fresh boot(s), and #$BLOCKER is CLOSED — since $START. zot-primary soak holds. Safe to retire GHCR (5.3-5.5) and flip ADR-096 accepted (5.6)."
 exit 0

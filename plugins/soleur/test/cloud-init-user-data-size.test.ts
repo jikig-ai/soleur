@@ -375,6 +375,26 @@ describe("cloud-init launcher contract (AC4/AC5/AC8)", () => {
   // #6462 AC1b — AC1's anchor is defeated the moment a comment quotes the emit call
   // verbatim (indexOf would silently return the comment's offset). Make that self-enforcing
   // rather than asking four paragraphs of prose not to do it.
+  // #6462 AC1c — pin WHICH REGISTRY EACH BRANCH REPORTS, not just where the line sits.
+  //
+  // AC1/AC1b pin the beacon's POSITION and the uniqueness of its anchors. Neither pins its
+  // SEMANTICS, and mutation testing proved the gap is real: inverting the discriminator
+  // (`=` → `!=`) passed ALL 39 tests across both files. That mutation is a FALSE-PASS ROUTE
+  // on the gate authorizing an irreversible PAT revoke — on an all-GHCR fleet it reports
+  // app_zot>0 / app_ghcr_served=0, so the denominator looks satisfied and the FAIL set stays
+  // silent, and only the independent MIN_SAMPLE arm still objects.
+  //
+  // The direction is the whole feature. After the pull loop:
+  //   REF == IMAGE_REF  ⟺  GHCR served it (the probe missed, OR the zot→GHCR flip reassigned
+  //                        REF="$IMAGE_REF")  → app_ghcr_served, `warning`, a FAIL signal
+  //   REF != IMAGE_REF  ⟺  zot served it (the zot branch prefixed "$ZURL/") → app_zot, `info`,
+  //                        the DENOMINATOR
+  // Pin the literal so `=`↔`!=` and a branch swap both go red.
+  test("the beacon maps each branch to the RIGHT registry (#6462 AC1c — direction, not position)", () => {
+    expect(block).toContain(
+      'if [ "$REF" = "$IMAGE_REF" ]; then _emit "app image served by GHCR" "app_ghcr_served" warning; else _emit "app image served by zot" "app_zot" info; fi',
+    );
+  });
   test("each beacon call form appears exactly once, so AC1's anchor stays unambiguous (#6462 AC1b)", () => {
     expect(block.match(/"app_ghcr_served" warning/g)).toHaveLength(1);
     expect(block.match(/"app_zot" info/g)).toHaveLength(1);
