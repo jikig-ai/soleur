@@ -72,9 +72,14 @@ Carried forward verbatim from the brainstorm/spec — not re-authored.
 was formally corrected on 2026-07-14 (#6400) — the same apply-wedge froze the `web-1`
 prod deploy leg ~10+ hours (`2026-07-13-web-2-fsn1-warm-standby-auth-denied-postmortem.md:22-25`).
 
-`requires_cpo_signoff: true`. CPO sign-off is carried forward from the brainstorm's
-Phase 0.5 triad (CPO assessed this exact scope and recommended reclaim→preflight→naming→raise);
-no re-spawn needed.
+`requires_cpo_signoff: true`.
+
+**CPO sign-off: GRANTED at plan-review (2026-07-15), conditional on the Phase 1.3 escape
+path — which is implemented.** The plan originally claimed the brainstorm's sign-off
+carried forward without a re-spawn; the CPO rejected that reasoning on review: *"A plan
+cannot assert its own sign-off,"* and the scope had materially changed (cap preflight
+dropped, stock preflight added, the git-data rationale collapsed). The fresh call is this
+review, not the brainstorm. Recorded here rather than left as a self-certification.
 
 ## Domain Review
 
@@ -217,41 +222,110 @@ surfaced, short enough to bound the retention of unaudited data (CLO).
 **None.** `gh issue list --label code-review --state open --json number,title,body --limit 200`
 returned no issue body containing any path in `## Files to Edit`.
 
+## Phase 0 — Preconditions (verify BEFORE coding; each can re-shape a later phase)
+
+These are the plan's unverified load-bearing assumptions. Each is a cheap probe whose
+failure changes the plan, so they run first.
+
+- [ ] **P0.1 — plan JSON availability (gates FR6's whole wiring).** Read the destroy-guard
+      steps at `apply-web-platform-infra.yml` `:1165`, `:1583`, `:1744`, `:1877`, `:2079`.
+      Confirm a `terraform show -json` output is available in each, and that a `-replace`
+      create carries `server_type` + `location` in `.resource_changes[].change.after`.
+      **If not, re-shape Phase 2.1 before coding.**
+- [ ] **P0.2 — `-replace` on a not-in-state address.** Confirm `terraform plan -replace=<addr>`
+      for an address absent from state exits 0 and plans a plain **create** (architecture
+      review established this; verify independently — it is the basis for treating
+      `git-data-host-replace` as live rather than dead).
+- [ ] **P0.3 — test discovery.** Confirm whether `scripts/test-all.sh` globs `tests/scripts/`.
+      If yes, Phase 2.5's `infra-validation.yml` step is a no-op; if no, it is mandatory.
+      **Do not assume — the whole deliverable's CI coverage rides on this.**
+- [ ] **P0.4 — sourced-gate precedent.** Read `tests/scripts/lib/web2-recreate-gate.sh` and
+      match its shape (function export, sourcing contract, exit semantics).
+- [ ] **P0.5 — follow-through exit semantics.** Read `.github/workflows/scheduled-followthrough-sweeper.yml`
+      + `scripts/followthroughs/reconcile-ff-only-sentry-4977.sh` and confirm the exit-code
+      convention before authoring FR1's script (the plan asserts "exit 0 = soak held = delete";
+      **verify that matches the sweeper's actual interpretation**).
+
 ## Implementation Phases
 
-Phase order is dependency-directed: the preflight's script must exist before the workflow
-steps call it.
+Phase order is dependency-directed: the gate must exist before the workflow steps source it.
 
-### Phase 1 — Stock preflight script (TDD)
+### Phase 1 — Stock preflight as a **sourced gate** (TDD)
 
-1.1 Write failing test `apps/web-platform/infra/stock-preflight.test.sh` covering:
+**Shape corrected per CTO review:** the repo's established pattern for these exact steps
+is a *sourced gate* exposing a function, sourced by **both** the workflow and its test so
+CI runs the same bytes (precedent: `tests/scripts/lib/web2-recreate-gate.sh:1-10`). Do
+**not** author a standalone `infra/scripts/stock-preflight.sh` — that invents a second
+pattern and lands outside test discovery.
+
+1.1 Write failing test `tests/scripts/test-stock-preflight-gate.sh` covering:
   - orderable type/location → exit 0 (`cx33 hel1`)
   - non-orderable type/location → exit 1 (`cx33 fsn1` — the live #6463 trap)
+  - non-orderable ARM type → exit 1 (`cax11 hel1` — 0 EU DCs)
   - unknown server type → exit 1 (fail-closed)
   - unknown location → exit 1 (fail-closed)
   - API failure (mocked non-2xx) → exit 1 (fail-closed)
 
-1.2 Implement `apps/web-platform/infra/scripts/stock-preflight.sh <server_type> <location>`:
+1.2 Implement `tests/scripts/lib/stock-preflight-gate.sh` exposing
+    `stock_preflight <server_type> <location>`:
   - resolve `server_type` name → id via `GET /v1/server_types?per_page=50`
-  - resolve `location` → its datacenter via `GET /v1/datacenters`
-  - assert the type id ∈ `datacenters[].server_types.available`
-  - fail-closed on any resolution/API failure; `::error::` on abort
+  - resolve `location` → its **single** datacenter via `GET /v1/datacenters`
+  - assert the type id ∈ `datacenters[].server_types.available` (**not** `.supported`)
+  - fail-closed on any resolution/API failure
   - **read-only**; needs only `HCLOUD_TOKEN`
 
-### Phase 2 — Wire the preflight into the three destroy-guard steps
+1.3 **Abort message** (per CTO — the plan previously left this underspecified, and CPO
+    conditioned sign-off on the escape path being present). On a stock miss, emit the
+    orderable locations for the target type — **already in the same `/v1/datacenters`
+    response, no extra call** — so the abort is a fork, not a wall:
 
-2.1 `apply-web-platform-infra.yml` — add a preflight call to the existing plan-time
-    destroy-guard steps at `:1165` (web-2), `:1583` (inngest), `:1744` (registry).
-    Derive `server_type`/`location` from the terraform plan JSON already produced in
-    those steps (do **not** re-read `variables.tf` — the plan is the source of truth for
-    what will actually be created).
-2.2 Tripwire framing in the step comment, matching `:447` verbatim in posture
-    ("This is a TRIPWIRE, not a routine gate").
+```
+::error::stock-preflight ABORT: server_type 'cx33' is NOT orderable in 'fsn1' today
+(orderable: hel1). A -replace DESTROYS before it creates — this recreate would strand the
+fleet with no rollback (#6393, #6463). Options: (1) re-dispatch against a location where
+cx33 is orderable; (2) if this host must stay in fsn1, see #6463 (type/DC change is an
+operator cost/HA decision); (3) stock is time-varying — re-run later. Do NOT bypass.
+```
+
+  The **API-blip** mode MUST be a distinct message, or operators read a blip as a real
+  shortage and open a spurious #6463 dup:
+  `::error::stock-preflight ABORT: cannot PROVE stock for '<type>' in '<loc>' (Hetzner API unreachable). An unreachable API is not evidence of availability. Re-dispatch.`
+
+### Phase 2 — Wire the gate into **all five** destroy-shaped paths + CI discovery
+
+2.1 `apply-web-platform-infra.yml` — source the gate and call it from the existing
+    plan-time destroy-guard steps. Derive `server_type`/`location` from the terraform
+    plan JSON already produced in those steps (do **not** re-read `variables.tf` — a
+    `TF_VAR_*` can override a default; the plan is what actually applies).
+    **VERIFY FIRST (Phase 0 precondition):** confirm the plan JSON is available in each
+    step and that a `-replace` create carries `server_type`/`location` in
+    `.resource_changes[].change.after`. If it does not, re-shape this phase before
+    coding — this is FR6's load-bearing assumption and it is **not yet verified**.
+2.2 Tripwire framing in the step comment, matching `:447` in posture ("This is a
+    TRIPWIRE, not a routine gate").
 2.3 **No `[ack-destroy]` bypass** — matches `:1775`, `:1613`, `:2170`.
-2.4 `registry-region-migrate` (`:1877`) is **also** destroy-then-create and takes a
-    *target region* — include it. (The feature description named three steps; this is a
-    fourth destroy-shaped path. `git-data-host-replace` at `:2079` is dead code until
-    git-data exists (#6460) — **skip it**, and note why in the PR body.)
+2.4 **Five paths, not three.** `:1165` (web-2), `:1583` (inngest), `:1744` (registry),
+    `:1877` (registry-region-migrate — destroy-then-create with a *target region*), and
+    **`:2079` (git-data-host-replace)**.
+
+  > **Corrected — the "dead code" premise was FALSE.** The plan previously skipped
+  > `git-data-host-replace` on the belief that a scoped `-replace` requires the resource
+  > in state. Architecture review established that **`terraform plan -replace=<addr>` on
+  > an address NOT in state exits 0 with no error and plans a plain CREATE.** Since
+  > `hcloud_server.git_data` is declared unconditionally (`git-data.tf:118`), that
+  > dispatch would attempt to **create git-data** — into a 5-server cap, with a `cax11`
+  > type that is orderable in **0 EU DCs**. It is a live path that fails, not dead code.
+  > It needs the gate most of all. **Re-verify this terraform behaviour at Phase 0**
+  > before relying on it (the reviewer verified it; this plan's author did not).
+
+2.5 **Wire the test into CI — non-optional.** `scripts/test-all.sh:219` globs
+    `apps/web-platform/scripts/*.test.sh` but **NOT** `infra/*.test.sh`; infra tests run
+    from a **hand-maintained explicit list** in `.github/workflows/infra-validation.yml:167-200`
+    (one `run:` step per file, no glob). Without this the gate's test ships dead — green
+    PR, zero coverage, AC1 passing only because a human ran it locally. Add the step.
+    (`tests/scripts/` discovery: confirm at Phase 0 whether `test-all.sh` already globs
+    it; if so, 2.5 is satisfied by the relocation in Phase 1 and this step is a no-op —
+    **verify, do not assume**.)
 
 ### Phase 3 — Amend the hard rule
 
@@ -303,9 +377,11 @@ steps call it.
 
 | File | Change |
 |---|---|
-| `apps/web-platform/infra/scripts/stock-preflight.sh` | **new** — read-only stock probe |
-| `apps/web-platform/infra/stock-preflight.test.sh` | **new** — 5 cases, fail-closed coverage |
-| `.github/workflows/apply-web-platform-infra.yml` | preflight into 4 destroy-guard steps (`:1165`, `:1583`, `:1744`, `:1877`) |
+| `tests/scripts/lib/stock-preflight-gate.sh` | **new** — sourced gate exposing `stock_preflight <type> <location>` (matches `web2-recreate-gate.sh`) |
+| `tests/scripts/test-stock-preflight-gate.sh` | **new** — 6 cases, fail-closed coverage |
+| `.github/workflows/apply-web-platform-infra.yml` | gate into **5** destroy-shaped steps (`:1165`, `:1583`, `:1744`, `:1877`, `:2079`) |
+| `.github/workflows/infra-validation.yml` | **add the test step** — the list at `:167-200` is hand-maintained, not a glob. **Without this the test ships dead.** (No-op only if Phase 0 proves `test-all.sh` already discovers `tests/scripts/`.) |
+| `plugins/soleur/test/terraform-target-parity.test.ts` *(or a sibling)* | coverage-enumeration test for AC3 + `EXCLUSION_ALLOWLIST` |
 | `AGENTS.core.md` | amend `hr-prod-host-config-change-immutable-redeploy` in place (≤600 B, byte-neutral) |
 | `apps/web-platform/infra/variables.tf` | 2 `validation` blocks (`location`, `registry_location`) |
 | `knowledge-base/operations/expenses.md` | `:14-16` status flip; `:17-19` region fix |
@@ -324,8 +400,17 @@ or `app/**/layout.tsx`** — the mechanical UI escalation does not fire.
 - [ ] **AC1** `bash apps/web-platform/infra/stock-preflight.test.sh` passes all 5 cases.
 - [ ] **AC2** `bash apps/web-platform/infra/scripts/stock-preflight.sh cx33 fsn1; echo $?` → `1`
       (the live #6463 trap) and `... cx33 hel1` → `0`. Both with `HCLOUD_TOKEN` exported.
-- [ ] **AC3** The preflight is invoked in **4** destroy-guard steps:
-      `grep -c 'stock-preflight.sh' .github/workflows/apply-web-platform-infra.yml` ≥ 4.
+- [ ] **AC3** *(reshaped per CTO — the old `grep -c … >= 4` did NOT bind a preflight to a
+      **path**; four calls inside one job would pass it.)* A **coverage-enumeration test**
+      asserts every recreate-shaped `apply_target` option has the gate in its job body.
+      Model it on `plugins/soleur/test/terraform-target-parity.test.ts`, which already
+      parses **this exact workflow** to assert target coverage, and read the options from
+      the `apply_target.options` enum (`apply-web-platform-infra.yml:92-104`, 8 items).
+      `git-data-host-replace` is **in** the covered set (see Phase 2.4 — it is not dead
+      code). Any genuinely-excluded target goes in an explicit `EXCLUSION_ALLOWLIST`
+      (mirroring `terraform-target-parity.test.ts:81`) so an exclusion is **declared**,
+      not silently skipped — and so a future target auto-enrolls.
+      **This is what prevents a 5th dispatch path shipping without the gate.**
 - [ ] **AC4** No bypass token added:
       `grep -c 'ack-destroy' .github/workflows/apply-web-platform-infra.yml` == **23**
       (the `origin/main` baseline, measured 2026-07-15). The token legitimately appears 23×
@@ -345,6 +430,19 @@ or `app/**/layout.tsx`** — the mechanical UI escalation does not fire.
       `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <plan> | xargs -I{} bash -c '[[ -f "{}" ]] || echo BROKEN: {}'` → empty.
 - [ ] **AC11** `bash scripts/followthroughs/hermes-snapshot-retention-6453.sh; echo $?` → non-zero today (soak window has not elapsed; `earliest=2026-08-14`).
 - [ ] **AC12** #6453 carries the `soleur:followthrough` directive + `follow-through` label.
+- [ ] **AC14** *(CPO sign-off condition — the escape path)* The stock-miss abort names the
+      **orderable locations for the target type** and points at #6463. Verify:
+      `stock_preflight cx33 fsn1 2>&1 | grep -q 'orderable: hel1'` **and**
+      `... | grep -q '#6463'`. The data comes from the `/v1/datacenters` response the gate
+      already fetched — no extra call. **This is what makes the abort a fork instead of a
+      wall**, and CPO conditioned sign-off on it.
+- [ ] **AC15** The API-blip abort is a **distinct** message from the stock-miss abort
+      (`grep -q 'cannot PROVE stock'`), so an operator does not read a blip as a real
+      shortage and file a spurious #6463 duplicate.
+- [ ] **AC16** The gate's test actually runs in CI — not just locally. Either
+      `grep -q 'test-stock-preflight-gate' .github/workflows/infra-validation.yml`, **or**
+      P0.3 proved `scripts/test-all.sh` discovers `tests/scripts/`. **One of the two must
+      hold**; a green PR with a dead test is the failure mode this AC exists for.
 
 ### Post-merge (operator)
 
@@ -384,7 +482,9 @@ or `app/**/layout.tsx`** — the mechanical UI escalation does not fire.
 | **Create-before-destroy** | The only non-racy fix, but `create_before_destroy` exists nowhere and the singletons have hard-coded names + pinned IPs that collide first. IaC redesign → **#6459** (with an ADR). |
 | **New rule `hr-destroy-requires-headroom`** | "Headroom" is the wrong frame (the cap is not what makes `-replace` dangerous), and `B_ALWAYS` is already over the critical cap (#6461). Amend the existing rule instead. |
 | **Automate the Console limit-raise** | No Console credentials exist in Doppler; OAuth + MFA + Turnstile; no precedent. Verified operator-only. |
-| **Change web-2's type/DC now** to make it recreatable | A real cost/HA tradeoff needing an operator decision → **#6463**. This plan ships the *detection*; #6463 owns the *remediation*. |
+| **Change web-2's type/DC now** to make it recreatable | A real cost/HA tradeoff needing an operator decision → **#6463**. This plan ships the *detection*; #6463 owns the *remediation*. **CPO reviewed this split and endorsed it over folding in** — folding would execute a destroy-then-create of the warm standby inside the same PR that ships the gate protecting it, on a guard that has never fired in anger, alongside a Terraform tightening and a hard-rule edit. Sign-off was conditioned on the **escape path** (Phase 1.3) instead. |
+| **`hcloud` CLI instead of curl+jq** | **False-green — verified.** `hcloud server-type list -o columns=name,location` reports `cx33 → fsn1,nbg1,hel1`, which is the **supported/prices** set, not the orderable one. It would PASS the live #6463 trap. `hcloud datacenter describe hel1-dc2 -o json \| jq '.server_types.available'` is correct but returns **IDs**, so the name→id resolution is still needed — no savings. `hcloud` is also not installed on the runner (zero hits in the workflow). **Keep curl+jq, and name this rejected false-green in a code comment** so a future maintainer does not "simplify" straight into #6463. |
+| **Terraform `data "hcloud_datacenter"` + `precondition`** instead of a shell gate | **Catastrophically wider blast radius.** A `data` source + precondition evaluates at **plan time on every apply — including the per-merge path**. A Hetzner blip would then wedge *every* apply, not just the recreate dispatches. That is the #6285 lesson (a `data` source 403 at plan time wedges the whole root) amplified: fail-closed is correct on 4-5 dispatch paths and unacceptable on the merge path. The shell gate confines fail-closed to exactly the paths that destroy. |
 
 ## Deferred (tracked)
 
