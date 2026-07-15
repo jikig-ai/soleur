@@ -4,7 +4,9 @@ category: best-practices
 module: infra/ci
 issue: 6416
 pr: 6421
-tags: [destroy-guard, terraform, github-actions, followthrough, cloudflare-tunnel, false-verdict]
+also_seen_in: [6454]
+also_seen_pr: [6458]
+tags: [destroy-guard, terraform, github-actions, followthrough, cloudflare-tunnel, false-verdict, cloud-init, required-checks]
 ---
 
 # Learning: a guard, its gate, and its probe must each pin the thing they are named after
@@ -17,6 +19,12 @@ not reach zot at `10.0.1.30:5000`, and CI's zot mirror silently skipped on every
 The fix was straightforward. **Everything built to guarantee the fix was not.** Four independent
 P1s, each an instance of one shape: *an artifact that certifies a neighbour of the property it
 claims to certify.*
+
+> **§6-§8 were added the same day from #6454 / PR #6458** — a *different* CI gate, written by a
+> different session, which reproduced this file's shape three more times **while this file already
+> existed**. That is the most useful fact here: the shape is not rare, and writing it down did not
+> inoculate the next author (me) against it. Read §6-§8 as evidence that this needs a mechanical
+> litmus at authoring time, not a lesson one absorbs once.
 
 ## The generalizable lesson
 
@@ -155,12 +163,90 @@ This mattered beyond bookkeeping: **six files had copied the `~50%` figure** the
 exists to refute — they disagreed with it before the PR merged. Single-source a measured rate to
 one artifact and have every point-of-use *point* at it.
 
+### 6. A counter whose two operands come from ONE pass cannot see under-discovery. (#6454, PR #6458)
+
+Same session, different guard, same shape — and this one is worth adding because it shows the
+lesson **does not transfer by being written down**. #6458 replaced a CI gate that schema-checked a
+raw Terraform templatefile. Its headline property was *"discovery is structural, never a filename
+allowlist"*, and its anti-rot guard was a counter:
+
+```bash
+[[ "$VALIDATED" -ne "$DISCOVERED" ]] && exit 5   # "machine-checkable evidence the gate RAN"
+```
+
+**Both operands derive from the same discovery pass.** So the counter can only detect loss
+*after* discovery — it is mathematically blind to a template discovery never found. And discovery
+used a line-based `grep -oP`, while `terraform fmt` happily accepts the wrapped call style:
+
+```hcl
+hooks_json = templatefile(
+  "${path.module}/hooks.json.tmpl",
+  { webhook_deploy_secret = var.webhook_deploy_secret }
+)
+```
+
+Reproduced against the real corpus: `hooks.json.tmpl` **silently left the set**, the gate printed
+a happy `rendered+validated 4/4 file(s)`, exit 0, and `terraform fmt` passed. `5/5` and `4/4` are
+both "self-consistent". The claim "structural, never a filename allowlist" was true and
+irrelevant: it was a **syntax allowlist**, narrower than Terraform's grammar.
+
+**Litmus:** for any N/N-style completeness counter, ask *where does each operand come from?* If
+both come from one pass, it proves the pass was internally consistent — not that the pass was
+complete. Completeness needs a **second, independently-derived opinion** (here: count
+`templatefile(` occurrences and require discovery to have parsed at least that many).
+
+### 7. The independent opinion re-introduced the trap the SAME FILE documents. (#6454)
+
+The fix for §6 was a floor: `grep -c 'templatefile(' *.tf` vs parsed referents. It red the correct
+corpus — 9 vs 5 — because it counted **comments**: `ci-ssh-key.tf`'s prose says
+``the `templatefile()` interpolation map so `cloud-init.yml`'s``, and one of the four was the
+#6454 note the same PR had just written into `server.tf`.
+
+The script's own header already documents the anchored, comment-proof pattern for *attribution*.
+The knowledge was in the file and did not transfer, because it was filed as a fact about
+attribution rather than **about any new token-grep over source**. A guard's own comments are part
+of its input.
+
+### 8. Registration is not environment: verify the RUNNER, not the wiring. (#6454)
+
+The plan claimed gate correctness *"is proven by the fixture suite, which runs inside
+`guard-script-fixture-tests`: REQUIRED, path-filter-free, every PR and merge_group"*. Every clause
+was verified and **every clause was true** — the `test-*.sh` glob picks it up, the job runs
+`run-all.sh`, and `"Bash fixture tests for guard scripts"` is a required context in
+`ruleset-ci-required.tf`.
+
+What nobody checked: that job is `runs-on: ubuntu-latest` + `checkout` + `run-all.sh`. **No
+terraform. No cloud-init.** All 22 fixtures exited 6 (tooling absent) and the REQUIRED,
+path-filter-free check went red — blocking every PR in the repo, docs-only included. The suite had
+never once executed the render path in CI, so the single most valuable fixture (*"a gate that
+cannot fail is not a gate"*) had never run.
+
+Two second-order notes:
+- **Fail-closed is what surfaced it.** The script exits 6 rather than self-SKIPping (*an advisory
+  test may skip; a gate may not*). A self-SKIP would have been green and proven nothing — the
+  §3 shape ("a probe that finds no failure has not found success") one layer up.
+- **The obvious fix was wrong.** Adding apt to that job puts a package-mirror dependency on the
+  **merge-queue critical path for every PR in the repo** to protect five infra files. A required,
+  path-filter-free, `merge_group` job is a shared resource. Correct move: rename the suite out of
+  the auto-glob, run it from a job that already has the tooling, and record the bash-only contract
+  where the glob lives so it cannot regress.
+
+**Litmus:** for any suite you register into a job, read the job body. Registration answers *will it
+be invoked*; only the runner answers *can it run*.
+
 ## Prevention
 
 - **Guard/gate:** if a counter feeds an independent gate rather than a sum, do not narrow its
   selector with a double-count argument. Enumerate the full action vocabulary
   (`["create"]`, `["delete","create"]`, `["create","delete"]`, `["forget"]`, …) and state, per
   shape, which gate catches it and whether that gate is ack-bypassable.
+- **Completeness counters:** name where each operand comes from. Two operands from one pass prove
+  self-consistency, never coverage. Add an independently-derived floor.
+- **New token-greps over source:** a guard sees its own comments. Anchor on the syntactic
+  construct, never a bare token — including in guards you add to a file that already documents
+  this for a neighbouring pattern.
+- **Registered suites:** read the runner. A true registration claim (glob + job + required
+  context) says nothing about whether the tools exist on that box.
 - **Gate tests:** a hand-written mirror of workflow bash cannot pin the workflow. Either run the
   real block (`extract_run_block`) or assert the gate's control flow against literal bytes
   (presence + position + fail-closed validation). Mutation-test each property.
@@ -187,6 +273,83 @@ one artifact and have every point-of-use *point* at it.
   → [2026-07-15-false-comment-shipped-the-bug-then-plan-guard-adr-and-tests-each-restated-it.md](./2026-07-15-false-comment-shipped-the-bug-then-plan-guard-adr-and-tests-each-restated-it.md) §5
 
 ## Session Errors
+
+### From #6454 / PR #6458 (the §6-§8 session)
+
+Recorded because the pattern is the point: **13 of these are the author's own defects in a gate
+written to end this defect class**, and every one was caught by multi-agent review or real CI —
+none by the author.
+
+**Forwarded from `session-state.md` (pre-compaction, plan phase):**
+
+1. **Planning subagent terminated early** — "You've hit your session limit". No Session Summary
+   emitted. **Recovery:** plan body verified on disk (frontmatter + Overview + ACs + Test
+   Scenarios); resumed from plan-review rather than re-running plan. **Prevention:** one-shot's
+   Step 1-2 fallback worked as designed; external limit, no workflow change.
+2. **That subagent returned text not matching its return contract** (a review-shaped fragment for
+   a planning task). **Recovery:** discarded as a stray transcript fragment, not used as input.
+   **Prevention:** already covered — a subagent result that does not match the contract is
+   evidence of a dead agent, never data.
+
+**Defects in the fix itself (all fixed inline):**
+
+3. **Discovery was a line-based grep → silent false-green.** See §6. **Prevention:** §6 litmus.
+4. **The N/N counter could not see it** — both operands from one pass. See §6.
+5. **The independent floor counted its own comments** — 9 vs 5, red the correct corpus. See §7.
+6. **Six false-reds on correct Terraform**: one-line map (exit 4), nested `})` at col 0 (exit 2),
+   brace inside a string value (exit 2), `%{ if !x }` (exit 2), `%{ if a && b }` (exit 2),
+   `%{~ if` left-strip (exit 2). **Prevention:** a gate that reds a correct file IS the defect
+   class; enumerate ordinary shapes of the grammar you parse and fixture each. All six are now
+   pinned (F11-F14b, F20, F21).
+7. **Registered the suite into a job with no tooling.** See §8.
+8. **The "inert" comment broke a size budget** — verified rendered content, never size.
+   **Prevention:** see `best-practices/2026-07-14-cloud-init-templatefile-escaping-…` §COMMENT-FROZEN.
+9. **Shipped a false "one-line admin follow-up" claim**, citing a precedent that refutes it.
+   **Prevention:** see `2026-03-20-github-required-checks-skip-ci-synthetic-status` §path-filtered.
+10. **`grep -n` omits the filename when handed exactly ONE file** → the line number parsed as the
+    filename. Caught by a fixture (single-`.tf`); the real infra roots ship many `.tf` and would
+    have masked it forever. **Prevention:** `-H` whenever a grep's output is parsed as `file:line`.
+11. **`grep -z` output is NUL-separated → a downstream grep says "binary file matches"** and
+    prints nothing. **Prevention:** `-a` + `tr '\0' '\n'` between a `-z` producer and any
+    text-mode consumer.
+
+**Test-authoring errors (the fixtures were wrong, not the code):**
+
+12. **F6a's stub comment reproduced VERBATIM call syntax** — indistinguishable from a real call
+    site by any regex, so it tested a case the design cannot defend. **Recovery:** mirrored
+    `ci-ssh-key.tf`'s REAL prose shape (`templatefile()` and the filename in one comment, never
+    adjacent). **Prevention:** a fixture for a comment-vs-code trap must reproduce the REAL
+    comment, not an idealised one.
+13. **F13/F14/F14b rendered a bare `#cloud-config`** on the false arm — legitimately "not a YAML
+    dict", so they failed for a reason unrelated to the bool typing under test. **Prevention:**
+    when testing a directive, keep a key OUTSIDE the directive so both arms stay valid.
+14. **F21 used `%{~`, which strips the PRECEDING newline** and glued `false` to `runcmd:`.
+    **Prevention:** `%{~` is not a cosmetic variant; to test typing without whitespace semantics
+    confounding it, use a JSON template.
+15. **A bare-runner PATH simulation was so austere it broke `grep` itself** → "command not found"
+    read as a suite failure. **Prevention:** simulate a missing tool by removing ITS directory
+    from PATH, not by allowlisting a hand-picked binary set.
+
+**Tooling traps (each already documented; this session CONFIRMS them):**
+
+16. **Bash-tool CWD persisted after `cd`** → later relative paths resolved under the wrong root.
+    **Prevention:** already in `work/SKILL.md` — chain `cd <abs> && <cmd>` in one call.
+17. **`cmd | tail; echo $?` reported tail's exit (0)**, masking a real exit 2. **Prevention:**
+    already in `work/SKILL.md` — `rc=$?` immediately, then inspect.
+18. **`git diff origin/main` (two-dot) showed 31 files** including sibling PRs' work; three-dot
+    showed the real 7. **Prevention:** already in `review/SKILL.md` — three-dot for branch scope.
+19. **A mutation-test restore never ran** — the harness 2-min timeout killed the command *before*
+    the trailing `cp /tmp/sut.bak`, leaving the SUT mutated on disk. The suite had **hung**,
+    because the removed guard let awk read stdin. **Prevention:** `review/SKILL.md` already
+    prescribes a `cp` backup; the NEW mechanism is that a hang can eat the restore itself — so
+    restore in a SEPARATE call, and give the harness a `timeout` so a hang returns a verdict
+    instead of consuming the window.
+20. **Included `git stash list` in a probe** → the guardrail denied the whole Bash call.
+    **Prevention:** working as designed; `hr-never-git-stash-in-worktrees` denies even the
+    read-only form. Use `git rev-parse --verify --quiet refs/stash`.
+21. **Mistyped a worktree path in an Edit** (dropped a path segment) → "File does not exist".
+    One-off. **Prevention:** none warranted.
+
 
 - **Plan v1 asserted five claims that review falsified** (P2b would have broken CI's only path to
   prod via the bridge's `-d "$SERVER_IP"` NAT match; P3's fix wouldn't reach the Slack line

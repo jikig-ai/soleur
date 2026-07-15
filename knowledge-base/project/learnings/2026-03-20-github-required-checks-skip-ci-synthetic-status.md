@@ -39,6 +39,47 @@ When adding required status checks to repos with bot workflows using `[skip ci]`
 
 The general pattern: **any time a required check is added to a ruleset, audit all code paths that can create commits without triggering the workflow that produces that check.** `[skip ci]` is the most common case, but the same problem arises with commits pushed by deploy keys, commits to branches with path-filtered workflows, and manual `workflow_dispatch` triggers that skip certain jobs.
 
+### The path-filtered-workflow case, twice (#5585, #6454)
+
+The clause above — *"commits to branches with path-filtered workflows"* — has now been the live
+failure mode twice, so it deserves promoting out of the list:
+
+> **`if: always()` is a JOB-level condition. It only guarantees the job runs once the WORKFLOW
+> runs.** A workflow-level `paths:` filter means a filtered-out PR never triggers the workflow, no
+> check-run is ever created, and a required context sits at *"Expected — Waiting for status"*
+> forever. `always()` and `paths:` are a known-bad pair.
+
+**#6454 / PR #6458** shipped an `infra-validate-required` aggregator — a static-named `if:
+always()` gate, because `validate` is a matrix job whose check names are dynamic
+(`validate (apps/web-platform/infra)`) and cannot be pinned. Its comment asserted:
+
+> *"`if: always()` means it ALWAYS reports a status, so making it required cannot deadlock a PR
+> that touches no infra. … Flipping the ruleset to make this required is a one-line admin
+> follow-up."*
+
+Both sentences false. `infra-validation.yml` keeps a workflow-level `paths:` filter and has no
+`merge_group:` trigger. Four independent review agents converged on it; the comment was rewritten
+and the real work tracked in **#6480**.
+
+**The sharpest detail: the precedent cited in support refutes the claim.** The comment cited
+`tenant-integration-required` — and `tenant-integration.yml` **dropped its workflow-level `paths:`
+filter**, moving path detection into a `detect-changes` job, *precisely so* its always-run gate
+posts a context on every PR. Its header says so in as many words. **A precedent must be READ, not
+remembered**: a half-recalled precedent is worse than none, because it launders a false claim as a
+verified one.
+
+**Cost check before dropping `paths:`.** Dropping the filter is only cheap if the heavy jobs are
+gated on `detect-changes`. In `infra-validation.yml` they were not: `deploy-script-tests`
+(`timeout-minutes: 8`, builds a docker image) and `check-secrets` carried no `needs:`/`if:`, so a
+naive filter removal would put 8 minutes on every docs-only PR. That is why the "one-line" framing
+was wrong twice over.
+
+**The full prerequisite set** for making a path-filtered workflow's gate required: drop `paths:`
+(gating heavy jobs on `detect-changes`) → add `merge_group:` → register the context in
+`ruleset-ci-required.tf` **and** `scripts/required-checks.txt` (bot PRs block on unregistered
+contexts) → then flip. Decide the escape hatch first: once required, a mis-parse in the gate is a
+repo-wide merge blocker with no override.
+
 ## Prevention
 
 - **Before adding a required status check**, search all workflow files for `[skip ci]` usage and identify which bot workflows will be affected.

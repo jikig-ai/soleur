@@ -14,6 +14,11 @@ on:
       - "apps/*/infra/**"
       - "infra/**"
       - ".github/workflows/infra-validation.yml"
+      # (#6454) The render-then-validate gate and its fixture suite. Without these,
+      # editing the validator would not run the validator's own tests — the job that
+      # proves the gate works would be skipped by the very PR changing the gate.
+      - ".github/scripts/validate-infra-templates.sh"
+      - ".github/scripts/test/fixtures-validate-infra-templates.sh"
       # ci-deploy.test.sh cross-file drift guard (#5145) reads the restart
       # workflow's poll budget; without this path the guard never fires on
       # client-side edits (deploy-script-tests job is ungated).
@@ -101,11 +106,34 @@ jobs:
             #
             # Strip the directive lines and validate the remainder. The `${...}` interpolations
             # survive: they sit inside scalars, so they parse fine un-rendered. This checks the
-            # schema of everything that ISN'T the gate; the gates' RENDERED YAML validity is
-            # covered behind terraform by cloud-init-inngest-bootstrap.test.sh (AC5/AC7 both
-            # yaml.safe_load every render), which is the only authority that can see the `~}`
-            # whitespace trim. Anchored ^%\{ so an indented (broken) directive is NOT stripped —
-            # it stays visible to this parser rather than being hidden by its own guard.
+            # schema of everything that ISN'T the gate. Anchored ^%\{ so an indented (broken)
+            # directive is NOT stripped — it stays visible to this parser rather than being
+            # hidden by its own guard.
+            #
+            # KEPT DELIBERATELY (#6454, operator call — it was also an operator call in #6456
+            # that this step stays). `Validate infra templates` below now renders every
+            # templatefile and schema-checks the RENDERED document, which supersedes this
+            # check on every axis: five templates to this step's one, rendered vs raw, and it
+            # renders BOTH arms of the `%{ if }` gate, whereas a directive-strip produces a
+            # document that is neither arm — both bodies concatenated, which ships to no host.
+            #
+            # What this step is, precisely: a REDUNDANT SECOND OPINION on cloud-init.yml via a
+            # different implementation. Its value is bounded and worth stating honestly,
+            # because the obvious justification for it is WRONG: it does NOT backstop the
+            # script reporting a false-green `0/0`. The script's discovery set B globs
+            # `cloud-init*.yml`, which strictly subsumes this step's `[[ -f cloud-init.yml ]]`
+            # — so whenever this step does any work, discovery has already found >=1 and `0/0`
+            # is unreachable. The two predicates fire on identical conditions. What it DOES
+            # cover is a bug in the script's clever middle: a wrong derived var map, an
+            # attribution picking the wrong call site, or a decode handing back raw text. Ten
+            # cheap seconds against that, in a job where cloud-init and terraform are
+            # installed anyway.
+            #
+            # Known fragility, priced in: if a future `%{ else }` arm ever repeats a key from
+            # its `if` arm, the strip merges both and YAML reds on DUPLICATE KEYS — a false red
+            # on a correct template, which is #6454's own dynamic. If that fires, DELETE this
+            # step rather than patching the grep; the render check below already covers it, and
+            # a second opinion is not worth reintroducing the bug this PR exists to end.
             grep -vE '^%\{' cloud-init.yml > /tmp/cloud-init.stripped.yml
             cloud-init schema -c /tmp/cloud-init.stripped.yml
           else
@@ -113,9 +141,45 @@ jobs:
           fi
         working-directory: ${{ matrix.directory }}
 
+      # terraform_wrapper: false is load-bearing here, not hygiene: the wrapper
+      # wraps stdout, and `Validate infra templates` below decodes
+      # `terraform console` output byte-for-byte. deploy-script-tests sets it for
+      # exactly this reason (see the `deploy-script-tests` job's setup-terraform step;
+      # deliberately cited by job name, not line number — this PR's own +lines shifted
+      # that comment and a bare line reference is self-invalidating).
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # #6454. The `Validate cloud-init schema` step above ran `cloud-init schema` against
+      # the RAW Terraform templatefile until #6456 taught it to strip directives, so it was
+      # red on EVERY PR touching apps/*/infra/** from #6344 — and, being pull_request-only,
+      # invisible on main. Stripping un-reds it, but it still validates ONE file (`if [[ -f
+      # cloud-init.yml ]]`), leaving two more cloud-inits and hooks.json.tmpl unvalidated,
+      # and it validates un-RENDERED text, which cannot see `permissions: 384` (valid YAML,
+      # schema-invalid) or the `~}` whitespace trim.
+      #
+      # This step closes that: the script renders each templatefile via `terraform console`
+      # and validates the RENDERED document — what work/SKILL.md §6.1 has prescribed all
+      # along. It must run AFTER setup-terraform (it needs terraform on PATH). No
+      # continue-on-error: that yields conclusion=success over outcome=failure, which is how
+      # a gate goes quiet. The two checks are kept side by side deliberately; the rationale
+      # and the exit condition for dropping the older one are recorded on it above.
+      #
+      # MATRIX_DIR goes through `env:`, never `${{ }}` inside `run:`. The matrix
+      # values are path prefixes derived from the PR diff, and detect-changes'
+      # sed only collapses them to `apps/<name>/infra` where <name> is [^/]+ —
+      # so a fork PR adding `apps/evil;id/infra/x.tf` would carry shell
+      # metacharacters straight into this shell. The stripped step above uses
+      # `working-directory:` (not a shell context) and has no such surface.
+      - name: Validate infra templates (render-then-validate)
+        env:
+          MATRIX_DIR: ${{ matrix.directory }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+          bash "$GITHUB_WORKSPACE/.github/scripts/validate-infra-templates.sh" "$MATRIX_DIR"
 
       - name: Terraform format check
         run: terraform fmt -check -recursive .
@@ -155,6 +219,54 @@ jobs:
           fi
         working-directory: ${{ matrix.directory }}
 
+  # #6454. `validate` is a MATRIX job, so its check names are dynamic
+  # (`validate (apps/web-platform/infra)`) and cannot be pinned as required
+  # contexts in infra/github/ruleset-ci-required.tf — which is precisely why it
+  # survived being red from #6344 onward with nobody blocked.
+  #
+  # This is the static-named gate a matrix job cannot be, and the second clause is
+  # the anti-silent-skip guard at JOB level: infra changed but validate did not
+  # succeed (skipped/cancelled/failure) -> red.
+  #
+  # DO NOT make this a required context yet — it would deadlock every non-infra PR.
+  # `if: always()` is a JOB-level condition: it only guarantees the job runs once the
+  # WORKFLOW runs. This workflow still carries a top-level `paths:` filter (see `on:`),
+  # so a PR touching no infra never triggers it, no context is ever posted, and a
+  # required check sits at "Expected — Waiting for status" forever. This workflow also
+  # has no `merge_group:` trigger, so the context would never post on the queue's temp
+  # ref either.
+  #
+  # `tenant-integration-required` (ruleset-ci-required.tf) is the precedent to COPY,
+  # and it is the counter-example to the shortcut: that workflow DROPPED its
+  # workflow-level `paths:` filter and moved path detection into its `detect-changes`
+  # job precisely so the always-run gate reports on every PR. Making this required is
+  # therefore NOT a one-line ruleset edit — the prerequisites are: drop `paths:` here
+  # (keep the heavy matrix gated on `detect-changes`), add `merge_group:`, register the
+  # context in ruleset-ci-required.tf AND scripts/required-checks.txt (bot PRs block
+  # otherwise). And `deploy-script-tests` + `check-secrets` currently have NO
+  # `needs:`/`if:`, so dropping `paths:` without gating them on `detect-changes` puts
+  # an 8-minute docker build on every docs-only PR. Tracked in #6480.
+  infra-validate-required:
+    name: infra-validate-required
+    needs: [detect-changes, validate]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail closed if validate did not succeed when it should have
+        env:
+          DIRS: ${{ needs.detect-changes.outputs.directories }}
+          RESULT: ${{ needs.validate.result }}
+        run: |
+          if [[ "$DIRS" == "[]" ]]; then
+            echo "No infra directories changed; nothing to validate."
+            exit 0
+          fi
+          if [[ "$RESULT" != "success" ]]; then
+            echo "validate did not succeed (result=$RESULT) while infra changed: $DIRS"
+            exit 1
+          fi
+          echo "validate succeeded for: $DIRS"
+
   deploy-script-tests:
     runs-on: ubuntu-24.04
     # 8 (was 5): the #5875 sandbox-canary regression below builds a small alpine+
@@ -181,25 +293,52 @@ jobs:
       # merge-blocking gate. terraform_wrapper: false keeps `terraform console` stdout
       # byte-clean so the render leg's heredoc-strip (render_yaml_ok, which depends on the
       # last output line being exactly `EOT`) is not corrupted by the default log wrapper.
+      # terraform_version pinned (#6454): this step was unpinned and floated to latest
+      # while every other setup-terraform here pins env.TERRAFORM_VERSION. The template
+      # fixtures below assert on `terraform console`'s encoding behaviour, so a silent
+      # major bump would red them for a non-reason.
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      # #6446: the render leg in cloud-init-inngest-bootstrap.test.sh also runs `cloud-init
-      # schema` on the RENDERED document. This does NOT replace the `validate` job's
-      # raw-source step above (:83-105) — that step is KEPT and directive-stripped. An
-      # earlier draft of this PR deleted it; #6426 landed a different fix for #6446 on main
-      # mid-pipeline (keep the step, strip the col-0 `%{` lines, schema-check the remainder)
-      # and both were kept, an operator call. They are complementary: the stripped check
-      # catches schema errors in the non-gate body with no terraform needed, and the rendered
-      # check catches what stripping structurally cannot see (`permissions: 384` is valid
-      # YAML and schema-invalid). Without the binary the leg SKIPs visibly rather than
-      # false-greening; this step makes it execute.
-      - name: Install cloud-init (rendered-schema check in the AC7 render leg)
+      # cloud-init here serves TWO consumers in this job, both of which SKIP or fail
+      # rather than false-green without it:
+      #
+      #  1. (#6446) the render leg in cloud-init-inngest-bootstrap.test.sh runs `cloud-init
+      #     schema` on the RENDERED document. Without the binary the leg SKIPs visibly
+      #     rather than false-greening; this step makes it execute.
+      #  2. (#6454) the validate-infra-templates.sh fixture suite below.
+      #
+      # Neither replaces the `validate` job's raw-source `Validate cloud-init schema` step —
+      # that step is KEPT and directive-stripped (cited by step name, not line number: this
+      # PR's own +lines shift it, and a bare line reference is self-invalidating). An earlier
+      # draft of #6446 deleted it; #6426 landed a different fix on main mid-pipeline (keep
+      # the step, strip the col-0 `%{` lines, schema-check the remainder) and both were
+      # kept, an operator call — re-affirmed when #6454 landed the render-then-validate
+      # gate. The reasoning and the exit condition for dropping the stripped step live on
+      # the step itself.
+      - name: Install cloud-init (render-leg schema check + infra-template fixtures)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
           cloud-init --version
+
+      # #6454. Fixture suite for .github/scripts/validate-infra-templates.sh. It lives
+      # HERE, not in `guard-script-fixture-tests` (which auto-globs
+      # .github/scripts/test/test-*.sh), because it needs terraform + cloud-init and that
+      # job is a bare-bash runner that is REQUIRED, merge_group-triggered and path-filter-
+      # free. Adding apt there would put a package-mirror dependency on the merge-queue
+      # critical path for every PR in the repo, docs-only included — a worse failure mode
+      # than the bug being fixed. Hence the file is named `fixtures-*` to stay out of that
+      # glob; see the contract note in .github/scripts/test/run-all.sh.
+      #
+      # Trade-off recorded honestly: deploy-script-tests is ADVISORY, so this suite does
+      # not block merge today. Gate CORRECTNESS being advisory is the same property that
+      # let #6454 live for four days — tracked by the follow-up that makes
+      # infra-validate-required a real required context (#6480).
+      - name: Fixture tests for validate-infra-templates.sh (#6454)
+        run: bash .github/scripts/test/fixtures-validate-infra-templates.sh
 
       - name: Run ci-deploy.sh tests
         run: bash apps/web-platform/infra/ci-deploy.test.sh
