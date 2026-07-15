@@ -547,24 +547,24 @@ them. These are the gates.)*
 > re-verified. A PR-B-tagged AC is **not** a gate on PR-A and must not be checked there;
 > that is the point of the split.
 
-- [ ] **AC1** In the **7 files listed in Phase 1**, zero bare `cloud-init.yml:<N>`
+- [x] **AC1** In the **7 files listed in Phase 1**, zero bare `cloud-init.yml:<N>`
       citations remain, and each anchor token is **present**. Scoped per-file — **not**
       repo-wide (RR-18: repo-wide returns ~146 residual across historical records that
       must not be rewritten). Verified to FAIL on the pre-fix tree. State it as "zero
       matching lines" and use `! grep -qE` — bare `grep` exits **1** on no match, so under
       `set -e` the passing state is a non-zero exit.
-- [ ] **AC2** `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts` passes.
+- [x] **AC2** `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts` passes.
       *(Subsumes v1's AC4/AC5 grep counts — `c4-render.test.ts` already fails on a view
       include referencing an undefined element, which is what those greps approximated
       worse: `grep -c` counts, it does not check.)*
-- [ ] **AC3** The Phase-3 live read-back shows `zot_mirror_fallback_rate` storing
+- [x] **AC3** The Phase-3 live read-back shows `zot_mirror_fallback_rate` storing
       `value: 0` with non-empty actions; recorded in the PR body. (#6285's never-run AC10.)
-- [ ] **AC4** `sandbox_startup_failure` fires at its **stated intent**: `value = 2` with the
+- [x] **AC4** `sandbox_startup_failure` fires at its **stated intent**: `value = 2` with the
       `>` semantics documented inline. Verified to FAIL pre-fix (`value = 3` → ≥4 ≠ the
       comment's "≥3").
-- [ ] **AC5** The capture-shape assertion is appended to the existing zot contract test and
+- [x] **AC5** The capture-shape assertion is appended to the existing zot contract test and
       **fails** if the sandbox emitter is switched to `captureMessage`.
-- [ ] **AC6** `web_terminal_boot_fatal`'s `GROUPING NOTE` back-reference resolves to the
+- [x] **AC6** `web_terminal_boot_fatal`'s `GROUPING NOTE` back-reference resolves to the
       paragraph it names (the #6424 repeat-offence guard).
 - [ ] **AC7** — **[PR-B]** `bash apps/web-platform/infra/ci-deploy.test.sh` passes, including all
       Phase-4.10 cases. **Advisory job — a human must read this one.**
@@ -575,7 +575,7 @@ them. These are the gates.)*
       garbage-passthrough guard).
 - [ ] **AC10** — **[PR-B]** `zot_gate_indeterminate_event`'s new `registry` tag value has a matching
       `filters_v2` entry in `zot_mirror_fallback_rate`, verified against the rule.
-- [ ] **AC11** `terraform validate` passes on `apps/web-platform/infra/sentry/` — run
+- [x] **AC11** `terraform validate` passes on `apps/web-platform/infra/sentry/` — run
       explicitly. **D-4's deferral leaves this PR's own `issue-alerts.tf` edits
       unvalidated in CI while `apply-sentry-infra.yml` auto-applies them post-merge**
       (CPO condition 3).
@@ -583,20 +583,69 @@ them. These are the gates.)*
       redeploys the last-good `ci-deploy.sh`. (CPO condition 2.) *(UC-1 makes this cheaper
       to honour: PR-B is revert-granular — reverting it no longer drags the C4 model, the
       citation sweep, and the alert audit with it, which was the reviewers' 4th argument.)*
-- [ ] **AC13** `infra-validation.yml` no longer contains `cloud-init schema -c cloud-init.yml`;
+- [x] **AC13** `infra-validation.yml` no longer contains `cloud-init schema -c cloud-init.yml`;
       `cloud-init-inngest-bootstrap.test.sh` contains a `cloud-init schema` on a **rendered**
       path with a visible SKIP arm.
-- [ ] **AC14** `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` passes;
+- [x] **AC14** `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` passes;
       headroom did not regress below the **76 B** measured at 0.1.
-- [ ] **AC15** Six tracking issues exist (D-1, D-3, D-4, D-5, D-6) and **D-1's body carries
-      the D-4 blocking precondition**.
-- [ ] **AC16** Full suite green: `bash scripts/test-all.sh`.
+- [x] **AC15** — **AMENDED at /work.** Plan said "six tracking issues (D-1, D-3, D-4, D-5,
+      D-6)" — six against five names. Filed **four**, per the Net-Flow gate (discovered
+      defects stay separate; deferred scope consolidates):
+      **#6472** (D-4, discovered defect) · **#6473** (D-1, #6446's explicit ask) ·
+      **#6474** (D-3, discovered compliance defect) · **#6475** (D-5 + D-6, consolidated
+      deferred scope). **Net flow: closing 4, filing 4 → 0.** D-1's precondition is wired
+      both ways as issue comments (#6473 blocked-by #6472, #6472 blocks #6473) since
+      GitHub has no dependency primitive.
+- [x] **AC16** Full suite green: `bash scripts/test-all.sh`.
 
 ### Post-merge (operator)
 
 *(none — every step is automated. `apply-sentry-infra.yml` and `web-platform-release.yml`
 fire on merge; `apply-github-infra.yml` plans a no-op for the comment. **Automation
 feasibility gate: no candidate operator step survived it.**)*
+
+## Verification Results (PR-A, /work 2026-07-15)
+
+**AC3 — live read-back** (`GET /api/0/projects/jikigai-eu/web-platform/rules/`, read-only;
+24 live rules). Folds in #6285's never-run AC10:
+
+| Live rule | Condition | value | actions |
+|---|---|---|---|
+| `zot-mirror-fallback-rate` | `EventFrequencyCondition` | **0** | 1 (`NotifyEmailAction`) |
+| `sandbox-startup-failure` | `EventUniqueUserFrequencyCondition` | **3** | 1 (`NotifyEmailAction`) |
+| `web-host-terminal-boot-fatal` | `EventFrequencyCondition` | 1 | 1 (`NotifyEmailAction`) |
+
+- #6285's `value = 0` is **live and pages a human** — AC10 discharged.
+- **The off-by-one is confirmed in PRODUCTION**, not just in the file: the live rule is
+  `value = 3` under a strict `>`, so it fires at ≥4 tenants while its contract promises ≥3.
+- **RR-1 falsified against production:** the live condition class is
+  `EventUniqueUserFrequencyCondition`, so #6429's "same `event_frequency` defect" premise
+  is wrong on the running system, not merely in the source.
+
+### Plan defects found at /work (the plan is intent, never fact)
+
+1. **AC3's prescribed token is wrong.** `SENTRY_ISSUE_RO_TOKEN` **403s** on the rules
+   endpoint (it is scoped to issues, not alerts) — it is the *only* one of the five Sentry
+   tokens that cannot perform this read. Used `SENTRY_API_TOKEN` (read-only GET). The first
+   403 was ALSO a stale-slug artifact: the plan-era `soleur-web-platform` was renamed to
+   `web-platform` on the DE org in 2026-05; Sentry returns 403 (not 404) for an
+   unknown/unauthorized slug, which disguises a rotted name as a permissions error. A
+   rotted claim inside the batch about rotted claims.
+2. **AC2 is a VACUOUS gate.** `c4-render.test.ts` mocks `node:child_process` and
+   `node:fs/promises` wholesale, so it never reads the `.c4` files;
+   `c4-code-syntax.test.ts` only unit-tests the CodeMirror tokenizer. Injecting a bogus
+   element into `views.c4` leaves all 23 green. The REAL gate — unnamed by the plan — is
+   `plugins/soleur/test/c4-model-freshness.test.sh`, which byte-diffs the committed
+   `model.likec4.json` against a fresh pinned render. Following the plan's stated ACs
+   would have shipped a RED CI. Artifact regenerated; gate 3/3.
+3. **`inngest -> sentry` (Phase 2, from #6436's own body) is falsified.** The Inngest host
+   has no Sentry path — its Vector sink was deliberately moved OFF Sentry onto Better Stack
+   (#4273). Its crons' check-ins are posted by handler code the webapp serves. Modelled
+   `github -> sentry` instead (the real un-modelled emitter: `sentry-heartbeat` across 5
+   scheduled workflows), with an in-model comment so it is not "restored".
+4. **Amended 3.7 vindicated.** `:1367`'s "3 fixed literals" is accurate today
+   (`probe_unreachable`, `creds_absent`, `login_failed` — exactly 3 call sites). Under the
+   original 3.7, PR-A would have written "4" for a literal only PR-B adds.
 
 ## Risks & Mitigations
 
