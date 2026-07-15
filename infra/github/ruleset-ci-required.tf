@@ -33,14 +33,16 @@
 # it in the action's Phase-4 ceiling before extending ALLOWED_PATHS. See the
 # CODEOWNERS-gated note in scripts/required-checks.txt + ADR-092.
 #
-# #5780 adds a second rule sibling — a `merge_queue` block (below the
-# required_status_checks block) — adopting a GitHub merge queue for `main` to
-# fix the strict-up-to-date BEHIND starvation. The queue REQUIRES every
-# required-check workflow to also fire on `merge_group` (landed in PR-1,
-# #5784), else queue entries stall pending forever. Because `rules` now holds
-# TWO rule types, any code/probe that reads the required-status-checks rule
-# MUST select by type (`select(.type=="required_status_checks")`), never a
-# positional `.rules[0]` — the apply-verify probe and audit script already do.
+# #5780 briefly added a second rule sibling — a `merge_queue` block adopting a
+# GitHub merge queue for `main` to fix the strict-up-to-date BEHIND starvation.
+# It was REVERTED (2026-06-30) and is NOT present: CodeQL reports no status
+# context on `merge_group`, so a queue and a blocking required `CodeQL` check are
+# mutually exclusive (see `codeql-1537-revisit-watch.yml:3-8`, and the kill-switch
+# record on the `merge_queue REVERTED` comment below). `rules` therefore holds
+# exactly ONE rule type today. Any code/probe that reads the
+# required-status-checks rule MUST still select by type
+# (`select(.type=="required_status_checks")`), never a positional `.rules[0]` —
+# the guard is kept so a future re-adoption cannot silently break the readers.
 resource "github_repository_ruleset" "ci_required" {
   name        = "CI Required"
   repository  = var.gh_repo
