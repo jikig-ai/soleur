@@ -211,12 +211,20 @@ jobs:
               record_failure "owner_access_broken" "postgres-liveness read failed — Inngest owner access may be broken. body=$(sanitize "$(printf '%s' "$live" | head -c 300)")"
             fi
           fi
+          # Asserted POSITIVELY (`returning 1` + require the row), never by grepping for one
+          # specific error. The prior `grep -qE '42501|permission denied'` reported PASS on
+          # EVERY other failure — 42703 undefined column, 23502 not-null, HTTP 5xx, empty
+          # body — i.e. it could not fail for any reason except the single one it named,
+          # while being the designated detector for the plan's failure mode (b) "Inngest
+          # lockout". Proven against live soleur-dev 2026-07-15: an injected 42703 made the
+          # old form print PASS. That is the false-PASS-anchor class (#6416, #6452). The
+          # sibling read probe above already asserted positively; the asymmetry was the bug.
           if [[ -z "$fail_mode" ]]; then
-            w="$(query "begin; set local role postgres; insert into public.events (event_id, event_name, event_ts) values ('rls-lockdown-probe', 'rls/lockdown.probe', now()); rollback")"
-            if printf '%s' "$w" | grep -qE '42501|permission denied'; then
-              record_failure "owner_write_broken" "owner INSERT was DENIED under non-forced RLS — the dark Inngest host cannot write its scheduler state. body=$(sanitize "$(printf '%s' "$w" | head -c 300)")"
+            w="$(query "begin; set local role postgres; insert into public.events (event_id, event_name, event_ts) values ('rls-lockdown-probe', 'rls/lockdown.probe', now()) returning 1 as ok; rollback")"
+            if printf '%s' "$w" | jq -e '.[0].ok == 1' >/dev/null 2>&1; then
+              echo "postgres-liveness PASS (write): owner INSERT round-tripped under non-forced RLS (rolled back)."
             else
-              echo "postgres-liveness PASS (write): owner INSERT accepted under non-forced RLS (rolled back)."
+              record_failure "owner_write_broken" "owner INSERT did not round-trip under non-forced RLS — the dark Inngest host may be unable to write its scheduler state. body=$(sanitize "$(printf '%s' "$w" | head -c 300)")"
             fi
           fi
 
