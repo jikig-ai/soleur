@@ -386,6 +386,33 @@ fixes for every per-step plan:
 > which silently misses deploys (a fix then hits ~50% stale code, invisibly): a
 > single-user-incident trap the threshold exists to prevent.
 
+> **Extension ([ADR-113](./ADR-113-one-tunnel-many-connectors-ingress-must-be-origin-relative.md), 2026-07-15, #6416) — the finding above generalizes beyond the deploy path.**
+> Nothing above is retracted. This ADR correctly stated the multi-connector fact — *"both
+> hosts run cloudflared on that ONE tunnel, so a POST load-balances to ONE connector
+> non-deterministically"* — and correctly rejected per-host tunnels (A). ADR-113 **cites**
+> that rejection rather than re-deciding it.
+>
+> The gap is narrower: **Option B solved connector nondeterminism for the `deploy.` route
+> only.** The same nondeterminism applies to every other ingress rule on the same tunnel, and
+> was never generalized:
+>
+> - **`registry.` → `tcp://10.0.1.30:5000`** is already origin-relative, so it is correct
+>   *provided every connector host is a 10.0.1.0/24 member*. #6416: web-2 had **no** private-net
+>   attachment, so ~50% of CI registry-bridge attempts landed on a connector with no route to
+>   zot — and, being masked by `continue-on-error`, silently skipped the mirror on every release.
+> - **`ssh.` → `ssh://localhost:22`** is connector-relative and therefore host-NONdeterministic.
+>   The 12 `web-1`-scoped provisioners below can land on the wrong host.
+>
+> ADR-113 records this as two normative invariants (I1 connector homogeneity, I2 origin-relative
+> ingress) plus the anti-pattern that a per-hostname ingress does **not** pin a connector.
+>
+> **Count correction (measured 2026-07-15).** "the 11 SSH provisioners" above is **stale** —
+> `server.tf` now carries **12** `terraform_data.*` blocks with
+> `connection { host = hcloud_server.web["web-1"].ipv4_address }` (a 13th, `deploy_pipeline_fix`,
+> has no `connection {}` at all). The original text is left verbatim above as this ADR wrote it;
+> **12** is the live number. Each of the 12 now carries an in-band `hostname` tripwire (#6416) so
+> a wrong-host landing fails the apply loudly instead of writing web-1's config to web-2.
+
 > **Amendment (CTO ruling, 2026-07-02, Phase 3 GA — cutover + read-source overlay, Sub-PR 3.D).**
 > The GA cutover to the shared git-data store is a hardened, coordinated operation, and
 > the rehydration contract (§1) is refined for the multi-host read side:
