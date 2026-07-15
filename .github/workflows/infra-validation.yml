@@ -338,6 +338,13 @@ jobs:
       - name: Run apply-inngest-rls{,-dev}.yml workflow shape guards
         run: bash apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh
 
+      # Proves the step above's sequence-DDL guard still FAILS on the catastrophe it
+      # claims to catch. It is the only check standing between an unbound sequence loop
+      # and a schema-wide REVOKE on the app's co-tenanted tables, so its non-vacuity is
+      # itself worth a gate. Mutates a sandbox copy only — never the tracked SQL.
+      - name: Run inngest-rls sequence-guard mutation attestation
+        run: bash apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
+
       - name: Run git-data writer-side CAS fence tests
         run: bash apps/web-platform/infra/git-data-pre-receive.test.sh
 
