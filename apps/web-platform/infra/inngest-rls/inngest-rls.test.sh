@@ -34,8 +34,10 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$DIR/../../../.." && pwd)"
 SQL_0001="$DIR/0001_enable_rls_lockdown.sql"
 SQL_0002="$DIR/0002_dev_inngest_tables_lockdown.sql"
+DEV_WF="$REPO_ROOT/.github/workflows/apply-inngest-rls-dev.yml"
 
 # The 14 dark-Inngest tables on soleur-dev. Re-derived from the live catalog
 # 2026-07-15 (never from a migration grep — see the learning
@@ -131,6 +133,42 @@ check_no_schemawide_ddl_loop() {
   else
     printf '%s\n' "$offenders"
     bad "[$LABEL] FORBIDDEN: a schema-wide table-catalog scan emits DDL — would reach the app's 52 tables"
+  fi
+}
+
+# $CODE strips ONLY `--` line comments, so a `/* ... */` block is invisible to the
+# stripper and stays in $CODE — every `check_has` below would still find the tokens
+# it names inside a wholly commented-out file. Wrapping 0001's ENTIRE revoke DO-block
+# in `/* */` left the suite GREEN 42/0 (mutation-proven 2026-07-15).
+#
+# Rather than teach the stripper to handle nested/quoted block comments (a real
+# tokenizer problem), FORBID the construct: both artifacts contain ZERO `/*` today
+# and have no need for one — `--` is the house style throughout.
+check_no_block_comments() {
+  check_absent '/\*' \
+    "no /* */ block comments (the \$CODE stripper only handles --; a block comment would hide real code from every check above)" \
+    "FORBIDDEN: /* */ block comment present — \$CODE strips only --, so every check_has here can pass against commented-out code. Use -- instead."
+}
+
+# The 14 names live in THREE places: apply-inngest-rls-dev.yml's ALLOW literal,
+# 0002's `allow` array, and ALLOW_14 here. profile_0002 asserts the SQL against
+# ALLOW_14; the WORKFLOW's copy — which drives the authoritative catalog gate and
+# the non-allowlisted report — was asserted by nothing, so it could drift silently
+# and the gate would police a different set than the migration locks down.
+check_workflow_allowlist_matches() {
+  local wf_names expected
+  if [[ ! -f "$DEV_WF" ]]; then
+    bad "[cross-file] dev workflow not found at $DEV_WF"
+    return
+  fi
+  wf_names="$(grep -oE '^[[:space:]]*ALLOW="ARRAY\[[^]]*\]"' "$DEV_WF" | head -1 |
+    grep -oE "'[a-z0-9_]+'" | tr -d "'" | sort | tr '\n' ' ')"
+  expected="$(printf '%s\n' "${ALLOW_14[@]}" | sort | tr '\n' ' ')"
+  if [[ -n "$wf_names" && "$wf_names" == "$expected" ]]; then
+    ok "[cross-file] apply-inngest-rls-dev.yml's ALLOW literal is EXACTLY the 14 (matches ALLOW_14)"
+  else
+    printf '       workflow: %s\n       expected: %s\n' "${wf_names:-<no ALLOW literal found>}" "$expected"
+    bad "[cross-file] apply-inngest-rls-dev.yml's ALLOW literal drifted from ALLOW_14 — the gate would police a different set than 0002 locks down"
   fi
 }
 
@@ -259,9 +297,18 @@ profile_0001() {
 
   # Ordering: the guard is worthless if it runs AFTER the revoke loop. Assert the
   # byte-offset of the app-distinctive guard precedes the FIRST REVOKE.
+  #
+  # `REVOKE[[:space:]]` alone was the WRONG pattern: it matches the word REVOKE inside
+  # 0001's own RAISE EXCEPTION prose ("A schema-wide REVOKE here would break the app"),
+  # which sits in a string literal — NOT a comment, so $CODE keeps it — and precedes
+  # the real revoke loop. revoke_off therefore pointed at PROSE, and this check
+  # returned the right verdict only BY ACCIDENT (the prose happens to fall after the
+  # guard). Match actual revoke STATEMENTS instead: a dynamic `EXECUTE format('REVOKE`
+  # or a REVOKE at the start of a line. Prose REVOKE is mid-line inside a string, so
+  # neither alternative can match it — correct by construction, not by luck.
   local guard_off revoke_off
   guard_off="$(printf '%s' "$CODE" | grep -abioE "to_regclass\('public\.kb_files'\)" | head -1 | cut -d: -f1)"
-  revoke_off="$(printf '%s' "$CODE" | grep -abioE 'REVOKE[[:space:]]' | head -1 | cut -d: -f1)"
+  revoke_off="$(printf '%s' "$CODE" | grep -abioE "(EXECUTE[[:space:]]+format\('REVOKE|^[[:space:]]*REVOKE[[:space:]])" | head -1 | cut -d: -f1)"
   if [[ -n "$guard_off" && -n "$revoke_off" && "$guard_off" -lt "$revoke_off" ]]; then
     ok "[$LABEL] negative guard (offset $guard_off) precedes the first REVOKE (offset $revoke_off)"
   else
@@ -282,6 +329,7 @@ profile_0001() {
     "no GRANT statement in applied code" \
     "FORBIDDEN: GRANT present in applied SQL"
 
+  check_no_block_comments
   check_no_privileged_revoke
 }
 
@@ -399,12 +447,17 @@ profile_0002() {
     "no pg_matviews sweep (out of scope on a co-tenanted project — would reach app matviews)" \
     "FORBIDDEN: pg_matviews sweep present — schema-wide on a co-tenanted project"
 
+  check_no_block_comments
   check_no_privileged_revoke
 }
 
 echo "inngest-rls.test.sh — per-artifact static shape guards"
 profile_0001
 profile_0002
+
+echo
+echo "profile: cross-file (the 14 are triplicated — SQL, workflow, this file)"
+check_workflow_allowlist_matches
 
 echo "---"
 echo "passed=$pass failed=$fail"
