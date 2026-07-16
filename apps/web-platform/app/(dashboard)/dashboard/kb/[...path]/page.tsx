@@ -19,6 +19,8 @@ import { classifyByExtension } from "@/lib/kb-file-kind";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
 import type { ContentResult } from "@/server/kb-reader";
+import { useNavResume } from "@/hooks/use-nav-resume";
+import { useRouter } from "next/navigation";
 
 // Full-screen LikeC4 workspace (diagram ‖ Concierge/Code). Browser-only
 // (@likec4/diagram is canvas-based) so it loads client-side after mount.
@@ -38,6 +40,8 @@ export default function KbContentPage({
 }) {
   const { path: pathSegments } = use(params);
   const joinedPath = pathSegments.join("/");
+  const { clearKbPath } = useNavResume();
+  const router = useRouter();
   const extension = getKbExtension(joinedPath);
   const isMarkdown = isMarkdownKbPath(joinedPath);
   const c4Enabled = useOptionalFeatureFlag(C4_VISUALIZER_FLAG);
@@ -97,6 +101,10 @@ export default function KbContentPage({
           if (res.status === 404) {
             setError("not-found");
             setLoading(false);
+            // #4826: clear sticky path and leave the 404 URL so the pathname
+            // persist effect does not immediately rewrite the bad path.
+            clearKbPath();
+            router.replace("/dashboard/kb");
             return;
           }
           if (!res.ok) {
@@ -117,7 +125,7 @@ export default function KbContentPage({
     }
     fetchContent();
     return () => { cancelled = true; };
-  }, [joinedPath, isMarkdown]);
+  }, [joinedPath, isMarkdown, clearKbPath, router]);
 
   if (loading) {
     return (
