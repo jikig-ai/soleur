@@ -60,6 +60,7 @@ import { cronSeoAeoAudit } from "@/server/inngest/functions/cron-seo-aeo-audit";
 import { cronSkillFreshness } from "@/server/inngest/functions/cron-skill-freshness";
 import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
+import { cronSupabaseAdvisorScan } from "@/server/inngest/functions/cron-supabase-advisor-scan";
 import { cronSupabaseDiskIo } from "@/server/inngest/functions/cron-supabase-disk-io";
 import { cronTerraformDrift } from "@/server/inngest/functions/cron-terraform-drift";
 import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
@@ -162,6 +163,7 @@ export const { GET, POST, PUT } = serve({
     cronSkillFreshness,
     cronStaleDeferredScopeOuts,
     cronStrategyReview,
+    cronSupabaseAdvisorScan,
     cronSupabaseDiskIo,
     cronTerraformDrift,
     cronUxAudit,

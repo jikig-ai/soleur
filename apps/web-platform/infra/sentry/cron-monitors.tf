@@ -1009,6 +1009,33 @@ resource "sentry_cron_monitor" "zot_restart_loop_alarm" {
   timezone                = "UTC"
 }
 
+# Executor liveness for the nightly Supabase advisor RLS gate (#3366).
+# Dispatched by apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts;
+# the check-in is posted at the END of .github/workflows/scheduled-supabase-advisor-scan.yml
+# and ONLY for Inngest-sourced runs, so a manual smoke-test dispatch cannot forge
+# liveness while the dispatcher is dead.
+#
+# `name` MUST stay slug-shaped: Sentry derives the monitor slug by slugifying
+# `name`, and the workflow's `monitor-slug` input must equal that derived slug.
+# scan-workflow.test.sh asserts the two agree.
+#
+# 03:37 UTC is deliberate: 20 minutes after the `17 * * * *` hourly Inngest-RLS
+# self-heal, which minimizes the window in which the advisor is legitimately
+# stale and the gate would have to fall back to its object-scoped carve-out.
+# A MISSED check-in is what covers a dead dispatch, so the margin is what makes
+# "Inngest never fired" visible rather than silent.
+resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-supabase-advisor-scan"
+  schedule                = { crontab = "37 3 * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # #6031 (ADR-088) — the scheduled-ghcr-token-minter monitor was REMOVED: the minter
 # cron is disabled (ADR-088 arm-b — App installation tokens cannot pull the private
 # repo-linked GHCR packages; pending GitHub-support confirmation). The handler
