@@ -308,6 +308,12 @@ resource "hcloud_server" "registry" {
     # no dashboard-eyeballing (hr-no-dashboard-eyeball-pull-data-yourself). Not a secret (a bare
     # ping URL); baked into user_data like zot_image, retrievable via the hcloud metadata API.
     disk_heartbeat_url = betteruptime_heartbeat.registry_disk_prd.url
+    # #6537 — zot LIVENESS heartbeat: the host pings this ONLY while zot answers on its own
+    # private IP, so a dead zot process on a live host alerts via Better Stack absence. This is
+    # the feeder that arms betteruptime_heartbeat.registry_prd; until it shipped, that monitor
+    # had ZERO consumers and stayed paused. Same class as disk_heartbeat_url: a bare ping URL,
+    # not a secret, baked into user_data and retrievable via the hcloud metadata API.
+    liveness_heartbeat_url = betteruptime_heartbeat.registry_prd.url
     # Better Stack Logs ingest URL for the SOLEUR_ZOT_DISK self-report (#6244). NON-secret host
     # routing (like disk_heartbeat_url) — baked into user_data; the ONLY secret is
     # BETTERSTACK_LOGS_TOKEN, injected at cron time via `doppler run` from the isolated config.

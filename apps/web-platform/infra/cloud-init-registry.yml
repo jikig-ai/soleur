@@ -314,6 +314,76 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # --- #6537: zot LIVENESS heartbeat (the feeder that arms betteruptime_heartbeat.registry_prd)
+  # The disk heartbeat above pings on `df` alone, so it stays GREEN with zot dead — it alarms
+  # HOST death by absence (900s), never PROCESS death. This feeder closes exactly that gap:
+  # zot dead, host alive, disk fine. It is the ONLY thing that feeds registry_prd; before it,
+  # that monitor had zero consumers and sat paused for 9 days (#6537).
+  #
+  # It probes the host's OWN PRIVATE IP, never loopback. zot publishes `-p 0.0.0.0:5000:5000`,
+  # so a loopback probe answers even on a host holding no 10.0.1.30 — which is how #6400 stayed
+  # green for ~14 days (see the private-NIC converger's preamble below, which documents that
+  # blindness in full). Probing the private IP means this heartbeat is ALSO a second, independent
+  # signal for NIC absence. Using loopback here would rebuild the blind spot inside the very
+  # monitor meant to see through it.
+  #
+  # ABSENCE-BASED, like the disk beat: ping ONLY inside the probe guard. An unconditional ping
+  # would make the monitor decorative — green over a dead registry.
+  # liveness_heartbeat_url is terraform-interpolated (non-secret host routing, same class as
+  # disk_heartbeat_url). NO `doppler run` wrapper: the URL is baked, so there is no
+  # empty-variable failure mode (#4116) and no token to inject.
+  - path: /usr/local/bin/zot-liveness-heartbeat.sh
+    content: |
+      #!/usr/bin/env bash
+      set -u
+      # (1) Probe zot on the private IP — the address consumers actually pull from.
+      #     -f: a 5xx from a wedged zot is NOT liveness. -o /dev/null: the catalog body is
+      #     irrelevant; only reachability matters. -m 10: bounded well inside the 60s timer
+      #     interval so a hung zot can never stack timer units (T4).
+      PROBE_RC=0
+      curl -fsS -m 10 -o /dev/null "http://${private_ip}:5000/v2/" || PROBE_RC=$?
+      # (2) Ping ONLY when the probe passed. Absence of this ping IS the alarm — Better Stack
+      #     pages when no beat arrives within period(60s) + grace(30s).
+      if [ "$PROBE_RC" -eq 0 ]; then
+        curl -fsS -m 10 -o /dev/null "${liveness_heartbeat_url}" || true
+      fi
+      # Always exit 0: a failed probe must alarm via ABSENCE (the monitor's own semantics), not
+      # via a failed unit that only `systemctl status` on a no-SSH host could ever reveal.
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/zot-liveness-heartbeat.service
+    content: |
+      [Unit]
+      Description=Ping the zot liveness heartbeat when zot answers on the private IP (#6537)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/zot-liveness-heartbeat.sh
+    owner: root:root
+    permissions: '0644'
+
+  # A systemd timer, NOT /etc/cron.d: cron's resolution floor is 60s, which against a 60s
+  # period + 30s grace leaves zero margin — every scheduling jitter would be a false page.
+  # Mirrors the live, armed inngest_prd feeder (inngest-bootstrap.sh), which runs the identical
+  # OnBootSec=30s / OnUnitActiveSec=60s cadence against the identical 60/30 monitor.
+  - path: /etc/systemd/system/zot-liveness-heartbeat.timer
+    content: |
+      [Unit]
+      Description=Run the zot liveness heartbeat every 60s (#6537)
+
+      [Timer]
+      OnBootSec=30s
+      OnUnitActiveSec=60s
+
+      [Install]
+      WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
   # --- #6415 / ADR-115: private-NIC boot converger ----------------------------------------
   # Root cause of the 2026-07-14 outage (#6400). hcloud_server_network is an ADDITIVE ONLINE
   # ATTACH (network.tf:9-13) — it needs a created server, and a created server is already
@@ -705,3 +775,14 @@ runcmd:
   # `|| true` is fail-OPEN toward serving: observing the boot must never break it. It takes the
   # SAME flock as the cron so the boot run and a 5-min tick cannot race.
   - set -a; . /etc/default/registry-doppler; set +a; flock -n /run/lock/soleur-private-nic-guard.lock doppler run --project soleur-registry --config prd -- bash /usr/local/bin/soleur-private-nic-guard.sh || true
+
+  # Arm the zot liveness feeder (#6537). `--now` starts the timer within this boot, so the first
+  # beat lands ~30s from here rather than after the next interval — the monitor goes green inside
+  # the redeploy window, which is what Phase 4.3 measures BEFORE the heartbeat is unpaused.
+  #
+  # `|| true` is fail-OPEN toward serving, matching every sibling above: a broken observer must
+  # never take down the registry it observes. That is safe precisely BECAUSE the monitor is
+  # absence-based — a timer that fails to enable produces no beats, which pages, rather than
+  # passing silently. This is the one place where fail-open and fail-loud agree.
+  - systemctl daemon-reload || true
+  - systemctl enable --now zot-liveness-heartbeat.timer || true
