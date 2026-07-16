@@ -352,6 +352,14 @@ jobs:
       - name: Run fresh-boot observability probe guard (#6090 baked-DSN + readiness gates + H3)
         run: bash apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
 
+      # #6511: `connect_timeout = 5` was a bare number where the pinned v4 provider's schema says
+      # `string`. It coerced to "5", failed Cloudflare's duration parse, landed as "0s", and the
+      # #6357 fail-fast mitigation on the registry origin was inert for weeks while every apply
+      # re-planned it. This job lists its tests explicitly (no glob), so an unregistered test file
+      # ships as zero coverage — the trap tests/scripts/test-stock-preflight-gate.sh documents.
+      - name: Run tunnel origin_request schema-type guard (#6511 connect_timeout string vs int)
+        run: bash apps/web-platform/infra/tunnel-origin-request-types.test.sh
+
       - name: Run ci-deploy-wrapper.sh tests
         run: bash apps/web-platform/infra/ci-deploy-wrapper.test.sh
 
