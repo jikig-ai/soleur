@@ -532,12 +532,12 @@ export const DEFAULT_IDLE_REAP_MS = 10 * 60 * 1000;
 // Resets on every block — "agent is alive" signal. PDF Read+summarize
 // observed at ~75s p99, hence 90s.
 export const DEFAULT_WALL_CLOCK_TRIGGER_MS = 90 * 1000;
-// Absolute hard ceiling on turn duration, NOT reset by per-block activity.
-// Backstop against a chatty-but-stalled agent that emits one block every
-// <90s indefinitely (idle reaper and per-block wall-clock both reset on
-// activity; cost cap fires only at SDKResultMessage boundaries). Anchored
-// on `turnOriginAt` set once when the first block of a turn arrives.
-export const DEFAULT_MAX_TURN_DURATION_MS = 10 * 60 * 1000;
+// Absolute hard ceiling on turn duration, NOT reset by per-block activity
+// and NEVER re-armed by `tool_progress` (chatty-stall defense — ADR-022).
+// Product budget for multi-step Concierge/one-shot work: 45 min agent compute
+// (raised 2026-07-16 from 10 min). Idle window (90s) still fails closed on
+// silent hung tools. Anchored on `turnOriginAt` / firstToolUseAt.
+export const DEFAULT_MAX_TURN_DURATION_MS = 45 * 60 * 1000;
 // #5313 (deferred #5240 FR-half) — consecutive mismatched `cd <path> && pwd`
 // CWD-verification commands before the runner emits `worktree_enter_failed`.
 // The observed no-git-checkout loop ran 4+ identical iterations before the turn

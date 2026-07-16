@@ -607,8 +607,8 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
     expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
   });
 
-  it("DEFAULT_MAX_TURN_DURATION_MS is 10 min — absolute ceiling on a single turn, not reset by per-block activity", () => {
-    expect(DEFAULT_MAX_TURN_DURATION_MS).toBe(10 * 60 * 1000);
+  it("DEFAULT_MAX_TURN_DURATION_MS is 45 min — absolute ceiling on a single turn, not reset by per-block activity", () => {
+    expect(DEFAULT_MAX_TURN_DURATION_MS).toBe(45 * 60 * 1000);
   });
 
   it("absolute turn ceiling fires runaway with reason=max_turn_duration even when blocks keep arriving (chatty-stall defense-in-depth)", async () => {

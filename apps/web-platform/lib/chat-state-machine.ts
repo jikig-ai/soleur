@@ -423,6 +423,72 @@ function buildInteractivePromptCard(
 }
 
 /**
+ * After Stage-2 `applyTimeout` paints `error` and evicts the leader from
+ * `activeStreams`, later liveness (tool_use / tool_progress / stream /
+ * command_stream / stream_start) would otherwise leave an orphan red banner
+ * while tools continue — especially for `cc_router`, which takes the chip-only
+ * branch when the leader is not in `activeStreams`.
+ *
+ * Walk from the end: the latest text bubble for `leaderId` is recoverable only
+ * if it is still `error`. A newer non-error text bubble means the turn already
+ * continued elsewhere — do not resurrect an older error.
+ *
+ * Plan: 2026-07-16-fix-concierge-agent-stop-mid-run-plan.md (Path A rebind).
+ */
+export function findRecoverableErrorBubble(
+  messages: ChatMessage[],
+  leaderId: DomainLeaderId,
+): number | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.type !== "text" || m.leaderId !== leaderId) continue;
+    if (m.state === "error") return i;
+    // Newer live text bubble for this leader — leave older errors alone.
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Re-insert a Stage-2 error bubble into `activeStreams` and clear hang flags
+ * so the stuck-watchdog + UI leave the terminal "Agent stopped responding"
+ * path. Caller supplies the post-recovery state patch (tool_use / streaming /
+ * thinking). Does not append chips.
+ *
+ * Precondition: `prev[errIdx]` is a `type: "text"` bubble (enforced by
+ * `findRecoverableErrorBubble`).
+ */
+function rebindRecoveredErrorBubble(
+  prev: ChatMessage[],
+  activeStreams: Map<DomainLeaderId, number>,
+  leaderId: DomainLeaderId,
+  errIdx: number,
+  patch: Partial<ChatTextMessage> & { state: MessageState },
+): {
+  messages: ChatMessage[];
+  activeStreams: Map<DomainLeaderId, number>;
+} {
+  const updated = [...prev];
+  const current = updated[errIdx];
+  if (current.type !== "text") {
+    // Defensive: helper is only called after findRecoverableErrorBubble.
+    return { messages: prev, activeStreams };
+  }
+  const { retrying: _retrying, livenessRearms: _rearms, ...rest } = current;
+  void _retrying;
+  void _rearms;
+  updated[errIdx] = {
+    ...rest,
+    ...patch,
+    type: "text",
+    livenessRearms: 0,
+  };
+  const nextStreams = new Map(activeStreams);
+  nextStreams.set(leaderId, errIdx);
+  return { messages: updated, activeStreams: nextStreams };
+}
+
+/**
  * Apply a single WS event to the chat state. Pure function — does not
  * mutate the passed `prev` or `activeStreams`, returns new instances.
  *
@@ -439,6 +505,24 @@ export function applyStreamEvent(
 ): StreamEventResult {
   switch (event.type) {
     case "stream_start": {
+      // Prefer rebind of a tip Stage-2 error over stacking a second thinking
+      // row above a permanent red banner (Path A recovery).
+      const errIdx = findRecoverableErrorBubble(prev, event.leaderId);
+      if (errIdx !== undefined) {
+        const rebound = rebindRecoveredErrorBubble(
+          prev,
+          activeStreams,
+          event.leaderId,
+          errIdx,
+          { state: "thinking", toolLabel: undefined },
+        );
+        return {
+          ...rebound,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+          timerAction: { type: "reset", leaderId: event.leaderId },
+        };
+      }
       const newMsg: ChatMessage = {
         id: `stream-${event.leaderId}-${crypto.randomUUID()}`,
         role: "assistant",
@@ -469,10 +553,35 @@ export function applyStreamEvent(
       // chips live "between user message and first leader bubble" only.
       // Fall through to the normal per-leader path so the bubble's
       // toolLabel updates instead.
+      //
+      // Path A recovery: if the tip text bubble for this leader is Stage-2
+      // `error` (evicted from activeStreams), rebind it instead of chip-only /
+      // no-op — otherwise the red banner stays while tools continue.
       if (
         (event.leaderId === "cc_router" || event.leaderId === "system") &&
         !activeStreams.has(event.leaderId)
       ) {
+        const errIdx = findRecoverableErrorBubble(prev, event.leaderId);
+        if (errIdx !== undefined) {
+          const current = prev[errIdx];
+          const rebound = rebindRecoveredErrorBubble(
+            prev,
+            activeStreams,
+            event.leaderId,
+            errIdx,
+            {
+              state: "tool_use",
+              toolLabel: event.label,
+              toolsUsed: [...(current.toolsUsed ?? []), event.label],
+            },
+          );
+          return {
+            ...rebound,
+            workflow: priorWorkflow,
+            spawnIndex: priorSpawnIndex,
+            timerAction: { type: "reset", leaderId: event.leaderId },
+          };
+        }
         const chip: ChatMessage = {
           id: `chip-${event.leaderId}-${crypto.randomUUID()}`,
           role: "assistant",
@@ -507,6 +616,27 @@ export function applyStreamEvent(
       }
       const idx = activeStreams.get(event.leaderId);
       if (idx === undefined || idx >= prev.length) {
+        const errIdx = findRecoverableErrorBubble(prev, event.leaderId);
+        if (errIdx !== undefined) {
+          const current = prev[errIdx];
+          const rebound = rebindRecoveredErrorBubble(
+            prev,
+            activeStreams,
+            event.leaderId,
+            errIdx,
+            {
+              state: "tool_use",
+              toolLabel: event.label,
+              toolsUsed: [...(current.toolsUsed ?? []), event.label],
+            },
+          );
+          return {
+            ...rebound,
+            workflow: priorWorkflow,
+            spawnIndex: priorSpawnIndex,
+            timerAction: { type: "reset", leaderId: event.leaderId },
+          };
+        }
         return {
           messages: prev,
           activeStreams,
@@ -545,8 +675,26 @@ export function applyStreamEvent(
       // Stage 4 (#2886) regression guard: `tool_progress` MUST NOT spawn a
       // chip — `tool_use` is the chip-start signal; `tool_progress` is
       // heartbeat-only.
+      // Path A: if the leader was Stage-2-evicted but the tip is still error,
+      // rebind so heartbeats heal the orphan red banner (no chip spawn).
       const idx = activeStreams.get(event.leaderId);
       if (idx === undefined || idx >= prev.length) {
+        const errIdx = findRecoverableErrorBubble(prev, event.leaderId);
+        if (errIdx !== undefined) {
+          const rebound = rebindRecoveredErrorBubble(
+            prev,
+            activeStreams,
+            event.leaderId,
+            errIdx,
+            { state: "tool_use" },
+          );
+          return {
+            ...rebound,
+            workflow: priorWorkflow,
+            spawnIndex: priorSpawnIndex,
+            timerAction: { type: "reset", leaderId: event.leaderId },
+          };
+        }
         // Unknown leader (e.g., heartbeat races stream_end) — inert no-op.
         return {
           messages: prev,
@@ -611,6 +759,28 @@ export function applyStreamEvent(
         return {
           messages: updated,
           activeStreams,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+          timerAction: { type: "reset", leaderId: event.leaderId },
+        };
+      }
+      // Path A: rebind tip error instead of stacking a second streaming bubble
+      // below a permanent red banner.
+      const errIdx = findRecoverableErrorBubble(working, event.leaderId);
+      if (errIdx !== undefined) {
+        const rebound = rebindRecoveredErrorBubble(
+          working,
+          activeStreams,
+          event.leaderId,
+          errIdx,
+          {
+            state: "streaming",
+            content: event.content,
+            toolLabel: undefined,
+          },
+        );
+        return {
+          ...rebound,
           workflow: priorWorkflow,
           spawnIndex: priorSpawnIndex,
           timerAction: { type: "reset", leaderId: event.leaderId },
@@ -1029,6 +1199,29 @@ export function applyStreamEvent(
         };
       }
 
+      // Path A: rebind tip Stage-2 error rather than appending a second
+      // streaming bubble below a permanent red banner.
+      const errIdx = findRecoverableErrorBubble(working, event.leaderId);
+      if (errIdx !== undefined && working[errIdx].type === "text") {
+        const target = working[errIdx] as ChatTextMessage;
+        const rebound = rebindRecoveredErrorBubble(
+          working,
+          activeStreams,
+          event.leaderId,
+          errIdx,
+          {
+            state: "streaming",
+            commandBlocks: applyToBlocks(target.commandBlocks),
+          },
+        );
+        return {
+          ...rebound,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+          timerAction: { type: "reset", leaderId: event.leaderId },
+        };
+      }
+
       // No active text bubble for this leader — create one carrying the block.
       const newMsg: ChatTextMessage = {
         id: `stream-${event.leaderId}-${crypto.randomUUID()}`,
@@ -1112,6 +1305,40 @@ export function applyStreamEvent(
         label: event.label,
         body: event.body,
       };
+      // Path A extension: when no leader is active but exactly one recoverable
+      // Stage-2 error text bubble exists, a debug tool_use is unambiguous
+      // liveness for that orphan — rebind + reset that leader (not reset_all
+      // against an empty timer map). Multi-orphan stays inert.
+      if (event.kind === "tool_use" && activeStreams.size === 0) {
+        const orphanLeaders = new Map<DomainLeaderId, number>();
+        for (let i = prev.length - 1; i >= 0; i--) {
+          const m = prev[i];
+          if (m.type !== "text" || m.state !== "error" || m.leaderId === undefined) {
+            continue;
+          }
+          if (!orphanLeaders.has(m.leaderId)) {
+            orphanLeaders.set(m.leaderId, i);
+          }
+        }
+        if (orphanLeaders.size === 1) {
+          const [[orphanLeader, errIdx]] = orphanLeaders;
+          const rebound = rebindRecoveredErrorBubble(
+            prev,
+            activeStreams,
+            orphanLeader,
+            errIdx,
+            { state: "tool_use" },
+          );
+          return {
+            messages: [...rebound.messages, debugMsg],
+            activeStreams: rebound.activeStreams,
+            workflow: priorWorkflow,
+            spawnIndex: priorSpawnIndex,
+            timerAction: { type: "reset", leaderId: orphanLeader },
+          };
+        }
+      }
+
       const isHeartbeat = event.kind === "tool_use" && activeStreams.size === 1;
       if (!isHeartbeat) {
         return {
