@@ -84,9 +84,11 @@ structured so that the sixth is caught by a command, not by a paragraph.
 
 ## Research Reconciliation — Brief vs. Measured Reality
 
-All measurements run 2026-07-16 against `docker` CLI 29.4.3 (host apt candidate on
-ubuntu-24.04 is `29.1.3-0ubuntu3~24.04.2`; cloud-init installs `docker-ce` — **re-measure on
-the pinned host version at /work Phase 0**, see AC1). Method: a live `registry:2` on
+All measurements run 2026-07-16 against `docker` CLI 29.4.3, and **independently re-measured on
+29.4.3 at /work Phase 0 — every surviving row reproduced byte-for-byte.** (~~re-measure on the
+pinned host version at /work Phase 0~~ — **there is no pinned host version**: `cloud-init.yml:428`
+installs `docker-ce` unpinned. See Research Reconciliation 9 and the amended AC1; the instrument
+now emits `docker_ver` so the host self-reports.) Method: a live `registry:2` on
 `localhost:15999` (answers `/v2/` 200) so the login reaches the credential-store write, which
 only happens **after** auth succeeds. Measured strings were then fed through the **real**
 `_zot_login_failure_class` extracted from `ci-deploy.sh:661-676`.
@@ -101,6 +103,10 @@ only happens **after** auth succeeds. Measured strings were then fed through the
 | 6 | §"ISSUE HYGIENE": open a successor issue for "zot serves zero pulls, not achieved end-to-end" | **DUPLICATE.** #6497's own body already states *"zot has served **zero pulls in 90 days**"* and owns the 3-condition decomposition. #6122 (umbrella) is OPEN and owns end-to-end. | **User-Challenge** — recorded in `decision-challenges.md`. Operator intent satisfied via a correcting comment on #6416 instead. |
 | 7 | §"CONSTRAINTS": "ci-deploy.sh is NOT an `OPERATOR_APPLIED_EXCLUSION` — ships on merge" | **TRUE, and now verified by the right question** (learning §6). Not because it is a `.sh`: because `apply-deploy-pipeline-fix.yml` is `on: push: branches:[main]` with `paths:` including `apps/web-platform/infra/ci-deploy.sh` (`:66`), and its `apply` job (`:183`) is gated only by a commit-message kill-switch — **not** `workflow_dispatch`. | Recorded with the enclosing-job + trigger evidence, per learning §6. |
 | 8 | §1: "#6497's ORIGINAL cause is FIXED AND CONVERGED" | **IMPRECISE — it was FALSIFIED, not fixed.** See below. | Drives the re-title and the PR body. |
+| **9** | **This plan's own AC1/Phase 0.1: "re-run the measurement battery on the pinned host docker version"** | **FALSIFIED AT /work PHASE 0. There is no pinned version.** `cloud-init.yml:424-428` adds Docker's official apt repo and runs `apt-get install -y docker-ce` **UNPINNED** — the host gets whatever was latest at boot. `soleur-web-platform` (web-1) was created **2026-03-17T06:37:09Z** (live Hetzner API) and has not been replaced since, so its docker is whatever `docker-ce` was current in March 2026. Today's candidate for noble is `5:29.6.1-1~ubuntu.24.04~noble` (measured in a real `ubuntu:24.04` container). The `docker/29.6.1` User-Agent in zot's session logs is almost certainly the **CI runner** (fresh, latest), **not** web-1 — do not attribute it to web-1. **web-1's actual docker version is not observable in any current telemetry.** | **AC1 amended (see AC1).** Per `hr-no-dashboard-eyeball-pull-data-yourself`, the missing signal becomes a **monitored marker**: the hatch emits a `docker_ver` field so the next occurrence self-reports. The follow-up issue (Phase 6.3) records the first observed host value; any arm whose literal does not appear in the host's measured output is amended then. |
+| **10** | **Phase 4 finding 2 / task 2.2: promote a `cli_daemon` arm on `docker.sock` \| `unix://` \| `_ping`** | **UNREPRODUCIBLE ON THE LOGIN PATH — measured on 29.4.3.** `docker login` **never contacts the daemon socket**: with a completely dead `DOCKER_HOST=unix:///nonexistent/d.sock`, `docker login` renders **no daemon error at all** (it renders the registry error, `time="…" level=info msg="Error logging in to endpoint, trying next endpoint"`), while `docker ps` on the same dead socket renders `failed to connect to the docker API at unix:///nonexistent/d.sock: … connect: no such file or directory`. Login is CLI-side in 29.x. The plan's proposed literal (`Got permission denied while trying to connect to the Docker daemon socket…`) is **not** what 29.4.3 renders, and is not on this path regardless. | **NO `cli_daemon` ARM SHIPS** — the plan's own rule: *"If AC1 cannot reproduce them, they stay `kw` probes and no arm ships (learning §2)."* The three discriminators are demoted to `kw` probes, where being wrong is free. This also retires the `cli_daemon` row from UC-3's confidently-wrong table. |
+| **11** | **Phase 3 / task 2.8: add a mandatory `registry: zot\|ghcr` tag to the Sentry beacon** | **KEY COLLISION.** `zot_gate_degraded_event` (`:715`) already emits `registry: "zot-gate-degraded"` in the **same** `tags` object. A second `registry` key is silently last-wins in `jq` — it would **destroy** the existing event-type tag. | Discriminator renamed **`login_registry`** (`zot`\|`ghcr`). The pre-existing `registry: "zot-gate-degraded"` tag is left untouched. |
+| **12** | **Phase 3 P0 / task 2.9: "the class is returned via a named global mirroring `RECOVERY_STAGE`"** | **UNIMPLEMENTABLE FOR THIS FUNCTION — measured.** `RECOVERY_STAGE` works because `_ghcr_pull_or_recover` is called **directly**. `refetch_ghcr_and_relogin` is called via **command substitution at BOTH sites** (`:825`, `:925`) — `stage="$(refetch_ghcr_and_relogin)"` — which is a **subshell**, so a global set inside it is discarded (measured: `G` stays `before`). The function's own comment already records that it "runs in a `$(…)` subshell". | The helper **emits its own journald line** for the class + hatch. This satisfies the constraint set more simply than a global could: stdout stays the typed control channel untouched, and GHCR is **journald-only by decision** anyway (Phase 3 Sentry-volume note), so no value needs to cross the subshell boundary at all. |
 
 ### 8 in full — the htpasswd cause was falsified by the experiment it motivated
 
@@ -570,7 +576,7 @@ real classifier:
 | shape (measured) | current class | correct |
 |---|---|---|
 | `error saving credentials: open <path>: permission denied` | `transport` | `cred_store` |
-| `Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: … connect: permission denied` | `transport` | **`cli_daemon`** |
+| ~~`Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: … connect: permission denied`~~ | ~~`transport`~~ | ~~**`cli_daemon`**~~ **ROW RETIRED** — /work Phase 0 measured that this shape **cannot occur on the login path** at all (docker login never touches the daemon socket in 29.x). Not a reclassification: a non-event. See finding 2 below. |
 | `received unexpected HTTP status: 504 Gateway Timeout` | `transport` | **`server_error`** |
 | `received unexpected HTTP status: 502 Bad Gateway` | `server_error` ✓ | — |
 
@@ -579,12 +585,18 @@ Three findings, all verified by execution:
 1. **`cred_store`** — anchored **only** on measured literals `error saving credentials|error
    storing credentials|error getting credentials`. MUST precede `transport`, whose bare
    `permission denied` otherwise steals the EACCES variant.
-2. **`cli_daemon`** — the daemon-socket EACCES contains **no `credentials` literal**, so
-   **`cred_store` cannot rescue it**; it stays confidently-wrong as `transport`. This is the
-   deploy user dropped from the `docker` group after a host replace — a local-permissions failure
-   routed to the network subsystem. Discriminators, to be measured at AC1 before promotion:
-   `docker.sock`, `unix://`, `_ping`. If AC1 cannot reproduce them, they stay `kw` probes and no
-   arm ships (learning §2).
+2. ~~**`cli_daemon`**~~ — **RETIRED AT /work PHASE 0 BY THE MEASUREMENT THIS ROW DEMANDED.**
+   The row's own gate was *"Discriminators, to be measured at AC1 before promotion: `docker.sock`,
+   `unix://`, `_ping`. **If AC1 cannot reproduce them, they stay `kw` probes and no arm ships**
+   (learning §2)."* **AC1 could not reproduce them.** Measured on 29.4.3: `docker login` **never
+   contacts the daemon socket** — a dead `DOCKER_HOST=unix:///nonexistent/d.sock` yields **no
+   daemon error whatsoever** on the login path, while `docker ps` on the same dead socket yields
+   `failed to connect to the docker API at unix:///nonexistent/d.sock: … no such file or
+   directory`. Login is CLI-side in docker 29.x. So the premise — *"the deploy user dropped from
+   the `docker` group renders a daemon-socket EACCES **on the login path**"* — is false: that
+   failure cannot reach this classifier at all. **No `cli_daemon` arm ships.** The three
+   discriminators are demoted to `kw` probes, where an unmeasured token is free (Phase 2's design
+   principle). See Research Reconciliation 10.
 3. **`504` lands in `transport`, not `server_error`** — `transport` (`:669`) precedes
    `server_error` (`:671`) and carries a bare `timeout` matched case-insensitively, so
    `504 Gateway Timeout` matches `timeout` first. An interposed-proxy 5xx routes the operator to
@@ -799,8 +811,22 @@ No step asks the operator to fetch, paste, or eyeball anything
 
 ### Pre-merge (PR)
 
-- **AC1 — measurement is re-run on the pinned host docker version**, and every arm in the diff
-  cites a string measured there. Any divergence from this plan's table amends the plan.
+- **AC1 — AMENDED at /work Phase 0 (Research Reconciliation 9); the original wording was
+  falsified.** There is **no pinned host docker version** to re-measure on:
+  `cloud-init.yml:428` installs `docker-ce` **unpinned**, web-1 has not been replaced since
+  2026-03-17, and its docker version is **not observable in any current telemetry**. AC1 is
+  therefore restated as:
+
+  > The arms cite strings **measured on docker 29.4.3** (plan author + implementer, both
+  > measured independently, against a live `registry:2`); the host's version is **not pinned and
+  > not currently observable**, so the instrument **emits `docker_ver`** on every failed-login
+  > telemetry line and the follow-up issue (Phase 6.3) records the first observed host value.
+  > **Any arm whose literal does not appear in the host's measured output is amended then.**
+
+  Re-measured on 29.4.3 at Phase 0 — **every surviving row reproduced byte-for-byte**
+  (helper-missing, disk-full, cred-EACCES, non-TTY, 401, 504, corrupt-config `rc=0`, and the
+  success path's 192-char stderr). **One row did not reproduce and its arm was dropped**
+  (`cli_daemon` — Research Reconciliation 10).
   *(Falsifier: an arm whose literal appears in no measured output.)*
 - **AC2 — `set -euo pipefail` survival against BOTH abort classes, verified behaviourally.**
   Two injections, because the first draft of this AC covered only one and **missed the dominant

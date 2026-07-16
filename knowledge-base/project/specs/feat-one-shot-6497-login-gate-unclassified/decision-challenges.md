@@ -110,14 +110,16 @@ hatch (fired only on `unclassified`) **never runs** → H-A and H-C are **byte-i
 emit**. `cred_store` becomes a two-mode bucket: **`unclassified` reproduced under a new name, in
 the PR whose entire purpose is to drain it.** The two instructions cancel each other.
 
-It is worse than that. Three more shapes land in a *confidently wrong* arm, where an
+It is worse than that. Two more shapes land in a *confidently wrong* arm (a third — the
+daemon-socket EACCES — was retired at /work Phase 0 when measurement showed it cannot occur on
+this path; see the table), where an
 `unclassified`-only hatch is suppressed by construction and the misclassification is permanently
 invisible from telemetry (all verified by execution against the real classifier):
 
 | shape | lands in | correct |
 |---|---|---|
 | cred-store EACCES | `transport` | `cred_store` |
-| docker daemon-socket EACCES | `transport` | `cli_daemon` — and it contains no `credentials` literal, so `cred_store` **cannot** rescue it |
+| ~~docker daemon-socket EACCES~~ | — | **ROW RETIRED at /work Phase 0.** Measured on docker 29.4.3: `docker login` **never contacts the daemon socket** (a dead `DOCKER_HOST` produces no daemon error on the login path; `docker ps` on the same dead socket does). This shape cannot reach the classifier, so there is nothing to misclassify and **no `cli_daemon` arm ships** — exactly what the plan's own gate required (*"if AC1 cannot reproduce them, no arm ships"*). The three discriminators are demoted to free `kw` probes. |
 | `504 Gateway Timeout` | `transport` | `server_error` — `transport`'s bare `timeout` matches first |
 
 An `unclassified`-only gate means the arms are auditable **only from the test suite**, never from
