@@ -437,17 +437,28 @@ liveness_signal:
                  + apps/web-platform/infra/zot-registry.tf (templatefile URL bake — user_data only)
 
 error_reporting:
-  destination: Better Stack (absence -> email). The existing SOLEUR_ZOT_DISK self-report already
-               carries a structured zot_health field to Better Stack Logs, queryable via
+  destination: Better Stack (absence -> email). The co-located SOLEUR_ZOT_DISK self-report carries
+               structured fields (pcent / fs_size_gb / resize_ok / zot_restarts / zot_last_err /
+               ping_rc) to Better Stack Logs, queryable via
                scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK (#6244)
-  fail_loud: true — absence-based. A dead cron, a dead host, a dead zot, or an absent private NIC
-             all STOP the ping. There is no "ping anyway" path: the curl guard is the ping's
+               [corrected at review: an earlier draft named a `zot_health` field. No such field
+                exists — a fabricated identifier, in the Observability block of the PR whose thesis
+                is that unverified claims rot. Fields above are read from the emit, not recalled.]
+  fail_loud: true — absence-based. A dead timer, a dead host, a dead zot, or an absent private NIC
+             all STOP the ping. There is no "ping anyway" path: the probe guard is the ping's
              precondition, not a logged side-effect (this is the T2/T3 invariant)
 
 failure_modes:
   - mode: zot process dead, host alive, disk fine (THE gap this PR closes)
-    detection: curl to 10.0.1.30:5000/v2/ fails -> ping withheld -> absence
-    alert_route: Better Stack missed-heartbeat email (<= 25 min)
+    detection: probe to 10.0.1.30:5000/v2/ returns no HTTP response (000) or 5xx -> ping withheld
+    alert_route: Better Stack missed-heartbeat email (<= 90s once armed)
+  - mode: zot alive but its htpasswd has diverged from the pull credential (#6497)
+    detection: NOT DETECTED BY THIS BEAT — an auth-gated 401 is accepted as liveness (it proves zot
+               is up and enforcing auth), so a zot whose htpasswd no longer matches the pull user
+               answers 401 and this beat stays GREEN while no client can actually pull.
+    alert_route: the disk beat's htpasswd_pull_matches field (#6497) is the layer that owns this.
+                 Declared here rather than elided: accepting 401 is required (a -f probe treats
+                 every healthy response as dead — see The feeder), and this is the edge it buys.
   - mode: private NIC absent at boot (#6400) — second, independent signal
     detection: host holds no 10.0.1.30 -> curl fails -> ping withheld
     alert_route: same. (L1 converger + L2 alarm from #6415 remain the primary.)

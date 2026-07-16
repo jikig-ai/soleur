@@ -337,16 +337,25 @@ write_files:
       #!/usr/bin/env bash
       set -u
       # (1) Probe zot on the private IP — the address consumers actually pull from.
-      #     -f: a 5xx from a wedged zot is NOT liveness. -o /dev/null: the catalog body is
-      #     irrelevant; only reachability matters. -m 10: bounded well inside the 60s timer
-      #     interval so a hung zot can never stack timer units (T4).
-      PROBE_RC=0
-      curl -fsS -m 10 -o /dev/null "http://${private_ip}:5000/v2/" || PROBE_RC=$?
-      # (2) Ping ONLY when the probe passed. Absence of this ping IS the alarm — Better Stack
-      #     pages when no beat arrives within period(60s) + grace(30s).
-      if [ "$PROBE_RC" -eq 0 ]; then
-        curl -fsS -m 10 -o /dev/null "${liveness_heartbeat_url}" || true
-      fi
+      #     Discriminate on the STATUS CODE, never on curl's -f. zot auth-gates /v2/
+      #     (htpasswd + "defaultPolicy": [] above), so an anonymous probe gets 401 — and 401 IS
+      #     liveness: it proves zot is up, listening, and enforcing auth. `-f` exits 22 on any
+      #     >=400, so an -f probe would treat every healthy response as dead and this feeder
+      #     would never ping at all. The boot readiness loop below already documents this
+      #     ("401 unauth IS healthy — reachable, auth-gated") and omits -f for the same reason.
+      #       200/401 -> zot answered           => alive
+      #       5xx     -> wedged/erroring zot    => NOT liveness (this is what -f was reaching for)
+      #       000     -> no HTTP response at all (connection refused, timeout, absent NIC)
+      #     -m 10 bounds the probe: two curls x 10s worst case = 20s, well inside the timer's
+      #     60s interval, so a hung zot can never stack units.
+      HTTP_CODE=$(curl -sS -m 10 -o /dev/null -w '%%{http_code}' "http://${private_ip}:5000/v2/" 2>/dev/null || true)
+      # (2) Ping ONLY when zot answered. Absence of this ping IS the alarm — Better Stack pages
+      #     when no beat arrives within period(60s) + grace(30s).
+      case "$${HTTP_CODE:-000}" in
+        200|401)
+          curl -fsS -m 10 -o /dev/null "${liveness_heartbeat_url}" || true
+          ;;
+      esac
       # Always exit 0: a failed probe must alarm via ABSENCE (the monitor's own semantics), not
       # via a failed unit that only `systemctl status` on a no-SSH host could ever reveal.
       exit 0
@@ -366,10 +375,25 @@ write_files:
     owner: root:root
     permissions: '0644'
 
-  # A systemd timer, NOT /etc/cron.d: cron's resolution floor is 60s, which against a 60s
-  # period + 30s grace leaves zero margin — every scheduling jitter would be a false page.
-  # Mirrors the live, armed inngest_prd feeder (inngest-bootstrap.sh), which runs the identical
-  # OnBootSec=30s / OnUnitActiveSec=60s cadence against the identical 60/30 monitor.
+  # A systemd timer, NOT /etc/cron.d, for TWO independent reasons:
+  #   1. cron's resolution floor is 60s, which against a 60s period + 30s grace leaves zero
+  #      margin — every scheduling jitter would be a false page.
+  #   2. cron's default PATH is /usr/bin:/bin and omits /usr/sbin. That is the #6415 trap on
+  #      THIS host: a probe binary silently unresolvable under cron while curl still resolves.
+  #      systemd's service PATH includes /usr/sbin, so the timer eliminates that class outright.
+  #
+  # AccuracySec=1s is load-bearing, NOT boilerplate. systemd's default is 1 MINUTE: the timer
+  # fires anywhere in [elapse, elapse+60s], so the interval is 60s + delta with a structural
+  # bound of 120s — against a 90s deadline. Measured on an A/B of this exact unit: unset drifted
+  # 60.0s / 62.0s / 72.6s / 66.5s, while AccuracySec=1s held 61.0s +/- 16ms. 72.6s is already
+  # inside the deadline's margin and the bound is over it.
+  #
+  # The inngest_prd feeder (inngest-bootstrap.sh) runs this cadence against an identical 60/30
+  # monitor and is live and up — but that is margin, not design: systemd's coalescing offset is
+  # derived from the BOOT ID, so its greenness is evidence about that host's current boot and
+  # nothing else. This feeder ships by immutable redeploy, which re-rolls the offset on every
+  # replace — so a measured-green first beat would not generalize to the next boot. On a no-SSH
+  # host whose failure mode is "page the founder forever", do not ship the boundary case.
   - path: /etc/systemd/system/zot-liveness-heartbeat.timer
     content: |
       [Unit]
@@ -378,6 +402,7 @@ write_files:
       [Timer]
       OnBootSec=30s
       OnUnitActiveSec=60s
+      AccuracySec=1s
 
       [Install]
       WantedBy=timers.target

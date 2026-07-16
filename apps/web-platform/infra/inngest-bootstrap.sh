@@ -193,6 +193,15 @@ EnvironmentFile=/etc/default/inngest-server
 ExecStart=${DOPPLER_BIN} run --project ${DOPPLER_PROJECT} --config prd -- ${HEARTBEAT_SCRIPT}
 HEARTBEATEOF
 
+# AccuracySec=1s added by #6537. systemd's default is 1 MINUTE, so this timer fires anywhere in
+# [elapse, elapse+60s] — an interval of 60s+delta, structurally bounded at 120s, against
+# inngest_prd's 60s period + 30s grace (a 90s deadline). Measured A/B on this exact unit shape:
+# unset drifted 60.0s / 62.0s / 72.6s / 66.5s; AccuracySec=1s held 61.0s +/- 16ms. This monitor is
+# live and up today on margin, not by design — systemd's coalescing offset derives from the BOOT
+# ID, so today's greenness is evidence about this boot only and is re-rolled by every host
+# replace. Takes effect on the next inngest-host-replace; harmless until then.
+# (Persistent=true below is a no-op for a monotonic timer — it only applies to OnCalendar — but is
+# left as-is: removing it is unrelated to this fix.)
 cat > "$HEARTBEAT_TIMER" <<'TIMEREOF'
 [Unit]
 Description=Run Inngest heartbeat every 60s
@@ -200,6 +209,7 @@ Description=Run Inngest heartbeat every 60s
 [Timer]
 OnBootSec=30s
 OnUnitActiveSec=60s
+AccuracySec=1s
 Persistent=true
 
 [Install]

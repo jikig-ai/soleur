@@ -417,20 +417,23 @@ resource "hcloud_firewall_attachment" "registry" {
 # private IP. The probe targets the private IP, never loopback: zot binds 0.0.0.0, so a loopback
 # probe answers even on a host holding no private NIC (#6400's exact blindness).
 #
-# The claim above is not prose you have to trust — `plugins/soleur/lib/heartbeat-manifest.ts`
-# declares this row's feeder as a file+pattern and `heartbeat-reprovision-parity.test.ts` greps
-# for it on every CI run. Delete or rename that timer and the suite goes RED.
+# Enforced, not asserted: `heartbeat-manifest.ts` declares this row's feeder as the arming
+# construct, and TWO suites gate it — `zot-liveness-heartbeat.test.sh` (delete the unit or the
+# runcmd enable => RED, and it pins the private-IP + no-`-f` + AccuracySec properties behaviorally)
+# and `heartbeat-reprovision-parity.test.ts` (the manifest row must name a real arming construct).
 #
-# The earlier version of THIS comment described a web-host probe cron and instructed the reader to
-# "unpause via the Better Stack UI once the probe ships". The probe was never written
-# (ZOT_HEARTBEAT_URL had zero consumers), so the monitor sat paused and inert for 9 days while this
-# comment asserted otherwise. That dangling instruction — no owner, no forcing function, unverified
-# by anything — WAS the bug (#6537). It is deliberately not replaced with another one.
+# The earlier version of THIS comment described a web-host probe cron and told the reader to
+# "unpause via the Better Stack UI once the probe ships". The probe was never written, so the
+# monitor sat paused and inert for 9 days while this comment asserted otherwise. That dangling
+# instruction — no owner, no forcing function, unverified by anything — WAS the bug (#6537), and it
+# is deliberately not replaced with another one.
 #
 # `paused = true` here is correct and permanent: `ignore_changes = [paused]` below decouples source
 # from live state, and this resource is an OPERATOR_APPLIED_EXCLUSION (untargeted), so a source
 # unpause is a no-op either way. Live arming is a one-time API PATCH, done only AFTER a real beat is
-# measured — never before (an unfed monitor that gets unpaused pages forever; #6210).
+# measured — never before (an unfed monitor that gets unpaused pages forever; #6210). Until that
+# happens the monitor is inert, and no static check can see it (ADR-116 names this state; the
+# nightly live-reconcile that would bound it is #6549).
 #
 # The consumer-perspective probe (can a CLIENT reach zot over the private net?) is a DIFFERENT
 # layer and remains open as #6438 §1; this on-host beat does not close it.

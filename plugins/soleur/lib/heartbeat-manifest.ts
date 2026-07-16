@@ -1,27 +1,11 @@
 // The heartbeat arming manifest (#6242 Audit Matrix Deliverable A; extracted from
 // heartbeat-reprovision-parity.test.ts for #6537).
 //
-// WHY THIS IS A MODULE AND NOT A COMMENT
-// --------------------------------------
-// #6537: `betteruptime_heartbeat.registry_prd` was provisioned `paused = true` on 2026-07-07 as a
-// bootstrap step, to be unpaused once "the web-host probe cron ships". The cron was never written.
-// The monitor sat inert for 9 days — and the ONLY record of what was supposed to feed it was a
-// COMMENT in zot-registry.tf, which said the opposite of the truth.
-//
-// That is the whole lesson: a heartbeat's "what feeds this?" answer was PROSE, and prose rots
-// silently. Two comments in this repo have been flatly false for months — one of them inside the
-// guard built to prevent exactly this class (#6242). A comment cannot fail CI.
-//
-// So `feeder` below is EXECUTABLE. Every claim about what pings a heartbeat is a file+pattern that
-// the parity test greps on every run. A feeder that is deleted, renamed, or never written turns the
-// suite RED. The invariant this enforces:
-//
-//   A heartbeat is either FED (feeder.kind ∈ {cron,timer}, with grep-able on-host evidence) or
-//   HONESTLY DECLARED UNFED (feeder.kind === "none", with a tracking issue). There is no third
-//   state — and "unfed" is the state that must never be silently unpaused.
-//
-// The invariant admits TWO legal resolutions for an unfed monitor: feed it, or DELETE it. What it
-// forbids is the 9-day middle: a provisioned monitor nobody feeds and nobody owns.
+// A heartbeat's "what feeds this?" answer used to live in a code COMMENT. #6537: the registry's
+// said a probe cron had shipped; it had never been written, and the monitor sat inert for 9 days.
+// A comment cannot fail CI, so `feeder` below is EXECUTABLE — every arming claim is a file plus a
+// syntactic construct the parity test greps on every run. See ADR-116 for the decision, the
+// rejected alternatives, and the states this does NOT cover.
 
 /** How a heartbeat's ping is armed — keyed on the MONITORED HOST'S REMEDIATION (CTO, #6242). */
 export type Arming =
@@ -33,15 +17,16 @@ export type Arming =
 /**
  * What actually emits the ping.
  *
- * `cron` / `timer` carry on-host EVIDENCE: a file that exists and a fixed-string pattern that
- * appears in it. This is the executable replacement for the prose `arming` axis — `arming` says
- * which REMEDIATION class the heartbeat belongs to; `feeder` says what CONCRETELY pings it, and is
- * checkable.
+ * `cron`/`timer` carry EVIDENCE: a file, and the **arming construct** within it — the line that
+ * actually causes the feeder to run (`systemctl enable --now <unit>`, a `- path: /etc/cron.d/<x>`
+ * drop-in). Deliberately NOT the unit's bare name: `inngest-heartbeat.timer` appears three times
+ * in its bootstrap script, and one of them is a comment — so a bare-name check stays green after
+ * the arming line is deleted, i.e. prose alone would satisfy the guard built to kill prose.
+ * Matching runs against a COMMENT-STRIPPED view for the same reason.
  *
- * `none` is the honest declaration that NOTHING pings this heartbeat yet. It is not a loophole:
- * it costs a `tracking_issue`, and if it names a `url_secret`, the guard asserts that secret still
- * has ZERO consumers — so the day someone ships the feeder, CI goes red and forces this row to be
- * reconciled. That inverse assertion is the forcing function #6537 never had.
+ * `none` is the honest declaration that nothing pings this heartbeat yet. It is not a loophole: it
+ * costs a `tracking_issue`, and the guard asserts the heartbeat has no feeder by EITHER delivery
+ * route this repo uses (see `feederDeliveryProbes`).
  */
 export type Feeder =
   | {
@@ -53,11 +38,10 @@ export type Feeder =
       kind: "none";
       /**
        * The Doppler secret holding this heartbeat's ping URL, or null if none is provisioned.
-       * When non-null, the guard asserts it has zero DEREFERENCING consumers (see
-       * `countUrlSecretConsumers`) — i.e. the feeder genuinely does not exist yet.
+       * When non-null the guard asserts it has zero DEREFERENCING consumers.
        */
       url_secret: string | null;
-      /** The issue that owns building the feeder (or deleting the heartbeat). */
+      /** The issue that owns building the feeder — or deleting the heartbeat. */
       tracking_issue: number;
     };
 
@@ -79,26 +63,26 @@ export interface ManifestEntry {
 }
 
 /**
- * Count REAL consumers of a heartbeat URL secret.
+ * Regexes that detect a feeder for `<name>`, one per delivery route this repo actually uses.
+ * An unfed (`kind:"none"`) row must match NEITHER. Both are needed:
  *
- * ANCHORED ON DEREFERENCE, NOT ON THE BARE NAME. This distinction is load-bearing and was found
- * the hard way: `git grep -c GIT_DATA_HEARTBEAT_URL` returns 2 hits, and NEITHER is a feeder —
- * one is the secret's own `name = "..."` definition in .tf, the other is a line of operator prose
- * inside a `cat <<'HEALTH'` heredoc in git-data-cutover.sh. A bare-name grep therefore reports a
- * feeder that does not exist, which is the very fiction this manifest exists to kill.
- *
- * A real consumer must DEREFERENCE the variable (`$VAR` or `${VAR}`) — prose and definitions never
- * do. Verified against the live counter-example: INNGEST_HEARTBEAT_URL is dereferenced exactly
- * where it should be (`curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL"`, inngest-bootstrap.sh),
- * and that heartbeat is the one that is actually armed and up.
+ *  - **deref**: the feeder reads the URL from a Doppler secret (`$INNGEST_HEARTBEAT_URL` in
+ *    inngest-bootstrap.sh — the live, armed precedent). Anchored on the DEREFERENCE, never the
+ *    bare name: a bare-name grep also matches the secret's own `name = "..."` definition and
+ *    plain prose, so it reports feeders that do not exist — the very fiction being replaced.
+ *  - **bake**: the feeder gets the URL baked in via `templatefile` (`liveness_heartbeat_url =
+ *    betteruptime_heartbeat.registry_prd.url`), dereferencing nothing. This is the route #6537
+ *    itself introduced, so a deref-only guard would be blind to the exact shape this repo now
+ *    treats as canonical. `value = ...` is excluded: that is a doppler_secret/output DEFINITION,
+ *    not a delivery into a template.
  */
-export function countUrlSecretConsumers(
-  secret: string,
-  searchFile: (pattern: RegExp) => number,
-): number {
-  // `\$\{?NAME\}?` — matches $NAME and ${NAME}; matches neither `name = "NAME"` nor bare prose.
-  const escaped = secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return searchFile(new RegExp(`\\$\\{?${escaped}\\}?`));
+export function feederDeliveryProbes(name: string, urlSecret: string | null): RegExp[] {
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const probes: RegExp[] = [
+    new RegExp(`^\\s*(?!value\\s*=)[A-Za-z0-9_]+\\s*=\\s*betteruptime_heartbeat\\.${esc(name)}\\.url`, "m"),
+  ];
+  if (urlSecret) probes.push(new RegExp(`\\$\\{?${esc(urlSecret)}\\}?`));
+  return probes;
 }
 
 // One row per heartbeat. Adding a heartbeat to the .tf files WITHOUT adding a row here FAILS the
@@ -108,9 +92,7 @@ export const MANIFEST: ManifestEntry[] = [
     name: "github_webhook_sig_failures",
     arming: "app-emit",
     paused: true,
-    // #6537: the source comment claimed "the webhook route deliberately pings" this on every
-    // signature-failure event. That is FALSE — no route pings it; the resource is `count = 0`
-    // under the free tier, so nothing has ever exercised the claim. Declared unfed honestly.
+    // Its source comment claimed the webhook route "deliberately pings" this. Nothing does.
     feeder: { kind: "none", url_secret: null, tracking_issue: 6549 },
     exempt_reason:
       "app/container would emit the ping; remediation is a container ci-deploy, not a dedicated-host reprovision. count=0 under the free tier (betterstack_paid_tier=false), so it is not provisioned live.",
@@ -119,8 +101,8 @@ export const MANIFEST: ManifestEntry[] = [
     name: "github_api_429_sustained",
     arming: "app-emit",
     paused: true,
-    // Same shape as its sibling above, and notably it never carried the false ping claim — the
-    // comment was attached to only ONE of the two identical resources.
+    // Structurally the same unfed shape as its sibling above, at a different cadence (900/120 vs
+    // 300/60) — and it never carried the false ping claim; that sat on only one of the two.
     feeder: { kind: "none", url_secret: null, tracking_issue: 6549 },
     exempt_reason:
       "app/container would emit the ping; remediation is a container ci-deploy, not a dedicated-host reprovision. count=0 under the free tier (betterstack_paid_tier=false), so it is not provisioned live.",
@@ -129,10 +111,9 @@ export const MANIFEST: ManifestEntry[] = [
     name: "git_data_prd",
     arming: "web-host-cron",
     paused: true,
-    // The sibling never-unpaused monitor. Its web-host probe cron is genuinely unbuilt: the
-    // url_secret assertion below proves GIT_DATA_HEARTBEAT_URL has zero dereferencing consumers.
-    // When #5274 PR C ships that probe, this row goes RED and must be reconciled — which is the
-    // forcing function #6537 lacked.
+    // The sibling never-unpaused monitor: its web-host probe cron is genuinely unbuilt, and the
+    // guard proves it against BOTH delivery routes. When #5274 PR C ships that probe by either
+    // route, this row goes RED and must be reconciled — the forcing function #6537 lacked.
     feeder: {
       kind: "none",
       url_secret: "GIT_DATA_HEARTBEAT_URL",
@@ -144,35 +125,34 @@ export const MANIFEST: ManifestEntry[] = [
   {
     name: "inngest_prd",
     arming: "dedicated-host-boot",
+    // Source says paused=true; LIVE is paused=false / up (self-pulled from /api/v2/heartbeats).
+    // That divergence is the proof that source is not live: Terraform never sets paused=false, and
+    // ignore_changes=[paused] means it never reverts one. It was armed out-of-band once its feeder
+    // existed — exactly the step registry_prd never got.
     paused: true,
-    // The armed precedent this PR mirrors: source paused=true, but LIVE paused=false — it was
-    // unpaused out-of-band once its feeder existed. That is the correct order, and it is exactly
-    // the step registry_prd never got.
     feeder: {
       kind: "timer",
       evidence: {
         file: "apps/web-platform/infra/inngest-bootstrap.sh",
-        pattern: "inngest-heartbeat.timer",
+        pattern: "systemctl enable --now inngest-heartbeat.timer",
       },
     },
     replace_target: { choice: "inngest-host-replace", server: "hcloud_server.inngest" },
   },
   {
     name: "registry_prd",
-    // #6537: was `web-host-cron` + an exempt_reason citing an "unshipped Phase-3 web-host probe
-    // cron". That classification was the bug's hiding place. It is now armed by the registry's
-    // OWN cloud-init (a systemd timer on the monitored host), so it is dedicated-host-boot — which
-    // makes ADR-103's replace_target requirement fire. That is INTENDED, not a workaround: the
-    // feeder reaches the host only via a fresh boot, so the reprovision path is genuinely required.
+    // #6537: was `web-host-cron` + an exempt_reason citing an unshipped probe cron — the
+    // classification was the bug's hiding place. It is armed by the registry's OWN cloud-init now,
+    // so it is dedicated-host-boot, which makes ADR-103's replace_target requirement fire. That is
+    // intended: cloud-init is per-instance, so the feeder reaches the host only on a fresh boot.
     arming: "dedicated-host-boot",
-    // Source stays paused=true; live is armed by API after Phase 4 measures a real beat
-    // (ignore_changes=[paused] decouples the two, and the resource is untargeted anyway).
+    // Stays paused in source; live arming is a one-time API PATCH after a real beat is measured.
     paused: true,
     feeder: {
       kind: "timer",
       evidence: {
         file: "apps/web-platform/infra/cloud-init-registry.yml",
-        pattern: "zot-liveness-heartbeat.timer",
+        pattern: "systemctl enable --now zot-liveness-heartbeat.timer",
       },
     },
     replace_target: { choice: "registry-host-replace", server: "hcloud_server.registry" },
@@ -181,14 +161,14 @@ export const MANIFEST: ManifestEntry[] = [
     name: "registry_disk_prd",
     arming: "dedicated-host-boot",
     paused: false,
-    // The #6238 exemplar: on-host cron (cloud-init-registry.yml) → MUST have a reprovision path.
-    // NOTE its scope, which #6537 mis-stated: this pings on `df` alone, so it alarms HOST death by
-    // absence but stays GREEN with zot dead. registry_prd's feeder covers that narrower gap.
+    // The #6238 exemplar. NOTE its scope, which #6537 mis-stated: it pings on `df` alone, so it
+    // alarms HOST death by absence but stays GREEN with zot dead. registry_prd covers that gap.
+    // A cron.d drop-in is armed by existing, so its `- path:` delivery IS the arming construct.
     feeder: {
       kind: "cron",
       evidence: {
         file: "apps/web-platform/infra/cloud-init-registry.yml",
-        pattern: "/etc/cron.d/zot-disk-heartbeat",
+        pattern: "- path: /etc/cron.d/zot-disk-heartbeat",
       },
     },
     replace_target: { choice: "registry-host-replace", server: "hcloud_server.registry" },

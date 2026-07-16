@@ -19,9 +19,13 @@ A dedicated Hetzner host behind a deny-all-public firewall (git-data, inngest, r
 be probed externally by Better Stack, so its liveness/health uses a **PUSH heartbeat**: something
 pings a heartbeat URL on a cadence, and *absence of ping* alerts. The pinger is installed either
 (a) **on the host itself by cloud-init** (the registry disk cron in
-`cloud-init-registry.yml`, the inngest systemd timer from `cloud-init-inngest.yml`), or (b) by a
-separate **web-host cron** over the private net (git-data + registry *liveness* — both unshipped
-follow-ups).
+`cloud-init-registry.yml`, the inngest systemd timer from `cloud-init-inngest.yml`, and — since
+#6537 — the registry *liveness* timer in `cloud-init-registry.yml`), or (b) by a separate
+**web-host cron** over the private net (git-data — still an unshipped follow-up, #6548).
+
+> **Amended (#6537):** registry *liveness* was listed under (b) as an unshipped follow-up. It is now
+> class (a): armed by the registry's own cloud-init. Its class-(b) framing is what let it sit
+> paused and unfed for 9 days — the manifest's own row restated it. See the ADR-116 block below.
 
 For class (a) the heartbeat and its cron ship in the same PR, but **`terraform apply` creating the
 heartbeat does NOT redeploy the host** — cloud-init runs only on host create/replace. If the host

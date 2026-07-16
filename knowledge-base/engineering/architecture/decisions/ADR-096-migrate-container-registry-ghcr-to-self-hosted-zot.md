@@ -99,14 +99,21 @@ independent axes so it never silently gates a host:
   its threshold being unreachable (#6285) mattered. (`paused` is under `ignore_changes`, so the live
   pause state is not verifiable from the repo.)
 
-  **Resolved (#6537, 2026-07-16 — [ADR-116](./ADR-116-executable-heartbeat-arming.md)):** the layer
-  now exists, but **not** as the web-host probe cron assumed above. It is an **on-host** systemd
+  **Feeder shipped (#6537, 2026-07-16 — [ADR-116](./ADR-116-executable-heartbeat-arming.md)):** the
+  layer now exists, but **not** as the web-host probe cron assumed above. It is an **on-host** systemd
   timer shipped in the registry's own cloud-init (`zot-liveness-heartbeat.timer`), pinging only while
   zot answers on the host's **private IP** — never loopback, because zot binds `0.0.0.0` and a
   loopback probe answers on a host holding no private NIC (#6400's blindness). It bakes the URL via
   `templatefile`, so `ZOT_HEARTBEAT_URL` still has zero consumers by design; that secret is reserved
-  for the off-host probe. The heartbeat is armed by a one-time API unpause **after** a real beat was
-  measured — never before (#6210).
+  for the off-host probe.
+
+  **NOT YET ARMED as of this edit.** The feeder reaches the host only on a fresh boot (cloud-init is
+  per-instance), so `registry_prd` stays **paused** until #6537's post-merge phase reprovisions the
+  host, measures a real beat, and *then* unpauses via a one-time API PATCH — never before (#6210).
+  Until that lands, zot liveness coverage is **unchanged** from the paragraph above. This sentence is
+  deliberately in the future tense: writing "is armed" before the beat is measured would be the same
+  species of false arming claim that #6537 exists to correct — and no static check would catch it
+  (the guard reads source `paused`, which `ignore_changes` decouples from live).
 
   Two scoping corrections to the note above, both of which read as coverage and are not:
   `registry_disk_prd` pings on `df` alone, so it alarms **host** death by absence but stays green

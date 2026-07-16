@@ -50,12 +50,35 @@ cron that did not exist. **The guard's own manifest restated the fiction.**
 - `{kind: "none", url_secret, tracking_issue}` — **HONESTLY UNFED.** Costs an owning issue. If it
   names a `url_secret`, the guard asserts that secret still has **zero consumers**.
 
-There is no third state. The 9-day middle — a provisioned monitor that nobody feeds and nobody owns —
-is what this forbids.
+The 9-day middle — a provisioned monitor that nobody feeds and nobody owns — is what this forbids.
 
 The invariant admits **two** legal resolutions for an unfed monitor: **feed it, or delete it.** A
 monitor that cannot alarm is not a cheap monitor; it is a false claim of coverage, and it is worse
 than no monitor because it reads as one.
+
+### What this does NOT exclude — stated plainly, because the guard's limits are the honest part
+
+An earlier draft of this ADR claimed "there is no third state". That was stronger than the guard
+supports, and overclaiming here is the same failure mode as the comment that caused #6537. Two states
+survive:
+
+- **FED-but-inert** (`feeder.kind` is `cron`/`timer`, live `paused=true`). `registry_prd` sits here
+  at merge, until the post-merge reprovision measures a beat and arms it. **No static check can
+  detect this** — the manifest compares source to source, and `ignore_changes` decouples both from
+  live. It is bounded only by the nightly live-reconcile deferred to #6549. Until that ships, the
+  bound is a human one, which is exactly the weakness that produced #6537 — so it is named here
+  rather than papered over.
+- **FALSELY FED** — evidence that resolves but does not actually arm *this* heartbeat. The guard
+  requires the declared **arming construct** (`systemctl enable --now <unit>`, a `- path:
+  /etc/cron.d/<x>` drop-in) on a comment-stripped view, which excludes the cheap versions: a bare
+  unit name that survives only in a comment, or generic boilerplate. It does **not** formally bind
+  the evidence to the heartbeat it claims to feed — a row could name a *sibling's* arming construct
+  and pass. Closing that needs a `url_binding` assertion (evidence file dereferences, or is baked
+  from, `betteruptime_heartbeat.<name>.url`); the two delivery routes differ, so it is not one
+  uniform check. Deliberately not built here.
+
+The guard is calibrated against **laziness** (`""`, `"a"`, boilerplate). #6537 was not laziness — it
+was a confident wrong claim. That gap is narrowed, not closed.
 
 ### The inverse assertion is the load-bearing half
 
@@ -67,15 +90,26 @@ still declared unfed, **CI goes red and forces the row — and the arming decisi
 That is precisely the event that went unnoticed for `registry_prd`, in reverse. It is now a build
 failure.
 
-### Consumer counting is dereference-anchored
+### Feeder detection is anchored on delivery, never on a name
 
-A consumer is a **dereference** (`$VAR` / `${VAR}`), never a bare name. This is not a detail:
-`git grep -c GIT_DATA_HEARTBEAT_URL` returns two hits and **neither is a feeder** — one is the
-secret's own `name = "..."` definition, the other is a line of operator prose inside a
-`cat <<'HEALTH'` heredoc. A name-anchored count would report a feeder that does not exist, i.e. it
-would reproduce the exact fiction this ADR exists to kill. Positive control: `INNGEST_HEARTBEAT_URL`
-*is* dereferenced (`curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL"`), and that heartbeat is the one
-that is actually armed and up.
+An unfed row is proven unfed against **both** delivery routes this repo uses, and neither probe
+matches a bare name:
+
+- **Dereference** (`$VAR` / `${VAR}`) — the Doppler-secret route. A bare-name grep for
+  `GIT_DATA_HEARTBEAT_URL` matches its own `name = "..."` definition and lines of operator prose
+  (including one inside a `cat <<'HEALTH'` heredoc, and a `TODO` comment describing the feeder that
+  does not exist). None is a feeder, so a name-anchored count reports a feeder that does not exist —
+  reproducing the exact fiction this ADR kills. Positive control: `INNGEST_HEARTBEAT_URL` *is*
+  dereferenced (`curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL"`), and that heartbeat is the one
+  actually armed and up.
+- **Bake** (`<var>_url = betteruptime_heartbeat.<name>.url` passed into a `templatefile`) — the route
+  #6537 itself introduced. `registry_prd`'s feeder bakes its URL and dereferences **nothing**, so a
+  dereference-only guard would be structurally blind to the very shape this ADR canonizes. `value =
+  ...url` is excluded: that is a `doppler_secret`/`output` definition, not a delivery.
+
+(No count is stated for those bare-name hits on purpose: the number depends on scope and moves with
+every edit — including this ADR's own. The test asserts the *discriminator* — bare name matches,
+dereference does not — never a literal.)
 
 ### This decision does NOT rest on `ignore_changes = [paused]`
 
