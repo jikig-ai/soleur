@@ -73,6 +73,55 @@ describe("support live path (support-live ON)", () => {
     );
   });
 
+  it("New conversation button: appears after a turn, clears history, and the next send mints a fresh thread", async () => {
+    // Distinct reply per call so transcript assertions are unambiguous.
+    let turn = 0;
+    const fetchSpy = vi.fn().mockImplementation(async () => {
+      turn += 1;
+      return sseResponse([
+        { type: "stream", content: `reply-${turn}`, partial: true, leaderId: "cc_router" } as WSMessage,
+        { type: "session_ended" } as WSMessage,
+      ]);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<SupportLauncher />);
+    fireEvent.click(screen.getByLabelText("Open support"));
+    const dialog = screen.getByRole("dialog");
+
+    // No new-conversation button on an empty thread.
+    expect(within(dialog).queryByLabelText("New conversation")).toBeNull();
+
+    const textarea = within(dialog).getByPlaceholderText("Ask a question…");
+    fireEvent.change(textarea, { target: { value: "first question" } });
+    fireEvent.click(within(dialog).getByLabelText("Send message"));
+    await waitFor(() => expect(within(dialog).getByText("reply-1")).toBeTruthy());
+    // First send does NOT force a new conversation.
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({ message: "first question" });
+
+    // Button now present; clicking it clears the transcript.
+    fireEvent.click(within(dialog).getByLabelText("New conversation"));
+    expect(within(dialog).queryByText("reply-1")).toBeNull();
+    expect(within(dialog).queryByText("first question")).toBeNull();
+    // And the button hides again on the now-empty thread.
+    expect(within(dialog).queryByLabelText("New conversation")).toBeNull();
+
+    // The NEXT send carries newConversation:true exactly once.
+    fireEvent.change(textarea, { target: { value: "second question" } });
+    fireEvent.click(within(dialog).getByLabelText("Send message"));
+    await waitFor(() => expect(within(dialog).getByText("reply-2")).toBeTruthy());
+    expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({
+      message: "second question",
+      newConversation: true,
+    });
+
+    // A THIRD send reuses (flag consumed — no newConversation).
+    fireEvent.change(textarea, { target: { value: "third question" } });
+    fireEvent.click(within(dialog).getByLabelText("Send message"));
+    await waitFor(() => expect(within(dialog).getByText("reply-3")).toBeTruthy());
+    expect(JSON.parse(fetchSpy.mock.calls[2][1].body)).toEqual({ message: "third question" });
+  });
+
   it("falls back to the canned reply when the transport fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
 

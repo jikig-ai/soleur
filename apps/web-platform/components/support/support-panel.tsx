@@ -20,6 +20,7 @@ export function SupportPanel({
   onClose,
   messages,
   onSend,
+  onReset,
   onStartTour,
   live = false,
 }: {
@@ -27,6 +28,8 @@ export function SupportPanel({
   onClose: () => void;
   messages: SupportMessage[];
   onSend: (text: string, chipKey?: string) => void;
+  /** Start a fresh support thread (clears history; next send mints a new one). */
+  onReset?: () => void;
   /** feat-guided-tour: present only when the guided-tour flag is on. */
   onStartTour?: () => void;
   /** ADR-113 — true when the live Concierge backend is enabled (support-live). */
@@ -135,26 +138,53 @@ export function SupportPanel({
               {live ? SUPPORT_PANEL_SUBTITLE_LIVE : SUPPORT_PANEL_SUBTITLE}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close support"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="h-4 w-4"
-              aria-hidden="true"
+          <div className="flex shrink-0 items-center gap-1">
+            {/* Start a fresh thread — only live (canned mode holds no server
+                conversation) and only once there's history to clear/escape. */}
+            {live && onReset && messages.length > 0 && (
+              <button
+                type="button"
+                onClick={onReset}
+                aria-label="New conversation"
+                title="New conversation"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                >
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                </svg>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close support"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
             >
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-4 w-4"
+                aria-hidden="true"
+              >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
         </header>
 
         {/* feat-guided-tour: "Take a tour" launch row — only when the flag is on
