@@ -59,7 +59,7 @@ Stand up a **dedicated Hetzner CX33-class EU host** that runs **Grok Build headl
 
 **If this leaks, the user's [data / workflow / money] is exposed via:** Operator API key + any secrets mistakenly placed on the host; prompts sent to xAI; autonomous shell on monorepo.
 
-**Brand-survival threshold:** `single-user incident`
+- **Brand-survival threshold:** `single-user incident`
 
 Requires CPO sign-off at plan time (carried from brainstorm PROCEED-WITH-GUARDS).
 
@@ -174,8 +174,8 @@ logs:
   where: /var/log/grok-dogfood/*.jsonl (or under workspace)
   retention: 30 days local then delete
 discoverability_test:
-  command: 'test -f knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood.md && grep -q TTFT knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood.md'
-  expected_output: runbook present with measurement section
+  command: 'test -f knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood.md && grep -q TTFT knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood.md && echo ok'
+  expected_output: ok
 ```
 
 ## Architecture Decision (ADR/C4)
