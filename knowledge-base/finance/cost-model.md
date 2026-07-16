@@ -107,10 +107,10 @@ At current architecture and headroom:
 | Component | Marginal cost/user (USD/mo) |
 |-----------|-----------------------------|
 | LLM inference | $0 (BYOK) |
-| Server capacity (1 slot of 11 on CX33) | ~$1.40 |
+| Server capacity (1 slot of 11 on CX33) | ~$0.83 [expenses.md@2026-07-16] |
 | Persistent storage (volume amortized) | ~$0.08 |
 | Database / auth / bandwidth (Supabase Pro headroom) | ~$0 until trigger |
-| **Marginal user cost** | **~$1.50 [expenses.md@2026-04-19]** |
+| **Marginal user cost** | **~$0.91 [expenses.md@2026-07-16]** |
 
 This is a steady-state approximation, valid while users remain within Supabase Pro limits and CX33 session capacity.
 
@@ -138,7 +138,7 @@ Effective **net revenue per user after Stripe fees: ~$48/month** (EU floor) to ~
 | Product COGS | 176.11 [expenses.md@2026-07-16] | 48 | ⌈176.11 ÷ 48⌉ = **4 users** |
 | All-in | 595.82 [expenses.md@2026-07-16] | 48 | ⌈595.82 ÷ 48⌉ = **13 users** |
 
-Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **13 users** at the current $595.82 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap). The COGS-scope count is unchanged at 3. Stripe fees still bite into gross margin at scale (see §5).
+Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **13 users** at the current $595.82 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap). The COGS-scope count shifts 3 → 4 (⌈176.11 ÷ 49⌉ = ⌈176.11 ÷ 48⌉ = 4). Stripe fees still bite into gross margin at scale (see §5).
 
 ## Scaling Triggers
 
@@ -167,8 +167,8 @@ Worked example: **50 paying users × $49/month = $2,450 MRR**. Two margin framin
 ```
 Revenue:           $2,450
 Product COGS:      $176.11 [expenses.md@2026-07-16]
-Gross profit:      $2,308.92
-Gross margin:      2,308.92 / 2,450 = 94.24%
+Gross profit:      $2,273.89
+Gross margin:      2,273.89 / 2,450 = 92.81%
 ```
 
 ### Against All-in Burn (the honest founder-economics framing)
@@ -176,7 +176,7 @@ Gross margin:      2,308.92 / 2,450 = 94.24%
 ```
 Revenue:           $2,450
 All-in burn:       $595.82 [expenses.md@2026-07-16]
-Contribution:      $1,898.92
+Contribution:      $1,854.18
 Margin (all-in):   1,854.18 / 2,450 = 75.68%
 ```
 
@@ -187,11 +187,11 @@ At 50 users × ~$1/user/mo Stripe fee (EU floor) = **$50/mo in fees**. Effective
 - Adjusted COGS-based margin: ($2,400 − $176.11) / $2,400 = **92.66%**
 - Adjusted all-in margin: ($2,400 − $595.82) / $2,400 = **75.17%**
 
-The original "93% gross margin" claim is closer to the COGS-based number (actually ~94%) and elides R&D / dev-tooling burn. The more honest founder-economics number is the all-in margin (~78%). Both should be cited side-by-side whenever the gross-margin claim is made; COGS-only margin without the R&D context misrepresents the operating picture.
+The original "93% gross margin" claim is closer to the COGS-based number (actually ~93%) and elides R&D / dev-tooling burn. The more honest founder-economics number is the all-in margin (~76%). Both should be cited side-by-side whenever the gross-margin claim is made; COGS-only margin without the R&D context misrepresents the operating picture.
 
 ## Pricing Gate #4 Status
 
-This document addresses the **affordability** dimension of Pricing Gate #4 (`knowledge-base/product/pricing-strategy.md:152` — "Infrastructure ready | Cloud sync, hosted execution, and analytics dashboard are buildable (not necessarily built) | Not assessed"). The affordability side is now assessed: product COGS is ~$141/mo at current ledger, break-even is 3 paying users (COGS scope) / 12 (all-in, gross-price and Stripe-net), gross margins remain ~77% all-in (~94% COGS-scope) at 50-user scale, and the BYOK architectural commitment keeps per-user variable cost near zero.
+This document addresses the **affordability** dimension of Pricing Gate #4 (`knowledge-base/product/pricing-strategy.md:152` — "Infrastructure ready | Cloud sync, hosted execution, and analytics dashboard are buildable (not necessarily built) | Not assessed"). The affordability side is now assessed: product COGS is ~$176/mo at current ledger [expenses.md@2026-07-16], break-even is 4 paying users (COGS scope) / 13 (all-in, gross-price and Stripe-net), gross margins remain ~76% all-in (~93% COGS-scope) at 50-user scale, and the BYOK architectural commitment keeps per-user variable cost near zero.
 
 The **buildability** dimension — whether cloud sync, hosted agent execution, and the analytics dashboard are actually buildable within a reasonable horizon — remains with **CPO / CTO**. That assessment is not closed by this document.
 
