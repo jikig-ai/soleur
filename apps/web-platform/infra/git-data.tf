@@ -271,6 +271,13 @@ resource "betteruptime_heartbeat" "git_data_prd" {
 # the private net to 10.0.1.20, then curl GIT_DATA_HEARTBEAT_URL on success) needs
 # ci-deploy wiring (a systemd timer like inngest-heartbeat.timer). This resource +
 # the URL secret are the IaC deliverable here; the probe script is the follow-up.
+#
+# This TODO is honest — unlike its registry counterpart, which claimed the probe had shipped and
+# left the monitor inert for 9 days (#6537). It is now ENFORCED rather than merely accurate:
+# heartbeat-manifest.ts declares this row `feeder: {kind:"none", url_secret:"GIT_DATA_HEARTBEAT_URL"}`
+# and the parity guard asserts that secret still has zero dereferencing consumers — so the day PR C
+# ships the probe, CI goes red and forces the row (and the arming decision) to be reconciled.
+# See ADR-116. Live-absence of this heartbeat is tracked separately in #6548.
 resource "doppler_secret" "git_data_heartbeat_url_prd" {
   project    = "soleur"
   config     = "prd"

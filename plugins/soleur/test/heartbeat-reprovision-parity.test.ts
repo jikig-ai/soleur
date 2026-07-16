@@ -44,7 +44,15 @@
 
 import { describe, test, expect } from "bun:test";
 import { resolve } from "path";
-import { readFileSync, readdirSync } from "fs";
+import { readFileSync, readdirSync, existsSync } from "fs";
+import { execFileSync } from "child_process";
+import {
+  MANIFEST,
+  countUrlSecretConsumers,
+  type Arming,
+  type Feeder,
+  type ManifestEntry,
+} from "../lib/heartbeat-manifest";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -53,77 +61,6 @@ const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
   ".github/workflows/apply-web-platform-infra.yml",
 );
-
-type Arming =
-  | "dedicated-host-boot"
-  | "web-host-cron"
-  | "app-emit"
-  | "external-probe";
-
-interface ManifestEntry {
-  /** The resource name (betteruptime_heartbeat.<name>). */
-  name: string;
-  arming: Arming;
-  /** DECLARED paused value; asserted equal to the value parsed from the .tf source. */
-  paused: boolean;
-  /**
-   * Required IFF arming === "dedicated-host-boot" && !paused. `choice` is the apply_target
-   * option; `server` is the `hcloud_server.<host>` the job -replaces.
-   */
-  replace_target?: { choice: string; server: string };
-  /** Required for every entry that is NOT (dedicated-host-boot && !paused). */
-  exempt_reason?: string;
-}
-
-// The codified #6242 Audit Matrix (Deliverable A). One row per heartbeat; adding a heartbeat to
-// the .tf files WITHOUT adding a row here FAILS the discovered⊆manifest assertion.
-const MANIFEST: ManifestEntry[] = [
-  {
-    name: "github_webhook_sig_failures",
-    arming: "app-emit",
-    paused: true,
-    exempt_reason:
-      "app/container emits the ping (webhook route pings on sig-failure); remediation is a container ci-deploy, not a dedicated-host reprovision.",
-  },
-  {
-    name: "github_api_429_sustained",
-    arming: "app-emit",
-    paused: true,
-    exempt_reason:
-      "app/container emits the ping; remediation is a container ci-deploy, not a dedicated-host reprovision.",
-  },
-  {
-    name: "git_data_prd",
-    arming: "web-host-cron",
-    paused: true,
-    exempt_reason:
-      "PUSH heartbeat armed by an (unshipped, #5274 PR C) WEB-HOST probe cron over the private net — NOT a git-data cloud-init cron. Reprovisioning git-data would not even arm it, so its remediation is web-host ci-deploy. (git-data-host-replace exists for immutable-redeploy compliance, not to arm this heartbeat.)",
-  },
-  {
-    name: "inngest_prd",
-    arming: "dedicated-host-boot",
-    paused: true,
-    // Currently paused → exempt from the path requirement, but a path exists anyway (ADR-100).
-    replace_target: { choice: "inngest-host-replace", server: "hcloud_server.inngest" },
-    exempt_reason:
-      "paused=true today (its on-host systemd timer's cron is armed at boot but the heartbeat is UI-unpaused only after first deploy); path exists regardless.",
-  },
-  {
-    name: "registry_prd",
-    arming: "web-host-cron",
-    paused: true,
-    exempt_reason:
-      "registry LIVENESS heartbeat armed by an (unshipped, Phase-3) WEB-HOST probe cron; remediation is web-host ci-deploy, not the registry cloud-init.",
-  },
-  {
-    name: "registry_disk_prd",
-    arming: "dedicated-host-boot",
-    paused: false,
-    // The #6238 exemplar: on-host cron /etc/cron.d/zot-disk-heartbeat (cloud-init-registry.yml)
-    // → MUST have a reprovision path. registry-host-replace re-runs cloud-init → installs it.
-    replace_target: { choice: "registry-host-replace", server: "hcloud_server.registry" },
-  },
-];
 
 /** Strip `#` and `//` line comments, quote-aware (mirrors terraform-target-parity.test.ts). */
 function stripLineComment(line: string): string {
@@ -208,6 +145,91 @@ function hasChoiceOption(workflow: string, choice: string): boolean {
 function hasReplaceLine(workflow: string, server: string): boolean {
   const esc = server.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`-replace=['"]${esc}['"]`).test(workflow);
+}
+
+/**
+ * Count lines in the repo (excluding knowledge-base/ prose) matching `re`.
+ *
+ * `git grep` exits 1 on "no match" — a NORMAL result here, not an error — and >1 on real failure,
+ * so the two must not be conflated: swallowing all non-zero exits would make a broken grep look
+ * like "zero consumers", i.e. would report an unfed heartbeat as correctly unfed for the wrong
+ * reason. That is the same false-green this whole module exists to prevent, so it fails loud.
+ */
+function gitGrepCount(re: RegExp): number {
+  try {
+    const out = execFileSync(
+      "git",
+      ["grep", "-IEc", re.source, "--", ":!knowledge-base"],
+      { cwd: REPO_ROOT, encoding: "utf8" },
+    );
+    return out
+      .split("\n")
+      .filter(Boolean)
+      .reduce((sum, line) => sum + Number(line.slice(line.lastIndexOf(":") + 1)), 0);
+  } catch (err: unknown) {
+    const status = (err as { status?: number }).status;
+    if (status === 1) return 0; // no match — the expected "still unfed" outcome
+    throw new Error(`git grep failed (exit ${status}) for /${re.source}/`);
+  }
+}
+
+/**
+ * The FEEDER guard (#6537) — the executable half of the arming claim.
+ *
+ * Forward (kind ∈ {cron,timer}): the declared evidence must exist on disk AND contain the pattern.
+ * A feeder that is deleted or renamed turns this RED. This is what a comment could never do.
+ *
+ * Inverse (kind === "none" + a url_secret): that secret must still have ZERO dereferencing
+ * consumers. This is the forcing function, and it is the assertion #6537 needed and lacked: the
+ * day someone ships a feeder for a heartbeat still declared unfed, CI goes red and makes them
+ * reconcile the row — instead of the feeder landing while the monitor stays paused for 9 days.
+ */
+function checkFeeders(
+  manifest: ManifestEntry[],
+  fileExists: (rel: string) => boolean,
+  readFile: (rel: string) => string,
+  countConsumers: (secret: string) => number,
+): string[] {
+  const violations: string[] = [];
+
+  for (const e of manifest) {
+    const f = e.feeder;
+
+    if (f.kind === "cron" || f.kind === "timer") {
+      // Two DISTINCT messages: "the evidence file is gone" and "the file is there but the feeder
+      // is not in it" are different failures with different fixes, and collapsing them into one
+      // message sends the next reader looking in the wrong place. (grep -F itself distinguishes
+      // them by exit code — 2 vs 1 — for the same reason.)
+      if (!fileExists(f.evidence.file)) {
+        violations.push(
+          `heartbeat "${e.name}": feeder evidence file "${f.evidence.file}" does not exist — the declared ${f.kind} cannot be arming it.`,
+        );
+        continue;
+      }
+      // Fixed-string containment (grep -F semantics): the pattern is a literal unit/path name, so
+      // regex interpretation would only invent metacharacter bugs.
+      if (!readFile(f.evidence.file).includes(f.evidence.pattern)) {
+        violations.push(
+          `heartbeat "${e.name}": feeder evidence file "${f.evidence.file}" exists but does NOT contain "${f.evidence.pattern}" — the ${f.kind} was renamed or removed, so nothing feeds this heartbeat.`,
+        );
+      }
+      continue;
+    }
+
+    // kind === "none" — an honest declaration, but it costs an owner.
+    if (!Number.isInteger(f.tracking_issue) || f.tracking_issue <= 0) {
+      violations.push(
+        `heartbeat "${e.name}": feeder.kind="none" requires a positive tracking_issue (who owns building the feeder — or deleting the heartbeat). An unfed monitor with no owner is exactly the #6537 shape.`,
+      );
+    }
+    if (f.url_secret !== null && countConsumers(f.url_secret) > 0) {
+      violations.push(
+        `heartbeat "${e.name}": declared UNFED (feeder.kind="none") but its url_secret ${f.url_secret} now has consumers — a feeder shipped. Reconcile this row to {kind:"cron"|"timer"} with evidence, then arm the heartbeat (verify a real ping lands BEFORE unpausing — #6210).`,
+      );
+    }
+  }
+
+  return violations;
 }
 
 /**
@@ -321,6 +343,120 @@ describe("heartbeat reprovision-parity guard — current state (#6242, ADR-103)"
         !discovered.find((d) => d.name === e.name)!.paused,
     ).map((e) => e.name);
     expect(live).toEqual(["registry_disk_prd"]);
+  });
+});
+
+describe("feeder manifest — every arming claim is executable (#6537)", () => {
+  const realExists = (rel: string) => existsSync(resolve(REPO_ROOT, rel));
+  const realRead = (rel: string) => readFileSync(resolve(REPO_ROOT, rel), "utf8");
+  const realCount = (secret: string) => countUrlSecretConsumers(secret, gitGrepCount);
+
+  test("every declared feeder's evidence resolves, and every unfed row is honest", () => {
+    expect(checkFeeders(MANIFEST, realExists, realRead, realCount)).toEqual([]);
+  });
+
+  test("every heartbeat declares a feeder (no silent omission)", () => {
+    for (const e of MANIFEST) {
+      expect(e.feeder).toBeDefined();
+      expect(["cron", "timer", "none"]).toContain(e.feeder.kind);
+    }
+  });
+
+  test("registry_prd is FED by the on-host timer and is dedicated-host-boot (#6537's fix)", () => {
+    // The row this PR inverts. Before: arming="web-host-cron" + an exempt_reason citing a probe
+    // cron that was never written — which is where the bug hid for 9 days. After: armed by the
+    // registry's own cloud-init, which makes the replace_target requirement fire (intended).
+    const e = MANIFEST.find((m) => m.name === "registry_prd")!;
+    expect(e.arming).toBe("dedicated-host-boot");
+    expect(e.feeder.kind).toBe("timer");
+    expect(e.replace_target).toEqual({
+      choice: "registry-host-replace",
+      server: "hcloud_server.registry",
+    });
+    // A dedicated-host-boot row must NOT carry an exempt_reason — it is not exempt.
+    expect(e.exempt_reason).toBeUndefined();
+  });
+
+  test("GIT_DATA_HEARTBEAT_URL still has zero consumers — the inverse assertion is live, not theoretical", () => {
+    // This is the tripwire for the sibling never-unpaused monitor. It passes today because the
+    // probe is genuinely unbuilt. When #5274 PR C ships it, this goes RED — on purpose.
+    expect(realCount("GIT_DATA_HEARTBEAT_URL")).toBe(0);
+  });
+
+  test("the consumer count is DEREFERENCE-anchored, not name-anchored (the trap this replaces)", () => {
+    // Load-bearing, and found the hard way: `git grep -c GIT_DATA_HEARTBEAT_URL` returns hits for
+    // the secret's own .tf definition and a line of operator prose in a heredoc — NEITHER is a
+    // feeder. A name-anchored count would report a feeder that does not exist, which is precisely
+    // the fiction this manifest replaces. So assert the discriminator directly:
+    //   bare name  -> matches (prose/definition exist)
+    //   dereference -> does not (no feeder exists)
+    expect(gitGrepCount(/GIT_DATA_HEARTBEAT_URL/)).toBeGreaterThan(0);
+    expect(realCount("GIT_DATA_HEARTBEAT_URL")).toBe(0);
+    // And the positive control: the one heartbeat that IS armed dereferences its URL.
+    expect(realCount("INNGEST_HEARTBEAT_URL")).toBeGreaterThan(0);
+  });
+});
+
+describe("feeder guard is load-bearing (non-vacuity, #6537)", () => {
+  const exists = (rel: string) => existsSync(resolve(REPO_ROOT, rel));
+  const read = (rel: string) => readFileSync(resolve(REPO_ROOT, rel), "utf8");
+  const noConsumers = () => 0;
+
+  const base: ManifestEntry = {
+    name: "synthetic_prd",
+    arming: "dedicated-host-boot",
+    paused: true,
+    feeder: { kind: "timer", evidence: { file: "apps/web-platform/infra/cloud-init-registry.yml", pattern: "zot-liveness-heartbeat.timer" } },
+    replace_target: { choice: "registry-host-replace", server: "hcloud_server.registry" },
+  };
+
+  test("a feeder whose evidence FILE is missing FAILS", () => {
+    const m: ManifestEntry[] = [
+      { ...base, feeder: { kind: "timer", evidence: { file: "apps/web-platform/infra/does-not-exist.yml", pattern: "x.timer" } } },
+    ];
+    const v = checkFeeders(m, exists, read, noConsumers);
+    expect(v.some((x) => x.includes("does not exist"))).toBe(true);
+  });
+
+  test("a feeder whose evidence PATTERN is absent FAILS — with a DIFFERENT message than a missing file", () => {
+    // This is the drift case that matters: the file survives a refactor, the unit is renamed, and
+    // the heartbeat silently stops being fed. Distinct message => the reader looks in the file,
+    // not for the file.
+    const m: ManifestEntry[] = [
+      { ...base, feeder: { kind: "timer", evidence: { file: "apps/web-platform/infra/cloud-init-registry.yml", pattern: "renamed-away.timer" } } },
+    ];
+    const v = checkFeeders(m, exists, read, noConsumers);
+    expect(v.some((x) => x.includes("does NOT contain"))).toBe(true);
+    expect(v.some((x) => x.includes("does not exist"))).toBe(false);
+  });
+
+  test("an unfed row with NO tracking issue FAILS (no owner => the #6537 shape)", () => {
+    const m: ManifestEntry[] = [
+      { name: "orphan_prd", arming: "app-emit", paused: true, exempt_reason: "x", feeder: { kind: "none", url_secret: null, tracking_issue: 0 } },
+    ];
+    const v = checkFeeders(m, exists, read, noConsumers);
+    expect(v.some((x) => x.includes("positive tracking_issue"))).toBe(true);
+  });
+
+  test("an unfed row whose url_secret GAINS a consumer FAILS — the forcing function", () => {
+    // Simulates #5274 PR C shipping the git-data probe while the row still claims "none".
+    // Mutation check: this is the assertion whose ABSENCE let registry_prd sit paused for 9 days
+    // while its comment claimed a feeder existed.
+    const m: ManifestEntry[] = [
+      { name: "unfed_prd", arming: "web-host-cron", paused: true, exempt_reason: "x", feeder: { kind: "none", url_secret: "SOME_HEARTBEAT_URL", tracking_issue: 1 } },
+    ];
+    const v = checkFeeders(m, exists, read, () => 1);
+    expect(v.some((x) => x.includes("a feeder shipped"))).toBe(true);
+  });
+
+  test("the real manifest's own evidence patterns are non-trivial (a pattern that matches everything proves nothing)", () => {
+    // Guards against the lazy fix: satisfying the forward assertion with a pattern so generic it
+    // can never fail (e.g. "" or "a"). Every declared pattern must name a specific unit/path.
+    for (const e of MANIFEST) {
+      if (e.feeder.kind === "none") continue;
+      expect(e.feeder.evidence.pattern.length).toBeGreaterThan(8);
+      expect(e.feeder.evidence.file).toMatch(/^apps\/web-platform\/infra\//);
+    }
   });
 });
 
