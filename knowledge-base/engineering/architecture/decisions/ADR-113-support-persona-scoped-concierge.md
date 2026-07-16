@@ -62,6 +62,28 @@ protecting line), C (on-demand WS that supersedes CC — drops the paying agent 
 no auto-reconnect). New: `lib/support-sse.ts` (pure frame format + client parse/reduce),
 `server/support-conversation.ts` (B2 resolve-or-create), `app/api/support/route.ts`.
 
+### Transport completion semantics (correction, 2026-07-15 — live-QA finding)
+
+Reusing `dispatchSoleurGo`'s injected sink hid a lifetime mismatch that only
+surfaced live: `dispatchSoleurGo` **resolves as soon as the turn's SDK query is
+started** — the runner consumes it on a fire-and-forget task (`void consumeStream`
+in `soleur-go-runner.ts`), so `onText`/`stream` frames arrive AFTER the dispatch
+promise settles. The Command Center's WS sink is process-lived, so this is invisible
+there; but the SSE stream is per-REQUEST, and the route originally closed the
+`ReadableStream` in a `finally` right after `await dispatchSoleurGo(...)` — i.e.
+BEFORE the first token. Every support turn therefore ran to completion server-side
+(LLM called, usage + reply persisted) while the client received an empty stream and
+fell back to canned. **Fix:** the route holds the SSE open until a TERMINAL frame
+(`stream_end`/`session_ended`/`error`) or a hard cap (`SUPPORT_TURN_MAX_MS`), not on
+the dispatch promise; regression test in `support-route.test.ts` emits frames AFTER
+the dispatch mock resolves. Corollary fix: `getSoleurGoRunner` is a process singleton
+whose captured sink feeds only `emitInteractivePrompt` — the support dispatch now
+passes the process-stable `defaultSendToClient` (a no-op for CC, since its
+`sendToClient` IS `defaultSendToClient`) instead of the per-request SSE sink, so the
+singleton never captures a request-scoped closure and the "re-init with different
+sendToClient" guard no longer fires per support turn. Unit-mock dispatch tests missed
+both because they resolved the injected sink synchronously.
+
 ## Live rollout gate (`support-live` flag)
 
 The live backend is gated behind a NEW `support-live` runtime flag, default OFF: while

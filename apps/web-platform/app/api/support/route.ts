@@ -23,6 +23,15 @@ import { sanitizeErrorForClient } from "@/server/error-sanitizer";
 import { reportSilentFallback } from "@/server/observability";
 import type { WSMessage } from "@/lib/types";
 
+// Hard cap on how long the SSE response is held open waiting for the turn to
+// finish. A well-behaved turn ends with a `stream_end`/`session_ended` frame far
+// sooner; this only backstops a turn that crashes mid-stream or is reaped without
+// a terminal frame (the client also has its own 30s idle watchdog).
+const SUPPORT_TURN_MAX_MS = 120_000;
+
+// Frame types that mean "the turn is over" — the signal to close the SSE response.
+const SUPPORT_TERMINAL_FRAME_TYPES = new Set(["stream_end", "session_ended", "error"]);
+
 export async function POST(request: Request): Promise<Response> {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/support", origin);
@@ -83,40 +92,65 @@ export async function POST(request: Request): Promise<Response> {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let closed = false;
+
+      // CRITICAL: `dispatchSoleurGo` resolves as soon as the turn's SDK query is
+      // *started* — the runner consumes it on a fire-and-forget background task
+      // (`void consumeStream` in soleur-go-runner.ts), so `onText`/`stream` frames
+      // arrive AFTER the dispatch promise settles. The Command Center gets away
+      // with this because its WebSocket sink is process-lived, but our per-request
+      // SSE stream would close before the first token if we closed on the dispatch
+      // promise. So we hold the response open until a TERMINAL frame arrives
+      // (stream_end / session_ended / error), or a hard cap fires.
+      let settleTurn!: () => void;
+      const turnComplete = new Promise<void>((resolve) => {
+        settleTurn = resolve;
+      });
+      let settled = false;
+      const finishTurn = () => {
+        if (!settled) {
+          settled = true;
+          settleTurn();
+        }
+      };
+
       const enqueue = (msg: WSMessage): boolean => {
         if (closed) return false;
         try {
           controller.enqueue(encoder.encode(formatSupportSseFrame(msg)));
-          return true;
         } catch {
           return false;
         }
+        if (SUPPORT_TERMINAL_FRAME_TYPES.has(msg.type)) finishTurn();
+        return true;
       };
 
-      try {
-        // The injected SSE sink — this is the whole coupling to the Concierge:
-        // dispatchSoleurGo streams its frames here instead of the WS.
-        await dispatchSoleurGo({
-          userId,
-          conversationId,
-          userMessage: message,
-          currentRouting: { kind: "soleur_go_pending" },
-          sendToClient: (_uid: string, msg: WSMessage) => enqueue(msg),
-          // Support has no sticky workflow (persona short-circuits routing).
-          persistActiveWorkflow: async () => {},
-          persona: "support",
-        });
-      } catch (err) {
+      const capTimer = setTimeout(finishTurn, SUPPORT_TURN_MAX_MS);
+
+      // Fire the dispatch but do NOT await it for turn completion (it settles
+      // early). We forward every frame to the SSE sink; a setup-time rejection
+      // becomes an honest error frame the client renders, then closes the turn.
+      void dispatchSoleurGo({
+        userId,
+        conversationId,
+        userMessage: message,
+        currentRouting: { kind: "soleur_go_pending" },
+        sendToClient: (_uid: string, msg: WSMessage) => enqueue(msg),
+        // Support has no sticky workflow (persona short-circuits routing).
+        persistActiveWorkflow: async () => {},
+        persona: "support",
+      }).catch((err) => {
         reportSilentFallback(err, { feature: "support", op: "support-route.dispatch", extra: { userId, conversationId } });
-        // Surface an honest error frame the client renders as a support bubble.
         enqueue({ type: "error", message: sanitizeErrorForClient(err) } as WSMessage);
-      } finally {
-        closed = true;
-        try {
-          controller.close();
-        } catch {
-          // already closed
-        }
+        finishTurn();
+      });
+
+      await turnComplete;
+      clearTimeout(capTimer);
+      closed = true;
+      try {
+        controller.close();
+      } catch {
+        // already closed
       }
     },
   });
