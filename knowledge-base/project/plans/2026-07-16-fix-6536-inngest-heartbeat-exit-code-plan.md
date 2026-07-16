@@ -190,14 +190,42 @@ Measured reality for the **dedicated** Inngest host:
   (`hr-prod-host-config-change-immutable-redeploy`).
 - **ADR-100**: this host is the **SOLE** scheduler.
 
-⇒ Delivering FR3/FR4 to the failing host means **replacing the sole prod scheduler host**, in the
-middle of the in-flight #6178 cutover. That is a real operational event with real blast radius —
-not a quiet redeploy. It is Terraform-driven (`terraform apply` on `inngest-host.tf`), so it stays
-inside IaC and needs no SSH, but the plan must **not** pretend it is free.
+⇒ Delivering FR3/FR4 to the failing host means **replacing the dedicated Inngest host**, in the
+middle of the in-flight #6178 cutover. That is a real operational event. It is Terraform-driven
+(`terraform apply` on `inngest-host.tf`), so it stays inside IaC and needs no SSH, but the plan
+must **not** pretend it is free.
 
-**Consequence for scope.** The cheap, genuinely-safe half (FR5 `vector.toml`, FR6 comment, FR7
-`cat-deploy-state.sh`) does **not** require a host replace. The unit-shape half (FR3, FR4) does.
-**Deepen-plan MUST settle the split** (see §Descoped) rather than let /work discover it.
+### Delivery split — **CORRECTED again (v3), measured**
+
+**v2's split is FALSE and would have broken /work.** v2 claimed "FR5 `vector.toml`, FR6, FR7 need
+no host replace." Measured:
+
+- `cloud-init-inngest.yml:337` pins **`IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.19`**.
+- **Both** `inngest-bootstrap.sh` **and** `vector.toml` are extracted from that OCI image at boot
+  (`cloud-init-inngest.yml:368` `docker cp …:/vector.toml`; `:370` `chmod +x $EXTRACT_DIR/inngest-bootstrap.sh`).
+- The bootstrap runs **only** under `runcmd`, at boot. A running host never re-reads either file.
+
+⇒ The replace trigger is **not** "editing `inngest-bootstrap.sh`" (that file is not in `user_data`
+at all). It is the **`IREF` tag bump at `cloud-init-inngest.yml:337`**, which *is* templated into
+`user_data` (`inngest-host.tf:200`) and, with no `ignore_changes=[user_data]` (`:244`), forces the
+replace. Re-pushing a mutable `v1.1.19` would produce **no** `user_data` diff and **no** replace —
+and the running host would keep the old units. Either way, **FR5 rides the same image as FR3/FR4**.
+
+**Corrected split:**
+
+| FR | Delivery | Replace? |
+|---|---|---|
+| FR3, FR4, **FR5** | OCI image `soleur-inngest-bootstrap` → `IREF` bump → `user_data` diff | **Yes** |
+| FR6 (`inngest-host.tf` comment) | Terraform comment only | No |
+| FR7 (`cat-deploy-state.sh`) | Not in `user_data`; verify its own delivery path | No |
+
+**Risk reframe (measured).** `INNGEST_CUTOVER_FLIP` and `INNGEST_HEARTBEAT_URL` are **both absent**
+from `soleur-inngest/prd` ⇒ the dedicated host is **dark/pre-cutover**; the **co-located** host is
+the live scheduler and sole monitor pusher. `inngest-host.tf:244`'s "SOLE scheduler" is ADR-100's
+**post-cutover** end-state, not today's. Replacing a dark, inert host does not interrupt prod
+scheduling — AC13 (monitor stays `up`) holds precisely because the co-located host keeps pushing.
+**Deepen-plan MUST confirm the #6178 cutover interaction and the `IREF` bump mechanics** (new tag
+vs. digest pin) rather than let /work discover them.
 
 **Verification** is `cat-deploy-state.sh` + Better Stack — no SSH (`hr-no-ssh-fallback-in-runbooks`).
 
@@ -291,8 +319,9 @@ three `.c4` files directly** (the completeness mandate rejects an unsupported "N
 
 | File | Change |
 |---|---|
-| `apps/web-platform/infra/inngest-bootstrap.sh` | **FR3** scoped dark-host branch in the ping script (160-164); **FR4** `SyslogIdentifier=inngest-heartbeat` + structured pre-exec log on the unit (178-194). *(Host-replace class — see §Apply path.)* |
-| `apps/web-platform/infra/vector.toml` | **FR5** add `"inngest-heartbeat"` to `[sources.host_scripts_journald].include_matches.SYSLOG_IDENTIFIER` (125-156) |
+| `apps/web-platform/infra/inngest-bootstrap.sh` | **FR3** scoped dark-host branch in the ping script (160-164); **FR4** `SyslogIdentifier=inngest-heartbeat` + structured pre-exec log on the unit (178-194). *(Ships in the OCI image — replace class, see §Delivery split.)* |
+| `apps/web-platform/infra/vector.toml` | **FR5** add `"inngest-heartbeat"` to `[sources.host_scripts_journald].include_matches.SYSLOG_IDENTIFIER` (125-156). *(Same OCI image as FR3/FR4 — replace class, NOT replace-free as v2 claimed.)* |
+| `apps/web-platform/infra/cloud-init-inngest.yml` | **FR8** bump `IREF` (`:337`) to the new `soleur-inngest-bootstrap` tag — the actual `user_data` diff that delivers FR3/FR4/FR5. Deepen-plan to settle tag-vs-digest. |
 | `apps/web-platform/infra/inngest-host.tf` | **FR6** correct the false "curl no-ops" comment (137-151) |
 | `apps/web-platform/infra/cat-deploy-state.sh` | **FR7** add `service_journal_tail inngest-heartbeat.service` next to `HEARTBEAT_STATUS` (344) |
 | `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` | RED tests for FR1-FR4 |
