@@ -308,6 +308,12 @@ resource "hcloud_server" "registry" {
     # no dashboard-eyeballing (hr-no-dashboard-eyeball-pull-data-yourself). Not a secret (a bare
     # ping URL); baked into user_data like zot_image, retrievable via the hcloud metadata API.
     disk_heartbeat_url = betteruptime_heartbeat.registry_disk_prd.url
+    # #6537 — zot LIVENESS heartbeat: the host pings this ONLY while zot answers on its own
+    # private IP, so a dead zot process on a live host alerts via Better Stack absence. This is
+    # the feeder that arms betteruptime_heartbeat.registry_prd; until it shipped, that monitor
+    # had ZERO consumers and stayed paused. Same class as disk_heartbeat_url: a bare ping URL,
+    # not a secret, baked into user_data and retrievable via the hcloud metadata API.
+    liveness_heartbeat_url = betteruptime_heartbeat.registry_prd.url
     # Better Stack Logs ingest URL for the SOLEUR_ZOT_DISK self-report (#6244). NON-secret host
     # routing (like disk_heartbeat_url) — baked into user_data; the ONLY secret is
     # BETTERSTACK_LOGS_TOKEN, injected at cron time via `doppler run` from the isolated config.
@@ -404,13 +410,33 @@ resource "hcloud_firewall_attachment" "registry" {
 }
 
 # --- Liveness (PUSH heartbeat) ---------------------------------------------------------
-# Better Stack cannot PULL a deny-all-public-ingress host, so liveness is a PUSH heartbeat:
-# a web-host cron probes zot `/v2/` over the private net and pings this heartbeat URL on
-# success; absence-of-ping alerts. Shape mirrors betteruptime_heartbeat.git_data_prd.
+# Better Stack cannot PULL a deny-all-public-ingress host, so liveness is a PUSH heartbeat.
 #
-# paused = true initially (same rationale as git_data_prd / inngest_prd): until the web-host
-# probe cron is wired + deployed (Phase-3/soak wiring), the gap between apply and the first
-# ping would fire a false alert. Unpause via the Better Stack UI once the probe ships.
+# WHAT FEEDS THIS (#6537): the registry's OWN cloud-init ships `zot-liveness-heartbeat.timer`
+# (cloud-init-registry.yml), which pings this URL every 60s ONLY while zot answers on the host's
+# private IP. The probe targets the private IP, never loopback: zot binds 0.0.0.0, so a loopback
+# probe answers even on a host holding no private NIC (#6400's exact blindness).
+#
+# Enforced, not asserted: `heartbeat-manifest.ts` declares this row's feeder as the arming
+# construct, and TWO suites gate it — `zot-liveness-heartbeat.test.sh` (delete the unit or the
+# runcmd enable => RED, and it pins the private-IP + no-`-f` + AccuracySec properties behaviorally)
+# and `heartbeat-reprovision-parity.test.ts` (the manifest row must name a real arming construct).
+#
+# The earlier version of THIS comment described a web-host probe cron and told the reader to
+# "unpause via the Better Stack UI once the probe ships". The probe was never written, so the
+# monitor sat paused and inert for 9 days while this comment asserted otherwise. That dangling
+# instruction — no owner, no forcing function, unverified by anything — WAS the bug (#6537), and it
+# is deliberately not replaced with another one.
+#
+# `paused = true` here is correct and permanent: `ignore_changes = [paused]` below decouples source
+# from live state, and this resource is an OPERATOR_APPLIED_EXCLUSION (untargeted), so a source
+# unpause is a no-op either way. Live arming is a one-time API PATCH, done only AFTER a real beat is
+# measured — never before (an unfed monitor that gets unpaused pages forever; #6210). Until that
+# happens the monitor is inert, and no static check can see it (ADR-117 names this state; the
+# nightly live-reconcile that would bound it is #6549).
+#
+# The consumer-perspective probe (can a CLIENT reach zot over the private net?) is a DIFFERENT
+# layer and remains open as #6438 §1; this on-host beat does not close it.
 resource "betteruptime_heartbeat" "registry_prd" {
   name      = "soleur-registry-prd"
   period    = 60
@@ -433,8 +459,19 @@ resource "betteruptime_heartbeat" "registry_prd" {
   }
 }
 
-# Heartbeat URL → Doppler prd, so the (Phase-3/soak) web-host probe cron can read it via the
-# server's existing `doppler secrets download` flow. Mirrors doppler_secret.git_data_heartbeat_url_prd.
+# Heartbeat URL → Doppler prd. Mirrors doppler_secret.git_data_heartbeat_url_prd.
+#
+# #6537: this previously claimed the URL was here "so the (Phase-3/soak) web-host probe cron can
+# read it" — the second false forward reference to a cron that was never written, on the same
+# resource as the first.
+#
+# It has ZERO consumers today, and that is expected rather than dead code: the on-host feeder that
+# actually arms registry_prd bakes the URL through `templatefile` (liveness_heartbeat_url), the same
+# way disk_heartbeat_url is delivered — no Doppler read, so no empty-variable failure mode (#4116).
+#
+# This secret is reserved for the OFF-HOST consumer-perspective probe (#6438 §1), which would run on
+# the web host and therefore cannot read the registry's user_data. If #6438 is resolved without one,
+# delete this secret rather than leaving it to accumulate another false forward reference.
 resource "doppler_secret" "zot_heartbeat_url_prd" {
   project    = "soleur"
   config     = "prd"

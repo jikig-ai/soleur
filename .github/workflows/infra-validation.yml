@@ -423,6 +423,13 @@ jobs:
       - name: Run registry private-NIC boot-converger tests (#6415)
         run: bash apps/web-platform/infra/private-nic-guard.test.sh
 
+      # Registered explicitly because this job runs named steps, not a glob — an unregistered
+      # infra suite gates NOTHING and fails silently green (#3366/#6520). Pure bash + PATH
+      # stubs: no terraform, cloud-init, docker, network, or root, so this job's existing
+      # environment already carries everything it needs.
+      - name: Run zot liveness-heartbeat feeder tests (#6537 — private-IP probe, not localhost)
+        run: bash apps/web-platform/infra/zot-liveness-heartbeat.test.sh
+
       - name: Run deploy fan-out peer-list parity drift-guard
         run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
 
