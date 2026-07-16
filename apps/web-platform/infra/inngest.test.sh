@@ -151,6 +151,71 @@ assert "DOPPLER_BIN resolved via command -v before HEARTBEAT_UNIT write" \
 assert "heartbeat unit sets SyslogIdentifier=inngest-heartbeat (AC1, #6536)" \
   "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-heartbeat$'"
 
+# #6536 ROUND 2: EVERY doppler-wrapped unit MUST set PrivateTmp=true.
+#
+# Not a style rule — a correctness one. /etc/default/inngest-server sets
+# DOPPLER_CONFIG_DIR=/tmp/.doppler for all of them, and cloud-init-inngest.yml's boot
+# isolation self-check runs `doppler secrets` as ROOT against that same path
+# (cloud-init-inngest.yml:212/226/289), so /tmp/.doppler is ROOT-OWNED from first boot.
+# A unit with a private /tmp never sees it and the CLI recreates it as `deploy`; a unit on
+# the shared /tmp gets `permission denied`, and `doppler run` dies BEFORE exec — the child
+# never runs. That is measured, not theorised: it is verbatim what the heartbeat's channel
+# shipped on the fresh host, and it is why this unit failed every 60s for 3 days while its
+# two siblings (which already set PrivateTmp) were fine.
+#
+# ALL-MEMBERS, derived — not a spot-check of the one unit we just fixed. The heartbeat was
+# the lone omission out of three; the next doppler unit added here inherits the same trap,
+# and nothing else would catch it (the failure is invisible off-box by construction — that
+# is #6536's whole thesis). Enumerating from the source means a NEW unit is guarded the day
+# it lands, not the day it breaks.
+PRIVATE_TMP_VIOLATORS=$(python3 - "$BOOTSTRAP_SH" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1]).read()
+bad = []
+# Each unit is written by `cat > "$VAR" <<'MARKER' ... MARKER`.
+for m in re.finditer(r'cat > "?\$\{?(\w+)\}?"? <<\'?(\w+EOF)\'?\n(.*?)\n\2', src, re.S):
+    var, body = m.group(1), m.group(3)
+    if '[Service]' not in body:
+        continue
+    execstart = re.search(r'^ExecStart=(.*)$', body, re.M)
+    if not execstart:
+        continue
+    # doppler-wrapped = the ExecStart runs the doppler CLI (literally or via ${DOPPLER_BIN}).
+    if 'doppler' not in execstart.group(1).lower() and 'DOPPLER_BIN' not in execstart.group(1):
+        continue
+    if not re.search(r'^PrivateTmp=true$', body, re.M):
+        bad.append(var)
+print(' '.join(bad))
+PYEOF
+)
+assert "every doppler-wrapped unit sets PrivateTmp=true (#6536 — root-owned /tmp/.doppler kills the child before exec)" \
+  "[[ -z '$PRIVATE_TMP_VIOLATORS' ]]"
+if [[ -n "$PRIVATE_TMP_VIOLATORS" ]]; then
+  echo "        VIOLATORS: $PRIVATE_TMP_VIOLATORS"
+  echo "        These units run doppler with DOPPLER_CONFIG_DIR=/tmp/.doppler on the SHARED"
+  echo "        /tmp, where cloud-init's root-run boot self-check already created that dir."
+  echo "        doppler run will exit 'permission denied' BEFORE exec and the child never runs."
+fi
+# Non-vacuity: the enumeration must actually FIND the units. A regex that matches nothing
+# reports zero violators and passes forever — the exact false-green this guard exists to
+# prevent. Three doppler units ship today (heartbeat, inngest-server, vector).
+DOPPLER_UNIT_COUNT=$(python3 - "$BOOTSTRAP_SH" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1]).read()
+n = 0
+for m in re.finditer(r'cat > "?\$\{?(\w+)\}?"? <<\'?(\w+EOF)\'?\n(.*?)\n\2', src, re.S):
+    body = m.group(3)
+    if '[Service]' not in body:
+        continue
+    e = re.search(r'^ExecStart=(.*)$', body, re.M)
+    if e and ('doppler' in e.group(1).lower() or 'DOPPLER_BIN' in e.group(1)):
+        n += 1
+print(n)
+PYEOF
+)
+assert "PrivateTmp guard is non-vacuous: it found >=3 doppler-wrapped units (found $DOPPLER_UNIT_COUNT)" \
+  "[[ '$DOPPLER_UNIT_COUNT' -ge 3 ]]"
+
 # --- #6536 / FR3: heartbeat ping-script render split (@@DARK_ARM@@) ---
 echo ""
 echo "--- Heartbeat ping-script render split (@@DARK_ARM@@, #6536) ---"
