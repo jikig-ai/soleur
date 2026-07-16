@@ -388,8 +388,12 @@ logs:
   where: "GitHub Actions run logs, Infra Validation / deploy-script-tests"
   retention: "90 days (repo default)"
 discoverability_test:
-  command: "bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh; echo rc=$?"
-  expected_output: "`all checks passed` then `rc=0` (no ssh; identical locally and in CI)"
+  # No `;` / `$?` / pipes: preflight Check 10 EXECUTES this command and refuses any
+  # shell-active token, so the original `…test.sh; echo rc=$?` form was unrunnable by
+  # the very gate that verifies it — declared-verifiable but unverifiable. The runner
+  # captures the exit code itself, so the suffix was redundant as well as fatal.
+  command: "bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh"
+  expected_output: "all checks passed"
 ```
 
 ## Domain Review
