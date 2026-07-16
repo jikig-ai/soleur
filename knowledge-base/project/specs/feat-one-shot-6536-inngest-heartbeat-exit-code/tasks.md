@@ -33,11 +33,16 @@ Lane: `cross-domain` · Threshold: `single-user incident` · Issue: #6536
       child env. That is the identical mechanism carrying `INNGEST_HEARTBEAT_URL` today, so the
       discriminator works by construction. Key absent today ⇒ not injected ⇒ `${…:-unset}` ⇒
       `unset` ⇒ dark arm ⇒ exit 0. Correct. Re-assert as a test, not an assumption (1.9).
-- [ ] 0.6 File tracking issues for the items in §Descoped (now **6**, incl. the new
-      `op=rollback` two-pusher gap and the stale `:416` FSM comment).
-- [ ] 0.7 **AC15 ordering gate.** Assert `INNGEST_CUTOVER_FLIP` is absent from `soleur-inngest/prd`
-      at apply time (`doppler secrets --only-names -p soleur-inngest -c prd`). The entire
-      §Downtime & Cutover zero-downtime conclusion rests on this. If present/armed → **HALT**.
+- [ ] 0.6 File tracking issues for the items in §Descoped (now **9**). Priority order:
+      **#7 (live shipper != repo vector.toml — file FIRST)**, #4 (op=rollback leaves the URL →
+      two pushers), #5 (stale `:416` FSM comment), #8 (heartbeat proves host, not scheduler).
+- [ ] 0.7 **AC15 ordering gate — BOTH keys** (CPO P1-3). Assert `INNGEST_HEARTBEAT_URL` **and**
+      `INNGEST_CUTOVER_FLIP` are absent from `soleur-inngest/prd` at apply time
+      (`doppler secrets --only-names -p soleur-inngest -c prd`). The URL is the **primary**
+      trip-wire — `op=arm` writes it FIRST (G4 `:759`) and the flip LAST (G5 `:669`), so a failed
+      arm leaves URL-present/flip-absent **durably**, a state v2's flip-only gate passed. Both
+      absent → proceed. URL present + flip absent → **HALT** (failed/partial arm). Flip present →
+      **HALT**.
 
 ## Phase 1 — Observability first (the discriminating probe)
 
@@ -50,9 +55,17 @@ Ships BEFORE the fix so the next fire self-reports which defect was live.
       → `doppler`).
 - [ ] 1.3 RED: test asserting the ping script emits one structured pre-exec line carrying
       `project=` + `url_present=` + `flip=` **together** (one row discriminates all hypotheses).
-- [ ] 1.4 GREEN: emit it via `logger -t inngest-heartbeat`. **Presence booleans only — NEVER the
-      URL value.**
-- [ ] 1.5 RED: leak gate (AC3) — assert no `logger`/`echo` of `$INNGEST_HEARTBEAT_URL` anywhere.
+- [ ] 1.4 GREEN: emit it via `logger -t "$LOG_TAG"` with `LOG_TAG="inngest-heartbeat"` as a real
+      assignment in the ping script — **NOT** a bare `logger -t inngest-heartbeat` literal. The
+      drift fixture (`vector-pii-scrub.test.sh:404`) derives EXPECTED_TAGS from
+      `^\s*(readonly\s+)?LOG_TAG="…"` in `infra/*.sh`; a literal pulls the file into the loop
+      (grep is heredoc-blind), yields NO tag, and hard-fails AC3's set-equality — taking AC7/AC9
+      with it (obs P1-2). Do NOT "fix" that by appending to `SYSTEMD_UNIT_IDENTIFIERS` — `:412`
+      forbids it (*"not a drift-guard bypass"*). **Presence booleans only — NEVER the URL value.**
+- [ ] 1.5 RED: leak gate (AC3) — **value-based, not source-grep** (CPO P1-2). Run the ping script
+      with `INNGEST_HEARTBEAT_URL=https://uptime.betterstack.com/api/v1/heartbeat/CANARY_SENTINEL`,
+      capture stdout+stderr+logger output, assert `CANARY_SENTINEL` appears **zero** times. v2's
+      regex caught 1 of 3 shapes and missed `${…}` brace form — this plan's own house style.
 - [ ] 1.6 GREEN: add `"inngest-heartbeat"` to `vector.toml`
       `[sources.host_scripts_journald].include_matches.SYSLOG_IDENTIFIER` with a `#6536` comment.
       **Source 4 only** — Source 1's `PRIORITY 0-4` cut drops the unit's PRIORITY-6 output.
@@ -65,9 +78,11 @@ Ships BEFORE the fix so the next fire self-reports which defect was live.
 
 ## Phase 2 — Fix the sole live defect (H5)
 
-- [ ] 2.1 RED: table-driven test over **all nine** cases from 0.4 — exit **0** for
-      `""`, `unset`, `aborted`, `rollback`, `rolled-back`; exit **1** for `armed`, `flipping`,
-      `flushed`, `done`; exit **1** for an unknown value (fail-closed `*)` arm).
+- [ ] 2.1 RED: table-driven test over **all ten** cases from 0.4. **Project gate FIRST**:
+      `DOPPLER_PROJECT=soleur` + URL absent → **exit 1** (the live co-located pusher; CPO P1-1).
+      Then, for `DOPPLER_PROJECT=soleur-inngest`: exit **0** for `""`, `unset`, `aborted`,
+      `rollback`, `rolled-back`; exit **1** for `armed`, `flipping`, `flushed`, `done`; exit **1**
+      for an unknown value (fail-closed `*)` arm).
 - [ ] 2.2 GREEN: implement the `case` branch in the ping script (`inngest-bootstrap.sh:160-164`)
       exactly as prescribed in plan §Phase 3 / §AC5b. Keep `exec curl` on the happy path.
 - [ ] 2.3 Verify the branch under `sh` (not bash) with the var **unset** — the script is `#!/bin/sh`.
