@@ -19,6 +19,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOAK="$HERE/zot-soak-6122.sh"
 fails=0
+GH_ARGV_SINK="$(mktemp)"
+trap 'rm -f "$GH_ARGV_SINK"' EXIT
 pass() { printf '  PASS: %s\n' "$1"; }
 fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 
@@ -30,7 +32,7 @@ fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 # COUNTS_SPEC is "<substring>=<count>" pairs; the first substring matching the request URL
 # wins. HTTP_CODE lets us simulate a non-200 (the TRANSIENT sentinel path).
 make_stubs() {
-  local dir="$1" counts_spec="$2" gh_state="$3" http_code="${4:-200}" fail_url_substr="${5:-}"
+  local dir="$1" counts_spec="$2" gh_state="$3" http_code="${4:-200}" fail_url_substr="${5:-}" gh_reason="${6:-COMPLETED}"
   mkdir -p "$dir" || { echo "FATAL: could not create stub dir $dir" >&2; exit 1; }
   # Mirror sentry_count's REAL contract exactly: it calls
   #   curl -sS -w '\nHTTP_STATUS:%{http_code}' ... "<url>"
@@ -67,11 +69,19 @@ if [[ "\$n" -gt 0 ]]; then
 fi
 printf '{"data":[%s]}\nHTTP_STATUS:%s' "\$data" "$http_code"
 STUB
-  cat > "$dir/gh" <<STUB
+  # Values are exported into the stub's ENVIRONMENT, not interpolated into its SOURCE, so the
+  # heredoc is QUOTED. An unquoted <<STUB expands $gh_state at write time, and a `"` or `$(...)`
+  # in any value would break out of the generated script — a latent injection in the very file
+  # guarding an irreversible act.
+  cat > "$dir/gh" <<'STUB'
 #!/usr/bin/env bash
-# The soak calls: gh issue view <n> --json state --jq .state
-if [[ "$gh_state" == "__UNREADABLE__" ]]; then exit 1; fi
-printf '%s\n' "$gh_state"
+# The soak calls: gh issue view <n> --repo github.com/jikig-ai/soleur --json state,stateReason
+# Record argv so an arm can assert the repo pin is actually passed. The stub SHADOWS gh's repo
+# resolution, so it cannot observe a GH_REPO hijack directly — argv is the witness that the
+# soak does not depend on that resolution at all.
+printf '%s\n' "$*" >> "$STUB_GH_ARGV"
+if [[ "$STUB_GH_STATE" == "__UNREADABLE__" ]]; then exit 1; fi
+printf '{"state":"%s","stateReason":"%s"}\n' "$STUB_GH_STATE" "$STUB_GH_REASON"
 STUB
   chmod 0755 "$dir/curl" "$dir/gh"
 }
@@ -84,7 +94,7 @@ STUB
 # so relocating the script relocates what it corroborates against. No test-only backdoor in the
 # gate itself — the gate has no override, and that is deliberate.
 run_soak() {
-  local counts_spec="$1" gh_state="$2" http_code="${3:-200}" fail_url_substr="${4:-}" inngest_fixed="${5:-no}"
+  local counts_spec="$1" gh_state="$2" http_code="${3:-200}" fail_url_substr="${4:-}" inngest_fixed="${5:-no}" gh_reason="${6:-COMPLETED}"
   local d out rc soak="$SOAK"
   d="$(mktemp -d)"
   if [[ "$inngest_fixed" == "yes" ]]; then
@@ -100,7 +110,7 @@ run_soak() {
 FIXED
     soak="$d/repo/scripts/followthroughs/$(basename "$SOAK")"
   fi
-  make_stubs "$d" "$counts_spec" "$gh_state" "$http_code" "$fail_url_substr"
+  make_stubs "$d" "$counts_spec" "$gh_state" "$http_code" "$fail_url_substr" "$gh_reason"
   # Assert the stub actually SHADOWS the real binaries. Without this, a silent stub-creation
   # failure would let the real curl hit sentry.io with a bogus token → 401 → TRANSIENT → exit 2
   # — and arms 5/6 both assert rc=2, so they would pass for entirely the wrong reason.
@@ -109,7 +119,9 @@ FIXED
   [[ "$resolved" == "$d/curl" ]] || { echo "FATAL: stub curl did not shadow the real one (got $resolved)" >&2; exit 1; }
   resolved="$(PATH="$d:$PATH" command -v gh)"
   [[ "$resolved" == "$d/gh" ]] || { echo "FATAL: stub gh did not shadow the real one (got $resolved)" >&2; exit 1; }
+  : > "$GH_ARGV_SINK"
   out="$(PATH="$d:$PATH" SENTRY_AUTH_TOKEN=stub GH_TOKEN=stub \
+        STUB_GH_STATE="$gh_state" STUB_GH_REASON="$gh_reason" STUB_GH_ARGV="$GH_ARGV_SINK" \
         ZOT_SOAK_START="2026-07-01T00:00:00" bash "$soak" 2>&1)"; rc=$?
   rm -rf "$d"
   printf '%s|%s' "$rc" "$out"
@@ -230,6 +242,51 @@ if [[ "$rc" == "1" && "$out" == *"blocker-closed-but-condition-unmet"* ]]; then
   pass "#6500 CLOSED but the inngest host still GHCR-only -> exit 1, closing the issue cannot bypass"
 else
   fail "a CLOSED blocker with the condition unmet must exit 1; got rc=$rc out=$out"
+fi
+
+# 8. The repo pin. security-sentinel proved the unpinned form live: with every other arm
+#    satisfied, `GH_REPO=microsoft/vscode` made the soak read THAT repo's #6500 (which is
+#    closed) and emit rc=0 "Safe to retire GHCR". A stub gh SHADOWS the resolution it would
+#    need to observe, so assert on argv instead: the soak must pin host+repo and therefore
+#    never depend on ambient GH_REPO/GH_HOST at all.
+r="$(run_soak "$HEALTHY" CLOSED 200 "" yes)"
+gh_argv="$(cat "$GH_ARGV_SINK" 2>/dev/null || true)"
+if [[ "$gh_argv" == *"--repo github.com/jikig-ai/soleur"* ]]; then
+  pass "blocker arm pins host+repo on gh (ambient GH_REPO/GH_HOST cannot redirect it)"
+else
+  fail "gh must be called with --repo github.com/jikig-ai/soleur; argv was: ${gh_argv:-<none>}"
+fi
+
+# 9. CLOSED is not consent. Every closure reason returns state=CLOSED, so a not-planned /
+#    duplicate / autonomous-triage close (ticket-triage and drain-labeled-backlog both operate
+#    over this backlog) would otherwise authorize an irreversible PAT revoke.
+r="$(run_soak "$HEALTHY" CLOSED 200 "" yes NOT_PLANNED)"
+rc="${r%%|*}"; out="${r#*|}"
+if [[ "$rc" == "1" && "$out" == *"blocker-closed-not-completed"* ]]; then
+  pass "#6500 closed as NOT_PLANNED -> exit 1, a tidy-up close cannot authorize"
+else
+  fail "a not-planned close must exit 1; got rc=$rc out=$out"
+fi
+
+# 10. The corroboration grep must not be satisfied by PROSE. Verified as a real bypass: two
+#     comment lines ("# TODO: add zot support", "# soleur-boot-emit would report this") passed
+#     the earlier bare-word grep on a file that was still GHCR-only — the guard added to close
+#     the careless-close bypass was itself bypassable by a comment. Anchors on ^\s*IREF=.*$ZURL
+#     and ^\s*soleur-boot-emit now; a comment line begins with '#' and cannot produce either.
+d10="$(mktemp -d)"
+mkdir -p "$d10/repo/scripts/followthroughs" "$d10/repo/apps/web-platform/infra"
+cp "$SOAK" "$d10/repo/scripts/followthroughs/"
+printf '# TODO: add zot support here one day\n# soleur-boot-emit would report this\nIREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.19\n' \
+  > "$d10/repo/apps/web-platform/infra/cloud-init-inngest.yml"
+make_stubs "$d10" "$HEALTHY" CLOSED 200 "" COMPLETED
+out10="$(PATH="$d10:$PATH" SENTRY_AUTH_TOKEN=stub GH_TOKEN=stub \
+        STUB_GH_STATE=CLOSED STUB_GH_REASON=COMPLETED STUB_GH_ARGV="$GH_ARGV_SINK" \
+        ZOT_SOAK_START="2026-07-01T00:00:00" bash "$d10/repo/scripts/followthroughs/$(basename "$SOAK")" 2>&1)"; rc10=$?
+rm -rf "$d10"
+if [[ "$rc10" == "1" && "$out10" == *"blocker-closed-but-condition-unmet"* ]]; then
+  pass "comments naming zot/soleur-boot-emit do NOT satisfy the corroboration grep"
+else
+  fail "prose must not satisfy the corroboration grep; got rc=$rc10 out=$out10"
 fi
 
 if [[ "$fails" -gt 0 ]]; then

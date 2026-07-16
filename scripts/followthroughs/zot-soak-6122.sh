@@ -354,7 +354,12 @@ BLOCKER=6500
 # cannot catch that: a wrong-repo CLOSED is a well-formed answer to the wrong question, and it
 # would authorize the revoke. Pinning the repo makes the arm's correctness a stated fact
 # rather than a CWD invariant.
-st=$(gh issue view "$BLOCKER" --repo jikig-ai/soleur --json state --jq .state 2>/dev/null)
+# --repo carries the HOST too: GH_HOST is a second unpinned resolver, so `jikig-ai/soleur`
+# alone still leaves the enterprise/host axis ambient. `--json state,stateReason` because
+# CLOSED alone is not consent — see the stateReason gate below.
+st_json=$(gh issue view "$BLOCKER" --repo github.com/jikig-ai/soleur --json state,stateReason 2>/dev/null)
+st=$(printf '%s' "$st_json" | jq -r '.state // empty' 2>/dev/null)
+st_reason=$(printf '%s' "$st_json" | jq -r '.stateReason // empty' 2>/dev/null)
 # ⚠ Fail SAFE on an unreadable state. A gate must never read "I could not measure" as "the
 # measurement is false" — treating an unknown state as CLOSED would PASS the gate during a
 # GitHub outage while the 7th path is still live. TRANSIENT is correct here (the probe could
@@ -383,6 +388,16 @@ fi
 # fails on a careless close but sees the world (e.g. whether the zot mirror is actually
 # populated — #6500's own "Caveat on the zot mirror"); the grep fails when the code looks right
 # but the mirror is empty, and cannot be closed by accident. Neither subsumes the other.
+# ⚠ CLOSED IS NOT CONSENT. GitHub returns CLOSED for EVERY closure reason, so a
+# `not planned` / `duplicate` / stale-triage close reads identically to a deliberate "the
+# inngest host now pulls zot". That matters concretely: soleur:ticket-triage and
+# drain-labeled-backlog operate autonomously over this backlog, so an automated tidy-up is a
+# realistic path to authorizing an irreversible PAT revoke. Require an affirmative COMPLETED.
+if [[ "$st" == "CLOSED" && "$st_reason" != "COMPLETED" ]]; then
+  echo "FAIL(blocker-closed-not-completed): #$BLOCKER is CLOSED with stateReason='${st_reason:-<empty>}', not COMPLETED — a not-planned/duplicate/triage close is not evidence the dedicated inngest host was fixed. Re-open it, or close it as completed only once the host pulls zot-primary AND reports on the Sentry stage: schema."
+  exit 1
+fi
+
 INNGEST_CI="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)/apps/web-platform/infra/cloud-init-inngest.yml"
 if [[ ! -f "$INNGEST_CI" ]]; then
   echo "TRANSIENT: cannot read $INNGEST_CI to corroborate #$BLOCKER's closure — refusing to authorize on issue state alone." >&2
@@ -391,7 +406,14 @@ fi
 # (a) a zot pull path exists at all, and (b) it reports on the Sentry `stage:` schema the
 # queries above depend on. Same terms as #6500's filed evidence, so the gate and the issue
 # cannot drift apart on what "fixed" means.
-if ! grep -qiE 'zot|ZURL|ZIREF|/v2/' "$INNGEST_CI" || ! grep -q 'soleur-boot-emit' "$INNGEST_CI"; then
+# ⚠ ANCHOR ON SYNTAX, NEVER THE BARE WORD. A body-grep sees COMMENTS too, so #6500's filed
+# evidence terms (`zot|ZURL|ZIREF|/v2/` + `soleur-boot-emit`) are the right SEMANTICS but the
+# wrong PREDICATE for a gate: an earlier draft used them bare, and two comment lines —
+# "# TODO: add zot support" and "# soleur-boot-emit would report this" — satisfied BOTH on a
+# file that was still GHCR-only. The guard added to close the careless-close bypass was itself
+# bypassable by prose (verified, not theorised). A comment line begins with `#`, so it can never
+# produce `^\s*IREF=` or `^\s*soleur-boot-emit `. Narrowing is not anchoring.
+if ! grep -qE '^[[:space:]]*IREF=.*\$ZURL' "$INNGEST_CI" || ! grep -qE '^[[:space:]]*soleur-boot-emit ' "$INNGEST_CI"; then
   echo "FAIL(blocker-closed-but-condition-unmet): #$BLOCKER is CLOSED, but $INNGEST_CI still shows no zot pull path and/or no soleur-boot-emit reporting — the 7th GHCR-served path is still open in the CODE. Closing the issue does not retire the path. Re-open #$BLOCKER or fix the host before 5.3."
   exit 1
 fi
