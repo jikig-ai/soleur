@@ -121,10 +121,44 @@ is armed; it can only prove a feeder exists.** Arming is verified by measuring a
 
 ### Ordering is mandatory, not advisory
 
-**Build the feeder → measure a real beat → then unpause.** Never unpause first. This repo has already
-run that experiment: #6210 unpaused a monitor nothing fed and paged the founder until it was
-re-paused. An unfed monitor that gets unpaused converts a silent gap into a permanent false alarm,
-which trains the operator to ignore the alarm — strictly worse than the silence it replaced.
+**Build the feeder → verify the beat → then leave it armed.** Never arm an unfed monitor and walk
+away. This repo has already run that experiment: #6210 unpaused a monitor nothing fed and paged the
+founder until it was re-paused. An unfed monitor that gets unpaused converts a silent gap into a
+permanent false alarm, which trains the operator to ignore the alarm — strictly worse than the
+silence it replaced.
+
+> **Corrected 2026-07-16, by executing it.** This section originally read *"measure a real beat →
+> **then** unpause"*. **That is not implementable against Better Stack's API, and shipping it as
+> procedure was this ADR's own defect** — an arming instruction nothing could carry out, in the ADR
+> written because an arming instruction nothing carried out cost 9 days of blindness.
+>
+> Measured, not assumed (`GET /api/v2/heartbeats/<id>`): the resource exposes
+> `{status, paused, paused_at, period, grace, updated_at, url, …}` — there is **no
+> `last_heartbeat_at`**, and `/heartbeats/<id>/events` **404s**. A paused monitor reports
+> `status: "paused"` and its `updated_at` never moves when a beat arrives. Verified against a live
+> feeder mid-reprovision: `updated_at` stayed frozen at the provisioning timestamp throughout.
+> **A beat is not observable while the monitor is paused.** The order the issue asked for cannot be
+> performed.
+>
+> **What replaces it — bounded arm-and-watch with the rollback in the same process:**
+> 1. Ship the feeder and reprovision the host.
+> 2. `PATCH {"paused": false}`, then poll `status` every 10s.
+> 3. `status: "up"` ⇒ a real beat landed; done.
+> 4. No `up` by `period + grace − 10s` ⇒ **`PATCH {"paused": true}` immediately**, before the first
+>    alert can fire. Diagnose; do not retry blind.
+>
+> This is NOT #6210's shape, and the distinction is the whole point: #6210 armed an unfed monitor and
+> **left it armed**. Here the rollback is held for the entire window, so the worst case is bounded to
+> at most one email (free tier: `policy_id = null`) — not a permanent page.
+>
+> **It was exercised on the first attempt and it worked.** The registry's `registry-host-replace`
+> hit #6400's NIC race (`nic_ok=false` — the host booted with no `10.0.1.30`). The feeder correctly
+> withheld its ping, arm-and-watch saw `pending` for 86s, rolled back at 86s, and **no alert fired**.
+> After #6415's guard converged the NIC (`converged_by=reboot`), the re-arm went `up` in **11s**.
+>
+> The invariant survives the correction intact: **no static check can prove a monitor is armed; it
+> can only prove a feeder exists.** Arming is still verified by a beat — the beat is just measured
+> during a rolled-back-by-default arm, not before it.
 
 ## Consequences
 

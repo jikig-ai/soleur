@@ -430,10 +430,16 @@ resource "hcloud_firewall_attachment" "registry" {
 #
 # `paused = true` here is correct and permanent: `ignore_changes = [paused]` below decouples source
 # from live state, and this resource is an OPERATOR_APPLIED_EXCLUSION (untargeted), so a source
-# unpause is a no-op either way. Live arming is a one-time API PATCH, done only AFTER a real beat is
-# measured — never before (an unfed monitor that gets unpaused pages forever; #6210). Until that
-# happens the monitor is inert, and no static check can see it (ADR-117 names this state; the
-# nightly live-reconcile that would bound it is #6549).
+# unpause is a no-op either way. LIVE state is armed (paused=false, up) as of 2026-07-16 — this
+# source value is not the live one, which is the whole point of ADR-117.
+#
+# Arming was a one-time API PATCH under a bounded arm-and-watch: the beat CANNOT be measured before
+# unpausing (Better Stack exposes no last_heartbeat_at and no /events; a paused monitor reads
+# status="paused" forever), so the rollback is held in-process and re-pauses inside period+grace if
+# no beat lands. It fired for real on the first attempt — the host booted NIC-less (#6400), the
+# feeder correctly withheld its ping, and the rollback re-paused at 86s with no alert. See ADR-117
+# §Ordering. Do NOT "simplify" this to a bare unpause: an unfed monitor left armed pages forever
+# (#6210).
 #
 # The consumer-perspective probe (can a CLIENT reach zot over the private net?) is a DIFFERENT
 # layer and remains open as #6438 §1; this on-host beat does not close it.
