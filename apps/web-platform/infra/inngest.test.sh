@@ -259,8 +259,18 @@ assert "AC5b/3 web render carries NO dark arm (no exit-0 branch on the live push
   "! grep -qF 'url_present=no' '$WEB_PING'"
 WEB_LOG="$PING_TMP/logger-web-absent.txt"
 WEB_ABSENT_OUT=$(run_ping "$WEB_PING" "" "$WEB_LOG") && WEB_ABSENT_RC=0 || WEB_ABSENT_RC=$?
-assert "AC5b/3 web render + URL absent -> rc=2 (loud; absent URL on the live pusher is a fault)" \
-  "[[ '$WEB_ABSENT_RC' -eq 2 ]]"
+# The contract is LOUD (non-zero) and CURL-attributable — NOT a specific exit code. curl's
+# empty-URL code is version-dependent: 8.18 exits 2 ("option : blank argument where content is
+# expected"), while #4116 recorded exit 3 ("URL using bad/illegal format or missing URL") on an
+# older curl. #6536's prod host measured 2, so an `-eq 2` assertion looks right on a modern box
+# and hard-fails on any runner shipping an older curl — it pins the AUTHOR'S curl build, not the
+# behaviour under test. Both halves are load-bearing:
+#   - `-ne 0` is the actual property (the live pusher must not silently succeed with no URL);
+#   - `^curl:` proves curl RAN and rejected the URL. Without it a missing binary would exit 127
+#     (`sh: exec: /usr/bin/curl: not found` — sh's message, not curl's) and satisfy a bare
+#     `-ne 0`, passing this assertion for the one reason that would mean the test proved nothing.
+assert "AC5b/3 web render + URL absent -> non-zero AND curl is what rejected it (loud; absent URL on the live pusher is a fault)" \
+  "[[ '$WEB_ABSENT_RC' -ne 0 && '$WEB_ABSENT_RC' -ne 127 ]] && printf '%s' \"\$WEB_ABSENT_OUT\" | grep -q '^curl:'"
 assert "AC5b/3 web render + URL absent -> emitted no dark-arm row" \
   "[[ ! -s '$WEB_LOG' ]]"
 
