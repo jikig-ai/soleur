@@ -522,15 +522,11 @@ runcmd:
     N=0
     until docker pull "$REF" > /run/soleur-pull.log 2>&1; do
       N=$((N+1))
-      # #6278: on the zot→GHCR flip (REF still the zot ref, so zot WAS primary), emit a
-      # warning breadcrumb (tags.stage=app_ghcr_fallback) so the mirror-staleness
-      # fallback-rate alarm can page on a fresh-boot zot miss on the PRIMARY web
-      # container that still SUCCEEDS via GHCR (otherwise invisible — only a total pull
-      # failure emits). Uses the baked _emit — the only emitter live at this pre-bootstrap
-      # point; the inngest path (bottom of runcmd) uses soleur-boot-emit for the same
-      # `stage` tag because it runs AFTER host-bootstrap authors that binary. The guard
-      # fires exactly once: after the flip REF==IMAGE_REF, and when zot was never primary
-      # (REF started == IMAGE_REF) it never fires. Fail-open (_emit swallows all errors).
+      # #6278: on the zot→GHCR flip (REF still the zot ref ⇒ zot WAS primary), emit a
+      # warning breadcrumb (stage=app_ghcr_fallback) so the fallback-rate alarm pages on a
+      # fresh-boot zot miss that still SUCCEEDS via GHCR (else invisible). Baked _emit is
+      # the only emitter live pre-bootstrap; the inngest path uses soleur-boot-emit (same
+      # `stage` tag) as it runs after host-bootstrap. Fires once. Fail-open.
       if [ "$N" -ge 2 ] && [ "$REF" != "$IMAGE_REF" ]; then
         REF="$IMAGE_REF"   # atomic fallback to GHCR after the zot attempt
         # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
@@ -541,6 +537,9 @@ runcmd:
     done
     : > /run/soleur-stage-detail
     printf '%s' "$REF" > /run/soleur-image-ref
+    # #6462 denominator: REF==IMAGE_REF iff GHCR served. MUST precede the reassign below (it
+    # makes the test always-true). Rationale + the image_ref wart: cloud-init-user-data-size.test.ts
+    if [ "$REF" = "$IMAGE_REF" ]; then _emit "app image served by GHCR" "app_ghcr_served" warning; else _emit "app image served by zot" "app_zot" info; fi
     IMAGE_REF="$REF"
     STAGE=extract
     docker create --name soleur-hostscript-seed "$IMAGE_REF" >/dev/null
@@ -588,10 +587,13 @@ runcmd:
 
   # Register cloudflared as a systemd service with the tunnel token.
   # The token encodes tunnel configuration managed remotely via Terraform.
+  # #6425: gated to the ingress host (rationale: server.tf web_tunnel_connector; ADR-114).
+%{ if web_tunnel_connector ~}
   - cloudflared service install ${tunnel_token}
 
   # #6090 H4: baked readiness poll (enable returns 0 before connect).
   - soleur-wait-ready service cloudflared cloudflared_ready || exit 1
+%{ endif ~}
 
   # Install webhook binary (adnanh/webhook v2.8.2) with checksum verification
   - |

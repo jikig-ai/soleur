@@ -1218,6 +1218,34 @@ resource "sentry_issue_alert" "outbound_email_send_failure" {
 # valid values incl. 1h). Distinct frequency=22 avoids Sentry POST-time
 # exact-duplicate dedup (keyed on action-shape + frequency + match — see the auth
 # rules' comment above).
+#
+# ═══ WHY value = 2 AND NOT 3 (#6429) ═══
+#
+# `value` is compared with a STRICT `current_value > value` — `event_unique_user_frequency`
+# extends the same BaseEventFrequencyCondition as `event_frequency`, whose strict-`>`
+# semantics zot_mirror_fallback_rate documents below
+# (sentry/rules/conditions/event_frequency.py). So `value = 2` means ">2 distinct users",
+# i.e. it fires at **≥3** — the stated intent above. It shipped as `3`, which fires at ≥4:
+# a silent off-by-one against its own comment, and #6429's real defect. Do NOT "restore"
+# this to 3 to match the "≥3" prose — the prose is the intent, `2` is how you spell it.
+#
+# NOT the zot rule's defect (#6429's filed premise, falsified). That rule is
+# `event_frequency` — a count of EVENTS in one issue-group, which a high-cardinality
+# message breaks by minting a fresh group per event. This one counts DISTINCT USERS, and
+# its group is stack-keyed (reportSilentFallback routes an Error to captureException), so
+# the group is stable and the threshold is reachable. The discriminator is CAPTURE SHAPE,
+# not the condition name: message-event → grouped on the message; exception-event →
+# grouped on the stack. Guarded by sentry-zot-mirror-fallback-alert-op-contract.test.ts.
+#
+# Sentry also short-circuits the first event of a NEW group when value > 1 ("Assumes that
+# the first event in a group will always be below the threshold"). Harmless here: a
+# brand-new group has exactly one distinct user, already below 3.
+#
+# The corrected frequency-rule sweep (#6429's generalizable ask): this file has TWO
+# `event_frequency` rules — zot_mirror_fallback_rate (value = 0, the #6285 fix) and
+# web_terminal_boot_fatal (value = 1, reachable only because its shared `soleur-boot-emit`
+# group is always already hot) — plus THIS ONE `event_unique_user_frequency`. The issue's
+# "three event_frequency rules" was wrong on both the count and every line it cited.
 resource "sentry_issue_alert" "sandbox_startup_failure" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug
@@ -1230,7 +1258,7 @@ resource "sentry_issue_alert" "sandbox_startup_failure" {
     {
       event_unique_user_frequency = {
         comparison_type = "count"
-        value           = 3
+        value           = 2 # STRICT `>`: fires at ≥3 distinct tenants (#6429)
         interval        = "1h"
       }
     },
@@ -1364,20 +1392,48 @@ resource "sentry_issue_alert" "inbox_action_required_notify_failure" {
 # — a threshold above 0 is strictly less sensitive than the gate it exists to pre-warn.
 #
 # GROUPING is per-signal asymmetric (`ghcr-fallback` fresh per deploy; `zot-gate-degraded`
-# per reason — 3 fixed literals; `app_ghcr_fallback` a dedicated static message;
-# `inngest_ghcr_fallback` the shared always-hot `soleur-boot-emit` group). It no longer
-# affects WHETHER a group pages at value = 0 — every group fires on its first event — but
-# it is load-bearing for HOW to quiet noise safely (below). Relevant to the threshold again
-# only if value is ever raised.
+# per reason — 3 fixed literals; `app_ghcr_fallback` and `app_ghcr_served` each a dedicated
+# static message; `inngest_ghcr_fallback` the shared always-hot `soleur-boot-emit` group).
+# It no longer affects WHETHER a group pages at value = 0 — every group fires on its first
+# event — but it is load-bearing for HOW to quiet noise safely (below). Relevant to the
+# threshold again only if value is ever raised.
 #
-# IF THIS GETS NOISY, MUTE THE ISSUE — NEVER THE RULE. All four signals share one rule
+# IF THIS GETS NOISY, MUTE THE ISSUE — NEVER THE RULE. All five signals share one rule
 # (filter_match = "any"), so muting the RULE to escape `zot-gate-degraded` noise also kills
 # `ghcr-fallback` — the only no-SSH page gating the IRREVERSIBLE ADR-096 5.5 PAT
-# rotate+revoke. Muting the noisy Sentry ISSUE is safe by construction here:
-# `zot-gate-degraded` groups on a stable reason literal, so a mute pins to that group only;
-# `ghcr-fallback` mints a FRESH group per deploy, so no pre-existing mute can ever
+# rotate+revoke. Muting the noisy Sentry ISSUE is safe by construction for the ORIGINAL
+# four: `zot-gate-degraded` groups on a stable reason literal, so a mute pins to that group
+# only; `ghcr-fallback` mints a FRESH group per deploy, so no pre-existing mute can ever
 # pre-suppress it. Pre-cutover the dominant noise is `probe_unreachable` — that is zot's
 # probe genuinely failing (the real fix is the zot host, not the alarm).
+#
+# ⚠ `app_ghcr_served` (#6462) IS THE EXCEPTION — the mute-is-safe argument above does NOT
+# extend to it, and this is the one signal where a reflexive mute is destructive. It is the
+# first signal that is BOTH:
+#   (a) stable-grouped — a static message ⇒ ONE Sentry issue group forever, so a mute is
+#       permanent (unlike `ghcr-fallback`, whose per-deploy regrouping self-expires a mute);
+#   (b) expected-noisy pre-cutover — ADR-096 tells the operator these pages are expected
+#       until the flip and not to investigate them separately.
+# Together those invite exactly one click that permanently blinds the page for the DOMINANT
+# GHCR-served path (a /v2/ probe-miss, where the GHCR pull succeeds first try) — the hole
+# #6462 exists to close. Muting does NOT create a false soak PASS (Discover counts muted
+# issues), so the loss is paging only — but paging is the entire point of this signal
+# pre-cutover.
+#
+# The honest levers, in order (an earlier draft of this comment offered "pin the soak's START
+# past the cutover" — that is a CATEGORY ERROR and was removed: START is ZOT_SOAK_START, read
+# only in zot-soak-6122.sh's sentry_count URL; THIS rule has no window and is completely
+# unaffected by it. Do not reach for it):
+#   1. Fix the probe (#6416 / #6288). This is the root cause and it also removes the noise
+#      from `zot-gate-degraded`, which already pages on the SAME probe_unreachable condition
+#      on ~34-of-38 rolling deploys — i.e. the operator is ALREADY being paged near-daily by
+#      that signal, and app_ghcr_served is an increment on existing noise, not a new class.
+#   2. If it must be quieted before then, mute `zot-gate-degraded`'s group (safe: it groups on
+#      a stable reason literal) — NOT this one, and never the RULE.
+#   3. If THIS group must be quieted, split it into its own sentry_issue_alert resource so it
+#      can be tuned without touching ghcr-fallback. That is a real fix, not a mute, and it
+#      costs a -target= entry + the op-contract's alarm⇔soak parity (which currently pins
+#      alarm.size == soakFailQueries().size == 5). Deferred, not dismissed: see #6462's PR.
 #
 # Distinct `frequency = 23` avoids Sentry POST-time exact-duplicate dedup (taken:
 # 5,10-22,30,60-62; keyed on action_match+filter_match+frequency+actions-shape, NOT
@@ -1429,6 +1485,13 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
         value = "app_ghcr_fallback"
       }
     },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "app_ghcr_served"
+      }
+    },
   ]
   # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no
   # ownership rule on this project → falls through to ActiveMembers, paging the solo
@@ -1457,7 +1520,8 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
 # terminal-block EXIT trap + the explicit hostscripts_incomplete emit, so the stage filter alone
 # selects fatal terminal-block failures (no separate level filter needed).
 #
-# GROUPING NOTE (mirrors zot_mirror_fallback_rate:1364): these events use the SHARED
+# GROUPING NOTE (mirrors the GROUPING paragraph of zot_mirror_fallback_rate above): these
+# events use the SHARED
 # `soleur-boot-emit` message ("soleur-cloud-init boot stage"; stage is a tag, not the message), so
 # they share ONE issue-group with routine boot stages — that group is effectively always active, so
 # event_frequency value=1 pages on the first event that MATCHES the fatal-stage filter. Over-loud in

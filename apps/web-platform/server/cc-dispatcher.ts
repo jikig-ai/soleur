@@ -3297,7 +3297,15 @@ export async function dispatchSoleurGo(
     }
   }
 
-  const runner = getSoleurGoRunner(sendToClient);
+  // The runner is a process singleton; its captured sink is used ONLY for
+  // `emitInteractivePrompt`. Pass the process-stable WS sender, NOT the per-call
+  // `sendToClient` — a support turn's `sendToClient` is a per-REQUEST SSE sink
+  // (ADR-113) that must never be captured by a process-lived singleton (it would
+  // trip the "re-init with different sendToClient" guard on every support turn).
+  // Per-turn streaming is routed via the per-call `events` (below), not this
+  // captured sink. For the Command Center `sendToClient === defaultSendToClient`,
+  // so this is a no-op.
+  const runner = getSoleurGoRunner(defaultSendToClient);
 
   // Resolve workspace path in parallel with `runner.dispatch` so cold-start
   // LTFT (latency-to-first-token) does not pay an extra serial Supabase RTT.
@@ -4327,6 +4335,8 @@ export function handleInteractivePromptResponseCase(args: {
 }): HandleInteractivePromptResponseResult {
   const { userId, payload, sendToClient } = args;
   const registry = getPendingPromptRegistry();
+  // WS-only path (interactive-prompt responses arrive over the socket); its
+  // `sendToClient` is already the process WS sender.
   const runner = getSoleurGoRunner(sendToClient);
 
   const result = handleInteractivePromptResponse({

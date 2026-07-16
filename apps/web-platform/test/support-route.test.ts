@@ -85,6 +85,34 @@ describe("POST /api/support", () => {
     expect(sse).toContain(`"type":"session_ended"`);
   });
 
+  it("holds the SSE open for frames emitted AFTER dispatch resolves (background-consumer regression)", async () => {
+    // The real runner consumes the SDK query on a fire-and-forget task, so
+    // `dispatchSoleurGo` RESOLVES before any `stream` frame is emitted. The route
+    // must close on a TERMINAL frame, not on the dispatch promise — otherwise it
+    // closes the response before the first token and the client sees nothing.
+    h.dispatchSoleurGo.mockImplementation(
+      async (args: { sendToClient: (u: string, m: WSMessage) => boolean }) => {
+        // Emit the reply LATER — after this promise has already resolved.
+        setTimeout(() => {
+          args.sendToClient("user-1", {
+            type: "stream",
+            content: "Open Routines from the sidebar.",
+            partial: true,
+            leaderId: "cc_router",
+          } as WSMessage);
+          args.sendToClient("user-1", { type: "stream_end", leaderId: "cc_router" } as WSMessage);
+        }, 10);
+        // resolves immediately, BEFORE the frames above
+      },
+    );
+
+    const res = await POST(req({ message: "how do I create a routine?" }));
+    const sse = await readAll(res);
+    // The post-resolution frames survived because the route waited for stream_end.
+    expect(sse).toContain("Open Routines from the sidebar.");
+    expect(sse).toContain(`"type":"stream_end"`);
+  });
+
   it("404 (dark) when support-live is OFF — never invokes the Concierge", async () => {
     h.getRuntimeFlag.mockResolvedValue(false);
     const res = await POST(req({ message: "read your internal roadmap" }));

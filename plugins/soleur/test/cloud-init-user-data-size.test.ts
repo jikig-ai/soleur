@@ -65,7 +65,18 @@ const HETZNER_CAP = 32_768;
 // soleur-host-bootstrap.sh (0 user_data, #5921 pattern); the irreducible inline cost is the
 // terminal-block boot-emit trap + the ungated `soleur-vector-install` call site + per-host
 // SOLEUR_HOST_NAME injection — necessary call-sites, not a re-inlined blob. Comments trimmed first.
-const WEB_GZIP_BUDGET = 21_800;
+// #6425: +100 B modest re-baseline (21,800 → 21,900). Measured 21,716 → 21,784 (+68 B) for the
+// col-0 `%{ if web_tunnel_connector ~}` / `%{ endif ~}` connector gate + its one-line pointer
+// comment. This is the one addition the "prefer baking over inline" guidance above CANNOT absorb:
+// a templatefile directive is evaluated at RENDER time by terraform, so it is irreducibly inline —
+// baking it into soleur-host-bootstrap.sh would move it to boot time, after the token is already
+// in user_data, defeating the gate's security half. Full rationale lives in server.tf (not
+// byte-budgeted); cloud-init.yml carries only a pointer. Comments trimmed first (an earlier draft
+// cost +516 B). At 21,800 the headroom was 16 B — below the noise floor of any future edit, which
+// would have made the NEXT infra change fail CI for no defect. 21,900 keeps the guard's actual
+// purpose intact: a KB-scale re-inlining (~1.5+ KB, the failure mode this exists to catch) still
+// trips it, and it stays ~10.9 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 21_900;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
@@ -313,6 +324,83 @@ describe("cloud-init launcher contract (AC4/AC5/AC8)", () => {
   test("terminal docker run is gated on the fail-closed sentinel (AC8)", () => {
     expect(cloudInit).toMatch(/test -f \/run\/soleur-hostscripts\.ok \|\|/);
     expect(cloudInit).toMatch(/poweroff -f/);
+  });
+  // #6462 AC1 — the fresh-boot registry beacon must sit BEFORE `IMAGE_REF="$REF"`.
+  //
+  // WHY THE ORDER IS THE WHOLE FEATURE: after the pull loop, `REF == IMAGE_REF` iff GHCR
+  // served the image and `REF != IMAGE_REF` iff zot did — that comparison IS the
+  // discriminator. `IMAGE_REF="$REF"` reassigns IMAGE_REF to the served ref, making the
+  // comparison tautologically true from that line on. One line later and the beacon
+  // reports "GHCR served" on every boot, forever.
+  //
+  // THE -1 GUARDS ARE LOAD-BEARING, NOT CEREMONY. indexOf returns -1 on a miss and -1 is
+  // less than every real offset, so `servedIdx < refIdx` ALONE passes on a tree with no
+  // beacon in it at all — a typo'd stage, a renamed stage, or the line never being written
+  // all satisfy it. (Verified: on the pre-beacon tree this assert returned -1 < 31470 =>
+  // true.) This mirrors the AC5 idiom above IN FULL — both toBeGreaterThan(-1) legs, then
+  // the ordering — not just its last line. Existence is ALSO pinned independently in
+  // sentry-zot-mirror-fallback-alert-op-contract.test.ts so neither AC vacuously carries
+  // the other.
+  //
+  // ANCHOR ON THE CALL FORM, NOT THE BARE TOKEN: the rationale comment above the emit names
+  // `app_ghcr_served`, so `indexOf("app_ghcr_served")` would return the COMMENT's offset
+  // (which sits above the anchor) and pass even with the code line below `IMAGE_REF="$REF"`
+  // — the exact failure this test exists to catch. Prose cannot produce the call form.
+  //
+  // ACCEPTED WART, documented here because cloud-init.yml is byte-budgeted and this file is
+  // NOT (the emit carries only a one-line pointer): `_emit` builds its `image_ref` tag from
+  // `$IMAGE_REF`, still the GHCR ref at the insertion point (the reassign is the next line).
+  // So the `app_zot` beacon reports `image_ref: ghcr.io/…` — the wrong registry on the event
+  // asserting zot served it. Deliberately NOT fixed:
+  //   - Gate-harmless: `image_ref` appears in zot-soak-6122.sh only inside comments (:26,
+  //     :40), never in a query — the soak reads `stage` alone.
+  //   - The real pulls are unaffected: :642/:660/:780 read /run/soleur-image-ref, which the
+  //     line above the beacon populates with the correct served ref.
+  //   - The fix (a temp var) is affordable on bytes now, but lands in the boot path, where a
+  //     malformed line means NO HOST BOOTS. Not worth that risk for a cosmetic tag nothing
+  //     queries. Do not "fix" this on noticing the headroom.
+  // BOTH operands must be comment-proof, not just the left one. An earlier draft anchored
+  // the right operand on the bare literal `IMAGE_REF="$REF"` and the beacon's own rationale
+  // comment quotes that assignment — so indexOf resolved it to the COMMENT (which sits
+  // ABOVE the beacon) and the test failed with servedIdx > refIdx even though the code was
+  // correctly ordered. Same defect class as the left operand, mirrored. Anchor on
+  // `^\s*…$` via .search(): a comment line begins with `#`, so it can never satisfy it.
+  test("the fresh-boot registry beacon precedes the IMAGE_REF reassignment (#6462 AC1)", () => {
+    const servedIdx = block.indexOf('"app_ghcr_served" warning');
+    const refIdx = block.search(/^\s*IMAGE_REF="\$REF"$/m);
+    expect(servedIdx).toBeGreaterThan(-1);
+    expect(refIdx).toBeGreaterThan(-1);
+    expect(servedIdx).toBeLessThan(refIdx);
+  });
+  // #6462 AC1b — AC1's anchor is defeated the moment a comment quotes the emit call
+  // verbatim (indexOf would silently return the comment's offset). Make that self-enforcing
+  // rather than asking four paragraphs of prose not to do it.
+  // #6462 AC1c — pin WHICH REGISTRY EACH BRANCH REPORTS, not just where the line sits.
+  //
+  // AC1/AC1b pin the beacon's POSITION and the uniqueness of its anchors. Neither pins its
+  // SEMANTICS, and mutation testing proved the gap is real: inverting the discriminator
+  // (`=` → `!=`) passed ALL 39 tests across both files. That mutation is a FALSE-PASS ROUTE
+  // on the gate authorizing an irreversible PAT revoke — on an all-GHCR fleet it reports
+  // app_zot>0 / app_ghcr_served=0, so the denominator looks satisfied and the FAIL set stays
+  // silent, and only the independent MIN_SAMPLE arm still objects.
+  //
+  // The direction is the whole feature. After the pull loop:
+  //   REF == IMAGE_REF  ⟺  GHCR served it (the probe missed, OR the zot→GHCR flip reassigned
+  //                        REF="$IMAGE_REF")  → app_ghcr_served, `warning`, a FAIL signal
+  //   REF != IMAGE_REF  ⟺  zot served it (the zot branch prefixed "$ZURL/") → app_zot, `info`,
+  //                        the DENOMINATOR
+  // Pin the literal so `=`↔`!=` and a branch swap both go red.
+  test("the beacon maps each branch to the RIGHT registry (#6462 AC1c — direction, not position)", () => {
+    expect(block).toContain(
+      'if [ "$REF" = "$IMAGE_REF" ]; then _emit "app image served by GHCR" "app_ghcr_served" warning; else _emit "app image served by zot" "app_zot" info; fi',
+    );
+  });
+  test("each beacon call form appears exactly once, so AC1's anchor stays unambiguous (#6462 AC1b)", () => {
+    expect(block.match(/"app_ghcr_served" warning/g)).toHaveLength(1);
+    expect(block.match(/"app_zot" info/g)).toHaveLength(1);
+    // The right operand too: exactly one line-anchored reassignment, so AC1's .search()
+    // cannot silently pick a different one if the boot path ever grows a second.
+    expect(block.match(/^\s*IMAGE_REF="\$REF"$/gm)).toHaveLength(1);
   });
   test("cloud-init no longer references the externalized write_files vars", () => {
     for (const gone of [

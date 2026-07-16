@@ -439,3 +439,41 @@ new ordinal of its own. The genuinely-new cross-cutting rule extracted from the 
 (a boot-armed non-paused heartbeat MUST have a mechanically-guarded reprovision path) is recorded
 separately in **ADR-103**, whose `heartbeat-reprovision-parity` CI guard enforces it.
 
+## Addendum (2026-07-15) — the dark backend is **soleur-dev**, and that co-tenancy is transient
+
+**The fact, recorded here because it previously lived ONLY in a Terraform comment**
+(`apps/web-platform/infra/inngest.tf:234-235`) and in a Doppler secret's value — neither of which
+is a place an architecture reader looks:
+
+> Until the cutover flips it, the dedicated Inngest host's **dark** Postgres backend is the
+> **soleur-dev** Supabase project (`mlwiodleouzwniehynfz`), reached through its session pooler as
+> username `postgres.mlwiodleouzwniehynfz`. `INNGEST_POSTGRES_URI` in Doppler `soleur-inngest/prd`
+> resolves there. It is **not** "a distinct DB on soleur-inngest-prd".
+
+**Why this matters beyond bookkeeping.** soleur-dev is the **app's dev project**. Pointing the dark
+backend at it made that project **co-tenanted**: goose ran 2026-07-10 and created 14 Inngest tables
+in the same `public` schema as the web-platform app's 52 dev tables. Two consequences followed, both
+now closed:
+
+1. **A live anon-write exposure.** Supabase default privileges auto-granted `anon`/`authenticated`
+   full DML on the new tables, and soleur-dev's anon key **ships to browsers**. An anonymous caller
+   held INSERT/UPDATE/DELETE/**TRUNCATE** on this host's scheduler state (advisor 2026-07-12; a
+   `GET /rest/v1/apps` returned 310 bytes of real rows). Remediated by the table-scoped
+   `0002_dev_inngest_tables_lockdown.sql` — see **ADR-030 I8** (by filename:
+   `ADR-030-inngest-as-durable-trigger-layer.md`; the `ADR-030` ID is ambiguous, two files claim it).
+2. **The existing prd lockdown became unsafe to point anywhere else.** `0001`'s Inngest-sentinel
+   preflight infers *"goose tables exist ⟹ Inngest-only project"* — which the dark backend
+   **falsified**, since soleur-dev satisfies it while hosting an entire app. Enforcement on a
+   co-tenanted project MUST be table-scoped; see I8.
+
+**Transient — with an atomic retirement.** This co-tenancy ends when `cutover-inngest.yml`'s
+`op=arm` writes the prod DSN. The 14 tables then become orphans on the dev project and are dropped
+in a tracked follow-up, which must retire `0002` + `apply-inngest-rls-dev.yml` **in the same change
+as (or before) the drop** — otherwise `0002`'s positive sentinel RAISEs forever. The quieter failure
+is worse: if the cutover lands and the drop does not, the sentinel still passes, the gate reports
+`violations=0`, and the workflow stays **green forever defending a co-tenancy that no longer
+exists**. Green cruft never annunciates. (Contrary to an earlier belief, soleur-dev is **not** a
+rollback target: `op=arm` overwrites `INNGEST_POSTGRES_URI`, and the `rollback` arm writes only
+`INNGEST_CUTOVER_FLIP` — no code path restores the dark DSN. The reason not to drop early is simply
+that the dark host is **live** against soleur-dev until the flip.)
+
