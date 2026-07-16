@@ -3,10 +3,10 @@ feature: web-2 retire (fsn1 orphan)
 date: 2026-07-16
 lane: cross-domain
 brand_survival_threshold: single-user incident
-closes: [6538, 6463]
+refs: [6538, 6463]   # NOT closes — remediation runs post-merge; closed by hand after the API probe (plan v2)
 related: [6393, 6453, 6457, 6459, 6460]
 brainstorm: knowledge-base/project/brainstorms/2026-07-16-web2-retire-fsn1-orphan-brainstorm.md
-status: ready-for-plan
+status: superseded-in-part-by-plan-v2
 ---
 
 # Spec — Retire web-2 (fsn1 orphan)
