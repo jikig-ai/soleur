@@ -13,12 +13,69 @@ requires_cpo_signoff: false
 
 > **Lane note:** no `spec.md` exists for this branch, so `lane:` could not be carried forward —
 > defaulted to `cross-domain` (TR2 fail-closed). In practice single-domain (engineering).
->
-> **v2** after 6-agent plan review. Six findings were empirically **proven** against the real
-> file and are folded in; the verification layer of v1 would have reported green on the
-> unfixed file. One reviewer recommendation contradicts operator-stated direction and is
-> recorded as a User-Challenge in `knowledge-base/project/specs/<branch>/decision-challenges.md`
-> rather than applied.
+
+## Enhancement Summary
+
+**Deepened:** 2026-07-16 · **Panel:** 6 agents (dhh, kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer, cto/devex)
+
+**v2 after plan review.** Every claim below was **measured**, not argued. v1's verification
+layer would have reported green on the *unfixed* file — that was the panel's convergent finding
+and it is the reason this revision exists.
+
+### Key corrections folded in
+
+1. **v1's ACs were vacuous.** Measured: the unfixed guard false-FAILs **0/400** locally. So
+   v1's "run it 200× and expect zero failures" was green on both arms — it re-measured the
+   bug's *invisibility*, not the fix. Replaced by a **size-amplified differential** (AC3), the
+   only test that discriminates: unfixed 100/100 FAIL vs fixed 100/100 pass.
+2. **v1's AC7 was proven vacuous** — `git diff … | grep '^\+…'` prints only `+` lines, so it
+   cannot compare against main and **exits 0 on the very `-F`→`-E` drift it claimed to catch**
+   (the plan's own #1 risk, left unmitigated). Mechanized as flag-count equality vs
+   `origin/main` (16 `-qF`, 12 `-qE` — measured).
+3. **v1 overclaimed the fail-open.** SIGPIPE needs a **second `write()`**; under one stdio
+   block (4096 B) it is *unreachable*. Measured 0/300 at 1591/4096/8035/16 000 B. Only
+   **`:200`** is a currently-reachable fail-open — `:157`/`:268` are fail-open in *polarity*
+   only. The 7-site scope is retained but **re-justified** (guard-writability, `advisor_block`
+   growth toward 4096 B, idiom uniformity) rather than resting on the wrong claim.
+4. **v1's self-check was evadable** — the narrow pattern missed `--quiet` and `-m1 -q`. The
+   guard against "a gate that gates nothing" was itself partly vacuous. Broadened and verified
+   against 5 unsafe + 4 safe forms.
+5. **v1's mutation ACs could not run.** `SCRIPT` is hardcoded (`:29`), so "scratch copy" is
+   impossible and every mutation edits **tracked source**. This is not theoretical — it dirtied
+   the tree during this session and needed `git checkout --`. Added the `SCRIPT_OVERRIDE` seam
+   + AC7 (clean tree).
+6. **Capture-once introduces a new single fail-open** if `script_code` is empty (`:200` takes
+   `pass`; no `-e` to catch it). Added a `FATAL` non-empty guard.
+7. **Reversed v1's "no debt exists"** call. It argued against the repo-wide 591 sites and never
+   sized the middle tier: **31 same-role sibling guards / 235 sites** (measured) under
+   `apps/web-platform/infra/**`. Now files a narrow tracking issue.
+
+### Deliberately not done
+
+No research fan-out. The panel's convergent finding was that v1 wrapped good diagnosis in
+~250 lines of restatement; adding "Research Insights" to a 7-line bash fix would undo the cuts
+just applied. Deepen value here was **gate verification + negative-claim verification** — every
+`cannot`/`never`/`unreachable` claim in this plan is backed by a measurement in-session, not by
+docs or recall.
+
+### Gates
+
+4.6 User-Brand Impact **PASS** (threshold `none` + required scope-out bullet — diff matches the
+sensitive-path regex via `apps/[^/]+/infra/`) · 4.7 Observability **PASS** (5/5 fields,
+ssh-free) · 4.8 PAT-shape **PASS** · 4.4 precedent-diff **PASS** (here-string is in-repo idiom,
+`deploy-status-fanout-verify.test.sh:244`) · 4.5 network-outage **SKIP** · 4.55 downtime
+**SKIP** · 4.9 UI-wireframe **SKIP**.
+
+> Both 4.9 and 4.5 *appeared* to fire on a whole-file grep and are **false positives** — the only
+> hits are this plan's own prose documenting the **absence** of UI files and of ssh. Scoped to
+> their real triggers (Files-to-Edit; network semantics) both are 0. That is precisely the
+> AC-self-reference trap this plan guards against, encountered live while verifying it.
+
+**Open decision:** `cto` challenges the operator-stated preference for option 3 (capture-once)
+in favour of option 1 (`| grep -F P >/dev/null`). **Not applied** — it contradicts stated
+direction, and `dhh` argued the opposite. Recorded for the operator in
+`knowledge-base/project/specs/feat-one-shot-6572-scan-workflow-pipefail-sigpipe/decision-challenges.md` (UC-1).
 
 ## Overview
 
