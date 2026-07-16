@@ -151,6 +151,26 @@ else
   pass
 fi
 
+# 10. (#6536, AC6) The dark-host heartbeat prose must NOT re-assert the false "curl no-ops"
+#     claim. `curl -fsS --max-time 10 ""` exits 2 ("blank argument where content is
+#     expected" — measured), it does NOT no-op. That false comment is what authorized the
+#     bug: it described a no-op the code never implemented, so the dark host's oneshot
+#     failed every 60s for 3 days (3,724 fires) while the comment said this was fine. The
+#     no-op is now implemented EXPLICITLY, as the @@DARK_ARM@@ render in inngest-bootstrap.sh.
+#     Absence-grep is safe here: the corrected prose states the measured rc=2 behaviour and
+#     has no reason to restate the phrase.
+if grep -qi 'curl no-ops' "$HOST_TF"; then
+  fail "inngest-host.tf must not claim the dark host's heartbeat curl no-ops (it exits 2 — #6536)"
+else
+  pass
+fi
+# The corrected prose must actually name the measured behaviour + its owner, so this is a
+# record-correction rather than a silent deletion of the claim.
+grep -qE 'exits? 2' "$HOST_TF" \
+  && grep -qF '#6536' "$HOST_TF" \
+  && grep -qF 'inngest-bootstrap.sh' "$HOST_TF" \
+  && pass || fail "inngest-host.tf must state the measured rc=2 truth, cite #6536, and name where the skip is implemented"
+
 echo ""
 echo "=== inngest-host.test.sh: ${passes} passed, ${fails} failed ==="
 [ "$fails" -eq 0 ] || exit 1
