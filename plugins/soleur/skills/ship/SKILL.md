@@ -1404,6 +1404,14 @@ git fetch origin main
 gh pr view --json mergeable,mergeStateStatus | jq '{mergeable, mergeStateStatus}'
 ```
 
+**Why this precedes any read of the check list (#6536):** a `pull_request` workflow runs against
+`refs/pull/N/merge`, which GitHub **cannot compute while the PR conflicts** — so CI never
+dispatches, while `pull_request_target` jobs (CLA) run against the *base*, dispatch fine, and go
+green. `gh pr checks` then reports "all checks settled, zero failures" over zero relevant checks.
+**"No failures" and "the checks ran" are different claims**, and a conflicting PR silently
+produces the first without the second. Assert the checks you *expect* are **present**, not merely
+non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)" --jq '[.workflow_runs[].name]'`.
+
 **If `mergeable` is `MERGEABLE`:** Continue to Phase 7.
 
 **If `mergeable` is `CONFLICTING`:**
