@@ -26,7 +26,11 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 WORKFLOW="$REPO_ROOT/.github/workflows/scheduled-supabase-advisor-scan.yml"
-SCRIPT="$REPO_ROOT/scripts/supabase-advisor-scan.sh"
+# SCRIPT_OVERRIDE lets a mutation test point this guard at a scratch copy. Without
+# the seam every mutation must edit TRACKED source, and an interrupted run leaves
+# the tree dirty (it did, while this fix was being planned). Unset in CI and in
+# every normal run, so the default path is byte-identical to before.
+SCRIPT="${SCRIPT_OVERRIDE:-$REPO_ROOT/scripts/supabase-advisor-scan.sh}"
 INNGEST_FN="$REPO_ROOT/apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts"
 MONITORS_TF="$REPO_ROOT/apps/web-platform/infra/sentry/cron-monitors.tf"
 APPLY_YML="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
@@ -74,6 +78,27 @@ if grep -qF 'bash tests/scripts/test-supabase-advisor-scan.sh' "$TEST_ALL"; then
   pass "the behavioural harness is registered in test-all.sh (the proof actually runs)"
 else
   fail "harness is wired" "test-all.sh does not run tests/scripts/test-supabase-advisor-scan.sh — the proof that the gate cannot silently pass would gate NOTHING (nothing auto-discovers tests/scripts/)"
+fi
+
+echo "== this file's own checks cannot SIGPIPE their producer (#6572) =="
+# Forbids <producer> | grep -q… (incl. -qF/-qE/--quiet/-m1 -q): grep -q exits on
+# first match, SIGPIPEs the producer, and pipefail (set at the top of this file)
+# promotes 141 to the pipeline status — INVERTING the if. Where match⇒pass that
+# false-FAILs a correct tree; where match⇒fail it false-PASSes, which is how the
+# headline .lints[]? assertion below could silently go green. Match against a
+# here-string instead. Safe forms (grep -c, grep … >/dev/null) are not matched.
+#
+# The messages below deliberately do NOT spell the forbidden construct. This
+# grep strips comments, but NOT string literals — so naming it verbatim in a
+# pass/fail string makes this check match itself and false-FAIL forever. That is
+# the same "assert must-not-contain X, then document X" collision the header
+# warns about, hit live while writing this block.
+pipe_grep_q='[|][[:space:]]*grep([[:space:]]+-[a-zA-Z0-9]+)*[[:space:]]+(-[a-zA-Z]*q[a-zA-Z]*|--quiet)([[:space:]]|$)'
+residual="$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}" | grep -cE "$pipe_grep_q")"
+if [[ "$residual" == "0" ]]; then
+  pass "no early-exit-pipe form remains in this guard (every check matches a here-string)"
+else
+  fail "no early-exit-pipe form remains" "$residual site(s) still feed a producer into an early-exiting matcher — under 'set -o pipefail' the SIGPIPEd producer (rc=141) becomes the pipeline status and inverts the check (#6572)"
 fi
 
 echo "== the hook allows this workflow (asserted by EXECUTING the hook) =="
@@ -154,7 +179,7 @@ else
 fi
 # The host line must not be interpolated from anywhere — an overridable host is
 # the exfil seam. Assert on the host-assignment line specifically.
-if grep -E '^\s*API=' "$SCRIPT" | grep -qE '\$\{|\$\(|\$[A-Za-z_]'; then
+if grep -qE '\$\{|\$\(|\$[A-Za-z_]' <<<"$(grep -E '^\s*API=' "$SCRIPT")"; then
   fail "host is not interpolated" "the API= line contains a shell/GHA expansion — it must be a literal"
 else
   pass "host assignment contains no interpolation"
@@ -196,15 +221,23 @@ echo "== the anti-fail-open sentinels are present in the script =="
 #  2. -F is deliberate. "Improving" this to grep -E makes the `]` optional
 #     (`[]?` = zero-or-one `]`), so it would match the CORRECT `.lints[]` and
 #     false-FAIL permanently.
-script_code() { grep -vE '^\s*#' "$SCRIPT"; }
-if script_code | grep -qF '.lints[]?'; then
+#  3. CAPTURED ONCE, matched against a here-string. This was a function piped
+#     into grep -q; grep -q exits on first match and SIGPIPEd it, so under
+#     pipefail rc=141 became the pipeline status and INVERTED both checks below
+#     (#6572). The capture also runs the producer once instead of per check.
+script_code="$(grep -vE '^\s*#' "$SCRIPT")"
+# Load-bearing: capture-once funnels seven checks through one variable, so an
+# empty capture would make the fail-open assertion below take its `pass` branch.
+# `set -uo pipefail` carries no `-e`, so a failed assignment is otherwise silent.
+[[ -n "$script_code" ]] || { printf 'FATAL: script_code empty (grep -v failed?)\n' >&2; exit 1; }
+if grep -qF '.lints[]?' <<<"$script_code"; then
   fail "script never uses the fail-open .lints[]? idiom" "found .lints[]? in CODE — a 401 body parses to 0 through it"
 else
   pass "script never uses the fail-open .lints[]? idiom (code, comments excluded)"
 fi
 # Non-vacuity: the assertion above is only meaningful if the code actually
 # parses .lints at all. Without this, deleting the parse entirely would pass.
-if script_code | grep -qF '.lints[]'; then
+if grep -qF '.lints[]' <<<"$script_code"; then
   pass "  ...and the script does parse .lints[] (so the check above is not vacuous)"
 else
   fail "script parses .lints[]" "no .lints[] parse found in code — the anti-fail-open check above would pass vacuously"
@@ -222,13 +255,13 @@ fi
 # green, satisfied by the catalog's line. Proven by mutation during review.
 # A guard whose subject can be deleted while it stays green is not a guard.
 advisor_block="$(awk '/^# --- Rung 2:/,/^# --- Rung 3:/' "$SCRIPT")"
-if printf '%s' "$advisor_block" | grep -qE 'code" != "200"'; then
+if grep -qE 'code" != "200"' <<<"$advisor_block"; then
   pass "HTTP-status assertion present IN THE ADVISOR RUNG (not merely somewhere in the file)"
 else
   fail "advisor HTTP-status assertion" "the advisor rung has no explicit non-200 check — a 401 would parse to a clean 0"
 fi
 # Same scoping for the structural rung, for the same reason.
-if printf '%s' "$advisor_block" | grep -qF 'has("lints")'; then
+if grep -qF 'has("lints")' <<<"$advisor_block"; then
   pass "structural assertion present IN THE ADVISOR RUNG"
 else
   fail "advisor structural assertion" "the advisor rung has no has(\"lints\") guard"
@@ -265,7 +298,7 @@ if [[ "$rung3_gate" == *'identity_ok'* ]]; then
 else
   fail "catalog rung gate" "rung 3's gate is '${rung3_gate:-<none found>}' — it must gate on identity_ok, not on ok/advisor state, or an advisor outage silently retires the authoritative assertion"
 fi
-if printf '%s' "$rung3_gate" | grep -qE '(^|[^_])\bok\b|advisor'; then
+if grep -qE '(^|[^_])\bok\b|advisor' <<<"$rung3_gate"; then
   fail "catalog rung is not advisor-coupled" "rung 3's gate '${rung3_gate}' references ok/advisor — the catalog must not depend on the advisory tier"
 else
   pass "catalog rung's gate references neither ok nor advisor state"
@@ -281,7 +314,7 @@ echo "== both anti-exfil libs are SOURCED, never redefined =="
 # confirmed violation emitted `scan_result=clean` exit 0. A permanently green
 # gate, reachable by deleting two lines this guard claimed to protect.
 for lib in strip-log-injection scrub-supabase-pat; do
-  if script_code | grep -qE '^[[:space:]]*\.[[:space:]].*lib/'"$lib"'\.sh'; then
+  if grep -qE '^[[:space:]]*\.[[:space:]].*lib/'"$lib"'\.sh' <<<"$script_code"; then
     pass "sources lib/${lib}.sh (real '.' source line, not the shellcheck directive)"
   else
     fail "sources lib/${lib}.sh" "no actual '. …/lib/${lib}.sh' source line in code — sanitize() would degrade silently"
