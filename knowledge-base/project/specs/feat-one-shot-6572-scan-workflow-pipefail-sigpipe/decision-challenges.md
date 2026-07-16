@@ -57,11 +57,11 @@ mechanical `sed`.
 
 ---
 
-## UC-2 — narrow tracking issue for 31 sibling guards (advisory, will be filed)
+## UC-2 — sibling-guard sweep: NOT filed (CONCUR gate dissented; verified)
 
 **decisionClass:** `taste` (surfaced, not a scope change to this PR)
 **Raised by:** `architecture-strategist` + `cto`, converging
-**Status:** to be filed as a tracking issue at ship; **not** folded into this PR
+**Status:** NOT filed — the CONCUR gate dissented at review and the dissent held on inspection (see the plan's Alternatives table). The 230-site figure is a syntax count, not a vulnerability count: 194/233 sites feed a bounded var (one write, no window). Scope of this PR unchanged.
 
 v1 declined to file anything, reasoning that "the shape is legitimate and safe in the
 overwhelming majority of cases; a tracking issue would imply a debt that does not exist."
@@ -75,5 +75,8 @@ to local runs (the unfixed guard passes 0/400 locally and still fails on CI). So
 exists" is an over-claim. The plan now files a **narrow** issue scoped to those 31, triaged by
 fail-open polarity. Scope of *this* PR is unchanged (one file).
 
-**What we need from you:** nothing — unless you want the 31-file sweep folded in now rather
-than tracked.
+**What we need from you:** nothing. The sweep is neither folded in nor tracked, because no one has
+measured which sibling sites are actually at risk (the predicate is per-site: can the producer emit
+≥2 writes before the match, and is the polarity match⇒fail?). Filing a 230-site defect claim without
+that measurement would assert a population that does not exist. If you want it tracked, the first task
+is the measurement, not the conversion.

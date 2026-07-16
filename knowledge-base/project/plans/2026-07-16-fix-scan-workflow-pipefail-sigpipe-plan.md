@@ -31,8 +31,10 @@ and it is the reason this revision exists.
    only test that discriminates: unfixed 100/100 FAIL vs fixed 100/100 pass.
 2. **v1's AC7 was proven vacuous** — `git diff … | grep '^\+…'` prints only `+` lines, so it
    cannot compare against main and **exits 0 on the very `-F`→`-E` drift it claimed to catch**
-   (the plan's own #1 risk, left unmitigated). Mechanized as flag-count equality vs
-   `origin/main` (16 `-qF`, 12 `-qE` — measured).
+   (the plan's own #1 risk, left unmitigated). Mechanized — but the count-equality form v2
+   specified ALSO false-FAILs this diff (it forbids adding a check; it hits the
+   document-what-you-forbid collision; and an unpinned `LC_ALL` makes `comm` run blind).
+   Final form compares `(flag, pattern)` pairs under `LC_ALL=C`; see AC4.
 3. **v1 overclaimed the fail-open — and v2's correction was itself false-precise (fixed at
    /work).** A producer needs a **second `write()`** for a window to exist at all, so a
    single-stdio-block (≤4096 B) producer is structurally safe. But v2 then read that as an
@@ -52,11 +54,19 @@ and it is the reason this revision exists.
    impossible and every mutation edits **tracked source**. This is not theoretical — it dirtied
    the tree during this session and needed `git checkout --`. Added the `SCRIPT_OVERRIDE` seam
    + AC7 (clean tree).
-6. **Capture-once introduces a new single fail-open** if `script_code` is empty (`:200` takes
-   `pass`; no `-e` to catch it). Added a `FATAL` non-empty guard.
-7. **Reversed v1's "no debt exists"** call. It argued against the repo-wide 591 sites and never
-   sized the middle tier: **31 same-role sibling guards / 235 sites** (measured) under
-   `apps/web-platform/infra/**`. Now files a narrow tracking issue.
+6. **"Capture-once introduces a new fail-open" was FALSE — measured at /work.** Delete the
+   guard, point `$SCRIPT` at an all-comment file: the `.lints[]?` check does take its `pass`
+   branch, but the non-vacuity check immediately after catches the empty capture and the run
+   still exits 1. The `FATAL` line stays — as a DIAGNOSTIC (one accurate message instead of
+   five confusing downstream FAILs), not as a fail-open guard. In a file whose thesis is that
+   every warning it carries is true, shipping a false hazard claim would have been the worst
+   possible addition.
+7. **"Reversed v1's no-debt call" — itself reversed at review; nothing filed.** v2 sized a
+   middle tier (~31 sibling guards / ~230 sites) and resolved to file a tracking issue. The
+   CONCUR gate dissented and was right: that is a SYNTAX count, not a vulnerability count
+   (194/233 sites feed a bounded var = one write = no window), the proposed close trigger could
+   never fire (the enumeration matches this PR's own comments), and the claimed criterion is
+   defeated by its own text. See the Alternatives table.
 
 ### Deliberately not done
 
@@ -441,7 +451,7 @@ since no `sentry_cron_monitor` is added or removed.
 | **Convert only the 3 reachable sites** (`:200`/`:207`/`:284`) | Rejected — but it is the *literal* close condition and a real option. Rejected because the Phase 3 zero-residual guard would need a 4-site allowlist, `advisor_block` (1591 B) grows toward the 4096 B threshold, and two idioms side-by-side invite copying the unsafe one. |
 | **Repo-wide sweep** of `\| grep -q` under `pipefail` | **Rejected for THIS PR** — measured **153 files / 591 sites** set `pipefail` and carry the shape; a different PR with a blast radius orders of magnitude larger than this fix. |
 | **Repo-wide lint** forbidding the shape | Rejected — reachability is producer-size × match-position × scheduling, none of which a lint can see; unacceptable false-positive rate across 591 mostly-safe sites. |
-| **File nothing** (v1's call: "a tracking issue would imply a debt that does not exist") | **Reversed.** v1 argued against the repo-wide 591, never sizing the middle tier: **31 same-role sibling guards / 235 sites** under `apps/web-platform/infra/**` that set `pipefail` and carry this shape (measured) — same architectural niche, same runner (`infra-validation.yml`), same advisory job, including `deploy-status-fanout-verify.test.sh`, this plan's own precedent citation. "Safe" is unevidenced for those: this session proved the shape is *lucky*, not correct, and **invisible to local runs** (0/400). **File a narrow tracking issue** scoped to those 31, triaged by fail-open polarity — bounded and greppable, not a repo-wide sweep. Satisfies `wg-defer-only-after-inline-triage` on evidence rather than on an assertion that no debt exists. |
+| **File nothing** (v1's call: "a tracking issue would imply a debt that does not exist") | **Reversed by v2, then reversed BACK at review — v1's conclusion was right, for reasons v1 never gave.** v2 measured ~31 sibling guards / ~230 sites under `apps/web-platform/infra/**` carrying the shape and resolved to file a tracking issue. The CONCUR gate DISSENTed, and the dissent held on inspection — I verified all three grounds: (1) **the count is a SYNTAX count, not a vulnerability count** — 194 of 233 non-comment sites feed `printf`/`echo` of a bounded shell variable, i.e. ONE write, so no second write, so no window at all; calling those "silent passes" is simply false. (2) **The proposed close trigger could never fire** — the enumeration matches 5 COMMENT lines, including this PR's own documentation of the bug, so reaching 0 would mean deleting the guard's own comments. (3) **The `cross-cutting-refactor` criterion is defeated by its own literal text**, which names `apps/web-platform/` as a top-level directory — every candidate lives under it, so they are RELATED by that definition. Filing an issue asserting a 230-site defect population nobody has measured would be exactly the false precision this PR's review spent its time removing. **Not filed.** The real predicate is per-site: *can this producer emit ≥2 writes before the match, AND is its polarity match⇒fail?* Measuring that is its own task, not a by-product of a one-file fix. The class is real — #6572's CI log proves the shape bites at 8 KB — but its population here is unmeasured, and this plan now says so instead of guessing. (The dissent's own model was wrong: it claimed a 64 KB pipe-buffer threshold, which the CI log and a `strace`-perturbed 8 KB producer both refute. Its procedural criticisms stand regardless — a right verdict can rest on a wrong reason, and both were checked separately.) |
 
 ## Sharp Edges
 
