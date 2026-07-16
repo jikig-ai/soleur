@@ -90,13 +90,29 @@ independent axes so it never silently gates a host:
 - **Loud, no-SSH signal:** every fallback emits a Sentry `registry:"ghcr-fallback"` /
   `stage:"inngest_ghcr_fallback"` event (the fallback-rate alarm pages on the first one).
   **Correction (#6285):** zot liveness was assigned here to a `betteruptime_heartbeat.registry_prd`
-  push beat "that pages if zot stops beating — before it can gate a boot (TR3)". **That layer does
-  not exist yet:** `ZOT_HEARTBEAT_URL` (`zot-registry.tf:359`) has **zero consumers** repo-wide — no
-  pinger cron was ever written — and the resource ships `paused = true` (`:350`). Live evidence: 31
-  `zot-gate-degraded (probe_unreachable)` events over the 4 days to 2026-07-15, none of which paged
-  anything. Until the pinger ships, `sentry_issue_alert.zot_mirror_fallback_rate` is the **only**
-  zot-liveness coverage — which is why its threshold being unreachable (#6285) mattered. (`paused`
-  is under `ignore_changes`, so the live pause state is not verifiable from the repo.)
+  push beat "that pages if zot stops beating — before it can gate a boot (TR3)". **That layer did
+  not exist:** `ZOT_HEARTBEAT_URL` (`zot-registry.tf`, the `doppler_secret.zot_heartbeat_url_prd`
+  definition) had **zero consumers** repo-wide — no pinger cron was ever written — and the resource
+  ships `paused = true`. Live evidence: 31 `zot-gate-degraded (probe_unreachable)` events over the 4
+  days to 2026-07-15, none of which paged anything. Until the pinger shipped,
+  `sentry_issue_alert.zot_mirror_fallback_rate` was the **only** zot-liveness coverage — which is why
+  its threshold being unreachable (#6285) mattered. (`paused` is under `ignore_changes`, so the live
+  pause state is not verifiable from the repo.)
+
+  **Resolved (#6537, 2026-07-16 — [ADR-116](./ADR-116-executable-heartbeat-arming.md)):** the layer
+  now exists, but **not** as the web-host probe cron assumed above. It is an **on-host** systemd
+  timer shipped in the registry's own cloud-init (`zot-liveness-heartbeat.timer`), pinging only while
+  zot answers on the host's **private IP** — never loopback, because zot binds `0.0.0.0` and a
+  loopback probe answers on a host holding no private NIC (#6400's blindness). It bakes the URL via
+  `templatefile`, so `ZOT_HEARTBEAT_URL` still has zero consumers by design; that secret is reserved
+  for the off-host probe. The heartbeat is armed by a one-time API unpause **after** a real beat was
+  measured — never before (#6210).
+
+  Two scoping corrections to the note above, both of which read as coverage and are not:
+  `registry_disk_prd` pings on `df` alone, so it alarms **host** death by absence but stays green
+  with zot dead; and the **consumer-perspective** probe (can a client reach zot over the private
+  net?) is still unbuilt — it remains #6438 §1. The on-host beat closes "zot dead, host alive", and
+  nothing more.
   - *CI push side (#6274):* the CI dual-push mirror step is **explicitly non-blocking**
     (`continue-on-error: true` + an `exit 0` inner shell + a bounded retry to self-heal a transient
     CF-tunnel reset) — a mirror failure degrades zot redundancy, never the release/build verdict

@@ -79,6 +79,22 @@ heartbeat with no manifest entry fails the test; a `dedicated-host-boot && !paus
 declared `<host>-host-replace` path is absent fails the test. This is the mechanical gate that
 would have caught #6238.
 
+> **Amended by [ADR-116](./ADR-116-executable-heartbeat-arming.md) (#6537, 2026-07-16).** The
+> `arming` axis above is **prose**: it records which remediation class a heartbeat belongs to, but it
+> never asserted that anything actually pings it. #6537 exploited exactly that gap — `registry_prd`
+> sat classified `web-host-cron` with an exempt_reason citing a probe cron that was never written, so
+> **this manifest restated the fiction** while the monitor sat paused and inert for 9 days.
+>
+> ADR-116 adds an executable `feeder` field alongside `arming`: every row is either FED (a file +
+> pattern the test greps each run) or HONESTLY UNFED (`kind: "none"` + a tracking issue, and — the
+> load-bearing half — an assertion that its URL secret still has zero consumers, so the day a feeder
+> ships, CI reds and forces the row to reconcile). The manifest moved to
+> `plugins/soleur/lib/heartbeat-manifest.ts`.
+>
+> Consequence for this ADR's own rule: `registry_prd` reclassifies to `dedicated-host-boot`, so the
+> `replace_target` requirement now fires for it — correctly, since its feeder ships via cloud-init
+> and therefore reaches the host only on a fresh boot.
+
 The scoped `-replace` dispatch mechanism itself is the ADR-096 (registry) / ADR-100 (inngest)
 pattern; ADR-103 does not invent it — it generalizes the ad-hoc registry fix into an enforced,
 cross-host rule and mandates the reprovision path exist for the whole class.
