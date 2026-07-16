@@ -284,16 +284,48 @@ if [[ "${1:-}" == "login" ]]; then
   _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$(cat)"
   [[ -n "${MOCK_LOGIN_ARGS_FILE:-}" ]] && printf 'LOGIN:%s\n' "$_luser" >> "$MOCK_LOGIN_ARGS_FILE"
   # #6497: fail the ZOT login with a caller-supplied stderr so a test can exercise each
-  # zot_login_class enum member. Registry-scoped (never ghcr.io) so arming it cannot
+  # login_class enum member. Registry-scoped (never ghcr.io) so arming it cannot
   # perturb the GHCR legs the #6400/#6090 tests assert on.
-  if [[ -n "${MOCK_ZOT_LOGIN_FAIL_STDERR:-}" && "$_lreg" == "10.0.1.30:5000" ]]; then
-    printf '%s\n' "${MOCK_ZOT_LOGIN_FAIL_STDERR}" >&2
-    exit 1
+  # MOCK_ZOT_LOGIN_FAIL_STDOUT arms the H-B-stdout hypothesis (the error text went to STDOUT,
+  # which the old code discarded) and lets the leak canary cover the stdout stream too. Armed
+  # independently of _STDERR: `stderr_chars=0 stdout_chars>0` is a distinct, load-bearing state.
+  # MOCK_ZOT_LOGIN_FAIL_RC also ARMS the failure on its own, and that is load-bearing rather than
+  # a convenience: the third state of the AC4 split is `stderr_chars=0 stdout_chars=0` (H-B-nowhere
+  # / H-D — a login that fails SILENTLY), which is by definition undriveable through either text
+  # var. With the arm gated only on the two text vars, the one hypothesis whose whole signature is
+  # "no text anywhere" could not be tested at all.
+  if [[ -n "${MOCK_ZOT_LOGIN_FAIL_STDERR:-}${MOCK_ZOT_LOGIN_FAIL_STDOUT:-}${MOCK_ZOT_LOGIN_FAIL_RC:-}" && "$_lreg" == "10.0.1.30:5000" ]]; then
+    [[ -n "${MOCK_ZOT_LOGIN_FAIL_STDERR:-}" ]] && printf '%s\n' "${MOCK_ZOT_LOGIN_FAIL_STDERR}" >&2
+    [[ -n "${MOCK_ZOT_LOGIN_FAIL_STDOUT:-}" ]] && printf '%s\n' "${MOCK_ZOT_LOGIN_FAIL_STDOUT}"
+    exit "${MOCK_ZOT_LOGIN_FAIL_RC:-1}"
+  fi
+  # #6497: the GHCR arm was ASYMMETRIC — caller-supplied stderr for zot, a HARDCODED
+  # `denied: authentication required` for ghcr — so no test could drive a GHCR login into any
+  # class but authn_rejected. Made symmetric, and registry-scoped to ghcr.io for exactly the
+  # reason the zot arm is scoped to zot: arming it must not perturb the OTHER registry's legs.
+  # _RC arms on its own here for the same reason it does on the zot arm above — and the symmetry
+  # is itself the point: this arm's ASYMMETRY with its sibling is the defect that already had to
+  # be fixed here once, so a new capability that lands on only one side re-opens that class.
+  if [[ -n "${MOCK_GHCR_LOGIN_FAIL_STDERR:-}${MOCK_GHCR_LOGIN_FAIL_STDOUT:-}${MOCK_GHCR_LOGIN_FAIL_RC:-}" && "$_lreg" == "ghcr.io" ]]; then
+    [[ -n "${MOCK_GHCR_LOGIN_FAIL_STDERR:-}" ]] && printf '%s\n' "${MOCK_GHCR_LOGIN_FAIL_STDERR}" >&2
+    [[ -n "${MOCK_GHCR_LOGIN_FAIL_STDOUT:-}" ]] && printf '%s\n' "${MOCK_GHCR_LOGIN_FAIL_STDOUT}"
+    exit "${MOCK_GHCR_LOGIN_FAIL_RC:-1}"
   fi
   if [[ -n "${MOCK_GHCR_LOGIN_FAIL_TOKEN:-}" && "$_ltok" == "${MOCK_GHCR_LOGIN_FAIL_TOKEN}" ]]; then
     echo "denied: authentication required" >&2
     exit 1
   fi
+  exit 0
+fi
+
+# #6497: `docker --version` is read by _login_hatch to emit `docker_ver`. The host's docker is
+# NOT pinned (cloud-init.yml:428 installs docker-ce unpinned) and NOT observable in telemetry,
+# so the instrument makes the host self-report. A fixed version here keeps the field assertable;
+# MOCK_DOCKER_VERSION_FAIL=1 drives the docker-absent path (the field must degrade to `unknown`,
+# never abort). Handled BEFORE the mode case so every mode gets it.
+if [[ "${1:-}" == "--version" ]]; then
+  [[ "${MOCK_DOCKER_VERSION_FAIL:-}" == "1" ]] && exit 127
+  echo "Docker version ${MOCK_DOCKER_VERSION:-29.4.3}, build 055a478"
   exit 0
 fi
 
@@ -3396,14 +3428,23 @@ if [[ "$REGEX_COUNT" -eq 1 ]] \
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: AC3 (regex_count=$REGEX_COUNT — expected 1 + content-classify + recovery_stage arg)"
 fi
-# AC6: token hygiene — refetch helper reaches docker login via --password-stdin only,
+# AC6: token hygiene — the token reaches docker login via --password-stdin only, never argv;
 # token is local + unset; recovery event payload is jq -n --arg with no raw stderr.
+#
+# #6497 moved the `docker login` INVOCATION out of this helper and into the shared
+# _docker_login_capture (the three login sites now share one captured invocation, for the same
+# reason they share one classifier: two drift). So the assertion follows the token to its new
+# home rather than being deleted: the helper must hand the token to the capture helper and must
+# never put it on a docker argv, and the CAPTURE helper is now where --password-stdin lives.
 TOTAL=$((TOTAL + 1))
 HELPER_BODY=$(awk '/^refetch_ghcr_and_relogin\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
+CAPTURE_BODY=$(awk '/^_docker_login_capture\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
 RECOV_BODY=$(awk '/^pull_auth_recovery_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
-if printf '%s' "$HELPER_BODY" | grep -q -- '--password-stdin' \
+if printf '%s' "$CAPTURE_BODY" | grep -q -- '--password-stdin' \
+   && printf '%s' "$CAPTURE_BODY" | grep -qE 'printf .*"\$_tok" \| docker login' \
+   && ! printf '%s' "$CAPTURE_BODY" | grep -qE 'docker login[^|]*\$_tok' \
    && printf '%s' "$HELPER_BODY" | grep -q 'local du="" dt=""' \
-   && printf '%s' "$HELPER_BODY" | grep -qE 'printf .*"\$dt" \| docker login' \
+   && printf '%s' "$HELPER_BODY" | grep -qE '_docker_login_capture ghcr\.io "\$du" "\$dt"' \
    && ! printf '%s' "$HELPER_BODY" | grep -qE 'docker login[^|]*\$dt' \
    && printf '%s' "$RECOV_BODY" | grep -q 'jq -n --arg' \
    && ! printf '%s' "$RECOV_BODY" | grep -qE 'detail_raw|tail -c 400|\$perr'; then
@@ -3413,8 +3454,15 @@ else
 fi
 # AC13: cosign continuity — the recovery relogin targets ghcr.io (the registry the
 # cosign :ro $GHCR_DOCKER_CONFIG authenticates), so a recovered pull does not 401 the .sig.
+#
+# ANCHORED ON THE INVOCATION, not on the bare string `docker login ghcr.io`. #6497 added a
+# `logger` line to this helper whose MESSAGE contains that exact substring — which left this
+# assertion VACUOUSLY GREEN: it passed while matching a log string, with the property it exists
+# to guard (the relogin actually targets ghcr.io) no longer verified by it. That is the same
+# defect class this file has now shipped five times: a static assertion anchored on a bare token
+# that a comment — or a log message — can also satisfy. Anchor on the call shape.
 TOTAL=$((TOTAL + 1))
-if printf '%s' "$HELPER_BODY" | grep -q 'docker login ghcr.io'; then
+if printf '%s' "$HELPER_BODY" | grep -qE '_docker_login_capture ghcr\.io "\$du" "\$dt"'; then
   PASS=$((PASS + 1)); echo "  PASS: recovery relogin writes ghcr.io auth into the same \$GHCR_DOCKER_CONFIG (cosign continuity)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: AC13 — recovery relogin must target ghcr.io"
@@ -3431,8 +3479,10 @@ fi
 # captures the Sentry POST bodies. Echoes nothing; the caller greps the capture file.
 # $3 (optional): a journald capture file. Armed only by the purity test — every other caller
 # leaves it empty so the logger mock keeps its historic discard-everything behavior.
+# $4 (optional): the login's STDOUT (#6497 H-B-stdout). $5 (optional): extra `VAR=value` env
+# entries, space-separated, for the abort-injection + docker-absent legs.
 run_deploy_zot_login_stderr() {
-  local sentry_file="$1" zot_stderr="$2" logger_file="${3:-}"
+  local sentry_file="$1" zot_stderr="$2" logger_file="${3:-}" zot_stdout="${4:-}" extra_env="${5:-}"
   (
     export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
     MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
@@ -3443,8 +3493,11 @@ run_deploy_zot_login_stderr() {
     export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
     export MOCK_ZOT_CONFIGURED=1
     export MOCK_ZOT_LOGIN_FAIL_STDERR="$zot_stderr"
+    [[ -n "$zot_stdout" ]] && export MOCK_ZOT_LOGIN_FAIL_STDOUT="$zot_stdout"
     export MOCK_SENTRY_CAPTURE_FILE="$sentry_file"
     [[ -n "$logger_file" ]] && export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    # shellcheck disable=SC2163
+    if [[ -n "$extra_env" ]]; then for _kv in $extra_env; do export "${_kv?}"; done; fi
     create_base_mocks "$MOCK_DIR"
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
@@ -3453,8 +3506,14 @@ run_deploy_zot_login_stderr() {
   )
 }
 
-# T-5B-1..5: one case per zot_login_class enum member. Each asserts the gate still emits
-# login_failed AND that the specific class rides along.
+# T-5B-1..5: each asserts the gate still emits login_failed AND that the specific class rides
+# along. (This said "one case per login_class enum member" — false: these 5 cases cover 4 of the
+# enum's 7 members. The other three ARE covered, elsewhere: authz_denied at T-5B-7, cred_store
+# and server_error at T-5B-12, plus more transport shapes at T-5B-5b..5f. Coverage was fine; the
+# claim was not — and an inaccurate comment about test coverage is the defect class this whole
+# change exists to drain.)
+# #6497: the tags are `login_class`/`login_http` (were `zot_login_class`/`zot_login_http`) — the
+# classifier is registry-neutral now, so its tags are too, and `login_registry` says which.
 assert_zot_login_class() {
   local label="$1" stderr="$2" want_class="$3" want_http="${4:-}"
   TOTAL=$((TOTAL + 1))
@@ -3462,14 +3521,15 @@ assert_zot_login_class() {
   run_deploy_zot_login_stderr "$sf" "$stderr"
   local ok=1
   grep -q 'zot gate degraded (login_failed)' "$sf" || ok=0
-  grep -q "\"zot_login_class\": *\"${want_class}\"" "$sf" || ok=0
+  grep -q "\"login_class\": *\"${want_class}\"" "$sf" || ok=0
+  grep -q "\"login_registry\": *\"zot\"" "$sf" || ok=0
   if [[ -n "$want_http" ]]; then
-    grep -q "\"zot_login_http\": *\"${want_http}\"" "$sf" || ok=0
+    grep -q "\"login_http\": *\"${want_http}\"" "$sf" || ok=0
   fi
   if [[ "$ok" == "1" ]]; then
-    PASS=$((PASS + 1)); echo "  PASS: ${label} → zot_login_class=${want_class}${want_http:+ http=$want_http}"
+    PASS=$((PASS + 1)); echo "  PASS: ${label} → login_class=${want_class}${want_http:+ http=$want_http}"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: ${label} — expected zot_login_class=${want_class}${want_http:+ + zot_login_http=$want_http}"
+    FAIL=$((FAIL + 1)); echo "  FAIL: ${label} — expected login_class=${want_class}${want_http:+ + login_http=$want_http}"
     echo "        sentry:"; sed 's/^/          /' "$sf"
   fi
   rm -f "$sf"
@@ -3478,7 +3538,7 @@ assert_zot_login_class() {
 # The 401 fixture is byte-accurate — reproduced against the pinned zot (v2.1.2) with this
 # repo's exact accessControl. Measured there: GET /v2/ (the ONLY request docker login makes)
 # answers 200 or 401 and NEVER 403, even for a user with zero accessControl policies.
-echo "--- #6497 T-5B-1..5: docker login stderr classifies into the zot_login_class enum ---"
+echo "--- #6497 T-5B-1..5: docker login stderr classifies into the login_class enum ---"
 assert_zot_login_class "401 stale htpasswd (H3 — the live defect)" \
   'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 401 Unauthorized' \
   'authn_rejected' '401'
@@ -3531,8 +3591,8 @@ echo "--- #6497 T-5B-6: tls_mismatch must NOT classify as authn_rejected ---"
 TOTAL=$((TOTAL + 1))
 SF_TLS=$(mktemp)
 run_deploy_zot_login_stderr "$SF_TLS" 'Error response from daemon: Get "https://10.0.1.30:5000/v2/": http: server gave HTTP response to HTTPS client'
-if grep -q '"zot_login_class": *"tls_mismatch"' "$SF_TLS" \
-   && ! grep -q '"zot_login_class": *"authn_rejected"' "$SF_TLS"; then
+if grep -q '"login_class": *"tls_mismatch"' "$SF_TLS" \
+   && ! grep -q '"login_class": *"authn_rejected"' "$SF_TLS"; then
   PASS=$((PASS + 1)); echo "  PASS: tls_mismatch stays out of the authn_rejected bucket"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: tls_mismatch collapsed into authn_rejected (enum has no discriminating power)"
@@ -3552,8 +3612,8 @@ echo "--- #6497 T-5B-7: a literal 403 must NOT be read as authn_rejected (defens
 TOTAL=$((TOTAL + 1))
 SF_403=$(mktemp)
 run_deploy_zot_login_stderr "$SF_403" 'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 403 Forbidden'
-if grep -q '"zot_login_class": *"authz_denied"' "$SF_403" \
-   && ! grep -q '"zot_login_class": *"authn_rejected"' "$SF_403"; then
+if grep -q '"login_class": *"authz_denied"' "$SF_403" \
+   && ! grep -q '"login_class": *"authn_rejected"' "$SF_403"; then
   PASS=$((PASS + 1)); echo "  PASS: literal 403 → authz_denied, never authn_rejected"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: 403 collapsed into authn_rejected"
@@ -3567,7 +3627,7 @@ echo "--- #6497 T-5B-8: raw docker login stderr never reaches the Sentry payload
 TOTAL=$((TOTAL + 1))
 SF_HYG=$(mktemp)
 run_deploy_zot_login_stderr "$SF_HYG" 'Error response from daemon: login attempt failed with status: 401 Unauthorized SENTINEL_LEAK_CANARY_zot-pull'
-if grep -q '"zot_login_class": *"authn_rejected"' "$SF_HYG" \
+if grep -q '"login_class": *"authn_rejected"' "$SF_HYG" \
    && ! grep -q 'SENTINEL_LEAK_CANARY' "$SF_HYG"; then
   PASS=$((PASS + 1)); echo "  PASS: stderr classified to the enum; raw stderr absent from the payload"
 else
@@ -3620,6 +3680,436 @@ if [[ -n "$ZGD_BODY" ]] \
   PASS=$((PASS + 1)); echo "  PASS: zot_gate_degraded_event threads --arg h \"\${HOST_ID:-}\" into tags.host_id"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: zot_gate_degraded_event must pass --arg h \"\${HOST_ID:-}\" AND put host_id: \$h in tags"
+fi
+
+# ---------------------------------------------------------------------------------------------
+# #6497 T-5B-10..19 — the hatch: rc + stderr_chars + stdout_chars + kw + tok + docker_ver.
+#
+# Everything below asserts the ESCAPE HATCH, which is the half of this change that buys the datum.
+# The classifier tests above assert the arms; these assert what happens when NO arm fires — the
+# `unclassified` case that #6497 exists to drain — plus the fields that make a confidently-wrong
+# arm visible in production telemetry.
+#
+# Each of these was proven RED by the AC9 mutation battery (Phase 3), not by being written before
+# an implementation that already exists. The relevant mutation is named in each block's comment,
+# because "this test would fail if the code were wrong" is a claim, and the mutation is its proof.
+# ---------------------------------------------------------------------------------------------
+
+# T-5B-10 (AC4, task 1.2): `unclassified` is not one state — it is three, and the whole point of
+# the split is that the operator's NEXT ACTION differs per state:
+#   stderr_chars>0                 -> the text exists and matched no arm  -> the remedy is an arm
+#   stderr_chars=0 stdout_chars>0  -> H-B-stdout: the text went to stdout -> remedy: capture stdout
+#   stderr_chars=0 stdout_chars=0  -> H-B-nowhere / H-D: no text anywhere -> `rc` is the only datum
+# Asserting the three payloads DIFFER is the real invariant: `stderr_chars` ALONE cannot decide
+# H-B, because H-B is a disjunction that `stderr_chars=0` merely RESTATES. Three identical
+# payloads is today's behaviour and the defect (the plan's Enhancement Summary finding 2).
+echo "--- #6497 T-5B-10: stderr_chars + stdout_chars split unclassified into three states ---"
+TOTAL=$((TOTAL + 1))
+T10D=$(mktemp -d)
+# (a) unmatched non-empty stderr
+run_deploy_zot_login_stderr "$T10D/s_a.txt" 'zqxjv totally unrecognized failure shape' "$T10D/l_a.txt"
+# (b) H-B-stdout: nothing on stderr, text on stdout
+run_deploy_zot_login_stderr "$T10D/s_b.txt" '' "$T10D/l_b.txt" 'zqxjv the error went to stdout instead'
+# (c) H-B-nowhere: a SILENT failure — no stderr, no stdout, only an rc
+run_deploy_zot_login_stderr "$T10D/s_c.txt" '' "$T10D/l_c.txt" '' 'MOCK_ZOT_LOGIN_FAIL_RC=1'
+T10_A="$(grep -o 'class=unclassified.*' "$T10D/l_a.txt" 2>/dev/null | head -1)"
+T10_B="$(grep -o 'class=unclassified.*' "$T10D/l_b.txt" 2>/dev/null | head -1)"
+T10_C="$(grep -o 'class=unclassified.*' "$T10D/l_c.txt" 2>/dev/null | head -1)"
+if [[ -n "$T10_A" && -n "$T10_B" && -n "$T10_C" ]] \
+   && printf '%s' "$T10_A" | grep -qE 'stderr_chars=[1-9][0-9]*' \
+   && printf '%s' "$T10_B" | grep -q 'stderr_chars=0' \
+   && printf '%s' "$T10_B" | grep -qE 'stdout_chars=[1-9][0-9]*' \
+   && printf '%s' "$T10_C" | grep -q 'stderr_chars=0' \
+   && printf '%s' "$T10_C" | grep -q 'stdout_chars=0' \
+   && [[ "$T10_A" != "$T10_B" && "$T10_B" != "$T10_C" && "$T10_A" != "$T10_C" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: the three unclassified states emit three DISTINCT payloads"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the unclassified split collapsed — expected 3 distinct payloads"
+  echo "        (a) stderr>0 : ${T10_A:-<no class= line>}"
+  echo "        (b) stdout>0 : ${T10_B:-<no class= line>}"
+  echo "        (c) silent   : ${T10_C:-<no class= line>}"
+fi
+rm -rf "$T10D"
+
+# T-5B-11 (AC5): `stderr_chars` is the TRUE length. The precedent this file already carries
+# (`tail -c 400`, :950) truncates, and a saturating length would make every large stderr
+# indistinguishable at exactly the point the shape stops being guessable. Variable capture makes
+# the true length structural — this pins that it stays so.
+# AC9 mutation: replace ${#_e} with the tail -c 400 length -> saturates at 400 -> RED.
+echo "--- #6497 T-5B-11: stderr_chars is the TRUE length, not the truncated one ---"
+TOTAL=$((TOTAL + 1))
+T11D=$(mktemp -d)
+T11_LONG="zqxjv$(printf 'a%.0s' $(seq 1 600))"   # 605 chars, matches no arm, first token is the lot
+run_deploy_zot_login_stderr "$T11D/s.txt" "$T11_LONG" "$T11D/l.txt"
+T11_N="$(grep -o 'stderr_chars=[0-9]*' "$T11D/l.txt" 2>/dev/null | head -1 | cut -d= -f2)"
+if [[ -n "$T11_N" && "$T11_N" -gt 400 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: stderr_chars=$T11_N — the true length, past the 400 truncation edge"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: stderr_chars=${T11_N:-<absent>} — expected >400 (saturation means a truncated length)"
+fi
+rm -rf "$T11D"
+
+# T-5B-11b: the STDOUT counterpart. The AC9 battery mutated `stderr_chars` to a truncated length
+# and caught it (M4) — and had NO counterpart on the stdout side, so `stdout_chars` was pinned
+# only by T-5B-10's `>0 vs =0` split. A BOOLEAN implementation (`[[ -n "$o" ]] && echo 1 || echo
+# 0`) satisfies every other assertion in this file: T-5B-10 (b) matches `[1-9][0-9]*` via "1" and
+# (c) matches `0`. The two length fields are documented as a symmetric pair, so they are pinned
+# as one.
+echo "--- #6497 T-5B-11b: stdout_chars is a LENGTH, not a boolean ---"
+TOTAL=$((TOTAL + 1))
+T11BD=$(mktemp -d)
+T11B_LONG="zqxjv$(printf 'b%.0s' $(seq 1 600))"   # 605 chars on STDOUT, nothing on stderr
+run_deploy_zot_login_stderr "$T11BD/s.txt" '' "$T11BD/l.txt" "$T11B_LONG"
+T11B_N="$(grep -o 'stdout_chars=[0-9]*' "$T11BD/l.txt" 2>/dev/null | head -1 | cut -d= -f2)"
+if [[ -n "$T11B_N" && "$T11B_N" -gt 400 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: stdout_chars=$T11B_N — a real length; a boolean or a truncation would be <=1 or 400"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: stdout_chars=${T11B_N:-<absent>} — expected >400 (1 means a boolean; 400 means truncation)"
+fi
+rm -rf "$T11BD"
+
+# T-5B-12 (AC6, task 1.4): the two arms that were CONFIDENTLY WRONG before this change. Both were
+# landing in `transport` — which routes the operator to the network subsystem for a failure that
+# is not on the network at all. These are precedence assertions, not matching assertions: the
+# strings DO match `transport` too (`permission denied` / `timeout` are both bare terms in it), so
+# the only thing keeping them out of it is arm ORDER.
+# AC9 mutations 3.1/3.2: relocate the arm AFTER transport -> RED. That relocation is the proof
+# these are testing order and not merely matching.
+echo "--- #6497 T-5B-12: cred_store and server_error precede transport (order is load-bearing) ---"
+assert_zot_login_class "cred-store EACCES (H-A/H-C — NOT a network fault)" \
+  'error saving credentials: open /home/deploy/.docker/config.json123: permission denied' \
+  'cred_store'
+assert_zot_login_class "504 from an interposed proxy (NOT a client-side timeout)" \
+  'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 504 Gateway Timeout' \
+  'server_error' '504'
+
+# T-5B-13 (task 1.3): `rc` rides every failed login. 125/126/127 (docker missing / not executable
+# / not on PATH), 137 (OOM-killed mid-login) and 124 (timeout wrapper) are each actionable from
+# this field ALONE — they are the states where there IS no stderr to classify, so without `rc`
+# the H-B-nowhere row of T-5B-10 would be a dead end rather than a diagnosis.
+echo "--- #6497 T-5B-13: rc rides the failed-login line (the only datum when there is no text) ---"
+TOTAL=$((TOTAL + 1))
+T13D=$(mktemp -d)
+run_deploy_zot_login_stderr "$T13D/s.txt" '' "$T13D/l.txt" '' 'MOCK_ZOT_LOGIN_FAIL_RC=127'
+if grep -q 'rc=127' "$T13D/l.txt" 2>/dev/null && grep -q 'class=unclassified' "$T13D/l.txt"; then
+  PASS=$((PASS + 1)); echo "  PASS: rc=127 (docker absent) rides the line with no stderr to classify"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: expected rc=127 on the failed-login line"
+  echo "        journald:"; sed 's/^/          /' "$T13D/l.txt" 2>/dev/null | head -5
+fi
+rm -rf "$T13D"
+
+# T-5B-14 (AC3, task 1.5): the leak canary THROUGH THE UNCLASSIFIED PATH.
+#
+# LOAD-BEARING, and the reason this is a separate test from T-5B-8/8b rather than an extension of
+# them: both existing canaries drive a 401, which classifies as `authn_rejected`. The hatch is the
+# ONLY thing that touches the raw stderr, so a canary that never reaches the hatch cannot detect a
+# hatch leak. T-5B-8/8b would stay GREEN while the hatch shipped raw stderr off-box. This fixture
+# matches no arm, so the hatch actually runs on it.
+#
+# Asserts against the WHOLE journald capture, not a prefix: the `ci-deploy` tag is allowlisted in
+# vector.toml and ships UNSCRUBBED to Better Stack, so it is a credential boundary exactly like
+# the Sentry POST.
+# AC9 mutation 3.3: swap tok Form B -> Form A raw passthrough -> the canary's first token is
+# echoed -> RED.
+echo "--- #6497 T-5B-14: the hatch cannot echo its input, asserted THROUGH the unclassified path ---"
+TOTAL=$((TOTAL + 1))
+T14D=$(mktemp -d)
+# First token IS the canary, so a raw-first-token passthrough leaks it. The password shape is a
+# synthesized fixture (cq-test-fixtures-synthesized-only), split so no contiguous token literal
+# exists in this source file.
+T14_CANARY="SENTINEL_LEAK_CANARY_hatch"
+T14_SECRET="dckr_pat_""AAAAAAAAAAAAAAAAAAAAAAAAAAA"
+run_deploy_zot_login_stderr "$T14D/s.txt" \
+  "${T14_CANARY} zqxjv unrecognized shape for user deploy-bot password=${T14_SECRET}" \
+  "$T14D/l.txt"
+T14_OK=1
+grep -q 'class=unclassified' "$T14D/l.txt" 2>/dev/null || T14_OK=0     # the hatch actually ran
+grep -q 'kw= tok=other' "$T14D/l.txt" 2>/dev/null || T14_OK=0          # closed vocabulary held
+grep -q "$T14_CANARY" "$T14D/l.txt" 2>/dev/null && T14_OK=0            # journald: no canary
+grep -q "$T14_SECRET" "$T14D/l.txt" 2>/dev/null && T14_OK=0            # journald: no secret
+grep -q "$T14_CANARY" "$T14D/s.txt" 2>/dev/null && T14_OK=0            # sentry: no canary
+grep -q "$T14_SECRET" "$T14D/s.txt" 2>/dev/null && T14_OK=0            # sentry: no secret
+if [[ "$T14_OK" == "1" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: hatch fired on the unclassified path; neither sink carries the canary or the secret"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the hatch leaked its input (or never fired) on the unclassified path"
+  echo "        journald:"; sed 's/^/          /' "$T14D/l.txt" 2>/dev/null | head -8
+  echo "        sentry:";   sed 's/^/          /' "$T14D/s.txt" 2>/dev/null | head -8
+fi
+rm -rf "$T14D"
+
+# T-5B-15 (AC3a, task 1.6): STRUCTURAL. T-5B-14 proves the emitters do not echo THIS input;
+# this proves they CANNOT echo ANY input, which is a different and stronger claim that no finite
+# set of fixtures can establish.
+#
+# THE ANCHOR IS A WHITELIST, NOT A BLACKLIST — and that is the whole point of this rewrite.
+#
+# The first draft asserted `grep -cE 'printf[^#]*\$'` == 0, i.e. "no printf line takes an
+# expansion". It was comment-blind (good) but anchored on TODAY'S SYNTAX rather than on the
+# PROPERTY, and review proved two ordinary implementations that echo their input and evade it:
+#   *)  echo -n "$1" ;;                    <- the guard only knows the verb `printf`
+#   *)  printf '%s' \                      <- grep is LINE-based; the expansion is on line 2
+#         "$1" ;;
+# Both are shapes a reasonable engineer might actually write next, which is the tell that the
+# anchor was narrower than the claim (`cq-assert-anchor-not-bare-token` says "anchor on syntax" —
+# today's syntax is a narrower thing than the syntax the property allows).
+#
+# Inverted: strip comments, then strip the ONE expansion these emitters are permitted (`${1:-}`
+# in the `case` head), then assert NO `$` survives anywhere in either body. That is verb-blind
+# (echo, print, cat, a variable-indirect call — all caught), line-boundary-blind (a continuation
+# carrying `"$1"` still contains `$`), and comment-blind. It cannot be evaded by any emit
+# mechanism, because the thing it forbids is the INPUT REACHING ANY LINE AT ALL.
+echo "--- #6497 T-5B-15: the emitters contain NO expansion but \${1:-} (Form B, structurally) ---"
+TOTAL=$((TOTAL + 1))
+KW_BODY="$(awk '/^_login_kw\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
+TOK_BODY="$(awk '/^_login_tok\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
+# Strip trailing comments, then the permitted `${1:-}`; anything left holding a `$` is a channel
+# from the input to the output.
+_t15_residue() { printf '%s\n' "$1" | sed 's/#.*$//' | sed 's/\${1:-}//g' | grep -n '\$' || true; }
+KW_RESIDUE="$(_t15_residue "$KW_BODY")"
+TOK_RESIDUE="$(_t15_residue "$TOK_BODY")"
+# Non-vacuity: an extraction that silently returns nothing would pass every assertion below.
+if [[ -z "$KW_BODY" || -z "$TOK_BODY" ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: could not extract _login_kw/_login_tok bodies (fixture error, not a code defect)"
+elif [[ -z "$KW_RESIDUE" && -z "$TOK_RESIDUE" ]] \
+  && [[ "$(printf '%s' "$KW_BODY"  | grep -cE '^[^#]*printf')" -gt 0 ]] \
+  && [[ "$(printf '%s' "$TOK_BODY" | grep -cE '^[^#]*printf')" -gt 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: neither emitter body contains any expansion but \${1:-} — incapable of echoing, whatever the verb"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: an emitter body holds an expansion other than \${1:-} (Form A — it can echo its input)"
+  [[ -n "$KW_RESIDUE"  ]] && { echo "        _login_kw:";  printf '%s\n' "$KW_RESIDUE"  | sed 's/^/          /'; }
+  [[ -n "$TOK_RESIDUE" ]] && { echo "        _login_tok:"; printf '%s\n' "$TOK_RESIDUE" | sed 's/^/          /'; }
+fi
+
+# T-5B-16 (AC3b, task 1.7): FUZZ. Against a single fixture the closed-vocabulary claim is
+# vacuous — one input proves one output. 200 high-entropy first tokens plus a hand-picked
+# adversarial set (format specifiers, command substitution, quote/newline breakouts) is what makes
+# the AC9 Form-A mutation reliably RED instead of coincidentally green.
+#
+# Sources the REAL function bodies rather than re-running the deploy 200+ times (~minutes each):
+# the emitters are pure `case`/`printf` with no dependencies, so the extracted body IS the SUT.
+echo "--- #6497 T-5B-16: tok is a member of the closed set for every input (200 fuzz + adversarial) ---"
+TOTAL=$((TOTAL + 1))
+T16_LIB=$(mktemp)
+{ printf '%s\n' "$KW_BODY"; printf '%s\n' "$TOK_BODY"; } > "$T16_LIB"
+# shellcheck disable=SC1090
+source "$T16_LIB"
+T16_BAD=""
+T16_N=0
+# One fixture per MEASURED _login_kw arm, each carrying a credential canary in the same string —
+# so an arm that splices its input emits the canary and fails the closed-form oracle. Every
+# literal here is a string the /work Phase 0 battery measured out of a real `docker login`
+# against a live registry:2 (except the three the plan FALSIFIED, kept as free kw probes).
+# Synthesized secret shapes only, split so no contiguous token literal exists in this file
+# (`cq-test-fixtures-synthesized-only` + GitHub push protection).
+T16_KW_CANARY="SENTINEL_LEAK_CANARY_kw pw=dckr_pat_""BBBBBBBBBBBBBBBBBBBBBBBBBBB user=deploy-bot"
+T16_KW_FIXTURES=(
+  "error saving credentials: write /home/deploy/.docker/config.json: no space left on device ${T16_KW_CANARY}"
+  "error saving credentials: exec: \"docker-credential-desktop\": executable file not found in \$PATH ${T16_KW_CANARY}"
+  "error getting credentials - err: exit status 1, out: \`docker-credential-secretservice\` ${T16_KW_CANARY}"
+  "error saving credentials: open /home/deploy/.docker/config.json: permission denied ${T16_KW_CANARY}"
+  "error storing credentials - err: exit status 1 ${T16_KW_CANARY}"
+  "error: cannot perform an interactive login from a non-TTY device ${T16_KW_CANARY}"
+  "Cannot connect to the Docker daemon at unix:///var/run/docker.sock ${T16_KW_CANARY}"
+  "credential helper is not installed ${T16_KW_CANARY}"
+  "some entirely novel shape no arm has ever seen ${T16_KW_CANARY}"
+  ""
+)
+if ! declare -F _login_tok >/dev/null || ! declare -F _login_kw >/dev/null; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: could not source the real emitters (fixture error, not a code defect)"
+else
+  # The oracle is DERIVED from the SUT, never hand-copied. A hand-written literal list is a
+  # replicated literal with no parity test: add an arm to _login_tok (`refused*) printf
+  # 'refused'`) and neither the 200 base64 randoms nor the adversarial list would ever emit it,
+  # so this test stays GREEN while its own headline claim ("tok ∈ the closed set for EVERY
+  # input") stops describing the closed set. Extracting the arms from TOK_BODY makes the oracle
+  # track the SUT by construction. Mirrors the T-PARITY precedent in this file, which extracts
+  # the lease basename from both sources rather than restating it.
+  # Anchored on the printf CALL FORM inside a case arm, not a bare token, so a comment in the
+  # body cannot inject a member (`cq-assert-anchor-not-bare-token`).
+  T16_CLOSED="$(printf '%s\n' "$TOK_BODY" | grep -oE "printf '[a-zA-Z]+'" | grep -oE "'[a-zA-Z]+'" | tr -d "'" | sort -u)"
+  T16_CLOSED_N="$(printf '%s\n' "$T16_CLOSED" | grep -c .)"
+  _t16_tok_closed() {
+    printf '%s\n' "$T16_CLOSED" | grep -qxF "$1"
+  }
+  # _login_kw's oracle needs no member list: its ENTIRE output vocabulary is comma-joined
+  # lowercase literals, so `^([a-z]+,)*$` is the closed-form property. Any Form-A mutation that
+  # splices input (`printf 'nospace:%s,' "$1"`, `echo -n "nospace:${1},"`) emits a colon, a
+  # space, a slash or a quote and fails it, whatever the arm.
+  _t16_kw_closed() { [[ "$1" =~ ^([a-z]+,)*$ ]]; }
+  # The adversarial set: each of these BREAKS a Form-A implementation in a different way.
+  # `failed`/`unauthorized` are here because base64 randoms cannot produce them — without them
+  # two of _login_tok's nine arms were never exercised, so a Form-A body in either arm passed
+  # the whole fuzz.
+  for _f in '%s%s%s' '%n' '$(id)' '`id`' '${IFS}' '"; id; #' "'" '\' '../../etc/passwd' \
+            '-' '--help' '' ' ' 'error' 'Error' 'time=x' 'WARNING!' 'Cannot' 'denied:' \
+            'failed' 'failed:' 'unauthorized' 'unauthorized:' ; do
+    T16_N=$((T16_N + 1))
+    _o="$(_login_tok "$_f")"
+    _t16_tok_closed "$_o" || T16_BAD="${T16_BAD}[tok in=<${_f}> out=<${_o}>] "
+  done
+  # _login_kw — REVIEW-CRITICAL. Until this loop existed, `_login_kw` had ZERO behavioural
+  # coverage: the AC9 battery mutated _login_tok, the hatch and the call sites, and never touched
+  # it, so a Form-A disclosure in ANY of its 10 arms shipped the raw stderr — username, token and
+  # all — to journald -> Vector -> Better Stack UNSCRUBBED, with the whole suite green. Proven by
+  # a review agent: mutating the `no space left on device` arm to splice `${1}` left the suite
+  # byte-identical (same pass count, same failures). That arm is the H-C disk-full path, i.e. one
+  # of the two live hypotheses this instrument exists to diagnose.
+  # The meta-lesson, worth more than the fix: A MUTATION BATTERY ONLY COVERS WHAT YOU MUTATE.
+  # Enumerate the SUT's functions and confirm each appears on the LEFT of a call in the test file.
+  for _f in "${T16_KW_FIXTURES[@]}"; do
+    T16_N=$((T16_N + 1))
+    _o="$(_login_kw "$_f")"
+    _t16_kw_closed "$_o" || T16_BAD="${T16_BAD}[kw in=<${_f}> out=<${_o}>] "
+  done
+  # Both emitters get the random corpus. Each random is ALSO appended to a measured prefix so it
+  # reaches _login_kw's arms with a high-entropy tail — a spliced arm then emits the tail.
+  for _i in $(seq 1 200); do
+    T16_N=$((T16_N + 2))
+    _f="$(head -c 18 /dev/urandom | base64 | tr -d '\n')"
+    _o="$(_login_tok "$_f")"
+    _t16_tok_closed "$_o" || T16_BAD="${T16_BAD}[tok in=<${_f}> out=<${_o}>] "
+    _o="$(_login_kw "error saving credentials: permission denied ${_f}")"
+    _t16_kw_closed "$_o" || T16_BAD="${T16_BAD}[kw in=<…${_f}> out=<${_o}>] "
+  done
+  # Non-vacuity floor on the DERIVED oracle: an extraction that silently returned nothing (or
+  # one member) would make `_t16_tok_closed` reject everything -> loud RED, not a false green;
+  # but a MIS-extraction that returned a huge set would accept everything, so pin the count too.
+  # _login_tok has 9 arms today; the floor is deliberately below that so adding an arm does not
+  # false-FAIL, while a collapsed extraction does.
+  # (`T16_N -ge 200` used to sit here and was a TAUTOLOGY — T16_N increments unconditionally
+  # across two literal-bounded loops, so it could never be false. It read as a non-vacuity guard
+  # and asserted nothing. The real guards are T16_CLOSED_N's bounds and _t16_kw_closed's regex.)
+  if [[ -z "$T16_BAD" && "$T16_CLOSED_N" -ge 5 && "$T16_CLOSED_N" -le 20 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: tok ∈ SUT-derived closed set (${T16_CLOSED_N} members); kw ∈ ^([a-z]+,)*\$ — $T16_N inputs across BOTH emitters"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: tok escaped the closed set (n=$T16_N, oracle_members=$T16_CLOSED_N): $T16_BAD"
+  fi
+fi
+rm -f "$T16_LIB"
+
+# T-5B-17 (AC8, task 1.8): GHCR parity. Before this change the two GHCR logins discarded stderr
+# entirely (`>/dev/null 2>&1`), so a GHCR login failure was as unnamed as the zot one — and the
+# BAKED-cred failure shape specifically is the #6090/#6400 recurrence signal, which is lost if
+# only the post-refetch login is classified. Both lines are asserted for that reason.
+#
+# Body-scoped to each GHCR line (precedent: assert_pull_failure_host_id :1076). The zot gate emits
+# `class=` too, so an unscoped `grep class=cred_store` over the capture would be satisfied by the
+# SIBLING zot emit and pass with GHCR classification entirely absent.
+# AC9 mutation 3.6: point the assertion at the zot payload -> RED, which is what proves the
+# scoping is real and not decorative.
+echo "--- #6497 T-5B-17: the class rides BOTH GHCR PRELUDE lines (baked-cred AND post-refetch) ---"
+run_deploy_ghcr_login_stderr() {
+  local sentry_file="$1" ghcr_stderr="$2" logger_file="$3"
+  (
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    export MOCK_GHCR_LOGIN_FAIL_STDERR="$ghcr_stderr"
+    export MOCK_SENTRY_CAPTURE_FILE="$sentry_file"
+    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    bash "$DEPLOY_SCRIPT" >/dev/null 2>&1 || true
+  )
+}
+# Body-scoped: each assertion reads only ITS OWN line, selected by that line's unique prefix.
+assert_ghcr_login_class() {
+  local label="$1" line_match="$2" want_class="$3" logger_file="$4"
+  TOTAL=$((TOTAL + 1))
+  local line; line="$(grep -F "$line_match" "$logger_file" 2>/dev/null | head -1)"
+  if [[ -n "$line" ]] && printf '%s' "$line" | grep -q "class=${want_class}" \
+     && printf '%s' "$line" | grep -q 'registry=ghcr'; then
+    PASS=$((PASS + 1)); echo "  PASS: ${label} → class=${want_class}"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: ${label} — expected class=${want_class} on this line"
+    echo "        line: ${line:-<line absent from journald>}"
+  fi
+}
+T17D=$(mktemp -d)
+run_deploy_ghcr_login_stderr "$T17D/s.txt" \
+  'error saving credentials: open /home/deploy/.docker/config.json123: permission denied' \
+  "$T17D/l.txt"
+assert_ghcr_login_class "GHCR baked/first-cred login" \
+  'PRELUDE: docker login ghcr.io FAILED with baked/first creds' 'cred_store' "$T17D/l.txt"
+assert_ghcr_login_class "GHCR post-Doppler-refetch login" \
+  'PRELUDE: docker login ghcr.io FAILED after Doppler re-fetch' 'cred_store' "$T17D/l.txt"
+
+# T-5B-18 (task 1.9): `refetch_ghcr_and_relogin`'s stdout is a TYPED CONTROL CHANNEL — its two
+# callers parse it with `stage="$(refetch_ghcr_and_relogin)"` and compare against `recovered`. The
+# reflexive way to add telemetry to that function is `2>&1`, which would pipe unclassified stderr
+# into the stage string, silently break the `== "recovered"` comparison, and discard the #6400
+# recovery — while every existing recovery test stays green, because they assert the RECOVERED
+# path and this corrupts only the FAILED one.
+#
+# So: the stage stays byte-exactly one of the three literals, and the class rides journald instead.
+# AC9 mutation 3.5: emit the class on the helper's stdout -> the stage string is polluted -> RED.
+echo "--- #6497 T-5B-18: the refetch helper's stdout stays a typed control channel ---"
+TOTAL=$((TOTAL + 1))
+T18_STAGE="$(grep -c 'STILL FAILED after Doppler re-fetch (stage=relogin_failed)' "$T17D/l.txt" 2>/dev/null)"
+T18_HATCH="$(grep -c 'PRELUDE: docker login ghcr.io FAILED after Doppler re-fetch.*rc=.*stderr_chars=' "$T17D/l.txt" 2>/dev/null)"
+if [[ "$T18_STAGE" -ge 1 && "$T18_HATCH" -ge 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: stage is byte-exactly 'relogin_failed'; the class + hatch ride journald instead"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: expected an unpolluted stage=relogin_failed AND a hatch on the journald line"
+  echo "        stage_lines=$T18_STAGE hatch_lines=$T18_HATCH"
+  grep -F 'PRELUDE' "$T17D/l.txt" 2>/dev/null | sed 's/^/          /' | head -8
+fi
+rm -rf "$T17D"
+
+# T-5B-19 (AC2c): the hatch's containment subshell, pinned STRUCTURALLY.
+#
+# WHY THIS TEST EXISTS, in its own words: the AC9 battery measured that REMOVING the subshell
+# leaves this suite 164/164 GREEN. That is not a passing grade — it is an unguarded invariant
+# (`cq-assert-anchor-not-bare-token`: if deleting the guard leaves the suite green, it pins
+# nothing). This test is the guard the battery proved was missing.
+#
+# The plan's AC2(b) falsifier — "remove the subshell -> (b) aborts the run -> RED" — is FALSE
+# against this implementation. Two measurements say why (both run at /work, neither derived):
+#   1. The emitters are built on `case`, which returns 0 on a NO-MATCH. The plan's abort vector
+#      was `grep -q`, whose normal non-match returns 1. There is no `grep -q` here at all, so the
+#      dominant abort class is designed out AT THE ROOT rather than contained — a strict
+#      improvement on the plan, and the reason its falsifier no longer falsifies.
+#   2. The plan's abort measurement is real but TOP-LEVEL ONLY. `kw="$(… | grep -q ZZZ …)"` does
+#      abort under `set -euo pipefail` at top level; the SAME code inside a function invoked
+#      through a command substitution does NOT — and `$( ( _login_hatch … ) )` is exactly how all
+#      three sites call it.
+# So the subshell today contains a failure mode nothing can currently reach. It STAYS: the
+# cheapest future edit to `_login_kw` is a `grep -q` probe (that is literally the shape the plan
+# proposed), and re-entering the abort class costs one deleted construct. No behavioural test can
+# pin it — there is no reachable abort to observe — so the construct itself is the assertion.
+#
+# COMMENT-BLIND BY CONSTRUCTION: `ci-deploy.sh` › `_login_hatch()`'s header documents the call
+# form VERBATIM ("CALL IT AS: hatch=..."), so a grep that does not strip comments matches that
+# prose and passes with all three real call sites gutted — a bare-token false-pass hiding inside
+# an assertion that otherwise looks correctly anchored. Non-comment lines only.
+echo "--- #6497 T-5B-19: every hatch call site is wrapped in the containment subshell ---"
+TOTAL=$((TOTAL + 1))
+HATCH_NC="$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")"
+# ARGUMENT-AGNOSTIC by necessity. This counted `_login_hatch[[:space:]]+"` — requiring the first
+# argument to START WITH A DOUBLE QUOTE — and review proved that makes the equality claim below
+# FALSE for the likeliest shapes a hurried 4th call site would take: `_login_hatch $E 0 1`,
+# `_login_hatch ${LOGIN_ERR:-} 0 1`, and a `\`-continuation all counted ZERO, leaving CALLS=3
+# WRAPPED=3 and the test GREEN with an unwrapped, uncontained 4th site. Anchoring on
+# `_login_hatch` NOT followed by `(` counts every invocation regardless of argument form while
+# still excluding the definition (`_login_hatch() {`). Let the wrapped-regex carry the shape
+# check; the counter's only job is to see the call at all.
+HATCH_CALLS="$(printf '%s\n' "$HATCH_NC" | grep -cE '_login_hatch([^(]|$)')"
+HATCH_WRAPPED="$(printf '%s\n' "$HATCH_NC" | grep -cE '\$\([[:space:]]*\([[:space:]]*_login_hatch[[:space:]].*\)[[:space:]]*\|\|[[:space:]]*true[[:space:]]*\)')"
+if [[ "$HATCH_CALLS" -eq 3 && "$HATCH_WRAPPED" -eq 3 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: all 3 hatch call sites emit from ( … ) || true — a telemetry failure cannot abort a deploy"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: hatch containment drift — invocations=$HATCH_CALLS wrapped=$HATCH_WRAPPED (both must be 3)"
+  echo "        every call MUST read: x=\"\$( ( _login_hatch … ) || true )\""
+  printf '%s\n' "$HATCH_NC" | grep -nE '_login_hatch([^(]|$)' | sed 's/^/          /'
 fi
 
 # Restore strict mode for the summary/exit.
