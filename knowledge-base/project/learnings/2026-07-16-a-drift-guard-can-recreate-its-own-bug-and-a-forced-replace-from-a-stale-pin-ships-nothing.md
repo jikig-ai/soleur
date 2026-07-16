@@ -1,8 +1,8 @@
 ---
-title: "A drift-guard can recreate the bug it guards — through its own failure message; and a forced -replace from a stale pin ships nothing"
+title: "A guard can recreate its own bug; a forced -replace from a stale pin ships nothing; a locally-measured exit code makes a branch silently CI-red"
 date: 2026-07-16
 category: best-practices
-tags: [drift-guard, observability, syslog-identifier, pinned-artifact, terraform-replace, oci-image, review, concur-gate]
+tags: [drift-guard, observability, syslog-identifier, pinned-artifact, terraform-replace, oci-image, review, concur-gate, version-skew, curl, ci-green-vs-local-green]
 problem_type: logic_error
 component: infrastructure
 module: apps/web-platform/infra
@@ -169,6 +169,80 @@ Two corollaries:
   IREF==ZIREF proves the two pins agree with *each other*; it says nothing about whether
   either agrees with the repo. Ask of any pin guard: *which of {format, self-consistency,
   content} does this actually check?*
+
+## 3. An assertion pinned to a LOCALLY-MEASURED exit code reads green to its author forever, while the branch sits CI-red
+
+### Problem
+
+The plan measured the bug precisely: `curl -fsS --max-time 10 ""` → **rc=2** (`option : blank
+argument where content is expected`). That measurement was correct, so `/work` encoded it
+directly:
+
+```bash
+assert "AC5b/3 web render + URL absent -> rc=2" "[[ '$WEB_ABSENT_RC' -eq 2 ]]"
+```
+
+Locally: **110/110**. In CI: **109/110** — and it had been failing on *every* run since the
+`/work` phase, on the last four commits, while the handoff notes recorded "tests green
+(110/110 inngest.test.sh)". The branch was never CI-green; the author's machine simply
+never said so.
+
+**curl's empty-URL exit code is version-dependent.** curl 8.18 exits **2**; older curl exits
+**3** (`URL using bad/illegal format or missing URL`) — which the runner ships, and which
+**this very plan already knew**: its own §Hypotheses called H5 *"Same class as #4116 (`curl`
+exit 3 on empty URL)"*. The plan cited a sibling incident with a **different rc for the same
+condition**, one section above the AC that hardcoded rc=2.
+
+### Root cause
+
+An empirical measurement is a fact about **the environment it was taken in**. Encoding it as
+an equality assertion silently converts "what my curl did" into "what curl does". The tell is
+that the measurement and the contract are different propositions:
+
+- measured: *this curl exits 2 on an empty URL* — true, environment-scoped;
+- contract: *the live pusher must not silently succeed with no URL* — true everywhere.
+
+Only the second is what the feature owes. `-eq 2` asserts the first.
+
+### Solution
+
+Assert the contract, and attribute it:
+
+```bash
+# non-zero is the property; ^curl: proves curl RAN and rejected it (a missing binary exits
+# 127 with sh's "exec: not found" and would satisfy a bare -ne 0 — passing for the one
+# reason that means the test proved nothing).
+[[ "$RC" -ne 0 && "$RC" -ne 127 ]] && printf '%s' "$OUT" | grep -q '^curl:'
+```
+
+Mutation-checked across both real curl versions and every failure mode:
+
+| input | verdict |
+|---|---|
+| rc=2, `curl: option : blank argument…` (8.18) | PASS |
+| rc=3, `curl: (3) URL using bad/illegal format…` (#4116 / runner) | PASS |
+| **rc=0, silent success — the regression this exists to catch** | **FAIL** |
+| rc=127, `sh: exec: /usr/bin/curl: not found` | **FAIL** |
+| rc=1, unrelated non-curl failure | **FAIL** |
+
+### Key insight
+
+**When a plan's evidence is a measured exit code / version string / byte count / timestamp,
+the AC must assert the PROPERTY it demonstrates, not the VALUE it returned** — unless the
+value itself is pinned by contract somewhere (and then cite where). Two cheap tells that this
+line is about to be written:
+
+- The plan cites a sibling incident with a **different value for the same condition**
+  (here #4116's exit 3, one section above). That is the environment-dependence, already
+  written down, going unread.
+- The assertion would be **unfalsifiable on the author's box** — it can only ever fail
+  somewhere the author is not, which is precisely where nobody is watching.
+
+And the corollary for handoffs: **"tests green" is a claim about a machine.** Before trusting
+a green in a resume note, check the branch's last CI run — `gh run list --branch <b>`. A
+local-only green is indistinguishable from a real one right up until it isn't. Related:
+[[2026-07-16-a-gate-certifies-placement-not-correctness-and-a-documented-class-recurred-again]]
+— a gate that certifies the wrong property, in the version-skew dimension.
 
 ## Session Errors
 
