@@ -356,6 +356,31 @@ HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
 # `url_present=no` row. Complements (does not replace) the Better Stack channel — this one
 # works even when Vector itself is the thing that is broken.
 HEARTBEAT_JOURNAL_TAIL="$(service_journal_tail inngest-heartbeat.service)"
+# #6536: WHICH heartbeat arm this host actually rendered. inngest-bootstrap.sh resolves host
+# identity at RENDER time — on DOPPLER_PROJECT=soleur-inngest it substitutes the dark arm into
+# the ping script (absent URL -> log + exit 0); on the co-located web host it deletes the
+# sentinel, so an absent URL reaches curl and exits 2, loudly. That decision is a one-time
+# bootstrap-log line, so off-box there is otherwise NO way to tell which arm a running host
+# carries — the two hosts' scripts differ by three lines and nothing reports it.
+#
+# Why that matters concretely: the render keys off $DOPPLER_PROJECT, and inngest-bootstrap.sh
+# defaults it to `soleur` when unset. A future redeploy path that reaches this host without
+# exporting it would render the WEB arm here and silently restore the 60s rc=2 storm #6536
+# fixed. This field makes that a one-field read instead of a re-diagnosis. `url_present=no`
+# appears ONLY in the dark arm's logger line — never in the script's comments — so its
+# presence is an exact discriminator (verified against both rendered outputs).
+#
+# `-r` first: absent/unreadable is reported as its own value, never conflated with `absent`
+# (a missing script and a deliberately-omitted arm are different faults).
+if [ -r /usr/local/bin/inngest-heartbeat.sh ]; then
+  if grep -q 'url_present=no' /usr/local/bin/inngest-heartbeat.sh 2>/dev/null; then
+    HEARTBEAT_DARK_ARM="rendered"      # dedicated host: absent URL skips the ping (expected while dark)
+  else
+    HEARTBEAT_DARK_ARM="absent"        # co-located web host: absent URL stays loud (expected on the live pusher)
+  fi
+else
+  HEARTBEAT_DARK_ARM="script-missing"
+fi
 # inngest-heartbeat.service is a Type=oneshot unit (no RemainAfterExit) driven by
 # inngest-heartbeat.timer (OnUnitActiveSec=60s; the unit + timer are written by
 # inngest-bootstrap.sh — the heartbeat block around the HEARTBEAT_UNIT/HEARTBEAT_TIMER
@@ -396,6 +421,7 @@ jq -nc \
   --argjson base "$BASE" \
   --arg hb "$HEARTBEAT_STATUS" \
   --arg hbj "$HEARTBEAT_JOURNAL_TAIL" \
+  --arg hbd "$HEARTBEAT_DARK_ARM" \
   --arg hbt "$HEARTBEAT_TIMER_STATUS" \
   --arg is "$INNGEST_SERVER_STATUS" \
   --arg vs "$VECTOR_STATUS" \
@@ -412,6 +438,7 @@ jq -nc \
   '$base + $cr + $cd + $sl + {host_id: $hid, sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_journal_tail: $hbj,
+    inngest_heartbeat_dark_arm: $hbd,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,
     vector: $vs,

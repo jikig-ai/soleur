@@ -82,6 +82,19 @@ assert "no_prior_deploy carries services.inngest_heartbeat_timer" \
 # and an empty value must still prove the FIELD is wired.
 assert "no_prior_deploy carries services.inngest_heartbeat_journal_tail (#6536)" \
   "printf '%s' '$NO_DEPLOY_OUT' | jq -e '.services | has(\"inngest_heartbeat_journal_tail\")' >/dev/null"
+# #6536: WHICH arm the host rendered. inngest-bootstrap.sh resolves host identity at render
+# time, so the dedicated and co-located hosts run different ping scripts — and nothing else
+# reports which one a live host carries. Off-host (the CI case) the script does not exist, so
+# the field must read `script-missing`: that value is itself the assertion that the -r probe
+# ran rather than silently defaulting. Constrained to the closed value set so a future refactor
+# cannot quietly widen it to an unhandled state.
+assert "no_prior_deploy carries services.inngest_heartbeat_dark_arm (#6536)" \
+  "printf '%s' '$NO_DEPLOY_OUT' | jq -e '.services | has(\"inngest_heartbeat_dark_arm\")' >/dev/null"
+# `IN` (exact equality), never `inside`: jq's `inside`/`contains` are SUBSTRING matches on
+# strings, so `[""] | inside([...])` and `["render"] | inside([...])` both return true — an
+# empty/unset value would sail through the very assertion meant to bound the set. Verified.
+assert "inngest_heartbeat_dark_arm is one of rendered|absent|script-missing (#6536)" \
+  "printf '%s' '$NO_DEPLOY_OUT' | jq -e '.services.inngest_heartbeat_dark_arm | IN(\"rendered\",\"absent\",\"script-missing\")' >/dev/null"
 
 # --- successful state file merge ---
 echo '{"exit_code":0,"target":"inngest","tag":"vinngest-v1.2.3"}' > "$TMP/ok.state"
