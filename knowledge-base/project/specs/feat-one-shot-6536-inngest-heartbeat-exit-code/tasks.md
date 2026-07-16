@@ -108,10 +108,77 @@ discriminate: H5 is confirmed, H4 refuted+descoped, and the probe cannot see H4 
       not touch the flip guard, and widening a cutover safety allowlist mid-cutover is not a
       change to make as a side effect of a heartbeat fix. Needs its own issue.
 
+## Phase 6 — Review disposition (2026-07-16)
+
+- [x] 6.1 **P2(a) drift guard — FIXED INLINE** (`a49bbffb9`). CONFIRMED by simulation, not argued:
+      `inngest-bootstrap.sh` enters the AC3 loop via **exactly one** line — the `sed` replacement
+      rendering the dark arm — and its only `LOG_TAG` is inside the ping heredoc. Removing the
+      now-pointless dark arm post-cutover drops the file out of the loop, `EXPECTED_TAGS` loses
+      `inngest-heartbeat`, AC3 fails, and its failure text names "the logger -t scripts" as the
+      source of truth — steering the engineer to delete the vector.toml entry and re-blind the
+      channel. The guard would have recreated #6536 through its own failure message.
+      **Judgment call (the three arguments):** the two reviewers were RIGHT that
+      `SYSTEMD_UNIT_IDENTIFIERS` is the wrong home — that list is for identifiers no source line
+      can yield (webhook's bare binary basename), and parking a *derivable* tag there trades
+      lockstep for the bypass its own comment forbids. The finding was RIGHT that the coupling is
+      real. Both missed the third option: **derive the `SyslogIdentifier=` channel** as an
+      independent source. Satisfies the finding (removal no longer perturbs EXPECTED), respects
+      the constraint (nothing hardcoded; that list untouched), and closes a pre-existing hole —
+      explicit `SyslogIdentifier=` units had ZERO drift coverage, which is the #6536 class itself.
+      Proven on all three axes: no-op today (13 tags, identical) / tag retained post-cutover /
+      catches an un-mirrored `SyslogIdentifier=` unit the old derivation was blind to (0 → 1).
+      *Note:* the `:412` citation had drifted — the constraint text now sits ~10 lines lower
+      (cf. `cq-cite-content-anchor-not-line-number`, ADR-116). Cite content, not coordinates.
+- [x] 6.2 **P2(c) render observability — FIXED INLINE** (`services.inngest_heartbeat_dark_arm`).
+      Which arm a host rendered was reported once, in a boot log line; off-box it was unreadable.
+      Now a one-field read over the existing HMAC + CF-Access `/hooks/deploy-status`, no SSH.
+      `url_present=no` verified as an exact discriminator by rendering the ping script under both
+      `DOPPLER_PROJECT` values (dedicated 1 / web 0; both `sh -n` clean, no residual sentinel).
+      The closed-value assertion uses jq `IN`, not `inside` — `inside`/`contains` are SUBSTRING
+      matches, so `""`/`"render"`/`"abs"` all passed the first draft of my own gate. 60/60.
+- [x] 6.3 **P2(b) `ci-deploy.sh` `--preserve-env` omits `DOPPLER_PROJECT` — NOT fixed here; folded
+      into the H4 follow-up (§Descoped 1).** Re-measured: `grep -c DOPPLER_PROJECT ci-deploy.sh`
+      → **0**, `--preserve-env` lists only the four version vars, and `cloud-init-inngest.yml:319`
+      confirms the dedicated host has no `/etc/default/webhook-deploy` — so ci-deploy **cannot
+      reach it** and H4 still fires nowhere. This PR does add a NEW consequence to H4's blast
+      radius (a `soleur` default would now render the WEB arm on the dedicated host and restore
+      the storm), so that consequence goes in the H4 issue. Fixing it means editing `ci-deploy.sh`
+      + sudoers — the web-host path, i.e. the Phase 2 the plan removed as unjustified risk while
+      replacing a host. 6.2 makes the wrong render *observable* rather than silent, which is the
+      cheap half of the mitigation and the half that fits this PR.
+- [x] 6.4 **P2(d) no `OnFailure=` — NOT fixed here; folded into §Descoped 2.** The premise is
+      right (queryable ≠ alarming) but the plan's v5 correction settles the scope: the Better Stack
+      monitor IS the alarm for the live pusher (reddens ~90s), and the dark host's missing alarm is
+      the documented accepted gap. Post-fix the dark unit should not fail at all, and FR4+FR5 now
+      put its stderr somewhere alertable. A real fix needs an alarm-handler unit + delivery for
+      EVERY infra unit — exactly §Descoped 2's systemic guard. Same trigger → bundle, don't file twice.
+
 ## Phase 4 — Delivery (dispatch-gated replace)
 
-- [ ] 4.1 Bump `IREF` (`cloud-init-inngest.yml:337`) to the new tag. Confirm the image-publish
-      workflow produced it BEFORE the bump (a bump to a non-existent tag bricks cold boot).
+> **P1 (BLOCKS DELIVERY, found at review) — the documented sequence would burn the free window
+> without landing the fix.** Tasks 4.1-4.3 read as if merge → dispatch delivers. It does not:
+> the dispatch runs `terraform plan -replace='hcloud_server.inngest'`, which force-replaces
+> **regardless of any `user_data` diff** — and the new host boots cloud-init pinned at
+> `IREF=…:v1.1.19` (`cloud-init-inngest.yml:337`), extracting `inngest-bootstrap.sh` +
+> `vector.toml` from that image. **Measured: neither `vinngest-v1.1.19` nor `vinngest-v1.1.20`
+> contains the fix** (dark arm 0, `SyslogIdentifier=` 0, vector.toml tag 0 in both trees).
+> So dispatching today rebuilds the dark host from a pre-fix image: #6536 survives, and the
+> zero-downtime window (free only while the host is dark) is spent for nothing.
+>
+> Nothing catches this. `cloud-init-inngest-bootstrap.test.sh` asserts the pin's FORMAT and the
+> IREF/ZIREF internal agreement (and targets `cloud-init.yml`, the WEB host — which independently
+> pins **v1.1.20**, already ahead of the dedicated host's v1.1.19). No guard ties either pin to
+> the repo's bootstrap content or to the newest tag, so "the shipped image predates the fix" is
+> silent drift. FR8 is listed in the plan's §Files to Edit and is absent from the PR.
+>
+> **The fix requires a tag that does not exist yet:** the image builds only on a `vinngest-v*.*.*`
+> tag push (`build-inngest-bootstrap-image.yml`), from that tag's tree. Ordering is therefore
+> merge → tag `vinngest-v1.1.21` on main → verify the publish → bump `IREF` → assert 0.7 → dispatch.
+
+- [ ] 4.1 Bump `IREF` (`cloud-init-inngest.yml:337`) to the new tag — **one line; the dedicated
+      host has no ZIREF** (that pair lives in `cloud-init.yml` for the web host). Confirm the
+      image-publish workflow produced the tag BEFORE the bump (a bump to a non-existent tag bricks
+      cold boot). **The tag must be cut from a tree containing this PR's fix — v1.1.20 does not.**
 - [ ] 4.2 Enumerate the rides-along drift (0.6) in the PR body.
 - [ ] 4.3 Re-assert 0.7, then dispatch `-f apply_target=inngest-host-replace`. Plan must show
       exactly one `hcloud_server.inngest` replace + 2 dependents, `hcloud_volume.inngest_redis`
