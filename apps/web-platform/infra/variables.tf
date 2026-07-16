@@ -163,9 +163,9 @@ variable "registry_server_type" {
   # with no edge to this var until #6508 — on 4 GB that could never bind, which is #6288's real
   # uncapped condition; that is fixed). So a wrong call yields a CONTAINED container-OOM
   # (zot_memory_capped=true, zot_oom_kills>0 — both self-reported and gated) plus GHCR fallback,
-  # NOT #6288's host-OOM restart-loop. Revert path: set this to cpx32 (8 GB, ~€35/mo) or back to
-  # cx33 and re-dispatch. #6288's exact failure mode (uncapped zot on a 4 GB host) is now
-  # structurally impossible.
+  # NOT #6288's host-OOM restart-loop. Revert path: back to cx33 (8 GB, ~€8.49/mo) if hel1 stock
+  # allows, else cpx32 (8 GB, ~€35/mo, the always-available 8 GB fallback), then re-dispatch.
+  # #6288's exact failure mode (uncapped zot on a 4 GB host) is now structurally impossible.
   #
   # A nonexistent type fails at PLAN via data.hcloud_server_type.registry (#6508) instead of
   # destroying the host first — that was #6288's cx32 disaster. registry_location stays hel1.
