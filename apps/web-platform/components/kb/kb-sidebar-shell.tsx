@@ -1,11 +1,13 @@
 "use client";
 
+import { useCallback, useEffect, useRef } from "react";
 import { FileTree } from "@/components/kb/file-tree";
 import { SearchOverlay } from "@/components/kb/search-overlay";
 import { useKb } from "@/components/kb/kb-context";
 import { KbSyncStatus } from "@/components/kb/kb-sync-status";
 import { RailEmptyState } from "@/components/dashboard/rail-empty-state";
 import { useRailCollapsed, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
+import { useNavResume } from "@/hooks/use-nav-resume";
 
 /**
  * KB file-tree sidebar shell — search overlay + the file tree. Pure
@@ -19,6 +21,8 @@ import { useRailCollapsed, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail
  * PR #4810's nav refactor removed (it previously lived ONLY in the file-open
  * `KbContentHeader`). Reads `lastSync` + `refreshTree` from the always-mounted
  * `useKb()` context — no new server route or prop plumbing.
+ *
+ * #4826: tree scrollport persists/restores scrollTop via useNavResume.
  */
 export function KbSidebarShell() {
   const { tree, loading, lastSync, refreshTree } = useKb();
@@ -38,6 +42,55 @@ export function KbSidebarShell() {
   // the expanded rail's KbSyncStatus, reachable once expanded. The stable
   // `kb-rail-tree` wrapper always renders to anchor present/absent assertions.
   const collapsed = useRailCollapsed();
+  const { readScrollTop, writeScrollTop } = useNavResume();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const restoredRef = useRef(false);
+  const rafWriteRef = useRef<number | null>(null);
+
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (rafWriteRef.current != null) return;
+    rafWriteRef.current = window.requestAnimationFrame(() => {
+      rafWriteRef.current = null;
+      if (scrollRef.current) writeScrollTop(scrollRef.current.scrollTop);
+    });
+  }, [writeScrollTop]);
+
+  // Restore scroll once after tree content is available (one-shot).
+  useEffect(() => {
+    if (collapsed || loading || isEmpty || restoredRef.current) return;
+    const saved = readScrollTop();
+    if (saved == null || saved <= 0) {
+      restoredRef.current = true;
+      return;
+    }
+    let cancelled = false;
+    const apply = () => {
+      if (cancelled) return;
+      const el = scrollRef.current;
+      if (!el) return;
+      // Wait until the scrollport can actually scroll (content painted).
+      if (el.scrollHeight <= el.clientHeight + 1) {
+        window.requestAnimationFrame(apply);
+        return;
+      }
+      el.scrollTop = saved;
+      restoredRef.current = true;
+    };
+    window.requestAnimationFrame(() => window.requestAnimationFrame(apply));
+    return () => {
+      cancelled = true;
+    };
+  }, [collapsed, loading, isEmpty, readScrollTop, tree]);
+
+  useEffect(() => {
+    return () => {
+      if (rafWriteRef.current != null) {
+        window.cancelAnimationFrame(rafWriteRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div data-testid="kb-rail-tree" data-tour-id="action:kb-tree" className="flex h-full flex-col">
@@ -69,7 +122,12 @@ export function KbSidebarShell() {
           <div className="shrink-0 px-3 pb-3 pt-3">
             <SearchOverlay />
           </div>
-          <div className="flex-1 overflow-y-auto px-2 pb-4">
+          <div
+            ref={scrollRef}
+            data-testid="kb-tree-scrollport"
+            className="flex-1 overflow-y-auto px-2 pb-4"
+            onScroll={onScroll}
+          >
             {isEmpty ? (
               <RailEmptyState
                 testId="kb-rail-empty"
