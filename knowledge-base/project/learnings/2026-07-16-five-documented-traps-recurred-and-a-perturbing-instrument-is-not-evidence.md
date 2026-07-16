@@ -185,17 +185,17 @@ threshold that was a race. Each read as diligence.
     only one caught *mechanically* rather than by me running something — which is the whole
     argument of §5. (Recurring → hook-enforced, no action needed.)
 
-16. **The planning subagent authored 2 commits as `ops@jikigai.com`, which resolves to NO GitHub
-    account — the required `cla-check` refused the merge.** The CLA gate maps commits to GitHub
+16. **The planning subagent authored 2 commits under an ops-role address that resolves to NO
+    GitHub account — the required `cla-check` refused the merge.** The CLA gate maps commits to GitHub
     users and allowlists `deruelle`; an unresolvable author can never match. Everything looked
     fine locally: `git log` showed a plausible name, and the worktree's git config was correct
-    (`jean.deruelle@jikigai.com`, matching all 1140 of main's commits over 60 days). The split
-    is invisible until the merge boundary. **Recovery:** `git filter-branch --env-filter`
+    (the canonical committer address, matching all 1140 of main's commits over 60 days). The
+    split is invisible until the merge boundary. **Recovery:** `git filter-branch --env-filter`
     rewriting the two commits to the canonical author (tree verified byte-identical — identity
     only), force-push, re-queue auto-merge. **Prevention:** unknown — I could not find the
-    mechanism that set `ops@` (no `GIT_*` env in the parent shell; local AND global config both
+    mechanism that set it (no `GIT_*` env in the parent shell; local AND global config both
     canonical). Deliberately NOT filed as an issue: one data point, no diagnosed mechanism, and
-    **zero `ops@` commits have ever landed on main** — filing "subagents commit with the wrong
+    **zero commits under that address have ever landed on main** — filing "subagents commit with the wrong
     identity" would assert a population I have not measured, which is the exact error the CONCUR
     gate caught in UC-2 an hour earlier. If this recurs, this note is the second data point and
     the mechanism hunt starts from `--env-filter` evidence, not from a guess. (Recurring? unknown
