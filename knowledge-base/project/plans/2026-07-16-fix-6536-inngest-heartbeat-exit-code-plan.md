@@ -431,6 +431,10 @@ which defect was live, and the fix is verified against evidence.
 1. **FR4** — add `SyslogIdentifier=inngest-heartbeat` to the unit heredoc
    (`inngest-bootstrap.sh:178-194`). This retags **all** unit output (doppler's *and* curl's
    stderr), replacing the systemd-derived `doppler` basename tag.
+1b. **FR4c (CPO P2-1)** — add `Environment=INTENDED_PUSHER_PROJECT=${DOPPLER_PROJECT}` to the
+   unit's `[Service]` block, same heredoc. The unit heredoc is **unquoted** (`<<HEARTBEATEOF`,
+   `:178`), so this expands at bootstrap from the *same* `${DOPPLER_PROJECT}` that renders the
+   unit's `--project` flag (`:193`) — one source, no drift. It is the identity FR3's gate reads.
 2. **FR4b** — emit one structured pre-exec line from the ping script:
    `logger -t inngest-heartbeat "project=$DOPPLER_PROJECT url_present=$(...) flip=$(...)"`.
    **Presence booleans only — never the URL value** (§User-Brand Impact).
@@ -467,21 +471,29 @@ follow-up issue.**
    # DOPPLER_PROJECT — see the `unit + heartbeat reconcile below always run` comment
    # above; the only project gate is the flip trio further down):
    #
-   #   * dedicated (DOPPLER_PROJECT=soleur-inngest): INNGEST_CUTOVER_FLIP is meaningful.
-   #     A dark/reverted host legitimately has no URL (inngest-host.tf:137-151 — one
-   #     unambiguous pusher per monitor; op=arm provisions the URL at cutover).
-   #   * co-located web (DOPPLER_PROJECT=soleur): has NO INNGEST_CUTOVER_FLIP *by design*
-   #     (see the `web host's INNGEST_POSTGRES_URI is prod with no INNGEST_CUTOVER_FLIP`
-   #     comment). It is TODAY'S live scheduler and sole monitor pusher, so an absent URL
-   #     there is ALWAYS a real fault — never a dark steady state. Gate on the project
-   #     FIRST, or `${INNGEST_CUTOVER_FLIP:-unset}` pins the live host in the exit-0 arm.
+   #   * dedicated (soleur-inngest): INNGEST_CUTOVER_FLIP is meaningful. A dark/reverted
+   #     host legitimately has no URL (inngest-host.tf:137-151 — one unambiguous pusher
+   #     per monitor; op=arm provisions the URL at cutover).
+   #   * co-located web (soleur): has NO INNGEST_CUTOVER_FLIP *by design* (see the `web
+   #     host's INNGEST_POSTGRES_URI is prod with no INNGEST_CUTOVER_FLIP` comment). It is
+   #     TODAY'S live scheduler and sole monitor pusher, so an absent URL there is ALWAYS a
+   #     real fault — never a dark steady state. Gate on the identity FIRST, or
+   #     `${INNGEST_CUTOVER_FLIP:-unset}` pins the live host in the exit-0 arm.
+   #
+   # INTENDED_PUSHER_PROJECT (not $DOPPLER_PROJECT) is the host's AUTHORITATIVE identity:
+   # the unit's [Service] bakes it from the same bootstrap-time ${DOPPLER_PROJECT} that
+   # renders the unit's own `--project` flag, so the two cannot drift. $DOPPLER_PROJECT at
+   # RUNTIME is a Doppler *secret* that `doppler run` injects — a separate, mutable source
+   # (measured: it exists on BOTH soleur/prd and soleur-inngest/prd). The distinct name
+   # also stops `doppler run` from shadowing it (it overrides same-named vars by default).
+   # Unset/empty => != soleur-inngest => exit 1 => loud. Every default direction is safe.
    #
    # Arms mirror cutover-inngest.yml:703/706. FSM: armed -> flipping -> flushed -> done
    # (:764); op=arm writes the URL (G4, :760) BEFORE flip=armed (:665), so an intended
    # pusher with no URL is a REAL fault, never the dark steady state.
    if [ -z "$INNGEST_HEARTBEAT_URL" ]; then
-     if [ "$DOPPLER_PROJECT" != "soleur-inngest" ]; then
-       logger -t "$LOG_TAG" "url_present=no project=$DOPPLER_PROJECT — live co-located pusher has NO heartbeat URL; failing"
+     if [ "$INTENDED_PUSHER_PROJECT" != "soleur-inngest" ]; then
+       logger -t "$LOG_TAG" "url_present=no project=${INTENDED_PUSHER_PROJECT:-unset} — live/unknown pusher has NO heartbeat URL; failing"
        exit 1
      fi
      case "${INNGEST_CUTOVER_FLIP:-unset}" in
@@ -500,9 +512,10 @@ follow-up issue.**
    exec /usr/bin/curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
    ```
 
-   The `flip` discriminator is what keeps this from being a silent fallback: it converts a
-   blanket exit-0 into a *scoped, self-declaring* no-op that still fails loudly whenever this
-   host is the intended pusher. **Never `[ "$INNGEST_CUTOVER_FLIP" = "armed" ]`** — that lumps
+   The **identity gate** is what keeps this from being a silent fallback on the live host, and the
+   `flip` discriminator is what keeps it scoped on the dedicated one: together they convert a
+   blanket exit-0 into a *scoped, self-declaring* no-op that still fails loudly whenever this host
+   is the intended pusher. **Never `[ "$INNGEST_CUTOVER_FLIP" = "armed" ]`** — that lumps
    `flipping`/`flushed`/`done` into the dark branch (AC5b). The `*)` arm fails closed so a typo'd
    or future state can never silently no-op. `logger` asserts **presence only, never the URL
    value** (§User-Brand Impact / AC3).
@@ -581,9 +594,10 @@ follow-up issue.**
 
   **Settled classification — the rule is "is this host the intended pusher?", not "is it armed?":**
 
-  | `DOPPLER_PROJECT` | `INNGEST_CUTOVER_FLIP` | Intended pusher? | Exit when URL absent |
+  | `INTENDED_PUSHER_PROJECT` | `INNGEST_CUTOVER_FLIP` | Intended pusher? | Exit when URL absent |
   |---|---|---|---|
   | `soleur` (co-located, **live**) | *(never set — by design)* | **Yes — today's sole pusher** | **1** (**CPO P1-1**) |
+  | unset / empty | *(any)* | Unknown ⇒ **fail closed** | **1** (**CPO P2-1**) |
   | `soleur-inngest` | `""` / unset (**today**) | No — pre-arm dark | **0** (skip, log reason) |
   | `soleur-inngest` | `aborted` | No — arm aborted | **0** |
   | `soleur-inngest` | `rollback` (transitional) | No — reverting | **0** |
@@ -593,6 +607,19 @@ follow-up issue.**
   | `soleur-inngest` | `flushed` | **Yes** — mid-FSM (**v2 missed this**) | **1** |
   | `soleur-inngest` | `done` | **Yes** — sole scheduler | **1** |
   | `soleur-inngest` | anything else (typo/unknown) | Unknown ⇒ **fail closed** | **1** |
+
+  **Why `INTENDED_PUSHER_PROJECT` and not `$DOPPLER_PROJECT` (CPO P2-1).** The gate must read the
+  host's *authoritative* identity. `$DOPPLER_PROJECT` at runtime is **not** that: the script
+  heredoc is **quoted** (`<<'HEARTBEATSCRIPTEOF'`, `:160`), so the var resolves in the child env,
+  where its only source is a Doppler **secret** coincidentally named `DOPPLER_PROJECT` —
+  `EnvironmentFile=/etc/default/inngest-server` carries only `DOPPLER_TOKEN`/`DOPPLER_CONFIG_DIR`/
+  `DOPPLER_ENABLE_VERSION_CHECK` (`:240-242`). Meanwhile the identity the unit actually
+  authenticates against is the **bootstrap-baked** `--project` flag. Two independent sources, free
+  to drift — a gate checking something adjacent to what it claims. FR4c collapses them to one.
+
+  **Measured (closing CPO P2-1's unknown row):** `soleur/prd → DOPPLER_PROJECT=soleur` and
+  `soleur-inngest/prd → DOPPLER_PROJECT=soleur-inngest`. Both correct **today**, so the gate would
+  work as-written; FR4c removes the drift *class* rather than relying on that holding.
 
   **The project gate is load-bearing and must be evaluated FIRST (CPO P1-1).** This script is
   **ungated** by `DOPPLER_PROJECT`: `inngest-bootstrap.sh:144` states *"unit + heartbeat reconcile
@@ -813,9 +840,9 @@ pushers on one monitor after a rollback), and `inngest-bootstrap.sh:416`'s FSM c
 
 | Risk | Mitigation |
 |---|---|
-| **Exit-0 masks a real post-cutover fault** (the #6536 harm, inverted). | FR3's `flip` discriminator: exit 0 **only** when unarmed. Armed + absent URL still exits non-zero. AC4 asserts both arms. |
-| **The new log line leaks the bearer URL** to a third-party vendor, defeating the `sensitive=true` + script-indirection control (`inngest-bootstrap.sh:156-159`). | AC3 leak gate as a test; presence booleans only; PII-scrub drift guard extended (`vector-pii-scrub.test.sh`). |
-| `INNGEST_CUTOVER_FLIP` is **not currently present** on `soleur-inngest/prd` (measured — names are `BETTERSTACK_LOGS_TOKEN, DOPPLER_CONFIG, DOPPLER_ENVIRONMENT, DOPPLER_PROJECT, INNGEST_EVENT_KEY, INNGEST_POSTGRES_URI, INNGEST_REDIS_PASSWORD, INNGEST_SIGNING_KEY`). An unset var makes `[ "$INNGEST_CUTOVER_FLIP" = "armed" ]` false → dark branch. | That is the **correct** default (unarmed ⇒ dark ⇒ no-op). Documented explicitly in FR3's comment so the fail-open direction is intentional and reviewable, not incidental. |
+| **Exit-0 masks a real post-cutover fault** (the #6536 harm, inverted). | **Two gates, identity FIRST (v4).** (1) `INTENDED_PUSHER_PROJECT != soleur-inngest` → exit 1 unconditionally, so the live co-located host — which has no flip *by design* — can never reach the exit-0 arm (CPO P1-1); unset/empty also exits 1 (CPO P2-1). (2) Only then the flip `case`: exit 0 solely for `""\|unset\|aborted\|rollback\|rolled-back`, exit 1 for `armed\|flipping\|flushed\|done`, `*)` fails closed. AC4 + AC5b assert all ten arms. |
+| **The new log line leaks the bearer URL** to a third-party vendor, defeating the `sensitive=true` + script-indirection control (`inngest-bootstrap.sh:156-159`). | **AC3's CANARY_SENTINEL value-absence assertion is the SOLE control** (CPO P1-2) — presence booleans only, never the value. **Do NOT cite the PII scrub as defense-in-depth:** `vector.toml:293-334` redacts `userid=`/`user_id=`, OAuth **query params**, emails, and `Authorization:` headers; this URL carries its token as a **path segment**, so the scrub chain is a **no-op on it**. Measured: curl's own stderr is clean across rc=2/3/6/22 (no URL echoed). Second exposure — see §Sharp Edges: unquoting the script heredoc bakes the URL into a 0755 file, which AC3 structurally cannot catch. |
+| `INNGEST_CUTOVER_FLIP` is **not currently present** on `soleur-inngest/prd` (measured — names are `BETTERSTACK_LOGS_TOKEN, DOPPLER_CONFIG, DOPPLER_ENVIRONMENT, DOPPLER_PROJECT, INNGEST_EVENT_KEY, INNGEST_POSTGRES_URI, INNGEST_REDIS_PASSWORD, INNGEST_SIGNING_KEY`). An unset var resolves via `${INNGEST_CUTOVER_FLIP:-unset}` to `unset` → dark arm. | That is the **correct** default on the dedicated host (unarmed ⇒ dark ⇒ no-op), and it is now reachable **only after** the identity gate has already excluded the live host. Documented in FR3's comment so the direction is intentional and reviewable, not incidental. **The `[ "$INNGEST_CUTOVER_FLIP" = "armed" ]` form this row used to reason through is FORBIDDEN** (§AC5b) — it lumps `flipping`/`flushed`/`done` into the dark branch. |
 | Adding a Vector source row raises Better Stack quota. | **Both v2's "net large decrease" and the review's "net increase / phantom saving" are wrong. Measured, not inferred (`betterstack-query.sh`, 2026-07-16):** the storm **does** ship today — a live row carries `PRIORITY=3`, `SYSLOG_IDENTIFIER=systemd`, `_SYSTEMD_UNIT=init.scope`, `_PID=1`, `UNIT=inngest-heartbeat.service`, `host_name=soleur-inngest-prd`, `shipper=vector`. So FR3's saving is **real**, not phantom. But the honest delta is roughly **neutral**, not a large decrease: the storm stops (−) and the new 60s positive row adds ~1,440/day (+). **Accept the ~+1,440/day explicitly** — it buys the first continuous dark-host liveness evidence this host has ever had (§Downtime & Cutover), against a `vector.toml:166-171` posture engineered to sit ~20% under the 25k/day threshold after #5110's AC12 **FAIL** at 2.3x. `/work` MUST quantify the real steady-state count before merge and re-check headroom. |
 | **UNRESOLVED — the live shipper does not match the repo's `vector.toml` (see §Sharp Edges).** | The measured row ships at `PRIORITY=3` with `SYSLOG_IDENTIFIER=systemd`, which **no source in the repo's `vector.toml` admits**: Source 1 is unit-scoped to `inngest-server.service`; Source 2 cuts `PRIORITY 0-2`; Source 3 is `CONTAINER_NAME`; Source 4 has no `systemd` tag. The same config held at the IREF-pin commit (`957350d82`), so this is **not** explained by a stale pin. **Do not build an AC on this mechanism** — AC12 is therefore restated against the `inngest-heartbeat` channel (which FR5 makes ship deterministically), and the discrepancy gets its own issue (§Descoped 7). |
 | Fixing FR2 to fail closed could brick a redeploy if `DOPPLER_PROJECT` is genuinely unresolvable. | Fail closed **only** on the dedicated host (where a wrong project is already fatal); the co-located web host keeps the `soleur` default. A loud failure beats today's silent wrong-project rewrite. |
@@ -830,6 +857,16 @@ pushers on one monitor after a rollback), and `inngest-bootstrap.sh:416`'s FSM c
   the heartbeat — it can point the **scheduler** at the wrong project and **silently skip the flip
   guard** on the dedicated host. FR1/FR2 fix the root, but the flip-guard interaction deserves its
   own verification and may warrant a separate tracking issue. Deepen-plan MUST size this.
+- **NEVER unquote the ping-script heredoc to "bake in" the host identity — it writes the bearer URL
+  to a world-readable file, and AC3 cannot see it (CPO P2-1).** `:160` is `<<'HEARTBEATSCRIPTEOF'`
+  — **quoted, deliberately**. Unquoting it to expand `${DOPPLER_PROJECT}` at bootstrap would also
+  expand `$INNGEST_HEARTBEAT_URL` into `/usr/local/bin/inngest-heartbeat.sh`, a **0755
+  world-readable** file — writing the bearer capability to disk in plaintext and defeating the
+  entire script-indirection control at `:156-159` (which exists precisely so systemd never journals
+  a resolved `ExecStart=`). **AC3's canary asserts the script's runtime OUTPUT, not the script
+  FILE's contents, so AC3 would pass while the secret sits on disk.** This is the natural way an
+  implementer reaches for FR4c — do it via `Environment=` in the *unit* heredoc (`:178`, already
+  unquoted) instead. The quoted script heredoc must stay quoted.
 - **Adding the unit to `vector.toml` Source 1 does not work.** Source 1's `PRIORITY 0-4` filter
   still drops the unit's PRIORITY-6 output. Source 4 (no PRIORITY filter) is the only allowlist
   that ships level-6 lines. This is the trap the naive fix falls into.

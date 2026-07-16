@@ -8,11 +8,18 @@ Lane: `cross-domain` · Threshold: `single-user incident` · Issue: #6536
 > `requires_cpo_signoff: true` is **unmet**. Re-run in **small batches (2-3 agents)**, never
 > 7-way parallel. Deepen-plan settled the delivery split and the flip enum (below) — those two
 > blockers are CLEARED.
+>
+> **UPDATE — CPO SIGN-OFF GRANTED** (2026-07-16) after both P1 rounds landed, conditional on
+> FR4c + the Risks rewrite, both now applied. 0.2 is CLEARED. 0.1 remains: the wider panel
+> (dhh / kieran / code-simplicity / architecture-strategist / spec-flow-analyzer) never ran.
 
 ## Phase 0 — Preconditions (verify, do not assume)
 
 - [ ] 0.1 Re-run `plan-review` in small batches (2-3 agents); fold findings in.
-- [ ] 0.2 Obtain CPO sign-off (threshold = single-user incident) via `user-impact-reviewer`.
+- [x] 0.2 **CPO sign-off — GRANTED** (`user-impact-reviewer`, 2 rounds). Conditions applied:
+      FR4c (`Environment=INTENDED_PUSHER_PROJECT=${DOPPLER_PROJECT}`) + Risks rows rewritten to v4.
+      Reviewer's note: *"placing the project gate before the `case` rather than folding it into the
+      `case` is the version that actually can't be defeated."*
 - [x] 0.3 **Delivery split — SETTLED (deepen-plan).** v2's split was FALSE. `cloud-init-inngest.yml:337`
       pins `IREF=…/soleur-inngest-bootstrap:v1.1.19`; **both** `inngest-bootstrap.sh` **and**
       `vector.toml` are docker-cp'd from that image at boot (`:368`, `:370`). So **FR5 is replace-class
@@ -54,7 +61,17 @@ Ships BEFORE the fix so the next fire self-reports which defect was live.
       (`cloud-init-inngest-bootstrap.test.sh`).
 - [ ] 1.2 GREEN: add `SyslogIdentifier=inngest-heartbeat` to the unit (`inngest-bootstrap.sh:178-194`).
       Retags doppler's AND curl's stderr (today systemd derives the tag from the ExecStart basename
-      → `doppler`).
+      → `doppler`). This is the single highest-value line in the PR — it is what makes the H4
+      signature (*no row + unit `failed`*) readable at all.
+- [ ] 1.2b GREEN (**FR4c**, CPO P2-1): add `Environment=INTENDED_PUSHER_PROJECT=${DOPPLER_PROJECT}`
+      to the same unit heredoc's `[Service]`. The heredoc is **unquoted** (`:178`) so it bakes at
+      bootstrap from the same value as the `--project` flag (`:193`) — one source, no drift. FR3
+      gates on THIS, never on runtime `$DOPPLER_PROJECT` (a mutable Doppler secret present on both
+      projects; measured `soleur→soleur`, `soleur-inngest→soleur-inngest`). Distinct name also
+      prevents `doppler run` shadowing it. **NEVER unquote the SCRIPT heredoc (`:160`) to achieve
+      this** — it bakes the bearer URL into a 0755 file and AC3 cannot see it (§Sharp Edges).
+- [ ] 1.2c RED: assert the unit contains `Environment=INTENDED_PUSHER_PROJECT=` and that the ping
+      script references `$INTENDED_PUSHER_PROJECT`, not `$DOPPLER_PROJECT`, in its gate.
 - [ ] 1.3 RED: test asserting the ping script emits one structured pre-exec line carrying
       `project=` + `url_present=` + `flip=` **together**. NOTE (obs P1-1): this row does **NOT**
       discriminate H4 — it runs inside `doppler run`'s child, so a Doppler-class failure emits
@@ -84,9 +101,10 @@ Ships BEFORE the fix so the next fire self-reports which defect was live.
 
 ## Phase 2 — Fix the sole live defect (H5)
 
-- [ ] 2.1 RED: table-driven test over **all ten** cases from 0.4. **Project gate FIRST**:
-      `DOPPLER_PROJECT=soleur` + URL absent → **exit 1** (the live co-located pusher; CPO P1-1).
-      Then, for `DOPPLER_PROJECT=soleur-inngest`: exit **0** for `""`, `unset`, `aborted`,
+- [ ] 2.1 RED: table-driven test over **all eleven** cases from 0.4. **Identity gate FIRST**:
+      `INTENDED_PUSHER_PROJECT=soleur` + URL absent → **exit 1** (the live co-located pusher;
+      CPO P1-1); `INTENDED_PUSHER_PROJECT` unset/empty + URL absent → **exit 1** (fail closed;
+      CPO P2-1). Then, for `INTENDED_PUSHER_PROJECT=soleur-inngest`: exit **0** for `""`, `unset`, `aborted`,
       `rollback`, `rolled-back`; exit **1** for `armed`, `flipping`, `flushed`, `done`; exit **1**
       for an unknown value (fail-closed `*)` arm).
 - [ ] 2.2 GREEN: implement the `case` branch in the ping script (`inngest-bootstrap.sh:160-164`)
