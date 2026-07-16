@@ -66,28 +66,60 @@ record_failure() {
     fail_detail="$2"
   fi
 }
+
+# A PROVEN VIOLATION OUTRANKS ANY INFRASTRUCTURE FAULT and overrides first-wins.
+# The two are not comparable: an infra fault means "the gate could not look", a
+# violation means "the gate looked and the data is exposed". If the advisor is
+# unreachable AND the catalog proves a public table has no RLS, the operator
+# must be paged for the exposure (class A), not handed a p2 "scan failed"
+# ticket. The workflow derives the issue class from this fail_mode, so
+# first-wins here would silently downgrade a real exposure to a token-renewal
+# ticket.
+record_violation() {
+  fail_mode="$1"
+  fail_detail="$2"
+}
+
 ok() { [[ -z "$fail_mode" ]]; }
+
+# Rung 1's outcome, tracked separately from `ok`. Identity is a genuine
+# precondition for every later rung (without it we do not know WHICH project we
+# are asserting against). The ADVISOR's health is NOT such a precondition — see
+# the rung 3 header.
+identity_ok=0
 
 : "${REF:=}" "${PROJECT_NAME:=}" "${SUPABASE_ACCESS_TOKEN:=}"
 [[ -z "$REF" ]] && record_failure "config_error" "REF not set."
 [[ -z "$PROJECT_NAME" ]] && record_failure "config_error" "PROJECT_NAME not set."
 [[ -z "$SUPABASE_ACCESS_TOKEN" ]] && record_failure "config_error" "SUPABASE_ACCESS_TOKEN not set."
 
-# Token travels by header from an env var, never in argv (argv is world-readable
-# via /proc). stderr is dropped so a curl diagnostic cannot echo the URL back.
+# The PAT is piped to curl on STDIN via `--header @-`, never interpolated into
+# an argument. `--header "Authorization: Bearer $TOK"` would look equivalent, but
+# the shell expands it BEFORE exec, so the cloud-admin token lands in curl's argv
+# and is world-readable at /proc/<pid>/cmdline for the life of the request.
+# Mirrors the same idiom (and the same reasoning) in scripts/audit-ruleset-bypass.sh.
+#
+# The standing repo rebuttal — that `--header @-` "would fork the shared HTTP
+# plumbing for no real gain" (apply-inngest-rls-dev.yml) — is scoped to workflow
+# `run:` steps that have no shared plumbing to reuse. This is a standalone
+# script, the same context as audit-ruleset-bypass.sh, so it does not apply here.
+#
+# stderr is dropped so a curl diagnostic cannot echo the URL back.
 api_get() {
-  curl --silent --show-error --max-time 30 \
-    --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
-    --write-out $'\n%{http_code}' --url "$1" 2>/dev/null
+  printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" |
+    curl --silent --show-error --max-time 30 \
+      --header @- \
+      --write-out $'\n%{http_code}' --url "$1" 2>/dev/null
 }
 
 api_query() {
-  curl --silent --show-error --max-time 30 \
-    --request POST \
-    --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
-    --header "Content-Type: application/json" \
-    --data "$(jq -nc --arg q "$1" '{query:$q}')" \
-    --write-out $'\n%{http_code}' --url "$API/v1/projects/${REF}/database/query" 2>/dev/null
+  printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" |
+    curl --silent --show-error --max-time 30 \
+      --request POST \
+      --header @- \
+      --header "Content-Type: application/json" \
+      --data "$(jq -nc --arg q "$1" '{query:$q}')" \
+      --write-out $'\n%{http_code}' --url "$API/v1/projects/${REF}/database/query" 2>/dev/null
 }
 
 http_code() { printf '%s' "$1" | tail -1; }
@@ -114,6 +146,7 @@ if ok; then
       record_failure "identity_mismatch" \
         "ref ${REF} resolves to project '$(sanitize "$actual_name")', expected '${PROJECT_NAME}'."
     else
+      identity_ok=1
       echo "identity_preflight=pass"
     fi
   fi
@@ -122,7 +155,7 @@ fi
 # --- Rung 2: the advisor (SUBORDINATE — may only ever ADD a failure) --------
 advisor_count=""
 advisor_body=""
-if ok; then
+if [[ "$identity_ok" -eq 1 ]]; then
   resp="$(api_get "$API/v1/projects/${REF}/advisors/security")"
   code="$(http_code "$resp")"
   advisor_body="$(http_body "$resp")"
@@ -160,9 +193,31 @@ fi
 # This is the coverage-bearing tier (ADR-112's two-tier pattern, in the correct
 # orientation): the advisor is advisory and may only ADD a failure; it can never
 # suppress or weaken this assertion.
+#
+# UNCONDITIONAL MEANS UNCONDITIONAL — including "the advisor broke".
+# This rung is gated on `identity_ok`, NOT on `ok`. Gating on `ok` would skip the
+# catalog whenever the ADVISOR failed, which quietly makes the coverage-bearing
+# tier depend on the health of the advisory one — ADR-112's "NEVER
+# coverage-bearing" violated through the back door. Concretely: if Supabase
+# renames `.lints`, rung 2b records advisor_malformed, and the catalog check —
+# which needs nothing from the advisor and shares only the PAT — would never run.
+# #3366's actual coverage would retire behind a p2 "scan failed" ticket while a
+# live RLS violation went unpaged. Identity IS a real precondition (without it we
+# do not know which project we are asserting against); the advisor is not.
 rls_off=""
-if ok; then
-  resp="$(api_query "select count(*)::int as rls_off from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity=false")"
+rls_off_tables=""
+if [[ "$identity_ok" -eq 1 ]]; then
+  # Select the offending table IDENTITIES, not a bare count.
+  #
+  # A count is not actionable. `catalog_rls_off=3` tells the operator a p1
+  # data-exposure page is real but not WHICH table to fix, and this is the one
+  # tier that can answer: in the exact scenario this rung exists for (a stale
+  # advisor over a live violation) the advisor reports zero findings, so there
+  # is no lint metadata to name the table either. Emitting only a count would
+  # send the operator to the Supabase dashboard to hand-run this same query —
+  # the dashboard-eyeball round trip the no-SSH/no-dashboard rule exists to
+  # prevent. The count is derived from the row array below.
+  resp="$(api_query "select n.nspname||'.'||c.relname as rls_off_table from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity=false order by 1")"
   code="$(http_code "$resp")"
   body="$(http_body "$resp")"
   # NOTE: this endpoint answers 201, not 200 — verified live 2026-07-16.
@@ -171,22 +226,35 @@ if ok; then
   if [[ "$code" != "200" && "$code" != "201" ]]; then
     record_failure "catalog_unreachable" \
       "catalog query HTTP ${code}: $(sanitize "$(printf '%s' "$body" | head -c 200)")"
-  elif ! printf '%s' "$body" | jq -e 'type=="array" and length>0 and (.[0].rls_off|type=="number")' >/dev/null 2>&1; then
+  # An EMPTY array is the clean case, so this cannot assert length>0. It asserts
+  # the response is a row array whose every element carries a string identity —
+  # `all` over an empty array is true, which is exactly right: zero offending
+  # tables is a proven clean, while {"message":"JWT could not be decoded"} is
+  # not an array and fails loud.
+  elif ! printf '%s' "$body" |
+      jq -e 'type=="array" and all(.[]; has("rls_off_table") and (.rls_off_table|type=="string"))' >/dev/null 2>&1; then
     record_failure "catalog_malformed" \
-      "catalog query returned no row array: $(sanitize "$(printf '%s' "$body" | head -c 200)")"
+      "catalog query did not return a row array of table identities: $(sanitize "$(printf '%s' "$body" | head -c 200)")"
   else
-    rls_off="$(printf '%s' "$body" | jq '.[0].rls_off' 2>/dev/null)"
+    rls_off="$(printf '%s' "$body" | jq 'length' 2>/dev/null)"
+    rls_off_tables="$(printf '%s' "$body" | jq -r '[.[].rls_off_table] | join(", ")' 2>/dev/null)"
     echo "catalog_rls_off=${rls_off}"
+    [[ -n "$rls_off_tables" ]] && echo "catalog_rls_off_tables=$(sanitize "$rls_off_tables")"
   fi
 fi
 
 # --- Rung 4: the decision ---------------------------------------------------
-if ok; then
-  if [[ "$rls_off" -gt 0 ]]; then
-    # The authoritative assertion, independent of what the advisor said.
-    record_failure "violation_confirmed" \
-      "${rls_off} table(s) in the public schema of ${PROJECT_NAME} have RLS disabled."
-  elif [[ "$advisor_count" -gt 0 ]]; then
+# Also gated on identity_ok, not ok: a proven violation must be reported even if
+# the advisor failed. record_violation OVERRIDES the first-wins fail_mode so the
+# operator is paged for the exposure (class A) rather than handed the advisor's
+# p2 "scan failed" ticket.
+if [[ "$identity_ok" -eq 1 ]]; then
+  if [[ -n "$rls_off" && "$rls_off" -gt 0 ]]; then
+    # The authoritative assertion, independent of what the advisor said — and
+    # independent of whether the advisor even worked.
+    record_violation "violation_confirmed" \
+      "${rls_off} table(s) in the public schema of ${PROJECT_NAME} have RLS disabled: ${rls_off_tables}"
+  elif [[ -n "$rls_off" && -n "$advisor_count" && "$advisor_count" -gt 0 ]]; then
     # Advisor fires, catalog clean. The ONLY benign explanation is the advisor's
     # documented lag (<=1h self-heal window). Verify it OBJECT-SCOPED, never
     # count-vs-count: our catalog predicate hardcodes relkind in ('r','p') and
@@ -197,7 +265,46 @@ if ok; then
     # So: check each advisor-NAMED table directly, WITHOUT the relkind filter.
     # Anything other than "this exact table is now RLS-on" fails. That also
     # stops a PERMANENT disagreement from WARN-passing forever as "lag".
+    # Extract the advisor-named tables, ASSERTING THE EXTRACTION ITSELF.
+    #
+    # This rung is subject to the same rule as every other one above: a zero is
+    # only ever reported after we have established there was something to count.
+    # An earlier version of this block piped jq straight into `while read` with
+    # `2>/dev/null` and a `// "?"` hedge. That reproduced this file's headline
+    # bug one tier up: if jq errored mid-stream (e.g. .metadata.name is an
+    # object after contract drift), the error was swallowed, the loop body never
+    # ran, `indeterminate` stayed empty, and the script reported
+    # "every named table is now RLS-enabled" and exited 0 — having checked
+    # NOTHING, while the advisor was actively reporting a finding.
+    #
+    # `strings` drops any metadata value that is not a string, and
+    # `select(length == 2)` drops any lint missing either half — so a shape the
+    # parse cannot trust produces FEWER rows than the advisor counted, and the
+    # cardinality check below turns that into a loud failure instead of a
+    # silent clean. The Supabase lint object's shape was pinned live from a
+    # SIBLING lint (rls_enabled_no_policy) because no live
+    # rls_disabled_in_public sample exists on any of the three projects, so
+    # "the field names are what I think they are" is an assumption this rung
+    # must verify rather than trust.
+    lint_rows="$(printf '%s' "$advisor_body" |
+      jq -r '.lints[] | select(.name=="rls_disabled_in_public")
+             | [(.metadata.schema | strings), (.metadata.name | strings)]
+             | select(length == 2) | @tsv' 2>/dev/null)"
+    jq_rc=$?
+    row_count=0
+    [[ -n "$lint_rows" ]] && row_count="$(printf '%s\n' "$lint_rows" | grep -c . || true)"
+
+    if [[ "$jq_rc" -ne 0 ]]; then
+      # NOT class A: this is the gate's own instrument failing, not a proven
+      # data exposure. Paging p1/type/security here would cry wolf nightly.
+      record_failure "advisor_metadata_malformed" \
+        "could not parse table identity out of the advisor lint metadata (jq exit ${jq_rc}) — the API contract may have drifted."
+    elif [[ "$row_count" -ne "$advisor_count" ]]; then
+      record_failure "advisor_metadata_malformed" \
+        "advisor reported ${advisor_count} rls_disabled_in_public finding(s) but only ${row_count} carried a usable schema+table identity — REFUSING to treat the unparseable remainder as benign lag."
+    else
     indeterminate=""
+    checked=0
     while IFS=$'\t' read -r lschema ltable; do
       [[ -z "$lschema$ltable" ]] && continue
       qresp="$(api_query "select c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname=$(sql_lit "$lschema") and c.relname=$(sql_lit "$ltable")")"
@@ -216,17 +323,23 @@ if ok; then
       if [[ "$(printf '%s' "$qbody" | jq -r '.[0].relrowsecurity' 2>/dev/null)" != "true" ]]; then
         indeterminate="${indeterminate} ${lschema}.${ltable}(rls-still-off)"
       fi
-    done < <(printf '%s' "$advisor_body" |
-      jq -r '.lints[] | select(.name=="rls_disabled_in_public")
-             | [(.metadata.schema // "?"), (.metadata.name // "?")] | @tsv' 2>/dev/null)
+      checked=$((checked + 1))
+    done <<< "$lint_rows"
 
     if [[ -n "$indeterminate" ]]; then
-      record_failure "confirm_indeterminate" \
+      record_violation "confirm_indeterminate" \
         "advisor flagged ${advisor_count} table(s) but the catalog disagrees for:$(sanitize "$indeterminate"). Refusing to treat an unexplained disagreement as advisor lag."
+    elif [[ "$checked" -ne "$advisor_count" ]]; then
+      # Belt-and-braces: the loop must actually have run once per advisor
+      # finding. Without this, any future edit that makes the loop body skip
+      # (a `continue`, a read failure) silently restores the fail-open.
+      record_failure "advisor_metadata_malformed" \
+        "expected to verify ${advisor_count} advisor-named table(s) but only checked ${checked} — refusing to report clean on an unverified finding."
     else
       # Benign: every advisor-named table is demonstrably RLS-on now.
       echo "warn=stale_advisor"
       echo "::warning::Supabase advisor reported ${advisor_count} rls_disabled_in_public finding(s) on ${PROJECT_NAME}, but every named table is now RLS-enabled — treating as advisor lag (<=1h self-heal window)."
+    fi
     fi
   fi
 fi
@@ -250,12 +363,19 @@ if [[ -n "$advisor_count" ]]; then
 fi
 
 # --- Emit ------------------------------------------------------------------
+# THE VERDICT BRANCHES ON THE RAW fail_mode, NEVER THE SANITIZED COPY.
+# Sanitization exists for log safety and must not sit on the control-flow path:
+# branching on `fail_mode_safe` means ANY degradation of sanitize() — a lib that
+# failed to source, a tr/sed error, an empty return — silently converts EVERY
+# failure into `scan_result=clean` exit 0. That is a whole-gate fail-open
+# reachable without touching a single assertion, and it is exactly the class
+# this file exists to eliminate. The sanitized copies are for OUTPUT only.
 fail_mode_safe="$(sanitize "$fail_mode")"
 fail_detail_safe="$(sanitize "$fail_detail")"
 echo "fail_mode=${fail_mode_safe}"
 echo "fail_detail=${fail_detail_safe}"
 
-if [[ -n "$fail_mode_safe" ]]; then
+if [[ -n "$fail_mode" ]]; then
   echo "::error::supabase-advisor-scan FAILED for ${PROJECT_NAME} (${REF}): ${fail_mode_safe} — ${fail_detail_safe}"
   exit 1
 fi

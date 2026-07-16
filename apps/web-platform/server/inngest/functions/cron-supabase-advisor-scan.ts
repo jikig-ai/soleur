@@ -35,8 +35,15 @@
  *  - End-to-end liveness: if the dispatch never reaches the runner, no GHA
  *    heartbeat arrives and the `scheduled-supabase-advisor-scan` monitor goes
  *    red on a missed check-in.
- *  - Dispatch error path: a token-mint / Octokit failure is reported to the
- *    Sentry issues stream via reportSilentFallback (token redacted).
+ *  - Dispatch error path: an Octokit/dispatch failure is reported to the Sentry
+ *    issues stream via reportSilentFallback, tagged `feature:cron-supabase-advisor-scan`,
+ *    with the minted token redacted out of the message.
+ *  - Token-mint failures are NOT in that path: mintInstallationToken runs OUTSIDE
+ *    the try, so a mint failure propagates, exhausts `retries: 1`, and is captured
+ *    by the Inngest sentry-correlation middleware instead — tagged `inngest.fn_id`,
+ *    NOT `feature`. Both reach the issue stream; only the tag differs. Worth
+ *    knowing before searching Sentry by `feature:` and concluding nothing fired.
+ *    (cron-terraform-drift.ts has the identical shape and the same caveat.)
  */
 import { inngest } from "@/server/inngest/client";
 import {

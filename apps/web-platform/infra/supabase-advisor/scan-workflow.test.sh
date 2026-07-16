@@ -32,6 +32,9 @@ MONITORS_TF="$REPO_ROOT/apps/web-platform/infra/sentry/cron-monitors.tf"
 APPLY_YML="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
 MODEL_C4="$REPO_ROOT/knowledge-base/engineering/architecture/diagrams/model.c4"
 HOOK="$REPO_ROOT/.claude/hooks/new-scheduled-cron-prefer-inngest.sh"
+INFRA_VALIDATION="$REPO_ROOT/.github/workflows/infra-validation.yml"
+TEST_ALL="$REPO_ROOT/scripts/test-all.sh"
+HARNESS="$REPO_ROOT/tests/scripts/test-supabase-advisor-scan.sh"
 
 fails=0
 pass() { printf '  ok   %s\n' "$1"; }
@@ -43,6 +46,35 @@ for f in "$WORKFLOW" "$SCRIPT" "$INNGEST_FN" "$MONITORS_TF" "$APPLY_YML" "$MODEL
     exit 1
   fi
 done
+
+echo "== BOTH gates are actually WIRED (this file's header claims it; now it asserts it) =="
+# Nothing in this repo auto-discovers a test. infra-validation.yml enumerates
+# ~50 explicit `run: bash …test.sh` steps with no glob runner, and test-all.sh
+# hand-registers every tests/scripts/ suite (its own comment at the
+# stock-preflight-gate line documents this exact trap). So an unregistered gate
+# is a file nobody calls: green locally, gating nothing.
+#
+# This block exists because review caught the header ASSERTING its own wiring
+# ("asserted by AC9b rather than assumed") while asserting no such thing — and
+# caught the behavioural harness, which carries this PR's entire value claim,
+# registered in ZERO runners. A PR arguing that unwired guards are worse than
+# none had shipped its best guard unwired. Delete either line below and this
+# goes RED.
+if grep -qF 'bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh' "$INFRA_VALIDATION"; then
+  pass "this shape guard is registered as a step in infra-validation.yml"
+else
+  fail "shape guard is wired" "no 'run: bash …/supabase-advisor/scan-workflow.test.sh' step in infra-validation.yml — this guard would never run in CI"
+fi
+if [[ -f "$HARNESS" ]]; then
+  pass "the behavioural harness exists"
+else
+  fail "harness exists" "$HARNESS not found"
+fi
+if grep -qF 'bash tests/scripts/test-supabase-advisor-scan.sh' "$TEST_ALL"; then
+  pass "the behavioural harness is registered in test-all.sh (the proof actually runs)"
+else
+  fail "harness is wired" "test-all.sh does not run tests/scripts/test-supabase-advisor-scan.sh — the proof that the gate cannot silently pass would gate NOTHING (nothing auto-discovers tests/scripts/)"
+fi
 
 echo "== the hook allows this workflow (asserted by EXECUTING the hook) =="
 # Assert by running the hook itself, not by re-implementing its predicate. Its
@@ -183,10 +215,23 @@ else
   fail "structural assertion present" "expected a has(\"lints\") guard"
 fi
 # The transport assertion: a non-200 must be a failure, never a zero.
-if grep -qE 'code" != "200"' "$SCRIPT"; then
-  pass "HTTP-status assertion present"
+#
+# SCOPED TO THE ADVISOR BLOCK. A whole-file `grep 'code" != "200"'` matches FOUR
+# sites (identity, advisor, catalog, object-lookup), so deleting the ADVISOR's
+# rung — the literal 401 fail-open this PR exists to close — left this check
+# green, satisfied by the catalog's line. Proven by mutation during review.
+# A guard whose subject can be deleted while it stays green is not a guard.
+advisor_block="$(awk '/^# --- Rung 2:/,/^# --- Rung 3:/' "$SCRIPT")"
+if printf '%s' "$advisor_block" | grep -qE 'code" != "200"'; then
+  pass "HTTP-status assertion present IN THE ADVISOR RUNG (not merely somewhere in the file)"
 else
-  fail "HTTP-status assertion present" "expected an explicit non-200 check"
+  fail "advisor HTTP-status assertion" "the advisor rung has no explicit non-200 check — a 401 would parse to a clean 0"
+fi
+# Same scoping for the structural rung, for the same reason.
+if printf '%s' "$advisor_block" | grep -qF 'has("lints")'; then
+  pass "structural assertion present IN THE ADVISOR RUNG"
+else
+  fail "advisor structural assertion" "the advisor rung has no has(\"lints\") guard"
 fi
 
 echo "== the catalog assertion is authoritative and UNCONDITIONAL =="
@@ -199,23 +244,47 @@ if grep -qF 'rls_off' "$SCRIPT"; then
 else
   fail "catalog assertion present" "expected the rls_off catalog query"
 fi
-# Extract the line number of the catalog query and of any advisor-count
-# conditional, and assert the catalog is not lexically inside one.
-cat_line="$(grep -nF 'as rls_off' "$SCRIPT" | head -1 | cut -d: -f1)"
-# shellcheck disable=SC2016  # single-quoted literal regex matching the SUT's source text, not an expansion
-adv_cond_line="$(grep -nE 'if \[\[ "\$advisor_count" -gt 0' "$SCRIPT" | head -1 | cut -d: -f1)"
-if [[ -n "$cat_line" && -n "$adv_cond_line" && "$cat_line" -lt "$adv_cond_line" ]]; then
-  pass "catalog query runs BEFORE (not inside) the advisor-non-zero branch"
+# Assert the catalog rung's GATE, not its line number.
+#
+# The previous version of this check compared line numbers ("catalog appears
+# before the advisor-non-zero branch"). Line order is not unconditionality:
+# review proved that rewriting the gate to `if ok && [[ "${advisor_count:-0}" !=
+# "0" ]]` — which IS the fail-open this section exists to prevent — kept the
+# line-order check green. It also hardcoded one spelling of the advisor
+# conditional, so any rewording silently disarmed it.
+#
+# The real invariant: the catalog rung is gated on IDENTITY (a genuine
+# precondition — we must know which project we are asserting against) and never
+# on `ok` (which is false whenever the ADVISOR failed, so gating on it would make
+# the coverage-bearing tier depend on the advisory one's health — ADR-112
+# inverted through the back door). The behavioural harness proves both directions
+# empirically; this is the structural companion.
+rung3_gate="$(awk '/^# --- Rung 3:/,/^# --- Rung 4:/' "$SCRIPT" | grep -E '^if ' | head -1)"
+if [[ "$rung3_gate" == *'identity_ok'* ]]; then
+  pass "catalog rung is gated on identity_ok (runs even when the advisor is broken)"
 else
-  fail "catalog query is unconditional" "catalog at line ${cat_line:-?}, advisor-non-zero branch at line ${adv_cond_line:-?} — the catalog must not be gated on the advisor firing"
+  fail "catalog rung gate" "rung 3's gate is '${rung3_gate:-<none found>}' — it must gate on identity_ok, not on ok/advisor state, or an advisor outage silently retires the authoritative assertion"
+fi
+if printf '%s' "$rung3_gate" | grep -qE '(^|[^_])\bok\b|advisor'; then
+  fail "catalog rung is not advisor-coupled" "rung 3's gate '${rung3_gate}' references ok/advisor — the catalog must not depend on the advisory tier"
+else
+  pass "catalog rung's gate references neither ok nor advisor state"
 fi
 
 echo "== both anti-exfil libs are SOURCED, never redefined =="
+# ANCHOR ON THE `.` SOURCING SYNTAX, NOT THE BARE PATH. The path also appears in
+# the `# shellcheck source=…` directive on the line ABOVE each real source, so a
+# bare-path grep matched the COMMENT and stayed green with both real `.` lines
+# deleted — proven by mutation during review. That was not cosmetic: with the
+# libs unsourced, sanitize() returns empty, and (before the companion fix in the
+# script's emit block) the verdict was derived from that empty value, so a
+# confirmed violation emitted `scan_result=clean` exit 0. A permanently green
+# gate, reachable by deleting two lines this guard claimed to protect.
 for lib in strip-log-injection scrub-supabase-pat; do
-  if grep -qF "lib/${lib}.sh" "$SCRIPT"; then
-    pass "sources lib/${lib}.sh"
+  if script_code | grep -qE '^[[:space:]]*\.[[:space:]].*lib/'"$lib"'\.sh'; then
+    pass "sources lib/${lib}.sh (real '.' source line, not the shellcheck directive)"
   else
-    fail "sources lib/${lib}.sh" "not sourced — this PR must add no new helper copy"
+    fail "sources lib/${lib}.sh" "no actual '. …/lib/${lib}.sh' source line in code — sanitize() would degrade silently"
   fi
 done
 if grep -qE '^\s*(strip_log_injection|scrub_pat)\(\)' "$SCRIPT"; then
@@ -256,7 +325,7 @@ echo "== issue filing cannot be silently skipped =="
 # `if: failure() && steps.x.outputs.failure_mode != ''` files NOTHING when an
 # unanticipated abort exits before the output is written. Assert the conjunct is
 # absent — anchored on the conjunct's syntax, not the bare words.
-if grep -qE "failure\(\) *&& *steps\.[a-z]+\.outputs\.failure_mode" "$WORKFLOW"; then
+if grep -qE "failure\(\) *&& *steps\.[a-z0-9_-]+\.outputs\.failure_mode" "$WORKFLOW"; then
   fail "issue step has no failure_mode conjunct" "found the conjunct — an unanticipated abort would file no issue at all"
 else
   pass "issue step's if: failure() carries no failure_mode conjunct"
@@ -294,18 +363,28 @@ else
   fail "gh issue create passes --milestone" "a hook rejects issue creation without it"
 fi
 
-echo "== cross-file: the monitor is actually APPLIED =="
-# apply-sentry-infra.yml enumerates -target= per resource with no wildcard. A
-# monitor without a matching line is declared but never applied: liveness dark.
-if grep -qF 'resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan"' "$MONITORS_TF"; then
-  pass "monitor declared in cron-monitors.tf"
+# NOTE — "monitor declared in cron-monitors.tf" and "monitor has a -target= line"
+# are deliberately NOT asserted here. Both are already covered, and covered
+# BETTER, by apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts:
+# it readdirSync's every workflow, extracts each `monitor-slug:`, and requires a
+# matching sentry_cron_monitor AND a matching -target= line in apply-sentry-infra.yml
+# — all-members and self-discovering, so it covered this new cron with no edit.
+# A hardcoded single-member copy here would be strictly weaker and would rot the
+# moment the resource is renamed. Cite the parity test rather than duplicate it.
+
+echo "== cross-file: the Inngest schedule and the Sentry monitor window agree =="
+# The monitor's crontab defines the window in which a missed check-in pages. If
+# the dispatcher's cron and the monitor's crontab drift apart, the gate either
+# pages nightly for a run that arrived on time, or opens a blind window. Both
+# operands are extracted by shape — hardcoding either would re-create the drift
+# class this asserts against.
+fn_cron="$(grep -oE '\{ cron: "[^"]+" \}' "$INNGEST_FN" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+tf_cron="$(awk '/resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan"/,/^}/' "$MONITORS_TF" |
+  grep -E '^\s*schedule\s*=' | head -1 | sed -E 's/.*crontab\s*=\s*"([^"]+)".*/\1/')"
+if [[ -n "$fn_cron" && "$fn_cron" == "$tf_cron" ]]; then
+  pass "Inngest cron '$fn_cron' == Sentry monitor crontab '$tf_cron'"
 else
-  fail "monitor declared in cron-monitors.tf" "resource not found"
-fi
-if grep -qF -- '-target=sentry_cron_monitor.scheduled_supabase_advisor_scan' "$APPLY_YML"; then
-  pass "monitor has a -target= line (else it is declared but never applied)"
-else
-  fail "monitor has a -target= line" "without it the resource never applies and liveness ships dark"
+  fail "schedule agreement" "Inngest fn cron '${fn_cron:-<none>}' != monitor crontab '${tf_cron:-<none>}' — a missed check-in would page on a healthy run, or a blind window would open"
 fi
 
 echo "== cross-file: slugify(tf name) == workflow monitor-slug =="

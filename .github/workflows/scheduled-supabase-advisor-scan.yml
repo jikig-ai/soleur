@@ -13,9 +13,15 @@
 # here is backtick-wrapped deliberately. Do not unwrap them.
 #
 # To smoke-test manually: gh workflow run scheduled-supabase-advisor-scan.yml
-# A manual run scans and files issues exactly as a nightly one does, but it
-# CANNOT post the Sentry check-in (see the final step) — otherwise a manual run
-# would forge the liveness signal while the dispatcher was dead.
+# A DEFAULT manual run scans and files issues exactly as a nightly one does, but
+# does not post the Sentry check-in (see the final step), so routine smoke-testing
+# cannot accidentally satisfy the monitor window while the dispatcher is dead.
+# This is a guard against ACCIDENT, not a security control: `source` is a
+# caller-supplied input with no server-side binding to the dispatcher, so anyone
+# with actions: write can pass `-f source=inngest` and post a real check-in.
+# Making that structural would mean gating on the dispatching App's identity;
+# it is not worth pinning a fragile actor literal here, and the threat model is
+# an operator fooling their own monitor.
 name: Supabase Advisor Scan (public tables without RLS)
 
 on:
@@ -145,10 +151,12 @@ jobs:
       - name: File or comment tracking issue (failure)
         # UNCONDITIONAL `if: failure()`. The precedent this is ported from also
         # requires `steps.x.outputs.failure_mode != ''`, which is a trap: an
-        # unanticipated abort (jq crash, OOM, runner eviction) exits before the
-        # output is written, so the condition would be false and the run would
-        # go red having filed NOTHING — no issue, no dedupe, no auto-close.
-        # Defaulting the mode instead means every failure files something.
+        # abort that exits before the output is written (an unbound-var under
+        # `set -u`, a syntax error, an OOM-kill) makes the condition false, so
+        # the run goes red having filed NOTHING — no issue, no dedupe, no
+        # auto-close. Defaulting the mode instead means every such failure files
+        # something. (Runner eviction is NOT in this set — no step runs at all
+        # there, so nothing files; that case is covered by the missed check-in.)
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -183,7 +191,9 @@ jobs:
           {
             if [[ "$ISSUE_CLASS" == "A" ]]; then
               printf '## A public table has no row-level security\n\n'
-              printf 'The authoritative catalog assertion found at least one table in a public schema with RLS disabled, or the advisor and the catalog disagree in a way that cannot be explained by advisor lag. Anyone holding the project anon key (which ships in the client bundle by design) may be able to read it.\n\n'
+              printf 'The authoritative catalog assertion found at least one table in a public schema with RLS disabled, or the advisor and the catalog disagree in a way that cannot be explained by advisor lag. The offending table(s) are named in the per-project status below.\n\n'
+              printf 'On soleur-dev and soleur-web-platform, anyone holding the project anon key (which ships in the client bundle by design) may be able to read it.\n\n'
+              printf 'On soleur-inngest-prd, check the grants FIRST: a new Inngest table is created with anon/authenticated grants already revoked by ALTER DEFAULT PRIVILEGES (ADR-030 I8), so RLS-off there is not automatically an exposure and the hourly self-heal may close it without action.\n\n'
             else
               printf '## The Supabase advisor scan could not be trusted\n\n'
               printf 'This is an INFRASTRUCTURE failure of the gate itself, not a known data exposure. It is still urgent: while the scan cannot run, nothing is watching for a public table without RLS.\n\n'
@@ -256,13 +266,25 @@ jobs:
       #    forging the liveness signal while the dispatcher was dead for weeks.
       #    Manual runs still scan and still file issues; they just cannot lie
       #    about liveness.
+      #
+      # 3. The check-in reports LIVENESS, not the work result. A confirmed RLS
+      #    violation (class A) posts `ok`: the scan ran end-to-end and did its
+      #    job, and the violation already has its own p1 issue. Posting `error`
+      #    there would pin the monitor red for as long as the violation is
+      #    unfixed — and while it is pinned red, a dispatcher that then dies is
+      #    invisible, because the monitor is already alarming. That is the
+      #    documented liveness-vs-artifact distinction; the liveness channel must
+      #    not be consumed by a work result that has its own paging route.
+      #    `error` is therefore reserved for class B (the scan itself could not
+      #    be trusted) and for an abort (outcome != success with no class), which
+      #    is itself an infrastructure fault.
       - name: Sentry check-in (final)
         if: always() && github.event.inputs.source == 'inngest'
         continue-on-error: true
         uses: ./.github/actions/sentry-heartbeat
         with:
           monitor-slug: scheduled-supabase-advisor-scan
-          status: ${{ steps.scan.outcome == 'success' && 'ok' || 'error' }}
+          status: ${{ (steps.scan.outcome == 'success' || steps.scan.outputs.issue_class == 'A') && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

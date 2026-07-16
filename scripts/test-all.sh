@@ -153,6 +153,12 @@ if want_scripts; then
   # infra-validation.yml only lists apps/web-platform/infra/*.test.sh. Without this line
   # the gate that stands between a -replace and a stranded fleet ships with zero coverage.
   run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-preflight-gate.sh
+  # Supabase advisor RLS gate (#3366). Registered HERE for the same reason as the
+  # line above: nothing auto-discovers tests/scripts/. This is the harness that
+  # proves the gate cannot silently pass (a 401 must not parse to a clean 0);
+  # without this line that proof runs nowhere and the gate's entire value claim
+  # is unverified on every PR — the exact defect the gate exists to catch.
+  run_suite "tests/scripts/supabase-advisor-scan" bash tests/scripts/test-supabase-advisor-scan.sh
   # EU residency allow-set parity (#6453 review). {nbg1,fsn1,hel1} is replicated across three
   # terraform validations + the stock gate's default; nothing pinned them together, and the
   # gate's own suite overrides the value to stay hermetic, so the shipped default was asserted

@@ -128,6 +128,22 @@ bundle by design. The gate's own leak vector is `SUPABASE_ACCESS_TOKEN` (a cloud
 by env-injection (never argv), a pinned API host (no override — an overridable host is a
 PAT-exfil-via-redirect seam), `curl … 2>/dev/null`, and `sanitize()` on every echoed body.
 
+**Deliberately out of scope (named, not silently absent):**
+
+- **Views and materialised views.** The catalog predicate pins `relkind in ('r','p')`, and
+  `relrowsecurity` is meaningless for `relkind = 'm'` — so a public matview holding
+  founder data with an `anon` SELECT grant is invisible to BOTH tiers (the advisor's
+  `rls_disabled_in_public` is table-only). This is a real blind spot, scoped out because RLS is
+  not the right control for a matview; grant hygiene is, and `ADR-112`'s `rls-authz-fuzz` owns
+  the grant class.
+- **Grants.** `relrowsecurity=false` is not synonymous with anon exposure. On
+  `soleur-inngest-prd` a new goose table is born RLS-off but with anon/authenticated
+  grants already revoked by ALTER DEFAULT PRIVILEGES (ADR-030 I8), so a scan landing
+  in that window reports a violation for a non-exposing, self-healing condition. The
+  class-A issue body names this so the operator checks grants before treating an
+  inngest-prd finding as an exposure. Adding a grant check is more machinery for a
+  bounded, self-limiting window; the gate stays RLS-only and says so.
+
 **Brand-survival threshold:** `single-user incident` — justified on the false-confidence argument above,
 not carried forward from ADR-030. `requires_cpo_signoff: true`; `user-impact-reviewer` runs at review.
 
@@ -244,8 +260,29 @@ failure_modes:
     detection: Phase 3.3 object-scoped lookup returns no row / relrowsecurity=false
     alert_route: same as violation_confirmed (fail-closed: an unexplained disagreement is NOT benign)
   # --- class B: "scan failed" (infrastructure; NOT type/security, priority/p2-medium) ---
+  - mode: config_error — REF / PROJECT_NAME / SUPABASE_ACCESS_TOKEN not set
+    detection: empty-env check at script entry
+    alert_route: red run + issue "[ci/supabase-advisor] scan failed"
+  - mode: identity_unreachable — the project-identity preflight got a non-200
+    detection: HTTP status assertion == 200 on GET /v1/projects/{ref}
+    alert_route: red run + issue "[ci/supabase-advisor] scan failed"
   - mode: advisor_unreachable — PAT expired/revoked/unauthorized (401)
     detection: HTTP status assertion == 200 (the naive parse returns 0 here = silently green)
+    alert_route: red run + issue "[ci/supabase-advisor] scan failed"
+  - mode: advisor_metadata_malformed — the advisor named findings whose table identity
+          could not be parsed (non-scalar or renamed .metadata fields)
+    detection: jq exit status + a row-count reconciliation against advisor_count
+    alert_route: red run + issue "[ci/supabase-advisor] scan failed"
+    why: caught at review. Piping the extraction straight into `while read` with
+         stderr dropped let a jq error produce ZERO rows, which the carve-out read
+         as "every named table is clean" -> exit 0. The headline fail-open, one
+         tier up. It is class B, not A: a field-name drift is the gate's own
+         instrument breaking, not a proven exposure.
+  - mode: catalog_unreachable — the catalog query got a non-2xx (the AUTHORITATIVE tier)
+    detection: HTTP status assertion (200 or 201 — this endpoint answers 201)
+    alert_route: red run + issue "[ci/supabase-advisor] scan failed"
+  - mode: catalog_malformed — the catalog query did not return a row array of identities
+    detection: jq -e 'type=="array" and all(.[]; has("rls_off_table") and (.rls_off_table|type=="string"))'
     alert_route: red run + issue "[ci/supabase-advisor] scan failed"
   - mode: advisor_malformed — API contract drift (.lints renamed/removed)
     detection: jq -e 'has("lints") and (.lints|type=="array")'

@@ -78,14 +78,21 @@ case "$args" in
   *"/advisors/security"*)
     emit "$STUB_ADV_BODY" "$STUB_ADV_CODE" ;;
   *"/database/query"*)
-    # The catalog assertion is the only query carrying the rls_off alias; every
-    # other query is a Phase-3.3 object-scoped lookup.
+    # The catalog assertion is the only query carrying the rls_off_table alias;
+    # every other query is an object-scoped lookup.
     case "$data" in
-      *rls_off*) emit "$STUB_CAT_BODY" "$STUB_CAT_CODE" ;;
-      *)         emit "$STUB_OBJ_BODY" "$STUB_OBJ_CODE" ;;
+      *rls_off_table*) emit "$STUB_CAT_BODY" "$STUB_CAT_CODE" ;;
+      *)               emit "$STUB_OBJ_BODY" "$STUB_OBJ_CODE" ;;
     esac ;;
-  *)
+  *"/v1/projects/"*)
     emit "$STUB_ID_BODY" "$STUB_ID_CODE" ;;
+  *)
+    # FAIL LOUD on an unrecognized URL. A `*)` catch-all that fell through to the
+    # identity fixture would let endpoint drift silently borrow a 200 + a
+    # well-formed body — the stub would paper over exactly the kind of break the
+    # suite exists to catch, and the test would pass for the wrong reason.
+    printf 'STUB-ERROR: unrecognized curl URL: %s\n' "$args" >&2
+    exit 99 ;;
 esac
 exit 0
 STUB
@@ -132,7 +139,7 @@ reset_stub() {
         STUB_CAT_CODE STUB_CAT_BODY STUB_OBJ_CODE STUB_OBJ_BODY
   export STUB_ID_CODE=200 STUB_ID_BODY='{"name":"soleur-dev"}'
   export STUB_ADV_CODE=200 STUB_ADV_BODY='{"lints":[]}'
-  export STUB_CAT_CODE=201 STUB_CAT_BODY='[{"rls_off":0}]'
+  export STUB_CAT_CODE=201 STUB_CAT_BODY='[]'
   export STUB_OBJ_CODE=201 STUB_OBJ_BODY='[]'
 }
 
@@ -193,6 +200,11 @@ run_scan
 expect_fail_mode "catalog query returning an object (not a row array) fails loud" catalog_malformed
 
 reset_stub
+export STUB_CAT_BODY='[{"wrong_column":"public.x"}]'
+run_scan
+expect_fail_mode "catalog rows without a string identity fail loud" catalog_malformed
+
+reset_stub
 run_scan
 expect_clean "genuine clean scan passes"
 
@@ -209,7 +221,7 @@ expect_clean "advisor clean + catalog clean -> pass"
 # documented as servable-stale right after a DDL change, so a cached 0 over a
 # live violation is exactly the case a nightly gate exists to catch.
 reset_stub
-export STUB_CAT_BODY='[{"rls_off":3}]'
+export STUB_CAT_BODY='[{"rls_off_table":"public.leaky_a"},{"rls_off_table":"public.leaky_b"},{"rls_off_table":"public.leaky_c"}]'
 run_scan
 expect_fail_mode "advisor CLEAN but catalog DIRTY -> FAIL (a stale advisor cannot hide a real violation)" violation_confirmed
 
@@ -247,9 +259,55 @@ expect_fail_mode "advisor fires + named table resolves to NO ROW -> FAIL (not sw
 # Quadrant: advisor fires + catalog dirty -> FAIL.
 reset_stub
 advisor_fires
-export STUB_CAT_BODY='[{"rls_off":2}]'
+export STUB_CAT_BODY='[{"rls_off_table":"public.leaky_a"},{"rls_off_table":"public.leaky_b"}]'
 run_scan
 expect_fail_mode "advisor fires + catalog dirty -> FAIL" violation_confirmed
+
+echo "== Regression: the metadata rung must not become the new fail-open =="
+
+# Found in review. The extraction jq feeds a `while read` loop; when it errored
+# mid-stream its status was swallowed, the loop body never ran, `indeterminate`
+# stayed empty, and the script announced "every named table is now RLS-enabled"
+# and exited 0 — having verified NOTHING while the advisor reported a finding.
+# The headline bug of this PR, one tier up.
+reset_stub
+export STUB_ADV_BODY='{"lints":[{"name":"rls_disabled_in_public","metadata":{"name":{"nested":"obj"},"schema":"public"}}]}'
+run_scan
+expect_fail_mode "advisor metadata is a non-scalar -> FAIL (does NOT report a vacuous clean)" advisor_metadata_malformed
+
+# Field-name drift must be an INFRASTRUCTURE fault (class B), not a class-A
+# data-exposure page naming a table called "?.?".
+reset_stub
+export STUB_ADV_BODY='{"lints":[{"name":"rls_disabled_in_public","metadata":{"table_name":"leaky","schema_name":"public"}}]}'
+run_scan
+expect_fail_mode "advisor metadata field-name drift -> class-B infra fault, not a p1 exposure page" advisor_metadata_malformed
+
+# Partial drift: 2 findings, only 1 parseable. The unparseable one must not be
+# silently dropped and the remainder treated as benign lag.
+reset_stub
+export STUB_ADV_BODY='{"lints":[{"name":"rls_disabled_in_public","metadata":{"name":"leaky","type":"table","schema":"public"}},{"name":"rls_disabled_in_public","metadata":{"name":["broken"],"schema":"public"}}]}'
+export STUB_OBJ_BODY='[{"relrowsecurity":true}]'
+run_scan
+expect_fail_mode "advisor reports 2 findings but only 1 is parseable -> FAIL (no partial pass)" advisor_metadata_malformed
+
+echo "== Regression: the catalog is authoritative even when the advisor is broken =="
+
+# Found in review. The catalog rung was gated on `ok`, so an advisor failure
+# skipped the coverage-bearing assertion entirely: a real RLS violation would
+# have gone unpaged behind a p2 "scan failed" ticket.
+reset_stub
+export STUB_ADV_CODE=401 STUB_ADV_BODY='{"message":"JWT could not be decoded"}'
+export STUB_CAT_BODY='[{"rls_off_table":"public.leaky_a"}]'
+run_scan
+expect_fail_mode "advisor DEAD + catalog DIRTY -> still pages as a VIOLATION (class A), not just scan-failed" violation_confirmed
+
+# And the violation detail must name the table — an operator paged at p1 for a
+# data exposure cannot act on a bare count.
+if printf '%s' "$OUT" | grep -qF 'public.leaky_a'; then
+  pass "  ...and the violation names the offending table (actionable without the dashboard)"
+else
+  fail "violation names the table" "expected 'public.leaky_a' in the output; a bare count sends the operator to the Supabase dashboard"
+fi
 
 echo "== Non-vacuity: the harness must be able to SEE a fail-open =="
 # Mutation self-check. If the script were reverted to the fail-open parse, the
