@@ -165,9 +165,10 @@ HEARTBEATSCRIPTEOF
 chmod 0755 "$HEARTBEAT_SCRIPT"
 
 # Resolve the doppler binary path at bootstrap time. cloud-init installs to
-# /usr/local/bin/doppler (cloud-init.yml:289-290); inngest-server.service:137
-# hardcodes /usr/bin/doppler. Interpolating `command -v` here avoids
-# inheriting that latent path discrepancy in the heartbeat unit.
+# /usr/local/bin/doppler (the `chmod +x /usr/local/bin/doppler` step in
+# cloud-init.yml); inngest-server.service:137 hardcodes /usr/bin/doppler.
+# Interpolating `command -v` here avoids inheriting that latent path
+# discrepancy in the heartbeat unit.
 DOPPLER_BIN="$(command -v doppler 2>/dev/null || true)"
 if [[ -z "$DOPPLER_BIN" ]]; then
   log "ERROR: doppler CLI not found on PATH — cloud-init must install /usr/local/bin/doppler before inngest-bootstrap"

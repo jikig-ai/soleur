@@ -136,12 +136,33 @@ if want_scripts; then
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
   run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh
   run_suite "scripts/followthrough-exec-bit" bash scripts/followthrough-exec-bit.test.sh
+  # #6462: exit-code harness for the zot soak's decision arms. Registered explicitly because
+  # this runner enumerates suites by hand — an unregistered .test.sh is an ORPHAN that never
+  # gates (the #5417 class). The soak authorizes an irreversible PAT revoke, so its arms
+  # returning the right codes is not optional coverage.
+  run_suite "scripts/zot-soak-6122-arms" bash scripts/followthroughs/zot-soak-6122.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
   run_suite "scripts/inngest-liveness-classify" bash scripts/inngest-liveness-classify.test.sh
   run_suite "scripts/inngest-restart-age-gate" bash scripts/inngest-restart-age-gate.test.sh
   run_suite "scripts/inngest-restart-poll-classify" bash scripts/inngest-restart-poll-classify.test.sh
+  run_suite "scripts/tunnel-connector-census" bash scripts/tunnel-connector-census.test.sh
+  # Stock preflight gate (#6453). Registered HERE because nothing auto-discovers
+  # tests/scripts/ — the bash *.test.sh glob further down does NOT include it, and
+  # infra-validation.yml only lists apps/web-platform/infra/*.test.sh. Without this line
+  # the gate that stands between a -replace and a stranded fleet ships with zero coverage.
+  run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-preflight-gate.sh
+  # EU residency allow-set parity (#6453 review). {nbg1,fsn1,hel1} is replicated across three
+  # terraform validations + the stock gate's default; nothing pinned them together, and the
+  # gate's own suite overrides the value to stay hermetic, so the shipped default was asserted
+  # nowhere. Drift makes the gate advise a location terraform rejects.
+  run_suite "tests/scripts/eu-location-allowset-parity" bash tests/scripts/test-eu-location-allowset-parity.sh
+  # betterstack-query.sh hot+archive UNION (#6288). remote() alone is the ~40-minute hot
+  # window, so a hot-only query answers `--since 24h` with 40 minutes — no error, just a
+  # short answer. That silently starved every soak gate built on it (#6288's needs 2h of
+  # span and could never PASS). Hermetic: stubs curl, asserts SQL shape, never live rows.
+  run_suite "tests/scripts/betterstack-query-archive" bash tests/scripts/test-betterstack-query-archive.sh
   run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh

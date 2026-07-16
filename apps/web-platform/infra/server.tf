@@ -144,6 +144,19 @@ resource "hcloud_server" "web" {
   # receives the gzipped form; its readiness gates fail-closed if decode ever produced a
   # non-#cloud-config. Byte-exact size is confirmed at `terraform plan`. See ADR-080 (amended
   # for the web host).
+  # (#6454) cloud-init.yml is a Terraform templatefile() SOURCE, not literal YAML: it
+  # carries a `%{ if web_colocate_inngest ~}` directive at column 1, and YAML reads a
+  # leading '%' as a directive indicator — so schema-checking that file RAW always fails.
+  # CI renders it via `terraform console` and schema-checks the RENDERED document; see
+  # .github/scripts/validate-infra-templates.sh. Both directive arms are validated, and
+  # the false arm (variables.tf default) is the doc real web hosts boot.
+  #
+  # This note lives HERE, at the call site, and deliberately NOT inside cloud-init.yml:
+  # that file is baked into user_data against Hetzner's 32,768-byte cap, and the
+  # base64gzip'd budget (plugins/soleur/test/cloud-init-user-data-size.test.ts,
+  # WEB_GZIP_BUDGET) has under ~300 bytes of headroom — an 8-line comment there costs
+  # ~276 gzipped bytes and reds that test. cloud-init.yml is effectively comment-frozen;
+  # .tf files cost nothing.
   user_data = base64gzip(templatefile("${path.module}/cloud-init.yml", {
     image_name = var.image_name
     # Keep-inline: fail2ban is reloaded early (at the package-audit stage, before Docker) so
@@ -156,6 +169,30 @@ resource "hcloud_server" "web" {
     fail2ban_sshd_local_b64   = base64encode(file("${path.module}/fail2ban-sshd.local"))
     host_scripts_content_hash = local.host_scripts_content_hash
     tunnel_token              = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
+    # #6425 — gates `cloudflared service install` (the tunnel REGISTRATION, not the apt
+    # install) to the designated ingress host. ADR-114 I1/I2: Cloudflare binds ingress to a
+    # TUNNEL and then selects a connector per edge colo, so with two connectors every
+    # `localhost:` ingress rule means "whichever replica answered", not "this host" — and
+    # only /hooks/deploy fans out, so deploy-status, infra-config (a WRITE) and ssh. all
+    # land coin-flipped. One connector ⇒ deterministic by construction.
+    #
+    # The predicate is `each.key == "web-1"` — the in-file idiom (`name` above, `host_name`
+    # below) — NOT a variable. A knob here would look like a promotion switch and isn't:
+    # `web["web-1"]` is pinned 23 times across 5 files (`grep -c 'web\["web-1"\]' *.tf`:
+    # server.tf 15 provisioner/attachment hosts, outputs.tf 4, placement-group.tf 2,
+    # dns.tf 1 (the app A record), ci-ssh-key.tf 1). Promotion must move all of them in
+    # lockstep; a lone connector flip would put the connector on web-2 while the A record
+    # still points at web-1 — ingress split, at 3am. The coupling is recorded in ADR-068.
+    # (No load balancer exists yet — ADR-068 §(c)'s LB weight is future-tense, so it is NOT
+    # part of this coupling today. Fold it in when the LB actually lands.)
+    #
+    # `tunnel_token` above stays in this map unconditionally and is NOT ternary'd to "":
+    # templatefile pre-checks expr.Variables() across BOTH branches of the `if` directive, so
+    # omitting the key errors even for a gated-off host. And a second predicate could diverge
+    # from this one — web-1 rendering gate-on with an empty token would `service install `,
+    # fail the readiness poll, and boot the LIVE host with deploy+ssh+registry dark. One
+    # predicate, one place.
+    web_tunnel_connector = each.key == "web-1"
     # webhook_deploy_secret stays: hooks.json is no longer rendered into user_data, but the
     # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
     webhook_deploy_secret = var.webhook_deploy_secret

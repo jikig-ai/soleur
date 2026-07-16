@@ -20,7 +20,7 @@
 
 # zot_trusted_region: stdin = raw betterstack JSONEachRow output.
 # Lexical sort (dt-prefixed → chronological), then strip each row's free-text `zot_last_err=`
-# tail BEFORE any key=value parse. zot_last_err is emitted LAST (cloud-init-registry.yml:219-221),
+# tail BEFORE any key=value parse. zot_last_err is emitted LAST (cloud-init-registry.yml, the LINE= emitter in zot-disk-heartbeat.sh),
 # so a greedy cut from its first occurrence bounds the trusted region and a crafted zot log line
 # (containing e.g. `boot_id=`/`exit_code=137`) cannot spoof the fields a verdict keys on.
 zot_trusted_region() {

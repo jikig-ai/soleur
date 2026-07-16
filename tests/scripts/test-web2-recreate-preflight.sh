@@ -27,7 +27,8 @@ if [[ ! -f "$PREFLIGHT" ]]; then
 fi
 
 # A synthesized "baked host-scripts" seed dir + its BOOT-IDENTICAL recomputed hash
-# (same pipeline as cloud-init.yml:390 and the script under test).
+# (same pipeline as the `GOT=$(cd "$SEED"` line in cloud-init.yml and the script
+# under test).
 make_seed() {
   local d; d="$(mktemp -d)"
   printf 'ci-deploy stub\n' > "$d/ci-deploy.sh"

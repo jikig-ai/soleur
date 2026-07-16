@@ -36,6 +36,34 @@ Two recurring foot-guns surfaced while adding infra to `apps/web-platform/infra/
 
 **A single committed file can be parsed by more than one tool at different lifecycle stages — cloud-init.yml is Terraform-templated at plan time and shell-executed at boot — so an edit must satisfy the EARLIEST parser first, and comments are not exempt from it.** Verify with the earliest parser's own render, not the final consumer's mental model. And when a runtime test harness fights you for a payload assertion, a body-scoped source grep that pins the exact wiring is a reliable, non-vacuous substitute (the value/reachability halves are owned by other tests).
 
+## `apps/web-platform/infra/cloud-init.yml` is COMMENT-FROZEN (#6454, PR #6458)
+
+A third parser reads this file, and it counts bytes rather than syntax: `server.tf` wraps the
+render in `base64gzip()` and Hetzner caps `user_data` at **32,768 bytes**. `plugins/soleur/test/cloud-init-user-data-size.test.ts`
+enforces a sub-cap `WEB_GZIP_BUDGET`, and as of #6458 the headroom was **under ~300 gzipped bytes**
+(#5921 had already moved 22 bootstrap scripts out of `write_files:` when the payload hit ~8.6× the
+cap).
+
+An 8-line documentation comment cost **~276 gzipped bytes** (602 raw) and turned that test red:
+`22,076` against a `21,800` budget. Treat any addition to this file — **including a comment** — as
+a byte-budget change, and run:
+
+```bash
+bun test plugins/soleur/test/cloud-init-user-data-size.test.ts
+```
+
+**The generalizable trap: "inert" is meaningless until you name the invariant.** The comment was
+proved inert by rendering both directive arms and diffing — byte-identical *semantic content*,
+which is a real and correct verification of the *wrong property*. Content-inert ≠ size-inert. When
+a file is consumed by N parsers, an edit must be checked against each one's invariant; a proof
+against one is not evidence about the others. This file has three: Terraform's directive scanner
+(syntax), cloud-init's schema (semantics), and the `user_data` cap (**size**).
+
+**Where the comment belongs instead:** `server.tf`'s `templatefile()` call site. It costs zero
+`user_data` bytes, and it is arguably the better home anyway — it sits where the render is actually
+invoked, next to the var map, rather than inside the artifact being rendered. If you need a note
+about how `cloud-init.yml` is validated or rendered, put it at the call site by default.
+
 ## Session Errors (#6396 one-shot)
 
 1. **Ran `grok-pre-push-gate.sh` on the Claude harness** — it launched full `test-all.sh` and timed out (2m), consuming the push window. **Recovery:** direct `git push`. **Prevention:** `grok-pre-push-gate.sh` is a **Grok-Build-only** step (one-shot SKILL.md labels it "REQUIRED before git push (Grok Build)"); on the Claude harness, push directly (lefthook covers the local gate).

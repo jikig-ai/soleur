@@ -77,7 +77,14 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
         # saturate the shared tunnel daemon's HA-stream budget and degrade the sibling
         # deploy-webhook route (the 2026-07-11 502; #6357). Mitigation, not cure — root cause is
         # registry stability (#6288); full deploy-tunnel decoupling + metrics are #6178.
-        connect_timeout   = 5    # INTEGER seconds (NOT "5s") — bounds the TCP dial only
+        # Go duration STRING — provider v4's schema is literally `connect_timeout: string` (dump it:
+        # `terraform providers schema -json`). A bare `5` coerces to "5", fails Cloudflare's duration
+        # parse, and lands as "0s" — so from #6357 until #6511 this mitigation was NEVER in effect:
+        # every apply planned `connect_timeout = "0s" -> "5"`, applied it, and read back "0s" forever.
+        # The old comment here said `INTEGER seconds (NOT "5s")`, which is exactly backwards for this
+        # pin — that is the v5 shape (v5 takes an integer). We are on v4 (`~> 4.0`, main.tf:23-26).
+        # Do NOT copy v5/REST-API docs onto this resource without checking the pinned schema.
+        connect_timeout   = "5s"
         no_happy_eyeballs = true # origin is a v4 literal → drop the v4/v6 parallel-dial fan-out
       }
     }
