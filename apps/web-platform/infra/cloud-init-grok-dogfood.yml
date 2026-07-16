@@ -2,6 +2,11 @@
 # #6545 — operator dogfood host for headless Grok Build (Grok 4.5 API Phase 1).
 # Minimal first-boot: git/curl tools, install pinned grok CLI, workspace dirs.
 # Model endpoint + API key are NOT baked here (secrets via runtime; model via config.toml).
+#
+# Ordering note: cloud-init runs write_files BEFORE users. Never set
+# owner: dogfood:dogfood on write_files paths — that fails with getpwnam
+# and skips later files (including the install script). Create as root,
+# then chown in runcmd after users exist.
 
 package_update: true
 packages:
@@ -25,8 +30,8 @@ write_files:
       # See runbook: knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood.md
       GROK_DOGFOOD_WORKSPACE=/home/dogfood/soleur
 
+  # Written as root; runcmd chowns to dogfood after users module.
   - path: /home/dogfood/.grok/config.toml
-    owner: dogfood:dogfood
     permissions: "0644"
     content: |
       # Model selection is config-driven (FR11 substrate). Swap default to a local
@@ -57,6 +62,10 @@ write_files:
       curl -fsSL https://x.ai/cli/install.sh | bash
       if [[ -x /root/.grok/bin/grok ]] && [[ ! -e /usr/local/bin/grok ]]; then
         ln -sf /root/.grok/bin/grok /usr/local/bin/grok || true
+      fi
+      # Prefer a world-runnable path for the dogfood user (no passwordless sudo).
+      if [[ -x /root/.grok/bin/grok ]]; then
+        install -m 755 /root/.grok/bin/grok /usr/local/bin/grok || true
       fi
       if [[ -x /home/dogfood/.grok/bin/grok ]]; then
         ln -sf /home/dogfood/.grok/bin/grok /usr/local/bin/grok || true
