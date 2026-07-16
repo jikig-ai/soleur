@@ -24,9 +24,11 @@ Lane: `cross-domain` · Threshold: `single-user incident` · Issue: #6536
       `armed → flipping → flushed → done` (`cutover-inngest.yml:764`); G1's arms are
       `""|unset|aborted|rolled-back` (`:703`) vs `armed/flipping/flushed/done` (`:706`);
       `op=rollback` writes transitional `rollback` (`:668`). Rule = **"is this host the intended
-      pusher?"** → exit 0 for `""|unset|aborted|rollback|rolled-back`; exit 1 for
-      `armed|flipping|flushed|done`; `*)` **fails closed** → exit 1. Use a `case`, mirroring
-      `:703`/`:706`. **Never `= "armed"`.** Full table + prescribed shape in plan §AC5b.
+      pusher?"** — evaluated as **project FIRST, then flip** (CPO P1-1): `DOPPLER_PROJECT != soleur-inngest`
+      (the live co-located host, which has no flip by design) → **exit 1** unconditionally; else exit 0 for
+      `""|unset|aborted|rollback|rolled-back`; exit 1 for `armed|flipping|flushed|done`; `*)`
+      **fails closed** → exit 1. Use a `case`, mirroring `:703`/`:706`. **Never `= "armed"`.**
+      Full 10-row table + prescribed shape in plan §AC5b.
 - [x] 0.5 **`INNGEST_CUTOVER_FLIP` env injection — SETTLED (deepen-plan).** The unit's ExecStart is
       `doppler run --project soleur-inngest --config prd -- $HEARTBEAT_SCRIPT`
       (`inngest-bootstrap.sh:193`); `doppler run` injects **every** secret in the config into the
@@ -54,7 +56,11 @@ Ships BEFORE the fix so the next fire self-reports which defect was live.
       Retags doppler's AND curl's stderr (today systemd derives the tag from the ExecStart basename
       → `doppler`).
 - [ ] 1.3 RED: test asserting the ping script emits one structured pre-exec line carrying
-      `project=` + `url_present=` + `flip=` **together** (one row discriminates all hypotheses).
+      `project=` + `url_present=` + `flip=` **together**. NOTE (obs P1-1): this row does **NOT**
+      discriminate H4 — it runs inside `doppler run`'s child, so a Doppler-class failure emits
+      ZERO rows. `project=` is a branch-recording field (FR3 gates on it), not an H4 probe. The H4
+      signature is *no row + unit `failed`*, readable only because FR4 retags the unit's stderr.
+      Do not re-add `resolved=`.
 - [ ] 1.4 GREEN: emit it via `logger -t "$LOG_TAG"` with `LOG_TAG="inngest-heartbeat"` as a real
       assignment in the ping script — **NOT** a bare `logger -t inngest-heartbeat` literal. The
       drift fixture (`vector-pii-scrub.test.sh:404`) derives EXPECTED_TAGS from
