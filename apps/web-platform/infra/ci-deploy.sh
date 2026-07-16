@@ -639,8 +639,10 @@ registry_pull_event() {
 # `_login_kw` and `_login_tok` are THE EMITTER: they are the only functions that receive the
 # raw stderr, and every `printf` in them takes a HARDCODED LITERAL. They are therefore
 # structurally incapable of echoing their input — not "filtered", incapable. That property is
-# grep-checkable (ci-deploy.test.sh T-5B-10), survives a regex defect, and survives future
-# loosening of the patterns. This is Form B; Form A (a regex FILTER that re-emits `$t` when it
+# grep-checkable (`ci-deploy.test.sh` › T-5B-15, which greps these bodies for a printf taking a
+# parameter expansion and requires zero; T-5B-14 covers it behaviourally through the
+# unclassified path, and T-5B-16 fuzzes 219 inputs against the closed set). It survives a regex
+# defect, and survives future loosening of the patterns. This is Form B; Form A (a regex FILTER that re-emits `$t` when it
 # matches) has the SAME output set but the opposite failure mode: Form A degrades to
 # DISCLOSURE, Form B degrades to a wrong label. Do not "simplify" these into a filter.
 #
@@ -727,15 +729,43 @@ _login_tok() {
 #                   `124` (timeout wrapper) are each actionable from this field ALONE.
 #   stderr_chars  — `${#e}`. A non-injective function of the stderr whose value is INVARIANT
 #                   under substitution of any fixed-length secret. It discloses shape, never
-#                   content. Safe because both pull tokens are fixed-length (40), so a registry
-#                   echoing the token moves this by exactly +40 for EVERY possible token value —
-#                   the channel carries zero bits about content, not "few bits". Token length is
-#                   already public from the format name.
-#                   *** IF EITHER TOKEN BECOMES VARIABLE-LENGTH (a JWT, an OIDC-minted session
-#                   token), THIS BECOMES A LENGTH ORACLE AND MUST BE BUCKETED
-#                   (`0 | 1-99 | 100-399 | 400+`). *** Bucketing now would destroy the
-#                   empty-vs-unmatched split for a risk that does not yet exist — but the trigger
-#                   is written down here so it is not re-derived from scratch.
+#                   content. Safe because each pull token is fixed-length FOR ITS FORMAT — zot:
+#                   `zot-registry.tf` › `random_password.zot_pull` (`length = 40`); GHCR: a PAT,
+#                   whose length is fixed by its format — so a registry echoing the token moves
+#                   this by the SAME amount for EVERY possible token value of that format; the
+#                   channel carries zero bits about content, not "few bits". (Do NOT restate "40"
+#                   for GHCR: the repo disagrees with itself on which PAT format is live —
+#                   `variables.tf` says fine-grained (`github_pat_…`, 93 chars), a sibling spec
+#                   records a classic `ghp_…` (40). The security property holds under EITHER,
+#                   because it turns on FIXED-ness, not on the number. Asserting an unverified
+#                   40 here would be exactly the false-measured-comment this change exists to
+#                   drain.)
+#                   Fixed length is necessary but NOT sufficient: it also needs an
+#                   escape-invariant alphabet. `special = false` on the zot token gives
+#                   `[A-Za-z0-9]{40}`, so no character expands under a registry's JSON/URL
+#                   escaping; a token containing `"` or `\` would move this length by a
+#                   CONTENT-DEPENDENT amount under a JSON-escaping registry.
+#                   *** TRIGGER — IF EITHER TOKEN (a) BECOMES VARIABLE-LENGTH (a JWT, an
+#                   OIDC-minted session token), (b) LEAVES THE `[A-Za-z0-9]` ALPHABET, or (c) IS
+#                   ROTATED TO A LENGTH OTHER THAN ITS CURRENT ONE, THIS BECOMES A LENGTH ORACLE
+#                   AND MUST BE BUCKETED (`0 | 1-99 | 100-399 | 400+`). *** (c) is the LIKELIEST
+#                   and was missing: `ZOT_PULL_TOKEN` is an htpasswd credential whose length is a
+#                   Doppler value, not a format invariant — a rotation to a different length is
+#                   an ordinary operator action that (a) does not describe. The zot side is
+#                   pinned by `random_password.zot_pull` (`length = 40`), so (c) fires only if
+#                   that resource changes; the reverse-citation there says so. *** Bucketing now
+#                   would destroy the empty-vs-unmatched split for a risk that does not yet
+#                   exist — but the trigger is written down here so it is not re-derived from
+#                   scratch. NOTE the trigger's firing condition is ALREADY SCHEDULED:
+#                   `specs/feat-registry-oidc-migration/spec.md` FR2/FR3 replace both tokens with
+#                   control-plane-signed zot JWTs. Reverse-citations are planted at
+#                   `random_password.zot_pull` and in that spec's touch-point list so the engineer
+#                   executing it reaches this paragraph.
+#                   The declared threat (`docker login` stderr can echo a USERNAME) is not covered
+#                   by the length argument above, which clears only the token: `stderr_chars`
+#                   does move by `len(username)`. Accepted, not overlooked — `ZOT_PULL_USER` is a
+#                   declared non-secret constant and the GHCR username is public as the package
+#                   owner, so it discloses a per-host constant that is already public.
 #   stdout_chars  — `${#o}`, computed inside _docker_login_capture. The stdout TEXT never leaves
 #                   that function's inner subshell; only its length does. Decides H-B, which is a
 #                   DISJUNCTION ("the text went to stdout, which is discarded, OR nowhere at
@@ -762,9 +792,10 @@ _login_tok() {
 _login_hatch() {
   # $2 defaults to EMPTY, never to a numeric literal. The #5145 client/server budget-drift guard
   # greps the WHOLE script (not comment-aware, not function-scoped) for a second positional
-  # defaulted to digits, and requires exactly ONE match — poll_interval's, at :1530. Defaulting
-  # this one to a number silently turns that unrelated guard RED. The numeric guard below renders
-  # a missing value as `parse_error`, which is more honest than a defaulted 0 anyway.
+  # defaulted to digits, and requires exactly ONE match — the `local interval=` in
+  # `ci-deploy.sh` › `verify_inngest_health()`. Defaulting this one to a number silently turns
+  # that unrelated guard RED. The numeric guard below renders a missing value as `parse_error`,
+  # which is more honest than a defaulted 0 anyway.
   # (Do not restate the offending pattern literally in this comment: the guard would match it.)
   local _e="${1:-}" _oc="${2:-}" _rc="${3:-}"
   local _kw _tok _first _dver
@@ -789,7 +820,8 @@ _login_hatch() {
 #       LOGIN_RC (numeric-guarded).
 #
 # WHY NO `mktemp` — this is not a style preference. The file has two divergent idioms and the
-# unsafe one (`perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"`, :950) degrades to
+# unsafe one (`perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"`, in
+# `ci-deploy.sh` › `pull_image_with_fallback()`) degrades to
 # a WORLD-READABLE FIXED PATH holding registry stderr that may echo the credential. And a bare
 # `mktemp` is itself an abort vector under `set -e` when /tmp is full — which IS hypothesis H-C.
 # A mktemp-based instrument would WEDGE PROD on the first deploy after merge, in exactly the
@@ -805,15 +837,39 @@ _login_hatch() {
 #
 # Sharp edges, all of which this file has already been bitten by once:
 #   1. `local _rec` and the assignment are SEPARATE statements. `local x="$(cmd)"` makes `local`
-#      the exit status and SWALLOWS the rc (the file already knows this — see :824-825).
+#      the exit status and SWALLOWS the rc (the file already knows this — see the
+#      `local prelude_stage` / `prelude_stage="$(refetch_ghcr_and_relogin)"` split in
+#      `ci-deploy.sh` › `ghcr_prelude_and_login()`).
 #   2. `2>&3 3>&-` order, and `1>&3`-style ordering generally: the stream you dup FIRST is
 #      resolved against the fd table as it stands at that moment.
-#   3. `$(…)` strips trailing newlines and `${#…}` counts CHARACTERS, not bytes, under a UTF-8
-#      locale. Hence the field name `stderr_chars` — calling it a byte length would be the next
-#      false comment in a file whose false comment started this thread.
+#   3. `$(…)` strips trailing newlines, so `stdout_chars` (`${#_o}`, measured after the inner
+#      `$( )`) excludes stdout's trailing newline, while the stderr sits MID-record (followed by
+#      `\036…`) so its trailing newline survives into `LOGIN_ERR` and IS counted. A docker
+#      writing exactly "\n" to each stream renders `stderr_chars=1 stdout_chars=0`. Immaterial to
+#      the H-B split (which turns on 0 vs >0 for real shapes) but the two fields are not
+#      symmetric and T-5B-11 pins `stderr_chars` as the TRUE length.
+#   4. `${#…}` counts CHARACTERS under a UTF-8 locale and BYTES under C/POSIX. This script sets
+#      no LANG/LC_ALL and runs as an SSH FORCED COMMAND, where sshd exports no locale and no
+#      AcceptEnv is configured — so on the deploy path this is almost certainly counting BYTES,
+#      and the field name `stderr_chars` is imprecise. Named and left alone deliberately:
+#      `export LC_ALL=…` would change collation and matching for the WHOLE script (every `sort`,
+#      every `grep` range) to fix a field name, which is a far larger behavioural change to every
+#      web host than the instrument it would be serving. The security argument is unaffected
+#      either way — the tokens are `[A-Za-z0-9]`, where bytes == chars — and so is the H-B split.
+#      Recorded rather than asserted away: this comment previously claimed the UTF-8 reading as
+#      fact, which was the very thing it warned against one clause later.
 #
 # The record is `<stderr><RS><rc><RS><stdout_chars>`, parsed from the END with `##`/`%`, so an
 # RS occurring inside the stderr cannot corrupt the rc or the length.
+#
+# UNBOUNDED READ — accepted, named rather than left implicit. `LOGIN_ERR` accumulates the whole
+# stderr in shell memory with no cap; `>/dev/null 2>&1` bounded it at zero, and `tail -c 400` was
+# deliberately designed out to get a TRUE length (AC5), which is what removes the bound. Measured:
+# a 5 MB stderr yields `stderr_chars=5000000` with no deadlock and the parent surviving — the pipe
+# IS read concurrently, so there is no fd deadlock here; the residue is purely RSS. Accepted
+# because both peers are trusted and reachable only from this host: zot is on the private net
+# (10.0.1.30, deny-all), GHCR is TLS-pinned. A registry streaming unbounded stderr is a
+# compromised-peer scenario in which an OOM-killed deploy is not the interesting loss.
 _docker_login_capture() {
   local _reg="${1:-}" _user="${2:-}" _tok="${3:-}"
   local _rec _rc=0 _r1 _o=""
@@ -877,8 +933,11 @@ _docker_login_capture() {
 # UNLESS it is pinned. It is, twice over: (i) BOTH precedence relations below are pinned by
 # `ci-deploy.test.sh` › T-5B-12, whose two cases are fed MEASURED strings — and pinned in the only
 # way that counts: the AC9 battery RELOCATED each arm after `transport` and watched the matching
-# case go RED (cred_store -> 161/164, server_error -> 163/164). A reorder cannot mis-route
-# silently. (ii) The hatch rides EVERY failed login, so a confidently-wrong arm is visible in
+# case go RED — cred_store's relocation reddened the cred-store EACCES case, server_error's
+# reddened the 504 case, and each took down ONLY its own case. A reorder cannot mis-route
+# silently. (No pass/total fractions here on purpose: a bare count rots on every test addition —
+# these were written as `161/164` and were stale within the hour, which is the same lesson as a
+# line number.) (ii) The hatch rides EVERY failed login, so a confidently-wrong arm is visible in
 # production telemetry rather than discoverable only from the suite.
 # (This citation named T-5B-11/T-5B-12 when written — test IDs PREDICTED before the tests existed,
 # and both were wrong: T-5B-11 is the stderr_chars-true-length case. Corrected against the file.
@@ -948,8 +1007,12 @@ zot_gate_degraded_event() {
     local payload
     # #6497: login_class + login_http make `login_failed` DIAGNOSABLE — it was one
     # undifferentiated bucket for credential/authz/transport/TLS, so 14 live WEB-PLATFORM-5B
-    # events could not say which. All three login_* fields are empty for the non-login reasons
-    # (probe_unreachable, creds_absent), which have no login outcome to report.
+    # events could not say which. `login_class`, `login_http` and `login_hatch` are empty for the
+    # non-login reasons (probe_unreachable, creds_absent), which have no login outcome to report.
+    # `login_registry` is the exception and always rides: it is the hardcoded constant "zot"
+    # (this emitter is zot-only), so it is never empty, including on those two reasons. (This
+    # said "All three login_* fields" — there are FOUR, and the fourth was added 13 lines below
+    # in the same edit that left the count at three.)
     # host_id reuses the #6396 pull_failure_event precedent: the beacon carried no host
     # attribution, so "which host" was unanswerable from Sentry alone. HOST_ID is empty-safe.
     # ONLY the enum + status code + the closed-vocabulary hatch cross this boundary — never the
@@ -989,9 +1052,11 @@ zot_gate_degraded_event() {
 # ############################################################################################
 # # THIS FUNCTION'S STDOUT IS A TYPED CONTROL CHANNEL. DO NOT WRITE TO IT.                   #
 # ############################################################################################
-# It communicates BY STDOUT STRING, and two callers parse that string: :825 (prelude_stage) and
-# :925 (`stage="$(refetch_ghcr_and_relogin)"` -> `[[ "$stage" == "recovered" ]]`). At :829 the
-# stage is interpolated RAW into a `logger` line. So NOTHING inside this function may write to
+# It communicates BY STDOUT STRING, and two callers parse that string:
+# `ghcr_prelude_and_login()` (`prelude_stage=`) and `_ghcr_pull_or_recover()`
+# (`stage="$(refetch_ghcr_and_relogin)"` -> `[[ "$stage" == "recovered" ]]`). In
+# `ghcr_prelude_and_login()` the stage is then interpolated RAW into its `STILL FAILED after
+# Doppler re-fetch (stage=…)` logger line. So NOTHING inside this function may write to
 # stdout except the three stage literals. In particular, #6497 added stderr capture here, and
 # the reflexive way to do that — `2>&1` at the FUNCTION level — has two failure modes from one
 # edit:
@@ -1030,7 +1095,8 @@ refetch_ghcr_and_relogin() {
   fi
   # journald ONLY, and emitted from HERE rather than returned to the caller. Two reasons, both
   # load-bearing:
-  #   1. This function is called ONLY as `stage="$(refetch_ghcr_and_relogin)"` (:825, :925) — a
+  #   1. This function is called ONLY as `stage="$(refetch_ghcr_and_relogin)"` — from
+  #      `ghcr_prelude_and_login()` and `_ghcr_pull_or_recover()`, at BOTH sites a
   #      command substitution, i.e. a SUBSHELL. A named global set here (the RECOVERY_STAGE
   #      pattern, which works for _ghcr_pull_or_recover precisely because that one is called
   #      DIRECTLY) is DISCARDED at the boundary. Verified. So the class cannot be returned; it

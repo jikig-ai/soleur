@@ -3506,8 +3506,12 @@ run_deploy_zot_login_stderr() {
   )
 }
 
-# T-5B-1..5: one case per login_class enum member. Each asserts the gate still emits
-# login_failed AND that the specific class rides along.
+# T-5B-1..5: each asserts the gate still emits login_failed AND that the specific class rides
+# along. (This said "one case per login_class enum member" — false: these 5 cases cover 4 of the
+# enum's 7 members. The other three ARE covered, elsewhere: authz_denied at T-5B-7, cred_store
+# and server_error at T-5B-12, plus more transport shapes at T-5B-5b..5f. Coverage was fine; the
+# claim was not — and an inaccurate comment about test coverage is the defect class this whole
+# change exists to drain.)
 # #6497: the tags are `login_class`/`login_http` (were `zot_login_class`/`zot_login_http`) — the
 # classifier is registry-neutral now, so its tags are too, and `login_registry` says which.
 assert_zot_login_class() {
@@ -3679,7 +3683,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
-# #6497 T-5B-10..18 — the hatch: rc + stderr_chars + stdout_chars + kw + tok + docker_ver.
+# #6497 T-5B-10..19 — the hatch: rc + stderr_chars + stdout_chars + kw + tok + docker_ver.
 #
 # Everything below asserts the ESCAPE HATCH, which is the half of this change that buys the datum.
 # The classifier tests above assert the arms; these assert what happens when NO arm fires — the
@@ -3833,8 +3837,8 @@ if [[ -z "$KW_BODY" || -z "$TOK_BODY" ]]; then
   FAIL=$((FAIL + 1)); echo "  FAIL: could not extract _login_kw/_login_tok bodies (fixture error, not a code defect)"
 elif [[ "$(printf '%s' "$KW_BODY"  | grep -cE 'printf[^#]*\$')" -eq 0 ]] \
   && [[ "$(printf '%s' "$TOK_BODY" | grep -cE 'printf[^#]*\$')" -eq 0 ]] \
-  && [[ "$(printf '%s' "$KW_BODY"  | grep -c 'printf')" -gt 0 ]] \
-  && [[ "$(printf '%s' "$TOK_BODY" | grep -c 'printf')" -gt 0 ]]; then
+  && [[ "$(printf '%s' "$KW_BODY"  | grep -cE '^[^#]*printf')" -gt 0 ]] \
+  && [[ "$(printf '%s' "$TOK_BODY" | grep -cE '^[^#]*printf')" -gt 0 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: every emitter printf takes a hardcoded literal — incapable of echoing, not filtered"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: an emitter printf takes a parameter expansion (Form A — it can echo its input)"
@@ -3859,11 +3863,19 @@ T16_N=0
 if ! declare -F _login_tok >/dev/null || ! declare -F _login_kw >/dev/null; then
   FAIL=$((FAIL + 1)); echo "  FAIL: could not source the real emitters (fixture error, not a code defect)"
 else
+  # The oracle is DERIVED from the SUT, never hand-copied. A hand-written literal list is a
+  # replicated literal with no parity test: add an arm to _login_tok (`refused*) printf
+  # 'refused'`) and neither the 200 base64 randoms nor the adversarial list would ever emit it,
+  # so this test stays GREEN while its own headline claim ("tok ∈ the closed set for EVERY
+  # input") stops describing the closed set. Extracting the arms from TOK_BODY makes the oracle
+  # track the SUT by construction. Mirrors the T-PARITY precedent in this file, which extracts
+  # the lease basename from both sources rather than restating it.
+  # Anchored on the printf CALL FORM inside a case arm, not a bare token, so a comment in the
+  # body cannot inject a member (`cq-assert-anchor-not-bare-token`).
+  T16_CLOSED="$(printf '%s\n' "$TOK_BODY" | grep -oE "printf '[a-zA-Z]+'" | grep -oE "'[a-zA-Z]+'" | tr -d "'" | sort -u)"
+  T16_CLOSED_N="$(printf '%s\n' "$T16_CLOSED" | grep -c .)"
   _t16_tok_closed() {
-    case "$1" in
-      error|Error|time|WARNING|Cannot|failed|denied|unauthorized|other) return 0 ;;
-      *) return 1 ;;
-    esac
+    printf '%s\n' "$T16_CLOSED" | grep -qxF "$1"
   }
   # The adversarial set: each of these BREAKS a Form-A implementation in a different way.
   for _f in '%s%s%s' '%n' '$(id)' '`id`' '${IFS}' '"; id; #' "'" '\' '../../etc/passwd' \
@@ -3878,10 +3890,15 @@ else
     _o="$(_login_tok "$_f")"
     _t16_tok_closed "$_o" || T16_BAD="${T16_BAD}[in=<${_f}> out=<${_o}>] "
   done
-  if [[ -z "$T16_BAD" && "$T16_N" -ge 200 ]]; then
-    PASS=$((PASS + 1)); echo "  PASS: tok ∈ the closed set across $T16_N inputs (200 random + adversarial)"
+  # Non-vacuity floor on the DERIVED oracle: an extraction that silently returned nothing (or
+  # one member) would make `_t16_tok_closed` reject everything -> loud RED, not a false green;
+  # but a MIS-extraction that returned a huge set would accept everything, so pin the count too.
+  # _login_tok has 9 arms today; the floor is deliberately below that so adding an arm does not
+  # false-FAIL, while a collapsed extraction does.
+  if [[ -z "$T16_BAD" && "$T16_N" -ge 200 && "$T16_CLOSED_N" -ge 5 && "$T16_CLOSED_N" -le 20 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: tok ∈ the SUT-derived closed set (${T16_CLOSED_N} members) across $T16_N inputs (200 random + adversarial)"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: tok escaped the closed set (n=$T16_N): $T16_BAD"
+    FAIL=$((FAIL + 1)); echo "  FAIL: tok escaped the closed set (n=$T16_N, oracle_members=$T16_CLOSED_N): $T16_BAD"
   fi
 fi
 rm -f "$T16_LIB"

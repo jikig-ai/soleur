@@ -471,11 +471,37 @@ variables has **a hole exactly the size of this diff's most likely failure mode.
 
 Measured containment table:
 
-| construct | `set -u` unbound | `set -e` nonzero rc |
-|---|---|---|
-| `f \|\| true` | **parent DIES** | rescued |
-| `x="$(f)" \|\| true` | **parent DIES** | rescued |
-| `( f ) \|\| true` | **parent survives** | **rescued** |
+| construct | `set -u` unbound | `set -e` nonzero rc | **fd-coupled HANG** |
+|---|---|---|---|
+| `f \|\| true` | **parent DIES** | rescued | n/a |
+| `x="$(f)" \|\| true` | **parent DIES** | rescued | n/a |
+| `( f ) \|\| true` | **parent survives** | **rescued** | **NOT contained** |
+
+> **The third column was added at /review, and it is the column this plan traded INTO.** The table
+> shipped with two columns — both ABORT classes — and the `## User-Brand Impact` section
+> enumerated the wedge as exactly those two ("a nonzero rc from a `grep -q` probe's normal
+> non-match — or an unbound variable"). But the capture replaces `>/dev/null 2>&1` (no pipe, so
+> this class could not exist) with `_rec="$( { _o="$(… 2>&3 3>&-)"; …; } 3>&1 )"`, and the outer
+> `$( )` blocks until **EOF on fd3** — i.e. until every holder of that fd closes it, NOT until
+> docker exits. A forked grandchild inheriting docker's stderr therefore blocks the capture
+> forever; `timeout N docker login` does **not** rescue it (the kill reaps docker, the grandchild
+> still holds the pipe). No subshell contains a hang. **We designed out the `mktemp` abort vector
+> (H-C) and enumerated only the side we traded away.**
+>
+> **MEASURED, not assumed — the scope-out this plan's own discipline requires.** Two probes on
+> docker 29.4.3 (the same basis as every arm in the diff):
+> - **the mechanism is real:** a synthetic child that forks an fd-holding grandchild blocks the
+>   capture indefinitely (confirmed, killed at 6 s).
+> - **it is unreachable via `docker login`:** the real `docker login` against an unroutable host
+>   AND against a refused connection both return cleanly — **no fd-holding child outlives docker**,
+>   record parses, `rc=1`. Login is CLI-side in 29.x (the same property that retired the
+>   `cli_daemon` arm: it never contacts the daemon socket).
+>
+> So the hang is a property of the SHAPE, not of this call site. It carries the same caveat as
+> AC1 — web-1's docker is unpinned and unobservable, so this is measured on 29.4.3 like
+> everything else here — and the same remedy: `rc` rides every failed login, so a version whose
+> `docker login` forks an fd-holder would surface as a deploy that times out with no
+> `class=` line at all, which AC13 state (c) catches by absence.
 
 **Mandate the subshell:** the whole hatch is emitted as `hatch="$( ( _login_hatch … ) || true )"`.
 It is the **only** construct that contains *both* abort classes, and it is what structurally
@@ -779,11 +805,23 @@ logs:
 discoverability_test:
   command: >
     doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh
-    --since 60m --grep ZOT_GATE --grep PRELUDE
+    --since 90m --grep ZOT_GATE --grep PRELUDE
   expected_output: >
-    a ZOT_GATE line AND a PRELUDE line, each carrying rc= and class=; when
-    class=unclassified, a populated stderr_chars= / stdout_chars= / kw= / tok=. NO ssh.
+    every login outcome matches exactly ONE of AC13's three states: (a) success — a
+    `ZOT_GATE: active …` / `PRELUDE: … ok` line with NO class= and NO rc=; (b) a named
+    non-login state (zot `reason=`; ghcr `PRELUDE: … skipping …`); (c) failure carrying
+    rc= + class= + stderr_chars= + stdout_chars=, and on class=unclassified a populated
+    tok= (kw= present, possibly empty — empty IS the H-D datum). NO ssh.
 ```
+
+> **`expected_output` was RED on correct code, and window-drifted — both fixed at /review.** It
+> required "a ZOT_GATE line AND a PRELUDE line, **each carrying rc= and class=**", but the two
+> SUCCESS lines carry neither: that is verbatim the first-draft condition AC13's own three-way
+> restatement exists to fix — the Observability block simply was not updated alongside it, so a
+> green deploy failed the block's own discoverability test. It also said `--since 60m` against
+> AC13's `90m`; at 6-12 deploys/day the mean inter-deploy gap is 2-4h, so the narrower window can
+> legitimately return zero rows and be misread as failure. Unified on `90m` — one probe, one
+> contract.
 
 > **Both of the first draft's commands were malformed — verified against the script's own
 > parser.** `--since` matches `^([0-9]+)([hmd])$`; a bare `60` **fails the regex** and falls
@@ -917,11 +955,28 @@ No step asks the operator to fetch, paste, or eyeball anything
   | # | state | required shape |
   |---|---|---|
   | (a) | **success** | `ZOT_GATE: active …` / `PRELUDE: … ok` — no class field; the gate had no failure to name |
-  | (b) | **no login attempted** | `reason=probe_unreachable` or `reason=creds_absent` — a bounded, named non-login state |
-  | (c) | **login failed** | carries `rc` + `class` + `stderr_chars` + `stdout_chars`, and when `class=unclassified`, populated `kw`/`tok` |
+  | (b) | **no login attempted** | a bounded, named non-login state. **zot:** `reason=probe_unreachable` / `reason=creds_absent`. **ghcr:** a `PRELUDE: … skipping …` line naming the missing input (`doppler/DOPPLER_TOKEN unavailable …`, `GHCR_READ_{USER,TOKEN} not both present …`) — these carry NO `reason=` field, because `reason=` is emitted only by `zot_gate_degraded_event`, which is zot-only (GHCR is journald-only by decision) |
+  | (c) | **login failed** | carries `rc` + `class` + `stderr_chars` + `stdout_chars`, and when `class=unclassified`, a populated `tok`. `kw` must be PRESENT but MAY BE EMPTY — see below |
 
   Only **(c)** is the invariant under test. **(a)** and **(b)** are "the gate had no login outcome
   to name," which is itself a bounded, named state.
+
+  > **AC13 was RED on correct code TWICE MORE — caught at /review, by the same lens that wrote
+  > the callout below.** Both are the identical defect one level down: the three-state table was
+  > derived from the ZOT emit sites and never re-checked against (i) the GHCR parity this same PR
+  > delivers, or (ii) the empty-`kw` novel shape the hatch exists for.
+  >
+  > 1. **State (b) was zot-only.** `reason=` is emitted *exclusively* by `zot_gate_degraded_event`,
+  >    called only from `zot_gate_and_login()`. GHCR's two no-login-attempted lines carry no
+  >    `reason=` field and have no degraded-event companion. A deploy with absent GHCR creds emits
+  >    a `PRELUDE:` line the AC13 grep catches that matched **none of the three states** → RED on
+  >    correct code. Restated registry-neutrally above.
+  > 2. **`kw` is EMPTY exactly on the shape the hatch exists to capture.** Measured against the
+  >    real `_login_kw`: a novel/unmatched stderr yields `kw=` (empty) — `tok` always populates via
+  >    its `*) other` default, `kw` does not. So the H-D/novel case renders
+  >    `class=unclassified kw= tok=other`, and an AC demanding "populated `kw`" reads RED on the
+  >    PR's entire reason for being. The instrument is right: **an empty `kw` IS the datum**
+  >    ("matched no known keyword" — that is the H-D signal). The AC's wording was wrong.
 
   > **The first draft of this AC was RED on correct code** — the exact trap its own callout box
   > warns about, one level up. Its condition was *"a class other than `unclassified`, or

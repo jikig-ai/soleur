@@ -57,8 +57,13 @@ locals {
   # zot's container memory cap, DERIVED from the host it will actually run on (ADR-062:
   # cap = host RAM − ~1024m for cron+doppler+sshd+OS). It was previously a hardcoded
   # `7168m` literal in cloud-init-registry.yml, with NOTHING tying it to
-  # var.registry_server_type — the same missing-data-edge shape as the htpasswd bug this
-  # host's replace_triggered_by exists to fix (#6497), and just as silent. Switching the
+  # var.registry_server_type — the same missing-data-edge shape as the htpasswd staleness this
+  # host's replace_triggered_by exists to prevent, and just as silent. (This said "the htpasswd
+  # bug ... exists to fix (#6497)". Deleted: that causation was falsified by the 2026-07-16
+  # 08:15Z re-bake — htpasswd converged on both users and `login_failed` continued. The
+  # missing-data-edge ANALOGY is what this comment needs and it survives intact; naming a
+  # still-open defect as the thing a line "fixes" is precisely what made #6497 undiagnosable for
+  # a week.) Switching the
   # var to a 4 GB type would have left a 7168m cap on a 4096m host: the cgroup limit can
   # never bind, so zot is free to take the host down instead of being contained — which is
   # precisely the uncapped-on-4GB condition of the #6288 restart-loop. Deriving it means
@@ -123,6 +128,18 @@ data "hcloud_server_type" "registry" {
   name = var.registry_server_type
 }
 
+# #6497 — BOTH attributes below are load-bearing for a SECURITY property in another file.
+# `ci-deploy.sh` › `_login_hatch()` emits `stderr_chars` (the true length of `docker login`'s
+# stderr) off-box to Better Stack + Sentry. That is safe ONLY because this token is
+# (a) fixed-length, so a registry echoing it moves the length by the same amount for every
+# possible value (zero bits about content), and (b) drawn from `[A-Za-z0-9]` (`special = false`),
+# so no character expands under a registry's JSON/URL escaping into a CONTENT-DEPENDENT length.
+# Changing `length` to a variable-length credential (a JWT / OIDC-minted session token) OR
+# setting `special = true` turns `stderr_chars` into a length oracle on a live credential, and
+# the field MUST be bucketed first. Read `_login_hatch()`'s field table before touching either.
+# The reverse-citation exists because the trigger was written in the CONSUMER and this is the
+# PRODUCER — and `specs/feat-registry-oidc-migration/spec.md` FR2/FR3 already schedule exactly
+# that change.
 resource "random_password" "zot_pull" {
   length  = 40
   special = false
@@ -341,7 +358,7 @@ resource "hcloud_server" "registry" {
   # replaces the host in the same apply.
   # This edge is sound on its own terms, but it is NOT the fix for #6497 — that claim was
   # falsified by the 2026-07-16 08:15Z re-bake (htpasswd now matches Doppler on both users;
-  # `login_failed` continues). See :100-121.
+  # `login_failed` continues). See the falsification note on `random_password.zot_pull`.
   # SAFE on a routine apply: random_password has no `keepers`, so these are stable and fire
   # only under an explicit `-replace` (verify with `grep -nE '^\s*keepers' zot-registry.tf` →
   # no hits; a bare `grep -n keepers` also matches this very comment).
