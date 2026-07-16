@@ -17,6 +17,7 @@ related_learnings:
   - 2026-05-11-drift-guard-scoping-extract-call-site-not-widen-walk.md
   - 2026-07-15-guard-gate-and-probe-must-pin-the-thing-they-name.md
   - 2026-07-08-inngest-cutover-authoring-review-and-observability-allowlist.md
+  - 2026-07-16-the-fix-for-an-inert-monitor-shipped-a-probe-that-could-never-fire.md
 ---
 
 # A guard can recreate its own bug; a forced `-replace` from a stale pin ships nothing; a locally-measured exit code hides a CI-red branch
@@ -237,6 +238,8 @@ line is about to be written:
   written down, going unread.
 - The assertion would be **unfalsifiable on the author's box** — it can only ever fail
   somewhere the author is not, which is precisely where nobody is watching.
+
+**Adjacent, and landed on main the same day:** [[2026-07-16-the-fix-for-an-inert-monitor-shipped-a-probe-that-could-never-fire]] — a probe FIXTURE that models a convenient exit code instead of the service's real response contract (zot auth-gates `/v2/` -> 401, and `curl -f` exits 22 on any >=400). Same family ("an exit code is not the contract"), different mechanism: that one is fixture-vs-reality *in one environment*; this one is a **correctly measured** value that is only true *in the environment it was measured in*. The shared reflex: never let an exit code stand in for the property.
 
 And the corollary for handoffs: **"tests green" is a claim about a machine.** Before trusting
 a green in a resume note, check the branch's last CI run — `gh run list --branch <b>`. A

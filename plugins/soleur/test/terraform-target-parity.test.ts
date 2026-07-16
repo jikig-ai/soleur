@@ -627,6 +627,15 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // coverage set, so this exclusions entry — not the -target line — is the load-bearing coverage).
   "doppler_secret.inngest_betterstack_logs_token",
   "doppler_service_token.inngest",
+  // #6545 — Grok Build dogfood host (headless Grok 4.5 trial). Gated by
+  // `enable_grok_dogfood` (default false). Per-PR CI cannot birth this host
+  // (#6416 host_creates tripwire). Provision is operator-local after free-slot
+  // check: `TF_VAR_enable_grok_dogfood=true` + targeted apply. Same class as
+  // registry/inngest/git-data: net-new host resources, never per-PR -target.
+  // Public IP only (no private-net join — review P1).
+  "hcloud_server.grok_dogfood",
+  "hcloud_firewall.grok_dogfood",
+  "hcloud_firewall_attachment.grok_dogfood",
 ]);
 // Operator-applied doppler_service_token exceptions to the "every token is CI-targeted"
 // assertion (#5566). A token belongs here ONLY when it is minted into an operator-created
