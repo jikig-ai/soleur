@@ -86,3 +86,45 @@ refuted. The edge keeps its full credit; only the causal attribution goes.
 **Net effect on your instruction:** unchanged in substance — do not re-implement the edge, do not
 imply it is broken. Changed in one word: the PR body says the htpasswd hypothesis was
 **falsified by the experiment it motivated**, not that it was fixed.
+
+---
+
+## UC-3 — "Add an `unclassified`-ONLY escape hatch at BOTH sites"
+
+**Class:** User-Challenge (changes a mechanism you specified in capitals).
+
+**What you asked for:** an `unclassified`-ONLY escape hatch at both sites, *"so this can never
+dead-end again."*
+
+**What I did:** fire the hatch on **every failed login**, not only `unclassified`.
+
+**Why — your stated goal and your stated mechanism are in direct conflict, and I kept the goal.**
+Your §C also asked for a `cred_store` classifier arm. Measured, both surviving cred-store
+hypotheses share a prefix:
+
+- H-A `error saving credentials: error storing credentials - err: exec: "docker-credential-X": executable file not found in $PATH…`
+- H-C `error saving credentials: write <path>: no space left on device`
+
+A `cred_store` arm matches `error saving credentials` → **both** classify as `cred_store` → the
+hatch (fired only on `unclassified`) **never runs** → H-A and H-C are **byte-identical in the
+emit**. `cred_store` becomes a two-mode bucket: **`unclassified` reproduced under a new name, in
+the PR whose entire purpose is to drain it.** The two instructions cancel each other.
+
+It is worse than that. Three more shapes land in a *confidently wrong* arm, where an
+`unclassified`-only hatch is suppressed by construction and the misclassification is permanently
+invisible from telemetry (all verified by execution against the real classifier):
+
+| shape | lands in | correct |
+|---|---|---|
+| cred-store EACCES | `transport` | `cred_store` |
+| docker daemon-socket EACCES | `transport` | `cli_daemon` — and it contains no `credentials` literal, so `cred_store` **cannot** rescue it |
+| `504 Gateway Timeout` | `transport` | `server_error` — `transport`'s bare `timeout` matches first |
+
+An `unclassified`-only gate means the arms are auditable **only from the test suite**, never from
+production. Firing on every failed login costs nothing (the fields are closed-vocabulary; the
+no-echo property is unchanged) and makes `class=transport kw=credentials` self-evidently wrong the
+moment it appears in Sentry.
+
+**Net:** your goal — *"so this can never dead-end again"* — is delivered more completely than the
+`unclassified`-only mechanism could deliver it. If you want the narrow gate anyway, it is a
+one-line conditional; but it would re-open the dead-end you asked me to close.

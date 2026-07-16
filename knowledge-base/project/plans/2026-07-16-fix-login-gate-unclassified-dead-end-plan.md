@@ -8,6 +8,48 @@ issue: 6497
 date: 2026-07-16
 ---
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-16 · **Panel:** security-sentinel, spec-flow-analyzer,
+observability-coverage-reviewer, user-impact-reviewer, verify-the-negative sweep, test-harness
+research. **Every finding below was verified by execution before being applied.**
+
+### The plan as first drafted would have shipped a green PR that failed its own contract
+
+Four agents converged **independently** on the same two defects:
+
+1. **The `unclassified`-only hatch + the `cred_store` arm cancel each other.** Both surviving
+   cred-store hypotheses share the measured prefix `error saving credentials`, so both would
+   classify as `cred_store`, the hatch would never fire, and they would be **byte-identical in the
+   emit**. `cred_store` becomes `unclassified` under a new name — *in the PR that exists to drain
+   it*. → hatch now fires on **every failed login** (UC-3).
+2. **`stderr_chars` alone cannot decide H-B** — H-B is a disjunction (stdout **or** nowhere), so
+   `stderr_chars=0` *restates* it. This is the plan's own Research-Reconciliation §5 defect
+   recurring one level down. → capture **stdout** + emit **`rc`** (which the plan measured, then
+   dropped).
+
+### Also caught, all by execution
+
+| finding | evidence |
+|---|---|
+| **The dominant abort class is a nonzero rc, not an unset var.** `grep -q`'s normal non-match kills the script under `set -e`; `${x:-}` cannot touch it. AC2 had a hole the size of the diff's likeliest failure. | measured 3-construct containment table → **subshell** is the only mechanism |
+| **A bare `mktemp` aborts when `/tmp` is full — which is hypothesis H-C.** The instrument would wedge prod in the exact scenario it diagnoses. | → variable capture; also designs out the `tail -c 400` edge and AC5 |
+| **`tok` as specified admitted a Form-A filter** — same output set, but degrades to *disclosure* instead of a wrong label. 3 of 8 allow-list entries were provably dead, creating the pressure to loosen that leaks. | → Form B mandated; AC3 made **structural** (`grep printf.*$` → zero) |
+| **`kw` contained only the three falsified tokens** — empty for every surviving hypothesis. | → enumerated from the measured table |
+| **`refetch_ghcr_and_relogin`'s stdout is a typed control channel** logged raw at `:829`. A reflexive `2>&1` pipes unclassified stderr into journald — **below AC3's Sentry-scoped sightline** — and silently discards the #6400 recovery. | `:747/:749` → `:825`/`:925` |
+| **Both prescribed Better Stack commands were malformed.** `--since 60` fails the `^([0-9]+)([hmd])$` regex → `WHERE dt >= '60'`. **The plan's only no-SSH probe did not run.** And `--grep ZOT_GATE` cannot see the GHCR `PRELUDE:` half. | re-ran the script's own parser |
+| **AC13 was RED on correct code** (success path emits no `class=`) *and* vacuous on the `cred_store` branch. R5's "green under every hypothesis" was false. | → three-way restatement |
+| **Two more confidently-wrong arms**: daemon-socket EACCES → `transport` (no `credentials` literal, so `cred_store` can't rescue it); `504` → `transport` (bare `timeout` outranks 5xx). | measured against the real classifier |
+| **The rename falsifies `:636-647`** — its zot-measured *"NEVER 403 → unreachable → tripwire"* claim is false for GHCR, which **does** 403. | Phase 5 |
+| **The existing leak-canaries drive a 401** → they never execute the hatch and would stay green while it leaks. | `:3583`/`:3600` |
+| Field-name drift `stderr_len`/`stderr_chars` across 30 sites | normalized |
+
+**Net:** 14 findings applied. The two most consequential — the cancelled hatch and the missing
+stdout capture — would each, alone, have cost the second telemetry PR this plan exists to prevent.
+That is learning §9 holding exactly: *every catch was an execution, not a reading.*
+
+---
+
 ## Overview
 
 `ci-deploy.sh`'s docker-login gate cannot name its own failure. Every deploy since 08:27Z
@@ -55,7 +97,7 @@ only happens **after** auth succeeds. Measured strings were then fed through the
 | 2 | §C: add arm matching `credential helper` | **FALSIFIED.** The phrase never appears. Helper failures render `error storing credentials - err: exec: "docker-credential-<name>": executable file not found in $PATH`. | Token dropped. |
 | 3 | §C: add arm matching `Cannot connect to the Docker daemon` | **NOT REPRODUCED** on the login path. A dead `DOCKER_HOST` socket rendered `time="…" level=info msg="Error logging in to endpoint, trying next endpoint"`. | Token dropped — unmeasured. Escape hatch covers it instead. |
 | 4 | §3: leading hypothesis = credential-store WRITE fails (`/home/deploy/.docker/config.json`, UID 1000) | **PARTIALLY FALSIFIED BY LIVE DATA.** The *permission* variant renders `error saving credentials: open <path>: permission denied` → contains `permission denied` → the **existing `transport` arm already matches it**. We observe `unclassified`, so the EACCES variant is **ruled out**. Only the *helper* variant survives — or a mode nobody has listed. | Hypothesis narrowed (see Hypotheses). The plan does **not** build for a specific cause. |
-| 5 | §3: `class=unclassified http=none` implies stderr text that matched no arm | **INCOMPLETE.** An **empty** stderr *also* renders exactly `class=unclassified http=none` (`_zot_login_failure_class "" → unclassified`). The gate cannot distinguish "text matched nothing" from "no text at all" — different bugs, different fixes. | **This is the highest-value field in the escape hatch.** `stderr_len` is decisive, not decorative. |
+| 5 | §3: `class=unclassified http=none` implies stderr text that matched no arm | **INCOMPLETE.** An **empty** stderr *also* renders exactly `class=unclassified http=none` (`_zot_login_failure_class "" → unclassified`). The gate cannot distinguish "text matched nothing" from "no text at all" — different bugs, different fixes. | **This is the highest-value field in the escape hatch.** `stderr_chars` is decisive, not decorative. |
 | 6 | §"ISSUE HYGIENE": open a successor issue for "zot serves zero pulls, not achieved end-to-end" | **DUPLICATE.** #6497's own body already states *"zot has served **zero pulls in 90 days**"* and owns the 3-condition decomposition. #6122 (umbrella) is OPEN and owns end-to-end. | **User-Challenge** — recorded in `decision-challenges.md`. Operator intent satisfied via a correcting comment on #6416 instead. |
 | 7 | §"CONSTRAINTS": "ci-deploy.sh is NOT an `OPERATOR_APPLIED_EXCLUSION` — ships on merge" | **TRUE, and now verified by the right question** (learning §6). Not because it is a `.sh`: because `apply-deploy-pipeline-fix.yml` is `on: push: branches:[main]` with `paths:` including `apps/web-platform/infra/ci-deploy.sh` (`:66`), and its `apply` job (`:183`) is gated only by a commit-message kill-switch — **not** `workflow_dispatch`. | Recorded with the enclosing-job + trigger evidence, per learning §6. |
 | 8 | §1: "#6497's ORIGINAL cause is FIXED AND CONVERGED" | **IMPRECISE — it was FALSIFIED, not fixed.** See below. | Drives the re-title and the PR body. |
@@ -149,22 +191,39 @@ H-A credsStore helper broken/missing · H-B empty stderr (output went to stdout,
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** a wedged deploy pipeline. `ci-deploy.sh` runs
-under `set -euo pipefail`; an unbound variable in the new emitter aborts the whole script, and
-prod freezes on the running tag with no new release able to land (the #6400 shape: prod pinned
-for ~10h). The 2026-07-15 review's **#1 P1 was exactly this** — a probe whose bare expansion
-took the entire telemetry line dark, and the `unknown` guards written for that case sat 8 lines
-below the line that already killed the script.
+**If this leaks, the user's credentials are exposed via:** the Sentry beacon and the journald →
+Better Stack path. `docker login` stderr can echo a **username**, and some registries echo the
+attempted credential. `ZOT_PULL_USER` / `GHCR_READ_USER` are **the founder's own credentials**,
+and the founder is Soleur's single non-technical target user — a credential of theirs landing in
+a third-party sink **is** the single-user exposure, no transitivity needed. The transitive leg
+matters too: **a leaked GHCR read credential is a supply-chain path to every end user of the web
+platform** (pull the private image, read what is baked into it). An escape hatch implemented as a
+passthrough — or a reflexive `2>&1` inside `refetch_ghcr_and_relogin`, which pipes raw stderr
+into journald **below AC3's Sentry-scoped sightline** (Phase 3 P0) — ships exactly that.
 
-**If this leaks, the user's credentials are exposed via:** the Sentry beacon. `docker login`
-stderr can echo a **username**, and some registries echo the attempted credential. An escape
-hatch implemented as a passthrough would ship that to a third-party sink on every failed deploy,
-retained and searchable.
+**If this lands broken, the user experiences:** a wedged deploy pipeline. `ci-deploy.sh` runs
+under `set -euo pipefail`; **a nonzero rc from a `grep -q` probe's normal non-match — or an
+unbound variable — aborts the whole script**, and prod freezes on the running tag with no new
+release able to land (the #6400 shape: prod pinned ~10h). The 2026-07-15 review's **#1 P1 was
+this class** — a probe whose bare expansion took the entire telemetry line dark, with the guards
+written for that case sitting 8 lines below the line that already killed the script.
 
 **Brand-survival threshold:** `single-user incident`.
 
+> **The threshold rests on the leak, not the wedge — state it in that order.** Re-derived, not
+> inherited: the invoking criterion is *one user's data, workflow, or money exposed, lost, or
+> charged incorrectly*. A wedged pipeline exposes no data, loses no data, charges nothing — the
+> container keeps serving and no live session breaks. **On the letter, the wedge alone argues the
+> threshold DOWN toward `none`**, and a reader could reasonably downgrade this plan on it. The
+> **credential vector sustains the threshold on its own.** What the wedge adds is second-order and
+> worth naming precisely: prod pinned for ~10h means **a user-data incident occurring inside that
+> window cannot be mitigated by shipping.** That is a real harm; it is not the primary one.
+
 Consequences, both binding: `requires_cpo_signoff: true`, and `user-impact-reviewer` runs at
-review time. Per learning §9, the 5-agent panel is the control that actually works here.
+review time. Per learning §9, the multi-agent panel is the control that actually works here — and
+it earned that on this plan: four agents independently converged on the `unclassified`-only gate
+and the missing stdout capture, both of which would have shipped a green PR that failed its own
+contract.
 
 ---
 
@@ -178,89 +237,370 @@ review time. Per learning §9, the 5-agent panel is the control that actually wo
    against it. **Any row whose string differs from this plan's table invalidates that row's
    arm** — fix the plan, do not fix the test. (learning §2.)
 2. Confirm the harness extension points exist: `run_deploy_zot_login_stderr`
-   (`ci-deploy.test.sh:3434`), `assert_zot_login_class` (`:3458`), the
-   `MOCK_ZOT_LOGIN_FAIL_STDERR` mock arm (`:3445`), and the Sentry capture file
-   (`MOCK_SENTRY_CAPTURE_FILE`).
+   (`ci-deploy.test.sh:3437`), `assert_zot_login_class` (`:3455`), the
+   `MOCK_ZOT_LOGIN_FAIL_STDERR` mock arm (`:289`), and the Sentry capture file
+   (`MOCK_SENTRY_CAPTURE_FILE`, `create_curl_mock` `:433-460`).
 3. Confirm the suite is registered: `infra-validation.yml:344` → `bash apps/web-platform/infra/ci-deploy.test.sh`.
+4. **Record the green baseline: the suite is currently 153/153** (not 22/22 — that count is from
+   an earlier file). Any new test must move that denominator.
 
-### Phase 1 — `stderr_len` first: split the empty-vs-unmatched bucket
+### Harness constraints (verified — these shape the test design, so read them first)
 
-The single decisive field. Emit, for a **failed** login only, the byte length of the captured
-stderr. `len=0` ⇒ the error text never reached stderr and the remediation is *capture stdout*;
-`len>0` ⇒ text arrived and matched no arm, and the remediation is an arm. Today both render
-identically and no amount of arm-adding distinguishes them.
+- **There is no source guard.** `ci-deploy.sh` has no `BASH_SOURCE[0]` check and no
+  source-without-execute env, so **individual functions cannot be called directly**. Every test
+  drives the whole script via `bash "$DEPLOY_SCRIPT"` with `SSH_ORIGINAL_COMMAND` set. The two
+  sanctioned styles are **behavioural** (arm a mock, assert on the captured sink) and
+  **inspection** (`awk '/^fn\(\) \{/,/^\}/' "$DEPLOY_SCRIPT"` → grep the extracted body, which is
+  body-scoped so a sibling function cannot satisfy the assertion). Prefer behavioural; this
+  plan's assertions are all reachable that way.
+- **Mocks are PATH shims** in a per-run `MOCK_DIR`, behaviour-switched by `MOCK_*` env vars.
+  `TEST_PATH_BASE` deliberately excludes `~/.local/bin` so a missing mock fails loudly instead
+  of reaching the real `doppler`.
+- **The GHCR mock arm is asymmetric and must be fixed symmetrically.** Today
+  (`ci-deploy.test.sh:289-296`) the zot arm takes **caller-supplied** stderr and is
+  **registry-scoped**:
+  ```bash
+  if [[ -n "${MOCK_ZOT_LOGIN_FAIL_STDERR:-}" && "$_lreg" == "10.0.1.30:5000" ]]; then …
+  if [[ -n "${MOCK_GHCR_LOGIN_FAIL_TOKEN:-}" && "$_ltok" == "${MOCK_GHCR_LOGIN_FAIL_TOKEN}" ]]; then
+    echo "denied: authentication required" >&2   # HARDCODED
+  ```
+  The zot arm's registry-scoping is load-bearing and commented as such — it must never match
+  `ghcr.io` *"so arming it cannot perturb the GHCR legs the #6400/#6090 tests assert on."* The
+  new `MOCK_GHCR_LOGIN_FAIL_STDERR` MUST be scoped symmetrically (`_lreg == "ghcr.io"`) or it
+  will perturb those legs.
+- **`refetch_ghcr_and_relogin` has inspection-only coverage today** (`:3402`, an `awk`-extracted
+  `HELPER_BODY` grep for token hygiene). Phase 3 gives it its **first behavioural test** — budget
+  for that, and do not assume a fixture exists.
+- **The leak-canary precedent already exists — extend it, do not invent it.** T-5B-8 (`:3583`)
+  and T-5B-8b (`:3600`) inject `SENTINEL_LEAK_CANARY_zot-pull` into the login stderr and assert
+  it reaches **neither** the Sentry capture **nor** the journald capture
+  (`MOCK_LOGGER_CAPTURE_FILE`), the latter asserted against the **whole** sink because that tag
+  ships unscrubbed off-box via `vector.toml`.
+
+  > **Vacuous-green trap — the single most important test finding in this plan.** Both existing
+  > canaries drive a **401** stderr, which classifies as `authn_rejected`. The escape hatch fires
+  > **only** on `unclassified`. **So the existing canaries never execute the escape hatch, and
+  > would stay green while it leaks.** AC3's canary MUST route through the `unclassified` path.
+  > This is exactly the shape learning §5 describes: an assertion whose name ("raw stderr never
+  > reaches the sink") is broader than what it exercises.
+- **`host_id` is deliberately NOT asserted at runtime** (`:3606-3613`) — `resolve_host_id` reads
+  IMDS/machine-id, which mocks cannot supply, so a non-empty assert goes red on correct code;
+  the guard is a body-scoped `awk` inspection instead. **Precedent to follow** if any new field
+  turns out to be unsatisfiable under mocks (learning §5 companion nuance: a vacuous assert and
+  an unsatisfiable assert are both wrong).
+- **The suite is currently ADVISORY, not a required check** (`infra-validation.yml:339`, tracked
+  by #6480). A green suite does **not** block merge. This raises the value of the mutation
+  battery (AC9) — the suite is the only thing that will catch a regression here, and nothing
+  forces it to run.
+
+### Phase 1 — `stderr_chars` AND `stdout_chars`: split the empty-vs-unmatched bucket for real
+
+Emit, for a **failed** login, the byte length of **both** captured streams.
+
+**`stderr_chars` alone is not sufficient, and believing it was is this plan's own §5 defect
+recurring one level down.** H-B is a **disjunction** — *"the error text went to stdout (which is
+`>/dev/null`), **or** nowhere at all."* `stderr_chars=0` is true under **both** arms, so it
+**restates** H-B rather than deciding it. Shipping only `stderr_chars` and inferring *"len=0 ⇒
+capture stdout"* is an inference, not a measurement: if stdout was also empty, that remediation
+ships and yields nothing — costing exactly the second telemetry PR this plan exists to prevent.
+
+So capture stdout too — **and `rc`, which this plan measured and then dropped.** The
+discrimination table has an `rc` column; every row is `rc=1` except corrupt-config (`rc=0`). `rc`
+is what rescues the otherwise-terminal `stderr_chars=0 stdout_chars=0` reading, and it is an integer
+from `$?` — structurally incapable of echoing input, so it is free under R2:
+
+| rc | meaning | actionable from this field alone |
+|---|---|---|
+| 1 | docker ran, login rejected | no — needs `kw`/`tok` |
+| 125/126/127 | docker missing / not executable / not on PATH | **yes, instantly** |
+| 137 | OOM-killed mid-login | **yes** |
+| 124 | `timeout` wrapper fired | **yes** |
+
+Then: 
+
+| reading | verdict |
+|---|---|
+| `stderr_chars>0` | text arrived and matched no arm → the remediation is an arm |
+| `stderr_chars=0 stdout_chars>0` | **H-B-stdout** — the text went to stdout → the remediation is stream capture |
+| `stderr_chars=0 stdout_chars=0` | **H-B-nowhere / H-D** — no output at all → a different investigation |
+
+That splits H-B in **one event**.
+
+**Security consequence, binding:** `stdout` must ride the **same** fixed-vocabulary emitter —
+never a passthrough. `docker login` prints `Login Succeeded` there, and a registry may echo more.
+**AC3's canary must cover stdout as well as stderr.**
 
 Note the measured asymmetry: on **success**, stderr is non-empty (the
-`WARNING! Your credentials are stored unencrypted…` notice, 192 bytes). Irrelevant here — we
-classify only on failure — but it forbids any future "stderr empty ⇒ success" shortcut.
+`WARNING! Your credentials are stored unencrypted…` notice, 192 bytes) and stdout carries
+`Login Succeeded`. Irrelevant here — we classify only on failure — but it forbids any future
+"stderr empty ⇒ success" shortcut.
 
-### Phase 2 — the escape hatch (fixed-vocabulary, `unclassified`-only, BOTH sites)
+### Phase 2 — the escape hatch (fixed-vocabulary, EVERY failed login, BOTH sites)
 
-**HARD CONSTRAINT (preserve, do not weaken).** security-sentinel's ruling on the 2026-07-15 PR
-was that the classifier is *structurally incapable* of echoing its input: every arm is a bare
-`printf '<literal>'`. The escape hatch **must be a fixed-vocabulary emitter, not a passthrough.**
-It emits, and can only emit:
+> **The brief specified an `unclassified`-ONLY hatch. That mechanism defeats the brief's own
+> stated goal ("so this can never dead-end again") the moment Phase 4 lands, and the plan
+> therefore fires the hatch on EVERY failed login.** Recorded as UC-3 in `decision-challenges.md`.
+>
+> **Why — the finding that nearly shipped the bug again.** Both surviving cred-store hypotheses
+> share a measured prefix:
+> - H-A `error saving credentials: error storing credentials - err: exec: "docker-credential-X": executable file not found in $PATH…`
+> - H-C `error saving credentials: write <path>: no space left on device`
+>
+> Phase 4's `cred_store` arm matches `error saving credentials` — so **both** classify as
+> `cred_store`, the hatch (fired only on `unclassified`) **never runs**, and H-A and H-C become
+> **byte-identical in the emit**. `cred_store` would become a ≥2-mode bucket: **`unclassified`
+> reproduced under a new name, in the PR whose entire purpose is to drain it.** Verified by
+> running both measured strings against the proposed arm.
+>
+> Firing the hatch on every failed login costs nothing and is what makes `cred_store`
+> splittable. This is the same lesson as learning §3 — an arm's value is (true positives − false
+> positives), and an arm that *collapses* two live hypotheses has a negative one unless the hatch
+> rides alongside it.
 
-- `stderr_len` — an integer.
-- `kw` — which of a **fixed** keyword set matched, rendered as literals joined by `,`. Each
-  probe is a `grep -q` whose output is a hardcoded token; input never reaches the value.
-- `tok` — the first token, drawn from a **closed allow-list** (`error`, `Error`, `time`,
-  `Cannot`, `WARNING`, `failed`, `denied`, `unauthorized`), rendering `other` for anything else.
-  **Never the raw first word** — a raw first token from an unknown message is a passthrough with
-  a length limit, which is the property we are forbidden to lose.
+**HARD CONSTRAINT — and the correct formulation of it.** security-sentinel's 2026-07-15 ruling
+established a **structural** property: every arm is a bare `printf '<literal>'`, so **no input
+byte can reach a sink**. The property that makes the design sound is **not** "the allow-list is
+closed" — it is:
+
+> **No parameter expansion appears in any `printf` argument in the emitter.**
+
+That formulation is grep-checkable, survives regex defects, survives future loosening, and is the
+only form of the claim the ruling actually established. **Mandate Form B verbatim:**
+
+```bash
+# Form A — FILTER. FORBIDDEN. Input reaches the sink, gated only by a regex.
+if printf '%s' "$t" | grep -qE '^(error|time|WARNING)$'; then printf '%s' "$t"   # <-- INPUT IS THE PAYLOAD
+else printf 'other'; fi
+
+# Form B — LITERAL ARMS. REQUIRED. Structurally incapable of echoing.
+case "$t" in
+  error*)   printf 'error'   ;;
+  time=*)   printf 'time'    ;;
+  WARNING*) printf 'WARNING' ;;
+  Cannot*)  printf 'Cannot'  ;;
+  *)        printf 'other'   ;;
+esac
+```
+
+Both forms have the **same output set**. They have opposite failure modes: **Form A degrades to
+disclosure, Form B degrades to a wrong label.** Under Form A the `^…$` anchoring becomes
+load-bearing *for confidentiality* — and dropping an anchor is a one-character edit that **this
+exact file has already shipped once** (the bare-`denied` arm the 2026-07-15 review caught).
+
+**The pressure to break it is measured, not hypothetical.** Feeding this plan's own measured
+strings through the originally-proposed exact-match allow-list:
+
+| first token (measured) | exact-match verdict |
+|---|---|
+| `error:` (non-TTY — trailing colon) | `other` ← entry **dead** |
+| `time="2026-07-16T08:27:00Z"` (daemon-down) | `other` ← entry **dead** |
+| `WARNING!` | `other` ← entry **dead** |
+| `error` (cred-store) | match |
+
+**3 of 8 entries never fire**, including the two best H-D candidates. The first engineer seeing
+`tok=other` on every real failure loosens the match to a prefix — and under Form A, loosening
+`^time$` → `time*` makes the emitted value `time="2026-07-16T08:27:00Z"`: a live, unbounded input
+echo shipped to a third party, **with AC3 still green** because a timestamp is not the synthetic
+credential the fixture planted. Under Form B, loosening the *pattern* is free — which is what
+finally makes the "unmeasured token is cheap in the hatch" principle **safe**, not just true.
+
+So the allow-list is restated as **patterns**, not literals: `error*`, `time=*`, `WARNING*`,
+`Cannot*`, `failed*`, `denied*`, `unauthorized*`, default `other`.
+
+The hatch emits, and can only emit:
+
+- `stderr_chars` / `stdout_chars` — integers (naming per Phase 1).
+- `kw` — which of a fixed keyword set matched, each probe a `grep -q` whose *output* is a
+  hardcoded token joined by `,`. Input never reaches the value.
+- `tok` — the first token's **pattern class** via the Form B `case`. Never the raw word.
+
+**`kw` must be enumerated from the MEASURED table, not the falsified list.** The originally-drafted
+`kw` set contained *only* the three falsified tokens — none of which appear in H-A, H-B, or H-C's
+measured strings — so `kw` would have been **empty for every surviving hypothesis** while `tok`
+read `error` for both H-A and H-C. The hatch would have emitted nothing discriminating. Minimum
+discriminating set, all measured:
+
+| probe (measured literal) | discriminates |
+|---|---|
+| `no space left on device` | **H-C** (disk-full) |
+| `executable file not found` | **H-A** (helper missing) |
+| `docker-credential` | **H-A** (helper family) |
+| `permission denied` | EACCES re-check (ruled out on live data — confirms if it returns) |
+| `error saving credentials` / `error storing credentials` | cred-store family |
+| `non-TTY device` · `Cannot connect to the Docker daemon` · `credential helper` | the three falsified tokens — **kept, because under Form B they are free**, and `kw` is exactly how we learn which was right |
 
 > **Design principle, earned from the measurements.** An **unmeasured token is cheap in the
-> escape hatch and expensive in a classifier arm.** In the hatch it simply never matches, and
-> `stderr_len`+`tok` still land. In an arm it actively mis-routes the operator. This is the
-> direct generalization of learning §3's *"bare terms are cheap in a LATE arm and expensive in an
-> EARLY one."* It is why the brief's three falsified tokens are **safe to probe in `kw`** and
-> **unsafe to promote to arms** — and `kw` is exactly how we find out which of them was right.
+> escape hatch and expensive in a classifier arm** — in the hatch it never matches and the other
+> fields still land; in an arm it mis-routes the operator. Direct generalization of learning §3's
+> *"bare terms are cheap in a LATE arm and expensive in an EARLY one."* **This principle is only
+> SAFE under Form B** — under Form A a never-matching probe invites the loosening that leaks.
 
-**Sharp edge — `tail -c 400` truncates the HEAD.** The existing capture is
-`zdetail="$(tail -c 400 "$zerr")"`. The measured daemon-down stderr is 346 bytes and multi-line;
-anything longer means the "first token" of the tail is **mid-message garbage**. `tok` MUST be
-read from `head -c` on the file, not from the tail-truncated string. `stderr_len` MUST be the
-**true** length (`wc -c < "$zerr"`), not the truncated one — otherwise it saturates at 400 and
-silently stops being a measurement.
+**`stderr_chars` is not a leak — name the property in the code comment.** The map from token bytes
+to length is **constant**: both pull tokens are fixed at 40 chars, so a registry echoing the token
+moves `stderr_chars` by exactly +40 *for every possible token value*. The channel carries **zero
+bits** about content, not "few bits", and does not accumulate across 6-12 deploys/day. Token
+*length* is already public from the format name. The comment must state:
 
-`$zerr` stays `0600` and is `rm -f`'d on **both** branches (unchanged).
+> *`stderr_chars` is a non-injective function of the stderr whose value is invariant under
+> substitution of any fixed-length secret. It discloses shape, never content. Safe because both
+> pull tokens are fixed-length (40); **if either becomes variable-length (a JWT, an OIDC-minted
+> session token), this becomes a length oracle and must be bucketed** (`0 | 1-99 | 100-399 | 400+`).*
 
-### Phase 3 — GHCR parity: capture + classify, reusing the existing classifier
+Bucketing now would destroy the empty-vs-unmatched split's precision for a risk that does not yet
+exist — but the trigger must be written down.
 
-Both GHCR sites currently discard stderr:
+### Phase 2b — containment and the capture primitive (both load-bearing, both MEASURED)
 
-- `ci-deploy.sh:803` — the prelude login.
-- `ci-deploy.sh:746` — inside `refetch_ghcr_and_relogin`.
+**(a) The dominant abort class is a NONZERO RC, not an unset variable — and `${x:-}` cannot touch
+it.** This is the sharpest finding of the review round and it invalidates the plan's first draft
+of R1/AC2. `grep -q` **returns 1 on a non-match**, which is the *normal* case for a probe:
 
-Capture to a `0600` temp exactly as the zot site does and classify with the **same**
-`_zot_login_failure_class`. **Do not fork a second classifier.** Rename it to a registry-neutral
-`_docker_login_failure_class` (it is no longer zot-specific), keeping `_zot_login_http_status`'s
-`status:` anchor logic likewise. Emit the class on both PRELUDE log lines and on the Sentry
-event.
+```bash
+set -euo pipefail
+kw="$(printf '%s' "$e" | grep -q 'ZZZ' && printf 'zzz')"   # rc=1 → THE SCRIPT DIES
+```
 
-### Phase 4 — the `cred_store` arm, gated on measurement, ordered before `transport`
+Measured: the parent shell aborts, with every variable bound. An AC that only injects unset
+variables has **a hole exactly the size of this diff's most likely failure mode.**
 
-Add **one** arm, `cred_store`, anchored **only** on measured literals:
-`error saving credentials|error storing credentials|error getting credentials`.
+Measured containment table:
 
-**It MUST precede `transport`.** Measured: the EACCES variant is
-`error saving credentials: open <path>: permission denied` — `transport`'s bare `permission
-denied` matches it. Without the reorder the new arm is dead for that variant.
+| construct | `set -u` unbound | `set -e` nonzero rc |
+|---|---|---|
+| `f \|\| true` | **parent DIES** | rescued |
+| `x="$(f)" \|\| true` | **parent DIES** | rescued |
+| `( f ) \|\| true` | **parent survives** | **rescued** |
 
-This makes ordering load-bearing again, which learning §3 flags as *"a red flag, not a
-defense"* — correctly. Meeting that objection head-on rather than ignoring it:
+**Mandate the subshell:** the whole hatch is emitted as `hatch="$( ( _login_hatch … ) || true )"`.
+It is the **only** construct that contains *both* abort classes, and it is what structurally
+enforces the contract the Observability block already states (`fail_loud: false — a telemetry
+failure must never abort a deploy`). `${x:-}`-at-every-site remains required, but it is a
+**discipline**; the subshell is a **mechanism**. The 2026-07-15 control was inspection; this
+plan's first draft upgraded it to behavioural verification of the discipline — which still only
+verifies the discipline was *applied*, not that misapplication is *non-fatal*. The subshell makes
+it non-fatal. Trade accepted: a broken hatch goes dark instead of wedging prod.
 
-- The overlap is **real and measured**, not hypothetical. `permission denied` genuinely appears
-  in two different subsystems' errors.
-- The resolution is the one the file already uses and documents for `authn_rejected` (kept first
-  because the GHCR shape `denied: authentication required` renders a 401 containing "denied").
-  This is the *same* precedent, applied for the *same* reason.
-- It is **pinned by a test**, not by a comment: feed the measured EACCES string, assert
-  `cred_store`. That test fails if anyone reorders the arms.
+**(b) Drop the temp file: capture into a variable.** Verified — `ci-deploy.sh` contains two
+divergent `mktemp` idioms, and Phase 3's new sites sit next to the **unsafe** one:
 
-`cred_store` is deliberately **distinct from `transport`**: a socket/daemon/config failure is not
-a network failure, and conflating them sends the operator to the wrong subsystem — the exact
-mistake the 2026-07-15 review caught.
+```
+:889   zerr="$(mktemp)"                                              # safe (fails loud)
+:950   perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"  # FIXED, PREDICTABLE PATH
+:1021  err="$(mktemp  2>/dev/null || echo /tmp/cosign-verify.err)"   # same
+```
+
+"Capture to a temp exactly as the zot site does" invites the `:950` template, which degrades to a
+world-readable fixed path under any `mktemp` failure — while holding registry stderr that may
+echo the credential. **And a bare `mktemp` is itself an abort vector under `set -e` when `/tmp` is
+full — which is hypothesis H-C.** If H-C is the true cause, a `mktemp`-based instrument **wedges
+prod on the first deploy after merge**, in exactly the scenario it exists to diagnose.
+
+Use variable capture at all three sites:
+
+```bash
+local zerr zrc=0
+zerr="$( ( printf '%s' "$ztoken" | docker login "$REG" -u "$zuser" --password-stdin 2>&1 >/dev/null ) )" || zrc=$?
+```
+
+Strictly better on every axis: no filesystem, no mode question, no `rm -f`, no cleanup-on-abort
+gap, no predictable-path fallback, no `/tmp`-full abort. The secret-adjacent text never leaves
+process memory. **It also designs out Phase 2's `tail -c 400` sharp edge and AC5 entirely** —
+`${#zerr}` is the true length by construction.
+
+Three sharp edges that MUST be stated in the code:
+
+1. **`local zerr` and the assignment must be SEPARATE statements.** `local zerr="$(cmd)"` makes
+   `local` the exit status and swallows `rc` — this is the R1 shape, and the file already knows it
+   (`:824-825`).
+2. **`2>&1 >/dev/null` — that order.** Reversed, it captures stdout and lets stderr through.
+3. **`$(…)` strips trailing newlines, and `${#…}` counts CHARACTERS, not bytes, under a UTF-8
+   locale.** Either pin `LC_ALL=C` or name the field `stderr_chars`. **The plan says
+   `stderr_chars`** — calling it a "true byte length" would be the next false comment.
+
+### Phase 3 — GHCR parity: capture + classify, reusing the renamed classifier
+
+Both GHCR sites currently discard stderr: `ci-deploy.sh:803` (prelude) and `:746` (inside
+`refetch_ghcr_and_relogin`). Reuse the **same** classifier — do not fork a second one — renamed
+registry-neutral to `_docker_login_failure_class` / `_docker_login_http_status`.
+
+> **P0 — `refetch_ghcr_and_relogin`'s STDOUT IS A TYPED CONTROL CHANNEL. Do not write to it.**
+> The function communicates **by stdout string**: `printf recovered` / `refetch_unavailable` /
+> `relogin_failed` (`:747`, `:749`), parsed by two callers — `:825` (`prelude_stage`) and `:925`
+> (`stage="$(refetch_ghcr_and_relogin)"` → `[[ "$stage" == "recovered" ]]`). At `:829` the stage
+> is interpolated **raw** into a `logger` line.
+>
+> Two failure modes, both from one reflexive edit:
+> - **Leak:** capturing stderr with `2>&1` *at the function level* merges docker's stderr into the
+>   function's stdout → into `$prelude_stage` → into **journald → Vector → Better Stack,
+>   verbatim and unclassified**. AC3 inspects the *Sentry* payload and **would never see it**.
+> - **Silent recovery loss:** `stage` becomes `"transport recovered"`, the `==` compare fails, the
+>   #6400 recovery is discarded, and the private pull fails-closed — degrading the deploy path
+>   this helper exists to protect.
+>
+> **Constraints, all testable:** (i) nothing inside the helper may write to stdout except the
+> three stage literals; (ii) the stderr capture wraps the **`docker login` invocation only**
+> (Phase 2b's form), never the function; (iii) the class is returned via a **named global**
+> mirroring `RECOVERY_STAGE`, never appended to the stage string. Same shape at `:925` →
+> `RECOVERY_STAGE` → `pull_failure_event`'s tag.
+
+**Classify BOTH prelude logins, and say so.** `:803` (baked/first creds) and `:746` (post-refetch)
+are two logins in one cycle. If only the second is classified, the **baked-cred failure shape is
+lost** — and that shape is the #6090/#6400 recurrence signal.
+
+**Name the Sentry event and its tags — do not reuse the zot beacon.** `zot_gate_degraded_event`
+(`:699`) hardcodes `registry: "zot-gate-degraded"`, `zot_gate_reason`, and the message
+*"zot gate degraded (…)"*. Routing a GHCR failure through it files a GHCR failure under a
+zot-gate issue — **the exact host-attribution error this plan corrects for #6497, reintroduced.**
+Rename the tags `login_class` / `login_http` and add a mandatory `registry: zot|ghcr`
+discriminator (or give GHCR its own event). Update Observability `configured_in` accordingly.
+
+> **Sentry volume — GHCR login failure is journald-only today** (`:804`, `:815`, `:829` are all
+> `logger`; no Sentry). Phase 3 would create a **new Sentry emit source**, reachable ~2×/deploy ×
+> 6-12 deploys/day, for an already-diagnosed failure. **Decision: emit the GHCR class to journald
+> only.** Better Stack already ingests `SYSLOG_IDENTIFIER=ci-deploy`, so the class is fully
+> discoverable there; a second sink buys nothing and spends the quota that real end-user error
+> events need. The zot beacon's volume is pre-existing and unchanged. (This also removes the
+> tag-conflation risk above at its root — revisit only if journald proves insufficient.)
+
+### Phase 4 — arms, gated on measurement, ordered before `transport`
+
+**`transport` is over-collecting, and `cred_store` alone does not fix it.** Measured against the
+real classifier:
+
+| shape (measured) | current class | correct |
+|---|---|---|
+| `error saving credentials: open <path>: permission denied` | `transport` | `cred_store` |
+| `Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: … connect: permission denied` | `transport` | **`cli_daemon`** |
+| `received unexpected HTTP status: 504 Gateway Timeout` | `transport` | **`server_error`** |
+| `received unexpected HTTP status: 502 Bad Gateway` | `server_error` ✓ | — |
+
+Three findings, all verified by execution:
+
+1. **`cred_store`** — anchored **only** on measured literals `error saving credentials|error
+   storing credentials|error getting credentials`. MUST precede `transport`, whose bare
+   `permission denied` otherwise steals the EACCES variant.
+2. **`cli_daemon`** — the daemon-socket EACCES contains **no `credentials` literal**, so
+   **`cred_store` cannot rescue it**; it stays confidently-wrong as `transport`. This is the
+   deploy user dropped from the `docker` group after a host replace — a local-permissions failure
+   routed to the network subsystem. Discriminators, to be measured at AC1 before promotion:
+   `docker.sock`, `unix://`, `_ping`. If AC1 cannot reproduce them, they stay `kw` probes and no
+   arm ships (learning §2).
+3. **`504` lands in `transport`, not `server_error`** — `transport` (`:669`) precedes
+   `server_error` (`:671`) and carries a bare `timeout` matched case-insensitively, so
+   `504 Gateway Timeout` matches `timeout` first. An interposed-proxy 5xx routes the operator to
+   the network. `502`/`503` are unaffected — only the timeout-worded 5xx bite. Fix by ordering
+   `server_error` before `transport`, or by anchoring `transport`'s timeout terms; **pin whichever
+   with a test fed the measured 504 string.**
+
+**On "ordering is load-bearing" (learning §3 calls this a red flag, not a defense) — the objection
+is correct and is met, not dodged.** The overlap is real and measured, so the arms are genuinely
+not disjoint on real input. The resolution is precedence *plus* two things the 2026-07-15 draft
+lacked: (i) every precedence relation is **pinned by a test fed a measured string**, so a reorder
+goes RED rather than silently mis-routing; and (ii) **the hatch now rides every failed login**
+(Phase 2), so a confidently-wrong arm is **visible in production telemetry** (`class=transport
+kw=credentials` is self-evidently wrong the moment it appears) rather than discoverable only from
+the test suite. That second property is what makes the arms auditable at all — and it is why the
+`unclassified`-only gate had to go.
 
 **Not added** (per Research Reconciliation 1-3): `not a TTY`, `credential helper`,
 `Cannot connect to the Docker daemon`. All three were falsified or unreproduced. They go in the
@@ -275,6 +615,24 @@ Each of these is falsified **by this diff or by the 08:15Z experiment**:
   (the arms are disjoint on real input)"* → **falsified by Phase 4**. Must state the overlap and
   name the test that pins it.
 - `ci-deploy.sh:648-650` — the H4 note referencing "the plan"; re-point at this plan.
+- **`ci-deploy.sh:636-647` — falsified by the RENAME, not by the diff's logic, which is why it is
+  the easiest to miss.** The block justifies `authz_denied`'s narrowness with a **zot-specific
+  measurement**: *"MEASURED against the pinned zot (v2.1.2) … answers 200 or 401 — **NEVER 403** …
+  `authz_denied` is effectively unreachable here … kept, narrowed, purely as a defensive
+  tripwire."* **GHCR can and does answer 403** (SAML/SSO enforcement, org package policy, IP
+  allow-lists). The moment the classifier is registry-neutral, *"unreachable here"* and *"purely a
+  defensive tripwire"* become **false statements about a live arm** — in the same comment block as
+  the reasoning this plan exists to correct. Same for consequence `2.` (*"A BROKEN accessControl is
+  NOT observable here at all"*), which has no GHCR meaning. **Fix:** split into a registry-neutral
+  preamble (the `status:` anchor + the enum contract — both dockerd behaviours, genuinely
+  registry-agnostic) and a `## Per-registry measured behaviour` subsection with a `zot v2.1.2:`
+  paragraph and a `ghcr.io:` paragraph. **The GHCR paragraph must say `unmeasured`** unless AC1
+  measures it — inheriting zot's finding for a registry whose strings were never measured is
+  precisely this plan's central discipline, violated.
+- **`ci-deploy.sh:643-644`** — *"`connect: permission denied` is a SOCKET error (ICMP
+  admin-prohibited → EACCES)"* conflates ICMP-admin-prohibited EACCES with **unix-socket** EACCES
+  because both render `connect: permission denied`. Phase 4's `cli_daemon` arm makes this comment
+  an assertion that the *network* reading is correct for a shape that is now classified as local.
 - `ci-deploy.sh:725-750` + `:762-763` — `refetch_ghcr_and_relogin` / prelude headers assert
   stderr handling that Phase 3 changes.
 - `zot-registry.tf:108-109` and `:332` — assert the htpasswd edge **was** WEB-PLATFORM-5B.
@@ -311,15 +669,26 @@ Each of these is falsified **by this diff or by the 08:15Z experiment**:
 
 | File | Change |
 |---|---|
-| `apps/web-platform/infra/ci-deploy.sh` | Phases 1-5. Rename classifier registry-neutral; `cred_store` arm before `transport`; capture+classify both GHCR sites; `stderr_len`/`kw`/`tok` escape hatch at both sites; comment truth-up. |
+| `apps/web-platform/infra/ci-deploy.sh` | Phases 1-5. Rename classifier registry-neutral; `cred_store` arm before `transport`; capture+classify both GHCR sites; `stderr_chars`/`kw`/`tok` escape hatch at both sites; comment truth-up. |
 | `apps/web-platform/infra/ci-deploy.test.sh` | New cases + `assert_ghcr_login_class` + `MOCK_GHCR_LOGIN_FAIL_STDERR` mock arm; mutation battery. |
 | `apps/web-platform/infra/zot-registry.tf` | **Comment-only.** Two falsified causal claims (`:108-109`, `:332`). |
 | `knowledge-base/project/learnings/2026-07-15-false-comment-…-restated-it.md` | 3-line dated addendum: root cause falsified; lesson stands. |
 | `knowledge-base/project/specs/feat-one-shot-6497-login-gate-unclassified/decision-challenges.md` | The successor-issue User-Challenge (headless path). |
 
-**Files NOT to edit:** `cloud-init-registry.yml`, `zot-disk-heartbeat.sh`, ADR-115 — the
-htpasswd edge and its probe are correct and converged; only their *causal attribution* is wrong,
-and that lives in comments.
+**Files NOT to edit — with reasons, because a silent exclusion is not a scope decision:**
+
+- `cloud-init-registry.yml`, `zot-disk-heartbeat.sh`, ADR-115 — the htpasswd edge and its probe
+  are correct and converged; only their *causal attribution* is wrong, and that lives in comments.
+- **Four further `docker login … >/dev/null 2>&1` sites are deliberately out of scope.** The
+  contract *"the docker-login gate can name its own failure"* does not reach them in this PR:
+  `soleur-host-bootstrap.sh:207` (GHCR) and `:231` (zot); `cloud-init.yml:507` (zot);
+  `cloud-init-inngest.yml:260` (GHCR). **Reason:** the observed failure is on the **deploy** path;
+  these are **boot**-path, and a change to `cloud-init*.yml` forces a host replace
+  (`hr-prod-host-config-change-immutable-redeploy`) — a blast radius this observability PR must
+  not carry. **Recorded for the follow-up:** `soleur-host-bootstrap.sh:224` already fires a Sentry
+  beacon *"fresh-boot zot docker login failed"* **with no class field** — the same undifferentiated
+  bucket #6497 exists to drain, on the fresh-boot path, **with the sink already wired**. It is the
+  cheapest next application of this plan's classifier and belongs in the follow-up issue (Phase 6.3).
 
 ---
 
@@ -355,40 +724,70 @@ about *this issue* prescribing exactly the grep that passed while its conclusion
 
 ```yaml
 liveness_signal:
-  what: ZOT_GATE / PRELUDE journald lines + WEB-PLATFORM-5B Sentry beacon, now carrying
-        login_class + stderr_len + kw + tok for EVERY failed login on BOTH registries
+  what: ZOT_GATE (zot) + PRELUDE (ghcr) journald lines carrying rc + class + stderr_chars +
+        stdout_chars + kw + tok for EVERY failed login on BOTH registries; the WEB-PLATFORM-5B
+        Sentry beacon carries the same for the zot gate only (GHCR is journald-only by choice —
+        see Phase 3 Sentry-volume note)
   cadence: every deploy (~6-12/day observed)
-  alert_target: Sentry WEB-PLATFORM-5B (existing issue), Better Stack source soleur-inngest-vector-prd
-  configured_in: apps/web-platform/infra/ci-deploy.sh (zot_gate_degraded_event)
+  alert_target: Sentry WEB-PLATFORM-5B (existing issue); Better Stack source
+                soleur-inngest-vector-prd (label; the emitting host is soleur-web-platform)
+  configured_in: apps/web-platform/infra/ci-deploy.sh — zot_gate_degraded_event (Sentry beacon,
+                 bespoke curl to the store endpoint) and the PRELUDE/ZOT_GATE logger lines
+                 (journald -> Vector). These are TWO INDEPENDENT TRANSPORTS with independent
+                 failure modes; do not read one as evidence for the other.
 error_reporting:
-  destination: Sentry store endpoint (existing transport, fail-open curl)
-  fail_loud: false — fail-open by design; a telemetry failure must never abort a deploy
+  destination: journald (both registries) + Sentry store endpoint (zot gate only)
+  fail_loud: false — fail-open by design; a telemetry failure must never abort a deploy.
+             STRUCTURALLY enforced by the Phase 2b subshell, not only by ${x:-} discipline
              (set -euo pipefail; see Risks R1)
 failure_modes:
   - mode: GHCR login fails, cause unknown
-    detection: PRELUDE line now carries class= + stderr_len= (was: silently discarded)
-    alert_route: Sentry WEB-PLATFORM-5B
-  - mode: zot login fails with a stderr matching no arm
-    detection: class=unclassified + stderr_len>0 + kw/tok naming the shape
-    alert_route: Sentry WEB-PLATFORM-5B
-  - mode: zot login fails with NO stderr at all
-    detection: class=unclassified + stderr_len=0 — the empty/unmatched split (Phase 1)
-    alert_route: Sentry WEB-PLATFORM-5B
-  - mode: credential-store failure misrouted to the network subsystem
-    detection: cred_store arm ordered before transport; pinned by the measured-EACCES test
-    alert_route: Sentry WEB-PLATFORM-5B (tag zot_login_class=cred_store)
+    detection: PRELUDE line carries rc + class + stderr_chars (was: stderr silently discarded)
+    alert_route: journald -> Vector -> Better Stack (--grep PRELUDE)
+  - mode: login fails with a stderr matching no arm
+    detection: class=unclassified + stderr_chars>0 + kw/tok naming the shape
+    alert_route: Sentry WEB-PLATFORM-5B (zot) / Better Stack (ghcr)
+  - mode: login fails with NO stderr at all (H-B)
+    detection: stderr_chars=0 + stdout_chars>0 => text went to stdout;
+               stderr_chars=0 + stdout_chars=0 => no output at all, and rc names it
+               (127 docker absent / 137 OOM / 124 timeout) - the split Phase 1 delivers
+    alert_route: Sentry WEB-PLATFORM-5B (zot) / Better Stack (ghcr)
+  - mode: a CONFIDENTLY-WRONG arm (cred-store EACCES, daemon-socket EACCES, 504) misroutes
+          the operator to the wrong subsystem
+    detection: the hatch rides EVERY failed login, so class=transport kw=credentials is
+               self-evidently wrong in production; each precedence relation is pinned by a
+               test fed a measured string
+    alert_route: Sentry WEB-PLATFORM-5B (tag login_class) / Better Stack
 logs:
-  where: journald on web-1 (SYSLOG_IDENTIFIER=ci-deploy) → Vector → Better Stack
-  retention: Better Stack remote() ~40-min hot window; archive arm required for any
-             soak-length span
+  where: journald on web-1 (SYSLOG_IDENTIFIER=ci-deploy, allowlisted in vector.toml:130)
+         -> Vector -> Better Stack
+  retention: remote() is a ~40-min hot window. VERIFIED - betterstack-query.sh mode 2 already
+             UNIONs remote() with s3Cluster(primary, <_s3>), so THE ARCHIVE ARM IS THE DEFAULT;
+             --no-archive opts OUT. Never pass --no-archive for a soak-length span.
 discoverability_test:
   command: >
     doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh
-    --since 60 --grep ZOT_GATE
+    --since 60m --grep ZOT_GATE --grep PRELUDE
   expected_output: >
-    a ZOT_GATE line carrying class=<enum> and, when class=unclassified,
-    a non-empty stderr_len= field. NO ssh.
+    a ZOT_GATE line AND a PRELUDE line, each carrying rc= and class=; when
+    class=unclassified, a populated stderr_chars= / stdout_chars= / kw= / tok=. NO ssh.
 ```
+
+> **Both of the first draft's commands were malformed — verified against the script's own
+> parser.** `--since` matches `^([0-9]+)([hmd])$`; a bare `60` **fails the regex** and falls
+> through to the literal branch → `WHERE dt >= '60'`, which ClickHouse cannot read as a DateTime.
+> **The plan's one no-SSH probe did not execute.** Fixed to `60m` / `90m`. Verified flag list:
+> `--since --until --grep --limit --raw-only --no-archive --table --table-s3`.
+>
+> **And `--grep ZOT_GATE` alone cannot see half the deliverable** — GHCR failures emit `PRELUDE:`
+> lines, which contain no `ZOT_GATE` substring (verified: zero co-occurrences in the file). Phase
+> 3's entire GHCR parity would have been unverifiable post-merge by the plan's only probe.
+> `--grep` is repeatable and OR-combined.
+
+**Field placement — `stderr_chars` goes in `extra`/context, NOT `tags`.** An unbounded-cardinality
+integer as a Sentry **tag** degrades the tag index and decays search on the very issue this PR
+exists to make searchable. The empty-vs-unmatched split needs only `len=0` vs `len>0`; the precise
+value is diagnostic context, not a facet. Keep `login_class` / `login_http` / `registry` as tags.
 
 **The registry host is deny-all/no-SSH.** Every step here is Better Stack + Sentry + `gh`.
 No step asks the operator to fetch, paste, or eyeball anything
@@ -403,33 +802,68 @@ No step asks the operator to fetch, paste, or eyeball anything
 - **AC1 — measurement is re-run on the pinned host docker version**, and every arm in the diff
   cites a string measured there. Any divergence from this plan's table amends the plan.
   *(Falsifier: an arm whose literal appears in no measured output.)*
-- **AC2 — `set -euo pipefail` survival, verified BEHAVIOURALLY on `ubuntu:24.04`**, not by
-  inspection: run the gate inside `docker run --rm ubuntu:24.04` with **each** new variable unset
-  in turn; the telemetry line must still render and the script must not abort. Every new
-  expansion is `${x:-}`-guarded **at the expansion site** — a `||` fallback does **not** rescue an
-  expansion error under `set -u` (learning §1). *(Falsifier: any unset var that aborts the run.)*
-- **AC3 — the escape hatch cannot echo its input.** Feed a stderr containing a synthetic
-  credential-shaped token and a username; assert the rendered Sentry payload contains **neither**,
-  and that every emitted `kw`/`tok` value is a member of the closed allow-list. *(Falsifier: any
-  input byte reaching the payload.)*
-- **AC4 — `stderr_len` splits the bucket.** Two cases: empty stderr → `class=unclassified
-  stderr_len=0`; unmatched non-empty stderr → `class=unclassified stderr_len=<true length>`.
+- **AC2 — `set -euo pipefail` survival against BOTH abort classes, verified behaviourally.**
+  Two injections, because the first draft of this AC covered only one and **missed the dominant
+  one**:
+  - **(a) unset-variable injection** — each new variable unset in turn. `${x:-}` at every
+    expansion site; `||` does not rescue an expansion error under `set -u` (learning §1).
+  - **(b) nonzero-rc injection** — force each `grep -q` probe to **not match** (its normal case)
+    and each `mktemp`/`wc` to fail. **Measured: `kw="$(… | grep -q 'ZZZ' && printf 'zzz')"` aborts
+    the script under `set -euo pipefail` with every variable bound.** `${x:-}` cannot touch this.
+  - **(c) structural containment** — the hatch is emitted from a subshell (`( … ) || true`),
+    the only construct measured to contain *both* classes.
+
+  In all cases the telemetry line must still render and the script must not abort.
+  *(Falsifier: remove the subshell → (b) aborts the run → RED.)*
+
+  > **Surface (verified — there is no ubuntu:24.04 container precedent in this repo).** The brief
+  > says "verify on ubuntu:24.04, the shipped host image." The existing behavioural surface that
+  > satisfies this is `infra-validation.yml`'s `deploy-script-tests` job, which already
+  > `runs-on: ubuntu-24.04` — the same major as `server.tf:111` (`image = "ubuntu-24.04"`). Bash
+  > version parity is what `set -u` survival turns on, and the runner has it. **Do not** add a
+  > net-new `docker run --rm ubuntu:24.04` leg for AC2 — zero repo precedent exists
+  > (`FROM ubuntu` / `container: ubuntu` / `docker run … ubuntu` all return zero hits), and the
+  > runner is the sanctioned surface. AC1 is different: it turns on the **docker version**, which
+  > the runner does *not* share with the host, so AC1 keeps its container/host reading.
+- **AC3 — the escape hatch cannot echo its input, asserted THROUGH THE UNCLASSIFIED PATH.**
+  Extend the existing `SENTINEL_LEAK_CANARY` precedent (T-5B-8 `:3583` Sentry, T-5B-8b `:3600`
+  journald) with a case whose stderr **matches no arm**, so the canary actually executes the
+  escape hatch. Assert the canary reaches **neither** sink, and that every emitted `kw`/`tok`
+  value is a member of the closed allow-list.
+
+  > **Load-bearing.** Both existing canaries drive a 401 (`authn_rejected`). The hatch fires only
+  > on `unclassified`. **The existing canaries do not exercise it and would stay green while it
+  > leaks.** Assert against the **whole** journald capture, not a prefix — that sink ships
+  > unscrubbed off-box via `vector.toml`.
+  > *(Falsifier: any input byte reaching either payload.)*
+- **AC4 — `stderr_chars` splits the bucket.** Two cases: empty stderr → `class=unclassified
+  stderr_chars=0`; unmatched non-empty stderr → `class=unclassified stderr_chars=<true length>`.
   Assert the two payloads **differ**. *(Falsifier: identical payloads — today's behaviour.)*
-- **AC5 — `stderr_len` is the TRUE length, not the truncated one.** Feed a >400-byte stderr;
-  assert `stderr_len` > 400. *(Falsifier: saturation at 400.)*
+- **AC5 — `stderr_chars` is the TRUE length, not the truncated one.** Feed a >400-byte stderr;
+  assert `stderr_chars` > 400. *(Falsifier: saturation at 400.)*
 - **AC6 — `cred_store` precedes `transport`, pinned by the measured string.** Feed
   `error saving credentials: open /home/deploy/.docker/config.json123: permission denied`;
   assert `cred_store`, **not** `transport`. *(Falsifier: reordering the arms → RED.)*
-- **AC7 — GHCR parity.** `git grep -c '>/dev/null 2>&1' apps/web-platform/infra/ci-deploy.sh`
-  returns **0 matches on any `docker login` line**. Verify with a login-line-scoped grep, not a
-  file-wide count (other commands legitimately discard output):
-  `git grep -n 'docker login' apps/web-platform/infra/ci-deploy.sh | grep -c '2>&1'` → `0`.
+- **AC7 — GHCR parity, asserted as the INVARIANT and in the POSITIVE form.** The first draft
+  (`… | grep -c '2>&1'` → `0`) was a **proxy** and had two defects: (i) a regression written as
+  `2>/dev/null`, or a login with no redirect at all, **passes it**; (ii) it is not comment-aware,
+  so Phase 5's mandated comment rewrites — which must mention `docker login` and the removed
+  `>/dev/null 2>&1` on one line — make it go **RED on a correct diff**. Assert instead, over
+  non-comment lines only:
+  ```bash
+  L=apps/web-platform/infra/ci-deploy.sh
+  # every docker login captures stderr into a variable: count MUST equal the login-site count (3)
+  git grep -n 'docker login' -- "$L" | grep -v '^\s*[0-9]*:\s*#' | grep -c '2>&1 >/dev/null'   # → 3
+  git grep -n 'docker login' -- "$L" | grep -v '^\s*[0-9]*:\s*#' | grep -c '>/dev/null 2>&1'   # → 0
+  ```
+  The count form also catches a **fourth** login site added later with no capture — which the
+  negative form never would.
 - **AC8 — the GHCR class rides the PRELUDE lines and the Sentry event**, asserted via a new
   `assert_ghcr_login_class` mirroring `assert_zot_login_class` (`:3458`).
 - **AC9 — mutation battery, each proven RED before green** (learning §5: *mutate a sibling
   attribute IN, not just the anchor OUT*; **relocation**, not deletion):
   - Move `cred_store` **after** `transport` → AC6 RED.
-  - Replace `stderr_len` with the `tail -c 400` length → AC5 RED.
+  - Replace `stderr_chars` with the `tail -c 400` length → AC5 RED.
   - Swap the `tok` allow-list for a raw first-token passthrough → AC3 RED.
   - Point `assert_ghcr_login_class` at the **zot** payload → AC8 RED (proves the assert is
     body-scoped and not satisfied by a sibling emit — the `:1076` precedent).
@@ -449,16 +883,33 @@ No step asks the operator to fetch, paste, or eyeball anything
 
 - **AC13 — the gate self-reports on the next deploy.** Within one deploy cycle of the merge:
   ```
-  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 90 --grep ZOT_GATE
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    --since 90m --grep ZOT_GATE --grep PRELUDE
   ```
-  **must** yield a login outcome carrying a **bounded, non-empty** shape — i.e. either a class
-  other than `unclassified`, **or** `unclassified` **with** `stderr_len` + `kw`/`tok` populated.
+  Every login outcome observed **must** fall into exactly one of three named states:
 
-  > **Deliberately NOT `class == cred_store`.** That would assert a *proxy for a hypothesis*
-  > rather than *the invariant this PR delivers*. The PR's contract is **"the gate can name its
-  > failure"**, and that must hold whether the cause is H-A, H-B, H-C, H-D, **or the login stops
-  > failing entirely** (also a valid, observable outcome). An AC pinned to a specific cause would
-  > go red on correct code — the plan-skill's vacuous/unsatisfiable-assert trap.
+  | # | state | required shape |
+  |---|---|---|
+  | (a) | **success** | `ZOT_GATE: active …` / `PRELUDE: … ok` — no class field; the gate had no failure to name |
+  | (b) | **no login attempted** | `reason=probe_unreachable` or `reason=creds_absent` — a bounded, named non-login state |
+  | (c) | **login failed** | carries `rc` + `class` + `stderr_chars` + `stdout_chars`, and when `class=unclassified`, populated `kw`/`tok` |
+
+  Only **(c)** is the invariant under test. **(a)** and **(b)** are "the gate had no login outcome
+  to name," which is itself a bounded, named state.
+
+  > **The first draft of this AC was RED on correct code** — the exact trap its own callout box
+  > warns about, one level up. Its condition was *"a class other than `unclassified`, or
+  > `unclassified` with `stderr_chars`"*. But the **success** path (`:892`) emits
+  > `ZOT_GATE: active — docker login … ok (zot-primary)` with **no `class=` field at all**, and
+  > `probe_unreachable`/`creds_absent` (`:872`, `:881`) return **before** the login. None of the
+  > three satisfies either disjunct. R5's claim that AC13 is "green under every hypothesis
+  > including recovery" was **false as written**; the three-way restatement makes it true.
+  >
+  > **Still deliberately NOT `class == cred_store`** — that asserts a *proxy for a hypothesis*
+  > rather than *the invariant this PR delivers*. And note the first draft was **also vacuous on
+  > the other side**: `class=cred_store` with zero hatch fields would have passed it, while the PR
+  > failed its own contract. Requiring the hatch on every failed login (Phase 2) is what closes
+  > both halves.
 
 - **AC14 — the datum is recorded on the follow-up issue** (Phase 6.3), closing the loop from
   measurement to repair.
@@ -519,11 +970,11 @@ impact**, because the diff adds fields to an existing emit on an existing edge.
 
 | # | Risk | Mitigation |
 |---|---|---|
-| **R1** | A new variable is expanded bare under `set -euo pipefail` → aborts the deploy, or takes the telemetry line dark. **This was the 2026-07-15 review's #1 P1.** | `${x:-}` at **every** expansion site as a **precondition**, never a downstream correction (`||` cannot catch an expansion error). AC2 verifies **behaviourally on ubuntu:24.04**, unset-var by unset-var. |
+| **R1** | The hatch aborts the deploy under `set -euo pipefail`. **Two distinct classes, and the first draft named only one.** (a) an unbound expansion (the 2026-07-15 #1 P1); (b) **a nonzero rc — `grep -q`'s normal non-match, a `mktemp` on a full `/tmp` (= hypothesis H-C!), a `wc` on an unreadable file.** (b) is the *more likely* class here and `${x:-}` cannot touch it. | **Structural, not disciplinary:** emit the hatch from a subshell — `( _login_hatch … ) || true` — the only construct **measured** to contain both classes. `${x:-}` at every site remains required but is a discipline, not a mechanism. Phase 2b drops `mktemp` entirely (variable capture), removing (b)'s worst instance: an instrument that wedges prod in the exact scenario it exists to diagnose. AC2 injects **both** classes. |
 | **R2** | The escape hatch becomes a passthrough and ships a credential/username to Sentry. | Fixed-vocabulary emitter: `kw` probes are `grep -q` → hardcoded literal; `tok` is a closed allow-list with `other` as default. AC3 + the mutation that swaps in a raw passthrough → RED. |
 | **R3** | The `cred_store` arm is built on an unmeasured string and never fires — decoration, and CI can never fail on an arm that never fires (learning §2/§3). | Arms cite only measured literals. The three falsified tokens are demoted to `kw` probes, where being wrong costs nothing. AC1 re-measures on the pinned version. |
 | **R4** | Reordering arms silently regresses `transport`'s live coverage — it is the arm that fires most on this fleet (#6415 private-NIC → `network is unreachable`; zot OOM → `connection reset`). | `cred_store`'s literals are `error {saving,storing,getting} credentials` — disjoint from every transport shape **except** via `permission denied`, which is exactly the overlap the reorder exists to resolve. The existing T-5B-5b..5f transport cases must stay green (AC12). |
-| **R5** | The bug is transient and the next deploy shows no failure → AC13 unverifiable. | AC13 asserts the **invariant** (the gate names its outcome), not a **cause**. Green under every hypothesis including recovery. |
+| **R5** | The bug is transient and the next deploy shows no failure → AC13 unverifiable. | AC13 asserts the **invariant** (the gate names its outcome), not a **cause**. **Correction: the first draft's AC13 was RED on recovery** — the success path emits no `class=` field, so "a class other than unclassified" matched nothing. The **three-way** restatement (success \| no-login-attempted \| classified-failure) is what actually makes this mitigation true. |
 | **R6** | `head`-truncated or line-scoped greps produce a false "absent" claim (plan-skill sharp edge). | AC7 uses a login-line-scoped grep with an explicit count, not a file-wide `grep -c`, and not `head`-truncated. |
 
 ---
