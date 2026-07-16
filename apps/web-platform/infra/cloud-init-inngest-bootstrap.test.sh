@@ -238,6 +238,37 @@ else
     echo "        Fix: bump every 'soleur-inngest-bootstrap:<tag>' ref in"
     echo "        apps/web-platform/infra/cloud-init.yml to $LATEST_TAG."
   fi
+
+  # #6536: the DEDICATED host's pin was guarded by NOTHING. This guard read only
+  # cloud-init.yml (the web host), so cloud-init-inngest.yml silently sat on v1.1.19
+  # while the web host moved to v1.1.20 — and the two hosts extract inngest-bootstrap.sh
+  # + vector.toml from whatever image THEIR OWN file pins.
+  #
+  # That gap is not cosmetic; it is how a fix reaches main and never reaches the host.
+  # The dedicated host is delivered by `apply_target=inngest-host-replace`, whose
+  # `terraform plan -replace=` force-replaces REGARDLESS of any user_data diff — so the
+  # rebuild boots the pinned image whether or not the pin moved. #6539 measured v1.1.19
+  # and v1.1.20 to contain NONE of the #6536 fix: dispatching the replace against a
+  # stale pin would have rebuilt the dark host pre-fix, left the bug live, and spent the
+  # zero-downtime window (free only while the host is dark, a cron outage after #6178
+  # arms the flip). The guard above would have stayed green throughout — it was watching
+  # the other file.
+  #
+  # Same authoritative signal (semver-max published tag), same failure text shape.
+  # `|| true` mirrors the PIN extraction above: a rename must FAIL cleanly, not abort
+  # the run under pipefail before the results summary.
+  DED_CLOUD_INIT="$SCRIPT_DIR/cloud-init-inngest.yml"
+  DED_PIN=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$DED_CLOUD_INIT" | head -1 | sed 's/.*://' || true)
+  assert "dedicated-host cloud-init pin ($DED_PIN) matches latest published vinngest-v* tag ($LATEST_TAG)" \
+    "[[ '$DED_PIN' == '$LATEST_TAG' ]]"
+  if [[ "$DED_PIN" != "$LATEST_TAG" ]]; then
+    echo "        DRIFT: cloud-init-inngest.yml pins $DED_PIN but the latest published tag is $LATEST_TAG."
+    echo "        Fix: bump every 'soleur-inngest-bootstrap:<tag>' ref in"
+    echo "        apps/web-platform/infra/cloud-init-inngest.yml to $LATEST_TAG."
+    echo "        This is the DEDICATED inngest host. Its replace is dispatch-only and"
+    echo "        force-replaces regardless of user_data, so a stale pin here means the"
+    echo "        rebuild boots a pre-fix image and the dispatch changes nothing (#6536)."
+  fi
 fi
 
 # --- AC6b: all pin refs present AND share one tag (catches a partial bump) ---
