@@ -1152,6 +1152,23 @@ If an issue number is found, store it as `ISSUE_NUMBER` for use in the PR body b
 
 **Important:** Use `Closes #N` syntax (not `Ref #N`, not `(#N)` in the title). GitHub only auto-closes issues when the PR body contains a keyword (`Closes`, `Fixes`, or `Resolves`) followed by the issue reference.
 
+**Closes-after-verification gate (check BEFORE choosing the keyword).** `Closes #N` fires at MERGE, which is decoupled from whether the thing the issue actually asked for is true yet. When the fix's proof lands POST-merge (a reprovision, an apply, a deploy probe, an arming step), `Closes` closes the issue on a promise. Grep the plan + `tasks.md` for a close-after-verification instruction before writing the body:
+
+```bash
+# NO `\b` — the host grep is ugrep, where \b is NOT a word boundary in ERE and silently
+# matches nothing (verified: `close[sd]?.*after` MATCHES, `close[sd]?\b.*\bafter\b` does NOT).
+# A \b here makes this gate catch zero lines while reading as if it works.
+CLOSE_DEFER_RE='close[sd]?.*(after|once|when)|closes-after-apply|manual close after|close manually|post-merge.*(close|verif)'
+PLAN_REFS=$(git diff --name-only origin/main...HEAD | grep -E 'knowledge-base/project/(plans|specs)/' || true)
+[[ -n "$PLAN_REFS" ]] && grep -inE "$CLOSE_DEFER_RE" $PLAN_REFS | head -5
+```
+
+Any hit ⇒ use **`Ref #N`**, not `Closes #N`, and close the issue yourself after the proof lands (`gh issue close N --comment "<live evidence>"`). Over-detection is deliberate and cheap here: a spurious hit costs one re-read of the keyword; a miss closes an issue whose work is not done.
+
+Match the SHAPE (a close verb + an ordering word), not the canonical phrasing. The grep is wider than [work/SKILL.md](../work/SKILL.md)'s prose list ("Closes-after-apply", "manual close after", …) because a plan rarely uses those exact words — it writes *"close #N only **after** Phase 4.5 passes"*, where the markdown bold also defeats any regex that expects `after` to be followed by a space.
+
+**Why this lives here and not only in `work`:** the rule was already documented in `work/SKILL.md` §Common Pitfalls, but `/ship` Phase 6 is where the PR body is actually written — a rule that fires in a different skill than the action it governs cannot catch anyone. #6537 proved it: `tasks.md` 7.6 said *"`gh issue close 6537` only **after** Phase 4.5 passes"*, the body shipped `Closes #6537`, and the merge closed the issue while the monitor it was filed about was **still paused**. The issue had to be reopened post-merge. Recording an observability gap as handled while it silently alarms nobody is that issue's own defect, reproduced by the PR fixing it.
+
 ### Auto-Close Keyword Pre-Creation Scan (#3407)
 
 Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title and body AND the branch's commit messages for unintentional auto-close-keyword + #N references. Two traps to know:
