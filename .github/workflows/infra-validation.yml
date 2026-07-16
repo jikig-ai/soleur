@@ -528,6 +528,15 @@ jobs:
       - name: Run scheduled-supabase-advisor-scan.yml shape + drift guards
         run: bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh
 
+      # Proves the step above still DISCRIMINATES. Its checks used to be shaped
+      # `<producer> | grep -q P` under pipefail, which inverts when grep -q exits
+      # first and SIGPIPEs the producer (#6572) — at the match⇒fail sites that
+      # inverts into a SILENT PASS on the headline assertion. The guard passes on
+      # an unmutated tree whether or not it is broken, so only a size-amplified
+      # differential can tell the two apart. Mutates sandbox copies only.
+      - name: Run supabase-advisor scan-workflow mutation attestation
+        run: bash apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh
+
       # Proves the step above's sequence-DDL guard still FAILS on the catastrophe it
       # claims to catch. It is the only check standing between an unbound sequence loop
       # and a schema-wide REVOKE on the app's co-tenanted tables, so its non-vacuity is

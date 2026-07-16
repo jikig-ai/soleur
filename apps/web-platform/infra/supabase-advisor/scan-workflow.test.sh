@@ -24,13 +24,22 @@
 # anchoring on syntax is.
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+DIR_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$DIR_SELF/../../../.." && pwd)"
 WORKFLOW="$REPO_ROOT/.github/workflows/scheduled-supabase-advisor-scan.yml"
-# SCRIPT_OVERRIDE lets a mutation test point this guard at a scratch copy. Without
-# the seam every mutation must edit TRACKED source, and an interrupted run leaves
-# the tree dirty (it did, while this fix was being planned). Unset in CI and in
-# every normal run, so the default path is byte-identical to before.
+# SCRIPT_OVERRIDE points this guard at a scratch copy so a mutation test never
+# edits tracked source. Consumer: scan-workflow-mutation.test.sh.
+#
+# It is NOT a disarm switch, and that is measured, not asserted: every $SCRIPT
+# rung below is paired with a non-vacuity rung that requires the target to carry
+# the real sentinels, so an override pointing at a benign file goes RED (9 FAILs),
+# not vacuously green. To pass, the target must already satisfy every property
+# asserted here. The residual risk is a human mistaking an override run for a
+# real audit, so an override announces itself — no CI-fail-closed check, because
+# the mutation harness is a legitimate CI caller and a check it must bypass
+# protects nothing.
 SCRIPT="${SCRIPT_OVERRIDE:-$REPO_ROOT/scripts/supabase-advisor-scan.sh}"
+[[ -z "${SCRIPT_OVERRIDE:-}" ]] || printf 'NOTE: auditing an override target, NOT tracked source: %s\n' "$SCRIPT" >&2
 INNGEST_FN="$REPO_ROOT/apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts"
 MONITORS_TF="$REPO_ROOT/apps/web-platform/infra/sentry/cron-monitors.tf"
 APPLY_YML="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
@@ -39,6 +48,7 @@ HOOK="$REPO_ROOT/.claude/hooks/new-scheduled-cron-prefer-inngest.sh"
 INFRA_VALIDATION="$REPO_ROOT/.github/workflows/infra-validation.yml"
 TEST_ALL="$REPO_ROOT/scripts/test-all.sh"
 HARNESS="$REPO_ROOT/tests/scripts/test-supabase-advisor-scan.sh"
+MUTATION_HARNESS="$DIR_SELF/scan-workflow-mutation.test.sh"
 
 fails=0
 pass() { printf '  ok   %s\n' "$1"; }
@@ -79,26 +89,62 @@ if grep -qF 'bash tests/scripts/test-supabase-advisor-scan.sh' "$TEST_ALL"; then
 else
   fail "harness is wired" "test-all.sh does not run tests/scripts/test-supabase-advisor-scan.sh — the proof that the gate cannot silently pass would gate NOTHING (nothing auto-discovers tests/scripts/)"
 fi
-
-echo "== this file's own checks cannot SIGPIPE their producer (#6572) =="
-# Forbids <producer> | grep -q… (incl. -qF/-qE/--quiet/-m1 -q): grep -q exits on
-# first match, SIGPIPEs the producer, and pipefail (set at the top of this file)
-# promotes 141 to the pipeline status — INVERTING the if. Where match⇒pass that
-# false-FAILs a correct tree; where match⇒fail it false-PASSes, which is how the
-# headline .lints[]? assertion below could silently go green. Match against a
-# here-string instead. Safe forms (grep -c, grep … >/dev/null) are not matched.
-#
-# The messages below deliberately do NOT spell the forbidden construct. This
-# grep strips comments, but NOT string literals — so naming it verbatim in a
-# pass/fail string makes this check match itself and false-FAIL forever. That is
-# the same "assert must-not-contain X, then document X" collision the header
-# warns about, hit live while writing this block.
-pipe_grep_q='[|][[:space:]]*grep([[:space:]]+-[a-zA-Z0-9]+)*[[:space:]]+(-[a-zA-Z]*q[a-zA-Z]*|--quiet)([[:space:]]|$)'
-residual="$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}" | grep -cE "$pipe_grep_q")"
-if [[ "$residual" == "0" ]]; then
-  pass "no early-exit-pipe form remains in this guard (every check matches a here-string)"
+# Third gate, same reasoning: the mutation attestation is what proves the checks
+# below still DISCRIMINATE (they pass on an unmutated tree either way — #6572).
+# Unregistered, it would be the strongest evidence in this subsystem, running nowhere.
+if [[ -f "$MUTATION_HARNESS" ]] && grep -qF 'bash apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh' "$INFRA_VALIDATION"; then
+  pass "the mutation attestation exists and is registered in infra-validation.yml"
 else
-  fail "no early-exit-pipe form remains" "$residual site(s) still feed a producer into an early-exiting matcher — under 'set -o pipefail' the SIGPIPEd producer (rc=141) becomes the pipeline status and inverts the check (#6572)"
+  fail "mutation attestation is wired" "scan-workflow-mutation.test.sh is missing or has no 'run:' step in infra-validation.yml — this guard's non-vacuity would rest on prose again (#6572)"
+fi
+
+echo "== no check in this file feeds a producer into grep -q (#6572) =="
+# grep -q exits on FIRST MATCH. The producer's next write() then takes SIGPIPE
+# (rc=141) and pipefail — set at the top of this file — promotes 141 to the
+# pipeline status, INVERTING the if. Where match⇒pass that false-FAILs a correct
+# tree (the observed #6572 symptom); where match⇒fail it false-PASSes, which is
+# how the headline .lints[]? assertion below goes green while the idiom it
+# forbids is present. Match against a here-string instead.
+#
+# SCHEDULING decides it, not a size threshold — do not reduce this to a byte
+# count in either direction. The producer needs ≥2 write()s for a window to
+# exist at all (~8 KB here = 2 writes), but whether the reader closes inside
+# that window is a race:
+#   - unperturbed locally the producer wins: 0/200 at the real 8 KB size;
+#   - perturb it at that SAME size (run it under strace) and the producer is
+#     killed by SIGPIPE — the window is real, not hypothetical;
+#   - CI's scheduler is such a perturbation. #6572 is the log: `grep: write
+#     error: Broken pipe`, same tree, re-run passed.
+# It only becomes DETERMINISTIC once output exceeds the pipe buffer (~100 KB).
+# So "it passes locally" is not evidence of anything, and neither is any single
+# arming size; only a size-amplified differential discriminates.
+#
+# SCOPE: grep -q/--quiet only — the #6572 close condition. Other early-exiting
+# consumers (| head -N, | jq -e) are NOT matched. They are safe here today only
+# because each sits in an unchecked $( ), so nothing reads their 141; that is
+# rc-discard, not design. Widen this if one ever gets status-checked.
+#
+# THREE NORMALISATIONS, each load-bearing — mutate any one out and a real bug
+# escapes or a correct file false-FAILs (scan-workflow-mutation.test.sh proves it):
+#   1. comments stripped   — this block's own prose describes the shape.
+#   2. double-quoted strings stripped — a fail message naming the shape would
+#      match ITSELF and false-FAIL forever. Comments are stripped here; string
+#      literals are not. Real code still matches: its patterns are single-quoted
+#      and the `| grep -q` token sits outside any quotes.
+#   3. line-continuations and pipe-newlines folded — THIS FILE writes multi-line
+#      pipes (the probe_hook jq chain above), so an author following house style
+#      would otherwise evade this guard silently.
+pipe_grep_q='[|][[:space:]]*grep([[:space:]]+-[a-zA-Z0-9]+)*[[:space:]]+(-[a-zA-Z]*q[a-zA-Z]*|--quiet)([[:space:]]|$)'
+residual_hits="$(sed -E ':a;/\\$/{N;s/\\\n[[:space:]]*/ /;ba}' "${BASH_SOURCE[0]}" \
+  | grep -vE '^[[:space:]]*#' \
+  | sed 's/"[^"]*"//g' \
+  | sed -E ':b;/\|[[:space:]]*$/{N;s/\|[[:space:]]*\n[[:space:]]*/| /;bb}' \
+  | grep -E "$pipe_grep_q")"
+if [[ -z "$residual_hits" ]]; then
+  pass "every check matches a here-string; none feeds a producer into an early-exiting matcher"
+else
+  # Print the offending text: a bare count makes the reader re-derive the regex.
+  fail "no early-exit-pipe form remains" "$(printf '%s' "$residual_hits" | wc -l) site(s) invert under pipefail (#6572). Offending: $(printf '%s' "$residual_hits" | tr '\n' '~')"
 fi
 
 echo "== the hook allows this workflow (asserted by EXECUTING the hook) =="
@@ -178,8 +224,10 @@ else
   fail "host literal pinned" "expected API=\"https://api.supabase.com\" in $SCRIPT"
 fi
 # The host line must not be interpolated from anywhere — an overridable host is
-# the exfil seam. Assert on the host-assignment line specifically.
-if grep -qE '\$\{|\$\(|\$[A-Za-z_]' <<<"$(grep -E '^\s*API=' "$SCRIPT")"; then
+# the exfil seam. Assert on the host-assignment line specifically. Captured to a
+# variable like every other producer here, so the match reads left-to-right.
+api_line="$(grep -E '^\s*API=' "$SCRIPT")"
+if grep -qE '\$\{|\$\(|\$[A-Za-z_]' <<<"$api_line"; then
   fail "host is not interpolated" "the API= line contains a shell/GHA expansion — it must be a literal"
 else
   pass "host assignment contains no interpolation"
@@ -221,15 +269,18 @@ echo "== the anti-fail-open sentinels are present in the script =="
 #  2. -F is deliberate. "Improving" this to grep -E makes the `]` optional
 #     (`[]?` = zero-or-one `]`), so it would match the CORRECT `.lints[]` and
 #     false-FAIL permanently.
-#  3. CAPTURED ONCE, matched against a here-string. This was a function piped
-#     into grep -q; grep -q exits on first match and SIGPIPEd it, so under
-#     pipefail rc=141 became the pipeline status and INVERTED both checks below
-#     (#6572). The capture also runs the producer once instead of per check.
+#  3. CAPTURED ONCE, matched against a here-string — see the #6572 block above
+#     for why the piped form could invert these two checks (a scheduling race,
+#     not a certainty). The capture also runs the producer once rather than per
+#     check.
 script_code="$(grep -vE '^\s*#' "$SCRIPT")"
-# Load-bearing: capture-once funnels seven checks through one variable, so an
-# empty capture would make the fail-open assertion below take its `pass` branch.
-# `set -uo pipefail` carries no `-e`, so a failed assignment is otherwise silent.
-[[ -n "$script_code" ]] || { printf 'FATAL: script_code empty (grep -v failed?)\n' >&2; exit 1; }
+# NOT a fail-open guard, despite appearances — measured: delete this line, point
+# $SCRIPT at an all-comment file, and the check below DOES take its `pass`
+# branch, but the non-vacuity check after it catches the empty capture and the
+# run still exits 1. This line is here for the DIAGNOSTIC: it turns five
+# confusing downstream FAILs into one accurate line naming the cause.
+# (`set -uo pipefail` carries no `-e`, so the empty assignment is itself silent.)
+[[ -n "$script_code" ]] || { printf 'FATAL: no non-comment lines in %s\n' "$SCRIPT" >&2; exit 1; }
 if grep -qF '.lints[]?' <<<"$script_code"; then
   fail "script never uses the fail-open .lints[]? idiom" "found .lints[]? in CODE — a 401 body parses to 0 through it"
 else

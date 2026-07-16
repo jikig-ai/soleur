@@ -33,11 +33,18 @@ and it is the reason this revision exists.
    cannot compare against main and **exits 0 on the very `-F`→`-E` drift it claimed to catch**
    (the plan's own #1 risk, left unmitigated). Mechanized as flag-count equality vs
    `origin/main` (16 `-qF`, 12 `-qE` — measured).
-3. **v1 overclaimed the fail-open.** SIGPIPE needs a **second `write()`**; under one stdio
-   block (4096 B) it is *unreachable*. Measured 0/300 at 1591/4096/8035/16 000 B. Only
-   **`:200`** is a currently-reachable fail-open — `:157`/`:268` are fail-open in *polarity*
-   only. The 7-site scope is retained but **re-justified** (guard-writability, `advisor_block`
-   growth toward 4096 B, idiom uniformity) rather than resting on the wrong claim.
+3. **v1 overclaimed the fail-open — and v2's correction was itself false-precise (fixed at
+   /work).** A producer needs a **second `write()`** for a window to exist at all, so a
+   single-stdio-block (≤4096 B) producer is structurally safe. But v2 then read that as an
+   *arming threshold* ("crossing 4096 B arms it"), which review falsified: unperturbed, the
+   8035 B producer is **0/200** locally, and a bisection is flat 0/40 from 4 KB to 64 KB.
+   **Scheduling decides the race, not a byte count.** Perturb the SAME 8035 B producer (run
+   it under `strace`) and it IS killed by SIGPIPE — the window is real; and #6572's CI log
+   (`grep: write error: Broken pipe`, same tree, re-run passed) is the race being lost in
+   production. It only becomes deterministic past the pipe buffer (~100 KB). The issue's own
+   text was the most accurate artifact here ("Runner scheduling/buffering appears to decide
+   it"); the plan replaced that honest uncertainty with a false size model. The 7-site scope
+   stands on guard-writability + idiom uniformity + future growth — never on a threshold.
 4. **v1's self-check was evadable** — the narrow pattern missed `--quiet` and `-m1 -q`. The
    guard against "a gate that gates nothing" was itself partly vacuous. Broadened and verified
    against 5 unsafe + 4 safe forms.
@@ -292,12 +299,26 @@ identically on the fixed and unfixed file; those are cut or rebuilt.
   Same host, same input, same site → a real differential. *(v1's AC6 ran the guard 200× on an
   unmodified tree; measured **0/400** false-FAILs on the **unfixed** file, i.e. green on both
   arms — it re-measured the bug's invisibility rather than the fix.)*
-- **AC4 (flag drift — mechanized):** flag counts on HEAD equal `origin/main`'s exactly —
-  **16** `grep -qF`, **12** `grep -qE`:
+- **AC4 (flag drift — mechanized):** every `(flag, pattern)` pair on `origin/main` still
+  exists on HEAD **with the same flag**. Empty output = no drift:
   ```bash
-  diff <(git show origin/main:apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh | grep -oE 'grep -q[FE]?' | sort | uniq -c) \
-       <(grep -oE 'grep -q[FE]?' apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh | sort | uniq -c)
+  F=apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh
+  pairs() { grep -vE '^[[:space:]]*#' | grep -oE "grep -q[FE]? '[^']*'" | LC_ALL=C sort -u; }
+  LC_ALL=C comm -23 <(git show "origin/main:$F" | pairs) <(pairs < "$F")   # must be empty
   ```
+  Three corrections over the count-equality form AC4 originally specified, each found by
+  running it rather than reading it:
+  1. **Pairs, not counts.** Counting `grep -q[FE]?` occurrences forbids *adding* a check —
+     this PR legitimately adds one (the mutation-harness wiring assertion), so the count form
+     false-FAILs a correct diff. AC4's intent is "no `-F`→`-E` drift on the sites being
+     rewritten"; pairing the flag to its pattern says exactly that and allows additions.
+  2. **Comments stripped.** The fix's own prose names `grep -q`, so a whole-file scan hits
+     the "assert must-not-contain X, then document X" collision the file's header warns
+     about — which the original AC4 walked straight into.
+  3. **`LC_ALL=C` pinned.** A locale `sort` makes `comm` read its input as unsorted, and the
+     set-diff is then undefined — the guard runs blind while printing nothing. Observed here.
+
+  Mutation-verified both halves: empty on the real diff; REDs on an injected `-qF`→`-qE`.
   *(v1's AC7 was `git diff … | grep -E '^\+.*grep -q'` — proven vacuous: it prints only `+`
   lines, so it cannot compare against main, and it exits 0 on the very `-qF`→`-qE` drift it
   claimed to catch. That drift is the Risks table's #1 named risk, so v1 left it unmitigated.)*
@@ -406,7 +427,7 @@ since no `sentry_cron_monitor` is added or removed.
 | **Mutation tests dirty tracked source** — `SCRIPT` is hardcoded, no scratch-copy path. *Happened this session.* | `SCRIPT_OVERRIDE` seam (Phase 1) + **AC7** asserts a clean tree. |
 | **Self-check evaded** by `--quiet` / `-m1 -q`. | Phase 3 pattern verified against all 5 unsafe forms and 4 safe forms. |
 | Diff matches the sensitive-path regex via `apps/[^/]+/infra/` → preflight Checks 6 + 10 fire. | `## User-Brand Impact` carries the `threshold: none, reason:` bullet; `## Observability` carries the 5-field schema with an ssh-free `discoverability_test`. |
-| **Guard is advisory**, so a regression is visible but not merge-blocking. | Pre-existing and out of scope — promoting `deploy-script-tests` to required needs dropping `paths:`, adding `merge_group:`, and registering in two places, putting ~50 test steps on every PR. Already scoped in **#6480**. Do not fold in. |
+| **Guard is advisory**, so a regression is visible but not merge-blocking. | Pre-existing and out of scope — promoting `deploy-script-tests` to required needs dropping `paths:`, adding `merge_group:`, and registering in two places, putting ~50 test steps on every PR. Already scoped in **#6480**. Do not fold in. **The advisory-only exposure is narrower than it reads:** the RLS fail-open axis IS backstopped by a required check — `tests/scripts/test-supabase-advisor-scan.sh` (which tests 401 / empty / HTML-502 / `.lints`-renamed / clean directly) → `test-all.sh:161` → ci.yml `test-scripts` → the `test` rollup, which IS in the canonical required set. Advisory-only genuinely applies to the cross-file drift axes (cron agreement, slug, `model.c4` count, liveness forge-proofing, issue-filing). So this guard is structural early-warning, not the last line of defence on security. |
 
 ## Alternative Approaches Considered
 
