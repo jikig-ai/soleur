@@ -236,6 +236,53 @@ vs. digest pin) rather than let /work discover them.
 project explicit end-to-end rather than defaulted, and FR2 fails closed if it is ever unresolvable.
 No `lifecycle.ignore_changes` involved. No secret values enter `terraform.tfstate`.
 
+## Downtime & Cutover
+
+**Gate 4.55 fires** (deepen-plan): the plan produces a `must be replaced` on `hcloud_server`
+(the dedicated Inngest host) via the `IREF` bump at `cloud-init-inngest.yml:337` → `user_data`
+diff → no `ignore_changes=[user_data]` (`inngest-host.tf:244`). Zero-downtime must be evaluated
+and defaulted to, not assumed away.
+
+### The offline-inducing operation, and the surface it affects
+
+- **Operation:** `terraform apply` replaces `hcloud_server` (dedicated Inngest host), detaching
+  and re-attaching `hcloud_volume_attachment.inngest_redis` (`inngest-host.tf:272-273`).
+- **Surface affected:** the **dedicated** host only.
+
+### Zero-downtime evaluation — the default, and why it already holds
+
+**This replace is zero-downtime for every serving surface, by measurement, not by mitigation.**
+
+| Question | Measured answer |
+|---|---|
+| Is the replaced host serving prod scheduling? | **No.** `INNGEST_CUTOVER_FLIP` is **absent** from `soleur-inngest/prd` ⇒ the flip guard (`inngest-bootstrap.sh:414-418`, blocks a prod-URI start outside `{armed, flipping, done}`) holds the host inert. The **co-located** host is the live scheduler. |
+| Is it pushing the prod liveness monitor? | **No.** `INNGEST_HEARTBEAT_URL` is **absent** from `soleur-inngest/prd` — by design (`inngest-host.tf:137-151`: one unambiguous pusher per monitor; the URL is provisioned only *at* cutover). The co-located host is the sole pusher — which is exactly why AC13 (monitor stays `up`) holds *through* the replace. |
+| Does the AOF volume carry in-flight work? | **No.** A dark host runs no queue; `hcloud_volume.inngest_redis` is a separate resource that survives the replace (`inngest-host.tf:248-249`). Re-attach is still verified (git-data precedent) — see AC14. |
+
+⇒ **No blue-green, drain, or maintenance window is required**, because the resource under replace
+serves nothing. The zero-downtime path is not a *mitigation* we add; it is the *measured* state.
+`inngest-host.tf:244`'s "SOLE scheduler ⇒ cron-outage window" is ADR-100's **post-cutover**
+end-state and does **not** describe today. **Ship this before cutover, not after** — the same
+replace after the flip is armed WOULD be a real outage needing the maintenance-window dispatch.
+
+**Residual risk accepted:** none requiring sign-off. The dark host has no liveness push during
+dark (a pre-existing, documented gap — `inngest-host.tf:149-151`), so a replace that bricked the
+host would surface at the #6178 Phase-2 pre-flight registry-empty check, not by continuous
+monitoring. FR3+FR4 **narrow** that gap: post-fix the dark host emits a positive
+`url_present=no flip=unarmed` row every 60s, which is the first continuous dark-host liveness
+evidence this host has ever had.
+
+### Per-stage verification / rollback
+
+| Stage | Verify (no SSH) | Rollback |
+|---|---|---|
+| Pre-apply | `terraform plan` shows exactly one `hcloud_server` replace + volume re-attach; **no** co-located resource in the diff | Do not apply |
+| Post-apply | `cutover-inngest.yml --field op=inventory`; Better Stack `SYSLOG_IDENTIFIER=inngest-heartbeat` ≥1 row/60s (AC11) | Revert the `IREF` bump → re-apply (host is dark; a second replace is equally free) |
+| Steady | AC12 (`Failed to start` stream stops) + AC13 (monitor still `up`) | As above |
+
+**Ordering constraint (load-bearing):** this must land while `INNGEST_CUTOVER_FLIP` is unset. If
+#6178 arms the flip first, re-run this gate — the zero-downtime conclusion inverts.
+
 ## Observability
 
 ```yaml
@@ -362,22 +409,38 @@ follow-up issue.**
 
    ```sh
    #!/bin/sh
-   # Dark (pre-cutover) hosts have no INNGEST_HEARTBEAT_URL by design
-   # (inngest-host.tf:137-151) — skip the ping and exit 0 so the unit's `failed`
-   # state keeps meaning. ARMED + absent URL is a REAL fault and must still fail.
+   # Posted to Better Stack every 60s by inngest-heartbeat.timer.
+   #
+   # An ABSENT INNGEST_HEARTBEAT_URL is NOT a curl no-op — `curl -fsS --max-time 10 ""`
+   # exits 2 (measured, #6536). Dark/reverted hosts legitimately have no URL
+   # (inngest-host.tf:137-151: one unambiguous pusher per monitor; op=arm provisions the
+   # URL at cutover), so classify explicitly and keep the unit's `failed` state meaningful.
+   #
+   # Arms mirror cutover-inngest.yml:703/706. FSM: armed -> flipping -> flushed -> done
+   # (:764); op=arm writes the URL (G4, :760) BEFORE flip=armed (:665), so an intended
+   # pusher with no URL is a REAL fault, never the dark steady state.
    if [ -z "$INNGEST_HEARTBEAT_URL" ]; then
-     if [ "$INNGEST_CUTOVER_FLIP" = "armed" ]; then
-       logger -t inngest-heartbeat "url_present=no flip=armed — ARMED but no heartbeat URL; failing"
-       exit 1
-     fi
-     logger -t inngest-heartbeat "url_present=no flip=unarmed — dark host, skipping ping"
-     exit 0
+     case "${INNGEST_CUTOVER_FLIP:-unset}" in
+       ""|unset|aborted|rollback|rolled-back)
+         logger -t inngest-heartbeat "url_present=no flip=${INNGEST_CUTOVER_FLIP:-unset} — not the intended pusher (dark/reverted); skipping ping"
+         exit 0 ;;
+       armed|flipping|flushed|done)
+         logger -t inngest-heartbeat "url_present=no flip=$INNGEST_CUTOVER_FLIP — intended pusher has NO heartbeat URL; failing"
+         exit 1 ;;
+       *)
+         logger -t inngest-heartbeat "url_present=no flip=$INNGEST_CUTOVER_FLIP — UNKNOWN flip state; failing closed"
+         exit 1 ;;
+     esac
    fi
    exec /usr/bin/curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
    ```
 
    The `flip` discriminator is what keeps this from being a silent fallback: it converts a
-   blanket exit-0 into a *scoped, self-declaring* no-op that still fails loudly post-cutover.
+   blanket exit-0 into a *scoped, self-declaring* no-op that still fails loudly whenever this
+   host is the intended pusher. **Never `[ "$INNGEST_CUTOVER_FLIP" = "armed" ]`** — that lumps
+   `flipping`/`flushed`/`done` into the dark branch (AC5b). The `*)` arm fails closed so a typo'd
+   or future state can never silently no-op. `logger` asserts **presence only, never the URL
+   value** (§User-Brand Impact / AC3).
 
 ### Phase 4 — Correct the record + guards
 
@@ -402,14 +465,67 @@ follow-up issue.**
   a new case proving the ping script exits **0** when the URL is absent and flip is unarmed, and
   **non-zero** when the URL is absent and flip is `armed`.
 - **AC5** — *(removed — asserted the descoped FR1. See §Descoped.)*
-- **AC5b (enum completeness)** — the FR3 branch classifies **every** `INNGEST_CUTOVER_FLIP` state,
-  not just `armed`. `inngest-bootstrap.sh:416` names the FSM set `{armed, flipping, done}` and
-  `cutover-inngest.yml` additionally writes `rollback`; the key is currently **absent** from
-  `soleur-inngest/prd` (unset). The test asserts the exit code for each of:
-  `unset`, `armed`, `flipping`, `done`, `rollback`. A single `= "armed"` comparison silently
-  lumps `flipping`/`done` into the dark branch — during those states the dedicated host IS the
-  intended pusher, so exit-0 there would be a **silent liveness hole**. Deepen-plan MUST settle
-  the correct classification per state before /work.
+- **AC5b (enum completeness) — SETTLED by deepen-plan.** The FR3 branch classifies **every**
+  `INNGEST_CUTOVER_FLIP` state. **v2's enum was incomplete and would have shipped the hole it
+  warned about**: it listed `{unset, armed, flipping, done, rollback}` and **missed `flushed`,
+  `aborted`, and `rolled-back`**.
+
+  **Authoritative state set** (measured, not inferred):
+  - `cutover-inngest.yml:764` — the on-host FSM is **`armed → flipping → flushed → done`**
+    (ADR-100 Decision 6a). `inngest-bootstrap.sh:416`'s `{armed, flipping, done}` comment is
+    **stale** — it omits `flushed`.
+  - `cutover-inngest.yml:703` — G1's safe-pre-arm arm: `""|unset|aborted|rolled-back`.
+  - `cutover-inngest.yml:706` — G1's refuse arm: `armed/flipping/flushed/done`.
+  - `cutover-inngest.yml:668` — `op=rollback` writes the transitional literal `rollback`; the
+    on-host FSM then settles at terminal `rolled-back` (`:133`).
+
+  **Ordering fact that decides the `armed` arm** (`cutover-inngest.yml:760` then `:665`): `op=arm`
+  writes `INNGEST_HEARTBEAT_URL` **first (G4)** and `INNGEST_CUTOVER_FLIP=armed` **LAST**. So
+  *armed + absent URL is unreachable in a healthy arm* — if observed, it is a genuine fault
+  (partial arm, or the URL was deleted underneath). This is what makes exit-1 correct there.
+
+  **Settled classification — the rule is "is this host the intended pusher?", not "is it armed?":**
+
+  | `INNGEST_CUTOVER_FLIP` | Intended pusher? | Exit when URL absent |
+  |---|---|---|
+  | `""` / unset (**today**) | No — pre-arm dark; co-located pushes | **0** (skip, log reason) |
+  | `aborted` | No — arm aborted; co-located serving | **0** |
+  | `rollback` (transitional) | No — reverting; co-located being re-enabled | **0** |
+  | `rolled-back` (terminal) | No — reverted; co-located serving | **0** |
+  | `armed` | **Yes** — URL written before this literal | **1** |
+  | `flipping` | **Yes** — mid-FSM | **1** |
+  | `flushed` | **Yes** — mid-FSM (**v2 missed this**) | **1** |
+  | `done` | **Yes** — sole scheduler | **1** |
+  | anything else (typo/unknown) | Unknown ⇒ **fail closed** | **1** |
+
+  **Prescribed shape — a `case`, mirroring the workflow's own arms at `:703`/`:706` (precedent
+  diff), NOT a `= "armed"` equality:**
+
+  ```sh
+  case "${INNGEST_CUTOVER_FLIP:-unset}" in
+    ""|unset|aborted|rollback|rolled-back)
+      logger -t inngest-heartbeat "url_present=no flip=${INNGEST_CUTOVER_FLIP:-unset} — not the intended pusher (dark/reverted); skipping ping"
+      exit 0 ;;
+    armed|flipping|flushed|done)
+      logger -t inngest-heartbeat "url_present=no flip=$INNGEST_CUTOVER_FLIP — intended pusher has NO heartbeat URL; failing"
+      exit 1 ;;
+    *)
+      logger -t inngest-heartbeat "url_present=no flip=$INNGEST_CUTOVER_FLIP — UNKNOWN flip state; failing closed"
+      exit 1 ;;
+  esac
+  ```
+
+  The test asserts the exit code for **all nine** cases above (the eight literals + one unknown
+  value). A single `= "armed"` comparison lumps `flipping`/`flushed`/`done` into the dark branch —
+  during those states the dedicated host IS the intended pusher, so exit-0 there is precisely the
+  **silent liveness hole** this AC exists to prevent.
+
+  **Follow-up surfaced (out of scope, needs its own issue):** `op=rollback` writes `flip=rollback`
+  but does **not** delete `INNGEST_HEARTBEAT_URL` from `soleur-inngest/prd`. After a rollback the
+  URL is still present, so the ping proceeds and the dark host pushes the **same** monitor the
+  re-enabled co-located host pushes — two pushers, the exact false-green the one-pusher-per-monitor
+  design (`inngest-host.tf:137-151`) forbids. Pre-existing (today's URL-present path already execs
+  curl unconditionally); FR3 neither causes nor worsens it. See §Descoped item 4.
 - **AC6** — `inngest-host.tf` no longer asserts the no-op claim:
   `grep -ci 'curl no-ops' apps/web-platform/infra/inngest-host.tf` = 0. (Absence-grep is safe
   here: the corrected prose states the measured rc=2 behaviour and does not restate the phrase.)
@@ -436,6 +552,14 @@ follow-up issue.**
   occurrences in the 30m after deploy (baseline ~1,240/day).
 - **AC13** — `betteruptime_heartbeat.inngest_prd` remains **`up`** throughout (the co-located host
   keeps pushing; this change must not disturb the monitor).
+- **AC14 (volume re-attach — replace safety)** — after the replace, `hcloud_volume.inngest_redis`
+  is re-attached to the new host and the Redis AOF is intact (git-data precedent, cited at
+  `inngest-host.tf:248-249`). Verified via `cutover-inngest.yml --field op=inventory` (no SSH).
+  Dark-host caveat: the AOF is expected **empty** pre-cutover — assert *attachment*, not contents.
+- **AC15 (dark-host ordering gate — load-bearing)** — `INNGEST_CUTOVER_FLIP` is **absent** from
+  `soleur-inngest/prd` at apply time (`doppler secrets --only-names -p soleur-inngest -c prd`).
+  This is the precondition the whole §Downtime & Cutover zero-downtime conclusion rests on. If the
+  key is present/armed, HALT and re-run that gate — the replace becomes a real prod outage.
 
 ## Descoped (each needs a tracking issue before /work)
 
@@ -453,7 +577,21 @@ follow-up issue.**
    `SyslogIdentifier=` silently tag as their ExecStart basename* (here, `doppler`). A CI guard
    asserting every `logger -t` tag / unit `SyslogIdentifier=` under `infra/` appears in Source 4's
    allowlist (or is explicitly excluded) kills the class. Follow-up issue, not this PR.
-3. **Sudoers dual-maintenance (CTO).** `cloud-init.yml:77-79` carries an inline **mirror** of
+4. **`op=rollback` leaves `INNGEST_HEARTBEAT_URL` in place → two pushers on one monitor.**
+   `cutover-inngest.yml:668` writes `INNGEST_CUTOVER_FLIP=rollback` but never deletes the URL
+   `op=arm` wrote at G4 (`:760`). After a rollback the dedicated host still has the URL, so its
+   ping proceeds while the **re-enabled co-located** host pushes the same monitor — two pushers,
+   violating the one-unambiguous-pusher-per-monitor invariant (`inngest-host.tf:137-151`) and
+   re-creating the false-green that invariant exists to prevent. **Pre-existing** (today's
+   URL-present path execs curl unconditionally); FR3 neither causes nor worsens it, and fixing it
+   means editing cutover semantics mid-cutover. *Candidate fix:* have `op=rollback` delete the URL
+   from `soleur-inngest/prd` (inverse of G4), which FR3's `rollback`/`rolled-back` arms then
+   classify correctly with zero further change. File as its own issue.
+5. **`inngest-bootstrap.sh:416`'s FSM comment is stale.** It names `{armed, flipping, done}`; the
+   real FSM is `armed → flipping → flushed → done` (`cutover-inngest.yml:764`) — `flushed` is
+   missing. This plan does not edit the flip guard, but the stale comment is what led v2's AC5b to
+   an incomplete enum. Correct it in the same follow-up as item 4.
+6. **Sudoers dual-maintenance (CTO).** `cloud-init.yml:77-79` carries an inline **mirror** of
    `deploy-inngest-bootstrap.sudoers` ("keep the two in sync", `cloud-init.yml:106,125`). Any
    future FR1 work must edit both, and sudoers delivery needs `apply-deploy-pipeline-fix.yml`, not
    the deploy webhook (`server.tf:720-731`).
@@ -476,6 +614,37 @@ AC10's delivery path (refuted → corrected) and FR3's enum literal (→ AC5b).
 did **not** run, and **CPO sign-off was not obtained** (`requires_cpo_signoff: true` is unmet).
 **Re-run `plan-review` — in small batches, not 7-way parallel — before `/work`.** Do not treat this
 plan as review-passed.
+
+### Deepen-plan pass (v3) — what it changed
+
+Run in small batches after the 7-way spawn failed. Gate results and findings:
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | **pass** — present, concrete, threshold `single-user incident` |
+| 4.7 Observability (5 fields) | **pass** — all present, no `ssh` in `discoverability_test.command` |
+| 4.8 PAT-shaped variable | **pass** — no matches |
+| 4.9 UI wireframe | **pass** (not triggered) — the lone regex hit is the plan's own *negative* statement in §Product/UX Gate, not a UI path in Files-to-Edit |
+| 4.5 Network-outage | **not triggered** — `inngest-host.tf` has no `provisioner "file"`/`"remote-exec"`/`connection { type = "ssh" }`; the prose `timeout` hits are `curl --max-time` and agent-API prose, not a connectivity symptom |
+| **4.55 Downtime & Cutover** | **FIRED** — plan force-replaces an `hcloud_server` with no `## Downtime & Cutover` section. Section added; telemetry emitted. Conclusion: **zero-downtime already holds** (the replaced host is dark/inert), and the ordering constraint is now AC15. |
+
+**Three v2 defects corrected — each would have surfaced inside `/work`:**
+
+1. **Delivery split was false.** FR5 (`vector.toml`) rides the **same OCI image** as FR3/FR4
+   (`cloud-init-inngest.yml:337` `IREF` pin; `:368`/`:370` docker-cp), so it is replace-class, not
+   replace-free. The replace trigger is the `IREF` bump, not the bootstrap edit. New FR8.
+2. **AC5b's enum was incomplete** — it missed **`flushed`**, **`aborted`**, **`rolled-back`**
+   (`cutover-inngest.yml:764`, `:703`, `:706`). v2 would have shipped the very silent-liveness hole
+   AC5b was written to prevent. Now settled as a 9-case `case` with a fail-closed `*)` arm.
+3. **AC10's "replace the SOLE scheduler" risk framing was wrong for today.** Measured:
+   `INNGEST_CUTOVER_FLIP` and `INNGEST_HEARTBEAT_URL` are both **absent** from `soleur-inngest/prd`
+   ⇒ the host is dark and the co-located host serves prod. `inngest-host.tf:244`'s "SOLE scheduler"
+   is ADR-100's post-cutover end-state. The replace is free **now** and expensive **after** the arm
+   — hence AC15's ordering gate.
+
+**Two follow-ups surfaced** (§Descoped 4 + 5): `op=rollback` never deletes the heartbeat URL (two
+pushers on one monitor after a rollback), and `inngest-bootstrap.sh:416`'s FSM comment is stale
+(omits `flushed`) — the stale comment is what led v2's enum astray.
 
 ## Risks & Mitigations
 

@@ -3,29 +3,41 @@
 Plan: `knowledge-base/project/plans/2026-07-16-fix-6536-inngest-heartbeat-exit-code-plan.md`
 Lane: `cross-domain` · Threshold: `single-user incident` · Issue: #6536
 
-> **BLOCKER — do not start Phase 2 until these clear.**
-> 1. `plan-review` did NOT complete (6/7 reviewers died on API errors; only `cto` returned).
->    Re-run it in **small batches (2-3 agents)**, never 7-way parallel.
-> 2. `requires_cpo_signoff: true` is **unmet**.
-> 3. Deepen-plan must settle the **delivery split** (§Apply path) and the **flip-state enum**
->    (AC5b) before any code is written.
+> **BLOCKER — do not start Phase 2 until this clears.**
+> `plan-review` did NOT complete (6/7 reviewers died on API errors; only `cto` returned) and
+> `requires_cpo_signoff: true` is **unmet**. Re-run in **small batches (2-3 agents)**, never
+> 7-way parallel. Deepen-plan settled the delivery split and the flip enum (below) — those two
+> blockers are CLEARED.
 
 ## Phase 0 — Preconditions (verify, do not assume)
 
-- [ ] 0.1 Re-run `plan-review` in small batches; fold findings in.
-- [ ] 0.2 Obtain CPO sign-off (threshold = single-user incident).
-- [ ] 0.3 **Settle the delivery split.** FR5/FR6/FR7 need no host replace. FR3/FR4 edit
-      `inngest-bootstrap.sh` → `user_data` diff → **replace of the SOLE scheduler**
-      (`inngest-host.tf:244`, ADR-100). Decide: one PR or split? Confirm #6178 cutover interaction.
-- [ ] 0.4 **Settle the flip-state enum (AC5b).** `inngest-bootstrap.sh:416` names
-      `{armed, flipping, done}`; `cutover-inngest.yml` also writes `rollback`; the key is currently
-      **absent** on `soleur-inngest/prd`. Classify the correct exit code for EVERY state:
-      `unset | armed | flipping | done | rollback`. A bare `= "armed"` test lumps `flipping`/`done`
-      into the dark branch → **silent liveness hole**.
-- [ ] 0.5 Confirm `INNGEST_CUTOVER_FLIP` is actually injected into the unit's env by
-      `doppler run` (it is absent from the config today — if never injected, the FR3 discriminator
-      does not work as written and must be redesigned).
-- [ ] 0.6 File tracking issues for the 3 items in §Descoped.
+- [ ] 0.1 Re-run `plan-review` in small batches (2-3 agents); fold findings in.
+- [ ] 0.2 Obtain CPO sign-off (threshold = single-user incident) via `user-impact-reviewer`.
+- [x] 0.3 **Delivery split — SETTLED (deepen-plan).** v2's split was FALSE. `cloud-init-inngest.yml:337`
+      pins `IREF=…/soleur-inngest-bootstrap:v1.1.19`; **both** `inngest-bootstrap.sh` **and**
+      `vector.toml` are docker-cp'd from that image at boot (`:368`, `:370`). So **FR5 is replace-class
+      too**, not replace-free. The replace trigger is the **`IREF` bump** (`user_data` via
+      `inngest-host.tf:200`, no `ignore_changes` at `:244`) — not the bootstrap edit itself.
+      **Decision: ONE PR.** Splitting buys nothing: FR3/FR4/FR5 share one image and one bump.
+- [x] 0.4 **Flip-state enum (AC5b) — SETTLED (deepen-plan).** v2's enum was incomplete: it missed
+      **`flushed`**, **`aborted`**, **`rolled-back`**. Authoritative FSM is
+      `armed → flipping → flushed → done` (`cutover-inngest.yml:764`); G1's arms are
+      `""|unset|aborted|rolled-back` (`:703`) vs `armed/flipping/flushed/done` (`:706`);
+      `op=rollback` writes transitional `rollback` (`:668`). Rule = **"is this host the intended
+      pusher?"** → exit 0 for `""|unset|aborted|rollback|rolled-back`; exit 1 for
+      `armed|flipping|flushed|done`; `*)` **fails closed** → exit 1. Use a `case`, mirroring
+      `:703`/`:706`. **Never `= "armed"`.** Full table + prescribed shape in plan §AC5b.
+- [x] 0.5 **`INNGEST_CUTOVER_FLIP` env injection — SETTLED (deepen-plan).** The unit's ExecStart is
+      `doppler run --project soleur-inngest --config prd -- $HEARTBEAT_SCRIPT`
+      (`inngest-bootstrap.sh:193`); `doppler run` injects **every** secret in the config into the
+      child env. That is the identical mechanism carrying `INNGEST_HEARTBEAT_URL` today, so the
+      discriminator works by construction. Key absent today ⇒ not injected ⇒ `${…:-unset}` ⇒
+      `unset` ⇒ dark arm ⇒ exit 0. Correct. Re-assert as a test, not an assumption (1.9).
+- [ ] 0.6 File tracking issues for the items in §Descoped (now **6**, incl. the new
+      `op=rollback` two-pusher gap and the stale `:416` FSM comment).
+- [ ] 0.7 **AC15 ordering gate.** Assert `INNGEST_CUTOVER_FLIP` is absent from `soleur-inngest/prd`
+      at apply time (`doppler secrets --only-names -p soleur-inngest -c prd`). The entire
+      §Downtime & Cutover zero-downtime conclusion rests on this. If present/armed → **HALT**.
 
 ## Phase 1 — Observability first (the discriminating probe)
 
@@ -44,30 +56,43 @@ Ships BEFORE the fix so the next fire self-reports which defect was live.
 - [ ] 1.6 GREEN: add `"inngest-heartbeat"` to `vector.toml`
       `[sources.host_scripts_journald].include_matches.SYSLOG_IDENTIFIER` with a `#6536` comment.
       **Source 4 only** — Source 1's `PRIORITY 0-4` cut drops the unit's PRIORITY-6 output.
+      Assert block scoping with the flag-based `awk` form, **not** an `/a/,/b/` range (AC2).
 - [ ] 1.7 Extend `vector-pii-scrub.test.sh` for the new tag + the URL-never-shipped assertion.
 - [ ] 1.8 `cat-deploy-state.sh:344` — add `service_journal_tail inngest-heartbeat.service`
       (+ assertion in `cat-deploy-state.test.sh`).
+- [ ] 1.9 RED/GREEN: assert the unit's ExecStart wraps the script in `doppler run --project` so the
+      flip/URL env injection path (0.5) cannot silently regress.
 
 ## Phase 2 — Fix the sole live defect (H5)
 
-- [ ] 2.1 RED: ping script exits **0** when URL absent + flip unarmed; **non-zero** when URL absent
-      + flip in a state where this host is the intended pusher. Cover EVERY state from 0.4.
-- [ ] 2.2 GREEN: implement the scoped branch in the ping script (`inngest-bootstrap.sh:160-164`).
-      Keep `exec curl` on the happy path.
-- [ ] 2.3 Verify `[ "$X" = "armed" ]` semantics under `sh` with the var unset.
+- [ ] 2.1 RED: table-driven test over **all nine** cases from 0.4 — exit **0** for
+      `""`, `unset`, `aborted`, `rollback`, `rolled-back`; exit **1** for `armed`, `flipping`,
+      `flushed`, `done`; exit **1** for an unknown value (fail-closed `*)` arm).
+- [ ] 2.2 GREEN: implement the `case` branch in the ping script (`inngest-bootstrap.sh:160-164`)
+      exactly as prescribed in plan §Phase 3 / §AC5b. Keep `exec curl` on the happy path.
+- [ ] 2.3 Verify the branch under `sh` (not bash) with the var **unset** — the script is `#!/bin/sh`.
+      `${INNGEST_CUTOVER_FLIP:-unset}` must not trip `set -u` if it is ever added.
 
 ## Phase 3 — Correct the record
 
 - [ ] 3.1 `inngest-host.tf:137-151` — replace the false *"the dark host's heartbeat curl no-ops"*
       claim with the measured truth (`curl -fsS --max-time 10 ""` → **rc=2**); state that the no-op
       is implemented explicitly in the ping script. Cite #6536.
-- [ ] 3.2 RED/GREEN: guard in `inngest-host.test.sh` so the false claim cannot return.
+- [ ] 3.2 RED/GREEN: guard in `inngest-host.test.sh` so the false claim cannot return (AC6).
 
-## Phase 4 — Exit gate
+## Phase 4 — Delivery (replace-class — see plan §Downtime & Cutover)
 
-- [ ] 4.1 `bash -n` every touched shell script.
-- [ ] 4.2 Run: `cloud-init-inngest-bootstrap.test.sh`, `inngest-host.test.sh`,
+- [ ] 4.1 Bump `IREF` at `cloud-init-inngest.yml:337` to the new `soleur-inngest-bootstrap` tag —
+      this is the `user_data` diff that actually delivers FR3/FR4/FR5. Confirm the image-publish
+      workflow produced the tag BEFORE the bump (a bump to a non-existent tag bricks cold boot).
+- [ ] 4.2 `terraform plan` shows **exactly one** `hcloud_server` replace + volume re-attach, and
+      **no** co-located resource in the diff (AC10). Re-assert 0.7 immediately before apply.
+
+## Phase 5 — Exit gate
+
+- [ ] 5.1 `bash -n` every touched shell script.
+- [ ] 5.2 Run: `cloud-init-inngest-bootstrap.test.sh`, `inngest-host.test.sh`,
       `cat-deploy-state.test.sh`, `vector-pii-scrub.test.sh`.
-- [ ] 4.3 `validate-vector-config.yml` gate green.
-- [ ] 4.4 Full infra suite (orphan suites only surface here).
-- [ ] 4.5 PR body: `Closes #6536`.
+- [ ] 5.3 `validate-vector-config.yml` gate green.
+- [ ] 5.4 Full infra suite (orphan suites only surface here).
+- [ ] 5.5 PR body: `Closes #6536`.
