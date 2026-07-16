@@ -44,8 +44,19 @@ Lane: `cross-domain` · Threshold: `single-user incident` · Issue: #6536
       trip-wire (`op=arm` writes it FIRST, G4 `:759`; flip LAST, G5 `:669`), so a failed arm leaves
       URL-present/flip-absent **durably** — a state a flip-only gate passes. Both absent → proceed.
       URL present + flip absent → **HALT**. Flip present → **HALT**.
-- [ ] 0.8 File the 7 §Descoped issues — **alongside, not blocking**. `#5` (live shipper ≠ repo
-      `vector.toml`) **first**: it is the highest-signal finding here and outranks #6536 itself.
+- [x] 0.8 **FILED** (2026-07-16). `#5` went first as instructed — it is the highest-signal finding
+      here and outranks #6536 itself.
+      | §Descoped | Issue | Subject |
+      |---|---|---|
+      | 5 | **#6551** | live Better Stack row that NO `vector.toml` source admits |
+      | 1 (H4) | **#6555** | `${DOPPLER_PROJECT:-soleur}` latent trap — **now also picks the heartbeat arm** (new consequence, added by this PR) |
+      | 2 (+P2d) | **#6556** | units with no `SyslogIdentifier=` tag as ExecStart basename; + "loud" is queryable, not alarming |
+      | 3 | **#6552** | `op=rollback` leaves the URL → two pushers on one monitor |
+      | 4 (+3.3) | **#6553** | flip-guard allowlist omits `flushed` (the CODE, not the comment — 3.3 refuted the "stale comment" premise) |
+      §Descoped 6 (heartbeat proves HOST ≠ SCHEDULER) folded into **#6556** — same subsystem, same
+      trigger, and it is the same false-green class. §Descoped 7 (sudoers dual-maintenance) folded
+      into **#6555**, which is the only work that would touch those files. Bundled per the review
+      skill's trigger-equality rule rather than filing 7 issues for 5 decisions.
 
 ## Phase 1 — Observability (verification infrastructure for AC12)
 
@@ -136,22 +147,28 @@ discriminate: H5 is confirmed, H4 refuted+descoped, and the probe cannot see H4 
       `DOPPLER_PROJECT` values (dedicated 1 / web 0; both `sh -n` clean, no residual sentinel).
       The closed-value assertion uses jq `IN`, not `inside` — `inside`/`contains` are SUBSTRING
       matches, so `""`/`"render"`/`"abs"` all passed the first draft of my own gate. 60/60.
-- [x] 6.3 **P2(b) `ci-deploy.sh` `--preserve-env` omits `DOPPLER_PROJECT` — NOT fixed here; folded
-      into the H4 follow-up (§Descoped 1).** Re-measured: `grep -c DOPPLER_PROJECT ci-deploy.sh`
-      → **0**, `--preserve-env` lists only the four version vars, and `cloud-init-inngest.yml:319`
-      confirms the dedicated host has no `/etc/default/webhook-deploy` — so ci-deploy **cannot
-      reach it** and H4 still fires nowhere. This PR does add a NEW consequence to H4's blast
-      radius (a `soleur` default would now render the WEB arm on the dedicated host and restore
-      the storm), so that consequence goes in the H4 issue. Fixing it means editing `ci-deploy.sh`
-      + sudoers — the web-host path, i.e. the Phase 2 the plan removed as unjustified risk while
-      replacing a host. 6.2 makes the wrong render *observable* rather than silent, which is the
-      cheap half of the mitigation and the half that fits this PR.
-- [x] 6.4 **P2(d) no `OnFailure=` — NOT fixed here; folded into §Descoped 2.** The premise is
-      right (queryable ≠ alarming) but the plan's v5 correction settles the scope: the Better Stack
-      monitor IS the alarm for the live pusher (reddens ~90s), and the dark host's missing alarm is
-      the documented accepted gap. Post-fix the dark unit should not fail at all, and FR4+FR5 now
-      put its stderr somewhere alertable. A real fix needs an alarm-handler unit + delivery for
-      EVERY infra unit — exactly §Descoped 2's systemic guard. Same trigger → bundle, don't file twice.
+- [x] 6.3 **P2(b) `--preserve-env` omits `DOPPLER_PROJECT` — FIXED INLINE** (`cfb0fd782`), after
+      the CONCUR gate **DISSENTed** on my proposed scope-out. I filed it as `cross-cutting-refactor`;
+      `code-simplicity-reviewer` was right that it fails that criterion's own text — the criterion
+      defines "core change" at **directory** granularity ("files in the same top-level directory as
+      the primary changed file"), and `ci-deploy.sh` / `deploy-inngest-bootstrap.sudoers` /
+      `cloud-init.yml` all sit in `apps/web-platform/infra/` next to `inngest-bootstrap.sh`. My
+      "web-host path vs dedicated-host path" framing was a *subsystem* distinction the criterion
+      does not make. **This is the gate working as designed** — it caught the rationalisation.
+      **But the prescribed fix was incomplete, and verifying beat applying:** `grep -c
+      DOPPLER_PROJECT ci-deploy.sh` → **0**, so `--preserve-env=DOPPLER_PROJECT` preserves an
+      *unset* var. Applied the three edits anyway (they close the sudo-boundary half and are a
+      strict improvement) with the limitation documented at all three sites; the **env-source half**
+      is the CTO's `/etc/default/inngest-server` fix → **#6555**. 70/70, AC5 byte-parity
+      non-vacuous (the compared 19-line body contains the new token), `visudo -cf` clean.
+- [x] 6.4 **P2(d) no `OnFailure=` — FILED as #6556** (criterion `architectural-pivot`,
+      **CONCUR** obtained on the residual after the Finding-1 flip). The premise is right
+      (queryable ≠ alarming; #6536 IS the proof) but the plan's v5 correction settles the scope:
+      the Better Stack monitor IS the alarm for the live pusher (reddens ~90s), and the dark host's
+      missing alarm is the documented accepted gap. Post-fix the dark unit should not fail at all,
+      and FR4+FR5 newly put its stderr somewhere alertable. A real fix needs an alarm-handler unit
+      + delivery for EVERY infra unit — a new cross-unit pattern, not a tweak to this one. Bundled
+      into §Descoped 2 rather than filed twice: same trigger, same subsystem.
 
 ## Phase 4 — Delivery (dispatch-gated replace)
 
