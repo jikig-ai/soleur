@@ -45,16 +45,15 @@ doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform plan \
     -target=hcloud_server.grok_dogfood \
     -target=hcloud_firewall.grok_dogfood \
-    -target=hcloud_firewall_attachment.grok_dogfood \
-    -target=hcloud_server_network.grok_dogfood
+    -target=hcloud_firewall_attachment.grok_dogfood
 # Review: 0 destroy of product fleet, 1 create of soleur-grok-dogfood
+# Phase 1: no private-net attach (agent host stays off 10.0.1.0/24 trust plane)
 doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
   env TF_VAR_enable_grok_dogfood=true \
   terraform apply \
     -target=hcloud_server.grok_dogfood \
     -target=hcloud_firewall.grok_dogfood \
-    -target=hcloud_firewall_attachment.grok_dogfood \
-    -target=hcloud_server_network.grok_dogfood
+    -target=hcloud_firewall_attachment.grok_dogfood
 ```
 
 Record host monthly cost in `knowledge-base/engineering/operations/expenses.md` when retained.
@@ -85,11 +84,14 @@ Script: `scripts/dogfood/grok-measure.sh`
 
 ```bash
 export XAI_API_KEY=…   # or source secrets.env
+# Opt-in --yolo only for trusted unattended runs; prefer deny rules, e.g.:
+#   grok -p "..." --yolo --deny 'Bash(rm*)' --deny 'Bash(sudo*)' --max-turns 15
 ./scripts/dogfood/grok-measure.sh \
   --prompt "List the top-level directories in this repo (read-only)." \
   --cwd /home/dogfood/soleur \
   --max-turns 15 \
   --log /var/log/grok-dogfood/runs.jsonl
+# Add --yolo only after reviewing the prompt; script defaults YOLO off.
 ```
 
 ### Prompt classes (minimum 3)
@@ -115,10 +117,14 @@ Fill sample table:
 
 ## Guards / kill criteria
 
+- `grok-measure.sh` defaults **YOLO off** — pass `--yolo` only deliberately; pair with `--deny` / permission rules  
 - Default `--max-turns` 30 (or lower)  
 - Soft API ceiling **$100/mo** unless operator raises  
 - No git push credentials on host by default  
+- No private-net attachment (Phase 1) — host is not on `10.0.1.0/24` trust plane  
+- dogfood user has **no** passwordless sudo  
 - Kill: spend ceiling, customer data on host, host compromise → destroy / disable flag  
+- CLI version: record `grok --version` after install; pin release artifact in runbook if you need bit-for-bit reproducibility (install.sh tracks latest stable)
 
 ## Phase 2 — open model swap (#6546)
 
@@ -150,6 +156,5 @@ Future: Grok Build **ACP** (`grok agent stdio` / `serve`) or headless job dispat
 TF_VAR_enable_grok_dogfood=false terraform apply \
   -target=hcloud_server.grok_dogfood \
   -target=hcloud_firewall.grok_dogfood \
-  -target=hcloud_firewall_attachment.grok_dogfood \
-  -target=hcloud_server_network.grok_dogfood
+  -target=hcloud_firewall_attachment.grok_dogfood
 ```

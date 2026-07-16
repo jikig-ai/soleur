@@ -426,8 +426,10 @@ variable "grok_dogfood_location" {
   default     = "hel1"
 }
 
+# Reserved for a future opt-in private-net attach (default off / not used in Phase 1).
+# Agent hosts must not join 10.0.1.0/24 trust plane without an explicit security review.
 variable "grok_dogfood_private_ip" {
-  description = "Stable private IP on soleur-private (10.0.1.0/24) for the dogfood host. Default 10.0.1.50 (web .10/.11, git-data .20, registry .30, inngest .40)."
+  description = "Reserved private IP if private-net attach is re-enabled later. Unused in Phase 1 (no hcloud_server_network). Default 10.0.1.50."
   type        = string
   default     = "10.0.1.50"
 }

@@ -12,10 +12,9 @@ packages:
   - build-essential
 
 users:
+  # No passwordless sudo — agent runs as dogfood without root escalation by default.
   - name: dogfood
-    groups: [sudo]
     shell: /bin/bash
-    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
     lock_passwd: true
 
 write_files:
@@ -46,7 +45,9 @@ write_files:
     permissions: "0755"
     content: |
       #!/usr/bin/env bash
-      # Install official Grok Build CLI (x.ai install script). Re-runnable.
+      # Install Grok Build CLI via official install script, then record version.
+      # Full binary pin (checksum URL) is operator-maintained in the runbook when
+      # a fixed release artifact is required; install.sh tracks latest stable.
       set -euo pipefail
       export PATH="/usr/local/bin:$PATH"
       if command -v grok >/dev/null 2>&1; then
@@ -54,20 +55,20 @@ write_files:
         exit 0
       fi
       curl -fsSL https://x.ai/cli/install.sh | bash
-      # install.sh typically places binary under ~/.local or /usr/local — ensure dogfood PATH
       if [[ -x /root/.grok/bin/grok ]] && [[ ! -e /usr/local/bin/grok ]]; then
         ln -sf /root/.grok/bin/grok /usr/local/bin/grok || true
       fi
       if [[ -x /home/dogfood/.grok/bin/grok ]]; then
         ln -sf /home/dogfood/.grok/bin/grok /usr/local/bin/grok || true
       fi
-      command -v grok && grok --version || echo "WARN: grok not on PATH after install"
+      command -v grok && grok --version | tee /var/log/grok-dogfood/cli-version.txt \
+        || echo "WARN: grok not on PATH after install"
 
 runcmd:
   - mkdir -p /home/dogfood/soleur /var/log/grok-dogfood /home/dogfood/.grok
   - chown -R dogfood:dogfood /home/dogfood /var/log/grok-dogfood
   - bash /usr/local/bin/grok-dogfood-install-cli.sh
+  - chown -R dogfood:dogfood /var/log/grok-dogfood /home/dogfood/.grok || true
   - |
-    # Soft clone of public metadata only if GH token later provided; empty workspace is fine for first boot.
     touch /var/log/grok-dogfood/boot-complete
     chown dogfood:dogfood /var/log/grok-dogfood/boot-complete

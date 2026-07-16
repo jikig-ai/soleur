@@ -15,7 +15,8 @@ MAX_TURNS=30
 CWD="."
 LOG_FILE=""
 PARSE_ONLY=0
-YOLO=1
+# Default OFF — opt in with --yolo; pair with --deny rules for unattended runs (FR4).
+YOLO=0
 
 usage() {
   sed -n '2,10p' "$0" | sed 's/^# //'
@@ -30,6 +31,7 @@ while [[ $# -gt 0 ]]; do
     --cwd) CWD="${2:-.}"; shift 2 ;;
     --log) LOG_FILE="${2:-}"; shift 2 ;;
     --parse-only) PARSE_ONLY=1; shift ;;
+    --yolo) YOLO=1; shift ;;
     --no-yolo) YOLO=0; shift ;;
     -h|--help) usage ;;
     *) echo "unknown arg: $1" >&2; usage ;;
