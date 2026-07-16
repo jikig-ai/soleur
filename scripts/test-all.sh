@@ -158,6 +158,11 @@ if want_scripts; then
   # gate's own suite overrides the value to stay hermetic, so the shipped default was asserted
   # nowhere. Drift makes the gate advise a location terraform rejects.
   run_suite "tests/scripts/eu-location-allowset-parity" bash tests/scripts/test-eu-location-allowset-parity.sh
+  # betterstack-query.sh hot+archive UNION (#6288). remote() alone is the ~40-minute hot
+  # window, so a hot-only query answers `--since 24h` with 40 minutes — no error, just a
+  # short answer. That silently starved every soak gate built on it (#6288's needs 2h of
+  # span and could never PASS). Hermetic: stubs curl, asserts SQL shape, never live rows.
+  run_suite "tests/scripts/betterstack-query-archive" bash tests/scripts/test-betterstack-query-archive.sh
   run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh

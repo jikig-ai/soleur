@@ -134,10 +134,35 @@ assert "docker inspect -f template order matches the read target order" \
 assert "read targets are in the same order as the inspect template" \
   "grep -qF 'read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE' '$CI'"
 
-# The 7168m cgroup cap is replicated (cloud-init source of truth + probe default + docs). Pin the
-# source-of-truth literal so any cap change is a conscious edit that also updates the probe/docs.
-assert "zot container --memory cap is the ZOT_MEMORY_CAP:-7168m env-overridable const" \
-  "grep -qF 'ZOT_MEMORY_CAP:-7168m' '$CI'"
+# The cap is DERIVED from var.registry_server_type (zot-registry.tf local.registry_memory_cap_mb),
+# not hardcoded. It was the literal 7168m with no edge to the server type, so a 4 GB host would
+# have kept a cap that can never bind on 4096m of RAM — silently the uncapped-on-cx23 condition
+# that caused #6288. Pin the derivation (and the absence of the literal) so it cannot regress.
+assert "zot container --memory cap comes from the templated zot_memory_cap_mb, not a literal" \
+  "grep -qF 'ZOT_MEMORY_CAP:-\${zot_memory_cap_mb}m' '$CI'"
+# Comments still cite 7168m deliberately (they explain what the literal WAS and why deriving
+# replaced it) — the regression this guards is a literal creeping back into executable shell.
+assert "no hardcoded 7168m cap literal on any non-comment line" \
+  "! grep -vE '^[[:space:]]*#' '$CI' | grep -qF '7168m'"
+# The probe must compare against the cap zot is ACTUALLY under, not a copy — a gate holding a
+# stale 7168 while the container is capped at 3072 tests an unreachable ceiling and rubber-stamps
+# a starved host. Read from the live cgroup, and reported in the telemetry the gate consumes.
+assert "the cap is read from the container's live cgroup memory.max" \
+  "grep -qF 'cap_bytes=\$(cat \"\$cg/memory.max\" 2>/dev/null)' '$CI'"
+assert "zot_memory_cap_mb is reported in the SOLEUR_ZOT_DISK payload" \
+  "grep -qF 'zot_memory_cap_mb=\$ZOT_MEMORY_CAP_MB' '$CI'"
+# UNCAPPED must be distinguishable from UNKNOWN. cap_mb cannot express it: -1 is the parse lib's
+# drop-sentinel (zot-telemetry-parse.sh:48 drops every negative) and 0 would read as "capped at
+# nothing". Collapsing them makes an uncapped container look mid-restart, so the gate assumes a cap
+# and can never alarm on zot running with none — #6288's root condition, invisible.
+assert "memory.max=='max' reports zot_memory_capped=false (UNCAPPED), distinct from unknown" \
+  "grep -qE '^ *max\\) *ZOT_MEMORY_CAPPED=false' '$CI'"
+assert "a numeric memory.max reports zot_memory_capped=true" \
+  "grep -qF 'ZOT_MEMORY_CAPPED=true' '$CI'"
+assert "zot_memory_capped defaults to unknown (cgroup absent != uncapped)" \
+  "grep -qF 'ZOT_MEMORY_CAPPED=unknown' '$CI'"
+assert "zot_memory_capped is reported in the SOLEUR_ZOT_DISK payload" \
+  "grep -qF 'zot_memory_capped=\$ZOT_MEMORY_CAPPED' '$CI'"
 # NB: leading '--' anchor dropped so grep/ugrep doesn't parse it as an option.
 assert "docker run carries --memory + --memory-swap == the cap (deterministic cgroup-OOM)" \
   "grep -qF 'memory \"\$ZOT_MEMORY_CAP\" --memory-swap \"\$ZOT_MEMORY_CAP\"' '$CI'"

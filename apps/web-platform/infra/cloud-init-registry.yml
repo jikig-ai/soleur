@@ -188,11 +188,37 @@ write_files:
       # unlike host used-memory). cgroup v2 memory.stat `anon` in bytes → /1048576. Path mirrors
       # container-restart-monitor.sh:129-132. Guard -1 if the container/cgroup is absent (mid-restart).
       CGROUP_ROOT="$${CGROUP_ROOT:-/sys/fs/cgroup}"
-      ZOT_ANON_MB=-1; ZOT_OOM_KILLS=-1
+      ZOT_ANON_MB=-1; ZOT_OOM_KILLS=-1; ZOT_MEMORY_CAP_MB=-1; ZOT_MEMORY_CAPPED=unknown
       if [ -n "$ID" ]; then
         cg="$CGROUP_ROOT/system.slice/docker-$ID.scope"
         anon_bytes=$(grep -E '^anon ' "$cg/memory.stat" 2>/dev/null | awk '{print $2}')
         [ -n "$anon_bytes" ] && ZOT_ANON_MB=$(( anon_bytes / 1048576 ))
+        # The cap zot is ACTUALLY running under, read from the live cgroup rather than copied
+        # from the value we templated in. The cap is now derived from the server type
+        # (zot-registry.tf local.registry_memory_cap_mb), so it is no longer the constant 7168
+        # every consumer used to assume: on a 4 GB host it is 3072. A gate holding a stale copy
+        # would compare zot_anon_mb against a ceiling the container cannot reach and PASS a
+        # starved host — the failure the "guard/gate and probe must pin the thing they name"
+        # learning describes.
+        #
+        # THREE distinct states, and they must NOT collapse into one:
+        #   number -> capped        (zot_memory_capped=true,    cap_mb=N)
+        #   "max"  -> UNCAPPED      (zot_memory_capped=false,   cap_mb=-1)  <- the #6288 condition
+        #   absent -> unknown       (zot_memory_capped=unknown, cap_mb=-1)  <- mid-restart, benign
+        # zot_memory_capped exists because cap_mb alone CANNOT express "uncapped": -1 is the
+        # parse lib's sentinel (it drops every negative), and 0 would read as "capped at nothing"
+        # and fail every gate. So an uncapped container would look identical to a mid-restart one,
+        # the gate would fall back to ASSUMING 7168, and nothing could ever alarm on zot running
+        # with no cap at all — the exact condition this whole derivation exists to prevent.
+        # Reported as a true/false/unknown string (parsed like oom_killed), never as a number.
+        cap_bytes=$(cat "$cg/memory.max" 2>/dev/null)
+        case "$cap_bytes" in
+          '')             : ;;                                   # cgroup gone: stays unknown
+          max)            ZOT_MEMORY_CAPPED=false ;;             # explicitly UNCAPPED
+          *[!0-9]*)       : ;;                                   # unparseable: stays unknown
+          *)              ZOT_MEMORY_CAPPED=true
+                          ZOT_MEMORY_CAP_MB=$(( cap_bytes / 1048576 )) ;;
+        esac
         # memory.events `oom_kill` is a MONOTONIC container-cgroup OOM-kill counter (mirrors
         # container-restart-monitor.sh's authoritative signal). Unlike the zot_anon_mb GAUGE — a
         # point sample that a 4/min loop sampled every 5 min systematically reads mid-scan, missing
@@ -264,7 +290,7 @@ write_files:
       fi
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
@@ -631,13 +657,18 @@ runcmd:
     chmod 600 /etc/zot/htpasswd
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     docker rm -f zot >/dev/null 2>&1 || true
-    # Container memory cap (ADR-062 pattern) — bounds zot's large-store (~35 GB) startup scan so a
-    # host-level OOM can't restart-loop the box (#6288). cap = host RAM (8192m on cx33) − documented
-    # host overhead (~1024m for cron+doppler+sshd+OS, lighter than ADR-062's 1.3 GB web host).
+    # Container memory cap (ADR-062 pattern) — bounds zot's startup scan so a host-level OOM can't
+    # restart-loop the box (#6288). cap = host RAM − ~1024m host overhead (cron+doppler+sshd+OS,
+    # lighter than ADR-062's 1.3 GB web host), DERIVED from var.registry_server_type via the live
+    # Hetzner catalog (zot-registry.tf local.registry_memory_cap_mb) and baked in at template time.
+    # It was a hardcoded `7168m` with no edge to the server type: a 4 GB host would have kept the
+    # 7168m cap, which can never bind on 4096m of RAM — i.e. silently back to the UNCAPPED-on-cx23
+    # condition that caused #6288's restart-loop in the first place. Do not re-hardcode it.
     # --memory-swap == --memory disables swap growth → a deterministic cgroup-OOM, not swap-thrash.
     # NO --init: zot is a single Go process (PID 1 handles SIGTERM, spawns no children) — ADR-062's
-    # Node zombie-reaping idiom buys nothing here. Env-overridable const (mirrors PROD_MEMORY_CAP).
-    ZOT_MEMORY_CAP="$${ZOT_MEMORY_CAP:-7168m}"
+    # Node zombie-reaping idiom buys nothing here. Env-overridable const (mirrors PROD_MEMORY_CAP);
+    # the template-derived value is the default, so an operator override still wins for a one-off.
+    ZOT_MEMORY_CAP="$${ZOT_MEMORY_CAP:-${zot_memory_cap_mb}m}"
     docker run -d --name zot --restart unless-stopped \
       --log-driver journald \
       --memory "$ZOT_MEMORY_CAP" --memory-swap "$ZOT_MEMORY_CAP" \
