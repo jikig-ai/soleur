@@ -375,9 +375,17 @@ else
 fi
 
 # AC2: the block has NO include_matches.PRIORITY line. These host-script lines
-# are PRIORITY 4-5 (user.warning / user.notice); ANY PRIORITY filter would
-# silently drop the very lines this source exists to capture. Regression guard.
-if echo "$HOST_SCRIPTS_BLOCK" | grep -qE 'PRIORITY'; then
+# are PRIORITY 4-6 (user.warning / user.notice; #6536's inngest-heartbeat channel is
+# PRIORITY 6); ANY PRIORITY filter would silently drop the very lines this source exists
+# to capture. Regression guard.
+#
+# ANCHORED on the assignment construct, NOT the bare word `PRIORITY`. The block-extraction
+# above only terminates on a COL-0 `#`, so the array's own indented comments stay inside
+# HOST_SCRIPTS_BLOCK — and those comments must be free to explain WHY this source carries no
+# PRIORITY filter (that reasoning is the whole point of #6536's Source-4-only fix). A bare
+# token grep makes the guard and its own documentation mutually exclusive: it false-FAILS on
+# the prose. A comment line cannot produce `include_matches.PRIORITY =`.
+if echo "$HOST_SCRIPTS_BLOCK" | grep -qE '^[[:space:]]*include_matches\.PRIORITY[[:space:]]*='; then
   FAIL=$((FAIL+1)); FAILS+=("AC2: host_scripts_journald must NOT carry an include_matches.PRIORITY line (would drop PRIORITY 4-5 host-script lines)")
 else
   PASS=$((PASS+1)); echo "  PASS: host_scripts_journald has no PRIORITY filter (captures PRIORITY 4-5)"
@@ -393,12 +401,21 @@ EXPECTED_TAGS=$(
   for f in "$INFRA_DIR"/*.sh; do
     # Match a real `logger -t` invocation, NOT a comment mention (e.g. ci-deploy.sh
     # has a `# … logger -t …` doc comment) — a stdout-only script that merely
-    # documents logger -t must not be pulled in. Two real forms are accepted:
+    # documents logger -t must not be pulled in. Three real forms are accepted:
     #   1. a direct `logger -t` at line-start or after a pipe;
     #   2. the fixture-seam form `"${CUTOVER_LOGGER_CMD:-logger}" -t` used by
     #      inngest-cutover-flip.sh (#6178) — the default `logger` sink wrapped so CI
-    #      can inject a recorder. Both ship to the journal under SYSLOG_IDENTIFIER.
-    grep -qE '(^|\|)[[:space:]]*logger -t|:-logger\}" -t' "$f" || continue
+    #      can inject a recorder;
+    #   3. (#6536) a logger call carried inside a sed REPLACEMENT string — i.e. rendered
+    #      into a generated script at bootstrap time rather than executed by the script
+    #      itself. inngest-bootstrap.sh substitutes @@DARK_ARM@@ into the heartbeat ping
+    #      script this way, so its `logger -t` sits after a literal `\n` in the sed
+    #      expression and matches neither form 1 nor 2. Without this alternative the file
+    #      never enters the loop, its LOG_TAG is never derived, and the tag it really does
+    #      ship escapes the drift guard SILENTLY — an unmatched emission shape is a hole in
+    #      the guard, not caught drift.
+    # All three ship to the journal under SYSLOG_IDENTIFIER.
+    grep -qE '(^|\|)[[:space:]]*logger -t|:-logger\}" -t|\\n[[:space:]]*logger -t' "$f" || continue
     grep -hoP '^\s*(readonly\s+)?LOG_TAG="\K[^"]+' "$f"
   done | sort -u
 )

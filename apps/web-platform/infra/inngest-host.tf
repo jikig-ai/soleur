@@ -145,10 +145,26 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
 # (Phase 2.x), when the dedicated host BECOMES the sole scheduler and the co-located pusher
 # is quiesced — one unambiguous pusher per monitor at all times. Set via `doppler secrets
 # set INNGEST_HEARTBEAT_URL` on the soleur-inngest prd config (stdin). During dark the URL is
-# absent → the dark host's heartbeat curl no-ops (no false-green). Accepted minor gap: the
-# dark host has no liveness push during dark (a dark, inert host bricking is surfaced at the
-# Phase-2 pre-flight registry-empty check, not by continuous monitoring). Same out-of-band
-# doctrine as INNGEST_POSTGRES_URI below.
+# absent → the dark host must not push, which is what preserves the no-false-green invariant.
+#
+# #6536 — CORRECTION. This comment used to claim the absent URL made "the dark host's
+# heartbeat curl no-op". That was FALSE, and the false claim is what authorized the bug:
+# `curl -fsS --max-time 10 ""` exits 2 ("option : blank argument where content is expected"
+# — measured; unset behaves identically), so the dark host's oneshot did not no-op, it FAILED
+# every 60s for 3 days (3,724 fires) while this prose asserted the design was already safe.
+# The monitor stayed green throughout only because the co-located host is the sole pusher —
+# monitor greenness is NOT evidence about the dark host's unit. Same class as #4116: wrapping
+# the ping in `doppler run` fixed WHERE the URL comes from, never made its ABSENCE safe.
+#
+# The skip is now implemented EXPLICITLY, not assumed from curl's behaviour: the ping script
+# in inngest-bootstrap.sh carries an @@DARK_ARM@@ sentinel rendered ONLY on this host
+# (DOPPLER_PROJECT=soleur-inngest), which logs `url_present=no` and exits 0. The co-located
+# web host renders it EMPTY, so an absent URL there still reaches curl and exits 2 — loud, as
+# it must be on the live pusher. Accepted minor gap: the dark host has no liveness push
+# during dark (a dark, inert host bricking is surfaced at the Phase-2 pre-flight
+# registry-empty check, not by continuous monitoring) — though the dark-arm row now gives it
+# continuous off-box liveness evidence for the first time. Same out-of-band doctrine as
+# INNGEST_POSTGRES_URI below.
 # ---------------------------------------------------------------------------------------
 # INNGEST_POSTGRES_URI — provisioned OUT-OF-BAND into THIS project's `prd` config, NOT a
 # TF resource (mirrors the co-located inngest.tf:170-194 out-of-band doctrine + the

@@ -75,6 +75,13 @@ assert "no_prior_deploy carries services.inngest_heartbeat" \
   "printf '%s' '$NO_DEPLOY_OUT' | jq -e '.services.inngest_heartbeat' >/dev/null"
 assert "no_prior_deploy carries services.inngest_heartbeat_timer" \
   "printf '%s' '$NO_DEPLOY_OUT' | jq -e '.services.inngest_heartbeat_timer' >/dev/null"
+# #6536 / FR7: the heartbeat's own journal tail. `inngest_heartbeat: failed` says the unit
+# broke but never WHY; the tail carries the deciding stderr (curl's rc=2 line, doppler's
+# project/auth error, or the dark-arm row) off-box with no SSH. Uses `has` rather than
+# truthiness: the tail is legitimately an empty string off-host / when journalctl is absent,
+# and an empty value must still prove the FIELD is wired.
+assert "no_prior_deploy carries services.inngest_heartbeat_journal_tail (#6536)" \
+  "printf '%s' '$NO_DEPLOY_OUT' | jq -e '.services | has(\"inngest_heartbeat_journal_tail\")' >/dev/null"
 
 # --- successful state file merge ---
 echo '{"exit_code":0,"target":"inngest","tag":"vinngest-v1.2.3"}' > "$TMP/ok.state"

@@ -97,7 +97,7 @@ if parse_err != null {
 '''
 
 # ---------------- Source 4: host-script journald (logger -t tags) (#5499, #6178) ----------------
-# Twelve bash scripts under apps/web-platform/infra/ log operational events to
+# Thirteen bash scripts under apps/web-platform/infra/ log operational events to
 # the journal via `logger -t <LOG_TAG>`. They run under webhook.service / cron on
 # the web hosts, or (the #6178 cutover trio: inngest-cutover-flip +
 # inngest-server-flip-guard) as systemd oneshot/ExecStartPre on the dedicated
@@ -110,17 +110,31 @@ if parse_err != null {
 # prefix/regex — a tag typo silently matches nothing).
 #
 # NO `include_matches.PRIORITY` filter (deliberate — differs from Sources 1/2):
-# these lines are PRIORITY 4-5, which Source 2 drops; the SYSLOG_IDENTIFIER
-# scoping to 12 known tags is already the narrowing. We do NOT widen
+# these lines are PRIORITY 4-6 (the #6536 inngest-heartbeat channel is PRIORITY 6),
+# which Source 2 drops; the SYSLOG_IDENTIFIER scoping to 14 known tags is already
+# the narrowing. We do NOT widen
 # system_journald's PRIORITY filter — that would ship every host NOTICE+ line
 # (sshd, cron, systemd units, fail2ban) and blow the Better Stack logs quota
 # (per the 2026-06-10 quota-diagnosis learning + #5110 verdict).
 #
-# Quota (#5110 reality check): all 12 are event-driven (deploy/webhook/cron-fire/
+# Quota (#5110 reality check): 13 of the 14 are event-driven (deploy/webhook/cron-fire/
 # cutover-flip), not continuous request-per-line firehoses — projected
 # tens-to-low-hundreds of rows/day, well within the ~20% headroom under 25k/day.
+#
+# `inngest-heartbeat` (#6536) is the ONE exception and was accepted deliberately: it is
+# timer-driven at 60s, so its dark-arm row costs ~1,440 rows/day on the dedicated host
+# (the co-located web host renders no dark arm and emits NO success-path row, so it adds
+# ~0). Steady-state delta is roughly NEUTRAL, not a saving: the pre-fix `Failed to start`
+# storm it replaces was itself shipping ~1,240 rows/day — though via a mechanism this file
+# does not explain (a live row carries SYSLOG_IDENTIFIER=systemd, which NO source here
+# admits; tracked separately). What the ~1,440 buys is the first continuous dark-host
+# liveness evidence this host has ever had. Deliberately NO success-path row on the
+# URL-present path: at 60s that would add ~2,880/day to duplicate what the Better Stack
+# heartbeat monitor already asserts.
+#
 # Adding a tag here is a quota decision; keep the list to genuinely-diagnostic
-# host scripts. The drift-guard + no-PRIORITY-filter fixtures in
+# host scripts, and treat any further timer-driven tag as a fresh quota decision.
+# The drift-guard + no-PRIORITY-filter fixtures in
 # vector-pii-scrub.test.sh pin this exact-tag set and the absent PRIORITY filter.
 [sources.host_scripts_journald]
 type = "journald"
@@ -151,6 +165,15 @@ include_matches.SYSLOG_IDENTIFIER = [
   "inngest-server-flip-guard",
   "inngest-registry-probe",
   "inngest-doublefire-probe",
+  # #6536: inngest-heartbeat.service exited non-zero every 60s for 3 days (3,724 fires) and
+  # the stderr proving why never left the host — the unit set no SyslogIdentifier=, so systemd
+  # tagged it with the ExecStart basename (`doppler`), which matches no source here. The
+  # unit now sets SyslogIdentifier=inngest-heartbeat (inngest-bootstrap.sh) and this entry
+  # ships that channel: BOTH the ping script's own dark-arm row AND the unit's raw
+  # doppler/curl stderr. Source 4 is the ONLY viable home — the unit's output is PRIORITY 6
+  # (SyslogLevel=info), which Source 1's PRIORITY 0-4 cut drops; this source has no PRIORITY
+  # filter. Adding it to Source 1 instead is the trap the naive fix falls into.
+  "inngest-heartbeat",
 ]
 journal_directory = "/var/log/journal"
 batch_size = 16

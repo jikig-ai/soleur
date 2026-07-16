@@ -342,8 +342,18 @@ seccomp_live_json() {
 }
 
 HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
+# #6536: the unit's OWN journal tail. `inngest_heartbeat: failed` reports THAT the unit broke
+# but never WHY — the deciding datum is its stderr, and #6536 burned 3 days (3,724 fires)
+# precisely because that stderr was unreadable off-box. Now that the unit sets
+# SyslogIdentifier=inngest-heartbeat, this tail surfaces the discriminator with no SSH:
+# curl's `blank argument` rc=2 line, doppler's project/auth error, or the dark-arm
+# `url_present=no` row. Complements (does not replace) the Better Stack channel — this one
+# works even when Vector itself is the thing that is broken.
+HEARTBEAT_JOURNAL_TAIL="$(service_journal_tail inngest-heartbeat.service)"
 # inngest-heartbeat.service is a Type=oneshot unit (no RemainAfterExit) driven by
-# inngest-heartbeat.timer (OnUnitActiveSec=60s, inngest-bootstrap.sh:216-245). It
+# inngest-heartbeat.timer (OnUnitActiveSec=60s; the unit + timer are written by
+# inngest-bootstrap.sh — the heartbeat block around the HEARTBEAT_UNIT/HEARTBEAT_TIMER
+# heredocs, NOT :216-245, which is the Doppler-token materialisation block). It
 # reports `inactive` from `systemctl is-active` as soon as each 60s ExecStart
 # completes successfully — i.e. `inactive` is the NORMAL, healthy steady state
 # between fires, NOT a fault (`failed` is the real fault, e.g. the empty-URL
@@ -379,6 +389,7 @@ fi
 jq -nc \
   --argjson base "$BASE" \
   --arg hb "$HEARTBEAT_STATUS" \
+  --arg hbj "$HEARTBEAT_JOURNAL_TAIL" \
   --arg hbt "$HEARTBEAT_TIMER_STATUS" \
   --arg is "$INNGEST_SERVER_STATUS" \
   --arg vs "$VECTOR_STATUS" \
@@ -394,6 +405,7 @@ jq -nc \
   --arg hid "$HOST_ID" \
   '$base + $cr + $cd + $sl + {host_id: $hid, sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
+    inngest_heartbeat_journal_tail: $hbj,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,
     vector: $vs,
