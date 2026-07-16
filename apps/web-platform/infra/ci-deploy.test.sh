@@ -284,16 +284,40 @@ if [[ "${1:-}" == "login" ]]; then
   _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$(cat)"
   [[ -n "${MOCK_LOGIN_ARGS_FILE:-}" ]] && printf 'LOGIN:%s\n' "$_luser" >> "$MOCK_LOGIN_ARGS_FILE"
   # #6497: fail the ZOT login with a caller-supplied stderr so a test can exercise each
-  # zot_login_class enum member. Registry-scoped (never ghcr.io) so arming it cannot
+  # login_class enum member. Registry-scoped (never ghcr.io) so arming it cannot
   # perturb the GHCR legs the #6400/#6090 tests assert on.
-  if [[ -n "${MOCK_ZOT_LOGIN_FAIL_STDERR:-}" && "$_lreg" == "10.0.1.30:5000" ]]; then
-    printf '%s\n' "${MOCK_ZOT_LOGIN_FAIL_STDERR}" >&2
-    exit 1
+  # MOCK_ZOT_LOGIN_FAIL_STDOUT arms the H-B-stdout hypothesis (the error text went to STDOUT,
+  # which the old code discarded) and lets the leak canary cover the stdout stream too. Armed
+  # independently of _STDERR: `stderr_chars=0 stdout_chars>0` is a distinct, load-bearing state.
+  if [[ -n "${MOCK_ZOT_LOGIN_FAIL_STDERR:-}${MOCK_ZOT_LOGIN_FAIL_STDOUT:-}" && "$_lreg" == "10.0.1.30:5000" ]]; then
+    [[ -n "${MOCK_ZOT_LOGIN_FAIL_STDERR:-}" ]] && printf '%s\n' "${MOCK_ZOT_LOGIN_FAIL_STDERR}" >&2
+    [[ -n "${MOCK_ZOT_LOGIN_FAIL_STDOUT:-}" ]] && printf '%s\n' "${MOCK_ZOT_LOGIN_FAIL_STDOUT}"
+    exit "${MOCK_ZOT_LOGIN_FAIL_RC:-1}"
+  fi
+  # #6497: the GHCR arm was ASYMMETRIC — caller-supplied stderr for zot, a HARDCODED
+  # `denied: authentication required` for ghcr — so no test could drive a GHCR login into any
+  # class but authn_rejected. Made symmetric, and registry-scoped to ghcr.io for exactly the
+  # reason the zot arm is scoped to zot: arming it must not perturb the OTHER registry's legs.
+  if [[ -n "${MOCK_GHCR_LOGIN_FAIL_STDERR:-}${MOCK_GHCR_LOGIN_FAIL_STDOUT:-}" && "$_lreg" == "ghcr.io" ]]; then
+    [[ -n "${MOCK_GHCR_LOGIN_FAIL_STDERR:-}" ]] && printf '%s\n' "${MOCK_GHCR_LOGIN_FAIL_STDERR}" >&2
+    [[ -n "${MOCK_GHCR_LOGIN_FAIL_STDOUT:-}" ]] && printf '%s\n' "${MOCK_GHCR_LOGIN_FAIL_STDOUT}"
+    exit "${MOCK_GHCR_LOGIN_FAIL_RC:-1}"
   fi
   if [[ -n "${MOCK_GHCR_LOGIN_FAIL_TOKEN:-}" && "$_ltok" == "${MOCK_GHCR_LOGIN_FAIL_TOKEN}" ]]; then
     echo "denied: authentication required" >&2
     exit 1
   fi
+  exit 0
+fi
+
+# #6497: `docker --version` is read by _login_hatch to emit `docker_ver`. The host's docker is
+# NOT pinned (cloud-init.yml:428 installs docker-ce unpinned) and NOT observable in telemetry,
+# so the instrument makes the host self-report. A fixed version here keeps the field assertable;
+# MOCK_DOCKER_VERSION_FAIL=1 drives the docker-absent path (the field must degrade to `unknown`,
+# never abort). Handled BEFORE the mode case so every mode gets it.
+if [[ "${1:-}" == "--version" ]]; then
+  [[ "${MOCK_DOCKER_VERSION_FAIL:-}" == "1" ]] && exit 127
+  echo "Docker version ${MOCK_DOCKER_VERSION:-29.4.3}, build 055a478"
   exit 0
 fi
 
@@ -3396,14 +3420,23 @@ if [[ "$REGEX_COUNT" -eq 1 ]] \
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: AC3 (regex_count=$REGEX_COUNT — expected 1 + content-classify + recovery_stage arg)"
 fi
-# AC6: token hygiene — refetch helper reaches docker login via --password-stdin only,
+# AC6: token hygiene — the token reaches docker login via --password-stdin only, never argv;
 # token is local + unset; recovery event payload is jq -n --arg with no raw stderr.
+#
+# #6497 moved the `docker login` INVOCATION out of this helper and into the shared
+# _docker_login_capture (the three login sites now share one captured invocation, for the same
+# reason they share one classifier: two drift). So the assertion follows the token to its new
+# home rather than being deleted: the helper must hand the token to the capture helper and must
+# never put it on a docker argv, and the CAPTURE helper is now where --password-stdin lives.
 TOTAL=$((TOTAL + 1))
 HELPER_BODY=$(awk '/^refetch_ghcr_and_relogin\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
+CAPTURE_BODY=$(awk '/^_docker_login_capture\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
 RECOV_BODY=$(awk '/^pull_auth_recovery_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
-if printf '%s' "$HELPER_BODY" | grep -q -- '--password-stdin' \
+if printf '%s' "$CAPTURE_BODY" | grep -q -- '--password-stdin' \
+   && printf '%s' "$CAPTURE_BODY" | grep -qE 'printf .*"\$_tok" \| docker login' \
+   && ! printf '%s' "$CAPTURE_BODY" | grep -qE 'docker login[^|]*\$_tok' \
    && printf '%s' "$HELPER_BODY" | grep -q 'local du="" dt=""' \
-   && printf '%s' "$HELPER_BODY" | grep -qE 'printf .*"\$dt" \| docker login' \
+   && printf '%s' "$HELPER_BODY" | grep -qE '_docker_login_capture ghcr\.io "\$du" "\$dt"' \
    && ! printf '%s' "$HELPER_BODY" | grep -qE 'docker login[^|]*\$dt' \
    && printf '%s' "$RECOV_BODY" | grep -q 'jq -n --arg' \
    && ! printf '%s' "$RECOV_BODY" | grep -qE 'detail_raw|tail -c 400|\$perr'; then
@@ -3413,8 +3446,15 @@ else
 fi
 # AC13: cosign continuity — the recovery relogin targets ghcr.io (the registry the
 # cosign :ro $GHCR_DOCKER_CONFIG authenticates), so a recovered pull does not 401 the .sig.
+#
+# ANCHORED ON THE INVOCATION, not on the bare string `docker login ghcr.io`. #6497 added a
+# `logger` line to this helper whose MESSAGE contains that exact substring — which left this
+# assertion VACUOUSLY GREEN: it passed while matching a log string, with the property it exists
+# to guard (the relogin actually targets ghcr.io) no longer verified by it. That is the same
+# defect class this file has now shipped five times: a static assertion anchored on a bare token
+# that a comment — or a log message — can also satisfy. Anchor on the call shape.
 TOTAL=$((TOTAL + 1))
-if printf '%s' "$HELPER_BODY" | grep -q 'docker login ghcr.io'; then
+if printf '%s' "$HELPER_BODY" | grep -qE '_docker_login_capture ghcr\.io "\$du" "\$dt"'; then
   PASS=$((PASS + 1)); echo "  PASS: recovery relogin writes ghcr.io auth into the same \$GHCR_DOCKER_CONFIG (cosign continuity)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: AC13 — recovery relogin must target ghcr.io"
@@ -3431,8 +3471,10 @@ fi
 # captures the Sentry POST bodies. Echoes nothing; the caller greps the capture file.
 # $3 (optional): a journald capture file. Armed only by the purity test — every other caller
 # leaves it empty so the logger mock keeps its historic discard-everything behavior.
+# $4 (optional): the login's STDOUT (#6497 H-B-stdout). $5 (optional): extra `VAR=value` env
+# entries, space-separated, for the abort-injection + docker-absent legs.
 run_deploy_zot_login_stderr() {
-  local sentry_file="$1" zot_stderr="$2" logger_file="${3:-}"
+  local sentry_file="$1" zot_stderr="$2" logger_file="${3:-}" zot_stdout="${4:-}" extra_env="${5:-}"
   (
     export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
     MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
@@ -3443,8 +3485,11 @@ run_deploy_zot_login_stderr() {
     export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
     export MOCK_ZOT_CONFIGURED=1
     export MOCK_ZOT_LOGIN_FAIL_STDERR="$zot_stderr"
+    [[ -n "$zot_stdout" ]] && export MOCK_ZOT_LOGIN_FAIL_STDOUT="$zot_stdout"
     export MOCK_SENTRY_CAPTURE_FILE="$sentry_file"
     [[ -n "$logger_file" ]] && export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    # shellcheck disable=SC2163
+    if [[ -n "$extra_env" ]]; then for _kv in $extra_env; do export "${_kv?}"; done; fi
     create_base_mocks "$MOCK_DIR"
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
@@ -3453,8 +3498,10 @@ run_deploy_zot_login_stderr() {
   )
 }
 
-# T-5B-1..5: one case per zot_login_class enum member. Each asserts the gate still emits
+# T-5B-1..5: one case per login_class enum member. Each asserts the gate still emits
 # login_failed AND that the specific class rides along.
+# #6497: the tags are `login_class`/`login_http` (were `zot_login_class`/`zot_login_http`) — the
+# classifier is registry-neutral now, so its tags are too, and `login_registry` says which.
 assert_zot_login_class() {
   local label="$1" stderr="$2" want_class="$3" want_http="${4:-}"
   TOTAL=$((TOTAL + 1))
@@ -3462,14 +3509,15 @@ assert_zot_login_class() {
   run_deploy_zot_login_stderr "$sf" "$stderr"
   local ok=1
   grep -q 'zot gate degraded (login_failed)' "$sf" || ok=0
-  grep -q "\"zot_login_class\": *\"${want_class}\"" "$sf" || ok=0
+  grep -q "\"login_class\": *\"${want_class}\"" "$sf" || ok=0
+  grep -q "\"login_registry\": *\"zot\"" "$sf" || ok=0
   if [[ -n "$want_http" ]]; then
-    grep -q "\"zot_login_http\": *\"${want_http}\"" "$sf" || ok=0
+    grep -q "\"login_http\": *\"${want_http}\"" "$sf" || ok=0
   fi
   if [[ "$ok" == "1" ]]; then
-    PASS=$((PASS + 1)); echo "  PASS: ${label} → zot_login_class=${want_class}${want_http:+ http=$want_http}"
+    PASS=$((PASS + 1)); echo "  PASS: ${label} → login_class=${want_class}${want_http:+ http=$want_http}"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: ${label} — expected zot_login_class=${want_class}${want_http:+ + zot_login_http=$want_http}"
+    FAIL=$((FAIL + 1)); echo "  FAIL: ${label} — expected login_class=${want_class}${want_http:+ + login_http=$want_http}"
     echo "        sentry:"; sed 's/^/          /' "$sf"
   fi
   rm -f "$sf"
@@ -3478,7 +3526,7 @@ assert_zot_login_class() {
 # The 401 fixture is byte-accurate — reproduced against the pinned zot (v2.1.2) with this
 # repo's exact accessControl. Measured there: GET /v2/ (the ONLY request docker login makes)
 # answers 200 or 401 and NEVER 403, even for a user with zero accessControl policies.
-echo "--- #6497 T-5B-1..5: docker login stderr classifies into the zot_login_class enum ---"
+echo "--- #6497 T-5B-1..5: docker login stderr classifies into the login_class enum ---"
 assert_zot_login_class "401 stale htpasswd (H3 — the live defect)" \
   'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 401 Unauthorized' \
   'authn_rejected' '401'
@@ -3531,8 +3579,8 @@ echo "--- #6497 T-5B-6: tls_mismatch must NOT classify as authn_rejected ---"
 TOTAL=$((TOTAL + 1))
 SF_TLS=$(mktemp)
 run_deploy_zot_login_stderr "$SF_TLS" 'Error response from daemon: Get "https://10.0.1.30:5000/v2/": http: server gave HTTP response to HTTPS client'
-if grep -q '"zot_login_class": *"tls_mismatch"' "$SF_TLS" \
-   && ! grep -q '"zot_login_class": *"authn_rejected"' "$SF_TLS"; then
+if grep -q '"login_class": *"tls_mismatch"' "$SF_TLS" \
+   && ! grep -q '"login_class": *"authn_rejected"' "$SF_TLS"; then
   PASS=$((PASS + 1)); echo "  PASS: tls_mismatch stays out of the authn_rejected bucket"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: tls_mismatch collapsed into authn_rejected (enum has no discriminating power)"
@@ -3552,8 +3600,8 @@ echo "--- #6497 T-5B-7: a literal 403 must NOT be read as authn_rejected (defens
 TOTAL=$((TOTAL + 1))
 SF_403=$(mktemp)
 run_deploy_zot_login_stderr "$SF_403" 'Error response from daemon: login attempt to http://10.0.1.30:5000/v2/ failed with status: 403 Forbidden'
-if grep -q '"zot_login_class": *"authz_denied"' "$SF_403" \
-   && ! grep -q '"zot_login_class": *"authn_rejected"' "$SF_403"; then
+if grep -q '"login_class": *"authz_denied"' "$SF_403" \
+   && ! grep -q '"login_class": *"authn_rejected"' "$SF_403"; then
   PASS=$((PASS + 1)); echo "  PASS: literal 403 → authz_denied, never authn_rejected"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: 403 collapsed into authn_rejected"
@@ -3567,7 +3615,7 @@ echo "--- #6497 T-5B-8: raw docker login stderr never reaches the Sentry payload
 TOTAL=$((TOTAL + 1))
 SF_HYG=$(mktemp)
 run_deploy_zot_login_stderr "$SF_HYG" 'Error response from daemon: login attempt failed with status: 401 Unauthorized SENTINEL_LEAK_CANARY_zot-pull'
-if grep -q '"zot_login_class": *"authn_rejected"' "$SF_HYG" \
+if grep -q '"login_class": *"authn_rejected"' "$SF_HYG" \
    && ! grep -q 'SENTINEL_LEAK_CANARY' "$SF_HYG"; then
   PASS=$((PASS + 1)); echo "  PASS: stderr classified to the enum; raw stderr absent from the payload"
 else
