@@ -30,6 +30,18 @@ on:
       # never run the guard that catches it.
       - ".github/workflows/apply-inngest-rls.yml"
       - ".github/workflows/apply-inngest-rls-dev.yml"
+      # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
+      # guard's whole job is to catch a gate that looks present but does nothing
+      # — so a guard that cannot fire when its own subjects are edited would be
+      # that same defect. cron-monitors.tf is already covered by apps/*/infra/**;
+      # these five are not. Notably apply-sentry-infra.yml, whose -target= list
+      # is enumerated per-resource: dropping the monitor's line there leaves it
+      # declared but never applied, which is silent and green without this path.
+      - ".github/workflows/scheduled-supabase-advisor-scan.yml"
+      - ".github/workflows/apply-sentry-infra.yml"
+      - "scripts/supabase-advisor-scan.sh"
+      - "apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts"
+      - "knowledge-base/engineering/architecture/diagrams/model.c4"
   workflow_dispatch:
 
 permissions:
@@ -500,6 +512,14 @@ jobs:
 
       - name: Run apply-inngest-rls{,-dev}.yml workflow shape guards
         run: bash apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh
+
+      # (#3366) This step is the ONLY thing that makes the advisor-scan shape
+      # guard run in CI: this workflow hand-enumerates every .test.sh and has no
+      # glob/find runner, so an unregistered guard is a file nobody calls —
+      # green locally, gating nothing. Registered here rather than relying on
+      # discovery, and asserted by AC9b so it cannot be silently dropped.
+      - name: Run scheduled-supabase-advisor-scan.yml shape + drift guards
+        run: bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh
 
       # Proves the step above's sequence-DDL guard still FAILS on the catastrophe it
       # claims to catch. It is the only check standing between an unbound sequence loop
