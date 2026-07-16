@@ -45,6 +45,7 @@ We want to trial **Grok Build headless** against the Soleur monorepo from a Hetz
 | FR8 | Cost controls: documented soft budget, xAI billing alert recommendation, default `--max-turns` for unattended runs. |
 | FR9 | Spec/docs state **Phase 2** path: custom `[model.*]` pointing at local OpenAI-compatible endpoint on a future GPU host — out of Phase 1 implement scope. |
 | FR10 | **Server-slot gate:** plan/apply refuses additive create when account free slots are 0; documents reclaim/limit-raise dependency. |
+| FR11 | Phase 1 design is **substrate-first**: model selection only via config/env (no xAI-only hardcode in provision scripts); headless flags and measurement scripts work with any configured model id; document how the same host/pattern would feed a future **Soleur Web → Grok Build (ACP/headless)** product path (implementation of that product path is out of scope). |
 
 ## Technical Requirements
 

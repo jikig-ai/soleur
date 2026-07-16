@@ -82,6 +82,7 @@ Prior art: fleet already uses small CPU boxes (`cx33` web, `cpx22` inngest, `cax
 | 8 | **Hard spend + turn caps** as first-class trial controls | API dominates bill; `--max-turns`, billing alerts, per-run JSON usage |
 | 9 | **Success = measured harness fidelity + cost ledger**, not feature ship velocity | CPO: dogfood metrics, kill criteria pre-declared |
 | 10 | **Do not market as self-hosted Grok 4.5** | Accuracy / brand |
+| 11 | **Phase 1 is substrate, not throwaway** — design for reuse on (a) open-model swap and (b) future Soleur Web agent runtime replacing Claude Code SDK | Operator concern 2026-07-16: API dogfood must not be a dead-end. Reusable: Grok Build harness, headless/ACP surface, `config.toml` model routing, secrets/sandbox/spend gates, measurement harness, TF host pattern. Disposable: only the default model endpoint (xAI) and any dogfood-only cron wrappers. Product Concierge migration remains a **later epic**, not Phase 1 scope, but Phase 1 choices must not hard-code Claude- or xAI-only assumptions that block Grok Build as the product agent. |
 
 ## Measurement plan (trial success criteria)
 
