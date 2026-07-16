@@ -195,11 +195,33 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     expect(cloudInit).toContain(`"app_ghcr_fallback" warning`);
   });
 
-  it("issue-alerts.tf pins all four signal tag-values (any-match OR)", () => {
+  // #6462: the fresh-boot DENOMINATOR. app_ghcr_fallback (above) only fires when a zot
+  // pull FAILED >=2 times; the DOMINANT path is a /v2/ probe-miss, where the GHCR pull
+  // succeeds first try and nothing is emitted at all. These two beacons make the boot's
+  // chosen registry observable: exactly one fires per successful boot.
+  //
+  // EXISTENCE, pinned here, is deliberately SEPARATE from ORDERING (pinned in
+  // cloud-init-user-data-size.test.ts). An indexOf-based ordering assert returns -1 on a
+  // miss and -1 < everything, so ordering-alone PASSES on a tree with no beacon at all —
+  // it cannot carry existence. Two ACs, two files, neither vacuously carrying the other.
+  //
+  // Pin the CALL FORM, not the bare stage token: the rationale comment above the emit
+  // names both stages, so a bare toContain() would be satisfied by prose (the same trap
+  // :192-193 documents for app_ghcr_fallback).
+  it("cloud-init.yml emits both fresh-boot registry beacons (#6462 denominator)", () => {
+    expect(cloudInit).toContain(`"app_ghcr_served" warning`);
+    expect(cloudInit).toContain(`"app_zot" info`);
+  });
+
+  it("issue-alerts.tf pins all five signal tag-values (any-match OR)", () => {
     expect(tf).toContain(`value = "ghcr-fallback"`);
     expect(tf).toContain(`value = "zot-gate-degraded"`);
     expect(tf).toContain(`value = "inngest_ghcr_fallback"`);
     expect(tf).toContain(`value = "app_ghcr_fallback"`);
+    // Anchored on the HCL assignment rather than a bare toContain: this PR adds an
+    // enumerating comment naming app_ghcr_served, and prose cannot produce `^\s*value =`.
+    // See :227-231 — mutation-testing proved a bare toContain lets the whole block go.
+    expect(tf).toMatch(/^\s*value\s*=\s*"app_ghcr_served"/m);
   });
 
   it("issue-alerts.tf declares the zot_mirror_fallback_rate resource with an any-match event_frequency rule", () => {
@@ -247,8 +269,11 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   it("the soak gate's FAIL set equals the alarm's watched signal set (derived, both sides)", () => {
     const alarm = alarmFilterSet();
     // Guard against a vacuous pass if either extraction silently yields nothing.
-    expect(alarm.size).toBe(4);
-    expect(soakFailQueries().size).toBe(4);
+    // 4 -> 5 with #6462's app_ghcr_served. The soak's RUNTIME cardinality floor
+    // (zot-soak-6122.sh `${#FAIL_QUERIES[@]} != 5`) must move in lockstep: CI parses
+    // the source, the sweeper executes it, and both must agree.
+    expect(alarm.size).toBe(5);
+    expect(soakFailQueries().size).toBe(5);
     // Derived equality on BOTH sides — deliberately no canonical list here. A
     // WATCHED constant would be a third source of truth, not a parity test; this
     // shape gives "a 5th signal added to the alarm breaks CI" for free.
@@ -269,7 +294,7 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   //   stage: query makes it match zero events FOREVER, silently restoring the very
   //   blindness this PR removes. Proven live: stage:"bootstrap_complete" => 9 events,
   //   feature:supply-chain op:image-pull stage:"bootstrap_complete" => 0.
-  it("pins the WHOLE query string for all four signals (the prefix trap)", () => {
+  it("pins the WHOLE query string for all five signals (the prefix trap)", () => {
     expect(soakQueryFor("ghcr-fallback")).toBe(
       'feature:supply-chain op:image-pull registry:"ghcr-fallback"',
     );
@@ -282,6 +307,12 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     );
     expect(soakQueryFor("app_ghcr_fallback")).toBe(
       'stage:"app_ghcr_fallback"',
+    );
+    // BARE — #6462. This is the 5th signal and it rides the SAME _emit tag schema as
+    // app_ghcr_fallback ({stage,image_ref,host_id,detail} — no feature/op), so a prefix
+    // here matches zero events forever.
+    expect(soakQueryFor("app_ghcr_served")).toBe(
+      'stage:"app_ghcr_served"',
     );
   });
 
