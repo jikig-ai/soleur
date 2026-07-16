@@ -42,8 +42,10 @@ assert "connect_timeout is NOT assigned a bare number (coerces to \"5\" -> parse
 
 # The #6357 mitigation's actual value. If someone retunes it, this fails and they must confirm
 # the new bound is deliberate — the whole point is that it was silently 0s for weeks.
+# Whitespace-tolerant on purpose: a future `terraform fmt` may realign this block if a longer
+# sibling key joins origin_request, and the value would still be correct — don't red on alignment.
 assert "connect_timeout is 5s (the #6357 fail-fast bound on the registry origin)" \
-  "grep -qF 'connect_timeout   = \"5s\"' '$TF'"
+  "grep -qE '^[[:space:]]*connect_timeout[[:space:]]*=[[:space:]]*\"5s\"' '$TF'"
 
 # Booleans stay booleans — no_happy_eyeballs is `bool` in the same schema block and was always
 # correct. Pinned so a future 'fix everything to strings' sweep doesn't over-correct it.
