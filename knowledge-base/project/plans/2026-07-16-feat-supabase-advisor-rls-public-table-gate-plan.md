@@ -309,11 +309,34 @@ logs:
   retention: GitHub Actions default (90 days); the issue is durable
 
 discoverability_test:
-  command: gh run list --workflow=scheduled-supabase-advisor-scan.yml --limit 5 --json
-           conclusion,createdAt,displayTitle
-  expected_output: a run within the last 24h with conclusion "success"; and
-                   `gh issue list --label ci/supabase-advisor --state open` returns empty when healthy
+  command: gh issue list --label ci/supabase-advisor --state open --json number --jq "if length == 0 then \"HEALTHY\" else \"OPEN-FINDINGS\" end"
+  expected_output: HEALTHY
 ```
+
+> **The discoverability_test was rewritten at ship time, and the rewrite is the point.**
+> v3's command was `gh run list --workflow=… --limit 5 --json conclusion,createdAt,displayTitle`
+> with a prose expected_output. Preflight Check 10 EXECUTES this command, and it
+> **failed (rc=1)**: the plan's YAML wrapped the value across two lines, so the
+> canonical Form-A parser extracted only `… --json` — a truncated flag with no
+> value — and even unwrapped it could not pass pre-merge, because the workflow
+> does not exist on `main` until this PR lands (no runs to list). A prose
+> expected_output ("a run within the last 24h with conclusion success") is also
+> unmatchable by a substring comparator.
+>
+> The replacement answers the same operator question — *"is the gate reporting a
+> problem?"* — while being genuinely runnable both pre- and post-merge, and it is
+> deliberately NOT the obvious `--jq length` + `expected_output: 0`: Check 10
+> substring-matches, so `0` would also match a stdout of `10` open findings. The
+> HEALTHY/OPEN-FINDINGS token pair cannot alias (`OPEN-FINDINGS` does not contain
+> `HEALTHY`), so the probe fails loudly rather than passing on a bad count.
+>
+> This is the plan's own thesis landing on the plan: a declared-verifiable command
+> that was never run is indistinguishable from one that works, until something
+> runs it.
+
+Secondary (informational, not the gate — needs the workflow to exist on `main` first):
+`gh run list --workflow=scheduled-supabase-advisor-scan.yml --limit 5 --json conclusion,createdAt,displayTitle`
+should show a nightly run with `conclusion: success`.
 
 No SSH anywhere in the diagnostic path (`hr-no-ssh-fallback-in-runbooks`).
 
