@@ -75,7 +75,7 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // #4826 — expand seed is one-shot per KB layout mount (ref latch). Later
   // user collapses must not be overwritten by re-reads of sessionStorage.
-  const { readExpanded, writeExpanded, clearKbPath } = useNavResume();
+  const { workspaceId, readExpanded, writeExpanded } = useNavResume();
   const expandedSeededRef = useRef(false);
 
   // Runtime feature flag — hydrated server-side via FeatureFlagProvider in
@@ -169,9 +169,11 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     [writeExpanded],
   );
 
-  // One-shot seed of expanded dirs from sessionStorage on first mount
-  // (union with any already-present entries). Latched so later collapses win.
+  // One-shot seed of expanded dirs from sessionStorage once workspaceId is
+  // known (union with any already-present entries). Latched so later collapses
+  // win — must NOT latch before workspaceId or cold loads skip AC4 restore.
   useEffect(() => {
+    if (!workspaceId) return;
     if (expandedSeededRef.current) return;
     expandedSeededRef.current = true;
     const stored = readExpanded();
@@ -181,7 +183,7 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       for (const dir of stored) next.add(dir);
       return next;
     });
-  }, [readExpanded]);
+  }, [workspaceId, readExpanded]);
 
   // Auto-expand ancestor directories when navigating to a file
   useEffect(() => {
@@ -215,13 +217,8 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const isContentView = pathname !== "/dashboard/kb";
   const hasTreeContent = !!(tree?.children && tree.children.length > 0);
 
-  // Fail-closed: clear sticky KB path when the tree reports not-found for the
-  // open doc route so the next main-nav entry lands at section root (AC path).
-  useEffect(() => {
-    if (error === "not-found" && isContentView) {
-      clearKbPath();
-    }
-  }, [error, isContentView, clearKbPath]);
+  // Document 404 clear lives in kb/[...path]/page.tsx (tree-level not-found
+  // is workspace/repo missing, not a single doc path).
 
   const ctxValue: KbContextValue = useMemo(
     () => ({

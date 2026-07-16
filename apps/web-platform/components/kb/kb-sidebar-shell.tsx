@@ -42,10 +42,11 @@ export function KbSidebarShell() {
   // the expanded rail's KbSyncStatus, reachable once expanded. The stable
   // `kb-rail-tree` wrapper always renders to anchor present/absent assertions.
   const collapsed = useRailCollapsed();
-  const { readScrollTop, writeScrollTop } = useNavResume();
+  const { workspaceId, readScrollTop, writeScrollTop } = useNavResume();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const restoredRef = useRef(false);
   const rafWriteRef = useRef<number | null>(null);
+  const MAX_SCROLL_RESTORE_FRAMES = 20;
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -58,21 +59,31 @@ export function KbSidebarShell() {
   }, [writeScrollTop]);
 
   // Restore scroll once after tree content is available (one-shot).
+  // Do not latch before workspaceId — cold load would skip AC5 restore.
   useEffect(() => {
-    if (collapsed || loading || isEmpty || restoredRef.current) return;
+    if (!workspaceId || collapsed || loading || isEmpty || restoredRef.current) {
+      return;
+    }
     const saved = readScrollTop();
     if (saved == null || saved <= 0) {
       restoredRef.current = true;
       return;
     }
     let cancelled = false;
+    let frames = 0;
     const apply = () => {
       if (cancelled) return;
       const el = scrollRef.current;
       if (!el) return;
-      // Wait until the scrollport can actually scroll (content painted).
+      frames += 1;
+      // Wait until the scrollport can actually scroll (content painted),
+      // but cap retries so short trees cannot spin rAF forever.
       if (el.scrollHeight <= el.clientHeight + 1) {
-        window.requestAnimationFrame(apply);
+        if (frames < MAX_SCROLL_RESTORE_FRAMES) {
+          window.requestAnimationFrame(apply);
+        } else {
+          restoredRef.current = true;
+        }
         return;
       }
       el.scrollTop = saved;
@@ -82,7 +93,7 @@ export function KbSidebarShell() {
     return () => {
       cancelled = true;
     };
-  }, [collapsed, loading, isEmpty, readScrollTop, tree]);
+  }, [workspaceId, collapsed, loading, isEmpty, readScrollTop, tree]);
 
   useEffect(() => {
     return () => {

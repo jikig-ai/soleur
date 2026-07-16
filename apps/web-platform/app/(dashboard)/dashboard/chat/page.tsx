@@ -11,17 +11,18 @@
  * - Wait for workspaceId (or treat as no-resume if still null after settle).
  * - Never redirect away from `/dashboard/chat/new` (that is a different route).
  * - Never restore `"new"` as an id (sanitize helpers reject it).
- * - Stale/missing id → land on `/new` and clear the sticky key.
+ * - Missing/invalid stored id → land on `/new`.
+ * - Stale conversation (exists in storage but not in DB) is cleared by
+ *   chat/[conversationId]/page.tsx after a maybeSingle probe (AC10).
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useNavResume } from "@/hooks/use-nav-resume";
 
 export default function ChatIndexPage() {
   const router = useRouter();
   const { workspaceId, readChatId, clearChatId } = useNavResume();
-  const [status, setStatus] = useState<"waiting" | "opening">("waiting");
   const replacedRef = useRef(false);
 
   useEffect(() => {
@@ -34,7 +35,6 @@ export default function ChatIndexPage() {
       const t = window.setTimeout(() => {
         if (replacedRef.current) return;
         replacedRef.current = true;
-        setStatus("opening");
         router.replace("/dashboard/chat/new");
       }, 1500);
       return () => window.clearTimeout(t);
@@ -42,10 +42,7 @@ export default function ChatIndexPage() {
 
     const id = readChatId();
     replacedRef.current = true;
-    setStatus("opening");
     if (id) {
-      // Optimistic resume; conversation surface handles missing rows.
-      // Soft-fail: if the route 404s, a sibling clear path runs on not-found.
       router.replace(`/dashboard/chat/${id}`);
     } else {
       clearChatId();
@@ -60,7 +57,7 @@ export default function ChatIndexPage() {
       role="status"
       aria-live="polite"
     >
-      {status === "waiting" ? "Opening conversation…" : "Opening conversation…"}
+      Opening conversation…
     </div>
   );
 }
