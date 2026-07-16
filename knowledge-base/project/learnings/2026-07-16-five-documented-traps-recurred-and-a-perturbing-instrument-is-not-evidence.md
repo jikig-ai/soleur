@@ -187,6 +187,13 @@ threshold that was a race. Each read as diligence.
 
 ## Related
 
+- `knowledge-base/project/learnings/2026-07-16-refuting-a-hypothesis-by-reasoning-while-its-discriminator-is-invisible.md`
+  (#6536, landed on main the same day) — **the same class, a different subsystem, within 24h.**
+  There a hypothesis was REFUTED by reasoning about systemd semantics while the datum that
+  would settle it was unobservable; here three reviewers refuted "the bug is live" by reasoning
+  about the pipe buffer while the datum — the CI log in the issue — was sitting in plain sight.
+  Its framing is the sharper one and generalises over both: *a hypothesis refuted by reasoning
+  is not refuted*. The pair is evidence this is a standing failure mode, not two anecdotes.
 - `knowledge-base/project/learnings/2026-07-15-ad-hoc-verification-evidence-is-as-perishable-as-uncommitted-code.md`
   — the lesson this PR re-learned the hard way.
 - `knowledge-base/project/learnings/2026-07-16-a-gate-certifies-placement-not-correctness-and-a-documented-class-recurred-again.md`
