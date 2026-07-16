@@ -4,6 +4,7 @@ date: 2026-07-16
 type: feat
 issue: 6545
 phase2_issue: 6546
+product_epic_issue: 6547
 pr: 6544
 branch: feat-grok-build-hetzner-trial
 lane: cross-domain
