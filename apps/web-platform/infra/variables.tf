@@ -401,3 +401,33 @@ variable "web_colocate_inngest" {
   type        = bool
   default     = false
 }
+
+# --- #6545 — operator dogfood: headless Grok Build host (Grok 4.5 API Phase 1) ---
+variable "enable_grok_dogfood" {
+  description = "When true, provision the dedicated soleur-grok-dogfood host (CX33-class, EU). Default false so merge never births a host on the per-PR apply path (#6416 host_creates tripwire). Enable via TF_VAR + dispatch apply_target=grok-dogfood (or operator-local -target) after free server slot is confirmed (#6545 Phase 0)."
+  type        = bool
+  default     = false
+}
+
+variable "grok_dogfood_server_type" {
+  description = "Hetzner server type for the Grok Build dogfood host. Prefer cx33 (4 vCPU / 8 GB) for monorepo + tooling. Must be cax*/cpx*/cx*/ccx* prefix for validation parity with sibling hosts."
+  type        = string
+  default     = "cx33"
+
+  validation {
+    condition     = can(regex("^(cax|cpx|cx|ccx)", var.grok_dogfood_server_type))
+    error_message = "grok_dogfood_server_type must be a recognized Hetzner type (cax*/cpx*/cx*/ccx*)."
+  }
+}
+
+variable "grok_dogfood_location" {
+  description = "Hetzner location for the Grok dogfood host. Prefer hel1 (fleet affinity). Must be EU for residency posture."
+  type        = string
+  default     = "hel1"
+}
+
+variable "grok_dogfood_private_ip" {
+  description = "Stable private IP on soleur-private (10.0.1.0/24) for the dogfood host. Default 10.0.1.50 (web .10/.11, git-data .20, registry .30, inngest .40)."
+  type        = string
+  default     = "10.0.1.50"
+}
