@@ -53,44 +53,60 @@ Lane: `cross-domain` · Threshold: `single-user incident` · Issue: #6536
 image, one bump, one replace, so no fire occurs between them. And there is nothing left to
 discriminate: H5 is confirmed, H4 refuted+descoped, and the probe cannot see H4 anyway.)*
 
-- [ ] 1.1 RED: unit heredoc contains `SyslogIdentifier=inngest-heartbeat`.
-- [ ] 1.2 GREEN: add it (`inngest-bootstrap.sh:178-194`). **Highest-value line in the PR** — it
+- [x] 1.1 RED: unit heredoc contains `SyslogIdentifier=inngest-heartbeat`.
+- [x] 1.2 GREEN: add it (`inngest-bootstrap.sh:178-194`). **Highest-value line in the PR** — it
       retags doppler's AND curl's stderr onto a shipping channel (today systemd derives the tag
       from the ExecStart basename → `doppler`), and it is what makes the "no row + unit failed"
       signature readable at all.
-- [ ] 1.3 GREEN: `LOG_TAG="inngest-heartbeat"` as a **real assignment** in the ping script — NOT a
+- [x] 1.3 GREEN: `LOG_TAG="inngest-heartbeat"` as a **real assignment** in the ping script — NOT a
       bare `logger -t inngest-heartbeat` literal. The drift fixture (`vector-pii-scrub.test.sh:404`)
       derives EXPECTED_TAGS from `^\s*(readonly\s+)?LOG_TAG="…"`; a literal pulls the file into
       the loop (grep is heredoc-blind), yields NO tag, and hard-fails AC3 — taking AC7/AC9 with it.
       Do NOT "fix" that via `SYSTEMD_UNIT_IDENTIFIERS` — `:412` forbids it.
-- [ ] 1.4 RED: leak gate (AC3) — **value-based**. Run the script with
+- [x] 1.4 RED: leak gate (AC3) — **value-based**. Run the script with
       `INNGEST_HEARTBEAT_URL=…/CANARY_SENTINEL`; assert `CANARY_SENTINEL` appears **zero** times in
       stdout+stderr+logger output. (v2's source-grep caught 1 of 3 shapes.)
-- [ ] 1.5 GREEN: add `"inngest-heartbeat"` to `vector.toml` Source 4's allowlist with a `#6536`
+- [x] 1.5 GREEN: add `"inngest-heartbeat"` to `vector.toml` Source 4's allowlist with a `#6536`
       comment. **Source 4 only** — Source 1's `PRIORITY 0-4` cut drops PRIORITY-6 output. Scope the
       AC with the flag-based `awk` form, not an `/a/,/b/` range.
-- [ ] 1.6 Extend `vector-pii-scrub.test.sh`; `cat-deploy-state.sh:344` + its test (FR7).
-- [ ] 1.7 **No success-path log row.** v4 added `url_present=yes … pinging` every 60s on BOTH hosts
+- [x] 1.6 Extend `vector-pii-scrub.test.sh`; `cat-deploy-state.sh:344` + its test (FR7).
+- [x] 1.7 **No success-path log row.** v4 added `url_present=yes … pinging` every 60s on BOTH hosts
       (~2,880/day) to duplicate what the monitor already asserts, against ~5k/day headroom
       (`vector.toml:166-171`, engineered ~20% under 25k after #5110's AC12 FAIL at 2.3x). Cut.
 
 ## Phase 2 — The fix (render-time split)
 
-- [ ] 2.1 RED: three cases on the **rendered** artifact — dedicated+URL-absent → exit 0 + one row;
+- [x] 2.1 RED: three cases on the **rendered** artifact — dedicated+URL-absent → exit 0 + one row;
       dedicated+URL-present → `exec curl`; **web render → NO dark arm** (rc=2, loud).
-- [ ] 2.2 GREEN: `@@DARK_ARM@@` sentinel in the **quoted** heredoc, substituted by `sed -i` per
+- [x] 2.2 GREEN: `@@DARK_ARM@@` sentinel in the **quoted** heredoc, substituted by `sed -i` per
       `DOPPLER_PROJECT` — the pattern `:609` (`@@HOST_NAME@@`) and `:405-418`
       (`@@FLIP_GUARD_EXECSTARTPRE@@`) already use. **NEVER unquote the heredoc** (§Sharp Edges: it
       bakes the bearer URL into a 0755 file and AC3 structurally cannot catch it).
-- [ ] 2.3 Verify under `sh`, not bash — the script is `#!/bin/sh`.
+- [x] 2.3 Verify under `sh`, not bash — the script is `#!/bin/sh`.
 
 ## Phase 3 — Correct the record
 
-- [ ] 3.1 `inngest-host.tf:137-151` — replace the false *"the dark host's heartbeat curl no-ops"*
+- [x] 3.1 `inngest-host.tf:137-151` — replace the false *"the dark host's heartbeat curl no-ops"*
       claim with the measured truth (rc=2). Cite #6536. This false comment authorized the bug.
-- [ ] 3.2 RED/GREEN: guard in `inngest-host.test.sh` so it cannot return (AC6).
-- [ ] 3.3 Fix `inngest-bootstrap.sh:416`'s stale FSM comment **in this PR** (arch rec 6) — one line,
-      the correct enum is known, and post-v5 it is the last FSM copy outside the flip script.
+- [x] 3.2 RED/GREEN: guard in `inngest-host.test.sh` so it cannot return (AC6).
+- [x] 3.3 **DONE, but NOT as specified — the task's premise is refuted (measured at /work).**
+      The task says the comment is "stale" because it names `{armed, flipping, done}` while the
+      FSM is `armed → flipping → flushed → done`. Measured: `inngest-server-flip-guard.sh:40` is
+      `armed | flipping | done) flag_ok=true ;;` — so the comment describes the guard's ACTUAL
+      code **accurately**. It is not a stale copy of the FSM; it is a correct description of an
+      allowlist that legitimately differs from the FSM.
+      Adding `flushed` as instructed would have made the comment assert behaviour the code does
+      **not** have — i.e. manufactured a NEW instance of the exact defect this PR exists to
+      remove (`inngest-host.tf` claimed a curl no-op that was never implemented, and that false
+      claim authorized 3 days of 60s failures). Applied instead: the comment now states the
+      guard's real allowlist, names `flushed` as a deliberate omission, and forbids the
+      "reconcile by adding flushed" edit that this very task asked for.
+      **Real finding (different subsystem, kept separate):** the guard's allowlist omits
+      `flushed`, so an inngest-server restart landing inside the flushed→done window is refused.
+      Fail-closed and self-healing (the flip script advances flushed→done on its next 30s poll),
+      so severity is low — but it is a genuine guard/FSM divergence. NOT fixed here: this PR does
+      not touch the flip guard, and widening a cutover safety allowlist mid-cutover is not a
+      change to make as a side effect of a heartbeat fix. Needs its own issue.
 
 ## Phase 4 — Delivery (dispatch-gated replace)
 
@@ -103,8 +119,8 @@ discriminate: H5 is confirmed, H4 refuted+descoped, and the probe cannot see H4 
 
 ## Phase 5 — Exit gate
 
-- [ ] 5.1 `bash -n` every touched shell script.
-- [ ] 5.2 Run: `cloud-init-inngest-bootstrap.test.sh`, `inngest-host.test.sh`,
+- [x] 5.1 `bash -n` every touched shell script.
+- [x] 5.2 Run: `cloud-init-inngest-bootstrap.test.sh`, `inngest-host.test.sh`,
       `cat-deploy-state.test.sh`, `vector-pii-scrub.test.sh`, `heartbeat-reprovision-parity.test.ts`,
       `terraform-target-parity.test.ts`.
-- [ ] 5.3 `validate-vector-config.yml` green. 5.4 Full infra suite. 5.5 PR body: `Closes #6536`.
+- [x] 5.3 `validate-vector-config.yml` green. 5.4 Full infra suite. 5.5 PR body: `Closes #6536`.
