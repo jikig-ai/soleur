@@ -137,27 +137,39 @@ variable "git_data_volume_size" {
 
 # --- #6122 (ADR-096) — the self-hosted zot registry host ---
 variable "registry_server_type" {
-  description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): cax11 (2 vCPU ARM64/Ampere, 4GB) / cx23 (2 vCPU x86, 4GB) / cx33 (4 vCPU x86, 8GB, ~€8.49/mo net, hel1). A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral. Recorded via ops-advisor. #6288 attempted cx23→cx32 (8 GB) for OOM headroom, but **cx32 does not exist in the Hetzner catalog** (the plan's ~€6.80 figure was for a phantom type) → the registry-host-replace apply DESTROYED the old nbg1 host then failed `server type cx32 not found`. RESOLUTION (operator-chosen, #6288): migrate the registry nbg1→**hel1** and bump cx23→**cx33** (real 8 GB type, only +~€3/mo vs cx23; cheapest ≥8 GB in nbg1 was cpx32 ~€35/mo, ~6×). hel1 is where the rest of the fleet lives; the registry was only in nbg1 due to a since-resolved hel1 stock outage. cx33 is amd64 (does NOT start with `cax`) → local.registry_arch unchanged. The 35 GB zot store is a disposable GHCR MIRROR — the fresh hel1 volume re-fills from GHCR on the next CI dual-push (pulls fall through to GHCR meanwhile, non-release-blocking). THE CAP FOLLOWS THIS VAR — do not assume 7168m: zot's ADR-062 cgroup cap is DERIVED as `memory × 1024 − 1024` (zot-registry.tf local.registry_memory_cap_mb, read from the live Hetzner catalog), so it is 7168m on cx33 and 3072m on any 4 GB type. It was formerly a hardcoded 7168m literal with no edge to this variable, which meant changing this var to a 4 GB type left a cap that can never bind on 4096m of RAM — silently the UNCAPPED-on-cx23 condition that caused #6288. That is fixed; the host also self-reports zot_memory_capped + zot_memory_cap_mb so a gate can no longer assume the cap either."
+  description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): cax11 (2 vCPU ARM64/Ampere, 4GB) / cx23 (2 vCPU x86, 4GB) / cx33 (4 vCPU x86, 8GB, ~€8.49/mo net, hel1). A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral. Recorded via ops-advisor. #6288 attempted cx23→cx32 (8 GB) for OOM headroom, but **cx32 does not exist in the Hetzner catalog** (the plan's ~€6.80 figure was for a phantom type) → the registry-host-replace apply DESTROYED the old nbg1 host then failed `server type cx32 not found`. #6288 migrated the registry nbg1→**hel1** and bumped cx23→cx33 for OOM headroom; #6497/#6463 (2026-07-16) reverted to **cx23** (4 GB, ~€5.49/mo) after live telemetry showed the 8 GB was never needed (37 MB steady) and the OOM diagnosis was never confirmed — see the block comment below. hel1 is where the rest of the fleet lives. cx23 is amd64 (does NOT start with `cax`) → local.registry_arch unchanged. The zot store is a disposable GHCR MIRROR on a separate volume — the fresh host re-fills from GHCR on the next CI dual-push (pulls fall through to GHCR meanwhile, non-release-blocking). THE CAP FOLLOWS THIS VAR — do not assume 7168m: zot's ADR-062 cgroup cap is DERIVED as `memory × 1024 − 1024` (zot-registry.tf local.registry_memory_cap_mb, read from the live Hetzner catalog), so it is 7168m on cx33 and 3072m on any 4 GB type. It was formerly a hardcoded 7168m literal with no edge to this variable, which meant changing this var to a 4 GB type left a cap that can never bind on 4096m of RAM — silently the UNCAPPED-on-cx23 condition that caused #6288. That is fixed; the host also self-reports zot_memory_capped + zot_memory_cap_mb so a gate can no longer assume the cap either."
   type        = string
-  # cx33 (x86, 8 GB, hel1) — the real OOM remediation after #6288's cx32 attempt failed (cx32 is
-  # not a real Hetzner type; a nonexistent type now fails at PLAN via data.hcloud_server_type.registry
-  # instead of destroying the host first). cx33 is the 8 GB member of the same CX Intel line as cx23,
-  # ~€8.49/mo net (+~€3/mo vs cx23). Paired with registry_location=hel1 below and the DERIVED cgroup
-  # cap (7168m here), it is what #6288 shipped against the boot-scan host-OOM restart-loop.
+  # cx23 (x86, 4 GB, 2 vCPU, ~€5.49/mo net, hel1) — the right-SIZED registry host (operator-chosen,
+  # #6497 / #6463, 2026-07-16). The DERIVED cgroup cap (zot-registry.tf local.registry_memory_cap_mb)
+  # is 3072m here. amd64 (does NOT start with `cax`) → local.registry_arch unchanged from cx33; the
+  # zot image + Doppler CLI build are unchanged. The zot store is on a SEPARATE 60 GB volume, so
+  # cx23's 40 GB local disk (OS + docker + the ~100 MB zot image) is irrelevant to store capacity.
   #
-  # CAVEAT on the 8 GB floor (#6497 / #6463, 2026-07-15): #6288's OOM diagnosis was never confirmed.
-  # ADR-062:47 says "no safe a-priori cap exists without a live measurement"; :68 calls the cap "a
-  # STARTING value, not a measured peak". The retroactive check that would have settled it
-  # (2026-07-09-fix-zot-restart-loop-oom-telemetry-plan.md:238 — peak zot_anon_mb >~3.5 GB confirms
-  # the 4 GB host starved zot, well below flags the diagnosis wrong) never ran: the cx32 apply
-  # destroyed the host before it booted with the reporter. The remediation is also confounded — it
-  # changed RAM (4→8 GB) AND the store (~35 GB → fresh/empty) at once, so zot_restarts=0 was measured
-  # on a host whose boot scan had nothing to scan. Live telemetry since: zot_anon_mb is 37 MB steady
-  # (peak 47 over 3 days / 4 boots), ~0.5% of the 7168m cap, and it moved only 35→47 MB while the
-  # store grew ~12 GB — consistent with zot's dedupe being INLINE over an on-disk BoltDB cache, not
-  # an in-memory boot index. Still UNMEASURED: RSS during a boot scan of a LARGE store (every
-  # sampled boot scanned a near-empty one). Do not treat 8 GB as evidence-backed; it is precautionary.
-  default = "cx33"
+  # WHY 4 GB, not the prior 8 GB (cx33): the 8 GB floor was never evidence-backed. #6288 bumped
+  # cx23→cx33 for "OOM headroom", but that diagnosis was never confirmed. ADR-062:47 — "no safe
+  # a-priori cap exists without a live measurement"; :68 — the cap is "a STARTING value, not a
+  # measured peak". The retroactive check that would have settled it
+  # (2026-07-09-fix-zot-restart-loop-oom-telemetry-plan.md:238) never ran: the cx32 apply destroyed
+  # the host before it booted with the reporter. The #6288 remediation was also confounded — it
+  # changed RAM (4→8 GB) AND the store (~35 GB → fresh/empty) together, so zot_restarts=0 was
+  # measured on a host whose boot scan had nothing to scan. Live telemetry since: zot_anon_mb is
+  # 37 MB steady (peak 47 over 3 days / 4 boots), and it moved only 35→47 MB while the store grew
+  # ~12 GB — ~1 MB/GB, consistent with zot's dedupe being INLINE over an on-disk BoltDB cache, not
+  # an in-memory blob index. Projected at the current ~9.4 GB store: ~50 MB, ~1.6 % of the 3072m cap.
+  #
+  # RESIDUAL RISK, stated honestly: still UNMEASURED is RSS during a boot scan of a LARGE store
+  # (every sampled boot so far scanned a near-empty one). The cx23 recreate IS that measurement.
+  # It is bounded and reversible: on a 4 GB host the 3072m cap now BINDS (it was a hardcoded 7168m
+  # with no edge to this var until #6508 — on 4 GB that could never bind, which is #6288's real
+  # uncapped condition; that is fixed). So a wrong call yields a CONTAINED container-OOM
+  # (zot_memory_capped=true, zot_oom_kills>0 — both self-reported and gated) plus GHCR fallback,
+  # NOT #6288's host-OOM restart-loop. Revert path: back to cx33 (8 GB, ~€8.49/mo) if hel1 stock
+  # allows, else cpx32 (8 GB, ~€35/mo, the always-available 8 GB fallback), then re-dispatch.
+  # #6288's exact failure mode (uncapped zot on a 4 GB host) is now structurally impossible.
+  #
+  # A nonexistent type fails at PLAN via data.hcloud_server_type.registry (#6508) instead of
+  # destroying the host first — that was #6288's cx32 disaster. registry_location stays hel1.
+  default = "cx23"
 }
 
 variable "registry_volume_size" {
