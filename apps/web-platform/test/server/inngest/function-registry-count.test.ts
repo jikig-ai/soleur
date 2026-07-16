@@ -113,6 +113,12 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
 
 const NON_INNGEST_MONITORS = new Set([
   "scheduled-terraform-drift",
+  // #3366: GHA-fired executor (scheduled-supabase-advisor-scan.yml) posts the
+  // heartbeat at the end of the run; the cron-supabase-advisor-scan.ts
+  // dispatcher declares no SENTRY_MONITOR_SLUG (it only dispatches and holds no
+  // Supabase PAT), so this monitor maps to no Inngest slug — same class as
+  // scheduled-terraform-drift.
+  "scheduled-supabase-advisor-scan",
   // #5872: GHA-fired executor (scheduled-domain-model-drift.yml) POSTs the
   // heartbeat; the cron-domain-model-drift.ts dispatcher declares no
   // SENTRY_MONITOR_SLUG, so this monitor maps to no Inngest slug — same class
@@ -154,7 +160,7 @@ describe("Inngest function registry — drift guards", () => {
 
   // UPDATE this number when adding/removing Inngest functions.
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(61);
+    expect(routeEntries.length).toBe(62);
   });
 
   // EVENT functions are invisible to the cron-glob guards (b)/(e) — they only

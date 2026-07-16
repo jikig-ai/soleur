@@ -334,7 +334,7 @@ runcmd:
   - |
     set -e
     test -f /run/soleur-inngest-doppler.ok || { echo "FATAL: doppler isolation self-check did not pass — refusing to bootstrap inngest" >&2; exit 1; }
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.19
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.21
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     # #6178 boot observability: bracket the OCI pull so a pull hang/401 self-reports the STAGE
     # (pre-oci-pull with no oci-pull-rc-* = hung; oci-pull-rc-N!=0 = failed, with masked tail).

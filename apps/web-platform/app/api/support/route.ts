@@ -64,8 +64,13 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  const body = (await request.json().catch(() => null)) as { message?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as
+    | { message?: unknown; newConversation?: unknown }
+    | null;
   const message = typeof body?.message === "string" ? body.message.trim() : "";
+  // "Start a new conversation" — the client sets this on the first send after
+  // the user taps the panel's new-thread button (or after a cost-cap error).
+  const forceNew = body?.newConversation === true;
   if (message.length === 0) {
     return new Response(JSON.stringify({ error: "Missing message" }), {
       status: 400,
@@ -79,7 +84,7 @@ export async function POST(request: Request): Promise<Response> {
   // persisted row (ownership probe / workspace_id / messages FK).
   let conversationId: string;
   try {
-    conversationId = await resolveOrCreateSupportConversation(userId);
+    conversationId = await resolveOrCreateSupportConversation(userId, { forceNew });
   } catch (err) {
     reportSilentFallback(err, { feature: "support", op: "support-route.resolveConversation", extra: { userId } });
     return new Response(JSON.stringify({ error: "Support is unavailable right now." }), {

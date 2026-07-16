@@ -532,12 +532,12 @@ export const DEFAULT_IDLE_REAP_MS = 10 * 60 * 1000;
 // Resets on every block — "agent is alive" signal. PDF Read+summarize
 // observed at ~75s p99, hence 90s.
 export const DEFAULT_WALL_CLOCK_TRIGGER_MS = 90 * 1000;
-// Absolute hard ceiling on turn duration, NOT reset by per-block activity.
-// Backstop against a chatty-but-stalled agent that emits one block every
-// <90s indefinitely (idle reaper and per-block wall-clock both reset on
-// activity; cost cap fires only at SDKResultMessage boundaries). Anchored
-// on `turnOriginAt` set once when the first block of a turn arrives.
-export const DEFAULT_MAX_TURN_DURATION_MS = 10 * 60 * 1000;
+// Absolute hard ceiling on turn duration, NOT reset by per-block activity
+// and NEVER re-armed by `tool_progress` (chatty-stall defense — ADR-022).
+// Product budget for multi-step Concierge/one-shot work: 45 min agent compute
+// (raised 2026-07-16 from 10 min). Idle window (90s) still fails closed on
+// silent hung tools. Anchored on `turnOriginAt` / firstToolUseAt.
+export const DEFAULT_MAX_TURN_DURATION_MS = 45 * 60 * 1000;
 // #5313 (deferred #5240 FR-half) — consecutive mismatched `cd <path> && pwd`
 // CWD-verification commands before the runner emits `worktree_enter_failed`.
 // The observed no-git-checkout loop ran 4+ identical iterations before the turn
@@ -1196,7 +1196,8 @@ export interface SoleurGoRunner {
    * preserved across pause/resume cycles within a turn. The wall-clock
    * trigger and the absolute turn ceiling subtract
    * `totalPausedMs + (pausedAt ? now() - pausedAt : 0)` from elapsed at
-   * fire time, so the 90s window and 10-min absolute ceiling bound
+   * fire time, so the 90s window and absolute ceiling
+   * (`DEFAULT_MAX_TURN_DURATION_MS`, 45 min) bound
    * cumulative agent-compute time only — not human read time. A
    * chatty-flap runaway cannot escape either ceiling by interleaving
    * cheap user prompts with heavy compute.
@@ -1594,6 +1595,13 @@ function createPushQueue<T>(): PushQueue<T> {
 interface ActiveQuery {
   conversationId: string;
   userId: string;
+  /**
+   * ADR-113 — persona the query was created under. Read by `pushUserMessage`
+   * so the per-message `wrapUserInput` postamble matches the system prompt:
+   * support turns must not carry the `/soleur:go` dispatch instruction
+   * (deployed-env QA: the support agent complains about it in every reply).
+   */
+  persona: Persona;
   query: Query;
   inputQueue: PushQueue<SDKUserMessage>;
   lastActivityAt: number;
@@ -2185,9 +2193,9 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   // discriminator on `SDKUserMessage` — also present on `SDKUserMessageReplay`,
   // so the field-shape check covers both via `msg.type === "user"`). Treat it
   // as forward progress and re-arm `state.runaway` only. Do NOT touch
-  // `state.turnHardCap` — the 10-min absolute ceiling stays anchored on
-  // `firstToolUseAt` (defense pair from PR #3225 + learning
-  // 2026-05-05-defense-relaxation-must-name-new-ceiling.md).
+  // `state.turnHardCap` — the absolute ceiling (`DEFAULT_MAX_TURN_DURATION_MS`,
+  // 45 min) stays anchored on `firstToolUseAt` (defense pair from PR #3225 +
+  // learning 2026-05-05-defense-relaxation-must-name-new-ceiling.md).
   // #5313 — command-pattern CWD-verify-loop detector. Compliance-independent:
   // keyed on observed Bash command + result text, NOT a cooperative
   // agent-emitted marker (the live agent ignored the prose "abort" contract).
@@ -2406,7 +2414,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           // Re-arm the per-block idle window ONLY — mirrors
           // `handleUserMessage`'s `tool_use_result` reset (the guard is the
           // same `!state.closed && !state.awaitingUser`). NEVER touch
-          // `state.turnHardCap`: the 10-min absolute ceiling stays anchored on
+          // `state.turnHardCap`: the absolute ceiling
+          // (`DEFAULT_MAX_TURN_DURATION_MS`, 45 min) stays anchored on
           // `firstToolUseAt` (chatty-stall defense, PR #3225). A genuinely HUNG
           // tool emits NO `tool_progress`, so it still trips `idle_window` —
           // detection is preserved, not relaxed.
@@ -2421,7 +2430,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           // The re-arm runs FIRST and unconditionally on any `tool_progress`
           // (even a malformed one): the message itself proves the tool is
           // alive, so re-arming is strictly safer than dropping it. NEVER touch
-          // `state.turnHardCap`: the 10-min absolute ceiling stays anchored on
+          // `state.turnHardCap`: the absolute ceiling
+          // (`DEFAULT_MAX_TURN_DURATION_MS`, 45 min) stays anchored on
           // `firstToolUseAt` (chatty-stall defense, PR #3225).
           if (!state.closed && !state.awaitingUser) armRunaway(state);
 
@@ -2516,7 +2526,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     state: ActiveQuery,
     userMessage: string,
   ): void {
-    const wrapped = wrapUserInput(userMessage);
+    const wrapped = wrapUserInput(userMessage, state.persona);
     const sdkUserMessage: SDKUserMessage = {
       type: "user",
       message: {
@@ -2668,6 +2678,9 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       state = {
         conversationId,
         userId,
+        // ADR-113: pin the persona for the query's lifetime so every queued
+        // user message wraps with the matching postamble.
+        persona: args.persona ?? "command_center",
         query,
         inputQueue,
         lastActivityAt: now(),

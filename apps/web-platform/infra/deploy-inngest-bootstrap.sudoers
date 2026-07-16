@@ -10,10 +10,21 @@
 # env_keep is the modern alternative to `sudo -E env K=V ...`: the two
 # version pins are preserved across the sudo boundary by name.
 #
+# DOPPLER_PROJECT (#6536) is listed for a different reason than the version pins:
+# inngest-bootstrap.sh defaults it to `soleur` when unset (:47) and uses it to decide
+# which artifacts to render — including, since #6536, WHICH heartbeat arm the host gets
+# (soleur-inngest -> an absent URL logs + exits 0; anything else -> it reaches curl and
+# exits 2, correct on the live web pusher, a 60s failure storm anywhere else). Keeping it
+# by name means a caller that DOES set it cannot have it silently stripped here.
+# Not a secret: it is a project NAME, and the token it selects is fetched separately.
+# This closes the sudo-boundary half of the trap ONLY — ci-deploy.sh does not yet SET the
+# variable (see #6536 review), so on a host that is not the web host the `soleur` default
+# still wins. The env-source half is tracked in the H4 follow-up.
+#
 # Provisioned via cloud-init (fresh hosts) and terraform_data.deploy_pipeline_fix
 # (already-running hosts). See #4144 / #4118.
 Cmnd_Alias INNGEST_BOOTSTRAP = /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh
-Defaults!INNGEST_BOOTSTRAP env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256 VECTOR_CLI_VERSION VECTOR_CLI_SHA256"
+Defaults!INNGEST_BOOTSTRAP env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256 VECTOR_CLI_VERSION VECTOR_CLI_SHA256 DOPPLER_PROJECT"
 deploy ALL=(root) NOPASSWD: INNGEST_BOOTSTRAP
 
 # #3756 — permits infra-config-apply.sh to schedule a delayed webhook restart

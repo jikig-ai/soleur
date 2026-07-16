@@ -19,7 +19,7 @@ export function SupportLauncher() {
   // live (else the support agent could read the internal knowledge base).
   const live = useOptionalFeatureFlag("support-live");
   const [open, setOpen] = useState(false);
-  const { messages, send, abort } = useSupportChat(live);
+  const { messages, send, abort, reset } = useSupportChat(live);
   const tour = useTour();
   const bubbleRef = useRef<HTMLButtonElement>(null);
   const wasOpenRef = useRef(false);
@@ -68,6 +68,7 @@ export function SupportLauncher() {
         onClose={() => setOpen(false)}
         messages={messages}
         onSend={send}
+        onReset={reset}
         live={Boolean(live)}
         onStartTour={
           tour.available

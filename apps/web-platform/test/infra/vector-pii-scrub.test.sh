@@ -375,30 +375,59 @@ else
 fi
 
 # AC2: the block has NO include_matches.PRIORITY line. These host-script lines
-# are PRIORITY 4-5 (user.warning / user.notice); ANY PRIORITY filter would
-# silently drop the very lines this source exists to capture. Regression guard.
-if echo "$HOST_SCRIPTS_BLOCK" | grep -qE 'PRIORITY'; then
+# are PRIORITY 4-6 (user.warning / user.notice; #6536's inngest-heartbeat channel is
+# PRIORITY 6); ANY PRIORITY filter would silently drop the very lines this source exists
+# to capture. Regression guard.
+#
+# ANCHORED on the assignment construct, NOT the bare word `PRIORITY`. The block-extraction
+# above only terminates on a COL-0 `#`, so the array's own indented comments stay inside
+# HOST_SCRIPTS_BLOCK — and those comments must be free to explain WHY this source carries no
+# PRIORITY filter (that reasoning is the whole point of #6536's Source-4-only fix). A bare
+# token grep makes the guard and its own documentation mutually exclusive: it false-FAILS on
+# the prose. A comment line cannot produce `include_matches.PRIORITY =`.
+if echo "$HOST_SCRIPTS_BLOCK" | grep -qE '^[[:space:]]*include_matches\.PRIORITY[[:space:]]*='; then
   FAIL=$((FAIL+1)); FAILS+=("AC2: host_scripts_journald must NOT carry an include_matches.PRIORITY line (would drop PRIORITY 4-5 host-script lines)")
 else
   PASS=$((PASS+1)); echo "  PASS: host_scripts_journald has no PRIORITY filter (captures PRIORITY 4-5)"
 fi
 
 # AC3: drift guard — the SYSLOG_IDENTIFIER tag set MUST equal the set of infra
-# scripts that actually call `logger -t`. Derive the expected set from the
-# scripts themselves so a NEW `logger -t` tag (or a removed one) that is not
-# mirrored into this source fails CI. (`logger -t <tag>` sets the journal
-# SYSLOG_IDENTIFIER field to <tag>; the source matches that field exactly.)
+# scripts that actually emit under one. Derive the expected set from the
+# scripts themselves so a NEW tag (or a removed one) that is not
+# mirrored into this source fails CI. Two independent emission channels feed a
+# journal SYSLOG_IDENTIFIER, and each is derived on its own terms below.
 INFRA_DIR="$REPO_ROOT/apps/web-platform/infra"
 EXPECTED_TAGS=$(
   for f in "$INFRA_DIR"/*.sh; do
-    # Match a real `logger -t` invocation, NOT a comment mention (e.g. ci-deploy.sh
+    # Channel A (#6536) — a systemd unit heredoc's EXPLICIT `SyslogIdentifier=<tag>`,
+    # which retags everything the unit writes (here: doppler's AND curl's stderr).
+    # Derived unconditionally, BEFORE the `logger -t` gate below, because the two
+    # channels are independent: the heartbeat unit ships under this tag whether or not
+    # any `logger -t` call exists in the file. Coupling them would mean a post-cutover
+    # removal of the now-pointless dark arm (a `logger -t` form) silently drops
+    # `inngest-heartbeat` from EXPECTED — and AC3's failure text would then instruct the
+    # engineer to delete the tag from vector.toml, re-blinding the exact channel #6536
+    # exists to open. Derived, NOT folded into SYSTEMD_UNIT_IDENTIFIERS below: that list
+    # is for identifiers no source line can yield (a bare binary basename), and parking a
+    # derivable tag there would trade lockstep for the bypass its own comment forbids.
+    grep -hoP '^SyslogIdentifier=\K[a-z0-9-]+$' "$f"
+    # Channel B — a real `logger -t` invocation, NOT a comment mention (e.g. ci-deploy.sh
     # has a `# … logger -t …` doc comment) — a stdout-only script that merely
-    # documents logger -t must not be pulled in. Two real forms are accepted:
+    # documents logger -t must not be pulled in. Three real forms are accepted:
     #   1. a direct `logger -t` at line-start or after a pipe;
     #   2. the fixture-seam form `"${CUTOVER_LOGGER_CMD:-logger}" -t` used by
     #      inngest-cutover-flip.sh (#6178) — the default `logger` sink wrapped so CI
-    #      can inject a recorder. Both ship to the journal under SYSLOG_IDENTIFIER.
-    grep -qE '(^|\|)[[:space:]]*logger -t|:-logger\}" -t' "$f" || continue
+    #      can inject a recorder;
+    #   3. (#6536) a logger call carried inside a sed REPLACEMENT string — i.e. rendered
+    #      into a generated script at bootstrap time rather than executed by the script
+    #      itself. inngest-bootstrap.sh substitutes @@DARK_ARM@@ into the heartbeat ping
+    #      script this way, so its `logger -t` sits after a literal `\n` in the sed
+    #      expression and matches neither form 1 nor 2. Without this alternative the file
+    #      never enters the loop, its LOG_TAG is never derived, and the tag it really does
+    #      ship escapes the drift guard SILENTLY — an unmatched emission shape is a hole in
+    #      the guard, not caught drift.
+    # All three ship to the journal under SYSLOG_IDENTIFIER.
+    grep -qE '(^|\|)[[:space:]]*logger -t|:-logger\}" -t|\\n[[:space:]]*logger -t' "$f" || continue
     grep -hoP '^\s*(readonly\s+)?LOG_TAG="\K[^"]+' "$f"
   done | sort -u
 )
@@ -415,13 +444,39 @@ EXPECTED_TAGS=$(printf '%s\n%s\n' "$EXPECTED_TAGS" "$SYSTEMD_UNIT_IDENTIFIERS" |
 # block; pull the bare tag from each.
 ACTUAL_TAGS=$(echo "$HOST_SCRIPTS_BLOCK" | grep -oP '^\s*"\K[a-z0-9-]+(?="\s*,?\s*$)' | sort -u)
 if [[ -n "$EXPECTED_TAGS" && "$EXPECTED_TAGS" == "$ACTUAL_TAGS" ]]; then
-  PASS=$((PASS+1)); echo "  PASS: SYSLOG_IDENTIFIER tag set matches the logger -t scripts ($(echo "$EXPECTED_TAGS" | grep -c .) tags)"
+  PASS=$((PASS+1)); echo "  PASS: SYSLOG_IDENTIFIER tag set matches the infra emitters ($(echo "$EXPECTED_TAGS" | grep -c .) tags)"
 else
-  FAIL=$((FAIL+1)); FAILS+=("AC3: tag-set drift — host_scripts_journald array != logger -t scripts.
-    expected (from infra/*.sh logger -t scripts):
+  FAIL=$((FAIL+1)); FAILS+=("AC3: tag-set drift — host_scripts_journald array != the infra emitters.
+    Reconcile in the direction the EMITTER dictates. A tag that is still emitted
+    (a unit's SyslogIdentifier= or a live logger -t) but is missing from vector.toml
+    means the channel does NOT ship — that is #6536 itself. Deleting the vector.toml
+    entry to satisfy this assertion re-creates that bug; remove the EMITTER first, or
+    add the entry.
+    expected (from infra/*.sh SyslogIdentifier= units + logger -t scripts):
 $(echo "$EXPECTED_TAGS" | sed 's/^/      /')
     actual (from vector.toml source array):
 $(echo "$ACTUAL_TAGS" | sed 's/^/      /')")
+fi
+
+# AC3b (#6536): pin the SyslogIdentifier= channel as an INDEPENDENT derivation source.
+# The heartbeat tag's justification is the unit's `SyslogIdentifier=inngest-heartbeat`,
+# which ships doppler's and curl's stderr — NOT the dark arm's `logger -t`, which is
+# cutover-scoped scaffolding and is meant to be deleted once the host goes live. If the
+# two ever get re-coupled (e.g. the SyslogIdentifier= derivation is folded back inside
+# the `logger -t` gate), removing the dark arm silently drops this tag from EXPECTED and
+# AC3 starts demanding its deletion from vector.toml. Assert the channel yields the tag
+# on its own, with no reference to any logger call.
+SYSLOG_ID_DERIVED=$(grep -hoP '^SyslogIdentifier=\K[a-z0-9-]+$' "$INFRA_DIR"/*.sh | sort -u)
+if printf '%s\n' "$SYSLOG_ID_DERIVED" | grep -qx 'inngest-heartbeat'; then
+  PASS=$((PASS+1)); echo "  PASS: inngest-heartbeat derives from the unit's SyslogIdentifier= alone (independent of the dark arm)"
+else
+  FAIL=$((FAIL+1)); FAILS+=("AC3b: inngest-heartbeat is no longer derivable from a SyslogIdentifier= line in infra/*.sh.
+    Either the unit lost SyslogIdentifier=inngest-heartbeat (the #6536 regression — its
+    stderr silently retags to the ExecStart basename 'doppler' and matches no vector.toml
+    source), or the derivation was re-coupled to the logger -t gate. Do NOT satisfy this
+    by deleting the vector.toml entry.
+    SyslogIdentifier= derived from infra/*.sh:
+$(printf '%s\n' "$SYSLOG_ID_DERIVED" | sed 's/^/      /')")
 fi
 
 # AC4: redaction-boundary guard (GDPR) — host_scripts_journald must traverse the

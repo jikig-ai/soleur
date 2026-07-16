@@ -21,6 +21,7 @@ import { resolveOrCreateSupportConversation } from "@/server/support-conversatio
 /** A chainable supabase mock. `existingRow` = what the resolve SELECT returns. */
 function makeTenant(existingRow: { id: string } | null) {
   const insert = vi.fn().mockResolvedValue({ error: null });
+  const maybeSingle = vi.fn().mockResolvedValue({ data: existingRow, error: null });
   const chain: Record<string, unknown> = {};
   const self = () => chain;
   Object.assign(chain, {
@@ -28,10 +29,10 @@ function makeTenant(existingRow: { id: string } | null) {
     eq: vi.fn(self),
     order: vi.fn(self),
     limit: vi.fn(self),
-    maybeSingle: vi.fn().mockResolvedValue({ data: existingRow, error: null }),
+    maybeSingle,
     insert,
   });
-  return { chain: { from: vi.fn(() => chain) }, insert };
+  return { chain: { from: vi.fn(() => chain) }, insert, maybeSingle };
 }
 
 describe("resolveOrCreateSupportConversation", () => {
@@ -59,6 +60,31 @@ describe("resolveOrCreateSupportConversation", () => {
     expect(row.workspace_id).toBe("ws-123");
     expect(row.user_id).toBe("user-1");
     expect(row.id).toBe(id);
+  });
+
+  it("forceNew skips the reuse SELECT and always inserts a fresh thread", async () => {
+    // A reusable row EXISTS, but forceNew must ignore it and mint a new one.
+    const { chain, insert, maybeSingle } = makeTenant({ id: "conv-wedged" });
+    mockGetFreshTenantClient.mockResolvedValue(chain);
+
+    const id = await resolveOrCreateSupportConversation("user-1", { forceNew: true });
+    expect(maybeSingle).not.toHaveBeenCalled(); // reuse SELECT bypassed
+    expect(insert).toHaveBeenCalledOnce();
+    const row = insert.mock.calls[0][0];
+    expect(row.id).toBe(id);
+    expect(row.kind).toBe("support");
+    expect(row.repo_url).toBeNull();
+    expect(id).not.toBe("conv-wedged");
+  });
+
+  it("default (no opts) still reuses the existing thread", async () => {
+    const { chain, insert, maybeSingle } = makeTenant({ id: "conv-existing" });
+    mockGetFreshTenantClient.mockResolvedValue(chain);
+
+    const id = await resolveOrCreateSupportConversation("user-1");
+    expect(maybeSingle).toHaveBeenCalledOnce();
+    expect(id).toBe("conv-existing");
+    expect(insert).not.toHaveBeenCalled();
   });
 
   it("throws if the insert fails (honest-degrade upstream)", async () => {

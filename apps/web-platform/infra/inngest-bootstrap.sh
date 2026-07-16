@@ -160,9 +160,67 @@ fi  # end SKIP_BINARY_INSTALL guard — unit + heartbeat reconcile below always 
 cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
 #!/bin/sh
 # Posted to Better Stack every 60s by inngest-heartbeat.timer.
-exec /usr/bin/curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
+#
+# LOG_TAG is a REAL assignment, never an inline tag literal in the logger call: the drift
+# fixture at test/infra/vector-pii-scrub.test.sh:392-404 derives the expected
+# SYSLOG_IDENTIFIER set from `^\s*(readonly\s+)?LOG_TAG="..."` across infra/*.sh. Its
+# `logger -t` probe is heredoc-blind, so a literal would pull THIS file into the fixture's
+# loop and yield NO tag -- hard-failing that fixture's exact-set equality.
+LOG_TAG="inngest-heartbeat"
+#
+# @@DARK_ARM@@ -- substituted at RENDER time by inngest-bootstrap.sh (see the render block
+# just below): the skip branch on the dedicated host, EMPTY on the co-located web host.
+#
+# An absent INNGEST_HEARTBEAT_URL is NOT a curl no-op. `curl -fsS --max-time 10 ""` exits 2
+# ("option : blank argument where content is expected" -- measured, #6536); unset behaves
+# identically. That is why this oneshot failed every 60s for 3 days (3,724 fires) on the dark
+# host, and why inngest-host.tf's old "curl no-ops" claim was false. Same class as #4116.
+#
+# The dark host legitimately has NO url: inngest-host.tf:137-151 keeps one unambiguous pusher
+# per monitor and provisions the URL out-of-band only AT cutover (op=arm). So skipping is
+# correct THERE and only there. The co-located web host is TODAY'S live pusher and gets no
+# arm at all -- an absent URL there is always a real fault and must stay loud.
+@@DARK_ARM@@
+# -g (--globoff): the URL is a BEARER capability. Without -g, a URL containing [ ] or
+# { } makes curl print the FULL URL in its glob-parse error (`curl: (3) bad range in URL
+# position N:` followed by the URL) — measured, curl 8.18 — which FR4's SyslogIdentifier
+# now ships straight to Better Stack. -g disables globbing (we never glob) and the echo
+# with it. Belt to cat-deploy-state.sh's braces: neither alone is sufficient.
+exec /usr/bin/curl -gfsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
 HEARTBEATSCRIPTEOF
 chmod 0755 "$HEARTBEAT_SCRIPT"
+
+# @@DARK_ARM@@ render begin (#6536)
+# Host identity is resolved into DIFFERENT ARTIFACTS at render time, never shipped into the
+# script for a runtime `if`. This is the house pattern already used twice in this file:
+# `sed -i 's|@@HOST_NAME@@|...|'` on the Vector config below, and @@FLIP_GUARD_EXECSTARTPRE@@
+# on inngest-server.service above ("ON THE DEDICATED HOST ONLY (empty on the co-located web
+# host)"). The consequence is the point: the LIVE co-located pusher's script has NO exit-0
+# branch to reach, so masking a real fault there is structurally unreachable, not merely gated.
+#
+# Deliberately NO INNGEST_CUTOVER_FLIP case: url-presence is sufficient (op=arm writes the URL
+# at G4 BEFORE flip=armed at G5), and an 8-state FSM that ADR-100 owns -- and
+# inngest-cutover-flip.sh implements once -- must not be copied a third time into a 20-line
+# liveness probe. A fail-closed `*)` arm would reintroduce this very bug: a future #6178 state
+# would land in it, exit 1 on a dark host, and restore the 60s storm.
+#
+# The heredoc above MUST stay QUOTED. The tempting way to render this sentinel is to unquote
+# it so the shell expands at bootstrap -- that would ALSO expand $INNGEST_HEARTBEAT_URL into
+# /usr/local/bin/inngest-heartbeat.sh, a 0755 WORLD-READABLE file, writing the bearer
+# capability to disk in plaintext and defeating the script-indirection control at :156-159.
+# AC3's canary asserts the script's runtime OUTPUT, not the file's CONTENTS, so AC3 would
+# pass while the secret sat on disk. `sed -i` on the quoted heredoc is the only safe render.
+# Both seds anchor on the STANDALONE sentinel line (^...$). An unanchored `s|@@DARK_ARM@@|`
+# also rewrites the sentinel's own mention inside the comment above, corrupting the script --
+# caught by the sh -n leg of the render test.
+if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
+  sed -i 's|^@@DARK_ARM@@$|if [ -z "$INNGEST_HEARTBEAT_URL" ]; then\n  logger -t "$LOG_TAG" "url_present=no — no heartbeat URL provisioned; skipping ping"\n  exit 0\nfi|' "$HEARTBEAT_SCRIPT"
+  log "inngest-heartbeat: dark arm RENDERED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — an absent URL skips the ping and logs why"
+else
+  sed -i '/^@@DARK_ARM@@$/d' "$HEARTBEAT_SCRIPT"
+  log "inngest-heartbeat: dark arm OMITTED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — live pusher; an absent URL stays loud (curl rc=2)"
+fi
+# @@DARK_ARM@@ render end
 
 # Resolve the doppler binary path at bootstrap time. cloud-init installs to
 # /usr/local/bin/doppler (the `chmod +x /usr/local/bin/doppler` step in
@@ -190,9 +248,26 @@ Group=deploy
 # automatically, matching inngest-server.service's hardening pattern.
 # Surfaced 2026-05-20 once #4204's reconcile gate exposed the new unit shape.
 EnvironmentFile=/etc/default/inngest-server
+# #6536: WITHOUT this, systemd derives SYSLOG_IDENTIFIER from the ExecStart basename ->
+# "doppler", which matches ZERO vector.toml sources. The unit's own stderr (doppler's AND
+# curl's) then never leaves the host: the issue's _SYSTEMD_UNIT='inngest-heartbeat.service'
+# query returned zero rows for exactly this reason -- not a Better Stack retention gap.
+# Retagging onto the "inngest-heartbeat" channel (vector.toml Source 4, which carries NO
+# PRIORITY filter and so admits this unit's PRIORITY-6 output) is what makes the
+# "no row at all + unit failed" signature readable off-box, with no SSH.
+SyslogIdentifier=inngest-heartbeat
 ExecStart=${DOPPLER_BIN} run --project ${DOPPLER_PROJECT} --config prd -- ${HEARTBEAT_SCRIPT}
 HEARTBEATEOF
 
+# AccuracySec=1s added by #6537. systemd's default is 1 MINUTE, so this timer fires anywhere in
+# [elapse, elapse+60s] — an interval of 60s+delta, structurally bounded at 120s, against
+# inngest_prd's 60s period + 30s grace (a 90s deadline). Measured A/B on this exact unit shape:
+# unset drifted 60.0s / 62.0s / 72.6s / 66.5s; AccuracySec=1s held 61.0s +/- 16ms. This monitor is
+# live and up today on margin, not by design — systemd's coalescing offset derives from the BOOT
+# ID, so today's greenness is evidence about this boot only and is re-rolled by every host
+# replace. Takes effect on the next inngest-host-replace; harmless until then.
+# (Persistent=true below is a no-op for a monotonic timer — it only applies to OnCalendar — but is
+# left as-is: removing it is unrelated to this fix.)
 cat > "$HEARTBEAT_TIMER" <<'TIMEREOF'
 [Unit]
 Description=Run Inngest heartbeat every 60s
@@ -200,6 +275,7 @@ Description=Run Inngest heartbeat every 60s
 [Timer]
 OnBootSec=30s
 OnUnitActiveSec=60s
+AccuracySec=1s
 Persistent=true
 
 [Install]
@@ -413,7 +489,12 @@ EnvironmentFile=/etc/default/inngest-server
 # @@FLIP_GUARD_EXECSTARTPRE@@ — the P1-5 arm-atomicity guard (#6178), substituted to an
 # ExecStartPre line ON THE DEDICATED HOST ONLY (empty on the co-located web host). Wrapped
 # in `doppler run` so the guard sees INNGEST_POSTGRES_URI + INNGEST_CUTOVER_FLIP; blocks a
-# prod-URI start when the flip flag is not in {armed, flipping, done}.
+# prod-URI start when the flip flag is not in {armed, flipping, done} — the guard's ACTUAL
+# allowlist, verbatim from inngest-server-flip-guard.sh's case. #6536: that is deliberately
+# NOT the full FSM (ADR-100's is armed → flipping → flushed → done), so `flushed` is omitted
+# — fail-closed + self-healing, tracked separately. Do NOT add `flushed` here to "reconcile"
+# it: this documents the guard's code, and a comment describing behaviour the code lacks is
+# the #6536 defect itself.
 @@FLIP_GUARD_EXECSTARTPRE@@
 ExecStart=/usr/bin/doppler run --project @@DOPPLER_PROJECT@@ --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
 Restart=on-failure

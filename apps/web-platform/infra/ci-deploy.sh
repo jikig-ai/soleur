@@ -2637,7 +2637,15 @@ case "$COMPONENT" in
     # syntax errors, unbound var traps) which journald wouldn't show.
     BOOTSTRAP_STDERR=/tmp/inngest-bootstrap-stderr.log
     rm -f "$BOOTSTRAP_STDERR"
-    if ! sudo --preserve-env=INNGEST_CLI_VERSION,INNGEST_CLI_SHA256,VECTOR_CLI_VERSION,VECTOR_CLI_SHA256 \
+    # DOPPLER_PROJECT (#6536): kept in lockstep with the sudoers env_keep list. It selects
+    # which heartbeat arm inngest-bootstrap.sh renders, so it must not be stripped at the
+    # sudo boundary. NOTE: ci-deploy.sh does not SET it — on this (web) host the bootstrap's
+    # `soleur` default at :47 is already correct, which is why nothing sets it today. If a
+    # ci-deploy path is ever added to the DEDICATED host, listing it here is necessary but
+    # NOT sufficient: that host must also export DOPPLER_PROJECT=soleur-inngest into
+    # webhook.service's environment, or the default renders the web arm there and restores
+    # the 60s rc=2 storm #6536 fixed. Tracked in the H4 follow-up.
+    if ! sudo --preserve-env=INNGEST_CLI_VERSION,INNGEST_CLI_SHA256,VECTOR_CLI_VERSION,VECTOR_CLI_SHA256,DOPPLER_PROJECT \
         /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh 2> "$BOOTSTRAP_STDERR"; then
       # Extract a SHORT (≤400 char) reason suffix from the stderr tail so
       # cat-deploy-state's JSON reason field carries actionable detail.
