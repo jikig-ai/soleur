@@ -48,6 +48,40 @@ and **fails the run** when one does.
 > below; the recurring lesson is recorded in §Sharp Edges. The v1→v2 delta is itself the strongest
 > argument that the DC-1 "~5 lines" estimate was not the real shape of this work (see DC-B).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-16 · **Plan version:** v3 (v1 → plan-review → v2 → deepen-plan → v3)
+**Agents/passes used:** Step-4.5 scoped consult (fable), architecture-strategist, spec-flow-analyzer,
+repo-research; deepen-plan halts 4.6/4.7/4.8/4.9 + verify-the-negative pass.
+
+### Key improvements
+
+1. **The briefed blocker was false — and the real one was the opposite.** `rls_disabled_in_public` is
+   **0 on all three projects**, so no baseline/allowlist machinery is needed at all. The genuine risk
+   was never a false-red; it was the **fail-open** (a 401 parses to `0`) and its twin the **false-green**
+   (a stale-clean advisor over a live violation).
+2. **The gate's assertion was re-oriented.** The catalog is now the unconditional, coverage-bearing
+   authority; the advisor is subordinate and can only ever *add* a failure. This is what makes the
+   ADR-112 citation true rather than inverted.
+3. **The load-bearing negative control became runnable.** v1's AC7 had no seam — the parse path lived in
+   a workflow `run:` block. Extracting `scripts/supabase-advisor-scan.sh` turned the plan's central claim
+   from prose into an executable test.
+4. **Three "it'll be picked up automatically" assumptions were falsified** (`-target=`, Inngest
+   registration, `infra-validation.yml`) — each fails silently and green. See §Deepen-Plan Findings.
+5. **All 16 verification commands were executed**, not asserted. Four ACs were false-passing as written.
+
+### New considerations discovered
+
+- **The plan reproduced the very bug it targets, three times, in its own ACs** (a Unicode ellipsis making
+  git error to stderr; a `grep -c` with no file reading stdin; an assertion resting on a source the plan
+  itself documents as unreliable). Recorded in §Sharp Edges — the general lesson is that *an AC asserting
+  "empty output" passes on any broken command*, so assert exit codes.
+- **The "~5 lines" estimate in DC-1 does not survive contact with the code** (DC-B). The decision to
+  build is unaffected — arguably better supported — but the estimate should not later be cited as
+  evidence this over-built.
+- **`soleur-web-platform`, not `soleur-prd`** — an identity preflight built on the assumed name would
+  have failed closed on every run.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 Every row was measured live this session, not paraphrased. **Four reverse a premise the task was briefed
@@ -421,7 +455,8 @@ handling:
 
 7.1 `actionlint` is **local-only** — there is **no CI gate a new workflow YAML must pass**
     (`ADR-030-inngest-as-durable-trigger-layer.md:159`; `apply-inngest-rls-dev-workflow.test.sh:8`). The
-    enforceable pattern is a checked-in shape-guard `.test.sh` under `apps/*/infra/**`, auto-run by
+    enforceable pattern is a checked-in shape-guard `.test.sh` under `apps/*/infra/**`, **wired by an
+    explicit enumerated step** (NOT auto-discovered — R14) in
     `infra-validation.yml`.
 7.2 Create `apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh` asserting:
     - **the hook's own regex** — pipe a synthetic Write payload through
@@ -472,6 +507,7 @@ handling:
 | `apps/web-platform/app/api/inngest/route.ts` | + import, + `functions:` entry | Unregistered fn never fires. |
 | `apps/web-platform/server/inngest/cron-manifest.ts` | + `"cron-supabase-advisor-scan"` | Registry-count + watchdog parity. |
 | `apps/web-platform/server/inngest/routine-metadata.ts` | + metadata entry | `routine-metadata-parity.test.ts` fails otherwise. |
+| `.github/workflows/infra-validation.yml` | + one explicit `run: bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh` step | **The shape guard is NOT auto-discovered** (R14) — this file hand-enumerates ~50 `.test.sh` steps with **no glob runner**. Without this line the guard never runs in CI and AC8 gates nothing. Precedent: `inngest-rls/apply-inngest-rls-dev-workflow.test.sh` is enumerated at `:502`. |
 | `knowledge-base/engineering/architecture/diagrams/model.c4` | **description refresh at `:444`** (counts) | v1's AC would have locked in a false model (Reconciliation #13). |
 
 **Not edited (deliberate):** the 4 inline `scrub_pat` + 7 `strip_log_injection` copies (separate sweep);
@@ -527,6 +563,12 @@ proxy-vs-invariant defect this plan is about** — v1 shipped three that false-p
 9. **AC9** `bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh` → exit 0 (covers the
    `-target=`↔`cron-monitors.tf` agreement, `slugify(name) == monitor-slug`, the heartbeat placement +
    `source == 'inngest'` gate, and the `model.c4:444` counts).
+9b. **AC9b (the guard is actually wired — R14).** AC9 only proves the guard *passes*; it cannot prove CI
+   *runs* it. Assert the enumeration explicitly:
+   `grep -qF 'bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh' .github/workflows/infra-validation.yml`
+   → exit 0. *Without this, the guard is a file nobody calls: green locally, gating nothing on every PR
+   — the same "looks present, does nothing" shape this whole plan exists to catch. `infra-validation.yml`
+   hand-enumerates ~50 `.test.sh` steps and has no glob runner.*
 10. **AC10** `bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh` and
     `test-destroy-guard-counter-sentry.sh` still exit 0 (verified type-scoped → expected to pass
     unmodified; a failure means the allowlist analysis was wrong).
@@ -634,6 +676,39 @@ creating a processing activity. No Article 30 entry needed.
 | `--search` dedupe returns empty → duplicate issue nightly | Label-based dedupe (Phase 4.3). |
 | PAT exfiltrated via a crafted response body | Pinned host, env-injection, `2>/dev/null`, `sanitize()` on every echo, `sbp_` redaction. |
 | One flaky ref retires coverage for the other two | Phase 2.4 accumulates per-ref status; `not_scanned` is rendered explicitly. |
+
+## Deepen-Plan Findings (round 2)
+
+The halt gates (4.6 User-Brand Impact, 4.7 Observability, 4.8 PAT-shaped variable, 4.9 UI-wireframe) all
+**pass**. The verify-the-negative pass re-checked every load-bearing negative claim in the plan body —
+`actionlint runs in ZERO workflows` (**confirmed**: 0 workflows invoke it), `the repo root declares no
+workspaces` (**confirmed**), `vitest is absent at repo root` (**confirmed**), `no new secret needed`
+(**confirmed**: `SUPABASE_ACCESS_TOKEN` wired 2026-06-18), `apply-sentry-infra.yml paths: covers
+cron-monitors.tf` (**confirmed**: named explicitly at `:45`). Every cited AGENTS rule ID resolves to an
+**active** `[id: …]` in AGENTS.md — no fabricated or retired citations. Milestone `Post-MVP / Later`
+exists. Label `ci/supabase-advisor` does **not** exist yet — already handled by Phase 4.4's idempotent
+`gh label create … || true`.
+
+**One new defect found — R14, and it is the third instance of a single recurring class.**
+
+| # | Finding | Verified how | Applied |
+|---|---|---|---|
+| **R14** | **The shape guard would never have run in CI.** The plan claimed `apps/*/infra/**.test.sh` is "auto-run by `infra-validation.yml`". **False.** That workflow **hand-enumerates ~50 explicit `run: bash …test.sh` steps** and has **no `find`/glob/`for`-loop runner**. A new `.test.sh` is picked up by **nothing**. AC8 would pass locally while the guard gated nothing on every PR — the guard-that-doesn't-guard, which is this plan's own thesis applied to itself. *(The one glob-ish hook, "Run per-app `main.test.sh` (if present)" at `:212-218`, matches only a file literally named `main.test.sh` at an infra root — not a named guard in a subdirectory.)* | `grep -nE 'test\.sh' .github/workflows/infra-validation.yml` → ~50 enumerated steps; `grep -nE 'find .*test\.sh\|for .*test\.sh\|\*\.test\.sh'` → **none**. Precedent for the fix: `inngest-rls/apply-inngest-rls-dev-workflow.test.sh` is enumerated at `:502`. | `.github/workflows/infra-validation.yml` added to **Files to Edit** (one explicit `run:` step). Its `paths:` already covers `apps/*/infra/**`, so the workflow fires — only the step was missing. |
+
+### The recurring class this plan keeps hitting
+
+**R14 is the third time the same assumption failed in this repo.** Each was found only by looking:
+
+1. **`-target=`** in `apply-sentry-infra.yml` — **enumerated per-resource**, not `sentry_cron_monitor.*`. Omit the line → monitor declared, never applied.
+2. **Inngest cron registration** — **four explicit sites** (route.ts, cron-manifest.ts, routine-metadata.ts, parity tests), not auto-discovery. Miss one → silently dead cron.
+3. **`infra-validation.yml`** — **~50 enumerated steps**, not a glob. Omit the step → guard never runs.
+
+**The rule this yields: in this repo, "it will be picked up automatically" is false by default.** Every
+registration surface is a hand-maintained list, and every one of them fails *silently and green* when you
+forget it — the artifact exists, the tests pass locally, and nothing runs. Any future plan adding a
+monitor, a cron, or a guard should grep for the enumeration site **before** assuming discovery. This is
+the same defect shape the gate itself targets (a thing that looks present but does nothing), which is why
+it is worth naming rather than just fixing.
 
 ## Sharp Edges
 

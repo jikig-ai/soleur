@@ -1,5 +1,11 @@
 # Tasks — feat-one-shot-3366-supabase-advisor-scan
 
+> **Verifying this plan's own ACs:** an absence-grep run against the plan/tasks files themselves will
+> **false-positive**, because these documents legitimately *quote* the forbidden tokens while explaining
+> them (`.lints[]?`, `origin/main…`, `schedule:`). This happened three times during planning. Scope every
+> absence-grep to the **artifact under test** (the script, the workflow), never to the plan — and assert
+> **exit codes**, never "empty output". This is the same trap the plan's own AC5/AC13 fell into.
+
 ```yaml
 lane: cross-domain
 plan: knowledge-base/project/plans/2026-07-16-feat-supabase-advisor-rls-public-table-gate-plan.md
@@ -131,9 +137,15 @@ settled before the four-site registration (6).
 - [ ] 7.2 **Quadrant harness** (AC7b): advisor×catalog matrix — clean/clean → pass; clean/**dirty** →
       **FAIL**; fires/clean + named-table-true → **WARN+pass**; fires/clean + false-or-no-row → **FAIL**;
       fires/dirty → **FAIL**.
-- [ ] 7.3 **`apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh`** — shape guard (auto-run by
-      `infra-validation.yml`; actionlint runs in ZERO workflows so this is the only enforceable gate).
-      Assert:
+- [ ] 7.3 **`apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh`** — shape guard (actionlint
+      runs in ZERO workflows, so this is the only enforceable gate for the workflow YAML).
+  - [ ] 7.3.0 **Wire it into `.github/workflows/infra-validation.yml` as an explicit
+        `run: bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh` step.**
+        **It is NOT auto-discovered** — that workflow hand-enumerates ~50 `.test.sh` steps and has no
+        glob/`find` runner. Without this line the guard **never runs in CI** and AC8 gates nothing.
+        Precedent: `inngest-rls/apply-inngest-rls-dev-workflow.test.sh` at `:502`. (The `paths:` filter
+        already covers `apps/*/infra/**`, so the workflow fires — only the step is missing.)
+  - [ ] 7.3.1 Assert:
   - [ ] workflow trips neither the hook's exact regex nor the hook itself (pipe a synthetic Write payload
         through `new-scheduled-cron-prefer-inngest.sh` → `permissionDecision == "allow"`);
   - [ ] host literal pinned, no `${{ }}` interpolation;
@@ -174,6 +186,9 @@ settled before the four-site registration (6).
 - [ ] AC7 `bash tests/scripts/test-supabase-advisor-scan.sh` → exit 0 ← **the load-bearing one**
 - [ ] AC7b quadrant harness
 - [ ] AC8 shape guard exit 0
+- [ ] AC9b **the guard is actually wired**:
+      `grep -qF 'bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh' .github/workflows/infra-validation.yml`
+      → exit 0. (AC8 proves it *passes*; only this proves CI *runs* it. Not auto-discovered.)
 - [ ] AC9 `-target=` line present + `slugify(name) == monitor-slug`
 - [ ] AC10 sentry scope-guard + counter suites still exit 0 (unmodified)
 - [ ] AC11 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
