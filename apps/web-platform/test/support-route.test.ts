@@ -113,6 +113,22 @@ describe("POST /api/support", () => {
     expect(sse).toContain(`"type":"stream_end"`);
   });
 
+  it("forwards newConversation:true as forceNew to the resolver", async () => {
+    h.dispatchSoleurGo.mockImplementation(async (args: { sendToClient: (u: string, m: WSMessage) => boolean }) => {
+      args.sendToClient("user-1", { type: "session_ended" } as WSMessage);
+    });
+    await POST(req({ message: "start over", newConversation: true }));
+    expect(h.resolveOrCreateSupportConversation).toHaveBeenCalledWith("user-1", { forceNew: true });
+  });
+
+  it("omitted/false newConversation resolves with forceNew:false (reuse)", async () => {
+    h.dispatchSoleurGo.mockImplementation(async (args: { sendToClient: (u: string, m: WSMessage) => boolean }) => {
+      args.sendToClient("user-1", { type: "session_ended" } as WSMessage);
+    });
+    await POST(req({ message: "hello" }));
+    expect(h.resolveOrCreateSupportConversation).toHaveBeenCalledWith("user-1", { forceNew: false });
+  });
+
   it("404 (dark) when support-live is OFF — never invokes the Concierge", async () => {
     h.getRuntimeFlag.mockResolvedValue(false);
     const res = await POST(req({ message: "read your internal roadmap" }));

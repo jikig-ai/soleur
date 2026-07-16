@@ -20,9 +20,18 @@ import { reportSilentFallback } from "@/server/observability";
  * route can fall back to the honest canned reply (never proceed with a
  * non-existent conversation id — dispatchSoleurGo would throw "Conversation not
  * found" downstream).
+ *
+ * @param opts.forceNew When true, SKIP the reuse SELECT and always insert a
+ *   fresh thread. The "start a new conversation" affordance (support panel +
+ *   the per-workflow cost-cap error's own instruction) — without it a caller
+ *   whose most-recent thread is wedged (cost-capped, or a stale pre-corpus
+ *   session) can never escape it, since the resolve path always returns that
+ *   same newest row. The newly-inserted row becomes the newest, so subsequent
+ *   (forceNew=false) sends reuse IT.
  */
 export async function resolveOrCreateSupportConversation(
   userId: string,
+  opts?: { forceNew?: boolean },
 ): Promise<string> {
   // biome-ignore lint/suspicious/noExplicitAny: tenant client is an untyped supabase-js chain
   const tenant = (await getFreshTenantClient(userId)) as any;
@@ -30,17 +39,20 @@ export async function resolveOrCreateSupportConversation(
   // Reuse the caller's most-recent support thread so the conversation (and its
   // history) persists across panel close/reopen — the reconnect-replay cliff B2
   // resolves. RLS already scopes to the caller; the kind filter picks support.
-  const existing = await tenant
-    .from("conversations")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("kind", "support")
-    .order("last_active", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  // `forceNew` bypasses reuse to mint a deliberate fresh thread.
+  if (!opts?.forceNew) {
+    const existing = await tenant
+      .from("conversations")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("kind", "support")
+      .order("last_active", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-  if (existing?.data?.id) {
-    return existing.data.id as string;
+    if (existing?.data?.id) {
+      return existing.data.id as string;
+    }
   }
 
   const id = randomUUID();
