@@ -195,6 +195,7 @@ jobs:
           # `-target=` line executes as a bare command (exit 127; PR #5108).
           terraform plan \
             -target=sentry_cron_monitor.scheduled_terraform_drift \
+            -target=sentry_cron_monitor.scheduled_supabase_advisor_scan \
             -target=sentry_cron_monitor.scheduled_domain_model_drift \
             -target=sentry_cron_monitor.scheduled_oauth_probe \
             -target=sentry_cron_monitor.scheduled_anthropic_cost_report \
