@@ -1196,7 +1196,8 @@ export interface SoleurGoRunner {
    * preserved across pause/resume cycles within a turn. The wall-clock
    * trigger and the absolute turn ceiling subtract
    * `totalPausedMs + (pausedAt ? now() - pausedAt : 0)` from elapsed at
-   * fire time, so the 90s window and 10-min absolute ceiling bound
+   * fire time, so the 90s window and absolute ceiling
+   * (`DEFAULT_MAX_TURN_DURATION_MS`, 45 min) bound
    * cumulative agent-compute time only — not human read time. A
    * chatty-flap runaway cannot escape either ceiling by interleaving
    * cheap user prompts with heavy compute.
@@ -2192,9 +2193,9 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   // discriminator on `SDKUserMessage` — also present on `SDKUserMessageReplay`,
   // so the field-shape check covers both via `msg.type === "user"`). Treat it
   // as forward progress and re-arm `state.runaway` only. Do NOT touch
-  // `state.turnHardCap` — the 10-min absolute ceiling stays anchored on
-  // `firstToolUseAt` (defense pair from PR #3225 + learning
-  // 2026-05-05-defense-relaxation-must-name-new-ceiling.md).
+  // `state.turnHardCap` — the absolute ceiling (`DEFAULT_MAX_TURN_DURATION_MS`,
+  // 45 min) stays anchored on `firstToolUseAt` (defense pair from PR #3225 +
+  // learning 2026-05-05-defense-relaxation-must-name-new-ceiling.md).
   // #5313 — command-pattern CWD-verify-loop detector. Compliance-independent:
   // keyed on observed Bash command + result text, NOT a cooperative
   // agent-emitted marker (the live agent ignored the prose "abort" contract).
@@ -2413,7 +2414,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           // Re-arm the per-block idle window ONLY — mirrors
           // `handleUserMessage`'s `tool_use_result` reset (the guard is the
           // same `!state.closed && !state.awaitingUser`). NEVER touch
-          // `state.turnHardCap`: the 10-min absolute ceiling stays anchored on
+          // `state.turnHardCap`: the absolute ceiling
+          // (`DEFAULT_MAX_TURN_DURATION_MS`, 45 min) stays anchored on
           // `firstToolUseAt` (chatty-stall defense, PR #3225). A genuinely HUNG
           // tool emits NO `tool_progress`, so it still trips `idle_window` —
           // detection is preserved, not relaxed.
@@ -2428,7 +2430,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           // The re-arm runs FIRST and unconditionally on any `tool_progress`
           // (even a malformed one): the message itself proves the tool is
           // alive, so re-arming is strictly safer than dropping it. NEVER touch
-          // `state.turnHardCap`: the 10-min absolute ceiling stays anchored on
+          // `state.turnHardCap`: the absolute ceiling
+          // (`DEFAULT_MAX_TURN_DURATION_MS`, 45 min) stays anchored on
           // `firstToolUseAt` (chatty-stall defense, PR #3225).
           if (!state.closed && !state.awaitingUser) armRunaway(state);
 

@@ -18,3 +18,9 @@ None (Sentry issue API self-pull returned project-not-found for the attempted pa
 - plan skill, deepen-plan skill
 - Local greps/reads of chat-state-machine, soleur-go-runner, cc-dispatcher, message-bubble
 - curl https://app.soleur.ai/health
+
+## Work Phase
+- Status: complete
+- Commit: c4b6eb907 fix(concierge): rebind Stage-2 orphan error on liveness + 45m hard cap
+- Tests: 89 targeted vitest pass; tsc --noEmit exit 0
+- Path B: skipped (Path A sufficient)

@@ -1137,5 +1137,27 @@ describe("chat-state-machine orphan Stage-2 error recovery (Path A)", () => {
     expect(result.messages.some((m) => m.type === "tool_use_chip")).toBe(true);
     expect(result.messages[0].state).toBe("error");
   });
+
+  test("after rebind, two applyTimeouts escalate to error again (no permanent amnesty)", () => {
+    const prev: ChatMessage[] = [stage2ErrorBubble()];
+    const streams = makeStreams();
+
+    const rebound = applyStreamEvent(prev, streams, {
+      type: "tool_use",
+      leaderId: CC,
+      label: "Running command…",
+    } as any);
+    expect(rebound.messages[0].state).toBe("tool_use");
+    expect(rebound.activeStreams.has(CC)).toBe(true);
+
+    const first = applyTimeout(rebound.messages, rebound.activeStreams, CC);
+    expect(first.messages[0].state).toBe("tool_use");
+    expect(first.messages[0].retrying).toBe(true);
+    expect(first.activeStreams.has(CC)).toBe(true);
+
+    const second = applyTimeout(first.messages, first.activeStreams, CC);
+    expect(second.messages[0].state).toBe("error");
+    expect(second.activeStreams.has(CC)).toBe(false);
+  });
 });
 

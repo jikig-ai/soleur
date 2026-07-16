@@ -1309,16 +1309,17 @@ export function applyStreamEvent(
       // Stage-2 error text bubble exists, a debug tool_use is unambiguous
       // liveness for that orphan — rebind + reset that leader (not reset_all
       // against an empty timer map). Multi-orphan stays inert.
+      // Use findRecoverableErrorBubble (tip contract) — not any historical error.
       if (event.kind === "tool_use" && activeStreams.size === 0) {
         const orphanLeaders = new Map<DomainLeaderId, number>();
+        const seenLeaders = new Set<DomainLeaderId>();
         for (let i = prev.length - 1; i >= 0; i--) {
           const m = prev[i];
-          if (m.type !== "text" || m.state !== "error" || m.leaderId === undefined) {
-            continue;
-          }
-          if (!orphanLeaders.has(m.leaderId)) {
-            orphanLeaders.set(m.leaderId, i);
-          }
+          if (m.type !== "text" || m.leaderId === undefined) continue;
+          if (seenLeaders.has(m.leaderId)) continue;
+          seenLeaders.add(m.leaderId);
+          const errIdx = findRecoverableErrorBubble(prev, m.leaderId);
+          if (errIdx !== undefined) orphanLeaders.set(m.leaderId, errIdx);
         }
         if (orphanLeaders.size === 1) {
           const [[orphanLeader, errIdx]] = orphanLeaders;
