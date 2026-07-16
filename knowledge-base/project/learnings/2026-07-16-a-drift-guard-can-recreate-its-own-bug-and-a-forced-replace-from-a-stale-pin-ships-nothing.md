@@ -19,9 +19,9 @@ related_learnings:
   - 2026-07-08-inngest-cutover-authoring-review-and-observability-allowlist.md
 ---
 
-# A drift-guard can recreate the bug it guards — and a forced `-replace` from a stale pin ships nothing
+# A guard can recreate its own bug; a forced `-replace` from a stale pin ships nothing; a locally-measured exit code hides a CI-red branch
 
-Two independent findings from the review of PR #6539 (fix #6536). Both were confirmed by
+Three independent findings from the review of PR #6539 (fix #6536). Each was confirmed by
 running something, not by reasoning about it. The #6536 bug itself and its five planning
 rounds live in the committed plan; this file records only what generalises.
 
