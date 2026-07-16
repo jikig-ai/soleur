@@ -248,6 +248,28 @@ Group=deploy
 # automatically, matching inngest-server.service's hardening pattern.
 # Surfaced 2026-05-20 once #4204's reconcile gate exposed the new unit shape.
 EnvironmentFile=/etc/default/inngest-server
+# #6536 ROUND 2 — this line is why the unit failed, and its absence is what 3,724 fires were.
+# MEASURED on the fresh host (the FIRST thing the SyslogIdentifier= channel below ever
+# shipped): `Doppler Error: open /tmp/.doppler/.doppler.yaml.XXXX: permission denied`.
+#
+# The env file above sets DOPPLER_CONFIG_DIR=/tmp/.doppler for EVERY doppler-wrapped unit.
+# That path is only safe under PrivateTmp: cloud-init-inngest.yml's boot isolation
+# self-check runs `doppler secrets` as ROOT (with HOME=/root and the same
+# DOPPLER_CONFIG_DIR, cloud-init-inngest.yml:212/226/289), so /tmp/.doppler exists
+# ROOT-OWNED from first boot. A unit with a PRIVATE /tmp never sees it and the CLI
+# recreates it as `deploy`; this unit shared the host /tmp and could not write there, so
+# `doppler run` died BEFORE exec -- the ping script never ran at all. Both siblings
+# (inngest-server, vector) already set this; the heartbeat was the lone omission, which is
+# exactly why they work and it did not.
+#
+# The #6536 plan REFUTED this hypothesis (H3) on reasoning: "they use different /tmps and
+# cannot collide" + "nothing mkdirs /tmp/.doppler; the CLI creates it lazily as deploy".
+# Both halves are false. The collision is not heartbeat-vs-sibling, it is
+# heartbeat-vs-ROOT's-boot-self-check; and the CLI creates it lazily as ROOT, before this
+# unit's first fire. It also explains the onset the plan could not attribute (13:00:38Z =
+# the host's boot, not a deploy): this unit has failed since its very first fire.
+# Do NOT remove without moving DOPPLER_CONFIG_DIR off the shared /tmp.
+PrivateTmp=true
 # #6536: WITHOUT this, systemd derives SYSLOG_IDENTIFIER from the ExecStart basename ->
 # "doppler", which matches ZERO vector.toml sources. The unit's own stderr (doppler's AND
 # curl's) then never leaves the host: the issue's _SYSTEMD_UNIT='inngest-heartbeat.service'
@@ -255,6 +277,8 @@ EnvironmentFile=/etc/default/inngest-server
 # Retagging onto the "inngest-heartbeat" channel (vector.toml Source 4, which carries NO
 # PRIORITY filter and so admits this unit's PRIORITY-6 output) is what makes the
 # "no row at all + unit failed" signature readable off-box, with no SSH.
+# This line is what made the PrivateTmp defect above diagnosable in 2 minutes, off-box,
+# after 3 days of a blind 60s storm. It earned its keep before the fix it shipped with did.
 SyslogIdentifier=inngest-heartbeat
 ExecStart=${DOPPLER_BIN} run --project ${DOPPLER_PROJECT} --config prd -- ${HEARTBEAT_SCRIPT}
 HEARTBEATEOF
