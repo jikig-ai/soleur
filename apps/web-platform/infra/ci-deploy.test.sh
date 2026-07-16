@@ -3749,6 +3749,25 @@ else
 fi
 rm -rf "$T11D"
 
+# T-5B-11b: the STDOUT counterpart. The AC9 battery mutated `stderr_chars` to a truncated length
+# and caught it (M4) — and had NO counterpart on the stdout side, so `stdout_chars` was pinned
+# only by T-5B-10's `>0 vs =0` split. A BOOLEAN implementation (`[[ -n "$o" ]] && echo 1 || echo
+# 0`) satisfies every other assertion in this file: T-5B-10 (b) matches `[1-9][0-9]*` via "1" and
+# (c) matches `0`. The two length fields are documented as a symmetric pair, so they are pinned
+# as one.
+echo "--- #6497 T-5B-11b: stdout_chars is a LENGTH, not a boolean ---"
+TOTAL=$((TOTAL + 1))
+T11BD=$(mktemp -d)
+T11B_LONG="zqxjv$(printf 'b%.0s' $(seq 1 600))"   # 605 chars on STDOUT, nothing on stderr
+run_deploy_zot_login_stderr "$T11BD/s.txt" '' "$T11BD/l.txt" "$T11B_LONG"
+T11B_N="$(grep -o 'stdout_chars=[0-9]*' "$T11BD/l.txt" 2>/dev/null | head -1 | cut -d= -f2)"
+if [[ -n "$T11B_N" && "$T11B_N" -gt 400 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: stdout_chars=$T11B_N — a real length; a boolean or a truncation would be <=1 or 400"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: stdout_chars=${T11B_N:-<absent>} — expected >400 (1 means a boolean; 400 means truncation)"
+fi
+rm -rf "$T11BD"
+
 # T-5B-12 (AC6, task 1.4): the two arms that were CONFIDENTLY WRONG before this change. Both were
 # landing in `transport` — which routes the operator to the network subsystem for a failure that
 # is not on the network at all. These are precedence assertions, not matching assertions: the
@@ -3824,25 +3843,43 @@ rm -rf "$T14D"
 # this proves they CANNOT echo ANY input, which is a different and stronger claim that no finite
 # set of fixtures can establish.
 #
-# Every `printf` in the two emitters must take a HARDCODED LITERAL. `[^#]*` stops the match at a
-# comment so the assertion reads code and not prose — the false-match-on-own-comment trap this
-# repo has been bitten by repeatedly (and which `${1:-}` on these very lines would otherwise
-# trigger, since it sits before the printf on the same line).
-echo "--- #6497 T-5B-15: no parameter expansion in any emitter printf (Form B, structurally) ---"
+# THE ANCHOR IS A WHITELIST, NOT A BLACKLIST — and that is the whole point of this rewrite.
+#
+# The first draft asserted `grep -cE 'printf[^#]*\$'` == 0, i.e. "no printf line takes an
+# expansion". It was comment-blind (good) but anchored on TODAY'S SYNTAX rather than on the
+# PROPERTY, and review proved two ordinary implementations that echo their input and evade it:
+#   *)  echo -n "$1" ;;                    <- the guard only knows the verb `printf`
+#   *)  printf '%s' \                      <- grep is LINE-based; the expansion is on line 2
+#         "$1" ;;
+# Both are shapes a reasonable engineer might actually write next, which is the tell that the
+# anchor was narrower than the claim (`cq-assert-anchor-not-bare-token` says "anchor on syntax" —
+# today's syntax is a narrower thing than the syntax the property allows).
+#
+# Inverted: strip comments, then strip the ONE expansion these emitters are permitted (`${1:-}`
+# in the `case` head), then assert NO `$` survives anywhere in either body. That is verb-blind
+# (echo, print, cat, a variable-indirect call — all caught), line-boundary-blind (a continuation
+# carrying `"$1"` still contains `$`), and comment-blind. It cannot be evaded by any emit
+# mechanism, because the thing it forbids is the INPUT REACHING ANY LINE AT ALL.
+echo "--- #6497 T-5B-15: the emitters contain NO expansion but \${1:-} (Form B, structurally) ---"
 TOTAL=$((TOTAL + 1))
 KW_BODY="$(awk '/^_login_kw\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
 TOK_BODY="$(awk '/^_login_tok\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
+# Strip trailing comments, then the permitted `${1:-}`; anything left holding a `$` is a channel
+# from the input to the output.
+_t15_residue() { printf '%s\n' "$1" | sed 's/#.*$//' | sed 's/\${1:-}//g' | grep -n '\$' || true; }
+KW_RESIDUE="$(_t15_residue "$KW_BODY")"
+TOK_RESIDUE="$(_t15_residue "$TOK_BODY")"
 # Non-vacuity: an extraction that silently returns nothing would pass every assertion below.
 if [[ -z "$KW_BODY" || -z "$TOK_BODY" ]]; then
   FAIL=$((FAIL + 1)); echo "  FAIL: could not extract _login_kw/_login_tok bodies (fixture error, not a code defect)"
-elif [[ "$(printf '%s' "$KW_BODY"  | grep -cE 'printf[^#]*\$')" -eq 0 ]] \
-  && [[ "$(printf '%s' "$TOK_BODY" | grep -cE 'printf[^#]*\$')" -eq 0 ]] \
+elif [[ -z "$KW_RESIDUE" && -z "$TOK_RESIDUE" ]] \
   && [[ "$(printf '%s' "$KW_BODY"  | grep -cE '^[^#]*printf')" -gt 0 ]] \
   && [[ "$(printf '%s' "$TOK_BODY" | grep -cE '^[^#]*printf')" -gt 0 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: every emitter printf takes a hardcoded literal — incapable of echoing, not filtered"
+  PASS=$((PASS + 1)); echo "  PASS: neither emitter body contains any expansion but \${1:-} — incapable of echoing, whatever the verb"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: an emitter printf takes a parameter expansion (Form A — it can echo its input)"
-  printf '%s\n%s\n' "$KW_BODY" "$TOK_BODY" | grep -nE 'printf[^#]*\$' | sed 's/^/          /'
+  FAIL=$((FAIL + 1)); echo "  FAIL: an emitter body holds an expansion other than \${1:-} (Form A — it can echo its input)"
+  [[ -n "$KW_RESIDUE"  ]] && { echo "        _login_kw:";  printf '%s\n' "$KW_RESIDUE"  | sed 's/^/          /'; }
+  [[ -n "$TOK_RESIDUE" ]] && { echo "        _login_tok:"; printf '%s\n' "$TOK_RESIDUE" | sed 's/^/          /'; }
 fi
 
 # T-5B-16 (AC3b, task 1.7): FUZZ. Against a single fixture the closed-vocabulary claim is
@@ -3860,6 +3897,25 @@ T16_LIB=$(mktemp)
 source "$T16_LIB"
 T16_BAD=""
 T16_N=0
+# One fixture per MEASURED _login_kw arm, each carrying a credential canary in the same string —
+# so an arm that splices its input emits the canary and fails the closed-form oracle. Every
+# literal here is a string the /work Phase 0 battery measured out of a real `docker login`
+# against a live registry:2 (except the three the plan FALSIFIED, kept as free kw probes).
+# Synthesized secret shapes only, split so no contiguous token literal exists in this file
+# (`cq-test-fixtures-synthesized-only` + GitHub push protection).
+T16_KW_CANARY="SENTINEL_LEAK_CANARY_kw pw=dckr_pat_""BBBBBBBBBBBBBBBBBBBBBBBBBBB user=deploy-bot"
+T16_KW_FIXTURES=(
+  "error saving credentials: write /home/deploy/.docker/config.json: no space left on device ${T16_KW_CANARY}"
+  "error saving credentials: exec: \"docker-credential-desktop\": executable file not found in \$PATH ${T16_KW_CANARY}"
+  "error getting credentials - err: exit status 1, out: \`docker-credential-secretservice\` ${T16_KW_CANARY}"
+  "error saving credentials: open /home/deploy/.docker/config.json: permission denied ${T16_KW_CANARY}"
+  "error storing credentials - err: exit status 1 ${T16_KW_CANARY}"
+  "error: cannot perform an interactive login from a non-TTY device ${T16_KW_CANARY}"
+  "Cannot connect to the Docker daemon at unix:///var/run/docker.sock ${T16_KW_CANARY}"
+  "credential helper is not installed ${T16_KW_CANARY}"
+  "some entirely novel shape no arm has ever seen ${T16_KW_CANARY}"
+  ""
+)
 if ! declare -F _login_tok >/dev/null || ! declare -F _login_kw >/dev/null; then
   FAIL=$((FAIL + 1)); echo "  FAIL: could not source the real emitters (fixture error, not a code defect)"
 else
@@ -3877,26 +3933,56 @@ else
   _t16_tok_closed() {
     printf '%s\n' "$T16_CLOSED" | grep -qxF "$1"
   }
+  # _login_kw's oracle needs no member list: its ENTIRE output vocabulary is comma-joined
+  # lowercase literals, so `^([a-z]+,)*$` is the closed-form property. Any Form-A mutation that
+  # splices input (`printf 'nospace:%s,' "$1"`, `echo -n "nospace:${1},"`) emits a colon, a
+  # space, a slash or a quote and fails it, whatever the arm.
+  _t16_kw_closed() { [[ "$1" =~ ^([a-z]+,)*$ ]]; }
   # The adversarial set: each of these BREAKS a Form-A implementation in a different way.
+  # `failed`/`unauthorized` are here because base64 randoms cannot produce them — without them
+  # two of _login_tok's nine arms were never exercised, so a Form-A body in either arm passed
+  # the whole fuzz.
   for _f in '%s%s%s' '%n' '$(id)' '`id`' '${IFS}' '"; id; #' "'" '\' '../../etc/passwd' \
-            '-' '--help' '' ' ' 'error' 'Error' 'time=x' 'WARNING!' 'Cannot' 'denied:' ; do
+            '-' '--help' '' ' ' 'error' 'Error' 'time=x' 'WARNING!' 'Cannot' 'denied:' \
+            'failed' 'failed:' 'unauthorized' 'unauthorized:' ; do
     T16_N=$((T16_N + 1))
     _o="$(_login_tok "$_f")"
-    _t16_tok_closed "$_o" || T16_BAD="${T16_BAD}[in=<${_f}> out=<${_o}>] "
+    _t16_tok_closed "$_o" || T16_BAD="${T16_BAD}[tok in=<${_f}> out=<${_o}>] "
   done
-  for _i in $(seq 1 200); do
+  # _login_kw — REVIEW-CRITICAL. Until this loop existed, `_login_kw` had ZERO behavioural
+  # coverage: the AC9 battery mutated _login_tok, the hatch and the call sites, and never touched
+  # it, so a Form-A disclosure in ANY of its 10 arms shipped the raw stderr — username, token and
+  # all — to journald -> Vector -> Better Stack UNSCRUBBED, with the whole suite green. Proven by
+  # a review agent: mutating the `no space left on device` arm to splice `${1}` left the suite
+  # byte-identical (same pass count, same failures). That arm is the H-C disk-full path, i.e. one
+  # of the two live hypotheses this instrument exists to diagnose.
+  # The meta-lesson, worth more than the fix: A MUTATION BATTERY ONLY COVERS WHAT YOU MUTATE.
+  # Enumerate the SUT's functions and confirm each appears on the LEFT of a call in the test file.
+  for _f in "${T16_KW_FIXTURES[@]}"; do
     T16_N=$((T16_N + 1))
+    _o="$(_login_kw "$_f")"
+    _t16_kw_closed "$_o" || T16_BAD="${T16_BAD}[kw in=<${_f}> out=<${_o}>] "
+  done
+  # Both emitters get the random corpus. Each random is ALSO appended to a measured prefix so it
+  # reaches _login_kw's arms with a high-entropy tail — a spliced arm then emits the tail.
+  for _i in $(seq 1 200); do
+    T16_N=$((T16_N + 2))
     _f="$(head -c 18 /dev/urandom | base64 | tr -d '\n')"
     _o="$(_login_tok "$_f")"
-    _t16_tok_closed "$_o" || T16_BAD="${T16_BAD}[in=<${_f}> out=<${_o}>] "
+    _t16_tok_closed "$_o" || T16_BAD="${T16_BAD}[tok in=<${_f}> out=<${_o}>] "
+    _o="$(_login_kw "error saving credentials: permission denied ${_f}")"
+    _t16_kw_closed "$_o" || T16_BAD="${T16_BAD}[kw in=<…${_f}> out=<${_o}>] "
   done
   # Non-vacuity floor on the DERIVED oracle: an extraction that silently returned nothing (or
   # one member) would make `_t16_tok_closed` reject everything -> loud RED, not a false green;
   # but a MIS-extraction that returned a huge set would accept everything, so pin the count too.
   # _login_tok has 9 arms today; the floor is deliberately below that so adding an arm does not
   # false-FAIL, while a collapsed extraction does.
-  if [[ -z "$T16_BAD" && "$T16_N" -ge 200 && "$T16_CLOSED_N" -ge 5 && "$T16_CLOSED_N" -le 20 ]]; then
-    PASS=$((PASS + 1)); echo "  PASS: tok ∈ the SUT-derived closed set (${T16_CLOSED_N} members) across $T16_N inputs (200 random + adversarial)"
+  # (`T16_N -ge 200` used to sit here and was a TAUTOLOGY — T16_N increments unconditionally
+  # across two literal-bounded loops, so it could never be false. It read as a non-vacuity guard
+  # and asserted nothing. The real guards are T16_CLOSED_N's bounds and _t16_kw_closed's regex.)
+  if [[ -z "$T16_BAD" && "$T16_CLOSED_N" -ge 5 && "$T16_CLOSED_N" -le 20 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: tok ∈ SUT-derived closed set (${T16_CLOSED_N} members); kw ∈ ^([a-z]+,)*\$ — $T16_N inputs across BOTH emitters"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: tok escaped the closed set (n=$T16_N, oracle_members=$T16_CLOSED_N): $T16_BAD"
   fi
@@ -4007,18 +4093,23 @@ rm -rf "$T17D"
 echo "--- #6497 T-5B-19: every hatch call site is wrapped in the containment subshell ---"
 TOTAL=$((TOTAL + 1))
 HATCH_NC="$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")"
-# An invocation passes args, so it is `_login_hatch "` — which the definition (`_login_hatch() {`)
-# cannot match. Both counts must be 3 AND equal: the equality is what catches a FOURTH site added
-# later with no containment, which a bare `-gt 0` never would.
-HATCH_CALLS="$(printf '%s\n' "$HATCH_NC" | grep -cE '_login_hatch[[:space:]]+"')"
-HATCH_WRAPPED="$(printf '%s\n' "$HATCH_NC" | grep -cE '\$\([[:space:]]*\([[:space:]]*_login_hatch[[:space:]]+".*\)[[:space:]]*\|\|[[:space:]]*true[[:space:]]*\)')"
+# ARGUMENT-AGNOSTIC by necessity. This counted `_login_hatch[[:space:]]+"` — requiring the first
+# argument to START WITH A DOUBLE QUOTE — and review proved that makes the equality claim below
+# FALSE for the likeliest shapes a hurried 4th call site would take: `_login_hatch $E 0 1`,
+# `_login_hatch ${LOGIN_ERR:-} 0 1`, and a `\`-continuation all counted ZERO, leaving CALLS=3
+# WRAPPED=3 and the test GREEN with an unwrapped, uncontained 4th site. Anchoring on
+# `_login_hatch` NOT followed by `(` counts every invocation regardless of argument form while
+# still excluding the definition (`_login_hatch() {`). Let the wrapped-regex carry the shape
+# check; the counter's only job is to see the call at all.
+HATCH_CALLS="$(printf '%s\n' "$HATCH_NC" | grep -cE '_login_hatch([^(]|$)')"
+HATCH_WRAPPED="$(printf '%s\n' "$HATCH_NC" | grep -cE '\$\([[:space:]]*\([[:space:]]*_login_hatch[[:space:]].*\)[[:space:]]*\|\|[[:space:]]*true[[:space:]]*\)')"
 if [[ "$HATCH_CALLS" -eq 3 && "$HATCH_WRAPPED" -eq 3 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: all 3 hatch call sites emit from ( … ) || true — a telemetry failure cannot abort a deploy"
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: hatch containment drift — invocations=$HATCH_CALLS wrapped=$HATCH_WRAPPED (both must be 3)"
   echo "        every call MUST read: x=\"\$( ( _login_hatch … ) || true )\""
-  printf '%s\n' "$HATCH_NC" | grep -nE '_login_hatch[[:space:]]+"' | sed 's/^/          /'
+  printf '%s\n' "$HATCH_NC" | grep -nE '_login_hatch([^(]|$)' | sed 's/^/          /'
 fi
 
 # Restore strict mode for the summary/exit.
