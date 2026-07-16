@@ -38,3 +38,13 @@ output "github_app_webhook_secret_rotate_command" {
   description = "Command to rotate the GitHub App webhook secret. After rotating, paste the new value into the GitHub App config in the UI."
   value       = "terraform apply -replace=random_id.github_webhook_secret"
 }
+
+output "grok_dogfood_ip" {
+  description = "Public IPv4 of the Grok Build dogfood host when enable_grok_dogfood=true; null otherwise (#6545)."
+  value       = try(hcloud_server.grok_dogfood[0].ipv4_address, null)
+}
+
+output "grok_dogfood_ssh" {
+  description = "SSH command for the Grok dogfood host when provisioned."
+  value       = try("ssh root@${hcloud_server.grok_dogfood[0].ipv4_address}", null)
+}
