@@ -181,7 +181,12 @@ LOG_TAG="inngest-heartbeat"
 # correct THERE and only there. The co-located web host is TODAY'S live pusher and gets no
 # arm at all -- an absent URL there is always a real fault and must stay loud.
 @@DARK_ARM@@
-exec /usr/bin/curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
+# -g (--globoff): the URL is a BEARER capability. Without -g, a URL containing [ ] or
+# { } makes curl print the FULL URL in its glob-parse error (`curl: (3) bad range in URL
+# position N:` followed by the URL) — measured, curl 8.18 — which FR4's SyslogIdentifier
+# now ships straight to Better Stack. -g disables globbing (we never glob) and the echo
+# with it. Belt to cat-deploy-state.sh's braces: neither alone is sufficient.
+exec /usr/bin/curl -gfsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
 HEARTBEATSCRIPTEOF
 chmod 0755 "$HEARTBEAT_SCRIPT"
 

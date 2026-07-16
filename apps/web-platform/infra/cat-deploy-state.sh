@@ -92,11 +92,17 @@ service_journal_tail() {
   local unit="$1"
   if command -v journalctl >/dev/null 2>&1; then
     # #5159: belt-and-suspenders redaction before surfacing over /hooks/deploy-status
-    # (HMAC + CF-Access gated, but defense-in-depth). Neutralizes the one residual
-    # leak path — a binary echoing the inngest signing key (fixed `signkey-` prefix)
-    # in an error line. Hardens BOTH this new inngest tail and the existing vector tail.
+    # (HMAC + CF-Access gated, but defense-in-depth). Neutralizes TWO residual leak
+    # paths — a binary echoing (a) the inngest signing key (fixed `signkey-` prefix) or
+    # (b) a Better Stack heartbeat BEARER URL, whose token is a PATH segment and so
+    # matches none of vector.toml's pii_scrub rules (those cover userid=, OAuth query
+    # params, emails, Authorization: headers). #6536 added (b) by tailing
+    # inngest-heartbeat.service, whose curl echoes the full URL on a glob-parse error;
+    # the ping script's `curl -g` stops that at the source and this stops it here.
+    # Hardens BOTH the inngest tails and the existing vector tail.
     journalctl -u "$unit" --no-pager --output=cat -n 100 2>/dev/null \
       | sed -E 's/signkey-(prod-)?[0-9a-fA-F]{4,}/signkey-REDACTED/g' \
+      | sed -E 's#(uptime\.betterstack\.com/api/v[0-9]+/heartbeat/)[A-Za-z0-9_-]{4,}#\1REDACTED#g' \
       | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' | tail -c 8000 \
       || true
   fi

@@ -162,8 +162,12 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
 # web host renders it EMPTY, so an absent URL there still reaches curl and exits 2 — loud, as
 # it must be on the live pusher. Accepted minor gap: the dark host has no liveness push
 # during dark (a dark, inert host bricking is surfaced at the Phase-2 pre-flight
-# registry-empty check, not by continuous monitoring) — though the dark-arm row now gives it
-# continuous off-box liveness evidence for the first time. Same out-of-band doctrine as
+# registry-empty check, not by continuous monitoring). The dark-arm row is BEST-EFFORT
+# evidence, NOT a liveness guarantee: the ping script exits 0 whether or not `logger`
+# succeeds, so journald being down / its volume full produces silence + exit 0 —
+# byte-identical to a healthy dark host (#4792 makes that a known surface here). Absence of
+# the row therefore proves nothing; presence proves the script ran. Stated precisely because
+# an over-claimed comment is exactly what #6536 was. Same out-of-band doctrine as
 # INNGEST_POSTGRES_URI below.
 # ---------------------------------------------------------------------------------------
 # INNGEST_POSTGRES_URI — provisioned OUT-OF-BAND into THIS project's `prd` config, NOT a

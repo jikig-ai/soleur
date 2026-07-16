@@ -110,7 +110,7 @@ if parse_err != null {
 # prefix/regex — a tag typo silently matches nothing).
 #
 # NO `include_matches.PRIORITY` filter (deliberate — differs from Sources 1/2):
-# these lines are PRIORITY 4-6 (the #6536 inngest-heartbeat channel is PRIORITY 6),
+# these lines are PRIORITY 4-6 (the #6536 inngest-heartbeat channel is PRIORITY 5-6),
 # which Source 2 drops; the SYSLOG_IDENTIFIER scoping to 14 known tags is already
 # the narrowing. We do NOT widen
 # system_journald's PRIORITY filter — that would ship every host NOTICE+ line
@@ -127,8 +127,10 @@ if parse_err != null {
 # ~0). Steady-state delta is roughly NEUTRAL, not a saving: the pre-fix `Failed to start`
 # storm it replaces was itself shipping ~1,240 rows/day — though via a mechanism this file
 # does not explain (a live row carries SYSLOG_IDENTIFIER=systemd, which NO source here
-# admits; tracked separately). What the ~1,440 buys is the first continuous dark-host
-# liveness evidence this host has ever had. Deliberately NO success-path row on the
+# admits; tracked separately). What the ~1,440 buys is best-effort dark-host evidence the
+# host never had — best-effort because the script exits 0 regardless of whether `logger`
+# succeeds, so ABSENCE of the row proves nothing (journald down looks like a healthy dark
+# host). Presence proves the script ran; that is the whole claim. Deliberately NO success-path row on the
 # URL-present path: at 60s that would add ~2,880/day to duplicate what the Better Stack
 # heartbeat monitor already asserts.
 #
@@ -170,7 +172,7 @@ include_matches.SYSLOG_IDENTIFIER = [
   # tagged it with the ExecStart basename (`doppler`), which matches no source here. The
   # unit now sets SyslogIdentifier=inngest-heartbeat (inngest-bootstrap.sh) and this entry
   # ships that channel: BOTH the ping script's own dark-arm row AND the unit's raw
-  # doppler/curl stderr. Source 4 is the ONLY viable home — the unit's output is PRIORITY 6
+  # doppler/curl stderr. Source 4 is the ONLY viable home — the unit's output is PRIORITY 5-6
   # (SyslogLevel=info), which Source 1's PRIORITY 0-4 cut drops; this source has no PRIORITY
   # filter. Adding it to Source 1 instead is the trap the naive fix falls into.
   "inngest-heartbeat",
