@@ -1594,6 +1594,13 @@ function createPushQueue<T>(): PushQueue<T> {
 interface ActiveQuery {
   conversationId: string;
   userId: string;
+  /**
+   * ADR-113 — persona the query was created under. Read by `pushUserMessage`
+   * so the per-message `wrapUserInput` postamble matches the system prompt:
+   * support turns must not carry the `/soleur:go` dispatch instruction
+   * (deployed-env QA: the support agent complains about it in every reply).
+   */
+  persona: Persona;
   query: Query;
   inputQueue: PushQueue<SDKUserMessage>;
   lastActivityAt: number;
@@ -2516,7 +2523,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     state: ActiveQuery,
     userMessage: string,
   ): void {
-    const wrapped = wrapUserInput(userMessage);
+    const wrapped = wrapUserInput(userMessage, state.persona);
     const sdkUserMessage: SDKUserMessage = {
       type: "user",
       message: {
@@ -2668,6 +2675,9 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       state = {
         conversationId,
         userId,
+        // ADR-113: pin the persona for the query's lifetime so every queued
+        // user message wraps with the matching postamble.
+        persona: args.persona ?? "command_center",
         query,
         inputQueue,
         lastActivityAt: now(),
