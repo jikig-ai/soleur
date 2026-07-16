@@ -874,11 +874,17 @@ _docker_login_capture() {
 #      `timeout`, matched case-insensitively, outranks the 5xx; 502/503 were unaffected — only
 #      the timeout-worded 5xx bite)
 # Precedence resolves both, and "ordering is load-bearing" is a red flag rather than a defense
-# UNLESS it is pinned. It is, twice over: (i) EVERY precedence relation below is pinned by a test
-# fed a MEASURED string (ci-deploy.test.sh T-5B-11 cred_store-before-transport, T-5B-12
-# server_error-before-transport), so a reorder goes RED rather than silently mis-routing; and
-# (ii) the hatch rides EVERY failed login, so a confidently-wrong arm is visible in production
-# telemetry rather than discoverable only from the suite.
+# UNLESS it is pinned. It is, twice over: (i) BOTH precedence relations below are pinned by
+# `ci-deploy.test.sh` › T-5B-12, whose two cases are fed MEASURED strings — and pinned in the only
+# way that counts: the AC9 battery RELOCATED each arm after `transport` and watched the matching
+# case go RED (cred_store -> 161/164, server_error -> 163/164). A reorder cannot mis-route
+# silently. (ii) The hatch rides EVERY failed login, so a confidently-wrong arm is visible in
+# production telemetry rather than discoverable only from the suite.
+# (This citation named T-5B-11/T-5B-12 when written — test IDs PREDICTED before the tests existed,
+# and both were wrong: T-5B-11 is the stderr_chars-true-length case. Corrected against the file.
+# A comment naming the test that supposedly pins it, itself unpinned, is the exact defect class
+# this change exists to drain — `cq-cite-content-anchor-not-line-number` is the same lesson for
+# coordinates.)
 # authn stays FIRST: the distribution/GHCR shape `denied: authentication required` renders a 401
 # with the word 'denied' in it, and a 401 must land in `authn_rejected` even if a future arm
 # reintroduces a bare 'denied'.

@@ -105,8 +105,16 @@ locals {
 # hcloud_server.registry's lifecycle.replace_triggered_by is what supplies that edge: it
 # replaces the host so the htpasswd is re-baked from the new value in the SAME apply.
 # Without it a rotation silently diverges the host from Doppler and every pull login is
-# rejected forever, with no signal saying why — which is exactly what #6497 / Sentry
-# WEB-PLATFORM-5B was. Mirrors random_password.git_data_luks.
+# rejected forever, with no signal saying why. Mirrors random_password.git_data_luks.
+#
+# This comment used to end "— which is exactly what #6497 / Sentry WEB-PLATFORM-5B was."
+# That causation is FALSIFIED and the claim is deleted rather than softened: the 2026-07-16
+# 08:15Z re-bake was the experiment the hypothesis implied, and after it the host's htpasswd
+# MATCHES Doppler on both users while `login_failed` continues. A stale htpasswd is a real
+# hazard and this edge is the right fix for it — it was simply not the cause of #6497, whose
+# actual cause is still unknown (see the plan; #6497 buys the datum before attempting a
+# repair). Naming a still-open defect as "solved by this line" is what made the gate
+# undiagnosable for a week in the first place.
 # The registry host's server type, read from the live Hetzner catalog so local.registry_
 # memory_cap_mb tracks the real host instead of a hand-maintained type→RAM map. Read-only;
 # creates nothing. Resolves at PLAN time, which is what makes it a phantom-type tripwire
@@ -329,8 +337,11 @@ resource "hcloud_server" "registry" {
   # boot via the Doppler CLI and baked into /etc/zot/htpasswd once; they are deliberately
   # absent from user_data (:263-265), so Terraform sees no data dependency and a rotation
   # would leave the host serving the OLD htpasswd forever while both Doppler copies show the
-  # new value — the WEB-PLATFORM-5B defect. Naming the resources here forces the bake to
-  # follow the value: a rotation replaces the host in the same apply.
+  # new value. Naming the resources here forces the bake to follow the value: a rotation
+  # replaces the host in the same apply.
+  # This edge is sound on its own terms, but it is NOT the fix for #6497 — that claim was
+  # falsified by the 2026-07-16 08:15Z re-bake (htpasswd now matches Doppler on both users;
+  # `login_failed` continues). See :100-121.
   # SAFE on a routine apply: random_password has no `keepers`, so these are stable and fire
   # only under an explicit `-replace` (verify with `grep -nE '^\s*keepers' zot-registry.tf` →
   # no hits; a bare `grep -n keepers` also matches this very comment).
