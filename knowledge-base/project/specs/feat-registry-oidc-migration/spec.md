@@ -65,6 +65,7 @@ minter disabled.
 - **Push (3):** `.github/workflows/build-inngest-bootstrap-image.yml:131-194`, `.github/workflows/reusable-release.yml:425-432,580-611`, cosign sign `:626-640`.
 - **Pull (6):** `apps/web-platform/infra/ci-deploy.sh:535-569` (+ `~1488` inngest pull, `600-601` cosign cfg), `soleur-host-bootstrap.sh:25-30`, `cloud-init.yml:440-452,545`.
 - **Credential/IaC:** Doppler `prd` `GHCR_READ_USER`/`GHCR_READ_TOKEN`/`GHCR_MINTER_DOPPLER_TOKEN`; `ghcr-read-credential.tf`, `ghcr-minter-doppler-token.tf`, `variables.tf` (`ghcr_read_user`, `ghcr_read_token`).
+- **BLOCKING on FR2/FR3 — `ci-deploy.sh` › `_login_hatch()` (#6497).** Replacing the pull tokens with zot JWTs FIRES a security trigger recorded in that function: it emits `stderr_chars` (the true length of `docker login`'s stderr) off-box to Better Stack + Sentry, which is safe **only** because both current tokens are fixed-length for their format and drawn from `[A-Za-z0-9]`. A JWT is variable-length (its base64url payload encodes a variable claim set), so `stderr_chars` becomes a **length oracle on a live credential** the moment a registry echoes the token in an error body. The field MUST be bucketed (`0 | 1-99 | 100-399 | 400+`) in the same PR that mints the first JWT. Read `_login_hatch()`'s field table and `zot-registry.tf` › `random_password.zot_pull` before starting FR3.
 - **Minter:** `apps/web-platform/server/inngest/functions/cron-ghcr-token-minter.ts:83-88` (disabled gate) + test.
 
 ## Open Questions (carry to plan)
