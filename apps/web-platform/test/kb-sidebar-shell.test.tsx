@@ -28,6 +28,20 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
 
+// #4826 — shell pulls useNavResume → useActiveRepo; stub so the Sync-now
+// AC-A3 assertion is not polluted by the active-repo SWR fetch.
+vi.mock("@/hooks/use-active-repo", () => ({
+  useActiveRepo: () => ({
+    data: {
+      workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      repoUrl: null,
+      repoName: null,
+      repoStatus: "ready",
+      fellBackToSolo: false,
+    },
+  }),
+}));
+
 const mockFetch = vi.fn();
 const originalFetch = globalThis.fetch;
 

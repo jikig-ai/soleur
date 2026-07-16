@@ -1,0 +1,871 @@
+{
+  "version": "2.9",
+  "variables": {
+    "bg-base": { "type": "color", "value": "#0F1115" },
+    "bg-surface-1": { "type": "color", "value": "#161A20" },
+    "bg-surface-2": { "type": "color", "value": "#1E2430" },
+    "border-default": { "type": "color", "value": "#2A3140" },
+    "text-primary": { "type": "color", "value": "#F2F4F7" },
+    "text-secondary": { "type": "color", "value": "#9AA3B2" },
+    "text-muted": { "type": "color", "value": "#6B7280" },
+    "accent-gold": { "type": "color", "value": "#D4A017" }
+  },
+  "children": [
+    {
+      "type": "frame",
+      "id": "f1",
+      "name": "01 — KB section re-entry restores last file",
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg-base",
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 32,
+      "clip": true,
+      "children": [
+        {
+          "type": "text",
+          "id": "f1-title",
+          "content": "KB re-entry — last-open file path",
+          "fontFamily": "Inter",
+          "fontSize": 22,
+          "fontWeight": "600",
+          "fill": "$text-primary",
+          "textGrowth": "auto"
+        },
+        {
+          "type": "text",
+          "id": "f1-sub",
+          "content": "sessionStorage key: soleur:nav.resume.<workspaceId>.kb.path — no new chrome; same single nav rail.",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fill": "$text-secondary",
+          "textGrowth": "fixed-width",
+          "width": 1200
+        },
+        {
+          "type": "frame",
+          "id": "f1-row",
+          "width": "fill_container",
+          "height": "fit_content",
+          "layout": "horizontal",
+          "gap": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "f1-before",
+              "name": "Before (today)",
+              "width": 640,
+              "height": 640,
+              "fill": "$bg-surface-1",
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 20,
+              "stroke": { "align": "inside", "thickness": 1, "fill": "$border-default" },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "f1-b-h",
+                  "content": "BEFORE — section root",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600",
+                  "fill": "$accent-gold",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f1-b-s1",
+                  "content": "1. Operator opens /dashboard/kb/engineering/architecture/decisions/ADR-047.md",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 580
+                },
+                {
+                  "type": "text",
+                  "id": "f1-b-s2",
+                  "content": "2. Back to menu → main nav → click Knowledge Base",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 580
+                },
+                {
+                  "type": "text",
+                  "id": "f1-b-s3",
+                  "content": "3. Lands at /dashboard/kb (section root). File position lost; only URL-deep-links retain place.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 580
+                },
+                {
+                  "type": "frame",
+                  "id": "f1-b-mock",
+                  "width": "fill_container",
+                  "height": 360,
+                  "fill": "$bg-surface-2",
+                  "layout": "horizontal",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "f1-b-rail",
+                      "width": 200,
+                      "height": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 12,
+                      "stroke": { "align": "inside", "thickness": { "right": 1 }, "fill": "$border-default" },
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "f1-b-r-t",
+                          "content": "Knowledge Base",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "600",
+                          "fill": "$text-primary",
+                          "textGrowth": "auto"
+                        },
+                        {
+                          "type": "text",
+                          "id": "f1-b-r-1",
+                          "content": "▾ engineering/",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fill": "$text-muted",
+                          "textGrowth": "auto"
+                        },
+                        {
+                          "type": "text",
+                          "id": "f1-b-r-2",
+                          "content": "(no file selected)",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fill": "$text-muted",
+                          "textGrowth": "auto"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "f1-b-main",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "padding": 16,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "f1-b-m",
+                          "content": "KB landing — empty content pane",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fill": "$text-muted",
+                          "textGrowth": "auto"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "f1-after",
+              "name": "After (#4826)",
+              "width": 640,
+              "height": 640,
+              "fill": "$bg-surface-1",
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 20,
+              "stroke": { "align": "inside", "thickness": 1, "fill": "$border-default" },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "f1-a-h",
+                  "content": "AFTER — last file restored",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600",
+                  "fill": "$accent-gold",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f1-a-s1",
+                  "content": "1. Same prior open file is written on every KB pathname change.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 580
+                },
+                {
+                  "type": "text",
+                  "id": "f1-a-s2",
+                  "content": "2. Main-nav Knowledge Base entry resolves to last path (or /dashboard/kb if none).",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 580
+                },
+                {
+                  "type": "text",
+                  "id": "f1-a-s3",
+                  "content": "3. Re-entry lands on ADR-047.md; ancestor dirs auto-expand from URL (existing).",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 580
+                },
+                {
+                  "type": "frame",
+                  "id": "f1-a-mock",
+                  "width": "fill_container",
+                  "height": 360,
+                  "fill": "$bg-surface-2",
+                  "layout": "horizontal",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "f1-a-rail",
+                      "width": 200,
+                      "height": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 12,
+                      "stroke": { "align": "inside", "thickness": { "right": 1 }, "fill": "$border-default" },
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "f1-a-r-t",
+                          "content": "Knowledge Base",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "600",
+                          "fill": "$text-primary",
+                          "textGrowth": "auto"
+                        },
+                        {
+                          "type": "text",
+                          "id": "f1-a-r-1",
+                          "content": "▾ engineering/architecture/…",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fill": "$text-secondary",
+                          "textGrowth": "auto"
+                        },
+                        {
+                          "type": "text",
+                          "id": "f1-a-r-2",
+                          "content": "● ADR-047.md",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fill": "$accent-gold",
+                          "textGrowth": "auto"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "f1-a-main",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "padding": 16,
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "f1-a-m1",
+                          "content": "ADR-047 — Nav context band…",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600",
+                          "fill": "$text-primary",
+                          "textGrowth": "auto"
+                        },
+                        {
+                          "type": "text",
+                          "id": "f1-a-m2",
+                          "content": "Document content restored via last-open path.",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": 360
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "f2",
+      "name": "02 — Chat section re-entry restores last conversation",
+      "x": 1560,
+      "y": 0,
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg-base",
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 32,
+      "clip": true,
+      "children": [
+        {
+          "type": "text",
+          "id": "f2-title",
+          "content": "Chat re-entry — last conversation stickiness",
+          "fontFamily": "Inter",
+          "fontSize": 22,
+          "fontWeight": "600",
+          "fill": "$text-primary",
+          "textGrowth": "auto"
+        },
+        {
+          "type": "text",
+          "id": "f2-sub",
+          "content": "sessionStorage key: soleur:nav.resume.<workspaceId>.chat.conversationId. Explicit /dashboard/chat/new is never overridden.",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fill": "$text-secondary",
+          "textGrowth": "fixed-width",
+          "width": 1200
+        },
+        {
+          "type": "frame",
+          "id": "f2-row",
+          "width": "fill_container",
+          "height": "fit_content",
+          "layout": "horizontal",
+          "gap": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "f2-before",
+              "width": 640,
+              "height": 560,
+              "fill": "$bg-surface-1",
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 20,
+              "stroke": { "align": "inside", "thickness": 1, "fill": "$border-default" },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "f2-b-h",
+                  "content": "BEFORE — always /new",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600",
+                  "fill": "$accent-gold",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f2-b-s",
+                  "content": "Bare /dashboard/chat server-redirects to /dashboard/chat/new. Re-entry always starts a fresh composer; last conversation is not sticky.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 580
+                },
+                {
+                  "type": "frame",
+                  "id": "f2-b-mock",
+                  "width": "fill_container",
+                  "height": 360,
+                  "fill": "$bg-surface-2",
+                  "layout": "vertical",
+                  "padding": 16,
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "f2-b-m1",
+                      "content": "Chat · New conversation",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600",
+                      "fill": "$text-primary",
+                      "textGrowth": "auto"
+                    },
+                    {
+                      "type": "text",
+                      "id": "f2-b-m2",
+                      "content": "Composer empty — prior thread abandoned.",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fill": "$text-muted",
+                      "textGrowth": "auto"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "f2-after",
+              "width": 640,
+              "height": 560,
+              "fill": "$bg-surface-1",
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 20,
+              "stroke": { "align": "inside", "thickness": 1, "fill": "$border-default" },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "f2-a-h",
+                  "content": "AFTER — last conversation",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600",
+                  "fill": "$accent-gold",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f2-a-s",
+                  "content": "Client redirect from bare /dashboard/chat → last real id when valid. + New and explicit /new remain fresh. Stale id fail-closed → /new and clears key.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 580
+                },
+                {
+                  "type": "frame",
+                  "id": "f2-a-mock",
+                  "width": "fill_container",
+                  "height": 360,
+                  "fill": "$bg-surface-2",
+                  "layout": "horizontal",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "f2-a-rail",
+                      "width": 220,
+                      "height": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "layout": "vertical",
+                      "gap": 6,
+                      "padding": 12,
+                      "stroke": { "align": "inside", "thickness": { "right": 1 }, "fill": "$border-default" },
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "f2-a-rt",
+                          "content": "Recent conversations",
+                          "fontFamily": "Inter",
+                          "fontSize": 10,
+                          "fontWeight": "600",
+                          "fill": "$text-muted",
+                          "textGrowth": "auto"
+                        },
+                        {
+                          "type": "text",
+                          "id": "f2-a-r1",
+                          "content": "● Fix issue 4826",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fill": "$accent-gold",
+                          "textGrowth": "auto"
+                        },
+                        {
+                          "type": "text",
+                          "id": "f2-a-r2",
+                          "content": "  Deploy pipeline",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fill": "$text-secondary",
+                          "textGrowth": "auto"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "f2-a-main",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "padding": 16,
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "f2-a-m1",
+                          "content": "Fix issue 4826",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600",
+                          "fill": "$text-primary",
+                          "textGrowth": "auto"
+                        },
+                        {
+                          "type": "text",
+                          "id": "f2-a-m2",
+                          "content": "Thread messages restored — operator continues mid-task.",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": 360
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "f3",
+      "name": "03 — KB tree expansion + scroll restore",
+      "x": 0,
+      "y": 980,
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg-base",
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 32,
+      "clip": true,
+      "children": [
+        {
+          "type": "text",
+          "id": "f3-title",
+          "content": "KB rail — expansion set + scrollTop",
+          "fontFamily": "Inter",
+          "fontSize": 22,
+          "fontWeight": "600",
+          "fill": "$text-primary",
+          "textGrowth": "auto"
+        },
+        {
+          "type": "text",
+          "id": "f3-sub",
+          "content": "Keys: soleur:nav.resume.<ws>.kb.expanded (JSON string[]) + .kb.scrollTop (number). Scroll container = kb-sidebar-shell overflow-y-auto.",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fill": "$text-secondary",
+          "textGrowth": "fixed-width",
+          "width": 1200
+        },
+        {
+          "type": "frame",
+          "id": "f3-body",
+          "width": "fill_container",
+          "height": 700,
+          "fill": "$bg-surface-1",
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 24,
+          "stroke": { "align": "inside", "thickness": 1, "fill": "$border-default" },
+          "children": [
+            {
+              "type": "text",
+              "id": "f3-p1",
+              "content": "Persist: on toggleExpanded and on scroll (rAF-throttled) of the tree scrollport.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": 1300
+            },
+            {
+              "type": "text",
+              "id": "f3-p2",
+              "content": "Restore: on mount of KbSidebarShell / useKbLayoutState, merge stored expanded dirs with pathname-ancestor auto-expand (union; never collapse ancestors of open file).",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": 1300
+            },
+            {
+              "type": "text",
+              "id": "f3-p3",
+              "content": "Scroll restore runs once after tree paint (requestAnimationFrame double-tick or ResizeObserver once height > 0). happy-dom tests instrument scrollTop (same pattern as debug-stream-panel-autoscroll).",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": 1300
+            },
+            {
+              "type": "frame",
+              "id": "f3-mock",
+              "width": 320,
+              "height": 420,
+              "fill": "$bg-surface-2",
+              "layout": "vertical",
+              "gap": 6,
+              "padding": 12,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "f3-m0",
+                  "content": "scrollTop ≈ mid-tree",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fill": "$accent-gold",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f3-m1",
+                  "content": "… (scrolled past product/)",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fill": "$text-muted",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f3-m2",
+                  "content": "▾ engineering/",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f3-m3",
+                  "content": "  ▾ architecture/decisions/",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f3-m4",
+                  "content": "    ● ADR-047.md",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$accent-gold",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f3-m5",
+                  "content": "    ADR-067.md",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "auto"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "f4",
+      "name": "04 — Fail-closed: stale id + workspace isolation",
+      "x": 1560,
+      "y": 980,
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg-base",
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 32,
+      "clip": true,
+      "children": [
+        {
+          "type": "text",
+          "id": "f4-title",
+          "content": "Fail-closed — no cross-workspace / stale restore",
+          "fontFamily": "Inter",
+          "fontSize": 22,
+          "fontWeight": "600",
+          "fill": "$text-primary",
+          "textGrowth": "auto"
+        },
+        {
+          "type": "text",
+          "id": "f4-sub",
+          "content": "Brand-adjacent: never restore a conversation id from workspace A after switch to B. Keys are workspace-scoped; missing workspaceId → no restore write/read.",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fill": "$text-secondary",
+          "textGrowth": "fixed-width",
+          "width": 1200
+        },
+        {
+          "type": "frame",
+          "id": "f4-grid",
+          "width": "fill_container",
+          "height": "fit_content",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "frame",
+              "id": "f4-c1",
+              "width": "fill_container",
+              "height": "fit_content",
+              "fill": "$bg-surface-1",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 20,
+              "stroke": { "align": "inside", "thickness": 1, "fill": "$border-default" },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "f4-c1-h",
+                  "content": "Workspace switch (hard assign /dashboard)",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600",
+                  "fill": "$accent-gold",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f4-c1-b",
+                  "content": "Storage is keyed by workspaceId from useActiveRepo. Workspace B never reads Workspace A keys. Optional: clear prior workspace keys on switch is NOT required if keys are namespaced.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 1300
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "f4-c2",
+              "width": "fill_container",
+              "height": "fit_content",
+              "fill": "$bg-surface-1",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 20,
+              "stroke": { "align": "inside", "thickness": 1, "fill": "$border-default" },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "f4-c2-h",
+                  "content": "Stale conversation / deleted file",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600",
+                  "fill": "$accent-gold",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f4-c2-b",
+                  "content": "Chat: if last id is not in the rail list after load (or fetch 404), clear key and land on /dashboard/chat/new. KB: if path 404s, existing doc error UI; clear last-path key so next re-entry hits root.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 1300
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "f4-c3",
+              "width": "fill_container",
+              "height": "fit_content",
+              "fill": "$bg-surface-1",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 20,
+              "stroke": { "align": "inside", "thickness": 1, "fill": "$border-default" },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "f4-c3-h",
+                  "content": "Explicit intent wins",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600",
+                  "fill": "$accent-gold",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f4-c3-b",
+                  "content": "Deep links, ⌘K palette targets, + New, inbox rows, and ?msg= prefill routes must NOT be redirected to last-open. Resume only applies to section-root entry (nav href / bare /dashboard/chat / bare /dashboard/kb).",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 1300
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "f4-c4",
+              "width": "fill_container",
+              "height": "fit_content",
+              "fill": "$bg-surface-1",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 20,
+              "stroke": { "align": "inside", "thickness": 1, "fill": "$border-default" },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "f4-c4-h",
+                  "content": "Settings out of scope (this issue)",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600",
+                  "fill": "$text-muted",
+                  "textGrowth": "auto"
+                },
+                {
+                  "type": "text",
+                  "id": "f4-c4-b",
+                  "content": "Issue body names KB path + conversation id + KB tree state only. Settings last-tab stickiness is a deferred follow-up if friction appears.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": 1300
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
