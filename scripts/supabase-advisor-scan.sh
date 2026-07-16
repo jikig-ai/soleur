@@ -236,9 +236,16 @@ fi
 # no-policy classes are non-zero by design and are owned by ADR-112's
 # authoritative guard, which explicitly forbids citing a cheaper tier to weaken
 # it. Reporting them is useful; asserting them here would be a regression.
-if [[ -n "$advisor_body" ]]; then
+#
+# Gated on advisor_count being set — i.e. the structural rung above already
+# PROVED there is a lints array. That is what lets this use the strict `.lints[]`
+# with no `?`. Guarding on a merely non-empty body instead would let this parse a
+# 401 error body, and reintroducing that `?` anywhere in this file is exactly the
+# mechanical copy the header warns against, so the shape guard forbids it
+# outright rather than trusting "it's only the census".
+if [[ -n "$advisor_count" ]]; then
   census="$(printf '%s' "$advisor_body" |
-    jq -r '[.lints[]? | .name] | group_by(.) | map("\(.[0])=\(length)") | join(" ")' 2>/dev/null)"
+    jq -r '[.lints[] | .name] | group_by(.) | map("\(.[0])=\(length)") | join(" ")' 2>/dev/null)"
   [[ -n "$census" && "$census" != "null" ]] && echo "census=$(sanitize "$census")"
 fi
 
