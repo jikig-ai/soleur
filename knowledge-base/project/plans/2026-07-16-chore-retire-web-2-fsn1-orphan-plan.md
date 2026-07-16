@@ -327,9 +327,17 @@ No `ssh` anywhere. Soak follow-through (2.9.1): n/a — verified synchronously.
 ### PR A (pre-merge)
 
 - **AC-A1** — Art. 30: no surviving **present-tense locative** claim placing web-2 in
-  `hel1`. Assert the anchor, not the bare token (`cq-assert-anchor-not-bare-token`):
-  `grep -cE 'web-2.*(CX33|hel1)' article-30-register.md` == 0. All **four** clauses
-  (PA-1 (d)/(e), PA-2 (d)/(e)) reconciled.
+  `hel1`. Anchor on the locative *construct*, not the bare token
+  (`cq-assert-anchor-not-bare-token`):
+  `grep -cE 'web-2[^.;]{0,25}(in|\(CX33,) \`hel1\`' article-30-register.md` == 0,
+  **and** `grep -cE 'web-2[^.;]{0,45}\`fsn1\`'` == 4 (all four clauses located).
+  All **four** clauses (PA-1 (d)/(e), PA-2 (d)/(e)) reconciled.
+  **v2 note — the first draft of this AC was itself the defect** (the exact
+  false-failing absence-grep the panel warned about): `web-2.*(CX33|hel1)` matches the
+  *correct* text "web-2 CX33 in `fsn1`", because CX33 is a true property of web-2, and
+  the alternation also fires on the legitimate relocation history `relocated \`hel1\`→\`fsn1\``.
+  The predicate above is **mutation-tested**: 0 on the corrected file, 2 on a copy with
+  the locative reverted to `hel1` — so it is anchored, not vacuous.
 - **AC-A2** — `compliance-posture.md` locative corrected **and** the TS-1 row still
   present: `grep -c 'cross-tenant write threat class' compliance-posture.md` >= 1.
 - **AC-A3** — `expenses.md`: web-1 row reads ~9.17 / 80 GB; registry reads CX23;

@@ -75,7 +75,7 @@ Source: `knowledge-base/project/specs/feat-vendor-ops-legal/dpa-verification-mem
 
 | Vendor | DPA Status | Signed/Verified | Transfer Mechanism | Data Region | Notes |
 |--------|-----------|----------------|-------------------|-------------|-------|
-| Hetzner Online GmbH | SIGNED | 2026-03-19 | N/A (EU-only) | hel1 (Finland) | Covers CX33 (web platform, incl. the 2nd web host web-2 CX33) + the git-data host CAX11 (multi-host /workspaces split, #5274, ADR-068). All same Hetzner account + hel1 EU region — no re-sign required (host-count-agnostic, no new sub-processor / no new third-country transfer) |
+| Hetzner Online GmbH | SIGNED | 2026-03-19 | N/A (EU-only) | hel1 (Finland) + fsn1 (Germany) | Covers CX33 (web platform, incl. the 2nd web host web-2 CX33 — in `fsn1` since PR #6393 relocated it `hel1`→`fsn1` on 2026-07-13 for cross-DC failure resilience) + the git-data host CAX11 (multi-host /workspaces split, #5274, ADR-068). All same Hetzner account, all EU regions (`var.web_hosts` is validation-pinned to `nbg1`/`fsn1`/`hel1`) — no re-sign required (host-count- and EU-DC-agnostic, no new sub-processor / no new third-country transfer) |
 | Supabase Inc | SIGNED | 2026-03-19 | N/A (EU-only) | eu-west-1 (Ireland) | DPA version: August 5, 2025. SCCs Module 2+3. Governing law: Irish. `usage` jsonb column added to `messages` table 2026-05-12 (PR #3648); processing-activity-bound DPA scope covers column-level extensions without re-signing |
 | Stripe Inc | AUTO | 2026-03-19 | EU-US DPF + SCCs | US-based | Automatic via Services Agreement. SAQ-A eligible (PCI) |
 | Cloudflare Inc | AUTO | 2026-03-19 | DPF + SCCs + CBPR | Global CDN | Self-executing via Self-Serve Agreement |

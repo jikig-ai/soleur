@@ -21,7 +21,11 @@ Everything below is true **today**, independent of the retire. No gates, no sequ
 - [ ] **A1.1** — `knowledge-base/legal/article-30-register.md`: correct web-2's locative
       `hel1 → fsn1` (live since #6393; §5(2) accuracy defect). Reconcile **all four**
       clauses — PA-1 (d)/(e) and PA-2 (d)/(e). *(Not two: v1 undercounted.)*
-- [ ] **A1.2** — Verify AC-A1: `grep -cE 'web-2.*(CX33|hel1)' knowledge-base/legal/article-30-register.md` == 0
+- [x] **A1.2** — Verify AC-A1 (predicate corrected — the first draft false-failed on the
+      *correct* text, since "web-2 CX33 in `fsn1`" matches `web-2.*CX33` and the relocation
+      history legitimately contains `hel1`). Mutation-tested anchor:
+      `grep -cE 'web-2[^.;]{0,25}(in|\(CX33,) \`hel1\`' <file>` == **0** (RED=2 on a reverted copy)
+      AND `grep -cE 'web-2[^.;]{0,45}\`fsn1\`' <file>` == **4**.
 - [ ] **A2.1** — `knowledge-base/legal/compliance-posture.md`: same locative correction.
       **Do NOT delete the TS-1 row** (*"cross-tenant write threat class"*, #5274, OPEN,
       soak-gated) — a live compliance record.

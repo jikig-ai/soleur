@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-06-16
+last_updated: 2026-07-16
 last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: cfo
@@ -18,6 +18,8 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 
 > **[2026-06-16 Review note]** Out-of-cycle update against `expenses.md@2026-06-16`: the 2026-06-15 outbound-email cold-sending go-live (#5325, PR #5365) added a dedicated `outbound.soleur.ai` Resend sending subdomain, forcing a **Resend free-tier → Pro ($20/mo) upgrade** (a second sending domain exceeds the 1-domain free tier). Resend moves from not-counted to product COGS. Product COGS rises **$121.08 → $141.08** (+16.4%), all-in burn **$531.08 → $551.08**. The all-in **gross-price** break-even shifts **11 → 12 users** (⌈551.08 ÷ 49⌉); the Stripe-net all-in break-even is unchanged at **12**, and the COGS-scope break-even is unchanged at **3**. All-in margin at 50-user scale shifts **78.32% → 77.51%** (gross revenue) / **77.87% → 77.04%** (Stripe-net). The Resend Pro amount is an estimate (operator-driven billing upgrade) — verify against the next Resend invoice per the `expenses.md` caveat.
 
+> **[2026-07-16 Review note]** Out-of-cycle correction against `expenses.md@2026-07-16` (#6538). Two defects, both ledger-accuracy not new spend. **(1) The Hetzner fleet was under-counted:** Product COGS carried only the web-1 host + its volume, omitting web-2, the zot registry, the Inngest control plane, and their volumes/IPv4s — ~$35/mo of *already-active* rows. **(2) The same cx33 SKU was priced two ways** (web-1 at $15.37 vs the registry row at $9.17); the live Hetzner catalog gives cx33 = EUR 8.49/mo net / 80 GB → USD ~9.17 at ~1.08 FX, so the $15.37 / "160 GB SSD" figures were wrong on both amount and disk. Also corrected: the registry is **cx23** (~$5.93), not cx33, since #6497/#6463 right-sized it on 2026-07-16. `grok-dogfood` (verified live via the Hetzner API 2026-07-16, previously ledgered "not born") is classified **R&D**, not COGS, per this document's own classification rule — it is an engineering accelerator that does not scale per paying user. Product COGS **$141.08 → $176.11** (+24.8%), R&D **$410.00 → $419.71**, all-in burn **$551.08 → $595.82**. COGS-scope break-even shifts **3 → 4 users** (⌈176.11 ÷ 49⌉); all-in break-even **12 → 13** at both gross ($49) and Stripe-net ($48) prices. All-in margin at 50-user scale **77.51% → 75.68%** (gross) / **77.04% → 75.17%** (Stripe-net). No new vendor, no new sub-processor — this is a re-derivation of spend that was already being drawn. web-2's rows are retained here and marked *retirement decided* (#6538/#6463); they leave COGS when the destroy lands, which will return ~$10.59/mo. **All Hetzner amounts are catalog-derived — VERIFY actual draw on the next Hetzner invoice.**
+
 ## Monthly Burn
 
 Monthly burn is split into two scopes: **R&D / dev tooling** (investments that accelerate engineering, not per-user product delivery) and **product COGS** (infrastructure and services consumed in running the product for paying users). This split is load-bearing for break-even math and for the gross-margin-at-scale claim in §5. Reporting a single blended number either collapses under scrutiny (the small-number framing omits real recurring costs) or misrepresents product economics (the large-number framing taxes product margins with engineering-accelerator spend). The split is defensible and carries forward cleanly into pricing conversations.
@@ -32,7 +34,9 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Claude Code Max 20x — seat 1 | 200.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Claude Code Max 20x — seat 2 | 200.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Anthropic API (CI claude-code-action) | 0.00 (accruing) [expenses.md@2026-06-11] | `expenses.md` |
-| **Subtotal R&D / Dev Tooling** | **410.00 [expenses.md@2026-06-11]** | |
+| Hetzner CX33 (grok-dogfood, operator dogfood host) | 9.17 [expenses.md@2026-07-16] | `expenses.md` |
+| Hetzner Primary IPv4 (grok-dogfood) | 0.54 [expenses.md@2026-07-16] | `expenses.md` |
+| **Subtotal R&D / Dev Tooling** | **419.71 [expenses.md@2026-07-16]** | |
 
 > **CI claude-code-action line (#5086, ADR-056):** metered `ANTHROPIC_API_KEY`
 > spend from the two CI review jobs — R&D, not COGS (engineering accelerator, same
@@ -46,21 +50,29 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 
 | Line | Amount (USD/mo) | Source |
 |------|----------------:|--------|
-| Hetzner CX33 (web platform) | 15.37 [expenses.md@2026-04-19] | `expenses.md` |
-| Hetzner Volume (20 GB) | 0.88 [expenses.md@2026-04-19] | `expenses.md` |
+| Hetzner CX33 (web-1, web platform) | 9.17 [expenses.md@2026-07-16] | `expenses.md` |
+| Hetzner Volume (web-1, 20 GB) | 0.88 [expenses.md@2026-04-19] | `expenses.md` |
+| Hetzner CX33 (web-2, warm standby, fsn1) | 9.17 [expenses.md@2026-07-16] | `expenses.md` (retirement decided — #6538) |
+| Hetzner Volume (web-2, 20 GB) | 0.88 [expenses.md@2026-07-16] | `expenses.md` (retirement decided — #6538) |
+| Hetzner Primary IPv4 (web-2) | 0.54 [expenses.md@2026-07-16] | `expenses.md` (retirement decided — #6538) |
+| Hetzner CX23 (zot registry, hel1) | 5.93 [expenses.md@2026-07-16] | `expenses.md` |
+| Hetzner Volume (registry, 60 GB) | 2.64 [expenses.md@2026-07-16] | `expenses.md` |
+| Hetzner CPX22 (inngest control plane, hel1) | 21.05 [expenses.md@2026-07-16] | `expenses.md` |
+| Hetzner Volume (inngest, 10 GB) | 0.48 [expenses.md@2026-07-16] | `expenses.md` |
+| Hetzner Primary IPv4 (inngest) | 0.54 [expenses.md@2026-07-16] | `expenses.md` |
 | Supabase Pro + Custom Domain | 35.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Plausible Analytics (Growth) | 9.00 [expenses.md@2026-04-19] | `expenses.md` (EUR 9) |
 | Anthropic API (ux-audit cron) | 15.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Cloudflare `soleur.ai` domain (amortized $70/yr ÷ 12) | 5.83 [expenses.md@2026-04-19] | `expenses.md` |
 | Sentry Team (error tracking + cron monitors, $29 base + ~$11 PAYG draw) | 40.00 [expenses.md@2026-06-11] | `expenses.md` |
 | Resend Pro (outbound + transactional email, 50K emails/mo) | 20.00 [expenses.md@2026-06-16] | `expenses.md` (estimate — verify on next invoice) |
-| **Subtotal Product COGS** | **141.08 [expenses.md@2026-06-16]** | |
+| **Subtotal Product COGS** | **176.11 [expenses.md@2026-07-16]** | |
 
 **Totals:**
 
-- **Product COGS:** ~$141/month [expenses.md@2026-06-16]
-- **R&D / Dev Tooling:** ~$410/month [expenses.md@2026-04-19]
-- **All-in recurring burn:** ~$551/month [expenses.md@2026-06-16]
+- **Product COGS:** ~$176/month [expenses.md@2026-07-16]
+- **R&D / Dev Tooling:** ~$420/month [expenses.md@2026-07-16]
+- **All-in recurring burn:** ~$596/month [expenses.md@2026-07-16]
 
 Not counted (free-tier or test-mode; trigger-based upgrades listed in §4): Stripe, Better Stack (uptime free-tier; Responder tier still deferred), Buttondown, Doppler, LinkedIn, Bluesky, X API free tier.
 
@@ -76,9 +88,9 @@ Per-user LLM inference cost is **$0** because inference runs on user-owned Anthr
 
 ### CX33 Session Capacity
 
-The current Hetzner CX33 host (4 vCPU, 8 GB RAM, 160 GB SSD, $15.37/mo [expenses.md@2026-04-19]) sustains approximately **10–12 concurrent agent sessions without Playwright**. Sessions with Playwright browser automation reduce this ceiling meaningfully; exact headroom depends on browser count. See `knowledge-base/operations/expenses.md` Hetzner CX33 notes for the operating-model assumption.
+The current Hetzner CX33 host (web-1: 4 shared vCPU, 8 GB RAM, 80 GB SSD, $9.17/mo [expenses.md@2026-07-16]) sustains approximately **10–12 concurrent agent sessions without Playwright**. Sessions with Playwright browser automation reduce this ceiling meaningfully; exact headroom depends on browser count. See `knowledge-base/operations/expenses.md` Hetzner CX33 notes for the operating-model assumption.
 
-Per-user server cost at capacity (11 concurrent, amortized): **$15.37 / 11 ≈ $1.40 per concurrent user slot [expenses.md@2026-04-19]**. This is a capacity-bound number, not a per-MAU cost — a single slot serves many MAUs across time.
+Per-user server cost at capacity (11 concurrent, amortized): **$9.17 / 11 ≈ $0.83 per concurrent user slot [expenses.md@2026-07-16]**. This is a capacity-bound number, not a per-MAU cost — a single slot serves many MAUs across time.
 
 ### Volume Amortization
 
@@ -110,8 +122,8 @@ Price anchor: **$49/month** per Pro tier (`product/pricing-strategy.md`). Math i
 
 | Scope | Burn (USD/mo) | Price ($49) | Users to break even |
 |-------|--------------:|------------:|--------------------:|
-| Product COGS | 141.08 [expenses.md@2026-06-16] | 49 | ⌈141.08 ÷ 49⌉ = **3 users** |
-| All-in (COGS + R&D / Dev Tooling) | 551.08 [expenses.md@2026-06-16] | 49 | ⌈551.08 ÷ 49⌉ = **12 users** |
+| Product COGS | 176.11 [expenses.md@2026-07-16] | 49 | ⌈176.11 ÷ 49⌉ = **4 users** |
+| All-in (COGS + R&D / Dev Tooling) | 595.82 [expenses.md@2026-07-16] | 49 | ⌈595.82 ÷ 49⌉ = **13 users** |
 
 ### Stripe fee drag
 
@@ -123,10 +135,10 @@ Effective **net revenue per user after Stripe fees: ~$48/month** (EU floor) to ~
 
 | Scope | Burn | Net price ($48) | Users to break even |
 |-------|-----:|----------------:|--------------------:|
-| Product COGS | 141.08 [expenses.md@2026-06-16] | 48 | ⌈141.08 ÷ 48⌉ = **3 users** |
-| All-in | 551.08 [expenses.md@2026-06-16] | 48 | ⌈551.08 ÷ 48⌉ = **12 users** |
+| Product COGS | 176.11 [expenses.md@2026-07-16] | 48 | ⌈176.11 ÷ 48⌉ = **4 users** |
+| All-in | 595.82 [expenses.md@2026-07-16] | 48 | ⌈595.82 ÷ 48⌉ = **13 users** |
 
-Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **12 users** at the current $551.08 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap). The COGS-scope count is unchanged at 3. Stripe fees still bite into gross margin at scale (see §5).
+Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **13 users** at the current $595.82 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap). The COGS-scope count is unchanged at 3. Stripe fees still bite into gross margin at scale (see §5).
 
 ## Scaling Triggers
 
@@ -135,7 +147,7 @@ Each row is a trigger that forces a spend upgrade. "Upgrade delta" is the monthl
 | Service | Current | Trigger | Upgrade delta (USD/mo) | Source |
 |---------|---------|---------|-----------------------:|--------|
 | Supabase Pro | $35.00 [expenses.md@2026-04-19] (Pro + custom domain) | Any of: 500 MB DB, 50K MAU, 1 GB file storage, 2 GB bandwidth | Pro-tier limit overages billed per-usage (DB storage ~$0.125/GB, bandwidth ~$0.09/GB, MAU ~$0.00325/MAU); no plan change until Team ($599/mo) | `expenses.md` + Supabase Pro pricing |
-| Hetzner CX33 session capacity | $15.37 [expenses.md@2026-04-19] (~11 concurrent) | Sustained >10–12 concurrent agent sessions or Playwright-heavy workload | Upgrade to CX43 (~$29/mo delta TBD — verify at Hetzner pricing at trigger time) | `expenses.md` CX33 notes |
+| Hetzner CX33 session capacity | $9.17 [expenses.md@2026-07-16] (~11 concurrent) | Sustained >10–12 concurrent agent sessions or Playwright-heavy workload | Upgrade to CX43 (~$29/mo delta TBD — verify at Hetzner pricing at trigger time) | `expenses.md` CX33 notes |
 | X API | $0 [expenses.md@2026-04-19] (free tier) | First paying customer or $500 MRR (per #497) | +$100.00/mo (X API Basic) | `expenses.md` deferred row + #497 |
 | Resend Pro | $20.00 [expenses.md@2026-06-16] (active; outbound + transactional, 50K emails/mo) | >50K emails/mo | Resend Scale-tier overage (delta TBD at trigger) | `expenses.md` (estimate — verify on next invoice) |
 | Buttondown | $0 [expenses.md@2026-04-19] (free tier) | >100 newsletter subscribers | +$9.00/mo (Basic) | `expenses.md` |
@@ -154,7 +166,7 @@ Worked example: **50 paying users × $49/month = $2,450 MRR**. Two margin framin
 
 ```
 Revenue:           $2,450
-Product COGS:      $141.08 [expenses.md@2026-06-16]
+Product COGS:      $176.11 [expenses.md@2026-07-16]
 Gross profit:      $2,308.92
 Gross margin:      2,308.92 / 2,450 = 94.24%
 ```
@@ -163,17 +175,17 @@ Gross margin:      2,308.92 / 2,450 = 94.24%
 
 ```
 Revenue:           $2,450
-All-in burn:       $551.08 [expenses.md@2026-06-16]
+All-in burn:       $595.82 [expenses.md@2026-07-16]
 Contribution:      $1,898.92
-Margin (all-in):   1,898.92 / 2,450 = 77.51%
+Margin (all-in):   1,854.18 / 2,450 = 75.68%
 ```
 
 ### Stripe Fee Drag
 
 At 50 users × ~$1/user/mo Stripe fee (EU floor) = **$50/mo in fees**. Effective net revenue: $2,450 − $50 = **$2,400**.
 
-- Adjusted COGS-based margin: ($2,400 − $141.08) / $2,400 = **94.12%**
-- Adjusted all-in margin: ($2,400 − $551.08) / $2,400 = **77.04%**
+- Adjusted COGS-based margin: ($2,400 − $176.11) / $2,400 = **92.66%**
+- Adjusted all-in margin: ($2,400 − $595.82) / $2,400 = **75.17%**
 
 The original "93% gross margin" claim is closer to the COGS-based number (actually ~94%) and elides R&D / dev-tooling burn. The more honest founder-economics number is the all-in margin (~78%). Both should be cited side-by-side whenever the gross-margin claim is made; COGS-only margin without the R&D context misrepresents the operating picture.
 
