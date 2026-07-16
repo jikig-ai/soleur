@@ -1,6 +1,8 @@
 ---
 date: 2026-07-16
 topic: grok-build-hetzner-trial
+issue: 6545
+phase2_issue: 6546
 pr: 6544
 branch: feat-grok-build-hetzner-trial
 lane: cross-domain
