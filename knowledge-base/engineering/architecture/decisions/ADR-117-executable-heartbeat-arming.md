@@ -1,5 +1,5 @@
 ---
-adr: 116
+adr: 117
 title: A heartbeat's arming claim must be executable — a monitor is fed, or honestly declared unfed
 status: accepted
 date: 2026-07-16
@@ -8,7 +8,7 @@ supersedes: none
 issue: 6537
 ---
 
-# ADR-116: Executable heartbeat arming
+# ADR-117: Executable heartbeat arming
 
 ## Context
 

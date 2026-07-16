@@ -432,7 +432,7 @@ resource "hcloud_firewall_attachment" "registry" {
 # from live state, and this resource is an OPERATOR_APPLIED_EXCLUSION (untargeted), so a source
 # unpause is a no-op either way. Live arming is a one-time API PATCH, done only AFTER a real beat is
 # measured — never before (an unfed monitor that gets unpaused pages forever; #6210). Until that
-# happens the monitor is inert, and no static check can see it (ADR-116 names this state; the
+# happens the monitor is inert, and no static check can see it (ADR-117 names this state; the
 # nightly live-reconcile that would bound it is #6549).
 #
 # The consumer-perspective probe (can a CLIENT reach zot over the private net?) is a DIFFERENT

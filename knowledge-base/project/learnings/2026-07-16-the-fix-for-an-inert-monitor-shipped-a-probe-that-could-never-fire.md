@@ -277,4 +277,4 @@ Fix: probe both routes — `$VAR`/`${VAR}` deref, **and** `<var>_url = betterupt
   timer rather than a `cron.d` entry.
 - [[2026-07-15-silent-fallback-masked-a-dead-primary-for-14-days]] — #6400, the blindness the
   private-IP probe choice exists to avoid rebuilding.
-- ADR-116 (executable heartbeat arming) · ADR-096 · ADR-103 · #6548 · #6549
+- ADR-117 (executable heartbeat arming) · ADR-096 · ADR-103 · #6548 · #6549

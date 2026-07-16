@@ -277,7 +277,7 @@ resource "betteruptime_heartbeat" "git_data_prd" {
 # heartbeat-manifest.ts declares this row `feeder: {kind:"none", url_secret:"GIT_DATA_HEARTBEAT_URL"}`
 # and the parity guard asserts that secret still has zero dereferencing consumers — so the day PR C
 # ships the probe, CI goes red and forces the row (and the arming decision) to be reconciled.
-# See ADR-116. Live-absence of this heartbeat is tracked separately in #6548.
+# See ADR-117. Live-absence of this heartbeat is tracked separately in #6548.
 resource "doppler_secret" "git_data_heartbeat_url_prd" {
   project    = "soleur"
   config     = "prd"

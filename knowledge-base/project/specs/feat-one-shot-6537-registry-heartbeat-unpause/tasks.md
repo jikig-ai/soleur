@@ -31,7 +31,7 @@ heartbeat is a guaranteed false alarm (#6210).
       `git grep -l cloud-init-registry -- '*test*'`. **If none exists, Phase 1.1's RED tests land in
       the parity test — do NOT invent a new suite.**
 - [x] 0.6 Re-verify the next free ADR ordinal against a freshly-fetched `origin/main`
-      (`git fetch origin main`; highest today: ADR-115 → provisional **ADR-116**).
+      (`git fetch origin main`; highest today: ADR-115 → provisional **ADR-117**).
 - [x] 0.7 Confirm the GHCR fallback is still warm (the `## Downtime & Cutover` precondition):
       ADR-096 status is `Adopting` AND `grep -c 'app_ghcr_fallback' apps/web-platform/infra/cloud-init.yml` ≥ 1.
       **If Phase-5 has retired GHCR, STOP** — the replace is no longer latency-only.
@@ -111,11 +111,11 @@ heartbeat is a guaranteed false alarm (#6210).
 - [x] 5.3 `alerts-github-webhook.tf:50-54` — delete the false *"the webhook route deliberately
       pings"* claim. **Note:** it attaches only to `github_webhook_sig_failures`;
       `github_api_429_sustained` has **no** corresponding comment.
-- [x] 5.4 `git-data.tf:271-274` — the TODO is already honest; add the ADR-116 pointer only.
+- [x] 5.4 `git-data.tf:271-274` — the TODO is already honest; add the ADR-117 pointer only.
 
 ## Phase 6 — ADR + C4
 
-- [x] 6.1 Create `ADR-116-executable-heartbeat-arming.md`, `status: accepted`. Decision rests on the
+- [x] 6.1 Create `ADR-117-executable-heartbeat-arming.md`, `status: accepted`. Decision rests on the
       **general** property (source ≠ live), **not** on `ignore_changes=[paused]` — the heartbeat is
       *also* untargeted, so a source unpause is a no-op regardless. Alternatives Considered must
       record: unpause-without-feeder (rejected, #6210), prose `arming` (rejected, false for months),

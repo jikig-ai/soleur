@@ -4,7 +4,7 @@ date: 2026-07-16
 type: fix
 issue: 6537
 related: ['#6438', '#6497', '#6400', '#6415', '#6242', '#6238', '#6210', '#6122']
-related_adrs: [ADR-096, ADR-103, ADR-115, ADR-116]
+related_adrs: [ADR-096, ADR-103, ADR-115, ADR-117]
 lane: cross-domain
 brand_survival_threshold: aggregate pattern
 status: draft
@@ -51,7 +51,7 @@ revision: v3 (post 7-agent plan-review — see ## Plan-Review Consolidation)
 ### Verification performed
 
 Rule IDs (all active, zero fabricated) · every cited issue/PR resolved live via `gh` with its
-title cross-checked against the narrative claim · KB paths resolve (only ADR-116 absent — this
+title cross-checked against the narrative claim · KB paths resolve (only ADR-117 absent — this
 plan's own Phase 6 deliverable) · live Better Stack state self-pulled · `-target` allow-lists and
 `OPERATOR_APPLIED_EXCLUSIONS` read from source · GHCR-fallback warmth confirmed from ADR-096
 status + `cloud-init.yml`.
@@ -251,7 +251,7 @@ prod host.
 
 ### ADR
 
-- **Create `ADR-116` — "A heartbeat's arming claim must be executable, and an unfed heartbeat must
+- **Create `ADR-117` — "A heartbeat's arming claim must be executable, and an unfed heartbeat must
   stay paused."** The cross-cutting invariant: `feeder` is grep-derived **bidirectionally**
   (forward evidence + inverse zero-consumer); an unfed heartbeat is `paused` and names an open
   tracking issue; `paused` in source is only a **lower bound** on liveness. Alternatives Considered
@@ -270,7 +270,7 @@ prod host.
   signal for NIC absence, not a replacement for L1. Cross-reference only.
 - Ordinal is **provisional** — `/ship`'s ADR-Ordinal Collision Gate re-verifies against
   `origin/main` (highest today: ADR-115). On renumber, sweep
-  `grep -rn 'ADR-116' knowledge-base/project/{plans,specs}/feat-one-shot-6537-*/` **in the same
+  `grep -rn 'ADR-117' knowledge-base/project/{plans,specs}/feat-one-shot-6537-*/` **in the same
   edit** (#5990 orphan trap).
 
 ### C4 views
@@ -593,11 +593,11 @@ identified.
 `zot-registry.tf:406-413` (the present-tense probe claim) **and** `:435-436` (the second forward
 reference). Delete the dangling by-hand unpause sentence — that instruction, with no owner and no
 forcing function, is the proximate cause of this bug. `alerts-github-webhook.tf:50-54` — delete
-the false pings claim. `git-data.tf:271-274` — the TODO is honest; add the ADR-116 pointer only.
+the false pings claim. `git-data.tf:271-274` — the TODO is honest; add the ADR-117 pointer only.
 
 ### Phase 6 — ADR + C4
 
-ADR-116 (create), ADR-096 + ADR-103 (amend, incl. the `:359`→`:441` citation fix), `model.c4` ×3.
+ADR-117 (create), ADR-096 + ADR-103 (amend, incl. the `:359`→`:441` citation fix), `model.c4` ×3.
 Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
 ### Phase 7 — Close the loop
@@ -613,7 +613,7 @@ Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 - `apps/web-platform/infra/cloud-init-registry.yml` — the liveness script + systemd `.service`/`.timer` + `runcmd` enable
 - `apps/web-platform/infra/zot-registry.tf` — `templatefile` var (`user_data` only) + 2 false comments (`:406-413`, `:435-436`). **No resource change.**
 - `apps/web-platform/infra/alerts-github-webhook.tf` — false claim at `:50-54`
-- `apps/web-platform/infra/git-data.tf` — ADR-116 pointer
+- `apps/web-platform/infra/git-data.tf` — ADR-117 pointer
 - `plugins/soleur/test/heartbeat-reprovision-parity.test.ts` — import manifest; `feeder` assertions
 - the registry cloud-init assertion suite identified in Phase 0.5 (T1–T4)
 - `knowledge-base/engineering/architecture/diagrams/model.c4` — 3 edits
@@ -627,7 +627,7 @@ allow-list moves. Editing them would break the `OPERATOR_APPLIED_EXCLUSIONS` rul
 ## Files to Create
 
 - `plugins/soleur/lib/heartbeat-manifest.ts`
-- `knowledge-base/engineering/architecture/decisions/ADR-116-executable-heartbeat-arming.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-117-executable-heartbeat-arming.md`
 
 ## Open Code-Review Overlap
 
@@ -668,7 +668,7 @@ against every path above. **None.**
 9. `c4-code-syntax.test.ts` + `c4-render.test.ts` green; `grep -c "git-data heartbeats" knowledge-base/engineering/architecture/diagrams/model.c4` == **0**.
    *(v1 grepped a bare `model.c4` — no such path at repo root; grep would exit 2 and the AC never
    evaluate.)*
-10. `ADR-116-*.md` exists, `status: accepted`, Alternatives Considered records the four rejected
+10. `ADR-117-*.md` exists, `status: accepted`, Alternatives Considered records the four rejected
     options. ADR-096's `zot-registry.tf:359` citation is corrected to `:441`.
 11. Tracking issues for `git_data_prd` + the two webhook heartbeats exist, are OPEN, and their
     numbers are in the manifest.
@@ -734,7 +734,7 @@ the script body against a stubbed `curl`; **no live mutation, no prod host in th
 | **`git_data_prd` absent live with no `count` gate** — unexplained drift | Out of scope; delegated to `scheduled-terraform-drift.yml` and called out in Distinctness so its absence is not mistaken for a `count` gate. |
 | **The self-ping is mistaken for consumer-perspective coverage** | ADR-096 amendment + Overview state plainly: this is the **on-host** layer. #6438 §1 stays open for the off-host probe. |
 | **Free tier ⇒ email-only, no escalation** | Recorded; non-differential across all options including the status quo. |
-| ADR-116 ordinal collision | `/ship`'s gate re-verifies vs `origin/main`; renumber sweeps plan+tasks+ACs in one edit (#5990). |
+| ADR-117 ordinal collision | `/ship`'s gate re-verifies vs `origin/main`; renumber sweeps plan+tasks+ACs in one edit (#5990). |
 
 ## Alternative Approaches Considered
 
@@ -776,12 +776,12 @@ plan-review rule, that convergence means **delete, not fix**; the cut dissolved 
 | Second false comment at `zot-registry.tf:435-436`; `alerts-github-webhook.tf` citation drift (`:50-54`, and only 1 of 2 entries has a comment); `ADR-096:94` cites `:359` not `:441` | kieran (P2) | All folded into Phase 5 / Phase 6. |
 | `grep -F` exits **2** on a missing file vs **1** on no-match — collapsing them misleads the debugger | code-simplicity | Separate file-existence assertion (T6, AC2). |
 | **`registry_prd` / `registry_disk_prd` / `zot_heartbeat_url_prd` are `OPERATOR_APPLIED_EXCLUSIONS`** — untargeted by deliberate CTO ruling (2026-07-06). **v2's `period` widening and secret deletion could never apply**, and forcing them would need an operator-local apply (a forbidden manual step) | architecture (P0-2) | **Verified** (`terraform-target-parity.test.ts:584`; `apply-web-platform-infra.yml:1710-1713`; 0 `-target` hits vs 1 for `inngest_prd`). **v3 removes every resource change** and meets `60/30` with a systemd timer — the proven `inngest_prd` shape. This is the single largest v2→v3 correction. |
-| **ADR-116 must not depend on `ignore_changes=[paused]`** — source ≠ live is *independently* guaranteed by the untargeted apply path, so the attribute-specific claim is weaker and more fragile than the truth | architecture (P0-2.2) | **Applied** — ADR-116's Decision now rests on the general property. |
+| **ADR-117 must not depend on `ignore_changes=[paused]`** — source ≠ live is *independently* guaranteed by the untargeted apply path, so the attribute-specific claim is weaker and more fragile than the truth | architecture (P0-2.2) | **Applied** — ADR-117's Decision now rests on the general property. |
 | **#6438 §1's arming blocker is wrong on the merits** — its option (a) ("drop `ignore_changes=[paused]`") does **not** work: the heartbeat stays untargeted, so a source unpause is still a CI no-op | architecture (P0-2.3) | **Folded into Phase 7's #6438 comment.** Found by this plan; #6438's own analysis never checked the apply path. |
 | **v1's `sentry_cron_monitor` would never be applied** — `apply-sentry-infra.yml` is `-target`-scoped (71 lines) with **zero** parity enforcement; AC11 (untargeted local plan) would go green while CI applied 0 | architecture (P0-1), kieran (P0-3) | **Dissolved by the cut** — v3 adds no monitor and no workflow. |
 | **`evidence.file` unconstrained**: a pattern in a `.tf` comment or doc satisfies the gate; and `feeder.evidence` is never joined to `replace_target`, so a feeder in cloud-init on a host with no reprovision path passes | architecture (P1-a/b) | **Closed by construction**: `registry_prd` becomes `arming: dedicated-host-boot`, which ADR-103 already *requires* to carry a `replace_target`. AC5 asserts that check now fires. |
 | **`model.c4:444`'s "49 cron monitors / 6 check in from here"** would go stale | architecture (P1-6) | **Moot** — v3 adds no monitor and no workflow. Counts unchanged. |
-| "Delete the heartbeat" was a missing Alternative (the invariant admits *feed it* **or** *remove it*) | architecture (P1-5) | **Moot for `registry_prd`** — v3 feeds it. Recorded in ADR-116 as the second legal resolution, which is what the deferred `git_data_prd`/webhook entries may take. |
+| "Delete the heartbeat" was a missing Alternative (the invariant admits *feed it* **or** *remove it*) | architecture (P1-5) | **Moot for `registry_prd`** — v3 feeds it. Recorded in ADR-117 as the second legal resolution, which is what the deferred `git_data_prd`/webhook entries may take. |
 | ADR-096 pointer + `decision-challenges.md` were decoration / a 3rd representation | code-simplicity | ADR-096 amendment **kept** (it is now substantive — the self-ping supersedes its "does not exist yet" note); `decision-challenges.md` **cut** (the CTO ruled; there is no open challenge). |
 
 **Applied — User-Challenge (the operator's stated scope):**
@@ -806,7 +806,7 @@ plan-review rule, that convergence means **delete, not fix**; the cut dissolved 
 - **cpo: "do not close #6537 while its substance sits in Post-MVP/Later" (#6438's milestone).**
   Correct **for v1**, moot for v2 — v2 closes the substance here. #6438 retains only the off-host
   layer.
-- **dhh: "merge ADR-116 into an ADR-103 amendment."** Rejected — ADR-116 is a cross-cutting
+- **dhh: "merge ADR-117 into an ADR-103 amendment."** Rejected — ADR-117 is a cross-cutting
   invariant over *all* heartbeats; ADR-103 is specifically the dedicated-host-boot reprovision
   path. Folding them would repeat the conflation that produced the false `app-emit` claim.
 

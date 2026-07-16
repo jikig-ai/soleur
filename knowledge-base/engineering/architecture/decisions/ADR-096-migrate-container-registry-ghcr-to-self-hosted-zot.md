@@ -99,7 +99,7 @@ independent axes so it never silently gates a host:
   its threshold being unreachable (#6285) mattered. (`paused` is under `ignore_changes`, so the live
   pause state is not verifiable from the repo.)
 
-  **Feeder shipped (#6537, 2026-07-16 — [ADR-116](./ADR-116-executable-heartbeat-arming.md)):** the
+  **Feeder shipped (#6537, 2026-07-16 — [ADR-117](./ADR-117-executable-heartbeat-arming.md)):** the
   layer now exists, but **not** as the web-host probe cron assumed above. It is an **on-host** systemd
   timer shipped in the registry's own cloud-init (`zot-liveness-heartbeat.timer`), pinging only while
   zot answers on the host's **private IP** — never loopback, because zot binds `0.0.0.0` and a

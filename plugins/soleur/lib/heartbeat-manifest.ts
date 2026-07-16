@@ -4,7 +4,7 @@
 // A heartbeat's "what feeds this?" answer used to live in a code COMMENT. #6537: the registry's
 // said a probe cron had shipped; it had never been written, and the monitor sat inert for 9 days.
 // A comment cannot fail CI, so `feeder` below is EXECUTABLE — every arming claim is a file plus a
-// syntactic construct the parity test greps on every run. See ADR-116 for the decision, the
+// syntactic construct the parity test greps on every run. See ADR-117 for the decision, the
 // rejected alternatives, and the states this does NOT cover.
 
 /** How a heartbeat's ping is armed — keyed on the MONITORED HOST'S REMEDIATION (CTO, #6242). */
