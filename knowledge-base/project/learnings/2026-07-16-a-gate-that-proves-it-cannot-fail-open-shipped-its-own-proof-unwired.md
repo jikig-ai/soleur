@@ -161,6 +161,18 @@ first-wins so class A outranks class B.
   **Prevention:** grep an existing precedent's comment before inventing a fix —
   `apply-inngest-rls.yml` states the convention explicitly.
 
+- **`/ship` Phase 0's trailer-parse gate false-positives on mid-body prose.** It
+  scans the WHOLE commit body for `^[A-Z][A-Za-z-]+:[[:space:]]` and asserts each
+  match parses as a trailer — but `git interpret-trailers` only ever reads the
+  FINAL paragraph, so an ordinary prose line (`Also: …`, `Route-to-definition: …`,
+  `Note: …`) can never be a trailer and can never be the demotion the gate exists
+  to catch. Both flagged commits here had `Ref #3366` as their final paragraph and
+  no trailers at all. Cleared by inspection in ~30s; not filed, because the gate's
+  protected invariant genuinely held and a tuning nit is not worth backlog growth.
+  **Prevention (if it recurs often enough to matter):** scope the candidate scan to
+  the final paragraph (`awk 'BEGIN{RS=""}{last=$0}END{print last}'`) before
+  asserting, so the gate's domain matches git's.
+
 - **`shellcheck` without `-x`** reported SC1091 on sourced libs (one-off).
 - **`gh run list --json triggeringActor`** — invalid field (one-off; `gh` lists
   valid fields on error).
