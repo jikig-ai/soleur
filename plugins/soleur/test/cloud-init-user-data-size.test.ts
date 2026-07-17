@@ -76,7 +76,15 @@ const HETZNER_CAP = 32_768;
 // would have made the NEXT infra change fail CI for no defect. 21,900 keeps the guard's actual
 // purpose intact: a KB-scale re-inlining (~1.5+ KB, the failure mode this exists to catch) still
 // trips it, and it stays ~10.9 KB below HETZNER_CAP.
-const WEB_GZIP_BUDGET = 21_900;
+// #6604: +~250 B modest re-baseline (21,900 → 22,200). Measured 21,900 → ~22,048 (+148 B) for two
+// irreducibly-inline additions the "prefer baking over inline" guidance CANNOT absorb: (a) the
+// /mnt/data mount pinned by-id + fstab `nofail` + fstab-dedupe guard (the glob binds the wrong
+// device once the LUKS volume attaches — this MUST be in the runcmd mount, not a baked helper),
+// and (b) the baked-DSN write to /etc/default/luks-monitor (the luks-monitor units source it; it
+// MUST be written at cloud-init time so a Doppler-down boot still pages — DP-9). Comments trimmed
+// first. 22,200 keeps the KB-scale re-inlining tripwire (a ~1.5 KB blob → ~23.5 KB trips it) and
+// stays ~10.6 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 22_200;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
