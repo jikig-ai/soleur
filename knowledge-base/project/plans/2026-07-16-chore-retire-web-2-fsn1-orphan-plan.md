@@ -65,6 +65,31 @@ Merges immediately.
 - **A5** — planning artifacts already committed (brainstorm, spec, this plan, the
   session learning, the `brainstorm/SKILL.md` route).
 
+- **A6 — PUBLIC legal docs (EMERGENT; v2 did not contemplate this).** v2 scoped PR A to
+  the **internal** register + ledger. It missed that the **public** docs users read carry
+  the same defect on a far more exposed surface: **40 live claims** across
+  `docs/legal/{gdpr-policy,privacy-policy,data-protection-disclosure}.md`, their 3 Eleventy
+  mirrors, and the DPA template pinned hosting to **Helsinki-only** and named web-2 — false
+  since #6393 (2026-07-13). They also asserted a **dedicated per-workspace git-data host**
+  that has **never existed** (verified live: 5 servers, no `soleur-git-data`).
+  **Operator decision 2026-07-16 — state the plane at the EU level, do not re-pin to two
+  DCs.** Re-pinning would be true today and false the moment PR B lands, and **PR B had no
+  step to revert it** (B5 covers only the register + expenses.md) — i.e. the literal fix
+  plants a defect PR B is not scoped to catch. The EU-level claim is true now, after PR B,
+  and after active-active-N (#6459); the Finland pin has already broken once and #6570
+  says capacity may force other DCs again. Claims that are specific **and true** keep
+  their specificity (workspace data, user-serving host, per-turn telemetry → `hel1`).
+  The **6 dated `Previous:` changelog entries are left verbatim** — true when written.
+  PR B inherits **B5.3/B5.4** to update the one "current DCs" note per doc.
+- **A7 — `terms-and-conditions.md` deliberately NOT edited.** Its claim is defensible as
+  written (web-2 never served the Web Platform), and the CLO-signed
+  `knowledge-base/legal/tc-version-bump-policy.md` makes **any non-cosmetic T&C edit Tier 2
+  "clarifying" → BUMP REQUIRED**, forcing every user to re-accept and closing live WS
+  sessions. Not worth consent fatigue for a host being deleted. `TC_VERSION` 2.4.0 and
+  `TC_DOCUMENT_SHA` untouched; the file is byte-identical to main.
+  *(Note: `legal-doc-shas.ts` has **no `terms-and-conditions` key** — the T&C SHA lives in
+  `tc-version.ts` and is written to the WORM consent ledger.)*
+
 **Not in PR A:** the ADR-068 amendment and the `model.c4` description fixes. Both
 describe the warm-standby posture, which is **true until the destroy lands** — amending
 them pre-destroy would make them lie in the other direction.
@@ -330,7 +355,13 @@ No `ssh` anywhere. Soak follow-through (2.9.1): n/a — verified synchronously.
   `hel1`. Anchor on the locative *construct*, not the bare token
   (`cq-assert-anchor-not-bare-token`):
   `grep -cE 'web-2[^.;]{0,25}(in|\(CX33,) \`hel1\`' article-30-register.md` == 0,
-  **and** `grep -cE 'web-2[^.;]{0,45}\`fsn1\`'` == 4 (all four clauses located).
+  **and** `grep -cE 'web-2[^.;]{0,45}\`fsn1\`'` == **6** (all four clauses located, plus
+  the annex row and PA-8(e)). *(Count corrected at /work 2026-07-16: this AC said **4**.
+  The as-written file has **6** — the annex row and PA-8(e) were added after the AC was
+  drafted, so the **AC was a stale plan-prose tally and the file was right**. Re-derived
+  from the as-written file with the command published above, per the plan's own
+  "counts must be derived from the as-written artifact" rule. The four clauses are PA-1
+  (d)/(e) and PA-2 (d)/(e).)*
   All **four** clauses (PA-1 (d)/(e), PA-2 (d)/(e)) reconciled.
   **v2 note — the first draft of this AC was itself the defect** (the exact
   false-failing absence-grep the panel warned about): `web-2.*(CX33|hel1)` matches the

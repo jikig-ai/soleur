@@ -36,7 +36,13 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > flagged for invoice verification in `expenses.md` — VERIFY on the next Supabase and
 > Proton invoices. **Method note:** the recurring defect is not any single row but that
 > `expenses.md` and this document drift silently — nothing gates an `active` ledger row
-> against a table line here. Filed as a follow-up.
+> against a table line here, so the drift is only ever caught by a human re-reading both.
+> Across both passes this cycle, Product COGS moved **$141.08 → $200.11 (+42%)** and the
+> COGS break-even **3 → 5 users**, entirely from rows that were already billing. Gate
+> proposed in **#6584**, which also carries two pre-existing gaps left un-fixed here: the
+> volume rows' FX basis disagrees with the host rows' ~1.08 EUR→USD basis by ~$0.35/mo,
+> and **web-1 and the registry have no Primary IPv4 row** (~$1.08/mo) though web-2,
+> inngest, and grok-dogfood each do. Both need invoice verification before booking.
 
 ## Monthly Burn
 

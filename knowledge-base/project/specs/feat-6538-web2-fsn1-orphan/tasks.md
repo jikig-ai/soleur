@@ -18,31 +18,80 @@ independent**. `Ref` never `Closes` — the remediation runs post-merge.
 
 Everything below is true **today**, independent of the retire. No gates, no sequencing.
 
-- [ ] **A1.1** — `knowledge-base/legal/article-30-register.md`: correct web-2's locative
+- [x] **A1.1** — `knowledge-base/legal/article-30-register.md`: correct web-2's locative
       `hel1 → fsn1` (live since #6393; §5(2) accuracy defect). Reconcile **all four**
       clauses — PA-1 (d)/(e) and PA-2 (d)/(e). *(Not two: v1 undercounted.)*
 - [x] **A1.2** — Verify AC-A1 (predicate corrected — the first draft false-failed on the
       *correct* text, since "web-2 CX33 in `fsn1`" matches `web-2.*CX33` and the relocation
       history legitimately contains `hel1`). Mutation-tested anchor:
       `grep -cE 'web-2[^.;]{0,25}(in|\(CX33,) \`hel1\`' <file>` == **0** (RED=2 on a reverted copy)
-      AND `grep -cE 'web-2[^.;]{0,45}\`fsn1\`' <file>` == **4**.
-- [ ] **A2.1** — `knowledge-base/legal/compliance-posture.md`: same locative correction.
+      AND `grep -cE 'web-2[^.;]{0,45}\`fsn1\`' <file>` == **6**.
+      *(Count corrected 2026-07-16: the plan said **4** — the four clauses PA-1 (d)/(e) +
+      PA-2 (d)/(e) — but the as-written file has **6**, because the annex row and PA-8(e)
+      were added after the AC was drafted. The file is right; the AC was a stale
+      plan-prose tally. Re-derived from the as-written file, command published above.)*
+- [x] **A2.1** — `knowledge-base/legal/compliance-posture.md`: same locative correction.
       **Do NOT delete the TS-1 row** (*"cross-tenant write threat class"*, #5274, OPEN,
       soak-gated) — a live compliance record.
-- [ ] **A2.2** — Verify AC-A2: `grep -c 'cross-tenant write threat class' knowledge-base/legal/compliance-posture.md` >= 1
-- [ ] **A3.1** — `knowledge-base/operations/expenses.md`: web-1 `15.37 → ~9.17`, spec
+- [x] **A2.2** — Verify AC-A2: `grep -c 'cross-tenant write threat class' knowledge-base/legal/compliance-posture.md` >= 1
+- [x] **A3.1** — `knowledge-base/operations/expenses.md`: web-1 `15.37 → ~9.17`, spec
       `160 GB → 80 GB` (cx33 = €8.49 / 80 GB — ledger prices the same SKU two ways).
-- [ ] **A3.2** — `expenses.md`: registry `CX33 / 9.17 → CX23 / ~5.93` (#6497/#6463).
-- [ ] **A3.3** — `expenses.md`: `grok-dogfood` — booked `approved-not-billing` / "Not
+- [x] **A3.2** — `expenses.md`: registry `CX33 / 9.17 → CX23 / ~5.93` (#6497/#6463).
+- [x] **A3.3** — `expenses.md`: `grok-dogfood` — booked `approved-not-billing` / "Not
       born" but **verified LIVE** (cx33, hel1, created 2026-07-16, 1 of 5 capped slots).
       Fix the row. Do not route a known-false row to #6460.
-- [ ] **A3.4** — Leave web-2's three rows intact (the host exists until PR B).
-- [ ] **A4.1** — `knowledge-base/finance/cost-model.md`: Product COGS currently omits
+- [x] **A3.4** — Leave web-2's three rows intact (the host exists until PR B).
+- [x] **A4.1** — `knowledge-base/finance/cost-model.md`: Product COGS currently omits
       web-2, registry, inngest (~$50/mo). Add them.
-- [ ] **A4.2** — Carry the standard `VERIFY actual draw on the next Hetzner invoice` caveat.
+- [x] **A4.2** — Carry the standard `VERIFY actual draw on the next Hetzner invoice` caveat.
+### A6 — PUBLIC legal docs (emergent; NOT in plan v2 — added 2026-07-16)
+
+The v2 plan scoped PR A to the **internal** register + ledger and never contemplated that
+the **public** docs users read also pin the hosting locative to Helsinki and name web-2.
+They have been inaccurate since #6393 (2026-07-13) — the same Art. 5(2) accuracy defect
+A1 fixes internally, on a far more exposed surface. Operator decision (2026-07-16): state
+the plane at the **EU** level rather than re-pin to two DCs, so the claim survives PR B
+and active-active-N (#6459) instead of rescheduling the defect.
+
+- [x] **A6.1** — 40 live claims corrected across `docs/legal/{gdpr-policy,privacy-policy,data-protection-disclosure}.md`,
+      the 3 Eleventy mirrors, and `knowledge-base/legal/data-processing-agreement-template.md`
+      (§11.1 + Schedule 2). Hosting **plane** → EU; **workspace data / user-serving host /
+      per-turn telemetry stay `Helsinki, Finland`** (specific AND true).
+- [x] **A6.2** — The **6 dated `Previous:` changelog entries left verbatim.** They were
+      true when written (#6393 moved web-2 *after* them); rewriting a dated legal record
+      falsifies it. New `**Last Updated:**` entry prepended; prior demoted to `Previous:`.
+- [x] **A6.3** — Removed the assertion that a **dedicated per-workspace git-data host**
+      exists. It never has — verified against the live Hetzner API (5 servers, no
+      `soleur-git-data`, no git-data volume). Second Art. 5(2) defect, same sentences.
+- [x] **A6.4** — **`terms-and-conditions.md` deliberately untouched**, byte-identical to
+      main. Any non-cosmetic edit is Tier 2 *clarifying* → **BUMP REQUIRED** under the
+      CLO-signed `knowledge-base/legal/tc-version-bump-policy.md`, forcing every user to
+      re-accept. Its claim is defensible as written (web-2 never served the Web Platform).
+      `TC_VERSION` 2.4.0 + `TC_DOCUMENT_SHA` untouched.
+- [x] **A6.5** — Repinned the **3** changed SHAs in `apps/web-platform/lib/legal/legal-doc-shas.ts`.
+      *(Note: that map has **no `terms-and-conditions` key** — the T&C SHA lives in
+      `apps/web-platform/lib/legal/tc-version.ts` as `TC_DOCUMENT_SHA` and is load-bearing:
+      it is written to the WORM consent ledger.)*
+- [x] **A6.6** — Verified with the **real gates**, not by inspection:
+      `bash apps/web-platform/scripts/check-tc-document-sha.sh` → exit 0;
+      `vitest run test/legal-doc-consistency.test.ts test/legal-doc-shas-guard.test.ts` → 19/19.
+      The consistency gate caught a real miss: the mirrors carry a `page-hero` `<p>` (line
+      11) with its **own** `Last Updated` date, asserted equal to source.
+- [x] **A6.7** — Locative check is **anchored + mutation-tested**, not a bare
+      `grep -c 'Helsinki'` — which false-matches the correction notes' own quoted-historical
+      prose (`cq-assert-anchor-not-bare-token`; hit for real here). Strips double-quoted
+      spans + skips `**Last Updated:**` lines. GREEN on corrected files; **RED (3 hits)**
+      when `gdpr-policy.md` is reverted to main.
+
+### A5 — exit
+
 - [ ] **A5.1** — `bash scripts/test-all.sh` green (the real runner per `package.json`).
-- [ ] **A5.2** — PR body: `Ref #6538` / `Ref #6463`. **Never `Closes`.**
+- [x] **A5.2** — PR body: `Ref #6538` / `Ref #6463`. **Never `Closes`.**
 - [ ] **A5.3** — `/soleur:review` → `/soleur:ship`.
+- [x] **A5.4** — **Threshold stays `single-user incident`; NOT `none`.** The pre-A6 PR was
+      internal-docs-only and `none` would have been right. A6 edits the **public privacy
+      policy + GDPR policy + DPD** — that IS the user surface, and it changes what users
+      are told about where their data lives. `user-impact-reviewer` must fire.
 
 ---
 
@@ -139,6 +188,32 @@ Everything below is true **today**, independent of the retire. No gates, no sequ
       amendment note referencing #6538 — do **not** silently strike (good Art. 30 practice
       keeps the audit trail; the token must survive).
 - [ ] **B5.2** — `expenses.md`: remove web-2's three rows.
+- [ ] **B5.3** — **PUBLIC legal docs (added 2026-07-16 — PR A gap; v2 plan never
+      contemplated that the public docs name web-2).** PR A restated the hosting plane at
+      the **EU** level, so the structural claim (*"hosted on Hetzner data centres in the
+      EU"*) **survives the destroy untouched**. But each doc carries **one** "current EU
+      data centres" note that names web-2/`fsn1` explicitly; those go stale the moment the
+      host dies. Update that single note per doc — 3 canonical + 3 Eleventy mirrors:
+      `docs/legal/{gdpr-policy,privacy-policy,data-protection-disclosure}.md` and
+      `plugins/soleur/docs/pages/legal/` — plus the `knowledge-base/legal/data-processing-agreement-template.md`
+      Schedule 2 row and §11.1 EEA list. **Then repin the 3 SHAs** in
+      `apps/web-platform/lib/legal/legal-doc-shas.ts` and re-run
+      `bash apps/web-platform/scripts/check-tc-document-sha.sh` (must exit 0) +
+      `vitest run test/legal-doc-consistency.test.ts test/legal-doc-shas-guard.test.ts`.
+      ⚠️ **Mirrors carry a `page-hero` `<p>` on line 11 with its OWN `Last Updated` date**
+      — the consistency test asserts hero-vs-body-vs-source date equality and WILL fail if
+      you update the body only (it caught exactly this in PR A).
+      ⚠️ **Do NOT touch `docs/legal/terms-and-conditions.md`** — PR A deliberately left it
+      byte-identical to main. Any non-cosmetic edit is Tier 2 "clarifying" under the
+      CLO-signed `knowledge-base/legal/tc-version-bump-policy.md` → **BUMP REQUIRED** →
+      forces every user to re-accept. Its claim is already true post-destroy.
+      ⚠️ **Do NOT rewrite the dated `Previous:` changelog entries** — they were true when
+      written. Add a NEW `**Last Updated:**` entry and demote the current one.
+- [ ] **B5.4** — Verify with the anchored check (NOT a bare `grep -c 'Helsinki'`, which
+      **false-matches the correction notes' own quoted-historical prose** — PR A hit this;
+      `cq-assert-anchor-not-bare-token`). Strip double-quoted spans and skip
+      `**Last Updated:**` lines before asserting. Mutation-test it: reverting one doc to
+      its pre-fix state MUST go RED.
 
 ### B6 — Merge, apply, verify, close
 
@@ -166,6 +241,18 @@ Everything below is true **today**, independent of the retire. No gates, no sequ
 ---
 
 ## Follow-ups (filed; out of scope here)
+
+- **#6584** — gate `expenses.md` `active` rows against the `cost-model.md` tables. The
+  root cause of this cycle's repeated under-counts: nothing couples the two, so COGS
+  drifted **$141.08 → $200.11 (+42%)** on rows that were already billing. Also carries the
+  volume-FX (~$0.35) + missing web-1/registry IPv4 (~$1.08) gaps. *(Net-flow: consolidated
+  3 candidates into 1 tracker — same subsystem, same root cause.)*
+- **#6585** — the public Eleventy legal mirrors are stale vs canonical and are **missing
+  disclosure bullets** (Turn summaries, `workspace_activity`, `kb_files`, workspace-logo,
+  message-attachments, BYOK-audit-log, beta-CRM). The published privacy policy discloses
+  *less* processing than the canonical — the exposed direction. `check-tc-document-sha.sh`
+  defers body-equivalence for the 8 non-T&C docs; that deferral has aged badly. Remediate,
+  **then turn the gate on**. Pre-existing; not introduced by this branch.
 
 - **#6570** — git-data pinned to `cax11`, orderable 0/3 EU DCs. Root blocker of
   active-active. **Next brainstorm.**
