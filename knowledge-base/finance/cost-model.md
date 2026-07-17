@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-16
+last_updated: 2026-07-17
 last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: cfo
@@ -62,6 +62,44 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > the tabling is for completeness, not because it moves the model. Product COGS unchanged
 > at $200.11. Re-derive when the first real monthly xAI draw lands.
 
+> **[2026-07-17 Review note]** Out-of-cycle correction against `expenses.md@2026-07-17`
+> (#6589, PR #6582). **Ledger-accuracy, not new spend** — same class as #6538, and the
+> same root cause: a figure nothing gated. **The defect:** the Sentry line carried an
+> **unverified estimate for five weeks**. The 2026-06-11 note booked "~$11/mo expected
+> PAYG (14 backfilled × ~$0.78)" and wrote its own TODO — "verify against the actual
+> 2026-06-17 invoice." That invoice came and went; the TODO was never closed, and the
+> estimate hardened into a cited number carrying an `@2026-06-11` anchor. A live Sentry
+> API read now closes it. **True composition is fixed and monitor-count-driven, not an
+> estimate:** $29 base + $42.22 PAYG (**49** × $0.78 cron-monitor seats + **4** × $1.00
+> uptime monitors) = **$71.22**. The estimate was low on both terms — it counted 40
+> monitors, not 49, and omitted uptime monitors entirely. Sentry line **$40.00 →
+> $71.22** (+78%), Product COGS **$200.11 → $231.33** (+15.6%), all-in burn **$619.96 →
+> $651.18**. R&D unchanged at $419.85. **The all-in break-even shifts 13 → 14 users** at
+> both $49 (⌈651.18 ÷ 49⌉) and $48 (⌈651.18 ÷ 48⌉) — the first break-even move since
+> #6538. COGS-scope break-even is **unchanged at 5** at both prices. All-in margin at
+> 50-user scale **74.70% → 73.42%** (gross) / **74.17% → 72.87%** (Stripe-net); the
+> COGS-based margin **91.83% → 90.56%**, walking the retired "~93%" framing (§5) down a
+> second time to **~91%**. Per-user marginal cost is unchanged (~$0.91) — Sentry is
+> flat-per-monitor, not per-user. **The structural point, which outlives this
+> correction:** `monitorSeats.reserved = 1` and `uptime.reserved = 1`, and Sentry sells
+> no reserved monitor volume (getsentry/sentry#73359, closed unshipped). So this is the
+> one COGS row with **no plan tier absorbing growth** — every scheduled workflow
+> engineering ships adds $0.78/mo forever, bounded only by the $50 PAYG cap, of which
+> **$7.78 (≈9 monitors) remains**. At the cap, the failure is not a bill — **every
+> monitor deactivates at once at renewal and check-ins are silently dropped** (#3958),
+> so the model's next Sentry event is an *observability* outage, not a cost overrun.
+> Next cliff **2026-08-16** (`onDemandPeriodEnd`). The $50 → $75 cap raise attempted in
+> PR #6582 is **post-merge and deliberately NOT modeled here**; the $50 cap is current,
+> and if it lands the headroom re-derives, not the burn. **Method note:** #6584's
+> proposed parity gate compares this document's lines to `active` ledger rows — it
+> would **not** have caught this one. The row was present, tabled, and anchored; only
+> its *amount* was fiction. A parity gate checks existence; this needed a gate on
+> **unverified estimates that outlive their own verify-by date**. Three such estimates
+> remain live and cited here: **Resend Pro** ($20, since 2026-06-16), **Proton Mail**
+> ($14, since 2026-07-16), and **all Hetzner catalog-derived amounts** (~$50, since
+> 2026-07-16) — each carrying a "verify on next invoice" caveat with no date and no
+> owner. Filed as a scope note on #6584.
+
 ## Monthly Burn
 
 Monthly burn is split into two scopes: **R&D / dev tooling** (investments that accelerate engineering, not per-user product delivery) and **product COGS** (infrastructure and services consumed in running the product for paying users). This split is load-bearing for break-even math and for the gross-margin-at-scale claim in §5. Reporting a single blended number either collapses under scrutiny (the small-number framing omits real recurring costs) or misrepresents product economics (the large-number framing taxes product margins with engineering-accelerator spend). The split is defensible and carries forward cleanly into pricing conversations.
@@ -119,10 +157,10 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Plausible Analytics (Growth) | 9.00 [expenses.md@2026-04-19] | `expenses.md` (EUR 9) |
 | Anthropic API (ux-audit cron) | 15.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Cloudflare `soleur.ai` domain (amortized $70/yr ÷ 12) | 5.83 [expenses.md@2026-04-19] | `expenses.md` |
-| Sentry Team (error tracking + cron monitors, $29 base + ~$11 PAYG draw) | 40.00 [expenses.md@2026-06-11] | `expenses.md` |
+| Sentry Team (error tracking + cron monitors, $29 base + $42.22 PAYG: 49 × $0.78 cron-monitor seats + 4 × $1.00 uptime monitors) | 71.22 [expenses.md@2026-07-17] | `expenses.md` (live-verified — see note) |
 | Resend Pro (outbound + transactional email, 50K emails/mo) | 20.00 [expenses.md@2026-06-16] | `expenses.md` (estimate — verify on next invoice) |
 | Proton Mail Workspace Standard (2 users — `ops@soleur.ai` intake) | 14.00 [expenses.md@2026-07-16] | `expenses.md` (estimate — confirm exact monthly rate from Proton billing) |
-| **Subtotal Product COGS** | **200.11 [expenses.md@2026-07-16]** | |
+| **Subtotal Product COGS** | **231.33 [expenses.md@2026-07-17]** | |
 
 > **Proton Mail is COGS, not overhead (#6538, 2026-07-16).** The row is easy to read as
 > G&A — it is not. Proton delivers `ops@soleur.ai`, the company operational address that
@@ -135,11 +173,24 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 > make engineering faster). Flat-rate, like Supabase Pro and Sentry — COGS does not
 > require per-user linearity.
 
+> **Sentry line is monitor-count-driven, and the count is uncapped (#6589, 2026-07-17).**
+> Unlike every other flat-rate COGS row, this line **moves when engineering ships a
+> scheduled workflow**. `monitorSeats.reserved = 1` and `uptime.reserved = 1`
+> (live-verified via the Sentry API 2026-07-17), and no purchasable reserved volume
+> exists (getsentry/sentry#73359, closed unshipped) — so monitors 2..n each bill
+> $0.78/mo as PAYG with no plan tier to absorb them. The $50/mo `onDemandMaxSpend`
+> cap is the only ceiling, and $42.22 of it is drawn: **~$7.78/mo of headroom, ≈9
+> more monitors**. This is not a soft limit. At `onDemandPeriodEnd` (**2026-08-16**),
+> if PAYG cannot cover all active monitors, **every monitor deactivates at once** and
+> check-ins are silently dropped (#3958). The cap raise ($50 → $75) attempted in this
+> PR is **post-merge and not modeled here** — the $50 cap is current. Re-derive this
+> line whenever the active monitor count changes.
+
 **Totals:**
 
-- **Product COGS:** ~$200/month [expenses.md@2026-07-16]
+- **Product COGS:** ~$231/month [expenses.md@2026-07-17]
 - **R&D / Dev Tooling:** ~$420/month [expenses.md@2026-07-16]
-- **All-in recurring burn:** ~$620/month [expenses.md@2026-07-16]
+- **All-in recurring burn:** ~$651/month [expenses.md@2026-07-17]
 
 Not counted (free-tier, test-mode, or metered-at-sub-cent; trigger-based upgrades listed in §4): Stripe, Better Stack (uptime free-tier; Responder tier still deferred), Buttondown, Doppler, LinkedIn, Bluesky, X API free tier, **Cloudflare R2 (cla-evidence)** — `active` and pay-per-use ($0.015/GB-mo + $0.36/M writes) but sub-cent/mo at realistic scale, so it is ledgered at 0.00 and not tabled. *(Scope of this list widened 2026-07-16 (#6538) from "free-tier or test-mode" to admit the metered-sub-cent case: R2 is `active` and fits neither prior label, so it fell through both the tables and this list. #6584's parity gate must treat this line as the authoritative not-counted set.)*
 
@@ -189,8 +240,8 @@ Price anchor: **$49/month** per Pro tier (`product/pricing-strategy.md`). Math i
 
 | Scope | Burn (USD/mo) | Price ($49) | Users to break even |
 |-------|--------------:|------------:|--------------------:|
-| Product COGS | 200.11 [expenses.md@2026-07-16] | 49 | ⌈200.11 ÷ 49⌉ = **5 users** |
-| All-in (COGS + R&D / Dev Tooling) | 619.96 [expenses.md@2026-07-16] | 49 | ⌈619.96 ÷ 49⌉ = **13 users** |
+| Product COGS | 231.33 [expenses.md@2026-07-17] | 49 | ⌈231.33 ÷ 49⌉ = **5 users** |
+| All-in (COGS + R&D / Dev Tooling) | 651.18 [expenses.md@2026-07-17] | 49 | ⌈651.18 ÷ 49⌉ = **14 users** |
 
 ### Stripe fee drag
 
@@ -202,10 +253,10 @@ Effective **net revenue per user after Stripe fees: ~$48/month** (EU floor) to ~
 
 | Scope | Burn | Net price ($48) | Users to break even |
 |-------|-----:|----------------:|--------------------:|
-| Product COGS | 200.11 [expenses.md@2026-07-16] | 48 | ⌈200.11 ÷ 48⌉ = **5 users** |
-| All-in | 619.96 [expenses.md@2026-07-16] | 48 | ⌈619.96 ÷ 48⌉ = **13 users** |
+| Product COGS | 231.33 [expenses.md@2026-07-17] | 48 | ⌈231.33 ÷ 48⌉ = **5 users** |
+| All-in | 651.18 [expenses.md@2026-07-17] | 48 | ⌈651.18 ÷ 48⌉ = **14 users** |
 
-Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **13 users** at the current $619.96 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap). The COGS-scope count shifts 4 → 5 (⌈200.11 ÷ 49⌉ = ⌈200.11 ÷ 48⌉ = 5). Stripe fees still bite into gross margin at scale (see §5).
+Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **14 users** at the current $651.18 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap; the 2026-07-17 Sentry correction moved both counts 13 → 14 together). The COGS-scope count is **unchanged at 5** (⌈231.33 ÷ 49⌉ = ⌈231.33 ÷ 48⌉ = 5). Stripe fees still bite into gross margin at scale (see §5).
 
 ## Scaling Triggers
 
@@ -219,7 +270,7 @@ Each row is a trigger that forces a spend upgrade. "Upgrade delta" is the monthl
 | Resend Pro | $20.00 [expenses.md@2026-06-16] (active; outbound + transactional, 50K emails/mo) | >50K emails/mo | Resend Scale-tier overage (delta TBD at trigger) | `expenses.md` (estimate — verify on next invoice) |
 | Buttondown | $0 [expenses.md@2026-04-19] (free tier) | >100 newsletter subscribers | +$9.00/mo (Basic) | `expenses.md` |
 | Plausible Analytics | $9.00 [expenses.md@2026-04-19] (Growth, EUR 9) | >10K pageviews/mo | Tier upgrade on Plausible Growth ladder — delta TBD at trigger | `expenses.md` |
-| Sentry Team | $40.00 [expenses.md@2026-06-11] (active; $29 base + ~$11 PAYG drawn for 40 cron monitors, PR #5161) | Further cron-monitor growth beyond the 40 active | +$0–39/mo residual PAYG headroom (`onDemandMaxSpend` $50 cap, see #3958) | `expenses.md` |
+| Sentry Team | $71.22 [expenses.md@2026-07-17] (active; $29 base + $42.22 PAYG drawn for 49 cron monitors + 4 uptime monitors, live-verified) | Further cron-monitor growth beyond the 49 active — each new scheduled workflow adds $0.78/mo, uncapped (`reserved = 1`) | +$7.78/mo residual PAYG headroom only (**≈9 more monitors**) before the `onDemandMaxSpend` $50 cap binds; at the cap, **all monitors deactivate at renewal** (next cliff 2026-08-16, see #3958) | `expenses.md` |
 | Better Stack | $0 [expenses.md@2026-05-21] (uptime free tier; Responder $29 deferred) | First paying customer or first email-only-routing incident (per #3960) | +$29/mo (Responder tier) | `expenses.md` |
 | Claude Code Max 20x token ceiling | $400.00 [expenses.md@2026-04-19] (2 seats, flat) | Cumulative loop usage hits the Max-20x rolling token/usage ceiling → forces a 3rd seat or API spillover | +$200/mo (seat 3) or metered API overage | #5086 exposure note — no automated quota signal exists today; re-evaluate on sustained rate-limit/slowdown symptoms |
 
@@ -233,32 +284,32 @@ Worked example: **50 paying users × $49/month = $2,450 MRR**. Two margin framin
 
 ```
 Revenue:           $2,450
-Product COGS:      $200.11 [expenses.md@2026-07-16]
-Gross profit:      $2,249.89
-Gross margin:      2,249.89 / 2,450 = 91.83%
+Product COGS:      $231.33 [expenses.md@2026-07-17]
+Gross profit:      $2,218.67
+Gross margin:      2,218.67 / 2,450 = 90.56%
 ```
 
 ### Against All-in Burn (the honest founder-economics framing)
 
 ```
 Revenue:           $2,450
-All-in burn:       $619.96 [expenses.md@2026-07-16]
-Contribution:      $1,830.04
-Margin (all-in):   1,830.04 / 2,450 = 74.70%
+All-in burn:       $651.18 [expenses.md@2026-07-17]
+Contribution:      $1,798.82
+Margin (all-in):   1,798.82 / 2,450 = 73.42%
 ```
 
 ### Stripe Fee Drag
 
 At 50 users × ~$1/user/mo Stripe fee (EU floor) = **$50/mo in fees**. Effective net revenue: $2,450 − $50 = **$2,400**.
 
-- Adjusted COGS-based margin: ($2,400 − $200.11) / $2,400 = **91.66%**
-- Adjusted all-in margin: ($2,400 − $619.96) / $2,400 = **74.17%**
+- Adjusted COGS-based margin: ($2,400 − $231.33) / $2,400 = **90.36%**
+- Adjusted all-in margin: ($2,400 − $651.18) / $2,400 = **72.87%**
 
-The original "93% gross margin" claim is closest to the COGS-based number, but that number is now **~92%, not ~93%** — the 2026-07-16 re-derivation (#6538) has walked it down from 92.81% as previously-untabled COGS rows landed, and it elides R&D / dev-tooling burn besides. The more honest founder-economics number is the all-in margin (**~75%**). Both should be cited side-by-side whenever the gross-margin claim is made; COGS-only margin without the R&D context misrepresents the operating picture. **The "93%" framing is now stale on its own terms and should be retired from external use rather than re-rounded.**
+The original "93% gross margin" claim is closest to the COGS-based number, but that number is now **~91%, not ~93%** — the 2026-07-16 re-derivation (#6538) walked it down from 92.81% as previously-untabled COGS rows landed, and the 2026-07-17 Sentry correction (#6589) walked it down again to 90.56%, in both cases on spend that was already being drawn. It elides R&D / dev-tooling burn besides. The more honest founder-economics number is the all-in margin (**~73%**). Both should be cited side-by-side whenever the gross-margin claim is made; COGS-only margin without the R&D context misrepresents the operating picture. **The "93%" framing is now stale on its own terms and should be retired from external use rather than re-rounded.**
 
 ## Pricing Gate #4 Status
 
-This document addresses the **affordability** dimension of Pricing Gate #4 (`knowledge-base/product/pricing-strategy.md:152` — "Infrastructure ready | Cloud sync, hosted execution, and analytics dashboard are buildable (not necessarily built) | Not assessed"). The affordability side is now assessed: product COGS is ~$200/mo at current ledger [expenses.md@2026-07-16], break-even is **5 paying users** (COGS scope) / 13 (all-in, gross-price and Stripe-net), gross margins are **~75% all-in (~92% COGS-scope)** at 50-user scale, and the BYOK architectural commitment keeps per-user variable cost near zero. **Cite the all-in figure, not the COGS-scope one** — §5 retires the "~93%" framing, and this section is the one most likely to be quoted outward.
+This document addresses the **affordability** dimension of Pricing Gate #4 (`knowledge-base/product/pricing-strategy.md:152` — "Infrastructure ready | Cloud sync, hosted execution, and analytics dashboard are buildable (not necessarily built) | Not assessed"). The affordability side is now assessed: product COGS is ~$231/mo at current ledger [expenses.md@2026-07-17], break-even is **5 paying users** (COGS scope) / 14 (all-in, gross-price and Stripe-net), gross margins are **~73% all-in (~91% COGS-scope)** at 50-user scale, and the BYOK architectural commitment keeps per-user variable cost near zero. **Cite the all-in figure, not the COGS-scope one** — §5 retires the "~93%" framing, and this section is the one most likely to be quoted outward.
 
 The **buildability** dimension — whether cloud sync, hosted agent execution, and the analytics dashboard are actually buildable within a reasonable horizon — remains with **CPO / CTO**. That assessment is not closed by this document.
 
