@@ -31,8 +31,8 @@
 #     delivers the handler + the infra-config-install escalation helper + the
 #     sudoers grant, which the webhook path cannot self-deliver (chicken-and-egg,
 #     #4811). The GitHub-hosted runner's egress IP is not in var.admin_ips, so this
-#     job bridges SSH through the existing CF Tunnel SSH route (tunnel.tf:
-#     ssh://localhost:22 ingress + CF Access ci_ssh service token): install
+#     job bridges SSH through the existing CF Tunnel SSH route (tunnel.tf's `ssh.`
+#     ingress, origin-relative to web-1 since #6594 + CF Access ci_ssh service token): install
 #     cloudflared, open a `cloudflared access tcp` localhost forward, and add an
 #     `iptables -t nat OUTPUT REDIRECT` rule rewriting SERVER_IP:22 → 127.0.0.1:2222
 #     (transparent to terraform's Go SSH client, which ignores ~/.ssh/config —
