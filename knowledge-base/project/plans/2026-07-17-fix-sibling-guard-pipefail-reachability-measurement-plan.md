@@ -12,6 +12,62 @@ revision: v2 — v1's apparatus was cut after 6-agent review + advisor consult (
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed). No `spec.md` exists for
 > this branch; the input record is the merged #6572 spec dir's `decision-challenges.md`.
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-17 · **Panel:** dhh, kieran, code-simplicity, architecture-strategist,
+spec-flow-analyzer, cto (devex) + a scoped `fable` advisor consult + learnings-researcher.
+
+**v1 → v2 was a cut, not a polish.** Both review panels fired on the same scope — the
+simplification panel called the apparatus over-built; the correctness panel found the apparatus
+could not work. Per `plan-review`'s own rule (*both panels on one scope ⇒ prefer delete over fix*),
+v1's classifier, 284-row provenance ledger, and 11-rung attestation were cut. Every finding below
+was **reproduced by command** before being acted on.
+
+**What the deepen pass changed:**
+
+1. **Cut the apparatus.** R1 eliminates ≤16/284, R2 ~0 → R3 decides everything, and R3 is
+   undecidable for the dominant var-fed class without the byte model #6573 retracted. The ledger
+   would have been majority-`UNDECIDED` by construction (Reconciliation rows 7-8).
+2. **Found the partition nobody had run.** 238 of 284 sites are `*.test.sh` internals; only **46
+   are production, across 11 files** (row 9). That makes the production class tractable *without*
+   the undecidable window analysis — the useful split was not the one anyone was arguing about.
+3. **Caught the plan committing its own cardinal sin.** v1's "202 `|| true` lines make this class
+   material" had **zero** overlap with the corpus under test (row 5) — a syntax count sold as a
+   relevance count, inside the plan condemning exactly that. v1's producer-kind row summed to 279,
+   not 284, and carried no command (row 6). Both cut.
+4. **Found that the measurement environment is load-bearing and unnamed.** `grep` in this session
+   is a **function shadowing GNU grep with ugrep**, and `ugrep -q` does not early-exit. This
+   session's own first probes read 0/200 and 0/50 and would have "proved" the corpus incapable —
+   a **false all-clear**, worse than the 230 over-claim. Now AC1's load-bearing negative arm.
+5. **Corrected two false premises.** v1 claimed `infra-validation.yml` runs shellcheck (it does not
+   — all 16 hits are `# shellcheck source=` directives in comments, row 10) and that a new script
+   could "self-assert its own registration" (vacuous — an unregistered script never runs; the
+   precedent is a **cross-file** assertion).
+6. **Made FR4 honest twice.** The brief's "capture-once closes the empty-read-back hole" is
+   imprecise (the file itself calls the FATAL line *"NOT a fail-open guard"*; the **pairing rung**
+   closes it), and the hole is **orthogonal to the pipe conversion** — measured identical under
+   both forms. FR4 moves into `scan-workflow-mutation.test.sh`, which already owns the sandbox.
+7. **Made the escalation executable.** v1 required CPO sign-off "before `/work`" for a trigger only
+   knowable *inside* `/work` — a gate demanding time travel. Now a security-rung **auto-forfeit**.
+8. **Corrected the blast-radius call.** The repo is **PUBLIC**; a per-site index of live-vacuous
+   security rungs is a targeting artifact. v1's "the ledger is inert" was wrong.
+
+**Gates:** 4.6 User-Brand Impact **PASS** (`aggregate pattern`) · 4.7 Observability **PASS** (5
+fields, no placeholders, no `ssh` in the discoverability command) · 4.8 PAT-shaped **PASS** (none) ·
+4.9 UI-wireframe **SKIP** (0 UI-surface paths) · 4.55 Downtime **SKIP** (no serving surface) ·
+4.5 Network-outage **SKIP** — the word `timeout` appears only as `timeout-minutes` (a CI budget),
+not a connectivity symptom; the keyword trigger is a false positive here.
+
+**Citations verified live:** `hr-verify-repo-capability-claim-before-assert` + `cq-test-fixtures-synthesized-only`
+both ACTIVE in AGENTS.md · ADR-084 exists · #6572 CLOSED, PR #6573 MERGED, #6578 **OPEN**, #6536
+CLOSED — all resolve to the cited type and state.
+
+**Open decision-challenges:** UC-1 (two-class vs `UNDECIDED`), UC-2 (the FR4 premise correction,
+applied), UC-3 (**dhh + cto argue the measurement should not happen at all** — convert the class
+blind). All recorded for operator reversal; none auto-applied.
+
+---
+
 ## Overview
 
 PR #6573 fixed 7 sites shaped `<producer> | grep -q P` under `set -uo pipefail`. `grep -q` exits on
