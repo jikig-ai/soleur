@@ -215,6 +215,10 @@ jobs:
           fi
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history: the create gate diffs this PR against its base to
+          # decide whether a planned create is explained by an added block.
+          fetch-depth: 0
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
@@ -263,6 +267,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -uo pipefail
           # Read-only: no -out, so nothing here can be applied. The plan is
@@ -290,15 +295,31 @@ jobs:
           counts=$(terraform show -json tfplan | \
             jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-sentry.jq")
           resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
+          resource_creates=$(echo "$counts" | jq -r '.resource_creates')
           nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
           # Fail-closed numeric validation: an empty value from a jq failure
           # would silently evaluate false in the `-gt 0` test below and let a
           # destroying PR through green.
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}')."
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] \
+             || [[ ! "$resource_creates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', resource_creates='${resource_creates}', nested_deletes='${nested_deletes}')."
             exit 1
           fi
-          destroy_count=$((resource_deletes + nested_deletes))
+
+          # ── CREATE gate (#6589) ──────────────────────────────────────────
+          # Runs BEFORE the destroy gate and has NO [ack-destroy] bypass: an
+          # unexplained create is a different failure from an intended delete,
+          # and typing one ack must not wave through the other. Diff-matched,
+          # not blanket-acked — the normal add-a-monitor flow passes silently.
+          if [[ "$resource_creates" -gt 0 ]]; then
+            terraform show -json tfplan \
+              | jq -r '[.resource_changes[] | select(.change.actions == ["create"]) | .address] | .[]' \
+              > /tmp/sentry-creates.txt
+            git -C "${GITHUB_WORKSPACE}" diff "origin/${BASE_REF}...HEAD" \
+              -- 'apps/web-platform/infra/sentry/*.tf' > /tmp/sentry-tf.diff
+            bash "${GITHUB_WORKSPACE}/scripts/sentry-create-gate.sh" \
+              /tmp/sentry-creates.txt /tmp/sentry-tf.diff
+          fi
 
           if [[ "$destroy_count" -eq 0 ]]; then
             echo "sentry destroy gate: PASS (plan destroys nothing)"
