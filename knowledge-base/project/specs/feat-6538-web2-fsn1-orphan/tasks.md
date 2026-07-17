@@ -85,7 +85,9 @@ and active-active-N (#6459) instead of rescheduling the defect.
 
 ### A5 — exit
 
-- [ ] **A5.1** — `bash scripts/test-all.sh` green (the real runner per `package.json`).
+- [x] **A5.1** — `bash scripts/test-all.sh` green — **178/178 suites, exit 0** (2026-07-16).
+      *(Read the runner's own summary + `EXIT=$?`, not the harness's background-task
+      notification: that reports the trailing command's exit and is always 0.)*
 - [x] **A5.2** — PR body: `Ref #6538` / `Ref #6463`. **Never `Closes`.**
 - [ ] **A5.3** — `/soleur:review` → `/soleur:ship`.
 - [x] **A5.4** — **Threshold stays `single-user incident`; NOT `none`.** The pre-A6 PR was
