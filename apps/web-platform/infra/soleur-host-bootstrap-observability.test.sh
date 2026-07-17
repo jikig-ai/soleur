@@ -162,12 +162,24 @@ else
 fi
 
 # ── AC6b (no tolerance inversion + composite trap) ──
-# Bare currently-tolerated commands keep their disposition (mount keeps || true; the
-# cloudflared apt lines are NOT wrapped in a fresh set -e + exit 1 block).
-if grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\* /mnt/data \|\| true' "$CI"; then
-  ok "AC6b: volume mount retains '|| true' continuation (no inversion)"
+# Bare currently-tolerated commands keep their disposition (the /mnt/data mount stays survivable;
+# the cloudflared apt lines are NOT wrapped in a fresh set -e + exit 1 block).
+#
+# #6604 RE-POINT (Q6/C10): the /mnt/data mount was pinned from the ambiguous scsi-0HC_Volume_*
+# glob to the stable by-id device (once the LUKS volume attaches the glob binds the wrong device).
+# The survivability this AC protects is NOT inverted — it is STRENGTHENED: it moved from the
+# single runcmd `|| true` into `nofail` in the fstab line, which survives EVERY boot (not just the
+# one runcmd pass), and the runcmd mount chain STILL ends non-fatal (`|| soleur-boot-emit … || true`,
+# a pageable-but-survivable degrade). Assert (a) the bare-glob mount is GONE, (b) the mount is
+# by-id-pinned and still ends `|| true`, (c) fstab carries `nofail`. Anchored on the pin construct
+# + `nofail`, not a bare token (cq-assert-anchor-not-bare-token).
+if grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\* /mnt/data' "$CI"; then
+  no "AC6b: the ambiguous scsi-0HC_Volume_* glob mount for /mnt/data must be REMOVED (#6604 pin by-id)"
+elif grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\$\{workspaces_volume_id\} /mnt/data \|\| soleur-boot-emit workspaces_mount fatal \|\| true' "$CI" \
+  && grep -qE 'scsi-0HC_Volume_\$\{workspaces_volume_id\} /mnt/data ext4 defaults,nofail ' "$CI"; then
+  ok "AC6b: /mnt/data mount pinned by-id + fstab nofail; survivability strengthened, not inverted"
 else
-  no "AC6b: the volume mount must keep '|| true' (do not invert survivable→fatal)"
+  no "AC6b: /mnt/data mount must be by-id-pinned, end '|| true', and carry fstab 'nofail' (survivable, not fatal)"
 fi
 # plugin_seed + inngest keep a COMPOSITE trap that still calls cleanup.
 n_comp=$(grep -cE "trap 'rc=\\\$\?; cleanup;" "$CI" || true)

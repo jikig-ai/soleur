@@ -36,10 +36,15 @@ assert_not_symlink() {
   fi
 }
 
-# 1. The substrate MUST be on the block volume. cloud-init's runcmd mounts it by
-#    id; re-assert idempotently here (glob — this host has exactly one volume) and
-#    FAIL LOUD if it is not mounted (never write the bare repos to the root fs —
-#    that loses the reboot-durable fence guarantee).
+# 1. The substrate MUST be on the block volume. cloud-init mounts it by STABLE by-id device
+#    (cloud-init-git-data.yml:117 pins scsi-0HC_Volume_${git_data_volume_id}); this glob is only
+#    a degraded-remount FALLBACK reached iff that pinned mount was lost. #6604 note: the
+#    glob-ambiguity #6604 fixes ("once a LUKS volume attaches beside the LIVE plaintext /mnt/data,
+#    the glob binds the wrong device") is a WEB-1 condition — it does NOT bite here. On the
+#    git-data host the plaintext mount is already by-id-pinned at boot, and if this fallback runs
+#    on the 2-volume set it FAILS LOUD (a multi-device `mount` errors → the mountpoint check below
+#    exits 1), never silently mounting the wrong volume. The LUKS store is selected by an explicit
+#    `cryptsetup isLuks` discriminator below (§1b), not a positional glob.
 mkdir -p "$GIT_DATA_ROOT"
 if ! mountpoint -q "$GIT_DATA_ROOT"; then
   log "volume not mounted at $GIT_DATA_ROOT — attempting mount"
@@ -67,6 +72,10 @@ if ! mountpoint -q "$LUKS_ROOT"; then
       log "FATAL: GIT_DATA_LUKS_KEY empty — refusing to unlock the LUKS cutover volume unencrypted"
       exit 1
     }
+    # #6604 note: this glob is SAFE by construction — the loop selects the LUKS device by an
+    # explicit `cryptsetup isLuks` discriminator, so a second (plaintext) volume in the set is
+    # skipped, not mis-bound. This is the CORRECT form of the "which device is LUKS" predicate;
+    # the web-1 ambiguity #6604 fixes is the INVERSE (a raw-glob mount with no discriminator).
     luks_dev=""
     for dev in /dev/disk/by-id/scsi-0HC_Volume_*; do
       [[ -e "$dev" ]] || continue
