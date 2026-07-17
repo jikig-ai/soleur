@@ -14,7 +14,14 @@
 
 set -euo pipefail
 
-INFRA_DIR="${INFRA_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Resolve the infra dir from THIS script's own location — absolute and
+# CWD-independent. Do NOT honor a relative $INFRA_DIR override (#6595): the workflow
+# exports INFRA_DIR=apps/web-platform/infra AND runs this step with
+# working-directory=$INFRA_DIR, so the CWD is already the infra dir and a
+# `cd apps/web-platform/infra` from there dies "No such file or directory" — which
+# gates (if: success()) and thus SKIPS the SSH-provisioned apply leg that delivers
+# fail2ban's ignoreip grant and every other remote-exec resource.
+INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$INFRA_DIR"
 
 DOPPLER_ARGS=(--project soleur --config prd_terraform)
