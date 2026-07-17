@@ -33,6 +33,15 @@ files an `action-required` issue.
 - **Default (kept):** the CTO delete-the-threading fix, as directed, with the plan-review mechanical
   hardening (2 standalone unit files added, fail-closed non-empty check, dead-substitution cleanup,
   `:47` SOLEUR-DEBT marker). The `:47` trap is explicitly out of #6555's stated scope.
+- **/work addition (deployment safety, beyond plan).** The plan's pure fail-closed check would have
+  downed `inngest-server` on the co-located WEB host on its next in-place `ci-deploy` re-bootstrap:
+  ci-deploy runs `inngest-bootstrap.sh` directly (ci-deploy.sh:2741), which hits the "preserve"
+  branch (existing valid token) and SKIPS the heredoc, so a pre-#6555 env-file never gains the
+  `DOPPLER_PROJECT` line → fail-closed → outage. Added an idempotent **in-place augment** of the
+  preserved env-file BEFORE the fail-closed backstop, eliminating the plan's "no in-place
+  re-bootstrap before force-replace" precondition (§5.9) entirely. Fresh hosts get the line from
+  cloud-init:324 (dedicated) or the heredoc (web); existing hosts get it from the augment; the
+  fail-closed catches only a genuinely broken env-file.
 
 ## T2 — #6551 `vector_config_*` instrument: ship (gated) vs drop from bundle — Taste (panel SPLIT)
 - **Challenge (DHH):** scope-creep on an investigation-only issue; the plan pre-wrote its own escape
@@ -44,6 +53,14 @@ files an `action-required` issue.
 - **Default (kept, gated + corrected):** keep it recommended-but-gated with the corrected
   Source-section-hash spec; #6551 stays OPEN regardless. Final ship/drop decision deferred to
   CPO / deepen-plan.
+- **/work resolution — DROPPED from this PR.** The operator's explicit instruction was
+  "investigation only — do NOT force a code change" unless the probes resolve to a definite
+  defect; they did not (the deciding datum is the invisible running `/etc/vector/vector.toml`
+  on the deny-all-public dark host). The corrected Source-section-hash spec is recorded as the
+  documented next-step in the #6551 issue update, and the instrument is latent-until-the-next-
+  dedicated-host-bake anyway (it would collect nothing now). #6551 stays OPEN. If CPO wants the
+  instrument shipped, it is a clean ~20-line read-only add to `cat-deploy-state.sh` (precedent
+  `seccomp_profile_host_sha256`).
 
 ## T1 — #6556 P1 CI-guard minimal shape (code-simplicity A1) — Taste
 - **Challenge (code-simplicity A1):** the ExecStart-basename derivation + exclusion-with-reason
@@ -55,3 +72,13 @@ files an `action-required` issue.
   ExecStart basename — so some basename handling is arguably operator-directed.
 - **Default:** /work + deepen-plan pick the minimal shape that satisfies #6556's "explicit-exclusion
   half" + coverage extension without a general ExecStart parser. Surfaced for confirmation.
+- **/work resolution — bounded shape shipped.** Extended the explicit `SyslogIdentifier=`/`logger -t`
+  coverage to `.service` + cloud-init files, AND added `AC3c`: basename-coverage for STANDALONE
+  `.service` units with no `SyslogIdentifier=` (they tag as their ExecStart basename — #6556's
+  titular class), each required to be in the Source 4 allowlist OR the `SYSLOG_TAG_EXCLUSIONS`
+  list (`sh`, `doppler`, with reasons). This closes #6556's basename-tagging class for standalone
+  units WITHOUT a general ExecStart parser (just `.service` first-token basename) — a middle path
+  between code-simplicity's minimal shape and #6556's stated purpose. Mutation-proven (drop an
+  exclusion → violator fails; add a stale exclusion → stale check fails). Cloud-init `write_files`
+  unit basename coverage (disk-monitor/resource-monitor/etc. on OTHER hosts) is NOT included — out
+  of scope; those tags are not in the inngest Source 4 allowlist and are not required to be.

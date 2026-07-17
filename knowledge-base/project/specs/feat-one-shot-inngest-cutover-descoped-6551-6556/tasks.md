@@ -43,15 +43,15 @@ Derived from the finalized (post-plan-review) plan. Phase order is load-bearing 
 - [x] 4.4 (Surfaced taste — decision-challenges T1) pick the minimal shape satisfying #6556 without a general ExecStart parser.
 
 ## Phase 5 — #6555 DOPPLER_PROJECT env-file (atomic commit)
-- [ ] 5.1 `cloud-init-inngest.yml:324` — add `DOPPLER_PROJECT=soleur-inngest` to the pre-create printf.
-- [ ] 5.2 `inngest-bootstrap.sh:339` heredoc — add `DOPPLER_PROJECT=$DOPPLER_PROJECT` (web-host path).
-- [ ] 5.3 Remove `--project` from all 6 sites: `inngest-bootstrap.sh:283/523/585/737` + `inngest-cutover-flip.service:19` + `inngest-redis.service:23`. Keep `--config prd`. Preserve `$DOPPLER_PROJECT` render-gating logic.
-- [ ] 5.4 Dead-substitution cleanup: remove `@@DOPPLER_PROJECT@@` at `inngest-bootstrap.sh:592/761/404` + `inngest-redis-bootstrap.sh:84`.
-- [ ] 5.5 Fail-closed check: bootstrap asserts `DOPPLER_PROJECT` present + non-empty in the env-file before unit start.
-- [ ] 5.6 Delete `DOPPLER_PROJECT` from env_keep in BOTH sudoers copies identically (`deploy-inngest-bootstrap.sudoers:27` + `cloud-init.yml:83`) + `ci-deploy.sh:2785` `--preserve-env`; reframe the `:2777-2784` comment (forward-guard superseded, not dead weight).
-- [ ] 5.7 Add `SOLEUR-DEBT:` marker at `inngest-bootstrap.sh:47` pointing at the `HEARTBEAT_DARK_ARM` detector (residual dual-sourcing).
-- [ ] 5.8 Update pinning tests: `inngest.test.sh:130/134/402/593` + cutover-flip + `cutover-inngest-workflow.test.sh` + `cloud-init-inngest-bootstrap.test.sh`.
-- [ ] 5.9 Record preserve-branch precondition (no in-place re-bootstrap before first force-replace).
+- [x] 5.1 `cloud-init-inngest.yml:324` — add `DOPPLER_PROJECT=soleur-inngest` to the pre-create printf.
+- [x] 5.2 `inngest-bootstrap.sh:339` heredoc — add `DOPPLER_PROJECT=$DOPPLER_PROJECT` (web-host path).
+- [x] 5.3 Remove `--project` from all 6 sites: `inngest-bootstrap.sh:283/523/585/737` + `inngest-cutover-flip.service:19` + `inngest-redis.service:23`. Keep `--config prd`. Preserve `$DOPPLER_PROJECT` render-gating logic.
+- [x] 5.4 Dead-substitution cleanup: remove `@@DOPPLER_PROJECT@@` at `inngest-bootstrap.sh:592/761/404` + `inngest-redis-bootstrap.sh:84`.
+- [x] 5.5 Fail-closed check: bootstrap asserts `DOPPLER_PROJECT` present + non-empty in the env-file before unit start.
+- [x] 5.6 Delete `DOPPLER_PROJECT` from env_keep in BOTH sudoers copies identically (`deploy-inngest-bootstrap.sudoers:27` + `cloud-init.yml:83`) + `ci-deploy.sh:2785` `--preserve-env`; reframe the `:2777-2784` comment (forward-guard superseded, not dead weight).
+- [x] 5.7 Add `SOLEUR-DEBT:` marker at `inngest-bootstrap.sh:47` pointing at the `HEARTBEAT_DARK_ARM` detector (residual dual-sourcing).
+- [x] 5.8 Update pinning tests: `inngest.test.sh:130/134/402/593` + cutover-flip + `cutover-inngest-workflow.test.sh` + `cloud-init-inngest-bootstrap.test.sh`.
+- [x] 5.9 Record preserve-branch precondition (no in-place re-bootstrap before first force-replace).
 
 ## Phase 6 — #6551 investigation write-up (+ gated instrument)
 - [ ] 6.1 PR body + issue #6551 update: measured probe findings (1&2 resolved, 3 infeasible), leave OPEN, `Ref #6551`.
