@@ -1,0 +1,123 @@
+doppler_service_token.write: Refreshing state... [id=soleur.prd_terraform.2322135e-0c9b-4ee1-95b0-996ca6ba9662]
+hcloud_ssh_key.default: Refreshing state... [id=109222459]
+hcloud_placement_group.web_spread: Refreshing state... [id=1739811]
+cloudflare_record.spf_send: Refreshing state... [id=75670ed044cd5efffe08ee0059654463]
+cloudflare_record.spf_send_send: Refreshing state... [id=37b5192a0cb21156735077818f897af3]
+cloudflare_record.spf_root: Refreshing state... [id=adcc69ef6ae1813f8b19f5b383764ae3]
+hcloud_firewall.web: Refreshing state... [id=10708450]
+cloudflare_ruleset.allowlist_ai_crawlers: Refreshing state... [id=a212a77c157a4c9b8a6590e25dbc9d40]
+cloudflare_ruleset.seo_response_headers: Refreshing state... [id=51e84830aab949aeb0c1df8282efa07d]
+cloudflare_record.protonmail_dkim_1: Refreshing state... [id=d7eca48d3688f95b935f0e390c0add86]
+cloudflare_record.protonmail_dkim_2: Refreshing state... [id=cc01e56a0c7b21d1728e9a6b2fa76d59]
+doppler_secret.resend_receiving_api_key: Refreshing state... [id=soleur.prd.RESEND_RECEIVING_API_KEY]
+doppler_project.inngest: Refreshing state... [id=soleur-inngest]
+random_id.kb_drift_ingest_signing_key: Refreshing state... [id=QScTpEy_XalLyUTEltweSh7oJaWLa8M7QlkKv1L0TFw]
+betteruptime_monitor.soleur_apex: Refreshing state... [id=4422675]
+betteruptime_monitor.app: Refreshing state... [id=4638251]
+random_id.github_webhook_secret: Refreshing state... [id=cYH8zaisyrpR6-H7NBc8AP_wV-S18YDJ9ejywXpkXMI]
+cloudflare_record.supabase_custom_domain: Refreshing state... [id=3f18360e62b82f730ba6924cfa52b2d5]
+cloudflare_ruleset.seo_page_redirects: Refreshing state... [id=6ad832f5915c4510b347980ba65aa40d]
+cloudflare_record.buttondown_ns1: Refreshing state... [id=2591b74b47db829ac8e45b7d9577020b]
+cloudflare_record.mx_send: Refreshing state... [id=c529a06c4d8cdf746636e45a22bb5671]
+doppler_secret.github_app_private_key: Refreshing state... [id=soleur.prd.GITHUB_APP_PRIVATE_KEY]
+doppler_service_token.ghcr_minter: Refreshing state... [id=soleur.prd.8fceb1ef-b0ef-4ebf-a579-09ccb7f8eebf]
+random_id.inngest_event_key_prd: Refreshing state... [id=j5sufMAh3z27h-xJeD9OXN0bePniwGZnFjQhqkEU-uo]
+random_id.inngest_manual_trigger_secret_prd: Refreshing state... [id=gTvPuMzWS58E17Z3QU0_C2fxsJaEu1cUgqsjT0xX9w4]
+random_id.tunnel_secret: Refreshing state... [id=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]
+betteruptime_team_member.ops: Refreshing state... [id=ops@jikigai.com]
+random_id.inngest_manual_trigger_secret_dev: Refreshing state... [id=OJ0ItET-0YglgO65HCVsT1mftJAUKLXaMRBelLxjl-w]
+random_id.inngest_event_key_dev: Refreshing state... [id=2eTcT9LXpbVD1S7GTBf4IaqO5AMKbcO3ZkH5XVWuDOI]
+random_id.inngest_signing_key_prd: Refreshing state... [id=1R7Xpu8uxwbwM2gJkwCUbZnGmyukXxQBx8Jqmv_4SZM]
+random_password.inngest_redis_password_prd: Refreshing state... [id=none]
+random_id.inngest_signing_key_dev: Refreshing state... [id=5-fkz6GFaQ6-6X6qxlz7zL2PwKK85RjIxMm_X0dPEc8]
+doppler_secret.kb_drift_operator_founder_id_app_runtime: Refreshing state... [id=soleur.prd.KB_DRIFT_OPERATOR_FOUNDER_ID]
+doppler_service_token.kb_drift: Refreshing state... [id=soleur.prd_kb_drift_walker.181683b3-9874-4518-a2f1-c7184ecd34d8]
+cloudflare_record.protonmail_verification: Refreshing state... [id=6554c4c18653406913e5d0c95a4110cc]
+doppler_secret.github_app_id: Refreshing state... [id=soleur.prd.GITHUB_APP_ID]
+doppler_secret.ghcr_read_user: Refreshing state... [id=soleur.prd.GHCR_READ_USER]
+doppler_secret.kb_drift_ingest_url: Refreshing state... [id=soleur.prd_kb_drift_walker.KB_DRIFT_INGEST_URL]
+doppler_secret.ghcr_read_token: Refreshing state... [id=soleur.prd.GHCR_READ_TOKEN]
+cloudflare_record.mx_send_send: Refreshing state... [id=359d0810a4eda1163c06db414ae68665]
+cloudflare_record.protonmail_dkim_3: Refreshing state... [id=fa54dd39a2e1fd41b8c0512cc63ca439]
+cloudflare_list.legal_redirects: Refreshing state... [id=2b87ee05247a4b77abf0e48517a528e4]
+cloudflare_record.supabase_acme_challenge: Refreshing state... [id=c8a606f9610239cffe8b988a90acd0ba]
+cloudflare_record.www: Refreshing state... [id=b1bd16f69fff661a1308532face3e873]
+tls_private_key.ci_ssh: Refreshing state... [id=93967400496f1a2f0230c3f6792c714330117694]
+cloudflare_record.github_pages_challenge: Refreshing state... [id=f85fc17419e58c9794fdcd2e016cc2cf]
+cloudflare_zero_trust_access_application.deploy: Refreshing state... [id=c02a91f4-7ea2-40a3-b736-41fd9adc824e]
+cloudflare_record.buttondown_ns2: Refreshing state... [id=f7caefe19091702871b95335005dbf21]
+cloudflare_record.protonmail_mx_secondary: Refreshing state... [id=6ff1e66003043dc2cf6f7e2ff90e10dc]
+cloudflare_zero_trust_access_application.ssh: Refreshing state... [id=7230394c-8ae7-4d21-bd1e-6ea215891c72]
+cloudflare_zero_trust_access_service_token.deploy: Refreshing state... [id=baa7825d-c52a-4cc4-bfe4-300140ed6bcb]
+cloudflare_zone_dnssec.soleur_ai: Refreshing state... [id=5af02a2f394e9ba6e0ea23c381a26b67]
+cloudflare_record.dkim_resend: Refreshing state... [id=1fb09fa3572b4de68d339b5027f5c3dc]
+cloudflare_record.google_site_verification: Refreshing state... [id=8a341c07e7d281a16f4632cbab39bb2d]
+cloudflare_record.github_pages["185.199.108.153"]: Refreshing state... [id=7064d3cc315b2eb989e2daba6d9753f6]
+cloudflare_record.github_pages["185.199.110.153"]: Refreshing state... [id=ebbc9e4264be0db57c22f7d603279ce0]
+cloudflare_record.github_pages["185.199.111.153"]: Refreshing state... [id=3f4e591596966cb5af642d17f699b451]
+cloudflare_record.github_pages["185.199.109.153"]: Refreshing state... [id=65900bd45527fd31430a1186a15d5cc9]
+cloudflare_notification_policy.service_token_expiry: Refreshing state... [id=b00f9d92fdbf412ba5e429567d23e0c1]
+cloudflare_record.protonmail_mx_primary: Refreshing state... [id=caea0030aba02e793b73604a16fa01e3]
+cloudflare_record.dkim_resend_send: Refreshing state... [id=cc053b3b9934c626f4835e3d4cd892db]
+cloudflare_ruleset.cache_shared_binaries: Refreshing state... [id=8249c75a572a48278e2dfa5214e84d50]
+cloudflare_zero_trust_access_service_token.ci_ssh: Refreshing state... [id=20d8c846-bf18-42af-bf35-fce42988326b]
+cloudflare_bot_management.soleur_ai: Refreshing state... [id=5af02a2f394e9ba6e0ea23c381a26b67]
+cloudflare_zone_settings_override.soleur_ai: Refreshing state... [id=5af02a2f394e9ba6e0ea23c381a26b67]
+cloudflare_record.dmarc: Refreshing state... [id=fd178d82e4448e99e37c132419e51919]
+betteruptime_heartbeat.inngest_prd: Refreshing state... [id=460830]
+github_actions_secret.supabase_access_token: Refreshing state... [id=soleur:SUPABASE_ACCESS_TOKEN]
+github_repository_environment.inngest_cutover: Refreshing state... [id=soleur:inngest-cutover]
+github_actions_secret.doppler_token_write: Refreshing state... [id=soleur:DOPPLER_TOKEN_WRITE]
+doppler_secret.kb_drift_ingest_signing_key: Refreshing state... [id=soleur.prd_kb_drift_walker.KB_DRIFT_INGEST_SIGNING_KEY]
+doppler_secret.kb_drift_ingest_signing_key_app_runtime: Refreshing state... [id=soleur.prd.KB_DRIFT_INGEST_SIGNING_KEY]
+doppler_secret.github_app_webhook_secret: Refreshing state... [id=soleur.prd.GITHUB_APP_WEBHOOK_SECRET]
+doppler_environment.inngest_prd: Refreshing state... [id=soleur-inngest.prd]
+doppler_secret.inngest_event_key_prd: Refreshing state... [id=soleur.prd.INNGEST_EVENT_KEY]
+doppler_secret.inngest_manual_trigger_secret_prd: Refreshing state... [id=soleur.prd.INNGEST_MANUAL_TRIGGER_SECRET]
+cloudflare_zero_trust_tunnel_cloudflared.web: Refreshing state... [id=6410c1ec-4f01-4a69-ad98-7bb1621f6d37]
+doppler_secret.inngest_manual_trigger_secret_dev: Refreshing state... [id=soleur.dev.INNGEST_MANUAL_TRIGGER_SECRET]
+doppler_secret.inngest_event_key_dev: Refreshing state... [id=soleur.dev.INNGEST_EVENT_KEY]
+doppler_secret.inngest_signing_key_prd: Refreshing state... [id=soleur.prd.INNGEST_SIGNING_KEY]
+doppler_secret.inngest_signing_key_dev: Refreshing state... [id=soleur.dev.INNGEST_SIGNING_KEY]
+doppler_secret.inngest_redis_password_prd: Refreshing state... [id=soleur.prd.INNGEST_REDIS_PASSWORD]
+doppler_secret.ghcr_minter_doppler_token: Refreshing state... [id=soleur.prd.GHCR_MINTER_DOPPLER_TOKEN]
+github_actions_secret.doppler_token_kb_drift: Refreshing state... [id=soleur:DOPPLER_TOKEN_KB_DRIFT]
+doppler_secret.deploy_ssh_private_key: Refreshing state... [id=soleur.prd_terraform.DEPLOY_SSH_PRIVATE_KEY]
+cloudflare_ruleset.bulk_redirects: Refreshing state... [id=b60c045c568e4f27b821ea2be37c62c5]
+cloudflare_zero_trust_access_policy.deploy_service_token: Refreshing state... [id=df24d8e2-b4c4-46bb-b0a2-1497bf30ebe2]
+doppler_secret.inngest_heartbeat_url_prd: Refreshing state... [id=soleur.prd.INNGEST_HEARTBEAT_URL]
+doppler_service_token.inngest_arm_write: Refreshing state... [id=soleur-inngest.prd.5c0fd8d9-27b3-4c50-a13c-62efce78b504]
+cloudflare_zero_trust_access_policy.ci_ssh_service_token: Refreshing state... [id=b67442f8-a98a-4e86-ac97-b37141b69258]
+cloudflare_record.deploy: Refreshing state... [id=a36342dd9e799d9c4e62542b56bd6c75]
+cloudflare_record.ssh: Refreshing state... [id=64b6deaf4c9d69e2e7691ef33db28420]
+hcloud_server.web["web-1"]: Refreshing state... [id=123931471]
+hcloud_server.web["web-2"]: Refreshing state... [id=150638239]
+cloudflare_zero_trust_tunnel_cloudflared_config.web: Refreshing state... [id=6410c1ec-4f01-4a69-ad98-7bb1621f6d37]
+github_actions_secret.doppler_token_inngest_arm: Refreshing state... [id=soleur:DOPPLER_TOKEN_INNGEST_ARM]
+hcloud_firewall_attachment.web: Refreshing state... [id=10708450]
+cloudflare_record.app: Refreshing state... [id=f45920a35b3c184b3a70196cded45889]
+
+No changes. Your infrastructure matches the configuration.
+
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.
+
+Warning: Resource targeting is in effect
+
+You are creating a plan with the -target option, which means that the result
+of this plan may not represent all of the changes requested by the current
+configuration.
+
+The -target option is not for routine use, and is provided only for
+exceptional situations such as recovering from errors or mistakes, or when
+Terraform specifically suggests to use it as part of an error message.
+
+Warning: Argument is deprecated
+
+  with github_actions_secret.doppler_token_write,
+  on doppler-write-token.tf line 50, in resource "github_actions_secret" "doppler_token_write":
+  50:   plaintext_value = doppler_service_token.write.key
+
+Use value.
+
+(and 3 more similar warnings elsewhere)
