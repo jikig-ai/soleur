@@ -116,6 +116,11 @@ provider, scoped to:
   attr), so the 4 project-wide auth frequency rules cannot migrate without dropping
   live paging; defer stands until stable v0.15.0. Deprecation warning is documented
   as accepted in `issue-alerts.tf`. Evidence: plan `2026-05-29-refactor-sentry-issue-alert-to-sentry-alert-migration-plan.md`.
+  **Amendment (2026-07-17, #6636):** re-confirmed at stable `v0.15.4` — the
+  `monitor_ids` blocker persists, so the defer stands. Re-evaluation criterion
+  updated from "on first stable" (now satisfied) to "when the `sentry_project_error_monitor`
+  / `sentry_project_issue_stream_monitor` data sources are confirmed to let a
+  project-wide frequency rule bind + fire faithfully". See Amendment 2026-07-17 (#6636) below.
 - **Defer** enabling new monitor classes (log-condition, custom-metric) until
   `apps/web-platform/server/sentry-scrub.ts` is extended to cover their event
   channels — enforced by Phase 6 GDPR-gate + AC9.
@@ -124,10 +129,11 @@ provider, scoped to:
 
 ### Provider source
 
-`jianyuan/sentry` v0.15.0-beta2 (released 2026-05-06). The competing
-`getsentry/sentry` is a stale fork (last push 2024-06-24). Pinned to the exact
-beta version; re-evaluate on first stable v0.15.0 release. **If the PR sits
-open for >2 weeks, re-run Phase 0.1 of the plan** before merge.
+`jianyuan/sentry` v0.15.4 (bumped from v0.15.0-beta2 under #6636 — see
+Amendment 2026-07-17). The competing `getsentry/sentry` is a stale fork (last
+push 2024-06-24). Pinned to the exact stable version; the "re-evaluate on first
+stable" note is now resolved (0.15.x GA'd). **If the PR sits open for >2 weeks,
+re-run Phase 0.1 of the plan** before merge.
 
 ### Per-app root
 
@@ -479,6 +485,51 @@ orphan there is anticipated rather than discovered.
 - The PR-time plan moves prod-token exposure **earlier** — from post-merge (after CODEOWNERS
   review) to any collaborator branch push touching `infra/sentry/**`. Bots are blocked by
   `ALLOWED_PATHS`; on a solo repo that leaves the founder. A real widening, accepted.
+
+**Amendment (2026-07-17, #6636) — provider bumped `0.15.0-beta2` → `0.15.4` (first stable);
+`sentry_alert` migration deferral RE-AFFIRMED.**
+
+**What happened.** On 2026-07-17 (~18:00–20:00Z) Sentry briefly returned `410 "This API no
+longer exists"` on the legacy issue-alert **read** endpoint (`GET /projects/{org}/{project}/
+rules/{id}/`) that the pinned `sentry_issue_alert` resource used. Because #6589 (same day) had
+just switched the apply to a **full-root** plan, every one of the 23 `sentry_issue_alert`
+reads refreshed on every PR and on the main apply — so the transient 410 wedged the required
+`sentry-destroy-required` gate and `apply-sentry-infra.yml` closed.
+
+**Measurement (Phase 0, the load-bearing gate).** Run against **live** Sentry state
+2026-07-17: `terraform plan` on the pinned `0.15.0-beta2` returned a clean full-root no-op
+(0/0/0) with **zero 410s** — the retirement was transient and Sentry had restored the legacy
+endpoint. So the 410 was NOT reproducible-on-beta2 by the time of the fix; a bump was not
+*required* to clear it. But the standing deprecation warning ("migrate to `sentry_alert`")
+signals the legacy read path will eventually be retired for real, and the beta pin was itself
+flagged "re-evaluate on first stable".
+
+**The decision — Option A (bump), not the migration the issue proposed.** Bump to the stable
+line's latest, `0.15.4`. This is the durable fix, not merely a beta-pin cleanup: provider
+**v0.15.3** (`jianyuan/terraform-provider-sentry#885`, "fix: Update reads from GET endpoint")
+switched `sentry_issue_alert` reads **off** the legacy endpoint, so `0.15.4` no longer depends
+on the retired read path. Measured on `0.15.4` against live state: `validate` exit 0, full-root
+`plan` no-op (0/0/0) across all 23 issue alerts + 49 cron + 4 uptime monitors, zero 410s, no
+drift, `fmt` clean. It is a provider-version-only change (`versions.tf` pin + regenerated
+`.terraform.lock.hcl` for the CI/dev platform set) — no state surgery, no resource rewrite,
+**zero risk of dropping a live paging rule**.
+
+**Why NOT the `sentry_alert` migration the issue led with.** The #4610 blocker persists even
+at `0.15.4`: the deprecated-but-functional `sentry_issue_alert` still works, and a faithful
+migration of the project-wide auth/frequency rules to `sentry_alert` still requires binding
+each rule to a monitor (`monitor_ids`) — a semantic change under the single-user-incident
+brand-survival threshold, plus 23× cross-type `state rm`+`import`. The migration stays
+**deferred**. The `0.15.x` line does expose `sentry_project_error_monitor` /
+`sentry_project_issue_stream_monitor` data sources (surfaced in the `0.15.4` deprecation
+warning) that *may* make a faithful binding expressible — so the re-evaluation criterion is
+updated: **re-attempt the `sentry_alert` migration when those default-monitor data sources are
+confirmed to let a project-wide frequency rule fire faithfully** (not merely "on first stable",
+which is now satisfied).
+
+**Recurrence.** If Sentry retires the legacy read endpoint *permanently*, `0.15.4` is already
+off it (v0.15.3 #885), so this root does not re-wedge on that account. A different provider
+read regression would surface the same way (full-root plan failure → red required gate) and is
+governed by the same #6589 machinery.
 
 ## Consequences
 

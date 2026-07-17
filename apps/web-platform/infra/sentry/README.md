@@ -2,22 +2,24 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **6 issue alerts** — 4 auth observability rules (import-only, mirrored from
-  rules created by `apps/web-platform/scripts/configure-sentry-alerts.sh`) +
-  2 BYOK-delegations rules (`byok-art-33-breach`, `byok-cap-exceeded`) that are
-  **apply-created** from real `conditions_v2`/`filters_v2`/`actions_v2` (#4364,
-  NOT import-only — terraform owns them; the apply workflow `-target`s both).
+- **23 issue alerts** — a mix of import-only auth/observability rules (mirrored
+  from rules created by `apps/web-platform/scripts/configure-sentry-alerts.sh`)
+  and **apply-created** rules that terraform fully owns from real
+  `conditions_v2`/`filters_v2`/`actions_v2`. The apply-created set includes the
+  BYOK-delegations rules (`byok-art-33-breach`, `byok-cap-exceeded`, #4364).
   `byok-art-33-breach` uses `action_match = "any"` over three event-lifecycle
   conditions (`first_seen_event` + `reappeared_event` + `regression_event`) so a
   recurring cross-tenant breach re-pages and re-starts the Art. 33 72h clock
   (#4656 item 1 — the only rule here using `"any"`). After every apply,
   `apply-sentry-infra.yml` runs a read-only `assert-byok-rules-exist.sh` liveness
   check asserting both BYOK rules still exist by name (#4656 item 5).
-- **8 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **49 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
-  push-to-main via `.github/workflows/apply-sentry-infra.yml`. A 9th monitor
-  for `scheduled-cf-token-expiry-check` is deferred until that workflow's
+  push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
+  `scheduled-cf-token-expiry-check` is deferred until that workflow's
   `schedule:` block is re-enabled (currently manual-dispatch only).
+- **4 uptime monitors** — vendor-hosted HTTP checks, auto-applied on the same
+  push-to-main path.
 
 ADR: [ADR-031 — Sentry alert and cron monitor configuration as IaC](../../../../knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md)
 

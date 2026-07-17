@@ -7,20 +7,20 @@ Plan: knowledge-base/project/plans/2026-07-17-fix-sentry-issue-alert-410-provide
 
 ## Phase 0 — Measurement gate (decides A vs B)
 
-- [ ] 0.1 Reproduce the break on beta2: `cd apps/web-platform/infra/sentry && terraform init -input=false && terraform plan` → capture one verbatim `410 "This API no longer exists"` line into the spec evidence file. (R2 creds from Doppler `prd_terraform`; Sentry token per README §Local invocation.)
-- [ ] 0.2 Enumerate versions: `curl -s https://registry.terraform.io/v1/providers/jianyuan/sentry/versions | jq -r '.versions[].version' | tail -20`. Pick the lowest stable ≥ current that reworks the issue-alert read (do NOT trust the research's exact version — the registry is authoritative).
-- [ ] 0.3 Bump + upgrade in a scratch copy: set `version = "<chosen>"` in versions.tf; `terraform init -upgrade`; regenerate lock via `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64`.
-- [ ] 0.4 MEASURE: `terraform validate` (exit 0) then `terraform plan -no-color`. Record (a) 410 cleared? (b) full-root plan shape (0/0/0 across issue-alert + cron + uptime)?
-- [ ] 0.5 Decision fork: cleared+no-op → Phase A; cleared+drift → Phase A + reconciliation; NOT cleared → Phase B (record the proof).
-- [ ] 0.6 Baseline guard/tooling: `bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh` `[ok]`; `grep -c 'sentry_issue_alert\|sentry_alert' apps/web-platform/scripts/sentry-monitors-audit.{sh,test.sh}` → 0.
+- [x] 0.1 Reproduce the break on beta2: `cd apps/web-platform/infra/sentry && terraform init -input=false && terraform plan` → capture one verbatim `410 "This API no longer exists"` line into the spec evidence file. (R2 creds from Doppler `prd_terraform`; Sentry token per README §Local invocation.)
+- [x] 0.2 Enumerate versions: `curl -s https://registry.terraform.io/v1/providers/jianyuan/sentry/versions | jq -r '.versions[].version' | tail -20`. Pick the lowest stable ≥ current that reworks the issue-alert read (do NOT trust the research's exact version — the registry is authoritative).
+- [x] 0.3 Bump + upgrade in a scratch copy: set `version = "<chosen>"` in versions.tf; `terraform init -upgrade`; regenerate lock via `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64`.
+- [x] 0.4 MEASURE: `terraform validate` (exit 0) then `terraform plan -no-color`. Record (a) 410 cleared? (b) full-root plan shape (0/0/0 across issue-alert + cron + uptime)?
+- [x] 0.5 Decision fork: cleared+no-op → Phase A; cleared+drift → Phase A + reconciliation; NOT cleared → Phase B (record the proof).
+- [x] 0.6 Baseline guard/tooling: `bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh` `[ok]`; `grep -c 'sentry_issue_alert\|sentry_alert' apps/web-platform/scripts/sentry-monitors-audit.{sh,test.sh}` → 0.
 
 ## Phase A — Provider bump (recommended)
 
-- [ ] A.1 versions.tf: pin `<chosen stable>`; update header comment (resolved stable pin + #6636 410 rationale + sentry_alert deferral persists).
-- [ ] A.2 Commit regenerated `.terraform.lock.hcl` (new version + full h1:/zh: hash set incl. linux_amd64 — CI uses `init -lockfile=readonly`).
+- [x] A.1 versions.tf: pin `<chosen stable>`; update header comment (resolved stable pin + #6636 410 rationale + sentry_alert deferral persists).
+- [x] A.2 Commit regenerated `.terraform.lock.hcl` (new version + full h1:/zh: hash set incl. linux_amd64 — CI uses `init -lockfile=readonly`).
 - [ ] A.3 If Phase 0.5 found drift: reconcile per-resource `lifecycle.ignore_changes` / `_v2` attribute shape across all 23 (grep-driven sweep) until plan is no-op.
-- [ ] A.4 README.md: "6 issue alerts" → 23; correct `de.sentry.io` API-host prose only if touched.
-- [ ] A.5 Amend ADR-031 (Amendment 2026-07-17 #6636: bump; sentry_alert deferral RE-AFFIRMED; re-eval criterion updated).
+- [x] A.4 README.md: "6 issue alerts" → 23; correct `de.sentry.io` API-host prose only if touched.
+- [x] A.5 Amend ADR-031 (Amendment 2026-07-17 #6636: bump; sentry_alert deferral RE-AFFIRMED; re-eval criterion updated).
 
 ## Phase B — Migrate to sentry_alert (fallback; only if Phase 0 proves no version clears the 410)
 
@@ -34,9 +34,9 @@ Plan: knowledge-base/project/plans/2026-07-17-fix-sentry-issue-alert-410-provide
 
 ## Phase 2 — Verification (both options)
 
-- [ ] 2.1 `terraform validate` exit 0.
-- [ ] 2.2 `terraform plan` full-root no-op (0/0/0), no 410, across all three types.
-- [ ] 2.3 `terraform fmt -check` clean on every edited .tf.
-- [ ] 2.4 `bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh` `[ok]`; `test-destroy-guard-counter-sentry.sh` pass; `test-sentry-full-root-apply.sh` pass.
+- [x] 2.1 `terraform validate` exit 0.
+- [x] 2.2 `terraform plan` full-root no-op (0/0/0), no 410, across all three types.
+- [x] 2.3 `terraform fmt -check` clean on every edited .tf.
+- [x] 2.4 `bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh` `[ok]`; `test-destroy-guard-counter-sentry.sh` pass; `test-sentry-full-root-apply.sh` pass.
 - [ ] 2.5 PR `sentry-destroy-required` gate GREEN (self-verifying via committed lockfile).
 - [ ] 2.6 Acceptance criteria AC1–AC8 checked (plan §Acceptance Criteria).

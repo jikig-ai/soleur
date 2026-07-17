@@ -61,6 +61,45 @@ The apply workflow (both the PR gate and the main apply) runs `terraform init -i
 ### Research Insight — the 410 is server-side, so "measure, don't trust the version"
 Sentry's 410 is a *server-side retirement* of `GET /projects/{org}/{project}/rules/{id}/`. A provider version can clear it ONLY by pointing `sentry_issue_alert`'s read at a still-live endpoint (research names a post-beta2 rework, hedged). This is unverifiable from registry docs alone against a live-retired endpoint — hence Phase 0.4 observes a real `terraform plan` returning no 410 before Option A is adopted. If the latest stable still 410s, the honest outcome is Option B, not a higher version pin.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-17
+**Method:** Inline (headless one-shot subagent). Provider facts sourced from a framework-docs-researcher agent (registry + release-notes sweep); local machinery mapped by direct reads of `apply-sentry-infra.yml`, `destroy-guard-filter-sentry.jq`, ADR-031, the 3 `.c4` model files, and the prior #4610 plan. All deepen-plan mechanical halt gates ran and passed.
+
+### Deepen-plan gate results (all pass)
+- **4.6 User-Brand Impact:** present; threshold `single-user incident`; `requires_cpo_signoff: true`. Pass.
+- **4.7 Observability:** all 5 fields present, non-placeholder, `discoverability_test.command` is SSH-free. Pass.
+- **4.8 PAT-shaped variable:** clean (no `var.*_token`, no `TF_VAR_(GITHUB|GH)_*`, no literal PAT; `SENTRY_AUTH_TOKEN`/`SENTRY_IAC_AUTH_TOKEN` are the provider's canonical env var + a GitHub repo secret, not PAT-shaped). Pass.
+- **4.9 UI-wireframe:** no UI surface — Files-to-Edit are `.tf`/`.hcl`/`.md`/`.jq`/`.sh` only. (A naive grep matches the Domain-Review negation prose "no file under `components/**`…" — that is the self-grep-scope false positive, not a real UI file.) Skip.
+- **4.55 Downtime & Cutover:** no trigger — a provider version bump takes no serving surface offline; live Sentry alerts fire server-side throughout both options (Option B's `state rm`/`import` never touches the running alerts). No host reboot/replace, no DB lock, no request drain. Skip.
+- **4.5 Network-Outage:** no trigger — `410` is not in the pattern set; the sentry root has no `provisioner`/`connection { ssh }` block (SaaS provider). Skip.
+
+### Key improvements from the deepen pass
+1. **Lockfile regeneration is the #1 way Option A breaks CI** — surfaced as a first-class Phase A.2 task + Sharp Edge (see Research Insights below).
+2. **The 410-clears-on-bump claim is held as a Phase 0 measurement**, not a researched fact — the research agent's version/PR specifics (`0.15.3`/`0.15.4`, PR #885) are treated as hypotheses the registry + a live `terraform plan` must confirm.
+3. **Precedent-Diff** confirms both state-surgery and destroy-guard-extension paths reuse existing repo patterns (no novel pattern).
+
+## Research Insights & Precedent-Diff (Phase 4.4)
+
+### Precedent-Diff — pattern-bound behaviors reuse existing forms (no novel pattern)
+- **`terraform state rm` + `import` (Option B state surgery):** precedent is `apps/web-platform/infra/sentry/README.md` §First-time-import (`terraform import "sentry_issue_alert.X" "org/project/id"`) + §Import rollback (`terraform state rm` on partial-failure). The plan reuses these verbatim; only the resource type changes (`sentry_alert`). The refresh-free property of `state rm` (no provider read → survives the 410) is the load-bearing reason it precedes `import`.
+- **Destroy-guard nested-block clause (Option B):** precedent is `tests/scripts/lib/destroy-guard-filter-web-platform.jq` (the `cloudflare_ruleset.rules[]` per-type `select(.type == ...)` clause, NO `walk()`). The `sentry_alert` clause mirrors it exactly.
+- **`terraform init -lockfile=readonly` + committed lock (Option A):** precedent is the apply + PR-gate jobs in `apply-sentry-infra.yml` (both already use it) and the beta-provider adoption learning `2026-05-15-terraform-import-only-beta-provider-schema-validation.md` (PR #3811).
+
+### Lockfile mechanics (Option A — the highest-risk step)
+`.terraform.lock.hcl` currently pins `0.15.0-beta2` with 3 `h1:` + 14 `zh:` hashes (3 platforms). The apply job AND the PR gate both run `terraform init -lockfile=readonly`, which **refuses** to download a provider whose checksum is absent from the lock. So the bump PR must commit a lock regenerated for the full platform set:
+```bash
+cd apps/web-platform/infra/sentry
+# after setting the new version in versions.tf:
+terraform init -upgrade      # downloads the new version, updates the lock for THIS platform
+terraform providers lock \
+  -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64   # add all CI+dev platforms
+```
+`linux_amd64` is mandatory (CI is `ubuntu-24.04`); omitting it passes locally and fails CI init. Verify the regenerated lock carries the new `version`/`constraints` and ≥3 `h1:` hashes before committing.
+
+### Measure-don't-trust (the load-bearing hypothesis)
+The 410 is a Sentry **server-side** retirement of `GET /projects/{org}/{project}/rules/{id}/`. A provider version can only clear it by reading a still-live endpoint. The research agent reported a fix in a post-beta2 release but hedged ("should", "likely", and gave an internally-shaky "the endpoint still exists but the logic changed" story). Therefore Phase 0.4 MUST observe a real `terraform plan` with **zero 410s and a clean full-root no-op** before Option A is adopted — the plan does not assert the fix as fact anywhere, and no AC greens on the research's version number alone. If the latest stable still 410s, the honest outcome is Option B (or C), not a different version guess.
+
 ## Overview
 
 `apps/web-platform/infra/sentry/` manages the platform's larger paging plane as IaC (ADR-031): **23 `sentry_issue_alert`** (`issue-alerts.tf`), **49 `sentry_cron_monitor`** (`cron-monitors.tf`), **4 `sentry_uptime_monitor`** (`uptime-monitors.tf`). The provider is pinned `jianyuan/sentry 0.15.0-beta2`.
