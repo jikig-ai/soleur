@@ -278,3 +278,49 @@ Fix: probe both routes — `$VAR`/`${VAR}` deref, **and** `<var>_url = betterupt
 - [[2026-07-15-silent-fallback-masked-a-dead-primary-for-14-days]] — #6400, the blindness the
   private-IP probe choice exists to avoid rebuilding.
 - ADR-117 (executable heartbeat arming) · ADR-096 · ADR-103 · #6548 · #6549
+
+## Postscript — what happened when it actually ran (same day, post-merge)
+
+Two things landed within an hour of merge that are worth more than the rest of this document.
+
+### 10. The load-bearing test reproduced itself in production, on the first boot
+
+The `registry-host-replace` that carried the feeder onto the host hit **#6400's NIC race**: the new
+host booted with **no private NIC** (`nic_ok=false`; interfaces were `lo, eth0, docker0` — no
+`enp7s0:10.0.1.30`). The feeder probed `10.0.1.30:5000`, got nothing, and **correctly withheld its
+ping**. The monitor stayed down because the registry genuinely *was* unreachable to its consumers.
+
+**A loopback probe would have reported green through all of it** — zot binds `0.0.0.0`, so
+`localhost:5000` answered fine the entire time. That is T3, the test this PR called the most
+important one, reproducing itself against real infrastructure minutes after shipping. The
+private-IP choice was not a theoretical nicety; it was the difference between a monitor that tells
+the truth and one that lies on its first boot.
+
+Then #6415's private-NIC guard (shipped one day earlier) healed it autonomously: it declined to act
+while `uptime_s` was under its 600s floor (`converged_by=none` — deliberately not rebooting a
+just-booted host), then fired `converged_by=reboot` at `uptime_s=663`. The re-rendered netplan
+brought `enp7s0:10.0.1.30` back, and the feeder's next probe went green. **Two guards, shipped a day
+apart, composed correctly without anyone wiring them together.**
+
+### 11. "Verify a ping BEFORE unpausing" is not implementable — the ADR shipped an unperformable step
+
+The issue's ask #1, this plan's Phase 4.3, ADR-117's "Ordering is mandatory", and the PR body all
+said: *measure a real beat, THEN unpause*. **None of us checked whether the API can do that.** It
+cannot:
+
+- `GET /api/v2/heartbeats/<id>` exposes `{status, paused, paused_at, period, grace, updated_at, url}`
+  — **no `last_heartbeat_at`**.
+- `/heartbeats/<id>/events` → **404**.
+- A paused monitor reports `status: "paused"`, and `updated_at` stays frozen at the provisioning
+  timestamp even while a live feeder beats at it (verified directly).
+
+So the ordering everyone agreed on, wrote down three times, and reviewed eight ways **could not be
+performed**. It is the same species as the comment that caused #6537 — an arming instruction nothing
+could carry out — reproduced inside the ADR written to end that species. Corrected in ADR-117 with
+the bounded arm-and-watch that actually works (rollback held in-process; blast radius one email).
+
+**The generalization is the sharpest thing in this file:** a procedure is a claim about a
+capability. "Verify X before Y" is only a rule if the system can observe X without doing Y — and
+nobody checked. Before writing an ordering constraint into an ADR, *execute it once*, or at minimum
+read the API's field list. The cheapest possible check (one `GET`, one `jq keys`) would have caught
+it at plan time, and it was never run because the sentence sounded obviously correct.

@@ -57,8 +57,13 @@ locals {
   # zot's container memory cap, DERIVED from the host it will actually run on (ADR-062:
   # cap = host RAM − ~1024m for cron+doppler+sshd+OS). It was previously a hardcoded
   # `7168m` literal in cloud-init-registry.yml, with NOTHING tying it to
-  # var.registry_server_type — the same missing-data-edge shape as the htpasswd bug this
-  # host's replace_triggered_by exists to fix (#6497), and just as silent. Switching the
+  # var.registry_server_type — the same missing-data-edge shape as the htpasswd staleness this
+  # host's replace_triggered_by exists to prevent, and just as silent. (This said "the htpasswd
+  # bug ... exists to fix (#6497)". Deleted: that causation was falsified by the 2026-07-16
+  # 08:15Z re-bake — htpasswd converged on both users and `login_failed` continued. The
+  # missing-data-edge ANALOGY is what this comment needs and it survives intact; naming a
+  # still-open defect as the thing a line "fixes" is precisely what made #6497 undiagnosable for
+  # a week.) Switching the
   # var to a 4 GB type would have left a 7168m cap on a 4096m host: the cgroup limit can
   # never bind, so zot is free to take the host down instead of being contained — which is
   # precisely the uncapped-on-4GB condition of the #6288 restart-loop. Deriving it means
@@ -105,8 +110,16 @@ locals {
 # hcloud_server.registry's lifecycle.replace_triggered_by is what supplies that edge: it
 # replaces the host so the htpasswd is re-baked from the new value in the SAME apply.
 # Without it a rotation silently diverges the host from Doppler and every pull login is
-# rejected forever, with no signal saying why — which is exactly what #6497 / Sentry
-# WEB-PLATFORM-5B was. Mirrors random_password.git_data_luks.
+# rejected forever, with no signal saying why. Mirrors random_password.git_data_luks.
+#
+# This comment used to end "— which is exactly what #6497 / Sentry WEB-PLATFORM-5B was."
+# That causation is FALSIFIED and the claim is deleted rather than softened: the 2026-07-16
+# 08:15Z re-bake was the experiment the hypothesis implied, and after it the host's htpasswd
+# MATCHES Doppler on both users while `login_failed` continues. A stale htpasswd is a real
+# hazard and this edge is the right fix for it — it was simply not the cause of #6497, whose
+# actual cause is still unknown (see the plan; #6497 buys the datum before attempting a
+# repair). Naming a still-open defect as "solved by this line" is what made the gate
+# undiagnosable for a week in the first place.
 # The registry host's server type, read from the live Hetzner catalog so local.registry_
 # memory_cap_mb tracks the real host instead of a hand-maintained type→RAM map. Read-only;
 # creates nothing. Resolves at PLAN time, which is what makes it a phantom-type tripwire
@@ -115,6 +128,18 @@ data "hcloud_server_type" "registry" {
   name = var.registry_server_type
 }
 
+# #6497 — BOTH attributes below are load-bearing for a SECURITY property in another file.
+# `ci-deploy.sh` › `_login_hatch()` emits `stderr_chars` (the true length of `docker login`'s
+# stderr) off-box to Better Stack + Sentry. That is safe ONLY because this token is
+# (a) fixed-length, so a registry echoing it moves the length by the same amount for every
+# possible value (zero bits about content), and (b) drawn from `[A-Za-z0-9]` (`special = false`),
+# so no character expands under a registry's JSON/URL escaping into a CONTENT-DEPENDENT length.
+# Changing `length` to a variable-length credential (a JWT / OIDC-minted session token) OR
+# setting `special = true` turns `stderr_chars` into a length oracle on a live credential, and
+# the field MUST be bucketed first. Read `_login_hatch()`'s field table before touching either.
+# The reverse-citation exists because the trigger was written in the CONSUMER and this is the
+# PRODUCER — and `specs/feat-registry-oidc-migration/spec.md` FR2/FR3 already schedule exactly
+# that change.
 resource "random_password" "zot_pull" {
   length  = 40
   special = false
@@ -335,8 +360,11 @@ resource "hcloud_server" "registry" {
   # boot via the Doppler CLI and baked into /etc/zot/htpasswd once; they are deliberately
   # absent from user_data (:263-265), so Terraform sees no data dependency and a rotation
   # would leave the host serving the OLD htpasswd forever while both Doppler copies show the
-  # new value — the WEB-PLATFORM-5B defect. Naming the resources here forces the bake to
-  # follow the value: a rotation replaces the host in the same apply.
+  # new value. Naming the resources here forces the bake to follow the value: a rotation
+  # replaces the host in the same apply.
+  # This edge is sound on its own terms, but it is NOT the fix for #6497 — that claim was
+  # falsified by the 2026-07-16 08:15Z re-bake (htpasswd now matches Doppler on both users;
+  # `login_failed` continues). See the falsification note on `random_password.zot_pull`.
   # SAFE on a routine apply: random_password has no `keepers`, so these are stable and fire
   # only under an explicit `-replace` (verify with `grep -nE '^\s*keepers' zot-registry.tf` →
   # no hits; a bare `grep -n keepers` also matches this very comment).
@@ -430,10 +458,16 @@ resource "hcloud_firewall_attachment" "registry" {
 #
 # `paused = true` here is correct and permanent: `ignore_changes = [paused]` below decouples source
 # from live state, and this resource is an OPERATOR_APPLIED_EXCLUSION (untargeted), so a source
-# unpause is a no-op either way. Live arming is a one-time API PATCH, done only AFTER a real beat is
-# measured — never before (an unfed monitor that gets unpaused pages forever; #6210). Until that
-# happens the monitor is inert, and no static check can see it (ADR-117 names this state; the
-# nightly live-reconcile that would bound it is #6549).
+# unpause is a no-op either way. LIVE state is armed (paused=false, up) as of 2026-07-16 — this
+# source value is not the live one, which is the whole point of ADR-117.
+#
+# Arming was a one-time API PATCH under a bounded arm-and-watch: the beat CANNOT be measured before
+# unpausing (Better Stack exposes no last_heartbeat_at and no /events; a paused monitor reads
+# status="paused" forever), so the rollback is held in-process and re-pauses inside period+grace if
+# no beat lands. It fired for real on the first attempt — the host booted NIC-less (#6400), the
+# feeder correctly withheld its ping, and the rollback re-paused at 86s with no alert. See ADR-117
+# §Ordering. Do NOT "simplify" this to a bare unpause: an unfed monitor left armed pages forever
+# (#6210).
 #
 # The consumer-perspective probe (can a CLIENT reach zot over the private net?) is a DIFFERENT
 # layer and remains open as #6438 §1; this on-host beat does not close it.
