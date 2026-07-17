@@ -474,8 +474,28 @@ jobs:
             # zero deletes) the generic line contradicts the reboot-specific
             # steer below, so suppress it: ack-through would execute the
             # transitively-included reboot on the unattended apply.
+            # STEER (#6538 / AC-B5). The pre-#6538 text read: "Add a line
+            # containing exactly '[ack-destroy]' ... or revert the trigger
+            # commit." During a scoped host retirement BOTH of its options are
+            # wrong, and this is the only instruction the operator sees:
+            #
+            #   - [ack-destroy] authorizes a PARTIAL destroy. This per-PR apply's
+            #     `-target` scope reaches hcloud_server.web["web-2"] but NOT
+            #     hcloud_volume.workspaces["web-2"] (measured 2026-07-17:
+            #     `0 to add, 1 to change, 1 to destroy`). Acking through kills the
+            #     host and strands a 20 GB volume that bills forever with nothing
+            #     attached to it.
+            #   - "revert the trigger commit" blames an INNOCENT merge. While
+            #     config says N hosts and state still says N+1, EVERY merge trips
+            #     this. The trigger is not the cause.
+            #
+            # The safe resolution is to skip THIS merge's apply and let the
+            # supervised operator-local full-scope apply complete the retirement.
+            # [ack-destroy] is still offered (it remains correct for an ordinary
+            # intentional delete) but never bare — it carries the partial warning.
+            echo "::error::If a scoped host retirement is in flight (config drops a host that is still in state), do NOT ack this. Add a line containing exactly '[skip-web-platform-apply]' to the merge commit message: it suppresses this merge's apply so the supervised full-scope apply can complete the retirement. Reverting the trigger commit does NOT help — the trigger is an innocent merge; every merge trips this until the retirement lands."
             if [[ "$resource_deletes" -gt 0 || "$nested_deletes" -gt 0 ]]; then
-              echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
+              echo "::error::Otherwise, for an ordinary intentional delete, add a line containing exactly '[ack-destroy]' to the merge commit message. WARNING: [ack-destroy] authorizes ONLY what this apply's -target scope reaches, which may be a PARTIAL destroy — e.g. a server deleted while its data volume is out of scope and survives, attached to nothing and still billing. Read the 'will be destroyed' list below and confirm it is the WHOLE intended change before acking."
             fi
             if [[ "$reboot_updates" -gt 0 ]]; then
               echo "::error::A reboot-forcing hcloud_server.* update is planned. Resolve via the operator maintenance-window apply — do NOT add [ack-destroy] to unblock this unattended apply: the host update is transitively in the saved plan, so ack-through would REBOOT prod unattended."
@@ -744,7 +764,7 @@ jobs:
       # MUST equal var.web_hosts private_ips (variables.tf), same literal the
       # release workflow uses — web-1 self-excludes at runtime, so this fans the
       # deploy out to web-2 (10.0.1.11) over the private net.
-      WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+      WEB_HOST_PRIVATE_IPS: "10.0.1.10"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -1008,7 +1028,7 @@ jobs:
       OP_CONTEXT: recreate
       # MUST equal var.web_hosts private_ips (variables.tf) — web-1 self-excludes at
       # runtime, so the fan-out reaches web-2 (10.0.1.11). Single-peer invariant.
-      WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+      WEB_HOST_PRIVATE_IPS: "10.0.1.10"
       IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
