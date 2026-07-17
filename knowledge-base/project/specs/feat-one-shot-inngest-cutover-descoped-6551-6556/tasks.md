@@ -37,10 +37,10 @@ Derived from the finalized (post-plan-review) plan. Phase order is load-bearing 
 - [x] 3.3 Test: `OnFailure=` present; unit sets the tag; ExecStart has no `doppler`/`--project`.
 
 ## Phase 4 — #6556 Part 1 CI tag-drift guard extension
-- [ ] 4.1 `vector-pii-scrub.test.sh` AC3/AC3b — extend enumeration to `.service` + `.sh`-heredoc + cloud-init `write_files` units (beyond `infra/*.sh`).
-- [ ] 4.2 Add the explicit-exclusion-with-reason half; require each explicit `logger -t`/`SyslogIdentifier=` ∈ allowlist OR exclusion list. Keep `SYSTEMD_UNIT_IDENTIFIERS` only for identifiers no source line yields (webhook). Failure message stays directional.
-- [ ] 4.3 Confirm the new `inngest-heartbeat-failure-log` unit passes (reuses `inngest-heartbeat`).
-- [ ] 4.4 (Surfaced taste — decision-challenges T1) pick the minimal shape satisfying #6556 without a general ExecStart parser.
+- [x] 4.1 `vector-pii-scrub.test.sh` AC3/AC3b — extend enumeration to `.service` + `.sh`-heredoc + cloud-init `write_files` units (beyond `infra/*.sh`).
+- [x] 4.2 Add the explicit-exclusion-with-reason half; require each explicit `logger -t`/`SyslogIdentifier=` ∈ allowlist OR exclusion list. Keep `SYSTEMD_UNIT_IDENTIFIERS` only for identifiers no source line yields (webhook). Failure message stays directional.
+- [x] 4.3 Confirm the new `inngest-heartbeat-failure-log` unit passes (reuses `inngest-heartbeat`).
+- [x] 4.4 (Surfaced taste — decision-challenges T1) pick the minimal shape satisfying #6556 without a general ExecStart parser.
 
 ## Phase 5 — #6555 DOPPLER_PROJECT env-file (atomic commit)
 - [ ] 5.1 `cloud-init-inngest.yml:324` — add `DOPPLER_PROJECT=soleur-inngest` to the pre-create printf.

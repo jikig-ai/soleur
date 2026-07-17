@@ -429,7 +429,14 @@ EXPECTED_TAGS=$(
     # All three ship to the journal under SYSLOG_IDENTIFIER.
     grep -qE '(^|\|)[[:space:]]*logger -t|:-logger\}" -t|\\n[[:space:]]*logger -t' "$f" || continue
     grep -hoP '^\s*(readonly\s+)?LOG_TAG="\K[^"]+' "$f"
-  done | sort -u
+  done
+  # #6556 Part 1 coverage extension — explicit SyslogIdentifier= in STANDALONE unit files
+  # (*.service) and cloud-init write_files unit bodies (*.yml). These are NOT .sh heredocs and
+  # were invisible to the pre-#6556 infra/*.sh-only scan. A comment never matches: the anchor
+  # requires SyslogIdentifier= at line-start (the optional indentation covers the YAML-embedded
+  # case). luks-monitor.service ships SyslogIdentifier=luks-monitor here (idempotent with the
+  # #6627 luks-monitor.sh logger -t derivation — the union is sort -u'd at line ~442).
+  grep -rhoP '^[[:space:]]*SyslogIdentifier=\K[a-z0-9-]+' "$INFRA_DIR"/*.service "$INFRA_DIR"/cloud-init*.yml 2>/dev/null
 )
 # #6178: some legitimate SYSLOG_IDENTIFIER entries come from a systemd UNIT's binary
 # writing to stdout — NOT from a `logger -t` call in infra/*.sh — so they are not
@@ -477,6 +484,74 @@ else
     by deleting the vector.toml entry.
     SyslogIdentifier= derived from infra/*.sh:
 $(printf '%s\n' "$SYSLOG_ID_DERIVED" | sed 's/^/      /')")
+fi
+
+# AC3c (#6556 Part 1) — basename coverage for STANDALONE unit files (the "beyond infra/*.sh"
+# half). A systemd unit with NO SyslogIdentifier= tags its journal output with the ExecStart
+# BINARY BASENAME (systemd default). That is the #6556 class: inngest-heartbeat once tagged as
+# `doppler` and shipped to no source. Require every such basename (from *.service files that
+# declare no SyslogIdentifier=) to be EITHER in the Source 4 allowlist OR in the documented
+# exclusion list — never silently un-covered. AC3/AC3b cover EXPLICIT declarations; this covers
+# the implicit basename channel that AC3 cannot see.
+#
+# The explicit-exclusion half: a basename that legitimately does NOT ship to Source 4, WITH a
+# reason. Keep this to genuine wrapper basenames, never a lockstep bypass for a real emitter.
+declare -A SYSLOG_TAG_EXCLUSIONS=(
+  [sh]="shared /bin/sh wrapper basename (cron-egress-{firewall,resolve}, cron-egress-alarm@, container-restart-monitor). Not a per-unit diagnostic channel — those units' payload scripts log under their own logger -t tags (covered by AC3); the bare /bin/sh wrapper carries nothing to ship."
+  [doppler]="doppler-run wrapper basename (inngest-cutover-flip.service, inngest-redis.service). The wrapped binary's real output is captured by Source 1 inngest_journald (include_units) or is non-diagnostic; the bare 'doppler' channel is not a Source 4 log surface."
+)
+
+SERVICE_BASENAMES=""
+SERVICE_BASENAME_VIOLATORS=""
+SERVICE_SCANNED=0
+BN_DERIVED=0
+for svc in "$INFRA_DIR"/*.service; do
+  SERVICE_SCANNED=$((SERVICE_SCANNED+1))
+  # A unit that declares SyslogIdentifier= is covered by AC3 above, not by its basename.
+  grep -qE '^[[:space:]]*SyslogIdentifier=' "$svc" && continue
+  # Effective identifier = basename of the ExecStart binary (first non-space token). `^ExecStart=`
+  # does NOT match ExecStartPre= (needs '=' right after ExecStart).
+  binpath=$(grep -m1 -oE '^ExecStart=[^[:space:]]+' "$svc" | sed 's/^ExecStart=//')
+  [[ -z "$binpath" ]] && continue
+  tag="$(basename "$binpath")"
+  SERVICE_BASENAMES+="$tag"$'\n'
+  BN_DERIVED=$((BN_DERIVED+1))
+  # Covered if shipped (in the allowlist) OR excluded-with-reason.
+  printf '%s\n' "$ACTUAL_TAGS" | grep -qxF "$tag" && continue
+  [[ -n "${SYSLOG_TAG_EXCLUSIONS[$tag]+x}" ]] && continue
+  SERVICE_BASENAME_VIOLATORS+="$(basename "$svc") tags as '$tag' (ExecStart basename) — add SyslogIdentifier= + a Source 4 entry, or exclude '$tag' with a reason"$'\n'
+done
+
+if [[ "$SERVICE_SCANNED" -lt 1 || "$BN_DERIVED" -lt 3 ]]; then
+  FAIL=$((FAIL+1)); FAILS+=("AC3c non-vacuity: expected >=1 .service scanned and >=3 basenames derived, got scanned=$SERVICE_SCANNED derived=$BN_DERIVED (extractor broke → the coverage check would pass vacuously)")
+elif [[ -n "$SERVICE_BASENAME_VIOLATORS" ]]; then
+  FAIL=$((FAIL+1)); FAILS+=("AC3c (#6556): a standalone unit tags as its ExecStart basename and is neither in Source 4 nor excluded:
+$(printf '%s' "$SERVICE_BASENAME_VIOLATORS" | sed 's/^/      /')")
+else
+  PASS=$((PASS+1)); echo "  PASS: every no-SyslogIdentifier .service basename is allowlisted or excluded-with-reason ($SERVICE_SCANNED units scanned, $BN_DERIVED basenames)"
+fi
+
+# AC3c-disjoint: an exclusion must NOT also be a shipped tag (a tag is shipped OR excluded, never both).
+EXCL_SHIPPED=""
+for k in "${!SYSLOG_TAG_EXCLUSIONS[@]}"; do
+  printf '%s\n' "$ACTUAL_TAGS" | grep -qxF "$k" && EXCL_SHIPPED+="$k "
+done
+if [[ -n "$EXCL_SHIPPED" ]]; then
+  FAIL=$((FAIL+1)); FAILS+=("AC3c-disjoint: exclusion(s) also present in the Source 4 allowlist (a tag is either shipped OR excluded): $EXCL_SHIPPED")
+else
+  PASS=$((PASS+1)); echo "  PASS: exclusion set is disjoint from the Source 4 allowlist"
+fi
+
+# AC3c-stale: every exclusion must correspond to a basename a real .service actually produces —
+# a dead exclusion for a non-existent emitter is drift the guard should surface.
+STALE_EXCL=""
+for k in "${!SYSLOG_TAG_EXCLUSIONS[@]}"; do
+  printf '%s\n' "$SERVICE_BASENAMES" | grep -qxF "$k" || STALE_EXCL+="$k "
+done
+if [[ -n "$STALE_EXCL" ]]; then
+  FAIL=$((FAIL+1)); FAILS+=("AC3c-stale: exclusion(s) for a basename no .service produces — remove the dead exclusion: $STALE_EXCL")
+else
+  PASS=$((PASS+1)); echo "  PASS: every exclusion corresponds to a real .service ExecStart basename"
 fi
 
 # AC4: redaction-boundary guard (GDPR) — host_scripts_journald must traverse the
