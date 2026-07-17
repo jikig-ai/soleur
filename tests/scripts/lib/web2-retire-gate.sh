@@ -32,7 +32,34 @@
 #   (server + network + volume_attachment + volume) >= 1   (not a no-op plan)
 #   retire_firewall_attachment_deletes == 0           (never strip web-1's firewall)
 #   retire_firewall_attachment_updates <= 1
+#   host_creates == 0                                 (no resurrection — see below)
 #   NO-STRAND: web2_server_destroyed <= web2_volume_destroyed
+#
+# DESIGN NOTES & KNOWN RESIDUALS (do not "fix" these without re-reading — several
+# are intentional, and one was added after review #6538):
+#   - `nested_deletes == 0 && reboot_updates == 0` is defense-in-depth that is
+#     OOS-SUBSUMED for this gate: any resource carrying a nested-delete or a reboot
+#     is either out of the allow-set (trips oos first) or an in-set web-2 reboot
+#     that cannot coexist with the required destroys (falls to members<1). No
+#     fixture exercises it in isolation BY DESIGN — it is a backstop against a
+#     future oos-counter regression, not an independently-triggerable gate.
+#   - `srv=1, vol=0 -> ABORT` catches BOTH the push-apply strand AND a legitimate
+#     volume-FIRST retry (terraform can destroy the independent volume before the
+#     server; if apply dies between, the re-plan shows server-delete + volume-absent,
+#     indistinguishable from the strand in plan JSON). The gate cannot tell them
+#     apart and fails CLOSED — this is fail-safe friction, NOT data loss. Do not
+#     "fix" the false-abort: the operator re-plans over the full 5-target scope and
+#     the true strand stays blocked.
+#   - `host_creates == 0` (added #6538, review MEDIUM) stops a web-2 server REPLACE
+#     (delete+create) — in-allow-set so oos misses it, non-stranding so no-strand
+#     misses it — from resurrecting the retired host (#6416). T50.
+#   - RESIDUAL (accepted): a server `["forget"]` + volume `["delete"]` passes
+#     (srv=0, vol=1, host_creates=0). That ABANDONS the host (keeps running,
+#     billing) rather than destroying it — not data loss, not web-1 impact, not
+#     volume-stranding. Unreachable without a `removed{}` block, which does not
+#     exist in apps/web-platform/infra/. Left un-guarded because a symmetric
+#     "server must delete when present" check would break the legitimate
+#     volume-only retry (T42). If a `removed{}` block is ever added here, revisit.
 #
 # WHY SUBSET AND NOT EQUALITY. Terraform applies sequentially and can die mid-way.
 # Strict equality (all four destroys required) fails closed on the retry and strands
@@ -59,7 +86,7 @@
 web2_retire_gate() {
   local plan_json="$1"
   local filter="${WEB2_GATE_FILTER:-$(dirname "${BASH_SOURCE[0]}")/destroy-guard-filter-web-platform.jq}"
-  local counts oos ndel rupd srv net vat vol fwu fwd members v
+  local counts oos ndel rupd srv net vat vol fwu fwd hcreates members v
 
   if [[ ! -f "$plan_json" ]]; then
     echo "web2_retire_gate: plan JSON not found: ${plan_json}"
@@ -79,12 +106,19 @@ web2_retire_gate() {
   vol=$(echo "$counts" | jq -r '.web2_volume_destroyed')
   fwu=$(echo "$counts" | jq -r '.retire_firewall_attachment_updates')
   fwd=$(echo "$counts" | jq -r '.retire_firewall_attachment_deletes')
+  # host_creates counts create actions on hcloud_server/hcloud_volume. A pure
+  # retirement CREATES nothing — any create means the plan births a host/volume,
+  # i.e. a web-2 REPLACE (delete+create, in-allow-set so oos=0 misses it) that
+  # resurrects the host this gate exists to destroy (the #6416 reborn-unattached
+  # hazard). Mirrors the per-PR path's host_creates HALT + the recreate gate's
+  # web2_server_replaced guard so the retire gate is not the weakest sibling.
+  hcreates=$(echo "$counts" | jq -r '.host_creates')
 
   # Parse-validate every counter. A jq null/empty would evaluate false in the
   # arithmetic below and could silently mis-decide; fail LOUD instead.
-  for v in "$oos" "$ndel" "$rupd" "$srv" "$net" "$vat" "$vol" "$fwu" "$fwd"; do
+  for v in "$oos" "$ndel" "$rupd" "$srv" "$net" "$vat" "$vol" "$fwu" "$fwd" "$hcreates"; do
     if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-      echo "web2_retire_gate: counter parse failed (oos='${oos}' nested_deletes='${ndel}' reboot_updates='${rupd}' server='${srv}' network='${net}' volume_attachment='${vat}' volume='${vol}' fw_updates='${fwu}' fw_deletes='${fwd}')"
+      echo "web2_retire_gate: counter parse failed (oos='${oos}' nested_deletes='${ndel}' reboot_updates='${rupd}' server='${srv}' network='${net}' volume_attachment='${vat}' volume='${vol}' fw_updates='${fwu}' fw_deletes='${fwd}' host_creates='${hcreates}')"
       return 1
     fi
   done
@@ -94,6 +128,10 @@ web2_retire_gate() {
 
   if [[ "$oos" -ne 0 ]]; then
     echo "web2_retire_gate: ABORT — ${oos} out-of-scope change(s): something outside the 5 web-2 retire addresses is being created/updated/deleted/forgotten (web-1 touch, proxy-TLS birth, or a stray resource)."
+    return 1
+  fi
+  if [[ "$hcreates" -ne 0 ]]; then
+    echo "web2_retire_gate: ABORT — ${hcreates} host/volume create(s): a retirement births nothing. This is a web-2 REPLACE (delete+create) or a stray host/volume create — it would resurrect the host being retired (the #6416 reborn-unattached hazard)."
     return 1
   fi
   if [[ "$ndel" -ne 0 || "$rupd" -ne 0 ]]; then

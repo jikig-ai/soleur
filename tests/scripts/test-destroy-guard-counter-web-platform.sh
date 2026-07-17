@@ -806,6 +806,23 @@ t_web2_retire_noop_aborts() {
   fi
 }
 
+# T50: THE RESURRECTION HAZARD. A web-2 server REPLACE (delete+create) is entirely
+# in-allow-set (oos=0) and does not strand the volume (srv=1 <= vol=1), so the
+# no-strand + oos + firewall checks all pass — yet it REBIRTHS the host the retire
+# exists to destroy (the #6416 unattached-reborn-host failure mode). The retire
+# gate must be as strict as its siblings (the per-PR path's host_creates HALT and
+# the recreate gate's web2_server_replaced guard both stop this). A pure retire
+# CREATES nothing, so host_creates==0 is the guard; it aborts with oos=0 and
+# srv<=vol, uniquely implicating the host_creates check.
+t_web2_retire_server_replace_aborts() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-server-replace.json")
+  if [[ "$out" == "0:1:1:1:1:1:0:1" ]]; then
+    _report "T50 web-2 server REPLACE ABORTS — no resurrection (host_creates==0)" ok
+  else
+    _report "T50 web-2 server REPLACE ABORTS" fail "got '$out' want '0:1:1:1:1:1:0:1'"
+  fi
+}
+
 # T49: a Terraform 1.7+ `removed{}` state-drop on the web-2 volume serializes as
 # actions==["forget"] — it drops the resource from state WITHOUT destroying the
 # real volume. That is the stranding hazard wearing a different hat: the volume
@@ -863,6 +880,7 @@ t_web2_retire_firewall_delete_aborts
 t_web2_retire_proxy_tls_birth_aborts
 t_web2_retire_noop_aborts
 t_web2_retire_volume_forget_aborts
+t_web2_retire_server_replace_aborts
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
