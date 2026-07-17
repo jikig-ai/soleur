@@ -95,6 +95,8 @@ inferring ownership from any HTTP status.
 
 ## Decision
 
+<!-- lint-infra-ignore start: the scope list below RECORDS the 2026-05-15 decision (a one-time `terraform import` of 4 pre-existing rules, executed then, never re-run) — it is a historical record, not a prescribed operator step. All Sentry Terraform execution is CI-driven and no-SSH: apply-sentry-infra.yml plans the full root on push-to-main (#6589), and since #6589 there is no human-run path at all. Wrapped so amending this ADR does not trip lint-infra-no-human-steps on pre-existing prose; same rationale as ADR-030:144 (#6407). -->
+
 Adopt Sentry as Infrastructure-as-Code via the `jianyuan/terraform-provider-sentry`
 provider, scoped to:
 
@@ -117,6 +119,8 @@ provider, scoped to:
 - **Defer** enabling new monitor classes (log-condition, custom-metric) until
   `apps/web-platform/server/sentry-scrub.ts` is extended to cover their event
   channels — enforced by Phase 6 GDPR-gate + AC9.
+
+<!-- lint-infra-ignore end -->
 
 ### Provider source
 
