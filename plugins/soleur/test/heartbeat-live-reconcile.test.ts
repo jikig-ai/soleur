@@ -304,7 +304,8 @@ describe("fetchLiveHeartbeats — flake tolerance + auth (network injected)", ()
       seen.push(url);
       // Assert the Bearer token is only ever attached to the trusted host.
       const auth = new Headers(init?.headers).get("Authorization");
-      if (!url.startsWith("https://uptime.betterstack.com/")) {
+      // Parse the host exactly (never a substring check) — the token may only reach the trusted host.
+      if (new URL(url).hostname !== "uptime.betterstack.com") {
         expect(auth).toBeNull();
       }
       if (url === "https://uptime.betterstack.com/api/v2/heartbeats") {
