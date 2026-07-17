@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
-# Pins the [ack-destroy] regex across all six sites where it lives — the
-# three apply-* workflows AND the three destroy-guard test scripts that
-# mirror their control flow.
+# Pins the [ack-destroy] regex across all seven sites where it lives — the
+# three apply-* workflows, the three destroy-guard test scripts that mirror
+# their control flow, AND the PR-time squash-ack detector (#6589).
 #
 # The regex `(^|$'\n')\[ack-destroy\]($|$'\n')` is load-bearing across all
-# six files: any drift silently breaks the operator-acknowledgement gate.
+# seven files: any drift silently breaks the operator-acknowledgement gate.
 # CODEOWNERS @deruelle gates approval but not content coherence — this
 # script is the deterministic coherence check.
+#
+# THE 7th SITE IS THE HIGHEST-STAKES ONE (#6589). scripts/sentry-squash-ack-detect.sh
+# answers the PR-time question "will a pre-staged [ack-destroy] satisfy the
+# apply gate after squash?". Its verdict and the apply gate's verdict MUST agree.
+# If this file's regex drifts from apply-sentry-infra.yml's, the PR gate greens
+# and the post-merge apply reds — the resource stays live and billing, which is
+# the exact #6074 end state this whole PR exists to make impossible. Divergence
+# between a predictor and the thing it predicts is invisible to review; it is
+# checked here mechanically instead.
 #
 # Closes #4419 review-finding F2 (pattern-recognition-specialist).
 set -euo pipefail
@@ -14,7 +23,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$REPO_ROOT/.." && pwd)"
 
-# Byte-identical regex (with the bash $'\n' ANSI-C-quoting). All six sites
+# Byte-identical regex (with the bash $'\n' ANSI-C-quoting). All seven sites
 # MUST contain a line matching this exact literal after the `=~` operator:
 #   (^|$'\n')\[ack-destroy\]($|$'\n')
 # The grep below uses `-F` (literal) to avoid regex-meta-on-regex confusion.
@@ -25,6 +34,9 @@ EXPECTED_SITES=(
   "tests/scripts/test-destroy-guard-counter.sh"
   "tests/scripts/test-destroy-guard-counter-sentry.sh"
   "tests/scripts/test-destroy-guard-counter-web-platform.sh"
+  # #6589 — the PR-time predictor of the apply gate's verdict. Must agree with
+  # apply-sentry-infra.yml or the PR greens while the apply reds (see header).
+  "scripts/sentry-squash-ack-detect.sh"
 )
 
 fail=0

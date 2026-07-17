@@ -24,39 +24,8 @@ const CRON_MONITORS_TF = resolve(
   __dirname,
   "../../../infra/sentry/cron-monitors.tf",
 );
-// The apply-sentry-infra workflow applies a HARDCODED `-target=` allowlist, not
-// the whole module. A sentry_cron_monitor resource added to the .tf without a
-// matching -target line is silently never created in prod (the apply reports
-// success over a plan that doesn't include it) — the exact gap that left
-// scheduled-content-generator's monitor absent post-#4714. Guard (f) below
-// forces .tf resources and workflow targets into lockstep.
-const APPLY_SENTRY_WF = resolve(
-  __dirname,
-  "../../../../../.github/workflows/apply-sentry-infra.yml",
-);
-
 const routeSrc = readFileSync(ROUTE_PATH, "utf8");
 const tfSrc = readFileSync(CRON_MONITORS_TF, "utf8");
-const applyWfSrc = readFileSync(APPLY_SENTRY_WF, "utf8");
-
-// Terraform resource *names* (the `"<name>"` in `resource "sentry_cron_monitor"
-// "<name>"`) — distinct from the monitor *slug* (`name = "..."`) that
-// extractTfMonitorNames reads. The workflow targets by resource name.
-function extractTfCronResourceNames(): Set<string> {
-  return new Set(
-    [...tfSrc.matchAll(/resource\s+"sentry_cron_monitor"\s+"([^"]+)"/g)].map(
-      (m) => m[1],
-    ),
-  );
-}
-
-function extractWorkflowCronTargets(): Set<string> {
-  return new Set(
-    [...applyWfSrc.matchAll(/-target=sentry_cron_monitor\.([A-Za-z0-9_]+)/g)].map(
-      (m) => m[1],
-    ),
-  );
-}
 
 function extractRouteArrayEntries(): string[] {
   return [...routeSrc.matchAll(/^\s+(\w+),$/gm)].map((m) => m[1]);
@@ -221,28 +190,15 @@ describe("Inngest function registry — drift guards", () => {
     expect(new Set(EXPECTED_CRON_FUNCTIONS)).toEqual(new Set(cronFiles));
   });
 
-  // apply-sentry-infra.yml applies a hardcoded `-target=` allowlist. A monitor
-  // resource in the .tf without a matching target is never created in prod and
-  // the apply still reports success — invisible until a postmerge Sentry probe
-  // notices the monitor is absent. This guard forces the two lists into lockstep.
-  it("(f) every sentry_cron_monitor resource has a -target line in apply-sentry-infra.yml", () => {
-    const tfResources = extractTfCronResourceNames();
-    const wfTargets = extractWorkflowCronTargets();
-    // Vacuous-pass guard: a regex that silently matches nothing would make the
-    // subset assertion pass trivially.
-    expect(tfResources.size).toBeGreaterThan(0);
-    expect(wfTargets.size).toBeGreaterThan(0);
-
-    const untargeted = [...tfResources].filter((r) => !wfTargets.has(r)).sort();
-    expect(untargeted).toEqual([]);
-  });
-
-  it("(f2) apply-sentry-infra.yml has no -target for a non-existent monitor resource", () => {
-    const tfResources = extractTfCronResourceNames();
-    const wfTargets = extractWorkflowCronTargets();
-    const phantomTargets = [...wfTargets].filter((t) => !tfResources.has(t)).sort();
-    expect(phantomTargets).toEqual([]);
-  });
+  // (f)/(f2) — the `-target=` allowlist parity guards — are deliberately GONE.
+  // apply-sentry-infra.yml now plans the sentry root FULL, so the plan universe is
+  // `state UNION config` and `declared ≡ applied` by construction: there is no
+  // target list for a .tf resource to be missing from (f), and no target that can
+  // name a non-existent resource (f2). Both could only be restated as a set
+  // compared against itself — assertions incapable of going red. The failure they
+  // guarded (a declared monitor silently never created) is now structurally
+  // impossible rather than test-enforced. Do NOT reintroduce them without first
+  // reintroducing `-target=`.
 
   // #5159: serve() must pin serveHost to the canonical public origin so EVERY
   // registration (boot, --poll-interval sync, loopback re-register PUT) reports

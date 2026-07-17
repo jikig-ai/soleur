@@ -200,6 +200,17 @@ resource "github_repository_ruleset" "ci_required" {
         context        = "grok-fidelity"
         integration_id = var.actions_integration_id
       }
+
+      # #6589 — apply-sentry-infra.yml's always-run aggregator. The heavy
+      # full-root terraform plan is path-gated behind it; this context is what
+      # makes an unacknowledged Sentry destroy unmergeable rather than merely
+      # visible. Advisory would not do: a red-but-mergeable check still permits
+      # merge -> post-merge apply failure -> the orphan survives, which is the
+      # exact #6074 end state the gate exists to prevent.
+      required_check {
+        context        = "sentry-destroy-required"
+        integration_id = var.actions_integration_id
+      }
     }
 
     # Merge queue REVERTED (#5780 kill-switch, 2026-06-30). The queue was

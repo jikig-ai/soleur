@@ -24,8 +24,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
 const ciDeploy = readFileSync(join(here, "../infra/ci-deploy.sh"), "utf8");
 const cloudInit = readFileSync(join(here, "../infra/cloud-init.yml"), "utf8");
-// Repo root is three levels up from apps/web-platform/test (precedent: the
-// apply-sentry-infra.yml read in the last leg of this file).
+// Repo root is three levels up from apps/web-platform/test.
 const soak = readFileSync(
   join(here, "../../../scripts/followthroughs/zot-soak-6122.sh"),
   "utf8",
@@ -224,6 +223,11 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     expect(tf).toMatch(/^\s*value\s*=\s*"app_ghcr_served"/m);
   });
 
+  // apply-sentry-infra.yml plans the sentry root FULL (no `-target=` allowlist), so
+  // the plan universe is `state UNION config`: declaring the resource IS what applies
+  // it, and deleting this block is what destroys the live rule. Declaration is
+  // therefore the whole apply contract — there is no separate "wired into the apply
+  // list" condition left to assert.
   it("issue-alerts.tf declares the zot_mirror_fallback_rate resource with an any-match event_frequency rule", () => {
     expect(tf).toContain(
       'resource "sentry_issue_alert" "zot_mirror_fallback_rate"',
@@ -313,16 +317,6 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     // here matches zero events forever.
     expect(soakQueryFor("app_ghcr_served")).toBe(
       'stage:"app_ghcr_served"',
-    );
-  });
-
-  it("the -target wiring guards that the apply workflow creates the rule", () => {
-    const wf = readFileSync(
-      join(here, "../../../.github/workflows/apply-sentry-infra.yml"),
-      "utf8",
-    );
-    expect(wf).toContain(
-      "-target=sentry_issue_alert.zot_mirror_fallback_rate",
     );
   });
 });
