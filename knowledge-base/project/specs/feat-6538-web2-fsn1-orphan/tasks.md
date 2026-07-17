@@ -260,11 +260,34 @@ and active-active-N (#6459) instead of rescheduling the defect.
 
 ### B5 — Register + ledger strikes
 
-- [ ] **B5.1** — Art. 30 + `compliance-posture.md`: **record the retirement** with a dated
+- [x] **B5.1** — Art. 30 + `compliance-posture.md`: **record the retirement** with a dated
       amendment note referencing #6538 — do **not** silently strike (good Art. 30 practice
-      keeps the audit trail; the token must survive).
-- [ ] **B5.2** — `expenses.md`: remove web-2's three rows.
-- [ ] **B5.3** — **PUBLIC legal docs (added 2026-07-16 — PR A gap; v2 plan never
+      keeps the audit trail; the token must survive). *(Done 2026-07-17: dated `[… UPDATE …]`
+      bracket notes on the Hetzner sub-processor rows in both files; historical `fsn1` text
+      retained; the Better Stack `eu-fsn-3` decoy explicitly disambiguated.)*
+- [~] **B5.2** — `expenses.md`: remove web-2's three rows. **DEFERRED to B6.11 (post-destroy
+      verify).** The rows are a *current-billing* record, not a desired-state config: web-2
+      bills until the destroy lands, and `knowledge-base/finance/cost-model.md`'s own note
+      (2026-07-16) states web-2's rows *"leave COGS when the destroy lands, which will return
+      ~$10.59/mo."* The rows already self-document this (row note: *"removed when the destroy
+      lands; they remain here while the host still exists and still bills"*). Removing them at
+      B5 — before the operator-gated, 1h-time-boxed, revertable B6.4 apply — would make the
+      ledger under-report real spend and drift from cost-model.md. So the removal + the
+      cost-model COGS recompute happen together at B6.11, gated on B6.6's destroy verify.
+- [ ] **B5.3** — **DEFERRED to PR-3 of #6604 (operator decision 2026-07-17).** The public
+      "current EU data centres" notes share a sentence/row with the frozen LUKS / "traffic
+      between the hosts" / "served across hosts" claim family (DC-1). That family stays
+      **untouched** pending the `/workspaces` LUKS cutover: the cutover *mechanism* merged
+      (#6610, 2026-07-17) but has **not been dispatched** — no `workspaces_luks` volume is
+      live and no git-data host exists (verified via Hetzner API 2026-07-17), so the published
+      LUKS claim is still not-yet-true and DC-1 still binds. #6604's own tasks scope the legal
+      flip (present-tense LUKS + SHA re-pin + clause-site rewrite) to **PR-3**, opened after
+      the cutover soak passes. The operator's Helsinki-only, topology-hidden wording (hide the
+      per-workspace git-data host; drop the German-DC mention; GDPR-clean since the public
+      notice need not enumerate hosts) lands **there**, in one coherent pass with the LUKS
+      flip — NOT half-done in B5 against a frozen, phantom antecedent (the PR-A failure mode).
+      No SHA re-pin in PR B (the public docs do not change here).
+      **[original B5.3 text retained below for the PR-3 executor:]** **PUBLIC legal docs (added 2026-07-16 — PR A gap; v2 plan never
       contemplated that the public docs name web-2).** PR A restated the hosting plane at
       the **EU** level, so the structural claim (*"hosted on Hetzner data centres in the
       EU"*) **survives the destroy untouched**. But each doc carries **one** "current EU
@@ -285,8 +308,10 @@ and active-active-N (#6459) instead of rescheduling the defect.
       forces every user to re-accept. Its claim is already true post-destroy.
       ⚠️ **Do NOT rewrite the dated `Previous:` changelog entries** — they were true when
       written. Add a NEW `**Last Updated:**` entry and demote the current one.
-- [ ] **B5.4** — Verify with the anchored check (NOT a bare `grep -c 'Helsinki'`, which
-      **false-matches the correction notes' own quoted-historical prose** — PR A hit this;
+- [~] **B5.4** — Anchored verification of the public-doc edits. **DEFERRED to PR-3 with B5.3**
+      (no public-doc edits ship in PR B). Instruction preserved for the PR-3 executor: verify
+      with an anchored check (NOT a bare `grep -c 'Helsinki'`, which **false-matches the
+      correction notes' own quoted-historical prose** — PR A hit this;
       `cq-assert-anchor-not-bare-token`). Strip double-quoted spans and skip
       `**Last Updated:**` lines before asserting. Mutation-test it: reverting one doc to
       its pre-fix state MUST go RED.
@@ -329,6 +354,16 @@ and active-active-N (#6459) instead of rescheduling the defect.
       reboot proxy — it never changes on reboot.)*
 - [ ] **B6.9** — A subsequent no-op merge runs push-apply to completion (no HALT).
 - [ ] **B6.10** — `gh issue close 6538 6463` with the decision recorded. Unblock #6575.
+- [ ] **B6.11** — **Ledger removal (moved from B5.2), gated on B6.6's destroy verify.** Only
+      after `servers?name=soleur-web-2` → 0: remove web-2's three rows from
+      `knowledge-base/operations/expenses.md` (host CX33 `$9.17` + volume 20 GB `$1.24` +
+      Primary IPv4 `$0.54`; amounts per #6602, NOT the plan's stale `$0.88` volume). Then
+      recompute `knowledge-base/finance/cost-model.md`: drop web-2's three COGS line items
+      (rows ~173–175) and the ~$10.95/mo they carry (9.17 + 1.24 + 0.54; the doc's older
+      "~$10.59" predates the #6602 volume-FX correction), and re-derive the COGS total,
+      break-even, and margin figures the note gates on. Re-run
+      `bash scripts/expenses-verify-by-check.sh` (exit 0; 16 → 13 markers) and
+      `bash scripts/expenses-verify-by-check.test.sh`. If B6.5 reverts, this reverts with it.
 
 ---
 

@@ -991,6 +991,47 @@ Phase 4b (continuous checkpoint).
 > **Status:** AMEND, not a reversal — Option B stands, and no prior decision changes. `Ref #6425`.
 > Plan: `knowledge-base/project/plans/2026-07-15-fix-web2-tunnel-depool-host-id-plan.md`.
 
+> **Amendment (operator decision, 2026-07-17, #6538/#6463 — the warm standby is retired).**
+> `web-2` (`fsn1`, `10.0.1.11`) — the ADR-068 Phase 3 warm standby, provisioned in the
+> §5877/§5887 amendments and moved to `fsn1` for cross-DC failover — is **retired**. It
+> never carried user-facing web traffic: `app.soleur.ai` is a direct A record to web-1
+> (§5 sole-consumer note above), it sat at **LB weight 0** by §(c)'s hard invariant, and
+> the multi-host DNS rewire that would have let it serve was deferred to the operator
+> cutover and never built. It stood by at a real recurring cost for a cutover with no
+> consumer. **§(c) survives unchanged** — it remains the normative gate on any future
+> live LB weight to a second host; this amendment removes the *host that §(c) was gating*,
+> not the invariant.
+>
+> **HA is deferred, not abandoned.** The DC-failover posture web-2 nominally provided is
+> re-scoped to **active-active-N (#6459)**. That work has a hard placement prerequisite
+> this ADR now records as normative: **every active-active host must be *born* in `hel1`
+> inside `hcloud_placement_group.web_spread`** (the location-scoped spread group —
+> `server.tf` gates that cross-DC hosts cannot join it). A host born in another DC cannot
+> later join the group; it must be created in `hel1` from the start. **git-data (#6570) is
+> the gating blocker** — active-active needs the shared bare store cut over first (§(c)'s
+> `isGitDataStoreEnabled()` prerequisite), so #6459 cannot start until #6570 lands.
+>
+> **Alternatives considered (both rejected).**
+> 1. **Keep web-2 as-is (a non-rebuildable cross-DC standby).** Rejected: `cx33` — web-2's
+>    type — is orderable in **exactly one datacenter (`hel1-dc2`)** and on 2026-07-15 was
+>    orderable in **zero** (#6463). A `-replace` of web-2 would destroy it and fail to
+>    re-place it in `fsn1`, wedging every apply-on-merge on `resource_unavailable` (the
+>    2026-07-13 #6374 incident). A standby that cannot be rebuilt is not a standby.
+> 2. **Keep a *rebuildable* cross-DC standby (upgrade web-2 to `cpx32`).** Rejected on
+>    cost. `cpx32` (€35.49/mo net) is the cheapest ≥8 GB machine `fsn1` will sell — there
+>    is nothing between it and `cx33` (€8.49/mo) in that DC. A rebuildable cross-DC standby
+>    therefore costs **+€27/mo (+€324/yr, ~47% of all Hetzner spend)** to insure a
+>    failover that §(c) keeps drained and that has no traffic-serving consumer until
+>    active-active ships anyway. The insurance premium exceeds the risk it covers.
+>
+> Retiring web-2 is the **first step of active-active**, not a detour: #6459's hosts start
+> from a clean single-host `web_hosts` roster born in `hel1`, not from an orphaned fsn1
+> standby that would have to be destroyed first regardless.
+>
+> **Status:** AMEND, not a reversal — Option A / Approach A stand; the GA end-state
+> (§8) is unchanged. `Ref #6538`, `Ref #6463`. Plan:
+> `knowledge-base/project/plans/2026-07-16-chore-retire-web-2-fsn1-orphan-plan.md`.
+
 ## Consequences
 
 - **Positive.** The serializable-vs-live-handle split (research reconciliation) kills
