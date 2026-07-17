@@ -16,9 +16,16 @@ forever — which the escrow proof + off-host header backup exist to prevent.
 
 - `prd_workspaces_luks` Doppler config exists with `WORKSPACES_LUKS_KEY` (operator precondition,
   `workspaces-luks.tf`).
-- The `workspaces-luks-cutover` GitHub **environment** exists with a **non-empty required-reviewer
-  set** (a zero-reviewer environment auto-approves — DP-11). This reviewer is the sole human
-  authorization on the freeze.
+- The `workspaces-luks-cutover` GitHub **environment** is **provisioned by the default allow-list
+  apply** (`github_repository_environment.workspaces_luks_cutover` in `workspaces-luks.tf`,
+  `-target`-ed in the push/`manual-rerun` block of `apply-web-platform-infra.yml`) — **not** a manual
+  operator step (`hr-all-infrastructure-provisioning-servers`,
+  `hr-fresh-host-provisioning-reachable-from-terraform-apply`; same class as `inngest-cutover`). Its
+  required-reviewer set (`reviewers.users = [54279]`, @deruelle) **must remain non-empty** — a
+  zero-reviewer environment auto-approves (DP-11 F8), and that reviewer is the sole human
+  authorization on the freeze. Verify post-apply with `gh api
+  repos/jikig-ai/soleur/environments/workspaces-luks-cutover` (200 + non-empty
+  `protection_rules[].reviewers`).
 - A distinct off-host bucket for the LUKS header backup (`WORKSPACES_HEADER_BUCKET`), **not** the
   tfstate bucket (C4).
 

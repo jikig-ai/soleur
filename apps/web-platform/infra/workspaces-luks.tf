@@ -186,3 +186,25 @@ resource "hcloud_volume_attachment" "workspaces_luks" {
   volume_id = hcloud_volume.workspaces_luks.id
   server_id = hcloud_server.web["web-1"].id
 }
+
+# GitHub Environment with a required-reviewer protection rule — the SOLE human
+# authorization on the irreversible /workspaces LUKS freeze (C19 / AC20b; DP-11 F8).
+# The freeze job in .github/workflows/workspaces-luks-cutover.yml declares
+# `environment: workspaces-luks-cutover`, so the run is held in "Waiting" for reviewer
+# approval BEFORE any step executes — that approval IS the human ack. A zero-reviewer
+# environment auto-approves, so reviewers.users MUST stay non-empty. reviewers.users
+# takes numeric GitHub user IDs — 54279 = @deruelle (the operator/founder). Mirrors
+# github_repository_environment.inngest_cutover (inngest-arm-write-token.tf).
+#
+# Provisioned by the DEFAULT allow-list apply (apply-web-platform-infra.yml push /
+# apply_target=manual-rerun), NOT the scoped apply_target=workspaces-luks-cutover job:
+# that job's sourced workspaces_luks_cutover_gate asserts the plan is EXACTLY the five
+# volume/attachment/passphrase/secret/token creates, so a sixth create there aborts it.
+resource "github_repository_environment" "workspaces_luks_cutover" {
+  repository  = "soleur"
+  environment = "workspaces-luks-cutover"
+
+  reviewers {
+    users = [54279]
+  }
+}
