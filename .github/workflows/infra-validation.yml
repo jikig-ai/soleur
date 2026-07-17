@@ -381,6 +381,9 @@ jobs:
       - name: Run tunnel-ingress verify infra-dir resolution guard (#6595 relative-INFRA_DIR cd)
         run: bash apps/web-platform/infra/verify-tunnel-ingress-origin-infradir.test.sh
 
+      - name: Run infra-config apply gate adjudicator guard (#6594 content assert vs stale-same-count)
+        run: bash apps/web-platform/infra/infra-config-gate.test.sh
+
       - name: Run ci-deploy-wrapper.sh tests
         run: bash apps/web-platform/infra/ci-deploy-wrapper.test.sh
 

@@ -916,8 +916,14 @@ resource "terraform_data" "deploy_pipeline_fix" {
   #
   # Secondary benefit: the edge also serializes the bridge's synchronous
   # webhook-listener restart (server.tf:529, an existing Terraform-managed remote-exec)
-  # BEFORE this push's `provisioner "local-exec"` below, so the push never races a
-  # mid-flight listener restart (a connection-reset window that exists today).
+  # BEFORE this push's `provisioner "local-exec"` below. This NARROWS the connection-
+  # reset window but does NOT close it — the ordering is a happens-before on Terraform's
+  # graph, not a wait-for-ready on the listener. nonce-1 (#6313, 2026-07-10;
+  # push-infra-config.sh:25-31) is the counterexample: the bridge's `systemctl restart
+  # webhook` returned ~10ms BEFORE the push fired, yet the webhook was still coming up,
+  # so the push RACED the mid-flight restart — it got HTTP 202 from the restarting
+  # listener but the async handler exec was disrupted and no files landed. The race is
+  # real; the edge only makes it less likely, it is not a guarantee.
   #
   # The apparmor_bwrap_profile element is unchanged (#1570, see the note above).
   # Do NOT "simplify" either element away — see ship-deploy-pipeline-fix-gate.test.ts.
