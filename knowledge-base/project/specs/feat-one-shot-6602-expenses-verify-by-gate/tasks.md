@@ -11,15 +11,17 @@ Lane: cross-domain · Issue: #6602 · Threshold: aggregate pattern
 - [ ] 0.4 agent-browser sanity (`AGENT_BROWSER_ARGS="--no-sandbox"`) or Playwright MCP available.
 
 ## Phase 1 — D1: pull actual draw + correct expenses.md (trace every figure; no re-estimate)
-- [ ] 1.1 Hetzner: API for inventory + catalog EUR (correct count/type drift); billed USD from the next/most-recent Hetzner billing-area invoice (browser). If invoice unavailable → keep catalog-EUR×~1.08 FX as an estimate WITH a fresh verify_by marker.
+- [ ] 1.0 Primary billed source = the invoice EMAIL in `ops@soleur.ai` (billed PDF; Resend Inbound triage chain) for ALL three vendors; browser billing area is the fallback; keep-estimate+marker is last resort (cfo review).
+- [ ] 1.1 Hetzner: API for inventory + catalog EUR (correct count/type drift); billed USD from the Hetzner invoice (email primary / billing-area browser fallback). If invoice unavailable → keep catalog-EUR×~1.08 FX as an estimate WITH a fresh verify_by marker.
 - [ ] 1.1b Fold in the two #6589-named gaps: volume-row FX basis (~$0.35/mo) + missing web-1/registry Primary IPv4 rows (~$1.08/mo).
-- [ ] 1.2 Resend Pro: read actual charge + billing/renewal date from the Resend invoice (browser). Book actual (drop marker) or keep $20 + marker.
-- [ ] 1.3 Proton Mail: browser-only read of the actual monthly charge; named human-gate (OTP/passkey) handoff if reached. Book actual + cite invoice, or keep $14 + marker + named blocker.
+- [ ] 1.2 Resend Pro: read actual charge + billing/renewal date from the Resend invoice (email primary / browser fallback). Book actual (drop marker) or keep $20 + marker dated to next monthly cycle.
+- [ ] 1.3 Proton Mail — ANNUAL plan (cfo): NO monthly charge. Read the annual invoice (~$168/2 users) → book `annual ÷ 12` (like Cloudflare $70/yr÷12). Named human-gate (OTP/passkey) handoff if reached. If unreadable → keep $14 + marker dated to the ANNUAL RENEWAL (not month-out, else monthly noise-file).
 - [ ] 1.4 Every touched row's Notes carries a cited source; marker removed (verified) or fresh verify_by marker (estimate).
 
 ## Phase 2 — D2 (schema): machine-readable verify_by marker in expenses.md
 - [ ] 2.1 Adopt marker `<!-- estimate verify_by=YYYY-MM-DD owner=<role> source="<named invoice/endpoint>" -->` in the Notes cell (invisible, greppable, no `|` inside; marker IS the estimate flag).
-- [ ] 2.2 Apply to rows that remain estimates after Phase 1; verified rows carry none. Replace the prose "verify on next invoice" caveat with the marker.
+- [ ] 2.1b `verify_by` = the date the vendor's NEXT invoice will exist (billing cadence): Resend→next monthly; Proton→annual renewal (cfo). Record the "no marker = verified collapses estimate vs usage-volatile" limitation as a follow-up note.
+- [ ] 2.2 Apply to rows that remain estimates after Phase 1 — including the R&D catalog-derived Hetzner rows (grok-dogfood host + IPv4), not COGS-only (cfo). Verified rows carry none. Replace the prose "verify on next invoice" caveat with the marker.
 
 ## Phase 3 — D2 (enforcing check): scheduled expiry gate (fails loud)
 - [ ] 3.1 Create `scripts/expenses-verify-by-check.sh`: grep the marker token (position-independent), parse fields; exit 1 (expired, rows named) / exit 0 (none) / exit 2 (malformed marker OR zero-markers-parsed positive-sample failure). `BASH_SOURCE`-guard `main`.
@@ -32,7 +34,7 @@ Lane: cross-domain · Issue: #6602 · Threshold: aggregate pattern
 - [ ] 3.5 Confirm no new Sentry monitor / no heartbeat step (Design A). Confirm `sentry-monitor-iac-parity.test.ts` does not require a per-cron monitor; if it does, decide add-monitor (+$0.78/mo, re-derive headroom) vs exempt.
 
 ## Phase 4 — D1: re-derive cost-model.md (if any category subtotal shifts >10%)
-- [ ] 4.1 Recompute Product COGS subtotal from the corrected figures. If any subtotal shifts >10%: re-derive all-in burn, both break-even counts ($49 + $48), per-user marginal, 50-user margins; add a dated Review note; update `[expenses.md@date]` anchors; walk the "~91%"/"~73%" framing. Sub-10%: still update the specific line + its anchor.
+- [ ] 4.1 Recompute Product COGS subtotal from corrected figures. Full re-derivation fires if EITHER (i) a subtotal shifts >10% OR (ii) corrected burn crosses a `⌈burn÷49⌉`/`⌈burn÷48⌉` integer boundary (current 14/14; all-in $651.18 sits ~$14 above the 13-user $637 boundary — a sub-10% Hetzner correction can flip it) (cfo). Full = all-in burn + both break-evens + per-user marginal + 50-user margins + dated Review note + updated `[expenses.md@date]` anchors + walk "~91%"/"~73%". Neither trigger: still update the specific line + anchor.
 - [ ] 4.2 Every re-derived figure traces to a corrected ledger row; no re-estimates.
 
 ## Phase 5 — D3: scope note on #6584

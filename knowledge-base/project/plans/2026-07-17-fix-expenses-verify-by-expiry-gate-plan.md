@@ -25,6 +25,30 @@ related:
 
 # fix(finance): correct unverified estimates + machine-readable verify_by expiry gate
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-17 · **Gates passed:** User-Brand (4.6, `aggregate pattern`), Observability (4.7, no-SSH),
+PAT-shaped (4.8, App-auth only), UI-wireframe (4.9, no UI surface), scheduled-work precedent (Inngest canonical, 49
+crons). **Inputs:** direct reads of expenses.md / cost-model.md / the sweeper + domain-model-drift executor;
+cron-registration research (exact serve-list + `cron-manifest.ts` + parity-test paths); learnings research
+(awk pipe-offset, fail-safe positive-sample, producer-derived fixtures); a **read-only Doppler probe** (HCLOUD_TOKEN
++ RESEND send key present); and a **blocking cfo domain review** (recomputed the tables; verdict + 4 folded findings).
+
+### Key improvements folded from the cfo review
+1. **Break-even boundary trigger** (§4.1 + AC) — re-derive when corrected burn crosses a `⌈burn÷49⌉`/`⌈burn÷48⌉`
+   boundary, not only on a >10% category shift; all-in burn sits ~$14 above the 13-user boundary, so a sub-10%
+   Hetzner correction would silently flip the headline break-even. Closes the plan's own defect class against itself.
+2. **Proton is ANNUAL** (§1.3) — amortize the annual invoice ÷12; date its `verify_by` to the annual renewal (else
+   the gate noise-files monthly).
+3. **`verify_by` = next-invoice-availability date** (§2.1), tracking each vendor's real billing cadence.
+4. **Marker scope = the whole defect class** (§2.2) — extend to the R&D catalog-derived Hetzner rows, not COGS-only.
+5. **Invoice-EMAIL as primary billed source** (§1) — the billed PDF landing in `ops@soleur.ai` beats OTP-gated
+   Console scrapes; browser is the fallback.
+
+### Load-bearing capability corrections (verify-before-assert)
+- Hetzner Cloud API = inventory + catalog EUR only (NOT invoiced totals); Resend key is a restricted send key (no
+  billing read); all three vendors' billed USD is authoritative only from the received invoice. See Research Reconciliation.
+
 ## Overview
 
 ~$84/mo of product COGS in `knowledge-base/operations/expenses.md` rests on **unverified
@@ -145,7 +169,15 @@ the read follows `hr-no-dashboard-eyeball-pull-data-yourself` (pull the data, do
 ### Phase 1 — D1: Pull actual draw + correct `expenses.md`
 
 Each corrected figure MUST carry a **cited source** (API response with endpoint + date, or a named invoice
-with date). No re-estimates. No operator paste.
+with date). No re-estimates. No pasted figures.
+
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+**Primary billed-source = the invoice EMAIL (cfo review), browser Console as fallback.** All three vendors
+email their monthly/annual invoice to `ops@jikigai.com` — the Proton `ops@soleur.ai` mailbox whose inbound
+already forwards to Resend Inbound for triage (documented in the ledger + `gdpr-policy.md`). Parsing the
+**received invoice PDF/email** is the authoritative billed figure (the Console is only a viewer of that PDF)
+and avoids three separate OTP-gated browser scrapes. Order of preference per vendor: (1) the invoice email in
+`ops@soleur.ai`, (2) the vendor billing area via browser, (3) keep the estimate + a fresh `verify_by` marker.
 
 1.1 **Hetzner fleet.**
   - **API (`HCLOUD_TOKEN`):** enumerate live inventory — `hcloud server list` equivalent (`GET /v1/servers`) +
@@ -162,10 +194,14 @@ with date). No re-estimates. No operator paste.
 1.2 **Resend Pro.** Read the actual charge + billing/renewal date from the **Resend dashboard invoice (browser)**.
   If the first Pro invoice exists → book the actual (remove the estimate marker). If not yet issued → keep the
   flat $20 with a verify_by marker dated to the next billing cycle.
-1.3 **Proton Mail.** **Browser only** (agent-browser `--no-sandbox` or Playwright MCP) — read the actual monthly
-  charge from the Proton billing portal. If an OTP/passkey/MFA human gate is reached, hand off a **named** gate
-  (do not ask the operator to paste the *figure* — only to clear the auth gate). Book the actual + cite the invoice.
-  If unreadable this cycle → keep $14 with a verify_by marker + named blocker.
+1.3 **Proton Mail — ANNUAL plan (cfo review — do NOT treat as monthly).** The row is "~$7/user/mo *annual*"; there
+  is **no monthly charge** to read. The real artifact is **one annual invoice (~$168 for 2 users)** that must be
+  **amortized ÷12** to stay consistent with the monthly-burn model (identical treatment to the Cloudflare
+  `$70/yr ÷ 12 = 5.83` row). Source it from the annual invoice email in `ops@soleur.ai` (primary) or the Proton
+  billing area (browser fallback); a human gate (OTP/passkey) is handed off **named** (clear the auth gate only —
+  never paste the figure). Book `annual ÷ 12` + cite the invoice. If unreadable this cycle → keep $14 with a
+  `verify_by` marker **dated to the ANNUAL RENEWAL** (§2.1) — a month-out date on an annually-billed row expires
+  every month and would noise-file a GitHub issue for a figure that genuinely cannot be re-verified until renewal.
 1.4 **Every row touched gets its Notes updated** with the cited source and (per D2) either an estimate marker
   removed (verified) or a fresh `verify_by` marker (still estimate).
 
@@ -191,12 +227,24 @@ with date). No re-estimates. No operator paste.
     the marker date (the precise rot in #6589, where a prose TODO date hardened into a cited number).
   - **Required fields:** `verify_by` (ISO date), `owner` (role token, e.g. `cfo`/`coo`), `source` (quoted free
     text naming what will close it). All three required; missing any → the check treats the marker as malformed.
+  - **`verify_by` = the date the vendor's NEXT invoice will exist, not booking-date + an arbitrary window (cfo
+    review).** It must track the vendor's actual billing cadence — Resend Pro's monthly proration → next monthly
+    cycle; **Proton's annual cycle → the annual renewal date** (§1.3). A marker dated ahead of when a real invoice
+    can exist just generates noise; a marker dated to a real invoice makes the expiry meaningful.
+  - **Schema limitation (cfo — record, don't fix here):** "no marker = verified" collapses *estimate* and
+    *verified-but-usage-volatile* into one state. The Sentry row is the counter-example — markerless yet moves per
+    monitor added. Usage/monitor-count-driven rows arguably need a *recurring* re-verify cadence, not a one-shot
+    `verify_by`; out of scope for this PR (Sentry has its own note + monitor-count driver), noted for a follow-up.
   - The prose "VERIFY on next invoice" caveat is **replaced** by the marker (its `source=` carries the same
     intent in parseable form); a short human hint may remain but the authoritative date/owner/source live only
     in the marker.
 
 2.2 **Apply the marker** to the rows that remain estimates after Phase 1 (Resend and/or Proton and/or Hetzner
   catalog-derived rows — whichever the actual reads did not fully close). Verified rows get **no** marker.
+  **Scope the marker to the whole defect class, not just COGS (cfo review):** the catalog-vs-billed estimate also
+  lives in the **R&D** Hetzner rows (`grok-dogfood` host + its IPv4, both catalog-derived + unverified). Mark those
+  too — a COGS-only gate would be narrower than the defect it exists to catch. (The check parses the whole ledger,
+  so R&D estimate rows are covered automatically once marked.)
 
 ### Phase 3 — D2 (enforcing check): scheduled expiry gate that fails loud
 
@@ -283,12 +331,19 @@ in COGS (Resend $20 + Proton $14 + Hetzner catalog rows ~$50).
 
 4.1 After Phase 1's actual figures land, recompute the **Product COGS subtotal**. Per the ledger's
   Downstream-Consumers rule + `cost-model.md` frontmatter (`review_cadence: monthly`, `owner: cfo`):
-  - **If any category subtotal shifts >10%** → full re-derivation: all-in burn, **both** break-even counts (gross
-    $49 + Stripe-net $48, `⌈burn ÷ price⌉`), per-user marginal cost, and 50-user margins (COGS-based + all-in +
-    Stripe-adjusted). Add a **dated Review note** following the existing `> **[YYYY-MM-DD Review note]**` convention;
-    update the tabled Source anchors (`[expenses.md@<date>]`) to the new dates; walk the "~91%"/"~73%" framing.
-  - **Even a sub-10% shift** still updates the specific tabled line + its anchor (accuracy is paramount) — only the
-    >10% case triggers the full break-even/margin narrative.
+  - **Full re-derivation trigger (TWO conditions — either fires it; cfo review):** (i) any category subtotal shifts
+    **>10%**, OR (ii) corrected burn **crosses a `⌈burn ÷ price⌉` integer boundary at $49 OR $48**. Condition (ii) is
+    load-bearing and NOT implied by (i): all-in burn is **651.18 = ⌈13.29⌉ = 14 users**, only **~$14/mo above the
+    13-user boundary ($637)** — a Hetzner correction of ~$15 (a ~6.5% COGS shift, *below* the 10% gate) silently
+    flips the headline break-even 14→13. Gating solely on 10% would let this plan's own defect class (a silent
+    financial-model drift) survive against itself. Compute `⌈burn÷49⌉` and `⌈burn÷48⌉` for the corrected burn and
+    compare to the current 14/14 before deciding.
+  - **Full re-derivation** = all-in burn, **both** break-even counts (gross $49 + Stripe-net $48, `⌈burn ÷ price⌉`),
+    per-user marginal cost, and 50-user margins (COGS-based + all-in + Stripe-adjusted). Add a **dated Review note**
+    following the existing `> **[YYYY-MM-DD Review note]**` convention; update the tabled Source anchors
+    (`[expenses.md@<date>]`) to the new dates; walk the "~91%"/"~73%" framing.
+  - **A shift that trips NEITHER condition** still updates the specific tabled line + its anchor (accuracy is
+    paramount) — only (i)/(ii) trigger the full break-even/margin narrative.
 4.2 **Trace every re-derived figure to a source** (the corrected ledger row at its new anchor date). No figure in
   `cost-model.md` may cite a re-estimate.
 
@@ -330,8 +385,20 @@ The test — *would a competent engineer reading the ADRs + C4 be misled about t
 
 ### Finance (cfo)
 **Status:** reviewed (blocking Task — the CFO re-derivation is what surfaced this defect class; #6589)
-**Assessment:** _[filled from the cfo domain-review Task — re-derivation rigor, break-even/margin correctness,
-trace-to-source discipline, the no-new-Sentry-monitor cost decision]_
+**Assessment (cfo, 2026-07-17 — recomputed the tables against the ledger first: COGS $231.33, all-in $651.18,
+all four break-evens reconcile):**
+- D1 methodology (trace-to-source, both-price recompute, anchor discipline) **sound**; COGS/R&D classification
+  clean; no margin-framing error.
+- **Verdict on the no-new-Sentry-monitor decision: AGREE** — $0.78/mo is 10% of the entire $7.78 PAYG headroom on
+  the row this feature corrects; that headroom is not fungible slack (at `onDemandPeriodEnd` 2026-08-16 an overrun
+  deactivates every monitor at once, #3958). Keep Design A.
+- **4 findings folded into the plan:** (1) break-even **boundary trigger** added to §4.1 + AC (the >10% gate alone
+  lets a sub-10% Hetzner correction silently flip all-in break-even 14→13); (2) **Proton is ANNUAL** — §1.3 now
+  amortizes ÷12 and dates `verify_by` to the annual renewal (a month-out date would noise-file monthly); (3)
+  **`verify_by` = next-invoice-availability date** tracking each vendor's billing cadence (§2.1); (4) the
+  catalog-vs-billed defect also lives in the **R&D** Hetzner rows → §2.2 extends the marker there.
+- **Bonus folded:** the authoritative billed source is the **invoice EMAIL landing in `ops@soleur.ai`** (the billed
+  PDF, not a Console view) — §1 now makes email-parse primary, browser fallback, reducing OTP-scrape brittleness.
 
 ### Operations (coo / ops-advisor)
 **Status:** reviewed inline — ops-advisor owns the expense ledger; the marker convention + which rows stay
@@ -378,9 +445,11 @@ discoverability_test:
       source** (API response w/ endpoint+date, or a named invoice w/ date). Grep every touched row's Notes for a
       source citation; **no bare re-estimate**. Any figure still an estimate carries a `verify_by` marker (not a
       bare number).
-- [ ] **D1 (b):** `cost-model.md` re-derived — if any category subtotal shifted >10%, a dated Review note updates
-      both break-even counts (gross $49 + Stripe-net $48), per-user marginal, and 50-user margins; tabled Source
-      anchors updated to new dates. Every re-derived figure traces to a corrected ledger row.
+- [ ] **D1 (b):** `cost-model.md` re-derived — full re-derivation fires if EITHER (i) a category subtotal shifted
+      >10% OR (ii) corrected burn crossed a `⌈burn÷49⌉`/`⌈burn÷48⌉` integer boundary (current 14/14). When it fires,
+      a dated Review note updates both break-even counts, per-user marginal, and 50-user margins; tabled Source
+      anchors updated to new dates. Every re-derived figure traces to a corrected ledger row. A change tripping
+      neither still updates the specific line + anchor.
 - [ ] **D2 (schema):** every remaining estimate row in `expenses.md` carries a well-formed
       `<!-- estimate verify_by=… owner=… source="…" -->` marker (greppable, no `|` in the marker); verified rows
       carry none.
