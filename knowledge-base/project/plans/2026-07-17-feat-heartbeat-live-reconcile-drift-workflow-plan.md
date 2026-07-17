@@ -13,6 +13,29 @@ requires_cpo_signoff: false
 
 > Spec lacks a `spec.md` (direct one-shot→plan path) — `lane:` defaulted to `cross-domain` (TR2 fail-closed). Infra + CI + plugin-lib change; no product/UI surface.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-17
+
+**Hard gates (deepen-plan Phases 4.4-4.9):** all PASS — User-Brand Impact present (threshold `aggregate pattern`, valid); Observability present (5-field schema); PAT-shaped grep clean (no `var.*_token`/`ghp_`/`github_pat_`); no UI surface (4.9 skipped); scheduled-work check PASS (rides the existing Inngest-dispatched `scheduled-terraform-drift.yml` — no new `.yml` cron, no new Inngest function, canonical per ADR-033). ADR-ordinal live-checked against `origin/main` → highest is ADR-121, so the new-ADR fallback **ADR-122** is correct (primary recommendation remains: amend ADR-117).
+
+### Key corrections vs. the initial plan
+1. **Sentry parity test needs NO change.** `sentry-monitor-iac-parity.test.ts` is **one-way (code→IaC)** and its docstring explicitly tolerates "monitors with no Inngest slug (GHA-fired workflows like `scheduled-terraform-drift`)". `scheduled-heartbeat-reconcile` is that same class → Phase 4.2 downgraded from "update the test" to "verify it stays green + grep for any hardcoded count census."
+2. **Full `sentry_cron_monitor` attribute set pinned** (against `jianyuan/sentry 0.15.0-beta2`): the resource requires `organization`, `project`, `name`, `schedule`, `checkin_margin_minutes`, `max_runtime_minutes`, `failure_issue_threshold`, `recovery_threshold`, `timezone` — the provider has **no separate `slug` attribute**; the check-in slug **is** `name`. Initial plan under-specified this.
+
+### New considerations
+- The Better Stack Uptime API doc pages 404'd on the deepen pass; the exact `/api/v2/heartbeats` contract (endpoint host `uptime.betterstack.com`, `Authorization: Bearer`, `data[].attributes.{name,paused}`, `pagination.next`) MUST be **curl/doc-verified at /work Phase 0.1** and pinned with `<!-- verified -->`. Corroborating in-repo evidence that `paused` + the endpoint exist: `heartbeat-manifest.ts:148` ("LIVE is paused=false … self-pulled from /api/v2/heartbeats").
+
+## Research Insights
+
+**Precedent-diff (Phase 4.4):** the scheduled-work canonical-pattern check passes without an Inngest migration — this adds a **job to an already-Inngest-dispatched workflow**, not a new scheduled trigger (50 Inngest cron functions exist; the reconcile needs none). The Sentry-monitor pattern precedent is `scheduled_terraform_drift` in the same `cron-monitors.tf` (mirrored verbatim in Phase 4.1). The GitHub-issue-post + email + Sentry-check-in reporting precedent is the drift-check job in the same workflow (D4).
+
+**Flake-tolerance grounding (learnings):** depth-bounded retry (max 3) — `2026-03-09-depth-limited-api-retry-pattern.md`; capture `rc=$?` explicitly, never pipe the exit through `tail`/`grep` under a pipeline — `2026-05-18-test-all-tail-masking-and-monitor-exit-condition-tightness.md`; single end-of-job Sentry check-in via the shared composite action, no `|| true` silencer — `2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md`.
+
+**Doppler auth grounding (learnings):** reuse `secrets.DOPPLER_TOKEN` (already `prd_terraform`-scoped, per the drift-check job) — a config-scope mismatch silently 403s (`2026-03-29-doppler-service-token-config-scope-mismatch.md`); read the Better Stack token **raw** via `doppler secrets get --plain` (never `--name-transformer tf-var`, which would break it into `TF_VAR_*`) — `2026-04-05-terraform-doppler-dual-credential-pattern.md`.
+
+**Sentry-margin grounding:** `checkin_margin_minutes = 60` mirrors the Inngest-dispatched drift monitor — correct because Inngest dispatch has ≤2-3 min jitter, unlike raw GHA `schedule:` (which can be 300+ min late) — `2026-06-02-sentry-cron-margin-must-absorb-gha-dispatch-jitter.md`.
+
 ## Overview
 
 Add a **live-reading reconcile job** to `.github/workflows/scheduled-terraform-drift.yml` that pulls Better Stack `GET /api/v2/heartbeats` and reconciles the **live** `paused`/existence state of each monitored heartbeat against the executable `MANIFEST` in `plugins/soleur/lib/heartbeat-manifest.ts`.
@@ -117,8 +140,22 @@ The reconcile **script** exits with a tri-state mirroring the drift job's exit-c
 
 ### Phase 4 — Sentry cron monitor (IaC)
 
-4.1. Add `resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile"` to `apps/web-platform/infra/sentry/cron-monitors.tf`, mirroring `scheduled_terraform_drift` (`schedule = { crontab = "0 6,18 * * *" }`, `checkin_margin_minutes = 60`, `failure_issue_threshold = 1`) — margin sized for the Inngest-dispatch cadence, not GHA-schedule jitter (learning `2026-06-02-sentry-cron-margin-must-absorb-gha-dispatch-jitter.md`).
-4.2. Update `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts` (+ any sibling census in `cron-substrate-imports.test.ts`) so the new monitor slug ↔ workflow-check-in parity holds. Grep `apps/web-platform/test scripts/` for any hardcoded monitor count/slug census and update.
+4.1. Add `resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile"` to `apps/web-platform/infra/sentry/cron-monitors.tf`, mirroring the **full attribute set** of `scheduled_terraform_drift` (verified against the pinned provider `jianyuan/sentry 0.15.0-beta2`, `cron-monitors.tf:83-92`):
+
+   ```hcl
+   resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
+     organization            = var.sentry_org
+     project                 = data.sentry_project.web_platform.slug
+     name                    = "scheduled-heartbeat-reconcile"   # this IS the check-in slug — provider has no separate `slug` attr
+     schedule                = { crontab = "0 6,18 * * *" }       # mirrors the drift cadence (same Inngest dispatch)
+     checkin_margin_minutes  = 60                                 # Inngest-dispatch cadence, not GHA-schedule jitter (learning 2026-06-02)
+     max_runtime_minutes     = 10                                 # bun + one paginated API call + ≤3 retries; well under
+     failure_issue_threshold = 1
+     recovery_threshold      = 1
+     timezone                = "UTC"
+   }
+   ```
+4.2. **Verify** (do NOT necessarily edit) `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts` stays GREEN. That guard is **one-way (code→IaC)**: it asserts every Inngest cron's `SENTRY_MONITOR_SLUG` has a matching monitor in `cron-monitors.tf`, and its docstring **explicitly tolerates** "monitors with no Inngest slug (GHA-fired workflows like `scheduled-terraform-drift`)". `scheduled-heartbeat-reconcile` is exactly that class (GHA-workflow-fired, no Inngest counterpart), so **the parity test needs no change**. Still: `git grep` `apps/web-platform/test scripts/` for any **hardcoded monitor-count census** (a literal `toBe(N)` over the monitor set) or a sentry destroy/scope-guard that enumerates monitor names, and update only if one exists.
 
 > `apply-sentry-infra.yml` is **full-root, auto-applied on push to `main`** touching `infra/sentry/**` (no `-target=` allowlist since #6589). Adding a monitor is a **pure create** — no `[ack-destroy]`, no operator step, no `-target` update. See `## Infrastructure (IaC)`.
 
@@ -189,7 +226,7 @@ No business-domain (product/marketing/sales/finance/legal/ops/support) implicati
 - [ ] `plugins/soleur/test/heartbeat-live-reconcile.test.ts` is GREEN; `heartbeat-reprovision-parity.test.ts` remains GREEN (unmodified).
 - [ ] `scheduled-terraform-drift.yml` has a `heartbeat-live-reconcile` job that reads `BETTERSTACK_API_TOKEN` via `doppler secrets get --plain` (`::add-mask::`ed), runs the script, and on rc=2 creates/updates a deduped issue labelled `heartbeat-reconcile-mismatch` — verified by reading the job YAML.
 - [ ] Transient path: the script retries ≤3× with backoff and exits **0** (UNREACHABLE) on exhausted 5xx/timeout — asserted by a unit test injecting a failing fetch; auth 401/403 exits **1** — asserted separately.
-- [ ] `sentry_cron_monitor.scheduled_heartbeat_reconcile` added to `cron-monitors.tf` with `checkin_margin_minutes = 60`, `schedule.crontab = "0 6,18 * * *"`; `sentry-monitor-iac-parity.test.ts` GREEN.
+- [ ] `sentry_cron_monitor.scheduled_heartbeat_reconcile` added to `cron-monitors.tf` with the full attribute set (`organization`, `project`, `name`, `schedule.crontab = "0 6,18 * * *"`, `checkin_margin_minutes = 60`, `max_runtime_minutes = 10`, `failure_issue_threshold = 1`, `recovery_threshold = 1`, `timezone = "UTC"`); `sentry-monitor-iac-parity.test.ts` stays GREEN unmodified (GHA-fired monitor, code→IaC direction tolerates it).
 - [ ] ADR-117 amended (or ADR-122 created); all three `.c4` files read, the CI→betterstack heartbeat-read edge added-or-cited-as-present, `c4-code-syntax.test.ts` + `c4-render.test.ts` GREEN.
 - [ ] PR body uses `Ref #6549` / `Ref #6548`, includes a `## Changelog`, `semver:minor` label; no `Closes`.
 
