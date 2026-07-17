@@ -102,12 +102,12 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
   ],
 ]);
 
-// Sentinel: 8 options today (manual-rerun, warm-standby, web-2-recreate, inngest-host,
+// Sentinel: 9 options today (manual-rerun, warm-standby, web-2-recreate, inngest-host,
 // inngest-host-replace, registry-host-replace, registry-region-migrate,
-// git-data-host-replace). `>=` so adding an option raises the count without a brittle
-// exact-match edit — the coverage assertion is what enforces correctness. This only guards
-// the parser silently collapsing to zero, which would make every assertion below vacuous.
-const MIN_APPLY_TARGET_OPTIONS = 8;
+// git-data-host-replace, workspaces-luks-cutover). `>=` so adding an option raises the count
+// without a brittle exact-match edit — the coverage assertion is what enforces correctness. This
+// only guards the parser silently collapsing to zero, which would make every assertion below vacuous.
+const MIN_APPLY_TARGET_OPTIONS = 9;
 
 // Sentinel for the same reason, on the other side of the ledger.
 const MIN_GATED_TARGETS = 5;

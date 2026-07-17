@@ -47,6 +47,10 @@ emit_and_die() {
   log "FAIL ($WL_REASON): device_type=$WL_DEVICE_TYPE mount_source=$WL_MOUNT_SOURCE mapper_present=$WL_MAPPER_PRESENT luks_open_result=$WL_LUKS_OPEN_RESULT header_uuid_match=$WL_HEADER_UUID_MATCH cryptsetup_unit_result=$WL_CRYPTSETUP_UNIT_RESULT doppler_reachable=$WL_DOPPLER_REACHABLE mountpoint_ok=$WL_MOUNTPOINT_OK"
   if command -v workspaces_luks_emit >/dev/null 2>&1; then
     WL_LEVEL=fatal workspaces_luks_emit
+  else
+    # The emit script was not sourced (install failure). The drift is now visible ONLY via journald
+    # + the heartbeat miss — the discriminating Sentry event is lost. Make THAT state itself visible.
+    log "WARN: workspaces-luks-emit.sh unavailable — drift ($WL_REASON) NOT emitted to Sentry; only journald + the heartbeat-miss will page. Reinstall $EMIT."
   fi
   exit 1
 }

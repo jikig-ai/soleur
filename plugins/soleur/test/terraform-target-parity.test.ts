@@ -830,6 +830,31 @@ describe("concurrency-group + cloudflared-pin parity across the two workflows (#
     expect(wpi.cloudflaredVersion).toBe(dpf.cloudflaredVersion);
     expect(wpi.cloudflaredSha256).toBe(dpf.cloudflaredSha256);
   });
+
+  // #6604: the pin is now replicated into the git-data + workspaces-luks cutover/verify workflows
+  // (all feed the same cf-tunnel-ssh-bridge composite). A pin bump that updated only the two apply
+  // workflows would leave these on a stale version/SHA — the bridge download fails CLOSED (aborts),
+  // not a silent hole, hence this is a drift tripwire. Assert EVERY workflow carrying the pin matches
+  // the canonical (apply-web-platform-infra) value.
+  test("the cloudflared pin matches across ALL workflows that declare it (#6604)", () => {
+    const grabPin = (rel: string) => {
+      const src = readFileSync(resolve(REPO_ROOT, rel), "utf8");
+      return {
+        version: /^\s*CLOUDFLARED_VERSION:\s*"([^"]+)"/m.exec(src)?.[1] ?? null,
+        sha256: /^\s*CLOUDFLARED_SHA256:\s*"([^"]+)"/m.exec(src)?.[1] ?? null,
+      };
+    };
+    const PIN_WORKFLOWS = [
+      ".github/workflows/git-data-cutover.yml",
+      ".github/workflows/workspaces-luks-cutover.yml",
+      ".github/workflows/workspaces-luks-verify.yml",
+    ];
+    for (const wf of PIN_WORKFLOWS) {
+      const pin = grabPin(wf);
+      expect(pin.version, `${wf} CLOUDFLARED_VERSION`).toBe(wpi.cloudflaredVersion);
+      expect(pin.sha256, `${wf} CLOUDFLARED_SHA256`).toBe(wpi.cloudflaredSha256);
+    }
+  });
 });
 
 // ─── Sentry infra -target parity (#5884) ────────────────────────────────────

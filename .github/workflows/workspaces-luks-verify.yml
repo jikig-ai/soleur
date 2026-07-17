@@ -59,6 +59,9 @@ jobs:
           # The bridge exports WEB_HOST_SSH as the exact ssh invocation (key + ProxyCommand).
           WEB_HOST: "10.0.1.10"
         run: |
+          # set +e so a failing probe is captured in probe_rc (and reported) rather than exiting the
+          # step at the ssh line under GitHub's inherited `-e` (which `set -uo pipefail` does not clear).
+          set +e
           set -uo pipefail
           # Run the baked daily probe read-only (it mutates nothing) — DP-11 reuse. It emits its
           # own discriminating Sentry event on any failed assert and exits non-zero.

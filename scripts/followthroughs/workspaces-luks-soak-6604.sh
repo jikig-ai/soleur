@@ -67,26 +67,28 @@ if [[ "$DRIFT" -ne 0 ]]; then
 fi
 
 # ---- 2. Better Stack: the luks-monitor heartbeat is PRESENT and SPANS ≥ SOAK_DAYS (DP-5) -------
-# Positive control: a probe that never ran leaves ZERO rows ⇒ FAIL (the parent could never go RED).
-# The archive arm gives the real multi-day span (NOT --no-archive, which is the ~40-min hot window).
-BS_SQL="SELECT min(dt) AS first_seen, max(dt) AS last_seen, count(*) AS n FROM {{table}} WHERE getJSON(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor' AND raw LIKE '%OK:%'"
+# Positive control: a probe that never emitted a SUCCESS line leaves ZERO OK rows ⇒ FAIL (the parent
+# could never go RED). The archive arm gives the real multi-day span (NOT --no-archive, the ~40-min
+# hot window). NOTE the count/span filter to the probe's `OK:` SUCCESS line (luks-monitor.sh logs
+# `OK: /mnt/data is LUKS-backed …` only on a fully-green run) — NOT the bare `luks-monitor` tag, which
+# also matches the `FAIL (...)` lines: a probe that runs daily but fails every assert would otherwise
+# satisfy this "heartbeat present" gate.
 BS_OUT=$(SINCE="${SOAK_DAYS}d" "$SCRIPT_DIR/../betterstack-query.sh" --since "${SOAK_DAYS}d" --grep 'luks-monitor' 2>/dev/null)
 BS_RC=$?
-: "$BS_SQL"  # documents the intended shape; betterstack-query.sh --grep runs the equivalent
 if [[ "$BS_RC" -ne 0 ]]; then
   echo "TRANSIENT: Better Stack query failed (rc=$BS_RC) — cannot confirm the heartbeat is live" >&2
   exit 2
 fi
-HB_ROWS=$(printf '%s\n' "$BS_OUT" | grep -c 'luks-monitor' || true)
-if [[ "${HB_ROWS:-0}" -eq 0 ]]; then
-  echo "FAIL: ZERO luks-monitor heartbeat rows in the ${SOAK_DAYS}d Better Stack window — the daily probe is DEAD or never armed. A missing probe cannot authorize a wipe (positive control)."
+OK_ROWS=$(printf '%s\n' "$BS_OUT" | grep 'luks-monitor' | grep -c 'OK:' || true)
+if [[ "${OK_ROWS:-0}" -eq 0 ]]; then
+  echo "FAIL: ZERO luks-monitor OK rows in the ${SOAK_DAYS}d Better Stack window — the daily probe is DEAD, never armed, or failing every run. A probe that is not steadily green cannot authorize a wipe (positive control)."
   exit 1
 fi
-# Internal ≥7d span floor: the first and last heartbeat rows must be ≥SOAK_DAYS apart. Derive from
-# the row timestamps (best-effort; if unparseable, stay conservative and require the operator's
-# directive earliest= to have gated the window — but never PASS on a sub-7d span).
-FIRST_TS=$(printf '%s\n' "$BS_OUT" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}' | sort | head -1)
-LAST_TS=$(printf '%s\n' "$BS_OUT" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}' | sort | tail -1)
+# Internal ≥7d span floor: the first and last SUCCESS (OK) rows must be ≥SOAK_DAYS apart. Derive from
+# the OK-row timestamps (best-effort; if unparseable, stay conservative — never PASS on a sub-7d span).
+OK_LINES=$(printf '%s\n' "$BS_OUT" | grep 'luks-monitor' | grep 'OK:')
+FIRST_TS=$(printf '%s\n' "$OK_LINES" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}' | sort | head -1)
+LAST_TS=$(printf '%s\n' "$OK_LINES" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}' | sort | tail -1)
 SPAN_OK=0
 if [[ -n "$FIRST_TS" && -n "$LAST_TS" ]]; then
   F_EPOCH=$(date -u -d "${FIRST_TS/ /T}" +%s 2>/dev/null || echo 0)

@@ -101,6 +101,10 @@ jobs:
         # it there so `trap cleanup EXIT` survives an SSH drop. The script reads the passphrase via
         # the host's pinned prd_workspaces_luks token path; no cloud-admin creds touch the host.
         run: |
+          # set +e so the `rc=$?` + ::error:: diagnostic runs — GitHub's inherited `-e` (which
+          # `set -uo pipefail` does not clear) would otherwise exit the step on the ssh failure
+          # before the guidance prints.
+          set +e
           set -uo pipefail
           # shellcheck disable=SC2086
           ${WEB_HOST_SSH:-ssh} "$WEB_HOST" "sudo DRY_RUN='${DRY_RUN}' ROLLBACK='${ROLLBACK}' bash -s" \

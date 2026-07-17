@@ -38,22 +38,28 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    `gh workflow run workspaces-luks-cutover.yml -f confirm=CUTOVER-WORKSPACES-LUKS -f dry_run=false`
    The `workspaces-luks-cutover` environment reviewer must approve. Window: ≤20 min budget (~10
    target), ≤2h hard abort. The cutover runs **on web-1** (host-side EXIT trap — DP-6), so an SSH
-   drop mid-freeze still auto-rolls-back to the plaintext mount. It reboots once and re-canaries
-   (C15) before declaring success.
+   drop mid-freeze still auto-rolls-back to the plaintext mount, and a host-local dead-man timer
+   remounts plaintext if no orchestrator heartbeat lands.
 
-4. **Verify (read-only, no SSH).**
+4. **Boot-path re-canary (C15) — operator step, after the freeze.** The cutover does NOT auto-reboot
+   (a reboot drops the SSH session mid-run). The realistic failure is the boot path (the structural
+   fail-closed gate + the `--restart unless-stopped` resurrection), so prove it explicitly: **reboot
+   web-1 once**, then run the read-only verify below. The run-keyed `CANARY_OK` persisted to the host
+   state file cannot satisfy a fresh post-reboot check — only a new green verify does.
+
+5. **Verify (read-only, no SSH).**
    `gh workflow run workspaces-luks-verify.yml` → conclusion `success` means `blkid`=`crypto_LUKS`,
    `findmnt /mnt/data`=`/dev/mapper/workspaces`, the `cryptsetup status` mapper→device link is
    present, and `/api/health`=200. The daily `luks-monitor` probe re-asserts this and pushes a
    Better Stack heartbeat; a missed push pages.
 
-5. **Soak (7 days).** The retained plaintext volume stays **attached-unmounted, un-wiped** for 7
+6. **Soak (7 days).** The retained plaintext volume stays **attached-unmounted, un-wiped** for 7
    days (protected by the cutover gate's `old_volume_touched==0`, NOT `prevent_destroy`). Enrol
    `scripts/followthroughs/workspaces-luks-soak-6604.sh` with a real ISO `earliest=` (canary+7d) and
    the `follow-through` label. It PASSes only on observed completion (drift=0 ∧ heartbeat spanning
    ≥7d ∧ ADR-119 `accepted`).
 
-6. **Wipe + converge + PR 3 (separate, environment-gated).** After the soak comments "SOAK PASSED —
+7. **Wipe + converge + PR 3 (separate, environment-gated).** After the soak comments "SOAK PASSED —
    wipe authorized", a human authorizes the **separate** environment-gated destructive dispatch:
    `lsblk -D` → `blkdiscard -z` → verified read-back → **detach** → Hetzner API delete (C5); the
    `for_each` key-set convergence (narrow to exclude web-1 on both the volume and its attachment —

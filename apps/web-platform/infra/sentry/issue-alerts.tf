@@ -1610,8 +1610,16 @@ resource "sentry_issue_alert" "workspaces_luks_drift" {
     {
       event_frequency = {
         comparison_type = "count"
-        value           = 1
-        interval        = "1h"
+        # value=0, NOT 1: event_frequency compares with a STRICT `current_value > value`
+        # (see zot_mirror_fallback_rate + web_terminal_boot_fatal above). This is a
+        # DEDICATED, COLD issue-group (an event is emitted ONLY on a failed at-rest
+        # assert), and luks-monitor.sh emits EXACTLY ONE event per daily failed run. With
+        # value=1 a single daily drift is count=1, `1 > 1` is false → NO page. value=0
+        # pages on the FIRST event (matches zot_mirror_fallback_rate). web_terminal_boot_fatal
+        # can use value=1 only because its group is always-already-hot (shared boot events);
+        # this group is not.
+        value    = 0
+        interval = "1h"
       }
     },
   ]

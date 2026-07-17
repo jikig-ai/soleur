@@ -53,7 +53,10 @@ else
 fi
 
 # (b3) DP-9: the emit reads the BAKED /etc/default/luks-monitor DSN BEFORE any `doppler secrets get`.
-baked_ln=$(grep -nF '/etc/default/luks-monitor' "$EMIT" | head -1 | cut -d: -f1 || true)
+# Anchor `baked_ln` on the CODE construct (the `[ -r … ]` guard), NOT the bare path — the path also
+# appears in the header COMMENT above the code, so a bare-token `head -1` would match the comment and
+# pass even if the code were reordered doppler-first (the exact vacuity this check exists to prevent).
+baked_ln=$(grep -nE '\[ -r /etc/default/luks-monitor \]' "$EMIT" | head -1 | cut -d: -f1 || true)
 dop_ln=$(grep -nE 'doppler secrets get SENTRY_DSN' "$EMIT" | head -1 | cut -d: -f1 || true)
 if [ -n "$baked_ln" ] && { [ -z "$dop_ln" ] || [ "$baked_ln" -lt "$dop_ln" ]; }; then
   ok "workspaces-luks-emit.sh reads the BAKED DSN before any Doppler fallback (DP-9)"
@@ -67,7 +70,10 @@ if have "doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces
 else
   no "luks-monitor.sh must read WORKSPACES_LUKS_KEY via 'doppler secrets get … --plain --config prd_workspaces_luks' (R9)"
 fi
-if grep -qE 'doppler (run|secrets download)[^\n]*--config prd_workspaces_luks' "$PROBE"; then
+# `.*` NOT `[^\n]*` — in a POSIX ERE `[^\n]` is "not backslash, not the letter n", so a violating
+# `doppler run --name x --config prd_workspaces_luks` (contains an `n`) would slip the guard. grep is
+# already line-scoped, so `.*` is the correct "rest of the line".
+if grep -qE 'doppler (run|secrets download).*--config prd_workspaces_luks' "$PROBE"; then
   no "luks-monitor.sh must NEVER use 'doppler run/download --config prd_workspaces_luks' (R9 CWE-522 hole)"
 else
   ok "luks-monitor.sh never uses doppler run/download against prd_workspaces_luks (R9)"
@@ -86,8 +92,8 @@ if have '^OnCalendar=daily$' "$TIMER"; then
 else
   no "luks-monitor.timer must fire OnCalendar=daily"
 fi
-if grep -qE 'OnUnitActiveSec|OnCalendar=\*:0/5|OnCalendar=minutely' "$TIMER"; then
-  no "luks-monitor.timer must NOT be a minute/5-min poll (the mount state is boot-immutable)"
+if grep -qE 'OnUnitActiveSec|OnCalendar=(minutely|hourly|\*:0/[0-9])' "$TIMER"; then
+  no "luks-monitor.timer must NOT be a sub-daily poll (minutely/hourly/*:0/N — the mount state is boot-immutable)"
 else
   ok "luks-monitor.timer is not a sub-daily poll"
 fi
@@ -106,13 +112,16 @@ else
   no "luks-monitor.sh must assign LOG_TAG=\"luks-monitor\" as a real assignment"
 fi
 
-# (h) The Sentry drift alert filters on BOTH tags the emit sets.
-if have 'resource "sentry_issue_alert" "workspaces_luks_drift"' "$SENTRY" \
-  && have 'value = "workspaces-luks"' "$SENTRY" \
-  && have 'value = "workspaces-luks-drift"' "$SENTRY"; then
-  ok "sentry_issue_alert.workspaces_luks_drift filters feature=workspaces-luks AND op=workspaces-luks-drift"
+# (h) The Sentry drift alert filters on BOTH tags the emit sets, ANDed. Extract the drift resource
+# block and assert WITHIN it (the two `value=` strings + filter_match) — an unscoped grep would pass
+# even if the tags lived in two different alerts or filter_match were "any" (either tag alone pages).
+drift_block="$(awk '/resource "sentry_issue_alert" "workspaces_luks_drift"/{p=1} p{print} p&&/^}/{exit}' "$SENTRY")"
+if printf '%s\n' "$drift_block" | grep -q 'value = "workspaces-luks"' \
+  && printf '%s\n' "$drift_block" | grep -q 'value = "workspaces-luks-drift"' \
+  && printf '%s\n' "$drift_block" | grep -qE '^[[:space:]]*filter_match[[:space:]]*=[[:space:]]*"all"'; then
+  ok "sentry_issue_alert.workspaces_luks_drift ANDs (filter_match=all) feature=workspaces-luks AND op=workspaces-luks-drift"
 else
-  no "sentry/issue-alerts.tf must declare sentry_issue_alert.workspaces_luks_drift filtering both tags"
+  no "sentry_issue_alert.workspaces_luks_drift must filter_match=\"all\" on BOTH feature=workspaces-luks and op=workspaces-luks-drift (a single-tag or filter_match=any alert pages on either tag alone)"
 fi
 
 # (i) The daily-probe heartbeat resource exists (the dead-probe switch — P1-4).

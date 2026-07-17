@@ -78,6 +78,16 @@ workspaces_luks_cutover_gate() {
         "hcloud_volume.workspaces_luks",
         "hcloud_volume_attachment.workspaces_luks"
       ];
+      # The three LIVE addresses each guarded by their OWN named clause (old_volume_touched /
+      # old_attachment_touched / web1_server_touched). out_of_scope EXCLUDES them so those named
+      # clauses are the SOLE catcher of a touch on them — making each independently load-bearing
+      # (a future allow-set widening can no longer silently shift their coverage onto out_of_scope,
+      # and the mutation test can isolate each). A touch on any of them still ABORTS (the named clause).
+      def named_live: [
+        "hcloud_volume.workspaces[\"web-1\"]",
+        "hcloud_volume_attachment.workspaces[\"web-1\"]",
+        "hcloud_server.web[\"web-1\"]"
+      ];
       def positive: (.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"));
       $p[0] as $plan
       | {
@@ -139,15 +149,22 @@ workspaces_luks_cutover_gate() {
             | length
           ),
           resource_deletes: (
-            # A pure +create provision has NO deletes. Any delete/forget of anything is out of shape.
+            # A pure +create provision has NO deletes. Any delete/forget is out of shape — EXCEPT the
+            # luks volume itself, which is owned by the named luks_volume_destroyed clause (so that
+            # clause is the sole catcher of a luks-volume delete/forget and stays independently
+            # load-bearing). A delete/forget of any OTHER resource still fires here.
             [ $plan.resource_changes[]?
+              | select(.address != "hcloud_volume.workspaces_luks")
               | select(.change.actions? | any(. == "delete" or . == "forget")) ]
             | length
           ),
           out_of_scope: (
+            # Positive action on an address that is NEITHER in the allow-set NOR one of the three
+            # named live addresses (each owned by its own clause above). So out_of_scope catches only
+            # GENUINELY un-enumerated addresses, and the named clauses solely own their addresses.
             [ $plan.resource_changes[]?
               | select(positive)
-              | select(IN(.address; allow[]) | not) ]
+              | select((IN(.address; allow[]) | not) and (IN(.address; named_live[]) | not)) ]
             | length
           )
         }

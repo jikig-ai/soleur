@@ -2479,6 +2479,10 @@ jobs:
         # sourced workspaces_luks_cutover_gate reads the STRUCTURED plan JSON and ABORTS unless the
         # plan is EXACTLY this create with the live plaintext volume/attachment + web-1 preserved.
         run: |
+          # set +e so the `rc=$?` diagnostic below actually runs — GitHub runs `run:` under an
+          # inherited `-e`, which `set -uo pipefail` does not clear, so without this the plan failure
+          # would exit the step before the ::error:: guidance prints. `set -e` is re-armed after.
+          set +e
           set -uo pipefail
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
