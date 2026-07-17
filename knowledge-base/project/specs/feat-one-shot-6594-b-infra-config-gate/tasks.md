@@ -80,23 +80,23 @@ the counterexample. (`depends_on` edge landed 2026-06-18 / #5516; nonce-1 race 2
 ## Phase 0.1 — Verify the tripwire premise (DONE above; gate the rest of the work)
 
 - [x] AC-0.1a: grep result recorded (P0.1). Tripwire ABSENT.
-- [ ] AC-0.1b: This premise flows into Phase 5 item 3 as the amendment headline.
+- [x] AC-0.1b: This premise flows into Phase 5 item 3 as the amendment headline.
 
 ## Phase 2 — RED (reproduce #6594 with a failing test)
 
 Goal: extract the adjudicator, capture the real payload, and prove the current logic PASSES the
 stale-same-count payload (i.e. reproduces the bug) before any fix.
 
-- [ ] **2.1** Create `apps/web-platform/infra/infra-config-gate.sh` — a **sourceable** adjudicator
+- [x] **2.1** Create `apps/web-platform/infra/infra-config-gate.sh` — a **sourceable** adjudicator
   extracted from the inline YAML gate. Pure function of (status JSON, repo checkout at the applied
   SHA); no network in the assert path. Emits `::error::content_mismatch:<dest>` naming the diverging
   file.
-- [ ] **2.2** Create `apps/web-platform/infra/infra-config-gate.test.sh` with **three fixtures**
+- [x] **2.2** Create `apps/web-platform/infra/infra-config-gate.test.sh` with **three fixtures**
   (see Fixture Table). The **stale-same-count** fixture is the captured real #6594 payload from the
   plan (`15/15`, `exit_code=0`, `files_failed=0`, `start_ts=1784233325`,
   `ci-deploy.sh sha256=2208300a…`). Fixtures are synthesized/captured artifacts containing paths and
   hashes only — **no secrets** (`cq-test-fixtures-synthesized-only`; confirm at implementation).
-- [ ] **2.3** With only the count logic ported (no content assert yet), run the test and
+- [x] **2.3** With only the count logic ported (no content assert yet), run the test and
   **confirm stale-same-count PASSES** — reproducing #6594.
 
 **Acceptance (Phase 2):**
@@ -110,14 +110,14 @@ stale-same-count payload (i.e. reproduces the bug) before any fix.
 
 ## Phase 3 — GREEN (content assert; terminal; wired into a runner)
 
-- [ ] **3.1** Add the content assert **OUTSIDE** the `for attempt in 1 2 3` retry loop. A content
+- [x] **3.1** Add the content assert **OUTSIDE** the `for attempt in 1 2 3` retry loop. A content
   mismatch is **terminal — never retried** (inside the loop = fresh curl = fresh connector =
   any-of-3, which launders the coin flip into a green).
-- [ ] **3.2** All three fixtures behave per the Fixture Table (stale-same-count now FAILs naming the
+- [x] **3.2** All three fixtures behave per the Fixture Table (stale-same-count now FAILs naming the
   file; fresh-correct PASSes; sentinel FAILs, not a silent no-op).
-- [ ] **3.3** **Mutation-test each assert** — delete/negate the subject assert and confirm the suite
+- [x] **3.3** **Mutation-test each assert** — delete/negate the subject assert and confirm the suite
   reddens. A green suite with the assert removed means the assert tests nothing.
-- [ ] **3.4** **Wire the new test into a runner** — add an explicit
+- [x] **3.4** **Wire the new test into a runner** — add an explicit
   `run: bash apps/web-platform/infra/infra-config-gate.test.sh` step to
   `.github/workflows/infra-validation.yml` (see P-runner). Confirm it is collected (no auto-glob).
 
@@ -135,11 +135,11 @@ passed; fail2ban ignoreip SSH apply delivered). **Phase 4 is therefore UNBLOCKED
 the authorization** (`hr-prod-host-config-change-immutable-redeploy` is satisfied: this re-delivers
 repo-defined files, it does not mutate host config in place).
 
-- [ ] **4.1** Bump the `redeploy-nonce` in `apps/web-platform/infra/push-infra-config.sh` — **that
+- [x] **4.1** Bump the `redeploy-nonce` in `apps/web-platform/infra/push-infra-config.sh` — **that
   file ONLY** (current value `redeploy-nonce: 6178-deliver-missing-cutover-probes-2` at line 35).
   This re-fires `deploy_pipeline_fix` **alone** (absent from `handler_bootstrap`'s trigger set) → no
   bridge, no restart, **no nonce-1 race**.
-- [ ] **4.2** No `-replace`, no `workflow_dispatch`, no SSH. The merge auto-applies.
+- [x] **4.2** No `-replace`, no `workflow_dispatch`, no SSH. The merge auto-applies.
 
 **Acceptance (Phase 4):**
 - AC-4a: only `push-infra-config.sh` changed in this phase; diff is a single nonce line.
@@ -149,7 +149,7 @@ repo-defined files, it does not mutate host config in place).
 
 ## Phase 5 — ADR-114 amendment + C4 correction + server.tf comment fix
 
-- [ ] **5.1** Amend `ADR-114-…-origin-relative.md` — **3 items**:
+- [x] **5.1** Amend `ADR-114-…-origin-relative.md` — **3 items**:
   1. I1 is inert (construction-time gate; `ignore_changes=[user_data]` + #6482).
   2. I2's antecedent discharged for `deploy.` AND `ssh.` (record origin-relative restores availability).
   3. **HEADLINE (per P0.1):** the #6416 in-band `hostname` tripwire is unsubstantiated — MEASURED
@@ -158,14 +158,14 @@ repo-defined files, it does not mutate host config in place).
     needing no `.tf` and no tunnel change"*): fan-out fixes the WRITE, not the READ (`deploy-status`
     / `inngest-liveness` stay coin-flipped), and it presumes web-2 should be converged (#6440's open
     question). Cite by **content anchor**, not bare line number (`cq-cite-content-anchor-not-line-number`).
-- [ ] **5.2** Correct the ONE-connector invariant in
+- [x] **5.2** Correct the ONE-connector invariant in
   `knowledge-base/engineering/architecture/diagrams/model.c4` — the `technology`/`description` on the
   `tunnel` container (*"exactly ONE connector … INVARIANT (ADR-114 I1, enforced #6425)"*) and the
   Tunnel→host edge, both false in production (2 live connectors, measured). Ensure web-2 is modeled.
   Read all three `.c4` files ({model,views,spec}); cite by content anchor. **Run BOTH C4 tests**
   (`c4-code-syntax.test.ts` + `c4-render.test.ts`) — a `view include` on an undefined element fails
   there, not at `tsc`.
-- [ ] **5.3** Fix `apps/web-platform/infra/server.tf:918-920` — the comment claiming the `depends_on`
+- [x] **5.3** Fix `apps/web-platform/infra/server.tf:918-920` — the comment claiming the `depends_on`
   edge means *"the push never races a mid-flight listener restart"*. nonce-1 (push-infra-config.sh:25-31)
   is the counterexample. Correct the comment to state the race is real (edge does not close it).
 
