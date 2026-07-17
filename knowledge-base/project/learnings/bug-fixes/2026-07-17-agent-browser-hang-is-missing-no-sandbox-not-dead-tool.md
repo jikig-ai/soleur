@@ -75,3 +75,29 @@ job to the operator:
 - `plugins/soleur/skills/feature-video/scripts/check_deps.sh`: a bounded launch smoke
   test that turns the 150s silent hang into a seconds-long, actionable WARN naming
   `--no-sandbox`.
+
+## Session Errors
+
+1. **Planning subagent terminated by API 529 (server overload) mid-investigation.**
+   Recovery: no partial plan artifact existed, so re-ran `soleur:plan` inline in the
+   parent and re-verified the subagent's decisive findings (daemon `/dev/null` stdout,
+   0.22.3 vs 0.32.1) by on-host measurement rather than trusting them.
+   **Prevention:** one-shot's partial-artifact recovery path already covers this; the
+   durable habit is to re-measure a crashed subagent's claims, never inherit them.
+2. **`exit 144` on `pkill -f agent-browser-linux-x64`.** A harness signal artifact;
+   the commands still executed. **Prevention:** isolate `pkill` in its own Bash call and
+   verify state with a follow-up `ps` rather than trusting the exit code.
+3. **`rm -rf /tmp/agent-browser/*` blocked by the delete-guard** when chained with a `cd`
+   into the worktree (the compound command's CWD tripped the protected-location guard).
+   **Prevention:** run `/tmp` cleanup as a standalone command, or design around it —
+   here, isolated `--session` names removed the need for manual daemon cleanup.
+4. **`./node_modules/.bin/vitest` → EXIT 127** on a plugin test that runs under `bun test`.
+   **Prevention:** plugin tests (`plugins/soleur/test/**`) use `bun test`; only
+   `apps/web-platform` uses vitest (already an AGENTS.md pinned-runner rule).
+5. **IaC-routing hook blocked the plan `Write`** (false positive on `npm install` /
+   "operator-driven" prose in a docs-only plan). **Prevention:** add the sanctioned
+   `<!-- iac-routing-ack: plan-phase-2-8-reviewed -->` comment when a plan legitimately
+   mentions install/operator prose but provisions no infrastructure.
+6. **`git diff origin/main` listed unrelated branches' files** — the bare-repo
+   stale-`origin/main` trap. **Prevention:** `git fetch origin main` + diff against the
+   merge-base (already documented across the plan/work/review skills).
