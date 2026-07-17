@@ -554,9 +554,15 @@ that fires, and AC9 reads zero rows for a reason that has nothing to do with the
   on the measured datum, comments, auto-closes issue 6497 via the sweeper, never runs again), and reports `class` + `docker_ver` but
   **not `kw`** — it would drop this round's entire deliverable. It already echoes `docker_ver` with "record
   on #6565", so it is already a datum-reporting channel. One line, same pattern, reporting-only,
-  Form-B-safe, cannot flip the verdict. **Flag for operator veto if the "nothing else" constraint is
-  absolute.**
-- **D7 — RECOMMENDED, needs operator sign-off: emit `errno_chars` from `_login_hatch`.**
+  Form-B-safe, cannot flip the verdict. ~~Flag for operator veto if the "nothing else" constraint is
+  absolute.~~ **OPERATOR DECISION 2026-07-17: APPROVED — implement it.** The single-shot argument carried:
+  without this line the round's deliverable has no automated reader, ever.
+- **D7 — ~~RECOMMENDED, needs operator sign-off~~ OPERATOR DECISION 2026-07-17: APPROVED — implement it.
+  Emit `errno_chars` from `_login_hatch`.** The operator accepted the deviation from the brief's "nothing
+  else" on the plan's own arithmetic: six arms answer only "is it ENOMEM?", and if the 22-char premise is
+  wrong they cover ~5% of ~130. `errno_chars` bounds the whole set in one round *and* tests the premise.
+  The honest caveats below are NOT waived by this approval — length is non-injective, and security must
+  **re-confirm** (not inherit) the `stderr_chars` residual argument for the narrowed segment.
   *Not in the brief's scope. Surfaced because the panel's arithmetic makes the six probes a ~5% shot if the
   premise is wrong, and this is the cheap move that ends the guessing.*
 
@@ -584,8 +590,62 @@ that fires, and AC9 reads zero rows for a reason that has nothing to do with the
     so security must re-confirm the argument still holds rather than inherit it.
 
   **Recommendation: take it.** It is ~2 lines, it converts "seventh shape = dead end" into "seventh shape =
-  bounded set", and it is the same "buy the datum" discipline that motivates the whole PR. **But it is
-  scope beyond the brief — the operator decides, not `/work`.**
+  bounded set", and it is the same "buy the datum" discipline that motivates the whole PR. ~~But it is
+  scope beyond the brief — the operator decides, not `/work`.~~ **Approved 2026-07-17 (see D7 heading).**
+
+---
+
+## MANDATORY PRE-SHIP CORRECTIONS — from the plan review panel (2026-07-17)
+
+The review verified **166/166 on the real worktree**; the six arms introduce **zero** test failures and all
+18 `6497` tests pass. The code is correct. **The defects are in this plan's Acceptance Criteria and in two
+shipped comments** — `/work` MUST fix each before the AC gate is trusted. Each was demonstrated by
+execution, not asserted; do not re-argue them.
+
+1. **AC6 false-FAILs on 100%-correct code — DEMONSTRATED.** `awk … | grep -c 'grep -q'` matches *comment
+   prose*, including Phase 2's own "`case`, never `grep -q`" wording. Adding that comment made AC6 return 1
+   on correct code. **Fix:** copy T-5B-19's comment-strip (`grep -vE '^[[:space:]]*#'`,
+   `ci-deploy.test.sh:4089-4092`) — it already exists and already explains why. Violates
+   `cq-assert-anchor-not-bare-token`.
+2. **AC6 is not in CI.** `failure_modes` claims `alert_route: CI`, but AC6 is a one-time manual grep —
+   nothing pins it post-merge. Either wire it into the suite or correct the claimed alert route. Do not
+   leave a false CI claim.
+3. **AC10 misses a close-form GitHub honors — VERIFIED.** `[^.]{0,40}` breaks on the `.` in `github.com`,
+   so `Closes https://github.com/jikig-ai/soleur/issues/6565` is **MISSED**. AC10 also claims to cover "the
+   commit message" while supplying no command for it, and Sharp Edge #2 names the **squash commit body** as
+   *the* risk surface. Fix the regex to cover `#N`, `GH-N`, **and** the full issue URL, and give it a
+   command that actually reads the squash body.
+4. **AC13's command cannot answer AC13 — VERIFIED.** `gh run list --json` returns only
+   name/status/conclusion, and `files_written` is a **count** (`files_written=8`) that never names
+   `ci-deploy.sh`. The criterion is unanswerable by that field under any command. Rewrite it against a
+   field that can actually settle it.
+5. **The change ships two mutually contradicting comments.** `_login_kw`'s header says *"Every literal
+   below is MEASURED … except the last three"*; the new arms are **INFERRED**. Same defect at
+   `ci-deploy.test.sh:3900-3903`. The universal quantifier breaks for the six new arms. **Fix:** introduce
+   an explicit third class — **MEASURED / INFERRED / FALSIFIED** — in both. This is exactly the
+   *"false-measured-comment this change exists to drain"* that the file itself warns about. Neither file is
+   currently in Files to Edit; add them.
+6. **Phase 1's parenthetical is factually wrong.** *"Expected: RED (arms absent → zero tokens emitted)"* —
+   measured unpatched output is `errsaving,`. Phase 1's own blockquote and D4 state this correctly. Delete
+   the parenthetical.
+7. **Name the two most-exposed tests in Test Strategy.** T-5B-14 (`ci-deploy.test.sh:3828`,
+   asserts `kw=` is **empty**) and T-5B-17 both feed `_login_kw`. Both pass, but T-5B-14 survives only on
+   its fixture's wording and is the test any future arm breaks first.
+8. **T-5B-20's (literal, token) pairs are HAND-WRITTEN ON PURPOSE — never derive them from `KW_BODY`.**
+   Deriving copies a typo into its own oracle and the test goes green with the bug (measured). The file's
+   loud "oracle DERIVED from the SUT, never hand-copied" precedent (`ci-deploy.test.sh:3922-3928`) applies
+   to the *vocabulary invariants* and **must not** be applied to the *firing fixtures*. Carry the
+   DO-NOT-FIX note so a reviewer cannot gut D4 by "correcting" it.
+
+**Minor (fix if cheap, do not gold-plate):** plan cites `ci-deploy.sh:669-691`, actual is **669-682**;
+AC3's `grep -c` exits rc=1 on zero and would abort a `set -e` wrapper — the same "non-match returns 1" class
+this instrument exists to survive; AC1's headline exceeds its command; AC5 has no command and a whole-file
+grep cannot distinguish the T16 fixture from the T-5B-20 fixture.
+
+**Methodology note worth preserving:** the reviewer's first run showed 5 failures. A **control run on
+unpatched code in the same copied dir reproduced the identical 5-failure set** — they were path artifacts of
+the scratchpad copy (drift guards resolving outside the copied tree), not a regression. A reviewer who
+stopped at the patched run would have reported a false regression. Run the suite in the **real worktree**.
 
 ---
 
