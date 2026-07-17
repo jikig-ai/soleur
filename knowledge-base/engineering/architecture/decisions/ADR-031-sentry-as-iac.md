@@ -375,13 +375,22 @@ acceptable design: a gate that is permanently red on every correct delete PR wou
 exactly the ack-blindness this plan refuses to train for `[ack-create]` (see the create-gate
 note below). A mechanism cannot be rejected in one phase and adopted in another.
 
-Because green now MEANS "the ack will reach the merge commit", two premises are **verified
-rather than assumed**:
+Two premises support the reconstruction, with an honest limit on the first (found at review):
 
-- the gate **fails closed** if `squash_merge_commit_message` is ever not `COMMIT_MESSAGES`.
-  Left unchecked, flipping that repo setting would silently green the PR gate while the apply
-  reds — #6074 with extra steps. This incident's etiology is a known hole documented in prose
-  that nobody re-checked; putting a second one in the fix would be inexcusable.
+- The PR gate **attempts to verify** `squash_merge_commit_message == COMMIT_MESSAGES` and
+  fails closed on a readable-but-wrong value. **But that field is administration-scoped, and
+  `administration` is not a grantable `GITHUB_TOKEN` permission** — so under CI the field
+  reads empty and the check cannot certify it. Rather than sit permanently red for a
+  token-scope reason (the exact anti-pattern this PR exists to avoid), the PR gate WARNS on an
+  empty read and defers to the apply gate. **The real enforcement is the post-merge apply
+  gate**, which reads the *actual* merge-commit message directly (its own `[ack-destroy]`
+  regex, no squash-mode assumption) and fails closed there — so a genuinely-missing ack still
+  cannot destroy anything, and a setting that mangled body content would make *every* destroy
+  PR fail its apply, self-announcing. The setting check has teeth only under an operator PAT
+  (`workflow_dispatch`); it is kept for that path and as documentation, not relied on in CI.
+  The earlier claim that the gate "fails closed if the setting is ever not COMMIT_MESSAGES"
+  was an overclaim corrected here — green from the PR gate means "best-effort early feedback",
+  and the apply gate is what means "the ack reached the merge commit".
 - `scripts/sentry-squash-ack-detect.sh` **reconstructs** the squash body before matching,
   rather than grepping the raw commit messages. It is pinned as the 7th
   `[ack-destroy]` regex site by `test-destroy-guard-regex-parity.sh`: drift between a

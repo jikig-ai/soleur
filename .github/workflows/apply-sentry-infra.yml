@@ -120,6 +120,12 @@ permissions:
   # Read the PR's branch commit messages to detect a pre-staged [ack-destroy]
   # (see the destroy gate). Read-only; no write scope anywhere in this workflow.
   pull-requests: read
+  # NOTE: `squash_merge_commit_message` (read by the destroy gate) is an
+  # administration-scoped field, and `administration` is NOT a grantable
+  # GITHUB_TOKEN permission scope — so the field is UNREADABLE by this workflow's
+  # token by construction, and the gate handles that by design (warn + defer to
+  # the apply gate; see the check). It becomes readable only under an operator
+  # PAT (workflow_dispatch), which is why the check is kept rather than dropped.
 
 env:
   TERRAFORM_VERSION: "1.10.5"
@@ -334,16 +340,38 @@ jobs:
           # premise is verified rather than assumed. This incident's etiology was
           # a known hole documented in prose that nobody re-checked; do not put a
           # second one in the fix.
-          # Separate the API call's success from its answer: a 5xx / rate-limit
-          # must read as "could not check" (a distinct, nameable failure), never
-          # as "the setting is wrong" — conflating them sends the operator to fix
-          # a repo setting that is fine.
-          if ! squash_mode=$(gh api "repos/${REPO}" --jq '.squash_merge_commit_message'); then
+          # Three distinct outcomes, not two — because "the API call failed",
+          # "the field is unreadable", and "the setting is genuinely wrong" send
+          # the operator to three different fixes, and only the last is a real
+          # problem.
+          #
+          #   1. `gh api` itself fails (5xx / rate-limit / network) -> fail closed,
+          #      named as transport. Re-run.
+          #   2. The call succeeds but the field is EMPTY. This is the NORMAL CI
+          #      case, not an edge one: `squash_merge_commit_message` is an
+          #      administration-scoped field, and `administration` is not a
+          #      grantable GITHUB_TOKEN permission scope, so this workflow's token
+          #      CANNOT read it — the field is empty by construction here (it is
+          #      readable only under an operator PAT via workflow_dispatch). An
+          #      empty read is therefore NEVER "the setting is wrong" — it is "this
+          #      token cannot see the setting". Failing on it would make the PR
+          #      gate permanently red for a token reason. So WARN and proceed: the
+          #      POST-MERGE APPLY GATE reads the actual merge-commit message
+          #      directly (its own [ack-destroy] regex, no squash-mode assumption)
+          #      and fails closed there, so a genuinely-missing ack still cannot
+          #      destroy anything. A setting that mangled body content would make
+          #      EVERY destroy PR fail its apply gate — self-announcing. The PR
+          #      gate is best-effort early feedback; the apply gate is enforcement.
+          #   3. The field is readable and != COMMIT_MESSAGES -> the assumption is
+          #      actually broken; fail closed, named as a setting problem.
+          if ! squash_mode=$(gh api "repos/${REPO}" --jq '.squash_merge_commit_message // ""'); then
             echo "::error::Could not read squash_merge_commit_message from the GitHub API (transport failure — 5xx / rate-limit / network). This is NOT an ack problem and NOT a repo-setting problem. Re-run the job; if it persists, check GitHub status. Failing closed because the gate cannot certify the ack without this read."
             exit 1
           fi
-          if [[ "$squash_mode" != "COMMIT_MESSAGES" ]]; then
-            echo "::error::This gate assumes the squash commit body is built from the branch commit messages (squash_merge_commit_message=COMMIT_MESSAGES), which is how a pre-staged [ack-destroy] reaches the merge commit. The repo now reports '${squash_mode}', so that assumption is broken and this gate cannot certify the ack. Failing closed. Fix the repo setting, or rework the gate."
+          if [[ -z "$squash_mode" ]]; then
+            echo "::warning::This token cannot read squash_merge_commit_message (empty response — an administration-scoped field the GITHUB_TOKEN does not always return). NOT failing the PR gate on it: this is a read-permission limit, not a wrong setting. The post-merge apply gate reads the actual merge-commit message and fails closed on a missing [ack-destroy], so a genuinely un-acked destroy still cannot land. Proceeding to the ack check as best-effort early feedback."
+          elif [[ "$squash_mode" != "COMMIT_MESSAGES" ]]; then
+            echo "::error::This gate assumes the squash commit body is built from the branch commit messages (squash_merge_commit_message=COMMIT_MESSAGES), which is how a pre-staged [ack-destroy] reaches the merge commit. The repo reports '${squash_mode}', so that assumption is broken and this gate cannot certify the ack. Failing closed. Fix the repo setting, or rework the gate."
             exit 1
           fi
 
