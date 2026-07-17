@@ -53,7 +53,15 @@ npm install --prefix ~/.local -g agent-browser@0.22.3
 agent-browser install  # Downloads Chrome for Testing (~300MB)
 ```
 
-See the `agent-browser` skill for detailed usage.
+**On Linux (Ubuntu 23.10+, containers, VMs), export the no-sandbox launch flag
+before the first command** — otherwise Chrome cannot launch and `open` hangs:
+
+```bash
+export AGENT_BROWSER_ARGS="--no-sandbox"
+```
+
+See the `agent-browser` skill for detailed usage and the "Chrome fails to launch
+/ `open` hangs" troubleshooting entry.
 
 ## Main Tasks
 
