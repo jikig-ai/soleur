@@ -17,7 +17,7 @@ Separately, `assert_ollama_loopback` wrapped the public-bind die in `if command 
 
 ## Solution
 
-1. **Renumber at review/ship:** free ordinal vs fresh `origin/main` → **ADR-119**; sweep plan/runbook/tasks/discoverability.
+1. **Renumber at review/ship:** free ordinal vs fresh `origin/main` → **ADR-120**; sweep plan/runbook/tasks/discoverability.
 2. **Fail-closed isolation:** require `ss` (install iproute2); shared `scripts/dogfood/assert-ollama-loopback.sh` used by bootstrap and by `grok-measure.sh` for `--model local-open`.
 3. **Tests pin control flow:** `LICENSE_OK` die regex, public-bind die anchor, base_url unit tests; register dogfood suites in `scripts/test-all.sh`.
 

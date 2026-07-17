@@ -136,7 +136,7 @@ Fill sample table:
 
 **Brand:** operator-only dogfood. **Never** claim “self-hosted Grok 4.5” or “Grok runs on our GPU.”
 
-**Control plane:** Robot console order + `scripts/dogfood/grok-gpu-bootstrap.sh` + this runbook + expense ledger. See ADR-119. **Not** Cloud TF birth.
+**Control plane:** Robot console order + `scripts/dogfood/grok-gpu-bootstrap.sh` + this runbook + expense ledger. See ADR-120. **Not** Cloud TF birth.
 
 ### Forbidden configs (Approach B / product)
 

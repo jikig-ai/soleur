@@ -6,7 +6,7 @@ issue: 6546
 supersedes: null
 ---
 
-# ADR-119: Robot GPU dogfood outside Cloud Terraform
+# ADR-120: Robot GPU dogfood outside Cloud Terraform
 
 ## Context
 

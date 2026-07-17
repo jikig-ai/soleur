@@ -103,7 +103,7 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-# Approach A (#6546 / ADR-119): when measuring local-open, re-assert loopback every run.
+# Approach A (#6546 / ADR-120): when measuring local-open, re-assert loopback every run.
 # Bootstrap-once is insufficient — config drift or public rebind must refuse the campaign.
 _MEASURE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ "${MODEL:-}" == "local-open" || "${MODEL:-}" == local-open/* ]]; then

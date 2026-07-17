@@ -34,7 +34,7 @@ fi
 
 echo "PASS grok-measure.test.sh"
 
-# #6546: local-open path must re-assert loopback (ADR-119)
+# #6546: local-open path must re-assert loopback (ADR-120)
 if grep -q 'assert-ollama-loopback' "$SCRIPT" && grep -q 'local-open' "$SCRIPT"; then
   echo "PASS: local-open measure preflight wired"
 else

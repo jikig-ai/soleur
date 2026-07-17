@@ -37,7 +37,7 @@ status: pre-merge-artifacts-done
 
 ## Phase 4: Core — ADR
 
-- [x] 4.1 Author short ADR-119 (renumbered from provisional 118 vs main) Robot dogfood outside Cloud TF + isolation non-edges
+- [x] 4.1 Author short ADR-120 (renumbered from provisional 118 vs main) Robot dogfood outside Cloud TF + isolation non-edges
 - [x] 4.2 Do **not** edit C4 this PR (deferred)
 
 ## Phase 5: Testing / verification (pre-merge)
