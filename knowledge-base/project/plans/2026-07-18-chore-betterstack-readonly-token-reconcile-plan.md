@@ -17,6 +17,48 @@ date: 2026-07-18
 > was present at plan time. `lane: single-domain` set directly (accurate — one
 > workflow file + one Doppler secret + one vendor token; no cross-domain surface).
 
+## Enhancement Summary
+
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+
+**Deepened on:** 2026-07-18
+**Sections enhanced:** verification-hardened (anchors, citations, IaC-routing exception)
+
+### Key Improvements
+1. **Line anchors verified live** — the reconcile step's Doppler read is at
+   `scheduled-terraform-drift.yml:293`, its comment at `:297`, the `BETTERSTACK_API_TOKEN="$TOKEN"`
+   script-env mapping at `:299` (all confirmed by `grep -n`; the swap touches only `:293`/`:297`).
+2. **Citations verified live** — `#6537` CLOSED (the "9-days-dark" heartbeat blind spot),
+   `#6548` OPEN (the diagnostic-first-run rationale), `#6549` OPEN (parent). All match the
+   narrative role they are cited in.
+3. **Negative claims confirmed** — `git grep BETTERSTACK_API_TOKEN -- '*.tf'` returns **zero**;
+   the sibling read/write token lives directly in Doppler (outside Terraform), exactly the
+   mechanism this plan uses for the readonly token (Phase-2.8 exception justified in the
+   Infrastructure section).
+4. **Runtime auth verification made a gate** — the Read scope's authorization of
+   `GET /api/v2/heartbeats` is *exercised* pre-merge (Phase 3), not assumed.
+
+### Deepen-plan gate results
+- 4.6 User-Brand Impact: PASS (present; threshold `none`; edited file is NOT a sensitive-path
+  per the canonical regex — `scheduled-terraform-drift.yml` matches none of doppler/secret/token/
+  deploy/… — so the scope-out bullet is optional, and present anyway).
+- 4.7 Observability: PASS (all 5 fields non-placeholder; `discoverability_test.command` is
+  `gh workflow run …` — no SSH).
+- 4.8 PAT-shaped variable halt: PASS (no `var.*_token`/`TF_VAR_(GITHUB|GH)_*`/`ghp_*` match;
+  `BETTERSTACK_API_TOKEN` is a vendor API token, not a GitHub PAT).
+- 4.9 UI-wireframe halt: N/A (no UI-surface file).
+- 4.4 scheduled-work / 4.5 network-outage / 4.55 downtime-cutover: N/A (rides the existing
+  Inngest dispatch; no SSH/network symptom; no serving surface taken offline).
+
+### Research Insights — Better Stack Read-scope contract
+The reconcile's ONLY call is `GET https://uptime.betterstack.com/api/v2/heartbeats` with
+`Authorization: Bearer <token>` (script comment, `<!-- verified: 2026-07-17 -->` against
+`apply-web-platform-infra.yml:1950`). A Better Stack **Read**-scoped global API token is
+designed to authorize GET reads; the residual risk is only that the vendor's "Read" scope is
+narrower than the heartbeats endpoint expects. Phase 3 closes this by exercising the token
+against the live endpoint (script rc in {0,2}) rather than trusting the scope label — the
+`FetchResult kind:"auth"` (401/403) → rc=1 path makes any scope shortfall LOUD, never silent.
+
 ## Overview
 
 The `heartbeat-live-reconcile` job in `.github/workflows/scheduled-terraform-drift.yml`
