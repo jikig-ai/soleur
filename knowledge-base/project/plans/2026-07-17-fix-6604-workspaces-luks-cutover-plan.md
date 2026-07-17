@@ -71,6 +71,8 @@ This fix also **creates a terminal failure mode that does not exist today**: pas
 loss ⇒ unreadable forever. Today's worst case is that someone else reads the user's code; post-LUKS it
 is that the user cannot.
 
+<!-- lint-infra-ignore start: describes the deferred-orchestrator cutover MECHANISM this PR builds
+     (dispatch-run freeze/rsync/repoint/canary + no-SSH observability), not a human-run infra step. -->
 **The adopted design (ADR-119, status `adopting`): additive volume + freeze + two-pass rsync +
 filesystem-level verify + repoint the mapper — never replace the host** (`cx33` is `available=false` in
 all 3 EU DCs, so a `-replace` destroys the sole prod host and strands the fleet unrebuildable). PR 1
@@ -79,6 +81,7 @@ all 3 EU DCs, so a `-replace` destroys the sole prod host and strands the fleet 
 deliver a fail-closed mount gate to the live host via the cutover channel, the dispatch apply + gate,
 the freeze/rsync/repoint/canary orchestration, the observability that lets the operator verify without
 SSH, and the soak enrollment that automates the post-soak converge/wipe.
+<!-- lint-infra-ignore end -->
 
 > No `spec.md` exists for this branch (one-shot; no brainstorm ran) — **lane defaulted to `cross-domain`
 > (TR2 fail-closed)**. The parent effort's four domain leaders (CTO, CLO, COO, CPO) are carried forward
@@ -91,6 +94,8 @@ SSH, and the soak enrollment that automates the post-soak converge/wipe.
 Every premise the issue and the parent plan cite by reference was re-checked against `origin/main` at
 `/work`-open (2026-07-17, after #6593 merged as `2c763c423`). Several moved.
 
+<!-- lint-infra-ignore start: retrospective premise-VALIDATION table (what was verified on main), not a
+     prescription of human-run steps — the terraform/apply nouns describe observed reality + dispatch fixes. -->
 | # | Claim (issue / parent plan) | Verified reality on main | Response |
 |---|---|---|---|
 | Q1 | Issue body: *"`Ref #6588` · **ADR-118** (`status: adopting`)"* | **Mis-cited.** `ADR-118-*.md` on main is *"A shared cert's SANs are the cluster roster"* (#6598). The LUKS ADR is **`ADR-119-luks-at-rest-for-the-live-workspaces-volume.md`, `status: adopting`**. The parent plan's provisional "ADR-119" is what shipped. | **This plan cites ADR-119 everywhere.** Do NOT propagate "ADR-118". |
@@ -106,6 +111,7 @@ Every premise the issue and the parent plan cite by reference was re-checked aga
 | Q11 | Scope: `workspaces-luks-cutover` dispatch job + `apply_target` choice + `web-1-swap` | **Confirmed shape.** `apply_target` is a `type: choice` (8 options today, `git-data-host-replace` last); `git_data_host_replace` (`:2158`) is the template. `warm_standby` + `web_2_recreate` each declare **job-level `concurrency: group: web-1-swap`** because they mutate web-1; `git_data_host_replace` inherits `terraform-apply-web-platform-host` because it mutates the git-data host. | The cutover mutates **web-1** ⇒ **`web-1-swap` is correct** (matches warm_standby/web_2_recreate). Add the choice option + description. |
 | Q12 | C5: `blkdiscard` + verified-read-back wipe precedent | **No code precedent** — `inngest-wiped-volume-verify.sh` uses `rm -rf` + a service-health read-back (gate→destroy→read-back→state-file is the STRUCTURAL shape). The blkdiscard technique is net-new. | Specify the full sequence in `workspaces-cutover.sh`'s wipe path; mirror inngest-wiped-volume-verify's structure. |
 | Q13 | C4/C11: C4 model state | **`workspacesVolume` element + `doppler → hetzner` boot-credential edge already shipped** by #6593; description currently says *"PLAINTEXT AT REST as of 2026-07-17 … the gap #6588/ADR-119 closes"*. | **No new C4 element/edge.** The only C4 edit is flipping that description PLAINTEXT→LUKS post-canary (Phase 4/5), sequenced with the ADR status flip. |
+<!-- lint-infra-ignore end -->
 
 **Own-capability claims** (`hr-verify-repo-capability-claim-before-assert`): I asserted the cutover is "a
 new apply_target job in apply-web-platform-infra.yml" AND "a git-data-cutover.yml-style orchestration
