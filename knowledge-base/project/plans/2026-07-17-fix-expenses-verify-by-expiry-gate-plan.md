@@ -441,31 +441,31 @@ discoverability_test:
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] **D1 (a):** Resend, Proton, and each corrected Hetzner row's amount in `expenses.md` **traces to a cited
+- [x] **D1 (a):** Resend, Proton, and each corrected Hetzner row's amount in `expenses.md` **traces to a cited
       source** (API response w/ endpoint+date, or a named invoice w/ date). Grep every touched row's Notes for a
       source citation; **no bare re-estimate**. Any figure still an estimate carries a `verify_by` marker (not a
       bare number).
-- [ ] **D1 (b):** `cost-model.md` re-derived — full re-derivation fires if EITHER (i) a category subtotal shifted
+- [x] **D1 (b):** `cost-model.md` re-derived — full re-derivation fires if EITHER (i) a category subtotal shifted
       >10% OR (ii) corrected burn crossed a `⌈burn÷49⌉`/`⌈burn÷48⌉` integer boundary (current 14/14). When it fires,
       a dated Review note updates both break-even counts, per-user marginal, and 50-user margins; tabled Source
       anchors updated to new dates. Every re-derived figure traces to a corrected ledger row. A change tripping
       neither still updates the specific line + anchor.
-- [ ] **D2 (schema):** every remaining estimate row in `expenses.md` carries a well-formed
+- [x] **D2 (schema):** every remaining estimate row in `expenses.md` carries a well-formed
       `<!-- estimate verify_by=… owner=… source="…" -->` marker (greppable, no `|` in the marker); verified rows
       carry none.
-- [ ] **D2 (check):** `scripts/expenses-verify-by-check.sh` exists, `BASH_SOURCE`-guarded, exit 1 on any expired
+- [x] **D2 (check):** `scripts/expenses-verify-by-check.sh` exists, `BASH_SOURCE`-guarded, exit 1 on any expired
       marker (rows named), exit 0 on none, exit 2 on malformed/anomaly.
-- [ ] **D2 (test) — RED/GREEN:** `scripts/expenses-verify-by-check.test.sh` asserts exit 1 (expired fixture, named),
+- [x] **D2 (test) — RED/GREEN:** `scripts/expenses-verify-by-check.test.sh` asserts exit 1 (expired fixture, named),
       exit 0 (future fixture), exit 2 (malformed fixture), + positive-sample guard; wired into `scripts/test-all.sh`
       and passing.
-- [ ] **D2 (scheduler):** `.github/workflows/scheduled-expenses-verify-by.yml` is `workflow_dispatch`-only (no
+- [x] **D2 (scheduler):** `.github/workflows/scheduled-expenses-verify-by.yml` is `workflow_dispatch`-only (no
       `schedule:` key); `cron-expenses-verify-by.ts` registered in `app/api/inngest/route.ts` serve list + added to
       `EXPECTED_CRON_FUNCTIONS` in `cron-manifest.ts`; `function-registry-count.test.ts` (e),
       `manual-trigger-allowlist.test.ts`, and `sentry-monitor-iac-parity.test.ts` all green.
-- [ ] **ADR-121** authored (`## Decision` + `## Alternatives Considered`); C4 "no impact" recorded with enumeration.
+- [x] **ADR-121** authored (`## Decision` + `## Alternatives Considered`); C4 "no impact" recorded with enumeration.
 
 ### Post-merge (operator/automated)
-- [ ] **D3:** `gh issue comment 6584` posted with the scope note (existence-check vs present-but-wrong-amount;
+- [x] **D3:** `gh issue comment 6584` posted with the scope note (existence-check vs present-but-wrong-amount;
       names the shipped D2 check). Automation: `gh` CLI in /work — not operator-manual.
 - [ ] Scheduled workflow dispatched once post-merge (`gh workflow run scheduled-expenses-verify-by.yml --ref main`,
       since a new workflow must exist on the default branch first) to confirm the executor path is green.
