@@ -32,9 +32,9 @@ Derived from the finalized (post-plan-review) plan. Phase order is load-bearing 
 - [ ] 2.2 Test: delete is OUTSIDE the case arm; runs on an `aborted`-state rollback fixture; `op=arm` unchanged.
 
 ## Phase 3 — #6556 Part 2 OnFailure (non-templated, bare-logger, heredoc)
-- [ ] 3.1 `inngest-bootstrap.sh` heartbeat `[Unit]` heredoc (:236-241) — add `OnFailure=inngest-heartbeat-failure-log.service`.
-- [ ] 3.2 Render non-templated `inngest-heartbeat-failure-log.service` as a bootstrap heredoc: `SyslogIdentifier=inngest-heartbeat`, ExecStart = bare `logger -t inngest-heartbeat -p err '<fixed msg>'` (NO `doppler run` wrapper), header comment (push-less + why + post-cutover semantics).
-- [ ] 3.3 Test: `OnFailure=` present; unit sets the tag; ExecStart has no `doppler`/`--project`.
+- [x] 3.1 `inngest-bootstrap.sh` heartbeat `[Unit]` heredoc (:236-241) — add `OnFailure=inngest-heartbeat-failure-log.service`.
+- [x] 3.2 Render non-templated `inngest-heartbeat-failure-log.service` as a bootstrap heredoc: `SyslogIdentifier=inngest-heartbeat`, ExecStart = bare `logger -t inngest-heartbeat -p err '<fixed msg>'` (NO `doppler run` wrapper), header comment (push-less + why + post-cutover semantics).
+- [x] 3.3 Test: `OnFailure=` present; unit sets the tag; ExecStart has no `doppler`/`--project`.
 
 ## Phase 4 — #6556 Part 1 CI tag-drift guard extension
 - [ ] 4.1 `vector-pii-scrub.test.sh` AC3/AC3b — extend enumeration to `.service` + `.sh`-heredoc + cloud-init `write_files` units (beyond `infra/*.sh`).

@@ -151,6 +151,31 @@ assert "DOPPLER_BIN resolved via command -v before HEARTBEAT_UNIT write" \
 assert "heartbeat unit sets SyslogIdentifier=inngest-heartbeat (AC1, #6536)" \
   "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-heartbeat$'"
 
+# #6556 Part 2 — the OnFailure alarm unit (push-less, queryable-only). The heartbeat unit
+# declares OnFailure=; the target unit reuses the inngest-heartbeat Source 4 tag and emits a
+# bare `logger` ERR line with NO `doppler run` wrapper (a wrapper would hardcode a project,
+# wrong on the soleur-inngest host, re-introducing the #6555 project-resolution surface).
+assert "heartbeat unit declares OnFailure=inngest-heartbeat-failure-log.service (#6556)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^OnFailure=inngest-heartbeat-failure-log\\.service$'"
+FAILLOG_BLOCK=$(awk '/cat > "\$HEARTBEAT_FAILURE_LOG_UNIT" <</,/^FAILLOGEOF$/' "$BOOTSTRAP_SH")
+assert "failure-log unit block extraction is non-empty (non-vacuity)" \
+  "[[ -n \"\$FAILLOG_BLOCK\" ]]"
+assert "failure-log unit is Type=oneshot" \
+  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -qE '^Type=oneshot$'"
+assert "failure-log unit reuses SyslogIdentifier=inngest-heartbeat (no new Source 4 entry)" \
+  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-heartbeat$'"
+# Anchor on the ExecStart LINE (not the whole block, whose comments mention doppler/--project):
+# the command must BE /usr/bin/logger and must NOT be a `doppler run`/`--project` wrapper.
+FAILLOG_EXECSTART=$(printf '%s\n' "$FAILLOG_BLOCK" | grep -E '^ExecStart=')
+assert "failure-log ExecStart is exactly one line" \
+  "[[ \$(printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
+assert "failure-log ExecStart command is /usr/bin/logger (bare)" \
+  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE '^ExecStart=/usr/bin/logger '"
+assert "failure-log ExecStart carries NO doppler run / --project wrapper (#6555 surface)" \
+  "! printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE 'doppler|--project'"
+assert "failure-log ExecStart emits at ERR priority on the inngest-heartbeat tag" \
+  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE '^ExecStart=/usr/bin/logger -t inngest-heartbeat -p err '"
+
 # #6536 ROUND 2: EVERY doppler-wrapped unit MUST set PrivateTmp=true.
 #
 # Not a style rule — a correctness one. /etc/default/inngest-server sets

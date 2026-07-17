@@ -61,6 +61,9 @@ readonly UNIT_FILE="/etc/systemd/system/inngest-server.service"
 readonly HEARTBEAT_UNIT="/etc/systemd/system/inngest-heartbeat.service"
 readonly HEARTBEAT_TIMER="/etc/systemd/system/inngest-heartbeat.timer"
 readonly HEARTBEAT_SCRIPT="/usr/local/bin/inngest-heartbeat.sh"
+# #6556 Part 2: OnFailure target for inngest-heartbeat.service — a push-less, queryable-only
+# oneshot that emits an ERR-priority `inngest-heartbeat` line when the heartbeat unit fails.
+readonly HEARTBEAT_FAILURE_LOG_UNIT="/etc/systemd/system/inngest-heartbeat-failure-log.service"
 readonly DOWNLOAD_URL="https://github.com/inngest/inngest/releases/download/${INNGEST_CLI_VERSION}/inngest_${INNGEST_CLI_VERSION#v}_linux_${INNGEST_CLI_ARCH}.tar.gz"
 # In-place upgrade drain. Override via env at install time if event volume
 # exceeds ~10 events/sec sustained — at higher rates the SQLite fsync window
@@ -237,6 +240,11 @@ cat > "$HEARTBEAT_UNIT" <<HEARTBEATEOF
 [Unit]
 Description=Inngest server heartbeat ping to Better Stack
 After=network-online.target
+# #6556 Part 2: on failure, fire a push-less oneshot that emits an ERR-priority
+# `inngest-heartbeat` line so a unit failure is READABLE off-box (no SSH). Before this, a
+# heartbeat failure surfaced only as the un-shippable SYSLOG_IDENTIFIER=systemd "Failed to
+# start" journal row (the #6551 signature); now it also ships on the inngest-heartbeat channel.
+OnFailure=inngest-heartbeat-failure-log.service
 
 [Service]
 Type=oneshot
@@ -282,6 +290,38 @@ PrivateTmp=true
 SyslogIdentifier=inngest-heartbeat
 ExecStart=${DOPPLER_BIN} run --project ${DOPPLER_PROJECT} --config prd -- ${HEARTBEAT_SCRIPT}
 HEARTBEATEOF
+
+# #6556 Part 2 — the OnFailure target for inngest-heartbeat.service. Non-templated (ONE
+# consumer, so no `@`/%i template — cf. cron-egress-alarm@ which earns its template from two
+# consumers) and rendered as a bootstrap heredoc like every other inngest unit (no standalone
+# tracked file, no server.tf delivery entry, no separate pinning test). Quoted delimiter — the
+# body is fully literal (no shell expansion). Loaded by the daemon-reload below; NOT enabled
+# (systemd triggers it via the heartbeat unit's OnFailure=, not a [Install] wants).
+cat > "$HEARTBEAT_FAILURE_LOG_UNIT" <<'FAILLOGEOF'
+[Unit]
+Description=Log an ERR-priority marker when inngest-heartbeat.service fails (#6556)
+# QUERYABLE, NOT ALARMING. This oneshot emits a single ERR line on the inngest-heartbeat
+# Vector -> Better Stack channel (vector.toml Source 4) so a heartbeat-unit failure is readable
+# off-box with NO SSH — it turns the failure systemd otherwise emits as the un-shippable
+# SYSLOG_IDENTIFIER=systemd "Failed to start" row (the #6551 signature) into a shippable
+# inngest-heartbeat line.
+#
+# It deliberately does NOT push to any monitor. One-unambiguous-pusher-per-monitor
+# (inngest-host.tf:137-171): the LIVE co-located pusher's alarm IS the Better Stack heartbeat
+# MONITOR (missing pings redden it in ~90s); the dark host has no monitor push by design.
+# POST-CUTOVER this stays correct — once the dedicated host BECOMES the live pusher, the
+# monitor's missing-pings alarm covers it and this log line remains the diagnostic. Do NOT
+# "complete" this unit by adding a monitor push.
+
+[Service]
+Type=oneshot
+# Reuse the existing Source 4 tag (vector.toml) — no new allowlist entry, no fresh quota decision.
+SyslogIdentifier=inngest-heartbeat
+# Bare `logger`, NO `doppler run` wrapper: this unit emits only a fixed marker and needs no
+# secrets. A `doppler run --project …` wrapper would hardcode a project (WRONG on the
+# soleur-inngest host) and re-introduce the exact project-resolution surface #6555 removes.
+ExecStart=/usr/bin/logger -t inngest-heartbeat -p err "inngest-heartbeat.service entered failed state (OnFailure) — the 60s ping failed; see the preceding inngest-heartbeat lines for the underlying ping error (#6556)"
+FAILLOGEOF
 
 # AccuracySec=1s added by #6537. systemd's default is 1 MINUTE, so this timer fires anywhere in
 # [elapse, elapse+60s] — an interval of 60s+delta, structurally bounded at 120s, against
