@@ -22,8 +22,12 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 
 > **[2026-07-16 Review note — second pass]** Same cycle, same issue (#6538). The fleet
 > sweep above found the Hetzner under-count; a second sweep of `expenses.md` for
-> **`active` rows absent from this document's tables** found two more, neither of them
-> new spend: **Supabase Inngest project** (`soleur-inngest-prd`, Micro compute, $10/mo,
+> **`active` rows absent from this document's tables** found **three**, none of them
+> new spend — and the sweep's own first report said "two", missing the third
+> because it was hunting dollars and the third is worth none (**Cloudflare R2
+> (cla-evidence)**: `active`, pay-per-use, sub-cent/mo — now named in the
+> not-counted list above, whose scope had to widen to admit it; caught at review,
+> not by the sweep). The two with dollars: **Supabase Inngest project** (`soleur-inngest-prd`, Micro compute, $10/mo,
 > active since 2026-06-17 — the durable Postgres backend behind the CPX22 Inngest host
 > that was *already* tabled as COGS) → **COGS**; and **Proton Mail Workspace Standard**
 > ($14/mo, active) → **COGS** (rationale in the note under the COGS table — it delivers
@@ -111,7 +115,7 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 - **R&D / Dev Tooling:** ~$420/month [expenses.md@2026-07-16]
 - **All-in recurring burn:** ~$620/month [expenses.md@2026-07-16]
 
-Not counted (free-tier or test-mode; trigger-based upgrades listed in §4): Stripe, Better Stack (uptime free-tier; Responder tier still deferred), Buttondown, Doppler, LinkedIn, Bluesky, X API free tier.
+Not counted (free-tier, test-mode, or metered-at-sub-cent; trigger-based upgrades listed in §4): Stripe, Better Stack (uptime free-tier; Responder tier still deferred), Buttondown, Doppler, LinkedIn, Bluesky, X API free tier, **Cloudflare R2 (cla-evidence)** — `active` and pay-per-use ($0.015/GB-mo + $0.36/M writes) but sub-cent/mo at realistic scale, so it is ledgered at 0.00 and not tabled. *(Scope of this list widened 2026-07-16 (#6538) from "free-tier or test-mode" to admit the metered-sub-cent case: R2 is `active` and fits neither prior label, so it fell through both the tables and this list. #6584's parity gate must treat this line as the authoritative not-counted set.)*
 
 ## Per-User Infrastructure Cost
 
@@ -199,7 +203,7 @@ Pre-planned cumulative upgrade exposure at "first paying customer" trigger: **+$
 
 Worked example: **50 paying users × $49/month = $2,450 MRR**. Two margin framings, both computed.
 
-### Against Product COGS (the 93%-adjacent framing)
+### Against Product COGS (the COGS-only framing)
 
 ```
 Revenue:           $2,450
@@ -228,7 +232,7 @@ The original "93% gross margin" claim is closest to the COGS-based number, but t
 
 ## Pricing Gate #4 Status
 
-This document addresses the **affordability** dimension of Pricing Gate #4 (`knowledge-base/product/pricing-strategy.md:152` — "Infrastructure ready | Cloud sync, hosted execution, and analytics dashboard are buildable (not necessarily built) | Not assessed"). The affordability side is now assessed: product COGS is ~$176/mo at current ledger [expenses.md@2026-07-16], break-even is 4 paying users (COGS scope) / 13 (all-in, gross-price and Stripe-net), gross margins remain ~76% all-in (~93% COGS-scope) at 50-user scale, and the BYOK architectural commitment keeps per-user variable cost near zero.
+This document addresses the **affordability** dimension of Pricing Gate #4 (`knowledge-base/product/pricing-strategy.md:152` — "Infrastructure ready | Cloud sync, hosted execution, and analytics dashboard are buildable (not necessarily built) | Not assessed"). The affordability side is now assessed: product COGS is ~$200/mo at current ledger [expenses.md@2026-07-16], break-even is **5 paying users** (COGS scope) / 13 (all-in, gross-price and Stripe-net), gross margins are **~75% all-in (~92% COGS-scope)** at 50-user scale, and the BYOK architectural commitment keeps per-user variable cost near zero. **Cite the all-in figure, not the COGS-scope one** — §5 retires the "~93%" framing, and this section is the one most likely to be quoted outward.
 
 The **buildability** dimension — whether cloud sync, hosted agent execution, and the analytics dashboard are actually buildable within a reasonable horizon — remains with **CPO / CTO**. That assessment is not closed by this document.
 
