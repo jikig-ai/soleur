@@ -109,31 +109,55 @@ and active-active-N (#6459) instead of rescheduling the defect.
 
 ---
 
-## PR B — the destroy (new branch; **blocked on the Open Decision**)
+## PR B — the destroy (new branch; **B-GATE CLEARED 2026-07-17 — unblocked**)
 
-### ⛔ B-GATE — resolve before ANY B-phase work
+### ✅ B-GATE — RESOLVED (ADR-118). B0–B6 may proceed.
 
-- [ ] **B-GATE.1** — Resolve §Open Decision: `proxy-tls.tf` reads
-      `ip_addresses = [for h in values(var.web_hosts) : h.private_ip]` and
-      `dns_names = concat(keys(var.web_hosts), ...)` — both **ForceNew**. Removing web-2
-      **replaces the cert** and rotates `PROXY_TLS_CERT`/`KEY` in Doppler `prd`, the value
-      the proxying client pins as `ca:` with `rejectUnauthorized: true`. It contains no
-      `web-2` literal → invisible to the sweep, the ACs, and the measurement.
-      Options: (1) bring cert + 2 doppler secrets into scope (rotates the pinned CA under
-      a running web-1 that baked the old cert at container start); (2) accept + document a
-      permanent 12h drift alarm; (3) decouple the cert from `var.web_hosts`.
-- [ ] **B-GATE.2** — Route to `/soleur:deepen-plan` (mandated at `single-user incident`;
-      its data-integrity + security triad is the right lens for a pinned-CA rotation).
+- [x] **B-GATE.1** — plan §Resolved Decision (was §Open Decision) — **resolved: Option 1** — bring the cert +
+      `doppler_secret.proxy_tls_cert` into PR B's scope and re-mint inside the supervised
+      operator-local apply. `proxy-tls.tf` is **unchanged (zero-line diff)** — the existing
+      for-expressions already compute the right answer. Rationale + rejected alternatives:
+      **ADR-118** (`knowledge-base/engineering/architecture/decisions/ADR-118-proxy-cert-sans-track-the-cluster-roster.md`).
+      **Two corrections to this task's own prior text:** (a) only **`PROXY_TLS_CERT`**
+      rotates — **not** `PROXY_TLS_KEY` (`tls_private_key.proxy_server` has zero
+      `var.web_hosts` dependency, so it is never replaced); (b) the "rotates the pinned CA
+      under a running web-1" risk is **vacuous** — the proxy path is dark behind three
+      independent locks, and server cert + client CA are the same PEM from the same env var
+      on the same host, so a stale host verifies against itself; skew needs two hosts and
+      the destroy leaves one.
+- [x] **B-GATE.2** — Routed to `/soleur:deepen-plan` → CTO ruling → ADR-118 (2026-07-17).
+- [x] **B-GATE.3** — Sibling issue filed: **#6596** — `terraform-target-parity.test.ts`
+      exempts the proxy cert because it *"ride[s] the same cluster apply"*, but **no
+      cluster-apply job exists**; that apply is an operator ritual, not automation. Mirror of
+      #6574 (*in the graph, claimed out* ↔ *out of the graph, claimed in*). P3, not a blocker
+      for B0–B6 — the proxy path is dark, so this is claim-vs-reality, not a live outage.
 
 ### B0 — Preconditions
 
 - [ ] **B0.1** — Re-run BOTH measurements (baseline + web-2-removed) over the exact
       push-apply scope. Stock/state are time-varying; a stale measurement is not evidence.
-      Record verbatim → AC-B1.
+      Record verbatim → AC-B1. **ADR-118: two shapes, do not conflate.** The push-apply-scope
+      measurement is **unchanged** (`0 to add, 1 to change, 1 to destroy`) — the cert is
+      unreachable from that scope (`-target` is transitive on *dependencies*, not
+      *dependents*). The **B3 local-apply** shape changes (a cert replace is
+      `1 to add, 0 to change, 1 to destroy` → the destroy count increments). **Measure both;
+      encode neither** — a predicted counter repeats the v1 P0 miss the 5th address cost once.
 - [ ] **B0.2** — Reference sweep with the **corrected** paths (v1 greped two zero-hit
       tokens and missed the guard directory):
       `git grep -n 'web-2\|web_2\|web\["web-2"\]' apps/web-platform/infra .github/workflows tests/ scripts/ plugins/soleur/test/`
       Capture the hit-set to a file — AC-B4 **diffs against it**. (Measured: 311 hits / 45 files.)
+- [ ] **B0.2b** — **Derivation sweep (ADR-118 — B0.2 cannot find what created the B-GATE).**
+      `proxy-tls.tf` has **zero** `web-2` literals; it couples by *derivation*, so B0.2,
+      AC-B4 and the measurement all missed it at once. A token grep enumerates *mentions*, not
+      *dependents*: `git grep -ln 'var\.web_hosts' apps/web-platform/infra` → **9 files**
+      (measured 2026-07-17). Audit every dependent for ForceNew-on-membership-change **and for
+      host-count assumptions**; AC-B4 diffs against this set too. The nine: `server.tf`,
+      `network.tf`, `dns.tf`, `placement-group.tf`, `proxy-tls.tf`, `variables.tf`,
+      **`web-hosts-fanout-parity.test.sh`**, **`tests/web-hosts-eu-pin.tftest.hcl`**,
+      **`scripts/deploy-status-fanout-verify.sh`**.
+      ⚠️ The last three were missed by this step's own first draft (six listed from memory
+      instead of running the command) — the ADR-118 lesson recurring inside its own
+      remediation. **Run the sweep, don't recall it**; if it returns >9, audit the extras.
 - [ ] **B0.3** — Confirm **no `apply-web-platform-infra` run is in flight** — the R2
       backend has no state lock (`use_lockfile = false`).
 - [ ] **B0.4** — Do **NOT** join the `web-1-swap` concurrency group (would red-CI
@@ -147,14 +171,29 @@ and active-active-N (#6459) instead of rescheduling the defect.
       fixtures only.
 - [ ] **B1.2** — RED cases that MUST fail: web-1 touch; non-web-2 volume destroy;
       server-only partial (**the measured shape**); firewall-attachment **delete**;
-      unparseable/empty plan JSON.
-- [ ] **B1.3** — RED case that MUST pass: **retry-after-partial** (3 of 4 remaining).
+      unparseable/empty plan JSON; **`doppler_secret.proxy_tls_cert` `delete`** (must be
+      `update`-only — a delete strips `PROXY_TLS_CERT` from Doppler `prd`); **any
+      `tls_private_key.proxy_server` change** (that is a key rotation → halt) *(both ADR-118)*.
+- [ ] **B1.3** — RED cases that MUST pass: **retry-after-partial** (3 of 4 remaining); and
+      **cert-replaced-but-Doppler-update-not-yet-applied** — Terraform applies sequentially
+      and can die between the two, so the `<= 1` / subset-not-equality shape must hold for the
+      new counters too *(ADR-118)*.
 - [ ] **B1.4** — GREEN: add `web2_retire_allow` to
-      `tests/scripts/lib/destroy-guard-filter-web-platform.jq` with **five** addresses:
+      `tests/scripts/lib/destroy-guard-filter-web-platform.jq` with **seven** addresses
+      *(5 + the 2 added by ADR-118)*:
       `hcloud_server.web["web-2"]`, `hcloud_server_network.web["web-2"]`,
       `hcloud_volume_attachment.workspaces["web-2"]`, `hcloud_volume.workspaces["web-2"]`,
-      **`hcloud_firewall_attachment.web`**. *(The 5th is a v1 P0 miss — the measured "1 to
-      change". Omitting it wedges the gate permanently.)*
+      **`hcloud_firewall_attachment.web`**, **`tls_self_signed_cert.proxy_server`**
+      (replace: delete+create), **`doppler_secret.proxy_tls_cert`** (update-in-place).
+      *(The 5th is a v1 P0 miss — the measured "1 to change". Omitting it wedges the gate
+      permanently.)* **`tls_private_key.proxy_server` is deliberately ABSENT** — it must never
+      plan a change; assert that with a fixture, don't assume it. Adding the two cert
+      addresses cannot weaken the gate: membership is exact-equality via
+      `IN(.address; web2_allow[])` over a disjoint resource-type space.
+- [ ] **B1.4b** — GREEN: two new counters mirroring `firewall_attachment_ok` *(ADR-118)*:
+      `cert_replaced` (`<= 1`, delete+create only) and `doppler_cert_ok` (exactly one
+      `update`, **never `delete`**). `host_creates` is **not** tripped — it is type-scoped to
+      `hcloud_server`/`hcloud_volume`, so the cert's create does not fire the mirrored wedge.
 - [ ] **B1.5** — GREEN: `out_of_scope == 0` (necessary, **not sufficient** — it passes the
       partial shape) **plus four named per-address destroy counters**, not a bare
       `length == 4`. Pin the volume counter to the exact address (a bare
@@ -180,8 +219,31 @@ and active-active-N (#6459) instead of rescheduling the defect.
 
 - [ ] **B3.1** — Remove the `"web-2"` key + its cross-DC rationale comment from
       `var.web_hosts`.
-- [ ] **B3.2** — Implement the B-GATE decision for `proxy-tls`.
+- [ ] **B3.2** — Implement the B-GATE decision for `proxy-tls` — **ADR-118, Option 1**.
+      **`proxy-tls.tf` must end byte-identical to `main`** (a zero-line diff — the existing
+      for-expressions already compute the right answer; if that file changed, the wrong option
+      was implemented). The work is entirely in the gate (B1.4/B1.4b) and the `-target` list
+      (B6.2). **Do NOT hardcode/pin the SAN list** — that was rejected Option 3: it falsifies
+      `terraform-target-parity.test.ts`'s exclusion rationale in place, and at the 3.D cutover
+      a new host gets no SAN → TLS verification fails on the live path **with the drift
+      detector blinded**.
 - [ ] **B3.3** — `terraform fmt -check` + `terraform validate` clean.
+- [ ] **B3.4** — **Fix `apps/web-platform/infra/web-hosts-fanout-parity.test.sh` — PR B
+      red-CIs it otherwise.** A *second* `var.web_hosts`-derived coupling (same class as the
+      cert), CI-registered at `.github/workflows/infra-validation.yml:434`. **Measured**
+      against a simulated B3.1: baseline `3 passed, 0 failed`; with web-2 removed →
+      `EXIT=1` (4 failures). Two edits, both required:
+      1. Three workflow literals move in lockstep with the roster —
+         `web-platform-release.yml:563`, `apply-web-platform-infra.yml:710` and `:974`:
+         `WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"` → `"10.0.1.10"`.
+      2. The test's own hardcoded 2-host floor — `if [ "$tf_n" -lt 2 ]; then fail "… — parser
+         drift"` → `-lt 1`. Fixing only the literals still leaves `3 passed, 1 failed`, and it
+         fails blaming *parser drift* rather than the roster — fix the message too.
+      ⚠️ **#6575 ordering trap:** apply-workflow copies #1/#2 live in the
+      `warm_standby`/`web_2_recreate` jobs #6575 deletes after B6, and
+      `check_all_copies "$APPLY_WORKFLOW" … 2` pins `min_copies=2` → deletion trips
+      `expected >=2 copies, found 0`. #6575 must lower `min_copies` in the same PR.
+- [ ] **B3.5** — Re-run `bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh` → exit 0.
 
 ### B4 — ADR + C4
 
@@ -234,7 +296,23 @@ and active-active-N (#6459) instead of rescheduling the defect.
 - [ ] **B6.1** — `/soleur:review` → `/soleur:ship`. Squash commit MUST carry
       `[skip-web-platform-apply]` **on its own line**. Keep the squash single-purpose (the
       token suppresses **all** guards for that merge).
-- [ ] **B6.2** — Produce the saved plan locally: `-target` the 5 addresses, `-out=tfplan`.
+- [ ] **B6.2** — Produce the saved plan locally: `-target` the **6** addresses *(5 + the one
+      added by ADR-118)*, `-out=tfplan`:
+      ```
+      -target='hcloud_server.web["web-2"]'
+      -target='hcloud_server_network.web["web-2"]'
+      -target='hcloud_volume_attachment.workspaces["web-2"]'
+      -target='hcloud_volume.workspaces["web-2"]'
+      -target=hcloud_firewall_attachment.web
+      -target=doppler_secret.proxy_tls_cert          # ADR-118
+      ```
+      One new target suffices — `-target` is transitive on **dependencies**, so
+      `doppler_secret.proxy_tls_cert` pulls in `tls_self_signed_cert.proxy_server` →
+      `tls_private_key.proxy_server` (a graph no-op; not replaced). **Do NOT add
+      `-target=doppler_secret.proxy_tls_key`** — the key does not rotate, and naming it invites
+      the false belief that it does. Note the `-target` list (6) and `web2_retire_allow` (7)
+      are **different lists**: the allow-list names everything that *appears* in the plan; the
+      `-target` list names only what must be *reached*.
 - [ ] **B6.3** — Run the gate: `terraform show -json tfplan | jq -f tests/scripts/lib/destroy-guard-filter-web-platform.jq`.
 - [ ] **B6.4** — **Show the operator the gate verdict AND the exact apply command; wait for
       explicit per-command go-ahead** (`hr-menu-option-ack-not-prod-write-auth` —
