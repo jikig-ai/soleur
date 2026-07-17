@@ -13,6 +13,35 @@ status: draft
 
 > Spec lacks valid `lane:` (no spec.md for this branch) — defaulted to `cross-domain` (fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-18
+
+**Deepen-plan halt gates — all PASS (no telemetry emitted):**
+- 4.6 User-Brand Impact — present, threshold `single-user incident`, non-placeholder.
+- 4.7 Observability — present, 5-field schema populated, `discoverability_test.command` is ssh-free.
+- 4.8 PAT-shaped variable — none.
+- 4.9 UI-wireframe — not a UI surface (cloud-init `.yml`); skip.
+- 4.5 Network-outage / 4.55 Downtime & Cutover — do NOT fire: the only reboot/replace referenced is
+  the explicitly out-of-scope `inngest-host-replace`; the change touches `hcloud_server` `user_data`
+  only, which the running host pins via `lifecycle { ignore_changes = [user_data, image, …] }`
+  (`server.tf:265`) — exactly the carve-out 4.55 exempts. No in-scope `terraform apply`, no SSH symptom.
+
+**Live-verified citations (2026-07-18):**
+- `origin/main` HEAD `68c2ff458`; `git merge-base --is-ancestor 119861998 origin/main` → 0 (fix is in main).
+- `vinngest-v1.1.22` is the semver-max published GHCR tag (built 2026-07-16); no `v1.1.23`.
+- `inngest-bootstrap.sh` drift = commit `119861998` (bundle; #6552 CLOSED confirms op=rollback content).
+- `vector.toml` drift = commit `938863a9d` (PR #6610, issue #6604 LUKS) — only the `luks-monitor` line;
+  `inngest-cutover-flip` was already baked at v1.1.22 (`git show vinngest-v1.1.22:…vector.toml` line 166).
+- Umbrella #6178 is OPEN (stays open — close no issues).
+- Precedent: this is the canonical pin-bump the drift-guard (`cloud-init-inngest-bootstrap.test.sh`
+  AC6/AC6b, #4675 + #6536) was built to enforce — no novel pattern.
+
+**Key improvement over the task background:** corrected the drift provenance (bootstrap.sh via the
+#6178 bundle; vector.toml via #6604 LUKS — NOT the flip marker, which was already baked) and surfaced
+the load-bearing tag↔pin coupling the drift-guard imposes (pushing the tag red-lines AC6 until the
+pins bump). Neither was in the original framing.
+
 ## Overview
 
 The dedicated Inngest host (`hcloud_server.inngest`, 10.0.1.40) and any web host with
@@ -29,9 +58,9 @@ Since that build, the two extracted carrier files have both drifted on `origin/m
   bundle (commit `119861998`, PRs #6552/#6553/#6555/#6556): op=rollback
   `INNGEST_HEARTBEAT_URL` delete, the flip-guard `flushed` allowlist entry, `DOPPLER_PROJECT`
   delivered via `/etc/default/inngest-server`, and the journald-tag drift-guard + OnFailure log unit.
-- **`vector.toml`** — `+6` from commit `938863a9d` (#6604 `/workspaces` LUKS cutover): the
-  `luks-monitor` entry added to the Source-4 (`host_scripts_journald`) `include_matches.SYSLOG_IDENTIFIER`
-  allowlist.
+- **`vector.toml`** — `+6` from commit `938863a9d` (PR #6610, issue #6604 — the `/workspaces` LUKS
+  cutover): the `luks-monitor` entry added to the Source-4 (`host_scripts_journald`)
+  `include_matches.SYSLOG_IDENTIFIER` allowlist.
 
 No `vinngest-v1.1.23` tag was ever pushed and the OCI pin still reads `v1.1.22` at all three
 sites. A future gated `inngest-host-replace` (`terraform apply -replace=`, which force-replaces
@@ -50,7 +79,7 @@ repoint — those are gated and planned separately under umbrella #6178, which s
 | Premise (task background) | Verified reality | Plan response |
 |---|---|---|
 | Tag points at commit `119861998` | `origin/main` HEAD is `68c2ff458`; **4 commits landed after** the bundle; `119861998` is an ancestor of HEAD. | Tag `origin/main` HEAD **at execution time** (contains the fix). Never hardcode a SHA or the bundle commit; never tag the feature branch. Assert `119861998` is an ancestor of the tag. |
-| The bundle `119861998` changed `vector.toml` | `119861998` changed **`inngest-bootstrap.sh`** (+101/-27) but **not** `vector.toml`. `vector.toml` drifted via a **different** commit `938863a9d` (#6604 LUKS), adding the `luks-monitor` Source-4 entry. | Rebake still required (both carriers differ from baked v1.1.22). Provenance corrected in Overview. |
+| The bundle `119861998` changed `vector.toml` | `119861998` changed **`inngest-bootstrap.sh`** (+101/-27) but **not** `vector.toml`. `vector.toml` drifted via a **different** commit `938863a9d` (PR #6610, issue #6604 LUKS), adding the `luks-monitor` Source-4 entry. | Rebake still required (both carriers differ from baked v1.1.22). Provenance corrected in Overview. |
 | Stale image drops the `inngest-cutover-flip` no-SSH marker (Source-4 allowlist) | `inngest-cutover-flip` was **already** in v1.1.22's `vector.toml` (`vector.toml:166`, verified via `git show vinngest-v1.1.22:…`). It is **not** the drift. | The real `vector.toml` drift is `luks-monitor`; the real `inngest-bootstrap.sh` drift is the #6178 bundle. Flip-marker claim corrected — the marker is not the justification, the bundle + luks drift is. |
 | Bump 3 sites; re-grep for a drift-guard fixture that pins the tag | Confirmed 3 real pin sites. The drift-guard test `cloud-init-inngest-bootstrap.test.sh` (AC6/AC6b) derives `LATEST_TAG` **dynamically** from `git tag --list 'vinngest-v*' | sort -V | tail -1` — there is **no hardcoded tag fixture** to bump. Other `v1.x` literals (`ci-deploy.test.sh` v1.0.0/v9.9.9/attacker; `zot-soak-6122.test.sh` v1.1.19) are **synthetic** security/soak fixtures. | Bump exactly the 3 real pins. Edit **no** test/fixture. Explicitly assert the synthetic fixtures are untouched. |
 
