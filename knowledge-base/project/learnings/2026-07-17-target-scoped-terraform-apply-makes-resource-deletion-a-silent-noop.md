@@ -178,6 +178,63 @@ averaging their opinions.
    **Prevention:** background agents notify on completion; there is no status-poll tool to
    fetch. One-off; no cost.
 
+## Addendum — plan-phase findings (2026-07-17, 7-agent review)
+
+Four findings from planning the fix are as transferable as the bug itself.
+
+### Removing a `-target=` scope bound does not fix the delete path if the apply is push-only
+
+`apply-sentry-infra.yml:42-45` triggers on `push: main` **only** — there is no PR-time plan. So
+full-root *alone* yields: remove a block → merge → the apply goes red **after** merge → the
+resource stays live. **End state byte-identical to the original bug**, with the failure now loud
+in a place nobody watches, on a closed PR. Worse, `[ack-destroy]` must live in the **merge
+commit**, authored in GitHub's squash UI — the author cannot pre-stage it from the branch and
+nothing warns them before they click.
+
+**Generalizes:** when you fix a footgun by making a destructive operation *possible*, check
+*when* the operator finds out. A gate that fires after the irreversible step is documentation,
+not a control. The fix is a `pull_request` job that converts a post-merge red into a pre-merge
+instruction.
+
+### A guard's new data source must be checked for what its *complement* hides
+
+The plan proposed sourcing a coverage guard's resource types from `*.tf` instead of the `-target=`
+list, and called it "strengthening the invariant". It was **false in exactly the direction of the
+bug**: under full-root, Terraform's plan universe is **state ∪ config**, so a type present in
+state with *no remaining block* is invisible to a `.tf`-only extractor — precisely the class the
+PR exists to destroy. Had the orphaned alert been the last of its type, the guard would have
+emitted a type set omitting it, passed **vacuously**, and let an unchecked destroy through.
+Correct source: `types(*.tf) ∪ types(terraform state list)`.
+
+**Generalizes:** when changing what a guard reads, ask "what is in the new source's complement?"
+A guard that passes because it saw nothing is indistinguishable from one that passed because
+everything was fine.
+
+### A contract's consumers must be re-derived at plan time, not inherited from a summary
+
+The plan named 3 consumers of the `-target=` list. There were **11** — six op-contract tests
+assert membership *by name* (`"is wired into the apply-sentry-infra.yml -target list (else it
+never applies)"`), i.e. the exact inverse of the change. All six appeared in the session's *first*
+grep and were then dropped when two research agents each returned a narrower list. The
+full-suite AC would have been unpassable.
+
+**Generalizes (the #4591 class):** the consumer list must come from a fresh `git grep -l` at
+plan-write time and be reconciled against every earlier grep in the session — never from a
+subagent's summary alone. Two agents narrowing independently is not corroboration; each was
+answering a different question.
+
+### A doc that quotes its own guard's trigger phrase re-triggers the guard
+
+`.claude/hooks/iac-plan-write-guard.sh` pattern (b) is a whole-phrase scan of plan *prose*. It
+blocked three writes. The first two matched a hyphenated idiom meaning "outside the normal
+channel", used incidentally to describe a vendor-side UI delete — never to describe a human task.
+The third block was self-inflicted: the Session Errors entry *documenting* the trigger quoted the
+trigger, so the write explaining the block re-triggered it.
+
+**Generalizes:** when a content-scanning gate fires, check whether the match is incidental word
+choice before reaching for the documented opt-out — an unnecessary ack records a `bypass` in rule
+telemetry and weakens a real signal. And describe trigger phrases rather than reproducing them.
+
 ## Related
 
 - Issue: #6589 (this work) · Deferred: #6590 (deep prune / ADR-031 amendment), #6591 (monitor-value telemetry)
