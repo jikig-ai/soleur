@@ -227,8 +227,8 @@ logs:
   where: GitHub Actions run logs for build-inngest-bootstrap-image.yml
   retention: GitHub Actions default
 discoverability_test:
-  command: gh run list --workflow=build-inngest-bootstrap-image.yml --limit 3 && docker manifest inspect ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.23
-  expected_output: latest run conclusion=success AND manifest JSON returned (exit 0) — no ssh
+  command: docker manifest inspect ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.23
+  expected_output: mediaType (manifest JSON returned, exit 0) — no ssh; single command, no shell-active tokens per preflight Check 10
 ```
 
 ## Acceptance Criteria
