@@ -28,18 +28,44 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
   tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.web.id
 
   config {
+    # ADR-114 I2 (#6425, #6594) — origin-RELATIVE, not connector-relative. This is ONE
+    # tunnel with MULTIPLE connector replicas and CF load-balances across them, so a
+    # `localhost:` service resolves on WHICHEVER replica answers. That made the whole
+    # management plane a coin flip: #6594's infra-config POST was a coin-flipped WRITE
+    # self-verified against a SEPARATELY coin-flipped READ, and the verify gate's retry
+    # loop (fresh curl per attempt = fresh connector selection, break on first pass)
+    # laundered the coin flip into a green — #6577's ci-deploy.sh never reached web-1
+    # while CI reported success. Pinning the origin makes whichever replica answers proxy
+    # to web-1, the only host that can serve these routes. Generalizes the pattern the
+    # registry rule below already ships (#6122).
+    #
+    # This does NOT trade availability away — it restores it. The status quo is not
+    # "available", it is "answers, sometimes from a host that cannot serve the route"
+    # (web-2 has no inngest-inventory.sh at all). Correct-or-unavailable ≻ silently-wrong.
+    #
+    # The :9000 / :22 ports stay literals: webhook.service binds `-ip 0.0.0.0` with the
+    # port in its own config, so deriving it costs more than it buys. A decision, not an
+    # oversight. The IP is NEVER hardcoded — var.web_hosts is the canonical source.
     ingress_rule {
       hostname = "deploy.${var.app_domain_base}"
-      service  = "http://localhost:9000"
+      service  = "http://${var.web_hosts["web-1"].private_ip}:9000"
     }
     # SSH ingress for CI runner — `terraform_data.*` provisioner resources
     # in server.tf reach the host through this tunnel after the runner
     # establishes a `cloudflared access tcp` localhost forward.
     # CF Tunnel ingress rules are first-match; this MUST stay above the
     # catch-all `http_status:404` rule below.
+    #
+    # Pinned for the same reason as `deploy.` above, and NOT optional: the
+    # infra_config_handler_bootstrap bridge is the SOLE delivery path for the webhook
+    # handler + hooks.json, and it rides this rule. Pinning only `deploy.` would leave
+    # the control plane's other half coin-flipped. ADR-114:191's "do NOT repoint the 12
+    # `connection { host }` blocks" is about connection.host — NOT the ingress service;
+    # #6441 §1 shows the service repoint needs no NAT rework (the runner still dials the
+    # public SERVER_IP).
     ingress_rule {
       hostname = "ssh.${var.app_domain_base}"
-      service  = "ssh://localhost:22"
+      service  = "ssh://${var.web_hosts["web-1"].private_ip}:22"
     }
     # #6122 (ADR-096) — registry PUSH ingress. A web-host cloudflared connector proxies to
     # the private-net zot host, so the registry host needs NO cloudflared of its own. CI runs
