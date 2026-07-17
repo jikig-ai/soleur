@@ -773,7 +773,13 @@ _login_tok() {
 #                   *** TRIGGER — IF EITHER TOKEN (a) BECOMES VARIABLE-LENGTH (a JWT, an
 #                   OIDC-minted session token), (b) LEAVES THE `[A-Za-z0-9]` ALPHABET, or (c) IS
 #                   ROTATED TO A LENGTH OTHER THAN ITS CURRENT ONE, THIS BECOMES A LENGTH ORACLE
-#                   AND MUST BE BUCKETED (`0 | 1-99 | 100-399 | 400+`). *** (c) is the LIKELIEST
+#                   AND **BOTH `stderr_chars` AND `errno_chars` MUST BE BUCKETED** — the two fields
+#                   are governed by this ONE paragraph and must be bucketed TOGETHER, in the same
+#                   PR (`0 | 1-99 | 100-399 | 400+`). Bucketing only this field leaves
+#                   `errno_chars` shipping `len(<credential>)` from the NARROWER final-colon
+#                   segment, which is the same oracle through a smaller window — #6565 added that
+#                   field under this paragraph's governance, so the plural is load-bearing, not
+#                   stylistic. *** (c) is the LIKELIEST
 #                   and was missing: `ZOT_PULL_TOKEN` is an htpasswd credential whose length is a
 #                   Doppler value, not a format invariant — a rotation to a different length is
 #                   an ordinary operator action that (a) does not describe. The zot side is

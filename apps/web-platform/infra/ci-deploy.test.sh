@@ -3897,13 +3897,24 @@ T16_LIB=$(mktemp)
 source "$T16_LIB"
 T16_BAD=""
 T16_N=0
-# One fixture per MEASURED _login_kw arm, each carrying a credential canary in the same string —
-# so an arm that splices its input emits the canary and fails the closed-form oracle. Every
-# literal here is a string the /work Phase 0 battery measured out of a real `docker login`
-# against a live registry:2 (except the three the plan FALSIFIED, kept as free kw probes).
-# NOT one fixture per ARM — `_login_kw` also carries six INFERRED errno arms (#6565) that this
-# array deliberately does not enumerate; T-5B-20 owns those. Read "MEASURED arm" literally here:
-# this comment stays true only because it quantifies over the measured arms, not over the body.
+# Fixtures for the _login_kw arms, each carrying a credential canary in the same string — so an arm
+# that splices its input emits the canary and fails the closed-form oracle.
+#
+# PROVENANCE, per entry — stated as an enumeration because the universal it replaces was FALSE.
+# Most entries below are strings the /work Phase 0 battery measured out of a real `docker login`
+# against a live registry:2. The exceptions, ALL of them:
+#   - three the plan FALSIFIED (non-TTY / daemon-conn / credential-helper), kept as free kw probes;
+#   - `some entirely novel shape no arm has ever seen …` — a SYNTHETIC no-match probe;
+#   - `""` — the empty-input case.
+# This array also does NOT enumerate `_login_kw`'s six INFERRED errno arms (#6565); T-5B-20 owns those.
+#
+# WHY THE ENUMERATION AND NOT A UNIVERSAL WITH A CARVE-OUT: this comment previously read "Every
+# literal here is a string the /work Phase 0 battery measured … (except the three the plan
+# FALSIFIED)". That universal was already false on main — the novel-shape probe and the empty
+# fixture are neither measured nor falsified — and the #6565 round initially "fixed" it by asserting
+# it "stays true", which made a passively stale comment into an ACTIVELY claimed one. A comment
+# claiming more measurement than was done is the exact defect this instrument exists to drain;
+# restating it here would have been this change reproducing its own bug. Enumerate, do not quantify.
 # Synthesized secret shapes only, split so no contiguous token literal exists in this file
 # (`cq-test-fixtures-synthesized-only` + GitHub push protection).
 T16_KW_CANARY="SENTINEL_LEAK_CANARY_kw pw=dckr_pat_""BBBBBBBBBBBBBBBBBBBBBBBBBBB user=deploy-bot"
@@ -3954,7 +3965,7 @@ else
   done
   # _login_kw — REVIEW-CRITICAL. Until this loop existed, `_login_kw` had ZERO behavioural
   # coverage: the AC9 battery mutated _login_tok, the hatch and the call sites, and never touched
-  # it, so a Form-A disclosure in ANY of its 10 arms shipped the raw stderr — username, token and
+  # it, so a Form-A disclosure in ANY of its 16 arms shipped the raw stderr — username, token and
   # all — to journald -> Vector -> Better Stack UNSCRUBBED, with the whole suite green. Proven by
   # a review agent: mutating the `no space left on device` arm to splice `${1}` left the suite
   # byte-identical (same pass count, same failures). That arm is the H-C disk-full path, i.e. one
@@ -4121,7 +4132,7 @@ fi
 # This test SPLITS its oracle sourcing on purpose, and the split is load-bearing:
 #   (a) the FIRING fixtures (literal -> expected token) are HAND-WRITTEN, and MUST STAY so;
 #   (b) the VOCABULARY invariant is DERIVED from KW_BODY, and MUST STAY so.
-# This file carries a loud precedent immediately above (T-5B-16:3922-3931) reading "the oracle is
+# This file carries a loud precedent immediately above (`ci-deploy.test.sh` › T-5B-16's oracle note) reading "the oracle is
 # DERIVED from the SUT, never hand-copied". That precedent is CORRECT and applies to (b). It does
 # NOT apply to (a), and applying it there destroys this test:
 #   deriving a FIRING fixture from KW_BODY feeds the arm's own literal back into itself, so a
@@ -4169,29 +4180,72 @@ else
       *"${_want},"*) : ;;
       *) T20_BAD="${T20_BAD}\n    arm '${_want}' did NOT fire; kw='${_got}'" ;;
     esac
+    # *** ... and must fire ONLY on its OWN errno. THIS IS THE NEGATIVE ORACLE — do not drop it. ***
+    # Without it this test is vacuous against the harm it exists to prevent. MEASURED: loosening the
+    # enomem arm to `*'.docker/config.json'*` makes it fire on ALL SIX fixtures (they share the
+    # `error saving credentials: open /home/deploy/.docker/config.json…` prefix) and the FULL SUITE
+    # stays BYTE-IDENTICAL to control — not one assertion moves. A positive-only oracle is true of
+    # the correct implementation AND of the broken one; that is the #6497 shape exactly
+    # (`2026-07-16-a-mutation-battery-only-covers-what-you-mutate.md`).
+    # The harm is the one `_login_kw`'s own header names — "in an arm it mis-routes the operator":
+    # every H-C disk-full event would report `enomem`, and "which errno" is this round's ONLY question.
+    # Scoped to the six ERRNO tokens on purpose: `errsaving` legitimately fires on all six (shared
+    # prefix), so a blanket "no other token" assertion would be wrong. Only these six are exclusive.
+    for _other in "${T20_PAIRS[@]}"; do
+      _onot="${_other##*|}"
+      [[ "$_onot" == "$_want" ]] && continue
+      case "$_got" in
+        *"${_onot},"*) T20_BAD="${T20_BAD}\n    ARM TOO LOOSE: the '${_want}' fixture ALSO fired '${_onot}' — kw='${_got}'. An arm matching something the fixtures SHARE (the config.json path, the 'error saving credentials' prefix) mis-routes every other errno to this token." ;;
+      esac
+    done
     # ... and the output must stay closed-form: comma-joined lowercase literals, nothing else.
     # Any Form-A splice emits a colon/space/slash/quote from the fixture and fails this.
     if ! [[ "$_got" =~ ^([a-z]+,)*$ ]]; then
       T20_BAD="${T20_BAD}\n    arm '${_want}' emitted a NON-closed-form value: '${_got}'"
     fi
   done
+  # *** CARDINALITY PARITY — this is what gives the HAND-WRITTEN family (a) teeth against arm #17. ***
+  # The DO-NOT-FIX note concedes (a) cannot span arm #17, and until this check nothing guarded that
+  # gap. MEASURED: a typo'd 7th Form-B arm (`*'devic or resource busy'*` -> `printf 'ebusy,'`) lands,
+  # never fires, and the suite PASSES — while the PASS line advertises the dead arm in its member
+  # count as if it were reassurance.
+  # This is a COUNT parity, never a derivation: no literal is fed back into its own oracle, so the
+  # DO-NOT-FIX note is untouched. A new errno arm goes RED until someone HAND-WRITES its fixture —
+  # which is exactly the intent, and the only way (a) can cover an arm nobody has written yet.
+  # NOTE this deliberately wants the OPPOSITE of T-5B-16's floor policy ("the floor is deliberately
+  # below that so adding an arm does not false-FAIL"): correct there, wrong here. For the errno
+  # family a new un-fixtured arm MUST false-FAIL — an unfixtured probe is a silent dead probe.
+  T20_ARM_N="$(printf '%s\n' "$KW_BODY" | awk '/--- INFERRED/{f=1;next} /--- FALSIFIED/{f=0} f' \
+    | sed 's/#.*$//' | grep -cE "printf '[a-z]+,'")"
+  if [[ "$T20_ARM_N" -ne "${#T20_PAIRS[@]}" ]]; then
+    T20_BAD="${T20_BAD}\n    ERRNO ARM/FIXTURE PARITY: ${T20_ARM_N} errno arm(s) in _login_kw but ${#T20_PAIRS[@]} hand-written fixture(s) here. A new arm needs a HAND-WRITTEN (literal, token) pair — do NOT derive it from KW_BODY (see the DO-NOT-FIX note): a derived fixture feeds the arm's own typo back into its oracle and passes green WITH the bug."
+  fi
+
   # ---- DERIVED invariants (see the DO-NOT-FIX note). These span arm #17. ----
   #
   # AC4 — THE ALPHABET INVARIANT, and the reason this family must be derived rather than listed.
   # It is a SECURITY property, not tidiness: `_login_kw`'s arms are the only code that pattern-
-  # matches against raw stderr, and stderr can contain a pull token. The zot token is
-  # `[A-Za-z0-9]{40}` (`zot-registry.tf` › `random_password.zot_pull`, `special = false`); a GHCR
-  # PAT is likewise alphanumeric-with-fixed-prefix. So ANY arm literal containing a character
-  # OUTSIDE `[A-Za-z0-9]` — a space, a hyphen, a slash — is STRUCTURALLY incapable of occurring
-  # inside a credential, and therefore incapable of firing on one. `kw` then carries zero bits
-  # about token content, by construction rather than by review.
+  # matches against raw stderr, and stderr can contain a pull token. So an arm literal containing a
+  # character OUTSIDE the credential alphabet — a space, a hyphen, a slash — is STRUCTURALLY
+  # incapable of occurring inside a credential, and therefore incapable of firing on one. `kw` then
+  # carries zero bits about token content, by construction rather than by review.
   # A future arm like `*'abc123'*` would silently break that: it could match INSIDE a token, and
   # `kw` would leak one bit per such arm. No hand-written member list can guard arm #17 — only a
   # derivation from the body can. This is exactly why (b) is derived and (a) is not.
   #
+  # THE ALPHABET IS `[A-Za-z0-9_]`, AND THE UNDERSCORE IS LOAD-BEARING — do not "tidy" it out.
+  # zot alone would justify the narrower `[A-Za-z0-9]` (`zot-registry.tf` › `random_password.zot_pull`
+  # is `length = 40`, `special = false` — verified, not assumed). But BOTH GHCR PAT formats carry an
+  # underscore (`ghp_…`, `github_pat_…`), so under the narrower alphabet an arm literal like
+  # `*'_pat_1'*` reads as "safe" while matching INSIDE a PAT — measured at ~5.9 bits about the PAT
+  # body's first character, passing the invariant. The union is the only sound choice while either
+  # credential can reach this function. (This is the same unverified-GHCR-claim the `_login_hatch`
+  # header explicitly warns against — "Do NOT restate 40 for GHCR: the repo disagrees with itself" —
+  # arriving in a test comment instead. The security property must hold under EITHER PAT format.)
+  #
   # Anchored on the `case` MATCH FORM (`*'…'*`), never a bare token, so prose in a comment cannot
   # inject a member (`cq-assert-anchor-not-bare-token`).
-  T20_LITERALS="$(printf '%s\n' "$KW_BODY" | grep -vE '^[[:space:]]*#' | grep -oE "\*'[^']+'\*" | sed "s/^\*'//; s/'\*$//")"
+  T20_LITERALS="$(printf '%s\n' "$KW_BODY" | grep -vE '^[[:space:]]*#' | sed 's/#.*$//' | grep -oE "\*'[^']+'\*" | sed "s/^\*'//; s/'\*$//")"
   T20_LIT_N="$(printf '%s\n' "$T20_LITERALS" | grep -c .)"
   # Minimum-cardinality guard: an extraction that silently returned zero would make every
   # invariant below VACUOUS — the empty-source trap this file's own bash gates warn about. 16 =
@@ -4201,18 +4255,62 @@ else
   fi
   while IFS= read -r _lit; do
     [[ -z "$_lit" ]] && continue
-    # (i) AC4: must contain a character outside [A-Za-z0-9], so it cannot match credential content.
-    if [[ ! "$_lit" =~ [^A-Za-z0-9] ]]; then
-      T20_BAD="${T20_BAD}\n    ALPHABET VIOLATION: arm literal '${_lit}' is pure [A-Za-z0-9] — it could match INSIDE a pull token, making kw a 1-bit credential oracle"
+    # (i) AC4: must contain a character outside the credential alphabet, so it cannot match
+    # credential content. See the underscore note above.
+    if [[ ! "$_lit" =~ [^A-Za-z0-9_] ]]; then
+      T20_BAD="${T20_BAD}\n    ALPHABET VIOLATION: arm literal '${_lit}' is pure [A-Za-z0-9_] — it could match INSIDE a pull token or a GHCR PAT, making kw a credential oracle"
     fi
   done <<< "$T20_LITERALS"
   # (ii) The emitted TOKEN vocabulary stays closed-form: comma-terminated lowercase. A future arm
   # emitting `Enomem,` or `enomem:` breaks the `^([a-z]+,)*$` oracle that T-5B-16's fuzz and this
   # test both rely on. Derived for the same arm-#17 reason.
-  T20_VOCAB="$(printf '%s\n' "$KW_BODY" | grep -vE '^[[:space:]]*#' | grep -oE "printf '[a-zA-Z]+,'" | grep -oE "'[a-zA-Z]+,'" | tr -d "',")"
+  T20_VOCAB="$(printf '%s\n' "$KW_BODY" | grep -vE '^[[:space:]]*#' | sed 's/#.*$//' | grep -oE "printf '[a-zA-Z]+,'" | grep -oE "'[a-zA-Z]+,'" | tr -d "',")"
   T20_VOCAB_N="$(printf '%s\n' "$T20_VOCAB" | grep -c .)"
   if [[ "$T20_VOCAB_N" -lt 16 ]]; then
     T20_BAD="${T20_BAD}\n    kw token extraction returned ${T20_VOCAB_N} members (expected >=16)"
+  fi
+  # (iii) SHARP EDGE #1, CLOSED HERE — the errno literals must be LOWERCASE.
+  # Scoped to the INFERRED errno block on purpose: a file-wide "every literal is lowercase" is
+  # UNSHIPPABLE, because main's own arms carry `non-TTY device` and `Cannot connect to the Docker
+  # daemon`. The plan asserted the file-wide form and claimed it "closes" the capitalized-copy
+  # class; it does not, and the residual was measurably OPEN — `Cannot allocate memory` (the C
+  # `strerror(3)` rendering, which is what issue 6565's own analysis quotes) passes the alphabet
+  # check (it contains spaces) and never reaches the token check (that reads `printf` tokens, not
+  # literals). So the one arm most likely to be copied from the issue text was unguarded.
+  # Go renders errno strings LOWERCASE (`syscall.Errno.Error()`, measured); C `strerror`
+  # capitalizes. A capitalized arm never matches Go-produced docker stderr — it is a silent dead
+  # probe, exactly the "confidently-wrong arm" the hatch's header says `kw` exists to expose.
+  # Derived from the block, not from T20_PAIRS, so it spans the SEVENTH errno arm too.
+  T20_ERRNO_LITS="$(printf '%s\n' "$KW_BODY" | awk '/--- INFERRED/{f=1;next} /--- FALSIFIED/{f=0} f' \
+    | grep -vE '^[[:space:]]*#' | sed 's/#.*$//' | grep -oE "\*'[^']+'\*" | sed "s/^\*'//; s/'\*$//")"
+  T20_ERRNO_N="$(printf '%s\n' "$T20_ERRNO_LITS" | grep -c .)"
+  if [[ "$T20_ERRNO_N" -lt 6 ]]; then
+    T20_BAD="${T20_BAD}\n    INFERRED-block extraction returned ${T20_ERRNO_N} errno literal(s) (expected >=6) — the lowercase invariant below would be vacuous; did the '--- INFERRED' / '--- FALSIFIED' markers move?"
+  fi
+  while IFS= read -r _elit; do
+    [[ -z "$_elit" ]] && continue
+    if [[ "$_elit" =~ [A-Z] ]]; then
+      T20_BAD="${T20_BAD}\n    SHARP EDGE #1: errno literal '${_elit}' contains an uppercase char — Go renders errno strings lowercase, so this arm can NEVER match real docker stderr (a silent dead probe). Did it get copied from a C strerror(3) table?"
+    fi
+  done <<< "$T20_ERRNO_LITS"
+  # (iv) *** THE CROSS-CHECK THAT MAKES (i) NON-FAIL-OPEN. Do not remove it as redundant. ***
+  # (i) is only as good as its extraction, and the extraction is faithful ONLY to the single-quoted
+  # `case` arm (`*'…'*`). Three ordinary shapes EVADE it — MEASURED, each with a live credential
+  # oracle installed and (i) reporting GREEN:
+  #     case "${1:-}" in *"abc123"*) printf 'dq,' ;; esac      -> evades (double-quoted)
+  #     case "${1:-}" in *abc123*)   printf 'unq,' ;; esac     -> evades (unquoted)
+  #     [[ "${1:-}" == *abc123* ]] && printf 'br,'             -> evades ([[ ]] instead of case)
+  # Against the unquoted mutant: `kw='unq,'` when the token contained `abc123` and `kw=''` when it
+  # did not — one bit of TOKEN CONTENT shipped to Better Stack unscrubbed. The `>=16` cardinality
+  # guard cannot catch it (the count stays 16).
+  # The fix needs no new extraction to maintain, because the test ALREADY HELD the evidence and was
+  # not looking at it: in all three mutations the VOCAB extraction counted 17 while the LITERAL
+  # extraction counted 16 — the derivation saw the arm; only (i) was blind to it.
+  # So: every EMITTING arm must contribute at least one extracted MATCH-FORM. A shape (i) cannot
+  # read shows up here as a token with no literal behind it. Verified not to false-positive on a
+  # legitimate `|`-alternation arm (which yields 2 literals for 1 token: 18 >= 17, green).
+  if [[ "$T20_LIT_N" -lt "$T20_VOCAB_N" ]]; then
+    T20_BAD="${T20_BAD}\n    AC4 FAIL-OPEN: ${T20_VOCAB_N} emitting arm(s) but only ${T20_LIT_N} readable match-form(s) — at least one arm uses a shape the alphabet check CANNOT read (double-quoted / unquoted / [[ ]]), so it is UNGUARDED and may match inside a credential. Write the arm as case \"\${1:-}\" in *'literal'*) or extend the extraction."
   fi
   while IFS= read -r _member; do
     [[ -z "$_member" ]] && continue
@@ -4222,7 +4320,11 @@ else
   done <<< "$T20_VOCAB"
   if [[ -z "$T20_BAD" ]]; then
     PASS=$((PASS + 1))
-    echo "  PASS: all ${T20_N} errno arms fire with their own token; kw vocabulary closed (${T20_VOCAB_N} members, all lowercase)"
+    # Word this precisely: the lowercase claims cover the emitted TOKENS (all 16) and the INFERRED
+    # errno LITERALS (6) — NOT every arm literal (main's own `non-TTY device` / `Cannot connect …`
+    # are legitimately capitalized). A looser PASS string makes the green CI log a third artifact
+    # asserting an invariant that does not exist.
+    echo "  PASS: all ${T20_N} errno arms fire with their own token; ${T20_VOCAB_N} kw TOKENS closed + lowercase; ${T20_ERRNO_N} INFERRED errno LITERALS lowercase (Sharp Edge #1); every arm literal outside [A-Za-z0-9_] (AC4) and readable by the alphabet check"
   else
     FAIL=$((FAIL + 1))
     echo "  FAIL: errno arm / kw vocabulary drift:"
@@ -4307,6 +4409,38 @@ T21_HC="$( ( _login_hatch "error saving credentials: open /x: ${T21_CANARY}" 0 1
 case "$T21_HC" in
   *"$T21_CANARY"*) T21_BAD="${T21_BAD}\n    LEAK: the hatch echoed the final-segment canary: '${T21_HC}'" ;;
 esac
+# *** THE POSITIVE CONTROL — and the assertion that kills the hardcode. Do not drop either half. ***
+# Two jobs in one line:
+#  (1) The canary check above is ABSENCE-ONLY, and an absence-only assertion is vacuous without a
+#      positive control: if `_login_hatch` ever aborted, `$T21_HC` would be EMPTY, the canary
+#      "wouldn't be there", and it would PASS while measuring nothing.
+#  (2) It falsifies a hardcode. MEASURED: every other assertion in this test is satisfied by
+#          _errseg="${_e:$(( ${#_e} > 22 ? ${#_e}-22 : 0 ))}"      # i.e. "always 22"
+#      which reports 22 for EVERY errno — eperm 23, erofs 21, eio 18, einval 16, enoent 25 all
+#      become 22. The field whose entire purpose is "bounds ALL ~130 errnos in ONE round" collapses
+#      to a constant, and the test that exists to prove it stays green. Root cause: everything above
+#      feeds exactly ONE errno (22 chars), so 22 is indistinguishable from a constant.
+#      This fixture's final segment is 36 chars, so it separates them: real -> 36, hardcode -> 22.
+# (The naive `${_e: -22}` hardcode is already killed by the no-colon=12 case above — bash does not
+# clamp negative offsets, so it yields 0, not 12. That degenerate case is doing real work; keep it.)
+T21_SEGLEN="${#T21_CANARY}"
+case "$T21_HC" in
+  *"errno_chars=${T21_SEGLEN} "*|*"errno_chars=${T21_SEGLEN}") : ;;
+  *) T21_BAD="${T21_BAD}\n    errno_chars is not tracking the segment: expected ${T21_SEGLEN} for a ${T21_SEGLEN}-char final segment, got '${T21_HC}'. If this reads 22, errno_chars is HARDCODED/clamped rather than measured — the field is then a constant, not a bound on the errno set." ;;
+esac
+# Length-fidelity across the WHOLE measured set, not one sample. The six lengths are the SUT's own
+# comment's claim (`ci-deploy.sh` › `_login_kw`: enomem 22, eperm 23, erofs 21, eio 18, einval 16,
+# enoent 25 — Go 1.21.6 `syscall.Errno.Error()`); this is what makes that claim checkable rather
+# than decorative, and it is what a one-errno oracle structurally cannot do.
+for _el in "cannot allocate memory|22" "operation not permitted|23" "read-only file system|21" \
+           "input/output error|18" "invalid argument|16" "no such file or directory|25"; do
+  _elit="${_el%|*}"; _elen="${_el##*|}"
+  _eh="$( ( _login_hatch "error saving credentials: open /home/deploy/.docker/config.json123456789: ${_elit}" 0 1 ) || true )"
+  case "$_eh" in
+    *"errno_chars=${_elen} "*) : ;;
+    *) T21_BAD="${T21_BAD}\n    errno_chars wrong for '${_elit}': expected ${_elen} (measured via go1.21.6 syscall.Errno.Error()), got '${_eh}'" ;;
+  esac
+done
 if [[ -z "$T21_BAD" ]]; then
   PASS=$((PASS + 1))
   echo "  PASS: errno_chars=22 for both live datums (stderr_chars 96 AND 97) — invariant under the uint32 suffix, no echo"

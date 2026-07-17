@@ -77,11 +77,56 @@ if [[ "${ANY_LINES:-0}" -eq 0 ]]; then
   exit 2
 fi
 
+# #6565 errno round — REPORTING ONLY, and it must run on BOTH PASS paths.
+#
+# WHY A FUNCTION AND NOT AN ECHO AT THE END: this probe is SINGLE-SHOT (it PASSes, comments, the
+# sweeper auto-resolves the tracker, it never runs again) and it has TWO exit-0 paths — the
+# zero-FAILED branch below, and the all-lines-carry-the-hatch path at the bottom. The errno round's
+# deliverable was originally reported only on the second. If the first sweep after `earliest` landed
+# on an all-success 90m window, the probe would PASS through the FIRST path, close, and the round's
+# entire deliverable would be foreclosed PERMANENTLY — a later resumed failure never read by anyone.
+# Both paths report; neither asserts. Reporting-only by construction: no `exit`, no assignment the
+# verdict reads, both fields closed-vocabulary/integers (`ci-deploy.sh` › `_login_kw`,`_login_hatch`).
+#
+# On the zero-FAILED path the fields are EMPTY, and that is itself the datum the plan's verdict rule
+# calls "premise (A) FALSIFIED" — the continuous cred-store failure stopped on its own, which is a
+# MAJOR finding and the one branch most likely to be misread as ordinary success.
+_report_errno_round() {
+  # $1 = the lines to read (may be empty), $2 = a one-line context label.
+  local _kw _ec
+  _kw="$(printf '%s\n' "${1:-}" | grep -oE 'kw=[a-z,]*' | sort -u | tr '\n' ' ')"
+  _ec="$(printf '%s\n' "${1:-}" | grep -oE 'errno_chars=[0-9]+' | sort -u | tr '\n' ' ')"
+  echo "Observed kw (the errno round's deliverable — record on #6565; ${2}). An EMPTY kw value is" \
+       "itself the datum: the errno matched none of the probed literals:" "${_kw:-<none>}"
+  echo "Observed errno_chars (bounds the errno set in ONE round; 22 == 'cannot allocate memory'," \
+       "and is INVARIANT under docker's uint32 temp suffix, unlike stderr_chars — record on #6565):" \
+       "${_ec:-<none>}"
+  # *** READ THIS BEFORE INTERPRETING AN EMPTY errno_chars — the two empties are NOT the same. ***
+  # `errno_chars` is a #6565 field. The code that emits it lands on web-1 and then SITS: the
+  # redeploy step is seccomp-conditional, so a `ci-deploy.sh`-only merge does not itself deploy
+  # (plan AC8). Until an independent release runs, the gate still emits the PRE-#6565 line shape —
+  # which has no `errno_chars` AT ALL and probes ten literals, not sixteen.
+  # So: `errno_chars=<none>` while FAILED lines EXIST means "the deployed code predates the errno
+  # round; the datum does not exist yet" — NOT "the errno has no length" and NOT "the round ran and
+  # found nothing". Conflating those reads a not-yet-deployed instrument as a negative result, which
+  # is the single most likely way this round gets misfiled as finished.
+  if [[ -n "${1:-}" && -z "$_ec" ]]; then
+    echo "  ^^ errno_chars ABSENT on lines that DO exist ⇒ web-1 is still running PRE-#6565 code." \
+         "The errno round has NOT reported yet. Do not read this as a negative result; re-read after" \
+         "the next independent web-platform release (this probe is single-shot, so record on #6565 now)."
+  fi
+}
+
 if [[ -z "$FAILED_LINES" ]]; then
   # Login lines exist and none of them FAILED → every outcome is state (a)/(b).
   # The gate had no failure to name. AC13 holds.
   echo "PASS: ${ANY_LINES} login line(s) in the last 90m, zero FAILED — every outcome is a" \
        "named success / non-login state (AC13 states (a)/(b))."
+  echo "MAJOR — read this before treating the PASS as routine: zero FAILED means the CONTINUOUS" \
+       "cred-store failure measured on both registries 2026-07-15 has STOPPED ON ITS OWN. That is" \
+       "the plan's 'premise (A) FALSIFIED' branch, not ordinary success: the errno question is now" \
+       "unanswerable from telemetry and the diagnosis must be re-opened, not considered settled."
+  _report_errno_round "" "zero FAILED lines in the window, so there is no kw to observe"
   exit 0
 fi
 

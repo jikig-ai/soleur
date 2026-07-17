@@ -50,10 +50,19 @@ emitters. Place T-5B-20 after both.
       (`:3922-3928`) is correct for `T16_CLOSED` and **must not** be applied here — leave a comment saying
       so, or a reviewer will "fix" it into a tautology.
 - [x] 1.3 Assert every output satisfies the closed-form oracle `^([a-z]+,)*$`.
-- [x] 1.4 **(b) Whole-vocabulary invariants — these ARE derived from `KW_BODY`** (so they span arm #17):
-      every literal (i) contains a character outside `[A-Za-z0-9]` — the alphabet invariant, closing the
-      predicate channel; (ii) is **lowercase** — directly asserts the Sharp Edge #1 class (Go's table vs
-      `strerror(3)`'s capitalized form); (iii) appears in a canary-carrying fixture.
+- [x] 1.4 **(b) Whole-vocabulary invariants — these ARE derived from `KW_BODY`** (so they span arm #17).
+      **AMENDED AT REVIEW — what shipped differs from what was planned, and the plan was wrong:**
+      (i) every literal contains a character outside **`[A-Za-z0-9_]`** — the alphabet invariant, closing the
+      predicate channel. *The underscore is a review correction: both GHCR PAT formats contain `_`, so under
+      the planned `[A-Za-z0-9]` a literal like `_pat_1` read as "safe" while matching INSIDE a PAT (~5.9 bits).*
+      (ii) **the INFERRED errno literals** are lowercase (Sharp Edge #1). *Scoped at review: the planned
+      file-wide form is unshippable — main's own `non-TTY device` / `Cannot connect to the Docker daemon` are
+      legitimately capitalized. Measured: the residual the plan called "closed" was OPEN.*
+      (iii) ~~every literal appears in a canary-carrying fixture~~ — **not shipped**; superseded by the ERRNO
+      ARM/FIXTURE PARITY check, which goes RED on an un-fixtured arm rather than merely noting one.
+      Also shipped, not planned: an AC4 FAIL-OPEN cross-check (`lit_n >= vocab_n`) — the planned extraction
+      reads only single-quoted `case` arms, and double-quoted / unquoted / `[[ ]]` arms evaded it with a live
+      credential oracle installed while the test stayed GREEN.
 - [x] 1.5 Run the suite. **Expect RED — output is `errsaving,` alone, NOT zero tokens** (every fixture
       starts with `error saving credentials:`, so that arm fires first). RED because `enomem,` etc. are absent.
       > **Why the ordering is load-bearing (plan D4, proven by execution):** with an arm removed, output

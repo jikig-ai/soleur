@@ -71,7 +71,7 @@ cheap.
 | 6400 / 6525 / 6560 / 6497 open | **Verified** — all five (incl. 6565) OPEN | All stay open |
 
 **Premise validation:** the premise (`kw=errsaving` alone ⇒ the errno matches none of the ten probed
-literals) **holds** — `_login_kw` (`ci-deploy.sh:669-691`) probes ten; none is an errno string. H-D is the
+literals) **holds** — `ci-deploy.sh` › `_login_kw()` probes ten; none is an errno string. H-D is the
 case the hatch exists for. The change is additive.
 
 ---
@@ -163,10 +163,10 @@ not an outage**; scoped out here, untouched by this diff.
 **If this leaks, the user's credentials are exposed via:** `_login_kw` receives **raw `docker login`
 stderr**, which may carry `ZOT_PULL_TOKEN` / the GHCR PAT (a registry echoing the credential, an argv or
 path echo, a helper's error text). A Form-A splice in any arm sends that to journald → Vector → **Better
-Stack unscrubbed** (and Sentry on the zot arm, `ci-deploy.sh:1289`). **A leaked GHCR read credential is a
+Stack unscrubbed** (and Sentry on the zot arm, `ci-deploy.sh` › `zot_gate_degraded_event()`). **A leaked GHCR read credential is a
 supply-chain path to every end user of the web platform.**
 
-> **The asset is the TOKEN, not the username.** `ci-deploy.sh:766-768` records that the username is a
+> **The asset is the TOKEN, not the username.** `ci-deploy.sh` › `_login_hatch()`'s `stderr_chars` field note records that the username is a
 > *declared non-secret* — `ZOT_PULL_USER` is a constant and the GHCR username is public as the package
 > owner — so its disclosure is **already accepted, not overlooked**. Naming the username as the asset would
 > invite a future reader to conclude the risk is minor (it's public) and loosen Form B. The supply-chain
@@ -180,7 +180,7 @@ alnum + `_`) — so no substring of a credential can ever match an arm. **Verifi
 But that is safe *by accident of English*, not by construction: a future short-alnum probe (`*'403'*`,
 `*'ghp'*`) would condition firing on credential content, and T-5B-15, T-5B-16 and T-5B-20 would **all pass**.
 AC4 converts this into an asserted invariant, mirroring the alphabet reasoning already at
-`ci-deploy.sh:748-763`.
+`ci-deploy.sh` › `_login_hatch()`'s `stderr_chars` field note.
 
 **Brand-survival threshold:** `single-user incident`
 
@@ -248,9 +248,17 @@ future ones (this is where the derived-oracle precedent *does* apply):
 
 4. **every literal contains a character outside `[A-Za-z0-9]`** — the alphabet invariant (AC4); closes the
    predicate channel and covers all 16 arms plus arm #17 for free;
-5. **every literal is lowercase** — directly asserts the Sharp Edge #1 class (Go's lowercase table vs
-   `strerror(3)`'s capitalized form), zero new dependency;
-6. **every literal appears in a canary-carrying fixture** — turns "one canary per arm" from a checklist item
+5. **every INFERRED-block errno literal is lowercase** — directly asserts the Sharp Edge #1 class (Go's
+   lowercase table vs `strerror(3)`'s capitalized form), zero new dependency. **CORRECTED at review: this
+   is scoped to the INFERRED errno block, NOT to every literal.** The file-wide form is unshippable —
+   main's own arms carry `non-TTY device` and `Cannot connect to the Docker daemon`, so a "every literal is
+   lowercase" assertion fails on correct code. Shipped as T-5B-20 (iii), derived from the block so it spans
+   a seventh errno arm;
+6. ~~**every literal appears in a canary-carrying fixture**~~ — **NOT SHIPPED, and superseded at review.**
+   Only the six errno literals have hand-written fixtures (`T20_PAIRS`); nothing binds the other ten. The
+   gap it was reaching for — an arm landing with no fixture — is closed better by T-5B-20's ERRNO
+   ARM/FIXTURE PARITY check (count(errno arms) == count(hand-written pairs)), which goes RED on an
+   un-fixtured arm instead of merely noting one. Original intent: turns "one canary per arm" from a checklist item
    into an invariant that cannot decay when arm #17 lands.
 
 **Expected: RED.** Output is **`errsaving,` alone** — *not* zero tokens: every fixture starts with
@@ -263,7 +271,7 @@ absent.
 
 **Residual, stated honestly:** family (a) catches a *one-sided* typo (source wrong, fixture right). It does
 **not** catch a *two-sided class error* — if Phase 0 had copied `strerror(3)`'s capitalized `Cannot allocate
-memory` into **both** the source and the fixture, both agree and the test is green. Invariant (5) closes
+memory` into **both** the source and the fixture, both agree and the test is green. **CORRECTED at review — the residual this claimed to close was measurably OPEN.** `Cannot allocate memory` (the C `strerror(3)` rendering that issue 6565's own analysis quotes) passes the alphabet invariant (it contains spaces) and never reaches the token invariant (which reads `printf` tokens, not literals), so the one arm most likely to be copied from the issue text was unguarded. It is now genuinely closed by T-5B-20 (iii), scoped to the INFERRED block and mutation-proven RED against `Cannot allocate memory`. The original claim read: Invariant (5) closes
 exactly that class. A two-sided *transcription* typo (`read only` in both) is closed only by an independent
 oracle — `python3 -c "import os; s=os.strerror(12); print(s[0].lower()+s[1:])"` reproduces all six exactly
 and `go` is installed. `/work` may adopt one if it can do so without adding a dependency to this pure-bash
@@ -427,9 +435,10 @@ liveness_signal:
                  `logger -t ci-deploy`, allowlisted in vector.toml [sources.host_scripts_journald]
 
 error_reporting:
-  destination: journald -> Vector -> Better Stack (plus Sentry on the zot fallback arm, ci-deploy.sh:1289)
+  destination: journald -> Vector -> Better Stack (plus Sentry on the zot fallback arm, ci-deploy.sh > zot_gate_degraded_event())
   fail_loud: false — BY DESIGN. All three hatch call sites are `$( ( _login_hatch … ) || true )`
-             (ci-deploy.sh:1110, :1181, :1286); a telemetry fault must never abort a deploy. Pinned by T-5B-19.
+             (the three `_login_hatch` call sites: the GHCR-refetch relogin, the GHCR prelude, and the ZOT_GATE
+             login branch — each wrapped in $( ( ... ) || true )); a telemetry fault must never abort a deploy. Pinned by T-5B-19.
 
 failure_modes:
   - mode: all six probes stay silent (the errno is a seventh shape)
@@ -582,7 +591,7 @@ that fires, and AC9 reads zero rows for a reason that has nothing to do with the
     directly** rather than assuming it — the plan's single unverified premise.
   - **Form B is not at risk:** this lives in `_login_hatch`, **not** `_login_kw`, so T-5B-15's
     no-expansion-but-`${1:-}` constraint does not apply. It sits exactly where `stderr_chars` already sits,
-    under the same no-echo-safe reasoning (`ci-deploy.sh:748-763`).
+    under the same no-echo-safe reasoning (`ci-deploy.sh` › `_login_hatch()`'s `stderr_chars` field note).
   - **Honest caveats — do not skip these at review:** length is **not injective** across errnos (it bounds
     the candidate set, it does not always name one), and it carries the **same accepted residual** as
     `stderr_chars` — it moves by `len(username)` if a username lands in the final colon segment. That
