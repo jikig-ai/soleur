@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-16T19:43:06Z",
+  "generated_at": "2026-07-17T09:27:59Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -55,7 +55,7 @@
       "rule_text_prefix": " → docs-only"
     },
     {
-      "id": "cq-agents-md-why-single-line",
+      "id": "cq-assert-anchor-not-bare-token",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -65,10 +65,23 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → docs-only"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "cq-before-pushing-package-json-changes",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → rest"
+    },
+    {
+      "id": "cq-cite-content-anchor-not-line-number",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -627,6 +640,19 @@
       "rule_text_prefix": " → core"
     },
     {
+      "id": "hr-ssh-diagnosis-verify-firewall",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
       "id": "hr-tagged-build-workflow-needs-initial-tag-push",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -693,19 +719,6 @@
     },
     {
       "id": "hr-verify-repo-capability-claim-before-assert",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → core"
-    },
-    {
-      "id": "hr-weigh-every-decision-against-target-user-impact",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1277,7 +1290,20 @@
       "rule_text_prefix": " → core"
     },
     {
-      "id": "hr-ssh-diagnosis-verify-firewall",
+      "id": "cq-agents-md-why-single-line",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 1,
+      "warn_count": 0,
+      "fire_count": 1,
+      "prevented_errors": 0,
+      "last_hit": "2026-07-17T09:27:59Z",
+      "first_seen": "2026-07-17T09:27:59Z",
+      "rule_text_prefix": " → docs-only"
+    },
+    {
+      "id": "hr-weigh-every-decision-against-target-user-impact",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1285,14 +1311,14 @@
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-16T12:31:46Z",
-      "first_seen": "2026-07-16T12:31:46Z",
+      "last_hit": "2026-07-17T08:46:03Z",
+      "first_seen": "2026-07-17T08:46:03Z",
       "rule_text_prefix": " → core"
     }
   ],
   "summary": {
-    "total_rules_tagged": 99,
-    "rules_unused_over_8w": 98,
+    "total_rules_tagged": 101,
+    "rules_unused_over_8w": 99,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,
