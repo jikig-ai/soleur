@@ -54,10 +54,12 @@ fast with `No usable sandbox! ... unprivileged user namespaces ... AppArmor` and
 
 ### Troubleshooting: Playwright MCP backend closed between calls
 
-Distinct from the CLI above — this is the Playwright **MCP** stack. If a
-`mcp__playwright__browser_*` call returns `browserBackend.callTool: Target page,
-context or browser has been closed`, the browser backend dropped while the MCP
-server itself stayed registered (a lifecycle event, not a dead tool).
+This is the **other** browser-automation symptom #6605 reported (the "MCP tools
+de-register" half) — distinct from the agent-browser CLI hang above, and covering the
+Playwright **MCP** stack. If a `mcp__playwright__browser_*` call returns
+`browserBackend.callTool: Target page, context or browser has been closed`, the browser
+backend dropped while the MCP server itself stayed registered (a lifecycle event, not a
+dead tool).
 
 Known root cause on this host: a Wayland/Vulkan GPU crash — already diagnosed and
 remediated in `.claude/playwright-mcp.config.json` (forces the X11/XWayland backend
