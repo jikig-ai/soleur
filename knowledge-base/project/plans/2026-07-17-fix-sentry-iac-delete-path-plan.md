@@ -338,29 +338,40 @@ automation ladder in Phase 1.1 rather than a `.tf` change. *Prices from a live A
 ```yaml
 liveness_signal:
   what: sentry-monitors-audit.sh Class D orphan count (fail-closed per Phase 6.2)
-  cadence: every apply-sentry-infra.yml run (push to main touching infra/sentry/**)
-  alert_target: workflow failure -> GitHub Actions notification; SOLEUR_ marker -> Better Stack
-  configured_in: .github/workflows/apply-sentry-infra.yml:155-171
+  cadence: every apply-sentry-infra.yml apply-job run (push to main touching infra/sentry/**)
+  # The load-bearing signal is the non-zero EXIT -> GitHub Actions job-failure
+  # notification. The SOLEUR_SENTRY_CLASS_D_ORPHAN marker is a human-readable
+  # detail line in that failed job's LOG, NOT a Better Stack event: SOLEUR_* is a
+  # host-journald convention (vector.toml scopes every source to the Hetzner
+  # host's SYSLOG_IDENTIFIER), and this script runs on a GitHub Actions runner
+  # whose stdout no vector source ships. Corrected at review — the earlier
+  # "SOLEUR_ marker -> Better Stack" claim was a signal-into-the-void.
+  alert_target: apply-job failure -> GitHub Actions notification (the marker is a detail line in the job log)
+  configured_in: apply-sentry-infra.yml step "Sentry audit-gate (4-gate destination-controllability)"
 error_reporting:
-  destination: GitHub Actions step failure (exit != 0) + stdout SOLEUR_ marker
+  destination: GitHub Actions step failure (exit != 0); stdout SOLEUR_ marker in the job log
   fail_loud: true
 failure_modes:
-  - mode: live monitor exists with no .tf resource (Class D orphan)
-    detection: sentry-monitors-audit.sh Class D check
-    alert_route: apply-sentry-infra.yml step failure (Phase 6.2 adds the non-zero exit that
-      makes this true — it was FALSE in v1) + SOLEUR_SENTRY_CLASS_D_ORPHAN marker
+  - mode: live monitor exists with no .tf resource AND not in state (Class D orphan)
+    detection: sentry-monitors-audit.sh Class D check, WITH the state half injected
+      (SENTRY_STATE_REQUIRED=1) — fires only in the apply job; pre-merge callers pass
+      no state half, so Class D is advisory (warn) there
+    alert_route: apply-sentry-infra.yml apply-job failure (non-zero exit); the
+      SOLEUR_SENTRY_CLASS_D_ORPHAN marker is a detail line in that failed job's log
   - mode: plan proposes a CREATE with no matching added resource block
     detection: destroy-guard-filter-sentry.jq resource_creates + diff-match gate (Phase 3.5)
-    alert_route: apply job failure; [ack-create] override for the unmatched case
+    alert_route: apply job failure; no blanket override (diff-matched)
   - mode: a PR removes a resource block and the author does not know to ack
-    detection: Phase 3.4 pull_request plan job
-    alert_route: PR check failure naming the addresses and the literal [ack-destroy]
+    detection: Phase 3.4 pull_request plan job (plan_pr), verdict via sentry-destroy-required
+    alert_route: PR check failure; the plan_pr step log names the destroyed addresses
+      and the literal [ack-destroy]. NOTE the aggregator's own message is generic
+      ("gate FAILED closed"); the address list lives in the plan_pr step log.
   - mode: PAYG cap re-approached (monitor count creeps back)
     detection: Sentry's own budget notification (the alert that fired this investigation)
     alert_route: vendor email to the founder
 logs:
-  where: GitHub Actions run logs; Better Stack (SOLEUR_* stdout markers via Vector)
-  retention: GH Actions 90d; Better Stack free tier 3d
+  where: GitHub Actions run logs (the only sink for this script's stdout — see alert_target)
+  retention: GH Actions 90d
 discoverability_test:
   command: >-
     curl -s -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN"

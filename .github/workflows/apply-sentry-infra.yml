@@ -292,19 +292,14 @@ jobs:
           SENTRY_STATE_TYPES="$plan_types" \
             bash "${GITHUB_WORKSPACE}/tests/scripts/test-destroy-guard-sentry-scope-guard.sh"
 
-          counts=$(terraform show -json tfplan | \
-            jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-sentry.jq")
-          resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
-          resource_creates=$(echo "$counts" | jq -r '.resource_creates')
-          nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
-          # Fail-closed numeric validation: an empty value from a jq failure
-          # would silently evaluate false in the `-gt 0` test below and let a
-          # destroying PR through green.
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] \
-             || [[ ! "$resource_creates" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', resource_creates='${resource_creates}', nested_deletes='${nested_deletes}')."
-            exit 1
-          fi
+          # Counts + validation + the destroy_count sum come from ONE script that
+          # the apply job below calls identically. They were inline in both jobs
+          # and drifted: this job dropped the `destroy_count=$((…))` line and then
+          # read $destroy_count, so under `set -u` the gate died on every run —
+          # permanently red by accident, green path never once executed. See the
+          # script's header. One copy makes that unrepresentable.
+          terraform show -json tfplan > /tmp/sentry-pr-plan.json
+          eval "$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-pr-plan.json)"
 
           # ── CREATE gate (#6589) ──────────────────────────────────────────
           # Runs BEFORE the destroy gate and has NO [ack-destroy] bypass: an
@@ -339,7 +334,14 @@ jobs:
           # premise is verified rather than assumed. This incident's etiology was
           # a known hole documented in prose that nobody re-checked; do not put a
           # second one in the fix.
-          squash_mode=$(gh api "repos/${REPO}" --jq '.squash_merge_commit_message')
+          # Separate the API call's success from its answer: a 5xx / rate-limit
+          # must read as "could not check" (a distinct, nameable failure), never
+          # as "the setting is wrong" — conflating them sends the operator to fix
+          # a repo setting that is fine.
+          if ! squash_mode=$(gh api "repos/${REPO}" --jq '.squash_merge_commit_message'); then
+            echo "::error::Could not read squash_merge_commit_message from the GitHub API (transport failure — 5xx / rate-limit / network). This is NOT an ack problem and NOT a repo-setting problem. Re-run the job; if it persists, check GitHub status. Failing closed because the gate cannot certify the ack without this read."
+            exit 1
+          fi
           if [[ "$squash_mode" != "COMMIT_MESSAGES" ]]; then
             echo "::error::This gate assumes the squash commit body is built from the branch commit messages (squash_merge_commit_message=COMMIT_MESSAGES), which is how a pre-staged [ack-destroy] reaches the merge commit. The repo now reports '${squash_mode}', so that assumption is broken and this gate cannot certify the ack. Failing closed. Fix the repo setting, or rework the gate."
             exit 1
@@ -360,8 +362,19 @@ jobs:
           # concatenated JSON documents on a >1-page PR, which is not parseable
           # as a single array. gh also rejects --slurp together with --jq, so the
           # flatten runs in a standalone jq. Verified against this PR.
+          # Fetch the commits in one step so a transport failure is distinguished
+          # from "ack absent". Piping gh straight into the detector would let a
+          # 5xx read as "no ack" (the detector sees empty input → exit 1), and the
+          # operator would be told to re-stage an ack that is already there. Under
+          # `set -uo pipefail` a failed `gh api` in the assignment aborts the step
+          # via the explicit rc check below, not via the ack branch.
+          commits_json=""
+          if ! commits_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" --paginate --slurp); then
+            echo "::error::Could not fetch this PR's commits from the GitHub API (transport failure — 5xx / rate-limit / network). This is NOT an ack problem. Re-run the job; if it persists, check GitHub status. Failing closed because the gate cannot certify the ack without the commit list."
+            exit 1
+          fi
           ack_destroy=false
-          if gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" --paginate --slurp \
+          if printf '%s' "$commits_json" \
              | jq '[.[][] | .commit.message]' \
              | bash "${GITHUB_WORKSPACE}/scripts/sentry-squash-ack-detect.sh"; then
             ack_destroy=true
@@ -500,10 +513,31 @@ jobs:
           # `set -euo pipefail` is active, so a `terraform show` failure aborts
           # the step rather than writing an empty file that would read as an
           # empty state and flag all 49 monitors as orphans.
-          terraform -chdir="${INFRA_DIR}" show -json \
-            | jq -r '.values.root_module.resources[]?
-                     | select(.type == "sentry_cron_monitor")
-                     | .values.name' > /tmp/sentry-state-slugs.txt
+          # State-read integrity, in the PRODUCER — the only place that can tell
+          # "state genuinely has zero cron monitors" from "the state read broke".
+          # A lost/empty remote state makes `terraform show -json` emit
+          # `{"format_version":"1.0"}` with NO `.values`, and the slug extractor's
+          # `.values...[]?` then silently yields zero rows → an empty file. The
+          # audit consumer cannot distinguish that from a legitimately-empty state
+          # (in which every live monitor IS a true Class D orphan — the case the
+          # feature exists to catch), so the guard MUST live here: assert the
+          # state document actually has `.values` before extracting. On a broken
+          # read, fail naming the real cause rather than shipping an empty file
+          # that the consumer reads as "all 49 monitors are orphans".
+          terraform -chdir="${INFRA_DIR}" show -json > /tmp/sentry-tfstate.json
+          if ! jq -e 'has("values")' /tmp/sentry-tfstate.json >/dev/null; then
+            echo "::error::terraform show -json returned no .values for ${INFRA_DIR} — the remote state read is broken (a lost/empty state serialises as {\"format_version\":\"1.0\"}). Refusing to derive the Class D state half from it: an empty derivation would make the audit report every live monitor as an orphan and halt the apply on the wrong cause. Re-check the R2 backend / state key."
+            exit 1
+          fi
+          jq -r '.values.root_module.resources[]?
+                 | select(.type == "sentry_cron_monitor")
+                 | .values.name' /tmp/sentry-tfstate.json > /tmp/sentry-state-slugs.txt
+          # SENTRY_STATE_REQUIRED=1 makes this caller's contract mechanical: if
+          # the export below is ever removed, the audit ERRORS instead of
+          # silently degrading to its warn path (a green apply that checked
+          # nothing). Declaring the contract is what stops a future edit from
+          # quietly disarming the gate.
+          export SENTRY_STATE_REQUIRED=1
           export SENTRY_STATE_SLUGS_FILE=/tmp/sentry-state-slugs.txt
           bash apps/web-platform/scripts/sentry-monitors-audit.sh
 
@@ -552,18 +586,11 @@ jobs:
           # path-specific per the #4420 plan-review iteration. Source of
           # truth: tests/scripts/lib/destroy-guard-filter-sentry.jq (also
           # exercised by tests/scripts/test-destroy-guard-counter-sentry.sh).
-          counts=$(terraform show -json tfplan | \
-            jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-sentry.jq")
-          resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
-          nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
-          # Validate counters parsed correctly — empty values from a jq
-          # failure would silently evaluate false in the `-gt 0` test and
-          # let destructive plans slip past the guard.
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}')."
-            exit 1
-          fi
-          destroy_count=$((resource_deletes + nested_deletes))
+          # Counts + validation + the destroy_count sum come from ONE script that
+          # the plan_pr gate above calls identically — see its header for why
+          # (these blocks were inline in both jobs and the arithmetic drifted).
+          terraform show -json tfplan > /tmp/sentry-apply-plan.json
+          eval "$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-apply-plan.json)"
           # Anchor `[ack-destroy]` to its own line (start-of-string OR
           # preceded by newline; followed by newline OR end-of-string) so
           # the token cannot fire from a quoted block, code fence, or

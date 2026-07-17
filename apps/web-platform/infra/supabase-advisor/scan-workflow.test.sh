@@ -447,14 +447,17 @@ else
   fail "gh issue create passes --milestone" "a hook rejects issue creation without it"
 fi
 
-# NOTE — "monitor declared in cron-monitors.tf" and "monitor has a -target= line"
-# are deliberately NOT asserted here. Both are already covered, and covered
-# BETTER, by apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts:
-# it readdirSync's every workflow, extracts each `monitor-slug:`, and requires a
-# matching sentry_cron_monitor AND a matching -target= line in apply-sentry-infra.yml
-# — all-members and self-discovering, so it covered this new cron with no edit.
-# A hardcoded single-member copy here would be strictly weaker and would rot the
-# moment the resource is renamed. Cite the parity test rather than duplicate it.
+# NOTE — "monitor declared in cron-monitors.tf" is deliberately NOT asserted
+# here. It is already covered, and covered BETTER, by
+# apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts: it
+# readdirSync's every workflow, extracts each `monitor-slug:`, and requires a
+# matching sentry_cron_monitor — all-members and self-discovering, so it covered
+# this new cron with no edit. (Until #6589 that test ALSO required a matching
+# `-target=` line in apply-sentry-infra.yml; the full-root apply retired the
+# allow-list, so declaring the resource now applies it and there is no target
+# line to assert.) A hardcoded single-member copy here would be strictly weaker
+# and would rot the moment the resource is renamed. Cite the parity test rather
+# than duplicate it.
 
 echo "== cross-file: the Inngest schedule and the Sentry monitor window agree =="
 # The monitor's crontab defines the window in which a missed check-in pages. If

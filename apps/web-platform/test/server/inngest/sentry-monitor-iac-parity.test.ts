@@ -118,19 +118,20 @@ function workflowHeartbeatSlugs(): string[] {
   return [...slugs].sort();
 }
 
-// Map each cron-monitor `name` (the Sentry slug) → its Terraform resource id.
+// The set of cron-monitor `name`s (the Sentry slugs) DECLARED in cron-monitors.tf.
 // Parsed per-resource (not a whole-file slug grep) so a `name = "..."` appearing in
-// a comment or a non-cron-monitor block cannot satisfy a workflow's slug.
-function tfSlugToResourceId(tf: string): Map<string, string> {
-  const map = new Map<string, string>();
+// a comment or a non-cron-monitor block cannot satisfy a workflow's slug. Only
+// membership is ever queried, so this is a Set — it used to be a Map<name,id>
+// whose value half was read only by the `-target=` parity check retired in #6589.
+function tfDeclaredMonitorSlugs(tf: string): Set<string> {
+  const slugs = new Set<string>();
   const re =
-    /^resource\s+"sentry_cron_monitor"\s+"([a-z0-9_]+)"\s*\{([\s\S]*?)^\}/gm;
+    /^resource\s+"sentry_cron_monitor"\s+"[a-z0-9_]+"\s*\{([\s\S]*?)^\}/gm;
   for (const m of tf.matchAll(re)) {
-    const resourceId = m[1];
-    const nameMatch = m[2].match(/\n\s*name\s*=\s*"([a-z0-9-]+)"/);
-    if (nameMatch) map.set(nameMatch[1], resourceId);
+    const nameMatch = m[1].match(/\n\s*name\s*=\s*"([a-z0-9-]+)"/);
+    if (nameMatch) slugs.add(nameMatch[1]);
   }
-  return map;
+  return slugs;
 }
 
 // Pure gap detector. Extracted so the deliberately-broken-fixture test can
@@ -139,8 +140,8 @@ function workflowSlugGaps(
   slugs: string[],
   tf: string,
 ): { missingMonitor: string[] } {
-  const slugToId = tfSlugToResourceId(tf);
-  const missingMonitor = slugs.filter((slug) => !slugToId.has(slug));
+  const declared = tfDeclaredMonitorSlugs(tf);
+  const missingMonitor = slugs.filter((slug) => !declared.has(slug));
   return { missingMonitor };
 }
 

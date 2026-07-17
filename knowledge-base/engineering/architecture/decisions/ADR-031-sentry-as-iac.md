@@ -319,10 +319,30 @@ parity-test entry **+** a registry count.
 #6589 broke a P1-derived invariant.** Clause (b) required every GHA `monitor-slug:` to name a
 resource present in the `-target=` allow-list. It existed because target-scoping made
 *declared ≠ applied*: a monitor could be declared and never applied (green CI, dark alarm —
-the #6374 P1, an alarm unseen ~14h). Under a full-root plan, **declared ≡ applied by
-construction**. The invariant clause (b) protected is *preserved*; only its enforcement
-mechanism becomes unnecessary. Clause (a) — every `monitor-slug:` has a matching
+the #6374 P1, an alarm unseen ~14h). Under a full-root plan, **declared ≡ applied whenever an
+apply succeeds** — the allow-list could make a *successful* apply skip a declared resource,
+and full-root cannot. Clause (a) — every `monitor-slug:` has a matching
 `sentry_cron_monitor.name` — remains load-bearing and is untouched.
+
+**But `declared ≡ applied` is a property of a successful apply, NOT a standing invariant, and
+the difference is the whole of what clause (b) gave up.** Clause (b) was checkable at CI time
+from the repo alone; its replacement is "the apply ran and converged", which is observable
+only in Actions history. Three live paths leave the root divergent:
+
+1. `[skip-sentry-apply]` in a merge commit skips the apply outright; nothing reconciles after.
+2. A failed apply run that is never retried — **including a run failed deliberately by the
+   destroy gate below**, which is the gate working as designed and still leaves divergence.
+3. No scheduled drift check covers this root. `scheduled-terraform-drift.yml`'s matrix is
+   `apps/web-platform/infra` + `infra/github`; `apps/web-platform/infra/sentry` is absent.
+
+That gap matters more than usual here, because clause (b) was born from #6374 — *an alarm that
+ran ~14h unseen* — so replacing it with an unwatched runtime property re-opens that incident's
+own failure class one layer up. **The honest statement is: this amendment trades a static,
+CI-checkable invariant for a dynamic one with no monitor, and closing that is tracked as
+#6607** (not a one-line matrix add: the drift workflow runs `doppler run --name-transformer
+tf-var`, which mangles the raw `SENTRY_AUTH_TOKEN` the `jianyuan/sentry` provider reads
+directly → `failed to perform health check`, so the sentry root needs raw-token plumbing the
+other two roots do not).
 
 Two things keep "declared ⇒ applied" true, and neither may be undone independently:
 
@@ -424,12 +444,29 @@ and a tolerated failure would rebuild the vacuity.
    merits — it fires at the moment the setting becomes load-bearing, not on a drift-cron
    cadence.
 
+**Why only this root has a PR-time gate.** Not because it is the only full-root apply —
+`apply-github-infra.yml` is *already* full-root (zero `-target=` lines) and has no PR gate, and
+`apply-web-platform-infra.yml` still carries ~163 `-target=` lines, i.e. **this exact
+silent-no-op defect class, unfixed, against resources that also bill** (betteruptime monitors,
+cloudflare rulesets). The real discriminator is **what an ack-blocked apply leaves behind**:
+for `infra/github`, refusing a destroy leaves a *ruleset* standing — failing closed preserves a
+protection, which is benign. For sentry, refusing a destroy leaves a *monitor billing $0.78/mo*
+— failing closed preserves the exact harm the change exists to remove. That is why sentry needs
+the red to arrive **before** merge, where the author can still act on it, and `infra/github`
+does not. Scoping #6589 to sentry is deliberate; the `-target=` defect in
+`apply-web-platform-infra.yml` is generic to address-scoping and is named here so the next
+orphan there is anticipated rather than discovered.
+
 **Consequences accepted, not mitigated.**
 
 - `main.tf:16` sets `use_lockfile = false` (R2 has no S3 conditional writes), so a full-root
-  plan widens the *unlocked* write window from ≤71 addresses to the whole state key. "Do not
-  run a manual apply while CI is applying" is an **instruction, not a control**. Acceptable
-  given the single-writer path-filtered CI path; recorded honestly rather than as mitigated.
+  plan widens the *unlocked* write window to the whole state key. The widening is a change in
+  **kind, not size**: under `-target=`, a concurrent writer could clobber *updates* to ≤71
+  addresses; under full-root it can produce *destroys* across the whole root. "Do not run a
+  manual apply while CI is applying" is an **instruction, not a control**. Acceptable given the
+  single-writer path-filtered CI path; recorded honestly rather than as mitigated. #6607's drift
+  check would not prevent the race but would detect the divergence within a cron period instead
+  of never.
 - The PR-time plan moves prod-token exposure **earlier** — from post-merge (after CODEOWNERS
   review) to any collaborator branch push touching `infra/sentry/**`. Bots are blocked by
   `ALLOWED_PATHS`; on a solo repo that leaves the founder. A real widening, accepted.

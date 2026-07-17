@@ -337,6 +337,29 @@ t_state_membership_is_decisive() {
   fi
 }
 
+# ── T13: SENTRY_STATE_REQUIRED=1 without the file is a hard error ──────────
+# The authoritative caller (apply-sentry-infra.yml) declares this so that
+# deleting its `export SENTRY_STATE_SLUGS_FILE=...` line cannot silently degrade
+# the gate from fail-closed to warn — a green apply that checked nothing. Without
+# this contract the degradation is invisible to review, which is the exact class
+# this PR is about.
+t_state_required_without_file_errors() {
+  local rc=0
+  env -u SENTRY_STATE_SLUGS_FILE \
+    SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_API_HOST=de.sentry.io \
+    NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+    SENTRY_FIXTURE_MONITORS="$TMP/monitors-orphan.json" \
+    SENTRY_FIXTURE_RULES="$TMP/rules.json" SENTRY_TF_DIR="$TMP/tf" \
+    AUDIT_OUT_DIR="$TMP/out" SENTRY_STATE_REQUIRED=1 \
+    bash "$SCRIPT" >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    _report "T13 SENTRY_STATE_REQUIRED=1 with no state file -> hard error (contract is mechanical)" ok
+  else
+    _report "T13 SENTRY_STATE_REQUIRED=1 with no state file -> hard error" fail \
+      "rc=$rc (want non-zero) — the caller declared it injects state and did not, yet the gate ran anyway"
+  fi
+}
+
 t_declared_monitor_is_not_class_d
 t_undeclared_monitor_is_class_d_and_exits_nonzero
 t_comment_mention_does_not_declare
@@ -349,6 +372,7 @@ t_state_unknown_warns_not_fails
 t_empty_state_file_still_fails
 t_missing_state_file_errors
 t_state_membership_is_decisive
+t_state_required_without_file_errors
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

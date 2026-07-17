@@ -513,6 +513,17 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
   # the one with teeth. The authoritative fail-closed run is
   # apply-sentry-infra.yml, which inits Terraform first and injects the state
   # half — the caller that can actually know.
+  # SENTRY_STATE_REQUIRED=1 lets the authoritative caller DECLARE its own
+  # contract. Without it, deleting the workflow's `export
+  # SENTRY_STATE_SLUGS_FILE=...` line silently degrades this gate from
+  # fail-closed to warn — a green apply that checked nothing, invisible to
+  # review. That is a prose-documented invariant with no mechanical check, in a
+  # PR whose entire thesis is that those get forgotten.
+  if [[ "${SENTRY_STATE_REQUIRED:-0}" == "1" && -z "${SENTRY_STATE_SLUGS_FILE:-}" ]]; then
+    echo "ERROR: SENTRY_STATE_REQUIRED=1 but SENTRY_STATE_SLUGS_FILE is unset — this caller declared that it injects Terraform state, and it did not. Refusing to degrade to the warn path: that would silently turn the Class D gate into a green that checked nothing. Refs #6589." >&2
+    exit 1
+  fi
+
   state_known=0
   state_slugs=""
   if [[ -n "${SENTRY_STATE_SLUGS_FILE:-}" ]]; then
@@ -522,6 +533,7 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
     fi
     state_known=1
     state_slugs=$(grep -vE '^[[:space:]]*$' "$SENTRY_STATE_SLUGS_FILE" | sort -u || true)
+
   fi
 
   class_d_candidates=()
@@ -659,17 +671,36 @@ echo "[ok] Wrote audit report: $out_file"
 # the operator gets the full list — a bare failure with no slugs is not
 # actionable. Nothing runs after this point, so the gate cannot be skipped.
 #
-# Callers: apply-sentry-infra.yml runs this under `set -euo pipefail` BEFORE
-# `terraform plan`, so a Class D orphan halts the apply before any state
-# mutation; sentry-audit-gate.yml fails the required check on Sentry-touching
-# PRs. reusable-release.yml wraps the call in `set +e` and downgrades any
-# non-zero to a `::warning::`, so releases stay unblocked.
+# Callers — and Class D's teeth exist in EXACTLY ONE of them, so state it
+# plainly rather than implying three:
+#   - apply-sentry-infra.yml (apply job): runs this under `set -euo pipefail`
+#     BEFORE `terraform plan`, WITH SENTRY_STATE_REQUIRED=1 + the state half
+#     injected. This is the only caller where a Class D orphan halts anything
+#     (the apply, before any state mutation).
+#   - sentry-audit-gate.yml: invokes the script with NO state half, so
+#     `state_known=0` -> Class D can only WARN here, never fail. (It is also not
+#     in scripts/required-checks.txt, so it gates no required context.) Pre-merge
+#     Class D is advisory, by construction.
+#   - reusable-release.yml: `set +e` + downgrade to `::warning::`. Also passes no
+#     state half, so the non-zero it would downgrade is unreachable — releases
+#     were never at risk from Class D. The downgrade is belt-and-suspenders, not
+#     load-bearing.
 #
 # ONLY unreclaimable monitors reach here — `live AND undeclared AND not in
 # state`. A pending destroy (in state, block removed) is excluded upstream: it
 # is not an orphan, and failing on it would halt the apply BEFORE the plan that
 # reclaims it, leaving the monitor live and billing. See the state-half comment
 # above.
+# The SOLEUR_SENTRY_CLASS_D_ORPHAN marker below goes to STDOUT, which on this
+# script's actual execution surface (a GitHub Actions runner) is the JOB LOG and
+# nothing else. It is NOT shipped to Better Stack: the `SOLEUR_*` marker
+# convention is HOST-journald only (apps/web-platform/infra/vector.toml scopes
+# every source to the Hetzner host's `SYSLOG_IDENTIFIER`; no vector source reads
+# runner stdout, and no workflow ships it). The load-bearing signal is the
+# non-zero EXIT (the apply job fails, GitHub Actions notifies); the marker is a
+# human-readable detail line in that failed job's log. Do not claim a Better
+# Stack route for it without first adding the runner-stdout shipper AND its
+# vector-scrub drift fixture.
 if (( ${#orphan_live_monitors[@]} > 0 )); then
   for slug in "${orphan_live_monitors[@]}"; do
     printf 'SOLEUR_SENTRY_CLASS_D_ORPHAN: slug=%s created=%s last_checkin=%s cost_usd=%s\n' \

@@ -205,6 +205,7 @@ if want_scripts; then
   # address-scoping in the apply (the #6074/#4929 root cause), the fail-closed
   # aggregator verdict, and the squash-body emulation that decides whether a
   # pre-staged [ack-destroy] will actually reach the merge commit.
+  run_suite "tests/scripts/sentry-destroy-counts" bash tests/scripts/test-sentry-destroy-counts.sh
   run_suite "tests/scripts/sentry-full-root-apply" bash tests/scripts/test-sentry-full-root-apply.sh
   run_suite "tests/scripts/sentry-destroy-gate-verdict" bash tests/scripts/test-sentry-destroy-gate-verdict.sh
   run_suite "tests/scripts/sentry-squash-ack-detect" bash tests/scripts/test-sentry-squash-ack-detect.sh
