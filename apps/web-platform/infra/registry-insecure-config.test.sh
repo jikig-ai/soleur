@@ -48,13 +48,19 @@ assert "resource terraform_data.registry_insecure_config exists" \
 assert "local.docker_daemon_json = templatefile(docker-daemon.json.tmpl, {...})" \
   "grep -qE 'docker_daemon_json[[:space:]]*=[[:space:]]*templatefile\(\"\\\$\{path.module\}/docker-daemon.json.tmpl\"' \"\$SERVER_TF\""
 
-# The endpoint var must be threaded into BOTH the daemon-json local map AND the cloud-init map
-# (running-host + fresh-host derivation). Assert both call sites pass it (count >= 2).
-# `|| true` inside the substitution: grep -c exits 1 when the count is 0, which under
-# `set -euo pipefail` would abort the whole script instead of letting the assert report FAIL.
-RE_COUNT=$(grep -cE 'registry_endpoint[[:space:]]*=[[:space:]]*local\.registry_endpoint' "$SERVER_TF" || true)
-assert "server.tf passes registry_endpoint = local.registry_endpoint in BOTH maps (daemon-json + cloud-init) (found $RE_COUNT)" \
-  "[[ \"\$RE_COUNT\" -ge 2 ]]"
+# The endpoint var must be threaded into BOTH templatefile maps — running-host
+# (docker-daemon.json.tmpl) AND fresh-host (cloud-init.yml). Scope each assertion to its OWN map
+# block (extract from the templatefile("...<file>...") line to the block's closing `})`), NOT a
+# file-wide count: a bare `count >= 2` could pass vacuously if one map dropped the var while an
+# unrelated occurrence appeared elsewhere (cq-assert-anchor-not-bare-token). Each awk bounds at
+# the first `}` immediately followed by `)` after the templatefile line — the map close (`})`) or
+# the base64gzip-wrapper close (`}))`). No inner `})` occurs in either map body.
+DJ_MAP="$(awk '/docker-daemon\.json\.tmpl"/{f=1} f{print} f && /\}\)/{exit}' "$SERVER_TF")"
+CI_MAP="$(awk '/cloud-init\.yml"/{f=1} f{print} f && /\}\)/{exit}' "$SERVER_TF")"
+assert "docker-daemon.json.tmpl map passes registry_endpoint = local.registry_endpoint (running-host)" \
+  "printf '%s' \"\$DJ_MAP\" | grep -qE 'registry_endpoint[[:space:]]*=[[:space:]]*local\.registry_endpoint'"
+assert "cloud-init.yml map passes registry_endpoint = local.registry_endpoint (fresh-host)" \
+  "printf '%s' \"\$CI_MAP\" | grep -qE 'registry_endpoint[[:space:]]*=[[:space:]]*local\.registry_endpoint'"
 
 # triggers_replace hashes the RENDERED content (local.docker_daemon_json), NOT sha256(file(...)).
 # The static-file hash could never track a derived value; the rendered-string hash does.
