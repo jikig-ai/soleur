@@ -193,7 +193,7 @@ Roadmap / CI already named the Eve-class gaps as **tenant product work**, not fr
 | Sandboxed untrusted work | Per-tenant FS isolation + bwrap TOCTOU close | [#5863](https://github.com/jikig-ai/soleur/issues/5863), [#5862](https://github.com/jikig-ai/soleur/issues/5862) |
 | Multi-channel delivery | Business SaaS / inbox breadth | [#4673](https://github.com/jikig-ai/soleur/issues/4673) |
 | Schedules / always-on work | Cross-system business automations | [#4674](https://github.com/jikig-ai/soleur/issues/4674) |
-| Traceable agent runs | Agent work visualization | [#2004](https://github.com/jikig-ai/soleur/issues/2004) |
+| Residual agent-**run** visibility (live session state, work log, intervene) | Open residual of [#2004](https://github.com/jikig-ai/soleur/issues/2004) after **Workstream** shipped *issue/task* kanban (not the same as live agent runs); chat tool chips + debug stream are partial only. Related open bridge: [#6010](https://github.com/jikig-ai/soleur/issues/6010) agents-as-teammates on Workstream |
 | Product packaging of primitives | Multica → Command Center adaptations | [#6006](https://github.com/jikig-ai/soleur/issues/6006) |
 
 **Sequencing already correct on roadmap:** CP1 → CP2 (HITL) before expanding external surfaces (CP4/CP3). Eve validates that order; it does not invent new work.

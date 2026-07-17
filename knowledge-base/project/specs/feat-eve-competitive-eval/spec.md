@@ -48,7 +48,7 @@ Operators and the market will encounter Vercel Eve (“Next.js for agents”). W
 
 - [x] Parallel domain leaders + research agents completed
 - [x] Brainstorm document committed with User-Brand Impact + Domain Assessments
-- [x] Epic #6641 created with gap table + links to product issues (#5862, #5863, #4672, #2004, #6006, #4674, #4673)
+- [x] Epic #6641 created with gap table + links to product issues (#5862, #5863, #4672, #2004 residual agent-run visibility — not Workstream, #6006, #4674, #4673)
 - [ ] Operator confirms CI Tier 4 action (now vs next intake)
 - [ ] Child issues under #6641 executed per sequencing (separate work)
 
