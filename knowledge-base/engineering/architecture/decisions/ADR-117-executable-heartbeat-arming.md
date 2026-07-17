@@ -65,9 +65,9 @@ survive:
 - **FED-but-inert** (`feeder.kind` is `cron`/`timer`, live `paused=true`). `registry_prd` sits here
   at merge, until the post-merge reprovision measures a beat and arms it. **No static check can
   detect this** — the manifest compares source to source, and `ignore_changes` decouples both from
-  live. It is bounded only by the nightly live-reconcile deferred to #6549. Until that ships, the
-  bound is a human one, which is exactly the weakness that produced #6537 — so it is named here
-  rather than papered over.
+  live. It is bounded by the nightly live-reconcile, which **shipped 2026-07-17 (#6549 item 2)** — see
+  the amendment under this section. Before it shipped the bound was a human one, which is exactly the
+  weakness that produced #6537 — so it is named here rather than papered over.
 - **FALSELY FED** — evidence that resolves but does not actually arm *this* heartbeat. The guard
   requires the declared **arming construct** (`systemctl enable --now <unit>`, a `- path:
   /etc/cron.d/<x>` drop-in) on a comment-stripped view, which excludes the cheap versions: a bare
@@ -160,6 +160,21 @@ silence it replaced.
 > can only prove a feeder exists.** Arming is still verified by a beat — the beat is just measured
 > during a rolled-back-by-default arm, not before it.
 
+### Amendment (2026-07-17, #6549 item 2): the live-reconcile that closes the FED-but-inert gap now exists
+
+The two states this ADR named as surviving — **FED-but-inert** (live `paused=true` with a working
+feeder) and the sibling **absent-live** shape (#6548) — were bounded by "a human one, which is
+exactly the weakness that produced #6537." That bound is now machine-checked. A nightly
+`heartbeat-live-reconcile` job in `scheduled-terraform-drift.yml` pulls `GET /api/v2/heartbeats` and
+reconciles the **live** `paused`/existence of each monitored heartbeat against this manifest, failing
+on either (a) a heartbeat live-`paused` whose manifest `feeder.kind ∈ {cron,timer}`, or (b) a
+non-`count`-gated heartbeat absent from the live payload. It only READS; it never unpauses. This is
+the **complement** to the static guard, not a replacement: the static manifest still proves a feeder
+exists in source (the forward + inverse checks above); the live-reconcile proves the source and live
+states agree — the one thing no source-only test can see. The two-vendor liveness of the reconcile
+job itself is a Sentry cron monitor (`scheduled-heartbeat-reconcile`). ADR-117 is **amended, not
+superseded**: the manifest remains the source-of-truth substrate the reconcile reads.
+
 ## Consequences
 
 - `registry_prd` reclassifies `web-host-cron` → `dedicated-host-boot`, so ADR-103's `replace_target`
@@ -170,9 +185,11 @@ silence it replaced.
   it buys the property that the sentence is true.
 - **Not closed by this ADR:** liveness from a *consumer's* perspective (can a client reach zot over
   the private net?) remains #6438 §1. The on-host beat cannot see that, and says so.
-- **Not closed by this ADR:** a heartbeat paused in *live* Better Stack while its manifest row
-  declares a working feeder. The guard is static; source is not live. Deferred to #6549 (a nightly
-  reconcile in `scheduled-terraform-drift.yml`), which is the only layer that can close it.
+- **Closed by the 2026-07-17 amendment (#6549 item 2):** a heartbeat paused in *live* Better Stack
+  while its manifest row declares a working feeder — and the sibling absent-live shape (#6548). The
+  static guard cannot see either (source is not live); the nightly `heartbeat-live-reconcile` job in
+  `scheduled-terraform-drift.yml` reads live state and reconciles it against this manifest. See the
+  amendment subsection under `## Decision`.
 
 ## Alternatives Considered
 
@@ -189,12 +206,25 @@ comment with a truer comment leaves the failure mode fully intact.
 feeder that never existed — the #6537 shape — and it goes silent exactly when someone ships a probe,
 then false-fires at the person doing the right thing. The inverse assertion is what closes it.
 
-**A nightly live-reconcile instead of a static guard.** Deferred (#6549), not rejected — it is the
-only thing that can see live `paused`. But it is a different design (auth, flake tolerance, paging)
-and would have been scope creep on a fix that was already shippable. Notably, an earlier draft of
-this work proposed a nightly gate *around* the refusal to unpause, whose own quadrant table would
-have stayed **silent** on the very monitor #6537 reported — a watchdog that would itself have been an
-inert monitor, i.e. the exact class it existed to gate.
+**A nightly live-reconcile instead of a static guard.** Deferred at #6537, **shipped 2026-07-17 as
+the #6549-item-2 complement** — not a replacement. It is the only thing that can see live `paused`,
+but on its own it is periodic (twice-daily) and vendor-availability-dependent, so it cannot replace
+the static manifest's per-commit forward+inverse checks; the two layers are complementary (source
+truth on every push, live truth twice daily). Splitting it out of #6537 was correct: it is a distinct
+design (auth via `doppler secrets get --plain`, tri-state flake tolerance, creation-only paging) that
+would have been scope creep on a fix already shippable. Notably, an earlier draft of this work
+proposed a nightly gate *around* the refusal to unpause, whose own quadrant table would have stayed
+**silent** on the very monitor #6537 reported — a watchdog that would itself have been an inert
+monitor, i.e. the exact class it existed to gate; the shipped reconcile avoids that by keying on the
+manifest `feeder.kind`, so a fed-but-paused monitor is flagged rather than tabulated-and-ignored.
+
+**Extend the static parity test to read live Better Stack state (fold the reconcile into the existing
+test).** Rejected. The parity test runs per-commit in CI with no vendor credentials and must stay
+hermetic and offline-deterministic; giving it a network dependency on `uptime.betterstack.com` would
+make every push flake on a Better Stack blip and leak the API token into the unit-test surface. The
+live read belongs in a scheduled job with its own auth, retry/backoff, and paging semantics — kept
+**separate** from the source-only guard precisely so the fast, hermetic per-commit check never
+acquires a vendor dependency.
 
 **Widen `period`/`grace` so a cron's 60s floor fits.** Rejected as structurally impossible, which is
 worth recording: `betteruptime_heartbeat.registry_prd` is an `OPERATOR_APPLIED_EXCLUSION`, so a
