@@ -164,6 +164,35 @@ This is precisely the ADR-114/#6425 two-connector ambiguity that caused 16h of f
 
 ---
 
+## Rebase re-measurement (2026-07-17, after B3)
+
+The branch was rebased from base `7b46f6291` onto `5c43c062a` (3 new commits on
+main): **#6588** (declare the LUKS-at-rest `/workspaces` volume — the DC-1
+re-raise dependency), **#6597** (Phase 2 GPU dogfood), **#6595** (pin deploy./ssh.
+tunnel ingress to web-1 — "management plane was a coin flip, PR-A of 2"). #6595 is
+directly adjacent to Finding 4 (web-2 as a live connector). One genuine file
+overlap — `apply-web-platform-infra.yml` — auto-merged cleanly (different regions);
+verified both my destroy-HALT steer and #6595's ingress pin survived, no markers.
+
+Re-measured against the new base:
+
+- Push-apply scope is still **95 targets** in the first (per-PR) plan block. The
+  new #6588/#6595 targets live in OTHER plan blocks (dispatch jobs), not the
+  per-PR path.
+- Push-apply shape, web-2 removed: **`0 to add, 1 to change, 1 to destroy`** —
+  unchanged. Same two resources (`hcloud_firewall_attachment.web` update,
+  `hcloud_server.web["web-2"]` destroy).
+- **#6588's `hcloud_volume.workspaces_luks` does NOT leak into the push-apply
+  scope** (0 mentions) — it is applied, so no spurious "to create", and it is not
+  in the web-2 retire `-target` set. The retire gate is unaffected.
+- `proxy-tls.tf` still byte-identical to the new main. fmt + validate clean.
+- All gates green on the new base: retire gate 43/0, regex-parity intact, fanout
+  3/0, cutover 200/0, terraform-target-parity 56/0.
+
+**For B5:** DC-1 still binds. #6588 landed the LUKS volume as a *declaration/new
+substrate*; the live workspace data is not yet migrated onto it, and the
+2026-07-23 re-raise trigger has not passed. The LUKS claim family stays untouched.
+
 ## Verdict
 
 B0.1 (push-apply shape), B0.2b (9 files), B0.3 and B0.4 hold. **B0.2's baseline, ADR-118's
