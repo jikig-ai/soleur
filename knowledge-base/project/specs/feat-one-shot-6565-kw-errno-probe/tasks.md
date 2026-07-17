@@ -140,19 +140,19 @@ it together with D6. It is the field that actually ends the guessing; the six ar
 
 ## Phase 4 — Verify
 
-- [ ] 4.1 **`bash apps/web-platform/infra/ci-deploy.test.sh` → all green.** This is the real gate (plan AC3);
+- [x] 4.1 **`bash apps/web-platform/infra/ci-deploy.test.sh` → all green.** This is the real gate (plan AC3);
       it subsumes T-5B-15 / T-5B-16 / T-5B-19. **Do not hand-copy their oracle pipelines into a checklist** —
       a second copy of an oracle drifts from the test it restates, which is the defect T-5B-16's own comment
       block warns about.
-- [ ] 4.2 **Sanity-only (NOT a gate): no abort vector in the emitter.** If you spot-check for `grep -q`,
+- [x] 4.2 **Sanity-only (NOT a gate): no abort vector in the emitter.** If you spot-check for `grep -q`,
       **strip comments first** — Phase 2's own comment block says *"case, never `grep -q`"*, so a bare-token
       body-grep matches that prose and **false-FAILs** (`cq-assert-anchor-not-bare-token`; T-5B-19 at `:4095`
       does the comment-strip and explains why). Note `grep -c` exits **rc=1** on a zero count — the exact
       non-match-returns-1 abort class this instrument was built around; never chain it under `set -e`.
-- [ ] 4.3 **Scope** (plan AC1): `git diff --stat origin/main...HEAD` touches exactly **three** files —
+- [x] 4.3 **Scope** (plan AC1): `git diff --stat origin/main...HEAD` touches exactly **three** files —
       `ci-deploy.sh`, `ci-deploy.test.sh`, `zot-login-gate-names-failure-6497.sh` (the D6 line). No `.tf`,
       no `.service`, no `cloud-init*`, no Doppler.
-- [ ] 4.4 **The follow-through's three-state invariant LOGIC is unmodified** (plan AC5). Reporting-only
+- [x] 4.4 **The follow-through's three-state invariant LOGIC is unmodified** (plan AC5). Reporting-only
       additions are permitted — that is D6/Phase 3.
       > **Do NOT assert `git diff -- scripts/followthroughs/` is empty.** An earlier draft did, and it
       > directly contradicted Phase 3: the "unmodified" form wins by being mechanically checkable, which
