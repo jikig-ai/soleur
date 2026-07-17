@@ -32,7 +32,9 @@ function countSoleurProjectAgents(inspectOutput: string): number {
     if (inAgents && /^\s+Plugins \(\d+\)/.test(line)) {
       break;
     }
-    if (inAgents && /soleur:[^\s]+\s+project/.test(line)) {
+    // Compat stubs register under hyphen form (Grok spawn key = filename stem).
+    // Accept colon form too for older stubs during transition.
+    if (inAgents && /soleur[-:][^\s]+\s+project/.test(line)) {
       count++;
     }
   }
@@ -69,6 +71,7 @@ describe("grok-agent-discoverability", () => {
     const count = countSoleurProjectAgents(output);
     expect(count).toBeGreaterThanOrEqual(EXPECTED_SOLEUR_AGENT_COUNT);
 
-    expect(output).toMatch(/soleur:engineering:review:security-sentinel/);
+    // Hyphen form is the Grok spawn key; must appear in inspect Agents list.
+    expect(output).toMatch(/soleur-engineering-review-security-sentinel/);
   }, 30_000);
 });

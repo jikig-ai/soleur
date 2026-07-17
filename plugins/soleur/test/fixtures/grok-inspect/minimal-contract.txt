@@ -2,8 +2,8 @@
   └ brainstorm                        plugin: soleur
 
   Agents (67)
-  └ soleur:engineering:review:security-sentinel     project
-  └ soleur:support:ticket-triage                    project
+  └ soleur-engineering-review-security-sentinel     project
+  └ soleur-support-ticket-triage                    project
 
   Plugins (2)
   └ soleur (project, enabled)         94 skills, 67 agents, hooks

@@ -7,7 +7,7 @@
  * Skills and go.md must call these helpers (or follow routingInstructions) — never improvise workflows.
  */
 
-import { pathToAgentId } from "./agent-registry";
+import { agentIdToGrokSubagentType, pathToAgentId } from "./agent-registry";
 import { behindSyncInstructions } from "./pr-merge-poll";
 import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
@@ -149,8 +149,12 @@ export function formatAgentSpawn(agent: string, prompt: string): string {
   const agentId = normalizeAgentName(agent);
 
   if (harness === "grok") {
+    // Grok validates subagent_type against the .grok/agents filename stem
+    // (colons → hyphens), not the colon-qualified Claude id.
+    const grokType = agentIdToGrokSubagentType(agentId);
     return (
-      `Use **spawn_subagent** with agent \`${agentId}\` and this prompt:\n\n${prompt}`
+      `Use **spawn_subagent** with subagent_type \`${grokType}\` ` +
+      `(Grok spawn key; canonical id \`${agentId}\`) and this prompt:\n\n${prompt}`
     );
   }
 
@@ -167,14 +171,16 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
   const agentId = normalizeAgentName(agent);
 
   if (harness === "grok") {
+    const grokType = agentIdToGrokSubagentType(agentId);
     return {
       harness,
       tool: "spawn_subagent",
-      agent: agentId,
+      agent: grokType,
       prompt,
       instruction:
-        `Spawn via **spawn_subagent** with agent \`${agentId}\` ` +
-        "(enable with `GROK_SUBAGENTS=1` or `[subagents] enabled = true` in config). " +
+        `Spawn via **spawn_subagent** with subagent_type \`${grokType}\` ` +
+        `(not colon form \`${agentId}\` — Grok matches the \`.grok/agents/\` filename stem). ` +
+        "Enable with `GROK_SUBAGENTS=1` or `[subagents] enabled = true` in config. " +
         "Pass the prompt verbatim — do NOT substitute a manual workflow.",
     };
   }
@@ -259,7 +265,7 @@ export function routingInstructions(harness: Harness): string {
       return [
         "**Harness: Grok Build**",
         "- Skills: **slash commands** — `/brainstorm`, `/one-shot`, `/plan`, etc.",
-        "- Agents: **spawn_subagent** (not Task).",
+        "- Agents: **spawn_subagent** (not Task). Use `spawnAgent()` so registry colon ids map to hyphen filename stems (`soleur:product:cpo` → `soleur-product-cpo`).",
         "- Commands: `/go`, `/sync`, `/help` — **not** `/soleur:go`.",
         "- **Never improvise** — invoke the registered slash command or subagent.",
         "",
