@@ -82,6 +82,11 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
 
 const NON_INNGEST_MONITORS = new Set([
   "scheduled-terraform-drift",
+  // #6549 item 2: GHA-fired (scheduled-terraform-drift.yml → heartbeat-live-reconcile
+  // job) — the source-vs-live Better Stack heartbeat reconcile. Its final
+  // sentry-heartbeat step pings the check-in; there is no Inngest cron function, so
+  // it maps to no SENTRY_MONITOR_SLUG — same class as scheduled-terraform-drift.
+  "scheduled-heartbeat-reconcile",
   // #3366: GHA-fired executor (scheduled-supabase-advisor-scan.yml) posts the
   // heartbeat at the end of the run; the cron-supabase-advisor-scan.ts
   // dispatcher declares no SENTRY_MONITOR_SLUG (it only dispatches and holds no
