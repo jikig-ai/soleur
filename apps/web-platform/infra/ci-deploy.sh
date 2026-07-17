@@ -1403,9 +1403,13 @@ _ghcr_pull_or_recover() {
   RECOVERY_STAGE=""
   # #6525 transient backoff schedule. PULL_TRANSIENT_RETRY_SLEEPS is a test-only override seam
   # (mirrors the SOLEUR_GHCR_READ_FILE precedent); tests pass "0 0" for a zero-sleep 2-retry loop.
-  # Setting it to "" yields max=0 and DISABLES the transient retry (intentional; tests never use "").
+  # UNSET (the prod default) → "2 4" = 2 retries, ≤6 s added wall-clock/leg. Setting it to "" (empty)
+  # → an empty array → max=0 → DISABLES the transient retry — a deliberate operator break-glass lever.
+  # Hence the `-` default (NOT `:-`): `:-` would substitute the default on an EMPTY value too, silently
+  # defeating the disable lever; `-` substitutes only when UNSET, leaving an explicit "" empty. Prod
+  # never sets the var (unset ⇒ default). Tests exercise all three: unset (T-6525-8), "0 0", "" (T-6525-9).
   # shellcheck disable=SC2206  # intentional word-split of the space-separated schedule into the array
-  local -a _sleeps=( ${PULL_TRANSIENT_RETRY_SLEEPS:-2 4} )
+  local -a _sleeps=( ${PULL_TRANSIENT_RETRY_SLEEPS-2 4} )
   local max=${#_sleeps[@]} attempt=0 detail
   while :; do
     if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
@@ -1414,7 +1418,11 @@ _ghcr_pull_or_recover() {
       [[ "$attempt" -gt 0 ]] && pull_auth_recovery_event "${IMAGE}:${TAG}" transient_recovered
       return 0
     fi
-    # classify the stderr CONTENT (tail -c 400), never the path — else recovery no-ops (P2-E).
+    # classify the stderr CONTENT (tail -c 400), never the path — else recovery no-ops (P2-E). The
+    # inline `tail` here (rather than reusing the `detail` computed just below) is INTENTIONAL: #6400
+    # AC3 anchors on the literal `_pull_result_is_auth_denied "$(tail -c 400 "$perr"` call shape to
+    # prove content-not-path classification. `$perr` is unchanged since the pull, so the re-read below
+    # is byte-identical and cheap (a ≤400-byte file read); do not "simplify" it away — it breaks AC3.
     if _pull_result_is_auth_denied "$(tail -c 400 "$perr" 2>/dev/null)"; then
       # ---- #6400 auth recovery, VERBATIM — keeps its OWN inner success `return 0`, then a
       # terminal `return 1`: auth is recover-once-then-terminal and MUST NOT loop (a

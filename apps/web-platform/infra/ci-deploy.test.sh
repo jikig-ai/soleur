@@ -627,6 +627,17 @@ MOCK
 # Shared mock scaffold: creates all common mock binaries in $MOCK_DIR.
 # Docker/curl behavior is driven by MOCK_DOCKER_MODE / MOCK_CURL_MODE env vars
 # (see factory docs above). Specialized overrides are rare after consolidation.
+# #6525: opt-in no-op `sleep` mock so a test can exercise the DEFAULT transient backoff schedule
+# (unset PULL_TRANSIENT_RETRY_SLEEPS ⇒ "2 4" = 6 s of REAL sleeps) without the wall-clock cost.
+# Gated on MOCK_SLEEP_NOOP=1 so every OTHER test keeps the real `sleep` (lease/lock/drain timing).
+create_mock_sleep() {
+  cat > "$1/sleep" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+  chmod +x "$1/sleep"
+}
+
 create_base_mocks() {
   local mock_dir="$1"
   create_mock_logger "$mock_dir"
@@ -640,6 +651,9 @@ create_base_mocks() {
   create_mock_df "$mock_dir"
   create_mock_doppler "$mock_dir"
   create_mock_layer3 "$mock_dir"
+  # `if` (not `[[ … ]] && …`): create_base_mocks runs under `set -euo pipefail`, where a bare
+  # `[[ false ]] && cmd` statement exits non-zero and aborts the whole suite.
+  if [[ "${MOCK_SLEEP_NOOP:-}" == "1" ]]; then create_mock_sleep "$mock_dir"; fi
 }
 
 # Parse .reason and .exit_code out of a ci-deploy.state JSON file.
@@ -3528,13 +3542,21 @@ PT_POS=(
   'Get "https://ghcr.io/v2/": request canceled while waiting for connection'
   'dial tcp: lookup ghcr.io on 10.0.0.1:53: server misbehaving'
 )
-# Negative fixtures — auth (higher precedence, owned by _pull_result_is_auth_denied) and
-# manifest (note `no such manifest` shares the `no such` prefix with the transient
-# `no such host` — the predicate must anchor on the full token and NOT match manifest).
+# Negative fixtures — auth (higher precedence, owned by _pull_result_is_auth_denied), manifest, and
+# durable non-transient failures. EVERY token in the auth regex (unauthorized|authentication
+# required|denied|forbidden) gets its OWN fixture: with only `denied` present, a transient regex
+# widened to overlap the other three auth tokens would pass the "all negatives rejected" assertion
+# vacuously (test-design M12). Manifest carries both tokens (`no such manifest` shares the `no such`
+# prefix with the transient `no such host`); the durable classes (disk-full, bad reference) must
+# never be retried as transient.
 PT_NEG=(
   'denied: requested access to the resource is denied'
+  'unauthorized: authentication required'
+  'Get "https://ghcr.io/v2/token": 403 Forbidden'
   'manifest unknown: manifest unknown'
   'manifest for ghcr.io/x:v1 not found: no such manifest'
+  'failed to register layer: write /var/lib/docker: no space left on device'
+  'invalid reference format'
 )
 PT_BAD=""
 if ! declare -F _pull_result_is_transient >/dev/null; then
@@ -3555,8 +3577,10 @@ fi
 rm -f "$PT_LIB"
 
 # T-6525-3: transient retry RECOVERS — count=1 (first pull transient, retry succeeds),
-# PULL_TRANSIENT_RETRY_SLEEPS="0 0" (no real sleep): 2 GHCR pulls, a transient_recovered
-# breadcrumb (op:image-pull-recovery), NO pull_failure_event, overall success.
+# PULL_TRANSIENT_RETRY_SLEEPS="0 0" (no real sleep): the GHCR pull leg recovers on the 2nd pull —
+# 2 GHCR pulls, a transient_recovered breadcrumb (op:image-pull-recovery), NO pull_failure_event.
+# (Asserts the pull-leg recovery via events, not the full-deploy exit code — mirrors #6400 AC1,
+# which likewise verifies recovery by event, since a later mocked deploy step is out of scope here.)
 echo "--- #6525 T-6525-3: transient retry RECOVERS (count=1 → 2 pulls, transient_recovered) ---"
 T6525=$(mktemp -d)
 echo 1 > "$T6525/transient-count"
@@ -3593,7 +3617,7 @@ TOTAL=$((TOTAL + 1))
 T4_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
 if [[ "$T4_RC" -ne 0 ]] && [[ "$T4_PULLS" -eq 3 ]] \
    && grep -q 'image pull failed (network)' "$MOCK_SENTRY_CAPTURE_FILE" \
-   && grep -q 'transient_exhausted' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && grep -q '"recovery_stage": *"transient_exhausted"' "$MOCK_SENTRY_CAPTURE_FILE" \
    && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
   PASS=$((PASS + 1)); echo "  PASS: exhausted — rc=$T4_RC, 3 GHCR pulls (1+2 retries), failure tagged network/transient_exhausted, no recovery"
 else
@@ -3676,6 +3700,56 @@ if [[ "$TRANSIENT_DEF_COUNT" -eq 1 ]] \
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-7 (transient_def=$TRANSIENT_DEF_COUNT; expected exactly 1 def + shared-predicate call + no inline network regex in pull_failure_event)"
 fi
+
+# T-6525-8 (test-design M10/M11): the PRODUCTION DEFAULT schedule must actually retry. Every other
+# #6525 test overrides PULL_TRANSIENT_RETRY_SLEEPS="0 0", so none exercises the prod wiring — a
+# one-char edit making the default empty (`${VAR-2 4}` → `${VAR-}`) silently reverts to the pre-#6525
+# ZERO-retry bug while staying green. Here the var is UNSET (prod path) so the real "2 4" default is
+# used; MOCK_SLEEP_NOOP=1 no-ops the 6 s of real sleeps so the test stays fast. Assert EXACTLY 3 GHCR
+# pulls (1 + 2 retries) → also pins the retry COUNT (a wrong default like "9 9 9 9 9" would give 6).
+echo "--- #6525 T-6525-8 (M10/M11): DEFAULT schedule (var UNSET) retries — exactly 3 pulls, transient_exhausted ---"
+T6525=$(mktemp -d)
+export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
+export MOCK_SLEEP_NOOP=1            # no-op the real "2 4" default sleeps so the test stays fast
+unset PULL_TRANSIENT_RETRY_SLEEPS   # exercise the PROD default (2 4) — the wiring M10 leaves untested
+export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T8_RC=0 || T8_RC=$?
+TOTAL=$((TOTAL + 1))
+T8_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$T8_RC" -ne 0 ]] && [[ "$T8_PULLS" -eq 3 ]] \
+   && grep -q 'image pull failed (network)' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && grep -q '"recovery_stage": *"transient_exhausted"' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: default schedule (unset ⇒ 2 4) retries — exactly 3 GHCR pulls (1+2), transient_exhausted (kills the empty-default regression)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-8 (rc=$T8_RC ghcr_pulls=$T8_PULLS; expected nonzero + 3 pulls + network + transient_exhausted — the DEFAULT '2 4' must produce 2 retries; an empty default gives 1 pull)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS MOCK_SLEEP_NOOP MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6525"
+
+# T-6525-9 (pattern/code-quality F1): PULL_TRANSIENT_RETRY_SLEEPS="" DISABLES the retry. This locks
+# the `-` (not `:-`) default contract: an empty value yields an empty array → max=0 → exactly 1 pull,
+# no retry. Under the old buggy `:-`, empty would fall back to "2 4" and give 3 pulls → this test
+# FAILS, catching the regression. max=0 means no sleep is ever reached, so no MOCK_SLEEP_NOOP needed.
+echo "--- #6525 T-6525-9: PULL_TRANSIENT_RETRY_SLEEPS=\"\" DISABLES retry (break-glass lever) — 1 pull ---"
+T6525=$(mktemp -d)
+export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
+export PULL_TRANSIENT_RETRY_SLEEPS=""   # empty ⇒ max=0 ⇒ no retry (the `-` default contract)
+export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T9_RC=0 || T9_RC=$?
+TOTAL=$((TOTAL + 1))
+T9_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$T9_RC" -ne 0 ]] && [[ "$T9_PULLS" -eq 1 ]] \
+   && grep -q 'image pull failed (network)' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: empty override disables the retry — exactly 1 GHCR pull (no retry), still classified network"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-9 (rc=$T9_RC ghcr_pulls=$T9_PULLS; expected nonzero + exactly 1 pull — empty must DISABLE via the \`-\` default, not fall back to \"2 4\")"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6525"
 
 # --- #6497: zot login failure is DISCRIMINATING (WEB-PLATFORM-5B) -----------------------
 # The gate discarded `docker login` stderr (`>/dev/null 2>&1`), so `login_failed` was one
