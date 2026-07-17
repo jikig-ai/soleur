@@ -14,6 +14,28 @@ date: 2026-07-18
 `deploy-script-tests` CI job, disarming every later-registered infra guard in that `bash -e`
 sequential job.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-18
+**Sections enhanced:** Research Reconciliation, Acceptance Criteria (verified against live repo state)
+**Method:** targeted premise-validation + deepen-plan HALT gates (4.6/4.7/4.8/4.9) + live citation/attribution checks. Full multi-agent fan-out was deliberately skipped as disproportionate for a byte-length-preserving two-number correction across two files (one hand-edited, one deterministically regenerated).
+
+### Key finding (load-bearing)
+
+The fix is **two files, not one**. `git show --stat 2726466dd` empirically confirms the commit that added the 50th monitor edited `cron-monitors.tf` (+18), **`model.c4` (2 lines)**, AND **`model.likec4.json` (2 lines)** in the same commit — but left "Of 49 cron monitors" stale in the edge label. Consequences verified:
+
+1. The committed `model.likec4.json` currently embeds the same "49 / 6" text and **matches** the stale `model.c4`, so the `c4-model-freshness` gate currently PASSES. Editing `model.c4` alone would flip it RED. The fix MUST regenerate the JSON (`scripts/regenerate-c4-model.sh`).
+2. `scan-workflow.test.sh`'s cross-file assertion is confirmed RED now (`c4_count=49` vs `tf_count=50`); it goes green at `c4_count=50`.
+3. The "6 workflows / 3+3" clause stays **6** — `scheduled_heartbeat_reconcile` is fired by the already-named `scheduled-terraform-drift.yml`, so no new workflow. Only the CI-monitor count moves 6 → 7. Task scoping confirmed exactly correct.
+
+### Gate results
+
+- 4.6 User-Brand Impact: PRESENT, threshold `none`, non-sensitive path → PASS.
+- 4.7 Observability: Files-to-Edit all under `knowledge-base/` → pure-docs, skip.
+- 4.8 PAT-shaped variable: no matches → PASS.
+- 4.9 UI-wireframe: no UI-surface files → skip.
+- Citations verified live: commit `2726466dd` (ancestor of `origin/main`, touched the three files above), issue #6549 (OPEN umbrella), PR #6632 (MERGED, "item 2").
+
 ## Overview
 
 `apps/web-platform/infra/sentry/cron-monitors.tf` now declares **50** `sentry_cron_monitor`
