@@ -481,12 +481,14 @@ NET="$SCRIPT_DIR/network.tf"
 assert "zot-registry.tf passes private_ip into templatefile (asserts the ARGUMENT, not a bare grep)" \
   "grep -qE '^\s*private_ip\s*=\s*local\.registry_private_ip\s*\$' '$TF'"
 # AC6 (corrected at /work): the plan's literal "exactly once across infra/*.tf" cannot pass — the
-# IP also appears in comments (tunnel.tf, dns.tf, server.tf) and in server.tf's
-# `docker info | grep '10.0.1.30:5000'` probe string. The invariant that matters is that the
-# address is ASSIGNED from one place, so assert the assignment shape. NOTE the scope is
-# deliberately narrow: the `:5000`-suffixed ENDPOINT copies (docker-daemon.json, cloud-init.yml,
-# server.tf) are a SEPARATE pre-existing surface with its own silent-drift failure — tracked in
-# #6448. Do NOT widen this assert to cover them without fixing that first: it would go red.
+# IP also appears in comments (tunnel.tf, dns.tf, server.tf). The invariant that matters is that
+# the address is ASSIGNED from one place, so assert the assignment shape. NOTE the scope is
+# deliberately narrow: the `:5000`-suffixed ENDPOINT copies (docker-daemon.json.tmpl, cloud-init.yml,
+# server.tf) are a SEPARATE surface — that silent-drift failure was RESOLVED by #6448, which derives
+# every copy from local.registry_endpoint and owns the `:5000` single-source scan in the sibling
+# registry-insecure-config.test.sh. Do NOT widen THIS assert to cover the `:5000` surface: it stays
+# scoped to the bare IP (`ip = "10.0.1.30"`), and widening would couple two guards and re-create the
+# scope-creep that guard warns against (2026-05-11-drift-guard-scoping).
 ASSIGNS="$(grep -rhoE '^\s*ip\s*=\s*"10\.0\.1\.30"' "$SCRIPT_DIR"/*.tf | wc -l | tr -d ' ')"
 assert "no .tf hardcodes 'ip = \"10.0.1.30\"' any more (single-sourced via local)" \
   "[[ '$ASSIGNS' == '0' ]]"
