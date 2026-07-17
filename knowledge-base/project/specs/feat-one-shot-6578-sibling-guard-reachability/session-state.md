@@ -22,3 +22,35 @@ None blocking. Two self-corrections during planning, both caught and fixed befor
 - `Skill: soleur:plan-review`
 - `Skill: soleur:deepen-plan`
 - Agents: `learnings-researcher`, `dhh-rails-reviewer`, `kieran-rails-reviewer`, `code-simplicity-reviewer`, `architecture-strategist`, `spec-flow-analyzer`, `soleur:engineering:cto` (devex lens), scoped advisor consult (`general-purpose`, model `fable`)
+
+## Session Errors
+
+### 1. Uncommitted verified work was silently reverted, twice, mid-session
+`worktree-manager.sh` carries a "Syncing on-disk files from git HEAD" pass
+(`:2133-2180`) and `.claude/hooks/guardrails.sh` can invoke it. It restores tracked
+files to HEAD, discarding uncommitted working-tree edits with no warning to the
+agent that asked for them.
+
+Cost here: two full re-applications of verified work (the `cat-deploy-state.sh` live
+fix, three probe corrections, and a complete note rewrite). The dangerous part was
+not the loss — it was the SILENCE. `python .replace()` no-ops when its anchor is
+absent, so the reconciliation scripts kept printing "ok"/"reconciled" against a
+reverted file. The revert was only caught because a probe re-run printed the OLD
+numbers, which contradicted a result verified minutes earlier.
+
+**How to apply:** commit each verified unit IMMEDIATELY — never hold verified work in
+the working tree across a long-running background job. Where an edit must be
+followed by a commit, do both in ONE Bash invocation (`cat > file <<'EOF' … EOF;
+git add …; git commit`) so no window exists. And treat any tool that silently
+no-ops on a missing anchor (`str.replace`, `sed s///` without `q`) as unsafe for
+reconciliation: assert the anchor (`assert old in s`) or the edit is unverified.
+
+### 2. A measurement instrument that reports 0 when broken looks exactly like a finding
+The probe's `count_sites` called a function that did not exist. Every payload file
+scored zero, the corpus SHRANK, and the shrink read as a real result — the same
+false-all-clear shape the probe exists to prevent, arriving through the back door.
+
+**How to apply:** any measurement tool must fail LOUD on a broken pipeline rather
+than return a plausible zero. `count_sites` now asserts its result is numeric and
+exits non-zero otherwise. The general rule: a tool whose broken state is
+indistinguishable from its clean state cannot be trusted for either.
