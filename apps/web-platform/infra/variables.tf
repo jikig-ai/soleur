@@ -232,6 +232,17 @@ variable "cf_api_token_bot_management" {
   sensitive   = true
 }
 
+# No default: an unprovisioned no-default var fails the WHOLE merge-triggered apply (Terraform
+# resolves all root vars before -target pruning), so CF_API_TOKEN_R2 MUST be provisioned into
+# Doppler prd_terraform BEFORE this merges (ADR-065 sequencing). Scope: Workers R2 Storage:Edit
+# only (no API Tokens:Edit — no cloudflare_api_token resource is minted; the S3 creds are a
+# separately-minted R2 API Token written to prd_workspaces_luks). See workspaces-luks-header.tf.
+variable "cf_api_token_r2" {
+  description = "Cloudflare API token narrowed to Workers R2 Storage:Edit (cloudflare_r2_bucket.workspaces_luks_header; see workspaces-luks-header.tf and main.tf provider alias cloudflare.r2) — #6649/#6604"
+  type        = string
+  sensitive   = true
+}
+
 variable "cf_zone_id" {
   description = "Cloudflare zone ID for soleur.ai"
   type        = string
