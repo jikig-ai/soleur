@@ -88,11 +88,15 @@ fi
 declare -A HOST_OK=()      # machine_id -> count of OK lines
 declare -A HOST_EROFS=()   # machine_id -> count of cred_store/erofs FAILED lines
 declare -A HOST_SEEN=()    # machine_id -> any login-outcome line seen
+FAIL_KWS=""                # distinct kw= values observed on the failing lines (for the FAIL msg)
 
 while IFS= read -r line; do
   [[ -z "$line" ]] && continue
   # journald machine-id appears double-escaped inside .raw: _MACHINE_ID\":\"<hex>
-  mid="$(printf '%s' "$line" | grep -oE '_MACHINE_ID[^0-9a-f]*[0-9a-f]{16,}' | grep -oE '[0-9a-f]{16,}' | head -1)"
+  # journald machine-id is EXACTLY 32 lowercase hex; pin the length + bound the non-hex bridge
+  # so an empty `_MACHINE_ID\":\"\"` value cannot make a greedy `[^0-9a-f]*` cross into the next
+  # field (e.g. _BOOT_ID) and mis-extract its hex as the machine id.
+  mid="$(printf '%s' "$line" | grep -oE '_MACHINE_ID[^0-9a-f]{1,8}[0-9a-f]{32}' | grep -oE '[0-9a-f]{32}' | head -1)"
   [[ -z "$mid" ]] && continue
 
   is_ok=0 is_erofs=0
@@ -104,6 +108,10 @@ while IFS= read -r line; do
   if printf '%s' "$line" | grep -qE '(ZOT_GATE|PRELUDE): docker login .* FAILED' \
      && printf '%s' "$line" | grep -qE 'class=cred_store|kw=[a-z,]*erofs'; then
     is_erofs=1
+    # Record the actual kw= so the FAIL message names the real fault (erofs vs a mkdir-failed
+    # enoent) instead of hard-coding "erofs".
+    _kw="$(printf '%s' "$line" | grep -oE 'kw=[a-z,]*' | head -1)"
+    [[ -n "$_kw" && "$FAIL_KWS" != *"$_kw"* ]] && FAIL_KWS="${FAIL_KWS} ${_kw}"
   fi
 
   if [[ "$is_ok" -eq 1 || "$is_erofs" -eq 1 ]]; then
@@ -121,8 +129,10 @@ for mid in "${!HOST_EROFS[@]}"; do
   [[ "${HOST_EROFS[$mid]:-0}" -gt 0 ]] && FAILED_HOSTS="${FAILED_HOSTS} ${mid}(${HOST_EROFS[$mid]})"
 done
 if [[ -n "$FAILED_HOSTS" ]]; then
-  echo "FAIL: docker login still fails with class=cred_store / kw=erofs on host(s):${FAILED_HOSTS}." >&2
-  echo "      The EROFS repair is not in effect on those hosts. Do NOT close #6565." >&2
+  echo "FAIL: docker login still fails class=cred_store (observed${FAIL_KWS:- kw=<none>}) on host(s):${FAILED_HOSTS}." >&2
+  echo "      A kw=…erofs class means the ProtectHome relocation is not in effect; a kw=…enoent" >&2
+  echo "      class means the /mnt/data config dir could not be created (mount/perm). Either way," >&2
+  echo "      the credential-persist path is broken — do NOT close #6565." >&2
   exit 1
 fi
 

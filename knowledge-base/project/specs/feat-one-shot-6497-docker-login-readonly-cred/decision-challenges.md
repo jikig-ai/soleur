@@ -27,7 +27,7 @@ Headless-persisted decision divergences (plan Step 4.5 / plan-review). `ship` re
 **What I implemented:** the soak (`scripts/followthroughs/zot-login-gate-erofs-repaired-6565.sh`) groups by journald-native `_MACHINE_ID`, extracted from each Better Stack record.
 
 **Measured grounds (traced at /work, not assumed):**
-1. `HOST_ID` is emitted ONLY to **Sentry** — the `zot_gate_degraded_event` payload `host_id` tag (`ci-deploy.sh:1104`) and the `#6396` pull-failure Sentry beacons. It is **NOT** written into the journald `ZOT_GATE`/`PRELUDE` logger lines (`:1248/1258/1349/1359` etc.), which are the plane the soak reads via `betterstack-query.sh`. So a per-`host_id` soak against Better Stack keys on a field that is not there.
+1. `HOST_ID` is emitted ONLY to **Sentry** — the `host_id: $h` jq tag inside `zot_gate_degraded_event` and the `#6396` pull-failure Sentry beacons. It is **NOT** written into the journald `ZOT_GATE`/`PRELUDE` logger lines (`:1248/1258/1349/1359` etc.), which are the plane the soak reads via `betterstack-query.sh`. So a per-`host_id` soak against Better Stack keys on a field that is not there.
 2. `host_name` (Vector-computed) is MISLABELED per `#6616` — uniformly `soleur-inngest-prd` on both web hosts — so it cannot distinguish web-1 from web-2.
 3. `_MACHINE_ID` is journald-native (the host's `/etc/machine-id`), present verbatim in every Better Stack record, distinct per host, and mints fresh on a web-2 `-replace` recreate (correct for fleet coverage). It is the only reliable per-host discriminator in this no-SSH plane today.
 

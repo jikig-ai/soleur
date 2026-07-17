@@ -21,7 +21,8 @@ readonly TEST_PATH_BASE="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 # the CI runner, so pin the config dir at a writable tmpdir before any `bash "$DEPLOY_SCRIPT"`
 # subshell (which inherits this exported env). Without it the `|| true` keeps DOCKER_CONFIG
 # exported at a nonexistent /mnt/data path for the whole test process.
-export DEPLOY_DOCKER_CONFIG_DIR="$(mktemp -d)"
+DEPLOY_DOCKER_CONFIG_DIR="$(mktemp -d)"   # split from export so SC2155 doesn't mask mktemp's rc
+export DEPLOY_DOCKER_CONFIG_DIR
 
 # --- Mock factories ---------------------------------------------------------
 # All specialized mocks are driven by env vars. Tests set MOCK_DOCKER_MODE /
@@ -3481,36 +3482,47 @@ fi
 # its ReadWritePaths -> EROFS ("error saving credentials"; measured class=cred_store
 # kw=errsaving,erofs). The fix relocates the config dir onto /mnt/data (a ReadWritePath).
 #
-# Two load-bearing invariants (the four tautological "the line I wrote exists" greps were cut):
-#   (1) relocation: the config-dir default resolves under /mnt/data, and NO assignment default
-#       resolves under /home/deploy. Anchored on ASSIGNMENT lines, comments stripped
-#       (cq-assert-anchor-not-bare-token) — the Phase-1 rationale comment names /home/deploy,
-#       so a bare-token grep would false-FAIL a correct file.
-#   (2) single source of truth: GHCR_DOCKER_CONFIG (the cosign :ro mount source, ci-deploy.sh
-#       ~:1513) is DERIVED from the exported DOCKER_CONFIG, so the login-WRITE path and the
-#       mount-READ path cannot be split by an independent override. Stronger than "resolves
-#       under /mnt/data" (which passes even under a split).
+# These assertions pin the runtime INVARIANT, not a line-shape (the recurring vacuous-guard
+# class: a guard whose deletion/inversion leaves the suite green pins nothing). Invariant:
+#   (1) the config-dir default resolves under /mnt/data and NO assignment default resolves
+#       under /home/deploy; AND the variable DOCKER_CONFIG is assigned EXACTLY ONCE — a second
+#       assignment (`export DOCKER_CONFIG="$HOME/.docker"`, or a bare keyword-less
+#       `DOCKER_CONFIG=/home/deploy/...`) re-points the runtime value under last-assignment-wins
+#       and reintroduces EROFS while leaving the pinned lines intact. The count is the behavioral
+#       part a static line-shape grep cannot see.
+#   (2) GHCR_DOCKER_CONFIG (the cosign :ro mount source, `-v "$GHCR_DOCKER_CONFIG:...:ro"`) is
+#       DERIVED from the exported DOCKER_CONFIG, so the login-WRITE and cosign mount-READ paths
+#       cannot split; AND no `--config` is ever passed a PATH-like argument (a docker config-dir
+#       override that would bypass the exported DOCKER_CONFIG).
+# Comment-strip via `grep -vE '^[[:space:]]*#'` so the Phase-1 rationale comment (which names
+# /home/deploy and ${DOCKER_CONFIG}) cannot false-match (cq-assert-anchor-not-bare-token).
 TOTAL=$((TOTAL + 1))
-DOCKERCFG_ASSIGN_LINES="$(grep -E '^[[:space:]]*(readonly|export)[[:space:]]+(DEPLOY_DOCKER_CONFIG_DIR|DOCKER_CONFIG|GHCR_DOCKER_CONFIG)=' "$DEPLOY_SCRIPT")"
+DOCKERCFG_CODE="$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")"
+DOCKERCFG_ASSIGN_LINES="$(printf '%s\n' "$DOCKERCFG_CODE" | grep -E '^[[:space:]]*(readonly|export)[[:space:]]+(DEPLOY_DOCKER_CONFIG_DIR|DOCKER_CONFIG|GHCR_DOCKER_CONFIG)=')"
+# Word-boundary before DOCKER_CONFIG so GHCR_DOCKER_CONFIG= and DEPLOY_DOCKER_CONFIG_DIR=
+# (different variables) are NOT counted; ALL forms (keyworded + bare) ARE counted.
+dc_assign_count="$(printf '%s\n' "$DOCKERCFG_CODE" | grep -cE '(^|[^A-Za-z0-9_])DOCKER_CONFIG=' || true)"
 if printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE 'DEPLOY_DOCKER_CONFIG_DIR:-/mnt/data/' \
-   && ! printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE '/home/deploy'; then
-  PASS=$((PASS + 1)); echo "  PASS: docker config relocated off ProtectHome (/mnt/data default; no /home/deploy assignment)"
+   && ! printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE '/home/deploy' \
+   && [[ "$dc_assign_count" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: docker config relocated off ProtectHome (/mnt/data default; DOCKER_CONFIG assigned exactly once; no /home/deploy)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: docker config still defaults under /home/deploy (EROFS regression)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: docker config relocation broken (EROFS regression — /home/deploy default, or DOCKER_CONFIG re-pointed; count=$dc_assign_count)"
 fi
 
-# (2) GHCR_DOCKER_CONFIG derived from the exported DOCKER_CONFIG; DOCKER_CONFIG exported off
-# DEPLOY_DOCKER_CONFIG_DIR; and NO `docker login`/`docker run` site passes a `--config` flag
-# (so all sites inherit the one exported DOCKER_CONFIG). Match the docker-INVOCATION shape,
-# never bare `--config` — a `doppler … --format docker … --config prd` line carries both
-# tokens and would false-FAIL a bare-token negative (Kieran finding 2).
+# (2) GHCR_DOCKER_CONFIG derived from exported DOCKER_CONFIG; DOCKER_CONFIG exported off
+# DEPLOY_DOCKER_CONFIG_DIR; and NO `--config` passed a PATH-like arg anywhere. The ONLY
+# legitimate --config in this file is doppler's env-name form (`doppler … --config prd`), whose
+# argument starts with a LETTER; a docker `--config` always takes a path (/, ., ~, $, or a quote
+# wrapping one). Comment-stripped and NOT single-line-scoped, so a `--config <path>` on a
+# `docker run` CONTINUATION line is caught (a per-line docker-scoped negative missed it).
 TOTAL=$((TOTAL + 1))
 if grep -qE '^[[:space:]]*readonly[[:space:]]+GHCR_DOCKER_CONFIG="\$\{DOCKER_CONFIG\}/config\.json"' "$DEPLOY_SCRIPT" \
    && grep -qE '^[[:space:]]*export[[:space:]]+DOCKER_CONFIG="\$DEPLOY_DOCKER_CONFIG_DIR"' "$DEPLOY_SCRIPT" \
-   && ! grep -qE 'docker[[:space:]]+(login|run)[[:space:]].*--config' "$DEPLOY_SCRIPT"; then
-  PASS=$((PASS + 1)); echo "  PASS: GHCR_DOCKER_CONFIG derived from exported DOCKER_CONFIG (login-write == cosign-mount by construction)"
+   && ! printf '%s\n' "$DOCKERCFG_CODE" | grep -qE -- '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
+  PASS=$((PASS + 1)); echo "  PASS: GHCR_DOCKER_CONFIG derived from exported DOCKER_CONFIG; no --config path override (login-write == cosign-mount by construction)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: GHCR_DOCKER_CONFIG not single-sourced from exported DOCKER_CONFIG"
+  FAIL=$((FAIL + 1)); echo "  FAIL: GHCR_DOCKER_CONFIG not single-sourced, or a --config path override can split login-write from cosign-mount"
 fi
 
 # --- #6497: zot login failure is DISCRIMINATING (WEB-PLATFORM-5B) -----------------------
