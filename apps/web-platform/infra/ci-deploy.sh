@@ -660,14 +660,24 @@ registry_pull_event() {
 # at the root rather than contained; (b) no `printf '%s' "$e" |` feed, so the emitter body holds
 # no parameter expansion in a printf argument at all.
 #
-# Every literal below is MEASURED (docker 29.4.3, live registry:2, /work Phase 0) except the
-# last three, which are the tokens the task brief proposed and measurement FALSIFIED. They are
-# kept deliberately: an unmeasured token is CHEAP in the hatch and EXPENSIVE in a classifier arm
-# — in the hatch it simply never matches and the other fields still land; in an arm it
-# mis-routes the operator. `kw` is exactly how we learn whether they were ever right. This is
-# only SAFE under Form B: under Form A a never-matching probe invites the loosening that leaks.
+# Every literal below carries an EXPLICIT class — MEASURED, INFERRED, or FALSIFIED. Do not
+# collapse them back into a universal ("every literal below is measured except the last N"): the
+# #6565 errno round added six INFERRED literals in the middle, and a universal quantifier plus a
+# positional carve-out silently became FALSE for them the moment they landed. A comment that
+# claims more measurement than was done is exactly the false-measured-comment this instrument
+# exists to drain (see `stderr_chars`'s "Do NOT restate 40 for GHCR" note below, same discipline).
+#
+#   MEASURED  — observed out of a real `docker login` (docker 29.4.3, live registry:2, Phase 0).
+#   INFERRED  — the string is measured (Go 1.21.6 `syscall.Errno.Error()`, exact), but that this
+#               errno is the one PRODUCTION hits is NOT measured. That is the open question.
+#   FALSIFIED — proposed by a task brief, measurement said no. Kept deliberately.
+#
+# An unmeasured token is CHEAP in the hatch and EXPENSIVE in a classifier arm — in the hatch it
+# simply never matches and the other fields still land; in an arm it mis-routes the operator. `kw`
+# is exactly how we learn whether they were ever right. This is only SAFE under Form B: under
+# Form A a never-matching probe invites the loosening that leaks.
 _login_kw() {
-  # --- measured: splits the `cred_store` arm, which would otherwise be a >=2-mode bucket ---
+  # --- MEASURED: splits the `cred_store` arm, which would otherwise be a >=2-mode bucket ---
   case "${1:-}" in *'no space left on device'*)   printf 'nospace,' ;; esac          # H-C disk-full
   case "${1:-}" in *'executable file not found'*) printf 'execnotfound,' ;; esac     # H-A helper missing
   case "${1:-}" in *'docker-credential'*)         printf 'credhelper,' ;; esac       # H-A helper family
@@ -675,6 +685,21 @@ _login_kw() {
   case "${1:-}" in *'error saving credentials'*)  printf 'errsaving,' ;; esac        # cred-store family
   case "${1:-}" in *'error storing credentials'*) printf 'errstoring,' ;; esac       # cred-store family
   case "${1:-}" in *'error getting credentials'*) printf 'errgetting,' ;; esac       # cred-store family
+  # --- INFERRED (#6565): the errno itself. `kw=errsaving` fired ALONE on both registries, so the
+  # errno matches NONE of the arms above — H-D, the case the hatch exists for. These six name it.
+  # Strings are Go's `syscall.Errno.Error()` renderings, measured byte-exact; Go renders lowercase
+  # (C `strerror` capitalizes — do not "fix" the case). Lengths, also measured: enomem 22,
+  # eperm 23, erofs 21, eio 18, einval 16, enoent 25.
+  # HONEST LIMIT, stated because six looks more principled than it is: the round's arithmetic
+  # admits ONLY a 22-char errno, so only `enomem` can fire IF that arithmetic holds. The other
+  # five are reachable only if it does NOT — and then six guesses cover ~5% of ~130 errnos. Six is
+  # CHEAP, not principled. `errno_chars` (in `_login_hatch`) is what actually bounds the set.
+  case "${1:-}" in *'cannot allocate memory'*)    printf 'enomem,' ;; esac           # ENOMEM (22)
+  case "${1:-}" in *'read-only file system'*)     printf 'erofs,' ;; esac            # EROFS  (21)
+  case "${1:-}" in *'no such file or directory'*) printf 'enoent,' ;; esac           # ENOENT (25)
+  case "${1:-}" in *'invalid argument'*)          printf 'einval,' ;; esac           # EINVAL (16)
+  case "${1:-}" in *'input/output error'*)        printf 'eio,' ;; esac              # EIO    (18)
+  case "${1:-}" in *'operation not permitted'*)   printf 'eperm,' ;; esac            # EPERM  (23)
   # --- FALSIFIED by measurement; free here, would have been harmful as arms ---
   case "${1:-}" in *'non-TTY device'*) printf 'nontty,' ;; esac
   case "${1:-}" in *'Cannot connect to the Docker daemon'*) printf 'daemonconn,' ;; esac
@@ -746,9 +771,21 @@ _login_tok() {
 #                   escaping; a token containing `"` or `\` would move this length by a
 #                   CONTENT-DEPENDENT amount under a JSON-escaping registry.
 #                   *** TRIGGER — IF EITHER TOKEN (a) BECOMES VARIABLE-LENGTH (a JWT, an
-#                   OIDC-minted session token), (b) LEAVES THE `[A-Za-z0-9]` ALPHABET, or (c) IS
+#                   OIDC-minted session token), (b) LEAVES THE ESCAPE-INVARIANT ALPHABET
+#                   `[A-Za-z0-9_]` — note the underscore: BOTH GHCR PAT formats carry one
+#                   (`ghp_…`, `github_pat_…`), so a bare `[A-Za-z0-9]` here reads as ALREADY
+#                   FIRED against a live credential and would teach the next engineer to bucket
+#                   needlessly or, worse, to ignore this trigger. `_` is escape-invariant, so the
+#                   property above holds; the ALPHABET is the test, escape-invariance is the
+#                   REASON (#6565) — or (c) IS
 #                   ROTATED TO A LENGTH OTHER THAN ITS CURRENT ONE, THIS BECOMES A LENGTH ORACLE
-#                   AND MUST BE BUCKETED (`0 | 1-99 | 100-399 | 400+`). *** (c) is the LIKELIEST
+#                   AND **BOTH `stderr_chars` AND `errno_chars` MUST BE BUCKETED** — the two fields
+#                   are governed by this ONE paragraph and must be bucketed TOGETHER, in the same
+#                   PR (`0 | 1-99 | 100-399 | 400+`). Bucketing only this field leaves
+#                   `errno_chars` shipping `len(<credential>)` from the NARROWER final-colon
+#                   segment, which is the same oracle through a smaller window — #6565 added that
+#                   field under this paragraph's governance, so the plural is load-bearing, not
+#                   stylistic. *** (c) is the LIKELIEST
 #                   and was missing: `ZOT_PULL_TOKEN` is an htpasswd credential whose length is a
 #                   Doppler value, not a format invariant — a rotation to a different length is
 #                   an ordinary operator action that (a) does not describe. The zot side is
@@ -775,6 +812,35 @@ _login_tok() {
 #                     stderr_chars=0 stdout_chars=0  -> H-B-nowhere / H-D; and `rc` names it
 #                   That splits H-B in ONE event. Shipping stderr_chars alone and inferring
 #                   "len=0 => capture stdout" is an inference, not a measurement.
+#   errno_chars   — `${#suffix}` where suffix is the text after the LAST ": " (#6565). The field
+#                   that ENDS the guessing rather than extending it.
+#                   WHY IT EXISTS: `kw` answers "is it one of these N literals?" — six probes is
+#                   ~5% coverage of ~130 errnos if the round's 22-char arithmetic is wrong (and
+#                   that arithmetic rests on the verb being `open()` and the path being 32 chars,
+#                   BOTH read from code, NEITHER observed). This field bounds ALL ~130 in ONE
+#                   round AND tests that premise instead of assuming it.
+#                   MEASURED PROPERTY, and the reason it beats `stderr_chars` here: it is
+#                   INVARIANT under docker's uint32 temp suffix. The live datum was
+#                   `stderr_chars=96` (zot) and `97` (ghcr), and it took arithmetic to conclude
+#                   those were the IDENTICAL error differing only by a 9- vs 10-digit suffix.
+#                   `errno_chars` reports 22 for BOTH. It skips the inference.
+#                   NO-ECHO — RE-CONFIRMED, NOT INHERITED from `stderr_chars`. Inheriting would be
+#                   unearned: this NARROWS the segment, and a narrower segment is a priori a
+#                   sharper oracle, so the argument has to be re-run rather than assumed.
+#                   It re-runs clean: this is a LENGTH, and the same fixed-length property that
+#                   clears `stderr_chars` clears it — substituting any value of a FIXED-length
+#                   token yields a CONSTANT length, so the channel carries zero bits about token
+#                   content (the property turns on fixed-ness, not on any particular number, so it
+#                   holds under either PAT format the repo disagrees about). If a username lands in
+#                   the final colon segment this moves by `len(username)` — the SAME residual
+#                   `stderr_chars` already carries and accepts, for the same reason (a declared
+#                   non-secret constant / the public package owner). The narrowing creates no new
+#                   channel. *** The `stderr_chars` TRIGGER above governs this field TOO: if either
+#                   token becomes variable-length or leaves the escape-invariant `[A-Za-z0-9_]`,
+#                   bucket BOTH. ***
+#                   Degenerate input (no ": " anywhere) makes the segment the whole string, so
+#                   `errno_chars == stderr_chars`. That is not a defect — it is how "there was no
+#                   colon segment" reports itself, using a comparison the reader already has.
 #   kw / tok      — closed vocabulary, by construction (see the emitters).
 #   docker_ver    — /work Phase 0: `cloud-init.yml:428` installs `docker-ce` UNPINNED, web-1 has
 #                   not been replaced since 2026-03-17, and its docker version is NOT OBSERVABLE
@@ -798,18 +864,23 @@ _login_hatch() {
   # which is more honest than a defaulted 0 anyway.
   # (Do not restate the offending pattern literally in this comment: the guard would match it.)
   local _e="${1:-}" _oc="${2:-}" _rc="${3:-}"
-  local _kw _tok _first _dver
+  local _kw _tok _first _dver _errseg
   _kw="$(_login_kw "$_e")"
   # First whitespace-delimited token, via expansion — no subprocess, no split of the rest.
   _first="${_e%%[[:space:]]*}"
   _tok="$(_login_tok "$_first")"
+  # #6565: the final ": "-delimited segment — where an errno renders in a Go `os.PathError`
+  # ("<op> <path>: <errno>"). Expansion only: no subprocess, and the TEXT never leaves this
+  # function — only `${#_errseg}` is printed. No ": " present => the whole string, so
+  # errno_chars == stderr_chars (see the field's note above).
+  _errseg="${_e##*: }"
   # Bounded + no-echo-safe: our own binary, matched by a fixed numeric regex. The subshell +
   # `|| true` keeps a missing/failing docker from aborting anything.
   _dver="$( ( docker --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 ) || true )"
   case "$_rc" in ''|*[!0-9]*) _rc='parse_error' ;; esac
   case "$_oc" in ''|*[!0-9]*) _oc='parse_error' ;; esac
-  printf 'rc=%s stderr_chars=%s stdout_chars=%s kw=%s tok=%s docker_ver=%s' \
-    "$_rc" "${#_e}" "$_oc" "${_kw%,}" "${_tok:-other}" "${_dver:-unknown}"
+  printf 'rc=%s stderr_chars=%s errno_chars=%s stdout_chars=%s kw=%s tok=%s docker_ver=%s' \
+    "$_rc" "${#_e}" "${#_errseg}" "$_oc" "${_kw%,}" "${_tok:-other}" "${_dver:-unknown}"
 }
 
 # _docker_login_capture <registry> <user> <token> (#6497): run `docker login` and capture the
