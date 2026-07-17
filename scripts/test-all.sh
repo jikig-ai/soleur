@@ -200,6 +200,14 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
+  # #6589 — the Sentry full-root delete path. These three gate the contract that
+  # makes `terraform destroy` reachable at all for infra/sentry/**: the absence of
+  # address-scoping in the apply (the #6074/#4929 root cause), the fail-closed
+  # aggregator verdict, and the squash-body emulation that decides whether a
+  # pre-staged [ack-destroy] will actually reach the merge commit.
+  run_suite "tests/scripts/sentry-full-root-apply" bash tests/scripts/test-sentry-full-root-apply.sh
+  run_suite "tests/scripts/sentry-destroy-gate-verdict" bash tests/scripts/test-sentry-destroy-gate-verdict.sh
+  run_suite "tests/scripts/sentry-squash-ack-detect" bash tests/scripts/test-sentry-squash-ack-detect.sh
   # md->Slack-mrkdwn converter (scripts/md-to-mrkdwn.mjs). Runs under stock
   # ubuntu-latest node (no setup-node — same bare-`node` precedent as
   # secret-scan.yml). node --test ships in Node >=18.
