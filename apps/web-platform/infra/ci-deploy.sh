@@ -58,15 +58,37 @@ readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enfor
 # it exists on the target version first; v3.1.1 `verify` has neither `--bundle` nor
 # `--new-bundle-format`). See ADR-087.
 # Host paths for the private-GHCR pull credential + the pinned offline trust root.
-# Overridable in tests; default to the real deploy-host layout. The docker config is
-# written by ghcr_prelude_and_login (host pull auth) and mounted :ro into the
-# ephemeral cosign verifier — it MUST carry an inline `auths."ghcr.io".auth` entry,
-# NEVER a credStore/credHelpers indirection (the distroless cosign image has no
-# credential helper; an indirection silently UNAUTHORIZEs the .sig fetch — ADR-087).
+#
+# #6565 (EROFS repair): `docker login` persists creds to $DOCKER_CONFIG/config.json. The old
+# default $HOME/.docker (/home/deploy/.docker) sits under webhook.service's ProtectHome=read-only
+# mount and is NOT in its ReadWritePaths, so the login AUTHENTICATES but cannot PERSIST the cred
+# → EROFS ("error saving credentials"; measured on both web hosts: class=cred_store
+# kw=errsaving,erofs, errno_chars=22). `docker pull` survived only off the boot-baked auths entry
+# (a latent trap: broken on the next rotation/fresh boot that needs a working login). Relocate the
+# config dir onto /mnt/data — already a ReadWritePath, already mounted — per the 2026-04-06
+# ProtectHome-relocate precedent (which names ~/.docker as the offender class and argues AGAINST
+# punching a home write-hole). `docker login` with no --config honors DOCKER_CONFIG as the config
+# *directory*, so exporting it relocates ALL login sites (GHCR prelude, zot gate, refetch-relogin)
+# and the cosign :ro mount at once. DEPLOY_DOCKER_CONFIG_DIR stays overridable for tests.
+readonly DEPLOY_DOCKER_CONFIG_DIR="${DEPLOY_DOCKER_CONFIG_DIR:-/mnt/data/deploy-docker}"
+export DOCKER_CONFIG="$DEPLOY_DOCKER_CONFIG_DIR"
+# Fail-soft: a transient mkdir/chmod must not `set -e`-abort the deploy — a resulting login
+# failure is then NAMED by the existing _login_kw/_login_hatch telemetry (kw=enoent, distinct
+# from the old erofs). /mnt/data is itself a ReadWritePath, so if the block volume is unmounted
+# the write fails safe onto the root fs (login still works; per-deploy re-login self-heals).
+mkdir -p "$DOCKER_CONFIG" 2>/dev/null || true
+chmod 700 "$DOCKER_CONFIG" 2>/dev/null || true
+# The config FILE is written by ghcr_prelude_and_login (host pull auth) and mounted :ro into the
+# ephemeral cosign verifier — it MUST carry an inline `auths."ghcr.io".auth` entry, NEVER a
+# credStore/credHelpers indirection (the distroless cosign image has no credential helper; an
+# indirection silently UNAUTHORIZEs the .sig fetch — ADR-087). Relocation changes the PATH only,
+# not this content contract. Single source of truth: DERIVE the mount-READ path from the exported
+# DOCKER_CONFIG so the login-WRITE path ($DOCKER_CONFIG/config.json) and the cosign mount-READ
+# path can never be split by an independent override.
+readonly GHCR_DOCKER_CONFIG="${DOCKER_CONFIG}/config.json"
 # The trusted root reaches the host via the baked HOST-image host-scripts set (fresh
 # hosts) + terraform_data.cosign_trusted_root SSH delivery (running host) — see
 # server.tf. It is NEVER baked into the DEPLOY image (circular trust).
-readonly GHCR_DOCKER_CONFIG="${GHCR_DOCKER_CONFIG:-/home/deploy/.docker/config.json}"
 readonly COSIGN_TRUSTED_ROOT_HOST="${COSIGN_TRUSTED_ROOT_HOST:-/etc/soleur/cosign-trusted-root.json}"
 
 # Self-hosted zot registry (#6122/ADR-096). The pull path prefers zot ONLY when it is

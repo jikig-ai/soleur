@@ -16,6 +16,13 @@ TOTAL=0
 # rather than falling through to real commands.
 readonly TEST_PATH_BASE="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+# #6565: ci-deploy.sh now `export`s DOCKER_CONFIG + `mkdir -p`s it at source time (relocated
+# off the ProtectHome=read-only /home/deploy sandbox onto /mnt/data). /mnt/data is absent on
+# the CI runner, so pin the config dir at a writable tmpdir before any `bash "$DEPLOY_SCRIPT"`
+# subshell (which inherits this exported env). Without it the `|| true` keeps DOCKER_CONFIG
+# exported at a nonexistent /mnt/data path for the whole test process.
+export DEPLOY_DOCKER_CONFIG_DIR="$(mktemp -d)"
+
 # --- Mock factories ---------------------------------------------------------
 # All specialized mocks are driven by env vars. Tests set MOCK_DOCKER_MODE /
 # MOCK_CURL_MODE before invoking a runner; the runner calls create_base_mocks
@@ -3466,6 +3473,44 @@ if printf '%s' "$HELPER_BODY" | grep -qE '_docker_login_capture ghcr\.io "\$du" 
   PASS=$((PASS + 1)); echo "  PASS: recovery relogin writes ghcr.io auth into the same \$GHCR_DOCKER_CONFIG (cosign continuity)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: AC13 — recovery relogin must target ghcr.io"
+fi
+
+# --- #6565: docker config relocated off the ProtectHome=read-only sandbox ------------------
+# `docker login` persists creds to $DOCKER_CONFIG/config.json. The old default
+# /home/deploy/.docker sits under webhook.service's ProtectHome=read-only mount and is NOT in
+# its ReadWritePaths -> EROFS ("error saving credentials"; measured class=cred_store
+# kw=errsaving,erofs). The fix relocates the config dir onto /mnt/data (a ReadWritePath).
+#
+# Two load-bearing invariants (the four tautological "the line I wrote exists" greps were cut):
+#   (1) relocation: the config-dir default resolves under /mnt/data, and NO assignment default
+#       resolves under /home/deploy. Anchored on ASSIGNMENT lines, comments stripped
+#       (cq-assert-anchor-not-bare-token) — the Phase-1 rationale comment names /home/deploy,
+#       so a bare-token grep would false-FAIL a correct file.
+#   (2) single source of truth: GHCR_DOCKER_CONFIG (the cosign :ro mount source, ci-deploy.sh
+#       ~:1513) is DERIVED from the exported DOCKER_CONFIG, so the login-WRITE path and the
+#       mount-READ path cannot be split by an independent override. Stronger than "resolves
+#       under /mnt/data" (which passes even under a split).
+TOTAL=$((TOTAL + 1))
+DOCKERCFG_ASSIGN_LINES="$(grep -E '^[[:space:]]*(readonly|export)[[:space:]]+(DEPLOY_DOCKER_CONFIG_DIR|DOCKER_CONFIG|GHCR_DOCKER_CONFIG)=' "$DEPLOY_SCRIPT")"
+if printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE 'DEPLOY_DOCKER_CONFIG_DIR:-/mnt/data/' \
+   && ! printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE '/home/deploy'; then
+  PASS=$((PASS + 1)); echo "  PASS: docker config relocated off ProtectHome (/mnt/data default; no /home/deploy assignment)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: docker config still defaults under /home/deploy (EROFS regression)"
+fi
+
+# (2) GHCR_DOCKER_CONFIG derived from the exported DOCKER_CONFIG; DOCKER_CONFIG exported off
+# DEPLOY_DOCKER_CONFIG_DIR; and NO `docker login`/`docker run` site passes a `--config` flag
+# (so all sites inherit the one exported DOCKER_CONFIG). Match the docker-INVOCATION shape,
+# never bare `--config` — a `doppler … --format docker … --config prd` line carries both
+# tokens and would false-FAIL a bare-token negative (Kieran finding 2).
+TOTAL=$((TOTAL + 1))
+if grep -qE '^[[:space:]]*readonly[[:space:]]+GHCR_DOCKER_CONFIG="\$\{DOCKER_CONFIG\}/config\.json"' "$DEPLOY_SCRIPT" \
+   && grep -qE '^[[:space:]]*export[[:space:]]+DOCKER_CONFIG="\$DEPLOY_DOCKER_CONFIG_DIR"' "$DEPLOY_SCRIPT" \
+   && ! grep -qE 'docker[[:space:]]+(login|run)[[:space:]].*--config' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1)); echo "  PASS: GHCR_DOCKER_CONFIG derived from exported DOCKER_CONFIG (login-write == cosign-mount by construction)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: GHCR_DOCKER_CONFIG not single-sourced from exported DOCKER_CONFIG"
 fi
 
 # --- #6497: zot login failure is DISCRIMINATING (WEB-PLATFORM-5B) -----------------------
