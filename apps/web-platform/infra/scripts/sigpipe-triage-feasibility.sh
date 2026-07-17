@@ -235,6 +235,28 @@ count_sites() {
 # It also protects any FUTURE reading here that does feed a producer into grep.
 #
 # Keep the gate; it earns its place. Just not for the reason first written.
+# Is SIGPIPE deliverable to a child of this shell at all?
+#
+# A process that inherits SIGPIPE as SIG_IGN does not die on a broken pipe — its
+# write() returns EPIPE instead, and a bash loop that ignores the failed printf
+# simply keeps going and exits 0. POSIX forbids a shell from resetting a signal
+# it inherited as ignored, so a script CANNOT undo this for itself.
+#
+# This matters twice over:
+#   1. It is why the 141 probe below cannot be read as a grep verdict on such a
+#      host — the producer is not killed because it CANNOT be killed.
+#   2. It means the defect this probe counts DOES NOT MANIFEST there. Measured:
+#        SIGPIPE default : producer 141, `if producer | grep -q M` INVERTS
+#        SIGPIPE SIG_IGN : producer 0,   `if producer | grep -q M` is CORRECT
+#      The static site counts are unaffected either way (they are `git grep` +
+#      text normalisation, no runtime), so the measurement still stands.
+sigpipe_is_ignored() {
+  local mask
+  mask="$(grep -i '^SigIgn:' /proc/self/status 2>/dev/null | awk '{print $2}')" || return 1
+  [[ -n "$mask" ]] || return 1
+  (( 0x${mask} & (1 << 12) ))   # SIGPIPE == 13 -> bit 12
+}
+
 preflight() {
   local producer rc
   producer="$(mktemp)"
@@ -253,6 +275,28 @@ PROD
   set -o pipefail
   rm -f "$producer"
 
+  # Order matters. An earlier revision tested ONLY for 141 and, on any non-141,
+  # blamed grep. That misdiagnosed CI: the GitHub Actions runner is Node-spawned,
+  # Node sets SIGPIPE to SIG_IGN, the runner's shell inherits it, and the producer
+  # therefore exits 0 with a perfectly good GNU grep. The probe refused to run and
+  # named the wrong cause — confidently, in the script whose subject is confident
+  # claims that were never measured. Two distinct causes produce the same non-141:
+  #   SIGPIPE ignored  => the defect cannot occur here      => proceed, say so
+  #   SIGPIPE default  => grep drained the producer         => refuse, blame grep
+  if sigpipe_is_ignored; then
+    emit "SIGPIPE deliverable to children?" "NO — inherited SIG_IGN"
+    cmd 'grep -i ^SigIgn: /proc/self/status  =>  bit 12 (SIGPIPE) set'
+    printf '    The runtime symptom CANNOT occur in this environment: a producer here\n'
+    # shellcheck disable=SC2016  # backticks are literal prose, not substitution
+    printf '    receives EPIPE instead of dying, so `if producer | grep -q X` returns the\n'
+    printf '    CORRECT answer (measured). This is normal under a Node-spawned runner.\n'
+    printf '    It does NOT mean the corpus is safe — the guards below run on prod hosts,\n'
+    printf '    systemd units and cron, where SIGPIPE has its default disposition and the\n'
+    printf '    inversion is live. The site counts are static (git grep + normalisation),\n'
+    printf '    so they are unaffected and the measurement proceeds.\n'
+    return 0
+  fi
+
   if [[ "$rc" -ne 141 ]]; then
     cat >&2 <<EOF
 FATAL: this host's \`grep\` does not early-exit — refusing to measure.
@@ -260,10 +304,12 @@ FATAL: this host's \`grep\` does not early-exit — refusing to measure.
   probe: a producer emitting a match then ~40k more lines was piped to \`grep -q\`.
   expected: producer killed by SIGPIPE (PIPESTATUS[0]=141).
   actual:   PIPESTATUS[0]=$rc — the producer ran to completion.
+  ruled out: SIGPIPE is at its DEFAULT disposition here (checked /proc/self/status
+             SigIgn bit 12), so the producer COULD have been killed and was not.
+             The matcher drained it.
 
   A grep that drains its input cannot observe the defect being counted. Every
-  reading taken here would be 0/N, and this probe would report that no site is
-  reachable. That green would be false, and nobody re-audits a green.
+  reading that depends on early-exit would be 0/N here.
 
   This is NOT a \`grep --version\` problem and cannot be diagnosed as one: the
   host that authored this probe resolved GNU grep 3.12 and still drained, via a
