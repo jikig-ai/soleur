@@ -220,7 +220,15 @@ independent axes so it never silently gates a host:
     `app_ghcr_fallback` as well as `zot-gate-degraded`. Each signal is additionally gated on the
     emitting host having Doppler + `DOPPLER_TOKEN` + a resolved `SENTRY_*` prefetch
     (`ci-deploy.sh:707,776-777`); a host missing either is Sentry-dark and reports only via
-    `logger -t ci-deploy` → Better Stack (#6437). **Closes:** task 5.3 deletes the pull-site
+    `logger -t ci-deploy` → Better Stack (#6437).
+    > **Amendment reference (#6512, 2026-07-17):** `ci-deploy.sh`'s `pull_image_with_fallback` grew a
+    > THIRD, last-resort tier below the zot→GHCR chain: on both-registries-fail for a same-version
+    > `web` reload it reuses the RUNNING container's local image (emitting `registry:"local-cache"`,
+    > watched by a DEDICATED `local_cache_reload_rate` alert — NOT folded into
+    > `zot_mirror_fallback_rate`, so the §5.3 retirement gate below is unaffected). A future §5.3
+    > editor should note the third tier exists but touches only the local-store rescue, not the GHCR
+    > push/pull path this task retires. See ADR-079 `(#6512)` amendment.
+    **Closes:** task 5.3 deletes the pull-site
     fallback **branches** — three of them across two files, not one: the `ZOT_ACTIVE` branch in
     `ci-deploy.sh` (emits `registry:"ghcr-fallback"`), plus the two fresh-boot branches in
     `cloud-init.yml` (emitting `app_ghcr_fallback` and `inngest_ghcr_fallback`) — darkening those

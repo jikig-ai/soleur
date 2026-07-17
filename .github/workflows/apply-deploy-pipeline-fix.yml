@@ -494,6 +494,15 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
+          # #6512 Fix 2a — actionable no-SSH alert (plain-language GitHub issue + Sentry event)
+          # when the redeploy terminally fails and leaves the profile UNENFORCED. issues:write is
+          # already granted at the job level; a red CI job is invisible to a non-technical founder.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
+          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
+          SECCOMP_ALERT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SECCOMP_ALERT_SHA: ${{ github.sha }}
         # "Applied ≠ loaded" gap closer (#5875 item 4 / ADR-079). The terraform
         # apply above delivered the seccomp profile to the HOST
         # (/etc/docker/seccomp-profiles/soleur-bwrap.json), but the RUNNING container
@@ -521,6 +530,10 @@ jobs:
           WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
           CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
           CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+
+          # #6512 Fix 2a: source the actionable-alert emitter (fail-open) called at every terminal
+          # failure below that leaves the running container's seccomp profile UNENFORCED.
+          source "$GITHUB_WORKSPACE/scripts/seccomp-unenforced-alert.sh"
 
           STATUS_URL="https://deploy.${APP_DOMAIN_BASE}/hooks/deploy-status"
           DEPLOY_URL="https://deploy.${APP_DOMAIN_BASE}/hooks/deploy"
@@ -574,6 +587,9 @@ jobs:
               echo "::error::Seccomp loaded-profile invariant failed, unclassified (host_present=${HOST_PRESENT}, host_sha='${HOST_SHA:-<none>}', loaded_matches=${LOADED_MATCHES})."
             fi
             cat /tmp/redeploy-terminal.json >&2 2>/dev/null || true
+            # #6512 Fix 2a: the profile is confirmed UNENFORCED — raise the actionable no-SSH alert
+            # (plain-language GitHub issue + Sentry) before failing loud. Fail-open (never masks exit 1).
+            seccomp_unenforced_alert "loaded-profile invariant not held: host_present=${HOST_PRESENT} host_sha='${HOST_SHA:-<none>}' loaded_matches=${LOADED_MATCHES}"
             exit 1
           }
 
@@ -714,6 +730,9 @@ jobs:
                 cp /tmp/redeploy-status.json /tmp/redeploy-terminal.json
                 echo "::error::Redeploy FAILED: web-platform ${TARGET_TAG} terminal reason='${REASON}' exit_code=${EXIT}. The applied seccomp profile was NOT loaded."
                 cat /tmp/redeploy-terminal.json >&2 2>/dev/null || true
+                # #6512 Fix 2a: the redeploy that would load the profile terminally failed (e.g.
+                # image_pull_failed) — the profile is left UNENFORCED. Raise the actionable alert.
+                seccomp_unenforced_alert "redeploy terminal reason='${REASON}' exit_code=${EXIT} for ${TARGET_TAG} — image not loaded (e.g. image_pull_failed)"
                 exit 1
                 ;;
             esac
