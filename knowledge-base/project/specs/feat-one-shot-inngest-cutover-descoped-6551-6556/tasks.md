@@ -13,19 +13,19 @@ Derived from the finalized (post-plan-review) plan. Phase order is load-bearing 
 (contract-before-consumer: env-file writes MUST land atomically with the `--project` removals).
 
 ## Phase 0 — Preconditions (grep-verify, no code)
-- [ ] 0.1 Confirm the 6 `--project` sites: `inngest-bootstrap.sh:283,523,585,737` (heredocs) + `inngest-cutover-flip.service:19` + `inngest-redis.service:23` (standalone unit files). Confirm `inngest-redis-bootstrap.sh` has NO `--project`.
-- [ ] 0.2 Confirm all 6 units read `EnvironmentFile=/etc/default/inngest-server` + the scoped `DOPPLER_TOKEN` backstop (cloud-init-inngest.yml:384).
-- [ ] 0.3 Confirm both sudoers copies (`deploy-inngest-bootstrap.sudoers:27`, `cloud-init.yml:83`) + AC5 byte-parity assertion (`cloud-init-inngest-bootstrap.test.sh`).
-- [ ] 0.4 Locate the flip-guard test + heartbeat unit test (grep `GUARD_FLIP_FLAG`, `inngest-heartbeat`).
-- [ ] 0.5 Enumerate `.service` + cloud-init `write_files` units for the #6556 P1 guard extension.
+- [x] 0.1 Confirm the 6 `--project` sites: `inngest-bootstrap.sh:283,523,585,737` (heredocs) + `inngest-cutover-flip.service:19` + `inngest-redis.service:23` (standalone unit files). Confirm `inngest-redis-bootstrap.sh` has NO `--project`.
+- [x] 0.2 Confirm all 6 units read `EnvironmentFile=/etc/default/inngest-server` + the scoped `DOPPLER_TOKEN` backstop (cloud-init-inngest.yml:384).
+- [x] 0.3 Confirm both sudoers copies (`deploy-inngest-bootstrap.sudoers:27`, `cloud-init.yml:83`) + AC5 byte-parity assertion (`cloud-init-inngest-bootstrap.test.sh`).
+- [x] 0.4 Locate the flip-guard test + heartbeat unit test (grep `GUARD_FLIP_FLAG`, `inngest-heartbeat`).
+- [x] 0.5 Enumerate `.service` + cloud-init `write_files` units for the #6556 P1 guard extension.
 
 ## Phase 1 — #6553 flip-guard widen + ADR-100 amend + FSM↔guard drift guard
-- [ ] 1.1 `inngest-server-flip-guard.sh:40` — add `flushed` to the case allowlist.
-- [ ] 1.2 Update all FOUR prose sites (`:12`, `:15-16`, `:44`, `:45`) → `{armed,flipping,flushed,done}`.
-- [ ] 1.3 ADR-100:189 — widen allowlist + FSM-start rationale (cite `:163/:172/:240/:178`); target `## Considered Options` (:63) / Decision 6a-6b prose (NOT `## Alternatives Considered`).
-- [ ] 1.4 Add ADR-100 class invariant: guard allowlist == {FSM states that invoke `start_server`}.
-- [ ] 1.5 Add CI drift-guard test (flip-guard test surface): FAIL if the FSM `flag_set`s a pre-`start_server` state absent from the guard allowlist.
-- [ ] 1.6 Test: `GUARD_FLIP_FLAG=flushed` + prod-marker URI → exit 0 (ALLOW); regression {armed,flipping,done}; block {unset,rollback,rolled-back,aborted}.
+- [x] 1.1 `inngest-server-flip-guard.sh:40` — add `flushed` to the case allowlist.
+- [x] 1.2 Update all FOUR prose sites (`:12`, `:15-16`, `:44`, `:45`) → `{armed,flipping,flushed,done}`.
+- [x] 1.3 ADR-100:189 — widen allowlist + FSM-start rationale (cite `:163/:172/:240/:178`); target `## Considered Options` (:63) / Decision 6a-6b prose (NOT `## Alternatives Considered`).
+- [x] 1.4 Add ADR-100 class invariant: guard allowlist == {FSM states that invoke `start_server`}.
+- [x] 1.5 Add CI drift-guard test (flip-guard test surface): FAIL if the FSM `flag_set`s a pre-`start_server` state absent from the guard allowlist.
+- [x] 1.6 Test: `GUARD_FLIP_FLAG=flushed` + prod-marker URI → exit 0 (ALLOW); regression {armed,flipping,done}; block {unset,rollback,rolled-back,aborted}.
 
 ## Phase 2 — #6552 rollback deletes INNGEST_HEARTBEAT_URL (UNCONDITIONAL)
 - [ ] 2.1 `cutover-inngest.yml` `op=rollback` — add idempotent `doppler secrets delete INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd` (DOPPLER_TOKEN_INNGEST_ARM, no echo, absent-OK) in the UNCONDITIONAL Half-B region (after `esac`, ≥:1119), NOT the `armed|flipping|flushed|done)` case arm.

@@ -2,7 +2,7 @@
 # Tests for inngest-server-flip-guard.sh — the P1-5 arm-atomicity ExecStartPre guard
 # (#6178, ADR-100). Driven via the GUARD_POSTGRES_URI / GUARD_FLIP_FLAG fixture seams
 # (no doppler). The guard blocks inngest-server start ONLY when the URI is prod AND the
-# flag is not in {armed, flipping, done}; every other combination allows the start.
+# flag is not in {armed, flipping, flushed, done}; every other combination allows the start.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,8 +53,11 @@ assert_blocks "prod + rollback blocks" "$(run_guard "$PROD_URI" 1 "rollback")"
 echo "TEST: prod URI + aborted flag => BLOCK (non-zero)"
 assert_blocks "prod + aborted blocks" "$(run_guard "$PROD_URI" 1 "aborted")"
 
-# --- Allowed: prod URI + flag in {armed, flipping, done} ---
-for flag in armed flipping "done"; do
+# --- Allowed: prod URI + flag in {armed, flipping, flushed, done} ---
+# `flushed` is the #6553 fix: the flip FSM sets flag=flushed then calls start_server
+# (inngest-cutover-flip.sh:188-189, and the flushed-resume arm :240), so the guard MUST
+# allow a prod-URI start at flushed — else it blocks the FSM's own controlled start.
+for flag in armed flipping flushed "done"; do
   echo "TEST: prod URI + '$flag' flag => ALLOW (exit 0)"
   assert_rc "prod + '$flag' allows start" "0" "$(run_guard "$PROD_URI" 1 "$flag")"
 done
@@ -74,6 +77,43 @@ if [[ "$out" == *"pigsfuxruiopinouvjwy"* || "$out" == *"pooler.supabase.com"* ||
   fail "guard leaked a connection-string fragment into its output"
 else
   pass "guard output carries no connection-string fragment"
+fi
+
+# --- FSM<->guard lockstep drift guard (#6553 / ADR-100 class invariant) ---
+# The guard's ALLOW allowlist MUST be a SUPERSET of every FSM state in which the cutover
+# flip oneshot invokes `start_server`. Otherwise the guard blocks the FSM's own controlled
+# start (the #6553 bug). Both sets are derived from source, so a future `flag_set <X>;
+# start_server` (or a `<X>)` case arm that starts the server) that the guard omits FAILS here.
+echo "TEST: FSM start-states are a subset of the guard allowlist (lockstep drift guard)"
+FSM="$SCRIPT_DIR/inngest-cutover-flip.sh"
+if [[ ! -f "$FSM" ]]; then
+  fail "FSM source $FSM not found — cannot verify lockstep"
+else
+  # Guard allowlist: the tokens before ')' on the `flag_ok=true` case line.
+  guard_allow=$(grep -E 'flag_ok=true' "$TARGET" | head -1 | sed -E 's/\).*//' \
+    | tr '|' '\n' | sed -E 's/[[:space:]]//g' | grep -E '^[a-z-]+$' | LC_ALL=C sort -u)
+  # FSM start-states: walk top-down tracking the nearest preceding `flag_set <arg>` OR
+  # case-arm label `<state>)`, emit it at each bare `start_server` call. flag_set()/
+  # start_server() DEFINITIONS are excluded (a call has an arg / is bare; a def has '() {').
+  fsm_states=$(awk '
+    /^[[:space:]]*flag_set[[:space:]]+["'\'']?[a-z-]+/ { s=$2; gsub(/["'\'']/,"",s); cur=s; next }
+    /^[[:space:]]*[a-z][a-z_-]*\)[[:space:]]*$/       { s=$1; sub(/\).*/,"",s); cur=s; next }
+    /^[[:space:]]*start_server[[:space:]]*$/          { if (cur != "") print cur; n++ }
+    END { if (n+0 < 1) print "__NO_START_SERVER_CALL_FOUND__" }
+  ' "$FSM" | LC_ALL=C sort -u)
+
+  # Non-vacuity: the derivation MUST find the known start-state (flushed). A silent empty
+  # derivation would make the subset check pass vacuously.
+  if ! printf '%s\n' "$fsm_states" | grep -qx 'flushed'; then
+    fail "lockstep derivation did not find the known 'flushed' start-state (derivation broken?); got: [$(printf '%s' "$fsm_states" | tr '\n' ' ')]"
+  else
+    missing=$(LC_ALL=C comm -23 <(printf '%s\n' "$fsm_states") <(printf '%s\n' "$guard_allow"))
+    if [[ -n "$missing" ]]; then
+      fail "FSM starts the server in state(s) the guard allowlist OMITS: [$(printf '%s' "$missing" | tr '\n' ' ')] — widen inngest-server-flip-guard.sh (ADR-100 class invariant: allowlist must cover every start_server state)"
+    else
+      pass "guard allowlist [$(printf '%s' "$guard_allow" | tr '\n' ' ')] covers all FSM start-states [$(printf '%s' "$fsm_states" | tr '\n' ' ')]"
+    fi
+  fi
 fi
 
 echo ""

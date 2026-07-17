@@ -9,11 +9,15 @@
 #
 # It BLOCKS the start (exit non-zero) when BOTH:
 #   * INNGEST_POSTGRES_URI resolves to the PROD durable backend, AND
-#   * the cutover flag is NOT in {armed, flipping, done}
+#   * the cutover flag is NOT in {armed, flipping, flushed, done}
 # i.e. the prod URI has been armed into Doppler but the gated flip has not begun. Without
 # this, a crash / OnBootSec / operator restart in that window would bring up a SECOND prod
-# scheduler against the still-dirty dark Redis (the double-fire race). armed/flipping/done
-# are the only states where a prod-URI start is legitimate (mid-flip, or post-cutover).
+# scheduler against the still-dirty dark Redis (the double-fire race). armed/flipping/flushed/done
+# are the only states where a prod-URI start is legitimate (mid-flip, or post-cutover). `flushed`
+# is included because the flip FSM itself starts the server AT flag=flushed (ADR-100; the flip
+# oneshot's forward path and its flushed-RESUME arm both call `start_server` while flag=flushed,
+# after asserting DBSIZE==0 on the dark Redis) — so without it the guard blocks the FSM's OWN
+# controlled start, not just an unplanned restart.
 #
 # Prod detection: the prod backend is the dedicated Supabase project ref
 # `pigsfuxruiopinouvjwy` (a NON-secret identifier, already in inngest.tf) — a stable
@@ -37,12 +41,12 @@ fi
 
 flag_ok=false
 case "$FLIP_FLAG" in
-  armed | flipping | done) flag_ok=true ;;
+  armed | flipping | flushed | done) flag_ok=true ;;
 esac
 
 if [[ "$is_prod" == true && "$flag_ok" == false ]]; then
-  logger -t "$LOG_TAG" "BLOCK: prod Postgres URI with cutover flag='${FLIP_FLAG:-unset}' not in {armed,flipping,done} — refusing inngest-server start (P1-5)" 2>/dev/null || true
-  echo "ERROR: refusing inngest-server start — prod Postgres URI with cutover flag '${FLIP_FLAG:-unset}' is not in {armed,flipping,done} (P1-5 arm-atomicity guard; would start a second prod scheduler)" >&2
+  logger -t "$LOG_TAG" "BLOCK: prod Postgres URI with cutover flag='${FLIP_FLAG:-unset}' not in {armed,flipping,flushed,done} — refusing inngest-server start (P1-5)" 2>/dev/null || true
+  echo "ERROR: refusing inngest-server start — prod Postgres URI with cutover flag '${FLIP_FLAG:-unset}' is not in {armed,flipping,flushed,done} (P1-5 arm-atomicity guard; would start a second prod scheduler)" >&2
   exit 1
 fi
 
