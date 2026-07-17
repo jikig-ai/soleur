@@ -1,5 +1,5 @@
 ---
-adr: 118
+adr: 119
 title: Encrypt the live /workspaces volume additively — never replace the host that cannot be rebuilt
 status: adopting
 date: 2026-07-17
@@ -8,7 +8,7 @@ supersedes: none
 issue: 6588
 ---
 
-# ADR-118: LUKS at rest for the live `/workspaces` volume
+# ADR-119: LUKS at rest for the live `/workspaces` volume
 
 **Ruled by:** `soleur:engineering:cto`, 2026-07-17, per issue #6588's explicit routing mandate
 (*"Do not start with terraform… The design question belongs to `soleur:engineering:cto`"*).

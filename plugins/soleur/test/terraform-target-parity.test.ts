@@ -548,7 +548,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume.git_data_luks",
   "hcloud_volume_attachment.git_data_luks",
   "doppler_service_token.git_data",
-  // #6588 (ADR-118) — the ADDITIVE LUKS-at-rest /workspaces volume + its at-rest key +
+  // #6588 (ADR-119) — the ADDITIVE LUKS-at-rest /workspaces volume + its at-rest key +
   // its scoped read-only token ALL ride the operator's `workspaces-luks-cutover` dispatch
   // apply, NOT the #5566 per-PR-CI class. Same class as hcloud_volume.workspaces +
   // hcloud_volume_attachment.workspaces above (already excluded), which is the very volume
@@ -666,7 +666,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
 // a github_actions_secret — that is the #5566 silent-un-applied class and MUST be targeted.
 const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   "doppler_service_token.git_data",
-  // #6588 (ADR-118) — minted into the operator-created `prd_workspaces_luks` config and read by
+  // #6588 (ADR-119) — minted into the operator-created `prd_workspaces_luks` config and read by
   // the web-1 host at LUKS-unlock time (NOT published to a CI github_actions_secret). CI cannot
   // apply it — the config does not exist until the operator creates it. Same class as
   // doppler_service_token.git_data. The dedicated config is a SECURITY boundary, not hygiene:

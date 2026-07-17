@@ -1,5 +1,5 @@
 # =============================================================================
-# LUKS-at-rest for the LIVE /workspaces volume (#6588, ADR-118)
+# LUKS-at-rest for the LIVE /workspaces volume (#6588, ADR-119)
 # =============================================================================
 #
 # WHAT THIS CLOSES
@@ -8,7 +8,7 @@
 # as plaintext ext4, while docs/legal/{privacy-policy,gdpr-policy,data-protection-
 # disclosure}.md tell data subjects it is LUKS-encrypted. The operator's decision is
 # to make the claim true rather than retract it. This file declares the ADDITIVE
-# encrypted volume that ADR-118 cuts over to.
+# encrypted volume that ADR-119 cuts over to.
 #
 # SHARP EDGE — encryption-at-rest is GUEST-SIDE LUKS, NOT an hcloud_volume attribute.
 # There is no hcloud `encrypted` flag. `cryptsetup` runs on the host, unlocked by the
@@ -32,7 +32,7 @@
 # datacentres (live Hetzner API 2026-07-16; corroborated at
 # tests/scripts/test-stock-preflight-gate.sh). A `-replace` of hcloud_server.web
 # ["web-1"] would DESTROY the sole prod host and then fail to recreate it, leaving the
-# platform unrebuildable. See ADR-118 §Alternatives Considered.
+# platform unrebuildable. See ADR-119 §Alternatives Considered.
 
 # --- Passphrase ---------------------------------------------------------------
 # Minted by terraform, never operator-supplied (hr-tf-variable-no-operator-mint-default).
@@ -157,7 +157,7 @@ resource "doppler_service_token" "workspaces_luks" {
 #      empty. Encrypting a volume scheduled for deletion is waste.
 #
 # web-2's volume is therefore KNOWINGLY left plaintext — a recorded deviation from
-# #6588's "every var.web_hosts member" AC, tracked by #6538. See ADR-118.
+# #6588's "every var.web_hosts member" AC, tracked by #6538. See ADR-119.
 #
 # Size and location track web-1's live volume exactly: `var.volume_size` is the same
 # input `hcloud_volume.workspaces` uses, so the target can never be born smaller than
@@ -181,7 +181,7 @@ resource "hcloud_volume" "workspaces_luks" {
 #
 # NOTE: with a second volume attached, the `scsi-0HC_Volume_*` glob in
 # cloud-init.yml becomes AMBIGUOUS. Pinning the mount by volume ID is a hard
-# prerequisite of the cutover — see ADR-118 §Sequencing.
+# prerequisite of the cutover — see ADR-119 §Sequencing.
 resource "hcloud_volume_attachment" "workspaces_luks" {
   volume_id = hcloud_volume.workspaces_luks.id
   server_id = hcloud_server.web["web-1"].id

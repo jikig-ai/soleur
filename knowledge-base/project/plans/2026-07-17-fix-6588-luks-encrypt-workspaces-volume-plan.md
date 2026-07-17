@@ -7,7 +7,7 @@ type: security-remediation
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 requires_clo_signoff: true
-adr: ADR-118 (provisional — re-verify ordinal at ship)
+adr: ADR-119 (provisional — re-verify ordinal at ship)
 ---
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
@@ -59,7 +59,7 @@ adr: ADR-118 (provisional — re-verify ordinal at ship)
 
 User source code sits **unencrypted at rest** on `hcloud_volume.workspaces` while three
 published legal documents tell data subjects it is LUKS-encrypted. Issue #6588 mandates routing
-to the CTO **before any terraform**. That happened; the ruling is ADR-118 (see Architecture Decision).
+to the CTO **before any terraform**. That happened; the ruling is ADR-119 (see Architecture Decision).
 
 **This plan differs materially from the issue's framing.** Eight of the issue's premises are
 false or incomplete, and four domain leaders — CTO, CLO, COO, CPO — converged *without contact*
@@ -184,7 +184,7 @@ a follow-up issue.
 
 ### ADR
 
-**Create `ADR-118-luks-at-rest-for-the-live-workspaces-volume.md`.** Provisional ordinal (ADR-117 is
+**Create `ADR-119-luks-at-rest-for-the-live-workspaces-volume.md`.** Provisional ordinal (ADR-117 is
 max); `/ship`'s ADR-Ordinal Collision Gate re-verifies against `origin/main`. **If renumbered, sweep
 this plan + `tasks.md` + every AC naming it in the same edit**
 (`2026-07-05-adr-renumber-must-sweep-planning-docs-and-scripts-glob-orphan.md`).
@@ -229,7 +229,7 @@ undefined element fails there, not at `tsc`.
 
 ### Sequencing
 
-The decision is only *true* after Phase 4. ADR-118 is authored **now** with **`status: adopting`**,
+The decision is only *true* after Phase 4. ADR-119 is authored **now** with **`status: adopting`**,
 flipped to `accepted` on soak-pass. It is **not** postponed to its own issue.
 
 ---
@@ -328,7 +328,7 @@ failure modes are discriminated **in one event** — `device_type=ext4` vs `moun
 
 ### Soak Follow-Through Enrollment (§2.9.1)
 
-Phase 5 gates on a soak before the plaintext volume is wiped and ADR-118 flips `adopting → accepted`.
+Phase 5 gates on a soak before the plaintext volume is wiped and ADR-119 flips `adopting → accepted`.
 That is a time-gated close criterion ⇒ enrollment is **mandatory**, not prose.
 
 **Retention = 7 days** (CPO C7/G7 is blocking and overrides COO's 72h — see Cross-Domain Disagreement).
@@ -493,9 +493,9 @@ issue with no PR**. Blocking on it would be blocking on a PR that does not exist
       effect from the merge alone).
 - [ ] Re-run `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` (budget).
 
-### Phase 2 — ADR-118 + C4 + LUKS in the baked bootstrap + mutation-tested drift guard
+### Phase 2 — ADR-119 + C4 + LUKS in the baked bootstrap + mutation-tested drift guard
 
-- [ ] **First task:** copy `specs/…/adr-118-seed.md` → `knowledge-base/engineering/architecture/decisions/ADR-118-luks-at-rest-for-the-live-workspaces-volume.md` (`status: adopting`). Re-verify the ordinal against `origin/main`.
+- [ ] **First task:** copy `specs/…/adr-118-seed.md` → `knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md` (`status: adopting`). Re-verify the ordinal against `origin/main`.
 - [ ] C4: element-description correction + Doppler→web-host boot edge + `views.c4` include. Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 - [ ] LUKS block into `soleur-host-bootstrap.sh` (ADR-080). `--key-file -` via **stdin**, never argv. Fail loud on empty key.
 - [ ] `workspaces-luks.tf` (mirror `git-data-luks.tf`), incl. `prevent_destroy` on the old volume.
@@ -544,7 +544,7 @@ issue with no PR**. Blocking on it would be blocking on a PR that does not exist
 - [ ] Soak-pass ⇒ release `prevent_destroy` → double-gated wipe (canary_ok **AND** confirm_wipe) →
       Hetzner API delete.
 - [ ] TF convergence: destroy old → `state rm` → `moved` → rename.
-- [ ] ADR-118 `adopting` → `accepted`.
+- [ ] ADR-119 `adopting` → `accepted`.
 - [ ] **The legal PR (single, coupled — operator decision):** now that the volume is live-verified
       LUKS, land **all four** doc corrections together: retract the three permanently-false clauses
       (git-data host / cross-host TLS / cross-host membership re-verification) across **all 20 sites**
@@ -705,7 +705,7 @@ Neither leader had this alone.
 
 ### Pre-merge (the infra PR) — ⬅ **THIS RUN's deliverable. AC11–AC20 are the gates `/work` must meet.**
 
-- [ ] **AC11** `ADR-118-*.md` exists with `status: adopting`, a `## Decision`, and a `## Alternatives Considered` table naming blue-green, in-place `reencrypt`, fscrypt, option 3, `soleur-drain.service`, and the snapshot — **with the cx33-stock rationale**.
+- [ ] **AC11** `ADR-119-*.md` exists with `status: adopting`, a `## Decision`, and a `## Alternatives Considered` table naming blue-green, in-place `reencrypt`, fscrypt, option 3, `soleur-drain.service`, and the snapshot — **with the cx33-stock rationale**.
 - [ ] **AC12** C4: `model.c4` carries the Doppler→web-host boot edge, `views.c4` includes it; `c4-code-syntax.test.ts` + `c4-render.test.ts` green.
 - [ ] **AC13** `workspaces-luks.test.sh` registered in `infra-validation.yml` and green. **Mutation case: a `format = "ext4"`-only volume with no LUKS block goes RED.**
 - [ ] **AC14** `cloud-init.yml` contains **no** `scsi-0HC_Volume_*` glob and **no `|| true`** on the mount; the fstab line carries an explicit volume ID + `nofail` + a `grep -q` guard.
@@ -729,7 +729,7 @@ Neither leader had this alone.
 - [ ] **AC27** `curl -sS -o /dev/null -w '%{http_code}' https://app.soleur.ai/api/health` == `200` post-restart; Better Stack monitor `status == "up"`.
 - [ ] **AC28** Downtime measured ≤ **20 min** (workflow-emitted freeze-start/freeze-end timestamps); hard abort at 2h.
 - [ ] **AC29 (G8)** Rollback rehearsal recorded green in Phase 3.
-- [ ] **AC30** 7d soak follow-through enrolled with the `follow-through` label + directive; on soak-pass: `prevent_destroy` released, plaintext volume deleted, TF state converged, ADR-118 → `accepted`, and the **coupled legal PR (AC1–AC10 + present-tense LUKS flip + SHA re-pin)** opened.
+- [ ] **AC30** 7d soak follow-through enrolled with the `follow-through` label + directive; on soak-pass: `prevent_destroy` released, plaintext volume deleted, TF state converged, ADR-119 → `accepted`, and the **coupled legal PR (AC1–AC10 + present-tense LUKS flip + SHA re-pin)** opened.
 
 **Automation feasibility (§2.10 gate).** Every step routes through the cutover `workflow_dispatch`
 job, `gh` CLI, or an API read. **No human-run command is authored anywhere in this plan.** The one
@@ -867,7 +867,7 @@ No other overlap.
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-118-luks-at-rest-for-the-live-workspaces-volume.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md`
 - `apps/web-platform/infra/workspaces-luks.tf`
 - `apps/web-platform/infra/workspaces-luks.test.sh` *(mutation-tested drift guard)*
 - `apps/web-platform/infra/workspaces-cutover.sh`

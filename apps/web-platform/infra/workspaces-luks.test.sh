@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Drift-guards for the LUKS-at-rest /workspaces volume (#6588, ADR-118).
+# Drift-guards for the LUKS-at-rest /workspaces volume (#6588, ADR-119).
 #
 # WHY THIS EXISTS
 # ---------------
 # `hcloud_volume.workspaces` holds every user's checked-out source code and is
 # plaintext ext4, while the published privacy policy tells data subjects it is
-# LUKS-encrypted. ADR-118 births an ADDITIVE encrypted volume rather than mutating
+# LUKS-encrypted. ADR-119 births an ADDITIVE encrypted volume rather than mutating
 # the live one. These guards assert the new volume can never be born plaintext, and
 # that the passphrase can never reach the agent container.
 #
@@ -163,7 +163,7 @@ p_dedicated_config() {
 # learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md).
 # What A8 actually pins is the write leg: `access = "admin"` would let a compromised
 # host rewrite the escrowed passphrase, and re-minting the key without re-keying the
-# LUKS header is the terminal mode ADR-118 §(f) names.
+# LUKS header is the terminal mode ADR-119 §(f) names.
 p_token_read_only() {
   local block
   block="$(block_of "$1" doppler_service_token workspaces_luks)"

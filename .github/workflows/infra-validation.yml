@@ -567,7 +567,7 @@ jobs:
       - name: Run git-data LUKS-at-rest cutover drift-guards
         run: bash apps/web-platform/infra/git-data-luks.test.sh
 
-      - name: Run /workspaces LUKS-at-rest drift-guards (#6588, ADR-118)
+      - name: Run /workspaces LUKS-at-rest drift-guards (#6588, ADR-119)
         run: bash apps/web-platform/infra/workspaces-luks.test.sh
 
       - name: Run git-data transport-wrapper allowlist tests

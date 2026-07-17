@@ -1,7 +1,7 @@
-# ADR-118 seed — LUKS at rest for the live `/workspaces` volume
+# ADR-119 seed — LUKS at rest for the live `/workspaces` volume
 
 > **This is a seed, not the ADR.** Phase 2's first task copies it to
-> `knowledge-base/engineering/architecture/decisions/ADR-118-luks-at-rest-for-the-live-workspaces-volume.md`
+> `knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md`
 > with `status: adopting`, re-verifying the ordinal against `origin/main` first
 > (ADR-117 is the current max; `/ship`'s ADR-Ordinal Collision Gate is authoritative).
 >

@@ -41,12 +41,12 @@ one-shot), so the lane defaulted to `cross-domain` fail-closed.
 > 1. **The foundation PR — ✅ DONE (PR #6593).** Declares `workspaces-luks.tf` (no `format`; dedicated
 >    Doppler config; web-1 singleton), the mutation-tested `workspaces-luks.test.sh` drift guard + its
 >    `infra-validation.yml` registration, the `OPERATOR_APPLIED_EXCLUSIONS` entries (load-bearing for
->    MERGEABILITY — verified by counterfactual), ADR-118, and the `model.c4` "host-local NVMe"
+>    MERGEABILITY — verified by counterfactual), ADR-119, and the `model.c4` "host-local NVMe"
 >    correction. **ZERO live effect: it encrypts nothing.** The volume is not born until PR 2 runs.
 > 2. **The cutover PR — ➡️ #6604.** The half that moves sole-copy user data: the
 >    `workspaces-luks-cutover` dispatch job + `choice` option + `web-1-swap` concurrency, the gate lib +
 >    gate test, the volume-ID mount pin, the fail-closed gate delivered via the **cutover SSH channel**
->    (ADR-118 §(e) — the bake has no consumer), and the observability emit path. **Every C1–C19
+>    (ADR-119 §(e) — the bake has no consumer), and the observability emit path. **Every C1–C19
 >    correction lands here.** Gates = plan AC21–AC30.
 > 3. **The coupled legal PR — after PR 2's canary passes.** §PR 1 + §PR 3 tasks **merged into one PR**.
 >    Retracts the three permanently-false clauses AND asserts LUKS **present-tense true** in the same
@@ -177,7 +177,7 @@ one-shot), so the lane defaulted to `cross-domain` fail-closed.
 
 - [ ] 2.2.1 **First task:** re-verify the next free ADR ordinal against `origin/main`, then copy
       `specs/feat-one-shot-6588-luks-workspaces-volume/adr-118-seed.md` →
-      `knowledge-base/engineering/architecture/decisions/ADR-118-*.md` with `status: adopting`.
+      `knowledge-base/engineering/architecture/decisions/ADR-119-*.md` with `status: adopting`.
       **If renumbered, sweep the plan + this tasks.md + every AC naming the ordinal in the same edit.**
 - [ ] 2.2.2 C4: correct the `/workspaces` element description; add the **Doppler → web-host boot-time
       passphrase** edge to `model.c4`; add the `include` line to `views.c4` so it renders.
@@ -249,7 +249,7 @@ one-shot), so the lane defaulted to `cross-domain` fail-closed.
 - [ ] 2.5.5 On soak-pass: release `prevent_destroy` → double-gated wipe (canary_ok AND confirm_wipe) →
       Hetzner API delete.
 - [ ] 2.5.6 TF convergence: destroy old → `state rm` → `moved` → rename.
-- [ ] 2.5.7 Flip ADR-118 `adopting` → `accepted`.
+- [ ] 2.5.7 Flip ADR-119 `adopting` → `accepted`.
 - [ ] 2.5.8 Write `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6588.md`.
       **State the one-way door explicitly** — rollback authority expires at canary-pass. **No "log in
       and check" step** (`hr-no-ssh-fallback-in-runbooks`).
