@@ -398,6 +398,30 @@ resource "terraform_data" "container_restart_monitor_install" {
 # Source of truth for jail content: fail2ban-sshd.local (sibling file).
 # Shows as "will be created" in CI drift reports -- expected behavior.
 # Runbook for acute lockout recovery: knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md
+#
+# Why the jail carries `ignoreip = ... 10.0.1.0/24` (#6594). The rationale lives here, not in
+# the .local file: that file is base64'd into user_data whole (see the keep-inline note above),
+# so its comments are byte-budgeted while .tf comments are free.
+#
+# Until #6594 pinned the tunnel ingress, `ssh.` resolved to `ssh://localhost:22`, so sshd saw
+# every tunnelled CI login as 127.0.0.1 — covered by fail2ban's default loopback ignore. Pinning
+# the ingress to web-1's private IP means a PEER connector (web-2, 10.0.1.11) now proxies in from
+# a REAL source address, which `ignoreself` does not cover (it covers only web-1's own IPs).
+#
+# Without the grant, a key-mismatch window (`-replace=tls_private_key.ci_ssh`, or a fresh web-1
+# before root_authorized_keys lands) puts >=5 failures in 10m from 10.0.1.11 and bans it —
+# killing `ssh.` for the ~half of CF colos routed via that connector, for 10m rising to 1h. That
+# is a failure AMPLIFIER on the one path with no in-band recovery: ssh-fail2ban-unban.md calls a
+# fail2ban lockout "the one operator task where the Hetzner Cloud Console (noVNC) is the only
+# tool".
+#
+# The private net is not an attack surface fail2ban should police: it is unreachable from the
+# internet (firewall.tf admits only 22/80/443/icmp on the public interface), and its only members
+# are our own hosts.
+#
+# SCOPE: this grant exists because a peer connector proxies to web-1. It is web-2-lifetime-scoped
+# — #6538 (retire the fsn1 orphan) removes the only peer, after which the 10.0.1.0/24 clause is
+# vestigial and should be re-evaluated rather than inherited.
 resource "terraform_data" "fail2ban_tuning" {
   triggers_replace = sha256(file("${path.module}/fail2ban-sshd.local"))
 

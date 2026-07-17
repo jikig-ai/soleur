@@ -540,6 +540,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    **Heuristic:** "Can I write a commit message that describes a complete, valuable change? If yes, commit. If the message would be 'WIP' or 'partial X', wait."
 
+   - **Commit each verified unit IMMEDIATELY — a worktree sync can revert uncommitted work with no warning.** `worktree-manager.sh` carries a "Syncing on-disk files from git HEAD" pass that restores tracked files to HEAD, and `.claude/hooks/guardrails.sh` can invoke it mid-session; anything verified-but-uncommitted is silently lost. Never hold verified work in the working tree across a long-running background job (a full test-all, a review agent). Where an edit must be followed by a commit, do BOTH IN ONE Bash call (`cat > file <<'EOF' … EOF; git add …; git commit`) so no window exists. Corollary: a reconciliation script that silently no-ops on a missing anchor (`python str.replace`, `sed s///`) will print success against a reverted file — assert the anchor (`assert old in s`) or the edit is unverified. **Why:** #6578 — two full re-applications of verified work; the revert was caught only because a re-run printed numbers that contradicted a result verified minutes earlier.
+
    **UX artifact heuristic:** "Did a specialist just produce or revise artifacts? If yes, commit with `wip: UX <description> for feat-X`. UX artifacts are high-effort and low-recoverability -- err on the side of committing too often rather than too rarely."
 
    The `wip:` prefix is intentional -- UX artifacts are valuable at every revision stage, and WIP commits are squashed on merge with no impact on final git history. Do not run compound before UX WIP commits -- compound runs once in Phase 4.

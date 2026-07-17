@@ -103,6 +103,33 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# Approach A (#6546 / ADR-120): when measuring local-open, re-assert loopback every run.
+# Bootstrap-once is insufficient — config drift or public rebind must refuse the campaign.
+_MEASURE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "${MODEL:-}" == "local-open" || "${MODEL:-}" == local-open/* ]]; then
+  # shellcheck source=scripts/dogfood/assert-ollama-loopback.sh
+  if [[ -f "${_MEASURE_DIR}/assert-ollama-loopback.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "${_MEASURE_DIR}/assert-ollama-loopback.sh"
+    assert_ollama_loopback_listen || {
+      echo "error: Ollama not loopback-only — refuse local-open measure (Approach A)" >&2
+      exit 1
+    }
+    _cfg="${HOME}/.grok/config.toml"
+    assert_config_base_url_loopback "$_cfg" || {
+      echo "error: non-loopback base_url in ${_cfg} — refuse local-open measure" >&2
+      exit 1
+    }
+    if ! curl -fsS --max-time 5 "http://127.0.0.1:11434/api/tags" >/dev/null; then
+      echo "error: Ollama not healthy on 127.0.0.1:11434 — refuse local-open measure" >&2
+      exit 1
+    fi
+  else
+    echo "error: missing assert-ollama-loopback.sh — refuse local-open measure" >&2
+    exit 1
+  fi
+fi
+
 cmd=(grok -p "$PROMPT" --cwd "$CWD" --output-format streaming-json --max-turns "$MAX_TURNS" --no-auto-update)
 if [[ -n "$MODEL" ]]; then
   cmd+=(-m "$MODEL")

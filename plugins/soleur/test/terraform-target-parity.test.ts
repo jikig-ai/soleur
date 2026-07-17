@@ -548,6 +548,28 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume.git_data_luks",
   "hcloud_volume_attachment.git_data_luks",
   "doppler_service_token.git_data",
+  // #6588 (ADR-119) — the ADDITIVE LUKS-at-rest /workspaces volume + its at-rest key +
+  // its scoped read-only token ALL ride the operator's `workspaces-luks-cutover` dispatch
+  // apply, NOT the #5566 per-PR-CI class. Same class as hcloud_volume.workspaces +
+  // hcloud_volume_attachment.workspaces above (already excluded), which is the very volume
+  // this one is cut over FROM.
+  //   This exclusion is load-bearing for MERGEABILITY, not just hygiene: `host_creates`
+  //   (#6416, destroy-guard-filter-web-platform.jq) is TYPE-scoped to hcloud_server OR
+  //   hcloud_volume and is evaluated BEFORE the destroy_count sum, so `[ack-destroy]`
+  //   deliberately cannot reach it. A net-new hcloud_volume that CI could plan would HALT
+  //   the per-PR apply path.
+  //   `doppler_service_token.workspaces_luks` is an OPERATOR-APPLIED token exception (see
+  //   OPERATOR_APPLIED_TOKEN_EXCLUSIONS below), same class as doppler_service_token.git_data:
+  //   it is minted into the operator-created `prd_workspaces_luks` Doppler config and read by
+  //   the web-1 HOST at unlock time — never published into a paired github_actions_secret. The
+  //   config does not exist until the operator creates it (runbook precondition), so CI cannot
+  //   apply it. The dedicated config is what keeps the key OUT of the `--config prd` download
+  //   that feeds `docker run --env-file` (CWE-522 — see workspaces-luks.tf).
+  "random_password.workspaces_luks",
+  "doppler_secret.workspaces_luks_key",
+  "hcloud_volume.workspaces_luks",
+  "hcloud_volume_attachment.workspaces_luks",
+  "doppler_service_token.workspaces_luks",
   // #6122 (ADR-096) — the zot registry host + its volume/network/firewall/creds/heartbeat
   // ALL ride the operator's initial full (untargeted) `terraform apply` + drift detector,
   // exactly like the git-data host above (CTO ruling 2026-07-06,
@@ -644,6 +666,18 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
 // a github_actions_secret — that is the #5566 silent-un-applied class and MUST be targeted.
 const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   "doppler_service_token.git_data",
+  // #6588 (ADR-119) — minted into the operator-created `prd_workspaces_luks` config and read by
+  // the web-1 host at LUKS-unlock time (NOT published to a CI github_actions_secret). CI cannot
+  // apply it — the config does not exist until the operator creates it. Same class as
+  // doppler_service_token.git_data. The dedicated config is a SECURITY boundary, not hygiene:
+  // web-1's cloud-init runs `doppler secrets download --config prd` into the TMPENV that feeds
+  // `docker run --env-file`, so a key in shared `prd` would be readable via /proc/self/environ
+  // by the agent container whose own data it encrypts (CWE-522). The mechanism is inheritance
+  // DIRECTIONALITY (root → branch), NOT scope reduction: this token still resolves the full prd
+  // set, exactly like the "leaky prd_registry branch config" named below — see #6167 and
+  // learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md.
+  // It is free here because web-1 already carries a full-prd DOPPLER_TOKEN.
+  "doppler_service_token.workspaces_luks",
   // #6122 (ADR-096) — minted into the ISOLATED `soleur-registry` project's `prd` root config
   // (TF-created via doppler_project.registry in the operator full apply; its own root holds ONLY
   // the two ZOT tokens — true cross-project isolation, NOT the leaky `prd_registry` branch config
