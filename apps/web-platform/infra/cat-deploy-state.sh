@@ -121,9 +121,31 @@ journald_storage_json() {
     # `journalctl --header` lists active journal files with their on-disk paths;
     # a file under /var/log/journal proves journald is in persistent mode (a
     # volatile-only journal lists /run/log/journal paths instead).
-    if command -v journalctl >/dev/null 2>&1 \
-      && journalctl --header 2>/dev/null | grep -q '/var/log/journal'; then
-      persistent=true
+    #
+    # CAPTURED ONCE, matched against a here-string — never
+    # `journalctl --header | grep -q`. This file runs under `set -euo pipefail`
+    # (line 2) and the header is large (~107 KB on any host with journal history)
+    # with the match on line 1. `grep -q` exits on that first match, the
+    # producer's next write() takes SIGPIPE, pipefail promotes 141 to the
+    # pipeline status, and the `&&` reads FALSE — reporting persistent=false on
+    # a host where journald is demonstrably persistent.
+    #
+    # Measured before the fix, on a host whose journald IS persistent:
+    #   journalctl --header | grep -q '/var/log/journal'  =>  PIPESTATUS[0]=141, killed 20/20
+    #   old form => persistent=false   (wrong)
+    #   new form => persistent=true    (correct)
+    # Not a race: the producer is far larger than the 64 KiB pipe buffer, so its
+    # write always blocks and always loses.
+    #
+    # This survived because it is host-age-dependent — a fresh host has a small
+    # header and reads correctly; the guard only starts lying once journals
+    # accumulate. #6578.
+    if command -v journalctl >/dev/null 2>&1; then
+      local journal_header
+      journal_header="$(journalctl --header 2>/dev/null || true)"
+      if grep -qF '/var/log/journal' <<<"$journal_header"; then
+        persistent=true
+      fi
     fi
   fi
   # Avail bytes on the root filesystem (the journal lives on `/`, NOT /mnt/data).
