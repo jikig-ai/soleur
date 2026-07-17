@@ -155,3 +155,64 @@ None for this assessment. Follow-ups are documentation (CI Tier 4 row) and optio
 ## Session Errors
 
 None. Prior single-agent answer (session start) was incomplete; this document supersedes it with full leader + research fan-out.
+
+## Operator reframe (2026-07-17, post-leader pass)
+
+**Reframe (operator):** Stop comparing Eve *against* Soleur. Ask whether Soleur should build a **similar production layer inside Soleur** so *Soleur users* ship more securely and reliably — not whether to depend on Eve.
+
+### Interpretation
+
+| Misread | Better read |
+|---------|-------------|
+| “Should Soleur become an agent framework like Eve?” | **No** — wrong category for ICP messaging |
+| “Should Soleur use Eve under the hood?” | **No** (leaders: patterns-only) |
+| “Should Soleur productize Eve-*class* capabilities (durable, sandboxed, HITL, multi-channel, scheduled agents) for tenants?” | **Yes as investment framing** — this is mostly *already the Concierge + CP roadmap*, not a greenfield framework |
+
+### Does a “similar layer” make sense?
+
+**Yes — as finishing Soleur’s production agent *platform* for founders, not as shipping a second npm framework.**
+
+Eve’s product insight is: agents that touch real systems need **production already built in** (isolation, durability, approvals, channels, evals). That insight applies *directly* to Soleur users running company work on `app.soleur.ai`. The research mapping shows Soleur already owns most of that *for itself*; the user-visible gap is **polish + productization of the remaining edges**, not inventing Eve.
+
+### Two layers (do not conflate)
+
+| Layer | Audience | Eve analog | Soleur status |
+|-------|----------|------------|---------------|
+| **L0 — Founder execution runtime** | Soleur tenants | Eve’s “batteries included production” | Concierge + sandbox + HITL + Inngest + BYOK — **invest here** |
+| **L1 — DIY agent framework for builders** | Developers writing custom agents as code | Eve itself | **Do not productize** (wrong ICP; dilutes CaaS; recreates Tier 4) |
+
+**Recommendation:** Build **L0 completeness** (secure shipping *for* Soleur users). Do **not** build L1 (“Soleur Framework” / Eve clone).
+
+### What “more secure shipping for Soleur users” maps to (existing issues)
+
+Roadmap / CI already named the Eve-class gaps as **tenant product work**, not framework R&D:
+
+| Eve production primitive | Soleur tenant investment | Existing tracker |
+|--------------------------|--------------------------|------------------|
+| Human-in-the-loop approvals | Structured approval queue for write/send | [#4672](https://github.com/jikig-ai/soleur/issues/4672) (CP2) |
+| Sandboxed untrusted work | Per-tenant FS isolation + bwrap TOCTOU close | [#5863](https://github.com/jikig-ai/soleur/issues/5863), [#5862](https://github.com/jikig-ai/soleur/issues/5862) |
+| Multi-channel delivery | Business SaaS / inbox breadth | [#4673](https://github.com/jikig-ai/soleur/issues/4673) |
+| Schedules / always-on work | Cross-system business automations | [#4674](https://github.com/jikig-ai/soleur/issues/4674) |
+| Traceable agent runs | Agent work visualization | [#2004](https://github.com/jikig-ai/soleur/issues/2004) |
+| Product packaging of primitives | Multica → Command Center adaptations | [#6006](https://github.com/jikig-ai/soleur/issues/6006) |
+
+**Sequencing already correct on roadmap:** CP1 → CP2 (HITL) before expanding external surfaces (CP4/CP3). Eve validates that order; it does not invent new work.
+
+### What *not* to build (even under this reframe)
+
+- A public “define your agent as a directory and deploy” framework product
+- npm/`eve`-compatible tool registry for third-party agent authors
+- Vercel-shaped multi-platform agent host as Soleur’s identity
+- Replacing multi-harness plugin lifecycle with a generic agent OS
+
+### Updated key decision (D9)
+
+| # | Decision |
+|---|----------|
+| **D9** | Treat Eve as **inspiration for L0 tenant production completeness**, not as competitor or substrate. Investment = accelerate existing CP/sandbox/HITL/channel issues; **not** a new “Soleur Eve” framework layer. |
+
+### Open product questions under the reframe
+
+1. Is the near-term priority **security of Concierge isolation** (#5862/#5863) or **operator UX for approvals** (#4672)?
+2. Should “channels” mean **founder business surfaces** (email/Slack for company work) only, or also **customer-facing bots** the founder deploys?
+3. Do we brand L0 completeness as “production agent platform” internally only, or ever in marketing (CMO: avoid framework language either way)?
