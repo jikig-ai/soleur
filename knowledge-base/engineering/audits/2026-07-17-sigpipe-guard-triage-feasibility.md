@@ -63,6 +63,37 @@ negative arms, including a shim that reports itself as `grep (GNU grep) 3.12` an
 shape an identity check cannot see. Not hypothetical twice over: an independent reviewer sent to audit
 this PR was caught by the same wrapper and measured 0/N before noticing.
 
+### The gate misdiagnosed its own environment — and the fix scopes the whole measurement
+
+The probe shipped, ran in CI, and **refused**: `PIPESTATUS[0]=0 — the producer ran to completion`.
+Its message blamed grep. That was false, and the truth matters more than the bug:
+
+The GitHub Actions runner is Node-spawned; **Node sets SIGPIPE to `SIG_IGN`**, the runner's shell
+inherits it, and POSIX forbids a shell from resetting a signal it inherited as ignored. So a producer
+there receives `EPIPE` instead of dying — with a perfectly good GNU grep. Measured:
+
+| SIGPIPE disposition | producer rc | `if producer \| grep -q M` |
+|---|---|---|
+| default | 141 | **INVERTS** (defect live) |
+| inherited `SIG_IGN` | 0 | **CORRECT** (defect absent) |
+
+Two causes produce the same non-141 and mean **opposite** things — the instrument is blind (grep
+drained), or **the defect cannot occur here at all**. The probe collapsed them into one and named the
+wrong one, confidently, in the script whose subject is confident claims nobody measured. It now
+discriminates via `SigIgn` bit 12 in `/proc/self/status`.
+
+**This scopes every runtime claim in this note.** The inversion is live where these guards actually
+run — prod hosts, systemd units, cron — where SIGPIPE has its default disposition. It is **absent on
+the Actions runner**. So a green CI run is not evidence the class is safe; it is evidence the runner
+cannot express the symptom. The site counts are unaffected either way: they are `git grep` plus text
+normalisation, with no runtime component.
+
+A consequence worth stating plainly: any *runtime* SIGPIPE differential that runs only on the Actions
+runner is measuring an environment where the defect is definitionally absent. The attestation
+therefore restores the default disposition (via `python3 subprocess`, whose `restore_signals=True`
+default is the only portable reset available to a script that cannot untrap its own inherited
+`SIG_IGN`) before exercising its refusal arms.
+
 **No verdict may be taken from a host whose grep does not early-exit.** Run it where CI's grep runs,
 or `env -i PATH=/usr/bin:/bin bash <probe>`.
 

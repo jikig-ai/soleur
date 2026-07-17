@@ -19,6 +19,26 @@ fails=0
 pass() { printf '  ok   %s\n' "$1"; }
 fail() { printf '  FAIL %s\n    -> %s\n' "$1" "${2:-}" >&2; fails=$((fails + 1)); }
 
+
+# Run the probe with SIGPIPE restored to its DEFAULT disposition.
+#
+# Required on CI. The GitHub Actions runner is Node-spawned, Node sets SIGPIPE to
+# SIG_IGN, and the runner's shell inherits it — and POSIX forbids a shell from
+# resetting a signal it inherited as ignored, so `trap - PIPE` CANNOT undo this.
+# Under SIG_IGN the probe correctly reports "the defect cannot occur here" and
+# proceeds, which would make T2/T3 (whose whole subject is the REFUSAL path)
+# fail for an environmental reason rather than a real one.
+#
+# Python's subprocess restores default signal dispositions in the child
+# (restore_signals=True is its default), so this is a portable reset with no new
+# dependency — python3 is present on every runner this repo uses.
+run_probe_sigpipe_default() {
+  python3 - "$@" <<'PYEOF'
+import subprocess, sys
+sys.exit(subprocess.run(sys.argv[1:]).returncode)   # restore_signals=True by default
+PYEOF
+}
+
 echo "== sigpipe-triage-feasibility attestation =="
 
 if [[ ! -f "$PROBE" ]]; then
@@ -31,7 +51,7 @@ fi
 # ---------------------------------------------------------------------------
 # `env -i` strips any interactive shell function shadowing grep. This is the
 # CI-equivalent environment, and the only one a verdict may be taken from.
-t1_out="$(env -i PATH="/usr/bin:/bin" HOME="$HOME" \
+t1_out="$(run_probe_sigpipe_default env -i PATH="/usr/bin:/bin" HOME="$HOME" \
   /bin/bash "$PROBE" --pathspec 'apps/web-platform/infra/' 2>&1)"
 t1_rc=$?
 if [[ "$t1_rc" -eq 0 ]]; then
@@ -79,7 +99,7 @@ exec /usr/bin/grep "$@"
 SHIM
 chmod +x "$shimdir/grep"
 
-t2_out="$(env -i PATH="$shimdir:/usr/bin:/bin" HOME="$HOME" \
+t2_out="$(run_probe_sigpipe_default env -i PATH="$shimdir:/usr/bin:/bin" HOME="$HOME" \
   /bin/bash "$PROBE" --pathspec 'apps/web-platform/infra/' 2>&1)"
 t2_rc=$?
 if [[ "$t2_rc" -ne 0 ]]; then
@@ -129,7 +149,7 @@ exec /usr/bin/grep "$@"
 SHIM
 chmod +x "$shimdir/grep"
 
-t3_out="$(env -i PATH="$shimdir:/usr/bin:/bin" HOME="$HOME" \
+t3_out="$(run_probe_sigpipe_default env -i PATH="$shimdir:/usr/bin:/bin" HOME="$HOME" \
   /bin/bash "$PROBE" --pathspec 'apps/web-platform/infra/' 2>&1)"
 t3_rc=$?
 if [[ "$t3_rc" -ne 0 ]]; then
