@@ -295,24 +295,28 @@ None — no open `code-review`-labeled issue references
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `BETTERSTACK_API_TOKEN_READONLY` exists in Doppler `soleur/prd_terraform`
-      (`doppler secrets get BETTERSTACK_API_TOKEN_READONLY --plain` returns a value).
-- [ ] The Read-scoped token authorizes the reconcile: running
-      `reconcile-live-heartbeats.ts` with it returns rc in {0, 2} (NOT rc=1 auth) — captured
-      in the PR body / work log (Phase 3).
-- [ ] `.github/workflows/scheduled-terraform-drift.yml` reconcile step reads
+- [x] `BETTERSTACK_API_TOKEN_READONLY` exists in Doppler `soleur/prd_terraform`
+      (`doppler secrets get BETTERSTACK_API_TOKEN_READONLY --plain` returns a value; stored len=24).
+- [x] The Read-scoped token authorizes the reconcile: running
+      `reconcile-live-heartbeats.ts` with it returns rc in {0, 2} (NOT rc=1 auth) — got **rc=2**
+      (source-vs-live mismatch, pre-existing; auth SUCCEEDED, `auth-error-lines=0`; direct
+      `GET /api/v2/heartbeats` → 200).
+- [x] `.github/workflows/scheduled-terraform-drift.yml` reconcile step reads
       `doppler secrets get BETTERSTACK_API_TOKEN_READONLY` (grep:
       `grep -c 'doppler secrets get BETTERSTACK_API_TOKEN_READONLY' .github/workflows/scheduled-terraform-drift.yml` == 1).
-- [ ] The workflow still passes `BETTERSTACK_API_TOKEN="$TOKEN"` into the script (env contract
+- [x] The workflow still passes `BETTERSTACK_API_TOKEN="$TOKEN"` into the script (env contract
       unchanged): `grep -c 'BETTERSTACK_API_TOKEN="\$TOKEN"' .github/workflows/scheduled-terraform-drift.yml` == 1.
-- [ ] No read/write `doppler secrets get BETTERSTACK_API_TOKEN ` (trailing space) read remains
+- [x] No read/write `doppler secrets get BETTERSTACK_API_TOKEN ` (trailing space) read remains
       in the reconcile step:
       `awk '/name: Reconcile live heartbeats/,/name: Ensure heartbeat-reconcile-mismatch/' .github/workflows/scheduled-terraform-drift.yml | grep -c 'get BETTERSTACK_API_TOKEN '` == 0.
-- [ ] `BETTERSTACK_API_TOKEN` (read/write) is left untouched in Doppler and still read by
-      `apply-web-platform-infra.yml` (not deleted/rotated).
-- [ ] Existing suite green: `bun test plugins/soleur/test/heartbeat-live-reconcile.test.ts`
-      (unchanged — swap does not touch reconcile logic).
-- [ ] `actionlint .github/workflows/scheduled-terraform-drift.yml` clean.
+- [x] `BETTERSTACK_API_TOKEN` (read/write) is left untouched in Doppler and still read by
+      `apply-web-platform-infra.yml` (not deleted/rotated; len=24 unchanged).
+- [x] Existing suite green: `bun test plugins/soleur/test/heartbeat-live-reconcile.test.ts`
+      (26 pass, 0 fail — swap does not touch reconcile logic). Also the 3 workflow-referencing
+      inngest tests green (37 pass).
+- [x] `actionlint .github/workflows/scheduled-terraform-drift.yml` — the reconcile step is clean;
+      the only SC2086 `info` hits (lines 93, 140) are pre-existing in unrelated steps, untouched
+      by this swap.
 
 ### Post-merge (operator/pipeline)
 - [ ] `gh workflow run scheduled-terraform-drift.yml`; the `heartbeat-live-reconcile` job's
