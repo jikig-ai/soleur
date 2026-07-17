@@ -66,10 +66,10 @@ Or set `GROK_SUBAGENTS=1` for a single session. Without this, `spawn_subagent` i
 ### Spawning domain agents
 
 ```text
-spawn_subagent agent=soleur:engineering:review:security-sentinel prompt="Review the auth changes in PR #123"
+spawn_subagent subagent_type=soleur-engineering-review-security-sentinel prompt="Review the auth changes in PR #123"
 ```
 
-Qualified IDs match Claude's `Task` `subagent_type` names. The harness adapter (`plugins/soleur/lib/harness.ts`) emits the same IDs under Grok.
+Grok matches `subagent_type` to the **`.grok/agents/` filename stem** (colons → hyphens), not Claude's colon-qualified registry id. Prefer `spawnAgent()` / `agentIdToGrokSubagentType()` from `plugins/soleur/lib/harness.ts` so `soleur:engineering:review:security-sentinel` becomes `soleur-engineering-review-security-sentinel`. Passing the colon form is listed in some catalogs but is **rejected** at spawn (Grok ≤0.2.102).
 
 ### Adding or renaming agents
 

@@ -1,5 +1,5 @@
 ---
-name: soleur:engineering:review:code-simplicity-reviewer
+name: soleur-engineering-review-code-simplicity-reviewer
 description: "Use this agent when you need a final review pass to ensure code changes are as simple and minimal as possible. Invoked after implementation to identify simplification opportunities and ensure YAGNI adherence."
 model: inherit
 ---
