@@ -31,13 +31,31 @@ one-shot), so the lane defaulted to `cross-domain` fail-closed.
 > both. **Phase 0 / task 2.0.1 is NOT a blocker** — proceed on **web-1 only** and scope web-2 out
 > (see §Sequencing correction). Never gate on PR-merge status; check `var.web_hosts` directly.
 >
-> **Three PRs, not two:** PR 1 legal-retraction · PR 2 infra · PR 3 legal-flip.
-
-**PR 1 (legal, decoupled) can start immediately. PR 2 (infra) is NOT blocked** (see above).
+> ## ⚖️ OPERATOR DECISION 2026-07-17 — READ BEFORE STARTING ANY TASK
+>
+> The **decouple was DECLINED** (DC-A, DC-B). The "three PRs, not two" split below is **superseded**.
+> **#6588's AC governs: all doc corrections land in ONE PR, after live verification.**
+>
+> **TWO PRs, in this order:**
+>
+> 1. **The infra PR — ⬅ THIS RUN.** §PR 2 tasks only. Gates = plan AC11–AC20. **Zero doc changes:** do
+>    not touch `docs/legal/**`, `knowledge-base/legal/**`, or the Eleventy mirrors.
+> 2. **The coupled legal PR — NOT this run.** §PR 1 + §PR 3 tasks **merged into one PR**, gated on the
+>    `workspaces-luks-cutover` canary passing. It retracts the three permanently-false clauses AND
+>    asserts LUKS **present-tense true** in the same change, then closes DC-1.
+>
+> **Scope of this run** (operator: *"Code + PR only; you drive cutover"*): implement and merge the infra
+> PR. The freeze/cutover runs later as a deliberate `workflow_dispatch`; the legal PR follows it.
 
 ---
 
-## PR 1 — Legal retraction (docs-only, no infra dependency, ship this week)
+## ~~PR 1 — Legal retraction (docs-only, ship this week)~~ → **CANCELLED as a standalone PR**
+
+> **NOT this run — do not implement any task in this section now.** Every task below is re-targeted into
+> the single post-cutover legal PR (merged with §PR 3), gated on the cutover canary. The tasks remain
+> **binding on that PR**, with two amendments from the coupling: task 1.2.4's LUKS clause is asserted
+> **present-tense true** rather than temporally qualified (DC-B declined), and the Art. 30 PA limb (g)
+> states the **then-encrypted** state rather than the plaintext one.
 
 ### 1.1 Enumerate
 
@@ -114,12 +132,19 @@ one-shot), so the lane defaulted to `cross-domain` fail-closed.
 
 ---
 
-## PR 2 — Infra (BLOCKED on PR #6568)
+## PR 2 — Infra ⬅ **THIS RUN's deliverable. NOT BLOCKED** (the #6568 premise is dead — see 2.0.1)
 
 ### 2.0 Phase 0 — gates (no code)
 
-- [ ] 2.0.1 Confirm PR #6568 merged. Re-derive `var.web_hosts` (expect `{web-1}`). Confirm
-      `hcloud_volume.workspaces["web-2"]` destroyed. **If #6568 stalls: STOP and re-price.**
+- [ ] 2.0.1 ~~Confirm PR #6568 merged; expect `var.web_hosts` == `{web-1}`.~~ **PREMISE DEAD — do not
+      gate on this.** #6568 **merged docs-only** and web-2 **survives**; the teardown is #6538, an
+      **open issue with no PR**, so blocking on it blocks on a PR that does not exist. **Corrected
+      gate:** read `var.web_hosts` **directly** (expect `{web-1, web-2}`) and proceed on **web-1 only**.
+      `hcloud_volume.workspaces_luks` is a **singleton for web-1**, *not* `for_each = var.web_hosts`.
+      **web-2's volume is deliberately left plaintext** (slated for destruction under #6538; has never
+      served — `app.soleur.ai` is a hard-pinned singleton to web-1). This is a **knowing, recorded
+      deviation** from the issue's "every `var.web_hosts` member" AC — see AC1a. Never gate on
+      PR-merge status.
 - [ ] 2.0.2 **HIGHEST-VALUE CHECK IN THE PLAN.** Verify the **live** host's actual `/etc/fstab` and
       mount state (read-only, via the sanctioned CI path). The glob finding is a *code-shape* finding.
       **If web-1 rebooted since first boot and `/mnt/data` is unmounted, the data is not where this

@@ -532,18 +532,43 @@ issue with no PR**. Blocking on it would be blocking on a PR that does not exist
       Hetzner API delete.
 - [ ] TF convergence: destroy old → `state rm` → `moved` → rename.
 - [ ] ADR-118 `adopting` → `accepted`.
-- [ ] **PR 2 (legal):** flip the LUKS clause to present tense; amend Art. 30 PA limb (g); **re-pin
-      `apps/web-platform/lib/legal/legal-doc-shas.ts` ×3**.
+- [ ] **The legal PR (single, coupled — operator decision):** now that the volume is live-verified
+      LUKS, land **all four** doc corrections together: retract the three permanently-false clauses
+      (git-data host / cross-host TLS / cross-host membership re-verification) across **all 20 sites**
+      with **per-site anchors**, assert the LUKS clause **present-tense true**, create the Art. 30 PA
+      + Cross-Cutting TOM limb, correct `compliance-posture.md:78`, ship the mutation-tested
+      mirror-hole gate, **re-pin `legal-doc-shas.ts` ×3**, and **close DC-1**. This is AC1–AC10,
+      re-targeted here. Honours the AC's "Only THEN" for the whole clause set.
 
 ---
 
-## The legal track — DECOUPLED (a deviation from the issue's AC)
+## The legal track — COUPLED (the issue's AC governs; operator decision 2026-07-17)
 
-> **The issue's AC requires the doc correction only after live verification, and the three
-> unachievable clauses corrected in the same PR. CLO and CPO both ruled against it, and the CTO's
-> evidence independently supports it. Recorded as a User-Challenge — see Decision Challenges.**
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 
-**Why decouple** — three independent arguments:
+> ## ⚖️ OPERATOR DECISION — SUPERSEDES THIS SECTION'S ORIGINAL DIRECTION
+>
+> The decouple proposed below was **put to the operator and DECLINED** (DC-A, DC-B — both now RESOLVED).
+> **#6588's AC governs as written.** Binding on `/work`:
+>
+> 1. **This run's infra PR carries ZERO doc changes.** No retraction, no temporal qualification, no
+>    `legal-doc-shas.ts` re-pin, no Art. 30 PA. Do not touch `docs/legal/**`,
+>    `knowledge-base/legal/**`, or the Eleventy mirrors in the infra PR.
+> 2. **"PR 1 — docs-only, THIS WEEK" is CANCELLED.** Everything specified under it is **re-targeted**
+>    to the single post-cutover legal PR, which also flips the LUKS clause to present tense.
+> 3. **That PR is gated on the `workspaces-luks-cutover` job's canary passing** (AC "Only THEN"), and
+>    is a follow-up to this run, not part of it.
+> 4. **DC-1 closes when that post-cutover PR merges.**
+> 5. The three permanently-false clauses **stay published** meanwhile — the controller's risk
+>    acceptance, taken a third time on current facts.
+>
+> **Read the checklist below as the post-cutover PR's specification**, merged with Phase 5's LUKS flip
+> into one PR. The corrections of *fact* in it (Art. 12(1) anchor not Art. 13(3); #4455 is not a
+> wording template; per-site anchors because the wording is not uniform; the mirror-hole gate) remain
+> **fully binding** on that PR.
+
+**The arguments that were made and declined** — retained for audit, because a risk acceptance is only
+meaningful if the case against it stays legible:
 
 1. **Legal.** No state of the world makes the three clauses true. Gating their retraction behind a
    migration keeps three falsehoods published **for a reason that does not exist**.
@@ -559,7 +584,11 @@ issue with no PR**. Blocking on it would be blocking on a PR that does not exist
    (*"What if the output is wrong?"*). For a brand whose thesis is *"give us your source code"*, an
    over-claimed encryption control is the worst credibility asset to be caught holding.
 
-### PR 1 — docs-only, THIS WEEK, zero infra dependency *(CPO C1/C2)*
+### ~~PR 1 — docs-only, THIS WEEK~~ → **CANCELLED. Re-targeted to the post-cutover legal PR.**
+
+> **NOT this run.** Operator declined the decouple (DC-A). Every item below is gated on the
+> `workspaces-luks-cutover` canary and ships in ONE PR together with Phase 5's LUKS present-tense flip.
+> `/work` must implement **none** of it in the infra PR. The items remain binding **on that PR**.
 
 - [ ] Retract clauses (a) git-data host, (b) cross-host TLS, (c) cross-host membership re-verification
       across **all 20 sites**. **Per-site edits with per-site anchors** — the wording is **not uniform**
@@ -638,7 +667,15 @@ Neither leader had this alone.
 
 ## Acceptance Criteria
 
-### Pre-merge (PR 1 — legal, decoupled)
+### The legal PR — **NOT this run.** Gated on the cutover canary (operator decision: coupling kept)
+
+> **AC1–AC10 are OUT OF SCOPE for the infra PR this run produces.** They ship in the single
+> post-cutover legal PR, together with Phase 5's LUKS present-tense flip. `/work` must satisfy **none**
+> of them now, and must **not** treat them as unmet gates on the infra PR.
+>
+> Two consequences of the coupling, folded in: **AC2's** clause is asserted **present-tense true**, not
+> temporally qualified (DC-B declined). **AC6's** limb (g) states the **then-encrypted** state, not the
+> plaintext one — that PR lands after the volume is verified LUKS.
 
 - [ ] **AC1** Union-anchor grep returns **zero** occurrences of the three retracted clauses across all 6 files:
       `grep -rcEi "git.data host|dedicated host for per-workspace|re-verified when a session|TLS-encrypted \(in transit\)|encrypted in transit with TLS" docs/legal/{privacy-policy,gdpr-policy,data-protection-disclosure}.md plugins/soleur/docs/pages/legal/{privacy-policy,gdpr-policy,data-protection-disclosure}.md` → `0` for each.
@@ -650,10 +687,10 @@ Neither leader had this alone.
 - [ ] **AC6** Art. 30 register contains a new PA for workspace git-data storage whose limb (g) states the **plaintext** current state + `Ref #6588`; §Cross-Cutting TOMs carries an explicit Hetzner-volume limb.
 - [ ] **AC7** `compliance-posture.md` CAX11 DPA-scope row corrected; #6588 Active Item present.
 - [ ] **AC8** PR body carries the **Tier 1** classification. CLO attestation DISCHARGED at ship Phase 5.5 → `knowledge-base/legal/audits/` (**auto-routed, not a human task** — `2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`).
-- [ ] **AC9** DC-1 closed by PR 1's merge.
+- [ ] **AC9** DC-1 closed by the **post-cutover legal PR's** merge (not by the infra PR, and not by #6588 closing).
 - [ ] **AC10** `Ref #6588` — **not `Closes`** (`type: security-remediation`; the fix executes post-merge, so `Closes` would auto-close before remediation runs).
 
-### Pre-merge (PR 2 — infra)
+### Pre-merge (the infra PR) — ⬅ **THIS RUN's deliverable. AC11–AC20 are the gates `/work` must meet.**
 
 - [ ] **AC11** `ADR-118-*.md` exists with `status: adopting`, a `## Decision`, and a `## Alternatives Considered` table naming blue-green, in-place `reencrypt`, fscrypt, option 3, `soleur-drain.service`, and the snapshot — **with the cx33-stock rationale**.
 - [ ] **AC12** C4: `model.c4` carries the Doppler→web-host boot edge, `views.c4` includes it; `c4-code-syntax.test.ts` + `c4-render.test.ts` green.
@@ -679,7 +716,7 @@ Neither leader had this alone.
 - [ ] **AC27** `curl -sS -o /dev/null -w '%{http_code}' https://app.soleur.ai/api/health` == `200` post-restart; Better Stack monitor `status == "up"`.
 - [ ] **AC28** Downtime measured ≤ **20 min** (workflow-emitted freeze-start/freeze-end timestamps); hard abort at 2h.
 - [ ] **AC29 (G8)** Rollback rehearsal recorded green in Phase 3.
-- [ ] **AC30** 7d soak follow-through enrolled with the `follow-through` label + directive; on soak-pass: `prevent_destroy` released, plaintext volume deleted, TF state converged, ADR-118 → `accepted`, PR 2 (legal present-tense flip + SHA re-pin) opened.
+- [ ] **AC30** 7d soak follow-through enrolled with the `follow-through` label + directive; on soak-pass: `prevent_destroy` released, plaintext volume deleted, TF state converged, ADR-118 → `accepted`, and the **coupled legal PR (AC1–AC10 + present-tense LUKS flip + SHA re-pin)** opened.
 
 **Automation feasibility (§2.10 gate).** Every step routes through the cutover `workflow_dispatch`
 job, `gh` CLI, or an API read. **No human-run command is authored anywhere in this plan.** The one

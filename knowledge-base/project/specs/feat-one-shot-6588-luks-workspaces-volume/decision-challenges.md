@@ -4,8 +4,8 @@ Decisions taken during planning that go against the stated direction in issue #6
 issue did not contemplate. Recorded per ADR-084 so they are auditable outside this session. `ship`
 renders these into the PR body and files them as `action-required` issues.
 
-**Mode: headless (one-shot pipeline).** These were **recorded, not asked**. The stated direction
-remains the default until a human decides otherwise.
+**Mode: interactive.** DC-A and DC-B were **asked and answered by the operator on 2026-07-17**; their
+resolutions are recorded in-place below. DC-C remains an in-plan resolution recorded for audit.
 
 ---
 
@@ -13,7 +13,26 @@ remains the default until a human decides otherwise.
 
 **Date:** 2026-07-17
 **Classification:** User-Challenge (contradicts the issue's stated Acceptance Criteria)
-**Status:** OPEN — surfaced for decision
+**Status:** RESOLVED 2026-07-17 — **operator DECLINED the decouple. The coupling stands.**
+
+### ⚖️ Operator decision (2026-07-17, interactive)
+
+**"Keep the coupling — one PR after migration."** The challenge below was put to the operator with the
+CLO/CPO/CTO arguments in hand and was **declined**. #6588's AC governs as written:
+
+- **All four** doc corrections — the three permanent retractions **and** the LUKS-clause flip — land in
+  a **single PR**, gated on **live verification** of the encrypted volume. The "Only THEN" is honoured
+  for the whole clause set, not just the LUKS limb.
+- The two-PR split described below (**PR 1 docs-only this week**) is **cancelled**. Its contents fold
+  into the post-cutover legal PR.
+- **DC-1 closes when that post-cutover PR merges**, not before.
+- The three permanently-false clauses **stay published** for the duration of the migration. This is the
+  controller's risk acceptance, taken for the third time with the Art. 5(2)/Art. 34(3)(a) scienter
+  argument (DC-B) explicitly in hand.
+
+**Consequence for the implementation plan:** the infra PR produced by this run carries **zero doc
+changes**. `## The legal track` below is retained **as the specification of the post-cutover PR's
+contents** — not as a separate near-term PR.
 
 ### The stated direction
 
@@ -74,7 +93,32 @@ Agreement to amend #6588's AC to drop the coupling, or a decision to keep it.
 
 **Date:** 2026-07-17
 **Classification:** User-Challenge (re-opens a recorded risk acceptance)
-**Status:** OPEN — surfaced for decision
+**Status:** RESOLVED 2026-07-17 — **operator DECLINED for the third time. The claim stays published as-is.**
+
+### ⚖️ Operator decision (2026-07-17, interactive)
+
+**Asked on the changed facts and declined.** The LUKS clause is **not** temporally qualified now; it
+stays published unqualified until the migration lands and is live-verified, at which point it becomes
+true in the same PR that retracts the other three (see DC-A).
+
+**What this means, stated plainly so the record is honest:** the re-raise premise in DC-1 was a
+*bounded* window, and the facts below establish the window is **not** bounded by 2026-07-23 — the
+freeze mechanism does not exist and cx33 is unorderable in all three EU DCs. The operator has taken
+this risk acceptance **with that unboundedness known**, and with the CLO's Art. 5(2) scienter and
+Art. 34(3)(a) notification-exemption arguments in hand. This is the controller's call to make; the
+exposure is theirs and it is now made on current, not stale, facts. **DC-1's 2026-07-23 trigger is
+superseded by this decision** — it should not re-fire as if undecided.
+
+**Still binding regardless of this decision** (they are corrections of fact, not of direction, and
+carry into the post-cutover legal PR):
+
+- The temporal-qualification anchor is **Art. 12(1) + Art. 5(1)(a)**, not Art. 13(3) (13(3) governs
+  further processing for a new purpose).
+- **PR #4455 is not a wording template** — it is *"feat(legal): PR-1 Flagsmith sub-processor
+  disclosure"* and the wording DC-1 quotes is not in it. The mechanism is reusable; the wording must be
+  authored fresh.
+- The Art. 32 framing is **weak**; the **transparency** exposure (Art. 5(1)(a) + 12(1) + 13(1)(f)) is
+  the strong one. The post-cutover PR's prose should be reasoned on that basis.
 
 ### The stated direction
 
