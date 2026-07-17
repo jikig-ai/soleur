@@ -54,10 +54,10 @@ Derived from the finalized (post-plan-review) plan. Phase order is load-bearing 
 - [x] 5.9 Record preserve-branch precondition (no in-place re-bootstrap before first force-replace).
 
 ## Phase 6 — #6551 investigation write-up (+ gated instrument)
-- [ ] 6.1 PR body + issue #6551 update: measured probe findings (1&2 resolved, 3 infeasible), leave OPEN, `Ref #6551`.
-- [ ] 6.2 (RECOMMENDED, gated on CPO/deepen) `cat-deploy-state.sh` — add read-only `vector_config_*` Source-section hash (NOT whole-file; precedent seccomp_profile_host_sha256:314-334), with documented comparison procedure.
+- [x] 6.1 PR body + issue #6551 update: measured probe findings (1&2 resolved, 3 infeasible), leave OPEN, `Ref #6551`.
+- [x] 6.2 DROPPED (operator: investigation-only, no code change; recorded in decision-challenges T2) — `cat-deploy-state.sh` — add read-only `vector_config_*` Source-section hash (NOT whole-file; precedent seccomp_profile_host_sha256:314-334), with documented comparison procedure.
 
 ## Phase 7 — Verify + ship prep
-- [ ] 7.1 `cd apps/web-platform && ./node_modules/.bin/vitest run` (relevant suites) — verify exact runner via `package.json`.
-- [ ] 7.2 Run the infra `*.test.sh` shell suites (flip-guard, inngest, vector-pii-scrub, cloud-init-inngest-bootstrap, cutover-inngest-workflow).
-- [ ] 7.3 PR body: `Closes #6552/#6553/#6555/#6556`, `Ref #6551`, inngest-base-url-repoint unblocked note. Ship renders `decision-challenges.md` → `action-required` issue.
+- [x] 7.1 `cd apps/web-platform && ./node_modules/.bin/vitest run` (relevant suites) — verify exact runner via `package.json`.
+- [x] 7.2 Run the infra `*.test.sh` shell suites (flip-guard, inngest, vector-pii-scrub, cloud-init-inngest-bootstrap, cutover-inngest-workflow).
+- [x] 7.3 PR body: `Closes #6552/#6553/#6555/#6556`, `Ref #6551`, inngest-base-url-repoint unblocked note. Ship renders `decision-challenges.md` → `action-required` issue.
