@@ -99,6 +99,46 @@ def web2_allow: [
   "hcloud_volume_attachment.workspaces[\"web-2\"]"
 ];
 
+# web-2 RETIRE allow-set (#6538). FIVE addresses. This is NOT web2_allow + extras
+# — the two sets are OPPOSITES on the data volume, and copy-pasting either into
+# the other's gate silently grades a plan against the wrong contract:
+#   web2_allow (recreate): hcloud_volume.workspaces["web-2"] DELIBERATELY ABSENT
+#                          — the data volume must SURVIVE the replace.
+#   web2_retire_allow    : hcloud_volume.workspaces["web-2"] REQUIRED — destroying
+#                          the data volume IS the retirement. Leaving it behind is
+#                          the stranding hazard (20 GB billing, nothing attached).
+# hcloud_firewall_attachment.web is the measured "1 to change": the attachment
+# UPDATES to drop web-2 from server_ids. It must never DELETE (that strips web-1's
+# firewall) — see retire_firewall_attachment_deletes.
+#
+# proxy-TLS is DELIBERATELY ABSENT (ADR-118 premise falsified, measured 2026-07-17).
+# tls_private_key.proxy_server / tls_self_signed_cert.proxy_server /
+# doppler_secret.proxy_tls_{cert,key} are absent from BOTH state and Doppler prd —
+# `proxy-tls.tf` is "contract before consumer" config that was never applied — so
+# they plan as CREATE, not the replace/update ADR-118 assumed. Excluding them means
+# any attempt to birth them inside a host retirement trips
+# web2_retire_out_of_scope_changes and ABORTS. Do NOT add them here or to B6.2's
+# -target list: targeting doppler_secret.proxy_tls_cert without
+# doppler_secret.proxy_tls_key writes a cert to prd with NO matching key.
+def web2_retire_allow: [
+  "hcloud_server.web[\"web-2\"]",
+  "hcloud_server_network.web[\"web-2\"]",
+  "hcloud_volume_attachment.workspaces[\"web-2\"]",
+  "hcloud_volume.workspaces[\"web-2\"]",
+  "hcloud_firewall_attachment.web"
+];
+
+# Count DESTROY actions at one exact address. Address-pinned by design: a bare
+# `hcloud_volume.*` count would let WEB-1's volume satisfy the web-2 volume
+# counter (T45). "forget" is deliberately NOT counted — a Terraform 1.7+
+# `removed{}` state-drop leaves the real volume alive and billing while dropping
+# it from state, which is the stranding hazard wearing a different hat (T49).
+def destroyed_at($addr):
+  [ .resource_changes[]?
+    | select(.address == $addr)
+    | select(.change.actions? | index("delete")) ]
+  | length;
+
 {
   resource_deletes: ([.resource_changes[]? | select(.change.actions? | index("delete"))] | length),
   nested_deletes: (
@@ -266,6 +306,45 @@ def web2_allow: [
     [ .resource_changes[]?
       | select(.type == "hcloud_server" or .type == "hcloud_volume")
       | select(.change.actions? | index("create")) ]
+    | length
+  ),
+
+  # --- web-2 RETIRE counters (#6538) -------------------------------------
+  # Read ONLY by web2_retire_gate (tests/scripts/lib/web2-retire-gate.sh) against
+  # the B6.2 operator-local 5-target plan. BACKWARD-COMPAT: additive keys; the
+  # apply / warm_standby / manual-rerun / web-2-recreate consumers are unchanged.
+  #
+  # Same exact-equality membership (IN(...)) as web2_out_of_scope_changes — NOT
+  # `inside`/array-`contains`, which do SUBSTRING matching and would false-match
+  # a bare `hcloud_server.web`. "forget" IS counted here: a `removed{}` state-drop
+  # on any out-of-set address is an out-of-scope change.
+  web2_retire_out_of_scope_changes: (
+    [ .resource_changes[]?
+      | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
+      | select(IN(.address; web2_retire_allow[]) | not) ]
+    | length
+  ),
+  # Four NAMED per-address destroy counters, not a bare `length == 4` — the gate
+  # must know WHICH resources are going, not how many (T42/T45).
+  web2_server_destroyed:             destroyed_at("hcloud_server.web[\"web-2\"]"),
+  web2_server_network_destroyed:     destroyed_at("hcloud_server_network.web[\"web-2\"]"),
+  web2_volume_attachment_destroyed:  destroyed_at("hcloud_volume_attachment.workspaces[\"web-2\"]"),
+  web2_volume_destroyed:             destroyed_at("hcloud_volume.workspaces[\"web-2\"]"),
+  # The firewall attachment must UPDATE (drop web-2 from server_ids), never DELETE
+  # (that strips web-1's firewall). Split into two counters rather than one
+  # `_ok` boolean so the gate can require deletes==0 STRICTLY while keeping
+  # updates retry-tolerant (<=1): on a retry the attachment may already be
+  # updated, yielding 0 — which must not fail closed.
+  retire_firewall_attachment_updates: (
+    [ .resource_changes[]?
+      | select(.address == "hcloud_firewall_attachment.web")
+      | select(.change.actions == ["update"]) ]
+    | length
+  ),
+  retire_firewall_attachment_deletes: (
+    [ .resource_changes[]?
+      | select(.address == "hcloud_firewall_attachment.web")
+      | select(.change.actions? | index("delete")) ]
     | length
   )
 }
