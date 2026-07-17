@@ -430,7 +430,7 @@ model {
   // source 2457081 over the ClickHouse SQL API; previously an un-modelled load-bearing edge.
   // #6415 — the same alarm now ALSO polls SOLEUR_PRIVATE_NIC and carries an independent NIC
   // verdict (not folded into its exit code, so a NIC fire is never mis-reported as a probe fault).
-  github -> betterstack "Polls the SOLEUR_ZOT_DISK + SOLEUR_PRIVATE_NIC Logs sources (ClickHouse SQL via betterstack-query.sh) for the zot restart-loop recurrence alarm, the private-NIC convergence alarm (#6415), and follow-through soak probes" { technology "HTTPS (ClickHouse SQL, eu-fsn-3)" }
+  github -> betterstack "Polls the SOLEUR_ZOT_DISK + SOLEUR_PRIVATE_NIC Logs sources (ClickHouse SQL via betterstack-query.sh) for the zot restart-loop recurrence alarm, the private-NIC convergence alarm (#6415), and follow-through soak probes. ALSO reads the heartbeats API read-only (GET /api/v2/heartbeats) from the scheduled-terraform-drift.yml heartbeat-live-reconcile job (#6549 item 2): it reconciles the LIVE paused/existence of each monitored heartbeat against the executable MANIFEST (heartbeat-manifest.ts) and flags fed-but-paused (the #6537 shape) or non-count-gated-absent-live (the #6548 git-data shape) — the live-state layer ADR-117's static guard cannot see. Distinct surface from the Logs poll above" { technology "HTTPS (ClickHouse SQL Logs + Uptime heartbeats API, eu-fsn-3)" }
 
   // ---- Sentry — the LARGER of two alerting planes (#6436, ADR-031) --------
   // Three emitters + a paging exit. It is NOT the only exit: `betterstack` pages
