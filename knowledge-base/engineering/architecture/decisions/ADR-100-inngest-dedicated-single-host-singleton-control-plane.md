@@ -186,9 +186,23 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
      `unset` no-ops make a benign 30s poll on the dark/live host safe.
    - **An `inngest-server.service` `ExecStartPre` arm-atomicity guard** (`inngest-server-flip-guard.sh`,
      P1-5) refuses to start (exit non-zero, blocking start) when `INNGEST_POSTGRES_URI` resolves to
-     **prod** and the flag ∉ `{armed, flipping, done}` — closing the race where the prod URI is
+     **prod** and the flag ∉ `{armed, flipping, flushed, done}` — closing the race where the prod URI is
      written before the gated flip and any non-arm restart (crash / `OnBootSec` / operator) would
      otherwise bring up a **second prod scheduler** against the still-dirty dark Redis.
+     **`flushed` is in the allowlist (amended 2026-07-17, Ref #6553):** the forward path sets the flag
+     to `flushed` **before** it invokes `start_server` (`:163,:172` above; `inngest-cutover-flip.sh:188→189`),
+     and the `flushed`-RESUME arm (`inngest-cutover-flip.sh:240`) also calls `start_server` while the
+     flag is `flushed`. Because `DBSIZE==0` is asserted **before** `flushed` is ever written
+     (`inngest-cutover-flip.sh:178`), a start at `flushed` cannot double-fire against a dirty dark Redis
+     — so the guard MUST allow it. Omitting `flushed` (the pre-#6553 allowlist) made the guard block the
+     FSM's **own** controlled start, not merely an unplanned restart. This is a correction of an
+     ADR-vs-code inconsistency: the omitted state is the very state the FSM starts the server at.
+   - **Guard/FSM lockstep — class invariant (added 2026-07-17, Ref #6553):** the guard allowlist MUST
+     be a **superset** of the set of FSM states in which the cutover-flip oneshot invokes `start_server`.
+     Adding a new FSM state that precedes a `start_server` call without adding it to the guard allowlist
+     re-introduces the self-block above. This is enforced mechanically by a source-derived drift guard in
+     `inngest-server-flip-guard.test.sh` (derives both sets from source and FAILS on divergence), not just
+     by the point-in-time string assertions.
    - **Flip-state is read no-SSH via Better Stack** (P0-2): the oneshot emits its verify-state as a
      `logger -t inngest-cutover-flip` JSON line, carried off-box by the already-shipped on-host
      Vector → Better Stack Logs journald shipper (source `soleur-inngest-vector-prd`, #6197). The

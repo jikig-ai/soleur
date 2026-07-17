@@ -556,7 +556,7 @@ left unhealthy for several days is auto-muted, then disabled (the "we'll
 automatically mute or disable them in a few days" warning email). A **disabled**
 monitor ignores even a recovery `?status=ok` check-in until it is re-enabled, so
 restoring credit does NOT by itself clear the alert. This is NOT a Terraform
-change — the `jianyuan/sentry` provider (0.15.0-beta2) exposes no mute/status
+change — the `jianyuan/sentry` provider exposes no mute/status
 attribute — so check and un-mute/re-enable via the Sentry REST API. This flow
 needs a WRITE-capable token: use the IaC token `SENTRY_IAC_AUTH_TOKEN`
 (`project:admin` / `alerts:write`) in Doppler `soleur/prd_terraform` — NOT the

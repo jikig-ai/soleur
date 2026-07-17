@@ -49,8 +49,9 @@
 #
 # COMPENSATING CONTROL FOR BETA-PROVIDER DRIFT: this guard keys on resource TYPE,
 # not on live nested-block shape. `sentry_uptime_monitor` is a beta resource
-# (v0.15.0-beta2); a future provider bump could graduate it and add a real
-# array-of-blocks attribute, which a type allow-list would NOT catch on its own.
+# (pinned v0.15.4 as of #6636; the beta2 → 0.15.4 bump planned no-op with no
+# array-of-blocks reshape). A future provider bump could still graduate it and add
+# a real array-of-blocks attribute, which a type allow-list would NOT catch on its own.
 # The compensating control is the mandatory schema re-validation on every
 # `terraform init -upgrade`, recorded in the uptime-monitors.tf BETA STATUS
 # comment — re-confirm `block_types: []` there and extend the jq filter if that

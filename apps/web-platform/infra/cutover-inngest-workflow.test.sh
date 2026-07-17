@@ -402,7 +402,26 @@ assert "rollback withholds web re-enable on an unconfirmed rolled-back (no doubl
 assert "rollback never re-writes POSTGRES_URI/HEARTBEAT (reverse writes ONLY the flip value)" "! grep -qE 'secrets set INNGEST_(POSTGRES_URI|HEARTBEAT_URL)' '$ROLLBACK_FILE'"
 assert "op=arm is FORWARD-ONLY: the arm block never writes the reverse flip 'rollback'" "! grep -qE \"printf '%s' 'rollback'\" '$ARM_FILE'"
 
-rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE"
+# #6552 — op=rollback DELETES the armed INNGEST_HEARTBEAT_URL (inverse of op=arm G4, :760) so a
+# rolled-back dark host stops being a SECOND pusher on the shared Better Stack heartbeat monitor.
+# The delete MUST be UNCONDITIONAL: op=arm writes the URL BEFORE the FSM runs, so it persists in
+# aborted / partial-arm / re-dispatch states that the forward-state inner case arm skips. This suite
+# is static, so "runs on an aborted-state rollback" is proven structurally: the delete lives in the
+# Half-B tail (after the inner Half-A esac) and NOT inside the armed|flipping|flushed|done) arm.
+FWD_ARM_FILE="$(mktemp)"
+awk '/^[[:space:]]+armed\|flipping\|flushed\|done\)$/,/^[[:space:]]+;;$/' "$WF" > "$FWD_ARM_FILE"
+FWD_ARM_N=$(wc -l < "$FWD_ARM_FILE" | tr -d '[:space:]')
+TAIL_FILE="$(mktemp)"
+awk '/^[[:space:]]*esac$/,0' "$ROLLBACK_FILE" > "$TAIL_FILE"
+TAIL_N=$(wc -l < "$TAIL_FILE" | tr -d '[:space:]')
+assert "#6552 rollback DELETEs INNGEST_HEARTBEAT_URL from soleur-inngest/prd (inverse of arm G4)" "grep -qE 'doppler secrets delete INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd' '$ROLLBACK_FILE'"
+assert "#6552 delete is value-silent (--yes + stdout redirected)" "grep -qE 'doppler secrets delete INNGEST_HEARTBEAT_URL.*--yes.*>/dev/null' '$ROLLBACK_FILE'"
+assert "#6552 forward-state inner arm extraction is non-vacuous (F6)" "[[ '$FWD_ARM_N' -gt 3 ]]"
+assert "#6552 delete is UNCONDITIONAL — NOT nested in the armed|flipping|flushed|done) case arm" "! grep -qE 'doppler secrets delete INNGEST_HEARTBEAT_URL' '$FWD_ARM_FILE'"
+assert "#6552 after-inner-esac tail is non-vacuous" "[[ '$TAIL_N' -gt 3 ]]"
+assert "#6552 delete runs in the unconditional Half-B tail (after inner esac) — reached for aborted/unset/re-dispatch" "grep -qE 'doppler secrets delete INNGEST_HEARTBEAT_URL' '$TAIL_FILE'"
+
+rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

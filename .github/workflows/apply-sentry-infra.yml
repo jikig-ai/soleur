@@ -504,8 +504,8 @@ jobs:
         # `-lockfile=readonly` refuses to download a provider whose
         # checksum is not already in `.terraform.lock.hcl`. Combined with
         # the committed lockfile, this defends against a malicious
-        # republish of the pinned beta provider version (beta tags are
-        # mutable on the Terraform registry by policy).
+        # republish of the pinned provider version (the committed
+        # per-platform checksums must match the registry download).
         run: terraform init -input=false -lockfile=readonly
 
       - name: Sentry audit-gate (4-gate destination-controllability)

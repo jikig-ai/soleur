@@ -1,0 +1,30 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "hcloud_volume.workspaces[\"web-2\"]",
+      "type": "hcloud_volume",
+      "name": "workspaces",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {},
+        "after": null
+      }
+    },
+    {
+      "address": "hcloud_firewall_attachment.web",
+      "type": "hcloud_firewall_attachment",
+      "name": "web",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {},
+        "after": {}
+      }
+    }
+  ]
+}

@@ -1039,6 +1039,24 @@ resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan" {
   timezone                = "UTC"
 }
 
+# #6549 item 2 — liveness for the source-vs-live Better Stack heartbeat reconcile job
+# (scheduled-terraform-drift.yml → heartbeat-live-reconcile). A GHA-workflow-fired
+# heartbeat (no Inngest counterpart); slug mirrors the workflow's `sentry-heartbeat`
+# check-in, so sentry-monitor-iac-parity.test.ts's code→IaC GHA-slug guard is satisfied.
+# checkin_margin_minutes=60 tracks the Inngest-dispatch cadence (≤2-3 min jitter), NOT
+# raw GHA `schedule:` drift — mirrors scheduled_terraform_drift, the same dispatch.
+resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-heartbeat-reconcile"
+  schedule                = { crontab = "0 6,18 * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # #6031 (ADR-088) — the scheduled-ghcr-token-minter monitor was REMOVED: the minter
 # cron is disabled (ADR-088 arm-b — App installation tokens cannot pull the private
 # repo-linked GHCR packages; pending GitHub-support confirmation). The handler
