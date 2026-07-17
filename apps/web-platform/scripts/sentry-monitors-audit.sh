@@ -19,6 +19,7 @@
 #   SENTRY_API_HOST           — bypass region probe; force this host
 #   SENTRY_FIXTURE_MONITORS   — file path; serve as monitors GET response
 #   SENTRY_FIXTURE_RULES      — file path; serve as project rules response
+#   SENTRY_TF_DIR             — read Class D `.tf` declarations from here
 #   AUDIT_OUT_DIR             — write report here instead of repo legal dir
 #
 # Dual-path output by caller (plan OQ1; PR #3811 review P1-H):
@@ -386,6 +387,94 @@ done < <(jq -r '
   ) | .id | tostring
 ' <<<"$rules_json")
 
+# --- Class D: live monitor with no declaring .tf resource block -----------
+# The live→IaC direction (A/B/C all run IaC→live or live→live). Since #6589
+# deleted the `-target=` allow-list from apply-sentry-infra.yml, the plan runs
+# against the FULL ROOT — so an undeclared live monitor is no longer a
+# harmless bookkeeping gap: it is spend Terraform will never reclaim, because
+# only a resource that once existed in the config can be destroyed by removing
+# it. Live monitors grew 8 → 49 in two months and never decreased while
+# deletion was a silent no-op; each undeclared monitor bills $0.78/mo forever.
+#
+# Slug↔declaration relation: Sentry derives the monitor slug by slugifying the
+# resource's `name`. Every `sentry_cron_monitor` in this root already sets a
+# kebab-case `name`, so slugification is the identity and `name` == live slug
+# — verified against the live org: 49 `resource "sentry_cron_monitor"` blocks,
+# 49 `name =` attributes, 49 live monitors, exact set match.
+CRON_MONITOR_MONTHLY_USD="0.78"
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+tf_dir="${SENTRY_TF_DIR:-${script_dir}/../infra/sentry}"
+
+# TR3: liveness comes from `environments[].lastCheckIn`, NOT a top-level
+# `.lastCheckIn`. The list endpoint has NO top-level lastCheckIn field, so
+# `.[].lastCheckIn` reads `null` for every monitor and reports the whole org
+# as never-checked-in (the 2026-07-17 research agent hit exactly this: it
+# claimed 50 never-checked-in; the true count was 2). A monitor carries one
+# entry per environment, each with its own check-in, so the newest across
+# environments is the monitor's liveness. `max` over the empty array yields
+# null → the `never` sentinel; an empty field would make the marker below
+# unparseable for any consumer splitting on `=`.
+monitor_last_checkin() {
+  jq -r --arg s "$1" '
+    [ .[] | select(.slug == $s) | .environments[]?.lastCheckIn // empty ] | max // "never"
+  ' <<<"$monitors_json"
+}
+
+monitor_created() {
+  jq -r --arg s "$1" '
+    [ .[] | select(.slug == $s) | .dateCreated // empty ] | first // "unknown"
+  ' <<<"$monitors_json"
+}
+
+orphan_live_monitors=()  # Class D
+# Class D compares two halves — the live monitor list and the .tf root that
+# declares it. A synthetic monitor list judged against the REAL tf root makes
+# every fixture slug "undeclared" by construction: noise, not a finding. So the
+# comparison runs only when both halves agree on their source. Same skip
+# predicate the 4-gate block above uses, and it cannot fail open in production:
+# SENTRY_FIXTURE_MONITORS is test-injection only (see the header), so with it
+# unset the gate always runs; a fixture run that supplies SENTRY_TF_DIR pairs
+# coherently and gets the full gate.
+if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
+  if [[ ! -d "$tf_dir" ]]; then
+    echo "ERROR: Sentry Terraform root not found at ${tf_dir} — cannot prove any live monitor is declared, and flagging all of them as Class D would be a false positive. Refs #6589." >&2
+    exit 1
+  fi
+
+  # Anchor on the declaration construct, NOT a bare slug grep. These .tf files
+  # name monitor slugs in prose comments (e.g. the CLAUDE-EVAL COHORT block
+  # lists 12 of them), so `grep -F "$slug" *.tf` matches a comment and silently
+  # suppresses a real orphan. Scoping to the `sentry_cron_monitor` block header
+  # also keeps `name =` from a sibling `sentry_issue_alert` / `sentry_uptime_
+  # monitor` block (both carry kebab-case names in this same root) from being
+  # read as a cron declaration. `in_block` clears on the first `name =` so a
+  # nested block's attribute cannot leak in either.
+  declared_slugs=$(awk '
+    /^resource[[:space:]]+"sentry_cron_monitor"[[:space:]]/ { in_block=1; next }
+    in_block && /^[[:space:]]*name[[:space:]]*=[[:space:]]*"/ {
+      if (match($0, /"[^"]*"/)) { print substr($0, RSTART+1, RLENGTH-2); in_block=0 }
+    }
+    in_block && /^}/ { in_block=0 }
+  ' "$tf_dir"/*.tf | sort -u)
+
+  # Zero declarations parsed against a non-empty live org means the anchor broke
+  # (e.g. a reformat moved `resource` off column 0), not that every monitor is
+  # orphaned. Erroring here is still fail-closed, but it names the real defect
+  # instead of flooding the operator with 49 bogus orphans.
+  if [[ -z "$declared_slugs" && "$(jq 'length' <<<"$monitors_json")" != "0" ]]; then
+    echo "ERROR: no sentry_cron_monitor declarations parsed from ${tf_dir}/*.tf while the API returned live monitors — Class D extraction is broken; refusing to report every live monitor as an orphan. Refs #6589." >&2
+    exit 1
+  fi
+
+  while IFS= read -r slug; do
+    [[ -z "$slug" ]] && continue
+    if ! printf '%s\n' "$declared_slugs" | grep -qFx -- "$slug"; then
+      orphan_live_monitors+=("$slug")
+    fi
+  done <<<"$monitor_slugs"
+fi
+
 # --- Resolve report path --------------------------------------------------
 # AUDIT_DATE_OVERRIDE is honored by the test suite to defeat the midnight
 # UTC race in T4 idempotency (3 invocations crossing the date boundary
@@ -431,9 +520,9 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
   fi
 
   printf '## Orphans\n\n'
-  total_orphans=$(( ${#orphan_monitors[@]} + ${#orphan_alerts[@]} + ${#empty_action_rule_ids[@]} ))
+  total_orphans=$(( ${#orphan_monitors[@]} + ${#orphan_alerts[@]} + ${#empty_action_rule_ids[@]} + ${#orphan_live_monitors[@]} ))
   if (( total_orphans == 0 )); then
-    printf 'No orphans detected. All three classes (A: monitor without alert; B: alert referencing missing monitor; C: alert with empty actions[]) are clean.\n\n'
+    printf 'No orphans detected. All four classes (A: monitor without alert; B: alert referencing missing monitor; C: alert with empty actions[]; D: live monitor with no .tf declaration) are clean.\n\n'
   fi
 
   if (( ${#orphan_alerts[@]} > 0 )); then
@@ -460,6 +549,21 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
     printf '\n**Remediation runbook:** plan §2.1.5 — delete monitor or pair with new alert.\n\n'
   fi
 
+  if (( ${#orphan_live_monitors[@]} > 0 )); then
+    printf '_Class D (live monitor with no declaring `.tf` resource block):_\n\n'
+    printf '| slug | created | last check-in | cost/mo (USD) |\n'
+    printf '|---|---|---|---|\n'
+    for slug in "${orphan_live_monitors[@]}"; do
+      printf '| `%s` | %s | %s | %s |\n' \
+        "$slug" "$(monitor_created "$slug")" "$(monitor_last_checkin "$slug")" "$CRON_MONITOR_MONTHLY_USD"
+    done
+    printf '\n**Monthly spend on undeclared monitors:** $%s (%d × $%s).\n\n' \
+      "$(printf '%s %s' "${#orphan_live_monitors[@]}" "$CRON_MONITOR_MONTHLY_USD" | awk '{printf "%.2f", $1 * $2}')" \
+      "${#orphan_live_monitors[@]}" "$CRON_MONITOR_MONTHLY_USD"
+    printf '**Remediation:** these monitors exist only in Sentry. Terraform cannot destroy a resource it never declared, so `terraform apply` will NOT reclaim them. Either add a `sentry_cron_monitor` block to `%s` (adopt via `terraform import`) or delete the monitor via the Sentry API. Refs #6589.\n\n' \
+      "apps/web-platform/infra/sentry/cron-monitors.tf"
+  fi
+
   printf '## DPA evidence\n\n'
   printf 'Vendor DPA: https://sentry.io/legal/dpa/\n'
   printf 'Article 30 register entry: knowledge-base/legal/article-30-register.md (PA8).\n\n'
@@ -474,3 +578,29 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
 } > "$out_file"
 
 echo "[ok] Wrote audit report: $out_file"
+
+# --- Class D gate ---------------------------------------------------------
+# Deliberately NOT the A/B/C posture. Those classes only `printf` into the
+# report and let the script exit 0 — that is correct for them (they describe
+# routing gaps an operator triages), and changing it would break the callers
+# that treat a non-zero audit as a hard stop. Class D is different: it is
+# unreclaimable recurring spend, and a detector that only writes a line into
+# a report nobody opens is wired to nothing. It must exit non-zero.
+#
+# Placed last, after the report is written and the markers are emitted, so
+# the operator gets the full list — a bare failure with no slugs is not
+# actionable. Nothing runs after this point, so the gate cannot be skipped.
+#
+# Callers: apply-sentry-infra.yml runs this under `set -euo pipefail` BEFORE
+# `terraform plan`, so a Class D orphan halts the apply before any state
+# mutation; sentry-audit-gate.yml fails the required check on Sentry-touching
+# PRs. reusable-release.yml wraps the call in `set +e` and downgrades any
+# non-zero to a `::warning::`, so releases stay unblocked.
+if (( ${#orphan_live_monitors[@]} > 0 )); then
+  for slug in "${orphan_live_monitors[@]}"; do
+    printf 'SOLEUR_SENTRY_CLASS_D_ORPHAN: slug=%s created=%s last_checkin=%s cost_usd=%s\n' \
+      "$slug" "$(monitor_created "$slug")" "$(monitor_last_checkin "$slug")" "$CRON_MONITOR_MONTHLY_USD"
+  done
+  echo "ERROR: ${#orphan_live_monitors[@]} live Sentry monitor(s) have no declaring resource block in ${tf_dir}/*.tf (Class D). Terraform will never reclaim them — each bills \$${CRON_MONITOR_MONTHLY_USD}/mo. See the Class D table in ${out_file}. Refs #6589." >&2
+  exit 1
+fi

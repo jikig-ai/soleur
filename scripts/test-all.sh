@@ -209,6 +209,12 @@ if want_scripts; then
   run_suite "tests/scripts/sentry-destroy-gate-verdict" bash tests/scripts/test-sentry-destroy-gate-verdict.sh
   run_suite "tests/scripts/sentry-squash-ack-detect" bash tests/scripts/test-sentry-squash-ack-detect.sh
   run_suite "tests/scripts/sentry-create-gate" bash tests/scripts/test-sentry-create-gate.sh
+  # Class D (live monitor with no .tf block) is the delete path's other half: the
+  # full-root apply can only reclaim a monitor the config once declared. Its whole
+  # value is the non-zero exit — registered here because nothing auto-discovers
+  # tests/scripts/, and an unregistered suite would leave the gate's fail-closed
+  # claim asserted nowhere.
+  run_suite "tests/scripts/sentry-monitors-audit-class-d" bash tests/scripts/test-sentry-monitors-audit-class-d.sh
   # md->Slack-mrkdwn converter (scripts/md-to-mrkdwn.mjs). Runs under stock
   # ubuntu-latest node (no setup-node — same bare-`node` precedent as
   # secret-scan.yml). node --test ships in Node >=18.
