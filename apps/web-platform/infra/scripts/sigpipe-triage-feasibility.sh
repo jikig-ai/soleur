@@ -108,8 +108,63 @@ normalise_keep_strings() {
   | sed -E ':b;/\|[[:space:]]*$/{N;s/\|[[:space:]]*\n[[:space:]]*/| /;bb}'
 }
 
+# A heredoc body is prose in a .sh (a usage block, a fixture) but it is the
+# PAYLOAD in a cloud-init .yml (`runcmd`, `write_files`) or a Terraform .tf
+# (`remote-exec inline`, `templatefile`) — that text is what executes on the
+# host. Stripping it there discards LIVE CODE as commentary. Measured cost of
+# getting this wrong: cloud-init-registry.yml (6 raw), server.tf (2) and
+# soleur-host-bootstrap.sh (1) all scored ZERO. That is this lineage's own defect
+# with the sign flipped — an unmeasured zero instead of an unmeasured many — and
+# it is the more dangerous direction, because a zero is never audited.
+is_payload_file() {
+  case "$1" in
+    *.yml|*.yaml|*.tf|*bootstrap*.sh|*cloud-init*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# normalise(), minus the heredoc strip.
+normalise_keep_heredocs() {
+  sed -E ':a;/\\$/{N;s/\\\n[[:space:]]*/ /;ba}' \
+  | grep -vE '^[[:space:]]*#' \
+  | sed 's/||/__OR__/g' \
+  | sed 's/"[^"]*"//g' \
+  | sed -E ':b;/\|[[:space:]]*$/{N;s/\|[[:space:]]*\n[[:space:]]*/| /;bb}'
+}
+
+# Producer classification for payload files: heredocs AND strings intact.
+normalise_keep_strings_and_heredocs() {
+  sed -E ':a;/\\$/{N;s/\\\n[[:space:]]*/ /;ba}' \
+  | grep -vE '^[[:space:]]*#' \
+  | sed 's/||/__OR__/g' \
+  | sed -E ':b;/\|[[:space:]]*$/{N;s/\|[[:space:]]*\n[[:space:]]*/| /;bb}'
+}
+
+normalise_for() {
+  local f="$1"
+  if is_payload_file "$f"; then normalise_keep_heredocs < "$f"; else normalise < "$f"; fi
+}
+classify_src() {
+  local f="$1"
+  if is_payload_file "$f"; then normalise_keep_strings_and_heredocs < "$f"; else normalise_keep_strings < "$f"; fi
+}
+
 # Count real sites in one file, after normalisation.
-count_sites() { normalise < "$1" | grep -cE "$SHAPE"; }
+#
+# Fails LOUD on a broken pipeline rather than scoring the file 0. An earlier
+# revision called a function that did not exist: every payload file silently
+# scored zero, the corpus SHRANK, and the shrink read exactly like a real
+# finding. A measurement tool that reports 0 when it is broken is the
+# false-all-clear this probe exists to prevent, arriving through the back door.
+count_sites() {
+  local n
+  n="$(normalise_for "$1" | grep -cE "$SHAPE")" || true
+  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+    printf 'FATAL: count_sites produced a non-numeric result for %s — the instrument is broken, refusing to report\n' "$1" >&2
+    exit 1
+  fi
+  printf '%s' "$n"
+}
 
 # ---------------------------------------------------------------------------
 # preflight — refuse to measure through a grep that cannot observe the defect.
@@ -263,22 +318,52 @@ if [[ "${#PF_NO_FILES[@]}" -gt 0 ]]; then
 fi
 echo
 
-# Symptom mix. The prior framing modelled ONE symptom (an inverted `if`) and
-# missed the other: a BARE pipeline under `set -e` aborts the script mid-run.
+# Symptom mix — per SITE. `set -e` at FILE level does not decide this, and an
+# earlier revision of this probe got the headline exactly backwards by assuming
+# it did (it reported a large "aborts" majority; the truth is the reverse).
+#
+# POSIX shells SUPPRESS errexit for any command run as a CONDITION: the
+# controlling pipeline of if/elif/while/until, an operand of `&&`/`||`, anything
+# under `!`, and the RHS of an assignment. Essentially every site in this corpus
+# is a condition — that is what a guard IS. Measured:
+#
+#   set -euo pipefail; if ! prod | grep -q M; then echo TAKEN; fi; echo SURVIVED
+#     => TAKEN + SURVIVED, rc=0          (inverts; errexit suppressed)
+#   set -euo pipefail; prod | grep -q M; echo SURVIVED
+#     => rc=141, SURVIVED never printed  (aborts)
+#
+# So the dominant symptom is the SILENT one: the guard returns the wrong answer
+# and the script sails on. That is worse than an abort, which announces itself.
 echo "-- symptom mix (production, pipefail-bearing) --"
 sym_abort=0; sym_invert=0
+declare -a BARE_SITES=()
 for f in "${PROD_FILES[@]}"; do
   grep -qE '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*o[[:space:]]+pipefail|^[[:space:]]*set[[:space:]]+-o[[:space:]]+pipefail' "$f" || continue
-  n="$(count_sites "$f")"
-  if grep -qE '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*e' "$f"; then
-    sym_abort=$((sym_abort + n))
-  else
-    sym_invert=$((sym_invert + n))
-  fi
+  has_e=0
+  grep -qE '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*e' "$f" && has_e=1
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    if [[ "$line" =~ ^[[:space:]]*(if|elif|while|until)[[:space:]] ]] ||
+       [[ "$line" =~ ^[[:space:]]*! ]] ||
+       [[ "$line" =~ (\&\&|__OR__) ]] ||
+       [[ "$line" =~ ^[[:space:]]*(local[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*= ]]; then
+      sym_invert=$((sym_invert + 1))
+    elif [[ "$has_e" -eq 1 ]]; then
+      sym_abort=$((sym_abort + 1)); BARE_SITES+=("$f")
+    else
+      sym_invert=$((sym_invert + 1))
+    fi
+  done < <(classify_src "$f" | grep -E "$SHAPE")
 done
-emit "symptom=aborts (set -e present)" "$sym_abort"
-emit "symptom=inverts (no set -e)" "$sym_invert"
-cmd "grep -qE '^\s*set\s+-[a-zA-Z]*e' \$f  per pipefail-bearing production file"
+emit "symptom=inverts (site is a condition => errexit suppressed)" "$sym_invert"
+emit "symptom=aborts (BARE pipeline under set -e)" "$sym_abort"
+cmd "per SITE: line starts if|elif|while|until|! , or contains &&/|| , or is an assignment => condition => inverts; else bare + set -e => aborts"
+if [[ "$sym_abort" -gt 0 ]]; then
+  printf '    nominally-bare sites in: %s\n' "$(printf '%s\n' "${BARE_SITES[@]}" | sort -u | tr '\n' ' ')"
+  printf '    CAVEAT: a bare pipeline in a FUNCTION body is still guarded when every caller\n'
+  printf '            invokes that function as a condition. No call graph is built here, so\n'
+  printf '            "aborts" is an UPPER BOUND, never a count.\n'
+fi
 echo
 
 # ---------------------------------------------------------------------------
@@ -318,10 +403,24 @@ for f in "${PROD_FILES[@]}"; do
       # read 0/200 unperturbed and was still killed under strace, because it
       # wrote MANY times and any write after grep's exit fails regardless of
       # buffer room. The rule here is about a single non-blocking write, and it
-      # was measured on this host at 400 B: 0/300 inversions, while the same
-      # single-write producer at 200 KB (over capacity, so the write blocks)
-      # inverted 300/300. Size alone decides nothing; size-below-capacity on a
-      # single write decides this.
+      # was measured on this host — but the PRODUCER must be pinned or the number
+      # does not reproduce. A reviewer re-ran the 200 KB row with a blob holding
+      # NO newline and measured 0/300, correctly: grep cannot match a line that
+      # has not terminated, so it drains to EOF regardless of size. Same command,
+      # different producer, opposite result. Pin it:
+      #
+      #   printf 'MATCH\n%s' "$(head -c N /dev/zero | tr '\0' x)" | grep -q MATCH
+      #     N=3498   (single write, under capacity)  =>    0/100 killed
+      #     N=200000 (single write, over capacity)   =>  100/100 killed
+      #   { echo MATCH; for i in $(seq 1 5000); do echo pad; done; } | grep -q MATCH
+      #                (multi-write)                 =>  300/300 killed
+      #
+      # Size alone decides nothing: a MULTI-write producer is killable at ANY
+      # size, because any write issued after grep's exit fails regardless of
+      # buffer room (this is why an 8 KB looping producer dies under strace, and
+      # why the byte threshold was rightly retracted). What decides it is a
+      # SINGLE write that cannot block; size-below-capacity is merely the
+      # condition under which a single write cannot block.
       elif [[ "$asn" =~ (head|tail)[[:space:]]+-c[[:space:]]+([0-9]+) ]] &&
            [[ "${BASH_REMATCH[2]}" -lt 65536 ]]; then
         bounded=$((bounded + 1))
@@ -377,17 +476,31 @@ emit "production denominator" "$prod_sites sites / $prod_files files"
 # gate that gates nothing, which is the exact failure this class already causes.
 # So a security rung in the set forfeits the convert arm regardless of size, and
 # the site detail goes to a tracked issue rather than a public audit note.
+# Detect the security seam by CONTENT, not filename. An earlier revision matched
+# `case "$f" in *rls*|*egress*|*auth*|…` and got the right answer by luck: six
+# files happened to be named *egress*/*rls*. It missed ci-deploy.sh — the largest
+# file in the corpus — which carries the cosign signature-verification classifier
+# (a supply-chain seam) and the registry auth/credential/TLS classifier. A
+# filename cannot see either; rename one file and a filename gate would silently
+# permit converting a signature verifier.
+SEC_RE='cosign|sigstore|rekor|x509|tls:|certificate|credential|unauthorized|authentication|secret|token|nft |nftables|iptables|egress|firewall|rls|row.level|42501|anon|bwrap|bubblewrap|seccomp|apparmor|sandbox|privileged|capabilities'
 declare -a SEC_FILES=()
 for f in "${PROD_FILES[@]}"; do
-  case "$f" in
-    *rls*|*anon-probe*|*egress*|*auth*|*token*|*cred*|*secret*|*bwrap*|*sandbox*)
-      SEC_FILES+=("$f") ;;
-  esac
+  if grep -qiE "$SEC_RE" "$f"; then SEC_FILES+=("$f"); fi
 done
 sec_n="${#SEC_FILES[@]}"
-emit "security-gating production files (RLS/egress/auth/cred/sandbox)" "$sec_n"
-cmd "case \$f in *rls*|*anon-probe*|*egress*|*auth*|*token*|*cred*|*secret*|*bwrap*|*sandbox*) ;; esac"
+emit "security-gating production files (by CONTENT, not filename)" "$sec_n of $prod_files"
+cmd "grep -qiE '<seam markers: cosign|x509|credential|nft|egress|rls|42501|bwrap|seccomp|…>' \$f"
+if [[ "$sec_n" -eq "$prod_files" && "$prod_files" -gt 0 ]]; then
+  printf '    NOTE: this flags EVERY production file, so it does not discriminate here — every\n'
+  printf '          infra script in this corpus touches a security seam. The regex is deliberately\n'
+  printf '          over-inclusive: over-flagging forfeits to TRACK, the conservative arm, so its\n'
+  printf '          errors are fail-safe. Do not read it as precision.\n'
+fi
 if [[ "$sec_n" -gt 0 ]]; then
+  # Printed deliberately: this list is one `git grep` away for anyone with a
+  # clone, so withholding it here would buy nothing and cost diagnosability.
+  # The audit note explains why the exposure it represents is fail-closed.
   printf '    files: %s\n' "${SEC_FILES[*]}"
 fi
 
