@@ -61,7 +61,15 @@ cat > "$shimdir/grep" <<'SHIM'
 #!/usr/bin/env bash
 # A draining grep: consumes stdin to EOF, then answers. Mirrors `ugrep -q`
 # (no early exit) and the shell-function wrapper observed on the authoring host.
-if [[ " $* " == *" -q"* ]]; then
+# Faithful: drains stdin ONLY when actually reading stdin. A shim that ignores a
+# FILE argument is not a draining grep — it is a BROKEN grep, and it makes the
+# probe HANG (grep waiting on a stdin nobody writes) instead of going red. The
+# earlier shim did exactly that: the identity-check regression T3 exists to catch
+# would TIME OUT rather than fail — in CI, an 8-minute red against a step
+# budgeted ~3s. A guard that hangs on the regression it guards is not a guard.
+has_file=0
+for a in "$@"; do case "$a" in -*) ;; *) [[ -f "$a" ]] && has_file=1 ;; esac; done
+if [[ " $* " == *" -q"* && "$has_file" -eq 0 ]]; then
   input="$(cat)"          # drain to EOF — the producer never gets SIGPIPE
   pat=""
   for a in "$@"; do case "$a" in -*) ;; *) pat="$a"; break ;; esac; done
@@ -103,7 +111,15 @@ cat > "$shimdir/grep" <<'SHIM'
 if [[ "${1:-}" == "--version" ]]; then
   echo "grep (GNU grep) 3.12"; exit 0
 fi
-if [[ " $* " == *" -q"* ]]; then
+# Faithful: drains stdin ONLY when actually reading stdin. A shim that ignores a
+# FILE argument is not a draining grep — it is a BROKEN grep, and it makes the
+# probe HANG (grep waiting on a stdin nobody writes) instead of going red. The
+# earlier shim did exactly that: the identity-check regression T3 exists to catch
+# would TIME OUT rather than fail — in CI, an 8-minute red against a step
+# budgeted ~3s. A guard that hangs on the regression it guards is not a guard.
+has_file=0
+for a in "$@"; do case "$a" in -*) ;; *) [[ -f "$a" ]] && has_file=1 ;; esac; done
+if [[ " $* " == *" -q"* && "$has_file" -eq 0 ]]; then
   input="$(cat)"
   pat=""
   for a in "$@"; do case "$a" in -*) ;; *) pat="$a"; break ;; esac; done

@@ -32,6 +32,22 @@ done
 # emit nothing — a set-diff that prints a clean result while running blind.
 export LC_ALL=C
 
+# git grep resolves a pathspec relative to CWD, so running this from any
+# subdirectory silently matches NOTHING. That is not a harmless zero: an empty
+# corpus satisfies `0 <= 50 sites` and `0 <= 12 files`, and the security-rung
+# forfeit cannot fire with no files to match — so the probe emits a confident,
+# exit-0 verdict of "CONVERT". The fail-safe posture INVERTS. Measured before
+# this line existed:
+#   cd apps/web-platform/infra && bash ./scripts/sigpipe-triage-feasibility.sh
+#     => production=0/0 B=0% arm=convert, exit 0
+# This is the false all-clear the preflight was built to prevent, arriving
+# through the door the preflight does not watch. Pin the root.
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  printf 'FATAL: not inside a git work tree — this probe measures a tracked corpus via git grep\n' >&2
+  exit 1
+}
+cd "$REPO_ROOT" || exit 1
+
 # The shape under test. Kept in one place; every count below derives from it.
 SHAPE='\|[[:space:]]*grep([[:space:]]+-[a-zA-Z0-9]+)*[[:space:]]+(-[a-zA-Z]*q[a-zA-Z]*|--quiet)([[:space:]]|$)'
 
@@ -158,7 +174,14 @@ classify_src() {
 # false-all-clear this probe exists to prevent, arriving through the back door.
 count_sites() {
   local n
-  n="$(normalise_for "$1" | grep -cE "$SHAPE")" || true
+  # -o + wc -l counts OCCURRENCES, not matching lines. `grep -c` counts lines,
+  # and the fold-pipes step merges multi-line pipes onto one line — so two real
+  # pipes on one folded line scored ONE. Measured: 25 sites corpus-wide were
+  # silently merged, including a genuine double in a security-rung file
+  # (`if ! nft … | grep -q A || ! nft … | grep -q B`). A line count sold as a
+  # site count is this lineage's defect one level down.
+  n="$(normalise_for "$1" | grep -oE "$SHAPE" | wc -l)" || true
+  n="${n//[[:space:]]/}"
   if [[ ! "$n" =~ ^[0-9]+$ ]]; then
     printf 'FATAL: count_sites produced a non-numeric result for %s — the instrument is broken, refusing to report\n' "$1" >&2
     exit 1
@@ -178,10 +201,30 @@ count_sites() {
 #
 #     when a match arrives early, does this grep exit and let the producer die?
 #
-# If it does not, every reading is 0/N and the verdict is a FALSE ALL-CLEAR:
-# a green that says "no site is reachable" about a corpus nobody measured.
-# That is worse than the over-count this work exists to correct, because a green
-# is never audited. Refuse, loudly, and name the cause.
+# WHAT THIS GATE IS AND IS NOT — stated precisely, because the first version of
+# this comment was itself an unmeasured claim in the probe that exists to correct
+# unmeasured claims.
+#
+# It CLAIMED: "if grep drains, every reading here is 0/N and this verdict is a
+# false all-clear." That is FALSE, and measurable in one command — neutralise the
+# gate and run the whole probe under a draining grep:
+#
+#   diff <(env -i PATH=/usr/bin:/bin bash nogate.sh) \
+#        <(env -i PATH="$DRAINSHIM:/usr/bin:/bin" bash nogate.sh)
+#     => identical but for the printed grep path
+#
+# Because NO measurement in this probe consumes grep's early-exit: every counting
+# grep is -c/-l/-v/-n, or -q against a FILE argument. The only pipeline feeding
+# grep's stdin is preflight's own instrument, below. So a draining grep cannot
+# corrupt these counts.
+#
+# What the gate IS: an environmental canary for the rest of this repo. The
+# #6572 rungs in scan-workflow.test.sh DO depend on grep early-exiting, and a
+# draining grep makes them pass vacuously. This probe runs in the same CI job, so
+# it is the cheapest place to assert the property those tests silently assume.
+# It also protects any FUTURE reading here that does feed a producer into grep.
+#
+# Keep the gate; it earns its place. Just not for the reason first written.
 preflight() {
   local producer rc
   producer="$(mktemp)"
@@ -266,6 +309,17 @@ for f in "${CANDIDATES[@]}"; do
   FILES+=("$f"); n_sites=$((n_sites + n))
 done
 n_files="${#FILES[@]}"
+# An empty corpus is never a finding here — this pathspec is known non-empty in
+# this repo, so zero means the instrument missed, not that the defect is absent.
+# Refusing is the whole lesson of this PR applied to itself: a measurement tool
+# must not emit a verdict it cannot support, and "0" is the most confident-looking
+# unsupported verdict there is.
+if [[ "$raw_sites" -eq 0 || "$n_files" -eq 0 ]]; then
+  printf 'FATAL: corpus is EMPTY for pathspec %s — refusing to emit a verdict.\n' "$PATHSPEC" >&2
+  printf '  A zero here means this probe did not look where it thinks it looked, not that\n' >&2
+  printf '  the defect is absent. Check the pathspec; the probe pins itself to the repo root.\n' >&2
+  exit 1
+fi
 emit "raw git-grep hits (UNNORMALISED — not the finding)" "$raw_sites across ${#CANDIDATES[@]} files"
 emit "real sites (comments/strings/heredocs stripped)" "$n_sites across $n_files files"
 emit "  of which were prose about the shape, not the shape" "$((raw_sites - n_sites))"
@@ -422,7 +476,7 @@ for f in "${PROD_FILES[@]}"; do
       # SINGLE write that cannot block; size-below-capacity is merely the
       # condition under which a single write cannot block.
       elif [[ "$asn" =~ (head|tail)[[:space:]]+-c[[:space:]]+([0-9]+) ]] &&
-           [[ "${BASH_REMATCH[2]}" -lt 65536 ]]; then
+           [[ "${BASH_REMATCH[2]}" -le 4096 ]]; then
         bounded=$((bounded + 1))
       elif [[ "$asn" =~ \$\((bash|sh|docker|curl|cat|jq|terraform|aws|gh|ssh)[[:space:]] ]]; then
         unbounded=$((unbounded + 1))
