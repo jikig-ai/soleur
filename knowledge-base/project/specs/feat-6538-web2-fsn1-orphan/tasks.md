@@ -265,7 +265,7 @@ and active-active-N (#6459) instead of rescheduling the defect.
       keeps the audit trail; the token must survive). *(Done 2026-07-17: dated `[… UPDATE …]`
       bracket notes on the Hetzner sub-processor rows in both files; historical `fsn1` text
       retained; the Better Stack `eu-fsn-3` decoy explicitly disambiguated.)*
-- [~] **B5.2** — `expenses.md`: remove web-2's three rows. **DEFERRED to B6.11 (post-destroy
+- [x] **B5.2** (executed in B6.11) — `expenses.md`: remove web-2's three rows. **DEFERRED to B6.11 (post-destroy
       verify).** The rows are a *current-billing* record, not a desired-state config: web-2
       bills until the destroy lands, and `knowledge-base/finance/cost-model.md`'s own note
       (2026-07-16) states web-2's rows *"leave COGS when the destroy lands, which will return
@@ -353,8 +353,8 @@ and active-active-N (#6459) instead of rescheduling the defect.
       `host=soleur-web-platform` shipping. *(Do NOT use the Hetzner `created` field as a
       reboot proxy — it never changes on reboot.)*
 - [ ] **B6.9** — A subsequent no-op merge runs push-apply to completion (no HALT).
-- [ ] **B6.10** — `gh issue close 6538 6463` with the decision recorded. Unblock #6575.
-- [ ] **B6.11** — **Ledger removal (moved from B5.2), gated on B6.6's destroy verify.** Only
+- [x] **B6.10** — `gh issue close 6538 6463` with the decision recorded. Unblock #6575.
+- [x] **B6.11** — **Ledger removal (moved from B5.2), gated on B6.6's destroy verify.** Only
       after `servers?name=soleur-web-2` → 0: remove web-2's three rows from
       `knowledge-base/operations/expenses.md` (host CX33 `$9.17` + volume 20 GB `$1.24` +
       Primary IPv4 `$0.54`; amounts per #6602, NOT the plan's stale `$0.88` volume). Then

@@ -125,6 +125,23 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > unverified and now carries a machine-readable `verify_by` marker (2026-08-01)
 > that the new `scripts/expenses-verify-by-check.sh` gate enforces on the calendar.
 
+> **[2026-07-17 Review note — web-2 retired, destroy applied]** web-2 (soleur-web-2,
+> fsn1) was destroyed via the supervised operator-local apply on 2026-07-17
+> (#6538/#6463 CLOSED; verified — 0 servers/volumes named web-2, terraform state
+> clean, Cloudflare connector census 2 → 1, web-1 serving). Its three COGS rows —
+> CX33 host $9.17, 20 GB volume $1.24, Primary IPv4 $0.54 = **$10.95/mo** — are
+> removed from `expenses.md` and the COGS table below. (The earlier "~$10.59"
+> estimate predated the #6602 volume-FX correction that re-booked the volume
+> $0.88 → $1.24.) Product COGS **$234.34 → $223.39** (−$10.95, −4.67%), all-in burn
+> **$654.19 → $643.24**. **Both break-evens unchanged** — COGS-scope stays **5**
+> (⌈223.39 ÷ 49⌉ = ⌈223.39 ÷ 48⌉ = 5) and all-in stays **14** (⌈643.24 ÷ 49⌉ =
+> ⌈643.24 ÷ 48⌉ = 14); no ⌈burn ÷ price⌉ boundary crossed. All-in margin at 50-user
+> scale (Stripe-net $2,400 basis) nudges **72.74% → 73.20%**; COGS-based
+> **90.24% → 90.69%**. This is the deferred B5.2 ledger removal from the #6538
+> retirement, executed post-destroy-verify (the rows billed until the host died —
+> see the B6.11 note in `specs/feat-6538-web2-fsn1-orphan/tasks.md`). No vendor,
+> sub-processor, or classification change.
+
 ## Monthly Burn
 
 Monthly burn is split into two scopes: **R&D / dev tooling** (investments that accelerate engineering, not per-user product delivery) and **product COGS** (infrastructure and services consumed in running the product for paying users). This split is load-bearing for break-even math and for the gross-margin-at-scale claim in §5. Reporting a single blended number either collapses under scrutiny (the small-number framing omits real recurring costs) or misrepresents product economics (the large-number framing taxes product margins with engineering-accelerator spend). The split is defensible and carries forward cleanly into pricing conversations.
@@ -170,9 +187,6 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Hetzner CX33 (web-1, web platform) | 9.17 [expenses.md@2026-07-16] | `expenses.md` |
 | Hetzner Volume (web-1, 20 GB) | 1.24 [expenses.md@2026-07-17] | `expenses.md` (FX-basis corrected — #6602) |
 | Hetzner Primary IPv4 (web-1) | 0.54 [expenses.md@2026-07-17] | `expenses.md` (#6589 gap added — #6602) |
-| Hetzner CX33 (web-2, warm standby, fsn1) | 9.17 [expenses.md@2026-07-16] | `expenses.md` (retirement decided — #6538) |
-| Hetzner Volume (web-2, 20 GB) | 1.24 [expenses.md@2026-07-17] | `expenses.md` (retirement decided — #6538; FX-basis corrected — #6602) |
-| Hetzner Primary IPv4 (web-2) | 0.54 [expenses.md@2026-07-16] | `expenses.md` (retirement decided — #6538) |
 | Hetzner CX23 (zot registry, hel1) | 5.93 [expenses.md@2026-07-16] | `expenses.md` |
 | Hetzner Volume (registry, 60 GB) | 3.71 [expenses.md@2026-07-17] | `expenses.md` (FX-basis corrected — #6602) |
 | Hetzner Primary IPv4 (registry) | 0.54 [expenses.md@2026-07-17] | `expenses.md` (#6589 gap added — #6602) |
@@ -187,7 +201,7 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Sentry Team (error tracking + cron monitors, $29 base + $42.22 PAYG: 49 × $0.78 cron-monitor seats + 4 × $1.00 uptime monitors) | 71.22 [expenses.md@2026-07-17] | `expenses.md` (live-verified — see note) |
 | Resend Pro (outbound + transactional email, 50K emails/mo) | 20.00 [expenses.md@2026-06-16] | `expenses.md` (estimate — verify on next invoice) |
 | Proton Mail Workspace Standard (2 users — `ops@soleur.ai` intake) | 14.00 [expenses.md@2026-07-16] | `expenses.md` (estimate — confirm exact monthly rate from Proton billing) |
-| **Subtotal Product COGS** | **234.34 [expenses.md@2026-07-17]** | |
+| **Subtotal Product COGS** | **223.39 [expenses.md@2026-07-17]** | |
 
 > **Proton Mail is COGS, not overhead (#6538, 2026-07-16).** The row is easy to read as
 > G&A — it is not. Proton delivers `ops@soleur.ai`, the company operational address that
@@ -267,8 +281,8 @@ Price anchor: **$49/month** per Pro tier (`product/pricing-strategy.md`). Math i
 
 | Scope | Burn (USD/mo) | Price ($49) | Users to break even |
 |-------|--------------:|------------:|--------------------:|
-| Product COGS | 234.34 [expenses.md@2026-07-17] | 49 | ⌈234.34 ÷ 49⌉ = **5 users** |
-| All-in (COGS + R&D / Dev Tooling) | 654.19 [expenses.md@2026-07-17] | 49 | ⌈654.19 ÷ 49⌉ = **14 users** |
+| Product COGS | 223.39 [expenses.md@2026-07-17] | 49 | ⌈223.39 ÷ 49⌉ = **5 users** |
+| All-in (COGS + R&D / Dev Tooling) | 643.24 [expenses.md@2026-07-17] | 49 | ⌈643.24 ÷ 49⌉ = **14 users** |
 
 ### Stripe fee drag
 
@@ -280,10 +294,10 @@ Effective **net revenue per user after Stripe fees: ~$48/month** (EU floor) to ~
 
 | Scope | Burn | Net price ($48) | Users to break even |
 |-------|-----:|----------------:|--------------------:|
-| Product COGS | 234.34 [expenses.md@2026-07-17] | 48 | ⌈234.34 ÷ 48⌉ = **5 users** |
-| All-in | 654.19 [expenses.md@2026-07-17] | 48 | ⌈654.19 ÷ 48⌉ = **14 users** |
+| Product COGS | 223.39 [expenses.md@2026-07-17] | 48 | ⌈223.39 ÷ 48⌉ = **5 users** |
+| All-in | 643.24 [expenses.md@2026-07-17] | 48 | ⌈643.24 ÷ 48⌉ = **14 users** |
 
-Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **14 users** at the current $654.19 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap; the 2026-07-17 Sentry correction moved both counts 13 → 14 together; the 2026-07-17 #6602 volume-FX correction left both at 14, no boundary crossed). The COGS-scope count is **unchanged at 5** (⌈234.34 ÷ 49⌉ = ⌈234.34 ÷ 48⌉ = 5). Stripe fees still bite into gross margin at scale (see §5).
+Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **14 users** at the current $643.24 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap; the 2026-07-17 Sentry correction moved both counts 13 → 14 together; the 2026-07-17 #6602 volume-FX correction left both at 14, no boundary crossed). The COGS-scope count is **unchanged at 5** (⌈223.39 ÷ 49⌉ = ⌈223.39 ÷ 48⌉ = 5). Stripe fees still bite into gross margin at scale (see §5).
 
 ## Scaling Triggers
 
@@ -311,7 +325,7 @@ Worked example: **50 paying users × $49/month = $2,450 MRR**. Two margin framin
 
 ```
 Revenue:           $2,450
-Product COGS:      $234.34 [expenses.md@2026-07-17]
+Product COGS:      $223.39 [expenses.md@2026-07-17]
 Gross profit:      $2,215.66
 Gross margin:      2,215.66 / 2,450 = 90.44%
 ```
@@ -320,7 +334,7 @@ Gross margin:      2,215.66 / 2,450 = 90.44%
 
 ```
 Revenue:           $2,450
-All-in burn:       $654.19 [expenses.md@2026-07-17]
+All-in burn:       $643.24 [expenses.md@2026-07-17]
 Contribution:      $1,795.81
 Margin (all-in):   1,795.81 / 2,450 = 73.30%
 ```
@@ -329,8 +343,8 @@ Margin (all-in):   1,795.81 / 2,450 = 73.30%
 
 At 50 users × ~$1/user/mo Stripe fee (EU floor) = **$50/mo in fees**. Effective net revenue: $2,450 − $50 = **$2,400**.
 
-- Adjusted COGS-based margin: ($2,400 − $234.34) / $2,400 = **90.24%**
-- Adjusted all-in margin: ($2,400 − $654.19) / $2,400 = **72.74%**
+- Adjusted COGS-based margin: ($2,400 − $223.39) / $2,400 = **90.69%**
+- Adjusted all-in margin: ($2,400 − $643.24) / $2,400 = **73.20%**
 
 The original "93% gross margin" claim is closest to the COGS-based number, but that number is now **~90%, not ~93%** — the 2026-07-16 re-derivation (#6538) walked it down from 92.81% as previously-untabled COGS rows landed, the 2026-07-17 Sentry correction (#6589) walked it down again to 90.56%, and the 2026-07-17 #6602 volume-FX correction nudged it to 90.44%, in every case on spend that was already being drawn. It elides R&D / dev-tooling burn besides. The more honest founder-economics number is the all-in margin (**~73%**). Both should be cited side-by-side whenever the gross-margin claim is made; COGS-only margin without the R&D context misrepresents the operating picture. **The "93%" framing is now stale on its own terms and should be retired from external use rather than re-rounded.**
 
