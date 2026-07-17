@@ -69,8 +69,18 @@ cmd()  { printf '    cmd: %s\n' "$1"; }
 # prints both numbers and their gap, so the reader can see how much of the
 # apparent corpus is the repo talking to itself.
 #
-# The pipeline order is load-bearing and is lifted verbatim from
-# scan-workflow.test.sh:138-142, where it is already proven:
+# PROVENANCE, stated accurately — an earlier revision of this comment said this
+# pipeline was "lifted verbatim from scan-workflow.test.sh:138-142, where it is
+# already proven". That was false twice: those lines are a PROSE COMMENT, not a
+# pipeline, and that file has no heredoc-strip and no `||` handling at all. Three
+# of these steps are adapted from the normalisation in `scan-workflow.test.sh`
+# (search it for `residual_hits`); the heredoc and `||` steps are NEW HERE and are
+# proven by nothing but the measurements cited beside them. Borrowed credibility is
+# the same defect as a borrowed count. Anchored on content, not a line number,
+# because line numbers rot (cq-cite-content-anchor-not-line-number) — and this one
+# already had.
+#
+# The order IS load-bearing:
 #   1. fold line-continuations FIRST  (a `\`-split pipe must rejoin before
 #      comment-stripping, or its tail reads as a bare line)
 #   2. strip heredoc BODIES          (tracked text git grep enumerates; these
@@ -432,7 +442,14 @@ streaming=0; varfed=0; other=0; bounded=0; unbounded=0; undecided=0
 for f in "${PROD_FILES[@]}"; do
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    if [[ "$line" =~ printf[[:space:]]+[\'\"]%s[\'\"][[:space:]]+\"?\$\{?([A-Za-z_][A-Za-z0-9_]*) ]] ||
+    # `%s[^'"]*` — NOT a bare `%s`. The corpus writes BOTH `printf '%s' "$v"` and
+    # `printf '%s\n' "$v"`, and an anchor demanding the quote immediately after %s
+    # silently skips every newline-terminated one. That is the FOURTH variant of
+    # the same anchoring bug in this single classifier (assignment position, RHS
+    # position, `$(` gap, format string) — each one making a site vanish rather
+    # than misreport, which is why none of them announced itself. An instrument
+    # that drops what it cannot parse reports a smaller, cleaner, wronger world.
+    if [[ "$line" =~ printf[[:space:]]+[\'\"]%s[^\'\"]*[\'\"][[:space:]]+\"?\$\{?([A-Za-z_][A-Za-z0-9_]*) ]] ||
        [[ "$line" =~ echo[[:space:]]+\"\$\{?([A-Za-z_][A-Za-z0-9_]*) ]]; then
       varfed=$((varfed + 1))
       var="${BASH_REMATCH[1]}"
@@ -444,7 +461,21 @@ for f in "${PROD_FILES[@]}"; do
       # corpus writes `code="${r%%|*}"; body="${r#*|}"` — an anchored pattern
       # misses it and scores UNDECIDED for the wrong reason (right answer, broken
       # instrument). Prefer being undecided honestly over being undecided by bug.
-      asn="$(grep -nE "(^|[[:space:];])[[:space:]]*(local[[:space:]]+)?${var}=" "$f" | head -1)"
+      # Capture the assignment AND the two lines after it. The corpus writes the
+      # house multi-line style —
+      #     SECURITY_OPT_ENTRIES=$(
+      #       docker inspect "$CONTAINER" \
+      # — so a single-line match sees `VAR=$(`, matches no producer, and scores
+      # UNDECIDED. That is how an earlier revision published `unbounded = 0` for a
+      # corpus full of docker/nft/journalctl: a broken-instrument zero presented as
+      # a finding, which is the failure this probe exists to name. Same trap as the
+      # anchored-assignment bug already fixed above, surviving in the RHS half.
+      asn_line="$(grep -nE "(^|[[:space:];])[[:space:]]*(local[[:space:]]+)?${var}=" "$f" | head -1 | cut -d: -f1)"
+      if [[ -n "$asn_line" ]]; then
+        asn="$(sed -n "${asn_line},$((asn_line + 2))p" "$f" | tr '\n' ' ')"
+      else
+        asn=""
+      fi
       if [[ -z "$asn" ]]; then
         undecided=$((undecided + 1))
       # BOUNDED, by construction rather than by frequency. An explicit truncation
@@ -478,7 +509,11 @@ for f in "${PROD_FILES[@]}"; do
       elif [[ "$asn" =~ (head|tail)[[:space:]]+-c[[:space:]]+([0-9]+) ]] &&
            [[ "${BASH_REMATCH[2]}" -le 4096 ]]; then
         bounded=$((bounded + 1))
-      elif [[ "$asn" =~ \$\((bash|sh|docker|curl|cat|jq|terraform|aws|gh|ssh)[[:space:]] ]]; then
+      # `[[:space:]]*` after `$(` is load-bearing: the multi-line house style puts
+      # the command on the NEXT line, so the joined text reads `$( docker …`, and
+      # a gap-less `\$\(docker` matches nothing. This is the third variant of the
+      # same anchoring bug in this one classifier — the reason `unbounded` read 0.
+      elif [[ "$asn" =~ \$\([[:space:]]*(bash|sh|docker|curl|cat|jq|nft|journalctl|systemctl|terraform|aws|gh|ssh|dig|ss)[[:space:]] ]]; then
         unbounded=$((unbounded + 1))
       else
         # Everything else is UNDECIDED and is REPORTED as such. A function

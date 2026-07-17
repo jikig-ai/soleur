@@ -111,6 +111,16 @@ if [[ -f "$SIGPIPE_PROBE" ]] && grep -qF 'bash apps/web-platform/infra/scripts/s
 else
   fail "sigpipe triage probe is wired" "apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh is missing or has no 'run:' step in infra-validation.yml — nothing would then verify that CI's grep can still observe this defect class at all"
 fi
+# ...and its ATTESTATION, which is the thing that proves the probe's own gates are
+# not vacuous. Pinning only the probe stopped one step short of this rung's own
+# argument: delete the attestation's run: step and every gate here stayed green
+# while the entire non-vacuity apparatus silently stopped running.
+SIGPIPE_ATTEST="$REPO_ROOT/apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh"
+if [[ -f "$SIGPIPE_ATTEST" ]] && grep -qF 'bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh' "$INFRA_VALIDATION"; then
+  pass "the sigpipe probe's attestation exists and is registered in infra-validation.yml (#6578)"
+else
+  fail "sigpipe attestation is wired" "sigpipe-triage-feasibility.test.sh is missing or has no 'run:' step in infra-validation.yml — the probe's false-all-clear guards would rest on prose, unproven, which is the exact failure this file exists to catch"
+fi
 
 echo "== no check in this file feeds a producer into grep -q (#6572) =="
 # grep -q exits on FIRST MATCH. The producer's next write() then takes SIGPIPE
