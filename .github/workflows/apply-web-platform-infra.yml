@@ -764,7 +764,7 @@ jobs:
       # MUST equal var.web_hosts private_ips (variables.tf), same literal the
       # release workflow uses — web-1 self-excludes at runtime, so this fans the
       # deploy out to web-2 (10.0.1.11) over the private net.
-      WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+      WEB_HOST_PRIVATE_IPS: "10.0.1.10"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -1028,7 +1028,7 @@ jobs:
       OP_CONTEXT: recreate
       # MUST equal var.web_hosts private_ips (variables.tf) — web-1 self-excludes at
       # runtime, so the fan-out reaches web-2 (10.0.1.11). Single-peer invariant.
-      WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+      WEB_HOST_PRIVATE_IPS: "10.0.1.10"
       IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

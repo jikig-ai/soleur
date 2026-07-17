@@ -103,7 +103,7 @@ jobs:
           # variables.tf) — incl weight-0 web-2 (10.0.1.11), which self-arms oneshots into
           # its own Redis independent of LB weight (DI-C3). No SSH; the deploy webhook fans
           # out to these private IPs over the private net.
-          CUTOVER_HOSTS: "10.0.1.10,10.0.1.11"
+          CUTOVER_HOSTS: "10.0.1.10"
         run: |
           set -euo pipefail
           BASE="https://deploy.soleur.ai/hooks"

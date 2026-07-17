@@ -55,9 +55,19 @@ extract_wf_ip_sets() {
 }
 
 # --- Expected set: var.web_hosts private_ips, sorted + comma-joined to match the
-# per-copy normalization above. Must itself be non-empty (>=2 hosts). ---
+# per-copy normalization above. Must itself be NON-EMPTY.
+#
+# This floor is an anti-PARSER-DRIFT tripwire, not a host-count policy: if the
+# grep above stops matching variables.tf's shape, `tf_ips` silently empties and
+# every parity assertion below would compare "" against "" and PASS — a green
+# test proving nothing. The floor exists to make that failure loud.
+#
+# It was `-lt 2` until 2026-07-17 (#6538), which conflated "the parser works"
+# with "there are two hosts". Retiring web-2 left ONE host and tripped it with
+# "parser drift" — blaming the parser for a roster change it was not measuring.
+# The correct floor is >=1: one host is a legitimate roster, zero is drift. ---
 tf_n=$(printf '%s\n' "$tf_ips" | grep -c '.')
-if [ "$tf_n" -lt 2 ]; then fail "extracted <2 private_ips from var.web_hosts (got $tf_n) — parser drift"; fi
+if [ "$tf_n" -lt 1 ]; then fail "extracted 0 private_ips from var.web_hosts — parser drift (the grep no longer matches variables.tf's shape; every assertion below would vacuously pass)"; fi
 tf_set="$(printf '%s\n' "$tf_ips" | grep -E '.' | paste -sd, -)"
 
 # --- Assert EVERY WEB_HOST_PRIVATE_IPS copy in a workflow equals var.web_hosts.
