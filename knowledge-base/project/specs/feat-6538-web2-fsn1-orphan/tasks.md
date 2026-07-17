@@ -60,9 +60,17 @@ and active-active-N (#6459) instead of rescheduling the defect.
 - [x] **A6.2** — The **6 dated `Previous:` changelog entries left verbatim.** They were
       true when written (#6393 moved web-2 *after* them); rewriting a dated legal record
       falsifies it. New `**Last Updated:**` entry prepended; prior demoted to `Previous:`.
-- [x] **A6.3** — Removed the assertion that a **dedicated per-workspace git-data host**
-      exists. It never has — verified against the live Hetzner API (5 servers, no
-      `soleur-git-data`, no git-data volume). Second Art. 5(2) defect, same sentences.
+- [~] **A6.3** — **UNWOUND at review (2026-07-16).** I removed the git-data-host assertion
+      (it is false — verified live: 5 servers, no `soleur-git-data`, no git-data volume),
+      but that host was the **antecedent** of the LUKS/cross-host safeguard clauses in the
+      same sentences. Removing it left those clauses **dangling** — no longer describing a
+      phantom host, now reading as claims about **live** workspace storage, which is plain
+      ext4. That made a false Art. 32 claim *worse*. `pattern-recognition-specialist` caught
+      it; `user-impact-reviewer`, `security-sentinel` and `code-quality-analyst` converged.
+      PR A is now **purely the locative fix**; the whole #5274-Phase-3 claim family is left
+      exactly as on main. Operator decided to keep the claim published and make it true by
+      encrypting → **#6588** (P1), CTO-routed; recorded at `decision-challenges.md` DC-1
+      with a 2026-07-23 re-raise trigger.
 - [x] **A6.4** — **`terms-and-conditions.md` deliberately untouched**, byte-identical to
       main. Any non-cosmetic edit is Tier 2 *clarifying* → **BUMP REQUIRED** under the
       CLO-signed `knowledge-base/legal/tc-version-bump-policy.md`, forcing every user to
@@ -89,7 +97,11 @@ and active-active-N (#6459) instead of rescheduling the defect.
       *(Read the runner's own summary + `EXIT=$?`, not the harness's background-task
       notification: that reports the trailing command's exit and is always 0.)*
 - [x] **A5.2** — PR body: `Ref #6538` / `Ref #6463`. **Never `Closes`.**
-- [ ] **A5.3** — `/soleur:review` → `/soleur:ship`.
+- [x] **A5.3a** — `/soleur:review` done: 7 agents, 13 findings (5 P1 / 5 P2 / 3 P3);
+      9 fixed inline (`18860da14`), 3 filed (#6584, #6585, #6588). Suite re-run green
+      178/178 after the fixes.
+- [ ] **A5.3b** — `/soleur:compound` → `/soleur:ship` (**operator go-ahead required** —
+      publishes a rewritten privacy policy; outward-facing).
 - [x] **A5.4** — **Threshold stays `single-user incident`; NOT `none`.** The pre-A6 PR was
       internal-docs-only and `none` would have been right. A6 edits the **public privacy
       policy + GDPR policy + DPD** — that IS the user surface, and it changes what users
