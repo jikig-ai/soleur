@@ -22,6 +22,27 @@
 #   SENTRY_TF_DIR             — read Class D `.tf` declarations from here
 #   AUDIT_OUT_DIR             — write report here instead of repo legal dir
 #
+# Class D state half (PRODUCTION input, not test-only):
+#   SENTRY_STATE_SLUGS_FILE — path to a file of newline-separated monitor slugs
+#     that Terraform state tracks. Class D = live AND undeclared AND *not in
+#     state*: a monitor in state with no .tf block is a PENDING DESTROY the next
+#     apply reclaims, not an orphan. Without this file the two are
+#     indistinguishable and the script only WARNS (failing on an unresolvable set
+#     deadlocks the apply — see the gate at the foot of this file).
+#
+#     A FILE PATH, not a value, so that "state is empty" (a legitimate state with
+#     zero cron monitors, in which every live monitor IS a true orphan) is
+#     distinguishable from "state was never read". A bare value cannot express
+#     that: empty-string and unset are the same thing to the shell, so an empty
+#     state would silently downgrade to a warning — fail-open on exactly the case
+#     where every live monitor is unreclaimable. Mirrors the SENTRY_FIXTURE_*
+#     file-path convention above.
+#
+#     Produced after `terraform init` by:
+#       terraform show -json | jq -r '
+#         .values.root_module.resources[]?
+#         | select(.type=="sentry_cron_monitor") | .values.name'
+#
 # Dual-path output by caller (plan OQ1; PR #3811 review P1-H):
 #   - Operator runs (Phase 2.1 baseline, local re-runs): AUDIT_OUT_DIR
 #     unset → tracked dir `knowledge-base/legal/audits/`. Produces the
@@ -427,7 +448,9 @@ monitor_created() {
   ' <<<"$monitors_json"
 }
 
-orphan_live_monitors=()  # Class D
+orphan_live_monitors=()   # Class D — live, undeclared, AND not in state (unreclaimable)
+class_d_unresolved=()     # live + undeclared, but state unknown -> cannot classify
+class_d_state_unknown=0
 # Class D compares two halves — the live monitor list and the .tf root that
 # declares it. A synthetic monitor list judged against the REAL tf root makes
 # every fixture slug "undeclared" by construction: noise, not a finding. So the
@@ -467,12 +490,57 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
     exit 1
   fi
 
+  # ── The state half — load-bearing, and NOT an optimisation ────────────────
+  # Class D means "Terraform can never reclaim this". `live AND not declared` is
+  # NOT that set: a monitor that is IN STATE with no remaining .tf block is a
+  # PENDING DESTROY — the very next full-root apply reclaims it. That is #6589's
+  # fix working, not an orphan.
+  #
+  # Getting this wrong DEADLOCKS the apply. apply-sentry-infra.yml runs this
+  # audit BEFORE `terraform plan` (a deliberate gate-call-graph ordering, so the
+  # workflow_dispatch path cannot bypass the 4-gate check). So a Class D that
+  # fires on a pending destroy fails the job before the plan runs, the destroy
+  # never happens, the monitor stays live and billing — and the detector has
+  # recreated the exact #6074 end state it exists to prevent, by blocking its own
+  # cure. This is not hypothetical: at the time of writing, live=50 declared=49,
+  # and the one difference is scheduled-ghcr-token-minter — precisely the orphan
+  # #6589 destroys.
+  #
+  # SENTRY_STATE_SLUGS carries the slugs Terraform tracks (see the header for the
+  # producer). Absent, the two cases are INDISTINGUISHABLE from here, so the
+  # candidates are reported without failing: failing on a set we cannot resolve
+  # is what causes the deadlock, and a gate that cannot be correct should not be
+  # the one with teeth. The authoritative fail-closed run is
+  # apply-sentry-infra.yml, which inits Terraform first and injects the state
+  # half — the caller that can actually know.
+  state_known=0
+  state_slugs=""
+  if [[ -n "${SENTRY_STATE_SLUGS_FILE:-}" ]]; then
+    if [[ ! -f "$SENTRY_STATE_SLUGS_FILE" ]]; then
+      echo "ERROR: SENTRY_STATE_SLUGS_FILE is set to '${SENTRY_STATE_SLUGS_FILE}' but no such file exists. Refusing to silently fall back to the state-unknown warn path — the caller believes it provided state. Refs #6589." >&2
+      exit 1
+    fi
+    state_known=1
+    state_slugs=$(grep -vE '^[[:space:]]*$' "$SENTRY_STATE_SLUGS_FILE" | sort -u || true)
+  fi
+
+  class_d_candidates=()
   while IFS= read -r slug; do
     [[ -z "$slug" ]] && continue
-    if ! printf '%s\n' "$declared_slugs" | grep -qFx -- "$slug"; then
-      orphan_live_monitors+=("$slug")
-    fi
+    printf '%s\n' "$declared_slugs" | grep -qFx -- "$slug" && continue
+    class_d_candidates+=("$slug")
   done <<<"$monitor_slugs"
+
+  if (( state_known == 1 )); then
+    for slug in ${class_d_candidates[@]+"${class_d_candidates[@]}"}; do
+      # In state => Terraform WILL reclaim it on the next apply => not Class D.
+      printf '%s\n' "$state_slugs" | grep -qFx -- "$slug" && continue
+      orphan_live_monitors+=("$slug")
+    done
+  else
+    class_d_state_unknown=1
+    class_d_unresolved=( ${class_d_candidates[@]+"${class_d_candidates[@]}"} )
+  fi
 fi
 
 # --- Resolve report path --------------------------------------------------
@@ -596,11 +664,26 @@ echo "[ok] Wrote audit report: $out_file"
 # mutation; sentry-audit-gate.yml fails the required check on Sentry-touching
 # PRs. reusable-release.yml wraps the call in `set +e` and downgrades any
 # non-zero to a `::warning::`, so releases stay unblocked.
+#
+# ONLY unreclaimable monitors reach here — `live AND undeclared AND not in
+# state`. A pending destroy (in state, block removed) is excluded upstream: it
+# is not an orphan, and failing on it would halt the apply BEFORE the plan that
+# reclaims it, leaving the monitor live and billing. See the state-half comment
+# above.
 if (( ${#orphan_live_monitors[@]} > 0 )); then
   for slug in "${orphan_live_monitors[@]}"; do
     printf 'SOLEUR_SENTRY_CLASS_D_ORPHAN: slug=%s created=%s last_checkin=%s cost_usd=%s\n' \
       "$slug" "$(monitor_created "$slug")" "$(monitor_last_checkin "$slug")" "$CRON_MONITOR_MONTHLY_USD"
   done
-  echo "ERROR: ${#orphan_live_monitors[@]} live Sentry monitor(s) have no declaring resource block in ${tf_dir}/*.tf (Class D). Terraform will never reclaim them — each bills \$${CRON_MONITOR_MONTHLY_USD}/mo. See the Class D table in ${out_file}. Refs #6589." >&2
+  echo "ERROR: ${#orphan_live_monitors[@]} live Sentry monitor(s) are unreclaimable (Class D): no declaring resource block in ${tf_dir}/*.tf AND absent from Terraform state, so no apply can ever destroy them — each bills \$${CRON_MONITOR_MONTHLY_USD}/mo. Import them into Terraform, or delete them via the Sentry API. See the Class D table in ${out_file}. Refs #6589." >&2
   exit 1
+fi
+
+# State unknown: `live AND undeclared` was computed, but without the state half a
+# PENDING DESTROY (which the next apply reclaims) is indistinguishable from a
+# genuinely unreclaimable orphan. Report, do not fail — failing on an unresolvable
+# set is what deadlocks the apply. The authoritative fail-closed run is
+# apply-sentry-infra.yml, which inits Terraform and injects SENTRY_STATE_SLUGS.
+if (( class_d_state_unknown == 1 )) && (( ${#class_d_unresolved[@]} > 0 )); then
+  echo "::warning::${#class_d_unresolved[@]} live Sentry monitor(s) have no declaring .tf block, but SENTRY_STATE_SLUGS was not provided so this run cannot tell a pending destroy from an unreclaimable orphan. Not failing: see ${out_file}. Candidates: ${class_d_unresolved[*]}" >&2
 fi

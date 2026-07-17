@@ -483,6 +483,28 @@ jobs:
         run: |
           set -euo pipefail
           which jq >/dev/null 2>&1 || sudo apt-get install -y jq
+          # Class D's state half. Terraform is initialised by the step above, so
+          # THIS caller can distinguish an unreclaimable orphan from a pending
+          # destroy — and it must, because this audit runs BEFORE `terraform
+          # plan`. Without the state half, a monitor whose block this very PR
+          # removed reads as Class D, fails the job, and the plan that would
+          # reclaim it never runs: the detector blocks its own cure and the
+          # monitor stays live and billing (#6074's end state, reached from the
+          # other side).
+          #
+          # A FILE, not a var: an empty state (legitimately zero cron monitors,
+          # where every live monitor IS a true orphan) must stay distinguishable
+          # from "state was never read". An empty var is indistinguishable from
+          # unset and would fail OPEN on exactly that case.
+          #
+          # `set -euo pipefail` is active, so a `terraform show` failure aborts
+          # the step rather than writing an empty file that would read as an
+          # empty state and flag all 49 monitors as orphans.
+          terraform -chdir="${INFRA_DIR}" show -json \
+            | jq -r '.values.root_module.resources[]?
+                     | select(.type == "sentry_cron_monitor")
+                     | .values.name' > /tmp/sentry-state-slugs.txt
+          export SENTRY_STATE_SLUGS_FILE=/tmp/sentry-state-slugs.txt
           bash apps/web-platform/scripts/sentry-monitors-audit.sh
 
       - name: Terraform plan (full root)

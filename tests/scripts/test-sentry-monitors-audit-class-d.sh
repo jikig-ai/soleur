@@ -115,18 +115,41 @@ resource "sentry_issue_alert" "some_alert" {
 }
 TF
 
-# _run <monitors-fixture> -> "<rc>|<stdout>"
+# Class D = live AND undeclared AND *not in Terraform state*. The state half is
+# a FILE so that "state is empty" stays distinguishable from "state unknown".
+# An EMPTY file is the right default for these fixtures: it asserts the fixture
+# monitors are in no state at all, so an undeclared one is genuinely
+# unreclaimable — which is what T2/T5 are about. Tests that need the other
+# branches pass their own file (or none).
+: > "$TMP/state-empty.txt"
+
+# _run <monitors-fixture> [state-file|"__none__"] -> "<rc>|<stdout>"
 _run() {
-  local out rc=0
-  out=$(SENTRY_AUTH_TOKEN=fake \
-        SENTRY_ORG=jikigai \
-        SENTRY_API_HOST=de.sentry.io \
-        NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
-        SENTRY_FIXTURE_MONITORS="$1" \
-        SENTRY_FIXTURE_RULES="$TMP/rules.json" \
-        SENTRY_TF_DIR="$TMP/tf" \
-        AUDIT_OUT_DIR="$TMP/out" \
-        bash "$SCRIPT" 2>/dev/null) || rc=$?
+  local out rc=0 state="${2:-$TMP/state-empty.txt}"
+  if [[ "$state" == "__none__" ]]; then
+    # No state file at all -> the script cannot tell a pending destroy from a
+    # true orphan and must WARN rather than fail (the deadlock-avoidance branch).
+    out=$(SENTRY_AUTH_TOKEN=fake \
+          SENTRY_ORG=jikigai \
+          SENTRY_API_HOST=de.sentry.io \
+          NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+          SENTRY_FIXTURE_MONITORS="$1" \
+          SENTRY_FIXTURE_RULES="$TMP/rules.json" \
+          SENTRY_TF_DIR="$TMP/tf" \
+          AUDIT_OUT_DIR="$TMP/out" \
+          bash "$SCRIPT" 2>/dev/null) || rc=$?
+  else
+    out=$(SENTRY_AUTH_TOKEN=fake \
+          SENTRY_ORG=jikigai \
+          SENTRY_API_HOST=de.sentry.io \
+          NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+          SENTRY_FIXTURE_MONITORS="$1" \
+          SENTRY_FIXTURE_RULES="$TMP/rules.json" \
+          SENTRY_TF_DIR="$TMP/tf" \
+          SENTRY_STATE_SLUGS_FILE="$state" \
+          AUDIT_OUT_DIR="$TMP/out" \
+          bash "$SCRIPT" 2>/dev/null) || rc=$?
+  fi
   printf '%s|%s' "$rc" "$out"
 }
 
@@ -221,6 +244,99 @@ t_issue_alert_name_does_not_declare_cron_monitor() {
   fi
 }
 
+# ── T8 (#6589): a PENDING DESTROY is not Class D — the deadlock guard ───────
+# THE most important test in this file. Class D means "Terraform can never
+# reclaim this". A monitor that is IN STATE with no .tf block is the opposite:
+# the next full-root apply destroys it. That is #6589's fix working.
+#
+# Getting this wrong DEADLOCKS production. apply-sentry-infra.yml runs this audit
+# BEFORE `terraform plan`, so a Class D that fires on a pending destroy fails the
+# job, the plan never runs, the monitor is never destroyed, and it stays live and
+# billing — the detector blocks its own cure and recreates #6074's end state.
+#
+# This is not hypothetical. At the time of writing, live=50 / declared=49, and
+# the difference is scheduled-ghcr-token-minter — exactly the orphan #6589
+# destroys. Without this test, merging would have wedged the first apply.
+t_pending_destroy_is_not_class_d() {
+  local sf="$TMP/state-has-orphan.txt"
+  # BOTH undeclared slugs in the orphan fixture are tracked by state, so both are
+  # pending destroys. Listing only one would leave the other genuinely
+  # unreclaimable and the gate would (correctly) still fire — masking what T8 is
+  # actually asserting.
+  printf 'undeclared-orphan\nnever-checked-in\n' > "$sf"
+  local r; r=$(_run "$TMP/monitors-orphan.json" "$sf")
+  local rc="${r%%|*}" out="${r#*|}"
+  if [[ "$rc" -eq 0 ]] && ! grep -q 'SOLEUR_SENTRY_CLASS_D_ORPHAN' <<<"$out"; then
+    _report "T8 a monitor IN STATE with no .tf block is a pending destroy, not Class D (deadlock guard)" ok
+  else
+    _report "T8 a monitor IN STATE with no .tf block is a pending destroy, not Class D" fail \
+      "rc=$rc (want 0), marker present=$(grep -qc 'SOLEUR_SENTRY_CLASS_D_ORPHAN' <<<"$out" || echo 0). Class D fired on a pending destroy: the apply would halt BEFORE the plan that reclaims it, leaving the monitor live and billing."
+  fi
+}
+
+# ── T9: state UNKNOWN warns, does not fail ─────────────────────────────────
+# Without the state half, pending-destroy and true-orphan are indistinguishable.
+# Failing on an unresolvable set is what causes the deadlock, so the script must
+# report and exit 0; the authoritative fail-closed run is the one that injects
+# state (apply-sentry-infra.yml, which inits Terraform first).
+t_state_unknown_warns_not_fails() {
+  local r; r=$(_run "$TMP/monitors-orphan.json" "__none__")
+  local rc="${r%%|*}"
+  if [[ "$rc" -eq 0 ]]; then
+    _report "T9 state unknown -> warn, not fail (cannot classify => must not deadlock)" ok
+  else
+    _report "T9 state unknown -> warn, not fail" fail \
+      "rc=$rc (want 0) — failing on a set it cannot resolve is the deadlock"
+  fi
+}
+
+# ── T10: an EMPTY state file still FAILs ───────────────────────────────────
+# An empty state is not an unknown state: it means Terraform tracks nothing, so
+# every undeclared live monitor IS unreclaimable. Pins the file-path sentinel
+# against a "simplification" back to a bare env var, where empty-string and unset
+# collapse into one and this case would silently fail OPEN.
+t_empty_state_file_still_fails() {
+  local r; r=$(_run "$TMP/monitors-orphan.json" "$TMP/state-empty.txt")
+  local rc="${r%%|*}"
+  if [[ "$rc" -ne 0 ]]; then
+    _report "T10 an EMPTY state file still FAILs (empty state != unknown state)" ok
+  else
+    _report "T10 an EMPTY state file still FAILs" fail \
+      "rc=$rc (want non-zero) — empty state collapsed into 'unknown' and failed OPEN"
+  fi
+}
+
+# ── T11: a state file that is SET but MISSING must not fall back ───────────
+# The caller believes it provided state. Silently degrading to the warn path
+# would turn a broken producer into a permanently green gate.
+t_missing_state_file_errors() {
+  local r; r=$(_run "$TMP/monitors-orphan.json" "$TMP/definitely-not-here.txt")
+  local rc="${r%%|*}"
+  if [[ "$rc" -ne 0 ]]; then
+    _report "T11 SENTRY_STATE_SLUGS_FILE set but absent -> error, no silent fallback" ok
+  else
+    _report "T11 SENTRY_STATE_SLUGS_FILE set but absent -> error" fail \
+      "rc=$rc (want non-zero) — a broken state producer silently became a green gate"
+  fi
+}
+
+# ── T12: non-vacuity — state membership is what decides ────────────────────
+# Same monitors fixture, same tf dir; ONLY the state file differs. If both
+# return the same verdict, the state half is not wired and T8 is decorative.
+t_state_membership_is_decisive() {
+  local sf="$TMP/state-has-orphan.txt"
+  printf 'undeclared-orphan\nnever-checked-in\n' > "$sf"
+  local in_state out_state
+  in_state=$(_run "$TMP/monitors-orphan.json" "$sf"); in_state="${in_state%%|*}"
+  out_state=$(_run "$TMP/monitors-orphan.json" "$TMP/state-empty.txt"); out_state="${out_state%%|*}"
+  if [[ "$in_state" -eq 0 && "$out_state" -ne 0 ]]; then
+    _report "T12 state membership alone flips the verdict (non-vacuity)" ok
+  else
+    _report "T12 state membership alone flips the verdict" fail \
+      "in_state_rc=$in_state (want 0) out_of_state_rc=$out_state (want non-zero) — the state half is not actually consulted"
+  fi
+}
+
 t_declared_monitor_is_not_class_d
 t_undeclared_monitor_is_class_d_and_exits_nonzero
 t_comment_mention_does_not_declare
@@ -228,6 +344,11 @@ t_marker_format_is_exact
 t_gate_discriminates_on_exit_code
 t_report_written_even_when_gate_fails
 t_issue_alert_name_does_not_declare_cron_monitor
+t_pending_destroy_is_not_class_d
+t_state_unknown_warns_not_fails
+t_empty_state_file_still_fails
+t_missing_state_file_errors
+t_state_membership_is_decisive
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
