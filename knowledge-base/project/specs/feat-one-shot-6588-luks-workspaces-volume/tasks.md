@@ -36,16 +36,25 @@ one-shot), so the lane defaulted to `cross-domain` fail-closed.
 > The **decouple was DECLINED** (DC-A, DC-B). The "three PRs, not two" split below is **superseded**.
 > **#6588's AC governs: all doc corrections land in ONE PR, after live verification.**
 >
-> **TWO PRs, in this order:**
+> **THREE PRs, in this order** (operator split the infra work 2026-07-17):
 >
-> 1. **The infra PR — ⬅ THIS RUN.** §PR 2 tasks only. Gates = plan AC11–AC20. **Zero doc changes:** do
->    not touch `docs/legal/**`, `knowledge-base/legal/**`, or the Eleventy mirrors.
-> 2. **The coupled legal PR — NOT this run.** §PR 1 + §PR 3 tasks **merged into one PR**, gated on the
->    `workspaces-luks-cutover` canary passing. It retracts the three permanently-false clauses AND
->    asserts LUKS **present-tense true** in the same change, then closes DC-1.
+> 1. **The foundation PR — ✅ DONE (PR #6593).** Declares `workspaces-luks.tf` (no `format`; dedicated
+>    Doppler config; web-1 singleton), the mutation-tested `workspaces-luks.test.sh` drift guard + its
+>    `infra-validation.yml` registration, the `OPERATOR_APPLIED_EXCLUSIONS` entries (load-bearing for
+>    MERGEABILITY — verified by counterfactual), ADR-118, and the `model.c4` "host-local NVMe"
+>    correction. **ZERO live effect: it encrypts nothing.** The volume is not born until PR 2 runs.
+> 2. **The cutover PR — ➡️ #6604.** The half that moves sole-copy user data: the
+>    `workspaces-luks-cutover` dispatch job + `choice` option + `web-1-swap` concurrency, the gate lib +
+>    gate test, the volume-ID mount pin, the fail-closed gate delivered via the **cutover SSH channel**
+>    (ADR-118 §(e) — the bake has no consumer), and the observability emit path. **Every C1–C19
+>    correction lands here.** Gates = plan AC21–AC30.
+> 3. **The coupled legal PR — after PR 2's canary passes.** §PR 1 + §PR 3 tasks **merged into one PR**.
+>    Retracts the three permanently-false clauses AND asserts LUKS **present-tense true** in the same
+>    change, then closes DC-1. **Re-derive the clause-site count** — #6568 proliferated the claim into
+>    new changelog headers and the "20 sites" figure is already stale (see plan §P3 drift).
 >
-> **Scope of this run** (operator: *"Code + PR only; you drive cutover"*): implement and merge the infra
-> PR. The freeze/cutover runs later as a deliberate `workflow_dispatch`; the legal PR follows it.
+> **Zero doc changes in PRs 1 and 2:** do not touch `docs/legal/**`, `knowledge-base/legal/**`, or the
+> Eleventy mirrors until the canary passes (operator's coupling decision).
 
 ---
 

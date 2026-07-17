@@ -168,6 +168,28 @@ The real boundary is **host-vs-container**: cloud-init runs `doppler secrets dow
 into the TMPENV that feeds `docker run --env-file`, so a key in shared `prd` would be readable via
 `/proc/self/environ` **by the very agent code whose data it encrypts** (CWE-522).
 
+**The mechanism is inheritance DIRECTIONALITY, not scope reduction — and this ADR will not claim
+otherwise.** Doppler resolves **root → branch**, so a secret in the branch does not appear in a
+`--config prd` download. That asymmetry is the whole guarantee. The inverse does **not** hold: the
+branch **inherits the full root set**, so the boot token resolves ~116 `prd` secrets including
+`SUPABASE_SERVICE_ROLE_KEY` and is materially a full-prd token. The repo established this empirically
+(`knowledge-base/project/learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md`,
+severity high; #6122 fixed zot by moving to a **separate project**; **#6167** audits the rest —
+including `prd_git_data`, the precedent this ADR mirrors). It is free on web-1, which already carries
+a full-prd token, so the CWE-522 container boundary holds regardless. **True isolation is a separate
+Doppler project — #6167's scope, deliberately not this work's.**
+
+**Named deferral to #6604 (the cutover).** Because the branch inherits the root, the natural host-side
+reads reintroduce the exact exposure this section closes:
+`doppler run --config prd_workspaces_luks -- …` and
+`doppler secrets download --config prd_workspaces_luks` both inject all ~116 secrets **plus** the key
+into one environment. **Only `doppler secrets get WORKSPACES_LUKS_KEY --plain --config
+prd_workspaces_luks` is safe.** Nothing in PR 1 can pin this — the `.tf` and its guard cannot see
+host-side code. #6604 must pin it, and should carry the boot self-assertion the learning prescribes
+(refuse to start unless the shipped token resolves exactly the expected secret set — count AND
+identity), because **every other signal fails OPEN on an over-scoped token**. Precedent:
+`cloud-init-registry.yml`.
+
 **Escrow is a blocking pre-freeze gate** (CPO amendment): passphrase loss makes the volume unreadable
 forever — a terminal mode **created by this fix**, strictly worse than the exposure being closed.
 

@@ -672,7 +672,11 @@ const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   // doppler_service_token.git_data. The dedicated config is a SECURITY boundary, not hygiene:
   // web-1's cloud-init runs `doppler secrets download --config prd` into the TMPENV that feeds
   // `docker run --env-file`, so a key in shared `prd` would be readable via /proc/self/environ
-  // by the agent container whose own data it encrypts (CWE-522).
+  // by the agent container whose own data it encrypts (CWE-522). The mechanism is inheritance
+  // DIRECTIONALITY (root → branch), NOT scope reduction: this token still resolves the full prd
+  // set, exactly like the "leaky prd_registry branch config" named below — see #6167 and
+  // learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md.
+  // It is free here because web-1 already carries a full-prd DOPPLER_TOKEN.
   "doppler_service_token.workspaces_luks",
   // #6122 (ADR-096) — minted into the ISOLATED `soleur-registry` project's `prd` root config
   // (TF-created via doppler_project.registry in the operator full apply; its own root holds ONLY

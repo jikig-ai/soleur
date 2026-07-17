@@ -69,8 +69,28 @@ resource "random_password" "workspaces_luks" {
 # ENCRYPTS (CWE-522) — reducing the at-rest guarantee to zero against in-container
 # compromise or prompt-injection exfiltration.
 #
-# The dedicated config is what keeps the key out of `--env-file`. Asserted by
-# workspaces-luks.test.sh A7 (mutation: config == "prd" ⇒ RED).
+# THE MECHANISM IS INHERITANCE DIRECTIONALITY, AND IT IS THE ONLY THING LOAD-BEARING.
+# Doppler resolves root → branch: a secret written to the `prd_workspaces_luks` BRANCH
+# does not appear in a `--config prd` download. That asymmetry — and nothing else — is
+# what keeps the key out of `--env-file`.
+#
+# ⚠️ THIS IS NOT LEAST PRIVILEGE, AND SAYING SO WOULD BE FALSE.
+# The inverse does NOT hold: a branch config INHERITS the full root secret set, so
+# `doppler_service_token.workspaces_luks` below resolves ~116 `prd` secrets including
+# SUPABASE_SERVICE_ROLE_KEY. It is materially a full-prd token. The repo established
+# this empirically and is tracking it:
+#   knowledge-base/project/learnings/security-issues/
+#     2026-07-07-doppler-branch-config-does-not-isolate-secrets.md  (severity: high)
+#   #6122 fixed zot by moving to a SEPARATE PROJECT; #6167 audits the rest — including
+#   `prd_git_data`, the precedent this file mirrors.
+# It costs nothing on web-1 (which already carries a full-prd DOPPLER_TOKEN at
+# cloud-init.yml:409, so there is no host blast radius left to buy), which is why the
+# CWE-522 container boundary still genuinely holds. True isolation would be a separate
+# Doppler project — that is #6167's scope, not this PR's.
+#
+# Asserted by workspaces-luks.test.sh A7 (relocation ⇒ RED) AND A11 (ADDITION of any
+# resource writing to `config = "prd"` ⇒ RED). A7 alone was addition-blind: a SECOND
+# doppler_secret writing this key to shared `prd`, unmasked, passed 20/20 green.
 #
 # OPERATOR PRECONDITION: the `prd_workspaces_luks` config must exist in Doppler
 # BEFORE `terraform apply` — the provider manages environments and configs as a unit
@@ -83,8 +103,18 @@ resource "doppler_secret" "workspaces_luks_key" {
   visibility = "masked"
 }
 
-# Read-only boot token: the host resolves the passphrase at unlock time via this
-# token, NOT via the full-prd token that feeds the container's --env-file.
+# The host resolves the passphrase at unlock time via this token. `access = "read"`
+# is real (it cannot WRITE secrets) — but it is NOT a narrower READ scope than the
+# host's existing full-prd token: branch configs inherit the root, so this token reads
+# all ~116 prd secrets too (see the escrow comment above, #6167). Do not describe it
+# as least-privilege.
+#
+# ⚠️ #6604 (the cutover) MUST read it with `doppler secrets get WORKSPACES_LUKS_KEY
+# --plain --config prd_workspaces_luks`. The natural-looking alternatives are exactly
+# the CWE-522 hole this file exists to close, because inheritance drags the root in:
+#   `doppler run --config prd_workspaces_luks -- …`      → injects all ~116 + the key
+#   `doppler secrets download --config prd_workspaces_luks` → same, into a file
+# Neither this .tf nor its guard can see host-side code, so nothing here pins it.
 resource "doppler_service_token" "workspaces_luks" {
   project = "soleur"
   config  = "prd_workspaces_luks"
