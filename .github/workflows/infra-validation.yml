@@ -588,6 +588,12 @@ jobs:
       - name: Run git-data transport-wrapper allowlist tests
         run: bash apps/web-platform/infra/git-data-transport-wrapper.test.sh
 
+      # Registered explicitly because this job runs named steps, not a glob — an unregistered infra
+      # suite gates NOTHING and fails silently green (#3366/#6520). Pure bash + python3: no
+      # terraform, cloud-init, docker, network, or root, so this job's environment already suffices.
+      - name: Run credential-persist-to-home guard (#6633 — ProtectHome=read-only cred-write class)
+        run: bash apps/web-platform/infra/credential-persist-home-guard.test.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:
