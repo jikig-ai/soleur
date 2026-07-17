@@ -14,6 +14,16 @@ branch: feat-one-shot-6497-docker-login-readonly-cred
 
 🐛 **P1** — `ci-deploy.sh`'s `docker login` (GHCR prelude + zot gate) authenticates, then **fails to save credentials** because it writes to `$HOME/.docker/config.json` (`/home/deploy/.docker/config.json`), which sits under `ProtectHome=read-only` and is **not** in `webhook.service`'s `ReadWritePaths=` → `EROFS`. Systemic across **both** web hosts (a static, shared unit directive), independent of host age.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-17 (one-shot pipeline: plan → 6-agent plan-review applied → deepen-plan)
+
+**Key improvements folded in (plan-review, all Mechanical):** fix mechanism confirmed sound by architecture-strategist deep-trace; Phase 0 reframed to the one unmeasured link (`docker login` honors `DOCKER_CONFIG`); `GHCR_DOCKER_CONFIG` derived from exported `DOCKER_CONFIG` (single source of truth); tests collapsed to two load-bearing invariants with anchored greps; **repair retargeted to #6565** (not the instrument's #6497); **per-host_id soak PASS + forced-deploy Phase 4** (the close loop was previously unreachable).
+
+**Deepen-plan gates run:** 4.6 User-Brand Impact ✓ (threshold `aggregate pattern`), 4.7 Observability ✓ (5 fields, no-ssh), 4.8 PAT-shaped ✓ (none), 4.9 UI-wireframe ✓ (no UI surface — skip), 4.4 precedent-diff ✓ (ProtectHome-relocate), 4.5 Network-Outage Deep-Dive (fired — see Hypotheses), 4.55 Downtime & Cutover (fired — see section).
+
+**New considerations surfaced by the deepen gates:** (a) the delivery apply (`apply-deploy-pipeline-fix.yml` → `terraform_data.deploy_pipeline_fix`) carries an apply-time **SSH-provisioner dependency** (`server.tf:273-528` `connection{}`+`provisioner`), so the operator egress-IP must be in `hcloud_firewall.web`'s SSH allowlist at apply time (cross-ref #3061); (b) the web-2 `-replace` is a **warm-standby (drained, non-serving) recreate** — zero-downtime for users, and web-1 is never power-cycled (hot-push), so no serving surface goes offline.
+
 ## Overview
 
 The 2026-07-16 login-gate instrument (PR #6528) emitted the discriminating datum from live Better Stack telemetry (12h, 55 failed-login lines, zero `class=unclassified`):
@@ -67,6 +77,17 @@ Root cause is **measured, not hypothesized** (see Overview). For completeness:
 
 - **Network-outage checklist (plan Phase 1.4):** considered and **N/A**. The trigger scan matches the substring `SSH` (in "no SSH") but the failure is definitively a **local filesystem write (EROFS)** — the telemetry proves `stderr_chars>0, stdout_chars=0, kw=erofs`, and `docker login` fails **before any registry request** (no L3-L7 connectivity involved). The L3→L7 firewall-first checklist governs connectivity **diagnoses**; this is a filesystem-permission fix on a measured root cause, so no `hr-ssh-diagnosis-verify-firewall` incident is emitted.
 - **Falsified alternatives (do not re-derive):** htpasswd stale-bake (converged 2026-07-16 08:15Z, `login_failed` continued); credential drift (all three planes agree, per issue body); disk-full (`kw`≠`nospace`); missing `credsStore` (`kw`≠`execnotfound`); empty-stderr H-B (`stderr_chars>0`).
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+The keyword scan matched (`SSH`, `firewall`, `timeout`) **and** the resource-shape trigger fired: the reach-path drives a `terraform apply` on `terraform_data.deploy_pipeline_fix`, which has `connection {}` + `provisioner "file"`/`"remote-exec"` blocks (`server.tf:273-528`) — an apply-time SSH dependency (cross-ref #3061). Layer-by-layer status:
+
+- **L3 firewall allow-list — VERIFY AT APPLY (delivery, not the bug):** the `apply-deploy-pipeline-fix.yml` apply reaches web-1 over SSH (the provisioner). Per `hr-ssh-diagnosis-verify-firewall` + #3061, the operator/CI egress IP MUST be in `hcloud_firewall.web`'s SSH allowlist when that apply runs, or it fails `connection reset by peer` with zero SSH keywords in the error. This is a **pre-existing** property of the delivery mechanism, not introduced by this fix; the plan does not change the provisioner or firewall. Action: the ship/apply step confirms the apply succeeded (workflow green) — a `connection reset` there is an egress-IP-drift signal, not a code defect.
+- **L3 DNS/routing — N/A to the bug:** the failure is local (EROFS), pre-any-request.
+- **L7 TLS/proxy — N/A to the bug:** `docker login` fails at the credential-PERSIST step, after auth, before any registry transport (`stderr_chars>0, stdout_chars=0, no network I/O`).
+- **L7 application — the actual fault, MEASURED:** `class=cred_store kw=errsaving,erofs` — a filesystem write, not connectivity.
+
+Conclusion: the **failure** is definitively non-network (local EROFS). The only network surface in scope is the **delivery apply's** pre-existing SSH provisioner, whose L3 allowlist is the operator's standing apply-time precondition (#3061) — flagged, not a new dependency.
 
 ## Fix Evaluation
 
@@ -226,6 +247,36 @@ Neither host is in the routine per-PR `-target` allow-list (`apply-web-platform-
 ### Distinctness / drift safeguards
 
 No `dev`/`prd` variable, no new state, no `for_each`. `host_scripts_content_hash` drift is the existing, guarded mechanism (drift detector + `web2-recreate-preflight.sh`). No Terraform state touches secrets.
+
+### Precedent-diff (deepen-plan Phase 4.4)
+
+Pattern-bound behavior: writing a service-sandboxed process's config off a `ProtectHome=read-only` home dir onto a declared `ReadWritePath`. **Precedent exists** — `knowledge-base/project/learnings/integration-issues/2026-04-06-doppler-protecthome-readonly-config-dir-fix.md` (Doppler CLI `os.Mkdir(~/.doppler)` EROFS under `ProtectHome=read-only`). Side-by-side: the precedent **relocates the write to a writable path** and its Prevention section explicitly names Docker `~/.docker` as the same offender class to audit. This plan's Option 2 IS that precedent applied to `~/.docker` → `/mnt/data`. The substrate-audit learning (`2026-05-19-inngest-substrate-five-bug-cascade.md`) established `/mnt/data` as the sanctioned writable substrate in both `ReadWritePaths` copies. Pattern is **not novel** — it is the established, twice-documented form. (Option 1's ReadWritePaths-widening is the variant the precedent's "Why not ReadWritePaths" section argues against.)
+
+## Downtime & Cutover
+
+Deepen-plan Phase 4.55 fired (a `-replace` on `hcloud_server.web["web-2"]`). The plan **defaults to zero-downtime** and proves it — no serving surface goes offline:
+
+- **web-1 (the serving host): NO downtime, NO reboot.** The fix is a `ci-deploy.sh` edit delivered via the `infra-config` **hot-push** (`apply-deploy-pipeline-fix.yml` → `/hooks/infra-config`), which writes `/usr/local/bin/ci-deploy.sh` in place. `hcloud_server.web` pins `lifecycle { ignore_changes = [user_data, …] }` (`server.tf:254-256`), so no `user_data`/replace is triggered on web-1, and the `webhook.service` unit is unchanged (no reload). web-1 keeps serving throughout. This is precisely why Option 2 was chosen over Option 1 (whose systemd-unit half would force a web-1 power-off).
+- **web-2 (warm standby): zero-downtime recreate (blue-green-shaped).** web-2 is a drained, **non-serving** warm standby (`server.tf:233-253`, `lb-weight-gate.sh`); it takes no user traffic until failover. The `apply_target=web-2-recreate` `-replace` births a fresh host running first-boot cloud-init, preflight-gated (`web2-recreate-preflight.sh`), with **zero user-facing impact** — the only power-off is of a host that serves nobody. This is the #5887 zero-downtime-first pattern (`2026-07-02-zero-downtime-first-moved-block-statemv-and-blue-green-cutover.md`).
+- **No database lock class, no in-flight-request drop class** — the change touches no migration and no router/connector on the serving path.
+
+**Residual downtime: none.** No bounded maintenance window or serving-surface outage is required. Operator sign-off is the recreate **ACK** only (a prod host mutation), not an availability trade.
+
+## Downtime & Cutover (deepen-plan Phase 4.55)
+
+The web-2 delivery path is a `terraform -replace` on `hcloud_server.web["web-2"]` (a replace of a serving-class resource → the trigger fires). **Evaluated and defaults to zero-downtime** — no serving surface goes offline:
+
+- **web-1 (the serving host): NO reboot, NO power-off.** The fix is delivered by the `ci-deploy.sh` **hot-push** (`apply-deploy-pipeline-fix.yml` → `/hooks/infra-config`), which writes `/usr/local/bin/ci-deploy.sh` in place. `hcloud_server.web` pins `user_data`/`image` via `lifecycle { ignore_changes = [...] }` (`server.tf:254-256`), so the cloud-init the plan does NOT edit cannot force a web-1 replace either. This is the decisive advantage of Option 2 over Option 1 (whose systemd-unit half would have needed a web-1 maintenance-window power-off).
+- **web-2 (warm standby): recreate is zero-downtime for users.** web-2 is a **drained, non-serving** warm standby (LB-weight-gated, `lb-weight-gate.sh`), so replacing it never drops a live request — the blue-green shape of #5887 (`2026-07-02-zero-downtime-first-moved-block-statemv-and-blue-green-cutover.md`). Its recreate runs under the sanctioned `apply_target=web-2-recreate` dispatch, preflight-gated, inside the operator's own timing.
+- **Residual downtime: none.** No bounded maintenance window is required for either host. The only operator-ACK'd action (web-2 recreate) affects a non-serving host.
+
+## Precedent Diff (deepen-plan Phase 4.4)
+
+The fix is a **pattern-bound behavior** (systemd `ProtectHome=read-only` + a process that writes a home config dir). Precedent exists and the fix mirrors it:
+
+- **Precedent:** `knowledge-base/project/learnings/integration-issues/2026-04-06-doppler-protecthome-readonly-config-dir-fix.md` — Doppler CLI's `os.Mkdir(~/.doppler)` hit EROFS under `ProtectHome=read-only`; the resolution **relocated the write off the home dir to a writable path** (and its "Why not ReadWritePaths" section argues against punching a home hole; its Prevention names **Docker `~/.docker`** as the same offender class). This plan applies that precedent verbatim to `~/.docker` → `/mnt/data`. **No divergence.**
+- **Substrate precedent for `/mnt/data` as the writable target:** `2026-05-19-inngest-substrate-five-bug-cascade.md` (#4017) established `/mnt/data` as the sanctioned `ReadWritePath` for deploy-written state. This plan writes there rather than adding a new hole — consistent.
+- **No novel pattern introduced** — reviewers need not scrutinize a new sandbox mechanism.
 
 ## Observability
 

@@ -39,6 +39,7 @@ Recommended fix: **Option 2** — relocate the deploy-user docker config onto `/
 
 ## Phase 4 — Delivery + verification (ship-driven, operator ACK only)
 
+- [ ] 4.0 Apply-time precondition (deepen 4.5): the delivery apply runs SSH provisioners (`server.tf:273-528`) — confirm the CI/operator egress IP is in `hcloud_firewall.web`'s SSH allowlist (else `connection reset`, per #3061). A green `apply-deploy-pipeline-fix.yml` run is the check.
 - [ ] 4.1 Merge → `apply-deploy-pipeline-fix.yml` hot-pushes ci-deploy.sh to web-1; force a web-1 deploy (re-deploy pinned version) so the deploy-user login runs the relocated path.
 - [ ] 4.2 Build-green gate: confirm `web-platform-release.yml` for the merge SHA is green + image pinned BEFORE web-2 recreate.
 - [ ] 4.3 Operator ACK: `gh workflow run apply-web-platform-infra.yml -f apply_target=web-2-recreate` (passes `web2-recreate-preflight.sh`); force a web-2 deploy to exercise its deploy-user login.
