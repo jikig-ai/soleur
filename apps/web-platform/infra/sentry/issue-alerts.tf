@@ -1662,3 +1662,129 @@ resource "sentry_issue_alert" "workspaces_luks_drift" {
     ignore_changes = [environment]
   }
 }
+
+# #6512 Fix 1 — seccomp reload local-cache reuse (registry == "local-cache"). ci-deploy.sh's
+# pull_image_with_fallback grew a THIRD, last-resort tier: when BOTH the zot-primary and the
+# GHCR-fallback legs fail to serve a same-version `web` reload (the item-4 seccomp redeploy of
+# v<running_version>), it reuses the ALREADY-RUNNING container's cosign-verified image ID instead
+# of dying image_pull_failed, and emits `registry_pull_event local-cache` at level=warning.
+#
+# This is a SEPARATE alert from zot_mirror_fallback_rate on purpose (do NOT fold local-cache into
+# that rule): `ghcr-fallback` means "zot missed but GHCR served" and is the single no-SSH page
+# gating the IRREVERSIBLE ADR-096 §5.5 GHCR-PAT retirement — a `local-cache` event means NEITHER
+# registry served, a categorically different (and worse) condition. Overloading the retirement gate
+# with it would corrupt that gate's meaning. A dedicated rule keeps the two signals decoupled.
+#
+# value=0 pages on ANY local-cache reuse (mirrors zot_mirror_fallback_rate's #6285 value=0 posture):
+# the reload succeeded THIS time by reusing the local image, but both registries failing to serve an
+# already-built image is a standing supply-chain-path degradation that must not hide behind the
+# working local cache (the silent-fallback-14-days class). GROUPING: registry_pull_event embeds the
+# unique deploy tag in the MESSAGE ("image pulled from local-cache (web:vX.Y.Z)"), so Sentry mints a
+# FRESH issue-group per deploy — no pre-existing mute can permanently silence it.
+#
+# Distinct frequency = 26 avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-25,30,60-62).
+# Events carry only registry/image/tag — no user content.
+resource "sentry_issue_alert" "local_cache_reload_rate" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "local-cache-reload-rate"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 26
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        value           = 0
+        interval        = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "registry"
+        match = "EQUAL"
+        value = "local-cache"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
+  # on this project → falls through to ActiveMembers, paging the solo founder. Events carry only
+  # registry/image/tag — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# #6512 Fix 2a — seccomp remediation redeploy terminally FAILED, leaving the running container's
+# profile UNENFORCED (op == "seccomp-remediation-failed"). Emitted by scripts/seccomp-unenforced-alert.sh
+# (sourced by apply-deploy-pipeline-fix.yml's item-4 step) at every terminal failure that gives up
+# with the profile confirmed-or-presumed unenforced (redeploy image_pull_failed / diagnose_and_fail).
+#
+# This is a DEDICATED alert, distinct from the container/registry supply-chain rules: the operator's
+# PRIMARY surface is the plain-language `ci/seccomp-unenforced` GitHub issue the same emitter files
+# (operator-digest harvests action-required issues, never red CI jobs); this Sentry rule is the
+# secondary alerting plane. It is EVENT-driven, deliberately NOT a cron-monitor check-in — an
+# event-driven check-in to a cadence monitor's slug resets its missed-check-in clock and masks a
+# genuinely-missed scheduled beat (code-simplicity MEDIUM).
+#
+# value=0 pages on the FIRST occurrence — an unenforced security control on prod is high-severity and
+# invisible on the site's own health (the #6454/#6512 shape). GROUPING: the event message embeds the
+# failure detail so Sentry groups per distinct cause.
+#
+# Distinct frequency = 27 avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-26,30,60-62).
+# Events carry only the failure detail (host_present/host_sha/loaded_matches or a redeploy reason) —
+# no user content.
+resource "sentry_issue_alert" "seccomp_remediation_failed" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "seccomp-remediation-failed"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 27
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        value           = 0
+        interval        = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "seccomp-remediation-failed"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
+  # on this project → falls through to ActiveMembers, paging the solo founder. Events carry only the
+  # failure detail — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}

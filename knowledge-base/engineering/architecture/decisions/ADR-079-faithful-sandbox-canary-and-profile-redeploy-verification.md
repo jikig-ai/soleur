@@ -411,6 +411,74 @@ committed profile satisfies the invariant). Adds a marginal second `docker inspe
 No new `TF_VAR_*`; `aggregate pattern` threshold unchanged. Files:
 `apps/web-platform/infra/cat-deploy-state.sh` + `.github/workflows/apply-deploy-pipeline-fix.yml`.
 
+### Amendment (#6512, 2026-07-17) — reload survives a both-registries-fail via the local image; an unenforced profile becomes a standing, plain-language alarm
+
+On 2026-07-16 the item-4 redeploy (this ADR's PR3 mechanism) terminated
+`image_pull_failed` on `v0.214.7`, leaving `seccomp_profile_host_present=false` — the control
+unenforced, and the ONLY signal one red job among a page of green (the #6454 invisible-gate
+shape). Phase-0 diagnosis + two composable fixes:
+
+**Phase-0 findings (in-session, no SSH).**
+- **Q1 ("state-file `.tag='latest'` aimed the remediation at a stale image") is SUPERSEDED, not a
+  bug.** The #5955 amendment already resolves the redeploy target from `/health` `.version`
+  (`apply-deploy-pipeline-fix.yml:631-643`); `CURRENT_TAG` (`.tag`, read at `:589`) feeds only the
+  diagnostic log strings (`:592/:640/:643`). `v0.214.7` was the *correct* running version at 21:03
+  (v0.215.x released later). **Do not re-open Q1** — "fix the tag" fixes a non-bug.
+- **The image was pullable.** A live authenticated GHCR manifest fetch of `v0.214.7` returns HTTP
+  200 — GHCR retains it. The failure was a transient/auth leg failure (the #6090 stale-baked-cred
+  class or GHCR degradation), consistent with zot GC'ing the several-releases-old tag from its
+  5-`v*` keep-set (`variables.tf:176`, #6246) and the GHCR fallback leg then also failing.
+- **Fix-2b gate → DEFER.** No non-merge unenforcement path is confirmable in-session that Fix 2a
+  would not already catch: `terraform_data.docker_seccomp_config` (`server.tf`) is keyed on BOTH
+  the profile hash AND `server_id`, so a host replacement re-runs the provisioner (re-delivers the
+  file) and the container re-enforces at `docker run`; a reboot preserves the durable file +
+  `--security-opt`. The standing probe (Fix 2b) is filed as a tracked follow-up (#6628), not built
+  speculatively (code-simplicity); the deep delivery-leg RCA (why `host_present=false`) is filed
+  separately as #6629 (a discovered defect, live-state-dependent).
+
+**Fix 1 — a `local-cache` last-resort tier in `ci-deploy.sh`'s `pull_image_with_fallback`.** The
+item-4 redeploy targets `v<running_version>` — the image the container is ALREADY running
+(cosign-verified at its original deploy, immutable @sha256, always in the host's local docker
+store), so a registry round-trip for the reload is an unnecessary single point of failure. On
+BOTH-registries-fail for a `web` immutable-semver reload, the tier reuses the RUNNING container's
+image ID (keyed off the literal container name `soleur-web-platform`) as `VERIFIED_REF` and
+**skips re-verify with an EXPLICIT `cosign_reused_local_reload` decision** — this is a deliberate
+amendment to the **ADR-087** cosign contract (re-verifying identical @sha256 bits is a no-op;
+skipping it explicitly is the honest posture vs. silently falling through the `warn`-mode
+fail-open), and a THIRD tier on **ADR-096**'s zot→GHCR pull chain (a future §5.3 GHCR-retirement
+editor must see it). Blast radius for any genuine version change is zero (a re-pushed tag / stale
+leftover / new-version deploy is never the running image ID → hard `image_pull_failed` unchanged).
+Usage is a MONITORED `registry=local-cache level=warning` emit → the DEDICATED
+`local_cache_reload_rate` issue-alert (NOT folded into `zot_mirror_fallback_rate`, whose
+`ghcr-fallback` signal gates the irreversible ADR-096 §5.5 GHCR retirement — `local-cache` means
+*neither* registry served, a different meaning), plus the `scheduled-zot-restart-loop.yml`
+pull-health runbook grep extended to `local-cache` (a host silently on local-cache must not read
+CLEAN and fire a blind registry-replace).
+
+**Fix 2a — an unenforced profile becomes a plain-language, operator-readable alarm (SHIP).** On any
+item-4 terminal failure that leaves the profile unenforced (redeploy `image_pull_failed` /
+`diagnose_and_fail`), `scripts/seccomp-unenforced-alert.sh` (sourced by the item-4 step, fail-open)
+files/updates a deduped plain-language `ci/seccomp-unenforced` GitHub issue (the surface
+`operator-digest` harvests — never PR bodies or red CI jobs) AND emits a
+`op:seccomp-remediation-failed` Sentry event → the dedicated `seccomp_remediation_failed`
+issue-alert. It is EVENT-driven, deliberately NOT a cron-monitor check-in (an event-driven check-in
+to a cadence slug resets its missed-beat clock and masks a genuinely-missed beat).
+
+**Fix 2b — DEFERRED (standing 6h enforcement watchdog, tracked in #6628).** Filed as a tracked
+follow-up to build if a non-merge unenforcement path is ever observed (a `ci/seccomp-unenforced`
+issue with `host_present=false` outside a known item-4 run). **Loop-vs-watchdog reconciliation:** this ADR
+rejected an *item-4* self-healing verify-LOOP; a SEPARATE standing watchdog firing ONE bounded,
+age-gated, idempotent re-dispatch (the accepted `inngest-watchdog` pattern) is the distinct,
+sanctioned mechanism — NOT the rejected loop.
+
+**Tracked residual (arch P2):** a host that reboots/replaces onto a stale-but-*enforcing* profile
+(`host_present=true, loaded_matches=true, host_sha!=committed`) is not paged until the next item-4
+run — filed to close the window (page on a `host_sha!=committed` mismatch persisting across ≥2
+probes). **Status stays `adopting`** (Deferral A / #5889 still open); `aggregate pattern` threshold
+unchanged; no new `TF_VAR_*`. Files: `apps/web-platform/infra/ci-deploy.sh` (+`.test.sh`),
+`scripts/seccomp-unenforced-alert.sh` (+`.test.sh`), `apps/web-platform/infra/sentry/issue-alerts.tf`
+(two dedicated alerts), `.github/workflows/{apply-deploy-pipeline-fix,scheduled-zot-restart-loop}.yml`.
+
 ## Consequences
 
 - **Positive.** A future SDK bump that breaks the sandbox is caught pre-merge

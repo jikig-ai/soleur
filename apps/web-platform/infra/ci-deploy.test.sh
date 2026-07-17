@@ -243,6 +243,20 @@ if [[ "${1:-}" == "run" ]]; then
     fi
   done
 fi
+# #6512: `docker inspect --format '{{.Image}}' soleur-web-platform` resolves the
+# RUNNING container to its image ID — the key the local-cache reload tier reuses
+# on a both-registries-fail same-version seccomp reload. Armed via
+# MOCK_RUNNING_IMAGE_ID (empty by default ⇒ no running container ⇒ tier does NOT
+# fire). Scoped to the `.Image` format so it never perturbs the RepoDigests inspect
+# below or the inngest `.Config.Env` inspect.
+if [[ "${1:-}" == "inspect" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == *".Image"* && "$_a" != *"RepoDigests"* ]]; then
+      printf '%s\n' "${MOCK_RUNNING_IMAGE_ID:-}"
+      exit 0
+    fi
+  done
+fi
 # `docker inspect --format '{{index .RepoDigests 0}}' <img>` resolves the pulled
 # tag to its immutable digest. Return a synthetic digest ref unless the test arms
 # MOCK_INSPECT_NO_DIGEST (exercises the inspect_failed WARN fallback). Scoped to
@@ -359,6 +373,17 @@ if [[ "${1:-}" == "pull" ]]; then
       fi
     fi
   fi
+fi
+
+# #6512: `docker image inspect <id>` — the local-cache reload tier's presence probe
+# for the running container's image. Present (exit 0) iff <id> equals the armed
+# MOCK_RUNNING_IMAGE_ID; absent (exit 1) otherwise. `docker image prune -af`
+# ($2=prune) falls through untouched.
+if [[ "${1:-}" == "image" && "${2:-}" == "inspect" ]]; then
+  if [[ -n "${MOCK_RUNNING_IMAGE_ID:-}" && "${3:-}" == "${MOCK_RUNNING_IMAGE_ID}" ]]; then
+    exit 0
+  fi
+  exit 1
 fi
 
 case "$mode" in
@@ -3415,6 +3440,117 @@ else
 fi
 unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6400"
+
+echo ""
+echo "--- #6512 local-cache reload tier (both registries fail → reuse the RUNNING image) ---"
+# The item-4 seccomp redeploy targets v<running_version> — the image the container is
+# ALREADY running (cosign-verified at its original deploy, immutable @sha256, always in the
+# host's local docker store). When both registries fail to serve that already-present image
+# (zot GC'd the several-releases-old tag from its 5-v* keep-set; GHCR leg then also fails),
+# the reload must NOT die image_pull_failed — it reuses the running container's image ID.
+# Extracts the local-cache event's level from the captured Sentry payload stream via jq -s.
+_lc_level() { jq -rs '.[] | select(.tags.registry=="local-cache") | .level' "$1" 2>/dev/null; }
+
+# (a) both fail (zot dark + GHCR deny) + web + immutable semver + running image present →
+#     RESCUED: registry=local-cache level=warning + cosign_reused_local_reload, deploy proceeds.
+T6512=$(mktemp -d)
+export MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_RUNNING_IMAGE_ID="sha256:6512aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+export MOCK_SENTRY_CAPTURE_FILE="$T6512/a.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+export CI_DEPLOY_STATE="$T6512/a.state"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && A_RC=0 || A_RC=$?
+read_state_reason_and_exit "$CI_DEPLOY_STATE" A_REASON A_EXIT
+TOTAL=$((TOTAL + 1))
+if [[ "$A_RC" -eq 0 ]] && [[ "$A_REASON" != "image_pull_failed" ]] \
+   && grep -q 'image pulled from local-cache' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && [[ "$(_lc_level "$MOCK_SENTRY_CAPTURE_FILE")" == "warning" ]] \
+   && grep -q 'reused_local_reload' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: both-fail + running image present → reused local image (rc=$A_RC), local-cache level=warning, cosign_reused_local_reload"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: #6512(a) rc=$A_RC reason=$A_REASON level=$(_lc_level "$MOCK_SENTRY_CAPTURE_FILE")"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+rm -rf "$T6512"
+
+# (b) #6512's ZOT-SERVED topology: zot ACTIVE + zot pull fails + GHCR deny (both fail via the
+#     ZOT_ACTIVE both-failed exit) → still rescued via the running image ID (IMAGE stays the
+#     ghcr ref, un-reassigned; a tier keyed on ${IMAGE}:${TAG} would MISS). Proves BOTH
+#     both-failed exits rescue (P2-5), not only the zot-dark one.
+T6512=$(mktemp -d)
+export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1 MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_RUNNING_IMAGE_ID="sha256:6512bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+export MOCK_SENTRY_CAPTURE_FILE="$T6512/b.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+export CI_DEPLOY_STATE="$T6512/b.state"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && B_RC=0 || B_RC=$?
+read_state_reason_and_exit "$CI_DEPLOY_STATE" B_REASON B_EXIT
+TOTAL=$((TOTAL + 1))
+# Assert the RESCUE fired on the ZOT_ACTIVE both-failed exit and got PAST the pull — NOT full-deploy
+# rc 0. Under MOCK_ZOT_CONFIGURED the mock harness's canary-health stage fails for reasons unrelated
+# to this tier (the sibling assert_zot_* tests likewise tolerate a non-zero deploy via `|| true`);
+# case (a) proves the identical VERIFIED_REF path reaches rc 0 on the zot-dark exit. The discriminator
+# here is: the local-cache event fired (a zot-dark-only tier would MISS this exit → RED) AND the pull
+# did NOT hard-fail (reason moved past image_pull_failed to a later stage).
+if [[ "$B_REASON" != "image_pull_failed" ]] \
+   && grep -q 'image pulled from local-cache' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: zot-served topology (ZOT_ACTIVE both-fail) → rescued via running image ID (reason moved past pull: $B_REASON)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: #6512(b) rc=$B_RC reason=$B_REASON (expected local-cache event + reason != image_pull_failed)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+rm -rf "$T6512"
+
+# (c) both fail + running image ABSENT (MOCK_RUNNING_IMAGE_ID unset) → unchanged hard
+#     image_pull_failed, NO local-cache event (the tier's presence-probe gates it out).
+T6512=$(mktemp -d)
+export MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_SENTRY_CAPTURE_FILE="$T6512/c.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+export CI_DEPLOY_STATE="$T6512/c.state"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && C_RC=0 || C_RC=$?
+read_state_reason_and_exit "$CI_DEPLOY_STATE" C_REASON C_EXIT
+TOTAL=$((TOTAL + 1))
+if [[ "$C_RC" -ne 0 ]] && [[ "$C_REASON" == "image_pull_failed" ]] \
+   && ! grep -q 'image pulled from local-cache' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: running image absent → hard image_pull_failed (unchanged), no local-cache event"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: #6512(c) rc=$C_RC reason=$C_REASON (expected nonzero + image_pull_failed + no local-cache)"
+fi
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+rm -rf "$T6512"
+
+# (c2) non-web (inngest) both-fail WITH a running image present → the web-only guard means the
+#      tier does NOT fire: no local-cache event (guards against dropping the image_kind==web gate).
+T6512=$(mktemp -d)
+export MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_RUNNING_IMAGE_ID="sha256:6512cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+export MOCK_SENTRY_CAPTURE_FILE="$T6512/c2.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy inngest ghcr.io/jikig-ai/soleur-inngest v9.9.9" >/dev/null 2>&1 || true
+TOTAL=$((TOTAL + 1))
+if ! grep -q 'image pulled from local-cache' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: inngest (non-web) both-fail → tier does NOT fire (web-only guard), no local-cache event"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: #6512(c2) local-cache event fired on a non-web deploy"
+fi
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6512"
+
+# (d) zot SERVES the image → the pull succeeds; the local-cache tier is never reached even
+#     with a running image present. No local-cache event.
+T6512=$(mktemp -d)
+export MOCK_ZOT_CONFIGURED=1
+export MOCK_RUNNING_IMAGE_ID="sha256:6512dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+export MOCK_SENTRY_CAPTURE_FILE="$T6512/d.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && D_RC=0 || D_RC=$?
+TOTAL=$((TOTAL + 1))
+if [[ "$D_RC" -eq 0 ]] && ! grep -q 'image pulled from local-cache' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: zot serves → tier never reached, no local-cache event (rc=$D_RC)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: #6512(d) rc=$D_RC (expected 0 + no local-cache event)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_ZOT_CONFIGURED MOCK_RUNNING_IMAGE_ID MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6512"
 
 echo "--- #6400 AC3/AC6/AC13: single classifier, content-not-path, token hygiene, cosign continuity ---"
 # AC3: ONE auth-denied regex, shared by the classifier + the recovery gate.

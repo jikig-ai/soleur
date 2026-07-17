@@ -597,11 +597,14 @@ pull_auth_recovery_event() {
 }
 
 # registry_pull_event <registry> <image_kind> <tag>: success breadcrumb recording
-# WHICH registry served a pull (#6122/ADR-096). registry ∈ {zot, ghcr-fallback};
+# WHICH registry served a pull (#6122/ADR-096). registry ∈ {zot, ghcr-fallback, local-cache};
 # image_kind ∈ {web, inngest}. The soak gate (scripts/followthroughs/zot-soak-6122.sh)
 # counts registry=ghcr-fallback events per image — a healthy post-cutover fleet emits
 # ONLY registry=zot, so ghcr-fallback is level=warning (the watched signal) and zot is
-# level=info. Emitted ONLY when zot was ACTUALLY attempted (ZOT_ACTIVE=1); the pure-dark
+# level=info. local-cache (#6512) is the last-resort same-version reload rescue — BOTH
+# registries failed to serve an already-running image — so it too is level=warning, watched
+# by the DEDICATED local_cache_reload_rate issue-alert (NOT the zot soak: local-cache is not
+# a GHCR-served event). Emitted ONLY when zot was ACTUALLY attempted (ZOT_ACTIVE=1); the pure-dark
 # pre-activation period emits nothing, so the flip stays a strict no-op until zot is
 # live. Fail-open, same Sentry store transport as pull_failure_event.
 registry_pull_event() {
@@ -611,7 +614,7 @@ registry_pull_event() {
     local payload
     payload="$(jq -n --arg reg "$registry" --arg img "$image_kind" --arg t "$tag" \
       '{message: ("image pulled from " + $reg + " (" + $img + ":" + $t + ")"),
-        level: (if $reg == "ghcr-fallback" then "warning" else "info" end),
+        level: (if ($reg == "ghcr-fallback" or $reg == "local-cache") then "warning" else "info" end),
         platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-pull", registry: $reg, image: $img},
         extra: {tag: $t}}' 2>/dev/null)" || return 0
@@ -1405,6 +1408,40 @@ _ghcr_pull_or_recover() {
 # but failed); pull_failure_event on total failure. Returns 1 only when BOTH registries
 # fail (caller aborts, OLD container stays live — downtime-safe). FD-200 advisory lock
 # is closed for the pull children (#5062).
+# _try_local_cache_reload <image_kind>: last-resort rescue for a same-version `web` reload
+# (#6512). The item-4 seccomp redeploy targets v<running_version> — the image the container is
+# ALREADY running (cosign-verified at its original deploy, immutable @sha256, and always present in
+# the host's local docker store). When BOTH registries fail to serve that image (zot GC'd the
+# several-releases-old tag from its 5-v* keep-set, then the GHCR fallback leg also failed), the
+# reload needs NO new bits — the registry round-trip is the single point of failure. Reuse the
+# RUNNING container's image ID as VERIFIED_REF, skipping re-verify (identical @sha256 bits) with an
+# EXPLICIT cosign-reuse breadcrumb (cosign_verify_event reused_local_reload) — this is a deliberate
+# amendment to the ADR-087 cosign contract, NOT the warn-mode fail-open — and emit a MONITORED
+# registry=local-cache event (a dead registry must not hide behind a working local cache). Sets the
+# global LOCAL_CACHE_VERIFIED_REF and returns 0 on rescue; returns 1 (caller proceeds to the
+# existing hard image_pull_failed) otherwise.
+#
+# Scope is deliberately narrow — rescues ONLY a `web` deploy of an immutable semver tag whose target
+# is the RUNNING container's OWN image ID (always local, keyed off the literal container name
+# `soleur-web-platform`; there is NO $CONTAINER_NAME variable in this script). A re-pushed tag, a
+# stale leftover, or a genuine NEW-version deploy (whose target is never the running image ID) all
+# fall through to the existing hard failure — blast radius for any genuine version change is zero.
+# `docker image inspect` proves the image is present, not that `docker run` succeeds on a partially
+# GC'd layer; the existing post-run health gate remains the final backstop.
+_try_local_cache_reload() {
+  local image_kind="$1" running_img_id
+  [[ "$image_kind" == "web" ]] || return 1
+  [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  running_img_id="$(docker inspect --format '{{.Image}}' soleur-web-platform 2>/dev/null || true)"
+  [[ -n "$running_img_id" ]] || return 1
+  docker image inspect "$running_img_id" >/dev/null 2>&1 || return 1
+  registry_pull_event "local-cache" "$image_kind" "$TAG"
+  cosign_verify_event "reused_local_reload" "$running_img_id" \
+    "both registries down; reusing the already-verified running image for a same-version seccomp reload (#6512)"
+  LOCAL_CACHE_VERIFIED_REF="$running_img_id"
+  return 0
+}
+
 pull_image_with_fallback() {
   local image_kind="$1" perr
   perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
@@ -1452,6 +1489,13 @@ pull_image_with_fallback() {
       rm -f "$perr" 2>/dev/null || true
       return 0
     fi
+    # #6512: both registries failed. Rescue a genuine same-version `web` reload of the
+    # RUNNING container's already-verified image before the hard failure (P2-5: this covers
+    # the ZOT_ACTIVE both-failed exit).
+    if _try_local_cache_reload "$image_kind"; then
+      rm -f "$perr" 2>/dev/null || true
+      return 0
+    fi
     pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
     rm -f "$perr" 2>/dev/null || true
     return 1
@@ -1459,6 +1503,13 @@ pull_image_with_fallback() {
   # zot dark (not configured/unreachable) → unchanged GHCR path, now with pull-site
   # recovery (#6400): a baked cred that logs in but cannot pull is re-fetched + retried.
   if _ghcr_pull_or_recover "$perr"; then
+    rm -f "$perr" 2>/dev/null || true
+    return 0
+  fi
+  # #6512: both registries failed on the zot-dark path too — same rescue for a genuine
+  # same-version `web` reload of the RUNNING container's already-verified image (P2-5:
+  # covers the ZOT_ACTIVE=0 exit).
+  if _try_local_cache_reload "$image_kind"; then
     rm -f "$perr" 2>/dev/null || true
     return 0
   fi
@@ -2139,7 +2190,17 @@ case "$COMPONENT" in
     # production) — closes the tag-repoint TOCTOU. WARN never blocks; ENFORCE aborts,
     # keeping the OLD container live (downtime-safe). VERIFIED_REF is always a
     # runnable ref (verified digest, or the tag as a WARN fail-open fallback).
-    if ! VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")"; then
+    #
+    # #6512: if the pull was rescued by the local-cache reload tier (both registries
+    # failed for a same-version reload), LOCAL_CACHE_VERIFIED_REF holds the RUNNING
+    # container's image ID — already cosign-verified at its original deploy (identical
+    # immutable @sha256 bits). Reuse it directly and SKIP re-verify; the explicit
+    # cosign_reused_local_reload breadcrumb was already emitted inside
+    # pull_image_with_fallback (an intentional amendment to the ADR-087 cosign contract,
+    # never the warn-mode fail-open).
+    if [[ -n "${LOCAL_CACHE_VERIFIED_REF:-}" ]]; then
+      VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"
+    elif ! VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")"; then
       logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
       final_write_state 1 "cosign_verify_failed"
       exit 1
