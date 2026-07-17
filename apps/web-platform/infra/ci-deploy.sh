@@ -553,6 +553,24 @@ _pull_result_is_auth_denied() {
   printf '%s' "${1:-}" | grep -qiE 'unauthorized|authentication required|denied|forbidden'
 }
 
+# _pull_result_is_transient <stderr-content>: the SINGLE source of truth for "is this docker
+# pull stderr a TRANSIENT/network failure that a warm retry can absorb?" (#6525). Same anti-drift
+# contract as _pull_result_is_auth_denied: BOTH pull_failure_event's `network` classifier arm AND
+# the pull-site retry gate (_ghcr_pull_or_recover) call this predicate, so they agree BY
+# CONSTRUCTION — a second inline copy of the regex would drift. Classifies the stderr CONTENT ($1),
+# never a file path. The token set is verified NON-OVERLAPPING with the auth-denied class handled by
+# _pull_result_is_auth_denied above AND with the manifest-unknown/not-found class handled by
+# pull_failure_event's manifest arm: note the transient `no such host` shares a `no such` prefix
+# with the manifest `no such manifest`, so this anchors on the full host token and precedence stays
+# auth then manifest then transient in pull_failure_event. `timeout` subsumes i/o timeout / TLS
+# handshake timeout / connection timeout; case-insensitive word-boundary EOF subsumes `unexpected
+# EOF`. Deepen docker-stderr research adds the canonical Go timeout (deadline-exceeded), the
+# registry-5xx unexpected-status shape, the net/http client cancel-while-waiting shape, and the
+# DNS-resolver misbehaving shape.
+_pull_result_is_transient() {
+  printf '%s' "${1:-}" | grep -qiE 'context deadline exceeded|timeout|timed out|temporary failure|no route|connection refused|connection reset|network is unreachable|no such host|server misbehaving|request canceled while waiting|received unexpected http status: 5|\bEOF\b'
+}
+
 # pull_failure_event: loud, no-SSH page on an authenticated PRIVATE-pull denial
 # (#6005). Every deploy + fresh boot now hard-depends on a valid GHCR credential
 # (M2 SPOF), so a pull auth failure must be Sentry/Better-Stack-diagnosable, not
@@ -568,7 +586,7 @@ pull_failure_event() {
   local ref="$1" detail_raw="${2:-}" recovery_stage="${3:-}" pull_result
   if   _pull_result_is_auth_denied "$detail_raw"; then pull_result="auth_denied"
   elif printf '%s' "$detail_raw" | grep -qiE 'manifest unknown|not found|no such manifest'; then pull_result="manifest_unknown"
-  elif printf '%s' "$detail_raw" | grep -qiE 'timeout|timed out|temporary failure|no route|connection refused'; then pull_result="network"
+  elif _pull_result_is_transient "$detail_raw"; then pull_result="network"   # #6525: shared predicate (was a narrower inline regex); precedence stays auth → manifest → transient. Tag value `network` UNCHANGED (Sentry grouping / zot_mirror_fallback_rate key on it). Widens the `network` set vs pre-#6525 — see the recovery gate + reclassification-safety check.
   else pull_result="pull_failed"
   fi
   logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result recovery_stage=${recovery_stage:-none}"
@@ -1385,37 +1403,85 @@ zot_gate_and_login() {
   ztoken=""
 }
 
-# _ghcr_pull_or_recover <perr> (#6400): pull ${IMAGE}:${TAG} from GHCR; on an
-# AUTH-denied failure (classified from the stderr CONTENT, not the file path),
-# re-fetch the prd cred, relogin, and retry the pull EXACTLY ONCE before giving up.
-# Returns 0 on success (first pull OR recovered retry). On failure returns 1 and
-# sets the global RECOVERY_STAGE for the caller's pull_failure_event tag (empty when
-# no recovery was attempted — a non-auth failure never enters the branch, so
-# pull_failure_event fires byte-identically to pre-#6400). Fail-open: a recovery miss
-# leaves the caller's terminal image_pull_failed state unchanged. No loop — retrying
-# a genuinely-invalid prd cred would burn the deploy window (Sharp Edge). The
-# `200>&-` closes the FD-200 advisory lock for the pull children (#5062), preserved.
+# _ghcr_pull_or_recover <perr> (#6400 + #6525): pull ${IMAGE}:${TAG} from GHCR and, on a
+# recoverable failure (classified from the stderr CONTENT, not the file path), recover in-band
+# before giving up. TWO recovery classes, disjoint by construction:
+#   • AUTH-denied (#6400): re-fetch the prd cred, relogin, and retry the pull EXACTLY ONCE. This
+#     branch NEVER loops — a genuinely-invalid prd cred would burn the deploy window (Sharp Edge).
+#   • TRANSIENT/network (#6525): a timeout / connection-reset / EOF / no-such-host / registry-5xx
+#     blip retries with a bounded, capped backoff (PULL_TRANSIENT_RETRY_SLEEPS, default "2 4" =
+#     2 retries, ≤6 s added wall-clock/leg). This is the fix for the "first attempt fails, rerun
+#     succeeds" shape (#6525): pre-#6525 a transient stderr took the return-1 path with ZERO retries.
+# Returns 0 on success (first pull OR either recovered retry). On failure returns 1 and sets the
+# global RECOVERY_STAGE for the caller's pull_failure_event tag: empty for a non-recoverable class
+# (manifest/unknown — pull_failure_event fires byte-identically to pre-#6400); transient_exhausted
+# only when a TRANSIENT failure spent all its retries (the Sentry transient-vs-durable
+# discriminator, #6415/#6565). Retry stays at ONE level — the caller (pull_image_with_fallback)
+# does NOT retry; zot is already an immediate different-registry fallback upstream (one-level-retry
+# rule, 2026-06-30). Fail-open: a recovery miss leaves the terminal image_pull_failed state
+# unchanged. `200>&-` closes the FD-200 advisory lock for the pull children (#5062), preserved.
 _ghcr_pull_or_recover() {
   local perr="$1"
   RECOVERY_STAGE=""
-  docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr" && return 0
-  # classify the stderr CONTENT (tail -c 400), never the path — else recovery no-ops (P2-E).
-  if _pull_result_is_auth_denied "$(tail -c 400 "$perr" 2>/dev/null)"; then
-    # `|| true`: helper returns non-zero on a miss; a bare assignment would abort the
-    # deploy under set -euo. We parse the stage STRING (that string, not the rc, is what
-    # gets copied into RECOVERY_STAGE below; the rc is discarded via `|| true`).
-    local stage; stage="$(refetch_ghcr_and_relogin)" || true   # recovered|refetch_unavailable|relogin_failed
-    if [[ "$stage" == "recovered" ]]; then
-      if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
-        pull_auth_recovery_event "${IMAGE}:${TAG}" recovered   # info breadcrumb, distinct op
-        return 0
-      fi
-      RECOVERY_STAGE="pull_still_denied"                       # relogin ok but retry pull still denied
-    else
-      RECOVERY_STAGE="$stage"                                  # refetch_unavailable|relogin_failed
+  # #6525 transient backoff schedule. PULL_TRANSIENT_RETRY_SLEEPS is a test-only override seam
+  # (mirrors the SOLEUR_GHCR_READ_FILE precedent); tests pass "0 0" for a zero-sleep 2-retry loop.
+  # UNSET (the prod default) → "2 4" = 2 retries, ≤6 s added wall-clock/leg. Setting it to "" (empty)
+  # → an empty array → max=0 → DISABLES the transient retry — a deliberate operator break-glass lever.
+  # Hence the `-` default (NOT `:-`): `:-` would substitute the default on an EMPTY value too, silently
+  # defeating the disable lever; `-` substitutes only when UNSET, leaving an explicit "" empty. Prod
+  # never sets the var (unset ⇒ default). Tests exercise all three: unset (T-6525-8), "0 0", "" (T-6525-9).
+  # shellcheck disable=SC2206  # intentional word-split of the space-separated schedule into the array
+  local -a _sleeps=( ${PULL_TRANSIENT_RETRY_SLEEPS-2 4} )
+  local max=${#_sleeps[@]} attempt=0 detail
+  while :; do
+    if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+      # attempt>0 ⇒ we are here only after ≥1 TRANSIENT retry (attempt increments ONLY on the
+      # transient arm below), so this breadcrumb is DISJOINT from the auth block's `recovered`.
+      [[ "$attempt" -gt 0 ]] && pull_auth_recovery_event "${IMAGE}:${TAG}" transient_recovered
+      return 0
     fi
-  fi
-  return 1
+    # classify the stderr CONTENT (tail -c 400), never the path — else recovery no-ops (P2-E). The
+    # inline `tail` here (rather than reusing the `detail` computed just below) is INTENTIONAL: #6400
+    # AC3 anchors on the literal `_pull_result_is_auth_denied "$(tail -c 400 "$perr"` call shape to
+    # prove content-not-path classification. `$perr` is unchanged since the pull, so the re-read below
+    # is byte-identical and cheap (a ≤400-byte file read); do not "simplify" it away — it breaks AC3.
+    if _pull_result_is_auth_denied "$(tail -c 400 "$perr" 2>/dev/null)"; then
+      # ---- #6400 auth recovery, VERBATIM — keeps its OWN inner success `return 0`, then a
+      # terminal `return 1`: auth is recover-once-then-terminal and MUST NOT loop (a
+      # MOCK_GHCR_PULL_DENY_ALWAYS cred would otherwise burn the window — AC2/AC14 guard this).
+      # `|| true`: helper returns non-zero on a miss; a bare assignment would abort the deploy
+      # under set -euo. We parse the stage STRING (not the rc, which is discarded via `|| true`).
+      local stage; stage="$(refetch_ghcr_and_relogin)" || true   # recovered|refetch_unavailable|relogin_failed
+      if [[ "$stage" == "recovered" ]]; then
+        if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+          pull_auth_recovery_event "${IMAGE}:${TAG}" recovered   # info breadcrumb, distinct op — label stays `recovered`
+          return 0
+        fi
+        RECOVERY_STAGE="pull_still_denied"                       # relogin ok but retry pull still denied
+      else
+        RECOVERY_STAGE="$stage"                                  # refetch_unavailable|relogin_failed
+      fi
+      return 1
+    fi
+    detail="$(tail -c 400 "$perr" 2>/dev/null)"
+    if _pull_result_is_transient "$detail" && (( attempt < max )); then
+      # transient blip with retries left → back off and retry the SAME registry.
+      sleep "${_sleeps[$attempt]}"; attempt=$((attempt + 1)); continue
+    elif _pull_result_is_transient "$detail"; then
+      # transient but retries SPENT (attempt == max) → tag the terminal-transient class so the
+      # Sentry recovery_stage discriminates transient-exhausted from durable host-degradation
+      # (#6415/#6565). Set ONLY here (deepen GAP-7), NEVER in the else below.
+      RECOVERY_STAGE="transient_exhausted"
+      return 1
+    else
+      # manifest_unknown / unknown → no retry, and NO false transient_exhausted tag. The gate
+      # deliberately omits an explicit manifest arm (deepen GAP-5b): the transient regex is
+      # verified non-overlapping with the manifest tokens, so a manifest stderr lands HERE with
+      # EMPTY RECOVERY_STAGE — a transient→manifest tail is therefore carried by
+      # pull_failure_event's own pull_result classification, not mislabeled transient_exhausted.
+      return 1
+    fi
+  done
 }
 
 # pull_image_with_fallback <image_kind>: pull $IMAGE:$TAG zot-primary with an ATOMIC

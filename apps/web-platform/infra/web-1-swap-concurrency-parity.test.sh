@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 #
-# Drift guard: the FOUR GitHub Actions jobs that swap the web-1 container (each
-# POSTs `command: deploy web-platform …` to /hooks/deploy, then ci-deploy.sh swaps
-# web-1 and fans out to peers) MUST share ONE job-level `web-1-swap` concurrency
-# group so GitHub's scheduler serializes them across pipelines — at most one web-1
-# swap in flight at a time (#6060 item (c) / FINDING 1 from #6051's review).
+# Drift guard: the FIVE GitHub Actions jobs that MUTATE web-1 (four swap the web-1
+# container via `command: deploy web-platform …` → /hooks/deploy → ci-deploy.sh; the
+# fifth, #6604, attaches the encrypted volume to web-1) MUST share ONE job-level
+# `web-1-swap` concurrency group so GitHub's scheduler serializes them across
+# pipelines — at most one web-1 mutation in flight at a time (#6060 item (c) /
+# FINDING 1 from #6051's review). A SIXTH member — the #6604 freeze workflow — carries
+# the group at WORKFLOW scope (it is a dedicated dispatch, not a job in a shared
+# workflow), asserted separately below.
 #
-# The four members (allow-list — an explicit named list so a DELIBERATE future
-# member is a visible allow-list edit, while a silently-dropped copy OR an
+# The five job-level members (allow-list — an explicit named list so a DELIBERATE
+# future member is a visible allow-list edit, while a silently-dropped copy OR an
 # accidentally-enrolled job both fail loud):
-#   1. web-platform-release.yml        job `deploy`         (tagged-release deploy)
-#   2. apply-web-platform-infra.yml    job `web_2_recreate` (#6030 operator recreate)
-#   3. apply-web-platform-infra.yml    job `warm_standby`   (ADR-068 warm-standby)
-#   4. apply-deploy-pipeline-fix.yml   job `apply`          (POSTs deploy at :607)
+#   1. web-platform-release.yml        job `deploy`                 (tagged-release deploy)
+#   2. apply-web-platform-infra.yml    job `web_2_recreate`         (#6030 operator recreate)
+#   3. apply-web-platform-infra.yml    job `warm_standby`           (ADR-068 warm-standby)
+#   4. apply-deploy-pipeline-fix.yml   job `apply`                  (POSTs deploy at :607)
+#   5. apply-web-platform-infra.yml    job `workspaces_luks_cutover` (#6604 attaches the LUKS volume to web-1)
+# Plus the WORKFLOW-level member: workspaces-luks-cutover.yml (#6604 freeze — stops/repoints web-1's /mnt/data).
 #
 # NOT a member (negative assertion): the routine `apply` job in
 # apply-web-platform-infra.yml runs terraform but does NOT POST /hooks/deploy
@@ -41,13 +46,14 @@ WF_DIR="${DIR}/../../../.github/workflows"
 RELEASE_WF="${WF_DIR}/web-platform-release.yml"
 APPLY_INFRA_WF="${WF_DIR}/apply-web-platform-infra.yml"
 PIPELINE_FIX_WF="${WF_DIR}/apply-deploy-pipeline-fix.yml"
+FREEZE_WF="${WF_DIR}/workspaces-luks-cutover.yml"
 
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
-for f in "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF"; do
+for f in "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" "$FREEZE_WF"; do
   [ -f "$f" ] || { echo "FAIL: workflow not found at $f" >&2; exit 1; }
 done
 
@@ -91,20 +97,38 @@ assert_member() {
 }
 
 # --- The four named members (allow-list) ---
-assert_member "$RELEASE_WF"      "deploy"         "release-deploy"
-assert_member "$APPLY_INFRA_WF"  "web_2_recreate" "web-2-recreate"
-assert_member "$APPLY_INFRA_WF"  "warm_standby"   "warm-standby"
-assert_member "$PIPELINE_FIX_WF" "apply"          "pipeline-fix-apply"
+assert_member "$RELEASE_WF"      "deploy"                 "release-deploy"
+assert_member "$APPLY_INFRA_WF"  "web_2_recreate"         "web-2-recreate"
+assert_member "$APPLY_INFRA_WF"  "warm_standby"           "warm-standby"
+assert_member "$PIPELINE_FIX_WF" "apply"                  "pipeline-fix-apply"
+assert_member "$APPLY_INFRA_WF"  "workspaces_luks_cutover" "workspaces-luks-cutover"
 
-# --- Total count of `group: web-1-swap` across the workflows == 4 (allow-list
-# length). A silently-dropped member drops below 4; an accidentally-enrolled or
-# duplicated job pushes above 4. Either fails loud. ---
-web1_count=$(grep -rhE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' \
-  "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" | grep -c .)
-if [ "$web1_count" -eq 4 ]; then
+# --- The #6604 freeze workflow (workspaces-luks-cutover.yml) carries web-1-swap at
+# WORKFLOW scope (it is a dedicated dispatch, not a job in a shared workflow), so it
+# is asserted directly, not via job_block. It stops/repoints web-1's /mnt/data and MUST
+# serialize against the container-swap jobs. ---
+if grep -qE '^[[:space:]]*group:[[:space:]]*web-1-swap[[:space:]]*$' "$FREEZE_WF"; then
   pass
 else
-  fail "expected exactly 4 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
+  fail "workspaces-luks-cutover.yml (freeze): workflow-level 'group: web-1-swap' missing"
+fi
+if grep -qE '^[[:space:]]*cancel-in-progress:[[:space:]]*false[[:space:]]*$' "$FREEZE_WF"; then
+  pass
+else
+  fail "workspaces-luks-cutover.yml (freeze): 'cancel-in-progress: false' missing"
+fi
+
+# --- Total count of job-level `group: web-1-swap` across the three shared workflows
+# == 5 (allow-list length: the four container-swap jobs + the #6604 volume-attach job,
+# all in RELEASE/APPLY_INFRA/PIPELINE_FIX). A silently-dropped member drops below 5;
+# an accidentally-enrolled or duplicated job pushes above 5. Either fails loud. The
+# freeze workflow's workflow-level group is asserted above and NOT part of this count. ---
+web1_count=$(grep -rhE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' \
+  "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" | grep -c .)
+if [ "$web1_count" -eq 5 ]; then
+  pass
+else
+  fail "expected exactly 5 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
 fi
 
 # --- Workflow-level R2 serializer preserved in BOTH apply workflows (coexists

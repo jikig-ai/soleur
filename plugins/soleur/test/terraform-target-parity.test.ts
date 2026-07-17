@@ -570,6 +570,13 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume.workspaces_luks",
   "hcloud_volume_attachment.workspaces_luks",
   "doppler_service_token.workspaces_luks",
+  // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret. Same
+  // class as betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd
+  // (both excluded, applied together by the operator apply; the heartbeat is paused until the
+  // operator unpauses at cutover). NOT part of the five-resource cutover gate allow-set, and never
+  // rides the gated cutover -target set — so it does not affect the cutover destroy-guard.
+  "betteruptime_heartbeat.workspaces_luks",
+  "doppler_secret.workspaces_luks_heartbeat_url",
   // #6122 (ADR-096) — the zot registry host + its volume/network/firewall/creds/heartbeat
   // ALL ride the operator's initial full (untargeted) `terraform apply` + drift detector,
   // exactly like the git-data host above (CTO ruling 2026-07-06,
@@ -822,6 +829,31 @@ describe("concurrency-group + cloudflared-pin parity across the two workflows (#
     expect(wpi.cloudflaredSha256).not.toBeNull();
     expect(wpi.cloudflaredVersion).toBe(dpf.cloudflaredVersion);
     expect(wpi.cloudflaredSha256).toBe(dpf.cloudflaredSha256);
+  });
+
+  // #6604: the pin is now replicated into the git-data + workspaces-luks cutover/verify workflows
+  // (all feed the same cf-tunnel-ssh-bridge composite). A pin bump that updated only the two apply
+  // workflows would leave these on a stale version/SHA — the bridge download fails CLOSED (aborts),
+  // not a silent hole, hence this is a drift tripwire. Assert EVERY workflow carrying the pin matches
+  // the canonical (apply-web-platform-infra) value.
+  test("the cloudflared pin matches across ALL workflows that declare it (#6604)", () => {
+    const grabPin = (rel: string) => {
+      const src = readFileSync(resolve(REPO_ROOT, rel), "utf8");
+      return {
+        version: /^\s*CLOUDFLARED_VERSION:\s*"([^"]+)"/m.exec(src)?.[1] ?? null,
+        sha256: /^\s*CLOUDFLARED_SHA256:\s*"([^"]+)"/m.exec(src)?.[1] ?? null,
+      };
+    };
+    const PIN_WORKFLOWS = [
+      ".github/workflows/git-data-cutover.yml",
+      ".github/workflows/workspaces-luks-cutover.yml",
+      ".github/workflows/workspaces-luks-verify.yml",
+    ];
+    for (const wf of PIN_WORKFLOWS) {
+      const pin = grabPin(wf);
+      expect(pin.version, `${wf} CLOUDFLARED_VERSION`).toBe(wpi.cloudflaredVersion);
+      expect(pin.sha256, `${wf} CLOUDFLARED_SHA256`).toBe(wpi.cloudflaredSha256);
+    }
   });
 });
 

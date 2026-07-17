@@ -89,7 +89,14 @@ const HETZNER_CAP = 32_768;
 // pointer kept, per #6425's precedent. 21,900 would have left 4 B of headroom — the same
 // below-the-noise-floor trap #6425 called out at 16 B. 22,300 keeps the guard's purpose intact:
 // a KB-scale re-inlining (~1.5+ KB) still trips it, and it stays ~10.2 KB below HETZNER_CAP.
-const WEB_GZIP_BUDGET = 22_300;
+// #6604: on top of #6594's 22,300 baseline, +~150 B for two irreducibly-inline additions the
+// "prefer baking over inline" guidance CANNOT absorb: (a) the /mnt/data mount pinned by-id + fstab
+// `nofail` + fstab-dedupe guard (the glob binds the wrong device once the LUKS volume attaches —
+// MUST be in the runcmd mount, not a baked helper), and (b) the baked-DSN write to
+// /etc/default/luks-monitor (the luks-monitor units source it; MUST be written at cloud-init time so
+// a Doppler-down boot still pages — DP-9). Merged render measured ~22,256; 22,450 keeps the KB-scale
+// re-inlining tripwire (a ~1.5 KB blob → ~23.7 KB trips it) and stays ~10.3 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 22_450;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/

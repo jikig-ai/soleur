@@ -338,6 +338,17 @@ to Better Stack. #6396 re-adds the shipper independently (ungated, baked into
 on `pull_failure_event`. See ADR-082 Item 5 (this is the decision that caused the regression #6396
 closes).
 
+**Create-time-render caveat (#6616):** the per-host `host_name` #6396 introduces is a
+*construction-time render*, not a runtime-guaranteed 1:1 discriminator. A host that predates the
+render and cannot re-run cloud-init (web-1, under `lifecycle{ignore_changes=[user_data]}`) keeps its
+stale co-located-era `host_name=soleur-inngest-prd` until its next immutable recreate — so it collides
+with the dedicated node on Better Stack source 2457081. Treat `host_name=soleur-inngest-prd` as suspect
+until every emitting host is post-#6396-born; the live invariant is enforced by the #6616 read-only
+follow-through (auto-closes on the web-1 recreate), not by the render alone. (The dedicated node's
+telemetry `host` is `soleur-inngest` = its `hcloud_server.inngest` name, inngest-host.tf:202, and thus
+its OS hostname — NOT `soleur-inngest-server-prd`, which is a `betteruptime_heartbeat` monitor name,
+inngest.tf:291, and never appears in telemetry.)
+
 **Blast radius (SEC-H3, documented not eliminated):** the signing key authorizes the entire ~60-
 function registry, several running in the web-app process with full prd env (GHCR token minter,
 agent-spawn, bug-fixer, TF-drift). Inngest-host compromise ≈ indirect arbitrary-app-code execution
