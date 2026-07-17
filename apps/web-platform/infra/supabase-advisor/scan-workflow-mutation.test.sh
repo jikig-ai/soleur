@@ -298,6 +298,73 @@ if assert_mutated "$REAL_SCRIPT" "$M2" "M2 fail-open polarity"; then
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# E1/E2 — what actually closes the empty-read-back hole (#6578 FR4)
+# ---------------------------------------------------------------------------
+# The brief that commissioned this said "the capture-once-then-match style closes
+# that hole." It does not, and the guard says so about itself at :277-283: the
+# `[[ -n "$script_code" ]]` FATAL is annotated "NOT a fail-open guard, despite
+# appearances" — it exists for the DIAGNOSTIC. What actually closes the hole is
+# the PAIRED non-vacuity rung at :291 (`grep -qF '.lints[]'` => fail if absent).
+#
+# The distinction is not pedantry. A maintainer who believes capture-once is what
+# saves them will convert a site, add no pairing, and ship the hole believing it
+# closed. So E1 pins the pairing, and E2 proves E1 pins the pairing rather than
+# the diagnostic — without E2, E1 passes for the wrong reason and rots silently.
+#
+# Both mutate SANDBOX COPIES of the guard (never tracked source), so AC7 holds.
+EMPTY_SCRIPT="$SANDBOX/all-comments-scan.sh"
+printf '#!/usr/bin/env bash\n# every line here is a comment\n# so the capture reads back empty\n' > "$EMPTY_SCRIPT"
+
+FATAL_ANCHOR='[[ -n "$script_code" ]] || { printf '"'"'FATAL: no non-comment lines in %s\n'"'"' "$SCRIPT" >&2; exit 1; }'
+PAIRING_ANCHOR="if grep -qF '.lints[]' <<<\"\$script_code\"; then"
+
+# Guard copies live in PROBE_DIR, NOT in SANDBOX's root: the guard derives
+# REPO_ROOT as $DIR/../../../.., so a copy at any other depth resolves a root
+# with no .github/ and dies on `FATAL: missing <workflow>` BEFORE reaching the
+# .lints rungs. This was not hypothetical during authoring: the first draft put
+# them in $SANDBOX, E1's non-zero exit came from the missing workflow rather than
+# the pairing, and E2 then went GREEN because its message was absent for that
+# same wrong reason — a vacuous pass, the exact failure this file exists to
+# catch. The header at :125-129 documents the trap; heed it.
+E1_GUARD="$PROBE_DIR/e1-guard.test.sh"
+if ! mutate "$PRISTINE" "$E1_GUARD" "$FATAL_ANCHOR" ""; then
+  fail "E1 empty read-back fails loudly" "FATAL anchor drifted — not evidence"
+else
+  out="$(cd "$REPO_ROOT" && SCRIPT_OVERRIDE="$EMPTY_SCRIPT" bash "$E1_GUARD" 2>&1)"; rc=$?
+  # Precondition: a mirror failure must never be read as a verdict.
+  if grep -qE '^FATAL: missing' <<<"$out"; then
+    fail "E1 empty read-back fails loudly" \
+      "guard died on a missing mirrored artifact, not on the empty capture — this result is not evidence: $(printf '%s' "$out" | tr '\n' '~')"
+  elif [[ "$rc" != "0" ]] && grep -qF 'no .lints[] parse found in code' <<<"$out"; then
+    pass "E1 empty read-back still exits non-zero with the FATAL diagnostic removed (the pairing rung is what closes it)"
+  else
+    fail "E1 empty read-back fails loudly" \
+      "guard exit $rc without naming the missing .lints[] parse — an empty capture reached a pass branch unchallenged. Output: $(printf '%s' "$out" | tr '\n' '~')"
+  fi
+
+  # E2 — vacuity of E1. Remove the pairing rung TOO; the same empty capture must
+  # now PASS. A green here is the proof: it shows E1's red came from the pairing
+  # and not from something incidental still standing.
+  E2_GUARD="$PROBE_DIR/e2-guard.test.sh"
+  if ! mutate "$E1_GUARD" "$E2_GUARD" "$PAIRING_ANCHOR" 'if true; then'; then
+    fail "E2 E1 is non-vacuous" "pairing anchor drifted — not evidence"
+  else
+    out2="$(cd "$REPO_ROOT" && SCRIPT_OVERRIDE="$EMPTY_SCRIPT" bash "$E2_GUARD" 2>&1)"; rc2=$?
+    # Same precondition. Without it, E2's "the message is absent" reads TRUE for
+    # any early death — which is how a vacuous green is manufactured.
+    if grep -qE '^FATAL: missing' <<<"$out2"; then
+      fail "E2 E1 is non-vacuous" \
+        "guard died on a missing mirrored artifact — the absent message proves nothing: $(printf '%s' "$out2" | tr '\n' '~')"
+    elif ! grep -qF 'no .lints[] parse found in code' <<<"$out2"; then
+      pass "E2 with the pairing rung ALSO removed, the same empty capture goes unchallenged — E1 pins the pairing, not the diagnostic"
+    else
+      fail "E2 E1 is non-vacuous" \
+        "the empty capture was still challenged with the pairing removed (exit $rc2) — E1's red does not come from the rung it claims to pin"
+    fi
+  fi
+fi
+
 # The seam must not dirty tracked source — the failure that prompted it.
 if git -C "$REPO_ROOT" diff --quiet -- scripts/supabase-advisor-scan.sh; then
   pass "no mutation touched tracked source (SCRIPT_OVERRIDE + sandbox held)"
