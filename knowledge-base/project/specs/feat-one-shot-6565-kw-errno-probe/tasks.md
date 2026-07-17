@@ -171,25 +171,25 @@ it together with D6. It is the field that actually ends the guessing; the six ar
 
 ## Phase 5 — Ship (PR body discipline — the deliverable's story)
 
-- [ ] 5.1 Tracker link uses the **`Ref`** form (never a close-keyword). Issue 6565 is the **repair**; this
+- [x] 5.1 Tracker link uses the **`Ref`** form (never a close-keyword). Issue 6565 is the **repair**; this
       PR does not repair, so a close-keyword link would manufacture a false-resolved state at merge.
-- [ ] 5.2 **No close-keyword adjacent to 6497 / 6400 / 6525 / 6560 / 6565** in the commit message, PR title,
+- [x] 5.2 **No close-keyword adjacent to 6497 / 6400 / 6525 / 6560 / 6565** in the commit message, PR title,
       or PR body. GitHub's parser is **negation-blind** and reads the squash commit body. Verify:
       `gh pr view --json title,body -q '.title + "\n" + .body' | grep -inE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b[[:space:]]*:?[[:space:]]*#?(6497|6400|6525|6560|6565)\b'` → **no output**
-- [ ] 5.3 PR body states plainly: **nothing is broken**; the instrument shipped 2026-07-15 and is working;
+- [x] 5.3 PR body states plainly: **nothing is broken**; the instrument shipped 2026-07-15 and is working;
       prod is serving (`soleur.ai` 200); the zot gate is **fail-open by design**.
-- [ ] 5.4 PR body carries the **corrected decomposition** — (A) cred-store write fails **continuously** on
+- [x] 5.4 PR body carries the **corrected decomposition** — (A) cred-store write fails **continuously** on
       both registries; (B) `image_pull_failed` is **intermittent** and **predates** the instrument's merge.
-- [ ] 5.5 PR body carries the **retraction**: the strong form ("one broken credential store explains BOTH")
+- [x] 5.5 PR body carries the **retraction**: the strong form ("one broken credential store explains BOTH")
       is **falsified by execution** — the `39a4bb8d` deploy went green (deploy + live-verify) while the
       login was still failing at 20:53Z. Show the retraction; do **not** quietly omit it.
-- [ ] 5.6 PR body carries the surviving mechanism as a **HYPOTHESIS**, not a claim: login fails at the
+- [x] 5.6 PR body carries the surviving mechanism as a **HYPOTHESIS**, not a claim: login fails at the
       **store write**, i.e. **after** auth succeeded, so a previously-baked `config.json` keeps pulls working
       until it goes stale. Name the **shape-mismatch (continuous A vs intermittent B)** explicitly as the
       thing the hypothesis must explain away.
-- [ ] 5.7 All three leads labelled **LEADS**, not claims. `e3a5bab21` labelled **class-evidence** for the
+- [x] 5.7 All three leads labelled **LEADS**, not claims. `e3a5bab21` labelled **class-evidence** for the
       sandboxing family — **not** a cause, and not grounds to pre-empt the probe.
-- [ ] 5.8 Do **not** widen scope: 6400 / 6525 / 6560 stay open and untouched.
+- [x] 5.8 Do **not** widen scope: 6400 / 6525 / 6560 stay open and untouched.
 
 ## Phase 6 — Post-merge
 

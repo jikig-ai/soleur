@@ -359,19 +359,28 @@ The proposed 16-arm `_login_kw` was sourced into a harness carrying the **real**
 
 ### Pre-merge
 
-- [ ] **AC1 — scope.** `git diff --stat origin/main...HEAD` touches exactly three files: `ci-deploy.sh`,
-      `ci-deploy.test.sh`, `zot-login-gate-names-failure-6497.sh`. No `.tf`, no `.service`, no
-      `cloud-init*`, no Doppler.
-- [ ] **AC2 — each probe fires on its measured Go literal.** T-5B-20 passes (catches a typo'd literal).
-- [ ] **AC3 — full suite green.** `bash apps/web-platform/infra/ci-deploy.test.sh` exits 0.
+- [x] **AC1 — scope.** ~~exactly three files~~ **AMENDED AT REVIEW — five code files, and the two extra are
+      deliberate.** `git diff --stat origin/main...HEAD` touches: `ci-deploy.sh`, `ci-deploy.test.sh`,
+      `zot-login-gate-names-failure-6497.sh` (the three planned), **plus** `zot-registry.tf` and
+      `specs/feat-registry-oidc-migration/spec.md` (comments only, zero behaviour).
+      **Why the `.tf` the original AC1 forbade:** D7 put a SECOND field (`errno_chars`) under the
+      `stderr_chars` bucketing TRIGGER's governance, but all three of that trigger's reverse-citations
+      still named one field. The trigger's firing is ALREADY SCHEDULED (FR2/FR3 replace both tokens with
+      JWTs), and spec.md's BLOCKING note is what the FR3 engineer reads. Leaving it singular meant: bucket
+      `stderr_chars`, ship `errno_chars` carrying `len(JWT)` unbucketed — from the field whose own note
+      predicted exactly that. A comment-only edit to the two citation sites is the whole fix.
+      Still holds: **no `.service`, no `cloud-init*`, no Doppler, and zero behavioural change outside
+      `ci-deploy.sh`.** The prohibition's intent (do not touch prod config) is intact; its letter is not.
+- [x] **AC2 — each probe fires on its measured Go literal.** T-5B-20 passes (catches a typo'd literal).
+- [x] **AC3 — full suite green.** `bash apps/web-platform/infra/ci-deploy.test.sh` exits 0.
       *(Subsumes T-5B-15 / T-5B-16 / T-5B-19 — do not re-assert them as separate ACs with hand-copied
       pipelines; a second copy of an oracle drifts from the test it restates.)*
-- [ ] **AC4 — alphabet invariant asserted, not assumed.** T-5B-20 requires every `KW_BODY`-derived literal
+- [x] **AC4 — alphabet invariant asserted, not assumed.** T-5B-20 requires every `KW_BODY`-derived literal
       to contain a character outside `[A-Za-z0-9]`, so no arm can ever fire on credential content.
-- [ ] **AC5 — the follow-through's three-state invariant LOGIC is unmodified.** Reporting-only additions
+- [x] **AC5 — the follow-through's three-state invariant LOGIC is unmodified.** Reporting-only additions
       are permitted (D6). Verify the probe still asserts `rc`/`class`/`*_chars`, still does **not** assert
       `kw` non-empty (an empty `kw` is itself the H-D datum), and that no assertion changed.
-- [ ] **AC6 — no close-keyword adjacent to 6497 / 6400 / 6525 / 6560 / 6565.** Check **three** surfaces —
+- [x] **AC6 — no close-keyword adjacent to 6497 / 6400 / 6525 / 6560 / 6565.** Check **three** surfaces —
       PR title, PR body, **and the commit messages** (Sharp Edge #2: the squash body is *the* risk surface,
       and a title/body-only check does not see it):
 
