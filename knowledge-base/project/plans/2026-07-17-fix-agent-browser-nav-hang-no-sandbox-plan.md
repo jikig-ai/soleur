@@ -257,29 +257,29 @@ regulated data, no new infrastructure.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (measured fix, primary):** After the SKILL.md edits, a clean-slate
+- [x] **AC1 (measured fix, primary):** After the SKILL.md edits, a clean-slate
   `AGENT_BROWSER_ARGS="--no-sandbox" timeout 45 agent-browser open https://example.com --headless`
   exits 0 and prints the success line on the pinned 0.22.3. (Command is copy-pasteable
   from `agent-browser/SKILL.md`.)
-- [ ] **AC2 (no silent hang):** `plugins/soleur/skills/feature-video/scripts/check_deps.sh`
+- [x] **AC2 (no silent hang):** `plugins/soleur/skills/feature-video/scripts/check_deps.sh`
   detects a launch failure within its bounded timeout and prints a message naming
   `--no-sandbox`; it never hangs unbounded. Verify by running the script on a
   deliberately-broken invocation (e.g., `--args` that forces sandbox) and confirming a
   bounded non-zero exit with the actionable message.
-- [ ] **AC3 (docs present):** `git grep -n "no-sandbox" plugins/soleur/skills/` returns
+- [x] **AC3 (docs present):** `git grep -n "no-sandbox" plugins/soleur/skills/` returns
   hits in `agent-browser/SKILL.md`, `test-browser/SKILL.md`, and `feature-video/SKILL.md`.
-- [ ] **AC4 (backend-close recipe):** `agent-browser/SKILL.md` Troubleshooting contains the
+- [x] **AC4 (backend-close recipe):** `agent-browser/SKILL.md` Troubleshooting contains the
   `browserBackend.callTool: Target page, context or browser has been closed` signature and
   the re-navigate + selector-not-stale-ref recovery.
-- [ ] **AC5 (learning captured):**
+- [x] **AC5 (learning captured):**
   `knowledge-base/project/learnings/bug-fixes/2026-07-17-agent-browser-hang-is-missing-no-sandbox-not-dead-tool.md`
   exists with the probe-before-declaring-dead lesson.
-- [ ] **AC6 (version-bump gate honored):** If the pin was bumped to 0.32.1, every pin site
+- [x] **AC6 (version-bump gate honored):** If the pin was bumped to 0.32.1, every pin site
   (`git grep -n "agent-browser@0.22.3"` → 0.32.1) is updated AND a note records the
   Playwright-MCP Chromium compatibility check result. If NOT bumped, all pins stay 0.22.3
   and the plan's Risks rationale is cited in the PR body. (Either branch is acceptable;
   silence is not.)
-- [ ] **AC7 (no product code / no infra):** `git diff --stat origin/main...HEAD` touches
+- [x] **AC7 (no product code / no infra):** `git diff --stat origin/main...HEAD` touches
   only `plugins/soleur/skills/**` (SKILL.md + check_deps.sh) and
   `knowledge-base/**` (learning + optional skill-freshness.json). No `apps/**`, no
   `*.tf`, no workflow YAML.
