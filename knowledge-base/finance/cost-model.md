@@ -20,6 +20,24 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 
 > **[2026-07-16 Review note]** Out-of-cycle correction against `expenses.md@2026-07-16` (#6538). Two defects, both ledger-accuracy not new spend. **(1) The Hetzner fleet was under-counted:** Product COGS carried only the web-1 host + its volume, omitting web-2, the zot registry, the Inngest control plane, and their volumes/IPv4s — ~$35/mo of *already-active* rows. **(2) The same cx33 SKU was priced two ways** (web-1 at $15.37 vs the registry row at $9.17); the live Hetzner catalog gives cx33 = EUR 8.49/mo net / 80 GB → USD ~9.17 at ~1.08 FX, so the $15.37 / "160 GB SSD" figures were wrong on both amount and disk. Also corrected: the registry is **cx23** (~$5.93), not cx33, since #6497/#6463 right-sized it on 2026-07-16. `grok-dogfood` (verified live via the Hetzner API 2026-07-16, previously ledgered "not born") is classified **R&D**, not COGS, per this document's own classification rule — it is an engineering accelerator that does not scale per paying user. Product COGS **$141.08 → $176.11** (+24.8%), R&D **$410.00 → $419.71**, all-in burn **$551.08 → $595.82**. COGS-scope break-even shifts **3 → 4 users** (⌈176.11 ÷ 49⌉); all-in break-even **12 → 13** at both gross ($49) and Stripe-net ($48) prices. All-in margin at 50-user scale **77.51% → 75.68%** (gross) / **77.04% → 75.17%** (Stripe-net). No new vendor, no new sub-processor — this is a re-derivation of spend that was already being drawn. web-2's rows are retained here and marked *retirement decided* (#6538/#6463); they leave COGS when the destroy lands, which will return ~$10.59/mo. **All Hetzner amounts are catalog-derived — VERIFY actual draw on the next Hetzner invoice.**
 
+> **[2026-07-16 Review note — second pass]** Same cycle, same issue (#6538). The fleet
+> sweep above found the Hetzner under-count; a second sweep of `expenses.md` for
+> **`active` rows absent from this document's tables** found two more, neither of them
+> new spend: **Supabase Inngest project** (`soleur-inngest-prd`, Micro compute, $10/mo,
+> active since 2026-06-17 — the durable Postgres backend behind the CPX22 Inngest host
+> that was *already* tabled as COGS) → **COGS**; and **Proton Mail Workspace Standard**
+> ($14/mo, active) → **COGS** (rationale in the note under the COGS table — it delivers
+> the disclosed `ops@soleur.ai` intake channel and is a named sub-processor, so it is
+> not overhead). Product COGS **$176.11 → $200.11** (+13.6%), R&D unchanged at $419.71,
+> all-in burn **$595.82 → $619.82**. **COGS-scope break-even shifts 4 → 5 users** at both
+> $49 and $48; all-in break-even is **unchanged at 13**. All-in margin at 50-user scale
+> **75.68% → 74.70%** (gross) / **75.17% → 74.17%** (Stripe-net); the COGS-based margin
+> **92.81% → 91.83%**, which retires the "~93%" framing (§5). Both amounts are estimates
+> flagged for invoice verification in `expenses.md` — VERIFY on the next Supabase and
+> Proton invoices. **Method note:** the recurring defect is not any single row but that
+> `expenses.md` and this document drift silently — nothing gates an `active` ledger row
+> against a table line here. Filed as a follow-up.
+
 ## Monthly Burn
 
 Monthly burn is split into two scopes: **R&D / dev tooling** (investments that accelerate engineering, not per-user product delivery) and **product COGS** (infrastructure and services consumed in running the product for paying users). This split is load-bearing for break-even math and for the gross-margin-at-scale claim in §5. Reporting a single blended number either collapses under scrutiny (the small-number framing omits real recurring costs) or misrepresents product economics (the large-number framing taxes product margins with engineering-accelerator spend). The split is defensible and carries forward cleanly into pricing conversations.
@@ -61,18 +79,31 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Hetzner Volume (inngest, 10 GB) | 0.48 [expenses.md@2026-07-16] | `expenses.md` |
 | Hetzner Primary IPv4 (inngest) | 0.54 [expenses.md@2026-07-16] | `expenses.md` |
 | Supabase Pro + Custom Domain | 35.00 [expenses.md@2026-04-19] | `expenses.md` |
+| Supabase Inngest project (`soleur-inngest-prd`, Micro compute) | 10.00 [expenses.md@2026-07-16] | `expenses.md` |
 | Plausible Analytics (Growth) | 9.00 [expenses.md@2026-04-19] | `expenses.md` (EUR 9) |
 | Anthropic API (ux-audit cron) | 15.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Cloudflare `soleur.ai` domain (amortized $70/yr ÷ 12) | 5.83 [expenses.md@2026-04-19] | `expenses.md` |
 | Sentry Team (error tracking + cron monitors, $29 base + ~$11 PAYG draw) | 40.00 [expenses.md@2026-06-11] | `expenses.md` |
 | Resend Pro (outbound + transactional email, 50K emails/mo) | 20.00 [expenses.md@2026-06-16] | `expenses.md` (estimate — verify on next invoice) |
-| **Subtotal Product COGS** | **176.11 [expenses.md@2026-07-16]** | |
+| Proton Mail Workspace Standard (2 users — `ops@soleur.ai` intake) | 14.00 [expenses.md@2026-07-16] | `expenses.md` (estimate — confirm exact monthly rate from Proton billing) |
+| **Subtotal Product COGS** | **200.11 [expenses.md@2026-07-16]** | |
+
+> **Proton Mail is COGS, not overhead (#6538, 2026-07-16).** The row is easy to read as
+> G&A — it is not. Proton delivers `ops@soleur.ai`, the company operational address that
+> `gdpr-policy.md` §4.13 and `privacy-policy.md` **disclose to data subjects** as the
+> intake channel, and Proton is a **named sub-processor** in the Article 30 register and
+> all three policies. Inbound mail forwards to Resend Inbound for AI-assisted triage, so
+> Proton is the first hop of a disclosed processing chain — a service consumed in running
+> the product, and a prerequisite for delivering the statutory Article 15/17 response
+> path. It fails the R&D test (the bucket is engineering accelerators; Proton does not
+> make engineering faster). Flat-rate, like Supabase Pro and Sentry — COGS does not
+> require per-user linearity.
 
 **Totals:**
 
-- **Product COGS:** ~$176/month [expenses.md@2026-07-16]
+- **Product COGS:** ~$200/month [expenses.md@2026-07-16]
 - **R&D / Dev Tooling:** ~$420/month [expenses.md@2026-07-16]
-- **All-in recurring burn:** ~$596/month [expenses.md@2026-07-16]
+- **All-in recurring burn:** ~$620/month [expenses.md@2026-07-16]
 
 Not counted (free-tier or test-mode; trigger-based upgrades listed in §4): Stripe, Better Stack (uptime free-tier; Responder tier still deferred), Buttondown, Doppler, LinkedIn, Bluesky, X API free tier.
 
@@ -122,8 +153,8 @@ Price anchor: **$49/month** per Pro tier (`product/pricing-strategy.md`). Math i
 
 | Scope | Burn (USD/mo) | Price ($49) | Users to break even |
 |-------|--------------:|------------:|--------------------:|
-| Product COGS | 176.11 [expenses.md@2026-07-16] | 49 | ⌈176.11 ÷ 49⌉ = **4 users** |
-| All-in (COGS + R&D / Dev Tooling) | 595.82 [expenses.md@2026-07-16] | 49 | ⌈595.82 ÷ 49⌉ = **13 users** |
+| Product COGS | 200.11 [expenses.md@2026-07-16] | 49 | ⌈200.11 ÷ 49⌉ = **5 users** |
+| All-in (COGS + R&D / Dev Tooling) | 619.82 [expenses.md@2026-07-16] | 49 | ⌈619.82 ÷ 49⌉ = **13 users** |
 
 ### Stripe fee drag
 
@@ -135,10 +166,10 @@ Effective **net revenue per user after Stripe fees: ~$48/month** (EU floor) to ~
 
 | Scope | Burn | Net price ($48) | Users to break even |
 |-------|-----:|----------------:|--------------------:|
-| Product COGS | 176.11 [expenses.md@2026-07-16] | 48 | ⌈176.11 ÷ 48⌉ = **4 users** |
-| All-in | 595.82 [expenses.md@2026-07-16] | 48 | ⌈595.82 ÷ 48⌉ = **13 users** |
+| Product COGS | 200.11 [expenses.md@2026-07-16] | 48 | ⌈200.11 ÷ 48⌉ = **5 users** |
+| All-in | 619.82 [expenses.md@2026-07-16] | 48 | ⌈619.82 ÷ 48⌉ = **13 users** |
 
-Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **13 users** at the current $595.82 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap). The COGS-scope count shifts 3 → 4 (⌈176.11 ÷ 49⌉ = ⌈176.11 ÷ 48⌉ = 4). Stripe fees still bite into gross margin at scale (see §5).
+Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **13 users** at the current $619.82 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap). The COGS-scope count shifts 4 → 5 (⌈200.11 ÷ 49⌉ = ⌈200.11 ÷ 48⌉ = 5). Stripe fees still bite into gross margin at scale (see §5).
 
 ## Scaling Triggers
 
@@ -166,28 +197,28 @@ Worked example: **50 paying users × $49/month = $2,450 MRR**. Two margin framin
 
 ```
 Revenue:           $2,450
-Product COGS:      $176.11 [expenses.md@2026-07-16]
-Gross profit:      $2,273.89
-Gross margin:      2,273.89 / 2,450 = 92.81%
+Product COGS:      $200.11 [expenses.md@2026-07-16]
+Gross profit:      $2,249.89
+Gross margin:      2,249.89 / 2,450 = 91.83%
 ```
 
 ### Against All-in Burn (the honest founder-economics framing)
 
 ```
 Revenue:           $2,450
-All-in burn:       $595.82 [expenses.md@2026-07-16]
-Contribution:      $1,854.18
-Margin (all-in):   1,854.18 / 2,450 = 75.68%
+All-in burn:       $619.82 [expenses.md@2026-07-16]
+Contribution:      $1,830.18
+Margin (all-in):   1,830.18 / 2,450 = 74.70%
 ```
 
 ### Stripe Fee Drag
 
 At 50 users × ~$1/user/mo Stripe fee (EU floor) = **$50/mo in fees**. Effective net revenue: $2,450 − $50 = **$2,400**.
 
-- Adjusted COGS-based margin: ($2,400 − $176.11) / $2,400 = **92.66%**
-- Adjusted all-in margin: ($2,400 − $595.82) / $2,400 = **75.17%**
+- Adjusted COGS-based margin: ($2,400 − $200.11) / $2,400 = **91.66%**
+- Adjusted all-in margin: ($2,400 − $619.82) / $2,400 = **74.17%**
 
-The original "93% gross margin" claim is closer to the COGS-based number (actually ~93%) and elides R&D / dev-tooling burn. The more honest founder-economics number is the all-in margin (~76%). Both should be cited side-by-side whenever the gross-margin claim is made; COGS-only margin without the R&D context misrepresents the operating picture.
+The original "93% gross margin" claim is closest to the COGS-based number, but that number is now **~92%, not ~93%** — the 2026-07-16 re-derivation (#6538) has walked it down from 92.81% as previously-untabled COGS rows landed, and it elides R&D / dev-tooling burn besides. The more honest founder-economics number is the all-in margin (**~75%**). Both should be cited side-by-side whenever the gross-margin claim is made; COGS-only margin without the R&D context misrepresents the operating picture. **The "93%" framing is now stale on its own terms and should be retired from external use rather than re-rounded.**
 
 ## Pricing Gate #4 Status
 
