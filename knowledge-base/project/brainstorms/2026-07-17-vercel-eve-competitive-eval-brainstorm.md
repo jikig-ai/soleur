@@ -210,6 +210,7 @@ Roadmap / CI already named the Eve-class gaps as **tenant product work**, not fr
 | # | Decision |
 |---|----------|
 | **D9** | Treat Eve as **inspiration for L0 tenant production completeness**, not as competitor or substrate. Investment = accelerate existing CP/sandbox/HITL/channel issues; **not** a new “Soleur Eve” framework layer. |
+| **D10** | Track gap closure under umbrella epic **[#6641](https://github.com/jikig-ai/soleur/issues/6641)** — *L0 tenant production completeness* — linking #5862, #5863, #4672, #2004, #6006, #4674, #4673 (sequenced security/HITL before channels). |
 
 ### Open product questions under the reframe
 
