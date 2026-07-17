@@ -1134,10 +1134,15 @@ jobs:
               # scheduler is still live. Idempotent (absent -> no-op) + value-silent; a delete error
               # WARNs but does NOT block the safety-critical web re-enable below — a lingering monitor
               # false-green is strictly less severe than withholding the double-fire prevention.
-              if DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets delete INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --yes >/dev/null 2>&1; then
+              # Capture stderr (NOT stdout — the CLI prints remaining secrets to stdout, so it stays
+              # >/dev/null) so a real Doppler error's cause is visible inline in the ::warning::,
+              # not just "transient error". Safe: delete only ever handled the secret NAME, never a
+              # value, so the stderr tail carries no secret.
+              if DELETE_ERR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets delete INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --yes 2>&1 >/dev/null); then
                 echo "::notice::op=rollback: deleted INNGEST_HEARTBEAT_URL from soleur-inngest/prd (inverse of op=arm G4) — the dedicated heartbeat dark arm now skips its ping; one pusher per monitor restored (no value echoed)."
               else
-                echo "::warning::op=rollback: could not delete INNGEST_HEARTBEAT_URL from soleur-inngest/prd (already absent, or a transient Doppler error). NOT blocking the web re-enable. If a stale URL persists the dedicated host may remain a second heartbeat pusher (monitor false-green) — re-dispatch op=rollback, or verify via cat-deploy-state.sh inngest_heartbeat_dark_arm."
+                ERR_TAIL=$(printf '%s' "$DELETE_ERR" | tr -d '\r' | tr '\n' ' ' | tail -c 300)
+                echo "::warning::op=rollback: could not delete INNGEST_HEARTBEAT_URL from soleur-inngest/prd (already absent, or a transient Doppler error: ${ERR_TAIL:-<no stderr>}). NOT blocking the web re-enable. If a stale URL persists the dedicated host may remain a second heartbeat pusher (monitor false-green) — re-dispatch op=rollback, or verify via cat-deploy-state.sh inngest_heartbeat_dark_arm."
               fi
 
               # ---- Half (B): the web re-enable + restart fan-out (the pre-#6369 behaviour).

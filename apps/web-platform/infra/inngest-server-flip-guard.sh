@@ -4,8 +4,9 @@
 #
 # Wired ONLY on the dedicated host (DOPPLER_PROJECT=soleur-inngest; inngest-bootstrap.sh
 # gates the ExecStartPre line on that project so the co-located web host's inngest-server
-# is never gated). Invoked via `doppler run --project soleur-inngest --config prd` so the
-# env carries INNGEST_POSTGRES_URI + INNGEST_CUTOVER_FLIP.
+# is never gated). Invoked via `doppler run --config prd` (the soleur-inngest project resolves
+# from EnvironmentFile=/etc/default/inngest-server, #6555) so the env carries
+# INNGEST_POSTGRES_URI + INNGEST_CUTOVER_FLIP.
 #
 # It BLOCKS the start (exit non-zero) when BOTH:
 #   * INNGEST_POSTGRES_URI resolves to the PROD durable backend, AND

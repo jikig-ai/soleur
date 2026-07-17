@@ -494,6 +494,20 @@ fi
 # exclusion list — never silently un-covered. AC3/AC3b cover EXPLICIT declarations; this covers
 # the implicit basename channel that AC3 cannot see.
 #
+# BOUNDED SCOPE (decision-challenge T1 / plan task 4.4 — no general ExecStart parser): the
+# basename channel here scans ONLY standalone `*.service` files. Systemd units rendered as `.sh`
+# heredocs (server/vector tag as `doppler`; heartbeat/failure-log carry explicit
+# SyslogIdentifier=) and units defined inline in cloud-init `write_files` (e.g.
+# inngest-nftables.service on the dedicated inngest host → basename `inngest-nftables.sh`, a
+# firewall oneshot whose output ships to NO source and is intentionally not diagnostic-critical)
+# are NOT basename-checked here. The EXPLICIT SyslogIdentifier=/logger-t derivation above IS
+# extended to those file types, so a future such unit that declares SyslogIdentifier= is caught;
+# a future heredoc/cloud-init unit WITHOUT SyslogIdentifier= is a known coverage gap — such a
+# unit must carry an explicit SyslogIdentifier= (or the basename loop must be extended to its
+# file type) to be guarded. Also note the exclusions below are COARSE by wrapper basename: a
+# future unit wrapping a REAL emitter in `/bin/sh -c` or `doppler run --` is silently covered by
+# the `sh`/`doppler` exclusion, so its payload must log under its own allowlisted logger -t tag.
+#
 # The explicit-exclusion half: a basename that legitimately does NOT ship to Source 4, WITH a
 # reason. Keep this to genuine wrapper basenames, never a lockstep bypass for a real emitter.
 declare -A SYSLOG_TAG_EXCLUSIONS=(

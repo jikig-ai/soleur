@@ -79,6 +79,14 @@ files an `action-required` issue.
   list (`sh`, `doppler`, with reasons). This closes #6556's basename-tagging class for standalone
   units WITHOUT a general ExecStart parser (just `.service` first-token basename) — a middle path
   between code-simplicity's minimal shape and #6556's stated purpose. Mutation-proven (drop an
-  exclusion → violator fails; add a stale exclusion → stale check fails). Cloud-init `write_files`
-  unit basename coverage (disk-monitor/resource-monitor/etc. on OTHER hosts) is NOT included — out
-  of scope; those tags are not in the inngest Source 4 allowlist and are not required to be.
+  exclusion → violator fails; add a stale exclusion → stale check fails). KNOWN GAP
+  (review-confirmed, P3, non-blocking): the basename channel scans only `.service` files, NOT
+  `.sh`-heredoc units nor cloud-init `write_files` inline units — including
+  `inngest-nftables.service`, which is on the dedicated inngest host ITSELF (not "another host,"
+  as an earlier draft of this note wrongly said), tags as basename `inngest-nftables.sh`, and
+  ships to no source (a firewall oneshot; intentionally non-diagnostic). It is the #6556 titular
+  class, uncaught — but pre-existing (this PR adds no cloud-init inline unit, and every unit it
+  touches carries an explicit `SyslogIdentifier=` or resolves to an already-excluded basename),
+  and closing it fully needs the general ExecStart parser T1 deliberately scoped out. Recorded as
+  a bounded-scope note in `vector-pii-scrub.test.sh` AC3c rather than a filed issue (net-issue
+  discipline; a future heredoc/cloud-init unit without SyslogIdentifier= is the trigger to extend).

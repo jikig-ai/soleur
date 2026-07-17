@@ -41,20 +41,16 @@ INNGEST_CLI_ARCH="${INNGEST_CLI_ARCH:-amd64}"
 # at the active web backend's private interface). DOPPLER_PROJECT selects the ISOLATED
 # `soleur-inngest` project (AC3) on the dedicated host vs `soleur` on the co-located web host.
 # Since #6555 the units no longer pass `--project`; DOPPLER_PROJECT is delivered to them via
-# EnvironmentFile=/etc/default/inngest-server (written at cloud-init:324 / the bootstrap heredoc
-# + in-place augment). This shell var still GATES which arms render (heartbeat dark arm, flip
-# units, DEDICATED_FLIP) below.
+# EnvironmentFile=/etc/default/inngest-server (written by cloud-init-inngest.yml's env-file
+# pre-create / the bootstrap heredoc + the in-place augment below). This shell var still GATES
+# which arms render (heartbeat dark arm, flip units, DEDICATED_FLIP) below.
 SDK_URL="${SDK_URL:-http://127.0.0.1:3000/api/inngest}"
 # EXPORTED so child bootstrap subprocesses inherit it. Default `soleur` preserves the web host.
-# SOLEUR-DEBT: the `:-soleur` default is a render-time trap — on the dedicated host the correct
-# value is injected by cloud-init's inline `env DOPPLER_PROJECT=soleur-inngest`
-# (cloud-init-inngest.yml), and if that ever fails to reach here the dark arms silently render
-# the WRONG (web) shape. #6555 removed the RUNTIME `--project` surface (units resolve the project
-# from the env-file) but NOT this render-time default. Detector: a wrong render surfaces as
-# cat-deploy-state.sh's `inngest_heartbeat_dark_arm` field (HEARTBEAT_DARK_ARM, #6536), read
-# no-SSH over /hooks/deploy-status. Upgrade trigger: fail-closed the `:47` default (refuse to
-# render dedicated arms when DOPPLER_PROJECT is unset on a host carrying the soleur-inngest
-# token). Ref #6555.
+# SOLEUR-DEBT: the `${DOPPLER_PROJECT:-soleur}` render-time default renders the WRONG (web) arm on the dedicated host if cloud-init's inline `env DOPPLER_PROJECT=soleur-inngest` ever fails to reach here, and the #6555 fail-closed backstop below is a PRESENCE check not a VALUE check so a wrong-but-present `soleur` passes it; when a dedicated-host in-place re-bootstrap path is ever added (the dedicated host is force-replace-only today) fail-close the default AND assert the value == soleur-inngest when the host carries the soleur-inngest Doppler token.
+# Detector for a wrong render (indirect — the field reports arm-render, not project identity):
+# cat-deploy-state.sh's `inngest_heartbeat_dark_arm` field (#6536), read no-SSH over
+# /hooks/deploy-status. #6555 removed the RUNTIME `--project` surface (units resolve the project
+# from the env-file) but NOT this render-time default. Ref #6555.
 export DOPPLER_PROJECT="${DOPPLER_PROJECT:-soleur}"
 
 if [[ -z "$INNGEST_CLI_VERSION" || -z "$INNGEST_CLI_SHA256" ]]; then
@@ -374,10 +370,10 @@ if [[ -f /etc/default/inngest-server ]] && grep -q '^DOPPLER_TOKEN=dp\.' /etc/de
   log "/etc/default/inngest-server exists with valid token — preserving"
   # #6555: the units dropped `--project` and now resolve the Doppler project from this file's
   # DOPPLER_PROJECT line. An env-file preserved from before #6555 lacks it, so append it
-  # idempotently — otherwise an in-place re-bootstrap (ci-deploy on the co-located web host,
-  # which preserves the existing token, ci-deploy.sh:2741) would start units against the `:47`
-  # default `soleur`, or trip the fail-closed backstop below and down inngest-server. Append
-  # only when absent.
+  # idempotently — otherwise an in-place re-bootstrap (ci-deploy runs this bootstrap directly on
+  # the co-located web host, preserving the existing token) would start units against the
+  # `${DOPPLER_PROJECT:-soleur}` default, or trip the fail-closed backstop below and down
+  # inngest-server. Append only when absent.
   if ! grep -qE '^DOPPLER_PROJECT=' /etc/default/inngest-server; then
     printf 'DOPPLER_PROJECT=%s\n' "$DOPPLER_PROJECT" >> /etc/default/inngest-server
     log "/etc/default/inngest-server: appended DOPPLER_PROJECT=$DOPPLER_PROJECT (#6555 in-place augment)"
@@ -411,12 +407,14 @@ fi
 
 # #6555 fail-closed backstop: every doppler-wrapped inngest unit resolves its project from
 # DOPPLER_PROJECT in /etc/default/inngest-server (--project was dropped). If the line is missing
-# or empty, `doppler run` falls back to the `:47` default `soleur` — the WRONG project on the
-# dedicated host, which would start the dedicated scheduler against the co-located project.
-# Refuse to start. On a fresh host cloud-init:324 (dedicated) or the heredoc above (web) writes
-# it; on an existing host the preserve-branch augment adds it — so this should never fire in
-# normal operation; it catches a genuinely broken env-file BEFORE any unit starts. Non-empty
-# check (AC6): a bare `DOPPLER_PROJECT=` is as wrong as an absent one.
+# or empty, `doppler run` falls back to the `${DOPPLER_PROJECT:-soleur}` default — the WRONG
+# project on the dedicated host, which would start the dedicated scheduler against the co-located
+# project. Refuse to start. On a fresh host cloud-init-inngest.yml's env-file pre-create
+# (dedicated) or the heredoc above (web) writes it; on an existing host the preserve-branch
+# augment adds it — so this should never fire in normal operation; it catches a genuinely broken
+# env-file BEFORE any unit starts. Non-empty check (AC6): a bare `DOPPLER_PROJECT=` is as wrong as
+# an absent one. NOTE it is a PRESENCE check, not a VALUE check — see the SOLEUR-DEBT marker above
+# for the wrong-but-present-value residual (not reachable via today's web-host-only ci-deploy).
 if ! grep -qE '^DOPPLER_PROJECT=[^[:space:]]' /etc/default/inngest-server 2>/dev/null; then
   log "ERROR: /etc/default/inngest-server has no non-empty DOPPLER_PROJECT= line. The inngest units resolve their Doppler project from it (--project dropped, #6555). Refusing to start units against a possibly-wrong project — force-replace the host (fresh disk) so cloud-init re-creates the env-file with DOPPLER_PROJECT."
   exit 1

@@ -85,8 +85,18 @@ the same test/vector surfaces and repeated review of the same subsystem.
   silently regresses cron reliability — e.g. a widened guard that wrongly allows a start could
   double-fire prod crons (duplicate reminders/emails to the founder's users), or a botched
   rollback delete could leave the monitor false-green while co-located crons are actually down.
-  Immediate blast radius is LOW today (the host is dark, no live traffic), but the failure class is
-  single-user-incident when the cutover runs.
+  For those #6552/#6553/#6551 cutover paths the immediate blast radius is LOW today (the dedicated
+  host is dark, no live traffic); the failure class is single-user-incident when the cutover runs.
+  **#6555 is the exception — it has an IMMEDIATE live-host surface** (added at review time, per
+  `user-impact-reviewer`): dropping `--project` means the units resolve `DOPPLER_PROJECT` from the
+  env-file, and the co-located **web host is re-bootstrapped IN PLACE by ci-deploy on the next
+  deploy** (`ci-deploy.sh` runs the bootstrap directly). Its pre-#6555 env-file lacks the
+  `DOPPLER_PROJECT` line, so absent mitigation the new fail-closed backstop would `exit 1` and
+  **down the LIVE co-located inngest-server — the founder's users' actual cron scheduler** — an
+  immediate single-user incident, not "when the cutover runs." **Mitigation (in-diff + tested):**
+  the preserve-branch in-place augment appends `DOPPLER_PROJECT=soleur` before the backstop runs,
+  so the live web host stays up; covered by `inngest.test.sh` "augments a preserved env-file …"
+  + the AC6 fail-closed assertion.
 - **If this leaks, the user's data/workflow is exposed via:** no new data surface. The OnFailure
   log and the `vector_config_*` instrument carry no PII (a config hash + a unit-failure
   marker); `cat-deploy-state.sh` already redacts signing keys + heartbeat bearer URLs (#5159). No
