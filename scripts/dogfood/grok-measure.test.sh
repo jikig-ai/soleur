@@ -25,5 +25,11 @@ grep -q 'count = local.grok_dogfood_enabled' "$ROOT/apps/web-platform/infra/grok
 # config-driven model (not only hard-coded install)
 grep -q 'default = "grok-4.5"' "$ROOT/apps/web-platform/infra/cloud-init-grok-dogfood.yml"
 grep -q 'Phase 2 placeholder' "$ROOT/apps/web-platform/infra/cloud-init-grok-dogfood.yml"
+# write_files runs before users — never owner: dogfood (cloud-init getpwnam footgun)
+if grep -E '^[[:space:]]*owner:[[:space:]]*dogfood' \
+  "$ROOT/apps/web-platform/infra/cloud-init-grok-dogfood.yml"; then
+  echo "FAIL: cloud-init write_files must not set owner: dogfood (users module is later)" >&2
+  exit 1
+fi
 
 echo "PASS grok-measure.test.sh"

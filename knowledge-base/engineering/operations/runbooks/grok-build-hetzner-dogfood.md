@@ -61,19 +61,23 @@ Record host monthly cost in `knowledge-base/engineering/operations/expenses.md` 
 ## Bootstrap secrets + repo
 
 1. SSH as root (admin IP allowlist): `ssh root@<ip>`  
-2. Install/verify `grok`: `grok --version`  
+   - If banner times out, check egress ∈ Doppler `ADMIN_IPS` and live `hcloud firewall describe soleur-grok-dogfood`.
+2. Confirm cloud-init: `test -f /var/log/grok-dogfood/boot-complete` and `grok --version`  
+   - **Known footgun (fixed in cloud-init after first trial):** `write_files` must not use `owner: dogfood` — that module runs *before* `users`, so the install script was skipped and only `boot-complete` appeared. Repair: reinstall CLI + reseed `config.toml` as root, then `chown dogfood`.
 3. Place API key (operator-only — **never** prd customer secrets):
 
 ```bash
 install -m 600 /dev/null /home/dogfood/.grok/secrets.env
-# Write XAI_API_KEY=... only
+# Write XAI_API_KEY=... only (durable console key preferred; OIDC access tokens expire)
 chown dogfood:dogfood /home/dogfood/.grok/secrets.env
 ```
+
+   Do **not** create a Doppler config that inherits/copies `prd` secrets for this host.
 
 4. Clone Soleur for dogfood (read-only preferred; no push credentials):
 
 ```bash
-sudo -u dogfood git clone --depth 1 <url> /home/dogfood/soleur
+sudo -u dogfood git clone --depth 1 https://github.com/jikig-ai/soleur.git /home/dogfood/soleur
 ```
 
 5. Config already seeds `default = "grok-4.5"` under `/home/dogfood/.grok/config.toml`.
