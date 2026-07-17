@@ -369,3 +369,15 @@ describe("#6031 — cron-ghcr-token-minter is a non-git cron", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-ghcr-token-minter")).toBe(false);
   });
 });
+
+describe("#6602 — cron-expenses-verify-by is a non-git dispatch-hybrid cron", () => {
+  // The expenses verify_by scheduler mints an installation token and dispatches
+  // scheduled-expenses-verify-by.yml; it does NO git operations, so it neither
+  // calls safeCommitAndPr nor carries a CRON_BASH_ALLOWLISTS entry, and is not a
+  // deferred Tier-2 cron. Acknowledged here so the sibling-set sweep sees this
+  // dependent when EXPECTED_CRON_FUNCTIONS grows (cron-tier2-parity set).
+  it("has no CRON_BASH_ALLOWLISTS entry and is not Tier-2 deferred", () => {
+    expect(CRON_BASH_ALLOWLISTS["cron-expenses-verify-by"]).toBeUndefined();
+    expect(TIER2_DEFERRED_CRONS.has("cron-expenses-verify-by")).toBe(false);
+  });
+});

@@ -130,6 +130,12 @@ if want_scripts; then
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
   run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
+  # #6602: exit-code harness for the expenses verify_by expiry gate. Registered
+  # explicitly — this runner enumerates by hand and scripts/*.test.sh is NOT in
+  # the auto-glob below, so an unregistered suite is an ORPHAN that never gates
+  # (the #5417 class). The gate authorizes a fail-loud financial-accuracy alarm,
+  # so its arms returning the right exit codes is load-bearing coverage.
+  run_suite "scripts/expenses-verify-by-check" bash scripts/expenses-verify-by-check.test.sh
   run_suite "scripts/sentry-issue" bash scripts/sentry-issue.test.sh
   run_suite "scripts/content-publisher" bash scripts/test-content-publisher.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh

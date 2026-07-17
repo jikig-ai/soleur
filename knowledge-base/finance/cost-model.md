@@ -100,6 +100,31 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > 2026-07-16) — each carrying a "verify on next invoice" caveat with no date and no
 > owner. Filed as a scope note on #6584.
 
+> **[2026-07-17 Review note — second pass]** Out-of-cycle correction against
+> `expenses.md@2026-07-17` (#6602, expenses verify_by expiry gate). **Ledger
+> accuracy, not new spend, and API-derived (not re-estimated):** a live Hetzner
+> Cloud API read (`/v1/pricing`, `/v1/primary_ips`, 2026-07-17) closed the two
+> pre-existing #6589 gaps flagged in the first-pass note above. **(1) Volume FX
+> basis:** the four active volume rows were priced at a stale ~$0.044/GB basis;
+> the live catalog is **EUR 0.0572/GB net**, so at the host rows' ~1.08 FX they
+> book web-1 **0.88 → 1.24**, web-2 **0.88 → 1.24**, registry **2.64 → 3.71**,
+> inngest **0.48 → 0.62** (+$1.93/mo). **(2) Missing Primary IPv4 rows:** web-1
+> and the registry had no IPv4 line though the API confirms all five live hosts
+> carry one billable IPv4; added at **$0.54 each** (+$1.08/mo). Product COGS
+> **$231.33 → $234.34** (+1.30%), all-in burn **$651.18 → $654.19** (+0.46%).
+> **Every break-even count is unchanged** — COGS-scope stays **5**
+> (⌈234.34 ÷ 49⌉ = ⌈234.34 ÷ 48⌉ = 5) and all-in stays **14**
+> (⌈654.19 ÷ 49⌉ = ⌈654.19 ÷ 48⌉ = 14); **neither re-derivation trigger fired**
+> (subtotal shift <10% AND no ⌈burn ÷ price⌉ boundary crossed at $49 or $48), so
+> per §4.1 this is a **line-and-anchor update, not a full re-derivation**.
+> Precise margins nudge: all-in 50-user **73.42% → 73.30%** (gross) / **72.87% →
+> 72.74%** (Stripe-net); COGS-based **90.56% → 90.44%**. Per-user marginal
+> **~$0.91 → ~$0.94** (the web-1 /workspaces volume now amortizes to ~$0.11/user,
+> was ~$0.08). **All Hetzner amounts remain catalog-EUR estimates** — the Cloud
+> API returns catalog EUR + inventory only (invoices 404), so billed USD stays
+> unverified and now carries a machine-readable `verify_by` marker (2026-08-01)
+> that the new `scripts/expenses-verify-by-check.sh` gate enforces on the calendar.
+
 ## Monthly Burn
 
 Monthly burn is split into two scopes: **R&D / dev tooling** (investments that accelerate engineering, not per-user product delivery) and **product COGS** (infrastructure and services consumed in running the product for paying users). This split is load-bearing for break-even math and for the gross-margin-at-scale claim in §5. Reporting a single blended number either collapses under scrutiny (the small-number framing omits real recurring costs) or misrepresents product economics (the large-number framing taxes product margins with engineering-accelerator spend). The split is defensible and carries forward cleanly into pricing conversations.
@@ -143,14 +168,16 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Line | Amount (USD/mo) | Source |
 |------|----------------:|--------|
 | Hetzner CX33 (web-1, web platform) | 9.17 [expenses.md@2026-07-16] | `expenses.md` |
-| Hetzner Volume (web-1, 20 GB) | 0.88 [expenses.md@2026-04-19] | `expenses.md` |
+| Hetzner Volume (web-1, 20 GB) | 1.24 [expenses.md@2026-07-17] | `expenses.md` (FX-basis corrected — #6602) |
+| Hetzner Primary IPv4 (web-1) | 0.54 [expenses.md@2026-07-17] | `expenses.md` (#6589 gap added — #6602) |
 | Hetzner CX33 (web-2, warm standby, fsn1) | 9.17 [expenses.md@2026-07-16] | `expenses.md` (retirement decided — #6538) |
-| Hetzner Volume (web-2, 20 GB) | 0.88 [expenses.md@2026-07-16] | `expenses.md` (retirement decided — #6538) |
+| Hetzner Volume (web-2, 20 GB) | 1.24 [expenses.md@2026-07-17] | `expenses.md` (retirement decided — #6538; FX-basis corrected — #6602) |
 | Hetzner Primary IPv4 (web-2) | 0.54 [expenses.md@2026-07-16] | `expenses.md` (retirement decided — #6538) |
 | Hetzner CX23 (zot registry, hel1) | 5.93 [expenses.md@2026-07-16] | `expenses.md` |
-| Hetzner Volume (registry, 60 GB) | 2.64 [expenses.md@2026-07-16] | `expenses.md` |
+| Hetzner Volume (registry, 60 GB) | 3.71 [expenses.md@2026-07-17] | `expenses.md` (FX-basis corrected — #6602) |
+| Hetzner Primary IPv4 (registry) | 0.54 [expenses.md@2026-07-17] | `expenses.md` (#6589 gap added — #6602) |
 | Hetzner CPX22 (inngest control plane, hel1) | 21.05 [expenses.md@2026-07-16] | `expenses.md` |
-| Hetzner Volume (inngest, 10 GB) | 0.48 [expenses.md@2026-07-16] | `expenses.md` |
+| Hetzner Volume (inngest, 10 GB) | 0.62 [expenses.md@2026-07-17] | `expenses.md` (FX-basis corrected — #6602) |
 | Hetzner Primary IPv4 (inngest) | 0.54 [expenses.md@2026-07-16] | `expenses.md` |
 | Supabase Pro + Custom Domain | 35.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Supabase Inngest project (`soleur-inngest-prd`, Micro compute) | 10.00 [expenses.md@2026-07-16] | `expenses.md` |
@@ -160,7 +187,7 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Sentry Team (error tracking + cron monitors, $29 base + $42.22 PAYG: 49 × $0.78 cron-monitor seats + 4 × $1.00 uptime monitors) | 71.22 [expenses.md@2026-07-17] | `expenses.md` (live-verified — see note) |
 | Resend Pro (outbound + transactional email, 50K emails/mo) | 20.00 [expenses.md@2026-06-16] | `expenses.md` (estimate — verify on next invoice) |
 | Proton Mail Workspace Standard (2 users — `ops@soleur.ai` intake) | 14.00 [expenses.md@2026-07-16] | `expenses.md` (estimate — confirm exact monthly rate from Proton billing) |
-| **Subtotal Product COGS** | **231.33 [expenses.md@2026-07-17]** | |
+| **Subtotal Product COGS** | **234.34 [expenses.md@2026-07-17]** | |
 
 > **Proton Mail is COGS, not overhead (#6538, 2026-07-16).** The row is easy to read as
 > G&A — it is not. Proton delivers `ops@soleur.ai`, the company operational address that
@@ -188,9 +215,9 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 
 **Totals:**
 
-- **Product COGS:** ~$231/month [expenses.md@2026-07-17]
+- **Product COGS:** ~$234/month [expenses.md@2026-07-17]
 - **R&D / Dev Tooling:** ~$420/month [expenses.md@2026-07-16]
-- **All-in recurring burn:** ~$651/month [expenses.md@2026-07-17]
+- **All-in recurring burn:** ~$654/month [expenses.md@2026-07-17]
 
 Not counted (free-tier, test-mode, or metered-at-sub-cent; trigger-based upgrades listed in §4): Stripe, Better Stack (uptime free-tier; Responder tier still deferred), Buttondown, Doppler, LinkedIn, Bluesky, X API free tier, **Cloudflare R2 (cla-evidence)** — `active` and pay-per-use ($0.015/GB-mo + $0.36/M writes) but sub-cent/mo at realistic scale, so it is ledgered at 0.00 and not tabled. *(Scope of this list widened 2026-07-16 (#6538) from "free-tier or test-mode" to admit the metered-sub-cent case: R2 is `active` and fits neither prior label, so it fell through both the tables and this list. #6584's parity gate must treat this line as the authoritative not-counted set.)*
 
@@ -212,7 +239,7 @@ Per-user server cost at capacity (11 concurrent, amortized): **$9.17 / 11 ≈ $0
 
 ### Volume Amortization
 
-Hetzner Volume (20 GB persistent storage for `/workspaces`) at $0.88/mo [expenses.md@2026-04-19] amortizes to $0.08/user/mo at 11 concurrent users. Negligible until the 20 GB cap is approached.
+Hetzner Volume (20 GB persistent storage for `/workspaces`) at $1.24/mo [expenses.md@2026-07-17] amortizes to $0.11/user/mo at 11 concurrent users. Negligible until the 20 GB cap is approached.
 
 ### Supabase Pro Headroom
 
@@ -226,9 +253,9 @@ At current architecture and headroom:
 |-----------|-----------------------------|
 | LLM inference | $0 (BYOK) |
 | Server capacity (1 slot of 11 on CX33) | ~$0.83 [expenses.md@2026-07-16] |
-| Persistent storage (volume amortized) | ~$0.08 |
+| Persistent storage (volume amortized) | ~$0.11 [expenses.md@2026-07-17] |
 | Database / auth / bandwidth (Supabase Pro headroom) | ~$0 until trigger |
-| **Marginal user cost** | **~$0.91 [expenses.md@2026-07-16]** |
+| **Marginal user cost** | **~$0.94 [expenses.md@2026-07-17]** |
 
 This is a steady-state approximation, valid while users remain within Supabase Pro limits and CX33 session capacity.
 
@@ -240,8 +267,8 @@ Price anchor: **$49/month** per Pro tier (`product/pricing-strategy.md`). Math i
 
 | Scope | Burn (USD/mo) | Price ($49) | Users to break even |
 |-------|--------------:|------------:|--------------------:|
-| Product COGS | 231.33 [expenses.md@2026-07-17] | 49 | ⌈231.33 ÷ 49⌉ = **5 users** |
-| All-in (COGS + R&D / Dev Tooling) | 651.18 [expenses.md@2026-07-17] | 49 | ⌈651.18 ÷ 49⌉ = **14 users** |
+| Product COGS | 234.34 [expenses.md@2026-07-17] | 49 | ⌈234.34 ÷ 49⌉ = **5 users** |
+| All-in (COGS + R&D / Dev Tooling) | 654.19 [expenses.md@2026-07-17] | 49 | ⌈654.19 ÷ 49⌉ = **14 users** |
 
 ### Stripe fee drag
 
@@ -253,10 +280,10 @@ Effective **net revenue per user after Stripe fees: ~$48/month** (EU floor) to ~
 
 | Scope | Burn | Net price ($48) | Users to break even |
 |-------|-----:|----------------:|--------------------:|
-| Product COGS | 231.33 [expenses.md@2026-07-17] | 48 | ⌈231.33 ÷ 48⌉ = **5 users** |
-| All-in | 651.18 [expenses.md@2026-07-17] | 48 | ⌈651.18 ÷ 48⌉ = **14 users** |
+| Product COGS | 234.34 [expenses.md@2026-07-17] | 48 | ⌈234.34 ÷ 48⌉ = **5 users** |
+| All-in | 654.19 [expenses.md@2026-07-17] | 48 | ⌈654.19 ÷ 48⌉ = **14 users** |
 
-Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **14 users** at the current $651.18 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap; the 2026-07-17 Sentry correction moved both counts 13 → 14 together). The COGS-scope count is **unchanged at 5** (⌈231.33 ÷ 49⌉ = ⌈231.33 ÷ 48⌉ = 5). Stripe fees still bite into gross margin at scale (see §5).
+Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **14 users** at the current $654.19 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap; the 2026-07-17 Sentry correction moved both counts 13 → 14 together; the 2026-07-17 #6602 volume-FX correction left both at 14, no boundary crossed). The COGS-scope count is **unchanged at 5** (⌈234.34 ÷ 49⌉ = ⌈234.34 ÷ 48⌉ = 5). Stripe fees still bite into gross margin at scale (see §5).
 
 ## Scaling Triggers
 
@@ -284,32 +311,32 @@ Worked example: **50 paying users × $49/month = $2,450 MRR**. Two margin framin
 
 ```
 Revenue:           $2,450
-Product COGS:      $231.33 [expenses.md@2026-07-17]
-Gross profit:      $2,218.67
-Gross margin:      2,218.67 / 2,450 = 90.56%
+Product COGS:      $234.34 [expenses.md@2026-07-17]
+Gross profit:      $2,215.66
+Gross margin:      2,215.66 / 2,450 = 90.44%
 ```
 
 ### Against All-in Burn (the honest founder-economics framing)
 
 ```
 Revenue:           $2,450
-All-in burn:       $651.18 [expenses.md@2026-07-17]
-Contribution:      $1,798.82
-Margin (all-in):   1,798.82 / 2,450 = 73.42%
+All-in burn:       $654.19 [expenses.md@2026-07-17]
+Contribution:      $1,795.81
+Margin (all-in):   1,795.81 / 2,450 = 73.30%
 ```
 
 ### Stripe Fee Drag
 
 At 50 users × ~$1/user/mo Stripe fee (EU floor) = **$50/mo in fees**. Effective net revenue: $2,450 − $50 = **$2,400**.
 
-- Adjusted COGS-based margin: ($2,400 − $231.33) / $2,400 = **90.36%**
-- Adjusted all-in margin: ($2,400 − $651.18) / $2,400 = **72.87%**
+- Adjusted COGS-based margin: ($2,400 − $234.34) / $2,400 = **90.24%**
+- Adjusted all-in margin: ($2,400 − $654.19) / $2,400 = **72.74%**
 
-The original "93% gross margin" claim is closest to the COGS-based number, but that number is now **~91%, not ~93%** — the 2026-07-16 re-derivation (#6538) walked it down from 92.81% as previously-untabled COGS rows landed, and the 2026-07-17 Sentry correction (#6589) walked it down again to 90.56%, in both cases on spend that was already being drawn. It elides R&D / dev-tooling burn besides. The more honest founder-economics number is the all-in margin (**~73%**). Both should be cited side-by-side whenever the gross-margin claim is made; COGS-only margin without the R&D context misrepresents the operating picture. **The "93%" framing is now stale on its own terms and should be retired from external use rather than re-rounded.**
+The original "93% gross margin" claim is closest to the COGS-based number, but that number is now **~90%, not ~93%** — the 2026-07-16 re-derivation (#6538) walked it down from 92.81% as previously-untabled COGS rows landed, the 2026-07-17 Sentry correction (#6589) walked it down again to 90.56%, and the 2026-07-17 #6602 volume-FX correction nudged it to 90.44%, in every case on spend that was already being drawn. It elides R&D / dev-tooling burn besides. The more honest founder-economics number is the all-in margin (**~73%**). Both should be cited side-by-side whenever the gross-margin claim is made; COGS-only margin without the R&D context misrepresents the operating picture. **The "93%" framing is now stale on its own terms and should be retired from external use rather than re-rounded.**
 
 ## Pricing Gate #4 Status
 
-This document addresses the **affordability** dimension of Pricing Gate #4 (`knowledge-base/product/pricing-strategy.md:152` — "Infrastructure ready | Cloud sync, hosted execution, and analytics dashboard are buildable (not necessarily built) | Not assessed"). The affordability side is now assessed: product COGS is ~$231/mo at current ledger [expenses.md@2026-07-17], break-even is **5 paying users** (COGS scope) / 14 (all-in, gross-price and Stripe-net), gross margins are **~73% all-in (~91% COGS-scope)** at 50-user scale, and the BYOK architectural commitment keeps per-user variable cost near zero. **Cite the all-in figure, not the COGS-scope one** — §5 retires the "~93%" framing, and this section is the one most likely to be quoted outward.
+This document addresses the **affordability** dimension of Pricing Gate #4 (`knowledge-base/product/pricing-strategy.md:152` — "Infrastructure ready | Cloud sync, hosted execution, and analytics dashboard are buildable (not necessarily built) | Not assessed"). The affordability side is now assessed: product COGS is ~$234/mo at current ledger [expenses.md@2026-07-17], break-even is **5 paying users** (COGS scope) / 14 (all-in, gross-price and Stripe-net), gross margins are **~73% all-in (~90% COGS-scope)** at 50-user scale, and the BYOK architectural commitment keeps per-user variable cost near zero. **Cite the all-in figure, not the COGS-scope one** — §5 retires the "~93%" framing, and this section is the one most likely to be quoted outward.
 
 The **buildability** dimension — whether cloud sync, hosted agent execution, and the analytics dashboard are actually buildable within a reasonable horizon — remains with **CPO / CTO**. That assessment is not closed by this document.
 
