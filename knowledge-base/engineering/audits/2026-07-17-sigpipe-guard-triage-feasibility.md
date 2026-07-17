@@ -161,16 +161,23 @@ it. Neither is resolved here; "not locally set" is reported as a bound, never as
 
 ## 3. B — the number the disposition was supposed to turn on
 
-**B = bounded / var-fed = 4/14 = 28%.**
+**B = bounded / var-fed = 4/15 = 26%.**
 
 | var-fed production sites | count |
 |---|---|
 | **bounded** (assignment resolves to a bound) | 4 |
-| unbounded | 0 |
+| unbounded | 1 |
 | **UNDECIDED** (assignment unresolvable) | **10** |
 
-The threshold fixed *before* measuring was B >= 0.8 for triage to be considered available. **28% is
-not close.** Window analysis cannot triage this class.
+The threshold fixed *before* measuring was B >= 0.8 for triage to be considered available. **26% is
+not close.**
+
+> **An earlier revision reported `unbounded = 0`** for a corpus full of `docker`/`nft`/`journalctl`
+> producers. That was not a finding — it was a broken instrument. FOUR separate anchoring bugs in one
+> classifier (assignment position, RHS position, the `$(` gap, the `printf '%s\n'` format) each made a
+> site *vanish* rather than misreport, which is why none of them announced itself. **An instrument that
+> silently drops what it cannot parse reports a smaller, cleaner, wronger world** — and a zero is the
+> most confident-looking unsupported verdict there is. Window analysis cannot triage this class.
 
 The 10 undecided are undecided structurally, not lazily. The dominant shape is:
 
@@ -230,7 +237,7 @@ truncation (`head -c N` / `tail -c N`, `N ≤ 4096`). Shape alone never qualifie
 > exists to correct it.
 
 **The conclusion is invariant** across every refinement above: with the classifier resolving nothing,
-B was 0%; with the construction rule, 28%. Both are far below the 0.8 bar. Nothing downstream turns on
+B was 0%; with the construction rule, 26%. Both are far below the 0.8 bar. Nothing downstream turns on
 which is right — stated so the precision is not mistaken for load-bearing.
 
 ## 4. Disposition
