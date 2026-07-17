@@ -22,6 +22,39 @@ adr: ADR-118 (provisional — re-verify ordinal at ship)
 
 # 🔒 fix(security): LUKS-encrypt `hcloud_volume.workspaces` (#6588)
 
+> ## ⚠️ Enhancement Summary — Deepen Pass (2026-07-17)
+>
+> **Eight lenses ran. The plan does NOT survive them intact. `/work` MUST apply §Deepen Pass
+> Corrections before implementing — several ACs as originally written are FALSE-GREEN GENERATORS.**
+>
+> **Sections enhanced:** Premise Validation (P4/P4a), Research Reconciliation (R7), Sequencing,
+> Observability, + the new §Deepen Pass Corrections which SUPERSEDES parts of Phases 1-5 and the ACs.
+>
+> **Agents:** verify-the-negative · data-integrity-guardian · security-sentinel ·
+> architecture-strategist · code-simplicity-reviewer · terraform-architect · spec-flow-analyzer ·
+> observability-coverage-reviewer.
+>
+> ### The four findings that matter
+>
+> 1. **AC26 — the verify could not go RED. Empirically proven.** The prescribed
+>    `rsync -aHAX --numeric-ids --checksum --delete --dry-run SRC/ DST/` "prints zero transfers" was
+>    run against a DST with corrupted content + wrong perms + an orphan file: **it printed nothing and
+>    exited 0.** rsync's default verbosity is 0. **The single check standing between the user and
+>    permanent loss of their source code was a false-green generator** — and the plan mutation-tested
+>    the drift guard and the mirror gate but never this. *(→ C1)*
+> 2. **The `#6568` premise was false, and it moved mid-session.** PR #6568 **merged docs-only** at
+>    10:17:46Z (zero `.tf`); web-2 survives; `var.web_hosts` still has both. Phase 0 blocked on a
+>    condition that had already resolved differently. *(→ fixed inline: P4/P4a, R7, §Sequencing correction)*
+> 3. **`--restart unless-stopped` defeats the D2 fail-closed gate on the exact path it exists for.**
+>    On reboot `dockerd` resurrects the container — `docker run` never executes, the gate never runs,
+>    and Docker silently creates the bind-mount dir on the **root disk**. My D2 synthesis was
+>    **circular**: I chose `nofail` *because* the gate would catch it. It does not. *(→ C2)*
+> 4. **The escrow proof was vacuous.** Formatting a throwaway with the same string just read from
+>    Doppler and re-opening it passes for **any** string — it cannot fail. *(→ C3)*
+>
+> **Verdict: the design (additive volume, freeze, filesystem-level verify, retain plaintext) survives
+> — the ADR's core ruling is unchanged. The instrumentation around it did not.**
+
 ## Overview
 
 User source code sits **unencrypted at rest** on `hcloud_volume.workspaces` while three
@@ -62,7 +95,8 @@ Every premise cited by reference was checked. Eight did not survive.
 | P1 | "`hcloud_volume.format` is ForceNew — a naive apply **destroys the volume**" | **Red herring.** LUKS at Hetzner is **guest-side**; `format` never changes. `git-data-luks.tf:11-14` verbatim: *"encryption-at-rest is GUEST-SIDE LUKS, NOT an hcloud_volume attribute. There is no hcloud 'encrypted' flag"* — its LUKS volume keeps `format = "ext4"`. | Reframe (→ P2) |
 | P2 | *(not named)* | **The real data-loss mechanism**: `cloud-init-git-data.yml:159` `if ! cryptsetup isLuks "$DEV"; then luksFormat`. On a **populated plaintext** device `isLuks` is false ⇒ `luksFormat` ⇒ **wipes live user code**. Safe only because git-data's volume is born fresh. | Never point the guard at the live volume |
 | P3 | Clause in 2 docs + 2 mirrors (4 files) | **7 canonical body sites + 3 `Last Updated` headers, ×2 mirrors = 20 sites**, across **three** docs. `gdpr-policy.md` missed entirely. Worse: `privacy-policy.md:488` + `gdpr-policy.md:318` (+ mirrors) carry the git-data-host clause with **no "LUKS" token** — invisible to the issue's own framing. | Union-anchor grep; **never** `grep LUKS` |
-| P4 | "see `specs/feat-6538-web2-fsn1-orphan/decision-challenges.md` DC-1" | Exists **only on unmerged PR #6568**, not `main`. Content + 2026-07-23 trigger confirmed on the PR branch. | Sequencing dep |
+| P4 | "see `specs/feat-6538-web2-fsn1-orphan/decision-challenges.md` DC-1" | **Moved mid-session.** At plan-open it existed only on the unmerged PR #6568. **PR #6568 MERGED at 2026-07-17T10:17:46Z** — DC-1 is now **on `main`** and directly closable. Content + the 2026-07-23 trigger confirmed. | PR 1 closes DC-1 on main |
+| P4a | *(the issue + my own Phase 0)* "PR B (#6538) is concurrently destroying web-2 … sequence after #6568" | **FALSE — caught by the deepen verify-the-negative pass.** PR #6568 merged as **`docs(legal,finance): state the hosting locative at EU level; re-derive the cost model`** — **docs-only, ZERO `.tf` files** (`gh pr view 6568 --json files`). `git show origin/main:apps/web-platform/infra/variables.tf` still defines **both** `web-1` (hel1) and `web-2` (fsn1). **web-2 was never destroyed, and no teardown PR exists** — #6538 is an open *issue* with no PR. | **Phase 0 UNBLOCKED — see §Sequencing correction** |
 | P5 | "Blue-green… aligns with the zero-downtime precedent in #5887" | **Inverts it.** #5887's norm: *"Default to the zero-downtime path… Downtime is acceptable only with explicit justification + a bounded window + operator sign-off."* Justification exists; the machinery does not (**no LB**, `server.tf:186-187`; `web["web-1"]` pinned **23× / 5 files**; **#6459 is OPEN with "ADR needed"**). | Option 1 rejected |
 | P6 | `#6570 #6459 #5274 #6538` blockers | All **OPEN**. `#5887` **CLOSED**. `#6426` **MERGED**. `#6568` is an **open PR**. | Hold |
 | P7 | DC-1 cites "the Art. 13(3) precedent set in PR #4455 — *'encryption at rest is being rolled out'*" | PR #4455 is MERGED but is *"feat(legal): PR-1 Flagsmith sub-processor disclosure"*. **That wording is not in it.** The *mechanism* is reusable; the citation is loose. CLO separately ruled the **Art. 13(3) anchor wrong** → **Art. 12(1) + 5(1)(a)**. | Do not propagate |
@@ -86,7 +120,7 @@ card — **CPO corrected me** (R1a).
 | R4 | *(implicit)* "a cloud-init edit delivers LUKS to the hosts" | **False.** `server.tf:254-256` `ignore_changes = [user_data, ssh_keys, image, placement_group_id]` ⇒ **no diff at all** on web-1/web-2. Only a fresh **create** consumes it. | Cutover delivers to the live host; cloud-init covers the fresh-host path |
 | R5 | *(CTO F7 + CPO G6; I confirmed independently)* | **`/mnt/data` has no working reboot path today.** `cloud-init.yml:568-569`: `mount /dev/disk/by-id/scsi-0HC_Volume_* /mnt/data \|\| true` then `echo '<same glob> … ext4 defaults 0 2' >> /etc/fstab`. **fstab does not expand globs** ⇒ inert. No `nofail`, no `grep -q` guard, and `\|\| true` **swallows mount failure**. Contrast git-data's correct `:170`. Consequences: a reboot leaves the container writing workspaces to the **root disk**; a second attached volume makes the glob match **two devices**. | **Phase 1** — prerequisite, not nice-to-have |
 | R6 | *(CTO F8)* "reuse `verify_set_identity`" | **Does not port.** `git-data-cutover.sh:246` verifies `git rev-list --all \| sort \| sha256sum` — sound for **bare** repos (all state = refs/objects). `/workspaces` holds **working trees**: uncommitted edits, untracked files, `refs/checkpoints/*`. A rev-list identity **passes while dropping exactly the sole-copy data in R1**. | Filesystem-level verify (Phase 4) |
-| R7 | AC: "every `var.web_hosts` member" | `{web-1: hel1, web-2: fsn1}` today; **PR #6568 destroys web-2** ⇒ post-merge `{web-1}`. Encrypting a volume scheduled for destruction is waste. | Sequence after #6568 |
+| R7 | AC: "every `var.web_hosts` member" | **Corrected at deepen.** `var.web_hosts` = `{web-1: hel1, web-2: fsn1}` on **fresh `origin/main`** and **stays that way** — PR #6568 merged docs-only (P4a). So the AC literally means **both hosts today**. But web-2 is slated for teardown (#6538, open, no PR), so encrypting its volume is waste. | **Scope out web-2 explicitly; do NOT block on a PR that does not exist** — §Sequencing correction |
 | R8 | *(implicit)* "add LUKS to cloud-init.yml" | **Byte-budget blocked.** `WEB_GZIP_BUDGET = 21_900` (`cloud-init-user-data-size.test.ts:79`); `server.tf:157` records *"under ~300 bytes of headroom"*, cloud-init.yml *"effectively comment-frozen"*. | **Bake** into `soleur-host-bootstrap.sh` (ADR-080) |
 | R9 | *(implicit)* "add the volume to the allow-list" | `apply-web-platform-infra.yml:29-35` **OPERATOR_APPLIED_EXCLUSION** excludes `hcloud_server.web`, `hcloud_volume.workspaces`, `_attachment.workspaces`. Only `hcloud_firewall.web`/`_attachment.web` are on the merge path (`:388-389`). | Dedicated `workflow_dispatch` job |
 | R10 | `/mnt/data` == workspaces | Also `/mnt/data/plugins/soleur` (`:573`, seeded `:661-666`) — **re-derivable** (`docker cp` + `.seed-complete`). | Rsync all (free); irreplaceable set = `/mnt/data/workspaces` |
@@ -218,12 +252,25 @@ receives both documents.
 
 ## Observability
 
+> **Rewritten at deepen (simplicity review).** The original design polled `blkid`/`findmnt`/`mountpoint`
+> every 5 minutes from a new `luks-monitor.{sh,service,timer}`. That was **cargo-culted from git-data —
+> a design for a second host nobody could see.** web-1 *is* the host that serves the site. Two facts kill
+> the probe: (1) **the state it polls is boot-immutable** — nothing but the cutover script remounts
+> `/mnt/data`, so a 5-min timer on a boot-time constant is a heartbeat pretending to be a probe; and
+> (2) **every one of its five failure modes is already caught, and caught louder, by the pre-`docker run`
+> fail-closed gate** — no mapper ⇒ no container ⇒ HTTP down ⇒ the existing Better Stack `app.soleur.ai`
+> monitor pages. The one thing the probe added was *discrimination* (`reason=doppler_unreachable` vs
+> `reason=plaintext_device`). **That belongs inside the gate**, at the one point where the state actually
+> transitions — five lines in a gate Phase 1 already builds, not a systemd unit + timer + baked script.
+> The plan's own sentence applies: *"for a singleton, drain ≡ stop, and stop is strictly stronger."*
+> **Cut: 3 files.** Phase 0 must assert the boot-immutability premise, not assume it.
+
 ```yaml
 liveness_signal:
-  what: "luks-monitor.sh — asserts (a) blkid TYPE=crypto_LUKS on the workspaces device, (b) findmnt -no SOURCE /mnt/data == /dev/mapper/workspaces, (c) mountpoint -q /mnt/data (root-disk fallthrough detector)"
-  cadence: "every 5 min (systemd timer; mirrors disk-monitor.service/.timer, cloud-init.yml:151-185)"
-  alert_target: "Sentry (host-side emit via the baked SOLEUR_SENTRY_DSN already wired at soleur-host-bootstrap.sh:44-46,263) + Better Stack heartbeat"
-  configured_in: "apps/web-platform/infra/luks-monitor.{sh,service,timer}; baked per ADR-080"
+  what: "The pre-`docker run` fail-closed mapper gate (soleur-host-bootstrap.sh). Refuses to start the app container unless findmnt -no SOURCE /mnt/data == /dev/mapper/workspaces AND blkid TYPE=crypto_LUKS AND mountpoint -q /mnt/data. On refusal it emits the discriminating reason and exits non-zero — the container never starts, so the failure is an HTTP outage, not a silent plaintext write."
+  cadence: "every boot + every container start (the only moments the asserted state can change)"
+  alert_target: "Sentry (host-side emit via the baked SOLEUR_SENTRY_DSN already wired at soleur-host-bootstrap.sh:44-46,263) + the EXISTING Better Stack app.soleur.ai uptime monitor (uptime-alerts.tf:79) — a refused container is a hard down"
+  configured_in: "apps/web-platform/infra/soleur-host-bootstrap.sh (the gate); .github/workflows/workspaces-luks-verify.yml (on-demand read-only re-assert)"
 error_reporting:
   destination: "Sentry — op slug `op:workspaces-luks-drift`"
   fail_loud: true   # NEVER an unencrypted fallback (NFR-026; mirrors cloud-init-git-data.yml:158)
@@ -389,15 +436,36 @@ authority expires at canary-pass: a one-way door**, stated as such in the runboo
 > glob is what makes a second volume ambiguous. Escrow proof (G5) precedes the freeze because F4 is
 > terminal. The ADR precedes the code because it is the contract the code implements.
 
-### Phase 0 — BLOCKED on PR #6568 (no code)
+### Sequencing correction (deepen pass — supersedes the CTO's sub-ruling (d))
 
-- [ ] Confirm PR #6568 merged; re-derive `var.web_hosts` (expect `{web-1}`); confirm
-      `hcloud_volume.workspaces["web-2"]` destroyed. **If #6568 stalls, STOP and re-price** — two-host
-      is worse than 2× (web-2's volume would need the same cutover for a host being deleted). *(CPO C9)*
+The CTO ruled *"wait for #6568; once web-2 leaves `var.web_hosts` the AC means web-1 only."* **That
+premise is dead.** #6568 merged docs-only and web-2 survives (P4a). The teardown is #6538 — an **open
+issue with no PR**. Blocking on it would be blocking on a PR that does not exist: a dead end, not a gate.
+
+**Corrected:** the plan is **NOT blocked**. Proceed on **web-1 only**, and scope web-2 out explicitly:
+
+- `hcloud_volume.workspaces_luks` is a **singleton for web-1**, not `for_each = var.web_hosts` — which
+  also sidesteps the `for_each`-over-a-`-target`-excluded-map hazard
+  (`2026-07-03-for-each-over-target-excluded-map-forces-premature-provisioning.md`).
+- **web-2's volume is deliberately left plaintext**, tracked by #6538. Rationale: it is slated for
+  destruction, holds no live user data (`app.soleur.ai` is a hard-pinned singleton to web-1 and web-2
+  has never served), and encrypting a volume scheduled for deletion is waste. **This is a knowing,
+  recorded deviation from the issue's "every `var.web_hosts` member" AC** — see AC1a.
+- The CTO's *other* reason to wait — avoiding a `server.tf`/`variables.tf` collision with PR B — is
+  moot: no such PR is in flight.
+
+### Phase 0 — Read-only preconditions (no code, NOT blocked)
+
 - [ ] **Highest-value check in the plan** (CTO open risk 1): verify the **live** host's actual
       `/etc/fstab` + mount state. R5 is a *code-shape* finding. **If web-1 has been rebooted since first
       boot and `/mnt/data` is unmounted, the workspace data is not where this plan assumes and the
       sequencing is invalid.** Read-only, via the sanctioned CI path.
+- [ ] **Measure the actual data size**: `du -sh /mnt/data/workspaces` (free — same read-only probe).
+      Every cutover estimate is priced against 20 GB of *capacity*; CPO reports the volume is near-empty
+      at 0 users. **If it is small, the single-pass rsync below is confirmed and no staging pass is
+      needed.**
+- [ ] Confirm `var.web_hosts` still `{web-1, web-2}` and that no web-2 teardown PR has landed; if one
+      has, re-read R7 (the scope-out's rationale changes but not its conclusion).
 
 ### Phase 1 — Pin the mount, fail-closed (ships alone; independently a latent-bug fix) *(CPO C6)*
 
@@ -840,6 +908,434 @@ the root `package.json` declares no `workspaces`).
 - **The ADR ordinal is provisional.** If renumbered, sweep this plan + `tasks.md` + every AC naming it in
   the same edit — a stale ordinal makes AC11 verify a nonexistent file.
 - **`Ref #6588`, never `Closes`** — the remediation executes post-merge.
+
+---
+
+## Deepen Pass Corrections — BINDING on `/work`
+
+These supersede the sections they name. Each is evidence-backed; none is taste.
+
+### C1 — AC26's verify is a false-green generator (data-integrity, **empirically proven**) 🔴
+
+The prescribed command prints **nothing** and exits 0 against a corrupt DST. Verified locally
+(rsync 3.4.1) against a DST with same-size content corruption + a perms divergence + an orphan:
+plan's exact command → **empty output, exit 0**. Even `-v` under-reports (it lists transfers and
+deletions but **not attribute-only** updates — exactly what `-aHAX` exists to preserve).
+
+**Replace AC26's command with the itemized form, and mutation-test it:**
+```
+rsync -aHAXi --numeric-ids --checksum --delete --dry-run --out-format='%i %n' SRC/ DST/ \
+  | tee /dev/stderr | wc -l    # MUST be 0
+```
+**Mutation cases (blocking — if any does not flip RED, the cutover does not proceed):**
+`touch DST/x` · `chmod` a file · `truncate -s-1` a file · `chown` a file.
+
+Also from the same review:
+- **`-a` does NOT include `-S` (sparse).** The "total-byte assert" must be `du --apparent-size -sb`,
+  **never** `du -sb`/`df` — LUKS steals a header and a fresh `mkfs` has different geometry, so a
+  `df`-based assert can *never* match and will be loosened into meaninglessness.
+- **Drop the caches before the checksum pass** (`sync && echo 3 > /proc/sys/vm/drop_caches`) — else
+  you verify rsync's page cache, not that the bytes round-tripped through **dm-crypt**, which is the
+  brand-new code path.
+- **DELETE the `chown 1001:1001` re-assert.** It sits *after* the verify — **any mutation after the
+  verify voids the verify** — and is redundant: `rsync -a` with a trailing-slash source preserves
+  uid/gid exactly. Keep `--numeric-ids` (UID 1001 has no host `/etc/passwd` entry).
+- **Pass 2 has no `--checksum`** ⇒ the verify is its *only* backstop. Give pass 2 `--checksum` or
+  state the dependency explicitly.
+- **Hardcode `--dry-run`** — one typo from `rsync --delete SRC/ DST/`; transposed operands wipe live data.
+- **Add `git fsck --full` per DST workspace** — the highest-value missing check; no rsync verify can
+  tell you a copied `.git` is internally consistent.
+- **Add a capacity preflight** — `df` AND `df -i`. Millions of loose objects ⇒ **inode exhaustion with
+  free bytes** is the realistic ENOSPC, and it is site-down if it fires inside the freeze.
+
+### C2 — `--restart unless-stopped` defeats the D2 gate on reboot (security) 🔴
+
+`cloud-init.yml:770` — **verified.** On reboot `dockerd` resurrects `soleur-web-platform` from stored
+config; `docker run` never executes; the pre-`docker run` gate never runs; `-v /mnt/data/workspaces`
+bind-mounts a **root-disk dir Docker silently creates**. Result: container healthy, `/api/health`
+200 (**AC27 passes**), **user source code written in plaintext to the root disk**. My D2 synthesis
+was circular. This also **defeats the simplicity review's case for cutting the probe** ("the gate
+catches all five modes") — on the reboot path it catches none.
+
+**Fix (take both):** (a) make the mount a real dependency — a systemd unit with
+`RequiresMountsFor=/mnt/data`, ordered after the mapper-open (or `/etc/crypttab` + `systemd.mount`),
+so *container running ⇒ mount correct* holds **by construction**; (b) `chattr +i` the root-disk
+`/mnt/data` inode so Docker's implicit `mkdir` returns `EPERM` and the container refuses to start.
+
+### C3 — the escrow proof was vacuous (security) 🔴
+
+Formatting a throwaway with the same string read from Doppler and opening it **passes for any
+string**. It cannot fail. It also misses the mode that actually kills you: a `-replace` of
+`random_password` re-mints Doppler **but does not re-key the LUKS header** (`git-data-luks.tf:26-30`
+documents exactly this) ⇒ escrow divergence, throwaway test green forever, real volume unopenable.
+
+**Fix — one command, no volume, no leak surface:**
+```
+printf '%s' "$WORKSPACES_LUKS_KEY" | cryptsetup luksOpen --test-passphrase --key-file - "$REAL_DEV"
+```
+against the **real** device, key read in a process distinct from the one that ran `luksFormat`. This
+deletes the throwaway's CI-transit/orphan/cost surface and makes Test Scenario 12 a genuine RED.
+**Then make it continuous** — a **daily** `--test-passphrase` probe with `reason=escrow_divergence`.
+*The plan invented a terminal failure mode and then declined to monitor it.*
+
+### C4 — HIGH: the LUKS **header** is unescrowed (security) — an independent terminal limb
+
+A corrupted/overwritten LUKS2 header is unrecoverable **even with a perfect passphrase** (keyslots
+live in the header; no derivation path exists). Absent from Risks, failure_modes, and the ACs.
+**Fix:** `cryptsetup luksHeaderBackup` after `prepare_luks_target`, stored off-host in a bucket
+**distinct from the tfstate bucket** — else both halves are colocated and the "different provider,
+different blast radius" property evaporates. Add an AC asserting the backup's `luksDump` UUID matches.
+
+### C5 — HIGH: the "wipe" is not a wipe (security)
+
+- A **Hetzner API delete is not a crypto-erase** and carries no attestation — asserting a wipe you
+  cannot evidence is the same failure class as the three clauses PR 1 retracts.
+- **`luksFormat` as a wipe is worst-of-all** — it overwrites ~16 MB of header/keyslots; **every byte
+  of source code past that offset survives**. It is a crypto-erase only for already-encrypted data.
+- **`blkdiscard` can silently no-op** if the virtio device doesn't advertise discard — gate on
+  `lsblk -D` showing non-zero.
+- **Sequence:** assert discard capability → `blkdiscard -z` (or `dd`) → **verified read-back at
+  random offsets + offset 0** → delete. In-repo precedent: `inngest-wiped-volume-verify.sh`.
+- **DETACH the retained volume, don't leave it attached-unmounted.** Unmounted is hygiene, not a
+  control: `dd if=/dev/sdb | strings` still recovers everything. Detached collapses the
+  root-compromise read path *and* makes the R5 glob class structurally unable to remount it.
+  Re-attach for rollback is one API call. **Detached-retained strictly dominates at zero cost.**
+
+### C6 — HIGH: the dedicated Doppler config is right; my rationale was cargo-cult (security)
+
+I inherited git-data's blast-radius argument. **It does not port** — web-1 already carries full-prd
+`DOPPLER_TOKEN`, so there is no host blast radius to buy. **The real reason is decisive and I never
+stated it.** Verified at `cloud-init.yml:755` + `:773`:
+`doppler secrets download --config prd > "$TMPENV"` → `docker run --env-file "$TMPENV"` ⇒ **every prd
+secret is injected into the agent container's env.** A `WORKSPACES_LUKS_KEY` in `prd` would be
+readable via `/proc/self/environ` **by the very agent code whose data it encrypts** (CWE-522),
+reducing the at-rest guarantee to zero against in-container compromise or prompt-injection exfil.
+**Keep the config; rewrite the rationale; assert it** — `workspaces-luks.test.sh` mutation case
+(`config == "prd"` ⇒ RED) + a runtime assert (`docker exec … env` contains no `WORKSPACES_LUKS_KEY`).
+
+### C7 — MEDIUM: drop `format` — it is what *prevents* a sound guard (security)
+
+"Safe by construction" is asserted, not engineered. The natural guard — *format only a device with no
+filesystem signature* — is **impossible today** because `format = "ext4"` makes the fresh volume
+`TYPE=ext4`, **byte-indistinguishable from the live plaintext volume**. `git-data-luks.tf:74-77` even
+admits the format is pointless. **Drop `format` on `hcloud_volume.workspaces_luks`** ⇒ raw device ⇒
+the discriminator exists:
+```
+sig=$(blkid -o value -s TYPE "$DEV" 2>/dev/null || true)
+case "$sig" in
+  "")          luksFormat ;;                # raw — the ONLY formattable state
+  crypto_LUKS) : ;;                         # idempotent no-op
+  *) echo "FATAL: $DEV carries TYPE=$sig — refusing to format a populated device"; exit 1 ;;
+esac
+```
+Plus a terraform-interpolated **not-the-old-volume** deny, and select the device **by volume ID from
+the terraform output — never by glob scan** (the precedent scans for the device that *is* LUKS; the
+inverse predicate matches the **live plaintext volume**). Mutation-test: point it at the live device ⇒ abort.
+*This refines P1: `format` never needs to change on the live volume — but it must be **dropped** on the new one.*
+
+### C8 — the freeze: "stop is strictly stronger than drain" is FALSE for write-atomicity (data-integrity)
+
+True for availability quiescence; **false for integrity**. Drain lets in-flight work *finish*; stop
+*interrupts* it. `git-data-cutover.sh:191-195` says so — *"stop new turns; let in-flight finish"* —
+**I inverted the precedent's rationale while claiming to copy its shape.** `docker stop` defaults to a
+**10s** grace then SIGKILL; an agent mid-`write()` leaves a **truncated file** that is then faithfully
+rsynced and certified correct. `fuser` can't see a dead writer; the verify can't see a quiesce failure.
+**Fix:** `docker stop -t 120`; add post-stop interrupted-write asserts (no `.git/index.lock`, no
+`objects/pack/tmp_pack_*`, no `gc.pid`) ⇒ abort rather than copy wreckage. Use `lsof +D /mnt/data`
+(`lsof +f -- /mnt/data` is malformed). *(`git gc --auto` is a verified non-risk: it dies with the PID
+namespace, and `refs/checkpoints/*` are gc roots.)*
+
+### C9 — G2/G3 compare the wrong pair (data-integrity)
+
+G2 is taken in **Phase 3 against the live tree**; G3 "re-verifies equality" in Phase 4. The operator
+dogfoods between them, so refs legitimately move ⇒ **false-RED mid-freeze** ⇒ under a 20-min clock the
+predictable fix is to re-take the manifest and compare it to itself — **vacuous**. **Take the manifest
+after the freeze on SRC and compare against DST** — same instant, opposite volumes.
+
+### C10 — Phase 1 contradicts a **currently-passing** CI guard (data-integrity)
+
+`soleur-host-bootstrap-observability.test.sh:166-170` **requires the exact string AC14 removes**:
+`grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\* /mnt/data \|\| true'` → *"do not invert
+survivable→fatal"*. Direct contradiction; the file is **absent from Files to Edit**. AC18 catches it
+at /work, where the path of least resistance is to delete the assertion — **silently reversing a
+deliberate prior decision.** **Add the file, argue the reversal, and re-point the guard at the new
+invariant.** Also: **AC14's "no `|| true`" is cargo-cult** — runcmd runs as one `/bin/sh` with `set +e`
+active, so removal achieves nothing; the real fix is the `grep -q` guard + a boot emit on mount
+failure. And **widen the AC14 grep** — `git grep 'scsi-0HC_Volume_\*'` also hits
+`git-data-bootstrap.sh:46,71` (`hr-write-boundary-sentinel-sweep-all-write-sites`).
+*R5 may be **understated**: a `defaults`/`pass=2` entry naming a nonexistent device fails
+`local-fs.target` → emergency mode → a headless host cx33 cannot rebuild.*
+
+### C11 — the C4 enumeration is WRONG on two of three limbs (architecture) 🔴
+
+My §C4 claimed "Hetzner and Doppler both already modelled". **Verified false:**
+- **Hetzner is NOT external** — `model.c4:180` is `hetzner = container "Compute"` **inside**
+  `platform.infra`, no `#external` tag. There is no block-storage vendor element at all.
+- **The `/workspaces` volume is not modelled at any level** — so "correct its description" targets
+  **an element that does not exist**.
+- **The `views.c4` edit is vacuous** — `views.c4:32` already includes `platform.infra.hetzner` and
+  `:36` already includes `doppler`; LikeC4 renders relationships between included elements
+  automatically. **Drop it from Files to Edit and from AC12.**
+- **The Doppler→host boot edge is genuinely new** (only `doppler -> engine|claude|inngest|zotRegistry`
+  exist) and follows the established host-boot-credential pattern. That limb holds.
+- **The miss that stings:** `model.c4:182` and `:212` both say **"per-user worktrees on host-local
+  NVMe"** — a reader who takes that literally concludes there is no attached volume to encrypt. My own
+  plan warns the CLO *"Do not write 'host-local NVMe' without checking `server.tf`"* — **while the C4
+  says it twice and my enumeration never noticed.** **Redo the C4 section; do not patch it.**
+
+### C12 — delete the rename; the divergence is self-inflicted (architecture)
+
+`name` **is** updatable in place (confirmed against the `1.63.0` binary: `resourceVolumeUpdate` →
+`VolumeUpdateOpts`) — but **the rename should not happen at all.** The volume name is cosmetic: the
+mount pins by **volume-ID**, so nothing reads it. **Keep `hcloud_volume.workspaces_luks` as the
+permanent address** and retire the old block ⇒ no `state rm`, no `moved`, no rename, **no divergence
+window**. Kills the Phase 5 `server.tf` edit, Risk 8, and seed open-risk 5. *(Constraint: while web-2
+lives, `hcloud_volume.workspaces` retains a web-2 instance — an argument for sequencing after the
+**real** teardown, not for the rename.)* **Also incoherent as written:** Phase 5 says
+"destroy old → `state rm` → `moved` → rename" *and* "Hetzner API delete" — **three disposal paths for
+one volume.** If Terraform destroys it there is no state entry to `state rm`. Pick one.
+
+### C13 — rollback closes ~30s earlier than stated (data-integrity)
+
+Phase 4 order is `docker start` → canary → *"any failed assert ⇒ rollback"*. **The door closes at
+`docker start`** — the app writes on boot. So the rollback promised on canary-failure is *already*
+lossy when invoked. **Fix:** run the host-level canary (`blkid`/`findmnt`/`mountpoint` — no container
+needed) **before** `docker start`; resume `webhook.service` only after canary-pass.
+**And the lossless/lossy dichotomy is false** — the LUKS volume physically retains every post-cutover
+write, so post-canary rollback is *reconcilable*, not impossible. Saying "one-way door" will make an
+operator refuse a rollback they should take. Remount the retained volume **read-only at a distinct
+path**: a byte-exact T0 that turns the door into "restore T0 + replay from LUKS".
+
+### C14 — Observability: the emit path does not exist (observability) 🔴
+
+- **P0-1:** the cited host-side Sentry emit is **bootstrap-process-only**. `soleur-host-bootstrap.sh:44`
+  `DSN="${SOLEUR_SENTRY_DSN:-}"` is a shell function local to that process; the DSN arrives only as a
+  process env var from `cloud-init.yml:561` and is **never persisted** —
+  `/etc/default/webhook-deploy` (`:409`) carries no `SOLEUR_SENTRY_DSN`. **A new systemd unit sourcing
+  it gets nothing.** Cite `cron-egress-enforce-probe.sh:46-64` instead.
+- **P0-2 (circular):** the only DSN path open to a standing unit is `doppler secrets get` — so the
+  **"Doppler unreachable ⇒ MUST page"** mode has its DSN resolve fail **by the same cause**, and every
+  emitter wraps the POST in `if [ -n "$DSN" ] … || true` ⇒ **silently dropped**. The one mode called
+  "the worst" is the one guaranteed to go dark. **Fix:** persist the DSN (extend `cloud-init.yml:409`)
+  or read the baked literal from `/usr/local/bin/soleur-boot-emit`.
+- **P0-3:** `discoverability_test` invokes `workspaces-luks-verify.yml`, **not in Files to Create**
+  (I caught this independently). **Add it** — a read-only `workflow_dispatch` re-assert is also the
+  right no-SSH artifact for the runbook. Replace the `<id>` placeholder with a real monitor ID.
+- **P1-1:** the 5 fields **do not discriminate** — FM3/FM4/FM5 collapse to an identical tuple
+  (`mount_source` is empty for all three; `passphrase_source` is read at probe time, not boot).
+  **An operator seeing it must SSH — the precise outcome §2.9.2 exists to prevent.** Add
+  `mapper_present`, `luks_open_result`, `header_uuid_match`, `cryptsetup_unit_result`,
+  `doppler_reachable`.
+- **P1-2:** `soleur-boot-emit`'s body is **hardcoded** to 3 tags — it **cannot carry `reason=`**.
+- **P1-3:** `logs.where` is **false** — Vector drops every `luks-monitor` line
+  (`vector.toml:141-143` is an exact-match `SYSLOG_IDENTIFIER` allowlist of 14 tags; `luks-monitor`
+  is absent; the file's own comment warns "a tag typo silently matches nothing").
+- **P1-4:** **no `betteruptime_heartbeat` resource exists or is planned** — `zot-registry.tf:336-339`
+  records this exact failure: *"until it shipped, that monitor had ZERO consumers and stayed paused."*
+- **P1-5:** the emit sets **neither `feature:` nor `op:`** — every existing Sentry rule filters on
+  `feature:`. Events land in the stream; **nothing pages**. `issue-alerts.tf` is not in Files to Edit.
+- **⇒ the 7d soak probe CAN NEVER GO RED** (both legs missing): the query matches zero events
+  unconditionally, and there is no positive control. **It exits 0 for 7 days regardless of the volume's
+  actual state — and then authorizes wiping the plaintext rollback volume.** That is the dangerous part.
+  Gate the soak on `heartbeat status == "up"` **AND** zero drift events, so a dead probe **fails**.
+- *Correct as written:* the `hr-no-ssh-fallback-in-runbooks` reading (the rule bars **human-run** steps
+  and the runbook's debug path, not workflow-orchestrated SSH) and `betteruptime_monitor.app`.
+- *P2:* `disk-monitor` is **not** a Sentry precedent — it alerts via **Resend email**. Mirror
+  `cron-egress-enforce-probe.sh` for the emit, `disk-monitor.{service,timer}` for cadence only.
+
+### C15 — simplicity cuts (accepted, as amended by C2/C14)
+
+- **Cut `luks-monitor` at 5-min cadence** — the state it polls is **boot-immutable**; a timer on a
+  boot-time constant is a heartbeat pretending to be a probe. **BUT C2 shows the gate does not cover
+  the reboot path and C3 needs a daily escrow probe** ⇒ keep a **daily** unit (escrow divergence +
+  header UUID), not a 5-min one, and only once C14's emit path is real.
+- **Cut pass-1 rsync** — the freeze is free at 0 users, and a single rsync into an **empty** volume
+  needs **no `--delete`** at all, removing `--delete` from the critical path over sole-copy data.
+  *(Phase 0's `du -sh` confirms.)*
+- **Cut the 7d soak → replace with `reboot once + re-canary` in Phase 4.** The realistic failure is the
+  **boot path**; 7 days of an uptime host tests it **zero times**. A deliberate reboot tests it in 90s,
+  inside the window, with the plaintext volume still attached. *(Retention length is then decoupled from
+  the clause flip; COO's 72h is the better-argued number — CPO's 7d won on authority, not argument.)*
+- **Cut G8 rehearsal** — it rehearses the state that is **running right now**, and "and serves" implies
+  a container restart, contradicting Phase 3's own ZERO-downtime header.
+- **Cut the runbook** → fold the one-way-door decision into ADR Consequences. *(Architecture dissents:
+  keep it, per the ADR-068 + runbook precedent, and move the **mechanics** there. Resolve at /work —
+  either way the ADR stays at decision altitude.)*
+- **Cut ~10 ACs** that are phase-output audits: AC8, AC9, AC10, AC11 (reduce to "ADR exists,
+  `status: adopting`"), AC16/AC17 (collapse into "CI green"), AC21 (vacuous container), AC25, AC28
+  (a metric with no consumer — keep the 2h abort in the script), AC29, AC30 (five actions in one box).
+- **Naming bug:** AC11-AC20 are headed "PR 2 — infra" while AC30 says "PR 2 (legal)". **There are three
+  PRs and two are called PR 2.** Rename: **PR 1 legal-retraction · PR 2 infra · PR 3 legal-flip.**
+- **The two-PR split STANDS on simplicity merits alone** — fusing them would give a three-line clause
+  retraction a merge gate on **Hetzner's inventory**. Dependency removal, not bureaucracy.
+- **Turn P8 on the plan's own budget:** zero users is a reason to do this **simply and now**, not to
+  run a 5-phase program.
+
+### C16 — line-citation corrections (verify-the-negative)
+
+All 17 load-bearing claims **confirmed**. Convert these to content anchors (`cq-cite-content-anchor-not-line-number`):
+`stock-preflight-gate.sh` `.server_types.available` is at **`:73`/`:144`, not `:19`** · `disk-monitor`
+block is **`:151-177`, not `:151-185`** · `docker run` is **`:768`**. Exact and correct as cited:
+`server.tf:254-256` · `terraform-target-parity.test.ts:1188` · `session-sync.ts:33` ·
+`cloud-init.yml:776`/`:581`/`:561` · `compliance-posture.md:78` · `git-data-luks.tf:83`.
+
+### C18 — Terraform: Phase 5's convergence is NOT executable, and its likeliest variant deletes the data (terraform-architect, **measured against 1.63.0**) 🔴
+
+- **🔴 `moved` into a still-occupied address does NOT error — it degrades to a *Warning* and plans a
+  `delete` of the SOURCE.** Measured: `hcloud_volume.workspaces["web-1"] → no-op` while
+  **`hcloud_volume.workspaces_luks → delete`** — i.e. *the old plaintext volume survives and the volume
+  holding every migrated workspace is planned for deletion*, behind a **Warning**. The repo filter reports
+  `resource_deletes: 1`, so the per-PR guard halts — with *"Add `[ack-destroy]` to acknowledge"*, **the
+  exact prompt an author types past.** ⇒ the gate MUST carry named `old_volume_touched == 0` +
+  `luks_volume_destroyed == 0` backstops and **no `[ack-destroy]` bypass**. *(The safe failure looks
+  wrong: leaving the block declared gives a clean hard error. **`terraform validate` passes on the
+  dangerous config — only `plan` catches it.** validate is not evidence for anything in Phase 5.)*
+- **🔴 "destroy old" is impossible.** `hcloud_volume.workspaces` is `for_each = var.web_hosts`; the only
+  way TF destroys `["web-1"]` is removing web-1 from the map — which **also destroys
+  `hcloud_server.web["web-1"]`, the sole prod host, on a cx33 unorderable in all 3 EU DCs.** That is the
+  fleet-wedging footgun, not a convergence step. And "destroy → `state rm`" is redundant.
+  **Only coherent sequence:** API-detach → API-**delete** → `state rm` (volume **and** attachment) →
+  PR removing the `workspaces_luks` blocks + adding **both** `moved`s → plan (expect rename-in-place
+  only) → apply. **Order matters:** API-delete *before* `state rm`, else a failed delete leaves an
+  invisible orphan billed at ~EUR 1.14/mo with nothing in state or config to surface it.
+- **HIGH — the attachment `moved` is missing.** Volume-only `moved` ⇒
+  `hcloud_volume_attachment.workspaces["web-1"].volume_id` (**ForceNew**) changes ⇒ **detach/attach churn
+  on the live, mounted, in-use volume.** Add the paired `moved` + `state rm` (precedent: `placement-group.tf:28-36`).
+- **HIGH — the job is undispatchable:** `workspaces-luks-cutover` must be added to the `apply_target`
+  **`type: choice` options** (`apply-web-platform-infra.yml:96-105`) + the description at `:91`.
+  `choice` rejects any value not in `options`.
+- **HIGH — missing `concurrency: group: web-1-swap`.** The workflow-level group is inherited, but
+  `warm_standby` (`:697`) and `web_2_recreate` (`:934`) each declare a **second job-level** `web-1-swap`
+  group. A cutover that stops the container and rewrites web-1's fstab **must** serialize against those.
+- **MED — `prevent_destroy` measured:** it applies to **every `for_each` instance** and fails the **whole
+  plan** (`Error: Instance cannot be destroyed … hcloud_volume.workspaces["web-2"]`). It **rejects
+  expressions** ⇒ Phase 5's "release" is a **PR+merge+apply**, not a dispatch input. **It also hard-blocks
+  any future web-2 volume destroy if it lands first** — add to Phase 0. It is a **deviation, not a
+  mirror** (`git-data-luks.tf` has no `lifecycle` block).
+- **MED — DROP the dedicated Doppler config** (contradicts C6 — resolve at /work). git-data's rationale is
+  *entirely* about a property web-1 lacks: web-1 **is** the host that legitimately holds
+  `SUPABASE_SERVICE_ROLE`, and already carries full-prd. An attacker on web-1 reads the full-prd token and
+  gets the key anyway ⇒ **zero blast-radius reduction**, at the cost of a config + token + delivery path +
+  the **UNVERIFIED** precondition. **⚠️ C6 counters with a reason this review did not consider — the
+  `--config prd` → `TMPENV` → `--env-file` injection into the *agent container*. That is a real,
+  different boundary (host-vs-container, not host-vs-host). C6's argument survives; C18's does not
+  defeat it. Keep the config, on C6's rationale.**
+- **MED — use a SINGLETON, not `for_each`** (matches `git-data-luks.tf:79`, and `moved` wants a singleton
+  source). A `for_each`'d attachment would land outside `web2_allow`
+  (`destroy-guard-filter-web-platform.jq:96-100`) and **permanently brick the `web-2-recreate` path**.
+  *Also: the plan **mis-cites** the `for_each` learning — `-target` pulls **dependencies, never
+  dependents**, and nothing in the 92-address allow-list depends on the new volume, so it never appears on
+  the per-PR path. Safe, but by a different mechanism than claimed.*
+- **MED — gate test missing:** `tests/scripts/test-workspaces-luks-cutover-gate.sh` sourcing the same lib
+  (CAP-COUPLING convention, jq `:48-52`). `workspaces-luks.test.sh` is a *different* artifact (`.tf` drift).
+- **LOW — AC19's grep collides** with a legitimate `variable "workspaces_luks_volume_size"`. Scope it to the
+  passphrase, or assert "no new `sensitive = true` variable".
+- **LOW — missing:** the ephemeral SSH keygen step (`:2202-2209` — HCL evaluates `file()` at plan time
+  **regardless of `-target`**); `labels = { app = "soleur-web-platform" }`; a size input (reuse `var.volume_size`).
+- **LOW — `host_creates` reasoning inverted** (conclusion right, mechanism wrong): it fires on a pure
+  `+ create` of `hcloud_volume` (**verified — Risk 10 discharged**), but the per-PR plan is `-target`-scoped
+  and never reaches the new volume, so it would be **0** there. **The dedicated job is required because no
+  other apply path exists**, not because a guard blocks one.
+
+**Discharged — drop these /work TODOs:** `hcloud_volume.name` **is** update-in-place in 1.63.0 (measured:
+`~ name … Plan: 0 to add, 1 to change, 0 to destroy`) · `host_creates` fires on a pure volume create
+(Risk 10) · `random_password(40, special=false)` + **no** `ignore_changes` matches both precedents
+(`live-verify.tf:30-31`: *"rotation is operator-explicit via -replace"*). Carry `visibility = "masked"`.
+
+**Required gate counters:** `out_of_scope == 0` (exact `IN(.address; allow[])`, never `contains`) ·
+`old_volume_touched == 0` (**AC20's STOP**) · `web1_server_touched == 0` (**highest-value line — a
+destroyed web-1 is unrecoverable**) · `luks_volume_created >= 1` (anti-no-op) ·
+`luks_attachment_created >= 1` · `resource_deletes == 0`.
+
+### C19 — Flow: the plan is a decision record, not a state machine (spec-flow) 🔴
+
+**The deepest finding — two of my OWN findings compose and I never noticed:**
+
+- **🔴 The baked LUKS block AND the D2 fail-closed gate are DEAD CODE.** The bake (ADR-080) is consumed
+  **only on a fresh create**; R4 says `ignore_changes` makes it inert on web-1; and **cx33 is unorderable
+  ⇒ web-1 cannot be created.** So **the fresh-host path has no consumer** — and with it goes the very
+  mechanism CPO's C6/G6 requires *"in this PR"* to stop silent root-disk writes **on the only host that
+  exists**. AC15's mutation test would pass against a gate that never runs in prod. *(Compounds C2: the
+  gate is bypassed on reboot AND never deployed.)* **Resolve before /work: the gate must reach web-1 via
+  the cutover channel, not the bake.**
+- **🔴 The escrow proof is tautological BY ORDER** — Phase 3 runs G5 **before** `prepare_luks_target`, so
+  it *cannot* test the real volume. And it proves the **CI read path**, not the **host's service-token**
+  path — the one that runs at boot, i.e. the exact F4 mode. **Re-order: `prepare_luks_target` → G5 against
+  the real volume via the host's token path.** *(Compounds C3.)*
+- **🔴 Rotation is named as F4's mitigation; the precedent gates against it as the catastrophe.**
+  §Risks #2 offers *"rotation is `-replace`-explicit"* as the F4 mitigation — but `-replace` regenerates
+  the passphrase and updates Doppler while **the volume header is untouched** ⇒ **that IS F4**, permanently,
+  after the plaintext backstop is wiped. `git-data-host-replace-gate.sh` asserts **`luks_passphrase_touched == 0`**
+  on exactly these grounds. **Add that predicate; strike the mitigation claim; spec `luksChangeKey` if
+  rotation must be supported.**
+- **🔴 The soak has ≥3 independent false-green paths** *(beyond C14's)*: the monitor is authored in Phase 5
+  **after** the soak window opens, is **never activated** (no unit-enable task; cf. `cloud-init.yml:616`),
+  and is **never delivered**; an auth failure returns zero events ⇒ **PASS** (no TRANSIENT case — the
+  convention doc mandates one); and **`earliest=<canary+7d>` is a literal placeholder** — `iso_to_epoch`
+  returns 0 on unparseable input ⇒ **gate opens ⇒ the soak runs on day 0**, finds zero events, PASSes, and
+  **closes its own tracker**. Also: the declared secret names are **both wrong** (`SENTRY_AUTH_TOKEN`,
+  `BETTERSTACK_QUERY_*`). ⇒ **the soak can go green on day 0 with the monitor never deployed and the volume
+  plaintext, then authorize wiping the rollback volume.**
+- **🔴 AC30's five post-conditions have NO ACTOR.** `sweep-followthroughs.sh` only `gh issue comment` +
+  `gh issue close`. Nothing releases `prevent_destroy`, deletes the volume, converges state, flips the ADR,
+  or opens PR 3. **Worse: the green soak closes the tracker — deleting the only reminder the work was owed.**
+  This is the exact rot the sweeper exists to prevent (#5675/#5689). **Fix:** fold the work into the script
+  before `exit 0` (precedent `web2-tunnel-depool-6425.sh`) **or** invert the criterion to *"the wipe already
+  happened"* (precedent `inngest-rls-drop-6488.sh`).
+- **🔴 No EXIT trap.** The precedent auto-rolls-back on any non-zero exit (`trap cleanup EXIT` +
+  `FREEZE_HELD`/`FLIP_DONE`/`CANARY_OK` + a `ROLLBACK=1` mode). Task 2.4.12 lists rollback as a *terminal
+  step*, not a trap. **Without a trap the ≤2h abort IS the stranded state, not the escape from it.**
+- **🔴 The SSH gate is a probe, not a lease.** Reachability at gate-time ≠ at freeze-time, and the human
+  sign-off makes Δ unbounded. If Access drops mid-freeze: container stopped, site down, **and rollback
+  needs the SSH that just died.** No exit.
+- **🔴 Five states have no exit:** G8-red *(and G8 can't execute in a ZERO-downtime phase — the container
+  holds the bind mount, so the unmount is refused; G8-green is D1's load-bearing premise ⇒ a red G8
+  retroactively invalidates the CPO sign-off)*; frozen-and-unreachable; soak-red *(rollback authority has
+  already expired)*; Phase 0's *"re-price"* **(no procedure, no owner, no criteria)**; Phase 0's
+  *"sequencing is invalid"* **(the highest-value check has no response to the only outcome that makes it
+  high-value)**.
+- **🔴 The single human sign-off has NO MECHANISM.** `git-data-cutover.yml` has **no `environment:`**; its
+  only gate is a `confirm:` string it self-describes as a **typo-guard** that its own header expects a *bot*
+  to type. And #4220 **deliberately removed** the `environment:` reviewer gate (13h waits) — but a
+  `workflow_dispatch` cutover **has no merge**, so the doctrine's control (CODEOWNERS at merge) doesn't
+  exist on this path. **Either reintroduce `environment:` on this one job with an explicit #4220
+  counter-argument, or withdraw the §2.10 `Automation: not feasible` claim as false.**
+- **P1 — the canary chain has a missing link:** `blkid(X)=LUKS ∧ findmnt(/mnt/data)=mapper` does **not**
+  entail *"/mnt/data is served from encrypted X"*. **Add `cryptsetup status workspaces`** (mapper→device).
+  AC23's `<dev>` is an unresolved placeholder — that's where the gap hides. And the canary is structurally
+  **blind to partial data loss** (all four asserts pass while workspaces are missing) — relabel it; **G3 is
+  the data gate**, not the canary.
+- **P1 — no `count > 0` floor anywhere.** `rsync --dry-run` zero-transfers between two **empty** trees is
+  zero transfers. If SRC is wrong-pathed, `DST == SRC == ∅` **passes**. Derive an absolute floor from G2.
+- **P1 — the infra PR CANNOT MERGE:** the new LUKS resources must be added to `OPERATOR_APPLIED_EXCLUSIONS`
+  (`terraform-target-parity.test.ts:534-548` — the canonical machine-readable list; the workflow's `:29-35`
+  prose is only a comment). `host_creates` is **type-scoped** ⇒ `hcloud_volume.workspaces_luks` **is** in
+  scope, evaluated **before** `destroy_count` ⇒ **`[ack-destroy]` cannot reach it.**
+- **P1 — `canary_ok` has no source at wipe time** (precedent works because the wipe is the *same process*;
+  here it is 7 days and a separate dispatch later). **The first gate of the double-gate has no source.**
+- **P1 — PR ordering is never asserted.** If the infra PR merges before PR 1, the LUKS clause becomes true
+  and PR 1's "temporally qualify" edit **understates a live control** ⇒ AC2 is wrong on arrival.
+  *(AC9 is fine — P4 resolves it: DC-1 **is now on main**.)*
+- **P1 — the runbook postdates the risk it mitigates** (authored Phase 5; the one-way door closes in Phase 4).
+- **P1 — Phase 1's identity is self-contradictory:** headed *"ships alone"*, filed in tasks.md under
+  *"PR 2 — Infra (BLOCKED)"*. It fixes a **live** latent bug (a reboot today writes workspaces to the root
+  disk) — blocking it is a real ongoing cost. *(§Sequencing correction unblocks it.)*
+- **P1 — no `DRY_RUN` task** despite Test Scenario 10 testing it.
+- **P2 — mirroring propagates a latent precedent bug:** `cloud-init-git-data.yml:155` runs
+  `doppler run --config prd` while its token is scoped `prd_git_data`; a service token is config-scoped ⇒
+  the `--config` literal is stale. **Verify before copying.**
+
+### C17 — ADR seed corrections (architecture)
+
+- **Strengthen 4a's rejection into a dominance proof:** *any safe `reencrypt` is option 2 with extra
+  steps* (to make it safe you must first create a second volume and rsync onto it — that **is** option 2,
+  plus a shrink and a second rsync). Also: **4a does not save the freeze** (ext4 shrink needs the fs
+  unmounted + fsck'd). Drop the probabilistic framing — it invites the rebuttal.
+- **Delete 4b's wording argument** — "the published wording says LUKS" cannot be a fixed constraint
+  when **PR 1 edits that wording**. The metadata-leak reason is sound and sufficient.
+- **Name AP-002** (no SSH state mutation) explicitly as a recorded deviation discharged by the
+  `git-data-cutover.yml` precedent, and **AP-009** (never delete user data) showing Phase 5's alignment.
+- `status: adopting` is **correct** — verified against 4 in-repo ADRs incl. ADR-068's identical shape.
 
 ---
 

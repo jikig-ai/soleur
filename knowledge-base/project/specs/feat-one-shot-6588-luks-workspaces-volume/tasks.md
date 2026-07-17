@@ -7,7 +7,33 @@ verified failure mode, not as ceremony.
 **lane:** `cross-domain` — no `spec.md` exists for this branch (no brainstorm ran; entered via
 one-shot), so the lane defaulted to `cross-domain` fail-closed.
 
-**Two PRs.** PR 1 (legal, decoupled) can start immediately. PR 2 (infra) is BLOCKED on PR #6568.
+> ## ⚠️ READ `## Deepen Pass Corrections` IN THE PLAN FIRST — C1-C17 are BINDING
+>
+> The deepen pass found **four vacuous gates**. Do not implement the pre-deepen text below where a
+> correction supersedes it. The highest-severity items:
+>
+> - **C1 🔴** the Phase-4 verify (2.4.5) **cannot go RED** — proven empirically. Use
+>   `rsync -aHAXi … --out-format='%i %n' | wc -l == 0` and mutation-test it. **Delete the `chown`
+>   after the verify** (any mutation after the verify voids it). Add `git fsck --full` + a `df -i`
+>   capacity preflight. Drop caches before the checksum pass.
+> - **C2 🔴** `--restart unless-stopped` (`cloud-init.yml:770`) **defeats the 2.1.3 gate on reboot** —
+>   use `RequiresMountsFor=/mnt/data` + `chattr +i` the root-disk mountpoint.
+> - **C3 🔴** the 2.3.6 escrow proof is **vacuous** — use `luksOpen --test-passphrase` against the
+>   **real** device; no throwaway volume.
+> - **C14 🔴** the host-side Sentry emit **does not exist** for a standing unit; the soak probe
+>   **can never go RED**; `workspaces-luks-verify.yml` is cited but never created.
+> - **C11 🔴** the C4 enumeration is **wrong** — Hetzner is an internal container, the volume is
+>   unmodelled, the `views.c4` edit is vacuous. Redo, don't patch.
+> - **C10** task 2.1.1 **contradicts a currently-passing CI guard**
+>   (`soleur-host-bootstrap-observability.test.sh:166-170`) — add it to Files to Edit and re-point it.
+>
+> **Sequencing changed:** PR #6568 **merged docs-only**; web-2 survives; `var.web_hosts` still has
+> both. **Phase 0 / task 2.0.1 is NOT a blocker** — proceed on **web-1 only** and scope web-2 out
+> (see §Sequencing correction). Never gate on PR-merge status; check `var.web_hosts` directly.
+>
+> **Three PRs, not two:** PR 1 legal-retraction · PR 2 infra · PR 3 legal-flip.
+
+**PR 1 (legal, decoupled) can start immediately. PR 2 (infra) is NOT blocked** (see above).
 
 ---
 
