@@ -127,6 +127,20 @@ main() {
 
   while IFS= read -r line; do
     candidates=$((candidates + 1))
+
+    # One-marker-per-row invariant, ENFORCED not assumed. The greedy `.*-->`
+    # extraction below collapses two markers on one row into a single blob and
+    # would read only the FIRST verify_by — silently masking an expired second
+    # marker (violating "fail loud, never a silent skip"). A human pasting two
+    # estimates into one Notes cell is exactly the edit this gate must catch.
+    local marker_hits
+    marker_hits=$({ printf '%s' "$line" | grep -oE '<!--[[:space:]]*estimate[[:space:]]' | wc -l; } | tr -d '[:space:]')
+    if (( marker_hits > 1 )); then
+      anomalies=$((anomalies + 1))
+      anomaly_rows+=("$(row_service "$line") — $marker_hits estimate markers on one row (one-marker-per-row invariant violated)")
+      continue
+    fi
+
     local marker
     marker=$(extract_marker "$line")
     if [[ -z "$marker" ]]; then
@@ -147,12 +161,16 @@ main() {
     # verdict = ok|<vb>|<owner>|<src>
     local vb owner src vb_epoch
     IFS='|' read -r _ vb owner src <<<"$verdict"
+    # Safe under set -e: classify_marker already validated $vb against the
+    # ISO-shape regex AND a real-calendar `date -u -d "$vb"` check before
+    # returning ok — this second date call cannot fail. Keep the two date
+    # validations in lockstep if either is edited.
     vb_epoch=$(date -u -d "$vb" +%s)
     if (( today_epoch > vb_epoch )); then
       expired=$((expired + 1))
       expired_rows+=("$(row_service "$line") | verify_by=$vb | owner=$owner | source=\"$src\"")
     fi
-  done < <(grep -nE '<!--[[:space:]]*estimate[[:space:]]' "$ledger" | sed -E 's/^[0-9]+://')
+  done < <(grep -E '<!--[[:space:]]*estimate[[:space:]]' "$ledger")
 
   echo "expenses-verify-by-check: ledger=$ledger today=$today (UTC)"
   echo "  markers: candidates=$candidates parsed_ok=$parsed expired=$expired anomalies=$anomalies"

@@ -29,6 +29,7 @@ SUT="$SCRIPT_DIR/expenses-verify-by-check.sh"
 
 PAST=$(date -u -d '30 days ago' +%Y-%m-%d 2>/dev/null || date -u -v-30d +%Y-%m-%d)
 FUTURE=$(date -u -d '365 days' +%Y-%m-%d 2>/dev/null || date -u -v+365d +%Y-%m-%d)
+TODAY=$(date -u +%Y-%m-%d)
 
 PASS=0
 FAIL=0
@@ -47,8 +48,9 @@ make_ledger() {
     echo ""
     echo "| Service | Provider | Category | Amount | Status | Renewal Date | Notes |"
     echo "|---------|----------|----------|--------|--------|--------------|-------|"
-    # A non-estimate row (verified, no marker) — must be ignored.
-    echo "| Sentry Team | Sentry | observability | 71.22 | active | 2026-06-17 | live-verified, no marker |"
+    # A non-estimate row (verified, no marker) — must be ignored. Date is a
+    # fixed obviously-synthetic literal that cannot collide with $PAST/$TODAY.
+    echo "| Sentry Team | Sentry | observability | 71.22 | active | 2020-01-01 | live-verified, no marker |"
     local note
     for note in "$@"; do
       echo "| Resend | Resend | email | 20.00 | active | - | Pro upgrade estimate. $note |"
@@ -95,6 +97,13 @@ L="$TMPROOT/green.md"
 make_ledger "$L" "<!-- estimate verify_by=$FUTURE owner=cfo source=\"Resend Pro invoice email in ops@soleur.ai\" -->"
 assert_rc "GREEN future → exit 0" 0 "$L" "none past verify_by"
 
+# --- Scenario 2b: BOUNDARY — verify_by == today is NOT expired (strict >, not >=) ---
+# Pins the "expires the day AFTER verify_by" semantics: a `>`→`>=` off-by-one
+# regression flips this fixture to exit 1 and is caught here (test-design review).
+L="$TMPROOT/today.md"
+make_ledger "$L" "<!-- estimate verify_by=$TODAY owner=cfo source=\"Hetzner invoice email in ops@soleur.ai\" -->"
+assert_rc "BOUNDARY verify_by==today → exit 0 (strict >)" 0 "$L" "none past verify_by"
+
 # --- Scenario 3: ANOMALY — bad date / missing owner / missing source / pipe ---
 L="$TMPROOT/anomaly-date.md"
 make_ledger "$L" "<!-- estimate verify_by=notadate owner=cfo source=\"x\" -->"
@@ -117,6 +126,17 @@ L="$TMPROOT/anomaly-pipe.md"
   echo "| Resend | Resend | email | 20.00 | active | - | est <!-- estimate verify_by=$FUTURE owner=cfo source=\"a|b\" --> |"
 } > "$L"
 assert_rc "ANOMALY pipe in source → exit 2" 2 "$L" "pipe in marker"
+
+# Two markers on ONE row: the greedy extraction would read only the first and
+# mask an expired second — enforce the one-marker-per-row invariant → anomaly.
+# (code-quality review: a human pasting a 2nd estimate into one Notes cell.)
+L="$TMPROOT/anomaly-multi.md"
+{
+  echo "| Service | Provider | Category | Amount | Status | Renewal Date | Notes |"
+  echo "|---------|----------|----------|--------|--------|--------------|-------|"
+  echo "| Resend | Resend | email | 20.00 | active | - | est <!-- estimate verify_by=$FUTURE owner=cfo source=\"A\" --> and <!-- estimate verify_by=$PAST owner=cfo source=\"B\" --> |"
+} > "$L"
+assert_rc "ANOMALY two markers on one row → exit 2" 2 "$L" "one-marker-per-row"
 
 # --- Scenario 4: POSITIVE-SAMPLE guard ---
 # (a) A ledger WITH multiple well-formed future markers parses >=1 and is clean.
