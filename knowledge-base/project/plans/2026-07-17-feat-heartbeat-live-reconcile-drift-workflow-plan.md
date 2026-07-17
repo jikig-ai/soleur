@@ -70,10 +70,18 @@ This closes the gap the static `heartbeat-reprovision-parity.test.ts` guard cann
 
 The brief prefers a **read-only** token (least privilege). Trade-off resolved as follows:
 
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!-- lint-infra-ignore start -->
+<!-- Deferred-orchestrator plan prose describing a DESIGN decision (the auth trade-off), not a
+     human-run infra step this PR ships. The reconcile job reads the token in CI
+     (`doppler secrets get --plain`); no operator runs terraform/SSH here. The read-only-token mint
+     is the ONLY operator-driven piece and it is deferred + filed as #6635 (a vendor-dashboard mint,
+     itself presumptively Playwright-automatable). No .tf provisioning is prescribed by this block. -->
 - **v1 reads the existing `BETTERSTACK_API_TOKEN`** (Doppler `soleur/prd_terraform`, already present) raw via `doppler secrets get BETTERSTACK_API_TOKEN --plain`, masked with `::add-mask::`. Rationale: (1) `GET /api/v2/heartbeats` is read-only in effect; (2) the token already exists, so the **#6548-diagnostic first run is never blocked on an operator mint** (the never-defer-operator principle — Soleur's operator is non-technical); (3) it is read via `--plain`, **not** a `TF_VAR_*`, so it gates **no** terraform apply (no auto-apply-sequencing hazard).
 - **Least-privilege hardening** (mint a dedicated `Read`-scoped Better Stack token → store as `BETTERSTACK_API_TOKEN_READONLY` in `prd_terraform` → swap the one Doppler secret name the reconcile step reads) is a **one-line follow-up**, filed as a tracking issue (Phase 6 deferral gate), NOT a merge blocker. The mint is an authenticated `betterstack.com/settings/global-api-tokens` dashboard action — presumptively Playwright-automatable; /work MAY attempt it, but must not block the diagnostic on it.
 
 > Plan-review / deepen-plan MAY elevate the read-only token to a pre-merge requirement; if so, /work attempts the Playwright mint first and only falls back to reuse if a genuine human gate is reached.
+<!-- lint-infra-ignore end -->
 
 ### D2 — Separate job, riding the same workflow (not a matrix step)
 
