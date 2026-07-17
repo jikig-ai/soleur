@@ -81,6 +81,30 @@ anyway). It stands unaffected. The genuinely suspect readings are any that treat
 `host_name=soleur-inngest-prd` row as *the dedicated Inngest host* — because ~75% of those rows in the
 24h window are actually web-1.
 
+## Session Errors
+
+- **The correction narrative was itself mis-sourced (caught by review, not by me).** After the live
+  query refuted the plan's `soleur-inngest-server-prd`, I documented the *reason* as "Hetzner resource
+  name ≠ OS hostname," citing `inngest.tf:291` — and propagated that inverted lesson into the learning,
+  `model.c4`, ADR-100, and the script comment before a `code-quality-analyst` review pass caught it.
+  `inngest.tf:291` is a `betteruptime_heartbeat` monitor, not a Hetzner server; the real
+  `hcloud_server.inngest` (`inngest-host.tf:202`) IS named `soleur-inngest` = the OS hostname, so the
+  name→hostname rule *holds*. **Recovery:** rewrote the narrative across all 8 artifacts. **Prevention:**
+  when documenting *why* a plan-pinned identity was wrong, resolve the citation to the exact resource
+  TYPE (`grep -A2 'resource "hcloud_server"'`) before asserting a general lesson — a refuted value and a
+  correct diagnosis of *why* are two separate claims, each needing its own verification (this is why the
+  live diagnosis was right — service fingerprint — while the first written explanation was wrong).
+- **Replicated IaC literals shipped without a parity guard (caught by review).** The three pinned
+  constants (`soleur-inngest-prd`, the web identities) had only comment citations, no coupling. **Recovery:**
+  added a mutation-proven parity battery. **Prevention:** the repo convention is explicit — any literal
+  copied from IaC/SSOT into a guard needs a parity assertion in the same PR (`cq-cite-content-anchor-not-line-number`).
+- **Editing `model.c4` without regenerating `model.likec4.json` (caught by the full-suite exit gate, twice).**
+  **Recovery:** `bash scripts/regenerate-c4-model.sh`. **Prevention:** already enforced — `c4-model-freshness.test.sh`
+  fails with the exact regen command; the lesson is to run `test-all.sh` (not just touched-file tests) as
+  the Phase-2 exit gate, which is what surfaced it.
+- **Forwarded from plan phase:** two `Write` "File has not been read yet" errors on existing files after a
+  skill context reload; resolved by Read-then-Write (covered by `hr-always-read-a-file-before-editing-it`).
+
 ## Artifacts
 
 - Follow-through: `scripts/followthroughs/hostname-mislabel-web1-6616.sh` (+ `.test.sh`, 7 arms) —
