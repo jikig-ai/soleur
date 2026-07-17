@@ -81,4 +81,16 @@ describe("agentIdToGrokSubagentType", () => {
     const id = "soleur:legal:clo";
     expect(agentIdToCompatFilename(id)).toBe(`${agentIdToGrokSubagentType(id)}.md`);
   });
+
+  test("all registry Grok stems unique and colon-free", () => {
+    const entries = discoverAgentEntries();
+    const stems = entries.map((e) => agentIdToGrokSubagentType(e.id));
+    expect(stems.length).toBe(EXPECTED_SOLEUR_AGENT_COUNT);
+    expect(new Set(stems).size).toBe(stems.length);
+    for (const entry of entries) {
+      const stem = agentIdToGrokSubagentType(entry.id);
+      expect(stem.includes(":")).toBe(false);
+      expect(agentIdToCompatFilename(entry.id)).toBe(`${stem}.md`);
+    }
+  });
 });

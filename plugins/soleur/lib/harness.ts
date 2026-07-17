@@ -265,7 +265,7 @@ export function routingInstructions(harness: Harness): string {
       return [
         "**Harness: Grok Build**",
         "- Skills: **slash commands** — `/brainstorm`, `/one-shot`, `/plan`, etc.",
-        "- Agents: **spawn_subagent** (not Task).",
+        "- Agents: **spawn_subagent** (not Task). Use `spawnAgent()` so registry colon ids map to hyphen filename stems (`soleur:product:cpo` → `soleur-product-cpo`).",
         "- Commands: `/go`, `/sync`, `/help` — **not** `/soleur:go`.",
         "- **Never improvise** — invoke the registered slash command or subagent.",
         "",
