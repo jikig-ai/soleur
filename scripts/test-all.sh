@@ -147,6 +147,10 @@ if want_scripts; then
   # gates (the #5417 class). The soak authorizes an irreversible PAT revoke, so its arms
   # returning the right codes is not optional coverage.
   run_suite "scripts/zot-soak-6122-arms" bash scripts/followthroughs/zot-soak-6122.test.sh
+  # #6616: exit-code harness for the host_name-mislabel follow-through's decision tree (identity,
+  # liveness, TRANSIENT-not-PASS). Registered explicitly (orphan-suite class above) — its exit code
+  # gates whether the sweeper auto-closes #6616, so a vacuous PASS regression must redden CI.
+  run_suite "scripts/hostname-mislabel-web1-6616" bash scripts/followthroughs/hostname-mislabel-web1-6616.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
