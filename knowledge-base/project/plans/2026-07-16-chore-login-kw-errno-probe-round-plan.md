@@ -611,7 +611,8 @@ execution, not asserted; do not re-argue them.
    nothing pins it post-merge. Either wire it into the suite or correct the claimed alert route. Do not
    leave a false CI claim.
 3. **AC10 misses a close-form GitHub honors — VERIFIED.** `[^.]{0,40}` breaks on the `.` in `github.com`,
-   so `Closes https://github.com/jikig-ai/soleur/issues/6565` is **MISSED**. AC10 also claims to cover "the
+   so the full-issue-URL form — `Clos<e>s https://github.com/<org>/<repo>/issues/<NNNN>`, written here with
+   placeholders **on purpose**; see the note below — is **MISSED**. AC10 also claims to cover "the
    commit message" while supplying no command for it, and Sharp Edge #2 names the **squash commit body** as
    *the* risk surface. Fix the regex to cover `#N`, `GH-N`, **and** the full issue URL, and give it a
    command that actually reads the squash body.
@@ -641,6 +642,17 @@ execution, not asserted; do not re-argue them.
 AC3's `grep -c` exits rc=1 on zero and would abort a `set -e` wrapper — the same "non-match returns 1" class
 this instrument exists to survive; AC1's headline exceeds its command; AC5 has no command and a whole-file
 grep cannot distinguish the T16 fixture from the T-5B-20 fixture.
+
+**Landmine self-report — the fourth arming this round, logged deliberately.** Writing correction #3 above,
+the author wrote a **live** `Clos<e>s <full-issue-URL>` for 6565 into this file while explaining that that
+exact form is the one AC10 misses. The planner armed it twice before (a literal close-keyword in a Sharp
+Edge, then a `GH-NNNN` in an AC6 fix note); the original brief armed it once. **Four for four: every party
+that handled this hazard armed it while documenting it.** File contents are not parsed by GitHub — only the
+PR body, PR title, and squash commit body are — so none of these would have fired from the plan alone. The
+danger is that plan prose gets **quoted into the PR body** at ship. Rule for this file, non-negotiable:
+**never write a close-keyword adjacent to a real issue number, even inside an example of what not to write.**
+Placeholders only. That a negation-blind parser plus a negation-heavy document produces this failure four
+times independently is itself the finding — it is a property of the hazard, not of any one author.
 
 **Methodology note worth preserving:** the reviewer's first run showed 5 failures. A **control run on
 unpatched code in the same copied dir reproduced the identical 5-failure set** — they were path artifacts of
