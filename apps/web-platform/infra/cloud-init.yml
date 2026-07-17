@@ -433,8 +433,8 @@ runcmd:
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
 
   # Configure Docker log rotation + the self-hosted zot registry as an insecure (plain-HTTP,
-  # private-net) registry (#6122/ADR-096). zot serves HTTP on 10.0.1.30:5000 (= zot-registry.tf
-  # local.registry_endpoint) behind a deny-all-public firewall; docker refuses a non-TLS registry
+  # private-net) registry (#6122/ADR-096). zot serves HTTP on ${registry_endpoint} (derived from
+  # zot-registry.tf local.registry_endpoint, #6448) behind a deny-all-public firewall; docker refuses a non-TLS registry
   # unless it is allowlisted here. Harmless before the Phase-3 flip activates — nothing pulls from
   # zot until the dark-launch gate confirms it live. cosign digest-pinning is the integrity guard,
   # not TLS (Phase-0 spike). This is the ONLY daemon.json write for FRESH hosts; running hosts get
@@ -447,7 +447,7 @@ runcmd:
         "max-size": "10m",
         "max-file": "3"
       },
-      "insecure-registries": ["10.0.1.30:5000"]
+      "insecure-registries": ["${registry_endpoint}"]
     }
     DOCKEREOF
   - STAGE=docker_restart  # (#6090) name the stage for the top-armed on_err fatal

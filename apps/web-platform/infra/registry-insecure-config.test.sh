@@ -3,24 +3,36 @@ set -euo pipefail
 
 # Drift guard for terraform_data.registry_insecure_config (#6122/ADR-096 Edge A, running
 # hosts). This SSH provisioner delivers the canonical docker daemon.json (allowlisting the
-# plain-HTTP private-net zot registry 10.0.1.30:5000 under insecure-registries) to the
-# ALREADY-RUNNING web host and hot-reloads dockerd. HIGH-RISK: it mutates the prod docker
-# daemon, so the reload-not-restart + malformed-JSON-guard invariants are load-bearing.
+# plain-HTTP private-net zot registry under insecure-registries) to the ALREADY-RUNNING web
+# host and hot-reloads dockerd. HIGH-RISK: it mutates the prod docker daemon, so the
+# reload-not-restart + malformed-JSON-guard invariants are load-bearing.
+#
+# #6448: the allowlisted endpoint is now DERIVED from local.registry_endpoint (the single
+# source, zot-registry.tf:44) via docker-daemon.json.tmpl — NOT a hardcoded copy. This guard
+# proves the derivation wiring and, via a shape-based residual scan, that no hardcoded IP:5000
+# copy has been reintroduced on the derivation surface. The old guard was self-referential: it
+# grepped the delivered file for the literal it itself hardcoded, so it could never detect a
+# drift from the local — the exact defect #6448 fixes.
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_TF="$DIR/server.tf"
-DAEMON_JSON="$DIR/docker-daemon.json"
+TMPL="$DIR/docker-daemon.json.tmpl"
 CLOUD_INIT="$DIR/cloud-init.yml"
 WORKFLOW="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
+
+# Interpolation tokens the derivation surface MUST carry (single-quoted so the shell never
+# expands them; every assert greps them as fixed strings).
+ENDPOINT_VAR='${registry_endpoint}'
+PROBE_TOKEN='${local.registry_endpoint}'
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); echo "  PASS: $1"; }
 no()  { FAIL=$((FAIL+1)); echo "  FAIL: $1"; }
 assert() { if eval "$2"; then ok "$1"; else no "$1"; fi; }
 
-echo "=== registry-insecure-config drift guard (#6122) ==="
+echo "=== registry-insecure-config drift guard (#6122 / #6448) ==="
 
-# Extract the resource block: from its header to the next top-level `resource`/`#`/EOF.
+# Extract the resource block: from its header to the next top-level `}`.
 BLOCK="$(awk '
   /^resource "terraform_data" "registry_insecure_config"/ { inb=1 }
   inb { print }
@@ -30,17 +42,43 @@ BLOCK="$(awk '
 assert "resource terraform_data.registry_insecure_config exists" \
   "[[ -n \"\$BLOCK\" ]]"
 
-# triggers_replace MUST hash the standalone file (NOT an inline heredoc) so the trigger
-# tracks the delivered content — inline strings desync the hash (integration learning).
-assert "triggers_replace = sha256(file(docker-daemon.json))" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(file\(\"\\\$\{path.module\}/docker-daemon.json\"\)\)'"
+# --- #6448 structural wiring: the delivered daemon.json DERIVES from local.registry_endpoint ---
 
-# The file provisioner delivers docker-daemon.json to /etc/docker/daemon.json.
-assert "file provisioner delivers docker-daemon.json → /etc/docker/daemon.json" \
+# local.docker_daemon_json renders the .tmpl, passing registry_endpoint = local.registry_endpoint.
+assert "local.docker_daemon_json = templatefile(docker-daemon.json.tmpl, {...})" \
+  "grep -qE 'docker_daemon_json[[:space:]]*=[[:space:]]*templatefile\(\"\\\$\{path.module\}/docker-daemon.json.tmpl\"' \"\$SERVER_TF\""
+
+# The endpoint var must be threaded into BOTH templatefile maps — running-host
+# (docker-daemon.json.tmpl) AND fresh-host (cloud-init.yml). Scope each assertion to its OWN map
+# block (extract from the templatefile("...<file>...") line to the block's closing `})`), NOT a
+# file-wide count: a bare `count >= 2` could pass vacuously if one map dropped the var while an
+# unrelated occurrence appeared elsewhere (cq-assert-anchor-not-bare-token). Each awk bounds at
+# the first `}` immediately followed by `)` after the templatefile line — the map close (`})`) or
+# the base64gzip-wrapper close (`}))`). No inner `})` occurs in either map body.
+DJ_MAP="$(awk '/docker-daemon\.json\.tmpl"/{f=1} f{print} f && /\}\)/{exit}' "$SERVER_TF")"
+CI_MAP="$(awk '/cloud-init\.yml"/{f=1} f{print} f && /\}\)/{exit}' "$SERVER_TF")"
+assert "docker-daemon.json.tmpl map passes registry_endpoint = local.registry_endpoint (running-host)" \
+  "printf '%s' \"\$DJ_MAP\" | grep -qE 'registry_endpoint[[:space:]]*=[[:space:]]*local\.registry_endpoint'"
+assert "cloud-init.yml map passes registry_endpoint = local.registry_endpoint (fresh-host)" \
+  "printf '%s' \"\$CI_MAP\" | grep -qE 'registry_endpoint[[:space:]]*=[[:space:]]*local\.registry_endpoint'"
+
+# triggers_replace hashes the RENDERED content (local.docker_daemon_json), NOT sha256(file(...)).
+# The static-file hash could never track a derived value; the rendered-string hash does.
+assert "triggers_replace = sha256(local.docker_daemon_json)" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(local\.docker_daemon_json\)'"
+assert "triggers_replace no longer hashes a static file() copy" \
+  "! printf '%s' \"\$BLOCK\" | grep -qE 'sha256\(file\('"
+
+# The file provisioner delivers the RENDERED content (content=), not a static source= copy.
+assert "file provisioner uses content = local.docker_daemon_json (rendered, not source=)" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'content[[:space:]]*=[[:space:]]*local\.docker_daemon_json'"
+assert "file provisioner does NOT source a static docker-daemon.json" \
+  "! printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path.module\}/docker-daemon.json'"
+assert "file provisioner delivers → /etc/docker/daemon.json" \
   "printf '%s' \"\$BLOCK\" | grep -qF 'destination = \"/etc/docker/daemon.json\"'"
 
-# RELOAD, not restart: a restart bounces every running container mid-deploy. Anchor on
-# the double-quoted inline-array form so an explanatory comment mentioning the command in
+# RELOAD, not restart: a restart bounces every running container mid-deploy. Anchor on the
+# double-quoted inline-array form so an explanatory comment mentioning the command in
 # `backticks` does not false-match (drift-guard-vs-comment-prose class).
 assert "uses 'systemctl reload docker' (SIGHUP, not restart)" \
   "printf '%s' \"\$BLOCK\" | grep -qF '\"systemctl reload docker\"'"
@@ -58,29 +96,51 @@ assert "JSON guard precedes the docker reload" "[[ -n \"\$GUARD_LN\" && -n \"\$R
 assert "every remote-exec inline opens with 'set -e'" \
   "printf '%s\n' \"\$BLOCK\" | awk '/inline = \[/{n++} /\"set -e\"/{seen[n]=1} END{for(i=1;i<=n;i++) if(!seen[i]) exit 1}'"
 
-# Post-reload assertion that dockerd honors the insecure registry.
-assert "asserts dockerd honors 10.0.1.30:5000 after reload" \
-  "printf '%s' \"\$BLOCK\" | grep -qF 'docker info' && printf '%s' \"\$BLOCK\" | grep -qF '10.0.1.30:5000'"
+# Post-reload probe DERIVES the endpoint — it interpolates \${local.registry_endpoint}, NOT a
+# hardcoded literal. Anchor on the interpolation token so a re-hardcoded literal fails.
+assert "post-reload probe interpolates \${local.registry_endpoint} (not a hardcoded literal)" \
+  "printf '%s' \"\$BLOCK\" | grep -qF 'docker info' && printf '%s' \"\$BLOCK\" | grep -qF \"\$PROBE_TOKEN\""
 
-# The delivered daemon.json is valid JSON and allowlists the zot endpoint.
-assert "docker-daemon.json exists" "[[ -f \"\$DAEMON_JSON\" ]]"
-assert "docker-daemon.json is valid JSON" \
-  "python3 -c 'import json; json.load(open(\"$DAEMON_JSON\"))'"
-assert "docker-daemon.json lists 10.0.1.30:5000 under insecure-registries" \
-  "python3 -c 'import json; d=json.load(open(\"$DAEMON_JSON\")); exit(0 if \"10.0.1.30:5000\" in d.get(\"insecure-registries\",[]) else 1)'"
+# --- #6448 template shape: the .tmpl derives its allowlist value; the rendered doc is valid JSON ---
+assert "docker-daemon.json.tmpl exists (renamed from the static docker-daemon.json)" \
+  "[[ -f \"\$TMPL\" ]]"
+assert "docker-daemon.json.tmpl insecure-registries value is \${registry_endpoint} (derived)" \
+  "grep -q 'insecure-registries' \"\$TMPL\" && grep -qF \"\$ENDPOINT_VAR\" \"\$TMPL\""
+# Rendered (not raw) JSON validity: the raw .tmpl holds the placeholder string; render it with
+# the current endpoint value and confirm valid JSON (learning 2026-05-06: assert the rendered
+# value, not the raw source, for anything interpolated). Full-render JSON validity in CI is also
+# covered by validate-infra-templates.sh (Phase 7) — this is the locally-runnable mirror.
+assert "rendered docker-daemon.json.tmpl is valid JSON" \
+  "sed 's/\${registry_endpoint}/10.0.1.30:5000/' \"\$TMPL\" | python3 -c 'import json,sys; json.load(sys.stdin)'"
+
+# --- #6448 cloud-init derivation: the fresh-host inline daemon.json derives too ---
+assert "cloud-init.yml insecure-registries value is \${registry_endpoint} (derived)" \
+  "grep -qE 'insecure-registries.*\\\$\{registry_endpoint\}' \"\$CLOUD_INIT\""
+
+# --- #6448 THE mutation test: shape-based single-source residual scan (renumber-proof) ---
+# Count NON-COMMENT occurrences of any hardcoded endpoint literal of the SHAPE IP:5000 across
+# the whole derivation surface (docker-daemon.json.tmpl + cloud-init.yml + server.tf) and assert
+# ZERO. Every consumer must interpolate the endpoint var; the ONLY legitimate place the :5000
+# suffix is constructed is zot-registry.tf:44 (local.registry_endpoint =
+# "${local.registry_private_ip}:5000"). A reintroduced hardcoded copy — the exact #6448 drift
+# (local.registry_private_ip moves to .31 while a consumer keeps a .30:5000 copy) — is a
+# non-comment IP:5000 literal, so this scan goes RED. The OLD guard could never fail this way (it
+# grepped the file against its own copy). Match by SHAPE, NOT the pinned value 10.0.1.30:5000, so
+# the guard stays load-bearing after a real subnet renumber (learning 2026-06-11 extract-by-shape;
+# closes the architecture-review value-coupling advisory). Comment-strip ^[^#]* for HCL/YAML; the
+# .tmpl is JSON (no comments). Adapts private-nic-guard.test.sh's non-comment LIVE_LITERALS scan.
+# `{ grep … || true; }`: a zero-match grep (the SUCCESS path here — no hardcoded literal) exits
+# 1, and under `set -euo pipefail` that would abort the script mid-run instead of yielding
+# RESID=0. Contain the failure inside the pipe segment so wc still counts an empty stream.
+RESID=$({ grep -rhE '^[^#]*[0-9]{1,3}(\.[0-9]{1,3}){3}:5000' \
+  "$TMPL" "$CLOUD_INIT" "$SERVER_TF" || true; } | wc -l | tr -d ' ')
+assert "no hardcoded IP:5000 literal on the derivation surface (.tmpl/cloud-init/server.tf) — all derive from local.registry_endpoint (found $RESID)" \
+  "[[ \"\$RESID\" == \"0\" ]]"
 
 # It is CI--target-ed (SSH-provisioned resources MUST be in the -target list, else they
 # silently never apply — apply-path-cto-ruling.md condition #1).
 assert "registry_insecure_config is in the workflow SSH -target list" \
   "grep -qF -- '-target=terraform_data.registry_insecure_config' \"\$WORKFLOW\""
-
-# Fresh/running-host parity: cloud-init.yml writes its OWN inline daemon.json on fresh boot
-# (task 3.0a) and this resource delivers docker-daemon.json to running hosts — both MUST
-# allowlist the SAME zot endpoint, else a future IP change diverges the two host classes.
-CI_ZOT_IP="$(grep -oE '"insecure-registries":[[:space:]]*\["[0-9.]+:[0-9]+"\]' "$CLOUD_INIT" | grep -oE '[0-9.]+:[0-9]+' | head -1 || true)"
-DJ_ZOT_IP="$(python3 -c 'import json; print((json.load(open("'"$DAEMON_JSON"'")).get("insecure-registries") or [""])[0])' 2>/dev/null || true)"
-assert "cloud-init inline daemon.json and docker-daemon.json agree on the zot endpoint (found ci='$CI_ZOT_IP' dj='$DJ_ZOT_IP')" \
-  "[[ -n \"\$CI_ZOT_IP\" && \"\$CI_ZOT_IP\" == \"\$DJ_ZOT_IP\" ]]"
 
 # --- #6497: the registry host's credential-convergence edges -----------------------------
 # WEB-PLATFORM-5B root cause: /etc/zot/htpasswd is baked once at boot from the two Doppler
