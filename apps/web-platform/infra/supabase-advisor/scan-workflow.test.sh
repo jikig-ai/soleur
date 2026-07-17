@@ -24,9 +24,22 @@
 # anchoring on syntax is.
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+DIR_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$DIR_SELF/../../../.." && pwd)"
 WORKFLOW="$REPO_ROOT/.github/workflows/scheduled-supabase-advisor-scan.yml"
-SCRIPT="$REPO_ROOT/scripts/supabase-advisor-scan.sh"
+# SCRIPT_OVERRIDE points this guard at a scratch copy so a mutation test never
+# edits tracked source. Consumer: scan-workflow-mutation.test.sh.
+#
+# It is NOT a disarm switch, and that is measured, not asserted: every $SCRIPT
+# rung below is paired with a non-vacuity rung that requires the target to carry
+# the real sentinels, so an override pointing at a benign file goes RED (9 FAILs),
+# not vacuously green. To pass, the target must already satisfy every property
+# asserted here. The residual risk is a human mistaking an override run for a
+# real audit, so an override announces itself — no CI-fail-closed check, because
+# the mutation harness is a legitimate CI caller and a check it must bypass
+# protects nothing.
+SCRIPT="${SCRIPT_OVERRIDE:-$REPO_ROOT/scripts/supabase-advisor-scan.sh}"
+[[ -z "${SCRIPT_OVERRIDE:-}" ]] || printf 'NOTE: auditing an override target, NOT tracked source: %s\n' "$SCRIPT" >&2
 INNGEST_FN="$REPO_ROOT/apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts"
 MONITORS_TF="$REPO_ROOT/apps/web-platform/infra/sentry/cron-monitors.tf"
 APPLY_YML="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
@@ -35,6 +48,7 @@ HOOK="$REPO_ROOT/.claude/hooks/new-scheduled-cron-prefer-inngest.sh"
 INFRA_VALIDATION="$REPO_ROOT/.github/workflows/infra-validation.yml"
 TEST_ALL="$REPO_ROOT/scripts/test-all.sh"
 HARNESS="$REPO_ROOT/tests/scripts/test-supabase-advisor-scan.sh"
+MUTATION_HARNESS="$DIR_SELF/scan-workflow-mutation.test.sh"
 
 fails=0
 pass() { printf '  ok   %s\n' "$1"; }
@@ -74,6 +88,63 @@ if grep -qF 'bash tests/scripts/test-supabase-advisor-scan.sh' "$TEST_ALL"; then
   pass "the behavioural harness is registered in test-all.sh (the proof actually runs)"
 else
   fail "harness is wired" "test-all.sh does not run tests/scripts/test-supabase-advisor-scan.sh — the proof that the gate cannot silently pass would gate NOTHING (nothing auto-discovers tests/scripts/)"
+fi
+# Third gate, same reasoning: the mutation attestation is what proves the checks
+# below still DISCRIMINATE (they pass on an unmutated tree either way — #6572).
+# Unregistered, it would be the strongest evidence in this subsystem, running nowhere.
+if [[ -f "$MUTATION_HARNESS" ]] && grep -qF 'bash apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh' "$INFRA_VALIDATION"; then
+  pass "the mutation attestation exists and is registered in infra-validation.yml"
+else
+  fail "mutation attestation is wired" "scan-workflow-mutation.test.sh is missing or has no 'run:' step in infra-validation.yml — this guard's non-vacuity would rest on prose again (#6572)"
+fi
+
+echo "== no check in this file feeds a producer into grep -q (#6572) =="
+# grep -q exits on FIRST MATCH. The producer's next write() then takes SIGPIPE
+# (rc=141) and pipefail — set at the top of this file — promotes 141 to the
+# pipeline status, INVERTING the if. Where match⇒pass that false-FAILs a correct
+# tree (the observed #6572 symptom); where match⇒fail it false-PASSes, which is
+# how the headline .lints[]? assertion below goes green while the idiom it
+# forbids is present. Match against a here-string instead.
+#
+# SCHEDULING decides it, not a size threshold — do not reduce this to a byte
+# count in either direction. The producer needs ≥2 write()s for a window to
+# exist at all (~8 KB here = 2 writes), but whether the reader closes inside
+# that window is a race:
+#   - unperturbed locally the producer wins: 0/200 at the real 8 KB size;
+#   - perturb it at that SAME size (run it under strace) and the producer is
+#     killed by SIGPIPE — the window is real, not hypothetical;
+#   - CI's scheduler is such a perturbation. #6572 is the log: `grep: write
+#     error: Broken pipe`, same tree, re-run passed.
+# It only becomes DETERMINISTIC once output exceeds the pipe buffer (~100 KB).
+# So "it passes locally" is not evidence of anything, and neither is any single
+# arming size; only a size-amplified differential discriminates.
+#
+# SCOPE: grep -q/--quiet only — the #6572 close condition. Other early-exiting
+# consumers (| head -N, | jq -e) are NOT matched. They are safe here today only
+# because each sits in an unchecked $( ), so nothing reads their 141; that is
+# rc-discard, not design. Widen this if one ever gets status-checked.
+#
+# THREE NORMALISATIONS, each load-bearing — mutate any one out and a real bug
+# escapes or a correct file false-FAILs (scan-workflow-mutation.test.sh proves it):
+#   1. comments stripped   — this block's own prose describes the shape.
+#   2. double-quoted strings stripped — a fail message naming the shape would
+#      match ITSELF and false-FAIL forever. Comments are stripped here; string
+#      literals are not. Real code still matches: its patterns are single-quoted
+#      and the `| grep -q` token sits outside any quotes.
+#   3. line-continuations and pipe-newlines folded — THIS FILE writes multi-line
+#      pipes (the probe_hook jq chain above), so an author following house style
+#      would otherwise evade this guard silently.
+pipe_grep_q='[|][[:space:]]*grep([[:space:]]+-[a-zA-Z0-9]+)*[[:space:]]+(-[a-zA-Z]*q[a-zA-Z]*|--quiet)([[:space:]]|$)'
+residual_hits="$(sed -E ':a;/\\$/{N;s/\\\n[[:space:]]*/ /;ba}' "${BASH_SOURCE[0]}" \
+  | grep -vE '^[[:space:]]*#' \
+  | sed 's/"[^"]*"//g' \
+  | sed -E ':b;/\|[[:space:]]*$/{N;s/\|[[:space:]]*\n[[:space:]]*/| /;bb}' \
+  | grep -E "$pipe_grep_q")"
+if [[ -z "$residual_hits" ]]; then
+  pass "every check matches a here-string; none feeds a producer into an early-exiting matcher"
+else
+  # Print the offending text: a bare count makes the reader re-derive the regex.
+  fail "no early-exit-pipe form remains" "$(printf '%s' "$residual_hits" | wc -l) site(s) invert under pipefail (#6572). Offending: $(printf '%s' "$residual_hits" | tr '\n' '~')"
 fi
 
 echo "== the hook allows this workflow (asserted by EXECUTING the hook) =="
@@ -153,8 +224,10 @@ else
   fail "host literal pinned" "expected API=\"https://api.supabase.com\" in $SCRIPT"
 fi
 # The host line must not be interpolated from anywhere — an overridable host is
-# the exfil seam. Assert on the host-assignment line specifically.
-if grep -E '^\s*API=' "$SCRIPT" | grep -qE '\$\{|\$\(|\$[A-Za-z_]'; then
+# the exfil seam. Assert on the host-assignment line specifically. Captured to a
+# variable like every other producer here, so the match reads left-to-right.
+api_line="$(grep -E '^\s*API=' "$SCRIPT")"
+if grep -qE '\$\{|\$\(|\$[A-Za-z_]' <<<"$api_line"; then
   fail "host is not interpolated" "the API= line contains a shell/GHA expansion — it must be a literal"
 else
   pass "host assignment contains no interpolation"
@@ -196,15 +269,26 @@ echo "== the anti-fail-open sentinels are present in the script =="
 #  2. -F is deliberate. "Improving" this to grep -E makes the `]` optional
 #     (`[]?` = zero-or-one `]`), so it would match the CORRECT `.lints[]` and
 #     false-FAIL permanently.
-script_code() { grep -vE '^\s*#' "$SCRIPT"; }
-if script_code | grep -qF '.lints[]?'; then
+#  3. CAPTURED ONCE, matched against a here-string — see the #6572 block above
+#     for why the piped form could invert these two checks (a scheduling race,
+#     not a certainty). The capture also runs the producer once rather than per
+#     check.
+script_code="$(grep -vE '^\s*#' "$SCRIPT")"
+# NOT a fail-open guard, despite appearances — measured: delete this line, point
+# $SCRIPT at an all-comment file, and the check below DOES take its `pass`
+# branch, but the non-vacuity check after it catches the empty capture and the
+# run still exits 1. This line is here for the DIAGNOSTIC: it turns five
+# confusing downstream FAILs into one accurate line naming the cause.
+# (`set -uo pipefail` carries no `-e`, so the empty assignment is itself silent.)
+[[ -n "$script_code" ]] || { printf 'FATAL: no non-comment lines in %s\n' "$SCRIPT" >&2; exit 1; }
+if grep -qF '.lints[]?' <<<"$script_code"; then
   fail "script never uses the fail-open .lints[]? idiom" "found .lints[]? in CODE — a 401 body parses to 0 through it"
 else
   pass "script never uses the fail-open .lints[]? idiom (code, comments excluded)"
 fi
 # Non-vacuity: the assertion above is only meaningful if the code actually
 # parses .lints at all. Without this, deleting the parse entirely would pass.
-if script_code | grep -qF '.lints[]'; then
+if grep -qF '.lints[]' <<<"$script_code"; then
   pass "  ...and the script does parse .lints[] (so the check above is not vacuous)"
 else
   fail "script parses .lints[]" "no .lints[] parse found in code — the anti-fail-open check above would pass vacuously"
@@ -222,13 +306,13 @@ fi
 # green, satisfied by the catalog's line. Proven by mutation during review.
 # A guard whose subject can be deleted while it stays green is not a guard.
 advisor_block="$(awk '/^# --- Rung 2:/,/^# --- Rung 3:/' "$SCRIPT")"
-if printf '%s' "$advisor_block" | grep -qE 'code" != "200"'; then
+if grep -qE 'code" != "200"' <<<"$advisor_block"; then
   pass "HTTP-status assertion present IN THE ADVISOR RUNG (not merely somewhere in the file)"
 else
   fail "advisor HTTP-status assertion" "the advisor rung has no explicit non-200 check — a 401 would parse to a clean 0"
 fi
 # Same scoping for the structural rung, for the same reason.
-if printf '%s' "$advisor_block" | grep -qF 'has("lints")'; then
+if grep -qF 'has("lints")' <<<"$advisor_block"; then
   pass "structural assertion present IN THE ADVISOR RUNG"
 else
   fail "advisor structural assertion" "the advisor rung has no has(\"lints\") guard"
@@ -265,7 +349,7 @@ if [[ "$rung3_gate" == *'identity_ok'* ]]; then
 else
   fail "catalog rung gate" "rung 3's gate is '${rung3_gate:-<none found>}' — it must gate on identity_ok, not on ok/advisor state, or an advisor outage silently retires the authoritative assertion"
 fi
-if printf '%s' "$rung3_gate" | grep -qE '(^|[^_])\bok\b|advisor'; then
+if grep -qE '(^|[^_])\bok\b|advisor' <<<"$rung3_gate"; then
   fail "catalog rung is not advisor-coupled" "rung 3's gate '${rung3_gate}' references ok/advisor — the catalog must not depend on the advisory tier"
 else
   pass "catalog rung's gate references neither ok nor advisor state"
@@ -281,7 +365,7 @@ echo "== both anti-exfil libs are SOURCED, never redefined =="
 # confirmed violation emitted `scan_result=clean` exit 0. A permanently green
 # gate, reachable by deleting two lines this guard claimed to protect.
 for lib in strip-log-injection scrub-supabase-pat; do
-  if script_code | grep -qE '^[[:space:]]*\.[[:space:]].*lib/'"$lib"'\.sh'; then
+  if grep -qE '^[[:space:]]*\.[[:space:]].*lib/'"$lib"'\.sh' <<<"$script_code"; then
     pass "sources lib/${lib}.sh (real '.' source line, not the shellcheck directive)"
   else
     fail "sources lib/${lib}.sh" "no actual '. …/lib/${lib}.sh' source line in code — sanitize() would degrade silently"
