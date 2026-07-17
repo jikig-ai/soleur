@@ -48,6 +48,20 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > and **web-1 and the registry have no Primary IPv4 row** (~$1.08/mo) though web-2,
 > inngest, and grok-dogfood each do. Both need invoice verification before booking.
 
+> **[2026-07-16 Review note — third pass, at merge]** Merging `origin/main` mid-ship
+> pulled in **#6554**, which flipped **xAI API (Grok 4.5 dogfood)** from
+> `approved-not-billing` → `active`. That is a live instance of the drift this cycle is
+> about: an `active` ledger row with no line here. Tabled → **R&D** (an operator-dogfood
+> measure suite is an engineering accelerator; same basis as the `grok-dogfood` host).
+> **Booked at the actual draw (~$0.14), NOT the ledger's `100.00` amount** — that figure
+> is the row's own **soft-ceiling kill-switch**, and the same row records the first
+> billable batch at ≈ $0.14. See the note under the R&D table: booking the ceiling would
+> overstate burn ~$100/mo and move the all-in break-even **13 → 15** on unspent money.
+> R&D **$419.71 → $419.85**, all-in **$619.82 → $619.96**. **Every break-even and margin
+> is unchanged** (⌈619.96 ÷ 49⌉ = ⌈619.96 ÷ 48⌉ = 13; all-in margin 74.70% / 74.17%) —
+> the tabling is for completeness, not because it moves the model. Product COGS unchanged
+> at $200.11. Re-derive when the first real monthly xAI draw lands.
+
 ## Monthly Burn
 
 Monthly burn is split into two scopes: **R&D / dev tooling** (investments that accelerate engineering, not per-user product delivery) and **product COGS** (infrastructure and services consumed in running the product for paying users). This split is load-bearing for break-even math and for the gross-margin-at-scale claim in §5. Reporting a single blended number either collapses under scrutiny (the small-number framing omits real recurring costs) or misrepresents product economics (the large-number framing taxes product margins with engineering-accelerator spend). The split is defensible and carries forward cleanly into pricing conversations.
@@ -64,7 +78,19 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Anthropic API (CI claude-code-action) | 0.00 (accruing) [expenses.md@2026-06-11] | `expenses.md` |
 | Hetzner CX33 (grok-dogfood, operator dogfood host) | 9.17 [expenses.md@2026-07-16] | `expenses.md` |
 | Hetzner Primary IPv4 (grok-dogfood) | 0.54 [expenses.md@2026-07-16] | `expenses.md` |
-| **Subtotal R&D / Dev Tooling** | **419.71 [expenses.md@2026-07-16]** | |
+| xAI API (Grok 4.5 dogfood) | 0.14 (accruing) [expenses.md@2026-07-16] | `expenses.md` (metered — see note) |
+| **Subtotal R&D / Dev Tooling** | **419.85 [expenses.md@2026-07-16]** | |
+
+> **xAI API line (#6545, tabled 2026-07-16 on merge of #6554):** `expenses.md` books this
+> row's amount as **100.00**, which is its **soft-ceiling kill-switch**, not a draw — the
+> same row records the first billable batch at **≈ $0.14** (2026-07-16). Tabled here at the
+> **actual draw**, mirroring the `Anthropic API (CI claude-code-action)` line below
+> (`0.00 (accruing)`), because this document models **burn**, not authorization. Booking the
+> ceiling would overstate all-in burn by ~$100/mo (+16%) and move the all-in break-even
+> **13 → 15 users** on money that has not been spent. Re-derive when the first real monthly
+> draw lands — VERIFY on the xAI console. *(The ledger booking a ceiling in the amount
+> column while a sibling metered row books the draw is the same two-ways-priced defect this
+> cycle fixed for cx33; tracked in #6584.)*
 
 > **CI claude-code-action line (#5086, ADR-056):** metered `ANTHROPIC_API_KEY`
 > spend from the two CI review jobs — R&D, not COGS (engineering accelerator, same
@@ -164,7 +190,7 @@ Price anchor: **$49/month** per Pro tier (`product/pricing-strategy.md`). Math i
 | Scope | Burn (USD/mo) | Price ($49) | Users to break even |
 |-------|--------------:|------------:|--------------------:|
 | Product COGS | 200.11 [expenses.md@2026-07-16] | 49 | ⌈200.11 ÷ 49⌉ = **5 users** |
-| All-in (COGS + R&D / Dev Tooling) | 619.82 [expenses.md@2026-07-16] | 49 | ⌈619.82 ÷ 49⌉ = **13 users** |
+| All-in (COGS + R&D / Dev Tooling) | 619.96 [expenses.md@2026-07-16] | 49 | ⌈619.96 ÷ 49⌉ = **13 users** |
 
 ### Stripe fee drag
 
@@ -177,9 +203,9 @@ Effective **net revenue per user after Stripe fees: ~$48/month** (EU floor) to ~
 | Scope | Burn | Net price ($48) | Users to break even |
 |-------|-----:|----------------:|--------------------:|
 | Product COGS | 200.11 [expenses.md@2026-07-16] | 48 | ⌈200.11 ÷ 48⌉ = **5 users** |
-| All-in | 619.82 [expenses.md@2026-07-16] | 48 | ⌈619.82 ÷ 48⌉ = **13 users** |
+| All-in | 619.96 [expenses.md@2026-07-16] | 48 | ⌈619.96 ÷ 48⌉ = **13 users** |
 
-Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **13 users** at the current $619.82 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap). The COGS-scope count shifts 4 → 5 (⌈200.11 ÷ 49⌉ = ⌈200.11 ÷ 48⌉ = 5). Stripe fees still bite into gross margin at scale (see §5).
+Stripe fee drag no longer moves the all-in break-even count — gross-price and net-price both round up to **13 users** at the current $619.96 burn (the 2026-06-16 Resend Pro add pushed the gross-price count from 11 to 12, closing the one-user gap). The COGS-scope count shifts 4 → 5 (⌈200.11 ÷ 49⌉ = ⌈200.11 ÷ 48⌉ = 5). Stripe fees still bite into gross margin at scale (see §5).
 
 ## Scaling Triggers
 
@@ -216,9 +242,9 @@ Gross margin:      2,249.89 / 2,450 = 91.83%
 
 ```
 Revenue:           $2,450
-All-in burn:       $619.82 [expenses.md@2026-07-16]
-Contribution:      $1,830.18
-Margin (all-in):   1,830.18 / 2,450 = 74.70%
+All-in burn:       $619.96 [expenses.md@2026-07-16]
+Contribution:      $1,830.04
+Margin (all-in):   1,830.04 / 2,450 = 74.70%
 ```
 
 ### Stripe Fee Drag
@@ -226,7 +252,7 @@ Margin (all-in):   1,830.18 / 2,450 = 74.70%
 At 50 users × ~$1/user/mo Stripe fee (EU floor) = **$50/mo in fees**. Effective net revenue: $2,450 − $50 = **$2,400**.
 
 - Adjusted COGS-based margin: ($2,400 − $200.11) / $2,400 = **91.66%**
-- Adjusted all-in margin: ($2,400 − $619.82) / $2,400 = **74.17%**
+- Adjusted all-in margin: ($2,400 − $619.96) / $2,400 = **74.17%**
 
 The original "93% gross margin" claim is closest to the COGS-based number, but that number is now **~92%, not ~93%** — the 2026-07-16 re-derivation (#6538) has walked it down from 92.81% as previously-untabled COGS rows landed, and it elides R&D / dev-tooling burn besides. The more honest founder-economics number is the all-in margin (**~75%**). Both should be cited side-by-side whenever the gross-margin claim is made; COGS-only margin without the R&D context misrepresents the operating picture. **The "93%" framing is now stale on its own terms and should be retired from external use rather than re-rounded.**
 
