@@ -34,6 +34,37 @@ closed ONLY if a probe resolves to a definite defect with a shipped fix; otherwi
 with the measured conclusion recorded (it did NOT resolve — see Research Reconciliation).
 inngest-base-url-repoint is an **unblocked-by dependency note**, not in scope.
 
+## Enhancement Summary (deepen-plan)
+
+**Deepened:** 2026-07-17. **Method:** 6-agent plan-review panel (DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer, cto — single-user-incident threshold) applied inline,
+plus deepen-plan hard gates + realism sweeps.
+
+### Key improvements folded in (mechanical, auto-applied)
+1. **#6552 delete made UNCONDITIONAL** (spec-flow + architecture + Kieran converged) — the case-arm
+   placement missed `aborted`/partial-arm/re-dispatch states where `op=arm`'s G4 URL persists.
+2. **#6555 corrected to 6 sites incl. 2 STANDALONE unit files** (`inngest-cutover-flip.service:19`,
+   `inngest-redis.service:23`) the first draft mislocated; + fail-closed non-empty check, dead-
+   substitution cleanup, preserve-branch precondition, scoped-token backstop, "forward-guard" reframe.
+3. **#6556 P2 alarm unit reshaped** — renamed `inngest-heartbeat-failure-log.service` (not `-alarm@`,
+   which means "pages a human" here), non-templated, bootstrap heredoc, **bare `logger` with NO
+   `doppler run` wrapper** (would hardcode `--project soleur`).
+4. **#6553 hardened** — four prose sites (not three), cite the flushed-RESUME start (`:240`), add an
+   FSM↔guard lockstep CI drift-guard + ADR class-invariant, fix ADR heading (`## Considered Options`).
+5. **#6551 instrument spec corrected** — Source-section hash, NOT whole-file (the `@@HOST_NAME@@` sed
+   makes a whole-file hash mismatch forever); stays gated + #6551 OPEN.
+
+### Gates verified
+User-Brand Impact (single-user incident) · Observability (5 fields, no-SSH discoverability) ·
+no PAT-shaped vars · no UI surface (no `.pen` needed) · Downtime/Cutover NOT triggered (dark
+non-serving host, no DB migration, no `hcloud_server` replace in this PR) · precedent-diff done
+(`cron-egress-alarm@` → reshaped) · negative claims verified (tag reuse, redaction).
+
+### Surfaced (operator visibility) → `decision-challenges.md`
+Panel User-Challenges to the operator's stated direction (bundle-into-one-PR; CTO #6555 approach)
+and Taste splits (#6551 instrument ship/drop; #6556 P1 minimal shape) — recorded, NOT silently
+applied; `ship` renders them into the PR body + files an `action-required` issue.
+
 ## Overview
 
 | # | P | Fix | Primary file |
@@ -42,7 +73,7 @@ inngest-base-url-repoint is an **unblocked-by dependency note**, not in scope.
 | 6553 | P3→(likely higher) | Widen the flip-guard CODE allowlist `{armed,flipping,done}` → `{armed,flipping,flushed,done}`; amend ADR-100 | `inngest-server-flip-guard.sh` + ADR-100 |
 | 6555 | P2 | Land `DOPPLER_PROJECT` in `/etc/default/inngest-server` at cloud-init so units drop `--project`; delete the ci-deploy + sudoers threading | `cloud-init-inngest.yml`, `inngest-bootstrap.sh`, both sudoers copies, `ci-deploy.sh` |
 | 6556 | P2 | Part 1: extend the CI tag-drift guard beyond `infra/*.sh` (units, containers) + add the explicit-exclusion half. Part 2: add `OnFailure=` to `inngest-heartbeat.service`, honestly scoped | `vector-pii-scrub.test.sh`, `inngest-bootstrap.sh` |
-| 6551 | P2 | INVESTIGATION only — run the 3 no-SSH probes, record findings, **leave OPEN** (recommended: ship a read-only `vector_config_sha256` probe instrument, gated on reviewer confirm) | `cat-deploy-state.sh` (recommended, gated) |
+| 6551 | P2 | INVESTIGATION only — run the 3 no-SSH probes, record findings, **leave OPEN** (recommended: ship a read-only `vector_config_*` probe instrument, gated on reviewer confirm) | `cat-deploy-state.sh` (recommended, gated) |
 
 **Why one PR:** shared files + one common re-eval dependency (all gate inngest-base-url-repoint) +
 they were carved out of #6536 together. Merging them separately would produce redundant CI churn on
@@ -57,7 +88,7 @@ the same test/vector surfaces and repeated review of the same subsystem.
   Immediate blast radius is LOW today (the host is dark, no live traffic), but the failure class is
   single-user-incident when the cutover runs.
 - **If this leaks, the user's data/workflow is exposed via:** no new data surface. The OnFailure
-  log and the `vector_config_sha256` instrument carry no PII (a config hash + a unit-failure
+  log and the `vector_config_*` instrument carry no PII (a config hash + a unit-failure
   marker); `cat-deploy-state.sh` already redacts signing keys + heartbeat bearer URLs (#5159). No
   regulated-data field is added or shipped.
 - **Brand-survival threshold:** single-user incident. Rationale: #6552 (monitor false-green masking
@@ -76,7 +107,7 @@ the same test/vector surfaces and repeated review of the same subsystem.
 | #6555: `:47 export DOPPLER_PROJECT="${DOPPLER_PROJECT:-soleur}"`; units read env via `EnvironmentFile=`; CTO fix writes it into `/etc/default/inngest-server` and drops `--project` | CONFIRMED + refined: on the **dedicated host** the env-file is pre-created at `cloud-init-inngest.yml:324` (bootstrap hits the "preserve" branch and SKIPS the `:339` heredoc), so the fix must patch `cloud-init-inngest.yml:324` (dedicated) AND `inngest-bootstrap.sh:339` (web-host). Doppler CLI reads `DOPPLER_PROJECT` from env (precedent `cloud-init-registry.yml:734,741`); routing is also backstopped by a soleur-inngest-scoped `DOPPLER_TOKEN` (cloud-init-inngest.yml:384). The sudoers `env_keep` for `DOPPLER_PROJECT` is a **deliberate forward-guard** (ci-deploy.sh:2779-2784, H4 — "if a ci-deploy path is ever added to the DEDICATED host"), safe to delete today (ci-deploy is web-host-only) but NOT "dead weight". **2 of 6 `--project` sites are in STANDALONE unit files** (`inngest-cutover-flip.service:19`, `inngest-redis.service:23`) the first draft mislocated | CTO fix; enumerate all 6 `--project` sites (incl. 2 unit files) + dead-substitution cleanup + fail-closed check + both sudoers copies + ci-deploy + tests |
 | #6556 P1: test derives EXPECTED_TAGS from `logger -t` + `SyslogIdentifier=` but scans only `infra/*.sh`, no exclusion half | CONFIRMED. `vector-pii-scrub.test.sh` AC3/AC3b scan `infra/*.sh` only; hardcodes `SYSTEMD_UNIT_IDENTIFIERS="webhook"`; no exclusion-with-reason list. Gaps: units with no `SyslogIdentifier=` (silent basename tags `sh`, `doppler`, `disk-monitor.sh`, `resource-monitor.sh`, `inngest-nftables.sh`, `zot-liveness-heartbeat.sh`), plus `luks-monitor.service` (only coincidentally covered via its `.sh`) | Extend coverage + add exclusion half (derive, don't hardcode) |
 | #6556 P2: `inngest-heartbeat.service` has no `OnFailure=` | CONFIRMED (heredoc `inngest-bootstrap.sh:236-283`, no `OnFailure=`). Precedent exists: `cron-egress-alarm@%n.service` (`cron-egress-firewall.service:8`) | Add `OnFailure=` templated alarm unit; reuse `inngest-heartbeat` tag |
-| #6551 probe 3: "surface a hash via `cat-deploy-state.sh`" | **INFEASIBLE as written** — `cat-deploy-state.sh` surfaces vector.service *status* + *journal tail* (`:417-418`) but NEVER reads/hashes `/etc/vector/vector.toml` | Probe 3 needs a new field; recommend adding a read-only `vector_config_sha256` (gated); #6551 stays OPEN |
+| #6551 probe 3: "surface a hash via `cat-deploy-state.sh`" | **INFEASIBLE as written** — `cat-deploy-state.sh` surfaces vector.service *status* + *journal tail* (`:417-418`) but NEVER reads/hashes `/etc/vector/vector.toml` | Probe 3 needs a new field; recommend adding a read-only `vector_config_*` (gated); #6551 stays OPEN |
 
 ### #6551 — the three no-SSH probes, run and dispositioned (#6536-compliant)
 
@@ -287,7 +318,7 @@ verbatim:
 
 ### Phase 6 — #6551 investigation write-up (+ recommended gated instrument)
 1. Record the probe findings (above) in the PR body and update issue #6551; leave it OPEN.
-2. RECOMMENDED (gated): add read-only `vector_config_sha256` to `cat-deploy-state.sh`.
+2. RECOMMENDED (gated): add read-only `vector_config_*` to `cat-deploy-state.sh`.
 
 ## Infrastructure (IaC)
 
@@ -321,7 +352,7 @@ must be justified against the headroom.
 
 ```yaml
 liveness_signal:
-  what: inngest-heartbeat.timer active-state + dark-arm render + (recommended) vector_config_sha256
+  what: inngest-heartbeat.timer active-state + dark-arm render + (recommended) vector_config_* (Source-section hash)
   cadence: 60s timer; deploy-status read on demand (no ssh)
   alert_target: Better Stack heartbeat monitor (LIVE host) via missing pings; dark host is queryable-only
   configured_in: inngest-bootstrap.sh (units), cat-deploy-state.sh (no-ssh read surface)
@@ -336,7 +367,7 @@ failure_modes:
     detection: OnFailure alarm -> logger -t inngest-heartbeat -p err -> Better Stack Logs (queryable); LIVE host also alarms via the monitor
     alert_route: Better Stack heartbeat monitor (live host); Logs query (dark host)
   - mode: running vector.toml drifts from repo (the #6551 mystery admit path)
-    detection: (recommended, gated) vector_config_sha256 in cat-deploy-state.sh vs repo+image hash
+    detection: (recommended, gated) vector_config_* Source-section hash in cat-deploy-state.sh vs repo Source-section hash
     alert_route: no-ssh deploy-status read post dedicated-host bake; #6551 stays open until read
   - mode: a new logger -t tag / unit SyslogIdentifier is invisible off-box (rides-the-shipper doctrine breach)
     detection: vector-pii-scrub.test.sh AC3/AC3b extended guard (CI, static)
@@ -352,7 +383,7 @@ discoverability_test:
 Affected-surface note (blind execution surface — the deny-all-public dark host): every failure mode
 above has an **in-surface** probe (OnFailure alarm line from the unit itself; dark-arm render read;
 recommended config-hash) reachable via `cat-deploy-state.sh` over `/hooks/deploy-status`, never SSH
-(`hr-no-ssh-fallback-in-runbooks`). The `vector_config_sha256` instrument is the discriminating
+(`hr-no-ssh-fallback-in-runbooks`). The `vector_config_*` instrument is the discriminating
 field for the host-config-vs-repo-vs-image hypothesis split (#6551).
 
 ## Architecture Decision (ADR/C4)
