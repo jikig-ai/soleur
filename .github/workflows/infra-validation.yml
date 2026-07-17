@@ -585,6 +585,9 @@ jobs:
       - name: Run /workspaces LUKS-at-rest drift-guards (#6588, ADR-119)
         run: bash apps/web-platform/infra/workspaces-luks.test.sh
 
+      - name: Run /workspaces LUKS header-escrow wiring drift-guards (#6649)
+        run: bash apps/web-platform/infra/workspaces-luks-header.test.sh
+
       - name: Run git-data transport-wrapper allowlist tests
         run: bash apps/web-platform/infra/git-data-transport-wrapper.test.sh
 
