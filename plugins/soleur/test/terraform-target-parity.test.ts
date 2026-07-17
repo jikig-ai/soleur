@@ -570,6 +570,13 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume.workspaces_luks",
   "hcloud_volume_attachment.workspaces_luks",
   "doppler_service_token.workspaces_luks",
+  // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret. Same
+  // class as betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd
+  // (both excluded, applied together by the operator apply; the heartbeat is paused until the
+  // operator unpauses at cutover). NOT part of the five-resource cutover gate allow-set, and never
+  // rides the gated cutover -target set — so it does not affect the cutover destroy-guard.
+  "betteruptime_heartbeat.workspaces_luks",
+  "doppler_secret.workspaces_luks_heartbeat_url",
   // #6122 (ADR-096) — the zot registry host + its volume/network/firewall/creds/heartbeat
   // ALL ride the operator's initial full (untargeted) `terraform apply` + drift detector,
   // exactly like the git-data host above (CTO ruling 2026-07-06,

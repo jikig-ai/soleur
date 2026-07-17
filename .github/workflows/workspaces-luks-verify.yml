@@ -1,0 +1,96 @@
+# #6604 — the /workspaces LUKS at-rest VERIFY workflow (the no-SSH runbook artifact).
+#
+# READ-ONLY. workflow_dispatch-only. This is the discoverability_test the runbook points at instead
+# of "log in and check" (hr-no-ssh-fallback-in-runbooks): over the CF Tunnel SSH bridge it runs the
+# SAME probe logic as the daily luks-monitor.sh (DP-11 — DRY, not a bespoke reimplementation), plus
+# an app-level workspace read + /api/health, then prints the discriminating fields. It MUTATES
+# NOTHING — no freeze, no flip, no wipe. The destructive cutover is a separate, environment-gated
+# workflow (workspaces-luks-cutover.yml).
+#
+# Reach model: the GH runner egress IP is not in var.admin_ips, so it reaches web-1 over the CF
+# Tunnel SSH bridge (.github/actions/cf-tunnel-ssh-bridge) — the same path apply-web-platform-infra
+# and git-data-cutover use. Creds are held here in GitHub secrets; nothing is held on the host.
+
+name: workspaces-luks verify (#6604 read-only re-assert)
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  # Read-only, but serialize dispatches so two verifies do not interleave their SSH sessions.
+  group: workspaces-luks-verify
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  INFRA_DIR: apps/web-platform/infra
+  CLOUDFLARED_VERSION: "2026.5.0"
+  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$DOPPLER_TOKEN_CHECK" ]] || { echo "::error::DOPPLER_TOKEN not configured."; exit 1; }
+
+      - name: CF Tunnel SSH bridge
+        uses: ./.github/actions/cf-tunnel-ssh-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          infra-dir: ${{ env.INFRA_DIR }}
+          cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
+          cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+
+      - name: Re-assert /workspaces LUKS at-rest (read-only)
+        env:
+          # The bridge exports WEB_HOST_SSH as the exact ssh invocation (key + ProxyCommand).
+          WEB_HOST: "10.0.1.10"
+        run: |
+          set -uo pipefail
+          # Run the baked daily probe read-only (it mutates nothing) — DP-11 reuse. It emits its
+          # own discriminating Sentry event on any failed assert and exits non-zero.
+          ${WEB_HOST_SSH:-ssh} "$WEB_HOST" 'sudo /usr/local/bin/luks-monitor'
+          probe_rc=$?
+          echo "luks-monitor probe rc=$probe_rc"
+          # App-level workspace read + /api/health, exercising the full HTTPS path.
+          health=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 https://app.soleur.ai/api/health || echo "000")
+          echo "app /api/health=$health"
+          if [[ "$probe_rc" -ne 0 ]]; then
+            echo "::error::workspaces-luks at-rest re-assert FAILED (see the emitted Sentry event: feature=workspaces-luks op=workspaces-luks-drift)."
+            exit "$probe_rc"
+          fi
+          if [[ "$health" != "200" ]]; then
+            echo "::error::app /api/health returned $health (expected 200)."
+            exit 1
+          fi
+          echo "workspaces-luks at-rest re-assert PASSED (blkid=crypto_LUKS, mapper mount, escrow ok, /api/health 200)."
+
+      - name: Verify summary
+        if: always()
+        env:
+          ACTOR: ${{ github.actor }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## workspaces-luks verify (read-only)"
+            echo ""
+            echo "**Actor:** ${ACTOR}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+            echo ""
+            echo "Read-only re-assert of /mnt/data == LUKS mapper + escrow + /api/health. No mutation."
+          } >> "$GITHUB_STEP_SUMMARY"

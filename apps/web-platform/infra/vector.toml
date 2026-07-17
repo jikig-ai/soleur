@@ -176,6 +176,12 @@ include_matches.SYSLOG_IDENTIFIER = [
   # (SyslogLevel=info), which Source 1's PRIORITY 0-4 cut drops; this source has no PRIORITY
   # filter. Adding it to Source 1 instead is the trap the naive fix falls into.
   "inngest-heartbeat",
+  # #6604: the daily LUKS at-rest probe (luks-monitor.timer → luks-monitor.sh, `logger -t
+  # luks-monitor`) + the workspaces-luks-emit.sh discriminating-field emit. Without this tag the
+  # drift log-lines never reach Better Stack and the soak's positive-control heartbeat query
+  # (workspaces-luks-soak-6604.sh) has no channel to read — a dead probe would look identical to a
+  # healthy silent one. Exact-value match: the units set SyslogIdentifier=luks-monitor / logger -t.
+  "luks-monitor",
 ]
 journal_directory = "/var/log/journal"
 batch_size = 16
