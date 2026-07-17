@@ -15,15 +15,19 @@
 #
 # IDENTITY, NOT CARDINALITY (and NOT the plan's assumed constant). The #6616 diagnosis
 # (2026-07-17, live) refuted the deepened plan's assumption that the dedicated node's
-# telemetry `host` = `soleur-inngest-server-prd` (that is the Hetzner *resource* name from
-# inngest.tf:291 and NEVER appears in telemetry). The dedicated node's real OS hostname is
-# `soleur-inngest`, authoritatively identified by its service fingerprint (it ships the
-# `inngest-heartbeat` service). A pure allowlist keyed on the dedicated node would false-FAIL
-# forever on that node's own generic early-boot rows (`host=Ubuntu-2404-noble-64-minimal`,
-# kernel-only, reappears every reboot before the hostname is set). So the check keys FAIL on
-# the authoritative WEB-host identities (server.tf:225) that must never wear the Inngest
-# label — the exact bug the issue names — and requires a positive dedicated-node liveness
-# marker before any PASS (#5934 vacuous-GREEN guard).
+# telemetry `host` = `soleur-inngest-server-prd`. That string is the name of a Better Stack
+# *heartbeat monitor* (`betteruptime_heartbeat.inngest_prd`, inngest.tf:291), NOT a Hetzner
+# server — so it never appears in telemetry. The dedicated node's real OS hostname is
+# `soleur-inngest`, which IS the Hetzner server name (`hcloud_server.inngest`,
+# inngest-host.tf:202): Hetzner seeds the OS hostname from the server name, so that rule holds
+# — the plan simply pinned the identity from the wrong, similarly-named resource. Confirmed
+# authoritatively by service fingerprint: `host=soleur-inngest` ships the `inngest-heartbeat`
+# service. A pure allowlist keyed on the dedicated node would false-FAIL forever on that node's
+# own generic early-boot rows (`host=Ubuntu-2404-noble-64-minimal`, kernel-only, reappears every
+# reboot before the hostname is set). So the check keys FAIL on the authoritative WEB-host
+# identities (server.tf:225) that must never wear the Inngest label — the exact bug the issue
+# names — and requires a positive dedicated-node liveness marker before any PASS (#5934
+# vacuous-GREEN guard).
 #
 # Exit semantics (per scripts/sweep-followthroughs.sh contract):
 #   0 = PASS       (soleur-inngest-prd emitted only by the dedicated node AND the dedicated
@@ -47,10 +51,19 @@
 set -uo pipefail
 
 # --- Pinned identities (authoritative sources, NOT the possibly-poisoned query output) ---
-MISLABEL_HOST_NAME="soleur-inngest-prd"          # the stale literal (inngest-bootstrap.sh sed)
-DEDICATED_HOST="soleur-inngest"                  # dedicated node OS hostname (live inngest-heartbeat fingerprint, 2026-07-17)
+# These three literals are replicated from IaC; hostname-mislabel-web1-6616.test.sh carries a
+# parity battery (§Parity) that reddens CI if any source renames out from under them — the
+# asymmetric risk is a silent drift toward a false PASS that auto-closes #6616 while live.
+MISLABEL_HOST_NAME="soleur-inngest-prd"          # the stale literal — inngest-bootstrap.sh sed `s|@@HOST_NAME@@|soleur-inngest-prd|g`
+DEDICATED_HOST="soleur-inngest"                  # dedicated node = hcloud_server.inngest name (inngest-host.tf:202) = its OS hostname; live inngest-heartbeat fingerprint, 2026-07-17
 # Web-host OS-hostname/host_name map from apps/web-platform/infra/server.tf:225
 # (name/host_name = each.key=="web-1" ? "soleur-web-platform" : "soleur-${each.key}").
+# SOLEUR-DEBT: this denylist enumerates the current web fleet {web-1, web-2}; a future web-3
+# (→ soleur-web-3) wearing the Inngest label would escape the FAIL predicate (a conscious
+# trade-off — an allowlist would false-FAIL on the dedicated node's generic early-boot rows;
+# DC-1 YAGNI-descoped a generic multi-host detector). Upgrade trigger: web fleet grows past 2,
+# OR a web-1 recreate changes its OS hostname away from soleur-web-platform. Re-sync with
+# server.tf:225 (the parity test asserts these two are present there).
 WEB_HOSTS=("soleur-web-platform" "soleur-web-2")
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,7 +101,9 @@ fi
 
 # Collision rows: host_name == the mislabel literal AND host is a KNOWN WEB identity.
 # The WEB_HOSTS bash array is marshalled into a jq array via --argjson; empty ROWS → jq
-# reads empty stdin → prints nothing (→ no collision, correct).
+# reads empty stdin → prints nothing (→ no collision, correct). jq stderr is swallowed
+# INTENTIONALLY: a malformed-row parse error yields empty output, which routes through the
+# liveness gate below to TRANSIENT (never a false PASS) — fail-safe, not silent.
 COLLISIONS="$(printf '%s\n' "$ROWS" | jq -r \
   --arg m "$MISLABEL_HOST_NAME" \
   --argjson web "$(printf '%s\n' "${WEB_HOSTS[@]}" | jq -R . | jq -s .)" \

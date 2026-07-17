@@ -38,12 +38,14 @@ This is the #6616 collision, live.
 
 ### ⚠️ Plan-correction (live data refuted a plan precondition — corrected inline per `hr-when-a-plan-specifies-relative-paths-e-g` class)
 
-The deepened plan pinned the dedicated Inngest node's telemetry `host` value as **`soleur-inngest-server-prd`**
-(the Hetzner *resource* `name` from `inngest.tf:291`). **That string never appears in telemetry.** The
-dedicated node's real OS hostname (Vector `host`) is **`soleur-inngest`** — authoritatively identified by its
-**service fingerprint** (`host=soleur-inngest` ships `inngest-heartbeat` ×3726, plus `doppler`/`sshd`/`systemd`;
-verified by a second content-keyed query, not by trusting the group-by output). The Hetzner `name` ≠ the OS
-hostname here (something sets the inngest host's hostname to the short `soleur-inngest`).
+The deepened plan pinned the dedicated Inngest node's telemetry `host` value as **`soleur-inngest-server-prd`**,
+citing `inngest.tf:291`. **That string never appears in telemetry** — because `inngest.tf:291` is a Better
+Stack **heartbeat monitor** (`betteruptime_heartbeat.inngest_prd`), NOT a Hetzner server. The actual Hetzner
+server is `hcloud_server.inngest` at **`inngest-host.tf:202`**, named **`soleur-inngest`**, and Hetzner seeds
+the OS hostname from the server `name` — so the dedicated node's Vector `host` = `soleur-inngest` = its
+`hcloud_server` name. The plan mis-sourced the identity from a similarly-named monitor resource. Confirmed
+independently by **service fingerprint** (`host=soleur-inngest` ships `inngest-heartbeat` ×3726 plus
+`doppler`/`sshd`/`systemd`; second content-keyed query, not the group-by output).
 
 **Consequences for the follow-through (corrected):**
 - A pure allowlist keyed on the dedicated node (`PASS iff soleur-inngest-prd only by <dedicated>`) would have

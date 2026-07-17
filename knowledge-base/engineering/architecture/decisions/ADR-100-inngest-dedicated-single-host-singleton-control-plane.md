@@ -345,8 +345,9 @@ stale co-located-era `host_name=soleur-inngest-prd` until its next immutable rec
 with the dedicated node on Better Stack source 2457081. Treat `host_name=soleur-inngest-prd` as suspect
 until every emitting host is post-#6396-born; the live invariant is enforced by the #6616 read-only
 follow-through (auto-closes on the web-1 recreate), not by the render alone. (The dedicated node's
-telemetry `host` is `soleur-inngest`, its OS hostname — not `soleur-inngest-server-prd`, the Hetzner
-resource `name`.)
+telemetry `host` is `soleur-inngest` = its `hcloud_server.inngest` name, inngest-host.tf:202, and thus
+its OS hostname — NOT `soleur-inngest-server-prd`, which is a `betteruptime_heartbeat` monitor name,
+inngest.tf:291, and never appears in telemetry.)
 
 **Blast radius (SEC-H3, documented not eliminated):** the signing key authorizes the entire ~60-
 function registry, several running in the web-app process with full prd env (GHCR token minter,

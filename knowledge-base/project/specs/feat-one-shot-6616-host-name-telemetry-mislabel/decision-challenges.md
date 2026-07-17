@@ -33,13 +33,15 @@ generic standing detector then (the cut design is preserved in this plan's git h
 ## DC-2 — Live diagnosis refuted the plan's pinned dedicated-node identity (correctness fix, applied at /work)
 
 **Decision (applied):** The deepened plan pinned the dedicated Inngest node's telemetry `host` as
-`soleur-inngest-server-prd` (the Hetzner resource `name`, `inngest.tf:291`) and keyed the follow-through
-as an allowlist ("PASS iff `soleur-inngest-prd` emitted only by that host"). The Phase-0 **live query
-(creds were available in-session) refuted this**: `soleur-inngest-server-prd` never appears in telemetry;
-the dedicated node's real `host` is `soleur-inngest` (confirmed by its `inngest-heartbeat` service
-fingerprint, not by trusting the group-by). I re-keyed the follow-through inline to **FAIL on
-authoritative web-host identities** (`soleur-web-platform`/`soleur-web-2`, `server.tf:225`) with a
-positive `soleur-inngest` liveness marker gating PASS.
+`soleur-inngest-server-prd`, citing `inngest.tf:291`, and keyed the follow-through as an allowlist
+("PASS iff `soleur-inngest-prd` emitted only by that host"). The Phase-0 **live query (creds were
+available in-session) refuted this**: `soleur-inngest-server-prd` never appears in telemetry — because
+`inngest.tf:291` is a Better Stack **heartbeat monitor** (`betteruptime_heartbeat`), not the Hetzner
+server. The real `hcloud_server.inngest` (`inngest-host.tf:202`) is named `soleur-inngest`, which = the
+node's OS hostname / Vector `host` (confirmed by its `inngest-heartbeat` service fingerprint). I re-keyed
+the follow-through inline to **FAIL on authoritative web-host identities** (`soleur-web-platform`/
+`soleur-web-2`, `server.tf:225`) with a positive `soleur-inngest` liveness marker gating PASS, and added
+a parity battery coupling all three pinned constants to their IaC sources.
 
 **Why applied (≤10-line correctness fix, not an architecture fork):** the plan's allowlist would have
 **false-FAILed forever** on the dedicated node's own generic early-boot rows

@@ -32,22 +32,28 @@ The physical fix is a web-1 **immutable recreate** (SSH edits are forbidden per 
 #6616 ships diagnosis + record-correction + an **armed, read-only follow-through** that auto-closes it
 once web-1 is eventually recreated (the GA blue-green host-replaceability work) and the label clears.
 
-## The trap that live data caught: Hetzner resource `name` ≠ OS hostname
+## The trap that live data caught: the plan pinned identity from the WRONG resource
 
 The deepened plan pinned the dedicated node's telemetry `host` value as **`soleur-inngest-server-prd`**,
-reasoning that Hetzner sets the OS hostname from the server `name` (`inngest.tf:291`). **The live query
-refuted this** — `soleur-inngest-server-prd` never appears in telemetry. The dedicated node's real
-`host` is the short **`soleur-inngest`**, authoritatively identified not by trusting the (possibly
-poisoned) group-by output but by its **service fingerprint**: a second content-keyed query showed
-`host=soleur-inngest` ships the `inngest-heartbeat` service (×3726) plus `doppler`/`sshd`/`systemd` —
-unmistakably the dedicated node. (Web hosts DO get OS hostname = server name: web-1's `host` is
-`soleur-web-platform`, matching `server.tf:225`. The inngest host is the exception — something sets its
-hostname to the short form.)
+citing `inngest.tf:291`. **The live query refuted this** — `soleur-inngest-server-prd` never appears in
+telemetry. The reason is a mis-sourced citation: `inngest.tf:291` is a **Better Stack heartbeat monitor**
+(`resource "betteruptime_heartbeat" "inngest_prd" { name = "soleur-inngest-server-prd" }`), NOT a Hetzner
+server. The actual Hetzner server is `hcloud_server.inngest` at **`inngest-host.tf:202`**, named
+**`soleur-inngest`** — and Hetzner *does* seed the OS hostname from the server `name`, so the dedicated
+node's telemetry `host` **equals** its `hcloud_server` name (the same rule `server.tf:225`'s own comment
+documents for the web hosts). Had the plan read the `hcloud_server` resource instead of the
+similarly-named heartbeat, it would have gotten `soleur-inngest` directly.
 
-**Lesson (a specific instance of `hr-when-a-plan-specifies-relative-paths-e-g`):** a plan-quoted
-identity constant is a *precondition to verify against telemetry*, not a fact. Identify a host by an
-**unforgeable content fingerprint** (the service only it runs), then read its label — never assume the
-Terraform resource name equals the OS hostname.
+The correct value was confirmed independently by **service fingerprint**: a second content-keyed query
+showed `host=soleur-inngest` ships the `inngest-heartbeat` service (×3726) plus `doppler`/`sshd`/`systemd`
+— unmistakably the dedicated node.
+
+**Lesson (a specific instance of `hr-when-a-plan-specifies-relative-paths-e-g`):** a plan-quoted identity
+constant is a *precondition to verify*, not a fact — and verify it against the RIGHT resource. Pin a
+host's telemetry identity from the `hcloud_server` resource that provisions it (its `name` = its OS
+hostname), never from a similarly-named `betteruptime_heartbeat`/monitor/DNS resource that merely shares
+a naming stem; then confirm against an **unforgeable content fingerprint** (the service only that host
+runs) and the live telemetry.
 
 ## Identity, not cardinality — and why an allowlist was the wrong shape here
 

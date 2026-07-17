@@ -15,6 +15,18 @@ deepened: 2026-07-17
 
 Ref #6616. Surfaced by #6594 (CLOSED, superseded by #6613 MERGED); poisons attributions built on `host_name`.
 
+> **⚠️ POST-PLAN CORRECTION (applied at /work, 2026-07-17 — the live diagnosis refuted a plan
+> precondition).** Throughout this plan the dedicated Inngest node's telemetry `host` is pinned as
+> `soleur-inngest-server-prd`. **That is wrong** — it is a Better Stack `betteruptime_heartbeat` monitor
+> name (`inngest.tf:291`), never a telemetry value. The node's real Vector `host` is **`soleur-inngest`**
+> = its `hcloud_server.inngest` name (`inngest-host.tf:202`); the plan mis-sourced the identity from a
+> similarly-named monitor. Consequently the shipped follow-through keys FAIL on the authoritative
+> **web-host denylist** (`soleur-web-platform`/`soleur-web-2`, `server.tf:225`) — the exact bug the issue
+> names — with a positive `host=soleur-inngest` liveness marker gating PASS (a pure dedicated-node
+> allowlist, as this plan's body describes, would false-FAIL forever on the node's own generic early-boot
+> rows). All `soleur-inngest-server-prd` / allowlist references below are superseded by this banner. Full
+> record: `session-state.md` §Work Phase + `decision-challenges.md` DC-2.
+
 ## Enhancement Summary
 
 **Deepened 2026-07-17.** 4-agent review panel (architecture-strategist, observability-coverage-reviewer,
@@ -343,10 +355,10 @@ error_reporting:
   fail_loud: true  # TRANSIENT on any creds/query/schema-liveness fault — never a false PASS/close (#5934)
 failure_modes:
   - mode: web host wearing the dedicated node's host_name (the #6616 collision)
-    detection: hostname-mislabel-web1-6616.sh identity check — soleur-inngest-prd emitted by any host != soleur-inngest-server-prd (in-source telemetry, read-only)
+    detection: hostname-mislabel-web1-6616.sh identity check — soleur-inngest-prd emitted by a WEB-host identity (soleur-web-platform/soleur-web-2, server.tf:225) [corrected at /work; see banner] (in-source telemetry, read-only)
     alert_route: FAIL comment on #6616 (leaves it open); resolution auto-closes on PASS post-recreate
   - mode: source 2457081 / the dedicated node goes dark (would vacuously read no collision)
-    detection: positive schema-liveness marker required (>=1 soleur-inngest-server-prd row) before any PASS
+    detection: positive schema-liveness marker required (>=1 host=soleur-inngest row — the dedicated node's real OS hostname) before any PASS
     alert_route: TRANSIENT — sweeper ERRORED Sentry check-in, no false close
   - mode: the sweeper itself goes dark
     detection: missed sweeper Sentry cron check-in
