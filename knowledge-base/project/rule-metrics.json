@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-17T19:38:49Z",
+  "generated_at": "2026-07-17T23:39:06Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -43,19 +43,6 @@
     },
     {
       "id": "cq-agents-md-tier-gate",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → docs-only"
-    },
-    {
-      "id": "cq-agents-md-why-single-line",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -653,6 +640,19 @@
       "rule_text_prefix": " → core"
     },
     {
+      "id": "hr-ssh-diagnosis-verify-firewall",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
       "id": "hr-tagged-build-workflow-needs-initial-tag-push",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -732,19 +732,6 @@
     },
     {
       "id": "hr-weigh-every-decision-against-target-user-impact",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → core"
-    },
-    {
-      "id": "hr-when-a-command-exits-non-zero-or-prints",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -875,19 +862,6 @@
     },
     {
       "id": "rf-before-spawning-review-agents-push-the",
-      "section": "Review & Feedback",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → rest"
-    },
-    {
-      "id": "rf-never-skip-qa-review-before-merging",
       "section": "Review & Feedback",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1303,22 +1277,48 @@
       "rule_text_prefix": " → core"
     },
     {
-      "id": "hr-ssh-diagnosis-verify-firewall",
-      "section": "Hard Rules",
+      "id": "cq-agents-md-why-single-line",
+      "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
       "applied_count": 1,
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-17T17:44:36Z",
-      "first_seen": "2026-07-17T17:44:36Z",
+      "last_hit": "2026-07-17T23:39:06Z",
+      "first_seen": "2026-07-17T23:39:06Z",
+      "rule_text_prefix": " → docs-only"
+    },
+    {
+      "id": "rf-never-skip-qa-review-before-merging",
+      "section": "Review & Feedback",
+      "hit_count": 2,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 2,
+      "prevented_errors": 2,
+      "last_hit": "2026-07-17T23:29:53Z",
+      "first_seen": "2026-07-17T23:29:51Z",
+      "rule_text_prefix": " → rest"
+    },
+    {
+      "id": "hr-when-a-command-exits-non-zero-or-prints",
+      "section": "Hard Rules",
+      "hit_count": 4,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 4,
+      "prevented_errors": 4,
+      "last_hit": "2026-07-17T23:29:54Z",
+      "first_seen": "2026-07-17T23:29:52Z",
       "rule_text_prefix": " → core"
     }
   ],
   "summary": {
     "total_rules_tagged": 101,
-    "rules_unused_over_8w": 100,
+    "rules_unused_over_8w": 98,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,
