@@ -76,6 +76,50 @@ case the hatch exists for. The change is additive.
 
 ---
 
+## LIVE RE-MEASUREMENT, 2026-07-17 09:04:20Z — pulled at /work, not assumed
+
+Self-pulled from Better Stack (`--since 180m --grep ZOT_GATE --grep PRELUDE`), so this is observation,
+not inference. Three results, one of which is a NEW open question this round did not know it had.
+
+**1. Premise (A) HOLDS — the failure is still live.** A deploy ran at 09:04:20Z today and both arms failed:
+
+```
+PRELUDE: docker login ghcr.io FAILED with baked/first creds class=cred_store rc=1 stderr_chars=97 stdout_chars=0 kw=errsaving tok=error docker_ver=29.3.0 (registry=ghcr)
+PRELUDE: docker login ghcr.io FAILED after Doppler re-fetch  class=cred_store rc=1 stderr_chars=97 stdout_chars=0 kw=errsaving tok=error docker_ver=29.3.0 (registry=ghcr)
+ZOT_GATE: docker login 10.0.1.30:5000 FAILED class=cred_store http=none rc=1 stderr_chars=97 stdout_chars=0 kw=errsaving tok=error docker_ver=29.3.0 — GHCR path (fallback)
+```
+
+So the round WILL report: deploys are running, and every one of them exercises the failure. The
+"zero FAILED window forecloses the deliverable" branch is real but is not the likely path.
+
+**2. `stderr_chars=97` on the ZOT arm too — the uint32-suffix explanation is now OBSERVED, not inferred.**
+On 2026-07-15 the arms read 96 (zot) / 97 (ghcr) and reconciling them took the temp-suffix argument. Today
+BOTH read 97. A registry-specific cause cannot produce a value that moves on the zot arm alone between
+observations while tracking the ghcr arm; a 9-vs-10-digit `uint32` suffix does exactly that. The
+"both registries are the identical error" conclusion now rests on measurement.
+
+**3. OPEN QUESTION — `host_name=soleur-inngest-prd`, not web-1. DO NOT SHIP A CONCLUSION ON THIS.**
+Every failing row carries `"host":"soleur-web-platform"` AND `"host_name":"soleur-inngest-prd"`, with
+`_SYSTEMD_UNIT=webhook.service`. Those two labels disagree, and `vector.toml` (§"the ONE Logs source
+2457081") states **`host_name` is the sole discriminator** between hosts; `server.tf` › the per-host
+`host_name` ternary maps `web-1 -> "soleur-web-platform"`, anything else -> `"soleur-<key>"`. So a row
+whose discriminator says `soleur-inngest-prd` did not come from web-1 by that field's own contract.
+Exactly one of these is true, and this round has NOT measured which:
+  - (a) the discriminator is mislabelled on this host (a Vector/bootstrap substitution bug), and the
+    datum is web-1's as the brief assumed; or
+  - (b) the failing `docker login` runs on a host that is NOT web-1 — in which case **the probe must be
+    delivered THERE or it reports nothing**, and `cloud-init-inngest.yml` does reference "ci-deploy.sh
+    (its baked-cred path)", so this is not far-fetched.
+This is the plan's own pre-existing open question ("confirm `deploy_pipeline_fix` delivers `ci-deploy.sh`
+to EVERY host that runs a `docker login`") arriving with evidence attached. **The brief, this plan, and
+the shipped comments all say "web-1"; that attribution is now UNVERIFIED.**
+**The probe settles it for free** — `kw` and `errno_chars` land in the same Better Stack row as
+`host_name`, so the first report names its own host. Read the host field before reading the errno.
+Tracked on 6565; deliberately NOT resolved here, because guessing before the instrument reports is the
+one thing this round exists to prevent.
+
+---
+
 ## The measured datum
 
 ```
