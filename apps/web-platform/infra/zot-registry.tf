@@ -128,15 +128,17 @@ data "hcloud_server_type" "registry" {
   name = var.registry_server_type
 }
 
-# #6497 — BOTH attributes below are load-bearing for a SECURITY property in another file.
-# `ci-deploy.sh` › `_login_hatch()` emits `stderr_chars` (the true length of `docker login`'s
-# stderr) off-box to Better Stack + Sentry. That is safe ONLY because this token is
+# #6497 / #6565 — BOTH attributes below are load-bearing for a SECURITY property in another file.
+# `ci-deploy.sh` › `_login_hatch()` emits TWO length fields off-box to Better Stack + Sentry:
+# `stderr_chars` (the length of `docker login`'s whole stderr) and `errno_chars` (#6565 — the
+# length of its FINAL ": "-delimited segment). Both are safe ONLY because this token is
 # (a) fixed-length, so a registry echoing it moves the length by the same amount for every
 # possible value (zero bits about content), and (b) drawn from `[A-Za-z0-9]` (`special = false`),
 # so no character expands under a registry's JSON/URL escaping into a CONTENT-DEPENDENT length.
 # Changing `length` to a variable-length credential (a JWT / OIDC-minted session token) OR
-# setting `special = true` turns `stderr_chars` into a length oracle on a live credential, and
-# the field MUST be bucketed first. Read `_login_hatch()`'s field table before touching either.
+# setting `special = true` turns BOTH fields into a length oracle on a live credential, and
+# **BOTH MUST be bucketed first — bucketing only `stderr_chars` leaves `errno_chars` carrying the
+# same oracle through a narrower window.** Read `_login_hatch()`'s field table before touching either.
 # The reverse-citation exists because the trigger was written in the CONSUMER and this is the
 # PRODUCER — and `specs/feat-registry-oidc-migration/spec.md` FR2/FR3 already schedule exactly
 # that change.
