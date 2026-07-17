@@ -58,13 +58,15 @@ enforcement probe (Phase-0-gated). Test-first per `cq-write-failing-tests-before
       cron-monitor slug (event-driven ≠ cadence).
 - [ ] 2.3 GREEN (Fix 2a): `issue-alerts.tf` — add dedicated `seccomp_remediation_failed` alert.
 - [ ] 2.4 **Only if task 0.4 gated Fix 2b in:** `scheduled-seccomp-enforcement.yml` (6h `cron` +
-      `workflow_dispatch`; `actions: write` + `issues: write`) — reads LIVE `host_present`/`loaded_matches`
+      `workflow_dispatch`; `actions: write` + `issues: write`; carry the
+      `<!-- gate-override: new-scheduled-cron-prefer-inngest -->` comment with the external-watchdog
+      justification — the PreToolUse hook requires it) — reads LIVE `host_present`/`loaded_matches`
       from `/hooks/deploy-status` (NEVER recorded `.seccomp_profile_sha256`); pages `error` iff
       `host_present!=true || loaded_matches!=true` (HEAD-independent); on unenforcement age-gated-dispatch
       `apply-deploy-pipeline-fix.yml` + file `ci/seccomp-unenforced` issue.
 - [ ] 2.5 (Fix 2b) fail-safe: `set -uo pipefail`, `record_failure()`, initial in-progress check-in, explicit
       `error` + `probe_unavailable` on unreadable/secret-unset (never omit); untrusted body stripped.
-- [ ] 2.6 (Fix 2b) `cron-monitors.tf` — one `sentry_monitor` (slug = workflow filename).
+- [ ] 2.6 (Fix 2b) `cron-monitors.tf` — one `sentry_cron_monitor` (slug = workflow filename).
 - [ ] 2.7 (Fix 2b) RED/mutation: benign deploy-lag frame → `ok` not `error` (P1-5); each conjunct mutated
       independently incl. `loaded_matches` (P2-2); fail-safe mutant (`ok` on unreadable) RED.
 

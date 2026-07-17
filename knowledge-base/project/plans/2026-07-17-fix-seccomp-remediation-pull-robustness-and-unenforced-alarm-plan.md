@@ -10,6 +10,42 @@ adr: ADR-079 (amend — governing decision for the profile-apply→redeploy veri
 
 # fix: seccomp remediation redeploy fails (image_pull_failed on an already-running tag) — profile left unenforced and invisible
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-17 · **Reviews applied:** SpecFlow + fable advisor + architecture-strategist +
+code-simplicity + CTO (5-signal), then deepen-plan hard gates + precedent-diff + live-citation verification.
+
+### Key improvements from review
+1. **Fix 1 was a no-op as first written (architecture P1-A):** a bare `return 0` left `IMAGE` un-reassigned →
+   cosign fail-open + a fresh network pull that dies anyway. Rewritten to reuse the **running container's
+   image ID** as `VERIFIED_REF` with an **explicit cosign-reuse** decision (`soleur-web-platform` literal,
+   not the nonexistent `$CONTAINER_NAME`, P1-B). Cross-refs ADR-087 (cosign) + ADR-096 (pull chain).
+2. **Fix 2 restructured (CTO + simplicity):** the observed incident is an *active* failure → **Fix 2a**
+   (item-4 files a plain-language `ci/seccomp-unenforced` GitHub issue + Sentry alert) always ships; the
+   **standing drift probe (Fix 2b)** is Phase-0-gated and, when built, **auto-dispatches** the re-enforcement
+   (a non-technical founder can't run `gh workflow run`). Mirrors the accepted `scheduled-inngest-health` watchdog.
+3. **Wiring corrections:** dedicated `local_cache_reload_rate` / `seccomp_remediation_failed` issue-alerts
+   (NOT overloading the GHCR-retirement gate); do NOT touch `zot-soak-6122.sh` (`!=5` count guard);
+   `scheduled-zot-restart-loop.yml:229` health-grep extended to `local-cache`.
+4. **Premise reconciliation:** issue ask #1 (state-file `.tag`) is **superseded by ADR-079 #5955** — the
+   redeploy resolves its tag from `/health`, not `.tag`. The plan must not chase that non-bug.
+
+### Verified in the deepen pass
+- Citations live: #5955 / #6090 / #6537 (CLOSED issues), #6246 (MERGED), ADR-087 + ADR-096 exist.
+- Sentry cron resource type is `sentry_cron_monitor` (corrected from `sentry_monitor`).
+- Fix 2b GH-Actions-cron choice is the sanctioned `gate-override` sibling of `scheduled-inngest-health.yml`
+  (49 Inngest crons exist; this watchdog must be external to the app + dispatches a GH workflow).
+- Hard gates 4.6 (User-Brand Impact) / 4.7 (Observability) / 4.8 (no PAT var) / 4.9 (no UI) all pass.
+
+### Network-Outage Deep-Dive (Phase 4.5 — triggered on `unreachable` + Phase 4 provisioner-SSH)
+The `unreachable` keyword is a **monitor fail-safe branch** (endpoint-down → explicit `error`), not a
+connectivity outage to diagnose — no L3/L7 firewall hypothesis applies to the plan's own code. The one real
+SSH dependency is **Phase 4's `apply-web-platform-infra.yml`** (which runs `server.tf`'s `provisioner "file"`
+to deliver the new `ci-deploy.sh` over the CF tunnel). That path is **CI-driven from GitHub runners through
+the existing CF-Access tunnel** (not the operator's laptop egress IP), and the plan does **not** modify the
+tunnel/firewall — so the #3061-class egress-drift risk does not apply. If that apply ever fails
+`connection reset`, it is the standing tunnel/firewall surface, out of this plan's scope.
+
 ## Overview
 
 The `apply-deploy-pipeline-fix.yml` "item 4" step (ADR-079 / #5875) exists to close the "applied ≠
@@ -197,7 +233,19 @@ This is the whole visibility fix for the observed failure, and it is HEAD-indepe
 monitor). BUILD ONLY IF Phase 0 confirms a non-merge unenforcement path exists** (a host replacement / reboot
 that leaves the container unenforced WITHOUT an item-4 run — the `host_present=false` delivery-leg class). If
 Phase 0 cannot confirm such a path, **defer 2b to a tracked follow-up** (§Deferred) — Fix 2a covers every
-unenforcement that an item-4 run produces. If built, it mirrors `scheduled-inngest-health.yml`:
+unenforcement that an item-4 run produces.
+
+**Scheduled-work vehicle (deepen precedent-diff, Phase 4.4):** the repo has 49 Inngest cron functions and
+the `new-scheduled-cron-prefer-inngest.sh` PreToolUse hook normally routes new schedules to Inngest (ADR-033).
+Fix 2b is the sanctioned exception and MUST carry the `<!-- gate-override: new-scheduled-cron-prefer-inngest -->`
+comment (as `scheduled-inngest-health.yml` does), justified: (a) it is a **health watchdog that must be
+external to the app substrate** — an Inngest cron cannot observe the deploy host / cannot fire while the app
+is degraded (the exact `scheduled-inngest-health.yml` rationale); (b) it **auto-dispatches a GitHub workflow**
+(`apply-deploy-pipeline-fix.yml`) via `github.token actions:write` — a GitHub-native operation an Inngest
+function cannot do without extra GH auth; (c) it is git/CI-scoped (reads a deploy hook, files a GH issue).
+This is the direct sibling of the accepted external watchdog, not a new pattern.
+
+If built, it mirrors `scheduled-inngest-health.yml`:
 - Every 6h (`cron`) + `workflow_dispatch`, GET `/hooks/deploy-status` (HMAC + CF-Access as item-4
   `:533-542`), read the **LIVE** `seccomp_profile_host_present` / `seccomp_profile_loaded_matches_host`.
   These are runtime ground truth (ADR-079 #5960, `cat-deploy-state.sh:seccomp_live_json` ~:300-363:
@@ -272,7 +320,7 @@ regardless of outcome (code-simplicity MEDIUM), so its RCA moves to the §Deferr
   `issues: write`.
 - **Fix 2b (only if Phase 0 gates it in):** `.github/workflows/scheduled-seccomp-enforcement.yml` (new; 6h
   `cron` + `workflow_dispatch`; `actions: write` for the auto-dispatch, `issues: write`),
-  `apps/web-platform/infra/sentry/cron-monitors.tf` (one `sentry_monitor`; slug = filename per
+  `apps/web-platform/infra/sentry/cron-monitors.tf` (one `sentry_cron_monitor`; slug = filename per
   `cron-monitors.tf:8-10`). NOT a required check.
 - RED tests (whichever pieces are built): enforced-frame → `ok`; `host_present=false` OR
   `loaded_matches=false` → `error` + auto-dispatch (age-gated) + issue; benign deploy-lag frame
@@ -384,7 +432,7 @@ discoverability_test:
   (`op:seccomp-remediation-failed`, Fix 2a). Do NOT extend `zot_mirror_fallback_rate` (it gates the
   irreversible ADR-096 GHCR retirement — architecture P2).
 - `apps/web-platform/infra/sentry/cron-monitors.tf` — **only if Fix 2b is Phase-0-gated in**: add ONE
-  `sentry_monitor` for `scheduled-seccomp-enforcement` (slug = filename per `cron-monitors.tf:8-10`;
+  `sentry_cron_monitor` for `scheduled-seccomp-enforcement` (slug = filename per `cron-monitors.tf:8-10`;
   `failure_issue_threshold` default 1). Provider: existing `jianyuan/sentry` (`main.tf`). No new `TF_VAR_*`.
 - Applied by the existing auto-apply root `apply-sentry-infra.yml` (`paths: infra/sentry/**`, FULL-ROOT
   since #6589) — declaring a resource applies it on merge. No new secret, host, or vendor.
@@ -399,7 +447,7 @@ discoverability_test:
   `lifecycle.ignore_changes` needed. State lands in the sentry root's R2 backend (existing).
 
 ### Vendor-tier reality check
-- `sentry_monitor` (cron) is available on the current Sentry plan (8+ siblings already declared in
+- `sentry_cron_monitor` (cron) is available on the current Sentry plan (8+ siblings already declared in
   `cron-monitors.tf`). NOT a `betteruptime_policy`-class paid-tier gate. No `count = var.*_paid_tier`
   guard required.
 
@@ -496,7 +544,7 @@ Not applicable — Product NONE, no UI-surface file in Files-to-Edit.
       reads LIVE `host_present`/`loaded_matches_host` from `/hooks/deploy-status` (never the recorded
       `.seccomp_profile_sha256`); pages `error` iff `host_present!=true || loaded_matches!=true`
       (HEAD-independent, P1-5); on unenforcement age-gated-auto-dispatches `apply-deploy-pipeline-fix.yml` +
-      files the `ci/seccomp-unenforced` issue; a `sentry_monitor` in `cron-monitors.tf` (slug=filename).
+      files the `ci/seccomp-unenforced` issue; a `sentry_cron_monitor` in `cron-monitors.tf` (slug=filename).
 - [ ] If built: fails safe with an EXPLICIT `error` + `probe_unavailable` (never omit) on unreadable/secret-unset
       (`set -uo pipefail`, `record_failure()`, initial in-progress check-in — P1-3/P1-4/P2-4); benign
       deploy-lag frame → `ok` not `error` (P1-5); untrusted body stripped; each conjunct mutation-tested incl.
@@ -594,7 +642,7 @@ Not applicable — Product NONE, no UI-surface file in Files-to-Edit.
   amendment. Not built here because Fix 2 makes the residual failure loud and Fix 1 covers the common case.
 - **Risk: Phase-0 diagnosis inconclusive on the delivery leg (`host_present=false`).** Then the delivery-leg
   root cause is filed as a tracked follow-up (§Deferred); Fixes 1 & 2 ship regardless (both stand alone).
-- **Dependency:** the Sentry `sentry_monitor` resource + `apply-sentry-infra.yml` auto-apply (existing).
+- **Dependency:** the Sentry `sentry_cron_monitor` resource + `apply-sentry-infra.yml` auto-apply (existing).
 
 ## Deferred (tracked)
 
