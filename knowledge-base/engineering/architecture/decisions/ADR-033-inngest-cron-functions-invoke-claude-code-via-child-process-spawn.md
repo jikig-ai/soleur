@@ -151,7 +151,7 @@ Phase 2 (#3948) migrates 21 additional functions to the single `cron-platform` p
 
 | Prefix | Schedule | Sentry cron monitor | Example |
 |--------|----------|--------------------|---------|
-| `cron-` | Recurring (Inngest `cron:` field) | Yes — `sentry_cron_monitor` resource + `-target=` | `cron-daily-triage.ts` |
+| `cron-` | Recurring (Inngest `cron:` field) | Yes — a `sentry_cron_monitor` resource (declaring it applies it; full-root apply since #6589, no `-target=` line) | `cron-daily-triage.ts` |
 | `oneshot-` | One-time fire, no recurring schedule | No — error alerting only via `reportSilentFallback` | `oneshot-gdpr-gate-50d-eval.ts` |
 | `event-` | Triggered by `inngest.send()` (manual or cascade) | No — no recurring schedule to monitor | `event-ship-merge.ts` |
 | `_` (underscore) | N/A — shared helper, not a function | N/A | `_cron-shared.ts` |
@@ -160,7 +160,7 @@ Oneshots and event-triggered functions do NOT get `sentry_cron_monitor` resource
 
 ### Registration checklist (a NEW `cron-*` claude-eval function)
 
-`[Added 2026-06-30 — #5631.]` Adding a recurring claude-eval cron touches **eight** gated locations, not the "four" (handler + manifest + metadata + serve route) often cited in PR bodies. Each location below has a CI gate that fails closed; a stale or bot-generated PR that ran before some gate existed will look green until rebased onto current `main`. Mirror the structurally-closest live cron (claude-eval + `safeCommitAndPr` ⇒ `cron-seo-aeo-audit.ts`) signature-for-signature rather than writing the handler from the substrate's prose.
+`[Added 2026-06-30 — #5631. Revised 2026-07-17 — #6589: was eight; the `-target=` allow-list location is gone (full-root apply), leaving seven.]` Adding a recurring claude-eval cron touches **seven** gated locations, not the "four" (handler + manifest + metadata + serve route) often cited in PR bodies. Each location below has a CI gate that fails closed; a stale or bot-generated PR that ran before some gate existed will look green until rebased onto current `main`. Mirror the structurally-closest live cron (claude-eval + `safeCommitAndPr` ⇒ `cron-seo-aeo-audit.ts`) signature-for-signature rather than writing the handler from the substrate's prose.
 
 | # | Location | What to add | Gate that catches an omission |
 |---|----------|-------------|-------------------------------|
@@ -170,8 +170,7 @@ Oneshots and event-triggered functions do NOT get `sentry_cron_monitor` resource
 | 4 | `server/inngest/routine-metadata.ts` | `ROUTINE_METADATA` entry | routine-metadata parity test |
 | 5 | `server/inngest/functions/_cron-claude-eval-substrate.ts` | `CRON_BASH_ALLOWLISTS` entry (or `TIER2_DEFERRED_CRONS` if deferred) — substrate-contained crons MUST be in exactly one | `cron-containment-classify` |
 | 6 | `test/server/inngest/function-registry-count.test.ts` | Bump the `route.ts functions array` count | `function-registry-count (a)` |
-| 7 | `infra/sentry/cron-monitors.tf` | `sentry_cron_monitor` resource for the slug | `sentry-monitor-iac-parity` + `function-registry-count (c)` |
-| 8 | `.github/workflows/apply-sentry-infra.yml` | `-target=sentry_cron_monitor.<slug>` line | `function-registry-count (f)` |
+| 7 | `infra/sentry/cron-monitors.tf` | `sentry_cron_monitor` resource for the slug (declaring it applies it — the full-root apply needs no workflow edit) | `sentry-monitor-iac-parity` + `function-registry-count (c)` |
 
 Plus the `cron-tier2-parity` sibling-set sweep (`.github/enforcement-contracts.json`) forces `cron-safe-commit-parity.test.ts` (add to `MIGRATED_PROMPT` for safe-commit crons) and `cron-shared.test.ts` into the same diff whenever `cron-manifest.ts` changes. Validate locally before push: `bunx vitest run test/server/inngest/{function-registry-count,sentry-monitor-iac-parity,cron-containment-classify,cron-safe-commit-parity,cron-shared}.test.ts`.
 
