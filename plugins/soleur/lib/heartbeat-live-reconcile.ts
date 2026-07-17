@@ -17,7 +17,12 @@ export interface DiscoveredHeartbeat {
   resourceName: string;
   /** The `name = "..."` attribute — how live Better Stack keys the monitor. */
   liveName: string;
-  /** The source-declared `paused` value (defaults to false when the attribute is absent). */
+  /**
+   * The source-declared `paused` value (defaults to false when the attribute is absent). Carried
+   * for reporting/diagnostics only — `reconcileHeartbeats` keys its decision on live state +
+   * `feeder.kind`, never on this (source `paused` is only a lower bound on live; that decoupling is
+   * the whole reason a live reconcile exists).
+   */
   sourcePaused: boolean;
   /** Whether the block carries a `count =` meta-argument (the paid-tier item-1 carve-out). */
   countGated: boolean;
@@ -107,16 +112,19 @@ export function parseHeartbeatBlocks(tfText: string): DiscoveredHeartbeat[] {
   return out;
 }
 
-type ManifestRow = Pick<ManifestEntry, "name" | "feeder">;
+type ManifestRow = Pick<ManifestEntry, "name" | "feeder" | "arming_pending">;
 
 /**
  * Reconcile the live Better Stack payload against the MANIFEST + discovered `.tf` blocks.
  *
  * - **(a) fed-but-paused** — a heartbeat whose MANIFEST feeder is a working feeder
  *   (`kind ∈ {cron,timer}`) that is `paused` in the live payload (the #6537 9-days-dark shape).
+ *   A row carrying `arming_pending` is EXEMPT from (a): its paused state is a deliberately-deferred
+ *   arming window owned by an issue (ADR-117's FED-but-inert legal state), not a forgotten monitor.
  * - **(b) absent-live** — a non-count-gated heartbeat present in `.tf`/MANIFEST but missing from the
  *   live payload (the `git_data_prd` shape, #6548). Count-gated rows (the paid-tier webhook
  *   heartbeats, item 1) are intentionally absent under the free tier and are carved out.
+ *   `arming_pending` does NOT exempt (b) — a declared-but-not-applied monitor is still surfaced.
  *
  * The two classes are mutually exclusive per heartbeat (present-but-paused vs. absent).
  */
@@ -151,7 +159,7 @@ export function reconcileHeartbeats(
       continue;
     }
 
-    if (fed && present && livePausedByName.get(disc.liveName) === true) {
+    if (fed && !row.arming_pending && present && livePausedByName.get(disc.liveName) === true) {
       violations.push({
         resourceName: disc.resourceName,
         liveName: disc.liveName,

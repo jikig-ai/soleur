@@ -301,6 +301,13 @@ jobs:
             > "${RUNNER_TEMP}/reconcile-output.txt" 2>&1
           RC=$?
           set -e
+          # Normalize any exit outside the script's own 0/1/2 contract (a bun-level crash: OOM 137,
+          # SIGSEGV 139, timeout 124) into the error path. An abnormal crash MUST page, never green
+          # the liveness monitor — that is the 9-days-dark failure class this whole job exists to kill.
+          if [[ "$RC" != "0" && "$RC" != "1" && "$RC" != "2" ]]; then
+            echo "::error::Better Stack heartbeat live-reconcile exited abnormally (rc=$RC)"
+            RC=1
+          fi
           echo "rc=$RC" >> "$GITHUB_OUTPUT"
           cat "${RUNNER_TEMP}/reconcile-output.txt"
           if [[ "$RC" == "2" ]]; then
@@ -350,9 +357,21 @@ jobs:
               echo ""
               echo "</details>"
             } > /tmp/reconcile-body.md
+            # Escalate (re-email) when a NEW mismatched heartbeat appears while the issue is already
+            # open — a real regression must not hide silently under the deduped git_data/workspaces
+            # issue. Compare current marker names against everything already recorded on the issue.
+            CUR_NAMES=$(printf '%s\n' "$MARKERS" | grep -oE 'name=[^ ]+' | sort -u || true)
+            PRIOR=$(gh issue view "$EXISTING" --json body,comments \
+              --jq '.body + " " + ([.comments[].body] | join(" "))' 2>/dev/null || true)
+            ESCALATE=false
+            while IFS= read -r n; do
+              [[ -z "$n" ]] && continue
+              printf '%s' "$PRIOR" | grep -qF "$n" || ESCALATE=true
+            done <<< "$CUR_NAMES"
             gh issue comment "$EXISTING" --body-file /tmp/reconcile-body.md
             echo "created=false" >> "$GITHUB_OUTPUT"
-            echo "Updated existing reconcile issue #$EXISTING"
+            echo "escalate=$ESCALATE" >> "$GITHUB_OUTPUT"
+            echo "Updated existing reconcile issue #$EXISTING (escalate=$ESCALATE)"
           else
             {
               echo "## Better Stack heartbeat live-reconcile mismatch"
@@ -389,6 +408,7 @@ jobs:
               --milestone "Post-MVP / Later" \
               --body-file /tmp/reconcile-body.md
             echo "created=true" >> "$GITHUB_OUTPUT"
+            echo "escalate=false" >> "$GITHUB_OUTPUT"
             echo "Created new reconcile-mismatch issue"
           fi
 
@@ -396,7 +416,7 @@ jobs:
         id: reconcile_email
         # Creation-only for a mismatch (avoid twice-daily spam while a heartbeat awaits
         # disposition); always on a hard error (rc=1).
-        if: steps.reconcile.outputs.rc == '1' || steps.reconcile_issue.outputs.created == 'true'
+        if: steps.reconcile.outputs.rc == '1' || steps.reconcile_issue.outputs.created == 'true' || steps.reconcile_issue.outputs.escalate == 'true'
         env:
           RC: ${{ steps.reconcile.outputs.rc }}
         run: |
@@ -420,7 +440,7 @@ jobs:
           { echo "body<<EOFBODY"; cat /tmp/reconcile-email.html; echo "EOFBODY"; } >> "$GITHUB_OUTPUT"
 
       - name: Email notification (reconcile)
-        if: steps.reconcile.outputs.rc == '1' || steps.reconcile_issue.outputs.created == 'true'
+        if: steps.reconcile.outputs.rc == '1' || steps.reconcile_issue.outputs.created == 'true' || steps.reconcile_issue.outputs.escalate == 'true'
         uses: ./.github/actions/notify-ops-email
         with:
           subject: ${{ steps.reconcile_email.outputs.subject }}
@@ -436,7 +456,7 @@ jobs:
         uses: ./.github/actions/sentry-heartbeat
         with:
           monitor-slug: scheduled-heartbeat-reconcile
-          status: ${{ steps.reconcile.outputs.rc == '1' && 'error' || 'ok' }}
+          status: ${{ (steps.reconcile.outputs.rc == '0' || steps.reconcile.outputs.rc == '2') && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

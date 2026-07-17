@@ -23,7 +23,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { MANIFEST } from "../lib/heartbeat-manifest";
+import { MANIFEST, type ManifestEntry } from "../lib/heartbeat-manifest";
 import {
   type DiscoveredHeartbeat,
   type LiveHeartbeat,
@@ -94,6 +94,12 @@ export async function fetchLiveHeartbeats(opts: FetchOptions): Promise<FetchResu
         resp = await fetchImpl(url, {
           headers: { Authorization: `Bearer ${opts.token}`, Accept: "application/json" },
           signal: controller.signal,
+          // Do NOT auto-follow HTTP redirects: `fetch`'s default `redirect: "follow"` would re-issue
+          // the request — with the Bearer token attached — to a `Location` we never validate (a
+          // MITM/DNS-takeover/compromised-edge 3xx could exfiltrate the token). We inspect any 3xx
+          // ourselves below and refuse it. The API paginates via the response body (`pagination.next`,
+          // host-pinned by `isAllowedHeartbeatsUrl`), never via HTTP redirects.
+          redirect: "manual",
         });
       } catch (err) {
         // Thrown network/abort/timeout error — transient. Retry if attempts remain.
@@ -109,6 +115,11 @@ export async function fetchLiveHeartbeats(opts: FetchOptions): Promise<FetchResu
 
       if (resp.status === 401 || resp.status === 403) {
         return { ok: false, kind: "auth", detail: `HTTP ${resp.status}` };
+      }
+      // `redirect: "manual"` surfaces 3xx here instead of auto-following. The API never legitimately
+      // redirects, so refuse fail-closed — the token is never re-sent to a redirect target.
+      if (resp.status >= 300 && resp.status < 400) {
+        return { ok: false, kind: "error", detail: `unexpected redirect (HTTP ${resp.status})` };
       }
       if (resp.status === 429 || resp.status >= 500) {
         // Transient — retry if attempts remain.
@@ -176,15 +187,23 @@ export function discoverHeartbeatsFromInfra(infraDir: string): DiscoveredHeartbe
   return discovered;
 }
 
-/** Strip CR/LF so a marker line can never inject a GitHub Actions annotation. */
-const oneLine = (s: string) => s.replace(/[\r\n]+/g, " ");
+/**
+ * Sanitize a marker line: strip CR/LF (so it can never inject a GitHub Actions `::annotation::`) and
+ * backticks (so a heartbeat name can never break out of the ``` code fence in the auto-filed issue
+ * body — defense-in-depth; the names are our own `.tf` `name =` literals, not raw API data).
+ */
+const oneLine = (s: string) => s.replace(/[\r\n`]+/g, " ");
 
 interface RunResult {
   code: number;
   markers: string[];
 }
 
-export async function runReconcile(infraDir: string, opts: FetchOptions): Promise<RunResult> {
+export async function runReconcile(
+  infraDir: string,
+  opts: FetchOptions,
+  manifest: readonly Pick<ManifestEntry, "name" | "feeder" | "arming_pending">[] = MANIFEST,
+): Promise<RunResult> {
   if (!opts.token) {
     return {
       code: 1,
@@ -209,7 +228,7 @@ export async function runReconcile(infraDir: string, opts: FetchOptions): Promis
     };
   }
 
-  const violations = reconcileHeartbeats(MANIFEST, discovered, result.live);
+  const violations = reconcileHeartbeats(manifest, discovered, result.live);
   if (violations.length === 0) {
     return {
       code: 0,
