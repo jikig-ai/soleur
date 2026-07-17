@@ -197,17 +197,17 @@ None. (`gh issue list --label code-review --state open` queried; no open scope-o
 
 ### Pre-merge (PR / CI)
 
-- [ ] `docker-daemon.json` no longer exists; `docker-daemon.json.tmpl` exists with `insecure-registries` value `["${registry_endpoint}"]` and **no** `10.0.1.30:5000` literal.
-- [ ] `templatefile(".../docker-daemon.json.tmpl", { registry_endpoint = "10.0.1.30:5000" })` renders **byte-identical** to the pre-change `docker-daemon.json` (proves zero-churn; the `sha256` trigger value is unchanged).
-- [ ] `server.tf`: `local.docker_daemon_json` is a `templatefile()` of the `.tmpl` passing `registry_endpoint = local.registry_endpoint`; `triggers_replace = sha256(local.docker_daemon_json)`; `provisioner "file"` uses `content = local.docker_daemon_json`; remote-exec greps `${local.registry_endpoint}` (no literal).
-- [ ] `cloud-init.yml`'s `insecure-registries` value is `${registry_endpoint}`; `server.tf`'s cloud-init templatefile map passes `registry_endpoint = local.registry_endpoint`.
-- [ ] **Mutation test (shape-based residual scan):** non-comment literals of shape `IP:5000` (`[0-9]{1,3}(\.[0-9]{1,3}){3}:5000`) across `docker-daemon.json.tmpl` + `cloud-init.yml` + `server.tf` count **0** — reintroducing any hardcoded endpoint copy (the exact #6448 drift) makes this go RED; the pre-fix self-referential green is gone. Renumber-proof (shape, not the pinned value).
-- [ ] `bash apps/web-platform/infra/registry-insecure-config.test.sh` → `0 failed`, exit 0.
-- [ ] `bash apps/web-platform/infra/private-nic-guard.test.sh` → `0 failed`, exit 0 (unchanged behavior; stale note corrected).
-- [ ] `bash apps/web-platform/infra/server-tf-set-e.test.sh` → passes (remote-exec `set -e` invariant preserved).
-- [ ] `bash .github/scripts/validate-infra-templates.sh apps/web-platform/infra` → `rendered+validated N/N`, exit 0, and its output names `docker-daemon.json.tmpl` (auto-coverage).
-- [ ] `bash .github/scripts/test/fixtures-validate-infra-templates.sh` → passes (F9/F9b unaffected).
-- [ ] `cd apps/web-platform/infra && terraform fmt -check && terraform validate` pass (fmt-clean; `terraform_data` local + provisioner rewire is valid HCL; confirms the novel-to-repo `content=` provisioner form is accepted).
+- [x] `docker-daemon.json` no longer exists; `docker-daemon.json.tmpl` exists with `insecure-registries` value `["${registry_endpoint}"]` and **no** `10.0.1.30:5000` literal.
+- [x] `templatefile(".../docker-daemon.json.tmpl", { registry_endpoint = "10.0.1.30:5000" })` renders **byte-identical** to the pre-change `docker-daemon.json` (proves zero-churn; the `sha256` trigger value is unchanged).
+- [x] `server.tf`: `local.docker_daemon_json` is a `templatefile()` of the `.tmpl` passing `registry_endpoint = local.registry_endpoint`; `triggers_replace = sha256(local.docker_daemon_json)`; `provisioner "file"` uses `content = local.docker_daemon_json`; remote-exec greps `${local.registry_endpoint}` (no literal).
+- [x] `cloud-init.yml`'s `insecure-registries` value is `${registry_endpoint}`; `server.tf`'s cloud-init templatefile map passes `registry_endpoint = local.registry_endpoint`.
+- [x] **Mutation test (shape-based residual scan):** non-comment literals of shape `IP:5000` (`[0-9]{1,3}(\.[0-9]{1,3}){3}:5000`) across `docker-daemon.json.tmpl` + `cloud-init.yml` + `server.tf` count **0** — reintroducing any hardcoded endpoint copy (the exact #6448 drift) makes this go RED; the pre-fix self-referential green is gone. Renumber-proof (shape, not the pinned value).
+- [x] `bash apps/web-platform/infra/registry-insecure-config.test.sh` → `0 failed`, exit 0.
+- [x] `bash apps/web-platform/infra/private-nic-guard.test.sh` → `0 failed`, exit 0 (unchanged behavior; stale note corrected).
+- [x] `bash apps/web-platform/infra/server-tf-set-e.test.sh` → passes (remote-exec `set -e` invariant preserved).
+- [x] `bash .github/scripts/validate-infra-templates.sh apps/web-platform/infra` → `rendered+validated N/N`, exit 0, and its output names `docker-daemon.json.tmpl` (auto-coverage).
+- [x] `bash .github/scripts/test/fixtures-validate-infra-templates.sh` → passes (F9/F9b unaffected).
+- [x] `cd apps/web-platform/infra && terraform fmt -check && terraform validate` pass (fmt-clean; `terraform_data` local + provisioner rewire is valid HCL; confirms the novel-to-repo `content=` provisioner form is accepted).
 
 ### Post-merge (operator)
 
