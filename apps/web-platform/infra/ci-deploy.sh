@@ -1410,8 +1410,10 @@ _ghcr_pull_or_recover() {
 # is closed for the pull children (#5062).
 # _try_local_cache_reload <image_kind>: last-resort rescue for a same-version `web` reload
 # (#6512). The item-4 seccomp redeploy targets v<running_version> — the image the container is
-# ALREADY running (cosign-verified at its original deploy, immutable @sha256, and always present in
-# the host's local docker store). When BOTH registries fail to serve that image (zot GC'd the
+# ALREADY running — the EXACT immutable @sha256 bits already live in production (cosign-checked at
+# its original deploy; even under WARN-mode fail-open the reused bits are strictly no worse than what
+# is already executing), always present in the host's local docker store. When BOTH registries fail
+# to serve that image (zot GC'd the
 # several-releases-old tag from its 5-v* keep-set, then the GHCR fallback leg also failed), the
 # reload needs NO new bits — the registry round-trip is the single point of failure. Reuse the
 # RUNNING container's image ID as VERIFIED_REF, skipping re-verify (identical @sha256 bits) with an
@@ -2207,9 +2209,10 @@ case "$COMPONENT" in
     #
     # #6512: if the pull was rescued by the local-cache reload tier (both registries
     # failed for a same-version reload), LOCAL_CACHE_VERIFIED_REF holds the RUNNING
-    # container's image ID — already cosign-verified at its original deploy (identical
-    # immutable @sha256 bits). Reuse it directly and SKIP re-verify; the explicit
-    # cosign_reused_local_reload breadcrumb was already emitted inside
+    # container's image ID — the exact immutable @sha256 bits already live in prod
+    # (cosign-checked at its original deploy; no worse than what is already executing).
+    # Reuse it directly and SKIP re-verify; the explicit
+    # reused_local_reload cosign breadcrumb (verify_result=reused_local_reload) was already emitted inside
     # pull_image_with_fallback (an intentional amendment to the ADR-087 cosign contract,
     # never the warn-mode fail-open).
     if [[ -n "${LOCAL_CACHE_VERIFIED_REF:-}" ]]; then

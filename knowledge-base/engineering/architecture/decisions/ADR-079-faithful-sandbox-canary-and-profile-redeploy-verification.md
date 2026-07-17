@@ -442,7 +442,10 @@ item-4 redeploy targets `v<running_version>` — the image the container is ALRE
 store), so a registry round-trip for the reload is an unnecessary single point of failure. On
 BOTH-registries-fail for a `web` immutable-semver reload, the tier reuses the RUNNING container's
 image ID (keyed off the literal container name `soleur-web-platform`) as `VERIFIED_REF` and
-**skips re-verify with an EXPLICIT `cosign_reused_local_reload` decision** — this is a deliberate
+**skips re-verify with an EXPLICIT reused-image decision** (emitted via `cosign_verify_event` with
+`verify_result=reused_local_reload` — reusing the verify emitter for the audit breadcrumb is
+intentional; its `IMAGE_VERIFY_FAIL` logger prefix is a known cosmetic artifact of that reuse, and
+no issue-alert is keyed on `op:image-verify`) — this is a deliberate
 amendment to the **ADR-087** cosign contract (re-verifying identical @sha256 bits is a no-op;
 skipping it explicitly is the honest posture vs. silently falling through the `warn`-mode
 fail-open), and a THIRD tier on **ADR-096**'s zot→GHCR pull chain (a future §5.3 GHCR-retirement

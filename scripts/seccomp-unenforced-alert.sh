@@ -71,6 +71,16 @@ The security profile that isolates tenant agent sessions on the production serve
 **CI run:** ${run_url}}
 EOF
 )"
+    # Idempotently ensure the labels exist before filing — `gh issue create` HARD-FAILS on an
+    # unknown label, and this call is fail-open, so a missing label would silently drop the PRIMARY
+    # operator surface (the issue) down to an invisible CI ::warning:: — the exact #6454/#6512
+    # invisibility this fix exists to eliminate. Self-bootstrapping (fresh clone / tenant repo /
+    # label deletion), matching the scheduled-inngest-health.yml precedent.
+    gh label create ci/seccomp-unenforced --color B60205 \
+      --description "seccomp profile not enforced on the server; auto-remediation failed (#6512)" \
+      2>/dev/null || true
+    gh label create domain/engineering 2>/dev/null || true
+    gh label create priority/p1-high 2>/dev/null || true
     gh issue create \
       --label ci/seccomp-unenforced --label domain/engineering --label priority/p1-high \
       --title "Security profile (seccomp) not enforced on the server — auto-remediation failed" \

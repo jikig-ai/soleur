@@ -3497,15 +3497,16 @@ export CI_DEPLOY_STATE="$T6512/b.state"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && B_RC=0 || B_RC=$?
 read_state_reason_and_exit "$CI_DEPLOY_STATE" B_REASON B_EXIT
 TOTAL=$((TOTAL + 1))
-# Assert the RESCUE fired on the ZOT_ACTIVE both-failed exit and got PAST the pull — NOT full-deploy
-# rc 0. Under MOCK_ZOT_CONFIGURED the mock harness's canary-health stage fails for reasons unrelated
-# to this tier (the sibling assert_zot_* tests likewise tolerate a non-zero deploy via `|| true`);
-# case (a) proves the identical VERIFIED_REF path reaches rc 0 on the zot-dark exit. The discriminator
-# here is: the local-cache event fired (a zot-dark-only tier would MISS this exit → RED) AND the pull
-# did NOT hard-fail (reason moved past image_pull_failed to a later stage).
-if [[ "$B_REASON" != "image_pull_failed" ]] \
+# The rescue fires on the ZOT_ACTIVE both-failed exit and the deploy then proceeds past the pull
+# (observed terminal reason `ok` — a full successful reload from the running image). Assert the two
+# discriminating invariants rather than an exact rc: (1) the local-cache event fired — a zot-dark-ONLY
+# tier would MISS the ZOT_ACTIVE exit → no event → RED (this is the P2-5 both-exits discriminator);
+# (2) the reason is a POST-PULL reason (neither the hard-fail `image_pull_failed` nor an early
+# validation exit like `image_mismatch`) — a positive control proving the run genuinely traversed the
+# ZOT_ACTIVE both-failed exit and the tier rescued it, not that it bailed earlier.
+if [[ "$B_REASON" != "image_pull_failed" ]] && [[ "$B_REASON" != "image_mismatch" ]] \
    && grep -q 'image pulled from local-cache' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: zot-served topology (ZOT_ACTIVE both-fail) → rescued via running image ID (reason moved past pull: $B_REASON)"
+  PASS=$((PASS + 1)); echo "  PASS: zot-served topology (ZOT_ACTIVE both-fail) → rescued via running image ID (post-pull reason: $B_REASON)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: #6512(b) rc=$B_RC reason=$B_REASON (expected local-cache event + reason != image_pull_failed)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
@@ -3554,20 +3555,29 @@ fi
 unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
 rm -rf "$T6512"
 
-# (c2) non-web (inngest) both-fail WITH a running image present → the web-only guard means the
-#      tier does NOT fire: no local-cache event (guards against dropping the image_kind==web gate).
+# (c2) non-web (inngest) both-fail with EVERY other tier precondition satisfiable (running image
+#      present + same-version tag + immutable semver) → ONLY the image_kind==web guard prevents the
+#      rescue. Uses the exact allowlisted inngest ref so the run REACHES the pull (a wrong ref exits
+#      early at image_mismatch, which would make the "no local-cache event" assertion vacuous —
+#      passing because the tier was never reached, not because the web guard gated it out). The
+#      reason==image_pull_failed positive control proves the pull was reached; removing the web
+#      guard from source would then fire the tier → local-cache event → RED.
 T6512=$(mktemp -d)
 export MOCK_GHCR_PULL_DENY_ALWAYS=1
 export MOCK_RUNNING_IMAGE_ID="sha256:6512cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+export MOCK_RUNNING_IMAGE_TAG="v9.9.9"   # same-version tag present, so ONLY the web guard gates the tier out
 export MOCK_SENTRY_CAPTURE_FILE="$T6512/c2.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
-run_deploy "deploy inngest ghcr.io/jikig-ai/soleur-inngest v9.9.9" >/dev/null 2>&1 || true
+export CI_DEPLOY_STATE="$T6512/c2.state"
+run_deploy "deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap v9.9.9" >/dev/null 2>&1 || true
+read_state_reason_and_exit "$CI_DEPLOY_STATE" C2_REASON C2_EXIT
 TOTAL=$((TOTAL + 1))
-if ! grep -q 'image pulled from local-cache' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: inngest (non-web) both-fail → tier does NOT fire (web-only guard), no local-cache event"
+if [[ "$C2_REASON" == "image_pull_failed" ]] \
+   && ! grep -q 'image pulled from local-cache' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: inngest (non-web) both-fail reached the pull (reason=$C2_REASON) → tier does NOT fire (web-only guard), no local-cache event"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: #6512(c2) local-cache event fired on a non-web deploy"
+  FAIL=$((FAIL + 1)); echo "  FAIL: #6512(c2) reason=$C2_REASON — expected image_pull_failed (reached the pull) + no local-cache event; a non-image_pull_failed reason means the run exited early and the assertion is vacuous"
 fi
-unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_SENTRY_CAPTURE_FILE
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
 rm -rf "$T6512"
 
 # (d) zot SERVES the image → the pull succeeds; the local-cache tier is never reached even
