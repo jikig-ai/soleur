@@ -18,6 +18,7 @@ import {
   buildAgentsManifest,
   discoverAgentEntries,
   agentIdToCompatFilename,
+  agentIdToGrokSubagentType,
   buildCompatStubBody,
   PLUGIN_ROOT,
 } from "../lib/agent-registry";
@@ -46,9 +47,13 @@ function yamlQuote(value: string): string {
 
 function compatStubMarkdown(entry: ReturnType<typeof discoverAgentEntries>[number]): string {
   const description = entry.description || entry.name;
+  // Frontmatter name MUST match the Grok spawn key (filename stem = colons→hyphens).
+  // Using colon-form here lists `soleur:product:cpo` in available types while
+  // spawn only accepts `soleur-product-cpo` (Grok ≤0.2.102 filename-stem match).
+  const grokName = agentIdToGrokSubagentType(entry.id);
   const lines = [
     "---",
-    `name: ${entry.id}`,
+    `name: ${grokName}`,
     `description: ${yamlQuote(description)}`,
     `model: ${entry.model}`,
     "---",

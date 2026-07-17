@@ -6,6 +6,7 @@ import {
   buildAgentsManifest,
   EXPECTED_SOLEUR_AGENT_COUNT,
   agentIdToCompatFilename,
+  agentIdToGrokSubagentType,
 } from "../lib/agent-registry";
 import { discoverAgents } from "./helpers";
 
@@ -65,5 +66,19 @@ describe("agentIdToCompatFilename", () => {
     expect(agentIdToCompatFilename("soleur:engineering:review:security-sentinel")).toBe(
       "soleur-engineering-review-security-sentinel.md",
     );
+  });
+});
+
+describe("agentIdToGrokSubagentType", () => {
+  test("maps colon-qualified registry id to Grok spawn key", () => {
+    expect(agentIdToGrokSubagentType("soleur:product:cpo")).toBe("soleur-product-cpo");
+    expect(agentIdToGrokSubagentType("soleur:engineering:review:security-sentinel")).toBe(
+      "soleur-engineering-review-security-sentinel",
+    );
+  });
+
+  test("filename stem equals Grok subagent type", () => {
+    const id = "soleur:legal:clo";
+    expect(agentIdToCompatFilename(id)).toBe(`${agentIdToGrokSubagentType(id)}.md`);
   });
 });
