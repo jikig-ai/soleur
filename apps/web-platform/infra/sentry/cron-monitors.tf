@@ -608,8 +608,11 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
 # so the margin is kept tight to the cadence rather than widened. max_runtime_minutes = 8
 # matches the job's `timeout-minutes: 8`. Slug MUST match the `monitor-slug` in the
 # workflow's sentry-heartbeat step (parity-asserted by
-# apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts, which also
-# asserts this resource is in the apply-sentry-infra.yml -target= allowlist).
+# apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts). That test no
+# longer asserts membership of an apply-sentry-infra.yml `-target=` allowlist: since
+# #6589 the workflow plans the full root, so declaring the resource here IS applying it.
+# The slug-parity half of that test remains load-bearing — a slug that drifts from the
+# workflow's `monitor-slug` still yields a monitor nothing checks into.
 resource "sentry_cron_monitor" "scheduled_inngest_health" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
