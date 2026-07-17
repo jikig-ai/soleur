@@ -56,7 +56,7 @@ doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
     -target=hcloud_firewall_attachment.grok_dogfood
 ```
 
-Record host monthly cost in `knowledge-base/engineering/operations/expenses.md` when retained.
+Record host monthly cost in `knowledge-base/operations/expenses.md` when retained.
 
 ## Bootstrap secrets + repo
 
@@ -130,31 +130,183 @@ Fill sample table:
 - Kill: spend ceiling, customer data on host, host compromise → destroy / disable flag  
 - CLI version: record `grok --version` after install; pin release artifact in runbook if you need bit-for-bit reproducibility (install.sh tracks latest stable)
 
-## Phase 2 — open model swap (#6546)
+## Phase 2 — open-weight on Robot GEX44 (#6546)
 
-Edit `~/.grok/config.toml`:
+**Architecture (Approach A — locked):** separate **Robot dedicated GEX44** host (not Cloud/`hcloud`); **Grok CLI + Ollama co-located** on that host; Ollama OpenAI-compatible API on **loopback only** (`http://127.0.0.1:11434/v1`). Phase 1 CX33 remains the xAI API baseline — do **not** point CX33 at GEX public IP (that recreates Approach B).
+
+**Brand:** operator-only dogfood. **Never** claim “self-hosted Grok 4.5” or “Grok runs on our GPU.”
+
+**Control plane:** Robot console order + `scripts/dogfood/grok-gpu-bootstrap.sh` + this runbook + expense ledger. See ADR-120. **Not** Cloud TF birth.
+
+### Forbidden configs (Approach B / product)
+
+| Forbidden | Why |
+|-----------|-----|
+| Ollama listening on `0.0.0.0:11434` / `*:11434` | Public OpenAI-compatible surface |
+| Any host `base_url = http://<GEX-public-IP>:11434/v1` | Split-host Approach B |
+| Product Concierge / `agent-runner` → GEX | #6547 parked |
+| Private-net `10.0.1.0/24` attach | Trust plane isolation |
+| Passwordless sudo for dogfood user | Agent escalation |
+
+### Order checklist (STOP until all true)
+
+**Do not order GPU without all of these recorded on #6546.**
+
+0. **GEX is Robot dedicated** (not a Cloud type). Cloud fleet free-slot inventory is **N/A** for Robot birth (separate product class).
+1. Operator **spend ack** on #6546 (1-week default soak envelope; setup fee accepted).
+2. Live **stock/price/setup** from Robot configurator (GEX44 FSN1; re-verify ~€184/mo + setup).
+3. **License memo** for exact model id (OK / OK-with-conditions / Reject) — Apache-2.0/MIT preferred; ≤20 GB VRAM; **before** `ollama pull`.
+
+Also confirm billing pro-ration (hourly vs month minimum) or plan full-month worst case.
+
+### Expense ledger
+
+Path: **`knowledge-base/operations/expenses.md`** (not `engineering/operations/expenses.md`).
+
+| When | Status |
+|------|--------|
+| Before order | `approved-not-billing` (GEX row must exist) |
+| Host live | flip `active` **same day**; stamp on #6546: `order_id`, `ip`, **`billable_from: <ISO8601>`** |
+| Robot cancel | flip `retired` **same day** |
+
+Cost-model R&D line: update only when status is `active` (not pre-order).
+
+### Bootstrap (after OS is up)
+
+Fresh Robot host has **no** repo checkout. Copy the script from a machine that has this tree, then run as root:
+
+```bash
+# From a soleur checkout that contains scripts/dogfood/grok-gpu-bootstrap.sh
+# <!-- verified: 2026-07-17 source: scripts/dogfood/grok-gpu-bootstrap.sh -->
+# SSH: L3 firewall / admin IP first if connect fails (hr-ssh-diagnosis-verify-firewall)
+GEX_IP='<from Robot console / #6546>'
+scp scripts/dogfood/grok-gpu-bootstrap.sh scripts/dogfood/assert-ollama-loopback.sh root@${GEX_IP}:/tmp/
+ssh root@${GEX_IP} 'bash /tmp/grok-gpu-bootstrap.sh'
+# After license memo on #6546:
+ssh root@${GEX_IP} 'bash /tmp/grok-gpu-bootstrap.sh --model <exact-ollama-tag> --license-ok'
+# Later re-runs can use the cloned tree:
+# ssh root@${GEX_IP} 'bash /home/dogfood/soleur/scripts/dogfood/grok-gpu-bootstrap.sh'
+```
+
+Idempotent: NVIDIA detect → install `ss`/iproute2 → Ollama with `OLLAMA_HOST=127.0.0.1:11434` → **fail closed** if `ss` missing or public bind → Grok CLI → config.toml → shallow clone `/home/dogfood/soleur` → optional pull.
+
+### License memo (before pull)
+
+1. Name exact model id + source (HF/Ollama tag).  
+2. Read model card license (SPDX or custom URL/date).  
+3. Classify: OK (Apache/MIT/BSD) / OK-with-conditions / Reject (NC / field-of-use).  
+4. One-line + link on #6546 **before** `--license-ok` pull.  
+5. Confirm Hetzner AVV covers **Robot dedicated** at order.
+
+### Config (`/home/dogfood/.grok/config.toml`)
 
 ```toml
 [models]
 default = "local-open"
 
 [model.local-open]
-model = "your-open-weight-id"
+model = "<exact-open-weight-id>"
 base_url = "http://127.0.0.1:11434/v1"
 name = "Local open model"
 context_window = 128000
 ```
 
-Re-run the **same** measure script with `--model local-open` (or rely on default). No reinstall of harness required.
+`base_url` host **must** be `127.0.0.1` or `localhost` only.
 
-GPU host class (entry): Hetzner GEX44-class (~€184+/mo) — separate provision.
+### Smoke (before multi-day soak)
+
+Grok Build OpenAI client → Ollama `/v1` must succeed once (AC11b). Concrete agent-runnable checks:
+
+```bash
+# On GEX as root or dogfood (Ollama already loopback-bound)
+curl -fsS http://127.0.0.1:11434/v1/models | jq -e '.data | length >= 0'
+# After --license-ok model pull, prefer a one-shot measure (exit 0 + non-null ttft_ms):
+sudo -u dogfood bash -lc '
+  cd /home/dogfood/soleur
+  ./scripts/dogfood/grok-measure.sh     --model local-open     --prompt "Reply with OK only."     --cwd /home/dogfood/soleur     --max-turns 3     --log /var/log/grok-dogfood/smoke.jsonl
+'
+```
+
+On fail: within **48h** either fix, Robot cancel, or re-approve burn with written reason on #6546 — do not leave host billing without disposition.
+
+### Measure (same three classes as Phase 1)
+
+**Preflight every campaign** (not only bootstrap):
+
+```bash
+# Loopback listen — fail if public (ss required; measure also re-asserts for --model local-open)
+ss -lnt | grep 11434   # expect 127.0.0.1:11434 only, not 0.0.0.0:11434
+curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+# base_url host must be 127.0.0.1 or localhost — fail on any other host
+grep -E '^\s*base_url\s*=' /home/dogfood/.grok/config.toml \
+  | grep -vE '127\.0\.0\.1|localhost' && { echo 'FAIL non-loopback base_url'; exit 1; } || true
+grep -qE 'base_url = "http://(127\.0\.0\.1|localhost)' /home/dogfood/.grok/config.toml \
+  || { echo 'FAIL missing loopback base_url'; exit 1; }
+```
+
+```bash
+sudo -u dogfood bash -lc '
+  cd /home/dogfood/soleur
+  # YOLO off by default
+  ./scripts/dogfood/grok-measure.sh \
+    --model local-open \
+    --prompt "List top-level directories (read-only)." \
+    --cwd /home/dogfood/soleur \
+    --max-turns 15 \
+    --log /var/log/grok-dogfood/runs.jsonl
+'
+```
+
+Prompt classes: (1) read-only, (2) scoped `/tmp` edit, (3) multi-tool `git status` + list dir. No push credentials.
+
+### Comparison table (paste filled rows on #6546)
+
+**Phase 1 baseline (API Grok 4.5, 2026-07-16, YOLO off):**
+
+| class | ttft_ms | tok/s | cost USD | exit |
+|-------|---------|-------|----------|------|
+| read | 2648 | 49.4 | 0.046 | 0 |
+| scoped /tmp edit | 2344 | 12.6 | 0.045 | 0 |
+| multi-tool | 5239 | 104 | 0.046 | 0 |
+
+**Phase 2 (open-weight on GEX — fill after measure):**
+
+| ts | class | model | ttft_ms | tok_per_sec | exit | notes |
+|----|-------|-------|---------|-------------|------|-------|
+|  | read |  |  |  |  |  |
+|  | scoped /tmp edit |  |  |  |  |  |
+|  | multi-tool |  |  |  |  |  |
+
+Also record: host €/mo, setup fee, Ollama version, Grok version, GPU (`nvidia-smi`), `billable_from`.
+
+**Narrative rules:** harness + cost/latency curve only. **No** quality-parity claim vs Grok 4.5. **No** “self-hosted Grok 4.5.”
+
+### Kill criteria
+
+- Spend ceiling / no re-approval after default **1-week** soak  
+- No filled comparison table within **14 days** of `billable_from`  
+- License fail / compromise / customer data on host  
+- Public Ollama bind or Approach B config  
+- Brand mislabel  
+- SKU jump without re-approval  
+
+### Destroy — Phase 2 (Robot cancel)
+
+1. Robot console: cancel / return GEX server (not `terraform`).  
+2. Same day: expense row → `retired` with cancel date.  
+3. Comment on #6546: cancel confirmation + final cost note.  
+4. Do **not** use Phase 1 TF destroy for GEX.
+
+### SSH diagnosis (L3 → L7)
+
+If SSH fails: (1) operator egress IP vs Robot firewall / admin allowlist, (2) correct public IP from Robot console, (3) only then sshd/fail2ban. See `hr-ssh-diagnosis-verify-firewall`.
 
 ## Product trajectory (#6547)
 
 Soleur Web today: `@anthropic-ai/claude-agent-sdk` in `apps/web-platform/server/agent-runner.ts`.  
-Future: Grok Build **ACP** (`grok agent stdio` / `serve`) or headless job dispatch as product agent backend. This dogfood host proves harness + cost + model-swap; it is **not** multi-tenant Concierge.
+Future: Grok Build **ACP** (`grok agent stdio` / `serve`) or headless job dispatch as product agent backend. This dogfood host proves harness + cost + model-swap; it is **not** multi-tenant Concierge. Phase 2 does **not** unpark #6547.
 
-## Destroy
+## Destroy — Phase 1 only (Cloud CX33)
 
 ```bash
 TF_VAR_enable_grok_dogfood=false terraform apply \
@@ -162,3 +314,5 @@ TF_VAR_enable_grok_dogfood=false terraform apply \
   -target=hcloud_firewall.grok_dogfood \
   -target=hcloud_firewall_attachment.grok_dogfood
 ```
+
+Phase 2 GEX destroy is **Robot cancel** (section above) — never this TF path.
