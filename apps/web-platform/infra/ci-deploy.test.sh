@@ -16,6 +16,14 @@ TOTAL=0
 # rather than falling through to real commands.
 readonly TEST_PATH_BASE="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+# #6565: ci-deploy.sh now `export`s DOCKER_CONFIG + `mkdir -p`s it at source time (relocated
+# off the ProtectHome=read-only /home/deploy sandbox onto /mnt/data). /mnt/data is absent on
+# the CI runner, so pin the config dir at a writable tmpdir before any `bash "$DEPLOY_SCRIPT"`
+# subshell (which inherits this exported env). Without it the `|| true` keeps DOCKER_CONFIG
+# exported at a nonexistent /mnt/data path for the whole test process.
+DEPLOY_DOCKER_CONFIG_DIR="$(mktemp -d)"   # split from export so SC2155 doesn't mask mktemp's rc
+export DEPLOY_DOCKER_CONFIG_DIR
+
 # --- Mock factories ---------------------------------------------------------
 # All specialized mocks are driven by env vars. Tests set MOCK_DOCKER_MODE /
 # MOCK_CURL_MODE before invoking a runner; the runner calls create_base_mocks
@@ -3504,6 +3512,55 @@ if printf '%s' "$HELPER_BODY" | grep -qE '_docker_login_capture ghcr\.io "\$du" 
   PASS=$((PASS + 1)); echo "  PASS: recovery relogin writes ghcr.io auth into the same \$GHCR_DOCKER_CONFIG (cosign continuity)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: AC13 — recovery relogin must target ghcr.io"
+fi
+
+# --- #6565: docker config relocated off the ProtectHome=read-only sandbox ------------------
+# `docker login` persists creds to $DOCKER_CONFIG/config.json. The old default
+# /home/deploy/.docker sits under webhook.service's ProtectHome=read-only mount and is NOT in
+# its ReadWritePaths -> EROFS ("error saving credentials"; measured class=cred_store
+# kw=errsaving,erofs). The fix relocates the config dir onto /mnt/data (a ReadWritePath).
+#
+# These assertions pin the runtime INVARIANT, not a line-shape (the recurring vacuous-guard
+# class: a guard whose deletion/inversion leaves the suite green pins nothing). Invariant:
+#   (1) the config-dir default resolves under /mnt/data and NO assignment default resolves
+#       under /home/deploy; AND the variable DOCKER_CONFIG is assigned EXACTLY ONCE — a second
+#       assignment (`export DOCKER_CONFIG="$HOME/.docker"`, or a bare keyword-less
+#       `DOCKER_CONFIG=/home/deploy/...`) re-points the runtime value under last-assignment-wins
+#       and reintroduces EROFS while leaving the pinned lines intact. The count is the behavioral
+#       part a static line-shape grep cannot see.
+#   (2) GHCR_DOCKER_CONFIG (the cosign :ro mount source, `-v "$GHCR_DOCKER_CONFIG:...:ro"`) is
+#       DERIVED from the exported DOCKER_CONFIG, so the login-WRITE and cosign mount-READ paths
+#       cannot split; AND no `--config` is ever passed a PATH-like argument (a docker config-dir
+#       override that would bypass the exported DOCKER_CONFIG).
+# Comment-strip via `grep -vE '^[[:space:]]*#'` so the Phase-1 rationale comment (which names
+# /home/deploy and ${DOCKER_CONFIG}) cannot false-match (cq-assert-anchor-not-bare-token).
+TOTAL=$((TOTAL + 1))
+DOCKERCFG_CODE="$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")"
+DOCKERCFG_ASSIGN_LINES="$(printf '%s\n' "$DOCKERCFG_CODE" | grep -E '^[[:space:]]*(readonly|export)[[:space:]]+(DEPLOY_DOCKER_CONFIG_DIR|DOCKER_CONFIG|GHCR_DOCKER_CONFIG)=')"
+# Word-boundary before DOCKER_CONFIG so GHCR_DOCKER_CONFIG= and DEPLOY_DOCKER_CONFIG_DIR=
+# (different variables) are NOT counted; ALL forms (keyworded + bare) ARE counted.
+dc_assign_count="$(printf '%s\n' "$DOCKERCFG_CODE" | grep -cE '(^|[^A-Za-z0-9_])DOCKER_CONFIG=' || true)"
+if printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE 'DEPLOY_DOCKER_CONFIG_DIR:-/mnt/data/' \
+   && ! printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE '/home/deploy' \
+   && [[ "$dc_assign_count" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: docker config relocated off ProtectHome (/mnt/data default; DOCKER_CONFIG assigned exactly once; no /home/deploy)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: docker config relocation broken (EROFS regression — /home/deploy default, or DOCKER_CONFIG re-pointed; count=$dc_assign_count)"
+fi
+
+# (2) GHCR_DOCKER_CONFIG derived from exported DOCKER_CONFIG; DOCKER_CONFIG exported off
+# DEPLOY_DOCKER_CONFIG_DIR; and NO `--config` passed a PATH-like arg anywhere. The ONLY
+# legitimate --config in this file is doppler's env-name form (`doppler … --config prd`), whose
+# argument starts with a LETTER; a docker `--config` always takes a path (/, ., ~, $, or a quote
+# wrapping one). Comment-stripped and NOT single-line-scoped, so a `--config <path>` on a
+# `docker run` CONTINUATION line is caught (a per-line docker-scoped negative missed it).
+TOTAL=$((TOTAL + 1))
+if grep -qE '^[[:space:]]*readonly[[:space:]]+GHCR_DOCKER_CONFIG="\$\{DOCKER_CONFIG\}/config\.json"' "$DEPLOY_SCRIPT" \
+   && grep -qE '^[[:space:]]*export[[:space:]]+DOCKER_CONFIG="\$DEPLOY_DOCKER_CONFIG_DIR"' "$DEPLOY_SCRIPT" \
+   && ! printf '%s\n' "$DOCKERCFG_CODE" | grep -qE -- '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
+  PASS=$((PASS + 1)); echo "  PASS: GHCR_DOCKER_CONFIG derived from exported DOCKER_CONFIG; no --config path override (login-write == cosign-mount by construction)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: GHCR_DOCKER_CONFIG not single-sourced, or a --config path override can split login-write from cosign-mount"
 fi
 
 # --- #6525: widen the GHCR retry beyond auth-denied to cover TRANSIENT/network stderr ----
