@@ -150,3 +150,80 @@ you exactly which 46 production sites to hit first, and the transform is one pas
 **What we need from you:** nothing to proceed. Say so if you want the blind sweep instead of the
 partitioned conversion.
 </content>
+
+---
+
+## UC-4 — the plan's AC1 mechanism was falsified at /work; implemented to its intent instead
+
+**decisionClass:** `mechanical` (a correctness fix, applied — recorded because it overrides a written AC)
+**Raised by:** /work Phase 0, measuring the authoring host before trusting the plan's premise
+**Status:** APPLIED — AC1 implemented as a behavioural probe, not the identity check it specifies.
+
+**The plan says:**
+
+> **AC1** — the probe ... **exits non-zero** when `grep` resolves to a non-GNU implementation
+> (verify by running it with a ugrep/BusyBox shim first on `PATH`).
+
+and, in Reconciliation (b), attributes the authoring session's 0/200 readings to
+`type grep → dispatches to ugrep 7.5.0`.
+
+**What was measured:**
+
+```
+command -v ugrep                    → not found          # ugrep is not installed on this host
+/bin/grep --version                 → grep (GNU grep) 3.12
+type grep                           → grep is a function                 (an arg-filtering wrapper)
+bash slowprod.sh | /bin/grep -q M   → PIPESTATUS=141 0   0.016s          (early-exit: defect LIVE)
+bash slowprod.sh | grep -q M        → PIPESTATUS=0   0   5.256s          (drained: defect INVISIBLE)
+unset -f grep; …| grep -q M         → PIPESTATUS=141 0   0.015s
+```
+
+The plan's **conclusion was right and its mechanism was wrong**: the drain is real and would have
+produced a false all-clear, but ugrep is not on this host at all — a shell **function** was
+shadowing GNU grep.
+
+**Why this is not a footnote.** AC1 as written cannot catch what actually happened here. The
+resolved binary **was** GNU grep 3.12, so an identity/`--version` assertion **passes** while every
+reading is 0/N. The plan's own stated intent — *"No verdict may be taken from a host whose `grep` is
+not the CI `grep`"* — is undeliverable by the mechanism it prescribes.
+
+**What was implemented:** the probe asks the question that discriminates — *when a match arrives
+early, does this grep exit and let the producer die?* (`PIPESTATUS[0] == 141`) — and refuses to emit
+a verdict otherwise. This catches ugrep, this host's function wrapper, and any future draining grep.
+The attestation's T3 rung pins it with a shim that reports `grep (GNU grep) 3.12` **and drains**:
+under the plan's AC1 that shim passes; under the implemented gate it is refused.
+
+**What we need from you:** nothing. The AC's intent is met more strictly than its text. Recorded
+because it overrides a written AC, and because this PR's subject is premises that sounded rigorous
+and were not — including its own.
+
+---
+
+## UC-5 — the plan's headline partition (its "most decision-relevant fact") was itself unnormalised
+
+**decisionClass:** `mechanical` (a correction, applied — recorded for visibility)
+**Raised by:** /work Phase 1, re-deriving the plan's Reconciliation row 9 rather than adopting it
+**Status:** APPLIED — the note reports the normalised figures; the plan's raw ones are not restated.
+
+**The plan says** (Reconciliation row 9, flagged **"the single most decision-relevant fact in this
+table"**): 238 of 284 sites are `*.test.sh`; **46 production across 11 files**.
+
+**Measured, after normalisation:** **124** test-harness, **34 production across 8 files**; 158 real
+sites of 280 raw hits.
+
+**Why they differ:** row 9's command is a bare `git grep` + per-file `grep -c`. It counts comments,
+fail-message strings, and heredoc bodies — and it counts `||` as a pipe. **122 of the 280 raw hits
+(44%) are the repo documenting the shape it forbids**, and `cmd_a || grep -q P FILE` feeds grep no
+stdin at all.
+
+So the plan's partition — the fact it leaned on to declare the production class tractable — is a
+syntax count. That is a milder instance of the exact defect the plan was written to correct, sitting
+in the row the plan calls its most decision-relevant. Noted without irony: the same trap caught this
+probe's first draft, and the earlier fix twice.
+
+**What changed as a result:** nothing in the disposition. 34/8 and 46/11 both sit inside the
+convert threshold, and the security-rung auto-forfeit overrides both. The correction matters for the
+artifact's honesty, not its conclusion — which is stated in the note so the precision is not
+mistaken for load-bearing.
+
+**What we need from you:** nothing.
