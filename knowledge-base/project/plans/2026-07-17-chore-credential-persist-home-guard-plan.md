@@ -188,8 +188,9 @@ logs:
   where: "GitHub Actions run logs for the deploy-script-tests job"
   retention: "GitHub default (90 days)"
 discoverability_test:
-  command: "bash apps/web-platform/infra/credential-persist-home-guard.test.sh"
-  expected_output: "exits 0; prints GREEN + census summary on the real tree, then RED-on-each-M1..M8 / GREEN-on-boot-probe attestation from the inline loop. No ssh, no network, no root."
+  command: "grep -c credential-persist-home-guard .github/workflows/infra-validation.yml"
+  expected_output: "1"
+  note: "Author-time CI gate — the liveness signal is 'the guard is REGISTERED as a named step and will run on every infra PR' (an unregistered infra test gates nothing, #3366/#6520). The full battery + census + M1-M8 RED attestation runs via `bash apps/web-platform/infra/credential-persist-home-guard.test.sh` (exit 0, PASS=28 FAIL=0)."
 ```
 
 ## Gate dispositions (plan-skill phases)
