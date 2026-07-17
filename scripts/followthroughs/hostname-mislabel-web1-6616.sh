@@ -102,7 +102,8 @@ LIVENESS="$(printf '%s\n' "$ROWS" | jq -r \
 # FAIL takes precedence: a live web-host collision is unambiguous regardless of liveness
 # (covers the single-emitter case where the dedicated node is momentarily silent).
 if [[ -n "$COLLISIONS" ]]; then
-  echo "FAIL: host_name=${MISLABEL_HOST_NAME} is still emitted by web host(s) [$(printf '%s ' $COLLISIONS)] in the last ${WINDOW} — the #6616 collision is live. Resolution is a web-1 immutable recreate (deferred; blocked per ADR-119 §(e))."
+  COLLISION_LIST="$(printf '%s' "$COLLISIONS" | tr '\n' ' ')"
+  echo "FAIL: host_name=${MISLABEL_HOST_NAME} is still emitted by web host(s) [${COLLISION_LIST}] in the last ${WINDOW} — the #6616 collision is live. Resolution is a web-1 immutable recreate (deferred; blocked per ADR-119 §(e))."
   exit 1
 fi
 
