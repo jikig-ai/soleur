@@ -126,7 +126,13 @@ t_no_args_fails() {
 t_both_jobs_call_the_script() {
   local wf="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
   local calls; calls=$(grep -cE 'sentry-destroy-counts\.sh' "$wf")
-  local inline; inline=$(grep -cE '^\s*destroy_count=\$\(\(' "$wf" || true)
+  # Anchor at line-start (with an optional `declare -i` / `local` prefix) so a
+  # re-inlined assignment in ANY of its forms is caught, while an EXPLANATORY
+  # COMMENT mentioning `destroy_count=$((…))` (this file's own header, and the
+  # workflow's) is NOT — a `#` precedes the token there, so the line-start anchor
+  # excludes it. The anchor-on-syntax-not-comment rule: a bare `destroy_count=$((`
+  # grep matches the prose that documents the retired inline form.
+  local inline; inline=$(grep -cE '^\s*(declare\s+-i\s+|local\s+)?destroy_count=\$\(\(' "$wf" || true)
   if [[ "$calls" -ge 2 && "$inline" -eq 0 ]]; then
     _report "T8 both workflow jobs call the shared script; zero inline destroy_count arithmetic" ok
   else
