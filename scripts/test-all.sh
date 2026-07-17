@@ -141,6 +141,10 @@ if want_scripts; then
   # gates (the #5417 class). The soak authorizes an irreversible PAT revoke, so its arms
   # returning the right codes is not optional coverage.
   run_suite "scripts/zot-soak-6122-arms" bash scripts/followthroughs/zot-soak-6122.test.sh
+  # #6616: exit-code harness for the host_name-mislabel follow-through's decision tree (identity,
+  # liveness, TRANSIENT-not-PASS). Registered explicitly (orphan-suite class above) — its exit code
+  # gates whether the sweeper auto-closes #6616, so a vacuous PASS regression must redden CI.
+  run_suite "scripts/hostname-mislabel-web1-6616" bash scripts/followthroughs/hostname-mislabel-web1-6616.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
@@ -201,6 +205,11 @@ if want_scripts; then
   run_suite "tests/scripts/registry-region-migrate-gate" bash tests/scripts/test-registry-region-migrate-gate.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the
+  # five #6593-authored workspaces_luks resources; ABORTs any touch of the live plaintext
+  # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
+  # or anything out of scope. Registered HERE — nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/workspaces-luks-cutover-gate" bash tests/scripts/test-workspaces-luks-cutover-gate.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh

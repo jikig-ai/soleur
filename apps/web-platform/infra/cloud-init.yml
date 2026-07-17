@@ -417,6 +417,10 @@ runcmd:
   - printf 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s\n' '${ghcr_read_user}' '${ghcr_read_token}' > /etc/default/soleur-ghcr-read
   - chmod 600 /etc/default/soleur-ghcr-read
   - chown deploy:deploy /etc/default/soleur-ghcr-read
+  # (#6604/DP-9) Bake the Sentry DSN for the luks-monitor units — baked so "Doppler down ⇒ MUST page" keeps its DSN.
+  - printf 'SOLEUR_SENTRY_DSN=%s\n' '${sentry_dsn}' > /etc/default/luks-monitor
+  - chmod 600 /etc/default/luks-monitor
+  - chown root:root /etc/default/luks-monitor
 
   # Install Docker via official APT repository with GPG key verification (#1615).
   # Replaces pipe-to-shell (curl | sh) with signed APT repo -- same pattern as cloudflared above.
@@ -563,10 +567,10 @@ runcmd:
     set +e  # H3 (#6090): scope set -e — runcmd is ONE /bin/sh; leak = silent abort (plan).
   # END host-script extraction (#5921)
 
-  # Mount volume for workspaces (Hetzner pre-formats with ext4 via Terraform)
+  # #6604: pin /mnt/data by-id + nofail (glob binds the wrong device once LUKS attaches; nofail = pageable degrade, not a boot hang).
   - mkdir -p /mnt/data
-  - mount /dev/disk/by-id/scsi-0HC_Volume_* /mnt/data || true
-  - echo '/dev/disk/by-id/scsi-0HC_Volume_* /mnt/data ext4 defaults 0 2' >> /etc/fstab
+  - grep -q ' /mnt/data ' /etc/fstab || echo '/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id} /mnt/data ext4 defaults,nofail 0 2' >> /etc/fstab
+  - mount /mnt/data 2>/dev/null || mount /dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id} /mnt/data || soleur-boot-emit workspaces_mount fatal || true
 
   # Create workspace and plugin directories
   - mkdir -p /mnt/data/workspaces

@@ -228,6 +228,12 @@ resource "hcloud_server" "web" {
     # terraform_data.registry_insecure_config delivery. A subnet renumber propagates to both
     # host classes instead of drifting from a hardcoded copy.
     registry_endpoint = local.registry_endpoint
+    # #6604 — pin /mnt/data to THIS host's workspaces volume by stable by-id device
+    # (/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id}), never the scsi-0HC_Volume_*
+    # glob: once the LUKS volume attaches, the glob matches TWO devices and the "which is LUKS"
+    # predicate binds to the wrong one. Same by-id + nofail shape as cloud-init-git-data.yml,
+    # cloud-init-inngest.yml, cloud-init-registry.yml (web-platform was the lone glob holdout).
+    workspaces_volume_id = hcloud_volume.workspaces[each.key].id
   }))
 
   # cloud-init and ssh_keys are create-time attributes. After import,
