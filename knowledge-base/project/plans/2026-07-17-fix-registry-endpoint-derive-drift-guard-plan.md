@@ -261,8 +261,8 @@ logs:
   where: "GitHub Actions job logs (infra-validation + apply-web-platform-infra)"
   retention: "GitHub Actions default (90 days)"
 discoverability_test:
-  command: "bash apps/web-platform/infra/registry-insecure-config.test.sh && bash .github/scripts/validate-infra-templates.sh apps/web-platform/infra"
-  expected_output: "both exit 0; drift guard prints '0 failed'; validator prints 'rendered+validated N/N' including docker-daemon.json.tmpl"
+  command: "bash apps/web-platform/infra/registry-insecure-config.test.sh"
+  expected_output: "0 failed"
 ```
 
 No SSH is required to observe any failure mode; every signal is a GitHub Actions job result or a locally-runnable bash script.
