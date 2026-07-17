@@ -425,6 +425,48 @@ exit 0
 VINEOF
 chmod 0755 /usr/local/bin/soleur-vector-install
 
+# #6604 — bake the STRUCTURAL fail-closed /mnt/data mapper gate for the FUTURE fresh-host path.
+# ACKNOWLEDGED DEAD ON WEB-1 (ADR-119 §(e)): cx33 is unrebuildable in all 3 EU DCs, so web-1 never
+# re-creates and cloud-init never re-runs — the LIVE gate is delivered to web-1 over the cutover
+# channel (workspaces-cutover.sh). This baked helper is the fresh-host analogue: it makes
+# "container running ⇒ /mnt/data is the LUKS mapper" hold BY CONSTRUCTION across the dockerd
+# `--restart unless-stopped` reboot resurrection (C2), where a pre-`docker run` shell gate catches
+# nothing. Kept MINIMAL per DP-10 (crypttab + RequiresMountsFor + chattr +i, no gold-plating); the
+# full fresh-host LUKS provisioning (keyscript wiring, luksFormat-on-birth) is a tracked deferral —
+# it cannot be exercised until a fresh host is actually born, and web-1 never will be.
+STAGE=luks_structural_gate_author; FAILED_FILE=soleur-luks-structural-gate
+cat > /usr/local/bin/soleur-luks-structural-gate <<'LUKSGATEEOF'
+#!/bin/sh
+# Idempotent structural fail-closed gate: /mnt/data MUST be the LUKS mapper before the app
+# container can start. Safe no-op on a host with no LUKS volume attached (today's plaintext
+# fresh host) — it only arms once /dev/mapper/workspaces exists.
+set -eu
+MOUNT=/mnt/data
+MAPPER=/dev/mapper/workspaces
+# 1. crypttab: name the mapper so systemd opens it at boot (keyfile wiring is the deferred half).
+if [ ! -e /etc/crypttab ] || ! grep -q '^workspaces[[:space:]]' /etc/crypttab; then
+  echo 'workspaces  /dev/disk/by-label/workspaces_luks  none  luks,nofail' >> /etc/crypttab
+fi
+# 2. chattr +i the ROOT-DISK mountpoint inode so, if the mapper mount is absent, Docker's implicit
+#    bind-mount mkdir gets EPERM and the container REFUSES to start (an outage, not a silent
+#    plaintext write to the root disk — the #5274 data-stranding mode). Only immutabilize the bare
+#    (unmounted) mountpoint; never the live mapper mount.
+mkdir -p "$MOUNT"
+if ! mountpoint -q "$MOUNT"; then
+  chattr +i "$MOUNT" 2>/dev/null || true
+fi
+# 3. RequiresMountsFor drop-in: the app container unit must order after the /mnt/data mount so it
+#    can never start before the mapper is mounted (survives the --restart resurrection — C2).
+mkdir -p /etc/systemd/system/docker.service.d
+cat > /etc/systemd/system/docker.service.d/10-workspaces-luks-mount.conf <<'DROPIN'
+[Unit]
+RequiresMountsFor=/mnt/data
+DROPIN
+systemctl daemon-reload 2>/dev/null || true
+: "$MAPPER"  # referenced for documentation; the crypttab name is the load-bearing binding
+LUKSGATEEOF
+chmod 0755 /usr/local/bin/soleur-luks-structural-gate
+
 # Sentinel LAST: extraction + install proven complete. The terminal `docker run` block gates
 # on this file; without it the host poweroffs (fail-closed) instead of serving with an
 # unconfigured egress firewall / missing deploy scripts.
