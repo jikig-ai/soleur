@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily timer for the /workspaces LUKS at-rest probe (#6604)
+
+[Timer]
+# DAILY, not a 5-min poll: the mount topology is boot-immutable, so the steady-state check is a
+# once-a-day escrow + header-UUID re-test (C3/C15/DP-10). Persistent=true fires a missed run after
+# a reboot, so the heartbeat gap that pages is a genuinely dead probe, not a normal downtime window.
+OnCalendar=daily
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target

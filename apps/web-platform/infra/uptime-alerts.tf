@@ -153,6 +153,49 @@ resource "betteruptime_policy" "uptime" {
 # OAuth consent). A pending (un-accepted) member receives no alerts; free-tier
 # non-owner routing is best-effort. Documented fallback if it proves owner-only:
 # betteruptime_outgoing_webhook forward or a Responder-tier upgrade (expense-gated).
+# #6604 — the DAILY /workspaces LUKS at-rest probe heartbeat (DP-10: the steady-state dead-probe
+# switch, distinct from the soak's log-line query). luks-monitor.sh pushes it once a day on a
+# fully-green escrow+header re-test, so a MISSED push (period 86400 + 1h grace) pages — a dead probe
+# fails the heartbeat (P1-4). paused until the operator unpauses at cutover; policy-gated on the
+# paid tier like every sibling heartbeat. Mirrors betteruptime_heartbeat.git_data_prd.
+resource "betteruptime_heartbeat" "workspaces_luks" {
+  name      = "soleur-workspaces-luks-prd"
+  period    = 86400
+  grace     = 3600
+  call      = false
+  sms       = false
+  email     = true
+  push      = false
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+  paused    = true
+
+  lifecycle {
+    # Operator unpause via UI MUST NOT be reverted by subsequent applies (mirrors git_data_prd).
+    ignore_changes = [paused]
+  }
+}
+
+# #6604 — luks-monitor.sh reads this URL with the SAME pinned `doppler secrets get … --config
+# prd_workspaces_luks` form as the passphrase (so the probe never widens to `doppler run`). Kept
+# HERE (beside the heartbeat), NOT in workspaces-luks.tf, whose anti-laundering guard
+# (workspaces-luks.test.sh A9/A11) forbids any extra resource / ignore_changes in that pristine
+# five-resource security surface. Mirrors doppler_secret.git_data_heartbeat_url_prd; it +
+# betteruptime_heartbeat.workspaces_luks are BOTH OPERATOR_APPLIED_EXCLUSIONS, applied together by
+# the operator apply. NOT one of the five cutover-gate resources; never rides the gated cutover set.
+resource "doppler_secret" "workspaces_luks_heartbeat_url" {
+  project    = "soleur"
+  config     = "prd_workspaces_luks"
+  name       = "WORKSPACES_LUKS_HEARTBEAT_URL"
+  value      = betteruptime_heartbeat.workspaces_luks.url
+  visibility = "masked"
+
+  lifecycle {
+    ignore_changes = [value] # URL is stable per heartbeat resource lifetime.
+  }
+}
+
 resource "betteruptime_team_member" "ops" {
   email     = "ops@jikigai.com"
   role      = "responder"

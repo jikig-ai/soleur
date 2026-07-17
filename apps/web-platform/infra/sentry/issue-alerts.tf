@@ -1599,3 +1599,66 @@ resource "sentry_issue_alert" "web_terminal_boot_fatal" {
     ignore_changes = [environment]
   }
 }
+
+# #6604 — the /workspaces LUKS at-rest drift PAGE. Vector is Better-Stack-only and never reaches
+# Sentry, so the drift page depends ENTIRELY on workspaces-luks-emit.sh's direct-curl envelope
+# matching this filter (DP-8/DP-10): the emit sets BOTH feature=workspaces-luks AND
+# op=workspaces-luks-drift, and filter_match="all" requires both. luks-monitor.sh (daily) and the
+# cutover canary emit through that envelope on any failed at-rest assert.
+resource "sentry_issue_alert" "workspaces_luks_drift" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "workspaces-luks-drift"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 25 # unique — avoids Sentry's create-time "exact duplicate of <rule>" dedup
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        # value=0, NOT 1: event_frequency compares with a STRICT `current_value > value`
+        # (see zot_mirror_fallback_rate + web_terminal_boot_fatal above). This is a
+        # DEDICATED, COLD issue-group (an event is emitted ONLY on a failed at-rest
+        # assert), and luks-monitor.sh emits EXACTLY ONE event per daily failed run. With
+        # value=1 a single daily drift is count=1, `1 > 1` is false → NO page. value=0
+        # pages on the FIRST event (matches zot_mirror_fallback_rate). web_terminal_boot_fatal
+        # can use value=1 only because its group is always-already-hot (shared boot events);
+        # this group is not.
+        value    = 0
+        interval = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "workspaces-luks"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "workspaces-luks-drift"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners falls through to
+  # ActiveMembers, paging the solo founder. Drift events carry only the nine discriminating fields
+  # (device_type/mount_source/… /host/reason) — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}

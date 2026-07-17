@@ -205,6 +205,11 @@ if want_scripts; then
   run_suite "tests/scripts/registry-region-migrate-gate" bash tests/scripts/test-registry-region-migrate-gate.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the
+  # five #6593-authored workspaces_luks resources; ABORTs any touch of the live plaintext
+  # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
+  # or anything out of scope. Registered HERE — nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/workspaces-luks-cutover-gate" bash tests/scripts/test-workspaces-luks-cutover-gate.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
