@@ -45,15 +45,13 @@ Doppler `prd_terraform` via `doppler secrets get --plain` — same pattern as
 ```bash
 cd apps/web-platform/infra/sentry
 
-# Auth token: personal user token from
-# https://de.sentry.io/settings/account/api/auth-tokens/
-# scope: project:read (for plan), project:write (for import + apply)
-export SENTRY_AUTH_TOKEN=...
-
-# R2 backend creds — same pattern as the main infra root.
-export DOPPLER_TOKEN=...
-eval "$(doppler secrets get AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
-  --no-quote --plain --format env -p soleur -c prd_terraform | sed 's/^/export /')"
+# All three creds live in Doppler prd_terraform — no personal-token mint needed.
+# The provider reads SENTRY_AUTH_TOKEN; source it from the IaC token that CI uses
+# (SENTRY_IAC_AUTH_TOKEN). Export each individually — `doppler secrets get` on the
+# installed CLI does NOT support the `--no-quote`/`--format env` combo.
+export SENTRY_AUTH_TOKEN="$(doppler secrets get SENTRY_IAC_AUTH_TOKEN --plain -p soleur -c prd_terraform)"
+export AWS_ACCESS_KEY_ID="$(doppler secrets get AWS_ACCESS_KEY_ID --plain -p soleur -c prd_terraform)"
+export AWS_SECRET_ACCESS_KEY="$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain -p soleur -c prd_terraform)"
 
 terraform init -input=false
 terraform plan
