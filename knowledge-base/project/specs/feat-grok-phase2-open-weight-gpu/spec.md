@@ -1,12 +1,15 @@
 ---
 title: Phase 2 — Open-weight Grok Build dogfood on Hetzner Robot GPU
 issue: 6546
-closes: 6546
+# Close only after post-merge soak: comparison table + ledger + destroy/re-approve.
+# Pre-merge PR body must use Ref #6546 (not Closes) — artifacts-only until operator gates.
+closes_after: comparison-table-and-ledger
 lane: cross-domain
 brand_survival_threshold: single-user incident
 status: draft
 date: 2026-07-17
 brainstorm: knowledge-base/project/brainstorms/2026-07-17-grok-phase2-open-weight-gpu-brainstorm.md
+plan: knowledge-base/project/plans/2026-07-17-feat-phase2-open-weight-gex-gpu-dogfood-plan.md
 branch: feat-grok-phase2-open-weight-gpu
 draft_pr: 6597
 ---
