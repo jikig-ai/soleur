@@ -32,7 +32,7 @@
 # Exit semantics (per scripts/sweep-followthroughs.sh contract):
 #   0 = PASS       (soleur-inngest-prd emitted only by the dedicated node AND the dedicated
 #                   node is live in-window; sweeper closes #6616)
-#   1 = FAIL       (a web host — soleur-web-platform/soleur-web-2 — still emits
+#   1 = FAIL       (a web host — soleur-web-platform — still emits
 #                   soleur-inngest-prd; the collision is live; sweeper leaves #6616 open)
 #   2 = TRANSIENT  (creds/query fault, OR no dedicated-node liveness marker in-window —
 #                   source dark / `host` field renamed → all-empty; never a false PASS)
@@ -58,13 +58,15 @@ MISLABEL_HOST_NAME="soleur-inngest-prd"          # the stale literal — inngest
 DEDICATED_HOST="soleur-inngest"                  # dedicated node = hcloud_server.inngest name (inngest-host.tf:202) = its OS hostname; live inngest-heartbeat fingerprint, 2026-07-17
 # Web-host OS-hostname/host_name map from apps/web-platform/infra/server.tf:225
 # (name/host_name = each.key=="web-1" ? "soleur-web-platform" : "soleur-${each.key}").
-# SOLEUR-DEBT: this denylist enumerates the current web fleet {web-1, web-2}; a future web-3
-# (→ soleur-web-3) wearing the Inngest label would escape the FAIL predicate (a conscious
+# SOLEUR-DEBT: this denylist enumerates the current web fleet {web-1}; a future web-N
+# (→ soleur-web-N) wearing the Inngest label would escape the FAIL predicate (a conscious
 # trade-off — an allowlist would false-FAIL on the dedicated node's generic early-boot rows;
-# DC-1 YAGNI-descoped a generic multi-host detector). Upgrade trigger: web fleet grows past 2,
+# DC-1 YAGNI-descoped a generic multi-host detector). Upgrade trigger: web fleet grows past 1,
 # OR a web-1 recreate changes its OS hostname away from soleur-web-platform. Re-sync with
-# server.tf:225 (the parity test asserts these two are present there).
-WEB_HOSTS=("soleur-web-platform" "soleur-web-2")
+# server.tf:225 (the parity test asserts this set matches var.web_hosts keys there).
+# web-2 (soleur-web-2) RETIRED 2026-07-17 (#6538) — dropped from the set; a stale soleur-web-2
+# telemetry row must no longer be read as a LIVE web-host collision (see the .test.sh case).
+WEB_HOSTS=("soleur-web-platform")
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BQ="${HOSTNAME_MISLABEL_BQ:-$SCRIPT_DIR/../betterstack-query.sh}"

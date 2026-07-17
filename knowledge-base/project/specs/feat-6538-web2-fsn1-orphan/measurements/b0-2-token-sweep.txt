@@ -1,0 +1,383 @@
+.github/workflows/apply-deploy-pipeline-fix.yml:190:    # the release deploy / web_2_recreate / warm_standby — at most one web-1 swap in
+.github/workflows/apply-web-platform-infra.yml:86:      # triggers the host-side deploy fan-out to web-2, and verifies web-2 off-host
+.github/workflows/apply-web-platform-infra.yml:92:        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume) | registry-host-replace (scoped -replace of the registry host to re-run cloud-init + apply any pending volume resize; preserves the zot storage volume) | registry-region-migrate (#6288: move the registry to var.registry_location + recreate the store volume in the new region — the store is a disposable GHCR mirror that re-fills from GHCR; scoped, guarded, no out-of-scope destroys) | git-data-host-replace (scoped -replace of the git-data host to re-run cloud-init; preserves BOTH data volumes + the LUKS passphrase; #6242)"
+.github/workflows/apply-web-platform-infra.yml:99:          - web-2-recreate
+.github/workflows/apply-web-platform-infra.yml:426:          # target-reachable. That asymmetry is exactly how soleur-web-2 came up
+.github/workflows/apply-web-platform-infra.yml:451:            echo "::error::  • hcloud_server.web[\"web-2\"] / its volume → dispatch 'gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby -f reason=...' (it targets the network attach + volume, and pulls the server transitively)."
+.github/workflows/apply-web-platform-infra.yml:454:            echo "::error::  • a legitimate new host (e.g. web-3 added to var.web_hosts) → NO dispatch creates it either (warm-standby's targets are hardcoded to web-2). It needs an operator-local full apply BEFORE the code merges, or EVERY subsequent merge HALTs here — not just this PR's."
+.github/workflows/apply-web-platform-infra.yml:685:  # sneak in), then triggers the host-side deploy fan-out to web-2 and verifies
+.github/workflows/apply-web-platform-infra.yml:686:  # web-2 accepted the deploy OFF-HOST via web-1's /hooks/deploy-status `reason`
+.github/workflows/apply-web-platform-infra.yml:687:  # (no SSH; web-2 has no public ingress — Open Question 1 topology resolution).
+.github/workflows/apply-web-platform-infra.yml:692:    # this job fans a redeploy out to web-2 which re-swaps web-1, so it shares the
+.github/workflows/apply-web-platform-infra.yml:693:    # `web-1-swap` group with the release deploy / web_2_recreate / pipeline-fix
+.github/workflows/apply-web-platform-infra.yml:709:      # deploy out to web-2 (10.0.1.11) over the private net.
+.github/workflows/apply-web-platform-infra.yml:794:              -target='hcloud_server_network.web["web-2"]' \
+.github/workflows/apply-web-platform-infra.yml:795:              -target='hcloud_volume.workspaces["web-2"]' \
+.github/workflows/apply-web-platform-infra.yml:796:              -target='hcloud_volume_attachment.workspaces["web-2"]'
+.github/workflows/apply-web-platform-infra.yml:838:        # attach proof (P0.1 / SE-1): no off-host reachability to web-2 is needed —
+.github/workflows/apply-web-platform-infra.yml:840:        # BOTH the web-2 volume-attachment AND web-2's private-network attachment
+.github/workflows/apply-web-platform-infra.yml:851:          for addr in 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_server_network.web["web-2"]'; do
+.github/workflows/apply-web-platform-infra.yml:860:            echo "::error::warm-standby apply did not yield the expected web-2 attachments — aborting before the deploy trigger."
+.github/workflows/apply-web-platform-infra.yml:864:      - name: Verify web-2 accepted the deploy off-host (shared poll — no SSH)
+.github/workflows/apply-web-platform-infra.yml:872:        # deploy-status-fanout-verify.sh — the SAME poll the web_2_recreate job runs,
+.github/workflows/apply-web-platform-infra.yml:876:        # web-1 at that tag + fans the deploy out to web-2, then proves web-2 accepted
+.github/workflows/apply-web-platform-infra.yml:880:        # landed / billing flips" recovery wording. A booted warm-standby web-2 returns
+.github/workflows/apply-web-platform-infra.yml:911:  # ─── web-2-recreate host bootstrap (dispatch-only; R2-serialized; no SSH) ─────
+.github/workflows/apply-web-platform-infra.yml:912:  # Selected by `-f apply_target=web-2-recreate`. Runs in the SAME workflow, so it
+.github/workflows/apply-web-platform-infra.yml:917:  # of hcloud_server.web["web-2"] to re-run first-boot cloud-init and bind web-2's
+.github/workflows/apply-web-platform-infra.yml:918:  # :9000 webhook listener (which its ORIGINAL boot aborted before reaching). web-2
+.github/workflows/apply-web-platform-infra.yml:922:  # ["web-2"] is a SEPARATE resource — the server replace does not recreate it.
+.github/workflows/apply-web-platform-infra.yml:923:  # PREREQUISITE to the warm-standby fan-out (web-2 must bind :9000 before the
+.github/workflows/apply-web-platform-infra.yml:925:  web_2_recreate:
+.github/workflows/apply-web-platform-infra.yml:926:    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'web-2-recreate'
+.github/workflows/apply-web-platform-infra.yml:973:      # runtime, so the fan-out reaches web-2 (10.0.1.11). Single-peer invariant.
+.github/workflows/apply-web-platform-infra.yml:1046:            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform — the fresh-boot fatal-emit would be dark for pre-extraction stages. Set it before recreating web-2 (#6090)."
+.github/workflows/apply-web-platform-infra.yml:1093:          # web-1, not a partially-recreated web-2. This holds by construction —
+.github/workflows/apply-web-platform-infra.yml:1154:        # applied local.host_scripts_content_hash, else recreating web-2 would
+.github/workflows/apply-web-platform-infra.yml:1165:      - name: Terraform plan (scoped web-2 -replace) + web-2-recreate destroy-guard
+.github/workflows/apply-web-platform-infra.yml:1170:        # Scoped -replace of the web-2 server + the 3 web-2 -targets, with the pinned
+.github/workflows/apply-web-platform-infra.yml:1173:        # the scoped web-2 recreate (web2_out_of_scope_changes==0 && nested_deletes==0
+.github/workflows/apply-web-platform-infra.yml:1175:        # .workspaces["web-2"] is NOT -targeted (data volume preserved).
+.github/workflows/apply-web-platform-infra.yml:1180:              -replace='hcloud_server.web["web-2"]' \
+.github/workflows/apply-web-platform-infra.yml:1181:              -target='hcloud_server.web["web-2"]' \
+.github/workflows/apply-web-platform-infra.yml:1182:              -target='hcloud_server_network.web["web-2"]' \
+.github/workflows/apply-web-platform-infra.yml:1183:              -target='hcloud_volume_attachment.workspaces["web-2"]' \
+.github/workflows/apply-web-platform-infra.yml:1188:            echo "::error::terraform plan (web-2-recreate) failed (exit $rc)."
+.github/workflows/apply-web-platform-infra.yml:1198:            echo "::error::web-2-recreate destroy-guard ABORTED: the plan is not the exact scoped web-2 recreate (an out-of-scope change, a web-2 data-volume destroy, a web-1 touch, a reboot, or a no-op). Refusing to apply. NO [ack-destroy] bypass on this path."
+.github/workflows/apply-web-platform-infra.yml:1227:            echo "::error::web-2-recreate stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above for the free warm-standby repair path and #6463). Refusing to apply — the destroy would succeed and the create would not. NO [ack-destroy] bypass on this path."
+.github/workflows/apply-web-platform-infra.yml:1230:          echo "web-2-recreate plan is the exact scoped recreate. Plan summary:"
+.github/workflows/apply-web-platform-infra.yml:1233:      - name: Terraform apply (web-2 -replace) — attach proof + volume-preserved assert
+.github/workflows/apply-web-platform-infra.yml:1238:        # Apply the saved, guarded plan. Post-apply: assert the two web-2 dependents
+.github/workflows/apply-web-platform-infra.yml:1246:          # exact plan we applied) that hcloud_volume.workspaces["web-2"] carries no
+.github/workflows/apply-web-platform-infra.yml:1249:            | select(.address == "hcloud_volume.workspaces[\"web-2\"]")
+.github/workflows/apply-web-platform-infra.yml:1252:            echo "::error::hcloud_volume.workspaces[\"web-2\"] shows ${VOL_DELETES} delete action(s) in the applied plan — the data volume must be preserved. This should have been caught by the guard; failing hard."
+.github/workflows/apply-web-platform-infra.yml:1258:          for addr in 'hcloud_server.web["web-2"]' 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_server_network.web["web-2"]'; do
+.github/workflows/apply-web-platform-infra.yml:1267:            echo "::error::web-2-recreate apply did not yield the expected web-2 resources — aborting before the deploy verify."
+.github/workflows/apply-web-platform-infra.yml:1271:      - name: Wait for web-2 :9000 + verify off-host (no SSH — shared poll)
+.github/workflows/apply-web-platform-infra.yml:1279:        # gate, and a TERMINAL exit 1 on timeout (no green-on-timeout). A fresh web-2
+.github/workflows/apply-web-platform-infra.yml:1299:        # (web-2's Hetzner instance-id) is unknown to the runner, so match on message + a
+.github/workflows/apply-web-platform-infra.yml:1314:          echo "web-2-recreate — fresh-host Sentry pointer (job=${JOB_STATUS})"
+.github/workflows/apply-web-platform-infra.yml:1316:            echo "## web-2-recreate — fresh-host Sentry pointer (best-effort)"
+.github/workflows/apply-web-platform-infra.yml:1321:              echo "Verify failed. If web-2's fresh boot aborted, a Sentry breadcrumb/fatal should name the last-reached stage below."
+.github/workflows/apply-web-platform-infra.yml:1383:      - name: web-2-recreate summary
+.github/workflows/apply-web-platform-infra.yml:1392:            echo "## web-2-recreate host bootstrap (ADR-068)"
+.github/workflows/apply-web-platform-infra.yml:1547:  # hcloud_server.inngest needs THIS scoped -replace path — mirroring web_2_recreate. The
+.github/workflows/cutover-inngest.yml:103:          # variables.tf) — incl weight-0 web-2 (10.0.1.11), which self-arms oneshots into
+.github/workflows/cutover-inngest.yml:564:              # infra is DEFERRED, see the tracking issue), so the weight-0 warm-standby web-2
+.github/workflows/cutover-inngest.yml:566:              # weight, is NOT captured here. web-2's reminders are covered by the OPERATOR
+.github/workflows/cutover-inngest.yml:567:              # web-2 freeze/recreate step in the SEAM below — NOT by this capture. The host
+.github/workflows/cutover-inngest.yml:598:              # CANNOT individually probe the weight-0 warm-standby web-2 (10.0.1.11), which
+.github/workflows/cutover-inngest.yml:602:              # claim "zero inngest across all $CUTOVER_HOSTS". web-2 quiesce is a MANDATORY
+.github/workflows/cutover-inngest.yml:603:              # OPERATOR step (the SEAM below, via the plan's web-2 freeze/recreate lifecycle)
+.github/workflows/cutover-inngest.yml:618:              # stop+disable + the operator web-2 freeze/recreate are what cover the web hosts.
+.github/workflows/cutover-inngest.yml:655:              echo "::notice::2.2 QUIESCE HARD GATE PASSED: the LB-REACHABLE host(s) POSITIVELY confirmed not-serving (fail-closed). SCOPE (DI-C3, tracked #6227): this LB-routed path did NOT individually probe the weight-0 warm-standby web-2 (10.0.1.11). op=quiesce-web (when run) now stop+disables web-2's scheduler too (an ACT), but CI still cannot VERIFY web-2 AND web-2's local reminders were never captured — the MANDATORY web-2 freeze/recreate step in the SEAM below is NOT superseded; do NOT read a green op=quiesce-web as 'web-2 handled'."
+.github/workflows/cutover-inngest.yml:661:              # The remaining true operator seams are 2.2a (web-2 lifecycle) and 2.4 (app-repoint).
+.github/workflows/cutover-inngest.yml:663:              echo "::notice::SEAM — operator maintenance-window steps (2.2a web-2 lifecycle + 2.4 app-repoint are operator; 2.2b/2.3 arm-flip is now the no-SSH op=arm dispatch):"
+.github/workflows/cutover-inngest.yml:664:              echo "  2.2a WEB-2 QUIESCE — MANDATORY, NOT AUTO-VERIFIED (DI-C3, tracked #6227). op=quiesce-web (when run) now stop+disables web-2's SCHEDULER over the private net (an ACT — a real improvement over operator-only web-2 handling), BUT CI still cannot VERIFY web-2 (LB-scoped) AND web-2's local reminders were NEVER captured (2.1 capture is also LB-scoped). The weight-0 warm-standby web-2 (10.0.1.11) self-arms oneshots into its OWN Redis independent of LB weight. So the web-2 freeze/recreate lifecycle REMAINS MANDATORY — do NOT read a green op=quiesce-web as 'web-2 handled'. Before arming the flip you MUST recreate web-2 onto the post-cutover config: take web-2 OUT of the warm-standby rotation and recreate it so no surviving web-2 scheduler self-arms a reminder into its local Redis. RISK IF SKIPPED: a reminder self-armed on an un-quiesced web-2 is silently dropped at cutover (its local Redis is never captured/re-armed). This is a lifecycle action (freeze → recreate), NOT a host shell step (AC-NOSSH). Do NOT proceed to arm the flip until web-2 is recreated. Tracks #6227 (real per-host fan-out to auto-verify web-2)."
+.github/workflows/cutover-inngest.yml:896:              # DI-C3 / web-2 scope (spec-flow Finding 4): the fan-out ACTs on web-2 but CI
+.github/workflows/cutover-inngest.yml:897:              # cannot VERIFY web-2 (LB-scoped) AND web-2's local reminders were never captured.
+.github/workflows/cutover-inngest.yml:898:              echo "::notice::quiesce-web complete (LB-reachable host verified quiesced via deploy-status). SCOPE (DI-C3): op=quiesce-web now stop+disables web-2's scheduler (an ACT), but CI cannot VERIFY web-2 AND web-2's local reminders were never captured — the operator web-2 freeze/recreate lifecycle (op=execute 2.2a) REMAINS MANDATORY. Do NOT read this green as 'web-2 handled'. Now re-run op=execute."
+.github/workflows/cutover-inngest.yml:1015:              echo "::notice::2.6 SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-2 double-fire detector — a surviving weight-0 web-2 scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. The operator's MANDATORY web-2 quiesce (op=execute SEAM, web-2 freeze/recreate) is the control against a web-2 double-fire — op=verify cannot substitute for it."
+.github/workflows/cutover-inngest.yml:1201:              # web-2 is ACTed by the fan-out but its verdict is acceptance-only (DI-C3, same
+.github/workflows/cutover-inngest.yml:1203:              echo "::notice::rollback complete (LB-reachable host verified enabled via deploy-status). SCOPE (DI-C3): web-2 is re-enabled by the fan-out but not individually VERIFIED here — confirm web-2 via its freeze/recreate lifecycle."
+.github/workflows/scheduled-inngest-health.yml:837:              printf 'Colo geography attributes a connector to a host (`origin_ip` is null on this endpoint): `ams*`/`hel*` = hel1 = **web-1**; `fra*` = fsn1 = **web-2**.\n\n'
+.github/workflows/scheduled-inngest-health.yml:838:              printf '### Remediation\n\n1. A non-primary host is running `cloudflared`. Expected cause: a recreate that bypassed the `web_tunnel_connector` gate (`server.tf`), a predicate regression, or a hand-run `cloudflared`.\n2. Re-assert the gate and recreate the offending host via `apply-web-platform-infra.yml` (`apply_target=web-2-recreate`).\n3. Do **not** "fix" this by adding a per-hostname ingress rule — ADR-114 records that as a normative anti-pattern: a per-hostname rule does not pin a connector.\n4. Re-pooling a host is NOT a weight flip and is blocked on #6466 (host-addressability).\n\nRefs #6425, ADR-114 (I1/I2), ADR-068.\n'
+.github/workflows/validate-vector-config.yml:99:          for hn in soleur-web-platform soleur-web-2 soleur-inngest-prd; do
+.github/workflows/web-platform-release.yml:441:    # web_2_recreate / warm_standby / pipeline-fix apply) so at most one runs at a
+.github/workflows/web-platform-release.yml:562:          # incident: a drift means web-2 silently misses deploys).
+apps/web-platform/infra/ci-deploy.sh:178:# so the release workflow surfaces "web-1 ok, web-2 down" without SSH).
+apps/web-platform/infra/ci-deploy.sh:556:    # (PR #6395 had to cross-reference the release aggregate JSON to pin it to web-2). The
+apps/web-platform/infra/ci-deploy.sh:1259:      # §1A (#6090 recurrence, web-2 fsn1 warm-standby 2026-07-13): the baked GHCR read token
+apps/web-platform/infra/ci-deploy.sh:2550:        # surfaces "web-1 ok, web-2 down" (#5274 Phase 3, ADR-068).
+apps/web-platform/infra/ci-deploy.test.sh:1102:# pin it to web-2). Assert the wiring at the source, scoped to the pull_failure_event body: the
+apps/web-platform/infra/ci-deploy.test.sh:3305:# web-2's fsn1 warm-standby not serving (2026-07-13): the fresh host's baked GHCR read
+apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh:10:# and web-2-recreate could never produce a working warm standby. Worse, the failure
+apps/web-platform/infra/cloud-init.yml:4:# 28819237402 proved web-2 dies in the opaque config phase (bootcmd_start fired, runcmd_start never
+apps/web-platform/infra/cloud-init.yml:303:  # block where on_err used to be defined — the blind spot that silently aborted web-2's fresh
+apps/web-platform/infra/cloud-init.yml:360:  # 28819237402 localized web-2's death to the opaque config phase (bootcmd_start fired,
+apps/web-platform/infra/cron-egress-enforce-probe.sh:9:# apply after deploy". On the cloud-init-only web-2 path there IS no SSH re-apply, so
+apps/web-platform/infra/deploy-status-fanout-verify.test.sh:2:# Network-free unit tests for the shared off-host web-2 acceptance verify
+apps/web-platform/infra/deploy-status-fanout-verify.test.sh:6:# RED, but a fresh `terraform apply -replace` boot of web-2 takes ~10 min to bind
+apps/web-platform/infra/deploy-status-fanout-verify.test.sh:279:# v1.1.0, web-2's `ok` completion at v1.1.0 matches DEPLOY_TAG → exit 0. Restores the
+apps/web-platform/infra/dns.tf:6:# CANNOT ride the per-PR merge-apply: web-2 does not exist until the operator's
+apps/web-platform/infra/dns.tf:10:# in the SAME maintenance window that provisions web-2, as a FULL operator apply (not
+apps/web-platform/infra/inngest-bootstrap.sh:474:#                                 (web-1 + web-2 warm standby), so BOTH must carry this
+apps/web-platform/infra/inngest-bootstrap.sh:475:#                                 cap or the aggregate (2×20=40) exceeds 30. web-2 is
+apps/web-platform/infra/inngest-host.tf:10:# unblocks active-active web (web-2 pooled, #6178 / #6185).
+apps/web-platform/infra/inngest-host.tf:233:    # to a private VIP when web-2 is pooled (Phase 4.2). Consumed by inngest-bootstrap.sh.
+apps/web-platform/infra/inngest.test.sh:628:# fresh host (:9000 never binds -> ok_peer_fanout_degraded -> web-2 undeployed).
+apps/web-platform/infra/inngest.tf:223:# on this SHARED prod pooler — web-1 (10.0.1.10) AND web-2 (10.0.1.11, weight-0 warm
+apps/web-platform/infra/inngest.tf:226:# still hit EMAXCONNSESSION after web-1 was capped: web-2's co-located inngest was
+apps/web-platform/infra/inngest.tf:231:# (≤8) ≈ 28 < 30. Pre-flip remediation: bring web-2 into the fan-out
+apps/web-platform/infra/lb-weight-gate.sh:11:# consumer that reads exit 0 as "safe to weight web-2" is contractually wrong: this proves
+apps/web-platform/infra/lb-weight-gate.sh:22:#       value; web-2 must be a roster host_id; allowlist peers ⊆ roster addresses.
+apps/web-platform/infra/lb-weight-gate.sh:106:# web-2 specifically present as a roster host_id.
+apps/web-platform/infra/lb-weight-gate.sh:107:jq -e 'has("web-2")' >/dev/null 2>&1 <<<"$ROSTER_RAW" || fail "A_web2_not_in_roster"
+apps/web-platform/infra/lb-weight-gate.sh:119:# web-2's roster (dial) address ⊆ allowlist (accept set) — the INBOUND direction the
+apps/web-platform/infra/lb-weight-gate.sh:123:#   roster={web-1,web-2}, allowlist={web-1 addr}
+apps/web-platform/infra/lb-weight-gate.sh:124:# PASSES the subset check yet web-1 would REJECT an inbound relay from web-2 (its addr ∉
+apps/web-platform/infra/lb-weight-gate.sh:125:# allowlist) → post-weight-flip mis-route → web-2 serves an empty /workspaces →
+apps/web-platform/infra/lb-weight-gate.sh:126:# workspace-gone. So assert web-2's dial address is a MEMBER of the allowlist. (Only
+apps/web-platform/infra/lb-weight-gate.sh:127:# web-2's is required, not full set equality: extra roster hosts whose addresses are not
+apps/web-platform/infra/lb-weight-gate.sh:131:WEB2_ADDR=$(jq -r '.["web-2"]' <<<"$ROSTER_RAW")
+apps/web-platform/infra/lb-weight-gate.test.sh:38:    [SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11"}'
+apps/web-platform/infra/lb-weight-gate.test.sh:110:# 3. Roster missing web-2 specifically → reject.
+apps/web-platform/infra/lb-weight-gate.test.sh:112:assert_rejects_with "roster without web-2 entry" "A_web2_not_in_roster"
+apps/web-platform/infra/lb-weight-gate.test.sh:115:reset_def; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11","web-2":"10.0.1.99"}'; run_with_def
+apps/web-platform/infra/lb-weight-gate.test.sh:121:reset_def; DEF[SOLEUR_HOST_ROSTER]='{"web-2":"10.0.1.11","   ":"10.0.1.10"}'; run_with_def
+apps/web-platform/infra/lb-weight-gate.test.sh:123:reset_def; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"","web-2":"10.0.1.11"}'; run_with_def
+apps/web-platform/infra/lb-weight-gate.test.sh:130:# 5b. web-2's roster (dial) address ⊄ allowlist (inbound accept set) → reject. Here the
+apps/web-platform/infra/lb-weight-gate.test.sh:132:#     A.subset check passes, but web-2's addr (10.0.1.11) is NOT an accepted inbound peer →
+apps/web-platform/infra/lb-weight-gate.test.sh:133:#     post-flip inbound relay from web-2 would be rejected → workspace-gone.
+apps/web-platform/infra/lb-weight-gate.test.sh:135:assert_rejects_with "roster has web-2 but allowlist omits its dial address" "A_web2_addr_not_in_allowlist"
+apps/web-platform/infra/lb-weight-gate.test.sh:177:# 8b. Extra valid host beyond web-1/web-2, allowlist all-in-roster incl. web-2's addr →
+apps/web-platform/infra/lb-weight-gate.test.sh:180:DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11","web-3":"10.0.1.12"}'
+apps/web-platform/infra/lb-weight-gate.test.sh:183:assert_zero "roster with extra host + allowlist all-in-roster (web-2 addr present) → exit 0"
+apps/web-platform/infra/resolve-web1-known-good-tag.test.sh:5:# #6147 — the web_2_recreate pin-gate used to read web-1's running tag from the
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:2:# Shared off-host web-2 acceptance verify (spec-flow P1-3, AC10c). EXTRACTED so
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:3:# the web_2_recreate dispatch job AND the warm_standby dispatch job REUSE this poll
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:5:# hazard). It triggers the host-side deploy fan-out to web-2 via web-1's PUBLIC
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:6:# /hooks/deploy (the only off-host-reachable trigger; web-2 :9000 is private-net-
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:7:# deny), then proves web-2 accepted OFF-HOST via web-1's /hooks/deploy-status
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:8:# `reason` — NO SSH, no private-IP curl. web-2 binding :9000 (fresh cloud-init
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:13:# boot of web-2 takes ~10 min (apt + docker + multi-image pull + webhook-enable);
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:14:# at fan-out time web-2's :9000 is still unbound, so the single fan-out degrades.
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:19:# loop. A booted warm-standby web-2 returns reason==ok on the FIRST fan-out, so the
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:23:#   - ROSTER_COUNT==2 single-peer guard: reason==ok ⟹ web-2 accepted holds ONLY
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:40:#   SETTLE_SECONDS                default 30 (fresh web-2 private-iface + :9000 bind)
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:87:  echo "::error::web-2 verify assumes exactly one peer besides web-1 (reason==ok ⟹ web-2 accepted), but WEB_HOST_PRIVATE_IPS enumerates ${ROSTER_COUNT} hosts. With >1 peer, reason=ok no longer uniquely proves web-2 accepted — teach this verify to read per-peer state before adding web-3."
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:95:    printf '%s' "Attach landed (billing flips) but web-2 is undeployed — ingress-safe (web-2 weight 0). Recovery: idempotent re-dispatch."
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:97:    printf '%s' "Recreate landed but web-2 is undeployed — ingress-safe (web-2 weight 0). Recovery: idempotent re-dispatch."
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:131:# not a partially-recreated web-2. Holds today by construction — cloudflare_record.app
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:133:# round-robin LB, and web-2 rides at ingress weight 0. REVISIT TRIGGER: if the multi-host
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:134:# DNS rewire (#5274) or the #6178 inngest cutover makes `app` canary-weighted so web-2 can
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:205:# match and a HEALTHY web-2 would RED on budget exhaustion (spec-flow P1). /health is the
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:219:    echo "::error::deploy webhook rejected the web-2 fan-out (HTTP $code). $(_recovery_msg)"
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:223:  echo "deploy fan-out accepted (HTTP 202) for ${DEPLOY_TAG}; verifying web-2 acceptance off-host…"
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:250:# Bounded settle for the fresh web-2 private interface / :9000 bind.
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:253:# 2. Trigger the fan-out (re-swaps web-1 at the /health-resolved tag first, then web-2).
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:285:        echo "web-2 ACCEPTED the deploy (reason=ok, tag=$DEPLOY_TAG, elapsed=${elapsed}s). web-2 :9000 bound — verified off-host (no SSH)."
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:302:          echo "::error::web-2 still degraded after the single re-POST (reason=$REASON, retrigger=$retrigger_count/$DEGRADED_RETRY_MAX, elapsed=${elapsed}s). $(_recovery_msg) RED."
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:309:          echo "verify $i/$STATUS_POLL_MAX_ATTEMPTS: web-2 not yet bound (reason=$REASON, elapsed=${elapsed}s < ${FRESH_BOOT_WINDOW_S}s) — waiting out the fresh-boot window before the single re-POST"
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh:340:echo "::error::web-2 fan-out did not report a fresh completion within $((STATUS_POLL_MAX_ATTEMPTS * STATUS_POLL_INTERVAL_S))s (retrigger=$retrigger_count/$DEGRADED_RETRY_MAX). $(_recovery_msg) Failing loudly per the recovery contract."
+apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh:5:# WHY THIS EXISTS: the web_2_recreate pin-gate used to read web-1's running tag
+apps/web-platform/infra/scripts/web2-recreate-preflight.sh:2:# web-2-recreate coherence preflight (LOAD-BEARING — spec-flow P1-2/P1-4, AC10b).
+apps/web-platform/infra/scripts/web2-recreate-preflight.sh:7:# If they diverge, recreating web-2 would RE-ABORT at cloud-init stage=verify
+apps/web-platform/infra/scripts/web2-recreate-preflight.sh:101:  die "COHERENCE MISMATCH: the pinned digest ${DIGEST} bakes host-scripts hashing to ${GOT}, but the applied local.host_scripts_content_hash is ${WANT}. Recreating web-2 on this image would RE-ABORT at cloud-init stage=verify. The checkout has drifted from web-1's running image — redeploy web-1 to current main first, then re-dispatch. NOT proceeding to -replace."
+apps/web-platform/infra/sentry/issue-alerts.tf:1515:# doppler_download, docker_run}) on a no-SSH boot abort. This is the SOLE PAGE for a dead web-2
+apps/web-platform/infra/sentry/issue-alerts.tf:1516:# WARM STANDBY: web-2 takes no app.soleur.ai traffic, so `betteruptime_monitor.app` (LB surface,
+apps/web-platform/infra/server.tf:103:  # force-REPLACE the live prod host). web-2 is fresh — provisioned entirely by
+apps/web-platform/infra/server.tf:105:  # the git-data host's cloud-init-only shape, so a web-2 that is not yet
+apps/web-platform/infra/server.tf:121:  # it stays placeable when web-1's DC is capacity-starved (2026-07-13: web-2 hel1→fsn1).
+apps/web-platform/infra/server.tf:143:  # ignore_changes=[user_data], so ONLY a fresh create (the web-2 recreate this PR instruments)
+apps/web-platform/infra/server.tf:184:    # lockstep; a lone connector flip would put the connector on web-2 while the A record
+apps/web-platform/infra/server.tf:221:    # web-2 resolve to DISTINCT sources in the shared Logs source 2457081 — a generic/duplicate
+apps/web-platform/infra/server.tf:238:  # applies — unwedging #5887 with ZERO reboot. web-2 was born INTO the group at
+apps/web-platform/infra/server.tf:245:  # must NOT remove this entry or shift web-2's Cloudflare LB weight above 0 until the
+apps/web-platform/infra/server.tf:249:  # (GIT_DATA_STORE_ENABLED==true + LUKS soak marker). Pooling web-2 before both = a
+apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh:4:# Observability probe guard for the web-2 fresh-boot blind spot (#6090).
+apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh:6:# CONTEXT: web-2 never completes a fresh boot — cloud-init dies SILENTLY after the
+apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh:343:  ok "AC14: web-2-recreate asserts baked SENTRY_DSN non-empty before -replace (pre-extraction can't go dark)"
+apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh:349:# recreate 28812931362 (on the merged pre-extraction fix) was STILL fully dark — web-2 emits
+apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh:387:# recreate 28819237402 localized web-2's death to the packages:/config phase (bootcmd_start fired,
+apps/web-platform/infra/soleur-host-bootstrap.sh:322:# name (SOLEUR_HOST_NAME, passed by cloud-init). Distinct per host so web-1/web-2 do not
+apps/web-platform/infra/tests/web-hosts-eu-pin.tftest.hcl:87:      "web-2" = { location = "hil", private_ip = "10.0.1.11" }
+apps/web-platform/infra/tunnel.tf:51:    # while EVERY connector host is a 10.0.1.0/24 member (ADR-114 invariant I1); web-2 was not.
+apps/web-platform/infra/variables.tf:103:    # web-2 sits in a DIFFERENT DC from web-1's hel1 (DC-failure resilience). A same-DC
+apps/web-platform/infra/variables.tf:105:    # DURING a hel1 capacity shortage destroyed web-2 then could not re-place it, wedging
+apps/web-platform/infra/variables.tf:109:    "web-2" = { location = "fsn1", private_ip = "10.0.1.11" }
+apps/web-platform/infra/variables.tf:113:    error_message = "web_hosts location must be an EU Hetzner DC (nbg1/fsn1/hel1) — GDPR residency (CLO T-1, GA-blocking). A non-EU web host or placement group is rejected before web-2 serves."
+apps/web-platform/infra/variables.tf:295:  description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working. NOTE: the doppler fallback only applies AFTER doppler is installed — the pre-extraction fresh-boot stages (pkg_audit/doppler_dl, #6090) depend SOLELY on this baked value, so an empty DSN there silently reverts to a zero-emit abort. The web-2-recreate job's 'Extract backend credentials' step asserts this is non-empty before -replace so that coverage cannot regress unnoticed."
+apps/web-platform/infra/vector.toml:373:# server name (`soleur-web-platform`/`soleur-web-2`). Keep both render sites in lockstep.
+apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh:13:#   2. apply-web-platform-infra.yml    job `web_2_recreate` (#6030 operator recreate)
+apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh:95:assert_member "$APPLY_INFRA_WF"  "web_2_recreate" "web-2-recreate"
+apps/web-platform/infra/web-hosts-fanout-parity.test.sh:6:# web-2 entirely) → web-2 silently ships stale code (single-user incident). There
+apps/web-platform/infra/web-hosts-fanout-parity.test.sh:11:#      web-2 (env WEB_HOST_PRIVATE_IPS).
+apps/web-platform/infra/web-hosts-fanout-parity.test.sh:12:#   3. apply-web-platform-infra.yml `web_2_recreate` job (#6030) — the same env,
+apps/web-platform/infra/web-hosts-fanout-parity.test.sh:88:# Operand 3: apply-web-platform-infra.yml — 2 copies (warm_standby + web_2_recreate, #6030).
+apps/web-platform/infra/webhook.service:46:# gates off the dir-creator, so a mandatory token 226/NAMESPACE'd fresh web-2
+plugins/soleur/test/stock-preflight-coverage.test.ts:72:    // hcloud_server_network.web["web-2"] carries `server_id = hcloud_server.web[each.key].id`
+plugins/soleur/test/stock-preflight-coverage.test.ts:74:    // transitively" and recommends it as THE remediation for a missing web-2. So it CAN
+plugins/soleur/test/stock-preflight-coverage.test.ts:95:// Sentinel: 8 options today (manual-rerun, warm-standby, web-2-recreate, inngest-host,
+plugins/soleur/test/terraform-target-parity.test.ts:402: * Strip ALL dispatch-only jobs (warm_standby + web_2_recreate) from the workflow
+plugins/soleur/test/terraform-target-parity.test.ts:406: * must-fix 2: web_2_recreate carries `-target='hcloud_server.web["web-2"]'`, whose
+plugins/soleur/test/terraform-target-parity.test.ts:438:          stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate"),
+plugins/soleur/test/terraform-target-parity.test.ts:684:      // JOB-AWARE: exclude the dispatch-only jobs (warm_standby + web_2_recreate)
+plugins/soleur/test/terraform-target-parity.test.ts:981:      // hcloud_server_network.web["web-1"/"web-2"]; the web_2_recreate job
+plugins/soleur/test/terraform-target-parity.test.ts:982:      // `-target`s hcloud_server.web["web-2"] (base hcloud_server.web — itself a
+plugins/soleur/test/terraform-target-parity.test.ts:1045:// web-2. This guard pins the target set to EXACTLY the 6 additive resources and
+plugins/soleur/test/terraform-target-parity.test.ts:1055:  'hcloud_server_network.web["web-2"]',
+plugins/soleur/test/terraform-target-parity.test.ts:1056:  'hcloud_volume.workspaces["web-2"]',
+plugins/soleur/test/terraform-target-parity.test.ts:1057:  'hcloud_volume_attachment.workspaces["web-2"]',
+plugins/soleur/test/terraform-target-parity.test.ts:1071:    // Strip BOTH dispatch jobs: web_2_recreate ALSO -targets
+plugins/soleur/test/terraform-target-parity.test.ts:1072:    // hcloud_server_network.web["web-2"], so stripping only warm_standby would
+plugins/soleur/test/terraform-target-parity.test.ts:1084:    // web_2_recreate job runs). Lock the migration in so a future revert fails CI.
+plugins/soleur/test/terraform-target-parity.test.ts:1102:    // the web-2 volume; it never targets hcloud_server.web, so web-1's placement
+plugins/soleur/test/terraform-target-parity.test.ts:1192:// ─── web-2-recreate dispatch -target/-replace guard (this PR, AC7/AC10c) ─────
+plugins/soleur/test/terraform-target-parity.test.ts:1193:// The `apply_target=web-2-recreate` dispatch job (`web_2_recreate`) runs a SCOPED,
+plugins/soleur/test/terraform-target-parity.test.ts:1194:// GUARDED `terraform apply -replace='hcloud_server.web["web-2"]'` + the 3 web-2
+plugins/soleur/test/terraform-target-parity.test.ts:1195:// `-target`s to re-run web-2's first-boot cloud-init and bind :9000. This guard
+plugins/soleur/test/terraform-target-parity.test.ts:1196:// pins the target/replace set to EXACTLY the web-2 addresses and proves it can
+plugins/soleur/test/terraform-target-parity.test.ts:1198:// volume (hcloud_volume.workspaces["web-2"]) must NOT be in the set (0-destroy).
+plugins/soleur/test/terraform-target-parity.test.ts:1200:  'hcloud_server.web["web-2"]',
+plugins/soleur/test/terraform-target-parity.test.ts:1201:  'hcloud_server_network.web["web-2"]',
+plugins/soleur/test/terraform-target-parity.test.ts:1202:  'hcloud_volume_attachment.workspaces["web-2"]',
+plugins/soleur/test/terraform-target-parity.test.ts:1204:const WEB2_RECREATE_REPLACE = 'hcloud_server.web["web-2"]';
+plugins/soleur/test/terraform-target-parity.test.ts:1217:describe("web-2-recreate dispatch -target/-replace set (scoped; web-1 never targeted)", () => {
+plugins/soleur/test/terraform-target-parity.test.ts:1224:    recreateJobBlock = extractJobBlock(wf, "web_2_recreate");
+plugins/soleur/test/terraform-target-parity.test.ts:1229:  test("the web_2_recreate job -targets EXACTLY the 3 web-2 resources", () => {
+plugins/soleur/test/terraform-target-parity.test.ts:1233:  test("every web-2-recreate target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
+plugins/soleur/test/terraform-target-parity.test.ts:1240:  test('hcloud_volume.workspaces["web-2"] (the DATA volume) is NOT in the recreate set', () => {
+plugins/soleur/test/terraform-target-parity.test.ts:1241:    expect(recreateTargets).not.toContain('hcloud_volume.workspaces["web-2"]');
+plugins/soleur/test/terraform-target-parity.test.ts:1248:  test("the -replace address is EXACTLY the web-2 server (never web-1)", () => {
+plugins/soleur/test/terraform-target-parity.test.ts:1256:    // non-vacuity: the set is non-empty and DOES carry web-2 addresses.
+plugins/soleur/test/terraform-target-parity.test.ts:1257:    expect(all.some((a) => a.includes('"web-2"'))).toBe(true);
+plugins/soleur/test/terraform-target-parity.test.ts:1350:    // Unlike web-2-recreate (data volume EXCLUDED), the registry store volume MUST be in the
+scripts/followthroughs/warm-standby-verify-dedup-6030.sh:28:# script name in the web_2_recreate job (L1319) + comments do NOT false-match
+scripts/followthroughs/web2-tunnel-depool-6425.sh:2:# Post-merge sequence for #6425 PR A — de-pool web-2 from the shared Cloudflare Tunnel,
+scripts/followthroughs/web2-tunnel-depool-6425.sh:14:#   * No release-digest wait. `web-2-recreate`'s coherence preflight compares
+scripts/followthroughs/web2-tunnel-depool-6425.sh:27:# web-2 is de-pooled, its merge-triggered push lands on web-1 deterministically.
+scripts/followthroughs/web2-tunnel-depool-6425.sh:88:say "STAGE 1 — de-pool web-2 (scoped dispatch; data volume preserved)"
+scripts/followthroughs/web2-tunnel-depool-6425.sh:94:    -f apply_target=web-2-recreate \
+scripts/followthroughs/web2-tunnel-depool-6425.sh:95:    -f reason="#6425 de-pool web-2 from the shared tunnel (ADR-114 I1)"
+scripts/followthroughs/web2-tunnel-depool-6425.sh:103:      || die "the web-2-recreate run failed or timed out — see the run log.
+scripts/followthroughs/web2-tunnel-depool-6425.sh:104:    If it failed on 'resource_unavailable', the DC is capacity-starved: web-2 was destroyed
+scripts/followthroughs/web2-tunnel-depool-6425.sh:106:    precedent). Documented lever: flip var.web_hosts[\"web-2\"].location off the starved DC
+scripts/followthroughs/web2-tunnel-depool-6425.sh:117:  # web-2's cloudflared re-registers within seconds of boot if the gate did not apply, so a
+scripts/followthroughs/web2-tunnel-depool-6425.sh:123:    web-2 still holds a connector. Check that the merged server.tf carries
+scripts/followthroughs/web2-tunnel-depool-6425.sh:141:      gh issue close "$ISSUE" --repo "$REPO" --comment "De-pool verified: the connector census returns exactly 1 (ADR-114 I1). web-2 no longer registers a connector, so deploy./ssh./registry. ingress is deterministic by construction. Closed by scripts/followthroughs/web2-tunnel-depool-6425.sh. Standing guard: the */15 census in scheduled-inngest-health.yml files an action-required issue if the count ever leaves 1."
+scripts/followthroughs/web2-tunnel-depool-6425.sh:151:say "DONE — web-2 is de-pooled and the invariant is verified."
+scripts/followthroughs/zot-mirror-connector-6416.sh:2:# Follow-through verification for #6416 (web-2 private-net attach + tunnel
+scripts/followthroughs/zot-mirror-connector-6416.sh:178:    echo "    hcloud server describe soleur-web-2 -o json | jq .private_net    # must NOT be []"
+scripts/lint-infra-no-human-steps.test.sh:216:ssh -i key.pem web-2 and reboot it.
+scripts/test-all.sh:188:  # web-2-recreate coherence preflight (AC10b) — drives the standalone preflight
+scripts/test-all.sh:190:  # the destroy-guard trio since it gates the same web-2-recreate dispatch.
+scripts/tunnel-connector-census.sh:90:# fra* = fsn1 = web-2. Best-effort: never fails the census.
+scripts/tunnel-connector-census.test.sh:41:# 2026-07-15 on tunnel 6410c1ec (a281fb1b = ams*/hel* = web-1; 8c57fcd5 = fra* = web-2).
+tests/scripts/fixtures/tfplan-hcloud-server-create.json:6:      "address": "hcloud_server.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-hcloud-server-create.json:10:      "index": "web-2",
+tests/scripts/fixtures/tfplan-hcloud-server-create.json:16:          "name": "soleur-web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-scoped.json:6:      "address": "hcloud_server.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-scoped.json:10:      "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-scoped.json:16:          "name": "soleur-web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-scoped.json:22:          "name": "soleur-web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-scoped.json:30:      "address": "hcloud_server_network.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-scoped.json:34:      "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-scoped.json:43:      "address": "hcloud_volume_attachment.workspaces[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-scoped.json:47:      "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-substring-collision.json:5:      "address": "hcloud_server.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-substring-collision.json:6:      "type": "hcloud_server", "name": "web", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-substring-collision.json:12:      "address": "hcloud_server_network.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-substring-collision.json:13:      "type": "hcloud_server_network", "name": "web", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-substring-collision.json:18:      "address": "hcloud_volume_attachment.workspaces[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-substring-collision.json:19:      "type": "hcloud_volume_attachment", "name": "workspaces", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-destroy.json:5:      "address": "hcloud_server.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-destroy.json:6:      "type": "hcloud_server", "name": "web", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-destroy.json:12:      "address": "hcloud_server_network.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-destroy.json:13:      "type": "hcloud_server_network", "name": "web", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-destroy.json:18:      "address": "hcloud_volume_attachment.workspaces[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-destroy.json:19:      "type": "hcloud_volume_attachment", "name": "workspaces", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-destroy.json:24:      "address": "hcloud_volume.workspaces[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-destroy.json:25:      "type": "hcloud_volume", "name": "workspaces", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-forget.json:5:      "address": "hcloud_server.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-forget.json:6:      "type": "hcloud_server", "name": "web", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-forget.json:12:      "address": "hcloud_server_network.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-forget.json:13:      "type": "hcloud_server_network", "name": "web", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-forget.json:18:      "address": "hcloud_volume_attachment.workspaces[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-forget.json:19:      "type": "hcloud_volume_attachment", "name": "workspaces", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-forget.json:24:      "address": "hcloud_volume.workspaces[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-volume-forget.json:25:      "type": "hcloud_volume", "name": "workspaces", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-inplace-nonplacement.json:5:      "address": "hcloud_server.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-inplace-nonplacement.json:6:      "type": "hcloud_server", "name": "web", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-inplace-nonplacement.json:12:      "address": "hcloud_server_network.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-inplace-nonplacement.json:13:      "type": "hcloud_server_network", "name": "web", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-inplace-nonplacement.json:18:      "address": "hcloud_volume_attachment.workspaces[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-inplace-nonplacement.json:19:      "type": "hcloud_volume_attachment", "name": "workspaces", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-replace.json:5:      "address": "hcloud_server.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-replace.json:6:      "type": "hcloud_server", "name": "web", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-replace.json:12:      "address": "hcloud_server_network.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-replace.json:13:      "type": "hcloud_server_network", "name": "web", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-replace.json:18:      "address": "hcloud_volume_attachment.workspaces[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-web1-replace.json:19:      "type": "hcloud_volume_attachment", "name": "workspaces", "index": "web-2",
+tests/scripts/fixtures/tfplan-web2-recreate-web2-reboot.json:4:      "address": "hcloud_server.web[\"web-2\"]",
+tests/scripts/fixtures/tfplan-web2-recreate-web2-reboot.json:5:      "type": "hcloud_server", "name": "web", "index": "web-2",
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:60:# working. Only the web_2_recreate job's sourced gate
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:88:# --- web-2-recreate scoped guard (apply_target=web-2-recreate) -------------
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:89:# The EXACT allow-set for the scoped `-replace='hcloud_server.web["web-2"]'`:
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:90:# the web-2 server + its two id-referencing dependents. A -replace of the
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:93:# hcloud_volume.workspaces["web-2"] is DELIBERATELY ABSENT — the 20 GB data
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:97:  "hcloud_server.web[\"web-2\"]",
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:98:  "hcloud_server_network.web[\"web-2\"]",
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:99:  "hcloud_volume_attachment.workspaces[\"web-2\"]"
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:149:  # double-counts a REPLACE, never false-fires on a CREATE (web-2 add), and
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:167:  # POSITIVE-SCOPE web-2-recreate guard (spec-flow P0-2). Count EVERY
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:173:  # via-any-attr, a web-2 VOLUME change, and anything else outside the 3 allowed
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:180:  # `removed{}` on any out-of-allow-set address — e.g. dropping web-1 or the web-2
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:195:  # hcloud_server.web["web-2"] carries BOTH delete and create (a -replace). The
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:200:      | select(.address == "hcloud_server.web[\"web-2\"]")
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:211:  # hcloud_server.web instance pulls the whole for_each map — web-2 included.
+tests/scripts/lib/destroy-guard-filter-web-platform.jq:218:  # WHY IT MATTERS (#6416): the per-PR apply created soleur-web-2 but NOT its
+tests/scripts/lib/inngest-host-replace-gate.sh:18:# Verified against the web-2 precedent's golden fixture (tfplan-web2-recreate-scoped.json):
+tests/scripts/lib/inngest-host-replace-gate.sh:19:# a scoped `-replace=hcloud_server.web["web-2"]` touches EXACTLY server + server_network +
+tests/scripts/lib/stock-preflight-gate.sh:155:  # web-2's private IP was restored 2026-07-13 without recreating it. Omitting this tine funnels
+tests/scripts/lib/stock-preflight-gate.sh:161:  # hcloud_server_network.web["web-2"], hcloud_volume.workspaces["web-2"] and
+tests/scripts/lib/stock-preflight-gate.sh:162:  # hcloud_volume_attachment.workspaces["web-2"] — the web-2-specific half is what makes the
+tests/scripts/lib/stock-preflight-gate.sh:168:  # (all five) knows its host exactly: web-2 gets the tine, everyone else is suppressed.
+tests/scripts/lib/stock-preflight-gate.sh:172:  # suppressing there would strip the tine from the plan's own documented web-2 probe;
+tests/scripts/lib/stock-preflight-gate.sh:173:  # emitting it unconditionally misdirects a non-web-2 probe (`stock_preflight cax11 fsn1`
+tests/scripts/lib/stock-preflight-gate.sh:174:  # for git-data was observed claiming a web-2-only dispatch would help). So the unknown-host
+tests/scripts/lib/stock-preflight-gate.sh:175:  # variant is emitted CONDITIONALLY-WORDED instead: it names web-2 as the precondition, which
+tests/scripts/lib/stock-preflight-gate.sh:177:  if [[ "${_STOCK_TINE_ADDR:-}" == 'hcloud_server.web["web-2"]' ]]; then
+tests/scripts/lib/stock-preflight-gate.sh:180:    echo "::error::  - If this host is web-2 AND you only need its private NIC or /workspaces volume re-attached, that is NOT a recreate: dispatch apply_target=warm-standby (additive, no destroy, no stock required; web-2 ONLY — it does nothing for inngest/registry/git-data). See apply-web-platform-infra.yml:451." >&2
+tests/scripts/lib/stock-preflight-gate.sh:274:    # _STOCK_TINE_ADDR scopes the web-2-only warm-standby suggestion to web-2's address.
+tests/scripts/lib/web2-recreate-gate.sh:2:# Sourced destroy-guard gate for the web-2-recreate scoped -replace
+tests/scripts/lib/web2-recreate-gate.sh:3:# (apply_target=web-2-recreate in .github/workflows/apply-web-platform-infra.yml).
+tests/scripts/lib/web2-recreate-gate.sh:5:# EXTRACTED + SOURCED (spec-flow P1-1 / AC5): both the workflow's web_2_recreate
+tests/scripts/lib/web2-recreate-gate.sh:11:# web-2 recreate: a -replace of hcloud_server.web["web-2"] + its two id-referencing
+tests/scripts/lib/web2-recreate-gate.sh:12:# dependents (hcloud_server_network.web["web-2"],
+tests/scripts/lib/web2-recreate-gate.sh:13:# hcloud_volume_attachment.workspaces["web-2"]). It ABORTS on anything else —
+tests/scripts/lib/web2-recreate-gate.sh:15:# hcloud_volume.workspaces["web-2"] (the data volume must be preserved), a web-2
+tests/scripts/lib/web2-recreate-gate.sh:21:# (permit ONLY the 3 web-2 replaces) is strictly safer and carries no override.
+tests/scripts/lib/web2-recreate-gate.sh:71:    echo "web2_recreate_gate: PASS — scoped web-2 recreate permitted (server + 2 dependents replace; volume preserved)"
+tests/scripts/lib/web2-recreate-gate.sh:74:  echo "web2_recreate_gate: ABORT — plan is NOT the exact scoped web-2 recreate (out-of-scope change, web-2 volume destroy, web-1 touch, reboot, or no-op)"
+tests/scripts/test-destroy-guard-counter-web-platform.sh:79:# The web-2-recreate gate is an EXTRACTED, SOURCED shell function (AC5/AC6) — this
+tests/scripts/test-destroy-guard-counter-web-platform.sh:369:# T18: CREATE of a 2nd host (hcloud_server.web["web-2"]) is not a REBOOT — the
+tests/scripts/test-destroy-guard-counter-web-platform.sh:376:# that left soleur-web-2 alive with NO private-net attachment — invisible to
+tests/scripts/test-destroy-guard-counter-web-platform.sh:381:  local out; out=$(_run_gate "$FIXTURES/tfplan-hcloud-server-create.json" "feat: add web-2 host")
+tests/scripts/test-destroy-guard-counter-web-platform.sh:406:# web-2-recreate scoped guard (apply_target=web-2-recreate). PERMITS EXACTLY the
+tests/scripts/test-destroy-guard-counter-web-platform.sh:407:# scoped -replace of hcloud_server.web["web-2"] + its 2 id-referencing dependents;
+tests/scripts/test-destroy-guard-counter-web-platform.sh:408:# ABORTS on any web-1 touch, any web-2 DATA-VOLUME destroy, a web-2 reboot, a
+tests/scripts/test-destroy-guard-counter-web-platform.sh:414:# Returns "oos:ndel:rupd:replaced:rc" — the four web-2 counters (proof the filter
+tests/scripts/test-destroy-guard-counter-web-platform.sh:433:# T20: the scoped web-2 replace (server + network attach + volume attachment all
+tests/scripts/test-destroy-guard-counter-web-platform.sh:438:    _report "T20 web-2 scoped replace PASSES (oos=0 ndel=0 rupd=0 replaced=1 rc=0)" ok
+tests/scripts/test-destroy-guard-counter-web-platform.sh:440:    _report "T20 web-2 scoped replace PASSES" fail "got '$out' want '0:0:0:1:0'"
+tests/scripts/test-destroy-guard-counter-web-platform.sh:455:# T22: scoped + a hcloud_volume.workspaces["web-2"] destroy → out-of-scope → ABORT.
+tests/scripts/test-destroy-guard-counter-web-platform.sh:460:    _report "T22 web-2 DATA-volume destroy ABORTS (oos=1 rc=1)" ok
+tests/scripts/test-destroy-guard-counter-web-platform.sh:462:    _report "T22 web-2 DATA-volume destroy ABORTS" fail "got '$out' want '1:0:0:1:1'"
+tests/scripts/test-destroy-guard-counter-web-platform.sh:466:# T23: web-2 server in-place reboot (actions==["update"], placement diff) → NOT a
+tests/scripts/test-destroy-guard-counter-web-platform.sh:471:    _report "T23 web-2 in-place reboot ABORTS (rupd=1 replaced=0 rc=1)" ok
+tests/scripts/test-destroy-guard-counter-web-platform.sh:473:    _report "T23 web-2 in-place reboot ABORTS" fail "got '$out' want '0:0:1:0:1'"
+tests/scripts/test-destroy-guard-counter-web-platform.sh:537:# T28 (forget hole closed): scoped + a hcloud_volume.workspaces["web-2"] STATE-DROP
+tests/scripts/test-destroy-guard-counter-web-platform.sh:547:    _report "T28 web-2 DATA-volume state-drop (forget) ABORTS (oos=1 rc=1 — forget hole closed)" ok
+tests/scripts/test-destroy-guard-counter-web-platform.sh:549:    _report "T28 web-2 DATA-volume state-drop (forget) ABORTS" fail "got '$out' want '1:0:0:1:1'"
+tests/scripts/test-destroy-guard-counter-web-platform.sh:560:# firewall.tf:93) pulls the whole for_each map — web-2 included. A pure create
+tests/scripts/test-destroy-guard-counter-web-platform.sh:562:# existing counters read 0 and the plan sails through. That is how web-2 was born
+tests/scripts/test-destroy-guard-counter-web-platform.sh:572:# `hcloud_server.web["web-2"]` create — HALTs. Reuses the EXISTING
+tests/scripts/test-destroy-guard-counter-web-platform.sh:592:  msg=$'feat: add web-2 host\n\n[ack-destroy]\n\nRefs #6416.'
+tests/scripts/test-stock-preflight-gate.sh:95:# (hcloud_server.web["web-2"]), which string-interpolate into malformed JSON and make
+tests/scripts/test-stock-preflight-gate.sh:193:p=$(plan_with 'hcloud_server.web["web-2"]' '["delete","create"]' alpha33 eu-b)
+tests/scripts/test-stock-preflight-gate.sh:196:grep -qF 'hcloud_server.web["web-2"]' <<<"$out" && pass || fail "T8: abort must name the offending address"
+tests/scripts/test-stock-preflight-gate.sh:199:p=$(plan_with 'hcloud_server.web["web-2"]' '["delete","create"]' beta22 eu-b)
+tests/scripts/test-stock-preflight-gate.sh:208:sibs='[{"address":"hcloud_server_network.web[\"web-2\"]","type":"hcloud_server_network","change":{"actions":["create"],"after":{"ip":"10.0.1.11"}}},{"address":"hcloud_volume_attachment.workspaces[\"web-2\"]","type":"hcloud_volume_attachment","change":{"actions":["create"],"after":{"volume_id":42}}}]'
+tests/scripts/test-stock-preflight-gate.sh:209:p=$(plan_with 'hcloud_server.web["web-2"]' '["delete","create"]' beta22 eu-b "$sibs")
+tests/scripts/test-stock-preflight-gate.sh:221:p=$(plan_with 'hcloud_server.web["web-2"]' '["delete","create"]' beta22 eu-b "$noop")
+tests/scripts/test-stock-preflight-gate.sh:227:# apply_target=warm-standby targets ONLY hcloud_server_network.web["web-2"],
+tests/scripts/test-stock-preflight-gate.sh:228:# hcloud_volume.workspaces["web-2"] and hcloud_volume_attachment.workspaces["web-2"]
+tests/scripts/test-stock-preflight-gate.sh:238:grep -q "warm-standby" <<<"$out" && fail "T10b: warm-standby is web-2-only; offering it on the registry path misdirects the operator" || pass
+tests/scripts/test-stock-preflight-gate.sh:239:grep -q "#6463" <<<"$out" && pass || fail "T10b: the generic #6463 tine must survive on non-web-2 paths"
+tests/scripts/test-stock-preflight-gate.sh:242:# T10c — web-2 KEEPS the tine when routed through the gate (guards over-suppression:
+tests/scripts/test-stock-preflight-gate.sh:244:p=$(plan_with 'hcloud_server.web["web-2"]' '["delete","create"]' alpha33 eu-b)
+tests/scripts/test-stock-preflight-gate.sh:246:[[ "$rc" -eq 1 ]] && pass || fail "T10c: an unorderable web-2 recreate must abort, got $rc"
+tests/scripts/test-stock-preflight-gate.sh:247:grep -q "warm-standby" <<<"$out" && pass || fail "T10c: web-2 MUST still get the free-repair tine through the gate path"
+tests/scripts/test-stock-preflight-gate.sh:289:echo '{"resource_changes":[{"address":"hcloud_server.web[\"web-2\"]","type":"hcloud_server"}]}' > "$TMP/noactions.json"
+tests/scripts/test-stock-preflight-gate.sh:324:grep -q "warm-standby" <<<"$out" && fail "T13b: warm-standby is web-2-only; it must not be offered on the git-data path" || pass

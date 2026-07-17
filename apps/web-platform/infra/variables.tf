@@ -98,19 +98,20 @@ variable "web_hosts" {
     private_ip  = string
     server_type = optional(string, "cx33")
   }))
+  # web-2 (fsn1, 10.0.1.11) RETIRED 2026-07-17 (#6538). It was the ADR-068 Phase 3
+  # warm standby, born in hel1 (#5877) and moved to fsn1 (#6393) for DC-failure
+  # resilience. It never carried user-facing web traffic by design, and the
+  # multi-host DNS rewire that would have made it serve was never built — so it
+  # cost €8.49/mo to stand by for a cutover with no consumer. HA is deferred to
+  # active-active-N (#6459), whose hosts must be born in hel1 inside the
+  # location-scoped web_spread placement group; git-data (#6570) gates that work.
+  # Do NOT re-add a key here to restore standby: see ADR-068's amendment.
   default = {
     "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
-    # web-2 sits in a DIFFERENT DC from web-1's hel1 (DC-failure resilience). A same-DC
-    # warm standby gives no protection against a hel1 outage, and a `-replace` recreate
-    # DURING a hel1 capacity shortage destroyed web-2 then could not re-place it, wedging
-    # every apply-on-merge on `resource_unavailable` (2026-07-13, #6374 follow-on). fsn1 is
-    # eu-central (10.0.1.0/24 spans it, network.tf) + EU (CLO T-1). Cross-DC hosts cannot
-    # share the location-scoped web_spread placement group — server.tf gates that.
-    "web-2" = { location = "fsn1", private_ip = "10.0.1.11" }
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])
-    error_message = "web_hosts location must be an EU Hetzner DC (nbg1/fsn1/hel1) — GDPR residency (CLO T-1, GA-blocking). A non-EU web host or placement group is rejected before web-2 serves."
+    error_message = "web_hosts location must be an EU Hetzner DC (nbg1/fsn1/hel1) — GDPR residency (CLO T-1, GA-blocking). A non-EU web host or placement group is rejected before it serves."
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : can(regex("^10\\.0\\.1\\.[0-9]{1,3}$", h.private_ip))])
