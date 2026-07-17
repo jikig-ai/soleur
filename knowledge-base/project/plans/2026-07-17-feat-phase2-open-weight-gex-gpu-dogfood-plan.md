@@ -389,7 +389,7 @@ liveness_signal:
   what: "Phase 2 measure success = filled comparison table on #6546 + optional host JSONL summary committed or pasted; not a product heartbeat"
   cadence: "per measure campaign (1–5 runs/day during soak); hard stop at 14 days without table"
   alert_target: "operator via GitHub issue #6546 comments; expense ledger active burn"
-  configured_in: "knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood.md Phase 2; knowledge-base/project/specs/feat-grok-phase2-open-weight-gpu/phase2-measure-report.md"
+  configured_in: "knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood.md Phase 2 (comparison table skeleton + kill); knowledge-base/operations/expenses.md GEX rows"
 
 error_reporting:
   destination: "Host /var/log/grok-dogfood/runs.jsonl (metrics only); GitHub #6546 for campaign failures; no Sentry product project required for operator dogfood"
