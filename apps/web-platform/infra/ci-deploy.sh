@@ -771,7 +771,13 @@ _login_tok() {
 #                   escaping; a token containing `"` or `\` would move this length by a
 #                   CONTENT-DEPENDENT amount under a JSON-escaping registry.
 #                   *** TRIGGER — IF EITHER TOKEN (a) BECOMES VARIABLE-LENGTH (a JWT, an
-#                   OIDC-minted session token), (b) LEAVES THE `[A-Za-z0-9]` ALPHABET, or (c) IS
+#                   OIDC-minted session token), (b) LEAVES THE ESCAPE-INVARIANT ALPHABET
+#                   `[A-Za-z0-9_]` — note the underscore: BOTH GHCR PAT formats carry one
+#                   (`ghp_…`, `github_pat_…`), so a bare `[A-Za-z0-9]` here reads as ALREADY
+#                   FIRED against a live credential and would teach the next engineer to bucket
+#                   needlessly or, worse, to ignore this trigger. `_` is escape-invariant, so the
+#                   property above holds; the ALPHABET is the test, escape-invariance is the
+#                   REASON (#6565) — or (c) IS
 #                   ROTATED TO A LENGTH OTHER THAN ITS CURRENT ONE, THIS BECOMES A LENGTH ORACLE
 #                   AND **BOTH `stderr_chars` AND `errno_chars` MUST BE BUCKETED** — the two fields
 #                   are governed by this ONE paragraph and must be bucketed TOGETHER, in the same
@@ -830,7 +836,8 @@ _login_tok() {
 #                   `stderr_chars` already carries and accepts, for the same reason (a declared
 #                   non-secret constant / the public package owner). The narrowing creates no new
 #                   channel. *** The `stderr_chars` TRIGGER above governs this field TOO: if either
-#                   token becomes variable-length or leaves `[A-Za-z0-9]`, bucket BOTH. ***
+#                   token becomes variable-length or leaves the escape-invariant `[A-Za-z0-9_]`,
+#                   bucket BOTH. ***
 #                   Degenerate input (no ": " anywhere) makes the segment the whole string, so
 #                   `errno_chars == stderr_chars`. That is not a defect — it is how "there was no
 #                   colon segment" reports itself, using a comparison the reader already has.
