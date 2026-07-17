@@ -13,32 +13,32 @@ brand_survival_threshold: single-user incident
 
 ## Phase 1 — Self-pull the diagnosis (RCA)
 
-- [ ] 1.0 **H0 FIRST** — which host answered `/hooks/deploy-status` at 21:03: web-1
+- [x] 1.0 **H0 FIRST** — which host answered `/hooks/deploy-status` at 21:03: web-1
   or the seccomp-less warm-standby web-2? Pull the payload host_id/marker + tunnel
   ingress state vs #6595 (2026-07-17 pin). web-2 ⟹ host_present=false is EXPECTED,
   H1/H2 REFUTED, RCA reframes (image-bake still closes the standby gap).
-- [ ] 1.1 `gh run view 29450562340 --log` — confirm it is the ADR-079 item-4
+- [x] 1.1 `gh run view 29450562340 --log` — confirm it is the ADR-079 item-4
   redeploy; capture the pre-redeploy `host_present=false` baseline + timestamp.
-- [ ] 1.2 Read `/hooks/deploy-status` HISTORY around 2026-07-16T21:03Z (HMAC +
+- [x] 1.2 Read `/hooks/deploy-status` HISTORY around 2026-07-16T21:03Z (HMAC +
   CF-Access via Doppler `prd_terraform`, read-only) — establish host_present
   true→false→true edges. Historical data only (no fresh probe).
-- [ ] 1.3 Query Better Stack logs API for web-1 SOLEUR_* boot markers in
+- [x] 1.3 Query Better Stack logs API for web-1 SOLEUR_* boot markers in
   [last-known-true … 21:03]. Boot marker in-window ⟹ replacement (H1/H2).
-- [ ] 1.4 (WINDOW-DECISIVE) `gh run list` for apply-web-platform-infra /
+- [x] 1.4 (WINDOW-DECISIVE) `gh run list` for apply-web-platform-infra /
   apply-deploy-pipeline-fix / scheduled-terraform-drift (2026-07-14…16) — find any
   web-1 replace/apply, its executed `-target` set, and the SSH-leg step status
   (`success`/`skipped`/`failure`). Grep the silent-skip signatures:
   `CI_SSH_ACCESS_TOKEN_ID absent`, `cloudflared TCP forward did not open`, and the
   cloudflared-log block (`Unauthorized`/`403`/`connection reset`/`i/o timeout`).
-- [ ] 1.5 (CORROBORATING, not decisive) Read R2 tfstate (canonical triplet);
+- [x] 1.5 (CORROBORATING, not decisive) Read R2 tfstate (canonical triplet);
   `terraform state show terraform_data.docker_seccomp_config` — server_id vs live id.
   NOTE: plan-time snapshot may have self-healed post-window; window-decisive = 1.0+1.4+1.3.
-- [ ] 1.6 Read `cat-deploy-state.sh:326-368` + hook wiring — confirm host-side
+- [x] 1.6 Read `cat-deploy-state.sh:326-368` + hook wiring — confirm host-side
   `test -f` (eliminate H5 namespace-visibility).
-- [ ] 1.7 Write the RCA post-mortem with a per-hypothesis verdict table (each row
+- [x] 1.7 Write the RCA post-mortem with a per-hypothesis verdict table (each row
   CONFIRMED/REFUTED/UNKNOWN + cited discriminator datum) + the explicit
   non-merge-path YES/NO determination.
-- [ ] 1.8 COMMIT Phase 1 alone. If H0 (web-2 probe) OR H1/H2 REFUTED, STOP and re-scope.
+- [x] 1.8 COMMIT Phase 1 alone. If H0 (web-2 probe) OR H1/H2 REFUTED, STOP and re-scope.
 
 ## Phase 2 — Fix (only if Phase 1 confirms an enforcement-delivery gap on the probed host)
 
