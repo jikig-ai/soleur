@@ -18,7 +18,7 @@ created: 2026-07-16
 
 ## Phase 0 — Preconditions (already measured; re-confirm only if you doubt them)
 
-- [ ] 0.1 Confirm the six Go errno literals are byte-exact. Measured 2026-07-16 against `go1.21.6`
+- [x] 0.1 Confirm the six Go errno literals are byte-exact. Measured 2026-07-16 against `go1.21.6`
       (`syscall.Errno.Error()`), **lowercase** — Go's table, **not** `strerror(3)`'s capitalized form:
       | errno | literal | len |
       |---|---|---|
@@ -28,7 +28,7 @@ created: 2026-07-16
       | EINVAL | `invalid argument` | 16 |
       | EIO | `input/output error` | 18 |
       | EPERM | `operation not permitted` | 23 |
-- [ ] 0.2 Read `apps/web-platform/infra/ci-deploy.sh` › `_login_kw` (~line 669) and its header comment
+- [x] 0.2 Read `apps/web-platform/infra/ci-deploy.sh` › `_login_kw` (~line 669) and its header comment
       (~line 639) before editing (`hr-always-read-a-file-before-editing-it`). The header is the surface's
       threat model — Form B is load-bearing, not style.
 
@@ -39,32 +39,32 @@ emitters. Place T-5B-20 after both.
 
 **T-5B-20 has TWO assertion families with OPPOSITE sourcing rules. Do not collapse them.**
 
-- [ ] 1.1 **(a) Firing assertions — fixture literals HAND-WRITTEN.** For each of the six
+- [x] 1.1 **(a) Firing assertions — fixture literals HAND-WRITTEN.** For each of the six
       `(literal, token)` pairs, assert
       `_login_kw "error saving credentials: open /home/deploy/.docker/config.json123456789: <literal> ${T16_KW_CANARY}"`
       **contains** `<token>,`. The path/suffix is **decorative** — the arms are path-agnostic.
-- [ ] 1.2 **NEVER derive the firing fixture from `KW_BODY`.** Measured: with a typo'd source arm
+- [x] 1.2 **NEVER derive the firing fixture from `KW_BODY`.** Measured: with a typo'd source arm
       (`read only file system`), a derived fixture feeds the typo back in, the arm fires, and the test is
       **GREEN with the bug**. A hand-written `read-only file system` goes **RED**. The fixture's
       independence from the source **is** the test. This file's *"derive the oracle from the SUT"* precedent
       (`:3922-3928`) is correct for `T16_CLOSED` and **must not** be applied here — leave a comment saying
       so, or a reviewer will "fix" it into a tautology.
-- [ ] 1.3 Assert every output satisfies the closed-form oracle `^([a-z]+,)*$`.
-- [ ] 1.4 **(b) Whole-vocabulary invariants — these ARE derived from `KW_BODY`** (so they span arm #17):
+- [x] 1.3 Assert every output satisfies the closed-form oracle `^([a-z]+,)*$`.
+- [x] 1.4 **(b) Whole-vocabulary invariants — these ARE derived from `KW_BODY`** (so they span arm #17):
       every literal (i) contains a character outside `[A-Za-z0-9]` — the alphabet invariant, closing the
       predicate channel; (ii) is **lowercase** — directly asserts the Sharp Edge #1 class (Go's table vs
       `strerror(3)`'s capitalized form); (iii) appears in a canary-carrying fixture.
-- [ ] 1.5 Run the suite. **Expect RED — output is `errsaving,` alone, NOT zero tokens** (every fixture
+- [x] 1.5 Run the suite. **Expect RED — output is `errsaving,` alone, NOT zero tokens** (every fixture
       starts with `error saving credentials:`, so that arm fires first). RED because `enomem,` etc. are absent.
       > **Why the ordering is load-bearing (plan D4, proven by execution):** with an arm removed, output
       > degrades to `errsaving,`, which **passes** the closed-form oracle. A canary fixture alone is GREEN
       > on a missing or typo'd arm. Only the firing assertion catches a dead probe.
-- [ ] 1.6 **Re-run T-5B-14** (`:3828`) — it asserts `kw=` is **EMPTY** and is the test most exposed to a new
+- [x] 1.6 **Re-run T-5B-14** (`:3828`) — it asserts `kw=` is **EMPTY** and is the test most exposed to a new
       arm; it survives only on its fixture's wording. Also re-run T-5B-17. Verify, do not assume.
 
 ## Phase 2 — GREEN: the six probes
 
-- [ ] 2.1 Append to `_login_kw` in `apps/web-platform/infra/ci-deploy.sh`, **below** the measured arms and
+- [x] 2.1 Append to `_login_kw` in `apps/web-platform/infra/ci-deploy.sh`, **below** the measured arms and
       **above** the falsified ones, under its own comment block marking the class as INFERRED-not-measured:
 
       ```bash
@@ -75,39 +75,68 @@ emitters. Place T-5B-20 after both.
       case "${1:-}" in *'input/output error'*)        printf 'eio,' ;; esac
       case "${1:-}" in *'operation not permitted'*)   printf 'eperm,' ;; esac
       ```
-- [ ] 2.2 **`case`, never `grep -q`.** Verified under `set -euo pipefail`: `case` non-match → rc=0 (cannot
+- [x] 2.2 **`case`, never `grep -q`.** Verified under `set -euo pipefail`: `case` non-match → rc=0 (cannot
       abort); top-level `grep -q` non-match → exit 1 → **aborts the deploy**. This is the dominant abort
       class the instrument was built to survive.
-- [ ] 2.3 Every `printf` takes a **hardcoded literal**. No parameter expansion but `${1:-}` anywhere in the
+- [x] 2.3 Every `printf` takes a **hardcoded literal**. No parameter expansion but `${1:-}` anywhere in the
       body (Form B). A Form-A filter that re-emits its input degrades to **credential disclosure**.
-- [ ] 2.4 Run the suite. **Expect GREEN** (T-5B-20 passes).
+- [x] 2.4 Run the suite. **Expect GREEN** (T-5B-20 passes).
 
 ## Phase 2b — the change FALSIFIES two comments. Update both, same commit.
 
-- [ ] 2b.1 `ci-deploy.sh` › `_login_kw` header: *"Every literal below is MEASURED … except the last three"*
+- [x] 2b.1 `ci-deploy.sh` › `_login_kw` header: *"Every literal below is MEASURED … except the last three"*
       — **false** once six **inferred** arms land (neither "measured" nor "the last three").
-- [ ] 2b.2 `ci-deploy.test.sh:3900-3903`: *"Every literal here is a string the /work Phase 0 battery
+- [x] 2b.2 `ci-deploy.test.sh:3900-3903`: *"Every literal here is a string the /work Phase 0 battery
       measured out of a real `docker login`"* — **false**; the six new fixtures are inferred from arithmetic.
-- [ ] 2b.3 Introduce an explicit **INFERRED** class in both, alongside MEASURED and FALSIFIED. Shipping the
+- [x] 2b.3 Introduce an explicit **INFERRED** class in both, alongside MEASURED and FALSIFIED. Shipping the
       arms while these comments still claim "every literal is measured" is exactly the false-comment defect
       this PR's discipline exists to drain — it would be this PR restating it.
 
 ## Phase 3 — Follow-through reporting line (plan D6 — flag for operator veto)
 
-- [ ] 3.1 Add ONE line to `scripts/followthroughs/zot-login-gate-names-failure-6497.sh`, beside the existing
+- [x] 3.1 Add ONE line to `scripts/followthroughs/zot-login-gate-names-failure-6497.sh`, beside the existing
       `Observed docker_ver … record on #6565` echo (`:116-117`):
       ```bash
       echo "Observed kw (the errno datum — record on 6565):" \
         "$(printf '%s\n' "$FAILED_LINES" | grep -oE 'kw=[a-z,]*' | sort -u | tr '\n' ' ')"
       ```
-- [ ] 3.2 **Reporting only** — after the PASS/FAIL decision; it cannot flip the verdict. Form-B-safe:
+- [x] 3.2 **Reporting only** — after the PASS/FAIL decision; it cannot flip the verdict. Form-B-safe:
       `kw=[a-z,]*` reads a closed-vocabulary field over a closed alphabet, so it cannot echo stderr. The
       three-state invariant logic is **untouched**.
-- [ ] 3.3 **Why this is not optional:** the probe is the **only** automated reader of these lines and is
+- [x] 3.3 **Why this is not optional:** the probe is the **only** automated reader of these lines and is
       **single-shot** — it PASSes on the current datum, comments, then the sweeper auto-closes issue 6497
       (`sweep-followthroughs.sh:233,272`), and never runs again. It reports `class` + `docker_ver` but
       **not `kw`** — it would drop this round's entire deliverable. It already echoes `docker_ver` with
       "record on #6565", so it is already a datum-reporting channel.
+
+## Phase 3b — `errno_chars` (plan D7) — **OPERATOR APPROVED 2026-07-17; not in the original brief**
+
+This phase did not exist when tasks.md was written — D7 was still awaiting sign-off. The operator approved
+it together with D6. It is the field that actually ends the guessing; the six arms only ask "is it ENOMEM?".
+
+- [x] 3b.1 In `apps/web-platform/infra/ci-deploy.sh` › `_login_hatch`, take the final `": "`-delimited
+      segment by expansion and print its LENGTH beside `stderr_chars`:
+      ```bash
+      _errseg="${_e##*: }"      # expansion only — no subprocess; the TEXT never leaves the function
+      # printf … stderr_chars=%s errno_chars=%s …   "${#_e}" "${#_errseg}"
+      ```
+- [x] 3b.2 **Not Form-B constrained** — this is `_login_hatch`, not `_login_kw`/`_login_tok`, so T-5B-15's
+      "no expansion but `${1:-}`" grep does not apply. It sits exactly where `stderr_chars` already sits and
+      prints a LENGTH, never content.
+- [x] 3b.3 **Re-confirm the no-echo residual, do NOT inherit it.** D7 narrows the segment vs `stderr_chars`,
+      and a narrower segment is a priori a sharper oracle — so the argument must be re-run. It re-runs clean:
+      a fixed-length token substituted into the segment yields a CONSTANT length ⇒ zero bits about content
+      (the property turns on fixed-ness, not on any number). A username there costs `len(username)` — the
+      same already-accepted residual `stderr_chars` carries. **The `stderr_chars` bucketing TRIGGER governs
+      this field too.**
+- [x] 3b.4 **The measured property that justifies it** (verified at /work, not reasoned): `errno_chars` is
+      **invariant under docker's uint32 temp suffix**. The live datums were `stderr_chars=96` (zot) and `97`
+      (ghcr) — it took arithmetic to conclude those were the identical error. `errno_chars` reports **22 for
+      both**. It skips the inference the whole round was built to make.
+- [x] 3b.5 T-5B-21 pins it: both live datums reproduce (96 AND 97 → errno_chars 22), invariance asserted
+      explicitly, degenerate no-colon input renders `errno_chars == stderr_chars`, empty → 0, and a
+      final-segment canary must not appear in the emit.
+- [x] 3b.6 Report it from the follow-through probe alongside `kw` (D6) — same single-shot argument.
 
 ## Phase 4 — Verify
 

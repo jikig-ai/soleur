@@ -115,4 +115,22 @@ echo "PASS: all ${N} failed-login line(s) carry rc + class + stderr_chars + stdo
 echo "Observed classes: $(printf '%s\n' "$FAILED_LINES" | grep -oE 'class=[a-z_]+' | sort -u | tr '\n' ' ')"
 echo "Observed docker_ver (first read of the unpinned host version — record on #6565):" \
      "$(printf '%s\n' "$FAILED_LINES" | grep -oE 'docker_ver=[0-9.a-z]+' | sort -u | tr '\n' ' ')"
+# #6565 errno round — REPORTING ONLY, and load-bearing precisely because of that.
+#
+# WHY THIS LINE EXISTS: this probe is SINGLE-SHOT. It PASSes on the already-measured datum,
+# comments, the sweeper auto-resolves issue 6497, and it NEVER RUNS AGAIN. It is also the ONLY
+# automated reader of these lines. So without this echo the errno round's entire deliverable —
+# the one field the round was built to buy — has no automated reader, ever. One line, the same
+# shape as the docker_ver line directly above, which is already a datum-reporting channel.
+#
+# It CANNOT flip the verdict: it sits after the last `exit 1`, asserts nothing, and both fields
+# are closed-vocabulary/integers by construction (`ci-deploy.sh` › `_login_kw`, `_login_hatch`).
+# `kw=` may legitimately be EMPTY — that IS the H-D datum ("matched no known keyword"), so this
+# reports it and does not assert it (see this file's header: "Do NOT assert kw non-empty").
+echo "Observed kw (the errno round's deliverable — record on #6565; EMPTY kw is itself the datum," \
+     "meaning the errno matched none of the probed literals):" \
+     "$(printf '%s\n' "$FAILED_LINES" | grep -oE 'kw=[a-z,]*' | sort -u | tr '\n' ' ')"
+echo "Observed errno_chars (bounds the errno set in ONE round; 22 == 'cannot allocate memory'," \
+     "and is INVARIANT under docker's uint32 temp suffix, unlike stderr_chars — record on #6565):" \
+     "$(printf '%s\n' "$FAILED_LINES" | grep -oE 'errno_chars=[0-9]+' | sort -u | tr '\n' ' ')"
 exit 0

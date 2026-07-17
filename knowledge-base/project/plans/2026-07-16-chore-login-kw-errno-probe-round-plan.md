@@ -595,12 +595,42 @@ that fires, and AC9 reads zero rows for a reason that has nothing to do with the
 
 ---
 
-## MANDATORY PRE-SHIP CORRECTIONS — from the plan review panel (2026-07-17)
+## REVIEW-PANEL RECONCILIATION (2026-07-17) — the corrections were ALREADY APPLIED; this records why
 
-The review verified **166/166 on the real worktree**; the six arms introduce **zero** test failures and all
-18 `6497` tests pass. The code is correct. **The defects are in this plan's Acceptance Criteria and in two
-shipped comments** — `/work` MUST fix each before the AC gate is trusted. Each was demonstrated by
-execution, not asserted; do not re-argue them.
+**Read this before acting on the list below: it is a HISTORY, not a work-list.** An earlier draft of this
+section ordered `/work` to "fix each" of the findings below. That instruction was **wrong**, and the error
+is worth keeping visible rather than deleting, because it is the same class the whole PR is about.
+
+What happened: the review panel ran against a **pre-`deepen-plan`** revision of this file and reported its
+findings against **that** revision's AC numbering (AC6/AC10/AC13). `deepen-plan` then rewrote and
+**renumbered** the ACs, fixing every finding *before* the review was read. `/work` then re-transcribed the
+findings as mandatory work without checking them against the file on disk — **asserting from a report
+instead of measuring the artifact**, which is precisely the failure this instrument exists to prevent, and
+the fourth instance of it in this round.
+
+Verified against the plan as-committed (2026-07-17), each finding, and the disposition:
+
+| Panel finding (old numbering) | Status on disk | Where it landed |
+|---|---|---|
+| `AC6` false-FAILs: `grep -c 'grep -q'` matches comment prose | **ALREADY FIXED — and better than proposed.** The AC no longer exists. The panel proposed copying T-5B-19's comment-strip; `deepen-plan` instead **deleted the duplicate oracle**, folding it into AC3 ("Subsumes T-5B-15/16/19 — do not re-assert them as separate ACs with hand-copied pipelines; a second copy of an oracle drifts from the test it restates"). A deleted oracle cannot false-FAIL. | AC3 |
+| `AC6` not in CI (`alert_route: CI` was false) | **ALREADY FIXED** — same deletion; the surviving assertion is the suite itself, which *is* in CI. | AC3 |
+| `AC10` misses `GH-N` + the full-URL close form; `[^.]{0,40}` breaks on the `.` in `github.com` | **ALREADY FIXED.** The regex now covers `#N`, `GH-N`, and the issue URL, reads the **squash commit body** (`git log origin/main..HEAD --format='%B'`), and names the `[^.]{0,40}` defect explicitly so it is not re-introduced. | AC6 |
+| `AC13` unanswerable: `files_written` is a count, never names `ci-deploy.sh` | **ALREADY FIXED — by honesty, not by a better command.** The AC now *states its own limit*: "the workflow asserts a COUNT, not per-file presence; 15/15 implies `ci-deploy.sh` landed but does not name it." An AC that admits what it cannot prove beats one that pretends. | AC7 |
+| Phase 1 parenthetical "RED (arms absent → zero tokens emitted)" is false | **ALREADY FIXED.** Reads "**Expected: RED.** Output is **`errsaving,` alone** — *not* zero tokens". | §Phase 1 |
+| Name the most-exposed tests (T-5B-14, T-5B-17) | **ALREADY FIXED.** Both in the Test Strategy table; T-5B-14 flagged "**re-verify — most exposed**". | §Test Strategy |
+| Two shipped comments contradict (`_login_kw` header says "every literal below is MEASURED") | **GENUINELY OPEN — fixed at /work.** `ci-deploy.sh` › `_login_kw` now carries an explicit **MEASURED / INFERRED / FALSIFIED** class per literal and forbids re-collapsing to a universal. The test-file half needed no change (its comment quantifies over *measured arms*, not the body) but gained a pointer so it cannot be misread as full arm coverage. | `ci-deploy.sh`, `ci-deploy.test.sh` |
+
+**The lesson, recorded because it recurred four times in one round:** a review report is a *claim about an
+artifact*, and it goes stale the instant the artifact changes. `deepen-plan` ran between the review and its
+consumption. Reconcile findings against the file on disk before transcribing them as work — the same rule
+this plan already applies to plan-quoted counts, tool-flag units, and `session-state.md` decisions.
+
+**Panel verdict that DOES stand (re-verified at /work):** the six arms are correct and introduce **zero**
+test failures. See the methodology note at the end of this section — it is the most valuable thing the panel
+produced.
+
+<details>
+<summary>Original findings as reported by the panel (superseded — kept for the audit trail)</summary>
 
 1. **AC6 false-FAILs on 100%-correct code — DEMONSTRATED.** `awk … | grep -c 'grep -q'` matches *comment
    prose*, including Phase 2's own "`case`, never `grep -q`" wording. Adding that comment made AC6 return 1
@@ -642,6 +672,8 @@ execution, not asserted; do not re-argue them.
 AC3's `grep -c` exits rc=1 on zero and would abort a `set -e` wrapper — the same "non-match returns 1" class
 this instrument exists to survive; AC1's headline exceeds its command; AC5 has no command and a whole-file
 grep cannot distinguish the T16 fixture from the T-5B-20 fixture.
+
+</details>
 
 **Landmine self-report — the fourth arming this round, logged deliberately.** Writing correction #3 above,
 the author wrote a **live** `Clos<e>s <full-issue-URL>` for 6565 into this file while explaining that that

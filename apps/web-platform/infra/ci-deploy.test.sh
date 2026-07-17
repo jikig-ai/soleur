@@ -3901,6 +3901,9 @@ T16_N=0
 # so an arm that splices its input emits the canary and fails the closed-form oracle. Every
 # literal here is a string the /work Phase 0 battery measured out of a real `docker login`
 # against a live registry:2 (except the three the plan FALSIFIED, kept as free kw probes).
+# NOT one fixture per ARM — `_login_kw` also carries six INFERRED errno arms (#6565) that this
+# array deliberately does not enumerate; T-5B-20 owns those. Read "MEASURED arm" literally here:
+# this comment stays true only because it quantifies over the measured arms, not over the body.
 # Synthesized secret shapes only, split so no contiguous token literal exists in this file
 # (`cq-test-fixtures-synthesized-only` + GitHub push protection).
 T16_KW_CANARY="SENTINEL_LEAK_CANARY_kw pw=dckr_pat_""BBBBBBBBBBBBBBBBBBBBBBBBBBB user=deploy-bot"
@@ -4111,6 +4114,208 @@ else
   echo "        every call MUST read: x=\"\$( ( _login_hatch … ) || true )\""
   printf '%s\n' "$HATCH_NC" | grep -nE '_login_hatch([^(]|$)' | sed 's/^/          /'
 fi
+
+# T-5B-20 (#6565, errno probe round): each errno arm FIRES, and the kw vocabulary stays closed.
+#
+# *** DO-NOT-FIX NOTE — READ BEFORE "CORRECTING" THE SOURCING BELOW. ***
+# This test SPLITS its oracle sourcing on purpose, and the split is load-bearing:
+#   (a) the FIRING fixtures (literal -> expected token) are HAND-WRITTEN, and MUST STAY so;
+#   (b) the VOCABULARY invariant is DERIVED from KW_BODY, and MUST STAY so.
+# This file carries a loud precedent immediately above (T-5B-16:3922-3931) reading "the oracle is
+# DERIVED from the SUT, never hand-copied". That precedent is CORRECT and applies to (b). It does
+# NOT apply to (a), and applying it there destroys this test:
+#   deriving a FIRING fixture from KW_BODY feeds the arm's own literal back into itself, so a
+#   TYPO'D arm (`*'cannot allocat memory'*`) matches its own typo and the test goes GREEN WITH THE
+#   BUG. Measured, not reasoned: that is exactly what a derived fixture does here.
+# Two reviewers gave opposite guidance on this and both were right about different assertions.
+# The measurement settled it. If you are here to unify the sourcing: don't — you would be
+# re-introducing the defect this note exists to prevent.
+#
+# (b) must be derived because it has to span arm #17 — the arm nobody has written yet. No
+# hand-written member list can.
+echo "--- #6565 T-5B-20: every errno arm fires with its own token; kw vocabulary stays closed ---"
+TOTAL=$((TOTAL + 1))
+T20_LIB=$(mktemp)
+printf '%s\n' "$KW_BODY" > "$T20_LIB"
+# shellcheck disable=SC1090
+source "$T20_LIB"
+T20_BAD=""
+T20_N=0
+# HAND-WRITTEN (see the DO-NOT-FIX note): each pair is (a real docker stderr shape carrying the
+# errno, the token that arm must emit). The errno strings are the MEASURED `syscall.Errno.Error()`
+# renderings (Go 1.21.6, /work Phase 0) — Go renders them lowercase; C `strerror` capitalizes.
+# Each fixture carries a credential canary so an arm that splices its input fails the closed-form
+# oracle below. Synthesized shapes only, split so no contiguous token literal exists in source
+# (`cq-test-fixtures-synthesized-only` + GitHub push protection).
+T20_CANARY="SENTINEL_LEAK_CANARY_errno pw=dckr_pat_""CCCCCCCCCCCCCCCCCCCCCCCCCCC user=deploy-bot"
+T20_PAIRS=(
+  "error saving credentials: open /home/deploy/.docker/config.json1234567890: cannot allocate memory ${T20_CANARY}|enomem"
+  "error saving credentials: open /home/deploy/.docker/config.json1234567890: read-only file system ${T20_CANARY}|erofs"
+  "error saving credentials: open /home/deploy/.docker/config.json1234567890: no such file or directory ${T20_CANARY}|enoent"
+  "error saving credentials: open /home/deploy/.docker/config.json1234567890: invalid argument ${T20_CANARY}|einval"
+  "error saving credentials: open /home/deploy/.docker/config.json1234567890: input/output error ${T20_CANARY}|eio"
+  "error saving credentials: open /home/deploy/.docker/config.json1234567890: operation not permitted ${T20_CANARY}|eperm"
+)
+if ! declare -F _login_kw >/dev/null; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: could not source _login_kw (fixture error, not a code defect)"
+else
+  for _pair in "${T20_PAIRS[@]}"; do
+    _fixture="${_pair%|*}"
+    _want="${_pair##*|}"
+    _got="$(_login_kw "$_fixture")"
+    T20_N=$((T20_N + 1))
+    # The arm must FIRE (its token present) ...
+    case "$_got" in
+      *"${_want},"*) : ;;
+      *) T20_BAD="${T20_BAD}\n    arm '${_want}' did NOT fire; kw='${_got}'" ;;
+    esac
+    # ... and the output must stay closed-form: comma-joined lowercase literals, nothing else.
+    # Any Form-A splice emits a colon/space/slash/quote from the fixture and fails this.
+    if ! [[ "$_got" =~ ^([a-z]+,)*$ ]]; then
+      T20_BAD="${T20_BAD}\n    arm '${_want}' emitted a NON-closed-form value: '${_got}'"
+    fi
+  done
+  # ---- DERIVED invariants (see the DO-NOT-FIX note). These span arm #17. ----
+  #
+  # AC4 — THE ALPHABET INVARIANT, and the reason this family must be derived rather than listed.
+  # It is a SECURITY property, not tidiness: `_login_kw`'s arms are the only code that pattern-
+  # matches against raw stderr, and stderr can contain a pull token. The zot token is
+  # `[A-Za-z0-9]{40}` (`zot-registry.tf` › `random_password.zot_pull`, `special = false`); a GHCR
+  # PAT is likewise alphanumeric-with-fixed-prefix. So ANY arm literal containing a character
+  # OUTSIDE `[A-Za-z0-9]` — a space, a hyphen, a slash — is STRUCTURALLY incapable of occurring
+  # inside a credential, and therefore incapable of firing on one. `kw` then carries zero bits
+  # about token content, by construction rather than by review.
+  # A future arm like `*'abc123'*` would silently break that: it could match INSIDE a token, and
+  # `kw` would leak one bit per such arm. No hand-written member list can guard arm #17 — only a
+  # derivation from the body can. This is exactly why (b) is derived and (a) is not.
+  #
+  # Anchored on the `case` MATCH FORM (`*'…'*`), never a bare token, so prose in a comment cannot
+  # inject a member (`cq-assert-anchor-not-bare-token`).
+  T20_LITERALS="$(printf '%s\n' "$KW_BODY" | grep -vE '^[[:space:]]*#' | grep -oE "\*'[^']+'\*" | sed "s/^\*'//; s/'\*$//")"
+  T20_LIT_N="$(printf '%s\n' "$T20_LITERALS" | grep -c .)"
+  # Minimum-cardinality guard: an extraction that silently returned zero would make every
+  # invariant below VACUOUS — the empty-source trap this file's own bash gates warn about. 16 =
+  # 7 measured + 6 inferred errno + 3 falsified.
+  if [[ "$T20_LIT_N" -lt 16 ]]; then
+    T20_BAD="${T20_BAD}\n    arm-literal extraction returned ${T20_LIT_N} (expected >=16: 7 measured + 6 errno + 3 falsified) — the invariants below would be vacuous"
+  fi
+  while IFS= read -r _lit; do
+    [[ -z "$_lit" ]] && continue
+    # (i) AC4: must contain a character outside [A-Za-z0-9], so it cannot match credential content.
+    if [[ ! "$_lit" =~ [^A-Za-z0-9] ]]; then
+      T20_BAD="${T20_BAD}\n    ALPHABET VIOLATION: arm literal '${_lit}' is pure [A-Za-z0-9] — it could match INSIDE a pull token, making kw a 1-bit credential oracle"
+    fi
+  done <<< "$T20_LITERALS"
+  # (ii) The emitted TOKEN vocabulary stays closed-form: comma-terminated lowercase. A future arm
+  # emitting `Enomem,` or `enomem:` breaks the `^([a-z]+,)*$` oracle that T-5B-16's fuzz and this
+  # test both rely on. Derived for the same arm-#17 reason.
+  T20_VOCAB="$(printf '%s\n' "$KW_BODY" | grep -vE '^[[:space:]]*#' | grep -oE "printf '[a-zA-Z]+,'" | grep -oE "'[a-zA-Z]+,'" | tr -d "',")"
+  T20_VOCAB_N="$(printf '%s\n' "$T20_VOCAB" | grep -c .)"
+  if [[ "$T20_VOCAB_N" -lt 16 ]]; then
+    T20_BAD="${T20_BAD}\n    kw token extraction returned ${T20_VOCAB_N} members (expected >=16)"
+  fi
+  while IFS= read -r _member; do
+    [[ -z "$_member" ]] && continue
+    if ! [[ "$_member" =~ ^[a-z]+$ ]]; then
+      T20_BAD="${T20_BAD}\n    kw token '${_member}' is not lowercase-alpha — breaks the closed-form oracle"
+    fi
+  done <<< "$T20_VOCAB"
+  if [[ -z "$T20_BAD" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: all ${T20_N} errno arms fire with their own token; kw vocabulary closed (${T20_VOCAB_N} members, all lowercase)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: errno arm / kw vocabulary drift:"
+    printf "%b\n" "$T20_BAD"
+  fi
+fi
+rm -f "$T20_LIB"
+
+# T-5B-21 (#6565, D7): `errno_chars` — the field that bounds ALL ~130 errnos in ONE round.
+#
+# WHY THIS FIELD EXISTS, in one measurement: the six arms above answer only "is it ENOMEM?".
+# Under the round's own 22-char arithmetic ONLY ENOMEM fits (measured: ENOMEM 22, EPERM 23,
+# EROFS 21, EIO 18, EINVAL 16, ENOENT 25), so the other five fire only if the premise is WRONG —
+# and if it is wrong, six guesses cover ~5% of ~130 errnos. `errno_chars` tests the premise
+# instead of assuming it.
+#
+# THE PROPERTY THAT MAKES IT WORTH TWO LINES (measured at /work, not reasoned): `errno_chars` is
+# INVARIANT under docker's uint32 temp suffix. The observed `stderr_chars` was 96 on zot and 97 on
+# ghcr, and it took arithmetic to conclude those were the IDENTICAL error with a 9- vs 10-digit
+# suffix. `errno_chars` reports 22 for BOTH. It skips the inference the round was built to make.
+#
+# NO-ECHO: this is a LENGTH, exactly like `stderr_chars` beside it — never content. The residual
+# argument is RE-CONFIRMED here, not inherited from `stderr_chars` (D7 narrows the segment, so
+# inheriting would be unearned): a fixed-length token substituted into the final colon segment
+# yields a CONSTANT length regardless of its value, so the channel carries zero bits about token
+# content — the property turns on fixed-ness, not on any particular number. A username landing in
+# that segment costs `len(username)`, which is the SAME already-accepted residual `stderr_chars`
+# carries (`ci-deploy.sh` › `_login_hatch` header: a declared non-secret constant / the public
+# package owner). The narrowing does not create a new channel.
+echo "--- #6565 T-5B-21: errno_chars is emitted, and is invariant under docker's uint32 temp suffix ---"
+TOTAL=$((TOTAL + 1))
+T21_BAD=""
+# Source the REAL hatch body (with its emitter dependencies), same technique and same rationale as
+# T-5B-16: `_login_hatch` is pure `case`/`printf` plus a `|| true`-guarded `docker --version`, so
+# the extracted body IS the SUT — and driving a full deploy per fixture costs minutes each.
+T21_LIB=$(mktemp)
+HATCH_BODY="$(awk '/^_login_hatch\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
+{ printf '%s\n' "$KW_BODY"; printf '%s\n' "$TOK_BODY"; printf '%s\n' "$HATCH_BODY"; } > "$T21_LIB"
+# shellcheck disable=SC1090
+source "$T21_LIB"
+if [[ -z "$HATCH_BODY" ]] || ! declare -F _login_hatch >/dev/null; then
+  T21_BAD="${T21_BAD}\n    could not source the real _login_hatch (fixture error, not a code defect)"
+fi
+# The EXACT observed production shape, at both measured suffix widths (9 and 10 digits; 11 is
+# impossible for a uint32). These reproduce stderr_chars 96 and 97 — the two live datums.
+T21_E9="error saving credentials: open /home/deploy/.docker/config.json123456789: cannot allocate memory"
+T21_E10="error saving credentials: open /home/deploy/.docker/config.json1234567890: cannot allocate memory"
+T21_H9="$( ( _login_hatch "$T21_E9" 0 1 ) || true )"
+T21_H10="$( ( _login_hatch "$T21_E10" 0 1 ) || true )"
+# The field must exist at all.
+case "$T21_H9" in
+  *errno_chars=*) : ;;
+  *) T21_BAD="${T21_BAD}\n    errno_chars absent from the hatch emit: '${T21_H9}'" ;;
+esac
+_t21_field() { printf '%s' "$1" | grep -oE 'errno_chars=[0-9]+' | cut -d= -f2; }
+T21_N9="$(_t21_field "$T21_H9")"
+T21_N10="$(_t21_field "$T21_H10")"
+# Pin the two live datums: the shapes must reproduce the OBSERVED stderr_chars, or the fixture has
+# drifted from production and every conclusion below is about a different string.
+case "$T21_H9"  in *'stderr_chars=96 '*) : ;; *) T21_BAD="${T21_BAD}\n    9-digit fixture no longer reproduces the observed stderr_chars=96" ;; esac
+case "$T21_H10" in *'stderr_chars=97 '*) : ;; *) T21_BAD="${T21_BAD}\n    10-digit fixture no longer reproduces the observed stderr_chars=97" ;; esac
+# THE POINT: same errno, different suffix width -> stderr_chars MOVES (96 vs 97), errno_chars does NOT.
+if [[ "$T21_N9" != "22" ]]; then
+  T21_BAD="${T21_BAD}\n    errno_chars=${T21_N9:-<empty>} for the 9-digit shape; expected 22 (measured len('cannot allocate memory'))"
+fi
+if [[ "$T21_N9" != "$T21_N10" ]]; then
+  T21_BAD="${T21_BAD}\n    errno_chars NOT invariant under the temp suffix: 9-digit=${T21_N9:-<empty>} 10-digit=${T21_N10:-<empty>} (this invariance IS the field's reason to exist)"
+fi
+# Degenerate input: no ': ' anywhere -> the segment is the whole string, so errno_chars ==
+# stderr_chars. Not a defect; it is how "there was no colon segment" reports itself.
+T21_HND="$( ( _login_hatch "unauthorized" 0 1 ) || true )"
+if ! [[ "$T21_HND" == *'stderr_chars=12 '* && "$T21_HND" == *'errno_chars=12'* ]]; then
+  T21_BAD="${T21_BAD}\n    no-colon input should render errno_chars == stderr_chars (12); got: '${T21_HND}'"
+fi
+# Empty stderr -> 0, and must not abort.
+T21_HE="$( ( _login_hatch "" 0 1 ) || true )"
+case "$T21_HE" in *'errno_chars=0'*) : ;; *) T21_BAD="${T21_BAD}\n    empty stderr should render errno_chars=0; got: '${T21_HE}'" ;; esac
+# NO-ECHO, behaviourally: a canary in the final colon segment must move only the INTEGER, never
+# appear in the emit. This is the assertion that would catch a `%s`-splice regression of the field.
+T21_CANARY="dckr_pat_""DDDDDDDDDDDDDDDDDDDDDDDDDDD"
+T21_HC="$( ( _login_hatch "error saving credentials: open /x: ${T21_CANARY}" 0 1 ) || true )"
+case "$T21_HC" in
+  *"$T21_CANARY"*) T21_BAD="${T21_BAD}\n    LEAK: the hatch echoed the final-segment canary: '${T21_HC}'" ;;
+esac
+if [[ -z "$T21_BAD" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: errno_chars=22 for both live datums (stderr_chars 96 AND 97) — invariant under the uint32 suffix, no echo"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: errno_chars drift:"
+  printf "%b\n" "$T21_BAD"
+fi
+rm -f "$T21_LIB"
 
 # Restore strict mode for the summary/exit.
 set -e -o pipefail
