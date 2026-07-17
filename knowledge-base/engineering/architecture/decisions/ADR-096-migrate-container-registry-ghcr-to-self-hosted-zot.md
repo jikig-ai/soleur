@@ -60,6 +60,15 @@ managed registry. Then:
    > pull site (`ci-deploy.sh` `_ghcr_pull_or_recover`), fail-open (a recovery miss leaves
    > the unchanged `image_pull_failed` terminal state), retry exactly once. This contract
    > retires with the GHCR pull path at Phase 5.
+   >
+   > **Transient-retry co-tenant (#6525).** The same `_ghcr_pull_or_recover` gate also
+   > absorbs a **transient/network** first-attempt pull failure (timeout, connection reset,
+   > EOF, no-such-host, registry 5xx) with a bounded capped backoff
+   > (`PULL_TRANSIENT_RETRY_SLEEPS`, default 2 retries, ≤6 s/leg), emitting
+   > `recovery_stage=transient_recovered` on a save and `transient_exhausted` on a
+   > fail-closed exhaustion. It is a sibling of the auth recovery above — same one-level
+   > retry, same fail-open both-registries semantics — and **retires together with it at
+   > Phase 5** (the retirement structurally subsumes both by deleting the GHCR pull leg).
 3. **cosign (Phase 4):** unchanged trust anchor — same pinned cosign SHA, same offline
    `trusted_root.json`, same GitHub-Actions-OIDC identity regexp. Registry-agnostic (Phase-0
    proved a read-only user fetches a zot-stored `.sig` and gc does not reap it).

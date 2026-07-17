@@ -358,6 +358,30 @@ if [[ "${1:-}" == "pull" ]]; then
         exit 1
       fi
     fi
+    # #6525: simulate a TRANSIENT/network GHCR pull failure so the bounded transient-retry
+    # loop in _ghcr_pull_or_recover can be exercised. TRANSIENT_COUNT_FILE is an integer
+    # countdown — emit a network-class stderr while >0 (decrement each GHCR pull), then fall
+    # through (a lower arm, or success). TRANSIENT_ALWAYS=1 emits transient on every GHCR pull
+    # (the exhaust scenario). MANIFEST_ALWAYS=1 emits a manifest-unknown stderr (the no-retry
+    # regression guard; also, composed with a TRANSIENT_COUNT_FILE=1, the GAP-7 transient→manifest
+    # tail). The transient stderr string mirrors the fleet-real shape used at T-5B-5c (:3568).
+    _T6525_TRANSIENT='read tcp 10.0.1.10:44444->140.82.112.34:443: read: connection reset by peer'
+    if [[ -n "${MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE:-}" && -f "${MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE}" ]]; then
+      _tn=$(cat "$MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE" 2>/dev/null || echo 0)
+      if [[ "$_tn" =~ ^[0-9]+$ ]] && (( _tn > 0 )); then
+        echo $(( _tn - 1 )) > "$MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE"
+        echo "$_T6525_TRANSIENT" >&2
+        exit 1
+      fi
+    fi
+    if [[ "${MOCK_GHCR_PULL_TRANSIENT_ALWAYS:-}" == "1" ]]; then
+      echo "$_T6525_TRANSIENT" >&2
+      exit 1
+    fi
+    if [[ "${MOCK_GHCR_PULL_MANIFEST_ALWAYS:-}" == "1" ]]; then
+      echo "manifest unknown: manifest unknown" >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -3466,6 +3490,191 @@ if printf '%s' "$HELPER_BODY" | grep -qE '_docker_login_capture ghcr\.io "\$du" 
   PASS=$((PASS + 1)); echo "  PASS: recovery relogin writes ghcr.io auth into the same \$GHCR_DOCKER_CONFIG (cosign continuity)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: AC13 — recovery relogin must target ghcr.io"
+fi
+
+# --- #6525: widen the GHCR retry beyond auth-denied to cover TRANSIENT/network stderr ----
+# Root cause: _ghcr_pull_or_recover retried a failed GHCR pull ONLY when the stderr was
+# auth-classified (_pull_result_is_auth_denied). A transient first-attempt failure (timeout,
+# connection reset, EOF, no-such-host, ...) took the return-1 path with ZERO retries — the
+# observed v0.216.1/.2 "first attempt fails, rerun succeeds" shape. The fix adds a shared
+# _pull_result_is_transient predicate + a bounded, capped backoff loop; the both-registries
+# fail-closed semantics and the entire #6400 auth-recovery branch stay byte-identical.
+
+# T-6525-1..2: _pull_result_is_transient classifies the fleet's real transient stderr as
+# transient (return 0) and does NOT swallow the higher-precedence auth/manifest classes
+# (return non-zero). Sources the real predicate body (pure grep|printf, no deps — like
+# _login_kw/_login_tok at T-5B-16) rather than re-running the deploy per fixture.
+echo "--- #6525 T-6525-1..2: _pull_result_is_transient classifier (positive + negative) ---"
+TOTAL=$((TOTAL + 1))
+PT_BODY="$(awk '/^_pull_result_is_transient\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
+PT_LIB=$(mktemp)
+printf '%s\n' "$PT_BODY" > "$PT_LIB"
+# shellcheck disable=SC1090
+source "$PT_LIB" 2>/dev/null || true
+# Positive fixtures — the fleet-real transient shapes (mirror :3555-3600) plus the deepen
+# docker-stderr research additions (context deadline exceeded / registry 5xx / net-http
+# client-timeout / DNS server-misbehaving).
+PT_POS=(
+  'read tcp 10.0.1.10:44444->140.82.112.34:443: read: connection reset by peer'
+  'Get "https://ghcr.io/v2/": dial tcp 140.82.112.34:443: connect: network is unreachable'
+  'Get "https://ghcr.io/v2/": EOF'
+  'dial tcp: lookup ghcr.io: no such host'
+  'dial tcp 140.82.112.34:443: connect: connection refused'
+  'Get "https://ghcr.io/v2/": net/http: TLS handshake timeout'
+  'Get "https://ghcr.io/v2/": read: i/o timeout'
+  'temporary failure in name resolution'
+  'Get "https://ghcr.io/v2/": context deadline exceeded'
+  'received unexpected HTTP status: 503 Service Unavailable'
+  'Get "https://ghcr.io/v2/": request canceled while waiting for connection'
+  'dial tcp: lookup ghcr.io on 10.0.0.1:53: server misbehaving'
+)
+# Negative fixtures — auth (higher precedence, owned by _pull_result_is_auth_denied) and
+# manifest (note `no such manifest` shares the `no such` prefix with the transient
+# `no such host` — the predicate must anchor on the full token and NOT match manifest).
+PT_NEG=(
+  'denied: requested access to the resource is denied'
+  'manifest unknown: manifest unknown'
+  'manifest for ghcr.io/x:v1 not found: no such manifest'
+)
+PT_BAD=""
+if ! declare -F _pull_result_is_transient >/dev/null; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: could not source _pull_result_is_transient (fixture error / function absent)"
+else
+  for _s in "${PT_POS[@]}"; do
+    if ! _pull_result_is_transient "$_s"; then PT_BAD+=$'\n'"    positive NOT matched: $_s"; fi
+  done
+  for _s in "${PT_NEG[@]}"; do
+    if _pull_result_is_transient "$_s"; then PT_BAD+=$'\n'"    negative WRONGLY matched: $_s"; fi
+  done
+  if [[ -z "$PT_BAD" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: all ${#PT_POS[@]} transient shapes matched; all ${#PT_NEG[@]} auth/manifest shapes rejected"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: classifier mismatch:$PT_BAD"
+  fi
+fi
+rm -f "$PT_LIB"
+
+# T-6525-3: transient retry RECOVERS — count=1 (first pull transient, retry succeeds),
+# PULL_TRANSIENT_RETRY_SLEEPS="0 0" (no real sleep): 2 GHCR pulls, a transient_recovered
+# breadcrumb (op:image-pull-recovery), NO pull_failure_event, overall success.
+echo "--- #6525 T-6525-3: transient retry RECOVERS (count=1 → 2 pulls, transient_recovered) ---"
+T6525=$(mktemp -d)
+echo 1 > "$T6525/transient-count"
+export MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE="$T6525/transient-count"
+export PULL_TRANSIENT_RETRY_SLEEPS="0 0"
+export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
+TOTAL=$((TOTAL + 1))
+T3_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$T3_PULLS" -eq 2 ]] \
+   && grep -q 'image pull recovered (transient_recovered)' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && ! grep -q 'image pull failed' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: transient recovered — 2 GHCR pulls (blip+retry), transient_recovered event, no failure event"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-3 (ghcr_pulls=$T3_PULLS; expected 2 + transient_recovered, no failure event)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6525"
+
+# T-6525-4: transient retry EXHAUSTS — transient on every pull, PULL_TRANSIENT_RETRY_SLEEPS="0 0"
+# (max=2): exactly 3 GHCR pulls (1 + 2 retries), pull_failure_event with pull_result=network
+# AND recovery_stage=transient_exhausted, overall FAILURE (old container stays live — fail-closed),
+# NO recovery event.
+echo "--- #6525 T-6525-4: transient retry EXHAUSTS (3 pulls, network/transient_exhausted, fail-closed) ---"
+T6525=$(mktemp -d)
+export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
+export PULL_TRANSIENT_RETRY_SLEEPS="0 0"
+export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T4_RC=0 || T4_RC=$?
+TOTAL=$((TOTAL + 1))
+T4_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$T4_RC" -ne 0 ]] && [[ "$T4_PULLS" -eq 3 ]] \
+   && grep -q 'image pull failed (network)' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && grep -q 'transient_exhausted' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: exhausted — rc=$T4_RC, 3 GHCR pulls (1+2 retries), failure tagged network/transient_exhausted, no recovery"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-4 (rc=$T4_RC ghcr_pulls=$T4_PULLS; expected nonzero + 3 pulls + network + transient_exhausted)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6525"
+
+# T-6525-5: manifest/unknown stderr → exactly 1 GHCR pull (NO retry), pull_result=manifest_unknown,
+# empty recovery_stage. Regression guard: we did NOT widen retries to the manifest class.
+echo "--- #6525 T-6525-5: manifest stderr → exactly 1 pull, no retry (regression guard) ---"
+T6525=$(mktemp -d)
+export MOCK_GHCR_PULL_MANIFEST_ALWAYS=1
+export PULL_TRANSIENT_RETRY_SLEEPS="0 0"
+export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T5_RC=0 || T5_RC=$?
+TOTAL=$((TOTAL + 1))
+T5_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$T5_RC" -ne 0 ]] && [[ "$T5_PULLS" -eq 1 ]] \
+   && grep -q 'image pull failed (manifest_unknown)' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && grep -q '"recovery_stage": *""' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && ! grep -q 'transient_exhausted' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: manifest → 1 GHCR pull (no retry), manifest_unknown, empty recovery_stage"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-5 (rc=$T5_RC ghcr_pulls=$T5_PULLS; expected nonzero + 1 pull + manifest_unknown + empty recovery_stage)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_MANIFEST_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6525"
+
+# T-6525-6 (deepen GAP-7): a transient blip FOLLOWED BY a manifest failure — arm transient
+# once, then manifest on the retry: exactly 2 GHCR pulls, terminal pull_result=manifest_unknown,
+# and recovery_stage EMPTY (NOT transient_exhausted — the retries were not spent AND the
+# terminal cause is manifest). Guards against polluting the transient_exhausted Sentry
+# discriminator with manifest tails.
+echo "--- #6525 T-6525-6 (GAP-7): transient→manifest tail → 2 pulls, manifest_unknown, empty recovery_stage ---"
+T6525=$(mktemp -d)
+echo 1 > "$T6525/transient-count"
+export MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE="$T6525/transient-count"
+export MOCK_GHCR_PULL_MANIFEST_ALWAYS=1
+export PULL_TRANSIENT_RETRY_SLEEPS="0 0"
+export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
+export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T6_RC=0 || T6_RC=$?
+TOTAL=$((TOTAL + 1))
+T6_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+if [[ "$T6_RC" -ne 0 ]] && [[ "$T6_PULLS" -eq 2 ]] \
+   && grep -q 'image pull failed (manifest_unknown)' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && grep -q '"recovery_stage": *""' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && ! grep -q 'transient_exhausted' "$MOCK_SENTRY_CAPTURE_FILE" \
+   && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: transient→manifest tail — 2 pulls, manifest_unknown, empty recovery_stage (discriminator not polluted)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-6 (rc=$T6_RC ghcr_pulls=$T6_PULLS; expected nonzero + 2 pulls + manifest_unknown + empty recovery_stage, no transient_exhausted/recovery)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE MOCK_GHCR_PULL_MANIFEST_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+rm -rf "$T6525"
+
+# T-6525-7: single-source-of-truth wiring — _pull_result_is_transient is defined exactly ONCE,
+# pull_failure_event's network arm CALLS it (not a second inline regex), mirroring the
+# _pull_result_is_auth_denied shared-predicate guard at AC3 (:3419-3427). Anchored on the
+# call shape + a distinctive regex token that must live ONLY in the predicate, per the file's
+# own "anchor on the construct, not a bare token" discipline.
+echo "--- #6525 T-6525-7: pull_failure_event network arm calls the shared _pull_result_is_transient ---"
+TOTAL=$((TOTAL + 1))
+# Anchored on the CALL shape + the DEFINITION, never a bare regex token a comment could also carry
+# (the file's own "anchor on syntax, not a bare token" discipline). Three checks: (a) the predicate
+# is defined exactly once; (b) pull_failure_event's body CALLS it; (c) pull_failure_event's body no
+# longer carries the pre-#6525 inline network regex `timeout|timed out|temporary failure|...` — so
+# the classification was REWIRED to the shared predicate, not duplicated (single source of truth).
+TRANSIENT_DEF_COUNT=$(grep -cE '^_pull_result_is_transient\(\) \{' "$DEPLOY_SCRIPT")
+PFE_BODY="$(awk '/^pull_failure_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
+if [[ "$TRANSIENT_DEF_COUNT" -eq 1 ]] \
+   && printf '%s' "$PFE_BODY" | grep -qE '_pull_result_is_transient "\$detail_raw"' \
+   && ! printf '%s' "$PFE_BODY" | grep -qE "grep -qiE '[^']*timed out\|temporary failure\|no route"; then
+  PASS=$((PASS + 1)); echo "  PASS: single _pull_result_is_transient definition; pull_failure_event calls the shared predicate (no inline network regex)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-7 (transient_def=$TRANSIENT_DEF_COUNT; expected exactly 1 def + shared-predicate call + no inline network regex in pull_failure_event)"
 fi
 
 # --- #6497: zot login failure is DISCRIMINATING (WEB-PLATFORM-5B) -----------------------
