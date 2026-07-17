@@ -40,8 +40,11 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
     # registry rule below already ships (#6122).
     #
     # This does NOT trade availability away — it restores it. The status quo is not
-    # "available", it is "answers, sometimes from a host that cannot serve the route"
-    # (web-2 has no inngest-inventory.sh at all). Correct-or-unavailable ≻ silently-wrong.
+    # "available", it is "answers, sometimes from a host that cannot serve the route":
+    # #6425 measured (2026-07-15) that web-2 has no `inngest-inventory.sh` BAKED — i.e.
+    # absent from its image/cloud-init. A coin-flipped push may since have landed one on
+    # web-2, which is the point: nobody can say which host holds what. Correct-or-
+    # unavailable ≻ silently-wrong.
     #
     # The :9000 / :22 ports stay literals: webhook.service binds `-ip 0.0.0.0` with the
     # port in its own config, so deriving it costs more than it buys. A decision, not an
@@ -76,15 +79,19 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
     # MULTIPLE connector replicas, and CF load-balances across them. So this rule is correct only
     # while EVERY connector host is a 10.0.1.0/24 member (ADR-114 invariant I1); web-2 was not.
     # It is nonetheless the RIGHT pattern and the one to generalize — its service is
-    # private-net-RELATIVE, so whichever replica answers proxies to the correct origin. Contrast
-    # `ssh://localhost:22` below, which is connector-relative and host-NONdeterministic (I2).
+    # private-net-RELATIVE, so whichever replica answers proxies to the correct origin.
+    #
+    # #6594 GENERALIZED IT: `deploy.` and `ssh.` above are now origin-relative too, so all three
+    # routes satisfy I2 and this rule is no longer the lone compliant one. This comment used to
+    # contrast the sibling `ssh://localhost:22` as the connector-relative counterexample; that
+    # counterexample no longer exists in this file. The pattern's rationale stands on its own.
     # Failure rates and the topology rationale live in ADR-114 — do not restate them here.
     #
     # `tcp://`, NOT `http://` (#6122 cutover fix): `cloudflared access tcp` bridges a RAW TCP
     # stream over a WebSocket. With an `http://` service the origin cloudflared HTTP-proxies the
     # WS-upgrade to zot, which doesn't speak it → the client dies "websocket: bad handshake"
     # (the exact symptom the first live push runs hit). The sibling SSH bridge works precisely
-    # because it uses a raw-TCP service type (`ssh://localhost:22`); `tcp://` is the generic
+    # because it uses a raw-TCP service type (the `ssh://` scheme); `tcp://` is the generic
     # form for zot's plain-HTTP registry — crane/docker then speak HTTP over the raw forward
     # (127.0.0.1:5000 is auto-insecure to docker). The CF Access app + service-token policy are
     # unchanged (identical shape to the working ssh app); only the ingress transport was wrong.
@@ -154,7 +161,9 @@ resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
 # GitHub Actions runs `cloudflared access tcp --hostname ssh.${app_domain_base}`
 # carrying TUNNEL_SERVICE_TOKEN_ID + TUNNEL_SERVICE_TOKEN_SECRET. CF Access
 # validates the headers and bridges the raw TCP forward into the tunnel,
-# where the host-side cloudflared daemon delivers to localhost:22 (sshd).
+# where the answering cloudflared connector delivers to web-1's sshd at
+# `${var.web_hosts["web-1"].private_ip}:22` — origin-relative since #6594, so the
+# bridge lands on web-1 no matter which connector replica CF selects.
 
 resource "cloudflare_zero_trust_access_application" "ssh" {
   zone_id = var.cf_zone_id
