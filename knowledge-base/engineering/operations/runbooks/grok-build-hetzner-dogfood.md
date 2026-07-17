@@ -136,7 +136,7 @@ Fill sample table:
 
 **Brand:** operator-only dogfood. **Never** claim “self-hosted Grok 4.5” or “Grok runs on our GPU.”
 
-**Control plane:** Robot console order + `scripts/dogfood/grok-gpu-bootstrap.sh` + this runbook + expense ledger. See ADR-118. **Not** Cloud TF birth.
+**Control plane:** Robot console order + `scripts/dogfood/grok-gpu-bootstrap.sh` + this runbook + expense ledger. See ADR-119. **Not** Cloud TF birth.
 
 ### Forbidden configs (Approach B / product)
 
@@ -173,16 +173,22 @@ Cost-model R&D line: update only when status is `active` (not pre-order).
 
 ### Bootstrap (after OS is up)
 
+Fresh Robot host has **no** repo checkout. Copy the script from a machine that has this tree, then run as root:
+
 ```bash
-# As root on GEX (SSH: L3 firewall / admin IP first if connect fails)
-# Script: scripts/dogfood/grok-gpu-bootstrap.sh
+# From a soleur checkout that contains scripts/dogfood/grok-gpu-bootstrap.sh
 # <!-- verified: 2026-07-17 source: scripts/dogfood/grok-gpu-bootstrap.sh -->
-bash scripts/dogfood/grok-gpu-bootstrap.sh
+# SSH: L3 firewall / admin IP first if connect fails (hr-ssh-diagnosis-verify-firewall)
+GEX_IP='<from Robot console / #6546>'
+scp scripts/dogfood/grok-gpu-bootstrap.sh scripts/dogfood/assert-ollama-loopback.sh root@${GEX_IP}:/tmp/
+ssh root@${GEX_IP} 'bash /tmp/grok-gpu-bootstrap.sh'
 # After license memo on #6546:
-bash scripts/dogfood/grok-gpu-bootstrap.sh --model '<exact-ollama-tag>' --license-ok
+ssh root@${GEX_IP} 'bash /tmp/grok-gpu-bootstrap.sh --model <exact-ollama-tag> --license-ok'
+# Later re-runs can use the cloned tree:
+# ssh root@${GEX_IP} 'bash /home/dogfood/soleur/scripts/dogfood/grok-gpu-bootstrap.sh'
 ```
 
-Idempotent: NVIDIA detect → Ollama with `OLLAMA_HOST=127.0.0.1:11434` → fail if public bind → Grok CLI → config.toml → shallow clone `/home/dogfood/soleur` → optional pull.
+Idempotent: NVIDIA detect → install `ss`/iproute2 → Ollama with `OLLAMA_HOST=127.0.0.1:11434` → **fail closed** if `ss` missing or public bind → Grok CLI → config.toml → shallow clone `/home/dogfood/soleur` → optional pull.
 
 ### License memo (before pull)
 
@@ -209,17 +215,33 @@ context_window = 128000
 
 ### Smoke (before multi-day soak)
 
-Grok Build OpenAI client → Ollama `/v1` must succeed once (AC11b). On fail: within **48h** either fix, Robot cancel, or re-approve burn with written reason on #6546 — do not leave host billing without disposition.
+Grok Build OpenAI client → Ollama `/v1` must succeed once (AC11b). Concrete agent-runnable checks:
+
+```bash
+# On GEX as root or dogfood (Ollama already loopback-bound)
+curl -fsS http://127.0.0.1:11434/v1/models | jq -e '.data | length >= 0'
+# After --license-ok model pull, prefer a one-shot measure (exit 0 + non-null ttft_ms):
+sudo -u dogfood bash -lc '
+  cd /home/dogfood/soleur
+  ./scripts/dogfood/grok-measure.sh     --model local-open     --prompt "Reply with OK only."     --cwd /home/dogfood/soleur     --max-turns 3     --log /var/log/grok-dogfood/smoke.jsonl
+'
+```
+
+On fail: within **48h** either fix, Robot cancel, or re-approve burn with written reason on #6546 — do not leave host billing without disposition.
 
 ### Measure (same three classes as Phase 1)
 
 **Preflight every campaign** (not only bootstrap):
 
 ```bash
-# Loopback listen — fail if public
+# Loopback listen — fail if public (ss required; measure also re-asserts for --model local-open)
 ss -lnt | grep 11434   # expect 127.0.0.1:11434 only, not 0.0.0.0:11434
 curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
-# base_url must be loopback in config.toml
+# base_url host must be 127.0.0.1 or localhost — fail on any other host
+grep -E '^\s*base_url\s*=' /home/dogfood/.grok/config.toml \
+  | grep -vE '127\.0\.0\.1|localhost' && { echo 'FAIL non-loopback base_url'; exit 1; } || true
+grep -qE 'base_url = "http://(127\.0\.0\.1|localhost)' /home/dogfood/.grok/config.toml \
+  || { echo 'FAIL missing loopback base_url'; exit 1; }
 ```
 
 ```bash

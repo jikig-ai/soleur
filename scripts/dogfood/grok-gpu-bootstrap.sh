@@ -2,13 +2,31 @@
 # #6546 — Thin idempotent bootstrap for Phase 2 open-weight dogfood on Hetzner Robot GEX44.
 # Approach A: Grok CLI + Ollama co-located; Ollama bound to loopback only.
 #
-# Usage (as root on the GEX host):
-#   bash grok-gpu-bootstrap.sh
-#   bash grok-gpu-bootstrap.sh --model qwen2.5-coder:32b --license-ok
+# Usage (as root on the GEX host — copy script first if repo not yet cloned):
+#   scp scripts/dogfood/grok-gpu-bootstrap.sh root@<gex-ip>:/tmp/
+#   ssh root@<gex-ip> 'bash /tmp/grok-gpu-bootstrap.sh'
+#   bash /tmp/grok-gpu-bootstrap.sh --model qwen2.5-coder:32b --license-ok
 #
 # Does NOT order hardware. Does NOT pull a model without --license-ok.
 # <!-- verified: 2026-07-17 source: https://docs.ollama.com/api/openai-compatibility OLLAMA_HOST pattern -->
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/dogfood/assert-ollama-loopback.sh
+if [[ -f "${SCRIPT_DIR}/assert-ollama-loopback.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "${SCRIPT_DIR}/assert-ollama-loopback.sh"
+else
+  # When scp'd alone to /tmp, inline minimal fail-closed assert.
+  assert_ollama_loopback_listen() {
+    local port=11434
+    command -v ss >/dev/null 2>&1 || die "ss (iproute2) required for loopback exclusivity assert"
+    if ss -lnt 2>/dev/null | grep -E "[:.]${port}\\b" | grep -qE "0\\.0\\.0\\.0:${port}|\\*:${port}|\\[::\\]:${port}"; then
+      die "Ollama appears bound to a public interface (0.0.0.0/:: on :${port}) — Approach A requires loopback only"
+    fi
+  }
+  assert_config_base_url_loopback() { return 0; }
+fi
 
 LICENSE_OK=0
 MODEL=""
@@ -17,6 +35,8 @@ DOGFOOD_USER="${DOGFOOD_USER:-dogfood}"
 WORKSPACE="${WORKSPACE:-/home/${DOGFOOD_USER}/soleur}"
 LOG_DIR="${LOG_DIR:-/var/log/grok-dogfood}"
 OLLAMA_HOST_BIND="127.0.0.1:11434"
+# Safe model id charset only (blocks sed/TOML injection via --model).
+MODEL_SAFE_RE='^[A-Za-z0-9._:/-]+$'
 
 log() { printf '[grok-gpu-bootstrap] %s\n' "$*"; }
 die() { printf '[grok-gpu-bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -29,12 +49,20 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --license-ok) LICENSE_OK=1; shift ;;
-    --model) MODEL="${2:-}"; shift 2 ;;
+    --model)
+      MODEL="${2:-}"
+      [[ -n "$MODEL" ]] || die "--model requires a value"
+      shift 2
+      ;;
     --skip-clone) SKIP_CLONE=1; shift ;;
     -h|--help) usage ;;
     *) die "unknown arg: $1" ;;
   esac
 done
+
+if [[ -n "$MODEL" && ! "$MODEL" =~ $MODEL_SAFE_RE ]]; then
+  die "invalid --model (allowed: A-Za-z0-9 . _ : / -)"
+fi
 
 require_root() {
   [[ "$(id -u)" -eq 0 ]] || die "must run as root"
@@ -55,7 +83,11 @@ ensure_dogfood_user() {
       useradd --create-home --shell /bin/bash "$DOGFOOD_USER"
   fi
   # No passwordless sudo — agent must not escalate by default.
+  if grep -RqsE "^[[:space:]]*${DOGFOOD_USER}[[:space:]].*NOPASSWD" /etc/sudoers /etc/sudoers.d 2>/dev/null; then
+    die "passwordless sudo for ${DOGFOOD_USER} is forbidden (Approach A)"
+  fi
   mkdir -p "/home/${DOGFOOD_USER}/.grok" "$LOG_DIR" "$WORKSPACE"
+  assert_not_symlink "/home/${DOGFOOD_USER}" "/home/${DOGFOOD_USER}/.grok" "$LOG_DIR" "$WORKSPACE"
   chown -R "${DOGFOOD_USER}:${DOGFOOD_USER}" "/home/${DOGFOOD_USER}" "$LOG_DIR"
 }
 
@@ -79,6 +111,14 @@ ensure_nvidia() {
 }
 
 ensure_ollama() {
+  # iproute2 provides ss — required for fail-closed public-bind assert.
+  if ! command -v ss >/dev/null 2>&1; then
+    log "installing iproute2 (ss required for Approach A bind assert)"
+    apt-get update -y
+    apt-get install -y iproute2 || die "iproute2 install failed — ss required"
+  fi
+  command -v ss >/dev/null 2>&1 || die "ss required for Approach A loopback exclusivity assert"
+
   if ! command -v ollama >/dev/null 2>&1; then
     log "installing ollama"
     # Official install path; pin policy is "track stable install.sh" for dogfood T0.
@@ -87,26 +127,32 @@ ensure_ollama() {
   fi
   command -v ollama >/dev/null 2>&1 || die "ollama not on PATH after install"
 
-  mkdir -p /etc/systemd/system/ollama.service.d
-  cat >/etc/systemd/system/ollama.service.d/10-loopback.conf <<EOF
+  local drop_dir="/etc/systemd/system/ollama.service.d"
+  local drop_file="${drop_dir}/10-loopback.conf"
+  mkdir -p "$drop_dir"
+  assert_not_symlink "$drop_dir" "$drop_file"
+  cat >"$drop_file" <<EOF
 [Service]
 Environment="OLLAMA_HOST=${OLLAMA_HOST_BIND}"
 EOF
   systemctl daemon-reload
-  systemctl enable ollama 2>/dev/null || true
+  if ! systemctl enable ollama 2>/dev/null; then
+    log "WARN: systemctl enable ollama failed (reboot persistence may be missing)"
+  fi
   systemctl restart ollama || die "failed to restart ollama"
-  sleep 2
-  systemctl is-active --quiet ollama || die "ollama service not active"
+  # Readiness: poll is-active + loopback health (sleep alone is brittle on cold GPU).
+  local _i
+  for _i in 1 2 3 4 5 6 7 8 9 10; do
+    if systemctl is-active --quiet ollama && curl -fsS --max-time 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  systemctl is-active --quiet ollama || die "ollama service not active after restart"
 }
 
 assert_ollama_loopback() {
-  # Fail if something is listening on all interfaces for 11434.
-  if command -v ss >/dev/null 2>&1; then
-    if ss -lnt 2>/dev/null | grep -E '[:.]11434\b' | grep -qE '0\.0\.0\.0:11434|\*:11434|\[::\]:11434'; then
-      die "Ollama appears bound to a public interface (0.0.0.0/:: on :11434) — Approach A requires loopback only"
-    fi
-  fi
-  # Positive health on loopback.
+  assert_ollama_loopback_listen || die "public or non-loopback Ollama listen on :11434"
   if ! curl -fsS --max-time 5 "http://127.0.0.1:11434/api/tags" >/dev/null; then
     die "curl http://127.0.0.1:11434/api/tags failed — Ollama not healthy on loopback"
   fi
@@ -124,21 +170,28 @@ ensure_grok_cli() {
     install -m 755 /root/.grok/bin/grok /usr/local/bin/grok
   fi
   command -v grok >/dev/null 2>&1 || die "grok not on PATH after install"
-  grok --version 2>/dev/null | tee "${LOG_DIR}/cli-version.txt" || true
-  chown "${DOGFOOD_USER}:${DOGFOOD_USER}" "${LOG_DIR}/cli-version.txt" 2>/dev/null || true
+  local ver_file="${LOG_DIR}/cli-version.txt"
+  assert_not_symlink "$ver_file"
+  grok --version 2>/dev/null | tee "$ver_file" || true
+  chown "${DOGFOOD_USER}:${DOGFOOD_USER}" "$ver_file" 2>/dev/null || true
 }
 
 seed_config_local_open() {
   local cfg="/home/${DOGFOOD_USER}/.grok/config.toml"
-  # base_url must stay loopback — never a public GEX IP (Approach B forbidden).
-  cat >"$cfg" <<'EOF'
+  assert_not_symlink "/home/${DOGFOOD_USER}/.grok" "$cfg"
+  local model_line='model = "REPLACE_AFTER_LICENSE_PULL"'
+  if [[ -n "$MODEL" ]]; then
+    model_line="model = \"${MODEL}\""
+  fi
+  # base_url is fixed in the heredoc — never substituted from env (Approach B guard).
+  cat >"$cfg" <<EOF
 # Phase 2 open-weight dogfood (#6546). Co-located with Ollama on this host.
 # Brand: operator-only — never market as "self-hosted Grok 4.5".
 [models]
 default = "local-open"
 
 [model.local-open]
-model = "REPLACE_AFTER_LICENSE_PULL"
+${model_line}
 base_url = "http://127.0.0.1:11434/v1"
 name = "Local open model"
 context_window = 128000
@@ -147,12 +200,10 @@ context_window = 128000
 [model.grok-4.5]
 # model id filled by operator when using API path; not default on GPU host
 EOF
-  if [[ -n "$MODEL" ]]; then
-    # shellcheck disable=SC2016
-    sed -i "s|model = \"REPLACE_AFTER_LICENSE_PULL\"|model = \"${MODEL}\"|" "$cfg"
-  fi
   chown "${DOGFOOD_USER}:${DOGFOOD_USER}" "$cfg"
-  chmod 644 "$cfg"
+  chmod 600 "$cfg"
+  assert_config_base_url_loopback "$cfg" || die "config base_url must stay loopback"
+  grep -qE 'base_url = "http://127\.0\.0\.1:11434/v1"' "$cfg" || die "post-write base_url assert failed"
   log "seeded ${cfg} (default=local-open, base_url=127.0.0.1)"
 }
 
@@ -161,6 +212,7 @@ ensure_workspace() {
     log "skip clone (--skip-clone)"
     return 0
   fi
+  assert_not_symlink "$WORKSPACE"
   if [[ -d "${WORKSPACE}/.git" ]]; then
     log "workspace already present: ${WORKSPACE}"
     return 0

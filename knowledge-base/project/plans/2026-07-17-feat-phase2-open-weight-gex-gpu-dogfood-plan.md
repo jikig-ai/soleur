@@ -27,7 +27,7 @@ Deliver the **HOW** for Phase 2 of Grok Build dogfood: run an **open-weight** mo
 
 **Approach A is locked** (brainstorm 2026-07-17): Grok + Ollama co-located on GEX44; loopback only. **Approach B rejected** (public inference port; also forbidden as CX33→GEX public `base_url`). **Approach C** (third-party GPU) is stock-delay filler only — not default.
 
-**Control plane (decided Phase 0, not deferred):** Robot console order + bootstrap script + runbook + expense ledger — **not** Cloud `hcloud` / not per-PR TF birth. Do **not** widen `grok_dogfood_server_type` to fake GEX. ADR-118 records the exception; C4 for ephemeral 1-week host is **deferred** (revisit on second durable Robot host).
+**Control plane (decided Phase 0, not deferred):** Robot console order + bootstrap script + runbook + expense ledger — **not** Cloud `hcloud` / not per-PR TF birth. Do **not** widen `grok_dogfood_server_type` to fake GEX. ADR-119 records the exception; C4 for ephemeral 1-week host is **deferred** (revisit on second durable Robot host).
 
 **Hard gate (this plan + /work + post-merge):** **Do not order a GPU host without operator spend ack + live stock check + license memo.** Implementation in this PR ships artifacts only (runbook, thin bootstrap, expense `approved-not-billing`, comparison table skeleton in runbook, short ADR, destroy/kill). Order + measure soak are **post-merge operator follow-through** gated by those three.
 
@@ -48,7 +48,7 @@ Mechanical: measure-time loopback + loopback-only `base_url`; `billable_from` T0
 | GEX is Cloud type | brainstorm live probe 2026-07-17 | **False** — 25 Cloud types, no `gex*`; GEX is **Robot dedicated** |
 | `ROBOT_*` in Doppler | brainstorm | **Absent** — order is console/Robot webservice later |
 | Paths on disk | worktree | Runbook, measure script, `grok-dogfood.tf`, expenses.md all present |
-| ADR mechanism conflict | grep ADR corpus | No ADR *rejects* Robot dogfood; ADR-019-class TF-default still applies — this plan **documents an explicit exception** (provisional ADR-118) |
+| ADR mechanism conflict | grep ADR corpus | No ADR *rejects* Robot dogfood; ADR-019-class TF-default still applies — this plan **documents an explicit exception** (ADR-119) |
 | Spec vs Phase 2 runbook depth | read runbook | Phase 2 is a **config stub** (~15 lines) — plan fills operational HOW |
 
 **Premise holds.** Not stale; not already closed by a merged PR.
@@ -112,7 +112,7 @@ Exact `ollama` tag + SPDX recorded in license memo on #6546 **before** `ollama p
 1. **Runbook** Phase 2 operational path (order → bootstrap → config → measure → report → kill/cancel) including comparison-table skeleton + brand ban + forbidden configs.
 2. **Thin bootstrap** `scripts/dogfood/grok-gpu-bootstrap.sh` (+ tests): NVIDIA detect/install if needed, Ollama, **loopback bind assert**, license-gated pull, Grok CLI, `config.toml` `[model.local-open]`, shallow Soleur clone for measure cwd, health checks.
 3. **Expense rows** GEX (+ setup one-time note, IPv4 if billed separate) = `approved-not-billing` with #6546 + kill criteria; flip guidance to `active` / `retired`.
-4. **Provisional short ADR-118** — Robot dogfood outside Cloud TF (exception + destroy/ledger; isolation non-edges in prose). C4 deferred.
+4. **Provisional short ADR-119** — Robot dogfood outside Cloud TF (exception + destroy/ledger; isolation non-edges in prose). C4 deferred.
 5. **Kill/destroy** criteria and Robot cancel path (not `enable_grok_dogfood=false`).
 
 ### Explicit non-deliverables
@@ -194,7 +194,7 @@ When first connecting to a new Robot GEX host fails, verify in order (plan netwo
 |--------|--------|
 | **No** new `hcloud_server` for GEX | Explicit non-goal |
 | **No** widen `grok_dogfood_server_type` regex | TR1 |
-| **Optional comment only** in `grok-dogfood.tf` | Point to ADR-118 + runbook Phase 2 — optional one-line, not required if ADR + runbook suffice |
+| **Optional comment only** in `grok-dogfood.tf` | Point to ADR-119 + runbook Phase 2 — optional one-line, not required if ADR + runbook suffice |
 | Phase 1 CX33 TF | **Unchanged** — keep API baseline host |
 
 ### Apply path
@@ -218,7 +218,7 @@ When first connecting to a new Robot GEX host fails, verify in order (plan netwo
 
 ### ADR
 
-- **Provisional ADR-118** (re-verify free ordinal at ship vs `origin/main`): *Operator R&D GPU dogfood on Hetzner Robot may live outside Cloud Terraform when no Cloud SKU exists; lifecycle = runbook + expense ledger + bootstrap script + explicit destroy; never fake Cloud types; loopback-only inference; no product Concierge edge; no private-net join.*
+- **Provisional ADR-119** (re-verify free ordinal at ship vs `origin/main`): *Operator R&D GPU dogfood on Hetzner Robot may live outside Cloud Terraform when no Cloud SKU exists; lifecycle = runbook + expense ledger + bootstrap script + explicit destroy; never fake Cloud types; loopback-only inference; no product Concierge edge; no private-net join.*
 - Status: **accepted** for time-boxed dogfood; revisit if second durable Robot host → T2 automation **and** C4.
 
 ### C4 views
@@ -288,9 +288,9 @@ Create `scripts/dogfood/grok-gpu-bootstrap.sh` + `grok-gpu-bootstrap.test.sh`:
 - [ ] Health curl loopback; end marker `bootstrap complete: …`.
 - [ ] Tests: `bash -n`; grep loopback + `--license-ok`; existing `grok-measure.test.sh` still green.
 
-### Phase 4 — Short ADR-118 (no C4 this PR)
+### Phase 4 — ADR-119 (no C4 this PR)
 
-- [ ] Author `knowledge-base/engineering/architecture/decisions/ADR-118-robot-gpu-dogfood-outside-cloud-tf.md` (~1 screen): Decision, isolation non-edges (no product, no private-net, loopback-only), ledger before birth, destroy = Robot cancel, revisit at second durable Robot host for T2 + C4.
+- [ ] Author `knowledge-base/engineering/architecture/decisions/ADR-119-robot-gpu-dogfood-outside-cloud-tf.md` (~1 screen): Decision, isolation non-edges (no product, no private-net, loopback-only), ledger before birth, destroy = Robot cancel, revisit at second durable Robot host for T2 + C4.
 - [ ] **C4 deferred** (ephemeral 1-week host; same bar as T2 Robot automation). Isolation invariants live in ADR + runbook.
 - [ ] Ordinal provisional — ship re-verifies free number vs `origin/main`.
 
@@ -319,7 +319,7 @@ Only after gates 0–3:
 |------|---------|
 | `scripts/dogfood/grok-gpu-bootstrap.sh` | Thin idempotent GPU host software install |
 | `scripts/dogfood/grok-gpu-bootstrap.test.sh` | Structure/guard tests |
-| `knowledge-base/engineering/architecture/decisions/ADR-118-robot-gpu-dogfood-outside-cloud-tf.md` | Short architecture exception (provisional ordinal) |
+| `knowledge-base/engineering/architecture/decisions/ADR-119-robot-gpu-dogfood-outside-cloud-tf.md` | Short architecture exception (provisional ordinal) |
 | `knowledge-base/project/specs/feat-grok-phase2-open-weight-gpu/tasks.md` | Task breakdown |
 
 ## Files to Edit
@@ -353,7 +353,7 @@ Queried open `code-review` issues against planned paths (runbook, expenses, dogf
 | P-FR3 | Expense GEX rows `approved-not-billing` before order is considered ready. |
 | P-FR4 | Runbook comparison-table skeleton: Phase 1 baseline + empty Phase 2 + brand ban. |
 | P-FR5 | Destroy = Robot cancel + ledger retired (≠ Phase 1 TF). |
-| P-FR6 | Short ADR-118 documents Robot-out-of-Cloud-TF exception + isolation non-edges. |
+| P-FR6 | ADR-119 documents Robot-out-of-Cloud-TF exception + isolation non-edges. |
 | P-FR7 | Artifacts never claim self-hosted Grok 4.5. |
 | P-FR8 | No Cloud TF fake GEX type. |
 | P-FR9 | Forbidden Approach B configs documented + measure-time base_url/loopback gate. |
@@ -366,7 +366,7 @@ Queried open `code-review` issues against planned paths (runbook, expenses, dogf
 - [ ] **AC2:** `scripts/dogfood/grok-gpu-bootstrap.sh` exists; `bash -n` clean; tests assert loopback + `--license-ok`.
 - [ ] **AC3:** `knowledge-base/operations/expenses.md` has GEX (+ setup notes) at **`approved-not-billing`** with #6546 and kill criteria.
 - [ ] **AC4:** Runbook contains comparison-table skeleton with Phase 1 baseline + three empty Phase 2 class rows + brand ban.
-- [ ] **AC5:** ADR-118 (or renumbered) exists; Decision forbids fake Cloud GEX types + product/private-net non-edges.
+- [ ] **AC5:** ADR-119 (or renumbered) exists; Decision forbids fake Cloud GEX types + product/private-net non-edges.
 - [ ] **AC6:** `git grep -nE 'gex44|GEX44' apps/web-platform/infra/variables.tf` does **not** accept GEX in type validation (regex Cloud-only).
 - [ ] **AC7:** Spec no longer claims merge-closes #6546; PR body uses **`Ref #6546`**.
 - [ ] **AC8:** Runbook forbids public Ollama bind and remote `base_url` to GEX public IP.
@@ -414,8 +414,8 @@ logs:
   retention: "trial duration + 14 days max; no customer data"
 
 discoverability_test:
-  command: "grep -c 'Phase 1 baseline' knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood.md && grep -E 'approved-not-billing|active|retired' knowledge-base/operations/expenses.md | grep -i GEX | head -3 && test -f knowledge-base/engineering/architecture/decisions/ADR-118-robot-gpu-dogfood-outside-cloud-tf.md"
-  expected_output: "runbook baseline section present (≥1); GEX expense row with status token; ADR-118 file exists"
+  command: "grep -c 'Phase 1 baseline' knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood.md && grep -E 'approved-not-billing|active|retired' knowledge-base/operations/expenses.md | grep -i GEX | head -3 && test -f knowledge-base/engineering/architecture/decisions/ADR-119-robot-gpu-dogfood-outside-cloud-tf.md"
+  expected_output: "runbook baseline section present (≥1); GEX expense row with status token; ADR-119 file exists"
 ```
 
 No `ssh` in discoverability_test. **This test is artifact liveness only** — it can pass while a live host is misbound; bind safety is bootstrap + every measure preflight (AC12), not this command.
