@@ -25,8 +25,8 @@ else
   fail "missing loopback OLLAMA_HOST / 127.0.0.1:11434"
 fi
 
-# Refuse public bind
-if grep -qE '0\.0\.0\.0:11434' "$SCRIPT" && grep -qE 'public interface|requires loopback' "$SCRIPT"; then
+# Refuse public bind (ss regex or die text)
+if grep -qE "0\\.0\\.0\\.0|0\.0\.0\.0" "$SCRIPT" && grep -qE "public interface|requires loopback" "$SCRIPT"; then
   pass "public bind is a hard fail"
 else
   fail "must detect and die on 0.0.0.0:11434"
