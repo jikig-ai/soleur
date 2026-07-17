@@ -97,6 +97,20 @@ if [[ -f "$MUTATION_HARNESS" ]] && grep -qF 'bash apps/web-platform/infra/supaba
 else
   fail "mutation attestation is wired" "scan-workflow-mutation.test.sh is missing or has no 'run:' step in infra-validation.yml — this guard's non-vacuity would rest on prose again (#6572)"
 fi
+# Fourth gate, same reasoning, for the #6578 triage probe. The assertion lives
+# HERE rather than in the probe's own attestation on purpose: a script cannot
+# meaningfully assert its own registration, because an unregistered script never
+# runs and its self-assertion never evaluates. Only a file that is itself already
+# registered can carry the claim — which is exactly why the rung above sits here
+# too. The probe is the one thing standing between this repo and a false
+# all-clear on the SIGPIPE class; unregistered, it would be a measurement nobody
+# takes.
+SIGPIPE_PROBE="$REPO_ROOT/apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh"
+if [[ -f "$SIGPIPE_PROBE" ]] && grep -qF 'bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh' "$INFRA_VALIDATION"; then
+  pass "the sigpipe triage-feasibility probe exists and is registered in infra-validation.yml (#6578)"
+else
+  fail "sigpipe triage probe is wired" "apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh is missing or has no 'run:' step in infra-validation.yml — nothing would then verify that CI's grep can still observe this defect class at all"
+fi
 
 echo "== no check in this file feeds a producer into grep -q (#6572) =="
 # grep -q exits on FIRST MATCH. The producer's next write() then takes SIGPIPE
