@@ -372,6 +372,12 @@ jobs:
       - name: Run tunnel origin_request schema-type guard (#6511 connect_timeout string vs int)
         run: bash apps/web-platform/infra/tunnel-origin-request-types.test.sh
 
+      - name: Run tunnel origin-relative ingress guard (#6594 ADR-114 I2 coin-flipped management plane)
+        run: bash apps/web-platform/infra/tunnel-origin-relative-ingress.test.sh
+
+      - name: Run tunnel-ingress verify infra-dir resolution guard (#6595 relative-INFRA_DIR cd)
+        run: bash apps/web-platform/infra/verify-tunnel-ingress-origin-infradir.test.sh
+
       - name: Run ci-deploy-wrapper.sh tests
         run: bash apps/web-platform/infra/ci-deploy-wrapper.test.sh
 
