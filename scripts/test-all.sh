@@ -148,6 +148,10 @@ if want_scripts; then
   run_suite "scripts/inngest-restart-age-gate" bash scripts/inngest-restart-age-gate.test.sh
   run_suite "scripts/inngest-restart-poll-classify" bash scripts/inngest-restart-poll-classify.test.sh
   run_suite "scripts/tunnel-connector-census" bash scripts/tunnel-connector-census.test.sh
+  # Dogfood Grok measure/bootstrap (#6545/#6546). Explicit run_suite — scripts/dogfood/
+  # is not in the auto-glob; orphan suites are the #5417 class (green CI, zero coverage).
+  run_suite "scripts/dogfood/grok-gpu-bootstrap" bash scripts/dogfood/grok-gpu-bootstrap.test.sh
+  run_suite "scripts/dogfood/grok-measure" bash scripts/dogfood/grok-measure.test.sh
   # Stock preflight gate (#6453). Registered HERE because nothing auto-discovers
   # tests/scripts/ — the bash *.test.sh glob further down does NOT include it, and
   # infra-validation.yml only lists apps/web-platform/infra/*.test.sh. Without this line

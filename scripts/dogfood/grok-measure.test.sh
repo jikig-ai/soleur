@@ -33,3 +33,11 @@ if grep -E '^[[:space:]]*owner:[[:space:]]*dogfood' \
 fi
 
 echo "PASS grok-measure.test.sh"
+
+# #6546: local-open path must re-assert loopback (ADR-120)
+if grep -q 'assert-ollama-loopback' "$SCRIPT" && grep -q 'local-open' "$SCRIPT"; then
+  echo "PASS: local-open measure preflight wired"
+else
+  echo "FAIL: missing local-open loopback preflight" >&2
+  exit 1
+fi
