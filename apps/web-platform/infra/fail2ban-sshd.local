@@ -6,20 +6,5 @@ maxretry = 5
 bantime.increment = true
 bantime.factor = 2
 bantime.maxtime = 1h
-# Never ban the private net (#6594). Until the tunnel ingress was pinned, `ssh.`
-# resolved to `ssh://localhost:22`, so sshd saw every tunnelled CI login as 127.0.0.1
-# — covered by fail2ban's default loopback ignore. Pinning the ingress to web-1's
-# private IP means a peer connector (web-2, 10.0.1.11) now proxies in from a REAL
-# source address, which `ignoreself` does not cover (it covers only web-1's own IPs).
-#
-# Without this, a key-mismatch window (`-replace=tls_private_key.ci_ssh`, or a fresh
-# web-1 before root_authorized_keys lands) puts >=5 failures in 10m from 10.0.1.11 and
-# bans it — killing `ssh.` for the ~half of CF colos routed via that connector, for
-# 10m rising to 1h. That is a failure AMPLIFIER on the one path with no in-band
-# recovery: ssh-fail2ban-unban.md calls a fail2ban lockout "the one operator task
-# where the Hetzner Cloud Console (noVNC) is the only tool".
-#
-# The private net is not an attack surface fail2ban should police: it is unreachable
-# from the internet (firewall.tf admits only 22/80/443/icmp on the public interface),
-# and its only members are our own hosts.
+# ignoreip rationale: server.tf, fail2ban_tuning (#6594). Comments here cost user_data.
 ignoreip = 127.0.0.1/8 ::1 10.0.1.0/24
