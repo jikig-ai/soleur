@@ -2,13 +2,14 @@
 # "re-evaluate on first stable" note is now resolved). Bumped from
 # v0.15.0-beta2 under #6636: on 2026-07-17 Sentry briefly returned 410
 # "This API no longer exists" on the legacy issue-alert read endpoint,
-# wedging the full-root plan. The durable fix is this bump: v0.15.3
-# (jianyuan/terraform-provider-sentry#885, "fix: Update reads from GET
-# endpoint") switched sentry_issue_alert reads OFF the legacy endpoint,
-# so v0.15.4 no longer depends on the retired read path. (The 410 was
-# transient — beta2 plans clean again now — but the bump future-proofs
-# against its eventual permanent retirement, per the standing deprecation
-# warning.) The `sentry_alert` migration remains deferred: the resource
+# wedging the full-root plan. The durable fix is this bump: per the
+# v0.15.3 release notes, PR jianyuan/terraform-provider-sentry#885 ("fix:
+# Update reads from GET endpoint") switched sentry_issue_alert reads OFF the
+# legacy endpoint, so v0.15.4 no longer depends on the retired read path.
+# (This durability differentiator is changelog-sourced, not plan-measured:
+# the 410 was transient — beta2 plans clean again now, so a terraform plan
+# cannot observe it — but the bump future-proofs against the endpoint's
+# eventual permanent retirement, per the standing deprecation warning.) The `sentry_alert` migration remains deferred: the resource
 # is deprecated-but-functional and a faithful migration still requires
 # monitor_ids binding — see ADR-031 §Amendment 2026-07-17. Provider
 # source rationale + escape-hatch documented in

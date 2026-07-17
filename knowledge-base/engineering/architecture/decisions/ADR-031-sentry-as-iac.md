@@ -548,12 +548,16 @@ governed by the same #6589 machinery.
 - **Beta-provider risk.** v0.15.0-beta2 may yank or change `*_v2` attribute
   shapes. Mitigated by exact-version pin + `lifecycle.ignore_changes` on
   `[conditions_v2, filters_v2, actions_v2, environment, frequency]` for the
-  4 imported rules. Re-evaluate at first stable v0.15.0.
+  4 imported rules. Re-evaluate at first stable v0.15.0. *(Resolved — see
+  Amendment 2026-07-17, #6636: pin is now the stable v0.15.4; the exact-pin +
+  `lifecycle.ignore_changes` mitigation carries forward unchanged.)*
 - **Dual secret-store posture.** Operators must remember Sentry secrets are
   in GH Actions, not Doppler. Mitigated by README.md cheatsheet at the root.
 - **Scope leakage risk.** Future "while we're here" PRs may try to migrate to
-  `sentry_alert` (the new beta unified resource) prematurely. NG9 of the plan
-  explicitly forbids this until provider GA.
+  `sentry_alert` (the new unified resource) prematurely. NG9 of the plan
+  explicitly forbids this until provider GA. *(GA is now reached (v0.15.4); the
+  migration deferral stands on the `monitor_ids` blocker, NOT on GA status — see
+  Amendment 2026-07-17, #6636 for the updated re-evaluation criterion.)*
 
 ## Escape hatches
 

@@ -33,8 +33,11 @@
 # a claim that beta2 supports the migration. The warning is NOT suppressible
 # while the resource type is `sentry_issue_alert` (Terraform core cannot
 # allow-list validate/plan warnings; the provider exposes no opt-out attr).
-# Re-attempt at stable v0.15.0 when `sentry_alert` supports project-wide
-# frequency alerts. Schema evidence + alternatives:
+# Re-attempt when a future `sentry_alert` release lets a project-wide
+# frequency alert bind + fire faithfully — i.e. when the `sentry_project_error_monitor`
+# / `sentry_project_issue_stream_monitor` default-monitor data sources are
+# confirmed to satisfy the `monitor_ids` requirement (stable v0.15.x, incl. the
+# pinned v0.15.4, still requires it — #6636). Schema evidence + alternatives:
 #   - ADR-031-sentry-as-iac.md (## Decision → "Defer migration" bullet)
 #   - knowledge-base/project/plans/2026-05-29-refactor-sentry-issue-alert-to-sentry-alert-migration-plan.md
 # ──────────────────────────────────────────────────────────────────────────
