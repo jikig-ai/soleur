@@ -90,6 +90,16 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
     // exists to prevent destroy-then-fail, not to pre-validate every create.
     "additive create; nothing destroyed first, so a stock miss is recoverable, not a strand",
   ],
+  [
+    "workspaces-luks-cutover",
+    // #6604 first provision (job `workspaces_luks_cutover`). It creates a VOLUME + attachment +
+    // secrets — NO hcloud_server — so stock-preflight-gate.sh (which `select(.type ==
+    // "hcloud_server")`) hits its legitimate-empty out-of-scope branch and cannot fire. And its
+    // OWN gate (workspaces_luks_cutover_gate) asserts web1_server_touched==0 + old_volume_touched
+    // ==0 + resource_deletes==0 — additive-only, structurally incapable of destroying first, so a
+    // failed create leaves the fleet intact (recoverable, not a strand). Same class as inngest-host.
+    "additive volume create (no server → stock-preflight is a no-op); its own gate forbids any destroy, so a miss is recoverable, not a strand",
+  ],
 ]);
 
 // Sentinel: 8 options today (manual-rerun, warm-standby, web-2-recreate, inngest-host,

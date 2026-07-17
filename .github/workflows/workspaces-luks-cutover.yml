@@ -1,0 +1,131 @@
+# #6604 — the /workspaces LUKS cutover freeze orchestration (ADR-119, epic #6588 PR 2).
+#
+# workflow_dispatch-only. Runs apps/web-platform/infra/workspaces-cutover.sh ON web-1 over the CF
+# Tunnel SSH bridge, with cloud-admin/Doppler creds held here in GitHub secrets (never on the host;
+# learning 2026-06-02). The fresh encrypted volume is +created + attached FIRST by a separate
+# `apply_target=workspaces-luks-cutover` run of apply-web-platform-infra.yml (gate-guarded); this
+# workflow does the freeze / rsync / repoint / canary. Mirrors git-data-cutover.yml.
+#
+# SIGN-OFF (C19 / AC20b): the freeze operates on SOLE-COPY user data with a terminal failure mode
+# the fix itself creates (passphrase/header loss ⇒ unreadable forever). The `environment:
+# workspaces-luks-cutover` gate below is the ONLY human authorization on it. #4220 removed a GitHub
+# environment from the MERGE path because a 13h CODEOWNERS-review wait wedged deploys — but a
+# `workflow_dispatch` cutover has NO merge/CODEOWNERS gate, so that counter-argument does NOT apply
+# here: the environment is not a second reviewer on an already-reviewed PR, it is the sole gate on an
+# irreversible freeze. The environment MUST have a NON-EMPTY required-reviewer set (a zero-reviewer
+# environment auto-approves — DP-11 F8). The typed `confirm` token is a typo-guard, NOT the authorization.
+
+name: workspaces-luks cutover freeze (#6604 / ADR-119)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type CUTOVER-WORKSPACES-LUKS to authorize the freeze (typo-guard, NOT the authorization)."
+        required: true
+        type: string
+      dry_run:
+        description: "If true: L3 gates + escrow + bulk rsync + verify only; NO freeze, NO repoint. Leave true until rehearsed."
+        required: false
+        type: boolean
+        default: true
+      rollback:
+        description: "Recovery: remount the retained plaintext at /mnt/data + restart. Use if a cutover left web-1 unhealthy."
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  # web-1-swap: this freeze stops/repoints web-1's /mnt/data — serialize against warm_standby /
+  # web_2_recreate / the release deploy (at most one web-1 mutation in flight). Non-cancellable.
+  group: web-1-swap
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  INFRA_DIR: apps/web-platform/infra
+  CLOUDFLARED_VERSION: "2026.5.0"
+  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+
+jobs:
+  cutover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The sole human authorization on a sole-copy-data freeze (C19). MUST carry a non-empty
+    # required-reviewer set in repo settings (DP-11 F8 — a zero-reviewer environment auto-approves).
+    environment: workspaces-luks-cutover
+    steps:
+      - name: Validate confirm token
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        # Untrusted input via env, compared as a literal — never interpolated into the condition.
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "CUTOVER-WORKSPACES-LUKS" ]]; then
+            echo "::error::confirm token mismatch — type exactly CUTOVER-WORKSPACES-LUKS to authorize."
+            exit 1
+          fi
+          echo "confirm token accepted (the environment reviewer is the authorization; this is the typo-guard)."
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$DOPPLER_TOKEN_CHECK" ]] || { echo "::error::DOPPLER_TOKEN not configured."; exit 1; }
+
+      - name: CF Tunnel SSH bridge
+        # Needed for any host-touching run: a real cutover OR a rollback recovery.
+        if: ${{ !inputs.dry_run || inputs.rollback }}
+        uses: ./.github/actions/cf-tunnel-ssh-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          infra-dir: ${{ env.INFRA_DIR }}
+          cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
+          cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+
+      - name: Run workspaces-luks cutover
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          ROLLBACK: ${{ inputs.rollback && '1' || '0' }}
+          WEB_HOST: "10.0.1.10"
+        # The cutover body runs ON web-1 (DP-6 host-side trap): copy it over the bridge and execute
+        # it there so `trap cleanup EXIT` survives an SSH drop. The script reads the passphrase via
+        # the host's pinned prd_workspaces_luks token path; no cloud-admin creds touch the host.
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2086
+          ${WEB_HOST_SSH:-ssh} "$WEB_HOST" "sudo DRY_RUN='${DRY_RUN}' ROLLBACK='${ROLLBACK}' bash -s" \
+            < "${INFRA_DIR}/workspaces-cutover.sh"
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::workspaces-luks cutover exited $rc — the host-side EXIT trap auto-rolled-back to the plaintext mount (DP-6). See the emitted Sentry event (feature=workspaces-luks op=workspaces-luks-drift)."
+            exit $rc
+          fi
+
+      - name: Cutover summary
+        if: always()
+        env:
+          ACTOR: ${{ github.actor }}
+          DRY: ${{ inputs.dry_run }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## workspaces-luks cutover freeze (#6604 / ADR-119)"
+            echo ""
+            echo "**Actor:** ${ACTOR}"
+            echo "**Dry run:** ${DRY}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+            echo ""
+            echo "The wipe + convergence + ADR flip + PR 3 ride a SEPARATE environment-gated dispatch after the 7d soak passes (DP-4)."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -108,6 +108,26 @@ export const MANIFEST: ManifestEntry[] = [
       "app/container would emit the ping; remediation is a container ci-deploy, not a dedicated-host reprovision. count=0 under the free tier (betterstack_paid_tier=false), so it is not provisioned live.",
   },
   {
+    name: "workspaces_luks",
+    // #6604 — the daily /workspaces LUKS at-rest probe heartbeat. Its feeder (luks-monitor.timer)
+    // is delivered to web-1 via the CUTOVER CHANNEL (workspaces-cutover.sh, ADR-119 §(e)), NOT
+    // cloud-init boot: web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO
+    // dedicated-host-replace path (re-arming is re-running the cutover channel). Hence
+    // web-host-cron, NOT dedicated-host-boot — the replace_target requirement correctly does not
+    // fire. paused until the operator unpauses at cutover (#6210: verify a real ping first).
+    arming: "web-host-cron",
+    paused: true,
+    feeder: {
+      kind: "timer",
+      evidence: {
+        file: "apps/web-platform/infra/workspaces-cutover.sh",
+        pattern: "systemctl enable --now luks-monitor.timer",
+      },
+    },
+    exempt_reason:
+      "web-host-resident feeder (luks-monitor.timer on web-1) delivered + armed by the cutover channel (workspaces-cutover.sh), NOT web-1 cloud-init boot — web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO <host>-host-replace path (re-arming is re-running the cutover channel). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
     name: "git_data_prd",
     arming: "web-host-cron",
     paused: true,
