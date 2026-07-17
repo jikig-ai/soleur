@@ -36,6 +36,7 @@ import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronDevMigrationDrift } from "@/server/inngest/functions/cron-dev-migration-drift";
 import { cronDomainModelDrift } from "@/server/inngest/functions/cron-domain-model-drift";
 import { cronEmailIngressProbe } from "@/server/inngest/functions/cron-email-ingress-probe";
+import { cronExpensesVerifyBy } from "@/server/inngest/functions/cron-expenses-verify-by";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGhPagesCertState } from "@/server/inngest/functions/cron-gh-pages-cert-state";
 import { cronGhcrTokenMinter } from "@/server/inngest/functions/cron-ghcr-token-minter";
@@ -139,6 +140,7 @@ export const { GET, POST, PUT } = serve({
     cronDevMigrationDrift,
     cronDomainModelDrift,
     cronEmailIngressProbe,
+    cronExpensesVerifyBy,
     cronFollowThroughMonitor,
     cronGhPagesCertState,
     cronGhcrTokenMinter,
