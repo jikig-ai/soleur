@@ -15,8 +15,8 @@ Branch: `feat-one-shot-6475-ci-deploy-sentry-fail-loud`
 ## Phase 1 — Write the probe (RED then GREEN)
 
 - [ ] 1.1 Create `scripts/followthroughs/ci-deploy-sentry-post-fail-6475.sh` mirroring `chardevice-wedge-nonrecurrence-5934.sh` (Better Stack query + liveness gate + fail-safe TRANSIENT).
-- [ ] 1.2 Query = AND-scoped raw-SQL (UNION-ALL hot+archive) for `raw LIKE '%…ci-deploy%' AND raw LIKE '%Sentry POST failed%'` over `CI_DEPLOY_SENTRY_SOAK_WINDOW` (default `7d`). Empirically confirm the `SYSLOG_IDENTIFIER` field spelling in one real `raw` row before freezing the LIKE; else fall back to `--grep "Sentry POST failed"` + post-filter `grep ci-deploy`.
-- [ ] 1.3 Liveness gate: separate count of ANY `ci-deploy` rows in window. Zero → `exit 2` (TRANSIENT), never PASS.
+- [ ] 1.2 POST-failure query = mode-2 `betterstack-query.sh --since "$WINDOW" --grep "Sentry POST failed" --limit 1000` (auto-UNIONs hot+archive) THEN post-filter output `grep -c 'ci-deploy'` (precedent: `chardevice` `denied_count()`). Window = `CI_DEPLOY_SENTRY_SOAK_WINDOW` (default `7d`). Confirm the `ci-deploy` discriminator's substring form in one real Better Stack row before freezing the post-filter. (Raw-SQL mode-1 with two `LIKE`s is the documented alternative — if used, write the `s3Cluster` UNION yourself.)
+- [ ] 1.3 Liveness gate: separate `--grep "ci-deploy"` count of ANY ci-deploy rows in window. Zero → `exit 2` (TRANSIENT), never PASS.
 - [ ] 1.4 Exit map: zero POST-failure + liveness≥1 → `exit 0`; ≥1 POST-failure → `exit 1` (fail-loud, print offending `dt`/`raw`); query/auth/creds/no-liveness → `exit 2`.
 - [ ] 1.5 Guards: `set -uo pipefail`; NO `: "${VAR:?}"` — use `if [[ -z "${VAR:-}" ]]; then echo TRANSIENT >&2; exit 2; fi`. Honor a `<NAME>_BQ` override for the query-script path (test seam). Validate window `^[0-9]+[hmd]$`.
 - [ ] 1.6 `chmod +x`.
