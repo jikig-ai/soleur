@@ -28,7 +28,7 @@ date has passed. Two non-obvious facts shaped the work:
 
 **Consequence:** every Hetzner amount derived from the API is a **catalog-EUR × FX estimate**, never a
 billed figure. Billed USD (VAT, FX drift, IPv4 line items, traffic overage, per-hour proration) lives only
-on the invoice PDF emailed to `ops@soleur.ai`. So the honest pattern is: **correct count/type/catalog-EUR
+on the invoice PDF emailed to the operator's ops intake mailbox. So the honest pattern is: **correct count/type/catalog-EUR
 from the API, keep billed USD as an estimate + a machine-readable `verify_by` marker dated to the next
 invoice cycle.** The account here is VAT-exempt (`vat_rate: 0.0`), so net == gross.
 
