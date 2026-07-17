@@ -25,10 +25,19 @@ this very note failed that standard; they are corrected below in place, not quie
 Before any count, the question is whether the host can observe the defect at all.
 
 `grep -q` exits on first match; the producer's next `write()` takes SIGPIPE (141); `pipefail` promotes
-141 to the pipeline status. **A `grep` that drains its input instead of exiting early cannot produce
-that outcome — so every reading through it is 0/N.** A measurement taken there reports that no site is
-reachable: a *false all-clear*, strictly more dangerous than the over-count this exercise was
-commissioned to correct, because nobody re-audits a green.
+141 to the pipeline status. A `grep` that drains its input instead of exiting early cannot produce
+that outcome.
+
+> **An earlier revision of this section claimed that a draining grep makes "every reading here 0/N"
+> and this note a false all-clear. That was itself an unmeasured claim** — in the note whose subject
+> is unmeasured claims — and it is false. Neutralise the gate, run the whole probe under a draining
+> grep, and diff: identical but for the printed grep path. No measurement in this probe consumes
+> grep's early-exit; every counting grep is `-c`/`-l`/`-v`/`-n`, or `-q` against a **file** argument.
+>
+> The gate still earns its place, for a reason that is true: it is an **environmental canary** for the
+> rest of the repo. The #6572 rungs in `scan-workflow.test.sh` *do* depend on grep early-exiting and
+> would pass **vacuously** under a draining grep. This probe runs in the same CI job, so it is the
+> cheapest place to assert a property those tests silently assume.
 
 On the authoring host, measured:
 
@@ -57,15 +66,33 @@ this PR was caught by the same wrapper and measured 0/N before noticing.
 **No verdict may be taken from a host whose grep does not early-exit.** Run it where CI's grep runs,
 or `env -i PATH=/usr/bin:/bin bash <probe>`.
 
+### The false all-clear was real — through a door the gate did not watch
+
+While the preflight guarded a failure this probe could not have, a reachable one sat open:
+
+```bash
+cd apps/web-platform/infra && bash ./scripts/sigpipe-triage-feasibility.sh
+#   => production=0/0 test-harness=0 B=0% arm=convert       exit 0
+```
+
+`git grep` resolves its pathspec relative to CWD, so from any subdirectory the probe matched nothing —
+and an empty corpus is not a harmless zero. It satisfies `0 ≤ 50 sites` and `0 ≤ 12 files`, and the
+security forfeit cannot fire with no files to match, so **the arm flips from TRACK to CONVERT**: the
+probe confidently recommends converting a class it never looked at. The fail-safe posture inverts.
+
+Fixed: the probe pins itself to the repo root and **refuses an empty corpus**. A zero for this
+pathspec means the instrument missed, never that the defect is absent — which is the whole lesson of
+this note, applied to itself.
+
 ---
 
-## 1. Corpus: 41% of the apparent class is the repo talking about itself
+## 1. Corpus: a third of the apparent class is not the shape at all
 
 | measure | count |
 |---|---|
 | raw `git grep` hits | **280** across 42 files |
-| **real sites** | **164** across 30 files |
-| prose about the shape, not the shape | **116 (41%)** |
+| **real sites** | **189** across 30 files |
+| prose / non-pipe `\|\|` forms, not the shape | **91 (33%)** |
 
 Four normalisations account for the gap. Each was found by *inspecting the matched lines*, not by
 reasoning — and each was, at some point in this PR's own history, missing:
@@ -94,8 +121,8 @@ lineage is about, and easy to commit *while* correcting it. This probe did, twic
 
 | population | sites | files |
 |---|---|---|
-| test-harness internals (`*.test.sh`) | **124** | 21 |
-| **production** | **40** | **9** |
+| test-harness internals (`*.test.sh`) | **148** | 21 |
+| **production** | **41** | **9** |
 
 In test-harness code the defect is test debt: it false-FAILs a test (noise) or false-PASSes one (a
 test that gates nothing). In production it changes what infra *does*.
@@ -174,15 +201,25 @@ This is a different argument, and the producer must be **pinned** or it does not
 | `printf 'MATCH\n%s' "$(head -c 200000 ...)" \| grep -q MATCH` — single write, over capacity | **100/100** |
 | `{ echo MATCH; for i in $(seq 1 5000); do echo pad; done; } \| grep -q MATCH` — multi-write | **300/300** |
 
-A **single** `write()` below the pipe capacity (64 KiB on Linux) cannot block: it completes into the
-buffer and the producer exits before `grep` can close the pipe, so no SIGPIPE is deliverable. A
+A **single** `write()` below **glibc's stdio buffer (`st_blksize` = 4096)** cannot block: it completes
+into the pipe buffer and the producer exits before `grep` can close the pipe, so no SIGPIPE is
+deliverable.
+
+> **An earlier revision put this boundary at the 64 KiB pipe capacity, and that was wrong** — the same
+> error as the retracted byte threshold, wearing a construction argument as a disguise. Above 4096 the
+> producer issues MULTIPLE writes (`head -c 60000` → 15 write() calls), so it is killable. Measured at
+> the old rule's own boundary: `head -c 65535` is killed **3/100** here, and 158/200 on a busier host —
+> load-dependent, and non-zero either way, which is all it takes to falsify "no SIGPIPE is
+> deliverable". The two points that "justified" 65536 (400 B and 200 KB) both sit *outside* the
+> failure band. Boundary corrected to ≤ 4096. B is unchanged, because the 4 bounded sites are
+> `tail -c 400`: the rule was wrong, the answer was not. A
 **multi**-write producer is killable at *any* size, because any write issued after grep's exit fails
 regardless of buffer room — which is exactly why the 8 KB case died under `strace`, and why the byte
 threshold deserved its retraction.
 
 So the discriminator is not size. It is a *single non-blocking write*; size only enters as the
 condition under which that write cannot block. The probe counts a site bounded only on an explicit
-truncation (`head -c N` / `tail -c N`, `N < 65536`). Shape alone never qualifies.
+truncation (`head -c N` / `tail -c N`, `N ≤ 4096`). Shape alone never qualifies.
 
 > **A reviewer could not reproduce the 200 KB row** and reported it as fabricated — correctly, given
 > what they ran: a 200 KB blob containing **no newline** measures 0/300, because grep cannot match a
@@ -200,10 +237,10 @@ which is right — stated so the precision is not mistaken for load-bearing.
 
 | subset | measured | disposition |
 |---|---|---|
-| production | 40 sites / 9 files | **TRACK** (one live site fixed here) |
-| test-harness | 124 sites / 21 files | **TRACK** — never converted here |
+| production | 41 sites / 9 files | **TRACK** (one live site fixed here) |
+| test-harness | 148 sites / 21 files | **TRACK** — never converted here |
 
-Size alone said *convert* (40 <= 50, 9 <= 12). The security-rung auto-forfeit overrides it: all 9
+Size alone said *convert* (41 <= 50, 9 <= 12). The security-rung auto-forfeit overrides it: all 9
 production files touch a security seam by content (cosign/x509/credential, nftables/egress, RLS,
 sandbox). The detector flags **9 of 9**, so it does not discriminate here — it is deliberately
 over-inclusive, and its errors are fail-safe, because over-flagging forfeits to TRACK.
