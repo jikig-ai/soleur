@@ -1471,3 +1471,62 @@ describe("betteruptime_team_member.ops is a per-merge -targeted managed resource
     );
   });
 });
+
+// ─── DP-11 F8 guard: every github_repository_environment must gate on a NON-EMPTY
+//     required-reviewer set. A zero-reviewer environment auto-approves, silently
+//     defeating the human ack these environments exist to enforce on irreversible
+//     cutover dispatches (inngest arm/rollback, the /workspaces LUKS freeze #6604).
+//     Terraform pins reviewers.users, but nothing else fails RED pre-merge if a
+//     future edit empties it — this test is that guard. ────────────────────────
+describe("github_repository_environment declares a non-empty reviewers.users (DP-11 F8)", () => {
+  test("every cutover-gate environment in the infra root gates on ≥1 reviewer", () => {
+    const header =
+      /resource\s+"github_repository_environment"\s+"([A-Za-z0-9_]+)"\s*\{/g;
+    const envs: { name: string; users: string }[] = [];
+    for (const file of listInfraTfFiles()) {
+      const stripped = stripComments(readFileSync(file, "utf8"));
+      let m: RegExpExecArray | null;
+      while ((m = header.exec(stripped)) !== null) {
+        const name = m[1];
+        const openBrace = header.lastIndex - 1; // index of the resource `{`
+        let depth = 0;
+        let end = -1;
+        for (let i = openBrace; i < stripped.length; i++) {
+          if (stripped[i] === "{") depth++;
+          else if (stripped[i] === "}") {
+            depth--;
+            if (depth === 0) {
+              end = i;
+              break;
+            }
+          }
+        }
+        if (end === -1) {
+          throw new Error(
+            `Unbalanced braces for github_repository_environment.${name}`,
+          );
+        }
+        const body = stripped.slice(openBrace, end + 1);
+        const rev = body.match(/reviewers\s*\{[^}]*users\s*=\s*\[([^\]]*)\]/);
+        envs.push({ name, users: (rev?.[1] ?? "").trim() });
+      }
+    }
+
+    // Fail-closed: the guard is vacuous if the extractor matches nothing. Assert it
+    // actually saw the known cutover-gate environments before trusting the loop.
+    const names = envs.map((e) => e.name);
+    expect(names).toContain("workspaces_luks_cutover");
+    expect(names).toContain("inngest_cutover");
+
+    for (const env of envs) {
+      const ids = env.users
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      expect(
+        ids.length,
+        `github_repository_environment.${env.name} has an EMPTY reviewers.users — a zero-reviewer environment auto-approves (DP-11 F8)`,
+      ).toBeGreaterThan(0);
+    }
+  });
+});
