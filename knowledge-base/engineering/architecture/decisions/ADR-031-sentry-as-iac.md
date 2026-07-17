@@ -339,7 +339,7 @@ That gap matters more than usual here, because clause (b) was born from #6374 �
 ran ~14h unseen* — so replacing it with an unwatched runtime property re-opens that incident's
 own failure class one layer up. **The honest statement is: this amendment trades a static,
 CI-checkable invariant for a dynamic one with no monitor, and closing that is tracked as
-#6607** (not a one-line matrix add: the drift workflow runs `doppler run --name-transformer
+#6612** (not a one-line matrix add: the drift workflow runs `doppler run --name-transformer
 tf-var`, which mangles the raw `SENTRY_AUTH_TOKEN` the `jianyuan/sentry` provider reads
 directly → `failed to perform health check`, so the sentry root needs raw-token plumbing the
 other two roots do not).
@@ -464,7 +464,7 @@ orphan there is anticipated rather than discovered.
   **kind, not size**: under `-target=`, a concurrent writer could clobber *updates* to ≤71
   addresses; under full-root it can produce *destroys* across the whole root. "Do not run a
   manual apply while CI is applying" is an **instruction, not a control**. Acceptable given the
-  single-writer path-filtered CI path; recorded honestly rather than as mitigated. #6607's drift
+  single-writer path-filtered CI path; recorded honestly rather than as mitigated. #6612's drift
   check would not prevent the race but would detect the divergence within a cron period instead
   of never.
 - The PR-time plan moves prod-token exposure **earlier** — from post-merge (after CODEOWNERS
