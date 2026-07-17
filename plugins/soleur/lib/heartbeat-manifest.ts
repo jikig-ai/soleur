@@ -60,6 +60,16 @@ export interface ManifestEntry {
   replace_target?: { choice: string; server: string };
   /** Required for every entry whose arming is NOT dedicated-host-boot. */
   exempt_reason?: string;
+  /**
+   * Declares that this heartbeat's arming is DELIBERATELY deferred (created paused in Better Stack,
+   * to be armed out-of-band later — ADR-117 "FED-but-inert", a legal state at merge). When set, the
+   * nightly live-reconcile (#6549 item 2) does NOT raise the `fed-but-paused` alert for this row: a
+   * paused-yet-fed monitor is EXPECTED during the owner's deferred-arming window. It costs an owning
+   * issue — the honest-declaration idiom mirrors `feeder:{kind:"none", tracking_issue}`. Remove it
+   * (at cutover/arming) and a still-paused fed monitor fires for real. It does NOT suppress the
+   * `absent-live` alert — a declared-but-not-applied monitor is still surfaced.
+   */
+  arming_pending?: { tracking_issue: number };
 }
 
 /**
@@ -124,6 +134,10 @@ export const MANIFEST: ManifestEntry[] = [
         pattern: "systemctl enable --now luks-monitor.timer",
       },
     },
+    // Deferred arming: the monitor is created paused and armed only at the /workspaces LUKS cutover
+    // (#6604, #6210: verify a real ping first). Until then the live-reconcile must NOT nag on a
+    // fed-but-paused mismatch for this row — it is the ADR-117 FED-but-inert state, owned by #6604.
+    arming_pending: { tracking_issue: 6604 },
     exempt_reason:
       "web-host-resident feeder (luks-monitor.timer on web-1) delivered + armed by the cutover channel (workspaces-cutover.sh), NOT web-1 cloud-init boot — web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO <host>-host-replace path (re-arming is re-running the cutover channel). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
