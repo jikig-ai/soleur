@@ -1118,6 +1118,28 @@ jobs:
                   echo "::notice::op=rollback: INNGEST_CUTOVER_FLIP is '${RB_CUR:-unset}' (not armed/forward-progressed) — nothing on the dedicated host to reverse (aborted = already stopped by the DBSIZE gate; unset = never armed). This is the documented P0-3 aborted-state recovery; proceeding to the web re-enable." ;;
               esac
 
+              # ---- #6552: DELETE the armed INNGEST_HEARTBEAT_URL (inverse of op=arm G4, :760).
+              # UNCONDITIONAL — it lives in Half (B), which runs for EVERY entry state, NOT in the
+              # forward-state case arm above. op=arm writes the URL at G4 BEFORE the FSM runs, so it
+              # persists in `aborted`, the partial-arm state (G4 wrote it, then G5 `armed` failed),
+              # and the `rolled-back` re-dispatch path — all of which the forward-state arm skips.
+              # Leaving it stranded there re-creates the two-pushers-on-one-monitor bug #6552 closes:
+              # the dedicated host keeps pinging the shared Better Stack heartbeat monitor while the
+              # re-enabled co-located host also pings, so the monitor stays green on either host and
+              # stops being evidence about either. After the delete, the dedicated heartbeat dark arm
+              # sees url_present=no and skips its ping -> ONE unambiguous pusher (co-located) per
+              # monitor (inngest-host.tf:137-171). Runs AFTER Half (A)'s `rolled-back` confirm (a
+              # forward-state rollback only reaches Half (B) once the dedicated scheduler is confirmed
+              # stopped), so a `done`-state rollback never blanks the monitor while the dedicated
+              # scheduler is still live. Idempotent (absent -> no-op) + value-silent; a delete error
+              # WARNs but does NOT block the safety-critical web re-enable below — a lingering monitor
+              # false-green is strictly less severe than withholding the double-fire prevention.
+              if DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets delete INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --yes >/dev/null 2>&1; then
+                echo "::notice::op=rollback: deleted INNGEST_HEARTBEAT_URL from soleur-inngest/prd (inverse of op=arm G4) — the dedicated heartbeat dark arm now skips its ping; one pusher per monitor restored (no value echoed)."
+              else
+                echo "::warning::op=rollback: could not delete INNGEST_HEARTBEAT_URL from soleur-inngest/prd (already absent, or a transient Doppler error). NOT blocking the web re-enable. If a stale URL persists the dedicated host may remain a second heartbeat pusher (monitor false-green) — re-dispatch op=rollback, or verify via cat-deploy-state.sh inngest_heartbeat_dark_arm."
+              fi
+
               # ---- Half (B): the web re-enable + restart fan-out (the pre-#6369 behaviour).
               echo "::notice::rollback: re-enabling inngest across host-set [$CUTOVER_HOSTS] (${#HOSTS[@]} host(s)) — reverse of 2.2 quiesce (P1-13)"
               # The reverse of 2.2 quiesce is now a SINGLE no-SSH `enable inngest _ _` verb
