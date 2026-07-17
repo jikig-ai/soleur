@@ -408,6 +408,17 @@ jobs:
       - name: Run GitHub /meta CIDR generator tests
         run: bash apps/web-platform/infra/scripts/gen-github-egress-cidr.test.sh
 
+      # #6578. The probe refuses to emit a verdict on a host whose grep does not
+      # early-exit (a draining grep reads 0/N and yields a false all-clear), so
+      # this step doubles as the assertion that CI's grep can still observe the
+      # SIGPIPE class at all. ~1.2s + ~2.6s; measured, against this job's ~12s
+      # of slack under timeout-minutes: 8.
+      - name: Run sigpipe guard triage-feasibility probe
+        run: bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh
+
+      - name: Run sigpipe triage-feasibility probe attestation
+        run: bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh
+
       - name: Run server.tf remote-exec set -e drift-guard
         run: bash apps/web-platform/infra/server-tf-set-e.test.sh
 
@@ -555,6 +566,9 @@ jobs:
 
       - name: Run git-data LUKS-at-rest cutover drift-guards
         run: bash apps/web-platform/infra/git-data-luks.test.sh
+
+      - name: Run /workspaces LUKS-at-rest drift-guards (#6588, ADR-119)
+        run: bash apps/web-platform/infra/workspaces-luks.test.sh
 
       - name: Run git-data transport-wrapper allowlist tests
         run: bash apps/web-platform/infra/git-data-transport-wrapper.test.sh
