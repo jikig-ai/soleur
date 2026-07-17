@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-17T13:55:49Z",
+  "generated_at": "2026-07-17T19:38:49Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -731,6 +731,19 @@
       "rule_text_prefix": " → core"
     },
     {
+      "id": "hr-weigh-every-decision-against-target-user-impact",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
       "id": "hr-when-a-command-exits-non-zero-or-prints",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -1298,27 +1311,14 @@
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-07-17T13:37:23Z",
-      "first_seen": "2026-07-17T13:37:23Z",
-      "rule_text_prefix": " → core"
-    },
-    {
-      "id": "hr-weigh-every-decision-against-target-user-impact",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 1,
-      "warn_count": 0,
-      "fire_count": 1,
-      "prevented_errors": 0,
-      "last_hit": "2026-07-17T10:54:01Z",
-      "first_seen": "2026-07-17T10:54:01Z",
+      "last_hit": "2026-07-17T17:44:36Z",
+      "first_seen": "2026-07-17T17:44:36Z",
       "rule_text_prefix": " → core"
     }
   ],
   "summary": {
     "total_rules_tagged": 101,
-    "rules_unused_over_8w": 99,
+    "rules_unused_over_8w": 100,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,
