@@ -31,8 +31,8 @@
 #     delivers the handler + the infra-config-install escalation helper + the
 #     sudoers grant, which the webhook path cannot self-deliver (chicken-and-egg,
 #     #4811). The GitHub-hosted runner's egress IP is not in var.admin_ips, so this
-#     job bridges SSH through the existing CF Tunnel SSH route (tunnel.tf:
-#     ssh://localhost:22 ingress + CF Access ci_ssh service token): install
+#     job bridges SSH through the existing CF Tunnel SSH route (tunnel.tf's `ssh.`
+#     ingress, origin-relative to web-1 since #6594 + CF Access ci_ssh service token): install
 #     cloudflared, open a `cloudflared access tcp` localhost forward, and add an
 #     `iptables -t nat OUTPUT REDIRECT` rule rewriting SERVER_IP:22 → 127.0.0.1:2222
 #     (transparent to terraform's Go SSH client, which ignores ~/.ssh/config —
@@ -404,7 +404,16 @@ jobs:
           # expects). handler_bootstrap runs before this push and updates the host
           # handler to the current FILE_MAP, so the count is aligned on a healthy
           # apply.
-          EXPECTED_COUNT=$(sed -n '/^FILE_MAP=(/,/^)/p' infra-config-apply.sh | grep -cE '_B64\|')
+          # #6594 (PR-B): the adjudication logic lives in a sourceable, TESTED script
+          # (infra-config-gate.sh; infra-config-gate.test.sh drives it). CWD is INFRA_DIR.
+          # shellcheck source=/dev/null
+          source ./infra-config-gate.sh
+          # `|| true`: infra_config_expected_count ends in `grep -c`, which exits 1 on
+          # zero matches. Without this, a zero-row FILE_MAP would abort the step here
+          # under `set -eo pipefail` BEFORE the numeric guard below can emit its
+          # diagnostic (review, code-quality P-low). The guard still fails closed —
+          # an empty EXPECTED_COUNT trips the regex check.
+          EXPECTED_COUNT=$(infra_config_expected_count infra-config-apply.sh || true)
           if [[ ! "$EXPECTED_COUNT" =~ ^[0-9]+$ || "$EXPECTED_COUNT" -eq 0 ]]; then
             echo "::error::Could not derive EXPECTED FILE_MAP count from infra-config-apply.sh (got '$EXPECTED_COUNT')."
             exit 1
@@ -428,11 +437,12 @@ jobs:
               FILES_FAILED=$(jq -r '.files_failed' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
               FILES_WRITTEN=$(jq -r '.files_written' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
               FILES_TOTAL=$(jq -r '.files_total' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
-              if [[ "$EXIT_CODE" == "0" && "$FILES_FAILED" == "0" \
-                    && "$FILES_TOTAL" != "MISSING" && "$FILES_TOTAL" != "null" \
-                    && "$FILES_WRITTEN" == "$FILES_TOTAL" \
-                    && "$FILES_TOTAL" == "$EXPECTED_COUNT" ]]; then
-                echo "Infra-config apply succeeded (exit_code=0, files_written=${FILES_WRITTEN}/${FILES_TOTAL}, expected=${EXPECTED_COUNT}, files_failed=0 on attempt $attempt)"
+              # Poll fast-path: stop polling once the COUNT invariant holds (single-
+              # sourced in infra-config-gate.sh). The CONTENT assert is deliberately NOT
+              # here — it runs once after the loop (terminal). Asserting content inside
+              # the loop would retry across fresh connector selections = any-of-3 (#6594).
+              if infra_config_count_invariant /tmp/infra-config-status-response.txt infra-config-apply.sh; then
+                echo "Infra-config apply count invariant holds (exit_code=0, files_written=${FILES_WRITTEN}/${FILES_TOTAL}, expected=${EXPECTED_COUNT}, files_failed=0 on attempt $attempt); running terminal adjudication."
                 cat /tmp/infra-config-status-response.txt
                 break
               fi
@@ -458,26 +468,19 @@ jobs:
               exit 1
             fi
           elif [[ "$HTTP_CODE" == "200" ]]; then
-            if [[ "$EXIT_CODE" != "0" ]]; then
-              echo "::error::infra-config-apply reported exit_code=$EXIT_CODE (partial failure)."
+            # Terminal adjudication (OUTSIDE the retry loop, #6594 PR-B): the count
+            # invariant (#6178 under-delivery guard) AND the per-file content assert —
+            # each delivered file's reported sha256 must equal the repo file the apply
+            # ran from (CWD is the checked-out INFRA_DIR at the applied SHA). A content
+            # mismatch is terminal and names the diverging file. This is what catches a
+            # stale-but-same-count host: 15/15 clean while ci-deploy.sh was never re-
+            # delivered (the exact #6594 false-green). Single-sourced in
+            # infra-config-gate.sh; driven by infra-config-gate.test.sh.
+            if ! adjudicate_infra_config /tmp/infra-config-status-response.txt . infra-config-apply.sh; then
               cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
               exit 1
             fi
-            if [[ "$FILES_FAILED" != "0" ]]; then
-              echo "::error::infra-config-apply reported files_failed=$FILES_FAILED — one or more files did not land on the host."
-              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-              exit 1
-            fi
-            if [[ "$FILES_TOTAL" == "MISSING" || "$FILES_TOTAL" == "null" || "$FILES_WRITTEN" != "$FILES_TOTAL" ]]; then
-              echo "::error::infra-config-apply landed-files mismatch: files_written=$FILES_WRITTEN files_total=$FILES_TOTAL (expected equal and non-null)."
-              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-              exit 1
-            fi
-            if [[ "$FILES_TOTAL" != "$EXPECTED_COUNT" ]]; then
-              echo "::error::infra-config-apply UNDER-DELIVERED: host reported files_total=$FILES_TOTAL but the repo FILE_MAP expects $EXPECTED_COUNT (#6178 false-green fix — a stale/racing push left the host short of the current file set). This is NOT a pass."
-              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-              exit 1
-            fi
+            echo "Infra-config apply verified: count invariant + per-file content match (#6594 PR-B)."
           else
             echo "::error::infra-config-status did not respond with HTTP 200 after 3 attempts (last HTTP $HTTP_CODE). The handler is async behind a 202 trigger-and-forget, so a non-responding status endpoint cannot be treated as success."
             cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true

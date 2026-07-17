@@ -76,15 +76,27 @@ const HETZNER_CAP = 32_768;
 // would have made the NEXT infra change fail CI for no defect. 21,900 keeps the guard's actual
 // purpose intact: a KB-scale re-inlining (~1.5+ KB, the failure mode this exists to catch) still
 // trips it, and it stays ~10.9 KB below HETZNER_CAP.
-// #6604: +~250 B modest re-baseline (21,900 → 22,200). Measured 21,900 → ~22,048 (+148 B) for two
-// irreducibly-inline additions the "prefer baking over inline" guidance CANNOT absorb: (a) the
-// /mnt/data mount pinned by-id + fstab `nofail` + fstab-dedupe guard (the glob binds the wrong
-// device once the LUKS volume attaches — this MUST be in the runcmd mount, not a baked helper),
-// and (b) the baked-DSN write to /etc/default/luks-monitor (the luks-monitor units source it; it
-// MUST be written at cloud-init time so a Doppler-down boot still pages — DP-9). Comments trimmed
-// first. 22,200 keeps the KB-scale re-inlining tripwire (a ~1.5 KB blob → ~23.5 KB trips it) and
-// stays ~10.6 KB below HETZNER_CAP.
-const WEB_GZIP_BUDGET = 22_200;
+// #6594: +400 B modest re-baseline (21,900 → 22,300). Measured 21,836 → 22,044 (+208 B) for the
+// fail2ban `ignoreip = ... 10.0.1.0/24` grant (+60 B) plus its one-line pointer comment (+148 B).
+// The grant is a REQUIRED consequence of pinning the tunnel ingress, not an independent addition:
+// once `ssh.` resolves to web-1's private IP, a peer connector proxies in from a real source
+// address instead of 127.0.0.1, so fail2ban's default loopback ignore no longer covers the CI
+// login path — see server.tf's fail2ban_tuning block for the full rationale (a lockout there is
+// noVNC-only recovery). "Prefer baking over inline" CANNOT absorb it: fail2ban is reloaded at the
+// package-audit stage, BEFORE Docker, so its drop-in cannot come from the post-Docker image
+// extraction (server.tf's keep-inline note) — the #5921 treatment that moved journald out is
+// structurally unavailable here. Rationale prose was moved to server.tf (free) and only the
+// pointer kept, per #6425's precedent. 21,900 would have left 4 B of headroom — the same
+// below-the-noise-floor trap #6425 called out at 16 B. 22,300 keeps the guard's purpose intact:
+// a KB-scale re-inlining (~1.5+ KB) still trips it, and it stays ~10.2 KB below HETZNER_CAP.
+// #6604: on top of #6594's 22,300 baseline, +~150 B for two irreducibly-inline additions the
+// "prefer baking over inline" guidance CANNOT absorb: (a) the /mnt/data mount pinned by-id + fstab
+// `nofail` + fstab-dedupe guard (the glob binds the wrong device once the LUKS volume attaches —
+// MUST be in the runcmd mount, not a baked helper), and (b) the baked-DSN write to
+// /etc/default/luks-monitor (the luks-monitor units source it; MUST be written at cloud-init time so
+// a Doppler-down boot still pages — DP-9). Merged render measured ~22,256; 22,450 keeps the KB-scale
+// re-inlining tripwire (a ~1.5 KB blob → ~23.7 KB trips it) and stays ~10.3 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 22_450;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/

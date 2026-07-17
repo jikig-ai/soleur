@@ -95,6 +95,8 @@ inferring ownership from any HTTP status.
 
 ## Decision
 
+<!-- lint-infra-ignore start: the scope list below RECORDS the 2026-05-15 decision (a one-time `terraform import` of 4 pre-existing rules, executed then, never re-run) — it is a historical record, not a prescribed operator step. All Sentry Terraform execution is CI-driven and no-SSH: apply-sentry-infra.yml plans the full root on push-to-main (#6589), and since #6589 there is no human-run path at all. Wrapped so amending this ADR does not trip lint-infra-no-human-steps on pre-existing prose; same rationale as ADR-030:144 (#6407). -->
+
 Adopt Sentry as Infrastructure-as-Code via the `jianyuan/terraform-provider-sentry`
 provider, scoped to:
 
@@ -117,6 +119,8 @@ provider, scoped to:
 - **Defer** enabling new monitor classes (log-condition, custom-metric) until
   `apps/web-platform/server/sentry-scrub.ts` is extended to cover their event
   channels — enforced by Phase 6 GDPR-gate + AC9.
+
+<!-- lint-infra-ignore end -->
 
 ### Provider source
 
@@ -287,6 +291,194 @@ list is declared-but-never-applied (green CI, dark alarm). Guarding only clause 
 pass while the monitor never materialised; both clauses are load-bearing. This makes
 "heartbeat into the void" and "applied nowhere" structurally impossible for GHA workflows,
 mirroring the Inngest-cron guard.
+
+**Amendment (2026-07-17, #6589) — the apply plans the FULL ROOT; `-target=` scoping is
+retired, and with it clause (b) of the 2026-07-13 amendment above.**
+
+**What was wrong.** The auto-apply built a saved plan against an explicit `-target=` set of
+~71 addresses. A `-target`-scoped plan restricts Terraform's plan universe to the addresses
+named on the command line — and a resource whose block has been DELETED from a `.tf` file is,
+by construction, no longer nameable there. So **deletion was a silent no-op**: removing a
+block removed the resource from CI's view while leaving it live and billing in Sentry. The
+allow-list made the "add" path safe and the "remove" path impossible.
+
+It fired twice. #4929 orphaned `sentry_issue_alert.kb_tenant_mint_silent_fallback`; the
+comment documenting that leak then sat in the workflow for two months and nobody re-checked
+it. #6034 added a monitor block **and** its allow-list line; #6074 removed **both together**
+— the intuitive edit — and orphaned `sentry_cron_monitor.scheduled_ghcr_token_minter`, live
+at $0.78/mo carrying a 12-day unresolved incident. Monitor count went **8 → 49 in two months
+and never once decreased**, because nothing could make it.
+
+**The decision.** `terraform plan` for `apps/web-platform/infra/sentry/` now runs
+unscoped. The plan universe is `state ∪ config`, so removing a block yields a real destroy,
+governed by the existing `[ack-destroy]` gate. The per-monitor tax goes with it: adding a
+monitor is now a resource block, where it was a block **+** an allow-list line **+** a
+parity-test entry **+** a registry count.
+
+**Why retiring clause (b) is safe — state this explicitly, or a future reader will conclude
+#6589 broke a P1-derived invariant.** Clause (b) required every GHA `monitor-slug:` to name a
+resource present in the `-target=` allow-list. It existed because target-scoping made
+*declared ≠ applied*: a monitor could be declared and never applied (green CI, dark alarm —
+the #6374 P1, an alarm unseen ~14h). Under a full-root plan, **declared ≡ applied whenever an
+apply succeeds** — the allow-list could make a *successful* apply skip a declared resource,
+and full-root cannot. Clause (a) — every `monitor-slug:` has a matching
+`sentry_cron_monitor.name` — remains load-bearing and is untouched.
+
+**But `declared ≡ applied` is a property of a successful apply, NOT a standing invariant, and
+the difference is the whole of what clause (b) gave up.** Clause (b) was checkable at CI time
+from the repo alone; its replacement is "the apply ran and converged", which is observable
+only in Actions history. Three live paths leave the root divergent:
+
+1. `[skip-sentry-apply]` in a merge commit skips the apply outright; nothing reconciles after.
+2. A failed apply run that is never retried — **including a run failed deliberately by the
+   destroy gate below**, which is the gate working as designed and still leaves divergence.
+3. No scheduled drift check covers this root. `scheduled-terraform-drift.yml`'s matrix is
+   `apps/web-platform/infra` + `infra/github`; `apps/web-platform/infra/sentry` is absent.
+
+That gap matters more than usual here, because clause (b) was born from #6374 — *an alarm that
+ran ~14h unseen* — so replacing it with an unwatched runtime property re-opens that incident's
+own failure class one layer up. **The honest statement is: this amendment trades a static,
+CI-checkable invariant for a dynamic one with no monitor, and closing that is tracked as
+#6612** (not a one-line matrix add: the drift workflow runs `doppler run --name-transformer
+tf-var`, which mangles the raw `SENTRY_AUTH_TOKEN` the `jianyuan/sentry` provider reads
+directly → `failed to perform health check`, so the sentry root needs raw-token plumbing the
+other two roots do not).
+
+Two things keep "declared ⇒ applied" true, and neither may be undone independently:
+
+1. **The `paths:` filter was widened** to `apps/web-platform/infra/sentry/**` (it listed 3
+   named `.tf` files). Under target-scoping the allow-list doubled as the gate for
+   declared-but-never-applied; full-root removes that gate, so the path filter is what
+   replaces it. A `versions.tf` / `variables.tf` / provider change must not silently skip
+   the apply.
+2. **The apply job gained an event guard.** The workflow now also triggers on
+   `pull_request` and `merge_group`; without the guard, `apply` would be reachable from a PR
+   and would apply prod Sentry infra from an unreviewed branch.
+
+**Full-root ALONE would not have fixed the bug — it would have relocated it.** The apply runs
+on push-to-main, so an unacknowledged delete would go red *after* merge, with the orphan
+surviving: an end state byte-identical to #6074, only louder somewhere nobody watches. The
+load-bearing half of #6589 is therefore a **PR-time gate**, `sentry-destroy-required`,
+registered as a required status context.
+
+**The gate is ack-AWARE, not merely loud, and that rests on a premise the plan got wrong.**
+The plan asserted that `[ack-destroy]` "must sit in the merge commit, authored in GitHub's
+squash UI — the author cannot pre-stage it from the branch." That is **false for this repo**:
+`squash_merge_commit_message = COMMIT_MESSAGES`, so the squash body is composed from the
+branch commit messages — each commit's SUBJECT prefixed `* `, its BODY lines carried verbatim
+(verified against merged commit `105799dbd`). An `[ack-destroy]` on its own line in a commit
+**body** therefore reaches the merge commit line-anchored and satisfies the apply gate; the
+same literal used as a commit **subject** becomes `* [ack-destroy]` and does not.
+
+That correction is what makes a *green-able* gate possible, and a green-able gate is the only
+acceptable design: a gate that is permanently red on every correct delete PR would train
+exactly the ack-blindness this plan refuses to train for `[ack-create]` (see the create-gate
+note below). A mechanism cannot be rejected in one phase and adopted in another.
+
+Two premises support the reconstruction, with an honest limit on the first (found at review):
+
+- The PR gate **attempts to verify** `squash_merge_commit_message == COMMIT_MESSAGES` and
+  fails closed on a readable-but-wrong value. **But that field is administration-scoped, and
+  `administration` is not a grantable `GITHUB_TOKEN` permission** — so under CI the field
+  reads empty and the check cannot certify it. Rather than sit permanently red for a
+  token-scope reason (the exact anti-pattern this PR exists to avoid), the PR gate WARNS on an
+  empty read and defers to the apply gate. **The real enforcement is the post-merge apply
+  gate**, which reads the *actual* merge-commit message directly (its own `[ack-destroy]`
+  regex, no squash-mode assumption) and fails closed there — so a genuinely-missing ack still
+  cannot destroy anything, and a setting that mangled body content would make *every* destroy
+  PR fail its apply, self-announcing. The setting check has teeth only under an operator PAT
+  (`workflow_dispatch`); it is kept for that path and as documentation, not relied on in CI.
+  The earlier claim that the gate "fails closed if the setting is ever not COMMIT_MESSAGES"
+  was an overclaim corrected here — green from the PR gate means "best-effort early feedback",
+  and the apply gate is what means "the ack reached the merge commit".
+- `scripts/sentry-squash-ack-detect.sh` **reconstructs** the squash body before matching,
+  rather than grepping the raw commit messages. It is pinned as the 7th
+  `[ack-destroy]` regex site by `test-destroy-guard-regex-parity.sh`: drift between a
+  predictor and the thing it predicts is invisible to review.
+
+**A create gate was added in the same change (symmetry).** The delete direction was guarded
+and the create direction was not — survivable while the universe was a hand-picked list, but
+under `state ∪ config` divergence surfaces as an unreviewed CREATE (a monitor deleted in the
+Sentry UI outside Terraform, or a failed import) that silently re-bills. It is **diff-matched,
+not blanket-acked**: a create explained by a resource block the PR added passes silently, so
+the normal add-a-monitor flow is unaffected; only an unexplained create fails. A blanket
+`[ack-create]` would fire on every add-a-monitor PR and erode `[ack-destroy]` with it.
+Rationale for gating rather than documenting: accepting a *documented* create-hole would
+repeat, one line lower, the exact pattern that produced this incident.
+
+**Bot-PR soundness (#6049 ceiling).** `sentry-destroy-required` is content-scoped, so its
+presence in `scripts/required-checks.txt` fabricates a green for bot PRs. That is sound only
+because `bot-pr-with-synthetic-checks` pins `ALLOWED_PATHS` to
+`{weakness-digest.md, rule-metrics.json}` and exits 1 on anything else — so
+`apps/web-platform/infra/sentry/**` is physically unreachable by any bot PR and a full-root
+plan over a bot diff is vacuously non-destroying. **The residual goes live the instant a
+sentry path joins `ALLOWED_PATHS`** — a bot could then delete a monitor block under a
+fabricated green, which is #6074 with a robot holding the pen. Same argument shape as
+`rule-body-lint` (#6103).
+
+**Type-scope guard, re-sourced.** `test-destroy-guard-sentry-scope-guard.sh` used to read
+resource types out of the `-target=` list. Its naive replacement — read the `.tf` files — is
+vacuous *in exactly the direction of the bug*: a type present in STATE with no remaining block
+is invisible to a `.tf`-only reader, which is precisely the class this change destroys. Had
+`kb_tenant_mint_silent_fallback` been the last `sentry_issue_alert`, a `.tf`-only guard would
+have omitted that type, passed vacuously, and let an array-of-blocks destroy through
+unchecked. The set is now `types(.tf) ∪ types(state)`, assembled across two callers because
+the halves are available in different places: the `.tf` half in CI (no credentials needed),
+and the state half injected by the workflow from the plan JSON — which *is* `state ∪ config`,
+so it is exact rather than a reconstruction. The guard deliberately does **not** run
+`terraform state list` itself: the R2 backend needs credentials `test-all.sh` does not have,
+and a tolerated failure would rebuild the vacuity.
+
+**Rejected alternatives.**
+
+1. **Keep the hand-maintained allow-list** (status quo). Deletion stays a silent no-op. It
+   fired twice (#4929, #6074) and the second time the workflow's own comment documented the
+   first.
+2. **Derive the `-target=` set from `terraform state list` ∪ declared addresses.** Rejected:
+   **identity-equal to passing no `-target` at all** — Terraform's plan universe *is*
+   `state ∪ config` — while adding a moving part that can drift from the thing it mirrors.
+3. **A CI lint on block-removal-without-ack.** Rejected as the primary fix: it lints a footgun
+   instead of removing it. Its *intent* is delivered by the PR-time plan job, which reads the
+   real plan rather than reconstructing one from the diff.
+4. **Advisory (non-required) PR gate.** Rejected: red-but-mergeable still permits merge →
+   post-merge apply failure → the orphan survives. That is the #6074 end state; a gate that
+   permits the outcome it exists to prevent is decoration.
+5. **`pull_request_target` to obtain secrets on fork PRs.** Rejected as actively dangerous: it
+   would run `terraform plan` with the prod Sentry token against untrusted fork-authored
+   `.tf`, and a single `data "http"` block exfiltrates the token. Fork PRs are refused by name
+   instead.
+6. **Managing `squash_merge_commit_message` via a `github_repository` Terraform resource.**
+   Rejected: importing the repo resource drags in dozens of unmanaged attributes that a
+   partial config would reset toward defaults. The runtime assertion is also better on the
+   merits — it fires at the moment the setting becomes load-bearing, not on a drift-cron
+   cadence.
+
+**Why only this root has a PR-time gate.** Not because it is the only full-root apply —
+`apply-github-infra.yml` is *already* full-root (zero `-target=` lines) and has no PR gate, and
+`apply-web-platform-infra.yml` still carries ~163 `-target=` lines, i.e. **this exact
+silent-no-op defect class, unfixed, against resources that also bill** (betteruptime monitors,
+cloudflare rulesets). The real discriminator is **what an ack-blocked apply leaves behind**:
+for `infra/github`, refusing a destroy leaves a *ruleset* standing — failing closed preserves a
+protection, which is benign. For sentry, refusing a destroy leaves a *monitor billing $0.78/mo*
+— failing closed preserves the exact harm the change exists to remove. That is why sentry needs
+the red to arrive **before** merge, where the author can still act on it, and `infra/github`
+does not. Scoping #6589 to sentry is deliberate; the `-target=` defect in
+`apply-web-platform-infra.yml` is generic to address-scoping and is named here so the next
+orphan there is anticipated rather than discovered.
+
+**Consequences accepted, not mitigated.**
+
+- `main.tf:16` sets `use_lockfile = false` (R2 has no S3 conditional writes), so a full-root
+  plan widens the *unlocked* write window to the whole state key. The widening is a change in
+  **kind, not size**: under `-target=`, a concurrent writer could clobber *updates* to ≤71
+  addresses; under full-root it can produce *destroys* across the whole root. "Do not run a
+  manual apply while CI is applying" is an **instruction, not a control**. Acceptable given the
+  single-writer path-filtered CI path; recorded honestly rather than as mitigated. #6612's drift
+  check would not prevent the race but would detect the divergence within a cron period instead
+  of never.
+- The PR-time plan moves prod-token exposure **earlier** — from post-merge (after CODEOWNERS
+  review) to any collaborator branch push touching `infra/sentry/**`. Bots are blocked by
+  `ALLOWED_PATHS`; on a solo repo that leaves the founder. A real widening, accepted.
 
 ## Consequences
 

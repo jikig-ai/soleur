@@ -188,9 +188,14 @@ resource "sentry_issue_alert" "auth_signout_burst" {
 #     dedup (keyed on action-shape + frequency + match, NOT conditions — see
 #     2026-05-17-sentry-issue-alert-create-dedup-on-action-match-not-conditions.md).
 #     Taken set is 60/61/62/30 (auth rules) — 5 and 15 are free.
-#   - the apply workflow MUST `-target` both (see apply-sentry-infra.yml); the
-#     untargeted apply is scoped to monitors so it never trips the import-only
-#     auth rules.
+#   - the apply workflow plans the FULL ROOT (#6589), so declaring these rules
+#     here applies them — there is no `-target=` list to also update. The 4
+#     import-only auth rules are safe under that widening for a different reason
+#     than before: they are not excluded by OMISSION from an allow-list any more,
+#     they plan as no-op because their v2 attributes are under `ignore_changes`
+#     (a live full-root plan on 2026-07-17 confirmed all 22 declared alerts
+#     no-op). That assumption now carries 22 resources where it once carried 2,
+#     which is why it is an explicit AC assertion rather than a comment.
 # Tag vocabulary verified against apps/web-platform/server/cost-writer.ts +
 # server/observability.ts: events carry `feature=byok-delegations`, `op=<...>`,
 # and `art_33_breach=true` on the cross-tenant path (wired in this PR's #4364
@@ -1431,9 +1436,11 @@ resource "sentry_issue_alert" "inbox_action_required_notify_failure" {
 #   2. If it must be quieted before then, mute `zot-gate-degraded`'s group (safe: it groups on
 #      a stable reason literal) — NOT this one, and never the RULE.
 #   3. If THIS group must be quieted, split it into its own sentry_issue_alert resource so it
-#      can be tuned without touching ghcr-fallback. That is a real fix, not a mute, and it
-#      costs a -target= entry + the op-contract's alarm⇔soak parity (which currently pins
-#      alarm.size == soakFailQueries().size == 5). Deferred, not dismissed: see #6462's PR.
+#      can be tuned without touching ghcr-fallback. That is a real fix, not a mute. Since
+#      #6589 the split costs only the resource block — the apply plans the full root, so
+#      there is no `-target=` entry to add — plus the op-contract's alarm⇔soak parity (which
+#      currently pins alarm.size == soakFailQueries().size == 5). Deferred, not dismissed:
+#      see #6462's PR.
 #
 # Distinct `frequency = 23` avoids Sentry POST-time exact-duplicate dedup (taken:
 # 5,10-22,30,60-62; keyed on action_match+filter_match+frequency+actions-shape, NOT

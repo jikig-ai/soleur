@@ -43,6 +43,11 @@ const OP_SLUG = "kb-sync.protected-fallback-failed";
 const SUCCESS_OP_SLUG = "kb-sync.push-protected-fallback";
 
 describe("kb-sync-protected-fallback alert op/feature contract", () => {
+  // apply-sentry-infra.yml plans the sentry root FULL (no `-target=` allowlist), so
+  // the plan universe is `state UNION config`: declaring the resource IS what applies
+  // it, and deleting this block is what destroys the live rule. That structurally
+  // closes the declared-but-untargeted-is-silently-dark class (#5380), so this
+  // declaration check is the whole apply contract.
   it("declares the kb_sync_protected_fallback_failed issue alert resource", () => {
     expect(blockStart).toBeGreaterThanOrEqual(0);
     expect(tfBlock).toContain(RESOURCE_DECL);
@@ -82,18 +87,5 @@ describe("kb-sync-protected-fallback alert op/feature contract", () => {
   it("the alert ANDs its filters (filter_match all) and matches the op via IS_IN", () => {
     expect(tfBlock).toContain('filter_match = "all"');
     expect(tfBlock).toMatch(/key\s*=\s*"op"[\s\S]*?match\s*=\s*"IS_IN"/);
-  });
-
-  // APPLY-CREATED: inert unless the apply workflow `-target`s it. Pin the wiring
-  // so dropping it breaks CI (the declared-but-untargeted-is-silently-dark class
-  // — see kb_sync_silent_failure's #5380 regression guard).
-  it("is wired into the apply-sentry-infra.yml -target list (else it never applies)", () => {
-    const wf = readFileSync(
-      join(here, "../../../.github/workflows/apply-sentry-infra.yml"),
-      "utf8",
-    );
-    expect(wf).toContain(
-      "-target=sentry_issue_alert.kb_sync_protected_fallback_failed",
-    );
   });
 });

@@ -1,19 +1,44 @@
-# Auto-apply `sentry_cron_monitor` and `sentry_uptime_monitor` resources
-# whenever a PR that touches apps/web-platform/infra/sentry/cron-monitors.tf
-# or apps/web-platform/infra/sentry/uptime-monitors.tf merges to main. Closes
-# the window between the per-workflow check-in steps shipping (Phase 4 of
-# #3814) and the monitors existing in Sentry. Uptime monitors were added to
-# the auto-apply allow-list in #4585 (previously operator-applied). See:
+# Apply `apps/web-platform/infra/sentry/**` (cron monitors, uptime monitors,
+# issue alerts) whenever a PR touching that tree merges to main. Closes the
+# window between the per-workflow check-in steps shipping (Phase 4 of #3814)
+# and the monitors existing in Sentry. See:
 #   knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md
 #
+# ── FULL-ROOT PLAN (#6589) ──────────────────────────────────────────────────
+# This workflow used to plan against a hand-maintained allow-list of ~71
+# explicit resource addresses. That made DELETION A SILENT NO-OP: a scoped plan
+# restricts Terraform's plan universe to the addresses named on the command
+# line, and a resource whose block has been deleted from a .tf file is — by
+# construction — no longer nameable there. So removing a block removed the
+# resource from CI's view while leaving it live and billing in Sentry.
+#
+# It fired twice. #4929 orphaned kb_tenant_mint_silent_fallback; the comment
+# documenting that leak sat in this file for two months and nobody re-checked
+# it. #6034 then added a monitor block AND its allow-list line; #6074 removed
+# BOTH together — the intuitive edit — and orphaned scheduled_ghcr_token_minter,
+# live at $0.78/mo with a 12-day unresolved incident. Monitor count went 8 -> 49
+# in two months and never once decreased, because nothing could make it.
+#
+# The plan is now FULL-ROOT: the universe is `state UNION config`, so removing a
+# block yields a real destroy, governed by the [ack-destroy] gate below. The
+# per-monitor tax is gone with it — adding a monitor is now just a resource
+# block, not a block + an allow-list line + a parity-test entry + a count.
+#
+# Two consequences are load-bearing and must not be undone independently:
+#   1. `paths:` below covers the WHOLE infra/sentry/ tree, not 3 named .tf
+#      files. The old allow-list doubled as the gate for "declared but never
+#      applied"; under full-root that gate is the path filter, so a
+#      versions.tf/variables.tf change must not silently skip the apply.
+#   2. The `sentry-destroy-required` PR gate (below) is what makes deletion
+#      SAFE rather than merely possible. Full-root alone would only relocate
+#      the footgun: this workflow applies on push-to-main, so an unacked delete
+#      would go red AFTER merge, with the orphan surviving — an end state
+#      byte-identical to #6074, only louder in a place nobody watches.
+#
 # Authorization model: the PR merge IS the human authorization. The 4 AUTH
-# issue-alert resources are excluded from this auto-apply (they are
-# import-only per the operator AC13 step in the plan; a fresh apply would
-# 412). The 2 BYOK issue-alert resources (byok_art_33_breach,
-# byok_cap_exceeded, #4364) ARE included — they are apply-created (no
-# pre-existing Sentry rule to import) and named in the -target set below.
-# So: cron-monitor, uptime-monitor, and BYOK issue-alert changes trigger an
-# apply; the auth issue-alert rules never do.
+# issue-alert resources carry `ignore_changes` on their v2 attributes (they are
+# import-only; a fresh apply would 412), so they plan as no-op under full-root
+# rather than needing to be excluded by omission.
 #
 # Kill switch: include `[skip-sentry-apply]` in the merge commit message to
 # skip auto-apply for that merge.
@@ -43,13 +68,38 @@ on:
   push:
     branches: [main]
     paths:
-      - "apps/web-platform/infra/sentry/cron-monitors.tf"
-      - "apps/web-platform/infra/sentry/uptime-monitors.tf"
-      - "apps/web-platform/infra/sentry/issue-alerts.tf"
+      # WIDENED #6589: the whole tree, not 3 named .tf files. Under the old
+      # target-scoped plan, the allow-list was the gate for "declared but never
+      # applied" (#6374 clause (b)). Full-root retires that clause, which makes
+      # this path filter the thing that keeps `declared => applied` true — a
+      # versions.tf / variables.tf / provider change must NOT silently skip the
+      # apply. Do not narrow this back to a file list.
+      - "apps/web-platform/infra/sentry/**"
       # Defense-in-depth: re-fire on filter mutations so a PR that mutates
       # the destroy-guard filter without touching infra still runs the
       # apply step against `main`'s captured baseline (#4419).
       - "tests/scripts/lib/destroy-guard-filter-sentry.jq"
+  # PR-time destroy gate (#6589). DELIBERATELY has NO `paths:` filter, and the
+  # reason is the whole point of #5585: a path-filtered workflow never reports a
+  # status context for a filtered-out PR, so a REQUIRED check would sit
+  # "Expected — Waiting" forever and wedge every unrelated PR. Path detection
+  # lives in the `detect-changes` job instead; the always-run
+  # `sentry-destroy-required` aggregator therefore reports on every PR while the
+  # heavy plan still runs only on PRs that touch the Sentry surface.
+  #
+  # `pull_request`, NEVER `pull_request_target`. The latter would run
+  # `terraform plan` with the prod Sentry token against UNTRUSTED fork-authored
+  # .tf — and a single `data "http"` block in that .tf exfiltrates the token.
+  # That is the one edit that would make this gate actively dangerous.
+  pull_request:
+    branches: [main]
+  # Merge queue: `sentry-destroy-required` is a required context, so it must
+  # report on the gh-readonly-queue/main/* temp ref or the queue stalls. The
+  # heavy plan is NOT re-run here (it ran authoritatively on the PR, and
+  # secrets.* may be absent on a GITHUB_TOKEN-authored merge_group event);
+  # detect-changes emits sentry=false and the aggregator posts a PASS via the
+  # suite=skipped branch.
+  merge_group:
   workflow_dispatch:
     inputs:
       reason:
@@ -58,11 +108,24 @@ on:
         type: string
 
 concurrency:
-  group: terraform-apply-sentry-infra
+  # Keyed by ref so a PR's plan cannot cancel main's apply (they shared a single
+  # global group before the PR trigger existed). cancel-in-progress stays false:
+  # a superseded run concludes `cancelled`, which fails the required gate on the
+  # head SHA until a re-run (#5585 R3).
+  group: terraform-apply-sentry-infra-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
   contents: read
+  # Read the PR's branch commit messages to detect a pre-staged [ack-destroy]
+  # (see the destroy gate). Read-only; no write scope anywhere in this workflow.
+  pull-requests: read
+  # NOTE: `squash_merge_commit_message` (read by the destroy gate) is an
+  # administration-scoped field, and `administration` is NOT a grantable
+  # GITHUB_TOKEN permission scope — so the field is UNREADABLE by this workflow's
+  # token by construction, and the gate handles that by design (warn + defer to
+  # the apply gate; see the check). It becomes readable only under an operator
+  # PAT (workflow_dispatch), which is why the check is kept rather than dropped.
 
 env:
   TERRAFORM_VERSION: "1.10.5"
@@ -90,9 +153,302 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # ── PR-time destroy gate (#6589) ──────────────────────────────────────────
+  # detect-changes: does this PR touch the Sentry surface? Cheap — one checkout
+  # + one git diff, NO Doppler/Sentry access. Mirrors tenant-integration.yml's
+  # detect-changes (#5585) and ci.yml's. BASE_REF exists only on pull_request.
+  detect-changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sentry: ${{ steps.filter.outputs.sentry }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -uo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            # merge_group: the authoritative plan already ran on the PR; the
+            # aggregator PASSes via detect=success + plan=skipped so the required
+            # context reports without re-running (and without needing secrets).
+            # push/workflow_dispatch: the PR gate does not apply — the push-to-main
+            # `apply` job owns those events and carries its own destroy guard.
+            printf 'sentry=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A git/checkout error must FAIL the job — never silently emit
+          # sentry=false. The aggregator treats a detect-changes failure as
+          # fail-closed, so this cannot degrade to a green.
+          if ! CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD"); then
+            echo "::error::git diff against origin/${BASE_REF} failed; failing detect-changes closed." >&2
+            exit 1
+          fi
+          # Anchors mirror the `paths:` filter above PLUS this workflow file and
+          # the jq filter (anti-bypass: the gate logic lives in both, so a PR
+          # editing either must run the gate against itself — the same
+          # self-trigger posture ci.yml uses).
+          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/infra/sentry/|tests/scripts/lib/destroy-guard-filter-sentry\.jq$|\.github/workflows/apply-sentry-infra\.yml$)'; then
+            printf 'sentry=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'sentry=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  # plan_pr: the read-only full-root plan, run BEFORE merge so a destroy is
+  # visible while the PR can still be edited. This is the job that actually
+  # removes the #6074 footgun — full-root alone would only move the red from
+  # "after merge, monitor already orphaned" to "after merge, monitor still
+  # orphaned". Heavy (Doppler + prod Sentry token), so it is gated on
+  # detect-changes and never runs on the ~95% of PRs that miss the surface.
+  plan_pr:
+    needs: detect-changes
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.sentry == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Refuse fork PRs (named, not a confusing secret error)
+        env:
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          if [[ "$IS_FORK" == "true" ]]; then
+            echo "::error::Fork PRs cannot run the Sentry plan gate: secrets.* are not exposed to fork workflows, so a full-root plan against live Sentry state is impossible here. A maintainer must re-open this change from a branch in this repository. (Deliberate: switching to pull_request_target to obtain secrets would run terraform plan with the prod Sentry token against untrusted fork-authored .tf — a token-exfiltration primitive.)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history: the create gate diffs this PR against its base to
+          # decide whether a planned create is explained by an added block.
+          fetch-depth: 0
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify required secrets present
+        env:
+          SENTRY_TOKEN_CHECK: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          if [[ -z "$SENTRY_TOKEN_CHECK" ]]; then
+            echo "::error::SENTRY_IAC_AUTH_TOKEN secret is not configured."
+            exit 1
+          fi
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Full-root plan + destroy gate
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -uo pipefail
+          # Read-only: no -out, so nothing here can be applied. The plan is
+          # FULL-ROOT (no -target=) — that is the contract this gate exists to
+          # enforce, and AC3 pins that no -target= survives in this file.
+          terraform plan -no-color -input=false -out=tfplan
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan failed (exit $rc)"
+            exit $rc
+          fi
+          set -e
+
+          # Type-scope assertion against the PLAN, which is the authoritative
+          # `state UNION config` universe. The jq filter's nested-block clauses
+          # cover a fixed set of types; a type outside that set would have its
+          # array-of-blocks shrink counted as 0 and slip the guard. The sibling
+          # run in scripts/test-all.sh can only read the .tf half (no R2
+          # credentials in CI), so THIS is the run that sees state-only types —
+          # exactly the class a removed-block PR is made of.
+          plan_types=$(terraform show -json tfplan | jq -r '[.resource_changes[].type] | unique | .[]')
+          SENTRY_STATE_TYPES="$plan_types" \
+            bash "${GITHUB_WORKSPACE}/tests/scripts/test-destroy-guard-sentry-scope-guard.sh"
+
+          # Counts + validation + the destroy_count sum come from ONE script that
+          # the apply job below calls identically. They were inline in both jobs
+          # and drifted: this job dropped the `destroy_count=$((…))` line and then
+          # read $destroy_count, so under `set -u` the gate died on every run —
+          # permanently red by accident, green path never once executed. See the
+          # script's header. One copy makes that unrepresentable.
+          terraform show -json tfplan > /tmp/sentry-pr-plan.json
+          eval "$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-pr-plan.json)"
+
+          # ── CREATE gate (#6589) ──────────────────────────────────────────
+          # Runs BEFORE the destroy gate and has NO [ack-destroy] bypass: an
+          # unexplained create is a different failure from an intended delete,
+          # and typing one ack must not wave through the other. Diff-matched,
+          # not blanket-acked — the normal add-a-monitor flow passes silently.
+          if [[ "$resource_creates" -gt 0 ]]; then
+            terraform show -json tfplan \
+              | jq -r '[.resource_changes[] | select(.change.actions == ["create"]) | .address] | .[]' \
+              > /tmp/sentry-creates.txt
+            git -C "${GITHUB_WORKSPACE}" diff "origin/${BASE_REF}...HEAD" \
+              -- 'apps/web-platform/infra/sentry/*.tf' > /tmp/sentry-tf.diff
+            bash "${GITHUB_WORKSPACE}/scripts/sentry-create-gate.sh" \
+              /tmp/sentry-creates.txt /tmp/sentry-tf.diff
+          fi
+
+          if [[ "$destroy_count" -eq 0 ]]; then
+            echo "sentry destroy gate: PASS (plan destroys nothing)"
+            exit 0
+          fi
+
+          addresses=$(terraform show -json tfplan | \
+            jq -r '[.resource_changes[] | select(.change.actions == ["delete"]) | .address] | sort | .[]')
+
+          # ── The ack must actually REACH the merge commit ──────────────────
+          # This gate greens on a pre-staged [ack-destroy], which only survives
+          # into the squash commit while the repo's squash body is composed from
+          # COMMIT_MESSAGES. If someone flips that setting, a pre-staged ack
+          # silently stops reaching the merge commit: this gate would go green
+          # and the post-merge apply would go red — #6074 again, with an extra
+          # step. Green must MEAN "the ack will reach the merge commit", so the
+          # premise is verified rather than assumed. This incident's etiology was
+          # a known hole documented in prose that nobody re-checked; do not put a
+          # second one in the fix.
+          # Three distinct outcomes, not two — because "the API call failed",
+          # "the field is unreadable", and "the setting is genuinely wrong" send
+          # the operator to three different fixes, and only the last is a real
+          # problem.
+          #
+          #   1. `gh api` itself fails (5xx / rate-limit / network) -> fail closed,
+          #      named as transport. Re-run.
+          #   2. The call succeeds but the field is EMPTY. This is the NORMAL CI
+          #      case, not an edge one: `squash_merge_commit_message` is an
+          #      administration-scoped field, and `administration` is not a
+          #      grantable GITHUB_TOKEN permission scope, so this workflow's token
+          #      CANNOT read it — the field is empty by construction here (it is
+          #      readable only under an operator PAT via workflow_dispatch). An
+          #      empty read is therefore NEVER "the setting is wrong" — it is "this
+          #      token cannot see the setting". Failing on it would make the PR
+          #      gate permanently red for a token reason. So WARN and proceed: the
+          #      POST-MERGE APPLY GATE reads the actual merge-commit message
+          #      directly (its own [ack-destroy] regex, no squash-mode assumption)
+          #      and fails closed there, so a genuinely-missing ack still cannot
+          #      destroy anything. A setting that mangled body content would make
+          #      EVERY destroy PR fail its apply gate — self-announcing. The PR
+          #      gate is best-effort early feedback; the apply gate is enforcement.
+          #   3. The field is readable and != COMMIT_MESSAGES -> the assumption is
+          #      actually broken; fail closed, named as a setting problem.
+          if ! squash_mode=$(gh api "repos/${REPO}" --jq '.squash_merge_commit_message // ""'); then
+            echo "::error::Could not read squash_merge_commit_message from the GitHub API (transport failure — 5xx / rate-limit / network). This is NOT an ack problem and NOT a repo-setting problem. Re-run the job; if it persists, check GitHub status. Failing closed because the gate cannot certify the ack without this read."
+            exit 1
+          fi
+          if [[ -z "$squash_mode" ]]; then
+            echo "::warning::This token cannot read squash_merge_commit_message (empty response — an administration-scoped field the GITHUB_TOKEN does not always return). NOT failing the PR gate on it: this is a read-permission limit, not a wrong setting. The post-merge apply gate reads the actual merge-commit message and fails closed on a missing [ack-destroy], so a genuinely un-acked destroy still cannot land. Proceeding to the ack check as best-effort early feedback."
+          elif [[ "$squash_mode" != "COMMIT_MESSAGES" ]]; then
+            echo "::error::This gate assumes the squash commit body is built from the branch commit messages (squash_merge_commit_message=COMMIT_MESSAGES), which is how a pre-staged [ack-destroy] reaches the merge commit. The repo reports '${squash_mode}', so that assumption is broken and this gate cannot certify the ack. Failing closed. Fix the repo setting, or rework the gate."
+            exit 1
+          fi
+
+          # Does a pre-staged [ack-destroy] actually survive into the squash
+          # commit? That is a question about GitHub's squash-body COMPOSITION,
+          # not about the raw commit messages — an ack in a commit BODY survives
+          # line-anchored, an ack used as a commit SUBJECT is rendered
+          # "* [ack-destroy]" and does not. Grepping the raw messages would green
+          # this gate on a subject-ack that the apply gate then rejects: #6074
+          # with extra steps. The emulation lives in a script so its branches are
+          # unit-tested (tests/scripts/test-sentry-squash-ack-detect.sh) and so
+          # its copy of the canonical regex is pinned as a distinct site by
+          # tests/scripts/test-destroy-guard-regex-parity.sh.
+          # `--paginate --slurp` (NOT --paginate --jq): gh applies --jq per PAGE
+          # and concatenates, so `--jq '[...]'` emits one array PER PAGE — two
+          # concatenated JSON documents on a >1-page PR, which is not parseable
+          # as a single array. gh also rejects --slurp together with --jq, so the
+          # flatten runs in a standalone jq. Verified against this PR.
+          # Fetch the commits in one step so a transport failure is distinguished
+          # from "ack absent". Piping gh straight into the detector would let a
+          # 5xx read as "no ack" (the detector sees empty input → exit 1), and the
+          # operator would be told to re-stage an ack that is already there. Under
+          # `set -uo pipefail` a failed `gh api` in the assignment aborts the step
+          # via the explicit rc check below, not via the ack branch.
+          commits_json=""
+          if ! commits_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" --paginate --slurp); then
+            echo "::error::Could not fetch this PR's commits from the GitHub API (transport failure — 5xx / rate-limit / network). This is NOT an ack problem. Re-run the job; if it persists, check GitHub status. Failing closed because the gate cannot certify the ack without the commit list."
+            exit 1
+          fi
+          ack_destroy=false
+          if printf '%s' "$commits_json" \
+             | jq '[.[][] | .commit.message]' \
+             | bash "${GITHUB_WORKSPACE}/scripts/sentry-squash-ack-detect.sh"; then
+            ack_destroy=true
+          fi
+
+          if [[ "$ack_destroy" == "true" ]]; then
+            echo "sentry destroy gate: PASS (${destroy_count} destroy(s) acknowledged via a pre-staged [ack-destroy])"
+            printf '%s\n' "$addresses" | sed 's/^/  destroys: /'
+            exit 0
+          fi
+
+          echo "::error::this PR destroys ${destroy_count} Sentry resource(s):"
+          printf '%s\n' "$addresses" | sed 's/^/::error::  /'
+          echo "::error::The merge commit must contain a line [ack-destroy]. Pre-stage it now so it survives the squash: put [ack-destroy] on its own line in the BODY of a commit on this branch (not the subject line — GitHub prefixes subjects with '* ' when it composes the squash body, which breaks the line anchor). Then this check goes green and the post-merge apply is authorized to destroy the resources listed above. If you did not intend to destroy anything, restore the resource block(s) instead."
+          exit 1
+
+  # Always-run aggregator (#6589, mirroring tenant-integration-required/#5585).
+  # THIS job — not plan_pr — is the required status check registered in the
+  # "CI Required" ruleset (infra/github/ruleset-ci-required.tf). It runs on every
+  # PR (`if: always()`) so a context is always reported, and asserts the verdict
+  # INSIDE a run: step — never via a job-level `if:`, which would report no
+  # context at all and reopen the path-filter gap the always-run shape closes.
+  # The verdict lives in a script so its branches are unit-tested
+  # (tests/scripts/test-sentry-destroy-gate-verdict.sh).
+  sentry-destroy-required:
+    needs: [detect-changes, plan_pr]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Aggregate gate verdict (fail-closed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          PLAN_RESULT: ${{ needs.plan_pr.result }}
+        run: bash scripts/sentry-destroy-gate-verdict.sh "$DETECT_RESULT" "$PLAN_RESULT"
+
   apply:
     needs: preflight
-    if: needs.preflight.outputs.skip != 'true'
+    # Event guard (#6589): this workflow now also triggers on pull_request and
+    # merge_group for the destroy gate. Without this guard, adding those triggers
+    # would make the APPLY job reachable from a PR — applying prod Sentry infra
+    # from an unreviewed branch. The PR path must be plan-only, always.
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
@@ -168,9 +524,52 @@ jobs:
         run: |
           set -euo pipefail
           which jq >/dev/null 2>&1 || sudo apt-get install -y jq
+          # Class D's state half. Terraform is initialised by the step above, so
+          # THIS caller can distinguish an unreclaimable orphan from a pending
+          # destroy — and it must, because this audit runs BEFORE `terraform
+          # plan`. Without the state half, a monitor whose block this very PR
+          # removed reads as Class D, fails the job, and the plan that would
+          # reclaim it never runs: the detector blocks its own cure and the
+          # monitor stays live and billing (#6074's end state, reached from the
+          # other side).
+          #
+          # A FILE, not a var: an empty state (legitimately zero cron monitors,
+          # where every live monitor IS a true orphan) must stay distinguishable
+          # from "state was never read". An empty var is indistinguishable from
+          # unset and would fail OPEN on exactly that case.
+          #
+          # `set -euo pipefail` is active, so a `terraform show` failure aborts
+          # the step rather than writing an empty file that would read as an
+          # empty state and flag all 49 monitors as orphans.
+          # State-read integrity, in the PRODUCER — the only place that can tell
+          # "state genuinely has zero cron monitors" from "the state read broke".
+          # A lost/empty remote state makes `terraform show -json` emit
+          # `{"format_version":"1.0"}` with NO `.values`, and the slug extractor's
+          # `.values...[]?` then silently yields zero rows → an empty file. The
+          # audit consumer cannot distinguish that from a legitimately-empty state
+          # (in which every live monitor IS a true Class D orphan — the case the
+          # feature exists to catch), so the guard MUST live here: assert the
+          # state document actually has `.values` before extracting. On a broken
+          # read, fail naming the real cause rather than shipping an empty file
+          # that the consumer reads as "all 49 monitors are orphans".
+          terraform -chdir="${INFRA_DIR}" show -json > /tmp/sentry-tfstate.json
+          if ! jq -e 'has("values")' /tmp/sentry-tfstate.json >/dev/null; then
+            echo "::error::terraform show -json returned no .values for ${INFRA_DIR} — the remote state read is broken (a lost/empty state serialises as {\"format_version\":\"1.0\"}). Refusing to derive the Class D state half from it: an empty derivation would make the audit report every live monitor as an orphan and halt the apply on the wrong cause. Re-check the R2 backend / state key."
+            exit 1
+          fi
+          jq -r '.values.root_module.resources[]?
+                 | select(.type == "sentry_cron_monitor")
+                 | .values.name' /tmp/sentry-tfstate.json > /tmp/sentry-state-slugs.txt
+          # SENTRY_STATE_REQUIRED=1 makes this caller's contract mechanical: if
+          # the export below is ever removed, the audit ERRORS instead of
+          # silently degrading to its warn path (a green apply that checked
+          # nothing). Declaring the contract is what stops a future edit from
+          # quietly disarming the gate.
+          export SENTRY_STATE_REQUIRED=1
+          export SENTRY_STATE_SLUGS_FILE=/tmp/sentry-state-slugs.txt
           bash apps/web-platform/scripts/sentry-monitors-audit.sh
 
-      - name: Terraform plan (cron + uptime monitors)
+      - name: Terraform plan (full root)
         id: plan
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -183,96 +582,28 @@ jobs:
           # after the rc-capture window per
           # `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
           set -uo pipefail
-          # NOTE: kb_tenant_mint_silent_fallback is deliberately ABSENT from
-          # the -target list below. The resource left issue-alerts.tf in #4929
-          # (superseded by kb_db_error) but was never destroy-applied, so an
-          # orphan remains in STATE and the live Sentry rule is inert (its
-          # producer is dead code). Purge on the next sentry apply by re-adding
-          # the target + an `[ack-destroy]` line in that PR's merge commit
-          # (PR #5089 postmerge exposed the latent destroy; the guard halted).
-          # Comments must NEVER sit inside the backslash-continued command —
-          # a mid-continuation comment terminates the command and the next
-          # `-target=` line executes as a bare command (exit 127; PR #5108).
-          terraform plan \
-            -target=sentry_cron_monitor.scheduled_terraform_drift \
-            -target=sentry_cron_monitor.scheduled_supabase_advisor_scan \
-            -target=sentry_cron_monitor.scheduled_domain_model_drift \
-            -target=sentry_cron_monitor.scheduled_oauth_probe \
-            -target=sentry_cron_monitor.scheduled_anthropic_cost_report \
-            -target=sentry_cron_monitor.scheduled_anthropic_credit_probe \
-            -target=sentry_cron_monitor.scheduled_github_app_drift_guard \
-            -target=sentry_cron_monitor.cron_github_cidr_refresh \
-            -target=sentry_cron_monitor.cron_kb_template_health \
-            -target=sentry_cron_monitor.scheduled_daily_triage \
-            -target=sentry_cron_monitor.scheduled_realtime_probe \
-            -target=sentry_cron_monitor.scheduled_skill_freshness \
-            -target=sentry_cron_monitor.scheduled_content_vendor_drift \
-            -target=sentry_cron_monitor.scheduled_community_monitor \
-            -target=sentry_cron_monitor.scheduled_gh_pages_cert_state \
-            -target=sentry_cron_monitor.scheduled_follow_through \
-            -target=sentry_cron_monitor.scheduled_strategy_review \
-            -target=sentry_cron_monitor.scheduled_roadmap_review \
-            -target=sentry_cron_monitor.scheduled_legal_audit \
-            -target=sentry_cron_monitor.scheduled_agent_native_audit \
-            -target=sentry_cron_monitor.scheduled_competitive_analysis \
-            -target=sentry_cron_monitor.scheduled_compound_promote \
-            -target=sentry_cron_monitor.scheduled_stale_deferred_scope_outs \
-            -target=sentry_cron_monitor.scheduled_inngest_cron_watchdog \
-            -target=sentry_cron_monitor.scheduled_inngest_health \
-            -target=sentry_cron_monitor.scheduled_bug_fixer \
-            -target=sentry_cron_monitor.scheduled_content_generator \
-            -target=sentry_cron_monitor.scheduled_ux_audit \
-            -target=sentry_cron_monitor.scheduled_supabase_disk_io \
-            -target=sentry_cron_monitor.scheduled_workspace_gc \
-            -target=sentry_cron_monitor.cron_egress_resolve \
-            -target=sentry_cron_monitor.cron_email_ingress_probe \
-            -target=sentry_cron_monitor.cron_weekly_release_digest \
-            -target=sentry_cron_monitor.cron_workspace_sync_health \
-            -target=sentry_cron_monitor.scheduled_campaign_calendar \
-            -target=sentry_cron_monitor.scheduled_cloud_task_heartbeat \
-            -target=sentry_cron_monitor.scheduled_content_publisher \
-            -target=sentry_cron_monitor.scheduled_growth_audit \
-            -target=sentry_cron_monitor.scheduled_growth_execution \
-            -target=sentry_cron_monitor.scheduled_linkedin_token_check \
-            -target=sentry_cron_monitor.scheduled_membership_health \
-            -target=sentry_cron_monitor.scheduled_plausible_goals \
-            -target=sentry_cron_monitor.scheduled_rule_prune \
-            -target=sentry_cron_monitor.scheduled_ruleset_bypass_audit \
-            -target=sentry_cron_monitor.scheduled_seo_aeo_audit \
-            -target=sentry_cron_monitor.scheduled_architecture_diagram_sync \
-            -target=sentry_cron_monitor.scheduled_weekly_analytics \
-            -target=sentry_cron_monitor.scheduled_nag_4216_readiness \
-            -target=sentry_cron_monitor.zot_restart_loop_alarm \
-            -target=sentry_uptime_monitor.soleur_apex \
-            -target=sentry_uptime_monitor.soleur_www \
-            -target=sentry_uptime_monitor.soleur_changelog_deep \
-            -target=sentry_uptime_monitor.soleur_acme_probe \
-            -target=sentry_issue_alert.byok_art_33_breach \
-            -target=sentry_issue_alert.byok_cap_exceeded \
-            -target=sentry_issue_alert.chat_message_save_failure \
-            -target=sentry_issue_alert.workspace_sync_health \
-            -target=sentry_issue_alert.kb_db_error \
-            -target=sentry_issue_alert.egress_blocked \
-            -target=sentry_issue_alert.stale_bot_pr \
-            -target=sentry_issue_alert.outbound_email_send_failure \
-            -target=sentry_issue_alert.workspaces_luks_drift \
-            -target=sentry_issue_alert.kb_sync_silent_failure \
-            -target=sentry_issue_alert.container_restart_burst \
-            -target=sentry_issue_alert.kb_sync_protected_fallback_failed \
-            -target=sentry_issue_alert.repo_resolver_divergence \
-            -target=sentry_issue_alert.disk_io_wal_concentration \
-            -target=sentry_issue_alert.sandbox_startup_failure \
-            -target=sentry_issue_alert.github_webhook_founder_ambiguous \
-            -target=sentry_issue_alert.inbox_action_required_notify_failure \
-            -target=sentry_issue_alert.zot_mirror_fallback_rate \
-            -target=sentry_issue_alert.web_terminal_boot_fatal \
-            -no-color -input=false -out=tfplan
+          # FULL ROOT (#6589) — no address scoping. The plan universe is
+          # `state UNION config`, which is what makes deleting a resource block
+          # produce a real destroy instead of a silent no-op. The destroy is then
+          # governed by the [ack-destroy] gate below and surfaced BEFORE merge by
+          # the sentry-destroy-required PR gate. Do not reintroduce address
+          # scoping here: it is unrepresentable for a resource whose block is
+          # gone, which is precisely how #4929 and #6074 orphaned live monitors.
+          terraform plan -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan failed (exit $rc)"
             exit $rc
           fi
           set -e
+          # Type-scope assertion against the PLAN (state UNION config) — see the
+          # identical call in the plan_pr job. The CI-side run of this guard sees
+          # only the .tf half; this run is the one that catches a state-only type
+          # whose array-of-blocks shrink the filter would silently count as 0.
+          plan_types=$(terraform show -json tfplan | jq -r '[.resource_changes[].type] | unique | .[]')
+          SENTRY_STATE_TYPES="$plan_types" \
+            bash "${GITHUB_WORKSPACE}/tests/scripts/test-destroy-guard-sentry-scope-guard.sh"
+
           terraform show -no-color tfplan > tfplan.txt
           # Authoritative destroy count via the structured plan, not the
           # `Plan: …` summary line. The summary-line grep is brittle and
@@ -283,18 +614,11 @@ jobs:
           # path-specific per the #4420 plan-review iteration. Source of
           # truth: tests/scripts/lib/destroy-guard-filter-sentry.jq (also
           # exercised by tests/scripts/test-destroy-guard-counter-sentry.sh).
-          counts=$(terraform show -json tfplan | \
-            jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-sentry.jq")
-          resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
-          nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
-          # Validate counters parsed correctly — empty values from a jq
-          # failure would silently evaluate false in the `-gt 0` test and
-          # let destructive plans slip past the guard.
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}')."
-            exit 1
-          fi
-          destroy_count=$((resource_deletes + nested_deletes))
+          # Counts + validation + the destroy_count sum come from ONE script that
+          # the plan_pr gate above calls identically — see its header for why
+          # (these blocks were inline in both jobs and the arithmetic drifted).
+          terraform show -json tfplan > /tmp/sentry-apply-plan.json
+          eval "$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-apply-plan.json)"
           # Anchor `[ack-destroy]` to its own line (start-of-string OR
           # preceded by newline; followed by newline OR end-of-string) so
           # the token cannot fire from a quoted block, code fence, or

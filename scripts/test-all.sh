@@ -209,6 +209,22 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
+  # #6589 — the Sentry full-root delete path. These three gate the contract that
+  # makes `terraform destroy` reachable at all for infra/sentry/**: the absence of
+  # address-scoping in the apply (the #6074/#4929 root cause), the fail-closed
+  # aggregator verdict, and the squash-body emulation that decides whether a
+  # pre-staged [ack-destroy] will actually reach the merge commit.
+  run_suite "tests/scripts/sentry-destroy-counts" bash tests/scripts/test-sentry-destroy-counts.sh
+  run_suite "tests/scripts/sentry-full-root-apply" bash tests/scripts/test-sentry-full-root-apply.sh
+  run_suite "tests/scripts/sentry-destroy-gate-verdict" bash tests/scripts/test-sentry-destroy-gate-verdict.sh
+  run_suite "tests/scripts/sentry-squash-ack-detect" bash tests/scripts/test-sentry-squash-ack-detect.sh
+  run_suite "tests/scripts/sentry-create-gate" bash tests/scripts/test-sentry-create-gate.sh
+  # Class D (live monitor with no .tf block) is the delete path's other half: the
+  # full-root apply can only reclaim a monitor the config once declared. Its whole
+  # value is the non-zero exit — registered here because nothing auto-discovers
+  # tests/scripts/, and an unregistered suite would leave the gate's fail-closed
+  # claim asserted nowhere.
+  run_suite "tests/scripts/sentry-monitors-audit-class-d" bash tests/scripts/test-sentry-monitors-audit-class-d.sh
   # md->Slack-mrkdwn converter (scripts/md-to-mrkdwn.mjs). Runs under stock
   # ubuntu-latest node (no setup-node — same bare-`node` precedent as
   # secret-scan.yml). node --test ships in Node >=18.

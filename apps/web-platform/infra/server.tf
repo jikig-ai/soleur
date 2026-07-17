@@ -404,6 +404,30 @@ resource "terraform_data" "container_restart_monitor_install" {
 # Source of truth for jail content: fail2ban-sshd.local (sibling file).
 # Shows as "will be created" in CI drift reports -- expected behavior.
 # Runbook for acute lockout recovery: knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md
+#
+# Why the jail carries `ignoreip = ... 10.0.1.0/24` (#6594). The rationale lives here, not in
+# the .local file: that file is base64'd into user_data whole (see the keep-inline note above),
+# so its comments are byte-budgeted while .tf comments are free.
+#
+# Until #6594 pinned the tunnel ingress, `ssh.` resolved to `ssh://localhost:22`, so sshd saw
+# every tunnelled CI login as 127.0.0.1 — covered by fail2ban's default loopback ignore. Pinning
+# the ingress to web-1's private IP means a PEER connector (web-2, 10.0.1.11) now proxies in from
+# a REAL source address, which `ignoreself` does not cover (it covers only web-1's own IPs).
+#
+# Without the grant, a key-mismatch window (`-replace=tls_private_key.ci_ssh`, or a fresh web-1
+# before root_authorized_keys lands) puts >=5 failures in 10m from 10.0.1.11 and bans it —
+# killing `ssh.` for the ~half of CF colos routed via that connector, for 10m rising to 1h. That
+# is a failure AMPLIFIER on the one path with no in-band recovery: ssh-fail2ban-unban.md calls a
+# fail2ban lockout "the one operator task where the Hetzner Cloud Console (noVNC) is the only
+# tool".
+#
+# The private net is not an attack surface fail2ban should police: it is unreachable from the
+# internet (firewall.tf admits only 22/80/443/icmp on the public interface), and its only members
+# are our own hosts.
+#
+# SCOPE: this grant exists because a peer connector proxies to web-1. It is web-2-lifetime-scoped
+# — #6538 (retire the fsn1 orphan) removes the only peer, after which the 10.0.1.0/24 clause is
+# vestigial and should be re-evaluated rather than inherited.
 resource "terraform_data" "fail2ban_tuning" {
   triggers_replace = sha256(file("${path.module}/fail2ban-sshd.local"))
 
@@ -898,8 +922,14 @@ resource "terraform_data" "deploy_pipeline_fix" {
   #
   # Secondary benefit: the edge also serializes the bridge's synchronous
   # webhook-listener restart (server.tf:529, an existing Terraform-managed remote-exec)
-  # BEFORE this push's `provisioner "local-exec"` below, so the push never races a
-  # mid-flight listener restart (a connection-reset window that exists today).
+  # BEFORE this push's `provisioner "local-exec"` below. This NARROWS the connection-
+  # reset window but does NOT close it — the ordering is a happens-before on Terraform's
+  # graph, not a wait-for-ready on the listener. nonce-1 (#6313, 2026-07-10;
+  # push-infra-config.sh:25-31) is the counterexample: the bridge's `systemctl restart
+  # webhook` returned ~10ms BEFORE the push fired, yet the webhook was still coming up,
+  # so the push RACED the mid-flight restart — it got HTTP 202 from the restarting
+  # listener but the async handler exec was disrupted and no files landed. The race is
+  # real; the edge only makes it less likely, it is not a guarantee.
   #
   # The apparmor_bwrap_profile element is unchanged (#1570, see the note above).
   # Do NOT "simplify" either element away — see ship-deploy-pipeline-fix-gate.test.ts.

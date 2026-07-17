@@ -34,9 +34,12 @@ on:
       # guard's whole job is to catch a gate that looks present but does nothing
       # — so a guard that cannot fire when its own subjects are edited would be
       # that same defect. cron-monitors.tf is already covered by apps/*/infra/**;
-      # these five are not. Notably apply-sentry-infra.yml, whose -target= list
-      # is enumerated per-resource: dropping the monitor's line there leaves it
-      # declared but never applied, which is silent and green without this path.
+      # these five are not. apply-sentry-infra.yml is here because its plan gate
+      # and destroy gate are what make an infra/sentry/** change safe: since
+      # #6589 it plans the FULL ROOT (declared ≡ applied — the per-resource
+      # `-target=` list that could leave a monitor declared-but-never-applied is
+      # gone), so the risk moved from a dropped allow-list line to a weakened
+      # gate. Editing that workflow must still be able to trip this guard.
       - ".github/workflows/scheduled-supabase-advisor-scan.yml"
       - ".github/workflows/apply-sentry-infra.yml"
       - "scripts/supabase-advisor-scan.sh"
@@ -374,6 +377,15 @@ jobs:
       # ships as zero coverage — the trap tests/scripts/test-stock-preflight-gate.sh documents.
       - name: Run tunnel origin_request schema-type guard (#6511 connect_timeout string vs int)
         run: bash apps/web-platform/infra/tunnel-origin-request-types.test.sh
+
+      - name: Run tunnel origin-relative ingress guard (#6594 ADR-114 I2 coin-flipped management plane)
+        run: bash apps/web-platform/infra/tunnel-origin-relative-ingress.test.sh
+
+      - name: Run tunnel-ingress verify infra-dir resolution guard (#6595 relative-INFRA_DIR cd)
+        run: bash apps/web-platform/infra/verify-tunnel-ingress-origin-infradir.test.sh
+
+      - name: Run infra-config apply gate adjudicator guard (#6594 content assert vs stale-same-count)
+        run: bash apps/web-platform/infra/infra-config-gate.test.sh
 
       - name: Run ci-deploy-wrapper.sh tests
         run: bash apps/web-platform/infra/ci-deploy-wrapper.test.sh

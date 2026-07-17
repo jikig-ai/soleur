@@ -493,6 +493,42 @@ jobs:
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
 
+      # Tunnel ingress origin verification (#6594 / ADR-114 I2).
+      #
+      # WHY THIS EXISTS: `terraform apply` of a Cloudflare tunnel config ALWAYS
+      # succeeds — CF accepts an ingress `service` without ever checking the origin is
+      # reachable. So a wrong origin (bad IP, wrong port, an un-converged private NIC)
+      # applied GREEN and took out the management plane silently. Nothing else caught
+      # it: apply-deploy-pipeline-fix.yml does NOT fire on tunnel.tf (its `paths:`
+      # lists explicit .sh files + server.tf), and the SSH bridge's readiness check is
+      # `nc -z 127.0.0.1 2222`, which proves only that the LOCAL cloudflared listener
+      # opened — true whether or not the origin answers. A tunnel.tf-only merge had
+      # ZERO post-apply verification: the same "closed by construction, verified by
+      # nothing" defect (#6425/#6594) this change exists to retire. Do not delete
+      # without a replacement that reads the LIVE config plane.
+      #
+      # Two instruments, because they prove different things:
+      #   (a) CF API config read-back — authoritative, vantage-free. Proves the edge
+      #       holds the config we intended.
+      #   (b) HMAC probe of /hooks/deploy-status — proves the pinned origin is
+      #       actually SERVING. (a) cannot: a perfect config pointing at a dead origin
+      #       reads back clean.
+      #
+      # Deliberately NOT a data-plane distribution check: connector selection is
+      # colo-STICKY (scheduled-inngest-health.yml — on 2026-07-15, 10/10 identical EU
+      # reads "proved" inngest was down while a US runner read it healthy). Polling N
+      # times from one runner colo samples ONE sticky binding N times, not a
+      # distribution. (b) asserts an INVARIANT (the route serves), which is
+      # colo-independent and needs no control arm.
+      - name: Verify tunnel ingress origins are live and origin-relative
+        if: success()
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh"
+
       # Bootstrap-cycle guard (#4195): on the FIRST apply that creates
       # `github_actions_secret.doppler_token_write`, the runner started
       # before the secret existed — interpolation returns empty for
