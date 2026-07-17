@@ -31,7 +31,13 @@ EMIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspaces-luks-emit.sh"
 # shellcheck source=apps/web-platform/infra/workspaces-luks-emit.sh
 [ -f "$EMIT" ] && . "$EMIT"
 
-log() { logger -t "$LOG_TAG" -- "$*" 2>/dev/null || true; echo "[$LOG_TAG] $*"; }
+# `logger -t` on its OWN line (not after `log() {`) so the vector-pii-scrub.test.sh AC3 emitter
+# extractor — which gates on `(^|\|)\s*logger -t` before deriving LOG_TAG — sees this channel and
+# includes "luks-monitor" in the expected SYSLOG_IDENTIFIER set (matching the vector.toml allowlist).
+log() {
+  logger -t "$LOG_TAG" -- "$*" 2>/dev/null || true
+  echo "[$LOG_TAG] $*"
+}
 
 # Discriminating-field accumulators (exported to workspaces-luks-emit.sh on failure).
 WL_DEVICE_TYPE=unknown WL_MOUNT_SOURCE=unknown WL_MAPPER_PRESENT=unknown

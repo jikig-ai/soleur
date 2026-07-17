@@ -18,12 +18,22 @@ on:
     paths:
       - "apps/web-platform/infra/vector.toml"
       - "apps/web-platform/infra/vector.tf"
+      # AC3 derives the expected SYSLOG_IDENTIFIER set from the infra emitter
+      # scripts (SyslogIdentifier= / logger -t / LOG_TAG=), so an emitter-only
+      # change (e.g. a new luks-monitor.sh) must re-run this guard — else a
+      # tag-set drift on those files goes untriggered and main stays stale-red.
+      - "apps/web-platform/infra/*.sh"
       - "apps/web-platform/test/infra/**"
       - ".github/workflows/validate-vector-config.yml"
   pull_request:
     paths:
       - "apps/web-platform/infra/vector.toml"
       - "apps/web-platform/infra/vector.tf"
+      # AC3 derives the expected SYSLOG_IDENTIFIER set from the infra emitter
+      # scripts (SyslogIdentifier= / logger -t / LOG_TAG=), so an emitter-only
+      # change (e.g. a new luks-monitor.sh) must re-run this guard — else a
+      # tag-set drift on those files goes untriggered and main stays stale-red.
+      - "apps/web-platform/infra/*.sh"
       - "apps/web-platform/test/infra/**"
       - ".github/workflows/validate-vector-config.yml"
 

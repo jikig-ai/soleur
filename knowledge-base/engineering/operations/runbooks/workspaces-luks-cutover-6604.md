@@ -41,11 +41,15 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    drop mid-freeze still auto-rolls-back to the plaintext mount, and a host-local dead-man timer
    remounts plaintext if no orchestrator heartbeat lands.
 
+<!-- lint-infra-ignore start: C15 boot-path re-canary is a deliberately-retained deferred-orchestrator
+     operator step — the cutover does NOT auto-reboot (a reboot drops the SSH session mid-run), so the
+     one host-reboot is operator-gated by design and cannot be routed through the dispatch. -->
 4. **Boot-path re-canary (C15) — operator step, after the freeze.** The cutover does NOT auto-reboot
    (a reboot drops the SSH session mid-run). The realistic failure is the boot path (the structural
    fail-closed gate + the `--restart unless-stopped` resurrection), so prove it explicitly: **reboot
    web-1 once**, then run the read-only verify below. The run-keyed `CANARY_OK` persisted to the host
    state file cannot satisfy a fresh post-reboot check — only a new green verify does.
+<!-- lint-infra-ignore end -->
 
 5. **Verify (read-only, no SSH).**
    `gh workflow run workspaces-luks-verify.yml` → conclusion `success` means `blkid`=`crypto_LUKS`,
