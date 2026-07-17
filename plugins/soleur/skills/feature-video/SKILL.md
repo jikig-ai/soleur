@@ -172,7 +172,12 @@ Execute the planned flow, capturing each step:
 
 **Step 1: Navigate to starting point**
 
+On Linux (Ubuntu 23.10+, containers, VMs), export the no-sandbox launch flag once
+before the first command — otherwise Chrome cannot launch and `open` hangs (see the
+`agent-browser` skill's "Chrome fails to launch / `open` hangs" troubleshooting):
+
 ```bash
+export AGENT_BROWSER_ARGS="--no-sandbox"
 agent-browser open "[base-url]/[start-route]"
 agent-browser wait 2000
 agent-browser screenshot tmp/screenshots/01-start.png

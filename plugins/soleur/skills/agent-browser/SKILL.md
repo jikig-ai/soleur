@@ -23,6 +23,55 @@ agent-browser install  # Downloads Chrome for Testing (~300MB)
 # agent-browser install --with-deps
 ```
 
+### Required launch flag on Linux: `--no-sandbox`
+
+On Ubuntu 23.10+, containers, and VMs, the host's AppArmor policy restricts
+unprivileged user namespaces, so Chrome for Testing cannot initialize its zygote
+sandbox and the browser fails to launch. Export the no-sandbox flag once per
+session **before the first `agent-browser` command** — the daemon reads it at
+launch and every later command in the session inherits it:
+
+```bash
+export AGENT_BROWSER_ARGS="--no-sandbox"
+```
+
+Inline alternative (first `open` only): `agent-browser open <url> --args "--no-sandbox"`.
+This confines `--no-sandbox` to agent-browser's own ephemeral automation Chrome —
+the same posture Playwright already runs here; it does not touch your real browser.
+
+### Troubleshooting: Chrome fails to launch / `open` hangs (no usable sandbox)
+
+Symptom on pinned 0.22.3: `agent-browser open <url>` **hangs indefinitely** with
+zero stdout/stderr (even `--debug` prints nothing). On newer versions it fails
+fast with `No usable sandbox! ... unprivileged user namespaces ... AppArmor` and a
+`--args "--no-sandbox"` hint. Both are the same cause.
+
+1. Set the launch flag: `export AGENT_BROWSER_ARGS="--no-sandbox"` (see above).
+2. If it still fails, a stale/wedged daemon may be holding the socket. Clear it:
+   `pkill -f agent-browser-linux-x64; rm -rf /tmp/agent-browser/* "/run/user/$(id -u)/agent-browser/"*`
+   then retry. (Never kill `playwright-mcp` processes — those are a separate stack.)
+3. Verify: `AGENT_BROWSER_ARGS="--no-sandbox" timeout 45 agent-browser open https://example.com --headless` → exit 0 + a `✓` line.
+
+### Troubleshooting: Playwright MCP backend closed between calls
+
+This is the **other** browser-automation symptom #6605 reported (the "MCP tools
+de-register" half) — distinct from the agent-browser CLI hang above, and covering the
+Playwright **MCP** stack. If a `mcp__playwright__browser_*` call returns
+`browserBackend.callTool: Target page, context or browser has been closed`, the browser
+backend dropped while the MCP server itself stayed registered (a lifecycle event, not a
+dead tool).
+
+Known root cause on this host: a Wayland/Vulkan GPU crash — already diagnosed and
+remediated in `.claude/playwright-mcp.config.json` (forces the X11/XWayland backend
+and disables the GPU); see `knowledge-base/project/learnings/workflow-patterns/2026-06-17-playwright-mcp-wayland-vulkan-launch-crash.md`.
+If it still recurs, recycle the context and re-navigate (the pattern in
+`plugins/soleur/skills/qa/SKILL.md`: `browser_close` — safe even if already closed —
+then `browser_navigate`); the backend restarts. Note that snapshot `ref=` handles do
+**not** survive the restart; target elements by name/selector
+(`button:has-text("Save")`, `input[aria-label="..."]`) across it. A separate
+`"these deferred tools are no longer available"` notice means the MCP server
+disconnected (reload via `ToolSearch`) — a different failure from the backend-close.
+
 ### Troubleshooting: version mismatch
 
 If you see "Version mismatch between agent-browser (expects 1200) and installed Playwright (1208)":
