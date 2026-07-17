@@ -188,6 +188,35 @@ else
   fail "mutation M3: expected template_exclusion_drift with 2 template dests (rc=$rc); got: $OUT"
 fi
 
+# M4 — the `missing` class arm (repo/FILE_MAP drift) is live. A FILE_MAP dest whose repo
+# file is absent from the checkout (nor a .tmpl) must fail loud, not certify an
+# un-checkable delivery. Build a synthetic dir with one comparable file removed → that
+# dest classifies `missing`. (Review test-design F2: this arm had zero prior coverage
+# because the fixture builder created a real file for both comparable AND missing dests.)
+M4DIR="$TMP/infra-missing"
+mkdir -p "$M4DIR"
+cp -r "$SYNTH"/. "$M4DIR"/
+rm -f "$M4DIR/ci-deploy.sh"   # neither ci-deploy.sh nor ci-deploy.sh.tmpl → missing
+OUT="$(infra_config_content_assert "$FRESH" "$M4DIR" "$M4DIR/infra-config-apply.sh" 2>&1)"; rc=$?
+if [[ "$rc" -ne 0 ]] && grep -qF 'content_gate_repo_file_missing:/usr/local/bin/ci-deploy.sh' <<<"$OUT"; then
+  pass "mutation M4: a FILE_MAP dest with no repo file fails loud (missing-class arm live)"
+else
+  fail "mutation M4: expected content_gate_repo_file_missing for the removed repo file (rc=$rc); got: $OUT"
+fi
+
+# M5 — the `status != "ok"` guard is independently live. A delivery entry that is PRESENT
+# and carries a MATCHING sha but reports status:"failed" must still fail — the gate's
+# contract is "ok delivery", not "a sha exists". (Review test-design F3: M2 only ever hit
+# the empty-sha clause via entry deletion, leaving the status clause vacuously covered.)
+M5="$TMP/mut-status-failed.json"
+jq '(.files[] | select(.file=="/usr/local/bin/ci-deploy.sh") | .status) = "failed"' "$FRESH" > "$M5"
+OUT="$(adjudicate_infra_config "$M5" "$SYNTH" "$SYNTH/infra-config-apply.sh" 2>&1)"; rc=$?
+if [[ "$rc" -ne 0 ]] && grep -qF 'content_mismatch:/usr/local/bin/ci-deploy.sh' <<<"$OUT"; then
+  pass "mutation M5: a present, sha-matching, status:failed delivery fails (status guard live)"
+else
+  fail "mutation M5: expected content_mismatch for the status:failed entry (rc=$rc); got: $OUT"
+fi
+
 # ===================================================================================
 # Registration self-check (AC-3d): the suite must be wired into infra-validation.yml.
 # ===================================================================================
@@ -196,6 +225,37 @@ if [[ -f "$INFRA_VALIDATION" ]] \
   pass "suite is registered as an explicit step in infra-validation.yml (AC-3d, #5417 class)"
 else
   fail "suite is NOT registered in infra-validation.yml — it would be an orphan (#5417 class)"
+fi
+
+# ===================================================================================
+# Production call-site pin (review test-design F1): the whole point of this gate is that
+# apply-deploy-pipeline-fix.yml INVOKES the content assert TERMINALLY. Testing the
+# adjudicator's logic in isolation is vacuous if the workflow doesn't call it, or calls
+# it inside the retry loop (any-of-3 coin flip, #6594). This test pins that wiring so
+# deleting or in-loop-moving the call reds the suite — not just the workflow.
+# ===================================================================================
+APPLY_WF="$REPO_ROOT/.github/workflows/apply-deploy-pipeline-fix.yml"
+if [[ ! -f "$APPLY_WF" ]]; then
+  fail "apply-deploy-pipeline-fix.yml not found — cannot verify the gate is wired into prod"
+else
+  # (a) the terminal adjudication is called at all
+  adj_line=$(grep -nE '(^|[^_[:alnum:]])adjudicate_infra_config[[:space:]]+/tmp/' "$APPLY_WF" | head -1 | cut -d: -f1)
+  # (b) the in-loop fast-path uses count_invariant (NOT adjudicate)
+  ci_line=$(grep -nE 'infra_config_count_invariant[[:space:]]+/tmp/' "$APPLY_WF" | head -1 | cut -d: -f1)
+  if [[ -z "$adj_line" ]]; then
+    fail "apply-deploy-pipeline-fix.yml does NOT call adjudicate_infra_config — the #6594 content assert is DEAD in production"
+  elif [[ -z "$ci_line" ]]; then
+    fail "apply-deploy-pipeline-fix.yml does NOT use infra_config_count_invariant as the poll-loop break"
+  else
+    # (c) the count_invariant call is inside a loop that CLOSES before the adjudicate call:
+    #     require a `done` line strictly between them → adjudicate is terminal, outside the loop.
+    between_done=$(awk -v a="$ci_line" -v b="$adj_line" 'NR>a && NR<b && $1=="done"{print NR; exit}' "$APPLY_WF")
+    if [[ "$ci_line" -lt "$adj_line" && -n "$between_done" ]]; then
+      pass "gate is wired into prod: count_invariant in-loop (L$ci_line), adjudicate_infra_config terminal after the loop's done (L$between_done < L$adj_line) — content assert is NOT any-of-3 (F1)"
+    else
+      fail "adjudicate_infra_config is not terminal: count L$ci_line, adjudicate L$adj_line, loop-done-between=${between_done:-none}. A content assert inside the retry loop is the #6594 coin flip."
+    fi
+  fi
 fi
 
 # --- non-vacuity floor: the synthetic FILE_MAP produced a real, non-empty set --------

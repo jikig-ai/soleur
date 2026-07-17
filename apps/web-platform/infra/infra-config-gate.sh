@@ -37,10 +37,12 @@ infra_config_expected_count() {
 #                rendered with secrets interpolated (hooks.json ← hooks.json.tmpl),
 #                so its content is NOT comparable. Excluded from the content assert.
 #   missing    — neither present; a repo/FILE_MAP drift the gate must fail loud on.
-# The template exclusion is DERIVED from the .tmpl property, never hardcoded — and
-# adjudicate_infra_config asserts there is exactly one, so a drift in that property
-# (a new template dest, or hooks.json.tmpl renamed) fails loud instead of silently
-# widening the set of files skipped from the content check.
+# The exclusion MEMBERSHIP is DERIVED from the .tmpl property, never hardcoded (no dest
+# path is named in code). The expected CARDINALITY is pinned: infra_config_content_assert
+# asserts exactly ONE template dest (hooks.json today). That pin is fail-loud on purpose —
+# a NEW template-backed FILE_MAP dest (or hooks.json.tmpl renamed) reds the gate until the
+# count is deliberately updated, rather than silently widening the set of files skipped
+# from the content check. Membership auto-tracks; cardinality is a reviewed constant.
 infra_config_classify_files() {
   local apply_script="$1" infra_dir="$2"
   local dest base
@@ -108,7 +110,13 @@ infra_config_content_assert() {
           echo "::error::content_mismatch:$dest — no ok delivery entry in the status JSON (status='${host_status:-none}'). The apply did not report a clean write for this file."
           rc=1
         elif [[ "$host_sha" != "$repo_sha" ]]; then
-          echo "::error::content_mismatch:$dest — host sha256=$host_sha but repo sha256=$repo_sha. The apply reported success while the host is serving different bytes than the commit it applied (#6594)."
+          # host_sha is the digest of the payload the handler decoded on the apply
+          # that PRODUCED this status (infra-config-apply.sh sha256's the staged temp,
+          # not the installed file), so a mismatch means the status was produced by an
+          # apply whose payload differs from this commit's repo file — i.e. a stale or
+          # mis-delivered status, not necessarily the bytes currently on disk. That
+          # stale-status shape IS #6594 (a status latched from an earlier, smaller apply).
+          echo "::error::content_mismatch:$dest — host sha256=$host_sha but repo sha256=$repo_sha. This status did not originate from an apply of this commit's ${base} (stale or mis-delivered apply, #6594)."
           rc=1
         fi
         ;;

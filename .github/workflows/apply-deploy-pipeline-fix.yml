@@ -408,7 +408,12 @@ jobs:
           # (infra-config-gate.sh; infra-config-gate.test.sh drives it). CWD is INFRA_DIR.
           # shellcheck source=/dev/null
           source ./infra-config-gate.sh
-          EXPECTED_COUNT=$(infra_config_expected_count infra-config-apply.sh)
+          # `|| true`: infra_config_expected_count ends in `grep -c`, which exits 1 on
+          # zero matches. Without this, a zero-row FILE_MAP would abort the step here
+          # under `set -eo pipefail` BEFORE the numeric guard below can emit its
+          # diagnostic (review, code-quality P-low). The guard still fails closed —
+          # an empty EXPECTED_COUNT trips the regex check.
+          EXPECTED_COUNT=$(infra_config_expected_count infra-config-apply.sh || true)
           if [[ ! "$EXPECTED_COUNT" =~ ^[0-9]+$ || "$EXPECTED_COUNT" -eq 0 ]]; then
             echo "::error::Could not derive EXPECTED FILE_MAP count from infra-config-apply.sh (got '$EXPECTED_COUNT')."
             exit 1
