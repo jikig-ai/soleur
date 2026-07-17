@@ -73,14 +73,15 @@ write_files:
 
   # #4144 — permits ci-deploy.sh to invoke inngest-bootstrap.sh as root
   # from the fixed path /tmp/inngest-extract/ (no wildcards, sudo-rs safe).
-  # env_keep preserves INNGEST_CLI_VERSION + SHA + DOPPLER_PROJECT (#6536) across sudo.
+  # env_keep preserves INNGEST_CLI_VERSION + SHA across sudo. (#6555 dropped DOPPLER_PROJECT —
+  # units now read it from EnvironmentFile=/etc/default/inngest-server, not the sudo-inherited env.)
   # Mirrored in apps/web-platform/infra/deploy-inngest-bootstrap.sudoers (rationale lives
   # there — this file is base64gzip'd into user_data against a byte budget)
   # so terraform_data.deploy_pipeline_fix can refresh existing hosts.
   - path: /etc/sudoers.d/deploy-inngest-bootstrap
     content: |
       Cmnd_Alias INNGEST_BOOTSTRAP = /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh
-      Defaults!INNGEST_BOOTSTRAP env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256 VECTOR_CLI_VERSION VECTOR_CLI_SHA256 DOPPLER_PROJECT"
+      Defaults!INNGEST_BOOTSTRAP env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256 VECTOR_CLI_VERSION VECTOR_CLI_SHA256"
       deploy ALL=(root) NOPASSWD: INNGEST_BOOTSTRAP
 
       # #3756 — permits infra-config-apply.sh to schedule a delayed webhook restart

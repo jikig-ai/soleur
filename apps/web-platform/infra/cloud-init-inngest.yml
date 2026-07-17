@@ -321,7 +321,11 @@ runcmd:
   # Same content + umask 0137 (mode 0640) + root:deploy the bootstrap itself writes (:238-245); deploy
   # must exist first (created above). The unit's User=deploy gets HOME=/home/deploy from systemd, so
   # this env file carries DOPPLER_CONFIG_DIR (not HOME).
-  - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-server )
+  # #6555: DOPPLER_PROJECT=soleur-inngest lands in the env-file so the inngest units (which
+  # dropped `--project`) resolve the dedicated project from EnvironmentFile at runtime. Literal
+  # here (not $DOPPLER_PROJECT) — this cloud-init write runs BEFORE the bootstrap that would set
+  # the shell var; the dedicated host is always soleur-inngest.
+  - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_PROJECT=soleur-inngest\n' '${doppler_token}' > /etc/default/inngest-server )
   - chown root:deploy /etc/default/inngest-server
 
   # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
