@@ -96,13 +96,17 @@ EOF
 make_mock "$WORK/fx-empty.json" 0
 run_case "host column all-empty -> TRANSIENT (no vacuous PASS)" 2
 
-# 7. FAIL — web-2 collision too (both web identities are keyed), dedicated node live.
-cat > "$WORK/fx-fail-web2.json" <<'EOF'
+# 7. PASS — web-2 RETIRED (#6538): soleur-web-2 is no longer a live web identity, so a stale
+#    soleur-web-2 row emitting the mislabel must NOT be read as a live web-host collision. Only
+#    the dedicated node emits the label (correctly) → PASS (exit 0). This is the post-retirement
+#    inverse of the old "web-2 collision -> FAIL" case: a lingering retired-host row from the
+#    merge->destroy window (or afterward) must not resurrect a false #6616 alarm.
+cat > "$WORK/fx-retired-web2.json" <<'EOF'
 {"host_name":"soleur-inngest-prd","host":"soleur-web-2","n":88}
 {"host_name":"soleur-inngest-prd","host":"soleur-inngest","n":5096}
 EOF
-make_mock "$WORK/fx-fail-web2.json" 0
-run_case "web-2 also keyed as a collision -> FAIL" 1
+make_mock "$WORK/fx-retired-web2.json" 0
+run_case "retired soleur-web-2 row is NOT a live collision -> PASS" 0
 
 # 8. FAIL takes PRECEDENCE over the liveness gate — a live web collision while the dedicated
 #    node is momentarily silent must be FAIL (exit 1), NOT TRANSIENT. Pins the documented
