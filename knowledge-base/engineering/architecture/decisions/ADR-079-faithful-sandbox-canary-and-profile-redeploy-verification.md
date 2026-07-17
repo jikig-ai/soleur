@@ -446,8 +446,14 @@ image ID (keyed off the literal container name `soleur-web-platform`) as `VERIFI
 amendment to the **ADR-087** cosign contract (re-verifying identical @sha256 bits is a no-op;
 skipping it explicitly is the honest posture vs. silently falling through the `warn`-mode
 fail-open), and a THIRD tier on **ADR-096**'s zot→GHCR pull chain (a future §5.3 GHCR-retirement
-editor must see it). Blast radius for any genuine version change is zero (a re-pushed tag / stale
-leftover / new-version deploy is never the running image ID → hard `image_pull_failed` unchanged).
+editor must see it). Blast radius for any genuine version change is zero: the tier fires ONLY for a
+**same-version reload** — the running container's image must itself carry a `<ref>:$TAG` RepoTag
+(it was pulled under that tag at its original deploy). A NEW-version deploy whose tag both registries
+failed to serve is NOT on the older running image, so it falls through to the existing hard
+`image_pull_failed` — reusing the running image there would silently serve stale bits and report the
+new release as "deployed" (ci-deploy runs no post-deploy version assertion; this same-version guard
+is the encoded form of that safety invariant, not prose). Any tag ambiguity fails SAFE (hard fail →
+Fix 2a alarms), never a stale-bits deploy.
 Usage is a MONITORED `registry=local-cache level=warning` emit → the DEDICATED
 `local_cache_reload_rate` issue-alert (NOT folded into `zot_mirror_fallback_rate`, whose
 `ghcr-fallback` signal gates the irreversible ADR-096 §5.5 GHCR retirement — `local-cache` means

@@ -1435,6 +1435,20 @@ _try_local_cache_reload() {
   running_img_id="$(docker inspect --format '{{.Image}}' soleur-web-platform 2>/dev/null || true)"
   [[ -n "$running_img_id" ]] || return 1
   docker image inspect "$running_img_id" >/dev/null 2>&1 || return 1
+  # SAME-VERSION reload ONLY (P0 correctness): the running image must itself be tagged with the tag
+  # we are (re)deploying. The item-4 seccomp redeploy targets v<running_version> by construction
+  # (#5955), so the running image carries a `<ref>:$TAG` RepoTag from its original pull. A genuine
+  # NEW-version deploy whose tag both registries failed to serve is NOT on the (older) running
+  # image, so it falls through to the existing hard image_pull_failed — reusing the running image
+  # there would silently serve stale bits and report the new release as "deployed" (a version
+  # rollback masked as success; ci-deploy runs no post-deploy version assertion). Suffix match is
+  # ref-agnostic (tolerates the zot/ghcr prefix); ANY tag ambiguity fails SAFE (hard fail → Fix 2a
+  # alarms) rather than risk a stale-bits deploy.
+  local _rt _reload_match=0
+  while IFS= read -r _rt; do
+    [[ "$_rt" == *":$TAG" ]] && { _reload_match=1; break; }
+  done < <(docker image inspect --format '{{range .RepoTags}}{{println .}}{{end}}' "$running_img_id" 2>/dev/null || true)
+  [[ "$_reload_match" == "1" ]] || return 1
   registry_pull_event "local-cache" "$image_kind" "$TAG"
   cosign_verify_event "reused_local_reload" "$running_img_id" \
     "both registries down; reusing the already-verified running image for a same-version seccomp reload (#6512)"

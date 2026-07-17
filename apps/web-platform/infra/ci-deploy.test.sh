@@ -375,13 +375,23 @@ if [[ "${1:-}" == "pull" ]]; then
   fi
 fi
 
-# #6512: `docker image inspect <id>` — the local-cache reload tier's presence probe
-# for the running container's image. Present (exit 0) iff <id> equals the armed
-# MOCK_RUNNING_IMAGE_ID; absent (exit 1) otherwise. `docker image prune -af`
-# ($2=prune) falls through untouched.
+# #6512: `docker image inspect …` on the running container's image. Two shapes:
+#   (1) `docker image inspect --format '{{range .RepoTags}}…' <id>` — the same-version-reload
+#       discriminator. Echoes a `<ref>:<MOCK_RUNNING_IMAGE_TAG>` RepoTag so the tier can confirm
+#       the running image is the one being (re)deployed (TAG == running version). Unset ⇒ no tags.
+#   (2) `docker image inspect <id>` — the presence probe (exit 0 iff <id> == MOCK_RUNNING_IMAGE_ID).
+# `docker image prune -af` ($2=prune) falls through untouched.
 if [[ "${1:-}" == "image" && "${2:-}" == "inspect" ]]; then
-  if [[ -n "${MOCK_RUNNING_IMAGE_ID:-}" && "${3:-}" == "${MOCK_RUNNING_IMAGE_ID}" ]]; then
-    exit 0
+  for _a in "$@"; do
+    if [[ "$_a" == *"RepoTags"* ]]; then
+      [[ -n "${MOCK_RUNNING_IMAGE_TAG:-}" ]] && printf 'ghcr.io/jikig-ai/soleur-web-platform:%s\n' "${MOCK_RUNNING_IMAGE_TAG}"
+      exit 0
+    fi
+  done
+  if [[ -n "${MOCK_RUNNING_IMAGE_ID:-}" ]]; then
+    for _a in "$@"; do
+      [[ "$_a" == "${MOCK_RUNNING_IMAGE_ID}" ]] && exit 0
+    done
   fi
   exit 1
 fi
@@ -3456,6 +3466,7 @@ _lc_level() { jq -rs '.[] | select(.tags.registry=="local-cache") | .level' "$1"
 T6512=$(mktemp -d)
 export MOCK_GHCR_PULL_DENY_ALWAYS=1
 export MOCK_RUNNING_IMAGE_ID="sha256:6512aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+export MOCK_RUNNING_IMAGE_TAG="v9.9.9"   # the running image IS the deploy version → same-version reload
 export MOCK_SENTRY_CAPTURE_FILE="$T6512/a.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 export CI_DEPLOY_STATE="$T6512/a.state"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && A_RC=0 || A_RC=$?
@@ -3470,7 +3481,7 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: #6512(a) rc=$A_RC reason=$A_REASON level=$(_lc_level "$MOCK_SENTRY_CAPTURE_FILE")"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
 rm -rf "$T6512"
 
 # (b) #6512's ZOT-SERVED topology: zot ACTIVE + zot pull fails + GHCR deny (both fail via the
@@ -3480,6 +3491,7 @@ rm -rf "$T6512"
 T6512=$(mktemp -d)
 export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1 MOCK_GHCR_PULL_DENY_ALWAYS=1
 export MOCK_RUNNING_IMAGE_ID="sha256:6512bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+export MOCK_RUNNING_IMAGE_TAG="v9.9.9"   # same-version reload
 export MOCK_SENTRY_CAPTURE_FILE="$T6512/b.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 export CI_DEPLOY_STATE="$T6512/b.state"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && B_RC=0 || B_RC=$?
@@ -3498,7 +3510,30 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: #6512(b) rc=$B_RC reason=$B_REASON (expected local-cache event + reason != image_pull_failed)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+rm -rf "$T6512"
+
+# (e) NEW-VERSION deploy with both registries down: the running container is an OLDER version
+#     (tagged v9.9.8) than the deploy TAG (v9.9.9). The tier MUST NOT fire — reusing the running
+#     image would silently serve stale bits and report the new release as "deployed" (a version
+#     rollback masked as success). Falls through to the existing hard image_pull_failed.
+T6512=$(mktemp -d)
+export MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_RUNNING_IMAGE_ID="sha256:6512eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+export MOCK_RUNNING_IMAGE_TAG="v9.9.8"   # running image is an OLDER version than the deploy TAG
+export MOCK_SENTRY_CAPTURE_FILE="$T6512/e.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+export CI_DEPLOY_STATE="$T6512/e.state"
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && E_RC=0 || E_RC=$?
+read_state_reason_and_exit "$CI_DEPLOY_STATE" E_REASON E_EXIT
+TOTAL=$((TOTAL + 1))
+if [[ "$E_RC" -ne 0 ]] && [[ "$E_REASON" == "image_pull_failed" ]] \
+   && ! grep -q 'image pulled from local-cache' "$MOCK_SENTRY_CAPTURE_FILE"; then
+  PASS=$((PASS + 1)); echo "  PASS: new-version deploy (running image is an older version) → tier does NOT fire, hard image_pull_failed (no stale-bits rollback)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: #6512(e) rc=$E_RC reason=$E_REASON — tier fired on a NEW-version deploy (stale-bits rollback risk)"
+  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
+fi
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
 rm -rf "$T6512"
 
 # (c) both fail + running image ABSENT (MOCK_RUNNING_IMAGE_ID unset) → unchanged hard
