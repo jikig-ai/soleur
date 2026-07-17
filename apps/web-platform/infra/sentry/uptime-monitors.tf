@@ -32,10 +32,12 @@
 # on the branch (not a commit subject — GitHub prefixes those with "* " when it
 # composes the squash body, which breaks the anchor the apply gate matches).
 #
-# BETA STATUS: `sentry_uptime_monitor` is documented as beta in the provider
-# (v0.15.0-beta2 — see provider docs at
+# BETA STATUS: `sentry_uptime_monitor` may still be documented as beta in the
+# provider (pinned v0.15.4 as of #6636 — see provider docs at
 # github.com/jianyuan/terraform-provider-sentry/blob/main/docs/resources/uptime_monitor.md).
-# The provider may rename attributes when the resource graduates to stable.
+# The beta2 → v0.15.4 bump (#6636 Phase 0) planned no-op with no attribute drift
+# on the 4 uptime monitors; the provider may still rename attributes when the
+# resource graduates further.
 # Re-validate the schema on every provider bump (`terraform init -upgrade`).
 #
 # ASSERTION SEMANTICS: the `assertion_json` argument is the SUCCESS condition.

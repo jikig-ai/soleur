@@ -16,9 +16,10 @@
 # ── DEPRECATION WARNING IS ACCEPTED UNTIL PROVIDER GA (#4610) ──────────────
 # `terraform validate`/`plan` emits "This resource is deprecated. Please
 # migrate to `sentry_alert`" for each block below. That warning is EXPECTED
-# and intentionally accepted until `jianyuan/sentry` ships a stable v0.15.0.
-# Do NOT migrate these to `sentry_alert` under the pinned v0.15.0-beta2:
-#   - beta2's `sentry_alert` is MONITOR-bound: `monitor_ids` (set) and
+# and intentionally accepted: the stable line has now shipped (pinned v0.15.4,
+# #6636) but the migration blocker persists (see below), so the deferral stands.
+# Do NOT migrate these to `sentry_alert` under the pinned v0.15.4:
+#   - stable `sentry_alert` (re-confirmed at v0.15.4) is MONITOR-bound: `monitor_ids` (set) and
 #     `trigger_conditions` (first_seen|regression|reappeared|issue_resolved)
 #     are BOTH required, and it has no `project` attribute.
 #   - these 4 rules are PROJECT-WIDE frequency alerts (EventFrequencyCondition
@@ -200,7 +201,7 @@ resource "sentry_issue_alert" "auth_signout_burst" {
 # server/observability.ts: events carry `feature=byok-delegations`, `op=<...>`,
 # and `art_33_breach=true` on the cross-tenant path (wired in this PR's #4364
 # Goal 0a). Schema attribute names verified via `terraform providers schema
-# -json` against jianyuan/sentry 0.15.0-beta2 (Phase 0).
+# -json` against jianyuan/sentry 0.15.4 (#6636 Phase 0 re-verified no drift; originally beta2).
 
 # Rule 1 — GDPR Art. 33 breach (cross-tenant BYOK key leak). Highest urgency:
 # tight frequency + notify ActiveMembers fallthrough. Filters require BOTH
@@ -213,7 +214,7 @@ resource "sentry_issue_alert" "byok_art_33_breach" {
   # mutually-exclusive event-lifecycle states (a captured event is exactly one
   # of new / reappeared / regressed). "all" would require all three on one
   # event — never satisfiable. Schema-grounded against jianyuan/sentry
-  # 0.15.0-beta2 (`action_match` description: "…any or all of the specified
+  # 0.15.4 (`action_match` description: "…any or all of the specified
   # conditions happen"). NOTE: this is the only rule in this file using "any" —
   # the 4 auth rules + byok_cap_exceeded use "all" with a single condition.
   action_match = "any"
@@ -1218,7 +1219,7 @@ resource "sentry_issue_alert" "outbound_email_send_failure" {
 #
 # Native affected-users threshold (event_unique_user_frequency): fire when ≥3
 # distinct tenants hit a sandbox-startup failure within 1h. Verified against
-# jianyuan/sentry 0.15.0-beta2 via `terraform providers schema -json` (condition
+# jianyuan/sentry 0.15.4 via `terraform providers schema -json` (condition
 # type event_unique_user_frequency; comparison_type ∈ {count,percent}; interval
 # valid values incl. 1h). Distinct frequency=22 avoids Sentry POST-time
 # exact-duplicate dedup (keyed on action-shape + frequency + match — see the auth
