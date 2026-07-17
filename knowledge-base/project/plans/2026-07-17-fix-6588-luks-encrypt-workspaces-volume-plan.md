@@ -102,6 +102,19 @@ Every premise cited by reference was checked. Eight did not survive.
 | P7 | DC-1 cites "the Art. 13(3) precedent set in PR #4455 — *'encryption at rest is being rolled out'*" | PR #4455 is MERGED but is *"feat(legal): PR-1 Flagsmith sub-processor disclosure"*. **That wording is not in it.** The *mechanism* is reusable; the citation is loose. CLO separately ruled the **Art. 13(3) anchor wrong** → **Art. 12(1) + 5(1)(a)**. | Do not propagate |
 | P8 | *(implicit)* "the claim misleads users" | **There are ZERO beta users** (`roadmap.md` Current State; #1439 "recruit 10 solo founders" still **OPEN**). The volume holds the **operator's own** dogfooding workspaces. The threshold is met, but no data subject has yet been misled. | Makes retraction **free now** |
 
+**P3 drift — re-derive the site count at the legal PR, do NOT inherit the 20.** Re-verified at /work
+(2026-07-17, after rebasing onto `origin/main` @ `105799dbd`): **#6568 merged between plan-time and
+/work-time and PROLIFERATED the false claim** — it added fresh `**Last Updated:**` changelog headers to
+all three canonical docs, each of which **restates the LUKS clause verbatim** (`privacy-policy.md:11`,
+`gdpr-policy.md:13`, `data-protection-disclosure.md:12`). Current canonical LUKS-token sites:
+pp `:11,:298,:518` · gdpr `:13,:44` · dpd `:12,:189,:276` = **8**, plus the 2 no-LUKS-token
+git-data-host sites, ×2 mirrors. **The plan's "20 sites" is stale and the number will keep moving with
+every legal PR that lands.** The legal PR must re-run the union-anchor grep and derive the count from
+the command's output at ITS work-time — never quote this plan's figure
+(`cq-cite-content-anchor-not-line-number`; the count is a claim, not a fact). The *conclusion* is
+unchanged and strengthened: the claim is live, published, and now more widely restated than when the
+issue was filed.
+
 **Own-capability claims** (`hr-verify-repo-capability-claim-before-assert`): I asserted "worktrees
 rehydrate from GitHub ⇒ re-clone instead of rsync" — **refuted** (R1). I asserted the cx33 finding
 was novel — **it is corroborated in-repo**. I asserted `provisionWorkspace` was the "Start Fresh"
