@@ -123,15 +123,17 @@ HEARTBEAT_BLOCK=$(awk '/cat > "\$HEARTBEAT_UNIT" <</,/^HEARTBEATEOF$/' "$BOOTSTR
 # Reference the block BY NAME ("$HEARTBEAT_BLOCK"), never by embedding its
 # value ('$HEARTBEAT_BLOCK'): the block's comments contain apostrophes
 # (e.g. "inngest-server.service's"), which break the single-quoted eval form.
-# #6178: the heartbeat unit doppler project is templated (${DOPPLER_PROJECT}, an
-# UNQUOTED-heredoc expansion — resolves at write time to the default soleur on the web
-# host, or soleur-inngest on the dedicated host). Source carries the literal ${DOPPLER_PROJECT}.
-assert "heartbeat unit uses doppler run (templated \${DOPPLER_PROJECT})" \
-  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --project [\$][{]DOPPLER_PROJECT[}] --config prd'"
+# #6555: the heartbeat unit dropped `--project` — it resolves the Doppler project from
+# EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime, not a flag. The
+# ExecStart is `doppler run --config prd -- ${HEARTBEAT_SCRIPT}` with NO --project.
+assert "heartbeat unit uses doppler run --config prd with NO --project (#6555)" \
+  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --config prd' && ! printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.*--project'"
 assert "heartbeat unit ExecStart is exactly one line" \
   "[[ \$(printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
-assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.* run --project [\$][{]DOPPLER_PROJECT[}] --config prd -- \\\$\\{HEARTBEAT_SCRIPT\\}'"
+assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler run --config prd" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.* run --config prd -- \\\$\\{HEARTBEAT_SCRIPT\\}'"
+assert "heartbeat unit reads EnvironmentFile=/etc/default/inngest-server (project delivery, #6555)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qxF 'EnvironmentFile=/etc/default/inngest-server'"
 assert "DOPPLER_PROJECT is exported (so inngest-redis-bootstrap.sh inherits it), default soleur" \
   "grep -qF 'export DOPPLER_PROJECT=\"\${DOPPLER_PROJECT:-soleur}\"' '$BOOTSTRAP_SH'"
 DOPPLER_BIN_LINE=$(grep -nE 'DOPPLER_BIN=.*command -v doppler' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
@@ -150,6 +152,31 @@ assert "DOPPLER_BIN resolved via command -v before HEARTBEAT_UNIT write" \
 # channel is what makes the "no row at all + unit failed" signature readable with no SSH.
 assert "heartbeat unit sets SyslogIdentifier=inngest-heartbeat (AC1, #6536)" \
   "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-heartbeat$'"
+
+# #6556 Part 2 — the OnFailure alarm unit (push-less, queryable-only). The heartbeat unit
+# declares OnFailure=; the target unit reuses the inngest-heartbeat Source 4 tag and emits a
+# bare `logger` ERR line with NO `doppler run` wrapper (a wrapper would hardcode a project,
+# wrong on the soleur-inngest host, re-introducing the #6555 project-resolution surface).
+assert "heartbeat unit declares OnFailure=inngest-heartbeat-failure-log.service (#6556)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^OnFailure=inngest-heartbeat-failure-log\\.service$'"
+FAILLOG_BLOCK=$(awk '/cat > "\$HEARTBEAT_FAILURE_LOG_UNIT" <</,/^FAILLOGEOF$/' "$BOOTSTRAP_SH")
+assert "failure-log unit block extraction is non-empty (non-vacuity)" \
+  "[[ -n \"\$FAILLOG_BLOCK\" ]]"
+assert "failure-log unit is Type=oneshot" \
+  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -qE '^Type=oneshot$'"
+assert "failure-log unit reuses SyslogIdentifier=inngest-heartbeat (no new Source 4 entry)" \
+  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-heartbeat$'"
+# Anchor on the ExecStart LINE (not the whole block, whose comments mention doppler/--project):
+# the command must BE /usr/bin/logger and must NOT be a `doppler run`/`--project` wrapper.
+FAILLOG_EXECSTART=$(printf '%s\n' "$FAILLOG_BLOCK" | grep -E '^ExecStart=')
+assert "failure-log ExecStart is exactly one line" \
+  "[[ \$(printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
+assert "failure-log ExecStart command is /usr/bin/logger (bare)" \
+  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE '^ExecStart=/usr/bin/logger '"
+assert "failure-log ExecStart carries NO doppler run / --project wrapper (#6555 surface)" \
+  "! printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE 'doppler|--project'"
+assert "failure-log ExecStart emits at ERR priority on the inngest-heartbeat tag" \
+  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE '^ExecStart=/usr/bin/logger -t inngest-heartbeat -p err '"
 
 # #6536 ROUND 2: EVERY doppler-wrapped unit MUST set PrivateTmp=true.
 #
@@ -396,12 +423,15 @@ assert "the @@SDK_URL@@ sentinel is substituted (bash param expansion, not sed)"
   "grep -qE '@@SDK_URL@@/' \"\$BOOTSTRAP_SH\""
 assert "SDK_URL default PRESERVES the co-located loopback app route (web regression guard, #6178)" \
   "grep -qF 'SDK_URL=\"\${SDK_URL:-http://127.0.0.1:3000/api/inngest}\"' \"\$BOOTSTRAP_SH\""
-# #6178: the ExecStart doppler project is templated (@@DOPPLER_PROJECT@@) so the dedicated
-# host targets its ISOLATED `soleur-inngest` project; the default preserves `soleur` for web.
-assert "server ExecStart carries the @@DOPPLER_PROJECT@@ sentinel (templated, #6178)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'run --project @@DOPPLER_PROJECT@@ --config prd'"
-assert "the @@DOPPLER_PROJECT@@ sentinel is substituted" \
-  "grep -qE '@@DOPPLER_PROJECT@@/' \"\$BOOTSTRAP_SH\""
+# #6555: the server ExecStart dropped `--project` — it resolves the Doppler project from
+# EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime, not a sentinel flag.
+assert "server ExecStart is doppler run --config prd with NO --project (#6555)" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'run --config prd' && ! printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE '^ExecStart=.*--project'"
+# No @@DOPPLER_PROJECT@@ SUBSTITUTION (`${var//@@DOPPLER_PROJECT@@/...}`) survives anywhere in the
+# bootstrap — a lingering render mechanism could silently re-introduce a hardcoded --project.
+# Anchored on the substitution syntax, NOT the bare sentinel (comments legitimately name it).
+assert "no @@DOPPLER_PROJECT@@ substitution mechanism remains in bootstrap (#6555)" \
+  "! grep -qF '//@@DOPPLER_PROJECT@@/' \"\$BOOTSTRAP_SH\""
 assert "DOPPLER_PROJECT default PRESERVES 'soleur' for the co-located web host (regression guard, #6178)" \
   "grep -qF 'DOPPLER_PROJECT=\"\${DOPPLER_PROJECT:-soleur}\"' \"\$BOOTSTRAP_SH\""
 # Regression guard: the signing-key strip survives the edit as an ENV export (#5560 —
@@ -586,15 +616,15 @@ assert "redis.conf loopback bind"         "grep -qE '^bind 127.0.0.1' '$REDIS_CO
 # password via doppler (never a literal in the file).
 assert "redis.service RequiresMountsFor=/mnt/data" "grep -qE '^RequiresMountsFor=/mnt/data' '$REDIS_SERVICE'"
 assert "redis.service requirepass injected from Doppler" "grep -qF 'requirepass \"\$INNGEST_REDIS_PASSWORD\"' '$REDIS_SERVICE'"
-# #6178: redis.service doppler project is templated (@@DOPPLER_PROJECT@@) so the dedicated
-# inngest host targets its isolated soleur-inngest project; inngest-redis-bootstrap.sh renders
-# the sentinel (default soleur preserves the web host — regression guard).
-assert "redis.service runs under doppler run prd (templated @@DOPPLER_PROJECT@@)" \
-  "grep -qE 'doppler run --project @@DOPPLER_PROJECT@@ --config prd' '$REDIS_SERVICE'"
-assert "inngest-redis-bootstrap.sh renders the @@DOPPLER_PROJECT@@ sentinel" \
-  "grep -qF '@@DOPPLER_PROJECT@@/' '$SCRIPT_DIR/inngest-redis-bootstrap.sh'"
-assert "redis unit DOPPLER_PROJECT default PRESERVES soleur for the web host (regression guard)" \
-  "grep -qF 'redis_doppler_project=\"\${DOPPLER_PROJECT:-soleur}\"' '$SCRIPT_DIR/inngest-redis-bootstrap.sh'"
+# #6555: the redis.service ExecStart dropped `--project` — it resolves the Doppler project from
+# EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime. The bootstrap installs
+# the unit verbatim (no @@DOPPLER_PROJECT@@ substitution round-trip).
+assert "redis.service runs under doppler run --config prd with NO --project (#6555)" \
+  "grep -qF 'doppler run --config prd' '$REDIS_SERVICE' && ! grep -qE '^ExecStart=.*--project' '$REDIS_SERVICE'"
+assert "redis.service reads EnvironmentFile=/etc/default/inngest-server (project delivery, #6555)" \
+  "grep -qxF 'EnvironmentFile=/etc/default/inngest-server' '$REDIS_SERVICE'"
+assert "inngest-redis-bootstrap.sh no longer renders a @@DOPPLER_PROJECT@@ substitution (#6555)" \
+  "! grep -qF '//@@DOPPLER_PROJECT@@/' '$SCRIPT_DIR/inngest-redis-bootstrap.sh'"
 # #5450 F1 regression guard: the conf MUST live under /mnt/data/redis, NOT
 # /etc/redis — on the existing-host deploy the bootstrap runs inside
 # webhook.service's ProtectSystem=strict namespace where /etc is read-only and
@@ -679,6 +709,34 @@ if command -v terraform >/dev/null 2>&1; then
 else
   echo "  SKIP: terraform not installed locally"
 fi
+
+# --- #6555: DOPPLER_PROJECT via EnvironmentFile (the units dropped --project) ---
+echo ""
+echo "--- #6555: DOPPLER_PROJECT env-file delivery + --project removal ---"
+CLOUD_INIT_INNGEST="$SCRIPT_DIR/cloud-init-inngest.yml"
+CUTOVER_FLIP_SERVICE="$SCRIPT_DIR/inngest-cutover-flip.service"
+SUDOERS_SRC="$SCRIPT_DIR/deploy-inngest-bootstrap.sudoers"
+CI_DEPLOY="$SCRIPT_DIR/ci-deploy.sh"
+assert "cloud-init pre-create writes DOPPLER_PROJECT=soleur-inngest into the env-file (dedicated path)" \
+  "grep -qE \"printf 'DOPPLER_TOKEN=.*DOPPLER_PROJECT=soleur-inngest\" '$CLOUD_INIT_INNGEST'"
+assert "bootstrap heredoc writes DOPPLER_PROJECT into the env-file (web path)" \
+  "grep -qxF 'DOPPLER_PROJECT=\$DOPPLER_PROJECT' '$BOOTSTRAP_SH'"
+assert "bootstrap fail-closes on a missing/empty DOPPLER_PROJECT env-file line (#6555 AC6)" \
+  "grep -qF 'no non-empty DOPPLER_PROJECT= line' '$BOOTSTRAP_SH'"
+assert "bootstrap augments a preserved env-file with DOPPLER_PROJECT (in-place re-bootstrap safety)" \
+  "grep -qF 'appended DOPPLER_PROJECT=' '$BOOTSTRAP_SH'"
+# Negative anchored on ExecStart / FLIP_GUARD assignment lines only — comments legitimately
+# name `run --project …` (e.g. the failure-log unit's do-NOT-wrap rationale).
+assert "no ExecStart --project remains in inngest-bootstrap.sh units (#6555)" \
+  "! grep -qE '^ExecStart=.*--project' '$BOOTSTRAP_SH' && ! grep -qE 'FLIP_GUARD_LINE=.*--project' '$BOOTSTRAP_SH'"
+assert "inngest-cutover-flip.service ExecStart has NO --project (#6555)" \
+  "grep -qF 'doppler run --config prd' '$CUTOVER_FLIP_SERVICE' && ! grep -qE '^ExecStart=.*--project' '$CUTOVER_FLIP_SERVICE'"
+assert "deploy-inngest-bootstrap.sudoers env_keep drops DOPPLER_PROJECT (#6555)" \
+  "! grep -qE '^Defaults!INNGEST_BOOTSTRAP env_keep.*DOPPLER_PROJECT' '$SUDOERS_SRC'"
+assert "cloud-init.yml inline sudoers env_keep drops DOPPLER_PROJECT (#6555)" \
+  "! grep -qE 'Defaults!INNGEST_BOOTSTRAP env_keep.*DOPPLER_PROJECT' '$CLOUD_INIT'"
+assert "ci-deploy.sh --preserve-env drops DOPPLER_PROJECT (#6555)" \
+  "! grep -qE 'preserve-env=.*DOPPLER_PROJECT' '$CI_DEPLOY'"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
