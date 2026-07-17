@@ -34,10 +34,9 @@ Locate all constructs by content (line numbers shifted after PR #6458). Endpoint
 - [ ] 5.1 Structural asserts (grep server.tf): local is `templatefile(...docker-daemon.json.tmpl...)` passing `registry_endpoint = local.registry_endpoint`; `triggers_replace = sha256(local.docker_daemon_json)`; provisioner uses `content = local.docker_daemon_json`; probe greps `${local.registry_endpoint}` (interpolation token, not literal).
 - [ ] 5.2 Template shape: `docker-daemon.json.tmpl` insecure-registries value is `${registry_endpoint}`, no `10.0.1.30:5000` literal; valid-JSON check runs against the RENDERED doc, not the raw template.
 - [ ] 5.3 cloud-init derivation asserts: `cloud-init.yml` value is `${registry_endpoint}` + server.tf map passes the var.
-- [ ] 5.4 Single-source residual scan (adapt `private-nic-guard.test.sh:490-499`): non-comment `10.0.1.30:5000` count across `docker-daemon.json.tmpl` + `cloud-init.yml` + `server.tf` == 0.
-- [ ] 5.5 Mutation proof (credential-free `terraform console`, empty scratch dir): render `.tmpl` with synthetic `registry_endpoint = "10.99.99.99:5000"` → assert rendered `insecure-registries[0] == 10.99.99.99:5000` AND no `10.0.1.30`; then render with the endpoint extracted from `zot-registry.tf` and assert equality.
-- [ ] 5.6 Preserve still-valid asserts: resource-block extraction, reload-not-restart, JSON-guard-precedes-reload, every-remote-exec-opens-`set -e`, `-target` membership, and the `#6497` credential-convergence section (touch only if an anchor shifts).
-- [ ] 5.7 Anchor on JSON/HCL construct not bare substring; assert rendered (not raw) for interpolated values; run every mutation arm (learnings 2026-06-02 / 2026-06-03 / 2026-05-06 / 2026-07-16).
+- [ ] 5.4 **THE mutation test — shape-based residual scan** (adapt `private-nic-guard.test.sh:490-499`): non-comment count of any `IP:5000`-shape literal (`[0-9]{1,3}(\.[0-9]{1,3}){3}:5000`) across `docker-daemon.json.tmpl` + `cloud-init.yml` + `server.tf` == 0. Match by SHAPE, not the pinned value `10.0.1.30:5000` (renumber-proof; learning 2026-06-11). A reintroduced hardcoded copy → RED. Add an inline comment: single source is `zot-registry.tf:44` `local.registry_endpoint`.
+- [ ] 5.5 Preserve still-valid asserts: resource-block extraction, reload-not-restart, JSON-guard-precedes-reload, every-remote-exec-opens-`set -e`, `-target` membership, and the `#6497` credential-convergence section (touch only if an anchor shifts).
+- [ ] 5.6 Do NOT add a `terraform console` render leg here (dropped at deepen-plan per code-simplicity review): render/JSON validity is covered by `validate-infra-templates.sh` (Phase 7) + the apply-time `python3 json.load` guard. Anchor on construct not bare substring; assert rendered (not raw) for interpolated values (learnings 2026-06-02 / 2026-06-03 / 2026-05-06 / 2026-06-11).
 
 ## Phase 6 — Fix stale forward-reference (`private-nic-guard.test.sh`)
 
@@ -51,4 +50,4 @@ Locate all constructs by content (line numbers shifted after PR #6458). Endpoint
 - [ ] 7.4 `bash .github/scripts/validate-infra-templates.sh apps/web-platform/infra` → `rendered+validated N/N`, output names `docker-daemon.json.tmpl`.
 - [ ] 7.5 `bash .github/scripts/test/fixtures-validate-infra-templates.sh` → passes.
 - [ ] 7.6 `cd apps/web-platform/infra && terraform fmt -check && terraform validate` → pass.
-- [ ] 7.7 Manual mutation acceptance: throwaway `local.registry_private_ip = "10.0.1.31"` + a leftover hardcoded `.30` copy → `registry-insecure-config.test.sh` RED; revert → GREEN.
+- [ ] 7.7 Mutation-test sanity (optional, one-time): temporarily hardcode an `IP:5000` literal into `docker-daemon.json.tmpl` (or the server.tf probe) → confirm `registry-insecure-config.test.sh` goes RED on the shape scan; revert → GREEN. (Automated by AC 5.4; this is a one-time human confirmation the self-referential green is gone.)

@@ -17,6 +17,24 @@ branch: feat-one-shot-6448-registry-endpoint-derive-drift-guard
 
 # fix(infra): derive docker `insecure-registries` from `local.registry_endpoint`, and make the drift guard actually detect drift (#6448)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-17
+**Sections enhanced:** Overview, Phase 2/3, Phase 5, Infrastructure (IaC), Risks — plus a new `### Precedent-Diff & Verified Facts` and `### Network-Outage Deep-Dive`.
+**Research/review used:** repo-research (test harness + terraform availability), learnings-researcher (12 drift-guard learnings), architecture-strategist + code-simplicity-reviewer (design pressure-test), empirical bash verification.
+
+### Key Improvements (verified, not asserted)
+
+1. **Zero-churn proven empirically.** The `.tmpl` renders **byte-identical** to the current `docker-daemon.json` — same `sha256 = e976eac6ad1135ca6504974bc781fa48108f466ab42eef8f9a118e4ab1c5d8bd` (verified by round-trip substitution + `cmp`). So `triggers_replace = sha256(local.docker_daemon_json)` keeps the prior trigger VALUE ⇒ no replace, no re-provision on the running fleet.
+2. **`provisioner "file" { content = }` is novel-to-repo.** All seven existing `file` provisioners in `server.tf` use `source=`; the one rendered-content case (secret-bearing `hooks.json`, `server.tf:787-827`) uses a `remote-exec` base64 heredoc. `content=` is the idiomatic Terraform choice here (non-secret rendered content), simpler than base64 — but flagged for reviewer scrutiny + a `terraform validate` AC because it is the first `content=` in this codebase (precedent-diff, gate 4.4).
+3. **Auto-coverage confirmed.** `validate-infra-templates.sh:27-30` and fixtures F9/F9b (`fixtures-validate-infra-templates.sh:311-357`) were built *for* #6448 — the `.tmpl` is discovered from the `.tf` call site alone and JSON-validated with no harness edit.
+
+### New Considerations Discovered
+
+- No in-repo precedent for `${local.*}` interpolation inside a `remote-exec` inline string (secret values use base64) — but it is standard HCL string interpolation and the value (`10.0.1.30:5000`) carries no shell metacharacters. Documented in Precedent-Diff.
+- **Simplification adopted (code-simplicity review):** the guard uses a **shape-based** residual scan as the single load-bearing mutation test (renumber-proof) and drops a `terraform console` render leg — the render/JSON-validity property is already covered by `validate-infra-templates.sh` (Phase 7) + the apply-time `python3 json.load` guard, so a duplicate render would add a terraform-on-PATH dependency for zero unique coverage.
+- **Architecture-review fix adopted:** the residual scan matches the endpoint by *shape* (`IP:5000`), not the pinned value `10.0.1.30:5000`, so it stays load-bearing after a real subnet renumber (value-coupling P2 closed).
+
 ## Overview
 
 `local.registry_endpoint` (`apps/web-platform/infra/zot-registry.tf:44` = `"${local.registry_private_ip}:5000"`, derived from the single-source IP at `:40`) is the canonical `host:port` for the self-hosted zot registry. It already feeds `tunnel.tf:107` and the `ZOT_REGISTRY_URL` Doppler secret (`zot-registry.tf:253`).
@@ -72,7 +90,18 @@ The plan-network-outage gate fires *structurally* because the feature narrative 
 - **L3 firewall / DNS / routing — opt out.** The SSH `connection {}` block (`server.tf:634-640`), its host (`hcloud_server.web["web-1"].ipv4_address`), and the apply-time `-target` list are **unchanged by this PR** (verified: the diff touches only `triggers_replace`, the `provisioner "file"` source→content, the `:669` grep literal, and the delivered content). No firewall/DNS/route surface is modified, so no L3 diagnosis applies.
 - **L7 TLS / application — opt out.** The one behavioral assertion (`docker info | grep -qF '<endpoint>'`) is preserved in shape and only has its literal *derived*; the reload-not-restart and malformed-JSON-guard invariants are preserved (Phase 3, guarded by `server-tf-set-e.test.sh` + `registry-insecure-config.test.sh`). Endpoint VALUE is unchanged (`10.0.1.30:5000`), so dockerd behavior on the live fleet is identical.
 
-Telemetry for `hr-ssh-diagnosis-verify-firewall` emitted at plan time.
+Telemetry for `hr-ssh-diagnosis-verify-firewall` emitted at plan + deepen time.
+
+### Network-Outage Deep-Dive (gate 4.5 — resource-shape trigger fired)
+
+`terraform_data.registry_insecure_config` carries `provisioner "file"` + `provisioner "remote-exec"` + `connection { type = "ssh" }`, so the deep-dive fires structurally even though the plan names no SSH keyword. Layer-by-layer verification artifact:
+
+- **L3 firewall / egress IP:** unchanged surface. The `connection {}` block (`server.tf:634-640`), its `host = hcloud_server.web["web-1"].ipv4_address`, `var.ci_ssh_private_key`, and the `apply-web-platform-infra.yml` SSH `-target` list are **not in this PR's diff** (diff = `triggers_replace` expr, `provisioner "file"` source→content, the `:669` grep literal, the delivered content, the cloud-init map var). No firewall/allowlist/egress change ⇒ no L3 diagnosis owed. Apply-time SSH reachability is a *pre-existing* dependency identical to today's `registry_insecure_config` apply.
+- **L3 DNS/routing:** N/A — SSH targets a private/Hetzner IPv4 directly, not a DNS name; unchanged.
+- **L7 TLS/proxy:** N/A — SSH, not HTTPS; the change touches no tunnel/ingress/cert.
+- **L7 application:** the single behavioral probe (`docker info | grep -qF '<endpoint>'`) is preserved in shape with only its literal derived; endpoint VALUE unchanged (`10.0.1.30:5000`), so dockerd behavior on the live fleet is identical.
+
+**Downtime & Cutover (gate 4.55):** NOT triggered. The apply is a SIGHUP reload (not restart/reboot/replace), `hcloud_server.web` pins `ignore_changes=[user_data]` so the cloud-init edit does not re-provision running hosts, and the byte-identical render keeps `triggers_replace` stable ⇒ **no replace**. No serving surface goes offline; no DB lock; no request drop.
 
 ## Implementation Phases
 
@@ -131,11 +160,12 @@ Rework the assertions that read the file as a static artifact so the guard prove
    - the remote-exec probe greps `${local.registry_endpoint}` (interpolated), NOT a literal. Anchor on the interpolation token so a re-hardcoded literal fails.
 2. **Template shape (grep `docker-daemon.json.tmpl`):** the `insecure-registries` array value is `${registry_endpoint}`, and the raw `.tmpl` contains **no** `10.0.1.30:5000` literal. Preserve the existing valid-JSON check but run it against the *rendered* doc, not the raw template (raw would parse but hold the placeholder string).
 3. **cloud-init derivation (grep):** `cloud-init.yml`'s `insecure-registries` value is `${registry_endpoint}`, and `server.tf`'s cloud-init templatefile map passes `registry_endpoint = local.registry_endpoint`.
-4. **Single-source residual scan (adapt `private-nic-guard.test.sh:490-499`):** count **non-comment** occurrences of the endpoint literal `10.0.1.30:5000` across the derivation surface (`docker-daemon.json.tmpl`, `cloud-init.yml`, `server.tf`) and assert **zero** — the endpoint is never a live literal; it is only ever `${registry_endpoint}` / `${local.registry_endpoint}`. (The bare IP `10.0.1.30` legitimately remains once, at `local.registry_private_ip`, guarded by private-nic-guard; this scan is scoped to the `:5000`-suffixed endpoint.) Comment-strip like the sibling (`^[^#]*` for HCL/YAML; JSON has no comments).
-5. **Mutation proof (credential-free `terraform console`, the load-bearing anti-self-reference test):** render `docker-daemon.json.tmpl` in an **empty scratch dir** (templatefile is a builtin — no `init`, no providers, preserving the credential-free contract, exactly as `validate-infra-templates.sh:82-84` does) with a **synthetic** endpoint `registry_endpoint = "10.99.99.99:5000"`; assert the rendered `insecure-registries[0] == "10.99.99.99:5000"` and the output contains **no** `10.0.1.30`. A hardcoded template emits `10.0.1.30` regardless of the var ⇒ this leg RED. Then render with the endpoint **extracted from `zot-registry.tf`** (`local.registry_endpoint` derivation) and assert the rendered value equals it (`registry_endpoint = local.registry_endpoint` wiring proven by Phase 5.1). Together with the residual scan, this is the mutation battery: a reintroduced hardcoded copy (in the template, the remote-exec grep, or cloud-init) fails at least one leg.
-6. **Preserve** the still-valid HIGH-RISK assertions: resource-block extraction, reload-not-restart, JSON-guard-precedes-reload, every-remote-exec-opens-`set -e`, and the `-target` list membership (`-target=terraform_data.registry_insecure_config` in `apply-web-platform-infra.yml`). Update the `#6497` credential-convergence section only if an anchor it greps shifts (it should not).
+4. **Shape-based residual scan — THIS IS THE MUTATION TEST (the load-bearing anti-self-reference assertion, adapts `private-nic-guard.test.sh:490-499`):** count **non-comment** occurrences of any hardcoded endpoint literal of the *shape* `[0-9]{1,3}(\.[0-9]{1,3}){3}:5000` across the derivation surface (`docker-daemon.json.tmpl`, `cloud-init.yml`, `server.tf`) and assert **zero** — every consumer must interpolate `${registry_endpoint}` / `${local.registry_endpoint}`, never a literal `IP:5000`. This is renumber-proof (it does NOT hardcode `10.0.1.30:5000`; per learning `2026-06-11`, extract-by-shape instead of pinning the current value — otherwise the scan target goes stale after a real renumber and guards nothing; this closes the architecture-review P2 value-coupling advisory). **Why this is the mutation test:** the exact #6448 drift is "`local.registry_private_ip` moves to `.31` while a consumer keeps a hardcoded `.30:5000` copy" — that stale copy is a non-comment `IP:5000` literal, so the scan goes RED. The old guard could never fail this way (it grepped the file against its own copy); this one fails precisely on a reintroduced hardcoded copy at any of the three sites (template, cloud-init, or the remote-exec probe string). Comment-strip like the sibling (`^[^#]*` for HCL/YAML; JSON has no comments). Add an inline comment noting the single source (`zot-registry.tf:44`, `local.registry_endpoint`) is the only legitimate place the `:5000` suffix is constructed.
+5. **Preserve** the still-valid HIGH-RISK assertions: resource-block extraction, reload-not-restart, JSON-guard-precedes-reload, every-remote-exec-opens-`set -e`, and the `-target` list membership (`-target=terraform_data.registry_insecure_config` in `apply-web-platform-infra.yml`). Update the `#6497` credential-convergence section only if an anchor it greps shifts (it should not).
 
-Guard against the known false-pass classes (learnings): anchor on the JSON/HCL **construct**, not a bare substring (`2026-06-02`, `2026-06-03`); assert the *rendered* value, not the raw source, for anything interpolated (`2026-05-06`); define the mutation battery upfront and run every arm (`2026-07-16`); keep the guard's own logic out of `triggers_replace`'s blind spot (N/A here — the guard is a CI `.test.sh`, not an inline provisioner body).
+**No `terraform console` render leg in this guard** (dropped at deepen-plan per the code-simplicity review): the "does the `.tmpl` actually interpolate to valid JSON" property is already covered by `validate-infra-templates.sh` (Phase 7) — it renders `docker-daemon.json.tmpl`, runs its stub-var-leak assertion (no map key survives as `${key}`), and `jq empty`-validates — plus the apply-time `python3 json.load` guard. Duplicating a render inside `registry-insecure-config.test.sh` would add a terraform-on-PATH dependency for coverage the structural greps (5.1-5.3, prove the wiring) + the shape scan (5.4, proves no hardcoded copy) already provide. The `terraform console` leg could not prove the wiring anyway (it renders the `.tmpl` in isolation, not the `server.tf` map) — the wiring is a construct-anchored grep either way (architecture-review confirmation).
+
+Guard against the known false-pass classes (learnings): anchor on the JSON/HCL **construct**, not a bare substring (`2026-06-02`, `2026-06-03`); assert the *rendered* value, not the raw source, for anything interpolated (`2026-05-06`) — which is why the JSON-validity check runs against the rendered doc (via `validate-infra-templates.sh`), not the raw `.tmpl`; extract-by-shape, not by pinned value, for the residual scan (`2026-06-11`); keep the guard's own logic out of `triggers_replace`'s blind spot (N/A here — the guard is a CI `.test.sh`, not an inline provisioner body).
 
 ### Phase 6 — Update the stale forward-reference in `private-nic-guard.test.sh`
 
@@ -171,15 +201,13 @@ None. (`gh issue list --label code-review --state open` queried; no open scope-o
 - [ ] `templatefile(".../docker-daemon.json.tmpl", { registry_endpoint = "10.0.1.30:5000" })` renders **byte-identical** to the pre-change `docker-daemon.json` (proves zero-churn; the `sha256` trigger value is unchanged).
 - [ ] `server.tf`: `local.docker_daemon_json` is a `templatefile()` of the `.tmpl` passing `registry_endpoint = local.registry_endpoint`; `triggers_replace = sha256(local.docker_daemon_json)`; `provisioner "file"` uses `content = local.docker_daemon_json`; remote-exec greps `${local.registry_endpoint}` (no literal).
 - [ ] `cloud-init.yml`'s `insecure-registries` value is `${registry_endpoint}`; `server.tf`'s cloud-init templatefile map passes `registry_endpoint = local.registry_endpoint`.
-- [ ] Non-comment `10.0.1.30:5000` literal count across `docker-daemon.json.tmpl` + `cloud-init.yml` + `server.tf` is **0** (single-source residual scan).
-- [ ] `registry-insecure-config.test.sh` mutation leg: rendering the `.tmpl` with a synthetic endpoint yields that endpoint (not `10.0.1.30`) — the guard is proven non-self-referential.
+- [ ] **Mutation test (shape-based residual scan):** non-comment literals of shape `IP:5000` (`[0-9]{1,3}(\.[0-9]{1,3}){3}:5000`) across `docker-daemon.json.tmpl` + `cloud-init.yml` + `server.tf` count **0** — reintroducing any hardcoded endpoint copy (the exact #6448 drift) makes this go RED; the pre-fix self-referential green is gone. Renumber-proof (shape, not the pinned value).
 - [ ] `bash apps/web-platform/infra/registry-insecure-config.test.sh` → `0 failed`, exit 0.
 - [ ] `bash apps/web-platform/infra/private-nic-guard.test.sh` → `0 failed`, exit 0 (unchanged behavior; stale note corrected).
 - [ ] `bash apps/web-platform/infra/server-tf-set-e.test.sh` → passes (remote-exec `set -e` invariant preserved).
 - [ ] `bash .github/scripts/validate-infra-templates.sh apps/web-platform/infra` → `rendered+validated N/N`, exit 0, and its output names `docker-daemon.json.tmpl` (auto-coverage).
 - [ ] `bash .github/scripts/test/fixtures-validate-infra-templates.sh` → passes (F9/F9b unaffected).
-- [ ] `cd apps/web-platform/infra && terraform fmt -check && terraform validate` pass (fmt-clean; `terraform_data` local + provisioner rewire is valid HCL).
-- [ ] Manual mutation acceptance (the issue's phrasing): with a throwaway edit setting `local.registry_private_ip = "10.0.1.31"` and a copy left hardcoded at `.30` anywhere on the derivation surface, `registry-insecure-config.test.sh` goes **RED**; reverted, it is GREEN. (Documents that the self-referential green is gone.)
+- [ ] `cd apps/web-platform/infra && terraform fmt -check && terraform validate` pass (fmt-clean; `terraform_data` local + provisioner rewire is valid HCL; confirms the novel-to-repo `content=` provisioner form is accepted).
 
 ### Post-merge (operator)
 
@@ -199,7 +227,7 @@ None. (`gh issue list --label code-review --state open` queried; no open scope-o
 ### Distinctness / drift safeguards
 
 - `dev != prd`: N/A — single registry host, single endpoint local; no dev/prd fork in this surface.
-- The whole point of the change is to eliminate the silent-drift class: after it lands, `local.registry_private_ip` → `local.registry_endpoint` propagates to every daemon.json copy and the runtime probe automatically; the CI single-source scan + mutation leg reject any reintroduced hardcoded copy.
+- The whole point of the change is to eliminate the silent-drift class: after it lands, `local.registry_private_ip` → `local.registry_endpoint` propagates to every daemon.json copy and the runtime probe automatically; the CI shape-based single-source scan rejects any reintroduced hardcoded `IP:5000` copy.
 
 ### Vendor-tier reality check
 
@@ -218,10 +246,10 @@ error_reporting:
   fail_loud: true   # apply probe is the terminal inline command; CI guard exits non-zero on any failed assert
 failure_modes:
   - mode: "derivation wired wrong (template/map does not reference local.registry_endpoint)"
-    detection: "registry-insecure-config.test.sh structural + mutation legs"
-    alert_route: "infra-validation.yml deploy-script-tests RED (PR)"
+    detection: "registry-insecure-config.test.sh structural greps (5.1-5.3) + validate-infra-templates.sh stub-var-leak render"
+    alert_route: "infra-validation.yml deploy-script-tests / validate RED (PR)"
   - mode: "hardcoded endpoint copy reintroduced on the derivation surface"
-    detection: "registry-insecure-config.test.sh single-source residual scan"
+    detection: "registry-insecure-config.test.sh shape-based single-source residual scan (5.4)"
     alert_route: "infra-validation.yml deploy-script-tests RED (PR)"
   - mode: "rendered daemon.json malformed JSON"
     detection: "validate-infra-templates.sh jq empty (CI) + remote-exec python3 json.load guard (apply)"
@@ -252,7 +280,7 @@ No SSH is required to observe any failure mode; every signal is a GitHub Actions
 ### Engineering
 
 **Status:** reviewed (CTO lens, carried into deepen-plan's multi-agent enhancement).
-**Assessment:** Pure infra refactor enforcing ADR-096. No product/marketing/legal/finance/sales/support/ops implications. The mechanism (templatefile + credential-free `terraform console` mutation proof + single-source residual scan) matches established sibling patterns (`private-nic-guard.test.sh`, `validate-infra-templates.sh`) and the codebase's own anticipatory scaffolds. Risk is confined to CI/apply correctness, fully covered by the guard rework.
+**Assessment:** Pure infra refactor enforcing ADR-096. No product/marketing/legal/finance/sales/support/ops implications. The mechanism (templatefile + shape-based single-source residual scan) matches established sibling patterns (`private-nic-guard.test.sh`, `validate-infra-templates.sh`) and the codebase's own anticipatory scaffolds. Risk is confined to CI/apply correctness, fully covered by the guard rework. Both deepen-plan review agents (architecture-strategist, code-simplicity-reviewer) confirmed the four load-bearing decisions; the simplicity review's cut of the `terraform console` render leg and the architecture review's value-coupling fix (shape-based scan) are both applied.
 
 ### Product/UX Gate
 
@@ -261,21 +289,30 @@ Not applicable — Product domain not relevant; the mechanical UI-surface overri
 ## Test Scenarios
 
 1. **Happy path (today's value):** render `.tmpl` with the real endpoint → byte-identical to pre-change file; full guard suite GREEN; `terraform validate` clean.
-2. **Subnet renumber (the fixed bug):** conceptually set `local.registry_private_ip = "10.0.1.31"` → `local.registry_endpoint` → `.31:5000` → every daemon.json copy + the probe derive `.31:5000`; the guard's mutation leg proves the template tracks the synthetic value. No drift possible.
-3. **Reintroduced hardcode (regression the guard must catch):** hardcode `10.0.1.30:5000` back into `docker-daemon.json.tmpl`, `cloud-init.yml`, or the `server.tf` probe → single-source residual scan and/or mutation leg go RED.
+2. **Subnet renumber (the fixed bug):** set `local.registry_private_ip = "10.0.1.31"` → `local.registry_endpoint` → `.31:5000` → every daemon.json copy + the probe derive `.31:5000` automatically; the shape scan stays GREEN (no hardcoded literal anywhere) and never needs updating (renumber-proof). No drift possible.
+3. **Reintroduced hardcode (regression the guard must catch):** hardcode any `IP:5000` (e.g. `10.0.1.30:5000` or a stale `.30:5000` after a renumber) back into `docker-daemon.json.tmpl`, `cloud-init.yml`, or the `server.tf` probe → the shape-based residual scan (5.4) goes RED. This is the mutation test.
 4. **Malformed rendered JSON:** break the `.tmpl` JSON → `validate-infra-templates.sh jq empty` RED (CI) and the apply-time `python3 json.load` guard RED (apply).
 5. **Auto-coverage:** `validate-infra-templates.sh apps/web-platform/infra` discovers `docker-daemon.json.tmpl` from the `.tf` call site alone and validates it — no harness edit.
 
 ## Risks & Mitigations
 
 - **Non-byte-identical `.tmpl` → one-time apply churn.** If the implementer reformats the `.tmpl`, the `sha256` trigger changes and the resource replaces once (SIGHUP reload, running containers untouched — safe, but avoidable). *Mitigation:* AC asserts byte-identical render; preserve indentation and the trailing `]\n}\n`.
-- **`terraform console` in the guard needs terraform on PATH.** `deploy-script-tests` installs terraform (`terraform_wrapper: false`), and a sibling render leg (`cloud-init-inngest-bootstrap.test.sh`) already relies on it. *Mitigation:* use the empty-scratch-dir builtin-`templatefile` technique (no `init`, no providers, no creds) exactly as `validate-infra-templates.sh` does; fail closed (not skip) if terraform is absent.
-- **File-provisioner `content` vs `source`.** Terraform's `file` provisioner accepts `content` (a string) as an alternative to `source` (a path). *Mitigation:* AC includes `terraform validate`; this is the standard rendered-content delivery pattern.
-- **Comment-prose false-pass in the guard.** *Mitigation:* the single-source scan is non-comment-scoped (`^[^#]*`), and construct-anchored assertions (not bare substrings), per learnings `2026-06-02` / `2026-06-03`.
+- **File-provisioner `content` vs `source` (novel to this repo).** All existing `file` provisioners use `source=`; `content=` is the first in this codebase (the secret-bearing `hooks.json` uses a base64 heredoc, but only because it is *secret* — not because `content=` is unavailable). Terraform's `file` provisioner accepts `content` (a string, mutually exclusive with `source`) and scps it over the same `connection {}`; it is the idiomatic, simpler choice for non-secret rendered content. *Mitigation:* the `terraform validate` AC confirms acceptance; architecture review confirmed the form is valid and that provisioner-config changes do not force replacement (only `triggers_replace` does, and its value is unchanged).
+- **Comment-prose false-pass in the guard.** *Mitigation:* the shape-based scan is non-comment-scoped (`^[^#]*`), and construct-anchored assertions (not bare substrings), per learnings `2026-06-02` / `2026-06-03`.
 - **`cloud-init.yml` col-0 `%{ }` directives break raw parsers.** The daemon.json write is not inside a directive; the new `${registry_endpoint}` is a plain interpolation. *Mitigation:* validation goes through the render-then-check path (`validate-infra-templates.sh` / the stripped schema check), never raw-parsing the interpolated value (learning `2026-07-11`).
+
+### Precedent-Diff & Verified Facts (gate 4.4)
+
+Pattern-bound behaviors, diffed against repo precedent (`git grep` / empirical / two review agents):
+
+1. **`provisioner "file" { content = local.docker_daemon_json }` — novel to this repo, confirmed valid.** Every existing `file` provisioner in `server.tf` uses `source=` (on-disk files); the sole rendered-content case — secret-bearing `hooks.json` — uses a `remote-exec` base64 heredoc (`server.tf:824-828`) *because it is secret* (the `server.tf:824-827` comment: base64 so "the interpolated content survives the inline string", mirroring the secret-delivery mechanism; Terraform refuses sensitive interpolation only in *local-exec*). That precedent does not apply to a non-secret `host:port`. `content` is a first-class, documented `file`-provisioner arg (mutually exclusive with `source`); architecture-review confirmed `terraform validate` accepts it and that a `source→content` change does **not** force replacement. The `hooks.json` "cannot be a provisioner file source" comment is about `source` shipping the unrendered `.tmpl`, not a prohibition on `content=`.
+2. **`${local.registry_endpoint}` in a `remote-exec` inline — no in-repo precedent, standard HCL, safe.** No existing `remote-exec` inline interpolates a bare `${local.*}` (secret values go through base64), but this is ordinary Terraform-side interpolation resolved before the string reaches the host; `10.0.1.30:5000` is digits/dots/colon only (no shell metacharacters), stays single-quoted, and `grep -qF` treats it literally.
+3. **Byte-identity (zero-churn) — empirically verified twice.** Round-trip substitution (`docker-daemon.json` → `.tmpl` placeholder → rendered) is `cmp`-clean; `sha256 = e976eac6ad1135ca6504974bc781fa48108f466ab42eef8f9a118e4ab1c5d8bd` on both the current file and the rendered `.tmpl` (also independently reproduced by architecture-review). The file contains no other `${`/`%{` sequences, so `templatefile()` performs a single pure substitution. This is the evidence behind "no replace"; the AC re-asserts it so a reformatting drift is caught.
+4. **Guard false-pass classes handled (learnings-researcher, 12 hits).** `2026-06-02` (bare-path grep vacuous) → construct-anchored asserts; `2026-06-03` (comment-prose false-pass) → non-comment scoping; `2026-05-06` (source-grep breaks after interpolation) → JSON validity asserted on the *rendered* doc via `validate-infra-templates.sh`, not the raw `.tmpl`; `2026-06-11` (extract-by-shape, not pinned value) → the residual scan matches `IP:5000` by shape (renumber-proof); `2026-06-14` (inline remote-exec body outside `triggers_replace` is a silent no-op) → N/A, the guard is a CI `.test.sh`, and the delivered content IS in the hash via `sha256(local.docker_daemon_json)`.
 
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, placeholder, or omits the threshold fails `deepen-plan` Phase 4.6. This one is filled: threshold `none` with the required sensitive-path scope-out reason.
-- The mutation proof MUST render the template with a value **different** from the real endpoint (`10.99.99.99:5000`) — a mutation battery only covers what it actually mutates (`2026-07-16`). Rendering only with the real value would pass on a hardcoded template.
+- The residual scan MUST match the endpoint by **shape** (`[0-9]{1,3}(\.[0-9]{1,3}){3}:5000`), not by the pinned value `10.0.1.30:5000` — otherwise the scan target goes stale after a real renumber and silently guards nothing (`2026-06-11` extract-by-shape; architecture-review P2). It must also be non-comment-scoped so the endpoint's appearance in explanatory prose (e.g. `cloud-init.yml:432`, `dns.tf`, `tunnel.tf` comments) does not false-fail.
 - Do NOT widen `private-nic-guard.test.sh`'s bare-IP assert to cover `:5000`; the `:5000` surface is owned by `registry-insecure-config.test.sh`. Widening couples two guards and re-creates the scope-creep the sibling note warns against (`2026-05-11-drift-guard-scoping`).
+- `content=` on the `file` provisioner is novel to this repo; keep it (idiomatic for non-secret rendered content) but do not "follow the `hooks.json` base64-heredoc precedent" — that pattern exists only to protect *secret* interpolation, inapplicable to a public `host:port`.
