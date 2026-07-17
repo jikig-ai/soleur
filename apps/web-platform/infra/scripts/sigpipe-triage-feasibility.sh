@@ -185,8 +185,24 @@ echo "-- corpus --"
 # Candidates come from a raw git grep; real sites are re-counted after
 # normalisation. The gap between the two is reported, not hidden: it is the
 # measure of how much of this corpus is the repo TALKING about the shape.
-mapfile -t CANDIDATES < <(git grep -lE "$SHAPE" -- "$PATHSPEC" | sort)
-raw_sites="$(git grep -cE "$SHAPE" -- "$PATHSPEC" | awk -F: '{s+=$NF} END {print s+0}')"
+# SELF-EXCLUSION, declared rather than silent.
+#
+# This probe lives at apps/web-platform/infra/scripts/, which is genuinely inside
+# the corpus it measures — and its preflight contains a REAL `| grep -q` site,
+# deliberately, because that pipeline IS the instrument. Its attestation contains
+# more. Left in, the probe counts itself: measured, committing it moved the
+# reported production set from 34 sites/8 files to 36/9 and silently reclassified
+# an audit tool as production infrastructure. An instrument that inflates its own
+# findings by existing is not measuring the corpus, it is measuring itself.
+#
+# So both files are excluded BY PATH and the exclusion is printed with the
+# counts. This is the third door of the self-match trap the earlier fix hit twice
+# (comments, then fail-message strings); a path exclusion is the only one that
+# closes it, because these instances are real code that normalisation must not
+# strip — stripping them would blind the probe to genuine sites of the same shape.
+SELF_RE='apps/web-platform/infra/scripts/sigpipe-triage-feasibility(\.test)?\.sh'
+mapfile -t CANDIDATES < <(git grep -lE "$SHAPE" -- "$PATHSPEC" | grep -vE "$SELF_RE" | sort)
+raw_sites="$(git grep -cE "$SHAPE" -- "$PATHSPEC" | grep -vE "$SELF_RE" | awk -F: '{s+=$NF} END {print s+0}')"
 declare -a FILES=()
 n_sites=0
 for f in "${CANDIDATES[@]}"; do
@@ -198,7 +214,8 @@ n_files="${#FILES[@]}"
 emit "raw git-grep hits (UNNORMALISED — not the finding)" "$raw_sites across ${#CANDIDATES[@]} files"
 emit "real sites (comments/strings/heredocs stripped)" "$n_sites across $n_files files"
 emit "  of which were prose about the shape, not the shape" "$((raw_sites - n_sites))"
-cmd "normalise < \$f | grep -cE '<shape>'   (normalise = fold-continuations | strip-heredocs | strip-comments | strip-strings | fold-pipes)"
+cmd "git grep -lE '<shape>' -- '$PATHSPEC' | grep -vE '<self>' ; then normalise < \$f | grep -cE '<shape>'"
+printf '    self-excluded (this probe + its attestation ARE in-corpus; their sites are the instrument): %s\n' "$SELF_RE"
 echo
 
 # The partition that decides the disposition. 84% of this corpus is test-harness
