@@ -31,6 +31,77 @@ revision: v2 (post 6-agent plan-review + live telemetry)
 > **Lane:** `specs/feat-one-shot-6594-infra-config-freshness-gate/spec.md` does not exist, so `lane:`
 > could not be carried forward. Defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-17 · **Panel:** dhh-rails-reviewer, kieran-rails-reviewer,
+code-simplicity-reviewer, architecture-strategist, spec-flow-analyzer, cto (6 parallel) + 4 research
+agents + live telemetry (Better Stack ClickHouse, Cloudflare API, Hetzner API, GitHub Actions logs).
+
+**Gates run:** 4.4 precedent-diff · 4.5 network-outage (fired; L3→L7 in `## Hypotheses`) ·
+4.55 downtime/cutover (fired; `## Downtime & Cutover`) · 4.6 user-brand (pass) · 4.7 observability
+(pass, 5/5 fields, ssh-free) · 4.8 PAT-shaped (pass) · 4.9 UI wireframe (skip, no UI surface).
+All 7 cited AGENTS rule IDs verified **active**; all 24 cited issues/PRs resolved **live**; all
+knowledge-base citations Glob-verified.
+
+### Key improvements over v1
+
+1. **Two PRs, not one — mechanical, not stylistic.** Both applying workflows share
+   `group: terraform-apply-web-platform-host` (`cancel-in-progress: false`), which **serializes but
+   does not order**. v1 stated the ordering as prose with no enforcing mechanism; in one PR the nonce
+   push could fire against the un-repointed tunnel and coin-flip anyway.
+2. **The retry loop launders the coin flip.** The gate's 3-attempt loop re-issues a fresh `curl` per
+   attempt (= a fresh connector selection) and `break`s on first pass — **any-of-3** semantics. An
+   assert inside it means "retry until some host matches". Now terminal, outside the loop.
+3. **Cut the freshness assert** (unanimous). Strictly dominated: its only unique catch is
+   *content-matches-but-`start_ts`-is-old* — a no-op — while its own unique behavior is
+   **false-failing**. And it is unimplementable as specified: the apply step pipes to the log with no
+   `tee`/`$GITHUB_OUTPUT`, so the gate (a separate step) has no signal to gate on.
+4. **Cut the `host_id` work** (unanimous). An *alternative* to the ingress pin, not a complement —
+   and **circular**: the reporter is delivered by the pipeline it audits, so it is absent on the only
+   run that matters. It also has no runtime source and three resolution outcomes, so a 3 s metadata
+   blip would redden the gate with a wrong-host accusation **against the right host**.
+5. **Folded in the `ssh.` repoint.** The `handler_bootstrap` bridge — the sole delivery path for the
+   handler + `hooks.json` — rides `ssh.` → `ssh://localhost:22` → *whichever connector*. Pinning only
+   `deploy.` leaves the control plane's other half coin-flipped.
+6. **Replaced v1's confounded verification.** "≥2 network vantages" cannot be discharged (you cannot
+   choose your colo) and post-repoint reads green either way. Now: **CF API config read**
+   (authoritative) + `/hooks/deploy-status`'s **existing** `host_id` (corroborating).
+
+### New considerations discovered
+
+- **`ADR-114:122` calls fan-out "the cheapest fix … needing no `.tf` and no tunnel change".** v1
+  dismissed it as "much larger" without citing it. Now quoted and rebutted on the merits (fan-out
+  fixes the WRITE, not the READ; and it presumes web-2 should be converged — #6440's open question).
+- **`model.c4:177-178` asserts "exactly ONE connector … INVARIANT enforced" — false in production.**
+  A required C4 correction, not a maybe.
+- **The #6416 in-band `hostname` tripwire may not exist.** `ADR-068:413` and #6440's "safe to run"
+  both depend on it; a grep of the 12 `connection {}` inlines finds zero host-identity assertions.
+  **Phase 0.1 must measure this** — if confirmed it is a *third* instance of the same meta-defect and
+  the most consequential (a wrong-host bridge landing would write web-1's config to web-2 silently).
+- **`depends_on` does NOT close the nonce-1 race** — the edge landed 2026-06-18 (#5516); the race
+  happened 2026-07-10 (#6313). A review claim to the contrary was refuted by `git log -S`.
+- **web-2 freezing out of infra-config is consistent with the recorded architecture**, not new debt:
+  `model.c4:178` says re-pooling needs full re-delivery (#6466), never a weight flip. Pinning
+  converts *randomly drifting* → *deterministically frozen*, which is what makes #6440 tractable.
+- **`image_pull_failed` (#6525) is a *pull* failure; `class=cred_store` (#6565) is a *login* failure.**
+  Different code paths. **#6565 is blocked on #6528 — merged, and already live on the host** — so it
+  is blocked on nothing, and this session measured the datum it was waiting for. See UC-1.
+- **`host_name` telemetry is lying** (D-A) and **the dedicated inngest host may be dark** (D-B).
+  Both surfaced by the UC-2 investigation; both filed, neither fixed here.
+
+### Retractions (v1 claims measured false, kept visible)
+
+| v1 claim | Reality |
+|---|---|
+| D3: "the inngest steer is impossible" → then "the operator was right" | **Both wrong in turn.** `host_name` is a `sed`-rendered Vector literal that a *colocated web host* also wears. The `--sdk-url 127.0.0.1:3000` argv settles it: machine `3f07b655` is a web host. **D3's conclusion stands; my challenge to it is withdrawn.** |
+| D7: "#6565 is gated on this PR's instrument" | #6565 is gated on **#6528**, which is merged and live. |
+| "#5515's edge closes the nonce-1 race" (raised at review) | The edge **predates** the race by 3 weeks. |
+
+**The `host_name` flip-flop is the session's main lesson:** I used `_MACHINE_ID` as a discriminator
+when it identifies *a* host but not *which* host — the exact "confirming probe that doesn't
+discriminate" trap `2026-07-16-refuting-a-hypothesis-by-reasoning-while-its-discriminator-is-invisible.md`
+names. The argv did discriminate.
+
 ## Overview
 
 #6594 says the "Verify infra-config apply succeeded" gate passed while #6577's `ci-deploy.sh` never
@@ -270,6 +341,39 @@ already dials `http://${peer}:9000/hooks/deploy-peer` cross-host today.
   `docker-daemon.json` converges **web-1 only** — while `cloud-init.yml` claims running hosts get it
   via that resource. True for web-1 only.
 
+## Downtime & Cutover
+
+Gate 4.55 fires: the change is **deploy/router class** — a tunnel ingress restructure. Default is
+zero-downtime and this plan meets it, but the reasoning is recorded rather than assumed.
+
+**The offline-inducing operation:** none. The change is an **atomic Cloudflare config-plane update**
+to `cloudflare_zero_trust_tunnel_cloudflared_config.web`. No host is powered off, replaced, rebooted,
+or restarted. No `hcloud_server`, volume, or attachment is touched (AC: `terraform plan` shows
+`0 to destroy` and no `hcloud_server` create). No DB lock class applies — there is no migration.
+
+**Surface affected:** `deploy.soleur.ai` + `ssh.soleur.ai` — the **management plane only**.
+`app.soleur.ai` is a direct CF-proxied A record to web-1 (`dns.tf:16`) and **never traverses this
+tunnel**, so no user-serving surface is in scope and no user-visible downtime is reachable.
+
+**Zero-downtime path (the default, and what ships):** Cloudflare applies the new ingress config to
+connectors without dropping the tunnel. In-flight risk is bounded to requests crossing the config
+swap on the management plane — a CI run at most, which retries. **No drain, no blue-green, and no
+maintenance window is required**, because there is no serving surface to drain.
+
+**Availability is IMPROVED, not traded.** Today `deploy.`/`ssh.` answer from a **randomly selected**
+connector, and web-2 cannot correctly serve either route (it has no `inngest-inventory.sh` at all —
+#6425). The status quo is not "available"; it is "answers, sometimes wrongly". Pinning converts
+*silently-wrong* → *correct*. #6441 makes the same point: origin-relative ingress **restores** the
+availability the #6426 de-pool traded away.
+
+**Residual risk + rollback.** A wrong `service` value breaks the management plane (not users).
+Rollback is a one-line revert that **also auto-applies**, and — verified — it does **not** depend on
+the surface it repairs: `tunnel.tf` is applied by `apply-web-platform-infra.yml` through the
+**Cloudflare API**, not through the `deploy.` tunnel. What is unavailable in the interim is
+`apply-deploy-pipeline-fix.yml` (its POST and gate both need `deploy.`) — an availability loss on a
+management plane, not a trap. **No operator sign-off is required for a zero-downtime config-plane
+change**; PR-A's `terraform plan` review is the gate.
+
 ## Observability
 
 ```yaml
@@ -497,6 +601,7 @@ the apply ran from, not `HEAD`.**
 | **A wrong `service` value breaks `deploy.`** — and it auto-applies on merge with no gate | Use the regex-validated `var.web_hosts`. Phase 1.2 review. Rollback is viable and does **not** depend on `deploy.` (corrected above). |
 | **Pinning makes `deploy.` unavailable if web-1 is down** | Accepted, and a net **improvement**: today the alternative is not "available" but "answered by a host that cannot serve the route" — web-2 has no `inngest-inventory.sh` at all. Correct-or-unavailable ≻ silently-wrong. |
 | **web-2 freezes out of infra-config after the pin** | **Consistent with the recorded architecture, not new debt.** `model.c4:178`: *"re-pooling needs full infra-config + SSH re-delivery (#6466), never a weight flip."* Today web-2 receives a **random ~50% subset** — an arbitrary interleaving. Pinning converts *randomly drifting* → *deterministically frozen*, which is what makes #6440's audit tractable. Fan-out is a **GA prerequisite** (ADR-068 §8), filed, not "the successor". |
+| **NEW (deepen): web-1's connector must dial its own private NIC, where it dialled loopback before.** A NIC-present dependency that did not exist. | Inert today (web-1 is long-lived and not recreated per-apply), but real: ADR-114:210-213 notes the boot race — the cloudflared token rides `user_data` at create while the network attach always lands after. **The one genuinely new failure mode this change introduces.** It bites only on a fresh web-1 boot, which #6482 currently makes impossible anyway. Named, not hidden. |
 | **`hooks.json` has no repo file to hash** | Exclusion derived from the template property, not hardcoded; asserted to be exactly one. |
 | **`files[]` can exceed FILE_MAP** (`orphan_hook_command`) | Key the assert off FILE_MAP. |
 | **The gate compares host bytes to the wrong ref** | Assert against the SHA the apply ran from, not `HEAD`. |
