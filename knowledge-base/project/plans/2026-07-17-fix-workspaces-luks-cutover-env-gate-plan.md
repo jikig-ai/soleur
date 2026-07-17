@@ -12,6 +12,41 @@ date: 2026-07-17
 
 # 🐛 Provision the missing `workspaces-luks-cutover` GitHub environment authorization gate
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-17
+**Scope decision:** This is a 3-file, precedent-mirror IaC change (mirrors
+`github_repository_environment.inngest_cutover` 1:1). Deepen ran the mandatory
+always-on halt gates + a live precedent-diff / citation-verification pass rather than a
+disproportionate 40-agent fan-out — appropriate for a mechanical infra-wiring change at
+this altitude. The heavy review lens (architecture-strategist + spec-flow-analyzer +
+`user-impact-reviewer`) lands at the review phase, which the single-user-incident
+threshold already escalates.
+
+**Halt gates (all PASS):** 4.6 User-Brand Impact present, threshold `single-user
+incident`. 4.7 Observability present, 5 fields, `discoverability_test.command` is
+`gh api` (no ssh). 4.8 no PAT-shaped variable. 4.9 no UI surface (skip). 4.5
+network-outage / 4.55 downtime — no trigger (creates a GitHub environment; no SSH
+provisioner, no serving-surface offline op).
+
+**Live-verified citations (deepen pass):**
+- Precedent resource `github_repository_environment.inngest_cutover` at
+  `apps/web-platform/infra/inngest-arm-write-token.tf:70-77` — `reviewers { users = [54279] }`. ✓
+- Default-block wiring `-target=github_repository_environment.inngest_cutover` at
+  `apply-web-platform-infra.yml:360`. ✓
+- `integrations/github` provider IS required by the infra root
+  (`apps/web-platform/infra/main.tf:49`, App-auth). ✓ (IaC "already required" claim holds.)
+- Reviewer id `54279` = @deruelle — confirmed in the precedent (only in-repo occurrence). ✓
+- `ADR-100` and `ADR-119` both exist under `knowledge-base/engineering/architecture/decisions/`. ✓
+- ADR-119 records the freeze needs operator sign-off (ADR-119:105) but does NOT name
+  the environment mechanism → ADR attribution tightened; no ADR amend needed. ✓
+
+**Precedent diff (inngest_cutover → workspaces_luks_cutover), the ONLY delta:**
+`resource "..." "inngest_cutover"` → `"workspaces_luks_cutover"`; `environment =
+"inngest-cutover"` → `"workspaces-luks-cutover"`. `repository`, the `reviewers { users =
+[54279] }` block, and the absence of `lifecycle.ignore_changes` are byte-identical.
+This is the intended verbatim mirror.
+
 ## Overview
 
 The `/workspaces` LUKS live-cutover mechanism merged 2026-07-17 shipped
@@ -216,13 +251,18 @@ discoverability_test:
 
 ## Architecture Decision (ADR/C4)
 
-**No new ADR; no C4 change.** This PR is the *provisioning implementation* of a
-decision already recorded in **ADR-119** (the workspaces LUKS cutover, which specifies
-the environment-gated freeze) and follows the *established precedent* set by
-`github_repository_environment.inngest_cutover` under **ADR-100** — that env addition
-itself introduced neither a new ADR nor a C4 edit. A competent engineer reading ADR-119
-+ ADR-100 would *expect* the freeze gate to be Terraform-provisioned exactly like
-inngest; this PR closes an implementation gap, not an architectural question.
+**No new ADR; no C4 change.** ADR-119 already records the *decision* that the freeze
+requires **operator sign-off / human authorization** with a bounded window
+(ADR-119:105 — "explicit justification + a bounded window + sign-off"); it does not
+name the *mechanism*. The GitHub `github_repository_environment` required-reviewer gate
+is the **established mechanism precedent** for exactly that sign-off, set by
+`github_repository_environment.inngest_cutover` (`inngest-arm-write-token.tf:70-77`,
+under ADR-100 Decision 6b) — that env addition introduced neither a new ADR nor a C4
+edit. This PR is the *provisioning implementation* that makes ADR-119's already-decided
+sign-off real, using the ADR-100 mechanism verbatim; it closes an implementation gap,
+not an architectural question. (Verified: ADR-119 does NOT specify the
+`workspaces-luks-cutover` environment by name — the gate mechanism is a workflow-level
+implementation choice, so there is nothing in the ADR corpus for this PR to amend.)
 
 **C4 completeness check (all three `.c4` files considered):** external human actor =
 the operator/reviewer @deruelle (already modeled); external system = GitHub Actions /
