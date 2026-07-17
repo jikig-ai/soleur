@@ -62,6 +62,18 @@ locals {
     # @@HOST_NAME@@ sentinel resolved per-host at install. This decouples web-host log shipping
     # from web_colocate_inngest (default-false post-ADR-100), which otherwise ships NO logs.
     "vector.toml",
+    # (#6629) Container-sandbox security-control profiles. Their ONLY prior delivery was the
+    # SSH provisioners terraform_data.docker_seccomp_config / apparmor_bwrap_profile below,
+    # which reach RUNNING hosts only — a FRESH host (web-1 replacement, or the web-2 warm
+    # standby that never receives the web-1 SSH provisioners) came up with NEITHER file, so
+    # cat-deploy-state reported seccomp_profile_host_present=false and the boot docker run
+    # ran the tenant sandbox unenforced. Baked here (ADR-080/#5921 image-bake, NOT user_data —
+    # seccomp-bwrap.json is 16,615 B and would red the WEB_GZIP_BUDGET cap), extracted +
+    # installed + apparmor-loaded by soleur-host-bootstrap.sh, enforced at the boot docker run
+    # with a fail-closed poweroff if absent. Restores the dual-delivery invariant
+    # (hr-fresh-host-provisioning-reachable-from-terraform-apply). See ADR-122.
+    "seccomp-bwrap.json",
+    "apparmor-soleur-bwrap.profile",
   ]
 
   # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
@@ -1118,7 +1130,16 @@ resource "terraform_data" "docker_seccomp_config" {
 # mount/umount/pivot_root while maintaining Docker's other restrictions.
 # Shows as "will be created" in CI drift reports -- expected behavior.
 resource "terraform_data" "apparmor_bwrap_profile" {
-  triggers_replace = sha256(file("${path.module}/apparmor-soleur-bwrap.profile"))
+  # (#6629) server_id fold-in — parity with docker_seccomp_config. A bare
+  # sha256(file(...)) trigger is hash-only: on a host REPLACEMENT the profile content is
+  # unchanged, so the trigger does NOT re-fire and the new VM never gets the AppArmor
+  # profile SSH-delivered (the exact fresh-host trap the #4927/#4928 precedent + the
+  # docker_seccomp_config comment warn about). The boot-time image-bake (host_script_files)
+  # closes the FRESH-host half; this closes the running-host re-apply half.
+  triggers_replace = {
+    apparmor_profile = sha256(file("${path.module}/apparmor-soleur-bwrap.profile"))
+    server_id        = hcloud_server.web["web-1"].id
+  }
 
   connection {
     type        = "ssh"

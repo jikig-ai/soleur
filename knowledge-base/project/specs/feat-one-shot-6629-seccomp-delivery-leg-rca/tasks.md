@@ -42,27 +42,27 @@ brand_survival_threshold: single-user incident
 
 ## Phase 2 — Fix (only if Phase 1 confirms an enforcement-delivery gap on the probed host)
 
-- [ ] 2.1 IMAGE-BAKE (NOT write_files): add `seccomp-bwrap.json` + `apparmor-soleur-bwrap.profile`
+- [x] 2.1 IMAGE-BAKE (NOT write_files): add `seccomp-bwrap.json` + `apparmor-soleur-bwrap.profile`
   to Dockerfile `/opt/soleur/host-scripts/` (`:196-206`); extract at boot
   (`cloud-init.yml:139-140`); fold into `host_scripts_content_hash` (no separate
   drift-guard test — extend existing hash). Respects the `WEB_GZIP_BUDGET` cap.
-- [ ] 2.2 Add `--security-opt seccomp=… --security-opt apparmor=soleur-bwrap` to the
+- [x] 2.2 Add `--security-opt seccomp=… --security-opt apparmor=soleur-bwrap` to the
   cloud-init boot `docker run` (`:773-785`) + fail-closed `poweroff -f` if absent;
   `apparmor_parser -r` + userns sysctl in `runcmd` BEFORE that run.
-- [ ] 2.3 AppArmor HARD-required: `server_id` in `apparmor_bwrap_profile.triggers_replace`
+- [x] 2.3 AppArmor HARD-required: `server_id` in `apparmor_bwrap_profile.triggers_replace`
   (`server.tf:1121`) + image-bake delivery + load + boot `--security-opt`.
-- [ ] 2.4 Preserve ci-deploy's UNCONDITIONAL `--security-opt` (fail-closed) — forbid
+- [x] 2.4 Preserve ci-deploy's UNCONDITIONAL `--security-opt` (fail-closed) — forbid
   any conditional-seccomp "fix." (Cond. H2/H3) SSH-leg FAIL LOUD (non-zero + Sentry).
-- [ ] 2.5 Track `seccomp_profile_loaded_matches_host` in ACs/Observability, not just
+- [x] 2.5 Track `seccomp_profile_loaded_matches_host` in ACs/Observability, not just
   host_present. Verify via `terraform plan -replace=hcloud_server.web["web-1"]` (no apply)
   that the fresh create carries the change (ignore_changes[user_data] caveat).
-- [ ] 2.6 CREATE ADR-122 anchored to ADR-080 (bake-and-extract) — NOT amend ADR-079.
+- [x] 2.6 CREATE ADR-122 anchored to ADR-080 (bake-and-extract) — NOT amend ADR-079.
   Re-read the 3 `.c4` files; edit only if a description is falsified (expected no-op).
-- [ ] 2.7 `tsc --noEmit` (if TS touched); infra shell tests; `cloud-init-user-data-size.test.ts`
+- [x] 2.7 `tsc --noEmit` (if TS touched); infra shell tests; `cloud-init-user-data-size.test.ts`
   green; `terraform validate` / infra-config gate green.
 
 ## Phase 3 — Non-merge-path determination (#6628 build-gate)
 
-- [ ] 3.1 State the YES/NO in the RCA with the confirming datum.
+- [x] 3.1 State the YES/NO in the RCA with the confirming datum.
 - [ ] 3.2 Comment on #6628 (build trigger fired / stays deferred, with reason).
 - [ ] 3.3 PR body `Ref #6629`; `gh issue close 6629` post-merge.

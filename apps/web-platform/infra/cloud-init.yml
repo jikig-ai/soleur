@@ -774,6 +774,8 @@ runcmd:
       --name soleur-web-platform \
       --log-driver journald \
       --restart unless-stopped \
+      --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
+      --security-opt apparmor=soleur-bwrap \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$TMPENV" \
       --add-host host.docker.internal:host-gateway \

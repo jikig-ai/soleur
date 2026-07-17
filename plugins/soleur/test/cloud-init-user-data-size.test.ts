@@ -489,7 +489,7 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml", () => {
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles", () => {
     // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
     // enforcement probe, #5933 item 3).
     // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
@@ -498,7 +498,11 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // +1 (=28): vector.toml — the Vector shipper config baked for the ungated web-host
     // install (soleur-vector-install renders + installs it to /etc/vector/vector.toml, #6396).
     // A data file, not a script.
-    expect(serverTfBakedSet().length).toBe(28);
+    // +2 (=30): seccomp-bwrap.json + apparmor-soleur-bwrap.profile — container-sandbox
+    // security-control profiles baked for FRESH-host boot-time delivery + enforcement (#6629,
+    // ADR-122). Previously SSH-provisioner-only, so a fresh host ran the tenant sandbox
+    // unenforced. Data files, not scripts.
+    expect(serverTfBakedSet().length).toBe(30);
   });
 
   // #5922 release break: the Dockerfile bakes the host-scripts via
