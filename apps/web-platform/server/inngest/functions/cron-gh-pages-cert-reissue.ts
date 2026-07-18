@@ -71,6 +71,8 @@ const REISSUE_TOKEN_PERMISSIONS: Record<string, string> = {
 // AbortController timeout mirrors cf-cache-purge.ts.
 const POLL_INTERVAL_MS = 60 * 1000;
 const POLL_MAX_MS = 15 * 60 * 1000;
+// Fixed poll count for the replay-safe handler loop (deterministic across resumes).
+const MAX_POLLS = Math.floor(POLL_MAX_MS / POLL_INTERVAL_MS);
 const CNAME_SETTLE_MS = 45 * 1000; // between cname:null and re-set
 const CF_TIMEOUT_MS = 10 * 1000;
 
@@ -714,20 +716,23 @@ export async function cronGhPagesCertReissueHandler({
     return result;
   }
 
-  // Poll (step.sleep is the only suspension point).
+  // Poll (step.sleep is the only suspension point). Bounded by a FIXED iteration
+  // count — NOT wall-clock Date.now() in the handler body, which is
+  // non-deterministic across Inngest replays and would shift step names on resume.
   let attempts = 0;
   let finalState = "unknown";
-  const pollStart = Date.now();
   let healthy = false;
-  while (Date.now() - pollStart < POLL_MAX_MS) {
-    const pages = await step.run(`poll-${attempts}`, () => deps.getPages());
+  for (let i = 0; i < MAX_POLLS; i++) {
+    const pages = await step.run(`poll-${i}`, () => deps.getPages());
     attempts += 1;
     finalState = pages.state;
     if (pages.state === "approved" || pages.state === "issued") {
       healthy = true;
       break;
     }
-    await step.sleep(`poll-wait-${attempts}`, `${POLL_INTERVAL_MS}ms`);
+    if (i < MAX_POLLS - 1) {
+      await step.sleep(`poll-wait-${i}`, `${POLL_INTERVAL_MS}ms`);
+    }
   }
 
   // Unconditional final restore step.
