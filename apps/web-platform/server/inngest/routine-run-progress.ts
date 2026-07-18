@@ -24,9 +24,12 @@ const TABLE = "routine_run_progress";
 //   stuck:    STUCK_THRESHOLD_MS < staleness ≤ ORPHAN_IGNORE_MS (evicted, reader-computed)
 //   ignored:  staleness > ORPHAN_IGNORE_MS (dead orphan; reader drops it, delete-stale reaps it)
 // Heavy claude-loop crons run for minutes, so the ignore bound sits well above
-// the longest expected run; the heartbeat is emitted every ~30s DURING the run.
-export const HEARTBEAT_INTERVAL_MS = 30_000;
-export const STUCK_THRESHOLD_MS = 90_000; // 3× interval — two missed heartbeats
+// the longest expected run; the heartbeat is emitted every ~60s DURING the run.
+// Interval raised 30s→60s (Disk-IO write reduction, 2026-07-18) with
+// STUCK_THRESHOLD_MS kept at 3× interval so the missed-beat tolerance is
+// unchanged (two missed beats before "stuck").
+export const HEARTBEAT_INTERVAL_MS = 60_000;
+export const STUCK_THRESHOLD_MS = 180_000; // 3× interval — two missed heartbeats
 export const ORPHAN_IGNORE_MS = 60 * 60_000; // 60 min — above the longest heavy run
 
 function mirror(op: string, e: unknown, runId: string): void {

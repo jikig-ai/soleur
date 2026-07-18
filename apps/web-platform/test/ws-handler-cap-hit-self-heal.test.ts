@@ -35,10 +35,25 @@ const {
   mockReleaseSlot,
   mockReportSilentFallback,
   mockServiceFrom,
+  mockForEachSession,
 } = vi.hoisted(() => ({
   mockReleaseSlot: vi.fn(),
   mockReportSilentFallback: vi.fn(),
   mockServiceFrom: vi.fn(),
+  // AC14: controls the LEGACY agent-loop registry probe. Default no-op = no
+  // live legacy loop for any conversation. A test can override it to simulate a
+  // live backgrounded loop that must be PROTECTED from the dead-socket reap.
+  mockForEachSession: vi.fn(),
+}));
+
+// Partial mock: preserve every real export (ws-handler imports setUserWorkspace,
+// getActiveTurnConversation, etc.) and override ONLY forEachSessionForConversation
+// so the AC14 hasLiveAgentLoop legacy-registry branch is controllable. cc-dispatcher
+// stays unmocked — its real hasActiveCcQuery returns false when no runner is set
+// (cc-dispatcher.ts:2861), which is the correct "no cc loop" default in tests.
+vi.mock("../server/agent-session-registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server/agent-session-registry")>()),
+  forEachSessionForConversation: mockForEachSession,
 }));
 
 vi.mock("@/lib/supabase/service", () => ({
@@ -75,6 +90,11 @@ vi.mock("../server/concurrency", () => ({
   acquireSlot: vi.fn(),
   touchSlot: vi.fn(),
   emitConcurrencyCapHit: vi.fn(),
+  // ws-handler.ts imports these liveness constants from ./concurrency; the
+  // wholesale mock MUST re-export them or ws-handler reads `undefined` and the
+  // staleCutoff computation becomes NaN (wholesale-mock-drops-named-exports).
+  SLOT_STALENESS_THRESHOLD_SECONDS: 240,
+  SLOT_HEARTBEAT_INTERVAL_MS: 60_000,
 }));
 
 vi.mock("../server/observability", () => ({
@@ -172,6 +192,10 @@ function setupSupabaseMock(args: {
 describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks clears call history but NOT implementations — reset the
+    // AC14 legacy-loop probe to its no-op default so a prior test's live-loop
+    // override does not leak.
+    mockForEachSession.mockReset();
   });
 
   it("orphan slot present → releases orphan, mirrors to Sentry, returns didRecover: true", async () => {
@@ -204,10 +228,16 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
     });
   });
 
-  it("all slots reference visible conversations → no recovery, didRecover: false", async () => {
-    // Genuine cap_hit: every slot maps to a visible-active conversation.
-    // No divergence — recovery is a no-op and the caller should fall
-    // through to the existing close path.
+  it("all slots reference visible conversations WITH a live loop → no recovery, didRecover: false", async () => {
+    // Genuine cap_hit: every slot maps to a visible-active conversation that is
+    // genuinely LIVE (has an agent loop). Post-AC14, "healthy" requires a live
+    // loop (or focus) — so mark conv-real-1 live. No divergence — recovery is a
+    // no-op and the caller should fall through to the existing close path.
+    mockForEachSession.mockImplementation(
+      (_u: string, convId: string, fn: (k: string, s: unknown) => unknown) => {
+        if (convId === "conv-real-1") fn("user-1:conv-real-1", {});
+      },
+    );
     setupSupabaseMock({
       visibleConversations: [{ id: "conv-real-1" }],
       slotRows: [{ conversation_id: "conv-real-1" }],
@@ -223,8 +253,13 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
   });
 
   it("multiple orphan slots → releases each, reports orphanCount", async () => {
-    // Two orphan slots + one real-visible slot. Recovery must release
-    // BOTH orphans and leave the real slot alone.
+    // Two orphan slots + one real-visible slot with a live loop. Recovery must
+    // release BOTH orphans and leave the real (live-loop-protected) slot alone.
+    mockForEachSession.mockImplementation(
+      (_u: string, convId: string, fn: (k: string, s: unknown) => unknown) => {
+        if (convId === "conv-real-1") fn("user-1:conv-real-1", {});
+      },
+    );
     setupSupabaseMock({
       visibleConversations: [{ id: "conv-real-1" }],
       slotRows: [
@@ -282,6 +317,10 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
 describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks clears call history but NOT implementations — reset the
+    // AC14 legacy-loop probe to its no-op default so a prior test's live-loop
+    // override does not leak.
+    mockForEachSession.mockReset();
   });
 
   it("stale-heartbeat slot whose conversation IS visible → reaps slot, mirrors with staleHeartbeatCount, didRecover: true", async () => {
@@ -302,12 +341,12 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     expect(mockReleaseSlot).toHaveBeenCalledTimes(1);
     expect(mockReleaseSlot).toHaveBeenCalledWith("user-1", "conv-stuck-active");
 
-    // Anchor the production-side STALE_HEARTBEAT_THRESHOLD_SECONDS constant.
-    // A regression that ships `120` (treated as ms) or `1_200_000` (typo)
-    // would miss this; this assertion catches it.
+    // Anchor the production-side shared SLOT_STALENESS_THRESHOLD_SECONDS (240s
+    // as of the 2026-07-18 Disk-IO backoff). A regression that ships `240`
+    // (treated as ms) or a typo'd magnitude would miss this window.
     expect(capture.staleCutoff).toBeDefined();
     const cutoffMs = new Date(capture.staleCutoff!).getTime();
-    const expected = before - 120_000;
+    const expected = before - 240_000;
     expect(Math.abs(cutoffMs - expected)).toBeLessThan(5_000);
 
     expect(mockReportSilentFallback).toHaveBeenCalled();
@@ -326,13 +365,47 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     });
   });
 
-  it("fresh-heartbeat slot whose conversation IS visible → no reap, no Sentry, didRecover: false", async () => {
-    // Negative gate: a slot whose heartbeat is fresh (returned as []
-    // by the stale SELECT) and whose conversation is visible is a
-    // genuine cap_hit. The widened helper must NOT over-fire.
+  it("AC14: fresh-heartbeat visible slot with NO live agent loop → dead-socket reap (immediate cap-hit reclaim)", async () => {
+    // AC14 dead-socket branch: a conversation whose slot is visible-active and
+    // fresh-heartbeat (<240 s, so NEITHER orphan NOR stale), not the focused
+    // socket conversation, and with no live agent loop on this instance — the
+    // classic crash+reconnect+new-conversation lockout. Must be reaped
+    // immediately, THRESHOLD-INDEPENDENT, so the cap-hit user is not locked out
+    // for up to 240 s. mockForEachSession default no-op = no legacy loop; real
+    // hasActiveCcQuery = false (no runner) → hasLiveAgentLoop = false → reaped.
     setupSupabaseMock({
       visibleConversations: [{ id: "conv-real-1" }],
       slotRows: [{ conversation_id: "conv-real-1" }],
+      staleSlotRows: [],
+    });
+
+    const result = await tryLedgerDivergenceRecovery("user-1");
+
+    expect(result.didRecover).toBe(true);
+    expect(mockReleaseSlot).toHaveBeenCalledTimes(1);
+    expect(mockReleaseSlot).toHaveBeenCalledWith("user-1", "conv-real-1");
+    const [, opts] = mockReportSilentFallback.mock.calls[0];
+    expect(opts.extra).toMatchObject({
+      orphanCount: 0,
+      staleHeartbeatCount: 0,
+      deadSocketCount: 1,
+      recoveryCause: "dead-socket",
+    });
+  });
+
+  it("AC14: fresh-heartbeat visible slot WITH a live agent loop → NOT reaped (backgrounded loop protected)", async () => {
+    // The load-bearing safety property (CTO ruling): a backgrounded-but-live
+    // loop (e.g. after crash+reconnect, or paused on a review gate) has a live
+    // registry entry and MUST NOT be reaped even though it is not the focused
+    // socket conversation. Simulate a live legacy loop for conv-live-1.
+    mockForEachSession.mockImplementation(
+      (_userId: string, _convId: string, fn: (k: string, s: unknown) => unknown) => {
+        fn("user-1:conv-live-1", {}); // one live session entry → hasLiveAgentLoop true
+      },
+    );
+    setupSupabaseMock({
+      visibleConversations: [{ id: "conv-live-1" }],
+      slotRows: [{ conversation_id: "conv-live-1" }],
       staleSlotRows: [],
     });
 
@@ -367,7 +440,7 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
       slotCount: 2,
       orphanCount: 1,
       staleHeartbeatCount: 1,
-      recoveryCause: "orphan-and-stale",
+      recoveryCause: "orphan+stale-heartbeat",
     });
   });
 

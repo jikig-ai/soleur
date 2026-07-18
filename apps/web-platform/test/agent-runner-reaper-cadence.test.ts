@@ -5,10 +5,14 @@ import path from "node:path";
 // Disk-IO remediation (2026-06-02): the stuck-active reaper poll cadence was
 // widened 60s → 300s to cut the `find_stuck_active_conversations` RPC volume 5×
 // — it was the #2 prod Supabase Disk-IO write consumer (760k ms / 38k calls
-// over a 27-day window). The 120s STUCK_ACTIVE_THRESHOLD_SECONDS staleness
-// window is INDEPENDENT of poll cadence and MUST stay 120s (it is co-locked
-// across four sources per the agent-runner.ts:726 comment). This test pins
-// BOTH so a future edit cannot silently re-couple them or revert the cadence.
+// over a 27-day window). The staleness window is INDEPENDENT of poll cadence.
+// 2026-07-18 Disk-IO backoff: the local STUCK_ACTIVE_THRESHOLD_SECONDS literal
+// was structurally de-duplicated into the shared SLOT_STALENESS_THRESHOLD_SECONDS
+// const (server/concurrency.ts, now 240s) — agent-runner imports it and passes
+// it as the RPC threshold arg, so it can no longer drift from the ws-handler
+// read-side or the SQL sweep (mig 133). This test pins the poll cadence AND the
+// shared-const wiring so a future edit cannot silently re-couple them, revert the
+// cadence, or re-introduce a divergent local threshold literal.
 //
 // Source-reading regex test: the constants are module-private (not exported),
 // so this asserts on the file text. Standalone file per the work-skill guidance
@@ -28,8 +32,17 @@ describe("stuck-active reaper cadence (disk-IO remediation)", () => {
     );
   });
 
-  it("keeps the staleness threshold at 120s (independent of poll cadence)", () => {
-    expect(SRC).toMatch(/STUCK_ACTIVE_THRESHOLD_SECONDS\s*=\s*120\s*;/);
+  it("uses the shared SLOT_STALENESS_THRESHOLD_SECONDS as the RPC threshold (no local literal)", () => {
+    // Imports the shared const...
+    expect(SRC).toMatch(
+      /import\s*\{[^}]*\bSLOT_STALENESS_THRESHOLD_SECONDS\b[^}]*\}\s*from\s*["']\.\/concurrency["']/,
+    );
+    // ...and passes it as the find_stuck_active_conversations threshold arg.
+    expect(SRC).toMatch(
+      /p_threshold_seconds:\s*SLOT_STALENESS_THRESHOLD_SECONDS/,
+    );
+    // The old divergent local literal is gone (structural de-dup, not a copy).
+    expect(SRC).not.toMatch(/STUCK_ACTIVE_THRESHOLD_SECONDS\s*=\s*120/);
   });
 
   it("does NOT retain the old 60s poll cadence", () => {
