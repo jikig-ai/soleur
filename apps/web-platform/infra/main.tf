@@ -129,3 +129,13 @@ provider "cloudflare" {
   alias     = "bot_management"
   api_token = var.cf_api_token_bot_management
 }
+
+# Separate provider for Cloudflare R2 (object storage). The default cf_api_token is scoped
+# "Tunnel, Access, DNS, Notifications" and lacks Workers R2 Storage:Edit (verified 2026-07-18
+# by a live 403 on GET /accounts/<id>/r2/buckets). This alias uses a narrow token scoped to
+# Workers R2 Storage:Edit only. Current consumer:
+#   - workspaces-luks-header.tf (cloudflare_r2_bucket.workspaces_luks_header) — #6649 / #6604
+provider "cloudflare" {
+  alias     = "r2"
+  api_token = var.cf_api_token_r2
+}
