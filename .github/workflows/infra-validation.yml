@@ -449,6 +449,20 @@ jobs:
       - name: Run registry private-NIC boot-converger tests (#6415)
         run: bash apps/web-platform/infra/private-nic-guard.test.sh
 
+      # #6438/#6548 web-host private-net probe primitive. Registered explicitly (this job runs
+      # named steps, not a glob — an unregistered infra suite gates NOTHING and fails silently
+      # green, #3366/#6520). Env-driven plain bash executed directly against synthesized fixtures
+      # + PATH stubs; the zot/git-data suites also stand up a python3 loopback server. ubuntu-24.04
+      # already carries bash + python3 + curl, so no apt is added to this job.
+      - name: Run web-host private-NIC self-report guard tests (#6438 §3, AC4 — no-reboot invariant)
+        run: bash apps/web-platform/infra/web-private-nic-guard.test.sh
+
+      - name: Run web-host zot consumer-probe tests (#6438 §1, AC1 — authed serviceability, -u/no-f)
+        run: bash apps/web-platform/infra/web-zot-consumer-probe.test.sh
+
+      - name: Run web-host git-data consumer-probe tests (#6548 — fail-soft reachability)
+        run: bash apps/web-platform/infra/web-git-data-probe.test.sh
+
       # Registered explicitly because this job runs named steps, not a glob — an unregistered
       # infra suite gates NOTHING and fails silently green (#3366/#6520). Pure bash + PATH
       # stubs: no terraform, cloud-init, docker, network, or root, so this job's existing
