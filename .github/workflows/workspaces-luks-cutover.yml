@@ -82,8 +82,11 @@ jobs:
           [[ -n "$DOPPLER_TOKEN_CHECK" ]] || { echo "::error::DOPPLER_TOKEN not configured."; exit 1; }
 
       - name: CF Tunnel SSH bridge
-        # Needed for any host-touching run: a real cutover OR a rollback recovery.
-        if: ${{ !inputs.dry_run || inputs.rollback }}
+        # Needed on EVERY invocation (dry-run, real cutover, rollback): the next step ALWAYS pipes
+        # workspaces-cutover.sh to web-1 (private 10.0.1.10) over SSH, and the escrow probe runs
+        # host-side in the dry-run arm too — before the DRY_RUN freeze gate — so a GREEN escrow
+        # signal lands during the rehearsal. A dry_run guard here left the bridge un-set on the
+        # rehearsal path, so the SSH timed out before the probe could run (ref run 29644526137).
         uses: ./.github/actions/cf-tunnel-ssh-bridge
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN }}
