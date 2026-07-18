@@ -39,6 +39,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-email-ingress-probe",
   "cron-expenses-verify-by",
   "cron-follow-through-monitor",
+  "cron-gh-pages-cert-reissue",
   "cron-gh-pages-cert-state",
   "cron-ghcr-token-minter",
   "cron-github-app-drift-guard",
