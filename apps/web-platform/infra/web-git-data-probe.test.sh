@@ -120,15 +120,16 @@ SERVER_TF="$SCRIPT_DIR/server.tf"
 assert "git-data .service sets Environment=HOME=/root (else doppler: \$HOME is not defined)" \
   "grep -qE '^Environment=HOME=/root\$' '$SVC'"
 assert "git-data .service does NOT source webhook-deploy (deploy-owned; imports /tmp/.doppler)" \
-  "! grep -q 'webhook-deploy' '$SVC'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'webhook-deploy'"
 assert "git-data .service does NOT set DOPPLER_CONFIG_DIR (root doppler uses /root/.doppler)" \
   "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'DOPPLER_CONFIG_DIR'"
 assert "git-data .service does NOT reference /tmp/.doppler (#6536 clash surface)" \
   "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q '/tmp/.doppler'"
 assert "git-data .service is root-run (no User=deploy without PrivateTmp=true)" \
   "! grep -qE '^User=deploy' '$SVC' || grep -qE '^PrivateTmp=true' '$SVC'"
-assert "server.tf git_data_probe_install writes DOPPLER_TOKEN= into /etc/default/web-git-data-probe" \
-  "grep -qE 'DOPPLER_TOKEN=.*/etc/default/web-git-data-probe' '$SERVER_TF'"
+# Anchor on the token VALUE wiring (web_probes.key), not just the literal (test-design review).
+assert "server.tf git_data_probe_install writes DOPPLER_TOKEN=<web_probes.key> into /etc/default/web-git-data-probe" \
+  "grep -qE 'DOPPLER_TOKEN=%s.*web_probes\\.key.*/etc/default/web-git-data-probe' '$SERVER_TF'"
 
 echo
 echo "=== $PASS passed, $FAIL failed ==="

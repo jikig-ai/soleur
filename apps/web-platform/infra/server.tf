@@ -428,6 +428,10 @@ resource "terraform_data" "container_restart_monitor_install" {
 # §3 private-NIC self-report (detect+emit+alarm, NO reboot). Its liveness beat (web_nic_guard) is
 # pinged every healthy run so the SOLEUR_PRIVATE_NIC emitter is observable-when-healthy.
 resource "terraform_data" "private_nic_guard_install" {
+  # Reload Vector (Source 4 live on web-1) BEFORE (re)enabling the probe timers, so the first post-fix
+  # FATAL/canary line ships instead of waiting a timer tick (probe-first intent; #6438/#6548 review).
+  depends_on = [terraform_data.journald_persistent]
+
   triggers_replace = sha256(join(",", [
     file("${path.module}/web-private-nic-guard.sh"),
     file("${path.module}/web-private-nic-guard.service"),
@@ -469,7 +473,10 @@ resource "terraform_data" "private_nic_guard_install" {
       # (root uses /root/.doppler, never /tmp/.doppler — the #6536 clash surface). VERSION_CHECK off
       # matches every fleet doppler env file (avoids a per-fire egress version-check warning shipping
       # to Source 4 as noise). #6438 §3.
-      "printf 'EXPECTED_IP=%s\\nBETTERSTACK_INGEST_URL=%s\\nWEB_NIC_GUARD_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${var.web_hosts["web-1"].private_ip}' '${local.betterstack_logs_ingest_url}' 'WEB_NIC_GUARD_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-private-nic-guard",
+      # umask 0137 so the file is NEVER created world/group-readable — the env file now holds a live
+      # prd read token (before this fix it held only URL key-names). Closes the sub-ms TOCTOU window
+      # between create-at-default-umask and chmod (security review; precedent cloud-init-inngest.yml).
+      "( umask 0137 && printf 'EXPECTED_IP=%s\\nBETTERSTACK_INGEST_URL=%s\\nWEB_NIC_GUARD_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${var.web_hosts["web-1"].private_ip}' '${local.betterstack_logs_ingest_url}' 'WEB_NIC_GUARD_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-private-nic-guard )",
       "chmod 600 /etc/default/web-private-nic-guard",
       "systemctl daemon-reload",
       "systemctl enable --now web-private-nic-guard.timer",
@@ -480,6 +487,9 @@ resource "terraform_data" "private_nic_guard_install" {
 
 # §1 zot consumer serviceability probe.
 resource "terraform_data" "zot_consumer_probe_install" {
+  # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering).
+  depends_on = [terraform_data.journald_persistent]
+
   triggers_replace = sha256(join(",", [
     file("${path.module}/web-zot-consumer-probe.sh"),
     file("${path.module}/web-zot-consumer-probe.service"),
@@ -516,7 +526,8 @@ resource "terraform_data" "zot_consumer_probe_install" {
       "chmod +x /usr/local/bin/web-zot-consumer-probe.sh",
       # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold unit-start
       # fix — see the web-private-nic-guard install above. #6438 §1.
-      "printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe",
+      # umask 0137: never world/group-readable — the env file now holds a live prd read token (see nic-guard install).
+      "( umask 0137 && printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe )",
       "chmod 600 /etc/default/web-zot-consumer-probe",
       "systemctl daemon-reload",
       "systemctl enable --now web-zot-consumer-probe.timer",
@@ -527,6 +538,9 @@ resource "terraform_data" "zot_consumer_probe_install" {
 
 # #6548 git-data reachability probe (fail-soft; arms the existing git_data_prd).
 resource "terraform_data" "git_data_probe_install" {
+  # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering).
+  depends_on = [terraform_data.journald_persistent]
+
   triggers_replace = sha256(join(",", [
     file("${path.module}/web-git-data-probe.sh"),
     file("${path.module}/web-git-data-probe.service"),
@@ -563,7 +577,8 @@ resource "terraform_data" "git_data_probe_install" {
       # to it. GIT_DATA_HEARTBEAT_URL is a SINGLE (non-for_each) secret, so the KEY is unsuffixed.
       # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold unit-start
       # fix — see the web-private-nic-guard install above. #6548.
-      "printf 'GIT_DATA_ENDPOINT=%s\\nGIT_DATA_HEARTBEAT_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '10.0.1.20:22' 'GIT_DATA_HEARTBEAT_URL' '${doppler_service_token.web_probes.key}' > /etc/default/web-git-data-probe",
+      # umask 0137: never world/group-readable — the env file now holds a live prd read token (see nic-guard install).
+      "( umask 0137 && printf 'GIT_DATA_ENDPOINT=%s\\nGIT_DATA_HEARTBEAT_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '10.0.1.20:22' 'GIT_DATA_HEARTBEAT_URL' '${doppler_service_token.web_probes.key}' > /etc/default/web-git-data-probe )",
       "chmod 600 /etc/default/web-git-data-probe",
       "systemctl daemon-reload",
       "systemctl enable --now web-git-data-probe.timer",
@@ -769,6 +784,17 @@ resource "terraform_data" "journald_persistent" {
       # not come back — never ship dead config (the fail2ban_tuning/journald positive-assert pattern).
       "install -d -m 0755 /etc/vector /opt/soleur",
       "sed 's|@@HOST_NAME@@|${hcloud_server.web["web-1"].name}|g' /tmp/soleur-vector.toml.staged > /opt/soleur/vector.toml",
+      # Render-sanity gate BEFORE we touch the live agent: a botched render (empty sed output,
+      # unsubstituted sentinel, missing sink) must fail the apply while the RUNNING vector stays up —
+      # a dead vector on web-1 darkens ALL host observability, a far bigger blast than the 3 probes.
+      # (A full `vector validate` is not used here: it would false-fail on the unset
+      # ${BETTERSTACK_LOGS_TOKEN} env interpolation — vector.service injects it via doppler run, this
+      # remote-exec has no such env. The committed vector.toml is already CI-validated TOML, and the
+      # only runtime transform is the @@HOST_NAME@@ string substitution.) #6438/#6548 review.
+      "test -s /opt/soleur/vector.toml",
+      "! grep -q '@@HOST_NAME@@' /opt/soleur/vector.toml",
+      "grep -q '\\[sinks.betterstack\\]' /opt/soleur/vector.toml",
+      "grep -q 'web-zot-consumer-probe' /opt/soleur/vector.toml",
       "install -m 0644 /opt/soleur/vector.toml /etc/vector/vector.toml",
       "rm -f /tmp/soleur-vector.toml.staged",
       "systemctl restart vector.service",

@@ -152,6 +152,13 @@ Terraform-minted **read-scoped** prd token (`doppler_service_token.web_probes`, 
 into the existing per-probe `/etc/default/web-<probe>` files (600). Least-privilege by construction
 (read-only, not the full-prd `var.doppler_token`); no PII in the beats; no new operator secret.
 
+**The one live-prod mutation — the vector-agent reload on web-1 (folded into the IaC
+`terraform_data.journald_persistent` remote-exec) — cannot reach serving traffic:** vector is a
+journald→Better Stack log-shipper sidecar, not in the request path (the app is served behind the
+cloudflared tunnel); its journald sources resume from their `sd_journal` cursor after the sub-second
+reload with no gap (persistent journal), so no user-facing disruption. A botched render fails the apply
+(render-sanity gate) BEFORE the running agent is touched, so vector never goes down on a bad config.
+
 **Brand-survival threshold:** **single-user incident.** CPO sign-off required at plan time (carried
 forward from the brainstorm framing); `user-impact-reviewer` runs at review time.
 
@@ -246,7 +253,7 @@ liveness_signal:
   configured_in: apps/web-platform/infra/web-probe.tf + git-data.tf; armed by apply-web-platform-infra.yml:719-794
 error_reporting:
   destination: Better Stack Logs source 2457081 (soleur-inngest-vector-prd), host_name=soleur-web-platform, via vector Source 4 (host_scripts_journald) — NEWLY LIVE on web-1 after Phase 1
-  fail_loud: yes — probe FATAL/classification stderr (SyslogIdentifier=web-{zot-consumer-probe,git-data-probe,nic-guard}) ships off-box; the doppler-auth error is now self-reporting
+  fail_loud: yes — probe FATAL/classification stderr (SyslogIdentifier=web-{zot-consumer-probe,git-data-probe,nic-guard}) ships off-box; the doppler-auth error will self-report once Phase 1 applies (Source 4 goes live on web-1 on the merge-apply — not before)
 failure_modes:
   - mode: doppler run fails (no HOME/token) — the current bug
     detection: SYSLOG_IDENTIFIER=web-*-probe stderr in Better Stack (Source 4) shows "Doppler Error: $HOME is not defined" / auth error

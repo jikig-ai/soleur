@@ -187,6 +187,14 @@ the three `.service` files):
 - Keep the unit **root-run**; never `User=deploy` without `PrivateTmp=true`; never set
   `DOPPLER_CONFIG_DIR` (so doppler stays on `/root/.doppler`, never `/tmp/.doppler`).
 
+The probe units use a **mandatory** `EnvironmentFile=/etc/default/web-<probe>` and a **hard**
+`doppler run` with no degrade fallback — a deliberate divergence from the fleet's degrade-gracefully
+root-doppler units (`container-restart-monitor`, `cron-egress-*` use `EnvironmentFile=-` + a
+doppler-less fallback). This is correct here: a probe whose heartbeat URL is resolved *from* Doppler
+is useless doppler-less, so a token/auth failure MUST surface as a failed unit + heartbeat lapse
+(fail-loud), never a silent degraded run — ADR-117's "coverage that reads green while providing none"
+anti-pattern.
+
 **Observability delivery:** vector installs on web-1 only at cloud-init boot, and web-1 never
 re-runs cloud-init (`ignore_changes=[user_data]`), so the probe `SyslogIdentifier`s added to
 `vector.toml` Source 4 were file-only, never live on the host — the probes' own FATAL stderr never

@@ -3,9 +3,11 @@
 # web-private-nic-guard) run `doppler run --project soleur --config prd -- …` as ROOT to inject
 # their per-host heartbeat URL + credentials. They FAILED TO START on web-1 because their systemd
 # env carried no DOPPLER_TOKEN (and web-1 has no /etc/default/inngest-server — web_colocate_inngest
-# defaults false — so there was no root-doppler-auth token source on the host at all). This mints a
-# dedicated credential for that auth, delivered into each unit's own /etc/default/web-<probe> file
-# (server.tf *_install provisioners).
+# defaults false — so there was no *suitable* root-doppler token source for the probe units: web-1
+# DOES carry a full-prd DOPPLER_TOKEN via the deploy-owned /etc/default/webhook-deploy, but that file
+# also imports DOPPLER_CONFIG_DIR=/tmp/.doppler — the #6536 clash surface — so it must not be sourced
+# here). This mints a dedicated credential for that auth, delivered into each unit's own
+# /etc/default/web-<probe> file (server.tf *_install provisioners).
 #
 # WHY A DEDICATED READ TOKEN (fleet least-privilege convention; mirrors doppler_service_token
 # .registry / .git_data / .inngest, all read-scoped boot tokens): the probes need ONLY to READ

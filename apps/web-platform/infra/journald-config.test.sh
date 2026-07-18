@@ -198,14 +198,23 @@ assert "cat-deploy-state.sh is bash -n clean" \
 echo ""
 echo "--- vector.toml delivery folded into journald_persistent (Source 4 live on web-1) ---"
 JP="$(awk '/resource \"terraform_data\" \"journald_persistent\"/,/^}/' "$SERVER_TF")"
-assert "journald_persistent delivers vector.toml to the running web-1 host" \
-  "grep -q 'vector.toml' <<<\"\$JP\""
+# Anchor on the actual delivery CONSTRUCT (install to the live /etc/vector path + the staging file
+# provisioner), NOT a bare 'vector.toml' token — the block's header comments mention vector.toml, so a
+# bare grep passes on comment text alone even if the delivery were deleted (test-design + pattern review).
+assert "journald_persistent delivers vector.toml to the live /etc/vector on web-1 (install construct)" \
+  "grep -qE 'install -m 0644 .*/etc/vector/vector.toml' <<<\"\$JP\""
+assert "journald_persistent stages vector.toml via a file provisioner" \
+  "grep -qE 'destination[[:space:]]*=[[:space:]]*\"/tmp/soleur-vector.toml.staged\"' <<<\"\$JP\""
 assert "journald_persistent triggers_replace hashes file(vector.toml) (re-delivery on config change)" \
   "grep -qE 'file\\(\"\\\$\\{path.module\\}/vector.toml\"\\)' <<<\"\$JP\""
 assert "journald_persistent reloads the vector agent (restart vector.service)" \
   "grep -qE 'systemctl.*vector.service|restart vector' <<<\"\$JP\""
-assert "the delivered vector.toml carries the 3 probe SyslogIdentifiers (Source 4 include list)" \
-  "grep -q 'web-zot-consumer-probe' '$SCRIPT_DIR/vector.toml' && grep -q 'web-git-data-probe' '$SCRIPT_DIR/vector.toml' && grep -q 'web-nic-guard' '$SCRIPT_DIR/vector.toml'"
+# Scope the identifier check to the [sources.host_scripts_journald] BLOCK (the Source 4 include list),
+# not the whole file — a name relocated into a comment / exclude / other sink would defeat a file-wide
+# grep while breaking Source-4 delivery (test-design + pattern review).
+HSJ="$(awk '/^\[sources\.host_scripts_journald\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' "$SCRIPT_DIR/vector.toml")"
+assert "Source 4 (host_scripts_journald) include list carries all 3 probe SyslogIdentifiers" \
+  "grep -q 'web-zot-consumer-probe' <<<\"\$HSJ\" && grep -q 'web-git-data-probe' <<<\"\$HSJ\" && grep -q 'web-nic-guard' <<<\"\$HSJ\""
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
