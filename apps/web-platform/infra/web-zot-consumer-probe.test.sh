@@ -119,7 +119,7 @@ PORT="$(cat "$PORT_FILE" 2>/dev/null || true)"
 run_probe() {  # <script> <repo>
   local script="$1" repo="$2" pinglog outf ec=0
   pinglog="$(mktemp "$TMP/ping.XXXXXX")"; outf="$(mktemp "$TMP/out.XXXXXX")"
-  SOLEUR_ZOT_PROBE_PING_LOG="$pinglog" \
+  SOLEUR_ZOT_PROBE_PING_LOG="$pinglog" SOLEUR_PROBE_VERBOSE=1 \
     ZOT_ENDPOINT="127.0.0.1:$PORT" ZOT_PROBE_REPO="$repo" ZUSER=zuser ZTOK=ztok \
     timeout 20 bash "$script" >"$outf" 2>&1 || ec=$?
   EC=$ec; PINGED=no; [[ -s "$pinglog" ]] && PINGED=yes; OUT="$(cat "$outf")"

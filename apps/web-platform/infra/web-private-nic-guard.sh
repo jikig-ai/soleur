@@ -106,7 +106,7 @@ fi
 # alarms. Independent unit/failure-domain from the zot beat (folding would re-introduce OR-masking).
 URL="${WEB_NIC_GUARD_URL:-}"
 if [ "$NIC_OK" = true ] && [ -n "$URL" ]; then
-  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || echo "[nic] WARN: web_nic_guard heartbeat ping FAILED (nic_ok=true): $URL" >&2
+  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || echo "[nic] WARN: web_nic_guard heartbeat ping FAILED (nic_ok=true, url_present=yes)" >&2
 fi
 # NO reboot. The web-host variant terminates here by design.
 exit 0

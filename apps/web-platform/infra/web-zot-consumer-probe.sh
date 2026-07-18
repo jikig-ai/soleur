@@ -41,6 +41,11 @@ REPO="${ZOT_PROBE_REPO:-}"
 ZUSER="${ZUSER:-${ZOT_PULL_USER:-}}"
 ZTOK="${ZTOK:-${ZOT_PULL_TOKEN:-}}"
 URL="${WEB_ZOT_CONSUMER_URL:-}"
+# Happy-path stderr is shipped off-box via Vector Source 4 (SyslogIdentifier=web-zot-consumer-probe);
+# the heartbeat ping is the actual off-box liveness signal, so the "servable (200)" narration is
+# redundant there and pure quota cost at 60s cadence. Gate it behind a debug flag (default OFF);
+# fault classifications below always emit. Set SOLEUR_PROBE_VERBOSE=1 in /etc/default for on-host debug.
+VERBOSE="${SOLEUR_PROBE_VERBOSE:-}"
 
 if [ -z "$REPO" ]; then
   echo "[zot-probe] FATAL: ZOT_PROBE_REPO unset (source /etc/default/web-zot-consumer-probe) — cannot probe serviceability without a real repository path." >&2
@@ -58,7 +63,7 @@ _ping() {
     return 0
   fi
   [ -n "$URL" ] || { echo "[zot-probe] WARN: WEB_ZOT_CONSUMER_URL unset — servable but cannot ping." >&2; return 0; }
-  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || echo "[zot-probe] WARN: heartbeat ping FAILED (servable=200): $URL" >&2
+  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || echo "[zot-probe] WARN: heartbeat ping FAILED (servable=200, url_present=yes)" >&2
 }
 
 if [ -n "${SOLEUR_ZOT_PROBE_STATUS_OVERRIDE:-}" ]; then
@@ -73,7 +78,7 @@ fi
 case "$CODE" in
   200)
     _ping "$URL"
-    echo "[zot-probe] servable (200): ${ENDPOINT}/v2/${REPO}/tags/list — pinged heartbeat." >&2
+    [ -n "$VERBOSE" ] && echo "[zot-probe] servable (200): ${ENDPOINT}/v2/${REPO}/tags/list — pinged heartbeat." >&2
     exit 0
     ;;
   404)

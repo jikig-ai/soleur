@@ -25,6 +25,11 @@ ENDPOINT="${GIT_DATA_ENDPOINT:-10.0.1.20:22}"
 HOST="${ENDPOINT%%:*}"
 PORT="${ENDPOINT##*:}"
 URL="${GIT_DATA_HEARTBEAT_URL:-}"
+# Happy-path stderr is shipped off-box via Vector Source 4 (SyslogIdentifier=web-git-data-probe);
+# the heartbeat ping is the off-box liveness signal, so the "reachable ... pinged" narration is
+# redundant there and pure quota cost at 60s cadence. Gate it behind a debug flag (default OFF);
+# the fail-soft SUPPRESS classification below always emits. Set SOLEUR_PROBE_VERBOSE=1 for on-host debug.
+VERBOSE="${SOLEUR_PROBE_VERBOSE:-}"
 
 _ping() {
   if [ -n "${SOLEUR_GIT_DATA_PROBE_PING_LOG:-}" ]; then
@@ -32,7 +37,7 @@ _ping() {
     return 0
   fi
   [ -n "$URL" ] || { echo "[git-data-probe] WARN: GIT_DATA_HEARTBEAT_URL unset — reachable but cannot ping." >&2; return 0; }
-  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || echo "[git-data-probe] WARN: heartbeat ping FAILED (reachable): $URL" >&2
+  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || echo "[git-data-probe] WARN: heartbeat ping FAILED (reachable, url_present=yes)" >&2
 }
 
 _reachable() {
@@ -52,7 +57,7 @@ fi
 
 if [ "$REACH" = reachable ]; then
   _ping "$URL"
-  echo "[git-data-probe] reachable: ${ENDPOINT} accepted a bounded TCP connect — pinged heartbeat." >&2
+  [ -n "$VERBOSE" ] && echo "[git-data-probe] reachable: ${ENDPOINT} accepted a bounded TCP connect — pinged heartbeat." >&2
   exit 0
 else
   echo "[git-data-probe] SUPPRESS ping: ${ENDPOINT} UNREACHABLE over the private net. Fail-soft — pages only on a SUSTAINED break (grace 180s)." >&2
