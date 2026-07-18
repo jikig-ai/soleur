@@ -75,6 +75,8 @@ client is provisioned on web-1) and a DRY_RUN-safe escrow-reachability probe.
 
 ## Research Reconciliation — Spec vs. Codebase
 
+<!-- lint-infra-ignore start: retrospective premise-vs-codebase VALIDATION table (what was verified on main) — describes the escrow MECHANISM this PR automates, not a runtime step a Soleur user performs -->
+
 | Spec/issue premise | Codebase reality (verified) | Plan response |
 |---|---|---|
 | "read the R2 creds/endpoint via the pinned scoped-config read … existing R2 backend creds may already be readable — verify scope" | The R2/AWS tfstate backend creds live in the **`prd_terraform` BRANCH** config (`tunnel.tf:230-245`). `prd_workspaces_luks` is a branch of **`prd`** and inherits **only** the `prd` root — branch configs do NOT propagate to each other. So the host **cannot** read the tfstate creds via `prd_workspaces_luks`. **Dedicated escrow creds MUST be written into `prd_workspaces_luks`.** | Provision escrow bucket-name + R2 creds + endpoint as secrets in `prd_workspaces_luks`. |
@@ -82,6 +84,8 @@ client is provisioned on web-1) and a DRY_RUN-safe escrow-reachability probe.
 | (cla-evidence `outputs.tf` prose) "R2 S3 secret_access_key = `sha256(token.value)`" — the terraform-architect research agent also recommended `secret_access_key = sha256(cloudflare_api_token.value)` | **REFUTED, empirically.** Learning `2026-05-18-cla-evidence-r2-s3-creds-not-derived.md` proved (real R2 error body, PR #3965) that `sha256(token.value)` fails SigV4 `SignatureDoesNotMatch`. R2 S3-compat creds are issued **only** by minting an **R2 API Token** (Storage → R2 → Manage API Tokens → Create Account API token), which returns a 32-char accessKeyId + 64-char secretAccessKey shown once — **not derivable** from any `cloudflare_api_token` field. | **Do NOT derive.** The R2 S3 creds are an operator/Playwright-minted **R2 API Token** → written to `prd_workspaces_luks`. Only the bucket, bucket-name secret, and endpoint secret are TF-managed. A **probe-PUT gate** (mirroring `cla-evidence/infra/bootstrap.sh`) measures the creds before they are trusted. See Sharp Edge #2. |
 | "backs up the LUKS header and uploads it with `aws s3 cp`" | The `aws s3 cp` / `aws s3api head-object` at `:196`/`:198` pass **no `--endpoint-url`, no region, no creds** — against R2 they resolve to real AWS S3 and die on auth. And **no `aws` CLI is installed on web-1** by cloud-init/`soleur-host-bootstrap.sh`, and the script never checks for it. | The script edit adds `--endpoint-url`, `AWS_DEFAULT_REGION=auto`, the checksum env, and host-side cred exports; plus an `aws`-presence preflight (loud die) and a durable install path. See Phase 2 + Sharp Edge #3. |
 | "add a wiring test … alongside `workspaces-luks.test.sh`" | `workspaces-luks.test.sh` A11 (`p_no_laundering_resource:213`) asserts **file-scoped exact cardinality** on `workspaces-luks.tf`: exactly one `doppler_secret`/`doppler_service_token`/`random_password`/`hcloud_volume`, and `config = "prd"` nowhere. Adding any escrow `doppler_secret` **into that file turns A11 RED.** | Escrow resources live in a **separate file** `workspaces-luks-header.tf`; the wiring test carries a parallel addition-blind guard for that file. See Phase 1 + Phase 3. |
+
+<!-- lint-infra-ignore end -->
 
 ## User-Brand Impact
 
@@ -129,10 +133,14 @@ If Phase 0 finds the primary `cf_api_token` lacks R2:Edit: add to **`main.tf`** 
 
 ### Apply path
 
+<!-- lint-infra-ignore start: deferred-orchestrator apply-path MECHANISM (CI-driven default-apply + ADR-065 pre-merge var sequencing) this PR builds — the pre-merge var provision is surfaced as an operator step in the PR body, not run by a Soleur user here -->
+
 - **cloud-init + idempotent behaviour, riding the DEFAULT allow-list apply.** The new `cloudflare_r2_bucket` + 2 `doppler_secret`s are appended to the default `-target=` list in `.github/workflows/apply-web-platform-infra.yml` (at/after **line 361**, beside `github_repository_environment.workspaces_luks_cutover` — the established precedent for a workspaces-luks resource that rides the default apply). CI *can* create Cloudflare + Doppler resources, so they are NOT `OPERATOR_APPLIED_EXCLUSIONS`. Merge → the push/`apply_target=manual-rerun` apply creates them.
 - **Do NOT** attach them to `apply_target=workspaces-luks-cutover`: that job's `workspaces_luks_cutover_gate` (`tests/scripts/lib/workspaces-luks-cutover-gate.sh`) permits EXACTLY the 5 volume/attachment/passphrase/secret/token creates; a 6th create reddens `out_of_scope`.
 - `plugins/soleur/test/terraform-target-parity.test.ts` "every managed resource has a `-target` or exclusion" (general coverage test) passes automatically once the `-target` lines exist — no exclusion-set edit. The `doppler_secret`s are the `doppler_secret` type, so the "every CI-publish token targeted" assertion does not bind them.
 - **Sequencing (ADR-065, if a new var is introduced):** operator provisions `CF_API_TOKEN_R2` into `prd_terraform` **BEFORE** merge — Terraform resolves all root vars before `-target` pruning, so an unprovisioned no-default var fails the WHOLE merge-triggered apply. Only after that does the PR merge. (No new var → no pre-merge provision; this branch is chosen only if Phase 0 shows the token lacks R2:Edit.)
+
+<!-- lint-infra-ignore end -->
 
 ### Distinctness / drift safeguards
 
@@ -219,6 +227,8 @@ three `.c4` files (`knowledge-base/engineering/architecture/diagrams/{model,view
 
 ## Implementation Phases
 
+<!-- lint-infra-ignore start: implementation-phase MECHANISM this PR builds (terraform/script/test edits authored in-PR + one ADR-065 pre-merge operator var-provision, surfaced separately in the PR body) — not runtime steps a Soleur user performs -->
+
 **Phase 0 — Preflight / verification (blocking; resolves the two contested decisions).**
 1. **Provider R2 scope:** determine whether the existing `cf_api_token` (as stored in `prd_terraform`) can create a `cloudflare_r2_bucket` — via a scoped `terraform plan -target='cloudflare_r2_bucket.workspaces_luks_header'` on a throwaway branch, or a CF token-verify/permission-groups read. Result decides: default provider (no new var) vs new `cloudflare.r2` alias + `var.cf_api_token_r2` (ADR-065 pre-merge provision). Record the finding in the plan/PR. Do NOT assert scope from the var description (`hr-verify-repo-capability-claim-before-assert`).
 2. **R2 cred contract:** confirm from learning `2026-05-18-cla-evidence-r2-s3-creds-not-derived.md` that S3 creds are a minted R2 API Token, not `sha256(token.value)`. The Phase 3 probe-PUT is the live measurement.
@@ -231,6 +241,8 @@ three `.c4` files (`knowledge-base/engineering/architecture/diagrams/{model,view
 **Phase 3 — Wiring test + DRY_RUN probe.** Extend `workspaces-luks.test.sh` (or a new `workspaces-luks-header.test.sh` registered in `infra-validation.yml`) mirroring the multi-artifact `git-data-luks.test.sh` shape (reads `.tf` + `.sh`), mutation-tested. Assert: (a) `cloudflare_r2_bucket.workspaces_luks_header` exists, its `name =` argument literal is `soleur-workspaces-luks-header` (≠ `soleur-terraform-state`), and `WORKSPACES_HEADER_BUCKET.value` is a **reference expression** (`cloudflare_r2_bucket.workspaces_luks_header.name`), not a literal (spec-flow F9 — at PR time nothing "resolves"; assert the argument form); (b) file-scoped addition-blind guard on `workspaces-luks-header.tf` (no `config = "prd"`; escrow doppler_secrets masked); (c) the script reads bucket + all R2 creds via `doppler secrets get … --config prd_workspaces_luks`; (d) the creds never appear on a `sudo … bash -s` command line and the workflow env never carries them; (e) no `doppler run`/`secrets download` for the escrow reads; (f) **the probe call is NOT lexically within the `if [ "$DRY_RUN" != "1" ]` block** (spec-flow F2 — mutation: move it inside → RED). Add the DRY_RUN-safe **probe-PUT** (write→read-back→delete of a namespaced `.probe/<run-id>` key) + the **negative probe** (escrow creds DENIED against `soleur-terraform-state`) to the script's dry-run arm. **Pre-merge fail-loud harness (spec-flow F6):** a function-level shell test that sources the escrow function with stubbed `aws`/`doppler` and asserts the empty-cred path exits non-zero + `emit_drift` — so Test Scenario 6 is a green-cannot-stay-green predicate at PR time, not a post-merge hope. Mirror the probe-PUT credential-shape check from `cla-evidence/infra/bootstrap.sh`.
 
 **Phase 4 — ADR/C4 + registration sweep.** ADR-119 addendum; `model.c4`/`views.c4` edges; run c4 tests. Sweep all guard suites touched by the `-target` extension (`terraform-target-parity.test.ts`, and grep `tests/scripts/` for any destroy-guard scope guard that enumerates resource types — learning `2026-05-29-target-allowlist-extension-must-sweep-all-guard-suites.md`).
+
+<!-- lint-infra-ignore end -->
 
 ## Files to Create
 - `apps/web-platform/infra/workspaces-luks-header.tf` — bucket + 2 doppler_secrets + `local.r2_s3_endpoint` (+ conditional provider-alias usage).
