@@ -108,9 +108,11 @@ p_script_reads_pinned() {
   echo 1
 }
 
-# H5 — the script NEVER uses doppler run / secrets download (the CWE-522 hole).
+# H5 — the script NEVER uses doppler run / secrets download (the CWE-522 hole). Tolerate intervening
+# global flags so `doppler --config X run …` is caught too, not just the bare `doppler run` form
+# (blacklist-evasion surfaced by the test-design review).
 p_no_doppler_run() {
-  strip_comments "$1" | grep -Eq 'doppler (run|secrets download)' && echo 0 || echo 1
+  strip_comments "$1" | grep -Eq 'doppler[[:space:]]+([^[:space:]]+[[:space:]]+)*(run|secrets[[:space:]]+download)([[:space:]]|$)' && echo 0 || echo 1
 }
 
 # H6 — every R2-targeting aws invocation carries --endpoint-url pointed at "$HEADER_R2_ENDPOINT".
@@ -129,10 +131,14 @@ p_creds_not_in_workflow() {
 
 # H9 — ensure_aws SHA256-verifies the installer BEFORE running it as root (the supply-chain gate).
 # A `sha256sum -c` must exist AND precede `./aws/install` (else an unpinned root installer runs).
+# strip_comments FIRST (strip blanks comment lines in place, so line numbers are preserved): a mere
+# COMMENT mentioning `sha256sum -c` must not satisfy the gate (test-design review — the only predicate
+# that was grepping the raw file, the exact comment-false-match class this file's header disclaims).
 p_sha_pin_gated() {
-  local f="$1" sha_ln inst_ln
-  sha_ln="$(grep -nE 'sha256sum -c' "$f" | head -1 | cut -d: -f1)"
-  inst_ln="$(grep -nF './aws/install' "$f" | head -1 | cut -d: -f1)"
+  local f="$1" sha_ln inst_ln stripped
+  stripped="$(strip_comments "$f")"
+  sha_ln="$(grep -nE 'sha256sum -c' <<<"$stripped" | head -1 | cut -d: -f1)"
+  inst_ln="$(grep -nF './aws/install' <<<"$stripped" | head -1 | cut -d: -f1)"
   [ -n "$sha_ln" ] && [ -n "$inst_ln" ] && [ "$sha_ln" -lt "$inst_ln" ] && echo 1 || echo 0
 }
 
@@ -154,6 +160,19 @@ p_negprobe_present() {
 # into a non-zero pipe exit (a false 0).
 p_script_distinct() {
   [ "$(strip_comments "$1" | grep -Ec '\[ "\$HEADER_BACKUP_BUCKET" != "\$TFSTATE_BUCKET" \]' || true)" -gt 0 ] && echo 1 || echo 0
+}
+
+# H12 — the escrow doppler_secret blocks carry the EXACT secret NAMEs the script reads. Without this,
+# a drift between the TF `name = "…"` and the pinned `doppler secrets get …` read passes both H2
+# (reference form) and H4 (script side) and surfaces only at runtime as an empty read → fail-loud die,
+# never at PR-test time (code-quality review — replicated-literal parity).
+p_secret_names() {
+  local f="$1" bb eb
+  bb="$(block_of "$f" doppler_secret workspaces_luks_header_bucket)"
+  eb="$(block_of "$f" doppler_secret workspaces_luks_header_r2_endpoint)"
+  grep -Eq '^[[:space:]]*name[[:space:]]*=[[:space:]]*"WORKSPACES_HEADER_BUCKET"[[:space:]]*$' <<<"$bb" || { echo 0; return; }
+  grep -Eq '^[[:space:]]*name[[:space:]]*=[[:space:]]*"WORKSPACES_HEADER_R2_ENDPOINT"[[:space:]]*$' <<<"$eb" || { echo 0; return; }
+  echo 1
 }
 
 # --- Harness (mirrors workspaces-luks.test.sh) --------------------------------
@@ -208,6 +227,9 @@ assert_holds "H5 script never uses doppler run/download" p_no_doppler_run "$SH"
 # Test Scenario 3: doppler run/download mutant for an escrow read.
 assert_mutation_append "H5 (doppler run added)" p_no_doppler_run "$SH" \
   'x=$(doppler run --config prd_workspaces_luks -- printf x)'
+# Evasion mutant: `run` behind an intervening global flag must still be caught (test-design review).
+assert_mutation_append "H5 (doppler run behind a global flag)" p_no_doppler_run "$SH" \
+  'x=$(doppler --config prd_workspaces_luks run -- printf x)'
 
 assert_holds "H6 every aws call points --endpoint-url at \$HEADER_R2_ENDPOINT" p_endpoint_on_aws "$SH"
 # Test Scenario 4: missing --endpoint-url mutant.
@@ -260,6 +282,10 @@ assert_holds "H9 sha256sum -c gates ./aws/install (supply-chain)" p_sha_pin_gate
 # Mutation: delete the sha256sum verification → an unpinned root installer runs → RED.
 assert_mutation "H9 (sha256 verification removed)" p_sha_pin_gated "$SH" \
   '/sha256sum -c/d'
+# Mutation: delete the REAL verification AND inject a decoy COMMENT naming sha256sum -c before the
+# install → a raw-file grep would false-GREEN on the comment; strip_comments must keep it RED.
+assert_mutation "H9 (real removed, sha256sum -c decoy comment injected)" p_sha_pin_gated "$SH" \
+  '/sha256sum -c/d; s~(\( cd "\$tmp" && unzip)~  # sha256sum -c decoy (must not satisfy the gate)\n\1~'
 
 # --- H10: escrow_probe carries the negative over-scope leg + probe-PUT ---------
 assert_holds "H10 negative over-scope probe + probe-PUT present" p_negprobe_present "$SH"
@@ -275,6 +301,12 @@ assert_holds "H11 script enforces bucket != tfstate at runtime" p_script_distinc
 # Mutation: delete every runtime distinctness compare → RED.
 assert_mutation "H11 (distinctness compare removed)" p_script_distinct "$SH" \
   '/\[ "\$HEADER_BACKUP_BUCKET" != "\$TFSTATE_BUCKET" \]/d'
+
+# --- H12: escrow secret NAMEs match the script reads (parity) -----------------
+assert_holds "H12 escrow secret NAMEs match the script reads" p_secret_names "$TF"
+# Mutation: drift the bucket secret's name literal → the TF `name` no longer matches the read → RED.
+assert_mutation "H12 (bucket secret name drifted)" p_secret_names "$TF" \
+  's~name([[:space:]]*)=([[:space:]]*)"WORKSPACES_HEADER_BUCKET"~name\1=\2"WORKSPACES_HEADER_BUCKET_X"~'
 
 # --- Test Scenario 6: empty-cred path fails loud (stubbed aws/doppler harness) -
 # Extract the readers + load_escrow_creds, stub doppler to return empty, and assert the empty-cred
@@ -310,16 +342,135 @@ else
     )
   }
   # "" = all empty (bucket guard fires); the three creds = half-populated (their own guard must fire).
+  # The reason slug is now per-field, so S6 asserts the RIGHT field's guard fired (discriminating),
+  # not merely that some cred-unreadable die happened (test-design + observability review).
   for empty in "" WORKSPACES_HEADER_R2_ACCESS_KEY_ID WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY WORKSPACES_HEADER_R2_ENDPOINT; do
     s6_out="$(run_s6 "$empty")"; s6_rc=$?
     label="${empty:-all-empty}"
-    if [ "$s6_rc" != "0" ] && grep -q 'DRIFT:header_creds_unreadable' <<<"$s6_out" \
+    case "$empty" in
+      "")                                     want=header_bucket_unreadable ;;
+      WORKSPACES_HEADER_R2_ACCESS_KEY_ID)     want=header_key_id_unreadable ;;
+      WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY) want=header_secret_unreadable ;;
+      WORKSPACES_HEADER_R2_ENDPOINT)          want=header_endpoint_unreadable ;;
+    esac
+    if [ "$s6_rc" != "0" ] && grep -q "DRIFT:${want}" <<<"$s6_out" \
        && ! grep -q 'REACHED_END' <<<"$s6_out"; then
       pass
     else
-      fail "S6[$label]: empty-cred path did not fail loud (rc=$s6_rc out=$s6_out)"
+      fail "S6[$label]: empty-cred path did not fail loud with reason=$want (rc=$s6_rc out=$s6_out)"
     fi
   done
+
+  # --- Test Scenario 7: positive control + endpoint/cred BINDING (test-design P1) ---------------
+  # All fields populated → load_escrow_creds must REACH THE END (rc 0) AND bind HEADER_R2_ENDPOINT +
+  # AWS_ACCESS_KEY_ID to exactly the values READ (a sentinel), not a hardcoded URL. This kills the
+  # mutation that pins only the `--endpoint-url "$HEADER_R2_ENDPOINT"` flag text (H6) while hardcoding
+  # the assignment to real AWS S3. Doubles as S6's positive control (a blanket top-of-function die
+  # would fail this).
+  run_s7() {
+    (
+      doppler() { printf 'stub-%s\n' "$3"; }
+      emit_drift() { echo "DRIFT:$1"; }
+      die() { echo "DIE:$*"; exit 1; }
+      log() { :; }
+      # shellcheck disable=SC2034
+      TFSTATE_BUCKET="soleur-terraform-state"
+      eval "$readers"; eval "$loader"
+      load_escrow_creds
+      echo "END endpoint=$HEADER_R2_ENDPOINT kid=$AWS_ACCESS_KEY_ID bucket=$HEADER_BACKUP_BUCKET"
+    )
+  }
+  s7_out="$(run_s7)"; s7_rc=$?
+  if [ "$s7_rc" = "0" ] \
+     && grep -q 'END endpoint=stub-WORKSPACES_HEADER_R2_ENDPOINT kid=stub-WORKSPACES_HEADER_R2_ACCESS_KEY_ID bucket=stub-WORKSPACES_HEADER_BUCKET' <<<"$s7_out" \
+     && ! grep -q 'DIE:' <<<"$s7_out"; then
+    pass
+  else
+    fail "S7: all-populated path did not reach end with creds bound to the reads (rc=$s7_rc out=$s7_out)"
+  fi
+
+  # --- Test Scenario 8: bucket == tfstate deny path exercised behaviorally (test-design P3b) ----
+  # H11 only greps that the compare TEXT exists; this proves the die actually FIRES when the
+  # host-read bucket equals tfstate (kills the `… || true` mutation that neuters the deny while
+  # leaving the compare text intact).
+  run_s8() {
+    (
+      doppler() { if [ "$3" = "WORKSPACES_HEADER_BUCKET" ]; then echo "soleur-terraform-state"; else printf 'stub-%s\n' "$3"; fi; }
+      emit_drift() { echo "DRIFT:$1"; }
+      die() { echo "DIE:$*"; exit 1; }
+      log() { :; }
+      TFSTATE_BUCKET="soleur-terraform-state"
+      eval "$readers"; eval "$loader"
+      load_escrow_creds
+      echo "REACHED_END"
+    )
+  }
+  s8_out="$(run_s8)"; s8_rc=$?
+  if [ "$s8_rc" != "0" ] && grep -q 'DRIFT:header_bucket_equals_tfstate' <<<"$s8_out" \
+     && ! grep -q 'REACHED_END' <<<"$s8_out"; then
+    pass
+  else
+    fail "S8: bucket==tfstate deny path did not fire (rc=$s8_rc out=$s8_out)"
+  fi
+fi
+
+# --- Test Scenario 9: escrow_probe behavioral coverage (test-design P2) --------------------------
+# escrow_probe is the SOLE runtime guard against an over-scoped token reaching the passphrase bucket,
+# yet H8/H10 only assert placement + token PRESENCE — every leg is defeatable by `if false`/`|| true`
+# while the token survives. Extract the function, stub aws() per-leg, and assert each die actually
+# fires on its condition (and the all-clean path reaches the end).
+probe_fn="$(awk '/^escrow_probe\(\) \{/,/^\}/' "$SH")"
+if [ -z "$probe_fn" ]; then
+  fail "S9: could not extract escrow_probe from the script"
+else
+  run_s9() {
+    local case="$1"
+    (
+      S9C="$case"
+      aws() {
+        case "$1 $2" in
+          "s3 cp")             [ "$S9C" = put_fail ] && return 1 || return 0 ;;
+          "s3api head-object") [ "$S9C" = readback_fail ] && return 1 || return 0 ;;
+          "s3 rm")             return 0 ;;
+          "s3api head-bucket")
+            case "$S9C" in
+              overscoped)   return 0 ;;                                                    # 200 → over-scoped
+              inconclusive) echo "Could not connect to the endpoint URL: timed out" >&2; return 255 ;;  # non-auth
+              *)            echo "An error occurred (403) when calling the HeadBucket operation: Forbidden" >&2; return 254 ;;
+            esac ;;
+        esac
+      }
+      emit_drift() { echo "DRIFT:$1"; }
+      die() { echo "DIE:$*"; exit 1; }
+      log() { echo "LOG:$*"; }
+      HEADER_BACKUP_BUCKET="soleur-workspaces-luks-header"
+      HEADER_R2_ENDPOINT="https://acct.r2.cloudflarestorage.com"
+      # shellcheck disable=SC2034  # both consumed by the eval'd escrow_probe (negative probe + run_id)
+      TFSTATE_BUCKET="soleur-terraform-state"
+      # shellcheck disable=SC2034
+      GITHUB_RUN_ID="s9test"
+      eval "$probe_fn"
+      escrow_probe
+      echo "PROBE_END"
+    )
+  }
+  for c in put_fail:escrow_probe_put_failed readback_fail:escrow_probe_readback_failed \
+           overscoped:escrow_creds_overscoped inconclusive:escrow_negprobe_inconclusive; do
+    cse="${c%%:*}"; want="${c##*:}"
+    o="$(run_s9 "$cse")"; rc=$?
+    if [ "$rc" != "0" ] && grep -q "DRIFT:${want}" <<<"$o" && ! grep -q 'PROBE_END' <<<"$o"; then
+      pass
+    else
+      fail "S9[$cse]: escrow_probe did not die with ${want} (rc=$rc out=$o)"
+    fi
+  done
+  # positive: every leg clean (PUT ok, read-back ok, negative probe DENIED via 403) → reaches the end.
+  o="$(run_s9 ok)"; rc=$?
+  if [ "$rc" = "0" ] && grep -q 'PROBE_END' <<<"$o" && ! grep -q 'DRIFT:' <<<"$o"; then
+    pass
+  else
+    fail "S9[ok]: clean probe did not reach the end (rc=$rc out=$o)"
+  fi
 fi
 
 # --- Summary ------------------------------------------------------------------
