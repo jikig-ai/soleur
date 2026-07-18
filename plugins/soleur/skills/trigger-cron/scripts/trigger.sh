@@ -136,7 +136,12 @@ if [[ -z "$TOKEN" ]]; then
   exit 2
 fi
 
-HTTP_CODE=$(curl -sS -o /tmp/trigger-cron-resp.$$ -w '%{http_code}' \
+# mktemp, not $$: a PID is predictable and reused across concurrent runs in shared shells
+# (same reason token-efficiency-report.sh's SHORTSTAT_TMP mktemp+EXIT-trap block rejects it).
+# See ADR-009 Amendment.
+RESP=$(mktemp -t trigger-cron-resp.XXXXXXXX)
+trap 'rm -f "$RESP"' EXIT INT TERM
+HTTP_CODE=$(curl -sS -o "$RESP" -w '%{http_code}' \
   -X POST "$ROUTE_URL" \
   -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
@@ -144,8 +149,8 @@ HTTP_CODE=$(curl -sS -o /tmp/trigger-cron-resp.$$ -w '%{http_code}' \
 unset TOKEN
 
 echo "HTTP $HTTP_CODE"
-cat /tmp/trigger-cron-resp.$$ 2>/dev/null && echo
-rm -f /tmp/trigger-cron-resp.$$
+cat "$RESP" 2>/dev/null && echo
+rm -f "$RESP"
 
 # 202 = dispatched. Anything else is a failure the caller must act on.
 [[ "$HTTP_CODE" == "202" ]] || exit 1
