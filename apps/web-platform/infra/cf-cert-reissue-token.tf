@@ -78,18 +78,25 @@
 # asymmetry). If/when the operator decides the mint scope will always be present, this file
 # can be promoted into the push allow-list in a follow-up.
 
-# Zone-level permission groups, keyed by NAME → group ID. Preferred over a hard-coded magic
-# ID so a CF-side ID rotation doesn't silently break the mint. (For reference, the "DNS
-# Write" group has historically been id 4755a26eedb94da69e1066d98aa820be; the data source is
-# the source of truth.)
-data "cloudflare_api_token_permission_groups" "all" {}
+# "DNS Write" (zone-level) permission group ID — a GLOBAL Cloudflare constant (the same
+# across every account; verified via `data.cloudflare_api_token_permission_groups` +
+# `terraform providers schema` against the pinned cloudflare v4.52.7). A hard-coded ID is
+# used deliberately instead of the data source: the data source performs a CF API READ at
+# plan time, which the credential-free `terraform test` (tests/*.tftest.hcl, run in CI
+# without CF auth) cannot satisfy — it returns an empty map and the `["DNS Write"]` index
+# fails. The ID is stable (CF permission-group IDs are versioned constants, not per-account),
+# so the mint is unaffected. If CF ever rotates it, the apply 403s loudly (see the fallback
+# in the header) rather than silently minting the wrong scope.
+locals {
+  cf_dns_write_permission_group = "4755a26eedb94da69e1066d98aa820be"
+}
 
 resource "cloudflare_api_token" "gh_pages_cert_reissue_dns_edit" {
   name = "web-platform-gh-pages-cert-reissue-dns-edit"
 
   policy {
     effect            = "allow"
-    permission_groups = [data.cloudflare_api_token_permission_groups.all.zone["DNS Write"]]
+    permission_groups = [local.cf_dns_write_permission_group]
     # Single-zone scope: soleur.ai only. `"*"` = all operations the permission group grants,
     # but confined to this one zone resource.
     resources = {
