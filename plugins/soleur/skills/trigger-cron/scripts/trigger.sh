@@ -137,7 +137,8 @@ if [[ -z "$TOKEN" ]]; then
 fi
 
 # mktemp, not $$: a PID is predictable and reused across concurrent runs in shared shells
-# (same reason token-efficiency-report.sh:36-56 rejected it). See ADR-009 Amendment.
+# (same reason token-efficiency-report.sh's SHORTSTAT_TMP mktemp+EXIT-trap block rejects it).
+# See ADR-009 Amendment.
 RESP=$(mktemp -t trigger-cron-resp.XXXXXXXX)
 trap 'rm -f "$RESP"' EXIT INT TERM
 HTTP_CODE=$(curl -sS -o "$RESP" -w '%{http_code}' \

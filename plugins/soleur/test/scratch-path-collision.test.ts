@@ -24,11 +24,14 @@ import { discoverSkills } from "./helpers";
 // discoverSkills() returns paths relative to plugins/soleur — rooting at the repo root ENOENTs.
 const PLUGIN_ROOT = resolve(import.meta.dir, "..");
 
-// A literal /tmp/ path. The leading `(?<![\w${}])` boundary is what makes a variable-rooted
-// path (`${GITHUB_WORKSPACE}/tmp/x`, `$PREFLIGHT_TMP/x`) COMPLIANT rather than an offender —
-// those are already session-scoped. `<` `>` `$` `{` `}` `*` are in the class so placeholder
-// and variable-bearing leaves (`/tmp/<script>.log`, `/tmp/issue-$name.url`) stay visible.
-const TMP_PATH = /(?<![\w${}])\/tmp\/[A-Za-z0-9_.<>${}*/-]+/g;
+// A literal /tmp/ path. The leading `(?<![\w}])` boundary is what makes a variable-rooted
+// path (`${GITHUB_WORKSPACE}/tmp/x`) COMPLIANT rather than an offender — the char before
+// `/tmp/` there is always `}`, and such a path is already session-scoped. The lookbehind
+// excludes ONLY `\w` and `}`: excluding `{` too (an earlier revision did) hid a real
+// hazard — brace-expansion `{/tmp/a,/tmp/b}` writes to a literal `/tmp/a`, so its first
+// element must stay visible. `<` `>` `$` `{` `}` `*` `_` are in the class so placeholder and
+// variable-bearing leaves (`/tmp/<script>.log`, `/tmp/issue-$name.url`, `/tmp/_lock`) match.
+const TMP_PATH = /(?<![\w}])\/tmp\/[A-Za-z0-9_.<>${}*/-]+/g;
 
 /** Pure. Returns every literal /tmp path in `text`. Exported for unit test. */
 export function findHazards(text: string): string[] {
@@ -129,6 +132,12 @@ describe("scratch-path-collision (#6486)", () => {
       "/tmp/sweep-targets.txt",
     ]); // bare prose — no write verb anywhere
     expect(findHazards('echo "$u" > "/tmp/issue-$name.url"')).toEqual(["/tmp/issue-$name.url"]);
+    // Pin `_` in the class: it is a first-class filename char, so dropping it must go RED
+    // (a leaf STARTING with `_` is missed entirely otherwise — `[class]+` fails at position 0).
+    expect(findHazards("cat /tmp/my_output.log")).toEqual(["/tmp/my_output.log"]); // `_` mid-leaf
+    expect(findHazards("rm -f /tmp/_lock")).toEqual(["/tmp/_lock"]); // `_` at leaf start
+    // Brace expansion writes to a literal `/tmp/a`; the `{` before it must NOT exempt it.
+    expect(findHazards("cp {/tmp/a,/tmp/b} d")).toEqual(["/tmp/a", "/tmp/b}"]);
     expect(findHazards("cp a /var/tmp/b")).toEqual([]); // boundary: /var/tmp is not /tmp
     // A waiver is exact-matched, so a high-collision prefix cannot absolve its neighbours.
     expect(findHazards("bash a > /tmp/logfile-new.txt")).toEqual(["/tmp/logfile-new.txt"]);

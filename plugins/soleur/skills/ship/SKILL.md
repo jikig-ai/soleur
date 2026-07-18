@@ -1878,7 +1878,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    4. Paste run-URL + byte count + verbatim URLs into the closing comment
    ```
 
-   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `body=$(mktemp -t follow-through-body.XXXXXXXX.md); { echo "..."; } > "$body"`), then create the issue:
+   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `body=$(mktemp -t follow-through-body.XXXXXXXX.md); { echo "..."; } > "$body"`, then `echo "BODY=$body"` so the path survives into the later `--body-file` and precondition-gate calls — a separate Bash call does not inherit `$body`), then create the issue:
 
    ```bash
    gh issue create --title "follow-through: <ITEM_DESCRIPTION>" --label "follow-through" --milestone "<MILESTONE>" --body-file "$body"

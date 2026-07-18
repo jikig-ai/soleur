@@ -154,6 +154,7 @@ Read both sides using git stage numbers (NOT `git show HEAD:` which only gives o
 ours=$(mktemp -t changelog-ours.XXXXXXXX.md); theirs=$(mktemp -t changelog-theirs.XXXXXXXX.md)
 git show :2:plugins/soleur/CHANGELOG.md > "$ours"
 git show :3:plugins/soleur/CHANGELOG.md > "$theirs"
+echo "ours=$ours theirs=$theirs"  # echo the paths: the Read/Write steps below need them, and a separate tool call does not inherit these vars
 ```
 
 - `:2:` is "ours" (feature branch)
