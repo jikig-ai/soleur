@@ -1,15 +1,20 @@
 // #6657 — cron-gh-pages-cert-reissue unit tests.
 //
 // Coverage:
-//   - Pure orchestration (runReissue) over INJECTED deps: happy path, poll
-//     timeout, stuck-state allowlist abort (zero writes), precondition-blocked,
-//     partial-toggle / cname-PUT reissue_failed (abort→restore).
-//   - restoreState: symmetric {cname, proxied} restore, idempotent, throws on
-//     non-convergence (the proxy_restore_failed brake).
-//   - onFailure: proves the restore runs via the onFailure lifecycle handler
-//     (NOT a JS try…finally) against a stateful Octokit + CF fetch mock.
-//   - Source-shape anchors: registration id / event trigger / no cron schedule /
-//     onFailure present / scoped token / no finally-spanning-step.sleep.
+//   - Pure helpers (assertStuckState, checkReissuePreconditions, setRecordsProxied).
+//   - The PRODUCTION orchestration `runReissueSteps` driven with a fake step +
+//     fake deps (no parallel/dead twin): happy, approved, poll timeout, stuck-state
+//     allowlist abort, precondition-blocked, reissue_failed (partial-toggle +
+//     cname-PUT), restore-on-timeout, settle-sleep window.
+//   - restoreState fail-loud: symmetric restore, idempotent, short-read throw,
+//     early per-record throw, AND the final re-read convergence brake
+//     (write-returns-true-but-doesn't-stick).
+//   - The handler config_missing benign path.
+//   - onFailure: restore runs via the lifecycle handler (not JS finally); pages on
+//     BOTH restore-ok (reissue_incomplete_restore_ok) and restore-fail
+//     (proxy_restore_failed, incl. a Cloudflare read failure).
+//   - Source/registration anchors, incl. a quote-agnostic no-cron check and an
+//     allowlist-event parity assert.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -29,8 +34,18 @@ vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
   return { ...actual, mintInstallationToken: vi.fn(async () => "fake-installation-token") };
 });
 
+// Spy on reportSilentFallback so the onFailure paging assertions can inspect tags.
+vi.mock("@/server/observability", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/server/observability")>();
+  return { ...actual, reportSilentFallback: vi.fn() };
+});
+
+import { reportSilentFallback } from "@/server/observability";
+import { manualTriggerEventFor } from "@/server/inngest/cron-manifest";
 import {
-  runReissue,
+  runReissueSteps,
+  cronGhPagesCertReissueHandler,
   restoreState,
   assertStuckState,
   checkReissuePreconditions,
@@ -38,13 +53,17 @@ import {
   PartialToggleError,
   cronGhPagesCertReissue,
   cronGhPagesCertReissueOnFailure,
+  EXPECTED_TOGGLE_RECORDS,
   type ReissueDeps,
+  type ReissueStep,
   type CfDnsRecord,
   type PreconditionInputs,
 } from "@/server/inngest/functions/cron-gh-pages-cert-reissue";
 
+const reportSilentFallbackMock = vi.mocked(reportSilentFallback);
+
 // =============================================================================
-// Injected-deps fake
+// Fakes
 // =============================================================================
 
 const APEX_A_IDS = ["a1", "a2", "a3", "a4"];
@@ -67,15 +86,33 @@ function healthyPreconditions(): PreconditionInputs {
   };
 }
 
+/** A fake step that just runs each callback and records the step names. */
+function makeStep(): ReissueStep & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    async run<T>(name: string, cb: () => Promise<T>) {
+      calls.push(name);
+      return cb();
+    },
+    async sleep(name: string) {
+      calls.push(`sleep:${name}`);
+    },
+    calls,
+  };
+}
+
 interface FakeConfig {
   stateOverride?: string;
+  issuedState?: "issued" | "approved"; // the healthy state the poll observes
   willIssue?: boolean;
   initialProxied?: boolean;
   initialCname?: string | null;
   preconditions?: PreconditionInputs;
-  failToggleOffIds?: string[]; // setRecordProxied(false) returns false
-  failToggleOnIds?: string[]; // setRecordProxied(true) returns false
+  failToggleOffIds?: string[];
+  failToggleOnIds?: string[];
   failCnameOn?: "null" | "set";
+  writeDoesNotStick?: boolean; // setRecordProxied returns true but does not mutate
+  listCount?: number; // force listToggleRecords to return this many records
 }
 
 function makeFake(cfg: FakeConfig = {}) {
@@ -83,17 +120,17 @@ function makeFake(cfg: FakeConfig = {}) {
     cname: cfg.initialCname === undefined ? "soleur.ai" : cfg.initialCname,
     records: defaultRecords(cfg.initialProxied ?? true),
     reissued: false,
-    clock: 0,
     sawNull: false,
   };
   const calls = {
     setRecordProxied: [] as Array<{ id: string; proxied: boolean }>,
     setPagesCname: [] as Array<string | null>,
+    sleep: [] as number[],
     getPages: 0,
   };
   const resolveState = () => {
     if (cfg.stateOverride) return cfg.stateOverride;
-    if (state.reissued && cfg.willIssue) return "issued";
+    if (state.reissued && cfg.willIssue) return cfg.issuedState ?? "issued";
     return "bad_authz";
   };
   const deps: ReissueDeps = {
@@ -112,27 +149,34 @@ function makeFake(cfg: FakeConfig = {}) {
       state.cname = cname;
     },
     async listToggleRecords() {
-      return state.records.map((r) => ({ ...r }));
+      const all = state.records.map((r) => ({ ...r }));
+      if (cfg.listCount !== undefined) return all.slice(0, cfg.listCount);
+      return all;
     },
     async setRecordProxied(id, proxied) {
       calls.setRecordProxied.push({ id, proxied });
       if (proxied === false && cfg.failToggleOffIds?.includes(id)) return false;
       if (proxied === true && cfg.failToggleOnIds?.includes(id)) return false;
-      const rec = state.records.find((r) => r.id === id);
-      if (rec) rec.proxied = proxied;
-      return true;
+      if (!cfg.writeDoesNotStick) {
+        const rec = state.records.find((r) => r.id === id);
+        if (rec) rec.proxied = proxied;
+      }
+      return true; // returns success even when writeDoesNotStick (the brake case)
     },
     async gatherPreconditions() {
       return cfg.preconditions ?? healthyPreconditions();
     },
     sleep: async (ms) => {
-      state.clock += ms;
+      calls.sleep.push(ms);
     },
-    now: () => state.clock,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { deps, state, calls };
 }
+
+beforeEach(() => {
+  reportSilentFallbackMock.mockClear();
+});
 
 // =============================================================================
 // Pure helper unit tests
@@ -180,12 +224,11 @@ describe("checkReissuePreconditions", () => {
 });
 
 describe("setRecordsProxied — partial-toggle abort", () => {
-  it("throws PartialToggleError on the failing record with count", async () => {
+  it("throws PartialToggleError on the failing record", async () => {
     const { deps } = makeFake({ failToggleOffIds: ["a3"] });
-    const records = defaultRecords(true);
-    await expect(setRecordsProxied(deps, records, false)).rejects.toBeInstanceOf(
-      PartialToggleError,
-    );
+    await expect(
+      setRecordsProxied(deps, defaultRecords(true), false),
+    ).rejects.toBeInstanceOf(PartialToggleError);
   });
   it("toggles all 5 when none fail", async () => {
     const { deps, calls } = makeFake();
@@ -196,44 +239,52 @@ describe("setRecordsProxied — partial-toggle abort", () => {
 });
 
 // =============================================================================
-// runReissue — Test Scenarios 1, 3, 4, 5, 6
+// runReissueSteps — the PRODUCTION orchestration (fake step + fake deps)
 // =============================================================================
 
-describe("runReissue — Scenario 1 (happy path)", () => {
+describe("runReissueSteps — Scenario 1 (happy path, issued)", () => {
   it("bad_authz + healthy → toggle → reissue → issued → restore", async () => {
-    const { deps, state, calls } = makeFake({ willIssue: true, initialProxied: true });
-    const result = await runReissue(deps);
+    const { deps, state, calls } = makeFake({ willIssue: true });
+    const result = await runReissueSteps(makeStep(), deps, deps.logger);
 
     expect(result.outcome).toBe("issued");
     expect(result.finalState).toBe("issued");
-    // All 5 records end proxied=true (restored).
     expect(state.records.every((r) => r.proxied === true)).toBe(true);
     expect(state.cname).toBe("soleur.ai");
-    // Symmetric cname toggle happened (null then re-set).
     expect(calls.setPagesCname).toContain(null);
     expect(calls.setPagesCname).toContain("soleur.ai");
+    // Settle window fired between the two cname PUTs (SURV-A guard).
+    expect(calls.sleep).toContain(45 * 1000);
   });
 });
 
-describe("runReissue — Scenario 3 (poll timeout)", () => {
+describe("runReissueSteps — Scenario 1b (approved is also healthy)", () => {
+  it("poll observing state=approved → outcome issued (SURV-B guard)", async () => {
+    const { deps } = makeFake({ willIssue: true, issuedState: "approved" });
+    const result = await runReissueSteps(makeStep(), deps, deps.logger);
+    expect(result.outcome).toBe("issued");
+    expect(result.finalState).toBe("approved");
+  });
+});
+
+describe("runReissueSteps — Scenario 3 (poll timeout)", () => {
   it("never issues → poll_timeout + restore still runs", async () => {
-    const { deps, state } = makeFake({ willIssue: false, initialProxied: true });
-    const result = await runReissue(deps);
+    const { deps, state } = makeFake({ willIssue: false });
+    const result = await runReissueSteps(makeStep(), deps, deps.logger);
 
     expect(result.outcome).toBe("poll_timeout");
     expect(result.attempts).toBeGreaterThan(1);
-    // Restore reasserts steady state even on the failed path.
     expect(state.records.every((r) => r.proxied === true)).toBe(true);
     expect(state.cname).toBe("soleur.ai");
   });
 });
 
-describe("runReissue — Scenario 4 (stuck-state allowlist — zero writes)", () => {
+describe("runReissueSteps — Scenario 4 (stuck-state allowlist — zero writes)", () => {
   it.each(["issued", "approved", "authorization_pending", "dns_changed"])(
     "state=%s → not_stuck, ZERO CF/GitHub writes",
     async (stateOverride) => {
       const { deps, calls } = makeFake({ stateOverride });
-      const result = await runReissue(deps);
+      const result = await runReissueSteps(makeStep(), deps, deps.logger);
 
       expect(result.outcome).toBe("not_stuck");
       expect(calls.setRecordProxied).toHaveLength(0);
@@ -242,12 +293,12 @@ describe("runReissue — Scenario 4 (stuck-state allowlist — zero writes)", ()
   );
 });
 
-describe("runReissue — Scenario 5 (precondition blocked)", () => {
+describe("runReissueSteps — Scenario 5 (precondition blocked)", () => {
   it("CAA present → precondition_blocked, no writes", async () => {
     const { deps, calls } = makeFake({
       preconditions: { ...healthyPreconditions(), caaCount: 1 },
     });
-    const result = await runReissue(deps);
+    const result = await runReissueSteps(makeStep(), deps, deps.logger);
 
     expect(result.outcome).toBe("precondition_blocked");
     expect(result.preconditionResults?.caaPermissive).toBe(false);
@@ -256,22 +307,20 @@ describe("runReissue — Scenario 5 (precondition blocked)", () => {
   });
 });
 
-describe("runReissue — Scenario 6 (reissue_failed → abort→restore)", () => {
+describe("runReissueSteps — Scenario 6 (reissue_failed → abort→restore)", () => {
   it("partial apex toggle → reissue_failed + restore reasserts proxied=true", async () => {
     const { deps, state, calls } = makeFake({ failToggleOffIds: ["a3"] });
-    const result = await runReissue(deps);
+    const result = await runReissueSteps(makeStep(), deps, deps.logger);
 
     expect(result.outcome).toBe("reissue_failed");
     expect(result.detail).toContain("partial-toggle");
-    // Restore ran: every record back to proxied=true.
     expect(state.records.every((r) => r.proxied === true)).toBe(true);
-    // The reissue cname toggle never fired (aborted before it).
-    expect(calls.setPagesCname).not.toContain(null);
+    expect(calls.setPagesCname).not.toContain(null); // aborted before the cname dance
   });
 
   it("cname:null PUT 403 → reissue_failed (cname-put) + restore", async () => {
     const { deps, state } = makeFake({ failCnameOn: "null" });
-    const result = await runReissue(deps);
+    const result = await runReissueSteps(makeStep(), deps, deps.logger);
 
     expect(result.outcome).toBe("reissue_failed");
     expect(result.detail).toContain("cname-put");
@@ -280,7 +329,7 @@ describe("runReissue — Scenario 6 (reissue_failed → abort→restore)", () =>
 });
 
 // =============================================================================
-// restoreState — symmetric, idempotent, throws on non-convergence (Scenario 7)
+// restoreState — fail-loud (Sec P1 + Test-design P2)
 // =============================================================================
 
 describe("restoreState — symmetric {cname, proxied} restore (AC3)", () => {
@@ -293,21 +342,20 @@ describe("restoreState — symmetric {cname, proxied} restore (AC3)", () => {
 
     expect(state.records.every((r) => r.proxied === true)).toBe(true);
     expect(state.cname).toBe("soleur.ai");
-    // All 5 records were re-asserted (not just proxied — cname too).
     expect(
       calls.setRecordProxied.filter((c) => c.proxied === true).length,
     ).toBe(5);
     expect(calls.setPagesCname).toContain("soleur.ai");
   });
 
-  it("idempotent — a second restore issues no further writes when already steady", async () => {
+  it("idempotent — a second restore issues no writes when already steady", async () => {
     const { deps, calls } = makeFake({ initialProxied: true, initialCname: "soleur.ai" });
     await restoreState(deps);
     expect(calls.setRecordProxied).toHaveLength(0);
     expect(calls.setPagesCname).toHaveLength(0);
   });
 
-  it("throws when the proxied restore cannot converge (proxy_restore_failed brake)", async () => {
+  it("throws when a proxied restore PATCH reports failure (per-record brake)", async () => {
     const { deps } = makeFake({
       initialProxied: false,
       initialCname: null,
@@ -315,31 +363,73 @@ describe("restoreState — symmetric {cname, proxied} restore (AC3)", () => {
     });
     await expect(restoreState(deps)).rejects.toThrow(/restore/i);
   });
+
+  it("throws when a PATCH returns success but the write does NOT stick (convergence brake)", async () => {
+    // setRecordProxied returns true, but the record stays proxied=false → the
+    // final re-read assert must catch the still-exposed origin.
+    const { deps } = makeFake({
+      initialProxied: false,
+      initialCname: "soleur.ai",
+      writeDoesNotStick: true,
+    });
+    await expect(restoreState(deps)).rejects.toThrow(/restore-assert failed/);
+  });
+
+  it("throws on a short record read (Cloudflare read failure → subset)", async () => {
+    const { deps } = makeFake({ initialProxied: false, listCount: 3 });
+    await expect(restoreState(deps)).rejects.toThrow(
+      new RegExp(`only 3/${EXPECTED_TOGGLE_RECORDS}`),
+    );
+  });
 });
 
 // =============================================================================
-// onFailure lifecycle handler — proves restore runs via onFailure (Scenario 2)
+// Handler config_missing benign path
 // =============================================================================
 
-describe("cronGhPagesCertReissueOnFailure — restores via onFailure, not finally", () => {
+describe("cronGhPagesCertReissueHandler — config_missing (token not provisioned)", () => {
+  const OLD = { ...process.env };
+  afterEach(() => {
+    process.env = { ...OLD };
+  });
+  it("returns config_missing (benign) and does NOT page when CF token unset", async () => {
+    delete process.env.CF_API_TOKEN_DNS_EDIT;
+    delete process.env.CF_ZONE_ID;
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const result = await cronGhPagesCertReissueHandler({
+      step: makeStep(),
+      logger,
+    });
+    expect(result.outcome).toBe("config_missing");
+    // Warned, not paged.
+    expect(logger.warn).toHaveBeenCalled();
+    expect(reportSilentFallbackMock).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// onFailure lifecycle handler — restore via onFailure, and it ALWAYS pages
+// =============================================================================
+
+describe("cronGhPagesCertReissueOnFailure — stateful CF + Octokit mocks", () => {
   const OLD_ENV = { ...process.env };
-  // Stateful CF + Octokit mocks so restoreState's re-list assert converges.
   let recordProxied: Record<string, boolean>;
   let pagesCname: string | null;
+  let cfListStatus: number; // let a test force a CF read failure
   let cfPatchCalls: Array<{ id: string; proxied: boolean }>;
   let pagesPutCalls: Array<string>;
 
   beforeEach(() => {
     process.env.CF_API_TOKEN_DNS_EDIT = "fake-cf-token";
     process.env.CF_ZONE_ID = "zone123";
-    // Mid-window degraded state the onFailure restore must repair.
     recordProxied = { a1: false, a2: false, a3: false, a4: false, w1: false };
     pagesCname = null;
+    cfListStatus = 200;
     cfPatchCalls = [];
     pagesPutCalls = [];
 
-    const jsonRes = (status: number, body: unknown) => ({
-      ok: status >= 200 && status < 300,
+    const jsonRes = (status: number, body: unknown, ok = status < 300) => ({
+      ok,
       status,
       json: async () => body,
     });
@@ -348,6 +438,7 @@ describe("cronGhPagesCertReissueOnFailure — restores via onFailure, not finall
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
         if (u.includes("/dns_records?")) {
+          if (cfListStatus >= 400) return jsonRes(cfListStatus, { success: false });
           const isApex = u.includes("type=A");
           const result = isApex
             ? APEX_A_IDS.map((id) => ({
@@ -384,16 +475,13 @@ describe("cronGhPagesCertReissueOnFailure — restores via onFailure, not finall
     process.env = { ...OLD_ENV };
   });
 
-  it("re-asserts proxied=true on all 5 records + cname on a simulated throw", async () => {
+  function mockOctokit() {
     vi.doMock("@octokit/core", () => ({
       Octokit: class {
         async request(route: string, params: Record<string, unknown>) {
           if (route === "GET /repos/{owner}/{repo}/pages") {
             return {
-              data: {
-                cname: pagesCname,
-                https_certificate: { state: "bad_authz" },
-              },
+              data: { cname: pagesCname, https_certificate: { state: "bad_authz" } },
             };
           }
           if (route === "PUT /repos/{owner}/{repo}/pages") {
@@ -405,25 +493,38 @@ describe("cronGhPagesCertReissueOnFailure — restores via onFailure, not finall
         }
       },
     }));
+  }
 
-    // A minimal fake step that just runs each callback (no memoization needed).
-    const step = {
-      run: async <T>(_name: string, cb: () => Promise<T>) => cb(),
-    };
-
+  it("restore succeeds → re-asserts proxied=true + cname AND pages reissue_incomplete_restore_ok", async () => {
+    mockOctokit();
     await cronGhPagesCertReissueOnFailure({
       error: new Error("simulated body failure after DNS-only toggle"),
       event: {},
-      step,
+      step: makeStep(),
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
 
-    // Every record restored to proxied=true (symmetric, all 5).
     expect(Object.values(recordProxied).every((p) => p === true)).toBe(true);
     expect(cfPatchCalls.filter((c) => c.proxied === true)).toHaveLength(5);
-    // cname re-asserted to the declared value.
     expect(pagesCname).toBe("soleur.ai");
     expect(pagesPutCalls).toContain("soleur.ai");
+    // A retries-exhausted throw pages even when restore succeeds (Obs P1).
+    expect(reportSilentFallbackMock).toHaveBeenCalled();
+    const tags = reportSilentFallbackMock.mock.calls.map((c) => c[1]?.tags?.outcome);
+    expect(tags).toContain("reissue_incomplete_restore_ok");
+  });
+
+  it("Cloudflare read failure during restore → pages proxy_restore_failed (fail-loud, not silent)", async () => {
+    mockOctokit();
+    cfListStatus = 503; // the GET dns_records fails → listToggleRecords throws
+    await cronGhPagesCertReissueOnFailure({
+      error: new Error("body failure"),
+      event: {},
+      step: makeStep(),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    const tags = reportSilentFallbackMock.mock.calls.map((c) => c[1]?.tags?.outcome);
+    expect(tags).toContain("proxy_restore_failed");
   });
 });
 
@@ -435,6 +536,13 @@ describe("cronGhPagesCertReissue — registration smoke", () => {
   it("loads without throwing", () => {
     expect(cronGhPagesCertReissue).toBeDefined();
     expect(typeof cronGhPagesCertReissue).toBe("object");
+  });
+  it("manual-trigger event matches the allowlist derivation (parity)", () => {
+    // The registration literal must equal what the manifest derives, or the
+    // trigger-cron allowlist would never match the registered event.
+    expect(manualTriggerEventFor("cron-gh-pages-cert-reissue")).toBe(
+      "cron/gh-pages-cert-reissue.manual-trigger",
+    );
   });
 });
 
@@ -456,31 +564,33 @@ describe("source-shape anchors (registration + replay-safety)", () => {
     ['key: \'"cron-platform"\'', "account concurrency lane"],
     ["onFailure: cronGhPagesCertReissueOnFailure", "onFailure lifecycle restore (AC3)"],
     ['administration: "write"', "least-privilege scoped mint (AC4)"],
-    ['repositories: [REPO_NAME]', "repo-scoped token (AC4)"],
+    ["repositories: [REPO_NAME]", "repo-scoped token (AC4)"],
     ["await step.sleep(", "poll suspends via step.sleep (ADR-077)"],
   ])("source contains %s (%s)", (anchor) => {
     expect(SUT_SOURCE).toContain(anchor);
   });
 
-  it("declares NO cron: schedule (event-triggered only, AC1)", () => {
-    expect(SUT_SOURCE).not.toMatch(/\{\s*cron:\s*"/);
+  it("registration declares NO cron: schedule — quote-agnostic (AC1)", () => {
+    // Slice the createFunction call and assert no `cron:` trigger KEY appears
+    // (regardless of the value's quote style — the old /\{\s*cron:\s*"/ regex
+    // only caught double-quoted schedules and false-failed on comments).
+    const start = SUT_SOURCE.indexOf("inngest.createFunction(");
+    const reg = SUT_SOURCE.slice(start);
+    expect(start).toBeGreaterThan(-1);
+    expect(reg).not.toMatch(/\bcron\s*:/); // no cron trigger key
+    expect(reg).toContain('event: "cron/gh-pages-cert-reissue.manual-trigger"');
   });
 
-  it("handler body has no try…finally spanning the poll (ADR-077)", () => {
-    // Scope to the handler (the cfFetch helper legitimately uses finally for
-    // clearTimeout, which is synchronous and does NOT span a step boundary).
-    const start = SUT_SOURCE.indexOf(
-      "export async function cronGhPagesCertReissueHandler",
-    );
-    const end = SUT_SOURCE.indexOf(
-      "export async function cronGhPagesCertReissueOnFailure",
-    );
+  it("orchestration has no try…finally spanning a step boundary (ADR-077)", () => {
+    // cfFetch legitimately uses finally for clearTimeout (synchronous, no step
+    // boundary) — scope to runReissueSteps, the replay-safety-critical function.
+    const start = SUT_SOURCE.indexOf("export async function runReissueSteps");
+    const end = SUT_SOURCE.indexOf("async function cfFetch");
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
-    const handlerBody = SUT_SOURCE.slice(start, end);
-    expect(handlerBody).not.toContain("finally");
-    // Positive: the poll loop uses step.sleep and restore is its own step.
-    expect(handlerBody).toContain("await step.sleep(");
-    expect(handlerBody).toContain('step.run("restore-steady-state"');
+    const body = SUT_SOURCE.slice(start, end);
+    expect(body).not.toContain("finally");
+    expect(body).toContain("await step.sleep(");
+    expect(body).toContain('step.run("restore-steady-state"');
   });
 });

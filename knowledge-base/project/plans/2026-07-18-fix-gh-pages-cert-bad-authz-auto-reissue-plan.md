@@ -32,6 +32,11 @@ requires_cpo_signoff: false
 
 > **IaC-routing note (Phase 2.8 reviewed):** this plan's entire purpose is to REPLACE the #3976 manual GitHub-Pages-console step with a fully scripted, IaC-routed remediation. Any vendor-console wording below is either a *quoted/refuted* reference to the old runbook or the single genuine vendor-authorization gate (App-manifest permission re-acceptance) that `apps/web-platform/infra/github-app.tf` already documents as an unavoidable GitHub web-authorization limit. See `## Infrastructure (IaC)`.
 
+> **⚠️ SUPERSEDED IN PLACES (CTO ruling + multi-agent review, 2026-07-18) — authoritative sources are ADR-125, `session-state.md`, and the shipped code.** Two plan-body claims below were corrected during implementation:
+> 1. **The ADR-089 "freeze-lock" (Finding #4, Solution step 0, `## Distinctness`, AC8b) is DESCOPED to v2 (#6677).** ADR-089 has no runtime implementation (it is an edit-time PreToolUse path-prefix guard, unreadable from the Inngest/GHA runtimes). v1 ships lock-free with a documented residual-race Sharp Edge + the P0 backstop. All "acquire/honor the ADR-089 freeze-lock" lines are v2 work, not v1.
+> 2. **Observability uses `reportSilentFallback` (feature tag), not `mirrorP0Deduped`, and events are queried by `feature=cron-gh-pages-cert-reissue` — NOT `op=gh-pages-cert-reissue`** (no event carries that `op`). `mirrorP0Deduped` is GDPR-Art-33-breach-specific (userId/conversationId dedup keys) and does not fit a cron pager. Wherever this plan says `mirrorP0Deduped` or `op=gh-pages-cert-reissue`, read `reportSilentFallback` / `feature=cron-gh-pages-cert-reissue`.
+> 3. **The mutating apply racer CAN revert the records** — `cloudflare_record.github_pages`/`.www` ARE in the `apply-web-platform-infra.yml` `-target` list (`:343-345`); the mitigation is fail-closed→P0→re-fire + avoiding infra merges during the window, not allowlist exclusion (see ADR-125 Consequences).
+
 ## Overview
 
 The `soleur.ai` GitHub Pages custom-domain TLS certificate is stuck in ACME state **`bad_authz`** ("The ACME authorization is in a bad state. We need to start over." — GitHub's own `https_certificate.description`). The cert covers `soleur.ai` + `www.soleur.ai`, expires **2026-08-16** (~28 days out). The site is **currently serving `HTTP/2 200` on the still-valid May cert** — there is **no live outage yet**, but every GitHub auto-retry re-fails, so the cert will not renew and will hard-expire on Aug 16, at which point Cloudflare (Full/Full-Strict SSL, origin = GitHub Pages) returns **526** exactly as in the 2026-05-18 incident.
@@ -181,7 +186,7 @@ logs:
   where: Better Stack Logs source 2457081 (Inngest node Vector ship) + Sentry breadcrumbs
   retention: per existing Better Stack + Sentry retention
 discoverability_test:
-  command: "gh api /repos/jikig-ai/soleur/pages | jq '.https_certificate.state'  AND Sentry issue search op:gh-pages-cert-reissue"
+  command: "gh api /repos/jikig-ai/soleur/pages | jq '.https_certificate.state'  AND Sentry issue search feature:cron-gh-pages-cert-reissue"
   expected_output: "issued (post-remediation); Sentry shows the terminal outcome event with discriminating fields — NO ssh required"
 ```
 

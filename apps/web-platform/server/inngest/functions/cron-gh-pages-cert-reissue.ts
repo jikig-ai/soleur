@@ -19,6 +19,9 @@
 // is WRONG here because step.sleep suspends via a control-flow throw that would
 // run `finally` prematurely at the first poll pass. There is no in-repo
 // `onFailure` precedent; the config key is verified against pinned inngest 3.54.2.
+// The read-only preflight lives in its OWN preceding step so the atomic mutating
+// step holds an HTTP connection only for the toggle→settle→reset window (the
+// Inngest executor callback goes through CF's ~100s origin-response timeout).
 //
 // AP-001 exception: this is an off-Terraform live-infra mutation (transient,
 // self-reverting, single-attempt, human-gated). Registered as AP-019 in
@@ -49,10 +52,17 @@ const SENTRY_FEATURE = "cron-gh-pages-cert-reissue";
 // Restore always targets THIS — it is what Terraform owns, so re-asserting it is
 // correct and drift-free. The onFailure path has no in-memory capture, so it
 // restores to these declared constants (idempotent with the happy-path restore).
-const APEX_NAME = "soleur.ai";
-const WWW_NAME = "www.soleur.ai";
-const PAGES_CNAME = "soleur.ai";
+// Exported so the test suite pins against the same literals (no drift).
+export const APEX_NAME = "soleur.ai";
+export const WWW_NAME = "www.soleur.ai";
+export const PAGES_CNAME = "soleur.ai";
 const STEADY_PROXIED = true;
+
+// The toggle set is exactly the 4 apex A-records + the www CNAME (dns.tf). A
+// restore that sees FEWER than this many records has hit a Cloudflare read
+// failure (listToggleRecords coalesces nothing to []) and MUST fail loud rather
+// than "restore" a subset and leave origins exposed. See restoreState.
+export const EXPECTED_TOGGLE_RECORDS = 5;
 
 // Preflight allowlist: only a genuinely-stuck cert is touched. Toggling a
 // healthy in-flight order (authorization_pending / dns_changed / new) can
@@ -62,19 +72,26 @@ const REISSUE_ALLOWED_STATES = ["bad_authz", "failed"] as const;
 // GitHub App installation-token lifetime floor (a handful of admin calls).
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
-// Least-privilege scope: PUT /repos/{owner}/{repo}/pages is `administration`.
+// Least-privilege scope: PUT /repos/{owner}/{repo}/pages requires `administration`
+// (the Pages site-config endpoint; `pages:write` is insufficient for the
+// custom-domain toggle). repositories:["soleur"] + a 15-min TTL bound the blast
+// radius to one repo.
 const REISSUE_TOKEN_PERMISSIONS: Record<string, string> = {
   administration: "write",
 };
 
-// Bounds. The poll cap keeps the DNS-only (unprotected) window short; the CF
-// AbortController timeout mirrors cf-cache-purge.ts.
+// Bounds. The poll cap keeps the DNS-only (unprotected) window short.
 const POLL_INTERVAL_MS = 60 * 1000;
 const POLL_MAX_MS = 15 * 60 * 1000;
-// Fixed poll count for the replay-safe handler loop (deterministic across resumes).
+// Fixed poll count for the replay-safe handler loop (deterministic across
+// resumes — NOT a wall-clock bound in the body). The loop skips the trailing
+// sleep, so the effective poll window is (MAX_POLLS-1)*POLL_INTERVAL_MS ≈ 14 min.
 const MAX_POLLS = Math.floor(POLL_MAX_MS / POLL_INTERVAL_MS);
 const CNAME_SETTLE_MS = 45 * 1000; // between cname:null and re-set
 const CF_TIMEOUT_MS = 10 * 1000;
+// Octokit has no default request timeout; bound the GitHub leg so a slow API
+// call cannot blow the ~100s CF origin-response budget inside the atomic step.
+const GITHUB_TIMEOUT_MS = 15 * 1000;
 
 const CF_API_BASE = "https://api.cloudflare.com/client/v4";
 
@@ -88,7 +105,8 @@ export type ReissueOutcome =
   | "reissue_failed"
   | "proxy_restore_failed"
   | "precondition_blocked"
-  | "not_stuck";
+  | "not_stuck"
+  | "config_missing";
 
 export interface ReissueResult {
   outcome: ReissueOutcome;
@@ -109,12 +127,6 @@ export interface CfDnsRecord {
   proxied: boolean;
 }
 
-/** Captured pre-existing state for symmetric restore (Finding #2). */
-export interface CapturedState {
-  cname: string | null;
-  records: Array<{ id: string; name: string; proxied: boolean }>;
-}
-
 export interface PreconditionInputs {
   acmeApexStatus: number;
   acmeWwwStatus: number;
@@ -124,9 +136,10 @@ export interface PreconditionInputs {
 }
 
 /**
- * All live IO is injected so the pure orchestration is unit-testable without a
- * network. The Inngest handler supplies real implementations (Octokit + CF
- * fetch) wrapped in step.run/step.sleep.
+ * All live IO is injected so the orchestration is testable without a network.
+ * The Inngest handler supplies real implementations (Octokit + CF fetch); the
+ * unit tests supply fakes and drive `runReissueSteps` — the SAME function that
+ * runs in production (no parallel/dead twin).
  */
 export interface ReissueDeps {
   getPages(): Promise<{ state: string; cname: string | null }>;
@@ -135,8 +148,14 @@ export interface ReissueDeps {
   setRecordProxied(id: string, proxied: boolean): Promise<boolean>;
   gatherPreconditions(): Promise<PreconditionInputs>;
   sleep(ms: number): Promise<void>;
-  now(): number;
   logger: HandlerArgs["logger"];
+}
+
+/** The Inngest step primitive the orchestration needs (run + sleep). Injectable
+ * so `runReissueSteps` is drivable by a fake step in tests. */
+export interface ReissueStep {
+  run<T>(name: string, cb: () => Promise<T>): Promise<T>;
+  sleep(name: string, duration: string): Promise<void>;
 }
 
 // =============================================================================
@@ -188,8 +207,7 @@ export function checkReissuePreconditions(inputs: PreconditionInputs): {
 // =============================================================================
 
 /**
- * Toggle every apex A-record + the www CNAME to `proxied`. Returns the records
- * as they were BEFORE the toggle (for symmetric restore). On ANY partial
+ * Toggle every apex A-record + the www CNAME to `proxied`. On ANY partial
  * failure, throws PartialToggleError so the caller aborts→restores rather than
  * leaving a half-open window.
  */
@@ -229,39 +247,25 @@ export async function reissueViaCnameToggle(deps: ReissueDeps): Promise<void> {
 }
 
 /**
- * Poll GET /pages every POLL_INTERVAL_MS up to POLL_MAX_MS. Resolves as soon as
- * the state is healthy; otherwise returns the last observed state on timeout.
- */
-export async function pollCertState(
-  deps: ReissueDeps,
-  opts: { intervalMs: number; maxMs: number } = {
-    intervalMs: POLL_INTERVAL_MS,
-    maxMs: POLL_MAX_MS,
-  },
-): Promise<{ healthy: boolean; finalState: string; attempts: number }> {
-  const start = deps.now();
-  let attempts = 0;
-  let finalState = "unknown";
-  while (deps.now() - start < opts.maxMs) {
-    const pages = await deps.getPages();
-    attempts += 1;
-    finalState = pages.state;
-    if (pages.state === "approved" || pages.state === "issued") {
-      return { healthy: true, finalState, attempts };
-    }
-    await deps.sleep(opts.intervalMs);
-  }
-  return { healthy: false, finalState, attempts };
-}
-
-/**
  * Restore the declared steady state: proxied=true on all toggle records +
  * cname=soleur.ai. Idempotent — safe to run from BOTH the happy-path final step
- * and the onFailure handler. Throws if the live state does not match after the
- * restore (a failed restore is a security regression, not a swallow).
+ * and the onFailure handler. FAIL-LOUD:
+ *   - a short record read (Cloudflare GET failure → fewer than the expected 5
+ *     records) throws, so a partial/empty list cannot "restore" a subset and
+ *     silently leave origins exposed (the alert never fires on a swallowed read);
+ *   - the final re-read convergence assert throws if a PATCH returned success but
+ *     did not stick (records still proxied=false, or cname didn't persist).
+ * A failed restore is a security regression, not a swallow — it throws so the
+ * caller (or onFailure) pages proxy_restore_failed.
  */
 export async function restoreState(deps: ReissueDeps): Promise<void> {
   const records = await deps.listToggleRecords();
+  if (records.length < EXPECTED_TOGGLE_RECORDS) {
+    throw new Error(
+      `restore: read only ${records.length}/${EXPECTED_TOGGLE_RECORDS} toggle records ` +
+        `(Cloudflare read failure?) — refusing to restore a subset`,
+    );
+  }
   for (const rec of records) {
     if (rec.proxied !== STEADY_PROXIED) {
       const ok = await deps.setRecordProxied(rec.id, STEADY_PROXIED);
@@ -274,8 +278,14 @@ export async function restoreState(deps: ReissueDeps): Promise<void> {
   if (pages.cname !== PAGES_CNAME) {
     await deps.setPagesCname(PAGES_CNAME);
   }
-  // Assert the live state converged.
+  // Assert the live state converged (catches a write that returned true but did
+  // not stick — the origin-exposure case a per-record throw cannot see).
   const after = await deps.listToggleRecords();
+  if (after.length < EXPECTED_TOGGLE_RECORDS) {
+    throw new Error(
+      `restore-assert: re-read only ${after.length}/${EXPECTED_TOGGLE_RECORDS} records`,
+    );
+  }
   const stillWrong = after.filter((r) => r.proxied !== STEADY_PROXIED);
   const pagesAfter = await deps.getPages();
   if (stillWrong.length > 0 || pagesAfter.cname !== PAGES_CNAME) {
@@ -286,95 +296,159 @@ export async function restoreState(deps: ReissueDeps): Promise<void> {
 }
 
 // =============================================================================
-// Orchestration (pure control flow over injected IO) — unit-testable end to end
+// Production orchestration (injectable step + deps → directly testable)
 // =============================================================================
 
+function emitAndReturn(
+  result: ReissueResult,
+  logger: HandlerArgs["logger"],
+): ReissueResult {
+  emitTerminal(result, logger);
+  return result;
+}
+
 /**
- * The full v1 remediation as one deps-injected function. The Inngest handler
- * maps its phases onto step.run/step.sleep; this function is what the unit tests
- * drive directly (no live IO).
+ * The full v1 remediation, mapped onto Inngest steps. THIS is the production
+ * control flow (the handler only mints the token + builds live deps, then calls
+ * this). Tests drive it with a fake `step` + fake `deps`, so the code that ships
+ * is the code that is tested — there is no parallel twin.
+ *
+ * Step structure (ADR-077): read-only preflight in its own step → atomic
+ * toggle+reissue in ONE step → step.sleep poll → unconditional restore step.
  */
-export async function runReissue(deps: ReissueDeps): Promise<ReissueResult> {
-  const start = deps.now();
-  const base = (): Omit<ReissueResult, "outcome" | "detail"> => ({
-    finalState: "unknown",
-    attempts: 0,
-    elapsedMs: deps.now() - start,
-    proxiedStateAtExit: STEADY_PROXIED,
-    cnameAtExit: PAGES_CNAME,
+export async function runReissueSteps(
+  step: ReissueStep,
+  deps: ReissueDeps,
+  logger: HandlerArgs["logger"],
+): Promise<ReissueResult> {
+  // Memoized start stamp so elapsedMs is correct across replays (Date.now() in
+  // the body would re-stamp on every resume and measure only the final pass).
+  const startedAt = await step.run("mark-start", async () => Date.now());
+  const elapsed = () => Date.now() - startedAt;
+
+  // Read-only preflight (own step; a retry of the mutation step below does not
+  // re-run these probes). Splitting it out also keeps the ~10-25s of ACME/DNS/CF
+  // read probes OUT of the atomic step's held-connection budget.
+  const pre = await step.run("preflight", async () => {
+    const pages = await deps.getPages();
+    const gate = assertStuckState(pages.state);
+    if (!gate.proceed) {
+      return { status: "not_stuck" as const, state: pages.state, reason: gate.reason };
+    }
+    const preCheck = checkReissuePreconditions(await deps.gatherPreconditions());
+    if (!preCheck.ok) {
+      return {
+        status: "blocked" as const,
+        state: pages.state,
+        results: preCheck.results,
+        failed: preCheck.failed,
+      };
+    }
+    return { status: "ok" as const, state: pages.state, results: preCheck.results };
   });
 
-  // Preflight 1: stuck-state allowlist — abort with ZERO writes otherwise.
-  const pre = await deps.getPages();
-  const gate = assertStuckState(pre.state);
-  if (!gate.proceed) {
-    return {
-      ...base(),
-      outcome: "not_stuck",
-      finalState: pre.state,
-      detail: gate.reason,
-    };
+  if (pre.status === "not_stuck") {
+    return emitAndReturn(
+      {
+        outcome: "not_stuck",
+        finalState: pre.state,
+        attempts: 0,
+        elapsedMs: elapsed(),
+        proxiedStateAtExit: null,
+        cnameAtExit: null,
+        detail: pre.reason,
+      },
+      logger,
+    );
+  }
+  if (pre.status === "blocked") {
+    return emitAndReturn(
+      {
+        outcome: "precondition_blocked",
+        finalState: pre.state,
+        attempts: 0,
+        elapsedMs: elapsed(),
+        proxiedStateAtExit: null,
+        cnameAtExit: null,
+        preconditionResults: pre.results,
+        detail: `preconditions failed: ${pre.failed.join(", ")}`,
+      },
+      logger,
+    );
   }
 
-  // Preflight 2: auto-fixable preconditions.
-  const preconditionInputs = await deps.gatherPreconditions();
-  const preCheck = checkReissuePreconditions(preconditionInputs);
-  if (!preCheck.ok) {
-    return {
-      ...base(),
-      outcome: "precondition_blocked",
-      finalState: pre.state,
-      preconditionResults: preCheck.results,
-      detail: `preconditions failed: ${preCheck.failed.join(", ")}`,
-    };
+  // Atomic toggle + reissue (ONE step.run): a step retry re-runs the whole
+  // mutating unit (bounded by retries:1), never a half-applied window.
+  const toggle = await step.run("toggle-reissue", async () => {
+    try {
+      const records = await deps.listToggleRecords();
+      await setRecordsProxied(deps, records, false);
+      await reissueViaCnameToggle(deps);
+      return { ok: true as const };
+    } catch (err) {
+      // Restore inside this step so a same-step abort is self-contained.
+      await restoreState(deps);
+      return {
+        ok: false as const,
+        message: (err as Error).message,
+        httpStatus:
+          err instanceof PartialToggleError ? "partial-toggle" : "cname-put",
+      };
+    }
+  });
+
+  if (!toggle.ok) {
+    return emitAndReturn(
+      {
+        outcome: "reissue_failed",
+        finalState: pre.state,
+        attempts: 0,
+        elapsedMs: elapsed(),
+        proxiedStateAtExit: null,
+        cnameAtExit: null,
+        preconditionResults: pre.results,
+        detail: `reissue trigger failed (${toggle.httpStatus}): ${toggle.message}`,
+      },
+      logger,
+    );
   }
 
-  // Toggle + reissue (the single mutating unit).
-  let toggled: CfDnsRecord[] = [];
-  try {
-    toggled = await deps.listToggleRecords();
-    await setRecordsProxied(deps, toggled, false);
-    await reissueViaCnameToggle(deps);
-  } catch (err) {
-    // Abort → restore captured/declared state.
-    await restoreState(deps);
-    const httpStatus =
-      err instanceof PartialToggleError ? "partial-toggle" : "cname-put";
-    return {
-      ...base(),
-      outcome: "reissue_failed",
-      finalState: pre.state,
-      preconditionResults: preCheck.results,
-      detail: `reissue trigger failed (${httpStatus}): ${(err as Error).message}`,
-    };
+  // Poll (step.sleep is the only suspension point). Fixed count → deterministic
+  // step names across replays.
+  let attempts = 0;
+  let finalState = "unknown";
+  let healthy = false;
+  for (let i = 0; i < MAX_POLLS; i++) {
+    const pages = await step.run(`poll-${i}`, () => deps.getPages());
+    attempts += 1;
+    finalState = pages.state;
+    if (pages.state === "approved" || pages.state === "issued") {
+      healthy = true;
+      break;
+    }
+    if (i < MAX_POLLS - 1) {
+      await step.sleep(`poll-wait-${i}`, `${POLL_INTERVAL_MS}ms`);
+    }
   }
 
-  // Poll for issuance.
-  const poll = await pollCertState(deps);
+  // Unconditional final restore step.
+  await step.run("restore-steady-state", () => restoreState(deps));
 
-  // Unconditional restore (the happy-path final step; onFailure covers throws).
-  await restoreState(deps);
-
-  if (poll.healthy) {
-    return {
-      ...base(),
-      outcome: "issued",
-      finalState: poll.finalState,
-      attempts: poll.attempts,
-      elapsedMs: deps.now() - start,
-      preconditionResults: preCheck.results,
-      detail: `cert reissued: state=${poll.finalState} after ${poll.attempts} poll(s)`,
-    };
-  }
-  return {
-    ...base(),
-    outcome: "poll_timeout",
-    finalState: poll.finalState,
-    attempts: poll.attempts,
-    elapsedMs: deps.now() - start,
-    preconditionResults: preCheck.results,
-    detail: `poll cap reached; final state=${poll.finalState} (H1+H2 falsified for this incident)`,
-  };
+  return emitAndReturn(
+    {
+      outcome: healthy ? "issued" : "poll_timeout",
+      finalState,
+      attempts,
+      elapsedMs: elapsed(),
+      proxiedStateAtExit: STEADY_PROXIED,
+      cnameAtExit: PAGES_CNAME,
+      preconditionResults: pre.results,
+      detail: healthy
+        ? `cert reissued: state=${finalState} after ${attempts} poll(s)`
+        : `poll cap reached; final state=${finalState}`,
+    },
+    logger,
+  );
 }
 
 // =============================================================================
@@ -432,6 +506,7 @@ function buildLiveDeps(args: {
     const res = await octokit.request("GET /repos/{owner}/{repo}/pages", {
       owner: REPO_OWNER,
       repo: REPO_NAME,
+      request: { signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) },
     });
     const data = res.data as {
       cname?: string | null;
@@ -452,6 +527,7 @@ function buildLiveDeps(args: {
         owner: REPO_OWNER,
         repo: REPO_NAME,
         cname: cname ?? "",
+        request: { signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) },
       });
     },
     async listToggleRecords() {
@@ -464,6 +540,21 @@ function buildLiveDeps(args: {
           `/zones/${zoneId}/dns_records?name=${encodeURIComponent(name)}&type=${type}`,
           { method: "GET", token: cfToken },
         );
+        // FAIL LOUD on a read failure — coalescing a failed GET to [] would let
+        // restore "succeed" over a subset and leave origins exposed silently.
+        if (!res.ok) {
+          reportSilentFallback(
+            new Error(`CF list dns_records failed: status=${res.status}`),
+            {
+              feature: SENTRY_FEATURE,
+              op: "list-toggle-records",
+              extra: { name, type, status: res.status },
+            },
+          );
+          throw new Error(
+            `CF list dns_records failed for ${name}/${type}: status=${res.status}`,
+          );
+        }
         const result = (res.body as { result?: CfDnsRecord[] })?.result ?? [];
         for (const r of result) {
           records.push({
@@ -553,7 +644,6 @@ function buildLiveDeps(args: {
       };
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    now: () => Date.now(),
     logger,
   };
 }
@@ -561,6 +651,16 @@ function buildLiveDeps(args: {
 // =============================================================================
 // Terminal observability
 // =============================================================================
+
+// Benign terminal outcomes: a healthy cert (issued), a correct decline
+// (not_stuck), or a not-yet-provisioned token (config_missing — the token IaC
+// has not been applied). These are logged, NOT paged. Every OTHER outcome is a
+// genuine remediation failure and mirrors to Sentry (→ the feature-scoped alert).
+const BENIGN_OUTCOMES: ReadonlySet<ReissueOutcome> = new Set([
+  "issued",
+  "not_stuck",
+  "config_missing",
+]);
 
 function emitTerminal(
   result: ReissueResult,
@@ -576,11 +676,13 @@ function emitTerminal(
     preconditionResults: result.preconditionResults,
     detail: result.detail,
   };
-  if (result.outcome === "issued" || result.outcome === "not_stuck") {
-    logger.info({ fn: FN_ID, ...extra }, `reissue outcome=${result.outcome}`);
+  if (BENIGN_OUTCOMES.has(result.outcome)) {
+    const log = result.outcome === "config_missing" ? logger.warn : logger.info;
+    log({ fn: FN_ID, ...extra }, `reissue outcome=${result.outcome}`);
     return;
   }
-  // Every non-success terminal path mirrors to Sentry (fail-loud).
+  // Every remediation-failure terminal path mirrors to Sentry (fail-loud → the
+  // gh-pages-cert-reissue-failed issue-alert fires on the `feature` tag).
   reportSilentFallback(new Error(`reissue outcome=${result.outcome}`), {
     feature: SENTRY_FEATURE,
     op: "reissue-terminal",
@@ -598,9 +700,7 @@ function emitTerminal(
 /** The handler needs `step.sleep` (the poll suspension point); HandlerArgs only
  * types `step.run`, so widen it locally without mutating the shared type. */
 interface ReissueHandlerArgs extends Omit<HandlerArgs, "step"> {
-  step: HandlerArgs["step"] & {
-    sleep(name: string, duration: string): Promise<void>;
-  };
+  step: ReissueStep;
 }
 
 export async function cronGhPagesCertReissueHandler({
@@ -610,18 +710,25 @@ export async function cronGhPagesCertReissueHandler({
   const cfToken = process.env.CF_API_TOKEN_DNS_EDIT;
   const zoneId = process.env.CF_ZONE_ID;
   if (!cfToken || !zoneId) {
-    const result: ReissueResult = {
-      outcome: "precondition_blocked",
-      finalState: "unknown",
-      attempts: 0,
-      elapsedMs: 0,
-      proxiedStateAtExit: null,
-      cnameAtExit: null,
-      preconditionResults: { cfTokenPresent: !!cfToken, zoneIdPresent: !!zoneId },
-      detail: "CF_API_TOKEN_DNS_EDIT or CF_ZONE_ID not set in runtime",
-    };
-    emitTerminal(result, logger);
-    return result;
+    // Benign config-not-ready state: the DNS-edit token IaC has not been applied
+    // yet (out-of-band JIT apply). Warn, do NOT page — nothing was mutated.
+    return emitAndReturn(
+      {
+        outcome: "config_missing",
+        finalState: "unknown",
+        attempts: 0,
+        elapsedMs: 0,
+        proxiedStateAtExit: null,
+        cnameAtExit: null,
+        preconditionResults: {
+          cfTokenPresent: !!cfToken,
+          zoneIdPresent: !!zoneId,
+        },
+        detail:
+          "CF_API_TOKEN_DNS_EDIT or CF_ZONE_ID not set — token IaC not yet applied",
+      },
+      logger,
+    );
   }
 
   const installationToken = await step.run("mint-installation-token", () =>
@@ -633,131 +740,17 @@ export async function cronGhPagesCertReissueHandler({
   );
 
   const deps = buildLiveDeps({ installationToken, cfToken, zoneId, logger });
-
-  // Preflight + toggle + reissue in ONE step.run: a step retry re-runs the
-  // whole mutating unit (bounded by retries:1), never a half-applied window.
-  const afterReissue = await step.run("preflight-toggle-reissue", async () => {
-    const pre = await deps.getPages();
-    const gate = assertStuckState(pre.state);
-    if (!gate.proceed) {
-      return { phase: "not_stuck" as const, state: pre.state, reason: gate.reason };
-    }
-    const preconditionInputs = await deps.gatherPreconditions();
-    const preCheck = checkReissuePreconditions(preconditionInputs);
-    if (!preCheck.ok) {
-      return {
-        phase: "precondition_blocked" as const,
-        state: pre.state,
-        results: preCheck.results,
-        failed: preCheck.failed,
-      };
-    }
-    try {
-      const records = await deps.listToggleRecords();
-      await setRecordsProxied(deps, records, false);
-      await reissueViaCnameToggle(deps);
-      return { phase: "toggled" as const, results: preCheck.results };
-    } catch (err) {
-      // Restore inside this step so a same-step abort is self-contained.
-      await restoreState(deps);
-      return {
-        phase: "reissue_failed" as const,
-        results: preCheck.results,
-        message: (err as Error).message,
-        httpStatus:
-          err instanceof PartialToggleError ? "partial-toggle" : "cname-put",
-      };
-    }
-  });
-
-  const startedAt = Date.now();
-
-  if (afterReissue.phase === "not_stuck") {
-    const result: ReissueResult = {
-      outcome: "not_stuck",
-      finalState: afterReissue.state,
-      attempts: 0,
-      elapsedMs: 0,
-      proxiedStateAtExit: STEADY_PROXIED,
-      cnameAtExit: PAGES_CNAME,
-      detail: afterReissue.reason,
-    };
-    emitTerminal(result, logger);
-    return result;
-  }
-  if (afterReissue.phase === "precondition_blocked") {
-    const result: ReissueResult = {
-      outcome: "precondition_blocked",
-      finalState: afterReissue.state,
-      attempts: 0,
-      elapsedMs: 0,
-      proxiedStateAtExit: STEADY_PROXIED,
-      cnameAtExit: PAGES_CNAME,
-      preconditionResults: afterReissue.results,
-      detail: `preconditions failed: ${afterReissue.failed.join(", ")}`,
-    };
-    emitTerminal(result, logger);
-    return result;
-  }
-  if (afterReissue.phase === "reissue_failed") {
-    const result: ReissueResult = {
-      outcome: "reissue_failed",
-      finalState: "bad_authz",
-      attempts: 0,
-      elapsedMs: Date.now() - startedAt,
-      proxiedStateAtExit: STEADY_PROXIED,
-      cnameAtExit: PAGES_CNAME,
-      preconditionResults: afterReissue.results,
-      detail: `reissue trigger failed (${afterReissue.httpStatus}): ${afterReissue.message}`,
-    };
-    emitTerminal(result, logger);
-    return result;
-  }
-
-  // Poll (step.sleep is the only suspension point). Bounded by a FIXED iteration
-  // count — NOT wall-clock Date.now() in the handler body, which is
-  // non-deterministic across Inngest replays and would shift step names on resume.
-  let attempts = 0;
-  let finalState = "unknown";
-  let healthy = false;
-  for (let i = 0; i < MAX_POLLS; i++) {
-    const pages = await step.run(`poll-${i}`, () => deps.getPages());
-    attempts += 1;
-    finalState = pages.state;
-    if (pages.state === "approved" || pages.state === "issued") {
-      healthy = true;
-      break;
-    }
-    if (i < MAX_POLLS - 1) {
-      await step.sleep(`poll-wait-${i}`, `${POLL_INTERVAL_MS}ms`);
-    }
-  }
-
-  // Unconditional final restore step.
-  await step.run("restore-steady-state", () => restoreState(deps));
-
-  const result: ReissueResult = {
-    outcome: healthy ? "issued" : "poll_timeout",
-    finalState,
-    attempts,
-    elapsedMs: Date.now() - startedAt,
-    proxiedStateAtExit: STEADY_PROXIED,
-    cnameAtExit: PAGES_CNAME,
-    preconditionResults: afterReissue.results,
-    detail: healthy
-      ? `cert reissued: state=${finalState} after ${attempts} poll(s)`
-      : `poll cap reached; final state=${finalState}`,
-  };
-  emitTerminal(result, logger);
-  return result;
+  return runReissueSteps(step, deps, logger);
 }
 
 /**
- * onFailure: runs ONLY after retries are exhausted / the body threw. The body's
- * final restore step does NOT run on a throw, so this idempotently re-asserts
- * the declared steady state and pages P0 if even the restore fails (origin IPs
- * would otherwise stay exposed AND/OR the custom domain unset — the highest
- * severity failure).
+ * onFailure: runs ONLY after retries are exhausted / the body threw (e.g. a
+ * persistent Octokit error during the poll loop). The body's final restore step
+ * does NOT run on a throw, so this idempotently re-asserts the declared steady
+ * state. It ALWAYS pages: a body throw means the cert is still bad_authz AND the
+ * DNS-only window was open — the founder must know even when the restore
+ * succeeds (reissue_incomplete_restore_ok) and especially when it fails
+ * (proxy_restore_failed: origin IPs exposed AND/OR the custom domain unset).
  */
 export async function cronGhPagesCertReissueOnFailure({
   error,
@@ -766,7 +759,7 @@ export async function cronGhPagesCertReissueOnFailure({
 }: {
   error: Error;
   event: unknown;
-  step: HandlerArgs["step"];
+  step: ReissueStep;
   logger: HandlerArgs["logger"];
 }): Promise<void> {
   const cfToken = process.env.CF_API_TOKEN_DNS_EDIT;
@@ -790,10 +783,14 @@ export async function cronGhPagesCertReissueOnFailure({
     );
     const deps = buildLiveDeps({ installationToken, cfToken, zoneId, logger });
     await step.run("onfailure-restore-steady-state", () => restoreState(deps));
-    logger.info(
-      { fn: FN_ID },
-      "onFailure restored declared steady state after body failure",
-    );
+    // Restore succeeded, but the remediation itself did NOT complete (the body
+    // threw). Page so a retries-exhausted throw is never silent.
+    reportSilentFallback(error, {
+      feature: SENTRY_FEATURE,
+      op: "onfailure-restore",
+      message: `reissue body failed after retries; steady state restored: ${error.message}`,
+      tags: { outcome: "reissue_incomplete_restore_ok" },
+    });
   } catch (restoreErr) {
     // The security-regression brake: restore itself failed.
     reportSilentFallback(restoreErr, {

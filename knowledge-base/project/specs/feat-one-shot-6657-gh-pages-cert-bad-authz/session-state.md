@@ -28,7 +28,7 @@ Substrate audit found **ADR-089 freeze-lock has NO runtime implementation** (it'
 - ADR-125 + AP-019 exception row + `## Decision` framing STAY in v1 (the off-Terraform CF mutation needs AP-001 governance regardless of the lock).
 - ADR-125 must NOT cite ADR-089 as runtime coordination (structurally absent); state "v1 accepts residual race; runtime infra-coordination lock deferred to v2".
 - v2 lock substrate (when built) = Supabase lease row consulted by a new guard step inside the GHA apply+drift workflows — NOT "reuse ADR-089".
-- v1 ships a Sharp Edge naming the two residual racers + the `reissue_failed`/`poll_timeout` → Sentry P0 backstop. The mutating apply racer can't fire on the records (not in the `-target` allowlist); the drift racer degrades to a spurious page (~2% overlap), no auto-apply.
+- v1 ships a Sharp Edge naming the two residual racers + the `reissue_failed`/`poll_timeout` → Sentry P0 backstop. **CORRECTION (review, arch-P1):** the mutating `apply-web-platform-infra.yml` push-apply DOES `-target` `cloudflare_record.github_pages`/`.www` (`:343-345`) — so an infra PR merging mid-window CAN auto-apply `proxied=true` and collapse the window (fails closed → poll_timeout → P0 → re-fire). Mitigation is the fail-closed backstop + avoiding infra merges during the window, NOT allowlist exclusion. The drift racer (`0 6,18`) at most spuriously pages. This strengthens the v2 lock justification (#6677).
 
 ### Other corrections folded from substrate audit
 - `mirrorP0Deduped` is GDPR-Art-33-breach-specific (userId/conversationId dedup keys) — NOT a cron pager. Use `reportSilentFallback` + red terminal outcome for `proxy_restore_failed` instead.

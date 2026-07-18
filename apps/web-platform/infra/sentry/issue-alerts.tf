@@ -1795,12 +1795,16 @@ resource "sentry_issue_alert" "seccomp_remediation_failed" {
 
 # #6657 / ADR-125 — GitHub Pages cert-reissue failure pager.
 # cron-gh-pages-cert-reissue is event-triggered (no Sentry cron monitor), so its
-# only paging surface is the reportSilentFallback events it emits ONLY on failure
-# (poll_timeout / reissue_failed / proxy_restore_failed / precondition_blocked).
-# Any event carrying feature=cron-gh-pages-cert-reissue is by construction a
-# failed remediation — page the founder. The highest-severity arm
-# (proxy_restore_failed: origin IPs exposed AND/OR custom domain unset) is
-# included by the feature-level filter.
+# only paging surface is the reportSilentFallback events it emits on a genuine
+# remediation failure: poll_timeout / reissue_failed / proxy_restore_failed /
+# precondition_blocked (CAA appeared, TXT missing, carve-out regressed) /
+# reissue_incomplete_restore_ok (a retries-exhausted body throw whose restore
+# still succeeded). Benign outcomes are deliberately NOT emitted to Sentry
+# (logger only): issued, not_stuck, and config_missing (the DNS-edit token IaC
+# not yet applied — see cron-gh-pages-cert-reissue.ts BENIGN_OUTCOMES). So every
+# event carrying feature=cron-gh-pages-cert-reissue is by construction a failed
+# remediation — page the founder. The highest-severity arm (proxy_restore_failed:
+# origin IPs exposed AND/OR custom domain unset) is included by the feature filter.
 resource "sentry_issue_alert" "gh_pages_cert_reissue_failed" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug

@@ -105,13 +105,19 @@ coordination and self-heal auto-invoke are **deferred to v2** (#6677).
   zero console steps; the least-privilege scoped App token + DNS-edit-only CF token bound leak
   blast radius; every terminal outcome emits one discriminating Sentry event.
 - **Residual race (v1, accepted):** during the ~5–15 min DNS-only window, live `proxied=false`
-  diverges from Terraform-declared `proxied=true`. The mutating racer
-  (`apply-web-platform-infra.yml` push-apply) **cannot** touch these records — they are not in its
-  `-target` allowlist. The drift racer (`cron-terraform-drift`, `0 6,18 * * *`) degrades to at most
-  a spurious `infra-drift` **page** (~2% window-overlap odds, no auto-apply). Any early
-  `proxied=true` surfaces immediately as `poll_timeout`/`reissue_failed` → Sentry P0 → operator
-  re-fires. Documented as a Sharp Edge; the runtime coordination lock is deferred to v2 (#6677),
-  where unattended firing removes the operator-in-the-loop backstop.
+  diverges from Terraform-declared `proxied=true`. **Two racers, both fail closed:** (1) the
+  mutating `apply-web-platform-infra.yml` push-apply DOES `-target` `cloudflare_record.github_pages`
+  + `.www` (`.github/workflows/apply-web-platform-infra.yml:343-345`) and fires on any push to
+  `main` touching `infra/**`, so an infra PR merging mid-window would auto-apply `proxied=true` and
+  collapse the DNS-only window before the cert validates; (2) the drift racer
+  (`cron-terraform-drift`, `0 6,18 * * *`) at most spuriously pages `infra-drift` (no auto-apply).
+  Both outcomes are **non-worse than the already-degraded status quo**: an early `proxied=true`
+  surfaces immediately as `poll_timeout`/`reissue_failed` → Sentry P0 → operator re-fires (idempotent,
+  human-gated). Mitigation for v1 is the fail-closed→P0→re-fire backstop plus avoiding infra merges
+  during the ~15-min window (or gating the apply with `[skip-web-platform-apply]`); it is **not**
+  `-target`-allowlist exclusion (an earlier draft of this ADR wrongly claimed the records were not
+  targeted). This is exactly why the runtime coordination lock is deferred to v2 (#6677), where
+  unattended firing removes the operator-in-the-loop backstop and makes a real lock load-bearing.
 - **Blast radius during the window:** CF WAF/DDoS + origin-IP hiding are absent on apex+www.
   Acceptable because the still-valid cert keeps traffic serving, the window is bounded, and the
   final step + `onFailure` guarantee return to the protected steady state; a failed restore pages
