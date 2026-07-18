@@ -13,111 +13,55 @@
 # WHY A DISTINCT, NARROW TOKEN (not the broad `var.cf_api_token`)
 # --------------------------------------------------------------
 # `var.cf_api_token` carries Tunnel/Access/DNS/Notifications scope and is NOT injected
-# into the web-platform app runtime. Minting a dedicated Zone.DNS:Edit-only token means a
-# runtime leak of `CF_API_TOKEN_DNS_EDIT` is blast-radius-limited to DNS edits on the one
-# zone — it cannot touch tunnels, Access, R2, rulesets, or other zones. This mirrors the
-# per-scope narrow-token pattern already used for cf_api_token_rulesets / _bot_management /
-# _r2 / _zone_settings (see main.tf provider aliases).
+# into the web-platform app runtime. A dedicated Zone.DNS:Edit-only token means a runtime
+# leak of `CF_API_TOKEN_DNS_EDIT` is blast-radius-limited to DNS edits on the one zone — it
+# cannot touch tunnels, Access, R2, rulesets, or other zones. This mirrors the per-scope
+# narrow-token pattern already used for cf_api_token_rulesets / _bot_management / _r2 /
+# _zone_settings (see main.tf provider aliases + variables.tf).
 #
-# SCOPE
-# -----
-#   permission group : "DNS Write"  (zone-level; referenced by NAME via the
-#                       cloudflare_api_token_permission_groups data source, not a magic ID)
-#   resource scope    : com.cloudflare.api.account.zone.<var.cf_zone_id> = "*"  (single zone)
-#   ownership         : USER-owned token (v4 `cloudflare_api_token` mints via the CF user
-#                       tokens API; the resource has no account_id field — the policy's
-#                       `resources` map is what pins it to the one zone).
-#   published to      : Doppler soleur/prd as CF_API_TOKEN_DNS_EDIT (the config the
-#                       web-platform/Inngest runtime reads).
+# OPERATOR-MINTED (why NOT a `cloudflare_api_token` resource — hr-tf-variable-no-operator-mint-default)
+# ----------------------------------------------------------------------------------------------------
+# hr-tf-variable-no-operator-mint-default PREFERS a provider-side mint, but that path is
+# UNAVAILABLE here: minting a `cloudflare_api_token` requires the "User API Tokens: Edit"
+# (a.k.a. "API Tokens: Edit") permission, which `var.cf_api_token` (Tunnel/Access/DNS/
+# Notifications) does NOT carry — a `cloudflare_api_token` apply 403s (CF error 9109). So
+# the token is OPERATOR-minted out-of-band and this file only PUBLISHES it, exactly like
+# resend.tf's `var.resend_receiving_api_key` and the r2 / rulesets / bot_management narrow
+# tokens. The live token is named **"Edit zone DNS"** in the Cloudflare dashboard.
 #
-# VALUE IS WRITE-ONLY-ON-CREATE (important caveat)
-# ------------------------------------------------
-# `cloudflare_api_token.value` is `computed` + `sensitive` and is returned by the CF API
-# ONLY at create time (Terraform persists it in state thereafter). The doppler_secret below
-# reads that value in the SAME apply graph. `lifecycle { ignore_changes = [value] }` (matching
-# the ghcr-read-credential.tf / github-app.tf precedent) prevents refresh-time value churn
-# from proposing a no-op Doppler rewrite. To ROTATE: `terraform taint` (or -replace) the
-# cloudflare_api_token, then MANUALLY re-apply BOTH resources together and re-verify the
-# Doppler value — because ignore_changes suppresses automatic propagation of a new value.
+# The operator-supplied value lives in Doppler `prd_terraform` as CF_API_TOKEN_DNS_EDIT and
+# reaches Terraform as `TF_VAR_cf_api_token_dns_edit` (via `--name-transformer tf-var`; see
+# variables.tf). The doppler_secret below republishes it into `prd` — the config the
+# web-platform/Inngest runtime reads. If the value is absent the cron fail-closes gracefully
+# (precondition_blocked, no crash) until the secret lands, so a missing token never breaks
+# the app.
 #
-# ZERO OPERATOR MINT (hr-tf-variable-no-operator-mint-default)
-# ------------------------------------------------------------
-# PRIMARY path: the token is minted by Terraform (this file). There is NO
-# `variable "cf_api_token_dns_edit"` and no operator hand-mint step in the happy path.
-#
-# The minting provider is the DEFAULT `cloudflare` provider (api_token = var.cf_api_token).
-# Creating an API token requires the "User API Tokens: Edit" (a.k.a. "API Tokens: Edit")
-# permission, which `var.cf_api_token` (Tunnel/Access/DNS/Notifications) does NOT list. So
-# the CREATE apply of `cloudflare_api_token.gh_pages_cert_reissue_dns_edit` MAY 403. If it
-# does, the FALLBACK (operator-visible, still no long-lived secret in code) is:
-#   1. Operator mints a Zone.DNS:Edit-on-soleur.ai token in the CF dashboard.
-#   2. Store it as CF_API_TOKEN_DNS_EDIT in Doppler soleur/prd (runtime) directly, OR
-#      re-run this apply after temporarily granting var.cf_api_token "User API Tokens: Edit".
-# Either way the cron function fail-closes gracefully (precondition_blocked, no crash) until
-# the secret lands, so an unresolved 403 never breaks the app.
-#
-# APPLY ROUTING (NOT covered by the push-triggered merge-apply — read before merging)
-# -----------------------------------------------------------------------------------
-# These two resources are DELIBERATELY NOT added to the `-target=` allow-list in
-# .github/workflows/apply-web-platform-infra.yml. Rationale: that allow-list runs on EVERY
-# push to main touching infra/*.tf. Because var.cf_api_token almost certainly lacks "User
-# API Tokens: Edit", auto-targeting the mint here would 403 on the next push and — since a
-# failed `-target` apply fails the whole run — WEDGE every subsequent web-platform infra
-# deploy (same class of repo-wide-block footgun as the capacity-shortage `-replace`). To
-# avoid that, apply these two out-of-band, JUST-IN-TIME, after confirming/granting the mint
-# scope, in a maintenance window:
-#
-#   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
-#     terraform apply \
-#       -target=cloudflare_api_token.gh_pages_cert_reissue_dns_edit \
-#       -target=doppler_secret.cf_api_token_dns_edit
-#
-# (The `data.cloudflare_api_token_permission_groups.all` read needs only list scope, which
-# any CF token has.) Pre-merge you can still `terraform validate` + `plan` this file with a
-# read-limited token — the scope check bites only at apply (narrow-token plan-vs-apply
-# asymmetry). If/when the operator decides the mint scope will always be present, this file
-# can be promoted into the push allow-list in a follow-up.
+# VALUE IS SET-ONCE FROM THE VARIABLE (rotation)
+# ----------------------------------------------
+# `lifecycle { ignore_changes = [value] }` (matching resend.tf / github-app.tf's
+# operator-supplied secrets) prevents refresh-time churn from proposing a spurious Doppler
+# rewrite. To ROTATE: operator mints a fresh "Edit zone DNS" token, updates
+# CF_API_TOKEN_DNS_EDIT in BOTH Doppler `prd_terraform` (the TF-var source) and `prd` (the
+# runtime read) — or re-applies this doppler_secret after temporarily clearing ignore_changes.
 
-# "DNS Write" (zone-level) permission group ID — a GLOBAL Cloudflare constant (the same
-# across every account; verified via `data.cloudflare_api_token_permission_groups` +
-# `terraform providers schema` against the pinned cloudflare v4.52.7). A hard-coded ID is
-# used deliberately instead of the data source: the data source performs a CF API READ at
-# plan time, which the credential-free `terraform test` (tests/*.tftest.hcl, run in CI
-# without CF auth) cannot satisfy — it returns an empty map and the `["DNS Write"]` index
-# fails. The ID is stable (CF permission-group IDs are versioned constants, not per-account),
-# so the mint is unaffected. If CF ever rotates it, the apply 403s loudly (see the fallback
-# in the header) rather than silently minting the wrong scope.
-locals {
-  cf_dns_write_permission_group = "4755a26eedb94da69e1066d98aa820be"
-}
-
-resource "cloudflare_api_token" "gh_pages_cert_reissue_dns_edit" {
-  name = "web-platform-gh-pages-cert-reissue-dns-edit"
-
-  policy {
-    effect            = "allow"
-    permission_groups = [local.cf_dns_write_permission_group]
-    # Single-zone scope: soleur.ai only. `"*"` = all operations the permission group grants,
-    # but confined to this one zone resource.
-    resources = {
-      "com.cloudflare.api.account.zone.${var.cf_zone_id}" = "*"
-    }
-  }
-}
-
-# Publish the minted token value into the config the web-platform/Inngest runtime reads.
-# Mirrors the ghcr-read-credential.tf precedent: config = "prd", ignore_changes = [value].
-# dev is intentionally NOT provisioned — the cert-reissue cron runs in prd only.
+# Publish the operator-minted DNS-edit token into the config the web-platform/Inngest
+# runtime reads. Mirrors resend.tf / github-app.tf: config = "prd", value = var.*,
+# visibility masked, ignore_changes = [value]. dev is intentionally NOT provisioned —
+# the cert-reissue cron runs in prd only. This resource IS in the push-triggered
+# `-target` allow-list (apply-web-platform-infra.yml): it is a pure Doppler write (needs
+# only var.doppler_token, always present), so — unlike the removed cloudflare_api_token
+# mint — it cannot 403 and wedge the shared infra apply.
 resource "doppler_secret" "cf_api_token_dns_edit" {
-  project = "soleur"
-  config  = "prd"
-  name    = "CF_API_TOKEN_DNS_EDIT"
-  value   = cloudflare_api_token.gh_pages_cert_reissue_dns_edit.value
+  project    = "soleur"
+  config     = "prd"
+  name       = "CF_API_TOKEN_DNS_EDIT"
+  value      = var.cf_api_token_dns_edit
+  visibility = "masked"
 
   lifecycle {
-    # Value source of truth on rotation is a deliberate re-apply of BOTH resources (see the
-    # "VALUE IS WRITE-ONLY-ON-CREATE" note in the header); ignore_changes prevents refresh-
-    # time churn from proposing a spurious Doppler rewrite.
+    # dev/prd isolation: config = "prd" pinned explicitly; cannot land in dev without an
+    # edit to this file (caught at PR review). Value source of truth on rotation is the
+    # operator-updated prd_terraform TF var; ignore_changes prevents refresh-time churn.
     ignore_changes = [value]
   }
 }
