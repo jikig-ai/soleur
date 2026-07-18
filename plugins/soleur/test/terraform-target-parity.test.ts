@@ -612,7 +612,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.zot_push_token",
   "betteruptime_heartbeat.registry_prd",
   "betteruptime_heartbeat.registry_disk_prd",
-  "doppler_secret.zot_heartbeat_url_prd",
+  // doppler_secret.zot_heartbeat_url_prd removed (#6438 B3): it was a reserved-but-inert secret for
+  // a never-built off-host probe; the web-host consumer probe now mints its own per-host heartbeat +
+  // URL secret (betteruptime_heartbeat.web_zot_consumer / doppler_secret.web_zot_consumer_url, which
+  // DO ride the per-PR -target list), so this exclusion is obsolete.
   "doppler_service_token.registry",
   // #6122 (ADR-096) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net
   // zot host via the EXISTING `web` Cloudflare Tunnel + a NEW dedicated CF Access service token,
