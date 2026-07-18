@@ -6,7 +6,8 @@
 # compound-capture (emits a marker line instead).
 #
 # Designed so plan ACs are greppable against the captured output:
-#   bash scripts/dry-run.sh test/fixtures/dry-run-incident.json > /tmp/pir-dry-run.txt
+#   out=$(mktemp -t pir-dry-run.XXXXXXXX.txt)
+#   bash scripts/dry-run.sh test/fixtures/dry-run-incident.json > "$out"; echo "OUT=$out"
 #
 # Synthetic-only — fixtures must contain no real production credentials
 # (`cq-test-fixtures-synthesized-only`).
