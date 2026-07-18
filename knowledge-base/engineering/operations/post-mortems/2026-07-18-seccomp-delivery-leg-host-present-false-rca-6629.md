@@ -7,6 +7,16 @@ classification: infra-diagnosis-plus-hardening
 adr: ADR-122
 severity: P2 (latent — invisible unenforced sandbox after a fresh host comes up)
 status: root cause CONFIRMED (code-level); fix shipped in the same PR
+brand_survival_threshold: single-user incident
+gdpr_art33_notifiable: false
+gdpr_art34_notifiable: false
+gdpr_notifiable_rationale: >
+  n/a — no personal-data breach occurred. This is a latent defense-in-depth gap (a
+  fresh host could run the tenant sandbox with the seccomp/apparmor syscall filters
+  unenforced), which only LOWERS the bar for a chained container escape; no escape,
+  no unauthorized access, and no confidentiality/integrity/availability breach of
+  personal data materialized. The Art. 33 72h clock is not triggered by a hardening
+  gap absent an actual breach event.
 ---
 
 # RCA: seccomp delivery-leg — `seccomp_profile_host_present=false` on the web host before the #6512 item-4 redeploy
@@ -182,9 +192,13 @@ page on.
 - Code facts: `server.tf`, `cloud-init.yml`, `cat-deploy-state.sh`,
   `apply-web-platform-infra.yml`, `tunnel.tf` at `origin/main` (SHA a989c247e).
 
-## Follow-ups
+## Action Items & Follow-ups
 
-- **#6628**: build trigger FIRED — comment posted; the standing 6h watchdog is licensed.
-- The running host self-resolved to `host_present=true` after the window (per the #6512
-  post-mortem); this fix takes effect on the **next** web-1 replacement (cloud-init runs
-  at boot). No retro-fix of the running host is needed or attempted.
+| Issue | Item |
+| --- | --- |
+| #6628 | Build the standing 6h seccomp-enforcement drift watchdog. This RCA's non-merge-path determination is **YES**, which fires #6628's build-gate. Post-merge: comment on #6628 that the trigger fired (a non-merge unenforcement path is observed) so the watchdog is built (tracking `seccomp_profile_loaded_matches_host`, and treating a poweroffed host's "no answer" as a distinct alarm per the detection note above). |
+
+Context (not an action item): the running host self-resolved to `host_present=true`
+after the window (per the #6512 post-mortem); this fix takes effect on the **next** web-1
+replacement (cloud-init runs at boot). No retro-fix of the running host is needed or
+attempted.
