@@ -49,9 +49,10 @@ ADR-033 exist. `hr-no-ssh-fallback-in-runbooks` active in AGENTS.core.md.
 
 ## Overview
 
-`ci-deploy.sh` emits best-effort Sentry events at eight fallback/degraded-state
-sites (CRON_DRAIN timeout, SANDBOX_CANARY fail, IMAGE_VERIFY, IMAGE_PULL,
-IMAGE_PULL_RECOVERY, ZOT_GATE, …). Each POST is fail-open (`curl … --max-time 10`
+`ci-deploy.sh` emits best-effort Sentry events at seven fail-open sites
+(7 `logger … "Sentry POST failed"` lines across the tags CRON_DRAIN timeout,
+SANDBOX_CANARY fail, IMAGE_VERIFY, IMAGE_PULL [×2], IMAGE_PULL_RECOVERY,
+ZOT_GATE). Each POST is fail-open (`curl … --max-time 10`
 followed by `|| logger -t "$LOG_TAG" "<TAG>: Sentry POST failed"`). This is
 **correct** on-host behaviour — a deploy must never abort because Sentry
 telemetry is unreachable — but it means the *failure of the alarm path itself*
@@ -60,7 +61,7 @@ journald, so a Sentry POST failure during a **real** fallback event is silently
 unalarmed. D-6 closes that blind spot by making the POST-failure signal
 **loud**: actively queried on a schedule and surfaced onto a tracker issue.
 
-**The mechanism is already 90% wired.** The eight emitters already `logger -t
+**The mechanism is already 90% wired.** The seven emitters already `logger -t
 "$LOG_TAG"` with `LOG_TAG="ci-deploy"`, and `ci-deploy` is **already** in
 `apps/web-platform/infra/vector.toml` Source 4
 (`host_scripts_journald`) SYSLOG_IDENTIFIER allowlist — so every "Sentry POST
@@ -243,12 +244,12 @@ line), remains open on its own cycle.
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `scripts/followthroughs/ci-deploy-sentry-post-fail-6475.sh` exists, is executable (`test -x`), and `bash -n` parses clean.
-- [ ] AC2 — The probe queries **Better Stack** and **never Sentry**: `grep -c 'sentry\.io\|SENTRY_AUTH_TOKEN\|/api/0/' scripts/followthroughs/ci-deploy-sentry-post-fail-6475.sh` returns 0; `grep -c 'betterstack-query.sh' …` returns ≥ 1.
-- [ ] AC3 — The probe has NO `: "${VAR:?}"` exit-gate: `grep -cE ':\s*"\$\{[A-Z_]+:\?' scripts/followthroughs/ci-deploy-sentry-post-fail-6475.sh` returns 0.
-- [ ] AC4 — Query is AND-scoped to the ci-deploy identifier: the probe both `--grep`s `Sentry POST failed` AND post-filters output for `ci-deploy` (assert via grep for both literals in the script). Guards against a future Source-4 script emitting the same marker (see Sharp Edges).
-- [ ] AC5 — `bash scripts/followthroughs/ci-deploy-sentry-post-fail-6475.test.sh` exits 0 (all six exit-code cases pass, including the FAIL=1 alarm case and zero-liveness=2 fail-safe case).
-- [ ] AC6 — `#6475` carries the `follow-through` label AND a `soleur:followthrough` directive whose `script=` is the new path and `secrets=` names the three `BETTERSTACK_QUERY_*` names: `gh issue view 6475 --json labels,body` shape check. (Verify the sweeper already exports those three: `grep -c 'BETTERSTACK_QUERY_' .github/workflows/scheduled-followthrough-sweeper.yml` ≥ 3 — no workflow edit expected.)
+- [x] AC1 — `scripts/followthroughs/ci-deploy-sentry-post-fail-6475.sh` exists, is executable (`test -x`), and `bash -n` parses clean.
+- [x] AC2 — The probe queries **Better Stack** and **never Sentry**: `grep -c 'sentry\.io\|SENTRY_AUTH_TOKEN\|/api/0/' scripts/followthroughs/ci-deploy-sentry-post-fail-6475.sh` returns 0; `grep -c 'betterstack-query.sh' …` returns ≥ 1.
+- [x] AC3 — The probe has NO `: "${VAR:?}"` exit-gate: `grep -cE ':\s*"\$\{[A-Z_]+:\?' scripts/followthroughs/ci-deploy-sentry-post-fail-6475.sh` returns 0.
+- [x] AC4 — Query is AND-scoped to the ci-deploy identifier: the probe both `--grep`s `Sentry POST failed` AND post-filters output for `ci-deploy` (assert via grep for both literals in the script). Guards against a future Source-4 script emitting the same marker (see Sharp Edges).
+- [x] AC5 — `bash scripts/followthroughs/ci-deploy-sentry-post-fail-6475.test.sh` exits 0 (all six exit-code cases pass, including the FAIL=1 alarm case and zero-liveness=2 fail-safe case).
+- [x] AC6 — `#6475` carries the `follow-through` label AND a `soleur:followthrough` directive whose `script=` is the new path and `secrets=` names the three `BETTERSTACK_QUERY_*` names: `gh issue view 6475 --json labels,body` shape check. (Verify the sweeper already exports those three: `grep -c 'BETTERSTACK_QUERY_' .github/workflows/scheduled-followthrough-sweeper.yml` ≥ 3 — no workflow edit expected.)
 - [ ] AC7 — PR body says `Ref #6475` (NOT `Closes #6475`): closure is the sweeper's job on soak PASS.
 
 ### Post-merge (operator — automatable, no SSH)
@@ -348,14 +349,23 @@ end-to-end). No prod-write, no synthetic users, read-only throughout.
   `if [[ -z … ]]; then exit 2; fi`.
 - **`Ref #6475`, not `Closes #6475`.** `Closes` auto-closes at merge, *before* the
   soak runs — a false-resolved state. The sweeper closes it on soak PASS.
-- **`betterstack-query.sh --grep` is OR-only — post-filter for the discriminator.**
-  For the AND of (`ci-deploy`) and (`Sentry POST failed`), use mode-2
-  `--grep "Sentry POST failed"` then post-filter the JSONEachRow output for `ci-deploy`
-  (exactly `chardevice`'s `denied_count()` shape), or mode-1 raw SQL with two `LIKE`s.
-  A bare `--grep "Sentry POST failed"` is correct *today* (only `ci-deploy` emits it in
-  Better Stack — verified: `scripts/seccomp-unenforced-alert.sh` emits the same string but
-  via a CI `::warning::` echo, not `logger -t`, and is not in Source 4), but the
-  `ci-deploy` post-filter is the defense-in-depth that survives a future Source-4 addition.
+- **The discriminator MUST isolate the SYSLOG_IDENTIFIER FIELD, not a bare `ci-deploy`
+  substring (review correction — was a blocking false-FAIL).** `betterstack-query.sh
+  --grep` is OR-only, so the AND of (ci-deploy) and (Sentry POST failed) is a server-side
+  `--grep "Sentry POST failed"` + a client post-filter. The original plan said post-filter
+  for a bare `ci-deploy` substring — **that false-FAILed against live prod**: inngest ships
+  GitHub-webhook processing logs to the same Better Stack source, and those rows
+  (`SYSLOG_IDENTIFIER=doppler`) embed branch names (`…-ci-deploy-…`) and issue/PR bodies
+  quoting both marker strings verbatim (this tracker's own body among them). Live 14d
+  window: 2 such rows matched the bare substring, zero were real ci-deploy emissions →
+  `exit 1` on a clean codebase, self-perpetuating (the FAIL comment re-seeds the payload).
+  The implemented post-filter isolates the journald field in its two byte-forms — server
+  `--grep 'SYSLOG_IDENTIFIER":"ci-deploy'` (LIKE, unescaped column) and client
+  `grep -F 'SYSLOG_IDENTIFIER\":\"ci-deploy\"'` (escaped JSONEachRow stdout) — empirically
+  verified: live probe now PASSes (569 real ci-deploy rows, zero POST failures in 14d).
+  (Aside: among Source-4 tags only ci-deploy emits "Sentry POST failed" via `logger -t`;
+  `scripts/seccomp-unenforced-alert.sh` emits the same string via a CI `::warning::` echo,
+  not `logger -t`, and is not in Source 4.)
 - **Mode-2 auto-handles the archive arm; raw SQL does not.** `betterstack-query.sh`
   mode-2 (`--grep`) already UNION-ALLs the ~40-min hot window with the s3 archive, so a 7d
   soak is complete. If you drop to mode-1 raw SQL, you MUST write the
