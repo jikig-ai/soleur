@@ -182,6 +182,15 @@ include_matches.SYSLOG_IDENTIFIER = [
   # (workspaces-luks-soak-6604.sh) has no channel to read — a dead probe would look identical to a
   # healthy silent one. Exact-value match: the units set SyslogIdentifier=luks-monitor / logger -t.
   "luks-monitor",
+  # #6438 §1/§3 + #6548: the three web-host consumer/guard oneshot probes (web-*.service,
+  # for_each var.web_hosts). Each declares SyslogIdentifier= (retagging the ExecStart basename
+  # `bash`) so its fault-CLASSIFICATION stderr reaches Better Stack off-box, not SSH-only: the
+  # heartbeat only says "suppressed", the journal line says WHY (zot 401 vs 404 vs 000; git-data
+  # unreachable; NIC-guard "SOLEUR_PRIVATE_NIC direct-curl egress FAILED"). Same #6556 lesson as
+  # inngest-heartbeat above. Exact-value match: the units set these SyslogIdentifier= tags.
+  "web-zot-consumer-probe",
+  "web-git-data-probe",
+  "web-nic-guard",
 ]
 journal_directory = "/var/log/journal"
 batch_size = 16

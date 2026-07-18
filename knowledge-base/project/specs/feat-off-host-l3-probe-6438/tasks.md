@@ -18,7 +18,7 @@ Scope: full bundle (#6438 §1 zot + #6548 git-data + §3 NIC guard), operator-co
 - [x] A3 — Arm gate built: `doppler_service_token.web_arm_write` → `DOPPLER_TOKEN_WEB_ARM` (web-arm-write-token.tf); op/state-gated on live `paused==true`; T0 → poll `last_ping_at > T0` within `period+grace` (monitor id from tfstate) → PATCH unpause on fresh beat → else leave paused + FAIL apply loud. Never gated on provisioner exit code. (apply-web-platform-infra.yml)
 - [x] A4 — `web_nic_guard` + `web_zot_consumer` rows in `heartbeat-manifest.ts` (`web-host-cron`, `paused:true`, timer feeder evidence → server.tf); parity green; `registry_prd` untouched.
 - [ ] A5 — **DEFERRED to #6459** (future-host cloud-init bake + arm-gate `var.web_hosts` iteration). No current-fleet value (single host, web-2 retired); new-host-HALT (apply.yml:456) is the safety net; high cloud-init-render risk for hypothetical hosts. See decision-challenges.md §1.
-- [x] A6 — ADR-122 ("web-host private-NIC self-report, no self-converge") citing ADR-115's reboot-blockers; provisional ordinal.
+- [x] A6 — ADR-123 ("web-host private-NIC self-report, no self-converge") citing ADR-115's reboot-blockers; ordinal resolved from provisional ADR-122 (collided with #6653's sandbox ADR-122).
 
 ## Phase B — zot consumer probe (#6438 §1)
 
@@ -45,7 +45,7 @@ Scope: full bundle (#6438 §1 zot + #6548 git-data + §3 NIC guard), operator-co
 - [x] E3 — AC3: arm gate freshness-correct via ADR-117's LIVE-API-VERIFIED sequence (a paused BS heartbeat exposes NO ping timestamp — the plan's `last_ping_at > T0` was corrected at /work): PATCH `paused:false` → poll `status` until `up` within period+grace−10 → roll back to `paused:true` + FAIL the apply if `up` never lands. Fail-loud/rollback branch self-contained in the arm step block.
 - [x] E4 — AC4: `web-private-nic-guard.test.sh` (46 pass) — comment-stripped asserts NO reboot invocation path (not a token grep), mutation-controlled.
 - [~] E5 — AC5: `terraform validate` green; `+ create` for new resources, exactly 1 `-target`ed destroy (reserved `zot_heartbeat_url_prd`), git_data_prd in-place grace, no `hcloud_server.web` reboot — asserted by construction; the authoritative `terraform plan` runs in the CI apply (destroy-guard) at merge.
-- [x] E6 — AC6: ADR-122 + ADR-117 amend + `model.c4` edits; c4 tests green.
+- [x] E6 — AC6: ADR-123 + ADR-117 amend + `model.c4` edits; c4 tests green.
 
 ## Post-merge (operator/automated)
 

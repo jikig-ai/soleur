@@ -5,6 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# SyslogIdentifier retags the unit's journal output away from the ExecStart basename `bash`
+# (systemd default) to a diagnostic-critical identifier shipped by vector.toml Source 4
+# (host_scripts_journald) — so the probe's fault-classification stderr ("SUPPRESS ping: UNREACHABLE
+# over the private net", "heartbeat ping FAILED") reaches Better Stack off-box, not SSH-only
+# (hr-no-ssh-fallback-in-runbooks; the #6556 inngest-heartbeat lesson). Mirrored in vector.toml.
+SyslogIdentifier=web-git-data-probe
 # /etc/default/web-git-data-probe (baked per-host) carries GIT_DATA_ENDPOINT + GIT_DATA_HEARTBEAT_URL_KEY
 # (the Doppler var name for this host's git_data_prd URL; git-data uses ONE shared beat today —
 # single-host makes masking moot, C3). doppler run injects GIT_DATA_HEARTBEAT_URL; bash indirect

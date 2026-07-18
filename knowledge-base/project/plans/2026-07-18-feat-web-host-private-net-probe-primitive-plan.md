@@ -91,13 +91,18 @@ Front-loaded per CPO ("prove the rail is read before speculative consumer beats 
 
 ## Infrastructure (IaC)
 
-(Full terraform-architect output — reconciled to single-host.) All delivery is IaC/CI; no manual operator step.
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 
+(Full terraform-architect output — reconciled to single-host.) All delivery is IaC/CI; no manual operator step. The `systemctl enable --now` reference below is the literal line the `terraform_data` SSH provisioner runs in CI (parity-test evidence anchor), not a human step.
+
+<!-- lint-infra-ignore start: IaC delivery description — the terraform_data/SSH provisioner + no-reboot apply path run in CI, not by a human; prescribes no human step -->
 - **Terraform changes:** delete `zot_heartbeat_url_prd`; new `betteruptime_heartbeat.web_zot_consumer` + `doppler_secret.web_zot_consumer_url` (both `for_each = var.web_hosts`, free-tier shape, `paused=true`, `ignore_changes=[paused]`, `policy_id` ternary); relax `git_data_prd` grace; new `terraform_data.*_install` SSH provisioners for web-1; §3 guard in `cloud-init.yml`. Providers `betteruptime`/`doppler` already present — no new credential except an optional write-scoped Better Stack token (Doppler `prd_terraform`, no operator-mint default).
 - **Apply path:** cloud-init bake (§3 for future hosts) **+** SSH `terraform_data` provisioner (the sole path that arms running web-1 — `ci-deploy.sh` re-seed installs no host units, verified `:2331-2355`). Pure `+ create` provisioners → no reboot; ride the `-target` list (`server.tf:640-644`).
 - **Distinctness / drift:** `ignore_changes=[user_data]` (`server.tf:266`) is why cloud-init can't arm web-1; heartbeat URL is a masked routing token in tfstate (same class as existing beats); every new heartbeat REQUIRES a matching manifest row (parity test line 365) with `paused` matching source + executable feeder; interpolate `EXPECTED_IP` per-host.
 - **Vendor-tier reality check:** free-tier heartbeats are creatable (unconditional in-repo; only `betteruptime_policy`/`_monitor` are `count`-gated); free-tier monitor cap = 10, heartbeats don't count. `betterstack_paid_tier` stays `false` (email-only; #6549 item 1 owns paid-tier). Verify current pricing at the provider page before budget decisions.
 - **Highest-risk item:** web-1 arming delivery (P0) — the SSH `terraform_data` provisioner is the only path; the manifest `feeder.evidence.pattern` must point at its literal `systemctl enable --now` line so the parity guard proves the beat is real.
+
+<!-- lint-infra-ignore end -->
 
 ## Observability
 
@@ -117,7 +122,7 @@ failure_modes:
   - {mode: "web host boots NIC-less (future fresh host)", detection: "§3 guard SOLEUR_PRIVATE_NIC emit at boot (no auto-reboot on web hosts)", alert_route: "Better Stack Logs alarm"}
   - {mode: "git-data unreachable (fail-soft)", detection: "git_data_prd absence, paged only on a sustained (multi-window) break", alert_route: "Better Stack email"}
 logs:
-  where: Better Stack Logs source 2457081 (SOLEUR_PRIVATE_NIC); journald on-host
+  where: Better Stack Logs source 2457081 — SOLEUR_PRIVATE_NIC (direct curl) AND each probe unit's fault-classification stderr, shipped via Vector Source 4 host_scripts_journald under per-unit SyslogIdentifier= (web-zot-consumer-probe / web-git-data-probe / web-nic-guard; #6556 off-box lesson, hr-no-ssh-fallback)
   retention: per existing Better Stack Logs retention
 discoverability_test:
   command: "curl -sS -H 'Authorization: Bearer $TOKEN' https://uptime.betterstack.com/api/v2/heartbeats | jq '.data[] | select(.attributes.name|test(\"zot-consumer|private-nic\"))'"
