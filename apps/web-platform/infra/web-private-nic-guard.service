@@ -1,0 +1,14 @@
+[Unit]
+Description=Web-host private-NIC self-report (detect+emit+alarm, NO reboot; #6438 §3)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# /etc/default/web-private-nic-guard (baked per-host) carries EXPECTED_IP (the host's own private
+# address, never a literal — from var.web_hosts[each.key].private_ip), BETTERSTACK_INGEST_URL, and
+# WEB_NIC_GUARD_URL_KEY (the per-host Doppler var name). doppler run injects BETTERSTACK_LOGS_TOKEN
+# + WEB_NIC_GUARD_URL_<host>; bash indirect expansion resolves the host's liveness-beat URL under
+# the generic name the (host-agnostic) script reads. Shipped as a FILE (nested doppler quotes).
+EnvironmentFile=/etc/default/web-private-nic-guard
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export WEB_NIC_GUARD_URL="$${!WEB_NIC_GUARD_URL_KEY}"; exec /usr/local/bin/web-private-nic-guard.sh'\'''

@@ -413,6 +413,148 @@ resource "terraform_data" "container_restart_monitor_install" {
   }
 }
 
+# --- #6438/#6548: web-host private-net consumer-probe + §3 NIC-guard delivery (web-1) ----------
+# The SSH terraform_data provisioner is the SOLE path that arms the cx33-unrebuildable web-1:
+# ignore_changes=[user_data] (above) means cloud-init changes never reach it, and ci-deploy.sh
+# re-seed installs NO host systemd units (verified :2331-2355). cloud-init.yml bakes the SAME
+# scripts+units for FUTURE fresh hosts (#6459, A5). All three mirror disk_monitor_install (same
+# connection + trigger-hash shape); units ship as FILES because their doppler-wrapped ExecStart's
+# nested single-quotes do not survive a terraform inline heredoc (container_restart_monitor
+# precedent, :357). Shows "will be created" in CI drift reports — expected (#1409-class).
+#
+# The `systemctl enable --now web-*.timer` lines below are the ARMING CONSTRUCTS that
+# heartbeat-manifest.ts cites as executable feeder evidence (the parity guard greps them here).
+
+# §3 private-NIC self-report (detect+emit+alarm, NO reboot). Its liveness beat (web_nic_guard) is
+# pinged every healthy run so the SOLEUR_PRIVATE_NIC emitter is observable-when-healthy.
+resource "terraform_data" "private_nic_guard_install" {
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-private-nic-guard.sh"),
+    file("${path.module}/web-private-nic-guard.service"),
+    file("${path.module}/web-private-nic-guard.timer"),
+    var.web_hosts["web-1"].private_ip,
+    local.betterstack_logs_ingest_url,
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-private-nic-guard.sh"
+    destination = "/usr/local/bin/web-private-nic-guard.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-private-nic-guard.service"
+    destination = "/etc/systemd/system/web-private-nic-guard.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-private-nic-guard.timer"
+    destination = "/etc/systemd/system/web-private-nic-guard.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-private-nic-guard.sh",
+      "printf 'EXPECTED_IP=%s\\nBETTERSTACK_INGEST_URL=%s\\nWEB_NIC_GUARD_URL_KEY=%s\\n' '${var.web_hosts["web-1"].private_ip}' '${local.betterstack_logs_ingest_url}' 'WEB_NIC_GUARD_URL_${upper(replace("web-1", "-", "_"))}' > /etc/default/web-private-nic-guard",
+      "chmod 600 /etc/default/web-private-nic-guard",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-private-nic-guard.timer",
+      "systemctl list-timers web-private-nic-guard.timer --no-pager",
+    ]
+  }
+}
+
+# §1 zot consumer serviceability probe.
+resource "terraform_data" "zot_consumer_probe_install" {
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-zot-consumer-probe.sh"),
+    file("${path.module}/web-zot-consumer-probe.service"),
+    file("${path.module}/web-zot-consumer-probe.timer"),
+    local.registry_endpoint,
+    local.zot_probe_repo,
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-zot-consumer-probe.sh"
+    destination = "/usr/local/bin/web-zot-consumer-probe.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-zot-consumer-probe.service"
+    destination = "/etc/systemd/system/web-zot-consumer-probe.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-zot-consumer-probe.timer"
+    destination = "/etc/systemd/system/web-zot-consumer-probe.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-zot-consumer-probe.sh",
+      "printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\n' '${local.registry_endpoint}' '${local.zot_probe_repo}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' > /etc/default/web-zot-consumer-probe",
+      "chmod 600 /etc/default/web-zot-consumer-probe",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-zot-consumer-probe.timer",
+      "systemctl list-timers web-zot-consumer-probe.timer --no-pager",
+    ]
+  }
+}
+
+# #6548 git-data reachability probe (fail-soft; arms the existing git_data_prd).
+resource "terraform_data" "git_data_probe_install" {
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-git-data-probe.sh"),
+    file("${path.module}/web-git-data-probe.service"),
+    file("${path.module}/web-git-data-probe.timer"),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-git-data-probe.sh"
+    destination = "/usr/local/bin/web-git-data-probe.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-git-data-probe.service"
+    destination = "/etc/systemd/system/web-git-data-probe.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-git-data-probe.timer"
+    destination = "/etc/systemd/system/web-git-data-probe.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-git-data-probe.sh",
+      # GIT_DATA_ENDPOINT mirrors the git-data SSH transport (git-data.tf); the script also defaults
+      # to it. GIT_DATA_HEARTBEAT_URL is a SINGLE (non-for_each) secret, so the KEY is unsuffixed.
+      "printf 'GIT_DATA_ENDPOINT=%s\\nGIT_DATA_HEARTBEAT_URL_KEY=%s\\n' '10.0.1.20:22' 'GIT_DATA_HEARTBEAT_URL' > /etc/default/web-git-data-probe",
+      "chmod 600 /etc/default/web-git-data-probe",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-git-data-probe.timer",
+      "systemctl list-timers web-git-data-probe.timer --no-pager",
+    ]
+  }
+}
+
 # Deploy fail2ban sshd tuning drop-in to the existing server (issue #2654).
 # Caps bantime.increment recidivism at 1h so an operator typo against
 # AllowUsers does not snowball into a multi-hour (or multi-day) SSH lockout.

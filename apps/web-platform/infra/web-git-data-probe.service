@@ -1,0 +1,14 @@
+[Unit]
+Description=git-data consumer-perspective reachability probe (web host, #6548)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# /etc/default/web-git-data-probe (baked per-host) carries GIT_DATA_ENDPOINT + GIT_DATA_HEARTBEAT_URL_KEY
+# (the Doppler var name for this host's git_data_prd URL; git-data uses ONE shared beat today —
+# single-host makes masking moot, C3). doppler run injects GIT_DATA_HEARTBEAT_URL; bash indirect
+# expansion resolves it under the generic name the script reads. Shipped as a FILE (nested doppler
+# quotes; container-restart-monitor precedent).
+EnvironmentFile=/etc/default/web-git-data-probe
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export GIT_DATA_HEARTBEAT_URL="$${!GIT_DATA_HEARTBEAT_URL_KEY}"; exec /usr/local/bin/web-git-data-probe.sh'\'''

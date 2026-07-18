@@ -1,0 +1,15 @@
+[Unit]
+Description=zot consumer-perspective serviceability probe (web host, #6438 §1)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# /etc/default/web-zot-consumer-probe (baked per-host) carries ZOT_ENDPOINT, ZOT_PROBE_REPO, and
+# WEB_ZOT_CONSUMER_URL_KEY (the per-host Doppler var name, e.g. WEB_ZOT_CONSUMER_URL_WEB_1). doppler
+# run injects that var + ZOT_PULL_USER/ZOT_PULL_TOKEN; bash indirect expansion (${!KEY}) resolves
+# the host's own heartbeat URL under the generic name the (host-agnostic) script reads. Shipping
+# the unit as a FILE (not a heredoc) keeps this nested-quoted doppler ExecStart intact — the
+# container-restart-monitor precedent (server.tf).
+EnvironmentFile=/etc/default/web-zot-consumer-probe
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export WEB_ZOT_CONSUMER_URL="$${!WEB_ZOT_CONSUMER_URL_KEY}"; exec /usr/local/bin/web-zot-consumer-probe.sh'\'''
