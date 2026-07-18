@@ -665,7 +665,14 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    > double-firing against prod Postgres that `op=verify` cannot detect (it reads only the
    > dedicated host's runs).
 
-1a. **Quiesce web-2 (MANDATORY — DI-C3, before arming the flip).** `op=quiesce-web` (when run)
+> **SUPERSEDED (#6538, 2026-07-17): web-2 was retired and destroyed; `var.web_hosts` is now
+> web-1 only.** There is no warm-standby scheduler left to self-arm reminders or double-fire, so
+> step 1a and the DI-C3 limitation above are **historical** — the cutover now runs against a
+> single-host web set (web-1, `10.0.1.10`), which `op=execute` fully captures + quiesce-verifies.
+> Skip 1a unless a second self-arming web host is ever re-provisioned before the cutover. (#6230
+> — the web-2 quiesce action-required — was closed as obviated by this retirement.)
+
+1a. **[HISTORICAL — web-2 retired #6538] Quiesce web-2 (was MANDATORY — DI-C3, before arming the flip).** `op=quiesce-web` (when run)
    now stop+disables web-2's SCHEDULER too (an ACT over the private net — a real improvement
    over operator-only web-2 handling), **but the freeze/recreate lifecycle STILL REMAINS
    MANDATORY**: CI cannot VERIFY web-2 (LB-scoped) AND web-2's local reminders were never

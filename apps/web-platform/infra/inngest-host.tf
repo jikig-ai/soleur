@@ -7,7 +7,8 @@
 # host so exactly-one-instance is enforced by TOPOLOGY, not a runtime role-guard:
 # OSS Inngest v1.x is single-writer and two servers on the same prod Postgres
 # double-fire every cron (ADR-100 Context). This host is the prerequisite that
-# unblocks active-active web (web-2 pooled, #6178 / #6185).
+# unblocks active-active web (HA deferred to active-active-N, #6459; web-2 was retired
+# 2026-07-17, #6538 — do NOT re-add a web-2 key).
 #
 # STRUCTURAL PRECEDENT: zot-registry.tf (ADR-096) / git-data.tf (ADR-068), NOT the
 # co-located inngest.tf. inngest.tf provisions keys/secrets for the ON-web-host
@@ -236,7 +237,7 @@ resource "hcloud_server" "inngest" {
     doppler_token = doppler_service_token.inngest.key
     # Single stable --sdk-url to the ACTIVE web backend's private interface (10.0.1.10).
     # The degenerate no-flap case of the route-once mechanism (ADR-100 Decision 1); migrate
-    # to a private VIP when web-2 is pooled (Phase 4.2). Consumed by inngest-bootstrap.sh.
+    # to a private VIP when active-active-N web lands (#6459; web-2 retired #6538). Consumed by inngest-bootstrap.sh.
     sdk_url = "http://10.0.1.10:3000/api/inngest"
     # Arch DERIVED from the server type (local.inngest_arch): cax* → arm64, else amd64. The
     # bootstrap consumes INNGEST_CLI_ARCH (inngest-bootstrap.sh:37/54) and verifies the download

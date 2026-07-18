@@ -97,9 +97,17 @@ grep -qF 'ip saddr { ${web_host_private_ips} } accept' "$CLOUD_INIT" \
 #     names — the literal was hardcoded and drifted when web-2 (10.0.1.11) was retired
 #     2026-07-17 (#6538). Deriving the canonical set (not a second hardcoded literal) means a
 #     future roster change to var.web_hosts red-lines this test until the allowlist follows.
-ALLOWLIST_SET=$(grep -oE 'web_host_private_ips[[:space:]]*=[[:space:]]*"[0-9.,]+"' "$HOST_TF" \
+#     `sed 's/#.*//'` strips comments BEFORE matching so a retired IP eulogized in prose
+#     (variables.tf documents `# web-2 (fsn1, 10.0.1.11) RETIRED ...`) can neither be picked up
+#     as a canonical member (a false-FAIL demanding the allowlist re-add .11) nor stand in for a
+#     renamed/absent live local (a vacuous PASS). The CANON derivation assumes the only quoted
+#     `private_ip = "10.0.1.X"` assignments in variables.tf are var.web_hosts entries (true today;
+#     mirrors cutover-inngest-workflow.test.sh).
+ALLOWLIST_SET=$(sed 's/#.*//' "$HOST_TF" \
+  | grep -oE 'web_host_private_ips[[:space:]]*=[[:space:]]*"[0-9.,]+"' \
   | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd,)
-CANON_WEB_HOSTS=$(grep -oE 'private_ip[[:space:]]*=[[:space:]]*"10\.0\.1\.[0-9]+"' "$VARIABLES_TF" \
+CANON_WEB_HOSTS=$(sed 's/#.*//' "$VARIABLES_TF" \
+  | grep -oE 'private_ip[[:space:]]*=[[:space:]]*"10\.0\.1\.[0-9]+"' \
   | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd,)
 if [[ -n "$ALLOWLIST_SET" && -n "$CANON_WEB_HOSTS" && "$ALLOWLIST_SET" == "$CANON_WEB_HOSTS" ]]; then
   pass
@@ -109,7 +117,8 @@ fi
 
 # 6c. The web-host allowlist local must NOT contain git-data(.20)/registry(.30) (complementary
 #     to the parity guard: neither peer host may ever enter the :8288/:8289 allowlist).
-if grep -qE 'web_host_private_ips[[:space:]]*=' "$HOST_TF" && grep -E 'web_host_private_ips[[:space:]]*=' "$HOST_TF" | grep -qE '10\.0\.1\.(20|30)'; then
+HOST_TF_NOCOMMENT=$(sed 's/#.*//' "$HOST_TF")
+if printf '%s\n' "$HOST_TF_NOCOMMENT" | grep -qE 'web_host_private_ips[[:space:]]*=' && printf '%s\n' "$HOST_TF_NOCOMMENT" | grep -E 'web_host_private_ips[[:space:]]*=' | grep -qE '10\.0\.1\.(20|30)'; then
   fail "web_host_private_ips must NOT include git-data(.20)/registry(.30)"
 else
   pass
