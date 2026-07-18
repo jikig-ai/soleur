@@ -310,9 +310,7 @@ export async function runReissue(deps: ReissueDeps): Promise<ReissueResult> {
   if (!gate.proceed) {
     return {
       ...base(),
-      outcome: pre.state === "issued" || pre.state === "approved"
-        ? "not_stuck"
-        : "not_stuck",
+      outcome: "not_stuck",
       finalState: pre.state,
       detail: gate.reason,
     };
