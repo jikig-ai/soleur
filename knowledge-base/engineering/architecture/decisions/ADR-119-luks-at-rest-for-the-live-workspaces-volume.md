@@ -315,6 +315,56 @@ architectural axis, so no new ADR):
   radius" property — that distinctness lives only at runtime (the `load_escrow_creds` name-compare +
   negative probe) + the `workspaces-luks-header.test.sh` reference-not-literal guard, not in the picture.
 
+## Addendum (2026-07-18): the escrow-rehearsal authorization model (#6649)
+
+The escrow rehearsal (`workspaces-luks-cutover.yml -f dry_run=true`) must run FULLY AUTONOMOUSLY — the
+operator is non-technical and never approves gates or runs terraform. Three host-provisioning/
+execution gaps (content-carrier, boot-token delivery, `WORKSPACES_LUKS_DEV`) blocked the probe; a
+fourth — the human gate — blocked autonomy. This addendum records the authorization-model change only;
+the mechanics live in the plan.
+
+**The gate moves onto the irreversible arm.** The cutover job previously declared a static
+`environment: workspaces-luks-cutover` at job level, so EVERY dispatch — including a `dry_run=true`
+rehearsal — waited on a required-reviewer (`[54279]`) approval. But a dry-run performs NO irreversible
+operation: the freeze/repoint are behind `DRY_RUN != 1` in `workspaces-cutover.sh`, and the plaintext
+wipe is a separate `CONFIRM_WIPE` dispatch. Gating a reversible probe behind a human is the actual
+misconfiguration. The job now declares:
+
+```yaml
+environment: ${{ !inputs.dry_run && 'workspaces-luks-cutover' || '' }}
+```
+
+**Reversibility proof (what the dry-run actually touches on web-1).** The dry-run is NOT
+host-side-effect-free, but every effect is reversible/benign: `ensure_aws` installs a SHA-pinned
+aws-cli (additive, no service restart); `escrow_probe` does a PUT→read-back→delete of a namespaced
+`.probe/<run-id>` R2 key (self-cleaning); `prepare_luks_target` selects, `luksFormat`s-if-raw, and
+opens the FRESH device (never the live plaintext volume — selected by by-id + a single-match assertion,
+guarded by the `blkid` discriminator §(g) that refuses to format a device carrying a filesystem
+signature) under the DP-6 `trap cleanup EXIT` host-local rollback. The `luksFormat` is destructive only
+on the disposable fresh volume; the live plaintext `/mnt/data` is never a candidate. None of these is the irreversible act the C19/AC20b
+gate exists to authorize (the freeze + plaintext wipe), all of which stay behind `DRY_RUN != 1`.
+
+**Truth table (why the expression is fail-closed).**
+
+| `inputs.dry_run` | `!inputs.dry_run` | `&& 'workspaces-luks-cutover'` | `\|\| ''` | environment | gated? |
+|---|---|---|---|---|---|
+| `true` (rehearsal) | `false` | `false` | `''` | none (empty) | NO — autonomous |
+| `false` (real freeze) | `true` | `'workspaces-luks-cutover'` | (short-circuits) | `workspaces-luks-cutover` | YES — human ack |
+
+The expression reads the **typed** `inputs.dry_run` boolean context (declared `type: boolean, default: true`), so `!inputs.dry_run` coerces on a real boolean — never the string-typed `github.event.inputs.dry_run`, where `!'false'` is `false` and the freeze would run **ungated**. Drift guards `workspaces-luks-header.test.sh` H17 (exact fail-closed byte-form) + H19 (non-empty reviewers) pin this; they go RED on the inversion. **Sequencing:** the boot-token secret rides the DEFAULT apply, not the scoped `apply_target=workspaces-luks-cutover` first-provision — between a scoped first-provision and the next default apply the secret is unpublished, so both workflows fail loud (`[[ -n "$WORKSPACES_LUKS_BOOT_TOKEN" ]] || exit 1`) rather than proceeding tokenless.
+
+The gate and `DRY_RUN` derive from the SAME `inputs.dry_run` operand, so "freeze-reachable" ⟺ "gated"
+is a tautology — there is no input that reaches the freeze arm ungated. The empty-string branch changes
+ONLY autonomy, never the safety property. **Never invert the operands:** `inputs.dry_run && '' || 'X'`
+gates ALWAYS (`''` is falsy, so it falls through to `'X'` in both arms) — the opposite of intent, and it
+would leave the freeze ungated in exactly the case that matters. A drift guard
+(`workspaces-luks-header.test.sh` H17) asserts the exact fail-closed form and goes RED on the inversion.
+
+The reviewer set MUST stay non-empty (a zero-reviewer environment auto-approves — DP-11 F8); H19 asserts
+it. Split-job (a `rehearse` job with no environment + a `freeze` job with a static `environment:`) is the
+auditability-preferred fallback if GitHub's empty-string-environment semantics ever change; the
+conditional form is the primary because it keeps the two arms in one job (no duplicated bridge/teardown).
+
 ## References
 
 - Issue #6588 — the P1 that mandated CTO routing before terraform.

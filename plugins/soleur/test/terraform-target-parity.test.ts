@@ -570,18 +570,19 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   //   hcloud_volume and is evaluated BEFORE the destroy_count sum, so `[ack-destroy]`
   //   deliberately cannot reach it. A net-new hcloud_volume that CI could plan would HALT
   //   the per-PR apply path.
-  //   `doppler_service_token.workspaces_luks` is an OPERATOR-APPLIED token exception (see
-  //   OPERATOR_APPLIED_TOKEN_EXCLUSIONS below), same class as doppler_service_token.git_data:
-  //   it is minted into the operator-created `prd_workspaces_luks` Doppler config and read by
-  //   the web-1 HOST at unlock time — never published into a paired github_actions_secret. The
-  //   config does not exist until the operator creates it (runbook precondition), so CI cannot
-  //   apply it. The dedicated config is what keeps the key OUT of the `--config prd` download
-  //   that feeds `docker run --env-file` (CWE-522 — see workspaces-luks.tf).
+  //   NOTE (#6649): `doppler_service_token.workspaces_luks` is DELIBERATELY NOT excluded here.
+  //   #6649 publishes its `.key` into `github_actions_secret.workspaces_luks_boot_token`
+  //   (workspaces-luks.tf) and adds an explicit `-target` for BOTH to the DEFAULT allow-list, so it
+  //   is now a CI-PUBLISHED token (the #5566 rule: a token feeding a github_actions_secret MUST be
+  //   targeted, never excluded — mirroring inngest_arm_write, which is in neither exclusion set).
+  //   Excluding it would desensitize the default-apply coverage assertion for its `-target` line. The
+  //   web-1 host ALSO reads it directly from `prd_workspaces_luks` at unlock time; publishing does not
+  //   change the CWE-522 container-boundary rationale (see workspaces-luks.tf + OPERATOR_APPLIED_TOKEN_EXCLUSIONS).
+  //   The four resources below ride ONLY the scoped operator cutover apply, so they stay excluded.
   "random_password.workspaces_luks",
   "doppler_secret.workspaces_luks_key",
   "hcloud_volume.workspaces_luks",
   "hcloud_volume_attachment.workspaces_luks",
-  "doppler_service_token.workspaces_luks",
   // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret. Same
   // class as betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd
   // (both excluded, applied together by the operator apply; the heartbeat is paused until the
@@ -688,18 +689,14 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
 // a github_actions_secret — that is the #5566 silent-un-applied class and MUST be targeted.
 const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   "doppler_service_token.git_data",
-  // #6588 (ADR-119) — minted into the operator-created `prd_workspaces_luks` config and read by
-  // the web-1 host at LUKS-unlock time (NOT published to a CI github_actions_secret). CI cannot
-  // apply it — the config does not exist until the operator creates it. Same class as
-  // doppler_service_token.git_data. The dedicated config is a SECURITY boundary, not hygiene:
-  // web-1's cloud-init runs `doppler secrets download --config prd` into the TMPENV that feeds
-  // `docker run --env-file`, so a key in shared `prd` would be readable via /proc/self/environ
-  // by the agent container whose own data it encrypts (CWE-522). The mechanism is inheritance
-  // DIRECTIONALITY (root → branch), NOT scope reduction: this token still resolves the full prd
-  // set, exactly like the "leaky prd_registry branch config" named below — see #6167 and
-  // learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md.
-  // It is free here because web-1 already carries a full-prd DOPPLER_TOKEN.
-  "doppler_service_token.workspaces_luks",
+  // #6649 (ADR-119) — doppler_service_token.workspaces_luks is DELIBERATELY NOT excluded here.
+  // It was an operator-applied-host-token (same class as git_data), but #6649 publishes its `.key`
+  // into github_actions_secret.workspaces_luks_boot_token (workspaces-luks.tf) so the cutover/verify
+  // workflows can deliver it host-side over the SSH bridge. Per the #5566 rule below, a token that
+  // feeds a github_actions_secret MUST be CI-targeted, never excluded — so it is now explicitly
+  // `-target`ed in apply-web-platform-infra.yml's DEFAULT allow-list (mirroring the inngest_arm_write
+  // precedent). web-1 still ALSO reads prd_workspaces_luks directly via the same token at unlock
+  // time; publishing it does not change the CWE-522 container-boundary rationale in workspaces-luks.tf.
   // #6122 (ADR-096) — minted into the ISOLATED `soleur-registry` project's `prd` root config
   // (TF-created via doppler_project.registry in the operator full apply; its own root holds ONLY
   // the two ZOT tokens — true cross-project isolation, NOT the leaky `prd_registry` branch config

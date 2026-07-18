@@ -35,8 +35,12 @@ REPO="$(cd "$DIR/../../.." && pwd)"
 TF="$DIR/workspaces-luks-header.tf"
 SH="$DIR/workspaces-cutover.sh"
 YML="$REPO/.github/workflows/workspaces-luks-cutover.yml"
+# #6649 — the escrow rehearsal autonomy + content-carrier delivery spans more files:
+YML_VERIFY="$REPO/.github/workflows/workspaces-luks-verify.yml"
+TF_MAIN="$DIR/workspaces-luks.tf"
+SVC="$DIR/luks-monitor.service"
 
-for f in "$TF" "$SH" "$YML"; do
+for f in "$TF" "$SH" "$YML" "$YML_VERIFY" "$TF_MAIN" "$SVC"; do
   [ -f "$f" ] || { echo "FAIL: required file not found: $f" >&2; exit 1; }
 done
 
@@ -472,6 +476,148 @@ else
     fail "S9[ok]: clean probe did not reach the end (rc=$rc out=$o)"
   fi
 fi
+
+# ==============================================================================
+# #6649 — escrow rehearsal autonomy + content-carrier delivery (BLOCKER 3/4/5 + gate).
+# Every predicate anchors on the syntactic construct (cq-assert-anchor-not-bare-token) and is
+# mutation-tested below. strip_comments FIRST so a form surviving only in a COMMENT cannot satisfy
+# a check vacuously (and a forbidden form in a comment cannot false-fail a negative check).
+# ==============================================================================
+
+# H13 — the cutover runs workspaces-cutover.sh AS A FILE from a tar-shipped bundle (content-carrier),
+# with NO stdin pipe of the script body (the pre-#6649 model that left ${BASH_SOURCE[0]} unbound).
+# The positive anchor requires `bash` to INVOKE the file by path (execution, not a stray `rm` mention),
+# closing the bare-`bash`-reads-stdin evasion (a piped script to `bash` never names the file by path).
+# The negative uses a word boundary so `bash -s` (stdin) is forbidden without false-failing an
+# unrelated flag token that merely starts with `-s`.
+p_file_execution() {
+  local f="$1" body
+  body="$(strip_comments "$f")"
+  grep -q 'tar xzf - -C' <<<"$body" || { echo 0; return; }
+  grep -Eq 'bash .{0,3}REMOTE_DIR/workspaces-cutover\.sh' <<<"$body" || { echo 0; return; }
+  grep -Eq 'bash -s([[:space:]"'"'"']|$)' <<<"$body" && { echo 0; return; }   # forbid the stdin-pipe re-introduction
+  echo 1
+}
+
+# H14 — the boot token (+ device + flags) is delivered via a mode-0600 stdin env file, NEVER as a
+# `VAR=val` command-line assignment (the full-prd-capable token must not enter the host process list).
+# Asserts the GOOD form EXCLUSIVELY, sudo-INDEPENDENT: the session lands `-l root` so the realistic
+# next regression is a sudo-LESS `DOPPLER_TOKEN=$x bash …` argv leak, which a `sudo …`-anchored regex
+# misses entirely. The ONLY permitted `<sensitive>=` occurrence is the printf placeholder `=%s` (the
+# stdin .env payload); any `=` NOT immediately followed by `%` is an argv/expansion leak, with or
+# without sudo, with or without an intervening `-E`/`--preserve-env`/`FOO=bar`.
+p_token_via_stdin() {
+  local f="$1" body
+  body="$(strip_comments "$f")"
+  grep -q 'install -m600 /dev/stdin' <<<"$body" || { echo 0; return; }
+  grep -Eq '(DOPPLER_TOKEN|WORKSPACES_LUKS_BOOT_TOKEN)=([^%]|$)' <<<"$body" && { echo 0; return; }
+  echo 1
+}
+
+# H15 — the 0600 .env is shredded on a host-local EXIT trap (covers an SSH drop; F7 discipline).
+# Herestring (not a pipe): under `set -o pipefail`, `strip_comments | grep -q` SIGPIPEs the sed on an
+# early match and false-reports 0 (this suite's own SIGPIPE learning).
+p_env_shred_trap() {
+  local body; body="$(strip_comments "$1")"
+  grep -Eq 'trap .*shred -u.*EXIT' <<<"$body" && echo 1 || echo 0
+}
+
+# H16 — WORKSPACES_LUKS_DEV (the by-id device) is derived + passed to the host (BLOCKER 5).
+p_luks_dev_passed() {
+  local f="$1" body
+  body="$(strip_comments "$f")"
+  grep -q 'WORKSPACES_LUKS_DEV=%s' <<<"$body" || { echo 0; return; }
+  grep -q 'scsi-0HC_Volume_' <<<"$body" || { echo 0; return; }
+  echo 1
+}
+
+# H17 — the environment gate is FAIL-CLOSED (gated unless dry_run is exactly true). RED on the
+# inverted `inputs.dry_run && '' || 'X'` form (which gates ALWAYS / ungates the freeze).
+p_env_gate_failclosed() {
+  local body; body="$(strip_comments "$1")"   # herestring below — avoid the pipefail+grep -q SIGPIPE flake
+  grep -qF "environment: \${{ !inputs.dry_run && 'workspaces-luks-cutover' || '' }}" <<<"$body" && echo 1 || echo 0
+}
+
+# H18 — luks-monitor.service carries HOME=/root (root doppler unit) + the EnvironmentFile that
+# supplies the boot token to the daily probe.
+p_service_env() {
+  local f="$1" body
+  body="$(strip_comments "$f")"
+  grep -qE '^Environment=HOME=/root[[:space:]]*$' <<<"$body" || { echo 0; return; }
+  grep -qE '^EnvironmentFile=-?/etc/default/luks-monitor[[:space:]]*$' <<<"$body" || { echo 0; return; }
+  echo 1
+}
+
+# H19 — the freeze-arm reviewer set stays NON-EMPTY (a zero-reviewer environment auto-approves,
+# DP-11 F8; learning 2026-07-17-workflow-env-gate-references-unprovisioned-environment-auto-approves).
+# BLOCK-SCOPED to the github_repository_environment.workspaces_luks_cutover resource (a decoy
+# `users = [1]` elsewhere in the file must NOT satisfy it), and newline-flattened so a `terraform fmt`
+# that wraps the list (`users = [\n  54279,\n]`) does not false-RED the line-oriented grep.
+p_reviewers_nonempty() {
+  local body; body="$(block_of "$1" github_repository_environment workspaces_luks_cutover | tr '\n' ' ')"
+  grep -Eq 'users[[:space:]]*=[[:space:]]*\[[[:space:]]*[0-9]' <<<"$body" && echo 1 || echo 0
+}
+
+# H20 — verify.yml ALSO uses file-execution of luks-monitor.sh + stdin-token delivery (BOTH
+# workflows must not regress the discipline); the old `sudo /usr/local/bin/luks-monitor` is gone.
+p_verify_file_execution() {
+  local f="$1" body
+  body="$(strip_comments "$f")"
+  grep -q 'REMOTE_DIR/luks-monitor.sh' <<<"$body" || { echo 0; return; }
+  grep -q 'install -m600 /dev/stdin' <<<"$body" || { echo 0; return; }
+  # Forbid running the PRE-INSTALLED binary regardless of sudo — the session is `-l root`, so the
+  # realistic regression is a sudo-LESS `/usr/local/bin/luks-monitor` call that skips the shipped
+  # file (+ the boot-token .env the probe needs). Anchor on the path, not the old `sudo …` prefix.
+  grep -q '/usr/local/bin/luks-monitor' <<<"$body" && { echo 0; return; }
+  echo 1
+}
+
+# --- #6649 assertions (mutation-tested) ---------------------------------------
+
+assert_holds "H13 cutover runs the script as a FILE from a tar bundle (no bash -s pipe)" p_file_execution "$YML"
+assert_mutation_append "H13 (bash -s stdin pipe re-introduced)" p_file_execution "$YML" \
+  '          ${WEB_HOST_SSH} "$WEB_HOST" "bash -s" < "${INFRA_DIR}/workspaces-cutover.sh"'
+# Prove the POSITIVE execution anchor is load-bearing: if `bash <file>` no longer invokes the script
+# by path (e.g. it is piped to a bare `bash` instead), the guard must go RED.
+assert_mutation "H13 (file no longer executed by path — bare-bash-stdin evasion)" p_file_execution "$YML" \
+  's~bash (.{0,3}REMOTE_DIR/workspaces-cutover)~source \1~'
+
+assert_holds "H14 boot token via install -m600 /dev/stdin, never a VAR=val argv (sudo-independent)" p_token_via_stdin "$YML"
+assert_mutation "H14 (install -m600 /dev/stdin removed)" p_token_via_stdin "$YML" \
+  's~install -m600 /dev/stdin~install /dev/stdin~'
+assert_mutation_append "H14 (token leaked onto a SUDO argv)" p_token_via_stdin "$YML" \
+  '          ${WEB_HOST_SSH} "$WEB_HOST" "sudo DOPPLER_TOKEN=$WORKSPACES_LUKS_BOOT_TOKEN bash x.sh"'
+# The sudo-LESS argv leak is the realistic next regression (the -l root session dropped sudo):
+assert_mutation_append "H14 (token leaked onto a sudo-LESS argv)" p_token_via_stdin "$YML" \
+  '          ${WEB_HOST_SSH} "$WEB_HOST" "DOPPLER_TOKEN=$WORKSPACES_LUKS_BOOT_TOKEN bash x.sh"'
+assert_mutation_append "H14 (token leaked via sudo --preserve-env argv)" p_token_via_stdin "$YML" \
+  '          ${WEB_HOST_SSH} "$WEB_HOST" "sudo --preserve-env DOPPLER_TOKEN=$WORKSPACES_LUKS_BOOT_TOKEN bash x.sh"'
+
+assert_holds "H15 .env shredded on a host-local EXIT trap (cutover)" p_env_shred_trap "$YML"
+assert_mutation "H15 (shred removed from the cutover trap)" p_env_shred_trap "$YML" 's~shred -u~rm -f~g'
+# H15b — verify.yml's .env ALSO carries the boot token, so its shred trap must be guarded too (the
+# quality review found H20 asserted only file-execution + install, never the shred trap for verify).
+assert_holds "H15b .env shredded on a host-local EXIT trap (verify)" p_env_shred_trap "$YML_VERIFY"
+assert_mutation "H15b (shred removed from the verify trap)" p_env_shred_trap "$YML_VERIFY" 's~shred -u~rm -f~g'
+
+assert_holds "H16 WORKSPACES_LUKS_DEV (by-id device) derived + passed" p_luks_dev_passed "$YML"
+assert_mutation "H16 (WORKSPACES_LUKS_DEV no longer passed)" p_luks_dev_passed "$YML" \
+  's~WORKSPACES_LUKS_DEV=%s~WORKSPACES_LUKS_UNPASSED=%s~'
+
+assert_holds "H17 environment gate is fail-closed (real freeze arm only)" p_env_gate_failclosed "$YML"
+assert_mutation "H17 (gate expression inverted to always-gated/ungated-freeze)" p_env_gate_failclosed "$YML" \
+  's~!inputs\.dry_run~inputs.dry_run~'
+
+assert_holds "H18 luks-monitor.service has HOME=/root + EnvironmentFile" p_service_env "$SVC"
+assert_mutation "H18 (HOME=/root removed)" p_service_env "$SVC" 's~^Environment=HOME=/root~Environment=FOO=bar~'
+
+assert_holds "H19 freeze-arm reviewer set stays non-empty" p_reviewers_nonempty "$TF_MAIN"
+assert_mutation "H19 (reviewers emptied → auto-approve)" p_reviewers_nonempty "$TF_MAIN" \
+  's~users[[:space:]]*=[[:space:]]*\[[0-9]+\]~users = []~'
+
+assert_holds "H20 verify.yml uses file-execution + stdin token (no sudo binary)" p_verify_file_execution "$YML_VERIFY"
+assert_mutation_append "H20 (old sudo /usr/local/bin/luks-monitor re-introduced)" p_verify_file_execution "$YML_VERIFY" \
+  '          ${WEB_HOST_SSH} "$WEB_HOST" "sudo /usr/local/bin/luks-monitor"'
 
 # --- Summary ------------------------------------------------------------------
 echo "workspaces-luks-header.test.sh: $passes passed, $fails failed"

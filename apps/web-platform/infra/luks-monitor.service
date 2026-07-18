@@ -15,6 +15,10 @@ SyslogIdentifier=luks-monitor
 # DOPPLER_TOKEN (scoped workspaces-luks-boot) + SOLEUR_SENTRY_DSN (baked). Written via the cutover
 # channel (ADR-119 §(e)); the DSN half is baked by cloud-init so a Doppler outage still pages.
 EnvironmentFile=-/etc/default/luks-monitor
+# HOME must be set for the root doppler CLI (it writes/reads its config dir under $HOME); a root
+# systemd unit has no HOME by default, so `doppler secrets get` dies "$HOME is not defined" and the
+# probe emits doppler_unreachable every run. Every sibling root-doppler unit sets this (#6649).
+Environment=HOME=/root
 ExecStart=/usr/local/bin/luks-monitor
 # A failed probe already emitted its discriminating Sentry event; do not let systemd retry-storm.
 Nice=10
