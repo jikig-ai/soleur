@@ -161,6 +161,62 @@ assert "(c) -f injected => the corrupted code lands in the unexpected-code branc
   "grep -q 'unexpected code' <<<\"\$OUT\""
 assert "(c) -f injected => still no ping (never green over a corrupted verdict)" "[[ '$PINGED' == no ]]"
 
+# --- static drift-guard: doppler-auth unit-start contract + observability delivery --------
+# (#6438 §1 unit-start fix.) The unit runs `doppler run` as ROOT. Without Environment=HOME=/root
+# the doppler CLI dies "$HOME is not defined" BEFORE it exec's the probe; without a DOPPLER_TOKEN
+# in the per-host env file it cannot authenticate. Both gaps made all 3 units fail to start on
+# web-1. This block also asserts the cross-cutting fix pieces: the dedicated read-scoped token
+# resource, and the positive-control Source-4 canary (the probes are otherwise silent-on-success,
+# so a dead vector Source 4 would be invisible — luks-#6604 pattern).
+echo "--- static: doppler-auth unit-start contract + observability ---"
+SVC="$SCRIPT_DIR/web-zot-consumer-probe.service"
+SERVER_TF="$SCRIPT_DIR/server.tf"
+TOKEN_TF="$SCRIPT_DIR/web-probe-read-token.tf"
+assert "zot .service sets Environment=HOME=/root (else doppler: \$HOME is not defined)" \
+  "grep -qE '^Environment=HOME=/root\$' '$SVC'"
+assert "zot .service does NOT source webhook-deploy (deploy-owned; imports /tmp/.doppler)" \
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'webhook-deploy'"
+assert "zot .service does NOT set DOPPLER_CONFIG_DIR (root doppler uses /root/.doppler)" \
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'DOPPLER_CONFIG_DIR'"
+assert "zot .service does NOT reference /tmp/.doppler (#6536 clash surface)" \
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q '/tmp/.doppler'"
+assert "zot .service is root-run (no User=deploy without PrivateTmp=true)" \
+  "! grep -qE '^User=deploy' '$SVC' || grep -qE '^PrivateTmp=true' '$SVC'"
+# Anchor on the token VALUE wiring (web_probes.key), not just the literal DOPPLER_TOKEN= — otherwise
+# dropping the key arg (empty token = the #6548 bug) still matches (test-design review).
+assert "server.tf zot_consumer_probe_install writes DOPPLER_TOKEN=<web_probes.key> into /etc/default/web-zot-consumer-probe" \
+  "grep -qE 'DOPPLER_TOKEN=%s.*web_probes\\.key.*/etc/default/web-zot-consumer-probe' '$SERVER_TF'"
+# Cross-cutting: dedicated read-scoped token (least-privilege; NOT the full-prd var.doppler_token).
+assert "doppler_service_token.web_probes resource exists" \
+  "grep -qE 'resource \"doppler_service_token\" \"web_probes\"' '$TOKEN_TF'"
+assert "web_probes token is read-scoped (access=\"read\") + soleur/prd config" \
+  "awk '/\"doppler_service_token\" \"web_probes\"/,/^}/' '$TOKEN_TF' | grep -qE 'access[[:space:]]*=[[:space:]]*\"read\"'"
+assert "web_probes token is scoped to config \"prd\" (the probes run doppler --config prd)" \
+  "awk '/\"doppler_service_token\" \"web_probes\"/,/^}/' '$TOKEN_TF' | grep -qE 'config[[:space:]]*=[[:space:]]*\"prd\"'"
+# Positive-control Source-4 canary — assert it FIRES (behaviorally), not merely that the string exists
+# in the file (a deleted _canary call would leave the string in the function def + comments). Prove
+# three properties: (a) fires on a run with a fresh marker; (b) rate-limits (no re-emit within window);
+# (c) fires INDEPENDENT of zot health (emits even on a 000 verdict — the observability-review property).
+CANARY_MARKER="$TMP/canary.marker"
+run_canary() {  # <override-code> <marker-reset:yes|no> -> sets CANARY_OUT
+  local code="$1" reset="$2" pl
+  [[ "$reset" == yes ]] && rm -f "$CANARY_MARKER"
+  pl="$(mktemp "$TMP/pl.XXXXXX")"; CANARY_OUT="$(mktemp "$TMP/canary.XXXXXX")"
+  SOLEUR_ZOT_PROBE_STATUS_OVERRIDE="$code" SOLEUR_ZOT_PROBE_PING_LOG="$pl" \
+    SOLEUR_PROBE_CANARY_MARKER="$CANARY_MARKER" \
+    ZOT_PROBE_REPO=known/repo ZUSER=u ZTOK=t \
+    bash "$SUT" >/dev/null 2>"$CANARY_OUT" || true
+}
+run_canary 200 yes
+assert "zot probe EMITS SOLEUR_PROBE_CANARY to stderr on a fresh-marker run (fires, not just present)" \
+  "grep -q 'SOLEUR_PROBE_CANARY' '$CANARY_OUT'"
+run_canary 200 no
+assert "zot probe RATE-LIMITS the canary (no re-emit within the window)" \
+  "! grep -q 'SOLEUR_PROBE_CANARY' '$CANARY_OUT'"
+run_canary 000 yes
+assert "zot probe canary fires INDEPENDENT of zot health (emits even on a 000 unreachable verdict)" \
+  "grep -q 'SOLEUR_PROBE_CANARY' '$CANARY_OUT'"
+
 echo
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

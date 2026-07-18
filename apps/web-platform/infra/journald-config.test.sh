@@ -119,8 +119,8 @@ BLOCK=$(awk '
   f && /^}/ { exit }
 ' "$SERVER_TF")
 assert "block is non-empty" "[[ -n \"\$BLOCK\" ]]"
-assert "triggers_replace = sha256(file(journald-soleur.conf))" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(file\(\"\\\$\{path\.module\}/journald-soleur\.conf\"\)\)'"
+assert "triggers_replace hashes journald-soleur.conf (re-delivery on drop-in change; now a join with vector.toml)" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/journald-soleur\.conf\"\)'"
 assert "SSH connection block (type=ssh)" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'type[[:space:]]*=[[:space:]]*\"ssh\"'"
 # `agent = true` was stale post-#4845: server.tf now uses the dual-context
@@ -186,6 +186,35 @@ assert "cat-deploy-state.sh emits a journald_storage field" \
   "grep -qE 'journald_storage' '$CAT_STATE'"
 assert "cat-deploy-state.sh is bash -n clean" \
   "bash -n '$CAT_STATE'"
+
+# --- vector.toml delivery folded into journald_persistent (#6438/#6548 Source-4 delivery) ---
+# web-1 installs vector ONLY at cloud-init boot and never re-runs cloud-init (ignore_changes=
+# [user_data]), so vector.toml's Source-4 probe SyslogIdentifiers were file-only, never live on
+# the running host — the 3 probes' own FATAL stderr never reached Better Stack. The sole live-prod
+# apply path is a terraform_data SSH provisioner; fold the vector.toml re-delivery + agent reload
+# into journald_persistent (already SSHes web-1, already on the workflow -target list). Assert the
+# wiring is present AND that triggers_replace hashes vector.toml (else the re-delivery never fires
+# — the "plan unchanged defers the real test to prod" trap).
+echo ""
+echo "--- vector.toml delivery folded into journald_persistent (Source 4 live on web-1) ---"
+JP="$(awk '/resource \"terraform_data\" \"journald_persistent\"/,/^}/' "$SERVER_TF")"
+# Anchor on the actual delivery CONSTRUCT (install to the live /etc/vector path + the staging file
+# provisioner), NOT a bare 'vector.toml' token — the block's header comments mention vector.toml, so a
+# bare grep passes on comment text alone even if the delivery were deleted (test-design + pattern review).
+assert "journald_persistent delivers vector.toml to the live /etc/vector on web-1 (install construct)" \
+  "grep -qE 'install -m 0644 .*/etc/vector/vector.toml' <<<\"\$JP\""
+assert "journald_persistent stages vector.toml via a file provisioner" \
+  "grep -qE 'destination[[:space:]]*=[[:space:]]*\"/tmp/soleur-vector.toml.staged\"' <<<\"\$JP\""
+assert "journald_persistent triggers_replace hashes file(vector.toml) (re-delivery on config change)" \
+  "grep -qE 'file\\(\"\\\$\\{path.module\\}/vector.toml\"\\)' <<<\"\$JP\""
+assert "journald_persistent reloads the vector agent (restart vector.service)" \
+  "grep -qE 'systemctl.*vector.service|restart vector' <<<\"\$JP\""
+# Scope the identifier check to the [sources.host_scripts_journald] BLOCK (the Source 4 include list),
+# not the whole file — a name relocated into a comment / exclude / other sink would defeat a file-wide
+# grep while breaking Source-4 delivery (test-design + pattern review).
+HSJ="$(awk '/^\[sources\.host_scripts_journald\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' "$SCRIPT_DIR/vector.toml")"
+assert "Source 4 (host_scripts_journald) include list carries all 3 probe SyslogIdentifiers" \
+  "grep -q 'web-zot-consumer-probe' <<<\"\$HSJ\" && grep -q 'web-git-data-probe' <<<\"\$HSJ\" && grep -q 'web-nic-guard' <<<\"\$HSJ\""
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

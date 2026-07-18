@@ -166,6 +166,48 @@ new element, actor, or store — Hetzner, Better Stack, zot, and git-data are al
 consumer-probe edges (web host → zot / git-data) are added for #6438 §1 / #6548 in the same
 change.
 
+## Amendment (2026-07-18, #6438/#6548) — web-1 root-doppler-unit auth contract
+
+The probe units this ADR canonizes were delivered (commit 14075d1b) but **failed to start** on
+web-1: their `ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- …'` runs as
+**root**, and a root systemd service gets no `$HOME`, so the Doppler CLI's `os.UserHomeDir()` init
+died `Doppler Error: $HOME is not defined` before it could exec the probe — and the units carried
+no `DOPPLER_TOKEN` source (web-1 has no `/etc/default/inngest-server`; `web_colocate_inngest`
+defaults false, so there was **no working root-doppler-auth systemd precedent on the host**).
+
+**Contract for any web-host root-run `doppler run` systemd unit** (implemented in server.tf +
+the three `.service` files):
+
+- Set `Environment=HOME=/root` on the unit (doppler then uses `/root/.doppler`).
+- Source a **prd-scoped `DOPPLER_TOKEN`** from a dedicated read-scoped `doppler_service_token`
+  (`doppler_service_token.web_probes`, `config=prd, access=read`) written into the unit's **own**
+  `/etc/default/web-<probe>` file (600) by its `*_install` provisioner — **not** the deploy-owned
+  `/etc/default/webhook-deploy` (which imports `DOPPLER_CONFIG_DIR=/tmp/.doppler`, re-opening the
+  #6536 ownership clash), and **not** the full-prd `var.doppler_token`.
+- Keep the unit **root-run**; never `User=deploy` without `PrivateTmp=true`; never set
+  `DOPPLER_CONFIG_DIR` (so doppler stays on `/root/.doppler`, never `/tmp/.doppler`).
+
+The probe units use a **mandatory** `EnvironmentFile=/etc/default/web-<probe>` and a **hard**
+`doppler run` with no degrade fallback — a deliberate divergence from the fleet's degrade-gracefully
+root-doppler units (`container-restart-monitor`, `cron-egress-*` use `EnvironmentFile=-` + a
+doppler-less fallback). This is correct here: a probe whose heartbeat URL is resolved *from* Doppler
+is useless doppler-less, so a token/auth failure MUST surface as a failed unit + heartbeat lapse
+(fail-loud), never a silent degraded run — ADR-117's "coverage that reads green while providing none"
+anti-pattern.
+
+**Observability delivery:** vector installs on web-1 only at cloud-init boot, and web-1 never
+re-runs cloud-init (`ignore_changes=[user_data]`), so the probe `SyslogIdentifier`s added to
+`vector.toml` Source 4 were file-only, never live on the host — the probes' own FATAL stderr never
+reached Better Stack. The sole live-prod apply path (a `terraform_data` SSH provisioner —
+`journald_persistent`) now also re-delivers `vector.toml` + reloads the Vector agent, and the zot
+probe emits a rate-limited positive-control `SOLEUR_PROBE_CANARY` row so Source-4 liveness is a
+steady-state signal (the probes are otherwise silent-on-success; luks-#6604 pattern).
+
+**#6459 fresh-host blocker (recorded, not fixed here):** the token is delivered only by the web-1
+SSH provisioner. A future baked host would get units requiring `DOPPLER_TOKEN` with nothing writing
+it — the future-host cloud-init bake (#6459) MUST also write the read-scoped token into each
+`/etc/default/web-<probe>` before it can run these units.
+
 ## Relationship to other ADRs
 
 **Counterpart to ADR-115** (registry self-converges; web host self-reports only — this ADR cites
