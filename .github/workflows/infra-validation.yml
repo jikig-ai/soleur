@@ -284,10 +284,18 @@ jobs:
 
   deploy-script-tests:
     runs-on: ubuntu-24.04
-    # 8 (was 5): the #5875 sandbox-canary regression below builds a small alpine+
-    # bubblewrap image and runs two docker bwrap probes on top of the existing bash
-    # suite. Self-validating (SKIPs if the runner cannot do bwrap userns).
-    timeout-minutes: 8
+    # 12 (was 8, was 5): the #5875 sandbox-canary regression below builds a small
+    # alpine+bubblewrap image and runs two docker bwrap probes on top of the existing
+    # bash suite. Self-validating (SKIPs if the runner cannot do bwrap userns).
+    # 8→12 (#6649): the `ci-deploy.sh tests` step alone now measures ~407s (real
+    # sleeps for the #6525 transient-retry backoff + lease/lock/drain timing + the
+    # #6475 soak path), consuming the whole 8-min budget with near-zero effective
+    # slack — so the job flakily times out mid-suite on a slightly-slow runner (the
+    # `~12s of slack` note below is now within runner variance of zero). Bumping to
+    # 12 restores real headroom for every infra PR, not just this one. Root-cause
+    # fix (broaden the MOCK_SLEEP_NOOP gate so those tests stop paying real
+    # wall-clock where timing fidelity is not asserted) is tracked as a follow-up.
+    timeout-minutes: 12
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
