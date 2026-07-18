@@ -11,6 +11,23 @@ status: planned
 
 # fix(security): Remediate 8 Dependabot alerts — undici + js-yaml lockfile bumps 🔒
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-18
+**Sections enhanced:** Observability (5-field schema), Implementation Phases (concrete verified snippets), Research Insights.
+**Verification method:** direct npm-registry + `gh api` + repo-grep probes (proportional to a mechanical lockfile bump — no agent fan-out, per `cm-delegate-verbose-exploration`).
+
+### Key Improvements (grounded, all verified this pass)
+1. **Patched versions confirmed published on npm** and reachable within existing ranges: `undici@7.28.0` (latest 7.x; `jsdom ^7.24.5` keeps it on 7.x), `js-yaml@3.15.0` (backported 3.x security release; `gray-matter ^3.13.1` permits it). No `package.json` edit needed.
+2. **Alert → patched-version mapping proven** against the live Dependabot API: all 6 undici alerts → `first_patched_version 7.28.0`; both js-yaml alerts → `3.15.0`. The flagged js-yaml is the **nested 3.14.2 under gray-matter**, not the already-safe top-level 4.2.0.
+3. **bun.lock parity requirement surfaced** (both lockfile toolchains exist and pin the vulnerable versions) — not in the original task framing; required by `cq-before-pushing-package-json-changes`.
+4. **Negative claim verified:** undici is stripped from the prod runtime image (`npm ci --omit=dev`, Dockerfile L128) — it reaches web-platform only via the `jsdom` devDependency.
+
+### New Considerations Discovered
+- The **npm@11 pin** in the CI `lockfile-sync` gate is the single highest-risk sharp edge: regenerating with local npm fails the gate on shape drift.
+- `minimumReleaseAge` (3 days) in `bunfig.toml` is satisfied — patched versions published 2026-07-02/04.
+- `type/security` and `dependencies` labels both exist (verified via `gh label list`).
+
 ## Overview
 
 Eight open Dependabot alerts on `main` (numbers #115–#123, verified live via
@@ -124,6 +141,38 @@ npm/prod-fidelity tree before testing (prod uses `npm ci`).
 - Open ONE PR, labels **`type/security`** + **`dependencies`** (both verified to exist before `gh pr create --label`).
 - PR body enumerates the 8 GHSAs → patched versions; note the four unrelated `type/security` issues (#6604/#6588/#6490/#6487) are **deliberately excluded**.
 
+### Research Insights — copy-paste verification (Phase 4 gate)
+
+**No-vulnerable-version-remains assertion** (run against each `package-lock.json`; floors are `first_patched_version` from the live Dependabot API):
+
+```bash
+# usage: node assert-floors.js <lockfile>
+node -e '
+const fs=require("fs");
+const lock=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+const cmp=(a,b)=>{const pa=a.split(".").map(Number),pb=b.split(".").map(Number);
+  for(let i=0;i<3;i++){if((pa[i]||0)!==(pb[i]||0))return (pa[i]||0)-(pb[i]||0);}return 0;};
+let bad=0;
+for(const [k,v] of Object.entries(lock.packages||{})){
+  if(/(^|\/)undici$/.test(k) && cmp(v.version,"7.28.0")<0){console.log("VULN undici",k,v.version);bad++;}
+  // js-yaml: 3.x line must be >=3.15.0; 4.x line (>=4.2.0) is out of the <3.15.0 advisory range
+  if(/(^|\/)js-yaml$/.test(k) && v.version.startsWith("3.") && cmp(v.version,"3.15.0")<0){console.log("VULN js-yaml",k,v.version);bad++;}
+}
+console.log(bad===0?"OK: no vulnerable undici/js-yaml remains":"FAIL: "+bad+" vulnerable node(s)");
+process.exit(bad?1:0);
+' "$1"
+```
+
+Run for `apps/web-platform/package-lock.json` and root `package-lock.json`; both MUST print `OK`. (undici assertion is a no-op for the root lockfile — root has no undici node.) Repeat the equivalent parity spot-check on each `bun.lock` (grep for `js-yaml@3.14.2` / `undici@7.24.6` → zero hits).
+
+**Alert-state discoverability** (the Phase 4 + Post-merge check, no SSH):
+
+```bash
+gh api "repos/:owner/:repo/dependabot/alerts?state=open" \
+  --jq '[.[]|select(.dependency.package.name=="undici" or .dependency.package.name=="js-yaml")]|length'
+# pre-merge: 8 ; post-merge (after one Dependabot rescan): 0
+```
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
@@ -145,10 +194,36 @@ npm/prod-fidelity tree before testing (prod uses `npm ci`).
 
 ## Observability
 
-Skipped — Files-to-Edit are lockfiles only (`package-lock.json`, `bun.lock`); no
-code-class file under `apps/*/server`, `apps/*/src`, `apps/*/infra`, or
-`plugins/*/scripts`, and no new infrastructure surface. Per plan Phase 2.9 skip
-condition (pure non-code change), no `## Observability` schema is required.
+Files-to-Edit are lockfiles only (`package-lock.json`, `bun.lock`) — no runtime
+service is added, so there is no new liveness surface. The change's "observability"
+is entirely CI + Dependabot (both non-SSH, operator-visible). Schema:
+
+```yaml
+liveness_signal:
+  what: N/A — no runtime service or process added (lockfile-only dependency bump); prod runtime is unaffected (undici is a devDependency-only transitive, stripped by `npm ci --omit=dev` at Dockerfile L128).
+  cadence: N/A
+  alert_target: N/A
+  configured_in: N/A
+error_reporting:
+  destination: GitHub Actions CI (the `lockfile-sync` job + `vitest` + `bash scripts/test-all.sh`) — a regression fails the PR check loudly; GitHub Dependabot re-scan surfaces any residual vulnerable version.
+  fail_loud: true — CI is a required check; a red run blocks merge.
+failure_modes:
+  - mode: lockfile regenerated with wrong npm major (shape drift)
+    detection: CI `lockfile-sync` job `git diff --exit-code apps/web-platform/package-lock.json`
+    alert_route: PR check failure (blocks merge)
+  - mode: patched version not actually reached (still < patched floor)
+    detection: `gh api repos/:owner/:repo/dependabot/alerts?state=open` still lists the alert post-merge
+    alert_route: Dependabot alert remains open on the default branch (visible in the security tab + API)
+  - mode: bump breaks a consumer (jsdom test env / gray-matter frontmatter parse)
+    detection: `vitest run` / `tsc --noEmit` / `test-all.sh` failure in CI
+    alert_route: PR check failure (blocks merge)
+logs:
+  where: GitHub Actions run logs (per-PR); GitHub Dependabot alerts API/security tab
+  retention: GitHub default (Actions logs ~90 days; Dependabot alert state is durable until dismissed)
+discoverability_test:
+  command: gh api "repos/:owner/:repo/dependabot/alerts?state=open" --jq '[.[]|select(.dependency.package.name=="undici" or .dependency.package.name=="js-yaml")]|length'
+  expected_output: "0" (post-merge, after one Dependabot rescan cycle) — no SSH required
+```
 
 ## Domain Review
 
