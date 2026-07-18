@@ -227,8 +227,8 @@ else
     emit_drift() { echo "DRIFT:$1"; }
     die() { echo "DIE:$*"; exit 1; }
     log() { :; }
+    # shellcheck disable=SC2034  # consumed by the eval'd load_escrow_creds (distinctness compare)
     TFSTATE_BUCKET="soleur-terraform-state"
-    HEADER_BACKUP_BUCKET=""
     eval "$readers"
     eval "$loader"
     load_escrow_creds
