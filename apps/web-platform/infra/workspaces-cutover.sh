@@ -59,8 +59,14 @@ DRY_RUN="${DRY_RUN:-1}"
 ROLLBACK="${ROLLBACK:-0}"
 CONFIRM_WIPE="${CONFIRM_WIPE:-0}"
 
+# Locate sibling scripts relative to THIS file. The workflow ships this script + its siblings
+# (workspaces-luks-emit.sh, luks-monitor.{sh,service,timer}) as a tar bundle and runs THIS file as a
+# file (#6649 content-carrier model), so the self-path is the on-host file path. The `:-$0` fallback
+# keeps it defined under `set -u` even if the body ever arrives on stdin (`bash -s`), where
+# BASH_SOURCE is empty — the pre-#6649 failure that darkened the emit channel + killed the run.
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 EMIT="/usr/local/bin/workspaces-luks-emit.sh"
-[ -f "$EMIT" ] || EMIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspaces-luks-emit.sh"
+[ -f "$EMIT" ] || EMIT="${SELF_DIR}/workspaces-luks-emit.sh"
 # shellcheck source=apps/web-platform/infra/workspaces-luks-emit.sh
 [ -f "$EMIT" ] && . "$EMIT"
 
@@ -472,14 +478,33 @@ if [ "$DRY_RUN" != "1" ]; then
   health="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://app.soleur.ai/api/health || echo 000)"
   [ "$health" = "200" ] || die "app /api/health=$health (expected 200) after restart"
   # Deliver the standing observability to the LIVE host via THIS channel (ADR-119 §(e)).
-  install -D -m 0755 "$(dirname "${BASH_SOURCE[0]}")/luks-monitor.sh" /usr/local/bin/luks-monitor 2>/dev/null || true
+  install -D -m 0755 "${SELF_DIR}/luks-monitor.sh" /usr/local/bin/luks-monitor 2>/dev/null || true
   install -D -m 0755 "$EMIT" /usr/local/bin/workspaces-luks-emit.sh 2>/dev/null || true
-  install -D -m 0644 "$(dirname "${BASH_SOURCE[0]}")/luks-monitor.service" /etc/systemd/system/luks-monitor.service 2>/dev/null || true
-  install -D -m 0644 "$(dirname "${BASH_SOURCE[0]}")/luks-monitor.timer" /etc/systemd/system/luks-monitor.timer 2>/dev/null || true
+  install -D -m 0644 "${SELF_DIR}/luks-monitor.service" /etc/systemd/system/luks-monitor.service 2>/dev/null || true
+  install -D -m 0644 "${SELF_DIR}/luks-monitor.timer" /etc/systemd/system/luks-monitor.timer 2>/dev/null || true
+  # #6649 — persist the prd_workspaces_luks boot token into the luks-monitor EnvironmentFile so the
+  # DAILY timer probe (luks-monitor.service) can `doppler secrets get WORKSPACES_LUKS_KEY … --config
+  # prd_workspaces_luks` unattended. cloud-init bakes ONLY SOLEUR_SENTRY_DSN here (no token), and the
+  # cutover carries the token in $DOPPLER_TOKEN (injected via the 0600 stdin .env). Preserve the baked
+  # DSN line; write 0600 root. Absent this, the daily probe would emit doppler_unreachable every day.
+  if [ -n "${DOPPLER_TOKEN:-}" ]; then
+    ENVF="/etc/default/luks-monitor"; touch "$ENVF"; chmod 600 "$ENVF"
+    # Drop any prior DOPPLER_TOKEN line, keep the baked DSN + everything else, append the current token.
+    # `umask 077` so the `.tmp` is BORN 0600 — a `chmod 600 "$ENVF"` AFTER the `mv` cannot protect the
+    # window, because `mv` replaces the inode with the tmp's (0644-under-default-umask) perms, briefly
+    # exposing the full-prd token world-readable (security review P3). The final chmod is belt-and-suspenders.
+    ( umask 077; { grep -v '^DOPPLER_TOKEN=' "$ENVF" 2>/dev/null || true; printf 'DOPPLER_TOKEN=%s\n' "$DOPPLER_TOKEN"; } > "${ENVF}.tmp" ) \
+      && mv "${ENVF}.tmp" "$ENVF" && chmod 600 "$ENVF"
+  else
+    log "WARN: DOPPLER_TOKEN not in env at unit-install time — the daily luks-monitor probe will lack a prd_workspaces_luks token"
+  fi
   # Structural fail-closed gate: chattr +i the root-disk mountpoint is unreachable now (mapper is
   # mounted), so it is delivered on the next unmount path; arm the daily probe timer now.
   systemctl daemon-reload 2>/dev/null || true
   systemctl enable --now luks-monitor.timer 2>/dev/null || true
+  # Fail loud if the timer did not arm (a silently-missing unit would leave the daily probe dark; the
+  # `install … || true` above swallows delivery errors deliberately, so assert the end state here).
+  systemctl is-enabled luks-monitor.timer >/dev/null 2>&1 || { emit_drift luks_monitor_timer_enable_failed; die "luks-monitor.timer failed to enable — the daily at-rest probe would not run (C15/ADR-119 §(e))"; }
   # Reboot-once re-canary (C15): the realistic failure is the boot path (the structural gate + the
   # --restart resurrection). This script does NOT auto-reboot — a reboot drops the CF-Tunnel SSH
   # session mid-run. The run-keyed CANARY_OK is persisted to $STATE_FILE with the header UUID (above)

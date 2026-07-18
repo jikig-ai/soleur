@@ -14,6 +14,15 @@
 # here: the environment is not a second reviewer on an already-reviewed PR, it is the sole gate on an
 # irreversible freeze. The environment MUST have a NON-EMPTY required-reviewer set (a zero-reviewer
 # environment auto-approves — DP-11 F8). The typed `confirm` token is a typo-guard, NOT the authorization.
+#
+# #6649 — the gate is applied to the REAL freeze arm ONLY (`dry_run=false`). A `dry_run=true` rehearsal
+# performs NO irreversible operation (freeze/repoint are behind `DRY_RUN != 1` in workspaces-cutover.sh;
+# the wipe is a separate CONFIRM_WIPE dispatch), so gating it behind a human made every escrow rehearsal
+# wait on an approval — defeating autonomy for a reversible probe. The job `environment:` expression below
+# resolves to the gated environment when `dry_run` is false and to an empty string (ungated) when true.
+# This is FAIL-CLOSED: the same `!inputs.dry_run` operand drives the gate, so any freeze-reachable run is
+# gated. The C19/AC20b human authorization on the irreversible operation is fully preserved; only the
+# reversible rehearsal is ungated. The reviewer set MUST stay non-empty for the freeze arm.
 
 name: workspaces-luks cutover freeze (#6604 / ADR-119)
 
@@ -57,9 +66,14 @@ jobs:
   cutover:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # The sole human authorization on a sole-copy-data freeze (C19). MUST carry a non-empty
-    # required-reviewer set in repo settings (DP-11 F8 — a zero-reviewer environment auto-approves).
-    environment: workspaces-luks-cutover
+    # The sole human authorization on a sole-copy-data freeze (C19). Applied to the REAL freeze arm
+    # ONLY (`dry_run=false`) — a reversible dry-run rehearsal runs ungated for autonomy (#6649). The
+    # expression is FAIL-CLOSED: `!inputs.dry_run && 'workspaces-luks-cutover'` yields the gated env
+    # whenever dry_run is false (the freeze-reachable case), and the empty-string branch (ungated)
+    # ONLY when dry_run is exactly true. The environment MUST carry a non-empty required-reviewer set
+    # in repo settings (DP-11 F8 — a zero-reviewer environment auto-approves). Never invert the
+    # operands: `inputs.dry_run && '' || 'X'` gates ALWAYS ('' is falsy), the opposite of intent.
+    environment: ${{ !inputs.dry_run && 'workspaces-luks-cutover' || '' }}
     steps:
       - name: Validate confirm token
         env:
@@ -106,13 +120,20 @@ jobs:
 
       - name: Run workspaces-luks cutover
         env:
+          # prd_terraform-scoped runner token — reads HCLOUD_TOKEN (volume-id lookup) on the RUNNER.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # prd_workspaces_luks-scoped boot token — the ONLY credential that can read
+          # WORKSPACES_LUKS_KEY + the R2 escrow creds host-side. Delivered to web-1 via a 0600 stdin
+          # .env (never argv). Published by the DEFAULT apply of apply-web-platform-infra.yml (#6649).
+          WORKSPACES_LUKS_BOOT_TOKEN: ${{ secrets.WORKSPACES_LUKS_BOOT_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           ROLLBACK: ${{ inputs.rollback && '1' || '0' }}
           WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
-        # The cutover body runs ON web-1 (DP-6 host-side trap): copy it over the bridge and execute
-        # it there so `trap cleanup EXIT` survives an SSH drop. The script reads the passphrase via
-        # the host's pinned prd_workspaces_luks token path; no cloud-admin creds touch the host.
+        # The cutover body runs ON web-1 (DP-6 host-side trap): ship the script + its siblings over the
+        # bridge and execute it there AS A FILE so `trap cleanup EXIT` survives an SSH drop AND the
+        # emit sibling is sourced (${BASH_SOURCE[0]} resolves — the pre-#6649 stdin-pipe darkened it).
+        # The script reads the passphrase via the host's pinned prd_workspaces_luks token path
+        # (delivered as $DOPPLER_TOKEN in the 0600 .env); no cloud-admin creds touch the host.
         run: |
           # set +e so the `rc=$?` + ::error:: diagnostic runs — GitHub's inherited `-e` (which
           # `set -uo pipefail` does not clear) would otherwise exit the step on the ssh failure
@@ -124,15 +145,69 @@ jobs:
           # auth-fail confusingly. The bridge sets WEB_HOST_SSH when server-ip
           # is passed (it is, above).
           [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1. Check the bridge step logs."; exit 1; }
-          # WEB_HOST_SSH is guaranteed set past the guard above (no :-ssh fallback —
-          # a keyless bare ssh is exactly what the guard exists to prevent).
+          # The host cannot read prd_workspaces_luks without the boot token — fail loud here rather
+          # than let read_key/load_escrow_creds die mid-run with a confusing empty-secret error.
+          [[ -n "${WORKSPACES_LUKS_BOOT_TOKEN:-}" ]] || { echo "::error::WORKSPACES_LUKS_BOOT_TOKEN not configured — run the DEFAULT apply of apply-web-platform-infra.yml to publish it (#6649)."; exit 1; }
+
+          # BLOCKER 5 — resolve the fresh LUKS volume's stable by-id device path. DOPPLER_TOKEN is
+          # prd_terraform-scoped, so it reads HCLOUD_TOKEN here on the runner (never on the host).
+          HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN --plain -p soleur -c prd_terraform)"
+          VOL_JSON="$(curl -fsS --max-time 15 -H "Authorization: Bearer $HCLOUD_TOKEN" \
+            'https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data-luks')"
+          # Assert EXACTLY ONE volume matched before taking [0] — an ambiguous/zero match must NOT
+          # silently pick a wrong device (the real arm luksFormats WORKSPACES_LUKS_DEV; a wrong id is
+          # data-destructive on that device). Belt for the blkid-signature backstop in prepare_luks_target.
+          VCOUNT="$(jq -r '.volumes | length' <<<"$VOL_JSON")"
+          [[ "$VCOUNT" == "1" ]] || { echo "::error::expected exactly 1 soleur-web-platform-data-luks volume from the Hetzner API, got ${VCOUNT:-<none>} — refusing to guess the fresh device"; exit 1; }
+          VID="$(jq -r '.volumes[0].id' <<<"$VOL_JSON")"
+          [[ "$VID" =~ ^[0-9]+$ ]] || { echo "::error::could not resolve the soleur-web-platform-data-luks volume id from the Hetzner API (got: '${VID:-<empty>}')"; exit 1; }
+          LUKS_DEV="/dev/disk/by-id/scsi-0HC_Volume_${VID}"
+
+          # BLOCKER 3 — content-carrier: ship the script + siblings to a temp dir on the PERSISTENT
+          # STATE_DIR (NOT tmpfs /tmp — a tmpfs .env makes the boot-token shred a no-op against the raw
+          # device, the F7 anti-pattern the header backup already fixes) and run it AS A FILE. No sudo:
+          # WEB_HOST_SSH lands `-l root`, and sudo's env_reset would scrub HOME + the sourced .env.
           # shellcheck disable=SC2086
-          ${WEB_HOST_SSH} "$WEB_HOST" "sudo DRY_RUN='${DRY_RUN}' ROLLBACK='${ROLLBACK}' bash -s" \
-            < "${INFRA_DIR}/workspaces-cutover.sh"
+          REMOTE_DIR="$(${WEB_HOST_SSH} "$WEB_HOST" 'mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && mktemp -d /var/lib/workspaces-luks/wl-cutover.XXXXXX')"
+          [[ -n "$REMOTE_DIR" ]] || { echo "::error::failed to create the remote bundle dir on web-1"; exit 1; }
+          echo "REMOTE_DIR=$REMOTE_DIR" >> "$GITHUB_ENV"
+          # shellcheck disable=SC2086
+          tar czf - -C "$INFRA_DIR" workspaces-cutover.sh workspaces-luks-emit.sh luks-monitor.sh luks-monitor.service luks-monitor.timer \
+            | ${WEB_HOST_SSH} "$WEB_HOST" "tar xzf - -C '$REMOTE_DIR'"
+
+          # BLOCKER 4 — deliver the boot token (+ device + flags) via a mode-0600 root .env written
+          # over STDIN (never `sudo VAR=val` argv — that leaks the full-prd-capable token into the host
+          # process list). Write .env, arm the host-local shred trap, source it, and run the script AS A
+          # FILE — ALL in ONE remote bash -c so the trap covers the .env's entire lifetime (no
+          # un-trapped window). Fields are metacharacter-free (dp.st token / by-id path / 0|1) so
+          # `set -a; . .env` is injection-safe.
+          # shellcheck disable=SC2086
+          printf 'DOPPLER_TOKEN=%s\nWORKSPACES_LUKS_DEV=%s\nDRY_RUN=%s\nROLLBACK=%s\n' \
+            "$WORKSPACES_LUKS_BOOT_TOKEN" "$LUKS_DEV" "$DRY_RUN" "$ROLLBACK" \
+            | ${WEB_HOST_SSH} "$WEB_HOST" "bash -c 'install -m600 /dev/stdin \"$REMOTE_DIR/.env\"; trap \"shred -u \\\"$REMOTE_DIR/.env\\\" 2>/dev/null || rm -f \\\"$REMOTE_DIR/.env\\\"\" EXIT; set -a; . \"$REMOTE_DIR/.env\"; set +a; bash \"$REMOTE_DIR/workspaces-cutover.sh\"'"
           rc=$?
           if [[ $rc -ne 0 ]]; then
-            echo "::error::workspaces-luks cutover exited $rc — the host-side EXIT trap auto-rolled-back to the plaintext mount (DP-6). See the emitted Sentry event (feature=workspaces-luks op=workspaces-luks-drift)."
+            # The DP-6 EXIT trap rolls back to the plaintext mount ONLY for a PRE-canary failure; a
+            # failure AFTER the host canary (e.g. monitor-timer arm) leaves the LUKS mount LIVE and
+            # retained (cleanup() no-ops once CANARY_OK=1). Not every failure emits a Sentry event —
+            # the at-rest asserts do; the timer-arm die now does too. Read the streamed die() message
+            # in this run log first, then the Sentry channel (feature=workspaces-luks op=workspaces-luks-drift).
+            echo "::error::workspaces-luks cutover exited $rc — see the streamed die() message above. Pre-canary failures auto-rolled-back to the plaintext mount (DP-6); a post-canary failure left the LUKS mount live. Check the run log + any emitted Sentry event (feature=workspaces-luks op=workspaces-luks-drift)."
             exit $rc
+          fi
+
+      - name: Remove remote cutover bundle
+        if: always()
+        env:
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
+        # Belt-and-suspenders: the .env is shredded by the host-local EXIT trap even on an SSH drop;
+        # this removes the (script-only, non-secret) bundle dir. REMOTE_DIR is exported to GITHUB_ENV
+        # by the Run step; empty if that step never created it.
+        run: |
+          set +e
+          if [[ -n "${WEB_HOST_SSH:-}" && -n "${REMOTE_DIR:-}" ]]; then
+            # shellcheck disable=SC2086
+            ${WEB_HOST_SSH} "$WEB_HOST" "rm -rf '$REMOTE_DIR'" 2>/dev/null || true
           fi
 
       - name: Tear down cloudflared SSH bridge
