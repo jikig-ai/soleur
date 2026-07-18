@@ -221,6 +221,19 @@ describe("checkReissuePreconditions", () => {
     expect(r.ok).toBe(false);
     expect(r.failed).toContain("acmeApexCarveout");
   });
+  it("always_use_https unreadable ('unknown', DNS-only token 403) → does NOT block (#6657)", () => {
+    // The least-privilege DNS-edit-only token cannot read the zone setting, so
+    // gatherPreconditions returns "unknown"; the ACME carve-out check is the
+    // authoritative signal, so an unreadable setting must not block.
+    const r = checkReissuePreconditions({ ...healthyPreconditions(), alwaysUseHttps: "unknown" });
+    expect(r.ok).toBe(true);
+    expect(r.results.alwaysUseHttpsOff).toBe(true);
+  });
+  it("always_use_https explicitly 'on' → blocks alwaysUseHttpsOff", () => {
+    const r = checkReissuePreconditions({ ...healthyPreconditions(), alwaysUseHttps: "on" });
+    expect(r.ok).toBe(false);
+    expect(r.failed).toContain("alwaysUseHttpsOff");
+  });
 });
 
 describe("setRecordsProxied — partial-toggle abort", () => {

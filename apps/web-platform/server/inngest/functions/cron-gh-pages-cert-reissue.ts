@@ -194,7 +194,15 @@ export function checkReissuePreconditions(inputs: PreconditionInputs): {
     acmeWwwCarveout: inputs.acmeWwwStatus === 404,
     caaPermissive: inputs.caaCount === 0,
     challengeTxtPresent: inputs.challengeTxtPresent === true,
-    alwaysUseHttpsOff: inputs.alwaysUseHttps === "off",
+    // Block ONLY on an explicit "on" — NOT on "unknown". Reading always_use_https
+    // needs Zone.Zone Settings:Read, which the least-privilege DNS-edit-only token
+    // (CF_API_TOKEN_DNS_EDIT) intentionally lacks, so gatherPreconditions coalesces
+    // a 403 to "unknown". `acmeApexCarveout`/`acmeWwwCarveout` (the ACME path returns
+    // 404, not a 301 redirect) is the AUTHORITATIVE redirect-interception signal —
+    // always_use_https="on" would force those to 301 and fail the carve-out check
+    // anyway — so an unreadable setting must not block. #6657 live-run: the DNS-only
+    // token made this precondition false with `=== "off"` and blocked the remediation.
+    alwaysUseHttpsOff: inputs.alwaysUseHttps !== "on",
   };
   const failed = Object.entries(results)
     .filter(([, ok]) => !ok)
