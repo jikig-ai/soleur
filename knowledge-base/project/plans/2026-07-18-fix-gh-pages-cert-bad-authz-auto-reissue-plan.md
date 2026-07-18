@@ -186,8 +186,13 @@ logs:
   where: Better Stack Logs source 2457081 (Inngest node Vector ship) + Sentry breadcrumbs
   retention: per existing Better Stack + Sentry retention
 discoverability_test:
-  command: "gh api /repos/jikig-ai/soleur/pages | jq '.https_certificate.state'  AND Sentry issue search feature:cron-gh-pages-cert-reissue"
-  expected_output: "issued (post-remediation); Sentry shows the terminal outcome event with discriminating fields — NO ssh required"
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://soleur.ai/
+  expected_output: "200"
+  # No-SSH liveness of the brand surface the cert protects (200 now on the valid
+  # May cert; 526 if it hard-expires). The reissue routine's own outcome is
+  # discovered via Sentry: search feature:cron-gh-pages-cert-reissue (needs auth,
+  # so it is not the preflight-runnable probe); the cert state itself via
+  # `gh api /repos/jikig-ai/soleur/pages --jq .https_certificate.state`.
 ```
 
 **Affected-surface probe (§2.9.2 — cron worker is a blind surface):** every reissue outcome emits ONE structured Sentry event whose fields (`outcome ∈ {issued, poll_timeout, reissue_failed, proxy_restore_failed, precondition_blocked}` (+`rate_limit_cooldown` once v2 self-heal ships), `finalState`, `attempts`, `elapsedMs`, `phase`, `httpStatus`, `cnameAtExit`, `proxiedStateAtExit`, `preconditionResults`) **discriminate all competing failure hypotheses in one event** — including the API-failure and partial-toggle cases most likely in practice — so the root cause of any future recurrence is decided the moment it fires, not after N blind fixes.
