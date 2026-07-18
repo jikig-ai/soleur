@@ -21,13 +21,14 @@ CLOUD_INIT="${DIR}/cloud-init-inngest.yml"
 INNGEST_TF="${DIR}/inngest.tf"
 VECTOR_TF="${DIR}/vector.tf"
 BOOTSTRAP="${DIR}/inngest-bootstrap.sh"
+VARIABLES_TF="${DIR}/variables.tf"
 
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
-for f in "$HOST_TF" "$CLOUD_INIT" "$INNGEST_TF" "$VECTOR_TF" "$BOOTSTRAP"; do
+for f in "$HOST_TF" "$CLOUD_INIT" "$INNGEST_TF" "$VECTOR_TF" "$BOOTSTRAP" "$VARIABLES_TF"; do
   [ -f "$f" ] || { echo "FAIL: required file not found: $f" >&2; exit 1; }
 done
 
@@ -85,13 +86,29 @@ grep -qE 'inngest_cli_sha256[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$INNGEST_T
   && grep -qF 'INNGEST_CLI_ARCH=${inngest_cli_arch}' "$CLOUD_INIT" \
   && pass || fail "dual-arch inngest-CLI SHA: amd64+arm64 locals + derived arch + arch-matched cloud-init override"
 
-# 6. nftables scopes :8288/:8289 to web-host IPs only. The allowlist is the TF constant
-#    local.web_host_private_ips (host.tf), rendered into the nft saddr set via ${web_host_private_ips}.
-#    git-data(.20)/registry(.30) are absent from that local → dropped by the default policy.
-grep -qE 'web_host_private_ips[[:space:]]*=[[:space:]]*"10\.0\.1\.10,10\.0\.1\.11"' "$HOST_TF" \
-  && grep -qF 'ip saddr { ${web_host_private_ips} } accept' "$CLOUD_INIT" \
-  && pass || fail "nftables saddr set is the web-host allowlist (.10/.11) via local.web_host_private_ips"
-# The web-host allowlist local must NOT contain git-data(.20)/registry(.30).
+# 6. nftables scopes :8288/:8289 to web-host IPs only, rendered from the TF constant
+#    local.web_host_private_ips (host.tf) into the nft saddr set via ${web_host_private_ips}.
+grep -qF 'ip saddr { ${web_host_private_ips} } accept' "$CLOUD_INIT" \
+  && pass || fail "nftables saddr set is rendered from local.web_host_private_ips"
+
+# 6b. DRIFT GUARD (#6608), mirroring cutover-inngest-workflow.test.sh's var.web_hosts parity:
+#     the allowlist local's IP set MUST byte-match the canonical var.web_hosts private_ip set
+#     (variables.tf `default` map). This closes the "no edge to var.web_hosts" gap the issue
+#     names — the literal was hardcoded and drifted when web-2 (10.0.1.11) was retired
+#     2026-07-17 (#6538). Deriving the canonical set (not a second hardcoded literal) means a
+#     future roster change to var.web_hosts red-lines this test until the allowlist follows.
+ALLOWLIST_SET=$(grep -oE 'web_host_private_ips[[:space:]]*=[[:space:]]*"[0-9.,]+"' "$HOST_TF" \
+  | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd,)
+CANON_WEB_HOSTS=$(grep -oE 'private_ip[[:space:]]*=[[:space:]]*"10\.0\.1\.[0-9]+"' "$VARIABLES_TF" \
+  | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd,)
+if [[ -n "$ALLOWLIST_SET" && -n "$CANON_WEB_HOSTS" && "$ALLOWLIST_SET" == "$CANON_WEB_HOSTS" ]]; then
+  pass
+else
+  fail "web_host_private_ips ('$ALLOWLIST_SET') must equal var.web_hosts private_ip set ('$CANON_WEB_HOSTS') — roster drift (#6608)"
+fi
+
+# 6c. The web-host allowlist local must NOT contain git-data(.20)/registry(.30) (complementary
+#     to the parity guard: neither peer host may ever enter the :8288/:8289 allowlist).
 if grep -qE 'web_host_private_ips[[:space:]]*=' "$HOST_TF" && grep -E 'web_host_private_ips[[:space:]]*=' "$HOST_TF" | grep -qE '10\.0\.1\.(20|30)'; then
   fail "web_host_private_ips must NOT include git-data(.20)/registry(.30)"
 else

@@ -29,7 +29,7 @@
 # Redis FLUSHALL + DBSIZE==0 assertion (ADR-100 Decision 6). No window at provision.
 
 locals {
-  # Fresh private IP in 10.0.1.0/24 — web = .10/.11, git-data = .20, registry = .30.
+  # Fresh private IP in 10.0.1.0/24 — web = .10 (.11 retired 2026-07-17, #6538), git-data = .20, registry = .30.
   inngest_private_ip = "10.0.1.40"
 
   # nftables allowlist for the inngest control API (:8288/:8289): ONLY the web-host
@@ -37,7 +37,13 @@ locals {
   # peer-host compromise must not pivot into the (unauthenticated in `start` mode)
   # :8288/v0/gql trigger control plane without the signing key (SEC-H2). Comma-joined
   # for the nft `ip saddr { ... }` set rendered into inngest-nftables.sh.
-  web_host_private_ips = "10.0.1.10,10.0.1.11"
+  #
+  # SINGLE-HOST (#6608): web-2 (the retired .11 host) was destroyed 2026-07-17 (#6538), so the
+  # roster is web-1 only. This literal is DRIFT-GUARDED against var.web_hosts by
+  # inngest-host.test.sh §6b (the allowlist IP set must byte-equal the var.web_hosts
+  # private_ip set) — that guard is the edge to var.web_hosts the roster previously lacked,
+  # so a stale .11 (or a future roster change) red-lines CI instead of silently re-granting.
+  web_host_private_ips = "10.0.1.10"
 
   # Arch DERIVED from var.inngest_server_type (mirrors zot-registry.tf local.registry_arch):
   # `cax*` (Ampere) → arm64, anything else (`cpx*`/`cx*`) → amd64. Lets the dedicated Inngest

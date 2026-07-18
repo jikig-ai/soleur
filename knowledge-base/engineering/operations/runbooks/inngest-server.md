@@ -798,6 +798,31 @@ empty the dark registry and re-run (all no-SSH):
    backend), then re-dispatch `op=execute`. The 2.0 probe must report `registry_empty:true`
    before the SEAM is reachable.
 
+### nftables web-host allowlist parity (#6608)
+
+`inngest-host.tf` `local.web_host_private_ips` is rendered into the dedicated host's nftables
+`ip saddr { … }` allowlist for the `:8288`/`:8289` control API (SEC-H2). It must equal the live
+web-host roster (`var.web_hosts` `private_ip` set). web-2 (`.11`) was retired 2026-07-17 (#6538),
+so the roster is web-1 (`10.0.1.10`) only; the literal was corrected to match (#6608) and is now
+**drift-guarded** by `inngest-host.test.sh` §6b (the allowlist IP set must byte-equal the
+`var.web_hosts` private_ip set — the edge to `var.web_hosts` the roster previously lacked, so a
+future roster change red-lines CI until the allowlist follows).
+
+**Apply path — the literal is baked into `user_data`, so the edit force-replaces the host.**
+`hcloud_server.inngest` deliberately carries **no** `lifecycle.ignore_changes=[user_data]`
+(ADR-100), and its resources are **excluded from the per-PR CI `-target`**, so the corrected
+literal is **inert at merge** — nothing applies. Deliver it by folding into the HELD Phase-2
+cutover re-provision (the same `apply_target=inngest-host-replace` dispatch above that delivers the
+#6197 arm64-Vector wiring), which is scoped, AOF-volume-preserving, and menu-ack authorized. Do
+**not** fire a separate gratuitous replace: during Phase-1 the host is dark/inert (zero prod crons),
+so there is no urgency unless a read-only check shows `10.0.1.11` reallocated to a live host before
+Phase-2.
+
+**Post-apply verification (no-SSH).** Confirm the rendered nftables set no longer contains `.11`
+and the `:8288`/`:8289` control API still accepts from web-1 (`10.0.1.10`) via the Vector
+journald→Better Stack boot marker / registry-probe class check — never `ssh` (the host is
+deny-all-public; `hr-no-ssh-fallback-in-runbooks`). Then `gh issue close 6608`.
+
 ### Rollback sequence (P1-13) — mirrors the forward gate, stop the dedicated host FIRST
 
 1. **Dispatch `op=rollback` (no-SSH — it now does BOTH halves, #6369).** As of #6369 `op=rollback`
