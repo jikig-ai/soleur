@@ -151,6 +151,11 @@ if want_scripts; then
   # liveness, TRANSIENT-not-PASS). Registered explicitly (orphan-suite class above) — its exit code
   # gates whether the sweeper auto-closes #6616, so a vacuous PASS regression must redden CI.
   run_suite "scripts/hostname-mislabel-web1-6616" bash scripts/followthroughs/hostname-mislabel-web1-6616.test.sh
+  # #6475 (D-6): exit-code harness for the ci-deploy Sentry-POST-failure soak probe. Registered
+  # explicitly (orphan-suite class above) — its exit code gates whether the sweeper auto-closes
+  # #6475, and the probe's whole purpose is to be the fail-loud alarm, so a vacuous PASS (or a
+  # false FAIL that pages a green codebase) must redden CI here.
+  run_suite "scripts/ci-deploy-sentry-post-fail-6475" bash scripts/followthroughs/ci-deploy-sentry-post-fail-6475.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
