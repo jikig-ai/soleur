@@ -119,8 +119,8 @@ BLOCK=$(awk '
   f && /^}/ { exit }
 ' "$SERVER_TF")
 assert "block is non-empty" "[[ -n \"\$BLOCK\" ]]"
-assert "triggers_replace = sha256(file(journald-soleur.conf))" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(file\(\"\\\$\{path\.module\}/journald-soleur\.conf\"\)\)'"
+assert "triggers_replace hashes journald-soleur.conf (re-delivery on drop-in change; now a join with vector.toml)" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/journald-soleur\.conf\"\)'"
 assert "SSH connection block (type=ssh)" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'type[[:space:]]*=[[:space:]]*\"ssh\"'"
 # `agent = true` was stale post-#4845: server.tf now uses the dual-context
@@ -186,6 +186,26 @@ assert "cat-deploy-state.sh emits a journald_storage field" \
   "grep -qE 'journald_storage' '$CAT_STATE'"
 assert "cat-deploy-state.sh is bash -n clean" \
   "bash -n '$CAT_STATE'"
+
+# --- vector.toml delivery folded into journald_persistent (#6438/#6548 Source-4 delivery) ---
+# web-1 installs vector ONLY at cloud-init boot and never re-runs cloud-init (ignore_changes=
+# [user_data]), so vector.toml's Source-4 probe SyslogIdentifiers were file-only, never live on
+# the running host — the 3 probes' own FATAL stderr never reached Better Stack. The sole live-prod
+# apply path is a terraform_data SSH provisioner; fold the vector.toml re-delivery + agent reload
+# into journald_persistent (already SSHes web-1, already on the workflow -target list). Assert the
+# wiring is present AND that triggers_replace hashes vector.toml (else the re-delivery never fires
+# — the "plan unchanged defers the real test to prod" trap).
+echo ""
+echo "--- vector.toml delivery folded into journald_persistent (Source 4 live on web-1) ---"
+JP="$(awk '/resource \"terraform_data\" \"journald_persistent\"/,/^}/' "$SERVER_TF")"
+assert "journald_persistent delivers vector.toml to the running web-1 host" \
+  "grep -q 'vector.toml' <<<\"\$JP\""
+assert "journald_persistent triggers_replace hashes file(vector.toml) (re-delivery on config change)" \
+  "grep -qE 'file\\(\"\\\$\\{path.module\\}/vector.toml\"\\)' <<<\"\$JP\""
+assert "journald_persistent reloads the vector agent (restart vector.service)" \
+  "grep -qE 'systemctl.*vector.service|restart vector' <<<\"\$JP\""
+assert "the delivered vector.toml carries the 3 probe SyslogIdentifiers (Source 4 include list)" \
+  "grep -q 'web-zot-consumer-probe' '$SCRIPT_DIR/vector.toml' && grep -q 'web-git-data-probe' '$SCRIPT_DIR/vector.toml' && grep -q 'web-nic-guard' '$SCRIPT_DIR/vector.toml'"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

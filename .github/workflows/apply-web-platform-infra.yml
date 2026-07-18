@@ -394,6 +394,7 @@ jobs:
               -target=betteruptime_heartbeat.web_nic_guard \
               -target=doppler_secret.web_zot_consumer_url \
               -target=doppler_secret.web_nic_guard_url \
+              -target=doppler_service_token.web_probes \
               -target=doppler_service_token.web_arm_write \
               -target=github_actions_secret.doppler_token_web_arm \
               -target=betteruptime_team_member.ops

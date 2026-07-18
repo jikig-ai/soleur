@@ -249,6 +249,27 @@ assert "MUT: 'REBOOT_CAP' is detected by the predicate" \
 assert "MUT: the predicate does NOT mis-fire on the emit's 'reboot_count=0'" \
   "! printf '%s\n' 'LINE=\"SOLEUR_PRIVATE_NIC reboot_count=0 boot_id=x\"' | grep -qE '^[[:space:]]*reboot([[:space:]]|\$)'"
 
+# --- static drift-guard: doppler-auth unit-start contract (#6438 §3 unit-start fix) -------
+# The guard runs `doppler run` as ROOT. Without Environment=HOME=/root the doppler CLI dies
+# "$HOME is not defined" BEFORE it exec's the guard; without a DOPPLER_TOKEN in the per-host
+# env file it cannot authenticate. Both gaps made the unit fail to start on web-1. Assert both,
+# and that the fix does not re-open the #6536 /tmp/.doppler ownership clash surface.
+echo "--- static: doppler-auth unit-start contract ---"
+SVC="$SCRIPT_DIR/web-private-nic-guard.service"
+SERVER_TF="$SCRIPT_DIR/server.tf"
+assert "nic-guard .service sets Environment=HOME=/root (else doppler: \$HOME is not defined)" \
+  "grep -qE '^Environment=HOME=/root\$' '$SVC'"
+assert "nic-guard .service does NOT source webhook-deploy (deploy-owned; imports /tmp/.doppler)" \
+  "! grep -q 'webhook-deploy' '$SVC'"
+assert "nic-guard .service does NOT set DOPPLER_CONFIG_DIR (root doppler uses /root/.doppler)" \
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'DOPPLER_CONFIG_DIR'"
+assert "nic-guard .service does NOT reference /tmp/.doppler (#6536 clash surface)" \
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q '/tmp/.doppler'"
+assert "nic-guard .service is root-run (no User=deploy without PrivateTmp=true)" \
+  "! grep -qE '^User=deploy' '$SVC' || grep -qE '^PrivateTmp=true' '$SVC'"
+assert "server.tf private_nic_guard_install writes DOPPLER_TOKEN= into /etc/default/web-private-nic-guard" \
+  "grep -qE 'DOPPLER_TOKEN=.*/etc/default/web-private-nic-guard' '$SERVER_TF'"
+
 echo
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

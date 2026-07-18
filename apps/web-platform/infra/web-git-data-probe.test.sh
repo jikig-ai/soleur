@@ -108,6 +108,28 @@ run_real "127.0.0.1:1"
 assert "real connect to a closed port => unreachable => NO ping" "[[ '$PINGED' == no ]]"
 assert "real connect to a closed port => fail-soft exit 0" "[[ '$EC' -eq 0 ]]"
 
+# --- static drift-guard: doppler-auth unit-start contract (#6548 unit-start fix) ----------
+# The unit runs `doppler run` as ROOT. Without Environment=HOME=/root the doppler CLI's
+# os.UserHomeDir() init dies "$HOME is not defined" BEFORE it exec's the probe; without a
+# DOPPLER_TOKEN in the per-host env file it cannot authenticate. Both gaps together made the
+# unit fail to start on web-1 (delivered-but-inert). Assert both, and that the fix does not
+# re-open the #6536 /tmp/.doppler ownership clash surface.
+echo "--- static: doppler-auth unit-start contract ---"
+SVC="$SCRIPT_DIR/web-git-data-probe.service"
+SERVER_TF="$SCRIPT_DIR/server.tf"
+assert "git-data .service sets Environment=HOME=/root (else doppler: \$HOME is not defined)" \
+  "grep -qE '^Environment=HOME=/root\$' '$SVC'"
+assert "git-data .service does NOT source webhook-deploy (deploy-owned; imports /tmp/.doppler)" \
+  "! grep -q 'webhook-deploy' '$SVC'"
+assert "git-data .service does NOT set DOPPLER_CONFIG_DIR (root doppler uses /root/.doppler)" \
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'DOPPLER_CONFIG_DIR'"
+assert "git-data .service does NOT reference /tmp/.doppler (#6536 clash surface)" \
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q '/tmp/.doppler'"
+assert "git-data .service is root-run (no User=deploy without PrivateTmp=true)" \
+  "! grep -qE '^User=deploy' '$SVC' || grep -qE '^PrivateTmp=true' '$SVC'"
+assert "server.tf git_data_probe_install writes DOPPLER_TOKEN= into /etc/default/web-git-data-probe" \
+  "grep -qE 'DOPPLER_TOKEN=.*/etc/default/web-git-data-probe' '$SERVER_TF'"
+
 echo
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

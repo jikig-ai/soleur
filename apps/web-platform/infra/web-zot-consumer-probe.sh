@@ -66,6 +66,27 @@ _ping() {
   curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || echo "[zot-probe] WARN: heartbeat ping FAILED (servable=200, url_present=yes)" >&2
 }
 
+_canary() {
+  # Positive-control canary for vector Source 4 (journald→Better Stack) liveness (#6438/#6548,
+  # luks-#6604 pattern). The probes are otherwise SILENT-ON-SUCCESS, and the heartbeats + the NIC
+  # guard's SOLEUR_PRIVATE_NIC line ship by DIRECT curl (independent of vector) — so a dead vector
+  # agent on web-1 (the exact gap this fix repairs) would be INVISIBLE. This emits a benign tagged
+  # stderr row on healthy runs, which journald ships under SyslogIdentifier=web-zot-consumer-probe
+  # via Source 4 — making Source-4 liveness a STEADY-STATE signal (its ABSENCE = the recurrence).
+  # One probe carries it: a dead agent kills ALL Source-4 tags, so a single canary proves the whole
+  # journald→vector path. Rate-limited to ~1/h (marker in /run tmpfs, resets on reboot) so the 60s
+  # timer cadence does not blow the log quota the VERBOSE gate deliberately avoids.
+  local m="${SOLEUR_PROBE_CANARY_MARKER:-/run/web-zot-consumer-probe.canary}" now last
+  now=$(date +%s 2>/dev/null || echo 0)
+  last=0
+  [ -f "$m" ] && last=$(cat "$m" 2>/dev/null || echo 0)
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  if [ $((now - last)) -ge 3600 ]; then
+    echo "[zot-probe] SOLEUR_PROBE_CANARY web-zot-consumer-probe ok ts=$now — vector Source 4 live (positive control)." >&2
+    printf '%s\n' "$now" > "$m" 2>/dev/null || true
+  fi
+}
+
 if [ -n "${SOLEUR_ZOT_PROBE_STATUS_OVERRIDE:-}" ]; then
   CODE="$SOLEUR_ZOT_PROBE_STATUS_OVERRIDE"
 else
@@ -78,6 +99,7 @@ fi
 case "$CODE" in
   200)
     _ping "$URL"
+    _canary
     [ -n "$VERBOSE" ] && echo "[zot-probe] servable (200): ${ENDPOINT}/v2/${REPO}/tags/list — pinged heartbeat." >&2
     exit 0
     ;;
