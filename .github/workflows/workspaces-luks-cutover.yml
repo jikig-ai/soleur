@@ -93,6 +93,11 @@ jobs:
           infra-dir: ${{ env.INFRA_DIR }}
           cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
           cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+          # server-ip == WEB_HOST (10.0.1.10, web-1 private IP): scopes the NAT
+          # redirect to the same address the Run step SSHes to, and enables the
+          # keyfile + WEB_HOST_SSH export the Run step consumes. No infra-state
+          # read here — the tunnel ingress (tunnel.tf) always lands on web-1.
+          server-ip: "10.0.1.10"
 
       - name: Run workspaces-luks cutover
         env:
@@ -109,6 +114,11 @@ jobs:
           # before the guidance prints.
           set +e
           set -uo pipefail
+          # Fail loud if the bridge did not export WEB_HOST_SSH — a bare `ssh`
+          # fallback would connect keyless as the runner user and time out /
+          # auth-fail confusingly. The bridge sets WEB_HOST_SSH when server-ip
+          # is passed (it is, above).
+          [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1. Check the bridge step logs."; exit 1; }
           # shellcheck disable=SC2086
           ${WEB_HOST_SSH:-ssh} "$WEB_HOST" "sudo DRY_RUN='${DRY_RUN}' ROLLBACK='${ROLLBACK}' bash -s" \
             < "${INFRA_DIR}/workspaces-cutover.sh"
@@ -117,6 +127,23 @@ jobs:
             echo "::error::workspaces-luks cutover exited $rc — the host-side EXIT trap auto-rolled-back to the plaintext mount (DP-6). See the emitted Sentry event (feature=workspaces-luks op=workspaces-luks-drift)."
             exit $rc
           fi
+
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+            kill "$CLOUDFLARED_PID" 2>/dev/null || true
+          fi
+          if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then
+            shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true
+          fi
+          if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
 
       - name: Cutover summary
         if: always()

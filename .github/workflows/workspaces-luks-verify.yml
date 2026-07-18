@@ -53,18 +53,27 @@ jobs:
           infra-dir: ${{ env.INFRA_DIR }}
           cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
           cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+          # server-ip == WEB_HOST (10.0.1.10): scopes the NAT redirect to the
+          # address the probe SSHes to + enables the WEB_HOST_SSH export. No
+          # infra-state read here.
+          server-ip: "10.0.1.10"
 
       - name: Re-assert /workspaces LUKS at-rest (read-only)
         env:
-          # The bridge exports WEB_HOST_SSH as the exact ssh invocation (key + ProxyCommand).
+          # The bridge exports WEB_HOST_SSH as the exact ssh invocation (key -i <keyfile> + the
+          # iptables NAT redirect scoped to server-ip; no ProxyCommand — the Go/bash client dials
+          # 10.0.1.10:22 which the kernel redirects to the local cloudflared forward).
           WEB_HOST: "10.0.1.10"
         run: |
           # set +e so a failing probe is captured in probe_rc (and reported) rather than exiting the
           # step at the ssh line under GitHub's inherited `-e` (which `set -uo pipefail` does not clear).
           set +e
           set -uo pipefail
+          # Fail loud if the bridge did not export WEB_HOST_SSH (bare ssh would connect keyless).
+          [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1. Check the bridge step logs."; exit 1; }
           # Run the baked daily probe read-only (it mutates nothing) — DP-11 reuse. It emits its
           # own discriminating Sentry event on any failed assert and exits non-zero.
+          # shellcheck disable=SC2086
           ${WEB_HOST_SSH:-ssh} "$WEB_HOST" 'sudo /usr/local/bin/luks-monitor'
           probe_rc=$?
           echo "luks-monitor probe rc=$probe_rc"
@@ -80,6 +89,23 @@ jobs:
             exit 1
           fi
           echo "workspaces-luks at-rest re-assert PASSED (blkid=crypto_LUKS, mapper mount, escrow ok, /api/health 200)."
+
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+            kill "$CLOUDFLARED_PID" 2>/dev/null || true
+          fi
+          if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then
+            shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true
+          fi
+          if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
 
       - name: Verify summary
         if: always()
