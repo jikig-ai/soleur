@@ -1,0 +1,195 @@
+# Expense-ledger verify_by expiry gate (executor).
+#
+# Trigger: this workflow has NO GitHub Actions `schedule:` key. The weekly
+# cadence (Mon 08:00 UTC) is Inngest-dispatched via
+# apps/web-platform/server/inngest/functions/cron-expenses-verify-by.ts
+# (workflow_dispatch). Inngest is the single scheduling substrate (ADR-033);
+# a raw `schedule:` YAML write is blocked by the new-scheduled-cron-prefer-inngest
+# PreToolUse hook. The deterministic checker runs HERE in the ephemeral runner
+# (the Inngest fn only dispatches).
+#
+# What it does: runs `scripts/expenses-verify-by-check.sh` (100% deterministic
+# bash — no LLM in the path), which parses the machine-readable `verify_by`
+# markers in knowledge-base/operations/expenses.md and:
+#   exit 0  clean   — no estimate marker past its verify_by date.
+#   exit 1  expired — >=1 estimate outlived its verify_by → file/update ONE
+#                     idempotent GitHub issue (constant title), offending rows
+#                     in the body. This is the #6589 defect class made visible.
+#   exit 2  anomaly — a malformed marker (missing owner/source, bad date, pipe)
+#                     or a broken-parser positive-sample failure → ::error:: +
+#                     step summary, fail the run loudly, file NO estimate issue.
+#
+# Observability: Design A (cost-aware, §3.5 of the plan) — NO Sentry cron
+# monitor. A Sentry cron seat costs $0.78/mo against the ~$7.78 PAYG headroom on
+# the very Sentry row this feature's sibling correction fixed (#6589); spending
+# it on a low-stakes weekly advisory checker is exactly the frugality this gate
+# enforces. Scheduler liveness rides cron-inngest-cron-watchdog +
+# EXPECTED_CRON_FUNCTIONS parity; a missed run only delays noticing an expired
+# estimate by a week, and the check is on-demand runnable. This mirrors
+# cron-dev-migration-drift (Design A), NOT domain-model-drift (Design B).
+#
+# To test manually: gh workflow run scheduled-expenses-verify-by.yml --ref main
+name: Expenses verify_by expiry check
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-expenses-verify-by
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  verify-by-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 1
+
+      - name: Run expenses verify_by check
+        id: check
+        run: |
+          # The runner's default shell is `bash --noprofile --norc -eo pipefail`.
+          # The checker exits 1 (expired) / 2 (anomaly) BY DESIGN, so keep
+          # errexit + pipefail OFF around it — otherwise the step aborts before
+          # the rc branch below can classify the result (mirrors
+          # scheduled-domain-model-drift.yml).
+          set +e +o pipefail
+          bash scripts/expenses-verify-by-check.sh > "$RUNNER_TEMP/verify-by.txt" 2>&1
+          rc=$?
+          cat "$RUNNER_TEMP/verify-by.txt"
+
+          {
+            echo "rc=$rc"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### expenses verify_by check"
+            echo ""
+            echo '```'
+            cat "$RUNNER_TEMP/verify-by.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # rc 2 (anomaly): a malformed marker or broken parser. Fail loud, file
+          # NO estimate issue (an anomaly is not a finding — it is a defect in
+          # the marker/parser that must be fixed before the gate can be trusted).
+          if [[ "$rc" == "2" ]]; then
+            echo "::error::expenses-verify-by check returned rc=2 (malformed marker / parser anomaly) — failing loudly, no estimate issue filed"
+            exit 1
+          fi
+
+          # rc other than 0/1/2 is an unexpected checker crash — fail loud too.
+          if [[ "$rc" != "0" && "$rc" != "1" ]]; then
+            echo "::error::expenses-verify-by check returned unexpected rc=$rc — failing loudly"
+            exit 1
+          fi
+
+      - name: Ensure expenses-verify-by label exists
+        if: steps.check.outputs.rc == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh label create "expenses-verify-by" --description "an estimate row in expenses.md has outlived its verify_by date (#6602)" --color "FBCA04" 2>/dev/null || true
+
+      - name: Create or update expiry issue
+        if: steps.check.outputs.rc == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # Constant idempotency title (keys the exact-title match). Timestamp +
+          # offending rows live in the body/comment ONLY, so re-runs update one
+          # issue rather than filing duplicates.
+          TITLE="expenses: unverified estimate past verify_by"
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+          RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+
+          # The checker's full stdout (already contains the "EXPIRED: ..." block
+          # naming each offending row).
+          EXISTING=$(gh issue list --label "expenses-verify-by" --state open \
+            --limit 100 \
+            --json number,title \
+            --jq ".[] | select(.title == \"${TITLE}\") | .number" \
+            | head -1)
+
+          if [[ -n "$EXISTING" ]]; then
+            {
+              echo "Estimate row(s) still past their \`verify_by\` date as of ${TIMESTAMP}."
+              echo ""
+              echo "<details><summary>Checker output</summary>"
+              echo ""
+              echo '```'
+              cat "$RUNNER_TEMP/verify-by.txt"
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+              echo "[Run #${RUN_NUMBER}](${RUN_URL})"
+            } > "$RUNNER_TEMP/issue-body.md"
+            gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/issue-body.md"
+            echo "Updated existing expiry issue #$EXISTING"
+          else
+            {
+              echo "## Unverified estimate past its verify_by date"
+              echo ""
+              echo "**Detected:** ${TIMESTAMP}"
+              echo "**Workflow:** [Run #${RUN_NUMBER}](${RUN_URL})"
+              echo ""
+              echo "One or more estimate rows in \`knowledge-base/operations/expenses.md\` carry a machine-readable \`verify_by\` marker whose date has passed. This is the #6589 defect class: an unverified estimate that outlived its own verification window."
+              echo ""
+              echo "<details><summary>Checker output (offending rows named)</summary>"
+              echo ""
+              echo '```'
+              cat "$RUNNER_TEMP/verify-by.txt"
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+              echo "## Next Steps"
+              echo ""
+              echo "1. Read the actual figure from the named source (the invoice email in \`ops@soleur.ai\`, or the vendor billing area)."
+              echo "2. Correct the amount in \`expenses.md\` and **remove** the \`verify_by\` marker (the marker IS the estimate flag — a verified row carries none)."
+              echo "3. If the figure genuinely cannot be verified yet, re-date the marker to the vendor's next real invoice cycle."
+              echo "4. Re-derive \`knowledge-base/finance/cost-model.md\` if a category subtotal shifts >10% or the corrected burn crosses a break-even boundary."
+              echo "5. This issue auto-closes on the next run once no estimate is past its \`verify_by\` date (re-run: \`gh workflow run scheduled-expenses-verify-by.yml --ref main\`)."
+              echo ""
+              echo "_Auto-created by the [expenses verify_by workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-expenses-verify-by.yml)._"
+            } > "$RUNNER_TEMP/issue-body.md"
+            gh issue create \
+              --title "$TITLE" \
+              --label "expenses-verify-by" \
+              --label "domain/finance" \
+              --milestone "Post-MVP / Later" \
+              --body-file "$RUNNER_TEMP/issue-body.md"
+            echo "Created new expiry issue"
+          fi
+
+      - name: Auto-close resolved expiry issue
+        if: steps.check.outputs.rc == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # Clean run: if a prior expiry issue is open, the estimates it named
+          # have since been corrected/re-dated — close it with a run link so the
+          # gate self-resolves (no operator gaze required, hr-no-dashboard-eyeball).
+          TITLE="expenses: unverified estimate past verify_by"
+          RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+          EXISTING=$(gh issue list --label "expenses-verify-by" --state open \
+            --limit 100 --json number,title \
+            --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1)
+          if [[ -n "$EXISTING" ]]; then
+            gh issue close "$EXISTING" --comment "All estimate rows are within their verify_by date as of this run — auto-closing. [Run]($RUN_URL)"
+            echo "Closed resolved expiry issue #$EXISTING"
+          fi

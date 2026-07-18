@@ -548,6 +548,35 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume.git_data_luks",
   "hcloud_volume_attachment.git_data_luks",
   "doppler_service_token.git_data",
+  // #6588 (ADR-119) — the ADDITIVE LUKS-at-rest /workspaces volume + its at-rest key +
+  // its scoped read-only token ALL ride the operator's `workspaces-luks-cutover` dispatch
+  // apply, NOT the #5566 per-PR-CI class. Same class as hcloud_volume.workspaces +
+  // hcloud_volume_attachment.workspaces above (already excluded), which is the very volume
+  // this one is cut over FROM.
+  //   This exclusion is load-bearing for MERGEABILITY, not just hygiene: `host_creates`
+  //   (#6416, destroy-guard-filter-web-platform.jq) is TYPE-scoped to hcloud_server OR
+  //   hcloud_volume and is evaluated BEFORE the destroy_count sum, so `[ack-destroy]`
+  //   deliberately cannot reach it. A net-new hcloud_volume that CI could plan would HALT
+  //   the per-PR apply path.
+  //   `doppler_service_token.workspaces_luks` is an OPERATOR-APPLIED token exception (see
+  //   OPERATOR_APPLIED_TOKEN_EXCLUSIONS below), same class as doppler_service_token.git_data:
+  //   it is minted into the operator-created `prd_workspaces_luks` Doppler config and read by
+  //   the web-1 HOST at unlock time — never published into a paired github_actions_secret. The
+  //   config does not exist until the operator creates it (runbook precondition), so CI cannot
+  //   apply it. The dedicated config is what keeps the key OUT of the `--config prd` download
+  //   that feeds `docker run --env-file` (CWE-522 — see workspaces-luks.tf).
+  "random_password.workspaces_luks",
+  "doppler_secret.workspaces_luks_key",
+  "hcloud_volume.workspaces_luks",
+  "hcloud_volume_attachment.workspaces_luks",
+  "doppler_service_token.workspaces_luks",
+  // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret. Same
+  // class as betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd
+  // (both excluded, applied together by the operator apply; the heartbeat is paused until the
+  // operator unpauses at cutover). NOT part of the five-resource cutover gate allow-set, and never
+  // rides the gated cutover -target set — so it does not affect the cutover destroy-guard.
+  "betteruptime_heartbeat.workspaces_luks",
+  "doppler_secret.workspaces_luks_heartbeat_url",
   // #6122 (ADR-096) — the zot registry host + its volume/network/firewall/creds/heartbeat
   // ALL ride the operator's initial full (untargeted) `terraform apply` + drift detector,
   // exactly like the git-data host above (CTO ruling 2026-07-06,
@@ -627,6 +656,15 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // coverage set, so this exclusions entry — not the -target line — is the load-bearing coverage).
   "doppler_secret.inngest_betterstack_logs_token",
   "doppler_service_token.inngest",
+  // #6545 — Grok Build dogfood host (headless Grok 4.5 trial). Gated by
+  // `enable_grok_dogfood` (default false). Per-PR CI cannot birth this host
+  // (#6416 host_creates tripwire). Provision is operator-local after free-slot
+  // check: `TF_VAR_enable_grok_dogfood=true` + targeted apply. Same class as
+  // registry/inngest/git-data: net-new host resources, never per-PR -target.
+  // Public IP only (no private-net join — review P1).
+  "hcloud_server.grok_dogfood",
+  "hcloud_firewall.grok_dogfood",
+  "hcloud_firewall_attachment.grok_dogfood",
 ]);
 // Operator-applied doppler_service_token exceptions to the "every token is CI-targeted"
 // assertion (#5566). A token belongs here ONLY when it is minted into an operator-created
@@ -635,6 +673,18 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
 // a github_actions_secret — that is the #5566 silent-un-applied class and MUST be targeted.
 const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   "doppler_service_token.git_data",
+  // #6588 (ADR-119) — minted into the operator-created `prd_workspaces_luks` config and read by
+  // the web-1 host at LUKS-unlock time (NOT published to a CI github_actions_secret). CI cannot
+  // apply it — the config does not exist until the operator creates it. Same class as
+  // doppler_service_token.git_data. The dedicated config is a SECURITY boundary, not hygiene:
+  // web-1's cloud-init runs `doppler secrets download --config prd` into the TMPENV that feeds
+  // `docker run --env-file`, so a key in shared `prd` would be readable via /proc/self/environ
+  // by the agent container whose own data it encrypts (CWE-522). The mechanism is inheritance
+  // DIRECTIONALITY (root → branch), NOT scope reduction: this token still resolves the full prd
+  // set, exactly like the "leaky prd_registry branch config" named below — see #6167 and
+  // learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md.
+  // It is free here because web-1 already carries a full-prd DOPPLER_TOKEN.
+  "doppler_service_token.workspaces_luks",
   // #6122 (ADR-096) — minted into the ISOLATED `soleur-registry` project's `prd` root config
   // (TF-created via doppler_project.registry in the operator full apply; its own root holds ONLY
   // the two ZOT tokens — true cross-project isolation, NOT the leaky `prd_registry` branch config
@@ -780,123 +830,50 @@ describe("concurrency-group + cloudflared-pin parity across the two workflows (#
     expect(wpi.cloudflaredVersion).toBe(dpf.cloudflaredVersion);
     expect(wpi.cloudflaredSha256).toBe(dpf.cloudflaredSha256);
   });
-});
 
-// ─── Sentry infra -target parity (#5884) ────────────────────────────────────
-// `apps/web-platform/infra/sentry/*.tf` is applied by apply-sentry-infra.yml via
-// an EXPLICIT `-target=` list (not a whole-directory apply), exactly like the
-// #5566 web-platform case above. A new sentry_issue_alert / sentry_cron_monitor /
-// sentry_uptime_monitor added to a .tf file but forgotten in that `-target` list
-// ships in code, passes `terraform validate`, and is NEVER applied to Sentry — an
-// inert alert/monitor with zero runtime signal. This bug has bitten twice already
-// (learning 2026-06-12-detector-cron-must-route-…; again in #5875's
-// sandbox_startup_failure). The #5566 guard above reads only the MAIN
-// apps/web-platform/infra/ tree + its two workflows; it never sees infra/sentry/
-// or apply-sentry-infra.yml. This block extends the identical mechanism
-// (extractAllResources ∪ extractAllTargets + a frozen exclusion Set) to the Sentry
-// apply pipeline. Reuses stripComments / extractAllResources / extractAllTargets.
-
-const SENTRY_INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra/sentry");
-const SENTRY_WORKFLOW = resolve(
-  REPO_ROOT,
-  ".github/workflows/apply-sentry-infra.yml",
-);
-
-// Import-only sentry_issue_alert placeholders (conditions_v2 = []), created in
-// Sentry via `terraform import` of the legacy configure-sentry-alerts.sh rules
-// (see issue-alerts.tf header + learning 2026-06-12-detector-cron-must-route-…).
-// They are DELIBERATELY absent from apply-sentry-infra.yml's -target set — a
-// target-scoped apply would try to CREATE a duplicate live rule. FROZEN: do NOT
-// grow. A NEW apply-created alert (real conditions_v2) must be TARGETED in the
-// workflow, never added here.
-const SENTRY_IMPORT_ONLY_EXCLUSIONS = new Set<string>([
-  "sentry_issue_alert.auth_callback_no_code_burst",
-  "sentry_issue_alert.auth_exchange_code_burst",
-  "sentry_issue_alert.auth_per_user_loop",
-  "sentry_issue_alert.auth_signout_burst",
-]);
-
-// Floor sentinel — 67 managed resources today (44 cron + 4 uptime + 19 alert).
-// `>=` (not `===`) so adding a resource raises the count without a brittle edit;
-// the parity assertion enforces correctness, this only guards a parser collapse
-// (regex/path regression that silently discovers zero resources).
-const SENTRY_MIN_RESOURCES = 60;
-
-function listSentryTfFiles(): string[] {
-  return readdirSync(SENTRY_INFRA_DIR)
-    .filter((f) => f.endsWith(".tf"))
-    .map((f) => resolve(SENTRY_INFRA_DIR, f))
-    .sort();
-}
-
-describe("terraform -target parity — Sentry infra issue-alerts/monitors (#5884)", () => {
-  let sentryResources: string[];
-  let sentryTargets: Set<string>;
-
-  beforeAll(() => {
-    expect(existsSync(SENTRY_INFRA_DIR)).toBe(true);
-    expect(existsSync(SENTRY_WORKFLOW)).toBe(true);
-    // NOTE: infra/sentry/ is a FLAT directory applied by a SINGLE workflow —
-    // listSentryTfFiles is non-recursive and only apply-sentry-infra.yml is scanned.
-    // No filter on resource TYPE: EVERY managed resource discovered under
-    // infra/sentry/ must be reachable by a -target line (mirrors the #5566 block).
-    // A future non-sentry_ resource (random_password, doppler_secret) added here
-    // must fail CLOSED — filtering to `sentry_` would silently skip it, re-opening
-    // the #5566 un-applied class. (`data "sentry_project"` is already excluded:
-    // extractAllResources matches `resource "…"`, not `data "…"`.)
-    sentryResources = listSentryTfFiles().flatMap((f) =>
-      extractAllResources(stripComments(readFileSync(f, "utf8"))),
-    );
-    sentryTargets = extractAllTargets(readFileSync(SENTRY_WORKFLOW, "utf8"));
-  });
-
-  test(`discovers >= ${SENTRY_MIN_RESOURCES} managed sentry resources (non-vacuity)`, () => {
-    expect(sentryResources.length).toBeGreaterThanOrEqual(SENTRY_MIN_RESOURCES);
-  });
-
-  test("every apply-created sentry resource is targeted (or a documented import-only exclusion)", () => {
-    const uncovered = sentryResources.filter(
-      (a) => !sentryTargets.has(a) && !SENTRY_IMPORT_ONLY_EXCLUSIONS.has(a),
-    );
-    // A non-empty list means a new sentry resource was added without a -target
-    // line (the inert-alert class) — add the -target to apply-sentry-infra.yml,
-    // or (only for a genuine import-only placeholder) add it to
-    // SENTRY_IMPORT_ONLY_EXCLUSIONS.
-    expect(uncovered).toEqual([]);
-  });
-
-  test("the #5875 regression anchor (sandbox_startup_failure) stays targeted", () => {
-    expect(
-      sentryTargets.has("sentry_issue_alert.sandbox_startup_failure"),
-    ).toBe(true);
-  });
-
-  test("the #5884 regression anchor (github_webhook_founder_ambiguous) stays targeted", () => {
-    // The apply-created alert whose missing -target line this PR fixed — the exact
-    // resource that surfaced the guard's third real inert-alert instance. Pin it so
-    // a future workflow edit cannot silently re-drop it back to inert.
-    expect(
-      sentryTargets.has("sentry_issue_alert.github_webhook_founder_ambiguous"),
-    ).toBe(true);
-  });
-
-  test("the 4 import-only auth_* placeholders are present in .tf yet NOT targeted", () => {
-    for (const a of SENTRY_IMPORT_ONLY_EXCLUSIONS) {
-      expect(sentryResources).toContain(a);
-      expect(sentryTargets.has(a)).toBe(false);
+  // #6604: the pin is now replicated into the git-data + workspaces-luks cutover/verify workflows
+  // (all feed the same cf-tunnel-ssh-bridge composite). A pin bump that updated only the two apply
+  // workflows would leave these on a stale version/SHA — the bridge download fails CLOSED (aborts),
+  // not a silent hole, hence this is a drift tripwire. Assert EVERY workflow carrying the pin matches
+  // the canonical (apply-web-platform-infra) value.
+  test("the cloudflared pin matches across ALL workflows that declare it (#6604)", () => {
+    const grabPin = (rel: string) => {
+      const src = readFileSync(resolve(REPO_ROOT, rel), "utf8");
+      return {
+        version: /^\s*CLOUDFLARED_VERSION:\s*"([^"]+)"/m.exec(src)?.[1] ?? null,
+        sha256: /^\s*CLOUDFLARED_SHA256:\s*"([^"]+)"/m.exec(src)?.[1] ?? null,
+      };
+    };
+    const PIN_WORKFLOWS = [
+      ".github/workflows/git-data-cutover.yml",
+      ".github/workflows/workspaces-luks-cutover.yml",
+      ".github/workflows/workspaces-luks-verify.yml",
+    ];
+    for (const wf of PIN_WORKFLOWS) {
+      const pin = grabPin(wf);
+      expect(pin.version, `${wf} CLOUDFLARED_VERSION`).toBe(wpi.cloudflaredVersion);
+      expect(pin.sha256, `${wf} CLOUDFLARED_SHA256`).toBe(wpi.cloudflaredSha256);
     }
   });
-
-  test("guard FAILS on a synthetic un-targeted apply-created alert (non-vacuity)", () => {
-    const synthetic = `resource "sentry_issue_alert" "synthetic_forgotten_alert" { project = "x" }`;
-    const parsed = extractAllResources(stripComments(synthetic));
-    expect(parsed).toEqual(["sentry_issue_alert.synthetic_forgotten_alert"]);
-    const uncovered = parsed.filter(
-      (a) => !sentryTargets.has(a) && !SENTRY_IMPORT_ONLY_EXCLUSIONS.has(a),
-    );
-    expect(uncovered).toEqual(["sentry_issue_alert.synthetic_forgotten_alert"]);
-  });
 });
+
+// ─── Sentry infra -target parity (#5884) — REMOVED ──────────────────────────
+// This block asserted that every resource under apps/web-platform/infra/sentry/
+// appeared in apply-sentry-infra.yml's `-target=` list, with a frozen exclusion Set
+// for the import-only auth_* placeholders (a target-scoped apply would try to CREATE
+// a duplicate of an imported rule).
+//
+// apply-sentry-infra.yml now plans that root FULL: the `-target=` list is gone, so
+// the plan universe is `state UNION config` and `declared ≡ applied` by construction.
+// Every assertion here depended on a target set that no longer exists and could only
+// be restated as a tautology. The inert-alert class it guarded is now structurally
+// impossible, and the import-only placeholders need no exclusion — a full plan
+// reconciles them from state rather than trying to re-create them.
+//
+// This retirement is SCOPED TO THE SENTRY ROOT ONLY. The #5566 web-platform block
+// above and the #5887 `moved`-block parity below cover DIFFERENT infra roots that
+// still apply via `-target=`; their guards remain load-bearing. Reintroduce a Sentry
+// block here only if apply-sentry-infra.yml ever regains a `-target=` flag.
 
 // ─── `moved`-block / -target parity (#5887) ─────────────────────────────────
 // Terraform processes EVERY `moved {}` block on any plan/apply. Under a
@@ -1492,5 +1469,64 @@ describe("betteruptime_team_member.ops is a per-merge -targeted managed resource
     expect(OPERATOR_APPLIED_EXCLUSIONS.has("betteruptime_team_member.ops")).toBe(
       false,
     );
+  });
+});
+
+// ─── DP-11 F8 guard: every github_repository_environment must gate on a NON-EMPTY
+//     required-reviewer set. A zero-reviewer environment auto-approves, silently
+//     defeating the human ack these environments exist to enforce on irreversible
+//     cutover dispatches (inngest arm/rollback, the /workspaces LUKS freeze #6604).
+//     Terraform pins reviewers.users, but nothing else fails RED pre-merge if a
+//     future edit empties it — this test is that guard. ────────────────────────
+describe("github_repository_environment declares a non-empty reviewers.users (DP-11 F8)", () => {
+  test("every cutover-gate environment in the infra root gates on ≥1 reviewer", () => {
+    const header =
+      /resource\s+"github_repository_environment"\s+"([A-Za-z0-9_]+)"\s*\{/g;
+    const envs: { name: string; users: string }[] = [];
+    for (const file of listInfraTfFiles()) {
+      const stripped = stripComments(readFileSync(file, "utf8"));
+      let m: RegExpExecArray | null;
+      while ((m = header.exec(stripped)) !== null) {
+        const name = m[1];
+        const openBrace = header.lastIndex - 1; // index of the resource `{`
+        let depth = 0;
+        let end = -1;
+        for (let i = openBrace; i < stripped.length; i++) {
+          if (stripped[i] === "{") depth++;
+          else if (stripped[i] === "}") {
+            depth--;
+            if (depth === 0) {
+              end = i;
+              break;
+            }
+          }
+        }
+        if (end === -1) {
+          throw new Error(
+            `Unbalanced braces for github_repository_environment.${name}`,
+          );
+        }
+        const body = stripped.slice(openBrace, end + 1);
+        const rev = body.match(/reviewers\s*\{[^}]*users\s*=\s*\[([^\]]*)\]/);
+        envs.push({ name, users: (rev?.[1] ?? "").trim() });
+      }
+    }
+
+    // Fail-closed: the guard is vacuous if the extractor matches nothing. Assert it
+    // actually saw the known cutover-gate environments before trusting the loop.
+    const names = envs.map((e) => e.name);
+    expect(names).toContain("workspaces_luks_cutover");
+    expect(names).toContain("inngest_cutover");
+
+    for (const env of envs) {
+      const ids = env.users
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      expect(
+        ids.length,
+        `github_repository_environment.${env.name} has an EMPTY reviewers.users — a zero-reviewer environment auto-approves (DP-11 F8)`,
+      ).toBeGreaterThan(0);
+    }
   });
 });

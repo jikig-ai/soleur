@@ -608,8 +608,11 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
 # so the margin is kept tight to the cadence rather than widened. max_runtime_minutes = 8
 # matches the job's `timeout-minutes: 8`. Slug MUST match the `monitor-slug` in the
 # workflow's sentry-heartbeat step (parity-asserted by
-# apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts, which also
-# asserts this resource is in the apply-sentry-infra.yml -target= allowlist).
+# apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts). That test no
+# longer asserts membership of an apply-sentry-infra.yml `-target=` allowlist: since
+# #6589 the workflow plans the full root, so declaring the resource here IS applying it.
+# The slug-parity half of that test remains load-bearing — a slug that drifts from the
+# workflow's `monitor-slug` still yields a monitor nothing checks into.
 resource "sentry_cron_monitor" "scheduled_inngest_health" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
@@ -1003,6 +1006,51 @@ resource "sentry_cron_monitor" "zot_restart_loop_alarm" {
   name                    = "scheduled-zot-restart-loop"
   schedule                = { crontab = "*/30 * * * *" }
   checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Executor liveness for the nightly Supabase advisor RLS gate (#3366).
+# Dispatched by apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts;
+# the check-in is posted at the END of .github/workflows/scheduled-supabase-advisor-scan.yml
+# and ONLY for Inngest-sourced runs, so a manual smoke-test dispatch cannot forge
+# liveness while the dispatcher is dead.
+#
+# `name` MUST stay slug-shaped: Sentry derives the monitor slug by slugifying
+# `name`, and the workflow's `monitor-slug` input must equal that derived slug.
+# scan-workflow.test.sh asserts the two agree.
+#
+# 03:37 UTC is deliberate: 20 minutes after the `17 * * * *` hourly Inngest-RLS
+# self-heal, which minimizes the window in which the advisor is legitimately
+# stale and the gate would have to fall back to its object-scoped carve-out.
+# A MISSED check-in is what covers a dead dispatch, so the margin is what makes
+# "Inngest never fired" visible rather than silent.
+resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-supabase-advisor-scan"
+  schedule                = { crontab = "37 3 * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# #6549 item 2 — liveness for the source-vs-live Better Stack heartbeat reconcile job
+# (scheduled-terraform-drift.yml → heartbeat-live-reconcile). A GHA-workflow-fired
+# heartbeat (no Inngest counterpart); slug mirrors the workflow's `sentry-heartbeat`
+# check-in, so sentry-monitor-iac-parity.test.ts's code→IaC GHA-slug guard is satisfied.
+# checkin_margin_minutes=60 tracks the Inngest-dispatch cadence (≤2-3 min jitter), NOT
+# raw GHA `schedule:` drift — mirrors scheduled_terraform_drift, the same dispatch.
+resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-heartbeat-reconcile"
+  schedule                = { crontab = "0 6,18 * * *" }
+  checkin_margin_minutes  = 60
   max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1

@@ -1,0 +1,290 @@
+# Nightly gate: no table in a Supabase `public` schema may be missing RLS (#3366).
+#
+# TRIGGER: this workflow is `workflow_dispatch:`-only. The nightly fire is
+# dispatched by apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts,
+# NOT by a GitHub Actions `schedule:` trigger. Inngest is the single scheduling
+# substrate (ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn);
+# GHA remains the EXECUTOR because the scan needs a Supabase cloud-admin PAT that
+# must stay in an ephemeral runner and off the long-lived app host.
+#
+# NOTE ON COMMENT STYLE: the `new-scheduled-cron-prefer-inngest` hook scans this
+# file's whole body with an UNANCHORED regex, so a bare space-preceded
+# `schedule:` token even inside a comment would deny the write. Every such token
+# here is backtick-wrapped deliberately. Do not unwrap them.
+#
+# To smoke-test manually: gh workflow run scheduled-supabase-advisor-scan.yml
+# A DEFAULT manual run scans and files issues exactly as a nightly one does, but
+# does not post the Sentry check-in (see the final step), so routine smoke-testing
+# cannot accidentally satisfy the monitor window while the dispatcher is dead.
+# This is a guard against ACCIDENT, not a security control: `source` is a
+# caller-supplied input with no server-side binding to the dispatcher, so anyone
+# with actions: write can pass `-f source=inngest` and post a real check-in.
+# Making that structural would mean gating on the dispatching App's identity;
+# it is not worth pinning a fragile actor literal here, and the threat model is
+# an operator fooling their own monitor.
+name: Supabase Advisor Scan (public tables without RLS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Dispatch source. Only 'inngest' may post the liveness check-in."
+        required: false
+        default: manual
+        type: string
+
+concurrency:
+  group: supabase-advisor-scan
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Scan all Supabase projects
+        id: scan
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          # No `set -e`: a non-zero from one ref must NOT abort the loop. An
+          # identity failure on the first ref would otherwise leave both prod
+          # refs unscanned while the issue body read like a full scan.
+          set -uo pipefail
+
+          # ref -> expected project name. The pairing is the guard: a rotated or
+          # mis-pinned ref resolves to the wrong name and fails closed.
+          # Verified live 2026-07-16 — note the prd project is named
+          # `soleur-web-platform`, NOT `soleur-prd`.
+          REFS=(
+            "mlwiodleouzwniehynfz:soleur-dev"
+            "ifsccnjhymdmidffkzhl:soleur-web-platform"
+            "pigsfuxruiopinouvjwy:soleur-inngest-prd"
+          )
+
+          REPORT="${RUNNER_TEMP}/scan-report.md"
+          : > "$REPORT"
+
+          # Every ref starts as not_scanned and is overwritten only by a real
+          # result, so a catastrophic abort renders honestly instead of looking
+          # like a completed clean scan.
+          declare -A STATUS
+          for pair in "${REFS[@]}"; do STATUS["${pair##*:}"]="not_scanned"; done
+
+          class_a=""   # a real RLS violation (or an unexplained disagreement)
+          class_b=""   # the scan itself could not be trusted
+          first_mode=""
+          first_detail=""
+
+          for pair in "${REFS[@]}"; do
+            ref="${pair%%:*}"; name="${pair##*:}"
+            echo "::group::${name} (${ref})"
+            out="$(REF="$ref" PROJECT_NAME="$name" bash scripts/supabase-advisor-scan.sh 2>&1)"
+            rc=$?
+            printf '%s\n' "$out"
+            echo "::endgroup::"
+
+            mode="$(printf '%s' "$out" | grep -m1 '^fail_mode=' | cut -d= -f2-)"
+            detail="$(printf '%s' "$out" | grep -m1 '^fail_detail=' | cut -d= -f2-)"
+
+            if [[ "$rc" -eq 0 ]]; then
+              if printf '%s' "$out" | grep -qF 'warn=stale_advisor'; then
+                STATUS["$name"]="clean (advisor lag warning)"
+              else
+                STATUS["$name"]="clean"
+              fi
+            else
+              # An abort so early that the script emitted nothing is still a
+              # failure — never let a missing fail_mode read as success.
+              [[ -z "$mode" ]] && mode="unknown_error"
+              STATUS["$name"]="FAILED: ${mode}"
+              case "$mode" in
+                violation_confirmed|confirm_indeterminate) class_a="${class_a} ${name}" ;;
+                *) class_b="${class_b} ${name}" ;;
+              esac
+              if [[ -z "$first_mode" ]]; then first_mode="$mode"; first_detail="$detail"; fi
+            fi
+
+            # Markdown code fences use ESCAPED backticks inside double quotes.
+            # A backtick inside a SINGLE-quoted printf trips shellcheck SC2016
+            # ("expressions don't expand in single quotes") — the repo's
+            # established workaround is to keep backticks out of single-quoted
+            # printf strings entirely.
+            {
+              printf '### %s (%s)\n\n' "$name" "$ref"
+              printf -- '- Status: %s\n\n' "${STATUS[$name]}"
+              printf "<details><summary>Scan output</summary>\n\n\`\`\`\n%s\n\`\`\`\n\n</details>\n\n" "$out"
+            } >> "$REPORT"
+          done
+
+          {
+            echo "## Per-project status"
+            echo ""
+            for pair in "${REFS[@]}"; do
+              printf -- '- **%s**: %s\n' "${pair##*:}" "${STATUS[${pair##*:}]}"
+            done
+            echo ""
+          } > "${RUNNER_TEMP}/summary.md"
+          cat "$REPORT" >> "${RUNNER_TEMP}/summary.md"
+
+          # A real violation outranks an infrastructure failure: if both occur,
+          # the operator must be paged for the data-exposure case.
+          if [[ -n "$class_a" ]]; then
+            echo "issue_class=A" >> "$GITHUB_OUTPUT"
+          elif [[ -n "$class_b" ]]; then
+            echo "issue_class=B" >> "$GITHUB_OUTPUT"
+          fi
+          { echo "failure_mode=${first_mode}"; echo "failure_detail=${first_detail}"; } >> "$GITHUB_OUTPUT"
+
+          if [[ -n "$class_a" || -n "$class_b" ]]; then
+            echo "::error::supabase-advisor-scan failed:${class_a}${class_b} (first mode: ${first_mode})"
+            exit 1
+          fi
+          echo "All three projects clean: no public table without RLS."
+
+      - name: File or comment tracking issue (failure)
+        # UNCONDITIONAL `if: failure()`. The precedent this is ported from also
+        # requires `steps.x.outputs.failure_mode != ''`, which is a trap: an
+        # abort that exits before the output is written (an unbound-var under
+        # `set -u`, a syntax error, an OOM-kill) makes the condition false, so
+        # the run goes red having filed NOTHING — no issue, no dedupe, no
+        # auto-close. Defaulting the mode instead means every such failure files
+        # something. (Runner eviction is NOT in this set — no step runs at all
+        # there, so nothing files; that case is covered by the missed check-in.)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_CLASS: ${{ steps.scan.outputs.issue_class || 'B' }}
+          FAIL_MODE: ${{ steps.scan.outputs.failure_mode || 'unknown_error' }}
+          FAIL_DETAIL: ${{ steps.scan.outputs.failure_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # TWO CLASSES, TWO TITLES — the separation is load-bearing, not tidiness.
+          # With a single title, an expired PAT would file "public table without
+          # RLS" tagged type/security + p1-high, paging the operator for a data
+          # exposure that is really a token renewal. Worse, a LATER genuine
+          # violation would then only *comment* on that token issue, and renewing
+          # the token would auto-close an issue whose body describes an unfixed
+          # RLS violation.
+          if [[ "$ISSUE_CLASS" == "A" ]]; then
+            TITLE="[ci/supabase-advisor] public table without RLS"
+            LABELS=(--label "ci/supabase-advisor" --label "type/security" --label "priority/p1-high")
+          else
+            TITLE="[ci/supabase-advisor] scan failed"
+            LABELS=(--label "ci/supabase-advisor" --label "priority/p2-medium")
+          fi
+
+          gh label create "ci/supabase-advisor" --repo "$GH_REPO" \
+            --description "Nightly Supabase advisor/catalog RLS gate" --color "B60205" 2>/dev/null || true
+
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            if [[ "$ISSUE_CLASS" == "A" ]]; then
+              printf '## A public table has no row-level security\n\n'
+              printf 'The authoritative catalog assertion found at least one table in a public schema with RLS disabled, or the advisor and the catalog disagree in a way that cannot be explained by advisor lag. The offending table(s) are named in the per-project status below.\n\n'
+              printf 'On soleur-dev and soleur-web-platform, anyone holding the project anon key (which ships in the client bundle by design) may be able to read it.\n\n'
+              printf 'On soleur-inngest-prd, check the grants FIRST: a new Inngest table is created with anon/authenticated grants already revoked by ALTER DEFAULT PRIVILEGES (ADR-030 I8), so RLS-off there is not automatically an exposure and the hourly self-heal may close it without action.\n\n'
+            else
+              printf '## The Supabase advisor scan could not be trusted\n\n'
+              printf 'This is an INFRASTRUCTURE failure of the gate itself, not a known data exposure. It is still urgent: while the scan cannot run, nothing is watching for a public table without RLS.\n\n'
+            fi
+            printf -- '- Failure mode: %s\n' "$FAIL_MODE"
+            printf -- '- Detail: %s\n' "$FAIL_DETAIL"
+            printf -- '- Detected at: %s\n' "$NOW"
+            printf -- '- Run log: %s\n\n' "$RUN_URL"
+            cat "${RUNNER_TEMP}/summary.md" 2>/dev/null || printf '_No per-project summary was produced — the run aborted before the scan loop completed._\n'
+            printf '\n### Remediation (no SSH required)\n\n'
+            if [[ "$ISSUE_CLASS" == "A" ]]; then
+              printf '1. Identify the table from the per-project status above.\n'
+              printf '2. Enable RLS on it and add the policies it needs.\n'
+              printf '3. Re-run this workflow to confirm; it auto-closes this issue when clean.\n'
+            else
+              printf '1. advisor_unreachable / identity_unreachable: the SUPABASE_ACCESS_TOKEN repository secret is likely expired or revoked. Mint a new PAT and update the secret.\n'
+              printf '2. advisor_malformed / catalog_malformed: the Management API contract may have drifted. Compare a live response against the parse in scripts/supabase-advisor-scan.sh.\n'
+              printf '3. identity_mismatch: a project ref was rotated or mis-pinned. Reconcile the ref-to-name pairs in this workflow.\n'
+              printf '4. Re-run this workflow; it auto-closes this issue when clean.\n'
+            fi
+          } > "$BODY_FILE"
+
+          # Dedupe by LABEL, not `--search`: the search API can return empty
+          # under some token contexts, which would file a fresh duplicate every
+          # single night. Each title dedupes independently.
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/supabase-advisor" --state open \
+            --limit 100 --json number,title \
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              "${LABELS[@]}" --milestone "Post-MVP / Later" --body-file "$BODY_FILE"
+          fi
+
+      - name: Auto-close tracking issues (success)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # Close BOTH titles independently — recovering from a token expiry must
+          # not close a violation issue, and vice versa.
+          for TITLE in "[ci/supabase-advisor] public table without RLS" "[ci/supabase-advisor] scan failed"; do
+            STALE=$(gh issue list --repo "$GH_REPO" --label "ci/supabase-advisor" --state open \
+              --limit 100 --json number,title \
+              --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+            if [[ -n "$STALE" ]]; then
+              gh issue close "$STALE" --repo "$GH_REPO" \
+                --comment "All three Supabase projects verified clean again at ${NOW}. Run: ${RUN_URL}"
+            fi
+          done
+
+      # LIVENESS. Two invariants, both learned the hard way:
+      #
+      # 1. The check-in fires at the END of the GHA run, never from the Inngest
+      #    function at dispatch time. A dispatch-time check-in would mark the
+      #    monitor green while covering only the first hop, leaving "dispatch
+      #    accepted, workflow never ran" invisible — the same fail-open shape as
+      #    the jq `?`, relocated to the orchestration layer.
+      #
+      # 2. Only an Inngest-sourced run may post it. This workflow is manually
+      #    dispatchable and we advertise that as a smoke test, so without this
+      #    gate any manual run would post `ok` and satisfy the check-in window —
+      #    forging the liveness signal while the dispatcher was dead for weeks.
+      #    Manual runs still scan and still file issues; they just cannot lie
+      #    about liveness.
+      #
+      # 3. The check-in reports LIVENESS, not the work result. A confirmed RLS
+      #    violation (class A) posts `ok`: the scan ran end-to-end and did its
+      #    job, and the violation already has its own p1 issue. Posting `error`
+      #    there would pin the monitor red for as long as the violation is
+      #    unfixed — and while it is pinned red, a dispatcher that then dies is
+      #    invisible, because the monitor is already alarming. That is the
+      #    documented liveness-vs-artifact distinction; the liveness channel must
+      #    not be consumed by a work result that has its own paging route.
+      #    `error` is therefore reserved for class B (the scan itself could not
+      #    be trusted) and for an abort (outcome != success with no class), which
+      #    is itself an infrastructure fault.
+      - name: Sentry check-in (final)
+        if: always() && github.event.inputs.source == 'inngest'
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-supabase-advisor-scan
+          status: ${{ (steps.scan.outcome == 'success' || steps.scan.outputs.issue_class == 'A') && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

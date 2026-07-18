@@ -58,15 +58,37 @@ readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enfor
 # it exists on the target version first; v3.1.1 `verify` has neither `--bundle` nor
 # `--new-bundle-format`). See ADR-087.
 # Host paths for the private-GHCR pull credential + the pinned offline trust root.
-# Overridable in tests; default to the real deploy-host layout. The docker config is
-# written by ghcr_prelude_and_login (host pull auth) and mounted :ro into the
-# ephemeral cosign verifier — it MUST carry an inline `auths."ghcr.io".auth` entry,
-# NEVER a credStore/credHelpers indirection (the distroless cosign image has no
-# credential helper; an indirection silently UNAUTHORIZEs the .sig fetch — ADR-087).
+#
+# #6565 (EROFS repair): `docker login` persists creds to $DOCKER_CONFIG/config.json. The old
+# default $HOME/.docker (/home/deploy/.docker) sits under webhook.service's ProtectHome=read-only
+# mount and is NOT in its ReadWritePaths, so the login AUTHENTICATES but cannot PERSIST the cred
+# → EROFS ("error saving credentials"; measured on both web hosts: class=cred_store
+# kw=errsaving,erofs, errno_chars=22). `docker pull` survived only off the boot-baked auths entry
+# (a latent trap: broken on the next rotation/fresh boot that needs a working login). Relocate the
+# config dir onto /mnt/data — already a ReadWritePath, already mounted — per the 2026-04-06
+# ProtectHome-relocate precedent (which names ~/.docker as the offender class and argues AGAINST
+# punching a home write-hole). `docker login` with no --config honors DOCKER_CONFIG as the config
+# *directory*, so exporting it relocates ALL login sites (GHCR prelude, zot gate, refetch-relogin)
+# and the cosign :ro mount at once. DEPLOY_DOCKER_CONFIG_DIR stays overridable for tests.
+readonly DEPLOY_DOCKER_CONFIG_DIR="${DEPLOY_DOCKER_CONFIG_DIR:-/mnt/data/deploy-docker}"
+export DOCKER_CONFIG="$DEPLOY_DOCKER_CONFIG_DIR"
+# Fail-soft: a transient mkdir/chmod must not `set -e`-abort the deploy — a resulting login
+# failure is then NAMED by the existing _login_kw/_login_hatch telemetry (kw=enoent, distinct
+# from the old erofs). /mnt/data is itself a ReadWritePath, so if the block volume is unmounted
+# the write fails safe onto the root fs (login still works; per-deploy re-login self-heals).
+mkdir -p "$DOCKER_CONFIG" 2>/dev/null || true
+chmod 700 "$DOCKER_CONFIG" 2>/dev/null || true
+# The config FILE is written by ghcr_prelude_and_login (host pull auth) and mounted :ro into the
+# ephemeral cosign verifier — it MUST carry an inline `auths."ghcr.io".auth` entry, NEVER a
+# credStore/credHelpers indirection (the distroless cosign image has no credential helper; an
+# indirection silently UNAUTHORIZEs the .sig fetch — ADR-087). Relocation changes the PATH only,
+# not this content contract. Single source of truth: DERIVE the mount-READ path from the exported
+# DOCKER_CONFIG so the login-WRITE path ($DOCKER_CONFIG/config.json) and the cosign mount-READ
+# path can never be split by an independent override.
+readonly GHCR_DOCKER_CONFIG="${DOCKER_CONFIG}/config.json"
 # The trusted root reaches the host via the baked HOST-image host-scripts set (fresh
 # hosts) + terraform_data.cosign_trusted_root SSH delivery (running host) — see
 # server.tf. It is NEVER baked into the DEPLOY image (circular trust).
-readonly GHCR_DOCKER_CONFIG="${GHCR_DOCKER_CONFIG:-/home/deploy/.docker/config.json}"
 readonly COSIGN_TRUSTED_ROOT_HOST="${COSIGN_TRUSTED_ROOT_HOST:-/etc/soleur/cosign-trusted-root.json}"
 
 # Self-hosted zot registry (#6122/ADR-096). The pull path prefers zot ONLY when it is
@@ -531,6 +553,24 @@ _pull_result_is_auth_denied() {
   printf '%s' "${1:-}" | grep -qiE 'unauthorized|authentication required|denied|forbidden'
 }
 
+# _pull_result_is_transient <stderr-content>: the SINGLE source of truth for "is this docker
+# pull stderr a TRANSIENT/network failure that a warm retry can absorb?" (#6525). Same anti-drift
+# contract as _pull_result_is_auth_denied: BOTH pull_failure_event's `network` classifier arm AND
+# the pull-site retry gate (_ghcr_pull_or_recover) call this predicate, so they agree BY
+# CONSTRUCTION — a second inline copy of the regex would drift. Classifies the stderr CONTENT ($1),
+# never a file path. The token set is verified NON-OVERLAPPING with the auth-denied class handled by
+# _pull_result_is_auth_denied above AND with the manifest-unknown/not-found class handled by
+# pull_failure_event's manifest arm: note the transient `no such host` shares a `no such` prefix
+# with the manifest `no such manifest`, so this anchors on the full host token and precedence stays
+# auth then manifest then transient in pull_failure_event. `timeout` subsumes i/o timeout / TLS
+# handshake timeout / connection timeout; case-insensitive word-boundary EOF subsumes `unexpected
+# EOF`. Deepen docker-stderr research adds the canonical Go timeout (deadline-exceeded), the
+# registry-5xx unexpected-status shape, the net/http client cancel-while-waiting shape, and the
+# DNS-resolver misbehaving shape.
+_pull_result_is_transient() {
+  printf '%s' "${1:-}" | grep -qiE 'context deadline exceeded|timeout|timed out|temporary failure|no route|connection refused|connection reset|network is unreachable|no such host|server misbehaving|request canceled while waiting|received unexpected http status: 5|\bEOF\b'
+}
+
 # pull_failure_event: loud, no-SSH page on an authenticated PRIVATE-pull denial
 # (#6005). Every deploy + fresh boot now hard-depends on a valid GHCR credential
 # (M2 SPOF), so a pull auth failure must be Sentry/Better-Stack-diagnosable, not
@@ -546,7 +586,7 @@ pull_failure_event() {
   local ref="$1" detail_raw="${2:-}" recovery_stage="${3:-}" pull_result
   if   _pull_result_is_auth_denied "$detail_raw"; then pull_result="auth_denied"
   elif printf '%s' "$detail_raw" | grep -qiE 'manifest unknown|not found|no such manifest'; then pull_result="manifest_unknown"
-  elif printf '%s' "$detail_raw" | grep -qiE 'timeout|timed out|temporary failure|no route|connection refused'; then pull_result="network"
+  elif _pull_result_is_transient "$detail_raw"; then pull_result="network"   # #6525: shared predicate (was a narrower inline regex); precedence stays auth → manifest → transient. Tag value `network` UNCHANGED (Sentry grouping / zot_mirror_fallback_rate key on it). Widens the `network` set vs pre-#6525 — see the recovery gate + reclassification-safety check.
   else pull_result="pull_failed"
   fi
   logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result recovery_stage=${recovery_stage:-none}"
@@ -597,11 +637,14 @@ pull_auth_recovery_event() {
 }
 
 # registry_pull_event <registry> <image_kind> <tag>: success breadcrumb recording
-# WHICH registry served a pull (#6122/ADR-096). registry ∈ {zot, ghcr-fallback};
+# WHICH registry served a pull (#6122/ADR-096). registry ∈ {zot, ghcr-fallback, local-cache};
 # image_kind ∈ {web, inngest}. The soak gate (scripts/followthroughs/zot-soak-6122.sh)
 # counts registry=ghcr-fallback events per image — a healthy post-cutover fleet emits
 # ONLY registry=zot, so ghcr-fallback is level=warning (the watched signal) and zot is
-# level=info. Emitted ONLY when zot was ACTUALLY attempted (ZOT_ACTIVE=1); the pure-dark
+# level=info. local-cache (#6512) is the last-resort same-version reload rescue — BOTH
+# registries failed to serve an already-running image — so it too is level=warning, watched
+# by the DEDICATED local_cache_reload_rate issue-alert (NOT the zot soak: local-cache is not
+# a GHCR-served event). Emitted ONLY when zot was ACTUALLY attempted (ZOT_ACTIVE=1); the pure-dark
 # pre-activation period emits nothing, so the flip stays a strict no-op until zot is
 # live. Fail-open, same Sentry store transport as pull_failure_event.
 registry_pull_event() {
@@ -611,7 +654,7 @@ registry_pull_event() {
     local payload
     payload="$(jq -n --arg reg "$registry" --arg img "$image_kind" --arg t "$tag" \
       '{message: ("image pulled from " + $reg + " (" + $img + ":" + $t + ")"),
-        level: (if $reg == "ghcr-fallback" then "warning" else "info" end),
+        level: (if ($reg == "ghcr-fallback" or $reg == "local-cache") then "warning" else "info" end),
         platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-pull", registry: $reg, image: $img},
         extra: {tag: $t}}' 2>/dev/null)" || return 0
@@ -624,7 +667,445 @@ registry_pull_event() {
   fi
 }
 
-# zot_gate_degraded_event <reason>: WARNING beacon for when zot is CONFIGURED
+# ============================ #6497 docker-login diagnostics ============================
+# The gate could not name its own failure: every deploy since 08:27Z emitted
+# `class=unclassified http=none`, and `unclassified` was MEASURED to hold >=4 distinct modes
+# (helper-missing / empty-stderr / disk-full / non-TTY), so observing it discriminated almost
+# nothing. The block below buys the datum. It does NOT attempt the repair — the cause is not
+# yet known and a guess ships to every web host.
+#
+# THE SECURITY PROPERTY, stated as the thing that is actually true (not as "the allow-list is
+# closed", which is a weaker claim that a future edit can silently break):
+#
+#     NO PARAMETER EXPANSION APPEARS IN ANY `printf` ARGUMENT IN THE EMITTER.
+#
+# `_login_kw` and `_login_tok` are THE EMITTER: they are the only functions that receive the
+# raw stderr, and every `printf` in them takes a HARDCODED LITERAL. They are therefore
+# structurally incapable of echoing their input — not "filtered", incapable. That property is
+# grep-checkable (`ci-deploy.test.sh` › T-5B-15, which greps these bodies for a printf taking a
+# parameter expansion and requires zero; T-5B-14 covers it behaviourally through the
+# unclassified path, and T-5B-16 fuzzes 219 inputs against the closed set). It survives a regex
+# defect, and survives future loosening of the patterns. This is Form B; Form A (a regex FILTER that re-emits `$t` when it
+# matches) has the SAME output set but the opposite failure mode: Form A degrades to
+# DISCLOSURE, Form B degrades to a wrong label. Do not "simplify" these into a filter.
+#
+# Why this matters here specifically: ZOT_PULL_USER / GHCR_READ_USER are the founder's own
+# credentials, `docker login` stderr can echo a username, and BOTH sinks leave the box (Sentry,
+# and journald -> Vector -> Better Stack UNSCRUBBED). A leaked GHCR read credential is also a
+# supply-chain path to every end user of the web platform.
+
+# _login_kw <stderr-content> (#6497): EMITTER. Which of a fixed keyword set matched, as
+# comma-terminated HARDCODED tokens. Input never reaches the value.
+#
+# `case` rather than `grep -q` on purpose, and it is a strict improvement on the plan's own
+# prescription: (a) no subprocess, so a probe's normal NON-MATCH cannot return 1 and abort the
+# script under `set -e` — the DOMINANT abort class this instrument had to survive, designed out
+# at the root rather than contained; (b) no `printf '%s' "$e" |` feed, so the emitter body holds
+# no parameter expansion in a printf argument at all.
+#
+# Every literal below carries an EXPLICIT class — MEASURED, INFERRED, or FALSIFIED. Do not
+# collapse them back into a universal ("every literal below is measured except the last N"): the
+# #6565 errno round added six INFERRED literals in the middle, and a universal quantifier plus a
+# positional carve-out silently became FALSE for them the moment they landed. A comment that
+# claims more measurement than was done is exactly the false-measured-comment this instrument
+# exists to drain (see `stderr_chars`'s "Do NOT restate 40 for GHCR" note below, same discipline).
+#
+#   MEASURED  — observed out of a real `docker login` (docker 29.4.3, live registry:2, Phase 0).
+#   INFERRED  — the string is measured (Go 1.21.6 `syscall.Errno.Error()`, exact), but that this
+#               errno is the one PRODUCTION hits is NOT measured. That is the open question.
+#   FALSIFIED — proposed by a task brief, measurement said no. Kept deliberately.
+#
+# An unmeasured token is CHEAP in the hatch and EXPENSIVE in a classifier arm — in the hatch it
+# simply never matches and the other fields still land; in an arm it mis-routes the operator. `kw`
+# is exactly how we learn whether they were ever right. This is only SAFE under Form B: under
+# Form A a never-matching probe invites the loosening that leaks.
+_login_kw() {
+  # --- MEASURED: splits the `cred_store` arm, which would otherwise be a >=2-mode bucket ---
+  case "${1:-}" in *'no space left on device'*)   printf 'nospace,' ;; esac          # H-C disk-full
+  case "${1:-}" in *'executable file not found'*) printf 'execnotfound,' ;; esac     # H-A helper missing
+  case "${1:-}" in *'docker-credential'*)         printf 'credhelper,' ;; esac       # H-A helper family
+  case "${1:-}" in *'permission denied'*)         printf 'permdenied,' ;; esac       # EACCES re-check
+  case "${1:-}" in *'error saving credentials'*)  printf 'errsaving,' ;; esac        # cred-store family
+  case "${1:-}" in *'error storing credentials'*) printf 'errstoring,' ;; esac       # cred-store family
+  case "${1:-}" in *'error getting credentials'*) printf 'errgetting,' ;; esac       # cred-store family
+  # --- INFERRED (#6565): the errno itself. `kw=errsaving` fired ALONE on both registries, so the
+  # errno matches NONE of the arms above — H-D, the case the hatch exists for. These six name it.
+  # Strings are Go's `syscall.Errno.Error()` renderings, measured byte-exact; Go renders lowercase
+  # (C `strerror` capitalizes — do not "fix" the case). Lengths, also measured: enomem 22,
+  # eperm 23, erofs 21, eio 18, einval 16, enoent 25.
+  # HONEST LIMIT, stated because six looks more principled than it is: the round's arithmetic
+  # admits ONLY a 22-char errno, so only `enomem` can fire IF that arithmetic holds. The other
+  # five are reachable only if it does NOT — and then six guesses cover ~5% of ~130 errnos. Six is
+  # CHEAP, not principled. `errno_chars` (in `_login_hatch`) is what actually bounds the set.
+  case "${1:-}" in *'cannot allocate memory'*)    printf 'enomem,' ;; esac           # ENOMEM (22)
+  case "${1:-}" in *'read-only file system'*)     printf 'erofs,' ;; esac            # EROFS  (21)
+  case "${1:-}" in *'no such file or directory'*) printf 'enoent,' ;; esac           # ENOENT (25)
+  case "${1:-}" in *'invalid argument'*)          printf 'einval,' ;; esac           # EINVAL (16)
+  case "${1:-}" in *'input/output error'*)        printf 'eio,' ;; esac              # EIO    (18)
+  case "${1:-}" in *'operation not permitted'*)   printf 'eperm,' ;; esac            # EPERM  (23)
+  # --- FALSIFIED by measurement; free here, would have been harmful as arms ---
+  case "${1:-}" in *'non-TTY device'*) printf 'nontty,' ;; esac
+  case "${1:-}" in *'Cannot connect to the Docker daemon'*) printf 'daemonconn,' ;; esac
+  case "${1:-}" in *'credential helper'*) printf 'credhelperphrase,' ;; esac
+}
+
+# _login_tok <first-token> (#6497): EMITTER. The first token's PATTERN CLASS. Never the raw word.
+#
+# The arms are PATTERNS, not literals, and that is load-bearing. Measured against the originally
+# proposed exact-match allow-list, 3 of 8 entries were provably DEAD — `error:` (non-TTY, note
+# the trailing colon), `time="2026-07-16T…"` (daemon-down), `WARNING!` — including the two best
+# H-D candidates. The first engineer seeing `tok=other` on every real failure loosens the match;
+# under Form A, loosening `^time$` -> `time*` makes the emitted value the raw timestamp — a live
+# unbounded input echo shipped to a third party, with the leak canary STILL GREEN because a
+# timestamp is not the synthetic credential the fixture planted. Under Form B, loosening a
+# pattern is free. That is what makes "an unmeasured token is cheap in the hatch" SAFE.
+_login_tok() {
+  case "${1:-}" in
+    error*)        printf 'error' ;;        # measured: cred-store family AND non-TTY (`error:`)
+    Error*)        printf 'Error' ;;        # measured: `Error response from daemon: …`
+    time=*)        printf 'time' ;;         # measured: dockerd logrus shape
+    WARNING*)      printf 'WARNING' ;;      # measured: the unencrypted-credentials notice
+    Cannot*)       printf 'Cannot' ;;
+    failed*)       printf 'failed' ;;
+    denied*)       printf 'denied' ;;
+    unauthorized*) printf 'unauthorized' ;;
+    *)             printf 'other' ;;
+  esac
+}
+
+# _login_hatch <stderr> <stdout_chars> <rc> (#6497): the escape hatch, for EVERY failed login.
+#
+# NOT `unclassified`-only. That mechanism defeats its own goal: both surviving cred-store
+# hypotheses share the measured prefix `error saving credentials`, so once the `cred_store` arm
+# lands BOTH classify as `cred_store`, an `unclassified`-only hatch never runs, and H-A and H-C
+# become BYTE-IDENTICAL in the emit — `unclassified` reproduced under a new name, in the change
+# whose entire purpose is to drain it. Firing on every failed login costs nothing (the fields are
+# closed-vocabulary) and is also what makes a confidently-wrong arm VISIBLE in production
+# telemetry: `class=transport kw=errsaving` is self-evidently wrong the moment it appears. That
+# is the only reason the arms below are auditable at all.
+#
+# CALL IT AS: hatch="$( ( _login_hatch … ) || true )" — see _docker_login_capture's callers.
+# The subshell is a MECHANISM, not a discipline: it is the ONLY construct measured to contain
+# BOTH abort classes (`set -u` unbound AND `set -e` nonzero rc). `x="$(f)" || true` does NOT
+# contain an unbound expansion — the parent dies. Trade accepted: a broken hatch goes dark
+# instead of wedging prod, which is the contract the Observability block states (`fail_loud:
+# false — a telemetry failure must never abort a deploy`).
+#
+# Fields, and why each is free of the no-echo constraint:
+#   rc            — an integer from `$?`, numeric-guarded at the capture site. `125/126/127`
+#                   (docker missing/not executable/not on PATH), `137` (OOM-killed mid-login) and
+#                   `124` (timeout wrapper) are each actionable from this field ALONE.
+#   stderr_chars  — `${#e}`. A non-injective function of the stderr whose value is INVARIANT
+#                   under substitution of any fixed-length secret. It discloses shape, never
+#                   content. Safe because each pull token is fixed-length FOR ITS FORMAT — zot:
+#                   `zot-registry.tf` › `random_password.zot_pull` (`length = 40`); GHCR: a PAT,
+#                   whose length is fixed by its format — so a registry echoing the token moves
+#                   this by the SAME amount for EVERY possible token value of that format; the
+#                   channel carries zero bits about content, not "few bits". (Do NOT restate "40"
+#                   for GHCR: the repo disagrees with itself on which PAT format is live —
+#                   `variables.tf` says fine-grained (`github_pat_…`, 93 chars), a sibling spec
+#                   records a classic `ghp_…` (40). The security property holds under EITHER,
+#                   because it turns on FIXED-ness, not on the number. Asserting an unverified
+#                   40 here would be exactly the false-measured-comment this change exists to
+#                   drain.)
+#                   Fixed length is necessary but NOT sufficient: it also needs an
+#                   escape-invariant alphabet. `special = false` on the zot token gives
+#                   `[A-Za-z0-9]{40}`, so no character expands under a registry's JSON/URL
+#                   escaping; a token containing `"` or `\` would move this length by a
+#                   CONTENT-DEPENDENT amount under a JSON-escaping registry.
+#                   *** TRIGGER — IF EITHER TOKEN (a) BECOMES VARIABLE-LENGTH (a JWT, an
+#                   OIDC-minted session token), (b) LEAVES THE ESCAPE-INVARIANT ALPHABET
+#                   `[A-Za-z0-9_]` — note the underscore: BOTH GHCR PAT formats carry one
+#                   (`ghp_…`, `github_pat_…`), so a bare `[A-Za-z0-9]` here reads as ALREADY
+#                   FIRED against a live credential and would teach the next engineer to bucket
+#                   needlessly or, worse, to ignore this trigger. `_` is escape-invariant, so the
+#                   property above holds; the ALPHABET is the test, escape-invariance is the
+#                   REASON (#6565) — or (c) IS
+#                   ROTATED TO A LENGTH OTHER THAN ITS CURRENT ONE, THIS BECOMES A LENGTH ORACLE
+#                   AND **BOTH `stderr_chars` AND `errno_chars` MUST BE BUCKETED** — the two fields
+#                   are governed by this ONE paragraph and must be bucketed TOGETHER, in the same
+#                   PR (`0 | 1-99 | 100-399 | 400+`). Bucketing only this field leaves
+#                   `errno_chars` shipping `len(<credential>)` from the NARROWER final-colon
+#                   segment, which is the same oracle through a smaller window — #6565 added that
+#                   field under this paragraph's governance, so the plural is load-bearing, not
+#                   stylistic. *** (c) is the LIKELIEST
+#                   and was missing: `ZOT_PULL_TOKEN` is an htpasswd credential whose length is a
+#                   Doppler value, not a format invariant — a rotation to a different length is
+#                   an ordinary operator action that (a) does not describe. The zot side is
+#                   pinned by `random_password.zot_pull` (`length = 40`), so (c) fires only if
+#                   that resource changes; the reverse-citation there says so. *** Bucketing now
+#                   would destroy the empty-vs-unmatched split for a risk that does not yet
+#                   exist — but the trigger is written down here so it is not re-derived from
+#                   scratch. NOTE the trigger's firing condition is ALREADY SCHEDULED:
+#                   `specs/feat-registry-oidc-migration/spec.md` FR2/FR3 replace both tokens with
+#                   control-plane-signed zot JWTs. Reverse-citations are planted at
+#                   `random_password.zot_pull` and in that spec's touch-point list so the engineer
+#                   executing it reaches this paragraph.
+#                   The declared threat (`docker login` stderr can echo a USERNAME) is not covered
+#                   by the length argument above, which clears only the token: `stderr_chars`
+#                   does move by `len(username)`. Accepted, not overlooked — `ZOT_PULL_USER` is a
+#                   declared non-secret constant and the GHCR username is public as the package
+#                   owner, so it discloses a per-host constant that is already public.
+#   stdout_chars  — `${#o}`, computed inside _docker_login_capture. The stdout TEXT never leaves
+#                   that function's inner subshell; only its length does. Decides H-B, which is a
+#                   DISJUNCTION ("the text went to stdout, which is discarded, OR nowhere at
+#                   all") that `stderr_chars=0` merely RESTATES rather than decides:
+#                     stderr_chars>0                 -> matched no arm; the remedy is an arm
+#                     stderr_chars=0 stdout_chars>0  -> H-B-stdout; the remedy is stream capture
+#                     stderr_chars=0 stdout_chars=0  -> H-B-nowhere / H-D; and `rc` names it
+#                   That splits H-B in ONE event. Shipping stderr_chars alone and inferring
+#                   "len=0 => capture stdout" is an inference, not a measurement.
+#   errno_chars   — `${#suffix}` where suffix is the text after the LAST ": " (#6565). The field
+#                   that ENDS the guessing rather than extending it.
+#                   WHY IT EXISTS: `kw` answers "is it one of these N literals?" — six probes is
+#                   ~5% coverage of ~130 errnos if the round's 22-char arithmetic is wrong (and
+#                   that arithmetic rests on the verb being `open()` and the path being 32 chars,
+#                   BOTH read from code, NEITHER observed). This field bounds ALL ~130 in ONE
+#                   round AND tests that premise instead of assuming it.
+#                   MEASURED PROPERTY, and the reason it beats `stderr_chars` here: it is
+#                   INVARIANT under docker's uint32 temp suffix. The live datum was
+#                   `stderr_chars=96` (zot) and `97` (ghcr), and it took arithmetic to conclude
+#                   those were the IDENTICAL error differing only by a 9- vs 10-digit suffix.
+#                   `errno_chars` reports 22 for BOTH. It skips the inference.
+#                   NO-ECHO — RE-CONFIRMED, NOT INHERITED from `stderr_chars`. Inheriting would be
+#                   unearned: this NARROWS the segment, and a narrower segment is a priori a
+#                   sharper oracle, so the argument has to be re-run rather than assumed.
+#                   It re-runs clean: this is a LENGTH, and the same fixed-length property that
+#                   clears `stderr_chars` clears it — substituting any value of a FIXED-length
+#                   token yields a CONSTANT length, so the channel carries zero bits about token
+#                   content (the property turns on fixed-ness, not on any particular number, so it
+#                   holds under either PAT format the repo disagrees about). If a username lands in
+#                   the final colon segment this moves by `len(username)` — the SAME residual
+#                   `stderr_chars` already carries and accepts, for the same reason (a declared
+#                   non-secret constant / the public package owner). The narrowing creates no new
+#                   channel. *** The `stderr_chars` TRIGGER above governs this field TOO: if either
+#                   token becomes variable-length or leaves the escape-invariant `[A-Za-z0-9_]`,
+#                   bucket BOTH. ***
+#                   Degenerate input (no ": " anywhere) makes the segment the whole string, so
+#                   `errno_chars == stderr_chars`. That is not a defect — it is how "there was no
+#                   colon segment" reports itself, using a comparison the reader already has.
+#   kw / tok      — closed vocabulary, by construction (see the emitters).
+#   docker_ver    — /work Phase 0: `cloud-init.yml:428` installs `docker-ce` UNPINNED, web-1 has
+#                   not been replaced since 2026-03-17, and its docker version is NOT OBSERVABLE
+#                   in any telemetry — so the plan's "re-measure on the pinned host version"
+#                   could not be done and every arm here cites a 29.4.3 measurement instead.
+#                   Rather than guess or ask the operator, the instrument makes the host
+#                   self-report (hr-no-dashboard-eyeball-pull-data-yourself). It is our OWN
+#                   binary's version string matched by a fixed numeric regex, so it cannot echo
+#                   input. Empty (docker absent — see rc=127) renders `unknown`.
+#
+# NOTE the measured asymmetry: on SUCCESS stderr is NON-empty (the 192-char
+# `WARNING! Your credentials are stored unencrypted…` notice) and stdout carries
+# `Login Succeeded`. Irrelevant here — we classify only on failure — but it forbids any future
+# "stderr empty => success" shortcut.
+_login_hatch() {
+  # $2 defaults to EMPTY, never to a numeric literal. The #5145 client/server budget-drift guard
+  # greps the WHOLE script (not comment-aware, not function-scoped) for a second positional
+  # defaulted to digits, and requires exactly ONE match — the `local interval=` in
+  # `ci-deploy.sh` › `verify_inngest_health()`. Defaulting this one to a number silently turns
+  # that unrelated guard RED. The numeric guard below renders a missing value as `parse_error`,
+  # which is more honest than a defaulted 0 anyway.
+  # (Do not restate the offending pattern literally in this comment: the guard would match it.)
+  local _e="${1:-}" _oc="${2:-}" _rc="${3:-}"
+  local _kw _tok _first _dver _errseg
+  _kw="$(_login_kw "$_e")"
+  # First whitespace-delimited token, via expansion — no subprocess, no split of the rest.
+  _first="${_e%%[[:space:]]*}"
+  _tok="$(_login_tok "$_first")"
+  # #6565: the final ": "-delimited segment — where an errno renders in a Go `os.PathError`
+  # ("<op> <path>: <errno>"). Expansion only: no subprocess, and the TEXT never leaves this
+  # function — only `${#_errseg}` is printed. No ": " present => the whole string, so
+  # errno_chars == stderr_chars (see the field's note above).
+  _errseg="${_e##*: }"
+  # Bounded + no-echo-safe: our own binary, matched by a fixed numeric regex. The subshell +
+  # `|| true` keeps a missing/failing docker from aborting anything.
+  _dver="$( ( docker --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 ) || true )"
+  case "$_rc" in ''|*[!0-9]*) _rc='parse_error' ;; esac
+  case "$_oc" in ''|*[!0-9]*) _oc='parse_error' ;; esac
+  printf 'rc=%s stderr_chars=%s errno_chars=%s stdout_chars=%s kw=%s tok=%s docker_ver=%s' \
+    "$_rc" "${#_e}" "${#_errseg}" "$_oc" "${_kw%,}" "${_tok:-other}" "${_dver:-unknown}"
+}
+
+# _docker_login_capture <registry> <user> <token> (#6497): run `docker login` and capture the
+# stderr TEXT, the stdout LENGTH, and the rc — with NO TEMP FILE, in ONE invocation.
+# Returns 0 iff the login succeeded, so callers keep the `if …; then` shape they already had
+# (an `if` condition is exempt from `set -e`).
+# Sets: LOGIN_ERR (stderr text) · LOGIN_OUT_CHARS (stdout LENGTH — the text never escapes) ·
+#       LOGIN_RC (numeric-guarded).
+#
+# WHY NO `mktemp` — this is not a style preference. The file has two divergent idioms and the
+# unsafe one (`perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"`, in
+# `ci-deploy.sh` › `pull_image_with_fallback()`) degrades to
+# a WORLD-READABLE FIXED PATH holding registry stderr that may echo the credential. And a bare
+# `mktemp` is itself an abort vector under `set -e` when /tmp is full — which IS hypothesis H-C.
+# A mktemp-based instrument would WEDGE PROD on the first deploy after merge, in exactly the
+# scenario it exists to diagnose. Variable capture is strictly better on every axis: no
+# filesystem, no mode question, no `rm -f`, no cleanup-on-abort gap, no /tmp-full abort; the
+# secret-adjacent text never leaves process memory. It also makes `${#LOGIN_ERR}` the true length
+# by construction, so there is no `tail -c 400` truncation edge to reason about.
+#
+# THE TOKEN never reaches argv: it is a bash function POSITIONAL (shell memory, not a process
+# argument list — `ps` / /proc/<pid>/cmdline show only `docker login <reg> -u <user>
+# --password-stdin`), and it reaches docker through the `printf` BUILTIN piped to
+# --password-stdin. Unchanged from the three call sites this replaces.
+#
+# Sharp edges, all of which this file has already been bitten by once:
+#   1. `local _rec` and the assignment are SEPARATE statements. `local x="$(cmd)"` makes `local`
+#      the exit status and SWALLOWS the rc (the file already knows this — see the
+#      `local prelude_stage` / `prelude_stage="$(refetch_ghcr_and_relogin)"` split in
+#      `ci-deploy.sh` › `ghcr_prelude_and_login()`).
+#   2. `2>&3 3>&-` order, and `1>&3`-style ordering generally: the stream you dup FIRST is
+#      resolved against the fd table as it stands at that moment.
+#   3. `$(…)` strips trailing newlines, so `stdout_chars` (`${#_o}`, measured after the inner
+#      `$( )`) excludes stdout's trailing newline, while the stderr sits MID-record (followed by
+#      `\036…`) so its trailing newline survives into `LOGIN_ERR` and IS counted. A docker
+#      writing exactly "\n" to each stream renders `stderr_chars=1 stdout_chars=0`. Immaterial to
+#      the H-B split (which turns on 0 vs >0 for real shapes) but the two fields are not
+#      symmetric and T-5B-11 pins `stderr_chars` as the TRUE length.
+#   4. `${#…}` counts CHARACTERS under a UTF-8 locale and BYTES under C/POSIX. This script sets
+#      no LANG/LC_ALL and runs as an SSH FORCED COMMAND, where sshd exports no locale and no
+#      AcceptEnv is configured — so on the deploy path this is almost certainly counting BYTES,
+#      and the field name `stderr_chars` is imprecise. Named and left alone deliberately:
+#      `export LC_ALL=…` would change collation and matching for the WHOLE script (every `sort`,
+#      every `grep` range) to fix a field name, which is a far larger behavioural change to every
+#      web host than the instrument it would be serving. The security argument is unaffected
+#      either way — the tokens are `[A-Za-z0-9]`, where bytes == chars — and so is the H-B split.
+#      Recorded rather than asserted away: this comment previously claimed the UTF-8 reading as
+#      fact, which was the very thing it warned against one clause later.
+#
+# The record is `<stderr><RS><rc><RS><stdout_chars>`, parsed from the END with `##`/`%`, so an
+# RS occurring inside the stderr cannot corrupt the rc or the length.
+#
+# UNBOUNDED READ — accepted, named rather than left implicit. `LOGIN_ERR` accumulates the whole
+# stderr in shell memory with no cap; `>/dev/null 2>&1` bounded it at zero, and `tail -c 400` was
+# deliberately designed out to get a TRUE length (AC5), which is what removes the bound. Measured:
+# a 5 MB stderr yields `stderr_chars=5000000` with no deadlock and the parent surviving — the pipe
+# IS read concurrently, so there is no fd deadlock here; the residue is purely RSS. Accepted
+# because both peers are trusted and reachable only from this host: zot is on the private net
+# (10.0.1.30, deny-all), GHCR is TLS-pinned. A registry streaming unbounded stderr is a
+# compromised-peer scenario in which an OOM-killed deploy is not the interesting loss.
+_docker_login_capture() {
+  local _reg="${1:-}" _user="${2:-}" _tok="${3:-}"
+  local _rec _rc=0 _r1 _o=""
+  LOGIN_RC=""; LOGIN_ERR=""; LOGIN_OUT_CHARS=0
+  # stdout -> the INNER $( ) -> $_o, which dies with this subshell (only ${#_o} escapes).
+  # stderr -> fd3 -> the OUTER $( ) -> the head of the record.
+  _rec="$( { _o="$(printf '%s' "$_tok" | docker login "$_reg" -u "$_user" --password-stdin 2>&3 3>&-)" || _rc=$?; printf '\036%s\036%s' "$_rc" "${#_o}"; } 3>&1 )"
+  LOGIN_OUT_CHARS="${_rec##*$'\036'}"
+  _r1="${_rec%$'\036'*}"
+  LOGIN_RC="${_r1##*$'\036'}"
+  LOGIN_ERR="${_r1%$'\036'*}"
+  # Numeric guard: defence in depth. The end-anchored parse above already yields the true rc
+  # even when the stderr contains an RS, but this makes "rc can never echo input" STRUCTURAL
+  # rather than argued — the same standard the emitter is held to.
+  case "$LOGIN_RC" in ''|*[!0-9]*) LOGIN_RC='parse_error' ;; esac
+  case "$LOGIN_OUT_CHARS" in ''|*[!0-9]*) LOGIN_OUT_CHARS='parse_error' ;; esac
+  [[ "$LOGIN_RC" == "0" ]]
+}
+
+# _docker_login_failure_class <stderr-content> (#6497): classify a FAILED `docker login` into a
+# fixed enum. Registry-NEUTRAL (was `_zot_login_failure_class`): the GHCR sites reuse it rather
+# than forking a second classifier, because two classifiers drift. Takes the stderr CONTENT as
+# $1, never a path (the precedent's security/P2-E trap).
+#
+# NOT _pull_result_is_auth_denied (:530). That predicate greps 'unauthorized|denied|forbidden'
+# as ONE bucket — correct for its job (is this an auth problem at all?), wrong for this one,
+# which must say WHICH failure so the operator knows which subsystem to fix.
+#
+# --- registry-neutral preamble (both are dockerd behaviours, not registry behaviours) --------
+# `docker login` issues exactly ONE request: GET /v2/. `authz_denied` matches ONLY a literal
+# `403`; bare 'denied'/'forbidden' are deliberately NOT matched, because `connect: permission
+# denied` is a SOCKET error and an early bare-'denied' arm would steal it from `transport` and
+# send the operator hunting an authz bug that does not exist.
+#
+# --- Per-registry measured behaviour ---------------------------------------------------------
+# zot v2.1.2 (the digest at zot-registry.tf:55), with this repo's exact accessControl, MEASURED:
+#   GET /v2/ answers 200 or 401 — NEVER 403. A user with ZERO accessControl policies still gets
+#   `Login Succeeded` (200); zot enforces authz at the MANIFEST endpoint (/v2/<repo>/manifests/
+#   <tag> -> 403), which the login path never touches. Consequences, both zot-scoped:
+#     1. `authz_denied` is effectively unreachable AGAINST ZOT, and is kept purely as a
+#        defensive tripwire there — a 403 must never be silently read as an authn failure.
+#     2. A BROKEN zot accessControl is NOT observable here at all: login SUCCEEDS, ZOT_ACTIVE=1,
+#        and the failure surfaces later at pull time. The login probe is the wrong layer for it;
+#        `zot-entry-gate.sh` is where zot's real 403 lives.
+# ghcr.io: UNMEASURED. Do NOT inherit zot's finding — GHCR can and does answer 403 (SAML/SSO
+#   enforcement, org package policy, IP allow-lists), so for GHCR `authz_denied` is a LIVE arm,
+#   not a tripwire, and consequence 2 above has no GHCR meaning. This paragraph says `unmeasured`
+#   rather than guessing, which is the whole discipline: the previous version of this comment
+#   asserted zot's "NEVER 403 / unreachable / purely a defensive tripwire" as a property of the
+#   CLASSIFIER, and the registry-neutral rename alone made it a false statement about a live arm.
+#
+# --- ORDERING IS LOAD-BEARING. It was NOT before, and the comment that said so is now false. ---
+# The previous text — "the arms are disjoint on real input" — was FALSIFIED by measurement: the
+# arms genuinely overlap on real strings, and two shapes were landing CONFIDENTLY WRONG:
+#   `error saving credentials: open <path>: permission denied`  -> `transport`  (transport's bare
+#      `permission denied` steals a cred-store error and routes the operator to the network)
+#   `received unexpected HTTP status: 504 Gateway Timeout`      -> `transport`  (transport's bare
+#      `timeout`, matched case-insensitively, outranks the 5xx; 502/503 were unaffected — only
+#      the timeout-worded 5xx bite)
+# Precedence resolves both, and "ordering is load-bearing" is a red flag rather than a defense
+# UNLESS it is pinned. It is, twice over: (i) BOTH precedence relations below are pinned by
+# `ci-deploy.test.sh` › T-5B-12, whose two cases are fed MEASURED strings — and pinned in the only
+# way that counts: the AC9 battery RELOCATED each arm after `transport` and watched the matching
+# case go RED — cred_store's relocation reddened the cred-store EACCES case, server_error's
+# reddened the 504 case, and each took down ONLY its own case. A reorder cannot mis-route
+# silently. (No pass/total fractions here on purpose: a bare count rots on every test addition —
+# these were written as `161/164` and were stale within the hour, which is the same lesson as a
+# line number.) (ii) The hatch rides EVERY failed login, so a confidently-wrong arm is visible in
+# production telemetry rather than discoverable only from the suite.
+# (This citation named T-5B-11/T-5B-12 when written — test IDs PREDICTED before the tests existed,
+# and both were wrong: T-5B-11 is the stderr_chars-true-length case. Corrected against the file.
+# A comment naming the test that supposedly pins it, itself unpinned, is the exact defect class
+# this change exists to drain — `cq-cite-content-anchor-not-line-number` is the same lesson for
+# coordinates.)
+# authn stays FIRST: the distribution/GHCR shape `denied: authentication required` renders a 401
+# with the word 'denied' in it, and a 401 must land in `authn_rejected` even if a future arm
+# reintroduces a bare 'denied'.
+# `cred_store` precedes `server_error` so that a random mktemp-style path suffix in a cred-store
+# error can never be scraped as a 5xx.
+# `transport` is the arm that fires most on THIS fleet — private-NIC convergence (#6415) yields
+# `network is unreachable`; zot OOM/restart (tracked as zot_oom_kills) yields `connection reset
+# by peer` / `EOF` mid-connection. Leaving those in `unclassified` would recreate the
+# undifferentiated bucket #6497 exists to drain.
+#
+# NOT ADDED, because measurement falsified them (/work Phase 0 + plan Research Reconciliation):
+# `not a TTY` (the real string is `error: cannot perform an interactive login from a non-TTY
+# device` — lowercase, hyphenated); `credential helper` (the phrase never appears); `Cannot
+# connect to the Docker daemon` (unreproduced on the login path — `docker login` never contacts
+# the daemon socket, so a `cli_daemon` arm was retired before it shipped). All three live in
+# `_login_kw`, where being wrong is free.
+_docker_login_failure_class() {
+  local e="${1:-}"
+  if printf '%s' "$e" | grep -qiE '\b401\b|unauthorized|authentication required|incorrect username or password'; then
+    printf 'authn_rejected'
+  elif printf '%s' "$e" | grep -qiE '\b403\b'; then
+    printf 'authz_denied'
+  elif printf '%s' "$e" | grep -qiE 'server gave HTTP response to HTTPS client|x509:|tls: failed to verify'; then
+    printf 'tls_mismatch'
+  elif printf '%s' "$e" | grep -qiE 'error saving credentials|error storing credentials|error getting credentials'; then
+    printf 'cred_store'
+  elif printf '%s' "$e" | grep -qiE '\b5[0-9]{2}\b'; then
+    printf 'server_error'
+  elif printf '%s' "$e" | grep -qiE 'connection refused|no route to host|network is unreachable|connection reset|broken pipe|: EOF|no such host|temporary failure in name resolution|context deadline exceeded|i/o timeout|timed out|timeout|permission denied'; then
+    printf 'transport'
+  else
+    printf 'unclassified'
+  fi
+}
+
+# _docker_login_http_status <stderr-content> (#6497): scrape the HTTP status dockerd echoes on a
+# login rejection ("failed with status: 401 Unauthorized"). Registry-neutral (was
+# `_zot_login_http_status`). The `status:` anchor is what keeps a host:port (`10.0.1.30:5000`,
+# `dial tcp 127.0.0.1:15999`) from being scraped as a code — verified. Empty means ONLY "no
+# status was rendered in this stderr"; it does NOT imply a transport failure — dockerd also
+# renders a bare `unauthorized: authentication required` with no status: prefix, which is a real
+# 401 with an empty tag here. `login_class` is the authoritative field; `login_http` is
+# corroboration when present. Matches 5xx too, so a server_error carries its code.
+_docker_login_http_status() {
+  printf '%s' "${1:-}" | grep -oE 'status:[[:space:]]*[45][0-9]{2}' | grep -oE '[45][0-9]{2}' | head -1 || true
+}
+
+# zot_gate_degraded_event <reason> [login_class] [login_http] [login_hatch]: WARNING beacon for when zot is CONFIGURED
 # (ZOT_REGISTRY_URL present) but the dark-launch gate could not activate it — the fleet
 # silently reverts to the GHCR path on the frequent rolling-deploy path WITHOUT a
 # registry=ghcr-fallback pull event (the pull path never attempts zot, so pull_image_with_
@@ -634,14 +1115,40 @@ registry_pull_event() {
 # when ZOT_REGISTRY_URL is set. reason ∈ {probe_unreachable, creds_absent, login_failed}.
 # Fail-open, same Sentry store transport as pull_failure_event.
 zot_gate_degraded_event() {
-  local reason="$1"
+  local reason="$1" login_class="${2:-}" login_http="${3:-}" login_hatch="${4:-}"
   logger -t "$LOG_TAG" "ZOT_GATE_DEGRADED: reason=$reason (configured but inactive — GHCR path)"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
-    payload="$(jq -n --arg r "$reason" \
+    # #6497: login_class + login_http make `login_failed` DIAGNOSABLE — it was one
+    # undifferentiated bucket for credential/authz/transport/TLS, so 14 live WEB-PLATFORM-5B
+    # events could not say which. `login_class`, `login_http` and `login_hatch` are empty for the
+    # non-login reasons (probe_unreachable, creds_absent), which have no login outcome to report.
+    # `login_registry` is the exception and always rides: it is the hardcoded constant "zot"
+    # (this emitter is zot-only), so it is never empty, including on those two reasons. (This
+    # said "All three login_* fields" — there are FOUR, and the fourth was added 13 lines below
+    # in the same edit that left the count at three.)
+    # host_id reuses the #6396 pull_failure_event precedent: the beacon carried no host
+    # attribution, so "which host" was unanswerable from Sentry alone. HOST_ID is empty-safe.
+    # ONLY the enum + status code + the closed-vocabulary hatch cross this boundary — never the
+    # raw stderr, which can echo a username (and, from some registries, the attempted credential).
+    #
+    # TAGS vs EXTRA is a real constraint, not bookkeeping. `login_hatch` carries `stderr_chars`,
+    # an unbounded-cardinality integer; as a Sentry TAG it would degrade the tag index and decay
+    # search on the very issue this change exists to make searchable. The empty-vs-unmatched
+    # split needs only len=0 vs len>0 — the precise value is diagnostic CONTEXT, not a facet.
+    # So: enums stay tags, the hatch goes in `extra`.
+    #
+    # `login_registry` — NOT `registry`, which is already taken in this same tags object by the
+    # event-type discriminator "zot-gate-degraded". A second `registry` key is silently last-wins
+    # in jq and would have destroyed that tag. The field is here (rather than being implied by
+    # the event name) so that if a GHCR login ever routes to a Sentry event, a GHCR failure can
+    # never be filed under a zot-gate issue — the exact host/subsystem attribution error #6497
+    # itself suffers from. GHCR is journald-only TODAY, by the Sentry-volume decision.
+    payload="$(jq -n --arg r "$reason" --arg h "${HOST_ID:-}" --arg lc "$login_class" --arg lh "$login_http" --arg hx "$login_hatch" \
       '{message: ("zot gate degraded (" + $r + ") — configured but inactive, using GHCR"),
         level: "warning", platform: "other", logger: "ci-deploy",
-        tags: {feature: "supply-chain", op: "image-pull", registry: "zot-gate-degraded", zot_gate_reason: $r}}' 2>/dev/null)" || return 0
+        tags: {feature: "supply-chain", op: "image-pull", registry: "zot-gate-degraded", zot_gate_reason: $r, host_id: $h, login_class: $lc, login_http: $lh, login_registry: "zot"},
+        extra: {login_hatch: $hx}}' 2>/dev/null)" || return 0
     curl -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
@@ -655,6 +1162,27 @@ zot_gate_degraded_event() {
 # re-run `docker login ghcr.io` into the SAME docker config the cosign verifier
 # mounts :ro, and return a STAGE code so the caller can discriminate the failure.
 # Echoes on stdout exactly one of: recovered | refetch_unavailable | relogin_failed
+#
+# ############################################################################################
+# # THIS FUNCTION'S STDOUT IS A TYPED CONTROL CHANNEL. DO NOT WRITE TO IT.                   #
+# ############################################################################################
+# It communicates BY STDOUT STRING, and two callers parse that string:
+# `ghcr_prelude_and_login()` (`prelude_stage=`) and `_ghcr_pull_or_recover()`
+# (`stage="$(refetch_ghcr_and_relogin)"` -> `[[ "$stage" == "recovered" ]]`). In
+# `ghcr_prelude_and_login()` the stage is then interpolated RAW into its `STILL FAILED after
+# Doppler re-fetch (stage=…)` logger line. So NOTHING inside this function may write to
+# stdout except the three stage literals. In particular, #6497 added stderr capture here, and
+# the reflexive way to do that — `2>&1` at the FUNCTION level — has two failure modes from one
+# edit:
+#   LEAK: docker's stderr merges into this function's stdout -> into $prelude_stage -> into
+#     journald -> Vector -> Better Stack, VERBATIM AND UNCLASSIFIED. A Sentry-scoped payload
+#     assertion would never see it.
+#   SILENT RECOVERY LOSS: `stage` becomes "transport recovered", the `==` compare fails, the
+#     #6400 recovery is discarded, and the private pull fails-closed — degrading the exact
+#     deploy path this helper exists to protect.
+# The capture therefore wraps the `docker login` INVOCATION ONLY (see _docker_login_capture),
+# and the class is emitted to journald from inside this function rather than returned (a named
+# global cannot escape the `$(…)` subshell every caller runs this in — see below).
 # Returns 0 IFF stage==recovered (the login status IS the exit status — this is the
 # load-bearing difference from §1A's inline body, whose trailing `dt=""` (exit 0)
 # would make the function return 0 on every path and muddy the `recovered` signal
@@ -672,9 +1200,30 @@ refetch_ghcr_and_relogin() {
   n=0; until du="$(timeout 45 doppler secrets get GHCR_READ_USER  --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$du" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
   n=0; until dt="$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$dt" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
   [[ -n "$du" && -n "$dt" ]] || { dt=""; printf refetch_unavailable; return 1; }
-  if printf '%s' "$dt" | docker login ghcr.io -u "$du" --password-stdin >/dev/null 2>&1; then
+  # #6497: this login's stderr was discarded (`>/dev/null 2>&1`). It is now captured and
+  # classified — but read the STDOUT warning above before touching this: the capture wraps the
+  # `docker login` INVOCATION ONLY (inside _docker_login_capture), never this function.
+  if _docker_login_capture ghcr.io "$du" "$dt"; then
+    LOGIN_ERR=""
     export GHCR_READ_USER="$du"; dt=""; printf recovered; return 0
   fi
+  # journald ONLY, and emitted from HERE rather than returned to the caller. Two reasons, both
+  # load-bearing:
+  #   1. This function is called ONLY as `stage="$(refetch_ghcr_and_relogin)"` — from
+  #      `ghcr_prelude_and_login()` and `_ghcr_pull_or_recover()`, at BOTH sites a
+  #      command substitution, i.e. a SUBSHELL. A named global set here (the RECOVERY_STAGE
+  #      pattern, which works for _ghcr_pull_or_recover precisely because that one is called
+  #      DIRECTLY) is DISCARDED at the boundary. Verified. So the class cannot be returned; it
+  #      must be emitted where it is computed.
+  #   2. `logger` writes to journald, not to this function's stdout, so it cannot contaminate the
+  #      typed control channel. GHCR is journald-only by decision anyway (Sentry quota), and
+  #      Better Stack already ingests SYSLOG_IDENTIFIER=ci-deploy, so the class is fully
+  #      discoverable there.
+  local rclass rhatch
+  rclass="$(_docker_login_failure_class "${LOGIN_ERR:-}")"
+  rhatch="$( ( _login_hatch "${LOGIN_ERR:-}" "${LOGIN_OUT_CHARS:-0}" "${LOGIN_RC:-}" ) || true )"
+  LOGIN_ERR=""
+  logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED after Doppler re-fetch class=$rclass ${rhatch:-} (registry=ghcr)"
   dt=""; printf relogin_failed; return 1
 }
 
@@ -690,6 +1239,10 @@ refetch_ghcr_and_relogin() {
 # surface it loudly); missing SENTRY_* just means a dark event, exactly as today. The
 # token is captured into a var and piped via --password-stdin — NEVER argv/logs, and
 # unset immediately after login so it never reaches a child process env.
+# #6497: the `docker login ghcr.io` below no longer discards its stderr (`>/dev/null 2>&1`) —
+# it is captured, classified with the SAME registry-neutral classifier the zot gate uses (two
+# classifiers drift), and summarized by the closed-vocabulary hatch. The class rides the PRELUDE
+# journald line ONLY — no Sentry emit for GHCR (volume; see the call site).
 ghcr_prelude_and_login() {
   # (#6090) Prefer BAKED GHCR read-creds (cloud-init writes /etc/default/soleur-ghcr-read,
   # deploy:deploy 0600 — the app-pull analogue of the seed-pull bake) so the app pull +
@@ -729,9 +1282,23 @@ ghcr_prelude_and_login() {
   fi
   export GHCR_READ_USER="$ghcr_user"   # username, not a secret (matches prior exported behavior)
   if [[ -n "$ghcr_user" && -n "$ghcr_token" ]]; then
-    if printf '%s' "$ghcr_token" | docker login ghcr.io -u "$ghcr_user" --password-stdin >/dev/null 2>&1; then
+    # #6497: this login's stderr was discarded too. BOTH prelude logins are classified — this
+    # one (baked/first creds) and the post-refetch one inside refetch_ghcr_and_relogin. If only
+    # the second were classified, the BAKED-CRED FAILURE SHAPE would be lost, and that shape is
+    # the #6090/#6400 recurrence signal.
+    if _docker_login_capture ghcr.io "$ghcr_user" "$ghcr_token"; then
+      LOGIN_ERR=""
       logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok (private-package pull authenticated)"
     else
+      local gclass ghatch
+      gclass="$(_docker_login_failure_class "${LOGIN_ERR:-}")"
+      ghatch="$( ( _login_hatch "${LOGIN_ERR:-}" "${LOGIN_OUT_CHARS:-0}" "${LOGIN_RC:-}" ) || true )"
+      LOGIN_ERR=""
+      # journald only — no new Sentry emit source. This path is reachable ~2x/deploy x 6-12
+      # deploys/day for an already-diagnosed failure; a second sink buys nothing and spends the
+      # quota that real end-user error events need. Better Stack already ingests
+      # SYSLOG_IDENTIFIER=ci-deploy, so `--grep PRELUDE` finds it.
+      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED with baked/first creds class=$gclass ${ghatch:-} (registry=ghcr)"
       # §1A (#6090 recurrence, web-2 fsn1 warm-standby 2026-07-13): the baked GHCR read token
       # is PRESENT but STALE — a fresh host's baked /etc/default/soleur-ghcr-read token ages
       # out by deploy time, and the EMPTY-only Doppler fallback above only re-fetches an
@@ -775,8 +1342,15 @@ ghcr_prelude_and_login() {
 # the SAME $GHCR_DOCKER_CONFIG the cosign verifier mounts :ro — so Edge B (insecure .sig
 # fetch auth) is satisfied ATOMICALLY with the pull cred. Fail-open: never aborts the
 # deploy. Runs AFTER ghcr_prelude_and_login (which already prefetched SENTRY_* + guarded
-# doppler/DOPPLER_TOKEN). Token reaches `docker login` via --password-stdin (never argv),
-# and login output is >/dev/null 2>&1 so no trace/secret leaks.
+# doppler/DOPPLER_TOKEN). Token reaches `docker login` via --password-stdin (never argv).
+# #6497: login stderr is NO LONGER discarded — the old `>/dev/null 2>&1` here is exactly why
+# WEB-PLATFORM-5B was undiagnosable. It is captured INTO A VARIABLE (never a temp file — see
+# _docker_login_capture for why that is a correctness property and not a preference), classified
+# to a fixed enum (_docker_login_failure_class), and summarized by the closed-vocabulary
+# _login_hatch; only the enum, an HTTP status code, and the hatch's integers/closed tokens reach
+# a sink, never the raw text. Keeping the old "output is discarded so nothing leaks" claim would
+# have left this function carrying a false comment about its own security posture — the very
+# defect class this change exists to fix.
 zot_gate_and_login() {
   ZOT_ACTIVE=0
   command -v doppler >/dev/null 2>&1 || return 0
@@ -805,47 +1379,112 @@ zot_gate_and_login() {
     zot_gate_degraded_event creds_absent
     return 0
   fi
-  if printf '%s' "$ztoken" | docker login "$ZOT_REGISTRY_URL" -u "$zuser" --password-stdin >/dev/null 2>&1; then
+  # #6497: capture the login stderr instead of discarding it. `>/dev/null 2>&1` here was the
+  # reason WEB-PLATFORM-5B was undiagnosable: it destroyed the one datum that says WHICH
+  # failure this is, at the source, and the registry host is deny-all/no-SSH so zot's own
+  # auth log is not shipped either. The stderr is classified to a fixed enum, and summarized by
+  # the closed-vocabulary hatch, before anything leaves this function; the raw text is never
+  # emitted and dies with the local when the function returns. No temp file — see
+  # _docker_login_capture (a bare `mktemp` is an abort vector under `set -e` when /tmp is full,
+  # which IS hypothesis H-C: the instrument would wedge prod in the scenario it diagnoses).
+  if _docker_login_capture "$ZOT_REGISTRY_URL" "$zuser" "$ztoken"; then
     ZOT_ACTIVE=1
     logger -t "$LOG_TAG" "ZOT_GATE: active — docker login $ZOT_REGISTRY_URL ok (zot-primary)"
   else
-    logger -t "$LOG_TAG" "ZOT_GATE: docker login $ZOT_REGISTRY_URL FAILED — GHCR path (fallback)"
-    zot_gate_degraded_event login_failed
+    local zclass zhttp zhatch
+    zclass="$(_docker_login_failure_class "${LOGIN_ERR:-}")"
+    zhttp="$(_docker_login_http_status "${LOGIN_ERR:-}")"
+    # The subshell is the mechanism that makes this fail-open: it is the only construct measured
+    # to contain BOTH a `set -u` unbound expansion AND a `set -e` nonzero rc. A broken hatch goes
+    # dark; it can never abort the deploy.
+    zhatch="$( ( _login_hatch "${LOGIN_ERR:-}" "${LOGIN_OUT_CHARS:-0}" "${LOGIN_RC:-}" ) || true )"
+    LOGIN_ERR=""
+    logger -t "$LOG_TAG" "ZOT_GATE: docker login $ZOT_REGISTRY_URL FAILED class=$zclass http=${zhttp:-none} ${zhatch:-} — GHCR path (fallback)"
+    zot_gate_degraded_event login_failed "$zclass" "$zhttp" "${zhatch:-}"
   fi
+  LOGIN_ERR=""
   ztoken=""
 }
 
-# _ghcr_pull_or_recover <perr> (#6400): pull ${IMAGE}:${TAG} from GHCR; on an
-# AUTH-denied failure (classified from the stderr CONTENT, not the file path),
-# re-fetch the prd cred, relogin, and retry the pull EXACTLY ONCE before giving up.
-# Returns 0 on success (first pull OR recovered retry). On failure returns 1 and
-# sets the global RECOVERY_STAGE for the caller's pull_failure_event tag (empty when
-# no recovery was attempted — a non-auth failure never enters the branch, so
-# pull_failure_event fires byte-identically to pre-#6400). Fail-open: a recovery miss
-# leaves the caller's terminal image_pull_failed state unchanged. No loop — retrying
-# a genuinely-invalid prd cred would burn the deploy window (Sharp Edge). The
-# `200>&-` closes the FD-200 advisory lock for the pull children (#5062), preserved.
+# _ghcr_pull_or_recover <perr> (#6400 + #6525): pull ${IMAGE}:${TAG} from GHCR and, on a
+# recoverable failure (classified from the stderr CONTENT, not the file path), recover in-band
+# before giving up. TWO recovery classes, disjoint by construction:
+#   • AUTH-denied (#6400): re-fetch the prd cred, relogin, and retry the pull EXACTLY ONCE. This
+#     branch NEVER loops — a genuinely-invalid prd cred would burn the deploy window (Sharp Edge).
+#   • TRANSIENT/network (#6525): a timeout / connection-reset / EOF / no-such-host / registry-5xx
+#     blip retries with a bounded, capped backoff (PULL_TRANSIENT_RETRY_SLEEPS, default "2 4" =
+#     2 retries, ≤6 s added wall-clock/leg). This is the fix for the "first attempt fails, rerun
+#     succeeds" shape (#6525): pre-#6525 a transient stderr took the return-1 path with ZERO retries.
+# Returns 0 on success (first pull OR either recovered retry). On failure returns 1 and sets the
+# global RECOVERY_STAGE for the caller's pull_failure_event tag: empty for a non-recoverable class
+# (manifest/unknown — pull_failure_event fires byte-identically to pre-#6400); transient_exhausted
+# only when a TRANSIENT failure spent all its retries (the Sentry transient-vs-durable
+# discriminator, #6415/#6565). Retry stays at ONE level — the caller (pull_image_with_fallback)
+# does NOT retry; zot is already an immediate different-registry fallback upstream (one-level-retry
+# rule, 2026-06-30). Fail-open: a recovery miss leaves the terminal image_pull_failed state
+# unchanged. `200>&-` closes the FD-200 advisory lock for the pull children (#5062), preserved.
 _ghcr_pull_or_recover() {
   local perr="$1"
   RECOVERY_STAGE=""
-  docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr" && return 0
-  # classify the stderr CONTENT (tail -c 400), never the path — else recovery no-ops (P2-E).
-  if _pull_result_is_auth_denied "$(tail -c 400 "$perr" 2>/dev/null)"; then
-    # `|| true`: helper returns non-zero on a miss; a bare assignment would abort the
-    # deploy under set -euo. We parse the stage STRING (that string, not the rc, is what
-    # gets copied into RECOVERY_STAGE below; the rc is discarded via `|| true`).
-    local stage; stage="$(refetch_ghcr_and_relogin)" || true   # recovered|refetch_unavailable|relogin_failed
-    if [[ "$stage" == "recovered" ]]; then
-      if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
-        pull_auth_recovery_event "${IMAGE}:${TAG}" recovered   # info breadcrumb, distinct op
-        return 0
-      fi
-      RECOVERY_STAGE="pull_still_denied"                       # relogin ok but retry pull still denied
-    else
-      RECOVERY_STAGE="$stage"                                  # refetch_unavailable|relogin_failed
+  # #6525 transient backoff schedule. PULL_TRANSIENT_RETRY_SLEEPS is a test-only override seam
+  # (mirrors the SOLEUR_GHCR_READ_FILE precedent); tests pass "0 0" for a zero-sleep 2-retry loop.
+  # UNSET (the prod default) → "2 4" = 2 retries, ≤6 s added wall-clock/leg. Setting it to "" (empty)
+  # → an empty array → max=0 → DISABLES the transient retry — a deliberate operator break-glass lever.
+  # Hence the `-` default (NOT `:-`): `:-` would substitute the default on an EMPTY value too, silently
+  # defeating the disable lever; `-` substitutes only when UNSET, leaving an explicit "" empty. Prod
+  # never sets the var (unset ⇒ default). Tests exercise all three: unset (T-6525-8), "0 0", "" (T-6525-9).
+  # shellcheck disable=SC2206  # intentional word-split of the space-separated schedule into the array
+  local -a _sleeps=( ${PULL_TRANSIENT_RETRY_SLEEPS-2 4} )
+  local max=${#_sleeps[@]} attempt=0 detail
+  while :; do
+    if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+      # attempt>0 ⇒ we are here only after ≥1 TRANSIENT retry (attempt increments ONLY on the
+      # transient arm below), so this breadcrumb is DISJOINT from the auth block's `recovered`.
+      [[ "$attempt" -gt 0 ]] && pull_auth_recovery_event "${IMAGE}:${TAG}" transient_recovered
+      return 0
     fi
-  fi
-  return 1
+    # classify the stderr CONTENT (tail -c 400), never the path — else recovery no-ops (P2-E). The
+    # inline `tail` here (rather than reusing the `detail` computed just below) is INTENTIONAL: #6400
+    # AC3 anchors on the literal `_pull_result_is_auth_denied "$(tail -c 400 "$perr"` call shape to
+    # prove content-not-path classification. `$perr` is unchanged since the pull, so the re-read below
+    # is byte-identical and cheap (a ≤400-byte file read); do not "simplify" it away — it breaks AC3.
+    if _pull_result_is_auth_denied "$(tail -c 400 "$perr" 2>/dev/null)"; then
+      # ---- #6400 auth recovery, VERBATIM — keeps its OWN inner success `return 0`, then a
+      # terminal `return 1`: auth is recover-once-then-terminal and MUST NOT loop (a
+      # MOCK_GHCR_PULL_DENY_ALWAYS cred would otherwise burn the window — AC2/AC14 guard this).
+      # `|| true`: helper returns non-zero on a miss; a bare assignment would abort the deploy
+      # under set -euo. We parse the stage STRING (not the rc, which is discarded via `|| true`).
+      local stage; stage="$(refetch_ghcr_and_relogin)" || true   # recovered|refetch_unavailable|relogin_failed
+      if [[ "$stage" == "recovered" ]]; then
+        if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+          pull_auth_recovery_event "${IMAGE}:${TAG}" recovered   # info breadcrumb, distinct op — label stays `recovered`
+          return 0
+        fi
+        RECOVERY_STAGE="pull_still_denied"                       # relogin ok but retry pull still denied
+      else
+        RECOVERY_STAGE="$stage"                                  # refetch_unavailable|relogin_failed
+      fi
+      return 1
+    fi
+    detail="$(tail -c 400 "$perr" 2>/dev/null)"
+    if _pull_result_is_transient "$detail" && (( attempt < max )); then
+      # transient blip with retries left → back off and retry the SAME registry.
+      sleep "${_sleeps[$attempt]}"; attempt=$((attempt + 1)); continue
+    elif _pull_result_is_transient "$detail"; then
+      # transient but retries SPENT (attempt == max) → tag the terminal-transient class so the
+      # Sentry recovery_stage discriminates transient-exhausted from durable host-degradation
+      # (#6415/#6565). Set ONLY here (deepen GAP-7), NEVER in the else below.
+      RECOVERY_STAGE="transient_exhausted"
+      return 1
+    else
+      # manifest_unknown / unknown → no retry, and NO false transient_exhausted tag. The gate
+      # deliberately omits an explicit manifest arm (deepen GAP-5b): the transient regex is
+      # verified non-overlapping with the manifest tokens, so a manifest stderr lands HERE with
+      # EMPTY RECOVERY_STAGE — a transient→manifest tail is therefore carried by
+      # pull_failure_event's own pull_result classification, not mislabeled transient_exhausted.
+      return 1
+    fi
+  done
 }
 
 # pull_image_with_fallback <image_kind>: pull $IMAGE:$TAG zot-primary with an ATOMIC
@@ -857,6 +1496,56 @@ _ghcr_pull_or_recover() {
 # but failed); pull_failure_event on total failure. Returns 1 only when BOTH registries
 # fail (caller aborts, OLD container stays live — downtime-safe). FD-200 advisory lock
 # is closed for the pull children (#5062).
+# _try_local_cache_reload <image_kind>: last-resort rescue for a same-version `web` reload
+# (#6512). The item-4 seccomp redeploy targets v<running_version> — the image the container is
+# ALREADY running — the EXACT immutable @sha256 bits already live in production (cosign-checked at
+# its original deploy; even under WARN-mode fail-open the reused bits are strictly no worse than what
+# is already executing), always present in the host's local docker store. When BOTH registries fail
+# to serve that image (zot GC'd the
+# several-releases-old tag from its 5-v* keep-set, then the GHCR fallback leg also failed), the
+# reload needs NO new bits — the registry round-trip is the single point of failure. Reuse the
+# RUNNING container's image ID as VERIFIED_REF, skipping re-verify (identical @sha256 bits) with an
+# EXPLICIT cosign-reuse breadcrumb (cosign_verify_event reused_local_reload) — this is a deliberate
+# amendment to the ADR-087 cosign contract, NOT the warn-mode fail-open — and emit a MONITORED
+# registry=local-cache event (a dead registry must not hide behind a working local cache). Sets the
+# global LOCAL_CACHE_VERIFIED_REF and returns 0 on rescue; returns 1 (caller proceeds to the
+# existing hard image_pull_failed) otherwise.
+#
+# Scope is deliberately narrow — rescues ONLY a `web` deploy of an immutable semver tag whose target
+# is the RUNNING container's OWN image ID (always local, keyed off the literal container name
+# `soleur-web-platform`; there is NO $CONTAINER_NAME variable in this script). A re-pushed tag, a
+# stale leftover, or a genuine NEW-version deploy (whose target is never the running image ID) all
+# fall through to the existing hard failure — blast radius for any genuine version change is zero.
+# `docker image inspect` proves the image is present, not that `docker run` succeeds on a partially
+# GC'd layer; the existing post-run health gate remains the final backstop.
+_try_local_cache_reload() {
+  local image_kind="$1" running_img_id
+  [[ "$image_kind" == "web" ]] || return 1
+  [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  running_img_id="$(docker inspect --format '{{.Image}}' soleur-web-platform 2>/dev/null || true)"
+  [[ -n "$running_img_id" ]] || return 1
+  docker image inspect "$running_img_id" >/dev/null 2>&1 || return 1
+  # SAME-VERSION reload ONLY (P0 correctness): the running image must itself be tagged with the tag
+  # we are (re)deploying. The item-4 seccomp redeploy targets v<running_version> by construction
+  # (#5955), so the running image carries a `<ref>:$TAG` RepoTag from its original pull. A genuine
+  # NEW-version deploy whose tag both registries failed to serve is NOT on the (older) running
+  # image, so it falls through to the existing hard image_pull_failed — reusing the running image
+  # there would silently serve stale bits and report the new release as "deployed" (a version
+  # rollback masked as success; ci-deploy runs no post-deploy version assertion). Suffix match is
+  # ref-agnostic (tolerates the zot/ghcr prefix); ANY tag ambiguity fails SAFE (hard fail → Fix 2a
+  # alarms) rather than risk a stale-bits deploy.
+  local _rt _reload_match=0
+  while IFS= read -r _rt; do
+    [[ "$_rt" == *":$TAG" ]] && { _reload_match=1; break; }
+  done < <(docker image inspect --format '{{range .RepoTags}}{{println .}}{{end}}' "$running_img_id" 2>/dev/null || true)
+  [[ "$_reload_match" == "1" ]] || return 1
+  registry_pull_event "local-cache" "$image_kind" "$TAG"
+  cosign_verify_event "reused_local_reload" "$running_img_id" \
+    "both registries down; reusing the already-verified running image for a same-version seccomp reload (#6512)"
+  LOCAL_CACHE_VERIFIED_REF="$running_img_id"
+  return 0
+}
+
 pull_image_with_fallback() {
   local image_kind="$1" perr
   perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
@@ -873,12 +1562,22 @@ pull_image_with_fallback() {
     # watched event; surfaced loudly, not journald-only.
     #
     # RETIREMENT TRIPWIRE (#6285): ADR-096 task 5.3 deletes this branch. That darkens exactly
-    # ONE of the four signals watched by sentry_issue_alert.zot_mirror_fallback_rate
-    # (infra/sentry/issue-alerts.tf): registry:"ghcr-fallback", emitted just below. The other
-    # two pull-fallback signals live in cloud-init.yml (app_ghcr_fallback,
-    # inngest_ghcr_fallback) — a separate fresh-boot path, separate deletions; they fire on
-    # the zot MISS, before any GHCR pull, so "stop GHCR push" does not darken them either.
-    # zot_gate_degraded_event (:630) is GATE-emitted and survives 5.3 outright.
+    # ONE of the FIVE signals watched by sentry_issue_alert.zot_mirror_fallback_rate
+    # (infra/sentry/issue-alerts.tf): registry:"ghcr-fallback", emitted just below.
+    #
+    # The other pull-fallback signals live in cloud-init.yml — a separate fresh-boot path,
+    # separate deletions. Their survival across 5.3 is NOT uniform, so do not read them as one
+    # group:
+    #   app_ghcr_fallback / inngest_ghcr_fallback — fire on the zot MISS, before any GHCR pull
+    #     succeeds, so "stop GHCR push" does not darken them.
+    #   app_ghcr_served (#6462) — DIFFERENT. It fires AFTER the pull loop resolves, and on its
+    #     dominant route (a /v2/ probe-miss) the GHCR pull SUCCEEDED. Once 5.3 revokes the PAT
+    #     that pull 401s instead, so the boot takes the N>=5 -> exit 1 path and dies emitting no
+    #     app_ghcr_served at all. It is not "darkened by push retirement" like its siblings —
+    #     it is darkened by the boot failing. Post-5.3, its silence means the opposite of
+    #     healthy. This is precisely why the soak must be trustworthy BEFORE 5.3, not after.
+    # zot_gate_degraded_event (defined below; name-anchored — the prior `:630` cite had rotted onto
+    # a bare comment line) is GATE-emitted and survives 5.3 outright.
     #
     # So do NOT retire that alarm here — NARROW its filters_v2 to the signals that still
     # emit. Retiring it blinds the survivors, and zot-gate-degraded is currently its
@@ -894,6 +1593,13 @@ pull_image_with_fallback() {
       rm -f "$perr" 2>/dev/null || true
       return 0
     fi
+    # #6512: both registries failed. Rescue a genuine same-version `web` reload of the
+    # RUNNING container's already-verified image before the hard failure (P2-5: this covers
+    # the ZOT_ACTIVE both-failed exit).
+    if _try_local_cache_reload "$image_kind"; then
+      rm -f "$perr" 2>/dev/null || true
+      return 0
+    fi
     pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
     rm -f "$perr" 2>/dev/null || true
     return 1
@@ -901,6 +1607,13 @@ pull_image_with_fallback() {
   # zot dark (not configured/unreachable) → unchanged GHCR path, now with pull-site
   # recovery (#6400): a baked cred that logs in but cannot pull is re-fetched + retried.
   if _ghcr_pull_or_recover "$perr"; then
+    rm -f "$perr" 2>/dev/null || true
+    return 0
+  fi
+  # #6512: both registries failed on the zot-dark path too — same rescue for a genuine
+  # same-version `web` reload of the RUNNING container's already-verified image (P2-5:
+  # covers the ZOT_ACTIVE=0 exit).
+  if _try_local_cache_reload "$image_kind"; then
     rm -f "$perr" 2>/dev/null || true
     return 0
   fi
@@ -1581,7 +2294,18 @@ case "$COMPONENT" in
     # production) — closes the tag-repoint TOCTOU. WARN never blocks; ENFORCE aborts,
     # keeping the OLD container live (downtime-safe). VERIFIED_REF is always a
     # runnable ref (verified digest, or the tag as a WARN fail-open fallback).
-    if ! VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")"; then
+    #
+    # #6512: if the pull was rescued by the local-cache reload tier (both registries
+    # failed for a same-version reload), LOCAL_CACHE_VERIFIED_REF holds the RUNNING
+    # container's image ID — the exact immutable @sha256 bits already live in prod
+    # (cosign-checked at its original deploy; no worse than what is already executing).
+    # Reuse it directly and SKIP re-verify; the explicit
+    # reused_local_reload cosign breadcrumb (verify_result=reused_local_reload) was already emitted inside
+    # pull_image_with_fallback (an intentional amendment to the ADR-087 cosign contract,
+    # never the warn-mode fail-open).
+    if [[ -n "${LOCAL_CACHE_VERIFIED_REF:-}" ]]; then
+      VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"
+    elif ! VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")"; then
       logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
       final_write_state 1 "cosign_verify_failed"
       exit 1
@@ -2150,6 +2874,13 @@ case "$COMPONENT" in
     # syntax errors, unbound var traps) which journald wouldn't show.
     BOOTSTRAP_STDERR=/tmp/inngest-bootstrap-stderr.log
     rm -f "$BOOTSTRAP_STDERR"
+    # (#6555) DOPPLER_PROJECT was preserved here as a forward-guard (lockstep with the sudoers
+    # env_keep list) for the day the DEDICATED host got a ci-deploy path — the idea being that a
+    # bootstrap invoked over sudo could inherit the project selector. #6555 superseded that: the
+    # inngest units now read DOPPLER_PROJECT from EnvironmentFile=/etc/default/inngest-server
+    # (written at cloud-init:324 / the bootstrap heredoc + in-place augment), so the sudo-inherited
+    # env is no longer the delivery path. Removed here + from both sudoers env_keep copies. On this
+    # (web) host the bootstrap's `soleur` default at :47 remains correct regardless.
     if ! sudo --preserve-env=INNGEST_CLI_VERSION,INNGEST_CLI_SHA256,VECTOR_CLI_VERSION,VECTOR_CLI_SHA256 \
         /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh 2> "$BOOTSTRAP_STDERR"; then
       # Extract a SHORT (≤400 char) reason suffix from the stderr tail so

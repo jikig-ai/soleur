@@ -50,8 +50,12 @@ import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
 // =============================================================================
 
 export const CRON_NAME = "cron-github-cidr-refresh";
-// Five-registry lockstep: this slug MUST be byte-identical to the function id,
-// the cron-monitors.tf resource name, and the apply-sentry-infra.yml -target.
+// Slug lockstep: this slug MUST be byte-identical to the function id, the
+// cron-monitors.tf resource's monitor-slug, and the GHA workflow heartbeat
+// slug (asserted by sentry-monitor-iac-parity.test.ts). The
+// apply-sentry-infra.yml `-target=` line used to be a lockstep member too;
+// #6589 made the apply full-root, so declaring the resource now applies it and
+// there is no target line left to keep in step.
 export const SENTRY_MONITOR_SLUG = "cron-github-cidr-refresh";
 
 // Repo-root-relative paths. CIDR_FILE_REL is the single file this cron is allowed

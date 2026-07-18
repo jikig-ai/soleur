@@ -28,6 +28,42 @@ BEGIN
   END IF;
 END $$;
 
+-- 0c) FAIL-CLOSED *negative* guard — the missing half of 0b (2026-07-15).
+--     0b encodes the inference "goose tables exist ⟹ this is an Inngest-ONLY project".
+--     The pre-cutover DARK Inngest backend (#6178 / ADR-100) FALSIFIED that inference:
+--     it ran goose against soleur-dev, so soleur-dev — a CO-TENANTED project holding the
+--     web-platform app's 52 dev tables — satisfies 0b and would let this schema-wide
+--     REVOKE-all proceed, revoking anon/authenticated across every app table and
+--     poisoning default privileges for every future dev migration. 0b alone cannot
+--     distinguish "Inngest-only" from "Inngest + an app"; this guard adds the other half
+--     by aborting when APP-owned tables are present.
+--
+--     INVARIANT: these three tables exist in the web-platform schema and MUST NEVER exist
+--     on the dedicated Inngest project. They are chosen to be APP-DISTINCTIVE. Do NOT
+--     substitute generic nouns like `users` or `conversations`: Inngest has no namespace
+--     discipline and already ships `apps`, `events`, `functions`, `history`, `migrations`
+--     and `traces`, so the day a goose migration ships `public.users` this guard would
+--     RAISE on soleur-inngest-prd FOREVER, permanently killing the ADR-030 I8 self-heal.
+--     Verified 2026-07-15: to_regclass of all three is NULL on pigsfuxruiopinouvjwy.
+--
+--     DEGRADATION MODE: if web-platform ever RENAMES all three of these tables, this guard
+--     silently degrades to a no-op (it can only detect tables it names) and 0b's falsified
+--     inference is all that remains. The workflow-level Management-API project-name
+--     preflight in apply-inngest-rls.yml is the PRIMARY guard for exactly this reason;
+--     this in-DB check is defense-in-depth, not the load-bearing control.
+--
+--     ORDERING IS LOAD-BEARING: this MUST precede the revoke loop below — a guard that
+--     runs after the REVOKE aborts nothing. Asserted statically by inngest-rls.test.sh
+--     (byte-offset of the guard < byte-offset of the first REVOKE).
+DO $$
+BEGIN
+  IF to_regclass('public.kb_files') IS NOT NULL
+     OR to_regclass('public.workspace_invitations') IS NOT NULL
+     OR to_regclass('public.byok_delegation_acceptances') IS NOT NULL THEN
+    RAISE EXCEPTION 'ABORT: web-platform app tables detected — this project is CO-TENANTED, not an Inngest-only project. A schema-wide REVOKE here would break the app. Use the table-scoped 0002_dev_inngest_tables_lockdown.sql instead.';
+  END IF;
+END $$;
+
 -- 1) Enable RLS + revoke client-role grants on every current public base table + sequence.
 --    Each ALTER/REVOKE is its own statement (autocommit) so a contended table holds only its own
 --    ACCESS EXCLUSIVE lock, not all N at once. (If the Management-API endpoint wraps the whole

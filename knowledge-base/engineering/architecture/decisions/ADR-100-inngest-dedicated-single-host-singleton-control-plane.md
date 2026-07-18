@@ -186,9 +186,23 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
      `unset` no-ops make a benign 30s poll on the dark/live host safe.
    - **An `inngest-server.service` `ExecStartPre` arm-atomicity guard** (`inngest-server-flip-guard.sh`,
      P1-5) refuses to start (exit non-zero, blocking start) when `INNGEST_POSTGRES_URI` resolves to
-     **prod** and the flag ∉ `{armed, flipping, done}` — closing the race where the prod URI is
+     **prod** and the flag ∉ `{armed, flipping, flushed, done}` — closing the race where the prod URI is
      written before the gated flip and any non-arm restart (crash / `OnBootSec` / operator) would
      otherwise bring up a **second prod scheduler** against the still-dirty dark Redis.
+     **`flushed` is in the allowlist (amended 2026-07-17, Ref #6553):** the forward path sets the flag
+     to `flushed` **before** it invokes `start_server` (`:163,:172` above; `inngest-cutover-flip.sh:188→189`),
+     and the `flushed`-RESUME arm (`inngest-cutover-flip.sh:240`) also calls `start_server` while the
+     flag is `flushed`. Because `DBSIZE==0` is asserted **before** `flushed` is ever written
+     (`inngest-cutover-flip.sh:178`), a start at `flushed` cannot double-fire against a dirty dark Redis
+     — so the guard MUST allow it. Omitting `flushed` (the pre-#6553 allowlist) made the guard block the
+     FSM's **own** controlled start, not merely an unplanned restart. This is a correction of an
+     ADR-vs-code inconsistency: the omitted state is the very state the FSM starts the server at.
+   - **Guard/FSM lockstep — class invariant (added 2026-07-17, Ref #6553):** the guard allowlist MUST
+     be a **superset** of the set of FSM states in which the cutover-flip oneshot invokes `start_server`.
+     Adding a new FSM state that precedes a `start_server` call without adding it to the guard allowlist
+     re-introduces the self-block above. This is enforced mechanically by a source-derived drift guard in
+     `inngest-server-flip-guard.test.sh` (derives both sets from source and FAILS on divergence), not just
+     by the point-in-time string assertions.
    - **Flip-state is read no-SSH via Better Stack** (P0-2): the oneshot emits its verify-state as a
      `logger -t inngest-cutover-flip` JSON line, carried off-box by the already-shipped on-host
      Vector → Better Stack Logs journald shipper (source `soleur-inngest-vector-prd`, #6197). The
@@ -338,6 +352,17 @@ to Better Stack. #6396 re-adds the shipper independently (ungated, baked into
 on `pull_failure_event`. See ADR-082 Item 5 (this is the decision that caused the regression #6396
 closes).
 
+**Create-time-render caveat (#6616):** the per-host `host_name` #6396 introduces is a
+*construction-time render*, not a runtime-guaranteed 1:1 discriminator. A host that predates the
+render and cannot re-run cloud-init (web-1, under `lifecycle{ignore_changes=[user_data]}`) keeps its
+stale co-located-era `host_name=soleur-inngest-prd` until its next immutable recreate — so it collides
+with the dedicated node on Better Stack source 2457081. Treat `host_name=soleur-inngest-prd` as suspect
+until every emitting host is post-#6396-born; the live invariant is enforced by the #6616 read-only
+follow-through (auto-closes on the web-1 recreate), not by the render alone. (The dedicated node's
+telemetry `host` is `soleur-inngest` = its `hcloud_server.inngest` name, inngest-host.tf:202, and thus
+its OS hostname — NOT `soleur-inngest-server-prd`, which is a `betteruptime_heartbeat` monitor name,
+inngest.tf:291, and never appears in telemetry.)
+
 **Blast radius (SEC-H3, documented not eliminated):** the signing key authorizes the entire ~60-
 function registry, several running in the web-app process with full prd env (GHCR token minter,
 agent-spawn, bug-fixer, TF-drift). Inngest-host compromise ≈ indirect arbitrary-app-code execution
@@ -438,4 +463,42 @@ This is a **re-application** of the established mechanism, not a novel decision 
 new ordinal of its own. The genuinely-new cross-cutting rule extracted from the #6238 recurrence
 (a boot-armed non-paused heartbeat MUST have a mechanically-guarded reprovision path) is recorded
 separately in **ADR-103**, whose `heartbeat-reprovision-parity` CI guard enforces it.
+
+## Addendum (2026-07-15) — the dark backend is **soleur-dev**, and that co-tenancy is transient
+
+**The fact, recorded here because it previously lived ONLY in a Terraform comment**
+(`apps/web-platform/infra/inngest.tf:234-235`) and in a Doppler secret's value — neither of which
+is a place an architecture reader looks:
+
+> Until the cutover flips it, the dedicated Inngest host's **dark** Postgres backend is the
+> **soleur-dev** Supabase project (`mlwiodleouzwniehynfz`), reached through its session pooler as
+> username `postgres.mlwiodleouzwniehynfz`. `INNGEST_POSTGRES_URI` in Doppler `soleur-inngest/prd`
+> resolves there. It is **not** "a distinct DB on soleur-inngest-prd".
+
+**Why this matters beyond bookkeeping.** soleur-dev is the **app's dev project**. Pointing the dark
+backend at it made that project **co-tenanted**: goose ran 2026-07-10 and created 14 Inngest tables
+in the same `public` schema as the web-platform app's 52 dev tables. Two consequences followed, both
+now closed:
+
+1. **A live anon-write exposure.** Supabase default privileges auto-granted `anon`/`authenticated`
+   full DML on the new tables, and soleur-dev's anon key **ships to browsers**. An anonymous caller
+   held INSERT/UPDATE/DELETE/**TRUNCATE** on this host's scheduler state (advisor 2026-07-12; a
+   `GET /rest/v1/apps` returned 310 bytes of real rows). Remediated by the table-scoped
+   `0002_dev_inngest_tables_lockdown.sql` — see **ADR-030 I8** (by filename:
+   `ADR-030-inngest-as-durable-trigger-layer.md`; the `ADR-030` ID is ambiguous, two files claim it).
+2. **The existing prd lockdown became unsafe to point anywhere else.** `0001`'s Inngest-sentinel
+   preflight infers *"goose tables exist ⟹ Inngest-only project"* — which the dark backend
+   **falsified**, since soleur-dev satisfies it while hosting an entire app. Enforcement on a
+   co-tenanted project MUST be table-scoped; see I8.
+
+**Transient — with an atomic retirement.** This co-tenancy ends when `cutover-inngest.yml`'s
+`op=arm` writes the prod DSN. The 14 tables then become orphans on the dev project and are dropped
+in a tracked follow-up, which must retire `0002` + `apply-inngest-rls-dev.yml` **in the same change
+as (or before) the drop** — otherwise `0002`'s positive sentinel RAISEs forever. The quieter failure
+is worse: if the cutover lands and the drop does not, the sentinel still passes, the gate reports
+`violations=0`, and the workflow stays **green forever defending a co-tenancy that no longer
+exists**. Green cruft never annunciates. (Contrary to an earlier belief, soleur-dev is **not** a
+rollback target: `op=arm` overwrites `INNGEST_POSTGRES_URI`, and the `rollback` arm writes only
+`INNGEST_CUTOVER_FLIP` — no code path restores the dark DSN. The reason not to drop early is simply
+that the dark host is **live** against soleur-dev until the flip.)
 

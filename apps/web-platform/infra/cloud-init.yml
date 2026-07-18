@@ -73,8 +73,10 @@ write_files:
 
   # #4144 — permits ci-deploy.sh to invoke inngest-bootstrap.sh as root
   # from the fixed path /tmp/inngest-extract/ (no wildcards, sudo-rs safe).
-  # env_keep preserves INNGEST_CLI_VERSION + SHA across the sudo boundary.
-  # Mirrored in apps/web-platform/infra/deploy-inngest-bootstrap.sudoers
+  # env_keep preserves INNGEST_CLI_VERSION + SHA across sudo. (#6555 dropped DOPPLER_PROJECT —
+  # units now read it from EnvironmentFile=/etc/default/inngest-server, not the sudo-inherited env.)
+  # Mirrored in apps/web-platform/infra/deploy-inngest-bootstrap.sudoers (rationale lives
+  # there — this file is base64gzip'd into user_data against a byte budget)
   # so terraform_data.deploy_pipeline_fix can refresh existing hosts.
   - path: /etc/sudoers.d/deploy-inngest-bootstrap
     content: |
@@ -416,6 +418,10 @@ runcmd:
   - printf 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s\n' '${ghcr_read_user}' '${ghcr_read_token}' > /etc/default/soleur-ghcr-read
   - chmod 600 /etc/default/soleur-ghcr-read
   - chown deploy:deploy /etc/default/soleur-ghcr-read
+  # (#6604/DP-9) Bake the Sentry DSN for the luks-monitor units — baked so "Doppler down ⇒ MUST page" keeps its DSN.
+  - printf 'SOLEUR_SENTRY_DSN=%s\n' '${sentry_dsn}' > /etc/default/luks-monitor
+  - chmod 600 /etc/default/luks-monitor
+  - chown root:root /etc/default/luks-monitor
 
   # Install Docker via official APT repository with GPG key verification (#1615).
   # Replaces pipe-to-shell (curl | sh) with signed APT repo -- same pattern as cloudflared above.
@@ -428,8 +434,8 @@ runcmd:
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
 
   # Configure Docker log rotation + the self-hosted zot registry as an insecure (plain-HTTP,
-  # private-net) registry (#6122/ADR-096). zot serves HTTP on 10.0.1.30:5000 (= zot-registry.tf
-  # local.registry_endpoint) behind a deny-all-public firewall; docker refuses a non-TLS registry
+  # private-net) registry (#6122/ADR-096). zot serves HTTP on ${registry_endpoint} (derived from
+  # zot-registry.tf local.registry_endpoint, #6448) behind a deny-all-public firewall; docker refuses a non-TLS registry
   # unless it is allowlisted here. Harmless before the Phase-3 flip activates — nothing pulls from
   # zot until the dark-launch gate confirms it live. cosign digest-pinning is the integrity guard,
   # not TLS (Phase-0 spike). This is the ONLY daemon.json write for FRESH hosts; running hosts get
@@ -442,7 +448,7 @@ runcmd:
         "max-size": "10m",
         "max-file": "3"
       },
-      "insecure-registries": ["10.0.1.30:5000"]
+      "insecure-registries": ["${registry_endpoint}"]
     }
     DOCKEREOF
   - STAGE=docker_restart  # (#6090) name the stage for the top-armed on_err fatal
@@ -522,15 +528,11 @@ runcmd:
     N=0
     until docker pull "$REF" > /run/soleur-pull.log 2>&1; do
       N=$((N+1))
-      # #6278: on the zot→GHCR flip (REF still the zot ref, so zot WAS primary), emit a
-      # warning breadcrumb (tags.stage=app_ghcr_fallback) so the mirror-staleness
-      # fallback-rate alarm can page on a fresh-boot zot miss on the PRIMARY web
-      # container that still SUCCEEDS via GHCR (otherwise invisible — only a total pull
-      # failure emits). Uses the baked _emit — the only emitter live at this pre-bootstrap
-      # point; the inngest path (bottom of runcmd) uses soleur-boot-emit for the same
-      # `stage` tag because it runs AFTER host-bootstrap authors that binary. The guard
-      # fires exactly once: after the flip REF==IMAGE_REF, and when zot was never primary
-      # (REF started == IMAGE_REF) it never fires. Fail-open (_emit swallows all errors).
+      # #6278: on the zot→GHCR flip (REF still the zot ref ⇒ zot WAS primary), emit a
+      # warning breadcrumb (stage=app_ghcr_fallback) so the fallback-rate alarm pages on a
+      # fresh-boot zot miss that still SUCCEEDS via GHCR (else invisible). Baked _emit is
+      # the only emitter live pre-bootstrap; the inngest path uses soleur-boot-emit (same
+      # `stage` tag) as it runs after host-bootstrap. Fires once. Fail-open.
       if [ "$N" -ge 2 ] && [ "$REF" != "$IMAGE_REF" ]; then
         REF="$IMAGE_REF"   # atomic fallback to GHCR after the zot attempt
         # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
@@ -541,6 +543,9 @@ runcmd:
     done
     : > /run/soleur-stage-detail
     printf '%s' "$REF" > /run/soleur-image-ref
+    # #6462 denominator: REF==IMAGE_REF iff GHCR served. MUST precede the reassign below (it
+    # makes the test always-true). Rationale + the image_ref wart: cloud-init-user-data-size.test.ts
+    if [ "$REF" = "$IMAGE_REF" ]; then _emit "app image served by GHCR" "app_ghcr_served" warning; else _emit "app image served by zot" "app_zot" info; fi
     IMAGE_REF="$REF"
     STAGE=extract
     docker create --name soleur-hostscript-seed "$IMAGE_REF" >/dev/null
@@ -563,10 +568,10 @@ runcmd:
     set +e  # H3 (#6090): scope set -e — runcmd is ONE /bin/sh; leak = silent abort (plan).
   # END host-script extraction (#5921)
 
-  # Mount volume for workspaces (Hetzner pre-formats with ext4 via Terraform)
+  # #6604: pin /mnt/data by-id + nofail (glob binds the wrong device once LUKS attaches; nofail = pageable degrade, not a boot hang).
   - mkdir -p /mnt/data
-  - mount /dev/disk/by-id/scsi-0HC_Volume_* /mnt/data || true
-  - echo '/dev/disk/by-id/scsi-0HC_Volume_* /mnt/data ext4 defaults 0 2' >> /etc/fstab
+  - grep -q ' /mnt/data ' /etc/fstab || echo '/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id} /mnt/data ext4 defaults,nofail 0 2' >> /etc/fstab
+  - mount /mnt/data 2>/dev/null || mount /dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id} /mnt/data || soleur-boot-emit workspaces_mount fatal || true
 
   # Create workspace and plugin directories
   - mkdir -p /mnt/data/workspaces
@@ -690,13 +695,13 @@ runcmd:
   # fresh hosts.
   - |
     set -e
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.20
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.23
     # #6122/ADR-096: prefer zot (dark; host already logged in by soleur-host-bootstrap.sh);
     # all 3 refs follow IREF, zot miss ⇒ GHCR fallback; soleur-boot-emit records the registry.
     ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
     # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
     if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
-      ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.20"
+      ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.23"
       if docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_ghcr_fallback warning; fi
     fi
     docker pull "$IREF"
@@ -769,6 +774,8 @@ runcmd:
       --name soleur-web-platform \
       --log-driver journald \
       --restart unless-stopped \
+      --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
+      --security-opt apparmor=soleur-bwrap \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$TMPENV" \
       --add-host host.docker.internal:host-gateway \

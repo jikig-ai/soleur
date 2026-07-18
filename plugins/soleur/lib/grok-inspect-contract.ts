@@ -69,7 +69,9 @@ export function parseGrokInspectOutput(output: string): GrokInspectParsed {
       continue;
     }
 
-    if (inAgents && /soleur:[^\s]+\s+project/.test(line)) {
+    // Grok project agents register under filename stem (colons→hyphens).
+    // Accept colon form only as a transition / pre-rename fixture shape.
+    if (inAgents && /soleur[-:][^\s]+\s+project/.test(line)) {
       soleurProjectAgentCount++;
       continue;
     }

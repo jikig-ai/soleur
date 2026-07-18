@@ -119,9 +119,10 @@ host-authoritative event (`feature=container-restart-monitor`, op-scoped to
 excluded). It uses the proven `first_seen/reappeared/regression` + `tagged_event`
 pattern — **not** an `event_frequency` condition. The monitor already does the rate
 thresholding host-side, so a first-seen page on its event is both correct and simpler
-than a redundant frequency condition. (Update, #6278: the pinned `jianyuan/sentry@
-0.15.0-beta2` `conditions_v2` **does** expose `event_frequency` — schema-verified via
-the cached provider binary; the first in-repo use is `zot_mirror_fallback_rate` in
+than a redundant frequency condition. (Update, #6278: the pinned `jianyuan/sentry`
+provider (v0.15.4 as of #6636; originally schema-verified at v0.15.0-beta2) `conditions_v2`
+**does** expose `event_frequency` — schema-verified via the cached provider binary;
+the first in-repo use is `zot_mirror_fallback_rate` in
 `issue-alerts.tf`. The original "no verified support" framing was stale; first-seen
 remains preferred *here* purely because the host does the thresholding.) The "Server
 startup" event-frequency remains available for AC12 verification via the Sentry

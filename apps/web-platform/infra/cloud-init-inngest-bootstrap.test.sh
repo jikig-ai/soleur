@@ -238,6 +238,37 @@ else
     echo "        Fix: bump every 'soleur-inngest-bootstrap:<tag>' ref in"
     echo "        apps/web-platform/infra/cloud-init.yml to $LATEST_TAG."
   fi
+
+  # #6536: the DEDICATED host's pin was guarded by NOTHING. This guard read only
+  # cloud-init.yml (the web host), so cloud-init-inngest.yml silently sat on v1.1.19
+  # while the web host moved to v1.1.20 — and the two hosts extract inngest-bootstrap.sh
+  # + vector.toml from whatever image THEIR OWN file pins.
+  #
+  # That gap is not cosmetic; it is how a fix reaches main and never reaches the host.
+  # The dedicated host is delivered by `apply_target=inngest-host-replace`, whose
+  # `terraform plan -replace=` force-replaces REGARDLESS of any user_data diff — so the
+  # rebuild boots the pinned image whether or not the pin moved. #6539 measured v1.1.19
+  # and v1.1.20 to contain NONE of the #6536 fix: dispatching the replace against a
+  # stale pin would have rebuilt the dark host pre-fix, left the bug live, and spent the
+  # zero-downtime window (free only while the host is dark, a cron outage after #6178
+  # arms the flip). The guard above would have stayed green throughout — it was watching
+  # the other file.
+  #
+  # Same authoritative signal (semver-max published tag), same failure text shape.
+  # `|| true` mirrors the PIN extraction above: a rename must FAIL cleanly, not abort
+  # the run under pipefail before the results summary.
+  DED_CLOUD_INIT="$SCRIPT_DIR/cloud-init-inngest.yml"
+  DED_PIN=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$DED_CLOUD_INIT" | head -1 | sed 's/.*://' || true)
+  assert "dedicated-host cloud-init pin ($DED_PIN) matches latest published vinngest-v* tag ($LATEST_TAG)" \
+    "[[ '$DED_PIN' == '$LATEST_TAG' ]]"
+  if [[ "$DED_PIN" != "$LATEST_TAG" ]]; then
+    echo "        DRIFT: cloud-init-inngest.yml pins $DED_PIN but the latest published tag is $LATEST_TAG."
+    echo "        Fix: bump every 'soleur-inngest-bootstrap:<tag>' ref in"
+    echo "        apps/web-platform/infra/cloud-init-inngest.yml to $LATEST_TAG."
+    echo "        This is the DEDICATED inngest host. Its replace is dispatch-only and"
+    echo "        force-replaces regardless of user_data, so a stale pin here means the"
+    echo "        rebuild boots a pre-fix image and the dispatch changes nothing (#6536)."
+  fi
 fi
 
 # --- AC6b: all pin refs present AND share one tag (catches a partial bump) ---
@@ -305,7 +336,7 @@ if command -v terraform >/dev/null 2>&1; then
   # whose assertions fail with a misleading "OMITS" pass (#6425).
   render_ci() {
     local colocate="$1" out="$2" connector="${3:-true}"
-    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="TT_SENTINEL_6425", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ghcr_read_user="u", ghcr_read_token="g", ci_ssh_public_key_openssh="k", web_colocate_inngest=%s, web_tunnel_connector=%s, host_name="soleur-web-platform" })\n' \
+    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="TT_SENTINEL_6425", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ghcr_read_user="u", ghcr_read_token="g", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="reg", web_colocate_inngest=%s, web_tunnel_connector=%s, host_name="soleur-web-platform" })\n' \
       "$CLOUD_INIT" "$colocate" "$connector" | terraform -chdir="$RENDER_SCRATCH" console > "$out"
     # A truncated/empty render makes every `! grep` assertion pass vacuously.
     [[ -s "$out" ]] || { echo "  FATAL: render produced no output (colocate=$colocate connector=$connector)"; return 1; }
@@ -319,6 +350,90 @@ body = "\n".join(L[1:-1]) if (L and L[0].lstrip().startswith("<<")) else "\n".jo
 yaml.safe_load(body)
 PY
   }
+  # --- #6446: the raw-source step is KEPT, and must stay directive-stripped ---
+  # An earlier draft of this PR DELETED infra-validation.yml's raw-source step and guarded
+  # its absence. #6426 landed on main mid-pipeline with a different fix for the same issue:
+  # keep the step, strip the col-0 `%{` directive lines, validate the remainder. The two are
+  # complementary, not competing, so both are kept (operator call) — main's step catches
+  # schema errors in the non-gate body WITHOUT needing terraform; the rendered check below
+  # catches what it structurally cannot see.
+  #
+  # So the invariant flipped: the guard is no longer "the step is gone" but "the step never
+  # points at the UNSTRIPPED template again". Anchored on `-c <path>` so the workflow's own
+  # explanatory comment (which names the old broken form) cannot satisfy it.
+  INFRA_VALIDATION_WF="$SCRIPT_DIR/../../../.github/workflows/infra-validation.yml"
+  assert "infra-validation.yml schema-checks the STRIPPED render, never the raw template (#6446/#6426)" \
+    "! grep -qE '^[[:space:]]*cloud-init schema -c cloud-init\.yml[[:space:]]*$' '$INFRA_VALIDATION_WF'"
+  # The POSITIVE half asserts schema coverage EXISTS. It is a two-item ALLOWLIST, NOT a general
+  # "any mechanism" check — a workflow-text grep structurally cannot verify that a script it
+  # merely CALLS performs the check, so an allowlist is the honest ceiling. It accepts main's
+  # stripped step or a line-leading `bash …validate-infra-templates.sh` (#6458's current path).
+  # A third mechanism, or #6458 renaming its script, reds this and must be added here.
+  # Pinning `-c /tmp/cloud-init.stripped.yml` ALONE would pin main's *implementation* (a
+  # temp-file path) and red #6458 for a deliberate UPGRADE of the coverage this guard protects.
+  # A drift guard must fail on SILENT LOSS of coverage, never on an upgrade of it.
+  #
+  # Anchored on a line-leading command: prose cannot produce one, and BOTH workflows name these
+  # tokens in explanatory comments (the instance-4 trap in 2026-07-15-narrowing-is-not-anchoring…
+  # — a bare substring here would be vacuous). `[^-]` after `bash ` rejects lint-only decoys:
+  # `bash -n <script>` syntax-checks and validates nothing.
+  assert "infra-validation.yml still schema-checks a NON-raw cloud-init source (#6426 stripped | #6458 rendered)" \
+    "grep -qE '^[[:space:]]*(cloud-init schema -c /tmp/cloud-init\.stripped\.yml|bash [^-].*validate-infra-templates\.sh)' '$INFRA_VALIDATION_WF'"
+  # The second alternate is SELF-VALIDATING: naming the script is not evidence it schema-checks.
+  # Without this, swapping the stripped step for a `bash …validate-infra-templates.sh` line
+  # greens the guard while coverage is GONE (the script does not exist on this branch) — a
+  # silent loss, the exact thing the contract above forbids. `bash <missing>` would red the
+  # `validate` matrix job, but that job's check name is dynamic and cannot be a required
+  # context — the "red for days, nobody blocked" pathology this guard backstops (see #6473).
+  # Conditional, so it costs nothing until #6458 lands.
+  VALIDATE_TEMPLATES_SH="$SCRIPT_DIR/../../../.github/scripts/validate-infra-templates.sh"
+  if grep -qE '^[[:space:]]*bash [^-].*validate-infra-templates\.sh' "$INFRA_VALIDATION_WF"; then
+    assert "validate-infra-templates.sh exists and actually runs cloud-init schema (#6458)" \
+      "[[ -x '$VALIDATE_TEMPLATES_SH' ]] && grep -q 'cloud-init schema' '$VALIDATE_TEMPLATES_SH'"
+  fi
+
+  # --- #6446: cloud-init schema on the RENDERED doc ---
+  # infra-validation.yml used to run `cloud-init schema -c cloud-init.yml` against the RAW
+  # templatefile() source. That is structurally incapable: the file is a Terraform template,
+  # not YAML. It survived for years only because `${...}` interpolations sit inside values and
+  # parse as ordinary scalars — false-green. The first column-0 `%{ if ... ~}` directive turned
+  # it false-RED (`%` is YAML's reserved directive indicator, so the parser aborts before
+  # cloud-init ever sees the doc), and it stayed red on every infra PR because `validate` is
+  # not a required check. This leg already holds the only real render, so the check belongs
+  # here — the schema is a property of the RENDERED state, which is what boots a host.
+  # Deleting the raw-source step without this would drop the coverage entirely.
+  cloud_init_schema_ok() {
+    local stripped="$1.schema.yml"
+    # Same heredoc-strip as render_yaml_ok — terraform console wraps output in `<<EOT … EOT`.
+    python3 - "$1" "$stripped" <<'PY'
+import sys
+L = open(sys.argv[1]).read().splitlines()
+body = "\n".join(L[1:-1]) if (L and L[0].lstrip().startswith("<<")) else "\n".join(L)
+open(sys.argv[2], "w").write(body + "\n")
+PY
+    # Warnings (e.g. no datasource) are expected; only a non-zero exit is a failure.
+    cloud-init schema -c "$stripped"
+  }
+  # Resolve availability ONCE and SKIP visibly — never fold the absence into a passing
+  # assert, which would read as coverage that never ran (the #6446 failure mode itself).
+  HAVE_CLOUD_INIT=0
+  if command -v cloud-init >/dev/null 2>&1; then
+    HAVE_CLOUD_INIT=1
+  elif [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+    # In CI the binary is installed by deploy-script-tests, so its absence means that
+    # wiring regressed — FAIL loudly rather than SKIP. A bare SKIP false-greens here:
+    # proven by masking cloud-init off PATH with CI=true, which exited 0 ("50/50 passed,
+    # OK") with the 3 schema asserts silently gone. "Visible in a green advisory job's
+    # log" is not visible. That is #6446's own failure mode — coverage that isn't there —
+    # reintroduced with a longer fuse, so this arm IS the drift guard for the install step.
+    # Mirrors the AC6 tag-reachability precedent above.
+    assert "cloud-init installed in CI (rendered-schema guard must not silently disarm)" "false"
+    echo "        cloud-init absent in a CI run — verify the 'Install cloud-init' step on"
+    echo "        deploy-script-tests in .github/workflows/infra-validation.yml."
+  else
+    echo "  SKIP: cloud-init not installed locally (rendered-schema checks skipped — CI installs it and FAILs if absent)"
+  fi
+
   # false (bool) and "false" (string, the rollback route) must BOTH gate off.
   for CASE in 'false' '"false"'; do
     OUT="$RENDER_SCRATCH/render.txt"
@@ -343,6 +458,14 @@ PY
     assert "render web_colocate_inngest=$CASE RETAINS ungated 'soleur-vector-install' (#6396)" \
       "grep -qF 'soleur-vector-install' '$OUT'"
     assert "render web_colocate_inngest=$CASE is valid YAML" "render_yaml_ok '$OUT'"
+    # #6446: YAML-parseable is necessary but NOT sufficient — a doc can safe_load and
+    # still be rejected by cloud-init's own schema (a malformed write_files entry, a
+    # bad runcmd shape). This is the check infra-validation.yml was structurally unable
+    # to perform against the raw template.
+    if (( HAVE_CLOUD_INIT )); then
+      assert "render web_colocate_inngest=$CASE passes cloud-init schema" \
+        "cloud_init_schema_ok '$OUT'"
+    fi
   done
   # true (bool) keeps the co-located bootstrap.
   TRUE_OUT="$RENDER_SCRATCH/render-true.txt"
@@ -352,6 +475,10 @@ PY
   assert "render web_colocate_inngest=true INCLUDES the inngest-bootstrap.sh invocation" \
     "grep -qF 'EXTRACT_DIR/inngest-bootstrap.sh' '$TRUE_OUT'"
   assert "render web_colocate_inngest=true is valid YAML" "render_yaml_ok '$TRUE_OUT'"
+  if (( HAVE_CLOUD_INIT )); then
+    assert "render web_colocate_inngest=true passes cloud-init schema" \
+      "cloud_init_schema_ok '$TRUE_OUT'"
+  fi
 
   # --- AC5 (#6425): web_tunnel_connector gate — terraform render authority ---
   # ONE connector per tunnel is the invariant (ADR-114 I1/I2). Cloudflare binds ingress

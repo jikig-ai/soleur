@@ -16,9 +16,10 @@
 # ── DEPRECATION WARNING IS ACCEPTED UNTIL PROVIDER GA (#4610) ──────────────
 # `terraform validate`/`plan` emits "This resource is deprecated. Please
 # migrate to `sentry_alert`" for each block below. That warning is EXPECTED
-# and intentionally accepted until `jianyuan/sentry` ships a stable v0.15.0.
-# Do NOT migrate these to `sentry_alert` under the pinned v0.15.0-beta2:
-#   - beta2's `sentry_alert` is MONITOR-bound: `monitor_ids` (set) and
+# and intentionally accepted: the stable line has now shipped (pinned v0.15.4,
+# #6636) but the migration blocker persists (see below), so the deferral stands.
+# Do NOT migrate these to `sentry_alert` under the pinned v0.15.4:
+#   - stable `sentry_alert` (re-confirmed at v0.15.4) is MONITOR-bound: `monitor_ids` (set) and
 #     `trigger_conditions` (first_seen|regression|reappeared|issue_resolved)
 #     are BOTH required, and it has no `project` attribute.
 #   - these 4 rules are PROJECT-WIDE frequency alerts (EventFrequencyCondition
@@ -32,8 +33,11 @@
 # a claim that beta2 supports the migration. The warning is NOT suppressible
 # while the resource type is `sentry_issue_alert` (Terraform core cannot
 # allow-list validate/plan warnings; the provider exposes no opt-out attr).
-# Re-attempt at stable v0.15.0 when `sentry_alert` supports project-wide
-# frequency alerts. Schema evidence + alternatives:
+# Re-attempt when a future `sentry_alert` release lets a project-wide
+# frequency alert bind + fire faithfully — i.e. when the `sentry_project_error_monitor`
+# / `sentry_project_issue_stream_monitor` default-monitor data sources are
+# confirmed to satisfy the `monitor_ids` requirement (stable v0.15.x, incl. the
+# pinned v0.15.4, still requires it — #6636). Schema evidence + alternatives:
 #   - ADR-031-sentry-as-iac.md (## Decision → "Defer migration" bullet)
 #   - knowledge-base/project/plans/2026-05-29-refactor-sentry-issue-alert-to-sentry-alert-migration-plan.md
 # ──────────────────────────────────────────────────────────────────────────
@@ -188,14 +192,19 @@ resource "sentry_issue_alert" "auth_signout_burst" {
 #     dedup (keyed on action-shape + frequency + match, NOT conditions — see
 #     2026-05-17-sentry-issue-alert-create-dedup-on-action-match-not-conditions.md).
 #     Taken set is 60/61/62/30 (auth rules) — 5 and 15 are free.
-#   - the apply workflow MUST `-target` both (see apply-sentry-infra.yml); the
-#     untargeted apply is scoped to monitors so it never trips the import-only
-#     auth rules.
+#   - the apply workflow plans the FULL ROOT (#6589), so declaring these rules
+#     here applies them — there is no `-target=` list to also update. The 4
+#     import-only auth rules are safe under that widening for a different reason
+#     than before: they are not excluded by OMISSION from an allow-list any more,
+#     they plan as no-op because their v2 attributes are under `ignore_changes`
+#     (a live full-root plan on 2026-07-17 confirmed all 22 declared alerts
+#     no-op). That assumption now carries 22 resources where it once carried 2,
+#     which is why it is an explicit AC assertion rather than a comment.
 # Tag vocabulary verified against apps/web-platform/server/cost-writer.ts +
 # server/observability.ts: events carry `feature=byok-delegations`, `op=<...>`,
 # and `art_33_breach=true` on the cross-tenant path (wired in this PR's #4364
 # Goal 0a). Schema attribute names verified via `terraform providers schema
-# -json` against jianyuan/sentry 0.15.0-beta2 (Phase 0).
+# -json` against jianyuan/sentry 0.15.4 (#6636 Phase 0 re-verified no drift; originally beta2).
 
 # Rule 1 — GDPR Art. 33 breach (cross-tenant BYOK key leak). Highest urgency:
 # tight frequency + notify ActiveMembers fallthrough. Filters require BOTH
@@ -208,7 +217,7 @@ resource "sentry_issue_alert" "byok_art_33_breach" {
   # mutually-exclusive event-lifecycle states (a captured event is exactly one
   # of new / reappeared / regressed). "all" would require all three on one
   # event — never satisfiable. Schema-grounded against jianyuan/sentry
-  # 0.15.0-beta2 (`action_match` description: "…any or all of the specified
+  # 0.15.4 (`action_match` description: "…any or all of the specified
   # conditions happen"). NOTE: this is the only rule in this file using "any" —
   # the 4 auth rules + byok_cap_exceeded use "all" with a single condition.
   action_match = "any"
@@ -1213,11 +1222,39 @@ resource "sentry_issue_alert" "outbound_email_send_failure" {
 #
 # Native affected-users threshold (event_unique_user_frequency): fire when ≥3
 # distinct tenants hit a sandbox-startup failure within 1h. Verified against
-# jianyuan/sentry 0.15.0-beta2 via `terraform providers schema -json` (condition
+# jianyuan/sentry 0.15.4 via `terraform providers schema -json` (condition
 # type event_unique_user_frequency; comparison_type ∈ {count,percent}; interval
 # valid values incl. 1h). Distinct frequency=22 avoids Sentry POST-time
 # exact-duplicate dedup (keyed on action-shape + frequency + match — see the auth
 # rules' comment above).
+#
+# ═══ WHY value = 2 AND NOT 3 (#6429) ═══
+#
+# `value` is compared with a STRICT `current_value > value` — `event_unique_user_frequency`
+# extends the same BaseEventFrequencyCondition as `event_frequency`, whose strict-`>`
+# semantics zot_mirror_fallback_rate documents below
+# (sentry/rules/conditions/event_frequency.py). So `value = 2` means ">2 distinct users",
+# i.e. it fires at **≥3** — the stated intent above. It shipped as `3`, which fires at ≥4:
+# a silent off-by-one against its own comment, and #6429's real defect. Do NOT "restore"
+# this to 3 to match the "≥3" prose — the prose is the intent, `2` is how you spell it.
+#
+# NOT the zot rule's defect (#6429's filed premise, falsified). That rule is
+# `event_frequency` — a count of EVENTS in one issue-group, which a high-cardinality
+# message breaks by minting a fresh group per event. This one counts DISTINCT USERS, and
+# its group is stack-keyed (reportSilentFallback routes an Error to captureException), so
+# the group is stable and the threshold is reachable. The discriminator is CAPTURE SHAPE,
+# not the condition name: message-event → grouped on the message; exception-event →
+# grouped on the stack. Guarded by sentry-zot-mirror-fallback-alert-op-contract.test.ts.
+#
+# Sentry also short-circuits the first event of a NEW group when value > 1 ("Assumes that
+# the first event in a group will always be below the threshold"). Harmless here: a
+# brand-new group has exactly one distinct user, already below 3.
+#
+# The corrected frequency-rule sweep (#6429's generalizable ask): this file has TWO
+# `event_frequency` rules — zot_mirror_fallback_rate (value = 0, the #6285 fix) and
+# web_terminal_boot_fatal (value = 1, reachable only because its shared `soleur-boot-emit`
+# group is always already hot) — plus THIS ONE `event_unique_user_frequency`. The issue's
+# "three event_frequency rules" was wrong on both the count and every line it cited.
 resource "sentry_issue_alert" "sandbox_startup_failure" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug
@@ -1230,7 +1267,7 @@ resource "sentry_issue_alert" "sandbox_startup_failure" {
     {
       event_unique_user_frequency = {
         comparison_type = "count"
-        value           = 3
+        value           = 2 # STRICT `>`: fires at ≥3 distinct tenants (#6429)
         interval        = "1h"
       }
     },
@@ -1364,20 +1401,50 @@ resource "sentry_issue_alert" "inbox_action_required_notify_failure" {
 # — a threshold above 0 is strictly less sensitive than the gate it exists to pre-warn.
 #
 # GROUPING is per-signal asymmetric (`ghcr-fallback` fresh per deploy; `zot-gate-degraded`
-# per reason — 3 fixed literals; `app_ghcr_fallback` a dedicated static message;
-# `inngest_ghcr_fallback` the shared always-hot `soleur-boot-emit` group). It no longer
-# affects WHETHER a group pages at value = 0 — every group fires on its first event — but
-# it is load-bearing for HOW to quiet noise safely (below). Relevant to the threshold again
-# only if value is ever raised.
+# per reason — 3 fixed literals; `app_ghcr_fallback` and `app_ghcr_served` each a dedicated
+# static message; `inngest_ghcr_fallback` the shared always-hot `soleur-boot-emit` group).
+# It no longer affects WHETHER a group pages at value = 0 — every group fires on its first
+# event — but it is load-bearing for HOW to quiet noise safely (below). Relevant to the
+# threshold again only if value is ever raised.
 #
-# IF THIS GETS NOISY, MUTE THE ISSUE — NEVER THE RULE. All four signals share one rule
+# IF THIS GETS NOISY, MUTE THE ISSUE — NEVER THE RULE. All five signals share one rule
 # (filter_match = "any"), so muting the RULE to escape `zot-gate-degraded` noise also kills
 # `ghcr-fallback` — the only no-SSH page gating the IRREVERSIBLE ADR-096 5.5 PAT
-# rotate+revoke. Muting the noisy Sentry ISSUE is safe by construction here:
-# `zot-gate-degraded` groups on a stable reason literal, so a mute pins to that group only;
-# `ghcr-fallback` mints a FRESH group per deploy, so no pre-existing mute can ever
+# rotate+revoke. Muting the noisy Sentry ISSUE is safe by construction for the ORIGINAL
+# four: `zot-gate-degraded` groups on a stable reason literal, so a mute pins to that group
+# only; `ghcr-fallback` mints a FRESH group per deploy, so no pre-existing mute can ever
 # pre-suppress it. Pre-cutover the dominant noise is `probe_unreachable` — that is zot's
 # probe genuinely failing (the real fix is the zot host, not the alarm).
+#
+# ⚠ `app_ghcr_served` (#6462) IS THE EXCEPTION — the mute-is-safe argument above does NOT
+# extend to it, and this is the one signal where a reflexive mute is destructive. It is the
+# first signal that is BOTH:
+#   (a) stable-grouped — a static message ⇒ ONE Sentry issue group forever, so a mute is
+#       permanent (unlike `ghcr-fallback`, whose per-deploy regrouping self-expires a mute);
+#   (b) expected-noisy pre-cutover — ADR-096 tells the operator these pages are expected
+#       until the flip and not to investigate them separately.
+# Together those invite exactly one click that permanently blinds the page for the DOMINANT
+# GHCR-served path (a /v2/ probe-miss, where the GHCR pull succeeds first try) — the hole
+# #6462 exists to close. Muting does NOT create a false soak PASS (Discover counts muted
+# issues), so the loss is paging only — but paging is the entire point of this signal
+# pre-cutover.
+#
+# The honest levers, in order (an earlier draft of this comment offered "pin the soak's START
+# past the cutover" — that is a CATEGORY ERROR and was removed: START is ZOT_SOAK_START, read
+# only in zot-soak-6122.sh's sentry_count URL; THIS rule has no window and is completely
+# unaffected by it. Do not reach for it):
+#   1. Fix the probe (#6416 / #6288). This is the root cause and it also removes the noise
+#      from `zot-gate-degraded`, which already pages on the SAME probe_unreachable condition
+#      on ~34-of-38 rolling deploys — i.e. the operator is ALREADY being paged near-daily by
+#      that signal, and app_ghcr_served is an increment on existing noise, not a new class.
+#   2. If it must be quieted before then, mute `zot-gate-degraded`'s group (safe: it groups on
+#      a stable reason literal) — NOT this one, and never the RULE.
+#   3. If THIS group must be quieted, split it into its own sentry_issue_alert resource so it
+#      can be tuned without touching ghcr-fallback. That is a real fix, not a mute. Since
+#      #6589 the split costs only the resource block — the apply plans the full root, so
+#      there is no `-target=` entry to add — plus the op-contract's alarm⇔soak parity (which
+#      currently pins alarm.size == soakFailQueries().size == 5). Deferred, not dismissed:
+#      see #6462's PR.
 #
 # Distinct `frequency = 23` avoids Sentry POST-time exact-duplicate dedup (taken:
 # 5,10-22,30,60-62; keyed on action_match+filter_match+frequency+actions-shape, NOT
@@ -1429,6 +1496,13 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
         value = "app_ghcr_fallback"
       }
     },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "app_ghcr_served"
+      }
+    },
   ]
   # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no
   # ownership rule on this project → falls through to ActiveMembers, paging the solo
@@ -1457,7 +1531,8 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
 # terminal-block EXIT trap + the explicit hostscripts_incomplete emit, so the stage filter alone
 # selects fatal terminal-block failures (no separate level filter needed).
 #
-# GROUPING NOTE (mirrors zot_mirror_fallback_rate:1364): these events use the SHARED
+# GROUPING NOTE (mirrors the GROUPING paragraph of zot_mirror_fallback_rate above): these
+# events use the SHARED
 # `soleur-boot-emit` message ("soleur-cloud-init boot stage"; stage is a tag, not the message), so
 # they share ONE issue-group with routine boot stages — that group is effectively always active, so
 # event_frequency value=1 pages on the first event that MATCHES the fatal-stage filter. Over-loud in
@@ -1515,6 +1590,195 @@ resource "sentry_issue_alert" "web_terminal_boot_fatal" {
   # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
   # on this project → falls through to ActiveMembers, paging the solo founder. Events carry only
   # stage/host_id/region — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# #6604 — the /workspaces LUKS at-rest drift PAGE. Vector is Better-Stack-only and never reaches
+# Sentry, so the drift page depends ENTIRELY on workspaces-luks-emit.sh's direct-curl envelope
+# matching this filter (DP-8/DP-10): the emit sets BOTH feature=workspaces-luks AND
+# op=workspaces-luks-drift, and filter_match="all" requires both. luks-monitor.sh (daily) and the
+# cutover canary emit through that envelope on any failed at-rest assert.
+resource "sentry_issue_alert" "workspaces_luks_drift" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "workspaces-luks-drift"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 25 # unique — avoids Sentry's create-time "exact duplicate of <rule>" dedup
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        # value=0, NOT 1: event_frequency compares with a STRICT `current_value > value`
+        # (see zot_mirror_fallback_rate + web_terminal_boot_fatal above). This is a
+        # DEDICATED, COLD issue-group (an event is emitted ONLY on a failed at-rest
+        # assert), and luks-monitor.sh emits EXACTLY ONE event per daily failed run. With
+        # value=1 a single daily drift is count=1, `1 > 1` is false → NO page. value=0
+        # pages on the FIRST event (matches zot_mirror_fallback_rate). web_terminal_boot_fatal
+        # can use value=1 only because its group is always-already-hot (shared boot events);
+        # this group is not.
+        value    = 0
+        interval = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "workspaces-luks"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "workspaces-luks-drift"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners falls through to
+  # ActiveMembers, paging the solo founder. Drift events carry only the nine discriminating fields
+  # (device_type/mount_source/… /host/reason) — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# #6512 Fix 1 — seccomp reload local-cache reuse (registry == "local-cache"). ci-deploy.sh's
+# pull_image_with_fallback grew a THIRD, last-resort tier: when BOTH the zot-primary and the
+# GHCR-fallback legs fail to serve a same-version `web` reload (the item-4 seccomp redeploy of
+# v<running_version>), it reuses the ALREADY-RUNNING container's cosign-verified image ID instead
+# of dying image_pull_failed, and emits `registry_pull_event local-cache` at level=warning.
+#
+# This is a SEPARATE alert from zot_mirror_fallback_rate on purpose (do NOT fold local-cache into
+# that rule): `ghcr-fallback` means "zot missed but GHCR served" and is the single no-SSH page
+# gating the IRREVERSIBLE ADR-096 §5.5 GHCR-PAT retirement — a `local-cache` event means NEITHER
+# registry served, a categorically different (and worse) condition. Overloading the retirement gate
+# with it would corrupt that gate's meaning. A dedicated rule keeps the two signals decoupled.
+#
+# value=0 pages on ANY local-cache reuse (mirrors zot_mirror_fallback_rate's #6285 value=0 posture):
+# the reload succeeded THIS time by reusing the local image, but both registries failing to serve an
+# already-built image is a standing supply-chain-path degradation that must not hide behind the
+# working local cache (the silent-fallback-14-days class). GROUPING: registry_pull_event embeds the
+# unique deploy tag in the MESSAGE ("image pulled from local-cache (web:vX.Y.Z)"), so Sentry mints a
+# FRESH issue-group per deploy — no pre-existing mute can permanently silence it.
+#
+# Distinct frequency = 26 avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-25,30,60-62).
+# Events carry only registry/image/tag — no user content.
+resource "sentry_issue_alert" "local_cache_reload_rate" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "local-cache-reload-rate"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 26
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        value           = 0
+        interval        = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "registry"
+        match = "EQUAL"
+        value = "local-cache"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
+  # on this project → falls through to ActiveMembers, paging the solo founder. Events carry only
+  # registry/image/tag — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# #6512 Fix 2a — seccomp remediation redeploy terminally FAILED, leaving the running container's
+# profile UNENFORCED (op == "seccomp-remediation-failed"). Emitted by scripts/seccomp-unenforced-alert.sh
+# (sourced by apply-deploy-pipeline-fix.yml's item-4 step) at every terminal failure that gives up
+# with the profile confirmed-or-presumed unenforced (redeploy image_pull_failed / diagnose_and_fail).
+#
+# This is a DEDICATED alert, distinct from the container/registry supply-chain rules: the operator's
+# PRIMARY surface is the plain-language `ci/seccomp-unenforced` GitHub issue the same emitter files
+# (operator-digest harvests action-required issues, never red CI jobs); this Sentry rule is the
+# secondary alerting plane. It is EVENT-driven, deliberately NOT a cron-monitor check-in — an
+# event-driven check-in to a cadence monitor's slug resets its missed-check-in clock and masks a
+# genuinely-missed scheduled beat (code-simplicity MEDIUM).
+#
+# value=0 pages on the FIRST occurrence — an unenforced security control on prod is high-severity and
+# invisible on the site's own health (the #6454/#6512 shape). GROUPING: the event message embeds the
+# failure detail so Sentry groups per distinct cause.
+#
+# Distinct frequency = 27 avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-26,30,60-62).
+# Events carry only the failure detail (host_present/host_sha/loaded_matches or a redeploy reason) —
+# no user content.
+resource "sentry_issue_alert" "seccomp_remediation_failed" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "seccomp-remediation-failed"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 27
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        value           = 0
+        interval        = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "seccomp-remediation-failed"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
+  # on this project → falls through to ActiveMembers, paging the solo founder. Events carry only the
+  # failure detail — no cross-tenant content.
   actions_v2 = [
     {
       notify_email = {

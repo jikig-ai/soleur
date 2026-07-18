@@ -148,8 +148,8 @@ HTTP_CODE=$(curl -sS -o "$RESP" -w '%{http_code}' \
 unset TOKEN
 
 echo "HTTP $HTTP_CODE"
-cat /tmp/trigger-cron-resp.$$ 2>/dev/null && echo
-rm -f /tmp/trigger-cron-resp.$$
+cat "$RESP" 2>/dev/null && echo
+rm -f "$RESP"
 
 # 202 = dispatched. Anything else is a failure the caller must act on.
 [[ "$HTTP_CODE" == "202" ]] || exit 1

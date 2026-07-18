@@ -50,6 +50,11 @@ describe("web-host-terminal-boot-fatal alert op contract", () => {
     }
   });
 
+  // apply-sentry-infra.yml plans the sentry root FULL (no `-target=` allowlist), so
+  // the plan universe is `state UNION config`: declaring the resource IS what applies
+  // it, and deleting this block is what destroys the live rule. Declaration is
+  // therefore the whole apply contract — there is no separate "wired into the apply
+  // list" condition left to assert.
   it("issue-alerts.tf declares web_terminal_boot_fatal as a first-occurrence page with a notify target", () => {
     expect(tf).toContain(
       'resource "sentry_issue_alert" "web_terminal_boot_fatal"',
@@ -74,15 +79,5 @@ describe("web-host-terminal-boot-fatal alert op contract", () => {
     // No-SSH page target: a silent removal would make the alarm fire-but-page-nobody.
     expect(scoped).toContain("IssueOwners");
     expect(scoped).toContain("ActiveMembers");
-  });
-
-  it("the -target wiring guards that the apply workflow creates the rule", () => {
-    const wf = readFileSync(
-      join(here, "../../../.github/workflows/apply-sentry-infra.yml"),
-      "utf8",
-    );
-    expect(wf).toContain(
-      "-target=sentry_issue_alert.web_terminal_boot_fatal",
-    );
   });
 });

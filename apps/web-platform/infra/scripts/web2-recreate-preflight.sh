@@ -5,10 +5,12 @@
 # pinned `@sha256` image's baked /opt/soleur/host-scripts recompute to the SAME
 # combined content-hash that Terraform applied (local.host_scripts_content_hash).
 # If they diverge, recreating web-2 would RE-ABORT at cloud-init stage=verify
-# (cloud-init.yml:389-391) — the exact ADR-080 stale-image trap the hash-verify
-# surfaces. Catching it here means NO destruction happens on a doomed boot.
+# (the `STAGE=verify` block in cloud-init.yml) — the exact ADR-080 stale-image
+# trap the hash-verify surfaces. Catching it here means NO destruction happens
+# on a doomed boot.
 #
-# The GOT recompute is BYTE-IDENTICAL to the boot check (cloud-init.yml:390):
+# The GOT recompute is BYTE-IDENTICAL to the boot check (the `GOT=$(cd "$SEED"`
+# pipeline in cloud-init.yml):
 #   find . -type f -exec sha256sum {} + | awk '{print $1}' | LC_ALL=C sort \
 #     | tr -d '\n' | sha256sum | awk '{print $1}'
 #
@@ -84,7 +86,8 @@ else
   docker rm -f "$CNAME" >/dev/null 2>&1 || true
 fi
 
-# 4. Recompute GOT — BYTE-IDENTICAL to the cloud-init boot check (cloud-init.yml:390).
+# 4. Recompute GOT — BYTE-IDENTICAL to the cloud-init boot check (the
+#    `GOT=$(cd "$SEED"` pipeline in cloud-init.yml).
 GOT="$(cd "$SEED" && find . -type f -exec sha256sum {} + | awk '{print $1}' | LC_ALL=C sort | tr -d '\n' | sha256sum | awk '{print $1}')" \
   || { [[ -n "$CLEANUP_DIR" ]] && rm -rf "$CLEANUP_DIR"; die "GOT recompute over the baked host-scripts failed."; }
 [[ -n "$CLEANUP_DIR" ]] && rm -rf "$CLEANUP_DIR"

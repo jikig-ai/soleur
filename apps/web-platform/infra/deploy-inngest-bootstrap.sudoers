@@ -10,6 +10,14 @@
 # env_keep is the modern alternative to `sudo -E env K=V ...`: the two
 # version pins are preserved across the sudo boundary by name.
 #
+# (#6555) DOPPLER_PROJECT was previously kept here as a deliberate forward-guard: a caller that
+# DID set it could not have it silently stripped across the sudo boundary, for the day the inngest
+# units would resolve their Doppler project from that variable. #6555 landed exactly that — but
+# the other way: the units now read DOPPLER_PROJECT from EnvironmentFile=/etc/default/inngest-server
+# (written at cloud-init:324 / the bootstrap heredoc + in-place augment), NOT from the
+# sudo-inherited env. Preserving it here is therefore no longer load-bearing, so it is removed.
+# (It was never a secret regardless — a project NAME; the token it selects is fetched separately.)
+#
 # Provisioned via cloud-init (fresh hosts) and terraform_data.deploy_pipeline_fix
 # (already-running hosts). See #4144 / #4118.
 Cmnd_Alias INNGEST_BOOTSTRAP = /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh

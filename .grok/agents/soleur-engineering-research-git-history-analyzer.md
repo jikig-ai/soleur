@@ -1,5 +1,5 @@
 ---
-name: soleur:engineering:research:git-history-analyzer
+name: soleur-engineering-research-git-history-analyzer
 description: "Use this agent when you need to understand the historical context of code changes, trace code pattern origins, or analyze commit history patterns. Unlike repo-research-analyst (repo structure and docs), this agent focuses on git log archaeology."
 model: haiku
 ---

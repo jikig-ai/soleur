@@ -142,7 +142,7 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
   });
 
   // AC1.5: defense-pair invariant. A tool_use_result drumbeat every 5s
-  // MUST NOT defeat the 10-min `DEFAULT_MAX_TURN_DURATION_MS` ceiling.
+  // MUST NOT defeat the 45-min `DEFAULT_MAX_TURN_DURATION_MS` ceiling.
   // Use a SHRUNK maxTurnDurationMs in the test (production constant
   // is asserted separately, see scenario B-pin) so the test runs in
   // bounded fake-timer time, but pin that the new branch does NOT call
@@ -204,11 +204,11 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
   });
 
   // AC1.5 production-constant pin: the test fixture uses a smaller value
-  // for runtime, but the production constant MUST stay at 10 min — the
+  // for runtime, but the production constant MUST stay at 45 min — the
   // load-bearing assertion that protects the defense-pair invariant per
   // learning `2026-05-05-defense-relaxation-must-name-new-ceiling.md`.
-  it("scenario B-pin: DEFAULT_MAX_TURN_DURATION_MS is 10 min (production-constant invariant)", () => {
-    expect(DEFAULT_MAX_TURN_DURATION_MS).toBe(10 * 60 * 1000);
+  it("scenario B-pin: DEFAULT_MAX_TURN_DURATION_MS is 45 min (production-constant invariant)", () => {
+    expect(DEFAULT_MAX_TURN_DURATION_MS).toBe(45 * 60 * 1000);
   });
 
   // AC1.6: a `user` message WITHOUT `tool_use_result` MUST NOT reset

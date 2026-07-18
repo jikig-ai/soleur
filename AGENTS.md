@@ -98,6 +98,8 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: cq-skill-description-budget-headroom] → docs-only
 - [id: cq-test-fixtures-synthesized-only] → rest
 - [id: cq-regex-unicode-separators-escape-only] → rest
+- [id: cq-cite-content-anchor-not-line-number] → rest
+- [id: cq-assert-anchor-not-bare-token] → rest
 
 ## Review & Feedback
 

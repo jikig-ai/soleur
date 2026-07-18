@@ -111,7 +111,7 @@ Re-use the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-dif
 grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
 
-The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > /tmp/A.txt && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > /tmp/B.txt && diff -u /tmp/A.txt /tmp/B.txt`.
+The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `a=$(mktemp) && b=$(mktemp) && git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
 
 If no migration files are found (grep rc=1), return **SKIP**.
 

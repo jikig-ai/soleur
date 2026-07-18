@@ -237,6 +237,63 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > connector count leaves 1. Vantage-independent — a response-poll cannot detect a second
 > connector, because selection is colo-sticky.
 
+> **Amendment (2026-07-17, #6594 — I2's antecedent discharged for `deploy.` + `ssh.`; the in-band `hostname` tripwire is MEASURED FALSE; the fan-out recommendation is rebutted).**
+> #6594 surfaced the `infra-config` leg failing exactly as the "third `deploy.` surface" note
+> above predicted: the verify gate reported 15/15 success while #6577's `ci-deploy.sh` never
+> reached the host. Diagnosis and fix produced three corrections to the text above.
+>
+> **1 — HEADLINE: the in-band `hostname` tripwire does not exist.** The Consequences section
+> credits #6416 with a *"tripwire (in-band `hostname` assertion)"* that "converts a silent
+> wrong-host write into a loud apply failure", and `ADR-068:413` states *"Each of the 12 now
+> carries an in-band `hostname` tripwire (#6416)"*. **Measured false, 2026-07-17:**
+> `grep -rnE 'hostnamectl|/etc/hostname|uname -n|\$\(hostname\)' apps/web-platform/infra/*.tf`
+> returns exactly one hit — a *comment* at `server.tf`'s `fail2ban`/keep-inline note reading
+> "NOT runtime `$(hostname)`" — and **zero** host-identity assertions in any of `server.tf`'s
+> 12 `connection {}` provisioner inlines. The safeguard that "loud apply failure" leaned on was
+> never shipped. This is the most consequential of the plan's meta-defect instances (a control
+> recorded as enforced that is inert): with no tripwire, a wrong-host bridge landing writes
+> web-1's config to web-2 *silently*. `ADR-068:413` and #6440's "safe to run" both carry this
+> false enforcement claim and should be corrected.
+>
+> **2 — I1 is inert on the running fleet, not enforced.** The 2026-07-15 amendment says "I1 is
+> enforced" via the `web_tunnel_connector` gate. That gate lives at **cloud-init create-time
+> `user_data` only**, and `hcloud_server.web` carries `ignore_changes = [user_data]`, so
+> cloud-init never re-runs on an already-booted host. web-2 booted 2026-07-13; the gate merged
+> 2026-07-15 (#6425). So the gate governs *future* fresh hosts, not the fleet that exists — I1
+> is a construction-time gate presented as a runtime precondition, and `model.c4`'s
+> *"INVARIANT (ADR-114 I1, enforced #6425)"* is false in production. This is precisely the
+> license #6594's fix needed.
+>
+> **3 — I2's antecedent is now discharged for `deploy.` AND `ssh.` (the "un-taken complement",
+> taken).** PR-A (#6595) repointed the `deploy.` and `ssh.` ingress *services* to
+> `http://${web-1.private_ip}:9000` / `ssh://${web-1.private_ip}:22` — the exact move the
+> 2026-07-15 amendment named as the complement that "would make determinism survive connector
+> count **structurally**" and "restore the availability #6425 trades away". All three routes
+> (`deploy.`, `ssh.`, `registry.`) are now origin-relative; the anti-pattern still stands for
+> anyone tempted to fix host-routing by changing the *hostname* rather than the *service*.
+> Applied and verified on prod 2026-07-17 (CF-API config read-back + `/hooks/deploy-status`
+> data-plane probe). PR-B then closed the observability half: a content assert
+> (`infra-config-gate.sh`) that compares each delivered file's sha256 against the applied
+> commit, so a stale-but-same-count host fails loud — the safeguard item 1 shows was missing.
+>
+> **Rebuttal of the fan-out recommendation.** The "third `deploy.` surface" note above
+> recommends: *"The cheapest fix mirrors ADR-068 Option B — fan out `/hooks/infra-config` to
+> peers as `ci-deploy.sh` already does, needing no `.tf` and no tunnel change."* PR-B did **not**
+> take that path, for reasons that outlive #6594:
+> - **Fan-out cannot discharge I2 at all.** I2 governs the ingress `service` address; fan-out
+>   operates at the application layer and would leave `http://localhost:9000` in place, so the
+>   READ side (`/hooks/deploy-status`, `/hooks/infra-config-status`, `inngest-liveness`) stays
+>   coin-flipped. The verify gate self-verifies a coin-flipped WRITE against a *separately*
+>   coin-flipped READ — fan-out patches one leg of the WRITE and leaves the READ untouched.
+> - **Fan-out presumes web-2 should be converged.** Writing web-1's config to every peer
+>   assumes the peer is a legitimate destination — exactly #6440's open question (whether a
+>   coin-flipped push already wrote to a host that should not hold that config). Origin-relative
+>   ingress makes the destination deterministic instead of multiplying it.
+>
+> So fan-out is not "the cheapest fix"; it is a different, narrower fix for a different problem
+> (application-level replication), and it does not close the transport-layer determinism gap I2
+> exists to name.
+
 ### Candidate implementations for I2 — assessed in #6441 (SUPERSEDED — see the amendment above; (b) shipped in #6425)
 
 Two shapes are on the table: **(a)** per-host private-net-relative ingress (`ssh-web-1.` →

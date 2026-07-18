@@ -37,6 +37,14 @@ export interface UseSupportChat {
   send: (text: string, chipKey?: string) => void;
   /** Abort any in-flight support turn (called on panel close — S1). */
   abort: () => void;
+  /**
+   * Start a fresh support thread: abort any in-flight turn, clear the on-screen
+   * history, and flag the NEXT `send()` to mint a new server-side conversation
+   * (POST body `newConversation:true`). Escapes a wedged thread (cost-capped or
+   * a stale pre-corpus session). No-op when not live (canned mode holds no
+   * server thread; it just clears the local preview).
+   */
+  reset: () => void;
 }
 
 // No support frame for this long → treat the stream as stalled (S5).
@@ -55,6 +63,9 @@ export function useSupportChat(live: boolean = false): UseSupportChat {
   const idRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set by reset(); consumed (and cleared) by the NEXT live send() so exactly
+  // one turn carries `newConversation:true`.
+  const startFreshRef = useRef(false);
 
   const nextId = useCallback((prefix: string) => {
     idRef.current += 1;
@@ -83,6 +94,16 @@ export function useSupportChat(live: boolean = false): UseSupportChat {
     setMessages((prev) =>
       prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
     );
+  }, [clearIdleTimer]);
+
+  const reset = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    clearIdleTimer();
+    // Mark the next live send() to mint a server-side thread. Harmless in canned
+    // mode (that path never reads it) — it just clears the local preview below.
+    startFreshRef.current = true;
+    setMessages([]);
   }, [clearIdleTimer]);
 
   const send = useCallback(
@@ -124,6 +145,11 @@ export function useSupportChat(live: boolean = false): UseSupportChat {
       };
       setMessages((prev) => [...prev, userMessage, supportMessage]);
 
+      // Consume the one-shot new-thread flag: this send mints a fresh server
+      // conversation, all following sends reuse it.
+      const startFresh = startFreshRef.current;
+      startFreshRef.current = false;
+
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -152,7 +178,11 @@ export function useSupportChat(live: boolean = false): UseSupportChat {
           const res = await fetch("/api/support", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: trimmed }),
+            body: JSON.stringify(
+              startFresh
+                ? { message: trimmed, newConversation: true }
+                : { message: trimmed },
+            ),
             signal: controller.signal,
           });
           if (!res.ok || !res.body) {
@@ -207,5 +237,5 @@ export function useSupportChat(live: boolean = false): UseSupportChat {
     [live, nextId, patch, clearIdleTimer],
   );
 
-  return { messages, hasConversation: messages.length > 0, send, abort };
+  return { messages, hasConversation: messages.length > 0, send, abort, reset };
 }

@@ -62,6 +62,18 @@ locals {
     # @@HOST_NAME@@ sentinel resolved per-host at install. This decouples web-host log shipping
     # from web_colocate_inngest (default-false post-ADR-100), which otherwise ships NO logs.
     "vector.toml",
+    # (#6629) Container-sandbox security-control profiles. Their ONLY prior delivery was the
+    # SSH provisioners terraform_data.docker_seccomp_config / apparmor_bwrap_profile below,
+    # which reach RUNNING hosts only — a FRESH host (web-1 replacement, or the web-2 warm
+    # standby that never receives the web-1 SSH provisioners) came up with NEITHER file, so
+    # cat-deploy-state reported seccomp_profile_host_present=false and the boot docker run
+    # ran the tenant sandbox unenforced. Baked here (ADR-080/#5921 image-bake, NOT user_data —
+    # seccomp-bwrap.json is 16,615 B and would red the WEB_GZIP_BUDGET cap), extracted +
+    # installed + apparmor-loaded by soleur-host-bootstrap.sh, enforced at the boot docker run
+    # with a fail-closed poweroff if absent. Restores the dual-delivery invariant
+    # (hr-fresh-host-provisioning-reachable-from-terraform-apply). See ADR-122.
+    "seccomp-bwrap.json",
+    "apparmor-soleur-bwrap.profile",
   ]
 
   # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
@@ -144,6 +156,19 @@ resource "hcloud_server" "web" {
   # receives the gzipped form; its readiness gates fail-closed if decode ever produced a
   # non-#cloud-config. Byte-exact size is confirmed at `terraform plan`. See ADR-080 (amended
   # for the web host).
+  # (#6454) cloud-init.yml is a Terraform templatefile() SOURCE, not literal YAML: it
+  # carries a `%{ if web_colocate_inngest ~}` directive at column 1, and YAML reads a
+  # leading '%' as a directive indicator — so schema-checking that file RAW always fails.
+  # CI renders it via `terraform console` and schema-checks the RENDERED document; see
+  # .github/scripts/validate-infra-templates.sh. Both directive arms are validated, and
+  # the false arm (variables.tf default) is the doc real web hosts boot.
+  #
+  # This note lives HERE, at the call site, and deliberately NOT inside cloud-init.yml:
+  # that file is baked into user_data against Hetzner's 32,768-byte cap, and the
+  # base64gzip'd budget (plugins/soleur/test/cloud-init-user-data-size.test.ts,
+  # WEB_GZIP_BUDGET) has under ~300 bytes of headroom — an 8-line comment there costs
+  # ~276 gzipped bytes and reds that test. cloud-init.yml is effectively comment-frozen;
+  # .tf files cost nothing.
   user_data = base64gzip(templatefile("${path.module}/cloud-init.yml", {
     image_name = var.image_name
     # Keep-inline: fail2ban is reloaded early (at the package-audit stage, before Docker) so
@@ -210,6 +235,17 @@ resource "hcloud_server" "web" {
     # hostname:/fqdn: and relies on Hetzner seeding hostname=server-name, which is not guaranteed
     # distinct on a re-imaged host.
     host_name = each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"
+    # #6448 — the fresh-host inline daemon.json derives its insecure-registries allowlist from
+    # local.registry_endpoint (the single source, zot-registry.tf:44), same as the running-host
+    # terraform_data.registry_insecure_config delivery. A subnet renumber propagates to both
+    # host classes instead of drifting from a hardcoded copy.
+    registry_endpoint = local.registry_endpoint
+    # #6604 — pin /mnt/data to THIS host's workspaces volume by stable by-id device
+    # (/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id}), never the scsi-0HC_Volume_*
+    # glob: once the LUKS volume attaches, the glob matches TWO devices and the "which is LUKS"
+    # predicate binds to the wrong one. Same by-id + nofail shape as cloud-init-git-data.yml,
+    # cloud-init-inngest.yml, cloud-init-registry.yml (web-platform was the lone glob holdout).
+    workspaces_volume_id = hcloud_volume.workspaces[each.key].id
   }))
 
   # cloud-init and ssh_keys are create-time attributes. After import,
@@ -385,6 +421,30 @@ resource "terraform_data" "container_restart_monitor_install" {
 # Source of truth for jail content: fail2ban-sshd.local (sibling file).
 # Shows as "will be created" in CI drift reports -- expected behavior.
 # Runbook for acute lockout recovery: knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md
+#
+# Why the jail carries `ignoreip = ... 10.0.1.0/24` (#6594). The rationale lives here, not in
+# the .local file: that file is base64'd into user_data whole (see the keep-inline note above),
+# so its comments are byte-budgeted while .tf comments are free.
+#
+# Until #6594 pinned the tunnel ingress, `ssh.` resolved to `ssh://localhost:22`, so sshd saw
+# every tunnelled CI login as 127.0.0.1 — covered by fail2ban's default loopback ignore. Pinning
+# the ingress to web-1's private IP means a PEER connector (web-2, 10.0.1.11) now proxies in from
+# a REAL source address, which `ignoreself` does not cover (it covers only web-1's own IPs).
+#
+# Without the grant, a key-mismatch window (`-replace=tls_private_key.ci_ssh`, or a fresh web-1
+# before root_authorized_keys lands) puts >=5 failures in 10m from 10.0.1.11 and bans it —
+# killing `ssh.` for the ~half of CF colos routed via that connector, for 10m rising to 1h. That
+# is a failure AMPLIFIER on the one path with no in-band recovery: ssh-fail2ban-unban.md calls a
+# fail2ban lockout "the one operator task where the Hetzner Cloud Console (noVNC) is the only
+# tool".
+#
+# The private net is not an attack surface fail2ban should police: it is unreachable from the
+# internet (firewall.tf admits only 22/80/443/icmp on the public interface), and its only members
+# are our own hosts.
+#
+# SCOPE: this grant exists because a peer connector proxies to web-1. It is web-2-lifetime-scoped
+# — #6538 (retire the fsn1 orphan) removes the only peer, after which the 10.0.1.0/24 clause is
+# vestigial and should be re-evaluated rather than inherited.
 resource "terraform_data" "fail2ban_tuning" {
   triggers_replace = sha256(file("${path.module}/fail2ban-sshd.local"))
 
@@ -574,11 +634,14 @@ resource "terraform_data" "cosign_trusted_root" {
 }
 
 # #6122/ADR-096 (Edge A, RUNNING hosts): deliver the canonical docker daemon.json — which
-# now allowlists the plain-HTTP private-net zot registry (10.0.1.30:5000) under
-# insecure-registries — to the ALREADY-RUNNING web host and hot-reload dockerd. Fresh hosts
-# get the same content from cloud-init.yml's daemon.json write (task 3.0a); a running host
-# has NO cloud-init re-run path (lifecycle ignore_changes=[user_data]), so this SSH
-# provisioner is the ONLY running-host delivery — mirrors terraform_data.journald_persistent
+# now allowlists the plain-HTTP private-net zot registry under insecure-registries — to the
+# ALREADY-RUNNING web host and hot-reload dockerd. The allowlisted endpoint is DERIVED from
+# local.registry_endpoint (the single source, zot-registry.tf:44) via local.docker_daemon_json
+# below: the delivered daemon.json is rendered from docker-daemon.json.tmpl, so a subnet
+# renumber propagates here automatically instead of drifting from a hardcoded copy (#6448).
+# Fresh hosts get the same DERIVED content from cloud-init.yml's daemon.json write (task 3.0a);
+# a running host has NO cloud-init re-run path (lifecycle ignore_changes=[user_data]), so this
+# SSH provisioner is the ONLY running-host delivery — mirrors terraform_data.journald_persistent
 # / cosign_trusted_root. HIGH-RISK (mutates the prod docker daemon), so:
 #   (a) validate the delivered JSON parses BEFORE reloading — a malformed daemon.json makes
 #       dockerd refuse the reload AND fail the NEXT restart (boot-bricking); the guard aborts
@@ -591,8 +654,20 @@ resource "terraform_data" "cosign_trusted_root" {
 # terraform-target-parity SSH-provisioned set — NOT OPERATOR_APPLIED_EXCLUSIONS (the git-data
 # model of the other 24 #6122 resources). See apply-path-cto-ruling.md §"Two load-bearing
 # conditions" #1: an SSH-provisioned terraform_data MUST be in the `-target` list.
+locals {
+  # #6448 — the delivered docker daemon.json derives its insecure-registries allowlist from
+  # local.registry_endpoint (the single source, zot-registry.tf:44), so a subnet renumber
+  # propagates to every copy automatically instead of drifting silently (the #6400 shape).
+  # docker-daemon.json.tmpl renders BYTE-IDENTICAL to the prior static file at the current
+  # endpoint value, so sha256(local.docker_daemon_json) == the prior sha256(file(...)) value
+  # ⇒ triggers_replace is unchanged ⇒ zero replace/churn on the running fleet.
+  docker_daemon_json = templatefile("${path.module}/docker-daemon.json.tmpl", {
+    registry_endpoint = local.registry_endpoint
+  })
+}
+
 resource "terraform_data" "registry_insecure_config" {
-  triggers_replace = sha256(file("${path.module}/docker-daemon.json"))
+  triggers_replace = sha256(local.docker_daemon_json)
 
   connection {
     type        = "ssh"
@@ -610,7 +685,12 @@ resource "terraform_data" "registry_insecure_config" {
   }
 
   provisioner "file" {
-    source      = "${path.module}/docker-daemon.json"
+    # content= (not source=): the delivered daemon.json is RENDERED from the .tmpl (a string),
+    # so it cannot be shipped as an on-disk source. content scps the rendered string over the
+    # same connection {}. This is the first content= file-provisioner in this repo — non-secret
+    # rendered content, so no base64 heredoc (that pattern exists only to protect SECRET
+    # interpolation; a public host:port needs no such guard). See #6448.
+    content     = local.docker_daemon_json
     destination = "/etc/docker/daemon.json"
   }
 
@@ -628,8 +708,10 @@ resource "terraform_data" "registry_insecure_config" {
       # bouncing running containers. A restart would kill the app/inngest/redis mid-deploy.
       "systemctl reload docker",
       # Assert dockerd now honors the private-net zot registry as insecure (fail loud if
-      # the reload silently did not pick it up).
-      "docker info 2>/dev/null | grep -q '10.0.1.30:5000'",
+      # the reload silently did not pick it up). Endpoint DERIVED from local.registry_endpoint
+      # (#6448) so this probe follows a subnet renumber automatically; -qF = fixed-string so
+      # the '.'/':' are literal.
+      "docker info 2>/dev/null | grep -qF '${local.registry_endpoint}'",
     ]
   }
 }
@@ -879,8 +961,14 @@ resource "terraform_data" "deploy_pipeline_fix" {
   #
   # Secondary benefit: the edge also serializes the bridge's synchronous
   # webhook-listener restart (server.tf:529, an existing Terraform-managed remote-exec)
-  # BEFORE this push's `provisioner "local-exec"` below, so the push never races a
-  # mid-flight listener restart (a connection-reset window that exists today).
+  # BEFORE this push's `provisioner "local-exec"` below. This NARROWS the connection-
+  # reset window but does NOT close it — the ordering is a happens-before on Terraform's
+  # graph, not a wait-for-ready on the listener. nonce-1 (#6313, 2026-07-10;
+  # push-infra-config.sh:25-31) is the counterexample: the bridge's `systemctl restart
+  # webhook` returned ~10ms BEFORE the push fired, yet the webhook was still coming up,
+  # so the push RACED the mid-flight restart — it got HTTP 202 from the restarting
+  # listener but the async handler exec was disrupted and no files landed. The race is
+  # real; the edge only makes it less likely, it is not a guarantee.
   #
   # The apparmor_bwrap_profile element is unchanged (#1570, see the note above).
   # Do NOT "simplify" either element away — see ship-deploy-pipeline-fix-gate.test.ts.
@@ -1042,7 +1130,16 @@ resource "terraform_data" "docker_seccomp_config" {
 # mount/umount/pivot_root while maintaining Docker's other restrictions.
 # Shows as "will be created" in CI drift reports -- expected behavior.
 resource "terraform_data" "apparmor_bwrap_profile" {
-  triggers_replace = sha256(file("${path.module}/apparmor-soleur-bwrap.profile"))
+  # (#6629) server_id fold-in — parity with docker_seccomp_config. A bare
+  # sha256(file(...)) trigger is hash-only: on a host REPLACEMENT the profile content is
+  # unchanged, so the trigger does NOT re-fire and the new VM never gets the AppArmor
+  # profile SSH-delivered (the exact fresh-host trap the #4927/#4928 precedent + the
+  # docker_seccomp_config comment warn about). The boot-time image-bake (host_script_files)
+  # closes the FRESH-host half; this closes the running-host re-apply half.
+  triggers_replace = {
+    apparmor_profile = sha256(file("${path.module}/apparmor-soleur-bwrap.profile"))
+    server_id        = hcloud_server.web["web-1"].id
+  }
 
   connection {
     type        = "ssh"

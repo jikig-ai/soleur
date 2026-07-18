@@ -54,6 +54,8 @@ infra/
 !infra/soleur-host-bootstrap.sh
 !infra/cosign-trusted-root.json
 !infra/vector.toml
+!infra/seccomp-bwrap.json
+!infra/apparmor-soleur-bwrap.profile
 scripts/
 # Allow the post-build dev-signin grep gate (R3 / feat-dev-signin-bypass).
 # The Dockerfile builder stage runs `bash scripts/assert-dev-signin-eliminated.sh`

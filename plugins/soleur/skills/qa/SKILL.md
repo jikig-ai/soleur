@@ -47,7 +47,7 @@ Before executing any browser scenarios, check whether the dev server is reachabl
 
 4. **Poll for readiness (30s timeout):** Poll `http://localhost:3000/` until it responds or 30 seconds have elapsed, whichever comes first. If the server responds, proceed to Step 2. If the timeout elapses:
    - Kill the background process by PID
-   - Include the last 20 lines of `/tmp/qa-dev-server.log` in the failure report
+   - Include the last 20 lines of `"$QA_LOG"` in the failure report
    - Report: "Dev server failed to start within 30s. See server output above."
    - Continue to API verification steps (do not block the pipeline)
 
@@ -158,7 +158,7 @@ After outputting the result (pass or fail), always proceed to Step 5.5 for clean
 
 ### Step 5.5: Cleanup Dev Server
 
-If the dev server was started in Step 1.5 (a background PID was recorded), kill the process by PID, remove `/tmp/qa-dev-server.log`, and report: "Stopped auto-started dev server (PID <pid>)." If the server was already running before QA (no PID recorded), do nothing.
+If the dev server was started in Step 1.5 (a background PID was recorded), kill the process by PID, remove `$QA_LOG` (the path echoed when the server started), and report: "Stopped auto-started dev server (PID <pid>)." If the server was already running before QA (no PID recorded), do nothing.
 
 This step runs regardless of whether scenarios passed or failed.
 

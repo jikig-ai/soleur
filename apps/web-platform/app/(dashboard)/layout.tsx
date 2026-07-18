@@ -16,6 +16,7 @@ import { RailSlotProvider, RailCollapsedProvider, RAIL_EXPAND_EVENT } from "@/co
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
 import { segmentToDrillLevel, isKbDocView } from "@/hooks/segment-to-drill-level";
+import { useNavResume } from "@/hooks/use-nav-resume";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
@@ -127,6 +128,11 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  // #4826 — sticky KB (and chat) section-root hrefs from sessionStorage.
+  // Bookmarks to bare `/dashboard/kb` still mean landing; only the main-nav
+  // Link href is rewritten so re-entry restores last-open path.
+  const { getKbEntryHref } = useNavResume();
+  const kbEntryHref = getKbEntryHref();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -418,6 +424,11 @@ export default function DashboardLayout({
             {/* Navigation */}
             <nav className={`flex-1 space-y-1 pt-3 ${collapsed ? "px-1" : "px-3"}`}>
               {navItems.filter((item) => item.href !== RELEASES_HREF).map((item) => {
+                // Sticky resume only rewrites the Knowledge Base main-nav href
+                // (#4826 AC2). Active-state still keys on the canonical
+                // section-root href so deep docs keep the gold treatment.
+                const href =
+                  item.href === "/dashboard/kb" ? kbEntryHref : item.href;
                 const active =
                   item.href === "/dashboard"
                     ? pathname === "/dashboard" || drill === "chat"
@@ -427,7 +438,7 @@ export default function DashboardLayout({
                 return (
                   <Link
                     key={item.href}
-                    href={item.href}
+                    href={href}
                     data-tour-id={item.href}
                     title={collapsed ? item.label : undefined}
                     aria-current={active ? "page" : undefined}

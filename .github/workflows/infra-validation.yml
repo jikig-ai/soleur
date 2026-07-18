@@ -14,10 +14,37 @@ on:
       - "apps/*/infra/**"
       - "infra/**"
       - ".github/workflows/infra-validation.yml"
+      # (#6454) The render-then-validate gate and its fixture suite. Without these,
+      # editing the validator would not run the validator's own tests — the job that
+      # proves the gate works would be skipped by the very PR changing the gate.
+      - ".github/scripts/validate-infra-templates.sh"
+      - ".github/scripts/test/fixtures-validate-infra-templates.sh"
       # ci-deploy.test.sh cross-file drift guard (#5145) reads the restart
       # workflow's poll budget; without this path the guard never fires on
       # client-side edits (deploy-script-tests job is ungated).
       - ".github/workflows/restart-inngest-server.yml"
+      # apply-inngest-rls-dev-workflow.test.sh asserts the PAIR of RLS apply
+      # workflows (path routing, project pinning, issue/concurrency identity).
+      # Without these paths, an edit to either workflow — including re-widening
+      # the prd `paths:` glob that used to auto-apply 0001 to Inngest prd — would
+      # never run the guard that catches it.
+      - ".github/workflows/apply-inngest-rls.yml"
+      - ".github/workflows/apply-inngest-rls-dev.yml"
+      # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
+      # guard's whole job is to catch a gate that looks present but does nothing
+      # — so a guard that cannot fire when its own subjects are edited would be
+      # that same defect. cron-monitors.tf is already covered by apps/*/infra/**;
+      # these five are not. apply-sentry-infra.yml is here because its plan gate
+      # and destroy gate are what make an infra/sentry/** change safe: since
+      # #6589 it plans the FULL ROOT (declared ≡ applied — the per-resource
+      # `-target=` list that could leave a monitor declared-but-never-applied is
+      # gone), so the risk moved from a dropped allow-list line to a weakened
+      # gate. Editing that workflow must still be able to trip this guard.
+      - ".github/workflows/scheduled-supabase-advisor-scan.yml"
+      - ".github/workflows/apply-sentry-infra.yml"
+      - "scripts/supabase-advisor-scan.sh"
+      - "apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts"
+      - "knowledge-base/engineering/architecture/diagrams/model.c4"
   workflow_dispatch:
 
 permissions:
@@ -94,11 +121,34 @@ jobs:
             #
             # Strip the directive lines and validate the remainder. The `${...}` interpolations
             # survive: they sit inside scalars, so they parse fine un-rendered. This checks the
-            # schema of everything that ISN'T the gate; the gates' RENDERED YAML validity is
-            # covered behind terraform by cloud-init-inngest-bootstrap.test.sh (AC5/AC7 both
-            # yaml.safe_load every render), which is the only authority that can see the `~}`
-            # whitespace trim. Anchored ^%\{ so an indented (broken) directive is NOT stripped —
-            # it stays visible to this parser rather than being hidden by its own guard.
+            # schema of everything that ISN'T the gate. Anchored ^%\{ so an indented (broken)
+            # directive is NOT stripped — it stays visible to this parser rather than being
+            # hidden by its own guard.
+            #
+            # KEPT DELIBERATELY (#6454, operator call — it was also an operator call in #6456
+            # that this step stays). `Validate infra templates` below now renders every
+            # templatefile and schema-checks the RENDERED document, which supersedes this
+            # check on every axis: five templates to this step's one, rendered vs raw, and it
+            # renders BOTH arms of the `%{ if }` gate, whereas a directive-strip produces a
+            # document that is neither arm — both bodies concatenated, which ships to no host.
+            #
+            # What this step is, precisely: a REDUNDANT SECOND OPINION on cloud-init.yml via a
+            # different implementation. Its value is bounded and worth stating honestly,
+            # because the obvious justification for it is WRONG: it does NOT backstop the
+            # script reporting a false-green `0/0`. The script's discovery set B globs
+            # `cloud-init*.yml`, which strictly subsumes this step's `[[ -f cloud-init.yml ]]`
+            # — so whenever this step does any work, discovery has already found >=1 and `0/0`
+            # is unreachable. The two predicates fire on identical conditions. What it DOES
+            # cover is a bug in the script's clever middle: a wrong derived var map, an
+            # attribution picking the wrong call site, or a decode handing back raw text. Ten
+            # cheap seconds against that, in a job where cloud-init and terraform are
+            # installed anyway.
+            #
+            # Known fragility, priced in: if a future `%{ else }` arm ever repeats a key from
+            # its `if` arm, the strip merges both and YAML reds on DUPLICATE KEYS — a false red
+            # on a correct template, which is #6454's own dynamic. If that fires, DELETE this
+            # step rather than patching the grep; the render check below already covers it, and
+            # a second opinion is not worth reintroducing the bug this PR exists to end.
             grep -vE '^%\{' cloud-init.yml > /tmp/cloud-init.stripped.yml
             cloud-init schema -c /tmp/cloud-init.stripped.yml
           else
@@ -106,9 +156,45 @@ jobs:
           fi
         working-directory: ${{ matrix.directory }}
 
+      # terraform_wrapper: false is load-bearing here, not hygiene: the wrapper
+      # wraps stdout, and `Validate infra templates` below decodes
+      # `terraform console` output byte-for-byte. deploy-script-tests sets it for
+      # exactly this reason (see the `deploy-script-tests` job's setup-terraform step;
+      # deliberately cited by job name, not line number — this PR's own +lines shifted
+      # that comment and a bare line reference is self-invalidating).
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # #6454. The `Validate cloud-init schema` step above ran `cloud-init schema` against
+      # the RAW Terraform templatefile until #6456 taught it to strip directives, so it was
+      # red on EVERY PR touching apps/*/infra/** from #6344 — and, being pull_request-only,
+      # invisible on main. Stripping un-reds it, but it still validates ONE file (`if [[ -f
+      # cloud-init.yml ]]`), leaving two more cloud-inits and hooks.json.tmpl unvalidated,
+      # and it validates un-RENDERED text, which cannot see `permissions: 384` (valid YAML,
+      # schema-invalid) or the `~}` whitespace trim.
+      #
+      # This step closes that: the script renders each templatefile via `terraform console`
+      # and validates the RENDERED document — what work/SKILL.md §6.1 has prescribed all
+      # along. It must run AFTER setup-terraform (it needs terraform on PATH). No
+      # continue-on-error: that yields conclusion=success over outcome=failure, which is how
+      # a gate goes quiet. The two checks are kept side by side deliberately; the rationale
+      # and the exit condition for dropping the older one are recorded on it above.
+      #
+      # MATRIX_DIR goes through `env:`, never `${{ }}` inside `run:`. The matrix
+      # values are path prefixes derived from the PR diff, and detect-changes'
+      # sed only collapses them to `apps/<name>/infra` where <name> is [^/]+ —
+      # so a fork PR adding `apps/evil;id/infra/x.tf` would carry shell
+      # metacharacters straight into this shell. The stripped step above uses
+      # `working-directory:` (not a shell context) and has no such surface.
+      - name: Validate infra templates (render-then-validate)
+        env:
+          MATRIX_DIR: ${{ matrix.directory }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+          bash "$GITHUB_WORKSPACE/.github/scripts/validate-infra-templates.sh" "$MATRIX_DIR"
 
       - name: Terraform format check
         run: terraform fmt -check -recursive .
@@ -148,6 +234,54 @@ jobs:
           fi
         working-directory: ${{ matrix.directory }}
 
+  # #6454. `validate` is a MATRIX job, so its check names are dynamic
+  # (`validate (apps/web-platform/infra)`) and cannot be pinned as required
+  # contexts in infra/github/ruleset-ci-required.tf — which is precisely why it
+  # survived being red from #6344 onward with nobody blocked.
+  #
+  # This is the static-named gate a matrix job cannot be, and the second clause is
+  # the anti-silent-skip guard at JOB level: infra changed but validate did not
+  # succeed (skipped/cancelled/failure) -> red.
+  #
+  # DO NOT make this a required context yet — it would deadlock every non-infra PR.
+  # `if: always()` is a JOB-level condition: it only guarantees the job runs once the
+  # WORKFLOW runs. This workflow still carries a top-level `paths:` filter (see `on:`),
+  # so a PR touching no infra never triggers it, no context is ever posted, and a
+  # required check sits at "Expected — Waiting for status" forever. This workflow also
+  # has no `merge_group:` trigger, so the context would never post on the queue's temp
+  # ref either.
+  #
+  # `tenant-integration-required` (ruleset-ci-required.tf) is the precedent to COPY,
+  # and it is the counter-example to the shortcut: that workflow DROPPED its
+  # workflow-level `paths:` filter and moved path detection into its `detect-changes`
+  # job precisely so the always-run gate reports on every PR. Making this required is
+  # therefore NOT a one-line ruleset edit — the prerequisites are: drop `paths:` here
+  # (keep the heavy matrix gated on `detect-changes`), add `merge_group:`, register the
+  # context in ruleset-ci-required.tf AND scripts/required-checks.txt (bot PRs block
+  # otherwise). And `deploy-script-tests` + `check-secrets` currently have NO
+  # `needs:`/`if:`, so dropping `paths:` without gating them on `detect-changes` puts
+  # an 8-minute docker build on every docs-only PR. Tracked in #6480.
+  infra-validate-required:
+    name: infra-validate-required
+    needs: [detect-changes, validate]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail closed if validate did not succeed when it should have
+        env:
+          DIRS: ${{ needs.detect-changes.outputs.directories }}
+          RESULT: ${{ needs.validate.result }}
+        run: |
+          if [[ "$DIRS" == "[]" ]]; then
+            echo "No infra directories changed; nothing to validate."
+            exit 0
+          fi
+          if [[ "$RESULT" != "success" ]]; then
+            echo "validate did not succeed (result=$RESULT) while infra changed: $DIRS"
+            exit 1
+          fi
+          echo "validate succeeded for: $DIRS"
+
   deploy-script-tests:
     runs-on: ubuntu-24.04
     # 8 (was 5): the #5875 sandbox-canary regression below builds a small alpine+
@@ -174,9 +308,52 @@ jobs:
       # merge-blocking gate. terraform_wrapper: false keeps `terraform console` stdout
       # byte-clean so the render leg's heredoc-strip (render_yaml_ok, which depends on the
       # last output line being exactly `EOT`) is not corrupted by the default log wrapper.
+      # terraform_version pinned (#6454): this step was unpinned and floated to latest
+      # while every other setup-terraform here pins env.TERRAFORM_VERSION. The template
+      # fixtures below assert on `terraform console`'s encoding behaviour, so a silent
+      # major bump would red them for a non-reason.
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
+
+      # cloud-init here serves TWO consumers in this job, both of which SKIP or fail
+      # rather than false-green without it:
+      #
+      #  1. (#6446) the render leg in cloud-init-inngest-bootstrap.test.sh runs `cloud-init
+      #     schema` on the RENDERED document. Without the binary the leg SKIPs visibly
+      #     rather than false-greening; this step makes it execute.
+      #  2. (#6454) the validate-infra-templates.sh fixture suite below.
+      #
+      # Neither replaces the `validate` job's raw-source `Validate cloud-init schema` step —
+      # that step is KEPT and directive-stripped (cited by step name, not line number: this
+      # PR's own +lines shift it, and a bare line reference is self-invalidating). An earlier
+      # draft of #6446 deleted it; #6426 landed a different fix on main mid-pipeline (keep
+      # the step, strip the col-0 `%{` lines, schema-check the remainder) and both were
+      # kept, an operator call — re-affirmed when #6454 landed the render-then-validate
+      # gate. The reasoning and the exit condition for dropping the stripped step live on
+      # the step itself.
+      - name: Install cloud-init (render-leg schema check + infra-template fixtures)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+          cloud-init --version
+
+      # #6454. Fixture suite for .github/scripts/validate-infra-templates.sh. It lives
+      # HERE, not in `guard-script-fixture-tests` (which auto-globs
+      # .github/scripts/test/test-*.sh), because it needs terraform + cloud-init and that
+      # job is a bare-bash runner that is REQUIRED, merge_group-triggered and path-filter-
+      # free. Adding apt there would put a package-mirror dependency on the merge-queue
+      # critical path for every PR in the repo, docs-only included — a worse failure mode
+      # than the bug being fixed. Hence the file is named `fixtures-*` to stay out of that
+      # glob; see the contract note in .github/scripts/test/run-all.sh.
+      #
+      # Trade-off recorded honestly: deploy-script-tests is ADVISORY, so this suite does
+      # not block merge today. Gate CORRECTNESS being advisory is the same property that
+      # let #6454 live for four days — tracked by the follow-up that makes
+      # infra-validate-required a real required context (#6480).
+      - name: Fixture tests for validate-infra-templates.sh (#6454)
+        run: bash .github/scripts/test/fixtures-validate-infra-templates.sh
 
       - name: Run ci-deploy.sh tests
         run: bash apps/web-platform/infra/ci-deploy.test.sh
@@ -189,6 +366,26 @@ jobs:
 
       - name: Run fresh-boot observability probe guard (#6090 baked-DSN + readiness gates + H3)
         run: bash apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
+
+      - name: Run /workspaces LUKS drift observability guard (#6604 emit tags/DSN + daily probe + gate)
+        run: bash apps/web-platform/infra/luks-monitor.test.sh
+
+      # #6511: `connect_timeout = 5` was a bare number where the pinned v4 provider's schema says
+      # `string`. It coerced to "5", failed Cloudflare's duration parse, landed as "0s", and the
+      # #6357 fail-fast mitigation on the registry origin was inert for weeks while every apply
+      # re-planned it. This job lists its tests explicitly (no glob), so an unregistered test file
+      # ships as zero coverage — the trap tests/scripts/test-stock-preflight-gate.sh documents.
+      - name: Run tunnel origin_request schema-type guard (#6511 connect_timeout string vs int)
+        run: bash apps/web-platform/infra/tunnel-origin-request-types.test.sh
+
+      - name: Run tunnel origin-relative ingress guard (#6594 ADR-114 I2 coin-flipped management plane)
+        run: bash apps/web-platform/infra/tunnel-origin-relative-ingress.test.sh
+
+      - name: Run tunnel-ingress verify infra-dir resolution guard (#6595 relative-INFRA_DIR cd)
+        run: bash apps/web-platform/infra/verify-tunnel-ingress-origin-infradir.test.sh
+
+      - name: Run infra-config apply gate adjudicator guard (#6594 content assert vs stale-same-count)
+        run: bash apps/web-platform/infra/infra-config-gate.test.sh
 
       - name: Run ci-deploy-wrapper.sh tests
         run: bash apps/web-platform/infra/ci-deploy-wrapper.test.sh
@@ -226,6 +423,17 @@ jobs:
       - name: Run GitHub /meta CIDR generator tests
         run: bash apps/web-platform/infra/scripts/gen-github-egress-cidr.test.sh
 
+      # #6578. The probe refuses to emit a verdict on a host whose grep does not
+      # early-exit (a draining grep reads 0/N and yields a false all-clear), so
+      # this step doubles as the assertion that CI's grep can still observe the
+      # SIGPIPE class at all. ~1.2s + ~2.6s; measured, against this job's ~12s
+      # of slack under timeout-minutes: 8.
+      - name: Run sigpipe guard triage-feasibility probe
+        run: bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh
+
+      - name: Run sigpipe triage-feasibility probe attestation
+        run: bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh
+
       - name: Run server.tf remote-exec set -e drift-guard
         run: bash apps/web-platform/infra/server-tf-set-e.test.sh
 
@@ -240,6 +448,13 @@ jobs:
 
       - name: Run registry private-NIC boot-converger tests (#6415)
         run: bash apps/web-platform/infra/private-nic-guard.test.sh
+
+      # Registered explicitly because this job runs named steps, not a glob — an unregistered
+      # infra suite gates NOTHING and fails silently green (#3366/#6520). Pure bash + PATH
+      # stubs: no terraform, cloud-init, docker, network, or root, so this job's existing
+      # environment already carries everything it needs.
+      - name: Run zot liveness-heartbeat feeder tests (#6537 — private-IP probe, not localhost)
+        run: bash apps/web-platform/infra/zot-liveness-heartbeat.test.sh
 
       - name: Run deploy fan-out peer-list parity drift-guard
         run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
@@ -328,6 +543,33 @@ jobs:
       - name: Run inngest-rls lockdown SQL shape guards
         run: bash apps/web-platform/infra/inngest-rls/inngest-rls.test.sh
 
+      - name: Run apply-inngest-rls{,-dev}.yml workflow shape guards
+        run: bash apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh
+
+      # (#3366) This step is the ONLY thing that makes the advisor-scan shape
+      # guard run in CI: this workflow hand-enumerates every .test.sh and has no
+      # glob/find runner, so an unregistered guard is a file nobody calls —
+      # green locally, gating nothing. Registered here rather than relying on
+      # discovery, and asserted by AC9b so it cannot be silently dropped.
+      - name: Run scheduled-supabase-advisor-scan.yml shape + drift guards
+        run: bash apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh
+
+      # Proves the step above still DISCRIMINATES. Its checks used to be shaped
+      # `<producer> | grep -q P` under pipefail, which inverts when grep -q exits
+      # first and SIGPIPEs the producer (#6572) — at the match⇒fail sites that
+      # inverts into a SILENT PASS on the headline assertion. The guard passes on
+      # an unmutated tree whether or not it is broken, so only a size-amplified
+      # differential can tell the two apart. Mutates sandbox copies only.
+      - name: Run supabase-advisor scan-workflow mutation attestation
+        run: bash apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh
+
+      # Proves the step above's sequence-DDL guard still FAILS on the catastrophe it
+      # claims to catch. It is the only check standing between an unbound sequence loop
+      # and a schema-wide REVOKE on the app's co-tenanted tables, so its non-vacuity is
+      # itself worth a gate. Mutates a sandbox copy only — never the tracked SQL.
+      - name: Run inngest-rls sequence-guard mutation attestation
+        run: bash apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
+
       - name: Run git-data writer-side CAS fence tests
         run: bash apps/web-platform/infra/git-data-pre-receive.test.sh
 
@@ -340,8 +582,17 @@ jobs:
       - name: Run git-data LUKS-at-rest cutover drift-guards
         run: bash apps/web-platform/infra/git-data-luks.test.sh
 
+      - name: Run /workspaces LUKS-at-rest drift-guards (#6588, ADR-119)
+        run: bash apps/web-platform/infra/workspaces-luks.test.sh
+
       - name: Run git-data transport-wrapper allowlist tests
         run: bash apps/web-platform/infra/git-data-transport-wrapper.test.sh
+
+      # Registered explicitly because this job runs named steps, not a glob — an unregistered infra
+      # suite gates NOTHING and fails silently green (#3366/#6520). Pure bash + python3: no
+      # terraform, cloud-init, docker, network, or root, so this job's environment already suffices.
+      - name: Run credential-persist-to-home guard (#6633 — ProtectHome=read-only cred-write class)
+        run: bash apps/web-platform/infra/credential-persist-home-guard.test.sh
 
   check-secrets:
     runs-on: ubuntu-24.04

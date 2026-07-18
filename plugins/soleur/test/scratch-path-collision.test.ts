@@ -57,6 +57,60 @@ const ALLOWLIST: readonly Waiver[] = [
     reason:
       "A JSON schema example documenting a sentinel value meaning 'no screenshot'. It is data in a documented shape, never a path anything writes or reads.",
   },
+  // worktree-manager.sh's cleanup_claude_tmp() reaps the Claude Code harness's OWN
+  // task-output dir. The code form is load-bearing (it MUST name the real path to reap it);
+  // the three comment forms document that same real path for a human reader. This is not a
+  // scratch path the script prescribes creating — it is the harness's fixed, session-scoped
+  // (`<session>`) tmpfs dir, which cannot collide across worktrees.
+  {
+    file: "skills/git-worktree/scripts/worktree-manager.sh",
+    text: "/tmp/claude-$uid",
+    reason:
+      "Load-bearing: cleanup_claude_tmp() reaps the Claude Code harness's real task-output dir at this exact path. Not a scratch path this script creates.",
+  },
+  {
+    file: "skills/git-worktree/scripts/worktree-manager.sh",
+    text: "/tmp/claude-<uid>/<project>/<session>/tasks/.",
+    reason:
+      "Comment documenting the harness's real task-output dir. Session-scoped (`<session>`), so it cannot collide; not a prescribed scratch path.",
+  },
+  {
+    file: "skills/git-worktree/scripts/worktree-manager.sh",
+    text: "/tmp/claude-<uid>",
+    reason: "Comment referencing the same harness dir cleanup_claude_tmp() reaps. Documentation, not a prescribed scratch path.",
+  },
+  {
+    file: "skills/git-worktree/scripts/worktree-manager.sh",
+    text: "/tmp/claude-<uid>/",
+    reason: "Comment referencing the same harness dir (menu help text). Documentation, not a prescribed scratch path.",
+  },
+  {
+    file: "skills/linear-fetch/scripts/persist-safe-integration.test.sh",
+    text: "/tmp/wt",
+    reason:
+      "Test-fixture template: an illustrative WORKING DIRECTORY inside a synthesized prompt that mirrors the one-shot subagent shape. Input data under test, not a prescribed scratch path.",
+  },
+  {
+    file: "skills/plan/SKILL.md",
+    text: "/tmp/.doppler",
+    reason:
+      "Incident prose (#6536): names doppler's own real cache dir as the diagnosed root cause (the heartbeat unit lacked PrivateTmp=true). Documents a system path, does not prescribe writing scratch there.",
+  },
+  // The agent-browser CLI uses a fixed /tmp/agent-browser/ cache dir of its own; these two
+  // sites are the documented command to CLEAR that stale cache, not a scratch path this
+  // guidance invents. The path is the tool's, unfixable from a SKILL.md.
+  {
+    file: "skills/agent-browser/SKILL.md",
+    text: "/tmp/agent-browser/*",
+    reason:
+      "The `rm -rf` clears the agent-browser CLI's own hardcoded cache dir. Tool-defined path, not a scratch path this guidance prescribes.",
+  },
+  {
+    file: "skills/feature-video/scripts/check_deps.sh",
+    text: "/tmp/agent-browser/*",
+    reason:
+      "Echoes the same agent-browser cache-clear hint as agent-browser/SKILL.md. Tool-defined path, printed as a remediation tip.",
+  },
 ];
 
 describe("scratch-path-collision (#6486)", () => {

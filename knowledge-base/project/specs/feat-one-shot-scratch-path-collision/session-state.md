@@ -54,3 +54,19 @@ The simplicity reviewer asked for a ~69% cut (557 → ~175 lines). Structural cu
 applied (ACs 12→7, Risks 9→3, taxonomy collapsed, anecdote 4×→2) but correctness fixes
 offset them, leaving the plan ~flat at 559 lines. Correctness was chosen over brevity. If a
 reviewer objects, trim the Research Reconciliation table first (most narrative section).
+
+### /work resume amendment (2026-07-18) — guard pivoted from write-verb to literal-path
+The write-verb-anchored `HAZARDS` array (redirect/flag/verb/unzip-d/read-redirect
+alternations) was replaced by a single literal `/tmp/…` matcher that catches **reads and
+writes alike** (`cat`, `rm`, `--body-file`, bare prose), keeping the variable-rooted
+exemption. Rationale: breadth of *write* syntax was never the property worth pinning — a
+literal `/tmp/<name>` in prescriptive guidance is the hazard whichever direction the data
+flows, and the write-anchored revision was blind to five live readers in this PR's own diff.
+This aligns better with ADR-009's own "reading a sibling's green log" concern, which is a
+READ hazard. Completing the pivot required sweeping the read-side sites the broader matcher
+surfaced (`preflight` verify-chain, `ship`/`qa`/`trigger.sh` mktemp-var inconsistencies,
+`work` sweep-targets + cd-example prose) and adding content-addressed waivers for genuine
+non-collisions (worktree-manager's real `/tmp/claude-$uid` harness dir, agent-browser's own
+`/tmp/agent-browser/` tool cache, doppler's `/tmp/.doppler` named in incident prose, a
+linear-fetch test fixture). Merged `origin/main` (one semantic conflict in `review/SKILL.md`:
+the review-backup prophylactic — kept main's four new bullets, applied our mktemp fix).

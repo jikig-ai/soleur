@@ -203,6 +203,8 @@ COPY --from=builder \
   /app/infra/soleur-host-bootstrap.sh \
   /app/infra/cosign-trusted-root.json \
   /app/infra/vector.toml \
+  /app/infra/seccomp-bwrap.json \
+  /app/infra/apparmor-soleur-bwrap.profile \
   /opt/soleur/host-scripts/
 RUN chown -R 1001:1001 /opt/soleur
 

@@ -88,7 +88,24 @@ export function buildAgentsManifest(): AgentsManifest {
 
 /** Filename for a Grok project compat stub under `.grok/agents/`. */
 export function agentIdToCompatFilename(id: string): string {
-  return `${id.replace(/:/g, "-")}.md`;
+  return `${agentIdToGrokSubagentType(id)}.md`;
+}
+
+/**
+ * Grok `spawn_subagent` type key for a Soleur agent.
+ *
+ * Project compat stubs live at `.grok/agents/<id-with-colons-as-hyphens>.md`.
+ * Grok Build (≤0.2.102) validates `subagent_type` against the **filename stem**,
+ * not the frontmatter `name:` field. Colon-form IDs (e.g. `soleur:product:cpo`)
+ * appear in available-type lists when frontmatter uses colons, but spawn then
+ * fails with "Unknown subagent type". Hyphen form matches the file stem and
+ * spawns successfully.
+ *
+ * Canonical Claude / registry IDs remain colon-qualified (`soleur:…`).
+ * Call this only when targeting Grok's spawn surface.
+ */
+export function agentIdToGrokSubagentType(id: string): string {
+  return id.replace(/:/g, "-");
 }
 
 /** Body for a thin Grok compat stub that defers to the canonical agent source. */
