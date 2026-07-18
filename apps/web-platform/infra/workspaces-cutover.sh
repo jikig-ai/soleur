@@ -90,7 +90,7 @@ ensure_aws() {
     rm -rf "$tmp"; emit_drift aws_cli_absent; die "aws-cli download failed — cannot escrow the header (C4)"
   fi
   echo "${AWSCLI_SHA256}  ${z}" | sha256sum -c - >/dev/null 2>&1 \
-    || { rm -rf "$tmp"; emit_drift aws_cli_absent; die "aws-cli SHA256 mismatch (expected ${AWSCLI_SHA256}) — refusing to run an unverified installer as root before the freeze"; }
+    || { rm -rf "$tmp"; emit_drift aws_cli_sha_mismatch; die "aws-cli SHA256 mismatch (expected ${AWSCLI_SHA256}) — refusing to run an unverified installer as root before the freeze (possible installer tampering)"; }
   ( cd "$tmp" && unzip -q "$z" && ./aws/install --update >/dev/null 2>&1 ) \
     || { rm -rf "$tmp"; emit_drift aws_cli_absent; die "aws-cli install failed"; }
   rm -rf "$tmp"
@@ -134,9 +134,16 @@ escrow_probe() {
   aws s3api head-object --bucket "$HEADER_BACKUP_BUCKET" --key "$probe_key" --endpoint-url "$HEADER_R2_ENDPOINT" >/dev/null 2>&1 \
     || { rm -f "$probe_body"; emit_drift escrow_probe_readback_failed; die "escrow probe read-back failed — object not durable; aborting BEFORE the freeze (C4)"; }
   aws s3 rm "s3://${HEADER_BACKUP_BUCKET}/${probe_key}" --endpoint-url "$HEADER_R2_ENDPOINT" >/dev/null 2>&1 || true
-  # NEGATIVE probe: escrow creds MUST NOT reach the tfstate bucket (over-scope detection).
-  if aws s3api head-bucket --bucket "$TFSTATE_BUCKET" --endpoint-url "$HEADER_R2_ENDPOINT" >/dev/null 2>&1; then
+  # NEGATIVE probe: the escrow creds MUST be DENIED against the tfstate bucket (the passphrase-bearing
+  # state bucket). rc==0 (200) ⇒ over-scoped account-wide token ⇒ die. This is the SOLE runtime guard
+  # against over-scope (the name-compare cannot catch it), so fail CLOSED: a non-zero exit is proof of
+  # denial ONLY when it is an AUTH error (403/401/404) — a transport/network error is NOT proof and
+  # must not be read as "safe" (security P2). A bucket-scoped R2 token gets 403 (or 404) here.
+  neg_err="$(aws s3api head-bucket --bucket "$TFSTATE_BUCKET" --endpoint-url "$HEADER_R2_ENDPOINT" 2>&1)"; neg_rc=$?
+  if [ "$neg_rc" -eq 0 ]; then
     rm -f "$probe_body"; emit_drift escrow_creds_overscoped; die "escrow creds are NOT bucket-scoped — they can reach $TFSTATE_BUCKET (the passphrase-bearing state bucket); refusing to proceed (C4/security)"
+  elif ! printf '%s' "$neg_err" | grep -Eq '\b(403|401|404)\b|Forbidden|AccessDenied|Not Found|NoSuchBucket'; then
+    rm -f "$probe_body"; emit_drift escrow_negprobe_inconclusive; die "over-scope negative probe INCONCLUSIVE against $TFSTATE_BUCKET (non-auth error: $(printf '%s' "$neg_err" | tail -1)) — refusing to proceed on an unproven denial (C4/security)"
   fi
   rm -f "$probe_body"
   log "escrow probe OK — PUT/read-back/delete on $HEADER_BACKUP_BUCKET green; creds DENIED against $TFSTATE_BUCKET (bucket-scoped)"
@@ -275,8 +282,8 @@ if [ "$DRY_RUN" != "1" ]; then
   # (not just non-empty): co-locating the header with tfstate collapses the "different blast radius"
   # property — one bucket loss then takes both the sole decryption key AND the state. (load_escrow_creds
   # already enforced non-empty + distinctness above; these re-assert it at the write site.)
-  [ -n "$HEADER_BACKUP_BUCKET" ] || die "WORKSPACES_HEADER_BUCKET unset — refusing to proceed without an off-host header backup to a bucket DISTINCT from tfstate (C4)"
-  [ "$HEADER_BACKUP_BUCKET" != "$TFSTATE_BUCKET" ] || die "WORKSPACES_HEADER_BUCKET ($HEADER_BACKUP_BUCKET) equals the tfstate bucket — the header MUST live in a DISTINCT blast radius (C4)"
+  [ -n "$HEADER_BACKUP_BUCKET" ] || { emit_drift header_creds_unreadable; die "WORKSPACES_HEADER_BUCKET unset — refusing to proceed without an off-host header backup to a bucket DISTINCT from tfstate (C4)"; }
+  [ "$HEADER_BACKUP_BUCKET" != "$TFSTATE_BUCKET" ] || { emit_drift header_bucket_equals_tfstate; die "WORKSPACES_HEADER_BUCKET ($HEADER_BACKUP_BUCKET) equals the tfstate bucket — the header MUST live in a DISTINCT blast radius (C4)"; }
   # Header temp file on the persistent STATE_DIR (mode 0700), NOT /tmp — a tmpfs /tmp makes the
   # `shred -u` below a no-op against the raw device (security F7).
   mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR" 2>/dev/null || true
