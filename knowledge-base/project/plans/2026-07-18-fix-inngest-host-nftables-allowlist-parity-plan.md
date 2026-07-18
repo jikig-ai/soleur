@@ -10,6 +10,41 @@ epic: "#6178 (HELD)"
 
 # fix(infra): inngest-host nftables allowlist parity (#6608) + #6197 reconciliation
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-18
+**Sections enhanced:** Research Reconciliation, Apply path, Downtime & Cutover (added), Observability.
+**Verification performed (live, this pass):** PR citations #6209/#6631/#6651 confirmed MERGED;
+issues #6538 CLOSED, #6178/#6608/#6197 OPEN; the `vinngest-v1.1.23` OCI tag confirmed to carry the
+arm64 Vector (`aarch64`) + `BETTERSTACK_LOGS_TOKEN` bootstrap/cloud-init changes (per the
+"image-baked is a claim" learning); the `inngest-host-replace` dispatch confirmed at
+`apply-web-platform-infra.yml:92/101/1602` (scoped `-replace`, AOF-preserving, menu-ack); the
+parity-test precedent read verbatim at `cutover-inngest-workflow.test.sh:184-199`; the co-edit
+target confirmed at `inngest-host.test.sh:91` (hardcodes the stale literal, `grep -Fc '10\.0\.1\.11'`
+== 1 pre-fix).
+
+### Key findings
+1. **#6197 is a stale premise — already fully delivered.** Code (PR #6209) + hardening (#6631) +
+   OCI bake `v1.1.23` (#6651) are all merged; the tag carries them. This plan touches zero
+   Vector/BetterStack files. Persisted as a headless decision-challenge (`decision-challenges.md`).
+2. **This PR is #6608 only** — a `user_data`-ForceNew literal fix + a drift-parity guard. No bundle.
+3. **Sibling test co-edit is mandatory** (`inngest-host.test.sh:91` hardcodes the stale value) — the
+   parity guard replaces it, so no vacuous double-literal.
+4. **Merge is inert; apply folds into the HELD Phase-2 cutover** (`inngest-host.tf` resources are
+   excluded from per-PR CI `-target`). `Ref #6608` (ops-remediation), close at Phase-2.
+
+### Gate results
+- 4.6 User-Brand Impact: PASS (threshold `none` + scope-out reason for the `apps/*/infra/` path).
+- 4.7 Observability: PASS (5 fields, no-ssh discoverability_test).
+- 4.8 PAT-shaped-var halt: PASS — the lone regex hit is `var.betterstack_logs_token`, a Better Stack
+  logs ingest token (not a GitHub PAT) that pre-exists on main and is *not* introduced here; the
+  `hr-github-app-auth-not-pat` intent (GitHub infra-write auth) does not apply.
+- 4.9 UI-wireframe halt: N/A (no UI surface).
+- 4.55 Downtime & Cutover: fired (hcloud_server replace) → `## Downtime & Cutover` added; defaults to
+  zero-downtime (dark host, AOF-preserving, folds into Phase-2). Telemetry emitted.
+- 4.5 Network-outage: keyword `firewall`/`nftables` matched → N/A (proactive allowlist edit, not an
+  outage diagnosis; no sshd/fail2ban fix proposed). Telemetry emitted.
+
 ## Overview
 
 Two pre-cutover hardening items for the dedicated Inngest host (`10.0.1.40`, arm64 `cax11`,
@@ -238,6 +273,30 @@ The **new parity test** IS the drift safeguard: `inngest-host.tf`'s literal must
 
 ### Vendor-tier reality check
 N/A — no new vendor resource.
+
+## Downtime & Cutover
+
+**Trigger:** the literal edit force-replaces `hcloud_server.inngest` (a `-/+` on an `hcloud_server`),
+so the downtime gate fires mechanically.
+
+**Offline-inducing operation + surface:** a scoped `-replace` of the dedicated Inngest host (re-runs
+cloud-init to re-render nftables). **Surface affected: none that is serving.** During Phase-1 the
+dedicated host is **DARK/inert** — it fires zero prod crons (born on a distinct non-prod Postgres,
+empty function registry, ADR-100 AC-DARK). The live Inngest control plane during this window is the
+**co-located** web-host scheduler, which this replace does not touch.
+
+**Zero-downtime path (default, and the case here by construction):**
+- The replace targets an **inert** host → **zero prod-downtime** by construction; no drain needed.
+- The durable **Redis AOF volume survives** the replace (`hcloud_volume.inngest_redis` deliberately
+  NOT targeted; pre-apply `inngest_host_replace_gate` + post-apply 0-delete backstop enforce it).
+- Delivery **folds into the already blue-green Phase-2 cutover** (a fresh host is born into the
+  topology, the co-located pusher is quiesced, the Postgres URI is flipped) — no *separate* window.
+- Residual: the immutable-redeploy NIC caveat (`2026-07-07-immutable-redeploy.md`) — a fresh host may
+  boot with the private NIC down needing a soft reboot; verified inside the Phase-2 window (a reason
+  to fold rather than dispatch a gratuitous immediate replace).
+
+**Residual downtime accepted:** none. No maintenance window is introduced by *this PR* (merge is
+inert); the eventual apply rides the HELD Phase-2 cutover window that epic #6178 already owns.
 
 ## Observability
 
