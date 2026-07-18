@@ -93,8 +93,16 @@ cannot complete until the wiring is correct.
 **If this leaks, the user's data is exposed via:** the R2 escrow credential crossing the SSH+`sudo`
 boundary. The realistic exposure vector is a **confidentiality regression** — R2 creds leaking to the
 host process list / audit log (an argv mistake) or CWE-522 re-exposure into the agent container's
-`--env-file`. The exposed credential is low-value: it reaches one bucket of LUKS **headers**, which are
-inert without the separately-held passphrase (`WORKSPACES_LUKS_KEY`, unchanged by this PR).
+`--env-file`. The credential is low-value **only while it is bucket-scoped**: it then reaches one bucket
+of LUKS **headers**, which are inert without the separately-held passphrase (`WORKSPACES_LUKS_KEY`,
+unchanged by this PR). **The true worst case is an OVER-SCOPED (account-wide) escrow token** — a
+plausible operator mint error: it can reach `soleur-terraform-state`, which holds
+`random_password.workspaces_luks.result` (the passphrase) in **plaintext state**, so header-access +
+plaintext-passphrase = **full decryption of the user's sole-copy source**. The control that keeps the
+credential low-value is the **negative over-scope probe** (`escrow_probe`, the
+`head-bucket … "$TFSTATE_BUCKET"` leg → `emit_drift escrow_creds_overscoped; die`), which fails the
+freeze CLOSED if the token is not bucket-scoped (and, post-review, on an inconclusive/transport error
+rather than trusting a bare non-zero). That probe is itself drift-guarded by test H10.
 
 **Brand-survival threshold:** single-user incident. Justification (CTO-confirmed): the escrow path
 itself carries **no data-loss** risk (fail-safe before the freeze), so it is not `none` only because it
@@ -152,21 +160,36 @@ error_reporting:
   destination: "Sentry (feature=workspaces-luks op=workspaces-luks-drift) via workspaces-luks-emit.sh"
   fail_loud: true   # emit_drift on every escrow failure leg; the die aborts before the freeze
 failure_modes:
-  - mode: "escrow bucket unset / creds missing on host (doppler read empty)"
-    detection: "workspaces-cutover.sh die at :184 + new emit_drift header_creds_unreadable"
+  - mode: "escrow bucket/creds unreadable on host (any of the 4 doppler reads empty)"
+    detection: "load_escrow_creds per-field [ -n ] check → emit_drift header_creds_unreadable; die (before aws)"
     alert_route: "Sentry workspaces-luks-drift + non-zero workflow run"
-  - mode: "aws CLI absent on web-1"
-    detection: "new preflight: command -v aws || emit_drift aws_cli_absent; die"
+  - mode: "escrow bucket == tfstate bucket (distinctness violated)"
+    detection: "load_escrow_creds compare → emit_drift header_bucket_equals_tfstate; die"
     alert_route: "Sentry workspaces-luks-drift + non-zero workflow run"
-  - mode: "R2 upload/read-back fails (wrong creds/endpoint/checksum)"
-    detection: "existing emit_drift header_backup_upload_failed / header_backup_unverified (:197/:199); DRY_RUN probe catches it one rehearsal earlier"
+  - mode: "aws CLI absent / install failed on web-1"
+    detection: "ensure_aws → emit_drift aws_cli_absent; die (download/unzip/install/post-install-absence)"
+    alert_route: "Sentry workspaces-luks-drift + non-zero workflow run"
+  - mode: "aws-cli installer SHA256 mismatch (possible tampering)"
+    detection: "ensure_aws sha256sum -c gate → emit_drift aws_cli_sha_mismatch; die"
+    alert_route: "Sentry workspaces-luks-drift + non-zero workflow run"
+  - mode: "escrow probe-PUT / read-back fails (wrong creds/endpoint/checksum/writability)"
+    detection: "escrow_probe → emit_drift escrow_probe_put_failed / escrow_probe_readback_failed; die (runs in the DRY_RUN arm — one rehearsal before the freeze)"
+    alert_route: "Sentry workspaces-luks-drift + non-zero workflow run"
+  - mode: "escrow creds are OVER-SCOPED (reach soleur-terraform-state)"
+    detection: "escrow_probe negative probe: head-bucket against $TFSTATE_BUCKET → emit_drift escrow_creds_overscoped; die"
+    alert_route: "Sentry workspaces-luks-drift + non-zero workflow run"
+  - mode: "over-scope negative probe INCONCLUSIVE (transport error, not a 403)"
+    detection: "escrow_probe fail-closed branch → emit_drift escrow_negprobe_inconclusive; die"
+    alert_route: "Sentry workspaces-luks-drift + non-zero workflow run"
+  - mode: "real header upload/read-back fails (real-freeze arm)"
+    detection: "existing emit_drift header_backup_upload_failed / header_backup_unverified (aws s3 cp / head-object with --endpoint-url); the DRY_RUN probe catches it one rehearsal earlier"
     alert_route: "Sentry workspaces-luks-drift"
 logs:
   where: "GitHub Actions run logs + host journald (workspaces-luks-emit.sh); NO SSH needed"
   retention: "Actions default; Sentry event retention"
 discoverability_test:
   command: "gh run view <run-id> --log  # + Sentry op=workspaces-luks-drift search (no-SSH path)"
-  expected_output: "on failure: a workspaces-luks-drift event with WL_REASON in {header_creds_unreadable, aws_cli_absent, header_backup_upload_failed, header_backup_unverified}"
+  expected_output: "on failure: a workspaces-luks-drift event with WL_REASON in {header_creds_unreadable, header_bucket_equals_tfstate, aws_cli_absent, aws_cli_sha_mismatch, escrow_probe_put_failed, escrow_probe_readback_failed, escrow_creds_overscoped, escrow_negprobe_inconclusive, header_backup_upload_failed, header_backup_unverified}"
 ```
 
 ## Architecture Decision (ADR/C4)

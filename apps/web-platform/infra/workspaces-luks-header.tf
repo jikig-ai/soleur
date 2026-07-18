@@ -25,8 +25,10 @@
 
 locals {
   # Path-style R2 S3 endpoint (account-root; the bucket goes in the S3 PATH, not a host
-  # suffix). Derived from var.cf_account_id — the SAME account hash as the tfstate backend
-  # endpoint in main.tf — so there is no duplicated magic literal to drift.
+  # suffix). Derived from var.cf_account_id rather than re-hardcoding the account hash — the SAME
+  # account owns the tfstate backend (main.tf's `backend "s3"` block hardcodes the hash because a
+  # backend cannot interpolate vars/locals), so deriving here avoids ADDING a second literal that
+  # could drift; the one backend literal is an unavoidable backend-config constraint, not a drift risk.
   r2_s3_endpoint = "https://${var.cf_account_id}.r2.cloudflarestorage.com"
 }
 

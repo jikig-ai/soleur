@@ -292,9 +292,11 @@ architectural axis, so no new ADR):
 - **The escrow token must NEVER also reach `soleur-terraform-state`.** That bucket holds
   `random_password.workspaces_luks.result` in plaintext Terraform state; reusing the tfstate R2 token
   for the header escrow would hand a host-compromise adversary write/read on the passphrase-bearing
-  state bucket — the real C4 blast-radius property for this issue. Enforced at runtime by
-  `workspaces-cutover.sh:185` (name compare) + a **negative probe** (the escrow creds must be DENIED
-  against the tfstate bucket — catches an over-scoped account-wide token the name-compare cannot).
+  state bucket — the real C4 blast-radius property for this issue. Enforced at runtime by the
+  `[ "$HEADER_BACKUP_BUCKET" != "$TFSTATE_BUCKET" ]` name compare in `load_escrow_creds` + a
+  **negative probe** (the escrow creds must be DENIED against the tfstate bucket — catches an
+  over-scoped account-wide token the name-compare cannot; it fails CLOSED on an inconclusive/transport
+  error rather than trusting a bare non-zero exit as "denied").
 
 **Residuals (recorded, not resolved here):**
 - The header bucket's confidentiality-at-rest is already gated on tfstate secrecy (the passphrase
@@ -304,10 +306,14 @@ architectural axis, so no new ADR):
 - `prevent_destroy` on the bucket protects against a Terraform `-destroy`, NOT against an API-delete
   by the Object-R&W escrow token itself — consider R2 object-retention (cla-evidence `object_lock.tf`
   precedent) or accept that the escrow copy is deletable by the token that writes it.
+- The local header copy is written to a mode-0700 dir on web-1's **persistent** NVMe root disk (not a
+  tmpfs `/tmp`, so `shred -u` is not a no-op) — but `shred` on a wear-levelled/journaled SSD is
+  **best-effort**, not a guaranteed raw-block overwrite. Acceptable at this threshold: the header alone
+  is inert without the passphrase, which lives in tfstate/Doppler, not on this disk.
 - **Honest C4 limitation:** a single `hetzner → cloudflare` edge collapses BOTH R2 buckets (tfstate +
   header) into the one `cloudflare` node, so the diagram does NOT visually encode the "distinct blast
-  radius" property — that distinctness lives only at runtime (`workspaces-cutover.sh:185` + the
-  `workspaces-luks-header.test.sh` reference-not-literal guard), not in the picture.
+  radius" property — that distinctness lives only at runtime (the `load_escrow_creds` name-compare +
+  negative probe) + the `workspaces-luks-header.test.sh` reference-not-literal guard, not in the picture.
 
 ## References
 
