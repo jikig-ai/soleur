@@ -696,21 +696,27 @@ jobs:
       # --- #6438/#6548: measured-beat ARM gate (ADR-117 automated) ------------------------------
       # The brand-critical step (#6400 shape prevention): a heartbeat that ships GREEN-but-inert is
       # the very failure this bundle exists to catch, so acceptance is a REAL measured beat, never a
-      # passing unit test. For each web-host probe/guard heartbeat + git_data_prd this:
+      # passing unit test. The sequence is ADR-117's (VERIFIED against the live Better Stack API):
+      # a paused heartbeat exposes NO usable ping timestamp — `attributes` is
+      # {status, paused, period, grace, updated_at, url, …} with NO last_ping_at, and `updated_at`
+      # does not move when a beat arrives while paused. So the only way to MEASURE a real beat is to
+      # UNPAUSE and watch `status` transition to `up`, rolling back BEFORE the first absence alert if
+      # it never does. For each web-host probe/guard heartbeat + git_data_prd this:
       #   1. resolves the monitor id from TFSTATE (never a name-regex — a name collision would arm
       #      the wrong monitor);
-      #   2. OP/STATE-GATES: acts ONLY when the monitor is live-`paused==true`. A monitor already
-      #      unpaused (ignore_changes=[paused] keeps source paused=true forever) is skipped, so
-      #      routine re-applies are a TRUE no-op and never flake on a Better Stack blip;
-      #   3. captures T0, polls the monitor for a beat with last_ping_at > T0 within period+grace;
-      #   4. PATCHes paused=false ONLY on a fresh measured beat; on timeout LEAVES it paused and
-      #      FAILS the apply loud (no "unavailable"-and-continue — that is the read-only status
-      #      steps' behavior, deliberately NOT reused here).
+      #   2. OP/STATE-GATES on live `status=="paused"`: a monitor already `up`/`pending`/`down`
+      #      (ignore_changes=[paused] keeps SOURCE paused=true forever, but a prior arm unpaused it
+      #      LIVE) is skipped, so routine re-applies are a TRUE no-op and never flake on a BS blip;
+      #   3. PATCH {paused:false}, then poll `status` every 10s until `up` within period+grace−10s;
+      #   4. `up` ⇒ a real beat landed ⇒ ARMED. Otherwise PATCH {paused:true} IMMEDIATELY (roll back
+      #      BEFORE the first absence alert would fire) and FAIL the apply loud — never leave an
+      #      unfed monitor live, never leave a green-but-inert one paused-and-forgotten.
       # Uses the DEDICATED DOPPLER_TOKEN_WEB_ARM (read) to fetch BETTERSTACK_API_TOKEN, then writes
-      # the account-wide Better Stack API (blast radius recorded in ADR-117). Never gated on the
-      # provisioner's exit code (P0-1). Runs only when the SSH provisioners actually installed the
-      # timers this run.
-      - name: Arm web-host probe heartbeats (measure-then-PATCH, fail-loud)
+      # the account-wide Better Stack API (blast radius recorded in ADR-117). The read-only
+      # "Best-effort heartbeat status" steps are deliberately NOT reused (they swallow errors and
+      # return "unavailable"). Never gated on the provisioner's exit code (P0-1). Runs only when the
+      # SSH provisioners actually installed the timers this run.
+      - name: Arm web-host probe heartbeats (unpause→verify-status→rollback, fail-loud)
         if: steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -727,61 +733,65 @@ jobs:
             exit 1
           fi
           printf '::add-mask::%s\n' "$BS_TOKEN"
-          T0=$(date -u +%s)
           terraform show -json > /tmp/webplat-tfstate.json
 
-          # arm_one <state-address> <label> <deadline_seconds>
+          hb_status() {  # <id> -> prints attributes.status (empty on lookup failure)
+            curl -fsS --max-time 15 -H "Authorization: Bearer ${BS_TOKEN}" \
+              "https://uptime.betterstack.com/api/v2/heartbeats/$1" 2>/dev/null \
+              | jq -r '.data.attributes.status // empty' 2>/dev/null || true
+          }
+          hb_patch_paused() {  # <id> <true|false> -> exit 0 on success
+            curl -fsS --max-time 15 -X PATCH \
+              -H "Authorization: Bearer ${BS_TOKEN}" -H 'Content-Type: application/json' \
+              "https://uptime.betterstack.com/api/v2/heartbeats/$1" \
+              --data-raw "{\"paused\":$2}" >/dev/null 2>&1
+          }
+
+          # arm_one <state-address> <label> <deadline_seconds = period + grace - 10>
           arm_one() {
             local addr="$1" label="$2" deadline="$3"
-            local id
+            local id status
             id=$(jq -r --arg a "$addr" '.values.root_module.resources[]? | select(.address==$a) | .values.id' /tmp/webplat-tfstate.json)
             if [[ -z "$id" || "$id" == "null" ]]; then
               echo "::notice::${label}: not present in tfstate (address ${addr}) — skipping (this apply path did not create it)."
               return 0
             fi
-            local get paused
-            get=$(curl -fsS --max-time 15 -H "Authorization: Bearer ${BS_TOKEN}" "https://uptime.betterstack.com/api/v2/heartbeats/${id}" 2>/dev/null || true)
-            if [[ -z "$get" ]]; then
+            status=$(hb_status "$id")
+            if [[ -z "$status" ]]; then
               echo "::error::${label}: GET /heartbeats/${id} failed — cannot verify arm state."
               return 1
             fi
-            paused=$(printf '%s' "$get" | jq -r '.data.attributes.paused')
-            if [[ "$paused" != "true" ]]; then
-              echo "${label}: already armed (paused=${paused}) — no-op."
+            if [[ "$status" != "paused" ]]; then
+              echo "${label}: already armed (status=${status}) — no-op."
               return 0
             fi
-            echo "${label}: monitor ${id} is paused; measuring a real beat (T0=${T0}, deadline=${deadline}s)…"
-            local waited=0 last epoch
+            echo "${label}: monitor ${id} is paused; unpausing and watching for a real beat (status→up, deadline=${deadline}s)…"
+            if ! hb_patch_paused "$id" false; then
+              echo "::error::${label}: PATCH paused=false FAILED — cannot begin arming."
+              return 1
+            fi
+            local waited=0
             while (( waited < deadline )); do
-              get=$(curl -fsS --max-time 15 -H "Authorization: Bearer ${BS_TOKEN}" "https://uptime.betterstack.com/api/v2/heartbeats/${id}" 2>/dev/null || true)
-              last=$(printf '%s' "$get" | jq -r '.data.attributes.last_ping_at // empty')
-              if [[ -n "$last" ]]; then
-                epoch=$(date -u -d "$last" +%s 2>/dev/null || echo 0)
-                if (( epoch > T0 )); then
-                  # Fresh measured beat — PATCH unpause. Fail loud if the write itself fails.
-                  if curl -fsS --max-time 15 -X PATCH \
-                       -H "Authorization: Bearer ${BS_TOKEN}" -H 'Content-Type: application/json' \
-                       "https://uptime.betterstack.com/api/v2/heartbeats/${id}" \
-                       --data-raw '{"paused":false}' >/dev/null 2>&1; then
-                    echo "::notice::${label}: measured a fresh beat (last_ping_at=${last}) and PATCHed paused=false — ARMED."
-                    return 0
-                  fi
-                  echo "::error::${label}: measured a fresh beat but the PATCH paused=false FAILED — leaving paused."
-                  return 1
-                fi
+              sleep 10
+              waited=$(( waited + 10 ))
+              status=$(hb_status "$id")
+              if [[ "$status" == "up" ]]; then
+                echo "::notice::${label}: status=up within ${waited}s — a real beat landed. ARMED."
+                return 0
               fi
-              sleep 15
-              waited=$(( waited + 15 ))
             done
-            echo "::error::${label}: NO fresh beat (last_ping_at > T0) within ${deadline}s — the probe timer never pinged. Leaving the monitor PAUSED and FAILING the apply (a green-but-inert monitor is the #6400 shape this gate exists to prevent). Investigate: is the web-1 timer installed + the private-net path healthy?"
+            # No `up` in time: roll back to paused BEFORE the first absence alert, then fail loud.
+            hb_patch_paused "$id" true || echo "::error::${label}: rollback PATCH paused=true ALSO failed — the monitor is unpaused-and-unfed; investigate immediately."
+            echo "::error::${label}: status never reached 'up' within ${deadline}s (probe timer never pinged) — ROLLED BACK to paused and FAILING the apply. A green-but-inert monitor is the #6400 shape this gate exists to prevent. Investigate: is the web-1 timer installed + the private-net path healthy?"
             return 1
           }
 
           rc=0
-          # period+grace deadlines: zot 180+60, nic-guard 360+120, git-data 60+180.
-          arm_one 'betteruptime_heartbeat.web_zot_consumer["web-1"]' 'web-zot-consumer (web-1)' 240 || rc=1
-          arm_one 'betteruptime_heartbeat.web_nic_guard["web-1"]'    'web-nic-guard (web-1)'    480 || rc=1
-          arm_one 'betteruptime_heartbeat.git_data_prd'              'git-data-prd'             240 || rc=1
+          # deadline = period + grace − 10 (roll back just before the first absence alert):
+          # zot 180+60−10, nic-guard 360+120−10, git-data 60+180−10.
+          arm_one 'betteruptime_heartbeat.web_zot_consumer["web-1"]' 'web-zot-consumer (web-1)' 230 || rc=1
+          arm_one 'betteruptime_heartbeat.web_nic_guard["web-1"]'    'web-nic-guard (web-1)'    470 || rc=1
+          arm_one 'betteruptime_heartbeat.git_data_prd'              'git-data-prd'             230 || rc=1
           exit "$rc"
 
       - name: Tear down cloudflared SSH bridge

@@ -1,8 +1,10 @@
 # --- #6438: dedicated Doppler token for the no-SSH measured-beat ARM gate (ADR-117 automated) ---
-# The apply-workflow arm gate (apply-web-platform-infra.yml) unpauses a web-host heartbeat ONLY
-# after it measures a real beat (capture T0 → poll last_ping_at > T0 → PATCH paused=false; on
-# timeout leave paused + fail the apply loud). The PATCH is a WRITE to the Better Stack API, whose
-# token (BETTERSTACK_API_TOKEN, in soleur/prd_terraform) the provider already uses.
+# The apply-workflow arm gate (apply-web-platform-infra.yml) arms a web-host heartbeat via ADR-117's
+# live-API-verified sequence: PATCH {paused:false} → poll `status` until `up` (a real beat landed) →
+# roll back to {paused:true} + fail the apply loud if `up` never arrives within period+grace (a
+# paused BS heartbeat exposes NO ping timestamp, so status-transition is the only measurable signal).
+# The PATCH is a WRITE to the Better Stack API, whose token (BETTERSTACK_API_TOKEN, in
+# soleur/prd_terraform) the provider already uses.
 #
 # WHY A DEDICATED TOKEN (mirrors inngest-arm-write-token.tf): the arm step reads BETTERSTACK_API_TOKEN
 # through THIS handle rather than the general-purpose ci-tf-write / DOPPLER_TOKEN, so the arm write

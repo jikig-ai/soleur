@@ -42,7 +42,7 @@ Scope: full bundle (#6438 §1 zot + #6548 git-data + §3 NIC guard), operator-co
 
 - [x] E1 — AC1: `web-zot-consumer-probe.test.sh` (29 pass) — mock-registry proves `-u`/`-f` load-bearing + classification.
 - [x] E2 — AC2: manifest + parity green (19 pass) because honestly fed; row+evidence same phase; git_data_prd tripwire reconciled.
-- [x] E3 — AC3: arm gate freshness-correct (T0 + `last_ping_at > T0` poll); fail-loud PATCH branch self-contained in the arm step block.
+- [x] E3 — AC3: arm gate freshness-correct via ADR-117's LIVE-API-VERIFIED sequence (a paused BS heartbeat exposes NO ping timestamp — the plan's `last_ping_at > T0` was corrected at /work): PATCH `paused:false` → poll `status` until `up` within period+grace−10 → roll back to `paused:true` + FAIL the apply if `up` never lands. Fail-loud/rollback branch self-contained in the arm step block.
 - [x] E4 — AC4: `web-private-nic-guard.test.sh` (46 pass) — comment-stripped asserts NO reboot invocation path (not a token grep), mutation-controlled.
 - [~] E5 — AC5: `terraform validate` green; `+ create` for new resources, exactly 1 `-target`ed destroy (reserved `zot_heartbeat_url_prd`), git_data_prd in-place grace, no `hcloud_server.web` reboot — asserted by construction; the authoritative `terraform plan` runs in the CI apply (destroy-guard) at merge.
 - [x] E6 — AC6: ADR-122 + ADR-117 amend + `model.c4` edits; c4 tests green.
