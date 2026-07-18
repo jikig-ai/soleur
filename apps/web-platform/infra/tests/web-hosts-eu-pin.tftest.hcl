@@ -32,6 +32,7 @@ variables {
   cf_account_id                = "0123456789abcdef0123456789abcdef"
   cf_api_token                 = "0123456789012345678901234567890123456789"
   cf_api_token_bot_management  = "0123456789012345678901234567890123456789"
+  cf_api_token_r2              = "0123456789012345678901234567890123456789"
   cf_api_token_rulesets        = "0123456789012345678901234567890123456789"
   cf_api_token_zone_settings   = "0123456789012345678901234567890123456789"
   cf_notification_email        = "ops@example.com"

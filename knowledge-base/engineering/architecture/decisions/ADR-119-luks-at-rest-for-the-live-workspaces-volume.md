@@ -276,9 +276,49 @@ plaintext volume gives a rehearsed rollback that a snapshot never would.
 in a single PR **after** the cutover canary passes, never before. See
 `knowledge-base/project/specs/feat-one-shot-6588-luks-workspaces-volume/decision-challenges.md`.
 
+## Addendum (2026-07-18): the header-escrow implementation (#6649)
+
+The C4 "independent terminal limb" decision above (back the LUKS header up off-host to a bucket
+DISTINCT from tfstate) is implemented by #6649. Recording the **implementation** decision (no new
+architectural axis, so no new ADR):
+
+- The escrow credential is a **distinct, bucket-scoped R2 API token** (Object Read & Write on
+  `soleur-workspaces-luks-header` only), minted out-of-band and delivered to web-1 via the SAME
+  `prd_workspaces_luks` scoped-read path as the passphrase (`WORKSPACES_HEADER_R2_ACCESS_KEY_ID` /
+  `_SECRET_ACCESS_KEY`; the bucket name + endpoint are Terraform-managed `doppler_secret`s). The S3
+  creds are **not** derivable from any `cloudflare_api_token` field — `sha256(token.value)` fails
+  SigV4 (learning 2026-05-18). A DRY_RUN-safe probe-PUT measures the creds before the freeze trusts
+  them.
+- **The escrow token must NEVER also reach `soleur-terraform-state`.** That bucket holds
+  `random_password.workspaces_luks.result` in plaintext Terraform state; reusing the tfstate R2 token
+  for the header escrow would hand a host-compromise adversary write/read on the passphrase-bearing
+  state bucket — the real C4 blast-radius property for this issue. Enforced at runtime by the
+  `[ "$HEADER_BACKUP_BUCKET" != "$TFSTATE_BUCKET" ]` name compare in `load_escrow_creds` + a
+  **negative probe** (the escrow creds must be DENIED against the tfstate bucket — catches an
+  over-scoped account-wide token the name-compare cannot; it fails CLOSED on an inconclusive/transport
+  error rather than trusting a bare non-zero exit as "denied").
+
+**Residuals (recorded, not resolved here):**
+- The header bucket's confidentiality-at-rest is already gated on tfstate secrecy (the passphrase
+  lives there); the escrow does not improve that, it only prevents *loss* of the header.
+- The `prd_workspaces_luks` host token inherits all ~116 `prd` root secrets (pre-existing for
+  `WORKSPACES_LUKS_KEY`, tracked by #6167); the escrow now depends on that same token.
+- `prevent_destroy` on the bucket protects against a Terraform `-destroy`, NOT against an API-delete
+  by the Object-R&W escrow token itself — consider R2 object-retention (cla-evidence `object_lock.tf`
+  precedent) or accept that the escrow copy is deletable by the token that writes it.
+- The local header copy is written to a mode-0700 dir on web-1's **persistent** NVMe root disk (not a
+  tmpfs `/tmp`, so `shred -u` is not a no-op) — but `shred` on a wear-levelled/journaled SSD is
+  **best-effort**, not a guaranteed raw-block overwrite. Acceptable at this threshold: the header alone
+  is inert without the passphrase, which lives in tfstate/Doppler, not on this disk.
+- **Honest C4 limitation:** a single `hetzner → cloudflare` edge collapses BOTH R2 buckets (tfstate +
+  header) into the one `cloudflare` node, so the diagram does NOT visually encode the "distinct blast
+  radius" property — that distinctness lives only at runtime (the `load_escrow_creds` name-compare +
+  negative probe) + the `workspaces-luks-header.test.sh` reference-not-literal guard, not in the picture.
+
 ## References
 
 - Issue #6588 — the P1 that mandated CTO routing before terraform.
+- Issue #6649 — the header-escrow wiring (this addendum); part of #6604.
 - `knowledge-base/project/plans/2026-07-17-fix-6588-luks-encrypt-workspaces-volume-plan.md` — the
   plan, its Premise Validation (8 issue premises did not survive), and the binding deepen corrections.
 - `apps/web-platform/infra/workspaces-luks.tf` — the declaration this ADR rules.
