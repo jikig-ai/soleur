@@ -225,8 +225,10 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 2. Query open code-review issues. **Use two-stage piping (`--json` then a standalone `jq --arg`), not single-stage `gh --jq` with `--arg`.** The `gh` CLI does NOT forward `--arg` to its embedded jq; a single-stage form produces `unknown arguments` at runtime. See learning `knowledge-base/project/learnings/2026-04-15-gh-jq-does-not-forward-arg-to-jq.md`.
 
     ```bash
+    ISSUES_JSON=$(mktemp -t open-review-issues.XXXXXXXX.json)
     gh issue list --label code-review --state open \
-      --json number,title,body --limit 200 > /tmp/open-review-issues.json
+      --json number,title,body --limit 200 > "$ISSUES_JSON"
+    echo "ISSUES_JSON=$ISSUES_JSON"
     ```
 
 3. For each planned file path, search the issue bodies using standalone `jq` with `--arg` (safe against regex metacharacters in paths):
@@ -235,8 +237,12 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
     jq -r --arg path "<file-path>" '
       .[] | select(.body // "" | contains($path))
       | "#\(.number): \(.title)"
-    ' /tmp/open-review-issues.json
+    ' "$ISSUES_JSON"
     ```
+
+    A later Bash call does not inherit `ISSUES_JSON`, so carry the echoed path forward (or
+    re-derive it in the same call). Do not substitute a fixed name: a concurrent `/plan`
+    would overwrite the file between the write and this read.
 
 4. If any matches are returned, write a `## Open Code-Review Overlap` section to the plan file with a one-line bullet per match and an explicit disposition for each:
 
@@ -897,6 +903,7 @@ Run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/arch
 - When a plan adds a resource with `for_each = var.<map>` (or references `<resource>[each.key]`) into a `-target`-scoped auto-apply, check whether the map contains entries whose **backing resource is EXCLUDED from the `-target=` allow-list** (deferred / maintenance-window-only provisioning). `-target` is **transitive on dependencies** — a new targeted resource that references a `-target`-excluded sibling silently drags it into the plan and can **CREATE** it on a routine merge-apply (a pure create the destroy-guard does not catch). Gate the new resource's `for_each` on the **same existence predicate** the sibling uses (e.g. `{ for k, v in var.web_hosts : k => v if v.monitored }`) and add an AC asserting `terraform plan` shows **no create** of the excluded resource. **Why:** #5933 plan v1 added a per-host `cloudflare_record for_each = var.web_hosts` referencing `hcloud_server.web["web-2"]` (excluded from `apply-web-platform-infra.yml`'s `-target` set per #5887) → a routine apply would have provisioned web-2 outside the operator maintenance window. Caught by spec-flow + architecture plan-review. See `knowledge-base/project/learnings/2026-07-03-for-each-over-target-excluded-map-forces-premature-provisioning.md`.
 - When an Acceptance Criterion prescribes `awk '/A/,/B/' <file>` to count occurrences inside a named block, verify `A` and `B` cannot both match the same line. Awk's `start,end` address range opens on the start match AND closes on the same line if the end pattern is satisfied by the start line — e.g., `awk '/^  job-name:/,/^  [a-z][a-z-]*:/'` closes after one line because the start line itself satisfies the end character class. Prefer the flag-based form `awk '/A/{flag=1} flag{print} /B/&&!/A/&&flag{exit}'` whose end pattern explicitly excludes the start line. **Why:** PR #4337 AC2 returned 0 from `awk '/^  lockfile-sync:/,/^  [a-z][a-z-]*:/' .github/workflows/ci.yml | grep -c 'npm install -g npm@11'` even though the pin step was correctly added; verification command had to be rewritten at /work AC-check time. See `knowledge-base/project/learnings/2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md` §Session Errors.
 - When a plan both extracts a shared helper AND adds a request-shaping field (`output_config`, a header, an option key) to the call sites, do NOT write a per-caller AC that counts the field's literal across callers (`git grep "<field>" <scope> | wc -l ≥ N`). The helper centralizes the literal, so the count becomes `1 (helper) + inline-sites`, not `N_total` — the AC reads under-count on a correct implementation. Verify the field via the helper's passthrough unit test (assert the serialized request body carries it) and reserve literal-greps for the genuinely-inline site. Same family as the awk-AC papercut above, but the literal legitimately *moves* into the helper rather than being stale. **Why:** PR #5186 AC7 (`git grep output_config … ≥ 3`) read 2 because two of three sites route through `postAnthropicMessage` via the `outputConfig` arg. See `knowledge-base/project/learnings/best-practices/2026-06-11-helper-indirection-breaks-per-caller-literal-grep-acs.md`.
+- For a **transitive-only or Dependabot lockfile bump** in a directory carrying dual lockfiles (`package-lock.json` AND `bun.lock`), do NOT prescribe `bun update <pkg>` (or bare `bun update`) — it elevates the target to a **direct** `package.json` dep and can overshoot to a MAJOR (verified: `bun update undici js-yaml` wrote `"undici": "^8.7.0"` / `"js-yaml": "^5.2.1"` while the intended patched versions were `7.28.0` / `3.15.0`). The plan's `bun.lock` phase MUST reference the surgical version+sha edit in [`work-lockfile-bumps.md`](../work/references/work-lockfile-bumps.md) (npm side stays `npx --yes npm@11 update <pkg>`). Same class as `hr-when-a-plan-specifies-relative-paths-e-g` — the plan owns intent, never the literal `bun` command. **Why:** the 8-alert undici/js-yaml Dependabot PR (2026-07-18) — plan Phase 2 prescribed `bun update`, caught and reverted at /work. See `knowledge-base/project/learnings/workflow-patterns/2026-07-18-plan-prescribed-bun-update-for-transitive-bump-is-banned.md`.
 - **Before authoring any `### Post-merge (operator)` step, run the automation-feasibility gate.** For each candidate step, check whether a loaded MCP server or CLI can execute it:
   - Supabase migration apply / `cron.job` verify / bucket-exists check / RLS spot-check → `mcp__plugin_supabase_supabase__*`
   - `gh pr ready` / `gh pr merge --squash --auto` / `gh issue close` / `gh workflow run` → `gh` CLI via Bash

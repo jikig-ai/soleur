@@ -72,6 +72,12 @@ jobs:
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # #6438 l3-probe-armed-6438.sh — Better Stack heartbeats API (uptime.betterstack.com
+          # /api/v2/heartbeats) read for the web-1 private-net probe soak (mirror Doppler
+          # soleur/prd_terraform BETTERSTACK_API_TOKEN). Distinct from the QUERY_* Logs creds
+          # above (ClickHouse); this is the account-wide uptime API token. Fail-safe TRANSIENT
+          # (never a false PASS/close) if unset.
+          BETTERSTACK_API_TOKEN: ${{ secrets.BETTERSTACK_API_TOKEN }}
           # #6168 autovacuum-thrash-6168.sh — read-only pg_stat_all_tables query
           # against prod via the Supabase Management API (soak gate for PR #6164).
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
