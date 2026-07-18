@@ -225,8 +225,10 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 2. Query open code-review issues. **Use two-stage piping (`--json` then a standalone `jq --arg`), not single-stage `gh --jq` with `--arg`.** The `gh` CLI does NOT forward `--arg` to its embedded jq; a single-stage form produces `unknown arguments` at runtime. See learning `knowledge-base/project/learnings/2026-04-15-gh-jq-does-not-forward-arg-to-jq.md`.
 
     ```bash
+    ISSUES_JSON=$(mktemp -t open-review-issues.XXXXXXXX.json)
     gh issue list --label code-review --state open \
-      --json number,title,body --limit 200 > /tmp/open-review-issues.json
+      --json number,title,body --limit 200 > "$ISSUES_JSON"
+    echo "ISSUES_JSON=$ISSUES_JSON"
     ```
 
 3. For each planned file path, search the issue bodies using standalone `jq` with `--arg` (safe against regex metacharacters in paths):
@@ -235,8 +237,12 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
     jq -r --arg path "<file-path>" '
       .[] | select(.body // "" | contains($path))
       | "#\(.number): \(.title)"
-    ' /tmp/open-review-issues.json
+    ' "$ISSUES_JSON"
     ```
+
+    A later Bash call does not inherit `ISSUES_JSON`, so carry the echoed path forward (or
+    re-derive it in the same call). Do not substitute a fixed name: a concurrent `/plan`
+    would overwrite the file between the write and this read.
 
 4. If any matches are returned, write a `## Open Code-Review Overlap` section to the plan file with a one-line bullet per match and an explicit disposition for each:
 
