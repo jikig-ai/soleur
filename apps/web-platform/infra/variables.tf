@@ -243,6 +243,17 @@ variable "cf_api_token_r2" {
   sensitive   = true
 }
 
+# No default: an unprovisioned no-default var fails the WHOLE merge-triggered apply
+# (Terraform resolves all root vars before -target pruning), so CF_API_TOKEN_DNS_EDIT MUST
+# be present in Doppler prd_terraform BEFORE this merges (ADR-065 sequencing — it already is).
+# Operator-minted, NOT a cloudflare_api_token resource: var.cf_api_token lacks "User API
+# Tokens: Edit" so a mint 403s (CF error 9109). See cf-cert-reissue-token.tf header.
+variable "cf_api_token_dns_edit" {
+  description = "Cloudflare API token narrowed to Zone.DNS:Edit on soleur.ai ONLY — read by the cron-gh-pages-cert-reissue runtime as CF_API_TOKEN_DNS_EDIT to flip apex+www proxied for GH Pages cert validation (#6657). Operator-minted in the CF dashboard (named 'Edit zone DNS'); value from Doppler prd_terraform via TF_VAR_cf_api_token_dns_edit, republished to prd by doppler_secret.cf_api_token_dns_edit. No default (hr-tf-variable-no-operator-mint-default)."
+  type        = string
+  sensitive   = true
+}
+
 variable "cf_zone_id" {
   description = "Cloudflare zone ID for soleur.ai"
   type        = string

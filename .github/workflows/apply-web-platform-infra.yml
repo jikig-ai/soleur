@@ -393,6 +393,7 @@ jobs:
               -target=hcloud_firewall.web \
               -target=hcloud_firewall_attachment.web \
               -target=doppler_secret.resend_receiving_api_key \
+              -target=doppler_secret.cf_api_token_dns_edit \
               -target=betteruptime_heartbeat.web_zot_consumer \
               -target=betteruptime_heartbeat.web_nic_guard \
               -target=doppler_secret.web_zot_consumer_url \

@@ -8,7 +8,7 @@
 // postmortem-proven recovery (learning 2026-02-16-github-pages-cloudflare-wiring):
 //   1. flip apex+www to DNS-only (proxied=false) so GitHub sees its own IPs,
 //   2. re-order the cert by toggling the Pages custom domain (cname:null → re-set)
-//      via the GitHub App's `administration:write` grant,
+//      via the GitHub App's `pages:write` grant,
 //   3. poll GET /pages until state ∈ {approved, issued},
 //   4. restore the declared steady state (proxied=true, cname=soleur.ai).
 //
@@ -72,12 +72,14 @@ const REISSUE_ALLOWED_STATES = ["bad_authz", "failed"] as const;
 // GitHub App installation-token lifetime floor (a handful of admin calls).
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
-// Least-privilege scope: PUT /repos/{owner}/{repo}/pages requires `administration`
-// (the Pages site-config endpoint; `pages:write` is insufficient for the
-// custom-domain toggle). repositories:["soleur"] + a 15-min TTL bound the blast
-// radius to one repo.
+// Least-privilege scope: the reissue calls GET + PUT /repos/{owner}/{repo}/pages
+// (the Pages site-config endpoint), both of which require the `pages` repository
+// permission (write for the cname toggle). `administration:write` is NOT
+// sufficient — live-fire #6657 proved PUT /pages 403s "Resource not accessible by
+// integration" while the minted token held administration:write but no pages
+// grant. repositories:["soleur"] + a 15-min TTL bound the blast radius to one repo.
 const REISSUE_TOKEN_PERMISSIONS: Record<string, string> = {
-  administration: "write",
+  pages: "write",
 };
 
 // Bounds. The poll cap keeps the DNS-only (unprotected) window short.
