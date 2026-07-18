@@ -80,6 +80,9 @@ read_header_endpoint() { doppler secrets get WORKSPACES_HEADER_R2_ENDPOINT --pla
 # cloud-init cannot deliver `aws` to the RUNNING host; this on-demand install IS the real delivery
 # (the cloud-init addition covers FUTURE hosts only). SHA256-pinned (root + $KEY in memory).
 # Idempotent: a present aws short-circuits.
+# OPERATOR NOTE: this runs in BOTH arms (it precedes escrow_probe, which is outside the DRY_RUN gate),
+# so a `dry_run=true` rehearsal is NOT host-side-effect-free the FIRST time — it may apt-get/curl/
+# install aws-cli on web-1 (additive, no service restart; user-impact review). Subsequent runs no-op.
 ensure_aws() {
   if command -v aws >/dev/null 2>&1; then return 0; fi
   log "aws CLI absent — installing pinned aws-cli v${AWSCLI_VERSION} (SHA256 verified)"
