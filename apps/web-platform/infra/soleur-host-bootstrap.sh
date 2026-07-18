@@ -101,6 +101,23 @@ install -D -m 0644 -o root -g root "$SEED/cosign-trusted-root.json" /etc/soleur/
 FAILED_FILE=journald-soleur.conf
 install -D -m 0644 -o root -g root "$SEED/journald-soleur.conf" /etc/systemd/journald.conf.d/00-soleur.conf
 
+# Container-sandbox security-control profiles (#6629). Their only prior delivery was the
+# SSH provisioners (terraform_data.docker_seccomp_config / apparmor_bwrap_profile), which
+# reach RUNNING hosts only — a FRESH host came up with neither, so the terminal docker run
+# ran the tenant sandbox unenforced (seccomp_profile_host_present=false). Installed here
+# (post-extraction, hash-verified) and apparmor-loaded BEFORE the terminal docker run so its
+# --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json + apparmor=soleur-bwrap
+# succeed on a cold host. FAIL-CLOSED: apparmor_parser -r runs under the top-level set -e +
+# emit_fail trap, so a load failure aborts the boot with a named stage (no sentinel → the
+# terminal docker run block poweroffs). 0644 root:root; dockerd (root) reads both.
+STAGE=sandbox_profiles
+FAILED_FILE=seccomp-bwrap.json
+install -D -m 0644 -o root -g root "$SEED/seccomp-bwrap.json" /etc/docker/seccomp-profiles/soleur-bwrap.json
+FAILED_FILE=apparmor-soleur-bwrap.profile
+install -D -m 0644 -o root -g root "$SEED/apparmor-soleur-bwrap.profile" /etc/apparmor.d/soleur-bwrap
+FAILED_FILE=apparmor-load
+apparmor_parser -r /etc/apparmor.d/soleur-bwrap
+
 # hooks.json: the baked hooks.json.tmpl carries the Terraform token literally; inject the
 # small webhook_deploy_secret at boot (jsonencode-equivalent via python3 json.dumps —
 # python3 is a cloud-init dependency, always present), validate the JSON, then mirror the SSH
@@ -148,6 +165,12 @@ FAILED_FILE=cron-egress-allowlist.txt; test -f /etc/soleur/cron-egress-allowlist
 FAILED_FILE=cron-egress-allowlist-cidr.txt; test -f /etc/soleur/cron-egress-allowlist-cidr.txt
 FAILED_FILE=cosign-trusted-root.json; test -f /etc/soleur/cosign-trusted-root.json
 FAILED_FILE=journald-soleur.conf; test -f /etc/systemd/journald.conf.d/00-soleur.conf
+# (#6629) sandbox profiles present on-host AND the AppArmor profile is kernel-loaded — the
+# terminal docker run's --security-opt apparmor=soleur-bwrap fails-to-create the container
+# if the profile is not loaded, so assert the load here to fail with a NAMED stage instead.
+FAILED_FILE=seccomp-bwrap.json; test -f /etc/docker/seccomp-profiles/soleur-bwrap.json
+FAILED_FILE=apparmor-soleur-bwrap.profile; test -f /etc/apparmor.d/soleur-bwrap
+FAILED_FILE=apparmor-loaded; aa-status 2>/dev/null | grep -qE '^[[:space:]]+soleur-bwrap$'
 
 STAGE=reload
 systemctl daemon-reload

@@ -462,6 +462,25 @@ describe("baked bootstrap installer contract (AC4/AC5/AC6/AC8/AC9)", () => {
     expect(bootstrap).toMatch(/"stage":"%s"/);
     expect(bootstrap).toMatch(/trap emit_fail EXIT/);
   });
+  test("installs + kernel-loads the container-sandbox profiles on-host (#6629 fresh-host delivery leg)", () => {
+    // The delivery-leg the RCA is about: a fresh host must receive BOTH profiles at the
+    // exact paths the terminal docker run's --security-opt reads, AND kernel-load apparmor
+    // ("applied != loaded" — apparmor=soleur-bwrap fails container-create otherwise). Without
+    // these assertions a "clean up the #6629 block" refactor could delete the install+assert
+    // lines together and ship a silently-unenforced fresh host (all placement/parity/count
+    // tests stay green). Pins install -> path, the load, and the fail-closed presence gate.
+    expect(bootstrap).toMatch(
+      /install -D -m 0644[^\n]*seccomp-bwrap\.json[^\n]*\/etc\/docker\/seccomp-profiles\/soleur-bwrap\.json/,
+    );
+    expect(bootstrap).toMatch(
+      /install -D -m 0644[^\n]*apparmor-soleur-bwrap\.profile[^\n]*\/etc\/apparmor\.d\/soleur-bwrap/,
+    );
+    expect(bootstrap).toMatch(/apparmor_parser -r \/etc\/apparmor\.d\/soleur-bwrap/);
+    // fail-closed presence + kernel-load asserts (run before the sentinel write)
+    expect(bootstrap).toMatch(/test -f \/etc\/docker\/seccomp-profiles\/soleur-bwrap\.json/);
+    expect(bootstrap).toMatch(/test -f \/etc\/apparmor\.d\/soleur-bwrap/);
+    expect(bootstrap).toMatch(/aa-status[^\n]*grep -qE '\^\[\[:space:\]\]\+soleur-bwrap\$'/);
+  });
 });
 
 describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
@@ -489,7 +508,7 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml", () => {
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles", () => {
     // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
     // enforcement probe, #5933 item 3).
     // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
@@ -498,7 +517,11 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // +1 (=28): vector.toml — the Vector shipper config baked for the ungated web-host
     // install (soleur-vector-install renders + installs it to /etc/vector/vector.toml, #6396).
     // A data file, not a script.
-    expect(serverTfBakedSet().length).toBe(28);
+    // +2 (=30): seccomp-bwrap.json + apparmor-soleur-bwrap.profile — container-sandbox
+    // security-control profiles baked for FRESH-host boot-time delivery + enforcement (#6629,
+    // ADR-122). Previously SSH-provisioner-only, so a fresh host ran the tenant sandbox
+    // unenforced. Data files, not scripts.
+    expect(serverTfBakedSet().length).toBe(30);
   });
 
   // #5922 release break: the Dockerfile bakes the host-scripts via
