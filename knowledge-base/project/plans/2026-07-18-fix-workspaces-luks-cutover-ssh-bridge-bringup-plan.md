@@ -10,6 +10,22 @@ refs: ["#6649", "#6604", "#6680", "ADR-119", "ADR-114", "#4177", "#4844"]
 
 # 🐛 fix(infra): bring up the workspaces-luks cutover SSH bridge (Option C)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-18 (plan-review 5-agent panel + deepen-plan gates + verify-the-negative grep pass)
+
+### Key improvements from review + deepen
+1. **Keystone: gate the keyfile-write + `WEB_HOST_SSH`/`GIT_DATA_SSH` export on `[[ -n "$SERVER_IP_INPUT" ]]`.** Converges 5 independent findings (code-simplicity #1, spec-flow Gap1, arch Finding A/B, Kieran scope) — makes the additions *genuinely inert* (not merely unused) for the terraform callers, makes the uniform-shred claim true, and preserves AC6/AC7.
+2. **`GIT_DATA_SSH` kept, not dropped** — the DHH/code-simplicity "drop it" finding was **refuted** by grep: `git-data-cutover.sh:82-83` defines `gd_ssh()`/`web_ssh()` consuming `${GIT_DATA_SSH:-ssh}`/`${WEB_HOST_SSH:-ssh}`, and the task directs the export.
+3. **HIGH (Kieran): `verify.yml:68` needs `# shellcheck disable=SC2086`** or AC8 fails (unlike cutover `:112`).
+4. Six mechanical hardening fixes: SERVER_IP export shared across both branches; keyfile-path exported before key bytes; teardown `set +e` only; fail-loud `WEB_HOST_SSH` guard; corrected git-data inertness rationale (no-terraform→exit-127, not "no ingress"); routability wording precision.
+
+### Deepen gates cleared
+- Phase 4.5 Network-Outage Deep-Dive (SSH/firewall triggers) — subsection below; telemetry emitted.
+- Phase 4.6 User-Brand Impact — threshold `none`, no sensitive-path match (grep-confirmed).
+- Phase 4.7 Observability — 5 fields present, `discoverability_test.command` ssh-free.
+- Phase 4.8 PAT-shape — clean. Phase 4.9 UI-wireframe — N/A (no UI surface). Phase 4.55 Downtime — no trigger (dry_run performs no freeze/repoint; action edit inert for the serving path).
+
 ## Overview
 
 `workspaces-luks-cutover.yml -f dry_run=true` and `workspaces-luks-verify.yml` were authored
@@ -261,7 +277,7 @@ logs:
   where: GitHub Actions run log + /tmp/cloudflared.log (dumped by teardown)
   retention: GitHub Actions default (90d)
 discoverability_test:
-  command: gh run view <run-id> --log   # NO ssh
+  command: gh run view <run-id> --log   # run-log only, never the host shell
   expected_output: "CF Tunnel SSH bridge" step green (no exit 127) AND escrow probe GREEN
 ```
 
@@ -283,6 +299,25 @@ Per `hr-ssh-diagnosis-verify-firewall`, verify L3 (firewall/routing) before L7 (
 The three walls are exactly the L3→L7 failure chain, addressed in order: terraform 127 (removed by
 `server-ip`), redirect-scope mismatch (fixed by `server-ip == WEB_HOST == 10.0.1.10`), missing
 key/user (fixed by the keyfile + `WEB_HOST_SSH` export).
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+Per `hr-ssh-diagnosis-verify-firewall`, L3 is verified before any L7 fix. Each layer cites a concrete
+artifact (verify-the-negative grep pass, this session):
+
+| Layer | Verification artifact | Status |
+| --- | --- | --- |
+| **L3 firewall / egress allow-list** | Runner egress IP is intentionally NOT in `var.admin_ips` (design — 5000+ rotating IPs); the tunnel bridge is the sanctioned path. This is a *by-design* non-allowlist, not a drifted one, so no firewall fix is warranted — the fix is the tunnel, which already exists. | ✔ verified (design intent) |
+| **L3 routing / redirect** | `nat OUTPUT REDIRECT -d 10.0.1.10 --dport 22 → 127.0.0.1:2222`; `10.0.1.10` resolves via the runner's default route (`0.0.0.0/0`) then REDIRECTs to loopback pre-egress. `server-ip == WEB_HOST == 10.0.1.10` (grep: cutover:102 / verify:60). | ✔ verified |
+| **L4/L7 tunnel** | `tunnel.tf:69-72` ingress `ssh.${app_domain_base}` → `ssh://10.0.1.10:22` (origin-relative, ADR-114 I2); CF Access ci_ssh service-token gate (`CI_SSH_ACCESS_TOKEN_ID/_SECRET` present in Doppler prd_terraform). | ✔ verified |
+| **L7 sshd auth** | `ci-ssh-key.tf` appends `tls_private_key.ci_ssh` public half to web-1 root's authorized_keys; `server.tf:299` connections `user="root"`. `WEB_HOST_SSH = ssh -i <keyfile> … -l root`. | ✔ verified |
+| **Wall #1 (terraform 127)** | `grep -cE 'setup-terraform\|terraform (init\|output\|apply\|plan)'` on cutover + verify = **0** — confirms the exit-127 root cause; `server-ip` removes the dependency. | ✔ verified |
+
+**Verify-the-negative pass (Phase 4.45), grep-confirmed this session:**
+- Inertness — `grep -E 'WEB_HOST_SSH\|GIT_DATA_SSH\|CI_SSH_KEYFILE'` on `apply-web-platform-infra.yml` + `apply-deploy-pipeline-fix.yml` → **zero hits** (terraform callers never consume the gated vars; with gating they are not even exported). **CONFIRMS** the inertness claim (AC14 codifies it).
+- H7 — `grep -E 'AWS_ACCESS_KEY_ID\|…\|WORKSPACES_HEADER_BUCKET'` on cutover workflow → **zero hits**. **CONFIRMS** `workspaces-luks-header.test.sh` H7 stays green.
+- `GIT_DATA_SSH` liveness — `git-data-cutover.sh:82-83` `gd_ssh()`/`web_ssh()` consume it. **CONFIRMS** keeping the export (refutes "drop it").
+- git-data no-terraform — `grep -c setup-terraform git-data-cutover.yml` = **0**. **CONFIRMS** the corrected rationale: the bridge exits 127 before git-data's script runs.
 
 ## Domain Review
 
