@@ -301,8 +301,8 @@ logs:
   where: GitHub Actions run log + $GITHUB_STEP_SUMMARY (Cutover summary step) + Sentry
   retention: GitHub Actions default; Sentry per project retention
 discoverability_test:
-  command: "gh run view <run-id> --log | grep -E 'CF Tunnel SSH bridge|escrow probe OK|Connection timed out'"
-  expected_output: "post-fix: the bridge + 'escrow probe OK' lines appear; no 'Connection timed out'"
+  command: "gh run view <run-id> --log | grep -E 'CF Tunnel|escrow probe OK|timed out'"
+  expected_output: "post-fix: the bridge + 'escrow probe OK' lines appear; no 'timed out'"
 ```
 
 The discoverability test uses `gh run view` only — no SSH is required to observe the outcome
@@ -323,6 +323,45 @@ Not applicable — no regulated-data surface is touched (no schema, migration, a
 or `.sql`). The change alters CI-workflow step gating only; it introduces no new processing
 activity, no new LLM/external-API call on user data, and no new distribution surface. Phase 2.7
 gate: skipped.
+
+## Deepen-Plan Enhancements (2026-07-18)
+
+### Precedent-Diff — how sibling CF-Tunnel-SSH-bridge workflows guard the bridge step
+
+`git grep` of every workflow that uses `./.github/actions/cf-tunnel-ssh-bridge` shows the fix
+(unconditional bridge) matches the dominant precedent — a host-touching step runs the bridge with no
+dry-run guard:
+
+| Workflow | Bridge-step guard | Relevance |
+|---|---|---|
+| **`workspaces-luks-verify.yml`** | **none (unconditional)** | Closest sibling — same #6604 epic, same web-1 host, read-only host-touching. Direct precedent for the fix. |
+| `apply-deploy-pipeline-fix.yml` | none (unconditional) | Host-touching apply; bridge always runs. |
+| `apply-web-platform-infra.yml` | `if: steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'` | Gated by an SSH-token-availability gate, NOT by `dry_run`. Different, apply-specific condition. |
+| `git-data-cutover.yml` | `if: ${{ !inputs.dry_run \|\| inputs.rollback }}` | The **only** workflow with the dry-run guard — and it is **correct** there (in-script per-step `DRY_RUN=1` short-circuits before any ssh → dry-run is host-free). |
+| `workspaces-luks-cutover.yml` (this fix) | `if: ${{ !inputs.dry_run \|\| inputs.rollback }}` → **removed** | Aligns with the verify-sibling precedent; its dry-run IS host-touching. |
+
+Conclusion: removing the guard is the well-precedented shape (matches `workspaces-luks-verify.yml`
+verbatim — no `if:`), not a novel one. The `git-data-cutover.yml` guard is left untouched.
+
+### Deepen hard-gate results
+
+- **4.5 Network-Outage deep-dive (SSH/timeout trigger):** the `## Hypotheses` section verifies
+  L3→L7 in order with artifacts. Root cause is L3 (missing NAT/tunnel to `10.0.1.10`), confirmed by
+  the connect-time *timeout* signature (not a handshake/auth error) in run `29644526137`. Firewall
+  allow-list is N/A with artifact (runner egress IP is deliberately not allowlisted; reach is
+  bridge-only per the action header). No sshd/service hypothesis is proposed. `hr-ssh-diagnosis-verify-firewall` satisfied.
+- **4.55 Downtime & Cutover:** not triggered — this diff does not reboot/replace a host, take a DB
+  lock, or restart a serving connector. The dry-run it enables is non-destructive (freeze/rsync/
+  repoint/wipe stay `DRY_RUN != 1`-gated in `workspaces-cutover.sh`).
+- **4.6 User-Brand Impact halt:** section present; threshold `none` with a scope-out reason bullet.
+  (The touched path `workspaces-luks-cutover.yml` does not match the preflight sensitive-path regex —
+  none of its `.github/workflows/…(doppler|secret|token|deploy|release|…)` tokens appear — so the
+  scope-out bullet is defensive, not required.)
+- **4.7 Observability gate:** all 5 schema fields present, non-placeholder; `discoverability_test.command`
+  uses `gh run view` (no SSH).
+- **4.8 PAT-shaped variable halt:** no `var.*_token` / `TF_VAR_(GITHUB|GH)_*` / literal `ghp_` /
+  `github_pat_` references. Pass.
+- **4.9 UI-wireframe halt:** not triggered — no UI-surface file in Files to Edit.
 
 ## Sharp Edges
 
