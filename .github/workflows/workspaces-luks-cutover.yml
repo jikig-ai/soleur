@@ -48,6 +48,10 @@ env:
   INFRA_DIR: apps/web-platform/infra
   CLOUDFLARED_VERSION: "2026.5.0"
   CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  # web-1 private IP — single source for BOTH the bridge `server-ip` (NAT redirect
+  # scope) and the Run step `WEB_HOST` (dial target). They MUST match or the
+  # redirect misses the SSH; defining once removes that drift foot-gun.
+  WEB_HOST_PRIVATE_IP: "10.0.1.10"
 
 jobs:
   cutover:
@@ -93,18 +97,19 @@ jobs:
           infra-dir: ${{ env.INFRA_DIR }}
           cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
           cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
-          # server-ip == WEB_HOST (10.0.1.10, web-1 private IP): scopes the NAT
-          # redirect to the same address the Run step SSHes to, and enables the
-          # keyfile + WEB_HOST_SSH export the Run step consumes. No infra-state
-          # read here — the tunnel ingress (tunnel.tf) always lands on web-1.
-          server-ip: "10.0.1.10"
+          # server-ip == WEB_HOST (web-1 private IP, single-sourced from
+          # env.WEB_HOST_PRIVATE_IP): scopes the NAT redirect to the same address
+          # the Run step SSHes to, and enables the keyfile + WEB_HOST_SSH export
+          # the Run step consumes. No infra-state read here — the tunnel ingress
+          # (tunnel.tf) always lands on web-1.
+          server-ip: ${{ env.WEB_HOST_PRIVATE_IP }}
 
       - name: Run workspaces-luks cutover
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           ROLLBACK: ${{ inputs.rollback && '1' || '0' }}
-          WEB_HOST: "10.0.1.10"
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
         # The cutover body runs ON web-1 (DP-6 host-side trap): copy it over the bridge and execute
         # it there so `trap cleanup EXIT` survives an SSH drop. The script reads the passphrase via
         # the host's pinned prd_workspaces_luks token path; no cloud-admin creds touch the host.
@@ -119,8 +124,10 @@ jobs:
           # auth-fail confusingly. The bridge sets WEB_HOST_SSH when server-ip
           # is passed (it is, above).
           [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1. Check the bridge step logs."; exit 1; }
+          # WEB_HOST_SSH is guaranteed set past the guard above (no :-ssh fallback —
+          # a keyless bare ssh is exactly what the guard exists to prevent).
           # shellcheck disable=SC2086
-          ${WEB_HOST_SSH:-ssh} "$WEB_HOST" "sudo DRY_RUN='${DRY_RUN}' ROLLBACK='${ROLLBACK}' bash -s" \
+          ${WEB_HOST_SSH} "$WEB_HOST" "sudo DRY_RUN='${DRY_RUN}' ROLLBACK='${ROLLBACK}' bash -s" \
             < "${INFRA_DIR}/workspaces-cutover.sh"
           rc=$?
           if [[ $rc -ne 0 ]]; then

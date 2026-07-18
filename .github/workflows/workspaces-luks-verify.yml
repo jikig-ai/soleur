@@ -28,6 +28,9 @@ env:
   INFRA_DIR: apps/web-platform/infra
   CLOUDFLARED_VERSION: "2026.5.0"
   CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  # web-1 private IP — single source for BOTH the bridge `server-ip` (NAT redirect
+  # scope) and the probe `WEB_HOST` (dial target); they MUST match.
+  WEB_HOST_PRIVATE_IP: "10.0.1.10"
 
 jobs:
   verify:
@@ -55,15 +58,15 @@ jobs:
           cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
           # server-ip == WEB_HOST (10.0.1.10): scopes the NAT redirect to the
           # address the probe SSHes to + enables the WEB_HOST_SSH export. No
-          # infra-state read here.
-          server-ip: "10.0.1.10"
+          # infra-state read here. Single-sourced from env.WEB_HOST_PRIVATE_IP.
+          server-ip: ${{ env.WEB_HOST_PRIVATE_IP }}
 
       - name: Re-assert /workspaces LUKS at-rest (read-only)
         env:
           # The bridge exports WEB_HOST_SSH as the exact ssh invocation (key -i <keyfile> + the
           # iptables NAT redirect scoped to server-ip; no ProxyCommand — the Go/bash client dials
           # 10.0.1.10:22 which the kernel redirects to the local cloudflared forward).
-          WEB_HOST: "10.0.1.10"
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
         run: |
           # set +e so a failing probe is captured in probe_rc (and reported) rather than exiting the
           # step at the ssh line under GitHub's inherited `-e` (which `set -uo pipefail` does not clear).
@@ -73,8 +76,9 @@ jobs:
           [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1. Check the bridge step logs."; exit 1; }
           # Run the baked daily probe read-only (it mutates nothing) — DP-11 reuse. It emits its
           # own discriminating Sentry event on any failed assert and exits non-zero.
+          # WEB_HOST_SSH is guaranteed set past the guard above (no :-ssh fallback).
           # shellcheck disable=SC2086
-          ${WEB_HOST_SSH:-ssh} "$WEB_HOST" 'sudo /usr/local/bin/luks-monitor'
+          ${WEB_HOST_SSH} "$WEB_HOST" 'sudo /usr/local/bin/luks-monitor'
           probe_rc=$?
           echo "luks-monitor probe rc=$probe_rc"
           # App-level workspace read + /api/health, exercising the full HTTPS path.

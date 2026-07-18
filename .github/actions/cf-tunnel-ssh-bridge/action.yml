@@ -60,11 +60,13 @@
 #    post-apply). The pull/decode steps fail loud if either is missing/empty.
 #
 # ── OUTPUTS (to $GITHUB_ENV, job-scoped, visible to the caller's later steps) ─
-#  SERVER_IP, CLOUDFLARED_PID, TF_VAR_ci_ssh_private_key,
-#  TUNNEL_SERVICE_TOKEN_ID, TUNNEL_SERVICE_TOKEN_SECRET.
-#  When `server-ip` is set, ALSO: CI_SSH_KEYFILE (chmod 600 temp key),
-#  WEB_HOST_SSH + GIT_DATA_SSH (ready `ssh -i <keyfile> … -l root` invocations the
-#  bash-ssh cutover/verify scripts consume via `${WEB_HOST_SSH:-ssh}`).
+#  Always: SERVER_IP, CLOUDFLARED_PID, TUNNEL_SERVICE_TOKEN_ID,
+#  TUNNEL_SERVICE_TOKEN_SECRET.
+#  When `server-ip` is EMPTY (terraform callers): TF_VAR_ci_ssh_private_key.
+#  When `server-ip` is SET (bash-ssh callers): CI_SSH_KEYFILE (chmod 600 temp key)
+#  + WEB_HOST_SSH + GIT_DATA_SSH (ready `ssh -i <keyfile> … -l root` invocations the
+#  cutover/verify scripts consume via `${WEB_HOST_SSH}`). The key form is
+#  mutually exclusive per caller class — the key never lands on an unused surface.
 #
 # Composite actions cannot read the `secrets` context — every secret is an
 # explicit input referenced ONLY inside `env:` mappings (never a `run:` body or
@@ -79,7 +81,7 @@ inputs:
     description: 'Doppler service token (prd_terraform, read-only). Caller forwards the DOPPLER_TOKEN repo secret.'
     required: true
   infra-dir:
-    description: 'Path to the terraform root (reads `terraform output -raw server_ip`). e.g. apps/web-platform/infra.'
+    description: 'Path to the terraform root; `terraform output -raw server_ip` is read from it ONLY when `server-ip` is empty. e.g. apps/web-platform/infra.'
     required: true
   cloudflared-version:
     description: 'cloudflared release version to install (e.g. 2026.5.0).'
@@ -163,19 +165,14 @@ runs:
         while IFS= read -r line; do
           [[ -n "$line" ]] && printf '::add-mask::%s\n' "$line"
         done <<< "$KEY"
-        {
-          echo "TF_VAR_ci_ssh_private_key<<__SOLEUR_CI_SSH_KEY_EOF__"
-          printf '%s\n' "$KEY"
-          echo "__SOLEUR_CI_SSH_KEY_EOF__"
-        } >> "$GITHUB_ENV"
-
-        # For bash-ssh callers (server-ip set — the LUKS cutover/verify
-        # workflows pipe a script over `${WEB_HOST_SSH:-ssh} "$HOST"`), ALSO
-        # write the key to a chmod 600 temp keyfile and export the ready ssh
-        # invocation. This block is INERT (nothing written or exported) when
-        # server-ip is empty, so terraform callers (apply-web-platform-infra.yml,
-        # which uses only TF_VAR_ci_ssh_private_key above) are byte-unchanged.
+        # The two caller classes are mutually exclusive and each gets ONLY the key
+        # form it uses — the key never lands on a surface its caller does not need:
         if [[ -n "${SERVER_IP_INPUT:-}" ]]; then
+          # bash-ssh callers (LUKS cutover/verify pipe a script over
+          # `${WEB_HOST_SSH} "$HOST"`): write the key to a chmod 600 temp keyfile
+          # and export the ready ssh invocation. NO TF_VAR — these callers run no
+          # terraform, so the key stays OFF $GITHUB_ENV (only the keyfile holds
+          # it, and the caller's if:always() teardown shreds that).
           KEYFILE=$(mktemp)
           chmod 600 "$KEYFILE"
           # Export the path BEFORE writing key bytes so the caller's if:always()
@@ -185,6 +182,15 @@ runs:
           SSH_INVOCATION="ssh -i $KEYFILE -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root"
           printf 'WEB_HOST_SSH=%s\n' "$SSH_INVOCATION" >> "$GITHUB_ENV"
           printf 'GIT_DATA_SSH=%s\n' "$SSH_INVOCATION" >> "$GITHUB_ENV"
+        else
+          # terraform callers (apply-web-platform-infra.yml): the Go SSH client
+          # authenticates with var.ci_ssh_private_key. Byte-identical to the
+          # pre-server-ip behavior (this heredoc was previously unconditional).
+          {
+            echo "TF_VAR_ci_ssh_private_key<<__SOLEUR_CI_SSH_KEY_EOF__"
+            printf '%s\n' "$KEY"
+            echo "__SOLEUR_CI_SSH_KEY_EOF__"
+          } >> "$GITHUB_ENV"
         fi
 
     - name: Start cloudflared SSH bridge + iptables NAT redirect
