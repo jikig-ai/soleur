@@ -531,6 +531,18 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "tls_self_signed_cert.proxy_server",
   "doppler_secret.proxy_tls_key",
   "doppler_secret.proxy_tls_cert",
+  // #6657 (ADR-125 / AP-019) — the DNS-edit-only Cloudflare token for the GitHub
+  // Pages cert-reissue routine + its prd doppler_secret. Minting a
+  // cloudflare_api_token requires "User API Tokens: Edit", which the per-PR CI
+  // runner's cf_api_token lacks; auto-targeting the mint on every infra/*.tf push
+  // would 403 and wedge the whole apply (the #5566-inverse footgun). So both ride
+  // an operator JIT / maintenance-window apply (documented in
+  // infra/cf-cert-reissue-token.tf), NOT the #5566 per-PR-CI silent-un-applied
+  // class — same class as the git-data doppler_secrets above (doppler_secret, not
+  // the CI-published doppler_service_token/github_actions_secret types this test
+  // forces).
+  "cloudflare_api_token.gh_pages_cert_reissue_dns_edit",
+  "doppler_secret.cf_api_token_dns_edit",
   // #5274 Sub-PR 3.D (ADR-068) — the fresh LUKS git-data volume + its at-rest key +
   // its scoped read-only token ALL ride the operator's MAINTENANCE-WINDOW cutover apply
   // (the volume attaches to the RUNNING git-data host; guest-side cryptsetup unlocks it

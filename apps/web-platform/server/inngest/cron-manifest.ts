@@ -14,11 +14,18 @@
 // manual-trigger allowlist (lib/inngest/manual-trigger-allowlist.ts) depend on
 // this leaf staying client-free.
 
-// Expected-cron manifest — every cron-*.ts function that MUST have a live
-// cron trigger. function-registry-count.test.ts (e) asserts this set equals
-// the cron-*.ts file list, so it cannot silently drift. Includes the watchdog
-// itself (it is a registered cron; when it runs it is planned → classifies OK;
-// its own Sentry monitor is the backstop if it stops).
+// Expected-cron manifest — every cron-*.ts function that is manual-trigger-able
+// / dashboard-visible / allowlisted. function-registry-count.test.ts (e) asserts
+// this set equals the cron-*.ts file list, so it cannot silently drift. Includes
+// the watchdog itself (it is a registered cron; when it runs it is planned →
+// classifies OK; its own Sentry monitor is the backstop if it stops).
+// NOTE: most members carry a live `{ cron: }` schedule, but membership does NOT
+// require one — `cron-gh-pages-cert-reissue` is EVENT-ONLY (manual-trigger, no
+// schedule; ADR-125). classifyRegistry's `hasCronTrigger` would classify such a
+// member UNPLANNED, but that classifier is not on a live auto-heal path today
+// (the watchdog is retired to a liveness beacon); un-retiring it needs an
+// event-only carve-out in hasCronTrigger first (else it would auto-fire this
+// human-gated routine).
 export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-agent-native-audit",
   "cron-anthropic-cost-report",
@@ -39,6 +46,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-email-ingress-probe",
   "cron-expenses-verify-by",
   "cron-follow-through-monitor",
+  "cron-gh-pages-cert-reissue",
   "cron-gh-pages-cert-state",
   "cron-ghcr-token-minter",
   "cron-github-app-drift-guard",
