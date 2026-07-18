@@ -37,6 +37,7 @@ The `/workspaces` LUKS cutover (ADR-119, epic #6588) has a working escrow *desig
 This is a `single-user incident` brand-survival plan: the surface is sole-copy user source code, and the escrow proof this rehearsal exercises is the ONLY defense against the ADR-119 terminal failure (passphrase/header loss ⇒ unreadable forever). The autonomy change touches the authorization boundary on that irreversible path, so security-sentinel + architecture-strategist review is a hard gate (see `## Architecture Decision`).
 
 ## Research Reconciliation — Spec vs. Codebase
+<!-- lint-infra-ignore start (automated CI -target apply + SSH-bridge format prose; OPERATOR_APPLIED_* identifier + -target…apply co-occurrence is a false positive) -->
 
 | Task-prescribed claim | Codebase reality (verified) | Plan response |
 |---|---|---|
@@ -46,6 +47,7 @@ This is a `single-user incident` brand-survival plan: the surface is sole-copy u
 | BLOCKER 4c: "persist the token to /etc/default/luks-monitor … so the daily probe works" | cloud-init bakes `/etc/default/luks-monitor` with ONLY `SOLEUR_SENTRY_DSN` (`cloud-init.yml:422-424`) — NO `DOPPLER_TOKEN`. AND `luks-monitor.service` has NO `Environment=HOME=/root`; a root systemd unit running `doppler` dies `$HOME is not defined` (learning `2026-07-18-web-1-root-doppler-unit-needs-home-…`). | Real arm persists `DOPPLER_TOKEN=<boot token>` into `/etc/default/luks-monitor` (0600 root, preserving the baked DSN). **Also add `Environment=HOME=/root` to `luks-monitor.service`** — a latent bug that would make the daily timer probe fail even with the token present. |
 | conditional environment `${{ inputs.dry_run && '' || 'X' }}` (the "obvious" form) | This is **inverted**: `''` is falsy, so `true && '' → ''` then `'' || 'X' → 'X'` ⇒ ALWAYS gated. | Use the fail-closed complement `${{ !inputs.dry_run && 'workspaces-luks-cutover' || '' }}` (truth table in `## Architecture Decision`). This mirrors the existing `DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}` logic (`:110`) — same boolean coercion the file already trusts. |
 | `hcloud_volume.workspaces_luks.id` → by-id device | `cloud-init.yml:573-574` mounts `/mnt/data` via `/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id}` — the confirmed convention. Volume name literal is `soleur-web-platform-data-luks` (`workspaces-luks.tf:166`). The Hetzner token variable `hcloud_token` ← Doppler `HCLOUD_TOKEN` in `prd_terraform` (`main.tf:88`, `variables.tf:15`) — a Hetzner API token, NOT a GitHub PAT (no GitHub-App alternative applies). | Derive the id via the hcloud API by volume name using `HCLOUD_TOKEN` (workflow already holds a `prd_terraform` `DOPPLER_TOKEN`); construct `WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_<id>`. Terraform-output is the documented fallback. |
+<!-- lint-infra-ignore end -->
 
 **Premise validation (Phase 0.6):** #6649 is OPEN (title: "wire WORKSPACES_HEADER_BUCKET + R2 creds into the workspaces-luks freeze path"). The prior `#6649` plan (`2026-07-18-fix-6649-workspaces-luks-header-escrow-wiring-plan.md`) delivered ONLY the header-escrow bucket/creds + probe machinery — it does NOT touch content-carrier, boot-token delivery, `WORKSPACES_LUKS_DEV`, or the autonomy gate. All four blockers here are fresh. Every cited file/line/symbol was read directly and holds.
 
@@ -68,9 +70,11 @@ The feature description matches SSH/timeout keywords, but this is NOT a connecti
 ## Implementation Phases
 
 ### Phase 0 — Preconditions (grep/verify, no code)
+<!-- lint-infra-ignore start (Phase 0 preconditions describe the automated CF-tunnel SSH bridge format + CI -target set — not human-run steps) -->
 - Confirm `WEB_HOST_SSH` format is `ssh -i <keyfile> -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root` (`.github/actions/cf-tunnel-ssh-bridge/action.yml`) — lands as root, pipes tar + stdin.
 - Confirm the scoped cutover `-target` set (`apply-web-platform-infra.yml:2660-2664`) is EXACTLY the five workspaces_luks resources — the new `github_actions_secret` must NOT be added there (the sourced `workspaces_luks_cutover_gate` would abort it as `out_of_scope`).
 - Verify (WebFetch GitHub Actions docs) that a job `environment:` evaluating to an EMPTY string runs with no environment gate. If NOT confirmed, use the split-job fallback (`## Architecture Decision`).
+<!-- lint-infra-ignore end -->
 
 ### Phase 1 — BLOCKER 3: content-carrier → file execution (RED test first)
 1. Harden `workspaces-cutover.sh`: replace every `${BASH_SOURCE[0]}` with `${BASH_SOURCE[0]:-}` (`:63`, `:475`, `:477`, `:478`) and, where a bare-empty dirname would resolve to `.`, anchor on `SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"` computed once near the top so file-execution is unambiguous. (`luks-monitor.sh:29` is NOT hardened — code-simplicity: it is always run as a file, so `${BASH_SOURCE[0]}` is never unbound; dropped from scope to keep the change minimal.)
@@ -93,8 +97,10 @@ The feature description matches SSH/timeout keywords, but this is NOT a connecti
      # NO lifecycle.ignore_changes — a -replace rotation of the token propagates the new key here.
    }
    ```
+<!-- lint-infra-ignore start (DEFAULT-apply -target reclassification prose; OPERATOR_APPLIED_TOKEN_EXCLUSIONS identifier co-occurs with -target…apply — automated CI, not a human step) -->
    **[architecture P1 — mirror the inngest precedent exactly; #5566 silent-un-applied class]** Add TWO explicit `-target` lines to the DEFAULT allow-list in `apply-web-platform-infra.yml` (near `:361`): `-target=doppler_service_token.workspaces_luks` AND `-target=github_actions_secret.workspaces_luks_boot_token` — exactly as `inngest_arm_write` + `doppler_token_inngest_arm` are both targeted. Then **REMOVE `doppler_service_token.workspaces_luks` from `OPERATOR_APPLIED_TOKEN_EXCLUSIONS`** in `terraform-target-parity.test.ts` — the rule at `:686-688` forbids excluding a token that feeds a `github_actions_secret` ("MUST be targeted"), because publishing `.key` reclassifies it from operator-applied-host-token to CI-published token. Do NOT rely on `-target` transitivity + a self-contradicting exclusion (a comment reconciliation is insufficient — the classification changed). **/work MUST verify against the inngest precedent side-by-side** the interaction with (i) the general 5-resource `OPERATOR_APPLIED_EXCLUSIONS` and (ii) the scoped cutover gate (`workspaces-luks-cutover-gate.sh` asserts only `vc/ac/sc` creates, not a token create, so a token already in state from the DEFAULT apply is fine; the scoped `-target` set at `apply-web-platform-infra.yml:2660-2664` still lists the token — idempotent).
    Update the stale `workspaces-luks.tf:190-210` env-gate comment AND the `workspaces-luks-cutover.yml:9-16` workflow comment block (the "environment gate ... covers every dispatch / is the ONLY human authorization" prose) to say the environment is applied ONLY to the real freeze arm (dry-run rehearsals run ungated for autonomy; the reviewer set stays non-empty for the freeze). Both doc sites must be reconciled, not just line 62.
+<!-- lint-infra-ignore end -->
 2. **(b) Inject into the host script env.** In cutover.yml, add step env `WORKSPACES_LUKS_BOOT_TOKEN: ${{ secrets.WORKSPACES_LUKS_BOOT_TOKEN }}` + a fail-loud presence check. Write the `.env` file:
    ```
    printf 'DOPPLER_TOKEN=%s\nWORKSPACES_LUKS_DEV=%s\nDRY_RUN=%s\nROLLBACK=%s\n' \
