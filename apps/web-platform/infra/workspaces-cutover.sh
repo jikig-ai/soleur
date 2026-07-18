@@ -43,8 +43,17 @@ MAPPER="/dev/mapper/${MAPPER_NAME}"
 CONTAINER="${WORKSPACES_CONTAINER:-soleur-web-platform}"
 STATE_DIR="${WORKSPACES_STATE_DIR:-/var/lib/workspaces-luks}"
 STATE_FILE="${STATE_DIR}/state"
+# HEADER_BACKUP_BUCKET + the R2 S3 creds/endpoint are read host-side from prd_workspaces_luks
+# (load_escrow_creds, below) — NOT passed via the workflow env / sudo argv (that would leak the
+# creds into the host process list). The env override is kept only for the pre-merge stubbed test
+# harness; production leaves it unset so the pinned Doppler read is authoritative (#6649).
 HEADER_BACKUP_BUCKET="${WORKSPACES_HEADER_BUCKET:-}"  # MUST be distinct from the tfstate bucket (C4)
 TFSTATE_BUCKET="${WORKSPACES_TFSTATE_BUCKET:-soleur-terraform-state}"  # the R2 backend bucket the header MUST NOT co-locate with (C4)
+# SHA256-pinned aws-cli v2 — installed on-demand as root just before the freeze with $KEY in
+# memory, so it is pinned exactly like CLOUDFLARED_SHA256. Digest computed from the versioned
+# installer; bump AWSCLI_VERSION + AWSCLI_SHA256 together.
+AWSCLI_VERSION="${WORKSPACES_AWSCLI_VERSION:-2.28.0}"
+AWSCLI_SHA256="${WORKSPACES_AWSCLI_SHA256:-483e3c43b59255aef243bde90e9f09bb21cb9d1dd5e20f985212d708e510b97c}"
 DEAD_MAN_MIN="${WORKSPACES_DEAD_MAN_MIN:-30}"
 DRY_RUN="${DRY_RUN:-1}"
 ROLLBACK="${ROLLBACK:-0}"
@@ -58,6 +67,96 @@ EMIT="/usr/local/bin/workspaces-luks-emit.sh"
 # The passphrase is read ONLY via the pinned scoped-config form (R9) — never doppler run/download.
 read_key() { doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks 2>/dev/null || true; }
 
+# The R2 escrow delivery (bucket name, S3 creds, endpoint) is read host-side via the SAME pinned
+# scoped-config form as the passphrase (R9) — never argv, never doppler run/download (the CWE-522
+# hole). `|| true` mirrors read_key; the fail-loud [ -n ] check is at the call site so a
+# half-populated cred pair dies BEFORE aws, not as a confusing mid-freeze SigV4 error.
+read_header_bucket()   { doppler secrets get WORKSPACES_HEADER_BUCKET --plain --config prd_workspaces_luks 2>/dev/null || true; }
+read_header_key_id()   { doppler secrets get WORKSPACES_HEADER_R2_ACCESS_KEY_ID --plain --config prd_workspaces_luks 2>/dev/null || true; }
+read_header_secret()   { doppler secrets get WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY --plain --config prd_workspaces_luks 2>/dev/null || true; }
+read_header_endpoint() { doppler secrets get WORKSPACES_HEADER_R2_ENDPOINT --plain --config prd_workspaces_luks 2>/dev/null || true; }
+
+# ensure_aws — web-1 carries lifecycle{ ignore_changes = [user_data] } and is unrebuildable, so
+# cloud-init cannot deliver `aws` to the RUNNING host; this on-demand install IS the real delivery
+# (the cloud-init addition covers FUTURE hosts only). SHA256-pinned (root + $KEY in memory).
+# Idempotent: a present aws short-circuits.
+# OPERATOR NOTE: this runs in BOTH arms (it precedes escrow_probe, which is outside the DRY_RUN gate),
+# so a `dry_run=true` rehearsal is NOT host-side-effect-free the FIRST time — it may apt-get/curl/
+# install aws-cli on web-1 (additive, no service restart; user-impact review). Subsequent runs no-op.
+ensure_aws() {
+  if command -v aws >/dev/null 2>&1; then return 0; fi
+  log "aws CLI absent — installing pinned aws-cli v${AWSCLI_VERSION} (SHA256 verified)"
+  command -v unzip >/dev/null 2>&1 || { apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq unzip >/dev/null 2>&1; } \
+    || { emit_drift aws_unzip_missing; die "unzip unavailable and could not be installed — cannot unpack aws-cli"; }
+  local tmp z; tmp="$(mktemp -d)"; z="${tmp}/awscliv2.zip"
+  if ! curl -fsSL -o "$z" "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWSCLI_VERSION}.zip"; then
+    rm -rf "$tmp"; emit_drift aws_download_failed; die "aws-cli download failed — cannot escrow the header (C4)"
+  fi
+  echo "${AWSCLI_SHA256}  ${z}" | sha256sum -c - >/dev/null 2>&1 \
+    || { rm -rf "$tmp"; emit_drift aws_cli_sha_mismatch; die "aws-cli SHA256 mismatch (expected ${AWSCLI_SHA256}) — refusing to run an unverified installer as root before the freeze (possible installer tampering)"; }
+  ( cd "$tmp" && unzip -q "$z" && ./aws/install --update >/dev/null 2>&1 ) \
+    || { rm -rf "$tmp"; emit_drift aws_install_failed; die "aws-cli install failed"; }
+  rm -rf "$tmp"
+  command -v aws >/dev/null 2>&1 || { emit_drift aws_still_absent; die "aws CLI still absent after install (C4)"; }
+}
+
+# load_escrow_creds — populate HEADER_BACKUP_BUCKET + export the R2 S3 env for aws, with per-field
+# fail-loud. R2 rejects aws-cli>=2.23's default CRC32 checksums, so pin the checksum env to
+# when_required (the known R2 breakage — a vendor-behavior fact, not derived).
+load_escrow_creds() {
+  HEADER_BACKUP_BUCKET="$(read_header_bucket)"
+  local kid sec ep
+  kid="$(read_header_key_id)"; sec="$(read_header_secret)"; ep="$(read_header_endpoint)"
+  [ -n "$HEADER_BACKUP_BUCKET" ] || { emit_drift header_bucket_unreadable; die "WORKSPACES_HEADER_BUCKET unreadable from prd_workspaces_luks — refusing to proceed without an off-host header bucket DISTINCT from tfstate (C4)"; }
+  [ -n "$kid" ] || { emit_drift header_key_id_unreadable; die "WORKSPACES_HEADER_R2_ACCESS_KEY_ID unreadable from prd_workspaces_luks (C4)"; }
+  [ -n "$sec" ] || { emit_drift header_secret_unreadable; die "WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY unreadable from prd_workspaces_luks (C4)"; }
+  [ -n "$ep" ] || { emit_drift header_endpoint_unreadable; die "WORKSPACES_HEADER_R2_ENDPOINT unreadable from prd_workspaces_luks (C4)"; }
+  [ "$HEADER_BACKUP_BUCKET" != "$TFSTATE_BUCKET" ] || { emit_drift header_bucket_equals_tfstate; die "WORKSPACES_HEADER_BUCKET ($HEADER_BACKUP_BUCKET) equals the tfstate bucket — the header MUST live in a DISTINCT blast radius (C4)"; }
+  export AWS_ACCESS_KEY_ID="$kid"
+  export AWS_SECRET_ACCESS_KEY="$sec"
+  export AWS_DEFAULT_REGION=auto
+  export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+  export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+  HEADER_R2_ENDPOINT="$ep"
+}
+
+# escrow_probe — DRY_RUN-safe reachability+auth+writability probe. Runs in BOTH arms (OUTSIDE the
+# `DRY_RUN != 1` gate) so a GREEN signal lands during the rehearsal, before any irreversible freeze.
+# (1) probe-PUT (write→read-back→delete of a namespaced .probe/<run-id> key): a read-only head-bucket
+#     would false-green an Object-Read-only token that then dies at the real PUT.
+# (2) NEGATIVE probe: the SAME creds MUST be DENIED against soleur-terraform-state — a success proves
+#     an over-scoped account-wide token (the name-compare below cannot catch over-scoping).
+escrow_probe() {
+  local run_id probe_key probe_body neg_err neg_rc
+  run_id="${GITHUB_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+  probe_key=".probe/${run_id}"
+  probe_body="$(mktemp)"; printf 'workspaces-luks-escrow-probe %s\n' "$run_id" > "$probe_body"
+  if ! aws s3 cp "$probe_body" "s3://${HEADER_BACKUP_BUCKET}/${probe_key}" --endpoint-url "$HEADER_R2_ENDPOINT" >/dev/null 2>&1; then
+    rm -f "$probe_body"; emit_drift escrow_probe_put_failed; die "escrow probe-PUT to $HEADER_BACKUP_BUCKET failed — creds/endpoint/writability not proven; aborting BEFORE the freeze (C4)"
+  fi
+  aws s3api head-object --bucket "$HEADER_BACKUP_BUCKET" --key "$probe_key" --endpoint-url "$HEADER_R2_ENDPOINT" >/dev/null 2>&1 \
+    || { aws s3 rm "s3://${HEADER_BACKUP_BUCKET}/${probe_key}" --endpoint-url "$HEADER_R2_ENDPOINT" >/dev/null 2>&1 || true; rm -f "$probe_body"; emit_drift escrow_probe_readback_failed; die "escrow probe read-back failed — object not durable; aborting BEFORE the freeze (C4)"; }
+  aws s3 rm "s3://${HEADER_BACKUP_BUCKET}/${probe_key}" --endpoint-url "$HEADER_R2_ENDPOINT" >/dev/null 2>&1 || true
+  # NEGATIVE probe: the escrow creds MUST be DENIED against the tfstate bucket (the passphrase-bearing
+  # state bucket). rc==0 (200) ⇒ over-scoped account-wide token ⇒ die. This is the SOLE runtime guard
+  # against over-scope (the name-compare cannot catch it), so fail CLOSED: a non-zero exit is proof of
+  # denial ONLY when it is an AUTH error (403/401/404) — a transport/network error is NOT proof and
+  # must not be read as "safe" (security P2). A bucket-scoped R2 token gets 403 (or 404) here.
+  neg_err="$(aws s3api head-bucket --bucket "$TFSTATE_BUCKET" --endpoint-url "$HEADER_R2_ENDPOINT" 2>&1)"; neg_rc=$?
+  if [ "$neg_rc" -eq 0 ]; then
+    rm -f "$probe_body"; emit_drift escrow_creds_overscoped; die "escrow creds are NOT bucket-scoped — they can reach $TFSTATE_BUCKET (the passphrase-bearing state bucket); refusing to proceed (C4/security)"
+  elif ! grep -Eq '\b(403|401|404)\b|Forbidden|AccessDenied|Not Found|NoSuchBucket' <<<"$neg_err"; then
+    # herestring, not `printf … | grep -q`: under `set -o pipefail` grep -q closes the pipe on the
+    # first match and SIGPIPEs the producer → a false non-match (this branch's own SIGPIPE learning,
+    # 2026-07-18-pipefail-grep-q-early-match-sigpipe-flakes-drift-guards.md). The raw $neg_err tail is
+    # credential-free here BY CONSTRUCTION: any auth error carrying a key-id shape is a 403/401/404 →
+    # caught above and routed to the deny branch, so only non-auth (network/DNS/TLS) text reaches here.
+    rm -f "$probe_body"; emit_drift escrow_negprobe_inconclusive; die "over-scope negative probe INCONCLUSIVE against $TFSTATE_BUCKET (non-auth error: $(tail -1 <<<"$neg_err")) — refusing to proceed on an unproven denial (C4/security)"
+  fi
+  rm -f "$probe_body"
+  log "escrow probe OK — PUT/read-back/delete on $HEADER_BACKUP_BUCKET green; creds DENIED against $TFSTATE_BUCKET (bucket-scoped)"
+}
+
 # --- Persisted recovery state (survives a reboot; read by the EXIT trap) ------
 persist_state() { mkdir -p "$STATE_DIR"; printf '%s=%s\n' "$1" "$2" >> "$STATE_FILE"; }
 read_state()    { [ -f "$STATE_FILE" ] && (grep -E "^$1=" "$STATE_FILE" | tail -1 | cut -d= -f2-) || echo ""; }
@@ -68,7 +167,8 @@ CANARY_OK=0
 # Emit a discriminating drift event (any failed at-rest assert routes here).
 emit_drift() {
   WL_REASON="$1"; export WL_REASON
-  if command -v workspaces_luks_emit >/dev/null 2>&1; then WL_LEVEL=fatal workspaces_luks_emit; fi
+  if command -v workspaces_luks_emit >/dev/null 2>&1; then WL_LEVEL=fatal workspaces_luks_emit;
+  else echo "[workspaces-cutover] DRIFT reason=$1 (workspaces_luks_emit unavailable — Sentry channel not reached; workflow-run log is the only sink)" >&2; fi
 }
 
 # Host-local rollback: unmount the mapper, remount the RETAINED plaintext volume at $MOUNT, restart.
@@ -170,6 +270,15 @@ mkdir -p "$STAGING"
 # Escrow proof (BLOCKING, AFTER prepare — R7/C3) — against the REAL device via the host token path
 # ============================================================================
 step "escrow proof: luksOpen --test-passphrase against the REAL device (host token path)"
+
+# Load the R2 escrow creds host-side (fail-loud) + ensure the S3 client, then run the DRY_RUN-safe
+# reachability probe — in BOTH arms (OUTSIDE the DRY_RUN != 1 gate below), so the rehearsal proves
+# the escrow path is usable BEFORE any irreversible freeze. This is what kills the false-green where
+# a green dry-run hid an unusable escrow (the gap #6649 fixes).
+ensure_aws
+load_escrow_creds
+escrow_probe
+
 if [ "$DRY_RUN" != "1" ]; then
   if printf '%s' "$KEY" | cryptsetup luksOpen --test-passphrase --key-file - "$FRESH_DEV" >/dev/null 2>&1; then
     log "escrow OK — the host-token passphrase unlocks the real device"
@@ -180,27 +289,36 @@ if [ "$DRY_RUN" != "1" ]; then
   # C4 — the LUKS header is an independent terminal limb: back it up to a bucket DISTINCT from the
   # tfstate bucket, then assert the backup's UUID matches the live header. Distinctness is ENFORCED
   # (not just non-empty): co-locating the header with tfstate collapses the "different blast radius"
-  # property — one bucket loss then takes both the sole decryption key AND the state.
-  [ -n "$HEADER_BACKUP_BUCKET" ] || die "WORKSPACES_HEADER_BUCKET unset — refusing to proceed without an off-host header backup to a bucket DISTINCT from tfstate (C4)"
-  [ "$HEADER_BACKUP_BUCKET" != "$TFSTATE_BUCKET" ] || die "WORKSPACES_HEADER_BUCKET ($HEADER_BACKUP_BUCKET) equals the tfstate bucket — the header MUST live in a DISTINCT blast radius (C4)"
-  hdr="/tmp/workspaces-luks-header.img"
-  cryptsetup luksHeaderBackup "$FRESH_DEV" --header-backup-file "$hdr"
+  # property — one bucket loss then takes both the sole decryption key AND the state. (load_escrow_creds
+  # already enforced non-empty + distinctness above; these re-assert it at the write site.)
+  [ -n "$HEADER_BACKUP_BUCKET" ] || { emit_drift header_bucket_unreadable; die "WORKSPACES_HEADER_BUCKET unset — refusing to proceed without an off-host header backup to a bucket DISTINCT from tfstate (C4)"; }
+  [ "$HEADER_BACKUP_BUCKET" != "$TFSTATE_BUCKET" ] || { emit_drift header_bucket_equals_tfstate; die "WORKSPACES_HEADER_BUCKET ($HEADER_BACKUP_BUCKET) equals the tfstate bucket — the header MUST live in a DISTINCT blast radius (C4)"; }
+  # Header temp file on the persistent STATE_DIR (mode 0700), NOT /tmp — a tmpfs /tmp makes the
+  # `shred -u` below a no-op against the raw device (security F7).
+  mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR" 2>/dev/null || true
+  hdr="${STATE_DIR}/header-backup.img"
+  # Guard the backup + UUID reads explicitly (set -uo pipefail has no -e): an unguarded
+  # luksHeaderBackup/luksUUID failure would fall through and mis-report as a "UUID mismatch" with an
+  # empty backup UUID, AND — firing pre-FREEZE_HELD — would page NOBODY on the Sentry channel (the
+  # emit-less die was the only such gap in the escrow limb; observability review P2).
+  cryptsetup luksHeaderBackup "$FRESH_DEV" --header-backup-file "$hdr" \
+    || { emit_drift header_backup_failed; die "cryptsetup luksHeaderBackup FAILED for $FRESH_DEV — cannot produce the off-host header; aborting BEFORE the freeze (C4)"; }
   live_uuid="$(cryptsetup luksUUID "$FRESH_DEV")"
   bkp_uuid="$(cryptsetup luksUUID "$hdr" 2>/dev/null || cryptsetup luksDump "$hdr" | sed -n 's/^UUID:[[:space:]]*//p')"
-  [ -n "$live_uuid" ] && [ "$live_uuid" = "$bkp_uuid" ] || die "header backup UUID mismatch (live=$live_uuid backup=$bkp_uuid) — C4"
+  [ -n "$live_uuid" ] && [ "$live_uuid" = "$bkp_uuid" ] || { emit_drift header_backup_uuid_mismatch; die "header backup UUID mismatch (live=$live_uuid backup=$bkp_uuid) — C4"; }
   # Off-host copy to the DISTINCT bucket. BLOCKING + read-back: the upload failure is FATAL and the
   # object is proven present (head-object) BEFORE the local copy is shredded and BEFORE the freeze —
   # else the cutover could complete with NO off-host header anywhere, reopening the F4 unreadable-
   # forever window the moment the plaintext is wiped (Phase 5). The upload is the escrow, not a hint.
   hdr_key="workspaces-luks-header-${live_uuid}.img"
-  aws s3 cp "$hdr" "s3://${HEADER_BACKUP_BUCKET}/${hdr_key}" >/dev/null 2>&1 \
-    || { emit_drift header_backup_upload_failed; die "off-host header backup upload to $HEADER_BACKUP_BUCKET FAILED — C4 escrow not satisfied; aborting BEFORE the freeze (the workflow env must provide S3 creds)"; }
-  aws s3api head-object --bucket "$HEADER_BACKUP_BUCKET" --key "$hdr_key" >/dev/null 2>&1 \
+  aws s3 cp "$hdr" "s3://${HEADER_BACKUP_BUCKET}/${hdr_key}" --endpoint-url "$HEADER_R2_ENDPOINT" >/dev/null 2>&1 \
+    || { emit_drift header_backup_upload_failed; die "off-host header backup upload to $HEADER_BACKUP_BUCKET FAILED — C4 escrow not satisfied; aborting BEFORE the freeze (creds are read host-side from prd_workspaces_luks — check WORKSPACES_HEADER_R2_ACCESS_KEY_ID / _SECRET_ACCESS_KEY / _ENDPOINT)"; }
+  aws s3api head-object --bucket "$HEADER_BACKUP_BUCKET" --key "$hdr_key" --endpoint-url "$HEADER_R2_ENDPOINT" >/dev/null 2>&1 \
     || { emit_drift header_backup_unverified; die "off-host header backup object not readable back from $HEADER_BACKUP_BUCKET — refusing to shred the only local copy on an unproven escrow (C4)"; }
   log "header escrow OK — $hdr_key present in $HEADER_BACKUP_BUCKET (distinct from tfstate)"
   shred -u "$hdr" 2>/dev/null || rm -f "$hdr"
 else
-  log "(dry-run) would luksOpen --test-passphrase + luksHeaderBackup to $HEADER_BACKUP_BUCKET"
+  log "(dry-run) escrow probe green; would luksHeaderBackup + upload to $HEADER_BACKUP_BUCKET via $HEADER_R2_ENDPOINT"
 fi
 
 # ============================================================================
