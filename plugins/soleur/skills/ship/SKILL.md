@@ -1202,7 +1202,8 @@ The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE 
 **Grok Build pre-push gate (mandatory before `git push`).** When the harness is Grok (`GROK_HOME` / `GROK_AGENT`), run from repo root and inspect exit code explicitly (do not pipe through `tail`):
 
 ```bash
-bash plugins/soleur/scripts/grok-pre-push-gate.sh > /tmp/grok-pre-push-gate.log 2>&1; rc=$?; echo "EXIT=$rc"
+log=$(mktemp -t grok-pre-push-gate.XXXXXXXX.log)
+bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"
 ```
 
 Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 test-all.sh already ran (Phase 4 is mid-pipeline; this gate is the push-time recheck).
@@ -1877,10 +1878,10 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    4. Paste run-URL + byte count + verbatim URLs into the closing comment
    ```
 
-   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `{ echo "..."; } > /tmp/follow-through-body.md`), then create the issue:
+   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `body=$(mktemp -t follow-through-body.XXXXXXXX.md); { echo "..."; } > "$body"`, then `echo "BODY=$body"` so the path survives into the later `--body-file` and precondition-gate calls — a separate Bash call does not inherit `$body`), then create the issue:
 
    ```bash
-   gh issue create --title "follow-through: <ITEM_DESCRIPTION>" --label "follow-through" --milestone "<MILESTONE>" --body-file /tmp/follow-through-body.md
+   gh issue create --title "follow-through: <ITEM_DESCRIPTION>" --label "follow-through" --milestone "<MILESTONE>" --body-file "$body"
    ```
 
    Replace `<ITEM_DESCRIPTION>` with the text after the ⏳ emoji (trimmed). Replace `<MILESTONE>` with the value from the roadmap or "Post-MVP / Later".
@@ -1969,7 +1970,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
          if ($i ~ /^secrets=/)  { sub(/^secrets=/, "", $i);  print "secrets "  $i }
        }
      }
-   ' /tmp/follow-through-body.md
+   ' "$body"
    ```
 
    Assert that:
