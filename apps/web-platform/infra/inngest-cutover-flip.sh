@@ -97,6 +97,14 @@ systemctl_cmd() {
   fi
 }
 stop_server() { systemctl_cmd stop "$SERVER_UNIT"; }
+# LOCKSTEP CONSTRAINT (#6553): the ExecStartPre flip-guard (inngest-server-flip-guard.sh) BLOCKS a
+# prod-URI start unless the cutover flag is in its allowlist, and inngest-server-flip-guard.test.sh
+# derives "the FSM states that start the server" by walking this file for `start_server` calls and
+# attributing the nearest preceding `flag_set <state>` / case-arm label. Keep every `start_server`
+# call TEXTUALLY PRECEDED (nearest, no intervening flag_set) by the `flag_set <state>` for the state
+# it runs in, and keep the guard allowlist a superset of those states — else the guard blocks the
+# FSM's own controlled start. A new start site changes the test's EXPECTED_START_SITES count (a
+# deliberate re-review latch).
 start_server() { systemctl_cmd start "$SERVER_UNIT"; }
 
 # --- redis-cli: fixture seam CUTOVER_REDIS_CLI_CMD else `redis-cli -a <pw>` (loopback

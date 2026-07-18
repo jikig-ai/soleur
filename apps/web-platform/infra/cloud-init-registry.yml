@@ -188,11 +188,37 @@ write_files:
       # unlike host used-memory). cgroup v2 memory.stat `anon` in bytes → /1048576. Path mirrors
       # container-restart-monitor.sh:129-132. Guard -1 if the container/cgroup is absent (mid-restart).
       CGROUP_ROOT="$${CGROUP_ROOT:-/sys/fs/cgroup}"
-      ZOT_ANON_MB=-1; ZOT_OOM_KILLS=-1
+      ZOT_ANON_MB=-1; ZOT_OOM_KILLS=-1; ZOT_MEMORY_CAP_MB=-1; ZOT_MEMORY_CAPPED=unknown
       if [ -n "$ID" ]; then
         cg="$CGROUP_ROOT/system.slice/docker-$ID.scope"
         anon_bytes=$(grep -E '^anon ' "$cg/memory.stat" 2>/dev/null | awk '{print $2}')
         [ -n "$anon_bytes" ] && ZOT_ANON_MB=$(( anon_bytes / 1048576 ))
+        # The cap zot is ACTUALLY running under, read from the live cgroup rather than copied
+        # from the value we templated in. The cap is now derived from the server type
+        # (zot-registry.tf local.registry_memory_cap_mb), so it is no longer the constant 7168
+        # every consumer used to assume: on a 4 GB host it is 3072. A gate holding a stale copy
+        # would compare zot_anon_mb against a ceiling the container cannot reach and PASS a
+        # starved host — the failure the "guard/gate and probe must pin the thing they name"
+        # learning describes.
+        #
+        # THREE distinct states, and they must NOT collapse into one:
+        #   number -> capped        (zot_memory_capped=true,    cap_mb=N)
+        #   "max"  -> UNCAPPED      (zot_memory_capped=false,   cap_mb=-1)  <- the #6288 condition
+        #   absent -> unknown       (zot_memory_capped=unknown, cap_mb=-1)  <- mid-restart, benign
+        # zot_memory_capped exists because cap_mb alone CANNOT express "uncapped": -1 is the
+        # parse lib's sentinel (it drops every negative), and 0 would read as "capped at nothing"
+        # and fail every gate. So an uncapped container would look identical to a mid-restart one,
+        # the gate would fall back to ASSUMING 7168, and nothing could ever alarm on zot running
+        # with no cap at all — the exact condition this whole derivation exists to prevent.
+        # Reported as a true/false/unknown string (parsed like oom_killed), never as a number.
+        cap_bytes=$(cat "$cg/memory.max" 2>/dev/null)
+        case "$cap_bytes" in
+          '')             : ;;                                   # cgroup gone: stays unknown
+          max)            ZOT_MEMORY_CAPPED=false ;;             # explicitly UNCAPPED
+          *[!0-9]*)       : ;;                                   # unparseable: stays unknown
+          *)              ZOT_MEMORY_CAPPED=true
+                          ZOT_MEMORY_CAP_MB=$(( cap_bytes / 1048576 )) ;;
+        esac
         # memory.events `oom_kill` is a MONOTONIC container-cgroup OOM-kill counter (mirrors
         # container-restart-monitor.sh's authoritative signal). Unlike the zot_anon_mb GAUGE — a
         # point sample that a 4/min loop sampled every 5 min systematically reads mid-scan, missing
@@ -216,9 +242,55 @@ write_files:
       # (2f) Boot discriminator — the immutable redeploy reuses the terraform hostname, so boot_id is
       # what cleanly separates old-host from new-host events for the automated decision rule.
       BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
+      # (2g) #6497 — htpasswd-vs-Doppler divergence detector. THE decisive, no-SSH signal for the
+      # WEB-PLATFORM-5B class: /etc/zot/htpasswd is baked ONCE at boot from these tokens, so a
+      # rotation (or a boot that raced the secret write) leaves the host authenticating against a
+      # value no client still presents — and nothing else on this deny-all host can report it.
+      # Comparing Doppler to Doppler proves nothing (both copies derive from the same
+      # random_password and agree BY CONSTRUCTION even when both have drifted from the host); the
+      # only comparison with evidentiary value is host-htpasswd vs the CURRENT token, which is
+      # exactly this. `htpasswd -vb` verifies a password against the file and emits only a fixed
+      # status line ("Password for user X correct." / "password verification failed") — the token
+      # is NEVER printed; verified on ubuntu:24.04 (the shipped host image): exit 0 = match,
+      # exit 3 = mismatch. Output is discarded regardless; a BOOLEAN is all that crosses the
+      # boundary. apache2-utils is already in `packages:` (:18), so htpasswd is on the host.
+      # Both tokens are in the env: the cron wraps this under `doppler run --project
+      # soleur-registry --config prd`, whose isolated config holds exactly these three secrets.
+      # Expected under H3: htpasswd_pull_matches=false htpasswd_push_matches=true — the E4
+      # asymmetry (crane/cosign push authenticating while the pull login is rejected), proven
+      # from inside the host rather than inferred from the outside.
+      # `unknown` is the DEFAULT, not a fallback: "cannot tell" is never conflated with
+      # "does not match" (a missing htpasswd is a different, worse defect than a diverged one).
+      # Every token expansion below uses `:-` — this script runs `set -u` (:151), where a BARE
+      # "$ZOT_PULL_TOKEN" on an unset token raises `unbound variable` and EXITS the script
+      # BEFORE $LINE is built, taking the whole SOLEUR_ZOT_DISK heartbeat dark (pcent, boot_id,
+      # OOM decode — everything) and bypassing the `exit 0` at the end that exists so the cron
+      # can never wedge. `|| HTP_PULL=false` does NOT rescue it: an expansion error is not a
+      # command failure. That would be a probe that kills the telemetry line it rides on — and
+      # since this heartbeat's ABSENCE is itself an alarm, it would page "host down" when only
+      # the probe broke. The guards are therefore preconditions, never post-hoc corrections.
+      # Gate on the EXIT CODE, not on zero-vs-nonzero. Measured on ubuntu:24.04 (the shipped
+      # host image): 0 = match, 3 = password mismatch, 6 = user absent from the file, 1 = file
+      # unreadable, 127 = htpasswd itself missing. ONLY 3 is a real divergence. Collapsing
+      # every non-zero into `false` would report a confident "the credential diverged" when a
+      # cloud-init edit renamed the htpasswd user (rc=6) — sending the operator to rotate a
+      # credential that was never stale, which is the inverse of this probe's job.
+      _htp_verify() {
+        htpasswd -vb /etc/zot/htpasswd "$1" "$2" >/dev/null 2>&1
+        case "$?" in
+          0) printf 'true' ;;
+          3) printf 'false' ;;
+          *) printf 'unknown' ;;
+        esac
+      }
+      HTP_PULL=unknown; HTP_PUSH=unknown
+      if [ -f /etc/zot/htpasswd ]; then
+        [ -n "$${ZOT_PULL_TOKEN:-}" ] && HTP_PULL=$(_htp_verify "${zot_pull_user}" "$${ZOT_PULL_TOKEN:-}")
+        [ -n "$${ZOT_PUSH_TOKEN:-}" ] && HTP_PUSH=$(_htp_verify "${zot_push_user}" "$${ZOT_PUSH_TOKEN:-}")
+      fi
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
@@ -239,6 +311,327 @@ write_files:
       # Wrapped in `doppler run` so BETTERSTACK_LOGS_TOKEN (isolated soleur-registry/prd config)
       # is injected for the Better Stack Logs POST — never baked into user_data.
       */5 * * * * root set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-disk-heartbeat.sh
+    owner: root:root
+    permissions: '0644'
+
+  # --- #6537: zot LIVENESS heartbeat (the feeder that arms betteruptime_heartbeat.registry_prd)
+  # The disk heartbeat above pings on `df` alone, so it stays GREEN with zot dead — it alarms
+  # HOST death by absence (900s), never PROCESS death. This feeder closes exactly that gap:
+  # zot dead, host alive, disk fine. It is the ONLY thing that feeds registry_prd; before it,
+  # that monitor had zero consumers and sat paused for 9 days (#6537).
+  #
+  # It probes the host's OWN PRIVATE IP, never loopback. zot publishes `-p 0.0.0.0:5000:5000`,
+  # so a loopback probe answers even on a host holding no 10.0.1.30 — which is how #6400 stayed
+  # green for ~14 days (see the private-NIC converger's preamble below, which documents that
+  # blindness in full). Probing the private IP means this heartbeat is ALSO a second, independent
+  # signal for NIC absence. Using loopback here would rebuild the blind spot inside the very
+  # monitor meant to see through it.
+  #
+  # ABSENCE-BASED, like the disk beat: ping ONLY inside the probe guard. An unconditional ping
+  # would make the monitor decorative — green over a dead registry.
+  # liveness_heartbeat_url is terraform-interpolated (non-secret host routing, same class as
+  # disk_heartbeat_url). NO `doppler run` wrapper: the URL is baked, so there is no
+  # empty-variable failure mode (#4116) and no token to inject.
+  - path: /usr/local/bin/zot-liveness-heartbeat.sh
+    content: |
+      #!/usr/bin/env bash
+      set -u
+      # (1) Probe zot on the private IP — the address consumers actually pull from.
+      #     Discriminate on the STATUS CODE, never on curl's -f. zot auth-gates /v2/
+      #     (htpasswd + "defaultPolicy": [] above), so an anonymous probe gets 401 — and 401 IS
+      #     liveness: it proves zot is up, listening, and enforcing auth. `-f` exits 22 on any
+      #     >=400, so an -f probe would treat every healthy response as dead and this feeder
+      #     would never ping at all. The boot readiness loop below already documents this
+      #     ("401 unauth IS healthy — reachable, auth-gated") and omits -f for the same reason.
+      #       200/401 -> zot answered           => alive
+      #       5xx     -> wedged/erroring zot    => NOT liveness (this is what -f was reaching for)
+      #       000     -> no HTTP response at all (connection refused, timeout, absent NIC)
+      #     -m 10 bounds the probe: two curls x 10s worst case = 20s, well inside the timer's
+      #     60s interval, so a hung zot can never stack units.
+      HTTP_CODE=$(curl -sS -m 10 -o /dev/null -w '%%{http_code}' "http://${private_ip}:5000/v2/" 2>/dev/null || true)
+      # (2) Ping ONLY when zot answered. Absence of this ping IS the alarm — Better Stack pages
+      #     when no beat arrives within period(60s) + grace(30s).
+      case "$${HTTP_CODE:-000}" in
+        200|401)
+          curl -fsS -m 10 -o /dev/null "${liveness_heartbeat_url}" || true
+          ;;
+      esac
+      # Always exit 0: a failed probe must alarm via ABSENCE (the monitor's own semantics), not
+      # via a failed unit that only `systemctl status` on a no-SSH host could ever reveal.
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/zot-liveness-heartbeat.service
+    content: |
+      [Unit]
+      Description=Ping the zot liveness heartbeat when zot answers on the private IP (#6537)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/zot-liveness-heartbeat.sh
+    owner: root:root
+    permissions: '0644'
+
+  # A systemd timer, NOT /etc/cron.d, for TWO independent reasons:
+  #   1. cron's resolution floor is 60s, which against a 60s period + 30s grace leaves zero
+  #      margin — every scheduling jitter would be a false page.
+  #   2. cron's default PATH is /usr/bin:/bin and omits /usr/sbin. That is the #6415 trap on
+  #      THIS host: a probe binary silently unresolvable under cron while curl still resolves.
+  #      systemd's service PATH includes /usr/sbin, so the timer eliminates that class outright.
+  #
+  # AccuracySec=1s is load-bearing, NOT boilerplate. systemd's default is 1 MINUTE: the timer
+  # fires anywhere in [elapse, elapse+60s], so the interval is 60s + delta with a structural
+  # bound of 120s — against a 90s deadline. Measured on an A/B of this exact unit: unset drifted
+  # 60.0s / 62.0s / 72.6s / 66.5s, while AccuracySec=1s held 61.0s +/- 16ms. 72.6s is already
+  # inside the deadline's margin and the bound is over it.
+  #
+  # The inngest_prd feeder (inngest-bootstrap.sh) runs this cadence against an identical 60/30
+  # monitor and is live and up — but that is margin, not design: systemd's coalescing offset is
+  # derived from the BOOT ID, so its greenness is evidence about that host's current boot and
+  # nothing else. This feeder ships by immutable redeploy, which re-rolls the offset on every
+  # replace — so a measured-green first beat would not generalize to the next boot. On a no-SSH
+  # host whose failure mode is "page the founder forever", do not ship the boundary case.
+  - path: /etc/systemd/system/zot-liveness-heartbeat.timer
+    content: |
+      [Unit]
+      Description=Run the zot liveness heartbeat every 60s (#6537)
+
+      [Timer]
+      OnBootSec=30s
+      OnUnitActiveSec=60s
+      AccuracySec=1s
+
+      [Install]
+      WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
+  # --- #6415 / ADR-115: private-NIC boot converger ----------------------------------------
+  # Root cause of the 2026-07-14 outage (#6400). hcloud_server_network is an ADDITIVE ONLINE
+  # ATTACH (network.tf:9-13) — it needs a created server, and a created server is already
+  # booting, so NO terraform ordering can guarantee the attach lands before cloud-init's
+  # network stage. When it lands late (or the IMDS fetch blips), cloud-init renders a netplan
+  # with ONLY the public eth0 and the host holds no 10.0.1.30.
+  #
+  # Why that went unseen for ~14 days: a NIC-less host keeps PUBLIC egress, so the disk
+  # heartbeat kept pinging green; and the boot readiness poll targets `localhost:5000` (the
+  # `curl … http://localhost:5000/v2/` loop in the zot-launch runcmd below), which succeeds
+  # because zot binds `0.0.0.0:5000` (its `-p 0.0.0.0:5000:5000` publish). Every existing signal
+  # is structurally blind to this — hence a NEW signal, not a re-thresholded old one.
+  # (Anchors are named rather than line-cited on purpose: this block's own insertion shifted
+  # every later line, and the original numeric citations rotted immediately.)
+  #
+  # This is the ON-HOST layer deliberately: the registry resources are an
+  # OPERATOR_APPLIED_EXCLUSION (zot-registry.tf:16-22), applied by the operator's full
+  # untargeted apply, so a reboot bolted into the dispatch job would cover only the maintenance
+  # path and leave the PRIMARY provisioning path uncovered.
+  - path: /usr/local/bin/soleur-private-nic-guard.sh
+    content: |
+      #!/usr/bin/env bash
+      set -u
+      # Assert the expected private IP is configured; converge it with ONE bounded primitive
+      # (a guarded reboot — it re-runs cloud-init's OWN renderer, so MTU and routes are correct
+      # BY CONSTRUCTION, and it is the recovery verified in production per #6122); and emit a
+      # discriminating SOLEUR_PRIVATE_NIC event on EVERY run.
+      #
+      # NOT `cloud-init clean && cloud-init init`: it wipes the datasource semaphore, so a
+      # transient IMDS failure on the re-run yields DataSourceNone => default network config =>
+      # the host loses its PUBLIC NIC too => unrecoverable on a deny-all no-SSH box. The
+      # proposed cure for a transient IMDS blip is triggered by a transient IMDS blip.
+      #
+      # SAFETY: the healthy path is a PURE READ. The reboot is gated on the local fact AND IMDS
+      # corroboration AND uptime AND a hard budget, counter on the ROOT DISK, written BEFORE the
+      # reboot. A cap of 2 makes a reboot storm definitionally impossible (so no cooldown).
+      #
+      # SOLEUR_NIC_TEST_ROOT is the ONLY env seam (mirrors zot-restart-loop-alarm.sh's
+      # ZOT_BQ_OVERRIDE): it re-roots FS reads so private-nic-guard.test.sh can execute this
+      # exact body against synthesized fixtures without root. The cron and the boot invocation
+      # NEVER set it; unset (production) it resolves to the real filesystem.
+      EXPECTED_IP='${private_ip}'
+      R="$${SOLEUR_NIC_TEST_ROOT:-}"
+      REBOOT_CAP=2
+      COUNTER_FILE="$R/var/lib/soleur/private-nic-reboots"
+      # (0) PROBE RESOLUTION — load-bearing, and the reason this guard has its own PATH.
+      # `ip` and `reboot` live in /usr/sbin, which is NOT on cron's default PATH (/usr/bin:/bin).
+      # The cron.d block below declares a full PATH, but resolve explicitly anyway and FAIL SAFE:
+      # if the probe binary is missing, we have NO local fact — and "the probe never ran" must
+      # never be conflated with "the IP is absent". Conflating them is fatal here: `curl` lives in
+      # /usr/bin and WOULD still resolve, so IMDS would corroborate (the network genuinely IS
+      # attached) and the reboot gate would be fully satisfied ON A HEALTHY HOST — then, budget
+      # spent, the guard would emit the terminal signature forever and the runbook would tell an
+      # operator to destroy and recreate a healthy production registry. This is the guard's own
+      # doctrine (never act on zero corroborating evidence) applied to its own instrument.
+      IP_BIN=$(command -v ip 2>/dev/null || true)
+      PROBE_OK=true; [ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] || PROBE_OK=false
+      # (1) Trigger predicate — the LOCAL FACT ALONE. The IP is baked at template time, so this
+      # has ZERO runtime dependencies: IMDS is telemetry and corroboration, NEVER the trigger.
+      # -w + -F: exact word, fixed string — so 10.0.1.3 can never match inside 10.0.1.30, and
+      # the dots are not treated as regex wildcards.
+      ip_present=false
+      if [ "$PROBE_OK" = true ] && "$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED_IP"; then ip_present=true; fi
+      # (2) Bounded wait — the same shape as the volume device-wait in runcmd below (~30 x 2s).
+      # Under the leading hypothesis (H2) the attach lands AFTER boot, so give it a chance to
+      # arrive before we consider acting. Only runs when the IP is already absent.
+      if [ "$ip_present" = false ]; then
+        for i in $(seq 1 30); do
+          sleep 2
+          if ip -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED_IP"; then ip_present=true; break; fi
+        done
+      fi
+      # (3) Store-mount self-heal. Runs on EVERY path (including the NIC-healthy one) because
+      # the bug is reachable from ANY reboot cause — kernel panic, Hetzner migration, the
+      # operator's own recovery — not just this guard's. runcmd is PER-INSTANCE and does NOT
+      # re-run on reboot, so the device-wait + mount + resize2fs below all skip and only the
+      # `nofail` fstab entry mounts the store; a slow volume node then means the mount silently
+      # fails and zot (launched `--restart unless-stopped`) bind-mounts an EMPTY root-disk dir => 404
+      # for every image while nic_ok=true. `mount -a` alone is NOT enough: zot may already be
+      # running against the empty dir, so it needs the restart.
+      ZOT_STORE_MOUNTED=false
+      if mountpoint -q /var/lib/zot 2>/dev/null; then
+        ZOT_STORE_MOUNTED=true
+      else
+        mount -a >/dev/null 2>&1 || true
+        if mountpoint -q /var/lib/zot 2>/dev/null; then
+          # The mount landed — but zot is STILL bound to the old (empty) dir: bind mounts are
+          # rprivate, so the new mount does not propagate into a running container. Report
+          # zot_store_mounted=true ONLY if the restart actually re-resolved the bind. Setting it
+          # true before the restart would report a healthy store while zot keeps 404-ing every
+          # image — a green signal over a dead pull path, i.e. #6400's exact shape.
+          if docker restart zot >/dev/null 2>&1; then
+            ZOT_STORE_MOUNTED=true
+          else
+            echo "[nic] SOLEUR_PRIVATE_NIC store remounted but 'docker restart zot' FAILED — zot is still bound to the empty root-disk dir" >&2
+          fi
+        fi
+      fi
+      # (4) Facts (pure reads).
+      UPTIME_S=$(awk '{printf "%d", $1}' "$R/proc/uptime" 2>/dev/null); [ -n "$UPTIME_S" ] || UPTIME_S=0
+      BOOT_ID=$(cat "$R/proc/sys/kernel/random/boot_id" 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
+      INSTANCE_ID=$(cat "$R/var/lib/cloud/data/instance-id" 2>/dev/null); [ -n "$INSTANCE_ID" ] || INSTANCE_ID=unknown
+      # Counter, keyed by instance-id. A host REPLACE gives a new root disk => a fresh budget for
+      # free; the id key additionally guarantees a stale file can never hand a fresh host an
+      # exhausted budget. NOT /var/lib/zot (that volume SURVIVES the replace). NOT /run or /tmp
+      # (tmpfs rotates per boot => that path choice alone would reintroduce the infinite-reboot
+      # trap this counter exists to prevent).
+      REBOOT_COUNT=0
+      if [ -r "$COUNTER_FILE" ]; then
+        stored_id=$(grep -E '^instance_id=' "$COUNTER_FILE" 2>/dev/null | head -1 | cut -d= -f2)
+        stored_n=$(grep -E '^count=' "$COUNTER_FILE" 2>/dev/null | head -1 | cut -d= -f2)
+        if [ "$stored_id" = "$INSTANCE_ID" ] && printf '%s' "$stored_n" | grep -qE '^[0-9]+$'; then
+          REBOOT_COUNT="$stored_n"
+        fi
+      fi
+      # (5) Diagnose. EXIT-CODE-NEUTRALIZED: a nonzero curl exit is a VALID data outcome (it is
+      # literally hypothesis H1), so it must never abort the script or read as a script error.
+      IMDS_RC=0
+      IMDS_BODY=$(curl -sf -m 5 http://169.254.169.254/hetzner/v1/metadata/private-networks 2>/dev/null) || IMDS_RC=$?
+      IMDS_NETS=0
+      IMDS_HAS_EXPECTED=false
+      if [ "$IMDS_RC" -eq 0 ] && [ -n "$IMDS_BODY" ]; then
+        IMDS_NETS=$(printf '%s\n' "$IMDS_BODY" | grep -cE '^[[:space:]]*network_id:' || true)
+        # Corroborate on the EXPECTED ADDRESS, not merely "some network is attached". IMDS already
+        # tells us the address, so using the weaker predicate throws that away — and the weaker
+        # one is what makes a drifted EXPECTED_IP dangerous: a wrong constant would be
+        # *corroborated* (a network genuinely IS attached), and the guard would reboot a healthy
+        # host to its cap and then go terminal. Keying on the address makes that structurally
+        # unreachable rather than a convention two future edits can break. imds_nets stays as a
+        # separate emit field so H1/H2 discrimination is unchanged.
+        # The `-?` is load-bearing: IMDS returns a YAML LIST, so the address line is `- ip: <addr>`
+        # on the first key of each entry and `  ip: <addr>` would never appear.
+        printf '%s\n' "$IMDS_BODY" | grep -qE "^[[:space:]]*-?[[:space:]]*ip:[[:space:]]*$EXPECTED_IP[[:space:]]*$" && IMDS_HAS_EXPECTED=true
+      fi
+      printf '%s' "$IMDS_NETS" | grep -qE '^[0-9]+$' || IMDS_NETS=0
+      # (6) Converge — ONE primitive. Never reboot on zero corroborating evidence (the
+      # zot-restart-loop-alarm.sh doctrine: an alarm that fires on its own probe fault trains the
+      # operator to ignore it; a HOST that reboots on its own probe fault is the same mistake
+      # with teeth). uptime_s>600 says "don't reboot a host that just booted" DIRECTLY — it needs
+      # zero persistent state, cannot be corrupted, is already an emit field, and makes the boot
+      # invocation naturally a no-op for the reboot arm.
+      NIC_OK=false
+      CONVERGED_BY=none
+      DO_REBOOT=false
+      if [ "$PROBE_OK" != true ]; then
+        # Zero evidence: we never read the local fact. NOT "the IP is absent" — do not reboot.
+        CONVERGED_BY=probe-fault
+      elif [ "$ip_present" = true ]; then
+        NIC_OK=true
+        CONVERGED_BY=already
+      elif [ "$IMDS_HAS_EXPECTED" = true ] && [ "$UPTIME_S" -gt 600 ] && [ "$REBOOT_COUNT" -lt "$REBOOT_CAP" ]; then
+        # The budget must be DURABLE before we grant reboot authority. An unchecked write is a
+        # reboot loop: if the root fs is read-only (ext4 errors=remount-ro) or full, the counter
+        # never persists, every boot re-reads 0, and the cap NEVER binds — the box power-cycles
+        # forever. So: write atomically (rename(2), so a reader sees the old or the new file and
+        # never a torn one), fsync the dirent, VERIFY it landed, and only then reboot.
+        REBOOT_COUNT=$((REBOOT_COUNT + 1))
+        if mkdir -p "$(dirname "$COUNTER_FILE")" 2>/dev/null \
+           && printf 'instance_id=%s\ncount=%s\n' "$INSTANCE_ID" "$REBOOT_COUNT" > "$COUNTER_FILE.tmp" 2>/dev/null \
+           && mv -f "$COUNTER_FILE.tmp" "$COUNTER_FILE" 2>/dev/null \
+           && grep -qxF "count=$REBOOT_COUNT" "$COUNTER_FILE" 2>/dev/null; then
+          sync "$(dirname "$COUNTER_FILE")" 2>/dev/null || true
+          CONVERGED_BY=reboot
+          DO_REBOOT=true
+        else
+          # The budget is not durable => rebooting would be unbounded. Refuse, and say why: an
+          # unwritable root fs is itself a high-value signal.
+          REBOOT_COUNT=$((REBOOT_COUNT - 1))
+          CONVERGED_BY=counter-unwritable
+        fi
+      fi
+      # (7) Emit ALWAYS — success AND failure. The field set discriminates every competing
+      # hypothesis in ONE event:
+      #   imds_rc!=0                           -> H1, a real IMDS blip (the issue's framing)
+      #   imds_rc=0 && imds_nets=0             -> H2, the structural attach race (leading)
+      #   imds_nets>0 && converged_by!=already -> a third mode: the attach landed and the guest
+      #                                           never configured it.
+      # zot_last_err is LAST and free-text: scripts/lib/zot-telemetry-parse.sh:27 strips the
+      # LITERAL ` zot_last_err=` tail to bound the trusted region, so this field MUST carry that
+      # exact name (a `last_err=` would silently never be stripped, and the spoof guard would
+      # never fire) and MUST be trailing. It carries the host's actual v4 addresses — exactly
+      # what you want to read when nic_ok=false. Sanitized like the :215 shape so a stray byte
+      # can never break the JSON payload.
+      # `host` is deliberately ABSENT: the parse lib documents that the immutable
+      # registry-host-replace REUSES the terraform hostname, so boot_id — not host — is what
+      # separates old-host from new-host events.
+      NIC_ADDRS=$(ip -4 -o addr show 2>/dev/null | awk '{print $2":"$4}' | tr '\n' ' ' | tail -c 200 | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\'); [ -n "$NIC_ADDRS" ] || NIC_ADDRS=none
+      LINE="SOLEUR_PRIVATE_NIC nic_ok=$NIC_OK converged_by=$CONVERGED_BY imds_rc=$IMDS_RC imds_nets=$IMDS_NETS reboot_count=$REBOOT_COUNT zot_store_mounted=$ZOT_STORE_MOUNTED uptime_s=$UPTIME_S boot_id=$BOOT_ID zot_last_err=$NIC_ADDRS"
+      TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
+      if [ -n "$TOKEN" ]; then
+        post() { curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "${betterstack_ingest_url}" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+        post || post || echo "[nic] SOLEUR_PRIVATE_NIC egress to Better Stack Logs FAILED: $LINE" >&2
+      else
+        echo "[nic] WARN: BETTERSTACK_LOGS_TOKEN unset (run under 'doppler run --project soleur-registry --config prd') — SOLEUR_PRIVATE_NIC not shipped: $LINE" >&2
+      fi
+      # (8) Reboot LAST — strictly after the event has shipped, so the converge is never silent.
+      if [ "$DO_REBOOT" = true ]; then
+        echo "[nic] SOLEUR_PRIVATE_NIC converging: $EXPECTED_IP absent, IMDS corroborates ($IMDS_NETS net(s)); reboot $REBOOT_COUNT/$REBOOT_CAP" >&2
+        reboot
+      fi
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/cron.d/soleur-private-nic-guard
+    content: |
+      # Converge + self-report the private NIC every 5 min (#6415).
+      # WHY A CADENCE, not a boot-only oneshot: under H2 the attach lands AFTER boot, so a
+      # boot-only check would emit a false failure and heal nothing. It also catches a NIC lost
+      # later. flock -n so a slow tick (the bounded wait) can never stack with the next one, and
+      # so the boot invocation and the cron cannot race.
+      #
+      # PATH IS LOAD-BEARING. cron's default is /usr/bin:/bin (_PATH_DEFPATH) — it does NOT include
+      # /usr/sbin, where BOTH `ip` and `reboot` live. Without this line the guard's probe silently
+      # resolves nothing under cron while `curl` (in /usr/bin) still resolves, so IMDS corroborates
+      # and the reboot gate is satisfied ON A HEALTHY HOST. The boot invocation runs under
+      # cloud-init's richer PATH, so the post-merge check would pass green and the box would page
+      # 10 minutes later. The sibling disk-heartbeat cron is not cover for this: it uses no
+      # /usr/sbin binary, so this guard is the host's first cron consumer of one.
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      # Offset from the disk heartbeat's `*/5` so the two `doppler run` processes are not
+      # concurrently resident (the host budgets ~1024m for cron+doppler+sshd+OS).
+      2-59/5 * * * * root set -a; . /etc/default/registry-doppler; set +a; flock -n /run/lock/soleur-private-nic-guard.lock doppler run --project soleur-registry --config prd -- /usr/local/bin/soleur-private-nic-guard.sh
     owner: root:root
     permissions: '0644'
 
@@ -359,13 +752,18 @@ runcmd:
     chmod 600 /etc/zot/htpasswd
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     docker rm -f zot >/dev/null 2>&1 || true
-    # Container memory cap (ADR-062 pattern) — bounds zot's large-store (~35 GB) startup scan so a
-    # host-level OOM can't restart-loop the box (#6288). cap = host RAM (8192m on cx33) − documented
-    # host overhead (~1024m for cron+doppler+sshd+OS, lighter than ADR-062's 1.3 GB web host).
+    # Container memory cap (ADR-062 pattern) — bounds zot's startup scan so a host-level OOM can't
+    # restart-loop the box (#6288). cap = host RAM − ~1024m host overhead (cron+doppler+sshd+OS,
+    # lighter than ADR-062's 1.3 GB web host), DERIVED from var.registry_server_type via the live
+    # Hetzner catalog (zot-registry.tf local.registry_memory_cap_mb) and baked in at template time.
+    # It was a hardcoded `7168m` with no edge to the server type: a 4 GB host would have kept the
+    # 7168m cap, which can never bind on 4096m of RAM — i.e. silently back to the UNCAPPED-on-cx23
+    # condition that caused #6288's restart-loop in the first place. Do not re-hardcode it.
     # --memory-swap == --memory disables swap growth → a deterministic cgroup-OOM, not swap-thrash.
     # NO --init: zot is a single Go process (PID 1 handles SIGTERM, spawns no children) — ADR-062's
-    # Node zombie-reaping idiom buys nothing here. Env-overridable const (mirrors PROD_MEMORY_CAP).
-    ZOT_MEMORY_CAP="$${ZOT_MEMORY_CAP:-7168m}"
+    # Node zombie-reaping idiom buys nothing here. Env-overridable const (mirrors PROD_MEMORY_CAP);
+    # the template-derived value is the default, so an operator override still wins for a one-off.
+    ZOT_MEMORY_CAP="$${ZOT_MEMORY_CAP:-${zot_memory_cap_mb}m}"
     docker run -d --name zot --restart unless-stopped \
       --log-driver journald \
       --memory "$ZOT_MEMORY_CAP" --memory-swap "$ZOT_MEMORY_CAP" \
@@ -388,3 +786,28 @@ runcmd:
   # BETTERSTACK_LOGS_TOKEN is injected for the Better Stack Logs POST (mirrors the cron wrapper).
   - systemctl enable --now cron || true
   - set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd -- bash /usr/local/bin/zot-disk-heartbeat.sh || true
+
+  # Private-NIC self-report at boot (#6415), so the very first SOLEUR_PRIVATE_NIC event lands
+  # within the redeploy rather than up to 5 min later — that first event is the empirical
+  # H1-vs-H2 verdict for this boot (converged_by=already => no race; =reboot => the race is real
+  # and the guard healed it).
+  #
+  # PLACEMENT IS LOAD-BEARING: this MUST come after /etc/default/registry-doppler is written
+  # (the printf above), NOT merely after the Doppler CLI install. Anywhere earlier has the binary
+  # but no token, so `doppler run` resolves nothing, the POST dies, and the `|| true` swallows it
+  # SILENTLY — a silent failure inside the control built to end silent failures.
+  #
+  # `|| true` is fail-OPEN toward serving: observing the boot must never break it. It takes the
+  # SAME flock as the cron so the boot run and a 5-min tick cannot race.
+  - set -a; . /etc/default/registry-doppler; set +a; flock -n /run/lock/soleur-private-nic-guard.lock doppler run --project soleur-registry --config prd -- bash /usr/local/bin/soleur-private-nic-guard.sh || true
+
+  # Arm the zot liveness feeder (#6537). `--now` starts the timer within this boot, so the first
+  # beat lands ~30s from here rather than after the next interval — the monitor goes green inside
+  # the redeploy window, which is what Phase 4.3 measures BEFORE the heartbeat is unpaused.
+  #
+  # `|| true` is fail-OPEN toward serving, matching every sibling above: a broken observer must
+  # never take down the registry it observes. That is safe precisely BECAUSE the monitor is
+  # absence-based — a timer that fails to enable produces no beats, which pages, rather than
+  # passing silently. This is the one place where fail-open and fail-loud agree.
+  - systemctl daemon-reload || true
+  - systemctl enable --now zot-liveness-heartbeat.timer || true

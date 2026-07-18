@@ -73,8 +73,10 @@ write_files:
 
   # #4144 — permits ci-deploy.sh to invoke inngest-bootstrap.sh as root
   # from the fixed path /tmp/inngest-extract/ (no wildcards, sudo-rs safe).
-  # env_keep preserves INNGEST_CLI_VERSION + SHA across the sudo boundary.
-  # Mirrored in apps/web-platform/infra/deploy-inngest-bootstrap.sudoers
+  # env_keep preserves INNGEST_CLI_VERSION + SHA across sudo. (#6555 dropped DOPPLER_PROJECT —
+  # units now read it from EnvironmentFile=/etc/default/inngest-server, not the sudo-inherited env.)
+  # Mirrored in apps/web-platform/infra/deploy-inngest-bootstrap.sudoers (rationale lives
+  # there — this file is base64gzip'd into user_data against a byte budget)
   # so terraform_data.deploy_pipeline_fix can refresh existing hosts.
   - path: /etc/sudoers.d/deploy-inngest-bootstrap
     content: |
@@ -100,6 +102,19 @@ write_files:
       deploy ALL=(root) NOPASSWD: INNGEST_STOP
       Cmnd_Alias INNGEST_START = /usr/bin/systemctl start inngest-server.service
       deploy ALL=(root) NOPASSWD: INNGEST_START
+
+      # #6178 — no-SSH web-host scheduler quiesce (stop+disable) via ci-deploy.sh's
+      # `quiesce inngest _ _` handler (op=quiesce-web). Full rationale in the mirrored
+      # deploy-inngest-bootstrap.sudoers; the `stop` overlaps INNGEST_STOP intentionally,
+      # `disable` is the genuinely-new verb. Pinned, wildcard-free (sudo-rs safe).
+      Cmnd_Alias INNGEST_QUIESCE = /usr/bin/systemctl stop inngest-server.service, /usr/bin/systemctl disable inngest-server.service
+      deploy ALL=(root) NOPASSWD: INNGEST_QUIESCE
+
+      # #6178 — no-SSH reverse re-enable via ci-deploy.sh's `enable inngest _ _` handler
+      # (op=rollback only). Restores the [Install] symlink a quiesce-disable removed; the
+      # start half reuses INNGEST_START (#5450). Pinned, wildcard-free (sudo-rs safe).
+      Cmnd_Alias INNGEST_ENABLE = /usr/bin/systemctl enable inngest-server.service
+      deploy ALL=(root) NOPASSWD: INNGEST_ENABLE
 
       # #4827 — permits infra-config-apply.sh to escalate the atomic install of
       # its managed files into root:root dest dirs the deploy user cannot write.
@@ -242,7 +257,12 @@ write_files:
       # NOT escape the mount namespace, so without these explicit
       # ReadWritePaths the inngest bootstrap fails with cryptic chown error
       # messages. See #4017 substrate audit (2026-05-19).
-      ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook /var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
+      # `-/var/lib/inngest` is OPTIONAL (`-` prefix, like -/var/lib/vector):
+      # web_colocate_inngest=false (default) gates the inngest-bootstrap runcmd
+      # block that CREATES the dir, so a mandatory token would 226/NAMESPACE this
+      # unit on fresh boot (:9000 never binds). systemd ignores it while absent;
+      # it becomes a real ReadWritePath once inngest-bootstrap creates it (#6090).
+      ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook -/var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
       ReadOnlyPaths=/etc/default/webhook-deploy
       TimeoutStopSec=180
 
@@ -398,6 +418,10 @@ runcmd:
   - printf 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s\n' '${ghcr_read_user}' '${ghcr_read_token}' > /etc/default/soleur-ghcr-read
   - chmod 600 /etc/default/soleur-ghcr-read
   - chown deploy:deploy /etc/default/soleur-ghcr-read
+  # (#6604/DP-9) Bake the Sentry DSN for the luks-monitor units — baked so "Doppler down ⇒ MUST page" keeps its DSN.
+  - printf 'SOLEUR_SENTRY_DSN=%s\n' '${sentry_dsn}' > /etc/default/luks-monitor
+  - chmod 600 /etc/default/luks-monitor
+  - chown root:root /etc/default/luks-monitor
 
   # Install Docker via official APT repository with GPG key verification (#1615).
   # Replaces pipe-to-shell (curl | sh) with signed APT repo -- same pattern as cloudflared above.
@@ -410,8 +434,8 @@ runcmd:
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
 
   # Configure Docker log rotation + the self-hosted zot registry as an insecure (plain-HTTP,
-  # private-net) registry (#6122/ADR-096). zot serves HTTP on 10.0.1.30:5000 (= zot-registry.tf
-  # local.registry_endpoint) behind a deny-all-public firewall; docker refuses a non-TLS registry
+  # private-net) registry (#6122/ADR-096). zot serves HTTP on ${registry_endpoint} (derived from
+  # zot-registry.tf local.registry_endpoint, #6448) behind a deny-all-public firewall; docker refuses a non-TLS registry
   # unless it is allowlisted here. Harmless before the Phase-3 flip activates — nothing pulls from
   # zot until the dark-launch gate confirms it live. cosign digest-pinning is the integrity guard,
   # not TLS (Phase-0 spike). This is the ONLY daemon.json write for FRESH hosts; running hosts get
@@ -424,7 +448,7 @@ runcmd:
         "max-size": "10m",
         "max-file": "3"
       },
-      "insecure-registries": ["10.0.1.30:5000"]
+      "insecure-registries": ["${registry_endpoint}"]
     }
     DOCKEREOF
   - STAGE=docker_restart  # (#6090) name the stage for the top-armed on_err fatal
@@ -468,7 +492,17 @@ runcmd:
       elif printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin > /run/soleur-ghcr-login.log 2>&1; then
         printf 'ghcr_login_ok' > /run/soleur-stage-detail
       else
-        printf 'ghcr_login_fail: %s' "$(tail -c 140 /run/soleur-ghcr-login.log 2>/dev/null)" > /run/soleur-stage-detail
+        # §1A (#6090): stale-but-present baked token fails login → re-fetch Doppler + retry once
+        # (mirrors ci-deploy.sh ghcr_prelude_and_login); still in the set +e subshell = fail-open.
+        RU=""; RT=""
+        n=0; until RU=$(timeout 45 doppler secrets get GHCR_READ_USER --plain --project soleur --config prd 2>/dev/null); [ -n "$RU" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done
+        n=0; until RT=$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null); [ -n "$RT" ]; do n=$((n+1)); [ "$n" -ge 3 ] && break; sleep 5; done
+        if [ -n "$RU" ] && [ -n "$RT" ] && printf '%s' "$RT" | docker login ghcr.io -u "$RU" --password-stdin > /run/soleur-ghcr-login.log 2>&1; then
+          GHCR_USER="$RU"
+          printf 'ghcr_login_ok_refetch' > /run/soleur-stage-detail
+        else
+          printf 'ghcr_login_fail: %s' "$(tail -c 140 /run/soleur-ghcr-login.log 2>/dev/null)" > /run/soleur-stage-detail
+        fi
       fi
       # #6122/ADR-096: also log in to zot (dark — only when ZOT_* present) so the seed pull can
       # prefer it; login persists for the app + inngest pulls (bootstrap's zot_login is too late).
@@ -494,17 +528,14 @@ runcmd:
     N=0
     until docker pull "$REF" > /run/soleur-pull.log 2>&1; do
       N=$((N+1))
-      # #6278: on the zot→GHCR flip (REF still the zot ref, so zot WAS primary), emit a
-      # warning breadcrumb (tags.stage=app_ghcr_fallback) so the mirror-staleness
-      # fallback-rate alarm can page on a fresh-boot zot miss on the PRIMARY web
-      # container that still SUCCEEDS via GHCR (otherwise invisible — only a total pull
-      # failure emits). Uses the baked _emit — the only emitter live at this pre-bootstrap
-      # point; the inngest path (bottom of runcmd) uses soleur-boot-emit for the same
-      # `stage` tag because it runs AFTER host-bootstrap authors that binary. The guard
-      # fires exactly once: after the flip REF==IMAGE_REF, and when zot was never primary
-      # (REF started == IMAGE_REF) it never fires. Fail-open (_emit swallows all errors).
+      # #6278: on the zot→GHCR flip (REF still the zot ref ⇒ zot WAS primary), emit a
+      # warning breadcrumb (stage=app_ghcr_fallback) so the fallback-rate alarm pages on a
+      # fresh-boot zot miss that still SUCCEEDS via GHCR (else invisible). Baked _emit is
+      # the only emitter live pre-bootstrap; the inngest path uses soleur-boot-emit (same
+      # `stage` tag) as it runs after host-bootstrap. Fires once. Fail-open.
       if [ "$N" -ge 2 ] && [ "$REF" != "$IMAGE_REF" ]; then
         REF="$IMAGE_REF"   # atomic fallback to GHCR after the zot attempt
+        # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
         _emit "app image served via GHCR fallback (zot miss)" "app_ghcr_fallback" warning
       fi
       [ "$N" -ge 5 ] && { printf ' | pull_err: %s' "$(tail -c 160 /run/soleur-pull.log 2>/dev/null)" >> /run/soleur-stage-detail; exit 1; }
@@ -512,6 +543,9 @@ runcmd:
     done
     : > /run/soleur-stage-detail
     printf '%s' "$REF" > /run/soleur-image-ref
+    # #6462 denominator: REF==IMAGE_REF iff GHCR served. MUST precede the reassign below (it
+    # makes the test always-true). Rationale + the image_ref wart: cloud-init-user-data-size.test.ts
+    if [ "$REF" = "$IMAGE_REF" ]; then _emit "app image served by GHCR" "app_ghcr_served" warning; else _emit "app image served by zot" "app_zot" info; fi
     IMAGE_REF="$REF"
     STAGE=extract
     docker create --name soleur-hostscript-seed "$IMAGE_REF" >/dev/null
@@ -529,15 +563,15 @@ runcmd:
     # runcmd (set -e) before the app starts. Secret via single-quote interpolation, same as
     # doppler_token below (trusted operator value, generated ASCII — no shell metachar).
     trap - EXIT
-    WEBHOOK_DEPLOY_SECRET='${webhook_deploy_secret}' SOLEUR_SENTRY_DSN='${sentry_dsn}' sh "$SEED/soleur-host-bootstrap.sh" "$SEED"
+    WEBHOOK_DEPLOY_SECRET='${webhook_deploy_secret}' SOLEUR_SENTRY_DSN='${sentry_dsn}' SOLEUR_HOST_NAME='${host_name}' sh "$SEED/soleur-host-bootstrap.sh" "$SEED"
     rm -rf "$SEED"
     set +e  # H3 (#6090): scope set -e — runcmd is ONE /bin/sh; leak = silent abort (plan).
   # END host-script extraction (#5921)
 
-  # Mount volume for workspaces (Hetzner pre-formats with ext4 via Terraform)
+  # #6604: pin /mnt/data by-id + nofail (glob binds the wrong device once LUKS attaches; nofail = pageable degrade, not a boot hang).
   - mkdir -p /mnt/data
-  - mount /dev/disk/by-id/scsi-0HC_Volume_* /mnt/data || true
-  - echo '/dev/disk/by-id/scsi-0HC_Volume_* /mnt/data ext4 defaults 0 2' >> /etc/fstab
+  - grep -q ' /mnt/data ' /etc/fstab || echo '/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id} /mnt/data ext4 defaults,nofail 0 2' >> /etc/fstab
+  - mount /mnt/data 2>/dev/null || mount /dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id} /mnt/data || soleur-boot-emit workspaces_mount fatal || true
 
   # Create workspace and plugin directories
   - mkdir -p /mnt/data/workspaces
@@ -559,10 +593,13 @@ runcmd:
 
   # Register cloudflared as a systemd service with the tunnel token.
   # The token encodes tunnel configuration managed remotely via Terraform.
+  # #6425: gated to the ingress host (rationale: server.tf web_tunnel_connector; ADR-114).
+%{ if web_tunnel_connector ~}
   - cloudflared service install ${tunnel_token}
 
   # #6090 H4: baked readiness poll (enable returns 0 before connect).
   - soleur-wait-ready service cloudflared cloudflared_ready || exit 1
+%{ endif ~}
 
   # Install webhook binary (adnanh/webhook v2.8.2) with checksum verification
   - |
@@ -633,7 +670,12 @@ runcmd:
     printf '%s\n' "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=cloud-init" \
       > /mnt/data/plugins/soleur/.seed-complete
 
+%{ if web_colocate_inngest ~}
   # Bootstrap Inngest server on first boot (#4118, Tier 1).
+  # #6178: this whole runcmd item is gated behind web_colocate_inngest (default false).
+  # When false (post-cutover), a freshly-created web host does NOT extract/run
+  # inngest-bootstrap.sh, so inngest-server.service / inngest-heartbeat.timer are never
+  # authored or enabled — scheduling lives on the dedicated soleur-inngest host (ADR-100).
   # Pinned image tag = the soleur-inngest-bootstrap OCI image version (the
   # bootstrap-script SHAPE version), NOT the inngest-cli version (the latter is
   # sourced from the image's Config.Env at run time). This pin MUST be bumped to
@@ -653,12 +695,13 @@ runcmd:
   # fresh hosts.
   - |
     set -e
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.20
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.23
     # #6122/ADR-096: prefer zot (dark; host already logged in by soleur-host-bootstrap.sh);
     # all 3 refs follow IREF, zot miss ⇒ GHCR fallback; soleur-boot-emit records the registry.
     ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
+    # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
     if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
-      ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.20"
+      ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.23"
       if docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_ghcr_fallback warning; fi
     fi
     docker pull "$IREF"
@@ -692,18 +735,26 @@ runcmd:
         "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=$VECTOR_CLI_SHA256" \
       bash "$EXTRACT_DIR/inngest-bootstrap.sh"
     trap - EXIT  # #6090: disarm, else the composite trap mislabels terminal-block failures as inngest_bootstrap.
+%{ endif ~}
 
   - |
     set -e
+    # #6396: terminal-block boot-emit trap. Mutable `stage` names the failing region in one
+    # SSH-free Sentry event; fires on exit-1/set-e aborts. The two poweroff paths bypass the
+    # EXIT trap and are handled explicitly (see below). Rationale: ADR-082 Item 5.
+    stage=terminal_preamble
+    trap 'rc=$?; rm -f "$${TMPENV:-}"; [ "$rc" = 0 ] || soleur-boot-emit "$stage" fatal' EXIT
     # Fail-closed gate (#5921): the host-script extraction block above writes
     # /run/soleur-hostscripts.ok ONLY after hash-verify + all installs + all assertions
     # pass. runcmd is NOT under a top-level set -e, so a failed extraction still reaches
     # here — refuse to bring the app up (which would serve with an unconfigured egress
     # firewall / missing deploy scripts) and poweroff so the host is visibly absent to the
     # provision-armed Better Stack uptime check.
-    test -f /run/soleur-hostscripts.ok || { echo "FATAL: host-script extraction incomplete; refusing to start app" >&2; poweroff -f; }
+    # #6396: poweroff -f is signal death, so the EXIT trap does NOT run — emit explicitly.
+    test -f /run/soleur-hostscripts.ok || { soleur-boot-emit hostscripts_incomplete fatal; echo "FATAL: host-script extraction incomplete; refusing to start app" >&2; poweroff -f; }
     # Source token from the restricted env file (avoids exposing it in /proc/<pid>/cmdline)
     set -a; . /etc/default/webhook-deploy; set +a
+    stage=doppler_download
     TMPENV=$(mktemp /tmp/doppler-env.XXXXXX)
     chmod 600 "$TMPENV"
     if ! doppler secrets download --no-file --format docker --project soleur --config prd > "$TMPENV"; then
@@ -718,10 +769,13 @@ runcmd:
     # still omitted to avoid regressing unrelated tools that may exec
     # from /tmp — if future hardening flips it on, grep for other
     # exec-from-/tmp call sites first.
+    stage=docker_run
     docker run -d \
       --name soleur-web-platform \
       --log-driver journald \
       --restart unless-stopped \
+      --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
+      --security-opt apparmor=soleur-bwrap \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$TMPENV" \
       --add-host host.docker.internal:host-gateway \
@@ -732,6 +786,9 @@ runcmd:
       -p 0.0.0.0:3000:3000 \
       "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
     rm -f "$TMPENV"
+    # #6396: disarm the EXIT trap before the self-emitting egress probe (spanning it would
+    # double-emit); the trap-covered region fails via exit-1/set-e, never poweroff.
+    trap - EXIT
     # Fresh-host post-container egress-enforcement probe (#5933; details in the script
     # header). Fail-closed: a non-enforcing host poweroffs rather than serve an open
     # exfil path. The probe emits an SSH-free Sentry event before exiting non-zero.
@@ -741,3 +798,9 @@ runcmd:
     fi
     # #6090: reached serving host (poweroff → Better Stack).
     soleur-boot-emit cloud_init_complete info
+
+  # #6396: ungated Vector install — LAST runcmd item, AFTER the app binds :80/:3000. Fail-open +
+  # wall-clock-bounded (`timeout 180` > the helper's inner `curl --max-time 120`; `sh -c` subshell
+  # + `|| true` contain any exit + the leaked plugin-seed `set -e`). Decoupled from
+  # web_colocate_inngest (the helper skips an inngest-owned unit). Rationale: ADR-082 Item 5.
+  - timeout 180 sh -c 'soleur-vector-install' || true

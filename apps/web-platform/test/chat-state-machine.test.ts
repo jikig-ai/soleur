@@ -984,3 +984,180 @@ describe("#5240 leader-liveness watchdog reset", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Path A: orphan Stage-2 error recovery (Concierge false mid-run stop)
+// Plan: 2026-07-16-fix-concierge-agent-stop-mid-run-plan.md
+// ---------------------------------------------------------------------------
+
+describe("chat-state-machine orphan Stage-2 error recovery (Path A)", () => {
+  const CC = "cc_router" as DomainLeaderId;
+
+  function stage2ErrorBubble(leaderId: string = CC): ChatMessage {
+    return {
+      id: `stream-${leaderId}-err`,
+      role: "assistant",
+      content: "partial",
+      type: "text",
+      leaderId: leaderId as DomainLeaderId,
+      state: "error",
+      toolLabel: "Working",
+      toolsUsed: ["Bash"],
+    };
+  }
+
+  test("cc_router tool_use after Stage-2 eviction rebinds error bubble (no permanent orphan)", () => {
+    // Dominant residual: after applyTimeout stage 2, cc_router is not in
+    // activeStreams and tool_use took the chip-only path — red banner stuck
+    // while tools continue.
+    const prev: ChatMessage[] = [stage2ErrorBubble()];
+    const streams = makeStreams(); // empty — leader was evicted
+
+    const result = applyStreamEvent(prev, streams, {
+      type: "tool_use",
+      leaderId: CC,
+      label: "Running command…",
+    } as any);
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].type).toBe("text");
+    expect(result.messages[0].state).toBe("tool_use");
+    expect(result.messages[0].toolLabel).toBe("Running command…");
+    expect(result.messages[0].retrying).toBeUndefined();
+    expect(result.activeStreams.get(CC)).toBe(0);
+    expect(result.timerAction).toEqual({ type: "reset", leaderId: CC });
+    // Must NOT append a tool_use_chip when recovering.
+    expect(result.messages.some((m) => m.type === "tool_use_chip")).toBe(false);
+  });
+
+  test("tool_progress after Stage-2 eviction rebinds to non-error + timer reset", () => {
+    const prev: ChatMessage[] = [stage2ErrorBubble()];
+    const streams = makeStreams();
+
+    const result = applyStreamEvent(prev, streams, {
+      type: "tool_progress",
+      leaderId: CC,
+      toolUseId: "tu-1",
+      toolName: "Bash",
+      elapsedSeconds: 60,
+    } as any);
+
+    expect(result.messages[0].state).toBe("tool_use");
+    expect(result.messages[0].state).not.toBe("error");
+    expect(result.activeStreams.has(CC)).toBe(true);
+    expect(result.timerAction).toEqual({ type: "reset", leaderId: CC });
+    expect(result.messages.some((m) => m.type === "tool_use_chip")).toBe(false);
+  });
+
+  test("Stage-2 error with no further events stays error (fail-closed)", () => {
+    const prev: ChatMessage[] = [stage2ErrorBubble()];
+    const streams = makeStreams();
+
+    // No events — bubble remains terminal error; leader stays out of map.
+    expect(prev[0].state).toBe("error");
+    expect(streams.has(CC)).toBe(false);
+
+    // applyTimeout on an already-evicted leader is a no-op (cannot re-escalate).
+    const result = applyTimeout(prev, streams, CC);
+    expect(result.messages[0].state).toBe("error");
+    expect(result.activeStreams.has(CC)).toBe(false);
+  });
+
+  test("command_stream after Stage-2 error rebinds tip (no dual error + streaming)", () => {
+    const prev: ChatMessage[] = [stage2ErrorBubble()];
+    const streams = makeStreams();
+
+    const result = applyStreamEvent(prev, streams, {
+      type: "command_stream",
+      leaderId: CC,
+      phase: "start",
+      command: "grep -n foo",
+      toolUseId: "tu-bash-1",
+    } as any);
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].state).toBe("streaming");
+    expect(result.messages[0].state).not.toBe("error");
+    expect(result.activeStreams.get(CC)).toBe(0);
+    expect(result.timerAction).toEqual({ type: "reset", leaderId: CC });
+    const blocks = (result.messages[0] as { commandBlocks?: { command: string }[] })
+      .commandBlocks;
+    expect(blocks?.[0]?.command).toBe("grep -n foo");
+  });
+
+  test("stream_start after Stage-2 error rebinds tip to thinking", () => {
+    const prev: ChatMessage[] = [stage2ErrorBubble()];
+    const streams = makeStreams();
+
+    const result = applyStreamEvent(prev, streams, {
+      type: "stream_start",
+      leaderId: CC,
+    } as any);
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].state).toBe("thinking");
+    expect(result.activeStreams.get(CC)).toBe(0);
+    expect(result.timerAction).toEqual({ type: "reset", leaderId: CC });
+  });
+
+  test("cold cc_router tool_use without error still spawns chip (preserve Stage 4)", () => {
+    // No recoverable error — pre-stream tool_use remains chip behavior.
+    const result = applyStreamEvent([], makeStreams(), {
+      type: "tool_use",
+      leaderId: CC,
+      label: "Reading file…",
+    } as any);
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].type).toBe("tool_use_chip");
+    expect(result.activeStreams.has(CC)).toBe(false);
+    expect(result.timerAction).toBeUndefined();
+  });
+
+  test("does not rebind older error when a newer non-error text tip exists", () => {
+    const oldError = stage2ErrorBubble();
+    const newerLive: ChatMessage = {
+      id: "stream-cc_router-new",
+      role: "assistant",
+      content: "continued",
+      type: "text",
+      leaderId: CC,
+      state: "streaming",
+      toolsUsed: [],
+    };
+    const prev: ChatMessage[] = [oldError, newerLive];
+    const streams = makeStreams();
+
+    const result = applyStreamEvent(prev, streams, {
+      type: "tool_use",
+      leaderId: CC,
+      label: "Bash",
+    } as any);
+
+    // Newer tip is non-error → chip path (no rebind of old error).
+    expect(result.messages.some((m) => m.type === "tool_use_chip")).toBe(true);
+    expect(result.messages[0].state).toBe("error");
+  });
+
+  test("after rebind, two applyTimeouts escalate to error again (no permanent amnesty)", () => {
+    const prev: ChatMessage[] = [stage2ErrorBubble()];
+    const streams = makeStreams();
+
+    const rebound = applyStreamEvent(prev, streams, {
+      type: "tool_use",
+      leaderId: CC,
+      label: "Running command…",
+    } as any);
+    expect(rebound.messages[0].state).toBe("tool_use");
+    expect(rebound.activeStreams.has(CC)).toBe(true);
+
+    const first = applyTimeout(rebound.messages, rebound.activeStreams, CC);
+    expect(first.messages[0].state).toBe("tool_use");
+    expect(first.messages[0].retrying).toBe(true);
+    expect(first.activeStreams.has(CC)).toBe(true);
+
+    const second = applyTimeout(first.messages, first.activeStreams, CC);
+    expect(second.messages[0].state).toBe("error");
+    expect(second.activeStreams.has(CC)).toBe(false);
+  });
+});
+

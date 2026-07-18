@@ -142,4 +142,22 @@ describe("cc-soleur-go tool_progress consumer-contract (no terminal-error on >90
     expect(state.messages[idx].state).toBe("error");
     expect(state.activeStreams.has(CC)).toBe(false);
   });
+
+  // Residual 2026-07-16: after Stage-2 eviction, a late `tool_progress` must
+  // rebind the error bubble so the red banner does not stick while tools live.
+  it("Test #8: tool_progress after Stage-2 error heals orphan red banner", () => {
+    let state = applyEvent(emptyState(), streamStart());
+    state = applyEvent(state, toolUse());
+    const idx = state.activeStreams.get(CC)!;
+
+    state = applyTimeoutTo(state, CC);
+    state = applyTimeoutTo(state, CC);
+    expect(state.messages[idx].state).toBe("error");
+    expect(state.activeStreams.has(CC)).toBe(false);
+
+    state = applyEvent(state, toolProgress(95));
+    expect(state.messages[idx].state).not.toBe("error");
+    expect(state.messages[idx].state).toBe("tool_use");
+    expect(state.activeStreams.has(CC)).toBe(true);
+  });
 });

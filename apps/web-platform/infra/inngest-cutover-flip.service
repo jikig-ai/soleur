@@ -14,9 +14,10 @@ Environment=HOME=/root
 # script's `doppler secrets set` flag transitions) authenticate against soleur-inngest/prd.
 EnvironmentFile=/etc/default/inngest-server
 # doppler run injects INNGEST_CUTOVER_FLIP (the FSM flag) + INNGEST_REDIS_PASSWORD (for
-# the loopback redis-cli FLUSHALL/DBSIZE) into the script's env. @@DOPPLER_PROJECT@@ is
-# substituted by inngest-bootstrap.sh (dedicated host => soleur-inngest).
-ExecStart=/usr/bin/doppler run --project @@DOPPLER_PROJECT@@ --config prd -- /usr/local/bin/inngest-cutover-flip.sh
+# the loopback redis-cli FLUSHALL/DBSIZE) into the script's env. The Doppler project is
+# resolved from DOPPLER_PROJECT in EnvironmentFile=/etc/default/inngest-server (#6555; the
+# dedicated host sets soleur-inngest) — no --project flag.
+ExecStart=/usr/bin/doppler run --config prd -- /usr/local/bin/inngest-cutover-flip.sh
 
 [Install]
 WantedBy=multi-user.target

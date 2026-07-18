@@ -50,9 +50,18 @@ resource "betteruptime_monitor" "github_webhook_failures" {
 
 # 2. Signature-verification failure pager — alerts on a spike (potential attack).
 # Implemented as a log-stream / log-search monitor; here we provision a
-# secondary heartbeat that the webhook route deliberately pings on every
-# signature-failure event. Operator-paid; free-tier path relies on the
-# Sentry `level: error` mirror.
+# secondary heartbeat. Operator-paid; free-tier path relies on the Sentry
+# `level: error` mirror.
+#
+# #6537: this comment previously claimed the heartbeat was one "that the webhook route deliberately
+# pings on every signature-failure event". NOTHING pings it — no route emits to it. The claim was
+# never exercised because `count = 0` under the free tier, so it was free to stay false. Note the
+# asymmetry that made it easy to miss: the claim sat on only ONE of the two identical heartbeats
+# below; github_api_429_sustained carried no such comment.
+#
+# Both are declared `feeder: {kind: "none"}` in plugins/soleur/lib/heartbeat-manifest.ts and tracked
+# by #6549. On a paid-tier flip each needs a real emitter or deletion — and per #6210, a ping must be
+# verified BEFORE either is unpaused.
 resource "betteruptime_heartbeat" "github_webhook_sig_failures" {
   count = var.betterstack_paid_tier ? 1 : 0
 

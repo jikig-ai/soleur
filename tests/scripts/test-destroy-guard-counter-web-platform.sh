@@ -82,6 +82,14 @@ FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
 WEB2_GATE_LIB="$REPO_ROOT/tests/scripts/lib/web2-recreate-gate.sh"
 # shellcheck source=tests/scripts/lib/web2-recreate-gate.sh
 source "$WEB2_GATE_LIB"
+# The web-2 RETIRE gate (#6538) is a SEPARATE sourced function graded against a
+# SEPARATE allow-set. It is NOT web2-recreate with an extra address: the recreate
+# set deliberately EXCLUDES hcloud_volume.workspaces["web-2"] (preserve the data),
+# while the retire set REQUIRES it (destroy the data). Grading a retire plan against
+# web2_allow would abort on the volume destroy that IS the retirement.
+WEB2_RETIRE_GATE_LIB="$REPO_ROOT/tests/scripts/lib/web2-retire-gate.sh"
+# shellcheck source=tests/scripts/lib/web2-retire-gate.sh
+source "$WEB2_RETIRE_GATE_LIB"
 pass=0; fail=0
 
 _report() {
@@ -121,6 +129,40 @@ _run_gate() {
     rc=1
   fi
   echo "$rdel:$ndel:$rupd:$dcount:$rc"
+}
+
+# 7th surface (#6416): the `host_creates` HALT. Deliberately a SECOND, SEPARATE
+# rc source rather than a 6th field threaded through _run_gate, for two reasons:
+#
+#   1. _run_gate's "$rdel:$ndel:$rupd:$dcount:$rc" string encodes the ack
+#      semantics (rc=1 iff dcount>0 && !ack). The host_creates HALT is
+#      ack-INDEPENDENT and sits OUTSIDE the destroy_count sum, so it cannot be
+#      expressed by that rc at all — it needs its own.
+#   2. Widening the string would touch ~54 counter-string assertions across
+#      T1–T28 for zero added signal: host_creates is 0 in every one of them.
+#
+# Mirrors apply-web-platform-infra.yml's host_creates block exactly. Takes NO
+# head_msg parameter — that absence IS the ack-independence, structurally: the
+# workflow's HALT never reads HEAD_MSG. T29b proves it against a live
+# [ack-destroy] message. Returns "hc:rc".
+_run_host_creates_gate() {
+  local fixture="$1"
+  local counts hc rc=0
+  if ! counts=$(jq -f "$FILTER" < "$fixture" 2>/dev/null); then
+    echo "ERROR:99"
+    return
+  fi
+  hc=$(echo "$counts" | jq -r '.host_creates')
+  # Fail-closed numeric validation: an empty value from a jq failure would
+  # silently evaluate false in the `-gt 0` test and let a host create slip past.
+  if [[ ! "$hc" =~ ^[0-9]+$ ]]; then
+    echo "PARSE:1"
+    return
+  fi
+  if [[ "$hc" -gt 0 ]]; then
+    rc=1
+  fi
+  echo "$hc:$rc"
 }
 
 if [[ ! -f "$FILTER" ]]; then
@@ -332,14 +374,23 @@ t_hcloud_noop_attr_update_passes() {
   fi
 }
 
-# T18: CREATE of a 2nd host (hcloud_server.web["web-2"]) — a legit new host,
-# not a reboot. reboot clause selects only ["update"], so rupd=0.
-t_hcloud_create_passes() {
+# T18: CREATE of a 2nd host (hcloud_server.web["web-2"]) is not a REBOOT — the
+# reboot clause selects only ["update"], so rupd=0. That invariant is unchanged
+# and still worth pinning.
+#
+# What T18 no longer claims (#6416): this fixture used to be named "a legit new
+# host" and its 0:0:0:0:0 was read as "…therefore the plan is fine". It is not.
+# A `+ create` of hcloud_server on the per-PR apply path is exactly the drift
+# that left soleur-web-2 alive with NO private-net attachment — invisible to
+# resource_deletes, nested_deletes AND reboot_updates alike. The reboot gate
+# passing it is correct; the CONCLUSION that it was therefore legitimate was the
+# codified belief this plan overturns. T29 is where that plan shape now HALTs.
+t_hcloud_create_is_not_a_reboot() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-hcloud-server-create.json" "feat: add web-2 host")
   if [[ "$out" == "0:0:0:0:0" ]]; then
-    _report "T18 hcloud_server create (web-2 add) is not a reboot (rupd=0)" ok
+    _report "T18 hcloud_server create is not a REBOOT (rupd=0; legitimacy is T29's call, not this gate's)" ok
   else
-    _report "T18 hcloud_server create is not a reboot" fail "got '$out' want '0:0:0:0:0'"
+    _report "T18 hcloud_server create is not a REBOOT" fail "got '$out' want '0:0:0:0:0'"
   fi
 }
 
@@ -507,6 +558,285 @@ t_web2_volume_forget_aborts() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# 7th surface (#6416): `host_creates` — a pure `+ create` of an hcloud_server /
+# hcloud_volume on the per-PR apply path.
+#
+# Why a 7th counter was needed: `-target` is transitive at the RESOURCE level, so
+# every allow-listed resource referencing ANY hcloud_server.web instance
+# (cloudflare_record.app at dns.tf:16, hcloud_firewall_attachment.web at
+# firewall.tf:93) pulls the whole for_each map — web-2 included. A pure create
+# has no delete, no nested-block shrinkage and no ["update"], so all three
+# existing counters read 0 and the plan sails through. That is how web-2 was born
+# on a per-PR apply WITHOUT its hcloud_server_network attachment (#6416): the
+# attachment is not itself target-reachable, so the host came up on the public
+# IP only and could never reach zot at 10.0.1.30:5000.
+#
+# The gate is a TRIPWIRE, not a routine gate: host_creates == 0 on every normal
+# merge (T30/T31 pin that), so this costs nothing until the drift recurs.
+# ---------------------------------------------------------------------------
+
+# T29 (RED→GREEN anchor): the exact plan shape from #6416 — a per-PR
+# `hcloud_server.web["web-2"]` create — HALTs. Reuses the EXISTING
+# tfplan-hcloud-server-create.json fixture (measured host_creates=1); T18 above
+# asserts the same fixture is invisible to all three legacy counters, so this
+# pair is the whole argument for the 7th surface in two tests.
+t_host_create_halts() {
+  local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-hcloud-server-create.json")
+  if [[ "$out" == "1:1" ]]; then
+    _report "T29 per-PR hcloud_server create HALTs (hc=1 rc=1 — the #6416 drift shape)" ok
+  else
+    _report "T29 per-PR hcloud_server create HALTs" fail "got '$out' want '1:1'"
+  fi
+}
+
+# T29b (no ack bypass): the SAME fixture with a line-anchored [ack-destroy].
+# _run_gate returns rc=0 (the legacy gate never even fires — dcount=0), while the
+# host_creates gate still returns rc=1. Proves the HALT sits OUTSIDE the
+# destroy_count sum and has no ack path: an operator cannot type their way past a
+# host create the way they can past a nested-block removal (T11).
+t_host_create_no_ack_bypass() {
+  local msg
+  msg=$'feat: add web-2 host\n\n[ack-destroy]\n\nRefs #6416.'
+  local legacy; legacy=$(_run_gate "$FIXTURES/tfplan-hcloud-server-create.json" "$msg")
+  local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-hcloud-server-create.json")
+  if [[ "$legacy" == "0:0:0:0:0" && "$out" == "1:1" ]]; then
+    _report "T29b [ack-destroy] cannot bypass the host_creates HALT (legacy rc=0, host_creates rc=1)" ok
+  else
+    _report "T29b [ack-destroy] cannot bypass the host_creates HALT" fail \
+      "got legacy='$legacy' (want '0:0:0:0:0') host_creates='$out' (want '1:1')"
+  fi
+}
+
+# T30 (a REPLACE births a host and must HALT): a location change forces a REPLACE
+# (["delete","create"]). It DESTROYS AND RE-CREATES the host — and the reborn host
+# has no hcloud_server_network attach, exactly like a fresh create. So it must trip
+# host_creates.
+#
+# This test asserted the OPPOSITE until review (`0:0`, "not double-counted"). That
+# was wrong, and it was the guard's most dangerous hole: a replace trips
+# resource_deletes, the destroy gate then prints "Add [ack-destroy] to
+# acknowledge", and an author acking a legitimate sibling change in the same merge
+# would ack the host rebirth through with it — #6416 reproducing THROUGH the guard.
+# There was never a double-count to avoid: host_creates is not a term in the
+# workflow's destroy_count sum, and the HALT is evaluated first and
+# unconditionally, so the destroy gate's count is never reached on this plan.
+t_host_replace_halts() {
+  local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-hcloud-server-location-replace.json")
+  if [[ "$out" == "1:1" ]]; then
+    _report "T30 hcloud_server REPLACE HALTs (hc=1 rc=1 — a reborn host is an unattached host)" ok
+  else
+    _report "T30 hcloud_server REPLACE HALTs" fail "got '$out' want '1:1'"
+  fi
+}
+
+# T31 (no false-fire on the steady state): the captured real baseline must read
+# host_creates=0, i.e. the tripwire is silent on a normal merge.
+t_host_creates_baseline_zero() {
+  if [[ ! -f "$FIXTURES/tfplan-web-platform-real-baseline.json" ]]; then
+    _report "T31 captured real baseline yields host_creates=0" fail "fixture missing"
+    return
+  fi
+  local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-web-platform-real-baseline.json")
+  if [[ "$out" == "0:0" ]]; then
+    _report "T31 captured real baseline yields host_creates=0 (tripwire silent on normal merges)" ok
+  else
+    _report "T31 captured real baseline yields host_creates=0" fail "got '$out' want '0:0'"
+  fi
+}
+
+# T32 (fail-closed, not fail-open): a malformed plan document must ABORT, never
+# coast. Mirrors the workflow's numeric-parse validation — the block whose own
+# comment warns that "empty values from a jq failure would silently evaluate
+# false in the `-gt 0` test and let destructive plans slip past the guard".
+t_host_creates_parse_failure_fails_closed() {
+  local tmp; tmp=$(mktemp)
+  printf 'not json at all' > "$tmp"
+  local out; out=$(_run_host_creates_gate "$tmp")
+  rm -f "$tmp"
+  if [[ "$out" == "ERROR:99" ]]; then
+    _report "T32 malformed plan document fails CLOSED (rc!=0, never a silent pass)" ok
+  else
+    _report "T32 malformed plan document fails CLOSED" fail "got '$out' want 'ERROR:99'"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# T40-T49 — the web-2 RETIRE gate (#6538). Graded against web2_retire_allow (5
+# addresses), NOT web2_allow (3, the recreate set).
+#
+# THE NO-STRAND INVARIANT (T43). B6.2's local plan destroys 4 web-2 resources +
+# updates hcloud_firewall_attachment.web. Terraform applies sequentially and can
+# die mid-way, so the gate must accept any RETRY SUBSET (T41/T42) — strict
+# equality would fail closed on retry and strand a half-retired host forever.
+# But a bare subset rule would also accept the push-apply shape (measured
+# 2026-07-17: `0 to add, 1 to change, 1 to destroy` — server destroyed, volume
+# NOT in scope), which is the exact hazard: the server dies, the 20 GB volume
+# survives and bills forever with nothing attached to it.
+#
+# The discriminator is an IMPLICATION, not a count:
+#     web2_server_destroyed == 1  =>  web2_volume_destroyed == 1
+# A plan is computed from CURRENT state, so:
+#   - fresh retire  : both in state, both destroyed        -> 1=>1  PASS (T40)
+#   - retry (server already gone): server_destroyed=0      -> vacuous PASS (T41/T42)
+#   - push-apply shape: server destroyed, volume unscoped  -> 1=>0  ABORT (T43)
+# This is subset-safe AND strand-proof with no strict equality.
+_run_web2_retire_gate() {
+  local fixture="$1" path counts oos srv net vat vol fwu fwd rc
+  path="$FIXTURES/$fixture"
+  if ! counts=$(jq -f "$FILTER" < "$path" 2>/dev/null); then
+    echo "ERROR:99"; return 0
+  fi
+  oos=$(echo "$counts" | jq -r '.web2_retire_out_of_scope_changes')
+  srv=$(echo "$counts" | jq -r '.web2_server_destroyed')
+  net=$(echo "$counts" | jq -r '.web2_server_network_destroyed')
+  vat=$(echo "$counts" | jq -r '.web2_volume_attachment_destroyed')
+  vol=$(echo "$counts" | jq -r '.web2_volume_destroyed')
+  fwu=$(echo "$counts" | jq -r '.retire_firewall_attachment_updates')
+  fwd=$(echo "$counts" | jq -r '.retire_firewall_attachment_deletes')
+  web2_retire_gate "$path" >/dev/null 2>&1 && rc=0 || rc=$?
+  # Column order is LOAD-BEARING — every T40-T49 assertion pins this exact tuple.
+  # Legend: oos : server_destroyed : network_destroyed : volume_attachment_destroyed :
+  #         volume_destroyed : firewall_updates : firewall_deletes : gate_rc.
+  echo "$oos:$srv:$net:$vat:$vol:$fwu:$fwd:$rc"
+}
+
+# T40: the exact measured B6.2 shape (4 destroys + 1 firewall update) PASSES.
+# Measured live 2026-07-17 over the 5-target scope: `0 to add, 1 to change, 4 to destroy`.
+t_web2_retire_scoped_passes() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-scoped.json")
+  if [[ "$out" == "0:1:1:1:1:1:0:0" ]]; then
+    _report "T40 web-2 retire scoped shape PASSES (4 destroys + fw update)" ok
+  else
+    _report "T40 web-2 retire scoped shape PASSES" fail "got '$out' want '0:1:1:1:1:1:0:0'"
+  fi
+}
+
+# T41: RETRY after the apply died having destroyed the server — 3 of 4 remain.
+# MUST PASS (B1.7): strict equality here strands a half-retired host.
+t_web2_retire_retry_3of4_passes() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-retry-3of4.json")
+  if [[ "$out" == "0:0:1:1:1:0:0:0" ]]; then
+    _report "T41 web-2 retire RETRY (3 of 4 remaining) PASSES — subset, not equality" ok
+  else
+    _report "T41 web-2 retire RETRY (3 of 4 remaining) PASSES" fail "got '$out' want '0:0:1:1:1:0:0:0'"
+  fi
+}
+
+# T42: RETRY where only the volume remains. Same destroy COUNT as the stranding
+# shape (T43) — only the ADDRESS differs. Proves the gate discriminates by
+# address, not by counting destroys.
+t_web2_retire_retry_volume_only_passes() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-retry-volume-only.json")
+  if [[ "$out" == "0:0:0:0:1:0:0:0" ]]; then
+    _report "T42 web-2 retire RETRY (volume only) PASSES — discriminates by address" ok
+  else
+    _report "T42 web-2 retire RETRY (volume only) PASSES" fail "got '$out' want '0:0:0:0:1:0:0:0'"
+  fi
+}
+
+# T43: THE STRANDING HAZARD. The measured push-apply shape (server destroyed,
+# volume not in scope) fed to the retire gate MUST ABORT. Applying it kills the
+# host and leaves a 20 GB orphan volume billing with nothing attached.
+t_web2_retire_server_only_strands_volume_aborts() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-server-only-strands-vol.json")
+  if [[ "$out" == "0:1:0:0:0:1:0:1" ]]; then
+    _report "T43 server-only ABORTS — no-strand invariant (server=>volume)" ok
+  else
+    _report "T43 server-only ABORTS — no-strand invariant" fail "got '$out' want '0:1:0:0:0:1:0:1'"
+  fi
+}
+
+# T44: any web-1 touch is out-of-scope -> ABORT. web-1 is the sole live origin.
+t_web2_retire_web1_touch_aborts() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-web1-touch.json")
+  if [[ "$out" == "1:1:1:1:1:1:0:1" ]]; then
+    _report "T44 web-1 delete ABORTS (oos=1)" ok
+  else
+    _report "T44 web-1 delete ABORTS" fail "got '$out' want '1:1:1:1:1:1:0:1'"
+  fi
+}
+
+# T45: web-1's VOLUME destroy -> ABORT. Pins the volume counter to the exact
+# web-2 address: a bare `hcloud_volume.*` count would let web-1's volume satisfy it.
+t_web2_retire_web1_volume_destroy_aborts() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-web1-volume-destroy.json")
+  if [[ "$out" == "1:1:1:1:1:1:0:1" ]]; then
+    _report "T45 web-1 VOLUME destroy ABORTS (address-pinned, not hcloud_volume.*)" ok
+  else
+    _report "T45 web-1 VOLUME destroy ABORTS" fail "got '$out' want '1:1:1:1:1:1:0:1'"
+  fi
+}
+
+# T46: firewall attachment DELETE -> ABORT. The attachment must UPDATE (dropping
+# web-2 from server_ids). A delete strips web-1's firewall entirely.
+t_web2_retire_firewall_delete_aborts() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-firewall-delete.json")
+  if [[ "$out" == "0:1:1:1:1:0:1:1" ]]; then
+    _report "T46 firewall attachment DELETE ABORTS (never delete — strips web-1)" ok
+  else
+    _report "T46 firewall attachment DELETE ABORTS" fail "got '$out' want '0:1:1:1:1:0:1:1'"
+  fi
+}
+
+# T47: THE ADR-118 BIRTH HAZARD (D1(A), measured 2026-07-17). The proxy-TLS
+# resources are ABSENT from state and from Doppler prd — `proxy-tls.tf` is
+# "contract before consumer" config that was never applied. So they plan as
+# CREATE, not replace/update. They are deliberately ABSENT from web2_retire_allow,
+# so any attempt to birth them inside a host retirement trips oos -> ABORT.
+# Guards against re-adding `-target=doppler_secret.proxy_tls_cert` to B6.2, which
+# would write PROXY_TLS_CERT to prd with NO matching PROXY_TLS_KEY.
+t_web2_retire_proxy_tls_birth_aborts() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-proxy-tls-birth.json")
+  if [[ "$out" == "2:1:1:1:1:1:0:1" ]]; then
+    _report "T47 proxy-TLS create ABORTS (oos=2 — no keyless cert into prd)" ok
+  else
+    _report "T47 proxy-TLS create ABORTS" fail "got '$out' want '2:1:1:1:1:1:0:1'"
+  fi
+}
+
+# T48: a no-op plan ABORTS — the gate must not authorize an apply that does
+# nothing (the dispatch must be a real, scoped retirement).
+t_web2_retire_noop_aborts() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-noop.json")
+  if [[ "$out" == "0:0:0:0:0:0:0:1" ]]; then
+    _report "T48 no-op plan ABORTS (>=1 member required)" ok
+  else
+    _report "T48 no-op plan ABORTS" fail "got '$out' want '0:0:0:0:0:0:0:1'"
+  fi
+}
+
+# T50: THE RESURRECTION HAZARD. A web-2 server REPLACE (delete+create) is entirely
+# in-allow-set (oos=0) and does not strand the volume (srv=1 <= vol=1), so the
+# no-strand + oos + firewall checks all pass — yet it REBIRTHS the host the retire
+# exists to destroy (the #6416 unattached-reborn-host failure mode). The retire
+# gate must be as strict as its siblings (the per-PR path's host_creates HALT and
+# the recreate gate's web2_server_replaced guard both stop this). A pure retire
+# CREATES nothing, so host_creates==0 is the guard; it aborts with oos=0 and
+# srv<=vol, uniquely implicating the host_creates check.
+t_web2_retire_server_replace_aborts() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-server-replace.json")
+  if [[ "$out" == "0:1:1:1:1:1:0:1" ]]; then
+    _report "T50 web-2 server REPLACE ABORTS — no resurrection (host_creates==0)" ok
+  else
+    _report "T50 web-2 server REPLACE ABORTS" fail "got '$out' want '0:1:1:1:1:1:0:1'"
+  fi
+}
+
+# T49: a Terraform 1.7+ `removed{}` state-drop on the web-2 volume serializes as
+# actions==["forget"] — it drops the resource from state WITHOUT destroying the
+# real volume. That is the stranding hazard wearing a different hat: the volume
+# survives, bills, and Terraform no longer knows about it. "forget" must NOT
+# satisfy web2_volume_destroyed.
+t_web2_retire_volume_forget_aborts() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-volume-forget.json")
+  if [[ "$out" == "0:1:1:1:0:1:0:1" ]]; then
+    _report "T49 volume ['forget'] ABORTS — a state-drop is not a destroy" ok
+  else
+    _report "T49 volume ['forget'] ABORTS" fail "got '$out' want '0:1:1:1:0:1:0:1'"
+  fi
+}
+
 t_ruleset_rule_removal_trips
 t_tunnel_ingress_removal_trips
 t_zone_settings_header_removal_trips
@@ -524,7 +854,7 @@ t_hcloud_placement_group_after_unknown_trips
 t_hcloud_server_type_update_trips
 t_hcloud_location_replace_no_double_count
 t_hcloud_noop_attr_update_passes
-t_hcloud_create_passes
+t_hcloud_create_is_not_a_reboot
 t_hcloud_reboot_ack_allows
 t_web2_scoped_replace_passes
 t_web2_web1_replace_aborts
@@ -535,6 +865,22 @@ t_web2_web1_inplace_nonplacement_aborts
 t_web2_substring_collision_aborts
 t_web2_no_ack_destroy_bypass
 t_web2_volume_forget_aborts
+t_host_create_halts
+t_host_create_no_ack_bypass
+t_host_replace_halts
+t_host_creates_baseline_zero
+t_host_creates_parse_failure_fails_closed
+t_web2_retire_scoped_passes
+t_web2_retire_retry_3of4_passes
+t_web2_retire_retry_volume_only_passes
+t_web2_retire_server_only_strands_volume_aborts
+t_web2_retire_web1_touch_aborts
+t_web2_retire_web1_volume_destroy_aborts
+t_web2_retire_firewall_delete_aborts
+t_web2_retire_proxy_tls_birth_aborts
+t_web2_retire_noop_aborts
+t_web2_retire_volume_forget_aborts
+t_web2_retire_server_replace_aborts
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

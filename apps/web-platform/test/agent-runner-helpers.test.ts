@@ -35,6 +35,7 @@ vi.mock("@/server/sandbox-hook", () => ({
 }));
 
 import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
+import { resolveWorkspaceMode } from "@/server/workspace-mode";
 
 // The filesystem `denyRead` is now computed per-dispatch from a live
 // `readdirSync(WORKSPACES_ROOT)` (per-sibling deny — #5733 follow-up, PR
@@ -183,6 +184,7 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
 
 describe("buildAgentQueryOptions drift guard (legacy ↔ cc — #2922)", () => {
   const baseArgs = {
+    mode: resolveWorkspaceMode("command_center"),
     workspacePath: "/tmp/test-workspace",
     pluginPath: "/tmp/test-workspace/plugins/soleur",
     credential: { value: "sk-test", scheme: "api_key" as const },

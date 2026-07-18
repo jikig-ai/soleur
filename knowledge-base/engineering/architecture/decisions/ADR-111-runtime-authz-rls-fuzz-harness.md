@@ -1,5 +1,6 @@
 # ADR-111: Runtime authz/RLS-fuzz harness on a Supabase-CLI-local disposable stack
 
+- **Amended by:** [ADR-112](./ADR-112-definer-grant-hygiene-two-tier-guard.md) (#6328) — names this harness's **AC8** gate the *authoritative* durable guard for SECURITY DEFINER grant hygiene, adds a static no-stack pre-filter subordinate to it, and adds a non-vacuity/live-catalog-parity assertion to `rls-rpc.integration.test.ts`.
 - **Status:** adopting (harness build in progress on `feat-t3mp3st-security-eval`, #6256)
 - **Date:** 2026-07-09
 - **Deciders:** Operator; drafted via `/soleur:go` → brainstorm → CLO legal-threshold → plan (4-agent review panel) → this ADR. Provisioning fork ruled by the `cto` agent mid-`/work`.
@@ -108,6 +109,16 @@ on ownership but fails to re-validate a tenancy reference), both baselined `test
 
 The 18-table base matrix, storage.objects, the new user-isolation dimension, and the
 deepened excluded surfaces showed **no** further leaks — RLS on those holds.
+
+**Resolved 2026-07-11 (#6342).** Both exposures are closed: migration 129 adds
+`is_workspace_member(workspace_id, auth.uid())` to the `conversations`/`kb_files`
+write-side WITH CHECK (and to `conversations_owner_insert` — an INSERT-placement
+variant of the same class, surfaced at plan-review), and migration 130 adds the
+`p_grant_id` ownership guard to `authorize_template`. Both `test.fails` baselines were
+un-baselined to plain passing assertions; deploy-time `verify/129`+`verify/130`
+sentinels prove the mechanism against prod. #6336's severity resolved to a
+data-integrity / Art. 5(2) WORM-provenance defect (no consumer trusts
+`template_authorizations.grant_id` for live authority).
 
 ## C4 impact
 

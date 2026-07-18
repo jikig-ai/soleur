@@ -25,7 +25,8 @@ groups:
 
 # The inngest-server systemd unit runs as User=deploy (inngest-bootstrap.sh:184/414) and the
 # bootstrap chowns /var/lib/inngest to deploy:deploy (else SQLite CANTOPEN(14)). The web hosts
-# create `deploy` in their cloud-init (cloud-init.yml:46-53); the dedicated inngest host never
+# create `deploy` in their cloud-init (the `name: deploy` entry under `users:` in
+# cloud-init.yml); the dedicated inngest host never
 # did, so the bootstrap aborted with `chown: invalid user: 'deploy:deploy'` and inngest never
 # started (found via the #6178 boot probe, after the HOME fix). Mirror the web deploy user;
 # `- default` preserves the distro root user (+ its hcloud-injected SSH key). deploy gets a home
@@ -206,7 +207,7 @@ runcmd:
   # "Doppler Error: $HOME is not defined" even when DOPPLER_CONFIG_DIR is set. Without it the
   # boot isolation self-check `doppler run` (+ its nested `doppler secrets`) and the token fetch
   # both fail → inngest never bootstraps → the host is dark+silent+unreachable. The registry host
-  # got this fix (cloud-init-registry.yml:314-317); the inngest host never did, so it never booted.
+  # got this fix (cloud-init-registry.yml, the (3) Store-mount self-heal block); the inngest host never did, so it never booted.
   # (systemd units set HOME=/root themselves, so only these cloud-init-level doppler calls need it.)
   - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-doppler
   - chmod 600 /etc/default/inngest-doppler
@@ -234,8 +235,13 @@ runcmd:
   # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------
   # So the cold-boot soleur-inngest-bootstrap OCI pull + cosign-verify authenticates even
   # when Doppler answers empty at the boot instant (else anonymous private pull → 401 →
-  # 226/NAMESPACE abort). Same 0600 protection as the token file. Copy of the web
-  # cloud-init.yml:398 + :462-468 bake+login pattern.
+  # 226/NAMESPACE abort). Same 0600 protection as the token file. Mirrors the web
+  # cloud-init's `> /etc/default/soleur-ghcr-read` bake — but the hosts diverge
+  # downstream: there the file is write-only at boot and is consumed later by
+  # ci-deploy.sh (its baked-cred path), while that host's `STAGE=ghcr_login` seed-pull
+  # authenticates from the template-interpolated vars directly. Here the file IS sourced
+  # for the login below. (An earlier draft said the web bake "feeds" that seed-pull login.
+  # It does not — the bake→login relationship holds on THIS host only.)
   - printf 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s\n' '${ghcr_read_user}' '${ghcr_read_token}' > /etc/default/soleur-ghcr-read
   - chmod 600 /etc/default/soleur-ghcr-read
 
@@ -315,11 +321,16 @@ runcmd:
   # Same content + umask 0137 (mode 0640) + root:deploy the bootstrap itself writes (:238-245); deploy
   # must exist first (created above). The unit's User=deploy gets HOME=/home/deploy from systemd, so
   # this env file carries DOPPLER_CONFIG_DIR (not HOME).
-  - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-server )
+  # #6555: DOPPLER_PROJECT=soleur-inngest lands in the env-file so the inngest units (which
+  # dropped `--project`) resolve the dedicated project from EnvironmentFile at runtime. Literal
+  # here (not $DOPPLER_PROJECT) — this cloud-init write runs BEFORE the bootstrap that would set
+  # the shell var; the dedicated host is always soleur-inngest.
+  - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_PROJECT=soleur-inngest\n' '${doppler_token}' > /etc/default/inngest-server )
   - chown root:deploy /etc/default/inngest-server
 
   # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
-  # Gated on the isolation sentinel above (fail-closed). Mirrors web cloud-init.yml:642-682:
+  # Gated on the isolation sentinel above (fail-closed). Mirrors the web block in
+  # cloud-init.yml opened by `docker create --name soleur-inngest-bootstrap-extract`:
   # docker create → docker cp the script + durable-Redis assets → read INNGEST_CLI_VERSION/
   # SHA from the image env → run it. Passes the dedicated-host env: INNGEST_CLI_ARCH
   # (arch-derived — arm64 on cax*, amd64 otherwise; inngest-bootstrap.sh:37/54) + SDK_URL
@@ -327,7 +338,7 @@ runcmd:
   - |
     set -e
     test -f /run/soleur-inngest-doppler.ok || { echo "FATAL: doppler isolation self-check did not pass — refusing to bootstrap inngest" >&2; exit 1; }
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.19
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.23
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     # #6178 boot observability: bracket the OCI pull so a pull hang/401 self-reports the STAGE
     # (pre-oci-pull with no oci-pull-rc-* = hung; oci-pull-rc-N!=0 = failed, with masked tail).
@@ -355,7 +366,8 @@ runcmd:
     # VECTOR_CLI_ARCH + aarch64 triple map) and BETTERSTACK_LOGS_TOKEN is provisioned into
     # the isolated soleur-inngest/prd project (inngest-betterstack-token.tf; admitted by the
     # boot isolation self-check above). Stage /tmp/vector.toml (docker-cp from the OCI image,
-    # same as web cloud-init.yml:659) so the bootstrap writes the vector.service unit; pass
+    # same as the identical `soleur-inngest-bootstrap-extract:/vector.toml` docker-cp line
+    # in web cloud-init.yml) so the bootstrap writes the vector.service unit; pass
     # the arm64 Vector env (non-empty VERSION + arm64 SHA override + VECTOR_CLI_ARCH) below.
     docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
     chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
@@ -367,7 +379,8 @@ runcmd:
     # the wrong-arch SHA would reject at verify. Version is arch-independent (from the image).
     INNGEST_CLI_SHA256="${inngest_cli_sha256}"
     # #6197: read the arch-independent Vector version from the image env (mirror the
-    # INNGEST_CLI_VERSION read above; web cloud-init.yml:677). The SHA is OVERRIDDEN with the
+    # INNGEST_CLI_VERSION read above; the web `grep '^VECTOR_CLI_VERSION='` read in
+    # cloud-init.yml). The SHA is OVERRIDDEN with the
     # arch-matched checksum (templatefile-derived, mirroring the INNGEST_CLI_SHA256 override)
     # because this host downloads the arch-matched tarball — a wrong-arch SHA would fail verify.
     VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)

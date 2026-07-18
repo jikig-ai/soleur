@@ -38,12 +38,19 @@ INNGEST_CLI_ARCH="${INNGEST_CLI_ARCH:-amd64}"
 # #6178 cross-consumer templating (defaults PRESERVE the co-located web-host behavior;
 # the dedicated inngest host overrides both). SDK_URL: the app serve URL inngest syncs +
 # invokes (Phase-0.2 spike: route-once → a single stable URL; the dedicated host points
-# at the active web backend's private interface). DOPPLER_PROJECT: the dedicated host's
-# boot token is scoped to the ISOLATED `soleur-inngest` project (AC3), so its ExecStart
-# `doppler run` must target that project, not `soleur`.
+# at the active web backend's private interface). DOPPLER_PROJECT selects the ISOLATED
+# `soleur-inngest` project (AC3) on the dedicated host vs `soleur` on the co-located web host.
+# Since #6555 the units no longer pass `--project`; DOPPLER_PROJECT is delivered to them via
+# EnvironmentFile=/etc/default/inngest-server (written by cloud-init-inngest.yml's env-file
+# pre-create / the bootstrap heredoc + the in-place augment below). This shell var still GATES
+# which arms render (heartbeat dark arm, flip units, DEDICATED_FLIP) below.
 SDK_URL="${SDK_URL:-http://127.0.0.1:3000/api/inngest}"
-# EXPORTED so the inngest-redis-bootstrap.sh subprocess (which renders the redis
-# unit's @@DOPPLER_PROJECT@@) inherits it. Default `soleur` preserves the web host.
+# EXPORTED so child bootstrap subprocesses inherit it. Default `soleur` preserves the web host.
+# SOLEUR-DEBT: the `${DOPPLER_PROJECT:-soleur}` render-time default renders the WRONG (web) arm on the dedicated host if cloud-init's inline `env DOPPLER_PROJECT=soleur-inngest` ever fails to reach here, and the #6555 fail-closed backstop below is a PRESENCE check not a VALUE check so a wrong-but-present `soleur` passes it; when a dedicated-host in-place re-bootstrap path is ever added (the dedicated host is force-replace-only today) fail-close the default AND assert the value == soleur-inngest when the host carries the soleur-inngest Doppler token.
+# Detector for a wrong render (indirect — the field reports arm-render, not project identity):
+# cat-deploy-state.sh's `inngest_heartbeat_dark_arm` field (#6536), read no-SSH over
+# /hooks/deploy-status. #6555 removed the RUNTIME `--project` surface (units resolve the project
+# from the env-file) but NOT this render-time default. Ref #6555.
 export DOPPLER_PROJECT="${DOPPLER_PROJECT:-soleur}"
 
 if [[ -z "$INNGEST_CLI_VERSION" || -z "$INNGEST_CLI_SHA256" ]]; then
@@ -61,6 +68,9 @@ readonly UNIT_FILE="/etc/systemd/system/inngest-server.service"
 readonly HEARTBEAT_UNIT="/etc/systemd/system/inngest-heartbeat.service"
 readonly HEARTBEAT_TIMER="/etc/systemd/system/inngest-heartbeat.timer"
 readonly HEARTBEAT_SCRIPT="/usr/local/bin/inngest-heartbeat.sh"
+# #6556 Part 2: OnFailure target for inngest-heartbeat.service — a push-less, queryable-only
+# oneshot that emits an ERR-priority `inngest-heartbeat` line when the heartbeat unit fails.
+readonly HEARTBEAT_FAILURE_LOG_UNIT="/etc/systemd/system/inngest-heartbeat-failure-log.service"
 readonly DOWNLOAD_URL="https://github.com/inngest/inngest/releases/download/${INNGEST_CLI_VERSION}/inngest_${INNGEST_CLI_VERSION#v}_linux_${INNGEST_CLI_ARCH}.tar.gz"
 # In-place upgrade drain. Override via env at install time if event volume
 # exceeds ~10 events/sec sustained — at higher rates the SQLite fsync window
@@ -144,8 +154,9 @@ fi  # end SKIP_BINARY_INSTALL guard — unit + heartbeat reconcile below always 
 
 # Heartbeat ping script + service + 60s timer.
 # The URL lives in $INNGEST_HEARTBEAT_URL — resolved at ExecStart time via
-# `doppler run --project soleur --config prd` (same pattern as
-# inngest-server.service above). The earlier shape relied on systemd's
+# `doppler run --config prd` (the project comes from DOPPLER_PROJECT in the
+# EnvironmentFile below, #6555; same pattern as inngest-server.service above).
+# The earlier shape relied on systemd's
 # EnvironmentFile=/etc/default/inngest-server to provide the URL, but the
 # substrate-fix in PR #4085 only writes DOPPLER_TOKEN / DOPPLER_CONFIG_DIR /
 # DOPPLER_ENABLE_VERSION_CHECK into that file — INNGEST_HEARTBEAT_URL was
@@ -160,14 +171,73 @@ fi  # end SKIP_BINARY_INSTALL guard — unit + heartbeat reconcile below always 
 cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
 #!/bin/sh
 # Posted to Better Stack every 60s by inngest-heartbeat.timer.
-exec /usr/bin/curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
+#
+# LOG_TAG is a REAL assignment, never an inline tag literal in the logger call: the drift
+# fixture at test/infra/vector-pii-scrub.test.sh:392-404 derives the expected
+# SYSLOG_IDENTIFIER set from `^\s*(readonly\s+)?LOG_TAG="..."` across infra/*.sh. Its
+# `logger -t` probe is heredoc-blind, so a literal would pull THIS file into the fixture's
+# loop and yield NO tag -- hard-failing that fixture's exact-set equality.
+LOG_TAG="inngest-heartbeat"
+#
+# @@DARK_ARM@@ -- substituted at RENDER time by inngest-bootstrap.sh (see the render block
+# just below): the skip branch on the dedicated host, EMPTY on the co-located web host.
+#
+# An absent INNGEST_HEARTBEAT_URL is NOT a curl no-op. `curl -fsS --max-time 10 ""` exits 2
+# ("option : blank argument where content is expected" -- measured, #6536); unset behaves
+# identically. That is why this oneshot failed every 60s for 3 days (3,724 fires) on the dark
+# host, and why inngest-host.tf's old "curl no-ops" claim was false. Same class as #4116.
+#
+# The dark host legitimately has NO url: inngest-host.tf:137-151 keeps one unambiguous pusher
+# per monitor and provisions the URL out-of-band only AT cutover (op=arm). So skipping is
+# correct THERE and only there. The co-located web host is TODAY'S live pusher and gets no
+# arm at all -- an absent URL there is always a real fault and must stay loud.
+@@DARK_ARM@@
+# -g (--globoff): the URL is a BEARER capability. Without -g, a URL containing [ ] or
+# { } makes curl print the FULL URL in its glob-parse error (`curl: (3) bad range in URL
+# position N:` followed by the URL) — measured, curl 8.18 — which FR4's SyslogIdentifier
+# now ships straight to Better Stack. -g disables globbing (we never glob) and the echo
+# with it. Belt to cat-deploy-state.sh's braces: neither alone is sufficient.
+exec /usr/bin/curl -gfsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
 HEARTBEATSCRIPTEOF
 chmod 0755 "$HEARTBEAT_SCRIPT"
 
+# @@DARK_ARM@@ render begin (#6536)
+# Host identity is resolved into DIFFERENT ARTIFACTS at render time, never shipped into the
+# script for a runtime `if`. This is the house pattern already used twice in this file:
+# `sed -i 's|@@HOST_NAME@@|...|'` on the Vector config below, and @@FLIP_GUARD_EXECSTARTPRE@@
+# on inngest-server.service above ("ON THE DEDICATED HOST ONLY (empty on the co-located web
+# host)"). The consequence is the point: the LIVE co-located pusher's script has NO exit-0
+# branch to reach, so masking a real fault there is structurally unreachable, not merely gated.
+#
+# Deliberately NO INNGEST_CUTOVER_FLIP case: url-presence is sufficient (op=arm writes the URL
+# at G4 BEFORE flip=armed at G5), and an 8-state FSM that ADR-100 owns -- and
+# inngest-cutover-flip.sh implements once -- must not be copied a third time into a 20-line
+# liveness probe. A fail-closed `*)` arm would reintroduce this very bug: a future #6178 state
+# would land in it, exit 1 on a dark host, and restore the 60s storm.
+#
+# The heredoc above MUST stay QUOTED. The tempting way to render this sentinel is to unquote
+# it so the shell expands at bootstrap -- that would ALSO expand $INNGEST_HEARTBEAT_URL into
+# /usr/local/bin/inngest-heartbeat.sh, a 0755 WORLD-READABLE file, writing the bearer
+# capability to disk in plaintext and defeating the script-indirection control at :156-159.
+# AC3's canary asserts the script's runtime OUTPUT, not the file's CONTENTS, so AC3 would
+# pass while the secret sat on disk. `sed -i` on the quoted heredoc is the only safe render.
+# Both seds anchor on the STANDALONE sentinel line (^...$). An unanchored `s|@@DARK_ARM@@|`
+# also rewrites the sentinel's own mention inside the comment above, corrupting the script --
+# caught by the sh -n leg of the render test.
+if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
+  sed -i 's|^@@DARK_ARM@@$|if [ -z "$INNGEST_HEARTBEAT_URL" ]; then\n  logger -t "$LOG_TAG" "url_present=no — no heartbeat URL provisioned; skipping ping"\n  exit 0\nfi|' "$HEARTBEAT_SCRIPT"
+  log "inngest-heartbeat: dark arm RENDERED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — an absent URL skips the ping and logs why"
+else
+  sed -i '/^@@DARK_ARM@@$/d' "$HEARTBEAT_SCRIPT"
+  log "inngest-heartbeat: dark arm OMITTED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — live pusher; an absent URL stays loud (curl rc=2)"
+fi
+# @@DARK_ARM@@ render end
+
 # Resolve the doppler binary path at bootstrap time. cloud-init installs to
-# /usr/local/bin/doppler (cloud-init.yml:289-290); inngest-server.service:137
-# hardcodes /usr/bin/doppler. Interpolating `command -v` here avoids
-# inheriting that latent path discrepancy in the heartbeat unit.
+# /usr/local/bin/doppler (the `chmod +x /usr/local/bin/doppler` step in
+# cloud-init.yml); inngest-server.service:137 hardcodes /usr/bin/doppler.
+# Interpolating `command -v` here avoids inheriting that latent path
+# discrepancy in the heartbeat unit.
 DOPPLER_BIN="$(command -v doppler 2>/dev/null || true)"
 if [[ -z "$DOPPLER_BIN" ]]; then
   log "ERROR: doppler CLI not found on PATH — cloud-init must install /usr/local/bin/doppler before inngest-bootstrap"
@@ -178,6 +248,11 @@ cat > "$HEARTBEAT_UNIT" <<HEARTBEATEOF
 [Unit]
 Description=Inngest server heartbeat ping to Better Stack
 After=network-online.target
+# #6556 Part 2: on failure, fire a push-less oneshot that emits an ERR-priority
+# `inngest-heartbeat` line so a unit failure is READABLE off-box (no SSH). Before this, a
+# heartbeat failure surfaced only as the un-shippable SYSLOG_IDENTIFIER=systemd "Failed to
+# start" journal row (the #6551 signature); now it also ships on the inngest-heartbeat channel.
+OnFailure=inngest-heartbeat-failure-log.service
 
 [Service]
 Type=oneshot
@@ -189,9 +264,82 @@ Group=deploy
 # automatically, matching inngest-server.service's hardening pattern.
 # Surfaced 2026-05-20 once #4204's reconcile gate exposed the new unit shape.
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=${DOPPLER_BIN} run --project ${DOPPLER_PROJECT} --config prd -- ${HEARTBEAT_SCRIPT}
+# #6536 ROUND 2 — this line is why the unit failed, and its absence is what 3,724 fires were.
+# MEASURED on the fresh host (the FIRST thing the SyslogIdentifier= channel below ever
+# shipped): `Doppler Error: open /tmp/.doppler/.doppler.yaml.XXXX: permission denied`.
+#
+# The env file above sets DOPPLER_CONFIG_DIR=/tmp/.doppler for EVERY doppler-wrapped unit.
+# That path is only safe under PrivateTmp: cloud-init-inngest.yml's boot isolation
+# self-check runs `doppler secrets` as ROOT (with HOME=/root and the same
+# DOPPLER_CONFIG_DIR, cloud-init-inngest.yml:212/226/289), so /tmp/.doppler exists
+# ROOT-OWNED from first boot. A unit with a PRIVATE /tmp never sees it and the CLI
+# recreates it as `deploy`; this unit shared the host /tmp and could not write there, so
+# `doppler run` died BEFORE exec -- the ping script never ran at all. Both siblings
+# (inngest-server, vector) already set this; the heartbeat was the lone omission, which is
+# exactly why they work and it did not.
+#
+# The #6536 plan REFUTED this hypothesis (H3) on reasoning: "they use different /tmps and
+# cannot collide" + "nothing mkdirs /tmp/.doppler; the CLI creates it lazily as deploy".
+# Both halves are false. The collision is not heartbeat-vs-sibling, it is
+# heartbeat-vs-ROOT's-boot-self-check; and the CLI creates it lazily as ROOT, before this
+# unit's first fire. It also explains the onset the plan could not attribute (13:00:38Z =
+# the host's boot, not a deploy): this unit has failed since its very first fire.
+# Do NOT remove without moving DOPPLER_CONFIG_DIR off the shared /tmp.
+PrivateTmp=true
+# #6536: WITHOUT this, systemd derives SYSLOG_IDENTIFIER from the ExecStart basename ->
+# "doppler", which matches ZERO vector.toml sources. The unit's own stderr (doppler's AND
+# curl's) then never leaves the host: the issue's _SYSTEMD_UNIT='inngest-heartbeat.service'
+# query returned zero rows for exactly this reason -- not a Better Stack retention gap.
+# Retagging onto the "inngest-heartbeat" channel (vector.toml Source 4, which carries NO
+# PRIORITY filter and so admits this unit's PRIORITY-6 output) is what makes the
+# "no row at all + unit failed" signature readable off-box, with no SSH.
+# This line is what made the PrivateTmp defect above diagnosable in 2 minutes, off-box,
+# after 3 days of a blind 60s storm. It earned its keep before the fix it shipped with did.
+SyslogIdentifier=inngest-heartbeat
+ExecStart=${DOPPLER_BIN} run --config prd -- ${HEARTBEAT_SCRIPT}
 HEARTBEATEOF
 
+# #6556 Part 2 — the OnFailure target for inngest-heartbeat.service. Non-templated (ONE
+# consumer, so no `@`/%i template — cf. cron-egress-alarm@ which earns its template from two
+# consumers) and rendered as a bootstrap heredoc like every other inngest unit (no standalone
+# tracked file, no server.tf delivery entry, no separate pinning test). Quoted delimiter — the
+# body is fully literal (no shell expansion). Loaded by the daemon-reload below; NOT enabled
+# (systemd triggers it via the heartbeat unit's OnFailure=, not a [Install] wants).
+cat > "$HEARTBEAT_FAILURE_LOG_UNIT" <<'FAILLOGEOF'
+[Unit]
+Description=Log an ERR-priority marker when inngest-heartbeat.service fails (#6556)
+# QUERYABLE, NOT ALARMING. This oneshot emits a single ERR line on the inngest-heartbeat
+# Vector -> Better Stack channel (vector.toml Source 4) so a heartbeat-unit failure is readable
+# off-box with NO SSH — it turns the failure systemd otherwise emits as the un-shippable
+# SYSLOG_IDENTIFIER=systemd "Failed to start" row (the #6551 signature) into a shippable
+# inngest-heartbeat line.
+#
+# It deliberately does NOT push to any monitor. One-unambiguous-pusher-per-monitor
+# (inngest-host.tf:137-171): the LIVE co-located pusher's alarm IS the Better Stack heartbeat
+# MONITOR (missing pings redden it in ~90s); the dark host has no monitor push by design.
+# POST-CUTOVER this stays correct — once the dedicated host BECOMES the live pusher, the
+# monitor's missing-pings alarm covers it and this log line remains the diagnostic. Do NOT
+# "complete" this unit by adding a monitor push.
+
+[Service]
+Type=oneshot
+# Reuse the existing Source 4 tag (vector.toml) — no new allowlist entry, no fresh quota decision.
+SyslogIdentifier=inngest-heartbeat
+# Bare `logger`, NO `doppler run` wrapper: this unit emits only a fixed marker and needs no
+# secrets. A `doppler run --project …` wrapper would hardcode a project (WRONG on the
+# soleur-inngest host) and re-introduce the exact project-resolution surface #6555 removes.
+ExecStart=/usr/bin/logger -t inngest-heartbeat -p err "inngest-heartbeat.service entered failed state (OnFailure) — the 60s ping failed; see the preceding inngest-heartbeat lines for the underlying ping error (#6556)"
+FAILLOGEOF
+
+# AccuracySec=1s added by #6537. systemd's default is 1 MINUTE, so this timer fires anywhere in
+# [elapse, elapse+60s] — an interval of 60s+delta, structurally bounded at 120s, against
+# inngest_prd's 60s period + 30s grace (a 90s deadline). Measured A/B on this exact unit shape:
+# unset drifted 60.0s / 62.0s / 72.6s / 66.5s; AccuracySec=1s held 61.0s +/- 16ms. This monitor is
+# live and up today on margin, not by design — systemd's coalescing offset derives from the BOOT
+# ID, so today's greenness is evidence about this boot only and is re-rolled by every host
+# replace. Takes effect on the next inngest-host-replace; harmless until then.
+# (Persistent=true below is a no-op for a monotonic timer — it only applies to OnCalendar — but is
+# left as-is: removing it is unrelated to this fix.)
 cat > "$HEARTBEAT_TIMER" <<'TIMEREOF'
 [Unit]
 Description=Run Inngest heartbeat every 60s
@@ -199,6 +347,7 @@ Description=Run Inngest heartbeat every 60s
 [Timer]
 OnBootSec=30s
 OnUnitActiveSec=60s
+AccuracySec=1s
 Persistent=true
 
 [Install]
@@ -219,6 +368,16 @@ TIMEREOF
 # more substrate gap. Surfaced 2026-05-19 via #4017.
 if [[ -f /etc/default/inngest-server ]] && grep -q '^DOPPLER_TOKEN=dp\.' /etc/default/inngest-server; then
   log "/etc/default/inngest-server exists with valid token — preserving"
+  # #6555: the units dropped `--project` and now resolve the Doppler project from this file's
+  # DOPPLER_PROJECT line. An env-file preserved from before #6555 lacks it, so append it
+  # idempotently — otherwise an in-place re-bootstrap (ci-deploy runs this bootstrap directly on
+  # the co-located web host, preserving the existing token) would start units against the
+  # `${DOPPLER_PROJECT:-soleur}` default, or trip the fail-closed backstop below and down
+  # inngest-server. Append only when absent.
+  if ! grep -qE '^DOPPLER_PROJECT=' /etc/default/inngest-server; then
+    printf 'DOPPLER_PROJECT=%s\n' "$DOPPLER_PROJECT" >> /etc/default/inngest-server
+    log "/etc/default/inngest-server: appended DOPPLER_PROJECT=$DOPPLER_PROJECT (#6555 in-place augment)"
+  fi
 else
   # Pull token from the sibling webhook-deploy env file (same Doppler scope
   # — both run as `deploy` user against the `prd` config).
@@ -239,10 +398,26 @@ else
 DOPPLER_TOKEN=$TOKEN
 DOPPLER_CONFIG_DIR=/tmp/.doppler
 DOPPLER_ENABLE_VERSION_CHECK=false
+DOPPLER_PROJECT=$DOPPLER_PROJECT
 DOPPLEREOF
   )
   chown root:deploy /etc/default/inngest-server
   chmod 0640 /etc/default/inngest-server
+fi
+
+# #6555 fail-closed backstop: every doppler-wrapped inngest unit resolves its project from
+# DOPPLER_PROJECT in /etc/default/inngest-server (--project was dropped). If the line is missing
+# or empty, `doppler run` falls back to the `${DOPPLER_PROJECT:-soleur}` default — the WRONG
+# project on the dedicated host, which would start the dedicated scheduler against the co-located
+# project. Refuse to start. On a fresh host cloud-init-inngest.yml's env-file pre-create
+# (dedicated) or the heredoc above (web) writes it; on an existing host the preserve-branch
+# augment adds it — so this should never fire in normal operation; it catches a genuinely broken
+# env-file BEFORE any unit starts. Non-empty check (AC6): a bare `DOPPLER_PROJECT=` is as wrong as
+# an absent one. NOTE it is a PRESENCE check, not a VALUE check — see the SOLEUR-DEBT marker above
+# for the wrong-but-present-value residual (not reachable via today's web-host-only ci-deploy).
+if ! grep -qE '^DOPPLER_PROJECT=[^[:space:]]' /etc/default/inngest-server 2>/dev/null; then
+  log "ERROR: /etc/default/inngest-server has no non-empty DOPPLER_PROJECT= line. The inngest units resolve their Doppler project from it (--project dropped, #6555). Refusing to start units against a possibly-wrong project — force-replace the host (fresh disk) so cloud-init re-creates the env-file with DOPPLER_PROJECT."
+  exit 1
 fi
 
 # Durable Redis (#5450, #5547 Gap 2) — install + start the queue store and
@@ -297,11 +472,10 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
     if [[ -f /tmp/cat-inngest-cutover-state.sh ]]; then
       install -m 0755 /tmp/cat-inngest-cutover-state.sh /usr/local/bin/cat-inngest-cutover-state.sh
     fi
-    # Render @@DOPPLER_PROJECT@@ in the oneshot unit (same bash-param-expansion as the
-    # server/redis/vector units); the timer carries no sentinel.
-    flip_service_content="$(cat /tmp/inngest-cutover-flip.service)"
-    flip_service_content="${flip_service_content//@@DOPPLER_PROJECT@@/$DOPPLER_PROJECT}"
-    printf '%s\n' "$flip_service_content" > /etc/systemd/system/inngest-cutover-flip.service
+    # #6555: the oneshot unit no longer carries a @@DOPPLER_PROJECT@@ sentinel (--project
+    # dropped; it resolves the project from EnvironmentFile at runtime). Install it verbatim
+    # like the timer below — no substitution round-trip that could mask a re-introduction.
+    install -m 0644 /tmp/inngest-cutover-flip.service /etc/systemd/system/inngest-cutover-flip.service
     install -m 0644 /tmp/inngest-cutover-flip.timer /etc/systemd/system/inngest-cutover-flip.timer
     DEDICATED_FLIP=1
   else
@@ -412,9 +586,14 @@ EnvironmentFile=/etc/default/inngest-server
 # @@FLIP_GUARD_EXECSTARTPRE@@ — the P1-5 arm-atomicity guard (#6178), substituted to an
 # ExecStartPre line ON THE DEDICATED HOST ONLY (empty on the co-located web host). Wrapped
 # in `doppler run` so the guard sees INNGEST_POSTGRES_URI + INNGEST_CUTOVER_FLIP; blocks a
-# prod-URI start when the flip flag is not in {armed, flipping, done}.
+# prod-URI start when the flip flag is not in {armed, flipping, done} — the guard's ACTUAL
+# allowlist, verbatim from inngest-server-flip-guard.sh's case. #6536: that is deliberately
+# NOT the full FSM (ADR-100's is armed → flipping → flushed → done), so `flushed` is omitted
+# — fail-closed + self-healing, tracked separately. Do NOT add `flushed` here to "reconcile"
+# it: this documents the guard's code, and a comment describing behaviour the code lacks is
+# the #6536 defect itself.
 @@FLIP_GUARD_EXECSTARTPRE@@
-ExecStart=/usr/bin/doppler run --project @@DOPPLER_PROJECT@@ --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
+ExecStart=/usr/bin/doppler run --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
 Restart=on-failure
 RestartSec=5
 User=deploy
@@ -476,14 +655,15 @@ unit_content="${unit_content//@@BACKEND_FLAGS@@/$BACKEND_FLAGS}"
 # missing binary. Runs under doppler run so the guard sees INNGEST_POSTGRES_URI +
 # INNGEST_CUTOVER_FLIP (P1-5).
 if [[ "${DEDICATED_FLIP:-0}" == "1" ]]; then
-  FLIP_GUARD_LINE="ExecStartPre=/usr/bin/doppler run --project ${DOPPLER_PROJECT} --config prd -- /usr/local/bin/inngest-server-flip-guard.sh"
+  FLIP_GUARD_LINE="ExecStartPre=/usr/bin/doppler run --config prd -- /usr/local/bin/inngest-server-flip-guard.sh"
 else
   FLIP_GUARD_LINE=""
 fi
 unit_content="${unit_content//@@FLIP_GUARD_EXECSTARTPRE@@/$FLIP_GUARD_LINE}"
 # #6178: same bash-parameter-expansion mechanism (NOT sed — SDK_URL contains `/`).
 unit_content="${unit_content//@@SDK_URL@@/$SDK_URL}"
-unit_content="${unit_content//@@DOPPLER_PROJECT@@/$DOPPLER_PROJECT}"
+# #6555: no @@DOPPLER_PROJECT@@ substitution — the unit dropped `--project` and resolves the
+# project from EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime.
 printf '%s\n' "$unit_content" > "$UNIT_FILE"
 
 # Record the installed version BEFORE restart so the idempotency short-circuit
@@ -535,8 +715,9 @@ log "bootstrap complete: inngest-server $INNGEST_CLI_VERSION active on 127.0.0.1
 # any future failure surfaces via the deploy-status endpoint without
 # needing SSH (permanent diagnostic kept post-pivot).
 # The sink reads BETTERSTACK_LOGS_TOKEN, Doppler-injected at ExecStart via
-# `doppler run --project @@DOPPLER_PROJECT@@ --config prd`. On the dedicated
-# arm64 host that token lives in the isolated soleur-inngest project (#6197).
+# `doppler run --config prd` (the project resolves from DOPPLER_PROJECT in the
+# EnvironmentFile, #6555). On the dedicated arm64 host that token lives in the
+# isolated soleur-inngest project (#6197).
 #
 # Idempotency: matches the inngest path — version file at
 # `/var/lib/vector/version`, sha256-verify on download, skip-install when
@@ -600,6 +781,12 @@ else
     if [[ -f /tmp/vector.toml ]]; then
       mkdir -p "$VECTOR_CONFIG_DIR" /var/lib/vector
       install -m 0644 /tmp/vector.toml "$VECTOR_CONFIG"
+      # #6396: render the shared vector.toml's @@HOST_NAME@@ sentinel to THIS host's Better
+      # Stack host_name. The inngest path pins the literal `soleur-inngest-prd` (byte-identical
+      # to pre-#6396 — all hosts multiplex into Logs source 2457081; host_name is the sole
+      # discriminator). The ungated web-host path renders the TF-injected per-host server name.
+      # Keep in lockstep with the two @@HOST_NAME@@ sites in vector.toml (tag_journald + tag_metrics).
+      sed -i 's|@@HOST_NAME@@|soleur-inngest-prd|g' "$VECTOR_CONFIG"
       chown -R deploy:deploy /var/lib/vector
       # Log the sha256 of the installed config so cat-deploy-state's
       # journal tail proves what content actually reached disk. Bitten
@@ -622,7 +809,7 @@ EnvironmentFile=/etc/default/inngest-server
 # Vector needs Doppler-injected BETTERSTACK_LOGS_TOKEN (and any other
 # secrets the config references). doppler run resolves them at
 # ExecStart time.
-ExecStart=/usr/bin/doppler run --project @@DOPPLER_PROJECT@@ --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml
+ExecStart=/usr/bin/doppler run --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml
 Restart=on-failure
 RestartSec=10
 User=deploy
@@ -640,14 +827,13 @@ TimeoutStopSec=30
 [Install]
 WantedBy=multi-user.target
 VECTOREOF
-      # #6178: render the @@DOPPLER_PROJECT@@ sentinel (same bash-param-expansion as the
-      # server/redis units; default `soleur` preserves the web host). Load-bearing for the
-      # deferred arm64-Vector follow-up: without this, when the dedicated host later sets
-      # VECTOR_CLI_*, this unit would run `doppler run --project soleur` under the scoped
-      # soleur-inngest token → FAIL (or force a token-widen that defeats AC3 isolation).
-      vector_unit_content="$(cat "$VECTOR_UNIT")"
-      vector_unit_content="${vector_unit_content//@@DOPPLER_PROJECT@@/$DOPPLER_PROJECT}"
-      printf '%s\n' "$vector_unit_content" > "$VECTOR_UNIT"
+      # #6555: the vector unit dropped `--project` and resolves the project from
+      # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime — no
+      # @@DOPPLER_PROJECT@@ sentinel remains, so the re-read/substitute/rewrite round-trip that
+      # was here is removed (the unit is already complete as written by the heredoc above). This
+      # also settles the deferred arm64-Vector concern: when the dedicated host later sets
+      # VECTOR_CLI_*, the unit resolves soleur-inngest from the env-file + scoped token, never a
+      # hardcoded `--project soleur`.
 
       systemctl daemon-reload
       # `enable --now` is a no-op when the unit is already running; the

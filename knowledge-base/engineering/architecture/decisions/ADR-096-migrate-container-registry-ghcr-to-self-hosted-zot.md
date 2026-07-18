@@ -11,8 +11,9 @@
 **Adopting.** The IaC foundations (Phase 1), dual-push (Phase 2), and the dark-launch pull-site
 flip (Phase 3) are merged. The flip is inert until the operator provisions (1.8) + backfills
 (1.9) zot and the entry gate (`zot-entry-gate.sh`) passes. This ADR flips to **accepted** after
-the Phase-5 soak (`zot-soak-6122.sh`: ≥7 days, zero ghcr-fallback, sufficient zot sample) and
-GHCR-push retirement (5.3–5.5).
+the Phase-5 soak (`zot-soak-6122.sh`: ≥7 days, zero fallback events across all four watched
+signals, sufficient zot sample — necessary but not sufficient; see the alarm-parity note below)
+and GHCR-push retirement (5.3–5.5).
 
 ## Context
 
@@ -46,6 +47,28 @@ managed registry. Then:
    follow it). zot is plain-HTTP on the private net, so a zot-pulled digest needs
    `insecure-registries` (Edge A) + cosign `--allow-insecure-registry` (Edge B); cosign
    digest-pinning is the integrity guard, not TLS.
+
+   > **Interim-GHCR pull-recovery contract (normative, #6400).** On the interim GHCR
+   > pull path (live as break-glass until the Phase-5 GHCR retirement), **`docker login`
+   > success is NOT proof of `docker pull` capability.** A credential that logs in but
+   > cannot pull — a GitHub App installation token (the exact ADR-088 limitation), or
+   > any login/pull capability split (a rotated/revoked baked snapshot that still
+   > login-succeeds) — makes login-outcome-gated recovery a **false gate**: the login
+   > passes, recovery is skipped, and the pull denies. The host therefore MUST re-fetch
+   > the `prd` GHCR credential, `docker login` again, and **retry the pull once on a
+   > `docker pull` auth-denial**, not only on a login **failure**. Implemented at the
+   > pull site (`ci-deploy.sh` `_ghcr_pull_or_recover`), fail-open (a recovery miss leaves
+   > the unchanged `image_pull_failed` terminal state), retry exactly once. This contract
+   > retires with the GHCR pull path at Phase 5.
+   >
+   > **Transient-retry co-tenant (#6525).** The same `_ghcr_pull_or_recover` gate also
+   > absorbs a **transient/network** first-attempt pull failure (timeout, connection reset,
+   > EOF, no-such-host, registry 5xx) with a bounded capped backoff
+   > (`PULL_TRANSIENT_RETRY_SLEEPS`, default 2 retries, ≤6 s/leg), emitting
+   > `recovery_stage=transient_recovered` on a save and `transient_exhausted` on a
+   > fail-closed exhaustion. It is a sibling of the auth recovery above — same one-level
+   > retry, same fail-open both-registries semantics — and **retires together with it at
+   > Phase 5** (the retirement structurally subsumes both by deleting the GHCR pull leg).
 3. **cosign (Phase 4):** unchanged trust anchor — same pinned cosign SHA, same offline
    `trusted_root.json`, same GitHub-Actions-OIDC identity regexp. Registry-agnostic (Phase-0
    proved a read-only user fetches a zot-stored `.sig` and gc does not reap it).
@@ -74,9 +97,38 @@ independent axes so it never silently gates a host:
   any zot miss (probe fail / login fail / pull fail) — a zot outage degrades latency, not
   availability, for the entire soak + break-glass period.
 - **Loud, no-SSH signal:** every fallback emits a Sentry `registry:"ghcr-fallback"` /
-  `stage:"inngest_ghcr_fallback"` event (the fallback-rate alarm pages at >3/1h); zot liveness is
-  a `betteruptime_heartbeat.registry_prd` push beat that pages if zot stops beating — before it
-  can gate a boot (TR3).
+  `stage:"inngest_ghcr_fallback"` event (the fallback-rate alarm pages on the first one).
+  **Correction (#6285):** zot liveness was assigned here to a `betteruptime_heartbeat.registry_prd`
+  push beat "that pages if zot stops beating — before it can gate a boot (TR3)". **That layer did
+  not exist:** `ZOT_HEARTBEAT_URL` (`zot-registry.tf`, the `doppler_secret.zot_heartbeat_url_prd`
+  definition) had **zero consumers** repo-wide — no pinger cron was ever written — and the resource
+  ships `paused = true`. Live evidence: 31 `zot-gate-degraded (probe_unreachable)` events over the 4
+  days to 2026-07-15, none of which paged anything. Until the pinger shipped,
+  `sentry_issue_alert.zot_mirror_fallback_rate` was the **only** zot-liveness coverage — which is why
+  its threshold being unreachable (#6285) mattered. (`paused` is under `ignore_changes`, so the live
+  pause state is not verifiable from the repo.)
+
+  **Feeder shipped (#6537, 2026-07-16 — [ADR-117](./ADR-117-executable-heartbeat-arming.md)):** the
+  layer now exists, but **not** as the web-host probe cron assumed above. It is an **on-host** systemd
+  timer shipped in the registry's own cloud-init (`zot-liveness-heartbeat.timer`), pinging only while
+  zot answers on the host's **private IP** — never loopback, because zot binds `0.0.0.0` and a
+  loopback probe answers on a host holding no private NIC (#6400's blindness). It bakes the URL via
+  `templatefile`, so `ZOT_HEARTBEAT_URL` still has zero consumers by design; that secret is reserved
+  for the off-host probe.
+
+  **NOT YET ARMED as of this edit.** The feeder reaches the host only on a fresh boot (cloud-init is
+  per-instance), so `registry_prd` stays **paused** until #6537's post-merge phase reprovisions the
+  host, measures a real beat, and *then* unpauses via a one-time API PATCH — never before (#6210).
+  Until that lands, zot liveness coverage is **unchanged** from the paragraph above. This sentence is
+  deliberately in the future tense: writing "is armed" before the beat is measured would be the same
+  species of false arming claim that #6537 exists to correct — and no static check would catch it
+  (the guard reads source `paused`, which `ignore_changes` decouples from live).
+
+  Two scoping corrections to the note above, both of which read as coverage and are not:
+  `registry_disk_prd` pings on `df` alone, so it alarms **host** death by absence but stays green
+  with zot dead; and the **consumer-perspective** probe (can a client reach zot over the private
+  net?) is still unbuilt — it remains #6438 §1. The on-host beat closes "zot dead, host alive", and
+  nothing more.
   - *CI push side (#6274):* the CI dual-push mirror step is **explicitly non-blocking**
     (`continue-on-error: true` + an `exit 0` inner shell + a bounded retry to self-heal a transient
     CF-tunnel reset) — a mirror failure degrades zot redundancy, never the release/build verdict
@@ -85,12 +137,106 @@ independent axes so it never silently gates a host:
     ⚠️ line on the Slack release message (`reusable-release.yml`; #6278 added the same ⚠️ to
     `build-inngest-bootstrap-image.yml`). The *live* fallback-rate Sentry alarm the bullet above
     references is now **provisioned in #6278** — `sentry_issue_alert.zot_mirror_fallback_rate`
-    (`issue-alerts.tf`), an `event_frequency` count > 3/1h over `filter_match="any"` across the four
-    runtime signals (`registry:{ghcr-fallback,zot-gate-degraded}`,
-    `stage:{inngest_ghcr_fallback,app_ghcr_fallback}`). It is load-bearing at the Phase-5 GHCR-push
-    retirement. (Sensitivity note: it thresholds per Sentry issue-group, not a true cross-signal
-    aggregate — see the resource comment; a `sentry_metric_alert` upgrade is deferred to #6285 until
-    a resolvable numeric notify target exists in the Sentry TF root.) Two post-cutover boot-gating
+    (`issue-alerts.tf`), an `event_frequency` count > 0/1h (fire-on-first) over `filter_match="any"`
+    across the four runtime signals (`registry:{ghcr-fallback,zot-gate-degraded}`,
+    `stage:{inngest_ghcr_fallback,app_ghcr_fallback}`). **Its threshold shipped as > 3/1h and could
+    never fire** — the count is per Sentry issue-group, `registry_pull_event` mints a fresh group per
+    deploy (the tag is in the message), so the per-group count is bounded by fleet size, not a rate;
+    #6285 corrected it to 0, the only fleet-independent setting (see the resource comment). Parity:
+    `zot-soak-6122.sh` FAILs on ≥1 event across the **same five signals** this alarm matches, pinned
+    by `sentry-zot-mirror-fallback-alert-op-contract.test.ts`. **This parity claim was FALSE from
+    #6278 until #6435:** the soak queried only `registry:"ghcr-fallback"` and
+    `stage:"inngest_ghcr_fallback"` — `registry:"zot-gate-degraded"` and `stage:"app_ghcr_fallback"`
+    were counted by nothing, so an intermittently-degraded fleet could PASS the soak. Corrected there;
+    recorded rather than silently edited, because the earlier text asserted the coverage it lacked.
+    **Scope of the corrected claim — do NOT restate this as "the gate matches the alarm" and stop:**
+    window/threshold parity is **not** pinned (the alarm is a 1h-rolling per-issue-group count; the
+    soak is a flat count over `START..now`); the soak's FAIL set covers **five of the seven KNOWN** ways
+    the fleet can end up GHCR-served. ⚠ *Known*, not total — the count went **6 → 7 by discovery inside
+    #6462** (nobody had looked at the dedicated inngest host until then), which is direct evidence the
+    enumeration is **not closed**. Treat 7 as a lower bound and the ratio as *what we can currently see*,
+    never *what exists*. For the same reason "machine-enforced" (below) means enforced against **accident**
+    — a deliberate close of #6500 with the code still GHCR-only is caught by the soak's code-corroboration
+    conjunct, but nothing defends against an 8th path nobody has found.
+
+    **Amended by #6462 — read the RATIO, not the delta.** #6462 added `stage:"app_ghcr_served"` (a
+    5th FAIL signal, covering the fresh-boot `/v2/` probe-miss path that previously emitted nothing)
+    and `stage:"app_zot"` (the missing **denominator** — a liveness beacon that makes "0 fallbacks"
+    distinguishable from "no fresh boot happened"). It also **surfaced a seventh path**. So coverage
+    moved **4-of-6 → 5-of-7**: the numerator and the denominator both rose, and the count of
+    known-uncovered paths is **unchanged at 2**. This is deliberately NOT restated as "COVERED" —
+    the passage above records that this ADR already asserted coverage it lacked once, and a reader
+    must be able to see the residual count without inferring it from "+1 signal".
+
+    The two remaining uncovered paths:
+    - **Sentry-dark** (#6437) — `ci-deploy.sh` returns early before every `zot_gate_degraded_event`
+      call site when doppler / `DOPPLER_TOKEN` / `ZOT_REGISTRY_URL` is absent: the fleet emits
+      nothing at all. Caught ONLY by the soak's insufficient-sample arm, which is why that arm must
+      keep `exit 1`.
+    - **The dedicated inngest host** (#6500, surfaced by #6462) — a **live** host
+      (`hcloud_server.inngest` is unconditional, `inngest-host.tf:181`) whose
+      `cloud-init-inngest.yml:337` hard-pins a `ghcr.io` ref with no zot path, no `/v2/` probe and
+      no fallback, and whose pull is **fail-closed** (`:349`). It reports via
+      `inngest-boot-phone-home.sh` to Better Stack, not the Sentry `stage:` schema, so every query
+      in the soak is structurally blind to it. **Task 5.3 revokes the PAT ⇒ its next fresh boot
+      401s ⇒ the host never comes up.** Unlike #6437 this residual is **machine-enforced, not
+      merely disclosed**: the soak's blocker arm reads #6500's state via `gh` and refuses `exit 0`
+      while it is OPEN. Closing #6500 is therefore an **authorization act** — see the pinned note
+      on that issue.
+
+    The soak remains **necessary but not sufficient** to authorize 5.3–5.5, and this ADR stays
+    **Adopting**.
+
+    *Debt recorded and TRACKED (#6510):* the **Sentry plane is unmodelled in C4**
+    (`hetzner -> sentry`, `webapp -> sentry`). The edge is already true on `main` — `_emit` has
+    POSTed from the boot path for the `on_err` fatals (`stage:"pull"`, `stage:"ghcr_login"`), and
+    #6462 adds a 5th call site on that same emitter rather than a new edge — so this is
+    pre-existing debt, not #6462's. It should be modelled **whole** in a docs-only PR; shipping
+    `sentry` with a single inbound edge would assert a falsehood (that the webapp does not report
+    to Sentry) where silence asserts nothing.
+
+    *Expected pages between merge and cutover:* a web-host recreate that misses the `/v2/` probe
+    now fires `zot_mirror_fallback_rate` via `app_ghcr_served`. That is **expected** and shares a
+    root cause with #6416 / #6288 — do not investigate it separately. ⚠ But do **not** mute the
+    `app_ghcr_served` issue to quiet it: unlike `ghcr-fallback` (which regroups per deploy, so a
+    mute self-expires) it is stable-grouped on a static message, so a mute is permanent and would
+    blind the dominant GHCR-served path — the exact hole #6462 closes. See the mute-safety
+    carve-out in `issue-alerts.tf`.
+    ⚠ **The soak is also not yet ENROLLED, and #6435 did not enroll it.** `sweep-followthroughs.sh`
+    enumerates `--label follow-through --state open` and reads a `soleur:followthrough` directive from
+    the issue body; #6122 carries neither, and no issue references `zot-soak-6122.sh`, so the sweeper
+    never invokes it. (It was additionally committed mode 100644 — a latent second defect, fixed in
+    #6435 and now class-guarded by `scripts/followthrough-exec-bit.test.sh`.) This is deliberate: the
+    cutover has not happened (`registry:"zot"` = 0 events/30d) and the soak's `START` is an unpinned
+    placeholder, so enrolling early would emit a daily TRANSIENT that never converges. **Enrolling the
+    soak — label + directive + a pinned `START` — is a precondition of Phase 5 that 5.3 must not
+    proceed without.** Until then the gate's verdict is not merely insufficient; it is absent. **Window — opens at task 1.8, for 3 of the 4 signals:**
+    `zot-gate-degraded` fires precisely where `ZOT_ACTIVE` stays 0 (probe_unreachable /
+    creds_absent / login_failed, `ci-deploy.sh:790/799/807`), and the two cloud-init fresh-boot
+    signals gate on `ZURL` + a `/v2/` probe with **no** `ZOT_ACTIVE` at all (`ZOT_ACTIVE` does not
+    occur in `cloud-init.yml`) — so all three go live as soon as `ZOT_REGISTRY_URL` is set in
+    Doppler `prd`, *before* the flip. Only `registry:ghcr-fallback` (`ci-deploy.sh:857`) requires
+    `ZOT_ACTIVE=1`. Note the 1.8→1.9 window (URL set, creds not yet backfilled) therefore pages on
+    `app_ghcr_fallback` as well as `zot-gate-degraded`. Each signal is additionally gated on the
+    emitting host having Doppler + `DOPPLER_TOKEN` + a resolved `SENTRY_*` prefetch
+    (`ci-deploy.sh:707,776-777`); a host missing either is Sentry-dark and reports only via
+    `logger -t ci-deploy` → Better Stack (#6437).
+    > **Amendment reference (#6512, 2026-07-17):** `ci-deploy.sh`'s `pull_image_with_fallback` grew a
+    > THIRD, last-resort tier below the zot→GHCR chain: on both-registries-fail for a same-version
+    > `web` reload it reuses the RUNNING container's local image (emitting `registry:"local-cache"`,
+    > watched by a DEDICATED `local_cache_reload_rate` alert — NOT folded into
+    > `zot_mirror_fallback_rate`, so the §5.3 retirement gate below is unaffected). A future §5.3
+    > editor should note the third tier exists but touches only the local-store rescue, not the GHCR
+    > push/pull path this task retires. See ADR-079 `(#6512)` amendment.
+    **Closes:** task 5.3 deletes the pull-site
+    fallback **branches** — three of them across two files, not one: the `ZOT_ACTIVE` branch in
+    `ci-deploy.sh` (emits `registry:"ghcr-fallback"`), plus the two fresh-boot branches in
+    `cloud-init.yml` (emitting `app_ghcr_fallback` and `inngest_ghcr_fallback`) — darkening those
+    three signals. Anchored on emit names, not line numbers: this enumeration is the claim 5.3
+    acts on, and a line-number citation into `cloud-init.yml` rots on the next insertion above it
+    (#6447 is that failure in the wild). `zot-gate-degraded`
+    survives 5.3 (gate-emitted). **Do NOT retire the alarm at 5.3 — narrow its `filters_v2` to the
+    surviving signal(s);** retiring it blinds `zot-gate-degraded`. Two post-cutover boot-gating
     shapes the degraded signal must remain loud for: a **missing** copy (crane-copy failure) AND a
     **present-but-unsigned** copy (cosign-sign succeeded-copy-then-failed-sign) — the latter is NOT a
     clean miss, since the pull side would pull the present zot copy and *bypass* the atomic GHCR

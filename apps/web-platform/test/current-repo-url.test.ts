@@ -111,3 +111,76 @@ describe("getCurrentRepoUrl (workspace read-cutover)", () => {
     expect(mockFrom).not.toHaveBeenCalledWith("users");
   });
 });
+
+// The degrade-aware variant surfaces WHY the url is null so a consumer (the
+// Workstream board accessor) can tell a transient degrade apart from an honest
+// "no repo connected". getCurrentRepoUrl stays a thin `.url` wrapper — every
+// existing consumer contract is unchanged (AC4).
+describe("readCurrentRepoUrlResult (degrade-aware variant)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveWs.mockImplementation(async (userId: string) => userId);
+  });
+
+  it("returns {url, degraded:false} for a connected repo", async () => {
+    const chain = mockQueryChain({ repo_url: "HTTPS://GitHub.com/Foo/Bar.git/" });
+    mockFrom.mockReturnValue(chain);
+    const { readCurrentRepoUrlResult } = await import("@/server/current-repo-url");
+    expect(await readCurrentRepoUrlResult("user-1")).toEqual({
+      url: "https://github.com/Foo/Bar",
+      degraded: false,
+    });
+  });
+
+  it("returns {url:null, degraded:false} for an honest no-repo (not a degrade)", async () => {
+    mockFrom.mockReturnValue(mockQueryChain({ repo_url: null }));
+    const { readCurrentRepoUrlResult } = await import("@/server/current-repo-url");
+    expect(await readCurrentRepoUrlResult("user-1")).toEqual({
+      url: null,
+      degraded: false,
+    });
+  });
+
+  it("returns {url:null, degraded:true} on a workspaces query error, mirrored at ERROR level", async () => {
+    const { reportSilentFallback, warnSilentFallback } = await import(
+      "@/server/observability"
+    );
+    mockFrom.mockReturnValue(mockQueryChain(null, { message: "boom" }));
+    const { readCurrentRepoUrlResult } = await import("@/server/current-repo-url");
+    expect(await readCurrentRepoUrlResult("user-1")).toEqual({
+      url: null,
+      degraded: true,
+    });
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "repo-scope" }),
+    );
+    expect(warnSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("returns {url:null, degraded:true} on a RuntimeAuthError, mirrored at WARN level (split preserved)", async () => {
+    const { RuntimeAuthError, getFreshTenantClient } = await import(
+      "@/lib/supabase/tenant"
+    );
+    const { reportSilentFallback, warnSilentFallback } = await import(
+      "@/server/observability"
+    );
+    vi.mocked(getFreshTenantClient).mockRejectedValueOnce(
+      new RuntimeAuthError("jwt_mint", "expired"),
+    );
+    const { readCurrentRepoUrlResult } = await import("@/server/current-repo-url");
+    expect(await readCurrentRepoUrlResult("user-1")).toEqual({
+      url: null,
+      degraded: true,
+    });
+    // WARN-vs-ERROR split preserved (ADR-059): tenant-mint is WARN, not ERROR.
+    expect(warnSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "repo-scope",
+        op: "read-current-repo-url.tenant-mint",
+      }),
+    );
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+});

@@ -89,15 +89,28 @@ jobs:
           cause="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_CAUSE=//p' | head -1)"
           detail="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_DETAIL=//p' | head -1)"
 
+          # The private-NIC stream (#6415) is an INDEPENDENT verdict, not encoded in $rc — see
+          # the checker's EXIT CONTRACT header. It rides every exit path, so it is readable even
+          # when the zot legs early-exit on a probe fault.
+          nic_verdict="$(printf '%s\n' "$out" | grep -oE 'NIC_ALARM_VERDICT=[A-Z_]+' | head -1 | cut -d= -f2 || true)"
+          nic_cause="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_CAUSE=//p' | head -1)"
+          nic_detail="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_DETAIL=//p' | head -1)"
+
           verdict_safe="$(strip_log_injection "$verdict")"
           cause_safe="$(strip_log_injection "$cause")"
           detail_safe="$(strip_log_injection "$detail")"
+          nic_verdict_safe="$(strip_log_injection "$nic_verdict")"
+          nic_cause_safe="$(strip_log_injection "$nic_cause")"
+          nic_detail_safe="$(strip_log_injection "$nic_detail")"
 
           {
             echo "exit_code=${rc}"
             echo "verdict=${verdict_safe}"
             echo "cause=${cause_safe}"
             echo "detail=${detail_safe}"
+            echo "nic_verdict=${nic_verdict_safe}"
+            echo "nic_cause=${nic_cause_safe}"
+            echo "nic_detail=${nic_detail_safe}"
           } >> "$GITHUB_OUTPUT"
 
           case "$rc" in
@@ -106,6 +119,14 @@ jobs:
             2) echo "::warning::zot restart-loop alarm TRANSIENT (probe fault / zero valid evidence) — ${detail_safe}. No issue filed; the errored Sentry check-in surfaces a persistent probe fault." ;;
             3) echo "::error::zot telemetry PRODUCER-SILENT — ${detail_safe}" ;;
             *) echo "::warning::zot restart-loop checker returned unexpected exit ${rc}: ${detail_safe}" ;;
+          esac
+
+          case "$nic_verdict_safe" in
+            GREEN)     echo "::notice::private-NIC GREEN — ${nic_detail_safe}" ;;
+            FIRE)      echo "::error::private-NIC alarm FIRE — ${nic_cause_safe}" ;;
+            ADVISORY)  echo "::warning::private-NIC self-heal observed — ${nic_cause_safe}" ;;
+            SILENT)    echo "::error::private-NIC guard went dark — ${nic_detail_safe}" ;;
+            *)         echo "::warning::private-NIC evaluation TRANSIENT — ${nic_detail_safe}. No issue filed." ;;
           esac
 
       - name: Open or comment recurrence issue (FIRE)
@@ -132,7 +153,7 @@ jobs:
             printf -- '- **Detected at:** %s\n' "$NOW"
             printf -- '- **Run log:** %s\n\n' "$RUN_URL"
             printf '### What fired\n\nScoped to the newest `boot_id`, ANY of: `exit_code=137` (OOM exit), `zot_restarts` climbing across >= 3 consecutive events (crash-loop signature), or `oom_kills_5m > 0` (journald kernel-OOM). The disk-absence heartbeat (`soleur-registry-disk-prd`) is blind to a disk-independent OOM loop — this alarm covers that gap (ADR-096, #6288/#6291).\n\n'
-            printf '### Decode table\n\n- `exit_code=137` AND `oom_kills_5m>0` -> host/kernel OOM (the box ran out of memory).\n- `oom_killed=true` -> the cgroup `--memory=7168m` cap contained it (container-scoped OOM).\n- `exit_code!=137` (non-OOM) -> read the `zot_last_err` tail in the decoded cause above.\n\n'
+            printf '### Decode table\n\n- `exit_code=137` AND `oom_kills_5m>0` -> host/kernel OOM (the box ran out of memory).\n- `oom_killed=true` -> the cgroup `--memory` cap contained it (container-scoped OOM). The cap is DERIVED from the server type and reported per-sample as `zot_memory_cap_mb` — read it from the event, do not assume 7168 (it is 3072 on a 4 GB host).\n- `exit_code!=137` (non-OOM) -> read the `zot_last_err` tail in the decoded cause above.\n\n'
             printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK --limit 50\ndoppler run -p soleur -c prd_terraform -- bash scripts/zot-restart-loop-alarm.sh\n```\n\nRemediation context: the #6288 PR body OOM decode + `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`. Escalate host size or route off the OOM hypothesis per the decoded cause.\n'
           } > "$BODY_FILE"
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
@@ -178,6 +199,148 @@ jobs:
               --label "ci/zot-telemetry-silent" --label "action-required" --label "observability" --label "domain/engineering" \
               --body-file "$BODY_FILE"
           fi
+
+      - name: Open or comment private-NIC issue (NIC FIRE)
+        if: steps.alarm.outputs.nic_verdict == 'FIRE'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CAUSE: ${{ steps.alarm.outputs.nic_cause }}
+          DETAIL: ${{ steps.alarm.outputs.nic_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/registry-private-nic] Registry host has no private NIC"
+          ISSUE_SEARCH='in:title "[ci/registry-private-nic] Registry host has no private NIC"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          gh label create "ci/registry-private-nic" --repo "$GH_REPO" \
+            --description "Standing alarm: the registry host's private NIC is absent (SOLEUR_PRIVATE_NIC)" --color "B60205" 2>/dev/null || true
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Registry host has no private NIC\n\n'
+            printf -- '- **Decoded cause:** %s\n' "$CAUSE"
+            printf -- '- **Detail:** %s\n' "$DETAIL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### Why this matters\n\nThe host holds no `10.0.1.30`, so the fleet'"'"'s PRIMARY image-pull path is unreachable. Deploys still succeed via the ADR-096 GHCR atomic fallback — which is exactly why this is dangerous: it is invisible from the deploy pipeline. This is #6400, where the same state ran for ~14 days because a NIC-less host keeps public egress and every other signal stayed green.\n\n'
+            printf '### Decode table\n\n- `imds_rc!=0` -> H1: the metadata service was unreachable. The guard will NOT reboot without corroboration.\n- `imds_rc=0 && imds_nets=0` -> H2: the `hcloud_server_network` additive online-attach had not landed when the guest configured its network. Usually self-heals on a later tick.\n- `imds_nets>0 && converged_by!=already` -> the attach landed but the guest never configured it. If `reboot_count` is at the cap (2) the guard is out of budget: this is terminal.\n\n'
+            printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_PRIVATE_NIC --limit 50\ndoppler run -p soleur -c prd_terraform -- bash scripts/zot-restart-loop-alarm.sh\n```\n\n'
+            printf '### Remediation (no SSH)\n\nThe host is ForceNew and has no SSH provisioner, so there is no in-place fix — re-dispatch. **Check the whole pull path FIRST:** in #6400 the GHCR fallback was ALSO degraded, which is what turned a registry outage into a total deploy outage, so firing the replace blind can leave the pull path with no source at all. Since #6512 a web reload can also survive on the host-local image cache (`registry=local-cache`, both registries dead) — a host silently on local-cache reads CLEAN on a ghcr-fallback-only check, so grep BOTH signals or you fire the replace blind on an already-doubly-degraded pull path.\n\n```\n# 1. Is the pull path healthy? (GHCR fallback OR local-cache reuse; sustained hits on EITHER = degraded => do NOT fire yet)\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep ghcr-fallback --grep local-cache --limit 20\n\n# 2. Only if step 1 is clean, re-provision (reason is a REQUIRED dispatch input):\ngh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason=\"private NIC absent (this issue)\"\n```\n\nSee ADR-115.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Private NIC still absent at ${NOW} — ${CAUSE}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/registry-private-nic" --label "action-required" --label "observability" --label "domain/engineering" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Open or comment private-NIC self-heal advisory (NIC ADVISORY)
+        if: steps.alarm.outputs.nic_verdict == 'ADVISORY'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CAUSE: ${{ steps.alarm.outputs.nic_cause }}
+          DETAIL: ${{ steps.alarm.outputs.nic_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/registry-private-nic] Registry private-NIC boot race self-healed"
+          ISSUE_SEARCH='in:title "[ci/registry-private-nic] Registry private-NIC boot race self-healed"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          gh label create "ci/registry-private-nic" --repo "$GH_REPO" \
+            --description "Standing alarm: the registry host's private NIC is absent (SOLEUR_PRIVATE_NIC)" --color "B60205" 2>/dev/null || true
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Registry private-NIC boot race self-healed\n\n'
+            printf -- '- **What happened:** %s\n' "$CAUSE"
+            printf -- '- **Detail:** %s\n' "$DETAIL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### Why this is filed at all (serving is FINE)\n\nA successful self-heal emits `nic_ok=true`, so the terminal alarm cannot see it. Without this advisory the boot race would self-heal silently forever and never be reported — a LOST ceiling, because today the race at least eventually surfaces as an outage (#6400). A production host rebooting itself is a STANDING signal, not a one-time post-merge read.\n\n'
+            printf '### What it confirms\n\nThis is the empirical H2 verdict: `hcloud_server_network` is an ADDITIVE ONLINE ATTACH that landed after the guest configured its network. No terraform ordering can fix that (the attach needs a created server, and a created server is already booting) — which is why the convergence lives on the host. See ADR-115.\n\n'
+            printf '### Action\n\nNone urgent. Triage: if `reboot_count` climbs toward the cap (2) across boots, the race is worsening and the bounded wait may need lengthening. Reproduce (no SSH):\n\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_PRIVATE_NIC --limit 50\n```\n'
+          } > "$BODY_FILE"
+          # CREATE-ONLY — deliberately NOT create-or-comment like the FIRE/SILENT steps.
+          # reboot_count lives on the ROOT DISK, so once a host self-heals it emits reboot_count>0
+          # on EVERY subsequent tick for the life of that instance. A create-or-comment shape would
+          # therefore post ~48 comments/day, forever, on an issue whose own body says "Action: None
+          # urgent" — and the operator would mute `ci/registry-private-nic`, which ALSO carries the
+          # terminal FIRE. The standing signal is the OPEN ISSUE, not a comment stream.
+          #
+          # Lifecycle: opens once per host instance that self-heals; the NIC-GREEN auto-close
+          # closes it when a replace gives the host a fresh root disk (=> reboot_count=0). That is
+          # the correct span for "this instance experienced the race".
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            echo "::notice::private-NIC self-heal advisory already open as #${EXISTING} — not commenting (create-only; the open issue IS the standing signal)."
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/registry-private-nic" --label "observability" --label "domain/engineering" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Open or comment private-NIC guard silence issue (NIC SILENT)
+        if: steps.alarm.outputs.nic_verdict == 'SILENT'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CAUSE: ${{ steps.alarm.outputs.nic_cause }}
+          DETAIL: ${{ steps.alarm.outputs.nic_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/registry-private-nic] Private-NIC guard went dark"
+          ISSUE_SEARCH='in:title "[ci/registry-private-nic] Private-NIC guard went dark"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          gh label create "ci/registry-private-nic" --repo "$GH_REPO" \
+            --description "Standing alarm: the registry host's private NIC is absent (SOLEUR_PRIVATE_NIC)" --color "B60205" 2>/dev/null || true
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Private-NIC guard went dark\n\n'
+            printf -- '- **Detail:** %s\n' "$DETAIL"
+            printf -- '- **Likely cause:** %s\n' "$CAUSE"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### Why this pages\n\nBetter Stack is reachable and had `SOLEUR_PRIVATE_NIC` rows in the last 24h, but NONE in the recent 3h window. The private-NIC signal is now UNOBSERVABLE — the exact GREEN-while-broken blind spot #6415 exists to kill, resurfacing one layer up.\n\nThis is a DEDICATED absence probe. The `SOLEUR_ZOT_DISK` producer-silence branch cannot cover it: if the NIC guard dies while the disk heartbeat keeps emitting, that branch never even evaluates and the run reads GREEN.\n\n'
+            printf '### Remediation (no SSH)\n\n1. Confirm the gap:\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_PRIVATE_NIC --limit 5\n```\n2. Most likely: the guard was never deployed (the host predates #6415), or its install failed, or the `BETTERSTACK_LOGS_TOKEN` (isolated `soleur-registry/prd`) rotated. A re-dispatch re-injects the token and reinstalls the guard (`reason` is a REQUIRED input):\n```\ngh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason=\"private-NIC guard silent (this issue)\"\n```\nSee `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Guard still dark at ${NOW} — ${DETAIL}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/registry-private-nic" --label "action-required" --label "observability" --label "domain/engineering" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Auto-close stale private-NIC issues (NIC GREEN)
+        if: steps.alarm.outputs.nic_verdict == 'GREEN'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search strings are intentional
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # Close EACH class with its OWN-title search — never a union search across the three
+          # titles (a union close-search would close the wrong issue; #5562 plan R5 / union-AC trap).
+          # Keyed on nic_verdict, NOT exit_code: zot and the NIC are independent verdicts, so a
+          # zot-GREEN run must never close a live NIC issue (and vice versa).
+          for T in \
+            '[ci/registry-private-nic] Registry host has no private NIC' \
+            '[ci/registry-private-nic] Registry private-NIC boot race self-healed' \
+            '[ci/registry-private-nic] Private-NIC guard went dark'; do
+            N=$(gh issue list --repo "$GH_REPO" --state open --search "in:title \"$T\"" --json number --jq '.[0].number // empty')
+            if [[ -n "$N" ]]; then
+              gh issue close "$N" --repo "$GH_REPO" --comment "Registry private NIC healthy again at ${NOW} (newest boot: nic_ok=true, converged_by=already, reboot_count=0). Run: ${RUN_URL}"
+            fi
+          done
 
       - name: Auto-close stale issues (GREEN)
         if: steps.alarm.outputs.exit_code == '0'

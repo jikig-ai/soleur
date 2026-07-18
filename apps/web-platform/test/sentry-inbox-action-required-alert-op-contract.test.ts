@@ -34,19 +34,14 @@ describe("inbox-action-required-notify-failure alert op contract", () => {
     expect(tf).toContain(`value = "${OP_TAG}"`);
   });
 
+  // apply-sentry-infra.yml plans the sentry root FULL (no `-target=` allowlist),
+  // so the plan universe is `state UNION config`: declaring the resource here IS
+  // what applies it, and deleting this block is what destroys the live rule.
+  // Declaration is therefore the whole apply contract — there is no second
+  // "wired into the apply list" condition left to assert.
   it("issue-alerts.tf declares the inbox_action_required_notify_failure resource", () => {
     expect(tf).toContain(
       'resource "sentry_issue_alert" "inbox_action_required_notify_failure"',
-    );
-  });
-
-  it("the -target wiring guards that the apply workflow creates the rule", () => {
-    const wf = readFileSync(
-      join(here, "../../../.github/workflows/apply-sentry-infra.yml"),
-      "utf8",
-    );
-    expect(wf).toContain(
-      "-target=sentry_issue_alert.inbox_action_required_notify_failure",
     );
   });
 });

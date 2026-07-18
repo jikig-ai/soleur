@@ -50,6 +50,7 @@ describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-cap-1",
       userId: "u1",
       userMessage: "hi",
@@ -76,6 +77,7 @@ describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-cap-2",
       userId: "u1",
       userMessage: "hi",
@@ -108,6 +110,7 @@ describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-cap-warm",
       userId: "u1",
       userMessage: "hi",
@@ -137,6 +140,7 @@ describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-cap-rebind",
       userId: "u1",
       userMessage: "hi",
@@ -164,6 +168,7 @@ describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-cap-3",
       userId: "u1",
       userMessage: "hi",

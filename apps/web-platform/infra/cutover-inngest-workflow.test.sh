@@ -119,7 +119,10 @@ assert "quiesce gate withholds the SEAM + exits non-zero on survivors" "grep -qE
 assert "execute prints the operator SEAM only after the gate" "grep -qE 'SEAM . operator maintenance-window steps' '$WF'"
 # The SEAM must gate the flip arm on Better Stack, NOT a host read (P0-2).
 assert "SEAM confirms the flip via Better Stack, not a host cat (P0-2)" "grep -qE 'Better Stack' '$WF'"
-assert "SEAM arms the Doppler flip (INNGEST_CUTOVER_FLIP=armed)" "grep -qE 'INNGEST_CUTOVER_FLIP=armed' '$WF'"
+# #6369 — the 2.2b/2.3 arm-flip is no longer a manual Doppler write in the SEAM; the SEAM now
+# directs the operator to the no-SSH op=arm dispatch (the armed write itself is asserted in the
+# op=arm case body section below).
+assert "SEAM directs the arm-flip to the no-SSH op=arm dispatch (#6369)" "grep -qE 'dispatch the no-SSH op=arm verb|op=arm' '$WF'"
 
 # D.3 / AC-VERIFY — op=verify: precondition registry NON-empty (2.4 landed,
 # P1-9/P2-17), 2.6 via the doublefire hook, RunsFilterV2 + STARTED_AT bucketing,
@@ -130,11 +133,38 @@ assert "verify buckets by floor(startedAt / cron_period) (no scheduled_tick)" "g
 assert "verify auto-emits the missed-tick trigger-cron list (P2-16)" "grep -qE 'soleur:trigger-cron' '$WF'"
 assert "workflow contains NO 'scheduled_tick' anywhere (AC-VERIFY)" "! grep -qE 'scheduled_tick' '$WF'"
 
-# D.6 / AC-ROLLBACK (P1-13) — op=rollback re-enables inngest across the host-set
-# (reverse of 2.2) and confirms via inventory.
-assert "rollback re-enables inngest on the host-set (restart fan-out)" "grep -qE 'restart inngest _ latest' '$WF'"
-assert "rollback confirms via the inventory hook" "grep -qE 'BASE/inngest-inventory\"' '$WF'"
+# D.6 / AC-ROLLBACK (P1-13) — op=rollback re-enables inngest across the host-set via a
+# SINGLE no-SSH `enable inngest _ _` fan-out (enable+start+verify in one flock-held handler,
+# #6178) and POLLS deploy-status for the `enabled` verdict — NOT a two-POST enable+restart
+# (flock race, arch P1-1) and NOT a bare inventory probe.
+assert "rollback issues a SINGLE 'enable inngest _ _' fan-out (#6178)" "grep -qE 'enable inngest _ _' '$WF'"
+assert "rollback does NOT POST 'restart inngest _ latest' (no two-POST flock race)" "! grep -qE 'restart inngest _ latest' '$WF'"
+assert "rollback POLLS deploy-status for the enabled verdict" "grep -qE 'reason=enabled' '$WF'"
+assert "rollback does NOT print an operator systemctl re-enable SEAM (#6178)" "! grep -qE 'systemctl enable inngest-server.service' '$WF'"
 assert "rollback iterates the SAME \$CUTOVER_HOSTS set (P1-13)" "grep -qE 'reverse of 2.2 quiesce' '$WF'"
+
+# #6178 — op=quiesce-web: the no-SSH stop+disable of the co-located web scheduler that
+# closes the cutover 2.2 gap (operators have no SSH). It is a constrained choice + a real
+# case arm; POSTs `quiesce inngest _ _` + peers to /hooks/deploy and POLLS deploy-status for
+# the terminal `quiesced` verdict (NOT a bare inventory probe raced against the async stop).
+assert "choice includes quiesce-web (#6178)" "grep -qE '^[[:space:]]+-[[:space:]]*quiesce-web\$' '$WF'"
+assert "case arm: quiesce-web)" "grep -qE '^[[:space:]]+quiesce-web\\)' '$WF'"
+assert "quiesce-web POSTs 'quiesce inngest _ _' with peers fan-out" "grep -qE '\"command\":\"quiesce inngest _ _\",\"peers\"' '$WF'"
+assert "quiesce-web POLLS deploy-status for the quiesced verdict (not a bare inventory probe)" "grep -qE 'reason=quiesced' '$WF'"
+assert "quiesce-web freshness-anchors the poll (FRESH_FLOOR)" "grep -qE 'FRESH_FLOOR=\\\$\\(\\(TRIGGER_TS - 60\\)\\)' '$WF'"
+# 2.2 HARD GATE failure remediation now points at op=quiesce-web, NOT an operator host-shell step.
+assert "2.2 gate failure remediation references op=quiesce-web (no-SSH)" "grep -qE 'op=quiesce-web' '$WF'"
+assert "2.2 gate failure remediation no longer instructs an operator 'systemctl disable' host step" "! grep -qE 'stop \\+ systemctl disable inngest\\) on the LB-reachable host' '$WF'"
+# quiesce-web's own failure verdicts each carry a no-SSH forward action (spec-flow F2).
+assert "quiesce-web failure verdicts print a no-SSH forward action (Do NOT SSH)" "grep -qE 'Do NOT SSH the host' '$WF'"
+
+# #6178 Fix-1 (observability P2) — BOTH deploy-status poll loops (quiesce-web + rollback)
+# FAST-FAIL on a TERMINAL-but-unrecognized reason (exit_code != -1 yet matched no enumerated
+# case branch) instead of polling to the full timeout. Without this a reason rename silently
+# degrades to a $((MAX_POLLS * POLL_INTERVAL))s timeout with no actionable error. Assert both
+# loops carry the fast-fail (count == 2, one per loop).
+UNREC_N=$(grep -cE '::error::unrecognized terminal reason' "$WF" || true)
+assert "both poll loops fast-fail on an unrecognized terminal reason (quiesce + rollback)" "[[ '$UNREC_N' -eq 2 ]]"
 
 # AC-NOSSH — no ssh in any new command.
 assert "no 'ssh ' command anywhere in the workflow (AC-NOSSH)" "! grep -qE '(^|[^[:alnum:]])ssh[[:space:]]' '$WF'"
@@ -271,6 +301,127 @@ assert "retry fails CLOSED (still-non-200 after 2 attempts exits 1)" "grep -qE '
 assert "DI-C3 execute inventory gate is NOT wrapped in a retry (single-shot)" "! grep -B2 'BASE/inngest-inventory\" || echo \"000\")' '$WF' | grep -q 'exec-inv.*for attempt'"
 # The registry_empty VERDICT (registry_empty != false) is downstream of the retry loop, un-retried.
 assert "registry_empty verdict is a separate downstream check (not inside the retry loop)" "grep -qE 'verify precondition FAILED' '$WF'"
+
+# ============================================================================
+# #6369 — op=arm (the no-SSH arm-flip) + op=rollback reverse flip-write. op=arm is
+# FORWARD-ONLY (writes `armed`); the reverse `rollback` write lives in op=rollback
+# (ADR-100 Decision 6b forward/reverse symmetry). AC-NOBODY: no source value is EVER echoed,
+# every value ::add-mask::'d + written via stdin; the FSM is confirmed via Better Stack.
+# Both verbs gate on the inngest-cutover environment (required-reviewer) + a conditional
+# DOPPLER_TOKEN_INNGEST_ARM. Extract each case body to a temp file and grep it — asserting
+# the awk range is NON-EMPTY first (security F6 — else every range grep passes vacuously).
+# ============================================================================
+assert "choice includes arm (#6369)" "grep -qE '^[[:space:]]+-[[:space:]]*arm\$' '$WF'"
+assert "case arm: arm)" "grep -qE '^[[:space:]]+arm\\)' '$WF'"
+
+ARM_FILE="$(mktemp)"; ROLLBACK_FILE="$(mktemp)"
+awk '/^            arm\)$/,/^              ;;$/' "$WF" > "$ARM_FILE"
+awk '/^            rollback\)$/,/^              ;;$/' "$WF" > "$ROLLBACK_FILE"
+ARM_N=$(wc -l < "$ARM_FILE"); ROLLBACK_N=$(wc -l < "$ROLLBACK_FILE")
+# F6 non-vacuity: the arm) awk range must be a real block before any range grep is trusted.
+assert "arm) case body is non-empty (>20 lines — F6 non-vacuity)" "[[ '$ARM_N' -gt 20 ]]"
+assert "rollback) case body is non-empty (F6 non-vacuity)" "[[ '$ROLLBACK_N' -gt 20 ]]"
+
+# AC6 (AC-NOBODY): no source value is echoed; ::add-mask:: per value; writes via stdin, never argv.
+assert "arm) echoes NO source value (AC6/AC-NOBODY)" "! grep -qE 'echo[^\"]*\\\$\\{?(HB|PG|PG_DARK|POSTGRES|HEARTBEAT)' '$ARM_FILE'"
+assert "arm) does NOT dump raw Better Stack rows (no 'jq .' — C6 mask bypass)" "! grep -qE 'jq \\.($|[^a-zA-Z_])' '$ARM_FILE'"
+assert "arm) has no 'set -x' (would echo masked values — C8)" "! grep -qE 'set -x' '$ARM_FILE'"
+ARM_MASK_N=$(grep -cE '::add-mask::' "$ARM_FILE" || true)
+assert "arm) masks EACH source value (>=3 ::add-mask:: — PG/HB/PG_DARK, C8/F7)" "[[ '$ARM_MASK_N' -ge 3 ]]"
+# stdin form: >=3 `doppler secrets set INNGEST_*` writes, each fed by a `printf` pipe (never NAME=value argv).
+ARM_SET_N=$(grep -cE 'doppler secrets set INNGEST_' "$ARM_FILE" || true)
+ARM_PRINTF_N=$(grep -cE "printf '%s'" "$ARM_FILE" || true)
+assert "arm) performs >=3 doppler secrets set INNGEST_* writes" "[[ '$ARM_SET_N' -ge 3 ]]"
+assert "arm) each write is stdin-fed (>=3 printf pipes — AC6 no-argv)" "[[ '$ARM_PRINTF_N' -ge 3 ]]"
+assert "arm) NEVER writes a secret on argv (no 'secrets set INNGEST_*=value')" "! grep -qE 'secrets set INNGEST_[A-Z_]+=' '$ARM_FILE'"
+assert "arm) writes target the ISOLATED soleur-inngest/prd config" "grep -qE 'doppler secrets set INNGEST_POSTGRES_URI -p soleur-inngest -c prd' '$ARM_FILE'"
+# Source reads are read-through from prd_terraform (CTO 6b): no -p/-c on the source get, no seed name.
+assert "arm) reads POSTGRES_URI read-through from prd_terraform (no -p/-c on the source get — CTO 6b)" "grep -qE 'doppler secrets get INNGEST_POSTGRES_URI --plain' '$ARM_FILE'"
+assert "arm) does NOT reference a dropped operator seed (INNGEST_POSTGRES_URI_PROD)" "! grep -qE 'INNGEST_POSTGRES_URI_PROD' '$ARM_FILE'"
+
+# AC7 write order: armed written AFTER both URIs.
+PG_SET_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
+FLIP_SET_LN=$(grep -nE 'secrets set INNGEST_CUTOVER_FLIP ' "$ARM_FILE" | head -1 | cut -d: -f1)
+assert "arm) writes POSTGRES_URI BEFORE INNGEST_CUTOVER_FLIP=armed (write order AC7)" "[[ -n '$PG_SET_LN' && -n '$FLIP_SET_LN' && '$PG_SET_LN' -lt '$FLIP_SET_LN' ]]"
+
+# AC8 / G3 positive prod-URI assertion + :6543 reject; G1 pre-write FSM-state guard (DI-C2).
+assert "arm) G3 rejects the :6543 transaction pooler" "grep -qF ':6543' '$ARM_FILE'"
+assert "arm) G3 requires the :5432 session pooler" "grep -qF ':5432' '$ARM_FILE'"
+assert "arm) G3 refuses when prod == dark (PG == PG_DARK)" "grep -qE 'PG.*==.*PG_DARK' '$ARM_FILE'"
+assert "arm) G1 reads the current INNGEST_CUTOVER_FLIP from soleur-inngest (pre-write state guard)" "grep -qE 'doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest' '$ARM_FILE'"
+assert "arm) G1 refuses re-arm over a non-safe FSM state (DI-C2 REFUSING)" "grep -qE 'G1 REFUSING' '$ARM_FILE'"
+
+# AC9 FSM confirm — the confirm logic is the SHARED confirm_flip_state() function (used by op=arm G6
+# AND op=rollback). Extract it and assert it keys on the emitter's `flag` field, NOT `reason`: the
+# on-host emitter (apps/web-platform/infra/inngest-cutover-flip.sh `emit_state exit_code dbsize reason
+# flag`) puts the TERMINAL STATE in `flag` (done/aborted/rolled-back) and a CAUSE in `reason` (which
+# NEVER equals done/aborted). A confirm keyed on `"reason":"done"` would match no row → every op=arm
+# times out. This block is the cross-file parity that stops that silent drift.
+CONFIRM_FILE="$(mktemp)"
+awk '/^          confirm_flip_state\(\) \{$/,/^          \}$/' "$WF" > "$CONFIRM_FILE"
+CONFIRM_N=$(wc -l < "$CONFIRM_FILE")
+assert "confirm_flip_state() is defined + non-empty (F6 non-vacuity)" "[[ '$CONFIRM_N' -gt 5 ]]"
+assert "confirm keys on the emitter FLAG field (\"flag\":\"done\" + exit_code:0 — NOT reason)" "grep -qF '\"flag\":\"done\"' '$CONFIRM_FILE' && grep -qF '\"exit_code\":0' '$CONFIRM_FILE'"
+assert "confirm does NOT key on \"reason\":\"done\" (the field-mismatch bug the review caught)" "! grep -qF '\"reason\":\"done\"' '$CONFIRM_FILE'"
+assert "confirm detects the aborted terminal flag (fail-loud path)" "grep -qF '\"flag\":\"aborted\"' '$CONFIRM_FILE'"
+assert "confirm detects the rolled-back terminal flag" "grep -qF '\"flag\":\"rolled-back\"' '$CONFIRM_FILE'"
+assert "confirm reads via betterstack-query.sh (no-SSH), never a deploy-status poll" "grep -qE 'betterstack-query.sh --since' '$CONFIRM_FILE' && ! grep -qE 'deploy-status' '$CONFIRM_FILE'"
+assert "confirm never dumps a raw Better Stack row (no 'jq .')" "! grep -qE 'jq \\.($|[^a-zA-Z_])' '$CONFIRM_FILE'"
+assert "confirm distinguishes a query-path failure from FSM-not-terminal (::warning:: CONFIRM PATH)" "grep -qE 'CONFIRM PATH' '$CONFIRM_FILE'"
+# Emitter parity: the on-host emitter MUST actually stamp the flag states the confirm greps for.
+EMITTER="$REPO_ROOT/apps/web-platform/infra/inngest-cutover-flip.sh"
+assert "emitter stamps flag 'done' (the confirm's success key) + an aborted path" "grep -qF 'flag_set \"done\"' '$EMITTER' && grep -qF 'aborted' '$EMITTER'"
+
+# op=arm calls the shared confirm with a SPACE-form timestamp betterstack-query.sh accepts (NOT the ISO
+# T/Z form its ClickHouse cast rejects — the P2 that would false-negative every confirm).
+assert "arm) calls confirm_flip_state (AC9)" "grep -qF 'confirm_flip_state \"\$ARM_ISO\"' '$ARM_FILE'"
+assert "arm) time-bounds via a SPACE-form timestamp, no ISO T/Z (the --since format P2)" "grep -qF \"+'%Y-%m-%d %H:%M:%S'\" '$ARM_FILE' && ! grep -qE 'ARM_ISO=.*T%H.*Z' '$ARM_FILE'"
+assert "arm) branches on the confirm result (done vs aborted/rolled-back vs timeout, fail-loud)" "grep -qF 'G6_STATE' '$ARM_FILE'"
+assert "arm) G3 pins the prod project-ref (stronger than a bare 'supabase' substring)" "grep -qF 'pigsfuxruiopinouvjwy' '$ARM_FILE'"
+assert "arm) G1 fail-CLOSED: probes config readability (DOPPLER_PROJECT) before trusting an empty flip" "grep -qF 'config-readability probe failed' '$ARM_FILE' && grep -qE 'doppler secrets get DOPPLER_PROJECT -p soleur-inngest' '$ARM_FILE'"
+assert "arm) G3 fail-CLOSED on an empty PG_DARK read (no silent equality-pass)" "grep -qF 'could not read the current dark INNGEST_POSTGRES_URI' '$ARM_FILE'"
+assert "arm) adds NO deploy-status poll (Better Stack read only — QMAX/RMAX untouched, AC9)" "! grep -qE 'deploy-status' '$ARM_FILE'"
+
+# AC13 no ssh in the arm block.
+assert "arm) contains no ssh (AC-NOSSH/AC13)" "! grep -qE '(^|[^[:alnum:]])ssh[[:space:]]' '$ARM_FILE'"
+
+# D5/C4 environment required-reviewer gate + C5 conditional token env (repo-level, not in the case body).
+assert "job gates op=arm/op=rollback on the inngest-cutover environment (D5/C4)" "grep -qE \"environment: .*inputs.op == 'arm'.*inputs.op == 'rollback'.*inngest-cutover\" '$WF'"
+assert "DOPPLER_TOKEN_INNGEST_ARM injected conditionally (empty for other ops — C5)" "grep -qE \"DOPPLER_TOKEN_INNGEST_ARM: .*inputs.op == 'arm'.*secrets.DOPPLER_TOKEN_INNGEST_ARM\" '$WF'"
+
+# D1/C1 — op=rollback owns the reverse flip write; op=arm stays FORWARD-ONLY.
+assert "rollback writes INNGEST_CUTOVER_FLIP=rollback via stdin to soleur-inngest/prd (D1/C1)" "grep -qE \"printf '%s' 'rollback'\" '$ROLLBACK_FILE' && grep -qE 'doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd' '$ROLLBACK_FILE'"
+assert "rollback G1' writes only when the forward flip is armed/progressed (armed/flipping/flushed/done)" "grep -qE 'armed\\|flipping\\|flushed\\|done' '$ROLLBACK_FILE'"
+assert "rollback calls the shared confirm BLOCKING before web re-enable" "grep -qF 'confirm_flip_state \"\$RB_ISO\"' '$ROLLBACK_FILE'"
+# ARCH P1 fix: Half (B) web re-enable runs UNCONDITIONALLY for a non-forward state (aborted/unset) —
+# the documented P0-3 recovery. Assert the rollback body reaches the web re-enable AND the non-forward
+# branch proceeds there (no exit 1 in that branch).
+assert "rollback reaches Half (B) web re-enable" "grep -qE 're-enabling inngest across host-set' '$ROLLBACK_FILE'"
+assert "rollback non-forward branch (aborted/unset) proceeds to Half B — P0-3 recovery, no exit 1" "grep -qF 'documented P0-3 aborted-state recovery; proceeding to the web re-enable' '$ROLLBACK_FILE'"
+assert "rollback withholds web re-enable on an unconfirmed rolled-back (no double-fire)" "grep -qF 'WITHHOLDING the web re-enable' '$ROLLBACK_FILE'"
+assert "rollback never re-writes POSTGRES_URI/HEARTBEAT (reverse writes ONLY the flip value)" "! grep -qE 'secrets set INNGEST_(POSTGRES_URI|HEARTBEAT_URL)' '$ROLLBACK_FILE'"
+assert "op=arm is FORWARD-ONLY: the arm block never writes the reverse flip 'rollback'" "! grep -qE \"printf '%s' 'rollback'\" '$ARM_FILE'"
+
+# #6552 — op=rollback DELETES the armed INNGEST_HEARTBEAT_URL (inverse of op=arm G4, :760) so a
+# rolled-back dark host stops being a SECOND pusher on the shared Better Stack heartbeat monitor.
+# The delete MUST be UNCONDITIONAL: op=arm writes the URL BEFORE the FSM runs, so it persists in
+# aborted / partial-arm / re-dispatch states that the forward-state inner case arm skips. This suite
+# is static, so "runs on an aborted-state rollback" is proven structurally: the delete lives in the
+# Half-B tail (after the inner Half-A esac) and NOT inside the armed|flipping|flushed|done) arm.
+FWD_ARM_FILE="$(mktemp)"
+awk '/^[[:space:]]+armed\|flipping\|flushed\|done\)$/,/^[[:space:]]+;;$/' "$WF" > "$FWD_ARM_FILE"
+FWD_ARM_N=$(wc -l < "$FWD_ARM_FILE" | tr -d '[:space:]')
+TAIL_FILE="$(mktemp)"
+awk '/^[[:space:]]*esac$/,0' "$ROLLBACK_FILE" > "$TAIL_FILE"
+TAIL_N=$(wc -l < "$TAIL_FILE" | tr -d '[:space:]')
+assert "#6552 rollback DELETEs INNGEST_HEARTBEAT_URL from soleur-inngest/prd (inverse of arm G4)" "grep -qE 'doppler secrets delete INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd' '$ROLLBACK_FILE'"
+assert "#6552 delete is value-silent (--yes + stdout redirected)" "grep -qE 'doppler secrets delete INNGEST_HEARTBEAT_URL.*--yes.*>/dev/null' '$ROLLBACK_FILE'"
+assert "#6552 forward-state inner arm extraction is non-vacuous (F6)" "[[ '$FWD_ARM_N' -gt 3 ]]"
+assert "#6552 delete is UNCONDITIONAL — NOT nested in the armed|flipping|flushed|done) case arm" "! grep -qE 'doppler secrets delete INNGEST_HEARTBEAT_URL' '$FWD_ARM_FILE'"
+assert "#6552 after-inner-esac tail is non-vacuous" "[[ '$TAIL_N' -gt 3 ]]"
+assert "#6552 delete runs in the unconditional Half-B tail (after inner esac) — reached for aborted/unset/re-dispatch" "grep -qE 'doppler secrets delete INNGEST_HEARTBEAT_URL' '$TAIL_FILE'"
+
+rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

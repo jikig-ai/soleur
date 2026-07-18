@@ -29,20 +29,23 @@ PrivateTmp=true
 # initial `printf >` redirect actually failed but chown still ran).
 # Surfaced 2026-05-19 via #4017 — PR-F's inngest substrate was never installed
 # in production because the webhook deploy of the bootstrap image failed at
-# the chown step inside this sandbox. The /var/lib/inngest entry is required
-# because mkdir+chown for SQLite's data dir runs ahead of the systemd unit's
-# own ReadWritePaths.
+# the chown step inside this sandbox. /var/lib/inngest is `-`-optional (see the
+# `-` prefix note below): when web_colocate_inngest is on, inngest-bootstrap's
+# mkdir+chown for SQLite's data dir runs ahead of this unit's own ReadWritePaths.
 # /etc/vector + /var/lib/vector added 2026-05-21 (TR9 PR-5): inngest-bootstrap.sh
 # now also installs Vector (observability shipper) alongside the inngest CLI;
 # its config + state dirs need bootstrap-time write access from inside this
 # namespace. Surfaced via v1.1.1 deploy diagnostic capture
 # (reason="mkdir: cannot create directory /etc/vector: Read-only file system").
-# `-` prefix on /var/lib/vector + /etc/vector marks them optional:
-# systemd silently ignores the path if absent, instead of refusing to set up
-# the mount namespace (which on prior PR #4257 took webhook.service down
-# entirely until the dirs were created). Once inngest-bootstrap.sh creates
-# them on first v1.1.x deploy, they become real ReadWritePaths.
-ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook /var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
+# `-` prefix on /var/lib/inngest + /var/lib/vector + /etc/vector marks them
+# optional: systemd silently ignores the path if absent, instead of refusing to
+# set up the mount namespace (which on prior PR #4257 took webhook.service down
+# entirely until the dirs were created). Once inngest-bootstrap.sh creates them
+# (only when web_colocate_inngest is on), they become real ReadWritePaths.
+# /var/lib/inngest got the `-` in #6090: web_colocate_inngest=false (default)
+# gates off the dir-creator, so a mandatory token 226/NAMESPACE'd fresh web-2
+# boots (:9000 never bound -> ok_peer_fanout_degraded).
+ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook -/var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
 ReadOnlyPaths=/etc/default/webhook-deploy
 TimeoutStopSec=180
 

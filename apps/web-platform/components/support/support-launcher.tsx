@@ -13,21 +13,29 @@ import { useSupportChat } from "./use-support-chat";
 
 export function SupportLauncher() {
   const enabled = useOptionalFeatureFlag("support");
+  // `support-live` gates the REAL Concierge backend (SSE). Default OFF → the
+  // bubble shows the canned interface-preview reply (no network). Flipped ON only
+  // after the Phase-4 product-help corpus + search-root restriction are validated
+  // live (else the support agent could read the internal knowledge base).
+  const live = useOptionalFeatureFlag("support-live");
   const [open, setOpen] = useState(false);
-  const { messages, send } = useSupportChat();
+  const { messages, send, abort, reset } = useSupportChat(live);
   const tour = useTour();
   const bubbleRef = useRef<HTMLButtonElement>(null);
   const wasOpenRef = useRef(false);
 
   // The bubble unmounts while the panel is open, so the panel's own
   // focus-return lands on <body>. When the panel closes, return focus to the
-  // re-mounted bubble (runs after the panel's cleanup, so it wins).
+  // re-mounted bubble (runs after the panel's cleanup, so it wins). Also abort
+  // any in-flight support turn on close (S1) so no Concierge turn streams to
+  // nowhere and burns Anthropic cost after the user dismissed the panel.
   useEffect(() => {
     if (wasOpenRef.current && !open) {
+      abort();
       bubbleRef.current?.focus();
     }
     wasOpenRef.current = open;
-  }, [open]);
+  }, [open, abort]);
 
   if (!enabled) return null;
 
@@ -60,6 +68,8 @@ export function SupportLauncher() {
         onClose={() => setOpen(false)}
         messages={messages}
         onSend={send}
+        onReset={reset}
+        live={Boolean(live)}
         onStartTour={
           tour.available
             ? () => {

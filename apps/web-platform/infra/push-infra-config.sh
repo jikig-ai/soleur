@@ -32,7 +32,19 @@ set -euo pipefail
 # nonce-2 changes ONLY this file → recreates ONLY deploy_pipeline_fix → the push
 # runs against the now-stable webhook + current handler/hooks.json → delivers all
 # 15 files (incl. the two cutover probes) in a single non-racing push.
-#   redeploy-nonce: 6178-deliver-missing-cutover-probes-2
+#
+# nonce-3 (#6594 recovery, 2026-07-17). #6594: the "Verify infra-config apply" gate
+# was count-only, so a stale host (frozen on ci-deploy.sh sha256=2208300a, #6577's
+# instrument never delivered) passed 15/15 and terraform latched the non-delivery as
+# success — a LATCHED false-green (a plain re-run is a no-op: no trigger hash change).
+# PR-B's content assert (infra-config-gate.sh) would go truthfully RED against that
+# stale host. This nonce bump is the recovery: it changes ONLY this file → recreates
+# ONLY deploy_pipeline_fix → re-fires the push (no bridge, no restart, no nonce-1 race)
+# → re-delivers the current 15 files → the new content assert then verifies each
+# byte-for-byte. The merge IS the authorization; no -replace, no workflow_dispatch, no
+# SSH. Gated on PR-A (the tunnel origin-relative pin), which was applied and verified
+# on prod 2026-07-17 before this landed.
+#   redeploy-nonce: 6594-content-assert-recovery-3
 for var in WEBHOOK_SECRET CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE INFRA_DIR HOOKS_JSON_B64; do
   if [[ -z "${!var:-}" ]]; then
     echo "ERROR: required env var $var is missing or empty" >&2

@@ -35,6 +35,20 @@
 #                       is empty → the token-gated reporter went dark while the token-free disk
 #                       heartbeat + Sentry monitor stay GREEN (open/update [ci/zot-telemetry-silent]).
 #
+# SECOND STREAM — SOLEUR_PRIVATE_NIC (#6415). This script also watches the registry host's
+# private-NIC self-report and emits an INDEPENDENT NIC_ALARM_VERDICT block
+# (GREEN|FIRE|ADVISORY|SILENT|TRANSIENT) on EVERY exit path. It is deliberately NOT folded into
+# the exit code: the workflow maps any exit outside {0,1,3} to a Sentry 'error', so a new exit 4
+# would report a NIC fire as a PROBE FAULT — contradicting the "a FIRE is NOT a monitor error"
+# doctrine. The NIC evaluation therefore runs BEFORE every zot leg, because those legs exit early
+# on a probe fault / zero evidence (a zot isolation FATAL ⇒ zot_restarts=-1 ⇒ exit 2) and would
+# otherwise skip the NIC check exactly when a correlated NIC fault is most likely.
+#
+# WHY A SECOND STREAM AT ALL: #6400 — the host booted without its private NIC, so the fleet's
+# primary pull path was dead for ~14 days while everything here stayed GREEN. A NIC-less host
+# keeps PUBLIC egress, so the disk heartbeat kept pinging and this alarm's own SOLEUR_ZOT_DISK
+# rows kept flowing. Neither signal can be re-thresholded into covering it — hence a new one.
+#
 # FAIL-SAFE: NEVER FIRE on zero valid evidence. A standing alarm that pages on its own query fault
 # trains the operator to ignore it (Sharp Edges). COVERAGE SEAM (deliberate trade): a *non-OOM*
 # crash severe enough that `docker inspect` returns only -1 sentinels — with no exit_code=137 and
@@ -74,6 +88,21 @@ VERDICT=""
 CAUSE=""
 DETAIL=""
 
+# --- Private-NIC stream (#6415) -----------------------------------------------------------
+# A SECOND, INDEPENDENT verdict carried alongside the zot one. It is NOT folded into the exit
+# code: the contract (0/1/2/3) is consumed by scheduled-zot-restart-loop.yml, whose Sentry
+# status mapping treats any non-0/1/3 as 'error' — so a new exit 4 would report a NIC fire as a
+# *probe fault*, contradicting that file's "a FIRE is NOT a monitor error" doctrine. Instead the
+# NIC facts travel as their own NIC_ALARM_* output block, printed on EVERY exit path.
+#
+# This is what makes the NIC check survive the zot early-exits. The zot legs below exit at the
+# first sign of a probe fault / zero evidence (a zot isolation FATAL yields zot_restarts=-1 =>
+# zero-evidence => exit 2), and anything appended AFTER them would simply never run when zot is
+# unhealthy — precisely when a correlated NIC fault is most likely.
+NIC_VERDICT=""
+NIC_CAUSE=""
+NIC_DETAIL=""
+
 emit_and_exit() {
   # $1 = exit code. Prints the machine-readable verdict block (the workflow greps
   # ZOT_ALARM_VERDICT= + ZOT_ALARM_CAUSE=) then exits with the contract code.
@@ -85,14 +114,204 @@ emit_and_exit() {
   echo "ZOT_ALARM_CLIMB_N=${CLIMB_N}"
   [[ -n "$DETAIL" ]] && echo "ZOT_ALARM_DETAIL=${DETAIL}"
   echo "ZOT_ALARM_CAUSE=${CAUSE:-n/a}"
+  # The NIC block rides EVERY exit path — that is the whole point (see above).
+  echo "NIC_ALARM_VERDICT=${NIC_VERDICT:-TRANSIENT}"
+  [[ -n "$NIC_DETAIL" ]] && echo "NIC_ALARM_DETAIL=${NIC_DETAIL}"
+  echo "NIC_ALARM_CAUSE=${NIC_CAUSE:-n/a}"
   echo "=============================="
   exit "$code"
 }
 
+# evaluate_nic: sets NIC_VERDICT / NIC_CAUSE / NIC_DETAIL from the SOLEUR_PRIVATE_NIC stream.
+#   GREEN     — newest boot has nic_ok=true, converged_by=already, no reboots
+#   FIRE      — newest boot has nic_ok=false (the terminal state; the guard could not converge)
+#   ADVISORY  — the NIC was absent and the guard self-healed it (nic_ok=true, so FIRE does NOT
+#               cover it). Without this the race would self-heal silently forever — a LOST
+#               ceiling, since today it at least surfaces eventually as an outage.
+#   SILENT    — the guard went dark (absence), proven against a control marker + 24h lookback
+#   TRANSIENT — probe fault / fresh host / no usable boot_id
+evaluate_nic() {
+  local main main_rc control control_rc look look_rc sib sib_rc trusted newest scoped
+  local conv rc nets store up nic max_rb any_false
+
+  main="$("$BQ" --since "$WINDOW" --grep SOLEUR_PRIVATE_NIC --limit 5000 2>/dev/null)"; main_rc=$?
+  if [[ "$main_rc" -ne 0 ]]; then
+    NIC_VERDICT="TRANSIENT"
+    NIC_DETAIL="SOLEUR_PRIVATE_NIC query failed (rc=${main_rc}) — auth/config/network probe fault"
+    return
+  fi
+
+  # Re-assert STREAM MEMBERSHIP before trusting a single row. betterstack-query.sh's --grep
+  # compiles to an UNANCHORED `raw LIKE '%SOLEUR_PRIVATE_NIC%'` (betterstack-query.sh:119) over a
+  # source that EVERY host multiplexes into (vector.toml:344 — "host_name is the sole
+  # discriminator"). Two ways a foreign row matches:
+  #   (a) cross-stream — SOLEUR_ZOT_DISK's zot_last_err carries `docker logs` output
+  #       (cloud-init-registry.yml), and zot logs the requested path, so a pull of
+  #       /v2/SOLEUR_PRIVATE_NIC/manifests/x puts this marker into a zot row;
+  #   (b) forgery — any producer that logs attacker-influenced text into the shared source.
+  # Either way the row survives the tail strip, carries no nic_ok, and the function would fall
+  # through to GREEN — fabricating a verdict from ZERO real rows, precisely when the guard is
+  # dark, and then AUTO-CLOSING a live issue.
+  #
+  # THIS IS NOT THEORETICAL — verified live 2026-07-15: `--grep SOLEUR_PRIVATE_NIC` returned 3
+  # rows, none of them emissions. They were Vector-shipped GitHub webhook payloads of the PR that
+  # ADDED this guard, because the PR body contains the marker as a literal string.
+  #
+  # The anchor is the ENVELOPE, captured from a real row rather than assumed: the host POSTs
+  # {"message":"SOLEUR_PRIVATE_NIC …"} and Better Stack stores that JSON as `raw`, so a genuine
+  # emission's raw STARTS with {"message":"<marker> . A Vector-shipped journald row's raw starts
+  # with {"PRIORITY":"6",… and buries the marker deep inside a nested .message — so it can never
+  # satisfy this prefix. Verified both directions against production: 3/3 real rows match, 0/3
+  # contaminated rows match.
+  trusted="$(printf '%s\n' "$main" | zot_trusted_region | grep -F '"raw":"{\"message\":\"SOLEUR_PRIVATE_NIC ' || true)"
+
+  if [[ -z "$trusted" ]]; then
+    # INDEPENDENT absence probe. Deliberately NOT the zot PRODUCER_SILENT branch above: that one
+    # is computed only when $MAIN (SOLEUR_ZOT_DISK) is empty, so a dead NIC guard sitting beside
+    # a live disk heartbeat would sail straight past it and read GREEN. Two producers, two
+    # absence checks.
+    control="$("$BQ" --since "$WINDOW" --limit 1 2>/dev/null)"; control_rc=$?
+    if [[ "$control_rc" -ne 0 || -z "$control" ]]; then
+      NIC_VERDICT="TRANSIENT"
+      NIC_DETAIL="recent ${WINDOW} empty for SOLEUR_PRIVATE_NIC AND the control-marker query is empty/errored (rc=${control_rc}) — Better Stack unreachable / creds unset"
+      return
+    fi
+    look="$("$BQ" --since "$LOOKBACK" --grep SOLEUR_PRIVATE_NIC --limit 1 2>/dev/null)"; look_rc=$?
+    if [[ "$look_rc" -eq 0 && -n "$look" ]]; then
+      NIC_VERDICT="SILENT"
+      NIC_DETAIL="SOLEUR_PRIVATE_NIC present in the last ${LOOKBACK} but ABSENT in the recent ${WINDOW} — the private-NIC guard went dark"
+      NIC_CAUSE="nic guard dark: its 5-min cron or the 'doppler run --project soleur-registry --config prd' wrapper stopped (cloud-init-registry.yml). The disk heartbeat CANNOT backstop this — it is a different producer on a different token path."
+      return
+    fi
+    # NEVER-EMITTED. Do NOT read this as "fresh host, nothing to see" — that is the trap. If the
+    # SIBLING producer on the SAME host, over the SAME transport and the SAME
+    # soleur-registry/prd token, IS emitting, then the host is up, cron runs, and the token
+    # resolves — so the NIC guard's silence is PROOF it is broken, not evidence of a fresh host.
+    # Without this cross-check the never-emitted case (a bad render, a Doppler scope miss, cron
+    # not installed, /run/lock absent) reads TRANSIENT forever: no issue, and Sentry stays green
+    # because :373 keys only on the ZOT exit code. That is #6400's own shape reproduced on the box
+    # built to end it — and it is THE rollout path, since registry-host-replace births a fresh
+    # host. This also correctly fires between merge and the AC14 replace, when the live host is a
+    # pre-#6415 image with no guard: the action is the same (run the replace).
+    sib="$("$BQ" --since "$WINDOW" --grep SOLEUR_ZOT_DISK --limit 1 2>/dev/null)"; sib_rc=$?
+    if [[ "$sib_rc" -eq 0 && -n "$sib" ]]; then
+      NIC_VERDICT="SILENT"
+      NIC_DETAIL="SOLEUR_PRIVATE_NIC has NEVER been seen (empty in ${WINDOW} and ${LOOKBACK}) while the sibling SOLEUR_ZOT_DISK producer on the same host IS emitting"
+      NIC_CAUSE="the guard is not running on a host that is otherwise alive: either it was never deployed (the host predates #6415 — run registry-host-replace), or its install failed (template render, /etc/cron.d, or the doppler run wrapper). The sibling's rows prove the host, cron and the token path all work."
+      return
+    fi
+    NIC_VERDICT="TRANSIENT"
+    NIC_DETAIL="no SOLEUR_PRIVATE_NIC in ${WINDOW} or ${LOOKBACK}, and the sibling SOLEUR_ZOT_DISK producer is ALSO silent — the whole host is dark (the zot legs below own that verdict)"
+    return
+  fi
+
+  newest="$(printf '%s\n' "$trusted" | zot_newest_boot)"
+  if [[ -z "$newest" ]]; then
+    NIC_VERDICT="TRANSIENT"
+    NIC_DETAIL="SOLEUR_PRIVATE_NIC rows present but no usable boot_id — cannot scope to the newest host"
+    return
+  fi
+  # Scope to the NEWEST boot. An any-in-window read would fire for up to WINDOW (3h) after every
+  # successful self-heal — i.e. page on the happy path.
+  scoped="$(printf '%s\n' "$trusted" | zot_scope_to_boot "$newest")"
+
+  # Every field is read from the NEWEST row (tail -1) — the host's CURRENT state. reboot_count is
+  # the one window-max, because it is a monotonic budget and its peak is the durable fact.
+  conv="$(printf '%s\n' "$scoped" | grep -oE 'converged_by=[a-z-]+' | tail -1 | cut -d= -f2)"
+  rc="$(printf '%s\n' "$scoped" | grep -oE 'imds_rc=[0-9]+' | tail -1 | cut -d= -f2)"
+  nets="$(printf '%s\n' "$scoped" | grep -oE 'imds_nets=[0-9]+' | tail -1 | cut -d= -f2)"
+  store="$(printf '%s\n' "$scoped" | grep -oE 'zot_store_mounted=(true|false)' | tail -1 | cut -d= -f2)"
+  up="$(printf '%s\n' "$scoped" | grep -oE 'uptime_s=[0-9]+' | tail -1 | cut -d= -f2)"
+  nic="$(printf '%s\n' "$scoped" | grep -oE 'nic_ok=(true|false)' | tail -1 | cut -d= -f2)"
+  max_rb="$(printf '%s\n' "$scoped" | grep -oE 'reboot_count=[0-9]+' | cut -d= -f2 | sort -n | tail -1)"
+  [[ -n "$max_rb" ]] || max_rb=0
+  any_false=false
+  printf '%s\n' "$scoped" | grep -qE 'nic_ok=false' && any_false=true
+
+  # (1) The guard could not READ its own instrument. Zero evidence — never decode it as an H1/H2
+  # NIC absence, and never let it look like a converge decision. This is the guard's own doctrine
+  # applied to the alarm: `nic_ok=false` here means "unknown", not "absent".
+  if [[ "${conv:-}" == "probe-fault" ]]; then
+    NIC_VERDICT="FIRE"
+    NIC_DETAIL="newest boot_id=${newest}: converged_by=probe-fault — the guard could not resolve its own \`ip\` probe"
+    NIC_CAUSE="guard probe fault, NOT a NIC diagnosis: \`ip\` was unresolvable, so the local fact was never read (nic_ok=false here means UNKNOWN). The guard correctly refused to reboot. Cause is almost always PATH: \`ip\` lives in /usr/sbin, which is not on cron's default PATH — check the PATH= line in /etc/cron.d/soleur-private-nic-guard."
+    return
+  fi
+
+  # (2) The reboot budget is not durable => reboot authority was withheld. The root fs is
+  # read-only or full; that is a bigger problem than the NIC.
+  if [[ "${conv:-}" == "counter-unwritable" ]]; then
+    NIC_VERDICT="FIRE"
+    NIC_DETAIL="newest boot_id=${newest}: converged_by=counter-unwritable — the reboot budget could not be persisted"
+    NIC_CAUSE="the guard withheld its reboot because /var/lib/soleur is unwritable (root fs read-only via ext4 errors=remount-ro, or full). Rebooting without a durable counter would be an UNBOUNDED power-cycle, so refusing is correct — but the root filesystem is broken and the private NIC is unconverged. Re-dispatch registry-host-replace."
+    return
+  fi
+
+  # (3) The store is NOT mounted => zot bind-mounts an EMPTY root-disk dir and 404s every image
+  # fleet-wide, while nic_ok=true keeps every NIC branch green. Checked BEFORE the NIC branches:
+  # a dead pull path outranks a healed NIC. This is the field the plan added for exactly this and
+  # then (in the first cut) shipped with no reader — the same sin it criticises v1 for.
+  if [[ "${store:-true}" == "false" ]]; then
+    NIC_VERDICT="FIRE"
+    NIC_DETAIL="newest boot_id=${newest}: zot_store_mounted=false nic_ok=${nic:-?} converged_by=${conv:-none}"
+    NIC_CAUSE="the OCI store volume is NOT mounted and the guard's \`mount -a\` did not heal it (fstab carries nofail, so a missing device node is silent). zot is serving from an EMPTY root-disk dir => 404 for every image in the fleet. The NIC may be perfectly healthy — this is the pull path, not the network. Check the hcloud_volume attachment."
+    return
+  fi
+
+  # (4) Terminal NIC absence — keyed on the NEWEST row, not any-row. Any-row would fire on the
+  # guard's most likely SUCCESS path: the boot invocation emits nic_ok=false at ~100s (the attach
+  # has not landed and the uptime gate is shut), the 5-min cron then emits nic_ok=true under the
+  # SAME boot_id. An any-row read pages "no private NIC — terminal" on a host that healed itself,
+  # with a cause computed from the healed row. That is paging on the happy path.
+  if [[ "${nic:-}" == "false" ]]; then
+    NIC_VERDICT="FIRE"
+    if [[ "${rc:-0}" != "0" ]]; then
+      NIC_CAUSE="H1 — the metadata service was unreachable (imds_rc=${rc}). The guard will NOT reboot without corroboration, so this is terminal until IMDS recovers or an operator re-dispatches registry-host-replace."
+    elif [[ "${nets:-0}" == "0" ]]; then
+      NIC_CAUSE="H2 — IMDS answered but reports NO private network attached (imds_rc=0, imds_nets=0): the hcloud_server_network additive online-attach had not landed. Expect a later tick to self-heal; if it persists, the attach itself failed."
+    elif [[ "${up:-0}" -le 600 ]]; then
+      # Distinguishing this from the budget-spent case is the whole point of emitting uptime_s.
+      NIC_CAUSE="the attach has landed (imds_nets=${nets}) and the guard's uptime gate is simply not open yet (uptime_s=${up} <= 600). NOT terminal: expect convergence within ~10 min of boot. If a later poll still shows nic_ok=false with uptime_s>600, re-read this issue."
+    else
+      NIC_CAUSE="third mode — the attach LANDED (imds_nets=${nets}) but the guest never configured the address; converged_by=${conv:-none}, reboot_count=${max_rb}/2, uptime_s=${up}. At the cap the guard is out of budget and this IS terminal."
+    fi
+    NIC_DETAIL="newest boot_id=${newest}: nic_ok=false converged_by=${conv:-none} imds_rc=${rc:-?} imds_nets=${nets:-?} reboot_count=${max_rb} uptime_s=${up:-?}"
+    return
+  fi
+
+  # (5) A SUCCESSFUL self-heal emits nic_ok=true, so the FIRE branch cannot see it. Two shapes:
+  #   - reboot_count>0  — the guard rebooted; the host came up under a NEW boot_id and the
+  #     root-disk counter carried the fact across. (converged_by=reboot lives on the PREVIOUS
+  #     boot_id, so keying on that alone would miss the post-reboot steady state.)
+  #   - any_false + newest true, same boot — the attach landed late and the NIC came up with NO
+  #     reboot. This is the LEADING hypothesis's happy path, and without this branch it reads
+  #     GREEN and the race is never reported.
+  # Without either, a silently-self-healing race is invisible forever — a lost ceiling, since
+  # today it at least eventually surfaces as an outage.
+  if [[ "$max_rb" -gt 0 ]] || [[ "$any_false" == true ]] || printf '%s\n' "$scoped" | grep -qE 'converged_by=reboot'; then
+    NIC_VERDICT="ADVISORY"
+    if [[ "$max_rb" -gt 0 ]]; then
+      NIC_DETAIL="newest boot_id=${newest}: nic_ok=true reboot_count=${max_rb} — the NIC was ABSENT at boot and the guard converged it by REBOOTING"
+      NIC_CAUSE="the boot race is REAL on this host and the guard healed it by rebooting — H2 confirmed empirically. Not an outage: serving is fine. This is the standing signal that the race recurs (without it, a silently-self-healing race is never reported). Triage if reboot_count climbs toward the cap (2) across boots."
+    else
+      NIC_DETAIL="newest boot_id=${newest}: nic_ok=true now, but this boot ALSO emitted nic_ok=false earlier — reboot_count=0, so it healed with NO reboot"
+      NIC_CAUSE="the attach landed AFTER the guest configured its network and the NIC came up on its own within the bounded wait — H2 confirmed empirically, healed without a reboot. Not an outage: serving is fine. This is the cheapest possible outcome of the race, and the reason the guard uses a cadence rather than a boot-only oneshot."
+    fi
+    return
+  fi
+
+  NIC_VERDICT="GREEN"
+  NIC_DETAIL="newest boot_id=${newest}: nic_ok=true converged_by=${conv:-already} imds_nets=${nets:-?} zot_store_mounted=true reboot_count=0 — the private NIC came up at boot with no intervention"
+}
+
 if [[ ! -x "$BQ" ]]; then
   VERDICT="TRANSIENT"; DETAIL="betterstack-query.sh not found/executable at $BQ"
+  NIC_VERDICT="TRANSIENT"; NIC_DETAIL="betterstack-query.sh not found/executable at $BQ"
   emit_and_exit 2
 fi
+
+# Evaluate the NIC stream FIRST — before any zot leg can early-exit.
+evaluate_nic
 
 # --- Recent-window main query ------------------------------------------------------------
 MAIN="$("$BQ" --since "$WINDOW" --grep SOLEUR_ZOT_DISK --limit 5000 2>/dev/null)"; main_rc=$?

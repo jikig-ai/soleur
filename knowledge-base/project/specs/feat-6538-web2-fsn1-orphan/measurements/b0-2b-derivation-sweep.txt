@@ -1,0 +1,9 @@
+apps/web-platform/infra/dns.tf
+apps/web-platform/infra/network.tf
+apps/web-platform/infra/placement-group.tf
+apps/web-platform/infra/proxy-tls.tf
+apps/web-platform/infra/scripts/deploy-status-fanout-verify.sh
+apps/web-platform/infra/server.tf
+apps/web-platform/infra/tests/web-hosts-eu-pin.tftest.hcl
+apps/web-platform/infra/variables.tf
+apps/web-platform/infra/web-hosts-fanout-parity.test.sh

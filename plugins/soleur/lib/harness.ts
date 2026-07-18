@@ -7,7 +7,8 @@
  * Skills and go.md must call these helpers (or follow routingInstructions) — never improvise workflows.
  */
 
-import { pathToAgentId } from "./agent-registry";
+import { agentIdToGrokSubagentType, pathToAgentId } from "./agent-registry";
+import { behindSyncInstructions } from "./pr-merge-poll";
 import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
 export type Harness = "claude" | "grok" | "unknown";
@@ -148,8 +149,12 @@ export function formatAgentSpawn(agent: string, prompt: string): string {
   const agentId = normalizeAgentName(agent);
 
   if (harness === "grok") {
+    // Grok validates subagent_type against the .grok/agents filename stem
+    // (colons → hyphens), not the colon-qualified Claude id.
+    const grokType = agentIdToGrokSubagentType(agentId);
     return (
-      `Use **spawn_subagent** with agent \`${agentId}\` and this prompt:\n\n${prompt}`
+      `Use **spawn_subagent** with subagent_type \`${grokType}\` ` +
+      `(Grok spawn key; canonical id \`${agentId}\`) and this prompt:\n\n${prompt}`
     );
   }
 
@@ -166,14 +171,16 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
   const agentId = normalizeAgentName(agent);
 
   if (harness === "grok") {
+    const grokType = agentIdToGrokSubagentType(agentId);
     return {
       harness,
       tool: "spawn_subagent",
-      agent: agentId,
+      agent: grokType,
       prompt,
       instruction:
-        `Spawn via **spawn_subagent** with agent \`${agentId}\` ` +
-        "(enable with `GROK_SUBAGENTS=1` or `[subagents] enabled = true` in config). " +
+        `Spawn via **spawn_subagent** with subagent_type \`${grokType}\` ` +
+        `(not colon form \`${agentId}\` — Grok matches the \`.grok/agents/\` filename stem). ` +
+        "Enable with `GROK_SUBAGENTS=1` or `[subagents] enabled = true` in config. " +
         "Pass the prompt verbatim — do NOT substitute a manual workflow.",
     };
   }
@@ -190,10 +197,55 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
 }
 
 /**
+ * Harness-specific guidance for merge → release → deploy polling loops.
+ * Cite in ship Phase 7, postmerge Phase 2, one-shot Step 7–8.
+ */
+export function pollInstructions(harness: Harness): string {
+  const behind = behindSyncInstructions(harness);
+
+  switch (harness) {
+    case "claude":
+      return [
+        "**Merge/deploy polling (Claude Code)**",
+        "- Poll `gh pr view --jq '.state,.mergeStateStatus'` — not checks alone.",
+        "- Use the **Monitor tool** with state-change + heartbeat shell loops (ship Phase 7).",
+        "- NEVER Bash `run_in_background` for PR merge, CI, or release polling.",
+        "- After merge: watch release workflows to `completed`, then invoke `soleur:postmerge`.",
+        "- FORBIDDEN: asking the operator to watch merge/deploy status.",
+        "",
+        behind,
+      ].join("\n");
+
+    case "grok":
+      return [
+        "**Merge/deploy polling (Grok Build)**",
+        "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
+        "- Use **Shell** with adequate `block_until_ms` for short `gh` probes.",
+        "- Use **AwaitShell** with `pattern` for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`.",
+        "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
+        "- After `/ship` merge: poll release workflows, invoke `/postmerge <PR>`, then emit `<promise>DONE</promise>`.",
+        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND`.",
+        "",
+        behind,
+      ].join("\n");
+
+    default:
+      return [
+        "**Merge/deploy polling**",
+        "- Poll PR state + mergeStateStatus; resync on BEHIND before watching checks.",
+        "- Invoke postmerge verification before declaring done.",
+        "",
+        behind,
+      ].join("\n");
+  }
+}
+
+/**
  * Markdown snippet for go.md / eval-harness — embed at routing time.
  */
 export function routingInstructions(harness: Harness): string {
   const fidelity = workflowFidelityInstructions(harness);
+  const polling = pollInstructions(harness);
 
   switch (harness) {
     case "claude":
@@ -205,17 +257,21 @@ export function routingInstructions(harness: Harness): string {
         "- **Never improvise** when a route names a `soleur:<skill>` or agent — invoke it.",
         "",
         fidelity,
+        "",
+        polling,
       ].join("\n");
 
     case "grok":
       return [
         "**Harness: Grok Build**",
         "- Skills: **slash commands** — `/brainstorm`, `/one-shot`, `/plan`, etc.",
-        "- Agents: **spawn_subagent** (not Task).",
+        "- Agents: **spawn_subagent** (not Task). Use `spawnAgent()` so registry colon ids map to hyphen filename stems (`soleur:product:cpo` → `soleur-product-cpo`).",
         "- Commands: `/go`, `/sync`, `/help` — **not** `/soleur:go`.",
         "- **Never improvise** — invoke the registered slash command or subagent.",
         "",
         fidelity,
+        "",
+        polling,
       ].join("\n");
 
     default:
@@ -225,6 +281,8 @@ export function routingInstructions(harness: Harness): string {
         "- If tools are missing, run `grok inspect` and `grok --trust` from repo root.",
         "",
         fidelity,
+        "",
+        polling,
       ].join("\n");
   }
 }

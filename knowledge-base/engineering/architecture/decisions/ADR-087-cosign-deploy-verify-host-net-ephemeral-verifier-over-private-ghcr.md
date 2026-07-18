@@ -135,6 +135,13 @@ WARN semantics are unchanged: the function still returns 0 always in WARN mode, 
 the discriminating `cosign_verify_event` on failure, and echoes the verified digest
 (TOCTOU-safe) on success.
 
+> **Amendment reference (#6512, 2026-07-17):** this cosign-verify contract carries one documented
+> exception. The `local-cache` reload tier added to `ci-deploy.sh` (ADR-079 `(#6512)` amendment)
+> **skips re-verify** when it reuses the RUNNING container's image ID for a same-version seccomp
+> reload — the reused bits are the exact @sha256 already live in production, so re-verifying is a
+> no-op; the skip is made explicit via `cosign_verify_event` `verify_result=reused_local_reload`
+> rather than falling through the WARN fail-open. See ADR-079 for the full rationale.
+
 ## Consequences
 
 - **Easier:** verify can actually PASS on the real host (the #6005 goal) without

@@ -167,11 +167,15 @@ assert "soleur-web-platform container-start found"          "[[ -n '$WEBPLATFORM
 assert "the bootstrap runs BEFORE the container starts" \
   "(( EXTRACT_LINE < WEBPLATFORM_LINE ))"
 
-# --- AC6: cloud-init.yml still parses as valid YAML ---
+# --- AC6: cloud-init.yml still parses as valid YAML (templatefile directives stripped) ---
+# #6178: cloud-init.yml carries col-0 `%{ if web_colocate_inngest ~}` / `%{ endif ~}`
+# templatefile directives (YAML rejects `%` at column 0 as a directive indicator). Strip
+# them before parsing the NON-rendered source — same fix as cloud-init-inngest-bootstrap.test.sh
+# AC3. Rendered-state YAML validity is asserted in that file's terraform-render leg.
 echo ""
-echo "--- AC6: cloud-init.yml YAML round-trip ---"
-assert "cloud-init.yml parses as valid YAML" \
-  "python3 -c \"import yaml; yaml.safe_load(open('$CLOUD_INIT'))\""
+echo "--- AC6: cloud-init.yml YAML round-trip (directives stripped) ---"
+assert "cloud-init.yml (templatefile directives stripped) parses as valid YAML" \
+  "grep -v '^%{' '$CLOUD_INIT' | python3 -c \"import sys,yaml; yaml.safe_load(sys.stdin)\""
 
 # --- AC7: cat-deploy-state.sh exposes journald_storage (no-SSH verification) ---
 echo ""

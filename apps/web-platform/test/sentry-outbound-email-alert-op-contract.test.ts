@@ -48,19 +48,14 @@ describe("outbound-email-send-failure alert feature contract", () => {
     expect(tf).toContain(`value = "${FEATURE_TAG}"`);
   });
 
+  // apply-sentry-infra.yml plans the sentry root FULL (no `-target=` allowlist),
+  // so the plan universe is `state UNION config`: declaring the resource here IS
+  // what applies it, and deleting this block is what destroys the live rule.
+  // Declaration is therefore the whole apply contract — there is no second
+  // "wired into the apply list" condition left to assert.
   it("issue-alerts.tf declares the outbound_email_send_failure alert resource", () => {
     expect(tf).toContain(
       'resource "sentry_issue_alert" "outbound_email_send_failure"',
-    );
-  });
-
-  it("the -target wiring guards that the apply workflow creates the rule", () => {
-    const wf = readFileSync(
-      join(here, "../../../.github/workflows/apply-sentry-infra.yml"),
-      "utf8",
-    );
-    expect(wf).toContain(
-      "-target=sentry_issue_alert.outbound_email_send_failure",
     );
   });
 

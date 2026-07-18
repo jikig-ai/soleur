@@ -6,6 +6,7 @@ import {
   invokeSkill,
   spawnAgent,
   routingInstructions,
+  pollInstructions,
   normalizeSkillName,
   normalizeAgentName,
 } from "../lib/harness";
@@ -158,14 +159,18 @@ describe("spawnAgent", () => {
     expect(spawn.instruction).toContain("Task tool");
   });
 
-  test("grok uses spawn_subagent", () => {
+  test("grok uses spawn_subagent with hyphenated filename-stem type", () => {
     process.env.GROK_HOME = "/home/user/.grok";
+    delete process.env.CLAUDECODE;
     const spawn = spawnAgent("legal:clo", "Attestation for #456");
 
     expect(spawn.harness).toBe("grok");
     expect(spawn.tool).toBe("spawn_subagent");
-    expect(spawn.agent).toBe("soleur:legal:clo");
+    // Grok validates against .grok/agents/<stem>.md — colons must become hyphens.
+    expect(spawn.agent).toBe("soleur-legal-clo");
     expect(spawn.instruction).toContain("spawn_subagent");
+    expect(spawn.instruction).toContain("soleur-legal-clo");
+    expect(spawn.instruction).toContain("soleur:legal:clo");
   });
 });
 
@@ -177,10 +182,13 @@ describe("formatAgentSpawn", () => {
     expect(text).toContain("prompt body");
   });
 
-  test("grok mentions spawn_subagent", () => {
+  test("grok mentions spawn_subagent with hyphen type", () => {
     process.env.GROK_HOME = "/home/user/.grok";
-    const text = formatAgentSpawn("clo", "prompt body");
+    delete process.env.CLAUDECODE;
+    const text = formatAgentSpawn("legal:clo", "prompt body");
     expect(text).toContain("spawn_subagent");
+    expect(text).toContain("soleur-legal-clo");
+    expect(text).toContain("soleur:legal:clo");
   });
 });
 
@@ -203,5 +211,22 @@ describe("routingInstructions", () => {
   test("unknown suggests grok inspect", () => {
     const md = routingInstructions("unknown");
     expect(md).toContain("grok inspect");
+  });
+});
+
+describe("pollInstructions", () => {
+  test("grok documents AwaitShell merge-deploy polling and BEHIND resync", () => {
+    const md = pollInstructions("grok");
+    expect(md).toContain("AwaitShell");
+    expect(md).toContain("/postmerge");
+    expect(md).toContain("NEVER ask");
+    expect(md).toContain("BEHIND");
+    expect(md).toContain("sync-pr-behind.sh");
+  });
+
+  test("claude documents Monitor tool merge-deploy polling", () => {
+    const md = pollInstructions("claude");
+    expect(md).toContain("Monitor tool");
+    expect(md).toContain("postmerge");
   });
 });

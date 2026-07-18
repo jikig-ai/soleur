@@ -6,3 +6,5 @@ maxretry = 5
 bantime.increment = true
 bantime.factor = 2
 bantime.maxtime = 1h
+# ignoreip rationale: server.tf, fail2ban_tuning (#6594). Comments here cost user_data.
+ignoreip = 127.0.0.1/8 ::1 10.0.1.0/24

@@ -66,10 +66,10 @@ Or set `GROK_SUBAGENTS=1` for a single session. Without this, `spawn_subagent` i
 ### Spawning domain agents
 
 ```text
-spawn_subagent agent=soleur:engineering:review:security-sentinel prompt="Review the auth changes in PR #123"
+spawn_subagent subagent_type=soleur-engineering-review-security-sentinel prompt="Review the auth changes in PR #123"
 ```
 
-Qualified IDs match Claude's `Task` `subagent_type` names. The harness adapter (`plugins/soleur/lib/harness.ts`) emits the same IDs under Grok.
+Grok matches `subagent_type` to the **`.grok/agents/` filename stem** (colons → hyphens), not Claude's colon-qualified registry id. Prefer `spawnAgent()` / `agentIdToGrokSubagentType()` from `plugins/soleur/lib/harness.ts` so `soleur:engineering:review:security-sentinel` becomes `soleur-engineering-review-security-sentinel`. Passing the colon form is listed in some catalogs but is **rejected** at spawn (Grok ≤0.2.102).
 
 ### Adding or renaming agents
 
@@ -85,6 +85,14 @@ CI drift checks (Phase F #6325):
 bash plugins/soleur/scripts/grok-fidelity-gate.sh   # full gate (CI job grok-fidelity)
 cd plugins/soleur && bun run scripts/sync-grok-agent-compat.ts --check
 ```
+
+**Run `grok-pre-push-gate.sh` locally before every `git push` under Grok Build:**
+
+```bash
+bash plugins/soleur/scripts/grok-pre-push-gate.sh > /tmp/grok-pre-push-gate.log 2>&1; rc=$?; echo "EXIT=$rc"
+```
+
+The gate mirrors reproducible CI: fast required jobs (`readme-counts`, `adr-ordinals`, `rule-body-lint`, `lockfile-sync`, …), `scripts/test-all.sh` (the `test` required check), `web-platform` build, and `grok-fidelity-gate.sh`. CI-only checks (CodeQL, CLA, e2e, tenant-integration) still run on GitHub. Claude Code gets commit-time lint via lefthook; Grok does not — running only `grok-fidelity-gate.sh` misses the `test-scripts` shard (e.g. `B_ALWAYS` budget).
 
 ## References
 

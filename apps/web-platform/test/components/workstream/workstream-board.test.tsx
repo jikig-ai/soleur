@@ -465,6 +465,64 @@ describe("WorkstreamBoard", () => {
     ).toBe("backlog");
   });
 
+  it("a body edit reconciles from the returned canonical issue (AC1/AC7)", async () => {
+    mockIssue = "77";
+    global.fetch = methodFetch({
+      getIssues: [
+        issue({ id: "77", title: "Editable", body: "old body", status: "backlog" }),
+      ],
+      write: issue({
+        id: "77",
+        title: "Editable",
+        body: "new body",
+        description: "new body",
+        status: "backlog",
+      }),
+    }) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Issue 77" })).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByLabelText("Edit description"));
+    fireEvent.change(screen.getByLabelText("Edit description"), {
+      target: { value: "new body" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // Reconciled: the rendered description now shows the returned canonical body.
+    await waitFor(() => expect(screen.getByText("new body")).toBeTruthy());
+  });
+
+  it("a failed field write rolls back + surfaces a retryable toast (AC7)", async () => {
+    mockIssue = "77";
+    global.fetch = methodFetch({
+      getIssues: [
+        issue({ id: "77", title: "Editable", body: "old body", status: "backlog" }),
+      ],
+      writeOk: false,
+      writeStatus: 502,
+    }) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Issue 77" })).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByLabelText("Edit description"));
+    fireEvent.change(screen.getByLabelText("Edit description"), {
+      target: { value: "doomed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/couldn.?t save that change/i)).toBeTruthy(),
+    );
+    // The editor stays open for a retry (board rolled the card back).
+    expect(screen.getByLabelText("Edit description")).toBeTruthy();
+  });
+
   it("a 403 write flips the board read-only with an honest hint (AC14)", async () => {
     mockIssue = "77";
     global.fetch = methodFetch({
@@ -485,5 +543,29 @@ describe("WorkstreamBoard", () => {
         screen.getAllByText(/read-only access/i).length,
       ).toBeGreaterThan(0),
     );
+  });
+
+  // AC7 — a degraded first-load (502, no prior data) shows the ErrorCard and
+  // must NOT let a New-Issue create resurrect the false EmptyState: the toolbar
+  // "+ New Issue" button is disabled while `error && !data`. (FINDING 2)
+  it("disables + New Issue on a first-load degrade so it can't resurrect EmptyState", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: false, json: async () => ({}) }) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+
+    // First-load failure → ErrorCard (never a false EmptyState).
+    await waitFor(() =>
+      expect(screen.getByText(/failed to load the board/i)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/no issues to display/i)).toBeNull();
+
+    // The only New-Issue trigger on screen (toolbar) is disabled, so an
+    // optimistic create can't flip `data` non-null and re-render EmptyState.
+    const newIssueBtn = screen.getByRole("button", {
+      name: /new issue/i,
+    }) as HTMLButtonElement;
+    expect(newIssueBtn.disabled).toBe(true);
   });
 });
