@@ -31,6 +31,31 @@ are soak-gated and auto-close via `scripts/followthroughs/l3-probe-armed-6438.sh
 2026-07-25) once three heartbeats hold. This plan touches neither the followthrough nor the
 already-provisioned GH secrets/ADRs (all done — see Non-Goals).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-18. **Reviewers:** architecture-strategist, spec-flow-analyzer,
+observability-coverage-reviewer, code-simplicity-reviewer, verify-the-negative pass, + a fable
+scoped advisor. All 6 negative/premise claims independently CONFIRMED against live infra.
+
+### Key revisions applied
+1. **Token delivery folded into the existing `*_install` provisioners** (append `DOPPLER_TOKEN=` to
+   each `/etc/default/web-<probe>` write) instead of a new `/etc/default/web-probes` file + new
+   `EnvironmentFile=`. Removes a new-file surface, a cross-resource ordering race, an SRP smell, and a
+   `-target` gap — 4 reviewers converged. Units now add only `Environment=HOME=/root`.
+2. **Token is a dedicated Terraform-minted read-scoped `doppler_service_token.web_probes`**
+   (`access=read`), matching the fleet's explicit security convention (4 precedents; "NOT the full-prd
+   `var.doppler_token`") — committed as the single path (no reuse-vs-mint ambiguity).
+3. **Phase model corrected:** the "measure still-broken units' stderr BEFORE fixing" checkpoint is
+   structurally unreachable in one auto-applied PR (merge = one apply job + arm in the same job) —
+   demoted to best-effort; the true probe-first split is recorded in decision-challenges §1.
+4. **Positive-control canary added** (luks-#6604 pattern): the probes are silent-on-success, so
+   Source-4 liveness was only fault-observable — a recurrence of this exact gap would have been silent.
+   The canary makes it a steady-state detectable signal; `discoverability_test` + failure_mode 3
+   rewired onto it (the l3-probe-armed soak checks `status==up` only and CANNOT see a Source-4 death).
+5. **Vector delivery folded into `terraform_data.journald_persistent`** (already SSHes web-1 + reloads
+   a daemon + is `-target`ed) to avoid a new resource + new `-target` entry; `-target` membership made
+   a HARD pre-merge AC.
+
 ## Overview
 
 Two coupled defects, both delivery/runtime-only (no design change to ADR-123's probe architecture):
@@ -82,7 +107,7 @@ arm workflow. The soak follow-through closes #6438/#6548 on its own.
 
 | Hypothesis (issue framing) | Codebase reality (verified) | Plan response |
 |---|---|---|
-| (a) `doppler run --config prd` has no auth in the unit env | **Confirmed as source-level gap.** Units set no `HOME` and source no token; `/etc/default/inngest-server` (sibling token source) is absent on web-1; only `/etc/default/webhook-deploy` carries a prd token (deploy-owned). No root-doppler-auth systemd precedent exists on web-1. | **Leading fix:** add `Environment=HOME=/root` + `EnvironmentFile=/etc/default/web-probes` to all 3 units, where `/etc/default/web-probes` is a NEW `root:root 600` file (only `DOPPLER_TOKEN`, a prd-read token value) delivered by the new provisioner. Do NOT source `webhook-deploy` (advisor Phase 4.5): it is deploy-owned and imports `DOPPLER_CONFIG_DIR=/tmp/.doppler` — coupling the probe lifecycle to a deploy-rotated file and dragging in the `/tmp/.doppler` surface. With `HOME=/root` + a token-only file, doppler uses `/root/.doppler` and never touches `/tmp/.doppler` — **permanently eliminating hypothesis (d)**. |
+| (a) `doppler run --config prd` has no auth in the unit env | **Confirmed as source-level gap.** Units set no `HOME` and source no token; `/etc/default/inngest-server` (sibling token source) is absent on web-1; only `/etc/default/webhook-deploy` carries a prd token (deploy-owned). No root-doppler-auth systemd precedent exists on web-1. | **Fix (deepen-plan-revised):** add `Environment=HOME=/root` to all 3 units; **fold `DOPPLER_TOKEN=` into each unit's EXISTING `/etc/default/web-<probe>` file** (the `*_install` provisioners already `printf` these — server.tf:463/506/549), so the token is co-located + ordered with the unit that consumes it (no new file, no new `EnvironmentFile=`, no cross-resource race). The token value is a **dedicated Terraform-minted read-scoped `doppler_service_token.web_probes`** (`config=prd, access=read`) — the fleet convention (`inngest-host.tf:197`, `zot-registry.tf:235`, `git-data.tf:176`, `web-arm-write-token.tf:29` all mint read tokens, "NOT the full-prd `var.doppler_token`, per security review"). Do NOT source `webhook-deploy` (deploy-owned; imports `DOPPLER_CONFIG_DIR=/tmp/.doppler`). With `HOME=/root` + a token-only env value (no `DOPPLER_CONFIG_DIR`), doppler uses `/root/.doppler` — **permanently eliminating hypothesis (d)**. NB the fleet's root-doppler precedent (inngest-cutover-flip etc.) uses `HOME=/root` + a `/tmp/.doppler` redirect *because* those units are `User=deploy`+`ProtectHome=read-only`; the root, no-ProtectHome probes correctly diverge and need no redirect. |
 | (b) EnvironmentFile missing/incomplete → per-probe FATAL exit 1 | **Less likely.** The `/etc/default/web-*` files ARE written (server.tf:463/506/549) with the probe keys; and the *fail-soft* git-data probe (defaults its endpoint, only WARNs on a missing URL) fails **identically** — a per-probe FATAL would differ across the three. The identical failure localises upstream to the shared `doppler run` wrapper. | Not the live cause; **confirm/exclude via the Phase-1-shipped stderr** (do not mark refuted). |
 | (c) ZOT_PULL_USER/TOKEN absent from prd doppler | **Excluded.** Both are in `soleur/prd` (`zot-registry.tf:257-271`) and consumed identically by cloud-init `docker login`. Also would explain only the zot probe, not all 3. But the probe never *reaches* the cred check (doppler dies first). | Not the cause; noted UNKNOWN-but-excluded until stderr confirms. |
 | (d, new) `/tmp/.doppler` ownership clash (the #6536 mechanism) | **Not the current cause** (units run root-vs-root: `/tmp/.doppler` is root-owned from boot, a root unit reads it fine). **But a forward hazard:** if the fix switches any unit to `User=deploy` WITHOUT `PrivateTmp=true`, it WILL hit `open /tmp/.doppler/…: permission denied`. | **Constraint on the fix:** keep the units root-run; if ever deploy-run, add `PrivateTmp=true`. |
@@ -122,69 +147,71 @@ GHCR/degraded, every health signal stays green, and deploys/data-access rot for 
 (the #6400 shape). A **half-armed probe that reads as coverage while providing none is worse than
 none** (ADR-117).
 
-**If this leaks, the user's data/workflow/money is exposed via:** no new exposure vector. No PII in
-the beats; the fix sources an existing prd-scoped token (`webhook-deploy`) already present on web-1 —
-no new secret, no new surface.
+**If this leaks, the user's data/workflow/money is exposed via:** minimal new surface — a dedicated
+Terraform-minted **read-scoped** prd token (`doppler_service_token.web_probes`, `access=read`) written
+into the existing per-probe `/etc/default/web-<probe>` files (600). Least-privilege by construction
+(read-only, not the full-prd `var.doppler_token`); no PII in the beats; no new operator secret.
 
 **Brand-survival threshold:** **single-user incident.** CPO sign-off required at plan time (carried
 forward from the brainstorm framing); `user-impact-reviewer` runs at review time.
 
 ## Implementation Phases
 
-**Phase ordering is load-bearing** (learning 2026-07-16 §2: "the probe ships before the fix so the
-next fire self-reports which defect was live"). The apply is `-target`-scoped and dispatch-gated, so
-these apply steps are sequenced within the one PR.
+**Delivery intent is probe-first** (learning 2026-07-16 §2), but deepen-plan review (spec-flow +
+architecture) established that in ONE auto-applied PR the merge runs a single apply job that delivers
+vector + the unit fix together and arms in the same job — so the "measure the *still-broken* units'
+stderr before fixing" checkpoint is **structurally unreachable** as a single-PR AC (see decision-
+challenges §1 for the two-PR alternative). The essential #6536 value survives: once Source 4 is live
+(same merge), ANY residual failure is self-diagnosable off-box. The root cause is already **confirmed
+from the unit diff** (visible source), so the broken-state beat is confirmatory, not load-bearing.
 
-### Phase 1 — Observability delivery + token file (probe ships FIRST)
-1. Add a new `terraform_data` provisioner in `server.tf` (sibling to `journald_persistent` /
-   `zot_consumer_probe_install`) that SSH-connects to web-1 and does TWO deliveries via its
-   remote-exec (the established IaC pattern — see the `## Infrastructure (IaC)` section for the
-   vector-reload mechanics):
-   - **(a) vector.toml:** deliver the updated `vector.toml`, render `@@HOST_NAME@@` (mirror
-     `soleur-host-bootstrap.sh:342` — or re-invoke `/usr/local/bin/soleur-vector-install`), install it
-     to `/etc/vector/vector.toml`, and reload the vector agent (same IaC pattern as the existing
-     `*_install` provisioners' daemon-reload; the reload verb is documented in the IaC section).
-   - **(b) doppler token file:** write `/etc/default/web-probes` as `root:root`, `chmod 600`, content
-     `DOPPLER_TOKEN=<prd-read token>`. Reuse the existing web-1 prd-read token value (the same
-     `doppler_token`/write-token already on the host in `webhook-deploy` — no new operator mint,
-     `hr-tf-variable-no-operator-mint-default`); OR mint a dedicated read-scoped
-     `doppler_service_token` (least-privilege, the `web-arm-write-token.tf` pattern with `access="read"`)
-     — /work + deepen-plan to pick, defaulting to reuse (minimal, no new secret to provision).
-   `triggers_replace = sha256(join(",", [file(".../vector.toml"), host_name render input, token ref]))`
-   so a vector.toml edit OR token change re-fires it. Idempotent.
-2. **Apply Phase 1 first** (`-target` the new provisioner via `apply-web-platform-infra.yml`), then
-   **self-pull telemetry** (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh
-   --grep web-zot-consumer-probe --grep 'Doppler Error'`). **Evidence checkpoint:** confirm the probe
-   stderr now ships AND reads the predicted `$HOME is not defined` / auth error on the still-broken
-   units. This is the measured confirmation of the root cause.
+### Phase 1 — Observability + token delivery (co-located, ordered)
+1. **Token, folded into the existing probe installers (NOT a new file).** In each of the 3
+   `terraform_data.*_install` remote-execs (server.tf:463/506/549), append `DOPPLER_TOKEN=<token>` to
+   the existing `printf … > /etc/default/web-<probe>` line. The token value is a **dedicated
+   Terraform-minted `doppler_service_token.web_probes`** (`config=prd, access=read` — the
+   `web-arm-write-token.tf` pattern; self-provisioning, no operator mint). Extend each installer's
+   `triggers_replace` to hash `doppler_service_token.web_probes.key` so a rotation re-fires delivery.
+   This co-locates the token with the unit that `enable --now`s the timer — no cross-resource ordering
+   race, no new `-target` entry, no new file surface.
+2. **Vector delivery to running web-1 — fold into `terraform_data.journald_persistent`**
+   (server.tf:668; it already SSHes web-1 + reloads a host observability daemon AND is on the SSH
+   `-target` list, so no new resource / no new `-target` entry — /work to confirm it is targeted; else
+   add a new resource AND append it to the workflow `-target` list + Files to Edit). Deliver the
+   rendered `vector.toml` → `/etc/vector/vector.toml` and reload the vector agent (re-invoke
+   `/usr/local/bin/soleur-vector-install`, which already renders host_name; reload mechanics in the
+   IaC section). Extend its `triggers_replace` to hash `file(vector.toml)`.
+3. **Positive-control canary (observability review P1 — close the recurrence blind spot).** The probes
+   are silent-on-success, so Source-4 liveness is only observable during a fault → a future
+   vector-delivery regression would be silent AND heartbeats (pinged by direct curl, independent of
+   Source 4) would stay green. Adopt the luks-monitor (#6604) pattern the `vector.toml` comment
+   documents: emit a periodic benign tagged row on HEALTHY runs so Source-4 liveness is a steady-state
+   canary. /work to pick the cadence-appropriate mechanism (a low-frequency `[probe] ok` line vs
+   `SOLEUR_PROBE_VERBOSE=1` — weigh the 60s-cadence quota cost the scripts deliberately gate off).
 
-### Phase 2 — Unit-start fix (verified against the Phase-1 reading)
-3. Edit the three unit files — add, in `[Service]`:
-   - `Environment=HOME=/root` (doppler needs `$HOME`; with it, doppler uses `/root/.doppler` — no
-     `/tmp/.doppler`).
-   - `EnvironmentFile=/etc/default/web-probes` (the NEW `root:root 600` token file from Phase 1(b),
-     `DOPPLER_TOKEN` only). Do NOT source `webhook-deploy` (advisor Phase 4.5 — deploy-owned, and its
-     `DOPPLER_CONFIG_DIR=/tmp/.doppler` reintroduces the surface we are eliminating).
-   - Keep the units **root-run** (no `User=`) — do NOT introduce `User=deploy` without
-     `PrivateTmp=true` (hypothesis d). Keep the existing `EnvironmentFile=/etc/default/web-*`
-     (probe keys) — no key overlap with the token file.
-   - **Fail loud, no degrade guard** (advisor Phase 4.5 + `cq-silent-fallback-must-mirror-to-sentry`):
-     do NOT wrap the doppler call in a `[ -n "$DOPPLER_TOKEN" ]` exit-0 degrade. A token regression
-     must surface as a `failed` unit + visible stderr (now shipped) + heartbeat lapse — three signals,
-     not a systemd-green silent lapse. On web-1 the token is present, so the units succeed.
-   Because these units are delivered **byte-identical** by both the SSH provisioner (web-1) and the
-   cloud-init bake (future hosts, #6459), one edit fixes both routes.
-4. **Apply Phase 2** — the `.service` edits change each `*_install` provisioner's `triggers_replace`
-   hash → force re-delivery + `daemon-reload` + `enable --now` (verified: `server.tf:476` hashes the
-   `.service` content). Self-pull telemetry: confirm probe classification/success stderr ships and a
-   real beat lands.
+### Phase 2 — Unit-start fix
+4. Edit the three unit files — add, in `[Service]`, ONLY `Environment=HOME=/root` (doppler then uses
+   `/root/.doppler`; the token now arrives via each unit's EXISTING `EnvironmentFile=/etc/default/web-<probe>`
+   — no new `EnvironmentFile=` directive). Keep units **root-run** (no `User=`; never `User=deploy`
+   without `PrivateTmp=true`). **Fail loud, no degrade guard** (advisor + `cq-silent-fallback-must-mirror-to-sentry`):
+   a token regression must surface as a `failed` unit + visible stderr + heartbeat lapse. Units are
+   delivered byte-identical by the SSH provisioner (web-1) AND the cloud-init bake (future hosts,
+   #6459), so one edit fixes both routes.
+5. The `.service` edits change each `*_install` provisioner's `triggers_replace` hash → force
+   re-delivery + `daemon-reload` + `enable --now` (verified: server.tf:476 hashes the `.service`).
 
 ### Phase 3 — Arm the heartbeats
-5. Re-run `apply-web-platform-infra.yml` via `workflow_dispatch` with a `reason` input
-   (`gh workflow run apply-web-platform-infra.yml --ref main -f reason='arm L3 probes after unit-start fix (#6438/#6548)'`).
-   The "Arm web-host probe heartbeats" step (apply-web-platform-infra.yml:719-794) unpauses →
-   polls `status==up` within period+grace → leaves armed (deadlines: web-zot-consumer 230s,
-   web-nic-guard 470s, git-data-prd 230s). Timer cadence 60s ⇒ a beat lands well inside every deadline.
+6. **On merge**, `apply-web-platform-infra.yml` (push trigger) applies everything AND runs the "Arm
+   web-host probe heartbeats" step (apply-web-platform-infra.yml:719-794) in the SAME job — it does
+   NOT wait for a separate dispatch. So the merge itself attempts the arm right after re-delivering the
+   fixed units; if the units are already beating it arms GREEN, else it fail-loud rolls back (safe).
+   The `workflow_dispatch` re-run (`gh workflow run apply-web-platform-infra.yml --ref main -f
+   reason='arm L3 probes after unit-start fix (#6438/#6548)'`) is the deliberate RETRY once
+   self-pulled telemetry confirms the units beat. The arm unpauses → polls `status==up` within
+   deadline (web-zot-consumer 230s, web-nic-guard 470s, git-data-prd 230s). **Cadence caveat:** the
+   60s-cadence probes land a beat well inside their deadline; the nic-guard's 5-min cadence gives ~one
+   post-unpause fire inside 470s — reconcile the Observability period figures with the live deadlines
+   at /work so the GREEN is not marginal.
 
 ### Phase 4 — Soak handoff (do NOT touch)
 6. `scripts/followthroughs/l3-probe-armed-6438.sh` (already enrolled: directive + `follow-through`
@@ -193,17 +220,21 @@ these apply steps are sequenced within the one PR.
 
 ## Files to Edit
 
-- `apps/web-platform/infra/web-zot-consumer-probe.service` — add `Environment=HOME=/root` + `EnvironmentFile=/etc/default/web-probes`.
-- `apps/web-platform/infra/web-git-data-probe.service` — same.
-- `apps/web-platform/infra/web-private-nic-guard.service` — same.
-- `apps/web-platform/infra/server.tf` — add `terraform_data.web_vector_reload_install` (deliver `vector.toml` + reload the vector agent on web-1 AND write `/etc/default/web-probes` root:root 600 with the prd-read `DOPPLER_TOKEN`). Optionally add a read-scoped `doppler_service_token` resource if not reusing the existing token. (The 3 probe `*_install` provisioners already re-fire on the `.service` edits via `triggers_replace` — no change to them needed for re-delivery.)
-- `apps/web-platform/test/` (or the infra validation surface) — extend the drift-guard: assert each probe `.service` carries `Environment=HOME=/root` AND an `EnvironmentFile` supplying `DOPPLER_TOKEN`; assert a delivery/reload path exists for `vector.toml` on web-1. Shell tests are `.test.sh` in the `test/` sibling (constitution); register in `infra-validation.yml`.
-- `knowledge-base/engineering/architecture/decisions/ADR-123-*.md` — **light amendment note** recording the web-1 root-doppler-unit auth contract (HOME=/root + prd token from `webhook-deploy`; never `User=deploy` without `PrivateTmp=true`). See ADR/C4 section.
+- `apps/web-platform/infra/web-zot-consumer-probe.service` — add `Environment=HOME=/root` (token arrives via the existing `EnvironmentFile=/etc/default/web-zot-consumer-probe`).
+- `apps/web-platform/infra/web-git-data-probe.service` — same (existing `/etc/default/web-git-data-probe`).
+- `apps/web-platform/infra/web-private-nic-guard.service` — same (existing `/etc/default/web-private-nic-guard`).
+- `apps/web-platform/infra/server.tf` — (1) in each of the 3 `*_install` remote-execs, append `DOPPLER_TOKEN=<token>` to the existing `printf … > /etc/default/web-<probe>` line + hash `doppler_service_token.web_probes.key` in `triggers_replace`; (2) fold the `vector.toml` delivery + reload into `terraform_data.journald_persistent` (server.tf:668) and hash `file(vector.toml)` in its `triggers_replace` (or a new resource + `-target` entry if journald_persistent is not targeted).
+- `apps/web-platform/infra/web-arm-write-token.tf` (or a new `web-probe-read-token.tf`) — add `doppler_service_token.web_probes` (`config=prd, access=read`) + a `doppler_secret`/local wiring for the token value.
+- `.github/workflows/apply-web-platform-infra.yml` — **only if** vector delivery is a NEW resource: append it to the SSH `-target` list (~:681-694). If folded into `journald_persistent` (already targeted), no workflow edit. (HARD requirement, not a footnote — a new untargeted `terraform_data` is silently skipped on merge-apply.)
+- `apps/web-platform/test/` — extend the infra drift-guard: assert each probe `.service` carries `Environment=HOME=/root`; each `/etc/default/web-<probe>` write includes `DOPPLER_TOKEN`; no probe unit sets `User=deploy` w/o `PrivateTmp=true` or references `/tmp/.doppler`; a `vector.toml` delivery/reload path to web-1 exists with `triggers_replace` hashing `vector.toml`. Shell tests `.test.sh` in `test/` (constitution); register in `infra-validation.yml`.
+- `knowledge-base/engineering/architecture/decisions/ADR-123-*.md` — **light amendment note** (web-1 root-doppler-unit auth contract). See ADR/C4 section.
 
 ## Files to Create
 
 - `knowledge-base/project/learnings/…/2026-07-18-web-1-has-no-root-doppler-auth-systemd-precedent-and-vector-toml-has-no-running-host-delivery.md` — the compound learning (created at write-time by /work; directory + topic only, date at write-time).
-- (Possibly) `apps/web-platform/test/web-probe-doppler-auth.test.sh` — the drift-guard, if a new file is the right home.
+- (Token IaC) a new `web-probe-read-token.tf` if `doppler_service_token.web_probes` is not co-located in an existing token `.tf`.
+
+(No new `apps/web-platform/test/web-probe-doppler-auth.test.sh` — the assertions are a few greps; fold into the existing infra drift-guard, per simplicity review.)
 
 ## Observability
 
@@ -224,14 +255,14 @@ failure_modes:
     detection: probe SUPPRESS-ping stderr (000 UNREACHABLE / 404 / 401) + heartbeat absence; NIC guard emits discriminating SOLEUR_PRIVATE_NIC {nic_ok,converged_by,imds_rc,imds_nets,imds_has_expected}
     alert_route: heartbeat absence → email alarm
   - mode: vector on web-1 not shipping Source 4 (this observability gap recurring)
-    detection: 0 probe-tagged rows in Better Stack while units fire — the drift-guard test + the l3-probe-armed soak surface it
-    alert_route: l3-probe-armed-6438.sh FAIL (monitor not up)
+    detection: absence of the HEALTHY positive-control canary row (Phase 1 step 3, luks-#6604 pattern) — NOT "monitor not up" (heartbeats ship by direct curl, independent of Source 4, so a Source-4 death leaves them green)
+    alert_route: the recurring canary-read (drift-guard asserts the delivery/reload path statically; a runtime read of the canary row is the live signal). NOTE: l3-probe-armed-6438.sh (status==up only) CANNOT detect this mode — do not rely on it here.
 logs:
   where: Better Stack Logs (ClickHouse warehouse, table t520508_soleur_inngest_vector_prd_3_logs)
   retention: hot ~40min + s3 archive (queried via scripts/betterstack-query.sh with the UNION-ALL archive arm)
 discoverability_test:
   command: "doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep web-zot-consumer-probe --grep web-nic-guard --grep web-git-data-probe"
-  expected_output: probe classification/success rows tagged with the probe SyslogIdentifiers from host soleur-web-platform (NO ssh)
+  expected_output: the HEALTHY positive-control canary row (Phase 1 step 3) tagged with a probe SyslogIdentifier from host soleur-web-platform — present in steady state (NO ssh). Its ABSENCE = Source 4 dark (the exact recurrence). (Without the canary the probes are silent-on-success, so 0 rows is ambiguous — healthy vs Source-4-dead.)
 ```
 
 **Affected-surface note (plan 2.9.2):** the probe oneshot units are a blind execution surface — the
@@ -241,15 +272,18 @@ fix's whole Phase 1 IS the in-surface probe (their own stderr, now shipped), and
 ## Infrastructure (IaC)
 
 ### Terraform changes
-- `apps/web-platform/infra/server.tf`: new `terraform_data.web_vector_reload_install` (SSH to web-1,
-  deliver `vector.toml`, render host_name, reload the vector agent, AND write `/etc/default/web-probes`
-  root:root 600 with the prd-read `DOPPLER_TOKEN`). Reuses `var.ci_ssh_private_key`; reuses the
-  existing prd-read token value by default (**no new secret**), or optionally adds a read-scoped
-  `doppler_service_token` (the `web-arm-write-token.tf` pattern) for least-privilege. The vector reload
-  runs inside this terraform_data remote-exec, exactly like the existing `*_install` provisioners'
-  daemon-reload — an IaC-owned step, not a manual one.
-- The 3 probe `.service` edits require no new `.tf` — they re-fire the existing `*_install`
-  provisioners via `triggers_replace`.
+- **Token:** new `doppler_service_token.web_probes` (`config=prd, access=read` — Terraform-minted,
+  self-provisioning, no operator mint; the fleet least-privilege convention, NOT `var.doppler_token`).
+  Its value is appended as `DOPPLER_TOKEN=` inside each existing `*_install` remote-exec's
+  `/etc/default/web-<probe>` write (server.tf:463/506/549), and hashed into each installer's
+  `triggers_replace`. No new file, no new resource-ordering dependency (co-located with the unit).
+- **Vector:** fold `vector.toml` delivery + reload into `terraform_data.journald_persistent`
+  (server.tf:668; already SSHes web-1 + reloads a host daemon + is on the SSH `-target` list) — hash
+  `file(vector.toml)` into its `triggers_replace`. The reload runs inside the terraform_data
+  remote-exec, an IaC-owned step. If journald_persistent is not `-target`ed, use a new resource AND
+  append it to the workflow `-target` list.
+- The 3 `.service` edits require no new `.tf` — they re-fire the `*_install` provisioners via
+  `triggers_replace`. Reuses `var.ci_ssh_private_key`.
 
 ### Apply path
 - (b) cloud-init + idempotent re-delivery: the `.service` fixes reach web-1 via the existing SSH
@@ -274,12 +308,13 @@ alarm, no reboot). This fixes the **delivery/auth** of the units that implement 
 
 ### ADR
 - **Amend ADR-123** with a short implementation-contract note: *"web-1 root-run doppler systemd units
-  MUST set `Environment=HOME=/root` and source a prd-scoped `DOPPLER_TOKEN` from a dedicated
-  `root:root 600` file (`/etc/default/web-probes`) — NOT `/etc/default/webhook-deploy` (deploy-owned;
-  imports `DOPPLER_CONFIG_DIR=/tmp/.doppler`), and `/etc/default/inngest-server` is absent when
+  MUST set `Environment=HOME=/root` and receive a prd-scoped `DOPPLER_TOKEN` from a dedicated
+  read-scoped `doppler_service_token` written into the unit's own `/etc/default/web-<probe>` file
+  (600) — NOT `webhook-deploy` (deploy-owned; imports `DOPPLER_CONFIG_DIR=/tmp/.doppler`), and NOT
+  `var.doppler_token` (full-prd). `/etc/default/inngest-server` is absent when
   `web_colocate_inngest=false`. With `HOME=/root` doppler uses `/root/.doppler`; never touch
-  `/tmp/.doppler`; never switch to `User=deploy` without `PrivateTmp=true`."* Records the invariant so
-  #6459 (future-host bake) inherits it.
+  `/tmp/.doppler`; never `User=deploy` without `PrivateTmp=true`."* Records the invariant so #6459
+  (future-host bake) inherits it — the token file must also be baked for fresh hosts (see Sharp Edges).
 
 ### C4 views
 - **No C4 impact.** Enumerated against the change: external human actors — none added; external systems
@@ -292,42 +327,50 @@ alarm, no reboot). This fixes the **delivery/auth** of the units that implement 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] Each of the 3 probe `.service` files contains `Environment=HOME=/root` AND
-      `EnvironmentFile=/etc/default/web-probes` (grep-guard test, green); no probe `.service` sources
-      `/etc/default/webhook-deploy`.
-- [ ] The new provisioner writes `/etc/default/web-probes` as `root:root` `chmod 600` with `DOPPLER_TOKEN`.
+- [ ] Each of the 3 probe `.service` files contains `Environment=HOME=/root` (grep-guard test); no
+      probe `.service` sources `/etc/default/webhook-deploy` or sets a `DOPPLER_CONFIG_DIR`.
+- [ ] Each `*_install` remote-exec writes `DOPPLER_TOKEN=` (from `doppler_service_token.web_probes`)
+      into its `/etc/default/web-<probe>` file; `doppler_service_token.web_probes` has `access="read"`.
 - [ ] No probe `.service` sets `User=deploy` without `PrivateTmp=true`; no probe unit references
       `/tmp/.doppler` (grep-guard test).
-- [ ] `server.tf` contains a `terraform_data` resource that delivers `vector.toml` to web-1 and reloads
-      the vector agent, with `triggers_replace` hashing `vector.toml`.
+- [ ] A `vector.toml` delivery+reload path to web-1 exists (in `journald_persistent` or a new resource)
+      with `triggers_replace` hashing `file(vector.toml)`; **if a NEW resource, it is in the workflow
+      SSH `-target` list** (grep the workflow — hard gate, not a footnote).
+- [ ] A positive-control healthy canary row is emitted to Source 4 (Phase 1 step 3) and the
+      `discoverability_test`/failure_mode-3 detection keys on it.
 - [ ] Drift-guard test registered in `infra-validation.yml`; `tsc`/shell tests green.
 - [ ] PR body uses **`Ref #6438 #6548`** (NOT `Closes`).
 - [ ] SpecFlow analysis run on the infra change (constitution: infra changes require SpecFlow).
 - [ ] ADR-123 amendment note present.
 
 ### Post-merge (operator/automated — sequenced, all automatable)
-- [ ] **Phase 1 applied + verified:** after the vector provisioner applies, self-pulled telemetry
-      shows probe-tagged stderr from host soleur-web-platform reaching Better Stack (0→N probe rows).
-      *Automation:* `apply-web-platform-infra.yml` + `scripts/betterstack-query.sh`.
-- [ ] **Phase 2 applied + verified:** all 3 probe units start cleanly (no `Failed with result
-      exit-code` in Better Stack) and a real measured beat lands. *Automation:* same.
-- [ ] **Phase 3:** `apply-web-platform-infra.yml` (workflow_dispatch, `reason=…`) arm step reports
-      all 3 heartbeats `status=up` (GREEN). *Automation:* `gh workflow run` + `gh run watch`.
-- [ ] **Phase 4:** l3-probe-armed-6438.sh soak (earliest 2026-07-25) closes #6438/#6548 — verified
-      by the sweeper, not this PR.
+- [ ] **Merge-apply verified:** after the merge apply, self-pulled telemetry shows (a) the probe units
+      start cleanly (no `Failed with result exit-code` in Better Stack) and (b) the positive-control
+      canary + probe classification rows reach Source 4 (Source 4 now live on web-1). *Automation:*
+      `scripts/betterstack-query.sh`. (The pre-fix "measure the still-broken units first" reading is
+      best-effort only — structurally unreachable in one PR; see decision-challenges §1.)
+- [ ] **Arm GREEN:** `apply-web-platform-infra.yml` arm step reports all 3 heartbeats `status=up` —
+      either on the merge-apply (if units already beating) or on the deliberate `workflow_dispatch`
+      re-run (`gh workflow run … -f reason=…`) once telemetry confirms beats. *Automation:*
+      `gh workflow run` + `gh run watch`.
+- [ ] **Soak:** l3-probe-armed-6438.sh (earliest 2026-07-25) closes #6438/#6548 — verified by the
+      sweeper, not this PR.
 
 ## Test Scenarios (Given/When/Then)
 
-- **Given** a probe `.service` file, **When** the drift-guard runs, **Then** it asserts
-  `Environment=HOME=/root` and a `DOPPLER_TOKEN`-supplying `EnvironmentFile` are present (fails RED
+- **Given** a probe `.service` + its `*_install` env-file write, **When** the drift-guard runs,
+  **Then** it asserts `Environment=HOME=/root` and `DOPPLER_TOKEN=` in the env-file write (fails RED
   on the current, unfixed files).
-- **Given** the vector provisioner applied to web-1, **When** a probe timer fires with the units still
-  unfixed, **Then** Better Stack shows a `web-*-probe`-tagged `Doppler Error: $HOME is not defined`
-  row (the measured root-cause confirmation).
-- **Given** the unit fix applied, **When** a timer fires, **Then** the probe classifies (200/reachable/
-  nic_ok) and pings its heartbeat; `betterstack-query.sh` shows the classification stderr and the beat.
-- **Given** all 3 beats holding, **When** the arm workflow runs, **Then** each monitor transitions to
-  `up` within its deadline and stays armed.
+- **Given** the fix applied on merge, **When** a timer fires, **Then** the probe classifies
+  (200/reachable/nic_ok), pings its heartbeat, AND the positive-control canary row reaches Source 4;
+  `betterstack-query.sh` shows the beat + the canary (NO ssh).
+- **Given** Source 4 later regresses on web-1, **When** the discoverability_test runs, **Then** the
+  canary row is ABSENT — the recurrence is detectable (it was not before this fix).
+- **Given** the units beating, **When** the arm step runs (merge-apply or dispatch), **Then** each
+  monitor transitions to `up` within its deadline and stays armed.
+- *(Best-effort, not a gate):* if the vector delivery could be applied strictly before the unit fix
+  (two-PR path, decision-challenges §1), a `web-*-probe`-tagged `Doppler Error: $HOME is not defined`
+  row would confirm the root cause on the still-broken units.
 
 ## Domain Review
 
@@ -365,10 +408,30 @@ files this plan edits.
 ## Sharp Edges
 
 - **Diagnosis discipline (learning 2026-07-16):** the doppler-auth root cause is established by a
-  **unit diff** (visible source), not a dev-box probe — but the *runtime error* is still a prediction
-  until Phase 1 ships the stderr. Do NOT collapse Phase 1 into Phase 2 ("they ride one PR so ordering
-  is meaningless" is the argument to reject). Phase 1 must produce a real reading; if applied together,
-  Source 4 still makes any residual failure self-diagnosable.
+  **unit diff** (visible source), not a dev-box probe. In ONE auto-applied PR the merge applies vector
+  + unit fix together and arms in the same job, so the "measure the still-broken units first"
+  checkpoint is structurally unreachable (spec-flow + architecture review) — it is DEMOTED to
+  best-effort, and the true probe-first measurement requires the two-PR split (decision-challenges §1).
+  The essential value survives: once Source 4 is live (same merge), any residual failure is
+  self-diagnosable.
+- **Silent-on-success blind spot (observability review):** without the positive-control canary
+  (Phase 1 step 3), the probes emit nothing to Source 4 when healthy, so a future vector-delivery
+  regression is INVISIBLE (heartbeats ship by direct curl, stay green). The canary is what makes the
+  recurrence detectable — do NOT drop it as "extra scope"; it is the honesty the feature exists for.
+- **`-target` membership is load-bearing (spec-flow CRITICAL):** a NEW untargeted `terraform_data`
+  vector resource is SILENTLY SKIPPED on merge-apply while the `.service`-triggered installs ship —
+  leaving units that now require the token but never got vector. Fold vector into `journald_persistent`
+  (already targeted) OR add the new resource to the workflow `-target` list AND Files to Edit.
+- **Token co-location removes the ordering race:** deliver the token inside each `*_install` (which
+  `enable --now`s the timer) — NOT a separate resource — so the token file always exists before the
+  timer fires. A separate resource without `depends_on` races the enable (nic-guard's ~1 post-unpause
+  fire makes a first-fire race a false rollback).
+- **The arm runs on the merge PUSH, not only workflow_dispatch:** the merge itself attempts the arm
+  right after re-delivering units; plan for a fail-loud-safe rollback if timing misses, and use the
+  dispatch re-run as the deliberate retry once beats are confirmed.
+- **#6459 fresh-host bake:** the token is delivered only by the web-1 SSH provisioner; a future baked
+  host would get units requiring `DOPPLER_TOKEN` with nothing writing it. Out of scope here, but record
+  it as an explicit #6459 blocker (the ADR note alone won't prevent it).
 - **`$HOME` masks the token error:** doppler checks `$HOME` before auth, so the first shipped error
   will be `$HOME is not defined`; the fix must add BOTH `HOME=/root` AND the token source — fixing only
   one leaves the other latent.
@@ -390,7 +453,9 @@ files this plan edits.
 
 ## Rollback plan
 
-Revert the PR. The `.service` edits revert to the prior (broken-but-inert) units; the vector provisioner
-is additive (removing it stops shipping Source 4 but breaks nothing). The heartbeats stay paused
-(source `paused=true`, `ignore_changes=[paused]`), so a revert cannot fire a false alarm. No data
-migration, no user-facing surface.
+Revert the PR. The `.service` + env-file edits revert to the prior (broken-but-inert) units; the vector
+fold is additive (reverting stops shipping Source 4 but breaks nothing). The heartbeats stay paused
+(source `paused=true`, `ignore_changes=[paused]`), so a revert cannot fire a false alarm. **Note:** the
+revert push itself re-runs the arm step, which fail-loud rolls the monitors back to paused once more —
+harmless to users (monitors stay paused), but not a silent no-op. No data migration, no user-facing
+surface.

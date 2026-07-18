@@ -18,13 +18,20 @@ cannot actually be observed between them — it is internal-ordering fiction. Sp
 observability channel provably live *before* the arm workflow re-runs, so a residual/differently-
 failing unit is distinguishable from "fixed" (the #6536 failure mode: re-running the arm blind).
 
+**Corroboration (deepen-plan review):** two independent reviewers (spec-flow-analyzer + architecture-
+strategist) CONFIRMED the advisor's structural point — on merge, `apply-web-platform-infra.yml` runs a
+SINGLE apply job that delivers vector + the unit fix together AND runs the arm step in the same job, so
+the "measure the still-broken units' stderr BEFORE fixing" checkpoint is **structurally unreachable**
+in one PR (not merely inelegant). The plan was revised accordingly: that checkpoint is demoted from an
+acceptance criterion to best-effort.
+
 **Session-model assessment (kept as default = single PR):** The single-PR plan still preserves the
-*essential* #6536 value — once the vector channel is live (same PR), ANY residual unit failure is
-self-diagnosable off-box, and the diagnosis here is already strong from a unit-diff (not a dev-box
-guess), so the pre-fix measurement is confirmatory, not load-bearing. The plan mitigates the advisor's
-concern within one PR by sequencing the apply/verify (Phase 1 vector delivery + telemetry checkpoint →
-Phase 2 unit fix + telemetry → Phase 3 separate `workflow_dispatch` arm run only after the channel is
-confirmed live). The operator's single-PR direction is retained; the split is the cleaner-engineering
-alternative for the operator to weigh.
+*essential* #6536 value — once Source 4 is live (same merge), ANY residual unit failure is
+self-diagnosable off-box, and the diagnosis here is already CONFIRMED from a unit-diff (not a dev-box
+guess), so the pre-fix measurement is confirmatory, not load-bearing. The plan also adds a positive-
+control canary so a future Source-4 regression is detectable. **The two-PR split is the ONLY way to
+capture the true pre-fix broken-state reading** — a real (if marginal, given the strong diagnosis)
+engineering benefit for the operator to weigh against the ARGUMENTS' single-PR deliverable. Retained
+as default = single PR; surfaced for the operator to decide.
 
 **Disposition:** default = single PR (operator direction). Surface to operator via `/ship`.

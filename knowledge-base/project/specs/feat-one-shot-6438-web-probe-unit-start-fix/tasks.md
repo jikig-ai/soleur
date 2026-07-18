@@ -14,40 +14,46 @@ before the fix is validated; learning 2026-07-16 §2). **Ref #6438 #6548**, neve
 ## Phase 0 — Preconditions (verify against live repo, no guessing)
 - [ ] 0.1 Read `diagrams/{model.c4,views.c4,spec.c4}` — confirm no new external actor/system/store/
       access-relationship is introduced (bug fix on already-modeled elements → no C4 edit).
-- [ ] 0.2 Confirm the `doppler_token`/write-token value available in `server.tf` scope for the token
-      file, OR decide to mint a read-scoped `doppler_service_token` (web-arm-write-token.tf pattern).
-- [ ] 0.3 Confirm `vector.toml` render path (`@@HOST_NAME@@` via `soleur-host-bootstrap.sh:342`, or
-      re-invoke `/usr/local/bin/soleur-vector-install`) for the new provisioner.
-- [ ] 0.4 Confirm the arm workflow's `-target` list scope for a new `terraform_data` resource
-      (apply-web-platform-infra.yml ~:393).
+- [ ] 0.2 Confirm `terraform_data.journald_persistent` (server.tf:668) is on the workflow SSH
+      `-target` list (apply-web-platform-infra.yml ~:681-694) — if yes, fold vector delivery into it
+      (no new -target); if no, use a new resource + append it to the -target list + Files to Edit.
+- [ ] 0.3 Confirm `vector.toml` render path (re-invoke `/usr/local/bin/soleur-vector-install`, which
+      already renders `@@HOST_NAME@@`).
+- [ ] 0.4 Reconcile the Observability period figures (180/360/180) with the live arm deadlines
+      (230/470/230) — nic-guard 5-min cadence gives ~1 fire inside 470s.
 
-## Phase 1 — Observability delivery + token file (SHIP FIRST)
-- [ ] 1.1 Add `terraform_data.web_vector_reload_install` in `server.tf`: SSH to web-1; deliver
-      `vector.toml` → `/etc/vector/vector.toml` (rendered) + reload the vector agent; write
-      `/etc/default/web-probes` (root:root, 600, `DOPPLER_TOKEN=<prd-read token>`).
-      `triggers_replace = sha256(join(...,[file(vector.toml), host_name, token ref]))`. Idempotent.
-- [ ] 1.2 (RED→GREEN) Drift-guard test: assert `server.tf` has a resource delivering `vector.toml`
-      + writing `/etc/default/web-probes` root:root 600; `triggers_replace` hashes `vector.toml`.
-- [ ] 1.3 (post-merge, automated) Apply Phase 1 (`-target` new provisioner), then self-pull telemetry:
-      `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep web-zot-consumer-probe --grep 'Doppler Error'`.
-      **Evidence checkpoint:** probe-tagged stderr now ships AND shows the predicted `$HOME`/auth error.
+## Phase 1 — Token (folded) + vector delivery + positive-control canary
+- [ ] 1.1 Add `doppler_service_token.web_probes` (`config=prd, access=read`) in a token `.tf`
+      (web-arm-write-token.tf pattern). Self-provisioning; NOT `var.doppler_token`.
+- [ ] 1.2 In each of the 3 `*_install` remote-execs (server.tf:463/506/549), append `DOPPLER_TOKEN=`
+      (from `doppler_service_token.web_probes.key`) to the existing `printf > /etc/default/web-<probe>`
+      line; hash the token key into each installer's `triggers_replace`. (No new file, no new
+      EnvironmentFile, no ordering race.)
+- [ ] 1.3 Fold `vector.toml` delivery + reload into `terraform_data.journald_persistent`
+      (or a new -targeted resource); hash `file(vector.toml)` into its `triggers_replace`.
+- [ ] 1.4 Add the positive-control healthy canary row to Source 4 (luks-#6604 pattern) — /work picks
+      the cadence-appropriate mechanism (low-freq `[probe] ok` line vs `SOLEUR_PROBE_VERBOSE=1`;
+      weigh the 60s quota cost).
 
-## Phase 2 — Unit-start fix (verified against the Phase-1 reading)
-- [ ] 2.1 (RED) Drift-guard test asserting each probe `.service` has `Environment=HOME=/root` +
-      `EnvironmentFile=/etc/default/web-probes`, does NOT source `webhook-deploy`, does NOT set
-      `User=deploy` w/o `PrivateTmp=true`, and references no `/tmp/.doppler`. Register in
-      `infra-validation.yml`. Test file `.test.sh` in `apps/web-platform/test/`.
-- [ ] 2.2 (GREEN) Edit the 3 `.service` files: add `Environment=HOME=/root` +
-      `EnvironmentFile=/etc/default/web-probes`; keep root-run; **fail loud, no degrade guard**.
-- [ ] 2.3 ADR-123 amendment note (web-1 root-doppler-unit auth contract).
-- [ ] 2.4 (post-merge, automated) Apply Phase 2 — the `.service` edits re-fire the `*_install`
-      provisioners (`triggers_replace` hashes the `.service`) → re-deliver + daemon-reload + enable.
-      Self-pull telemetry: units succeed (no `Failed with result exit-code`), a real beat lands.
+## Phase 2 — Unit-start fix
+- [ ] 2.1 (RED) Drift-guard test: each probe `.service` has `Environment=HOME=/root`; each
+      `/etc/default/web-<probe>` write includes `DOPPLER_TOKEN=`; no `webhook-deploy` source, no
+      `User=deploy` w/o `PrivateTmp=true`, no `/tmp/.doppler`; a `vector.toml` delivery/reload path with
+      `triggers_replace` hashing `file(vector.toml)`; if a NEW vector resource, it is in the -target
+      list. Fold into the existing infra drift-guard (no new test file); register in `infra-validation.yml`.
+- [ ] 2.2 (GREEN) Edit the 3 `.service` files: add ONLY `Environment=HOME=/root`; keep root-run;
+      **fail loud, no degrade guard**.
+- [ ] 2.3 ADR-123 amendment note (web-1 root-doppler-unit auth contract — dedicated read token in the
+      per-probe env files; #6459 fresh-host token-bake blocker recorded).
+- [ ] 2.4 (post-merge, automated) The merge apply re-fires the `*_install` provisioners (token + unit)
+      and folds vector delivery; self-pull telemetry: units succeed (no `Failed with result
+      exit-code`), classification + positive-control canary rows reach Source 4, a real beat lands.
 
 ## Phase 3 — Arm the heartbeats
-- [ ] 3.1 (post-merge) `gh workflow run apply-web-platform-infra.yml --ref main -f reason='arm L3
-      probes after unit-start fix (#6438/#6548)'`; watch the "Arm web-host probe heartbeats" step
-      report all 3 monitors `status=up` (deadlines 230/470/230s).
+- [ ] 3.1 The arm step runs on the merge PUSH (same job) — it arms GREEN if units already beat, else
+      fail-loud rolls back (safe). Deliberate retry once telemetry confirms beats:
+      `gh workflow run apply-web-platform-infra.yml --ref main -f reason='arm L3 probes after
+      unit-start fix (#6438/#6548)'`; watch all 3 monitors reach `status=up`.
 
 ## Phase 4 — Soak handoff (do NOT touch)
 - [ ] 4.1 Confirm `scripts/followthroughs/l3-probe-armed-6438.sh` enrollment intact (directive +
