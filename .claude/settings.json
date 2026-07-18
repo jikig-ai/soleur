@@ -15,6 +15,10 @@
       "Read(**/.env.*.local)",
       "Read(**/.env.production)",
       "Read(**/.env.development)",
+      "Read(**/.env.staging)",
+      "Read(**/.env.test)",
+      "Read(**/.env.prod)",
+      "Read(**/.env.dev)",
       "Read(**/lib/stripe.ts)"
     ]
   },
