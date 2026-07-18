@@ -106,10 +106,13 @@ with the per-apply attestation); the systemic fix is tracked in #3910.
 This revision tightens the "mirrors ADR-031" framing in two ways the
 PR #3903 body must NOT overstate:
 
-1. ADR-031 scopes the Sentry auto-apply to `-target=sentry_cron_monitor.*`
+1. ADR-031 scoped the Sentry auto-apply to `-target=sentry_cron_monitor.*`
    because that root manages BOTH cron-monitors (auto-applied) AND
-   issue-alerts (import-only). `infra/github/` manages a single resource
-   (`github_repository_ruleset.ci_required`) so the apply step does not
+   issue-alerts (import-only). (As of ADR-031's original decision; #6589 later
+   made the Sentry apply full-root and retired the `-target=` scoping — this
+   ADR-032 reasoning stands on the general "single-resource root needs no
+   scoping" point, which is unaffected.) `infra/github/` manages a single
+   resource (`github_repository_ruleset.ci_required`) so the apply step does not
    need `-target` scoping — the full-root apply is the scoped apply by
    construction. Future additions to this root require revisiting the
    scoping decision.

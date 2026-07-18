@@ -144,10 +144,34 @@ if [[ -n "$maxoom" && "$maxoom" -gt 0 ]]; then
 fi
 
 # (5) anon RSS pressure near the --memory cap (context signal, backs up the monotonic counter).
-threshold=$(( CAP_MB - ANON_HEADROOM_MB ))
+# The cap is REPORTED by the host (zot_memory_cap_mb, read from the container's live cgroup
+# memory.max), not assumed here. It used to default to a hardcoded 7168 — correct only while
+# the host was cx33. The cap is now derived from var.registry_server_type
+# (zot-registry.tf local.registry_memory_cap_mb), so on a 4 GB host it is 3072. A gate holding
+# the stale 7168 would test zot_anon_mb against 7168-1024=6144 on a container the kernel kills
+# at 3072: unreachable, so it PASSES a starved host — a gate that does not pin the thing it
+# names. Fall back to CAP_MB only when the host reports nothing (older boot with no such
+# field); a reported cap always wins.
+reported_cap="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values zot_memory_cap_mb | sort -n | tail -1)"
+effective_cap="${reported_cap:-$CAP_MB}"
+cap_source="reported by host"
+[[ -z "$reported_cap" ]] && cap_source="assumed (host reported none)"
+threshold=$(( effective_cap - ANON_HEADROOM_MB ))
+
+# UNCAPPED is its own failure, not a missing reading. zot_memory_cap_mb cannot express it (-1 is
+# the parse lib's drop-sentinel, 0 would mean "capped at nothing"), so the host reports
+# zot_memory_capped=true|false|unknown separately. Without this branch an uncapped container
+# looks exactly like a mid-restart one: reported_cap is empty, the gate ASSUMES 7168, and check
+# (5) below tests anon against a ceiling that does not exist — on a 4 GB host, 6144 is
+# unreachable, so it passes. Uncapped-on-a-small-host IS #6288's root condition; a gate that
+# cannot see it is the gate this issue needed and did not have. Any `false` on the newest boot
+# fails: the cap either binds or it does not.
+if printf '%s\n' "$SCOPED" | grep -qF 'zot_memory_capped=false'; then
+  FAILS+=("zot is running UNCAPPED (zot_memory_capped=false) — docker started it with no --memory limit, so the cgroup cannot contain a large-store scan and the host OOM-killer is the only backstop. This is #6288's root condition.")
+fi
 maxanon="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values zot_anon_mb | sort -n | tail -1)"
 if [[ -n "$maxanon" && "$maxanon" -gt "$threshold" ]]; then
-  FAILS+=("zot_anon_mb peaked at ${maxanon} MB (> cap ${CAP_MB} - headroom ${ANON_HEADROOM_MB} = ${threshold}) — the --memory cap is under-sized")
+  FAILS+=("zot_anon_mb peaked at ${maxanon} MB (> cap ${effective_cap} [${cap_source}] - headroom ${ANON_HEADROOM_MB} = ${threshold}) — the --memory cap is under-sized")
 fi
 
 if [[ "${#FAILS[@]}" -gt 0 ]]; then
@@ -157,5 +181,5 @@ if [[ "${#FAILS[@]}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "PASS: zot restart-loop plateaued for boot_id=$NEWEST_BOOT over ${span}s / ${n_events} events (>=1 valid container sample) — restarts flat (delta<=${PLATEAU_TOL}), no exit_code=137, zot_oom_kills=0, oom_kills_5m=0, zot_anon_mb below the ${CAP_MB}m cap. #6288 remediation holds."
+echo "PASS: zot restart-loop plateaued for boot_id=$NEWEST_BOOT over ${span}s / ${n_events} events (>=1 valid container sample) — restarts flat (delta<=${PLATEAU_TOL}), no exit_code=137, zot_oom_kills=0, oom_kills_5m=0, zot_anon_mb below the ${effective_cap}m cap [${cap_source}]. #6288 remediation holds."
 exit 0

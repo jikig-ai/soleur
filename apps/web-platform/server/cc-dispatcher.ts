@@ -18,6 +18,11 @@ import { existsSync } from "node:fs";
 import path from "path";
 
 import { ROUTINE_AUTHORING_DIRECTIVE } from "@/server/routine-authoring-directive";
+import {
+  SUPPORT_SKILLS_OPTION,
+  SUPPORT_EXTRA_DISALLOWED_TOOLS,
+} from "@/server/support-directive";
+import { resolveWorkspaceMode, type Persona } from "@/server/workspace-mode";
 
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
@@ -1673,6 +1678,12 @@ export const realSdkQueryFactory: QueryFactory = async (
     // when enabled+permitted; otherwise the api_key (feat-operator-cc-oauth).
     const credential = await lease.getAgentCredential();
 
+    // ADR-113 — resolve the execution mode ONCE from the required persona. Drives
+    // the repo-lifecycle skip (below), the cwd, and the sandbox write-set. A
+    // garbage/cast persona throws here (never silently falls through to the repo
+    // path); `command_center` preserves every gate in its existing order.
+    const mode = resolveWorkspaceMode(args.persona);
+
     // ADR-044 PR-1 (FR1/TR1) — resolve the ACTIVE workspace ONCE,
     // membership-verified, BEFORE the parallel consumer fan-out. Threading this
     // single id into the agent CWD, repo, installation, AND the in-dispatch
@@ -1787,7 +1798,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     // path — no regression, no over-block of repo-less chat. `!repoUrl` is
     // `repoReadiness.ok === true` (not_connected, never cloning/error), so this
     // never shadows the RepoNotReadyError gate below.
-    if (resetFromClaim && !repoUrl) {
+    if (mode.runRepoLifecycle && resetFromClaim && !repoUrl) {
       throw new WorkspaceNotReadyError({
         kind: "no-repo-switch",
         targetTeamId: resetFromClaim,
@@ -1898,10 +1909,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     // clone and before `buildAgentQueryOptions`, is the stronger precondition. On
     // failure it surfaces a retryable error (rides the `query()`-construction catch
     // below) rather than building a doomed sandbox.
-    await ensureWorkspaceDirExists(workspacePath, {
-      feature: "cc-dispatcher",
-      userId: args.userId,
-    });
+    // ADR-113 — support runs at the plugin docs root (agentWorkspacePath), not the
+    // user's workspace, so it does NOT need the workspace dir ensured/created.
+    if (mode.runRepoLifecycle) {
+      await ensureWorkspaceDirExists(workspacePath, {
+        feature: "cc-dispatcher",
+        userId: args.userId,
+      });
+    }
 
     // #5394 Layer A (FIX 1a) + Bug 2 — gate-reordering self-heal. The
     // recoverable `error`/stale-`cloning` branch (`repoReadiness.ok === false`)
@@ -1992,7 +2007,11 @@ export const realSdkQueryFactory: QueryFactory = async (
     // the pre-heal value (used as-is when no heal runs) and lifted to the post-heal
     // `repoReadiness.ok || healed.ok` inside the heal block (where `healed` scopes).
     let confirmDbReady = repoReadiness.ok;
-    if (needsSelfHeal) {
+    // ADR-113 — the clone self-heal (and its RepoNotReadyError throw on clone
+    // failure) is a repo-lifecycle concern. A support turn runs read-only at the
+    // plugin docs root and MUST NOT be blocked by the user's repo state (a support
+    // user whose repo is mid-clone still needs app help), so skip it for support.
+    if (mode.runRepoLifecycle && needsSelfHeal) {
       let healed: RepoReadiness = repoReadiness;
       try {
         const tenant = await getFreshTenantClient(args.userId);
@@ -2179,7 +2198,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     // FAILS-OPEN (spawn) so a transient blip never blocks a healthy repo. This does
     // NOT replace the sync `gitDirValid` seam consumed by the self-heal above — it
     // is an additive re-probe of `agentReady` despite `healed.ok=true`.
+    // ADR-113 — the terminal agent-readiness gate (in-bwrap `git rev-parse`
+    // strand → RepoNotReadyError) is a repo-lifecycle concern. Short-circuit it
+    // for support so a support turn is never blocked on the user's `.git` state;
+    // `evaluateAgentReadiness` is not even invoked (matches the read-only, repo-
+    // gate-bypassed contract).
     if (
+      mode.runRepoLifecycle &&
       (await evaluateAgentReadiness(workspacePath, {
         userId: args.userId,
         activeWorkspaceId,
@@ -2317,17 +2342,22 @@ export const realSdkQueryFactory: QueryFactory = async (
   // depend on `workspacePath` but not on each other — parallelize so the
   // probe doesn't add latency to cold-start dispatch. See plan
   // §"Sharp Edges" and `agent-prefill-guard.ts` for the guard contract.
-  const [, prefillGuardResult] = await Promise.all([
-    patchWorkspacePermissions(workspacePath),
-    applyPrefillGuard({
-      resumeSessionId: args.resumeSessionId,
-      workspacePath,
-      userId: args.userId,
-      conversationId: args.conversationId,
-      feature: "cc-concierge",
-      leaderId: CC_ROUTER_LEADER_ID,
-    }),
-  ]);
+  //
+  // ADR-113 — the support persona runs `applyPrefillGuard` ALONE:
+  // `patchWorkspacePermissions` is a repo-lifecycle concern (chmod'ing the user's
+  // connected workspace) that a read-only, repo-less support turn must NOT run.
+  // `applyPrefillGuard` is the always-on half and stays for both personas.
+  const prefillGuardPromise = applyPrefillGuard({
+    resumeSessionId: args.resumeSessionId,
+    workspacePath,
+    userId: args.userId,
+    conversationId: args.conversationId,
+    feature: "cc-concierge",
+    leaderId: CC_ROUTER_LEADER_ID,
+  });
+  const prefillGuardResult = mode.runRepoLifecycle
+    ? (await Promise.all([patchWorkspacePermissions(workspacePath), prefillGuardPromise]))[1]
+    : await prefillGuardPromise;
   const {
     safeResumeSessionId,
     contextResetNotice,
@@ -2394,6 +2424,16 @@ export const realSdkQueryFactory: QueryFactory = async (
   // See knowledge-base/project/learnings/bug-fixes/2026-07-06-connected-repo-
   // shadows-deployed-plugin-via-workspace-relative-path.md (supersedes #6115).
   const pluginPath = getPluginPath();
+
+  // ADR-113 — the workspace path the AGENT executes against. Support runs at the
+  // plugin docs root (`cwd` + sandbox + file-tool containment all target it, so
+  // the Read tool can reach the curated product-help corpus and the sandbox
+  // denyRead is computed against a real, existing dir). Command Center uses the
+  // user's resolved workspace unchanged. `mode` drives it, so a docs cwd cannot
+  // pair with a workspace write-set. Note `workspacePath` (the user's real
+  // workspace) is still used above for the repo lifecycle / prompt context.
+  const agentWorkspacePath =
+    mode.cwdSource === "plugin" ? pluginPath : workspacePath;
 
   // Synthetic AgentSession — the only place in the cc path where an
   // AgentSession exists. Registered into `_ccBashGates` per Bash
@@ -2582,7 +2622,10 @@ export const realSdkQueryFactory: QueryFactory = async (
     // Acquired LAST (after all setup) and inside this try so the catch releases
     // it on an `sdkQuery` throw; released on every close path via
     // `handleCcCloseQuery`.
-    if (isGitDataStoreEnabled()) {
+    // ADR-113 — the worktree write-lease is a repo-lifecycle concern (it guards
+    // concurrent writes to the user's workspace git-data store). A read-only,
+    // repo-less support turn never writes, so it must NOT acquire the lease.
+    if (mode.runRepoLifecycle && isGitDataStoreEnabled()) {
       const hostId = resolveHostId();
       const worktreeLeaseHandle = await acquireAndHoldWorktreeLease(
         activeWorkspaceId,
@@ -2636,8 +2679,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
-        workspacePath,
+        // ADR-113 — agentWorkspacePath = pluginPath for support (sandbox +
+        // file-tool containment target the corpus root), the user's workspace for
+        // Command Center. `mode` drives cwd + the sandbox write-set from the same
+        // value, so a docs cwd can never pair with a workspace write-set.
+        workspacePath: agentWorkspacePath,
         pluginPath,
+        mode,
         credential,
         serviceTokens,
         // Issue A — minted GH_TOKEN (or undefined when no repo connected).
@@ -2661,7 +2709,22 @@ export const realSdkQueryFactory: QueryFactory = async (
         // autonomous bypass) and runs inside the SDK bwrap sandbox whose
         // network egress is token-derived (see buildAgentSandboxConfig).
         // Merged with the canonical [WebSearch, WebFetch] disallowed list.
-        extraDisallowedTools: CC_PATH_DISALLOWED_TOOLS,
+        //
+        // feat-wire-concierge-support-chat (ADR-113): the support persona pins a
+        // WIDER disallowed set (Edit/Write/MultiEdit/NotebookEdit/Task/Agent) so a
+        // read-only help chat cannot write under cwd=getPluginPath() nor fan out
+        // into engineering subagents. Bash stays out of the list (kb-search shells
+        // out behind the read-only safe-bash gate).
+        extraDisallowedTools:
+          args.persona === "support"
+            ? SUPPORT_EXTRA_DISALLOWED_TOOLS
+            : CC_PATH_DISALLOWED_TOOLS,
+        // SDK-native skill scope (PRIMARY lever, ADR-113). Support loads ONLY
+        // kb-search into the main-session prompt; Command Center loads every skill
+        // (undefined → SDK default). Paired with the createCanUseTool default-deny
+        // below (defense-in-depth for an emit-a-non-loaded-skill case).
+        skills:
+          args.persona === "support" ? [...SUPPORT_SKILLS_OPTION] : undefined,
         // SubagentStart sanitizer override: cc strips control chars +
         // U+2028/U+2029 (per learning
         // 2026-04-17-log-injection-unicode-line-separators.md) and
@@ -2681,7 +2744,8 @@ export const realSdkQueryFactory: QueryFactory = async (
           // attributes the cc path. `CC_ROUTER_LEADER_ID` is a
           // non-routable leader id reserved for this purpose.
           leaderId: CC_ROUTER_LEADER_ID,
-          workspacePath,
+          // ADR-113 — file-tool containment targets the corpus root for support.
+          workspacePath: agentWorkspacePath,
           // Allow the flag-gated edit_c4_diagram through canUseTool (its tier
           // is auto-approve; writeC4Diagram enforces the diagrams-dir scope).
           platformToolNames: c4ToolName ? [c4ToolName] : [],
@@ -2690,6 +2754,10 @@ export const realSdkQueryFactory: QueryFactory = async (
           repoName: "",
           session,
           controllerSignal: controller.signal,
+          // feat-wire-concierge-support-chat (ADR-113) — default-deny Skill
+          // allowlist ({kb-search}) when persona=support (defense-in-depth for a
+          // model that emits a non-loaded skill despite the SDK `skills` filter).
+          persona: args.persona,
           deps: ccDeps,
         }),
         // #5772 lever 1 (ADR-070) — opt into the L3 phase-surface hint on the
@@ -2932,6 +3000,20 @@ export interface DispatchSoleurGoArgs {
    * gate — a trusted system-prompt append, never via context.content.
    */
   routineAuthoring?: boolean;
+  /**
+   * feat-wire-concierge-support-chat (ADR-113). Set to `"support"` by the
+   * ws-handler when `chatContext.type === "support"` (the in-app support chat).
+   * Threaded to the runner → realSdkQueryFactory, which bypasses the repo-
+   * lifecycle gates (support runs read-only at cwd=getPluginPath()), scopes SDK
+   * skills to kb-search, pins the support disallowed-tools, and emits the support
+   * prompt. Enum (not a safety-disabling boolean): a support turn CANNOT be
+   * expressed as "Command Center with gates off".
+   *
+   * REQUIRED (ADR-113 / CTO ruling): the two personas have OPPOSITE safe defaults,
+   * so there is no safe default — a dropped hop must be a compile error. Command
+   * Center callers pass `"command_center"` explicitly.
+   */
+  persona: Persona;
   /**
    * 2026-05-06 follow-up to #3338. Set by `resolveConciergeDocumentContext`
    * when the in-process PDF extractor surfaced a typed failure class. The
@@ -3215,7 +3297,15 @@ export async function dispatchSoleurGo(
     }
   }
 
-  const runner = getSoleurGoRunner(sendToClient);
+  // The runner is a process singleton; its captured sink is used ONLY for
+  // `emitInteractivePrompt`. Pass the process-stable WS sender, NOT the per-call
+  // `sendToClient` — a support turn's `sendToClient` is a per-REQUEST SSE sink
+  // (ADR-113) that must never be captured by a process-lived singleton (it would
+  // trip the "re-init with different sendToClient" guard on every support turn).
+  // Per-turn streaming is routed via the per-call `events` (below), not this
+  // captured sink. For the Command Center `sendToClient === defaultSendToClient`,
+  // so this is a no-op.
+  const runner = getSoleurGoRunner(defaultSendToClient);
 
   // Resolve workspace path in parallel with `runner.dispatch` so cold-start
   // LTFT (latency-to-first-token) does not pay an extra serial Supabase RTT.
@@ -4045,6 +4135,9 @@ export async function dispatchSoleurGo(
       persistActiveWorkflow,
       sessionId: sessionId ?? undefined,
       routineAuthoring: args.routineAuthoring,
+      // feat-wire-concierge-support-chat — forward the support persona to the
+      // runner → realSdkQueryFactory (repo-gate bypass + skill/tool scope).
+      persona: args.persona,
       artifactPath,
       documentKind,
       documentContent,
@@ -4242,6 +4335,8 @@ export function handleInteractivePromptResponseCase(args: {
 }): HandleInteractivePromptResponseResult {
   const { userId, payload, sendToClient } = args;
   const registry = getPendingPromptRegistry();
+  // WS-only path (interactive-prompt responses arrive over the socket); its
+  // `sendToClient` is already the process WS sender.
   const runner = getSoleurGoRunner(sendToClient);
 
   const result = handleInteractivePromptResponse({

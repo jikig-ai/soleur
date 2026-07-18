@@ -386,6 +386,33 @@ fixes for every per-step plan:
 > which silently misses deploys (a fix then hits ~50% stale code, invisibly): a
 > single-user-incident trap the threshold exists to prevent.
 
+> **Extension ([ADR-114](./ADR-114-one-tunnel-many-connectors-ingress-must-be-origin-relative.md), 2026-07-15, #6416) — the finding above generalizes beyond the deploy path.**
+> Nothing above is retracted. This ADR correctly stated the multi-connector fact — *"both
+> hosts run cloudflared on that ONE tunnel, so a POST load-balances to ONE connector
+> non-deterministically"* — and correctly rejected per-host tunnels (A). ADR-114 **cites**
+> that rejection rather than re-deciding it.
+>
+> The gap is narrower: **Option B solved connector nondeterminism for the `deploy.` route
+> only.** The same nondeterminism applies to every other ingress rule on the same tunnel, and
+> was never generalized:
+>
+> - **`registry.` → `tcp://10.0.1.30:5000`** is already origin-relative, so it is correct
+>   *provided every connector host is a 10.0.1.0/24 member*. #6416: web-2 had **no** private-net
+>   attachment, so ~50% of CI registry-bridge attempts landed on a connector with no route to
+>   zot — and, being masked by `continue-on-error`, silently skipped the mirror on every release.
+> - **`ssh.` → `ssh://localhost:22`** is connector-relative and therefore host-NONdeterministic.
+>   The 12 `web-1`-scoped provisioners below can land on the wrong host.
+>
+> ADR-114 records this as two normative invariants (I1 connector homogeneity, I2 origin-relative
+> ingress) plus the anti-pattern that a per-hostname ingress does **not** pin a connector.
+>
+> **Count correction (measured 2026-07-15).** "the 11 SSH provisioners" above is **stale** —
+> `server.tf` now carries **12** `terraform_data.*` blocks with
+> `connection { host = hcloud_server.web["web-1"].ipv4_address }` (a 13th, `deploy_pipeline_fix`,
+> has no `connection {}` at all). The original text is left verbatim above as this ADR wrote it;
+> **12** is the live number. Each of the 12 now carries an in-band `hostname` tripwire (#6416) so
+> a wrong-host landing fails the apply loudly instead of writing web-1's config to web-2.
+
 > **Amendment (CTO ruling, 2026-07-02, Phase 3 GA — cutover + read-source overlay, Sub-PR 3.D).**
 > The GA cutover to the shared git-data store is a hardened, coordinated operation, and
 > the rehydration contract (§1) is refined for the multi-host read side:
@@ -910,6 +937,100 @@ Phase 4b (continuous checkpoint).
 > changes). Items (a) truly-zero-downtime swap / web-2-only path and (b) private-net web-2
 > post-accept health probe remain OPEN on #6060 (GA-cutover / owner-side-relay scoped). `Ref #6060`.
 > Plan: `knowledge-base/project/plans/2026-07-05-fix-cross-pipeline-web-1-swap-serialization-plan.md`.
+
+> **Amendment (2026-07-15, #6425 — the tunnel carries ONE connector, and this ADR assumed otherwise).**
+> This ADR's Phase-3 verification design rests on a premise about the shared Cloudflare Tunnel
+> that was false in production from the moment web-2 first booted. Five corrections:
+>
+> **(1) Premise correction.** This ADR reasoned that "both hosts run cloudflared on that ONE
+> tunnel, **so** a POST load-balances to ONE connector non-deterministically" and chose
+> **Option B** (a receiving-host private-net fan-out) to absorb it. The premise is right and the
+> conclusion was too narrow: the fan-out fixes `/hooks/deploy` **only**. It was never applied to
+> `/hooks/deploy-status`, `/hooks/inngest-liveness`, `/hooks/infra-config`, or `ssh.`, all of
+> which resolve `localhost:` against whichever connector the caller's colo selected. Deploys
+> survived the coin flip; everything else silently did not. De-pooling does not reverse Option B
+> — the fan-out is retained unchanged; only the entry point becomes deterministic.
+>
+> **(2) The falsified contract.** Two claims in this ADR — *"the off-host runner cannot read
+> web-2 directly"* and *"web-2 `:9000` is private-net-deny"* (grep them; line numbers move) —
+> are **false under two connectors**: the
+> warm-standby verify can POST to web-2 and read web-1, or vice versa, and report either as
+> fact. Those lines described the intent, not the behavior. De-pooling makes them true for the
+> first time — this amendment *repairs* the verification design rather than weakening it.
+>
+> **(3) Designated-ingress-host invariant (normative).** Exactly ONE host — the designated
+> ingress host, currently `web-1` — registers a `cloudflared` connector on the
+> `soleur-web-platform` tunnel (`server.tf`'s `web_tunnel_connector = each.key == "web-1"`).
+> Every other web host installs the binary and registers nothing. See ADR-114 (I1/I2).
+>
+> **This invariant is NOT bound to §(c).** §(c) (`:594`) is a hard invariant on **live LB
+> weight** to web-2 — a different mechanism on a different surface. Clearing §(c) at GA
+> (owner-side relay active + git-data cut over) says nothing about connectors, and a reading
+> that treats "§(c) cleared" as "web-2 may re-join the tunnel" would **regress #6425 with a
+> staler host**: post-de-pool, web-2 receives infra-config pushes and SSH-bridged applies 0% of
+> the time, so its host scripts and seccomp/apparmor profiles freeze at whatever `PINNED` baked
+> and drift permanently. A freshly-recreated web-2 has no `inngest-inventory.sh` at all — its
+> `/hooks/inngest-liveness` is broken by construction. Re-pooling therefore requires a full
+> infra-config + SSH-bridge re-delivery, **not a weight flip**, and is gated on the
+> host-addressability prerequisite (#6466), not on §(c).
+>
+> **(4) The availability trade, stated.** De-pooling removes deploy-ingress survival of a web-1
+> **cloudflared-process-only** failure — previously web-2's connector would have answered. That
+> is bounded by the systemd `restart-on-failure` on the unit, and worthless if web-1's *host*
+> dies (`app.soleur.ai` is a direct A record to web-1 anyway, so the user-facing surface is gone
+> regardless). **A silent-wrong-answer mode is traded for a loud-total-outage mode.** That is
+> the right trade — a management plane that lies is worse than one that is visibly down — and it
+> must be a stated one, so the zero-connector census verdict pages `action-required`.
+>
+> **(5) Sole-consumer note.** The tunnel is purely a **management plane**: it carries no `app.`
+> ingress rule (`grep -c 'hostname = "app\.' tunnel.tf` → 0), and `app.soleur.ai` is a direct
+> CF-proxied A record to web-1 (`dns.tf:13-20`). So the de-pool has **no user-facing surface**.
+> Operator break-glass is preserved via the direct A record + `admin_ips` firewall
+> (`tunnel.tf:4`), which does not traverse the tunnel being constrained.
+>
+> **Status:** AMEND, not a reversal — Option B stands, and no prior decision changes. `Ref #6425`.
+> Plan: `knowledge-base/project/plans/2026-07-15-fix-web2-tunnel-depool-host-id-plan.md`.
+
+> **Amendment (operator decision, 2026-07-17, #6538/#6463 — the warm standby is retired).**
+> `web-2` (`fsn1`, `10.0.1.11`) — the ADR-068 Phase 3 warm standby, provisioned in the
+> §5877/§5887 amendments and moved to `fsn1` for cross-DC failover — is **retired**. It
+> never carried user-facing web traffic: `app.soleur.ai` is a direct A record to web-1
+> (§5 sole-consumer note above), it sat at **LB weight 0** by §(c)'s hard invariant, and
+> the multi-host DNS rewire that would have let it serve was deferred to the operator
+> cutover and never built. It stood by at a real recurring cost for a cutover with no
+> consumer. **§(c) survives unchanged** — it remains the normative gate on any future
+> live LB weight to a second host; this amendment removes the *host that §(c) was gating*,
+> not the invariant.
+>
+> **HA is deferred, not abandoned.** The DC-failover posture web-2 nominally provided is
+> re-scoped to **active-active-N (#6459)**. That work has a hard placement prerequisite
+> this ADR now records as normative: **every active-active host must be *born* in `hel1`
+> inside `hcloud_placement_group.web_spread`** (the location-scoped spread group —
+> `server.tf` gates that cross-DC hosts cannot join it). A host born in another DC cannot
+> later join the group; it must be created in `hel1` from the start. **git-data (#6570) is
+> the gating blocker** — active-active needs the shared bare store cut over first (§(c)'s
+> `isGitDataStoreEnabled()` prerequisite), so #6459 cannot start until #6570 lands.
+>
+> **Alternatives considered (both rejected).**
+> 1. **Keep web-2 as-is (a non-rebuildable cross-DC standby).** Rejected: `cx33` — web-2's
+>    type — is orderable in **exactly one datacenter (`hel1-dc2`)** and on 2026-07-15 was
+>    orderable in **zero** (#6463). A `-replace` of web-2 would destroy it and fail to
+>    re-place it in `fsn1`, wedging every apply-on-merge on `resource_unavailable` (the
+>    2026-07-13 #6374 incident). A standby that cannot be rebuilt is not a standby.
+> 2. **Keep a *rebuildable* cross-DC standby (upgrade web-2 to `cpx32`).** Rejected on
+>    cost. `cpx32` (€35.49/mo net) is the cheapest ≥8 GB machine `fsn1` will sell — there
+>    is nothing between it and `cx33` (€8.49/mo) in that DC. A rebuildable cross-DC standby
+>    therefore costs **+€27/mo (+€324/yr, ~47% of all Hetzner spend)** to insure a
+>    failover that §(c) keeps drained and that has no traffic-serving consumer until
+>    active-active ships anyway. The insurance premium exceeds the risk it covers.
+>
+> Retiring web-2 is the **first step of active-active**, not a detour: #6459's hosts start
+> from a clean single-host `web_hosts` roster born in `hel1`, not from an orphaned fsn1
+> standby that would have to be destroyed first regardless.
+>
+> **Status:** AMEND, not a reversal — Option A / Approach A stand; the GA end-state
+> (§8) is unchanged. `Ref #6538`, `Ref #6463`. Plan:
+> `knowledge-base/project/plans/2026-07-16-chore-retire-web-2-fsn1-orphan-plan.md`.
 
 ## Consequences
 

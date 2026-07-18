@@ -1,0 +1,210 @@
+# Tasks — fix(#6536) inngest-heartbeat.service exits non-zero every 60s
+
+Plan: `knowledge-base/project/plans/2026-07-16-fix-6536-inngest-heartbeat-exit-code-plan.md`
+Lane: `cross-domain` · Threshold: `single-user incident` · Issue: #6536
+
+> **BLOCKER — do not start Phase 2 until this clears.**
+> `plan-review` did NOT complete (6/7 reviewers died on API errors; only `cto` returned) and
+> `requires_cpo_signoff: true` is **unmet**. Re-run in **small batches (2-3 agents)**, never
+> 7-way parallel. Deepen-plan settled the delivery split and the flip enum (below) — those two
+> blockers are CLEARED.
+>
+> **UPDATE — CPO SIGN-OFF GRANTED** (2026-07-16) after both P1 rounds landed, conditional on
+> FR4c + the Risks rewrite, both now applied. 0.2 is CLEARED. 0.1 remains: the wider panel
+> (dhh / kieran / code-simplicity / architecture-strategist / spec-flow-analyzer) never ran.
+
+## Phase 0 — Preconditions
+
+- [x] 0.1 **Panel run** (small batches — the 7-way spawn is what died): `cto`, `user-impact-reviewer`
+      (CPO, 2 rounds), `observability-coverage-reviewer`, `code-simplicity-reviewer`,
+      `architecture-strategist`. **v5 folds in the last two, which independently refuted the
+      premise that justified ~60% of v4.**
+- [x] 0.2 **CPO sign-off — GRANTED** (conditions applied, then FR4c superseded by v5's render split,
+      which removes the hazard structurally rather than gating it — strictly stronger than the
+      design signed off).
+- [x] 0.3 **Delivery — SETTLED + BLOCKER FIXED (arch F1).** `IREF` bump (`cloud-init-inngest.yml:337`)
+      is the `user_data` diff; FR3/FR4/FR5 all ride that one image. **Merging delivers NOTHING**:
+      `hcloud_server.inngest` is stripped from per-merge coverage (`apply-web-platform-infra.yml:1401`)
+      and the replace is dispatch-only (`:1552`, ADR-100 Amendment 6b). Delivery =
+      `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace`, run by
+      **the pipeline, not the operator**.
+- [x] 0.4 **Flip enum — CUT (v5).** No FSM in the ping script. URL-presence is sufficient (`op=arm`
+      writes the URL before `armed`). ADR-100 / `inngest-cutover-flip.sh:214` owns the FSM;
+      `inngest-bootstrap.sh:416` is already a stale copy #2. Don't add copy #3.
+- [x] 0.5 **FR4c — CUT (v5).** `DOPPLER_PROJECT` is a Doppler **reserved/computed** secret derived
+      from `--project` (measured across 3 configs + a live `doppler run` probe). The drift class
+      FR4c removed does not exist.
+- [x] 0.6 **Image baseline — MEASURED (arch F6).** `IREF` tag → `sha256:61bcdff0…`. The image is NOT
+      the commit: its `vector.toml` lacks `"webhook"` (#6315) and hardcodes `host_name` (#6396);
+      its bootstrap is 19 lines behind. **The replace ships all of that too** — enumerate it in the
+      PR body. Lockstep OK: repo bootstrap renders `@@HOST_NAME@@` (`:609`) ↔ repo `vector.toml`
+      has the sentinel.
+- [ ] 0.7 **AC15 ordering gate — BOTH keys** (CPO P1-3). Assert `INNGEST_HEARTBEAT_URL` **and**
+      `INNGEST_CUTOVER_FLIP` absent from `soleur-inngest/prd` at apply time. URL is the **primary**
+      trip-wire (`op=arm` writes it FIRST, G4 `:759`; flip LAST, G5 `:669`), so a failed arm leaves
+      URL-present/flip-absent **durably** — a state a flip-only gate passes. Both absent → proceed.
+      URL present + flip absent → **HALT**. Flip present → **HALT**.
+- [x] 0.8 **FILED** (2026-07-16). `#5` went first as instructed — it is the highest-signal finding
+      here and outranks #6536 itself.
+      | §Descoped | Issue | Subject |
+      |---|---|---|
+      | 5 | **#6551** | live Better Stack row that NO `vector.toml` source admits |
+      | 1 (H4) | **#6555** | `${DOPPLER_PROJECT:-soleur}` latent trap — **now also picks the heartbeat arm** (new consequence, added by this PR) |
+      | 2 (+P2d) | **#6556** | units with no `SyslogIdentifier=` tag as ExecStart basename; + "loud" is queryable, not alarming |
+      | 3 | **#6552** | `op=rollback` leaves the URL → two pushers on one monitor |
+      | 4 (+3.3) | **#6553** | flip-guard allowlist omits `flushed` (the CODE, not the comment — 3.3 refuted the "stale comment" premise) |
+      §Descoped 6 (heartbeat proves HOST ≠ SCHEDULER) folded into **#6556** — same subsystem, same
+      trigger, and it is the same false-green class. §Descoped 7 (sudoers dual-maintenance) folded
+      into **#6555**, which is the only work that would touch those files. Bundled per the review
+      skill's trigger-equality rule rather than filing 7 issues for 5 decisions.
+
+## Phase 1 — Observability (verification infrastructure for AC12)
+
+*(v5: dropped the "probe ships BEFORE the fix" ordering. It was fiction — FR3/FR4/FR5 ride one
+image, one bump, one replace, so no fire occurs between them. And there is nothing left to
+discriminate: H5 is confirmed, H4 refuted+descoped, and the probe cannot see H4 anyway.)*
+
+- [x] 1.1 RED: unit heredoc contains `SyslogIdentifier=inngest-heartbeat`.
+- [x] 1.2 GREEN: add it (`inngest-bootstrap.sh:178-194`). **Highest-value line in the PR** — it
+      retags doppler's AND curl's stderr onto a shipping channel (today systemd derives the tag
+      from the ExecStart basename → `doppler`), and it is what makes the "no row + unit failed"
+      signature readable at all.
+- [x] 1.3 GREEN: `LOG_TAG="inngest-heartbeat"` as a **real assignment** in the ping script — NOT a
+      bare `logger -t inngest-heartbeat` literal. The drift fixture (`vector-pii-scrub.test.sh:404`)
+      derives EXPECTED_TAGS from `^\s*(readonly\s+)?LOG_TAG="…"`; a literal pulls the file into
+      the loop (grep is heredoc-blind), yields NO tag, and hard-fails AC3 — taking AC7/AC9 with it.
+      Do NOT "fix" that via `SYSTEMD_UNIT_IDENTIFIERS` — `:412` forbids it.
+- [x] 1.4 RED: leak gate (AC3) — **value-based**. Run the script with
+      `INNGEST_HEARTBEAT_URL=…/CANARY_SENTINEL`; assert `CANARY_SENTINEL` appears **zero** times in
+      stdout+stderr+logger output. (v2's source-grep caught 1 of 3 shapes.)
+- [x] 1.5 GREEN: add `"inngest-heartbeat"` to `vector.toml` Source 4's allowlist with a `#6536`
+      comment. **Source 4 only** — Source 1's `PRIORITY 0-4` cut drops PRIORITY-6 output. Scope the
+      AC with the flag-based `awk` form, not an `/a/,/b/` range.
+- [x] 1.6 Extend `vector-pii-scrub.test.sh`; `cat-deploy-state.sh:344` + its test (FR7).
+- [x] 1.7 **No success-path log row.** v4 added `url_present=yes … pinging` every 60s on BOTH hosts
+      (~2,880/day) to duplicate what the monitor already asserts, against ~5k/day headroom
+      (`vector.toml:166-171`, engineered ~20% under 25k after #5110's AC12 FAIL at 2.3x). Cut.
+
+## Phase 2 — The fix (render-time split)
+
+- [x] 2.1 RED: three cases on the **rendered** artifact — dedicated+URL-absent → exit 0 + one row;
+      dedicated+URL-present → `exec curl`; **web render → NO dark arm** (rc=2, loud).
+- [x] 2.2 GREEN: `@@DARK_ARM@@` sentinel in the **quoted** heredoc, substituted by `sed -i` per
+      `DOPPLER_PROJECT` — the pattern `:609` (`@@HOST_NAME@@`) and `:405-418`
+      (`@@FLIP_GUARD_EXECSTARTPRE@@`) already use. **NEVER unquote the heredoc** (§Sharp Edges: it
+      bakes the bearer URL into a 0755 file and AC3 structurally cannot catch it).
+- [x] 2.3 Verify under `sh`, not bash — the script is `#!/bin/sh`.
+
+## Phase 3 — Correct the record
+
+- [x] 3.1 `inngest-host.tf:137-151` — replace the false *"the dark host's heartbeat curl no-ops"*
+      claim with the measured truth (rc=2). Cite #6536. This false comment authorized the bug.
+- [x] 3.2 RED/GREEN: guard in `inngest-host.test.sh` so it cannot return (AC6).
+- [x] 3.3 **DONE, but NOT as specified — the task's premise is refuted (measured at /work).**
+      The task says the comment is "stale" because it names `{armed, flipping, done}` while the
+      FSM is `armed → flipping → flushed → done`. Measured: `inngest-server-flip-guard.sh:40` is
+      `armed | flipping | done) flag_ok=true ;;` — so the comment describes the guard's ACTUAL
+      code **accurately**. It is not a stale copy of the FSM; it is a correct description of an
+      allowlist that legitimately differs from the FSM.
+      Adding `flushed` as instructed would have made the comment assert behaviour the code does
+      **not** have — i.e. manufactured a NEW instance of the exact defect this PR exists to
+      remove (`inngest-host.tf` claimed a curl no-op that was never implemented, and that false
+      claim authorized 3 days of 60s failures). Applied instead: the comment now states the
+      guard's real allowlist, names `flushed` as a deliberate omission, and forbids the
+      "reconcile by adding flushed" edit that this very task asked for.
+      **Real finding (different subsystem, kept separate):** the guard's allowlist omits
+      `flushed`, so an inngest-server restart landing inside the flushed→done window is refused.
+      Fail-closed and self-healing (the flip script advances flushed→done on its next 30s poll),
+      so severity is low — but it is a genuine guard/FSM divergence. NOT fixed here: this PR does
+      not touch the flip guard, and widening a cutover safety allowlist mid-cutover is not a
+      change to make as a side effect of a heartbeat fix. Needs its own issue.
+
+## Phase 6 — Review disposition (2026-07-16)
+
+- [x] 6.1 **P2(a) drift guard — FIXED INLINE** (`a49bbffb9`). CONFIRMED by simulation, not argued:
+      `inngest-bootstrap.sh` enters the AC3 loop via **exactly one** line — the `sed` replacement
+      rendering the dark arm — and its only `LOG_TAG` is inside the ping heredoc. Removing the
+      now-pointless dark arm post-cutover drops the file out of the loop, `EXPECTED_TAGS` loses
+      `inngest-heartbeat`, AC3 fails, and its failure text names "the logger -t scripts" as the
+      source of truth — steering the engineer to delete the vector.toml entry and re-blind the
+      channel. The guard would have recreated #6536 through its own failure message.
+      **Judgment call (the three arguments):** the two reviewers were RIGHT that
+      `SYSTEMD_UNIT_IDENTIFIERS` is the wrong home — that list is for identifiers no source line
+      can yield (webhook's bare binary basename), and parking a *derivable* tag there trades
+      lockstep for the bypass its own comment forbids. The finding was RIGHT that the coupling is
+      real. Both missed the third option: **derive the `SyslogIdentifier=` channel** as an
+      independent source. Satisfies the finding (removal no longer perturbs EXPECTED), respects
+      the constraint (nothing hardcoded; that list untouched), and closes a pre-existing hole —
+      explicit `SyslogIdentifier=` units had ZERO drift coverage, which is the #6536 class itself.
+      Proven on all three axes: no-op today (13 tags, identical) / tag retained post-cutover /
+      catches an un-mirrored `SyslogIdentifier=` unit the old derivation was blind to (0 → 1).
+      *Note:* the `:412` citation had drifted — the constraint text now sits ~10 lines lower
+      (cf. `cq-cite-content-anchor-not-line-number`, ADR-116). Cite content, not coordinates.
+- [x] 6.2 **P2(c) render observability — FIXED INLINE** (`services.inngest_heartbeat_dark_arm`).
+      Which arm a host rendered was reported once, in a boot log line; off-box it was unreadable.
+      Now a one-field read over the existing HMAC + CF-Access `/hooks/deploy-status`, no SSH.
+      `url_present=no` verified as an exact discriminator by rendering the ping script under both
+      `DOPPLER_PROJECT` values (dedicated 1 / web 0; both `sh -n` clean, no residual sentinel).
+      The closed-value assertion uses jq `IN`, not `inside` — `inside`/`contains` are SUBSTRING
+      matches, so `""`/`"render"`/`"abs"` all passed the first draft of my own gate. 60/60.
+- [x] 6.3 **P2(b) `--preserve-env` omits `DOPPLER_PROJECT` — FIXED INLINE** (`cfb0fd782`), after
+      the CONCUR gate **DISSENTed** on my proposed scope-out. I filed it as `cross-cutting-refactor`;
+      `code-simplicity-reviewer` was right that it fails that criterion's own text — the criterion
+      defines "core change" at **directory** granularity ("files in the same top-level directory as
+      the primary changed file"), and `ci-deploy.sh` / `deploy-inngest-bootstrap.sudoers` /
+      `cloud-init.yml` all sit in `apps/web-platform/infra/` next to `inngest-bootstrap.sh`. My
+      "web-host path vs dedicated-host path" framing was a *subsystem* distinction the criterion
+      does not make. **This is the gate working as designed** — it caught the rationalisation.
+      **But the prescribed fix was incomplete, and verifying beat applying:** `grep -c
+      DOPPLER_PROJECT ci-deploy.sh` → **0**, so `--preserve-env=DOPPLER_PROJECT` preserves an
+      *unset* var. Applied the three edits anyway (they close the sudo-boundary half and are a
+      strict improvement) with the limitation documented at all three sites; the **env-source half**
+      is the CTO's `/etc/default/inngest-server` fix → **#6555**. 70/70, AC5 byte-parity
+      non-vacuous (the compared 19-line body contains the new token), `visudo -cf` clean.
+- [x] 6.4 **P2(d) no `OnFailure=` — FILED as #6556** (criterion `architectural-pivot`,
+      **CONCUR** obtained on the residual after the Finding-1 flip). The premise is right
+      (queryable ≠ alarming; #6536 IS the proof) but the plan's v5 correction settles the scope:
+      the Better Stack monitor IS the alarm for the live pusher (reddens ~90s), and the dark host's
+      missing alarm is the documented accepted gap. Post-fix the dark unit should not fail at all,
+      and FR4+FR5 newly put its stderr somewhere alertable. A real fix needs an alarm-handler unit
+      + delivery for EVERY infra unit — a new cross-unit pattern, not a tweak to this one. Bundled
+      into §Descoped 2 rather than filed twice: same trigger, same subsystem.
+
+## Phase 4 — Delivery (dispatch-gated replace)
+
+> **P1 (BLOCKS DELIVERY, found at review) — the documented sequence would burn the free window
+> without landing the fix.** Tasks 4.1-4.3 read as if merge → dispatch delivers. It does not:
+> the dispatch runs `terraform plan -replace='hcloud_server.inngest'`, which force-replaces
+> **regardless of any `user_data` diff** — and the new host boots cloud-init pinned at
+> `IREF=…:v1.1.19` (`cloud-init-inngest.yml:337`), extracting `inngest-bootstrap.sh` +
+> `vector.toml` from that image. **Measured: neither `vinngest-v1.1.19` nor `vinngest-v1.1.20`
+> contains the fix** (dark arm 0, `SyslogIdentifier=` 0, vector.toml tag 0 in both trees).
+> So dispatching today rebuilds the dark host from a pre-fix image: #6536 survives, and the
+> zero-downtime window (free only while the host is dark) is spent for nothing.
+>
+> Nothing catches this. `cloud-init-inngest-bootstrap.test.sh` asserts the pin's FORMAT and the
+> IREF/ZIREF internal agreement (and targets `cloud-init.yml`, the WEB host — which independently
+> pins **v1.1.20**, already ahead of the dedicated host's v1.1.19). No guard ties either pin to
+> the repo's bootstrap content or to the newest tag, so "the shipped image predates the fix" is
+> silent drift. FR8 is listed in the plan's §Files to Edit and is absent from the PR.
+>
+> **The fix requires a tag that does not exist yet:** the image builds only on a `vinngest-v*.*.*`
+> tag push (`build-inngest-bootstrap-image.yml`), from that tag's tree. Ordering is therefore
+> merge → tag `vinngest-v1.1.21` on main → verify the publish → bump `IREF` → assert 0.7 → dispatch.
+
+- [ ] 4.1 Bump `IREF` (`cloud-init-inngest.yml:337`) to the new tag — **one line; the dedicated
+      host has no ZIREF** (that pair lives in `cloud-init.yml` for the web host). Confirm the
+      image-publish workflow produced the tag BEFORE the bump (a bump to a non-existent tag bricks
+      cold boot). **The tag must be cut from a tree containing this PR's fix — v1.1.20 does not.**
+- [ ] 4.2 Enumerate the rides-along drift (0.6) in the PR body.
+- [ ] 4.3 Re-assert 0.7, then dispatch `-f apply_target=inngest-host-replace`. Plan must show
+      exactly one `hcloud_server.inngest` replace + 2 dependents, `hcloud_volume.inngest_redis`
+      **preserved** (AC14).
+
+## Phase 5 — Exit gate
+
+- [x] 5.1 `bash -n` every touched shell script.
+- [x] 5.2 Run: `cloud-init-inngest-bootstrap.test.sh`, `inngest-host.test.sh`,
+      `cat-deploy-state.test.sh`, `vector-pii-scrub.test.sh`, `heartbeat-reprovision-parity.test.ts`,
+      `terraform-target-parity.test.ts`.
+- [x] 5.3 `validate-vector-config.yml` green. 5.4 Full infra suite. 5.5 PR body: `Closes #6536`.

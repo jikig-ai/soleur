@@ -1,0 +1,179 @@
+tls_private_key.ci_ssh: Refreshing state... [id=93967400496f1a2f0230c3f6792c714330117694]
+random_id.tunnel_secret: Refreshing state... [id=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]
+hcloud_network.private: Refreshing state... [id=12414183]
+hcloud_placement_group.web_spread: Refreshing state... [id=1739811]
+hcloud_ssh_key.default: Refreshing state... [id=109222459]
+hcloud_volume.workspaces["web-2"]: Refreshing state... [id=106374503]
+cloudflare_zero_trust_tunnel_cloudflared.web: Refreshing state... [id=6410c1ec-4f01-4a69-ad98-7bb1621f6d37]
+hcloud_firewall.web: Refreshing state... [id=10708450]
+hcloud_network_subnet.private: Refreshing state... [id=12414183-10.0.1.0/24]
+hcloud_server.web["web-2"]: Refreshing state... [id=150638239]
+hcloud_firewall_attachment.web: Refreshing state... [id=10708450]
+hcloud_volume_attachment.workspaces["web-2"]: Refreshing state... [id=106374503]
+hcloud_server_network.web["web-2"]: Refreshing state... [id=150638239-12414183]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  + create
+  ~ update in-place
+  - destroy
+
+Terraform will perform the following actions:
+
+  # doppler_secret.proxy_tls_cert will be created
+  + resource "doppler_secret" "proxy_tls_cert" {
+      + computed   = (sensitive value)
+      + config     = "prd"
+      + id         = (known after apply)
+      + name       = "PROXY_TLS_CERT"
+      + project    = "soleur"
+      + value      = (sensitive value)
+      + value_type = "string"
+      + visibility = "masked"
+    }
+
+  # hcloud_firewall_attachment.web will be updated in-place
+  ~ resource "hcloud_firewall_attachment" "web" {
+        id              = "10708450"
+      ~ server_ids      = [
+          - 150638239,
+            # (1 unchanged element hidden)
+        ]
+        # (2 unchanged attributes hidden)
+    }
+
+  # hcloud_server.web["web-2"] will be destroyed
+  # (because key ["web-2"] is not in for_each map)
+  - resource "hcloud_server" "web" {
+      - allow_deprecated_images    = false -> null
+      - backups                    = false -> null
+      - delete_protection          = false -> null
+      - firewall_ids               = [
+          - 10708450,
+        ] -> null
+      - id                         = "150638239" -> null
+      - ignore_remote_firewall_ids = false -> null
+      - image                      = "ubuntu-24.04" -> null
+      - ipv4_address               = "178.105.153.255" -> null
+      - ipv6_address               = "2a01:4f8:c015:c251::1" -> null
+      - ipv6_network               = "2a01:4f8:c015:c251::/64" -> null
+      - keep_disk                  = true -> null
+      - labels                     = {
+          - "app" = "soleur-web-platform"
+        } -> null
+      - location                   = "fsn1" -> null
+      - name                       = "soleur-web-2" -> null
+      - placement_group_id         = 0 -> null
+      - primary_disk_size          = 80 -> null
+      - rebuild_protection         = false -> null
+      - server_type                = "cx33" -> null
+      - shutdown_before_deletion   = false -> null
+      - ssh_keys                   = [
+          - "109222459",
+        ] -> null
+      - status                     = "running" -> null
+      - user_data                  = (sensitive value) -> null
+        # (1 unchanged attribute hidden)
+    }
+
+  # hcloud_server_network.web["web-2"] will be destroyed
+  # (because key ["web-2"] is not in for_each map)
+  - resource "hcloud_server_network" "web" {
+      - alias_ips   = [] -> null
+      - id          = "150638239-12414183" -> null
+      - ip          = "10.0.1.11" -> null
+      - mac_address = "86:00:00:44:6c:36" -> null
+      - network_id  = 12414183 -> null
+      - server_id   = 150638239 -> null
+      - subnet_id   = "12414183-10.0.1.0/24" -> null
+    }
+
+  # hcloud_volume.workspaces["web-2"] will be destroyed
+  # (because key ["web-2"] is not in for_each map)
+  - resource "hcloud_volume" "workspaces" {
+      - delete_protection = false -> null
+      - format            = "ext4" -> null
+      - id                = "106374503" -> null
+      - labels            = {
+          - "app" = "soleur-web-platform"
+        } -> null
+      - linux_device      = "/dev/disk/by-id/scsi-0HC_Volume_106374503" -> null
+      - location          = "fsn1" -> null
+      - name              = "soleur-web-platform-data-web-2" -> null
+      - server_id         = 150638239 -> null
+      - size              = 20 -> null
+    }
+
+  # hcloud_volume_attachment.workspaces["web-2"] will be destroyed
+  # (because key ["web-2"] is not in for_each map)
+  - resource "hcloud_volume_attachment" "workspaces" {
+      - id        = "106374503" -> null
+      - server_id = 150638239 -> null
+      - volume_id = 106374503 -> null
+    }
+
+  # tls_private_key.proxy_server will be created
+  + resource "tls_private_key" "proxy_server" {
+      + algorithm                     = "ECDSA"
+      + ecdsa_curve                   = "P256"
+      + id                            = (known after apply)
+      + private_key_openssh           = (sensitive value)
+      + private_key_pem               = (sensitive value)
+      + private_key_pem_pkcs8         = (sensitive value)
+      + public_key_fingerprint_md5    = (known after apply)
+      + public_key_fingerprint_sha256 = (known after apply)
+      + public_key_openssh            = (known after apply)
+      + public_key_pem                = (known after apply)
+      + rsa_bits                      = 2048
+    }
+
+  # tls_self_signed_cert.proxy_server will be created
+  + resource "tls_self_signed_cert" "proxy_server" {
+      + allowed_uses          = [
+          + "digital_signature",
+          + "key_encipherment",
+          + "server_auth",
+        ]
+      + cert_pem              = (known after apply)
+      + dns_names             = [
+          + "web-1",
+          + "localhost",
+        ]
+      + early_renewal_hours   = 720
+      + id                    = (known after apply)
+      + ip_addresses          = [
+          + "10.0.1.10",
+        ]
+      + is_ca_certificate     = false
+      + key_algorithm         = (known after apply)
+      + max_path_length       = (known after apply)
+      + private_key_pem       = (sensitive value)
+      + ready_for_renewal     = false
+      + set_authority_key_id  = false
+      + set_subject_key_id    = false
+      + validity_end_time     = (known after apply)
+      + validity_period_hours = 87600
+      + validity_start_time   = (known after apply)
+
+      + subject {
+          + common_name  = "soleur-web-proxy"
+          + organization = "Soleur"
+        }
+    }
+
+Plan: 3 to add, 1 to change, 4 to destroy.
+
+Warning: Resource targeting is in effect
+
+You are creating a plan with the -target option, which means that the result
+of this plan may not represent all of the changes requested by the current
+configuration.
+
+The -target option is not for routine use, and is provided only for
+exceptional situations such as recovering from errors or mistakes, or when
+Terraform specifically suggests to use it as part of an error message.
+
+─────────────────────────────────────────────────────────────────────────────
+
+Note: You didn't use the -out option to save this plan, so Terraform can't
+guarantee to take exactly these actions if you run "terraform apply" now.

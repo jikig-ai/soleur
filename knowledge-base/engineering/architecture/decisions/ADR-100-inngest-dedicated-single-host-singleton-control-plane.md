@@ -186,9 +186,23 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
      `unset` no-ops make a benign 30s poll on the dark/live host safe.
    - **An `inngest-server.service` `ExecStartPre` arm-atomicity guard** (`inngest-server-flip-guard.sh`,
      P1-5) refuses to start (exit non-zero, blocking start) when `INNGEST_POSTGRES_URI` resolves to
-     **prod** and the flag ∉ `{armed, flipping, done}` — closing the race where the prod URI is
+     **prod** and the flag ∉ `{armed, flipping, flushed, done}` — closing the race where the prod URI is
      written before the gated flip and any non-arm restart (crash / `OnBootSec` / operator) would
      otherwise bring up a **second prod scheduler** against the still-dirty dark Redis.
+     **`flushed` is in the allowlist (amended 2026-07-17, Ref #6553):** the forward path sets the flag
+     to `flushed` **before** it invokes `start_server` (`:163,:172` above; `inngest-cutover-flip.sh:188→189`),
+     and the `flushed`-RESUME arm (`inngest-cutover-flip.sh:240`) also calls `start_server` while the
+     flag is `flushed`. Because `DBSIZE==0` is asserted **before** `flushed` is ever written
+     (`inngest-cutover-flip.sh:178`), a start at `flushed` cannot double-fire against a dirty dark Redis
+     — so the guard MUST allow it. Omitting `flushed` (the pre-#6553 allowlist) made the guard block the
+     FSM's **own** controlled start, not merely an unplanned restart. This is a correction of an
+     ADR-vs-code inconsistency: the omitted state is the very state the FSM starts the server at.
+   - **Guard/FSM lockstep — class invariant (added 2026-07-17, Ref #6553):** the guard allowlist MUST
+     be a **superset** of the set of FSM states in which the cutover-flip oneshot invokes `start_server`.
+     Adding a new FSM state that precedes a `start_server` call without adding it to the guard allowlist
+     re-introduces the self-block above. This is enforced mechanically by a source-derived drift guard in
+     `inngest-server-flip-guard.test.sh` (derives both sets from source and FAILS on divergence), not just
+     by the point-in-time string assertions.
    - **Flip-state is read no-SSH via Better Stack** (P0-2): the oneshot emits its verify-state as a
      `logger -t inngest-cutover-flip` JSON line, carried off-box by the already-shipped on-host
      Vector → Better Stack Logs journald shipper (source `soleur-inngest-vector-prd`, #6197). The
@@ -209,6 +223,104 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    occupied `(functionID, floor(startedAt / cron_period))` bucket has exactly one run. (Alternate:
    `eventsV2(includeInternalEvents:true)` surfaces `inngest/scheduled.timer` internal events with
    nested runs; the top-level `runs` query is cleaner.) `scheduled_tick` is removed everywhere.
+
+### Amendment (2026-07-12, Ref #6178) — no-SSH web-host scheduler quiesce/re-enable
+
+The Phase-2 cutover's web-host scheduler **quiesce** (forward) and **re-enable** (rollback) are
+performed **no-SSH** via the existing deploy webhook + pinned sudoers verbs — operators have no
+SSH access (`hr-no-ssh-fallback-in-runbooks`). This mirrors the `INNGEST_RESTART` (#4538) no-SSH
+restart precedent and the private-net deploy fan-out (ADR-068, #5274):
+
+- **`op=quiesce-web`** → ci-deploy.sh's `quiesce inngest _ _` handler runs the pinned
+  `INNGEST_QUIESCE` sudoers verbs (`systemctl stop` + `systemctl disable inngest-server.service`),
+  fanned out per-host over the private net. It verifies not-serving **AND** unit-inactive **AND**
+  not-enabled (the `disable` removes the `[Install]` symlink so a mid-window reboot cannot re-arm
+  the old scheduler → the double-fire this prevents), then the workflow POLLS `/hooks/deploy-status`
+  for the synchronous `quiesced` verdict (the unit's `TimeoutStopSec=180` makes an immediate probe
+  race the async stop).
+- **`op=rollback`** → ci-deploy.sh's `enable inngest _ _` handler runs the pinned `INNGEST_ENABLE`
+  verb (`systemctl enable`) + the pre-existing `INNGEST_START` (#5450) verb (`systemctl start`) +
+  a serving-and-enabled verify, in ONE flock-held handler, then polls deploy-status for `enabled`.
+
+**Rejected alternative — fold re-enable into the shared `restart` handler.** Tempting (op=rollback's
+existing `restart` would then re-enable "for free"), but **unsafe post-cutover**: the web hosts'
+inngest is intentionally disabled (10.0.1.40 is the sole scheduler), so a routine
+`restart-inngest-server.yml` restart (LB-routed to a web host) with a re-enable folded in would
+RE-ENABLE the deliberately-disabled web scheduler → a second live scheduler on prod Postgres →
+double-fire. `restart` MUST stay pure; only the deliberate `op=rollback` re-enables, via a distinct
+`enable` verb. (Note also arch P2-4: even a PURE `restart` is unsafe on a web host post-cutover — it
+STARTS the disabled unit for a transient double-fire, because the `ExecStartPre` flip-guard blocks
+only the dedicated host. The web verbs to use post-cutover are `op=quiesce-web`/`op=rollback`, never
+`restart`.)
+
+**Security blast-radius expansion (security review P2).** The single shared webhook deploy secret
+now authorizes a scheduler-**disable** (and, via `enable`, a fleet-wide **re-arm**), not just
+deploy/restart — inside the existing "deploy secret == prod-write" boundary, but the secret-rotation
+cadence should reflect the wider authority. The peer fan-out path
+(`http://<ip>:9000/hooks/deploy-peer`) is HMAC + L3-firewall only (no CF-Access), so confirm the
+web→web:9000 firewall source-restricts to peer hosts (already proven live by the deploy fan-out;
+`firewall-9000-deny`). No new ADR ordinal — this is an extension of ADR-100's decision, not a new
+architecture. No C4 impact (the `deploy-webhook → ci-deploy → inngest-server` control edge already
+exists; `quiesce`/`enable` are additional verbs on the SAME edge, not a new relationship).
+
+### Amendment (2026-07-12, Ref #6369) — Decision 6b: no-SSH `op=arm` arm-flip + reverse write
+
+The Phase-2 cutover's **arm-flip** (the three writes to `soleur-inngest/prd`:
+`INNGEST_POSTGRES_URI`, `INNGEST_HEARTBEAT_URL`, then `INNGEST_CUTOVER_FLIP=armed` last — the last
+was the operator SEAM at `cutover-inngest.yml`) is now performed **no-SSH** by
+`cutover-inngest.yml op=arm`, and the reverse `INNGEST_CUTOVER_FLIP=rollback` write is folded into
+the existing `op=rollback` verb. This removes the last operator secret-write seam from the cutover.
+
+- **Trust / ack (reconciles `hr-menu-option-ack-not-prod-write-auth`).** `op=arm`/`op=rollback` are
+  prod-writes behind an **explicit dispatch** (same trust model as `op=quiesce-web`/`op=rollback`)
+  **plus** a GitHub **Environment** (`inngest-cutover`) required-reviewer protection rule. The
+  dispatch + the reviewer approval IS the explicit per-command go-ahead the hard rule requires; the
+  rule kept the flip out of `op=execute`'s *auto-run* spine, not out of a separately-dispatched,
+  human-approved verb. There is **no interactive pre-write value confirmation, by design** —
+  AC-NOBODY forbids echoing the values.
+- **Provisioning (reconciles `hr-all-infrastructure-provisioning`).** The write **token** is
+  TF-provisioned (`doppler_service_token.inngest_arm_write`, read/write on the isolated
+  `soleur-inngest/prd`, published as the repo secret `DOPPLER_TOKEN_INNGEST_ARM`). The human-ack
+  gate is the `inngest-cutover` GitHub **Environment** (required-reviewer) declared on the op=arm /
+  op=rollback **job** — the run waits for approval before any step executes. (The token is a repo
+  secret rather than an environment secret because the TF GitHub App lacks permission to write
+  environment secrets — a first-apply 403; the reviewer gate on the job preserves the ack either
+  way. Fixed forward in #6369-followup.) This is the **first CI-consumed read/write token into the
+  isolated `soleur-inngest` project** — prior tokens there are read-only host-boot
+  (`inngest-host.tf:173`); CI can now WRITE `soleur-inngest/prd`. The token is a **standing read
+  handle to the armed prod DSN** once op=arm runs, so it is revoked post-cutover.
+- **Source-of-truth: read-through, no seed (CTO decision at /work).** The two source *values*
+  remain out-of-band (they are not TF `doppler_secret` resources — dark-window heartbeat masking +
+  a DB password TF never minted, `inngest-host.tf:137-166`). op=arm reads them **read-through from
+  `soleur/prd_terraform`** via the workflow's existing read-only `DOPPLER_TOKEN` (the same
+  config-scoped read `op=backup` uses for `HCLOUD_TOKEN`). The prod `INNGEST_POSTGRES_URI` already
+  lives in `prd_terraform` (SHA-identical to canonical `prd`, `:5432` session pooler, distinct from
+  the dark value), so there is **no operator secret-seed step and no stale-copy rotation-drift
+  trap**. Reading the live canonical source at arm-time makes freshness *structural*; the G3
+  positive prod-URI assertion (prod ≠ dark, `:5432` not `:6543`, prod host) + the G1 pre-write
+  FSM-state guard remain the defense against writing a wrong/dark value. **Rejected:** (A) seed a
+  narrow `INNGEST_POSTGRES_URI_PROD` config — removes no existing exposure (the value is already
+  CI-readable) while adding a forbidden human pre-window seed + a drift trap that could arm a dead
+  DSN and stall every user's crons; (B) a workflow step copying `prd_terraform`→narrow — machinery
+  to relocate an already-readable value, inheriting (A)'s drift risk.
+
+**Post-cutover revoke.**
+<!-- lint-infra-ignore start -->
+After `op=verify` confirms exactly-once (AC17), the write token is rotated + revoked
+(`terraform apply -replace=doppler_service_token.inngest_arm_write` + `doppler configs tokens
+revoke` the orphaned key) so no standing prod-DSN read handle survives (runbook § Rollback / Op
+order 3b).
+<!-- lint-infra-ignore end -->
+
+**No C4 change (enumeration).** op=arm is a new *instance* of an already-modeled relationship, not a
+new one: `doppler` (system), `betterstack` (system), `github`, `inngest`/`inngestPostgres`/
+`inngestRedis` (containers/stores) are all in `model.c4`; the CI/TF→Doppler secret-**write**
+relationship already exists at the C4 altitude (TF applies writes to Doppler via
+`doppler_service_token.write`; the precedent write edge is `inngest -> doppler "Writes GHCR_READ_TOKEN"`,
+`model.c4:404` — a Doppler-write edge, distinct from the `doppler -> inngest "Injects secrets"`
+injection edge). op=arm writing `soleur-inngest/prd` is another edge of the same write relationship
+type, not a new relationship — so no `model.c4`/`views.c4` edit. No new ADR ordinal
+— this is an extension of ADR-100's Decision 6, mirroring the Ref #6178 amendment above.
 
 ## Consequences
 
@@ -231,6 +343,25 @@ tracked follow-up if force-replaces become frequent.**
 The AOF volume is a separate resource that
 survives the replace. The Phase-2 cutover carries a bounded, operator-signed-off residual window
 (quiesce-all → register).
+
+**Regression back-ref (#6396):** defaulting `web_colocate_inngest = false` (#6178) silently dropped
+the co-located web-host Vector journald/host_metrics shipper — a fresh web host installed Vector
+ONLY inside the `%{ if web_colocate_inngest }` block, so post-cutover web hosts shipped **no** logs
+to Better Stack. #6396 re-adds the shipper independently (ungated, baked into
+`soleur-host-bootstrap.sh`, fail-open) + a terminal serving-block no-SSH cause breadcrumb + `host_id`
+on `pull_failure_event`. See ADR-082 Item 5 (this is the decision that caused the regression #6396
+closes).
+
+**Create-time-render caveat (#6616):** the per-host `host_name` #6396 introduces is a
+*construction-time render*, not a runtime-guaranteed 1:1 discriminator. A host that predates the
+render and cannot re-run cloud-init (web-1, under `lifecycle{ignore_changes=[user_data]}`) keeps its
+stale co-located-era `host_name=soleur-inngest-prd` until its next immutable recreate — so it collides
+with the dedicated node on Better Stack source 2457081. Treat `host_name=soleur-inngest-prd` as suspect
+until every emitting host is post-#6396-born; the live invariant is enforced by the #6616 read-only
+follow-through (auto-closes on the web-1 recreate), not by the render alone. (The dedicated node's
+telemetry `host` is `soleur-inngest` = its `hcloud_server.inngest` name, inngest-host.tf:202, and thus
+its OS hostname — NOT `soleur-inngest-server-prd`, which is a `betteruptime_heartbeat` monitor name,
+inngest.tf:291, and never appears in telemetry.)
 
 **Blast radius (SEC-H3, documented not eliminated):** the signing key authorizes the entire ~60-
 function registry, several running in the web-app process with full prd env (GHCR token minter,
@@ -332,4 +463,42 @@ This is a **re-application** of the established mechanism, not a novel decision 
 new ordinal of its own. The genuinely-new cross-cutting rule extracted from the #6238 recurrence
 (a boot-armed non-paused heartbeat MUST have a mechanically-guarded reprovision path) is recorded
 separately in **ADR-103**, whose `heartbeat-reprovision-parity` CI guard enforces it.
+
+## Addendum (2026-07-15) — the dark backend is **soleur-dev**, and that co-tenancy is transient
+
+**The fact, recorded here because it previously lived ONLY in a Terraform comment**
+(`apps/web-platform/infra/inngest.tf:234-235`) and in a Doppler secret's value — neither of which
+is a place an architecture reader looks:
+
+> Until the cutover flips it, the dedicated Inngest host's **dark** Postgres backend is the
+> **soleur-dev** Supabase project (`mlwiodleouzwniehynfz`), reached through its session pooler as
+> username `postgres.mlwiodleouzwniehynfz`. `INNGEST_POSTGRES_URI` in Doppler `soleur-inngest/prd`
+> resolves there. It is **not** "a distinct DB on soleur-inngest-prd".
+
+**Why this matters beyond bookkeeping.** soleur-dev is the **app's dev project**. Pointing the dark
+backend at it made that project **co-tenanted**: goose ran 2026-07-10 and created 14 Inngest tables
+in the same `public` schema as the web-platform app's 52 dev tables. Two consequences followed, both
+now closed:
+
+1. **A live anon-write exposure.** Supabase default privileges auto-granted `anon`/`authenticated`
+   full DML on the new tables, and soleur-dev's anon key **ships to browsers**. An anonymous caller
+   held INSERT/UPDATE/DELETE/**TRUNCATE** on this host's scheduler state (advisor 2026-07-12; a
+   `GET /rest/v1/apps` returned 310 bytes of real rows). Remediated by the table-scoped
+   `0002_dev_inngest_tables_lockdown.sql` — see **ADR-030 I8** (by filename:
+   `ADR-030-inngest-as-durable-trigger-layer.md`; the `ADR-030` ID is ambiguous, two files claim it).
+2. **The existing prd lockdown became unsafe to point anywhere else.** `0001`'s Inngest-sentinel
+   preflight infers *"goose tables exist ⟹ Inngest-only project"* — which the dark backend
+   **falsified**, since soleur-dev satisfies it while hosting an entire app. Enforcement on a
+   co-tenanted project MUST be table-scoped; see I8.
+
+**Transient — with an atomic retirement.** This co-tenancy ends when `cutover-inngest.yml`'s
+`op=arm` writes the prod DSN. The 14 tables then become orphans on the dev project and are dropped
+in a tracked follow-up, which must retire `0002` + `apply-inngest-rls-dev.yml` **in the same change
+as (or before) the drop** — otherwise `0002`'s positive sentinel RAISEs forever. The quieter failure
+is worse: if the cutover lands and the drop does not, the sentinel still passes, the gate reports
+`violations=0`, and the workflow stays **green forever defending a co-tenancy that no longer
+exists**. Green cruft never annunciates. (Contrary to an earlier belief, soleur-dev is **not** a
+rollback target: `op=arm` overwrites `INNGEST_POSTGRES_URI`, and the `rollback` arm writes only
+`INNGEST_CUTOVER_FLIP` — no code path restores the dark DSN. The reason not to drop early is simply
+that the dark host is **live** against soleur-dev until the flip.)
 

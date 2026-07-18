@@ -105,6 +105,29 @@ enforce
 # trigger CI, so they need the synthetic; on relevant human PRs the real gate
 # job posts the context.
 tenant-integration-required
+# #6589 — apply-sentry-infra.yml jobs.sentry-destroy-required. Always-run
+# aggregator gate job (the full-root terraform plan is path-gated behind it).
+# Bot PRs never trigger CI, so they need the synthetic; on relevant human PRs the
+# real gate job posts the context.
+#
+# ⚠ CONTENT-SCOPED — cleared under the #6049 ceiling by the SAME argument as
+# rule-body-lint above, not by exemption. This gate asks "does this PR's plan
+# destroy a Sentry resource without an acknowledgement?", which is a question
+# about the diff, so a fabricated green is only sound if no bot PR can produce a
+# destroying diff. It cannot: the action's ALLOWED_PATHS = {weakness-digest.md,
+# rule-metrics.json} makes apps/web-platform/infra/sentry/** physically
+# unreachable by every bot PR, and the action exits 1 on any path outside that
+# set. A full-root plan over a bot diff is therefore vacuously non-destroying,
+# and the synthetic green asserts something true.
+#
+# The residual goes LIVE the instant any sentry path is added to ALLOWED_PATHS —
+# at which point a bot PR could delete a monitor block under a fabricated green,
+# which is #6074 with a robot holding the pen. Do NOT extend ALLOWED_PATHS to
+# any apps/web-platform/infra/sentry/** path without first reproducing the
+# full-root plan + destroy gate over the bot diff in the action's preflight.
+# See .github/actions/bot-pr-with-synthetic-checks/action.yml ALLOWED_PATHS +
+# the ADR-031 Amendment (2026-07-17, #6589).
+sentry-destroy-required
 
 # CLA Required ruleset
 cla-check

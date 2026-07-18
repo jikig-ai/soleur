@@ -4,11 +4,15 @@
 // workspace (ADR-044) — the body NEVER carries owner/repo/login.
 //
 // Dispatch:
-//   - title            → updateWorkstreamIssueTitle
-//   - status           → setWorkstreamIssueStatus (the ONE primitive; status=done
-//                        closes with state_reason, non-terminal relabels+reopens)
-//   - reopen: true     → reopenWorkstreamIssue (state=open, leaves Done, lands
-//                        where surviving labels derive)
+//   - title                          → updateWorkstreamIssueTitle
+//   - status                         → setWorkstreamIssueStatus (the ONE primitive;
+//                                      status=done closes, non-terminal relabels)
+//   - reopen: true                   → reopenWorkstreamIssue (state=open)
+//   - body/labels/assignees/milestone → updateWorkstreamIssueFields (any combo of
+//                                      the four in one request; labels = non-status
+//                                      only; empty body allowed; milestone int|null)
+// title / status/reopen / the four-field group are each their OWN atomic op —
+// combining across groups 422s (the accessor applies exactly one group).
 // Returns the CANONICAL resulting issue so the client reconciles from stored
 // truth, not a bare 2xx. 502 + Sentry on failure (fail-loud, never masquerade).
 
@@ -19,8 +23,10 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import {
   reopenWorkstreamIssue,
   setWorkstreamIssueStatus,
+  updateWorkstreamIssueFields,
   updateWorkstreamIssueTitle,
   type CloseReason,
+  type UpdateFieldsInput,
 } from "@/server/workstream/mutate-workstream-issue";
 import {
   checkWorkstreamWriteRate,
@@ -35,6 +41,16 @@ import {
 export const dynamic = "force-dynamic";
 
 const CLOSE_REASONS = new Set<CloseReason>(["completed", "not_planned"]);
+
+/** A JSON array whose every element is a string (labels/assignees payloads). */
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+
+/** A valid milestone value: a positive integer (the number) OR null (clear). */
+function isMilestone(v: unknown): v is number | null {
+  return v === null || (typeof v === "number" && Number.isInteger(v) && v > 0);
+}
 
 export async function PATCH(
   req: Request,
@@ -76,17 +92,36 @@ export async function PATCH(
   const hasStatus = typeof b.status === "string";
   const reopen = b.reopen === true;
 
+  // The four editable-field keys (edit-fields). `body` allows empty string;
+  // `milestone` is present when the key exists (null = clear).
+  const hasBody = typeof b.body === "string";
+  const hasLabels = "labels" in b;
+  const hasAssignees = "assignees" in b;
+  const hasMilestone = "milestone" in b;
+  const hasFields = hasBody || hasLabels || hasAssignees || hasMilestone;
+
   // Title validation before any write (empty/whitespace → 422).
   if (hasTitle && !(b.title as string).trim()) {
     return NextResponse.json({ error: "empty_title" }, { status: 422 });
   }
-  if (!hasTitle && !hasStatus && !reopen) {
+  if (!hasTitle && !hasStatus && !reopen && !hasFields) {
     return NextResponse.json({ error: "no_change" }, { status: 400 });
   }
   // Validate status against the known column set (parity with the agent tool's
   // STATUS_ENUM) so a typo'd status 422s instead of silently landing in Backlog.
   if (hasStatus && !STATUS_ORDER.includes(b.status as WorkstreamStatus)) {
     return NextResponse.json({ error: "invalid_status" }, { status: 422 });
+  }
+  // Field-type validation (422 before any write). labels/assignees MUST be string
+  // arrays; milestone MUST be a positive int OR null.
+  if (hasLabels && !isStringArray(b.labels)) {
+    return NextResponse.json({ error: "invalid_labels" }, { status: 422 });
+  }
+  if (hasAssignees && !isStringArray(b.assignees)) {
+    return NextResponse.json({ error: "invalid_assignees" }, { status: 422 });
+  }
+  if (hasMilestone && !isMilestone(b.milestone)) {
+    return NextResponse.json({ error: "invalid_milestone" }, { status: 422 });
   }
   // Title and status/reopen are separate atomic writes — reject a combined body
   // rather than silently dropping the title (the dispatch below applies only one).
@@ -95,6 +130,12 @@ export async function PATCH(
       { error: "title_and_status_separate" },
       { status: 422 },
     );
+  }
+  // The four-field group is ALSO its own atomic op — reject combining it with a
+  // title or a status/reopen (each stays a distinct write; the dispatch applies
+  // exactly one group).
+  if (hasFields && (hasTitle || hasStatus || reopen)) {
+    return NextResponse.json({ error: "fields_separate" }, { status: 422 });
   }
 
   try {
@@ -113,12 +154,20 @@ export async function PATCH(
       );
     } else if (reopen) {
       issue = await reopenWorkstreamIssue(user.id, issueNumber);
-    } else {
+    } else if (hasTitle) {
       issue = await updateWorkstreamIssueTitle(
         user.id,
         issueNumber,
         b.title as string,
       );
+    } else {
+      // Only the PROVIDED field keys are forwarded (owner/repo never accepted).
+      const fields: UpdateFieldsInput = {};
+      if (hasBody) fields.body = b.body as string;
+      if (hasLabels) fields.labels = b.labels as string[];
+      if (hasAssignees) fields.assignees = b.assignees as string[];
+      if (hasMilestone) fields.milestone = b.milestone as number | null;
+      issue = await updateWorkstreamIssueFields(user.id, issueNumber, fields);
     }
     return NextResponse.json({ issue });
   } catch (e) {

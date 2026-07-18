@@ -93,6 +93,7 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
       emitInteractivePrompt,
     });
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-1",
       userId: "user-1",
       userMessage: "hi",
@@ -270,6 +271,7 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
       now: () => Date.now(),
     });
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-2",
       userId: "user-2",
       userMessage: "hi",

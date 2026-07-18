@@ -144,6 +144,20 @@ curl -sfS -H "Authorization: Bearer ${SENTRY_TOKEN}" \
 
 **Graceful degradation:** This check is advisory. A Sentry API failure does not block the postmerge pipeline.
 
+### Inngest liveness awareness (#6374)
+
+Surface any OPEN inngest-down alarm so the operator is never told "prod is healthy" while the durable trigger layer (armed reminders + all `server/inngest/functions/` crons) is dark. The external watchdog (`scheduled-inngest-health.yml`) files `[ci/inngest-down]` on a confirmed down; this is a cheap read that needs no Sentry token:
+
+```bash
+gh issue list --label ci/inngest-down --state open \
+  --json number,title,createdAt --jq '.[] | "#\(.number) \(.title) (opened \(.createdAt))"'
+```
+
+- If it prints an open issue: surface a one-line advisory — "ADVISORY: inngest reports down (`#<n>`) — armed reminders and scheduled crons may not be firing; the external watchdog is auto-restarting / escalating. Do not assume scheduled work ran." Include it prominently in the Phase 7 report.
+- If empty: silent (no line needed).
+
+**Advisory only — never hard-block the turn.** inngest-down does not block all work; the operator retains agency. (An optional deeper probe — `curl` the `/hooks/inngest-liveness` HMAC+CF-Access hook — is available for a live verdict but is not required here; the open-issue read is the cheap default.)
+
 ## Phase 3.6: Sentry Error-Count Delta (Fix Efficacy)
 
 A merged-and-deployed fix can pass every gate above and still not work — the deploy is healthy, monitors are alive, files are fresh, but the error keeps firing because the fix addressed the wrong root cause (the KB-sync / oauth-probe failure class). Phase 3.5 proves the *monitor* is alive; this phase asks the harder question: **did the error this PR claims to fix actually stop?**

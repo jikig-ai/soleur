@@ -1,9 +1,9 @@
 ---
 title: "Jump anywhere in the app with two keystrokes"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-08-13
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#5867"
 issue_reference: "#5636"
 ---

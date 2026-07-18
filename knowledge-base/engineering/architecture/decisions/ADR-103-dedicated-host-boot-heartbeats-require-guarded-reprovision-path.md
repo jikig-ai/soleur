@@ -19,9 +19,13 @@ A dedicated Hetzner host behind a deny-all-public firewall (git-data, inngest, r
 be probed externally by Better Stack, so its liveness/health uses a **PUSH heartbeat**: something
 pings a heartbeat URL on a cadence, and *absence of ping* alerts. The pinger is installed either
 (a) **on the host itself by cloud-init** (the registry disk cron in
-`cloud-init-registry.yml`, the inngest systemd timer from `cloud-init-inngest.yml`), or (b) by a
-separate **web-host cron** over the private net (git-data + registry *liveness* — both unshipped
-follow-ups).
+`cloud-init-registry.yml`, the inngest systemd timer from `cloud-init-inngest.yml`, and — since
+#6537 — the registry *liveness* timer in `cloud-init-registry.yml`), or (b) by a separate
+**web-host cron** over the private net (git-data — still an unshipped follow-up, #6548).
+
+> **Amended (#6537):** registry *liveness* was listed under (b) as an unshipped follow-up. It is now
+> class (a): armed by the registry's own cloud-init. Its class-(b) framing is what let it sit
+> paused and unfed for 9 days — the manifest's own row restated it. See the ADR-117 block below.
 
 For class (a) the heartbeat and its cron ship in the same PR, but **`terraform apply` creating the
 heartbeat does NOT redeploy the host** — cloud-init runs only on host create/replace. If the host
@@ -78,6 +82,22 @@ each heartbeat by arming mechanism (the codified, enforced form of the #6242 Aud
 heartbeat with no manifest entry fails the test; a `dedicated-host-boot && !paused` heartbeat whose
 declared `<host>-host-replace` path is absent fails the test. This is the mechanical gate that
 would have caught #6238.
+
+> **Amended by [ADR-117](./ADR-117-executable-heartbeat-arming.md) (#6537, 2026-07-16).** The
+> `arming` axis above is **prose**: it records which remediation class a heartbeat belongs to, but it
+> never asserted that anything actually pings it. #6537 exploited exactly that gap — `registry_prd`
+> sat classified `web-host-cron` with an exempt_reason citing a probe cron that was never written, so
+> **this manifest restated the fiction** while the monitor sat paused and inert for 9 days.
+>
+> ADR-117 adds an executable `feeder` field alongside `arming`: every row is either FED (a file +
+> pattern the test greps each run) or HONESTLY UNFED (`kind: "none"` + a tracking issue, and — the
+> load-bearing half — an assertion that its URL secret still has zero consumers, so the day a feeder
+> ships, CI reds and forces the row to reconcile). The manifest moved to
+> `plugins/soleur/lib/heartbeat-manifest.ts`.
+>
+> Consequence for this ADR's own rule: `registry_prd` reclassifies to `dedicated-host-boot`, so the
+> `replace_target` requirement now fires for it — correctly, since its feeder ships via cloud-init
+> and therefore reaches the host only on a fresh boot.
 
 The scoped `-replace` dispatch mechanism itself is the ADR-096 (registry) / ADR-100 (inngest)
 pattern; ADR-103 does not invent it — it generalizes the ad-hoc registry fix into an enforced,

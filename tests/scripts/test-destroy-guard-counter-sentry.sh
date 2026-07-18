@@ -7,34 +7,20 @@
 # real `terraform show -json` baseline (redacted).
 #
 # Re-capturing `tfplan-sentry-real-baseline.json` (e.g. after a provider
-# upgrade trips T4):
+# upgrade trips T4). The plan is FULL-ROOT (#6589) — no address scoping. The
+# ~20-line `-target=` recipe that used to live here has been deleted rather than
+# refreshed: it described a mechanism that no longer exists, and a stale recipe
+# for a retired mechanism is how #4929's leak survived two months in a comment.
 #   cd apps/web-platform/infra/sentry
+#   # NOTE: the provider reads a RAW `SENTRY_AUTH_TOKEN`. Do NOT pass it through
+#   # `doppler run --name-transformer tf-var` — that mangles it to
+#   # TF_VAR_sentry_auth_token and the provider dies with
+#   # "failed to perform health check".
 #   SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_IAC_AUTH_TOKEN -p soleur -c prd_terraform --plain) \
 #     doppler run -p soleur -c prd_terraform -- terraform init -input=false
 #   SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_IAC_AUTH_TOKEN -p soleur -c prd_terraform --plain) \
-#     doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
-#       terraform plan -no-color -input=false -out=/tmp/tfplan \
-#         -target=sentry_cron_monitor.scheduled_terraform_drift \
-#         -target=sentry_cron_monitor.scheduled_oauth_probe \
-#         -target=sentry_cron_monitor.scheduled_github_app_drift_guard \
-#         -target=sentry_cron_monitor.scheduled_daily_triage \
-#         -target=sentry_cron_monitor.scheduled_realtime_probe \
-#         -target=sentry_cron_monitor.scheduled_skill_freshness \
-#         -target=sentry_cron_monitor.scheduled_content_vendor_drift \
-#         -target=sentry_cron_monitor.scheduled_community_monitor \
-#         -target=sentry_cron_monitor.scheduled_gh_pages_cert_state \
-#         -target=sentry_cron_monitor.scheduled_follow_through \
-#         -target=sentry_cron_monitor.scheduled_strategy_review \
-#         -target=sentry_cron_monitor.scheduled_roadmap_review \
-#         -target=sentry_cron_monitor.scheduled_legal_audit \
-#         -target=sentry_cron_monitor.scheduled_agent_native_audit \
-#         -target=sentry_cron_monitor.scheduled_competitive_analysis \
-#         -target=sentry_cron_monitor.scheduled_compound_promote \
-#         -target=sentry_cron_monitor.scheduled_stale_deferred_scope_outs \
-#         -target=sentry_uptime_monitor.soleur_apex \
-#         -target=sentry_uptime_monitor.soleur_www \
-#         -target=sentry_uptime_monitor.soleur_changelog_deep \
-#         -target=sentry_uptime_monitor.soleur_acme_probe
+#     doppler run -p soleur -c prd_terraform -- \
+#       terraform plan -no-color -input=false -out=/tmp/tfplan
 #   terraform show -json /tmp/tfplan > /tmp/raw.json
 #   # MANDATORY redaction: drop .variables (TF_VAR_*-sourced Doppler tokens),
 #   # planned_values/prior_state/configuration (carry resolved provider tokens
@@ -177,12 +163,61 @@ t_issue_alert_nested_delete_trips() {
   fi
 }
 
+# T7 (#6589): resource_creates counts a PURE create. The delete direction was
+# guarded and the create direction was not; once full-root brings the 4
+# formerly-untargeted alerts into scope, state/config divergence surfaces as an
+# unreviewed CREATE — the same billing leak in mirror image.
+t_pure_create_counted() {
+  local got
+  got=$(echo '{"resource_changes":[{"type":"sentry_cron_monitor","address":"sentry_cron_monitor.y","change":{"actions":["create"],"before":null,"after":{}}}]}' \
+    | jq -f "$FILTER" -c)
+  if [[ "$got" == '{"resource_deletes":0,"resource_creates":1,"nested_deletes":0}' ]]; then
+    _report "T7 pure create is counted in resource_creates" ok
+  else
+    _report "T7 pure create is counted in resource_creates" fail "got '$got'"
+  fi
+}
+
+# T8 (#6589): a REPLACE (["delete","create"]) must NOT be counted as a create.
+# It is already a destroy, so it already trips [ack-destroy]; counting it twice
+# would fail a correctly-acknowledged plan for a second reason and push the
+# author toward a blanket ack — the ack-blindness the create gate exists to
+# avoid training. Pins the exact-equality shape against a "simplification" to
+# `index("create")`, which would silently start counting every replace.
+t_replace_not_counted_as_create() {
+  local got
+  got=$(echo '{"resource_changes":[{"type":"sentry_cron_monitor","address":"sentry_cron_monitor.x","change":{"actions":["delete","create"],"before":{},"after":{}}}]}' \
+    | jq -f "$FILTER" -c)
+  if [[ "$got" == '{"resource_deletes":1,"resource_creates":0,"nested_deletes":0}' ]]; then
+    _report "T8 replace counts as a delete, NOT as a create (no double jeopardy)" ok
+  else
+    _report "T8 replace counts as a delete, NOT as a create" fail "got '$got' want deletes=1 creates=0"
+  fi
+}
+
+# T9 (#6589): the measured live baseline creates nothing. AC5's sub-assertion.
+t_real_baseline_zero_creates() {
+  if [[ ! -f "$FIXTURES/tfplan-sentry-real-baseline.json" ]]; then
+    _report "T9 captured real baseline yields resource_creates=0" fail "fixture missing"
+    return
+  fi
+  local got; got=$(jq -f "$FILTER" < "$FIXTURES/tfplan-sentry-real-baseline.json" | jq -r '.resource_creates')
+  if [[ "$got" == "0" ]]; then
+    _report "T9 captured real baseline yields resource_creates=0" ok
+  else
+    _report "T9 captured real baseline yields resource_creates=0" fail "got '$got'"
+  fi
+}
+
 t_resource_delete_trips
 t_no_changes_passes
 t_ack_destroy_allows_resource_delete
 t_real_baseline_zero
 t_ack_destroy_substring_rejected
 t_issue_alert_nested_delete_trips
+t_pure_create_counted
+t_replace_not_counted_as_create
+t_real_baseline_zero_creates
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

@@ -36,6 +36,7 @@ import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronDevMigrationDrift } from "@/server/inngest/functions/cron-dev-migration-drift";
 import { cronDomainModelDrift } from "@/server/inngest/functions/cron-domain-model-drift";
 import { cronEmailIngressProbe } from "@/server/inngest/functions/cron-email-ingress-probe";
+import { cronExpensesVerifyBy } from "@/server/inngest/functions/cron-expenses-verify-by";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGhPagesCertState } from "@/server/inngest/functions/cron-gh-pages-cert-state";
 import { cronGhcrTokenMinter } from "@/server/inngest/functions/cron-ghcr-token-minter";
@@ -60,6 +61,7 @@ import { cronSeoAeoAudit } from "@/server/inngest/functions/cron-seo-aeo-audit";
 import { cronSkillFreshness } from "@/server/inngest/functions/cron-skill-freshness";
 import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
+import { cronSupabaseAdvisorScan } from "@/server/inngest/functions/cron-supabase-advisor-scan";
 import { cronSupabaseDiskIo } from "@/server/inngest/functions/cron-supabase-disk-io";
 import { cronTerraformDrift } from "@/server/inngest/functions/cron-terraform-drift";
 import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
@@ -138,6 +140,7 @@ export const { GET, POST, PUT } = serve({
     cronDevMigrationDrift,
     cronDomainModelDrift,
     cronEmailIngressProbe,
+    cronExpensesVerifyBy,
     cronFollowThroughMonitor,
     cronGhPagesCertState,
     cronGhcrTokenMinter,
@@ -162,6 +165,7 @@ export const { GET, POST, PUT } = serve({
     cronSkillFreshness,
     cronStaleDeferredScopeOuts,
     cronStrategyReview,
+    cronSupabaseAdvisorScan,
     cronSupabaseDiskIo,
     cronTerraformDrift,
     cronUxAudit,

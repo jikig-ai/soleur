@@ -60,14 +60,16 @@ changed yet) or for re-runs after a transient failure.
 > The rest of this section describes the (currently inactive) target state, valid
 > only once one of the two preconditions above holds.
 
-The ruleset carries a second rule sibling — a `merge_queue {}` block in
-`ruleset-ci-required.tf` — adopting a **GitHub merge queue** for `main`. It fixes
-the strict-up-to-date BEHIND starvation: with
+Under the target state the ruleset would carry a second rule sibling — a
+`merge_queue {}` block in `ruleset-ci-required.tf` — adopting a **GitHub merge
+queue** for `main`. (That block is **not present today**; see the status note
+above.) It would fix the strict-up-to-date BEHIND starvation: with
 `strict_required_status_checks_policy = true`, a web-platform PR's CI (~8 min)
 cannot converge faster than `main` merges on an active day, so the PR is flipped
-`BEHIND` and restarts forever. The queue builds each candidate against the
-projected post-merge state, so "up-to-date" is satisfied **by construction** —
-no human/agent re-update race — and routine admin-merge is no longer needed.
+`BEHIND` and restarts forever. A queue would build each candidate against the
+projected post-merge state, so "up-to-date" would be satisfied **by
+construction** — no human/agent re-update race. With the queue reverted, that
+BEHIND race is instead handled by `/ship`'s auto-sync loop.
 Full rationale + the param table live in ADR-032 (#5780 amendment).
 
 **Chosen params** (only value-bearing decisions are set; `max_entries_to_build`
@@ -97,15 +99,19 @@ The queue dispatches a `merge_group` event against a temporary
    synthetics only fire on `merge_group`, which never occurs without a queue).
    They are preserved in git history and MUST be restored as part of any
    re-adoption.
-2. **PR-2 (this root)** adds the `merge_queue` block and *enables* the queue.
+2. **PR-2 (this root)** would add the `merge_queue` block and *enable* the queue.
+   PR #5800 did exactly this on 2026-06-30 and was **reverted the same day**; the
+   block is not in the root today.
 
 `merge_group` only fires *after* the queue is live, so enabling and verifying
 cannot happen in the same merge.
 
-### Kill switch
+### Kill switch (already exercised)
 
 Remove the `merge_queue {}` block from `ruleset-ci-required.tf` and merge —
-auto-apply reverts to pre-queue behavior. This is `0 destroy` (a rule-block
+auto-apply reverts to pre-queue behavior. **This is what happened on 2026-06-30**,
+and it is why no block is present now; the procedure is recorded here for a future
+re-adoption. This is `0 destroy` (a rule-block
 removal, not a `required_check` removal), so it is **not** `[ack-destroy]`-gated
 (intended — the kill-switch must stay friction-free).
 
@@ -117,23 +123,25 @@ workaround for the BEHIND race (the queue removes that need).
 
 ### Drift detection
 
-`scheduled-terraform-drift.yml` now includes `infra/github` in its matrix
-(#5780, CTO B-2), so the `merge_queue` rule is drift-detected on a schedule. A
-`terraform plan` there also catches a *silently-disabled* queue (rule removed
-outside Terraform → no entries → the stall probe is blind to it). The stall probe
-and the drift probe are deliberately separated: stall = "queue not draining",
-drift = "config changed/removed outside Terraform".
+`scheduled-terraform-drift.yml` includes `infra/github` in its matrix (#5780,
+CTO B-2), so the whole ruleset — and, if the queue is ever re-adopted, the
+`merge_queue` rule — is drift-detected on a schedule. A `terraform plan` there
+also catches a *silently-re-added* queue rule (added outside Terraform). While
+the queue is reverted there is no stall probe (it was removed with PR-1's
+workflows); drift = "config changed outside Terraform" is the only live probe of
+the two.
 
 ### DR-restore sync (P1-3)
 
 `scripts/create-ci-required-ruleset.sh` (the documented from-scratch restore
-path) restores BOTH the `required_status_checks` and `merge_queue` rules. Its
-`merge_queue` params **must be kept in lockstep** with the `merge_queue` block in
-`ruleset-ci-required.tf` — if they drift, a DR restore creates a ruleset the next
-`terraform plan` immediately wants to change (and the drift matrix flags). The
-two params the `.tf` leaves at provider default are set to GitHub's defaults
-(5/5) in the DR skeleton because the raw REST API requires every field; the
-post-DR `terraform plan` is the authority on their final values.
+path) restores the `required_status_checks` rule **only** — it carries no
+`merge_queue` rule, matching the reverted state of `ruleset-ci-required.tf`
+(see that script's own header note). The two must stay in lockstep: if the queue
+is ever re-adopted, the `merge_queue` params have to be added to BOTH, else a DR
+restore creates a ruleset the next `terraform plan` immediately wants to change
+(and the drift matrix flags). Any param the `.tf` leaves at provider default must
+be written explicitly in the DR skeleton because the raw REST API requires every
+field; the post-DR `terraform plan` is the authority on final values.
 
 ### Post-enablement canary (after PR-2 applies)
 
@@ -141,7 +149,8 @@ post-DR `terraform plan` is the authority on their final values.
 # Rule is APPLIED (App-auth token; does NOT prove the queue drains):
 gh api repos/jikig-ai/soleur/rulesets/14145388 \
   --jq '[.rules[] | select(.type=="merge_queue")] | length'
-# Expected: 1
+# Expected: 1 — but ONLY after a re-adoption applies the block.
+# TODAY (queue reverted) this correctly returns 0.
 ```
 
 Then verify the queue *functions*: open a trivial human PR, `gh pr merge --squash
@@ -271,8 +280,9 @@ summary. If you want to manually re-verify the live state:
 gh api repos/jikig-ai/soleur/rulesets/14145388 \
   | jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks | length'
 # Expected: matches the current ruleset-ci-required.tf set
-# (select-by-type, NOT .rules[0] — the merge_queue rule is a sibling and
-#  GitHub may return rules[] in any order; see this file's intro + .tf header.)
+# (select-by-type, NOT .rules[0] — GitHub may return rules[] in any order, and a
+#  re-adopted merge_queue rule would sit alongside this one as a sibling. The
+#  guard is kept even though only one rule exists today; see the .tf header.)
 ```
 
 Spot-check the active contexts:

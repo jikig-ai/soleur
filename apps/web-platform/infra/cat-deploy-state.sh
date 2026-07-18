@@ -13,6 +13,56 @@ set -euo pipefail
 #   {"exit_code":-3,"reason":"corrupt_state"}   -- state file unparseable
 # Exit-code protocol defined in ci-deploy.sh header (#2205).
 
+# Identify the host that answered this read (#6425). deploy.soleur.ai is a Cloudflare
+# Tunnel hostname and Cloudflare selects a connector per edge colo, so a read of
+# /hooks/deploy-status answers from whichever connector the caller's colo picked —
+# NOT necessarily the host the caller meant. Without this field a wrong-host answer is
+# indistinguishable from a correct one, which is exactly what made #6425 cost 16h.
+# Resolved from the Hetzner metadata service (the hcloud_server id — the SAME value
+# terraform knows, so AC13 can assert identity against a TF-known value rather than
+# self-consistency), with /etc/machine-id as a reboot-stable fallback.
+#
+# SOLEUR-DEBT: 2nd of 3 resolve_host_id copies (ci-deploy.sh source-of-truth, this,
+# inngest-inventory.sh). Kept in sync by test_host_id_drift_guard, NOT a shared sourced
+# lib — sourcing works in infra (ci-deploy.sh sources its env file), but DISTRIBUTING a new script costs
+# ~11 surfaces (push-infra-config.sh, hooks.json.tmpl, infra-config-apply.sh FILE_MAP,
+# infra-config-install.sh DEST_SPEC + its 2 hardcoded counts, server.tf triggers_replace,
+# apply-deploy-pipeline-fix.yml paths, ship-deploy-pipeline-fix-gate.test.ts,
+# ship/SKILL.md) plus the bake path. Upgrade trigger: a 4th copy OR any consumer outside
+# infra/. Tracked: #6465.
+resolve_host_id() {
+  if [[ -n "${SOLEUR_HOST_ID_OVERRIDE:-}" ]]; then
+    printf '%s' "$SOLEUR_HOST_ID_OVERRIDE"
+    return 0
+  fi
+  local url="${SOLEUR_HOST_ID_METADATA_URL:-http://169.254.169.254/hetzner/v1/metadata/instance-id}"
+  local id
+  id=$(curl -sf --max-time 3 "$url" 2>/dev/null || true)
+  if [[ "$id" =~ ^[0-9]+$ ]]; then
+    printf 'hetzner-%s' "$id"
+    return 0
+  fi
+  id=$(tr -d '[:space:]' < /etc/machine-id 2>/dev/null || true)
+  if [[ -n "$id" ]]; then
+    # HASHED, never raw: machine-id(5) says the value "should be considered confidential and
+    # must not be exposed in untrusted environments" — systemd's own guidance is to hash it
+    # per-application (sd_id128_get_machine_app_specific). This fallback now reaches an HTTP
+    # response body and journald -> Vector -> Better Stack (a third-party vendor), which the
+    # ci-deploy.sh original never did. Hashing is LOSSLESS here: host_id only ever needs to be
+    # STABLE and COMPARABLE (same-host vs different-host), never reversible.
+    printf 'machine-%s' "$(printf '%s' "$id" | sha256sum | cut -c1-12)"
+    return 0
+  fi
+  return 1
+}
+# `|| true` is load-bearing: this script is `set -euo pipefail`, and resolve_host_id
+# return 1s when metadata is unreachable AND /etc/machine-id is unreadable. A bare
+# assignment would abort the hook and turn /hooks/deploy-status into a non-200 — losing
+# the whole state read to protect one field. An empty host_id is emitted instead: an
+# ABSENT field is indistinguishable from an old script, an empty one is not.
+HOST_ID="$(resolve_host_id || true)"
+readonly HOST_ID
+
 # Best-effort: systemctl may be unavailable in non-systemd contexts (local
 # tests, containers). `systemctl is-active` prints a canonical state word to
 # stdout and exits non-zero for inactive/failed; the `|| true` swallows the
@@ -42,11 +92,17 @@ service_journal_tail() {
   local unit="$1"
   if command -v journalctl >/dev/null 2>&1; then
     # #5159: belt-and-suspenders redaction before surfacing over /hooks/deploy-status
-    # (HMAC + CF-Access gated, but defense-in-depth). Neutralizes the one residual
-    # leak path — a binary echoing the inngest signing key (fixed `signkey-` prefix)
-    # in an error line. Hardens BOTH this new inngest tail and the existing vector tail.
+    # (HMAC + CF-Access gated, but defense-in-depth). Neutralizes TWO residual leak
+    # paths — a binary echoing (a) the inngest signing key (fixed `signkey-` prefix) or
+    # (b) a Better Stack heartbeat BEARER URL, whose token is a PATH segment and so
+    # matches none of vector.toml's pii_scrub rules (those cover userid=, OAuth query
+    # params, emails, Authorization: headers). #6536 added (b) by tailing
+    # inngest-heartbeat.service, whose curl echoes the full URL on a glob-parse error;
+    # the ping script's `curl -g` stops that at the source and this stops it here.
+    # Hardens BOTH the inngest tails and the existing vector tail.
     journalctl -u "$unit" --no-pager --output=cat -n 100 2>/dev/null \
       | sed -E 's/signkey-(prod-)?[0-9a-fA-F]{4,}/signkey-REDACTED/g' \
+      | sed -E 's#(uptime\.betterstack\.com/api/v[0-9]+/heartbeat/)[A-Za-z0-9_-]{4,}#\1REDACTED#g' \
       | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' | tail -c 8000 \
       || true
   fi
@@ -65,9 +121,31 @@ journald_storage_json() {
     # `journalctl --header` lists active journal files with their on-disk paths;
     # a file under /var/log/journal proves journald is in persistent mode (a
     # volatile-only journal lists /run/log/journal paths instead).
-    if command -v journalctl >/dev/null 2>&1 \
-      && journalctl --header 2>/dev/null | grep -q '/var/log/journal'; then
-      persistent=true
+    #
+    # CAPTURED ONCE, matched against a here-string — never
+    # `journalctl --header | grep -q`. This file runs under `set -euo pipefail`
+    # (line 2) and the header is large (~107 KB on any host with journal history)
+    # with the match on line 1. `grep -q` exits on that first match, the
+    # producer's next write() takes SIGPIPE, pipefail promotes 141 to the
+    # pipeline status, and the `&&` reads FALSE — reporting persistent=false on
+    # a host where journald is demonstrably persistent.
+    #
+    # Measured before the fix, on a host whose journald IS persistent:
+    #   journalctl --header | grep -q '/var/log/journal'  =>  PIPESTATUS[0]=141, killed 20/20
+    #   old form => persistent=false   (wrong)
+    #   new form => persistent=true    (correct)
+    # Not a race: the producer is far larger than the 64 KiB pipe buffer, so its
+    # write always blocks and always loses.
+    #
+    # This survived because it is host-age-dependent — a fresh host has a small
+    # header and reads correctly; the guard only starts lying once journals
+    # accumulate. #6578.
+    if command -v journalctl >/dev/null 2>&1; then
+      local journal_header
+      journal_header="$(journalctl --header 2>/dev/null || true)"
+      if grep -qF '/var/log/journal' <<<"$journal_header"; then
+        persistent=true
+      fi
     fi
   fi
   # Avail bytes on the root filesystem (the journal lives on `/`, NOT /mnt/data).
@@ -292,8 +370,43 @@ seccomp_live_json() {
 }
 
 HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
+# #6536: the unit's OWN journal tail. `inngest_heartbeat: failed` reports THAT the unit broke
+# but never WHY — the deciding datum is its stderr, and #6536 burned 3 days (3,724 fires)
+# precisely because that stderr was unreadable off-box. Now that the unit sets
+# SyslogIdentifier=inngest-heartbeat, this tail surfaces the discriminator with no SSH:
+# curl's `blank argument` rc=2 line, doppler's project/auth error, or the dark-arm
+# `url_present=no` row. Complements (does not replace) the Better Stack channel — this one
+# works even when Vector itself is the thing that is broken.
+HEARTBEAT_JOURNAL_TAIL="$(service_journal_tail inngest-heartbeat.service)"
+# #6536: WHICH heartbeat arm this host actually rendered. inngest-bootstrap.sh resolves host
+# identity at RENDER time — on DOPPLER_PROJECT=soleur-inngest it substitutes the dark arm into
+# the ping script (absent URL -> log + exit 0); on the co-located web host it deletes the
+# sentinel, so an absent URL reaches curl and exits 2, loudly. That decision is a one-time
+# bootstrap-log line, so off-box there is otherwise NO way to tell which arm a running host
+# carries — the two hosts' scripts differ by three lines and nothing reports it.
+#
+# Why that matters concretely: the render keys off $DOPPLER_PROJECT, and inngest-bootstrap.sh
+# defaults it to `soleur` when unset. A future redeploy path that reaches this host without
+# exporting it would render the WEB arm here and silently restore the 60s rc=2 storm #6536
+# fixed. This field makes that a one-field read instead of a re-diagnosis. `url_present=no`
+# appears ONLY in the dark arm's logger line — never in the script's comments — so its
+# presence is an exact discriminator (verified against both rendered outputs).
+#
+# `-r` first: absent/unreadable is reported as its own value, never conflated with `absent`
+# (a missing script and a deliberately-omitted arm are different faults).
+if [ -r /usr/local/bin/inngest-heartbeat.sh ]; then
+  if grep -q 'url_present=no' /usr/local/bin/inngest-heartbeat.sh 2>/dev/null; then
+    HEARTBEAT_DARK_ARM="rendered"      # dedicated host: absent URL skips the ping (expected while dark)
+  else
+    HEARTBEAT_DARK_ARM="absent"        # co-located web host: absent URL stays loud (expected on the live pusher)
+  fi
+else
+  HEARTBEAT_DARK_ARM="script-missing"
+fi
 # inngest-heartbeat.service is a Type=oneshot unit (no RemainAfterExit) driven by
-# inngest-heartbeat.timer (OnUnitActiveSec=60s, inngest-bootstrap.sh:216-245). It
+# inngest-heartbeat.timer (OnUnitActiveSec=60s; the unit + timer are written by
+# inngest-bootstrap.sh — the heartbeat block around the HEARTBEAT_UNIT/HEARTBEAT_TIMER
+# heredocs, NOT :216-245, which is the Doppler-token materialisation block). It
 # reports `inactive` from `systemctl is-active` as soon as each 60s ExecStart
 # completes successfully — i.e. `inactive` is the NORMAL, healthy steady state
 # between fires, NOT a fault (`failed` is the real fault, e.g. the empty-URL
@@ -329,6 +442,8 @@ fi
 jq -nc \
   --argjson base "$BASE" \
   --arg hb "$HEARTBEAT_STATUS" \
+  --arg hbj "$HEARTBEAT_JOURNAL_TAIL" \
+  --arg hbd "$HEARTBEAT_DARK_ARM" \
   --arg hbt "$HEARTBEAT_TIMER_STATUS" \
   --arg is "$INNGEST_SERVER_STATUS" \
   --arg vs "$VECTOR_STATUS" \
@@ -341,8 +456,11 @@ jq -nc \
   --argjson sc "$SANDBOX_CANARY" \
   --arg sps "$SECCOMP_PROFILE_SHA256" \
   --argjson sl "$SECCOMP_LIVE" \
-  '$base + $cr + $cd + $sl + {sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
+  --arg hid "$HOST_ID" \
+  '$base + $cr + $cd + $sl + {host_id: $hid, sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
+    inngest_heartbeat_journal_tail: $hbj,
+    inngest_heartbeat_dark_arm: $hbd,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,
     vector: $vs,

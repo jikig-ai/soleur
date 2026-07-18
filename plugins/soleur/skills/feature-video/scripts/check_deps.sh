@@ -225,6 +225,28 @@ if command -v agent-browser >/dev/null 2>&1; then
     fi
   fi
   echo "  [ok] agent-browser${AB_VERSION:+ ($AB_VERSION)}"
+
+  # Launch smoke test (issue #6605): a broken Chrome launch otherwise hangs
+  # ~150s with zero output. `timeout` bounds it; isolated sessions avoid reusing
+  # a prior attempt's daemon state. The dominant Linux failure is the AppArmor
+  # unprivileged-user-namespace restriction (Ubuntu 23.10+, containers, VMs),
+  # fixed by launching Chrome with --no-sandbox.
+  if [[ "$OS" == "linux" ]]; then
+    if timeout 45 agent-browser open about:blank --headless --session ab-smoke-a >/dev/null 2>&1; then
+      echo "  [ok] agent-browser can launch Chrome"
+    elif AGENT_BROWSER_ARGS="--no-sandbox" timeout 45 agent-browser open about:blank --headless --session ab-smoke-b >/dev/null 2>&1; then
+      echo "  [WARN] agent-browser needs --no-sandbox to launch Chrome on this host"
+      echo "    (Ubuntu 23.10+/container/VM restricts unprivileged user namespaces via AppArmor)."
+      echo "    Fix -- export before running the recording flow:"
+      echo "      export AGENT_BROWSER_ARGS=\"--no-sandbox\""
+    else
+      echo "  [WARN] agent-browser could not launch Chrome within 45s, even with --no-sandbox."
+      echo "    A wedged daemon may hold the socket. Clear it and retry:"
+      echo "      pkill -f agent-browser-linux-x64; rm -rf /tmp/agent-browser/* \"/run/user/\$(id -u)/agent-browser/\"*"
+    fi
+    timeout 10 agent-browser close --session ab-smoke-a >/dev/null 2>&1 || true
+    AGENT_BROWSER_ARGS="--no-sandbox" timeout 10 agent-browser close --session ab-smoke-b >/dev/null 2>&1 || true
+  fi
 else
   echo "  [MISSING] agent-browser (required)"
   echo "    Install: npm install --prefix ~/.local -g agent-browser@0.22.3 && agent-browser install"

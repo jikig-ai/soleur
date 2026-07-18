@@ -47,6 +47,7 @@ import {
   isReadOnly,
   isRateLimited,
   type CreateIssueBody,
+  type PatchIssueBody,
 } from "./workstream-writes";
 
 interface BoardMeta {
@@ -139,6 +140,13 @@ export function WorkstreamBoard() {
   }, [mutate]);
 
   const refreshFailed = error != null && data != null;
+  // First-load degrade (502 before any data): the board shows <ErrorCard>. Guard
+  // the TOOLBAR New-Issue button (the only create trigger rendered in this state)
+  // so an optimistic create can't flip `data` non-null and resurrect the false
+  // <EmptyState> when its POST then fails against the same cold backend (rollback
+  // → { issues: [] }). The EmptyState button needs no guard — it only renders
+  // when `data != null`, where `firstLoadFailed` is definitionally false.
+  const firstLoadFailed = error != null && data == null;
 
   const resetFilters = useCallback(() => {
     setFilters(emptyFilters());
@@ -285,6 +293,65 @@ export function WorkstreamBoard() {
       );
       try {
         const returned = await patchIssueRequest(number, { title });
+        void mutate(
+          (cur) =>
+            cur
+              ? {
+                  ...cur,
+                  issues: cur.issues.map((i) =>
+                    i.id === returned.id ? returned : i,
+                  ),
+                }
+              : cur,
+          { revalidate: false },
+        );
+      } catch (e) {
+        if (prev) {
+          void mutate(
+            (cur) =>
+              cur
+                ? {
+                    ...cur,
+                    issues: cur.issues.map((i) => (i.id === id ? prev : i)),
+                  }
+                : cur,
+            { revalidate: false },
+          );
+        }
+        surfaceWriteError(e);
+        throw e; // let the inline editor keep edit mode for retry
+      }
+    },
+    [issues, mutate, surfaceWriteError],
+  );
+
+  // FIELDS edit (body/labels/assignees/milestone) — optimistic merge of the
+  // provided fields, reconcile from the returned canonical issue, roll back on
+  // failure. Mirrors updateTitle's shape; the optimistic shape is passed in
+  // because the milestone patch is a number while the card holds { number, title }.
+  const updateFields = useCallback(
+    async (
+      id: string,
+      optimistic: Partial<WorkstreamIssue>,
+      patch: PatchIssueBody,
+    ): Promise<void> => {
+      const number = issueNumberOf(id);
+      if (number === null) return;
+      const prev = issues?.find((i) => i.id === id);
+      void mutate(
+        (cur) =>
+          cur
+            ? {
+                ...cur,
+                issues: cur.issues.map((i) =>
+                  i.id === id ? { ...i, ...optimistic } : i,
+                ),
+              }
+            : cur,
+        { revalidate: false },
+      );
+      try {
+        const returned = await patchIssueRequest(number, patch);
         void mutate(
           (cur) =>
             cur
@@ -467,7 +534,7 @@ export function WorkstreamBoard() {
           </button>
           <GoldButton
             onClick={() => setNewOpen(true)}
-            disabled={readOnly}
+            disabled={readOnly || firstLoadFailed}
             data-tour-id="action:new-issue"
           >
             + New Issue
@@ -540,6 +607,7 @@ export function WorkstreamBoard() {
         onChangeStatus={changeStatus}
         onReopen={reopenIssue}
         onUpdateTitle={updateTitle}
+        onUpdateFields={updateFields}
       />
 
       <NewIssueDialog

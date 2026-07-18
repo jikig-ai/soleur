@@ -89,7 +89,7 @@ on:
       # prod-write authored by a non-technical user — `hr-menu-option-ack-not-prod-write-auth`):
       #   gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby -f reason='...'
       apply_target:
-        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume) | registry-host-replace (scoped -replace of the registry host to re-run cloud-init + apply any pending volume resize; preserves the zot storage volume) | registry-region-migrate (#6288: move the registry to var.registry_location + recreate the store volume in the new region — the store is a disposable GHCR mirror that re-fills from GHCR; scoped, guarded, no out-of-scope destroys) | git-data-host-replace (scoped -replace of the git-data host to re-run cloud-init; preserves BOTH data volumes + the LUKS passphrase; #6242)"
+        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume) | registry-host-replace (scoped -replace of the registry host to re-run cloud-init + apply any pending volume resize; preserves the zot storage volume) | registry-region-migrate (#6288: move the registry to var.registry_location + recreate the store volume in the new region — the store is a disposable GHCR mirror that re-fills from GHCR; scoped, guarded, no out-of-scope destroys) | git-data-host-replace (scoped -replace of the git-data host to re-run cloud-init; preserves BOTH data volumes + the LUKS passphrase; #6242) | workspaces-luks-cutover (#6604: FIRST-PROVISION +create of the five workspaces_luks resources — the encrypted volume + attachment + passphrase/secret/token — gate-guarded so it touches NEITHER the live plaintext /mnt/data volume/attachment NOR the web-1 server; the freeze/rsync/repoint runs from the separate environment-gated workspaces-luks-cutover.yml)"
         required: false
         default: manual-rerun
         type: choice
@@ -102,6 +102,7 @@ on:
           - registry-host-replace
           - registry-region-migrate
           - git-data-host-replace
+          - workspaces-luks-cutover
 
 concurrency:
   # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
@@ -355,6 +356,10 @@ jobs:
               -target=github_actions_secret.doppler_token_kb_drift \
               -target=doppler_service_token.write \
               -target=github_actions_secret.doppler_token_write \
+              -target=doppler_service_token.inngest_arm_write \
+              -target=github_repository_environment.inngest_cutover \
+              -target=github_repository_environment.workspaces_luks_cutover \
+              -target=github_actions_secret.doppler_token_inngest_arm \
               -target=tls_private_key.ci_ssh \
               -target=doppler_secret.deploy_ssh_private_key \
               -target=doppler_secret.ghcr_read_user \
@@ -364,8 +369,6 @@ jobs:
               -target=betteruptime_monitor.soleur_apex \
               -target=betteruptime_policy.uptime \
               -target=betteruptime_monitor.app \
-              -target=cloudflare_record.web_host \
-              -target=betteruptime_monitor.web_host \
               -target=random_id.inngest_signing_key_prd \
               -target=random_id.inngest_signing_key_dev \
               -target=random_id.inngest_event_key_prd \
@@ -415,11 +418,44 @@ jobs:
           # the two counters above). Source of truth:
           # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
           reboot_updates=$(echo "$counts" | jq -r '.reboot_updates')
+          # host_creates (#6416): a pure `+ create` of an hcloud_server /
+          # hcloud_volume. INVISIBLE to all three counters above (no delete, no
+          # nested-block shrinkage, not an ["update"]). This apply path must
+          # NEVER birth a host: `-target` is transitive at the RESOURCE level, so
+          # cloudflare_record.app (dns.tf) and hcloud_firewall_attachment.web
+          # (firewall.tf) each pull the whole hcloud_server.web for_each map —
+          # but the map's hcloud_server_network attachments are NOT
+          # target-reachable. That asymmetry is exactly how soleur-web-2 came up
+          # with no private-net IP, unable to reach zot at 10.0.1.30:5000, while
+          # still serving as a CF tunnel connector replica (ADR-114 I1). Such a host
+          # also boots with NO firewall (hcloud provider 1.63.0:
+          # hcloud_firewall_attachment does not attach before first boot, unlike
+          # hcloud_server.firewall_ids). Source of truth:
+          # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+          host_creates=$(echo "$counts" | jq -r '.host_creates')
           # Validate counters parsed correctly — empty values from a jq
           # failure would silently evaluate false in the `-gt 0` test and
           # let destructive plans slip past the guard.
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}')."
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}')."
+            exit 1
+          fi
+          # HALT on a host create — evaluated OUTSIDE the destroy_count sum below
+          # and BEFORE it, so `[ack-destroy]` cannot bypass this one. Rationale:
+          # ack is the right resolution for an intended nested-block removal, but
+          # an unattended per-PR apply is never the right place to birth a host —
+          # the dispatch jobs that legitimately create one are not gated here.
+          # This is a TRIPWIRE, not a routine gate: host_creates == 0 on every
+          # normal merge, so it is a no-op until the #6416 drift class recurs.
+          if [[ "$host_creates" -gt 0 ]]; then
+            echo "::error::terraform plan would CREATE ${host_creates} hcloud_server/hcloud_volume resource(s) on the per-PR apply path. This path must never birth a host: the server is target-reachable but its hcloud_server_network attachment is not, so the host would come up with no private-net IP (and, transiently, no firewall) — the #6416 failure mode."
+            echo "::error::Remediation depends on WHICH host is being created (see the plan output above):"
+            echo "::error::  • hcloud_server.web[\"web-2\"] / its volume → dispatch 'gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby -f reason=...' (it targets the network attach + volume, and pulls the server transitively)."
+            echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host'."
+            echo "::error::  • hcloud_server.registry → NO dispatch creates it (registry-host-replace and registry-region-migrate are both scoped -replace and need the resource already in state). Run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
+            echo "::error::  • a legitimate new host (e.g. web-3 added to var.web_hosts) → NO dispatch creates it either (warm-standby's targets are hardcoded to web-2). It needs an operator-local full apply BEFORE the code merges, or EVERY subsequent merge HALTs here — not just this PR's."
+            echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. That is the only bypass — [ack-destroy] deliberately does NOT reach this HALT. Use it to unblock merges while the correct dispatch/apply above is arranged; it skips the apply, it does not perform it."
+            grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi
           destroy_count=$((resource_deletes + nested_deletes + reboot_updates))
@@ -439,8 +475,28 @@ jobs:
             # zero deletes) the generic line contradicts the reboot-specific
             # steer below, so suppress it: ack-through would execute the
             # transitively-included reboot on the unattended apply.
+            # STEER (#6538 / AC-B5). The pre-#6538 text read: "Add a line
+            # containing exactly '[ack-destroy]' ... or revert the trigger
+            # commit." During a scoped host retirement BOTH of its options are
+            # wrong, and this is the only instruction the operator sees:
+            #
+            #   - [ack-destroy] authorizes a PARTIAL destroy. This per-PR apply's
+            #     `-target` scope reaches hcloud_server.web["web-2"] but NOT
+            #     hcloud_volume.workspaces["web-2"] (measured 2026-07-17:
+            #     `0 to add, 1 to change, 1 to destroy`). Acking through kills the
+            #     host and strands a 20 GB volume that bills forever with nothing
+            #     attached to it.
+            #   - "revert the trigger commit" blames an INNOCENT merge. While
+            #     config says N hosts and state still says N+1, EVERY merge trips
+            #     this. The trigger is not the cause.
+            #
+            # The safe resolution is to skip THIS merge's apply and let the
+            # supervised operator-local full-scope apply complete the retirement.
+            # [ack-destroy] is still offered (it remains correct for an ordinary
+            # intentional delete) but never bare — it carries the partial warning.
+            echo "::error::If a scoped host retirement is in flight (config drops a host that is still in state), do NOT ack this. Add a line containing exactly '[skip-web-platform-apply]' to the merge commit message: it suppresses this merge's apply so the supervised full-scope apply can complete the retirement. Reverting the trigger commit does NOT help — the trigger is an innocent merge; every merge trips this until the retirement lands."
             if [[ "$resource_deletes" -gt 0 || "$nested_deletes" -gt 0 ]]; then
-              echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
+              echo "::error::Otherwise, for an ordinary intentional delete, add a line containing exactly '[ack-destroy]' to the merge commit message. WARNING: [ack-destroy] authorizes ONLY what this apply's -target scope reaches, which may be a PARTIAL destroy — e.g. a server deleted while its data volume is out of scope and survives, attached to nothing and still billing. Read the 'will be destroyed' list below and confirm it is the WHOLE intended change before acking."
             fi
             if [[ "$reboot_updates" -gt 0 ]]; then
               echo "::error::A reboot-forcing hcloud_server.* update is planned. Resolve via the operator maintenance-window apply — do NOT add [ack-destroy] to unblock this unattended apply: the host update is transitively in the saved plan, so ack-through would REBOOT prod unattended."
@@ -457,6 +513,42 @@ jobs:
           set -euo pipefail
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
+
+      # Tunnel ingress origin verification (#6594 / ADR-114 I2).
+      #
+      # WHY THIS EXISTS: `terraform apply` of a Cloudflare tunnel config ALWAYS
+      # succeeds — CF accepts an ingress `service` without ever checking the origin is
+      # reachable. So a wrong origin (bad IP, wrong port, an un-converged private NIC)
+      # applied GREEN and took out the management plane silently. Nothing else caught
+      # it: apply-deploy-pipeline-fix.yml does NOT fire on tunnel.tf (its `paths:`
+      # lists explicit .sh files + server.tf), and the SSH bridge's readiness check is
+      # `nc -z 127.0.0.1 2222`, which proves only that the LOCAL cloudflared listener
+      # opened — true whether or not the origin answers. A tunnel.tf-only merge had
+      # ZERO post-apply verification: the same "closed by construction, verified by
+      # nothing" defect (#6425/#6594) this change exists to retire. Do not delete
+      # without a replacement that reads the LIVE config plane.
+      #
+      # Two instruments, because they prove different things:
+      #   (a) CF API config read-back — authoritative, vantage-free. Proves the edge
+      #       holds the config we intended.
+      #   (b) HMAC probe of /hooks/deploy-status — proves the pinned origin is
+      #       actually SERVING. (a) cannot: a perfect config pointing at a dead origin
+      #       reads back clean.
+      #
+      # Deliberately NOT a data-plane distribution check: connector selection is
+      # colo-STICKY (scheduled-inngest-health.yml — on 2026-07-15, 10/10 identical EU
+      # reads "proved" inngest was down while a US runner read it healthy). Polling N
+      # times from one runner colo samples ONE sticky binding N times, not a
+      # distribution. (b) asserts an INVARIANT (the route serves), which is
+      # colo-independent and needs no control arm.
+      - name: Verify tunnel ingress origins are live and origin-relative
+        if: success()
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh"
 
       # Bootstrap-cycle guard (#4195): on the FIRST apply that creates
       # `github_actions_secret.doppler_token_write`, the runner started
@@ -673,7 +765,7 @@ jobs:
       # MUST equal var.web_hosts private_ips (variables.tf), same literal the
       # release workflow uses — web-1 self-excludes at runtime, so this fans the
       # deploy out to web-2 (10.0.1.11) over the private net.
-      WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+      WEB_HOST_PRIVATE_IPS: "10.0.1.10"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -937,7 +1029,7 @@ jobs:
       OP_CONTEXT: recreate
       # MUST equal var.web_hosts private_ips (variables.tf) — web-1 self-excludes at
       # runtime, so the fan-out reaches web-2 (10.0.1.11). Single-peer invariant.
-      WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+      WEB_HOST_PRIVATE_IPS: "10.0.1.10"
       IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -1163,6 +1255,34 @@ jobs:
           if ! web2_recreate_gate tfplan.json; then
             echo "::error::web-2-recreate destroy-guard ABORTED: the plan is not the exact scoped web-2 recreate (an out-of-scope change, a web-2 data-volume destroy, a web-1 touch, a reboot, or a no-op). Refusing to apply. NO [ack-destroy] bypass on this path."
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          # #6453 STOCK preflight — a TRIPWIRE, not a routine gate (posture matches :447).
+          # The guard above proves the plan is the EXACT scoped recreate; it cannot prove the
+          # create is FEASIBLE. A -replace DESTROYS first, so with no DC stock the destroy
+          # succeeds, the create fails resource_unavailable, and the fleet strands with NO
+          # rollback (#6393 -> ~10h web-1 prod deploy freeze, PIR corrected #6400). The account
+          # CAP never engages here — a -replace frees its own slot — which is why #6453's
+          # original cap preflight was dropped: it returns green on exactly this failure.
+          # Rationale + the load-bearing available-vs-supported trap live in the gate lib.
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read the gate would
+          # fail-closed on EVERY dispatch (a gate that always fails is an outage, not a
+          # tripwire). Read-only; never echoed. Precedent: cutover-inngest.yml:359.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::web-2-recreate stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above for the free warm-standby repair path and #6463). Refusing to apply — the destroy would succeed and the create would not. NO [ack-destroy] bypass on this path."
             exit 1
           fi
           echo "web-2-recreate plan is the exact scoped recreate. Plan summary:"
@@ -1582,6 +1702,32 @@ jobs:
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
+          # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447). The
+          # guard above proves the plan's SHAPE; it cannot prove the create is FEASIBLE. A
+          # -replace DESTROYS first, so with no DC stock the destroy succeeds, the create fails
+          # resource_unavailable, and the fleet strands with no rollback (#6393 -> ~10h prod
+          # deploy freeze, #6400). The account CAP never engages — a -replace frees its own
+          # slot. Full rationale + the available-vs-supported trap: the gate lib's header.
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
+          # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
+          # cutover-inngest.yml:359.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::inngest-host-replace stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above). Refusing to apply — the destroy would succeed and the create would not, stranding the inngest host with its Redis AOF volume detached (#6393, #6463). NO [ack-destroy] bypass on this path."
+            exit 1
+          fi
           echo "inngest-host-replace plan is the exact scoped recreate. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
@@ -1742,6 +1888,32 @@ jobs:
           if ! registry_host_replace_gate tfplan.json; then
             echo "::error::registry-host-replace destroy-guard ABORTED: the plan is not the exact scoped registry-host recreate. Refusing to apply. Specifically verify: the zot OCI STORE volume (hcloud_volume.registry) is preserved (no delete/forget/replace), the private NIC (hcloud_server_network.registry) is re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.registry) is re-attached. NO [ack-destroy] bypass on this path."
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447). The
+          # guard above proves the plan's SHAPE; it cannot prove the create is FEASIBLE. A
+          # -replace DESTROYS first, so with no DC stock the destroy succeeds, the create fails
+          # resource_unavailable, and the fleet strands with no rollback (#6393 -> ~10h prod
+          # deploy freeze, #6400). The account CAP never engages — a -replace frees its own
+          # slot. Full rationale + the available-vs-supported trap: the gate lib's header.
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
+          # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
+          # cutover-inngest.yml:359.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::registry-host-replace stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above). Refusing to apply — the destroy would succeed and the create would not, stranding the registry with its zot store volume detached (#6393, #6463). NO [ack-destroy] bypass on this path."
             exit 1
           fi
           echo "registry-host-replace plan is the exact scoped recreate. Plan summary:"
@@ -1935,6 +2107,35 @@ jobs:
           if ! registry_region_migrate_gate tfplan.json; then
             echo "::error::registry-region-migrate destroy-guard ABORTED: the plan is not the exact scoped registry region migration. Refusing to apply. Verify: ONLY the registry's own 6 resources change (no out-of-scope create/update/destroy), the logs-token secret is preserved, and the server + fresh store volume + private NIC + volume-attachment + deny-all firewall are all CREATED in the new region. NO [ack-destroy] bypass on this path."
             grep -E 'will be destroyed|must be replaced|will be created|Plan:' tfplan.txt | head -40 >&2
+            exit 1
+          fi
+          # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447). The
+          # guard above proves the plan's SHAPE; it cannot prove the create is FEASIBLE.
+          # This path carries NO -replace flag (:2023-2024) — the var.registry_location change
+          # itself forces the replacement — but the destroy-then-create ordering, and therefore
+          # the stranding risk, is identical: no stock in the TARGET region => the old registry
+          # is destroyed and the new one never lands (#6393 -> ~10h prod deploy freeze, #6400).
+          # This is the path stock most obviously governs: the target region is operator-chosen,
+          # and change.after.location gives the gate that target for free. Full rationale + the
+          # available-vs-supported trap: the gate lib's header.
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
+          # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
+          # cutover-inngest.yml:359.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::registry-region-migrate stock-preflight ABORTED: the registry's server_type is not orderable in the TARGET region (var.registry_location; see the ::error:: lines above). Refusing to apply — the old registry would be destroyed and the new one would not land (#6393, #6463). Pick a region where the type is orderable, or wait for stock. NO [ack-destroy] bypass on this path."
             exit 1
           fi
           echo "registry-region-migrate plan is the exact scoped migration. Plan summary:"
@@ -2139,6 +2340,34 @@ jobs:
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
+          # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447).
+          # This path needs the gate MOST, and not for the -replace reason the others do:
+          # `terraform plan -replace=<addr>` on an address NOT in state exits 0 with no warning
+          # and plans a plain CREATE. hcloud_server.git_data is declared unconditionally
+          # (git-data.tf:118) and the host has never been born, so this dispatch tries to CREATE
+          # git-data — with a cax11 type that was orderable in 0 of 3 EU DCs on 2026-07-15. It
+          # is a live path that fails, not dead code. Full rationale + the available-vs-supported
+          # trap: the gate lib's header.
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
+          # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
+          # cutover-inngest.yml:359.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
+          # before any later step can echo it. This token carries destroy authority over the
+          # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::git-data-host-replace stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above). If git-data has never been born, this dispatch plans a plain CREATE — and cax11 has had no EU stock, so it cannot be born at any account cap. Refusing to apply (#6393, #6463). NO [ack-destroy] bypass on this path."
+            exit 1
+          fi
           echo "git-data-host-replace plan is the exact scoped recreate. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
@@ -2223,4 +2452,170 @@ jobs:
             echo "**Dispatch reason:** ${REASON:-n/a}"
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Selected by `-f apply_target=workspaces-luks-cutover` (#6604, ADR-119). The FIVE workspaces_luks
+  # resources (workspaces-luks.tf) are OPERATOR_APPLIED_EXCLUSIONS — deliberately NOT in the per-PR
+  # `-target=` allow-list (they ride THIS dispatch), and the per-PR `host_creates` TRIPWIRE fires on
+  # any `hcloud_volume` create, so the volume MUST be born here, never on a merge. This is a
+  # FIRST PROVISION (a pure `+create` of all five), NOT a host -replace — so NO `-replace` flag; the
+  # sourced workspaces_luks_cutover_gate PERMITS the five creates and counts luks_passphrase_touched
+  # on update/delete/forget only (DP-1). It ABORTS if the plan touches the LIVE plaintext /mnt/data
+  # volume/attachment (the old volume has NO prevent_destroy — #6593 omitted it), the web-1 server
+  # (cx33-unrebuildable), or anything out of scope. NO [ack-destroy] bypass (a sole-copy-data volume
+  # is authorized by the menu-ack dispatch, hr-menu-option-ack-not-prod-write-auth). The freeze /
+  # rsync / repoint / canary run from the SEPARATE environment-gated workspaces-luks-cutover.yml
+  # AFTER this create; this job only provisions + attaches the encrypted volume (zero downtime).
+  workspaces_luks_cutover:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'workspaces-luks-cutover'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Job-level web-1-swap mutex (DP-3): this job attaches a volume to web-1, so it shares the
+    # cross-pipeline `web-1-swap` group with warm_standby / web_2_recreate / the release deploy —
+    # at most one web-1 mutation in flight. COEXISTS with (does not replace) the workflow-level R2
+    # serializer (terraform-apply-web-platform-host) that protects the lockless backend.
+    concurrency:
+      group: web-1-swap
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
+        # satisfies var.ssh_key_path (never consumed by the scoped volume create).
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (workspaces-luks first provision) + destroy-guard
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Pure `+create` of the five workspaces_luks resources (NO -replace — first provision). The
+        # sourced workspaces_luks_cutover_gate reads the STRUCTURED plan JSON and ABORTS unless the
+        # plan is EXACTLY this create with the live plaintext volume/attachment + web-1 preserved.
+        run: |
+          # set +e so the `rc=$?` diagnostic below actually runs — GitHub runs `run:` under an
+          # inherited `-e`, which `set -uo pipefail` does not clear, so without this the plan failure
+          # would exit the step before the ::error:: guidance prints. `set -e` is re-armed after.
+          set +e
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -target='random_password.workspaces_luks' \
+              -target='doppler_secret.workspaces_luks_key' \
+              -target='doppler_service_token.workspaces_luks' \
+              -target='hcloud_volume.workspaces_luks' \
+              -target='hcloud_volume_attachment.workspaces_luks' \
+              -var="ssh_key_path=${CI_SSH_PUB}"
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (workspaces-luks-cutover) failed (exit $rc)."
+            exit $rc
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          # Sourced gate — the SAME bytes tests/scripts/test-workspaces-luks-cutover-gate.sh exercises.
+          # shellcheck source=tests/scripts/lib/workspaces-luks-cutover-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/workspaces-luks-cutover-gate.sh"
+          if ! workspaces_luks_cutover_gate tfplan.json; then
+            echo "::error::workspaces-luks-cutover destroy-guard ABORTED: the plan is not the exact scoped first provision. Verify the LIVE plaintext /mnt/data volume (hcloud_volume.workspaces[\"web-1\"]) + its attachment + the web-1 server are UNTOUCHED, no passphrase re-mint, no destroy/forget, and the encrypted volume + attachment + doppler_secret each show a create. NO [ack-destroy] bypass on this path."
+            grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          echo "workspaces-luks-cutover plan is the exact scoped first provision. Plan summary:"
+          grep -E '^Plan:' tfplan.txt || true
+
+      - name: Terraform apply (workspaces-luks first provision) — live-volume-preserved assert
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Apply the saved, guarded plan. Post-apply jq backstops from the SAVED plan (belt-and-
+        # suspenders to the gate): the live plaintext volume/attachment + web-1 carry ZERO actions,
+        # the encrypted volume + attachment each show a create. This is additive — zero downtime.
+        run: |
+          set -euo pipefail
+          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan; then
+            echo "::error::terraform apply (workspaces-luks-cutover) failed — the encrypted volume was not provisioned. The live plaintext /mnt/data is UNTOUCHED (additive create); re-dispatch to retry."
+            exit 1
+          fi
+          for ADDR in 'hcloud_volume.workspaces["web-1"]' 'hcloud_volume_attachment.workspaces["web-1"]' 'hcloud_server.web["web-1"]'; do
+            TOUCHED=$(jq --arg a "$ADDR" '[.resource_changes[]?
+              | select(.address == $a)
+              | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))] | length' tfplan.json)
+            if [[ "$TOUCHED" != "0" ]]; then
+              echo "::error::${ADDR} shows ${TOUCHED} action(s) in the applied plan — the LIVE plaintext store / web-1 must be preserved. This should have been caught by the guard; failing hard."
+              exit 1
+            fi
+          done
+          VOL_CREATES=$(jq '[.resource_changes[]?
+            | select(.address == "hcloud_volume.workspaces_luks")
+            | select(.change.actions? | index("create"))] | length' tfplan.json)
+          ATT_CREATES=$(jq '[.resource_changes[]?
+            | select(.address == "hcloud_volume_attachment.workspaces_luks")
+            | select(.change.actions? | index("create"))] | length' tfplan.json)
+          if [[ "$VOL_CREATES" == "0" || "$ATT_CREATES" == "0" ]]; then
+            echo "::error::the encrypted volume/attachment shows no create in the applied plan — nothing was provisioned. Failing hard."
+            exit 1
+          fi
+          echo "live plaintext volume/attachment + web-1 untouched (0 actions); encrypted volume + attachment created. Additive — zero downtime. Next: dispatch workspaces-luks-cutover.yml (environment-gated) for the freeze/rsync/repoint."
+
+      - name: Dispatch summary
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## workspaces-luks-cutover first provision (ADR-119, #6604)"
+            echo ""
+            echo "**Dispatch reason:** ${REASON:-n/a}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+            echo ""
+            echo "Additive +create of the encrypted volume (zero downtime). The freeze/rsync/repoint/canary is the SEPARATE environment-gated workspaces-luks-cutover.yml dispatch."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -104,6 +104,7 @@ describe("soleur-go-runner pre-dispatch narration (Stage 2.23)", () => {
       now: () => Date.now(),
     });
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-narr",
       userId: "u1",
       userMessage: "hi",

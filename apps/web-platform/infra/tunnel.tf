@@ -28,35 +28,98 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
   tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.web.id
 
   config {
+    # ADR-114 I2 (#6425, #6594) — origin-RELATIVE, not connector-relative. This is ONE
+    # tunnel with MULTIPLE connector replicas and CF load-balances across them, so a
+    # `localhost:` service resolves on WHICHEVER replica answers. That made the whole
+    # management plane a coin flip: #6594's infra-config POST was a coin-flipped WRITE
+    # self-verified against a SEPARATELY coin-flipped READ, and the verify gate's retry
+    # loop (fresh curl per attempt = fresh connector selection, break on first pass)
+    # laundered the coin flip into a green — #6577's ci-deploy.sh never reached web-1
+    # while CI reported success. Pinning the origin makes whichever replica answers proxy
+    # to web-1, the only host that can serve these routes. Generalizes the pattern the
+    # registry rule below already ships (#6122).
+    #
+    # This does NOT trade availability away — it restores it. The status quo is not
+    # "available", it is "answers, sometimes from a host that cannot serve the route":
+    # #6425 measured (2026-07-15) that web-2 has no `inngest-inventory.sh` BAKED — i.e.
+    # absent from its image/cloud-init. A coin-flipped push may since have landed one on
+    # web-2, which is the point: nobody can say which host holds what. Correct-or-
+    # unavailable ≻ silently-wrong.
+    #
+    # The :9000 / :22 ports stay literals: webhook.service binds `-ip 0.0.0.0` with the
+    # port in its own config, so deriving it costs more than it buys. A decision, not an
+    # oversight. The IP is NEVER hardcoded — var.web_hosts is the canonical source.
     ingress_rule {
       hostname = "deploy.${var.app_domain_base}"
-      service  = "http://localhost:9000"
+      service  = "http://${var.web_hosts["web-1"].private_ip}:9000"
     }
     # SSH ingress for CI runner — `terraform_data.*` provisioner resources
     # in server.tf reach the host through this tunnel after the runner
     # establishes a `cloudflared access tcp` localhost forward.
     # CF Tunnel ingress rules are first-match; this MUST stay above the
     # catch-all `http_status:404` rule below.
+    #
+    # Pinned for the same reason as `deploy.` above, and NOT optional: the
+    # infra_config_handler_bootstrap bridge is the SOLE delivery path for the webhook
+    # handler + hooks.json, and it rides this rule. Pinning only `deploy.` would leave
+    # the control plane's other half coin-flipped. ADR-114:191's "do NOT repoint the 12
+    # `connection { host }` blocks" is about connection.host — NOT the ingress service;
+    # #6441 §1 shows the service repoint needs no NAT rework (the runner still dials the
+    # public SERVER_IP).
     ingress_rule {
       hostname = "ssh.${var.app_domain_base}"
-      service  = "ssh://localhost:22"
+      service  = "ssh://${var.web_hosts["web-1"].private_ip}:22"
     }
-    # #6122 (ADR-096) — registry PUSH ingress. The web host's cloudflared (already a
-    # 10.0.1.0/24 member) proxies to the private-net zot host, so the registry host needs
-    # NO cloudflared of its own. CI runs `cloudflared access tcp --hostname registry.<base>`
-    # → this rule → tcp://10.0.1.30:5000 (zot). First-match; MUST stay above the 404.
+    # #6122 (ADR-096) — registry PUSH ingress. A web-host cloudflared connector proxies to
+    # the private-net zot host, so the registry host needs NO cloudflared of its own. CI runs
+    # `cloudflared access tcp --hostname registry.<base>` → this rule → tcp://10.0.1.30:5000
+    # (zot). First-match; MUST stay above the 404.
+    #
+    # (#6416) "A web-host cloudflared connector", NOT "THE web host's" — this is ONE tunnel with
+    # MULTIPLE connector replicas, and CF load-balances across them. So this rule is correct only
+    # while EVERY connector host is a 10.0.1.0/24 member (ADR-114 invariant I1); web-2 was not.
+    # It is nonetheless the RIGHT pattern and the one to generalize — its service is
+    # private-net-RELATIVE, so whichever replica answers proxies to the correct origin.
+    #
+    # #6594 GENERALIZED IT: `deploy.` and `ssh.` above are now origin-relative too, so all three
+    # routes satisfy I2 and this rule is no longer the lone compliant one. This comment used to
+    # contrast the sibling `ssh://localhost:22` as the connector-relative counterexample; that
+    # counterexample no longer exists in this file. The pattern's rationale stands on its own.
+    # Failure rates and the topology rationale live in ADR-114 — do not restate them here.
     #
     # `tcp://`, NOT `http://` (#6122 cutover fix): `cloudflared access tcp` bridges a RAW TCP
     # stream over a WebSocket. With an `http://` service the origin cloudflared HTTP-proxies the
     # WS-upgrade to zot, which doesn't speak it → the client dies "websocket: bad handshake"
     # (the exact symptom the first live push runs hit). The sibling SSH bridge works precisely
-    # because it uses a raw-TCP service type (`ssh://localhost:22`); `tcp://` is the generic
+    # because it uses a raw-TCP service type (the `ssh://` scheme); `tcp://` is the generic
     # form for zot's plain-HTTP registry — crane/docker then speak HTTP over the raw forward
     # (127.0.0.1:5000 is auto-insecure to docker). The CF Access app + service-token policy are
     # unchanged (identical shape to the working ssh app); only the ingress transport was wrong.
+    #
+    # NOT STALE (#6357): this rule is the LIVE registry-push path — do NOT remove or repoint it.
+    # #6288 moved the zot registry REGION nbg1→hel1 and recreated its store volume, but the origin
+    # private IP `10.0.1.30:5000` is UNCHANGED (the 10.0.1.0/24 net spans hel1; zot-registry.tf
+    # `registry_private_ip = "10.0.1.30"`). Removing this rule breaks CI registry push; repointing
+    # is a no-op. A `dial tcp 10.0.1.30:5000: operation was canceled` here means the origin is
+    # transiently DOWN (registry stability = #6288), NOT that the config is wrong.
     ingress_rule {
       hostname = "registry.${var.app_domain_base}"
       service  = "tcp://${local.registry_endpoint}"
+      origin_request {
+        # Fail-fast so a DOWN registry origin (#6288) doesn't pile up ~30s-held dials that
+        # saturate the shared tunnel daemon's HA-stream budget and degrade the sibling
+        # deploy-webhook route (the 2026-07-11 502; #6357). Mitigation, not cure — root cause is
+        # registry stability (#6288); full deploy-tunnel decoupling + metrics are #6178.
+        # Go duration STRING — provider v4's schema is literally `connect_timeout: string` (dump it:
+        # `terraform providers schema -json`). A bare `5` coerces to "5", fails Cloudflare's duration
+        # parse, and lands as "0s" — so from #6357 until #6511 this mitigation was NEVER in effect:
+        # every apply planned `connect_timeout = "0s" -> "5"`, applied it, and read back "0s" forever.
+        # The old comment here said `INTEGER seconds (NOT "5s")`, which is exactly backwards for this
+        # pin — that is the v5 shape (v5 takes an integer). We are on v4 (`~> 4.0`, main.tf:23-26).
+        # Do NOT copy v5/REST-API docs onto this resource without checking the pinned schema.
+        connect_timeout   = "5s"
+        no_happy_eyeballs = true # origin is a v4 literal → drop the v4/v6 parallel-dial fan-out
+      }
     }
     # Catch-all rule (required by Cloudflare)
     ingress_rule {
@@ -98,7 +161,9 @@ resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
 # GitHub Actions runs `cloudflared access tcp --hostname ssh.${app_domain_base}`
 # carrying TUNNEL_SERVICE_TOKEN_ID + TUNNEL_SERVICE_TOKEN_SECRET. CF Access
 # validates the headers and bridges the raw TCP forward into the tunnel,
-# where the host-side cloudflared daemon delivers to localhost:22 (sshd).
+# where the answering cloudflared connector delivers to web-1's sshd at
+# `${var.web_hosts["web-1"].private_ip}:22` — origin-relative since #6594, so the
+# bridge lands on web-1 no matter which connector replica CF selects.
 
 resource "cloudflare_zero_trust_access_application" "ssh" {
   zone_id = var.cf_zone_id

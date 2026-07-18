@@ -276,6 +276,7 @@ describe("cc-dispatcher Bash review-gate (Option A — synthetic AgentSession)",
     // (Don't actually call resolveCcBashGate — that would consume it.)
     // Instead, advance time past idleReapMs and run reapIdle().
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-reap",
       userId: "u-reap",
       userMessage: "trigger query construction",

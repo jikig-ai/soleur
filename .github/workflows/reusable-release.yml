@@ -649,7 +649,9 @@ jobs:
       # crane + cosign auto-treat loopback (127.0.0.1) as an insecure registry → plain-HTTP
       # zot over the raw-TCP forward needs no extra flag (Phase-0 spike evidence). This block
       # is additive: a zot/bridge failure must not fail the GHCR release (the whole block is
-      # gated on zot_bridge.outcome and the teardown is if:always()).
+        # (#6416) Gated on `docker_build.outcome`; the BRIDGE outcome is branched on
+        # INTERNALLY below, so a bridge failure reaches degraded() instead of skipping into
+        # silence. Do NOT re-gate this step on zot_bridge — that was the #6416 defect.
       - name: Bridge to zot registry (CF Tunnel)
         id: zot_bridge
         if: steps.docker_build.outcome == 'success'
@@ -668,7 +670,24 @@ jobs:
 
       - name: Mirror image GHCR→zot (crane) + cosign-sign the zot digest
         id: zot_mirror
-        if: steps.zot_bridge.outcome == 'success'
+        # (#6416) Gated on docker_build, NOT on zot_bridge. Previously this read
+        # `if: steps.zot_bridge.outcome == 'success'`, which SKIPPED the step whenever
+        # the bridge failed — and a skipped step emits nothing, so
+        # `steps.zot_mirror.outputs.mirror_status` stayed UNSET and the Slack ⚠️ that
+        # reads it (by step id) stayed inert. Net effect: the bridge could fail on every
+        # single release, zot would never receive an image, and the release stayed green
+        # and silent. Adding a sibling step could not fix this — step outputs are
+        # namespaced by step id, so a new id writes an output no consumer reads. The fix
+        # is to keep this id and branch INTERNALLY (below), inheriting the existing
+        # degraded() emitter.
+        #
+        # Matching zot_bridge's own gate is deliberate: dropping the `if:` entirely would
+        # run this step on releases that never built an image (docker_build skipped when
+        # `version.outputs.next` or `inputs.docker_image` is empty), where IMAGE/DIGEST
+        # are empty and crane would fail — emitting a FALSE "zot mirror degraded" on a
+        # release that never intended to mirror anything. docker_build success is exactly
+        # the precondition that guarantees IMAGE and DIGEST are populated.
+        if: steps.docker_build.outcome == 'success'
         # The continue-on-error marker below is BELT: the zot mirror is a SECONDARY/shadow
         # copy during the ADR-096 soak (GHCR stays primary + break-glass; the pull
         # side does an atomic GHCR fallback on any zot miss), so a mirror failure
@@ -681,6 +700,11 @@ jobs:
           DIGEST: ${{ steps.docker_build.outputs.digest }}
           VERSION: ${{ steps.version.outputs.next }}
           COMMIT_SHA: ${{ github.sha }}
+          # (#6416) Read as `outcome`, NOT `conclusion`: zot_bridge carries
+          # continue-on-error: true, which forces its conclusion to 'success' while
+          # outcome keeps the TRUE result. That masking is precisely what made the
+          # broken bridge invisible.
+          BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }}
         run: |
           # No `set -e` — every failure path exits 0 so the release job stays green
           # (SUSPENDERS to the continue-on-error belt, mirroring the Sentry-audit
@@ -725,6 +749,39 @@ jobs:
             exit 0
           }
 
+          # Preserve the FULL org namespace (jikig-ai/…). The pull side
+          # (ci-deploy.sh: zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") and
+          # zot-entry-gate.sh both address `jikig-ai/soleur-web-platform`. `basename` dropped
+          # the org, pushing to an orphan `soleur-web-platform` repo nothing reads → the gate
+          # MISSED and every pull fell back to GHCR (#6122 namespace fix).
+          #
+          # (#6416) Computed HERE, before the bridge branch below, so the degraded message
+          # can name the real image. Shell state does not cross steps, so this cannot be
+          # borrowed from zot_bridge.
+          REPO="${IMAGE#ghcr.io/}"           # e.g. jikig-ai/soleur-web-platform
+          ZOT="127.0.0.1:5000/${REPO}"
+
+          # (#6416) The bridge is what makes zot reachable at 127.0.0.1:5000. If it FAILED,
+          # there is nothing to mirror into — report degraded through the SAME emitter (and
+          # therefore the same output id the Slack line consumes) instead of being skipped
+          # into silence.
+          #
+          # `== 'failure'`, NOT `!= 'success'`: zot_bridge is itself gated on docker_build,
+          # so a BUILD failure leaves the bridge 'skipped' — and "zot mirror degraded" would
+          # be a misleading thing to say about a build that never produced an image. Only a
+          # genuine bridge failure is worth reporting here.
+          #
+          # rc is a non-numeric sentinel: zot_bridge is a composite `uses:` action, so GitHub
+          # exposes only outcome/conclusion — there is no exit code to forward. degraded()
+          # interpolates rc as text, so no widening is needed.
+          # `:-` guard: the run block is `set -u`, and this step is also executed verbatim
+          # by plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh. An unset value
+          # degrades to the pre-#6416 path (attempt the mirror; crane fails; degraded fires
+          # with a less specific message) — never to silence.
+          if [[ "${BRIDGE_OUTCOME:-}" == "failure" ]]; then
+            degraded "bridge" "the CF-tunnel registry bridge to zot FAILED, so NOTHING was mirrored for this release (not a partial copy). zot is now missing this version entirely; the host's atomic GHCR fallback covers the pull. Backfill: re-run the bridge, then 'crane copy ${IMAGE}:v${VERSION} ${ZOT}:v${VERSION} && cosign sign --yes ${ZOT}@${DIGEST}'. If the bridge keeps failing, the tunnel connector serving registry.soleur.ai may lack a private-net route to 10.0.1.30:5000 (#6416)."
+          fi
+
           # Install crane (SHA-pinned; supply-chain discipline, same as cloudflared).
           CRANE_VERSION="v0.20.2"
           CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
@@ -737,13 +794,6 @@ jobs:
           retry install_crane || degraded "$?"
           rm -f /tmp/crane.tgz
 
-          # Preserve the FULL org namespace (jikig-ai/…). The pull side
-          # (ci-deploy.sh: zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") and
-          # zot-entry-gate.sh both address `jikig-ai/soleur-web-platform`. `basename` dropped
-          # the org, pushing to an orphan `soleur-web-platform` repo nothing reads → the gate
-          # MISSED and every pull fell back to GHCR (#6122 namespace fix).
-          REPO="${IMAGE#ghcr.io/}"           # e.g. jikig-ai/soleur-web-platform
-          ZOT="127.0.0.1:5000/${REPO}"
           # crane reads ~/.docker/config.json for BOTH ghcr.io (Docker login step) and
           # 127.0.0.1:5000 (cf-tunnel-registry-bridge docker login). Copy every tag the GHCR
           # build-push wrote (digest preserved → zot manifest byte-identical).
@@ -838,11 +888,16 @@ jobs:
           VERSION: ${{ steps.version.outputs.next }}
           COMPONENT_DISPLAY: ${{ inputs.component_display }}
           RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
-          # #6274: surface a degraded zot mirror on the release message. Empty on
-          # the happy path AND when the mirror step was skipped (bridge failed) —
-          # `outputs.mirror_status` is unset there, so the append is inert. Read as
-          # OUTPUT, never `outcome` (the step always exits 0, so outcome is always
-          # 'success').
+          # #6274: surface a degraded zot mirror on the release message. Empty on the
+          # happy path. Read as OUTPUT, never `outcome` (the step always exits 0, so
+          # outcome is always 'success').
+          #
+          # #6416: this used to also be empty when the mirror step was SKIPPED because the
+          # bridge failed — which meant the one case most worth reporting was the one case
+          # that said nothing, and zot silently never got backfilled. zot_mirror is now
+          # gated on docker_build (not on zot_bridge) and branches internally, so a bridge
+          # failure reaches degraded() and this line fires. Still empty when docker_build
+          # itself was skipped — correct: no image was built, so there is nothing to say.
           MIRROR_STATUS: ${{ steps.zot_mirror.outputs.mirror_status }}
         run: |
           WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"

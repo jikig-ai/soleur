@@ -41,13 +41,23 @@
 #   DEGRADED_RETRY_MAX            default 1   (exactly one re-POST after the boot window)
 #   FRESH_BOOT_WINDOW_S           default 600 (wait this long from verify start before the single re-POST)
 #   OP_CONTEXT                    default recreate  {recreate|warm-standby} — recovery-message wording
+#   HEALTH_URL                    default https://app.soleur.ai/health — web-1's PUBLIC
+#                                 /health. #6353: the tag the fan-out re-swaps web-1 at is
+#                                 resolved from its `.version` (the actually-running
+#                                 container's BUILD_VERSION), NEVER the shared deploy-status
+#                                 `.tag` slot (which independent writers pollute with `latest`).
 #   GITHUB_OUTPUT                 optional — deployed_tag=<tag> emitted when set (summary step consumer)
 # Test seams (unset in prod → real curl / POST / wall-clock — see the sibling .test.sh):
 #   DS_BODY_FILE                  status body path (default /tmp/ds-body)
 #   DEPLOY_STATUS_SOURCE_CMD      overrides the GET (writes $DS_BODY_FILE, echoes HTTP code)
 #   DEPLOY_POST_SINK              records each fan-out POST payload (one line per POST)
 #   DEPLOY_POST_CODE_CMD          overrides the per-POST HTTP code (default DEPLOY_POST_CODE / 202)
+#   HEALTH_SOURCE_CMD             overrides the /health fetch (echoes the bare `.version` string)
 set -euo pipefail
+
+# This script and the pure resolver it calls (resolve-web1-known-good-tag.sh) live in
+# the same directory; resolve it from BASH_SOURCE so a caller's CWD never matters.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 : "${WEBHOOK_SECRET:?WEBHOOK_SECRET required}"
 : "${CF_ACCESS_CLIENT_ID:?CF_ACCESS_CLIENT_ID required}"
@@ -55,6 +65,8 @@ set -euo pipefail
 : "${WEB_HOST_PRIVATE_IPS:?WEB_HOST_PRIVATE_IPS required}"
 DEPLOY_STATUS_URL="${DEPLOY_STATUS_URL:-https://deploy.soleur.ai/hooks/deploy-status}"
 DEPLOY_URL="${DEPLOY_URL:-https://deploy.soleur.ai/hooks/deploy}"
+HEALTH_URL="${HEALTH_URL:-https://app.soleur.ai/health}"
+HEALTH_SOURCE_CMD="${HEALTH_SOURCE_CMD:-}"
 STATUS_POLL_MAX_ATTEMPTS="${STATUS_POLL_MAX_ATTEMPTS:-60}"
 STATUS_POLL_INTERVAL_S="${STATUS_POLL_INTERVAL_S:-15}"
 SETTLE_SECONDS="${SETTLE_SECONDS:-30}"
@@ -103,6 +115,60 @@ _get_status() {
     "$DEPLOY_STATUS_URL" || echo "000"
 }
 
+# Resolve web-1's known-good re-swap tag from its PUBLIC /health `.version` (the
+# actually-running container's baked BUILD_VERSION) — NOT the shared deploy-status
+# `.tag` slot (#6353). That slot is a single last-write-wins object stamped by
+# multiple independent writers (a web-platform deploy, an inngest `restart … latest`,
+# a git-lock sweep); when a non-web writer owns it the verify would re-POST
+# `deploy web-platform <image> latest`, which ci-deploy.sh rejects as tag_malformed —
+# aborting EVERY web-host recreate. /health is immune (it never reads the shared slot).
+# Same invariant ADR-079 amendment #5955 + the recreate pin-gate (#6147) already adopted
+# for the two sibling readers; the pure resolver resolve-web1-known-good-tag.sh applies
+# the strict `^v[0-9]+\.[0-9]+\.[0-9]+$` guard (reused unchanged — single source of the
+# guard, do NOT fork the regex).
+#
+# HOST-TARGETING INVARIANT (load-bearing): app.<domain>/health MUST resolve to web-1,
+# not a partially-recreated web-2. Holds today by construction — cloudflare_record.app
+# (apps/web-platform/infra/dns.tf) is a SINGLE proxied A record pinned to web-1, NOT a
+# round-robin LB, and web-2 rides at ingress weight 0. REVISIT TRIGGER: if the multi-host
+# DNS rewire (#5274) or the #6178 inngest cutover makes `app` canary-weighted so web-2 can
+# answer, this resolver MUST switch to a web-1-pinned health path (or re-add a host check).
+# This very PR unblocks the #6178 cutover that eventually changes that — revisit then.
+#
+# stdout = the resolved `vX.Y.Z` tag ONLY; ALL diagnostics go to >&2. Called as
+# DEPLOY_TAG="$(_resolve_known_good_tag)", any stray stdout is captured INTO DEPLOY_TAG
+# and would pollute the fan-out payload. On /health unreachable or a non-semver version:
+# loud ::error:: + terminal exit 1 — NEVER a silent fallback to the `.tag` seed.
+_resolve_known_good_tag() {
+  local version tag
+  if [[ -n "$HEALTH_SOURCE_CMD" ]]; then
+    # Test seam: the injected command echoes the /health `.version` string directly
+    # (a bare semver / "dev" / "" — no JSON body, no HTTP code). `|| true` keeps a
+    # seam that exits non-zero from aborting under set -e before the resolver runs.
+    version=$(bash -c "$HEALTH_SOURCE_CMD" || true)
+  else
+    # web-1 here is the LIVE prod origin already serving — a one-line bounded retry
+    # (NOT the pin step's 12× fresh-boot loop) covers transient CF-tunnel blips.
+    # `|| true` mirrors _get_status's `|| echo "000"`: a curl transport failure must
+    # surface as an empty version the resolver rejects LOUD, not a set -e abort here.
+    version=$(curl -sf --max-time 15 --retry 3 --retry-connrefused "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || true)
+  fi
+  # The pure resolver strict-validates + prepends `v`, emitting its OWN ::error:: to
+  # >&2 and exit 1 on rejection. Capture its stdout (the tag); on failure add the
+  # OP_CONTEXT recovery remediation and abort LOUD. NEVER fall back to `.tag`.
+  if ! tag=$(bash "$SCRIPT_DIR/resolve-web1-known-good-tag.sh" "$version"); then
+    # Strip C0 control chars from the untrusted /health value before echoing it into
+    # the runner log — mirrors resolve-web1-known-good-tag.sh:55. An embedded newline
+    # in a spoofed .version would otherwise inject a line-start `::workflow-command::`
+    # annotation (the resolver already sanitizes its OWN diagnostic; this wrapper must
+    # too, since it is reached on exactly the malformed-version path).
+    local safe_version; safe_version=$(printf '%s' "$version" | tr -d '\000-\037')
+    echo "::error::deploy fan-out cannot resolve web-1's known-good re-swap tag from ${HEALTH_URL} (/health .version='${safe_version}'). $(_recovery_msg)" >&2
+    exit 1
+  fi
+  printf '%s' "$tag"
+}
+
 # POST the fan-out payload; echo the HTTP code. Test seam records the payload to a
 # sink and returns a scripted code so the assertion path is network-free.
 _post_fanout() {
@@ -133,27 +199,19 @@ _emit_deployed_tag() {
 }
 
 # Re-callable fan-out trigger (the INITIAL POST and each bounded retry share this).
-# Re-reads the freshest deployed tag (tag-downgrade race guard) and REASSIGNS the
-# outer DEPLOY_TAG so the verify poll's TAG==DEPLOY_TAG match tracks a tag that
-# advanced during a long fresh-boot wait — else a genuine reason==ok at the NEW tag
-# would never match and a HEALTHY web-2 would RED on budget exhaustion (spec-flow
-# P1). Asserts HTTP 202 and is TERMINAL exit 1 on non-202 (AC3f). Does NOT touch
-# PRE_START_TS (the staleness baseline stays the ORIGINAL for the whole run).
+# Re-RESOLVES the re-swap tag from web-1's /health `.version` (#6353) and REASSIGNS the
+# outer DEPLOY_TAG so the verify poll's TAG==DEPLOY_TAG match tracks a tag that advanced
+# during a long fresh-boot wait — else a genuine reason==ok at the NEW tag would never
+# match and a HEALTHY web-2 would RED on budget exhaustion (spec-flow P1). /health is the
+# UNIFORM tag source (baseline seed AND here), so the `.tag` slot is NEVER a tag source
+# (architecture P1-A): the former `.tag` re-read used a looser regex than the deploy
+# contract, so a v-prefixed non-strict pollutant (e.g. `v1.2.3-rc1`) could be adopted →
+# POSTed → tag_malformed — the same #6353 wedge through a third seam. /health `.version`
+# is web-1's running version (never a downgrade), so the downgrade-safety intent is kept.
+# Asserts HTTP 202 and is TERMINAL exit 1 on non-202 (AC3f). Does NOT touch PRE_START_TS
+# (the staleness baseline stays the ORIGINAL for the whole run).
 _trigger_fanout() {
-  _get_status >/dev/null 2>&1 || true
-  local re_body fresh_tag
-  re_body=$(cat "$DS_BODY_FILE" 2>/dev/null || echo "")
-  if [[ -n "$re_body" ]] && echo "$re_body" | jq -e . >/dev/null 2>&1; then
-    fresh_tag=$(echo "$re_body" | jq -r '.tag // ""')
-    # Intentionally NOT widened to also match `latest` (unlike the baseline guard above):
-    # only ADOPT a fresh PINNED version here. A `latest` DEPLOY_TAG must never be rebound
-    # onto a re-read `latest` (a no-op) and a pinned DEPLOY_TAG must never be downgraded
-    # back onto the floating tag. Reassignment is strictly latest→pinned or pinned→newer-pinned.
-    if [[ "$fresh_tag" =~ ^v[0-9][A-Za-z0-9._-]*$ ]] && [[ "$fresh_tag" != "$DEPLOY_TAG" ]]; then
-      echo "current deployed tag advanced '${DEPLOY_TAG}' -> '${fresh_tag}'; deploying the freshest to avoid a downgrade re-swap of web-1."
-      DEPLOY_TAG="$fresh_tag"
-    fi
-  fi
+  DEPLOY_TAG="$(_resolve_known_good_tag)"
   local payload code
   payload=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform %s","peers":"%s"}' "$DEPLOY_TAG" "$WEB_HOST_PRIVATE_IPS")
   code=$(_post_fanout "$payload")
@@ -165,9 +223,12 @@ _trigger_fanout() {
   echo "deploy fan-out accepted (HTTP 202) for ${DEPLOY_TAG}; verifying web-2 acceptance off-host…"
 }
 
-# 1. Baseline: read the current deployed tag + start_ts; don't POST into an
-#    in-flight swap (exit_code==-1). Full-anchor tag validation.
-CURRENT_TAG=""; PRE_START_TS=0
+# 1. Baseline: read start_ts (staleness baseline) + exit_code (don't POST into an
+#    in-flight swap, exit_code==-1). The `.tag` field is NO LONGER read here (#6353):
+#    it is the shared last-write-wins slot's last-ATTEMPT tag, which independent writers
+#    (an inngest `restart … latest`, a git-lock sweep) pollute with `latest` — the wedge
+#    that aborted every recreate. The re-swap tag is resolved from /health below instead.
+PRE_START_TS=0
 for i in $(seq 1 12); do
   HTTP_CODE=$(_get_status); BODY=$(cat "$DS_BODY_FILE" 2>/dev/null || echo "")
   if [[ -z "$BODY" ]] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
@@ -177,29 +238,20 @@ for i in $(seq 1 12); do
   if [[ "$EXIT_CODE" == "-1" ]]; then
     echo "baseline $i/12: web-1 deploy in flight (exit_code=-1) — waiting"; sleep 10; continue
   fi
-  CURRENT_TAG=$(echo "$BODY" | jq -r '.tag // ""')
   PRE_START_TS=$(echo "$BODY" | jq -r '.start_ts // 0')
   break
 done
-# Accept a pinned vX.Y.Z OR the floating `latest`. web-1 can sit on :latest (the durable-
-# :latest state), which previously aborted the verify here. For the verify's redeploy this
-# is acceptable: `latest` is the newest tag, so the web-1 re-swap can NEVER DOWNGRADE web-1
-# (the risk the original ^v[0-9]-only guard addressed), and the verify only redeploys the
-# current GA image to trigger the web-2 fan-out. Truly-unknown tags (empty / garbage) still
-# abort. Cleaner long-term fixes: a web-2-only fan-out that never re-swaps web-1 (#6060), and
-# resolving the durable-:latest at the deploy source so web-1 always reports a pinned version.
-if [[ ! "$CURRENT_TAG" =~ ^(v[0-9][A-Za-z0-9._-]*|latest)$ ]]; then
-  echo "::error::could not read a valid current deployed tag from web-1 deploy-status (got '${CURRENT_TAG}'). Cannot redeploy the current version — aborting ($(_recovery_msg))."
-  exit 1
-fi
 [[ "$PRE_START_TS" =~ ^[0-9]+$ ]] || PRE_START_TS=0
-echo "current deployed tag = ${CURRENT_TAG}; pre-trigger start_ts baseline = ${PRE_START_TS}"
-DEPLOY_TAG="$CURRENT_TAG"
+# Resolve the re-swap tag from web-1's /health `.version` — the actually-running image,
+# immune to deploy-status writer contention. A non-semver / unreachable /health aborts
+# LOUD inside _resolve_known_good_tag (no silent fallback to the polluted `.tag`).
+DEPLOY_TAG="$(_resolve_known_good_tag)"
+echo "pre-trigger start_ts baseline = ${PRE_START_TS}; re-swap tag (resolved from web-1 /health) = ${DEPLOY_TAG}"
 # Bounded settle for the fresh web-2 private interface / :9000 bind.
 sleep "$SETTLE_SECONDS"
 
-# 2. Trigger the fan-out (re-swaps web-1 at the current tag first, then web-2).
-#    Tag-downgrade race guard + DEPLOY_TAG reassignment live in _trigger_fanout.
+# 2. Trigger the fan-out (re-swaps web-1 at the /health-resolved tag first, then web-2).
+#    The re-swap tag re-resolution (uniform /health source) lives in _trigger_fanout.
 _trigger_fanout
 
 # 3. Verify poll: staleness-gated, single-peer reason==ok proof, bounded fresh-boot

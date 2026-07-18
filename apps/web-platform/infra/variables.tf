@@ -39,12 +39,29 @@ variable "location" {
   description = "Hetzner datacenter location (web + git-data hosts). NOT the registry — that has its own var.registry_location so the two can diverge (#6122: the registry lives in nbg1, provisioned during a hel1 capacity outage)."
   type        = string
   default     = "hel1"
+  # EU residency (#6453). var.web_hosts pins its per-host location (:94-96) but this
+  # scalar — which places the git-data host and is overridable by TF_VAR_location —
+  # carried no check at all. Hetzner's /v1/datacenters really does return ash-dc1 (US),
+  # hil-dc1 (US) and sin-dc1 (Singapore), so an unvalidated var is one typo away from a
+  # non-EU prod host. Config-phase only: no resource is created, modified or destroyed.
+  validation {
+    condition     = contains(["nbg1", "fsn1", "hel1"], var.location)
+    error_message = "location must be an EU Hetzner DC (nbg1/fsn1/hel1) — GDPR residency (CLO T-1, GA-blocking). A non-EU host is rejected before it is created, not after it holds data."
+  }
 }
 
 variable "registry_location" {
   description = "Hetzner datacenter location for the zot registry host + its volume (#6122). Separate from var.location so the registry can move regions independently. Originally nbg1 (provisioned there during a hel1/eu-central cx23-stock outage). MOVED nbg1→**hel1** (#6288): the OOM remediation needs an 8 GB host, and cx33 (8 GB, ~€8.49/mo) is available in hel1 but not nbg1 (nbg1's cheapest 8 GB was cpx32 ~€35/mo). hel1 is the same eu-central network zone (10.0.1.0/24 spans it) + where the web/git-data/inngest hosts live. The location change is ForceNew on hcloud_volume.registry — the nbg1 store volume is destroyed and a fresh hel1 volume is created; the 35 GB store re-fills from GHCR (zot is a mirror; pulls fall through to GHCR meanwhile)."
   type        = string
   default     = "hel1"
+  # EU residency (#6453) — same rule as var.location above, enforced separately because
+  # the two deliberately diverge (the registry moved nbg1 -> hel1 independently, #6288).
+  # This var is the TARGET of the registry-region-migrate dispatch, i.e. the one location
+  # an operator changes by hand, which makes it the likeliest to receive a non-EU value.
+  validation {
+    condition     = contains(["nbg1", "fsn1", "hel1"], var.registry_location)
+    error_message = "registry_location must be an EU Hetzner DC (nbg1/fsn1/hel1) — GDPR residency (CLO T-1, GA-blocking). The zot store mirrors GHCR artifacts; it is rejected before it lands outside the EU."
+  }
 }
 
 variable "image_name" {
@@ -81,13 +98,20 @@ variable "web_hosts" {
     private_ip  = string
     server_type = optional(string, "cx33")
   }))
+  # web-2 (fsn1, 10.0.1.11) RETIRED 2026-07-17 (#6538). It was the ADR-068 Phase 3
+  # warm standby, born in hel1 (#5877) and moved to fsn1 (#6393) for DC-failure
+  # resilience. It never carried user-facing web traffic by design, and the
+  # multi-host DNS rewire that would have made it serve was never built — so it
+  # cost €8.49/mo to stand by for a cutover with no consumer. HA is deferred to
+  # active-active-N (#6459), whose hosts must be born in hel1 inside the
+  # location-scoped web_spread placement group; git-data (#6570) gates that work.
+  # Do NOT re-add a key here to restore standby: see ADR-068's amendment.
   default = {
     "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
-    "web-2" = { location = "hel1", private_ip = "10.0.1.11" }
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])
-    error_message = "web_hosts location must be an EU Hetzner DC (nbg1/fsn1/hel1) — GDPR residency (CLO T-1, GA-blocking). A non-EU web host or placement group is rejected before web-2 serves."
+    error_message = "web_hosts location must be an EU Hetzner DC (nbg1/fsn1/hel1) — GDPR residency (CLO T-1, GA-blocking). A non-EU web host or placement group is rejected before it serves."
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : can(regex("^10\\.0\\.1\\.[0-9]{1,3}$", h.private_ip))])
@@ -114,13 +138,39 @@ variable "git_data_volume_size" {
 
 # --- #6122 (ADR-096) — the self-hosted zot registry host ---
 variable "registry_server_type" {
-  description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): cax11 (2 vCPU ARM64/Ampere, 4GB) / cx23 (2 vCPU x86, 4GB) / cx33 (4 vCPU x86, 8GB, ~€8.49/mo net, hel1). A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral. Recorded via ops-advisor. #6288 attempted cx23→cx32 (8 GB) for OOM headroom, but **cx32 does not exist in the Hetzner catalog** (the plan's ~€6.80 figure was for a phantom type) → the registry-host-replace apply DESTROYED the old nbg1 host then failed `server type cx32 not found`. RESOLUTION (operator-chosen, #6288): migrate the registry nbg1→**hel1** and bump cx23→**cx33** (real 8 GB type, only +~€3/mo vs cx23; cheapest ≥8 GB in nbg1 was cpx32 ~€35/mo, ~6×). hel1 is where the rest of the fleet lives; the registry was only in nbg1 due to a since-resolved hel1 stock outage. cx33 is amd64 (does NOT start with `cax`) → local.registry_arch unchanged. The 35 GB zot store is a disposable GHCR MIRROR — the fresh hel1 volume re-fills from GHCR on the next CI dual-push (pulls fall through to GHCR meanwhile, non-release-blocking). The ADR-062 --memory=7168m cap (8192−1024 host reserve) is now VALID + load-bearing on the 8 GB host."
+  description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): cax11 (2 vCPU ARM64/Ampere, 4GB) / cx23 (2 vCPU x86, 4GB) / cx33 (4 vCPU x86, 8GB, ~€8.49/mo net, hel1). A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral. Recorded via ops-advisor. #6288 attempted cx23→cx32 (8 GB) for OOM headroom, but **cx32 does not exist in the Hetzner catalog** (the plan's ~€6.80 figure was for a phantom type) → the registry-host-replace apply DESTROYED the old nbg1 host then failed `server type cx32 not found`. #6288 migrated the registry nbg1→**hel1** and bumped cx23→cx33 for OOM headroom; #6497/#6463 (2026-07-16) reverted to **cx23** (4 GB, ~€5.49/mo) after live telemetry showed the 8 GB was never needed (37 MB steady) and the OOM diagnosis was never confirmed — see the block comment below. hel1 is where the rest of the fleet lives. cx23 is amd64 (does NOT start with `cax`) → local.registry_arch unchanged. The zot store is a disposable GHCR MIRROR on a separate volume — the fresh host re-fills from GHCR on the next CI dual-push (pulls fall through to GHCR meanwhile, non-release-blocking). THE CAP FOLLOWS THIS VAR — do not assume 7168m: zot's ADR-062 cgroup cap is DERIVED as `memory × 1024 − 1024` (zot-registry.tf local.registry_memory_cap_mb, read from the live Hetzner catalog), so it is 7168m on cx33 and 3072m on any 4 GB type. It was formerly a hardcoded 7168m literal with no edge to this variable, which meant changing this var to a 4 GB type left a cap that can never bind on 4096m of RAM — silently the UNCAPPED-on-cx23 condition that caused #6288. That is fixed; the host also self-reports zot_memory_capped + zot_memory_cap_mb so a gate can no longer assume the cap either."
   type        = string
-  # cx33 (x86, 8 GB, hel1) — the real OOM remediation after #6288's cx32 attempt failed (cx32 is
-  # not a real Hetzner type). cx33 is the 8 GB member of the same CX Intel line as cx23, available
-  # in hel1 at ~€8.49/mo net (+~€3/mo vs cx23). Paired with registry_location=hel1 below and the
-  # --memory=7168m cgroup cap (now enforceable on 8 GB) it fixes the boot-scan host-OOM restart-loop.
-  default = "cx33"
+  # cx23 (x86, 4 GB, 2 vCPU, ~€5.49/mo net, hel1) — the right-SIZED registry host (operator-chosen,
+  # #6497 / #6463, 2026-07-16). The DERIVED cgroup cap (zot-registry.tf local.registry_memory_cap_mb)
+  # is 3072m here. amd64 (does NOT start with `cax`) → local.registry_arch unchanged from cx33; the
+  # zot image + Doppler CLI build are unchanged. The zot store is on a SEPARATE 60 GB volume, so
+  # cx23's 40 GB local disk (OS + docker + the ~100 MB zot image) is irrelevant to store capacity.
+  #
+  # WHY 4 GB, not the prior 8 GB (cx33): the 8 GB floor was never evidence-backed. #6288 bumped
+  # cx23→cx33 for "OOM headroom", but that diagnosis was never confirmed. ADR-062:47 — "no safe
+  # a-priori cap exists without a live measurement"; :68 — the cap is "a STARTING value, not a
+  # measured peak". The retroactive check that would have settled it
+  # (2026-07-09-fix-zot-restart-loop-oom-telemetry-plan.md:238) never ran: the cx32 apply destroyed
+  # the host before it booted with the reporter. The #6288 remediation was also confounded — it
+  # changed RAM (4→8 GB) AND the store (~35 GB → fresh/empty) together, so zot_restarts=0 was
+  # measured on a host whose boot scan had nothing to scan. Live telemetry since: zot_anon_mb is
+  # 37 MB steady (peak 47 over 3 days / 4 boots), and it moved only 35→47 MB while the store grew
+  # ~12 GB — ~1 MB/GB, consistent with zot's dedupe being INLINE over an on-disk BoltDB cache, not
+  # an in-memory blob index. Projected at the current ~9.4 GB store: ~50 MB, ~1.6 % of the 3072m cap.
+  #
+  # RESIDUAL RISK, stated honestly: still UNMEASURED is RSS during a boot scan of a LARGE store
+  # (every sampled boot so far scanned a near-empty one). The cx23 recreate IS that measurement.
+  # It is bounded and reversible: on a 4 GB host the 3072m cap now BINDS (it was a hardcoded 7168m
+  # with no edge to this var until #6508 — on 4 GB that could never bind, which is #6288's real
+  # uncapped condition; that is fixed). So a wrong call yields a CONTAINED container-OOM
+  # (zot_memory_capped=true, zot_oom_kills>0 — both self-reported and gated) plus GHCR fallback,
+  # NOT #6288's host-OOM restart-loop. Revert path: back to cx33 (8 GB, ~€8.49/mo) if hel1 stock
+  # allows, else cpx32 (8 GB, ~€35/mo, the always-available 8 GB fallback), then re-dispatch.
+  # #6288's exact failure mode (uncapped zot on a 4 GB host) is now structurally impossible.
+  #
+  # A nonexistent type fails at PLAN via data.hcloud_server_type.registry (#6508) instead of
+  # destroying the host first — that was #6288's cx32 disaster. registry_location stays hel1.
+  default = "cx23"
 }
 
 variable "registry_volume_size" {
@@ -351,4 +401,36 @@ variable "web_colocate_inngest" {
   description = "When true, a freshly-created web host bootstraps + enables the co-located inngest-server.service (pre-cutover). Default false: scheduling lives on the dedicated soleur-inngest host (10.0.1.40, ADR-100, #6178). Recreate is the quiesce mechanism (hr-prod-host-config-change-immutable-redeploy)."
   type        = bool
   default     = false
+}
+
+# --- #6545 — operator dogfood: headless Grok Build host (Grok 4.5 API Phase 1) ---
+variable "enable_grok_dogfood" {
+  description = "When true, provision the dedicated soleur-grok-dogfood host (CX33-class, EU). Default false so merge never births a host on the per-PR apply path (#6416 host_creates tripwire). Enable via TF_VAR + dispatch apply_target=grok-dogfood (or operator-local -target) after free server slot is confirmed (#6545 Phase 0)."
+  type        = bool
+  default     = false
+}
+
+variable "grok_dogfood_server_type" {
+  description = "Hetzner server type for the Grok Build dogfood host. Prefer cx33 (4 vCPU / 8 GB) for monorepo + tooling. Must be cax*/cpx*/cx*/ccx* prefix for validation parity with sibling hosts."
+  type        = string
+  default     = "cx33"
+
+  validation {
+    condition     = can(regex("^(cax|cpx|cx|ccx)", var.grok_dogfood_server_type))
+    error_message = "grok_dogfood_server_type must be a recognized Hetzner type (cax*/cpx*/cx*/ccx*)."
+  }
+}
+
+variable "grok_dogfood_location" {
+  description = "Hetzner location for the Grok dogfood host. Prefer hel1 (fleet affinity). Must be EU for residency posture."
+  type        = string
+  default     = "hel1"
+}
+
+# Reserved for a future opt-in private-net attach (default off / not used in Phase 1).
+# Agent hosts must not join 10.0.1.0/24 trust plane without an explicit security review.
+variable "grok_dogfood_private_ip" {
+  description = "Reserved private IP if private-net attach is re-enabled later. Unused in Phase 1 (no hcloud_server_network). Default 10.0.1.50."
+  type        = string
+  default     = "10.0.1.50"
 }

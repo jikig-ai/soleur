@@ -67,6 +67,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     const first = await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-reuse",
       userId: "u1",
       userMessage: "first",
@@ -75,6 +76,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
       persistActiveWorkflow: persist,
     });
     const second = await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-reuse",
       userId: "u1",
       userMessage: "second",
@@ -105,6 +107,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-idle",
       userId: "u1",
       userMessage: "hello",
@@ -135,6 +138,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-term",
       userId: "u1",
       userMessage: "spend",
@@ -172,6 +176,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-resume",
       userId: "u1",
       userMessage: "1",
@@ -190,6 +195,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
 
     // Second dispatch should open a fresh Query and pass resume: "sess-A".
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-resume",
       userId: "u1",
       userMessage: "2",
@@ -218,6 +224,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "A",
       userId: "u1",
       userMessage: "x",
@@ -226,6 +233,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
       persistActiveWorkflow: persist,
     });
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "B",
       userId: "u1",
       userMessage: "y",
@@ -271,6 +279,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "d1",
       userId: "u1",
       userMessage: "x",
@@ -279,6 +288,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
       persistActiveWorkflow: persist,
     });
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "d2",
       userId: "u1",
       userMessage: "y",
@@ -315,6 +325,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "g1",
       userId: "u1",
       userMessage: "x",
@@ -359,6 +370,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
     const persist = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "a1",
       userId: "u1",
       userMessage: "x",
