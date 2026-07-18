@@ -36,6 +36,7 @@ const {
   mockReportSilentFallback,
   mockServiceFrom,
   mockForEachSession,
+  mockHasActiveCcQuery,
 } = vi.hoisted(() => ({
   mockReleaseSlot: vi.fn(),
   mockReportSilentFallback: vi.fn(),
@@ -44,16 +45,28 @@ const {
   // live legacy loop for any conversation. A test can override it to simulate a
   // live backgrounded loop that must be PROTECTED from the dead-socket reap.
   mockForEachSession: vi.fn(),
+  // AC14: controls the cc-soleur-go (DOMINANT) loop probe. Default false = no
+  // live cc query. A test overrides it to true to simulate a live cc loop that
+  // must be PROTECTED from the dead-socket reap. The `_conversationId` param
+  // makes the mock's type accept a 1-arg mockImplementation (TS2345 otherwise).
+  mockHasActiveCcQuery: vi.fn((_conversationId: string): boolean => false),
 }));
 
 // Partial mock: preserve every real export (ws-handler imports setUserWorkspace,
 // getActiveTurnConversation, etc.) and override ONLY forEachSessionForConversation
-// so the AC14 hasLiveAgentLoop legacy-registry branch is controllable. cc-dispatcher
-// stays unmocked — its real hasActiveCcQuery returns false when no runner is set
-// (cc-dispatcher.ts:2861), which is the correct "no cc loop" default in tests.
+// so the AC14 hasLiveAgentLoop legacy-registry branch is controllable.
 vi.mock("../server/agent-session-registry", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../server/agent-session-registry")>()),
   forEachSessionForConversation: mockForEachSession,
+}));
+
+// Partial mock of the cc-dispatcher: override ONLY hasActiveCcQuery so the AC14
+// hasLiveAgentLoop cc-registry branch (the DOMINANT loop path) is controllable —
+// without this the branch is only ever exercised returning false and a
+// regression neutering it would ship green (test-design P1).
+vi.mock("../server/cc-dispatcher", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server/cc-dispatcher")>()),
+  hasActiveCcQuery: mockHasActiveCcQuery,
 }));
 
 vi.mock("@/lib/supabase/service", () => ({
@@ -102,7 +115,7 @@ vi.mock("../server/observability", () => ({
   warnSilentFallback: vi.fn(),
 }));
 
-import { tryLedgerDivergenceRecovery } from "../server/ws-handler";
+import { tryLedgerDivergenceRecovery, sessions } from "../server/ws-handler";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -193,9 +206,15 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // clearAllMocks clears call history but NOT implementations — reset the
-    // AC14 legacy-loop probe to its no-op default so a prior test's live-loop
-    // override does not leak.
+    // AC14 loop probes to their defaults so a prior test's live-loop override
+    // does not leak. mockHasActiveCcQuery defaults to false (no cc loop).
     mockForEachSession.mockReset();
+    mockHasActiveCcQuery.mockReset();
+    mockHasActiveCcQuery.mockReturnValue(false);
+    // The module `sessions` map is real + shared across tests in this file;
+    // clear it so a prior test's focused-session injection cannot leak into a
+    // dead-socket test that assumes no focused conversation.
+    sessions.clear();
   });
 
   it("orphan slot present → releases orphan, mirrors to Sentry, returns didRecover: true", async () => {
@@ -318,9 +337,15 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // clearAllMocks clears call history but NOT implementations — reset the
-    // AC14 legacy-loop probe to its no-op default so a prior test's live-loop
-    // override does not leak.
+    // AC14 loop probes to their defaults so a prior test's live-loop override
+    // does not leak. mockHasActiveCcQuery defaults to false (no cc loop).
     mockForEachSession.mockReset();
+    mockHasActiveCcQuery.mockReset();
+    mockHasActiveCcQuery.mockReturnValue(false);
+    // The module `sessions` map is real + shared across tests in this file;
+    // clear it so a prior test's focused-session injection cannot leak into a
+    // dead-socket test that assumes no focused conversation.
+    sessions.clear();
   });
 
   it("stale-heartbeat slot whose conversation IS visible → reaps slot, mirrors with staleHeartbeatCount, didRecover: true", async () => {
@@ -406,6 +431,51 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     setupSupabaseMock({
       visibleConversations: [{ id: "conv-live-1" }],
       slotRows: [{ conversation_id: "conv-live-1" }],
+      staleSlotRows: [],
+    });
+
+    const result = await tryLedgerDivergenceRecovery("user-1");
+
+    expect(result.didRecover).toBe(false);
+    expect(mockReleaseSlot).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("AC14: fresh-heartbeat visible slot WITH a live cc-soleur-go query → NOT reaped (dominant loop path protected)", async () => {
+    // test-design P1: the cc-dispatcher lineage is the DOMINANT loop-protection
+    // path and was previously exercised only returning false. Simulate a live cc
+    // query for conv-cc-live; the dead-socket reap must NOT fire (killing a live
+    // cc loop is the single-user incident this branch exists to avoid). Neutering
+    // `if (hasActiveCcQuery(...)) return true` in hasLiveAgentLoop reddens this.
+    mockHasActiveCcQuery.mockImplementation(
+      (convId: string) => convId === "conv-cc-live",
+    );
+    setupSupabaseMock({
+      visibleConversations: [{ id: "conv-cc-live" }],
+      slotRows: [{ conversation_id: "conv-cc-live" }],
+      staleSlotRows: [],
+    });
+
+    const result = await tryLedgerDivergenceRecovery("user-1");
+
+    expect(result.didRecover).toBe(false);
+    expect(mockReleaseSlot).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("AC14: focused-but-idle conversation (in sessions map, no live loop) → NOT reaped (focus-exclusion guard)", async () => {
+    // test-design P2: the focus-exclusion guard (!focusedConvIds.has(cid)) was
+    // dead code under test because no test populated the module `sessions` map.
+    // A user's currently-focused conversation has a fresh heartbeat (the socket
+    // is touching it) but between turns has no live agent loop — it must NOT be
+    // dead-socket-reaped. Deleting `!focusedConvIds.has(cid) &&` from the filter
+    // reddens this.
+    sessions.set("user-1", {
+      conversationId: "conv-focused",
+    } as unknown as Parameters<typeof sessions.set>[1]);
+    setupSupabaseMock({
+      visibleConversations: [{ id: "conv-focused" }],
+      slotRows: [{ conversation_id: "conv-focused" }],
       staleSlotRows: [],
     });
 

@@ -34,7 +34,7 @@
 -- sites below (mig 093 lazy sweep, mig 115 pg_cron sweep, mig 037 finder
 -- default, mig 116 lease takeover) couple to the TS sites
 -- SLOT_STALENESS_THRESHOLD_SECONDS (ws-handler.ts + agent-runner.ts),
--- ws-handler.ts:801/:2059 liveCutoff, and LEASE_LIVENESS_WINDOW_MS
+-- ws-handler.ts cap-drift + sibling-snapshot-restore liveCutoff gates, and LEASE_LIVENESS_WINDOW_MS
 -- (worktree-write-lease.ts). See learning
 -- bug-fixes/2026-05-05-cc-stuck-active-conversation-leaks-slot.md — divergent
 -- thresholds silently false-reap.

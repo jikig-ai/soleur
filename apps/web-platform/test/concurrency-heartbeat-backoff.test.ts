@@ -49,23 +49,32 @@ describe("heartbeat/threshold invariant (AC7 — live symbols)", () => {
   });
 });
 
-// AC8 — grep-based drift-guard (NOT an enumerated allowlist; the enumerated
-// approach is what let sites slip past the first pass). Anchored on the
-// syntactic liveness-literal shape keyed on last_heartbeat_at/heartbeat_at, so a
-// residual 120s window anywhere in the coupled TS + SQL-133 surface reds this.
+// AC8 — grep-based drift-guard. NOTE: the AUTHORITATIVE guard against a threshold
+// revert is the AC7 behavioural test above (`.toBe(240)` on the LIVE symbols) —
+// a realistic revert now lands in concurrency.ts as `= 120` (seconds) and
+// produces NO `120_000` literal, so this grep alone would miss it. This grep is
+// DEFENSE-IN-DEPTH against a raw `120_000` millisecond literal creeping back into
+// the coupled server files (the shape origin/main actually carried at
+// ws-handler.ts:801/:2059 before this PR), plus the migration-133 literal counts.
 describe("120s→240s liveness-literal drift-guard (AC8)", () => {
   const read = (rel: string) =>
     readFileSync(path.join(__dirname, "..", rel), "utf8");
 
   const WS = read("server/ws-handler.ts");
   const AR = read("server/agent-runner.ts");
+  const WWL = read("server/worktree-write-lease.ts");
+  const RRP = read("server/inngest/routine-run-progress.ts");
   const MIG = read("supabase/migrations/133_heartbeat_threshold_backoff.sql");
 
-  it("no residual 120_000 ms literal in the coupled TS files", () => {
-    // Any `120_000` in ws-handler/agent-runner would be a slot-liveness window
-    // left un-widened. Comments were swept to 240s too, so 0 matches total.
+  it("no residual 120_000 ms literal in ANY of the 4 coupled TS files", () => {
+    // Any raw `120_000` in a coupled liveness writer would be a window left
+    // un-widened. Extended beyond ws-handler/agent-runner to the worktree-lease
+    // and routine-progress writers (the other two coupled cadences) so a raw ms
+    // literal cannot slip back into them either.
     expect(WS.match(/120_000/g) ?? []).toHaveLength(0);
     expect(AR.match(/120_000/g) ?? []).toHaveLength(0);
+    expect(WWL.match(/120_000/g) ?? []).toHaveLength(0);
+    expect(RRP.match(/120_000/g) ?? []).toHaveLength(0);
   });
 
   it("no residual `interval '120 seconds'` in migration 133 (up)", () => {

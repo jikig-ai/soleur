@@ -11,7 +11,7 @@ import { reportSilentFallback } from "./observability";
  * `host_id` is passed in by the caller — a host-STABLE infra identity (the
  * Hetzner server id injected at cloud-init), NEVER the per-container hostname
  * and NEVER an auth.uid(). Resolving that stable source + wiring acquire/touch/
- * release into the write path (SIGTERM-release, ≤30s heartbeat, fail-loud on a
+ * release into the write path (SIGTERM-release, ≤50s heartbeat, fail-loud on a
  * touch-0, and the `git push --push-option=lease-gen=<N>` fence wrapper) is
  * PR B; this module provides only the lease primitives.
  */
@@ -413,7 +413,7 @@ export interface WorktreeLeaseHandle {
 
 /**
  * Acquire a write lease and hold it for the session lifetime: register it for
- * the SIGTERM drain and start a ≤25s heartbeat. Returns `null` when the lease is
+ * the SIGTERM drain and start a ≤50s heartbeat. Returns `null` when the lease is
  * held live by ANOTHER host — the caller LOST and MUST NOT write (fail-closed).
  *
  * On heartbeat loss the heartbeat stops, the registry entry is dropped, and

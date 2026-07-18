@@ -754,8 +754,9 @@ export function startInactivityTimer(): void {
  * — `last_active` is updated only by status writes, so a long tool-heavy
  * turn streaming partials without status writes would have stale
  * `last_active` and be falsely reaped. Slot heartbeats are refreshed every
- * 30 s by `ws-handler.ts` for the active conversation; their staleness is
- * the authoritative liveness signal.
+ * SLOT_HEARTBEAT_INTERVAL_MS (60 s as of the 2026-07-18 Disk-IO backoff) by
+ * `ws-handler.ts` for the active conversation; their staleness is the
+ * authoritative liveness signal.
  *
  * The 240 s staleness threshold matches the pg_cron sweep (migration 133) so
  * the sweep mechanisms agree on a single liveness threshold. The poll cadence
@@ -780,7 +781,8 @@ export function startInactivityTimer(): void {
  */
 // THRESHOLD-COUPLING: the staleness threshold is the ONE shared const
 // SLOT_STALENESS_THRESHOLD_SECONDS (240 s, server/concurrency.ts), also consumed
-// by ws-handler.ts (ledger-divergence recovery + the :801/:2059 liveCutoff
+// by ws-handler.ts (ledger-divergence recovery + the cap-drift self-eviction +
+// sibling-snapshot-restore liveCutoff
 // gates) and mirrored in SQL by migration 133 (acquire_conversation_slot lazy
 // sweep, user_concurrency_slots_sweep pg_cron, find_stuck_active_conversations
 // default). Importing the shared symbol (rather than a local literal)

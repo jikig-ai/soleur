@@ -66,9 +66,25 @@ a socket happens to be pointed at it.
 
 ## Scope / consequences
 
-- Replicas = 1 today, so "no live loop on this instance" == "no live loop anywhere". The cross-host
-  generalization is ADR-068's coordinator-lease seam and is out of scope here.
+- **Cross-host safety is CONDITIONAL on user-sticky session placement (ADR-068 D0).** `hasLiveAgentLoop`
+  consults only THIS instance's process-local registries — unlike the pre-existing orphan/stale reap
+  branches, which key off the DB `last_heartbeat_at` age (cross-host safe by construction). AC14's
+  no-false-reap guarantee therefore rests on the invariant that a reconnecting user is always routed
+  to (or transparently proxied to, before `auth_ok`) the host that owns their live loops
+  (`ws-handler.ts` sticky-placement, epic #5274). Under that invariant `hasLiveAgentLoop` is
+  authoritative for the reconnecting user, so the reap cannot finalize a conversation with a live loop
+  on a peer. Replicas = 1 today (the proxy machinery stays inert until a 2nd host), so "no live loop on
+  this instance" == "no live loop anywhere". **Any future weakening of sticky placement, or a
+  lease-transfer window where a peer still holds a live heartbeating loop, MUST re-audit this reaper**
+  — the cross-host generalization is ADR-068's coordinator-lease seam and is out of scope here.
+- **Registered-not-live transition window (accepted).** `hasLiveAgentLoop` reflects *registered* loops;
+  a turn that is just starting returns 0 until `registerSession`/`activeQueries` insertion. During a
+  cap-hit, a non-focused conversation momentarily between registrations could be reaped. The dominant
+  cc path registers synchronously and the slot is immediately re-acquirable, so this is within
+  tolerance; no mitigation beyond this note.
 - Adds SELECT-free filtering + bounded idempotent `releaseSlot` DELETEs on the cap-hit cold path
   only. No new hot-path write, no new steady-state WAL.
-- Tests: `test/ws-handler-cap-hit-self-heal.test.ts` covers both the dead-socket reap (no live loop →
-  reaped) and the protection property (live loop → not reaped).
+- Tests: `test/ws-handler-cap-hit-self-heal.test.ts` covers the dead-socket reap (no live loop →
+  reaped) and the protection property across BOTH lineages — a live cc-soleur-go query
+  (`hasActiveCcQuery`), a live legacy `activeSessions` entry, and a focused-but-idle conversation are
+  each asserted NOT reaped (each mutation-proven to red on guard removal).

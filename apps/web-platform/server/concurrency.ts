@@ -15,7 +15,8 @@ const log = createChildLogger("concurrency");
 // silently false-reaps a live agent session — see learning
 // bug-fixes/2026-05-05-cc-stuck-active-conversation-leaks-slot.md):
 //   TS  : SLOT_STALENESS_THRESHOLD_SECONDS (below) — imported by ws-handler.ts
-//         (ledger-divergence recovery + the :801 cap-drift + :2059 sibling gates)
+//         (ledger-divergence recovery + the cap-drift self-eviction + the
+//          sibling-snapshot-restore liveCutoff gates)
 //         and agent-runner.ts (find_stuck_active_conversations threshold arg).
 //   SQL : migration 133 — acquire_conversation_slot lazy sweep,
 //         user_concurrency_slots_sweep pg_cron body (mig 115 cadence),

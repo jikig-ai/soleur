@@ -559,8 +559,9 @@ export async function tryLedgerDivergenceRecovery(
     //
     // THRESHOLD-COUPLING: the 240 s staleness value is the ONE shared const
     // SLOT_STALENESS_THRESHOLD_SECONDS (server/concurrency.ts), also consumed by
-    // agent-runner.ts (find_stuck_active_conversations arg) and the :801/:2059
-    // liveCutoff literals below, and mirrored in SQL by migration 133
+    // agent-runner.ts (find_stuck_active_conversations arg) and the cap-drift
+    // self-eviction + sibling-snapshot-restore liveCutoff gates below, and
+    // mirrored in SQL by migration 133
     // (acquire_conversation_slot lazy sweep, user_concurrency_slots_sweep
     // pg_cron, find_stuck_active_conversations default). Importing the shared
     // symbol here (rather than a local literal) structurally prevents the
@@ -606,7 +607,10 @@ export async function tryLedgerDivergenceRecovery(
     // it only adds the visible+fresh-heartbeat-but-dead case. Uses only slots
     // already fetched (no extra query). CTO ruling 2026-07-18: gate on agent-loop
     // liveness, NOT socket focus (a focus-only reap kills backgrounded-live loops
-    // #5273 and review-gate-paused conversations).
+    // #5273 and review-gate-paused conversations). CROSS-HOST CAVEAT (ADR-123):
+    // hasLiveAgentLoop is instance-local, so this branch's no-false-reap guarantee
+    // is CONDITIONAL on user-sticky placement (ADR-068 D0 / #5274, replicas=1
+    // today). Any weakening of sticky placement must re-audit this reaper.
     const focusedSession = sessions.get(userId);
     const focusedConvIds = new Set<string>(
       [focusedSession?.conversationId, focusedSession?.pending?.id].filter(
