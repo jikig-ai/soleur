@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the web-host private-NIC self-report every 5 min (#6438 §3)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
