@@ -290,12 +290,14 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set +e
-          TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null)
+          TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN_READONLY --plain 2>/dev/null)
           if [[ -n "$TOKEN" ]]; then
             printf '::add-mask::%s\n' "$TOKEN"
           fi
-          # The script reads BETTERSTACK_API_TOKEN, prints SOLEUR_HEARTBEAT_RECONCILE_*
-          # markers, and NEVER echoes the token. Capture stdout+stderr to a file.
+          # The script reads the BETTERSTACK_API_TOKEN env, sourced from the Read-scoped
+          # BETTERSTACK_API_TOKEN_READONLY secret in Doppler (least privilege: reconcile only
+          # GETs /api/v2/heartbeats). It prints SOLEUR_HEARTBEAT_RECONCILE_* markers, and NEVER
+          # echoes the token. Capture stdout+stderr to a file.
           BETTERSTACK_API_TOKEN="$TOKEN" \
             bun plugins/soleur/scripts/reconcile-live-heartbeats.ts \
             > "${RUNNER_TEMP}/reconcile-output.txt" 2>&1
