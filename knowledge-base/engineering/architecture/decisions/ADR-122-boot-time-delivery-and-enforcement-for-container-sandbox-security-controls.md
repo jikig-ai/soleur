@@ -80,8 +80,12 @@ amend ADR-079 (the reload/canary leg) — that leg is a distinct concern.
   outside an item-4 run (the web-2 standby + three CI SSH-leg silent-skip paths), so
   the standing 6h enforcement-drift watchdog (#6628 item 1) is now licensed. It should
   track `seccomp_profile_loaded_matches_host`, not just `host_present`.
-- Blast radius on the running host: zero — `ignore_changes=[user_data]` means the
-  running host is untouched; the change takes effect on the next fresh create.
+- Blast radius on the running host: near-zero — `ignore_changes=[user_data]` means the
+  running host is **not rebooted or replaced**; the boot-delivery change takes effect on
+  the next fresh create. The one live-host touch is the `apparmor_bwrap_profile.triggers_replace`
+  reshape (string→map): on the next apply Terraform replaces that `terraform_data` resource
+  and re-runs its SSH `apparmor_parser -r` against running web-1 — a single idempotent
+  in-kernel reload of an identical policy (no reboot, no container restart, no downtime).
 
 ## Alternatives rejected
 

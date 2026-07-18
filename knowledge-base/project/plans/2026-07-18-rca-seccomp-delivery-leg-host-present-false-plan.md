@@ -241,6 +241,24 @@ is a **cross-tenant confidentiality breach affecting every tenant on web-1**, no
 single user. Weaponization requires a chained exploit — this is a lowered-bar, not a
 direct filesystem path.
 
+**Accepted availability trade-off (fail-closed poweroff).** The fix's fail-closed
+`poweroff -f` (a fresh host that cannot deliver/kernel-load the profiles refuses to boot)
+introduces a NEW availability failure mode: if apparmor is ever *legitimately* unavailable
+(an ubuntu-24.04 base-image bump that drops the apparmor kernel module or drifts
+`apparmor_parser`/`aa-status`), a fresh web-1 create or a web-2 promotion cannot boot —
+a recoverable serving outage with no in-band recovery except reverting. This is the
+DELIBERATE, accepted trade-off at single-user-incident threshold: a recoverable outage is
+strictly preferable to a brand-ending cross-tenant sandbox escape. Residual trigger to
+watch: **base-image bumps MUST re-verify apparmor presence** before rollout.
+
+**web-2 warm-standby cutover role.** web-2 is STANDING-unenforced today (it structurally
+never receives the 11 web-1-scoped SSH provisioners), currently latent because its
+Cloudflare LB weight is 0 until GA. This fix closes it at boot (web-2 boots the identical
+`for_each`/shared-`user_data`/image path, so the image-bake + `--security-opt` run there
+too). Constraint: **the warm-standby cutover PR MUST NOT raise web-2's LB weight until this
+fix merges** — otherwise tenants land on a host running the sandbox unenforced from the
+moment it takes traffic.
+
 **Brand-survival threshold:** single-user incident. Deliberately the STRICTEST enum
 value (not `aggregate pattern`) precisely because the blast radius is cross-tenant —
 a single realized escape is brand-ending, so max review rigor applies.

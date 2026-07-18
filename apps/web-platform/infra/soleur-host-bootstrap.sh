@@ -170,7 +170,7 @@ FAILED_FILE=journald-soleur.conf; test -f /etc/systemd/journald.conf.d/00-soleur
 # if the profile is not loaded, so assert the load here to fail with a NAMED stage instead.
 FAILED_FILE=seccomp-bwrap.json; test -f /etc/docker/seccomp-profiles/soleur-bwrap.json
 FAILED_FILE=apparmor-soleur-bwrap.profile; test -f /etc/apparmor.d/soleur-bwrap
-FAILED_FILE=apparmor-loaded; aa-status 2>/dev/null | grep -q soleur-bwrap
+FAILED_FILE=apparmor-loaded; aa-status 2>/dev/null | grep -qE '^[[:space:]]+soleur-bwrap$'
 
 STAGE=reload
 systemctl daemon-reload

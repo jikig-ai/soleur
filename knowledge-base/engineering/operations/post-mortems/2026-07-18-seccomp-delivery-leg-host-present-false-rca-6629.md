@@ -156,6 +156,23 @@ licensed to be built. (It should track `seccomp_profile_loaded_matches_host`, no
 Recorded in **ADR-122** (anchored to ADR-080 bake-and-extract; cross-references
 ADR-079, which owns the reload/canary leg — deliberately NOT amended here).
 
+## Detection of the fail-closed path (and a caveat for the #6628 watchdog)
+
+The reliable no-SSH detector for the enforce-fail → `poweroff -f` mode is the **Sentry
+fatal event** the host emits *during boot, before poweroff* — `emit_fail` with
+`stage=sandbox_profiles|assert` / `failed_file=apparmor-loaded` (soleur-host-bootstrap.sh),
+or `soleur-boot-emit stage=docker_run` / `hostscripts_incomplete` (cloud-init.yml). It is
+NOT the Better Stack uptime check: the per-host absence monitor was removed in #5933, and
+the surviving `app` (LB-pool) + apex monitors stay green when a single host — or the
+never-served web-2 warm standby — drains/poweroffs. A poweroffed host also runs no crons,
+so `resource-monitor.sh`/`container-restart-monitor.sh` do not fire.
+
+**Caveat the #6628 watchdog MUST encode:** polling a poweroffed (fail-closed) host's
+`/hooks/deploy-status` yields a **connection failure / timeout, NOT `host_present=false`**.
+The watchdog must treat "no answer" as a distinct alarm condition, never a green — a
+fail-closed host is unenforced-and-refusing-to-serve, which is exactly what #6628 exists to
+page on.
+
 ## Layer citations
 
 - Incident datum: `gh run view 29450562340 --log` (GitHub Actions).

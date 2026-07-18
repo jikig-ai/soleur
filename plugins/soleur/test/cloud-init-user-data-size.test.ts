@@ -462,6 +462,25 @@ describe("baked bootstrap installer contract (AC4/AC5/AC6/AC8/AC9)", () => {
     expect(bootstrap).toMatch(/"stage":"%s"/);
     expect(bootstrap).toMatch(/trap emit_fail EXIT/);
   });
+  test("installs + kernel-loads the container-sandbox profiles on-host (#6629 fresh-host delivery leg)", () => {
+    // The delivery-leg the RCA is about: a fresh host must receive BOTH profiles at the
+    // exact paths the terminal docker run's --security-opt reads, AND kernel-load apparmor
+    // ("applied != loaded" — apparmor=soleur-bwrap fails container-create otherwise). Without
+    // these assertions a "clean up the #6629 block" refactor could delete the install+assert
+    // lines together and ship a silently-unenforced fresh host (all placement/parity/count
+    // tests stay green). Pins install -> path, the load, and the fail-closed presence gate.
+    expect(bootstrap).toMatch(
+      /install -D -m 0644[^\n]*seccomp-bwrap\.json[^\n]*\/etc\/docker\/seccomp-profiles\/soleur-bwrap\.json/,
+    );
+    expect(bootstrap).toMatch(
+      /install -D -m 0644[^\n]*apparmor-soleur-bwrap\.profile[^\n]*\/etc\/apparmor\.d\/soleur-bwrap/,
+    );
+    expect(bootstrap).toMatch(/apparmor_parser -r \/etc\/apparmor\.d\/soleur-bwrap/);
+    // fail-closed presence + kernel-load asserts (run before the sentinel write)
+    expect(bootstrap).toMatch(/test -f \/etc\/docker\/seccomp-profiles\/soleur-bwrap\.json/);
+    expect(bootstrap).toMatch(/test -f \/etc\/apparmor\.d\/soleur-bwrap/);
+    expect(bootstrap).toMatch(/aa-status[^\n]*grep -qE '\^\[\[:space:\]\]\+soleur-bwrap\$'/);
+  });
 });
 
 describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
