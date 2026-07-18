@@ -607,7 +607,7 @@ export async function tryLedgerDivergenceRecovery(
     // it only adds the visible+fresh-heartbeat-but-dead case. Uses only slots
     // already fetched (no extra query). CTO ruling 2026-07-18: gate on agent-loop
     // liveness, NOT socket focus (a focus-only reap kills backgrounded-live loops
-    // #5273 and review-gate-paused conversations). CROSS-HOST CAVEAT (ADR-123):
+    // #5273 and review-gate-paused conversations). CROSS-HOST CAVEAT (ADR-124):
     // hasLiveAgentLoop is instance-local, so this branch's no-false-reap guarantee
     // is CONDITIONAL on user-sticky placement (ADR-068 D0 / #5274, replicas=1
     // today). Any weakening of sticky placement must re-audit this reaper.

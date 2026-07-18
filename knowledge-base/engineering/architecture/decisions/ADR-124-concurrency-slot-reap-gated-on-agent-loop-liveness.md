@@ -6,7 +6,7 @@ issue: null
 supersedes: null
 ---
 
-# ADR-123: concurrency-slot reap gated on agent-loop liveness, not socket focus
+# ADR-124: concurrency-slot reap gated on agent-loop liveness, not socket focus
 
 ## Context
 

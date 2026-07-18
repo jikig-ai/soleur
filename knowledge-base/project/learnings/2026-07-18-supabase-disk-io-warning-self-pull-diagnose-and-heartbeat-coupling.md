@@ -48,7 +48,7 @@ staleness threshold widens a cap-hit self-lockout window; the immediate-reclaim 
 slots with no *live loop* on this instance. But "no focused socket" ≠ "no live loop" — a user's socket
 tracks one focused conversation while background loops persist across crashes in separate registries.
 Gate the reap on the loop registries (cc + legacy), never on socket focus, or you kill the live loop
-the whole change was meant to protect (ADR-123, CTO ruling).
+the whole change was meant to protect (ADR-124, CTO ruling).
 
 ## Session Errors
 
