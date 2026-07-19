@@ -746,9 +746,15 @@ export async function cronCommunityMonitorHandler({
           // "no-changes" and "failed" are BOTH red: the operator's artifact did
           // not land either way. They stay distinguishable in marker 1.
           livenessOk = false;
-        } else if (commitResult.resumed && !commitResult.paths) {
-          livenessOk = true; // R21 carve-out — undetermined, not absent.
-        } else if (commitResult.paths && !commitResult.paths.includes(digestPath)) {
+        } else if (commitResult.paths === undefined) {
+          // NOT DETERMINED (R21), never "nothing committed". But ONLY the
+          // replay-resume branch has a legitimate reason to leave it
+          // undetermined — it is the one path that skips the allowlist scan.
+          // Any OTHER undetermined shape means the result contract drifted, and
+          // voting GREEN on an unknown is exactly the failure this issue is
+          // about, so it stays red.
+          livenessOk = commitResult.resumed === true;
+        } else if (!commitResult.paths.includes(digestPath)) {
           livenessOk = false; // committed something, but not today's digest.
         }
       } else {

@@ -216,3 +216,111 @@ describe("cron-community-monitor — throw-path heartbeat (#5728)", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #6714 — the four-arm liveness table (R16a / R21)
+// ---------------------------------------------------------------------------
+// Every case below posts a heartbeat with `threw === false`, so
+// finalizeOutputAwareHeartbeat computes `failed = threw && !heartbeatOk` = false
+// and ALWAYS reaches the heartbeat step: the colour, not the presence, is the
+// observable. Each case therefore asserts `?status=…` directly.
+//
+// resolveOutputAwareOk stays TRUE throughout — that is the whole point. Every
+// one of these is a run whose ISSUE landed (so the pre-#6714 monitor was GREEN);
+// only the committed ARTIFACT differs.
+describe("cron-community-monitor — digest liveness (#6714)", () => {
+  it("issue filed but persistence returned no-changes turns the monitor RED", async () => {
+    // THE 2026-07-14 → 07-19 STATE. The return value was discarded (R16a), so
+    // this ran GREEN for six days with nothing committed.
+    safeCommitAndPrSpy.mockResolvedValue({ status: "no-changes" as const });
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: false });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+  });
+
+  it("issue filed but persistence FAILED turns the monitor RED", async () => {
+    safeCommitAndPrSpy.mockResolvedValue({
+      status: "failed" as const,
+      stage: "git-push",
+      message: "remote rejected",
+    });
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+  });
+
+  it("a commit that landed OTHER files but not today's digest turns the monitor RED", async () => {
+    // The subtle arm: status IS "committed" and a PR number exists, so every
+    // pre-#6714 signal reads healthy — but the operator's artifact is absent.
+    safeCommitAndPrSpy.mockResolvedValue({
+      status: "committed" as const,
+      prNumber: 4242,
+      branch: "cron/community-monitor",
+      fileCount: 1,
+      deletionCount: 0,
+      paths: ["knowledge-base/support/community/collector-status.json"],
+    });
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+  });
+
+  it("a replay-resume with UNDETERMINED paths stays GREEN (R21 carve-out)", async () => {
+    // On the replay-resume branch the allowlist scan never runs, so `paths` is
+    // undefined — "NOT DETERMINED", never "nothing committed". Reading undefined
+    // as absent would false-RED a run whose artifact genuinely landed.
+    safeCommitAndPrSpy.mockResolvedValue({
+      status: "committed" as const,
+      prNumber: 4242,
+      branch: "cron/community-monitor",
+      fileCount: 0,
+      deletionCount: 0,
+      resumed: true as const,
+    });
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: true });
+    expect(heartbeatUrls()[0]).toContain("?status=ok");
+  });
+
+  it("UNDETERMINED paths WITHOUT the resumed marker turns the monitor RED", async () => {
+    // The negative half of the R21 carve-out, and what makes `resumed`
+    // load-bearing rather than decorative: only the replay-resume branch has a
+    // legitimate reason to leave `paths` undetermined. Any other undetermined
+    // shape is a drifted result contract, and voting GREEN on an unknown is the
+    // precise failure #6714 exists to close.
+    safeCommitAndPrSpy.mockResolvedValue({
+      status: "committed" as const,
+      prNumber: 4242,
+      branch: "cron/community-monitor",
+      fileCount: 0,
+      deletionCount: 0,
+    });
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+  });
+
+  it("a timed-out spawn whose issue landed turns the monitor RED (the no-else gate)", async () => {
+    // The persistence gate had no `else`, so this skipped persistence silently.
+    // heartbeatOk is true (the issue exists), so ONLY livenessOk can redden it.
+    spawnClaudeEvalSpy.mockResolvedValue({ ...okSpawn, abortedByTimeout: true });
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+    // and persistence was genuinely skipped, not merely reported red
+    expect(safeCommitAndPrSpy).not.toHaveBeenCalled();
+  });
+});
