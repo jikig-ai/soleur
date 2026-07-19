@@ -539,12 +539,21 @@ logs:
   retention:     90 days (GitHub default)
 
 discoverability_test:
-  command:       awk '$0 ~ "^  warm_standby:" {b=1; next} b && /^  [A-Za-z_]/ {b=0} b && /^[A-Za-z]/ {b=0} b' .github/workflows/apply-web-platform-infra.yml | grep -q 'host_creates' && echo warm_standby_halt_present || echo warm_standby_halt_ABSENT
-  expected_output: warm_standby_halt_present
+  command:       bash tests/scripts/test-destroy-guard-counter-web-platform.sh
+  expected_output: 0 failed
 ```
 
-**Verified:** the command was executed against the pre-fix tree (returning
-`warm_standby_halt_ABSENT`, exit 0) and re-executed after the revision-3 amendment — unchanged and
+**Revised at ship-time (#6725 preflight Check 10).** The original command was an
+`awk … | grep -q … && echo … || echo …` pipeline. Check 10 executes the declared command in a
+scrubbed `env -i` sandbox and **refuses any command containing shell-active tokens** (`|`, `&&`,
+`||`, `$(`, backticks) — so the documented probe could never actually be run by the gate that
+exists to run it. Replaced with a single invocation of the suite itself, which is strictly
+stronger: it proves the HALT **behaviourally** (T52 executes the workflow's own guard bytes
+against real tfplan fixtures), not merely that the string `host_creates` appears in the job block.
+
+**Verified:** executed in Check 10's exact sandbox
+(`env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=$HOME timeout 15s bash -c …`) → `62 passed, 0 failed`, exit 0. The
+pre-fix tree returned a failing count for the same command, so the probe discriminates. Previously
 still runnable, since it targets the half that survived the cut. Real, always-exits-0, output
 discriminates, no `ssh `. `expected_output` is the post-fix value. **Known limitation:** it greps
 source, not execution — AC9 covers the reachability question it cannot see.
