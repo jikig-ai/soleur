@@ -56,11 +56,11 @@
 #          web2_out_of_scope_changes: int, web2_server_replaced: int,
 #          host_creates: int}.
 # Every key past the first three is ADDITIVE; the first three are byte-unchanged
-# so the apply / warm_standby / manual-rerun consumers that read only them keep
-# working. Only the web_2_recreate job's sourced gate
-# (tests/scripts/lib/web2-recreate-gate.sh) reads the web2_* keys. Only the
-# `apply` job reads host_creates (#6416) — and evaluates it OUTSIDE the
-# destroy_count sum, so `[ack-destroy]` cannot bypass it.
+# so the manual-rerun consumer that reads only them keeps working. Only the
+# web_2_recreate job's sourced gate (tests/scripts/lib/web2-recreate-gate.sh)
+# reads the web2_* keys. host_creates is read by BOTH the `apply` job (#6416)
+# and the `warm_standby` job (#6718) — each evaluates it OUTSIDE the
+# destroy_count sum, so `[ack-destroy]` cannot bypass either.
 #
 # Each `_count($side)` helper uses `$side` value-binding (jq 1.7+; safe on
 # jq 1.8.x). NOT the call-by-name filter-arg shape that crashed v1 of

@@ -237,6 +237,27 @@ mention any path in Files to Edit. The open backlog is entirely app/product-side
   `terraform plan -target` on an unresolvable `for_each` key **warns** or **errors**. If it
   **errors**, the plan step dies *before* the guard block and the new HALT is **present but
   unreachable** — structurally green, provably dead. The PR must not claim closure in that case.
+
+  **RESOLVED 2026-07-20 → WARNS. The HALT is executable; the risk is closed.** Measured
+  empirically on Terraform **v1.10.5** (the pinned CI version) with a credential-free local
+  reproduction — a `for_each` map containing only `web-1`, planned twice:
+
+  | `-target` | exit | output |
+  |---|---|---|
+  | `local_file.web["web-1"]` (resolvable) | **0** | normal plan |
+  | `local_file.web["web-2"]` (unresolvable key) | **0** | `No changes.` + the generic "Resource targeting is in effect" warning — **no error, no mention of the missing key** |
+
+  Terraform **silently ignores** a `-target` whose `for_each` instance key is absent. So
+  `warm_standby`'s plan step survives its three stale `web-2` targets, reaches the guard block,
+  and the new HALT executes. AC9 resolves to the *warn* arm.
+
+  **Byproduct finding (out of scope, filed not fixed):** because unresolvable targets are silently
+  dropped, `warm_standby`'s "additive 6-target set" is really a **3-target set** — the three
+  `web-2` addresses (`hcloud_server_network.web["web-2"]`, `hcloud_volume.workspaces["web-2"]`,
+  `hcloud_volume_attachment.workspaces["web-2"]`) have been dead no-ops since web-2's retirement
+  (2026-07-17, #6538). This does **not** weaken the HALT — `hcloud_server.web["web-1"]` is still
+  transitively in the graph via the surviving `hcloud_server_network.web["web-1"]` target, which
+  is what the tripwire counts. It is evidence for the `warm_standby`-is-a-zombie issue (AC11).
 - **P3.** Re-derive cloud-init headroom: `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts`.
 - **P4.** Confirm the baseline as **presence/absence**, not an exact count (an exact count is a
   brittle magic constant that drifts on any comment edit): warm_standby `host_creates` **absent**,
