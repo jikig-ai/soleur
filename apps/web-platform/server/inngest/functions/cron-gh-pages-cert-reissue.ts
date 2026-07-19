@@ -1460,8 +1460,30 @@ function emitTerminal(
   });
 
   if (BENIGN_OUTCOMES.has(result.outcome)) {
-    const log = result.outcome === "config_missing" ? logger.warn : logger.info;
-    log({ fn: FN_ID, ...extra }, `reissue outcome=${result.outcome}`);
+    // ‼️ CALL THE METHOD, DO NOT EXTRACT IT. `const log = logger.info` drops the
+    // receiver, and inngest's ProxyLogger.info() begins `if (!this.enabled)
+    // return;` — so an extracted reference throws
+    // `Cannot read properties of undefined (reading 'enabled')`.
+    //
+    // That throw escapes emitTerminal, propagates out of the handler, exhausts
+    // `retries: 1`, and fires onFailure — so EVERY benign terminal, including
+    // `issued`, was recorded as `reissue_incomplete_restore_ok`. A SUCCESSFUL
+    // remediation reported itself as a failure.
+    //
+    // It never fired before #6698 because the only benign outcomes reachable in
+    // practice were `issued` (never achieved — the cert was wedged) and
+    // `not_stuck`; every observed live fire ended non-benign and took the
+    // reportSilentFallback branch below, which does not touch the ctx logger.
+    // `probe_only_complete` is the first benign terminal to actually execute in
+    // production, which is how the new step markers surfaced this on the first
+    // post-deploy fire.
+    const msg = `reissue outcome=${result.outcome}`;
+    const payload = { fn: FN_ID, ...extra };
+    if (result.outcome === "config_missing") {
+      logger.warn(payload, msg);
+    } else {
+      logger.info(payload, msg);
+    }
     return;
   }
   // Every remediation-failure terminal path mirrors to Sentry (fail-loud → the
