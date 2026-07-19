@@ -538,6 +538,43 @@ else
 fi
 
 echo ""
+echo "--- The cosign correction comment must itself be true (#6617 / plan CF-2) ---"
+# This PR exists because a false comment ("the cold-boot OCI pull is signature-verified")
+# propagated into a plan and then into an acceptance criterion. The correction that replaced
+# it introduced a NEW false claim in the same breath — that real verification exists in
+# `cloud-init-registry.yml` — so the correction needs the same guard the original lacked.
+#
+# Ground truth: cloud-init-registry.yml contains ZERO cosign INVOCATIONS. Every `cosign`
+# occurrence in it is a comment about zot's `sha256-*` tag RETENTION policy, i.e. keeping the
+# signature tags around so ci-deploy.sh's verify can fetch them. Retaining a signature is not
+# verifying one.
+INNGEST_CI_YML="$SCRIPT_DIR/cloud-init-inngest.yml"
+REGISTRY_CI_YML="$SCRIPT_DIR/cloud-init-registry.yml"
+# Strip comments (full-line and trailing) before looking for an invocation, so the file's own
+# prose about cosign cannot satisfy this (cq-assert-anchor-not-bare-token).
+REGISTRY_COSIGN_CODE="$(sed -E 's/#.*$//' "$REGISTRY_CI_YML" | grep -c 'cosign' || true)"
+assert "cloud-init-registry.yml runs cosign ZERO times (every occurrence is a retention comment)" \
+  "[[ '$REGISTRY_COSIGN_CODE' -eq 0 ]]"
+assert "cloud-init-registry.yml's cosign mentions are about sha256-* signature-tag retention" \
+  "grep -qE '^[[:space:]]*#.*sha256-\*' '$REGISTRY_CI_YML'"
+# The claim under guard. The sentence WRAPS across comment lines, so a line-based grep
+# matches nothing and passes vacuously against the false text — measured. Flatten the comment
+# prose to one line first, then assert on the joined sentence.
+INNGEST_CI_PROSE="$(grep -E '^[[:space:]]*#' "$INNGEST_CI_YML" | sed -E 's/^[[:space:]]*#[[:space:]]?//' | tr '\n' ' ' | tr -s ' ')"
+assert "harness non-vacuity: the flattened prose carries the cosign correction sentence at all" \
+  "grep -qF 'verification exists only in' <<<\"\$INNGEST_CI_PROSE\""
+# Asserted on the false CONJUNCTION rather than on proximity: the corrected sentence still
+# names cloud-init-registry.yml (to say what it actually does), so a distance-based regex
+# would fire on the fix too. Listing it as a second place verification "exists" — "... and
+# cloud-init-registry.yml" — is precisely the error.
+assert "the cosign correction does NOT list cloud-init-registry.yml as a verification site" \
+  "! grep -qF 'and cloud-init-registry.yml' <<<\"\$INNGEST_CI_PROSE\""
+assert "the cosign correction names ci-deploy.sh as the sole real verification path" \
+  "grep -qF 'verification exists only in ci-deploy.sh' <<<\"\$INNGEST_CI_PROSE\""
+assert "the cosign correction states registry's role is RETAINING the sha256-* tags verify depends on" \
+  "grep -qF 'cloud-init-registry.yml only retains the sha256-* signature tags' <<<\"\$INNGEST_CI_PROSE\""
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then
   echo "FAIL: $FAIL test(s) failed"

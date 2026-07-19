@@ -419,8 +419,38 @@ variable "ghcr_read_token" {
 # operand — the string "false" coerces to boolean false, so the rollback route
 # `TF_VAR_web_colocate_inngest="false"` gates OFF correctly (and a non-bool string fails
 # closed at plan time). Pinning `type = bool` keeps the variable-boundary contract explicit.
+#
+# SOLEUR-DEBT: turning this back on RE-ARMS AN UNPINNED, ROOT-EXECUTED OCI PULL.
+#   what: cloud-init.yml's inngest runcmd execs the pulled payload as root, and its zot arm
+#         fetches over plain HTTP. Unlike the dedicated host (cloud-init-inngest.yml:390) its
+#         $IREF is TAG-pinned only — no @sha256 digest — so a mutated tag is a root RCE on the
+#         sole live web origin. This was found by the #6617 security review and DECLINED, not
+#         missed.
+#   why:  no user_data budget. Re-measured 2026-07-19 at branch HEAD with the model in
+#         plugins/soleur/test/cloud-init-user-data-size.test.ts (gzip -9 + base64 of the
+#         rendered template — the test's own model, explicitly NOT byte-exact vs terraform's
+#         Go zlib; #5887's terraform plan is the byte-exact truth):
+#           origin/main, as-is .......................... 22,372 B (78 B under the 22,450 cap)
+#           + 2 @sha256 digest pins, no added comment ... 22,456 B (6 B OVER — FAILS)
+#         So the pin does not fit, but by 6 B, not the 14 B recorded in 761243954, and main's
+#         headroom is 78 B, not the ~11 B that commit reported. Do not re-cite 761243954's
+#         absolute figures; its baseline no longer reproduces. Its VERDICT (pin does not fit)
+#         is confirmed. Entropy is the dominant term and the reason this is so tight: the same
+#         two pins with a low-entropy placeholder digest measure 22,404 B (PASSES) — a 52 B
+#         swing from digest randomness alone, so any budget experiment MUST use a real-entropy
+#         sha256 or it will falsely conclude the pin fits.
+#         The trade was: the arm is DORMANT (this variable defaults false post-ADR-100), so it
+#         is a non-exposure today, while user_data is a hard 32 KB Hetzner cap on the live web
+#         host's boot path. Spending a scarce hard resource to pin dead code is the wrong side
+#         of that trade — but ONLY while it stays dead.
+#   trigger: flipping this to true. Do NOT do so without first digest-pinning cloud-init.yml's
+#         $IREF, which means first freeing user_data budget (bake the logic into the OCI image
+#         per the #5921 pattern rather than raising the cap — see
+#         plugins/soleur/test/cloud-init-user-data-size.test.ts).
+#   rationale: git show 761243954 (original measurement table; absolutes superseded above).
+#
 variable "web_colocate_inngest" {
-  description = "When true, a freshly-created web host bootstraps + enables the co-located inngest-server.service (pre-cutover). Default false: scheduling lives on the dedicated soleur-inngest host (10.0.1.40, ADR-100, #6178). Recreate is the quiesce mechanism (hr-prod-host-config-change-immutable-redeploy)."
+  description = "When true, a freshly-created web host bootstraps + enables the co-located inngest-server.service (pre-cutover). Default false: scheduling lives on the dedicated soleur-inngest host (10.0.1.40, ADR-100, #6178). Recreate is the quiesce mechanism (hr-prod-host-config-change-immutable-redeploy). SOLEUR-DEBT: enabling this re-arms an unpinned root-executed OCI pull — see the comment above."
   type        = bool
   default     = false
 }
