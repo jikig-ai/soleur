@@ -1604,6 +1604,75 @@ resource "sentry_issue_alert" "web_terminal_boot_fatal" {
   }
 }
 
+# #6441 — the first-boot private-NIC gate's non-ready outcomes (ADR-114 I1).
+#
+# WHY A SEPARATE RULE rather than two more stages on web_terminal_boot_fatal above: these are
+# NOT terminal. soleur-wait-nic is fail-OPEN by contract — it defers and lets the boot continue,
+# so folding them into a rule named "terminal-boot-fatal" would page a deferral as a boot
+# failure and, worse, train the reader to discount that rule.
+#
+# WHY THE RULE IS LOAD-BEARING: the gate's entire value is converting a pathological case from
+# SILENT to OBSERVED, and review established that without this the two stages matched no
+# tagged_event filter anywhere in this file. They would also not raise a NEW-issue notification,
+# because soleur-boot-emit sends one shared message ("soleur-cloud-init boot stage") for every
+# stage, so all boot events land in a single perpetually-active issue group. Emitting into a
+# bucket nobody reads is not observability — it is the silence the gate was built to end.
+#
+# Fires rarely by construction: runcmd is once-per-instance, so at most one event per fresh
+# connector-host boot. Any occurrence means either the NIC never converged within 60 s
+# (private_nic_timeout) or the probe could not measure at all (private_nic_probe_fault) — both
+# worth a look, neither an emergency, since cloudflared dials its origin per connection and
+# self-heals when the attach lands.
+resource "sentry_issue_alert" "web_private_nic_boot_gate" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "web-host-private-nic-boot-gate"
+  action_match = "all"
+  filter_match = "any"
+  frequency    = 24
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        value           = 1
+        interval        = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "private_nic_timeout"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "private_nic_probe_fault"
+      }
+    },
+  ]
+  # N=1 accepted risk, mirroring every sibling apply-created rule: IssueOwners has no ownership
+  # rule on this project → falls through to ActiveMembers, paging the solo founder. Events carry
+  # only stage/host_id/region — no cross-tenant content, and never the expected IP.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # #6604 — the /workspaces LUKS at-rest drift PAGE. Vector is Better-Stack-only and never reaches
 # Sentry, so the drift page depends ENTIRELY on workspaces-luks-emit.sh's direct-curl envelope
 # matching this filter (DP-8/DP-10): the emit sets BOTH feature=workspaces-luks AND

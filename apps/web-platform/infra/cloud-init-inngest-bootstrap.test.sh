@@ -336,7 +336,7 @@ if command -v terraform >/dev/null 2>&1; then
   # whose assertions fail with a misleading "OMITS" pass (#6425).
   render_ci() {
     local colocate="$1" out="$2" connector="${3:-true}"
-    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="TT_SENTINEL_6425", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ghcr_read_user="u", ghcr_read_token="g", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="reg", web_colocate_inngest=%s, web_tunnel_connector=%s, host_name="soleur-web-platform" })\n' \
+    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="TT_SENTINEL_6425", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ghcr_read_user="u", ghcr_read_token="g", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="reg", web_colocate_inngest=%s, web_tunnel_connector=%s, host_name="soleur-web-platform", private_ip="10.0.1.10" })\n' \
       "$CLOUD_INIT" "$colocate" "$connector" | terraform -chdir="$RENDER_SCRATCH" console > "$out"
     # A truncated/empty render makes every `! grep` assertion pass vacuously.
     [[ -s "$out" ]] || { echo "  FATAL: render produced no output (colocate=$colocate connector=$connector)"; return 1; }
@@ -497,6 +497,22 @@ PY
   assert "render web_tunnel_connector=true INCLUDES the cloudflared readiness poll" \
     "grep -qF 'soleur-wait-ready service cloudflared' '$CONN_ON'"
   assert "render web_tunnel_connector=true is valid YAML" "render_yaml_ok '$CONN_ON'"
+  # #6441 (ADR-114 I1): the first-boot NIC gate. THIS is the only place the "inside the
+  # `%{ if }` block" property is checkable — a raw-source grep passes identically if the line
+  # lands OUTSIDE the directive pair, which would run a NIC wait on a future non-connector
+  # host (waiting out the full budget on an address it will never hold, then emitting a
+  # spurious private_nic_timeout). The sibling nic-wait-gate.test.sh owns the helper's
+  # BEHAVIOUR; the gating is owned here, where the render actually happens.
+  assert "render web_tunnel_connector=true INCLUDES the NIC wait with the interpolated IP" \
+    "grep -qF 'soleur-wait-nic 10.0.1.10' '$CONN_ON'"
+  # Adjacency, not mere presence: the wait must sit IMMEDIATELY before the install so its
+  # budget is SEQUENTIAL with the downstream cloudflared_ready gate rather than nested inside
+  # it. A wait that drifts below the install would spend cloudflared_ready's ~60 s budget and
+  # detonate that gate's pre-existing `|| exit 1` — the CF-5 abort this gate exists to prevent.
+  NIC_IDX=$(grep -nF 'soleur-wait-nic 10.0.1.10' "$CONN_ON" | head -1 | cut -d: -f1 || true)
+  INS_IDX=$(grep -nF 'cloudflared service install' "$CONN_ON" | head -1 | cut -d: -f1 || true)
+  assert "rendered NIC wait immediately precedes cloudflared service install" \
+    "[[ -n '$NIC_IDX' && -n '$INS_IDX' && \$(( INS_IDX - NIC_IDX )) -eq 1 ]]"
 
   CONN_OFF="$RENDER_SCRATCH/render-conn-off.txt"
   render_ci false "$CONN_OFF" false
@@ -508,6 +524,11 @@ PY
     "! grep -qF 'TT_SENTINEL_6425' '$CONN_OFF'"
   assert "render web_tunnel_connector=false OMITS the cloudflared readiness poll" \
     "! grep -qF 'soleur-wait-ready service cloudflared' '$CONN_OFF'"
+  # A non-connector host must not run the NIC wait at all: it never registers a connector, so
+  # the gate has nothing to gate, and on a host that legitimately holds no private IP it would
+  # burn the full budget and emit a false private_nic_timeout.
+  assert "render web_tunnel_connector=false OMITS the NIC wait entirely (#6441)" \
+    "! grep -qF 'soleur-wait-nic' '$CONN_OFF'"
   # The apt install stays UNGATED — only tunnel REGISTRATION is gated, so a de-pooled host
   # keeps the binary and stays promotable without an image change.
   assert "render web_tunnel_connector=false RETAINS ungated 'apt-get install -y cloudflared'" \
