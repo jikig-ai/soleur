@@ -207,17 +207,27 @@ violations to remediate — which is exactly why it is cheap to land now.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** nothing directly — the change is a
-type-only annotation with zero runtime emission. The failure mode of a *mistake* here is
-a `tsc --noEmit` failure that blocks CI, not a production regression. The failure mode of
-*not* landing it is the one already observed: a cron routine's terminal-logging path
-throws, the routine reports a successful remediation as `reissue_incomplete_restore_ok`,
-and the operator is paged for a success (or, worse, reads a real success as a failure and
-re-fires a remediation that consumes a Let's Encrypt validation attempt).
+**If this lands broken, the user experiences:** a cron-wide outage. **Revised on review** —
+an earlier draft called this "a type-only annotation with zero runtime emission" whose
+worst case was "a `tsc --noEmit` failure that blocks CI." That described the rejected
+Option A. What ships is runtime code on the hot path of all 65 Inngest functions: a `get`
+trap that fires on *every property access of every logger call*. A throw in that trap, or
+in `transformInput`, reds every cron on the surface — the marketing-site TLS renewal, the
+weekly analytics fan-out, the payment-failure handlers. That is why three separate throw
+paths (frozen logger, nested-trap `Reflect.get`, `new Proxy(undefined)`) are each guarded
+and each pinned by a mutation-tested case: the blast radius of a mistake here is strictly
+larger than the bug being fixed.
+
+The failure mode of *not* landing it is the one already observed: a cron routine's
+terminal-logging path throws, the routine reports a successful remediation as
+`reissue_incomplete_restore_ok`, and the operator is paged for a success (or, worse, reads
+a real success as a failure and re-fires a remediation that consumes a Let's Encrypt
+validation attempt).
 
 **If this leaks, the user's data / workflow / money is exposed via:** no exposure vector.
-The change adds no field, no log emission, no network call, and no persisted data. It
-narrows a type.
+The facade forwards to the caller's logger and adds no field, no network call, and no
+persisted data. It emits exactly one line of its own, on the fail-open branch, carrying a
+fixed message and `typeof raw` — no logger contents, no event payload, no user data.
 
 **Brand-survival threshold:** `aggregate pattern`
 
@@ -306,8 +316,19 @@ failure_modes:
   - mode: "A future detached ctx-logger reference is introduced in any Inngest handler"
     detection: "NOT DETECTED — and deliberately so. The bind makes the shape HARMLESS
                 rather than observable. There is nothing to alert on because there is no
-                longer a failure. This is the point of choosing elimination over detection."
+                longer a failure. CAVEAT: this honesty holds only while the bind is
+                actually applied, which is exactly what the fail-open mode below covers."
     alert_route: "n/a — failure mode removed, not monitored"
+  - mode: "applyBoundLogger fails open (ctx.logger absent or non-object) — all 65
+           functions silently revert to unbound loggers and the receiver-loss TypeError
+           class returns fleet-wide. Reachable by an SDK bump OR by a refactor that reads
+           ctx.logger from onFunctionRun instead of transformInput; tsc catches neither."
+    detection: "Layer 2 — module-scope pino ERROR via warnSilentFallback → Sentry
+                captureException, tag feature=inngest-bound-logger, op=transformInput.
+                Deduped to one report per process (the container restarts each deploy, so
+                it re-arms). Deliberately NOT the ctx logger: that is the path found
+                missing, so the mirror must be disjoint from it."
+    alert_route: "Sentry issue alert on tag feature:inngest-bound-logger"
   - mode: "Middleware ordering disturbs sentry-correlation scope tagging or run-log's
            {ok, errorSummary} projection (would surface as silent data loss in
            public.routine_runs, NOT as an error)"
@@ -327,24 +348,39 @@ failure_modes:
     alert_route: "CI typecheck job (blocks merge)"
 
 logs:
-  where: "no new log emission — this PR adds zero runtime code"
-  retention: "n/a"
+  where: "One conditional emission only: the fail-open branch of applyBoundLogger, via
+          warnSilentFallback (module-scope pino ERROR → Sentry), deduped once per process.
+          Zero emission on the healthy path — the facade forwards to the caller's logger
+          and adds no line of its own."
+  retention: "Sentry issue retention (existing); no new persisted data"
 
 discoverability_test:
-  command: "cd apps/web-platform && ./node_modules/.bin/tsc --noEmit"
-  expected_output: "exit 0, no diagnostics"
+  command: "cd apps/web-platform && ./node_modules/.bin/vitest run
+            test/server/inngest/bound-logger-middleware.test.ts"
+  expected_output: "20 passed — including the hook-wiring case that drives
+                    init().onFunctionRun().transformInput() and the hostile-shape cases
+                    (frozen logger, nested-trap throw, cross-instance mis-bind)"
 ```
+
+**Corrected on review.** An earlier draft of this block declared
+`logs.where: "no new log emission — this PR adds zero runtime code"` and a
+`tsc --noEmit` discoverability test. Both described **Option A, the rejected type-level
+detector**. What ships is a runtime `InngestMiddleware` executing a `Proxy` get trap on
+every property access of every logger call across 65 functions — a typecheck cannot
+exercise that. The block above describes the shipped design.
 
 **No SSH anywhere in the verification path.** The entire acceptance surface is a local
 typecheck plus a vitest run.
 
 ### Affected-surface note (§2.9.2)
 
-The Inngest cron worker is a blind execution surface. This PR does **not** add a runtime
-probe there, and deliberately so: the failure class it addresses is moved from *runtime*
-to *compile time*, which removes the need for in-surface telemetry rather than requiring
-it. The pre-existing in-surface probe (`cert-reissue-marker.ts` WARN markers, reaching
-Better Stack) remains the runtime discriminator and is untouched.
+The Inngest cron worker is a blind execution surface, and this PR adds runtime code to it.
+The healthy path is deliberately silent — a facade that logged about logging would
+multiply volume across 65 crons for no signal. The one branch that *would* otherwise be
+invisible, the fail-open, is covered by a Layer 2 emission (`warnSilentFallback` →
+Sentry, `feature=inngest-bound-logger`) that is disjoint from the `ctx.logger` path it
+reports as missing. The pre-existing in-surface probe (`cert-reissue-marker.ts` WARN
+markers, reaching Better Stack) remains the runtime discriminator and is untouched.
 
 ### Soak follow-through enrollment (§2.9.1)
 
@@ -694,12 +730,54 @@ grep-for-the-thing-you-just-wrote, prose assertions with no command, or fragile 
 - **AC1 — the middleware exists and binds every function-valued property.**
   `server/inngest/middleware/bound-logger.ts` exports `boundLoggerMiddleware` and returns a
   `Proxy` whose `get` trap binds function values to `target`. Verify:
-  `grep -c 'v.bind(target)' apps/web-platform/server/inngest/middleware/bound-logger.ts` → `1`,
-  **and** `grep -c 'typeof v === "function"' …` → `1`. (A three-arrow-closure implementation
-  fails this AC by design — it drops `debug`/`child`/`level`.)
-- **AC1b — the fail-open guard exists.** Verify:
-  `grep -cE 'if \(!raw \|\| typeof raw !== "object"\) return;' apps/web-platform/server/inngest/middleware/bound-logger.ts`
-  → `1`. Without it, `new Proxy(undefined, …)` throws and reds every cron on the surface.
+  `grep -c 'bind(target)' apps/web-platform/server/inngest/middleware/bound-logger.ts` → `>= 1`
+  (currently `2` — the call plus the comment explaining `target` over `receiver`; a
+  body-grep sees comments, so an exact count here would be pinning prose, per
+  `cq-assert-anchor-not-bare-token`).
+  (A three-arrow-closure implementation fails this AC by design — it drops
+  `debug`/`child`/`level`.) **Behaviour, not shape, is the real gate:** AC4's suite asserts
+  it, and the AC3b mutation control proves the suite would catch its removal.
+- **AC1b — the fail-open guard exists AND reports.** Verify the guard admits both
+  wrappable shapes and rejects nothing else:
+  `grep -cE 'typeof raw !== "object" && typeof raw !== "function"' apps/web-platform/server/inngest/middleware/bound-logger.ts`
+  → `1`. Without the guard, `new Proxy(undefined, …)` throws and reds every cron. **Revised
+  on review:** the original AC rejected `typeof raw === "function"`, which would have failed
+  open against a perfectly wrappable callable logger (debug/npmlog/roarr shape). It must
+  also MIRROR — see AC1d.
+- **AC1d — the fail-open is reported, not silent.** The guard calls `warnSilentFallback`
+  (module-scope pino → Sentry, `feature: "inngest-bound-logger"`), deduped once per process,
+  inside a `try/catch` so a reporting failure cannot red a cron. **Why this was added:**
+  fail-open and fail-silent are separable and only the first is forced. Unreported, this
+  branch silently reverts all 65 functions to unbound loggers with no signal on any
+  observability layer — a fleet-wide regression shaped exactly like health. The
+  `cert-reissue-marker.ts` exemption does NOT cover it: that one is scoped to a `catch`
+  around an emit that already failed, where the mirror re-enters the broken path; here
+  nothing has been attempted and the mirror target is disjoint from `ctx.logger`.
+- **AC1e — hostile logger shapes cannot throw.** The `get` trap must survive three shapes
+  that each reintroduce the crash class, all verified live against a real Proxy before being
+  fixed:
+  1. **Frozen logger.** For an own non-writable + non-configurable data property, `[[Get]]`
+     requires the trap to return the target's exact value; a bound copy throws. That check
+     runs *after* the trap returns, so a `try/catch` inside it does **not** contain the
+     throw — it must be avoided via `Reflect.getOwnPropertyDescriptor`, not caught. Such a
+     property stays unbound: not throwing is the guarantee, binding is unavailable at any
+     price.
+  2. **`Reflect.get` throwing through the nested trap.** The real target is itself a Proxy
+     whose trap ends `Reflect.get(target.logger, …)`; a `child()` returning `undefined`
+     makes any unknown-prop read throw `Reflect.get called on non-object`. Fail open to
+     `undefined`.
+  3. **Cross-instance mis-binding.** Bound methods are memoised two levels deep, keyed on
+     the **target first**. Class methods live on the shared prototype, so a single-level
+     cache hands the second logger a method bound to the first instance — silently routing
+     one cron's logs into another's. Verified to return the wrong receiver.
+  Also pins bound-method identity stability (`logger.info === logger.info`), without which
+  `emitter.off(logger.info)` can never match and handler-set dedupe double-registers.
+- **AC1f — the hook wiring is exercised end-to-end.** A test drives
+  `boundLoggerMiddleware.init().onFunctionRun().transformInput({ ctx })` and asserts the
+  returned ctx patch carries a bound facade. Every other assertion calls `applyBoundLogger`
+  directly, so without this a wiring regression — notably reading `ctx.logger` in
+  `onFunctionRun`, where it is `undefined` — would silently unbind all 65 functions with no
+  red test.
 - **AC1c — `ctx.logger` is read in `transformInput`, never `onFunctionRun`.** Verify the
   `onFunctionRun` signature takes no destructured `ctx`:
   `grep -cE 'onFunctionRun\(\)' apps/web-platform/server/inngest/middleware/bound-logger.ts` → `1`.
@@ -779,7 +857,7 @@ effect without an operator step.
 | --- | --- |
 | `apps/web-platform/server/inngest/functions/_cron-shared.ts` | `HandlerArgs["logger"]` needs no change — the bound facade satisfies the existing shape. Narrowing a type used by 68 modules was the rejected Option A. |
 | `apps/web-platform/server/cert-reissue-marker.ts` | Load-bearing WARN marker independently reaching Better Stack today (AC8). |
-| `apps/web-platform/server/inngest/functions/cron-gh-pages-cert-reissue.ts` | Already fixed by #6705. Its `ProxyLoggerLike` regression test stays as the site-level belt. |
+| `apps/web-platform/server/inngest/functions/cron-gh-pages-cert-reissue.ts` | **Deviation, comment-only.** No logic change; its `ProxyLoggerLike` regression test stays as the site-level belt. A review pass flagged that the `‼️ CALL THE METHOD, DO NOT EXTRACT IT` block reads as *false* once the middleware ships — a future reader would conclude the middleware doesn't work and either delete the guard or distrust the fix. Added a `#6703 UPDATE` note marking it defence-in-depth and stating why it still holds (the middleware fails open; a frozen logger keeps unbound methods). Recorded here rather than silently widening scope. |
 | `apps/web-platform/infra/vector.toml` | No filter change needed or proposed. |
 
 ## Test Scenarios
