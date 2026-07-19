@@ -714,11 +714,40 @@ describe("#6698 checkDnsPropagated — pure verdict function (AC8)", () => {
     expect(v.reason).toMatch(/188\.114\.96\.2/);
   });
 
+  it("AAAA present WITH stale Cloudflare A-records → retry, not terminal", () => {
+    // Measured in production (runId 01KXXR3BBF, 2026-07-19): the public
+    // resolvers flap between the new GitHub answer and the still-cached
+    // Cloudflare one for the whole propagation window, and a tick landing on
+    // the stale answer returns Cloudflare's A-records AND its synthetic AAAA
+    // together. The zone provably has zero AAAA records, so treating that as a
+    // surviving AAAA aborts a healthy remediation on a transient read.
+    const v = checkDnsPropagated({
+      ...base,
+      resolved4: ["188.114.96.1", "188.114.97.1"],
+      resolved6: ["2a06:98c1:3121::1", "2a06:98c1:3120::1"],
+      resolve6Error: null,
+    });
+    expect(v.status).toBe("retry");
+    expect(v.reason).toMatch(/pre-flip cached answer/);
+  });
+
+  it("AAAA present with NO A-record answer → retry (cannot confirm post-flip state)", () => {
+    const v = checkDnsPropagated({
+      ...base,
+      resolved4: [],
+      resolved6: ["2a06:98c1:3121::1"],
+      resolve6Error: null,
+    });
+    expect(v.status).toBe("retry");
+  });
+
   it("AAAA present → failed, NOT retry (H-W4 is terminal, waiting cannot help)", () => {
     // Let's Encrypt prefers IPv6 and will not fall back from a proxied AAAA that
     // answers 200 with the wrong content, so no window length can succeed. A
     // `retry` here would burn the remaining budget lengthening a public TLS
     // outage for an outcome that cannot change.
+    // A-records CONVERGED to GitHub anycast (base fixture) AND an AAAA still
+    // answers — that is the real H-W4 condition, and it stays terminal.
     const v = checkDnsPropagated({
       ...base,
       resolved6: ["2a06:98c1:3120::2"],
@@ -726,6 +755,7 @@ describe("#6698 checkDnsPropagated — pure verdict function (AC8)", () => {
     });
     expect(v.status).toBe("failed");
     expect(v.reason).toMatch(/prefers IPv6/);
+    expect(v.reason).toMatch(/converged to GitHub anycast/);
   });
 
   it("A-records right but ACME not GitHub-shaped → retry (challenge intercepted)", () => {
@@ -1308,6 +1338,80 @@ describe("#6698 onFailure envelope", () => {
       (m) => m.phase === "onfailure-restore",
     );
     expect(markers.every((m) => m.probeOnly === true)).toBe(true);
+  });
+});
+
+describe("emitTerminal must CALL the logger method, not extract it", () => {
+  // A plain `{ info: vi.fn() }` fake cannot catch this class: object-literal
+  // methods have no `this` dependency, so an extracted reference works fine
+  // against the fake and throws only in production. This fake mirrors inngest's
+  // real ProxyLogger, whose info()/warn() begin `if (!this.enabled) return;`.
+  class ProxyLoggerLike {
+    enabled = true;
+    calls: Array<[unknown, unknown]> = [];
+    info(...args: unknown[]) {
+      if (!this.enabled) return;
+      this.calls.push([args[0], args[1]]);
+    }
+    warn(...args: unknown[]) {
+      if (!this.enabled) return;
+      this.calls.push([args[0], args[1]]);
+    }
+    error(...args: unknown[]) {
+      if (!this.enabled) return;
+      this.calls.push([args[0], args[1]]);
+    }
+  }
+
+  it("does not throw on a BENIGN terminal (issued / not_stuck / probe_only_complete)", async () => {
+    // Observed in production on the first post-deploy fire: extracting the
+    // method produced `Cannot read properties of undefined (reading 'enabled')`,
+    // which escaped the handler, exhausted retries and fired onFailure — so a
+    // SUCCESSFUL remediation was recorded as reissue_incomplete_restore_ok.
+    for (const [cfg, ctx, expected] of [
+      [{ willIssue: true }, remediationCtx(), "issued"],
+      [{ stateOverride: "issued" }, remediationCtx(), "not_stuck"],
+      [{}, probeCtx(), "probe_only_complete"],
+    ] as Array<[FakeConfig, ReissueRunContext, string]>) {
+      const { deps } = makeFake(cfg);
+      const proxyLogger = new ProxyLoggerLike();
+      deps.logger = proxyLogger as unknown as ReissueDeps["logger"];
+
+      const result = await runReissueSteps(
+        makeStep(),
+        deps,
+        deps.logger,
+        ctx,
+      );
+
+      expect(result.outcome, expected).toBe(expected);
+      // The benign branch must have actually logged through the bound method.
+      expect(proxyLogger.calls.length, expected).toBeGreaterThan(0);
+      const [payload, msg] = proxyLogger.calls[proxyLogger.calls.length - 1];
+      expect(msg).toBe(`reissue outcome=${expected}`);
+      expect(payload).toMatchObject({ outcome: expected });
+    }
+  });
+
+  it("config_missing routes to warn, still bound", async () => {
+    const proxyLogger = new ProxyLoggerLike();
+    const prevToken = process.env.CF_API_TOKEN_DNS_EDIT;
+    const prevZone = process.env.CF_ZONE_ID;
+    process.env.CF_API_TOKEN_DNS_EDIT = "";
+    process.env.CF_ZONE_ID = "";
+    try {
+      const result = await cronGhPagesCertReissueHandler({
+        step: makeStep(),
+        logger: proxyLogger as unknown as ReissueDeps["logger"],
+      } as unknown as Parameters<typeof cronGhPagesCertReissueHandler>[0]);
+      expect(result.outcome).toBe("config_missing");
+      expect(proxyLogger.calls.length).toBeGreaterThan(0);
+    } finally {
+      if (prevToken === undefined) delete process.env.CF_API_TOKEN_DNS_EDIT;
+      else process.env.CF_API_TOKEN_DNS_EDIT = prevToken;
+      if (prevZone === undefined) delete process.env.CF_ZONE_ID;
+      else process.env.CF_ZONE_ID = prevZone;
+    }
   });
 });
 

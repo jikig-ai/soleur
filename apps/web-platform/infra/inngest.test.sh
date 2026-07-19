@@ -344,6 +344,118 @@ assert "AC5b/1 dedicated render + URL absent -> exactly one url_present=no row (
 assert "AC5b/1 dedicated render + URL absent -> curl never ran (no curl error on output)" \
   "! printf '%s' \"\$DED_ABSENT_OUT\" | grep -qi 'curl'"
 
+# --- #6617b (A6): the dark arm is RATE-LIMITED, not ELIMINATED (plan CF-9) ---
+# The dark arm fires every 60s and each fire ships a row through Source 4 (which applies no
+# PRIORITY filter): ~1,440 rows/day against a ~25k/day Better Stack quota, for a message whose
+# content never changes. The obvious fix -- emit once per boot, or only on transition -- is the
+# one ADR-117 forbids: it deletes the positive control, after which a dead pusher and a healthy
+# quiet one are the same observation (no rows), which is #6617 itself. So: a LOW PERIODIC
+# CADENCE. ~24 rows/day, and the host still says "I am alive and deliberately dark" every hour.
+#
+# Asserted BEHAVIOURALLY against the real rendered script, not by grepping for a constant: the
+# property is "repeat fires inside the window emit once AND the window reopens", and only
+# executing it can distinguish rate-limiting from suppression.
+echo ""
+echo "--- #6617b (A6): dark-arm hourly rate limit (CF-9 positive control preserved) ---"
+A6_STAMP="$PING_TMP/a6-run/dark.stamp"
+mkdir -p "$(dirname "$A6_STAMP")"
+A6_LOG="$PING_TMP/logger-a6.txt"
+: > "$A6_LOG"
+rm -f "$A6_STAMP"
+a6_fire() {
+  PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$A6_LOG" INNGEST_HEARTBEAT_URL="" \
+    INNGEST_HEARTBEAT_DARK_STAMP="$A6_STAMP" sh "$DEDICATED_PING" >/dev/null 2>&1
+}
+a6_fire && A6_RC1=0 || A6_RC1=$?
+a6_fire; a6_fire; a6_fire
+A6_BURST_ROWS=$(grep -c 'url_present=no' "$A6_LOG" || true)
+assert "A6 dark arm still exits 0 (the #6536 storm fix is intact)" \
+  "[[ '$A6_RC1' -eq 0 ]]"
+assert "A6 four fires inside one window emit exactly ONE row (was one per 60s fire)" \
+  "[[ '$A6_BURST_ROWS' -eq 1 ]]"
+# CF-9 -- the load-bearing half. Age the stamp past the interval: the marker MUST return. An
+# assertion that only checks suppression passes just as happily against "emit once, ever",
+# which is the elimination this rejects.
+printf '%s' "$(( $(date +%s) - 7200 ))" > "$A6_STAMP"
+a6_fire
+A6_AFTER_ROWS=$(grep -c 'url_present=no' "$A6_LOG" || true)
+assert "A6/CF-9 an aged stamp RE-EMITS (rate-limited, not transition-only/once-per-boot)" \
+  "[[ '$A6_AFTER_ROWS' -eq 2 ]]"
+# The window is an hour, not an arbitrary number: pin it so a later edit to 24h (which would
+# pass both behavioural legs above) has to justify itself.
+assert "A6 the dark-arm window is 3600s (hourly)" \
+  "grep -qE '^[[:space:]]*_interval=\\\$\\{INNGEST_HEARTBEAT_DARK_INTERVAL:-3600\\}$' '$PING_BODY'"
+# ...but that grep pins the ASSIGNMENT LINE, and nothing in it reaches the `-ge "$_interval"`
+# comparison the dark arm actually runs. Measured: mutating that comparison to a literal
+# `-ge 60` restores the full ~1,440 rows/day bug and still passes 138/138 here, because every
+# leg above uses inputs (0s and 7200s) that fall on the same side of both windows.
+#
+# Half a window is the discriminating input: 1800s is >= 60 but < 3600, so a too-small window
+# re-emits and the real one stays silent. Deterministic — the stamp is computed relative to
+# now, so there is no sleep and no wall-clock coupling.
+printf '%s' "$(( $(date +%s) - 1800 ))" > "$A6_STAMP"
+a6_fire
+assert "A6/CF-9 a half-window-old stamp does NOT re-emit (the CONSUMED window is >=3600, not 60s)" \
+  "[[ \$(grep -c 'url_present=no' '$A6_LOG') -eq 2 ]]"
+
+# The override seam: dark_arm_emit_due declares INNGEST_HEARTBEAT_DARK_INTERVAL, and the test
+# harness above names it in a comment, but no leg ever DRIVES it — so a comparison against a
+# hardcoded 3600 would satisfy everything so far. Explicit helper rather than a
+# `VAR=v a6_fire` prefix: bash leaves assignments that prefix a FUNCTION call set in the shell
+# afterwards, which would silently re-window every later leg.
+a6_fire_with_interval() {
+  PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$A6_LOG" INNGEST_HEARTBEAT_URL="" \
+    INNGEST_HEARTBEAT_DARK_STAMP="$A6_STAMP" INNGEST_HEARTBEAT_DARK_INTERVAL="$1" \
+    sh "$DEDICATED_PING" >/dev/null 2>&1
+}
+# One stamp age, two windows, two outcomes -- that pair is what proves the env var is READ
+# rather than decorative. 3s is inside the default window and outside a 2s one.
+printf '%s' "$(( $(date +%s) - 3 ))" > "$A6_STAMP"
+a6_fire
+assert "A6 a 3s-old stamp does NOT re-emit under the DEFAULT window" \
+  "[[ \$(grep -c 'url_present=no' '$A6_LOG') -eq 2 ]]"
+a6_fire_with_interval 2
+assert "A6 the SAME 3s-old stamp DOES re-emit under INNGEST_HEARTBEAT_DARK_INTERVAL=2 (override seam is consumed)" \
+  "[[ \$(grep -c 'url_present=no' '$A6_LOG') -eq 3 ]]"
+# P3-3: the function's comment claims it FAILS OPEN. That held for read/write failure but NOT
+# for a FUTURE-DATED stamp, which is neither. Boot before NTP writes `now+skew`; timesyncd
+# steps the clock BACK; `_now - _last` goes NEGATIVE, never reaches the interval, and the
+# marker is suppressed for the whole skew — on a host whose liveness signal IS this marker, a
+# routine clock correction would read as a dead pusher. 2h ahead is a realistic pre-NTP skew.
+printf '%s' "$(( $(date +%s) + 7200 ))" > "$A6_STAMP"
+a6_fire
+assert "A6/P3-3 a FUTURE-dated stamp (boot-before-NTP, clock stepped back) still emits — fails OPEN" \
+  "[[ \$(grep -c 'url_present=no' '$A6_LOG') -eq 4 ]]"
+# ...and the recovery write must leave a SANE stamp behind, or the next fire re-enters the
+# same suppressed state and the fix only papers over one cycle.
+assert "A6/P3-3 the recovering fire overwrites the future stamp with a non-future value" \
+  "[[ \$(cat '$A6_STAMP') -le \$(date +%s) ]]"
+# The stamp lives in a systemd-managed RuntimeDirectory: the unit runs User=deploy, and /run
+# itself is root-owned 0755, so without this the write fails every fire, the rate limit
+# silently never engages, and the quota fix is a no-op that tests-in-CI cannot see (the test
+# above supplies its own writable dir). RuntimeDirectoryPreserve=yes is equally load-bearing:
+# this is a ONESHOT, so systemd would otherwise delete the directory -- and the stamp -- the
+# instant it exits, on every single fire.
+assert "A6 heartbeat unit declares RuntimeDirectory=inngest-heartbeat (deploy cannot write bare /run)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^RuntimeDirectory=inngest-heartbeat$'"
+assert "A6 heartbeat unit declares RuntimeDirectoryPreserve=yes (a oneshot would else drop the stamp each fire)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^RuntimeDirectoryPreserve=yes$'"
+
+# --- #6617b task 1.6.2: this change provisions NO heartbeat URL ---
+# Writing the URL early would put TWO pushers on one monitor -- the co-located web host (live
+# today) and the dedicated host -- which is precisely the dual-pusher state #6552 exists to
+# prevent. Provisioning it is `op=arm`'s job at cutover (G4), and nothing before it.
+# Anchored on ASSIGNMENT constructs, not the bare name: this repo is full of prose and
+# `name = "INNGEST_HEARTBEAT_URL"` definitions that a token grep would match.
+assert "1.6.2 no INNGEST_HEARTBEAT_URL is assigned a literal URL anywhere in infra/" \
+  "! grep -rIE '^[^#]*INNGEST_HEARTBEAT_URL[[:space:]]*=[[:space:]]*\"?https?://' '$SCRIPT_DIR'"
+# `--exclude=*.test.sh`: zot-liveness-heartbeat.test.sh carries a SYNTHETIC
+# `.../heartbeat/synthetic-liveness` fixture (cq-test-fixtures-synthesized-only). Excluding
+# the suites keeps this assertion pointed at DELIVERED artifacts -- cloud-init, units,
+# bootstrap, HCL -- which is where a baked URL would actually arm a second pusher.
+assert "1.6.2 no Better Stack heartbeat URL literal is baked into a delivered infra artifact" \
+  "! grep -rIE --exclude='*.test.sh' 'uptime\\.betterstack\\.com/api/v[0-9]+/heartbeat/[A-Za-z0-9]' '$SCRIPT_DIR'"
+
 # AC5b case 3 -- web render, URL absent: NO dark arm, so the absent URL reaches curl and
 # exits 2, loudly. This is what makes CPO P1-1 STRUCTURALLY unreachable rather than gated:
 # the live co-located pusher's script has no exit-0 branch to reach at all.
@@ -393,6 +505,208 @@ assert "AC3 non-vacuity: the harness observes a leaked canary when one IS emitte
 # the RENDERED scripts (not the heredoc body) so it also covers the sed replacement's text.
 assert "AC3 secondary: no logger/echo/printf line references the URL value (both renders)" \
   "! grep -qE '^[[:space:]]*(logger|echo|printf)[[:space:]].*INNGEST_HEARTBEAT_URL' '$DEDICATED_PING' '$WEB_PING'"
+
+# --- #6617a (A4): the inngest-server POSITIVE liveness probe -------------------------
+# The probe ships three artifacts (script, .service, .timer) plus an `enable --now`, and had
+# exactly two string assertions against it (both in journald-config.test.sh, both about the
+# SyslogIdentifier tag). Measured: deleting the whole timer heredoc AND the enable line AND
+# gutting the script body still passed both. That is a positive control with no coverage —
+# the same class of hole this probe exists to close.
+#
+# Behavioural where it can be (the script is executed against stubs, mirroring the heartbeat
+# harness above), structural where it must be (unit/timer/enable are systemd's contract).
+echo ""
+echo "--- #6617a (A4): inngest-server liveness probe (script + unit + timer + enable) ---"
+
+PROBE_BODY="$PING_TMP/probe-body.sh"
+# shellcheck disable=SC2016
+awk '/^cat > "\$PROBE_SCRIPT" <</{f=1;next} /^PROBESCRIPTEOF$/{f=0} f' "$BOOTSTRAP_SH" > "$PROBE_BODY"
+PROBE_UNIT_BLOCK="$(awk '/^cat > "\$PROBE_UNIT" <</{f=1;next} /^PROBEUNITEOF$/{f=0} f' "$BOOTSTRAP_SH")"
+PROBE_TIMER_BLOCK="$(awk '/^cat > "\$PROBE_TIMER" <</{f=1;next} /^PROBETIMEREOF$/{f=0} f' "$BOOTSTRAP_SH")"
+
+assert "A4 probe script heredoc body extracted (non-empty)" \
+  "[[ -s '$PROBE_BODY' ]]"
+assert "A4 probe UNIT block extracted from the bootstrap (non-empty)" \
+  "[[ -n \"\$PROBE_UNIT_BLOCK\" ]]"
+assert "A4 probe TIMER block extracted from the bootstrap (non-empty)" \
+  "[[ -n \"\$PROBE_TIMER_BLOCK\" ]]"
+
+# Oneshot, not simple: a `simple` probe would be considered "running" forever and
+# OnUnitActiveSec would never re-arm, silently reducing the hourly probe to one fire per boot.
+assert "A4 probe unit is Type=oneshot (a 'simple' unit never re-arms OnUnitActiveSec)" \
+  "grep -qE '^Type=oneshot$' <<<\"\$PROBE_UNIT_BLOCK\""
+assert "A4 probe unit ExecStart points at the probe script" \
+  "grep -qE '^ExecStart=/usr/local/bin/inngest-server-probe\.sh$' <<<\"\$PROBE_UNIT_BLOCK\""
+
+# HOURLY is load-bearing in BOTH directions: Source 4 applies no PRIORITY filter, so a 60s
+# cadence would cost ~1,440 rows/day against a ~25k/day quota (the exact cost #6617b is
+# removing from the heartbeat in this same change), while a daily cadence would make the
+# positive control too coarse to catch a replace that failed to bind :8288.
+assert "A4 probe timer re-arms HOURLY (OnUnitActiveSec=1h)" \
+  "grep -qE '^OnUnitActiveSec=1h$' <<<\"\$PROBE_TIMER_BLOCK\""
+# Reboot survival for a MONOTONIC timer is OnBootSec=, not Persistent=. systemd honours
+# Persistent= only for OnCalendar= timers — inngest-bootstrap.sh says so itself about the
+# heartbeat timer ("a no-op for a monotonic timer"), so asserting it here would have forced a
+# directive systemd ignores into the unit and read as coverage while buying nothing.
+# OnBootSec is also the stronger property for this probe: the highest-value fire is the one
+# right after a replace.
+assert "A4 probe timer fires shortly after every boot (OnBootSec — the monotonic reboot-survival seam)" \
+  "grep -qE '^OnBootSec=[0-9]+s?$' <<<\"\$PROBE_TIMER_BLOCK\""
+assert "A4 probe timer installs into timers.target (else enable --now is a no-op)" \
+  "grep -qE '^WantedBy=timers\.target$' <<<\"\$PROBE_TIMER_BLOCK\""
+# A timer that is written but never enabled ships zero rows — indistinguishable from a dead
+# host, which is #6617 itself.
+assert "A4 bootstrap actually enables the timer (systemctl enable --now inngest-server-probe.timer)" \
+  "grep -qE '^systemctl enable --now inngest-server-probe\.timer$' '$BOOTSTRAP_SH'"
+
+# LOG_TAG must be a REAL assignment and the logger call must go through it — same
+# drift-fixture contract the heartbeat script is held to above (vector-pii-scrub.test.sh
+# derives EXPECTED_TAGS from `LOG_TAG="..."` across infra/*.sh and is heredoc-blind).
+# The probe's health URL is a FLEET contract, not a free choice. #6617's review flagged
+# /health as an "unverified route" that appears nowhere else and asked for a switch to the
+# bare root. That premise is false, and acting on it would have made this probe the only
+# :8288 consumer on a different path and desynced it from #6407's watchdog semantics.
+# /health is verified against the running router by production evidence:
+#   - ci-deploy.sh gates the quiesce probe on `curl -sf http://127.0.0.1:8288/health`; -f
+#     FAILS on 404 and a SERVED /health is its "STILL RUNNING" signal, so a 404 route would
+#     have wedged the deploy path long ago;
+#   - inngest-inventory.sh defaults INNGEST_HEALTH_URL to the same loopback path;
+#   - #6407's soak gate calls a `mode=down health_code=200` row a CONTRADICTION, i.e.
+#     health_code=200 is routinely observed in prod.
+# Pinned on BOTH sides so drift in either direction fails CI rather than silently hardcoding
+# http_code to 404 — the unit's own comment calls http_code "the single most diagnostic value
+# here", and a permanently-404 positive control is a muted alert, the exact outcome #6617
+# exists to prevent.
+assert "A4 probe curls the fleet-standard loopback /health route" \
+  "grep -qF 'http://127.0.0.1:8288/health' '$PROBE_BODY'"
+assert "A4 ci-deploy.sh gates on the SAME loopback /health route (probe is not a lone snowflake)" \
+  "grep -qF 'curl -sf --max-time 5 http://127.0.0.1:8288/health' '$SCRIPT_DIR/ci-deploy.sh'"
+assert "A4 inngest-inventory.sh defaults INNGEST_HEALTH_URL to the same loopback /health route" \
+  "grep -qF 'INNGEST_HEALTH_URL:-http://127.0.0.1:8288/health' '$SCRIPT_DIR/inngest-inventory.sh'"
+
+assert "A4 probe script assigns LOG_TAG=\"inngest-server-probe\" (drift-fixture contract)" \
+  "grep -qE '^LOG_TAG=\"inngest-server-probe\"$' '$PROBE_BODY'"
+assert "A4 probe script never inlines the tag literal in a logger call (drift-fixture contract)" \
+  "! grep -qE '^[[:space:]]*logger[[:space:]]+-t[[:space:]]+[a-z]' '$PROBE_BODY'"
+
+# --- behavioural: execute the probe against stubs ---
+# `curl` and `systemctl` are stubbed (the script calls both unqualified, unlike the
+# heartbeat's absolute /usr/bin/curl) so the leg is hermetic: no network, no host services.
+PROBE_BIN="$PING_TMP/probe-bin"
+mkdir -p "$PROBE_BIN"
+cp "$PING_TMP/bin/logger" "$PROBE_BIN/logger"
+# Exit 7 + empty stdout = "could not connect", the realistic failure the probe must survive.
+cat > "$PROBE_BIN/curl" <<'CURLEOF'
+#!/bin/sh
+exit 7
+CURLEOF
+cat > "$PROBE_BIN/systemctl" <<'SYSTEMCTLEOF'
+#!/bin/sh
+echo active
+SYSTEMCTLEOF
+chmod +x "$PROBE_BIN/curl" "$PROBE_BIN/systemctl"
+
+PROBE_LOG="$PING_TMP/logger-probe.txt"
+: > "$PROBE_LOG"
+PATH="$PROBE_BIN:$PATH" LOGGER_OUT="$PROBE_LOG" sh "$PROBE_BODY" >/dev/null 2>&1 \
+  && PROBE_RC=0 || PROBE_RC=$?
+
+assert "A4 probe script is POSIX-clean under sh -n" \
+  "sh -n '$PROBE_BODY'"
+assert "A4 probe exits 0 even when curl cannot connect (observability, never a gate)" \
+  "[[ '$PROBE_RC' -eq 0 ]]"
+# The whole point of the unit: exactly ONE marker row per fire, unconditionally.
+assert "A4 probe emits exactly one SOLEUR_INNGEST_SERVER_PROBE marker per fire" \
+  "[[ \$(grep -c 'SOLEUR_INNGEST_SERVER_PROBE' '$PROBE_LOG') -eq 1 ]]"
+# The stub records logger's full argv, so this pins the RESOLVED tag: `-t <tag>` proves
+# "$LOG_TAG" expanded to the value vector.toml's Source 4 allowlist matches on. A tag that
+# drifts from that allowlist is a silent no-op — the marker never leaves the host (#6536).
+assert "A4 probe emits the marker under the resolved inngest-server-probe tag (logger -t \"\$LOG_TAG\")" \
+  "grep -qE '^-t inngest-server-probe SOLEUR_INNGEST_SERVER_PROBE ' '$PROBE_LOG'"
+# A degraded capture must degrade a FIELD, never the event: curl exited 7 with no stdout, and
+# http_code — the unit's own comment calls it "the single most diagnostic value here" — must
+# still be a VALUE (000), not an empty field that reads as missing data.
+assert "A4 a failed curl degrades http_code to the literal 000, not to an empty field" \
+  "grep -qE 'http_code=000( |\$)' '$PROBE_LOG'"
+# Every field present and non-empty. An empty field silently reads as "no data" in Better
+# Stack, which is the same ambiguity a missing row creates.
+for _f in server_active vector_active redis_active uptime_s boot_id image_ref; do
+  assert "A4 probe marker carries a non-empty $_f= field" \
+    "grep -qE '$_f=[^ ]+' '$PROBE_LOG'"
+done
+# The field is named for what it CONTAINS. cloud-init-inngest.yml writes
+# INNGEST_BOOTSTRAP_IMAGE=$IREF, and $IREF is the FULL ref (registry/repo:tag@sha256:...), not
+# a bare digest. Under the old `image_sha=` name a Better Stack consumer keying on
+# `image_sha=sha256:` matched nothing, forever — a silent gap of exactly the class this probe
+# exists to close. Both sides pinned so a rename on either drifts loudly.
+assert "A4 the image field is named image_ref (it carries a full ref, not a bare sha)" \
+  "grep -qE 'image_ref=' '$PROBE_LOG' && ! grep -qE 'image_sha=' '$PROBE_LOG'"
+assert "A4 cloud-init writes INNGEST_BOOTSTRAP_IMAGE from the full \$IREF (what image_ref reports)" \
+  "grep -qF \"printf 'INNGEST_BOOTSTRAP_IMAGE=%s\\\\n' \\\"\\\$IREF\\\"\" '$SCRIPT_DIR/cloud-init-inngest.yml'"
+
+# --- P2-B: vector_active is unobservable through the channel it describes ---
+# This marker reaches Better Stack via journald -> Vector Source 4. So vector_active is the ONE
+# field whose only off-box path is Vector ITSELF: precisely when it carries information
+# (Vector down), the row cannot ship, and the result is indistinguishable from a dead host —
+# the #6536 ambiguity. The non-active branch must therefore ALSO fire the direct-curl
+# phone-home, which bypasses Vector entirely.
+#
+# The probe calls the emitter by ABSOLUTE path, so the leg runs a copy with that path rewritten
+# to a stub. Rewriting (not stubbing PATH) is what keeps the assertion honest: it proves the
+# script invokes THAT path, not merely some command named phone-home.
+PROBE_PH_LOG="$PING_TMP/probe-phonehome.txt"
+: > "$PROBE_PH_LOG"
+cat > "$PROBE_BIN/phone-home-stub.sh" <<PHSTUBEOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$PROBE_PH_LOG"
+exit 0
+PHSTUBEOF
+chmod +x "$PROBE_BIN/phone-home-stub.sh"
+PROBE_PH_BODY="$PING_TMP/probe-body-phonehome.sh"
+sed "s#/usr/local/bin/inngest-boot-phone-home.sh#$PROBE_BIN/phone-home-stub.sh#g" \
+  "$PROBE_BODY" > "$PROBE_PH_BODY"
+
+# Vector DOWN: systemctl reports inactive for vector.service, active for everything else.
+cat > "$PROBE_BIN/systemctl" <<'SYSDOWNEOF'
+#!/bin/sh
+case "$*" in *vector.service*) echo inactive ;; *) echo active ;; esac
+SYSDOWNEOF
+chmod +x "$PROBE_BIN/systemctl"
+PROBE_DOWN_LOG="$PING_TMP/logger-probe-vector-down.txt"
+: > "$PROBE_DOWN_LOG"
+PATH="$PROBE_BIN:$PATH" LOGGER_OUT="$PROBE_DOWN_LOG" sh "$PROBE_PH_BODY" >/dev/null 2>&1 \
+  && PROBE_DOWN_RC=0 || PROBE_DOWN_RC=$?
+
+assert "P2-B probe still exits 0 with Vector down (second channel is never a gate)" \
+  "[[ '$PROBE_DOWN_RC' -eq 0 ]]"
+# ADR-117: the unconditional journald emit happens REGARDLESS. The new `if` sits after it and
+# adds a channel; it must not have become a branch that replaces the emit.
+assert "P2-B the unconditional journald emit STILL fires with Vector down (ADR-117 intact)" \
+  "[[ \$(grep -c 'SOLEUR_INNGEST_SERVER_PROBE' '$PROBE_DOWN_LOG') -eq 1 ]]"
+assert "P2-B vector_active=inactive ALSO reaches the Vector-independent phone-home channel" \
+  "[[ -s '$PROBE_PH_LOG' ]] && grep -qF 'vector_active=inactive' '$PROBE_PH_LOG'"
+# Same fields on both channels — an off-box consumer reading only the phone-home row must be
+# able to make the same call as one reading the journald row.
+for _f in http_code server_active redis_active uptime_s boot_id image_ref; do
+  assert "P2-B the phone-home payload carries the same $_f= field as the journald marker" \
+    "grep -qE '$_f=[^ ]+' '$PROBE_PH_LOG'"
+done
+
+# Vector UP: the second channel must stay silent, or the steady-state row cost is not zero and
+# this fix re-creates the quota problem #6617b is removing.
+cat > "$PROBE_BIN/systemctl" <<'SYSUPEOF'
+#!/bin/sh
+echo active
+SYSUPEOF
+chmod +x "$PROBE_BIN/systemctl"
+: > "$PROBE_PH_LOG"
+PATH="$PROBE_BIN:$PATH" LOGGER_OUT="$PING_TMP/logger-probe-vector-up.txt" \
+  sh "$PROBE_PH_BODY" >/dev/null 2>&1
+assert "P2-B a HEALTHY vector fires NO phone-home (second channel costs zero in steady state)" \
+  "[[ ! -s '$PROBE_PH_LOG' ]]"
+# The guard that keeps this fail-open on the co-located web host, where the emitter is absent.
+assert "P2-B the phone-home call is guarded by [ -x ] (absent emitter must not fail the probe)" \
+  "grep -qF '[ -x /usr/local/bin/inngest-boot-phone-home.sh ]' '$PROBE_BODY'"
 
 # --- Inngest-SERVER unit ExecStart: poll-interval + sdk-url (#4652) ---
 echo ""

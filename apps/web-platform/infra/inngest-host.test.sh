@@ -197,6 +197,42 @@ grep -qE 'exits? 2' "$HOST_TF" \
   && grep -qF 'inngest-bootstrap.sh' "$HOST_TF" \
   && pass || fail "inngest-host.tf must state the measured rc=2 truth, cite #6536, and name where the skip is implemented"
 
+# 11. (plan CF-2) The bootstrap pull must be VERIFIED-BY-CONSTRUCTION, and the file must not
+#     claim a verification it does not perform. Same shape as item 10 above, one file over:
+#     `grep -n cosign cloud-init-inngest.yml` returned exactly ONE hit and it was a comment
+#     asserting the cold-boot pull was cosign-verified. It never was. The real path is
+#     IREF -> docker pull -> docker create/cp -> `bash inngest-bootstrap.sh` AS ROOT, with no
+#     signature check anywhere; build-inngest-bootstrap-image.yml says outright that this
+#     image is not signed. The claim survived long enough that the PLAN for this change
+#     inherited it from the comment and restated it as an acceptance criterion — which is the
+#     whole reason a false comment is treated here as a defect and not as untidiness.
+#
+#     Two assertions, because either alone is defeatable:
+#       (a) no cosign VERIFICATION may be claimed unless one is actually executed. Stated as
+#           an implication rather than a flat absence, so the day someone ships a real
+#           `cosign verify` the guard permits the prose that describes it.
+#       (b) the pull is digest-pinned. This is the substantive control the false comment stood
+#           in for: `@sha256:` names immutable bytes, so a mutable tag cannot be re-pointed at
+#           a different root-executed payload between the build and a host replace.
+if grep -qE 'cosign[- ]verif' "$CLOUD_INIT" && ! grep -qE '^[[:space:]]*cosign verify[[:space:]]' "$CLOUD_INIT"; then
+  fail "cloud-init-inngest.yml claims a cosign verification but executes none (CF-2 — the claim was false for months)"
+else
+  pass
+fi
+# Record-correction, not silent deletion (mirrors item 10's second leg): the corrected prose
+# must name the absence, cite its issue, and name what replaced it.
+grep -qE 'NO SIGNATURE VERIFICATION ON THIS PATH' "$CLOUD_INIT" \
+  && grep -qF 'CF-2' "$CLOUD_INIT" \
+  && grep -qE 'DIGEST PIN' "$CLOUD_INIT" \
+  && pass || fail "cloud-init-inngest.yml must state that no signature verification exists, cite CF-2, and name the digest pin that replaces it"
+# Anchored on the ASSIGNMENT construct, not a bare `@sha256:` token — the comments above it
+# discuss the digest pin in prose, and a token grep would pass on that prose alone with the
+# assignment still on a mutable tag. The tag is retained ahead of the digest deliberately: it
+# keeps the `soleur-inngest-bootstrap:vX.Y.Z` pin-drift guard in
+# cloud-init-inngest-bootstrap.test.sh armed, and docker resolves by the digest regardless.
+grep -qE '^[[:space:]]*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$' "$CLOUD_INIT" \
+  && pass || fail "IREF must be digest-pinned (repo:vX.Y.Z@sha256:<64-hex>) — CF-2: a mutable tag gates a root-executed payload on nothing but GHCR TLS"
+
 echo ""
 echo "=== inngest-host.test.sh: ${passes} passed, ${fails} failed ==="
 [ "$fails" -eq 0 ] || exit 1
