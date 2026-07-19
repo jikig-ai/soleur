@@ -16,9 +16,15 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 CONFIG="$REPO_ROOT/.gitleaks.toml"
 
+# T8/T9/T10 are pure CONFIG-TEXT assertions — they need no binary, so they run
+# unconditionally. Only the fixture-driven rows (T1-T7) require gitleaks. A
+# blanket `exit 0` here used to skip the arity/anchor guards too, which meant an
+# allowlist widening could land un-guarded on any runner lacking the binary.
+HAVE_GITLEAKS=1
 if ! command -v gitleaks >/dev/null 2>&1; then
-  echo "SKIP: gitleaks not installed (CI secret-scan job runs the pinned binary)"
-  exit 0
+  HAVE_GITLEAKS=0
+  echo "NOTE: gitleaks not installed — fixture rows (T1-T7) skipped;"
+  echo "      config-text guards (T8/T9/T10) still run."
 fi
 
 PASS=0
@@ -58,6 +64,10 @@ DC_TOKEN="SYNTH$(printf 'aBc9%.0s' {1..14})xyz"
 PG="postgres"
 PGQL="${PG}ql://"
 PG="${PG}://"
+# The REAL password tail in a multi-@ DSN (#6723): everything after the first
+# '@' up to the host. Split for the same reason as the literals above.
+SEC_TAIL="Xq7vNp2"
+SEC_TAIL="${SEC_TAIL}LmWd4"
 
 # scan_rules <fixture-line> -> newline-separated RuleIDs that fired
 scan_rules() {
@@ -71,6 +81,8 @@ scan_rules() {
 
 echo "=== gitleaks custom-rule fixture tests ==="
 echo ""
+
+if [[ "$HAVE_GITLEAKS" == "1" ]]; then
 
 echo "T1: canonical /services/ Slack webhook fires BOTH rules (no default shadowing)"
 rules=$(scan_rules "${SLACK_BASE}/services/T0000FAKE/B0000FAKE/${FAKE_TOKEN}")
@@ -160,6 +172,69 @@ for row in \
   fi
 done
 
+echo "T7b: multi-@ credentials fire (#6723 — the bypass this rule change closes)"
+# Every real URL parser takes userinfo to the LAST '@'. The old rule's password
+# class stopped at the FIRST '@', and the allowlist entry was an unanchored
+# SEARCH against that truncated match — so a real password containing '@' put a
+# placeholder prefix (`user:password@`) at the start of the match and silenced
+# the whole finding. Measured: all four were silenced before this change.
+#
+#   <scheme>://user:password@<REAL>@db.prod.example.com
+#                ^^^^^^^^^^^^ allowlist matched this substring
+#                             ^^^^^^ ...while THIS was the actual password
+#
+# The scheme is written `<scheme>` rather than spelled out: the rule is
+# keyword-gated on the literal `postgres://`, so a spelled-out example here
+# would make this very comment a finding under the widened rule — the trap
+# this PR exists to close, re-entering through the file that documents it.
+for row in \
+  "multi-at-password|${PG}user:password@${SEC_TAIL}@db.prod.example.com/appdb" \
+  "multi-at-user|${PG}<anything>:password@${SEC_TAIL}@db.prod.example.com" \
+  "multi-at-secret|${PG}user:secret@${SEC_TAIL}@db.example.com" \
+  "multi-at-redacted|${PG}user:***@${SEC_TAIL}@db.example.com" \
+  ; do
+  label="${row%%|*}"
+  fixture="${row#*|}"
+  rules=$(scan_rules "$fixture")
+  if grep -qx 'database-url-with-password' <<<"$rules"; then
+    pass "multi-@ credential fires (${label})"
+  else
+    fail "multi-@ credential MUST fire (${label}) — #6723 bypass is open"
+  fi
+done
+
+echo "T7c: bracket-userinfo credentials fire (regression net for the widened class)"
+# These are the reason this PR does NOT ship the fix proposed in #6723's body.
+# Widening the password class to `[^/\s]+` lets '@' and ':' live inside the
+# password. The issue's candidate kept an `<[^>]+>` placeholder branch, which
+# ALSO permits '@' and ':' — so an entire real credential fits inside what the
+# allowlist certifies as "a placeholder":
+#
+#   <scheme>://user:<admin:R3alPassw0rd@prod.db.internal>@x.com
+#                   ^-------- allowlisted as a "placeholder" --------^
+#
+# Measured: all three are DETECTED today and SILENCED by the issue's candidate —
+# it would have made the gate strictly worse for them, the same defect class that
+# got the earlier widening reverted, re-entering through a different branch.
+# The shipped form hardens both branches to `<[^>@:]+>`. These rows are the
+# guard: they go RED against the unhardened candidate.
+for row in \
+  "bracket-userinfo-colon|${PG}user:<admin:${REALPW}@prod.db.internal>@x.com" \
+  "bracket-userinfo-plain|${PG}user:<${REALPW}@prod-db.internal.corp>@localhost" \
+  "bracket-userinfo-port|${PG}user:<admin:${REALPW}@prod.db.internal>@x.com:5432/appdb" \
+  ; do
+  label="${row%%|*}"
+  fixture="${row#*|}"
+  rules=$(scan_rules "$fixture")
+  if grep -qx 'database-url-with-password' <<<"$rules"; then
+    pass "bracket-userinfo credential fires (${label})"
+  else
+    fail "bracket-userinfo credential MUST fire (${label}) — allowlist bracket branch permits @ or :"
+  fi
+done
+
+fi  # HAVE_GITLEAKS
+
 echo "T8: the placeholder allowlist stays a SINGLE entry"
 # Arity guard. Every behavioural row above tests the SHAPE of one regex; none can
 # see a SECOND array element being appended. That is the cheapest real escape:
@@ -176,6 +251,64 @@ if [[ "$regexes_count" == "1" && "$quote_runs" == "2" ]]; then
   pass "database-url-with-password carries exactly one regexes entry"
 else
   fail "expected 1 regexes line holding 1 entry; got lines=${regexes_count} quote_runs=${quote_runs} (2 == one entry)"
+fi
+
+echo "T9: the placeholder allowlist entry stays FULLY ANCHORED and @/:-free"
+# Behavioural rows cannot see the anchors being dropped while the sampled rows
+# coincidentally survive. Allowlist `regexes` match the SECRET (the whole rule
+# match, there being no secretGroup), so an unanchored entry is a SEARCH: a
+# placeholder prefix anywhere inside a real credential silences it — precisely
+# the #6723 bypass. Both anchors are load-bearing; removing either must go RED.
+#
+# The bracket branches must also exclude '@' and ':'. With the widened password
+# class those characters are legal inside the password, so a bare `<[^>]+>`
+# lets a whole credential masquerade as a placeholder (see T7c). Guarding the
+# anchors alone would not catch that.
+# Scope every assertion below to the `regexes` LINE, never the whole rule block.
+# The block also holds the `paths` line, whose last entry ends `...\.md$'''` — so
+# a block-scoped end-anchor check matches THAT and passes even when the regexes
+# entry is unanchored. (Observed: this exact false pass, on the first run of this
+# guard. A guard that matches a sibling line is the defect this PR exists to fix.)
+if grep -qE "^  regexes = \['''\^postgres" <<<"$regexes_line"; then
+  pass "allowlist entry is start-anchored (^)"
+else
+  fail "allowlist entry MUST start with ^ — unanchored, a placeholder prefix inside a real credential silences it (#6723)"
+fi
+if grep -qE "\\\$'''\]$" <<<"$regexes_line"; then
+  pass "allowlist entry is end-anchored (\$)"
+else
+  fail "allowlist entry MUST end with \$ — without it the entry matches a prefix of a longer credential"
+fi
+bracket_unsafe=$(grep -c '<\[^>\]+>' <<<"$regexes_line" || true)
+if [[ "$bracket_unsafe" == "0" ]]; then
+  pass "no bare <[^>]+> branch (brackets exclude @ and :)"
+else
+  fail "found $bracket_unsafe bare <[^>]+> branch(es) — with the widened password class a whole credential fits inside the brackets (T7c)"
+fi
+
+echo "T10: the database-url-with-password PATHS allowlist stays pinned"
+# Nothing guarded `paths` before this. T6-T9 are all fixture- or regex-shaped,
+# and scan_rules writes every fixture to `fixture.txt`, where no realistic path
+# entry can ever match — so appending e.g. '''plugins/soleur/.*\.md$''' would
+# blind an entire subtree to this rule while every other row stayed green.
+# Pinned to the shipped count; widening it is a deliberate, visible edit.
+EXPECTED_PATHS=13
+paths_line=$(grep '^  paths = ' <<<"$db_block" || true)
+paths_count=$(grep -o "'''" <<<"$paths_line" | wc -l | tr -d ' ')
+paths_entries=$((paths_count / 2))
+if [[ "$paths_entries" == "$EXPECTED_PATHS" ]]; then
+  pass "paths allowlist holds exactly $EXPECTED_PATHS entries"
+else
+  fail "paths allowlist entry count changed: expected $EXPECTED_PATHS, got $paths_entries — widening this blinds whole subtrees to the DSN rule; update EXPECTED_PATHS deliberately"
+fi
+# The review-skill carve-out is the one path entry added for #6723. Its leading
+# ^ is load-bearing: gitleaks matches path entries as a SEARCH against the
+# scan-root-relative path, so unanchored, ANY parent directory launders a real
+# DSN (measured: evil/plugins/soleur/skills/review/SKILL.md silenced).
+if grep -qF "'''^plugins/soleur/skills/review/SKILL\\.md\$'''" <<<"$paths_line"; then
+  pass "review-skill path carve-out is anchored ^...\$"
+else
+  fail "review-skill path carve-out must be anchored '^plugins/soleur/skills/review/SKILL\\.md\$' — unanchored, any parent dir launders a real DSN"
 fi
 
 echo ""
