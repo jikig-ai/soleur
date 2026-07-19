@@ -498,6 +498,14 @@ export async function cronCommunityMonitorHandler({
     // class). spawnResult is hoisted so the silence-hole audit issue can read it
     // even when a later step threw.
     let heartbeatOk = false;
+    // #6695 — paging and persistence are separate decisions. A collector
+    // failure must turn the monitor RED, but must NOT discard the digest that
+    // honestly reports it: heartbeatOk also gates safe-commit-pr below, and an
+    // operator with a red monitor and no digest has strictly less to act on.
+    // So the collector gate raises this flag and it is applied to heartbeatOk
+    // AFTER the persistence step, leaving the cohort-wide issue-verified gate
+    // shape (asserted by cron-safe-commit-parity) untouched.
+    let collectorSignalRed = false;
     let threw = false;
     let spawnResult: SpawnResult | null = null;
     try {
@@ -588,7 +596,7 @@ export async function cronCommunityMonitorHandler({
             extra: { fn: "cron-community-monitor", failures: collectorStatus.failed },
           },
         );
-        heartbeatOk = false;
+        collectorSignalRed = true;
       } else if (!collectorStatus.present) {
         // Distinguished from "all collectors succeeded". The sidecar should
         // exist on every healthy run (the github commands are unconditional), so
@@ -638,7 +646,7 @@ export async function cronCommunityMonitorHandler({
             extra: { fn: "cron-community-monitor", failures: collectorStatus.failed },
           },
         );
-        heartbeatOk = false;
+        collectorSignalRed = true;
       }
 
       // --- Step 4.5: deterministic persistence (#5111, pattern from #5091 /
@@ -666,6 +674,9 @@ export async function cronCommunityMonitorHandler({
           }),
         );
       }
+
+      // Applied here, after persistence: the digest is kept, the monitor pages.
+      if (collectorSignalRed) heartbeatOk = false;
     } catch (err) {
       // #5728 G1 — a deploy-in-progress defer is benign (ADR-078/#5686): rethrow
       // bare with NO heartbeat so Inngest retries after the swap. Any OTHER throw

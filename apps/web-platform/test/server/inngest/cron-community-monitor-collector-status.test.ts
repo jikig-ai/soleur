@@ -22,6 +22,7 @@ vi.hoisted(() => {
 });
 
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -104,6 +105,48 @@ describe("readCollectorStatus", () => {
     );
     expect(report.records).toHaveLength(2);
     expect(report.failed).toEqual([]);
+  });
+});
+
+describe("paging must not discard the digest (ordering invariant)", () => {
+  // heartbeatOk gates BOTH the Sentry page and safe-commit-pr. Lowering it
+  // inside the collector gate would page AND throw away the digest that
+  // honestly reports the failure -- leaving the operator strictly less to act
+  // on than before this PR. The flag is therefore applied AFTER persistence.
+  // This is the kind of indirection a later "simplification" removes, so the
+  // ordering is asserted rather than left to a comment.
+  const src = readFileSync(
+    new URL(
+      "../../../server/inngest/functions/cron-community-monitor.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  it("raises a flag in the collector gate rather than lowering heartbeatOk there", () => {
+    const gate = src.slice(
+      src.indexOf("verify-collector-status"),
+      src.indexOf("Step 4.5: deterministic persistence"),
+    );
+    expect(gate.length).toBeGreaterThan(200); // slice anchors resolved
+    expect(gate).toContain("collectorSignalRed = true");
+    expect(gate).not.toContain("heartbeatOk = false");
+  });
+
+  it("applies the flag to heartbeatOk only AFTER the safeCommitAndPr block", () => {
+    const persist = src.indexOf("safeCommitAndPr({");
+    const apply = src.indexOf("if (collectorSignalRed) heartbeatOk = false;");
+    expect(persist).toBeGreaterThan(-1);
+    expect(apply).toBeGreaterThan(-1);
+    expect(apply).toBeGreaterThan(persist);
+  });
+
+  it("keeps the cohort-wide issue-verified persistence gate shape", () => {
+    // cron-safe-commit-parity asserts this literal across 9 crons; renaming the
+    // variable here to express the new concept would have silently weakened it.
+    expect(src).toMatch(
+      /if \(heartbeatOk && !spawnResult\.abortedByTimeout\) \{[\s\S]{0,800}?safeCommitAndPr\(\{/,
+    );
   });
 });
 
