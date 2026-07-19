@@ -38,7 +38,7 @@ provisioner, no serving-surface offline op).
   (`apps/web-platform/infra/main.tf:49`, App-auth). ✓ (IaC "already required" claim holds.)
 - Reviewer id `54279` = @deruelle — confirmed in the precedent (only in-repo occurrence). ✓
 - `ADR-100` and `ADR-119` both exist under `knowledge-base/engineering/architecture/decisions/`. ✓
-- ADR-119 records the freeze needs operator sign-off (ADR-119:105) but does NOT name
+- ADR-119 records the freeze needs operator sign-off (ADR-119 §(c)) but does NOT name
   the environment mechanism → ADR attribution tightened; no ADR amend needed. ✓
 
 **Precedent diff (inngest_cutover → workspaces_luks_cutover), the ONLY delta:**
@@ -91,6 +91,8 @@ review time.
 
 ## Research Reconciliation — Spec vs. Codebase
 
+<!-- lint-infra-ignore start: PRE-EXISTING prose (unchanged by this PR, which only re-anchored two stale ADR-119 line citations to a section anchor). Retrospective premise-vs-codebase validation table describing the CI-driven apply MECHANISM, not a step a Soleur user performs -->
+
 | Claim (from the task) | Reality (verified) | Plan response |
 |---|---|---|
 | `gh api .../environments/workspaces-luks-cutover` returns 404 | **Confirmed** 404 (2026-07-17) | Provision via Terraform |
@@ -116,6 +118,8 @@ exclusion set). Adding `github_repository_environment.workspaces_luks_cutover` t
 RED (`uncovered = [github_repository_environment.workspaces_luks_cutover]`). This is
 the built-in test-first loop for the change — the precedent env `inngest_cutover` is
 green today only because it is in that allow-list.
+
+<!-- lint-infra-ignore end -->
 
 ## Implementation Phases
 
@@ -203,12 +207,16 @@ one *is* operator-seeded (unchanged by this PR).
   No new secrets; nothing lands in `terraform.tfstate` beyond the environment metadata.
 
 ### Apply path
+
+<!-- lint-infra-ignore start: PRE-EXISTING prose (unchanged by this PR). Describes the CI-driven default-apply path — the line flagged literally reads 'Zero operator ...', i.e. it documents the ABSENCE of a human step -->
 - **(a) cloud-init-only? No. (b) idempotent bootstrap? No. Chosen: default per-merge
   apply.** Merging this PR touches `apps/web-platform/infra/*.tf`, which fires
   `apply-web-platform-infra.yml` on push; the default allow-list block (now including
   the new `-target`) runs `terraform apply` and creates the environment. Zero operator
   steps, zero SSH, zero dashboard. Blast radius: creation of one GitHub environment +
   its reviewer rule; no host, no data path, no downtime.
+
+<!-- lint-infra-ignore end -->
 
 ### Distinctness / drift safeguards
 - No `lifecycle.ignore_changes` (matches `inngest_cutover`) — a reviewer-set change is
@@ -253,7 +261,7 @@ discoverability_test:
 
 **No new ADR; no C4 change.** ADR-119 already records the *decision* that the freeze
 requires **operator sign-off / human authorization** with a bounded window
-(ADR-119:105 — "explicit justification + a bounded window + sign-off"); it does not
+(ADR-119 §(c) — "explicit justification + a bounded window + sign-off"); it does not
 name the *mechanism*. The GitHub `github_repository_environment` required-reviewer gate
 is the **established mechanism precedent** for exactly that sign-off, set by
 `github_repository_environment.inngest_cutover` (`inngest-arm-write-token.tf:70-77`,
