@@ -240,7 +240,23 @@ runcmd:
     fi
 
   # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------
-  # So the cold-boot soleur-inngest-bootstrap OCI pull + cosign-verify authenticates even
+  # CORRECTED (#6617 / plan CF-2): this comment used to assert that the cold-boot OCI pull was
+  # signature-verified. THERE IS NO SIGNATURE VERIFICATION ON THIS PATH, and there never was.
+  # `grep -n cosign` on this file returned exactly one hit — that sentence, which named a
+  # verification step no line of this file performs. Real verification exists only in
+  # ci-deploy.sh (the app-deploy
+  # path) and cloud-init-registry.yml; build-inngest-bootstrap-image.yml states plainly that
+  # this image is "NOT cosign-signed (no id-token perm) — no sign step", so there is no
+  # signature for a verify to check and adding one would gate the sole scheduler's boot on an
+  # artifact that has never been produced.
+  #
+  # The correction is recorded rather than quietly deleted because a false comment is how this
+  # class propagates: the plan for this very change inherited the claim instead of grepping
+  # the path, and restated it as an acceptance criterion. What actually authenticates the pull
+  # is now the DIGEST PIN on IREF below (immutable bytes) plus GHCR's TLS + authn. Signing the
+  # image is a separate change that must land BEFORE any verify step, not with it.
+  #
+  # So the cold-boot soleur-inngest-bootstrap OCI pull authenticates even
   # when Doppler answers empty at the boot instant (else anonymous private pull → 401 →
   # 226/NAMESPACE abort). Same 0600 protection as the token file. Mirrors the web
   # cloud-init's `> /etc/default/soleur-ghcr-read` bake — but the hosts diverge
@@ -345,7 +361,7 @@ runcmd:
   - |
     set -e
     test -f /run/soleur-inngest-doppler.ok || { echo "FATAL: doppler isolation self-check did not pass — refusing to bootstrap inngest" >&2; exit 1; }
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.23
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.24
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     # #6178 boot observability: bracket the OCI pull so a pull hang/401 self-reports the STAGE
     # (pre-oci-pull with no oci-pull-rc-* = hung; oci-pull-rc-N!=0 = failed, with masked tail).
