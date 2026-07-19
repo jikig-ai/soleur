@@ -54,6 +54,23 @@ vi.mock("@/server/inngest/functions/_cron-safe-commit", () => ({
   safeCommitAndPr: (...a: unknown[]) => safeCommitAndPrSpy(...a),
 }));
 
+// #6714 V3 — call-site coverage for the liveness verdict. Every emitter the
+// module exports is listed: a wholesale factory REPLACES the module, so an
+// omitted export would break any real sibling in the SUT's import graph.
+const { digestLivenessMock, digestFileMock } = vi.hoisted(() => ({
+  digestLivenessMock: vi.fn(),
+  digestFileMock: vi.fn(),
+}));
+
+vi.mock("@/server/cron-liveness-marker", () => ({
+  emitCronDigestLiveness: digestLivenessMock,
+  emitCommunityDigestFile: digestFileMock,
+  emitCronPersistResult: vi.fn(),
+  emitCronPersistSkipped: vi.fn(),
+  emitCronTier2Deferred: vi.fn(),
+  emitCronDedupSkip: vi.fn(),
+}));
+
 // Partial mock — keep DeployInProgressError, finalizeOutputAwareHeartbeat,
 // postSentryHeartbeat REAL; stub only the spawn-adjacent deps.
 vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
@@ -361,6 +378,47 @@ describe("cron-community-monitor — digest liveness (#6714)", () => {
 
     expect(res).toEqual({ ok: false });
     expect(heartbeatUrls()[0]).toContain("?status=error");
+  });
+
+  it("emits the liveness VERDICT with the arm that decided it, at its call site", async () => {
+    // V3 — markers 2-5 had zero call-site coverage; only marker 1 was asserted
+    // where it fires. This pins the one that makes a RED run diagnosable: marker
+    // 1 already emitted status:"committed" from inside safeCommitAndPr, so
+    // without a reason an operator cannot tell WHY the monitor reddened.
+    safeCommitAndPrSpy.mockResolvedValue({
+      status: "committed" as const,
+      prNumber: 4242,
+      branch: "cron/community-monitor",
+      fileCount: 1,
+      deletionCount: 0,
+      paths: [`${COMMUNITY_DIGEST_DIR}2026-06-29-digest.md`], // stale
+    });
+    const step = makeStep();
+    await invoke(step, 0, 2);
+
+    expect(digestLivenessMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cron: "cron-community-monitor",
+        ok: 0,
+        reason: "digest-absent-from-commit",
+        attempt: 0,
+      }),
+    );
+  });
+
+  it("the digest-file marker carries the REAL attempt, not a constant", async () => {
+    // The field exists solely to disambiguate replays: the stat runs outside
+    // step.run, so it re-emits on attempt 1 — by which point the `finally` has
+    // deleted the workspace, forcing present:0. Hardcoding attempt:0 would make
+    // a healthy replayed run indistinguishable from an agent that never wrote
+    // the file, which is exactly what this marker is supposed to tell apart.
+    // Asserted on a NON-ZERO attempt, since attempt:0 cannot catch a constant.
+    const step = makeStep();
+    await invoke(step, 1, 2);
+
+    expect(digestFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({ attempt: 1, digest_path: DIGEST_PATH }),
+    );
   });
 
   it("a replay-resume with UNDETERMINED paths stays GREEN (R21 carve-out)", async () => {

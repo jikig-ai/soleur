@@ -93,7 +93,9 @@ import { safeCommitAndPr } from "./_cron-safe-commit";
 import {
   emitCommunityDigestFile,
   emitCronDedupSkip,
+  emitCronDigestLiveness,
   emitCronPersistSkipped,
+  type CronDigestLivenessMarker,
 } from "@/server/cron-liveness-marker";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
@@ -731,6 +733,7 @@ export async function cronCommunityMonitorHandler({
       const { join: joinPath } = await import("node:path");
       emitCommunityDigestFile({
         cron: "cron-community-monitor",
+        attempt: attempt ?? 0,
         digest_path: digestPath,
         present: existsSync(joinPath(spawnCwd!, digestPath)) ? 1 : 0,
       });
@@ -754,6 +757,8 @@ export async function cronCommunityMonitorHandler({
         // only the two arms below can turn the run GREEN; everything else —
         // "no-changes", "failed", committed-without-today's-digest, and every
         // throw that never reaches here — falls through still RED.
+        let livenessReason: CronDigestLivenessMarker["reason"] =
+          "persistence-not-committed";
         if (commitResult.status === "committed") {
           if (commitResult.paths?.includes(digestPath)) {
             // THE POSITIVE: today's digest is demonstrably in the commit.
@@ -761,6 +766,7 @@ export async function cronCommunityMonitorHandler({
             // whole community directory, so the agent may land other files
             // beside the digest and the digest need not be first.
             livenessOk = true;
+            livenessReason = "digest-committed";
           } else if (commitResult.paths === undefined) {
             // NOT DETERMINED (R21), never "nothing committed". But ONLY the
             // replay-resume branch has a legitimate reason to leave it
@@ -769,9 +775,25 @@ export async function cronCommunityMonitorHandler({
             // and voting GREEN on an unknown is exactly the failure this issue
             // is about, so it stays red.
             livenessOk = commitResult.resumed === true;
+            livenessReason = commitResult.resumed
+              ? "undetermined-replay-resume"
+              : "undetermined-contract-drift";
+          } else {
+            // committed something, but not today's digest → stays RED.
+            livenessReason = "digest-absent-from-commit";
           }
-          // else: committed something, but not today's digest → stays RED.
         }
+        // Marker 6 — the VERDICT plus the arm that decided it. Without this the
+        // RED arms are indistinguishable in Better Stack: marker 1 already
+        // emitted `status:"committed"` from inside safeCommitAndPr before this
+        // table ran.
+        emitCronDigestLiveness({
+          cron: "cron-community-monitor",
+          run_id: runId ?? "unknown",
+          attempt: attempt ?? 0,
+          ok: livenessOk ? 1 : 0,
+          reason: livenessReason,
+        });
       } else {
         // #6714 marker 2 — this gate had NO else, so a RED or timed-out run
         // skipped persistence leaving no trace on any operator-reachable
@@ -785,6 +807,13 @@ export async function cronCommunityMonitorHandler({
         // the case this catches is a timed-out run whose issue landed, which was
         // GREEN-with-no-artifact before this line.
         livenessOk = false;
+        emitCronDigestLiveness({
+          cron: "cron-community-monitor",
+          run_id: runId ?? "unknown",
+          attempt: attempt ?? 0,
+          ok: 0,
+          reason: "persistence-skipped",
+        });
       }
     } catch (err) {
       // #5728 G1 — a deploy-in-progress defer is benign (ADR-078/#5686): rethrow

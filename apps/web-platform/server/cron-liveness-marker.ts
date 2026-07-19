@@ -120,6 +120,15 @@ export function emitCronPersistSkipped(m: CronPersistSkippedMarker): void {
 
 export interface CommunityDigestFileMarker {
   cron: string;
+  /**
+   * Inngest attempt index. LOAD-BEARING for this marker specifically: the stat
+   * runs OUTSIDE step.run, so it re-emits on every replay — and by then the
+   * handler's `finally` has deleted the workspace, forcing `present: 0`. Without
+   * this field a healthy run that replayed is indistinguishable from an agent
+   * that never wrote the file, which is the exact discrimination this marker
+   * exists to provide. Consumers should filter to `attempt=0`.
+   */
+  attempt: number;
   /** Repo-relative digest path that was stat'ed. */
   digest_path: string;
   /** 1 when the file exists in the spawn workspace, 0 otherwise. */
@@ -198,6 +207,53 @@ export interface CronDedupSkipMarker {
 export function emitCronDedupSkip(m: CronDedupSkipMarker): void {
   try {
     log.warn({ SOLEUR_CRON_DEDUP_SKIP: true, ...m }, "cron dedup skip");
+  } catch {
+    // fail-open.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Marker 6 — SOLEUR_CRON_DIGEST_LIVENESS
+// ---------------------------------------------------------------------------
+// The VERDICT, and the reason for it. Without this the five markers above make
+// every GREEN-with-no-artifact path enumerable but leave the RED arms
+// undiagnosable: marker 1 emits `status:"committed"` from inside safeCommitAndPr
+// BEFORE the handler's liveness table runs, so an operator seeing
+// `PERSIST_RESULT status=committed` next to a RED monitor cannot tell a drifted
+// result contract from a commit that simply missed today's digest. That is the
+// "RED with an undiagnosable cause" shape this whole module exists to close, so
+// leaving it open would have been the same defect in a new place.
+//
+// `run_id` and `attempt` are the correlation fields the precedent
+// (claude-cost-marker's `id`) carries and the five markers above lack. They
+// matter more here than in the precedent because markers 2/3/5 sit OUTSIDE
+// step.run and therefore RE-EMIT on every Inngest replay — most consequentially
+// marker 3, whose `present` is necessarily 0 on a replay since the `finally`
+// already deleted the workspace. Without `attempt`, a healthy run that replayed
+// looks like an agent that failed to write the file.
+
+export interface CronDigestLivenessMarker {
+  cron: string;
+  /** Inngest run id — correlates every marker from ONE logical run. */
+  run_id: string;
+  /** Inngest attempt index. Markers outside step.run re-emit per attempt. */
+  attempt: number;
+  /** 1 when the operator's artifact is proven landed. */
+  ok: 0 | 1;
+  /** Which arm of the liveness table decided it. */
+  reason:
+    | "digest-committed"
+    | "persistence-not-committed"
+    | "digest-absent-from-commit"
+    | "undetermined-replay-resume"
+    | "undetermined-contract-drift"
+    | "persistence-skipped";
+}
+
+/** Emit one `SOLEUR_CRON_DIGEST_LIVENESS` WARN marker. NEVER throws. */
+export function emitCronDigestLiveness(m: CronDigestLivenessMarker): void {
+  try {
+    log.warn({ SOLEUR_CRON_DIGEST_LIVENESS: true, ...m }, "cron digest liveness");
   } catch {
     // fail-open.
   }

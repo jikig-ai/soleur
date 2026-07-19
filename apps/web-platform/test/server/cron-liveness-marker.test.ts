@@ -21,6 +21,7 @@ vi.mock("pino", () => ({ default: pinoFactory }));
 import {
   emitCommunityDigestFile,
   emitCronDedupSkip,
+  emitCronDigestLiveness,
   emitCronPersistResult,
   emitCronPersistSkipped,
   emitCronTier2Deferred,
@@ -58,10 +59,23 @@ const MARKERS = [
     emit: emitCommunityDigestFile,
     payload: {
       cron: "cron-community-monitor",
+      attempt: 0,
       digest_path: "knowledge-base/support/community/2026-07-19-digest.md",
       present: 1 as const,
     },
     msg: "community digest file",
+  },
+  {
+    name: "SOLEUR_CRON_DIGEST_LIVENESS",
+    emit: emitCronDigestLiveness,
+    payload: {
+      cron: "cron-community-monitor",
+      run_id: "01JRUN",
+      attempt: 0,
+      ok: 0 as const,
+      reason: "digest-absent-from-commit" as const,
+    },
+    msg: "cron digest liveness",
   },
   {
     name: "SOLEUR_CRON_TIER2_DEFERRED",
