@@ -27,17 +27,31 @@ handler receives a logger whose methods carry no `this` dependency.
 ```ts
 // server/inngest/middleware/bound-logger.ts (new, ~20 lines)
 transformInput({ ctx }) {
-  return { ctx: { logger: {
-    info:  (...a: unknown[]) => ctx.logger.info(...a),
-    warn:  (...a: unknown[]) => ctx.logger.warn(...a),
-    error: (...a: unknown[]) => ctx.logger.error(...a),
-  } } };
+  const raw = ctx.logger;
+  return { ctx: { logger: new Proxy(raw, {
+    get(target, prop, receiver) {
+      const v = Reflect.get(target, prop, receiver);
+      // Bind every function-valued property to its owner, so detaching it
+      // (`const f = logger.info`) can never lose the receiver.
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  }) } };
 }
 ```
 
-Arrow closures have no `this` dependency, so `const log = logger.info; log(x)` — and every
-other detachment shape — becomes safe rather than merely detectable. Applied once in
-`client.ts` alongside the two existing middlewares, it covers all 60+ Inngest functions.
+Every function-valued property comes out pre-bound, so `const log = logger.info; log(x)` —
+and every other detachment shape — becomes safe rather than merely detectable. Applied once
+in `client.ts` alongside the two existing middlewares, it covers all 60+ Inngest functions.
+
+> ‼️ **Why a binding Proxy and not three arrow closures.** The obvious implementation —
+> `{ info: (...a) => raw.info(...a), warn: …, error: … }` — **trades one crash for
+> another.** `ProxyLogger`'s own constructor returns a Proxy whose `get` trap forwards any
+> *unknown* property to the underlying user logger (`middleware/logger.js:32-35`), so the
+> real ctx logger also carries `debug` (`logger.js:49-52`) plus pino passthroughs (`child`,
+> `trace`, `fatal`, `level`). A three-method plain object silently **drops all of them**,
+> and any caller reaching for one gets `TypeError: logger.debug is not a function`. The
+> binding Proxy preserves the entire passthrough surface *and* makes every method
+> detachment-safe, at the same ~5 lines. Caught by the deepen-plan SDK verification pass.
 
 > **This is a revision.** The first draft of this plan proposed a *compile-time detector*
 > (adding `this` parameters to `HandlerArgs["logger"]`). Three independent plan reviews
@@ -464,6 +478,22 @@ before and after (three reviewers independently flagged that as vacuous).
 
    Run it and **record the failure output** — this is the real RED evidence.
 
+3b. **Anti-vacuity control** (per
+   `knowledge-base/project/learnings/2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr-and-the-two-producer-count-that-fixed-it.md`):
+   the battery must fail when the **observer is removed**, not only when an arm is
+   perturbed. Add an explicit mutation check to the PR body: delete the `bind` (return `v`
+   raw from the trap) and confirm the suite goes RED. A suite that stays green with the
+   bind deleted is measuring nothing.
+
+3c. **Fail-open case:** `applyBoundLogger(undefined)` and `applyBoundLogger(null)` must
+   **not throw** and must leave ctx untouched (the middleware returns `undefined`). This is
+   the guard that prevents `new Proxy(undefined, …)` from redding every cron.
+
+3d. **Surface-preservation case:** a logger carrying `debug` / `child` / a non-function
+   `level` must still expose all of them through the facade — `bound.debug` is a function,
+   `bound.level` is the passthrough value, and a detached `const d = bound.debug; d("x")`
+   does not throw. This is the regression the three-arrow-closure design would have shipped.
+
 4. Cover all detachment shapes the detector would have missed, so the elimination claim is
    asserted rather than asserted-about:
 
@@ -500,13 +530,28 @@ export const boundLoggerMiddleware = new InngestMiddleware({
     return {
       onFunctionRun() {
         return {
+          // ‼️ Read ctx.logger HERE, not in onFunctionRun — see the precedent trap below.
           transformInput({ ctx }) {
             const raw = ctx.logger;
-            return { ctx: { logger: {
-              info:  (...a: unknown[]) => raw.info(...a),
-              warn:  (...a: unknown[]) => raw.warn(...a),
-              error: (...a: unknown[]) => raw.error(...a),
-            } } };
+            // ‼️ FAIL OPEN. `new Proxy(undefined, …)` THROWS — and a throw here
+            // would red EVERY cron on the surface. If the logger is missing or
+            // not an object, return undefined: the waterfall passes `prev`
+            // through unchanged and the run proceeds with the original ctx.
+            // Sanctioned observability-of-observability exemption to
+            // `cq-silent-fallback-must-mirror-to-sentry`, same rationale as
+            // `cert-reissue-marker.ts`: a logging failure must NEVER red a cron,
+            // and mirroring it would re-enter the path that is already broken.
+            if (!raw || typeof raw !== "object") return;
+            return {
+              ctx: {
+                logger: new Proxy(raw, {
+                  get(target, prop, receiver) {
+                    const v = Reflect.get(target, prop, receiver);
+                    return typeof v === "function" ? v.bind(target) : v;
+                  },
+                }),
+              },
+            };
           },
         };
       },
@@ -514,6 +559,23 @@ export const boundLoggerMiddleware = new InngestMiddleware({
   },
 });
 ```
+
+**Fail-open vs fail-loud (a real tension, resolved deliberately).** A deepen-plan learnings
+pass raised that `runLogMiddleware` classifies a non-throwing run as
+`status='completed'`, so a silently-unbound logger would look like success
+(`knowledge-base/project/learnings/integration-issues/2026-06-29-cron-health-run-log-green-masks-claude-eval-failure.md`).
+That argues for failing loud. **We fail open anyway**, because the alternative is worse: a
+throw in `transformInput` reds *every cron on the surface* over a logging concern. The
+in-repo precedent is explicit — `cert-reissue-marker.ts:34-37` documents the same call as a
+sanctioned exemption. The residual risk is bounded: the guard can only fire if Inngest stops
+supplying `ctx.logger`, which would be an SDK-breaking change caught by the Phase 1 tests
+and by `tsc` at the next bump.
+
+**Why `v.bind(target)` and not `v.bind(receiver)`:** `receiver` is our outer Proxy, so
+binding to it would re-enter this trap on every internal `this.*` access inside
+`ProxyLogger` — including `this.enabled` and `this.logger`. Binding to `target` hands the
+method the receiver it actually expects. Non-function values (e.g. `level`) pass through
+untouched.
 
 Register it in `apps/web-platform/server/inngest/client.ts`:
 
@@ -629,11 +691,18 @@ grep-for-the-thing-you-just-wrote, prose assertions with no command, or fragile 
 
 ### Pre-merge (PR)
 
-- **AC1 — the middleware exists and is bound.** `server/inngest/middleware/bound-logger.ts`
-  exports `boundLoggerMiddleware`, and its three methods are arrow closures over a captured
-  `raw`, not method shorthand. Verify:
-  `grep -cE "^\s*(info|warn|error):\s*\(\.\.\.a: unknown\[\]\) =>" apps/web-platform/server/inngest/middleware/bound-logger.ts`
-  → `3`.
+- **AC1 — the middleware exists and binds every function-valued property.**
+  `server/inngest/middleware/bound-logger.ts` exports `boundLoggerMiddleware` and returns a
+  `Proxy` whose `get` trap binds function values to `target`. Verify:
+  `grep -c 'v.bind(target)' apps/web-platform/server/inngest/middleware/bound-logger.ts` → `1`,
+  **and** `grep -c 'typeof v === "function"' …` → `1`. (A three-arrow-closure implementation
+  fails this AC by design — it drops `debug`/`child`/`level`.)
+- **AC1b — the fail-open guard exists.** Verify:
+  `grep -cE 'if \(!raw \|\| typeof raw !== "object"\) return;' apps/web-platform/server/inngest/middleware/bound-logger.ts`
+  → `1`. Without it, `new Proxy(undefined, …)` throws and reds every cron on the surface.
+- **AC1c — `ctx.logger` is read in `transformInput`, never `onFunctionRun`.** Verify the
+  `onFunctionRun` signature takes no destructured `ctx`:
+  `grep -cE 'onFunctionRun\(\)' apps/web-platform/server/inngest/middleware/bound-logger.ts` → `1`.
 - **AC2 — it is registered on the client.** Verify:
   `grep -q "boundLoggerMiddleware" apps/web-platform/server/inngest/client.ts && echo BOUND`
   → prints `BOUND`, and the `middleware: [...]` array contains it.
@@ -642,6 +711,15 @@ grep-for-the-thing-you-just-wrote, prose assertions with no command, or fragile 
   `Cannot read properties of undefined (reading 'enabled')`. A guard that never failed
   proves nothing — this AC exists because the first draft's proposed guard was vacuous and
   three reviewers caught it.
+- **AC3b — the battery is not vacuous.** The PR body records the mutation control: with
+  `v.bind(target)` replaced by `v`, the suite goes **RED**. A suite that stays green with the
+  bind removed is measuring nothing (the failure mode recorded in the 2026-07-19
+  self-graded-battery learning).
+- **AC3c — fail-open verified.** `applyBoundLogger(undefined)` and `applyBoundLogger(null)`
+  do not throw and leave ctx untouched.
+- **AC3d — passthrough surface preserved.** A logger carrying `debug` and a non-function
+  `level` exposes both through the facade, and a detached `const d = bound.debug; d("x")`
+  does not throw.
 - **AC4 — every detachment shape is safe.** `./node_modules/.bin/vitest run test/server/inngest/bound-logger-middleware.test.ts`
   passes, including the five-shape loop (extract, destructure, `forEach`, `setTimeout`,
   `.catch`) and the `enabled === false` gate-preservation case.
@@ -723,8 +801,9 @@ effect without an operator step.
 | --- | --- | --- |
 | **R1** | **Middleware ordering breaks `sentry-correlation` scope tagging or `run-log`'s `{ ok, errorSummary }` projection.** This is now the top risk — it is the one failure mode that would surface as *silent data loss* in `public.routine_runs` rather than a red test. | `boundLoggerMiddleware` is registered **last**, so it wraps an already-composed ctx. AC6 requires the existing sentry-correlation and run-log suites to pass **unmodified** (verified by a `git diff --name-only` that must come back empty — a suite edited to make it pass is the failure this guards). If ordering does disturb them, move the registration and record why in a comment. |
 | **R2** | **The bind defeats `ProxyLogger`'s `enabled` gate**, turning replay-pass suppression into a passthrough and multiplying log volume fleet-wide across 60+ crons. | The facade forwards to `raw.info(...)` with the correct receiver, so the gate applies exactly as before. Asserted explicitly by T6 / AC5 (`enabled === false` → zero delivered calls), not assumed. |
-| **R3** | The facade drops methods handlers might use (`debug`, `child`, `flush`). | `HandlerArgs["logger"]` declares exactly `info`/`warn`/`error`, and all 65 handlers are typed against it. Phase 3.1's `tsc --noEmit` catches any handler reaching for more. If one does, forward that method too rather than narrowing the facade. |
-| **R4** | Inngest's own internals call `logger.enable()` / `flush()` / `logger.error(error)` on the ctx logger (`Inngest.js:680-686`). Does replacing `ctx.logger` in `transformInput` break them? | **Verify in Phase 0.2 before writing code.** Inngest holds its own reference to the `ProxyLogger` instance in the closure at `Inngest.js:673` and calls `enable()`/`flush()` on *that*, not on the transformed ctx — so the facade should be invisible to it. This is the single most important precondition of Option C; if it does not hold, Option C is unworkable and the plan must fall back to Option A with its coverage stated honestly. |
+| **R3** | ~~The facade drops methods handlers might use (`debug`, `child`, `flush`).~~ **RESOLVED by design change.** | The original three-arrow-closure design **would** have dropped them — `ProxyLogger`'s constructor Proxy forwards unknown props to the underlying logger (`middleware/logger.js:32-35`), so the real ctx logger carries `debug` (`logger.js:49-52`) plus pino passthroughs. The binding-Proxy design preserves the entire surface. Asserted by AC3d. |
+| **R4** | ~~Inngest's own internals call `logger.enable()` / `flush()` / `logger.error(error)` on the ctx logger — does replacing it break them?~~ **RESOLVED at plan time.** | **Verified against the pinned SDK.** `Inngest.js:673-687` declares `const logger = new ProxyLogger(providedLogger)` and calls `enable()`, `error()`, `flush()` on that **closure const** — `ctx` is read only at `:661-666` for `runId`/`eventName` metadata, never for the logger. The facade is invisible to them, and because it forwards to the same instance, `enable()` still flips the gate our calls observe. Also verified: the built-in logger middleware is **prepended** (`Inngest.js:162`, `[...builtInMiddleware, ...middleware]`), so ours runs after and sees the real `ProxyLogger`; and `transformInput` ctx merging is a shallow spread in array order, last-write-wins (`execution/v1.js:1087-1099`), so returning `{ ctx: { logger } }` clobbers nothing else — `run-log.ts` returns `undefined` and `sentry-correlation.ts` never touches `logger`. |
+| **R4b** | `ctx.logger` is absent/non-object at `transformInput` → `new Proxy(undefined, …)` throws → **every cron on the surface reds** over a logging concern. | The fail-open guard (AC1b) returns `undefined`, and the waterfall passes `prev` through unchanged. Deliberately chosen over fail-loud despite the run-log `completed`-masking trade-off; rationale and precedent recorded in Phase 2. |
 | **R5** | This plan misread the vendor. | Phase 0.2 re-reads the pinned `inngest@3.54.2` files before any edit; every claim cites a named path. If the version differs, halt. |
 | **R6** | Someone reads this PR as "the observability class is fixed." | AC10 forbids that claim in the PR body; Phase 4 records the corrected premise on #6703, which stays open. |
 
