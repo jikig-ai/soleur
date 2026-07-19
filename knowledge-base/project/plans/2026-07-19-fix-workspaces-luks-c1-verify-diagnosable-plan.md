@@ -12,6 +12,48 @@ lane: single-domain
 
 # 🐛 fix: make the C1 itemized byte-identity verify diagnosable (workspaces-luks cutover)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-19 · **Sections enhanced:** Vector allowlist decision, Phase 0, Research
+Insights (new), AC10. **Method:** direct high-value verification (precedent-diff + verify-the-negative
++ cited-artifact/rule-ID checks) rather than 40-agent fan-out — this is a tightly-scoped single-file
+observability fix; the substance gate is the review-time `user-impact-reviewer` (single-user-incident
+threshold) + CPO sign-off, not breadth of plan-time agents.
+
+### Key improvements (verified this pass)
+1. **AC10 de-risked to a hard confirm:** no test walks `apps/web-platform/infra/*.sh` extracting
+   `logger -t` tags (`grep -rln "for .* in .*infra … logger -t"` → 0), so adding
+   `logger -t luks-monitor` to `workspaces-cutover.sh` trips **no** drift guard and needs **no**
+   `vector.toml` change. `vector-pii-scrub.test.sh` (583 lines) tests the VRL *transforms* only — not
+   host-script tag extraction. The `luks-monitor` tag is already in Source 4 (`vector.toml:184`).
+2. **Precedent-diff:** the itemized `%i %n` parse is **deliberately unique** to `workspaces-cutover.sh`
+   — the sibling `git-data-cutover.sh` uses a `verify_set_identity` (per-repo `for-each-ref` +
+   `rev-list sha256`, `:239-277`), NOT an itemized rsync. This is intentional (the C1 header at
+   `workspaces-cutover.sh:24-27`: a rev-list identity "passes while dropping the working-tree +
+   refs/checkpoints/* data"). So there is **no repo precedent** for the parse — scrutinize the regex —
+   but the *emit / guard / scrub* patterns all have precedent (below).
+3. **All cited rule IDs are ACTIVE** in AGENTS.md (`hr-menu-option-ack-not-prod-write-auth`,
+   `hr-no-ssh-fallback-in-runbooks`, `hr-observability-as-plan-quality-gate`,
+   `hr-weigh-every-decision-against-target-user-impact`, `wg-ui-feature-requires-pen-wireframe`).
+   ADR-119 file + `infra-validation.yml` `luks-monitor.test.sh` step (~:379) exist.
+
+## Research Insights (precedent-diff — deepen Phase 4.4)
+
+Pattern-bound behaviors and their in-repo precedents (the parse is novel; everything else is matched):
+
+| Pattern in this plan | Precedent (verbatim shape) | Fit |
+| --- | --- | --- |
+| `logger -t "$TAG" --` on its own line, `TAG` a real assignment | `luks-monitor.sh:34-38` (`logger -t "$LOG_TAG" --`, own line so the extractor "sees this channel"); `infra-config-apply.sh:220`; `web-private-nic-guard.sh` | **Match** — adopt `LUKS_LOG_TAG="luks-monitor"` real assignment + own-line `logger -t "$LUKS_LOG_TAG" --`. |
+| SOLEUR_ plain-text stdout marker, `KEY=value` shape | `SOLEUR_INFRA_CONFIG_HOOK_ORPHAN dangling_hook_command=… reason=…` (`infra-config-apply.sh:220`); `SOLEUR_PRIVATE_NIC nic_ok=… converged_by=…` | **Match** — `SOLEUR_WORKSPACES_LUKS_VERIFY_DIFF feature=… op=… count=… icode=… path=…`. |
+| Sourced-detection guard (define funcs when sourced, run body when executed) | `workspaces-luks-emit.sh:84` (`if [ "${BASH_SOURCE[0]}" = "${0}" ]; then workspaces_luks_emit; fi`) | **Match (inverse)** — guard = `if sourced → return`. |
+| `_vscrub` structural-byte scrub before log interpolation | `workspaces-luks-emit.sh:33` `_wl_scrub() { … tr -d '"\\' \| tr -cd '[:print:]'; }` | **Match** — `_vscrub` strips CR/LF + non-printable (marker is not JSON, so drop the `"`/`\` deletion; keep control-char strip). |
+| Itemized `rsync -aHAXi … --out-format='%i %n'` diff parse | **None** — `git-data-cutover.sh` uses set-identity, not itemized rsync | **Novel** — no precedent; the `^(\*deleting\|[<>ch.*][fdLDS])` count regex is the scrutiny point (case d in the test proves it counts attribute-only codes). |
+
+**Verify-the-negative (deepen Phase 4.45) — every negative claim probed:**
+- "no new Vector allowlist entry needed" → **confirmed** (`luks-monitor` ∈ Source 4 `vector.toml:184`; Source 4 filters `SYSLOG_IDENTIFIER`, not `op=`).
+- "no test extracts logger tags from the cutover script" → **confirmed** (0 hits; `vector-pii-scrub.test.sh` tests VRL transforms only).
+- "git-data-cutover is not a precedent for the itemized verify" → **confirmed** (it uses `verify_set_identity`).
+
 ## Overview
 
 On 2026-07-19 the first real `/workspaces` LUKS cutover (GitHub Actions run **29676994044**,
@@ -80,13 +122,11 @@ luks-monitor`. Rationale:
   `SOLEUR_INFRA_CONFIG_HOOK_ORPHAN` plain-text marker already uses.
 - web-1 runs Vector (Source 4's `luks-monitor` entry exists precisely so the daily probe on web-1
   reaches Better Stack), so a marker emitted on web-1 during the cutover flows to Better Stack.
-- **Caveat to verify in Phase 0:** `vector-pii-scrub.test.sh` has an AC3 "emitter-extractor" drift
-  guard that scans host scripts for `(^|\|)\s*logger -t` and derives their `LOG_TAG` to cross-check
-  against the Source 4 allowlist (`luks-monitor.sh:34-38` documents this contract: `logger -t` on its
-  own line, `LOG_TAG` a real assignment). Confirm whether that extractor scans `workspaces-cutover.sh`
-  and, if so, satisfy its shape (define `LUKS_LOG_TAG="luks-monitor"` as a real assignment and use
-  `logger -t "$LUKS_LOG_TAG" --` on its own line). If it does not scan the cutover script, no change
-  is needed there.
+- **Verified (deepen pass):** no test walks `apps/web-platform/infra/*.sh` extracting `logger -t` tags
+  (0 hits repo-wide), and `vector-pii-scrub.test.sh` tests only the VRL *transforms*, not host-script
+  tag extraction. So reusing `luks-monitor` trips **no** drift guard and needs **no** `vector.toml`
+  change. Still adopt the documented `luks-monitor.sh:34-38` shape (`LUKS_LOG_TAG="luks-monitor"` real
+  assignment + `logger -t "$LUKS_LOG_TAG" --` on its own line) as cheap insurance / convention match.
 
 > If a future decision ever wants a *distinct* SYSLOG_IDENTIFIER for verify-diff, THAT would require a
 > new `vector.toml` Source 4 entry **and** the `vector-pii-scrub.test.sh` exact-tag drift-fixture
@@ -130,8 +170,8 @@ luks-monitor`. Rationale:
   (attribute-only lines start `.`, e.g. `.f..t……`/`.d..t……`), plus the `*deleting  ` form.
   Count regex: `^(\*deleting|[<>ch.*][fdLDS])`. This counts **every** itemize code (does NOT narrow)
   and excludes stderr warning lines + blank lines.
-- Grep `vector-pii-scrub.test.sh` for its emitter-extractor scope (does it scan `workspaces-cutover.sh`?)
-  and adopt the `logger -t` / `LOG_TAG`-real-assignment shape if required (see §Vector allowlist).
+- (Resolved in deepen: no `infra/*.sh` logger-tag extractor exists → no drift-guard concern.) Adopt
+  the `luks-monitor.sh:34-38` `logger -t "$LUKS_LOG_TAG" --` own-line + real-assignment shape anyway.
 - Confirm `logger` + `mktemp` are available on the target (util-linux; yes).
 
 ### Phase 1 — `verify_byte_identity` (the counting fix, defect 1)
@@ -237,10 +277,10 @@ One-line note in the observability section: `op=workspaces-luks-verify-diff` (Be
 - **AC9 (behavioral test — case d, codes-not-narrowed):** an mtime-only diff (`.f..t...... …`) and a
   dir-mtime diff (`.d..t...... …`) on stdout each still **fail** the gate and appear in the diagnostic
   (proves the itemize regex counts attribute-only codes, not only `>f……`).
-- **AC10 (no Vector allowlist regression):** the marker uses tag `luks-monitor` (already allowlisted);
-  no `vector.toml` Source 4 change is required. If Phase 0 finds `vector-pii-scrub.test.sh` scans the
-  cutover script, that suite still passes (the `logger -t "$LUKS_LOG_TAG" --` + real `LUKS_LOG_TAG`
-  assignment satisfies its emitter-extractor contract).
+- **AC10 (no Vector allowlist regression):** the marker uses tag `luks-monitor` (already allowlisted,
+  `vector.toml:184`); no `vector.toml` Source 4 change is required. Verified in deepen: no
+  `infra/*.sh` `logger -t` tag-extractor exists, so no drift-guard suite gates on the cutover script's
+  new emit. `vector-pii-scrub.test.sh` remains green (it tests VRL transforms, not tag extraction).
 - **AC11 (no semantic change to untouched steps):** `workspaces-cutover.sh:399` (pass-2 delta rsync),
   `:406` (`sync`), `:407` (`drop_caches`) are byte-unchanged; DRY_RUN gating unchanged; the gate
   threshold is still 0 and no itemize code is excluded.

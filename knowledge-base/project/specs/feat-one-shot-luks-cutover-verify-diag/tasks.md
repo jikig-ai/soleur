@@ -7,7 +7,7 @@ Threshold: single-user incident (`requires_cpo_signoff: true`) — preserve fail
 ## Phase 0 — Preconditions (verify, do not assume)
 - [ ] 0.1 Re-read `apps/web-platform/infra/workspaces-cutover.sh:396-442`; confirm anchors (verify 408-416; pass-2 :399; sync/drop_caches :406-407; die :36).
 - [ ] 0.2 Confirm rsync `--out-format='%i %n'` itemize shape; lock count regex `^(\*deleting|[<>ch.*][fdLDS])` (counts ALL codes, excludes stderr/blank).
-- [ ] 0.3 Grep `vector-pii-scrub.test.sh` for its emitter-extractor scope; if it scans `workspaces-cutover.sh`, adopt `logger -t "$LUKS_LOG_TAG" --` on its own line + a real `LUKS_LOG_TAG="luks-monitor"` assignment.
+- [ ] 0.3 (Deepen-resolved: no `infra/*.sh` logger-tag extractor exists → no drift-guard concern; `luks-monitor` already in `vector.toml:184` → no vector.toml change.) Still adopt `luks-monitor.sh:34-38` shape: `LUKS_LOG_TAG="luks-monitor"` real assignment + own-line `logger -t "$LUKS_LOG_TAG" --`.
 - [ ] 0.4 Confirm no open `code-review` issue references the edited files (`gh issue list --label code-review --state open` grep).
 
 ## Phase 1 — Counting fix (defect 1)
