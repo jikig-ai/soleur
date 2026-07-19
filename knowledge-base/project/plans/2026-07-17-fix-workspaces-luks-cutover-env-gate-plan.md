@@ -38,7 +38,7 @@ provisioner, no serving-surface offline op).
   (`apps/web-platform/infra/main.tf:49`, App-auth). ✓ (IaC "already required" claim holds.)
 - Reviewer id `54279` = @deruelle — confirmed in the precedent (only in-repo occurrence). ✓
 - `ADR-100` and `ADR-119` both exist under `knowledge-base/engineering/architecture/decisions/`. ✓
-- ADR-119 records the freeze needs operator sign-off (ADR-119:105) but does NOT name
+- ADR-119 records the freeze needs operator sign-off (ADR-119 §(c)) but does NOT name
   the environment mechanism → ADR attribution tightened; no ADR amend needed. ✓
 
 **Precedent diff (inngest_cutover → workspaces_luks_cutover), the ONLY delta:**
@@ -253,7 +253,7 @@ discoverability_test:
 
 **No new ADR; no C4 change.** ADR-119 already records the *decision* that the freeze
 requires **operator sign-off / human authorization** with a bounded window
-(ADR-119:105 — "explicit justification + a bounded window + sign-off"); it does not
+(ADR-119 §(c) — "explicit justification + a bounded window + sign-off"); it does not
 name the *mechanism*. The GitHub `github_repository_environment` required-reviewer gate
 is the **established mechanism precedent** for exactly that sign-off, set by
 `github_repository_environment.inngest_cutover` (`inngest-arm-write-token.tf:70-77`,

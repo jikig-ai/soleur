@@ -12,127 +12,20 @@
 # container, so `docker stop $CONTAINER` never touched it. The C1 gate was RIGHT; the writer was not
 # quiesced. AC11 pins verify_byte_identity/emit_verify_diff as byte-identical to main.
 #
-# HARNESS RULE — NEVER pipe into the assertion predicate.
-#   `calls | grep -q PAT` under `set -o pipefail` returns 141 when grep matches EARLY and the
-#   producer takes SIGPIPE. On a NEGATIVE assertion (`if ! ...`) that fails OPEN: the violation is
-#   present and the test reports green. This suite exists to forbid exactly that shape in the SUT
-#   (AC5, T8, M3), so committing it in the harness made T11/T13/T14/M1/M4 unreliable and — because
-#   `HARNESS_UNDEFINED:` is line 1, always an early match — made `undef()` itself fail open, so the
-#   vacuity guard was vacuous and T7/T8 passed against a script where the functions do not exist.
-#   Every predicate below therefore greps a FILE directly, or uses bash `[[ == ]]`. No pipes.
+# HARNESS: run_case, the stub set and every predicate live in workspaces-luks-harness.sh, shared
+# with workspaces-luks-staging.test.sh (#6588 staging-target guards). The no-pipe rule that file
+# documents is the reason this suite was rewritten once already: `calls | grep -q PAT` under
+# `set -o pipefail` returns 141 when grep matches EARLY and the producer takes SIGPIPE, so a
+# NEGATIVE assertion (`if ! ...`) fails OPEN — and because `HARNESS_UNDEFINED:` is line 1 and
+# always an early match, `undef()` itself failed open and the vacuity guard was vacuous.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CUTOVER="$SCRIPT_DIR/workspaces-cutover.sh"
 WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/workspaces-luks-cutover.yml"
 
-pass=0
-fail=0
-ok() { pass=$((pass + 1)); printf 'ok   - %s\n' "$1"; }
-no() { fail=$((fail + 1)); printf 'FAIL - %s\n' "$1"; }
-
-RUN_SCRATCH="$(mktemp -d -t wl-freeze-test.XXXXXXXX)"
-CASE_N=0
-cleanup_scratch() { rm -rf "$RUN_SCRATCH"; }
-trap cleanup_scratch EXIT INT TERM HUP
-
-# run_case <script> <invocation> <required-fns> [env assignments...]
-#
-# <required-fns>: asserted DECLARED before the invocation runs; otherwise the subshell exits 97 with
-# HARNESS_UNDEFINED. Without it, a case asserting "exits non-zero" passes vacuously against a script
-# where the function does not exist — the subshell fails for the wrong reason.
-#
-# Sets: CASE_RC, CASE_OUT, CALLS (argv log), MARKER_LOG (logger sink), MNT (the stub $MOUNT).
-# LSOF_OUT / LSOF_OUT_FILE  stub lsof stdout (the g4 probe line is ALWAYS emitted, see the stub)
-# LSOF_ABSENT=1             `command -v lsof` fails AND the install fails (fail-closed probe)
-# LSOF_BLIND=1              lsof runs but never reports the probe fd (a scan that did not reach $MOUNT)
-# LSOF_RC=<n>               force the lsof exit status (rc>1 = an outright probe failure)
-# ACTIVE_UNITS              space-separated units for which `systemctl is-active` succeeds
-# CURL_CODE / READYZ_BODY   stub curl's /health code and /internal/readyz body
-run_case() {
-  local script="$1" invocation="$2" require="$3"; shift 3
-  CASE_N=$((CASE_N + 1))
-  local d="$RUN_SCRATCH/case-$CASE_N"; mkdir -p "$d"
-  CALLS="$d/calls"; MARKER_LOG="$d/marker"; STATE="$d/state.d"; MNT="$d/mnt"
-  mkdir -p "$STATE" "$MNT"
-  : > "$CALLS"; : > "$MARKER_LOG"
-  CASE_OUT="$(
-    env "$@" \
-      CUTOVER="$script" CALLS="$CALLS" MARKER_LOG="$MARKER_LOG" \
-      WORKSPACES_STATE_DIR="$STATE" WORKSPACES_MOUNT="$MNT" \
-      INVOCATION="$invocation" REQUIRE_FNS="$require" \
-    bash -c '
-      source "$CUTOVER"                                   # guard => functions only, no main body
-      rec() { printf "%s\n" "$*" >> "$CALLS"; }
-      systemctl() {
-        rec "systemctl $*"
-        if [ "${1:-}" = "is-active" ]; then
-          local u="${@: -1}"
-          case " ${ACTIVE_UNITS:-} " in *" $u "*) return 0;; *) return 1;; esac
-        fi
-        if [ "${1:-}" = "show" ]; then printf "%s\n" "${STOP_RESULT:-success}"; fi
-        return 0
-      }
-      docker()  { rec "docker $*"; return 0; }
-      mount()   { rec "mount $*"; return "${MOUNT_RC:-0}"; }
-      umount()  { rec "umount $*"; return 0; }
-      mountpoint() { rec "mountpoint $*"; return "${MOUNTPOINT_RC:-0}"; }
-      cryptsetup() { rec "cryptsetup $*"; return 0; }
-      systemd-run() { rec "systemd-run $*"; return 0; }
-      logger()  { printf "%s\n" "$*" >> "$MARKER_LOG"; }
-      hostname() { echo "test-host"; }
-      apt-get() { rec "apt-get $*"; return 1; }
-      timeout() { shift; "$@"; }
-      curl() {
-        rec "curl $*"
-        case "$*" in
-          *readyz*) printf "%s" "${READYZ_BODY-{\"ready\":true\}}" ;;
-          *)        printf "%s" "${CURL_CODE:-200}" ;;
-        esac
-        return 0
-      }
-      die()     { echo "DIE: $*"; exit 1; }
-      emit_drift() { echo "EMIT_DRIFT: $1"; }
-      lsof()    {
-        rec "lsof $*"
-        # Always report the script own probe fd unless LSOF_BLIND — a real lsof scanning $MOUNT
-        # cannot miss an fd this process holds open there, so the positive control must model it.
-        if [ "${LSOF_BLIND:-}" != "1" ]; then
-          local p
-          for p in "$WORKSPACES_MOUNT"/.luks-g4-probe.*; do
-            [ -e "$p" ] && printf "COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\nbash    111 root    9w   REG   0,1        0    1 %s\n" "$p"
-          done
-        fi
-        if [ -n "${LSOF_OUT_FILE:-}" ]; then cat "$LSOF_OUT_FILE"; return "${LSOF_RC:-0}"; fi
-        [ -n "${LSOF_OUT:-}" ] && printf "%s\n" "$LSOF_OUT"
-        return "${LSOF_RC:-0}"
-      }
-      command() {
-        if [ "${1:-}" = "-v" ] && [ "${2:-}" = "lsof" ] && [ "${LSOF_ABSENT:-}" = "1" ]; then return 1; fi
-        builtin command "$@"
-      }
-      for f in ${REQUIRE_FNS:-}; do
-        declare -F "$f" >/dev/null || { echo "HARNESS_UNDEFINED:$f"; exit 97; }
-      done
-      eval "$INVOCATION"
-    ' 2>&1
-  )"
-  CASE_RC=$?
-}
-
-# --- predicates: file-direct greps and bash matching ONLY, never a pipe ---
-has()     { grep -qE -- "$1" "$CALLS"; }            # a recorded call matches
-hasF()    { grep -qF -- "$1" "$CALLS"; }            # literal
-nhas()    { ! grep -qE -- "$1" "$CALLS"; }
-cnt()     { grep -cE -- "$1" "$CALLS" || true; }
-idx()     { grep -nE -- "$1" "$CALLS" | head -1 | cut -d: -f1; }   # value only; rc unused
-markerF() { grep -qF -- "$1" "$MARKER_LOG"; }
-outF()    { [[ "$CASE_OUT" == *"$1"* ]]; }
-undef()   { [[ "$CASE_OUT" == *"HARNESS_UNDEFINED:"* ]]; }
-died()    { [ "$CASE_RC" -ne 0 ] && ! undef; }
-# ran — positive control: the case completed successfully. Without this a case can assert on the
-# calls file (populated before an unrelated die) while the function never actually succeeded.
-ran()     { [ "$CASE_RC" -eq 0 ] && ! undef; }
+# shellcheck source=apps/web-platform/infra/workspaces-luks-harness.sh
+. "$SCRIPT_DIR/workspaces-luks-harness.sh"
 
 # ---------------------------------------------------------------------------
 # freeze_writers — quiesce set, order, closed-world, persisted state

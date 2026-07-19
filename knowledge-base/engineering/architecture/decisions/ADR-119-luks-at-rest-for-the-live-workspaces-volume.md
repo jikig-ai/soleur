@@ -327,6 +327,53 @@ the device that *is* LUKS; the inverse predicate matches the **live plaintext vo
 `/mnt/data` mount by volume ID is a hard prerequisite: with a second volume attached, the existing
 `scsi-0HC_Volume_*` glob in `cloud-init.yml` is ambiguous.
 
+**The device arm is only half the state machine — after `luksOpen` the MAPPER is an EMPTY CONTAINER.**
+`luksFormat` writes a LUKS2 header and `luksOpen` exposes `/dev/mapper/<name>`; neither lays a
+filesystem. `mkfs.ext4` must run on the **mapper**, so the filesystem is created INSIDE the encrypted
+container rather than beside it. Omit it and the mapper has no superblock, `mount "$MAPPER"
+"$STAGING"` fails with *"wrong fs type, bad option, bad superblock"*, and — under `set -uo pipefail`
+with no `-e` — that failure is **swallowed**, leaving the rsync to land on the plain root-disk
+directory the preceding `mkdir -p "$STAGING"` just created. That is #6588's realised defect: a cutover
+reporting green while writing every user's source code, **in plaintext, to the very disk this ADR
+exists to get it off**. Fixed in `workspaces-cutover.sh :: prepare_staging_target`.
+
+The mapper therefore carries the **same three-arm discriminator shape as the device**, one level down:
+
+```
+fs_type=$(blkid -p -s TYPE -o value "$MAPPER" 2>/dev/null || true)
+case "$fs_type" in
+  "")   mkfs.ext4 "$MAPPER" ;;  # empty container — the ONLY mkfs-able state
+  ext4) : ;;                    # idempotent no-op on a re-run
+  *) echo "FATAL: $MAPPER carries TYPE=$fs_type — refusing to mkfs over it"; exit 1 ;;
+esac
+```
+
+Three details of that shape are decisions, not style:
+
+- **`-p`, not a cached probe.** The mapper probe is `blkid -p` — a low-level superblock read that
+  **bypasses `/run/blkid/blkid.tab`**. A cached entry can report the **previous** type across a
+  rollback-and-reformat cycle, which is precisely the sequence a safe-abort produces. And the arms are
+  destructive in **opposite** directions: one `mkfs`es (destroying a filesystem that really is there)
+  while another refuses (stranding the cutover on a mapper that really is empty). **A stale read is
+  wrong in BOTH directions**, so "probably fresh enough" is not a defensible default here.
+- **`-s TYPE -o value`, not bare `blkid`.** Bare `blkid` exits 0 on a partition-table-only device, so
+  an `if blkid …` form would **skip the needed `mkfs`** — reproducing this very bug through a
+  different door.
+- **The staging mount is fail-closed and carries a positive control.** A `mount` failure `die`s rather
+  than falling through, and after the mount `findmnt -no SOURCE "$STAGING"` must equal `$MAPPER`,
+  whose backing device must in turn equal `$FRESH_DEV`. **Both links are asserted because neither
+  alone is sufficient:** `$MOUNT` and `$STAGING` are *strings*, and a string that is merely non-empty
+  and merely distinct proves nothing about which block device sits underneath it. The assert anchors
+  the mount to the mapper and the mapper to the fresh device, so *copy target is encrypted* holds by
+  construction — the same positive-control constraint §(a) places on G4's `lsof` scan, for the same
+  reason (a probe that cannot distinguish "clean" from "never ran" is not a gate).
+
+Every `die` in `prepare_staging_target` fires at **prepare** time — **before** the freeze is held — so
+the abort note must say so: nothing was unwound, and `ROLLBACK=1` must **not** be run (it would
+unmount the LIVE plaintext volume at `/mnt/data` and cause a gratuitous outage for no benefit).
+Residual state is at worst an open mapper, possibly mounted at `$STAGING`; both are idempotent on
+re-run, which is what the `ext4` arm above exists to make true.
+
 ## Alternatives Considered
 
 | Alternative | Verdict |
@@ -427,9 +474,19 @@ aws-cli (additive, no service restart); `escrow_probe` does a PUT→read-back→
 `.probe/<run-id>` R2 key (self-cleaning); `prepare_luks_target` selects, `luksFormat`s-if-raw, and
 opens the FRESH device (never the live plaintext volume — selected by by-id + a single-match assertion,
 guarded by the `blkid` discriminator §(g) that refuses to format a device carrying a filesystem
-signature) under the DP-6 `trap cleanup EXIT` host-local rollback. The `luksFormat` is destructive only
-on the disposable fresh volume; the live plaintext `/mnt/data` is never a candidate. None of these is the irreversible act the C19/AC20b
-gate exists to authorize (the freeze + plaintext wipe), all of which stay behind `DRY_RUN != 1`.
+signature) under the DP-6 `trap cleanup EXIT` host-local rollback; `prepare_staging_target` then
+`mkfs.ext4`s the **mapper**-if-empty and mounts it at `$STAGING` behind the mapper-arm discriminator +
+staging positive control §(g). The `luksFormat` and the `mkfs` are destructive only on the disposable
+fresh volume and on the container opened from it; the live plaintext `/mnt/data` is never a candidate
+for either. **Both are unchanged on this arm:** under `DRY_RUN=1` `prepare_staging_target` returns before it
+touches the mapper at all, so the mkfs/staging-mount work added by #6588 adds **nothing destructive
+to the dry-run arm**. Precisely: the dry-run arm performs `mkdir -p "$STAGING"` (idempotent; creates
+at most an empty directory) and two read-only asserts — the stray-copy check and the
+already-cutover check, both of which are deliberately evaluated in BOTH arms so the rehearsal
+reports those conditions honestly. It performs no `mkfs`, no `mount`, and no deletion. This proof is
+corrected for completeness, not weakened. None of these is the irreversible act
+the C19/AC20b gate exists to authorize (the freeze + plaintext wipe), all of which stay behind
+`DRY_RUN != 1`.
 
 **Truth table (why the expression is fail-closed).**
 
