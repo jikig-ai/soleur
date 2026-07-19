@@ -188,20 +188,34 @@ MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP
    - LinkedIn (if enabled): append \`bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-metrics\` to the same call (aggregate Company Page metrics: follower total + share statistics). Optionally also \`bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-activity\` for recent org post metadata. If either fails, log the error and continue.
    Batch 2 (GitHub + HN — single Bash call):
    - \`bash plugins/soleur/skills/community/scripts/community-router.sh github activity 1; bash plugins/soleur/skills/community/scripts/community-router.sh github contributors 1; bash plugins/soleur/skills/community/scripts/community-router.sh github discussions 1; bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats 1; bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions 1; bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20; bash plugins/soleur/skills/community/scripts/community-router.sh hn trending --limit 30\`
-   If any command in a batch fails, log the error and continue.
+   If any command in a batch fails, log the error and continue collecting the
+   remaining platforms — but "continue" NEVER means the failure disappears from
+   the digest. Every failed command MUST surface as an explicit
+   "collection failed: <reason>" line in that platform's section (see step 4).
+   Never omit a section, and never substitute a number from a previous digest,
+   because a command failed.
 
 3. **Read brand guide** at knowledge-base/marketing/brand-guide.md (section ## Voice)
    before writing any content. Match the brand voice in the digest.
 
 4. **Generate digest** and write to knowledge-base/support/community/YYYY-MM-DD-digest.md
    (use today's date). Follow the digest file contract from the community-manager
-   agent: frontmatter with period_start/period_end/generated_at, then sections
+   agent: frontmatter with period_start/period_end/generated_at — derive the
+   period from the collectors' own \`period_days\`/\`since\` fields, never from the
+   gap since the last committed digest, and never widen it to explain missing
+   data. Then sections
    ## Period, ## Activity Summary, ## Top Contributors, and optional sections
    ## Trending Topics, ## GitHub Activity, ## X/Twitter Metrics,
    ## Bluesky Metrics, ## LinkedIn Activity, ## Hacker News Activity.
    The ## GitHub Activity section must include a **Repository Stats** sub-section
    with a table showing Stars, Forks, and Watchers counts, plus a list of
    new stargazers in the period (username and starred date) from the repo-stats data.
+   Every one of those numbers must come from THIS run's repo-stats output. To
+   distinguish "GitHub quiet" from "GitHub broken": if a github command FAILED,
+   write an explicit "collection failed: <reason>" line under ## GitHub Activity
+   instead of the affected numbers. Do NOT carry a Stars/Forks/Watchers value
+   forward from a previous digest, do NOT label a stale number "(stale)", and do
+   NOT estimate one — an absent number is correct, a plausible wrong number is not.
    If fetch-interactions returned any interactions, include a **Community Interactions**
    sub-section with a markdown table: | User | Issue/PR | Comment |. Each row shows
    the commenter, a link to the issue (e.g., #123), and a snippet of their comment.
@@ -234,6 +248,92 @@ CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log
 const COMMUNITY_MONITOR_ALLOWED_PATHS = [
   "knowledge-base/support/community/",
 ] as const;
+
+// --- Collector-status sidecar (#6695) ---------------------------------------
+//
+// Every other failure channel the collectors have terminates in the spawned
+// agent's context window: the scripts run as Bash tool calls INSIDE claude, so
+// their stderr is captured by the tool, never by the claude process's own
+// stderr, and never reaches spawnResult.stderrTail. resolveOutputAwareOk cannot
+// close the gap either — it is a presence check on whether a labelled issue was
+// updated in the run window, so a digest that fabricates its numbers and one
+// that honestly reports "collection failed:" both resolve GREEN through it.
+//
+// The sidecar is the one deterministic path: the collector appends a JSONL
+// record per dispatch and the handler reads it directly, with no LLM in the
+// middle. It lives under spawnCwd but outside COMMUNITY_MONITOR_ALLOWED_PATHS,
+// so safeCommitAndPr can never commit it, and teardown discards it.
+const COLLECTOR_STATUS_DIRNAME = ".soleur-collector-status";
+const COLLECTOR_STATUS_FILENAME = "collector-status.jsonl";
+
+type CollectorStatusRecord = {
+  collector?: string;
+  command?: string;
+  exit?: number;
+  cause?: string;
+  warn?: string;
+};
+
+type CollectorStatusReport = {
+  present: boolean;
+  records: CollectorStatusRecord[];
+  failed: CollectorStatusRecord[];
+};
+
+export async function readCollectorStatus(
+  cwd: string,
+): Promise<CollectorStatusReport> {
+  // Lazy imports: a top-level node:fs binding would land in the static graph of
+  // every sibling test that mocks node builtins with partial factories.
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const file = join(cwd, COLLECTOR_STATUS_DIRNAME, COLLECTOR_STATUS_FILENAME);
+
+  let raw: string;
+  try {
+    raw = await readFile(file, "utf8");
+  } catch {
+    return { present: false, records: [], failed: [] };
+  }
+
+  const records: CollectorStatusRecord[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      records.push(JSON.parse(trimmed) as CollectorStatusRecord);
+    } catch {
+      // A malformed line is itself a collector defect, not a reason to drop the
+      // whole report — count it as a failure so it cannot pass silently.
+      records.push({ command: "unparseable", exit: 1, cause: "malformed-record" });
+    }
+  }
+  return {
+    present: true,
+    records,
+    failed: records.filter((r) => typeof r.exit === "number" && r.exit !== 0),
+  };
+}
+
+// D5b — the only deterministic control on the fabrication class. The prompt
+// edits shift probability; this checks the artifact. If repo-stats failed but
+// the digest still states a Repository Stats number, the digest invented it.
+// Both arms matter: an honest "collection failed:" digest must NOT fire, or the
+// alert trains the reader to ignore it.
+export function digestFabricatesRepoStats(
+  digest: string,
+  status: CollectorStatusReport,
+): boolean {
+  const repoStatsFailed = status.failed.some((r) => r.command === "repo-stats");
+  if (!repoStatsFailed) return false;
+
+  const section = digest.match(
+    /\*\*Repository Stats\*\*[\s\S]*?(?=\n##\s|\n\*\*|$)/,
+  )?.[0];
+  if (!section) return false;
+  if (/collection failed:/i.test(section)) return false;
+  return /\d/.test(section);
+}
 
 // Spawn-env allowlist (NOT a denylist). PR-5 base shape + PR-11 community-
 // monitor additions. The keys below are the COMPLETE set the spawned claude
@@ -411,7 +511,13 @@ export async function cronCommunityMonitorHandler({
             prompt: injectRunDate(COMMUNITY_MONITOR_PROMPT, runStartedAt),
             maxTurnDurationMs: MAX_TURN_DURATION_MS,
             cronName: "cron-community-monitor",
-            buildSpawnEnv,
+            // Wrapped rather than folded into buildSpawnEnv: the status dir is
+            // run-scoped (it depends on spawnCwd), while buildSpawnEnv is a
+            // static secret allowlist shared with the substrate's signature.
+            buildSpawnEnv: (token: string) => ({
+              ...buildSpawnEnv(token),
+              SOLEUR_COLLECTOR_STATUS_DIR: `${spawnCwd!}/${COLLECTOR_STATUS_DIRNAME}`,
+            }),
             logger,
             runId,
             attempt,
@@ -456,6 +562,85 @@ export async function cronCommunityMonitorHandler({
           stdoutTail: spawnResult!.stdoutTail,
         }),
       );
+
+      // --- Collector-status gate (#6695). Deliberately placed BEFORE the
+      //     persistence gate below: that branch is guarded on
+      //     `heartbeatOk && !abortedByTimeout`, so reading the sidecar inside it
+      //     would make the signal unreachable on exactly the runs it exists to
+      //     catch. reportSilentFallback fires UNCONDITIONALLY on a non-zero
+      //     record and heartbeatOk is set independently of resolveOutputAwareOk's
+      //     return value — its catch branch falls back to the spawn exit code
+      //     (deliberate fail-open, #5139) and would otherwise mask this. ---
+      const collectorStatus = await step.run("verify-collector-status", async () =>
+        readCollectorStatus(spawnCwd!),
+      );
+
+      if (collectorStatus.failed.length > 0) {
+        const summary = collectorStatus.failed
+          .map((r) => `${r.command ?? "unknown"}(exit=${r.exit}${r.cause ? `, cause=${r.cause}` : ""})`)
+          .join("; ");
+        reportSilentFallback(
+          new Error(`community collectors reported failures: ${summary}`),
+          {
+            feature: "cron-community-monitor",
+            op: "collector-status-failed",
+            message: "one or more community collectors exited non-zero",
+            extra: { fn: "cron-community-monitor", failures: collectorStatus.failed },
+          },
+        );
+        heartbeatOk = false;
+      } else if (!collectorStatus.present) {
+        // Distinguished from "all collectors succeeded". The sidecar should
+        // exist on every healthy run (the github commands are unconditional), so
+        // its absence means the collector never ran or could not write. Reported
+        // but NOT paged: this mechanism is new, and paging RED on its own
+        // absence during rollout would be a self-inflicted outage. Revisit once
+        // a few green runs confirm the write path.
+        reportSilentFallback(
+          new Error("collector-status sidecar absent after claude-eval"),
+          {
+            feature: "cron-community-monitor",
+            op: "collector-status-missing",
+            message: "no collector-status.jsonl was written by the spawned run",
+            extra: { fn: "cron-community-monitor", spawnCwd },
+          },
+        );
+      }
+
+      // D5b — fabrication detector. The prompt edits are a probability shift;
+      // this is the check against the artifact itself.
+      const fabricated = await step.run("verify-no-fabricated-stats", async () => {
+        if (!collectorStatus.present) return false;
+        const { readFile } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        const digestPath = join(
+          spawnCwd!,
+          "knowledge-base/support/community",
+          `${runStartedAt.slice(0, 10)}-digest.md`,
+        );
+        try {
+          const digest = await readFile(digestPath, "utf8");
+          return digestFabricatesRepoStats(digest, collectorStatus);
+        } catch {
+          return false;
+        }
+      });
+
+      if (fabricated) {
+        reportSilentFallback(
+          new Error(
+            "digest states Repository Stats numbers although repo-stats collection failed",
+          ),
+          {
+            feature: "cron-community-monitor",
+            op: "digest-fabricated-stats",
+            message: "digest reported stats the collector did not produce",
+            extra: { fn: "cron-community-monitor", failures: collectorStatus.failed },
+          },
+        );
+        heartbeatOk = false;
+      }
+
       // --- Step 4.5: deterministic persistence (#5111, pattern from #5091 /
       //     cron-seo-aeo-audit.ts). Gated on the issue-verified output rather
       //     than the spawn exit code: exit-0-with-no-issue is unverified
