@@ -350,11 +350,40 @@ export function checkDnsPropagated(
   // first request of a validation — redirects get no retry. A Cloudflare-proxied
   // AAAA answers successfully with the WRONG content, so there is no fallback at
   // all and validation fails silently at any window length.
+  const a4AllGitHub =
+    inputs.resolved4.length > 0 && inputs.resolved4.every(isGitHubPagesV4);
+
   if (inputs.resolved6.length > 0) {
+    // ‼️ An AAAA is only TERMINAL once the A-records prove we are actually
+    // looking at the post-flip answer. The public resolvers flap between the
+    // new GitHub answer and the still-cached Cloudflare one for the whole
+    // propagation window (independent caches on 1.1.1.1 and 8.8.8.8), and a
+    // tick that lands on the stale Cloudflare answer returns Cloudflare's
+    // A-records AND its synthetic AAAA together. Treating that as a surviving
+    // zone AAAA aborts a perfectly healthy remediation on a transient read.
+    //
+    // Measured on the 2026-07-19 probe fire (runId 01KXXR3BBF): five ticks
+    // alternated 185.199.x / 188.114.x with ENODATA, then a sixth landed on
+    // 188.114.x WITH the AAAA and terminated the run — while the zone provably
+    // has zero AAAA records (`GET /zones/{id}/dns_records?type=AAAA` → count 0).
+    //
+    // When the A-records HAVE converged to GitHub anycast and an AAAA is still
+    // answered, that is the real H-W4 condition and remains terminal: Let's
+    // Encrypt prefers IPv6 and will not fall back, so no window length helps.
+    if (!a4AllGitHub) {
+      return {
+        status: "retry",
+        reason:
+          `AAAA present (${inputs.resolved6.join(", ")}) but A-records are ` +
+          `${inputs.resolved4.length > 0 ? inputs.resolved4.join(", ") : "absent"} — ` +
+          `this is the pre-flip cached answer, not a surviving AAAA; waiting for propagation`,
+      };
+    }
     return {
       status: "failed",
       reason:
-        `AAAA still resolves after the DNS-only flip (${inputs.resolved6.join(", ")}) — ` +
+        `AAAA still resolves after the DNS-only flip (${inputs.resolved6.join(", ")}) ` +
+        `while A-records have converged to GitHub anycast — ` +
         `Let's Encrypt prefers IPv6 and will not fall back, so no window length can succeed. ` +
         `Fix the zone (the toggle set covers only A + CNAME) before remediating.`,
     };
