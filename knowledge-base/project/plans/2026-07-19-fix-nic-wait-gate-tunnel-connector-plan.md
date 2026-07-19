@@ -209,7 +209,7 @@ security-adjacent consideration is that `tunnel_token` already rides `user_data`
 plan neither moves nor widens it. A NIC-less connector is an *availability* failure, not
 a confidentiality one.
 
-**Brand-survival threshold:** `single-user incident`.
+- **Brand-survival threshold:** `single-user incident`.
 
 Rationale: `web-1` is the **sole live origin** (ADR-115 is explicit that a web-host
 reboot would power off the only origin). One bad boot is one total outage for the only
@@ -756,8 +756,9 @@ logs:
   retention: "per existing Sentry + Better Stack retention; no new retention surface"
 
 discoverability_test:
-  command: "Query Sentry for tag stage IN (private_nic_ready, private_nic_timeout) filtered to region:cloud-init, over the window since the last web-1 create."
-  expected_output: "Exactly one event per fresh connector-host boot. CORRECTED at review: an earlier draft read 'zero events across a window containing a known web-1 create means the gate did not run — itself the finding.' That inference is unsound, and it is the same conflation the gate's third arm exists to prevent, moved up into the transport. Zero events equally means an empty baked DSN (soleur-boot-emit exits 0 early when the DSN is empty), curl unavailable, or blocked egress. Zero events is a signal to check the transport FIRST, not a conclusion about the gate."
+  command: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_PRIVATE_NIC --limit 3
+  expected_output: SOLEUR_PRIVATE_NIC
+  note: "This probes the CORROBORATING signal (the 5-minute web-private-nic-guard beat on the live web-1), NOT the gate's own emit. The gate is once-per-instance on a fresh boot, so its stage events cannot exist until the next web-1 create — there is no command that can prove the gate fired before it has ever run, and pretending otherwise is what an unverified discoverability_test looks like. Two corrections from review: (a) the guard pings its heartbeat ONLY on a healthy run, so a NIC-broken host makes the beat LAPSE (period 360 + grace 120, ~8 min) — the failure signal is an ABSENCE, not a nic_ok=false line. (b) An earlier draft asserted that zero Sentry events across a window containing a known web-1 create would mean the gate did not run. Unsound: an empty baked DSN silences all three arms identically (soleur-boot-emit exits 0 early when the DSN is empty), as does blocked egress. Zero events is a signal to check the transport FIRST, not a conclusion about the gate."
 ```
 
 **Affected-surface note (Phase 2.9.2).** A fresh cloud-init boot is a **blind execution
