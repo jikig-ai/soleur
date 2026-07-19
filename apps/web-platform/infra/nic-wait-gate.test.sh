@@ -212,6 +212,60 @@ assert "the call site interpolates \${private_ip}, not a hardcoded address" \
 assert "the call site hardcodes no 10.0.1.x literal" \
   "! grep -qE '^[[:space:]]*-[[:space:]]+soleur-wait-nic[[:space:]]+10\.0\.1\.' '$CI'"
 
+# ── AC8: bake/apply coherence — the delivery-channel P0 ─────────────────────────────
+# soleur-host-bootstrap.sh is a member of local.host_script_files, which feeds
+# local.host_scripts_content_hash, which is injected into user_data and RECOMPUTED AND
+# COMPARED at boot under the `set -e` armed before the `set +e` region:
+#     [ "$GOT" = "$HOST_SCRIPTS_HASH" ] || exit 1
+# So editing this file changes the hash, and a web-1 created after the apply but BEFORE
+# `:latest` carries the matching bootstrap aborts its ENTIRE runcmd at stage=verify — the
+# exact catastrophe this gate exists to prevent, arriving through the delivery channel
+# rather than the code. This is the first PR to edit soleur-host-bootstrap.sh since the
+# coherence guard was added for the sibling web-2 path.
+#
+# That guard (web2-recreate-preflight.sh) CANNOT be reused on the routine path: it hard-
+# requires a pinned repo@sha256 ref and dies on anything else, while var.image_name defaults
+# to the mutable `:latest`. So the safety argument here is structural instead, and rests on
+# exactly two facts. Both are ASSERTED below rather than assumed, because if either changes
+# the exposure silently opens:
+#
+#   (1) hcloud_server.web carries ignore_changes = [user_data, ...] — so this edit is inert
+#       for the RUNNING web-1 and cannot re-render its user_data in place.
+#   (2) hcloud_server.web["web-1"] is absent from every -target= in the auto-apply workflow
+#       — so a routine merge apply cannot create or replace it. (web-2's entry IS present,
+#       and that job is the one already carrying the coherence preflight.)
+#
+# Residual, deliberately NOT closed here: an operator-driven fresh create/-replace of web-1
+# still consumes the new hash with no preflight. That structural gap is the sibling of the
+# guard's single-call-site limitation and is tracked as its own issue — it needs a preflight
+# that works against a mutable tag, which is a different piece of work from this gate.
+echo ""
+echo "--- AC8: bake/apply coherence — the structural facts the safety argument rests on ---"
+WF_APPLY="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
+assert "the apply workflow is present at the expected path" "[[ -f '$WF_APPLY' ]]"
+assert "hcloud_server.web pins ignore_changes = [user_data, ...] (edit is inert for the running host)" \
+  "grep -qE '^[[:space:]]*ignore_changes[[:space:]]*=[[:space:]]*\[user_data,' '$TF'"
+# Anchor on the -target= construct, not a bare resource name: the resource is named in prose
+# comments throughout that workflow, so a bare grep would match commentary and pass vacuously
+# in exactly the case this assert exists to catch.
+#
+# COUNT OUTSIDE THE assert, then compare. An in-assert `! grep -qE '...'` has to survive both
+# eval-quoting and regex-escaping of `[`, `"` and `'`; the first draft of this line did not,
+# and a regex that matches nothing makes a NEGATIVE assert pass forever. Mutation-testing it
+# (inject a real web-1 -target and require a RED) is what surfaced that — the assert reported
+# clean against a workflow that genuinely did target web-1. Fixed string + explicit count
+# removes the escaping surface entirely. `|| true` guards grep -c's exit 1 on a zero count,
+# which would otherwise abort this `set -e` script on the PASSING case.
+WEB1_TARGET_N=$(grep -cF -- "-target='hcloud_server.web[\"web-1\"]'" "$WF_APPLY" || true)
+assert "hcloud_server.web[\"web-1\"] is in NO -target= of the auto-apply workflow (found $WEB1_TARGET_N)" \
+  "[[ '$WEB1_TARGET_N' == '0' ]]"
+# Positive control: the web-2 entry MUST be found. Without this, a typo'd needle (or a future
+# rename of the -target= spelling) would make the count-zero assert above pass vacuously —
+# the same defect one layer up. If this ever fails, the needle is wrong, not the workflow.
+WEB2_TARGET_N=$(grep -cF -- "-target='hcloud_server.web[\"web-2\"]'" "$WF_APPLY" || true)
+assert "positive control: the web-2 -target= needle still matches (found $WEB2_TARGET_N)" \
+  "[[ '$WEB2_TARGET_N' -ge 1 ]]"
+
 echo ""
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
