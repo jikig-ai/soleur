@@ -246,6 +246,17 @@ resource "hcloud_server" "web" {
     # predicate binds to the wrong one. Same by-id + nofail shape as cloud-init-git-data.yml,
     # cloud-init-inngest.yml, cloud-init-registry.yml (web-platform was the lone glob holdout).
     workspaces_volume_id = hcloud_volume.workspaces[each.key].id
+    # #6441 — the address the first-boot NIC gate waits on, before `cloudflared service
+    # install` registers this host as the tunnel's sole connector (ADR-114 I1). Single-sourced
+    # from var.web_hosts per ADR-115's single-definition doctrine: a hardcoded literal in
+    # cloud-init.yml would drift silently from variables.tf on a subnet renumber, and the gate
+    # would then wait out its whole budget on an address that will never appear.
+    #
+    # NOT sourced from /etc/default/web-private-nic-guard: that file is written by an SSH
+    # provisioner (below) which reaches RUNNING hosts only, so on the fresh boot this gate
+    # exists for it does not yet exist. Reusing it would work on web-1 today and fail silently
+    # on any future host — the worst failure shape.
+    private_ip = each.value.private_ip
   }))
 
   # cloud-init and ssh_keys are create-time attributes. After import,

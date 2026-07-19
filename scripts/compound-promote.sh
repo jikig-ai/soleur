@@ -146,7 +146,6 @@ for file in "${SAFE_FILES[@]}"; do
   summary=$(head -n 10 "$file" | jq -Rs .)
   jq -nc --arg path "$rel" --argjson summary "$summary" '{path: $path, summary: $summary}' >> "$CORPUS_NDJSON"
 done
-CORPUS_JSON=$(jq -s . "$CORPUS_NDJSON")
 
 # Compute live always-loaded byte size of the AGENTS payload. The LLM cannot
 # inspect the repo filesystem, so the driver injects the current size into the
@@ -183,7 +182,7 @@ REQUEST=$(jq -n \
   --arg model "claude-sonnet-5" \
   --argjson max_tokens 16384 \
   --arg prompt "$PROMPT" \
-  --argjson corpus "$CORPUS_JSON" \
+  --slurpfile corpus "$CORPUS_NDJSON" \
   '{model: $model, max_tokens: $max_tokens, messages: [{role: "user", content: ($prompt + "\n\nCorpus:\n" + ($corpus | tostring))}]}')
 
 RESPONSE=$("$CURL_BIN" -sS https://api.anthropic.com/v1/messages \

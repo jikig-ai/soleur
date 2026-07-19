@@ -108,3 +108,7 @@ mutants/
 # self-healing/auto PRs, not from state files). Reject any future
 # .github/promotion-*.json re-introduction.
 .github/promotion-*.json
+
+# #6695 — collector-status sidecar written into the cron spawn cwd; run-scoped,
+# never committed (also structurally excluded in _cron-safe-commit.ts).
+.soleur-collector-status/

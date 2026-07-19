@@ -26,7 +26,16 @@ export const DEFAULT_MAX_DELETIONS = 10;
 // allowlist filter is mirrored to Sentry. PREFIX semantics (trailing slash
 // required): a literal-entry exclusion would let deletions UNDER a scaffolded
 // directory flow into the deletion guard on every run (#5091 plan review).
-export const STRUCTURAL_EXCLUSION_PREFIXES: readonly string[] = [".claude/"];
+// Workspace scaffolding the substrate itself writes on EVERY run. These are
+// excluded BEFORE the allowlist filter so they never reach the loud
+// "paths-dropped" report -- that signal exists to catch a bot writing outside
+// its allowlist, and a path that appears on every single run would drown it.
+// `.soleur-collector-status/` is the #6695 collector-status sidecar, written by
+// github-community.sh and read by cron-community-monitor before teardown.
+export const STRUCTURAL_EXCLUSION_PREFIXES: readonly string[] = [
+  ".claude/",
+  ".soleur-collector-status/",
+];
 
 // #5111 — the bot-PR-with-synthetic-checks pattern: deterministic data-refresh
 // PRs post these check-runs as completed/success so the integration-pinned
