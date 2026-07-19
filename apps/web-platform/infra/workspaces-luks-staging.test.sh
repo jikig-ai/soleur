@@ -150,6 +150,9 @@ nhas '^mkfs\.ext4 ' && nhas '^mount ' \
 # T4 — a non-mountpoint, NON-EMPTY $STAGING is a stray plaintext copy on the ROOT DISK: exactly
 # what the 2026-07-19 run left behind. DETECT and REFUSE. Deleting it is a separate single-purpose
 # PR — it is user data (AP-009) — so "no rm anywhere" is as load-bearing as the abort itself.
+# That separate PR has since landed as clean_stray() (T4d-T4j below, ADR-119 "Addendum
+# (2026-07-19): the stray-copy carve-out"); T4c's scope is prepare_staging_target ONLY and is
+# deliberately left byte-identical — it is not a whole-file prohibition on rm.
 # ---------------------------------------------------------------------------
 run_case "$CUTOVER" \
   'FRESH_DEV="$BLK"; MAPPER="$BLK"; : > "$WORKSPACES_STAGING/stray-copy"; prepare_staging_target' \
@@ -164,6 +167,148 @@ outF 'EMIT_DRIFT: staging_stray_present' \
 nhas '^rm ' \
   && ok "T4c the stray guard runs NO rm — it detects and refuses, it never deletes user data (AP-009)" \
   || no "T4c an rm was issued against the stray copy — that is user data and a separate PR"
+
+# ---------------------------------------------------------------------------
+# T4d-T4j — clean_stray(), the CLEAN_STRAY=1 operator entrypoint. This is the "separate
+# single-purpose PR" T4c's comment anticipated: the ONE sanctioned deletion of the stray, a
+# documented AP-009 deviation (ADR-119 "Addendum (2026-07-19): the stray-copy carve-out").
+#
+# T4c above is deliberately NOT edited and NOT weakened. Its run_case invokes
+# prepare_staging_target ONLY, which still issues no rm on any path — so "detect and refuse"
+# stays mechanically enforced for every arm that is not this explicit entrypoint. Read T4c as a
+# prohibition on prepare_staging_target, NOT on the whole file.
+#
+# ASSERTION IDIOM: these cases must NOT reuse T4c's bare `^rm ` — the harness makes rm a
+# PASSTHROUGH RECORDER (`rm() { rec "rm $*"; command rm "$@"; }`), so every rm in traced scope is
+# recorded including incidental temp cleanup. Refusal assertions are $STAGING-scoped.
+# T4d carries the POSITIVE CONTROL (`has "^rm -rf .*$STG"` — $STG is the harness stub $STAGING
+# in the OUTER shell; $WORKSPACES_STAGING exists only INSIDE the case subshell): without it, a
+# clean_stray() that deleted via `find -exec rm` (invoking the real /bin/rm binary rather than the
+# harness shell function) would be invisible to the recorder and EVERY negative assertion below
+# would pass vacuously.
+# ---------------------------------------------------------------------------
+
+# T4d — the happy path: non-mountpoint non-empty $STAGING, healthy $MOUNT, subset holds.
+# Fixture deliberately includes a DOTFILE: `rm -rf "$STAGING"/*` misses dotfiles, which would
+# leave the stray guard correctly still firing after a "successful" cleanup.
+run_case "$CUTOVER" \
+  'mkdir -p "$WORKSPACES_MOUNT/ws-a" "$WORKSPACES_MOUNT/.cache"; mkdir -p "$WORKSPACES_STAGING/ws-a"; : > "$WORKSPACES_STAGING/.cache"; clean_stray; echo "REMAIN:[$(ls -A "$WORKSPACES_STAGING" 2>/dev/null)]"' \
+  'clean_stray emit_clean_stray _same_dev' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
+  FINDMNT_MOUNT_SRC="$BLKDEV" FINDMNT_STAGING_SRC="" DU_SRC=4096
+ran && ok "T4d clean_stray removes a provenance-established stray and returns 0" \
+    || no "T4d clean_stray did not return 0 (rc=$CASE_RC ${CASE_OUT:0:300})"
+outF 'REMAIN:[]' \
+  && ok "T4d-b the removal is DOTFILE-INCLUSIVE (\$STAGING is empty afterwards, .cache gone)" \
+  || no "T4d-b \$STAGING is not empty after clean_stray — a dotfile survived and the guard still fires"
+has "^rm -rf .*$STG" \
+  && ok "T4d-c POSITIVE CONTROL: the deletion is visible to the harness recorder" \
+  || no "T4d-c no \$STAGING-scoped rm was recorded — every negative assertion below is VACUOUS"
+markerF 'SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY' \
+  && ok "T4d-d emits under its OWN marker name, not the STAGING_TARGET vocabulary" \
+  || no "T4d-d no CLEAN_STRAY marker — the deletion has no operator-visible receipt"
+markerF 'AP-009' \
+  && ok "T4d-e the receipt names the AP-009 deviation" \
+  || no "T4d-e the receipt does not name AP-009 — the deviation is not legible at run time"
+
+# T4e — $STAGING is a MOUNTPOINT: that is the real LUKS volume, not a root-disk stray.
+run_case "$CUTOVER" \
+  ': > "$WORKSPACES_STAGING/ws-a"; clean_stray' \
+  'clean_stray emit_clean_stray _same_dev' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="0" \
+  FINDMNT_MOUNT_SRC="$BLKDEV" DU_SRC=4096
+died && ok "T4e a MOUNTPOINT \$STAGING refuses (that is the real volume, not a stray)" \
+     || no "T4e clean_stray did not refuse on a mountpoint \$STAGING — it would delete the LUKS volume"
+nhas "^rm -rf .*$STG" \
+  && ok "T4e-b no \$STAGING-scoped rm was issued on the mountpoint refusal" \
+  || no "T4e-b an rm reached \$STAGING while it was a mountpoint — catastrophic"
+outF 'EMIT_DRIFT: clean_stray_staging_is_mountpoint' \
+  && ok "T4e-c the reason is clean_stray_staging_is_mountpoint" \
+  || no "T4e-c no clean_stray_staging_is_mountpoint drift emitted"
+
+# T4f — provenance FALSIFIED: a top-level entry exists in $STAGING that $MOUNT does not have.
+# The stray is meant to be a strict duplicate; a unique entry means something else wrote here.
+run_case "$CUTOVER" \
+  'mkdir -p "$WORKSPACES_MOUNT/ws-a" "$WORKSPACES_STAGING/ws-a" "$WORKSPACES_STAGING/ws-ORPHAN"; clean_stray' \
+  'clean_stray emit_clean_stray _same_dev' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
+  FINDMNT_MOUNT_SRC="$BLKDEV" FINDMNT_STAGING_SRC="" DU_SRC=4096
+died && ok "T4f a top-level entry absent from \$MOUNT refuses (provenance falsified)" \
+     || no "T4f clean_stray deleted a stray holding an entry canonical does not have"
+nhas "^rm -rf .*$STG" \
+  && ok "T4f-b no \$STAGING-scoped rm on the not-subset refusal" \
+  || no "T4f-b an rm was issued despite the subset check failing"
+outF 'EMIT_DRIFT: clean_stray_not_subset' \
+  && ok "T4f-c the reason is clean_stray_not_subset" \
+  || no "T4f-c no clean_stray_not_subset drift emitted"
+
+# T4g — requirement 2 at the script layer: CLEAN_STRAY=1 must never ride the dry-run arm.
+# It REFUSES rather than forcing DRY_RUN=0 the way ROLLBACK does — forcing is precisely what
+# makes ROLLBACK's ungated arm dangerous.
+run_case "$CUTOVER" \
+  ': > "$WORKSPACES_STAGING/ws-a"; clean_stray' \
+  'clean_stray emit_clean_stray _same_dev' \
+  BLK="$BLKDEV" DRY_RUN=1 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
+  FINDMNT_MOUNT_SRC="$BLKDEV" DU_SRC=4096
+died && ok "T4g CLEAN_STRAY=1 with DRY_RUN=1 refuses (requirement 2, script layer)" \
+     || no "T4g a dry-run dispatch reached the deletion path — requirement 2 is violated"
+nhas "^rm -rf .*$STG" \
+  && ok "T4g-b no \$STAGING-scoped rm on the dry-run refusal" \
+  || no "T4g-b an rm was issued from the dry_run=true arm"
+outF 'EMIT_DRIFT: clean_stray_dryrun_conflict' \
+  && ok "T4g-c the reason is clean_stray_dryrun_conflict" \
+  || no "T4g-c no clean_stray_dryrun_conflict drift emitted"
+
+# T4h — mode mutual exclusion. The ROLLBACK block ends `exit 0`, so without this guard an
+# operator who ticks BOTH gets a rollback (umount $MOUNT, cryptsetup close, docker stop) on a
+# host where no freeze was held — a gratuitous outage — the run exits GREEN, and the stray is
+# still there. The operator most likely to tick both is the one who just read "the cutover is
+# wedged, try the recovery modes."
+run_case "$CUTOVER" \
+  'assert_mode_exclusive' \
+  'assert_mode_exclusive' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 ROLLBACK=1
+died && ok "T4h ROLLBACK=1 + CLEAN_STRAY=1 refuses before either mode block runs" \
+     || no "T4h both modes were accepted — the rollback would silently win and report green"
+outF 'EMIT_DRIFT: clean_stray_mode_conflict' \
+  && ok "T4h-b the reason is clean_stray_mode_conflict" \
+  || no "T4h-b no clean_stray_mode_conflict drift emitted"
+nhas '^umount ' && nhas '^docker ' \
+  && ok "T4h-c NO rollback side effects ran (no umount, no docker stop) — no gratuitous outage" \
+  || no "T4h-c the conflicting dispatch performed rollback side effects"
+
+# T4i — $MOUNT and $STAGING resolve to the SAME device: deleting the "stray" would be deleting
+# canonical. _same_dev fails closed (it requires readlink to prove a real block device).
+run_case "$CUTOVER" \
+  'mkdir -p "$WORKSPACES_MOUNT/ws-a" "$WORKSPACES_STAGING/ws-a"; clean_stray' \
+  'clean_stray emit_clean_stray _same_dev' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
+  FINDMNT_MOUNT_SRC="$BLKDEV" FINDMNT_STAGING_SRC="$BLKDEV" DU_SRC=4096
+died && ok "T4i \$MOUNT and \$STAGING on the same device refuses (that is canonical, not a stray)" \
+     || no "T4i clean_stray would have deleted from the canonical device"
+nhas "^rm -rf .*$STG" \
+  && ok "T4i-b no \$STAGING-scoped rm on the same-device refusal" \
+  || no "T4i-b an rm was issued against the canonical device"
+outF 'EMIT_DRIFT: clean_stray_same_device' \
+  && ok "T4i-c the reason is clean_stray_same_device" \
+  || no "T4i-c no clean_stray_same_device drift emitted"
+
+# T4j — an ALREADY-EMPTY $STAGING is a SUCCESS, not a failure. Re-dispatch is the most likely
+# operator action after an ambiguous run log, and the file already establishes this principle at
+# rollback()'s mapper guard: "a recovery-path signal that cries wolf gets ignored."
+run_case "$CUTOVER" \
+  'clean_stray' \
+  'clean_stray emit_clean_stray _same_dev' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
+  FINDMNT_MOUNT_SRC="$BLKDEV"
+ran && ok "T4j an already-empty \$STAGING returns 0 (idempotent re-dispatch, no false alarm)" \
+    || no "T4j a re-dispatch over an already-clean \$STAGING failed (rc=$CASE_RC) — cries wolf"
+markerF 'reason=already_clean' \
+  && ok "T4j-b the no-op is NAMED already_clean, not silently indistinguishable from a deletion" \
+  || no "T4j-b no already_clean marker — a no-op looks like a successful deletion"
+nhas "^rm -rf .*$STG" \
+  && ok "T4j-c no rm issued when there was nothing to remove" \
+  || no "T4j-c an rm was issued against an empty \$STAGING"
 
 # ---------------------------------------------------------------------------
 # T9 — $MAPPER absent must be named ACCURATELY. Unguarded, an absent mapper falls through to the
