@@ -381,11 +381,7 @@ runcmd:
     STAGE=apt_update
     n=0; until timeout 240 apt-get update -o Acquire::Retries=3 -o DPkg::Lock::Timeout=300; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
     STAGE=apt_install
-    # lsof (#6588): the /workspaces LUKS cutover's G4 straggler assert is fail-CLOSED, so a host
-    # without lsof would abort the freeze. workspaces-cutover.sh's ensure_lsof installs it on demand
-    # (web-1 carries lifecycle{ ignore_changes = [user_data] } and cannot be rebuilt, so cloud-init
-    # cannot reach it) — this line covers FUTURE hosts so the on-demand path is a fallback, not the
-    # only delivery.
+    # lsof: #6588 fail-closed G4 straggler assert (future hosts; ensure_lsof covers running ones).
     n=0; until timeout 300 apt-get install -y -o DPkg::Lock::Timeout=300 curl fail2ban jq lsof nftables; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
 
   # Reload fail2ban so the jail.d/soleur-sshd.local drop-in applies (#2654).
