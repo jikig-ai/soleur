@@ -739,7 +739,8 @@ error_reporting:
 failure_modes:
   - mode: "Private NIC never converges within the wait budget; connector registers NIC-less and serves no ingress"
     detection: "stage=private_nic_timeout warning emitted FROM the host itself, at boot, before the connector registers"
-    alert_route: "Sentry; corroborated within 5 min by the existing web-private-nic-guard.sh SOLEUR_PRIVATE_NIC beat (nic_ok=false)"
+    alert_route: "Sentry issue alert `web-host-private-nic-boot-gate` (apps/web-platform/infra/sentry/issue-alerts.tf), filtering stage IN (private_nic_timeout, private_nic_probe_fault). CORRECTED at review: an earlier draft said 'Sentry' unqualified, and at that point NO rule matched these stages — soleur-boot-emit sends one shared message for every stage, so the events raise no new-issue notification on their own either. Emitting without a filter is not a route."
+    corroboration: "CORRECTED at review: the web-private-nic-guard.sh signal is NOT 'nic_ok=false within 5 min'. The guard pings its heartbeat ONLY on a healthy run, so a NIC-broken host makes the beat LAPSE — the corroborating signal is a heartbeat lapse at period 360 + grace 120 (~8 min), not a failure beat. It is also second-line: betteruptime_heartbeat.web_nic_guard declares paused = true with ignore_changes = [paused], so its live enablement is not derivable from source. Sentry is the authoritative route; this is confirmation, not detection."
   - mode: "NIC converges but late — connector registration is delayed"
     detection: "stage=private_nic_ready emitted; boot-stage timestamps bound the delay"
     alert_route: "Sentry (info); no page — this is the gate working as designed"
@@ -756,7 +757,7 @@ logs:
 
 discoverability_test:
   command: "Query Sentry for tag stage IN (private_nic_ready, private_nic_timeout) filtered to region:cloud-init, over the window since the last web-1 create."
-  expected_output: "Exactly one event per fresh connector-host boot. Zero events across a window containing a known web-1 create means the gate did not run — itself the finding."
+  expected_output: "Exactly one event per fresh connector-host boot. CORRECTED at review: an earlier draft read 'zero events across a window containing a known web-1 create means the gate did not run — itself the finding.' That inference is unsound, and it is the same conflation the gate's third arm exists to prevent, moved up into the transport. Zero events equally means an empty baked DSN (soleur-boot-emit exits 0 early when the DSN is empty), curl unavailable, or blocked egress. Zero events is a signal to check the transport FIRST, not a conclusion about the gate."
 ```
 
 **Affected-surface note (Phase 2.9.2).** A fresh cloud-init boot is a **blind execution
