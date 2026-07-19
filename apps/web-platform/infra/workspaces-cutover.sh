@@ -490,9 +490,9 @@ ensure_mtime_tools() {
 
 # _g4_depth1_fingerprint — NUL-delimited, locale-stable hash of $MOUNT's immediate children.
 # Newline-safe by construction: a hostile filename carrying \n cannot forge an entry boundary.
-# Proves the probe bracket is listing-NEUTRAL (nothing added, nothing removed) before the restore
-# stamps the root's mtime back — otherwise a create+delete pair landing inside the bracket would
-# have its evidence overwritten by our own restore.
+# Shows the probe bracket is NET listing-neutral before the restore stamps the root's mtime back.
+# NOT a proof of no-foreign-write: a MATCHED create+delete pair is net-zero and passes by
+# construction (measured — mutation m19a). See the scope block at the comparison site.
 _g4_depth1_fingerprint() {
   find "$MOUNT" -mindepth 1 -maxdepth 1 -print0 2>/dev/null \
     | LC_ALL=C sort -z | sha256sum | cut -d' ' -f1
@@ -555,14 +555,31 @@ assert_mount_quiesced() {
   # The unlink must have LANDED before we stamp the mtime back — otherwise the restore would hide a
   # straggler probe file from the very fingerprint that exists to catch it.
   if [ -e "$probe" ]; then
-    _g4_restore_root_mtime "$mref" "$phase" best-effort; emit_drift g4_probe_unremovable
+    # Deliberately NO restore on this path, and the message below says so truthfully. Stamping the
+    # root's mtime back while our own artifact is still sitting in the tree would present a
+    # contaminated tree as a pristine one. The perturbation is the lesser evil and the run aborts
+    # here regardless, so C1 never certifies anything.
+    rm -f "$mref"; emit_drift g4_probe_unremovable
     die "the G4 probe file survived its own unlink (phase=${phase}) — refusing to restore \$MOUNT's mtime over a tree that still carries our artifact"
   fi
 
-  # Listing must be byte-identical across the bracket. A foreign create+delete PAIR landing inside
-  # the bracket is invisible to mtime alone once we restore, so this is the only thing standing
-  # between us and stamping over someone else's write. (A bare foreign `touch` of the root inside
-  # the bracket remains an OPEN blind spot — see the residual note below.)
+  # Listing must be byte-identical across the bracket.
+  #
+  # SCOPE OF THIS GUARD — stated narrowly on purpose, because an earlier draft of this comment
+  # overclaimed and the mutation battery (m19a) falsified it:
+  #   CATCHES   a NET listing change across the bracket — a foreign create with no matching delete,
+  #             or a delete with no matching create. m19b measures this firing.
+  #   DOES NOT  catch a MATCHED foreign create+delete pair. fp_pre and fp_post are both sampled
+  #   CATCH     with no probe present, so a matched pair is net-zero and compares equal BY
+  #             CONSTRUCTION. Two point-in-time listings cannot see a write that undid itself
+  #             between them; catching that needs inotify-class watching, which is out of scope
+  #             for a gate that must run inside the freeze window.
+  #
+  # So the OPEN residual is larger than "a bare foreign `touch` of the root": it is any foreign
+  # mutation that leaves the depth-1 listing net-unchanged — a bare touch, or a matched
+  # create+delete pair. In that window our restore does erase the writer's mtime evidence. Recorded
+  # honestly rather than papered over; the freeze already quiesces the known writers (G4's whole
+  # purpose), so the residual is a writer that started AFTER the quiescence sample.
   fp_post="$(_g4_depth1_fingerprint)"
   if [ "$fp_pre" != "$fp_post" ]; then
     _g4_restore_root_mtime "$mref" "$phase" best-effort; emit_drift g4_bracket_listing_changed
