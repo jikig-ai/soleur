@@ -570,8 +570,8 @@ logs:
   where: Inngest run logs + Sentry breadcrumbs + collector-status.jsonl (run-scoped, in spawnCwd, never committed)
   retention: per existing Sentry/Inngest retention; the sidecar is discarded with the ephemeral workspace
 discoverability_test:
-  command: "bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats 1; echo exit=$?"
-  expected_output: "exit=0 with a numeric stargazers_count, OR non-zero with GITHUB_COLLECTOR_CAUSE= on stderr — never a number without a successful fetch"
+  command: bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats 1
+  expected_output: stargazers_count
 ```
 
 No SSH is required for any verification step (`hr-no-ssh-fallback-in-runbooks`).
@@ -587,8 +587,7 @@ fabricated traction data.
 public repository metadata through already-granted `gh` auth. No new data category, destination,
 or retention is introduced.
 
-**Brand-survival threshold:** `none` — internal operator reporting, no external surface, no
-customer data.
+- **Brand-survival threshold:** `none` — internal operator reporting, no external surface, no customer data.
 
 **Sensitive-path scope-out** (required — `deepen-plan` Phase 4.6 correctly rejected an earlier
 draft that claimed no sensitive path was touched):
