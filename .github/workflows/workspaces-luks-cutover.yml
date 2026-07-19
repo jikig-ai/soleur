@@ -34,7 +34,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: "If true: L3 gates + escrow + bulk rsync + verify only; NO freeze, NO repoint. Leave true until rehearsed."
+        description: "Rehearsal. COVERS: L3 gates, LUKS target prep, escrow proof + R2 probe, G2 manifest, advisory holder probe. Does NOT cover: no bulk rsync, no freeze, no delta rsync, no C1 verify, no repoint, no wipe. A green rehearsal is NOT evidence the copy/verify path works."
         required: false
         type: boolean
         default: true

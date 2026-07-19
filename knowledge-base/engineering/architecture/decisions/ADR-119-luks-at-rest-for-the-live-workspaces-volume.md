@@ -73,6 +73,57 @@ container mid-rsync. **Post-stop interrupted-write asserts are blocking** — no
 `lsof +D /mnt/data` (`lsof +f -- /mnt/data` is malformed). `git gc --auto` is a verified non-risk: it
 dies with the PID namespace, and `refs/checkpoints/*` are gc roots.
 
+#### Addendum 2026-07-19 (#6588 freeze-quiesce) — the quiesce set was incomplete
+
+The enumeration above (`docker stop -t 120` + `webhook.service`) is **not the full set of
+`/mnt/data` writers**, and this ADR asserting it was is what let two real freezes abort.
+
+On 2026-07-19 the first two REAL freezes (runs 29676994044 and 29687729540) each safe-aborted on the
+C1 byte-identity verify with exactly **one** difference:
+
+```
+SOLEUR_WORKSPACES_LUKS_VERIFY_DIFF count=1 idx=0
+  icode=>fcst...... path=redis/appendonlydir/appendonly.aof.94.incr.aof
+```
+
+`>fcst......` = checksum + size + mtime differ — the signature of a file being appended to *during*
+the copy. **`inngest-redis.service` persists its AOF to `/mnt/data/redis`** (`inngest-redis.conf`:
+`dir /mnt/data/redis`, `appendonly yes`) and is a **systemd unit, not a container** — so
+`docker stop "$CONTAINER"` never touched it and Redis appended straight through the freeze, the
+pass-2 delta rsync, and the verify. DP-6 auto-rolled back both times; no data was lost.
+
+The C1 gate was **correct**: copying a live-appending journal would have put a torn AOF on the
+encrypted volume and silently lost armed Inngest reminders. The writer was not quiesced.
+
+**Restated quiesce set** (`QUIESCE_UNITS` in `workspaces-cutover.sh`, a single declaration point):
+
+| Unit | Quiesced? | Why |
+|---|---|---|
+| `webhook.service` | yes, first | a CI deploy must not restart the container mid-rsync |
+| the app container | yes, `-t 120` | C8 drain (unchanged) |
+| `inngest-redis.service` | **yes (new)** | writes `/mnt/data/redis`; `TimeoutStopSec=30` gives a graceful SIGTERM + AOF flush |
+| `luks-monitor.timer` | yes, best-effort | armed by a *prior* successful cutover; `RequiresMountsFor=/mnt/data`, so on a re-dispatch it can hold the mount and trip the now fail-closed G4 |
+| `inngest-server.service` | **no — deliberately** | `ProtectSystem=strict` + `ReadWritePaths=/var/lib/inngest /var/lock` means it provably cannot write `/mnt/data`; `TimeoutStopSec=180` would burn 3 min of a ~10 min freeze for zero quiescence benefit. Reconciled post-freeze instead (clear failed state, start only if inactive). |
+
+**The straggler assert must be fail-closed and self-delivering.** `lsof +D /mnt/data` was wrapped in
+`if command -v lsof`, so on a host without `lsof` the entire gate silently vanished — false
+assurance, and the reason the unquiesced writer was never named. `lsof` is provisioned by no repo
+artifact, so making the gate fail-closed without also *delivering* it would guarantee an abort on
+the next real freeze. Both halves are required: `ensure_lsof` (on-demand install, mirroring
+`ensure_aws`; the cloud-init package covers future hosts only) **and** an abort — never a skip — if
+it is still absent. The predicate must also carry **no pipe**: `lsof +D … | grep -q .` under
+`set -o pipefail` returns 141 when `grep` closes the pipe early and the producer takes SIGPIPE, so
+`&& die` never fires — a *size-dependent fail-open* that evaporates precisely when there are many
+stragglers. And holders are emitted (`SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER`) **before** `die`, the
+same evidence-survives-the-abort constraint #6604 established for C1.
+
+**Three restore sites, not two.** Every quiesced unit is `RequiresMountsFor=/mnt/data`, so a restore
+that races the remount leaves the unit `failed` — which silently outlives the run and is worse than
+leaving it stopped. `resume_writers()` therefore clears failed state before each start and runs
+after the mount, on **all three** exit paths: the success path, `rollback()` (the EXIT trap and
+`ROLLBACK=1`), and the dead-man `systemd-run` command. The dead-man is the one that runs
+**unattended** — omitting it there leaves the durable Inngest queue down with no operator signal.
+
 ### (b) Rollback is the retained plaintext volume — and the "one-way door" framing is wrong
 
 No flag-flip analogue exists (`/workspaces` has no `GIT_DATA_STORE_ENABLED` equivalent) and GitHub is
