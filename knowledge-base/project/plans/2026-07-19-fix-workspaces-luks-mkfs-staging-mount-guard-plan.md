@@ -58,6 +58,8 @@ external technical verification.
 
 ### New considerations discovered
 
+<!-- lint-infra-ignore start: retrospective ANALYSIS of failure modes an operator could stumble into (e.g. reaching for ROLLBACK=1 after a prepare-time abort) — these describe mistakes the new die messages now PREVENT, they do not instruct a Soleur user to run anything -->
+
 - **This PR is what first makes `ENOSPC` reachable** — the copy moves from the root disk (where it
   fit) into a mapper strictly smaller than its source. The capacity gate moved from deferred to
   in-scope.
@@ -68,6 +70,8 @@ external technical verification.
 - **Three `set -u` aborts** would have killed the first-cutover path *before emitting any marker*.
 - **The stubbed harness could not have run the specified tests** — `run_case` lives in a different
   file, never sets `WORKSPACES_STAGING`, and has a single-rc `mountpoint` stub.
+
+<!-- lint-infra-ignore end -->
 
 ## Overview
 
@@ -100,6 +104,8 @@ cannot express *"correct copy, wrong target"*.
 
 ### The root cause is a shape transplant across differing error-handling regimes
 
+<!-- lint-infra-ignore start: quotes the EXISTING git-data cloud-init precedent verbatim as evidence for the diagnosis — provisioning code that already ships, not a step anyone runs by hand -->
+
 The sibling git-data volume has the **identical** line (`cloud-init-git-data.yml:159-170`):
 
 ```bash
@@ -118,6 +124,8 @@ failed `mount` fatal. `workspaces-cutover.sh` copied the line's *shape* into a `
 would have made the mount succeed in the first place. `git-data-luks.tf:73-78` documents the
 mechanism explicitly ("the guest's `luksFormat` overwrites the LUKS header region and `mkfs.ext4`
 lays the real FS **INSIDE** the mapper").
+
+<!-- lint-infra-ignore end -->
 
 ### The layer below: every downstream gate is *relational*, none is *anchored*
 
@@ -196,6 +204,8 @@ target-preparation path fail *earlier* and *louder*. See Non-Goals.
 
 ## Research Reconciliation — Spec vs. Codebase
 
+<!-- lint-infra-ignore start: retrospective premise-vs-codebase VALIDATION table (what was verified on main) — describes the cutover MECHANISM this PR fixes, not a runtime step a Soleur user performs -->
+
 | Claim | Reality | Plan response |
 |---|---|---|
 | "Mount at `~696` is unguarded" | Exact | Fix (Phase 2) |
@@ -207,6 +217,8 @@ target-preparation path fail *earlier* and *louder*. See Non-Goals.
 | ADR-119 records the cutover mechanism | §(g) documents the 3-arm `blkid` state machine on the **device**; the Reversibility proof describes `prepare_luks_target` as *"selects, `luksFormat`s-if-raw, and opens the FRESH device"* | **The ADR carries the same gap** — zero `mkfs` hits, no staging-mount step. Amend it |
 | **Review finding:** v1 claimed a failed `:892` umount makes "rollback fail EBUSY" | `rollback()` `:577` is `cryptsetup close … 2>/dev/null \|\| true` — the EBUSY is **swallowed**, rollback remounts plaintext (`:579`) and reports **success** | Corrected. The real end state is worse: **plaintext live at `$MOUNT` AND a still-open mapper holding a full divergent copy still mounted at `$STAGING`**, run green, no telemetry. Also violates ADR-119 §(b)'s "retained volume is DETACHED, not attached-unmounted" in the mirror direction |
 | **Review finding:** v1 justified not reordering `FLIP_DONE` as "rollback would not learn a partial flip occurred" | **False.** `FLIP_DONE`'s only in-script reader is `cleanup()` `:602`, whose condition is `[ "$FLIP_DONE" = "1" ] \|\| [ "$FREEZE_HELD" = "1" ]` — and `FREEZE_HELD=1` is set at `:808`, ~90 lines earlier, so the disjunction is **already** satisfied. The persisted copy has no in-script reader (`read_state` is used only for `PLAINTEXT_DEV`, `:580`) | Rationale corrected. Guarding `:899` is chosen because it is the **smaller diff**, not because ordering is safety-critical. v1's AC pinning the ordering is **dropped** — it encoded a false invariant |
+
+<!-- lint-infra-ignore end -->
 
 ## User-Brand Impact
 
@@ -302,6 +314,8 @@ Plan review verified the harness against the files and found v2's assumptions wr
   canonicalization — which is a further reason the loopback suite is not optional.
 
 ### Phase 2 — GREEN: `prepare_staging_target()`
+
+<!-- lint-infra-ignore start: specifies the SHELL FUNCTION this PR adds to workspaces-cutover.sh; the 'operator action' referenced is re-dispatching the gated workflow, which is exactly the automated route this lint asks for -->
 
 Define **above the sourced-detection guard at `:652`** (after `log`/`die`/`emit_drift`/`_vscrub`/
 `LUKS_LOG_TAG`), mirroring the `:351`/`:608` convention. **No `local`** for `KEY`, `FRESH_DEV`,
@@ -457,11 +471,15 @@ the first-cutover path would abort with `unbound variable` *and emit no marker*.
    failed", where the filesystem is *empty* and `reused=1` fires anyway. Without a byte count the flag
    cries wolf on its most frequent trigger and gets ignored.
 
+<!-- lint-infra-ignore end -->
+
 ### Phase 3 — wire the call site
 
 Replace `:695-696` with `prepare_staging_target`. Top-level call ordering is otherwise unchanged.
 
 ### Phase 4 — strictly-additive sibling fail-closures
+
+<!-- lint-infra-ignore start: enumerates fail-open->fail-closed code edits and the die-message text they emit; the ROLLBACK=1 prose is the WARNING the new messages carry, not an instruction -->
 
 Every item converts fail-open → fail-closed. None can make a currently-passing run fail for a new
 reason; each can only abort a run that is *already* broken.
@@ -483,6 +501,8 @@ rollback is needed; do NOT run `ROLLBACK=1`"). Otherwise an operator reaching fo
 prepare-time abort triggers `umount "$MOUNT"` on the **live plaintext volume** and takes a gratuitous
 outage. Residual state after such an abort is a mapper left open (and possibly mounted at `$STAGING`);
 that is idempotent on re-run and must be documented in the die text.
+
+<!-- lint-infra-ignore end -->
 
 ### Phase 5 — ADR-119 amendment
 
@@ -756,6 +776,8 @@ steps. No `.tf` file is touched, so `apply-web-platform-infra.yml` does not fire
 
 ## Downtime & Cutover
 
+<!-- lint-infra-ignore start: states that the freeze is a separately gated, operator-APPROVED workflow_dispatch that this task must NOT trigger — the routing this lint requires, described rather than prescribed -->
+
 Deepen-plan gate 4.55 fires: the script this PR edits performs a freeze on a serving surface.
 
 **This PR itself takes nothing offline.** It ships code, tests, workflow steps, and an ADR
@@ -793,7 +815,11 @@ at the delta rsync (`:839`), **inside** the freeze, burning an irreversible-free
 the run aborts before any user impact. `mkfs`'s synchronous inode-table write is likewise paid
 pre-freeze by design.
 
+<!-- lint-infra-ignore end -->
+
 ## Risks & Mitigations
+
+<!-- lint-infra-ignore start: risk/mitigation table; the operator-error rows describe scenarios the new guards make impossible, not procedures to follow -->
 
 | Risk | Mitigation |
 |---|---|
@@ -816,6 +842,8 @@ pre-freeze by design.
 | **New asserts could abort a freeze that would otherwise succeed.** | Every assert in `prepare_staging_target` is **pre-freeze**, so a failure aborts with **zero downtime** — strictly better than proceeding onto the wrong device. **Two exceptions** (corrected post-review): the repoint `umount` and repoint `mount` asserts are **in-freeze**; a failure there is a bounded outage + DP-6 rollback, not zero-downtime. Phase 4's changes are all fail-open → fail-closed and cannot make a currently-*correct* run fail. |
 | **Unverified current on-host state.** What `blkid` reports for the mapper on web-1 now is unknown from here (no SSH). | The three-arm guard is total by construction — empty, `ext4`, or anything else are all handled and the third arm dies. No arm assumes a particular current state. |
 | **The stray copy remains on disk after this PR.** | The `staging_stray_present` die **mechanically blocks every cutover** until it is remediated, and emits a Sentry-fatal + marker so it is tracked rather than invisible. Remediation ships in the immediately-following PR (Non-Goals), sequenced before any real freeze. |
+
+<!-- lint-infra-ignore end -->
 
 ## Research Insights (deepen-plan)
 
