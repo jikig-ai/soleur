@@ -384,5 +384,25 @@ assert_rc 0 "$RC" "activity still succeeds at the per_page cap"
 assert_file_matches "$CASE7/out/stderr" 'truncat' \
   "activity warns when a fetch returns exactly per_page items"
 
+# Both arms are required. The pulls endpoint over-fetches a fixed page and
+# filters by date afterwards, so a full RAW page is its steady state -- against
+# the live repo it returns 100 on every run. Warning on that would fire daily
+# and train the reader to ignore the signal, so the cap is measured after the
+# date filter for this endpoint. A detector that cries wolf is worse than none.
+CASE7B="$(new_case cap_negative)"
+gen_issues 3 16   > "$CASE7B/fixtures/issues.json"
+gen_pulls  100 16 > "$CASE7B/fixtures/pulls.json"
+# Age every PR out of the window so the post-filter count is 0, not 100.
+jq -c '[.[] | .updated_at = "2000-01-01T00:00:00Z"]' \
+  "$CASE7B/fixtures/pulls.json" > "$CASE7B/fixtures/pulls.tmp" \
+  && mv "$CASE7B/fixtures/pulls.tmp" "$CASE7B/fixtures/pulls.json"
+
+run_collector "$CASE7B" activity 1
+assert_rc 0 "$RC" "activity succeeds when pulls returns a full raw page"
+assert_jq "$CASE7B/out/stdout" '.pull_requests.count == 0' \
+  "activity: the date filter still excludes out-of-window PRs"
+assert_file_not_matches "$CASE7B/out/stderr" 'truncat' \
+  "activity does NOT warn on a full raw pulls page that filters down to 0"
+
 echo ""
 print_results

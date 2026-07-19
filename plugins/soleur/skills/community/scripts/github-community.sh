@@ -152,13 +152,22 @@ check_rate_limit_file() { # $1=file
   fi
 }
 
+_json_len() { # $1=file
+  jq -s 'add // [] | length' <"$1" 2>/dev/null || echo 0
+}
+
 # A response holding exactly per_page items is indistinguishable from a
 # truncated one. Record it so a future growth-driven undercount is loud instead
 # of silent. This is detection, not pagination.
-check_cap() { # $1=file  $2=what
-  local n
-  n=$(jq -s 'add // [] | length' <"$1" 2>/dev/null) || n=0
-  if [[ "${n:-0}" -eq 100 ]]; then
+#
+# Takes a COUNT, not a file, because "a full page" only means truncation for
+# endpoints that filter server-side. The pulls endpoint deliberately over-fetches
+# a fixed page and filters by date afterwards, so a full raw page is its normal
+# state -- warning on it would fire every run and train the reader to ignore the
+# signal. For that endpoint the caller passes the post-filter count instead,
+# where a full page really does mean the window is saturated.
+check_cap() { # $1=count  $2=what
+  if [[ "${1:-0}" -eq 100 ]]; then
     _CAP_WARN="truncated_at_per_page"
     echo "WARN: ${2} returned exactly 100 items (per_page cap) -- results may be truncated" >&2
   fi
@@ -195,7 +204,7 @@ cmd_activity() {
   check_rate_limit "$issues"
   printf '%s' "$issues" >"$issues_f"
   check_array_response "$issues_f" issues
-  check_cap "$issues_f" issues
+  check_cap "$(_json_len "$issues_f")" issues
 
   prs=$(gh api "repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100" 2>&1) || {
     _CAUSE="pulls-fetch-failed"
@@ -206,7 +215,8 @@ cmd_activity() {
   check_rate_limit "$prs"
   printf '%s' "$prs" >"$prs_f"
   check_array_response "$prs_f" pulls
-  check_cap "$prs_f" pulls
+  # Post-filter count: see check_cap on why pulls is measured after the date filter.
+  check_cap "$(jq -s --arg since "$since" 'add // [] | map(select(.updated_at >= $since)) | length' <"$prs_f" 2>/dev/null || echo 0)" pulls
 
   # `--slurpfile x f` wraps the file's contents in an array, so a single-array
   # body reads as [[...]] and a paginated body as [[...],[...]]. `add // []`
@@ -261,7 +271,7 @@ cmd_contributors() {
   check_rate_limit "$commits"
   printf '%s' "$commits" >"$commits_f"
   check_array_response "$commits_f" commits
-  check_cap "$commits_f" commits
+  check_cap "$(_json_len "$commits_f")" commits
 
   # Get contributors from recent issues/PRs
   local issues
@@ -407,7 +417,7 @@ cmd_repo_stats() {
   fi
   check_rate_limit_file "$star_f"
   check_array_response "$star_f" stargazers
-  check_cap "$star_f" stargazers
+  check_cap "$(_json_len "$star_f")" stargazers
 
   # Combine and filter
   jq -n \
