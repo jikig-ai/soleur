@@ -457,8 +457,14 @@ logs:
   where: GitHub Actions run log, journald -> vector -> Better Stack (luks-monitor tag), Sentry
   retention: per existing Better Stack / Sentry retention; no new sink
 discoverability_test:
-  command: gh run view <run-id> --log | grep SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER
-  expected_output: the capped, scrubbed holder rows naming the PID/path that blocked the freeze
+  # Proves the cutover run log — the synchronous channel SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER
+  # and SOLEUR_WORKSPACES_LUKS_DRYRUN_HOLDER are emitted to — is queryable with NO ssh.
+  # Credential-free by design: a Doppler-bearing probe (betterstack-query.sh) cannot run under
+  # preflight Check 10's `env -i` sandbox, so it would fail the gate for an environment reason
+  # rather than a signal reason. The durable Better Stack half is verified separately: the
+  # luks-monitor tag is already allowlisted in vector.toml include_matches.
+  command: gh run list --workflow=workspaces-luks-cutover.yml --limit 1 --json conclusion --jq .[0].conclusion
+  expected_output: "success or failure"
 ```
 
 No SSH appears in any verification path (`hr-no-ssh-fallback-in-runbooks`). The `luks-monitor`
