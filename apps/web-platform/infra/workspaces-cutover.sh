@@ -200,7 +200,7 @@ emit_verify_diff() {
   local count="$1" vout="$2" reason="$4" k=0 line icode path summary row
   log "C1 verify FAILED ($reason): ${count} difference(s). Itemized (capped ${VERIFY_DIFF_CAP}):"
   # Human view -> run log.
-  head -n "$VERIFY_DIFF_CAP" "$vout" 2>/dev/null | while IFS= read -r line; do log "  DIFF ${line}"; done
+  head -n "$VERIFY_DIFF_CAP" "$vout" 2>/dev/null | while IFS= read -r line; do log "  DIFF $(_vscrub "$line")"; done
   [ "$count" -gt "$VERIFY_DIFF_CAP" ] 2>/dev/null && log "  … +$((count - VERIFY_DIFF_CAP)) more"
   # Structured marker -> Better Stack (logger -t luks-monitor) AND run log (echo). Summary first.
   summary="SOLEUR_WORKSPACES_LUKS_VERIFY_DIFF feature=workspaces-luks op=workspaces-luks-verify-diff count=${count} reason=$(_vscrub "$reason") host=$(hostname 2>/dev/null)"
@@ -229,7 +229,10 @@ verify_byte_identity() {
   # into a var BEFORE rm (die "$(tail "$verr")" after rm would print nothing).
   if [ "$rc" -ne 0 ]; then
     err_tail="$(tail -n 3 "$verr" 2>/dev/null | tr '\n' ' ')"
-    emit_verify_diff "$rc" "$vout" "$verr" verify_rsync_error   # log BEFORE rm + die
+    # count=0: a verify-rsync ERROR has no diff count (vout is empty). The rc + stderr are surfaced in
+    # the die message below; passing "0" avoids the marker mislabelling the rsync exit code as a diff
+    # count (and avoids a nonsensical "+N more" when rc > VERIFY_DIFF_CAP).
+    emit_verify_diff 0 "$vout" "$verr" verify_rsync_error       # log BEFORE rm + die
     rm -f "$vout" "$verr"
     die "the itemized verify rsync itself FAILED (rc=${rc}) to run to completion — cannot certify DST==SRC (C1); stderr: ${err_tail}"
   fi

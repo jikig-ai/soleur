@@ -28,10 +28,12 @@ no() { fail=$((fail + 1)); printf 'FAIL - %s\n' "$1"; }
 # Sources <script>, installs stubs, runs verify_byte_identity /src /dst in a subshell.
 # Sets globals: CASE_RC (subshell exit), CASE_OUT (combined stdout+stderr), MARKER_LOG (logger sink).
 run_case() {
-  local script="$1" rc_in="$2" out_in="$3" err_in="$4"
+  local script="$1" rc_in="$2" out_in="$3" err_in="$4" cap_in="${5:-}"
   MARKER_LOG="$(mktemp)"
+  # cap_in empty => the script's own default (40) applies (${VAR:-40} treats "" as unset).
   CASE_OUT="$(
     RSYNC_RC="$rc_in" RSYNC_OUT="$out_in" RSYNC_ERR="$err_in" MARKER_LOG="$MARKER_LOG" CUTOVER="$script" \
+    WORKSPACES_VERIFY_DIFF_CAP="$cap_in" \
     bash -c '
       source "$CUTOVER"                                   # guard => functions only
       # Stubs (override the sourced defs). The real streams are redirected by verify_byte_identity
@@ -81,11 +83,12 @@ fi
 run_case "$CUTOVER" 23 "" "rsync error: some files could not be transferred (code 23) at main.c(1338)"
 if [ "$CASE_RC" -ne 0 ] \
   && grep -q 'verify rsync itself FAILED' <<<"$CASE_OUT" \
-  && grep -q 'code 23' <<<"$CASE_OUT"; then
-  ok "case c: verify-rsync hard error fails closed with the rsync stderr surfaced"
+  && grep -q 'code 23' <<<"$CASE_OUT" \
+  && grep -q 'reason=verify_rsync_error' <<<"$(marker)"; then
+  ok "case c: verify-rsync hard error fails closed with the rsync stderr surfaced + marker emitted"
 else
-  no "case c: rc=23 should fail closed with stderr surfaced (rc=$CASE_RC)"
-  printf '     out: %s\n' "$CASE_OUT"
+  no "case c: rc=23 should fail closed with stderr surfaced + marker (rc=$CASE_RC)"
+  printf '     out: %s\n     marker: %s\n' "$CASE_OUT" "$(marker)"
 fi
 
 # Case d — attribute-only codes are NOT narrowed away: an mtime-only (.f..t) and a dir-mtime (.d..t)
@@ -106,6 +109,45 @@ if [ "$CASE_RC" -eq 0 ] && ! grep -q 'SOLEUR_WORKSPACES_LUKS_VERIFY_DIFF' <<<"$(
   ok "case e: clean verify passes with no abort and no marker"
 else
   no "case e: clean verify should pass silently (rc=$CASE_RC)"
+  printf '     out: %s\n     marker: %s\n' "$CASE_OUT" "$(marker)"
+fi
+
+# Case f — LOG-INJECTION defense (_vscrub): a workspace filename carrying an embedded CR MUST NOT
+# put a raw control byte into the Better Stack (marker) sink OR the human run-log — that is what
+# lets a crafted name split into a forged separate marker line at the JSON/journald ingester.
+# (_vscrub deliberately keeps spaces/`=`, so intra-line field text is NOT its contract — that is
+# path-last-mitigated; here we assert the newline/control-strip property only.) Mutation M4
+# (neuter _vscrub) MUST flip this. `$'…'` embeds a literal CR into the crafted filename.
+INJECT=$'>f+++++++++ workspaces/ws1/a\rSOLEUR_WORKSPACES_LUKS_VERIFY_DIFF op=FORGED count=0'
+run_case "$CUTOVER" 0 "$INJECT" ""
+if [ "$CASE_RC" -ne 0 ] \
+  && [ "$(marker | LC_ALL=C grep -c '[[:cntrl:]]' || true)" -eq 0 ] \
+  && [ "$(LC_ALL=C grep -c $'\r' <<<"$CASE_OUT" || true)" -eq 0 ]; then
+  ok "case f: crafted path (embedded CR) is control-scrubbed in both sinks (no newline injection)"
+else
+  no "case f: log-injection defense (_vscrub) failed — a raw control byte leaked to a sink (rc=$CASE_RC)"
+  printf '     marker: %s\n' "$(marker | cat -v)"
+fi
+
+# Case g — path-LAST parse: a filename containing SPACES must be captured WHOLE in the marker's
+# path= field (a last-token-only parse would truncate it). count=1, dies, whole path visible.
+run_case "$CUTOVER" 0 ">f+++++++++ workspaces/ws1/my report v2.txt" ""
+if [ "$CASE_RC" -ne 0 ] && grep -q 'path=workspaces/ws1/my report v2.txt' <<<"$(marker)"; then
+  ok "case g: a spaced path is captured whole in path= (path-last parse)"
+else
+  no "case g: spaced path should be captured whole (rc=$CASE_RC)"
+  printf '     marker: %s\n' "$(marker)"
+fi
+
+# Case h — CAP + overflow: with cap=1 and 3 diffs, exactly ONE per-diff row is emitted and a
+# "… +2 more" note is logged. Exercises head -n cap, the loop guard, and the +N-more arithmetic.
+THREE=$'>f+++++++++ workspaces/ws1/a\n>f+++++++++ workspaces/ws1/b\n>f+++++++++ workspaces/ws1/c'
+run_case "$CUTOVER" 0 "$THREE" "" 1
+rows="$(marker | grep -c 'idx=' || true)"
+if [ "$CASE_RC" -ne 0 ] && [ "$rows" -eq 1 ] && grep -q '+2 more' <<<"$CASE_OUT"; then
+  ok "case h: cap=1 emits exactly 1 per-diff row + a '+2 more' note (count=3)"
+else
+  no "case h: cap/overflow not honored (rows=$rows rc=$CASE_RC)"
   printf '     out: %s\n     marker: %s\n' "$CASE_OUT" "$(marker)"
 fi
 
@@ -176,6 +218,22 @@ else
   no "mutation M3 did not flip case c — the rc fail-closed check is not load-bearing"
 fi
 rm -f "$MUT3"
+
+# M4 — neuter _vscrub to a passthrough => case f MUST flip (the forged marker / raw CR leaks). Proves
+# the log-injection defense is load-bearing, not decorative (the P1 the mutation battery first missed).
+MUT4="$(mutate 's|^_vscrub() .*$|_vscrub() { printf "%s" "${1:-}"; }|')"
+if ! grep -qE '^_vscrub\(\) \{ printf "%s" "\$\{1:-\}"; \}$' "$MUT4"; then
+  no "mutation M4 sed did NOT land (_vscrub body unchanged) — treat as un-run, not evidence"
+else
+  INJECT=$'>f+++++++++ workspaces/ws1/a\rSOLEUR_WORKSPACES_LUKS_VERIFY_DIFF op=FORGED count=0'
+  run_case "$MUT4" 0 "$INJECT" ""
+  if [ "$(marker | LC_ALL=C grep -c '[[:cntrl:]]' || true)" -ne 0 ]; then
+    ok "mutation M4 (neuter _vscrub): case f flips — a raw CR leaks to the marker (defense is load-bearing)"
+  else
+    no "mutation M4 did not flip case f — _vscrub is not load-bearing (or the assertion is vacuous)"
+  fi
+fi
+rm -f "$MUT4"
 
 # ---------------------------------------------------------------------------
 echo
