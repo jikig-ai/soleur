@@ -444,13 +444,26 @@ invoke_closed() {
   cat "$out_file"
 }
 
-# The #6657 shape: closed COMPLETED, `earliest` in the FUTURE, probe exits 1.
-# This is the case the earliest-gate bypass exists for — without it the issue
-# leaves the closed-recency window before its own soak elapses and is evaluated
-# zero times, so the reopen path would miss its own motivating case.
+# The #6657 shape once its soak HAS elapsed: closed COMPLETED, `earliest` in the
+# past, probe still exits 1 → the closure was premature and must be reopened.
+# #6657 was closed 2026-07-18 with earliest=2026-07-25 and CLOSED_LOOKBACK_DAYS
+# is 14, so it stays a candidate until 08-01 and is evaluated from 07-25 with
+# the earliest gate intact — the gate never had to be bypassed for this case.
 closed_body_6657() {
   cat <<'EOF'
 [cert-poll] GitHub Pages cert requires attention
+
+<!-- soleur:followthrough script=scripts/followthroughs/cert-probe.sh earliest=2020-01-01T00:00:00Z secrets=GH_TOKEN -->
+EOF
+}
+
+# The same issue BEFORE its soak elapses. Probes use exit 1 for "still soaking"
+# (see workspaces-luks-soak-6604.sh: `1 = FAIL (still soaking, ...)`), so an
+# earliest-bypassing sweeper would read every legitimately-closed-but-soaking
+# issue as prematurely closed and reopen it, overriding the operator.
+closed_body_still_soaking() {
+  cat <<'EOF'
+[soak] verification still running
 
 <!-- soleur:followthrough script=scripts/followthroughs/cert-probe.sh earliest=2099-01-01T00:00:00Z secrets=GH_TOKEN -->
 EOF
@@ -473,12 +486,32 @@ t9_closed_fail_reopens_bypassing_earliest() {
   local root; root=$(setup_closed_root 1 '{"comments":[]}')
   local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
   local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
-  assert_contains     "T9 bypasses the earliest gate for the closed set" \
-                      "bypassing earliest=2099-01-01T00:00:00Z" "$out"
+  assert_not_contains "T9 does not skip once earliest has elapsed" \
+                      "not yet reached" "$out"
   assert_contains     "T9 reopens the prematurely-closed issue (exit 1)" \
                       "issue reopen 6657" "$calls"
   assert_contains     "T9 comments with the reopen block" \
                       "issue comment 6657" "$calls"
+  unset GH_TOKEN; rm -rf "$root"
+}
+
+# --- T9b: a still-soaking closed issue must NOT be reopened -------------------
+t9b_still_soaking_closure_is_not_reopened() {
+  # THE REGRESSION THIS GUARDS: an earlier draft bypassed the earliest gate for
+  # the closed set. Because soak probes exit 1 for "still soaking", that would
+  # have reopened every legitimately-closed issue whose soak had not elapsed.
+  # Measured 2026-07-19: #6604 (earliest=07-25), #6416 (07-22) and #6462 (07-29)
+  # were all closed COMPLETED with a future earliest and would have been
+  # reopened that night, overriding the operator.
+  local root; root=$(setup_closed_root 1 '{"comments":[]}')
+  local out; out=$(invoke_closed "$root" "$(closed_body_still_soaking)")
+  local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
+  assert_contains     "T9b honors the earliest gate on the closed set" \
+                      "not yet reached" "$out"
+  assert_not_contains "T9b does NOT reopen a still-soaking closure" \
+                      "issue reopen" "$calls"
+  assert_not_contains "T9b does not even run the probe before earliest" \
+                      "issue comment" "$calls"
   unset GH_TOKEN; rm -rf "$root"
 }
 
@@ -518,7 +551,10 @@ t12_skips_own_pass_closure() {
   # Evidence-based, not actor-based: still catches a premature close by ANY
   # actor, while not re-verifying a closure the sweeper itself justified. Absent
   # this, one follow-through silently becomes a permanent daily monitor.
-  local comments='{"comments":[{"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."}]}'
+  # Two comments, with the PASS NOT last — a positional `.comments[-1]` check
+  # would miss it and re-arm daily re-verification on exactly the issues humans
+  # have touched.
+  local comments='{"comments":[{"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."},{"body":"triage bot: linked to #1234"}]}'
   local root; root=$(setup_closed_root 1 "$comments")
   local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
   local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
@@ -578,12 +614,58 @@ EOF
 t15_open_path_still_honors_earliest() {
   # The closed set must not have widened the open query or relaxed its gate.
   local root; root=$(setup_closed_root 1 '{"comments":[]}')
-  local body; body=$(closed_body_6657)
+  local body; body=$(closed_body_still_soaking)
   local combined; combined=$(invoke_run_one "$root" "$body" 6657)
   assert_contains     "T15 open path still skips on a future earliest" \
                       "not yet reached" "$combined"
   assert_contains     "T15 open issue query keeps its own --state open limit" \
                       "--state open --limit 50" "$(cat "$SUT")"
+  unset GH_TOKEN; rm -rf "$root"
+}
+
+# --- T16: main()'s closed-set loop (V1 — was entirely untested) -------------
+# The whole reopen feature lives in main(): the search string, the COMPLETED
+# filter, the lookback, CLOSED_LIMIT, and the per-issue dispatch. Every prior
+# test drove run_one directly, so main() could have been pointed at a
+# nonexistent label, had its wontfix filter deleted, or run a zero-day lookback
+# with a fully green suite.
+t16_main_closed_set_dispatch() {
+  local root; root=$(setup_tmpdir)
+  cat > "$root/scripts/followthroughs/cert-probe.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$root/scripts/followthroughs/cert-probe.sh"
+
+  # Three closed issues: COMPLETED (candidate), NOT_PLANNED (wontfix), and a
+  # null reason (unknown provenance). Only the first may be evaluated.
+  local body='[cert] x\n\n<!-- soleur:followthrough script=scripts/followthroughs/cert-probe.sh earliest=2020-01-01T00:00:00Z secrets=GH_TOKEN -->'
+  local closed_json
+  closed_json=$(printf '[{"number":6657,"body":"%s","stateReason":"COMPLETED"},{"number":7001,"body":"%s","stateReason":"NOT_PLANNED"},{"number":7002,"body":"%s","stateReason":null}]' "$body" "$body" "$body")
+  make_gh_stub "$root" '[]' "$closed_json" '{"comments":[]}'
+
+  local out
+  out=$(
+    cd "$root"
+    export PATH="$root/bin:$PATH" GH_REPO="test/test" DRY_RUN=0 GH_TOKEN="stub"
+    # shellcheck disable=SC1090
+    source "$SUT"
+    main 2>&1
+  )
+  local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
+
+  assert_contains     "T16 queries the closed set by label+state+recency" \
+                      "label:follow-through state:closed closed:>=" "$calls"
+  assert_contains     "T16 honors CLOSED_LIMIT on the closed query" \
+                      "--limit 30" "$calls"
+  assert_contains     "T16 reopens the COMPLETED candidate" \
+                      "issue reopen 6657" "$calls"
+  assert_not_contains "T16 leaves the NOT_PLANNED wontfix closed" \
+                      "issue reopen 7001" "$calls"
+  assert_not_contains "T16 leaves a null-stateReason closure alone" \
+                      "issue reopen 7002" "$calls"
+  assert_contains     "T16 says why it skipped the wontfix" \
+                      "not COMPLETED" "$out"
   unset GH_TOKEN; rm -rf "$root"
 }
 
@@ -596,12 +678,14 @@ t6_fenced_block_directive_is_skipped
 t7_symlink_under_allowlist_rejected
 t8_secrets_gh_token_forwarded
 t9_closed_fail_reopens_bypassing_earliest
+t9b_still_soaking_closure_is_not_reopened
 t10_closed_pass_is_full_noop
 t11_closed_transient_is_silent
 t12_skips_own_pass_closure
 t13_reopen_cap_bounds_the_loop
 t14_failed_reopen_emits_error_annotation
 t15_open_path_still_honors_earliest
+t16_main_closed_set_dispatch
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"

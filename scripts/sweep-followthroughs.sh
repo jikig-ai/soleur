@@ -105,7 +105,18 @@ readonly SWEEPER_PASS_HEADING="### Sweeper run: PASS"
 closed_precheck() {
   local issue_num="$1"
   local comments_json rc=0
-  comments_json=$(gh issue view "$issue_num" --repo "$REPO" --json comments 2>&1) || rc=$?
+  # ‼️ stderr is captured SEPARATELY, not folded in with `2>&1`. gh writes
+  # routine noise to stderr while exiting 0 (e.g. its own "A new release of gh
+  # is available" notice); folding that into the JSON makes every jq below
+  # parse-fail. Because run_one is invoked as `run_one … || fail` and this
+  # function under `if !`, errexit is suppressed throughout — so an empty
+  # `reopens` would satisfy `0 >= REOPEN_MAX` as false and PROCEED, defeating
+  # both the cap and the PASS guard simultaneously in a function whose whole
+  # contract is to fail closed.
+  local err_file
+  err_file=$(mktemp -t followthrough-gh-err.XXXXXXXX)
+  comments_json=$(gh issue view "$issue_num" --repo "$REPO" --json comments 2>"$err_file") || rc=$?
+  rm -f "$err_file"
   if (( rc != 0 )); then
     # FAIL-CLOSED. Without the comment history we can neither bound the reopen
     # loop nor tell our own PASS closure apart from someone else's — reopening
@@ -113,18 +124,29 @@ closed_precheck() {
     fail "issue #$issue_num: could not read comments (rc=$rc) — skipping closed-set evaluation"
     return 1
   fi
+  # Fail closed on unparseable JSON too — same reasoning as a non-zero exit.
+  if ! printf '%s' "$comments_json" | jq -e '.comments' >/dev/null 2>&1; then
+    fail "issue #$issue_num: comment payload is not parseable JSON — skipping closed-set evaluation"
+    return 1
+  fi
 
   # Do not re-litigate a closure the sweeper itself justified. This is
   # EVIDENCE-based, not ACTOR-based: it still catches a premature close by any
   # actor (operator, agent, a `Closes #N` in prose, or the sweeper on a
-  # different day), while leaving the sweeper's own most recent PASS alone.
-  # Without it, every correctly-closed issue would be re-verified daily for the
-  # whole recency window and reopened the moment its condition regressed — one
+  # different day), while leaving the sweeper's own PASS alone. Without it,
+  # every correctly-closed issue would be re-verified daily for the whole
+  # recency window and reopened the moment its condition regressed — one
   # follow-through would silently become a permanent monitor.
-  local last_comment
-  last_comment=$(printf '%s' "$comments_json" | jq -r '.comments[-1].body // ""')
-  if [[ "$last_comment" == "$SWEEPER_PASS_HEADING"* ]]; then
-    log "issue #$issue_num: last comment is the sweeper's own PASS block — not re-litigating"
+  #
+  # ‼️ Scan ALL comments, not just `.comments[-1]`. A positional check is
+  # defeated by any single trailing comment from anyone — an operator note, the
+  # triage bot, a linked-discussion reply — which silently re-arms daily
+  # re-verification on exactly the issues humans have touched.
+  local sweeper_passes
+  sweeper_passes=$(printf '%s' "$comments_json" \
+    | jq --arg h "$SWEEPER_PASS_HEADING" '[.comments[] | select(.body | startswith($h))] | length')
+  if (( sweeper_passes > 0 )); then
+    log "issue #$issue_num: carries the sweeper's own PASS block — not re-litigating"
     return 1
   fi
 
@@ -132,7 +154,11 @@ closed_precheck() {
   reopens=$(printf '%s' "$comments_json" \
     | jq --arg m "$SWEEPER_REOPEN_MARKER" '[.comments[] | select(.body | contains($m))] | length')
   if (( reopens >= REOPEN_MAX )); then
-    log "issue #$issue_num: already reopened ${reopens}x by the sweeper (cap=$REOPEN_MAX) — giving up, needs a human"
+    # ::error:: rather than a bare log: this is the give-up branch. Past the cap
+    # the sweeper permanently abandons a still-failing verification, and a plain
+    # stdout line in a green workflow run is read by nobody.
+    printf '::error::sweeper reopen cap reached for issue #%s (%sx, cap=%s) — verification still fails and no further reopen will be attempted; needs a human\n' \
+      "$issue_num" "$reopens" "$REOPEN_MAX"
     return 1
   fi
   return 0
@@ -240,26 +266,37 @@ run_one() {
     return 0
   fi
 
-  # Earliest gate — OPEN set only.
+  # Earliest gate — applies to BOTH sets.
   #
-  # ‼️ THE CLOSED SET DELIBERATELY BYPASSES THIS, and that bypass is what makes
-  # the reopen path work at all. `earliest` exists to prevent a premature CLOSE;
-  # a closed follow-through is already asserting "verified", so its predicate
-  # should be evaluated immediately regardless of the soak clock. Without the
-  # bypass the path would miss its own motivating case: #6657 was closed
-  # 2026-07-18 carrying earliest=2026-07-25, so under any closed-recency window
-  # shorter than ~7 days it leaves the query window before its own `earliest`
-  # elapses — evaluated zero times, reopened never.
+  # ‼️ THE CLOSED SET MUST NOT BYPASS THIS. An earlier draft of #6698 bypassed
+  # it, reasoning that a closed follow-through already asserts "verified" so its
+  # predicate should be evaluated immediately. That is wrong, because it
+  # misreads what exit 1 means to a soak probe. The probes use exit 1 for "still
+  # soaking", NOT for "closed prematurely" — e.g.
+  # `scripts/followthroughs/workspaces-luks-soak-6604.sh` documents
+  # `1 = FAIL (still soaking, ...)` and refuses a day-0 PASS "regardless of the
+  # directive earliest=". So bypassing the gate makes every legitimately-closed
+  # issue whose soak has not yet elapsed look prematurely closed, and the sweeper
+  # reopens it — overriding the operator. Measured 2026-07-19: #6604
+  # (earliest=07-25), #6416 (07-22) and #6462 (07-29) were all closed COMPLETED
+  # with a future `earliest`, and a bypassing sweep would have reopened all three
+  # that night.
+  #
+  # The bypass was also unnecessary. Its stated motivation was that #6657
+  # (closed 07-18, earliest=07-25) would "leave the query window before its own
+  # earliest elapsed" — true only for a recency window shorter than the ~7-day
+  # gap. `CLOSED_LOOKBACK_DAYS` is 14, so #6657 stays a candidate until 08-01 and
+  # is evaluated from 07-25 onward with the gate intact. Keeping the gate costs
+  # the reopen path nothing and removes the whole override class.
+  local earliest_epoch
+  earliest_epoch=$(iso_to_epoch "${earliest:-}")
+  if (( now_epoch < earliest_epoch )); then
+    log "issue #$issue_num: earliest=$earliest not yet reached (now=$(date -u +%FT%TZ)) — skipping"
+    return 0
+  fi
+
   if [[ "$mode" == "closed" ]]; then
-    log "issue #$issue_num: closed-set evaluation — bypassing earliest=${earliest:-none}"
     if ! closed_precheck "$issue_num"; then
-      return 0
-    fi
-  else
-    local earliest_epoch
-    earliest_epoch=$(iso_to_epoch "${earliest:-}")
-    if (( now_epoch < earliest_epoch )); then
-      log "issue #$issue_num: earliest=$earliest not yet reached (now=$(date -u +%FT%TZ)) — skipping"
       return 0
     fi
   fi
@@ -355,7 +392,7 @@ $trimmed_out
   case "$rc" in
     0)
       verdict="PASS"
-      body_msg="### Sweeper run: PASS ($(date -u +%FT%TZ))
+      body_msg="$SWEEPER_PASS_HEADING ($(date -u +%FT%TZ))
 Script: \`$script\` exited 0. Auto-closing per follow-through convention.
 
 <details><summary>Output (last 4 KB)</summary>
@@ -452,6 +489,9 @@ main() {
     --search "label:follow-through state:closed closed:>=${closed_since}" \
     --limit "$CLOSED_LIMIT" --json number,body,stateReason 2>&1) || closed_rc=$?
   if (( closed_rc != 0 )); then
+    # ::error:: not a bare log: `fail` only prints to stderr, so a permanently
+    # broken reopen path would leave the daily workflow green forever.
+    printf '::error::closed-set query failed (rc=%s) — the follow-through reopen path did not run this sweep\n' "$closed_rc"
     fail "closed-set query failed (rc=$closed_rc) — skipping reopen path this sweep"
   else
     local closed_count
@@ -465,8 +505,12 @@ main() {
       creason=$(printf '%s' "$closed_json" | jq -r ".[$j].stateReason // \"\"")
       # NOT_PLANNED is a deliberate wontfix. Reopening it would override a human
       # decision, which is the opposite of what this path is for.
-      if [[ "$creason" == "NOT_PLANNED" ]]; then
-        log "issue #$cnum: closed as NOT_PLANNED (wontfix) — leaving closed"
+      # Only an explicit COMPLETED closure is a reopen candidate. NOT_PLANNED is
+      # a deliberate wontfix, and a NULL reason (issues closed before GitHub
+      # introduced close reasons, or via some API paths) is unknown provenance —
+      # neither is evidence of a premature close, so both are left alone.
+      if [[ "$creason" != "COMPLETED" ]]; then
+        log "issue #$cnum: closed as ${creason:-<no-reason>} (not COMPLETED) — leaving closed"
         continue
       fi
       run_one "$cnum" "$cbody" closed || fail "issue #$cnum: closed-set run_one returned non-zero (continuing)"
