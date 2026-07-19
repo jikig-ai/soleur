@@ -367,7 +367,12 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > that workflow's header has carried a false claim before.) The residual exposure is an
 > operator-driven fresh create or `-replace` of web-1, which has no preflight. Both structural
 > facts are now pinned by a test so the argument fails loudly if either changes; closing the
-> residual needs a preflight that works against a mutable tag, tracked separately.
+> residual needs a preflight that works against a mutable tag, tracked in #6712.
+>
+> **Related follow-ups filed with this amendment:** #6710 (whether a never-ready cloudflared
+> should abort the boot at all — the adjacent `cloudflared_ready` fail-closed gate, grandfathered
+> here rather than endorsed) and #6711 (private-NIC health splits across Sentry and Better Stack
+> with no shared join key).
 
 ### Candidate implementations for I2 — assessed in #6441 (SUPERSEDED — see the amendment above; (b) shipped in #6425)
 
