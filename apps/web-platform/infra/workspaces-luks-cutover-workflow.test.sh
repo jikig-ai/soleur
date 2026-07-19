@@ -143,6 +143,40 @@ if run_step:
     check("CLEAN_STRAY env derives from inputs.clean_stray, not a hardcoded value",
           "inputs.clean_stray" in cs_env, cs_env)
 
+# PATH PARITY. The workflow hardcodes /mnt/data-luks and /mnt/data (in the clean_stray input
+# description and in the probe's env); the script derives them from ${WORKSPACES_STAGING:-...} /
+# ${WORKSPACES_MOUNT:-...}. The workflow does NOT pass those vars in the .env, so the two agree
+# only by coincidence. Change a script default and the approval banner would describe — and the
+# probe would measure — a path different from the one the script deletes, with nothing failing.
+import re
+script = open("apps/web-platform/infra/workspaces-cutover.sh").read()
+def _default(var):
+    # e.g. STAGING="${WORKSPACES_STAGING:-/mnt/data-luks}" — the env var name differs from the
+    # local, so match any override name rather than assuming they are the same.
+    m = re.search(r'^%s="\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]+)\}"' % re.escape(var), script, re.M)
+    return m.group(1) if m else None
+script_staging = _default("STAGING")
+script_mount = _default("MOUNT")
+check("could read the script's STAGING/MOUNT defaults", bool(script_staging and script_mount),
+      f"{script_staging} {script_mount}")
+probe = [s for s in (jobs.get("preflight") or {}).get("steps") or []
+         if "AP-009 deletion probe" in str(s.get("name", ""))]
+check("the AP-009 probe step exists", len(probe) == 1)
+if probe and script_staging and script_mount:
+    penv = probe[0].get("env") or {}
+    check("probe STAGING_PATH matches the script's $STAGING default",
+          str(penv.get("STAGING_PATH")) == script_staging,
+          f"workflow={penv.get('STAGING_PATH')} script={script_staging}")
+    check("probe MOUNT_PATH matches the script's $MOUNT default",
+          str(penv.get("MOUNT_PATH")) == script_mount,
+          f"workflow={penv.get('MOUNT_PATH')} script={script_mount}")
+    # Safe-by-literal, not by construction: the probe interpolates these into a single-quoted
+    # remote shell string. They are constants today; a quote or metacharacter would escape it.
+    for k in ("STAGING_PATH", "MOUNT_PATH"):
+        v = str(penv.get(k, ""))
+        check(f"probe {k} is a metacharacter-free literal (it is interpolated into a remote shell string)",
+              bool(re.fullmatch(r"[A-Za-z0-9/_.-]+", v)), v)
+
 for v in verdicts:
     print("\t".join(v))
 PY
@@ -218,7 +252,7 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # NON-DEGENERACY FLOOR — see the sibling rationale in workspaces-luks-staging.test.sh. A python
 # leg that dies before emitting verdicts, or a `check()` block deleted wholesale, would otherwise
 # leave this suite reporting "0 passed, 0 failed" and exiting 0.
-WF_MIN_ASSERTIONS=32
+WF_MIN_ASSERTIONS=40
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — the structural leg produced fewer verdicts than expected; a green run here would be vacuous"
   exit 1
