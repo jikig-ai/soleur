@@ -138,20 +138,33 @@ backwards — the cheap layer ran last, after a human had already been paged):
    names the remedy ("untick dry_run"), because `dry_run` defaults to **true** and the
    natural dispatch — tick `clean_stray`, change nothing else — lands here.
 
-### D1b — the ROLLBACK gate hole, and its two siblings, are fixed in the same edit
+### D1b — the ROLLBACK gate hole, and its siblings, are fixed in the same edit
 
-Three expressions in this workflow use `dry_run` as a **proxy for "which mode"**. That
-synonymy was true when the file was written and this change breaks it. All three are
-corrected together — same defect class, same file, one edit:
+`dry_run` is used as a **proxy for "which mode"** across this workflow. That synonymy was
+true when the file was written and this change breaks it.
 
-| Expression | Today | Becomes | Why |
-|---|---|---|---|
-| `environment:` | `!inputs.dry_run` | `!dry_run \|\| clean_stray \|\| rollback` | Closes the ungated-rollback hole. |
-| Loopback validation gate `if:` | `!inputs.dry_run` | `!dry_run && !rollback && !clean_stray` | Otherwise a `clean_stray` dispatch runs a full `apt-get install cryptsetup-bin` + losetup/mkfs LUKS suite, and a **red unrelated suite blocks the deletion permanently**. Same defect already applies to `rollback`: an emergency recovery gated behind a multi-minute validation of a path rollback does not use. |
-| Hetzner volume lookup (Run step) | unconditional | skipped when `clean_stray` | It hard-fails unless *exactly one* `soleur-web-platform-data-luks` volume exists. `clean_stray()` runs **above** `FRESH_DEV`/`read_key` and needs no device. Post-incident that volume may be detached — the cleanup path would be unreachable for an unrelated reason. `WORKSPACES_LUKS_DEV` is omitted from the `.env` on that arm. |
+**Deepen-plan verified the count.** `inputs.dry_run` appears **7 times**, of which **4 are
+functional** (non-comment): lines 88, 117, 200, 305. An earlier draft of this plan claimed
+three and missed the fourth — the verify-the-negative sweep caught it. All four are now
+accounted for:
 
-Each change only ever makes a destructive arm *harder* to reach or removes an
-irrelevant precondition. All are called out in the PR body, not folded in silently.
+| # | Expression | Today | Becomes | Why |
+|---|---|---|---|---|
+| 1 | `environment:` (`:88`) | `!inputs.dry_run` | `!dry_run \|\| clean_stray \|\| rollback` | Closes the ungated-rollback hole. |
+| 2 | Loopback validation gate `if:` (`:117`) | `!inputs.dry_run` | `!dry_run && !rollback && !clean_stray` | Otherwise a `clean_stray` dispatch runs a full `apt-get install cryptsetup-bin` + losetup/mkfs LUKS suite, and a **red unrelated suite blocks the deletion permanently**. Same defect already applies to `rollback`: an emergency recovery gated behind a multi-minute validation of a path rollback does not use. |
+| 3 | `DRY_RUN` env plumb (`:200`) | `inputs.dry_run && '1' \|\| '0'` | **unchanged** | Correct as-is — this occurrence genuinely means `dry_run`, not "which mode". |
+| 4 | `Cutover summary` `DRY:` (`:305`) | `inputs.dry_run` | augmented with mode + magnitude (FR17) | Otherwise a deletion's permanent artifact reads `Dry run: false` and nothing else — and a rollback dispatched with `dry_run=true` reads `Dry run: **true**` on a run that performed a **real** rollback. |
+
+Plus the **Hetzner volume lookup** in the Run step, unconditional today, which must be
+skipped when `clean_stray`: it hard-fails unless *exactly one*
+`soleur-web-platform-data-luks` volume exists, while `clean_stray()` runs **above**
+`FRESH_DEV`/`read_key` and needs no device at all. Post-incident that volume may be
+detached — the cleanup path would be unreachable for an entirely unrelated reason.
+`WORKSPACES_LUKS_DEV` is omitted from the `.env` on that arm.
+
+Each change only ever makes a destructive arm *harder* to reach, removes an irrelevant
+precondition, or improves the permanent record. **None removes an approval.** All are
+called out in the PR body, not folded in silently.
 
 ### D1c — mutual exclusion between modes (v1 P0-1)
 
@@ -359,7 +372,9 @@ The PR body carries the same AP-009 deviation statement (hard requirement 3).
 - **FR13** — The workflow is split into an ungated `probe` job and a gated `delete` job
   (`needs: probe`), with the probe writing the AP-009 banner + magnitude + subset result
   to `$GITHUB_STEP_SUMMARY` before the approval gate (D6). The probe issues no `rm`.
-- **FR14** — The three `dry_run`-as-mode-proxy expressions are corrected per D1b:
+- **FR14** — The `dry_run`-as-mode-proxy expressions are corrected per D1b (4 functional
+  occurrences at `:88`, `:117`, `:200`, `:305` — `:200` stays unchanged — plus the
+  Hetzner volume lookup):
   `environment:`, the loopback-validation-gate `if:`, and the Hetzner volume lookup.
 - **FR15** — ADR-119 gains the dated addendum with the ADR-055-shaped AP-009 deviation
   bullet. **`principles-register.md` is not edited** (D5).
@@ -696,3 +711,129 @@ Nothing above is deferred to a later phase, so no deferral tracking issues are r
 - **`rm -rf "$STAGING"/*` misses dotfiles.** A workspace tree is full of them; the guard
   correctly keeps firing after the "successful" run, and the remaining stray is now a
   strict subset that behaves differently on retry.
+
+---
+
+## Downtime & Cutover (deepen-plan Phase 4.55)
+
+**Trigger evaluated: does not fire — but the near-miss is worth recording.**
+
+- **Infra reboot/replace class** — not triggered. No `hcloud_server` attribute changes, no
+  `server_type`/`location`/`placement_group_id` edit, no `-/+` replace. No Terraform root
+  is touched at all.
+- **Database lock class** — not triggered. No migration, no DDL, no backfill.
+- **Deploy/router class** — not triggered. `clean_stray()` performs no `umount`, no
+  `cryptsetup close`, no `docker stop`, and no `systemctl` action. It deletes contents of
+  a directory on the **root filesystem** that no service, mount, or container references.
+  `$MOUNT` is untouched by construction, and FR5 refuses if `$STAGING` resolves to the
+  same device.
+
+**Zero-downtime by construction**, therefore, with one important qualification: the
+*plan's own P0-1 defect class* was a downtime bug. `rollback=true` + `clean_stray=true`
+would have executed `rollback()` — `umount "$MOUNT"`, `cryptsetup close`, `docker stop`,
+`resume_writers` — on a host where no freeze was held, which the script's own
+`_PREPARE_ABORT_NOTE` describes as "a gratuitous outage." D1c's mutual exclusion is
+therefore not merely a correctness fix; it is the availability control for this change.
+FR2, FR11 and T4h are the mechanisms; there is no residual downtime to justify and no
+maintenance window is required.
+
+One operational note, not a change this plan makes: the workflow's
+`concurrency: web-1-swap` group is `cancel-in-progress: false`, so an in-flight wedged
+cutover run can block the very remediation that unwedges it. Worth knowing at dispatch
+time.
+
+---
+
+## Precedent Diff (deepen-plan Phase 4.4)
+
+Pattern-bound behaviors in this plan and their in-repo precedents:
+
+| Pattern | Precedent | Conformance |
+|---|---|---|
+| Operator-entrypoint mode block | `ROLLBACK=1` block in `workspaces-cutover.sh` (after `trap cleanup EXIT`, before the L3 gates, ends `exit 0`) | **Conforms in shape, deliberately diverges in two places**, both documented: (a) it does **not** force `DRY_RUN=0` — it refuses instead (FR3), because forcing is what makes ROLLBACK's ungated arm dangerous; (b) it sits behind a mutual-exclusion guard (FR2), because ROLLBACK's `exit 0` would otherwise render it unreachable. |
+| Emit marker + `emit_drift` before `die` | `emit_staging_target` / `emit_freeze_holders` — bare `echo` at column 0 plus `logger -t "$LUKS_LOG_TAG"`, `_vscrub` on every interpolated value, marker emitted **before** `die` so evidence survives (T2c) | Conforms. FR7 uses the same shape under a **new** marker name (`SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY`) rather than overloading `SOLEUR_WORKSPACES_LUKS_STAGING_TARGET`, whose `result=`/`reason=` vocabulary is pinned by the T-series and the `record_arm` coverage matrix. |
+| Device-identity assertion before a destructive act | `_same_dev()` + `[ -b … ]` guards used before `luksFormat`/`mkfs` | Conforms. FR5 reuses `_same_dev` directly; deepen-plan confirmed it fails closed on empty args and on a non-block second argument. |
+| Idempotent re-dispatch on a recovery path | `rollback()`'s mapper guard — "a recovery-path signal that cries wolf gets ignored" | Conforms. FR4's `already_clean` + `exit 0` on an empty `$STAGING` applies the same principle. |
+| Magnitude in the operator message | the stray guard's own `stray_bytes` / `stray_entries` (`du -s --block-size=1`, `find -mindepth 1 -maxdepth 1 -printf`) | Conforms — FR7 reuses the identical probe form, which is also already proven tolerable on a many-GB tree since the guard runs it on every dispatch. |
+
+**Scheduled-work pattern check:** N/A — this plan introduces no scheduled job. The
+workflow remains `workflow_dispatch`-only.
+
+**Novel pattern (no precedent):** the top-level subset check (FR6). No sibling in this
+repo performs a name-level subset assertion before a delete. Flagged for reviewer
+scrutiny — this is deliberate, since the precedent that *did* exist
+(`verify_byte_identity`) was falsified as unusable for this predicate (D3).
+
+---
+
+## Verify-the-Negative Sweep (deepen-plan Phase 4.45)
+
+15 negative/structural claims probed against the code. **14 CONFIRM, 1 CONTRADICTS.**
+
+Confirmed: `verify_byte_identity` hardcodes `--delete` (`:226`), counts `*deleting`
+(`:242`), and `die()`s rather than returning (`:237`, `:246`); `emit_verify_diff` emits
+one row per differing path capped at `VERIFY_DIFF_CAP` (`:192`, `:209`); the ROLLBACK
+block ends `exit 0` (`:941-944`); the harness `rm` is a passthrough recorder
+(`workspaces-luks-harness.sh:214`); `dry_run`/`rollback` are `type: boolean`
+(`:46`, `:52`); `principles-register.md` contains neither "Deviation" nor "ADR-055";
+ADR-055 carries the exact literal `AP-009 (Never delete user data): Deviation` (`:171`);
+ADR-119 has exactly three `## Addendum` headings, one already prefixed
+`## Addendum (2026-07-19)`; `_same_dev` fails closed (`:701-707`); the guard's magnitude
+probe uses the cited `du`/`find` forms (`:753`, `:756`); T4c's `run_case` invokes only
+`prepare_staging_target` (`:154-158`); the `BASH_SOURCE` guard is at `:933` with the
+ROLLBACK block after it.
+
+**Contradiction found and fixed:** the plan claimed **three** functional `inputs.dry_run`
+positions in the workflow. There are **four** — the `Cutover summary` step's
+`DRY: ${{ inputs.dry_run }}` at `:305` was missed. D1b and FR14 are corrected above; FR17
+already covered the remedy, so the fix was a counting error in the prose, not a gap in
+the deliverable. Recorded because "N call sites" claims in this plan are load-bearing and
+this one was wrong on first pass.
+
+---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-07-19
+**Rounds:** plan v1 → 3-agent review → v2 → deepen-plan gates → v2.1
+
+### Gate results
+
+| Gate | Result |
+|---|---|
+| 4.4 Precedent diff | Recorded above — 5 conforming patterns, 1 novel (flagged) |
+| 4.45 Verify-the-negative | 14 CONFIRM / 1 CONTRADICTS (fixed) |
+| 4.5 Network-outage deep-dive | Not triggered — no SSH/connectivity symptom in the problem statement |
+| 4.55 Downtime & cutover | Evaluated; does not fire. Zero-downtime by construction |
+| 4.6 User-Brand Impact | PASS — section present, threshold `single-user incident` |
+| 4.7 Observability | PASS — all 5 fields present, no placeholders, no `ssh` in `discoverability_test` |
+| 4.8 PAT-shaped variable | PASS — no matches |
+| 4.9 UI wireframe | Skipped — no UI surface in Files to Edit/Create |
+| Rule-ID citations | 2/2 resolve to active `[id: …]` entries in AGENTS.md |
+| KB path citations | 1/1 resolves on disk |
+
+### Key improvements over v1
+
+1. **The redundancy proof was falsified and replaced.** v1's reuse of
+   `verify_byte_identity()` would have refused on every real invocation, making the
+   plan's own goal unreachable. Replaced with a top-level subset check (D3).
+2. **A silent mode-swallowing bug was caught.** `rollback` + `clean_stray` would have run
+   a rollback — a gratuitous outage — while reporting green and skipping the deletion
+   (D1c).
+3. **The approver, not just the dispatcher, now sees the AP-009 deviation.** The
+   probe/delete job split puts magnitude and the deviation banner in the step summary
+   *before* the approval gate (D6).
+4. **Two more `dry_run`-as-mode proxies were found** beyond the `environment:` expression
+   — the loopback gate and the Hetzner volume lookup — plus a fourth occurrence in the
+   summary step found by the verify-the-negative sweep (D1b).
+5. **The `principles-register.md` edit was dropped** after verifying the register has no
+   deviations column and no ADR-055 reference; the established convention is that
+   deviations live in ADRs (D5).
+
+### Residual risks for the implementer
+
+- The subset check (FR6) is a novel pattern with no in-repo precedent — scrutinize.
+- New tests must NOT mirror T4c's bare `^rm ` assertion idiom; the harness records every
+  `rm`. Scope to `$STAGING`.
+- AC6 must anchor on the new addendum heading's full text; a `## Addendum (2026-07-19)`
+  heading already exists and would self-satisfy a prefix match.
