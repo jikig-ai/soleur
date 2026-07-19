@@ -126,6 +126,16 @@ _on_exit() {
 # opaque "Cannot index string" from deep inside a jq program. This turns it into
 # a named, greppable cause.
 check_array_response() { # $1=file  $2=what
+  # An empty body is NOT an empty result. The API renders "no results" as `[]`,
+  # so zero bytes means the response was lost, not that the period was quiet --
+  # and slurping an empty file yields [], which would render a plausible 0. This
+  # is the last path by which a missing fetch could still look like a quiet day.
+  if [[ ! -s "$1" ]]; then
+    _CAUSE="${2}-empty-response"
+    echo "GITHUB_COLLECTOR_CAUSE=${2} returned an empty body (expected a JSON array)" >&2
+    echo "Error: Failed to fetch ${2} (empty response)" >&2
+    exit 1
+  fi
   if ! jq -se 'all(type == "array")' <"$1" >/dev/null 2>&1; then
     local detail
     detail=$(jq -rs '.[0].message? // empty' <"$1" 2>/dev/null | head -c 200)

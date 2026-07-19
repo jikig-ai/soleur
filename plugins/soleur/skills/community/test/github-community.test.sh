@@ -268,6 +268,27 @@ assert_file_matches "$CASE3/out/stderr" 'GITHUB_COLLECTOR_CAUSE=' \
 
 echo ""
 
+# --- Test 3b: exit-0 with an EMPTY body -------------------------------------
+#
+# The API renders "no results" as [], so zero bytes means the response was lost.
+# Slurping an empty file yields [], which would render a plausible 0 -- the last
+# path by which a missing fetch could still look like a quiet day.
+
+echo "Test 3b: an exit-0 empty body must fail loudly, not read as a quiet day"
+
+CASE3B="$(new_case rc3_empty)"
+gen_repo > "$CASE3B/fixtures/repo.json"
+: > "$CASE3B/fixtures/stargazers.json"
+
+run_collector "$CASE3B" repo-stats 1
+assert_nonzero_rc "$RC" "repo-stats exits non-zero on an empty stargazer body"
+assert_file_not_matches "$CASE3B/out/stdout" '"new_stargazers_count"' \
+  "repo-stats emits no new_stargazers_count on an empty body"
+assert_file_matches "$CASE3B/out/stderr" 'GITHUB_COLLECTOR_CAUSE=stargazers returned an empty body' \
+  "repo-stats names the empty body as the cause"
+
+echo ""
+
 # --- Test 4: D7 multi-tempfile cleanup on a FAILURE path ---------------------
 #
 # Forward guard: it cannot be RED before the fix, because the pre-fix script
