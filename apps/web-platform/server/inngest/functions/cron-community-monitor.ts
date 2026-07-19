@@ -280,6 +280,25 @@ type CollectorStatusReport = {
   failed: CollectorStatusRecord[];
 };
 
+export type CollectorStatusVerdict = {
+  /** Records the collector reported as non-zero. Pages. */
+  failed: CollectorStatusRecord[];
+  /** Records carrying a latent truncation warning. Reported, does NOT page. */
+  warned: CollectorStatusRecord[];
+  /** No sidecar at all — the collector never ran or could not write. */
+  missing: boolean;
+};
+
+export function classifyCollectorStatus(
+  report: CollectorStatusReport,
+): CollectorStatusVerdict {
+  return {
+    failed: report.failed,
+    warned: report.records.filter((r) => Boolean(r.warn)),
+    missing: !report.present,
+  };
+}
+
 export async function readCollectorStatus(
   cwd: string,
 ): Promise<CollectorStatusReport> {
@@ -315,25 +334,6 @@ export async function readCollectorStatus(
   };
 }
 
-// D5b — the only deterministic control on the fabrication class. The prompt
-// edits shift probability; this checks the artifact. If repo-stats failed but
-// the digest still states a Repository Stats number, the digest invented it.
-// Both arms matter: an honest "collection failed:" digest must NOT fire, or the
-// alert trains the reader to ignore it.
-export function digestFabricatesRepoStats(
-  digest: string,
-  status: CollectorStatusReport,
-): boolean {
-  const repoStatsFailed = status.failed.some((r) => r.command === "repo-stats");
-  if (!repoStatsFailed) return false;
-
-  const section = digest.match(
-    /\*\*Repository Stats\*\*[\s\S]*?(?=\n##\s|\n\*\*|$)/,
-  )?.[0];
-  if (!section) return false;
-  if (/collection failed:/i.test(section)) return false;
-  return /\d/.test(section);
-}
 
 // Spawn-env allowlist (NOT a denylist). PR-5 base shape + PR-11 community-
 // monitor additions. The keys below are the COMPLETE set the spawned claude
@@ -583,21 +583,43 @@ export async function cronCommunityMonitorHandler({
         readCollectorStatus(spawnCwd!),
       );
 
-      if (collectorStatus.failed.length > 0) {
-        const summary = collectorStatus.failed
+      const verdict = classifyCollectorStatus(collectorStatus);
+
+      if (verdict.failed.length > 0) {
+        const summary = verdict.failed
           .map((r) => `${r.command ?? "unknown"}(exit=${r.exit}${r.cause ? `, cause=${r.cause}` : ""})`)
           .join("; ");
         reportSilentFallback(
-          new Error(`community collectors reported failures: ${summary}`),
+          new Error(`github collector reported failures: ${summary}`),
           {
             feature: "cron-community-monitor",
             op: "collector-status-failed",
-            message: "one or more community collectors exited non-zero",
-            extra: { fn: "cron-community-monitor", failures: collectorStatus.failed },
+            message: "one or more github collector commands exited non-zero",
+            extra: { fn: "cron-community-monitor", failures: verdict.failed },
           },
         );
         collectorSignalRed = true;
-      } else if (!collectorStatus.present) {
+      } else if (verdict.warned.length > 0) {
+        // Truncation is latent, not present-tense: the run's data is correct,
+        // but a future one may silently undercount. Reported so it is visible,
+        // deliberately NOT paged -- a nightly page for a hypothetical is how a
+        // signal stops being read. Without this branch the `warn` field would
+        // be written and typed but consumed by nothing, which is the same
+        // dead-end this PR exists to remove.
+        reportSilentFallback(
+          new Error(
+            `github collector hit a per_page cap: ${verdict.warned
+              .map((r) => `${r.command ?? "unknown"}(${r.warn})`)
+              .join("; ")}`,
+          ),
+          {
+            feature: "cron-community-monitor",
+            op: "collector-status-warn",
+            message: "a collector fetch returned exactly per_page items",
+            extra: { fn: "cron-community-monitor", warned: verdict.warned },
+          },
+        );
+      } else if (verdict.missing) {
         // Distinguished from "all collectors succeeded". The sidecar should
         // exist on every healthy run (the github commands are unconditional), so
         // its absence means the collector never ran or could not write. Reported
@@ -609,44 +631,10 @@ export async function cronCommunityMonitorHandler({
           {
             feature: "cron-community-monitor",
             op: "collector-status-missing",
-            message: "no collector-status.jsonl was written by the spawned run",
+            message: "no collector-status.jsonl was written by the spawned run (github collector only; sibling platforms do not yet record status)",
             extra: { fn: "cron-community-monitor", spawnCwd },
           },
         );
-      }
-
-      // D5b — fabrication detector. The prompt edits are a probability shift;
-      // this is the check against the artifact itself.
-      const fabricated = await step.run("verify-no-fabricated-stats", async () => {
-        if (!collectorStatus.present) return false;
-        const { readFile } = await import("node:fs/promises");
-        const { join } = await import("node:path");
-        const digestPath = join(
-          spawnCwd!,
-          "knowledge-base/support/community",
-          `${runStartedAt.slice(0, 10)}-digest.md`,
-        );
-        try {
-          const digest = await readFile(digestPath, "utf8");
-          return digestFabricatesRepoStats(digest, collectorStatus);
-        } catch {
-          return false;
-        }
-      });
-
-      if (fabricated) {
-        reportSilentFallback(
-          new Error(
-            "digest states Repository Stats numbers although repo-stats collection failed",
-          ),
-          {
-            feature: "cron-community-monitor",
-            op: "digest-fabricated-stats",
-            message: "digest reported stats the collector did not produce",
-            extra: { fn: "cron-community-monitor", failures: collectorStatus.failed },
-          },
-        );
-        collectorSignalRed = true;
       }
 
       // --- Step 4.5: deterministic persistence (#5111, pattern from #5091 /
@@ -674,9 +662,6 @@ export async function cronCommunityMonitorHandler({
           }),
         );
       }
-
-      // Applied here, after persistence: the digest is kept, the monitor pages.
-      if (collectorSignalRed) heartbeatOk = false;
     } catch (err) {
       // #5728 G1 — a deploy-in-progress defer is benign (ADR-078/#5686): rethrow
       // bare with NO heartbeat so Inngest retries after the swap. Any OTHER throw
@@ -702,6 +687,16 @@ export async function cronCommunityMonitorHandler({
         },
       });
     }
+
+    // #6695 — applied HERE, after the inner try/catch closes, for two reasons.
+    // (1) AFTER persistence: `heartbeatOk` also gates safeCommitAndPr, so
+    //     lowering it at the collector gate would discard the very digest that
+    //     honestly reports the failure -- a red monitor and nothing to read.
+    // (2) OUTSIDE the try: as the try's LAST statement this was skipped whenever
+    //     a trailing step threw, and the catch deliberately keeps heartbeatOk
+    //     true for a trailing-step failure -- so the page was silently lost on
+    //     exactly the compound-failure run. The catch falls through to here.
+    if (collectorSignalRed) heartbeatOk = false;
 
     // --- Single authoritative terminal heartbeat (memoization-safe,
     //     final-attempt gated). On a genuine non-final failure the helper skips

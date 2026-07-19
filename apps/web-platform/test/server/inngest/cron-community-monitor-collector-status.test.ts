@@ -5,10 +5,10 @@
 //         (every other channel the collectors have ends in the spawned agent's
 //         context window, and resolveOutputAwareOk is a presence check that
 //         returns GREEN for both the fabrication and honest-failure paths).
-//   AC14  a digest that states Repository Stats numbers the collector never
-//         produced must fire; an honest "collection failed:" digest carrying
-//         the SAME non-zero record must NOT. Both arms are required — a
-//         detector that fires on the honest path trains the reader to ignore it.
+//   AC13b paging and persistence must stay separable: a collector failure has
+//         to turn the monitor RED without discarding the digest that reports
+//         it. `heartbeatOk` gates both, so the separation is load-bearing and
+//         easy to "simplify" away.
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -28,7 +28,7 @@ import { join } from "node:path";
 
 import {
   readCollectorStatus,
-  digestFabricatesRepoStats,
+  classifyCollectorStatus,
 } from "@/server/inngest/functions/cron-community-monitor";
 
 const STATUS_DIR = ".soleur-collector-status";
@@ -108,13 +108,64 @@ describe("readCollectorStatus", () => {
   });
 });
 
-describe("paging must not discard the digest (ordering invariant)", () => {
-  // heartbeatOk gates BOTH the Sentry page and safe-commit-pr. Lowering it
-  // inside the collector gate would page AND throw away the digest that
-  // honestly reports the failure -- leaving the operator strictly less to act
-  // on than before this PR. The flag is therefore applied AFTER persistence.
-  // This is the kind of indirection a later "simplification" removes, so the
-  // ordering is asserted rather than left to a comment.
+describe("classifyCollectorStatus — the three arms are distinct outcomes", () => {
+  // Inline in the handler these were reachable only through a full Inngest run,
+  // so the warn arm could be deleted with the whole suite green. Each arm drives
+  // a different operator action: page / report-only / report-absence.
+  const rec = (over: Partial<Parameters<typeof classifyCollectorStatus>[0]["records"][number]>) => ({
+    collector: "github",
+    command: "activity",
+    exit: 0,
+    ...over,
+  });
+
+  it("pages on a non-zero record", () => {
+    const failed = [rec({ exit: 1, cause: "issues-fetch-failed" })];
+    const v = classifyCollectorStatus({ present: true, records: failed, failed });
+    expect(v.failed).toHaveLength(1);
+    expect(v.warned).toHaveLength(0);
+    expect(v.missing).toBe(false);
+  });
+
+  it("reports a truncation warn WITHOUT treating it as a failure", () => {
+    // Truncation is latent: this run's data is correct. Paging nightly on a
+    // hypothetical is how a signal stops being read.
+    const records = [rec({ warn: "truncated_at_per_page" })];
+    const v = classifyCollectorStatus({ present: true, records, failed: [] });
+    expect(v.warned).toHaveLength(1);
+    expect(v.failed).toHaveLength(0);
+    expect(v.missing).toBe(false);
+  });
+
+  it("distinguishes an absent sidecar from an all-green one", () => {
+    const green = classifyCollectorStatus({
+      present: true,
+      records: [rec({})],
+      failed: [],
+    });
+    const absent = classifyCollectorStatus({ present: false, records: [], failed: [] });
+    expect(green.missing).toBe(false);
+    expect(absent.missing).toBe(true);
+    // Both have zero failures — only `missing` separates them.
+    expect(green.failed).toEqual(absent.failed);
+  });
+
+  it("a failed record takes precedence over a warn on the same run", () => {
+    const failed = [rec({ command: "repo-stats", exit: 1 })];
+    const records = [...failed, rec({ warn: "truncated_at_per_page" })];
+    const v = classifyCollectorStatus({ present: true, records, failed });
+    expect(v.failed).toHaveLength(1);
+    expect(v.warned).toHaveLength(1);
+  });
+});
+
+describe("paging must not discard the digest (separation invariant)", () => {
+  // `heartbeatOk` gates BOTH the Sentry page and safeCommitAndPr. Lowering it
+  // at the collector gate would page AND throw away the honest digest, leaving
+  // the operator strictly less to act on than before this PR. Applying it as
+  // the last statement of the try was worse: a throw from safe-commit-pr jumps
+  // to the catch, which deliberately keeps heartbeatOk true for a trailing-step
+  // failure, so the page was lost on exactly the compound-failure run.
   const src = readFileSync(
     new URL(
       "../../../server/inngest/functions/cron-community-monitor.ts",
@@ -123,7 +174,7 @@ describe("paging must not discard the digest (ordering invariant)", () => {
     "utf8",
   );
 
-  it("raises a flag in the collector gate rather than lowering heartbeatOk there", () => {
+  it("never lowers heartbeatOk inside the collector gate (digest must survive)", () => {
     const gate = src.slice(
       src.indexOf("verify-collector-status"),
       src.indexOf("Step 4.5: deterministic persistence"),
@@ -133,94 +184,30 @@ describe("paging must not discard the digest (ordering invariant)", () => {
     expect(gate).not.toContain("heartbeatOk = false");
   });
 
-  it("applies the flag to heartbeatOk only AFTER the safeCommitAndPr block", () => {
+  it("applies the flag after BOTH persistence and the catch, so a trailing throw cannot drop the page", () => {
     const persist = src.indexOf("safeCommitAndPr({");
+    // Anchor on the catch that CLOSES the handler body's inner try -- the first
+    // one AFTER persistence. A bare indexOf("} catch (err) {") finds an earlier
+    // catch in a different function, which makes the ordering assertion
+    // trivially true and the guard vacuous (caught by mutation).
+    const catchStart = src.indexOf("} catch (err) {", persist);
     const apply = src.indexOf("if (collectorSignalRed) heartbeatOk = false;");
+
     expect(persist).toBeGreaterThan(-1);
+    expect(catchStart).toBeGreaterThan(persist);
     expect(apply).toBeGreaterThan(-1);
+
+    // After persistence => the honest digest is committed before the page.
     expect(apply).toBeGreaterThan(persist);
+    // After the catch closes => reached even when a trailing step throws. As
+    // the try's last statement it was skipped on exactly that path, and the
+    // catch keeps heartbeatOk true for a trailing-step failure.
+    expect(apply).toBeGreaterThan(catchStart);
   });
 
   it("keeps the cohort-wide issue-verified persistence gate shape", () => {
-    // cron-safe-commit-parity asserts this literal across 9 crons; renaming the
-    // variable here to express the new concept would have silently weakened it.
     expect(src).toMatch(
       /if \(heartbeatOk && !spawnResult\.abortedByTimeout\) \{[\s\S]{0,800}?safeCommitAndPr\(\{/,
     );
-  });
-});
-
-describe("digestFabricatesRepoStats", () => {
-  const failed = {
-    present: true,
-    records: [],
-    failed: [{ collector: "github", command: "repo-stats", exit: 1 }],
-  };
-  const clean = { present: true, records: [], failed: [] };
-
-  const withStats = [
-    "## GitHub Activity",
-    "",
-    "**Repository Stats**",
-    "",
-    "| Metric | Value |",
-    "|---|---|",
-    "| Stars | 10 |",
-    "| Forks | 1 |",
-    "",
-  ].join("\n");
-
-  // The reason string CONTAINS DIGITS on purpose. A digit-free fixture would
-  // pass this test for the wrong reason -- the bare "does it contain a number?"
-  // check would return false on its own and the honest-failure exemption would
-  // never be exercised. Real causes carry status codes ("HTTP 404", "exit 5"),
-  // so the digit-free version is also the unrealistic one.
-  const withHonestFailure = [
-    "## GitHub Activity",
-    "",
-    "**Repository Stats**",
-    "",
-    "collection failed: stargazers returned HTTP 404 (non-array payload)",
-    "",
-  ].join("\n");
-
-  it("fires when repo-stats failed but the digest still states numbers", () => {
-    expect(digestFabricatesRepoStats(withStats, failed)).toBe(true);
-  });
-
-  it("does NOT fire when the digest honestly reports the failure", () => {
-    // The arm that keeps the alert credible.
-    expect(digestFabricatesRepoStats(withHonestFailure, failed)).toBe(false);
-  });
-
-  it("does NOT fire when repo-stats succeeded", () => {
-    expect(digestFabricatesRepoStats(withStats, clean)).toBe(false);
-  });
-
-  it("does NOT fire when the digest omits the section entirely", () => {
-    // Numbers ELSEWHERE in the digest must not count. Without a digit here the
-    // detector would return false for lack of any number at all, and this test
-    // would pass against a version that scanned the whole document.
-    expect(
-      digestFabricatesRepoStats(
-        "## GitHub Activity\n\n12 issues opened, 3 PRs merged this period.\n",
-        failed,
-      ),
-    ).toBe(false);
-  });
-
-  it("fires on the exact shape the 2026-07-19 digest shipped", () => {
-    // The regression this whole PR exists for: a stale number carried forward
-    // from a six-week-old digest and labelled "(stale)" rather than reported as
-    // a failure. "(stale)" is not an honest-failure marker.
-    const shipped = [
-      "## GitHub Activity",
-      "",
-      "**Repository Stats**",
-      "",
-      "| Stars/Forks/Watchers | 10 / 1 / 10 (stale — last confirmed 2026-06-08) |",
-      "",
-    ].join("\n");
-    expect(digestFabricatesRepoStats(shipped, failed)).toBe(true);
   });
 });

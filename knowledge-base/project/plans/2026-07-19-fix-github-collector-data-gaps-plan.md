@@ -43,8 +43,10 @@ verify-the-negative.
 4. **Prior art reconciled.** This bug class was solved twice here; the 2026-03-28 learning's
    wrong threshold model (`ARG_MAX` vs `MAX_ARG_STRLEN`) is *why* the fix was never
    back-propagated. Correcting it is in scope.
-5. **Scope claim verified, not asserted.** A sibling sweep across all `--argjson` call sites
-   confirms no other script shares the defect.
+5. ~~**Scope claim verified, not asserted.**~~ **This was itself unverified — see the
+   correction in Sibling sweep.** The sweep ran the right grep and then under-reported
+   its own output by two sites, one of which (`scripts/compound-promote.sh`) was already
+   broken at 8.2× the ceiling. Fixed in this PR; the at-risk second site is a follow-up.
 6. **Every verification command was executed** against the current tree and its expected value
    recorded — including a reviewer-suggested fix that turned out to be buggy itself. v1's ACs
    were written but never run; that was v1's defining failure.
@@ -332,7 +334,21 @@ grep -rnE '\-\-argjson [a-z_]+ "\$' --include=*.sh . | grep -v node_modules
 | `scripts/skill-freshness-aggregate.sh` `inventory_json`, `invocations_json` | ~90 skill **names**; `group_by(.skill)`-aggregated to one record per skill | Bounded **by skill count, not log size** — safe |
 | `scripts/audit-bot-codeql-coverage.sh` accumulator | payload arrives via `printf … \| jq` (**stdin**); only scalars on argv | Safe by construction |
 
-**Result: no sibling shares the defect.** The scope claim is now verified.
+> **CORRECTED AT REVIEW (this claim was false).** The table above is a partial
+> transcription of the grep's own output. The sweep omitted two hits and then
+> declared the scope "verified" — reproducing, one paragraph after citing it,
+> the exact failure the 2026-06-18 learning exists to prevent. The methodology
+> was right; the transcription was not.
+>
+> | Omitted site | Measured | Status |
+> |---|---|---|
+> | `scripts/compound-promote.sh:186` `--argjson corpus "$CORPUS_JSON"` | **1,073,302 B** across 1,972 learning files — **8.2× the 131,072 B ceiling** | **ALREADY BROKEN.** Reproduced. Fixed in this PR: `CORPUS_NDJSON` was already a tempfile, so `--slurpfile` is a two-line drop-in (its 22-case suite still passes). The production path is unaffected — the runtime moved to `cron-compound-promote.ts`, which builds the payload in-process with `JSON.stringify` and has no argv limit. |
+> | `scripts/domain-model-drift.sh:107` `--argjson facts` | ~72 KB, ~55 % of ceiling | **At risk, not broken.** Filed as **#6720** rather than fixed here: there is no existing tempfile to slurp, so the fix is a spool restructure plus a cap decision, not a binding swap. |
+>
+> **Result: two siblings shared the defect, one of them live.** The corrected
+> claim is that no *community collector* sibling shares it — `bsky`, `linkedin`,
+> and `linkedin-setup` bind genuinely bounded payloads, which the table's
+> per-site reasoning does establish.
 
 ### Implementation details lifted from the prior fix
 
@@ -360,7 +376,7 @@ accumulation", not the literal token. See
 |---|---|
 | `plugins/soleur/skills/community/scripts/github-community.sh` | RC1: tempfile + `--slurpfile` at the **5 unbounded bindings** — `issues`+`prs` (`cmd_activity`), `commits`+`issues` (`cmd_contributors`), `stargazers` (`cmd_repo_stats`) (D1). RC2: separate-stderr shape at the **stargazer fetch only** (D3). D2 cap detection, D6 shape assertion, D7 traps (incl. the existing `cmd_fetch_interactions` leak). `repo_data` + `days` stay `--argjson` (bounded) |
 | `apps/web-platform/server/inngest/functions/cron-community-monitor.ts` | D4a/b/c prompt edits at the three content anchors; D5 output-aware failure signal |
-| `plugins/soleur/test/test-helpers.sh` | **New `make_gh_api_stub`** — dispatches on `$1 == "api"` by URL substring; handles `auth status` → exit 0; **three required modes**: (a) large valid payload, (b) valid stdout + stderr noise, (c) **exit 0 with an error JSON body** (`{"message":"Not Found"}`). Mode (c) is what makes H3 testable — without it the "plausible 0" path is unverifiable. Shared by ~21 suites, so additive only |
+| `plugins/soleur/test/test-helpers.sh` | **New `make_gh_api_stub`** — dispatches on `$1 == "api"` by URL substring; handles `auth status` → exit 0; **three required modes**: (a) large valid payload, (b) valid stdout + stderr noise, (c) **exit 0 with an error JSON body** (`{"message":"Not Found"}`). Mode (c) exercises the exit-0-error-body path. (It was originally justified as "what makes H3 testable"; H3's premise is retracted — see Work-Phase Corrections — but the mode is still needed, since that body must produce a *named cause* rather than an opaque jq error.) Shared by ~21 suites, so additive only |
 | `knowledge-base/project/learnings/integration-issues/2026-03-28-gh-api-paginate-argument-list-too-long.md` | **Correct the threshold model.** It attributes the limit to `ARG_MAX` (~2 MB) and concludes the sibling `--argjson` sites are safe "because stargazers are small". The real ceiling is `MAX_ARG_STRLEN` (131,072 B **per argument**). That error is why this fix was never back-propagated — leaving it uncorrected reproduces the incomplete fix |
 
 ## Files to Create
@@ -670,15 +686,37 @@ plan is authoritative for *intent*, never for facts.
 | Plan claim | What execution showed | Resolution |
 |---|---|---|
 | **H3/D6:** an exit-0 error body renders a plausible `new_stargazers_count: 0`, "indistinguishable from a quiet day" | **Wrong.** Verified directly: `$stargazers[]` over an object iterates its *values*, so `select(.starred_at >= $since)` indexes a **string** and jq hard-errors (`Cannot index string with "starred_at"`, exit 5). The script already failed loudly; no fabricated `0` was reachable by this path | D6 kept, rationale corrected: its value is a **named cause** (`GITHUB_COLLECTOR_CAUSE=`) instead of an opaque jq indexing error — diagnosability, not closing a fabrication hole. Test 3's first two assertions pass pre-fix and are documented as forward guards; only the cause assertion was RED |
-| **AC2:** `grep -c -- '--slurpfile'` → 5 | Returned **6**. The sixth match was the plan-mandated explanatory comment naming the flag — the exact trap task 4.8 raised for the other two literals, which I then walked into with the third | Comment reworded AND the assertion anchored (`^[[:space:]]*--slurpfile`), matching its own `--argjson` half. Both now return 5 |
+| **AC2:** `grep -c -- '--slurpfile'` → 5 | Returned **6**. The sixth match was the plan-mandated explanatory comment naming the flag — the exact trap task 4.8 raised for the other two literals, which I then walked into with the third | Comment reworded AND the assertion anchored (`^[[:space:]]*--slurpfile`), matching its own `--argjson` half. The anchored and unanchored slurpfile greps now agree at 5; the unbounded-`--argjson` grep is 0 |
 | **AC3 counter-assertion:** `grep -c '>/dev/null 2>&1'` → **2** | A whole-file count false-fails a *correct* implementation: `check_array_response` and the repo-metadata shape check legitimately add the idiom | Scoped to the function it is about: `awk '/^validate_gh\(\)/,/^}/' \| grep -c '>/dev/null 2>&1'` → 2. Same "fixed total false-fails" reasoning the plan already applied to AC2 |
 | **D2:** warn when a fetch returns exactly `per_page` items | Fires on **every live run**. The `pulls` endpoint deliberately over-fetches a fixed page and filters by date client-side, so a full raw page is its steady state (100 on every run against this repo) | Cap measured **post-filter** for `pulls` only, where a full page really does mean the window is saturated. A detector that cries wolf daily is worse than none — the same argument the plan makes for D5b's honest arm. Guarded by a dedicated negative test |
 | **AC9:** every case verified to fail against pre-fix code | Test 4 (multi-tempfile cleanup) **cannot** be RED pre-fix — the pre-fix commands create no tempfiles, so cleanup passes trivially | Documented in-file as a forward guard and covered by mutation instead: splitting the single trap into one-per-file turns it RED (M5) |
 | **AC14:** both arms of the fabrication detector are tested | Both honest-path fixtures were **digit-free**, so the bare "contains a number?" check returned false on its own and the honest-failure exemption was never exercised. Mutation-testing showed deleting the exemption kept the suite GREEN | Fixtures now carry digits (`collection failed: HTTP 404`) — realistic, since real causes carry status codes. All 5 handler mutations now RED |
 
-**Mutation results.** 8/8 script mutations and 5/5 handler mutations turn the
-suite RED, including the two that were silently vacuous until the fixtures were
-fixed. No assertion in this PR is known-vacuous.
+### Review-phase corrections (10-agent panel)
+
+Nine of ten agents returned findings; six converged on the same P1. Everything
+below was fixed in-PR — all are `pr-introduced`, so none is scope-out eligible.
+
+| Finding | Severity | Resolution |
+|---|---|---|
+| `check_cap "$issues_f"` passed a **file path** to a helper taking a count. `[[ /tmp/tmp.X -eq 100 ]]` is arithmetic evaluation → bash syntax error, non-zero inside an `if`, detector **permanently dead** on `contributors` + stderr noise every run. Converged on by 6 agents; my `replace(…, 1)` had converted only the first of two identical call sites | **P1** | Fixed; `PER_PAGE` bound to one constant; a `contributors` cap arm added (test 7c) |
+| `if (collectorSignalRed) heartbeatOk = false` was the try's **last statement**. A throw from `safe-commit-pr` jumps to the catch — which deliberately keeps `heartbeatOk` true for a trailing-step failure — so a collector failure **paged GREEN** on exactly the compound-failure run | **P0** | Moved after the inner catch closes: after persistence (digest kept) *and* on the throw path |
+| `add // []` → `.[0] // []` mutated at **all six sites** left the suite 36/36 green. Every fixture was a single JSON array, so `--paginate`'s multi-array output — the whole reason the flattening exists — was **unverified**. Verified: two-page fixture gives 150 vs 100 | **P1 (vacuous test)** | Multi-page fixtures added for stargazers and issue-comments; mutation now RED |
+| The untracked sidecar made `safe-commit-paths-dropped` fire on **every** run, drowning the control that detects a bot writing outside its allowlist | **P1** | Added to `STRUCTURAL_EXCLUSION_PREFIXES` + `.gitignore` |
+| `warn: truncated_at_per_page` was written, typed, and **read by nothing** — the `alert_route` this plan claimed did not exist | **P1** | `classifyCollectorStatus` extracted with a warn arm that reports without paging; all three arms unit-tested |
+| Stargazer cap fired on a **complete** set: `--paginate` exhausts pages, so a total of exactly 100 means done, not truncated | **P1** | Cap call removed for that endpoint, with the reason recorded at the helper |
+| `cmd_fetch_interactions` ran in production with **zero test coverage** and collapsed a lost fetch into `[]` at exit 0 | **P1** | Separate stderr + shape guard + three test cases |
+| The spawn-env negative class was extracted from the `buildSpawnEnv` slice only; the new call-site wrapper composed the env **outside** the guard | **P2** | Guard widened to the whole module |
+| `digestFabricatesRepoStats` could not change any outcome (it required `repo-stats` failed, which already reds the monitor) and its regex failed **silently** on a bold-list rendering | **P2 (over-build)** | **Cut.** The plan's claim that it was "the only deterministic control on RC3" was wrong — the collector-status gate already covers it. Prompt edits kept |
+| `check_rate_limit_file` was triple-covered and used a bash-4 `${msg,,}` on a script with a BSD fallback | **P2** | Cut; `_CAUSE="rate-limit"` added to the surviving `check_rate_limit`, which previously recorded an empty cause |
+| An empty-body guard using `-s` passed a **whitespace-only** body (reachable for the direct-written stargazer file) | **P2** | Strengthened to a slurped-length check |
+
+**Mutation results.** 8/8 script and 4/4 handler mutations turn the suite RED —
+after **three** were found vacuous and fixed: two digit-free fixtures, and an
+ordering guard whose bare `indexOf("} catch (err) {")` anchored on the first of
+**three** matches in a different function, making the assertion trivially true.
+A green mutation battery measures the mutations its author thought of; three of
+this PR's holes were only found by mutating something the author had not.
 
 ## Sharp Edges
 

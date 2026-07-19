@@ -132,6 +132,13 @@ gen_stargazers() { jq -nc --argjson n "$1" --argjson pad "$2" --arg ts "$NOW" \
   '[range($n) | {starred_at: $ts, user: {login: ("gazer" + (.|tostring))},
                  pad: ("x" * $pad)}]'; }
 
+gen_comments()   { jq -nc --argjson n "$1" --arg ts "$NOW" \
+  '[range($n) | {author_association: "NONE",
+                 user: {login: ("outsider" + (.|tostring)), type: "User"},
+                 issue_url: "https://api.github.com/repos/o/r/issues/42",
+                 body: "a comment", html_url: "https://github.com/o/r/issues/42",
+                 created_at: $ts}]'; }
+
 gen_repo()       { jq -nc '{stargazers_count: 11, forks_count: 2,
                             watchers_count: 11, subscribers_count: 1}'; }
 
@@ -242,6 +249,36 @@ assert_jq "$CASE2/out/stdout" '.stargazers_count == 11' \
   "repo-stats: stargazers_count survives stderr noise"
 assert_jq "$CASE2/out/stdout" '.new_stargazers_count == 3' \
   "repo-stats: new_stargazers_count survives stderr noise"
+
+echo ""
+
+# --- Test 2b: paginated (multi-array) body ----------------------------------
+#
+# `gh --paginate` emits ONE JSON ARRAY PER PAGE, concatenated. Slurping wraps
+# them as [[...],[...]], so the dereference must FLATTEN, not take the first
+# page. Every other fixture in this suite is a single array, under which
+# `add // []` and `.[0] // []` are indistinguishable -- so without this case the
+# flattening is unverified and a first-page-only regression reads as green while
+# silently undercounting. That is the same plausible-wrong-number class as RC3,
+# in the fix for RC3.
+
+echo "Test 2b: a paginated multi-array body is flattened, not truncated to page 1"
+
+CASE2B="$(new_case paginated)"
+gen_repo > "$CASE2B/fixtures/repo.json"
+# Two pages: 100 + 50. Concatenated exactly as --paginate emits them.
+{ gen_stargazers 100 16; gen_stargazers 50 16; } > "$CASE2B/fixtures/stargazers.json"
+
+# Precondition: the fixture really does hold more than one JSON value.
+PAGES=$(jq -s 'length' < "$CASE2B/fixtures/stargazers.json")
+assert_eq "2" "$PAGES" "fixture holds two concatenated page arrays"
+
+run_collector "$CASE2B" repo-stats 1
+assert_rc 0 "$RC" "repo-stats exits 0 on a paginated body"
+assert_jq "$CASE2B/out/stdout" '.new_stargazers_count == 150'   "repo-stats sums BOTH pages (150), not just the first (100)"
+assert_jq "$CASE2B/out/stdout" \
+  '.new_stargazers_count == (.new_stargazers | length)' \
+  "repo-stats: count still matches items on a paginated body"
 
 echo ""
 
@@ -424,6 +461,110 @@ assert_jq "$CASE7B/out/stdout" '.pull_requests.count == 0' \
   "activity: the date filter still excludes out-of-window PRs"
 assert_file_not_matches "$CASE7B/out/stderr" 'truncat' \
   "activity does NOT warn on a full raw pulls page that filters down to 0"
+
+# The contributors/issues call site passed a FILE PATH to a helper that takes a
+# COUNT, so `[[ /tmp/tmp.X -eq 100 ]]` raised a bash arithmetic error, returned
+# non-zero inside an `if`, and the detector was permanently dead there. Test 7
+# covered `activity` only, which is why the suite stayed green.
+echo "Test 7c: cap detection is live on the contributors endpoint too"
+
+CASE7C="$(new_case cap_contributors)"
+gen_commits 3 16   > "$CASE7C/fixtures/commits.json"
+gen_issues 100 16  > "$CASE7C/fixtures/issues.json"
+
+run_collector "$CASE7C" contributors 1
+assert_rc 0 "$RC" "contributors succeeds at the per_page cap"
+assert_file_matches "$CASE7C/out/stderr" 'issues returned exactly 100 items' \
+  "contributors warns when its issues fetch returns exactly per_page items"
+assert_file_not_matches "$CASE7C/out/stderr" 'arithmetic syntax error' \
+  "contributors emits no bash arithmetic error (helper receives a count)"
+
+echo ""
+
+# --- Test 8: the sidecar carries the diagnostic payload, not just an exit code -
+#
+# `cause` and `warn` are what the handler renders into the operator page. Both
+# were previously unasserted: blanking every _CAUSE assignment, or dropping the
+# warn field, left the suite fully green.
+
+echo "Test 8: sidecar records carry cause and warn"
+
+CASE8="$(new_case sidecar_fields)"
+gen_repo > "$CASE8/fixtures/repo.json"
+jq -nc '{message: "Not Found"}' > "$CASE8/fixtures/stargazers.json"
+STATUS8="$CASE8/status"
+(
+  export PATH="$CASE8/stub:$PATH"
+  export GITHUB_REPOSITORY="test-owner/test-repo"
+  export TMPDIR="$CASE8/tmp"
+  export SOLEUR_COLLECTOR_STATUS_DIR="$STATUS8"
+  bash "$COLLECTOR" repo-stats 1
+) >"$CASE8/out/stdout" 2>"$CASE8/out/stderr"
+RC=$?
+assert_nonzero_rc "$RC" "repo-stats fails on an error body"
+if [[ -f "$STATUS8/collector-status.jsonl" ]]; then
+  assert_jq "$STATUS8/collector-status.jsonl" \
+    '.cause == "stargazers-non-array"' \
+    "sidecar records the specific cause, not an empty string"
+else
+  echo "  FAIL: sidecar missing after error-body run"; FAIL=$((FAIL + 1))
+fi
+
+CASE8W="$(new_case sidecar_warn)"
+gen_commits 3 16  > "$CASE8W/fixtures/commits.json"
+gen_issues 100 16 > "$CASE8W/fixtures/issues.json"
+STATUS8W="$CASE8W/status"
+(
+  export PATH="$CASE8W/stub:$PATH"
+  export GITHUB_REPOSITORY="test-owner/test-repo"
+  export TMPDIR="$CASE8W/tmp"
+  export SOLEUR_COLLECTOR_STATUS_DIR="$STATUS8W"
+  bash "$COLLECTOR" contributors 1
+) >"$CASE8W/out/stdout" 2>"$CASE8W/out/stderr"
+RC=$?
+assert_rc 0 "$RC" "contributors succeeds at the cap with a status dir set"
+if [[ -f "$STATUS8W/collector-status.jsonl" ]]; then
+  assert_jq "$STATUS8W/collector-status.jsonl" \
+    '.warn == "truncated_at_per_page"' \
+    "sidecar carries the truncation warn field the handler reports on"
+else
+  echo "  FAIL: sidecar missing after capped run"; FAIL=$((FAIL + 1))
+fi
+
+# --- Test 9: fetch-interactions -------------------------------------------
+#
+# This command runs in production on every digest but had zero coverage. Its old
+# form piped through `add // []` BEFORE any validation and discarded stderr, so a
+# lost or error response collapsed into an empty interaction list at exit 0 --
+# a quiet day, indistinguishable from a real one.
+
+echo "Test 9: fetch-interactions parses, and fails loudly on an error body"
+
+CASE9="$(new_case interactions)"
+gen_comments 3 > "$CASE9/fixtures/issue_comments.json"
+
+run_collector "$CASE9" fetch-interactions 1
+assert_rc 0 "$RC" "fetch-interactions exits 0 on a valid body"
+assert_jq "$CASE9/out/stdout" '(.interactions | length) == 3' \
+  "fetch-interactions returns all three external comments"
+
+# Paginated shape: the same flattening requirement as the stargazer path.
+CASE9P="$(new_case interactions_paged)"
+{ gen_comments 2; gen_comments 2; } > "$CASE9P/fixtures/issue_comments.json"
+run_collector "$CASE9P" fetch-interactions 1
+assert_rc 0 "$RC" "fetch-interactions exits 0 on a paginated body"
+assert_jq "$CASE9P/out/stdout" '(.interactions | length) == 4' \
+  "fetch-interactions flattens both pages (4), not just the first (2)"
+
+# Exit-0 error body must not read as "no interactions today".
+CASE9E="$(new_case interactions_error)"
+jq -nc '{message: "Not Found"}' > "$CASE9E/fixtures/issue_comments.json"
+run_collector "$CASE9E" fetch-interactions 1
+assert_nonzero_rc "$RC" "fetch-interactions exits non-zero on an exit-0 error body"
+assert_file_not_matches "$CASE9E/out/stdout" '"interactions"' \
+  "fetch-interactions emits no empty interactions list on an error body"
+assert_file_matches "$CASE9E/out/stderr" 'GITHUB_COLLECTOR_CAUSE=issue-comments' \
+  "fetch-interactions names issue-comments as the cause"
 
 echo ""
 print_results

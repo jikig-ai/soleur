@@ -15,6 +15,11 @@
 
 set -euo pipefail
 
+# Page size for every list endpoint below. check_cap compares against it, so
+# binding both sides to one constant keeps the truncation detector from
+# silently retiring if a URL changes.
+readonly PER_PAGE=100
+
 # --- Validation ---
 
 validate_gh() {
@@ -72,6 +77,7 @@ date_n_days_ago() {
 check_rate_limit() {
   local response="$1"
   if echo "$response" | jq -e '.message // empty' 2>/dev/null | grep -qi "rate limit"; then
+    _CAUSE="rate-limit"
     echo "Error: GitHub API rate limit exceeded." >&2
     echo "" >&2
     echo "Options:" >&2
@@ -130,7 +136,7 @@ check_array_response() { # $1=file  $2=what
   # so zero bytes means the response was lost, not that the period was quiet --
   # and slurping an empty file yields [], which would render a plausible 0. This
   # is the last path by which a missing fetch could still look like a quiet day.
-  if [[ ! -s "$1" ]]; then
+  if [[ ! -s "$1" ]] || [[ "$(jq -s 'length' <"$1" 2>/dev/null || echo 0)" -eq 0 ]]; then
     _CAUSE="${2}-empty-response"
     echo "GITHUB_COLLECTOR_CAUSE=${2} returned an empty body (expected a JSON array)" >&2
     echo "Error: Failed to fetch ${2} (empty response)" >&2
@@ -146,22 +152,6 @@ check_array_response() { # $1=file  $2=what
   fi
 }
 
-# File-based counterpart to check_rate_limit, for payloads that are spooled to
-# disk rather than captured into a shell variable.
-check_rate_limit_file() { # $1=file
-  local msg
-  msg=$(jq -rs '.[0].message? // empty' <"$1" 2>/dev/null | head -c 200)
-  if [[ "${msg,,}" == *"rate limit"* ]]; then
-    _CAUSE="rate-limit"
-    echo "Error: GitHub API rate limit exceeded." >&2
-    echo "" >&2
-    echo "Options:" >&2
-    echo "  1. Wait and retry (resets hourly)" >&2
-    echo "  2. Check limit: gh api rate_limit" >&2
-    exit 1
-  fi
-}
-
 _json_len() { # $1=file
   jq -s 'add // [] | length' <"$1" 2>/dev/null || echo 0
 }
@@ -170,6 +160,10 @@ _json_len() { # $1=file
 # truncated one. Record it so a future growth-driven undercount is loud instead
 # of silent. This is detection, not pagination.
 #
+# NOT applied to stargazers: that fetch paginates to exhaustion, so a total of
+# exactly PER_PAGE means the set is COMPLETE, not truncated -- warning there
+# would cry wolf on any repo sitting at exactly 100 stars.
+#
 # Takes a COUNT, not a file, because "a full page" only means truncation for
 # endpoints that filter server-side. The pulls endpoint deliberately over-fetches
 # a fixed page and filters by date afterwards, so a full raw page is its normal
@@ -177,9 +171,9 @@ _json_len() { # $1=file
 # signal. For that endpoint the caller passes the post-filter count instead,
 # where a full page really does mean the window is saturated.
 check_cap() { # $1=count  $2=what
-  if [[ "${1:-0}" -eq 100 ]]; then
+  if [[ "${1:-0}" -eq "$PER_PAGE" ]]; then
     _CAP_WARN="truncated_at_per_page"
-    echo "WARN: ${2} returned exactly 100 items (per_page cap) -- results may be truncated" >&2
+    echo "WARN: ${2} returned exactly ${PER_PAGE} items (per_page cap) -- results may be truncated" >&2
   fi
 }
 
@@ -205,7 +199,7 @@ cmd_activity() {
   _TMPFILES+=("$prs_f")
 
   local issues prs
-  issues=$(gh api "repos/${repo}/issues?state=all&since=${since}&per_page=100" 2>&1) || {
+  issues=$(gh api "repos/${repo}/issues?state=all&since=${since}&per_page=${PER_PAGE}" 2>&1) || {
     _CAUSE="issues-fetch-failed"
     echo "GITHUB_COLLECTOR_CAUSE=issues: $(echo "$issues" | head -c 200 | tr '\n' ' ')" >&2
     echo "Error: Failed to fetch issues ($(echo "$issues" | head -c 200))" >&2
@@ -216,7 +210,7 @@ cmd_activity() {
   check_array_response "$issues_f" issues
   check_cap "$(_json_len "$issues_f")" issues
 
-  prs=$(gh api "repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100" 2>&1) || {
+  prs=$(gh api "repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=${PER_PAGE}" 2>&1) || {
     _CAUSE="pulls-fetch-failed"
     echo "GITHUB_COLLECTOR_CAUSE=pulls: $(echo "$prs" | head -c 200 | tr '\n' ' ')" >&2
     echo "Error: Failed to fetch PRs ($(echo "$prs" | head -c 200))" >&2
@@ -272,7 +266,7 @@ cmd_contributors() {
 
   # Get contributors from recent commits
   local commits
-  commits=$(gh api "repos/${repo}/commits?since=${since}&per_page=100" 2>&1) || {
+  commits=$(gh api "repos/${repo}/commits?since=${since}&per_page=${PER_PAGE}" 2>&1) || {
     _CAUSE="commits-fetch-failed"
     echo "GITHUB_COLLECTOR_CAUSE=commits: $(echo "$commits" | head -c 200 | tr '\n' ' ')" >&2
     echo "Error: Failed to fetch commits ($(echo "$commits" | head -c 200))" >&2
@@ -285,7 +279,7 @@ cmd_contributors() {
 
   # Get contributors from recent issues/PRs
   local issues
-  issues=$(gh api "repos/${repo}/issues?state=all&since=${since}&per_page=100" 2>&1) || {
+  issues=$(gh api "repos/${repo}/issues?state=all&since=${since}&per_page=${PER_PAGE}" 2>&1) || {
     _CAUSE="issues-fetch-failed"
     echo "GITHUB_COLLECTOR_CAUSE=issues: $(echo "$issues" | head -c 200 | tr '\n' ' ')" >&2
     echo "Error: Failed to fetch issues ($(echo "$issues" | head -c 200))" >&2
@@ -294,7 +288,7 @@ cmd_contributors() {
   check_rate_limit "$issues"
   printf '%s' "$issues" >"$issues_f"
   check_array_response "$issues_f" issues
-  check_cap "$issues_f" issues
+  check_cap "$(_json_len "$issues_f")" issues
 
   jq -n \
     --slurpfile commits "$commits_f" \
@@ -417,7 +411,7 @@ cmd_repo_stats() {
   star_err=$(mktemp)
   _TMPFILES+=("$star_err")
 
-  if ! gh api "repos/${repo}/stargazers?per_page=100" \
+  if ! gh api "repos/${repo}/stargazers?per_page=${PER_PAGE}" \
     -H "Accept: application/vnd.github.star+json" \
     --paginate >"$star_f" 2>"$star_err"; then
     _CAUSE="stargazers-fetch-failed"
@@ -425,9 +419,7 @@ cmd_repo_stats() {
     echo "Error: Failed to fetch stargazers" >&2
     exit 1
   fi
-  check_rate_limit_file "$star_f"
   check_array_response "$star_f" stargazers
-  check_cap "$(_json_len "$star_f")" stargazers
 
   # Combine and filter
   jq -n \
@@ -463,25 +455,35 @@ cmd_fetch_interactions() {
   # Registered with the single EXIT trap rather than removed by hand: the old
   # form cleaned up only on the paths it remembered, leaking the spool on every
   # other early exit.
-  local tmpfile
+  #
+  # stdout and stderr go to separate files for the same reason as the stargazer
+  # fetch. The old form discarded stderr and collapsed the body through
+  # `add // []` BEFORE any validation, so a lost or error response became an
+  # empty interaction list at exit 0 -- a quiet day, indistinguishable from a
+  # real one.
+  local tmpfile err_f
   tmpfile=$(mktemp)
   _TMPFILES+=("$tmpfile")
+  err_f=$(mktemp)
+  _TMPFILES+=("$err_f")
 
-  if ! gh api "repos/${repo}/issues/comments?since=${since}&per_page=100" \
-    --paginate 2>/dev/null | jq -s 'add // []' >"$tmpfile"; then
+  if ! gh api "repos/${repo}/issues/comments?since=${since}&per_page=${PER_PAGE}" \
+    --paginate >"$tmpfile" 2>"$err_f"; then
     _CAUSE="issue-comments-fetch-failed"
-    echo "GITHUB_COLLECTOR_CAUSE=issue comments: fetch or parse failed" >&2
+    echo "GITHUB_COLLECTOR_CAUSE=issue comments: $(head -c 200 "$err_f" | tr '\n' ' ')" >&2
     echo "Error: Failed to fetch issue comments" >&2
     exit 1
   fi
+  check_array_response "$tmpfile" issue-comments
 
   # Filter to external users only, exclude bots
-  jq --arg since "$since" --arg repo "$repo" \
-    '{
+  jq -n --slurpfile comments "$tmpfile" --arg since "$since" --arg repo "$repo" \
+    '($comments | add // []) as $c
+    | {
       repo: $repo,
       since: $since,
       interactions: [
-        .[]
+        $c[]
         | select(
             (.author_association == "NONE" or
              .author_association == "CONTRIBUTOR" or
@@ -498,7 +500,7 @@ cmd_fetch_interactions() {
             created_at: .created_at
           }
       ]
-    }' "$tmpfile"
+    }'
 }
 
 # --- Main ---
