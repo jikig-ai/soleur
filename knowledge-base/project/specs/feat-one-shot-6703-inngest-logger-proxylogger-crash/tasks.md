@@ -1,0 +1,70 @@
+# Tasks — eliminate Inngest ctx-logger receiver loss at the middleware boundary
+
+---
+lane: cross-domain
+plan: knowledge-base/project/plans/2026-07-19-fix-inngest-ctx-logger-receiver-loss-typeerror-plan.md
+branch: feat-one-shot-6703-inngest-logger-proxylogger-crash
+refs: ["#6703", "#6657"]
+---
+
+> **Read the plan's Overview + Research Reconciliation before starting.** The brief's
+> prescribed fix (wire the client `logger` to pino) is **falsified** and must NOT be
+> implemented. See `decision-challenges.md` in this directory.
+
+## Phase 0 — Preconditions (verify; halt on mismatch)
+
+- [ ] 0.1 Confirm `6496e3398` (PR #6705) is an ancestor of HEAD:
+      `git merge-base --is-ancestor 6496e3398 HEAD && echo IN-BRANCH`
+- [ ] 0.2 Re-read the pinned vendor files — do NOT trust the plan's quotes:
+  - [ ] 0.2.1 `grep -n '"version"' apps/web-platform/node_modules/inngest/package.json` → `3.54.2`. If not, **halt**.
+  - [ ] 0.2.2 `sed -n '27,40p' apps/web-platform/node_modules/inngest/middleware/logger.js` — `enabled = false` instance field.
+  - [ ] 0.2.3 `sed -n '660,690p' apps/web-platform/node_modules/inngest/components/Inngest.js` — confirm inngest calls `enable()`/`flush()`/`error()` on **its own closure reference** (`:673`), not on the transformed ctx. **This is R4 — the load-bearing precondition of the whole approach.** If inngest reads the logger back off ctx, Option C is unworkable; halt and re-plan.
+- [ ] 0.3 Confirm zero existing detachment sites (both greps must return empty):
+  - [ ] `grep -rnE "(const|let|var)\s+\w+\s*=\s*\w*[Ll]ogger\.(info|warn|error|debug)\s*[;,)]" apps/web-platform/server apps/web-platform/app`
+  - [ ] `grep -rnE "\(\s*\w*[Ll]ogger\.(info|warn|error|debug)\s*\)" apps/web-platform/server`
+- [ ] 0.4 Baseline green: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` → exit 0.
+
+> Runner forms: typecheck is `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
+> (**never** `npm run -w …` — no root `workspaces`). Tests are **vitest**
+> (`./node_modules/.bin/vitest run <path>`), **never** `bun test`.
+
+## Phase 1 — RED (write the failing test first)
+
+- [ ] 1.1 Create `apps/web-platform/test/server/inngest/bound-logger-middleware.test.ts`.
+- [ ] 1.2 Build a `ProxyLoggerLike` **class** fake — `enabled` as an initialized instance field, each method opening `if (!this.enabled) return;`. **Must be a class**; an object literal cannot reproduce receiver loss.
+- [ ] 1.3 Assert the RED on the raw logger: detached `raw.info` throws `/Cannot read properties of undefined \(reading 'enabled'\)/`.
+- [ ] 1.4 Assert the target behaviour (fails today — no middleware exists): detached `bound.info` does **not** throw **and** the call still reaches the underlying logger.
+- [ ] 1.5 Add the five-shape loop: extract, destructure, `forEach`, `setTimeout`, `.catch` — none throw.
+- [ ] 1.6 Add the gate-preservation case: with `enabled === false`, a bound call delivers **zero** calls to the underlying logger.
+- [ ] 1.7 **Run it and capture the failure output** — this is the AC3 evidence quoted in the PR body.
+
+## Phase 2 — GREEN (bind at the boundary)
+
+- [ ] 2.1 Create `apps/web-platform/server/inngest/middleware/bound-logger.ts` exporting `boundLoggerMiddleware`, mirroring `run-log.ts`'s `InngestMiddleware` → `init()` → `onFunctionRun()` → `transformInput({ ctx })` structure.
+- [ ] 2.2 Forward `info`/`warn`/`error` as **arrow closures** over a captured `raw = ctx.logger` (no method shorthand — shorthand reintroduces the `this` dependency).
+- [ ] 2.3 Register in `apps/web-platform/server/inngest/client.ts`: append `boundLoggerMiddleware` **last** in the `middleware` array.
+- [ ] 2.4 Comment the ordering rationale (it wraps an already-composed ctx).
+- [ ] 2.5 **Do NOT** add a `logger:` option to `new Inngest({...})`.
+- [ ] 2.6 **Do NOT** modify `_cron-shared.ts` — `HandlerArgs["logger"]` needs no change.
+- [ ] 2.7 Re-run Phase 1 tests → all green.
+
+## Phase 3 — Fleet-wide verification
+
+- [ ] 3.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` → exit 0.
+- [ ] 3.2 Record covered surface: `grep -rl "inngest.createFunction" apps/web-platform/server/inngest/functions/ | wc -l` → note in PR body.
+- [ ] 3.3 `./node_modules/.bin/vitest run test/server/inngest/` → green.
+- [ ] 3.4 Confirm `sentry-correlation` + `run-log` suites pass **unmodified**: `git diff --name-only $(git merge-base origin/main HEAD) -- 'apps/web-platform/test/server/inngest/*sentry*' 'apps/web-platform/test/server/inngest/*run-log*'` → empty.
+- [ ] 3.5 Full-suite exit gate: `cd apps/web-platform && ./node_modules/.bin/vitest run` → green.
+
+## Phase 4 — Correct the record (do NOT close anything)
+
+- [ ] 4.1 Comment on #6703 recording the falsification (see plan Phase 4 for required content).
+- [ ] 4.2 Confirm #6703 and #6657 are both still `OPEN`.
+- [ ] 4.3 PR body uses `Ref #6703` / `Ref #6657` — **no** closing keyword for either.
+- [ ] 4.4 PR body states the non-overclaim (AC10): client logger deliberately not wired; `enabled` gate still suppresses ctx logs on replay passes; observability class **not** fixed.
+- [ ] 4.5 Ensure `decision-challenges.md` is surfaced by `/soleur:ship` (DC-1 and DC-2 are user-challenges needing an operator decision).
+
+## Phase 5 — Learnings
+
+- [ ] 5.1 Capture a learning: *"`enabled === false` is not `enabled === undefined`"* — a plausible causal chain that nobody compiled, propagated from a live incident into an issue body into a task brief.
+- [ ] 5.2 Capture: *elimination beats detection* — a ~20-line arrow-closure bind removed a class that a `this`-parameter type guard could only partially detect, while guarding a type severed from the SDK by 65 `as unknown as` casts.
