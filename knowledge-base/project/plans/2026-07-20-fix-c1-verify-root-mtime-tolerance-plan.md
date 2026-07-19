@@ -19,6 +19,34 @@ requires_cpo_signoff: true
 > `knowledge-base/project/specs/<branch>/decision-challenges.md` (ADR-084) for operator
 > review; `ship` surfaces it in the PR body and as an `action-required` issue.
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-20 · **Passes:** plan-review (Kieran, spec-flow), learnings-researcher,
+data-integrity-guardian (precedent-diff gate), local measurement.
+
+### Key improvements over the first draft
+
+1. **The approach was inverted by measurement.** The draft narrowed C1 per the issue brief.
+   spec-flow found — and I independently confirmed in the source and by reproduction — that the
+   diff is caused by the script's own G4 probe. C1 is now left untouched.
+2. **`touch -r` replaces the `stat`/`touch -d` round-trip**, and a **read-back guard** makes the
+   restore *measured* rather than *asserted* (a truncating `touch` exits 0 and would otherwise
+   pass silently).
+3. **`die`-site line numbers corrected** — the draft cited the `rm` lines (`:463/:469/:473`);
+   the real sites are `:456/:464/:470/:476`, and `:456` needs no restore.
+4. **In-bracket blind spot named honestly** instead of claimed closed. A depth-1 listing
+   fingerprint covers the create+delete case; the bare-`touch` case stays recorded as open.
+5. **Battery grown 18 → 21 cases** and required to be *half-authored by an independent agent* —
+   a self-graded battery measures its author's imagination, not the suite.
+6. **Sibling-suite list corrected** from `header/staging/luks` (which pin none of the changed
+   literals) to `verify/freeze/loopback` (which do).
+
+### Open items carried forward
+
+- Byte-loss window **after** C1 (`git fsck` across 8 workspaces, before `umount`) — pre-existing,
+  scoped out, needs its own issue.
+- In-bracket bare-`touch` by a foreign writer — uncovered residual, recorded in-code.
+
 ## Overview
 
 Every `/workspaces` LUKS cutover safe-aborts on one itemize line:
@@ -143,26 +171,85 @@ the 2026-07-19 learning, a suite that silently runs nothing reports green.
 ### Phase 1 — Make the G4 probe non-perturbing
 
 In `assert_mount_quiesced`, capture the root's mtime before `exec 9>"$probe"` and restore it
-after the probe is unlinked, on **every** exit path (the clean path plus the three `die`
-paths at `:463`, `:469`, `:473`).
+after the probe is unlinked.
 
-**Precision is load-bearing.** Use full sub-second precision (`stat -c %y` / `touch -d`), not
-`stat -c %Y` — `%Y` truncates to whole seconds, and ext4 stores nanoseconds, so a `%Y`
-round-trip leaves a sub-second skew that still emits `.d..t...... ./`. The local repro used
-`%y` and verified clean.
+**Use `touch -r`, not a `stat`/`touch -d` string round-trip.** Capture into a reference file
+alongside the existing `mktemp`s at `:451` (`touch -r "$MOUNT" "$ref"`), restore with
+`touch -r "$ref" "$MOUNT"`. This eliminates the format assumption, the locale dependency, the
+quoting hazard and the date parser entirely. **No precedent exists in-tree** (`git grep 'touch -r'`
+→ zero hits; every in-tree `stat` is whole-second `%Y`; every `touch -d` is test-fixture
+aging) — the pattern is novel, which is itself a reason to prefer the primitive with the
+fewest moving parts.
 
-**Fail-closed, in a shell with no `-e`.** `workspaces-cutover.sh:32` is `set -uo pipefail`
-with **no `-e`**, so a failed `stat` or `touch` does not abort by itself. Validate explicitly:
-an unreadable pre-probe mtime or a failed restore must `die` (a probe that silently leaves the
-tree perturbed reintroduces exactly this bug, invisibly). Per the 2026-07-19 learning's
-unifying question: *if this instrument were unavailable, does the guard REFUSE or PROCEED?*
-It must refuse.
+**Verify the restore by reading it back — do not assume it (P0).** A `touch` that exits 0 but
+writes a *truncated* timestamp is not a failure exit, so an exit-status-only guard passes while
+the root stays perturbed — reintroducing this bug invisibly, which is precisely what this plan
+says must not happen. Read back and compare:
 
-**Preferred alternative, if it holds under test:** move the probe fd outside the transferred
-tree entirely, so there is nothing to restore. Evaluate in Phase 0 — G4's purpose is to prove
-`lsof +D "$MOUNT"` scanned the mount, and the positive control requires the fd to be *under*
-`$MOUNT`, so relocation likely defeats the control. If so, save/restore is correct; record
-why in the plan body rather than leaving the alternative unexamined.
+```bash
+post="$(stat -c %y -- "$MOUNT")"
+[ "$post" = "$pre" ] || { emit_drift g4_root_mtime_restore_skew; die "..."; }
+```
+
+This makes `probe_restored=yes` **measured rather than asserted**, and it catches truncation
+from any source — GNU-vs-uutils `touch -d` parser differences, coarser filesystem granularity,
+or a future primitive swap. It also makes the `%y`-vs-`%Y` precision argument moot at runtime
+(m17 still pins it at the harness level).
+
+**Exit paths.** The `die` sites are `:456`, `:464`, `:470`, `:476` — **not** the `rm` lines
+(`:463`, `:469`, `:473`), which an earlier draft of this plan miscited. `:456` needs **no**
+restore: `exec 9>` failed, so nothing was created. Add an explicit comment there so the
+omission is deliberate rather than apparent. The other three require the restore.
+
+**Order the restore after a positive unlink check.** `rm -f "$probe"` is unchecked at all three
+sites. If it fails (EPERM, immutable, EROFS), restoring the mtime yields a root that *asserts*
+"unchanged" while still carrying the entry. C1 still catches it (`>f+++++++++ .luks-g4-probe.NNN`),
+so this is not fail-open — but require `[ ! -e "$probe" ] || die` between unlink and restore so
+the ordering is load-bearing rather than incidental.
+
+**Fail-closed, in a shell with no `-e`.** `workspaces-cutover.sh:32` is `set -uo pipefail` with
+**no `-e`**. Two specific traps:
+
+- `local mt="$(stat ...)"` **masks the exit status** — `local` returns 0 regardless, so a failed
+  `stat` never reaches the `die`. Use the in-tree precedent two lines from the edit site
+  (`:462`, `:468`): declare first, assign second (`local mt; mt="$(...)"`).
+- Instrument availability belongs in the **existing batch preflight at `:1019-1025`**, which
+  already loops over required tools (including `stat`) with this exact rationale. Extend that
+  loop with `touch` — do not add an ad-hoc inline check. `ensure_lsof` (`:312`) and `ensure_aws`
+  (`:95`) are the sibling forms.
+
+Per the 2026-07-19 learning's unifying question: *if this instrument were unavailable, does the
+guard REFUSE or PROCEED?* It must refuse.
+
+**GNU-vs-uutils capability preflight (Phase 0).** Prod is Debian GNU; the local harness may be
+uutils, where `%y` ns fidelity and `touch -d`/`touch -r` ns handling differ. A green local
+harness is not evidence for prod. Gate the harness on a runtime GNU-capability probe and SKIP
+cleanly when absent — precedent: `plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh:28-29`.
+The read-back guard above makes prod self-checking regardless.
+
+**Why the probe cannot simply be relocated.** Two candidates, both rejected, recorded here so
+nobody adopts them later:
+
+- *Move the fd outside `$MOUNT`* — defeats G4's positive control, which exists to prove
+  `lsof +D "$MOUNT"` actually scanned the mount (`:467`).
+- *Hold a read-only fd on a file that already exists under `$MOUNT`* — zero perturbation (read
+  bumps only atime, and C1 at `:229` compares neither atime nor ctime), **but** the holder
+  filter at `:472` is `grep -vF -- "$probe"`, so reusing a real path would mask a genuine
+  straggler holding that same file. This is a stronger reason for rejection than the first and
+  belongs in the function comment.
+
+**Depth-1 listing fingerprint (closes most of the in-bracket blind spot).** The restore
+necessarily overwrites any root-mtime move that happened *inside* the bracket, including a
+foreign create+delete pair — structurally identical to the probe's own. Capture a sorted,
+hashed depth-1 listing before `exec 9>` and re-check it after the unlink; die on mismatch.
+This catches the create/delete-pair and rename cases the mtime restore would erase. A bare
+`touch "$MOUNT"` by a foreign writer inside the bracket remains **uncovered** — record that
+residual honestly in the function comment rather than claiming the class is closed.
+
+**Pin the C1 flag set as load-bearing.** The restore bumps the root's ctime twice. That is
+harmless only because C1 at `:229` omits `--atimes`/`--crtimes`. Add a one-line comment at
+`:229` recording that the flag set is load-bearing for the G4 restore — otherwise a future
+`--crtimes` addition silently re-breaks this with the identical `.d..t...... ./` signature.
 
 ### Phase 2 — Root-mtime telemetry (keeps the question answerable after the fix)
 
@@ -181,6 +268,12 @@ Two distinct questions, two distinct fields — not one boolean (`§2.9.2`):
   the residual-unquiesced-writer signal the fix must not blind. It stays fail-closed at C1.
 
 `stat` failure emits `unknown`, never a silent default. Comparisons use ns precision.
+
+**Do not route these through `emit_drift` alone.** The script already documents that
+`emit_drift` "returns 0 silently when the Sentry DSN cannot be resolved, which is exactly the
+FIRST-cutover case" — i.e. exactly this run. Mirror the in-tree emitter convention: bare `echo`
+at column 0 + `logger -t "$LUKS_LOG_TAG"` first (the `emit_staging_target` / `emit_freeze_holders`
+shape), with `emit_drift` as a best-effort second channel.
 
 ### Phase 3 — Correct the falsified in-tree comment
 
@@ -227,7 +320,10 @@ rejects when the root line is present, which is precisely what a tolerance would
 | m15 | probe `die` path taken (`g4_probe_blind`) | root mtime still restored |
 | m16 | `stat`/`touch` unavailable | probe **refuses** (dies), never proceeds silently |
 | m17 | `%Y`-precision restore instead of `%y` (mutation) | still emits `.d..t...... ./` — pins the precision requirement |
-| m18 | a **residual** SRC-root perturbation after the probe | C1 still REJECTS, `src_moved_after_probe=yes` |
+| m18 | a residual SRC-root perturbation **after** the probe | C1 still REJECTS, `src_moved_after_probe=yes` |
+| m19 | a create+delete pair **inside** the probe bracket | the depth-1 listing fingerprint dies; the restore must not silently absorb it |
+| m20 | `touch -r` truncates the restore (simulated coarse granularity) | read-back guard dies with `g4_root_mtime_restore_skew` |
+| m21 | `rm -f "$probe"` fails, restore would run anyway | `[ ! -e "$probe" ] || die` fires before the restore |
 
 **Applying the 2026-07-19 learning (mandatory, not optional):**
 
@@ -285,6 +381,25 @@ discoverability_test:
   expected_output: one row with probe_restored=yes and src_moved_after_probe=no
 ```
 
+## Downtime & Cutover
+
+**This change introduces no downtime of its own.** It edits a shell script; it does not touch a
+serving host, a hot table, or the router. No reboot, no replace, no lock-taking DDL.
+
+**Effect on the cutover's existing downtime envelope:** strictly reducing. The cutover holds a
+freeze (~90s) that is operator-dispatched and pre-existing. Today every dispatch pays that
+freeze and then **safe-aborts at C1**, so the downtime is spent for nothing and must be paid
+again on the next attempt. This fix makes the first post-merge dispatch able to complete, which
+removes the repeat-attempt cost rather than adding any.
+
+**Cutover path:** unchanged — the script's existing freeze → copy → verify → repoint sequence,
+with rollback, the dead-man timer, and C1 all intact. Per-stage verification and rollback are
+already implemented and are not modified by this plan.
+
+**Residual availability risk:** none introduced. The one pre-existing window this plan does not
+close (writers landing in `$MOUNT` between C1 and `umount`, during the multi-minute `git fsck`
+pass) is recorded in the Risks table and deferred to its own issue.
+
 ## Architecture Decision (ADR/C4)
 
 **No ADR.** This fixes an instrumentation defect within an already-recorded architecture
@@ -332,6 +447,26 @@ None. `gh issue list --label code-review --state open` returned no issue body re
       invariant is preserved.
 - [ ] **AC15** `shellcheck` clean; `workspaces-luks-verify`, `workspaces-luks-freeze` and
       `workspaces-luks-loopback` suites all green.
+- [ ] **AC18** The restore is **read back and compared** (`stat -c %y` before vs after); a
+      truncating `touch` dies with `g4_root_mtime_restore_skew`. `probe_restored` is measured,
+      not asserted (m20).
+- [ ] **AC19** `[ ! -e "$probe" ] || die` sits between unlink and restore (m21).
+- [ ] **AC20** Depth-1 listing fingerprint captured pre-probe and re-checked post-unlink;
+      an in-bracket create+delete pair dies (m19).
+- [ ] **AC21** No `local x="$(cmd)"` in the new code — declare-then-assign, per the `:462`/`:468`
+      precedent. Grep the diff to confirm.
+- [ ] **AC22** `touch` added to the existing instrument preflight loop at `:1019-1025` — not an
+      ad-hoc inline check.
+- [ ] **AC23** Telemetry emits via `echo` + `logger -t "$LUKS_LOG_TAG"` first; `emit_drift` is
+      best-effort second (it returns 0 silently when the DSN is unresolvable — the first-cutover
+      case).
+- [ ] **AC24** Comment at `:229` records that C1's flag set (no `--atimes`/`--crtimes`) is
+      load-bearing for the G4 restore.
+- [ ] **AC25** Comment at `:456` records that no restore is needed there (nothing was created).
+- [ ] **AC26** At least half the mutation battery is authored by an agent that did **not** write
+      the assertions. A self-graded battery measures the author's imagination, not the suite.
+- [ ] **AC27** The in-bracket bare-`touch` residual is recorded in the function comment as an
+      open blind spot — not claimed closed.
 - [ ] **AC16** `decision-challenges.md` (UC-1) exists and is rendered by `ship` into the PR
       body plus an `action-required` issue.
 
@@ -353,7 +488,8 @@ None. `gh issue list --label code-review --state open` returned no issue body re
 | Restore missed on a `die` path | AC6 covers all three `die` paths |
 | Relocating the probe defeats G4's positive control | Phase 1 evaluates and records why relocation is rejected |
 | Battery is vacuous (the 2026-07-19 class) | SUT mutation (m14/m17), call-order assertion, landing assertions, non-degeneracy floors, entrypoint coverage |
-| A **different** writer perturbs the root and the fix hides it | The fix restores only across the probe's own bracket; anything else still moves the mtime and still aborts C1 (m18, AC9) |
+| A different writer perturbs the root **outside** the probe bracket | Its mtime move survives the restore and still aborts C1 (m18, AC9) |
+| A different writer perturbs the root **inside** the bracket — its evidence is stamped over by the restore | **Real residual blind spot.** Listing-changing writes still emit their own itemize line, but the two root-mtime-only shapes (a bare `touch "$MOUNT"`, or a create+delete pair structurally identical to the probe) are erased. `src_moved_after_probe` cannot see this — post-restore and pre-verify are equal by construction. Mitigated by the depth-1 listing fingerprint (Phase 1, m19); the bare-`touch` case remains uncovered and is recorded honestly in the function comment rather than claimed closed |
 | Byte-loss window **after** C1 (`git fsck` across 8 workspaces takes minutes, before `umount`) | Pre-existing and out of scope; recorded here so the Risks table does not over-claim that C1 covers the whole cutover. File a follow-up issue |
 | Sibling suite pins a changed literal | `test-all.sh` does not cover `infra/`; three pinning suites named and run (AC15) |
 
