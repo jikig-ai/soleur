@@ -317,10 +317,17 @@ echo "  => _same_dev canonicalizes both sides, so it is correct under EITHER for
 echo "     comparison against \$MAPPER would be correct ONLY under the mapper-name form."
 echo "=================================================================================="
 echo
+# L4 is EVIDENCE RECORDING, not a behavior assertion: _same_dev canonicalizes both operands, so
+# the suite's verdict must not depend on WHICH form findmnt happens to report on this kernel.
+# Counting it as a pass would inflate the pass total with a tautology (it "passes" whenever
+# findmnt returns any string at all), and counting it as a failure would red the suite over an
+# environment observation with no bearing on correctness. It is therefore reported as ADVISORY and
+# deliberately does NOT touch the pass/fail counters. The behavior that matters — that the mount
+# source IS the mapper under either form — is asserted by L5c/L5d.
 if [ -n "$L4_SOURCE" ] && [ "$L4_FORM" != "unknown" ] && [ "$L4_FORM" != "EMPTY" ]; then
-  ok "L4: findmnt SOURCE form RECORDED as '$L4_SOURCE' ($L4_FORM)"
+  printf 'advisory - L4: findmnt SOURCE form RECORDED as %s (%s) — evidence only, not a pass/fail gate\n' "'$L4_SOURCE'" "$L4_FORM"
 else
-  no "L4: could not record a findmnt SOURCE form (got '$L4_SOURCE') — no evidence for the deferred decision"
+  printf 'advisory - L4: could not record a findmnt SOURCE form (got %s) — evidence only; L5c/L5d carry the behavior assertion\n' "'$L4_SOURCE'"
 fi
 
 # ===========================================================================
@@ -349,14 +356,21 @@ STAGING="$STAGING_DIR" MAPPER="$MAPPER" bash -c '
 ' > "$L5A_OUT" 2>&1
 L5A_RC=$?
 L5A_SRC="$(findmnt -no SOURCE "$STAGING_DIR" 2>/dev/null || true)"
+# LEGACY_RC is the captured status of the `mountpoint || mount` line itself. Asserting only that
+# execution REACHED THE END cannot tell "mount ran and FAILED" (the incident) from "mount never ran
+# at all" (e.g. the binary missing from PATH) — both leave $STAGING an empty root-disk directory
+# with no source, so every other condition below is satisfied either way and the reproduction would
+# be vacuous. A non-zero LEGACY_RC is what proves the mount was actually attempted and rejected.
+L5A_LEGACY_RC="$(awk -F= '/^LEGACY_RC=/{print $2; exit}' "$L5A_OUT")"
 if [ "$L5A_RC" -eq 0 ] \
   && grep -qE -- '^LEGACY_REACHED_END=1$' "$L5A_OUT" \
+  && [ -n "$L5A_LEGACY_RC" ] && [ "$L5A_LEGACY_RC" -ne 0 ] \
   && ! mountpoint -q "$STAGING_DIR" \
   && [ -d "$STAGING_DIR" ] \
   && [ -z "$L5A_SRC" ]; then
-  ok "L5a: INCIDENT REPRODUCED — the origin/main lines swallow the failed mount, continue, and leave \$STAGING a plain ROOT-DISK directory (src='<none>')"
+  ok "L5a: INCIDENT REPRODUCED — the mount was ATTEMPTED and FAILED (rc=$L5A_LEGACY_RC), the origin/main lines swallowed it, execution continued, and \$STAGING is a plain ROOT-DISK directory (src='<none>')"
 else
-  no "L5a: could not reproduce the incident (rc=$L5A_RC mountpoint=$(mountpoint -q "$STAGING_DIR" && echo yes || echo no) src='$L5A_SRC')"
+  no "L5a: could not reproduce the incident (rc=$L5A_RC legacy_rc='${L5A_LEGACY_RC:-<unread>}' mountpoint=$(mountpoint -q "$STAGING_DIR" && echo yes || echo no) src='$L5A_SRC')"
   note "out: $(cat "$L5A_OUT" 2>/dev/null)"
 fi
 

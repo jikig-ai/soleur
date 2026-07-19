@@ -115,6 +115,9 @@ harness_blockdev_other() {
 #   MKFS_RC=<n>               force `mkfs.ext4`'s exit status
 #   CRYPTSETUP_DEV            the `device:` line `cryptsetup status` reports (default: empty)
 #   DU_SRC / DF_AVAIL         the capacity-probe byte counts (verbatim, so a case can feed garbage)
+#   BLKID_RC=<n>              force `blkid`'s exit status (only 0 and 2 are acceptable to the SUT)
+#   BLKID_ABSENT=1            `command -v blkid` fails (blkid not on PATH)
+#   CRYPTSETUP_CLOSE_RC=<n>   force `cryptsetup close`'s exit status (rollback EBUSY)
 #   READLINK_RC=<n>           force `readlink`'s exit status (the naive _same_dev fails OPEN here)
 #   READLINK_EMPTY=1          readlink exits 0 but prints NOTHING (the other fail-open half)
 run_case() {
@@ -170,6 +173,11 @@ run_case() {
         if [ "${1:-}" = "status" ] && [ -n "${CRYPTSETUP_DEV:-}" ]; then
           printf "  type:    LUKS2\n  device:  %s\n" "$CRYPTSETUP_DEV"
         fi
+        # NOTE: no apostrophes in this block — it lives inside a single-quoted bash -c body.
+        # The rollback path close previously swallowed its failure via `2>/dev/null || true`,
+        # remounting plaintext and reporting SUCCESS while leaking the mapper open AND mounted at
+        # $STAGING with a full divergent copy. This knob is what makes that EBUSY reproducible.
+        if [ "${1:-}" = "close" ]; then return "${CRYPTSETUP_CLOSE_RC:-0}"; fi
         return 0
       }
       findmnt() {
@@ -180,7 +188,16 @@ run_case() {
         esac
         return 0
       }
-      blkid()   { rec "blkid $*"; printf "%s\n" "${BLKID_FS:-}"; return 0; }
+      # A FAILED PROBE IS NOT PROOF OF AN EMPTY DEVICE: the SUT accepts only rc 0 or rc 2
+      # ("nothing detected") and refuses to mkfs on any other rc. The default models real blkid —
+      # rc 2 when it reports no type — so the empty-fs happy path exercises the rc-2 arm, not a
+      # rc-0 fiction. BLKID_RC forces any other rc (4 usage, 8 ambivalent, ENOENT, EIO...).
+      blkid()   {
+        rec "blkid $*"; printf "%s\n" "${BLKID_FS:-}"
+        [ -n "${BLKID_RC:-}" ] && return "$BLKID_RC"
+        [ -z "${BLKID_FS:-}" ] && return 2
+        return 0
+      }
       mkfs.ext4() { rec "mkfs.ext4 $*"; return "${MKFS_RC:-0}"; }
       # `du --apparent-size -sb X | cut -f1` and `df --output=avail -B1 X | tail -1 | tr -dc 0-9`:
       # emit the SHAPE each consumer parses so a case can feed non-numeric garbage verbatim.
@@ -236,6 +253,9 @@ run_case() {
       }
       command() {
         if [ "${1:-}" = "-v" ] && [ "${2:-}" = "lsof" ] && [ "${LSOF_ABSENT:-}" = "1" ]; then return 1; fi
+        # blkid lives in /usr/sbin, which this script has been bitten by before. An absent blkid
+        # must refuse, never fall through to the DESTRUCTIVE mkfs arm.
+        if [ "${1:-}" = "-v" ] && [ "${2:-}" = "blkid" ] && [ "${BLKID_ABSENT:-}" = "1" ]; then return 1; fi
         builtin command "$@"
       }
       for f in ${REQUIRE_FNS:-}; do

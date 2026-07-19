@@ -53,6 +53,13 @@ stage_case() {
     BLK="$BLKDEV" "$@"
 }
 
+# drift_n — how many drift markers this case emitted. Every emit_drift assertion in this suite is
+# positive ("X happened"), which cannot catch a case that fires the RIGHT drift plus a spurious
+# second one, nor a happy path that emits drift at all. Counted, not grepped.
+drift_n() { awk '/^EMIT_DRIFT: /{c++} END{print c+0}' <<<"$CASE_OUT"; }
+one_drift()  { [ "$(drift_n)" = "1" ]; }
+zero_drift() { [ "$(drift_n)" = "0" ]; }
+
 # The default happy-path environment, spelled out once. MOUNTPOINT_RCS="1 1": $STAGING is not a
 # mountpoint at the stray probe (so the ls -A arm runs) and still not one at the mount guard (so
 # `mount` runs) — the two calls the single global MOUNTPOINT_RC could never tell apart.
@@ -73,6 +80,9 @@ ran && ok "T0 prepare_staging_target succeeds on the first-cutover happy path (p
 markerF 'result=ok reason=prepared' \
   && ok "T0b the success path emits result=ok reason=prepared (a green run PROVES the assert ran)" \
   || no "T0b no ok marker on the happy path — a green run cannot be distinguished from a skipped gate"
+zero_drift \
+  && ok "T0c the success path emits NO drift at all (the drift channel is not noisy on green runs)" \
+  || no "T0c the happy path emitted $(drift_n) drift marker(s) — a green cutover would page the operator"
 
 # ---------------------------------------------------------------------------
 # T16 — the first-cutover arm must emit reused=0. STAGING_FS_REUSED is assigned ONLY in the ext4
@@ -208,6 +218,83 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Tmk — the mkdir fail-closure. `mkdir -p "$STAGING"` is the FIRST thing prepare_staging_target
+# does and it is what created /mnt/data-luks as a plain ROOT-DISK directory on 2026-07-19. A
+# swallowed failure here means every later gate operates on a path that does not exist.
+# ---------------------------------------------------------------------------
+happy "$CUTOVER" MKDIR_RC=1
+died && ok "Tmk a failed \`mkdir -p \$STAGING\` aborts the prepare" \
+     || no "Tmk a failed mkdir was swallowed (rc=$CASE_RC) — every later gate targets a missing path"
+outF 'EMIT_DRIFT: staging_mkdir_failed' && markerF 'reason=mkdir_failed' \
+  && ok "Tmkb the reason is mkdir_failed on BOTH the drift and marker channels" \
+  || no "Tmkb no mkdir_failed reason emitted"
+if nhas '^mountpoint ' && nhas '^mkfs\.ext4 ' && nhas '^mount '; then
+  ok "Tmkc the run stops immediately (no mountpoint probe, no mkfs, no mount)"
+else
+  no "Tmkc the run continued after a failed mkdir"
+fi
+
+# ---------------------------------------------------------------------------
+# Tbk — A FAILED PROBE IS NOT PROOF OF AN EMPTY DEVICE. `blkid ... || true` collapsed every blkid
+# failure (absent binary, rc 4 usage, rc 8 ambivalent, ENOENT, EACCES, EIO) into fs_type="", which
+# takes the DESTRUCTIVE mkfs arm. Concrete loss: a prior run completed the hours-long bulk rsync
+# and died later; a re-dispatch whose blkid fails then mkfs's over the complete good copy.
+# ---------------------------------------------------------------------------
+happy "$CUTOVER" BLKID_ABSENT=1
+died && ok "Tbk1 an absent blkid aborts rather than mkfs-ing blind" \
+     || no "Tbk1 blkid missing from PATH took the DESTRUCTIVE mkfs arm (rc=$CASE_RC)"
+outF 'EMIT_DRIFT: staging_blkid_absent' && markerF 'reason=blkid_absent' \
+  && ok "Tbk1b the reason is blkid_absent" \
+  || no "Tbk1b no blkid_absent reason emitted"
+nhas '^mkfs\.ext4 ' \
+  && ok "Tbk1c NO mkfs runs when blkid is absent (an unprobed mapper is never formatted)" \
+  || no "Tbk1c mkfs ran without any filesystem probe — this is the data-destroying arm"
+
+happy "$CUTOVER" BLKID_RC=4
+died && ok "Tbk2 a FAILED blkid probe (rc 4) aborts — a failed probe is not an empty device" \
+     || no "Tbk2 a failed blkid probe was read as 'no filesystem' (rc=$CASE_RC) — mkfs over a good copy"
+outF 'EMIT_DRIFT: staging_blkid_probe_failed' && markerF 'reason=blkid_probe_failed' \
+  && ok "Tbk2b the reason is blkid_probe_failed" \
+  || no "Tbk2b no blkid_probe_failed reason emitted"
+nhas '^mkfs\.ext4 ' \
+  && ok "Tbk2c NO mkfs runs after a failed probe" \
+  || no "Tbk2c mkfs ran after a failed probe — the destructive arm is reachable from an error"
+# Tbk2d — rc 2 ("nothing detected") is the ONLY empty that means "no filesystem", and it MUST
+# still reach mkfs. Without this the guard could be satisfied by refusing every empty device,
+# which would break the first cutover entirely.
+happy "$CUTOVER" BLKID_RC=2 BLKID_FS=""
+ran && has '^mkfs\.ext4 ' \
+  && ok "Tbk2d rc 2 (nothing detected) still takes the mkfs arm — the first cutover is not broken" \
+  || no "Tbk2d rc 2 no longer reaches mkfs (rc=$CASE_RC) — the guard broke the first-cutover path"
+
+# ---------------------------------------------------------------------------
+# Tmf — THE STAGING MOUNT FAIL-CLOSURE: the PR's headline behaviour. On 2026-07-19 the mapper held
+# no filesystem, `mount "$MAPPER" "$STAGING"` failed with `wrong fs type`, and under `set -uo
+# pipefail` with no `-e` that failure was SWALLOWED onto a root-disk directory.
+#
+# FINDMNT_STAGING_SRC is deliberately NOT pre-satisfied here. With the happy default the
+# downstream mount-source control masks this gate entirely: replacing the fail-closure with
+# `|| true` still dies (at source_not_mapper), so an rc-only assertion cannot see the difference.
+# The REASON is therefore the load-bearing assertion, not the rc.
+# ---------------------------------------------------------------------------
+happy "$CUTOVER" MOUNT_RC=1 FINDMNT_STAGING_SRC=""
+died && ok "Tmf a failed \`mount \$MAPPER \$STAGING\` aborts the prepare" \
+     || no "Tmf a failed staging mount was swallowed (rc=$CASE_RC) — THE 2026-07-19 defect"
+if outF 'EMIT_DRIFT: staging_mount_failed' && markerF 'reason=mount_failed'; then
+  ok "Tmfb the reason is mount_failed, NOT the downstream source_not_mapper (the gate is distinguishable)"
+else
+  no "Tmfb a failed staging mount is not reported as mount_failed — the fail-closure is inert or masked"
+fi
+one_drift \
+  && ok "Tmfc exactly one drift fires (the abort is not double-reported downstream)" \
+  || no "Tmfc $(drift_n) drift markers fired — the run continued past the mount failure"
+if nhas '^df ' && nhas '^du ' && ! markerF 'result=ok'; then
+  ok "Tmfd the run does NOT reach the capacity probe and emits no result=ok"
+else
+  no "Tmfd the run continued past a failed staging mount — the copy target is unverified"
+fi
+
+# ---------------------------------------------------------------------------
 # Tsm — THE STAGING MOUNT-SOURCE POSITIVE CONTROL. This is the primary regression guard for the
 # 2026-07-19 incident and the only assert in the function that answers "WHERE DO THE BYTES GO?".
 # Every other gate — C1 byte-identity, the `du` assert, `git fsck`, the G3 manifest — is a pure
@@ -270,11 +357,12 @@ outF 'EMIT_DRIFT: staging_insufficient_capacity' \
   && ok "T12b the reason is staging_insufficient_capacity" \
   || no "T12b no staging_insufficient_capacity drift emitted"
 
-# T12b2 — the boundary. `-gt`, not `-ge`: an EXACTLY-equal target cannot hold the copy plus ext4
-# metadata, and an off-by-one here is the difference between a pre-freeze abort and an in-freeze one.
+# T12c — the boundary. The gate requires usable > src + 5%, not a bare `avail > src`: ext4 writes
+# metadata DURING the copy, so one byte of slack is not headroom. An exactly-equal target must
+# still be refused, and it is the margin — not an off-by-one — that decides it.
 happy "$CUTOVER" DU_SRC=4096 DF_AVAIL=4096
-died && ok "T12c an exactly-equal avail/src is REFUSED (-gt, not -ge)" \
-     || no "T12c avail == src was accepted — the LUKS header + ext4 metadata make that a guaranteed ENOSPC"
+died && ok "T12c an exactly-equal avail/src is REFUSED (the 5% metadata margin, not a bare -gt)" \
+     || no "T12c avail == src was accepted — ext4 metadata written during the copy guarantees ENOSPC"
 
 # ---------------------------------------------------------------------------
 # T13 — a NON-NUMERIC capacity probe must abort, not pass vacuously. `[ "$avail_b" -gt "$src_b" ]`
@@ -339,21 +427,42 @@ extract_repoint() {  # <script> -> path to the extracted block, or empty when ex
   fi
 }
 
+# repoint_landed — did the LAST repoint_case actually execute the extracted block?
+#
+# THIS GATE IS LOAD-BEARING ON EVERY repoint ASSERTION, not just the mutations. When extraction
+# misses, the old code set CASE_RC=98 and CALLS=/dev/null — which made `died()` TRUE (98 != 0) and
+# `nhas` UNCONDITIONALLY true (nothing ever matches in /dev/null). T5/T5c/T6/T6c therefore all
+# passed with the block never running: breaking only the extraction anchor, leaving SUT behaviour
+# byte-identical, kept them green. CALLS now points at a real EMPTY temp file so `nhas` is a
+# genuine observation of an empty call log rather than a structural tautology, and every case
+# below gates on this predicate.
+REPOINT_OK=0
+repoint_landed() { [ "$REPOINT_OK" = "1" ]; }
+
 repoint_case() {  # <script> [env...]
   local script="$1"; shift
   local blk; blk="$(extract_repoint "$script")"
-  if [ -z "$blk" ]; then CASE_RC=98; CASE_OUT="REPOINT_EXTRACTION_MISSED"; CALLS=/dev/null; return; fi
+  if [ -z "$blk" ]; then
+    REPOINT_OK=0
+    CASE_RC=98; CASE_OUT="REPOINT_EXTRACTION_MISSED"
+    CALLS="$(mktemp -p "$RUN_SCRATCH" empty-calls.XXXXXX)"; : > "$CALLS"
+    MARKER_LOG="$(mktemp -p "$RUN_SCRATCH" empty-marker.XXXXXX)"; : > "$MARKER_LOG"
+    return
+  fi
+  REPOINT_OK=1
+  # CRYPTSETUP_DEV is required by the C13 canary's mapper->device anchor, which now runs
+  # `_same_dev "$_canary_mapper_dev" "$FRESH_DEV"`; without it the happy control dies there.
   run_case "$script" \
     'DRY_RUN=0; FRESH_DEV="$BLK"; MAPPER="$BLK"; FLIP_DONE=0; CANARY_OK=0; source "$REPOINT_BLOCK"' \
     'emit_drift persist_state' \
-    BLK="$BLKDEV" REPOINT_BLOCK="$blk" "$@"
+    BLK="$BLKDEV" REPOINT_BLOCK="$blk" CRYPTSETUP_DEV="$BLKDEV" "$@"
 }
 
 # MOUNTPOINT_RCS="1 0" is the STATE TRANSITION: after `umount "$MOUNT"` the repoint asserts $MOUNT
 # is NOT a mountpoint (rc 1), and after `mount "$MAPPER" "$MOUNT"` the canary asserts it IS (rc 0).
 # One global rc cannot express that, and without it neither T5/T6 nor their control is writable.
 repoint_case "$CUTOVER" MOUNTPOINT_RCS="1 0" FINDMNT_MOUNT_SRC="$BLKDEV" BLKID_FS="crypto_LUKS"
-if [ "$CASE_OUT" = "REPOINT_EXTRACTION_MISSED" ]; then
+if ! repoint_landed; then
   no "T5z repoint extraction MISSED — treat T5/T6 as un-run, not as evidence"
 else
   ran && ok "T5z the repoint block completes and reaches the host canary (positive control)" \
@@ -369,28 +478,36 @@ fi
 # mapper holding a divergent full copy at $STAGING, with no telemetry at all.
 repoint_case "$CUTOVER" MOUNTPOINT_RCS="1 0" FINDMNT_MOUNT_SRC="$BLKDEV" BLKID_FS="crypto_LUKS" \
   UMOUNT_FAIL_MATCH="/staging"
-died && ok "T5 a failed \`umount \$STAGING\` aborts the repoint" \
-     || no "T5 a failed staging umount was swallowed (rc=$CASE_RC) — two live divergent copies"
-outF 'EMIT_DRIFT: staging_umount_failed' \
-  && ok "T5b the reason is staging_umount_failed" \
-  || no "T5b no staging_umount_failed drift emitted"
-nhas '^mount ' \
-  && ok "T5c the abort happens BEFORE \`mount \$MAPPER \$MOUNT\` (the mapper is never stacked over plaintext)" \
-  || no "T5c the mapper was mounted at \$MOUNT despite the failed staging umount"
+if ! repoint_landed; then
+  no "T5/T5b/T5c NOT RUN: repoint extraction missed — treat as un-run, not as evidence"
+else
+  died && ok "T5 a failed \`umount \$STAGING\` aborts the repoint" \
+       || no "T5 a failed staging umount was swallowed (rc=$CASE_RC) — two live divergent copies"
+  outF 'EMIT_DRIFT: staging_umount_failed' \
+    && ok "T5b the reason is staging_umount_failed" \
+    || no "T5b no staging_umount_failed drift emitted"
+  nhas '^mount ' \
+    && ok "T5c the abort happens BEFORE \`mount \$MAPPER \$MOUNT\` (the mapper is never stacked over plaintext)" \
+    || no "T5c the mapper was mounted at \$MOUNT despite the failed staging umount"
+fi
 
 # T6 — a failed repoint mount must abort before the canary. The canary would otherwise run against
 # whatever is still mounted at $MOUNT and certify it.
 repoint_case "$CUTOVER" MOUNTPOINT_RCS="1 0" FINDMNT_MOUNT_SRC="$BLKDEV" BLKID_FS="crypto_LUKS" \
   MOUNT_RC=1
-died && ok "T6 a failed \`mount \$MAPPER \$MOUNT\` aborts the repoint" \
-     || no "T6 a failed repoint mount was swallowed (rc=$CASE_RC)"
-outF 'EMIT_DRIFT: repoint_mount_failed' \
-  && ok "T6b the reason is repoint_mount_failed" \
-  || no "T6b no repoint_mount_failed drift emitted"
-if nhas 'cryptsetup status' && nhas '^blkid '; then
-  ok "T6c the run does NOT reach the C13 host canary after a failed repoint"
+if ! repoint_landed; then
+  no "T6/T6b/T6c NOT RUN: repoint extraction missed — treat as un-run, not as evidence"
 else
-  no "T6c the canary ran after a failed repoint — it would certify whatever is still at \$MOUNT"
+  died && ok "T6 a failed \`mount \$MAPPER \$MOUNT\` aborts the repoint" \
+       || no "T6 a failed repoint mount was swallowed (rc=$CASE_RC)"
+  outF 'EMIT_DRIFT: repoint_mount_failed' \
+    && ok "T6b the reason is repoint_mount_failed" \
+    || no "T6b no repoint_mount_failed drift emitted"
+  if nhas 'cryptsetup status' && nhas '^blkid '; then
+    ok "T6c the run does NOT reach the C13 host canary after a failed repoint"
+  else
+    no "T6c the canary ran after a failed repoint — it would certify whatever is still at \$MOUNT"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -415,7 +532,7 @@ script_case() {  # <script> <findmnt-source> [env assignments...]
   done
   printf '#!/usr/bin/env bash\nprintf "findmnt %%s\\n" "$*" >> "$CALLS"\nprintf "%%s\\n" "$FINDMNT_SRC"\n' > "$d/bin/findmnt"
   printf '#!/usr/bin/env bash\nprintf "doppler %%s\\n" "$*" >> "$CALLS"\nprintf "test-passphrase\\n"\n' > "$d/bin/doppler"
-  printf '#!/usr/bin/env bash\nprintf "cryptsetup %%s\\n" "$*" >> "$CALLS"\ncase "$*" in *luksFormat*) exit "${LUKSFORMAT_RC:-0}";; esac\nexit 0\n' > "$d/bin/cryptsetup"
+  printf '#!/usr/bin/env bash\nprintf "cryptsetup %%s\\n" "$*" >> "$CALLS"\ncase "$*" in *luksFormat*) exit "${LUKSFORMAT_RC:-0}";; *luksOpen*) exit "${LUKSOPEN_RC:-0}";; esac\nexit 0\n' > "$d/bin/cryptsetup"
   chmod +x "$d/bin"/*
   SCRIPT_OUT="$(
     env "$@" CALLS="$SCRIPT_CALLS" FINDMNT_SRC="$fmsrc" \
@@ -461,6 +578,71 @@ else
   no "T15c the run proceeded to luksOpen after luksFormat failed — the abort reason ends up wrong"
 fi
 
+# Tlo — the luksOpen fail-closure, sibling of T15's luksFormat in the same hunk. Unguarded, a
+# failed open leaves $MAPPER absent and prepare_staging_target then dies as staging_mapper_absent
+# — a MISLEADING reason on the operator's only no-SSH channel. WORKSPACES_MAPPER_NAME is pointed
+# at a name guaranteed absent so the call site's `[ ! -e "$MAPPER" ]` skip does not fire.
+script_case "$CUTOVER" "$BLKDEV" DRY_RUN=0 ROLLBACK=0 WORKSPACES_LUKS_DEV="$BLKDEV" \
+  WORKSPACES_MAPPER_NAME="wl-staging-test-absent" LUKSOPEN_RC=1
+[ "$SCRIPT_RC" -ne 0 ] && ok "Tlo a failed luksOpen aborts the run" \
+                       || no "Tlo a failed luksOpen did not abort (rc=$SCRIPT_RC)"
+sout 'DRIFT reason=luksopen_failed' \
+  && ok "Tlob the reason is luksopen_failed (not the misleading downstream mapper_absent)" \
+  || no "Tlob no luksopen_failed drift emitted: ${SCRIPT_OUT:0:300}"
+if grep -qE 'cryptsetup luksOpen' "$SCRIPT_CALLS" && ! grep -qF 'staging_mapper_absent' <<<"$SCRIPT_OUT"; then
+  ok "Tloc luksOpen ran and the abort is NOT attributed to the absent mapper it caused"
+else
+  no "Tloc the failed open is reported one layer downstream — the operator chases the wrong failure"
+fi
+
+# ---------------------------------------------------------------------------
+# Trb — rollback(). This is the RECOVERY path, where a swallowed failure matters MORE than on the
+# forward path, and it was entirely unasserted: deleting either line below left both suites green.
+#
+# Trb1: `umount "$STAGING"` must happen BEFORE `cryptsetup close`. Without it a mapper still
+# mounted at $STAGING makes the close fail EBUSY — and the old `2>/dev/null || true` swallowed
+# that, so rollback remounted plaintext and reported SUCCESS while leaking the mapper open AND
+# mounted, holding a full divergent copy.
+# Trb2: the close failure must be REPORTED, not swallowed.
+# ---------------------------------------------------------------------------
+# MAPPER is bound to a real block device: the close is guarded on `[ -e "$MAPPER" ]`, so with the
+# default /dev/mapper/workspaces (absent on any test host) the close never runs and Trb1b/Trb2
+# would assert against a line that was never reached.
+ROLLBACK_ENV=(BLK="$BLKDEV" ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service")
+ROLLBACK_INV='DRY_RUN=0; MAPPER="$BLK"; rollback'
+run_case "$CUTOVER" "$ROLLBACK_INV" 'rollback resume_writers' "${ROLLBACK_ENV[@]}"
+ran && ok "Trb0 rollback() completes on the happy recovery path (positive control)" \
+    || no "Trb0 rollback() did not complete: rc=$CASE_RC ${CASE_OUT:0:300}"
+has '^umount .*/staging$' \
+  && ok "Trb1 rollback() umounts \$STAGING (without it the mapper close fails EBUSY)" \
+  || no "Trb1 rollback() never umounts \$STAGING — the close fails EBUSY and the mapper leaks open+mounted"
+u_stg="$(idx '^umount .*/staging$')"; c_cls="$(idx '^cryptsetup close')"
+if [ -n "$u_stg" ] && [ -n "$c_cls" ] && [ "$u_stg" -lt "$c_cls" ]; then
+  ok "Trb1b the \$STAGING umount PRECEDES the mapper close (ordering is the whole point)"
+else
+  no "Trb1b staging umount does not precede the close (umount=$u_stg close=$c_cls)"
+fi
+outF 'EMIT_DRIFT: rollback_mapper_close_failed' \
+  && no "Trb1c a SUCCEEDING close reported a close failure — the drift is unconditional, not an oracle" \
+  || ok "Trb1c a succeeding mapper close emits NO close-failure drift (negative control)"
+
+run_case "$CUTOVER" "$ROLLBACK_INV" 'rollback resume_writers' "${ROLLBACK_ENV[@]}" CRYPTSETUP_CLOSE_RC=1
+outF 'EMIT_DRIFT: rollback_mapper_close_failed' \
+  && ok "Trb2 a FAILED mapper close is reported (no longer swallowed by \`2>/dev/null || true\`)" \
+  || no "Trb2 the mapper close failure was swallowed — rollback reports SUCCESS while leaking the mapper"
+
+# Trb3 — the close is guarded on mapper EXISTENCE. `cryptsetup close` on an already-inactive mapper
+# exits non-zero, so an unguarded emit fires a FATAL drift on a second ROLLBACK=1 dispatch — the
+# most likely operator action after a partial recovery — for a rollback that fully succeeded. A
+# recovery-path signal that cries wolf gets ignored, so this negative oracle is load-bearing.
+run_case "$CUTOVER" 'DRY_RUN=0; MAPPER="$WORKSPACES_STAGING/no-such-mapper"; rollback' \
+  'rollback resume_writers' "${ROLLBACK_ENV[@]}" CRYPTSETUP_CLOSE_RC=1
+if nhas '^cryptsetup close' && ! outF 'EMIT_DRIFT: rollback_mapper_close_failed'; then
+  ok "Trb3 an ALREADY-CLOSED mapper is not closed again and emits no close-failure drift (no wolf-crying)"
+else
+  no "Trb3 a re-dispatched rollback pages FATAL for an already-successful close"
+fi
+
 # ---------------------------------------------------------------------------
 # T8 — VACUITY GUARD. Deleting prepare_staging_target from a scratch copy must make every case
 # above report HARNESS_UNDEFINED rather than pass. Without this the whole rc-non-zero matrix could
@@ -485,6 +667,131 @@ else
   [ -z "$vac_fail" ] \
     && ok "T8 with prepare_staging_target deleted every case reports HARNESS_UNDEFINED (none is vacuous)" \
     || no "T8 these cases pass WITHOUT prepare_staging_target existing — they are vacuous:$vac_fail"
+fi
+
+# ---------------------------------------------------------------------------
+# TQ — THE QUANTIFIER. emit_staging_target is documented as firing "on EVERY outcome including
+# success", but until now nothing quantified over that set: deleting the call from 9 of 13 arms
+# left the suite at 72/1, and the single catch was incidental (an ordering assertion that merely
+# needs SOME marker to exist).
+#
+# This block DERIVES the arm set from the SUT source and asserts (a) every derived arm is actually
+# exercised by a case here, and (b) the CARDINALITY matches the number of producer call sites. (b)
+# is what keeps the guard bounded: an arm the extraction cannot see would otherwise be silently
+# exempt, and a new arm added to the SUT would be covered by nobody while this block stayed green.
+# It is also the mechanism by which the two blkid arms added mid-review surfaced as uncovered.
+#
+# Comments are stripped before extraction: the prose above the function names these slugs too, and
+# a body-grep that sees comments would credit coverage to documentation.
+# ---------------------------------------------------------------------------
+ARMS_SRC="$RUN_SCRATCH/arms-src"; ARMS_SEEN="$RUN_SCRATCH/arms-seen"
+DRIFT_SRC="$RUN_SCRATCH/drift-src"; DRIFT_SEEN="$RUN_SCRATCH/drift-seen"
+: > "$ARMS_SEEN"; : > "$DRIFT_SEEN"
+TQ_DRIFT_BAD=""
+
+# record_arm <label> <expected-drift-count> — fold the case just run into the coverage sets and
+# check its drift cardinality. "exactly one drift per failure arm" is the oracle that catches a
+# run which fired the right drift AND then continued to fire another.
+record_arm() {
+  grep -oE 'result=[a-z]+ reason=[a-z_]+' "$MARKER_LOG" >> "$ARMS_SEEN" 2>/dev/null || true
+  awk '/^EMIT_DRIFT: /{sub(/^EMIT_DRIFT: /,""); print $1}' <<<"$CASE_OUT" >> "$DRIFT_SEEN"
+  local n; n="$(drift_n)"
+  [ "$n" = "$2" ] || TQ_DRIFT_BAD="$TQ_DRIFT_BAD $1(drift=$n want=$2)"
+}
+
+# One case per arm, run against the REAL script only (never a mutant — a mutant's markers would
+# credit coverage the SUT does not actually have).
+happy "$CUTOVER" MKDIR_RC=1                                     ; record_arm mkdir_failed 1
+run_case "$CUTOVER" \
+  'FRESH_DEV="$BLK"; MAPPER="$BLK"; : > "$WORKSPACES_STAGING/stray"; prepare_staging_target' \
+  'prepare_staging_target' BLK="$BLKDEV" DRY_RUN=0 MOUNTPOINT_RCS="1 1" \
+  CRYPTSETUP_DEV="$BLKDEV" FINDMNT_STAGING_SRC="$BLKDEV" FINDMNT_MOUNT_SRC="" BLKID_FS="" \
+  DU_SRC=1024 DF_AVAIL=999999999                                ; record_arm stray_present 1
+happy "$CUTOVER" FINDMNT_MOUNT_SRC="$BLKDEV"                    ; record_arm already_cutover 1
+stage_case "$CUTOVER" DRY_RUN=1 MOUNTPOINT_RCS="1 1" FINDMNT_MOUNT_SRC="" BLKID_FS="" \
+                                                                ; record_arm dryrun 0
+run_case "$CUTOVER" \
+  'FRESH_DEV="$BLK"; MAPPER="$WORKSPACES_STAGING/no-such-mapper"; prepare_staging_target' \
+  'prepare_staging_target' BLK="$BLKDEV" DRY_RUN=0 MOUNTPOINT_RCS="1 1" FINDMNT_MOUNT_SRC="" \
+  BLKID_FS="" DU_SRC=1024 DF_AVAIL=999999999                    ; record_arm mapper_absent 1
+happy "$CUTOVER" CRYPTSETUP_DEV="/dev/other"                    ; record_arm mapper_wrong_device 1
+happy "$CUTOVER" BLKID_ABSENT=1                                 ; record_arm blkid_absent 1
+happy "$CUTOVER" BLKID_RC=4                                     ; record_arm blkid_probe_failed 1
+happy "$CUTOVER" MKFS_RC=1                                      ; record_arm mkfs_failed 1
+happy "$CUTOVER" BLKID_FS="xfs"                                 ; record_arm unexpected_fs 1
+happy "$CUTOVER" MOUNT_RC=1 FINDMNT_STAGING_SRC=""              ; record_arm mount_failed 1
+happy "$CUTOVER" FINDMNT_STAGING_SRC=""                         ; record_arm source_not_mapper 1
+happy "$CUTOVER" DU_SRC="garbage"                               ; record_arm capacity_unreadable 1
+happy "$CUTOVER" DU_SRC=4096 DF_AVAIL=100                       ; record_arm insufficient_capacity 1
+happy "$CUTOVER"                                                ; record_arm prepared 0
+# staging_umount_failed lives in the repoint block, not in prepare_staging_target, so the drift
+# set is only complete with it. Gated: an extraction miss must read as un-run, not as coverage.
+if repoint_landed || true; then
+  repoint_case "$CUTOVER" MOUNTPOINT_RCS="1 0" FINDMNT_MOUNT_SRC="$BLKDEV" \
+    BLKID_FS="crypto_LUKS" UMOUNT_FAIL_MATCH="/staging"
+  if repoint_landed; then record_arm staging_umount_failed 1; fi
+fi
+
+[ -z "$TQ_DRIFT_BAD" ] \
+  && ok "TQ0 every arm emits EXACTLY the expected number of drift markers (fail arms 1, ok/dryrun 0)" \
+  || no "TQ0 drift cardinality wrong for:$TQ_DRIFT_BAD"
+
+# (a) Derive the producer set from source, comments stripped.
+awk '!/^[[:space:]]*#/' "$CUTOVER" \
+  | grep -oE 'emit_staging_target (ok|fail|dryrun) [a-z_]+' \
+  | awk '{print "result="$2" reason="$3}' | sort -u > "$ARMS_SRC"
+N_CALLSITES="$(awk '!/^[[:space:]]*#/' "$CUTOVER" | grep -cE 'emit_staging_target (ok|fail|dryrun) [a-z_]+' || true)"
+N_DERIVED="$(wc -l < "$ARMS_SRC" | tr -d ' ')"
+sort -u "$ARMS_SEEN" > "$ARMS_SEEN.u"
+
+# TQ1a — THE PAIRING INVARIANT, and the reason this block is bounded without an arbitrary floor.
+# Deleting a producer arm removes it from the DERIVED set and from the OBSERVED set at the same
+# time, so a set-difference alone can never see it — the guard would shrink silently along with
+# the SUT. Every fail arm in prepare_staging_target is paired with exactly one `emit_drift
+# staging_*`, so counting the two INDEPENDENT producers against each other catches a deleted
+# marker immediately: drift stays, the marker goes, the counts diverge.
+PSTBODY="$RUN_SCRATCH/pst-body"
+awk '/^prepare_staging_target\(\) \{$/,/^\}$/' "$CUTOVER" | awk '!/^[[:space:]]*#/' > "$PSTBODY"
+N_FAIL_ARMS="$(grep -cE '^ *emit_staging_target fail ' "$PSTBODY" || true)"
+N_FN_DRIFT="$(grep -cE '^ *emit_drift staging_' "$PSTBODY" || true)"
+if [ "$N_FAIL_ARMS" -lt 5 ] || [ "$N_FN_DRIFT" -lt 5 ]; then
+  no "TQ1a function-body extraction produced $N_FAIL_ARMS marker arms / $N_FN_DRIFT drift calls — the derivation itself broke; treat TQ as un-run"
+elif [ "$N_FAIL_ARMS" = "$N_FN_DRIFT" ]; then
+  ok "TQ1a every fail arm is paired 1:1 with a drift call ($N_FAIL_ARMS each) — no marker arm has been dropped"
+else
+  no "TQ1a marker/drift pairing broken: $N_FAIL_ARMS emit_staging_target fail arms vs $N_FN_DRIFT emit_drift staging_ calls — an outcome reports on one channel only"
+fi
+
+if [ "$N_DERIVED" -lt 10 ]; then
+  no "TQ1 only $N_DERIVED arms derived — either the extraction regex broke or arms were deleted from the SUT (see TQ1a); treat TQ1/TQ2/TQ3 as un-run"
+else
+  MISSING="$(comm -23 "$ARMS_SRC" "$ARMS_SEEN.u" | tr '\n' ' ')"
+  [ -z "$MISSING" ] \
+    && ok "TQ1 all $N_DERIVED emit_staging_target arms are exercised by a case in this suite" \
+    || no "TQ1 emit_staging_target arms with NO covering case: $MISSING"
+  # (b) CARDINALITY. Without this a new arm sharing an existing result/reason pair, or an arm the
+  # regex cannot see, is silently exempt and the guard is unbounded.
+  [ "$N_CALLSITES" = "$N_DERIVED" ] \
+    && ok "TQ2 producer call sites ($N_CALLSITES) == distinct arms ($N_DERIVED) — no arm is hidden behind a duplicate reason" \
+    || no "TQ2 $N_CALLSITES call sites collapse into $N_DERIVED distinct reasons — at least one arm is unobservable"
+  EXTRA="$(comm -13 "$ARMS_SRC" "$ARMS_SEEN.u" | tr '\n' ' ')"
+  [ -z "$EXTRA" ] \
+    && ok "TQ3 every observed marker corresponds to a real producer arm (no stale expectations)" \
+    || no "TQ3 markers observed that no producer emits: $EXTRA"
+fi
+
+# Same quantifier over the drift channel. staging_* is the slug family this change owns.
+awk '!/^[[:space:]]*#/' "$CUTOVER" | grep -oE 'emit_drift staging_[a-z_]+' \
+  | awk '{print $2}' | sort -u > "$DRIFT_SRC"
+sort -u "$DRIFT_SEEN" > "$DRIFT_SEEN.u"
+N_DRIFT="$(wc -l < "$DRIFT_SRC" | tr -d ' ')"
+if [ "$N_DRIFT" -lt 8 ]; then
+  no "TQ4 drift extraction produced only $N_DRIFT slugs — the derivation broke; treat as un-run"
+else
+  D_MISSING="$(comm -23 "$DRIFT_SRC" "$DRIFT_SEEN.u" | tr '\n' ' ')"
+  [ -z "$D_MISSING" ] \
+    && ok "TQ4 all $N_DRIFT staging_* drift slugs are exercised by a case in this suite" \
+    || no "TQ4 staging_* drift slugs with NO covering case: $D_MISSING"
 fi
 
 # ---------------------------------------------------------------------------
@@ -552,7 +859,7 @@ else
 fi
 
 # MS5 — neuter the capacity comparison => T12 must flip.
-MS5="$(mutate 's@^  \[ "\$avail_b" -gt "\$src_b" \] || {$@  [ 1 = 0 ] \&\& {@')"
+MS5="$(mutate 's@^  \[ "\$_usable_b" -gt "\$_need_b" \] || {$@  [ 1 = 0 ] \&\& {@')"
 if ! grep -qF '[ 1 = 0 ] && {' "$MS5"; then
   no "mutation MS5 sed did NOT land — treat as un-run, not evidence"
 else
@@ -578,7 +885,7 @@ if ! grep -qE '^  umount "\$STAGING" \|\| true$' "$MS7"; then
 else
   repoint_case "$MS7" MOUNTPOINT_RCS="1 0" FINDMNT_MOUNT_SRC="$BLKDEV" BLKID_FS="crypto_LUKS" \
     UMOUNT_FAIL_MATCH="/staging"
-  if [ "$CASE_OUT" = "REPOINT_EXTRACTION_MISSED" ]; then
+  if ! repoint_landed; then
     no "mutation MS7 repoint extraction MISSED — treat as un-run, not evidence"
   else
   has '^mount ' \
@@ -641,7 +948,7 @@ if ! grep -qE '^    \|\| true$' "$MS12"; then
   no "mutation MS12 sed did NOT land — treat as un-run, not evidence"
 else
   repoint_case "$MS12" MOUNTPOINT_RCS="1 0" FINDMNT_MOUNT_SRC="$BLKDEV" BLKID_FS="crypto_LUKS" MOUNT_RC=1
-  if [ "$CASE_OUT" = "REPOINT_EXTRACTION_MISSED" ]; then
+  if ! repoint_landed; then
     no "mutation MS12 repoint extraction MISSED — treat as un-run, not evidence"
   else
     hasF 'cryptsetup status' \
@@ -683,11 +990,17 @@ else
     || ok "mutation MS15 (drop the non-numeric check): T13b flips (a garbage probe reports the wrong reason)"
 fi
 
-# MS16 — DELETE the staging mount-source positive control outright (the coordinator's independent
-# mutation). This is the guard for the actual incident, and merge-time coverage for it lives ONLY
-# here: infra-validation.yml is not in ruleset-ci-required.tf, so the loopback suite that also
-# covers it (L5c/L5d, loop devices + sudo) is advisory at PR time. If this mutation stays green,
-# the guard for the incident this PR exists to fix has no blocking coverage at all.
+# MS16 — DELETE the staging mount-source positive control outright. This is the guard for the
+# actual incident.
+#
+# CORRECTION (an earlier version of this comment claimed this suite is merge-blocking while the
+# loopback suite is advisory): NEITHER is merge-blocking. `infra/github/ruleset-ci-required.tf`
+# lists neither `deploy-script-tests` nor `infra-validate-required`, so BOTH suites are advisory
+# at PR time. The hard enforcement for this behaviour is the freeze-arm dispatch gate in
+# workspaces-luks-cutover.yml, which executes the loopback suite before a real cutover may run.
+# That does not make this mutation less load-bearing — an advisory suite that cannot fail is
+# still the "gate that cannot fail" class #6588 exists to remove — but the reason is coverage
+# quality, not a merge block this suite does not have.
 MS16="$(mktemp -p "$RUN_SCRATCH" mut.XXXXXX.sh)"
 # awk, not perl: keeps the mutation dependency-free on any runner. Deletes from the `_same_dev
 # "$staging_src" ...` line through its closing `  }`.
@@ -707,6 +1020,100 @@ else
     happy "$MS16" FINDMNT_STAGING_SRC="$OTHERDEV"
     ran && ok "mutation MS16b (delete the control): Tsm2 flips (the wrong-device case is load-bearing)" \
         || no "mutation MS16b did not flip Tsm2 — a wrong-device staging mount survives the control's deletion (rc=$CASE_RC)"
+  fi
+fi
+
+# mutate_block <open-line-regex> <close-line-literal> <replacement-line> -> mutant path
+# Multi-line fail-closures cannot be neutered with a single-line sed: replacing only the `|| {`
+# leaves the closing `}` orphaned and the mutant fails to PARSE, which reads as "mutation did not
+# land" rather than as evidence. This deletes the whole block and substitutes one line.
+mutate_block() {
+  local open="$1" close="$2" repl="$3" mut
+  mut="$(mktemp -p "$RUN_SCRATCH" mut.XXXXXX.sh)"
+  awk -v open="$open" -v close="$close" -v repl="$repl" '
+    s==0 && $0 ~ open { s=1; print repl; next }
+    s==1 { if ($0 == close) s=0; next }
+    1
+  ' "$CUTOVER" > "$mut"
+  printf '%s\n' "$mut"
+}
+
+# MS17 (V1) — replace the staging mount fail-closure with `|| true`, the exact pre-fix shape. This
+# is the PR's HEADLINE behaviour and it previously survived: the happy default pre-satisfied the
+# downstream mount-source control, so the suite stayed fully green with the fail-closure gone.
+MS17="$(mutate_block '^    mount "\$MAPPER" "\$STAGING" \|\| \{$' '    }' '    mount "$MAPPER" "$STAGING" || true')"
+if grep -qF 'emit_staging_target fail mount_failed' "$MS17" || ! bash -n "$MS17" 2>/dev/null; then
+  no "mutation MS17 did NOT land (closure still present, or the mutant no longer parses) — treat as un-run"
+else
+  happy "$MS17" MOUNT_RC=1 FINDMNT_STAGING_SRC=""
+  if markerF 'reason=mount_failed'; then
+    no "mutation MS17 did not flip Tmfb — the staging mount fail-closure can be DELETED and this suite stays green"
+  else
+    ok "mutation MS17 (staging mount || true): Tmfb flips (the headline fail-closure is load-bearing)"
+  fi
+fi
+
+# MS18 (V2) — neuter the mkdir fail-closure.
+MS18="$(mutate_block '^  mkdir -p "\$STAGING" \|\| \{$' '  }' '  mkdir -p "$STAGING" || true')"
+if grep -qF 'emit_staging_target fail mkdir_failed' "$MS18" || ! bash -n "$MS18" 2>/dev/null; then
+  no "mutation MS18 did NOT land — treat as un-run, not evidence"
+else
+  happy "$MS18" MKDIR_RC=1
+  markerF 'reason=mkdir_failed' \
+    && no "mutation MS18 did not flip Tmk — the mkdir fail-closure is unpinned" \
+    || ok "mutation MS18 (mkdir || true): Tmk flips (the mkdir fail-closure is load-bearing)"
+fi
+
+# MS19 (V3) — delete `umount "$STAGING"` from rollback(): the mapper close then fails EBUSY.
+MS19="$(mutate 's@^  umount "\$STAGING" 2>/dev/null \|\| true$@  : # MUTANT@')"
+if grep -qF 'umount "$STAGING" 2>/dev/null || true' "$MS19"; then
+  no "mutation MS19 sed did NOT land — treat as un-run, not evidence"
+else
+  run_case "$MS19" "$ROLLBACK_INV" 'rollback resume_writers' "${ROLLBACK_ENV[@]}"
+  has '^umount .*/staging$' \
+    && no "mutation MS19 did not flip Trb1 — the rollback staging umount is unpinned" \
+    || ok "mutation MS19 (drop rollback staging umount): Trb1 flips (the close would fail EBUSY)"
+fi
+
+# MS20 (V4) — restore the SWALLOWING close, the shape that let rollback report SUCCESS while
+# leaking the mapper open and mounted with a full divergent copy.
+MS20="$(mutate 's@^    cryptsetup close "\$MAPPER_NAME" \|\| emit_drift rollback_mapper_close_failed$@    cryptsetup close "$MAPPER_NAME" 2>/dev/null || true@')"
+if ! grep -qF 'cryptsetup close "$MAPPER_NAME" 2>/dev/null || true' "$MS20"; then
+  no "mutation MS20 sed did NOT land — treat as un-run, not evidence"
+else
+  run_case "$MS20" "$ROLLBACK_INV" 'rollback resume_writers' "${ROLLBACK_ENV[@]}" CRYPTSETUP_CLOSE_RC=1
+  outF 'EMIT_DRIFT: rollback_mapper_close_failed' \
+    && no "mutation MS20 did not flip Trb2 — the close-failure report is unpinned" \
+    || ok "mutation MS20 (swallow the mapper close): Trb2 flips (the EBUSY report is load-bearing)"
+fi
+
+# MS21 (V5) — swallow the luksOpen failure.
+MS21="$(mutate 's@^    || { emit_drift luksopen_failed;.*$@    || true@')"
+if grep -qF 'emit_drift luksopen_failed' "$MS21"; then
+  no "mutation MS21 sed did NOT land — treat as un-run, not evidence"
+else
+  script_case "$MS21" "$BLKDEV" DRY_RUN=0 ROLLBACK=0 WORKSPACES_LUKS_DEV="$BLKDEV" \
+    WORKSPACES_MAPPER_NAME="wl-staging-test-absent" LUKSOPEN_RC=1
+  sout 'DRIFT reason=luksopen_failed' \
+    && no "mutation MS21 did not flip Tlob — the luksOpen fail-closure is unpinned" \
+    || ok "mutation MS21 (swallow the luksOpen failure): Tlob flips (the fail-closure is load-bearing)"
+fi
+
+# MS22 (V7) — strip emit_staging_target from every `fail` arm while LEAVING the drift calls and the
+# die in place. This is the precise shape the quantifier exists to catch: the run still aborts and
+# still emits drift, so every rc-based and drift-based assertion stays green, and only a test that
+# quantifies over the MARKER arms can see it.
+MS22="$(mutate 's@^\( *\)emit_staging_target fail @\1: # MUTANT @')"
+if grep -qE '^ *emit_staging_target fail ' "$MS22"; then
+  no "mutation MS22 sed did NOT land — treat as un-run, not evidence"
+else
+  happy "$MS22" MKFS_RC=1
+  if markerF 'reason=mkfs_failed'; then
+    no "mutation MS22 did not flip TQ1 — marker arms can be deleted wholesale and this suite stays green"
+  elif outF 'EMIT_DRIFT: staging_mkfs_failed'; then
+    ok "mutation MS22 (delete the fail-arm markers, keep drift+die): TQ1 flips (the quantifier is load-bearing)"
+  else
+    no "mutation MS22 removed more than the marker — the mutation is not the V7 shape"
   fi
 fi
 
