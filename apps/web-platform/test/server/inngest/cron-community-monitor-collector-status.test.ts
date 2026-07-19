@@ -30,6 +30,7 @@ import {
   readCollectorStatus,
   classifyCollectorStatus,
 } from "@/server/inngest/functions/cron-community-monitor";
+import { STRUCTURAL_EXCLUSION_PREFIXES } from "@/server/inngest/functions/_cron-safe-commit";
 
 const STATUS_DIR = ".soleur-collector-status";
 const STATUS_FILE = "collector-status.jsonl";
@@ -105,6 +106,54 @@ describe("readCollectorStatus", () => {
     );
     expect(report.records).toHaveLength(2);
     expect(report.failed).toEqual([]);
+  });
+});
+
+describe("sidecar contract — producer, consumer, and commit-guard agree", () => {
+  // The contract spans a plugin shell script and this handler with no shared
+  // constant: the dir name, the file name, and the env var are separate string
+  // literals on both sides. Nothing else fails if they drift, and the drift
+  // would manifest as SILENCE — the failure class this PR exists to remove.
+  const COLLECTOR = readFileSync(
+    new URL(
+      "../../../../../plugins/soleur/skills/community/scripts/github-community.sh",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const HANDLER = readFileSync(
+    new URL(
+      "../../../server/inngest/functions/cron-community-monitor.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  it("resolves the collector script (path anchor, so the rest is not vacuous)", () => {
+    expect(COLLECTOR).toContain("github-community.sh");
+    expect(COLLECTOR.length).toBeGreaterThan(1000);
+  });
+
+  it("producer and consumer use the same env var and file name", () => {
+    expect(COLLECTOR).toContain("SOLEUR_COLLECTOR_STATUS_DIR");
+    expect(HANDLER).toContain("SOLEUR_COLLECTOR_STATUS_DIR");
+    expect(COLLECTOR).toContain(STATUS_FILE);
+    expect(HANDLER).toContain(STATUS_FILE);
+  });
+
+  it("the handler's dir constant matches the literal used everywhere else", () => {
+    expect(HANDLER).toContain(`COLLECTOR_STATUS_DIRNAME = "${STATUS_DIR}"`);
+  });
+
+  it("safeCommitAndPr structurally excludes the sidecar, so it cannot page every run", () => {
+    // Without this the sidecar is an untracked path on EVERY successful run, so
+    // `safe-commit-paths-dropped` — the control that catches a bot writing
+    // outside its allowlist — fires nightly and stops being read.
+    expect(STRUCTURAL_EXCLUSION_PREFIXES).toContain(`${STATUS_DIR}/`);
+  });
+
+  it("the collector dispatches the command name the handler keys on", () => {
+    expect(COLLECTOR).toContain("repo-stats)");
   });
 });
 
