@@ -227,6 +227,47 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
     ).toBe(true);
   });
 
+  it("#6714 — a digest ISSUE without the committed digest does NOT dedup; the run spawns", async () => {
+    // The GREEN-with-no-artifact path the dedup itself created. Run 1 files a
+    // genuine digest issue but loses the commit; run 2 used to see the issue,
+    // short-circuit, and post GREEN with nothing landed. `committedPaths` stays
+    // empty here, so the contents read 404s — "not proven committed" — and the
+    // run must proceed to spawn rather than dedup on the wrong artifact.
+    store.push({
+      title: `${TITLE_PREFIX} ${TODAY}`,
+      body: "## Platform Status\n## Key Metrics\n3 followers",
+      created_at: new Date().toISOString(),
+    });
+    expect(committedPaths.has(DIGEST_PATH)).toBe(false); // precondition
+
+    const step = makeStep();
+    await invoke(step);
+
+    expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1); // recovered, not deduped
+    expect(step.executed).toContain("claude-eval");
+    // and the recovery genuinely committed the artifact this time
+    expect(committedPaths.has(DIGEST_PATH)).toBe(true);
+  });
+
+  it("#6714 — a digest issue WITH the committed digest still dedups (healthy path preserved)", async () => {
+    // The positive control for the test above: the tightened gate must not turn
+    // every dedup into a re-spawn, or it trades a missing digest for a duplicate
+    // one every single day.
+    store.push({
+      title: `${TITLE_PREFIX} ${TODAY}`,
+      body: "## Platform Status\n## Key Metrics\n3 followers",
+      created_at: new Date().toISOString(),
+    });
+    committedPaths.add(DIGEST_PATH);
+
+    const step = makeStep();
+    const res = await invoke(step);
+
+    expect(spawnClaudeEvalSpy).not.toHaveBeenCalled(); // deduped
+    expect(res).toEqual({ ok: true });
+    expect(heartbeatUrls()[0]).toContain("?status=ok");
+  });
+
   it("a coincidental-date issue (title merely ends in today's date) does NOT suppress the digest", async () => {
     // `Investigate community drop <today>` ends in the date but is NOT the
     // canonical digest title. The positive-anchor predicate must let the genuine
