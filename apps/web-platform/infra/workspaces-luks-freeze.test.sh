@@ -1,0 +1,527 @@
+#!/usr/bin/env bash
+#
+# Behavioral test for workspaces-cutover.sh :: freeze_writers / resume_writers / app_canary /
+# assert_mount_quiesced / arm_dead_man / cleanup (#6588 freeze-quiesce).
+#
+# Context: on 2026-07-19 two consecutive REAL /workspaces LUKS freezes safe-aborted on the C1
+# byte-identity verify with exactly ONE difference:
+#   SOLEUR_WORKSPACES_LUKS_VERIFY_DIFF count=1 idx=0 icode=>fcst......
+#     path=redis/appendonlydir/appendonly.aof.94.incr.aof
+# `>fcst......` = checksum + size + mtime differ — a live-appending file, NOT a copy defect. Redis
+# persists its AOF to /mnt/data/redis and runs as the SYSTEMD UNIT inngest-redis.service, not as a
+# container, so `docker stop $CONTAINER` never touched it. The C1 gate was RIGHT; the writer was not
+# quiesced. AC11 pins verify_byte_identity/emit_verify_diff as byte-identical to main.
+#
+# HARNESS RULE — NEVER pipe into the assertion predicate.
+#   `calls | grep -q PAT` under `set -o pipefail` returns 141 when grep matches EARLY and the
+#   producer takes SIGPIPE. On a NEGATIVE assertion (`if ! ...`) that fails OPEN: the violation is
+#   present and the test reports green. This suite exists to forbid exactly that shape in the SUT
+#   (AC5, T8, M3), so committing it in the harness made T11/T13/T14/M1/M4 unreliable and — because
+#   `HARNESS_UNDEFINED:` is line 1, always an early match — made `undef()` itself fail open, so the
+#   vacuity guard was vacuous and T7/T8 passed against a script where the functions do not exist.
+#   Every predicate below therefore greps a FILE directly, or uses bash `[[ == ]]`. No pipes.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CUTOVER="$SCRIPT_DIR/workspaces-cutover.sh"
+WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/workspaces-luks-cutover.yml"
+
+pass=0
+fail=0
+ok() { pass=$((pass + 1)); printf 'ok   - %s\n' "$1"; }
+no() { fail=$((fail + 1)); printf 'FAIL - %s\n' "$1"; }
+
+RUN_SCRATCH="$(mktemp -d -t wl-freeze-test.XXXXXXXX)"
+CASE_N=0
+cleanup_scratch() { rm -rf "$RUN_SCRATCH"; }
+trap cleanup_scratch EXIT INT TERM HUP
+
+# run_case <script> <invocation> <required-fns> [env assignments...]
+#
+# <required-fns>: asserted DECLARED before the invocation runs; otherwise the subshell exits 97 with
+# HARNESS_UNDEFINED. Without it, a case asserting "exits non-zero" passes vacuously against a script
+# where the function does not exist — the subshell fails for the wrong reason.
+#
+# Sets: CASE_RC, CASE_OUT, CALLS (argv log), MARKER_LOG (logger sink), MNT (the stub $MOUNT).
+# LSOF_OUT / LSOF_OUT_FILE  stub lsof stdout (the g4 probe line is ALWAYS emitted, see the stub)
+# LSOF_ABSENT=1             `command -v lsof` fails AND the install fails (fail-closed probe)
+# LSOF_BLIND=1              lsof runs but never reports the probe fd (a scan that did not reach $MOUNT)
+# LSOF_RC=<n>               force the lsof exit status (rc>1 = an outright probe failure)
+# ACTIVE_UNITS              space-separated units for which `systemctl is-active` succeeds
+# CURL_CODE / READYZ_BODY   stub curl's /health code and /internal/readyz body
+run_case() {
+  local script="$1" invocation="$2" require="$3"; shift 3
+  CASE_N=$((CASE_N + 1))
+  local d="$RUN_SCRATCH/case-$CASE_N"; mkdir -p "$d"
+  CALLS="$d/calls"; MARKER_LOG="$d/marker"; STATE="$d/state.d"; MNT="$d/mnt"
+  mkdir -p "$STATE" "$MNT"
+  : > "$CALLS"; : > "$MARKER_LOG"
+  CASE_OUT="$(
+    env "$@" \
+      CUTOVER="$script" CALLS="$CALLS" MARKER_LOG="$MARKER_LOG" \
+      WORKSPACES_STATE_DIR="$STATE" WORKSPACES_MOUNT="$MNT" \
+      INVOCATION="$invocation" REQUIRE_FNS="$require" \
+    bash -c '
+      source "$CUTOVER"                                   # guard => functions only, no main body
+      rec() { printf "%s\n" "$*" >> "$CALLS"; }
+      systemctl() {
+        rec "systemctl $*"
+        if [ "${1:-}" = "is-active" ]; then
+          local u="${@: -1}"
+          case " ${ACTIVE_UNITS:-} " in *" $u "*) return 0;; *) return 1;; esac
+        fi
+        if [ "${1:-}" = "show" ]; then printf "%s\n" "${STOP_RESULT:-success}"; fi
+        return 0
+      }
+      docker()  { rec "docker $*"; return 0; }
+      mount()   { rec "mount $*"; return "${MOUNT_RC:-0}"; }
+      umount()  { rec "umount $*"; return 0; }
+      mountpoint() { rec "mountpoint $*"; return "${MOUNTPOINT_RC:-0}"; }
+      cryptsetup() { rec "cryptsetup $*"; return 0; }
+      systemd-run() { rec "systemd-run $*"; return 0; }
+      logger()  { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+      hostname() { echo "test-host"; }
+      apt-get() { rec "apt-get $*"; return 1; }
+      timeout() { shift; "$@"; }
+      curl() {
+        rec "curl $*"
+        case "$*" in
+          *readyz*) printf "%s" "${READYZ_BODY-{\"ready\":true\}}" ;;
+          *)        printf "%s" "${CURL_CODE:-200}" ;;
+        esac
+        return 0
+      }
+      die()     { echo "DIE: $*"; exit 1; }
+      emit_drift() { echo "EMIT_DRIFT: $1"; }
+      lsof()    {
+        rec "lsof $*"
+        # Always report the script own probe fd unless LSOF_BLIND — a real lsof scanning $MOUNT
+        # cannot miss an fd this process holds open there, so the positive control must model it.
+        if [ "${LSOF_BLIND:-}" != "1" ]; then
+          local p
+          for p in "$WORKSPACES_MOUNT"/.luks-g4-probe.*; do
+            [ -e "$p" ] && printf "COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\nbash    111 root    9w   REG   0,1        0    1 %s\n" "$p"
+          done
+        fi
+        if [ -n "${LSOF_OUT_FILE:-}" ]; then cat "$LSOF_OUT_FILE"; return "${LSOF_RC:-0}"; fi
+        [ -n "${LSOF_OUT:-}" ] && printf "%s\n" "$LSOF_OUT"
+        return "${LSOF_RC:-0}"
+      }
+      command() {
+        if [ "${1:-}" = "-v" ] && [ "${2:-}" = "lsof" ] && [ "${LSOF_ABSENT:-}" = "1" ]; then return 1; fi
+        builtin command "$@"
+      }
+      for f in ${REQUIRE_FNS:-}; do
+        declare -F "$f" >/dev/null || { echo "HARNESS_UNDEFINED:$f"; exit 97; }
+      done
+      eval "$INVOCATION"
+    ' 2>&1
+  )"
+  CASE_RC=$?
+}
+
+# --- predicates: file-direct greps and bash matching ONLY, never a pipe ---
+has()     { grep -qE -- "$1" "$CALLS"; }            # a recorded call matches
+hasF()    { grep -qF -- "$1" "$CALLS"; }            # literal
+nhas()    { ! grep -qE -- "$1" "$CALLS"; }
+cnt()     { grep -cE -- "$1" "$CALLS" || true; }
+idx()     { grep -nE -- "$1" "$CALLS" | head -1 | cut -d: -f1; }   # value only; rc unused
+markerF() { grep -qF -- "$1" "$MARKER_LOG"; }
+outF()    { [[ "$CASE_OUT" == *"$1"* ]]; }
+undef()   { [[ "$CASE_OUT" == *"HARNESS_UNDEFINED:"* ]]; }
+died()    { [ "$CASE_RC" -ne 0 ] && ! undef; }
+# ran — positive control: the case completed successfully. Without this a case can assert on the
+# calls file (populated before an unrelated die) while the function never actually succeeded.
+ran()     { [ "$CASE_RC" -eq 0 ] && ! undef; }
+
+# ---------------------------------------------------------------------------
+# freeze_writers — quiesce set, order, closed-world, persisted state
+# ---------------------------------------------------------------------------
+
+run_case "$CUTOVER" 'freeze_writers' 'freeze_writers' LSOF_OUT="" LSOF_RC=1
+ran && ok "T0 freeze_writers succeeds on a clean mount (happy-path positive control)" \
+     || no "T0 freeze_writers did not exit 0 on a clean mount: rc=$CASE_RC ${CASE_OUT:0:200}"
+has '^systemctl stop .*inngest-redis\.service' \
+  && ok "T1 freeze_writers stops inngest-redis.service (the unquiesced AOF writer)" \
+  || no "T1 freeze_writers did NOT stop inngest-redis.service — the quiescence gap is unfixed"
+
+wh="$(idx '^systemctl stop webhook\.service')"; dk="$(idx '^docker stop')"; rd="$(idx '^systemctl stop .*inngest-redis\.service')"
+if [ -n "$wh" ] && [ -n "$dk" ] && [ -n "$rd" ] && [ "$wh" -lt "$dk" ] && [ "$dk" -lt "$rd" ]; then
+  ok "T2 quiesce order: webhook, then the container drain, then the remaining writers"
+else
+  no "T2 quiesce order wrong (webhook=$wh docker=$dk redis=$rd; want webhook<docker<redis)"
+fi
+
+# T2b — the drain timeout is the C8 property, not an incidental number. `-t 1` truncates an
+# in-flight write(); the whole point of -t 120 is to let it finish.
+hasF 'docker stop -t 120' && ok "T2b the container drain keeps its 120s C8 timeout" \
+                          || no "T2b the container drain timeout changed — a short -t SIGKILLs mid-write() (C8)"
+
+grep -qE '^QUIESCED_UNITS=.*inngest-redis\.service' "$STATE/state" 2>/dev/null \
+  && ok "T3 freeze_writers persists QUIESCED_UNITS naming inngest-redis.service" \
+  || no "T3 QUIESCED_UNITS not persisted (or omits inngest-redis.service)"
+
+# T3b — CLOSED-WORLD. "the right units are stopped" needs an upper bound too, else a unit added to
+# the stop set but restored by NO exit path passes every other assertion.
+# Anchored at end-of-line so this matches only SINGLE-unit stops (the _quiesce_list loop). The
+# timer quiesce uses the two-argument `stop <x>.timer <x>.service` pair form and is asserted
+# separately by T3c/T3d — folding both shapes into one set would hide a drift in either.
+stops="$(grep -oE '^systemctl stop [a-z0-9@.-]+$' "$CALLS" | awk '{print $3}' | sort -u || true)"
+expected_stops="$(printf '%s\n' inngest-redis.service webhook.service | sort -u)"
+if [ "$stops" = "$expected_stops" ]; then
+  ok "T3b closed-world: the set of stopped .service units is EXACTLY _quiesce_list"
+else
+  no "T3b stop-set drift — stopped=[$(echo $stops)] expected=[$(echo $expected_stops)]"
+fi
+
+# T3c — the timer/service PAIRS. Stopping a .timer does not stop the instance it already launched.
+hasF 'systemctl stop orphan-reaper.timer orphan-reaper.service' \
+  && ok "T3c orphan-reaper timer AND service are stopped (6h root rm -rf over \$MOUNT/workspaces)" \
+  || no "T3c orphan-reaper not quiesced as a timer+service pair — a mid-freeze reap yields the same C1 abort as the AOF"
+hasF 'systemctl stop luks-monitor.timer luks-monitor.service' \
+  && ok "T3d luks-monitor timer AND service are stopped (a running instance holds \$MOUNT)" \
+  || no "T3d luks-monitor not quiesced as a timer+service pair"
+
+nhas '^systemctl stop .*inngest-server\.service' \
+  && ok "T14 freeze_writers never stops inngest-server.service (deepen decision pinned)" \
+  || no "T14 freeze_writers stops inngest-server.service — 180s TimeoutStopSec for zero quiescence benefit"
+
+# T16 — a failed stop must abort. Unchecked, the freeze proceeds with a live writer: #6588 exactly.
+run_case "$CUTOVER" 'systemctl() { rec "systemctl $*"; [ "${1:-}" = "stop" ] && return 1; return 0; }; freeze_writers' 'freeze_writers' LSOF_OUT="" LSOF_RC=1
+died && ok "T16 a failed systemctl stop aborts the freeze" \
+     || no "T16 a failed systemctl stop did NOT abort — the freeze proceeds with a live writer"
+
+# T17 — an unclean stop (SIGKILL at TimeoutStopSec) must abort: `systemctl stop` still returns 0, so
+# the process is gone and G4 is clean, but the AOF tail is torn and C1 would certify the corruption.
+run_case "$CUTOVER" 'freeze_writers' 'freeze_writers' LSOF_OUT="" LSOF_RC=1 STOP_RESULT="timeout"
+died && ok "T17 a Result=timeout (SIGKILLed) stop aborts — byte-identity is not integrity" \
+     || no "T17 an unclean stop did NOT abort — C1 would certify a byte-perfect copy of a torn AOF"
+
+# ---------------------------------------------------------------------------
+# assert_mount_quiesced — G4: fail-closed, no pipe, positive control, logs-before-die
+# ---------------------------------------------------------------------------
+
+run_case "$CUTOVER" 'freeze_writers' 'freeze_writers ensure_lsof' LSOF_ABSENT=1 LSOF_OUT="" LSOF_RC=1
+died && ok "T7 G4 is fail-closed: absent+un-installable lsof aborts the freeze" \
+     || no "T7 G4 silently skipped on a missing lsof — the gate evaporates exactly when needed"
+
+BIGF="$(mktemp)"; yes 'redis-server 1234 root  7w REG 0,42 /mnt/data/redis/appendonlydir/appendonly.aof' 2>/dev/null | head -20000 > "$BIGF"
+run_case "$CUTOVER" 'freeze_writers' 'freeze_writers' LSOF_OUT_FILE="$BIGF"
+died && ok "T8 G4 still aborts on a large holder list (no pipefail/SIGPIPE fail-open)" \
+     || no "T8 G4 returned success on a large holder list — the pipe fail-open is present"
+
+# T18 — POSITIVE CONTROL. lsof exits 1 both when clean and when it errors, and writes diagnostics
+# only to stderr, so "empty output" is not evidence the scan happened. A blind probe must abort.
+run_case "$CUTOVER" 'freeze_writers' 'freeze_writers assert_mount_quiesced' LSOF_BLIND=1 LSOF_OUT="" LSOF_RC=1
+died && outF 'BLIND' && ok "T18 G4 aborts when lsof does not report the script own probe fd (blind, not clean)" \
+                     || no "T18 a BLIND lsof scan passed G4 — 'empty output' is being read as 'mount is clean'"
+
+# T19 — an outright probe failure (rc>1) must abort, not be swallowed by `|| true`.
+run_case "$CUTOVER" 'freeze_writers' 'freeze_writers assert_mount_quiesced' LSOF_OUT="" LSOF_RC=7
+died && ok "T19 G4 aborts when the lsof probe itself fails (rc>1)" \
+     || no "T19 an lsof probe failure was swallowed — the same fail-open class one layer down"
+
+# T9 — holders logged before die. Sampled at n>1 (a single-holder fixture cannot catch a cap of 1).
+MULTI=$'redis-server 1234 root 7w REG /mnt/data/redis/appendonlydir/appendonly.aof\nnode 5678 root 12w REG /mnt/data/workspaces/u1/a.ts\nbash 9012 root cwd DIR /mnt/data/workspaces/u2'
+run_case "$CUTOVER" 'freeze_writers' 'freeze_writers emit_freeze_holders' LSOF_OUT="$MULTI"
+markerF 'SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER' \
+  && ok "T9 G4 emits SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER to the Better Stack channel" \
+  || no "T9 no FREEZE_HOLDER marker — a G4 abort stays undiagnosable without SSH"
+emit_line="$(grep -n 'SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER' <<<"$CASE_OUT" | head -1 | cut -d: -f1)"
+die_line="$(grep -n '^DIE:' <<<"$CASE_OUT" | head -1 | cut -d: -f1)"
+if [ -n "$emit_line" ] && [ -n "$die_line" ] && [ "$emit_line" -lt "$die_line" ]; then
+  ok "T9b the holder emit PRECEDES die (evidence survives the abort)"
+else
+  no "T9b holder emit does not precede die (emit=$emit_line die=$die_line)"
+fi
+# T9c — EVERY holder is named, not just the first. The count must also exclude lsof's header row
+# and the script's own probe fd, or `count=` misreports and idx=0 names a column header.
+n_rows=0
+for p in redis-server node bash; do markerF "$p" && n_rows=$((n_rows + 1)); done
+if [ "$n_rows" -eq 3 ] && markerF 'count=3'; then
+  ok "T9c all 3 holders are named and count=3 (header row + own probe fd excluded)"
+else
+  no "T9c holder emission is incomplete or miscounted (named=$n_rows, expected count=3)"
+fi
+
+# ---------------------------------------------------------------------------
+# resume_writers — mount guard, order, reconcile, degraded signal
+# ---------------------------------------------------------------------------
+
+run_case "$CUTOVER" 'resume_writers' 'resume_writers' ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service"
+ran && ok "T4z resume_writers succeeds when everything comes back (positive control)" \
+    || no "T4z resume_writers did not exit 0 on the happy path: rc=$CASE_RC"
+has '^systemctl start .*inngest-redis\.service' \
+  && ok "T4 resume_writers starts inngest-redis.service" \
+  || no "T4 resume_writers does not start inngest-redis.service — the durable queue stays down"
+has '^systemctl reset-failed .*inngest-redis\.service' \
+  && ok "T4b resume_writers clears failed state before starting (a mount race leaves it 'failed')" \
+  || no "T4b no reset-failed before the start — a mount-race failure silently outlives the run"
+
+# T5b — ORDER: webhook must come back LAST. Starting it first re-exposes the CI-deploy-restarts-the-
+# container race that the stop order exists to prevent. A count assertion cannot see this.
+s_wh="$(idx '^systemctl start webhook\.service')"; s_rd="$(idx '^systemctl start .*inngest-redis\.service')"
+if [ -n "$s_wh" ] && [ -n "$s_rd" ] && [ "$s_rd" -lt "$s_wh" ]; then
+  ok "T5b resume order is the reverse of the stop order (webhook comes back LAST)"
+else
+  no "T5b webhook is not restored last (redis=$s_rd webhook=$s_wh) — re-exposes the CI-deploy race"
+fi
+
+# T20 — THE MOUNT GUARD. webhook.service has NO RequiresMountsFor (only ReadWritePaths=/mnt/data),
+# so on a failed remount it starts SUCCESSFULLY onto the bare root-disk mountpoint dir — and it is
+# the CI deploy receiver, so a deploy then writes user data to the root filesystem.
+run_case "$CUTOVER" 'resume_writers' 'resume_writers' MOUNTPOINT_RC=1 ACTIVE_UNITS=""
+if nhas '^systemctl start webhook\.service'; then
+  ok "T20 resume_writers refuses to start writers when \$MOUNT is not mounted"
+else
+  no "T20 webhook started onto an UNMOUNTED \$MOUNT — a CI deploy would write to the root disk"
+fi
+outF 'EMIT_DRIFT: resume_without_mount' \
+  && ok "T20b the refusal is reported (resume_without_mount), not silent" \
+  || no "T20b resume skipped the writers silently — no drift emitted"
+
+run_case "$CUTOVER" 'resume_writers' 'resume_writers' ACTIVE_UNITS="inngest-server.service"
+nhas '^systemctl start .*inngest-server\.service' \
+  && ok "T13 no redundant inngest-server start when it is already active" \
+  || no "T13 redundant inngest-server start issued although it was already active"
+
+run_case "$CUTOVER" 'resume_writers' 'resume_writers' ACTIVE_UNITS=""
+has '^systemctl start .*inngest-server\.service' \
+  && ok "T13b inactive inngest-server IS reconciled (started) post-freeze" \
+  || no "T13b inactive inngest-server was not reconciled"
+# T21 — a unit that fails to come back must produce a DURABLE signal, not just a WARN on a green run.
+markerF 'SOLEUR_WORKSPACES_LUKS_RESUME_DEGRADED' \
+  && ok "T21 a failed resume emits RESUME_DEGRADED to the durable channel" \
+  || no "T21 a failed resume is invisible off-box — a green run with a dead queue reads as success"
+# T21b — the drift reason must discriminate WHICH unit; two units share one reason otherwise.
+outF 'quiesced_unit_not_active_inngest-redis' \
+  && ok "T21b the drift reason names the failing unit" \
+  || no "T21b undiscriminated drift reason — 'webhook down' is indistinguishable from 'queue down'"
+
+# T5/T6 — rollback restores, and only after the remount.
+run_case "$CUTOVER" 'DRY_RUN=0 rollback' 'rollback resume_writers' ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service"
+has '^systemctl start .*inngest-redis\.service' \
+  && ok "T5 rollback() restores inngest-redis.service (DP-6 leaves the host as it found it)" \
+  || no "T5 rollback() does not restore inngest-redis.service"
+m_i="$(idx '^mount ')"; r_i="$(idx '^systemctl start .*inngest-redis\.service')"
+if [ -n "$m_i" ] && [ -n "$r_i" ] && [ "$m_i" -lt "$r_i" ]; then
+  ok "T6 rollback() remounts BEFORE starting redis (RequiresMountsFor=/mnt/data)"
+else
+  no "T6 redis start races the remount (mount=$m_i start=$r_i)"
+fi
+# T6b — the dead-man must be disarmed after a rollback, else it fires DEAD_MAN_MIN later and takes a
+# SECOND outage that now stops inngest-redis too.
+has '^systemctl stop workspaces-luks-deadman' \
+  && ok "T6b rollback() disarms the dead-man (no second, unannounced outage 30 min later)" \
+  || no "T6b rollback() leaves the dead-man armed — it fires again after the host is already restored"
+
+# T15 — stop/restore symmetry under an override.
+run_case "$CUTOVER" 'freeze_writers' 'freeze_writers' LSOF_OUT="" LSOF_RC=1 WORKSPACES_QUIESCE_UNITS="inngest-redis.service"
+stopped_wh=$(cnt '^systemctl stop webhook\.service')
+run_case "$CUTOVER" 'resume_writers' 'resume_writers' ACTIVE_UNITS="webhook.service inngest-redis.service inngest-server.service" WORKSPACES_QUIESCE_UNITS="inngest-redis.service"
+started_wh=$(cnt '^systemctl start webhook\.service')
+if [ "$stopped_wh" -ge 1 ] && [ "$started_wh" -ge 1 ]; then
+  ok "T15 webhook stop/restore stays symmetric even when QUIESCE_UNITS omits it"
+else
+  no "T15 asymmetric stop/restore (stopped=$stopped_wh started=$started_wh)"
+fi
+
+# ---------------------------------------------------------------------------
+# app_canary — liveness AND mount-coupled readiness
+# ---------------------------------------------------------------------------
+
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200
+ran && ok "T10z app_canary succeeds on 200 + ready=true (positive control)" \
+    || no "T10z app_canary did not pass the happy path: rc=$CASE_RC ${CASE_OUT:0:200}"
+hasF 'https://app.soleur.ai/health' \
+  && ok "T10 app_canary probes https app.soleur.ai/health (liveness)" \
+  || no "T10 app_canary does not probe /health over https"
+nhas 'app\.soleur\.ai/api/health' \
+  && ok "T11 app_canary never probes /api/health (no route; 307s to /login)" \
+  || no "T11 app_canary still probes /api/health — it would abort every good cutover"
+
+# T22 — THE GATE THAT MATTERS. /health is `res.writeHead(200)` unconditionally and never touches
+# $MOUNT (readiness.ts states the no-mount-coupling invariant explicitly), so it CANNOT fail on an
+# empty or unmounted volume. /internal/readyz asserts workspaces_writable + workspaces_populated.
+hasF '/internal/readyz' \
+  && ok "T22 app_canary also asserts /internal/readyz (mount-coupled readiness)" \
+  || no "T22 app_canary relies on /health alone — a 200-always probe that cannot fail on an empty \$MOUNT"
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200 READYZ_BODY='{"ready":false,"checks":{"workspaces_populated":false}}'
+died && ok "T22b app_canary FAILS when readyz reports ready=false (empty /workspaces)" \
+     || no "T22b a cutover serving an EMPTY /workspaces was declared green"
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200 READYZ_BODY=''
+died && ok "T22c app_canary fails closed when readyz is unreachable" \
+     || no "T22c an unreachable readyz was treated as success"
+# T11b/T11c — the gate strength itself: exactly 200, not any 2xx.
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=307
+died && ok "T11b app_canary fails closed on a 307" || no "T11b app_canary accepted a 307"
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=204
+died && ok "T11c app_canary requires exactly 200, not any 2xx" \
+     || no "T11c app_canary accepted a 204 — the gate is looser than it reads"
+
+# ---------------------------------------------------------------------------
+# arm_dead_man — the unattended restore path
+# ---------------------------------------------------------------------------
+
+run_case "$CUTOVER" 'DRY_RUN=0 arm_dead_man' 'arm_dead_man'
+dm="$RUN_SCRATCH/case-$CASE_N/dm"; grep -E '^systemd-run ' "$CALLS" > "$dm" 2>/dev/null || : > "$dm"
+dm_missing=""
+for u in webhook.service inngest-redis.service; do
+  grep -qF -- "start $u" "$dm" || dm_missing="$dm_missing $u"
+done
+grep -qF -- "restart orphan-reaper.timer" "$dm" || dm_missing="$dm_missing orphan-reaper.timer"
+[ -z "$dm_missing" ] \
+  && ok "T12 the dead-man restores every quiesced unit + timer (the unattended path)" \
+  || no "T12 dead-man command omits:$dm_missing"
+# T12b — restores GATED on the remount. Previously `&&` bound only `docker start`, so every
+# appended start ran even when mount failed — and webhook has no RequiresMountsFor.
+grep -qE 'if mount [^;]*; then' "$dm" \
+  && ok "T12b dead-man restores are gated on the remount succeeding" \
+  || no "T12b dead-man restores are NOT mount-gated — webhook can start onto the bare mountpoint"
+# T12c — derived from _quiesce_list, not hardcoded.
+run_case "$CUTOVER" 'DRY_RUN=0 arm_dead_man' 'arm_dead_man' WORKSPACES_QUIESCE_UNITS="inngest-redis.service extra-writer.service"
+dm2="$RUN_SCRATCH/case-$CASE_N/dm"; grep -E '^systemd-run ' "$CALLS" > "$dm2" 2>/dev/null || : > "$dm2"
+grep -qF -- 'start extra-writer.service' "$dm2" \
+  && ok "T12c dead-man derives its units from _quiesce_list (an override reaches the unattended path)" \
+  || no "T12c dead-man hardcodes its units — an override is stopped but never restored unattended"
+
+# ---------------------------------------------------------------------------
+# cleanup() — the rollback decision. Replacing this guard with `if true` must NOT stay green: it
+# would tear down a SUCCESSFUL cutover, unmounting the authoritative LUKS volume.
+# ---------------------------------------------------------------------------
+
+cleanup_case() {  # <canary_ok> <flip_done> <freeze_held> -> sets CASE_OUT/CASE_RC
+  run_case "$CUTOVER" \
+    "CANARY_OK=$1 FLIP_DONE=$2 FREEZE_HELD=$3 DRY_RUN=0; rollback() { echo ROLLBACK_FIRED; }; (exit 9); cleanup" \
+    'cleanup rollback'
+}
+cleanup_case 1 1 1
+outF 'ROLLBACK_FIRED' && no "T23 cleanup rolled back a canary-PASSED cutover — tears down the authoritative LUKS volume" \
+                      || ok "T23 cleanup does NOT roll back once the canary passed (CANARY_OK=1)"
+cleanup_case 0 0 1
+outF 'ROLLBACK_FIRED' && ok "T23b cleanup DOES roll back when the freeze is held and the canary never passed" \
+                      || no "T23b cleanup failed to roll back a held freeze — the host stays frozen"
+cleanup_case 0 1 0
+outF 'ROLLBACK_FIRED' && ok "T23c cleanup DOES roll back after the flip when the canary never passed" \
+                      || no "T23c cleanup failed to roll back after a flip"
+cleanup_case 0 0 0
+outF 'ROLLBACK_FIRED' && no "T23d cleanup rolled back although nothing was ever frozen or flipped" \
+                      || ok "T23d cleanup does nothing when neither the freeze nor the flip happened"
+
+# ---------------------------------------------------------------------------
+# Static guards (AC5 / AC7 / AC8 / AC9)
+# ---------------------------------------------------------------------------
+G4BODY="$RUN_SCRATCH/g4body"
+awk '/^assert_mount_quiesced\(\)/,/^}/' "$CUTOVER" | grep -vE '^[[:space:]]*#' > "$G4BODY" || :
+[ "$(grep -cE 'lsof.*\| *grep' "$G4BODY" || true)" -eq 0 ] \
+  && ok "AC5 the G4 body contains no \`lsof … | grep\` pipe (comments stripped first)" \
+  || no "AC5 a pipe is back in the G4 predicate — size-dependent SIGPIPE fail-open"
+[ "$(grep -c 'app\.soleur\.ai/api/health' "$CUTOVER" || true)" -eq 0 ] \
+  && ok "AC7 no /api/health reference remains in the cutover script" \
+  || no "AC7 /api/health still referenced"
+[ "$(grep -c 'no C1 verify' "$WORKFLOW" || true)" -ge 1 ] \
+  && ok "AC9 the dry_run description states the rehearsal does not run the C1 verify" \
+  || no "AC9 dry_run description still misrepresents what a rehearsal covers"
+# AC9b — the COVERS clauses must be accurate too, not just the C1 disclaimer. luksFormat/luksOpen
+# and the luksOpen --test-passphrase escrow PROOF are all DRY_RUN-gated, so claiming the rehearsal
+# covers "LUKS target prep" or "escrow proof" is a fresh misrepresentation inside the correction.
+if grep -qF 'no luksFormat/luksOpen/staging mount' "$WORKFLOW" && grep -qF 'no luksOpen --test-passphrase escrow proof' "$WORKFLOW"; then
+  ok "AC9b the description names the gated LUKS-prep and escrow-proof steps as NOT covered"
+else
+  no "AC9b the description still implies the rehearsal exercises LUKS prep / the escrow proof"
+fi
+
+# ---------------------------------------------------------------------------
+# Mutation tests — each carries the did-the-sed-land guard.
+# ---------------------------------------------------------------------------
+mutate() {
+  local mut; mut="$(mktemp --suffix=.sh)"
+  cp "$CUTOVER" "$mut"
+  local e; for e in "$@"; do sed -i "$e" "$mut"; done
+  printf '%s\n' "$mut"
+}
+
+MUT1="$(mutate 's|^QUIESCE_UNITS=.*$|QUIESCE_UNITS="webhook.service"|')"
+if ! grep -qE '^QUIESCE_UNITS="webhook\.service"$' "$MUT1"; then
+  no "mutation M1 sed did NOT land — treat as un-run, not evidence"
+else
+  run_case "$MUT1" 'freeze_writers' 'freeze_writers' LSOF_OUT="" LSOF_RC=1
+  nhas '^systemctl stop .*inngest-redis\.service' \
+    && ok "mutation M1 (drop redis from QUIESCE_UNITS): T1 flips (the set is load-bearing)" \
+    || no "mutation M1 did not flip T1"
+fi
+rm -f "$MUT1"
+
+MUT2="$(mutate 's|^ *ensure_lsof$|  command -v lsof >/dev/null 2>\&1 \|\| return 0|')"
+if ! grep -qE '^ *command -v lsof >/dev/null 2>&1 \|\| return 0$' "$MUT2"; then
+  no "mutation M2 sed did NOT land — treat as un-run, not evidence"
+else
+  run_case "$MUT2" 'freeze_writers' 'freeze_writers' LSOF_ABSENT=1 LSOF_OUT="" LSOF_RC=1
+  { [ "$CASE_RC" -eq 0 ] && ! undef; } \
+    && ok "mutation M2 (restore the command -v skip): T7 flips (fail-closed is load-bearing)" \
+    || no "mutation M2 did not flip T7"
+fi
+rm -f "$MUT2"
+
+MUT3="$(mutate 's|^ *lsof +D "\$MOUNT" >"\$lout" 2>"\$lerr"; rc=\$?$|  holders=""; lsof +D "$MOUNT" 2>/dev/null \| grep -q . \&\& holders=x; rc=0; : >"$lout"; : >"$lerr"; printf "%s\\n" "$probe" >>"$lout"|')"
+if ! grep -qF 'lsof +D "$MOUNT" 2>/dev/null | grep -q . && holders=x' "$MUT3"; then
+  no "mutation M3 sed did NOT land — treat as un-run, not evidence"
+else
+  run_case "$MUT3" 'freeze_writers' 'freeze_writers' LSOF_OUT_FILE="$BIGF"
+  { [ "$CASE_RC" -eq 0 ] && ! undef; } \
+    && ok "mutation M3 (reintroduce the pipe): T8 flips (the no-pipe form is load-bearing)" \
+    || no "mutation M3 did not flip T8"
+fi
+rm -f "$MUT3"
+
+MUT4="$(mutate 's|^ *emit_freeze_holders "\$holders"$|  :|')"
+if grep -qF 'emit_freeze_holders "$holders"' "$MUT4"; then
+  no "mutation M4 sed did NOT land — treat as un-run, not evidence"
+else
+  run_case "$MUT4" 'freeze_writers' 'freeze_writers' LSOF_OUT="$MULTI"
+  markerF 'SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER' \
+    && no "mutation M4 did not flip T9 — the emit is not load-bearing" \
+    || ok "mutation M4 (drop the holder emit): T9 flips (the emit is load-bearing)"
+fi
+rm -f "$MUT4"
+
+MUT5="$(mutate 's|^  for u in \$(_quiesce_list); do rev=|  for u in $QUIESCE_UNITS; do rev=|')"
+if ! grep -qF 'for u in $QUIESCE_UNITS; do rev=' "$MUT5"; then
+  no "mutation M5 sed did NOT land — treat as un-run, not evidence"
+else
+  run_case "$MUT5" 'resume_writers' 'resume_writers' ACTIVE_UNITS="inngest-server.service" WORKSPACES_QUIESCE_UNITS="inngest-redis.service"
+  [ "$(cnt '^systemctl start webhook\.service')" -eq 0 ] \
+    && ok "mutation M5 (resume off raw QUIESCE_UNITS): T15 flips (the symmetric list is load-bearing)" \
+    || no "mutation M5 did not flip T15"
+fi
+rm -f "$MUT5"
+
+# M6 — neuter the mount guard => T20 MUST flip (webhook starts onto an unmounted $MOUNT).
+MUT6="$(mutate 's|^  if ! mountpoint -q "\$MOUNT" 2>/dev/null; then$|  if false; then|')"
+if ! grep -qE '^  if false; then$' "$MUT6"; then
+  no "mutation M6 sed did NOT land — treat as un-run, not evidence"
+else
+  run_case "$MUT6" 'resume_writers' 'resume_writers' MOUNTPOINT_RC=1 ACTIVE_UNITS=""
+  has '^systemctl start webhook\.service' \
+    && ok "mutation M6 (drop the mount guard): T20 flips (the guard is load-bearing)" \
+    || no "mutation M6 did not flip T20"
+fi
+rm -f "$MUT6"
+
+# M7 — neuter the cleanup rollback guard => T23 MUST flip (a passed cutover gets torn down).
+MUT7="$(mutate 's|^  if \[ "\$CANARY_OK" != "1" \] && { \[ "\$FLIP_DONE" = "1" \] \|\| \[ "\$FREEZE_HELD" = "1" \]; }; then$|  if true; then|')"
+if ! grep -qE '^  if true; then$' "$MUT7"; then
+  no "mutation M7 sed did NOT land — treat as un-run, not evidence"
+else
+  run_case "$MUT7" 'CANARY_OK=1 FLIP_DONE=1 FREEZE_HELD=1 DRY_RUN=0; rollback() { echo ROLLBACK_FIRED; }; (exit 9); cleanup' 'cleanup rollback'
+  outF 'ROLLBACK_FIRED' \
+    && ok "mutation M7 (neuter the cleanup guard): T23 flips (the rollback decision is load-bearing)" \
+    || no "mutation M7 did not flip T23 — the cleanup guard is unpinned"
+fi
+rm -f "$MUT7"
+rm -f "$BIGF"
+
+# ---------------------------------------------------------------------------
+echo
+echo "workspaces-luks-freeze.test.sh: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

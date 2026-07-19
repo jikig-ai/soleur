@@ -381,6 +381,11 @@ jobs:
       - name: Run /workspaces LUKS C1 verify diagnosability guard (#6604 separate stdout/stderr + emit path before rm/die)
         run: bash apps/web-platform/infra/workspaces-luks-verify.test.sh
 
+      # LOAD-BEARING registration: this job lists each infra test explicitly (no glob), so an
+      # unregistered suite is ZERO coverage, silently and greenly.
+      - name: Run /workspaces LUKS freeze-quiesce guard (#6588 redis in quiesce set + fail-closed G4 + /health canary)
+        run: bash apps/web-platform/infra/workspaces-luks-freeze.test.sh
+
       # #6511: `connect_timeout = 5` was a bare number where the pinned v4 provider's schema says
       # `string`. It coerced to "5", failed Cloudflare's duration parse, landed as "0s", and the
       # #6357 fail-fast mitigation on the registry origin was inert for weeks while every apply
