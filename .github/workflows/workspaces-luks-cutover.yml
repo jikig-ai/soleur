@@ -34,7 +34,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: "If true: L3 gates + escrow + bulk rsync + verify only; NO freeze, NO repoint. Leave true until rehearsed."
+        description: "Rehearsal. COVERS: L3 gates; fresh-device selection + blkid discriminator; aws/lsof install; R2 escrow reachability probe (PUT/read-back/delete + the negative tfstate-denial probe); G2 manifest; advisory holder probe. Does NOT cover: no luksFormat/luksOpen/staging mount, no luksOpen --test-passphrase escrow proof, no header backup/upload, no rollback rehearsal, no bulk rsync, no freeze, no delta rsync, no C1 verify, no repoint, no canary, no wipe. A green rehearsal is NOT evidence the copy/verify path works."
         required: false
         type: boolean
         default: true
