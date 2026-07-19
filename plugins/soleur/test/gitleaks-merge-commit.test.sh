@@ -242,13 +242,39 @@ if [[ "$bare_form" == "0" ]]; then
 else
   fail "found bare log-opts=\"-m\" ($bare_form) — --all is load-bearing"
 fi
-# AC5 + AC6a: full-tree steps exist. Anchored on the invocation shape, not a
-# bare token, so a mention inside an explanatory comment cannot satisfy it.
+# AC5 + AC6a: full-tree coverage, asserted PER EVENT.
+#
+# This was `dir_steps -ge 2`, which is a count masquerading as a coverage claim.
+# The workflow ships four full-tree steps, so deleting the PR-side one — the
+# actual shipped remedy for the #6721 shape T5 proves is otherwise uncovered —
+# left the count at 3, still `-ge 2`, and this suite fully GREEN. A `>=`
+# threshold cannot fail for any deletion that keeps the floor, which is the
+# vacuity class this whole file exists to prevent, inside the file itself.
+#
+# Now: every event that runs the scan job must have its own full-tree step, and
+# each such step must reach an actual invocation. Anchored on the step-name and
+# invocation shapes, so a comment cannot satisfy either half.
+for ev in "PR" "merge_group candidate" "push:main" "weekly cron"; do
+  if grep -qF -- "- name: Scan (full tree, ${ev})" "$WORKFLOW"; then
+    pass "full-tree step present for '${ev}'"
+  else
+    fail "no full-tree step for '${ev}' — that event has no tree coverage"
+  fi
+done
 dir_steps=$(grep -cE '^ +\./gitleaks dir \.' "$WORKFLOW")
-if [[ "$dir_steps" -ge 2 ]]; then
-  pass "workflow carries $dir_steps './gitleaks dir .' invocations (cron + PR-side)"
+if [[ "$dir_steps" == "4" ]]; then
+  pass "exactly 4 './gitleaks dir .' invocations — one per event, none orphaned"
 else
-  fail "expected >=2 './gitleaks dir .' invocations (cron + PR-side); found $dir_steps"
+  fail "expected exactly 4 './gitleaks dir .' invocations (one per event); found $dir_steps"
+fi
+# Diagnosability: a bare full-tree failure prints only 'leaks found: N' with no
+# File/RuleID/Line, and the search space for a tree scan is the whole repo.
+# Measured: without -v the output is two INF/WRN lines and nothing else.
+dir_verbose=$(grep -cE '^ +\./gitleaks dir \. .*--exit-code 1 -v$' "$WORKFLOW")
+if [[ "$dir_verbose" == "4" ]]; then
+  pass "all 4 full-tree scans carry -v (findings name File/RuleID/Line)"
+else
+  fail "only $dir_verbose/4 full-tree scans carry -v — a red gate would be undiagnosable"
 fi
 # AC6: the push:main comment must no longer describe #6721 as unfixed.
 if grep -qF 'direction 1 would invert it' <<<"$wf"; then

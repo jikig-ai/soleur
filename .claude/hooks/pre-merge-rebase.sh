@@ -132,13 +132,30 @@ fi
 # gate for EVERY branch, forever, including branches where review never ran. The
 # gate could not deny anything for as long as that file existed.
 #
-# Scoped to paths touched by commits unique to this branch. `--format=` strips
-# the commit headers so only paths are emitted; `xargs -r` keeps grep from
-# running at all when the branch touched no todos — without it, grep would read
-# stdin and hang, which is the common case and the one the old form got wrong.
-REVIEW_TODOS=$(cd "$WORK_DIR" 2>/dev/null && \
-  git log origin/main..HEAD --name-only --format= -- todos/ 2>/dev/null \
-  | sort -u | xargs -r grep -l "code-review" 2>/dev/null | head -1 || true)
+# `-G'code-review'` selects commits whose DIFF adds or removes a line matching
+# the pattern, so this asks "did THIS BRANCH introduce review evidence?".
+#
+# The obvious formulation — list the paths the branch touched, then grep those
+# paths — is still vacuous, just more narrowly. `git log --name-only` yields
+# paths, and grep then reads whatever those paths contain IN THE CURRENT
+# CHECKOUT. So a branch that merely TOUCHES a pre-existing main-side todo (a
+# `resolve-todo-parallel` sweep, marking one done, a reformat) lists that path,
+# grep matches the `code-review` tag that came from main, and the gate passes
+# with no review having run. Matching on the diff instead of on the working
+# tree closes that; it is the same class of residual the repo-global grep had.
+# `-G` alone is still not enough: it matches lines ADDED **or REMOVED**, so a
+# sweep that merely deletes a completed review todo (`git rm todos/...`) would
+# count as evidence. So each candidate path must ALSO still carry the tag in
+# HEAD's blob — evidence that was introduced and is still there.
+REVIEW_TODOS=""
+while IFS= read -r _todo; do
+  [[ -n "$_todo" ]] || continue
+  if git -C "$WORK_DIR" show "HEAD:$_todo" 2>/dev/null | grep -q "code-review"; then
+    REVIEW_TODOS="$_todo"
+    break
+  fi
+done < <(git -C "$WORK_DIR" log origin/main..HEAD -G'code-review' \
+           --name-only --format= -- todos/ 2>/dev/null | sort -u)
 
 # Check 2: review commit, or the machine-emitted review trailer.
 #
@@ -185,6 +202,25 @@ if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
   fi
 fi
 
+# A stale origin/main makes BOTH local signals untrustworthy in the UNSAFE
+# direction, so they are discarded rather than merely warned about (#6724).
+#
+# Hoisting the fetch above the gate stopped a network failure from
+# short-circuiting the gate, but recording FETCH_OK without acting on it left a
+# verified bypass: with origin/main stale, `origin/main..HEAD` widens to include
+# commits already on main, and this hook MERGES origin/main on every successful
+# run — so after one pass a branch inherits main's whole `review:` history.
+# Measured: a branch with zero review evidence of its own PASSES the gate in
+# that state. This PR makes it strictly worse, because emit-review-trailer.sh
+# guarantees main's history is dense with `review:` subjects and trailers.
+#
+# Signal 3 is unaffected (it queries the remote by PR number, not the local
+# range), so a fetch failure degrades to Signal-3-only rather than to a bypass.
+if [[ "$FETCH_OK" != "1" ]]; then
+  REVIEW_TODOS=""
+  REVIEW_COMMIT=""
+fi
+
 if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]] && [[ -z "$REVIEW_ISSUES" ]]; then
   emit_incident "rf-never-skip-qa-review-before-merging" deny \
     "Never skip QA/review before merging. Full pipeline:" "$CMD"
@@ -192,7 +228,7 @@ if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]] && [[ -z "$REVIEW_ISSUE
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: "BLOCKED: No review evidence found on this branch. Run /review before merging."
+      permissionDecisionReason: "BLOCKED: No review evidence for commits in origin/main..HEAD. If review has NOT run: run /soleur:review. If it HAS run (or found nothing, which emits no artifacts): bash plugins/soleur/skills/review/scripts/emit-review-trailer.sh --findings <n>. Signals checked: todos/ tagged code-review introduced by this branch, a review: commit or Reviewed-By-Soleur: trailer, a code-review-labelled issue citing this PR. Note the scope is this branch only — evidence already on main does not count."
     }
   }'
   exit 0

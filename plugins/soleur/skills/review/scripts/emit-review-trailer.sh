@@ -21,6 +21,34 @@
 # The trailer is emitted by a script rather than described in prose because a
 # described `git commit` line is advisory and a script invocation is not.
 #
+# WHAT THIS TRAILER DOES AND DOES NOT MEAN (ADR-126)
+#
+# It is a BOOLEAN: "a review ran on this branch". It is NOT an attestation that
+# the merged tree is the tree that was reviewed. Reviewing early and then
+# pushing further commits leaves the trailer in range and the gate passes.
+#
+# That is deliberate, not an oversight. The consuming gate is a three-signal
+# OR in which every leg is a boolean — the legacy `review: ` subject pattern is
+# checked BEFORE this trailer, and Signal 3 (a labelled GitHub issue) cannot be
+# bound to a tree at all. Content-binding this one leg would therefore close
+# nothing: `git commit --allow-empty -m "review: x"` still satisfies the gate.
+# Making the binding real means deleting the legacy patterns (stranding every
+# branch reviewed before this shipped) and re-architecting Signal 3 — a much
+# larger change, landing a re-review treadmill on a gate already denying most
+# open PRs. Gates that block constantly get bypassed; that is how #6724 was
+# created.
+#
+# Threat model: agent forgetfulness on a trusted single-operator repo. These
+# hooks live in the operator's own checkout and are editable by the same agent
+# they constrain, so there is no enforcement boundary to build on. A boolean is
+# the honest instrument for that.
+#
+# `Reviewed-Commit:` below records the reviewed sha WITHOUT any consumer reading
+# it, so the forensic data exists if the threat model ever changes (external
+# contributors merging without operator review) and enforcement becomes
+# warranted. Adding the field later would be the expensive part; enforcing a
+# field already present is cheap.
+#
 # Usage:
 #   emit-review-trailer.sh [--findings <n>] [--summary <text>]
 #
@@ -31,6 +59,21 @@
 #   2  usage / environment error
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: emit-review-trailer.sh [--findings <n>] [--summary <text>]
+
+Commits an empty commit carrying the Reviewed-By-Soleur: trailer, the
+machine-readable proof that soleur:review ran on this branch (#6724).
+
+Exit codes:
+  0  trailer committed and verified parseable
+  0  skipped (on main/master, or evidence already present for this branch)
+  1  commit succeeded but the trailer does not parse
+  2  usage / environment error
+EOF
+}
+
 TRAILER_KEY="Reviewed-By-Soleur"
 FINDINGS=""
 SUMMARY=""
@@ -39,7 +82,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --findings) FINDINGS="${2:?--findings needs a value}"; shift 2 ;;
     --summary)  SUMMARY="${2:?--summary needs a value}";  shift 2 ;;
-    -h|--help)  sed -n '1,32p' "$0"; exit 0 ;;
+    -h|--help)  usage; exit 0 ;;
     *) echo "emit-review-trailer: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
@@ -107,10 +150,31 @@ fi
 # block of `Token: value` lines, so a stray `Refs #6724.` there would silently
 # void every trailer below it — including this one. Issue references therefore
 # stay in the body prose above.
-COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n' \
+#
+# `Reviewed-Commit:` records the sha under review. NO consumer reads it — see
+# the ADR-126 note in the header. It is recorded now because adding a field
+# later, once the key is in main's permanent history and read by three
+# consumers, is the expensive part; enforcing a field already present is cheap.
+REVIEWED_SHA=$(git rev-parse HEAD)
+COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n%s: %s\n' \
   "review: ${SUMMARY}" \
-  "Machine-readable evidence that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran." \
-  "$TRAILER_KEY")
+  "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-126." \
+  "$TRAILER_KEY" \
+  "Reviewed-Commit" "$REVIEWED_SHA")
+
+# `--allow-empty` does NOT mean "empty" — it commits the INDEX, so anything
+# staged is silently absorbed into a commit whose subject reads
+# "review: no findings". That is reachable: review's step 2 stages artifacts and
+# its commit is conditional, while step 3 runs unconditionally right after.
+# Refuse rather than absorb; the caller can commit or unstage and re-run.
+if ! git diff --cached --quiet 2>/dev/null; then
+  echo "emit-review-trailer: refusing to run with staged changes." >&2
+  echo "  --allow-empty commits the index, so these would be silently absorbed" >&2
+  echo "  into a commit subjected 'review: ${SUMMARY}':" >&2
+  git diff --cached --name-only 2>/dev/null | sed 's/^/    /' >&2
+  echo "  Commit or unstage them first, then re-run." >&2
+  exit 2
+fi
 
 if ! git commit --allow-empty -q -m "$COMMIT_MSG"; then
   echo "emit-review-trailer: git commit failed" >&2

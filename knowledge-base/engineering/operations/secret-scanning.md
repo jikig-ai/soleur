@@ -58,7 +58,7 @@ a red gate is sometimes unfixable by editing the file it names.
 | `merge_group` — **full tree** | the checked-out worktree | `gitleaks dir .` |
 | `push` (main) — **blocking** | **main's ancestry only** | `--log-opts="--no-merges HEAD"` |
 | `push` (main) — **full tree** | the checked-out worktree | `gitleaks dir .` |
-| `push` (main) — **advisory** | **every fetched ref** | bare `gitleaks git -v`, `\|\| echo ::warning` — never fails the job |
+| `push` (main) — **advisory** | **every fetched ref, merge commits included** | `-v --log-opts="-m --all"`, `\|\| echo ::warning` — never fails the job |
 | `schedule` (weekly) | **every fetched ref, merge commits included** | `--log-opts="-m --all"`, plus `-v` |
 | `schedule` (weekly) — **full tree** | the checked-out worktree | `gitleaks dir .` |
 
@@ -67,8 +67,9 @@ PR side (see the next section). They scan the **tree**, not a commit range, so
 they catch anything still present in the checkout regardless of which commit
 introduced it — and, unlike a range scan, a fix at the tip genuinely clears them.
 
-The cron is the only range scan carrying `-m`. That is deliberate; see
-"Why only the cron gets `-m`" below.
+`-m` is carried by the two **non-blocking** range scans — the weekly cron and the
+push:main advisory sweep — and by no blocking one. That split is deliberate; see
+"Why no BLOCKING range scan gets `-m`" below.
 
 `push:main` runs **two** invocations on purpose. Blocking *verdict* scope and scan
 *breadth* are independent axes: the first decides whether `main`'s required check

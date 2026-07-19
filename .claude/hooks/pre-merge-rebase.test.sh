@@ -639,8 +639,75 @@ t_v3_real_script_satisfies_gate() {
   rm -rf "$tmp"
 }
 
+# --- T-V1b / T-V1c: the SAME vacuity, for the other two signals -----------
+#
+# T-V1 seeds todos/ on main and covers Signal 1 only. Mutation-verified gap:
+# stripping `origin/main..HEAD` from Signal 2 (legacy subject) and from the
+# trailer lookup left the whole suite GREEN, because no fixture puts either of
+# those on main pre-fork. One historical `review:` commit or one trailer commit
+# anywhere in main's history would then satisfy the gate for EVERY future
+# branch forever — the exact regression this PR exists to close, unguarded on
+# two of three signals.
+#
+# This matters more after this PR, not less: emit-review-trailer.sh guarantees
+# main's history becomes dense with both shapes.
+_vacuity_signal_case() { # <slug> <assert-name> <commit-subject> <extra-commit-body>
+  local slug="$1" case_name="$2" subject="$3" body="${4:-}"
+  local tmp; tmp=$(mktemp -d)
+  local work="$tmp/work" incidents="$tmp/incidents"
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  echo "base" > "$work/file.txt"
+  git -C "$work" add file.txt
+  git -C "$work" commit -q -m "init"
+  # The evidence lands on MAIN, pre-fork — never on the feature branch.
+  if [[ -n "$body" ]]; then
+    git -C "$work" commit -q --allow-empty -m "$subject
+
+$body"
+  else
+    git -C "$work" commit -q --allow-empty -m "$subject"
+  fi
+  attach_origin "$work" "$tmp/origin.git"
+
+  git -C "$work" checkout -q -b "feat-unreviewed-${slug}"
+  echo "feature" > "$work/feature.txt"
+  git -C "$work" add feature.txt
+  git -C "$work" commit -q -m "feat: unreviewed work"
+
+  # Precondition: the evidence must really be in main's history, or this test
+  # passes because there was nothing to find rather than because scoping works.
+  if ! git -C "$work" log origin/main --oneline | grep -qF "${subject:0:20}"; then
+    echo "FAIL: $case_name fixture invalid — evidence not present on main"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); rm -rf "$tmp"; return
+  fi
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" "gh pr merge 996 --squash")
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_deny "$case_name" "$incidents" "$out" "$exit_code" \
+    "rf-never-skip-qa-review-before-merging"
+  rm -rf "$tmp"
+}
+
+t_v1b_vacuity_review_subject_on_main() {
+  _vacuity_signal_case "subject" \
+    "T-V1b vacuity: a review: subject on MAIN is not this branch's evidence" \
+    "review: findings from some older branch (P2)"
+}
+
+t_v1c_vacuity_trailer_on_main() {
+  _vacuity_signal_case "trailer" \
+    "T-V1c vacuity: a Reviewed-By-Soleur trailer on MAIN is not this branch's evidence" \
+    "chore: older branch checkpoint" \
+    "Reviewed-By-Soleur: soleur:review"
+}
+
 t1_review_evidence_gate
 t_v1_vacuity_todos_on_main_only
+t_v1b_vacuity_review_subject_on_main
+t_v1c_vacuity_trailer_on_main
 t_v2_zero_finding_trailer_allows
 t_v3_real_script_satisfies_gate
 t2_uncommitted_changes

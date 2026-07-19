@@ -567,6 +567,14 @@ esac
       ["git", "update-ref", "refs/remotes/origin/main", mainSha],
       { cwd: remoteDir }
     );
+    // The hook fetches origin/main before the gate and, since #6724, DISCARDS
+    // both local signals when that fetch fails — a stale ref widens
+    // origin/main..HEAD in the unsafe direction. This bare repo is its own
+    // origin, so point `origin` at itself to make the fetch succeed offline.
+    // Without this the gate correctly denies and never reaches the
+    // uncommitted-changes check this test exercises.
+    Bun.spawnSync(["git", "remote", "remove", "origin"], { cwd: remoteDir, env: GIT_ENV });
+    spawnChecked(["git", "remote", "add", "origin", remoteDir], { cwd: remoteDir });
     // commit-tree needs a committer identity, and GIT_ENV deliberately nulls
     // the global config (GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1),
     // so set it locally on the bare repo.

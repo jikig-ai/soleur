@@ -14,7 +14,7 @@ INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 
 # Early exit: only intercept gh pr merge commands.
-if ! echo "$CMD" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+merge(\s|$)'; then
+if ! echo "$CMD" | grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)'; then
   exit 0
 fi
 
@@ -54,9 +54,18 @@ fi
 # therefore structurally unfailable (#6724): todos/ lives on main, so one
 # long-lived review todo satisfied the gate for every branch forever. Now scoped
 # to paths touched by commits unique to this branch.
-REVIEW_TODOS=$(cd "$WORK_DIR" 2>/dev/null && \
-  git log origin/main..HEAD --name-only --format= -- todos/ 2>/dev/null \
-  | sort -u | xargs -r grep -l "code-review" 2>/dev/null | head -1 || true)
+# `-G` selects commits whose DIFF touched the tag (so the BRANCH introduced it),
+# and the HEAD-blob check requires it to still be there — `-G` alone matches
+# removals, so a sweep deleting a completed todo would otherwise count.
+REVIEW_TODOS=""
+while IFS= read -r _todo; do
+  [[ -n "$_todo" ]] || continue
+  if git -C "$WORK_DIR" show "HEAD:$_todo" 2>/dev/null | grep -q "code-review"; then
+    REVIEW_TODOS="$_todo"
+    break
+  fi
+done < <(git -C "$WORK_DIR" log origin/main..HEAD -G'code-review' \
+           --name-only --format= -- todos/ 2>/dev/null | sort -u)
 # Signal 2 had drifted out of sync with the .claude/hooks copy: it matched only
 # the legacy "refactor: add code review findings" subject, missing the "review: "
 # fix-inline convention (post-#2374) entirely. Both are now matched here, plus
@@ -83,8 +92,18 @@ if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
   fi
 fi
 
+# A stale origin/main makes both local signals untrustworthy in the UNSAFE
+# direction (the range widens to include commits already on main, and this hook
+# merges origin/main on every run), so discard them rather than warn. Signal 3
+# queries the remote and is unaffected, so a fetch failure degrades to
+# Signal-3-only instead of to a bypass (#6724).
+if [[ "$FETCH_OK" != "1" ]]; then
+  REVIEW_TODOS=""
+  REVIEW_COMMIT=""
+fi
+
 if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]] && [[ -z "$REVIEW_ISSUES" ]]; then
-  deny "BLOCKED: No review evidence found on this branch. Run /review before merging."
+  deny "BLOCKED: No review evidence for commits in origin/main..HEAD. If review has NOT run: run /soleur:review. If it HAS run (or found nothing, which emits no artifacts): bash plugins/soleur/skills/review/scripts/emit-review-trailer.sh --findings <n>. Scope is this branch only — evidence already on main does not count."
 fi
 
 # Check for detached HEAD
