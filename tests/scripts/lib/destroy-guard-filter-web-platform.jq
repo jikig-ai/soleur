@@ -295,13 +295,14 @@ def destroyed_at($addr):
   # #6416, but detaching a live host's private NIC would pass. That is the I1
   # runtime-precondition gap tracked in #6441, not a counter this filter can add.
   #
-  # BACKWARD-COMPAT: additive key. The apply / warm_standby / manual-rerun
-  # consumers that read only resource_deletes/nested_deletes/reboot_updates stay
-  # byte-unchanged. Only the `apply` job reads host_creates, and it evaluates the
-  # HALT OUTSIDE the destroy_count sum — there is deliberately NO [ack-destroy]
-  # bypass (a host create is never the right thing to type past on an unattended
-  # per-PR apply; the dispatch jobs that legitimately create/replace are separate
-  # jobs and do not read this key).
+  # BACKWARD-COMPAT: additive key. The manual-rerun consumer that reads only
+  # resource_deletes/nested_deletes/reboot_updates stays byte-unchanged.
+  # host_creates is read by BOTH the `apply` job (#6416) and the `warm_standby`
+  # job (#6718), and each evaluates its HALT OUTSIDE the destroy_count sum —
+  # there is deliberately NO [ack-destroy] bypass on either (a host create is
+  # never the right thing to type past on an unattended per-PR apply, nor on a
+  # dispatch that passes no -var image_name; the dispatch jobs that legitimately
+  # create/replace are separate jobs and do not read this key).
   host_creates: (
     [ .resource_changes[]?
       | select(.type == "hcloud_server" or .type == "hcloud_volume")
