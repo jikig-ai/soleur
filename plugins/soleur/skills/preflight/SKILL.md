@@ -692,7 +692,15 @@ esac
 
 ```bash
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
-awk '/^## Observability/{in=1; next} /^## /{if (in) exit} in' "$PLAN_PATH" > "$PREFLIGHT_TMP/preflight-observability.txt"
+# ‼️ ANCHOR the heading match. `/^## Observability/` is a PREFIX match, so it
+# also matches `## Observability layer citation` — a section name that
+# `hr-observability-layer-citation` actively encourages, making the collision
+# systemic rather than incidental. When both sections exist, the unanchored form
+# extracts the FIRST (the prose citation), finds no `discoverability_test`, and
+# FAILs with "no command could be parsed" — a false FAIL on a plan that is
+# perfectly well-formed. Verified against #6698's plan: unanchored extracted 47
+# lines of the wrong section; anchored reaches the real block.
+awk '/^## Observability$/{ino=1; next} /^## /{if (ino) exit} ino' "$PLAN_PATH" > "$PREFLIGHT_TMP/preflight-observability.txt"
 test -s "$PREFLIGHT_TMP/preflight-observability.txt" || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
 ```
 
