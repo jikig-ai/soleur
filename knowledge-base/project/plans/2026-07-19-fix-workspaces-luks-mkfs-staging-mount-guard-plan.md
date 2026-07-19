@@ -776,7 +776,16 @@ requires a bounded freeze to copy the delta consistently.
 rollback rehearsal (`:783`) that proves the retained plaintext remounts read-only before the freeze
 begins. This plan does not extend that window.
 
-**This plan strictly reduces expected downtime.** Every new assert is **pre-freeze** (the freeze
+**Correction (post-implementation review).** The global claim below — "every new assert is
+pre-freeze" — is **false as written**, and was asserted twice in this plan. `FREEZE_HELD=1` is set
+at the freeze step, and **two** of this PR's new asserts land below it: the repoint
+`umount "$STAGING"` (`staging_umount_failed`) and the repoint `mount "$MAPPER" "$MOUNT"`
+(`repoint_mount_failed`). Both are still the right call — each converts a silent two-live-divergent-copies
+state into a loud abort, and neither can fail a *correct* run — but their user impact is **in-freeze**:
+bounded outage, DP-6 rollback to the retained plaintext, zero data loss. The narrower claim (every die
+in `prepare_staging_target` is pre-freeze) is the true one and is what the ADR amendment carries.
+
+**This plan strictly reduces expected downtime.** Every assert in `prepare_staging_target` is **pre-freeze** (the freeze
 starts at `:807`), so each converts a would-be mid-freeze failure — or, in the 2026-07-19 case, a
 silent wrong-target copy followed by a repoint onto an unformatted mapper — into a zero-downtime
 abort. The capacity gate (Phase 2 step 7) is the clearest instance: without it an `ENOSPC` would fire
@@ -804,7 +813,7 @@ pre-freeze by design.
 | **Harness assumptions were wrong** — `run_case` is not in `workspaces-luks.test.sh`, never sets `WORKSPACES_STAGING` (so cases would `mkdir` against the real runner and `EACCES`), and its `mountpoint` stub has a single global rc. | Phase 1b scopes all three as explicit work items rather than implementation surprises. |
 | **`mkfs.ext4` lazy init competes with the bulk rsync.** | `-E lazy_itable_init=0,lazy_journal_init=0`; the mkfs runs **pre-freeze**, so the cost is outside the budget. |
 | **Silent stale-FS reuse.** The `ext4` arm reuses a populated filesystem from a prior partial run. | Not a correctness hole — the `--delete --checksum` delta rsync (`:839`) reconciles and C1 verifies byte identity. Made visible via `reused=1`; L2 covers it on a real device. |
-| **New asserts could abort a freeze that would otherwise succeed.** | Every new assert is **pre-freeze** (freeze starts `:807`), so a failure aborts with **zero downtime** — strictly better than proceeding onto the wrong device. Phase 4's changes are all fail-open → fail-closed and cannot make a currently-*correct* run fail. |
+| **New asserts could abort a freeze that would otherwise succeed.** | Every assert in `prepare_staging_target` is **pre-freeze**, so a failure aborts with **zero downtime** — strictly better than proceeding onto the wrong device. **Two exceptions** (corrected post-review): the repoint `umount` and repoint `mount` asserts are **in-freeze**; a failure there is a bounded outage + DP-6 rollback, not zero-downtime. Phase 4's changes are all fail-open → fail-closed and cannot make a currently-*correct* run fail. |
 | **Unverified current on-host state.** What `blkid` reports for the mapper on web-1 now is unknown from here (no SSH). | The three-arm guard is total by construction — empty, `ext4`, or anything else are all handled and the third arm dies. No arm assumes a particular current state. |
 | **The stray copy remains on disk after this PR.** | The `staging_stray_present` die **mechanically blocks every cutover** until it is remediated, and emits a Sentry-fatal + marker so it is tracked rather than invisible. Remediation ships in the immediately-following PR (Non-Goals), sequenced before any real freeze. |
 

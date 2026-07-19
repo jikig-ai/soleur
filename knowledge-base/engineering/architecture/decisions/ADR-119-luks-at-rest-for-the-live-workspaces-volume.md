@@ -478,7 +478,12 @@ signature) under the DP-6 `trap cleanup EXIT` host-local rollback; `prepare_stag
 `mkfs.ext4`s the **mapper**-if-empty and mounts it at `$STAGING` behind the mapper-arm discriminator +
 staging positive control §(g). The `luksFormat` and the `mkfs` are destructive only on the disposable
 fresh volume and on the container opened from it; the live plaintext `/mnt/data` is never a candidate
-for either. **Both are unchanged on this arm:** under `DRY_RUN=1` `prepare_staging_target` returns before it
+for either. **No new destructive operation on this arm; two new read-only refusals added.** ("Unchanged" would
+be the wrong word — the dry-run arm gained two terminal exits it did not have: `stray_present` and
+`already_cutover`. Both are read-only assertions, deliberately evaluated in BOTH arms so a rehearsal
+reports those conditions honestly rather than passing green over them. The *destructiveness* claim
+below is what the reversibility premise rests on, and it survives.) Under `DRY_RUN=1`
+`prepare_staging_target` returns before it
 touches the mapper at all, so the mkfs/staging-mount work added by #6588 adds **nothing destructive
 to the dry-run arm**. Precisely: the dry-run arm performs `mkdir -p "$STAGING"` (idempotent; creates
 at most an empty directory) and two read-only asserts — the stray-copy check and the
