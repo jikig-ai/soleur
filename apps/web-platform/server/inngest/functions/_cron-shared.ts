@@ -444,6 +444,24 @@ export async function finalizeOutputAwareHeartbeat(args: {
   cronName: string;
   logger: HandlerArgs["logger"];
   onBeforeHeartbeat?: () => Promise<void>;
+  /**
+   * Can a REPLAY plausibly recover this failure? (#6714, ADR-126.)
+   *
+   * This helper conflated two independent questions: "what colour do we post"
+   * and "is a retry capable of fixing it". For a producer whose ephemeral
+   * workspace is destroyed in its own `finally`, the second answer is always
+   * NO — `setup-workspace` is memoized, so a replay reads back a path that has
+   * already been `rm -rf`'d and `safeCommitAndPr` hits its `workspace-lost`
+   * guard unconditionally. That guard is not silent: it comments "PR withheld:
+   * safe-commit failed at stage `workspace-lost`" onto the operator's issue
+   * with a runbook pointer, so a guaranteed-useless replay actively misleads a
+   * non-technical operator.
+   *
+   * Passing `false` lets such a caller report an honest RED colour without
+   * buying a replay that cannot succeed. OMITTED (undefined) preserves the
+   * existing behavior exactly, so the other 7 cohort callers are unchanged.
+   */
+  retryEligible?: boolean;
 }): Promise<{ retry: boolean }> {
   const {
     step,
@@ -455,6 +473,7 @@ export async function finalizeOutputAwareHeartbeat(args: {
     cronName,
     logger,
     onBeforeHeartbeat,
+    retryEligible,
   } = args;
   // retries:1 → 2 attempts (index 0 and 1); final attempt is index 1. Callers
   // passing neither read attempt=0/maxAttempts=1 → isFinalAttempt=true (legacy
@@ -462,7 +481,9 @@ export async function finalizeOutputAwareHeartbeat(args: {
   // value collapses to always-final → every failed attempt posts error: degrades
   // to OVER-paging (the original bug), never to masking a failure with false ok.
   const isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1);
-  const failed = threw && !heartbeatOk;
+  // `retryEligible !== false` (not a truthiness test) so OMITTING the field is
+  // indistinguishable from today's behavior for the 7 callers that do not pass it.
+  const failed = threw && !heartbeatOk && retryEligible !== false;
   if (failed && !isFinalAttempt) {
     logger.warn(
       { fn: cronName, attempt: attempt ?? 0, isFinalAttempt },

@@ -48,7 +48,7 @@ Where the deliverable is a committed file, "an issue was filed" is not evidence 
 Concretely, for the claude-eval cron cohort:
 
 1. **Split the signal by ADDITION, never by renaming.** `heartbeatOk` keeps its name *and* its role
-   as the persistence gate; a separately-named `livenessOk` feeds the check-in. Both are applied to
+   as the persistence gate; a separately-named `livenessOk` is added beside it. Both are applied to
    the posted colour. This is not stylistic: `cron-safe-commit-parity.test.ts` asserts the gate as
    **literal source text** across all 8 `MIGRATED_PROMPT` cohort files, and a prior PR deliberately
    preserved that shape. A rename would break a cohort invariant to fix a colour bug.
@@ -67,14 +67,18 @@ Concretely, for the claude-eval cron cohort:
 5. **Dedup on the artifact, not on a proxy for it.** The short-circuit now requires both the issue
    *and* the dated digest committed on the default branch. It fails closed toward spawning: a
    duplicate digest is a paper cut, a missing digest is this incident.
+6. **Separate "what colour to post" from "can a replay recover this".**
+   `finalizeOutputAwareHeartbeat` conflated them in one `heartbeatOk`, which is what made the
+   fail-open `livenessOk` default look necessary. They are independent questions, and for a producer
+   whose ephemeral workspace is destroyed in its own `finally` the second answer is *always no* —
+   the memoized `setup-workspace` hands a replay a path that no longer exists. The helper therefore
+   takes an optional `retryEligible`; `failed = threw && !heartbeatOk && retryEligible !== false`.
+   Omitting it preserves existing behaviour exactly, so the other 7 cohort callers are untouched.
 
-**Markers are observability infrastructure and must be reachable by construction.** They are pino
-**WARN** (level ≥ 40) — Vector's `app_container_warn_filter` ships only level ≥ 40 to Better Stack,
-so an info-level marker never leaves the host and is invisible in precisely the incident it exists
-for. They are **fail-open**: an emit failure must never propagate into the run it observes. They use
-a **dedicated pino instance with no `hooks.logMethod`**, because the shared logger mirrors every
-WARN+ line into a Sentry breadcrumb and a steady daily marker stream would evict genuine diagnostics
-from the shared-scope ring buffer.
+**Markers follow ADR-108's form exactly** — pino WARN (level ≥ 40), fail-open, on a dedicated pino
+instance with no `hooks.logMethod`. See ADR-108 for the full rationale for each of those three; it
+is not restated here, because the same four facts already appear in `claude-cost-marker.ts` and in
+`cron-liveness-marker.ts`'s own header and a third copy would be a fourth thing to keep in sync.
 
 That dedicated instance has **no ADR-029 `renameUserIdToHash` formatter and no redact paths** — both
 are shared-logger-only. Marker payloads therefore MUST carry no user id, email, secret, or other
@@ -92,15 +96,34 @@ is answerable next time from the surface operators already have.
 **Negative / accepted.** The cron can now go RED for a reason the *issue* stream looks healthy for,
 which is the intended behaviour change and will read as "noisier" until the underlying persistence
 faults are fixed. The dedup performs one extra GitHub contents read per run on the deduped path.
-`livenessOk` is initialised `true` and falsified only by an OBSERVED negative — deliberately, so a
-trailing-step throw preserves today's "output-present run stays GREEN" contract rather than
-inverting `finalizeOutputAwareHeartbeat`'s `failed = threw && !heartbeatOk` into a retry that would
-replay against an already-deleted `spawnCwd`.
 
-**Cohort implication (not addressed here).** `resolveOutputAwareOk` is shared across the cron
-cohort, so **every** producer whose real deliverable is a committed file rather than an issue has
-this same blind spot. This ADR deliberately does not widen to the cohort; a follow-up audits each
-producer's asserted-vs-consumed artifact against this decision.
+`livenessOk` is initialised **`false`** and set true only by an OBSERVED POSITIVE. A liveness signal
+that votes GREEN on an *unobserved* artifact is the bug class this ADR forbids, so fail-closed is the
+only defensible default: every throw that never reaches the persistence branch leaves the run RED by
+construction, with no `reachedPersistenceGate` bookkeeping to get wrong.
+
+Two behaviour changes follow, both deliberate and both previously-encoded contracts:
+
+- **A trailing persistence throw on an output-present run now posts RED** (was GREEN, #5728). That
+  old contract was a GREEN-with-no-artifact path by construction — the issue landed, the commit did
+  not, and the operator saw green.
+- **A non-final no-output throw now posts one terminal RED instead of rethrowing for a retry.** The
+  retry was never capable of recovery: `setup-workspace` runs inside `step.run` and is memoized, and
+  the handler's `finally` tears down `ephemeralRoot` unconditionally, so a replay reads back a path
+  that has already been `rm -rf`'d and `safeCommitAndPr` hits its `workspace-lost` guard. That guard
+  is not silent — it comments *"PR withheld: safe-commit failed at stage `workspace-lost`"* onto the
+  operator's issue with a runbook pointer, sending a non-technical operator to a runbook for a fault
+  that did not occur.
+
+**Cohort implication (not addressed here) — tracked as #6737.** `resolveOutputAwareOk` is shared
+across the cron cohort, so **every** producer whose real deliverable is a committed file rather than
+an issue has this same blind spot. This ADR deliberately does not widen to the cohort; #6737 audits
+each producer's asserted-vs-consumed artifact against this decision.
+
+The same follow-up should sweep `retryEligible` (decision 6). The "a replay cannot recover once the
+workspace is torn down in `finally`" argument applies verbatim to all 8 `MIGRATED_PROMPT` crons —
+only `cron-community-monitor` passes the flag today, so the other 7 still buy a guaranteed-useless
+replay (and its misleading `workspace-lost` comment) on any throw inside their guarded bodies.
 
 ## Alternatives considered
 
@@ -108,9 +131,21 @@ producer's asserted-vs-consumed artifact against this decision.
 source-text cohort invariant in `cron-safe-commit-parity.test.ts` across 8 files, to no benefit the
 additive split does not already provide.
 
-**Make `paths` required on the committed arm.** Rejected: ~38 handler and test consumers construct
-that arm, so a required field is a breaking change to all of them for a purely additive signal —
-and it would force the replay-resume branch to invent a value it cannot know.
+**Initialise `livenessOk` to `true` and falsify only on an observed negative.** Rejected — this was
+the first draft, and it left the bug class REACHABLE. A throw anywhere between `verify-output` and
+the persistence gate leaves `heartbeatOk` true and `livenessOk` never falsified, so
+`failed = threw && !heartbeatOk` is false, no retry fires, and the run posts a terminal GREEN with
+nothing committed *on the first attempt* — verbatim the shape this ADR forbids. Its stated
+justification (that honest falsification would induce a retry replaying against a deleted
+`spawnCwd`) was a false dilemma: that hazard already exists on `main` via the pre-existing
+`if (collectorSignalRed) heartbeatOk = false`, so the fail-open default bought nothing `main` had
+not already lost. Decision 6 addresses the retry properly instead of weakening the signal.
+
+**Make `paths` required on the committed arm.** Rejected: it would force the replay-resume branch to
+invent a value it cannot know, since that branch never runs the allowlist scan. *(An earlier draft
+also claimed "~38 consumers construct that arm". That number is the count of files REFERENCING
+`safeCommitAndPr`; only 12 sites across 7 files construct the committed arm, so the blast-radius
+claim was ~5x overstated. The rejection stands on the replay-resume leg alone.)*
 
 **Treat `paths === undefined` as "nothing committed".** Rejected: it false-REDs every replay-resume,
 i.e. it converts a correct run into a page. Undetermined and absent are different states and the

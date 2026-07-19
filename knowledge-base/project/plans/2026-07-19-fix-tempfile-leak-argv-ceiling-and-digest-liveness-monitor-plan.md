@@ -507,7 +507,7 @@ that fires on only one failure shape is insufficient.
 | 2 | `SOLEUR_CRON_PERSIST_SKIPPED cron=<n> reason=<red\|timeout>` | new `else` at `cron-community-monitor.ts:664` | The gate at `:651` has **no `else`** — RED/timeout skips silently |
 | 3 | `SOLEUR_COMMUNITY_DIGEST_FILE digest_path=<p> present=<0\|1>` | immediately before the gate at `cron-community-monitor.ts:651`, stat'ing `<spawnCwd>/knowledge-base/support/community/<date>-digest.md` | **This is the single signal that would have decided H9 on day one.** |
 | 4 | `SOLEUR_CRON_TIER2_DEFERRED cron=<n>` | `_cron-shared.ts:750` | Tier-2 defer is indistinguishable from a healthy run (the 06-09 → 06-12 blind spot) |
-| 5 | `SOLEUR_CRON_DEDUP_SKIP cron=<n> date=<d> matched_issue=<n>` | `cron-community-monitor.ts:438` | Dedup early-return is GREEN by construction with no spawn and no commit |
+| 5 | `SOLEUR_CRON_DEDUP_SKIP cron=<n> date=<d> digest_committed=<0|1>` | `cron-community-monitor.ts:438` | Dedup early-return is GREEN by construction with no spawn and no commit |
 
 *Marker 6 (`SOLEUR_CRON_SPAWN_TIMEOUT`) was cut at plan-review (code-simplicity, accepted):
 marker 2's `reason=timeout` already discriminates it, so it was a duplicate signal at a
@@ -802,7 +802,7 @@ failure_modes:
     detection: "SOLEUR_CRON_TIER2_DEFERRED"
     alert_route: "informational marker; distinguishes a deferred run from a healthy one"
   - mode: "dedup early-return skips the spawn while no digest is committed for the date"
-    detection: "SOLEUR_CRON_DEDUP_SKIP matched_issue=<n>"
+    detection: "SOLEUR_CRON_DEDUP_SKIP digest_committed=0"
     alert_route: "Sentry cron monitor RED when the issue exists but the digest is not committed (3.4)"
   - mode: "cron never fired"
     detection: "absent check-in past checkin_margin_minutes=60"
@@ -812,11 +812,11 @@ failure_modes:
     alert_route: "CI red on the PR"
 
 logs:
-  where: "Better Stack (SOLEUR_* stdout markers from the Inngest host); Sentry for exceptions"
+  where: "Better Stack (SOLEUR_* markers from the soleur-web-platform app container on the web host -- Vector Source 3 app_container_journald -> app_container_warn_filter, NOT the dedicated Inngest host, whose Source 1 filters PRIORITY 0-4 and would drop every pino line); Sentry for exceptions"
   retention: "per existing Better Stack plan retention"
 
 discoverability_test:
-  command: "bash scripts/betterstack-query.sh --grep SOLEUR_COMMUNITY_DIGEST_FILE --since 48h"
+  command: "doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --grep SOLEUR_COMMUNITY_DIGEST_FILE --since 48h"
   expected_output: "one SOLEUR_COMMUNITY_DIGEST_FILE record per daily fire with present=0|1 set,
                     paired with a SOLEUR_CRON_PERSIST_RESULT or SOLEUR_CRON_PERSIST_SKIPPED
                     record naming the outcome. Today this query returns ZERO rows for this cron

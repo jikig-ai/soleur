@@ -39,7 +39,23 @@ import pino from "pino";
 // shared-logger-only. The marker interfaces below MUST therefore stay free of
 // any user id, email, secret, or other regulated field. They carry only a cron
 // name, a status enum, counts, a PR/issue number, a date, and a repo-relative
-// path. Adding a regulated field here would silently bypass ADR-029.
+// path.
+//
+// Be precise about WHICH half is uncovered, or the next author guards the wrong
+// thing. Vector's `pii_scrub_structured` re-applies the ADR-029 HMAC rename in
+// VRL to EVERY line reaching Better Stack, so a top-level `userId` would still
+// be pseudonymized downstream. What is genuinely unprotected is the `redact`
+// KEY SET: a top-level `token`/`secret`/`password`/`authorization` ships
+// VERBATIM, because `pii_scrub_drop_userdata` drops only Art-9 content keys
+// (body/content/message/prompt/…) and `pii_scrub_string` — which holds the
+// credential and email regexes — SKIPS ENTIRELY once a line has parsed as JSON.
+// Credential-shaped KEYS are the real residual risk here, not user ids.
+//
+// Note also why `stage` is safe and must stay so: it is typed as a closed union
+// of 11 literals, and the UNBOUNDED `message` (raw git/GitHub error text, which
+// can embed remote URLs carrying credentials) is deliberately NOT forwarded to
+// the marker. Adding `message` here would be one line from shipping unredacted
+// upstream errors through a logger with no `redact`.
 const log = pino({ base: { component: "cron-liveness" } });
 
 // ---------------------------------------------------------------------------
@@ -148,10 +164,16 @@ export function emitCronTier2Deferred(m: CronTier2DeferredMarker): void {
 // The date-dedup early-return posts `ok:true` and returns before minting a token
 // or spawning. Observed failure shape: run 1 files a genuine digest issue but
 // fails to commit; run 2 dedups on that issue and posts GREEN with no artifact.
-// `digest_committed` and `deduped` are BOTH carried so one event distinguishes
-// "deduped on a genuinely-committed digest" (healthy) from "issue exists, digest
-// does not, so we proceeded to spawn" (the recovery path) — a single boolean
-// firing on only one shape would not.
+//
+// `digest_committed` alone carries the discrimination. An earlier draft also
+// carried a `deduped` boolean, on the theory that one event should distinguish
+// "deduped on a genuinely-committed digest" from "issue exists, digest does not".
+// It could not: the marker fires only inside `if (digestAlreadyExists)` and the
+// gate below it is `if (digestAlreadyExists && digestCommitted)`, so the dedup
+// decision IS `digest_committed` and the two fields were equal by construction.
+// A second field that cannot disagree with the first tells a Better Stack reader
+// they might — which is worse than not carrying it. What matters is the emit's
+// PLACEMENT (before the gate, so it fires on both outcomes), not a second field.
 
 export interface CronDedupSkipMarker {
   cron: string;
@@ -164,10 +186,12 @@ export interface CronDedupSkipMarker {
   // guard — all for a diagnostic nicety. Emitting `null` instead was rejected as
   // a LIE: this marker fires only when an issue DID match, so a null would read
   // as "none matched". `date` + the cron name already locate the issue by search.
-  /** 1 when the dated digest is committed on the default branch. */
+  /**
+   * 1 when the dated digest is committed on the default branch. This is ALSO
+   * the dedup decision: 1 => the run short-circuited, 0 => it fell through to
+   * spawn (the recovery path).
+   */
   digest_committed: 0 | 1;
-  /** 1 when the run actually short-circuited; 0 when it fell through to spawn. */
-  deduped: 0 | 1;
 }
 
 /** Emit one `SOLEUR_CRON_DEDUP_SKIP` WARN marker. NEVER throws. */

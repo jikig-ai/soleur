@@ -130,9 +130,12 @@ export type SafeCommitResult =
        * did land. A caller asserting "my artifact is in here" MUST treat
        * `undefined` as inconclusive and consult `resumed` before turning red.
        *
-       * Optional rather than required because ~38 handler + test consumers
-       * construct this arm; a required field would be a breaking change to all
-       * of them for a purely additive signal.
+       * Optional rather than required because the replay-resume branch cannot
+       * know a value to supply — it never runs the allowlist scan. (An earlier
+       * draft justified this with "~38 consumers construct this arm"; that
+       * number is the count of files REFERENCING safeCommitAndPr. Only 12 sites
+       * across 7 files construct the committed arm, so the blast-radius claim
+       * was ~5x overstated. The decision stands on the replay-resume leg.)
        */
       paths?: string[];
       /**

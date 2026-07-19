@@ -74,15 +74,25 @@ vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
 const heartbeatUrls = () =>
   fetchSpy.mock.calls.map((c) => String(c[0] as string));
 
-import { cronCommunityMonitorHandler } from "@/server/inngest/functions/cron-community-monitor";
+import {
+  cronCommunityMonitorHandler,
+  COMMUNITY_DIGEST_DIR,
+} from "@/server/inngest/functions/cron-community-monitor";
 import { DeployInProgressError } from "@/server/inngest/functions/_cron-shared";
 
-function makeStep() {
+/**
+ * `throwOn` makes the named step reject, which is the only seam for simulating a
+ * throw at a specific point in the handler body — the steps in the window
+ * between verify-output and the persistence gate call module-local functions
+ * (`readCollectorStatus`) that no `vi.mock` of a sibling module can intercept.
+ */
+function makeStep(throwOn?: string) {
   const executed: string[] = [];
   const step = {
     executed,
     run: vi.fn(async (name: string, cb: () => Promise<unknown>) => {
       executed.push(name);
+      if (name === throwOn) throw new Error(`simulated failure in ${name}`);
       return cb();
     }),
   };
@@ -121,11 +131,16 @@ const okSpawn = {
 // `status !== "committed"` → livenessOk=false → RED, failing every happy-path
 // test here for a fixture reason rather than a real one.
 //
-// Mirrors COMMUNITY_DIGEST_DIR in cron-community-monitor.ts. Computed at CALL
-// time (not at beforeEach time) so the date matches the handler's own
-// `runStartedAt.slice(0,10)` from the same run rather than an earlier tick.
-const digestPathForToday = () =>
-  `knowledge-base/support/community/${new Date().toISOString().slice(0, 10)}-digest.md`;
+// The clock is FROZEN (see beforeEach) rather than read live. The handler derives
+// its digest path from `runStartedAt.slice(0,10)`; deriving the fixture's from a
+// second, later `new Date()` made the two disagree across a UTC midnight boundary
+// — a real (if rare) RED flake, reproduced by review. The sibling dedup suite
+// already pins its clock this way; this suite was the inconsistent one.
+const FROZEN = new Date("2026-06-30T12:00:00.000Z");
+const TODAY = FROZEN.toISOString().slice(0, 10);
+// Mirrors COMMUNITY_DIGEST_DIR, imported from the handler so a rename cannot
+// silently desync the fixture from the value under test.
+const DIGEST_PATH = `${COMMUNITY_DIGEST_DIR}${TODAY}-digest.md`;
 
 /** A union-valid "committed" result whose `paths` includes today's digest. */
 const committedWithDigest = () => ({
@@ -134,10 +149,15 @@ const committedWithDigest = () => ({
   branch: "cron/community-monitor",
   fileCount: 1,
   deletionCount: 0,
-  paths: [digestPathForToday()],
+  paths: [DIGEST_PATH],
 });
 
 beforeEach(() => {
+  // `toFake: ["Date"]` only — setTimeout stays real so the heartbeat retry
+  // backoff and call-count assertions are unaffected (this suite's fetch always
+  // resolves 202). Mirrors the dedup suite.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(FROZEN);
   setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: "/tmp/x", spawnCwd: "/tmp/x/repo" });
   spawnClaudeEvalSpy.mockResolvedValue(okSpawn);
   resolveOutputAwareOkSpy.mockResolvedValue(true);
@@ -153,6 +173,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
@@ -181,24 +202,48 @@ describe("cron-community-monitor — throw-path heartbeat (#5728)", () => {
     expect(reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "handler-body-threw")).toBe(true);
   });
 
-  it("non-final throw runs NO heartbeat step and rethrows (Inngest retries; no memoized stale signal)", async () => {
+  // CONTRACT CHANGE (#6714, ADR-126). Both tests below previously encoded the
+  // #5728 behavior: a non-final throw rethrew for an Inngest retry, and a
+  // trailing persistence throw on an output-present run stayed GREEN. Both are
+  // now RED-and-terminal, deliberately.
+  //
+  // The retry was never capable of recovery. `setup-workspace` runs inside
+  // step.run (memoized), and the handler's `finally` tears down ephemeralRoot
+  // unconditionally — so a replay reads back a path that has already been
+  // rm -rf'd, and safeCommitAndPr hits its `workspace-lost` guard, which
+  // comments a misleading "PR withheld" + runbook pointer onto the operator's
+  // issue. `retryEligible: false` at the finalize call drops that useless
+  // replay, which is what lets livenessOk be honestly fail-closed.
+  it("a non-final no-output throw posts ONE terminal error and does not rethrow", async () => {
     spawnClaudeEvalSpy.mockRejectedValue(new Error("transient blip"));
     const step = makeStep();
-    await expect(invoke(step, 0, 2)).rejects.toThrow();
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(step.executed).not.toContain("sentry-heartbeat");
-    expect(step.executed).not.toContain("ensure-audit-issue");
+
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    // The honest terminal signal now includes the FAILED audit issue, which the
+    // old rethrow-and-retry path deferred to a second attempt that could not
+    // have succeeded.
+    expect(step.executed).toContain("ensure-audit-issue");
   });
 
-  it("a trailing safe-commit-pr throw on an OUTPUT-PRESENT run stays GREEN (one ok, persistence failure self-reports)", async () => {
+  it("a trailing safe-commit-pr throw turns the monitor RED (was GREEN pre-#6714)", async () => {
+    // This was the "output-present run with a trailing persistence throw stays
+    // GREEN" contract. It is a GREEN-with-no-artifact path by construction: the
+    // issue landed, the commit did not, and the operator saw green. Under the
+    // fail-closed default livenessOk is never set true, so the run reddens.
     resolveOutputAwareOkSpy.mockResolvedValue(true);
     safeCommitAndPrSpy.mockRejectedValue(new Error("git push failed"));
     const step = makeStep();
+
     const res = await invoke(step, 0, 2);
-    expect(res).toEqual({ ok: true });
+
+    expect(res).toEqual({ ok: false });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(heartbeatUrls()[0]).toContain("?status=ok"); // NOT error — digest exists
-    // the trailing persistence throw self-reports via the body catch
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+    // still self-reports the underlying persistence failure
     expect(reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "handler-body-threw")).toBe(true);
   });
 
@@ -272,6 +317,52 @@ describe("cron-community-monitor — digest liveness (#6714)", () => {
     expect(heartbeatUrls()[0]).toContain("?status=error");
   });
 
+  it("today's digest among SEVERAL committed files stays GREEN (membership, not position)", async () => {
+    // V1 — every other fixture here carries a single-element `paths`, under which
+    // `paths.includes(digestPath)` and `paths[0] === digestPath` are
+    // indistinguishable. The allowlist is the whole community directory, so the
+    // agent can legitimately land other files beside the digest and the digest
+    // need not be first. Without this fixture, narrowing the production check to
+    // a positional compare passes the whole suite.
+    safeCommitAndPrSpy.mockResolvedValue({
+      status: "committed" as const,
+      prNumber: 4242,
+      branch: "cron/community-monitor",
+      fileCount: 3,
+      deletionCount: 0,
+      paths: [
+        `${COMMUNITY_DIGEST_DIR}README.md`,
+        `${COMMUNITY_DIGEST_DIR}platform-notes.md`,
+        DIGEST_PATH,
+      ],
+    });
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: true });
+    expect(heartbeatUrls()[0]).toContain("?status=ok");
+  });
+
+  it("a STALE digest from a prior date turns the monitor RED (the date anchor)", async () => {
+    // V2 — the date anchor is the entire point of #6714, and nothing pinned it at
+    // the liveness gate. Relaxing the production check to "some path ends in
+    // -digest.md" passed every other test: a stale digest kept the monitor GREEN,
+    // which is GREEN-with-no-CURRENT-artifact — the exact failure being closed.
+    safeCommitAndPrSpy.mockResolvedValue({
+      status: "committed" as const,
+      prNumber: 4242,
+      branch: "cron/community-monitor",
+      fileCount: 1,
+      deletionCount: 0,
+      paths: [`${COMMUNITY_DIGEST_DIR}2026-06-29-digest.md`], // yesterday
+    });
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+  });
+
   it("a replay-resume with UNDETERMINED paths stays GREEN (R21 carve-out)", async () => {
     // On the replay-resume branch the allowlist scan never runs, so `paths` is
     // undefined — "NOT DETERMINED", never "nothing committed". Reading undefined
@@ -309,6 +400,40 @@ describe("cron-community-monitor — digest liveness (#6714)", () => {
 
     expect(res).toEqual({ ok: false });
     expect(heartbeatUrls()[0]).toContain("?status=error");
+  });
+
+  it("a throw BEFORE the persistence gate turns the monitor RED and does NOT retry", async () => {
+    // THE EXPLOIT the fail-open default left open. The issue lands
+    // (heartbeatOk=true), the agent writes the digest, then a step between
+    // verify-output and the persistence gate throws. Under the old
+    // initialised-true default: threw=true, heartbeatOk=true, livenessOk never
+    // falsified → `failed = threw && !heartbeatOk` = FALSE → no retry → terminal
+    // GREEN with nothing committed, on the FIRST attempt. Verbatim the shape
+    // ADR-126 forbids.
+    //
+    // Simulated at the collector-status step, which sits in exactly that window.
+    const step = makeStep("verify-collector-status");
+    const res = await invoke(step, 0, 2); // attempt 0 of 2 — a retry IS available
+
+    expect(res).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+    // and it did NOT retry: a replay reads back an ephemeralRoot the `finally`
+    // already deleted, so it could only produce a misleading workspace-lost
+    // comment on the operator's issue. One terminal heartbeat, not a rethrow.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(safeCommitAndPrSpy).not.toHaveBeenCalled();
+  });
+
+  it("the happy path still posts GREEN under the fail-closed default", async () => {
+    // Guards the inversion against over-reddening. A fail-closed livenessOk is
+    // only correct if the positive arm genuinely fires on a healthy run — if it
+    // did not, every run would go RED and the monitor would be useless in the
+    // opposite direction.
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: true });
+    expect(heartbeatUrls()[0]).toContain("?status=ok");
   });
 
   it("a timed-out spawn whose issue landed turns the monitor RED (the no-else gate)", async () => {

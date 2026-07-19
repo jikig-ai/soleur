@@ -255,7 +255,10 @@ CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log
 // Single source of truth for the persistence allowlist, the workspace stat
 // (marker 3) and the committed-artifact liveness assertion — a drifted copy in
 // any one of the three would silently un-assert the artifact.
-const COMMUNITY_DIGEST_DIR = "knowledge-base/support/community/";
+// EXPORTED so the three test suites that assert against the dated digest path
+// derive it from this value instead of hardcoding a mirror. The comment below
+// calls this the single source of truth; before the export it was not one.
+export const COMMUNITY_DIGEST_DIR = "knowledge-base/support/community/";
 const COMMUNITY_MONITOR_ALLOWED_PATHS = [COMMUNITY_DIGEST_DIR] as const;
 
 // --- Collector-status sidecar (#6695) ---------------------------------------
@@ -472,7 +475,6 @@ export async function cronCommunityMonitorHandler({
       cron: "cron-community-monitor",
       date: runStartedAt.slice(0, 10),
       digest_committed: digestCommitted ? 1 : 0,
-      deduped: digestCommitted ? 1 : 0,
     });
   }
   if (digestAlreadyExists && digestCommitted) {
@@ -554,16 +556,25 @@ export async function cronCommunityMonitorHandler({
     // land"; livenessOk answers "did the digest the operator actually consumes
     // get COMMITTED". Applied to heartbeatOk below, alongside collectorSignalRed.
     //
-    // Initialised TRUE = "no evidence the artifact is missing", and falsified
-    // only by an OBSERVED negative. This is load-bearing, not laziness: if a
-    // trailing step throws, the body catch runs and this stays true, so the
-    // posted colour is unchanged from today's deliberate "output-present run
-    // with a trailing persistence throw stays GREEN" contract. Flipping it false
-    // on the throw path would make finalizeOutputAwareHeartbeat compute
-    // `failed = threw && !heartbeatOk` → true on a non-final attempt → retry,
-    // and the Inngest replay would re-run against a spawnCwd the `finally`
-    // already deleted, firing a FALSE workspace-lost Sentry event.
-    let livenessOk = true;
+    // Initialised FALSE and set true ONLY by an observed positive. An earlier
+    // draft initialised it true ("no evidence the artifact is missing") and
+    // justified that by the retry hazard below. Review falsified both halves:
+    //
+    //  1. It left the bug class REACHABLE. A throw anywhere between
+    //     verify-output and the persistence gate leaves heartbeatOk true and
+    //     livenessOk never falsified → `failed = threw && !heartbeatOk` is
+    //     false → NO retry → terminal GREEN with nothing committed, on the
+    //     FIRST attempt. That is verbatim the shape ADR-126 forbids.
+    //  2. The retry hazard it claimed to avoid ALREADY EXISTS on main via the
+    //     pre-existing `if (collectorSignalRed) heartbeatOk = false` below, so
+    //     the fail-open default bought nothing main had not already lost.
+    //
+    // A liveness signal that votes GREEN on an UNOBSERVED artifact is precisely
+    // the defect this file exists to close, so fail-closed is the only
+    // defensible default. The retry consequence is handled properly by
+    // `retryEligible: false` at the finalize call rather than by weakening the
+    // signal — see the four-arm table below and ADR-126.
+    let livenessOk = false;
     let threw = false;
     let spawnResult: SpawnResult | null = null;
     try {
@@ -739,23 +750,27 @@ export async function cronCommunityMonitorHandler({
             logger,
           }),
         );
-        // The four-arm liveness table. `paths === undefined` is NOT "nothing
-        // committed" (R21) — on a replay-resume the scan never runs, so the
-        // `resumed` arm below keeps a legitimate landed artifact GREEN.
-        if (commitResult.status !== "committed") {
-          // "no-changes" and "failed" are BOTH red: the operator's artifact did
-          // not land either way. They stay distinguishable in marker 1.
-          livenessOk = false;
-        } else if (commitResult.paths === undefined) {
-          // NOT DETERMINED (R21), never "nothing committed". But ONLY the
-          // replay-resume branch has a legitimate reason to leave it
-          // undetermined — it is the one path that skips the allowlist scan.
-          // Any OTHER undetermined shape means the result contract drifted, and
-          // voting GREEN on an unknown is exactly the failure this issue is
-          // about, so it stays red.
-          livenessOk = commitResult.resumed === true;
-        } else if (!commitResult.paths.includes(digestPath)) {
-          livenessOk = false; // committed something, but not today's digest.
+        // The liveness table. `livenessOk` is FALSE until proven otherwise, so
+        // only the two arms below can turn the run GREEN; everything else —
+        // "no-changes", "failed", committed-without-today's-digest, and every
+        // throw that never reaches here — falls through still RED.
+        if (commitResult.status === "committed") {
+          if (commitResult.paths?.includes(digestPath)) {
+            // THE POSITIVE: today's digest is demonstrably in the commit.
+            // `includes` is membership, not position — the allowlist covers the
+            // whole community directory, so the agent may land other files
+            // beside the digest and the digest need not be first.
+            livenessOk = true;
+          } else if (commitResult.paths === undefined) {
+            // NOT DETERMINED (R21), never "nothing committed". But ONLY the
+            // replay-resume branch has a legitimate reason to leave it
+            // undetermined — it is the one path that skips the allowlist scan.
+            // Any OTHER undetermined shape means the result contract drifted,
+            // and voting GREEN on an unknown is exactly the failure this issue
+            // is about, so it stays red.
+            livenessOk = commitResult.resumed === true;
+          }
+          // else: committed something, but not today's digest → stays RED.
         }
       } else {
         // #6714 marker 2 — this gate had NO else, so a RED or timed-out run
@@ -836,6 +851,16 @@ export async function cronCommunityMonitorHandler({
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: "cron-community-monitor",
       logger,
+      // #6714 — a replay CANNOT recover any failure inside the guarded body:
+      // `setup-workspace` is memoized, so attempt 1 reads back an ephemeralRoot
+      // the `finally` below already deleted, and safeCommitAndPr then hits its
+      // `workspace-lost` guard unconditionally — which comments a misleading
+      // "PR withheld" + runbook pointer onto the operator's issue. This is what
+      // lets livenessOk be honestly fail-closed without buying that useless
+      // replay. Scoped precisely: throws BEFORE the try (token mint,
+      // setup-workspace itself) are unaffected and still retry into a fresh
+      // workspace, and DeployInProgressError still rethrows bare.
+      retryEligible: false,
       onBeforeHeartbeat: heartbeatOk
         ? undefined
         : async () => {

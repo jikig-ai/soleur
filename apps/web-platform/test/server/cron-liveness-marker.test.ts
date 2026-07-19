@@ -76,7 +76,6 @@ const MARKERS = [
       cron: "cron-community-monitor",
       date: "2026-07-19",
       digest_committed: 1 as const,
-      deduped: 1 as const,
     },
     msg: "cron dedup skip",
   },
@@ -109,14 +108,39 @@ describe("cron-liveness-marker — per-marker contract (#6714 AC25/AC26)", () =>
     },
   );
 
-  it.each(MARKERS)("$name emits via warn, never info/debug", ({ emit, payload }) => {
-    // The level is the whole reason these are reachable. Vector's
-    // app_container_warn_filter ships only pino level >= 40 to Better Stack, so
-    // an info-level marker never leaves the host and the signal is invisible in
-    // exactly the incident it exists for. The mocked logger exposes ONLY `warn`,
-    // so any other level would throw here rather than silently downgrade.
-    expect(() => (emit as (m: unknown) => void)(payload)).not.toThrow();
-    expect(warnMock).toHaveBeenCalledTimes(1);
+  // A third `it.each` asserting "emits via warn, never info/debug" was removed as
+  // strictly subsumed: the field-set block above already asserts
+  // toHaveBeenCalledTimes(1), so a downgrade to log.info fails THERE on a 0 count
+  // before a dedicated level test could run. (My mutation run showed "2 failed"
+  // for an info downgrade; I read that as two tests earning their keep when it
+  // actually meant one was redundant.) The level contract is now stated
+  // explicitly by the mock shape assertion below instead of resting on the
+  // accident that the mocked logger happens to expose only `warn`.
+  it("the module calls ONLY log.warn — never info/debug/error", () => {
+    // Stated as a contract rather than inferred from a deliberately-thin mock, so
+    // a future faithful-mock refactor cannot silently void it. Levels below 40
+    // are dropped by Vector's app_container_warn_filter and never reach Better
+    // Stack — the marker would be invisible in exactly the incident it exists for.
+    const levels = { warn: warnMock, info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+    pinoFactory.mockReturnValueOnce(levels as never);
+    for (const { emit, payload } of MARKERS) {
+      (emit as (m: unknown) => void)(payload);
+    }
+    expect(warnMock).toHaveBeenCalledTimes(MARKERS.length);
+    expect(levels.info).not.toHaveBeenCalled();
+    expect(levels.debug).not.toHaveBeenCalled();
+    expect(levels.error).not.toHaveBeenCalled();
+  });
+
+  it("the MARKERS table covers EVERY emitter the module exports", async () => {
+    // V4 — the table's comment claimed a new marker without a row would be
+    // "visible as a missing row". It was not: nothing quantified over the
+    // module's exports, and review proved it by appending a sixth emitter that
+    // logged at info, had no fail-open wrapper, and carried a user_email on a
+    // pino instance with no ADR-029 pseudonymizer — 16/16 still passed.
+    const mod = await import("@/server/cron-liveness-marker");
+    const exportedEmitters = Object.keys(mod).filter((k) => k.startsWith("emit"));
+    expect(exportedEmitters).toHaveLength(MARKERS.length);
   });
 });
 

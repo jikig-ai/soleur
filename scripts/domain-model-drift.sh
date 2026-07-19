@@ -40,7 +40,12 @@ DISCLAIMER="Best-effort structural extraction from migrations/RLS/types; NOT a s
 # `drift` run while the trap looked correct. Allocate in the caller; pass paths in.
 _TMPFILES=()
 _cleanup_tmpfiles() { [[ ${#_TMPFILES[@]} -gt 0 ]] && rm -f "${_TMPFILES[@]}"; return 0; }
-trap _cleanup_tmpfiles EXIT
+# INT/TERM as well as EXIT: bash does not run an EXIT trap for an uncaught
+# SIGINT/SIGTERM in a non-interactive script, so Ctrl-C or a CI job kill would
+# otherwise leak the spool files. Contents are non-sensitive by construction (the
+# secret scan runs BEFORE any spool write) and mode is 0600, so this is disk
+# hygiene rather than disclosure — but the leak is free to close.
+trap _cleanup_tmpfiles EXIT INT TERM
 
 # Allocate the two extract spool files in main-shell scope (see the invariant above).
 SPOOL_FACTS=""

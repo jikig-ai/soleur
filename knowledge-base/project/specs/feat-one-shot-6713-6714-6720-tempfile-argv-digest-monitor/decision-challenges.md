@@ -10,20 +10,33 @@ Recorded headless (one-shot pipeline; no operator prompt per the plan-review hea
 **Recommendation:** cut. `TIER2_DEFERRED_CRONS` is empty at HEAD (`_cron-shared.ts:736`), so the
 marker instruments a condition that is not currently occurring — "textbook just-in-case."
 
-**Decision: retained.** Two reasons the plan judges decisive:
-1. The Tier-2 defer path **posts a GREEN Sentry check-in while committing nothing**
-   (`_cron-shared.ts:745-750`). That is exactly the class ADR-126 generalizes — "every GREEN
-   check-in path must be enumerated." Cutting the marker would contradict the ADR the same PR
-   writes.
-2. It is not hypothetical: the defer accounted for **4 of the 41 gap days** (H3, CONFIRMED), and
-   it was indistinguishable from a healthy run at the time — which is why those 4 days took
-   archaeology to explain.
+**Decision: retained — but the original reasoning was wrong and is corrected here.**
 
-Cost is one emit line at one site. The reviewer's YAGNI logic is sound in general; the plan
-judges the ADR-consistency argument to outweigh it here.
+Post-implementation review (`code-simplicity-reviewer`, independently) dismantled both arguments the
+plan originally gave, and it was right to:
 
-**If the operator disagrees:** cut marker 4 and its Test Scenario 11, and add a sentence to
-ADR-126 noting the defer path is a known-unenumerated GREEN check-in.
+1. ~~"Cutting it would contradict the ADR the same PR writes."~~ **Circular.** ADR-126 is an artifact
+   of *this* diff; a document being authored here cannot be an external constraint on it. The tell
+   was that the ADR clause had to carry a defensive parenthetical apologising that the instrumented
+   condition does not occur.
+2. ~~"It accounted for 4 of the 41 gap days."~~ **Backward-looking and irrelevant.** Those days were
+   2026-06-09 → 06-12; the marker did not exist then and would not have helped. It helps only if
+   `TIER2_DEFERRED_CRONS` is ever repopulated — a hypothetical future, which is precisely what YAGNI
+   targets. The branch is genuinely unreachable at HEAD.
+
+**The argument that actually holds** (which the plan did not make): `deferIfTier2Cron` is not
+speculative code this PR introduced. It is a live exported function called from 8 cohort handlers,
+which a *prior* decision deliberately retained as a defensive no-op. YAGNI polices speculative paths
+you add; it does not police instrumentation on a branch someone already decided to keep. Cutting the
+marker while keeping the branch is the internally inconsistent position — it says the branch is
+worth preserving against a future repopulation but the one line telling you it fired is not. And if
+the set is repopulated, whoever does it will not remember to add the marker, so the blind spot costs
+archaeology a second time.
+
+Cost is one emit line at one site.
+
+**If the operator disagrees:** cut marker 4 and its Test Scenario 11, and add a sentence to ADR-126
+noting the defer path is a known-unenumerated GREEN check-in.
 
 ## Accepted without challenge
 
