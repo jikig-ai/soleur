@@ -179,6 +179,39 @@ cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
 # loop and yield NO tag -- hard-failing that fixture's exact-set equality.
 LOG_TAG="inngest-heartbeat"
 #
+# --- #6617b: dark-arm rate limiter ---------------------------------------------------------
+# Reachable ONLY from the dark arm rendered below (the live co-located host's render deletes
+# that arm entirely, so on that host this function is defined and never called). It exists as a
+# function rather than inline in the sed replacement because the replacement is a single
+# `s|...|...|` expression with \n escapes -- readable logic does not survive in there.
+#
+# WHY rate-limit rather than emit once: the dark arm fires every 60s and each fire ships a row
+# through Source 4 (no PRIORITY filter) -- ~1,440 rows/day of an unchanging message, against a
+# ~25k/day quota. But "emit once per boot" or "emit only on transition" would make a DEAD
+# pusher and a healthy deliberately-dark one produce the identical observation: nothing. That
+# is the #6617 failure exactly, and ADR-117 names it -- a monitor that "goes silent exactly
+# when someone ships a probe". Hourly keeps the positive control at ~1.7% of the row cost.
+#
+# FAILS OPEN, deliberately: if the stamp cannot be read or written (RuntimeDirectory missing,
+# disk full) this returns 0 and the marker still ships. The degraded mode is then today's row
+# volume -- loud and visible -- rather than a silently disarmed liveness signal. Quota is
+# recoverable; a blind host is what this whole change exists to end.
+dark_arm_emit_due() {
+  # Override exists for the test harness, which must supply a writable stamp path; production
+  # takes the default, which inngest-heartbeat.service provisions via RuntimeDirectory=.
+  _stamp="${INNGEST_HEARTBEAT_DARK_STAMP:-/run/inngest-heartbeat/dark.stamp}"
+  _interval=${INNGEST_HEARTBEAT_DARK_INTERVAL:-3600}
+  _now="$(date +%s 2>/dev/null || true)"
+  # No usable clock -> emit. Never let a broken read suppress the marker.
+  case "$_now" in '' | *[!0-9]*) return 0 ;; esac
+  _last="$(cat "$_stamp" 2>/dev/null || true)"
+  # A truncated/garbage stamp reads as "never emitted", not as "emitted just now".
+  case "$_last" in '' | *[!0-9]*) _last=0 ;; esac
+  [ "$(( _now - _last ))" -ge "$_interval" ] || return 1
+  printf '%s' "$_now" > "$_stamp" 2>/dev/null || true
+  return 0
+}
+#
 # @@DARK_ARM@@ -- substituted at RENDER time by inngest-bootstrap.sh (see the render block
 # just below): the skip branch on the dedicated host, EMPTY on the co-located web host.
 #
@@ -225,8 +258,12 @@ chmod 0755 "$HEARTBEAT_SCRIPT"
 # also rewrites the sentinel's own mention inside the comment above, corrupting the script --
 # caught by the sh -n leg of the render test.
 if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
-  sed -i 's|^@@DARK_ARM@@$|if [ -z "$INNGEST_HEARTBEAT_URL" ]; then\n  logger -t "$LOG_TAG" "url_present=no — no heartbeat URL provisioned; skipping ping"\n  exit 0\nfi|' "$HEARTBEAT_SCRIPT"
-  log "inngest-heartbeat: dark arm RENDERED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — an absent URL skips the ping and logs why"
+  # #6617b: the logger call is now gated on dark_arm_emit_due (hourly), NOT on any state
+  # transition -- see that function. `exit 0` stays OUTSIDE the gate: the storm fix from #6536
+  # is that an absent URL must never reach curl, and that is independent of whether this
+  # particular fire is the one that logs.
+  sed -i 's|^@@DARK_ARM@@$|if [ -z "$INNGEST_HEARTBEAT_URL" ]; then\n  if dark_arm_emit_due; then\n    logger -t "$LOG_TAG" "url_present=no — no heartbeat URL provisioned; skipping ping (hourly rate-limited, #6617b)"\n  fi\n  exit 0\nfi|' "$HEARTBEAT_SCRIPT"
+  log "inngest-heartbeat: dark arm RENDERED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — an absent URL skips the ping and logs why, hourly"
 else
   sed -i '/^@@DARK_ARM@@$/d' "$HEARTBEAT_SCRIPT"
   log "inngest-heartbeat: dark arm OMITTED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — live pusher; an absent URL stays loud (curl rc=2)"
@@ -286,6 +323,17 @@ EnvironmentFile=/etc/default/inngest-server
 # the host's boot, not a deploy): this unit has failed since its very first fire.
 # Do NOT remove without moving DOPPLER_CONFIG_DIR off the shared /tmp.
 PrivateTmp=true
+# #6617b: the dark arm's hourly rate limiter keeps its last-emit stamp at
+# /run/inngest-heartbeat/dark.stamp. This unit runs User=deploy and /run is root-owned 0755,
+# so deploy cannot create anything there directly -- without RuntimeDirectory= the stamp write
+# fails on every fire, the limiter never engages, and the quota fix is a silent no-op.
+# PrivateTmp=true above does NOT cover /run, so this is the right mechanism (and /tmp is
+# already spoken for by the DOPPLER_CONFIG_DIR collision documented above).
+# RuntimeDirectoryPreserve=yes is equally load-bearing: this is a Type=oneshot, so systemd
+# tears the directory down the moment ExecStart returns -- taking the stamp with it and
+# restoring the 60s storm this rate limit removes.
+RuntimeDirectory=inngest-heartbeat
+RuntimeDirectoryPreserve=yes
 # #6536: WITHOUT this, systemd derives SYSLOG_IDENTIFIER from the ExecStart basename ->
 # "doppler", which matches ZERO vector.toml sources. The unit's own stderr (doppler's AND
 # curl's) then never leaves the host: the issue's _SYSTEMD_UNIT='inngest-heartbeat.service'

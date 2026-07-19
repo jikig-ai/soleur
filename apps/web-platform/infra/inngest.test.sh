@@ -344,6 +344,73 @@ assert "AC5b/1 dedicated render + URL absent -> exactly one url_present=no row (
 assert "AC5b/1 dedicated render + URL absent -> curl never ran (no curl error on output)" \
   "! printf '%s' \"\$DED_ABSENT_OUT\" | grep -qi 'curl'"
 
+# --- #6617b (A6): the dark arm is RATE-LIMITED, not ELIMINATED (plan CF-9) ---
+# The dark arm fires every 60s and each fire ships a row through Source 4 (which applies no
+# PRIORITY filter): ~1,440 rows/day against a ~25k/day Better Stack quota, for a message whose
+# content never changes. The obvious fix -- emit once per boot, or only on transition -- is the
+# one ADR-117 forbids: it deletes the positive control, after which a dead pusher and a healthy
+# quiet one are the same observation (no rows), which is #6617 itself. So: a LOW PERIODIC
+# CADENCE. ~24 rows/day, and the host still says "I am alive and deliberately dark" every hour.
+#
+# Asserted BEHAVIOURALLY against the real rendered script, not by grepping for a constant: the
+# property is "repeat fires inside the window emit once AND the window reopens", and only
+# executing it can distinguish rate-limiting from suppression.
+echo ""
+echo "--- #6617b (A6): dark-arm hourly rate limit (CF-9 positive control preserved) ---"
+A6_STAMP="$PING_TMP/a6-run/dark.stamp"
+mkdir -p "$(dirname "$A6_STAMP")"
+A6_LOG="$PING_TMP/logger-a6.txt"
+: > "$A6_LOG"
+rm -f "$A6_STAMP"
+a6_fire() {
+  PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$A6_LOG" INNGEST_HEARTBEAT_URL="" \
+    INNGEST_HEARTBEAT_DARK_STAMP="$A6_STAMP" sh "$DEDICATED_PING" >/dev/null 2>&1
+}
+a6_fire && A6_RC1=0 || A6_RC1=$?
+a6_fire; a6_fire; a6_fire
+A6_BURST_ROWS=$(grep -c 'url_present=no' "$A6_LOG" || true)
+assert "A6 dark arm still exits 0 (the #6536 storm fix is intact)" \
+  "[[ '$A6_RC1' -eq 0 ]]"
+assert "A6 four fires inside one window emit exactly ONE row (was one per 60s fire)" \
+  "[[ '$A6_BURST_ROWS' -eq 1 ]]"
+# CF-9 -- the load-bearing half. Age the stamp past the interval: the marker MUST return. An
+# assertion that only checks suppression passes just as happily against "emit once, ever",
+# which is the elimination this rejects.
+printf '%s' "$(( $(date +%s) - 7200 ))" > "$A6_STAMP"
+a6_fire
+A6_AFTER_ROWS=$(grep -c 'url_present=no' "$A6_LOG" || true)
+assert "A6/CF-9 an aged stamp RE-EMITS (rate-limited, not transition-only/once-per-boot)" \
+  "[[ '$A6_AFTER_ROWS' -eq 2 ]]"
+# The window is an hour, not an arbitrary number: pin it so a later edit to 24h (which would
+# pass both behavioural legs above) has to justify itself.
+assert "A6 the dark-arm window is 3600s (hourly)" \
+  "grep -qE '^[[:space:]]*_interval=\\\$\\{INNGEST_HEARTBEAT_DARK_INTERVAL:-3600\\}$' '$PING_BODY'"
+# The stamp lives in a systemd-managed RuntimeDirectory: the unit runs User=deploy, and /run
+# itself is root-owned 0755, so without this the write fails every fire, the rate limit
+# silently never engages, and the quota fix is a no-op that tests-in-CI cannot see (the test
+# above supplies its own writable dir). RuntimeDirectoryPreserve=yes is equally load-bearing:
+# this is a ONESHOT, so systemd would otherwise delete the directory -- and the stamp -- the
+# instant it exits, on every single fire.
+assert "A6 heartbeat unit declares RuntimeDirectory=inngest-heartbeat (deploy cannot write bare /run)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^RuntimeDirectory=inngest-heartbeat$'"
+assert "A6 heartbeat unit declares RuntimeDirectoryPreserve=yes (a oneshot would else drop the stamp each fire)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^RuntimeDirectoryPreserve=yes$'"
+
+# --- #6617b task 1.6.2: this change provisions NO heartbeat URL ---
+# Writing the URL early would put TWO pushers on one monitor -- the co-located web host (live
+# today) and the dedicated host -- which is precisely the dual-pusher state #6552 exists to
+# prevent. Provisioning it is `op=arm`'s job at cutover (G4), and nothing before it.
+# Anchored on ASSIGNMENT constructs, not the bare name: this repo is full of prose and
+# `name = "INNGEST_HEARTBEAT_URL"` definitions that a token grep would match.
+assert "1.6.2 no INNGEST_HEARTBEAT_URL is assigned a literal URL anywhere in infra/" \
+  "! grep -rIE '^[^#]*INNGEST_HEARTBEAT_URL[[:space:]]*=[[:space:]]*\"?https?://' '$SCRIPT_DIR'"
+# `--exclude=*.test.sh`: zot-liveness-heartbeat.test.sh carries a SYNTHETIC
+# `.../heartbeat/synthetic-liveness` fixture (cq-test-fixtures-synthesized-only). Excluding
+# the suites keeps this assertion pointed at DELIVERED artifacts -- cloud-init, units,
+# bootstrap, HCL -- which is where a baked URL would actually arm a second pusher.
+assert "1.6.2 no Better Stack heartbeat URL literal is baked into a delivered infra artifact" \
+  "! grep -rIE --exclude='*.test.sh' 'uptime\\.betterstack\\.com/api/v[0-9]+/heartbeat/[A-Za-z0-9]' '$SCRIPT_DIR'"
+
 # AC5b case 3 -- web render, URL absent: NO dark arm, so the absent URL reaches curl and
 # exits 2, loudly. This is what makes CPO P1-1 STRUCTURALLY unreachable rather than gated:
 # the live co-located pusher's script has no exit-0 branch to reach at all.
