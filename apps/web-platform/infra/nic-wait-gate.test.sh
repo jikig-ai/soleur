@@ -404,6 +404,7 @@ assert "the apply workflow is present at the expected path" "[[ -f '$WF_APPLY' ]
 # lifecycle block — server.tf carries ~20 ignore_changes across ~20 resources, so a line-start
 # regex alone is satisfied by any of them (verified: adding a decoy elsewhere and removing the
 # real one left this green).
+# shellcheck disable=SC2034  # consumed inside the eval'd assert below, invisible to shellcheck
 WEB_BLOCK=$(awk '/^resource "hcloud_server" "web"/{f=1} f{print} f&&/^}/{exit}' "$TF")
 assert "hcloud_server.web block extracts non-empty" "[[ -n \"\$WEB_BLOCK\" ]]"
 assert "hcloud_server.web ITSELF pins ignore_changes = [user_data, ...] (edit is inert for the running host)" \
@@ -461,6 +462,29 @@ assert "control: the web-2 carve-out is still live (found $WEB2_SEEN); if 0, del
 ANY_TARGET_N=$(grep -choE -- "-target=" "$WF_APPLY" | paste -sd+ - | bc 2>/dev/null || grep -cE -- "-target=" "$WF_APPLY" || true)
 assert "positive control: the -target= extractor finds targets in the apply workflow (found $ANY_TARGET_N)" \
   "[[ '$ANY_TARGET_N' -ge 1 ]]"
+
+# ── The emit must have somewhere to go ───────────────────────────────────────────────
+# The gate's whole value is converting a silent pathological case into an observed one, so an
+# emitted stage that matches no alert filter is not a smaller version of that — it is the
+# silence it was built to end. soleur-boot-emit sends ONE shared message for every stage, so
+# these events also raise no new-issue notification on their own; the tagged_event filter is
+# the only thing that routes them. Pinned here rather than trusted, in emit/route lockstep:
+# either both move or the suite reds.
+echo ""
+echo "--- observability: the non-ready stages are actually routed ---"
+ALERTS="$DIR/sentry/issue-alerts.tf"
+assert "the Sentry issue-alert config is present" "[[ -f '$ALERTS' ]]"
+for stage in private_nic_timeout private_nic_probe_fault; do
+  # Anchor on the HCL attribute construct, not the bare stage name: these names also appear in
+  # this file's own explanatory comment, so a bare grep would match the prose that describes the
+  # rule rather than the rule, and would keep passing after the filter was deleted.
+  n=$(grep -cE "^[[:space:]]*value[[:space:]]*=[[:space:]]*\"${stage}\"[[:space:]]*$" "$ALERTS" || true)
+  assert "stage '$stage' is a live tagged_event filter value, not just prose (found $n)" \
+    "[[ '$n' -ge 1 ]]"
+  # And the emitter must actually emit it — a filter naming a stage nothing emits is a dark rule.
+  m=$(grep -cF "soleur-boot-emit $stage" "$BOOT" || true)
+  assert "stage '$stage' is emitted by soleur-host-bootstrap.sh (found $m)" "[[ '$m' -ge 1 ]]"
+done
 
 echo ""
 echo "$pass passed, $fail failed"

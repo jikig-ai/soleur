@@ -333,12 +333,22 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > **4 — The runtime arm (`ExecStartPre`) is REJECTED for now, not tracked as an open item.**
 > `ExecStartPre` is the shape that best matches I1's runtime wording, and is the long-term
 > preference on record from engineering review. It is rejected here on three grounds:
-> - **It carries the abort risk the gate exists to remove.** During `ExecStartPre` the unit
->   sits in `activating`, so `systemctl is-active --quiet` returns false for the whole wait —
->   consuming the pre-existing `cloudflared_ready` gate's ~60 s budget and detonating its live
->   `|| exit 1`. Since `runcmd` is one shell and once-per-instance, that abort costs the
->   instance cloudflared, the webhook, the monitors and the egress firewall permanently.
->   Placing the wait *before* the install makes the two budgets sequential instead of nested.
+> - **It puts the wait inside systemd's start timeout.** `TimeoutStartSec` (default 90 s) spans
+>   `ExecStartPre` **plus** `ExecStart` combined, so a 60 s NIC wait leaves ~30 s for the rest of
+>   activation, and any later increase to the wait silently converts this gate into a
+>   `systemctl start` failure. The runcmd shape has no such ceiling.
+>
+>   > **[Corrected at review.]** This bullet originally argued that an `ExecStartPre` would
+>   > consume the downstream `cloudflared_ready` gate's ~60 s budget and detonate its live
+>   > `|| exit 1`, because the unit sits in `activating` and `systemctl is-active --quiet`
+>   > returns false throughout. The premise is true; **the conclusion does not follow.**
+>   > `cloudflared service install` runs `systemctl start`, which blocks on the job by default,
+>   > so a long `ExecStartPre` delays the *install command itself* — `soleur-wait-ready` does
+>   > not begin polling until activation has already resolved, and gets its full budget. The two
+>   > budgets are sequential under either shape. The rejection stands on the two grounds below,
+>   > each independently sufficient, plus the `TimeoutStartSec` ceiling above, which is the
+>   > argument the original bullet should have made. Recorded rather than silently rewritten
+>   > because the wrong version was load-bearing in a commit message and a code comment.
 > - **Making it safe means re-tuning a fail-closed gate** currently pinned by an exact-string
 >   test assertion — coupling a low-risk fix to a change that can dark the sole origin.
 > - **Its value is smaller than assumed.** cloudflared dials its ingress origin **per
@@ -361,13 +371,29 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > dispatch and cannot be reused generally — it requires a pinned `@sha256` ref, while the
 > default `var.image_name` is the mutable `:latest`.
 >
-> For the routine merge apply this is a non-issue, and the reason is structural rather than
-> lucky: `hcloud_server.web["web-1"]` appears in **no** `-target=` of the auto-apply workflow,
-> so that workflow cannot create or replace it. (Verified against the target list itself —
-> that workflow's header has carried a false claim before.) The residual exposure is an
-> operator-driven fresh create or `-replace` of web-1, which has no preflight. Both structural
-> facts are now pinned by a test so the argument fails loudly if either changes; closing the
-> residual needs a preflight that works against a mutable tag, tracked in #6712.
+> For the routine merge apply this is a non-issue, but **not** for the reason an earlier draft
+> of this amendment gave. That draft argued: *"`hcloud_server.web["web-1"]` appears in no
+> `-target=`, so the workflow cannot create or replace it."* **The inference is invalid.**
+> `-target` is transitive at the resource level — the workflow states this in its own comments —
+> so `cloudflare_record.app` and `hcloud_firewall_attachment.web` each pull the whole
+> `hcloud_server.web` for_each map into the plan graph. web-1 **is** target-reachable there.
+>
+> What actually prevents a birth is the **`host_creates > 0` HALT tripwire** in the `apply` job,
+> added by #6416 — whose error text reads *"the host would come up with no private-net IP … the
+> #6416 failure mode"*, i.e. precisely the condition this NIC gate mitigates. The two facts now
+> pinned by test are therefore: `hcloud_server.web` carries `ignore_changes = [user_data, …]`
+> (the edit is inert for the running host), and that tripwire exists and parses its counter from
+> the plan. The superseded assertion would have stayed green with the tripwire deleted.
+>
+> **A pre-existing gap this surfaced, not closed here:** the `warm_standby` job `-target`s
+> `hcloud_server_network.web["web-1"]` — transitively reaching `hcloud_server.web` — while its
+> guard set is `resource_deletes` / `nested_deletes` / `reboot_updates` with **no**
+> `host_creates` check. That path could birth a host on a new bootstrap hash with no coherence
+> preflight. It belongs to the apply workflow's guard set rather than to this gate.
+>
+> The residual exposure remains an operator-driven fresh create or `-replace` of web-1, which
+> has no preflight; closing it needs a preflight that works against a mutable tag, tracked in
+> #6712.
 >
 > **Related follow-ups filed with this amendment:** #6710 (whether a never-ready cloudflared
 > should abort the boot at all — the adjacent `cloudflared_ready` fail-closed gate, grandfathered
