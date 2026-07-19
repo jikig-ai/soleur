@@ -1506,6 +1506,16 @@ function emitTerminal(
     // `probe_only_complete` is the first benign terminal to actually execute in
     // production, which is how the new step markers surfaced this on the first
     // post-deploy fire.
+    //
+    // #6703 UPDATE — this is now DEFENCE IN DEPTH, not the only guard.
+    // bound-logger.ts › boundLoggerMiddleware binds every function-valued
+    // property of ctx.logger for all Inngest functions, so extraction is safe
+    // fleet-wide and the warning above no longer describes a live crash here.
+    // Keep it anyway: the middleware fails OPEN (if ctx.logger is ever absent
+    // or unwrappable the raw logger passes through), and a frozen logger keeps
+    // its unbound methods because the Proxy invariant forbids substitution — so
+    // calling the method rather than extracting it remains the correct habit at
+    // the site level. Do not "simplify" this back into an extraction.
     const msg = `reissue outcome=${result.outcome}`;
     const payload = { fn: FN_ID, ...extra };
     if (result.outcome === "config_missing") {
