@@ -177,6 +177,74 @@ emit_drift() {
   else echo "[workspaces-cutover] DRIFT reason=$1 (workspaces_luks_emit unavailable — Sentry channel not reached; workflow-run log is the only sink)" >&2; fi
 }
 
+# --- C1 byte-identity verify (itemized rsync) + its diagnostic emitter --------
+# Two defects were fixed here vs the pre-#6604-followup inline form (run 29676585829/29676994044 —
+# the first real cutover safe-aborted on "1 difference" that the operator could not identify):
+#   (1) the verify rsync's stdout (the `%i %n` itemize lines) and stderr (rsync warnings/errors) are
+#       captured SEPARATELY, so a benign stderr warning ("file has vanished") can no longer inflate
+#       the diff count (the old `>"$vlog" 2>&1` folded them into one file);
+#   (2) on a non-zero count OR a verify-rsync error the offending path(s)+code(s) are LOGGED — to the
+#       run log AND Better Stack (via the already-allowlisted `luks-monitor` tag, op=
+#       workspaces-luks-verify-diff) — BEFORE the temp files are removed and BEFORE die(), so the next
+#       operator-approved real cutover self-reports exactly which path aborted it, no SSH.
+# The gate is UNCHANGED: still 0 real content diffs, still fail-closed if the verify rsync errors, and
+# NO itemize code is narrowed away (attribute-only .f..t/.d..t diffs still count).
+VERIFY_DIFF_CAP="${WORKSPACES_VERIFY_DIFF_CAP:-40}"
+LUKS_LOG_TAG="${WORKSPACES_LUKS_LOG_TAG:-luks-monitor}"   # real assignment; own-line `logger -t "$LUKS_LOG_TAG"` below (emitter-extractor convention, luks-monitor.sh shape)
+# Strip CR/LF + non-printable so a crafted workspace filename cannot inject a spurious log/marker line.
+_vscrub() { printf '%s' "${1:-}" | tr -d '\r\n' | tr -cd '[:print:]'; }
+
+# Emit the itemized-diff diagnostic. MUST run BEFORE any rm of $vout/$verr and BEFORE die (defect 2
+# is precisely "rm before log"). $1=count(int) $2=vout-file $3=verr-file $4=reason
+emit_verify_diff() {
+  local count="$1" vout="$2" reason="$4" k=0 line icode path summary row
+  log "C1 verify FAILED ($reason): ${count} difference(s). Itemized (capped ${VERIFY_DIFF_CAP}):"
+  # Human view -> run log.
+  head -n "$VERIFY_DIFF_CAP" "$vout" 2>/dev/null | while IFS= read -r line; do log "  DIFF ${line}"; done
+  [ "$count" -gt "$VERIFY_DIFF_CAP" ] 2>/dev/null && log "  … +$((count - VERIFY_DIFF_CAP)) more"
+  # Structured marker -> Better Stack (logger -t luks-monitor) AND run log (echo). Summary first.
+  summary="SOLEUR_WORKSPACES_LUKS_VERIFY_DIFF feature=workspaces-luks op=workspaces-luks-verify-diff count=${count} reason=$(_vscrub "$reason") host=$(hostname 2>/dev/null)"
+  echo "$summary"; logger -t "$LUKS_LOG_TAG" -- "$summary" 2>/dev/null || true
+  # Per-diff rows (one path each, path LAST so a spaced path is captured whole).
+  while IFS= read -r line && [ "$k" -lt "$VERIFY_DIFF_CAP" ]; do
+    icode="$(_vscrub "${line%% *}")"; path="$(_vscrub "${line#* }")"
+    row="SOLEUR_WORKSPACES_LUKS_VERIFY_DIFF feature=workspaces-luks op=workspaces-luks-verify-diff count=${count} idx=${k} icode=${icode} path=${path}"
+    echo "$row"; logger -t "$LUKS_LOG_TAG" -- "$row" 2>/dev/null || true
+    k=$((k + 1))
+  done < "$vout"
+  # Sentry page via the existing at-rest channel (op=workspaces-luks-drift), discriminating reason.
+  emit_drift "workspaces_luks_${reason}"
+}
+
+# The C1 verify. Call DIRECTLY (never in $(…)/a pipe/a subshell) in the main body so die's `exit 1`
+# reaches the EXIT trap -> rollback (a subshell would swallow it). $1=src $2=dst
+verify_byte_identity() {
+  local src="$1" dst="$2" vout verr rc diff_n err_tail
+  vout="$(mktemp)"; verr="$(mktemp)"
+  # --dry-run HARDCODED (one typo from `rsync --delete` wiping live data). Itemize -> stdout; rsync's
+  # own warnings/errors -> stderr. Separate streams: stderr can no longer inflate the diff count.
+  rsync -aHAXi --numeric-ids --checksum --delete --dry-run --out-format='%i %n' "$src"/ "$dst"/ >"$vout" 2>"$verr"
+  rc=$?
+  # Fail-closed PRESERVED: a verify rsync that ERRORS cannot certify DST==SRC. Capture its stderr tail
+  # into a var BEFORE rm (die "$(tail "$verr")" after rm would print nothing).
+  if [ "$rc" -ne 0 ]; then
+    err_tail="$(tail -n 3 "$verr" 2>/dev/null | tr '\n' ' ')"
+    emit_verify_diff "$rc" "$vout" "$verr" verify_rsync_error   # log BEFORE rm + die
+    rm -f "$vout" "$verr"
+    die "the itemized verify rsync itself FAILED (rc=${rc}) to run to completion — cannot certify DST==SRC (C1); stderr: ${err_tail}"
+  fi
+  # Count ONLY itemize-shaped stdout lines: first char in <>ch.* , second in fdLDS (attribute-only
+  # lines start '.', e.g. .f..t…/.d..t…), plus the `*deleting` form. Counts EVERY code (no narrowing);
+  # blank lines and any stray stderr are excluded by construction.
+  diff_n="$(grep -cE '^(\*deleting|[<>ch.*][fdLDS])' "$vout" || true)"
+  if [ "$diff_n" -ne 0 ]; then
+    emit_verify_diff "$diff_n" "$vout" "$verr" verify_byte_diff  # log BEFORE rm + die
+    rm -f "$vout" "$verr"
+    die "itemized rsync verify found ${diff_n} difference(s) — DST is not byte-identical to SRC (C1); see the SOLEUR_WORKSPACES_LUKS_VERIFY_DIFF marker for the offending path(s)+code(s)"
+  fi
+  rm -f "$vout" "$verr"
+}
+
 # Host-local rollback: unmount the mapper, remount the RETAINED plaintext volume at $MOUNT, restart.
 # Reconcilable, not a one-way door (C13): the LUKS volume RETAINS post-cutover writes.
 # shellcheck disable=SC2317  # invoked indirectly via the EXIT trap / ROLLBACK mode
@@ -209,6 +277,13 @@ cleanup() {
   fi
   exit "$rc"
 }
+
+# Sourced-detection guard: when this file is `source`d (the workspaces-luks-verify.test.sh harness
+# obtains verify_byte_identity/emit_verify_diff without running the cutover), return HERE — after all
+# functions the test needs are defined, but BEFORE `trap cleanup EXIT` and the main body. An executed
+# run (`bash …/workspaces-cutover.sh`, BASH_SOURCE[0]==$0) evaluates this as a no-op and proceeds.
+if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then return 0 2>/dev/null || true; fi
+
 trap cleanup EXIT
 
 # Arm a host-local dead-man timer: if the orchestrator does not clear it within DEAD_MAN_MIN,
@@ -405,15 +480,13 @@ if [ "$DRY_RUN" != "1" ]; then
   # round-trip, so a silently-cached verify is a false-green (data-integrity P1).
   sync
   echo 3 > /proc/sys/vm/drop_caches || die "drop_caches failed — cannot trust the dm-crypt round-trip verify; aborting (C1)"
-  # C1 — the ITEMIZED verify (the false-green fix): MUST be 0. --dry-run hardcoded (one typo from
-  # wiping). Capture the verify-rsync EXIT explicitly: a verify that ERRORS emits no stdout, so
-  # `grep -c .` would return 0 and false-green a failed verify. Run to a temp file, gate on rc first.
-  vlog="$(mktemp)"
-  if ! rsync -aHAXi --numeric-ids --checksum --delete --dry-run --out-format='%i %n' "$MOUNT"/ "$STAGING"/ > "$vlog" 2>&1; then
-    rm -f "$vlog"; die "the itemized verify rsync itself FAILED to run to completion — cannot certify DST==SRC (C1)"
-  fi
-  DIFF_N="$(grep -c . "$vlog" || true)"; rm -f "$vlog"
-  [ "$DIFF_N" -eq 0 ] || die "itemized rsync verify found $DIFF_N difference(s) — DST is not byte-identical to SRC (C1)"
+  # C1 — the ITEMIZED verify (the false-green fix): MUST be 0 real content diffs, fail-closed on a
+  # verify-rsync error. verify_byte_identity captures the verify rsync's stdout/stderr SEPARATELY,
+  # counts only itemize-shaped stdout lines (stderr can no longer inflate it), and LOGS the offending
+  # path(s)+code(s) — run log + Better Stack (SOLEUR_WORKSPACES_LUKS_VERIFY_DIFF) — BEFORE it dies, so
+  # the next real cutover self-reports what aborted it. Call it DIRECTLY (never in $(…)/a subshell) so
+  # die's exit 1 reaches the EXIT trap -> rollback.
+  verify_byte_identity "$MOUNT" "$STAGING"
   # Byte assert with apparent-size (never df/du -sb — LUKS steals a header, geometry differs). Require
   # both sides non-empty + numeric, else a `du` failure on both (path typo, missing dir) yields ""=""
   # and passes vacuously.
