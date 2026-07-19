@@ -662,6 +662,24 @@ v2 *reduces* data volume versus v1 by cutting pagination.
   correct for a daily cadence. Worth its own issue; D4b at least makes the resulting window honest.
 - `github discussions` — not reported as failing, and its `2>&1` is load-bearing. Untouched.
 
+## Work-Phase Corrections (implementation findings)
+
+Six plan claims did not survive contact with the code. Recorded here because the
+plan is authoritative for *intent*, never for facts.
+
+| Plan claim | What execution showed | Resolution |
+|---|---|---|
+| **H3/D6:** an exit-0 error body renders a plausible `new_stargazers_count: 0`, "indistinguishable from a quiet day" | **Wrong.** Verified directly: `$stargazers[]` over an object iterates its *values*, so `select(.starred_at >= $since)` indexes a **string** and jq hard-errors (`Cannot index string with "starred_at"`, exit 5). The script already failed loudly; no fabricated `0` was reachable by this path | D6 kept, rationale corrected: its value is a **named cause** (`GITHUB_COLLECTOR_CAUSE=`) instead of an opaque jq indexing error — diagnosability, not closing a fabrication hole. Test 3's first two assertions pass pre-fix and are documented as forward guards; only the cause assertion was RED |
+| **AC2:** `grep -c -- '--slurpfile'` → 5 | Returned **6**. The sixth match was the plan-mandated explanatory comment naming the flag — the exact trap task 4.8 raised for the other two literals, which I then walked into with the third | Comment reworded AND the assertion anchored (`^[[:space:]]*--slurpfile`), matching its own `--argjson` half. Both now return 5 |
+| **AC3 counter-assertion:** `grep -c '>/dev/null 2>&1'` → **2** | A whole-file count false-fails a *correct* implementation: `check_array_response` and the repo-metadata shape check legitimately add the idiom | Scoped to the function it is about: `awk '/^validate_gh\(\)/,/^}/' \| grep -c '>/dev/null 2>&1'` → 2. Same "fixed total false-fails" reasoning the plan already applied to AC2 |
+| **D2:** warn when a fetch returns exactly `per_page` items | Fires on **every live run**. The `pulls` endpoint deliberately over-fetches a fixed page and filters by date client-side, so a full raw page is its steady state (100 on every run against this repo) | Cap measured **post-filter** for `pulls` only, where a full page really does mean the window is saturated. A detector that cries wolf daily is worse than none — the same argument the plan makes for D5b's honest arm. Guarded by a dedicated negative test |
+| **AC9:** every case verified to fail against pre-fix code | Test 4 (multi-tempfile cleanup) **cannot** be RED pre-fix — the pre-fix commands create no tempfiles, so cleanup passes trivially | Documented in-file as a forward guard and covered by mutation instead: splitting the single trap into one-per-file turns it RED (M5) |
+| **AC14:** both arms of the fabrication detector are tested | Both honest-path fixtures were **digit-free**, so the bare "contains a number?" check returned false on its own and the honest-failure exemption was never exercised. Mutation-testing showed deleting the exemption kept the suite GREEN | Fixtures now carry digits (`collection failed: HTTP 404`) — realistic, since real causes carry status codes. All 5 handler mutations now RED |
+
+**Mutation results.** 8/8 script mutations and 5/5 handler mutations turn the
+suite RED, including the two that were silently vacuous until the fixtures were
+fixed. No assertion in this PR is known-vacuous.
+
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder
