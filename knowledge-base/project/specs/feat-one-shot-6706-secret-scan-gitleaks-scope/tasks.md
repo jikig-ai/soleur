@@ -26,7 +26,13 @@ Lane: `cross-domain`
 - [x] 0.5 Confirm the current tree is already clean — proves the fix must target *history*:
       `./gitleaks dir apps/web-platform/infra/vector.toml --no-banner --exit-code 1 -c .gitleaks.toml` → **0**.
 
-## Phase 1 — Allowlist the placeholder DSN shape
+## Phase 1 — Allowlist the placeholder DSN shape ❌ REVERTED (do not implement)
+
+> **Implemented, measured to silence real credentials, then reverted in full.**
+> `.gitleaks.toml` is byte-identical to `origin/main` in the shipped PR. The ticked
+> boxes below are the record of what was done before the revert — they are history,
+> not shipped state. Do not re-implement this phase without first reading #6723,
+> which is the pre-existing gap the widening would have broadened. Measurements: §S1.
 
 - [x] 1.1 In `.gitleaks.toml`, inside the **existing** `[[rules.allowlists]]` block under
       `id = "database-url-with-password"`, extend **only** the password-side alternation to
@@ -107,6 +113,19 @@ Lane: `cross-domain`
 ---
 
 ## AC verification record (task 6.3)
+
+> **Read §S1 first — Phase 1 was reverted after this record was written.**
+> **Superseded (tested the reverted widening, not shipped behaviour):** AC1, AC2,
+> AC3 and the extra-fixture row, AC5 (trivially true now — the file is untouched),
+> AC6 (no `.gitleaks.toml` change exists to ack, so the `Allowlist-Widened-By`
+> trailer no longer applies). Retained verbatim as the record of what was verified
+> at the time.
+> **Still live, re-verified post-revert:** AC4, AC7, AC8, AC9, AC10, AC11, AC12 —
+> though AC10/AC12's content changed with the revert (the runbook documents a
+> known-gap rather than a widening; the PR body links #6723 as well as #6721).
+> The replacement guard for rule behaviour is the T6/T7/T8 suite (§T1), which pins
+> the allowlist as it exists on `main` rather than as this PR proposed to change it.
+
 
 Pinned gitleaks v8.24.2 (sha256 verified against the workflow's literal). All gitleaks
 assertions gate on **exit codes**; no invocation whose rc is asserted is piped; all
