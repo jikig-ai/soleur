@@ -375,6 +375,14 @@ jobs:
       - name: Run fresh-boot observability probe guard (#6090 baked-DSN + readiness gates + H3)
         run: bash apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
 
+      # LOAD-BEARING registration (this job lists each infra test explicitly — no glob, so an
+      # unregistered suite is ZERO coverage, silently and greenly). This suite is behavioural,
+      # not grep-only: it extracts the baked soleur-wait-nic helper and EXECUTES it against a
+      # stub `ip`, which is the only way the fail-open contract (always exit 0 — CF-5) and the
+      # probe-fault-is-not-absence arm (#6415) are actually asserted rather than string-matched.
+      - name: Run first-boot NIC-wait gate guard (#6441 ADR-114 I1 defer-not-abort + 3 arms)
+        run: bash apps/web-platform/infra/nic-wait-gate.test.sh
+
       - name: Run /workspaces LUKS drift observability guard (#6604 emit tags/DSN + daily probe + gate)
         run: bash apps/web-platform/infra/luks-monitor.test.sh
 

@@ -285,6 +285,27 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
       expect(buildEnvBody).not.toMatch(/\.\.\.process\.env/);
     });
 
+    // #6695 — the effective spawn env is now composed at the CALL SITE, which
+    // wraps buildSpawnEnv to add the collector-status dir. That composition sits
+    // outside `buildEnvBody`, so every assertion above is blind to it: a future
+    // `...buildSpawnEnv(token), ...process.env` inside the wrapper would pass
+    // the whole negative class with a green suite. Assert against the WHOLE
+    // file — this module has no legitimate use of that spread anywhere.
+    it("no ...process.env spread anywhere in the module (incl. the call-site wrapper)", () => {
+      expect(SUT_SOURCE).not.toMatch(/\.\.\.process\.env/);
+    });
+
+    it("the call-site wrapper adds only the non-secret collector-status dir", () => {
+      const wrapper = SUT_SOURCE.match(
+        /buildSpawnEnv:\s*\(token: string\) => \(\{[\s\S]*?\}\),/,
+      )?.[0];
+      expect(wrapper).toBeDefined();
+      // Exactly one added key, and it is a path — not a credential.
+      expect(wrapper).toContain("...buildSpawnEnv(token)");
+      expect(wrapper).toContain("SOLEUR_COLLECTOR_STATUS_DIR");
+      expect(wrapper).not.toMatch(/process\.env\./);
+    });
+
     // Read-only invariant: the community monitor forwards X read credentials
     // (X_API_KEY etc., positive class above) but MUST NOT forward X_ALLOW_POST
     // — the posting defense-in-depth guard (x-community.sh:611). Only the
