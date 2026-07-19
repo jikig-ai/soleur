@@ -20,10 +20,15 @@ no registration needed.
 ## 1. Setup / Preconditions
 
 - [ ] 1.1 Confirm `jq --version` ≥ 1.6 supports `--slurpfile` (verified `jq-1.8.1` at plan time).
-- [ ] 1.2 **Read `resolveOutputAwareOk` end-to-end** in `cron-community-monitor.ts` and confirm
-      it can express "digest contains a failure marker" (plan D5). This is the plan's one
-      unread mechanism. If it cannot, fall back to an explicit `reportSilentFallback` call in
-      the persistence step and record the deviation.
+- [ ] 1.2 ~~Read `resolveOutputAwareOk`.~~ **Resolved at deepen time — it CANNOT express the
+      condition.** `verifyScheduledIssueCreated` (`_cron-shared.ts`) requests only
+      `labels`/`since`/`sort`/`per_page` and returns `issues.some(i => updated_at >= sinceMs)`
+      — a presence check that never reads the issue body. Both the fabrication path and the
+      honest-failure path return GREEN through it. **D5 is now a collector-status sidecar
+      (§4c).** Instead confirm: (a) the handler can read a file from `spawnCwd` before
+      `teardownEphemeralWorkspace`; (b) the read is NOT placed behind
+      `if (heartbeatOk && !spawnResult.abortedByTimeout)` (the `safe-commit-pr` gate), or it is
+      unreachable on exactly the runs that matter.
 - [ ] 1.3 Re-establish the RED baseline: confirm `github activity 1` and `contributors 1` fail
       with "Argument list too long", and that the stargazer pipeline is poisonable by stderr.
 - [ ] 1.4 Confirm the five unbounded `--argjson` bindings and the single multi-line stargazer
@@ -34,9 +39,11 @@ no registration needed.
 - [ ] 2.1 Add `make_gh_api_stub` to `plugins/soleur/test/test-helpers.sh`. **Additive only** —
       the file is shared by ~21 suites. Existing `make_gh_stub` handles only `gh run list`
       and is unusable here.
-- [ ] 2.2 Stub must: dispatch on `$1 == "api"` by URL substring; handle `auth status` → exit 0;
-      support emitting stderr noise alongside valid stdout (for the RC2 case); support an
-      error-body mode (for the RC3/D6 case).
+- [ ] 2.2 Stub must dispatch on `$1 == "api"` by URL substring, handle `auth status` → exit 0,
+      and support **three modes**: (a) large valid payload (>131,072 B in one arg);
+      (b) valid stdout **plus stderr noise**; (c) **exit 0 with an error JSON body**
+      (`{"message":"Not Found"}`). Mode (c) is non-optional — it is the only way to test the
+      "plausible 0" path (H3), which is otherwise unverifiable.
 
 ## 3. RED — regression tests (`cq-write-failing-tests-before`)
 
@@ -44,14 +51,25 @@ Create `plugins/soleur/skills/community/test/github-community.test.sh`. Fixtures
 **synthesized**, never captured (`cq-test-fixtures-synthesized-only`). Set `TMPDIR` to a
 **private per-test directory** so cleanup assertions cannot false-fail on a shared `/tmp`.
 
-- [ ] 3.1 **Large payload (RC1).** Single JSON argument > **131,072 B** (`MAX_ARG_STRLEN`, not
-      `ARG_MAX`). Assert exit 0 and an exact item count. Fails today with E2BIG.
-      Trailing `assert_file_not_exists` on the private `TMPDIR` (covers D7).
+- [ ] 3.1 **Large payload (RC1) — parametric over ALL THREE commands / FIVE bindings**
+      (`issues`+`prs`, `commits`+`issues`, `stargazers`). Payload > **131,072 B** in one arg.
+      Assert exit 0 **and `count == (items|length)`** for each — NOT merely "non-empty JSON",
+      which passes on the defect. The silent shape is **partial** unwrapping (projection fixed,
+      `length` left as-is → `{"count":1,"items":[…all…]}` at exit 0, verified). One-binding
+      coverage misses e.g. `prs` wrong while `issues` right — a partially-correct digest that
+      looks exactly like a quiet day.
 - [ ] 3.2 **stderr noise on the stargazer path (RC2).** Valid JSON on stdout + noise on stderr.
       Assert `repo-stats` parses **and** the diagnostic still carries the cause (D3).
-      Fails today with `parse error`. Trailing cleanup assertion.
-- [ ] 3.3 **No fabricated stat (RC3/D6).** Error body → assert non-zero exit and that **no
-      numeric `stargazers_count`** is emitted.
+      Fails today with `parse error`.
+- [ ] 3.3 **Exit-0-with-error-body (RC3/D6/H3).** Stub mode (c): exit 0 + `{"message":"Not Found"}`.
+      Assert non-zero exit and that **no numeric `stargazers_count` / `new_stargazers_count`**
+      is emitted. Without this the "0 new stargazers" fabrication path stays open.
+- [ ] 3.4 **Multi-tempfile cleanup on a FAILURE path (D7/M1).** Exercise a two-tempfile command
+      (`activity` or `contributors`) with a forced mid-command failure; assert the private
+      `TMPDIR` is empty. A single-tempfile test cannot detect the trap-replacement leak.
+- [ ] 3.5 **Sidecar records (D5).** With `SOLEUR_COLLECTOR_STATUS_DIR` set, assert one JSONL
+      record with the real exit code for both a success and a failure run; with it unset,
+      assert nothing is written.
 - [ ] 3.4 Anchor every assertion on call-form / `^[[:space:]]*` (`cq-assert-anchor-not-bare-token`).
       Mutation-testing is deferred to 4.7 — there is no fix to break yet.
 
@@ -72,17 +90,47 @@ Create `plugins/soleur/skills/community/test/github-community.test.sh`. Fixtures
       captures that are the error diagnostic.
 - [ ] 4.5 (D2) Cap detection: when a fetch returns exactly `per_page` items, emit a truncation
       warning on stderr. ~3 lines. Not pagination.
-- [ ] 4.6 (D6) Shape assertion on `$repo_data` — `(.stargazers_count | type) == "number"`
-      before emit (precedent anchor `Shape validation BEFORE any` in `linkedin-community.sh`).
-- [ ] 4.7 (D7) `trap 'rm -f …' EXIT` on every tempfile, **including the existing
-      `cmd_fetch_interactions` leak** (`rm -f` on success paths only today).
-      **`EXIT`, never `RETURN`** — a `RETURN` trap does not fire on `exit`, so the `exit 1`
-      failure branches would leak the spool (per the 2026-06-18 learning).
+- [ ] 4.6 (D6) Shape assertion at **every fetch site**, not just `$repo_data`. Add
+      `check_array_response()` rejecting any non-array payload (precedent anchor
+      `Shape validation BEFORE any` in `linkedin-community.sh`). **Why it must be every site:**
+      a 404/403/410 body reaches jq as an object, `check_rate_limit` matches only `rate limit`,
+      and an unguarded `$stargazers` renders `new_stargazers_count: 0` — indistinguishable from
+      a quiet day. Keep the `(.stargazers_count | type) == "number"` check on `$repo_data`.
+- [ ] 4.7 (D7) **ONE** `trap 'rm -f "$a" "$b"' EXIT` listing every tempfile — **not one trap per
+      file.** EXIT traps are global and singular; a second `trap` REPLACES the first, silently
+      leaking all but the last on every run (verified: naive two-trap → 1 leaked; single trap →
+      0). Do **not** use a `_mktemp()` helper that appends to an array and returns via `$( )`
+      — the append is lost in the subshell (verified: array size 0, 2 leaked).
+      **`EXIT`, never `RETURN`** — `RETURN` does not fire on `exit`, leaking on the `exit 1`
+      branches (verified: RETURN leaked 1, EXIT leaked 0).
+      Fix the existing `cmd_fetch_interactions` leak (`rm -f` on success paths only) too.
 - [ ] 4.8 **Do not write the literal tokens `--argjson` or `2>&1` in any comment in this file.**
       AC2/AC3 grep the script body; a comment describing the old form false-fails them. Say
       "the old per-page argjson accumulation" instead. (Prior occurrence:
       `learnings/test-failures/2026-06-17-grep-assertion-over-script-body-false-matches-own-comments.md`.)
 - [ ] 4.9 Mutation-test the 3.x assertions: break each fix, confirm the test goes red.
+
+## 4c. Collector-status sidecar — the deterministic signal (v3, replaces old D5)
+
+Without this, the PR **relocates** the silent-fallback hole instead of closing it: a collector
+failure stays invisible to Sentry because `resolveOutputAwareOk` returns GREEN for both the
+fabrication and the honest-failure path (see 1.2).
+
+- [ ] 4c.1 In `github-community.sh`, add `_record_status()` appending one JSONL record per
+      dispatch (**success and failure**) to `$SOLEUR_COLLECTOR_STATUS_DIR/collector-status.jsonl`:
+      `{collector,command,exit,cause}`. No-op when the env var is unset.
+- [ ] 4c.2 Include `{"warn":"truncated_at_per_page"}` on the record for the D2 cap case —
+      **this is D2's only real consumer.** If 4c is descoped, cut D2 (task 4.5) and its
+      Observability entry with it; a stderr-only warning has no reader.
+- [ ] 4c.3 In the handler, read the sidecar from `spawnCwd` **before** teardown. Any record with
+      `exit != 0` → `reportSilentFallback` **and** force `heartbeatOk = false`.
+- [ ] 4c.4 (M4) Emit `reportSilentFallback` **unconditionally** on a non-zero record and set
+      `heartbeatOk` independently of `resolveOutputAwareOk`'s return — its `catch` branch
+      returns `spawnOk` (fail-open, #5139) and would otherwise mask the new signal.
+- [ ] 4c.5 (D5b) **Fabrication detector:** collector recorded `repo-stats exit != 0` AND the
+      digest contains a Repository Stats number → `reportSilentFallback` + heartbeat RED.
+      This is the *only* deterministic control on RC3 — the §5 prompt edits are a probability
+      shift, not enforcement. Must NOT fire on an honest `collection failed:` digest.
 
 ## 4b. Correct the institutional record (deepen-plan finding)
 
