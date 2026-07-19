@@ -218,7 +218,7 @@ cmd_activity() {
   # Post-filter count: see check_cap on why pulls is measured after the date filter.
   check_cap "$(jq -s --arg since "$since" 'add // [] | map(select(.updated_at >= $since)) | length' <"$prs_f" 2>/dev/null || echo 0)" pulls
 
-  # `--slurpfile x f` wraps the file's contents in an array, so a single-array
+  # The slurped binding wraps the file's contents in an array, so a single-array
   # body reads as [[...]] and a paginated body as [[...],[...]]. `add // []`
   # flattens both to one array, giving every binding in this file the same
   # dereference shape. Leaving `length` applied to the wrapper while fixing only
