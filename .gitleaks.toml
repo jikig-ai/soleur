@@ -309,10 +309,16 @@ tags = ["url", "database", "credential"]
   # SKILL.md` carrying a real credential was SILENCED without the anchor and is
   # DETECTED with it.
   #
-  # Scope cost: blinds exactly ONE file to exactly ONE rule. That file is skill
-  # prose, never a credential carrier. Compensating controls stay live —
-  # lint-fixture-content, GitHub push protection, CODEOWNERS on .gitleaks.toml,
-  # and every other rule still applies to it. Pinned by T10.
+  # Scope cost, stated honestly: this blinds exactly ONE file to exactly ONE
+  # rule, and there is NO compensating control for a real DSN in that file.
+  # Checked rather than assumed: lint-fixture-content's file-set regex in
+  # secret-scan.yml does not match this path; CODEOWNERS is a `* @deruelle`
+  # catch-all, so the /.gitleaks.toml line adds nothing for this file's
+  # CONTENT; and "every other rule still applies" is true but vacuous, since
+  # no other rule matches a bare postgres DSN — which is why this rule exists.
+  # The blind spot is unmitigated, not mitigated-in-depth. Accepted because the
+  # finding is frozen in history and a path predicate is the only remedy (see
+  # above), and the file is skill prose. Pinned by T10.
   paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/lib/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/project/learnings/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''', '''plugins/soleur/skills/.*/test/fixtures/.*\.md$''', '''^plugins/soleur/skills/review/SKILL\.md$''']
   # Allow placeholder URLs (USER:PASSWORD shapes) AND asterisk-redacted shapes
   # (postgres://user:***@HOST) — `\*+` branch per #3877 recognizes the canonical

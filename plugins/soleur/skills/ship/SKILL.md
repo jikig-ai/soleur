@@ -120,17 +120,33 @@ introduced** — refresh `origin/main` first, since the scoping is only as
 accurate as the cached ref:
 
 ```bash
-git fetch origin main >/dev/null 2>&1 || true
-git log origin/main..HEAD --name-only --format= -- todos/ 2>/dev/null \
-  | sort -u | xargs -r grep -l "code-review" 2>/dev/null | head -1 || true
+if ! git fetch origin main >/dev/null 2>&1; then
+  echo "origin/main is stale — Signals 1-2 are unreliable; use Signal 3 only" >&2
+else
+  git log origin/main..HEAD -G'code-review' --name-only --format= -- todos/ 2>/dev/null \
+    | sort -u | while read -r f; do
+        git show "HEAD:$f" 2>/dev/null | grep -q "code-review" && echo "$f"
+      done | head -1
+fi
 ```
 
 This was a repo-global `grep -rl "code-review" todos/`, which made the signal
 structurally unfailable (#6724): `todos/` is a tracked directory on main, so a
 single long-lived review todo anywhere in it satisfied Step 1 for every branch
-forever — including branches where review never ran. `xargs -r` is load-bearing:
-without it, `grep` reads stdin and hangs when the branch touched no todos, which
-is the common case.
+forever — including branches where review never ran.
+
+Three details are load-bearing, each closing a narrower version of the same
+vacuity (all verified during #6727's review):
+
+- **Do not `|| true` the fetch.** A stale `origin/main` widens
+  `origin/main..HEAD` to include commits already on main, so main's review
+  history counts as this branch's. The hooks discard both local signals in that
+  case; do the same here rather than proceeding on a stale ref.
+- **`-G'code-review'` matches the DIFF, not the working tree.** Listing paths
+  and grepping them reads whatever the current checkout contains, so a branch
+  that merely touches a pre-existing main-side todo inherits main's tag.
+- **The `git show HEAD:` check.** `-G` matches added *or removed* lines, so
+  deleting a completed todo would otherwise count as evidence.
 
 **Step 2: Check commit history for review evidence.**
 

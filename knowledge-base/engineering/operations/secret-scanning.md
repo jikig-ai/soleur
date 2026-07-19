@@ -71,7 +71,7 @@ introduced it — and, unlike a range scan, a fix at the tip genuinely clears th
 push:main advisory sweep — and by no blocking one. That split is deliberate; see
 "Why no BLOCKING range scan gets `-m`" below.
 
-`push:main` runs **two** invocations on purpose. Blocking *verdict* scope and scan
+`push:main` runs **three** invocations on purpose (blocking ancestry, full tree, advisory sweep). Blocking *verdict* scope and scan
 *breadth* are independent axes: the first decides whether `main`'s required check
 goes red (main's ancestry only — the #6706 fix), the second keeps full all-refs
 visibility as a `::warning` so a finding on a pushed branch that never opened a PR
@@ -663,8 +663,9 @@ If you are tempted to "simplify" a `-m` walk to `--cc`, don't. `--cc` emits patc
 bytes that visibly contain the secret and gitleaks detects **none** of it — its
 diff parser does not consume combined-diff `@@@` format. It is a gate that cannot
 fail, which is worse than no gate because it reads as coverage. Measured and
-pinned in `plugins/soleur/test/gitleaks-merge-commit.test.sh` T2; the workflow
-carries an assertion that no step ships `--cc` as a `log-opts` value.
+pinned in `plugins/soleur/test/gitleaks-merge-commit.test.sh` T2, which also
+asserts that no step ships `--cc` as a `log-opts` value. The workflow itself
+only documents the trap in a comment — the assertion lives in the test.
 
 ### The comment explaining a rule is itself scanned
 
