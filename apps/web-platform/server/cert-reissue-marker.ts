@@ -134,9 +134,13 @@ export interface CertReissueMarker {
   // almost no IPv4 fallback, so a surviving proxied AAAA defeats validation at
   // any window length (H-W4 / RI-1).
   resolve6Error?: string | null;
+  resolve4Error?: string | null;
   acmeApexStatus?: number | null;
   acmeWwwStatus?: number | null;
-  acmeGithubShaped?: boolean | null;
+  // Raw `Server` headers — the evidence behind the GitHub-shaped verdict, so a
+  // failed gate says WHAT answered rather than only that it was wrong.
+  acmeApexServer?: string | null;
+  acmeWwwServer?: string | null;
 
   // --- outcome ---
   outcome?: string | null;

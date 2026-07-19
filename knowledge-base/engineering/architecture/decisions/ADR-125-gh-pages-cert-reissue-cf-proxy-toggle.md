@@ -60,17 +60,33 @@ only, via `POST /api/internal/trigger-cron`; `retries: 1`; fn+account concurrenc
    "write", pages: "write" }, repositories: ["soleur"] })`). *(Amended: `PUT /pages` requires
    **BOTH** `administration:write` AND `pages:write` — proven empirically on the live installation,
    pages-only → 403, admin-only → 403, both → 204. GitHub's REST docs do not state this.)*
-3. **DNS-propagation gate (`step.run` + `step.sleep`, added #6698):** before polling, confirm from
-   **public resolvers** (1.1.1.1 / 8.8.8.8) that the flip actually propagated — apex A ⊆
-   `185.199.0.0/16`, **no AAAA**, and a post-flip ACME-shaped probe that answers GitHub-shaped
-   rather than Cloudflare-shaped. A poll that begins before propagation completes is
-   guaranteed-wasted window. An AAAA that survives the flip is **terminal, not retryable**: Let's
-   Encrypt prefers IPv6 and does not fall back from a proxied AAAA that answers successfully with
-   the wrong content, so no window length can succeed. Failure yields the non-benign
-   `dns_propagation_failed` outcome.
-4. **Poll (`step.sleep`):** `GET /pages` for `state ∈ {approved, issued}`. *(Amended #6698: the
-   gate's budget comes **out of** the poll's, not on top — see the window budget below, which
-   shortens the cert poll relative to the original "~15 min".)*
+3. **DNS-propagation gate (`step.run` + `step.sleep`, added #6698):** before polling, observe from
+   **public resolvers** (1.1.1.1 / 8.8.8.8) whether the flip has propagated — apex A ⊆
+   `185.199.0.0/16`, **no AAAA**, and a post-flip ACME probe whose `Server` header is GitHub's
+   rather than Cloudflare's.
+
+   **Only a CONFIRMED AAAA aborts.** Gate *exhaustion* does not: Cloudflare's proxied TTL is a
+   fixed, non-editable 300 s, so "not propagated yet" is an ordinary observation, and treating it
+   as terminal would make the paging `dns_propagation_failed` the **default** outcome of a
+   perfectly correct remediation. The gate budget is therefore sized past one full TTL rollover
+   (11 attempts × 30 s = 300 s), and on exhaustion the routine proceeds to the poll while emitting
+   an `unconfirmed` marker so a later `poll_timeout` is never misread as "DNS was known good".
+
+   A surviving AAAA is different in kind and IS terminal: Let's Encrypt prefers IPv6 and does not
+   fall back from a proxied AAAA that answers successfully with the wrong content, so no window
+   length can succeed and proceeding would burn a validation attempt on a guaranteed failure. That
+   case alone yields the non-benign `dns_propagation_failed`.
+
+   The gate reads **raw** observations (resolver answers, per-leg error codes, `Server` headers);
+   the verdict is a pure exported function, mirroring the existing
+   `gatherPreconditions` → `checkReissuePreconditions` split. An inconclusive lookup
+   (`ETIMEOUT`/`ESERVFAIL`, as distinct from `ENODATA`) is a `retry`, never a pass — collapsing
+   "could not ask" into "the answer is empty" would fail open on exactly the state being checked.
+4. **Poll (`step.sleep`):** `GET /pages` for `state ∈ {approved, issued}`, capturing the ENTIRE
+   `https_certificate` object per tick (`description` is the only in-band field that has ever
+   carried Let's Encrypt-side detail). *(Amended #6698: the gate's budget comes **out of** the
+   poll's, not on top — see the window budget below, which shortens the cert poll to 9 ticks from
+   the original "~15 min".)*
 5. **Restore:** an **unconditional final `step.run`** re-asserts the declared steady state
    (`proxied=true`, `cname=soleur.ai` — symmetric on both fields), **plus an `onFailure`
    lifecycle handler** that idempotently restores on any throw / retry-exhaustion. *(Amended #6698:
@@ -78,9 +94,15 @@ only, via `POST /api/internal/trigger-cron`; `retries: 1`; fn+account concurrenc
    skips restore" holds by construction — `onFailure` does not fire on a clean early `return`.)*
 
 **Total DNS-only window budget (amended #6698).** The public-TLS-outage window is
-`poll + CNAME_SETTLE_MS + gate`, **not** the poll alone — the original ADR budgeted only the poll,
-so the real window already overran by the 45 s settle. The exported `TOTAL_DNS_ONLY_WINDOW_MS`
-asserts the **sum** stays ≤ 15 min.
+`poll + CNAME_SETTLE_MS + gate + step IO`, **not** the poll alone — the original ADR budgeted only
+the poll, so the real window already overran by the 45 s settle. `TOTAL_DNS_ONLY_WINDOW_MS`
+**bounds** that sum at 14.75 min, reserving a nominal `STEP_IO_ALLOWANCE_MS` for the per-step IO
+(GitHub calls at `GITHUB_TIMEOUT_MS`, CF/DNS/ACME at `CF_TIMEOUT_MS`) that sleeps alone do not
+count. It is a budget, **not a runtime guarantee**: a pathological run where every call hits its
+timeout can still overrun, and the real backstop against an unbounded window is that restore runs
+on every exit. A wall-clock (`elapsed()`) break in the loops would NOT make it a guarantee — it
+would be a replay hazard, since Inngest re-executes the body on every resume and ADR-077 bans
+`Date.now()`-derived control flow there.
 
 **Probe-only mode (added #6698).** A probe fire performs the DNS flip, runs the propagation gate,
 and restores — **skipping the cname toggle and the poll entirely**, so it consumes no Let's Encrypt

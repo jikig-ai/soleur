@@ -137,30 +137,52 @@ export const MAX_DNS_ONLY_WINDOW_MS = 15 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
 const CNAME_SETTLE_MS = 45 * 1000; // between cname:null and re-set
 
-// Propagation gate (#6698). Cloudflare's TTL for proxied records is fixed at
-// 300 s, so a proxy-status flip takes ~5-10 min to reach recursive resolvers.
-// The gate measures that rather than assuming it: a poll that starts before
-// propagation completes is guaranteed-wasted window.
-export const DNS_GATE_MAX_ATTEMPTS = 5;
+// Propagation gate (#6698). Cloudflare's TTL for proxied records is FIXED at
+// 300 s and is not editable, so a proxy-status flip takes ~5-10 min to reach
+// recursive resolvers. The gate budget must therefore exceed one full TTL
+// rollover — a gate that gives up in 2 min would time out before the event it
+// waits for can occur, making "not propagated" the DEFAULT observation of a
+// perfectly correct remediation.
+export const DNS_GATE_MAX_ATTEMPTS = 11;
 const DNS_GATE_INTERVAL_MS = 30 * 1000;
 // The loop skips the trailing sleep, so the budget is (attempts-1)*interval.
 const DNS_GATE_BUDGET_MS = (DNS_GATE_MAX_ATTEMPTS - 1) * DNS_GATE_INTERVAL_MS;
 
+// ‼️ Sleeps are not the whole window. Each step also spends real IO time: a
+// `GET /pages` bounded by GITHUB_TIMEOUT_MS, CF PATCHes and DNS/ACME probes
+// bounded by CF_TIMEOUT_MS, plus an Inngest round-trip per step. Budgeting only
+// the sleeps is the same mistake this file already made once (the 45s settle
+// sat outside the old POLL_MAX_MS bound), so a nominal allowance is reserved
+// here. It is NOT a hard guarantee: a pathological run where every call hits
+// its timeout can still overrun, and the real backstop against an unbounded
+// window is that restore runs on every exit — not this arithmetic.
+const STEP_IO_ALLOWANCE_MS = 60 * 1000;
+
 // The gate's budget comes OUT of the poll's, not on top of it (#6698 Phase 2.6).
 const POLL_BUDGET_MS =
-  MAX_DNS_ONLY_WINDOW_MS - CNAME_SETTLE_MS - DNS_GATE_BUDGET_MS;
+  MAX_DNS_ONLY_WINDOW_MS -
+  CNAME_SETTLE_MS -
+  DNS_GATE_BUDGET_MS -
+  STEP_IO_ALLOWANCE_MS;
 // Fixed poll count for the replay-safe handler loop (deterministic across
-// resumes — NOT a wall-clock bound in the body). The loop skips the trailing
-// sleep, so the effective poll window is (MAX_POLLS-1)*POLL_INTERVAL_MS.
+// resumes — NOT a wall-clock bound in the body; see the gate loop for why a
+// wall-clock break in the body is a replay hazard). `+ 1` because N polls span
+// N-1 sleep intervals, so filling a budget B at interval I needs floor(B/I)+1
+// polls; dropping it silently shortens the window by one full interval.
 const MAX_POLLS = Math.floor(POLL_BUDGET_MS / POLL_INTERVAL_MS) + 1;
 
 /**
- * The REAL public-TLS-outage window: poll + cname settle + propagation gate.
- * Exported so a test asserts the SUM against `MAX_DNS_ONLY_WINDOW_MS` (AC13) —
- * pinning any single component would let the total drift past 15 minutes.
+ * The nominal public-TLS-outage window: poll sleeps + cname settle +
+ * propagation-gate sleeps + the IO allowance. Exported so a test asserts the
+ * SUM against `MAX_DNS_ONLY_WINDOW_MS` (AC13) — pinning any single component
+ * would let the total drift past 15 minutes, which is exactly how the 45s
+ * settle escaped the old bound.
  */
 export const TOTAL_DNS_ONLY_WINDOW_MS =
-  (MAX_POLLS - 1) * POLL_INTERVAL_MS + CNAME_SETTLE_MS + DNS_GATE_BUDGET_MS;
+  (MAX_POLLS - 1) * POLL_INTERVAL_MS +
+  CNAME_SETTLE_MS +
+  DNS_GATE_BUDGET_MS +
+  STEP_IO_ALLOWANCE_MS;
 const CF_TIMEOUT_MS = 10 * 1000;
 // Octokit has no default request timeout; bound the GitHub leg so a slow API
 // call cannot blow the ~100s CF origin-response budget inside the atomic step.
@@ -187,7 +209,13 @@ export type ReissueOutcome =
   // #6698: a probe-only fire completed. Benign by construction — it deliberately
   // does NOT remediate, so it must be distinguishable from both `issued` (which
   // would read as "fixed") and `poll_timeout` (which would page).
-  | "probe_only_complete";
+  | "probe_only_complete"
+  // Emitted only by the onFailure handler: the body threw and could not be
+  // retried, but the steady state WAS restored. Part of the union so the
+  // marker's `outcome` is a closed vocabulary an operator can group by —
+  // previously it escaped as a bare string because the marker field is typed
+  // `string | null` and the Sentry tag bag is untyped.
+  | "reissue_incomplete_restore_ok";
 
 export interface ReissueResult {
   outcome: ReissueOutcome;
@@ -198,12 +226,33 @@ export interface ReissueResult {
   cnameAtExit: string | null;
   preconditionResults?: Record<string, boolean>;
   detail: string;
-  // Lands in emitTerminal's `extra` → the Sentry payload AND the
-  // `public.routine_runs` row written by runLogMiddleware. Without it the
-  // operator-facing routine-run history shows a run that "completed" with no
-  // indication it was only a probe.
+  // Distinguishes a probe from a real remediation in the Sentry payload. NOT
+  // set at the construction sites — derived once in `emitAndReturn` from the
+  // run context, so the two cannot diverge.
   probeOnly: boolean;
+  // ‼️ `ok` and `errorSummary` are the ONLY fields `runLogMiddleware` reads off
+  // a handler's return value (`server/inngest/middleware/run-log.ts` projects
+  // exactly `{ ok?: boolean; errorSummary?: string }`). Without them EVERY
+  // outcome — including the deliberately-paging `dns_propagation_failed` and a
+  // probe that never attempted the fix — writes an identical
+  // `status='completed', error_summary=null` row to `public.routine_runs`.
+  // That row is WORM, so the operator-facing run history is permanently unable
+  // to tell a probe from a remediation from a failure. Derived from
+  // BENIGN_OUTCOMES in `emitAndReturn`.
+  ok: boolean;
+  errorSummary?: string;
 }
+
+/**
+ * What a terminal site constructs. The three status fields above are derived
+ * centrally rather than repeated at ~8 construction sites, where a hardcoded
+ * `probeOnly: true` in one branch and `false` in another was a standing
+ * divergence risk.
+ */
+type ReissueResultDraft = Omit<
+  ReissueResult,
+  "probeOnly" | "ok" | "errorSummary"
+>;
 
 /** A single Cloudflare DNS record we toggle (apex A-record or the www CNAME). */
 export interface CfDnsRecord {
@@ -235,6 +284,8 @@ export interface DnsPropagationInputs {
   resolved6: string[];
   /** The resolve6 error code (`ENODATA` is the PASS condition), or null. */
   resolve6Error: string | null;
+  /** The resolve4 error code, or null. Distinguishes "no answer" from "could not ask". */
+  resolve4Error: string | null;
   /**
    * HTTP status of an ACME HTTP-01-shaped probe re-run POST-flip.
    * `gatherPreconditions` already probes this, but at PREFLIGHT while records
@@ -244,14 +295,32 @@ export interface DnsPropagationInputs {
    */
   acmeApexStatus: number;
   acmeWwwStatus: number;
-  /** Whether the post-flip ACME response looks like GitHub's, not Cloudflare's. */
-  acmeGithubShaped: boolean;
+  /**
+   * The raw `Server` response headers. These are OBSERVATIONS, not a verdict —
+   * an earlier revision computed a single `acmeGithubShaped` boolean inside the
+   * dep, which put the gate's most load-bearing rule outside the pure function
+   * (untestable) and discarded the evidence: an operator reading a failed gate
+   * got a bare `false` with no indication of what actually answered, and the
+   * `&&` collapsed apex and www so per-host attribution was lost.
+   */
+  acmeApexServer: string;
+  acmeWwwServer: string;
 }
 
 export type DnsPropagationVerdict =
   | { status: "propagated"; reason: string }
   | { status: "retry"; reason: string }
   | { status: "failed"; reason: string };
+
+/**
+ * GitHub Pages answers `Server: GitHub.com`; Cloudflare answers
+ * `Server: cloudflare`. Status alone does not separate them — CF can proxy
+ * through GitHub's own 404.
+ */
+export function isGitHubShapedServer(header: string): boolean {
+  const h = header.toLowerCase();
+  return h.includes("github") && !h.includes("cloudflare");
+}
 
 /** GitHub Pages public anycast lives in 185.199.0.0/16. */
 function isGitHubPagesV4(addr: string): boolean {
@@ -312,6 +381,19 @@ export function checkDnsPropagated(
     };
   }
 
+  // Same class as the AAAA guard above, on the IPv4 leg: an ESERVFAIL/ETIMEOUT
+  // collapses to an empty array and would otherwise be reported as "not yet
+  // propagated", which is a different fact with a different remedy.
+  if (
+    inputs.resolve4Error !== null &&
+    !["ENODATA", "ENOTFOUND"].includes(inputs.resolve4Error)
+  ) {
+    return {
+      status: "retry",
+      reason: `A lookup inconclusive (${inputs.resolve4Error}) — could not ask, not an empty answer`,
+    };
+  }
+
   if (inputs.resolved4.length === 0) {
     return { status: "retry", reason: "no A-record answer yet" };
   }
@@ -327,12 +409,16 @@ export function checkDnsPropagated(
   // Resolver answers can be right while something still intercepts the challenge
   // path (a residual redirect or CF rule). This is the single most informative
   // observation available, so it gates too.
-  if (!inputs.acmeGithubShaped) {
+  const apexShaped = isGitHubShapedServer(inputs.acmeApexServer);
+  const wwwShaped = isGitHubShapedServer(inputs.acmeWwwServer);
+  if (!apexShaped || !wwwShaped) {
     return {
       status: "retry",
       reason:
         `A-records are GitHub anycast but the ACME probe is not GitHub-shaped ` +
-        `(apex=${inputs.acmeApexStatus}, www=${inputs.acmeWwwStatus}) — challenge path may be intercepted`,
+        `(apex: status=${inputs.acmeApexStatus} server="${inputs.acmeApexServer}", ` +
+        `www: status=${inputs.acmeWwwStatus} server="${inputs.acmeWwwServer}") — ` +
+        `challenge path may be intercepted`,
     };
   }
 
@@ -458,19 +544,25 @@ export interface ReissueRunContext {
 
 export type MarkerEmitter = (
   phase: CertReissuePhase,
-  fields?: Partial<CertReissueMarker>,
+  // The correlation fields are owned by the run context, not by call sites —
+  // excluding them here makes an accidental per-call override a type error.
+  fields?: Omit<
+    Partial<CertReissueMarker>,
+    "phase" | "runId" | "attempt" | "probeOnly"
+  >,
 ) => void;
-
-const noopEmitter: MarkerEmitter = () => {};
 
 function makeEmitter(ctx: ReissueRunContext): MarkerEmitter {
   return (phase, fields = {}) =>
     emitCertReissueMarker({
+      // Correlation fields last so a call site cannot shadow them (the emitter
+      // type also excludes them, making that a compile error rather than a
+      // silently-wrong row).
+      ...fields,
       phase,
       runId: ctx.runId,
       attempt: ctx.attempt,
       probeOnly: ctx.probeOnly,
-      ...fields,
     });
 }
 
@@ -527,7 +619,7 @@ export async function setRecordsProxied(
  */
 export async function reissueViaCnameToggle(
   deps: ReissueDeps,
-  emit: MarkerEmitter = noopEmitter,
+  emit: MarkerEmitter,
 ): Promise<void> {
   emit("cname-put-null", { cname: null });
   await deps.setPagesCname(null);
@@ -550,7 +642,7 @@ export async function reissueViaCnameToggle(
  */
 export async function restoreState(
   deps: ReissueDeps,
-  emit: MarkerEmitter = noopEmitter,
+  emit: MarkerEmitter,
 ): Promise<void> {
   try {
     await restoreStateInner(deps, emit);
@@ -629,10 +721,20 @@ async function restoreStateInner(
 // =============================================================================
 
 function emitAndReturn(
-  result: ReissueResult,
+  draft: ReissueResultDraft,
   logger: HandlerArgs["logger"],
   ctx: ReissueRunContext,
 ): ReissueResult {
+  const benign = BENIGN_OUTCOMES.has(draft.outcome);
+  const result: ReissueResult = {
+    ...draft,
+    probeOnly: ctx.probeOnly,
+    // Drives the routine_runs row's status/error_summary. A non-benign outcome
+    // that RETURNS (rather than throws) would otherwise be recorded as a clean
+    // completion — see the ReissueResult docstring.
+    ok: benign,
+    errorSummary: benign ? undefined : `${draft.outcome}: ${draft.detail}`,
+  };
   emitTerminal(result, logger, ctx);
   return result;
 }
@@ -741,7 +843,6 @@ export async function runReissueSteps(
         proxiedStateAtExit: null,
         cnameAtExit: null,
         detail: pre.reason,
-        probeOnly: ctx.probeOnly,
       },
       logger,
       ctx,
@@ -758,7 +859,6 @@ export async function runReissueSteps(
         cnameAtExit: null,
         preconditionResults: pre.results,
         detail: pre.reason,
-        probeOnly: ctx.probeOnly,
       },
       logger,
       ctx,
@@ -777,9 +877,11 @@ export async function runReissueSteps(
       resolved4: dns.resolved4,
       resolved6: dns.resolved6,
       resolve6Error: dns.resolve6Error,
+      resolve4Error: dns.resolve4Error,
       acmeApexStatus: dns.acmeApexStatus,
       acmeWwwStatus: dns.acmeWwwStatus,
-      acmeGithubShaped: dns.acmeGithubShaped,
+      acmeApexServer: dns.acmeApexServer,
+      acmeWwwServer: dns.acmeWwwServer,
       detail: "baseline before the DNS-only flip",
     });
     return dns;
@@ -835,7 +937,7 @@ export async function runReissueSteps(
   // throw, `onFailure` would fire, and the precise `reissue_failed` diagnostic
   // would be overwritten by a generic restore outcome.
   // ===========================================================================
-  let result: ReissueResult;
+  let result: ReissueResultDraft;
 
   if (!toggle.ok) {
     result = {
@@ -843,11 +945,14 @@ export async function runReissueSteps(
       finalState: pre.state,
       attempts: 0,
       elapsedMs: elapsed(),
-      proxiedStateAtExit: null,
-      cnameAtExit: null,
+      // The in-step restore ABOVE converged (it is fail-loud and
+      // convergence-asserted, so reaching here means it succeeded). Reporting
+      // null would read as "unknown" on a PAGING outcome, and the first thing
+      // an operator asks is whether the marketing site is still exposed.
+      proxiedStateAtExit: STEADY_PROXIED,
+      cnameAtExit: PAGES_CNAME,
       preconditionResults: pre.results,
       detail: `reissue trigger failed (${toggle.httpStatus}): ${toggle.message}`,
-      probeOnly: ctx.probeOnly,
     };
   } else {
     // ---- DNS-propagation gate. Fixed-count step names over a constant so the
@@ -868,9 +973,11 @@ export async function runReissueSteps(
           resolved4: inputs.resolved4,
           resolved6: inputs.resolved6,
           resolve6Error: inputs.resolve6Error,
+          resolve4Error: inputs.resolve4Error,
           acmeApexStatus: inputs.acmeApexStatus,
           acmeWwwStatus: inputs.acmeWwwStatus,
-          acmeGithubShaped: inputs.acmeGithubShaped,
+          acmeApexServer: inputs.acmeApexServer,
+          acmeWwwServer: inputs.acmeWwwServer,
           ok: v.status === "propagated",
           outcome: v.status,
           detail: v.reason,
@@ -881,14 +988,33 @@ export async function runReissueSteps(
       // `failed` is terminal (a surviving AAAA will still be there next
       // attempt); `propagated` is done. Only `retry` keeps waiting.
       if (verdict.status !== "retry") break;
-      // The fixed count is the upper bound; wall-clock is the real ceiling.
-      if (elapsed() + DNS_GATE_INTERVAL_MS >= TOTAL_DNS_ONLY_WINDOW_MS) break;
+      //
+      // ‼️ NO WALL-CLOCK BREAK HERE. An `elapsed()`-derived `break` looks like a
+      // safety bound and is actually a replay hazard: `elapsed()` is
+      // `Date.now() - startedAt` evaluated in the BODY, which Inngest
+      // re-executes from the top on every resume. After the poll loop has
+      // burned ~12 min, a resume re-enters this loop, `dns-gate-0` returns its
+      // MEMOIZED `retry`, the wall-clock break fires, and the run terminates
+      // `dns_propagation_failed` — discarding a `dns-gate-1` that had already
+      // memoized `propagated` and destroying the entire poll trajectory, on
+      // precisely the slow remediation anyone runs this routine to understand.
+      // ADR-077 bans `Date.now()`-derived control flow in the replayed body for
+      // this reason. The fixed attempt count is the bound; the window is
+      // budgeted by constants, not measured at runtime.
       if (i < DNS_GATE_MAX_ATTEMPTS - 1) {
         await step.sleep(`dns-gate-wait-${i}`, `${DNS_GATE_INTERVAL_MS}ms`);
       }
     }
 
-    if (verdict.status !== "propagated") {
+    // ‼️ Only a CONFIRMED AAAA aborts. Gate exhaustion (`retry` all the way
+    // down) must NOT abort a remediation: Cloudflare's proxied TTL is a fixed
+    // 300s, so "not yet propagated within the gate budget" is an ordinary
+    // observation, not a fault — treating it as terminal would make
+    // `dns_propagation_failed` the DEFAULT outcome of a correct remediation and
+    // page on every fire. A surviving AAAA is different in kind: Let's Encrypt
+    // will not fall back from it, so no window length can succeed and
+    // proceeding would burn a validation attempt for a guaranteed failure.
+    if (verdict.status === "failed") {
       result = {
         outcome: "dns_propagation_failed",
         finalState: pre.state,
@@ -897,8 +1023,7 @@ export async function runReissueSteps(
         proxiedStateAtExit: STEADY_PROXIED,
         cnameAtExit: PAGES_CNAME,
         preconditionResults: pre.results,
-        detail: `DNS-only state never propagated: ${verdict.reason}`,
-        probeOnly: ctx.probeOnly,
+        detail: `DNS-only state cannot validate: ${verdict.reason}`,
       };
     } else if (ctx.probeOnly) {
       // ‼️ Probe-only runs ZERO polls. The poll exists to watch a cert re-order
@@ -915,9 +1040,19 @@ export async function runReissueSteps(
         cnameAtExit: PAGES_CNAME,
         preconditionResults: pre.results,
         detail: `probe-only: ${verdict.reason}`,
-        probeOnly: true,
       };
     } else {
+      // Remediation proceeds even when the gate never confirmed propagation —
+      // see the abort comment above. Record that explicitly so a `poll_timeout`
+      // read later is not mistaken for "DNS was known good".
+      if (verdict.status !== "propagated") {
+        emit("dns-propagation", {
+          ok: false,
+          outcome: "unconfirmed",
+          detail: `proceeding to poll without confirmed propagation: ${verdict.reason}`,
+          elapsedMs: elapsed(),
+        });
+      }
       // Poll (step.sleep suspends). Fixed count → deterministic step names.
       let attempts = 0;
       let finalState = "unknown";
@@ -966,7 +1101,6 @@ export async function runReissueSteps(
         detail: healthy
           ? `cert reissued: state=${finalState} after ${attempts} poll(s)`
           : `poll cap reached; final state=${finalState}`,
-        probeOnly: false,
       };
     }
 
@@ -1199,21 +1333,28 @@ export function buildLiveDeps(args: {
       // cached or split-horizon and says nothing about what Let's Encrypt sees.
       resolver.setServers(["1.1.1.1", "8.8.8.8"]);
 
-      let resolved4: string[] = [];
-      try {
-        resolved4 = await resolver.resolve4(APEX_NAME);
-      } catch {
-        resolved4 = [];
-      }
-      let resolved6: string[] = [];
-      let resolve6Error: string | null = null;
-      try {
-        resolved6 = await resolver.resolve6(APEX_NAME);
-      } catch (err) {
-        // ENODATA / ENOTFOUND is the PASS condition here.
-        resolved6 = [];
-        resolve6Error = (err as { code?: string }).code ?? "unknown";
-      }
+      // Concurrent: the two lookups are independent, and c-ares applies `tries`
+      // PER NAME SERVER with backoff, so each costs ~26s worst-case against two
+      // blackholed servers — sequencing them would put ~51s of the ~100s
+      // Cloudflare origin-response budget into one step for no benefit.
+      // Each leg captures its own error code: collapsing "we could not ask" into
+      // "the answer is empty" is the fail-open class this gate exists to avoid,
+      // and it applies to the A leg exactly as it does to the AAAA leg.
+      const [r4, r6] = await Promise.all([
+        resolver.resolve4(APEX_NAME).then(
+          (a) => ({ addrs: a, err: null as string | null }),
+          (e: { code?: string }) => ({ addrs: [] as string[], err: e?.code ?? "unknown" }),
+        ),
+        resolver.resolve6(APEX_NAME).then(
+          (a) => ({ addrs: a, err: null as string | null }),
+          // ENODATA / ENOTFOUND is the PASS condition here.
+          (e: { code?: string }) => ({ addrs: [] as string[], err: e?.code ?? "unknown" }),
+        ),
+      ]);
+      const resolved4 = r4.addrs;
+      const resolve4Error = r4.err;
+      const resolved6 = r6.addrs;
+      const resolve6Error = r6.err;
 
       // Re-run the ACME-shaped probe POST-flip. gatherPreconditions already
       // probes this, but at preflight while records are still proxied — so it
@@ -1241,20 +1382,17 @@ export function buildLiveDeps(args: {
         probe(APEX_NAME),
         probe(WWW_NAME),
       ]);
-      // The `Server` header is the actual discriminator: GitHub Pages answers
-      // `GitHub.com`, Cloudflare answers `cloudflare`. Status alone does not
-      // separate them — CF can proxy through GitHub's own 404.
-      const shaped = (s: string) =>
-        s.toLowerCase().includes("github") &&
-        !s.toLowerCase().includes("cloudflare");
-
       return {
         resolved4,
+        resolve4Error,
         resolved6,
         resolve6Error,
         acmeApexStatus: apex.status,
         acmeWwwStatus: www.status,
-        acmeGithubShaped: shaped(apex.server) && shaped(www.server),
+        // RAW observations only — the shaped/unshaped VERDICT is policy and
+        // lives in checkDnsPropagated, per this file's gather/check split.
+        acmeApexServer: apex.server,
+        acmeWwwServer: www.server,
       };
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -1394,7 +1532,6 @@ export async function cronGhPagesCertReissueHandler({
         },
         detail:
           "CF_API_TOKEN_DNS_EDIT or CF_ZONE_ID not set — token IaC not yet applied",
-        probeOnly: ctx.probeOnly,
       },
       logger,
       ctx,
@@ -1441,10 +1578,29 @@ export async function cronGhPagesCertReissueOnFailure({
   // Without markers here a body throw is Sentry-visible but marker-dark —
   // exactly the asymmetry #6698 exists to fix, and indistinguishable from
   // "telemetry is broken". Emitted from BOTH branches of the try/catch below.
+  //
+  // ‼️ THE ENVELOPE IS NOT THE ORIGINAL EVENT. Inngest registers onFailure as a
+  // SEPARATE function triggered by `inngest/function.failed`, whose payload is
+  // `{ name, data: { function_id, run_id, error, event: <originalEvent> } }`
+  // (verified against pinned inngest 3.54.2, `types.d.ts` FailureEventPayload).
+  // Two consequences, both of which silently corrupt exactly the telemetry this
+  // work exists to produce:
+  //   - `resolveProbeOnly(event)` would read `event.data.probeOnly` → undefined
+  //     → its safe default `true`. So an operator's `{"probeOnly": false}`
+  //     remediation that then threw would be recorded as a PROBE, inverting the
+  //     one field whose contract is "a row read out of context can never be
+  //     misread as a remediation fire" — and corrupting the Let's Encrypt
+  //     validation-attempt accounting the rate-limit hypothesis rests on.
+  //   - the ctx `runId` is the FAILURE HANDLER's run, not the failed run's, so
+  //     the onfailure markers would be un-joinable to the run they describe.
+  // `attempt` is deliberately null: the injected value belongs to the handler,
+  // and a `0` would read as "first try" of the body, which is never true here.
+  const failure = (event as { data?: { event?: unknown; run_id?: string } })
+    ?.data;
   const ctx: ReissueRunContext = {
-    probeOnly: resolveProbeOnly(event),
-    runId: runId ?? null,
-    attempt: attempt ?? null,
+    probeOnly: resolveProbeOnly(failure?.event),
+    runId: failure?.run_id ?? runId ?? null,
+    attempt: null,
   };
   const emit = makeEmitter(ctx);
   const cfToken = process.env.CF_API_TOKEN_DNS_EDIT;
