@@ -354,6 +354,120 @@ Persistent=true
 WantedBy=timers.target
 TIMEREOF
 
+# --- #6617a (A4): POSITIVE liveness marker for inngest-server -------------------------
+# The dedicated host is deny-all-public with no SSH: the ONLY evidence that inngest-server
+# is actually serving is what it ships off-box. Every existing signal is an ABSENCE signal
+# (no heartbeat push, no journal line), and #6617 is the lesson that absence is not
+# evidence — a dead probe and a healthy quiet host are the same row count: zero.
+#
+# TWO properties are load-bearing, and each one is a defect this repo has already paid for:
+#
+# 1. EMITTED UNCONDITIONALLY, BEFORE ANY CLASSIFICATION (ADR-117 / #6537). There is no `if`
+#    in front of the `logger` call below and there must never be one. The tempting shape —
+#    "only log when something is wrong" — is precisely what ADR-117 describes as a monitor
+#    that "goes silent exactly when someone ships a probe": it deletes the positive control,
+#    after which silence means either health or death and nothing can tell them apart.
+#
+# 2. DISCRIMINATING FIELDS, IN ONE EVENT. A boolean/OK-vs-not marker reproduces #6617 one
+#    layer up: you would learn the probe ran and still not know WHY the server was down.
+#    The fields are gathered first and shipped in a SINGLE logger call so one row is
+#    self-sufficient — no correlating across rows that Better Stack may interleave or drop:
+#      http_code    — including the literal 000 (curl could not connect at all), which is
+#                     the single most diagnostic value here and the one a naive
+#                     `curl -f && logger` shape silently discards
+#      vector_active/redis_active — is the SHIPPER dead, or the SERVER? #6536 burned 3 days
+#                     on exactly this ambiguity
+#      uptime_s     — discriminates "never came up after boot" from "died later"
+#      boot_id      — ties rows to one boot; a host replace re-rolls it, so it is how you
+#                     tell a fresh host's first probe from the previous host's last one
+#      image_sha    — WHICH bootstrap image produced this host (CF-3: vector.toml and this
+#                     very script are OCI-baked, so "the fix is on main" never implied "the
+#                     fix is on the host"; #6539 measured two releases that carried none of
+#                     the fix they were dispatched for)
+#
+# Runs as root but wraps NO doppler: it needs no secrets (a bare `logger` + `curl` to
+# loopback), so it inherits neither the $HOME-is-not-defined trap nor the
+# DOPPLER_CONFIG_DIR/PrivateTmp collision that cost #6536 three days. If a future edit adds
+# `doppler run` here, it MUST also set Environment=HOME=/root.
+readonly PROBE_SCRIPT="/usr/local/bin/inngest-server-probe.sh"
+readonly PROBE_UNIT="/etc/systemd/system/inngest-server-probe.service"
+readonly PROBE_TIMER="/etc/systemd/system/inngest-server-probe.timer"
+
+# Quoted delimiter: the body is fully literal. Unquoting it would expand $http_code et al at
+# BOOTSTRAP time (yielding an empty-field marker that always reads healthy) and would break
+# curl's `%{http_code}` writeout — the same quoted-heredoc discipline as the heartbeat script.
+cat > "$PROBE_SCRIPT" <<'PROBESCRIPTEOF'
+#!/bin/sh
+# Positive liveness marker for inngest-server (#6617a). Fired by inngest-server-probe.timer.
+#
+# LOG_TAG is a REAL assignment, never an inline literal in the logger call — same drift-fixture
+# contract as inngest-heartbeat.sh. The matching Source 4 allowlist entry is in vector.toml;
+# journald-config.test.sh asserts BOTH sides, because Source 4 is exact-value equality and a
+# one-sided change is a silent no-op.
+LOG_TAG="inngest-server-probe"
+
+# --- gather (never branch on the results before the emit below) ---
+# `|| true` on every capture: this probe must ALWAYS reach its logger call. A non-zero curl
+# under a future `set -e`, or a missing systemctl, must degrade a FIELD, never the event.
+http_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8288/health 2>/dev/null || true)"
+# curl writes 000 for "no HTTP response at all" but prints nothing when it cannot even start;
+# normalize both to the literal 000 so "could not connect" is a VALUE, not an empty field that
+# reads as missing data.
+[ -n "$http_code" ] || http_code=000
+vector_active="$(systemctl is-active vector.service 2>/dev/null || true)"
+redis_active="$(systemctl is-active inngest-redis.service 2>/dev/null || true)"
+server_active="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+[ -n "$vector_active" ] || vector_active=unknown
+[ -n "$redis_active" ] || redis_active=unknown
+[ -n "$server_active" ] || server_active=unknown
+uptime_s="$(cut -d. -f1 /proc/uptime 2>/dev/null || true)"
+[ -n "$uptime_s" ] || uptime_s=unknown
+boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+[ -n "$boot_id" ] || boot_id=unknown
+# Written by cloud-init-inngest.yml immediately after the OCI pull, from the SAME digest-pinned
+# $IREF the bootstrap was extracted from. Absent on the co-located web host (whose IREF is
+# reassigned at runtime by the zot arm) -> `unknown`, which is honest rather than wrong.
+image_sha="$(sed -n 's/^INNGEST_BOOTSTRAP_IMAGE=//p' /etc/default/soleur-inngest-image 2>/dev/null | head -1 || true)"
+[ -n "$image_sha" ] || image_sha=unknown
+
+# --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_sha=$image_sha"
+exit 0
+PROBESCRIPTEOF
+chmod 0755 "$PROBE_SCRIPT"
+
+cat > "$PROBE_UNIT" <<'PROBEUNITEOF'
+[Unit]
+Description=Inngest server positive liveness marker (#6617a)
+
+[Service]
+Type=oneshot
+# WITHOUT this, systemd derives SYSLOG_IDENTIFIER from the ExecStart basename, which matches
+# ZERO vector.toml sources and the marker never leaves the host — the #6536 defect exactly.
+# Source 4 (vector.toml host_scripts_journald) carries the matching exact-value entry.
+SyslogIdentifier=inngest-server-probe
+ExecStart=/usr/local/bin/inngest-server-probe.sh
+PROBEUNITEOF
+
+# Hourly, not per-minute. Source 4 applies NO PRIORITY filter, so every fire ships a row: at
+# 60s this marker alone would cost ~1,440 rows/day against the ~25k/day Better Stack quota —
+# the very cost #6617b is removing from the heartbeat in this same change. Hourly is ~24
+# rows/day, which preserves the positive control at ~1.7% of the cost. OnBootSec is short
+# because the highest-value probe is the one right after a replace (did the new image's
+# server actually bind :8288?).
+cat > "$PROBE_TIMER" <<'PROBETIMEREOF'
+[Unit]
+Description=Run the Inngest server liveness probe hourly (#6617a)
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=1h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+PROBETIMEREOF
+
 # Materialize Doppler token + CLI config dir env file. The unit's `User=deploy`
 # combined with `ProtectHome=read-only` blocks Doppler CLI's default fallback
 # dir (/home/deploy/.doppler/fallback) — must redirect via DOPPLER_CONFIG_DIR
@@ -688,6 +802,13 @@ systemctl enable --now inngest-heartbeat.timer
 # effect immediately rather than waiting up to 60s for the next timer fire.
 # Oneshot in `failed` state: restart re-runs ExecStart with the new unit.
 systemctl restart inngest-heartbeat.service || log "warn: heartbeat oneshot non-zero (timer will retry in 60s)"
+
+# #6617a: arm the positive liveness marker. `enable --now` starts the TIMER; the immediate
+# `start` below fires the oneshot once so a fresh replace ships its first marker in seconds
+# rather than at OnBootSec — the replace is exactly when someone is watching. `|| log` keeps
+# a probe failure from failing the whole bootstrap: this is observability, never a gate.
+systemctl enable --now inngest-server-probe.timer
+systemctl start inngest-server-probe.service || log "warn: server-probe oneshot non-zero (timer will retry hourly)"
 
 # #6178: enable the cutover flip poll timer (dedicated host only; daemon-reload above
 # already picked up the new units). It SHIPS ENABLED and is NEVER disabled for the host's

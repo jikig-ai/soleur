@@ -16,6 +16,14 @@ Type=simple
 User=deploy
 Group=deploy
 EnvironmentFile=/etc/default/inngest-server
+# #6617c: WITHOUT this, systemd derives SYSLOG_IDENTIFIER from the ExecStart basename ->
+# `doppler`, which matches ZERO vector.toml sources, so this unit's stderr (redis-server's AND
+# doppler's) never leaves the host. Same defect the heartbeat unit had for 3 days (#6536) —
+# and the reason a `inngest-redis` entry in Vector's Source 4 allowlist was, until now, a
+# permanently-dead no-op: Source 4 is EXACT-VALUE SYSLOG_IDENTIFIER equality, never a prefix
+# match, so the tag and the allowlist entry only work as a pair. journald-config.test.sh
+# asserts both sides; do not change this literal without changing vector.toml with it.
+SyslogIdentifier=inngest-redis
 # Password injected from Doppler prd at runtime, inside a bash -c so the literal
 # $INNGEST_REDIS_PASSWORD (NOT its value) appears in `ps`/journal — same
 # defense as inngest-server.service. Shipped as a FILE (not a TF inline heredoc)

@@ -191,6 +191,27 @@ include_matches.SYSLOG_IDENTIFIER = [
   "web-zot-consumer-probe",
   "web-git-data-probe",
   "web-nic-guard",
+  # #6617 (a/c): the dedicated inngest host's three remaining dark channels. Each entry here
+  # is HALF a change — Source 4 is sd_journal_add_match EXACT-VALUE equality, so an entry
+  # whose unit does not set that literal SyslogIdentifier= is a permanently-dead no-op that
+  # reads like coverage. Two of these three were exactly that until #6617c set the tag:
+  #   inngest-redis     — the unit set NO SyslogIdentifier=, so journald tagged it from the
+  #                       ExecStart basename `doppler` (inngest-redis.service now sets it).
+  #   inngest-nftables  — same, tagged `inngest-nftables.sh` WITH the .sh
+  #                       (cloud-init-inngest.yml's unit now sets it).
+  #   inngest-server-probe — new #6617a unit; declares the tag from birth.
+  # journald-config.test.sh asserts each literal on BOTH sides. Quota: the two service
+  # channels are event-driven (a boot + failures); the probe is HOURLY by design (~24 rows/
+  # day) and lands in the SAME change that takes inngest-heartbeat's dark arm from ~1,440
+  # rows/day to ~24 (#6617b), so this trio is a large net saving, not a new cost.
+  #
+  # DELIBERATELY ABSENT: `inngest-boot-phone-home`. It is a pure curl POST to the Better
+  # Stack HTTP ingest and never calls `logger` — it has NO journald channel at all, so an
+  # entry for it could never match anything. It already ships direct; the tag would buy a
+  # dead line in an allowlist that is read as an inventory of live channels.
+  "inngest-redis",
+  "inngest-nftables",
+  "inngest-server-probe",
 ]
 journal_directory = "/var/log/journal"
 batch_size = 16

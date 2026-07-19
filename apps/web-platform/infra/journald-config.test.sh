@@ -216,6 +216,60 @@ HSJ="$(awk '/^\[sources\.host_scripts_journald\]/{f=1;next} f&&/^\[[a-z]/{f=0} f
 assert "Source 4 (host_scripts_journald) include list carries all 3 probe SyslogIdentifiers" \
   "grep -q 'web-zot-consumer-probe' <<<\"\$HSJ\" && grep -q 'web-git-data-probe' <<<\"\$HSJ\" && grep -q 'web-nic-guard' <<<\"\$HSJ\""
 
+# --- #6617c (A5): the dedicated-host tag trio, asserted on BOTH sides of the join ---
+# Source 4's include_matches.SYSLOG_IDENTIFIER is sd_journal_add_match EXACT-VALUE equality,
+# never a prefix/regex — so an allowlist entry with no unit emitting that exact tag is a
+# silent no-op, and a unit tag with no allowlist entry is a silent drop. The #6617 lesson is
+# that the two halves were maintained independently and three of four tags could never match:
+#   - inngest-redis.service set NO SyslogIdentifier= -> journald tagged it from the ExecStart
+#     basename `doppler` (same defect class as #6536's heartbeat unit).
+#   - inngest-nftables.service set NO SyslogIdentifier= -> tagged `inngest-nftables.sh` (.sh).
+# So each tag below is asserted TWICE: once on the emitting unit, once on the allowlist. A
+# one-sided assertion is the exact shape that passed while the channel was dead.
+#
+# Anchors are syntactic constructs, not bare tokens (cq-assert-anchor-not-bare-token): the
+# unit side anchors `^SyslogIdentifier=<tag>$` (a directive line — a comment cannot satisfy
+# it), the vector side anchors `^\s*"<tag>",$` (a quoted TOML array element — the surrounding
+# rationale comments in this very file mention every one of these names in prose).
+echo ""
+echo "--- #6617c (A5): inngest tag trio — unit SyslogIdentifier= <-> Source 4 allowlist ---"
+REDIS_UNIT="$SCRIPT_DIR/inngest-redis.service"
+INNGEST_CI="$SCRIPT_DIR/cloud-init-inngest.yml"
+INNGEST_BOOTSTRAP="$SCRIPT_DIR/inngest-bootstrap.sh"
+assert "inngest-redis.service exists"   "[[ -f '$REDIS_UNIT' ]]"
+assert "cloud-init-inngest.yml exists"  "[[ -f '$INNGEST_CI' ]]"
+assert "inngest-bootstrap.sh exists"    "[[ -f '$INNGEST_BOOTSTRAP' ]]"
+
+# Scope the nftables assertion to that unit's OWN write_files entry, so a SyslogIdentifier=
+# added to a neighbouring unit cannot satisfy it.
+NFT_UNIT_BLOCK="$(awk '/^  - path: \/etc\/systemd\/system\/inngest-nftables\.service$/{f=1;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI")"
+assert "nftables unit block extracted from cloud-init-inngest.yml" \
+  "[[ -n \"\$NFT_UNIT_BLOCK\" ]]"
+
+# Unit side (emitter): each tag is set EXPLICITLY.
+assert "unit side: inngest-redis.service sets SyslogIdentifier=inngest-redis (was tagged 'doppler')" \
+  "grep -qE '^SyslogIdentifier=inngest-redis\$' '$REDIS_UNIT'"
+assert "unit side: inngest-nftables.service sets SyslogIdentifier=inngest-nftables (was tagged 'inngest-nftables.sh')" \
+  "grep -qE '^[[:space:]]*SyslogIdentifier=inngest-nftables\$' <<<\"\$NFT_UNIT_BLOCK\""
+assert "unit side: inngest-server-probe.service sets SyslogIdentifier=inngest-server-probe (#6617a)" \
+  "grep -qE '^SyslogIdentifier=inngest-server-probe\$' '$INNGEST_BOOTSTRAP'"
+
+# Vector side (allowlist): each tag is a quoted element of Source 4's include list.
+assert "vector side: Source 4 allowlists \"inngest-redis\"" \
+  "grep -qE '^[[:space:]]*\"inngest-redis\",\$' <<<\"\$HSJ\""
+assert "vector side: Source 4 allowlists \"inngest-nftables\"" \
+  "grep -qE '^[[:space:]]*\"inngest-nftables\",\$' <<<\"\$HSJ\""
+assert "vector side: Source 4 allowlists \"inngest-server-probe\"" \
+  "grep -qE '^[[:space:]]*\"inngest-server-probe\",\$' <<<\"\$HSJ\""
+
+# CF-4 negative: inngest-boot-phone-home.sh is a pure `curl` POST straight to the Better Stack
+# HTTP ingest — it never calls `logger`, so it has NO journald channel and an allowlist entry
+# for it would be a permanently-dead no-op that reads like coverage. Keep it out.
+assert "CF-4: \"inngest-boot-phone-home\" is NOT in the Source 4 allowlist (no journald channel)" \
+  "! grep -qE '^[[:space:]]*\"inngest-boot-phone-home\",\$' <<<\"\$HSJ\""
+assert "CF-4 corroboration: inngest-boot-phone-home.sh never calls logger" \
+  "! grep -qE '^[[:space:]]*logger[[:space:]]' <<<\"\$(awk '/^  - path: \/usr\/local\/bin\/inngest-boot-phone-home\.sh\$/{f=1;next} f&&/^  - path: /{f=0} f' '$INNGEST_CI')\""
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then

@@ -89,6 +89,13 @@ write_files:
       Wants=network-online.target
       [Service]
       Type=oneshot
+      # #6617c: without this, systemd tags this unit from the ExecStart basename —
+      # `inngest-nftables.sh`, WITH the .sh — which matches no vector.toml source, so the
+      # script's own "[inngest-nft] nft binary not found" / rule-load failure never leaves
+      # this deny-all-public host. Source 4 is EXACT-VALUE equality: the tag here and the
+      # allowlist entry in vector.toml are one change, asserted on both sides by
+      # journald-config.test.sh.
+      SyslogIdentifier=inngest-nftables
       ExecStart=/usr/local/bin/inngest-nftables.sh
       RemainAfterExit=yes
       [Install]
@@ -351,6 +358,12 @@ runcmd:
     pull_tail="$(tail -n 8 /var/log/inngest-oci-pull.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
     /usr/local/bin/inngest-boot-phone-home.sh oci-pull-rc-$pull_rc "$pull_tail"
     [ "$pull_rc" -eq 0 ] || { echo "FATAL: OCI pull failed rc=$pull_rc" >&2; exit "$pull_rc"; }
+    # #6617a: record WHICH image produced this host, for the liveness probe's image_sha field.
+    # CF-3's lesson is that inngest-bootstrap.sh and vector.toml reach the host ONLY through
+    # this image, so "the fix is on main" never implies "the fix is on the host" — #6539
+    # measured two published releases containing none of the fix they were dispatched for.
+    # $IREF is digest-pinned above, so this records the exact bytes, not a mutable tag.
+    printf 'INNGEST_BOOTSTRAP_IMAGE=%s\n' "$IREF" > /etc/default/soleur-inngest-image
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
     trap cleanup EXIT
